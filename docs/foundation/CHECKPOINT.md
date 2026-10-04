@@ -8,7 +8,7 @@ Date: 2026-10-04
 - Phase A evidence: `2c8c163784e260af4aaa8c1dc05c6281b0476120`
 - Phase B seal: `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`
 - Phase C checkpoint 1 (C1–C4): `d596416cf57877116e9cfbc8cf6c6fe25c001c67` (hash recorded in `03448ad`)
-- Checkpoint 2 work below is **uncommitted** on top of `03448ad`.
+- **Phase C checkpoint 2 (C5–C10):** `fc2dd68f843b1eb05828f4116f94e8bab4f478da`
 
 ## COMPLETED_WORK (checkpoint 2, in the mandated order)
 1. X-10 keyboard/modifier ownership: 9 scenarios PASS; negative control FAILS as predicted (stuck modifier without K3). K1–K9 not falsified.

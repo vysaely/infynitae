@@ -453,7 +453,7 @@ The focus model's outputs are `Effect::KeyboardFocus(Option<target>)` and `Effec
 ---
 ---
 
-# Phase C checkpoint 2 (C5–C10)
+# Phase C checkpoint 2 (C5–C10): accepted, commit `fc2dd68f843b1eb05828f4116f94e8bab4f478da`
 
 Execution order as mandated: X-10 → snapshot boundary → C5 → C6 → C7 → C8 → C9 → C10 → contradiction pass.
 
