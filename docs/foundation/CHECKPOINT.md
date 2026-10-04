@@ -1,42 +1,45 @@
 # Checkpoint
 
-CURRENT_PHASE: **A — Establish Evidence: COMPLETE, gate met. Awaiting explicit user clearance for Phase B.**
+CURRENT_PHASE: **B — Resolve Architecture Blockers: atomic checkpoint 1 (B1–B6) complete. B7–B13 not started.**
+Phase B is NOT complete. Do not advance to Phase C.
 
 Date: 2026-10-04
 
-## COMPLETED_WORK
-- A1: Hyprland Infynitae inspected (core plugin model, architecture doc, pointer/off-screen research, integration-audit options). Product semantics vs Hyprland-only mechanisms separated (FOUNDATION_EVIDENCE §3).
-- A2: Prototype 01 read in full (1,303 LOC) and its recorded run logs examined. Ledger written.
-- A3: Smithay pinned at crates.io 0.7.0 (newest stable). Relied-on APIs verified in source.
-- A4: Relevant protocol text extracted from system XML (wayland 1.26.0, wayland-protocols 1.49).
-- A5: Evidence matrix written (56 entries: EV-P01…23, EV-H01…07, EV-S01…12, EV-W01…14).
+## Baseline
+Phase A evidence baseline commit: `2c8c163784e260af4aaa8c1dc05c6281b0476120` (branch `main`).
+Phase B work below is **uncommitted** on top of it.
 
-## FILES_CHANGED
-New repository `~/infynitae-native` (git-initialized, **nothing committed**):
-- `docs/foundation/FOUNDATION_EVIDENCE.md`
-- `docs/foundation/PROTOTYPE_DECISION_LEDGER.md`
-- `docs/foundation/CHECKPOINT.md`
-- `docs/foundation/evidence/phase-a/*` (7 raw evidence files)
+## COMPLETED_WORK (Phase B, checkpoint 1)
+- B1: numeric model decided (Q16 i64, ±2³⁶ bound, integral anchors, rounding points, lattice edge rule). Experiment E1–E9.
+- B2: coordinate domains, transformation table T1–T10, anchor = window-geometry origin, pointer chain with Canvas as Smithay global space, I9 restated, type encoding. `Space` question answered (not used), with experiment S1–S7.
+- B3: object graph and negative ownership.
+- B4: identity (`NonZeroU64` monotonic, never reused; `(InstanceId, ElementId)` across IPC).
+- B5: lifecycle states and transition table, difficult cases.
+- B6: popups/subsurfaces (no stored position; constraint boundary policy; no pan repositioning; grab and lifetime rules).
 
-No changes to `~/infynitae` or `~/infynitae-native-prototype`. Running `cargo test` in the prototype only touched its `target/`.
+## FILES_CHANGED (uncommitted)
+- `docs/foundation/FOUNDATION_BLOCKERS.md` (new)
+- `docs/foundation/CHECKPOINT.md` (this file)
+- `docs/foundation/evidence/phase-b/b1-numeric-output.txt`, `b2-space-output.txt` (new)
+- `experiments/b1-numeric/` (no deps), `experiments/b2-space/` (smithay =0.7.0, Cargo.lock copied from Prototype 01; builds offline)
 
 ## EVIDENCE_CREATED
-`docs/foundation/evidence/phase-a/`: prototype source hashes, prototype test + verify output, prototype grep inventory, prototype runtime-log excerpts, Smithay pin, Smithay 0.7.0 source excerpts, Wayland protocol excerpts.
+EB-1…EB-7 (see FOUNDATION_BLOCKERS §0). Re-run: `cargo run --release --offline` in `experiments/b1-numeric`, `cargo run --offline` in `experiments/b2-space`.
 
 ## DECISIONS MADE
-None architectural. One procedural decision: foundation docs live in a new repo `~/infynitae-native` (production foundation), not in the prototype (frozen evidence) or the Hyprland repo.
+D-B1, D-B2-ANCHOR, D-B2-SPACE, D-B2-PTR-SPACE, D-B2-PTR-STATE, D-B2-I9, D-B4, D-B5-REMAP, D-B6-BOUNDARY, D-B6-NO-PAN-REPOSITION. B6.3's grab-dismissal rule is provisional until B10.
 
-## OPEN_BLOCKERS (inputs to Phase B, see FOUNDATION_EVIDENCE §7)
-Q-01 off-screen callback policy (spec says *should avoid*, master prompt says *must not starve*) ·
-Q-02 `suspended` vs I3 · Q-03 Stage anchor (surface vs geometry origin) · Q-04 popup constraint boundary ·
-Q-05 Smithay pointer "global space" under multiple cameras · Q-06 single preferred scale on mixed-scale outputs ·
-Q-08 Canvas numeric model (prototype provides no f64 evidence) · Q-09 restated I3 (pan is client-observable via enter/leave).
-Q-07 (Smithay pin strategy) is Level B.
+## OPEN_BLOCKERS
+Q-01 (off-screen callbacks), Q-02 (`suspended` vs I3), Q-06 (preferred scale), Q-07 (Smithay pin, Level B), Q-09 (restated I3). Q-04 is conditional on B8 and EB-H1.
+New: EB-H1 (popup enter/leave offset for CSD parents), RB-1…RB-4, X-6.
 
 ## NEXT_ACTION
-On user clearance: begin **Phase B**, starting with B1 (Canvas numeric model) and B2 (coordinate algebra, including Q-03 and Q-05), since every other blocker depends on the coordinate domains. Experiments X-1…X-4 (FOUNDATION_EVIDENCE §8) should be scheduled within Phase B where a blocker cannot be resolved from spec plus source alone (Q-01 and Q-06 likely need X-2/X-3).
+Phase B checkpoint 2 (B7–B9):
+1. Build a minimal headless/nested experiment harness: Smithay compositor with ≥2 virtual outputs (different scales) plus a small Wayland test client that logs every received event. It needs no live-session access: a headless backend, or winit nested under the host.
+2. Run X-3 (two outputs 1.0/1.5) and X-5 (popup enter/leave), then X-1 (pan trace), then X-2 (off-screen clients: EGL swap-interval-1, Vulkan FIFO, Firefox, mpv).
+3. Write B7 (camera/output model), B8 (mandatory worked example), B9 (visibility/off-screen state machine; resolve Q-01, Q-02, Q-09).
 
-Recommended before Phase B: commit `~/infynitae-native-prototype` so evidence references a commit rather than file hashes.
+Then checkpoint 3: B10–B13 (input/activation, pan, backend boundary, blocker report finalization and Phase B gate).
 
 ## LIVE_SYSTEM_TOUCHED
-**No.** No compositor started, nested or otherwise. No Hyprland config, installation, or session state touched. Network use: `cargo search` / crates.io API read for the latest Smithay version.
+**No.** No compositor run, nested or otherwise. No change to `~/infynitae` or `~/infynitae-native-prototype`. Experiments are pure computation (Smithay `Space` with dummy elements; no Wayland socket opened).

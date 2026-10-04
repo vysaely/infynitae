@@ -1,0 +1,71 @@
+$ cargo run --release --offline   (experiments/b1-numeric, rustc 1.99.0)
+# 2026-10-04T12:47:10+03:00
+B1 numeric experiment — infynitae-native/experiments/b1-numeric
+Q16: i64 with 16 fractional bits; step = 1.52587890625e-5 px
+
+== E1: representable spacing (ulp) by magnitude, logical px ==
+             magnitude        f64 ulp        f32 ulp       Q16 step
+                   1e3      1.137e-13       6.104e-5       1.526e-5
+                   1e6      1.164e-10       6.250e-2       1.526e-5
+        2^31 (i32 max)       4.768e-7        2.560e2       1.526e-5
+  1e9 (Hyprland bound)       1.192e-7        6.400e1       1.526e-5
+                  2^36       1.526e-5        8.192e3       1.526e-5
+                  1e12       1.221e-4        6.554e4       1.526e-5
+    2^47 (Q16 i64 max)       3.125e-2        1.678e7       1.526e-5
+
+== E2: camera accumulation vs exact sum (random trackpad deltas 0.05..4 px, 2^-20 granular) ==
+start=             0 n=  1000000 gesture_len= 200 | max|err| px: f64=0.000e0  Q16/event=2.801e-3  Q16-G=3.548e-4  I32-round/event=3.376e2
+start=             0 n= 10000000 gesture_len= 200 | max|err| px: f64=0.000e0  Q16/event=1.498e-2  Q16-G=9.136e-4  I32-round/event=6.803e2
+start=    1000000000 n=  1000000 gesture_len= 200 | max|err| px: f64=0.000e0  Q16/event=2.801e-3  Q16-G=3.548e-4  I32-round/event=3.376e2
+start=    1000000000 n= 10000000 gesture_len= 200 | max|err| px: f64=0.000e0  Q16/event=1.498e-2  Q16-G=9.136e-4  I32-round/event=6.803e2
+start=   68719476735 n=  1000000 gesture_len= 200 | max|err| px: f64=2.287e-3  Q16/event=2.801e-3  Q16-G=3.548e-4  I32-round/event=3.376e2
+start=   68719476735 n= 10000000 gesture_len= 200 | max|err| px: f64=9.361e-3  Q16/event=1.498e-2  Q16-G=9.136e-4  I32-round/event=6.803e2
+
+== E2b: constant non-representable delta 0.1 px (systematic bias) ==
+start=             0 delta=0.1 n=  1000000 | drift px: f64=+1.333e-6  Q16/event=+6.104e0  Q16-G(1 gesture)=+0.000e0  I32-round/event=-1.000e5
+start=             0 delta=0.3 n=  1000000 | drift px: f64=-5.658e-6  Q16/event=+3.052e0  Q16-G(1 gesture)=+0.000e0  I32-round/event=-3.000e5
+start=    1000000000 delta=0.1 n=  1000000 | drift px: f64=+2.384e-2  Q16/event=+6.104e0  Q16-G(1 gesture)=+0.000e0  I32-round/event=-1.000e5
+start=    1000000000 delta=0.3 n=  1000000 | drift px: f64=-4.768e-2  Q16/event=+3.052e0  Q16-G(1 gesture)=+0.000e0  I32-round/event=-3.000e5
+start=   68719476735 delta=0.1 n=  1000000 | drift px: f64=+6.103e0  Q16/event=+6.104e0  Q16-G(1 gesture)=+0.000e0  I32-round/event=-1.000e5
+start=   68719476735 delta=0.3 n=  1000000 | drift px: f64=+3.052e0  Q16/event=+3.052e0  Q16-G(1 gesture)=+0.000e0  I32-round/event=-3.000e5
+
+== E3: path dependence (same deltas, per-event vs coalesced pairs) ==
+start=             0 n=1000000 | f64 per-event vs coalesced differ by 3.302e-8 px (bitwise equal: false) | Q16 equal: true
+start=    1000000000 n=1000000 | f64 per-event vs coalesced differ by 0.000e0 px (bitwise equal: true) | Q16 equal: true
+start=   68719476735 n=1000000 | f64 per-event vs coalesced differ by 2.400e-1 px (bitwise equal: false) | Q16 equal: true
+
+== E4: relative jitter between neighbouring elements during a sub-pixel pan ==
+scale=1     | neighbour distance range (phys px): A=[1,1] B=[1,1] | sweep steps where any neighbour distance changed: A=0/1000 B=0/1000
+scale=1.25  | neighbour distance range (phys px): A=[1,2] B=[1,2] | sweep steps where any neighbour distance changed: A=50/1000 B=0/1000
+scale=1.5   | neighbour distance range (phys px): A=[1,2] B=[1,2] | sweep steps where any neighbour distance changed: A=30/1000 B=0/1000
+scale=1.75  | neighbour distance range (phys px): A=[1,2] B=[1,2] | sweep steps where any neighbour distance changed: A=70/1000 B=0/1000
+scale=2     | neighbour distance range (phys px): A=[2,2] B=[2,2] | sweep steps where any neighbour distance changed: A=0/1000 B=0/1000
+
+== E5: snapped adjacency at fractional scales ==
+scales n/120 for n=120..=360, 2404216 adjacency cases | gap/overlap per scale, worst: i32 root location 2888 (at scale 1.1417); f64 root location 542; f64 root + bias 2^-20 0; biased edge != exact round-half-up 0
+
+== E6: large-coordinate camera subtraction ==
+element at      1000000000 | Q16 delta=1234.5678863525 f64 delta=1234.5678863525 |diff|=0.000e0 | fits i32: true
+element at     68719471736 | Q16 delta=1234.5678863525 f64 delta=1234.5678863525 |diff|=0.000e0 | fits i32: false
+element at   1099511627776 | Q16 delta=1234.5678863525 f64 delta=1234.5678710938 |diff|=1.526e-5 | fits i32: false
+
+== E7: unproject -> Q16 -> project round trip ==
+zoom=1     camera≈            0 | max |project(unproject(p)) - p| = 7.629e-6 logical px (bound: zoom*2^-17 = 7.629e-6)
+zoom=1     camera≈   1000000000 | max |project(unproject(p)) - p| = 7.629e-6 logical px (bound: zoom*2^-17 = 7.629e-6)
+zoom=1     camera≈  68719472640 | max |project(unproject(p)) - p| = 7.629e-6 logical px (bound: zoom*2^-17 = 7.629e-6)
+zoom=0.37  camera≈            0 | max |project(unproject(p)) - p| = 2.823e-6 logical px (bound: zoom*2^-17 = 2.823e-6)
+zoom=0.37  camera≈   1000000000 | max |project(unproject(p)) - p| = 2.823e-6 logical px (bound: zoom*2^-17 = 2.823e-6)
+zoom=0.37  camera≈  68719472640 | max |project(unproject(p)) - p| = 2.823e-6 logical px (bound: zoom*2^-17 = 2.823e-6)
+zoom=2.5   camera≈            0 | max |project(unproject(p)) - p| = 1.907e-5 logical px (bound: zoom*2^-17 = 1.907e-5)
+zoom=2.5   camera≈   1000000000 | max |project(unproject(p)) - p| = 1.907e-5 logical px (bound: zoom*2^-17 = 1.907e-5)
+zoom=2.5   camera≈  68719472640 | max |project(unproject(p)) - p| = 1.907e-5 logical px (bound: zoom*2^-17 = 1.907e-5)
+
+== E9: physical edge rounding at extreme coordinates ==
+base=            0 cases=1179695 | adjacency gap/overlap: naive absolute 0 ; lattice-relative 0 | relative geometry differs from same scene near origin: 0
+base=   1000000000 cases=1179695 | adjacency gap/overlap: naive absolute 0 ; lattice-relative 0 | relative geometry differs from same scene near origin: 0
+base=  68719376736 cases=1179695 | adjacency gap/overlap: naive absolute 4288 ; lattice-relative 0 | relative geometry differs from same scene near origin: 0
+
+== E8: equality and serialization semantics ==
+f64: 0.0 == -0.0 -> true, bits equal -> false; NaN == NaN -> false; 0.1+0.2 == 0.3 -> false
+Q16: 8090864136249 -> "8090864136249" -> 8090864136249 (round trip exact: true)
+f64: Display round trip of 68719476735.12346 -> exact: true

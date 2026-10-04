@@ -1,0 +1,46 @@
+$ cargo run --offline   (experiments/b2-space; smithay =0.7.0, features desktop+wayland_frontend; Cargo.lock copied from Prototype 01)
+# 2026-10-04T12:48:20+03:00
+== S1: map elements; Space stores ONE i32 Logical location per element (geometry-origin anchored) ==
+-- callbacks from map_element
+   W: set_activate(true)
+   element_location(W) = Some(Point<smithay::utils::geometry::Logical> { x: 1000, y: 500 })
+   element_geometry(W) = Some(Rectangle<smithay::utils::geometry::Logical> { x: 1000, y: 500, width: 800, height: 600 })   (location == geometry origin)
+   element_bbox(W)     = Some(Rectangle<smithay::utils::geometry::Logical> { x: 990, y: 490, width: 820, height: 620 })   (bbox.loc = location - geometry.loc + bbox.loc)
+   element_bbox(F)     = Some(Rectangle<smithay::utils::geometry::Logical> { x: 70, y: 70, width: 460, height: 360 })
+
+== S2: outputs mapped at OVERLAPPING positions (Space's only 'camera' = output location, i32) ==
+   output_geometry(A) = Some(Rectangle<smithay::utils::geometry::Logical> { x: 0, y: 0, width: 1920, height: 1080 })
+   output_geometry(B) = Some(Rectangle<smithay::utils::geometry::Logical> { x: 500, y: 200, width: 2560, height: 1440 })   (logical size = mode / 1.5, ceil)
+-- refresh with A and B overlapping
+   W: output_enter(A, overlap loc=(0,0) size=820x590)
+   W: output_enter(B, overlap loc=(0,0) size=820x620)
+   F: output_enter(A, overlap loc=(0,0) size=460x360)
+   F: output_enter(B, overlap loc=(430,130) size=30x230)
+   outputs_for_element(W) = ["A", "B"]
+
+== S3: element_under / output_under operate in ONE Space coordinate system ==
+   element_under(Point<smithay::utils::geometry::Logical> { x: 1100.5, y: 650.25 }) = Some(("W", Point<smithay::utils::geometry::Logical> { x: 990, y: 490 }))  (returned loc = render location = surface origin)
+   output_under(Point<smithay::utils::geometry::Logical> { x: 1100.5, y: 650.25 }) = ["A", "B"]  -> one Space point is on BOTH outputs; Space cannot say which camera the pointer looks through
+
+== S4: 'independent camera' move = remap output B only ==
+-- refresh after moving B away
+   W: output_leave(B)
+   F: output_leave(B)
+
+== S5: overlap convention passed to output_enter (EV-S12) ==
+-- refresh with A at x=120 (cuts F)
+   F: output_enter(A, overlap loc=(50,0) size=410x360)
+   F root surface origin in Space: (100,100). Visible part of F's tree starts at Space x=120,
+   i.e. surface-origin-relative x = 20. Space passed overlap relative to BBOX origin (x=70) instead.
+   Window::refresh -> output_update interprets overlap relative to the ROOT SURFACE origin (0,0).
+
+== S6: Space remap replaces location (no second position possible) ==
+   element_location(W) after remap = Some(Point<smithay::utils::geometry::Logical> { x: 1001, y: 500 })
+   count of W in space.elements() = 1
+
+== S7: z-order lives in Space ==
+   back-to-front before raise = ["F", "W"]
+   back-to-front after raise(F) = ["W", "F"]
+-- callbacks from raise_element(F, activate=true)
+   F: set_activate(true)
+   W: set_activate(false)
