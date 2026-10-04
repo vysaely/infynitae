@@ -4,7 +4,7 @@ Status: **Phase B complete (B1–B13). Phase B gate SATISFIED with explicit cond
 Checkpoints:
 - 1 (B1–B6): `9f3f5d4`
 - 2 (B7–B9): `90992b839af1bdbe07d128009d8b7460e21fcc88`
-- 3 (B10–B13): see CHECKPOINT.md
+- 3 (B10–B13) and **Phase B seal**: `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`
 
 Evidence baseline: Phase A artifacts at commit
 **`2c8c163784e260af4aaa8c1dc05c6281b0476120`** (`~/infynitae-native`, branch `main`).

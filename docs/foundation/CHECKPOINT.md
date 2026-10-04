@@ -1,6 +1,6 @@
 # Checkpoint
 
-CURRENT_PHASE: **B — COMPLETE and SEALED (review gate cleared by the user 2026-10-04).** The seal commit is recorded in the next commit (a commit cannot contain its own hash).
+CURRENT_PHASE: **B — COMPLETE and SEALED (review gate cleared by the user 2026-10-04).** **Phase B seal commit: `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`.**
 The carry-forward ledger (5 categories) is at the end of FOUNDATION_BLOCKERS.md.
 
 Date: 2026-10-04
@@ -9,7 +9,7 @@ Date: 2026-10-04
 - Phase A evidence: `2c8c163784e260af4aaa8c1dc05c6281b0476120`
 - Phase B checkpoint 1 (B1–B6): `9f3f5d4`
 - Phase B checkpoint 2 (B7–B9): `90992b839af1bdbe07d128009d8b7460e21fcc88`
-- Phase B checkpoint 3 (B10–B13) + seal: this commit (hash recorded in the following commit)
+- Phase B checkpoint 3 (B10–B13) + seal: `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`
 
 ## COMPLETED_WORK (checkpoint 3)
 - Harness additions, kept minimal:
