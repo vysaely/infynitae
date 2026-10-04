@@ -1,0 +1,107 @@
+# Prototype 01 recorded runtime logs (from the agent session that built it)
+# source: /home/vysaely/.gemini/antigravity-cli/brain/0a6f9e0b-392d-4b84-b3f9-655367d15924/.system_generated/tasks/
+=== task-280.log
+
+=======================================================
+RUNNING INFYNITAE SPATIAL FOUNDATION VERIFICATION SUITE
+=======================================================
+
+✓ Milestone 2 & 4: Projection and inverse hit-testing math verified.
+✓ Milestone 5: Multi-viewport projection verified (same world point, independent cameras).
+✓ Milestone 3: 10,000 camera pans executed in 78.709µs (7.87 ns/pan).
+✓ Milestone 8: Projection time for 10 elements:   0.07 µs
+✓ Milestone 8: Projection time for 100 elements:  0.61 µs
+✓ Milestone 8: Projection time for 1000 elements: 5.72 µs
+
+ALL MATHEMATICAL & ARCHITECTURAL FOUNDATION INVARIANTS PASSED.
+
+Starting Infynitae Native Prototype 01 (Nested Wayland Compositor)...
+2026-10-04T07:26:58.090548Z  INFO input_seat{name="infynitae"}:add_keyboard{xkb_config=XkbConfig { rules: "", model: "", layout: "", variant: "", options: None } repeat_delay=200 repeat_rate=25}:input_keyboard: smithay::input::keyboard: Initializing a xkbcommon handler with keymap query
+2026-10-04T07:26:58.091911Z  INFO input_seat{name="infynitae"}:add_keyboard{xkb_config=XkbConfig { rules: "", model: "", layout: "", variant: "", options: None } repeat_delay=200 repeat_rate=25}:input_keyboard: smithay::input::keyboard: Loaded Keymap name="English (US)"
+2026-10-04T07:26:58.093014Z  INFO smithay::wayland::socket: Created new socket name=Some("wayland-2")
+2026-10-04T07:26:58.093107Z  INFO backend_winit: smithay::backend::winit: Initializing a winit backend
+2026-10-04T07:26:58.105663Z  INFO backend_winit{window=94552643351744}: smithay::backend::egl::display: Successfully selected EGL platform: PLATFORM_WAYLAND_KHR
+2026-10-04T07:26:58.113711Z  INFO backend_winit{window=94552643351744}: smithay::backend::egl::display: EGL Initialized
+2026-10-04T07:26:58.113731Z  INFO backend_winit{window=94552643351744}: smithay::backend::egl::display: EGL Version: (1, 5)
+2026-10-04T07:26:58.113763Z  INFO backend_winit{window=94552643351744}: smithay::backend::egl::display: Supported EGL display extensions: ["EGL_ANDROID_blob_cache", "EGL_ANDROID_native_fence_sync", "EGL_EXT_buffer_age", "EGL_EXT_config_select_group", "EGL_EXT_create_context_robustness", "EGL_EXT_image_dma_buf_import", "EGL_EXT_image_dma_buf_import_modifiers", "EGL_EXT_present_opaque", "EGL_EXT_query_reset_notification_strategy", "EGL_EXT_surface_compression", "EGL_EXT_swap_buffers_with_damage", "EGL_IMG_context_priority", "EGL_KHR_cl_event2", "EGL_KHR_config_attribs", "EGL_KHR_context_flush_control", "EGL_KHR_create_context", "EGL_KHR_create_context_no_error", "EGL_KHR_fence_sync", "EGL_KHR_get_all_proc_addresses", "EGL_KHR_gl_colorspace", "EGL_KHR_gl_renderbuffer_image", "EGL_KHR_gl_texture_2D_image", "EGL_KHR_gl_texture_3D_image", "EGL_KHR_gl_texture_cubemap_image", "EGL_KHR_image_base", "EGL_KHR_no_config_context", "EGL_KHR_reusable_sync", "EGL_KHR_surfaceless_context", "EGL_KHR_swap_buffers_with_damage", "EGL_EXT_pixel_format_float", "EGL_KHR_wait_sync", "EGL_MESA_configless_context", "EGL_MESA_gl_interop", "EGL_MESA_image_dma_buf_export", "EGL_MESA_query_driver", "EGL_MESA_x11_native_visual_id", ""]
+2026-10-04T07:26:58.114509Z  INFO backend_winit{window=94552643351744}:egl{platform="PLATFORM_WAYLAND_KHR" version=(1, 5)}:egl_context: smithay::backend::egl::display: Selected color format: PixelFormat { hardware_accelerated: true, color_bits: 30, alpha_bits: 2, depth_bits: 24, stencil_bits: 8, stereoscopy: false, multisampling: None, srgb: false }
+2026-10-04T07:26:58.115870Z  INFO backend_winit{window=94552643351744}:egl{platform="PLATFORM_WAYLAND_KHR" version=(1, 5)}:egl_context{ptr=94552644518112}: smithay::backend::egl::context: EGL context created priority=Some(Medium)
+2026-10-04T07:26:58.117325Z  INFO backend_winit{window=94552643351744}:egl{platform="PLATFORM_WAYLAND_KHR" version=(1, 5)}:egl_context{ptr=94552644518112}:renderer_gles2: smithay::backend::renderer::gles: Initializing OpenGL ES Renderer
+2026-10-04T07:26:58.117356Z  INFO backend_winit{window=94552643351744}:egl{platform="PLATFORM_WAYLAND_KHR" version=(1, 5)}:egl_context{ptr=94552644518112}:renderer_gles2: smithay::backend::renderer::gles: GL Version: "OpenGL ES 3.2 Mesa 26.2.3-arch1.2"
+2026-10-04T07:26:58.117374Z  INFO backend_winit{window=94552643351744}:egl{platform="PLATFORM_WAYLAND_KHR" version=(1, 5)}:egl_context{ptr=94552644518112}:renderer_gles2: smithay::backend::renderer::gles: GL Vendor: "AMD"
+2026-10-04T07:26:58.117385Z  INFO backend_winit{window=94552643351744}:egl{platform="PLATFORM_WAYLAND_KHR" version=(1, 5)}:egl_context{ptr=94552644518112}:renderer_gles2: smithay::backend::renderer::gles: GL Renderer: "AMD Radeon RX 9070 XT (radeonsi, gfx1201, ACO, DRM 3.64, 7.2.8-arch1-1)"
+2026-10-04T07:26:58.125819Z  INFO new{name="winit" physical=PhysicalProperties { size: Size<smithay::utils::geometry::Raw> { w: 0, h: 0 }, subpixel: Unknown, make: "Infynitae", model: "Nested" }}: smithay::output: Creating new Output name="winit"
+2026-10-04T07:26:58.125842Z  INFO smithay::wayland::output: Creating new wl_output output="winit"
+---------------------------------------------------------------
+INFYNITAE NATIVE FOUNDATION PROTOTYPE 01 ACTIVE
+Wayland socket: WAYLAND_DISPLAY=wayland-2
+Controls:
+  Super + Middle Mouse Drag : Pan camera over infinite canvas
+  Left Click               : Focus window and raise to top
+---------------------------------------------------------------
+2026-10-04T07:27:06.505124Z  INFO infynitae_native_prototype::handlers: Stage: registered new toplevel window ElementId(0) at canvas position CanvasPoint { x: 80, y: 80 }
+2026-10-04T07:27:07.505701Z  INFO infynitae_native_prototype::handlers: Stage: registered new toplevel window ElementId(1) at canvas position CanvasPoint { x: 280, y: 180 }
+=== task-316.log
+
+=======================================================
+RUNNING INFYNITAE SPATIAL FOUNDATION VERIFICATION SUITE
+=======================================================
+
+✓ Milestone 2 & 4: Projection and inverse hit-testing math verified.
+✓ Milestone 5: Multi-viewport projection verified (same world point, independent cameras).
+✓ Milestone 3: 10,000 camera pans executed in 80.001µs (8.00 ns/pan).
+✓ Milestone 8: Projection time for 10 elements:   0.07 µs
+✓ Milestone 8: Projection time for 100 elements:  0.59 µs
+✓ Milestone 8: Projection time for 1000 elements: 5.97 µs
+
+ALL MATHEMATICAL & ARCHITECTURAL FOUNDATION INVARIANTS PASSED.
+
+Starting Infynitae Native Prototype 01 (Nested Wayland Compositor)...
+2026-10-04T07:28:22.680043Z  INFO input_seat{name="infynitae"}:add_keyboard{xkb_config=XkbConfig { rules: "", model: "", layout: "", variant: "", options: None } repeat_delay=200 repeat_rate=25}:input_keyboard: smithay::input::keyboard: Initializing a xkbcommon handler with keymap query
+2026-10-04T07:28:22.681663Z  INFO input_seat{name="infynitae"}:add_keyboard{xkb_config=XkbConfig { rules: "", model: "", layout: "", variant: "", options: None } repeat_delay=200 repeat_rate=25}:input_keyboard: smithay::input::keyboard: Loaded Keymap name="English (US)"
+2026-10-04T07:28:22.682891Z  INFO smithay::wayland::socket: Created new socket name=Some("wayland-2")
+2026-10-04T07:28:22.683001Z  INFO backend_winit: smithay::backend::winit: Initializing a winit backend
+2026-10-04T07:28:22.696502Z  INFO backend_winit{window=94076185199872}: smithay::backend::egl::display: Successfully selected EGL platform: PLATFORM_WAYLAND_KHR
+2026-10-04T07:28:22.704397Z  INFO backend_winit{window=94076185199872}: smithay::backend::egl::display: EGL Initialized
+2026-10-04T07:28:22.704417Z  INFO backend_winit{window=94076185199872}: smithay::backend::egl::display: EGL Version: (1, 5)
+2026-10-04T07:28:22.704453Z  INFO backend_winit{window=94076185199872}: smithay::backend::egl::display: Supported EGL display extensions: ["EGL_ANDROID_blob_cache", "EGL_ANDROID_native_fence_sync", "EGL_EXT_buffer_age", "EGL_EXT_config_select_group", "EGL_EXT_create_context_robustness", "EGL_EXT_image_dma_buf_import", "EGL_EXT_image_dma_buf_import_modifiers", "EGL_EXT_present_opaque", "EGL_EXT_query_reset_notification_strategy", "EGL_EXT_surface_compression", "EGL_EXT_swap_buffers_with_damage", "EGL_IMG_context_priority", "EGL_KHR_cl_event2", "EGL_KHR_config_attribs", "EGL_KHR_context_flush_control", "EGL_KHR_create_context", "EGL_KHR_create_context_no_error", "EGL_KHR_fence_sync", "EGL_KHR_get_all_proc_addresses", "EGL_KHR_gl_colorspace", "EGL_KHR_gl_renderbuffer_image", "EGL_KHR_gl_texture_2D_image", "EGL_KHR_gl_texture_3D_image", "EGL_KHR_gl_texture_cubemap_image", "EGL_KHR_image_base", "EGL_KHR_no_config_context", "EGL_KHR_reusable_sync", "EGL_KHR_surfaceless_context", "EGL_KHR_swap_buffers_with_damage", "EGL_EXT_pixel_format_float", "EGL_KHR_wait_sync", "EGL_MESA_configless_context", "EGL_MESA_gl_interop", "EGL_MESA_image_dma_buf_export", "EGL_MESA_query_driver", "EGL_MESA_x11_native_visual_id", ""]
+2026-10-04T07:28:22.705182Z  INFO backend_winit{window=94076185199872}:egl{platform="PLATFORM_WAYLAND_KHR" version=(1, 5)}:egl_context: smithay::backend::egl::display: Selected color format: PixelFormat { hardware_accelerated: true, color_bits: 30, alpha_bits: 2, depth_bits: 24, stencil_bits: 8, stereoscopy: false, multisampling: None, srgb: false }
+2026-10-04T07:28:22.706448Z  INFO backend_winit{window=94076185199872}:egl{platform="PLATFORM_WAYLAND_KHR" version=(1, 5)}:egl_context{ptr=94076186366240}: smithay::backend::egl::context: EGL context created priority=Some(Medium)
+2026-10-04T07:28:22.707667Z  INFO backend_winit{window=94076185199872}:egl{platform="PLATFORM_WAYLAND_KHR" version=(1, 5)}:egl_context{ptr=94076186366240}:renderer_gles2: smithay::backend::renderer::gles: Initializing OpenGL ES Renderer
+2026-10-04T07:28:22.707690Z  INFO backend_winit{window=94076185199872}:egl{platform="PLATFORM_WAYLAND_KHR" version=(1, 5)}:egl_context{ptr=94076186366240}:renderer_gles2: smithay::backend::renderer::gles: GL Version: "OpenGL ES 3.2 Mesa 26.2.3-arch1.2"
+2026-10-04T07:28:22.707704Z  INFO backend_winit{window=94076185199872}:egl{platform="PLATFORM_WAYLAND_KHR" version=(1, 5)}:egl_context{ptr=94076186366240}:renderer_gles2: smithay::backend::renderer::gles: GL Vendor: "AMD"
+2026-10-04T07:28:22.707715Z  INFO backend_winit{window=94076185199872}:egl{platform="PLATFORM_WAYLAND_KHR" version=(1, 5)}:egl_context{ptr=94076186366240}:renderer_gles2: smithay::backend::renderer::gles: GL Renderer: "AMD Radeon RX 9070 XT (radeonsi, gfx1201, ACO, DRM 3.64, 7.2.8-arch1-1)"
+2026-10-04T07:28:22.711749Z  INFO new{name="winit" physical=PhysicalProperties { size: Size<smithay::utils::geometry::Raw> { w: 0, h: 0 }, subpixel: Unknown, make: "Infynitae", model: "Nested" }}: smithay::output: Creating new Output name="winit"
+2026-10-04T07:28:22.711773Z  INFO smithay::wayland::output: Creating new wl_output output="winit"
+---------------------------------------------------------------
+INFYNITAE NATIVE FOUNDATION PROTOTYPE 01 ACTIVE
+Wayland socket: WAYLAND_DISPLAY=wayland-2
+Controls:
+  Super + Middle Mouse Drag : Pan camera over infinite canvas
+  Left Click               : Focus window and raise to top
+---------------------------------------------------------------
+2026-10-04T07:28:22.711838Z  INFO infynitae_native_prototype::xwayland: Spawning xwayland-satellite :25 for WAYLAND_DISPLAY=wayland-2
+xwayland-satellite running on DISPLAY=:25
+ 2026-10-04T07:28:22.712Z INFO  xwayland_satellite > Starting xwayland-satellite version 0.8.3
+ 2026-10-04T07:28:22.719Z WARN  xwayland_satellite::server > Couldn't bind fractional scale manager: the requested global was not found in the registry. Fractional scaling will not work.
+ 2026-10-04T07:28:22.719Z WARN  xwayland_satellite::server > Could not bind xdg activation (NotPresent). Windows might not receive focus depending on compositor focus stealing policy.
+ 2026-10-04T07:28:22.719Z INFO  xwayland_satellite::server::selection > Primary selection unsupported.
+ 2026-10-04T07:28:22.727Z INFO  xwayland_process                      > Xwayland glamor: GBM Wayland interfaces not available
+ 2026-10-04T07:28:22.727Z INFO  xwayland_process                      > Failed to initialize glamor, falling back to sw
+ 2026-10-04T07:28:22.733Z INFO  xwayland_process                      > _amdgpu_device_initialize: amdgpu_query_info(ACCEL_WORKING) failed (-13)
+ 2026-10-04T07:28:22.749Z INFO  xwayland_satellite::xstate            > xfixes version: 1.0
+ 2026-10-04T07:28:22.750Z INFO  xwayland_satellite                    > Connected to Xwayland on :25
+ 2026-10-04T07:28:22.750Z INFO  xwayland_satellite                    > Successfully notified systemd of ready state.
+ 2026-10-04T07:28:22.758Z INFO  xwayland_process                      > >                   X11 cannot support keycodes above 255.
+2026-10-04T07:28:34.530499Z  INFO infynitae_native_prototype::handlers: Stage: registered new toplevel window ElementId(0) at canvas position CanvasPoint { x: 80, y: 80 }
+
+=== searches across ALL task logs
+Camera Pan START: 0
+Final stats: 0
+Total configure events sent: 0
+Focus switched: 0
+
+=== client launch commands found in session transcript
+DISPLAY=:25 GDK_BACKEND=x11 kitty -o linux_display_server=x11 --hold sh -c 
+WAYLAND_DISPLAY=wayland-2 /home/vysaely/.local/bin/xwayland-satellite :25 &
+WAYLAND_DISPLAY=wayland-2 kitty --hold sh -c 

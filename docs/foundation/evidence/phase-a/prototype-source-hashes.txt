@@ -1,0 +1,26 @@
+# Prototype 01 source snapshot inspected 2026-10-04T12:27:57+03:00
+# repo has NO commits; these hashes identify the exact files read
+cc7ca99ee8663927d7165e8df32d4d5041a49fb11618d7809c9265c24374cafc  Cargo.toml
+e9282b7c2c88752c540c75e99105b2e09002de7ef2349a43204df0c7b6b605fe  Cargo.lock
+d2fb80ad6b744f39fffd41c0296451f88968ab9c3c7a825b5a5c48fd35572784  src/handlers.rs
+cc42e8274cecf21c7fe13dcfddfb10058aaa06ef56160754fd41fed39cabf677  src/input.rs
+1b575ec43aee40a0225a5a0c77907a0c127c685ea8cc17576c12f2b2b9a83827  src/lib.rs
+261230b56da739dc6eab8ca5aad3666bfb31fe8a3f253e7e70837fc2f07861b7  src/main.rs
+4dc310ca5319379b8ca70d3afdbe9eee3db6e8bdcd49b596ad0a78ca85d66190  src/render.rs
+c89122ca8517fa46ce13ea205285e7d78996f787fd04384d32d708c75179e6cf  src/spatial.rs
+96d1297e567f86fd6f3e7a0e5b4275120a1a16df04c824fbdabce7521162ca7b  src/state.rs
+6c175dffe3796c2cf13ce6316d83bbd73271e2f012df95d063da1ea4b97bb080  src/verification.rs
+8b759f8ba9fda4ab02175a4dfeadc86af3b8e110b16b897a51f7d2f0b106c30b  src/winit.rs
+d1b765a5228a156ac75434a333329dceb3d72e827870b66df6276fbb96ff02ab  src/xwayland.rs
+
+  193 src/handlers.rs
+  219 src/input.rs
+    8 src/lib.rs
+   86 src/main.rs
+   65 src/render.rs
+  289 src/spatial.rs
+  190 src/state.rs
+  105 src/verification.rs
+  116 src/winit.rs
+   32 src/xwayland.rs
+ 1303 total

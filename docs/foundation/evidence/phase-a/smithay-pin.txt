@@ -1,0 +1,106 @@
+# Smithay pin
+1309:name = "smithay"
+1310-version = "0.7.0"
+1311-source = "registry+https://github.com/rust-lang/crates.io-index"
+1312-checksum = "740cea6927892bc182d5bf70c8f79806c8bc9f68f2fb96e55a30be171b63af98"
+
+$ cargo search smithay --limit 1   (2026-10-04T12:27:57+03:00)
+smithay = "0.7.0"    # Smithay is a library for writing wayland compositors.
+
+# features block of smithay-0.7.0/Cargo.toml
+[features]
+backend_drm = [
+    "drm",
+    "drm-ffi",
+]
+backend_egl = [
+    "gl_generator",
+    "libloading",
+]
+backend_gbm = [
+    "gbm",
+    "cc",
+    "pkg-config",
+    "backend_drm",
+]
+backend_gbm_has_create_with_modifiers2 = []
+backend_gbm_has_fd_for_plane = []
+backend_libinput = ["input"]
+backend_session = []
+backend_session_libseat = [
+    "backend_session",
+    "libseat",
+]
+backend_udev = [
+    "udev",
+    "input/udev",
+]
+backend_vulkan = [
+    "ash",
+    "scopeguard",
+]
+backend_winit = [
+    "winit",
+    "backend_egl",
+    "wayland-client",
+    "wayland-cursor",
+    "wayland-egl",
+    "renderer_gl",
+]
+backend_x11 = [
+    "x11rb",
+    "x11rb/dri3",
+    "x11rb/xfixes",
+    "x11rb/xinput",
+    "x11rb/present",
+    "x11rb_event_source",
+    "backend_gbm",
+    "backend_drm",
+    "backend_egl",
+]
+default = [
+    "backend_drm",
+    "backend_gbm",
+    "backend_libinput",
+    "backend_udev",
+    "backend_session_libseat",
+    "backend_x11",
+    "backend_winit",
+    "desktop",
+    "renderer_gl",
+    "renderer_pixman",
+    "renderer_multi",
+    "xwayland",
+    "wayland_frontend",
+    "backend_vulkan",
+]
+desktop = []
+renderer_gl = [
+    "gl_generator",
+    "backend_egl",
+]
+renderer_glow = [
+    "renderer_gl",
+    "glow",
+]
+renderer_multi = [
+    "backend_drm",
+    "aliasable",
+]
+renderer_pixman = ["pixman"]
+
+# related crates in lock
+name = "wayland-server"
+version = "0.31.14"
+name = "wayland-protocols"
+version = "0.32.13"
+name = "calloop"
+version = "0.13.0"
+--
+name = "calloop"
+version = "0.14.5"
+name = "winit"
+version = "0.30.13"
+
+rustc 1.99.0 (b940084d7 2026-09-28)
+cargo 1.99.0 (5f94df478 2026-08-27)

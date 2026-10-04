@@ -1,0 +1,100 @@
+# grep of prototype for lifecycle / output / counter / panic sites
+## pattern: toplevel_destroyed
+(no matches)
+## pattern: remove_element_by_surface
+src/spatial.rs:166:    pub fn remove_element_by_surface(&mut self, surface: &WlSurface) -> Option<ElementId> {
+## pattern: output_enter
+(no matches)
+## pattern: output_leave
+(no matches)
+## pattern: \.enter(
+(no matches)
+## pattern: send_frame
+src/winit.rs:94:                    pw.window.send_frame(
+## pattern: relative_motion
+src/state.rs:65:    pub relative_motion_events_sent: Arc<AtomicUsize>,
+src/state.rs:129:            relative_motion_events_sent: Arc::new(AtomicUsize::new(0)),
+## pattern: PopupManager
+(no matches)
+## pattern: new_popup
+src/handlers.rs:118:    fn new_popup(&mut self, _surface: PopupSurface, _positioner: PositionerState) {}
+## pattern: Space
+src/spatial.rs:129:/// Neither Smithay Space nor any client configure event stores or overrides
+## pattern: record_configure
+src/state.rs:166:    pub fn record_configure(&self) {
+src/handlers.rs:77:                self.record_configure();
+src/handlers.rs:115:        self.record_configure();
+## pattern: configure_traffic_during_pan
+src/main.rs:22:        println!("Configure traffic during pan: {}", results.configure_traffic_during_pan);
+src/verification.rs:10:    pub configure_traffic_during_pan: usize,
+src/verification.rs:81:        configure_traffic_during_pan: 0,
+## pattern: world_mutations_during_pan
+src/main.rs:23:        println!("World mutations during pan: {}", results.world_mutations_during_pan);
+src/verification.rs:11:    pub world_mutations_during_pan: usize,
+src/verification.rs:82:        world_mutations_during_pan: 0,
+## pattern: unwrap()
+src/state.rs:97:        seat.add_keyboard(Default::default(), 200, 25).unwrap();
+src/state.rs:136:        let listening_socket = ListeningSocketSource::new_auto().unwrap();
+src/state.rs:146:                    .unwrap();
+src/state.rs:155:                        display.get_mut().dispatch_clients(state).unwrap();
+src/state.rs:160:            .unwrap();
+src/input.rs:26:                self.seat.get_keyboard().unwrap().input::<(), _>(
+src/input.rs:41:                let pointer = self.seat.get_pointer().unwrap();
+src/input.rs:52:                let pointer = self.seat.get_pointer().unwrap();
+src/input.rs:59:                let pointer = self.seat.get_pointer().unwrap();
+src/input.rs:60:                let keyboard = self.seat.get_keyboard().unwrap();
+src/input.rs:162:                let pointer = self.seat.get_pointer().unwrap();
+src/input.rs:173:        let pointer = self.seat.get_pointer().unwrap();
+src/handlers.rs:50:        &client.get_data::<ClientState>().unwrap().compositor_state
+src/handlers.rs:71:                    .map(|d| d.lock().unwrap().initial_configure_sent)
+src/handlers.rs:76:                elem.window.toplevel().unwrap().send_configure();
+src/winit.rs:76:                    let (renderer, mut framebuffer) = backend.bind().unwrap();
+## pattern: expect(
+src/state.rs:148:            .expect("Failed to init Wayland socket source.");
+## pattern: unsafe
+src/state.rs:154:                    unsafe {
+## pattern: i32
+src/spatial.rs:17:    pub x: i32,
+src/spatial.rs:18:    pub y: i32,
+src/spatial.rs:22:    pub const fn new(x: i32, y: i32) -> Self {
+src/spatial.rs:63:    pub x: i32,
+src/spatial.rs:64:    pub y: i32,
+src/spatial.rs:65:    pub width: i32,
+src/spatial.rs:66:    pub height: i32,
+src/spatial.rs:70:    pub const fn new(x: i32, y: i32, width: i32, height: i32) -> Self {
+src/spatial.rs:85:    pub x: i32,
+src/spatial.rs:86:    pub y: i32,
+src/spatial.rs:90:    pub const fn new(x: i32, y: i32) -> Self {
+src/spatial.rs:98:    pub fn pan(&mut self, delta_x: i32, delta_y: i32) {
+src/spatial.rs:105:    pub fn project(&self, world_pt: CanvasPoint) -> (i32, i32) {
+src/spatial.rs:111:    pub fn unproject(&self, screen_x: i32, screen_y: i32) -> CanvasPoint {
+src/render.rs:16:    pub screen_pos: Point<i32, Logical>,
+src/render.rs:17:    pub world_pos: (i32, i32),
+src/render.rs:29:    _output_size: (i32, i32),
+src/render.rs:54:        let phys_pos = smithay::utils::Point::<i32, smithay::utils::Physical>::from((pw.screen_pos.x, pw.screen_pos.y));
+src/state.rs:178:        let world_x = screen_pos.x.round() as i32 + self.camera.x;
+src/state.rs:179:        let world_y = screen_pos.y.round() as i32 + self.camera.y;
+src/input.rs:99:                    let world_x = current_screen_pos.x.round() as i32 + self.camera.x;
+src/input.rs:100:                    let world_y = current_screen_pos.y.round() as i32 + self.camera.y;
+src/input.rs:152:                        frame = frame.v120(Axis::Horizontal, discrete as i32);
+src/input.rs:158:                        frame = frame.v120(Axis::Vertical, discrete as i32);
+src/input.rs:178:                let dx = d.x.round() as i32;
+src/input.rs:179:                let dy = d.y.round() as i32;
+src/handlers.rs:103:        let count = self.stage.elements_in_z_order().len() as i32;
+src/verification.rs:89:        .map(|i| CanvasPoint::new((i as i32) * 50, (i as i32) * 40))
+## pattern: f64
+src/state.rs:58:    pub pan_start_pointer: Option<Point<f64, Logical>>,
+src/state.rs:174:        screen_pos: Point<f64, Logical>,
+src/state.rs:175:    ) -> Option<(smithay::reexports::wayland_server::protocol::wl_surface::WlSurface, Point<f64, Logical>)> {
+src/state.rs:184:            let local_f64 = Point::from((local_pt.x as f64, local_pt.y as f64));
+src/state.rs:186:                .surface_under(local_f64, smithay::desktop::WindowSurfaceType::ALL)
+src/state.rs:187:                .map(|(s, p)| (s, p.to_f64()))
+src/input.rs:171:    fn handle_pointer_position(&mut self, pos: Point<f64, Logical>, delta: Option<Point<f64, Logical>>) {
+src/handlers.rs:165:        _location: Point<f64, Logical>,
+src/verification.rs:6:    pub pan_update_ns: f64,
+src/verification.rs:7:    pub stage_scaling_10_ns: f64,
+src/verification.rs:8:    pub stage_scaling_100_ns: f64,
+src/verification.rs:9:    pub stage_scaling_1000_ns: f64,
+src/verification.rs:62:    let pan_update_ns = pan_duration.as_nanos() as f64 / 10_000.0;
+src/verification.rs:86:fn bench_stage_projection(count: usize) -> f64 {
+src/verification.rs:104:    (duration.as_micros() as f64) / (iters as f64)

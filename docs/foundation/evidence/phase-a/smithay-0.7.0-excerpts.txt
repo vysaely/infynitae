@@ -1,0 +1,379 @@
+# Smithay 0.7.0 source excerpts relied upon (path relative to crate root)
+## src/desktop/space/mod.rs (visibility of wayland mod)
+29:pub(crate) mod wayland;
+31:pub use self::element::*;
+33:pub use self::utils::*;
+## src/desktop/space/wayland/window.rs  impl SpaceElement for Window
+use super::{output_update, WindowOutputUserData};
+
+impl SpaceElement for Window {
+    fn geometry(&self) -> Rectangle<i32, Logical> {
+        self.geometry()
+    }
+
+    fn bbox(&self) -> Rectangle<i32, Logical> {
+        self.bbox_with_popups()
+    }
+
+    fn is_in_input_region(&self, point: &Point<f64, Logical>) -> bool {
+        self.surface_under(*point, WindowSurfaceType::ALL).is_some()
+    }
+
+    fn z_index(&self) -> u8 {
+        self.0.z_index.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    fn set_activate(&self, activated: bool) {
+        self.set_activated(activated);
+    }
+
+    #[profiling::function]
+    fn output_enter(&self, output: &Output, overlap: Rectangle<i32, Logical>) {
+        self.user_data().insert_if_missing(WindowOutputUserData::default);
+        {
+            let mut state = self
+                .user_data()
+                .get::<WindowOutputUserData>()
+                .unwrap()
+                .borrow_mut();
+            state.output_overlap.insert(output.downgrade(), overlap);
+            state.output_overlap.retain(|weak, _| weak.is_alive());
+        }
+        self.refresh()
+    }
+
+    #[profiling::function]
+    fn output_leave(&self, output: &Output) {
+        if let Some(state) = self.user_data().get::<WindowOutputUserData>() {
+            state.borrow_mut().output_overlap.retain(|weak, _| weak != output);
+        }
+
+        if let Some(surface) = self.wl_surface() {
+            output_update(output, None, &surface);
+            for (popup, _) in PopupManager::popups_for_surface(&surface) {
+                output_update(output, None, popup.wl_surface());
+            }
+        }
+    }
+
+    #[profiling::function]
+    fn refresh(&self) {
+        self.user_data().insert_if_missing(WindowOutputUserData::default);
+        let state = self.user_data().get::<WindowOutputUserData>().unwrap().borrow();
+
+        if let Some(surface) = self.wl_surface() {
+            for (weak, overlap) in state.output_overlap.iter() {
+                if let Some(output) = weak.upgrade() {
+                    output_update(&output, Some(*overlap), &surface);
+                    for (popup, location) in PopupManager::popups_for_surface(&surface) {
+                        let mut overlap = *overlap;
+                        overlap.loc -= location;
+                        output_update(&output, Some(overlap), popup.wl_surface());
+                    }
+## src/desktop/space/mod.rs  Space::refresh overlap convention
+            })
+            .collect::<Vec<_>>();
+        for e in &mut self.elements {
+            let bbox = e.bbox();
+
+            for (output, output_geometry) in &outputs {
+                // Check if the bounding box of the toplevel intersects with the output
+                if let Some(mut overlap) = output_geometry.intersection(bbox) {
+                    // output_enter expects the overlap to be relative to the element
+                    overlap.loc -= bbox.loc;
+                    let old = e.outputs.insert(output.clone(), overlap);
+                    if old.is_none() || matches!(old, Some(old_overlap) if old_overlap != overlap) {
+                        e.element.output_enter(output, overlap);
+                    }
+                } else if e.outputs.remove(output).is_some() {
+                    e.element.output_leave(output);
+                }
+            }
+            e.outputs.retain(|output, _| {
+                if !outputs.iter().any(|(o, _)| o == output) {
+                    e.element.output_leave(output);
+                    false
+                } else {
+## src/desktop/wayland/utils.rs  send_frames_surface_tree + throttle
+/// The frame callbacks for a [`WlSurface`](wl_surface::WlSurface) will only be sent if the
+/// primary scan-out output equals the provided output or if the surface has no primary
+/// scan-out output and the frame callback is overdue. A frame callback is considered
+/// overdue if the last time a frame callback has been sent is greater than the provided
+/// throttle threshold. If the threshold is `None` this will never send frame callbacks
+/// for a surface that is not visible. Specifying [`Duration::ZERO`] as the throttle threshold
+/// will always send frame callbacks for non visible surfaces.
+pub fn send_frames_surface_tree<T, F>(
+    surface: &wl_surface::WlSurface,
+    output: &Output,
+    time: T,
+    throttle: Option<Duration>,
+    mut primary_scan_out_output: F,
+) where
+    T: Into<Duration>,
+    F: FnMut(&wl_surface::WlSurface, &SurfaceData) -> Option<Output>,
+{
+    let time = time.into();
+
+    with_surface_tree_downward(
+        surface,
+        (),
+        |_, _, &()| TraversalAction::DoChildren(()),
+        |surface, states, &()| {
+            states
+                .data_map
+                .insert_if_missing_threadsafe(SurfaceFrameThrottlingState::default);
+            let surface_frame_throttling_state =
+                states.data_map.get::<SurfaceFrameThrottlingState>().unwrap();
+
+            let on_primary_scanout_output = primary_scan_out_output(surface, states)
+                .map(|preferred_output| preferred_output == *output)
+                .unwrap_or(false);
+
+            let frame_overdue = surface_frame_throttling_state.update(time, throttle);
+
+            // We only want to send frame callbacks on the primary scan-out output
+            // or if we have no output and the frame is overdue, this can only
+            // happen if the surface is completely occluded on all outputs
+            let send_frame_callback = on_primary_scanout_output || frame_overdue;
+
+            if send_frame_callback {
+                // the surface may not have any user_data if it is a subsurface and has not
+                // yet been commited
+                for callback in states
+                    .cached_state
+                    .get::<SurfaceAttributes>()
+                    .current()
+                    .frame_callbacks
+                    .drain(..)
+                {
+                    callback.done(time.as_millis() as u32);
+                }
+            }
+        },
+        |_, _, &()| true,
+    );
+}
+
+/// Sends dmabuf feedback for a surface and its subsurfaces with the given select function.
+///
+/// The dmabuf feedback for a [`WlSurface`](wl_surface::WlSurface) will only be sent if the
+/// primary scan-out output equals the provided output and the surface has requested dmabuf
+struct SurfaceFrameThrottlingState(Mutex<Option<Duration>>);
+
+impl SurfaceFrameThrottlingState {
+    pub fn update(&self, time: Duration, throttle: Option<Duration>) -> bool {
+        if let Some(throttle) = throttle {
+            let mut guard = self.0.lock().unwrap();
+            let send_throttled_frame = guard
+                .map(|last| time.saturating_sub(last) > throttle)
+                .unwrap_or(true);
+            if send_throttled_frame {
+                *guard = Some(time);
+            }
+            send_throttled_frame
+        } else {
+            false
+        }
+    }
+}
+## src/wayland/output/mod.rs  Output::enter/leave
+    }
+
+    /// Sends `wl_surface.enter` for the provided surface
+    /// with the matching client output
+    #[profiling::function]
+    pub fn enter(&self, surface: &wl_surface::WlSurface) {
+        let mut inner = self.inner.0.lock().unwrap();
+        if inner.surfaces.insert(surface.downgrade()) {
+            let client = inner
+                .handle
+                .as_ref()
+                .and_then(|handle| handle.upgrade())
+                .and_then(|handle| handle.get_client(surface.id()).ok());
+            drop(inner);
+
+            if let Some(client) = client {
+                for output in self.client_outputs_internal(client) {
+                    surface.enter(&output);
+                }
+            }
+        }
+    }
+
+    /// Sends `wl_surface.leave` for the provided surface
+    /// with the matching client output
+    #[profiling::function]
+    pub fn leave(&self, surface: &wl_surface::WlSurface) {
+        let mut inner = self.inner.0.lock().unwrap();
+        if inner.surfaces.remove(&surface.downgrade()) {
+            let client = inner
+                .handle
+                .as_ref()
+                .and_then(|handle| handle.upgrade())
+                .and_then(|handle| handle.get_client(surface.id()).ok());
+            drop(inner);
+
+            if let Some(client) = client {
+                for output in self.client_outputs_internal(client) {
+                    surface.leave(&output);
+                }
+            }
+## src/wayland/compositor/mod.rs  send_surface_state
+
+/// Send the `scale` and `transform` preferences for the given surface when it supports them.
+///
+/// The new state is only send when it differs from the already cached one on the calling thread.
+pub fn send_surface_state(surface: &WlSurface, data: &SurfaceData, scale: i32, transform: Transform) {
+    if surface.version() < 6 {
+        return;
+    }
+
+    // NOTE we insert default for checks below to work properly.
+    let mut storage = data
+        .data_map
+        .get_or_insert(|| RefCell::new(SuggestedSurfaceState::default()))
+        .borrow_mut();
+
+    if storage.scale != scale {
+        surface.preferred_buffer_scale(scale);
+        storage.scale = scale;
+    }
+
+    let transform = transform.into();
+    if storage.transform != transform {
+        surface.preferred_buffer_transform(transform);
+        storage.transform = transform;
+    }
+}
+## src/wayland/fractional_scale/mod.rs
+pub type FractionalScaleStateUserData = RefCell<FractionalScaleState>;
+
+/// State for the fractional scale of a surface
+#[derive(Debug, Default)]
+pub struct FractionalScaleState {
+    /// The fractional scale object, if one exists for this surface.
+    fractional_scale: Option<wp_fractional_scale_v1::WpFractionalScaleV1>,
+    /// Preferred fractional scale for this surface.
+    preferred_scale: Option<f64>,
+}
+
+impl FractionalScaleState {
+    /// Set the preferred scale
+    pub fn set_preferred_scale(&mut self, scale: f64) {
+        if self.preferred_scale != Some(scale) {
+            if let Some(obj) = &self.fractional_scale {
+                obj.preferred_scale(f64::round(scale * 120.0) as u32);
+            }
+            self.preferred_scale = Some(scale);
+        }
+    }
+
+    /// Returns the current preferred scale
+    pub fn preferred_scale(&self) -> Option<f64> {
+        self.preferred_scale
+    }
+}
+
+/// Run a closure on the [`FractionalScaleState`] of a [`WlSurface`](wl_surface::WlSurface)
+pub fn with_fractional_scale<F, T>(states: &SurfaceData, f: F) -> T
+where
+    F: FnOnce(&mut FractionalScaleState) -> T,
+{
+    let mut fractional_scale = states
+        .data_map
+        .get_or_insert(FractionalScaleStateUserData::default)
+        .borrow_mut();
+
+## src/backend/renderer/element/mod.rs  default_primary_scanout_output_compare
+}
+
+/// Default function for primary scan-out selection
+///
+/// This will prefer the next output when the visible portion of
+/// the element on screen is at least twice the size of the
+/// current visible portion. Otherwise it will prefer the output
+/// with the higher refresh rate.
+pub fn default_primary_scanout_output_compare<'a>(
+    current_output: &'a Output,
+    current_state: &RenderElementState,
+    next_output: &'a Output,
+    next_state: &RenderElementState,
+) -> &'a Output {
+    const VISIBLE_AREA_THRESHOLD: usize = 2;
+
+    let current_mode = current_output.current_mode();
+    let next_mode = next_output.current_mode();
+
+    // We don't expect to be called with an output that has no mode,
+    // but to be safe we do not unwrap here
+    let next_mode_has_higher_refresh = next_mode
+        .map(|next_mode| {
+            current_mode
+                .map(|current_mode| next_mode.refresh > current_mode.refresh)
+                .unwrap_or(false)
+        })
+        .unwrap_or(false);
+
+    let current_visible_area_threshold = current_state.visible_area * VISIBLE_AREA_THRESHOLD;
+    let next_mode_visible_area_greater = next_state.visible_area >= current_visible_area_threshold;
+
+    if next_mode_visible_area_greater || next_mode_has_higher_refresh {
+        next_output
+    } else {
+        current_output
+    }
+}
+
+## pointer grab API
+/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/grab.rs:37:pub trait PointerGrab<D: SeatHandler>: Send + Downcast {
+/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:168:    pub fn set_grab<G: PointerGrab<D> + 'static>(&self, data: &mut D, grab: G, serial: Serial, focus: Focus) {
+/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:178:    pub fn unset_grab(&self, data: &mut D, serial: Serial, time: u32) {
+/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:232:    pub fn motion(
+/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:252:    pub fn relative_motion(
+/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:518:    pub fn set_grab<G: PointerGrab<D> + 'static>(
+/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:534:    pub fn unset_grab(
+/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:576:    pub fn motion(
+/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:590:    pub fn relative_motion(
+## Window pub API
+109:    pub fn new(toplevel: ToplevelSurface) -> Window {
+114:    pub fn new_wayland_window(toplevel: ToplevelSurface) -> Window {
+128:    pub fn new_x11_window(surface: X11Surface) -> Window {
+142:    pub fn is_wayland(&self) -> bool {
+149:    pub fn is_x11(&self) -> bool {
+154:    pub fn geometry(&self) -> Rectangle<i32, Logical> {
+174:    pub fn bbox(&self) -> Rectangle<i32, Logical> {
+186:    pub fn bbox_with_popups(&self) -> Rectangle<i32, Logical> {
+200:    pub fn set_activated(&self, active: bool) -> bool {
+224:    pub fn send_frame<T, F>(
+247:    pub fn send_dmabuf_feedback<'a, P, F>(
+278:    pub fn take_presentation_feedback<F1, F2>(
+307:    pub fn with_surfaces<F>(&self, mut processor: F)
+324:    pub fn on_commit(&self) {
+336:    pub fn surface_under<P: Into<Point<f64, Logical>>>(
+363:    pub fn toplevel(&self) -> Option<&ToplevelSurface> {
+373:    pub fn x11_surface(&self) -> Option<&X11Surface> {
+382:    pub fn underlying_surface(&self) -> &WindowSurface {
+387:    pub fn override_z_index(&self, z_index: u8) {
+393:    pub fn user_data(&self) -> &UserDataMap {
+## xdg Suspended handling
+        let tiled_supported = version >= XDG_TOPLEVEL_STATE_TILED_SINCE;
+        let suspended_supported = version >= XDG_TOPLEVEL_STATE_SUSPENDED_SINCE;
+
+        // If the client version supports the suspended states
+        // we can directly return the states which will save
+        // us from allocating another vector
+        if suspended_supported {
+            return self.states;
+        }
+
+        let is_suspended = |state: &xdg_toplevel::State| *state == xdg_toplevel::State::Suspended;
+        let contains_suspended = self.states.contains(&xdg_toplevel::State::Suspended);
+
+        // If tiled is supported and there is no suspend state there is nothing to filter out
+        if tiled_supported && !contains_suspended {
+            return self.states;
+        }
+
+        let is_tiled = |state: &xdg_toplevel::State| {
+            matches!(
+                state,
