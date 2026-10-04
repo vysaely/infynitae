@@ -1,0 +1,6 @@
+$ ./target/release/x6   (experiments/b8-harness; smithay =0.7.0 + renderer_test; lockstep, virtual time)
+# 2026-10-04T13:36:25+03:00
+root surface 837x635, subsurface offset from public renderer state = (37,11) size 101x53
+surface rects checked (root + subsurface, 241 scales x 3 magnitudes x 93 positions): 134478
+f64 root location (B1.5 rule): rects whose 4 edges differ from edge(x): 0
+i32 root location (render_elements_from_surface_tree style): rects differing: 72242 (worst scale 1.1333: 435)

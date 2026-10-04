@@ -1,0 +1,11 @@
+$ ./target/release/x9   (experiments/b8-harness; smithay =0.7.0 + renderer_test; lockstep, virtual time)
+# 2026-10-04T13:36:25+03:00
+t=   0.000ms client W: wl_surface.enter A
+t=   0.000ms client presentation_feedback#1.presented
+t=  20.000ms client W: wl_surface.leave A
+t=  40.000ms client presentation_feedback#2.discarded
+t= 120.000ms client W: wl_surface.enter A
+t= 121.212ms client presentation_feedback#3.presented
+[PASS] commit #1 (visible) presented while visible
+[PASS] commit #2 (unobserved, superseded by #3) discarded at supersede time, never presented
+[PASS] commit #3 (latest while unobserved) stays pending, then presented on re-entry: latency Some(1212) us

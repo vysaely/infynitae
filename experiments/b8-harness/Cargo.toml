@@ -7,7 +7,7 @@ publish = false
 # Minimal experiment harness for Phase B checkpoint 2 (B7-B9).
 # Not a compositor: no renderer, no input backend. Buffers are accepted, never drawn.
 [dependencies]
-smithay = { version = "=0.7.0", default-features = false, features = ["desktop", "wayland_frontend"] }
+smithay = { version = "=0.7.0", default-features = false, features = ["desktop", "wayland_frontend", "renderer_test"] }
 wayland-client = "=0.31.15"
-wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
+wayland-protocols = { version = "=0.32.13", features = ["client", "staging", "unstable"] }
 libc = "0.2"

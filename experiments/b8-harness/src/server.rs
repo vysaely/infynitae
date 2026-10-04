@@ -16,9 +16,10 @@ use smithay::{
         renderer::utils::{on_commit_buffer_handler, with_renderer_surface_state},
     },
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
-    delegate_output, delegate_seat, delegate_shm, delegate_viewporter, delegate_xdg_shell,
-    desktop::{space::SpaceElement, PopupKind, PopupManager, Window},
-    input::{Seat, SeatHandler, SeatState},
+    delegate_output, delegate_pointer_constraints, delegate_presentation, delegate_relative_pointer, delegate_seat, delegate_shm,
+    delegate_viewporter, delegate_xdg_shell,
+    desktop::{space::SpaceElement, utils::OutputPresentationFeedback, PopupKind, PopupManager, Window},
+    input::{pointer::PointerHandle, Seat, SeatHandler, SeatState},
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
@@ -38,6 +39,9 @@ use smithay::{
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         fractional_scale::{with_fractional_scale, FractionalScaleHandler, FractionalScaleManagerState},
         output::{OutputHandler, OutputManagerState},
+        pointer_constraints::{with_pointer_constraint, PointerConstraintsHandler, PointerConstraintsState},
+        presentation::{PresentationState, Refresh},
+        relative_pointer::RelativePointerManagerState,
         selection::{
             data_device::{ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler},
             SelectionHandler,
@@ -142,6 +146,9 @@ pub struct Server {
     pub data_device_state: DataDeviceState,
     pub fractional_state: FractionalScaleManagerState,
     pub viewporter_state: ViewporterState,
+    pub constraints_state: PointerConstraintsState,
+    pub relative_state: RelativePointerManagerState,
+    pub presentation_state: PresentationState,
     pub dmabuf_state: DmabufState,
     pub dmabuf_global: Option<DmabufGlobal>,
     pub popups: PopupManager,
@@ -158,6 +165,9 @@ pub struct Server {
     pub quiet: bool,
     /// a camera gesture (pan) is in progress
     pub gesture_active: bool,
+    /// constraint-activation policy switch (X-12 models a policy that declines activation,
+    /// e.g. pointer outside a lock region)
+    pub activation_allowed: bool,
 }
 
 #[derive(Default)]
@@ -221,6 +231,9 @@ impl Server {
             data_device_state: DataDeviceState::new::<Self>(dh),
             fractional_state: FractionalScaleManagerState::new::<Self>(dh),
             viewporter_state: ViewporterState::new::<Self>(dh),
+            constraints_state: PointerConstraintsState::new::<Self>(dh),
+            relative_state: RelativePointerManagerState::new::<Self>(dh),
+            presentation_state: PresentationState::new::<Self>(dh, libc::CLOCK_MONOTONIC as u32),
             dmabuf_state: DmabufState::new(),
             dmabuf_global: None,
             popups: PopupManager::default(),
@@ -235,6 +248,7 @@ impl Server {
             pongs: Vec::new(),
             quiet: false,
             gesture_active: false,
+            activation_allowed: true,
         }
     }
 
@@ -425,6 +439,13 @@ impl Server {
             let clock = self.clock_output(ei);
             if visible_here && clock == Some(oi) {
                 let o2 = &out; // closure must be Copy: capture by reference
+                // modeled "presentation": the element's current content is shown on its clock output
+                let mut fb = OutputPresentationFeedback::new(&out);
+                self.elements[ei].window.take_presentation_feedback(&mut fb, |_, _| Some(o2.clone()), |_, _| {
+                    smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind::empty()
+                });
+                let period = Duration::from_nanos((1e12 / self.outputs[oi].refresh_mhz as f64) as u64);
+                fb.presented::<_, smithay::utils::Monotonic>(t, Refresh::Fixed(period), 0, smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback::Kind::empty());
                 self.elements[ei].window.send_frame(&out, t, None, |_, _| Some(o2.clone()));
             } else if clock.is_none() {
                 if let FramePolicy::Throttle(d) = self.policy.frames {
@@ -630,6 +651,27 @@ delegate_data_device!(Server);
 delegate_fractional_scale!(Server);
 delegate_viewporter!(Server);
 delegate_dmabuf!(Server);
+delegate_pointer_constraints!(Server);
+delegate_relative_pointer!(Server);
+delegate_presentation!(Server);
+
+impl PointerConstraintsHandler for Server {
+    /// Policy under test (B10): a constraint is activated when it is created on the surface that
+    /// currently has pointer focus; otherwise when that surface next gains focus (see input.rs).
+    fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
+        if self.activation_allowed && pointer.current_focus().as_ref() == Some(surface) {
+            with_pointer_constraint(surface, pointer, |c| {
+                if let Some(c) = c {
+                    if !c.is_active() {
+                        c.activate();
+                    }
+                }
+            });
+            self.note("constraint activated on creation (surface focused)".into());
+        }
+    }
+    fn cursor_position_hint(&mut self, _s: &WlSurface, _p: &PointerHandle<Self>, _l: smithay::utils::Point<f64, Logical>) {}
+}
 
 pub fn surface_id(s: &WlSurface) -> String {
     format!("{}", s.id().protocol_id())

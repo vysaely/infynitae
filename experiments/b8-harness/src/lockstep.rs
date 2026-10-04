@@ -12,6 +12,7 @@ use crate::{
 };
 
 pub struct Lockstep {
+    pub globals: wayland_client::globals::GlobalList,
     pub display: Display<Server>,
     pub server: Server,
     pub conn: Connection,
@@ -52,7 +53,7 @@ impl Lockstep {
         let qh = queue.handle();
         let now = Arc::new(AtomicU64::new(0));
         let probe = Probe::new(&globals, &qh, now.clone());
-        let mut ls = Lockstep { display, server, conn, queue, probe, qh, now };
+        let mut ls = Lockstep { globals, display, server, conn, queue, probe, qh, now };
         ls.pump();
         ls
     }

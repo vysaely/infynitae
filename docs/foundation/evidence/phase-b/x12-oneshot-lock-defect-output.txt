@@ -1,0 +1,19 @@
+$ ./target/release/x12   (experiments/b8-harness; smithay =0.7.0; lockstep, virtual time)
+# 2026-10-04T13:49:00+03:00
+X-12 W-SM-4b reproducer — smithay =0.7.0, lockstep
+-- lifetime=oneshot trace:
+    t= 20.000ms client wl_pointer.enter W (220.000,220.000)
+    t= 21.000ms client wl_pointer.leave W
+    t= 21.000ms client locked_pointer.unlocked
+    t= 21.500ms client wl_pointer.enter W (220.000,220.000)
+oneshot:    locked before leave=false  unlocked on leave=true  locked after return=false
+  => DEFECT REPRODUCED: true
+     (never-active oneshot lock got `unlocked` = defunct, and cannot activate when activation becomes allowed)
+-- lifetime=persistent trace:
+    t= 20.000ms client wl_pointer.enter W (220.000,220.000)
+    t= 21.000ms client wl_pointer.leave W
+    t= 21.000ms client locked_pointer.unlocked
+    t= 21.500ms client wl_pointer.enter W (220.000,220.000)
+    t= 21.500ms client locked_pointer.locked
+persistent: locked before leave=false  unlocked on leave=true  locked after return=true
+  => spurious `unlocked` for a never-active persistent lock: true (lock survives and activates later: true)

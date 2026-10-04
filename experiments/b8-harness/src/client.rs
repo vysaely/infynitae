@@ -14,6 +14,10 @@ use wayland_client::{
         wl_callback::{self, WlCallback},
         wl_compositor::WlCompositor,
         wl_output::{self, WlOutput},
+        wl_pointer::{self, WlPointer},
+        wl_seat::WlSeat,
+        wl_subcompositor::WlSubcompositor,
+        wl_subsurface::WlSubsurface,
         wl_registry::WlRegistry,
         wl_shm::{self, WlShm},
         wl_shm_pool::WlShmPool,
@@ -28,6 +32,19 @@ use wayland_protocols::{
             wp_fractional_scale_v1::{self, WpFractionalScaleV1},
         },
         viewporter::client::{wp_viewport::WpViewport, wp_viewporter::WpViewporter},
+    },
+    wp::pointer_constraints::zv1::client::{
+        zwp_confined_pointer_v1::{self, ZwpConfinedPointerV1},
+        zwp_locked_pointer_v1::{self, ZwpLockedPointerV1},
+        zwp_pointer_constraints_v1::{self, ZwpPointerConstraintsV1},
+    },
+    wp::presentation_time::client::{
+        wp_presentation::WpPresentation,
+        wp_presentation_feedback::{self, WpPresentationFeedback},
+    },
+    wp::relative_pointer::zv1::client::{
+        zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1,
+        zwp_relative_pointer_v1::{self, ZwpRelativePointerV1},
     },
     xdg::shell::client::{
         xdg_popup::{self, XdgPopup},
@@ -70,6 +87,17 @@ pub struct Probe {
     pub _output_objs: Vec<WlOutput>,
     pub surfaces: Vec<Surf>,
     pub record_frames: bool,
+    pub seat: Option<WlSeat>,
+    pub pointer: Option<WlPointer>,
+    pub relative: Option<ZwpRelativePointerV1>,
+    pub constraints: Option<ZwpPointerConstraintsV1>,
+    pub locked: Option<ZwpLockedPointerV1>,
+    pub confined: Option<ZwpConfinedPointerV1>,
+    /// buttons the client currently believes are pressed
+    pub buttons_down: std::collections::BTreeSet<u32>,
+    pub presentation: Option<WpPresentation>,
+    /// request presentation feedback with every draw (X-9); the u32 tags the commit
+    pub feedback_seq: Option<u32>,
 }
 
 impl Probe {
@@ -97,7 +125,72 @@ impl Probe {
             _output_objs: outs,
             surfaces: Vec::new(),
             record_frames: true,
+            seat: None,
+            pointer: None,
+            relative: None,
+            constraints: None,
+            locked: None,
+            confined: None,
+            buttons_down: Default::default(),
+            presentation: None,
+            feedback_seq: None,
         }
+    }
+
+    /// X-6: add a subsurface of `size` at `offset` (parent-surface-local) to surface `parent`,
+    /// with its own buffer; applied on the parent's next commit.
+    pub fn add_subsurface(&mut self, globals: &GlobalList, qh: &QueueHandle<Self>, parent: usize, label: &str, offset: (i32, i32), size: (i32, i32)) -> usize {
+        let subc: WlSubcompositor = globals.bind(qh, 1..=1, ()).expect("wl_subcompositor");
+        let idx = self.surfaces.len();
+        let wl = self.compositor.create_surface(qh, idx);
+        let sub: WlSubsurface = subc.get_subsurface(&wl, &self.surfaces[parent].wl, qh, ());
+        sub.set_position(offset.0, offset.1);
+        sub.set_desync();
+        // a plain surface (no xdg role); reuse Surf bookkeeping with a dummy xdg object is not
+        // possible, so draw it directly here
+        let (w, h) = size;
+        let stride = w * 4;
+        let len = (stride * h) as usize;
+        let fd = memfd(len);
+        let pool: WlShmPool = self.shm.create_pool(fd.as_fd(), len as i32, qh, ());
+        let buf = pool.create_buffer(0, w, h, stride, wl_shm::Format::Argb8888, qh, ());
+        pool.destroy();
+        wl.attach(Some(&buf), 0, 0);
+        wl.damage_buffer(0, 0, w, h);
+        wl.commit();
+        self.surfaces[parent].wl.commit();
+        let _ = label;
+        std::mem::forget(sub);
+        std::mem::forget(wl);
+        idx
+    }
+
+    /// Bind seat pointer, relative pointer and pointer constraints (X-8).
+    pub fn bind_input(&mut self, globals: &GlobalList, qh: &QueueHandle<Self>) {
+        let seat: WlSeat = globals.bind(qh, 1..=7, ()).expect("wl_seat");
+        let pointer = seat.get_pointer(qh, ());
+        let rel_mgr: ZwpRelativePointerManagerV1 = globals.bind(qh, 1..=1, ()).expect("relative pointer manager");
+        let relative = rel_mgr.get_relative_pointer(&pointer, qh, ());
+        let constraints: ZwpPointerConstraintsV1 = globals.bind(qh, 1..=1, ()).expect("pointer constraints");
+        self.seat = Some(seat);
+        self.pointer = Some(pointer);
+        self.relative = Some(relative);
+        self.constraints = Some(constraints);
+    }
+
+    pub fn lock_pointer(&mut self, qh: &QueueHandle<Self>, idx: usize, oneshot: bool) {
+        let lt = if oneshot { zwp_pointer_constraints_v1::Lifetime::Oneshot } else { zwp_pointer_constraints_v1::Lifetime::Persistent };
+        let c = self.constraints.as_ref().unwrap();
+        let l = c.lock_pointer(&self.surfaces[idx].wl, self.pointer.as_ref().unwrap(), None, lt, qh, ());
+        self.surfaces[idx].wl.commit();
+        self.locked = Some(l);
+    }
+
+    pub fn confine_pointer(&mut self, qh: &QueueHandle<Self>, idx: usize) {
+        let c = self.constraints.as_ref().unwrap();
+        let cf = c.confine_pointer(&self.surfaces[idx].wl, self.pointer.as_ref().unwrap(), None, zwp_pointer_constraints_v1::Lifetime::Persistent, qh, ());
+        self.surfaces[idx].wl.commit();
+        self.confined = Some(cf);
     }
 
     fn rec(&mut self, s: String) {
@@ -187,6 +280,11 @@ impl Probe {
         surf.wl.attach(Some(&buf), 0, 0);
         surf.viewport.set_destination(w, h);
         surf.wl.damage_buffer(0, 0, bw, bh);
+        if let (Some(p), Some(seq)) = (&self.presentation, self.feedback_seq.as_mut()) {
+            *seq += 1;
+            let _ = p.feedback(&surf.wl, qh, *seq);
+        }
+        let surf = &mut self.surfaces[idx];
         if surf.frame_driven && !surf.frame_pending {
             surf.wl.frame(qh, idx);
             surf.frame_pending = true;
@@ -315,6 +413,78 @@ impl Dispatch<WlOutput, ()> for Probe {
         }
     }
 }
+fn label_of(st: &Probe, s: &WlSurface) -> String {
+    s.data::<usize>().map(|i| st.surfaces[*i].label.clone()).unwrap_or("?".into())
+}
+impl Dispatch<WlPointer, ()> for Probe {
+    fn event(st: &mut Self, _: &WlPointer, ev: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        match ev {
+            wl_pointer::Event::Enter { surface, surface_x, surface_y, .. } => {
+                let l = label_of(st, &surface);
+                st.rec(format!("wl_pointer.enter {l} ({surface_x:.3},{surface_y:.3})"));
+            }
+            wl_pointer::Event::Leave { surface, .. } => {
+                let l = label_of(st, &surface);
+                st.rec(format!("wl_pointer.leave {l}"));
+                // wl_pointer.leave does not release buttons in the protocol; keep the client's view as-is
+            }
+            wl_pointer::Event::Motion { surface_x, surface_y, .. } => st.rec(format!("wl_pointer.motion ({surface_x:.3},{surface_y:.3})")),
+            wl_pointer::Event::Button { button, state, .. } => {
+                let pressed = matches!(state, wayland_client::WEnum::Value(wl_pointer::ButtonState::Pressed));
+                if pressed {
+                    st.buttons_down.insert(button);
+                } else {
+                    st.buttons_down.remove(&button);
+                }
+                st.rec(format!("wl_pointer.button {button} {}", if pressed { "pressed" } else { "released" }));
+            }
+            _ => {}
+        }
+    }
+}
+impl Dispatch<ZwpRelativePointerV1, ()> for Probe {
+    fn event(st: &mut Self, _: &ZwpRelativePointerV1, ev: zwp_relative_pointer_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        if let zwp_relative_pointer_v1::Event::RelativeMotion { dx, dy, dx_unaccel, dy_unaccel, .. } = ev {
+            st.rec(format!("relative_motion ({dx:.3},{dy:.3}) unaccel ({dx_unaccel:.3},{dy_unaccel:.3})"));
+        }
+    }
+}
+impl Dispatch<ZwpLockedPointerV1, ()> for Probe {
+    fn event(st: &mut Self, _: &ZwpLockedPointerV1, ev: zwp_locked_pointer_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        match ev {
+            zwp_locked_pointer_v1::Event::Locked => st.rec("locked_pointer.locked".into()),
+            zwp_locked_pointer_v1::Event::Unlocked => st.rec("locked_pointer.unlocked".into()),
+            _ => {}
+        }
+    }
+}
+impl Dispatch<ZwpConfinedPointerV1, ()> for Probe {
+    fn event(st: &mut Self, _: &ZwpConfinedPointerV1, ev: zwp_confined_pointer_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        match ev {
+            zwp_confined_pointer_v1::Event::Confined => st.rec("confined_pointer.confined".into()),
+            zwp_confined_pointer_v1::Event::Unconfined => st.rec("confined_pointer.unconfined".into()),
+            _ => {}
+        }
+    }
+}
+impl Dispatch<WlSeat, ()> for Probe {
+    fn event(_: &mut Self, _: &WlSeat, _: wayland_client::protocol::wl_seat::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+}
+wayland_client::delegate_noop!(Probe: ignore ZwpRelativePointerManagerV1);
+wayland_client::delegate_noop!(Probe: ignore WlSubcompositor);
+wayland_client::delegate_noop!(Probe: ignore WpPresentation);
+impl Dispatch<WpPresentationFeedback, u32> for Probe {
+    fn event(st: &mut Self, _: &WpPresentationFeedback, ev: wp_presentation_feedback::Event, seq: &u32, _: &Connection, _: &QueueHandle<Self>) {
+        match ev {
+            wp_presentation_feedback::Event::Presented { .. } => st.rec(format!("presentation_feedback#{seq}.presented")),
+            wp_presentation_feedback::Event::Discarded => st.rec(format!("presentation_feedback#{seq}.discarded")),
+            _ => {}
+        }
+    }
+}
+wayland_client::delegate_noop!(Probe: ignore WlSubsurface);
+wayland_client::delegate_noop!(Probe: ignore ZwpPointerConstraintsV1);
+
 impl Dispatch<WlBuffer, ()> for Probe {
     fn event(_: &mut Self, b: &WlBuffer, ev: wl_buffer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         if let wl_buffer::Event::Release = ev {

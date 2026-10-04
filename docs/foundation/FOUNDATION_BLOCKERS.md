@@ -1,8 +1,10 @@
 # Infynitae Native — Foundation Blockers (Phase B)
 
-Status: **IN PROGRESS. Checkpoint 2 of Phase B: B1–B9 complete. B10–B13 not started.**
-Phase B is **not** complete. Q-07 (Smithay pin strategy, B12) is still open (§9).
-Checkpoint 1 (B1–B6) is commit `9f3f5d4`.
+Status: **Phase B complete (B1–B13). Phase B gate SATISFIED with explicit conditional resolutions (see the gate evaluation at the end). Stopped at the review gate.**
+Checkpoints:
+- 1 (B1–B6): `9f3f5d4`
+- 2 (B7–B9): `90992b839af1bdbe07d128009d8b7460e21fcc88`
+- 3 (B10–B13): see CHECKPOINT.md
 
 Evidence baseline: Phase A artifacts at commit
 **`2c8c163784e260af4aaa8c1dc05c6281b0476120`** (`~/infynitae-native`, branch `main`).
@@ -17,7 +19,7 @@ New Phase B evidence uses `EB-*` IDs and lives in [`evidence/phase-b/`](evidence
 
 ## 0. Phase B evidence produced so far
 
-(EB-8 … EB-12 are listed in B8.1.)
+(EB-8 … EB-12 are listed in B8.1; EB-13 … EB-20 in B10.1.)
 
 | ID | What | Where |
 |---|---|---|
@@ -671,7 +673,7 @@ The master prompt's PartiallyVisible / VisibleOnOne / VisibleOnMany distinctions
 1. **Never invent requests.** The compositor only completes callbacks clients requested (`wl_surface.frame`). It never creates them.
 2. **Observed:** complete pending callbacks once per frame of the clock output c (D-B8-CLOCK).
 3. **Unobserved:** withhold (spec-recommended), with two bounded exceptions:
-   - **(a) Protocol kick.** When the compositor sends a client a request that needs the client's main loop (`xdg_wm_base.ping`, `xdg_toplevel.close`, a non-initial configure, `xdg_popup.popup_done`), it first completes that client's withheld callbacks once. This bounds protocol responsiveness at zero idle cost (measured).
+   - **(a) Protocol kick.** When the compositor sends a client a request that needs the client's main loop (`xdg_wm_base.ping`, `xdg_toplevel.close`, a non-initial configure, `xdg_popup.popup_done`, and, added at checkpoint 3 (B10.5), **input events delivered to it**), it first completes that client's withheld callbacks once. This bounds protocol responsiveness at zero idle cost (measured for ping; input trigger unmeasured, X-10).
    - **(b) Finite fallback cadence.** Each unobserved element receives at most one completion per fallback period P. **Architectural requirement: P is finite**, so no element is starved for an unbounded time. P is a runtime configuration parameter. Foundation 01's *provisional* default is P = 1 s:
      - the measured cost at 1 s is negligible for GPU clients (vkcube 0.0–0.2%) and for Firefox (= Starve);
      - it lets present-locked loops progress at 1 fps;
@@ -762,80 +764,507 @@ Permanent regression test: client-observed `configure` count during pan = 0 (C12
 
 ---
 
-## 8. Experiments: status
+## B10 — Input, grabs, focus and activation
 
-| ID | Experiment | Status |
+### B10.1 New evidence (checkpoint 3)
+
+| ID | Evidence | Where |
 |---|---|---|
-| E1–E9 | Numeric (EB-1) | **RUN**: B1 |
-| S1–S7 | `Space` semantics (EB-2) | **RUN**: B2.4 |
-| X-1 | Client-side trace during scripted pan (configure, enter/leave, scale) | **RUN** (SC1, SC4): 0 pan-induced configures. *Pointer* leakage during pan is not covered; the harness has no input path. That part moves to B11 (X-8). |
-| X-2 | Real clients off-screen: Starve / Throttle / kick | **RUN** (EB-9): vkcube, kitty, Firefox. mpv and mesa-demos are not installed (not installed, to avoid system changes); games deferred (X-7). |
-| X-3 | Two outputs 1.0/1.5, one spanning window | **RUN** (SC1, SC2) |
-| X-4 | Smithay overlap convention | **RUN** (EB-2 S5) |
-| X-5 | Popup enter/leave offset (EB-H1) | **RUN**: confirmed (B8.5) |
-| X-6 | Subsurface edge rounding under f64 root location | **PENDING**: T1 |
-| X-7 (new) | Off-screen Wine/Proton game and a network client under D-B9-FRAMES (Starve vs P=1 s vs kick); detect frozen simulation or disconnects | **DEFERRED** to T5. Needs a real game and must not touch the live session. It decides P's default, not the architecture (P is already finite and configurable) |
-| X-8 (new) | Pointer/relative-motion leakage during CameraPan | **PENDING**: B11 |
-| X-9 (new) | Presentation-feedback resolution for unobserved commits (B9.4) | **PENDING**: T1 |
+| EB-13 | **X-8**: the pan-ownership model under test (`experiments/b8-harness/src/input.rs`) driven by injected physical events. Real Smithay seat, `wp_relative_pointer`, `wp_pointer_constraints`. The probe client records every pointer, relative, lock and confine event. 9 cases, **48 programmatic checks, all PASS**. | `src/bin/x8.rs`; [`evidence/phase-b/x8-pan-input-output.txt`](evidence/phase-b/x8-pan-input-output.txt) |
+| EB-14 | **X-6**: Smithay's real `WaylandSurfaceRenderElement` geometry (via `renderer_test`'s `DummyRenderer`) for a root surface plus an odd-offset subsurface. **134,478** rects over 241 scales × 3 magnitudes (up to 2³⁶). The f64-root B1.5 rule had **0** edge mismatches; the i32-root alternative had 72,242. | `src/bin/x6.rs`; [`evidence/phase-b/x6-edges-output.txt`](evidence/phase-b/x6-edges-output.txt) |
+| EB-15 | **X-9**: presentation feedback while unobserved. A superseded commit's feedback is `discarded` at supersede time and never presented; the latest unobserved commit stays pending and is `presented` 1.2 ms after re-entry. | `src/bin/x9.rs`; [`evidence/phase-b/x9-presentation-output.txt`](evidence/phase-b/x9-presentation-output.txt) |
+| EB-16 | SMITHAY: `pointer_constraints` `activate()` is never automatic (compositor policy); `deactivate()` destroys oneshot constraints (`wayland/pointer_constraints.rs:120-160`). The seat's `WlSurface` pointer-target `leave()` calls `deactivate()` **unconditionally** (`wayland/seat/pointer.rs:246-256`). X-8 C4 observed a duplicated `locked_pointer.unlocked`. | source + X-8 |
+| EB-17 | SMITHAY: `PresentationFeedbackCachedState::merge_into` discards superseded feedback; `Drop` discards on destruction (`wayland/presentation/mod.rs:315-345`) | source + X-9 |
+| EB-18 | SMITHAY: `RendererSurfaceState::surface_view` is private; the public accessor is `view()` (`backend/renderer/utils/wayland.rs:344`). `SubsurfaceCachedState.location` is public. | source + X-6 (compile error, then `view()`) |
+| EB-19 | SMITHAY: `xdg_wm_base` advertised at v6 (`shell/xdg/mod.rs:1252`). `XdgActivationHandler::token_created` default accepts **every** token (`xdg_activation/mod.rs:248-258`). `XdgActivationTokenData` carries `client_id`, `serial: Option<(Serial, WlSeat)>`, `app_id`. | source |
+| EB-20 | PROTOCOL + EXPERIMENT: `zwp_relative_pointer_v1` deltas are `wl_fixed` (1/256 px). An unaccelerated 0.9 arrives as 0.898 (X-8). The protocol is coarser than the Q16 Canvas, which is consistent with B1 (the Canvas is never the limiting precision). | X-8 |
 
-Harness limitations (stated so they are not mistaken for coverage):
-- integer cameras, zoom 1;
-- no renderer (visual quality of downsampling not measured);
-- no presentation-time;
-- no input backend;
-- real-client tests used a single output.
+### B10.2 The eight concepts and who owns them
 
----
+| # | Concept | Owner | Representation | Must NOT |
+|---|---|---|---|---|
+| 1 | Physical/backend input | backend adapter (libinput, winit, headless) | backend-neutral `PhysicalEvent` (button/key with physical code, relative Δ accel+unaccel, absolute normalized, axis, device id, time). Non-finite values rejected (A-B1-3). | decide focus, routing or bindings; call the Smithay seat |
+| 2 | Compositor gesture recognition | binding resolver (configuration-driven) | `(modifiers, button/key) → action`; bindings are **data** | hold state across events (that is #3); see Stage geometry |
+| 3 | Compositor interaction state | interaction model (domain) | one `Interaction` value plus a **button/key ownership table**: every pressed physical button/key → `Owner::Client(seat delivery) / Owner::Compositor(interaction)` | be duplicated in the Smithay seat (Smithay's grab state covers only client-owned sequences) |
+| 4 | Stage hit-testing | pure domain function over Stage + the per-output projection list (B2.5–B2.6) | `(OutputId, OutputLogical) → (ElementId, surface, surface origin in Canvas)` | store results (I8) |
+| 5 | Wayland seat/pointer focus | Smithay seat **applies** Infynitae's focus decisions | `PointerHandle` focus + Canvas origin; `KeyboardHandle` focus | be read back as policy truth. Keyboard focus authority is Infynitae's focus model (B10.5); Smithay's keyboard focus is its applied image |
+| 6 | Client absolute pointer delivery | Smithay `PointerHandle::motion` | Canvas location − surface Canvas origin (B2.5) | carry camera deltas (I3′c) |
+| 7 | Client relative-pointer delivery | Smithay `PointerHandle::relative_motion` | the **physical** delta only, accel + unaccel | be derived from absolute position differences or camera changes (INV-5) |
+| 8 | Constraint/lock state | protocol objects in Smithay; **activation policy** in Infynitae; authoritative pointer mode `Free(OutputId, p)` / `Locked(surface, Canvas lock point)` | `with_pointer_constraint`, the Infynitae pointer mode | be activated implicitly (EB-16: it never is); be changed by camera motion except at reconciliation (B11.4) |
 
-## 9. Q-01 … Q-09 dispositions
+**Refinement of D-B2-PTR-STATE.** This is a refinement, not a contradiction. While a lock is active, the authoritative pointer state is `Locked(S, q_lock)`, with `q_lock` a Canvas point. The output-local position is derived from it. Pans never move elements (I2), so `q_lock` remains the lock point through any camera change (X-8 C3).
 
-| Q | Question | Status | Where |
-|---|---|---|---|
-| Q-01 | Off-screen frame-callback policy | **RESOLVED**: D-B9-FRAMES (withhold + protocol kick + finite fallback P; P's default provisional pending X-7) | B9.2–B9.3 |
-| Q-02 | `suspended` vs I3 | **RESOLVED**: never from camera visibility; semantic reasons only (D-B9-SUSPEND) | B9.5 |
-| Q-03 | Stage anchor | **RESOLVED**: window-geometry origin | B2.3 |
-| Q-04 | Popup constraint boundary | **RESOLVED**: anchor-output viewport. Fallback rule 2 now uses the parent's frame-clock output (D-B8-CLOCK). EB-H1 affects only membership, which D-B8-ENTER handles | B6.2, B8.4 |
-| Q-05 | Smithay pointer global space | **RESOLVED**: Canvas; authoritative pointer = `(OutputId, OutputLogical)` | B2.5 |
-| Q-06 | Single preferred scale on mixed-scale outputs | **RESOLVED** as INFYNITAE POLICY: D-B8-SCALE (MaxGesture; ⌈⌉ for integer scale) | B8.3 |
-| Q-07 | Smithay pin strategy | **OPEN** (B12, Level B) | — |
-| Q-08 | Canvas numeric model | **RESOLVED** | B1 |
-| Q-09 | Restated I3 | **RESOLVED**: I3′ | B9.7 |
+### B10.3 Intake precedence (DECISION D-B10-INTAKE; verified for pointer buttons by X-8)
 
----
+Every physical event is routed to **exactly one** owner, in this order:
 
-## 10. Risks and open hypotheses
-
-| ID | Risk / hypothesis | Severity | Mitigation / test |
-|---|---|---|---|
-| RB-1 | Smithay `Window::geometry()` re-clamps dynamically | low | T3 |
-| RB-2 | `PopupManager::grab_popup` panics on root mismatch | medium | Check precondition (C8) |
-| RB-3 | Buffer-before-configure enforcement is opt-in | medium | Call `ensure_configured`. T1 |
-| RB-4 | Arbitrary destruction order on client death | medium | Idempotent handlers. T1 |
-| RB-5 (new) | Smithay membership helpers wrong for CSD trees (EV-S12, EB-H1 confirmed) | **resolved by design** (D-B8-ENTER); medium if regressed | T1 regression: popup/CSD enter/leave against computed truth |
-| RB-6 (new) | Default `CompositorState::new` is v5; using it silently disables `preferred_buffer_scale` | low | Use `new_v6`; T1 asserts the bound version |
-| RB-7 (new) | MaxGesture holds the higher scale during gestures: 2.25× buffer memory while multi-observed | low | Measured cost (SC2). Revisit if memory pressure appears |
-| RB-8 (new) | Fallback P = 1 s may be too slow (game timeouts) or too costly (software clients: kitty/swrast 10% CPU) | medium | X-7; P is configurable |
-| RB-9 (new) | The protocol kick completes callbacks for every unobserved surface of a client, including ones the request was not about | low | Bounded: once per compositor request |
-| A-B1-1 | Zoom anti-jitter rule unresolved | low (Level C) | Before zoom work |
-
----
-
-## Phase B gate status
-
-| B-item | Status |
+| Step | Rule |
 |---|---|
-| B1 Numeric model | **Complete** |
-| B2 Coordinate algebra | **Complete** |
-| B3 Object graph | **Complete** |
-| B4 Identity | **Complete** |
-| B5 Lifecycle | **Complete** |
-| B6 Popups/subsurfaces | **Complete** (Q-04 resolved at checkpoint 2) |
-| B7 Camera/output model | **Complete** (checkpoint 2) |
-| B8 Multi-output semantics | **Complete** (checkpoint 2); worked example measured |
-| B9 Visibility/off-screen | **Complete** (checkpoint 2). P default provisional (X-7) |
-| B10 Input & activation | **Not started** |
-| B11 Camera pan | **Not started** (X-8) |
-| B12 Backend boundary | **Not started** (Q-07) |
-| B13 Blocker report finalisation | **Not started** |
+| P0 | Backend normalization (#1). |
+| P1 | **Continuation follows ownership.** A release goes to whoever owned the press, always, including after the interaction that took it has ended (X-8 C7). Motion goes to the active compositor interaction if there is one. |
+| P2 | **Binding resolution precedes client dispatch** for new presses. If the press matches a compositor binding and the acquisition precondition holds, the interaction is acquired and the press consumed; the client never sees it. |
+| P3 | Client-owned sequences already in Smithay grabs (implicit click grab, popup grab, DnD) proceed through the seat. |
+| P4 | Normal routing: hit test (#4) → seat focus (#5) → delivery (#6, #7). |
 
-Phase B as a whole: **NOT COMPLETE.** Do not advance to Phase C.
+**Acquisition precondition for pointer gestures:** the client owns no pressed button. If it does, the binding press is delivered to the client like any press (X-8 C6). Rationale:
+- The protocol has no way to retract a delivered press except protocol-defined focus transfer. `wl_pointer.leave` does not release buttons.
+- Taking over a sequence the client already owns is exactly the stuck-button failure. Delivering instead keeps every client press paired with a release (INV-2).
+
+The **only** legitimate client→compositor transfer of an in-progress press is protocol-initiated: `xdg_toplevel.move`/`resize` and `wl_data_device.start_drag` with a valid serial. There the protocol itself specifies the client loses device focus ("If triggered, the surface will lose the focus of the device used for the move").
+
+**Keys:** the same ownership table applies to keyboard bindings. A key press consumed by a binding has its release consumed; a forwarded press has its release forwarded. Smithay's keyboard filter is per event, so it cannot guarantee this by itself. This is **not** covered by X-8 (no keyboard path in the harness); T1 obligation **X-10**.
+
+**Bindings are configuration.** X-8 used middle button + modifier as test data only; the mechanism references a `PanBinding` value (`input.rs`) and never a hard-coded code.
+
+### B10.4 Interaction state machine
+
+| State | Event | Next | Effect |
+|---|---|---|---|
+| Normal | binding press, precondition holds | CameraPan / WindowMove / WindowResize | press consumed; owner = compositor; `gesture_active` = true (B8.3) |
+| Normal | binding press, client owns a button | Normal | delivered to client (no acquisition) |
+| Normal | protocol move/resize request with valid serial of a client-owned press | WindowMove / WindowResize | **transfer**: client loses pointer focus (protocol-defined); that button's release becomes compositor-owned |
+| Normal | popup grab requested (valid serial) | Normal + Smithay `PopupGrab` | grab owned by the client sequence (#3 records it) |
+| CameraPan / WindowMove / WindowResize | any press | same | consumed; owned until its release (X-8 C7) |
+| CameraPan / WindowMove / WindowResize | motion | same | consumed by the interaction (B11 for pan) |
+| CameraPan / WindowMove / WindowResize | initiator release | Normal | reconciliation (B11.4); `gesture_active` = false → deferred scale decreases |
+| CameraPan / WindowMove / WindowResize | cancel (binding, session lock, compositor shutdown) | Normal | **no revert**; the camera or element stays where it is; owned buttons remain owned until released |
+| WindowMove / WindowResize | target element unmapped/destroyed | Normal-after-release | interaction cancels; owned buttons consumed until released |
+| CameraPan | focused / locked target destroyed | CameraPan | unaffected; reconciliation uses the free-pointer path (X-8 C9) |
+| any interaction | its output removed | same (orphaned) | motion still consumed until the initiator is released; at termination the pointer is placed on a remaining output (nearest in Arrangement). **Design only:** the harness cannot remove outputs (T1 obligation X-11) |
+| Normal with popup grab | compositor binding press, client owns no button | CameraPan (etc.) | popup grab chain dismissed first, in protocol order (B6.3; X-11 covers it in T1) |
+
+### B10.5 Keyboard focus and visibility (DECISION D-B10-KBD, INFYNITAE POLICY)
+
+| Option | Accidental typing into an invisible app | Intentional typing while looking elsewhere | Window still visible on another output | Focus changes without explicit action | Returning to the element |
+|---|---|---|---|---|---|
+| Retain | possible | **works** | correct (output-independent) | **never** | nothing to restore |
+| Clear when unobserved | prevented | **broken** | must define "unobserved on which output"; partial answers are arbitrary | **yes** (camera motion changes focus) | needs a restore rule, which is camera-driven focus again |
+| Retain + shell indicator | possible but visible | works | correct | never | — |
+
+Decision:
+- Keyboard focus changes **only** through:
+  - explicit focus actions (click on an element, focus-navigation bindings, shell/IPC focus requests carrying user authority, activation granted by B10.7 policy);
+  - loss of the focus target (unmap, destroy, session lock), after which the next target comes from the focus model (C4).
+- Camera position, camera motion, Stage visibility and output membership never change keyboard focus.
+- Retaining focus on an unobserved element is the defined behaviour. A shell indicator for "keyboard focus is off-screen" is permitted (Level D UX).
+- Security: visibility never grants focus, and retaining focus grants nothing the user did not grant. Under this policy the camera cannot be used to steer keystrokes.
+
+**Interaction with D-B9-FRAMES (contradiction found and resolved here):**
+- A focused but unobserved client whose main loop is blocked by withheld callbacks (the vkcube class, EB-9) would queue the user's keystrokes until the next fallback tick.
+- **Resolution:** delivering input events to an unobserved element's client is a *protocol kick* trigger (D-B9-FRAMES 3a now lists: ping, close, non-initial configure, popup_done, **input delivery**).
+- The kick is rate-limited by the input rate. The user typing into an off-screen window is the user asking it to run.
+- Not measured with a keyboard client: **X-10**.
+
+### B10.6 Pointer focus, implicit/explicit grabs, multi-output, destruction
+
+- **Pointer focus** is recomputed from the authoritative pointer state on every client-routed event. Exceptions: Smithay grabs (P3) and compositor interactions (KeepFocus, B11).
+- **Implicit (click) grab:** the Smithay default grab freezes the focus surface and its Canvas origin. A camera change during such a grab (e.g. via keyboard or IPC; never via the pan binding, by the precondition) changes the pointer's Canvas point. The client receives the true position: elements do not move with the camera, so the frozen Canvas origin stays correct (B2.5).
+- **Multi-output:** the pointer is on exactly one output, so hit-testing uses that output's projection only. A window seen on two outputs gives the same client coordinates through either camera (B8.2).
+- **Destruction/unmap during a grab:**
+  - Smithay grabs on a dead surface deliver nothing.
+  - Compositor interactions hold `ElementId`s, and lookups fail closed (B4).
+  - Lock target destroyed → free reconciliation (X-8 C9).
+- **Output removal during an interaction:** B10.4, design only (X-11).
+
+### B10.7 xdg-activation authority (DECISION D-B10-ACTIVATION)
+
+```
+client: get_activation_token(serial, surface, app_id)  ──►  token minted (Smithay)
+compositor: token_created(token, data) ──► VALIDATE provenance; Smithay default accepts all (EB-19), so Infynitae overrides:
+            serial must match a recent input event delivered to the requesting client's focused surface
+client: activate(token, surface) ──► request_activation(token, data, surface)
+compositor policy (focus model) ──► one of:
+       grant keyboard focus to the target            (a focus action; allowed while the target is unobserved, D-B10-KBD)
+       mark attention/urgency on the element          (state the shell renders)
+       ignore                                         (invalid / stale / unwanted)
+shell (user authority) ──► may issue a CameraCommand to navigate, e.g. when the user acts on an attention indicator
+```
+
+**Authority invariant (Foundation 01):** *Wayland client protocol requests cannot directly reposition an Infynitae Camera.* It is encoded mechanically:
+- Camera mutation requires a `CameraCommand` with an authority tag constructible only by input interactions, the privileged local control socket (user/shell), and explicit user configuration.
+- The Wayland protocol-handler code is in a different module/crate and cannot construct it (Rust visibility; C1 decides the crate boundary).
+- This also closes `xdg_toplevel.set_fullscreen(output)`, `move`/`resize` requests, popup positioning, and activation as camera paths. None of them can name a camera.
+
+An optional user setting such as "navigate to activated windows" would be user policy executed by the compositor. It is Level D and off by default. Shell UX (notifications, indicators) is deferred, not designed here.
+
+---
+
+## B11 — Camera-pan input semantics (X-8)
+
+### B11.1 Lifecycle (DECISION D-B11-PAN; ★ = verified by X-8)
+
+| Phase | Rule |
+|---|---|
+| Acquisition ★ | Binding press with no client-owned button (B10.3). The press is consumed. Records: initiating button, output, camera at start, Σ=0, and the lock point if a lock is active on the focused surface. |
+| Ownership ★ | The initiator plus every button pressed during the pan, each until its own release (C7). Motion while active. The **modifier is not part of ownership**: releasing it first changes nothing (C8). |
+| Accumulation ★ | Σ += physical Δ (accelerated) in f64. Camera = start − Q(Σ), quantized from the gesture origin (B1). X-8: 30 × (7.3, −2.1) → camera exactly (−219, 63). |
+| Camera update ★ | Per motion: camera set mutated; visibility pass (enter/leave per B9); preferred-scale increases only (MaxGesture). Stage untouched (INV-3). |
+| Input consumption ★ | No `wl_pointer.motion`, no `relative_motion`, no `wl_pointer.button` to any client while the pan owns the pointer (INV-1, all 9 cases). The pointer's output-local position is **frozen**: the world slides under a stationary cursor, so pans are unbounded and never clip at output edges. Frozen-cursor vs cursor-follows-world is UX policy (revisitable); ownership semantics are the same either way. |
+| Existing grabs | Client-owned button ⇒ no acquisition (C6 ★). Popup grab without a held button ⇒ chain dismissed, then acquired (B6.3; X-11). |
+| Pointer focus | **KeepFocus** (D-B11-FOCUS, B11.2) ★ |
+| Constraints ★ | Active locks persist through the pan with no `unlocked`, persistent or oneshot (C3). Confinement persists if the pointer stays over the surface (C5 small). |
+| Relative pointer ★ | Consumed. Nothing is replayed after termination; the first genuine motion yields exactly its own delta (INV-4, INV-5). |
+| Cancellation | Terminate without reverting the camera; owned buttons stay owned. |
+| Target destruction ★ | No effect on the pan (it has no element target). A destroyed lock target falls back to free reconciliation (C9). |
+| Output disappearance | Orphaned pan (B10.4). Design only (X-11). |
+| Termination ★ | Initiator release (consumed). `gesture_active` = false → deferred scale decreases apply (B8.3). |
+
+### B11.2 Pan focus mode (DECISION D-B11-FOCUS = KeepFocus; EXPERIMENT X-8 C3)
+
+| | KeepFocus | LeaveFocus (clear focus at acquisition) |
+|---|---|---|
+| Free pointer | no events during the pan; one true-position motion at the end | `wl_pointer.leave` at acquisition; `enter` at the true position at the end |
+| Persistent lock | **no events** | `leave` + `unlocked` at acquisition (Smithay auto-deactivates on leave, EB-16); `enter` + `locked` at the end |
+| Oneshot lock | **no events** | `unlocked` → **constraint destroyed**; the game must re-request (the Hyprland-era re-lock churn, EV-H07) |
+
+KeepFocus produces strictly fewer client-visible effects and preserves oneshot locks. Clearing focus during a pan has no protocol requirement behind it: the spec's focus-loss sentence is about client-requested moves, not compositor gestures.
+
+### B11.3 The principal invariant: verified
+
+**"When an Infynitae camera-pan interaction owns a physical motion delta, that same delta produces neither client absolute pointer motion nor client relative-pointer motion."** **EXPERIMENTALLY VERIFIED** in all 9 X-8 cases:
+- free pointer, both focus modes;
+- locked persistent and oneshot, both modes;
+- lock point pushed off the output;
+- confined, small and large pans;
+- stuck-button cases;
+- modifier-first release;
+- target destroyed mid-pan.
+
+INV-1 held in each: 0 motion, 0 relative, 0 button during ownership.
+
+**"The initiating event cannot leave the client with a logically stuck button"**: verified (INV-2 in all cases; C6, C7, C8 target it specifically).
+
+### B11.4 Reconciliation at termination (verified unless marked)
+
+| Pointer mode at acquisition | At termination | Client sees |
+|---|---|---|
+| Free | Re-hit-test at the unchanged output-local position | One `wl_pointer.motion` at the **true** surface-local position, or leave/enter if the surface under the pointer changed. X-8: exactly (11, 283), then (12, 283) after the next +1 motion. Not a replayed delta. |
+| Locked, lock point still on the pointer's output | Keep the lock. The output-local position is re-derived from the Canvas lock point. | **nothing** (C3). The next genuine Δ arrives as `relative_motion` only. |
+| Locked, lock point no longer observable | End the lock (protocol allows compositor deactivation); free reconciliation. **Ordering rule (W-SM-4a):** deactivate explicitly only if pointer focus will not change; otherwise Smithay's `leave()` deactivates. | `leave`, then exactly one `unlocked` (C4, after the rule ★). Before the rule the client received `unlocked` **twice**, because Smithay's `leave()` deactivates unconditionally (EB-16). |
+| Confined, pointer leaves the surface through the pan | Free reconciliation | `leave` + `unconfined` (C5 large). No warping. |
+
+No warping of the client-visible pointer to viewport edges, no synthetic relative motion, no replay of consumed deltas (INV-5 ★).
+
+**Uncertainty recorded, not invented:**
+- Whether real games behave well when their surface moves under a held lock (camera moved, lock point kept) is not established. No game was run (X-7, T5).
+- The protocol is silent on locked-surface motion caused by the compositor; the chosen rule is protocol-permitted (no events), not protocol-mandated.
+
+---
+
+## B12 — Backend boundary and Smithay contract (resolves Q-07)
+
+### B12.1 Layers and ownership
+
+| Datum / function | OWNER | Explicitly NOT the authority |
+|---|---|---|
+| Backend events (devices, hotplug, vblank) | backend adapter (winit / DRM-KMS + libinput / headless) | domain, Smithay seat |
+| Outputs: logical record (OutputId, mode choice, scale, transform, arrangement, camera binding) | core output manager | backend (reports capabilities and connectors only), Smithay `Output` (protocol face, written one-way from the core record), renderer |
+| Outputs: hardware (connectors, CRTCs, modes available) | backend | core (reads descriptors) |
+| Rendering / presentation (GPU resources, buffer import, submit) | backend renderer layer | domain (supplies only the per-output projection list), Smithay desktop helpers (only `from_surface` and the damage tracker are used) |
+| Frame clocks (when an output can present) | backend (vblank/flip events) | domain decides which output **clocks which element** (D-B8-CLOCK), never hardware timing |
+| Input devices | backend | domain (sees `PhysicalEvent`s only) |
+| Wayland protocol dispatch, protocol objects, surface trees | Smithay adapter | Stage, backend |
+| Surface ↔ ElementId association | Smithay adapter | Stage (knows ids only) |
+| Stage (anchors, z-order, identity) | domain | Smithay (`Space` unused), backend, renderer, shell, XWayland |
+| Camera set | domain | Output, backend, Smithay, shell (requests via `CameraCommand`), clients (B10.7) |
+| Focus / input policy, interaction state, ownership table | domain | Smithay seat (applies only), backend |
+| Persistence (Stage/camera state; format Level D) | domain service | backend, Smithay, shell |
+
+**Backend-specific components (complete list):** device/event source; output discovery and mode setting; vblank/flip timing; render target, renderer, buffer import (shm/dmabuf); session/seat management (libseat) in production; the winit window in development. Nothing else.
+
+**Headless/nested testing uses the same model.** The headless backend implements the same backend seam (virtual outputs, virtual vblank, injected `PhysicalEvent`s) under the **production** core and Smithay adapter. The checkpoint 2–3 harness (`server.rs` + `input.rs`) is an experiment rig standing in for that seam. It is **not** the production adapter, and tests written against it are re-expressed against the real seam in Phase F (C11).
+
+**Duplication audit:**
+- Smithay `Output` mode/scale is a protocol-facing copy, written only from the core record.
+- Smithay seat focus is an applied copy.
+- Smithay `Window::geometry()` is client state, read and never cached (B2.3).
+- No backend structure stores element or camera positions.
+
+### B12.2 Q-07: dependency and pinning strategy (DECISION D-B12-PIN)
+
+| Item | Decision |
+|---|---|
+| Source | crates.io release (checksum-verified, reproducible offline), not git. Git `master` was not evaluated (EV-S01). Re-evaluating it is an upgrade decision, not a Foundation input. |
+| Cargo dependency | `smithay = { version = "=0.7.0", default-features = false, features = [...] }`: exact `=` pin |
+| Cargo.lock | committed (binary workspace); changed only by the upgrade procedure; CI builds with `--locked` |
+| Toolchain | pinned via `rust-toolchain.toml` to a specific stable in Phase F (local today: rustc 1.99.0). Smithay 0.7.0's MSRV is 1.80.1. |
+| Features: core | `wayland_frontend`, `desktop` (for `Window`, `PopupManager`, desktop utils; **not** `Space`) |
+| Features: development backend | `backend_winit` (implies `backend_egl`, `renderer_gl`) |
+| Features: production backend (Phase G) | `backend_drm`, `backend_gbm`, `backend_libinput`, `backend_udev`, `backend_session_libseat`, `renderer_gl` (multi-GPU later) |
+| Features: tests | `renderer_test` (DummyRenderer, X-6) |
+| Not enabled | `xwayland` (xwayland-satellite is an ordinary client, C6), `backend_x11`, `backend_vulkan`, `renderer_pixman` (until needed) |
+| Protocol versions required | `wl_compositor` **v6** (`CompositorState::new_v6`, EB-10), `xdg_wm_base` v6 (Smithay default, EB-19), `wp_fractional_scale_v1`, `wp_viewporter`, `wp_presentation`, `zwp_relative_pointer_v1`, `zwp_pointer_constraints_v1`, `xdg_activation_v1`, `zwp_linux_dmabuf_v1` v4+ (feedback), `wl_seat`, `wl_data_device` |
+| Transitive boundary | `wayland-server 0.31.14`, `wayland-backend 0.3.17` (rs backend: destructor order EB-5), `wayland-protocols 0.32.13`, `calloop 0.14.5`, all fixed by the lock |
+| Patch policy | A `[patch.crates-io]` fork of Smithay is allowed **only** for a correctness defect that is (1) experimentally reproduced, (2) not fixable through public API, and (3) has an upstream issue/PR. Each patch is one minimal commit, listed in this table, with its experiment. The pin remains the crates.io version plus listed patches. Candidate: W-SM-4b. |
+
+### B12.3 What Infynitae relies on, classified
+
+| Behaviour relied upon | Class | Evidence |
+|---|---|---|
+| Toplevel position is not communicated to clients; `configure` has size + states only | WAYLAND PROTOCOL | EV-W01 |
+| Popup position relative to the parent's window geometry | WAYLAND PROTOCOL | EV-W07 |
+| `wl_surface.enter`/`leave` = scan-out overlap; preferred scale is one value per surface | WAYLAND PROTOCOL | EV-W03, EV-W04 |
+| Frame callbacks "should" be withheld for invisible surfaces | WAYLAND PROTOCOL (recommendation) | EV-W02 |
+| Superseded content → `discarded` | WAYLAND PROTOCOL | EV-W09 |
+| `wl_pointer.leave` does not release buttons; move/resize transfer focus | WAYLAND PROTOCOL | spec text (B10.3) |
+| `Window` standalone (no position); `surface_under` (root-relative); `send_frame`; `take_presentation_feedback`; `on_commit`; `bbox_with_popups`; `geometry` | SMITHAY PUBLIC API | EV-S03, EB-6, EB-15 |
+| `Output::enter`/`leave`; `send_surface_state`; `with_fractional_scale`; `with_pointer_constraint`; `PointerHandle::{motion, relative_motion, button, frame}`; `PopupManager`; `PositionerState::get_unconstrained_geometry`; `WaylandSurfaceRenderElement::from_surface` (f64); `RendererSurfaceState::view()`; `CompositorState::new_v6` | SMITHAY PUBLIC API | EV-S04, EV-S07, EB-3, EB-18, EB-10 |
+| Withheld frame callbacks accumulate and are never dropped | EXPERIMENTALLY VERIFIED SMITHAY BEHAVIOUR (+ source) | EB-11, SC1, SC3 |
+| Pending callbacks complete at the first clock vblank after re-entry | EXPERIMENTALLY VERIFIED | SC1/SC3, EB-9 |
+| Superseded presentation feedback discarded automatically; destroyed → discarded | EXPERIMENTALLY VERIFIED (+ source) | EB-15, EB-17 |
+| Render-element edges equal B1.5 lattice edges with an f64 location, root and subsurfaces | EXPERIMENTALLY VERIFIED | EB-14 |
+| Client death runs every object's `destroyed`, in arbitrary order | SMITHAY / wayland-backend implementation (source) | EB-5 |
+| `Window::output_enter` mis-places popups and `bbox ≠ root` trees | SMITHAY QUIRK (experimentally confirmed) | EB-2 S5, X5 |
+| `CompositorState::new` = v5 | SMITHAY QUIRK / default | EB-10 |
+| Seat `leave()` deactivates constraints unconditionally | SMITHAY QUIRK (source + observed) | EB-16 |
+| `ensure_configured` opt-in; `grab_popup` `assert_eq!`; `Window::geometry` re-clamps; `token_created` accepts all; `surface_view` private | SMITHAY QUIRK / implementation detail | EB-6, EB-18, EB-19 |
+| MaxGesture, clock choice, frame policy (kick + fallback P), suspension reasons, KeepFocus, intake precedence, keyboard-focus policy, activation policy, anchor, numeric model | INFYNITAE POLICY | B1–B11 |
+
+### B12.4 Quirks, workarounds and deliberate bypasses (all isolated in the Smithay adapter)
+
+| ID | Smithay behaviour | Infynitae response | Verified? |
+|---|---|---|---|
+| W-SM-1 | `Space` owns placement, z-order and activation (B2.4) | **not used** | design (EB-2) |
+| W-SM-2 | `Window::output_enter` / `Space::refresh` mis-compute membership for CSD trees and popups | own per-surface membership via `Output::enter`/`leave` (D-B8-ENTER) | quirk confirmed (X5); replacement tested in T1 |
+| W-SM-3 | `CompositorState::new` → v5 | always `new_v6`; T1 asserts the bound version | harness uses v6 (SC1) |
+| W-SM-4a | seat `leave()` → unconditional `deactivate()`, duplicating `unlocked` after an explicit deactivate | ordering rule: explicit `deactivate()` only when no pointer-focus change follows | **X-8 C4 ★** (48/48) |
+| W-SM-4b | the same unconditional `deactivate()` **destroys a oneshot constraint that was never activated** when the pointer leaves its surface (only possible when Infynitae declines activation while the surface is focused, e.g. pointer outside a lock region) | **No public-API workaround.** A wrapper `PointerFocus` cannot send `wl_pointer.leave` itself (`PointerHandle.wl_pointer` is `pub(crate)`, `input/pointer/mod.rs:36`). Options: upstream fix (`if constraint.is_active()`); a vendored one-line `[patch]` under D-B12-PIN's patch policy; or accept. Decision deferred to Phase F; risk RB-10 | **reproduced (X-12)**; intervention deferred to the implementation phase |
+| W-SM-5 | `render_elements_from_surface_tree` takes an i32 root | build elements with `from_surface` (f64) over its own traversal | X-6 |
+| W-SM-6 | `ensure_configured` opt-in | call on every role commit | T1 (RB-3) |
+| W-SM-7 | `grab_popup` panics on root mismatch | check the precondition first | T1 (RB-2) |
+| W-SM-8 | `token_created` default accepts all | override with provenance validation | T1 |
+| W-SM-9 | `Window::geometry` re-clamps to the current bbox | accept; compute effective geometry ourselves if T3 shows harm | T3 (RB-1) |
+
+### B12.5 Upgrade procedure
+
+1. Read the changelog and diff for: `desktop/space/wayland/*`, `desktop/wayland/{window,utils,popup/*}.rs`, `wayland/compositor/{mod,handlers}.rs`, `wayland/seat/pointer.rs`, `wayland/pointer_constraints.rs`, `wayland/presentation/mod.rs`, `wayland/shell/xdg/mod.rs`, `wayland/xdg_activation/mod.rs`, `backend/renderer/element/surface.rs`, `backend/renderer/utils/wayland.rs`, `output.rs`.
+2. For each W-SM-n, decide whether it still applies. If a quirk was fixed upstream, the workaround may be removed **only after** its experiment passes without it.
+3. Bump the `=` pin; `cargo update -p smithay` only; build with `--locked` afterwards.
+4. **Re-run before acceptance:** b8-harness `scenarios` (SC1–SC4, X5), `x6`, `x8`, `x9`, and `realclient` with vkcube, kitty and Firefox (Starve/Throttle/kick). Plus the Phase F T0–T2 suites once they exist. `b2-space` only if `Space` is reconsidered. `b1-numeric` is Smithay-independent.
+5. Any changed result is recorded as new evidence. A contradiction with a B-decision reopens that decision (F8).
+
+---
+
+## 8. Experiments: status (all of Phase B)
+
+| ID | Experiment | Status | Evidence |
+|---|---|---|---|
+| E1–E9 | Numeric model | **RUN** | EB-1 |
+| S1–S7 | `Space` semantics | **RUN** | EB-2 |
+| X-1 | Client trace during pan (configure / enter-leave / scale) | **RUN** | SC1, SC4 |
+| X-2 | Real clients off-screen (vkcube, kitty, Firefox; Starve, Throttle, kick) | **RUN** | EB-9 |
+| X-3 | Two outputs 1.0/1.5, spanning window | **RUN** | SC1, SC2 |
+| X-4 | Smithay overlap convention | **RUN** | EB-2 S5 |
+| X-5 | Popup enter/leave offset | **RUN** (defect confirmed) | X5 |
+| X-6 | Render-element edges vs lattice rule (root + subsurface, 241 scales, up to 2³⁶) | **RUN, PASS** (0 / 134,478 mismatches) | EB-14 |
+| X-7 | Off-screen game / network client | **DEFERRED → T5** (physical/manual; decides P's default only) | — |
+| X-8 | Camera-pan input ownership (9 cases, 48 checks) | **RUN, PASS** | EB-13 |
+| X-9 | Presentation feedback while unobserved | **RUN, PASS** | EB-15 |
+| X-10 (new) | Keyboard-binding key ownership (no stuck keys); input-delivery kick for a blocked unobserved client | **PENDING → T1** (harness has no keyboard path; mechanism is symmetric to the verified button rule) | — |
+| X-11 (new) | Output removal during an interaction; popup-grab dismissal on pan acquisition | **PENDING → T1** (harness cannot remove outputs; no grab test) | — |
+| X-12 (new) | W-SM-4b: oneshot lock never activated, then pointer leaves | **RUN: defect REPRODUCED at the client** (`unlocked` without `locked`; the lock can never activate afterwards). No intervention made (sealing rule). | `bin/x12.rs`; [`evidence/phase-b/x12-oneshot-lock-defect-output.txt`](evidence/phase-b/x12-oneshot-lock-defect-output.txt) |
+| X-13 (new) | Single surface-origin function: render, membership, hit test (incl. `Window::surface_under` popups) and input agree on every surface's Canvas origin (property test) | **PENDING → T0/T1** | — |
+| X-14 (new) | Activation/camera authority is unrepresentable for protocol code (compile-fail test) | **PENDING → T0** (needs the crate layout from C1) | — |
+
+Re-run commands: `experiments/b8-harness`: `cargo run --offline --release --bin {scenarios,x6,x8,x9}`; `target/release/realclient …` (CHECKPOINT.md). `experiments/b1-numeric`, `experiments/b2-space`: `cargo run --offline --release`.
+
+---
+
+## B13 — Adversarial blocker audit
+
+### B13.1 Original blockers
+
+| Q | Original question | Evidence gathered | Disposition | Decision | Remaining assumptions | Deferred validation | Confidence / class |
+|---|---|---|---|---|---|---|---|
+| Q-01 | Off-screen frame-callback policy | EV-W02 (spec "should avoid"); EB-11 (callbacks never dropped); SC3 (re-entry ≤ 1 period, one-shot@off liveness); EB-9 (vkcube blocked 2–4 s under Starve; kick and Throttle bound it; Firefox/kitty fine); X-9 (feedback) | **RESOLVED** | D-B9-FRAMES: withhold; protocol kick (ping, close, configure, popup_done, input); finite fallback P (**provisional 1 s, configuration**); re-entry liveness; single clock | games / network clients under withholding; P value | X-7 (T5), X-10 | HIGH for mechanism (EXPERIMENT + SMITHAY + PROTOCOL); P value = ASSUMPTION |
+| Q-02 | `suspended` vs I3 | EV-W05; SC4(a) configure per toggle; SC4(b/c) amplification: Immediate 1.0/transition, debounce only delays (sweep 48 = 48) or depends on T (scrub 0.70 / 0.10) | **RESOLVED** | D-B9-SUSPEND: never from camera visibility; reasons = {SessionLocked, AllObservingOutputsOff, Parked}; `StableUnobserved(T)` reserved, disabled | benefit of suspension for non-frame-paced clients is unmeasured | — (only if the reserved reason is proposed) | HIGH (EXPERIMENT + PROTOCOL) |
+| Q-03 | Stage anchor | spec `set_window_geometry`; Space convention (S1); popup helpers (EB-6); X-6, X5 truth computations | **RESOLVED** | D-B2-ANCHOR = window-geometry origin; all origins derived | — | X-13 (single origin function) | HIGH (PROTOCOL + SMITHAY + EXPERIMENT) |
+| Q-04 | Popup constraint boundary | EV-W07; `get_unconstrained_geometry` (EB-6) | **RESOLVED** (policy) | D-B6-BOUNDARY: viewport of the anchor output (input output → clock output → none); D-B6-NO-PAN-REPOSITION | UX quality unknown | T3 | MEDIUM-HIGH (DECISION; mechanism SMITHAY) |
+| Q-05 | Smithay pointer global space | Smithay focus contract (EV-S08/P08); S3 ambiguity; X-8 exact client coordinates (11,283) | **RESOLVED** | D-B2-PTR-SPACE = Canvas; D-B2-PTR-STATE `(OutputId, OutputLogical)`, refined by `Locked(S, q_lock)` (B10.2) | — | X-13 | HIGH (SMITHAY + EXPERIMENT) |
+| Q-06 | Preferred scale on mixed-scale outputs | protocol text (no rule); SC1; SC2 (5 policies) | **RESOLVED as INFYNITAE POLICY** | D-B8-SCALE MaxGesture; ⌈⌉ for the integer scale | downsampling quality on lower-scale outputs not measured (no renderer) | T3 visual check | HIGH for stability/sharpness metrics (EXPERIMENT); quality = ASSUMPTION |
+| Q-07 | Smithay pin strategy | EV-S01; EB-10, 16–19; quirk inventory | **RESOLVED** | D-B12-PIN (exact pin, locked, features, protocol versions, patch policy, upgrade procedure, re-run suite) | git master not evaluated | at each upgrade | HIGH (DECISION) |
+| Q-08 | Canvas numeric model | E1–E9; X-6 | **RESOLVED** | D-B1 (Q16 i64, ±2³⁶, integral anchors, rounding points, lattice edges) | zoom anti-jitter (A-B1-1, Level C) | before zoom | HIGH (EXPERIMENT) |
+| Q-09 | Restated I3 | SC1, SC4 (0 configures), X-8 (pan-owned input: 0 events; reconciliation = true position only) | **RESOLVED** | I3′ (B9.7) | — | permanent regression tests (C12) | HIGH (EXPERIMENT + PROTOCOL) |
+
+### B13.2 Blockers discovered during B1–B12 (not in the original program)
+
+| ID | Blocker | Level | Found | Disposition | Validation |
+|---|---|---|---|---|---|
+| NB-1 | Smithay membership helpers mis-place CSD/popup surfaces (EV-S12, EB-H1) | A (multi-output semantics) | B2.4, X5 | **CONDITIONALLY RESOLVED**: D-B8-ENTER own per-surface membership. The defect is confirmed; the replacement is designed, not yet implemented. | X-13, T1 enter/leave truth tests |
+| NB-2 | Single surface-origin function across render / membership / hit-test / input | A (coordinate algebra) | contradiction pass (§9-4) | **CONDITIONALLY RESOLVED**: one function computes every surface's Canvas origin. `Window::surface_under` may be used for hit-testing only if X-13 proves identical results; otherwise own traversal with Smithay input regions. | X-13 |
+| NB-3 | Pure starvation blocks Mesa-WSI-FIFO clients (vkcube) | A (off-screen lifecycle) | X-2 | **RESOLVED** (D-B9-FRAMES kick + finite P) | X-7 for P |
+| NB-4 | Unmatched client button state on gesture acquisition | A (input/grab authority) | directive + B10.3 | **RESOLVED, verified** (X-8 INV-2, C6/C7/C8) | X-10 (keys) |
+| NB-5 | Smithay `CompositorState::new` advertises v5 | B | SC harness | **RESOLVED** (W-SM-3) | T1 version assertion |
+| NB-6 | Smithay `leave()` deactivates constraints unconditionally | B (input correctness, games) | X-8 C4 | 4a **RESOLVED, verified** (ordering rule); 4b **OPEN as risk RB-10**: no public-API fix; patch policy defined | X-12 |
+| NB-7 | Smithay activation tokens accepted by default | B (security) | B10.7 | **RESOLVED** (W-SM-8 override with provenance) | T1 |
+| NB-8 | Keyboard input to an unobserved, blocked client waits for the fallback tick | B | contradiction pass (§9-6) | **RESOLVED** (input delivery is a kick trigger) | X-10 |
+| NB-9 | Interaction during output removal | B | B10.4 | **CONDITIONALLY RESOLVED** (orphaned interaction; design only) | X-11 |
+| NB-10 | Camera authority must be mechanically unrepresentable for protocol code | A (activation authority invariant) | directive §5 | **CONDITIONALLY RESOLVED**: `CameraCommand` authority tag plus crate/module visibility. The design is fixed; enforcement depends on C1's crate layout. | X-14 |
+| NB-11 | Fallback-tick clock source when no output is active (all outputs off) | B | contradiction pass (§9-6) | **RESOLVED**: the production fallback uses a compositor timer, not output vblanks (the harness used output 0's vblanks only as a stand-in) | T1 |
+| NB-12 | Harness ≠ production adapter; tests must not form a second architecture | B (process) | B12.1 | **RESOLVED by rule**: experiments are re-expressed against the production headless seam in Phase F | C11 |
+| NB-13 | Zoom ≠ 1 anti-jitter rule | C | B1 | **DEFERRED** (A-B1-1) | before zoom |
+| NB-14 | `relative_motion` is `wl_fixed` (1/256 px) | informational | X-8 | **NOTED**: protocol coarser than Canvas; no conflict | — |
+
+---
+
+## 9. Final contradiction pass
+
+| # | Check | Result | Basis |
+|---|---|---|---|
+| 1 | Coordinate domains agree across rendering, hit-testing and input | **Holds**, with the stated ≤ ½ physical px bound at fractional scale (D-B2-I9). Render edges equal the lattice rule exactly (X-6); client coordinates are exact through the B2.5 chain (X-8: (11,283)). The fractional-camera `c_eff` path was **not** exercised (harness cameras are integer), so it is a T0 property-test obligation, not a demonstrated result. | X-6, X-8, B2.6 |
+| 2 | Stage authority singular | **Holds.** Anchors exist only in Stage; `Space` unused; Smithay Output and seat copies are one-way; backend holds no positions; INV-3 held in all X-8 cases. | B2.4, B12.1, X-8 |
+| 3 | Cameras never spatial authorities | **Holds.** No camera operation writes Stage; popups are never repositioned by pans; the lock point is a Canvas point carried by the element, not by the camera. | I3′, D-B6, B10.2 |
+| 4 | Popup semantics agree with corrected enter/leave | **Contradiction found and resolved as NB-2.** Membership uses Infynitae's origin formula (D-B8-ENTER), while B2.5 hit-testing used `Window::surface_under` (Smithay's formula). The two formulas agree on paper (`geometry.loc + location − popup.geometry.loc`), but that was not tested. Resolution: one origin function, with X-13 as the gate for reusing `surface_under`. | B6.1, B8.5 |
+| 5 | MaxGesture agrees with output membership | **Holds.** The scale input is the union of per-surface memberships from D-B8-ENTER (popups included); changes occur only at membership events or gesture end. | B8.3, SC2 |
+| 6 | Frame policy vs suspension policy | **Holds**, plus two gaps closed: (a) a suspension configure is a non-initial configure and therefore a kick trigger, so a blocked client can process it; (b) **NB-8** (keyboard input to a blocked unobserved client) and **NB-11** (fallback clock with no outputs) were found here and resolved. | B9.3, B9.5, B10.5 |
+| 7 | Gesture acquisition cannot produce unmatched client button state | **Holds for pointer buttons (verified).** Keys are not verified (X-10). Protocol-initiated transfers (move/resize/drag) follow protocol-defined focus loss. | X-8, B10.3 |
+| 8 | Pan ownership cannot leak absolute or relative motion | **Holds (verified)**, INV-1 in 9 cases including locked, confined and destroyed targets. | X-8 |
+| 9 | Pointer-lock termination cannot create phantom motion | **Holds (verified)**: no replay, no compensation, first genuine Δ only (INV-4/5). The real-game response is unknown (X-7). | X-8 C3, C4 |
+| 10 | Keyboard focus policy explicit | **Holds**: D-B10-KBD, recorded as Infynitae policy. | B10.5 |
+| 11 | xdg-activation cannot move Cameras | **Holds by design**, with no execution path from protocol handlers to `CameraCommand`. Mechanical enforcement is pending (X-14, NB-10). | B10.7 |
+| 12 | Backend abstractions do not duplicate Stage/Camera state | **Holds** (B12.1 duplication audit). | B12.1 |
+| 13 | Smithay workarounds isolated | **Holds**: every W-SM lives in the Smithay adapter. W-SM-4a needs one domain→adapter call (`end_lock(surface, focus_will_change)`); the decision stays in the domain, the Smithay call in the adapter. | B12.4 |
+| 14 | I3 agrees with actual protocol behaviour | **Holds**: pans produced only enter/leave, membership-driven scale changes and clock changes; pan-owned input produced zero events; a single true-position motion after termination. | SC1, SC4, X-8 |
+| 15 | No provisional policy silently became an invariant | **Holds.** Explicitly provisional or revisitable: fallback P = 1 s; frozen-cursor pan UX; popup draw order (B6.4); the MaxGesture cost trade-off (RB-7); ⌈⌉ integer scale; activation outcomes and shell UX; the reserved `StableUnobserved(T)`. Invariants (I1–I10, I3′) contain no numeric policy values. | this document |
+| 16 | Phase A product requirement: "camera jumps keep the cursor at the same screen position" | **Holds structurally.** The authoritative pointer is `(OutputId, OutputLogical)` and camera changes do not touch it. Exception by design: while a pointer lock is active, the screen position is derived from the lock point (cursor normally hidden by the client). | B2.5, B10.2 |
+| 17 | Output power-off vs membership | **Open question at Level C, not a contradiction.** Whether a powered-off output still "observes" (wl_surface.enter is about scan-out) is undecided. D-B9-SUSPEND's `AllObservingOutputsOff` reason works with either answer. | B9.5 |
+
+---
+
+## 10. Q-01 … Q-09 dispositions (summary; detail in B13.1)
+
+| Q | Status |
+|---|---|
+| Q-01 | RESOLVED (P provisional) |
+| Q-02 | RESOLVED |
+| Q-03 | RESOLVED |
+| Q-04 | RESOLVED (policy) |
+| Q-05 | RESOLVED |
+| Q-06 | RESOLVED (Infynitae policy) |
+| Q-07 | RESOLVED |
+| Q-08 | RESOLVED |
+| Q-09 | RESOLVED |
+
+---
+
+## 11. Risks and open hypotheses
+
+| ID | Risk | Severity | Mitigation / test |
+|---|---|---|---|
+| RB-1 | `Window::geometry()` re-clamps dynamically | low | T3 |
+| RB-2 | `grab_popup` panics on root mismatch | medium | precondition check (W-SM-7) |
+| RB-3 | `ensure_configured` opt-in | medium | W-SM-6, T1 |
+| RB-4 | Arbitrary destruction order on client death | medium | idempotent handlers, T1 |
+| RB-5 | Smithay membership helpers wrong for CSD/popups | resolved by design (NB-1) | X-13, T1 |
+| RB-6 | Default compositor v5 | low | W-SM-3 |
+| RB-7 | MaxGesture memory cost (2.25× while multi-observed) | low | measured (SC2) |
+| RB-8 | Fallback P wrong for games or software clients | medium | X-7; P is configuration |
+| RB-9 | The kick completes callbacks for all unobserved surfaces of a client | low | bounded per request/input |
+| RB-10 (new) | W-SM-4b: never-activated oneshot lock destroyed on pointer leave | medium | X-12; upstream issue or patch policy |
+| RB-11 (new) | Keyboard key ownership not yet verified | medium | X-10 |
+| RB-12 (new) | Interaction during output removal not yet verified | low-medium | X-11 |
+| A-B1-1 | Zoom anti-jitter | low (Level C) | before zoom |
+
+---
+
+---
+
+## Phase B seal: carry-forward ledger
+
+Five categories, kept separate on purpose. Phase C and later phases consume this ledger. Nothing in categories 2–5 may be cited as "resolved".
+
+### 1. Resolved architecture (frozen unless new evidence contradicts it)
+
+| Decision | Section |
+|---|---|
+| D-B1 numeric model: Q16 i64, ±2³⁶, integral anchors, rounding points R1–R6, forbidden F1–F7 | B1 |
+| B1.5 reference-relative lattice edge rule (R = 120-lattice, δ = 2⁻²⁰), f64 location into Smithay | B1.5, X-6 |
+| D-B2 coordinate domains, T1–T10, D-B2-ANCHOR (window-geometry origin), D-B2-PTR-SPACE (Canvas), D-B2-PTR-STATE (+ Locked refinement), D-B2-I9 | B2, B10.2 |
+| D-B2-SPACE: Smithay `Space` not used | B2.4 |
+| B3 object graph; D-B4 identity; B5 lifecycle; D-B5-REMAP | B3–B5 |
+| D-B6 popups: no stored position; D-B6-BOUNDARY; D-B6-NO-PAN-REPOSITION | B6 |
+| D-B7-CENTER; cameras survive outputs; N:1 binding | B7 |
+| D-B8-SCALE (MaxGesture, Infynitae policy); D-B8-CLOCK; D-B8-ENTER (own per-surface membership) | B8 |
+| D-B9-FRAMES mechanism (withhold + kick incl. input + finite fallback), D-B9-SUSPEND, I3′ | B9 |
+| D-B10-INTAKE, D-B10-KBD, D-B10-ACTIVATION (as a design), D-B11-PAN, D-B11-FOCUS (KeepFocus), W-SM-4a ordering rule | B10–B11 |
+| D-B12 layer ownership; D-B12-PIN (exact pin, lock, features, protocol versions, patch policy, upgrade procedure) | B12 |
+
+### 2. Conditionally resolved obligations (design fixed; validation owed)
+
+| ID | Obligation | Validation | Owner phase |
+|---|---|---|---|
+| CR-1 | Authoritative per-surface enter/leave (D-B8-ENTER) **and** one shared surface-origin function for render, membership, hit-test and input (NB-1, NB-2) | X-13 | C3/C4 design → T0/T1 |
+| CR-2 | Keyboard binding and **modifier** ownership: no stuck logical keys or modifiers across bindings, focus changes, cancellation and destruction | X-10 | C4 design → T1 |
+| CR-3 | Output removal during an active interaction (orphaned interaction) | X-11a | C4/C5 design → T1 |
+| CR-4 | Popup-grab dismissal when a compositor interaction is acquired | X-11b | C4 design → T1 |
+| CR-5 | Mechanical prevention of Camera mutation from protocol-handling code (NB-10) | X-14 | **C1** design → T0 |
+| CR-6 | Fractional-camera snapping/rounding (`c_eff,O` path): never exercised; harness cameras were integral | T0 property tests | C3 → T0 |
+| CR-7 | Input delivery as a kick trigger for blocked, unobserved, focused clients (NB-8) | X-10 | T1 |
+
+### 3. Provisional policy / constants (configurable or revisitable; never invariants)
+
+| Item | Current value | Revisit when |
+|---|---|---|
+| Off-screen fallback period P | 1 s (configuration) | X-7 results |
+| Pan cursor behaviour | cursor frozen on screen, world slides | UX review |
+| Popup draw order | immediately above own element | Level D |
+| Integer preferred scale | ⌈fractional⌉ | evidence of integer-client problems |
+| Activation outcomes and shell UX | focus / attention / ignore; no auto-navigation | shell design |
+| `StableUnobserved(T)` suspension reason | reserved, disabled | evidence of benefit |
+| MaxGesture memory trade-off (2.25× while multi-observed) | accepted | memory pressure |
+
+### 4. Deferred physical / visual validation
+
+| ID | Validation | Tier |
+|---|---|---|
+| DV-1 | X-7: Wine/Proton game and a network client off-screen under withholding, kick and P | T5 |
+| DV-2 | Downsampling quality on the lower-scale output under MaxGesture (renderer filter) | T3/T4 visual |
+| DV-3 | Real games under KeepFocus pans and preserved locks | T5 |
+| DV-4 | Real libinput device semantics (acceleration, high-rate mice) under pan accumulation | T4 |
+
+### 5. Catalogued Smithay quirks / workarounds (adapter-local; Smithay pinned per D-B12-PIN)
+
+| ID | Quirk | Disposition | Evidence |
+|---|---|---|---|
+| W-SM-1 | `Space` owns placement/z-order/activation | not used | EB-2 |
+| W-SM-2 | `Window::output_enter` / `Space::refresh` mis-compute CSD/popup membership (EV-S12, EB-H1) | own membership (CR-1) | EB-2 S5, X5 |
+| W-SM-3 | `CompositorState::new` = `wl_compositor` v5 | use `new_v6` | EB-10 |
+| W-SM-4a | `leave()` deactivates unconditionally → duplicate `unlocked` | ordering rule | X-8 C4 |
+| W-SM-4b | same → never-activated oneshot lock destroyed | **defect record + reproducer preserved; no fork/vendor/patch now.** Intervention decided in the implementation phase under the patch policy | X-12 |
+| W-SM-5 | `render_elements_from_surface_tree` takes an i32 root | build with `from_surface` (f64) | X-6 |
+| W-SM-6 | `ensure_configured` opt-in | call on every role commit | EB-6 |
+| W-SM-7 | `grab_popup` `assert_eq!` | check precondition | EB-6 |
+| W-SM-8 | `token_created` accepts all | provenance override | EB-19 |
+| W-SM-9 | `Window::geometry` re-clamps dynamically | accept; revisit on T3 evidence | EB-6 |
+| W-SM-10 | `RendererSurfaceState::surface_view` private | use `view()` | EB-18 |
+
+---
+
+## Phase B gate evaluation
+
+**Level A blockers from the master program (§7):**
+
+| Level A item | Status | Where |
+|---|---|---|
+| Canvas numeric representation | RESOLVED | B1 |
+| Coordinate algebra | RESOLVED; NB-2 CONDITIONALLY RESOLVED (X-13) | B2, §9-4 |
+| Stage authority | RESOLVED | B2.4, B3, B12 |
+| Element identity | RESOLVED | B4 |
+| Stage element ↔ Wayland surface relationship | RESOLVED | B3 |
+| Lifecycle ownership | RESOLVED | B5 |
+| Multi-output surface semantics | RESOLVED (worked example measured); NB-1 CONDITIONALLY RESOLVED (implementation of D-B8-ENTER, X-13) | B8 |
+| Off-screen lifecycle / callback semantics | RESOLVED (P provisional, X-7) | B9 |
+| Input / grab authority | RESOLVED for buttons, pan, locks and confinement (X-8); keys and output removal CONDITIONALLY RESOLVED (X-10, X-11) | B10, B11 |
+| Backend ownership boundary | RESOLVED | B12 |
+| Activation → camera authority (NB-10) | CONDITIONALLY RESOLVED (design fixed; X-14 enforcement) | B10.7 |
+
+**UNRESOLVED Level A blockers: none.**
+
+Every CONDITIONALLY RESOLVED item has:
+- a fixed design;
+- a named validation experiment (X-10 … X-14) that runs in T0/T1 against the production seam;
+- a failure mode that would be an implementation defect, or at worst a vendored one-line Smithay patch under D-B12-PIN's policy (W-SM-4b), rather than a change to ownership, coordinates or protocol semantics.
+
+**B1–B13 status:** all complete.
+
+**Phase B gate: SATISFIED**, with the conditional resolutions and deferred validations above carried forward explicitly. **Stopped at the Phase B review gate. Phase C has not begun and requires explicit approval.**
