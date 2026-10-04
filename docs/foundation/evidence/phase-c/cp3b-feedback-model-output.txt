@@ -1,0 +1,19 @@
+CP3B feedback MODEL. Ladder: [1.0, 1.2247, 1.5, 1.7321, 2.0, 2.4495, 3.0] H_max 3.0
+Scenario: user viewport-fits W on output A (stimulus), then 60 client-response rounds with no further stimulus.
+
+NAIVE  client=compliant (logical size constant)                          hint changes=  1 final h=1.7321 still-oscillating-at-end=False
+EPOCH  client=compliant (logical size constant)                          hint changes=  1 final h=1.7321 still-oscillating-at-end=False
+NAIVE  client=constant-physical (logical = 1200x900 / h)                 hint changes=  4 final h=3.0000 still-oscillating-at-end=False
+EPOCH  client=constant-physical (logical = 1200x900 / h)                 hint changes=  4 final h=3.0000 still-oscillating-at-end=False
+NAIVE  client=anti (logical grows with h)                                hint changes=  1 final h=1.7321 still-oscillating-at-end=False
+EPOCH  client=anti (logical grows with h)                                hint changes=  1 final h=1.7321 still-oscillating-at-end=False
+NAIVE  client=toggling (size flips with each hint value)                 hint changes=  1 final h=1.7321 still-oscillating-at-end=False
+EPOCH  client=toggling (size flips with each hint value)                 hint changes=  1 final h=1.7321 still-oscillating-at-end=False
+NAIVE  client=adversarial (picks the size that inverts the last move)    hint changes= 60 final h=1.5000 still-oscillating-at-end=True
+        first changes: [(0, 1.5, 1.7321), (1, 1.7321, 1.5), (2, 1.5, 3.0), (3, 3.0, 1.5), (4, 1.5, 3.0), (5, 3.0, 1.5)]
+EPOCH  client=adversarial (picks the size that inverts the last move)    hint changes=  1 final h=1.7321 still-oscillating-at-end=False
+
+Wheel wiggle: camera A zoom alternates 1.57 <-> 1.59 for 40 ticks (rung boundary 1.5*1.05 = 1.575), B observes at 1.5;
+then the user clicks (non-zoom input) which ends a discrete-zoom interaction.
+  NAIVE  hint changes= 40 final h=1.5000
+  DZI    hint changes=  2 final h=1.5000

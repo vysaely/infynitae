@@ -1,6 +1,6 @@
 # Infynitae Native — Foundation Architecture (Phase C)
 
-Status: checkpoint 1 (C1–C4) accepted, commit `d596416cf57877116e9cfbc8cf6c6fe25c001c67`. Checkpoint 2 (C5–C10) accepted. **Checkpoint 3A complete; stopped at the 3A review gate.** C11–C16 (checkpoint 3B) not started.
+Status: checkpoint 1 (C1–C4) accepted, commit `d596416cf57877116e9cfbc8cf6c6fe25c001c67`. Checkpoints 1, 2 and 3A accepted. **Checkpoint 3B (C11–C16) complete. Phase C gate SATISFIED; stopped at the Phase C final review gate.** The canonical invariant registry is in C12.
 
 Inputs (frozen):
 - Phase B seal `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`, especially the carry-forward ledger at the end of [FOUNDATION_BLOCKERS.md](FOUNDATION_BLOCKERS.md).
@@ -1126,3 +1126,505 @@ Both cycles are the OB-28 test target.
 | C5.2 Case B "Open policy question CP2-Q1" | **resolved**: no fullscreen override (Case C) |
 | C3.7 / D-B2-I9 "≤ ½ px agreement bound" | **refined** to exact physical-pixel agreement (CP3A-2) |
 | C2.1 `ScaleState` | now holds h, the ladder (derived from configuration + outputs + D_max) and the gesture flag |
+
+---
+---
+
+# Phase C checkpoint 3B (final): C11–C16, canonical registry, final audit, Phase C gate
+
+Checkpoint 3A accepted: `795800937a1e50e56587cd4080a73ce27d8a8b01`.
+
+## CP3B evidence
+
+| ID | What | Where |
+|---|---|---|
+| EC-22 | **Feedback MODEL** (not an experiment): client-geometry/scale loops under viewport-fit, five client behaviours; boundary wiggle. Benign clients converge under any policy (1–4 hint changes). **An adversarial client that inverts every move oscillates forever under naive settle-every-time (60 changes in 60 rounds); under epoch monotonicity (SC-E): 1 change.** Wheel wiggle across a rung boundary: naive 40 changes / 40 ticks; discrete-zoom interaction (SC-D): 2. | `experiments/cp3a-scale-model/feedback.py`; [`evidence/phase-c/cp3b-feedback-model-output.txt`](evidence/phase-c/cp3b-feedback-model-output.txt) |
+| EC-23 | Target hardware for budgets: AMD Ryzen 5 7600X3D, 30 GiB RAM, AMD Radeon RX 9070 XT (RADV GFX1201), Mesa 26.2.3, Linux 7.2.8 | `/proc/cpuinfo`, `free`, vulkaninfo, EB-9 |
+
+---
+
+## C11 — Verification hierarchy
+
+### C11.1 Tiers
+
+| Tier | Environment | Simulated | Real | Invariants covered | Required tests (minimum) | Cost | Trigger | Retained evidence | A failure means |
+|---|---|---|---|---|---|---|---|---|---|
+| **T0** | `cargo test` on `infynitae-core` (no Smithay, no runtime) + `verify-architecture` (build probes, dependency checks) | everything outside core | core logic, compiler, Cargo graph | COORD, CAMERA (authority), STAGE (identity/lifecycle state machine), SCALE (policy), FRAME (policy decisions), INPUT (ownership state machine), ARCH | numeric properties (B1 E1–E9 as properties); lattice/edge properties to 2³⁶; projection↔unprojection; ID never reused; lifecycle transition table; MaxGesture/ladder/epoch/DZI properties (EC-19, EC-22 as property tests); ownership table; keyboard K-rules at state level; compile-fail probes with asserted diagnostics; `!Send` port probe; dependency DAG | seconds | every commit (CI) | test log, probe diagnostics | a domain rule or an authority boundary is broken; **blocks merge** |
+| **T1** | lockstep headless: production core + production Smithay adapter + headless backend (virtual outputs, virtual vblank, injected `PhysicalEvent`s), recording probe clients over socketpairs (Phase B/C harness pattern, re-expressed against the real seam, NB-12) | time, outputs, devices, rendering (DummyRenderer) | Smithay protocol handling, real `wl_*`/`xdg_*`/`wp_*` traffic, client-observed events | RENDER (order, edges), HIT, membership, INPUT (pan, keys, constraints), FRAME (callbacks, presentation), PROTOCOL (configures, I3′), SHELL (IPC against core), FAIL (client death, output removal) | ports of SC1–SC4, X5, X-6, X-8, X-9, X-10, X-12, xsnap, xhit; OB-1/2/3/4/13/14/15/18/26/28; adversarial misbehaving clients | seconds–a minute | every commit (CI) | client protocol traces, merged logs | protocol behaviour or ordering is wrong; **blocks merge** |
+| **T2** | nested: Infynitae on the winit backend inside the developer's session; scripted probe clients | the output (a window), input via host | GL/EGL renderer, real frame timing of the host, real buffers | RENDER on a real GPU, damage, FRAME timing, basic input | smoke: map/render/interact, pan, multi-window, unmap; renderer filters exercised | minutes | on demand / pre-release | screenshots, traces | renderer/backend integration is wrong; does not prove DRM behaviour |
+| **T3** | real toolkits/applications against the headless (T1-style, real time) or nested backend: GTK3/4, Qt6, Firefox, Chromium/Electron, kitty, SDL, xwayland-satellite + X11 apps | outputs (headless) or host (nested) | toolkit behaviour | toolkit compatibility of INPUT (RC-1, keys), SCALE (client response), FRAME (off-screen behaviour), XWAYLAND, fullscreen policy, CSD geometry | OB-9, OB-10, OB-16, OB-17, OB-22 (non-game), OB-27, X-16 (client side), DV-2 visual | minutes–hours | manual / scheduled pre-release | client logs, `WAYLAND_DEBUG` traces, CPU/memory | a client class misbehaves; may yield workarounds, never a change of invariants without review |
+| **T4** | physical: DRM/KMS + libinput + real monitors (target: 7600X3D, RX 9070 XT, 165 Hz and mixed-DPI outputs) | nothing | everything | presentation timing, VRR/flip feedback, real input devices, multi-monitor hotplug, measured performance and idle | OB-6 on real outputs, OB-7, OB-21, OB-25, C14 measurements, DV-4, hotplug | hours | manual pre-release | measurements, traces, photos/video where visual | physical assumptions are wrong; feeds TUNE |
+| **T5** | games, latency, long-duration, adversarial stress on T4 hardware | nothing | everything | DV-1/3, X-7, input-to-photon latency, 24 h stability, memory growth, fuzzed clients | OB-5, OB-8, OB-20, OB-22 (games), long-session C14 | hours–days | manual milestone | measurements, crash dumps | the product is not daily-drivable; may change provisional values |
+
+**Tier honesty rule.** A tier may only claim what it physically represents:
+- T0/T1 cannot claim GPU, timing, visual or device behaviour;
+- T1 cannot claim toolkit behaviour;
+- T2 cannot claim DRM/KMS behaviour;
+- T3 results are per-toolkit-version, never universal.
+
+Every evidence record states its tier.
+
+### C11.2 OB-1 … OB-29 destinations (all mapped)
+
+| Tier / destination | Obligations |
+|---|---|
+| T0 | OB-2 (reference region evaluator), OB-6, OB-14 (transforms, zoom ≠ 1, clamp), OB-12 property part (bounds/monotonicity), OB-23 property part, OB-28 property part, OB-19 (as the Phase F entry gate, below) |
+| T1 | OB-1, OB-2, OB-3, OB-4, OB-9 (GTK3/X11 menus via satellite headless), OB-13, OB-14, OB-15, OB-16 (real-time harness), OB-18, OB-26, OB-28 (adversarial client) |
+| T2 | renderer-filter smoke for OB-7 |
+| T3 | OB-7 (visual), OB-9 (Steam), OB-10, OB-16 (toolkits), OB-17, OB-22 (apps/video), OB-27, OB-12/X-16 client measurements |
+| T4 | OB-6 (physical outputs), OB-7, OB-21, OB-25 |
+| T5 | OB-5, OB-20, OB-22 (games) |
+| UP (upstream) | OB-11 (Smithay issue; patch decision in Phase F) |
+| TUNE | OB-8, OB-12, OB-23 |
+| Decision before the zoom-motion feature | OB-24 |
+| **Phase F entry gate (unconditional)** | **OB-19** |
+| GATE-C | OB-29 (this checkpoint) |
+
+### C11.3 Negative controls that stay in verification
+
+A negative control proves a test can see the failure its invariant prevents. Each is kept because the failure is real and cheap to reproduce:
+
+| Invariant | Negative control | Expected outcome | Tier | Status |
+|---|---|---|---|---|
+| INV-INPUT-6 (modifier keys never compositor-owned) | K3 disabled (`k3_enforced = false`) | client left with a stuck modifier | T1 | **exists** (X-10 NEG) |
+| INV-CAMERA-1 / INV-ARCH-2 | forge a port; call input without a port; mutate through the read accessor; reach navigation internals; store a port in protocol state | compile failure with the asserted diagnostic (E0624, private-field, E0061, E0603, E0277) | T0 | **exists** (spike `verify.sh`; ported by OB-19) |
+| INV-ARCH-1 | add a forbidden dependency edge (core → smithay; wayland → backend) in a probe manifest | `verify-architecture` fails | T0 | to add with OB-19 |
+| INV-SCALE-4 | ladder and epoch rule disabled (naive settle) | churn: 313 renegotiations in Case E; 60/60 adversarial oscillation; 40/40 wiggle | T0 (model as property test) / T1 (real clients) | **exists** (EC-19, EC-22) |
+| INV-RENDER-1 / INV-HIT-1 | i32 root location; canvas-exact hit rule | 72,242 edge mismatches (X-6); 399–617 hit mismatches (xhit) | T1 | **exists** |
+| INV-INPUT-3 | deliver pan motion to the client (bypass the interaction) | client receives motion/relative during the pan; INV-1 check fails | T1 | to add (one-line switch in the X-8 port) |
+| INV-FRAME-3 (no pure starvation) | kick and fallback disabled with a Mesa-WSI-FIFO client off-screen | ping unanswered until re-entry (vkcube: 2–4 s) | T3 (needs a real Vulkan client) | **exists** (EB-9 Starve run) |
+| INV-RENDER-4 (own membership) | use `Window::output_enter` for popups | wrong popup enter/leave (X5) | T1 | **exists** |
+| INV-INPUT-9 (W-SM-4a) | explicit deactivate before a focus change | duplicate `unlocked` | T1 | **exists** (X-8 C4 history) |
+
+Not kept as negative controls: things that would only inflate counts (e.g. "remove the Stage": nothing compiles).
+
+---
+
+## C12 — Canonical invariant registry
+
+**This table is authoritative.** Legacy identifiers map to it (C12.2). Where a rule was refined, the earlier wording is superseded and must not be cited as normative.
+
+Evidence class: P = protocol, S = Smithay source, E = experiment, M = executable model, D = decision.
+
+| ID | Statement | Authority / owner | Class | Evidence | Enforcing tests (tier) | Violation means |
+|---|---|---|---|---|---|---|
+| **INV-STAGE-1** | Stage is the **only** store and writer of persistent placement (anchors) and z-order. Writers: `stage::place` via (a) placement policy at initial commit, (b) interactive drag commit, (c) shell `MoveElement` (same path). | core `Stage` | D | B2–B5, C2 | T0 single-writer API tests; T1 INV-3 (X-8) | second spatial authority (Level A) |
+| **INV-STAGE-2** | An element's anchor is the Canvas position of its xdg window-geometry origin; all surface origins derive from it via one function (INV-COORD-6) | core | P+S+D | B2.3 | T1 xsnap/xhit | render/hit/membership disagreement |
+| **INV-STAGE-3** | `ElementId` = `NonZeroU64`, monotonic, never reused within a process; external references are `(InstanceId, ElementId)` and resolve or fail with `StaleElement` | core `Stage` | D | B4 | T0 property; T1 shell stale-ID | ABA aliasing |
+| **INV-STAGE-4** | Lifecycle follows B5's state/transition table; destroy handling is idempotent and order-independent (client death destroys objects in arbitrary order) | core + adapter | S+D | B5, EB-5 | T0 state machine; T1 crash tests | stale relationships, panics |
+| **INV-STAGE-5** | Unmap retains `ElementId` and anchor; remap re-shows at the anchor on top of z-order | core | D | D-B5-REMAP | T1 | identity loss on remap |
+| **INV-STAGE-6** | No projected/rendered/derived value is ever written back to Stage, cameras or snapshots | all | D | B1 F1, C2 | T0 (no API), review | derived state becomes authority |
+| **INV-CAMERA-1** | Camera state is mutated only inside `core::navigation`, reachable only with `InputPort` (physical input) or `ShellPort` (shell); ports are unforgeable, `!Send`, bound to their Core and never stored in protocol state | core `navigation` | E+D | C1.5, EC-1, EC-15 | T0 probes (OB-19) | clients can move cameras |
+| **INV-CAMERA-2** | A camera change never changes any element's Canvas geometry | core | D+E | I2, X-8 INV-3 | T0, T1 | cameras become spatial authority |
+| **INV-CAMERA-3** | Cameras are centre-anchored views (centre Q16, zoom); per-output view origin `v_O = centre − mode/(2k)` (R7); cameras survive output removal; N outputs may share one camera | core `navigation` | D | D-B7-CENTER, B7.2 | T0, T1 hotplug | lost views, wrong projection |
+| **INV-CAMERA-4 (I3′)** | Camera change alone causes no configure (size, state incl. `suspended`, bounds, popup position) and delivers no pointer/relative/button event from the pan gesture. It MAY cause enter/leave, scale changes per INV-SCALE-*, clock changes, presentation outcomes, and after termination one true-position pointer event. | core | P+E | B9.7, SC1, SC4, X-8 | T1 (client-observed configure count = 0 during pan) | pan visible to clients as geometry/input |
+| **INV-CAMERA-5** | Viewport-fit is a camera operation (centre + zoom on one output; optional isolation) saved/restored in `navigation`; it never changes an element's size or anchor | core `navigation` | D | C5.1 | T0, T1 | fit rewrites geometry |
+| **INV-COORD-1** | Canvas coordinates are Q16 `i64` (2⁻¹⁶ px), \|v\| ≤ 2³⁶; anchors and surface origins are integral | core | E | B1 (E1–E9) | T0 | precision collapse, path dependence |
+| **INV-COORD-2** | Rounding happens only at R1–R7 (R7 = view-origin quantisation); F1–F7 are forbidden | core | E+D | B1.4, C3.2 | T0 | jitter, drift |
+| **INV-COORD-3** | Gesture deltas accumulate in f64 from the gesture origin and are quantised once per update, never per event | core | E | B1 E2b, X-8 | T0 | drift (6.1 px / 1e6 events) |
+| **INV-COORD-4** | Coordinate domains are distinct Rust types with no cross-domain arithmetic; Smithay geometry types are constructed only in the adapter's `convert` module | core / adapter | D | B2.7, C3.6 | T0 compile probes | domain mix-ups |
+| **INV-COORD-5** | Smithay's pointer "global space" is Canvas. The authoritative pointer is `Free(OutputId, OutputLogical)` or `Locked(SurfaceKey, Canvas lock point)`; Smithay's location is derived per dispatch. | core `PointerModel` | S+E | B2.5, B10.2, X-8 | T1 | wrong client coordinates (Prototype 01 bug) |
+| **INV-COORD-6** | One surface-origin function (anchor − geometry.loc + subsurface/popup offsets) is the only source of surface Canvas origins for render, membership, hit-test and input | core | E | CR-1, EC-9, EC-20 | T1 xsnap/xhit | render/input disagreement |
+| **INV-RENDER-1** | Physical edges: `edge(x) = round((x − R)·k + δ) − C_O` with R a 120-lattice reference, δ = 2⁻²⁰, k = zoom·scale; surfaces are built with `from_surface` at f64 location `(x − R)·k + δ − C_O` | core (numbers) / adapter (Smithay call) | E | B1.5, X-6 | T1 X-6 port; T0 properties | gaps, jitter, scale-dependent seams |
+| **INV-RENDER-2** | Render order front-to-back: reverse Stage z-order; within an element each popup tree in `popups_for_surface` order, then the root tree, each traversed downward | core (from snapshot order) | E | X-15 | T1 | wrong stacking |
+| **INV-RENDER-3** | Output membership (`wl_surface.enter/leave`) is computed by Infynitae per surface from physical-pixel projection and applied via `Output::enter/leave`; leave is sent before an output global is destroyed; `Window::output_enter`/`Space` are not used | core + adapter | P+E | D-B8-ENTER, C3.2[3], X5 | T1 | wrong enter/leave, wrong scale |
+| **INV-RENDER-4** | No spatial index unless C3.8's measured threshold is met; if introduced, it is derived from Stage and differentially tested | core | D | C3.8 | review + differential T0 | secondary authority |
+| **INV-HIT-1** | Hit-testing selects the surface **presented** at the pointer's physical pixel (same edges/order/`c_eff` as rendering) whose input region (protocol add/subtract, half-open on the clamped surface-local point) contains the point; delivered coordinates are `q − origin` clamped into the surface. `Window::surface_under` is not used. **Supersedes D-B2-I9's ½-px tolerance.** | core | E+P | EC-20, W-SM-11/12 | T1 xhit; T0 region evaluator | clicks land on hidden surfaces |
+| **INV-INPUT-1** | Every physical event has exactly one owner, decided at press (before any client dispatch); releases follow the press owner; motion follows the active interaction | core intake | E | B10.3, X-8, X-10 | T1 | stuck buttons/keys, leaks |
+| **INV-INPUT-2** | A compositor pointer interaction is acquired only when the client owns no pressed button; protocol move/resize/drag are the only client→compositor transfers | core | P+E | B10.3, X-8 C6 | T1 | unmatched client button state |
+| **INV-INPUT-3** | While a compositor interaction owns the pointer, no absolute motion, relative motion or button event reaches any client; pointer focus is kept (KeepFocus) | core + adapter | E | X-8 (48 checks), D-B11-FOCUS | T1 (+ negative control) | game input leakage, lost locks |
+| **INV-INPUT-4** | Relative motion is emitted only from physical deltas on the client path; nothing is replayed, synthesised or derived from camera changes | core | E | X-8 INV-4/5 | T1 | phantom motion |
+| **INV-INPUT-5** | Pointer constraints: activation is compositor policy (focused + inside region; never during pan acquisition); lock reconciliation at pan end keeps the Canvas lock point if it is observable on the pointer's output, else deactivates; on output removal the lock is deactivated and the pointer moves to the Arrangement-nearest output; W-SM-4a ordering (explicit deactivate only without a following focus change) | core + adapter | E+D | B11.4, X-8 C3/C4, AUD-4 | T1 | lost/duplicate lock events |
+| **INV-INPUT-6** | Keys whose press changes XKB modifier/lock state are never compositor-owned (bindings on them run in observe mode) | core intake | E | K3, X-10 + NEG | T1 (+ negative control) | stuck modifiers |
+| **INV-INPUT-7** | Focus transitions use protocol semantics only (`leave` resets, `enter(keys)` + `modifiers`); no synthetic key events; compositor-owned keys are absent from `enter` and their releases are consumed; client-side destruction of the focused surface → successor `enter` without `leave` | adapter (Smithay seat) + core | P+S+E | K4–K9, X-10, EC-21 | T1; T3 (OB-10) | logically impossible key state |
+| **INV-INPUT-8** | Keyboard focus changes only by explicit action (click-to-focus, focus bindings, shell focus command, activation grant) or target loss; camera, visibility and pointer motion never change it | core `FocusModel` | D | D-B10-KBD | T0, T1 | typing redirected by panning |
+| **INV-INPUT-9** | xdg-activation tokens are validated by provenance (W-SM-8); activation yields focus grant, attention or nothing; never a camera change | core `protocol` | D+E | D-B10-ACTIVATION, EC-1 | T0 probes, T1 | focus stealing, camera hijack |
+| **INV-SCALE-1** | ρ(E) = max over observing presentations of `output_scale × presentation_zoom`; the protocol-fullscreen presentation contributes `scale_O` (zoom 1); no fullscreen override | core visibility | D+M | S1, CP2-Q1, Case C | T0 model properties | blurry or overspent buffers |
+| **INV-SCALE-2** | The client hint h belongs to a finite ladder containing every output scale and is ≤ `H_max(E) = min(H_cfg, D_max / max logical side)`, with `D_max` queried from the renderer; if E's size makes h exceed the device bound, h is lowered immediately | core `ScaleState` | E+M | S2, S3, P1, P2, P7, EC-16, EC-18 | T0; T1 (OB-13) | unrenderable/huge buffers |
+| **INV-SCALE-3** | Increases happen only when the target rung exceeds h (rung crossings); decreases only when no camera gesture **and** no discrete-zoom interaction is active | core | M | S5, S6, SC-D | T0 properties | per-event renegotiation |
+| **INV-SCALE-4 (churn contract)** | (a) no hint change per raw zoom event; (b) changes only at rung crossings or settlement; (c) per gesture/interaction: ≤ (rungs crossed) + 1; (d) no oscillation: within an epoch, re-evaluations caused only by client responses move h monotonically in the epoch's first direction (SC-E); a reversal needs a new non-client stimulus | core | M+E | P3, EC-17, EC-19, EC-22 | T0 properties (+ negative control); T1 OB-28 adversarial client | scale storms (EC-17: up to 477% client CPU) |
+| **INV-SCALE-5** | At zoom 1 with no zoom gestures the policy equals Phase B MaxGesture; integer hint = ⌈h⌉; emission only on change; unobserved elements hold h; evaluation happens once per core event batch, after all state updates of that batch | core | M | P4, S7, S8, AUD-25 | T0 | regressions vs Phase B, double renegotiation |
+| **INV-FRAME-1** | The compositor only completes frame callbacks clients requested; it never invents them | core + adapter | P | D-B9-FRAMES 1 | T1 | protocol violation |
+| **INV-FRAME-2** | Observed elements: completion once per frame of the clock output = highest-refresh observing output (ties by `OutputId`); presentation `sync_output` = clock output | core | E+P | D-B8-CLOCK, SC3 | T1 | double-rate or starved animation |
+| **INV-FRAME-3** | Unobserved elements: callbacks withheld, except (a) the **kick**: before a ping, close, non-initial configure, `popup_done` or input event is delivered to the client, withheld callbacks complete once; (b) the **fallback**: at most one completion per period P (finite, configurable) measured from the element's last completion (kick or fallback), driven by a compositor timer armed only while such an element has a pending callback | core | E | EB-9, D-B9-FRAMES, AUD-24 | T1/T3 (+ negative control) | starvation (vkcube) or wasted wakeups |
+| **INV-FRAME-4** | Re-entry liveness: pending callbacks complete at the first vblank of the new clock output after observation resumes (≤ one period) | core | S+E | EB-11, SC1/SC3 | T1 | stuck clients after re-entry |
+| **INV-FRAME-5** | Presentation feedback: superseded commits `discarded`; the latest unobserved commit stays pending and is `presented` when shown, or discarded on supersession/destruction | Smithay mechanism + core | S+E | X-9 | T1 | wrong timing feedback |
+| **INV-FRAME-6** | `suspended` is set only from semantic reasons {SessionLocked, AllObservingOutputsOff, Parked}; never from camera visibility | core | E+D | D-B9-SUSPEND, SC4 | T1 | configure storms |
+| **INV-PRES-1** | Protocol fullscreen is an output presentation state (`OutputPresentation(O) = Exclusive(W)`), accepted only for the focused element or before first map; it never touches cameras or anchors; other cameras observe W at its actual (fullscreen) size; output removal/unmap ends it | core `protocol` + output model | P+D | C5.2, EC-13, EC-14 | T1 | camera hijack, hidden size effects |
+| **INV-OUTPUT-1** | Output removal: membership `leave` before the global is destroyed; camera unbound but kept; fullscreen presentation dropped; interactions orphaned (ownership kept until release); pointer moved to a remaining output | core output manager | D | B7.2, C4.6, C8 | T1 (OB-3) | dangling protocol objects, stuck input |
+| **INV-SHELL-1** | The shell channel accepts only semantic commands executed through the same validated single-writer paths as user input; no raw state, size or memory writes; `ShellPort` lives only in `infynitae-ipc` | core + ipc | D | C7 | T0 (crate checks), T1 | shell becomes arbitrary mutator |
+| **INV-SHELL-2** | The shell owns no authoritative state; every response/event is a generation-stamped derived copy; stale IDs fail; reconnect = Snapshot + Subscribe | core + ipc | D | C7.3 | T1 | shell restart loses truth |
+| **INV-XWAYLAND-1** | X11 support is xwayland-satellite as an ordinary Wayland client: X11 windows are ordinary elements; no X11 path to Stage or cameras; satellite crash destroys its elements through the normal client-death path; no internal XWM | adapter + supervisor | E | C6, EC-12, EC-13 | T1/T3 | second spatial authority |
+| **INV-ARCH-1** | Crate DAG: core has zero dependencies; all edges point to core; wayland ↛ backend; ipc ↛ wayland; backends ↛ each other | workspace | E+D | C1.3, EC-1 | T0 `verify-architecture` (OB-19) | layering collapse |
+| **INV-ARCH-2** | `unsafe`: forbidden in core and ipc; elsewhere only listed, justified sites with no authority effect | workspace | D | C9 | T0 lint + inventory review | memory/authority bypass |
+| **INV-ARCH-3** | Smithay exact pin, locked graph; workarounds adapter-local; a dependency patch only per the patch policy; a workaround is removed only after its experiment passes without it | workspace + adapter | D | D-B12-PIN, C9 | T0 `--locked`; upgrade re-run suite | silent behaviour drift |
+| **INV-FAIL-1** | Recovery rebuilds derived state from authority; an internal invariant violation terminates rather than repairs; required-global failure aborts startup | core + bin | D | C8 | T1 failure injection | corrupt authority hidden by best effort |
+| **INV-OBS-1** | Observability is never read by decision paths and runs no background subsystem | all | D | C10 | review; T0 (no read API) | heisenbugs, idle cost |
+| **INV-IDLE-1** | When product-idle (C14.2), Infynitae generates no wakeups of its own: no polling, no periodic timers, no busy loops; every armed timer has a pending obligation behind it | core + bin + backend | D | C14.2 | T4 idle measurement | battery/latency regressions |
+| **INV-ALLOC-1** | Core hot paths (input intake, pan, pointer routing, hit-testing, visibility, render-list construction) perform no heap allocation in steady state (reused buffers); Smithay/backend allocations are isolated and measured | core | D | C14.3 | T0 counting-allocator test | frame-time jitter |
+
+### C12.2 Legacy → canonical map (superseded wording must not be cited)
+
+| Legacy | Canonical | Note |
+|---|---|---|
+| I1 single spatial authority | INV-STAGE-1 | |
+| I2 camera ≠ window movement | INV-CAMERA-2 | |
+| I3 pan does not configure | INV-CAMERA-4 | **superseded by I3′** |
+| I4 outputs view Stage | INV-STAGE-1, INV-CAMERA-3 | |
+| I5 multiple outputs may view one element | INV-RENDER-3, INV-SCALE-1, INV-FRAME-2 | |
+| I6 explicit coordinate domains | INV-COORD-4 | |
+| I7 stable runtime identity | INV-STAGE-3 | |
+| I8 presentation is derived | INV-STAGE-6 | |
+| I9 render and hit-test share one model | INV-HIT-1, INV-COORD-6 | **D-B2-I9's ½-px tolerance superseded** by exact pixel agreement |
+| I10 clients are untrusted | INV-STAGE-4, INV-FAIL-1, INV-CAMERA-1, INV-SCALE-4(d) | |
+| R1–R6 (B1.4), R7 (C3.2) | INV-COORD-2 | |
+| F1–F7 | INV-COORD-2, INV-STAGE-6 | |
+| B1.5 lattice rule | INV-RENDER-1 | |
+| K1, K2 | INV-INPUT-1 | |
+| K3 | INV-INPUT-6 | |
+| K4–K7, K9 | INV-INPUT-7 | |
+| K8 | INV-INPUT-8, INV-OUTPUT-1 | |
+| X-8 INV-1 … INV-5 | INV-INPUT-3, INV-INPUT-2, INV-CAMERA-2, INV-INPUT-4 | |
+| D-B8-SCALE (MaxGesture) | INV-SCALE-1, -3, -5 | **superseded wording**: "max(scale(O))" → `scale × zoom` with ladder/ceiling |
+| D-CP3A-SCALE S1–S9, P1–P7 | INV-SCALE-1 … -5 | |
+| D-B8-CLOCK | INV-FRAME-2 | |
+| D-B8-ENTER | INV-RENDER-3 | |
+| D-B9-FRAMES | INV-FRAME-1, -3, -4 | kick list extended (input); fallback reset rule added (AUD-24) |
+| D-B9-SUSPEND | INV-FRAME-6 | |
+| D-B10-INTAKE | INV-INPUT-1, -2 (+ -6 for keys) | |
+| D-B10-KBD | INV-INPUT-8 | |
+| D-B10-ACTIVATION | INV-INPUT-9, INV-CAMERA-1 | |
+| D-B11-PAN / D-B11-FOCUS | INV-INPUT-3, INV-COORD-3 | |
+| B11.4 reconciliation | INV-INPUT-5 | output-removal case added (AUD-4) |
+| D-C5-FIT | INV-CAMERA-5 | |
+| D-C5-FS | INV-PRES-1 | |
+| D-C6 | INV-XWAYLAND-1 | |
+| D-C7 | INV-SHELL-1, -2 | |
+| D-C8 | INV-FAIL-1 | |
+| C9 | INV-ARCH-2, -3 | |
+| D-C10 | INV-OBS-1 | |
+| D-CP2-HIT / D-CP3A-HIT | INV-HIT-1 | |
+
+---
+
+## C13 — Implementation-readiness audit (zero-memory reader)
+
+Every implementation-critical question below has a normative answer in this document or in FOUNDATION_BLOCKERS.md. Evidence logs are cited, never the only source.
+
+| Question | Normative answer (canonical) | Where |
+|---|---|---|
+| Owner of every important state; who may mutate it | C2.1, C2.2, **C-AUTH** | this doc |
+| Dependency direction | INV-ARCH-1; C1.2–C1.4 | C1 |
+| Coordinate domains, numeric types | INV-COORD-1…4; B2.1–B2.2 (T1–T10), B2.7 | Blockers B1/B2 |
+| Stage/Camera algebra, projection, lattice rounding | INV-CAMERA-3, INV-COORD-2, INV-RENDER-1; C3.2 [1]–[5] | C3 |
+| Surface origin | INV-STAGE-2, INV-COORD-6; B2.3, B6.1, CP2-2 | |
+| Lifecycle | INV-STAGE-4/5; B5.2–B5.4 | Blockers B5 |
+| Popups/subsurfaces | B6; INV-RENDER-2; CP2-2 | |
+| Rendering | C3; INV-RENDER-1…4 | |
+| Hit-testing | INV-HIT-1; CP3A-2 | |
+| Output membership | INV-RENDER-3; C3.2 [3] | |
+| Input ownership, keyboard/pointer focus | INV-INPUT-1…8; C4 | |
+| Pointer constraints, relative motion | INV-INPUT-4/5; C4.3; B11.4 | |
+| Scale/zoom | INV-SCALE-1…5; CP3A-1; C14.4 (SC-E, SC-D) | |
+| Fullscreen / viewport-fit | INV-PRES-1 / INV-CAMERA-5; C5 | |
+| Frame pacing, suspension | INV-FRAME-1…6; B9 | |
+| Activation | INV-INPUT-9; B10.7; C1.5 | |
+| Shell authority | INV-SHELL-1/2; C7 | |
+| XWayland | INV-XWAYLAND-1; C6 | |
+| Failure recovery | INV-FAIL-1; C8 | |
+| Unsafe / dependency patching | INV-ARCH-2/3; C9; D-B12-PIN | |
+| Observability | INV-OBS-1; C10 | |
+| Verification tiers | C11 | |
+| Provisional constants | C14.5 (single list) | |
+| Deferred physical validation | C11.2, C-PHYS | |
+
+**Rules promoted into normative text during 3B.** They previously existed only as analysis, evidence or implication:
+
+| Rule | Promoted to |
+|---|---|
+| epoch monotonicity (SC-E) | C14.4 / INV-SCALE-4(d) |
+| discrete-zoom interaction (SC-D) | C14.4 / INV-SCALE-3 |
+| the P7 lock | C14.4 |
+| fallback measured from the last completion | INV-FRAME-3 |
+| scale evaluation once per event batch | INV-SCALE-5 |
+| lock reconciliation on output removal | INV-INPUT-5 |
+| complete kick trigger list | INV-FRAME-3 |
+| required Smithay overrides W-SM-13 | C15 |
+| idle and allocation contracts | C14.2/C14.3 |
+
+**Gaps found: none remaining.** Each 3B scenario that exposed an under-specified rule is listed in AUD with its resolution.
+
+---
+
+## C14 — Performance and resource architecture
+
+### C14.1 Methodology (no invented budgets)
+
+Physical facts:
+- 165 Hz → 6.061 ms per frame; 144 Hz → 6.944 ms per frame (the B8 outputs);
+- the target hardware is EC-23.
+
+There is no production code yet, so production baselines do not exist. Harness numbers are **not** baselines for the compositor. Each budget is frozen only after its T4 baseline exists, using the procedure below.
+
+| Hot path | Metric | Measurement boundary | Current evidence | Desired headroom (principle) | Candidate budget | Evidence required before freezing |
+|---|---|---|---|---|---|---|
+| input intake | latency p50/p99/p99.9 per event | libinput fd readable → effects applied to the seat | none (no production code) | intake + routing must not delay the next frame's composition | set from T4 baseline | 10⁶-event replay, 1000 Hz mouse, T4 |
+| hit-testing | time per query vs element/surface count | `hit_test(ProjectionFrame, OutputId, p)` | xhit correctness only | negligible vs intake | from T0 bench with realistic trees (100/1000 elements) | T0 micro + T4 in context |
+| camera transformation | time per camera change | `navigation::pan` → new `View`s | spike: O(1) arithmetic (8 ns micro, **not** compositor performance) | — | none needed unless T4 shows otherwise | T4 profile |
+| projection + visibility/culling | time per frame per output vs E | C3.2 [1]–[3] | none | C3.8 threshold (10% of shortest frame) triggers index work | from T4 | T4 with 10/100/1000 elements |
+| render-element generation | time + allocations per frame | C3.2 [4]–[5] incl. `from_surface` | none | — | from T4 | T4 profile |
+| renderer/GPU submission | CPU time + GPU time per frame | damage tracker → submit | none | frame must complete before the next vblank with margin for client commits | from T4 | GPU timestamps, T4 |
+| shell IPC | command latency; events/s | socket read → response written | none | must not block frame composition | from T4 | T4 with a scripted shell |
+| input-to-presentation latency | ms, p50/p99 | physical event timestamp → presentation feedback timestamp of the frame showing its effect (software proxy); photodiode for absolute | none | as low as the frame clock allows (≤ ~1 frame + scanout is the physical floor) | none frozen | T4 software proxy; T5 photodiode/LDAT |
+| frame kick | latency from trigger to callback | protocol request / input queued → `wl_callback.done` sent | harness: ping answered in the same dispatch (EB-9) | ≤ 1 dispatch | **established qualitatively** (same dispatch) | T1 assertion |
+| scale-policy processing | time per batch; renegotiations per gesture | INV-SCALE-5 evaluation point | MODEL (EC-19/22) | negligible | — | T0 bench |
+| memory per element/surface | heap bytes core + adapter | counting allocator in T1 with N elements | none | linear, small constant | from T1 | T1 with 1000 elements |
+| client-buffer consequences | MB per element vs hint | EC-18 formula | EC-18 (computed), EC-17 (measured) | governed by H_cfg (provisional) | — | X-16 |
+| long-session memory stability | RSS slope over 24 h with churn | process RSS + GPU memory (amdgpu fdinfo) | none | zero growth after warm-up | slope ≈ 0 (statistical) | T5 24 h run |
+
+### C14.2 Idle contract (INV-IDLE-1)
+
+**Product-idle** means all of the following hold:
+- no input events;
+- no client commits;
+- no observed element with a pending frame callback;
+- no unobserved element with a pending callback whose fallback is due;
+- no active interaction or animation;
+- no IPC traffic;
+- no hotplug.
+
+**Wakeups Infynitae may generate, each only while its obligation exists:**
+
+| Wakeup source | Armed only while |
+|---|---|
+| frame scheduling (vblank/flip events requested from DRM, or a frame timer) | damage exists or an observed element waits for a callback. **Never** a continuous redraw loop (Prototype 01 violated this, EV-P14). |
+| fallback timer (P) | at least one unobserved element has a pending callback |
+| animation timers | an animation is running |
+| satellite restart backoff | a restart is pending |
+| per-device/protocol timeouts Smithay arms internally | those are external dependency behaviour, attributed and measured, not assumed zero |
+
+**External wakeups (outside Infynitae's control):**
+- client requests;
+- kernel input, udev and DRM events Infynitae did not request;
+- Mesa/driver internal threads;
+- systemd/D-Bus if used by dependencies.
+
+**Proof procedure (T4).**
+1. Idle session (compositor + N idle clients) for 60 s.
+2. Count compositor wakeups (`/proc/<pid>/status` voluntary context switches; `perf trace -s` / `strace -c` on epoll and timerfd).
+3. Attribute each wakeup via `inf::*` tracing at DEBUG to its source.
+4. **Pass:** zero wakeups attributable to Infynitae-generated sources while product-idle. External wakeups are reported but not counted against the invariant.
+
+A literal "0 wakeups" or "0.0% CPU" is not claimed: kernel/driver bookkeeping may wake the process.
+
+### C14.3 Hot-loop allocation contract (INV-ALLOC-1)
+
+| Path | Structural guarantee | Enforcement |
+|---|---|---|
+| pointer intake/routing, camera pan, keyboard intake | core APIs write into caller-owned reusable buffers (`&mut EffectBuf`, cleared not freed); no `Vec` returned per event (REFINEMENT: C1's `Vec<Effect>` return type becomes a caller-provided buffer) | **T0**: a test-only counting global allocator around a scripted steady-state pan/route/key sequence after warm-up must report **0** allocations |
+| hit-testing | iterates `ProjectionFrame` in place | same T0 test |
+| visibility, membership diff, render-list construction (core part) | per-output buffers reused frame to frame; membership diffs written into a reused buffer | same T0 test |
+| Smithay render-element construction, damage tracking, protocol sends | **may allocate** (Smithay API) | measured: allocations per frame reported in T1/T4; regressions flagged, not forbidden |
+
+No object pools or custom production allocators are introduced; the counting allocator exists only in tests.
+
+### C14.4 Scale-churn contract and feedback damping (INV-SCALE-3/4; resolves OB-28 at the architecture level)
+
+**SC-D: discrete-zoom interaction.**
+- Begins at the first discrete zoom step (wheel/axis bound to zoom, or a zoom key binding).
+- While active: increases happen only at rung crossings; no decreases.
+- Ends at the first non-zoom input from any device (button, key, pointer motion), or at a settlement event (output change, fit/restore, jump).
+- An optional decrease-settle delay is **provisional and off by default**.
+- Model: wiggle 40 → 2 changes (EC-22).
+
+**SC-E: epoch monotonicity.**
+- An **epoch** begins at a non-client stimulus: a user/shell camera action, gesture or SC-D end, output add/remove/config change, a membership change caused by camera or Stage movement, or fullscreen enter/exit.
+- Within an epoch, re-evaluations caused **only** by a client's response (a commit changing its logical geometry) may move h only in the epoch's first direction. A reversal waits for the next stimulus.
+- **P7 lock:** a correctness-forced decrease (device bound, INV-SCALE-2) is always applied and sets the epoch direction to *down*, so a client cannot push h back up without a new stimulus.
+
+**Convergence argument.** Within an epoch h is monotone over a finite ladder, so there are ≤ |L| changes. Epochs start only from non-client stimuli, so a client alone cannot cause unbounded changes. Model: adversarial client 60 → 1 change (EC-22).
+
+**Churn contract (frozen):** INV-SCALE-4 (a)–(d).
+
+**Adversarial test destination:** OB-28 → T1 test client that, on each `preferred_scale`, picks the logical size inverting the last move, under viewport-fit and two observers. Pass: ≤ |L| + 1 changes per epoch; the run ends quiescent.
+
+### C14.5 Provisional tuning (single authoritative list)
+
+| Value | Current | Allowed range keeping every invariant true | Tuned by | Measurements |
+|---|---|---|---|---|
+| H_cfg (client scale ceiling) | 3.0 | ≥ max connected output scale; the effective ceiling is always min(H_cfg, D_max/size) | X-16 (T3/T4) | sharpness at m ∈ {1, 1.04, 1.25, 2, 2.67}; client CPU; buffer MB (EC-18 formula + fdinfo); renegotiations; frame-time variance during zoom |
+| r (ladder ratio) | 1.25 | 1 < r ≤ 2 | X-16 | same |
+| σ (sharpness tolerance) | 0.05 | 0 ≤ σ < r − 1 | X-16 + DV-2 | magnification visibility |
+| P (off-screen fallback) | 1 s | finite, > 0 | X-7 (T5) | game/network survival, off-screen CPU |
+| SC-D decrease-settle delay | off | off or finite | OB-23 | wiggle renegotiations with real clients |
+| renderer filters | Linear/Linear | any | DV-2 | visual |
+
+The architecture is correct for **any** value in the allowed ranges. Each property P1–P7 and INV-SCALE-4 holds independently of the numbers (EC-19/22 parameterised; T0 properties run over the ranges).
+
+---
+
+## OB-19 — Unconditional Phase F entry gate
+
+**The first Phase F commit that creates the production Cargo workspace must, in that same commit and before any compositor or protocol implementation, install:**
+1. `verify-architecture` (CI-blocking), ported from `experiments/c1-authority-spike/verify.sh`:
+   - camera-authority probes with **asserted diagnostics** (mutate via read accessor, forge port, input without port, navigation internals);
+   - the `!Send` port + `Send` protocol-state assertion probe (E0277);
+   - `cargo tree` checks: `infynitae-core` has no dependencies; no `wayland → backend`, `ipc ↔ wayland`, `backend ↔ backend` edges;
+   - a source check that `infynitae-wayland` never names `InputPort`, `ShellPort`, `physical_input`, `shell_command`;
+2. `#![forbid(unsafe_code)]` in core and ipc; `#![deny(unsafe_code)]` elsewhere;
+3. `cargo build --locked`; `smithay = "=0.7.0"`; `rust-toolchain.toml` pinned.
+
+The Phase C gate passes with OB-19 open **only** because its design is complete, the spike proves feasibility (EC-1, EC-15), and its closure point (that commit) is mechanically identifiable. Phase F may not bypass or defer it.
+
+---
+
+## C15 — Compatibility contract (Foundation 01)
+
+| Area | Verified (tier, evidence) | Architecturally supported, not physically validated | Deferred | Unsupported |
+|---|---|---|---|---|
+| Smithay | `=0.7.0` APIs and quirks W-SM-1…13 (T1 harness) | upgrade path (B12.5) | git master | other compositor libraries |
+| `wl_compositor` | v6 via `new_v6` (T1) | — | — | v5-only operation (would lose `preferred_buffer_scale`) |
+| xdg-shell | `xdg_wm_base` v6: toplevel/popup lifecycle, configure, suspended state, fullscreen requests (T1) | maximize/minimize policy | interactive move/resize UX | — |
+| fractional-scale / viewporter | client response measured GTK4, kitty, Firefox (T3, EC-17) | other toolkits | — | — |
+| presentation-time | virtual timing (T1, X-9) | DRM flip timestamps, VRR (OB-25) | — | — |
+| pointer constraints / relative pointer | protocol behaviour (T1, X-8, X-12) | real games (DV-3) | — | W-SM-4b: never-activated oneshot locks destroyed on leave (OB-11) |
+| xdg-activation | design + authority probes (T0) | toolkit behaviour (OB-27) | shell UX | auto-navigation by clients (forbidden) |
+| keyboard | XKB via Smithay seat; ownership rules (T1, X-10); GTK4 RC-1 (T3) | Qt/SDL/Chromium/Wine (OB-10) | compositor-side repeat | multi-seat |
+| XWayland | xwayland-satellite 0.8.3: toplevels, crash path, pre-map fullscreen (T1-style real time, EC-12/13) | override-redirect menus/tooltips (OB-9), activation, Steam | X11 primary selection | internal XWM, ICCCM/EWMH emulation, X11 grabs, X11 self-positioning |
+| backend | winit nested (T2, Prototype 01) | DRM/KMS + libinput + libseat (T4) | multi-GPU | non-Linux |
+| renderer/GPU | GLES via Smithay; tested with AMD RADV/radeonsi (Prototype 01); `D_max` from the renderer | other GPUs/drivers | Vulkan renderer | software-only rendering as a supported product mode |
+| input devices | — | mouse/keyboard via libinput; touchpad gestures (begin/end) | touch, tablet | — |
+| multi-output / mixed scale | 2 outputs at 1.0/1.5 (T1) | real hotplug, rotated/flipped transforms (OB-14) | — | — |
+| high refresh | 165/144 Hz clocks (T1 virtual) | physical 165 Hz pacing (T4) | VRR/tearing control | — |
+| X11 limitations | X11 move requests ignored (EC-12) | — | — | X11 apps placing their own windows |
+| Smithay quirks | W-SM-1…13 catalogued, workarounds adapter-local | — | upstream fixes (OB-11) | — |
+| dependency patching | policy (D-B12-PIN, C9) | — | — | ad-hoc forks |
+
+**A harness or single-toolkit result is never a claim of universal hardware or toolkit support.**
+
+---
+
+## C16 — Non-goals for Foundation 01 (aggressive)
+
+| Item | Classification |
+|---|---|
+| internal XWM / ICCCM-EWMH emulation | **non-goal** (C6) |
+| universal compositor framework / reusable library | **non-goal** |
+| plugin ecosystem, arbitrary third-party extensions | **non-goal** |
+| generic scene graph | **non-goal** (C2.3) |
+| generic spatial database/index before measured need | **non-goal** (C3.8 threshold) |
+| remote desktop, network transparency | **non-goal** |
+| multi-seat | **non-goal** (no Foundation requirement) |
+| production telemetry platform, metrics daemon | **non-goal** (C10) |
+| generalized dependency-injection / event-bus framework | **non-goal** (C1: `Effect` vocabulary only) |
+| cross-platform backend abstraction for its own sake | **non-goal** (C1.1: no `Backend` trait) |
+| unlimited zoom-driven client supersampling | **non-goal** (INV-SCALE-2) |
+| per-toolkit compatibility hacks | **non-goal** unless a T3 failure is triaged and approved as a documented workaround |
+| HDR / colour management | **deferred** (Level C; no master-program requirement for Foundation 01) |
+| bookmarks, slots, snapping/clusters, overview UI, animations, decorations, blur, persistence format | **deferred** (Level D, master §C16) |
+
+A future version may revisit any non-goal by an explicit decision; Foundation implementation may not absorb one quietly.
+
+---
+
+## C-PHYS — Remaining physical and dependency obligations
+
+| Item | Tier |
+|---|---|
+| X-7 games/network clients off-screen (OB-5, OB-8) | T5 |
+| real pointer-lock games under KeepFocus pans (OB-20) | T5 |
+| visual magnification/downsampling quality (OB-7, DV-2) | T3/T4 |
+| fractional camera behaviour on physical outputs (OB-6 physical part) | T4 |
+| GPU/device variation (`D_max`, drivers) | T4 (per device) |
+| xwayland-satellite override-redirect menus/tooltips (OB-9) | T1 (GTK3/X11) → T3 (Steam) |
+| Smithay oneshot-lock defect (OB-11) | UP + Phase F decision |
+| broader RC-1 toolkits (OB-10) | T3 |
+| latency and high-refresh stress (C14) | T4/T5 |
+| long-duration stability (C14) | T5 |
+
+---
+
+## C-AUTH — Final authority reconstruction (from the written artifacts)
+
+Classes: A authoritative · P protocol · D derived · C cached · PO presentation-only.
+
+| State | Owner | Legal writers | Observers | Class | Recovery source | Forbidden writers |
+|---|---|---|---|---|---|---|
+| Element identity | core `Stage` (INV-STAGE-3) | Stage minting on `new_toplevel` | all | A | none needed (process-local) | adapter, shell, persistence, clients |
+| Stage geometry (anchors, z-order) | core `Stage` (INV-STAGE-1) | `stage::place` (placement policy, drag commit, shell `MoveElement`) | render, hit, membership, shell | A | persistence (Level D) on restart | cameras, renderer, adapter, satellite, scale policy, fit/fullscreen |
+| Camera position | core `navigation` (INV-CAMERA-1) | navigation via `InputPort`/`ShellPort` | projection, shell | A | persistence keyed by `OutputKey` | protocol handlers, adapter, fullscreen, scale policy |
+| Camera zoom | core `navigation` | navigation (gestures, fit/restore) | projection, scale policy | A | as above | scale policy (reads only), clients |
+| Output state (logical config) | core output manager | output manager from backend descriptors + configuration | all | A | backend re-enumeration | Smithay `Output` (written from it), clients |
+| Output membership | core `MembershipTable` | visibility pass | scale, clock, adapter | D | recompute from Stage + cameras + snapshots | Smithay entered-sets (dedupe only) |
+| Surface tree | client via protocol; snapshot in core | adapter commit hook (snapshot) | core | P / D | re-extract on next commit | core, Stage |
+| Scale requirement ρ | core visibility | visibility pass | `ScaleState` | D | recompute | — |
+| Client scale hint h | core `ScaleState` (INV-SCALE-*) | scale policy only | adapter (emits) | A (policy state) | recompute from ρ + rules (may emit one settle) | adapter, clients, fullscreen |
+| Client buffer | client | client | renderer | P | client re-commit | compositor (never alters) |
+| Fullscreen | core `FullscreenState` + `OutputPresentation` | protocol policy on validated client requests; output removal/unmap | render, scale (as a presentation) | A (state) / PO (presentation view) | drop on failure; client may re-request | cameras/navigation, shell (no fullscreen write path) |
+| Viewport-fit | core `navigation` `ViewportFit` | navigation via ports | projection | A | restore saved camera | protocol handlers |
+| Pointer focus | core `PointerModel` + intake | intake | adapter (applies) | A (pointer state) / D (focus per event) | recompute from `ProjectionFrame` | Smithay (applied copy), cameras |
+| Keyboard focus | core `FocusModel` | explicit actions, target loss, activation grant | adapter | A | successor policy | cameras, visibility, pointer motion, clients |
+| Keyboard ownership | core ownership table | intake | adapter | A | physical device state on device loss | Smithay filter (executes core decisions only) |
+| XKB state | Smithay `KeyboardHandle` | Smithay on every key | core (via filter) | P (authoritative for XKB) | keymap reload | core (no copy) |
+| Pointer constraints | Smithay objects; core activation policy | Smithay (protocol); adapter executes core decisions | core | P + A (policy) | protocol | camera code |
+| Shell | ipc connection | — | — | PO (shell-owned presentation) | reconnect + Snapshot | shell writing core state other than via semantic commands |
+| XWayland | satellite (a client) | satellite via Wayland protocol | — | P | restart (elements not preserved) | any X11 path to Stage/cameras |
+| Observability | `tracing` | everything (emit only) | developers | PO | — | any decision reading it |
+| Persistence | core service (Level D format) | save on change; load at startup | — | C (of A) | atomic file, last good copy | partial application of a corrupt file |
+
+**Two independent writers to any authoritative state: none found.** The two places with multiple *paths* are both deliberate:
+- `stage::place` (three callers, one function, one validation);
+- keyboard focus (several explicit causes, one writer: `FocusModel`).
+
+---
+
+## AUD — Final adversarial contradiction audit (25 combined scenarios)
+
+| # | Scenario | Analysis (rules applied) | Result |
+|---|---|---|---|
+| 1 | fullscreen + second camera + mixed DPI + zoom | W fullscreen on A (ρ = 1.0) while camera B at 1.5 with zoom 2 observes W (ρ = 3.0) → h = 3.0 (ceiling). A 1920×1080 fullscreen game renders 5760×3240 (71 MB/buffer). INV-PRES-1 + INV-SCALE-1 as decided (CP2-Q1). | **consistent**. Accepted, stated cost; tunable via H_cfg (C14.5). Not a contradiction. |
+| 2 | viewport-fit + ceiling + second observer | 200×100 window fitted on A: zoom 9.6 → ρ 9.6 → h 3.0; m_A = 3.2 (compositor magnifies); B unaffected | **consistent** (INV-SCALE-2, S9) |
+| 3 | popup + nested subsurface + fractional camera + input region | covered by xhit (one popup level, nested subsurface, hole, 4 scales × 4 cameras): 0 mismatches | **consistent**; deeper popup levels are OB-1 (T1) |
+| 4 | pan + locked pointer + output removal | the pan on A is orphaned (ownership kept); at termination the pointer's output is gone, so the lock point cannot be kept "on the pointer's output". **Under-specified in B11.4** → resolved: deactivate the lock (W-SM-4a ordering) and place the pointer Arrangement-nearest. | **gap closed** → INV-INPUT-5 |
+| 5 | held modifier + focused-surface destruction + shell focus request | single-threaded event loop: successor `enter(Shift)`, then shell focus → `leave` + `enter(W3, Shift)` (X-10 K-5/K-6 patterns) | **consistent** |
+| 6 | shell restart during navigation | animated navigation is a compositor interaction started with valid authority; it continues to its end; the shell reconnects with a Snapshot | **consistent** (INV-SHELL-2); animation = gesture for scale (decreases deferred) |
+| 7 | satellite crash while an X11 window is focused | client death → element destroyed → focus successor; keys per INV-INPUT-7 | **consistent** |
+| 8 | satellite crash while an X11 window is fullscreen | destroy → `FullscreenState` dropped → output presents camera view again; cameras untouched | **consistent** (INV-PRES-1) |
+| 9 | output removal while fullscreen | presentation dropped; unfullscreen configure with saved size; camera unbound but kept | **consistent** (INV-OUTPUT-1) |
+| 10 | output removal while pointer-constrained | pointer moves to a remaining output → focus change → Smithay `leave` deactivates (active constraints correctly); never-active oneshot constraints hit W-SM-4b | **consistent**; known defect OB-11 |
+| 11 | off-screen client + kick + scale change + re-entry | unobserved: h held (no `preferred_scale` sent to it), kick on protocol/input; re-entry: scale settles (membership change), callbacks complete at the next clock vblank | **consistent** (INV-SCALE-5, INV-FRAME-3/4) |
+| 12 | client self-resize in response to scale | naive policy oscillates for an adversary (EC-22) → SC-E | **gap closed** → INV-SCALE-4(d); test OB-28 |
+| 13 | oscillation across an effective-scale boundary | camera gesture: no decreases; discrete wheel: SC-D (EC-22 40 → 2); client-driven: SC-E | **gap closed** → INV-SCALE-3/4 |
+| 14 | stale shell ElementId after destroy/recreate | `(InstanceId, ElementId)`, never reused → `StaleElement` | **consistent** |
+| 15 | renderer/backend failure with Stage intact | renderer: S + D rebuild; backend: terminate (Foundation 01); Stage never touched | **consistent** (INV-FAIL-1) |
+| 16 | popup dismissal during camera movement | camera movement never dismisses or repositions popups; only acquisition of a compositor **pointer** interaction dismisses a popup grab (C4.6) | **consistent** (made explicit here) |
+| 17 | camera zoom beyond the client-scale ceiling | compositor magnification m > 1 (S9); hint bounded | **consistent** |
+| 18 | simultaneous observers with different zooms and refresh rates | ρ = max(scale × zoom); clock = highest refresh (independent of zoom) | **consistent** |
+| 19 | focused off-screen client receiving keyboard input | input delivery is a kick trigger | **consistent** (INV-FRAME-3); OB-16 |
+| 20 | lock/confine target becoming non-visible during pan | nothing changes during the pan (I3′); at the end, B11.4 reconciliation | **consistent** |
+| 21 | shell command arriving during client destruction | calloop sources never run concurrently; a command observes either before (valid) or after (`StaleElement`) | **consistent** (A-C3) |
+| 22 | persistence restoration with a missing output | cameras keyed by `OutputKey` stay unbound; anchors restored; no partial application of corrupt data | **consistent** (C8, Level D) |
+| 23 | a Smithay workaround becomes unnecessary after an upgrade | removal only after its experiment passes without it; the semantic regression tests (xhit/xsnap/X5/X-8) keep running | **consistent** (INV-ARCH-3) |
+| 24 | frame fallback + ping/kick interaction | double completion if the fallback ignores a just-performed kick → resolved: the fallback period is measured from the element's **last completion** (kick or fallback) | **gap closed** → INV-FRAME-3 |
+| 25 | scale decrease at gesture end while the highest-requirement observer disappears simultaneously | two settle evaluations could emit two renegotiations → resolved: evaluate once per core event batch after all updates | **gap closed** → INV-SCALE-5 |
+
+**Contradictions between established invariants: none.** Five under-specifications were found and closed by promoted rules (AUD-4, -12/-13, -24, -25), each consistent with the existing invariants and none weakening one. Scenario 1 is a stated cost of an accepted decision, not an inconsistency.
+
+---
+
+## Phase C gate evaluation
+
+| Criterion | Status |
+|---|---|
+| C1–C16 complete | **yes**: C1–C4 (CP1), C5–C10 (CP2), scale/hit/registry (CP3A), C11–C16 (this section) |
+| implementation-critical normative architecture in repository artifacts | **yes** (C13) |
+| canonical invariant registry complete | **yes** (C12: 54 invariants, legacy map, supersessions marked) |
+| OB-1 … OB-29 destinations | **yes** (C11.2) |
+| provisional tuning separated | **yes** (C14.5, single list) |
+| test tiers for every deferred validation | **yes** (C11.1, C-PHYS) |
+| compatibility and non-goals explicit | **yes** (C15, C16) |
+| no unresolved Level A blocker | **yes** |
+| OB-19 bound to the first Phase F production-workspace commit | **yes** (OB-19 section) |
+| final contradiction audit without unresolved inconsistency | **yes** (AUD) |
+
+**PHASE C GATE: SATISFIED.** Stopped at the Phase C final review gate. Phase D has not begun.

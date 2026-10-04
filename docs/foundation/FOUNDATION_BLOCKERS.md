@@ -1,5 +1,7 @@
 # Infynitae Native — Foundation Blockers (Phase B)
 
+> **Phase C note (normative pointer).** The decisions recorded here (D-B…, I1–I10, R/F rules, K-rules, MaxGesture, D-B2-I9) are consolidated, and where refined **superseded**, by the canonical invariant registry in [FOUNDATION_ARCHITECTURE.md §C12](FOUNDATION_ARCHITECTURE.md). Cite `INV-*` identifiers as normative. This document remains the Phase B evidence and decision record. In particular, D-B2-I9's ½-px tolerance is superseded by INV-HIT-1, and D-B8-SCALE's wording by INV-SCALE-1…5.
+
 Status: **Phase B complete (B1–B13). Phase B gate SATISFIED with explicit conditional resolutions (see the gate evaluation at the end). Stopped at the review gate.**
 Checkpoints:
 - 1 (B1–B6): `9f3f5d4`
