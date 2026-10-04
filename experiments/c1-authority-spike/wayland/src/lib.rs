@@ -57,6 +57,10 @@ impl Handlers {
     pub fn on_new_toplevel(&mut self, element: u64) -> Vec<Effect> {
         self.core.protocol_event(ProtocolEvent::NewToplevel { element })
     }
+    /// a client commit that changed the element's logical size
+    pub fn on_commit(&mut self, element: u64, size: (i64, i64)) -> Vec<Effect> {
+        self.core.protocol_event(ProtocolEvent::Commit { element, size })
+    }
 }
 
 #[cfg(test)]
@@ -86,6 +90,37 @@ mod tests {
         assert_eq!(h.core.stage().anchor(1), anchor, "camera motion must not mutate Stage (I2)");
         h.core.shell_command(&mut shell, ShellCommand::NavigateTo { camera: 0, to: CanvasPos { x: 3, y: 3 } }).unwrap();
         assert_eq!(h.core.cameras().center(0), CanvasPos { x: 3, y: 3 });
+    }
+
+    /// PD-F2-01: viewport-fit is one-shot. After an authorized fit, NO client commit (resize, any size,
+    /// any number) moves or zooms the camera; only a fresh authorized action does.
+    #[test]
+    fn client_resize_after_fit_never_moves_camera() {
+        let (core, _input, mut shell) = Core::new(1);
+        let mut h = Handlers { core, #[cfg(feature = "probe_store_port_in_state")] leaked: unreachable!() };
+        h.on_new_toplevel(5);
+        h.core.shell_command(&mut shell, ShellCommand::FitViewport { camera: 0, element: 5, view: (1920, 1080) }).unwrap();
+        let fitted = (h.core.cameras().center(0), h.core.cameras().zoom_milli(0));
+        assert_eq!(fitted, (CanvasPos { x: 400, y: 300 }, 1800));
+        for i in 1..=200i64 {
+            let fx = h.on_commit(5, (100 + 37 * i, 50 + 11 * i)); // adversarial self-resizing client
+            assert!(fx.is_empty(), "a client commit produced effects {fx:?}");
+            assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), fitted, "client commit #{i} moved the camera");
+        }
+        // a FRESH authorized fit uses the geometry at that instant
+        h.core.shell_command(&mut shell, ShellCommand::FitViewport { camera: 0, element: 5, view: (1920, 1080) }).unwrap();
+        assert_eq!(h.core.stage().size(5), Some((7500, 2250)));
+        assert_eq!(h.core.cameras().center(0), CanvasPos { x: 3750, y: 1125 });
+        assert_eq!(h.core.cameras().zoom_milli(0), 256);
+    }
+
+    #[test]
+    fn fit_of_stale_element_mutates_nothing() {
+        let (core, _input, mut shell) = Core::new(1);
+        let mut h = Handlers { core, #[cfg(feature = "probe_store_port_in_state")] leaked: unreachable!() };
+        let before = (h.core.cameras().center(0), h.core.cameras().zoom_milli(0));
+        assert_eq!(h.core.shell_command(&mut shell, ShellCommand::FitViewport { camera: 0, element: 99, view: (1920, 1080) }).unwrap(), vec![]);
+        assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), before);
     }
 
     #[test]

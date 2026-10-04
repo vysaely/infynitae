@@ -6,23 +6,26 @@ These records explain **why** each foundational decision was made. **What** the 
 
 An ADR whose decision is touched by an open D-F2 finding has the status **"Accepted; under Phase D review"**. The decision stands until the user disposes of the finding.
 
+**Phase D 1R:** the corrections are recorded as "1R amendment" notes inside the affected ADRs. The canonical rules are FOUNDATION_ARCHITECTURE §C12.R1; provenance is in audit/1R/.
+
 Evidence class: P protocol · S Smithay source · M math/model · H harness experiment (T1-style) · R real client · D design policy · V provisional · X deferred physical validation.
 
 | ADR | Title | Status |
 |---|---|---|
-| ADR-01 | Stage is the sole spatial authority; Smithay `Space` rejected | Accepted; under review (PD-F2-13) |
-| ADR-02 | Fixed-point Q16 Canvas with a reference-relative lattice | Accepted; under review (PD-F2-06, PD-F2-12) |
+| ADR-01 | Stage is the sole spatial authority; Smithay `Space` rejected | Accepted; PD-F2-13 → obligation OB-34 (1R) |
+| ADR-02 | Fixed-point Q16 Canvas with a reference-relative lattice | Accepted; **amended 1R** (R8; zoom-aware pan; OB-24 rescoped) |
 | ADR-03 | Window-geometry anchor and exact physical-pixel hit-testing | Accepted |
-| ADR-04 | Independent centre-anchored cameras | Accepted; under review (PD-F2-01, -06, -11) |
-| ADR-05 | Unified effective scale: MaxGesture, bounded ladder hint, settlement | Accepted; under review (PD-F2-07, -08, -09) |
-| ADR-06 | Off-screen withholding with kick/fallback; suspension separated from visibility | Accepted; under review (PD-F2-14) |
-| ADR-07 | Pre-client input ownership, gesture isolation, modifier observation | Accepted; under review (PD-F2-02, -03, -04, -05, -17) |
-| ADR-08 | Compile-time camera-authority separation | Accepted; under review (**PD-F2-01, Level A**) |
-| ADR-09 | Protocol fullscreen is output presentation; viewport-fit is a camera operation | Accepted; under review (PD-F2-01, -10, -17) |
-| ADR-10 | X11 via xwayland-satellite only | Accepted; under review (PD-F2-16) |
-| ADR-11 | Non-authoritative semantic shell IPC | Accepted; under review (PD-F2-01, -15) |
+| ADR-04 | Independent centre-anchored cameras | Accepted; **amended 1R** (one-shot fit; direct-manipulation pan) |
+| ADR-05 | Unified effective scale: MaxGesture, bounded ladder hint, settlement | Accepted; **amended 1R** (ScaleInteractionEpoch; device-bound ladder; initial hint) |
+| ADR-06 | Off-screen withholding with kick/fallback; suspension separated from visibility | Accepted; **amended 1R** (`OutputsOff`) |
+| ADR-07 | Pre-client input ownership, gesture isolation, modifier observation | Accepted; **amended 1R** (split pointer/constraint state; reconciliation; confinement) |
+| ADR-08 | Compile-time camera-authority separation | Accepted; **amended 1R** (per-action `Authorized` proof; PD-F2-01 resolved) |
+| ADR-09 | Protocol fullscreen is output presentation; viewport-fit is a camera operation | Accepted; **amended 1R** (answer every request; maximize declined; one-shot fit) |
+| ADR-10 | X11 via xwayland-satellite only | Accepted; PD-F2-16 → OB-33 (`-listenfd` verified, ER-6) |
+| ADR-11 | Non-authoritative semantic shell IPC | Accepted; **amended 1R** (shell navigation atomic; no animation in F01); PD-F2-15 → OB-35 |
 | ADR-12 | Performance/idle philosophy and the OB-19 Phase F entry gate | Accepted |
-| ADR-13 | Exact Smithay pin with adapter-local workarounds | Accepted |
+| ADR-13 | Exact Smithay pin with adapter-local workarounds | Accepted; W-SM-14/15 added (1R) |
+| ADR-14 | Element-level focus authority vs protocol surface routing | **Accepted (1R, new)** |
 
 ---
 
@@ -71,6 +74,10 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Invariants:** COORD-1, COORD-2, COORD-3, COORD-4, RENDER-1.
 - **Obligations:** OB-6, OB-24.
 - **Revisit trigger:** a zoom-motion feature (OB-24), or PD-F2-06 disposed with option (b); a renderer that accepts sub-pixel positioning.
+- **1R amendment:**
+  - R8 (inward rounding of popup constraint targets) is added to the rounding set (PD-F2-12).
+  - Gesture totals are zoom-aware (INV-COORD-3, PD-F2-06).
+  - The lattice is kept: render/hit agreement holds at k ∉ n/120 (ED-1). The ±1 px shape change at reference switches during zoomed panning is a stated residual, OB-24 rescoped (candidate: gesture-pinned reference).
 
 ## ADR-03: window-geometry anchor and exact physical-pixel hit-testing
 
@@ -127,6 +134,12 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Invariants:** CAMERA-2, CAMERA-3, CAMERA-5, OUTPUT-1.
 - **Obligations:** OB-3, OB-24.
 - **Revisit trigger:** a decision on PD-F2-01/-06/-11; the zoom-motion feature.
+- **1R amendment:**
+  - Viewport-fit is one-shot (INV-CAMERA-5). A client can invalidate what the user sees but can never move a camera.
+  - Pan follows direct manipulation: `dP = dp_phys/(s_O·z_C)` (INV-COORD-3).
+  - Zoomed navigation is part of Foundation 01.
+  - An orphaned pan mutates nothing (INV-OUTPUT-1).
+  - Rejected in 1R: a sticky fit mode, because it is the client→camera path (PD-F2-01).
 
 ## ADR-05: unified effective scale (MaxGesture, bounded ladder hint, settlement)
 
@@ -164,6 +177,11 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Invariants:** SCALE-1 … SCALE-5.
 - **Obligations:** OB-7, OB-12, OB-13, OB-23, OB-28.
 - **Revisit trigger:** X-16 tuning (TUNE); a disposition of PD-F2-07/-08/-09.
+- **1R amendment:**
+  - Gesture-type-specific damping (MaxGesture flag + SC-D) is replaced by one concept, **ScaleInteractionEpoch** (INV-SCALE-3/4). It ends by explicit end, settlement event or timeout; the timeout's existence is architectural, its value provisional (OB-23).
+  - The ladder contains output scales ≤ H_max, with H_max over all surfaces (INV-SCALE-2).
+  - Initial hint defined (INV-SCALE-5).
+  - Evidence: ER-5 R2 (40 → 1 for discrete pan, zoom-at-cursor and shell streams; negative control 40).
 
 ## ADR-06: off-screen withholding with kick/fallback; suspension separated from visibility
 
@@ -186,6 +204,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Invariants:** FRAME-1 … FRAME-6, IDLE-1.
 - **Obligations:** OB-5, OB-8, OB-16, OB-25.
 - **Revisit trigger:** X-7 game/network results; evidence of benefit for a `StableUnobserved(T)` reason.
+- **1R amendment:** the reason `AllObservingOutputsOff` is replaced by `OutputsOff`, defined without camera membership (INV-FRAME-6, PD-F2-14).
 
 ## ADR-07: pre-client input ownership, gesture isolation, modifier observation
 
@@ -222,6 +241,11 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Invariants:** INPUT-1 … INPUT-9, COORD-5.
 - **Obligations:** OB-3, OB-4, OB-10, OB-11, OB-15, OB-16, OB-20, OB-21.
 - **Revisit trigger:** a disposition of PD-F2-02…05/-17; T5 game results (DV-3); a Smithay fix for W-SM-4b.
+- **1R amendment:**
+  - Seat state is split into physical `(interaction output, p)` and a constraint `{surface, kind, SurfaceLocal lock point}` (INV-COORD-5).
+  - One batch-end reconciliation, deferred during compositor interactions **and client-owned grab sequences** (INV-INPUT-5; ER-2 shows the deferral is the only strategy that keeps core and Smithay equal with exactly one `unlocked`).
+  - Confinement is clamped on the interaction output with no crossing (ER-5 R5).
+  - Focus layering: ADR-14.
 
 ## ADR-08: compile-time camera-authority separation
 
@@ -241,6 +265,9 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Invariants:** CAMERA-1, SHELL-1, ARCH-1.
 - **Obligations:** OB-19 (probe list to be extended per PD-F2-01).
 - **Revisit trigger:** the PD-F2-01 disposition; any new camera behaviour.
+- **1R amendment:**
+  - Authority is per action: each camera mutation consumes a fresh `Authorized` proof minted only in the port-carrying entry module (E0624 elsewhere), and retaining one fails the `Send` assertion (E0277).
+  - This closes PD-F2-01's "authority retained for later" path, which port-gating alone did not cover (ER-4).
 
 ## ADR-09: protocol fullscreen is output presentation; viewport-fit is a camera operation
 
@@ -268,6 +295,11 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Invariants:** PRES-1, CAMERA-5, SCALE-1.
 - **Obligations:** OB-22.
 - **Revisit trigger:** OB-22 results; a PD-F2-10 disposition.
+- **1R amendment:**
+  - Every `set_fullscreen`/`unset_fullscreen`/`set_maximized`/`unset_maximized` is answered with exactly one configure (protocol requirement; ER-3).
+  - Unfocused fullscreen requests are declined at once (no pending state).
+  - Maximize is declined and never invokes fit (INV-PRES-1, INV-PROTO-1).
+  - Fit is one-shot (INV-CAMERA-5).
 
 ## ADR-10: X11 via xwayland-satellite only
 
@@ -281,6 +313,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Invariants:** XWAYLAND-1, STAGE-1.
 - **Obligations:** OB-9, OB-27.
 - **Revisit trigger:** T3 evidence that satellite fails a required app class.
+- **1R:** xwayland-satellite 0.8.3 supports `-listenfd` (ER-6). Restart on the same X display is OB-33.
 
 ## ADR-11: non-authoritative semantic shell IPC
 
@@ -304,6 +337,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Invariants:** SHELL-1, SHELL-2, CAMERA-1.
 - **Obligations:** T1 IPC tests.
 - **Revisit trigger:** shell design (Level D); the PD-F2-01 disposition.
+- **1R amendment:** shell navigation commands are atomic. Animated navigation is not part of Foundation 01 (INV-CAMERA-1). Shell delta streams form a ScaleInteractionEpoch (INV-SCALE-3).
 
 ## ADR-12: performance/idle philosophy and the OB-19 Phase F entry gate
 
@@ -345,3 +379,37 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Invariants:** ARCH-3.
 - **Obligations:** OB-11, OB-18, OB-26.
 - **Revisit trigger:** a Smithay release fixing W-SM-4b/11/12; the PD-F2-02 disposition.
+- **1R:** W-SM-14 (a nested popup grab replacing the pointer grab tears down the keyboard grab) and W-SM-15 (pointer-first grab teardown refocuses the root) were added, both with adapter-local workarounds (ER-1).
+
+## ADR-14: element-level focus authority vs protocol surface routing (new, 1R)
+
+- **Status:** Accepted (Phase D 1R decision; INV-INPUT-8 amended, INV-INPUT-10 new).
+- **Context:**
+  - Smithay's popup grabs decide keyboard and pointer routing while a popup grab is active.
+  - `PopupKeyboardGrab` ignores `set_focus` from outside, and Smithay restores focus to the root itself (ED-3).
+  - A single "keyboard focus" written by both core and Smithay diverged in practice (ER-1 NEG-1).
+- **Decision:**
+  - Two concepts at two levels.
+  - **ActiveElementFocus** (core, sole policy authority) answers "which Stage element owns desktop focus".
+  - **ProtocolSurfaceRoute** (adapter, Smithay grabs) answers "where, inside that element's surface tree, protocol events route during a valid popup grab". It is subordinate and never changes ActiveElementFocus.
+  - A core change of ActiveElementFocus preempts incompatible grabs in a fixed order (INV-INPUT-10).
+- **Evidence:**
+  - ER-1: PF-1…PF-7 pass, including parent destroyed, popup destroyed in flight, nested grabs and keys held.
+  - Negative controls: the naive path diverges; pointer-first teardown flickers; replacing the pointer grab on nesting loses routing.
+- **Alternatives:**
+  - (a) Rename and keep two writers.
+  - (b) Disable Smithay popup grabs and route popups ourselves.
+  - (c) Defer the focus change until the client dismisses its popups.
+- **Rejected:**
+  - (a) keeps the divergence.
+  - (b) re-implements protocol grab semantics that Smithay already gets right within an element.
+  - (c) lets a client veto a user's focus action.
+- **Consequences:**
+  - Opening a popup never changes desktop focus.
+  - The shell, activation and focus bindings act on elements.
+  - Smithay's root restore is accepted as routing inside the same element.
+  - Two Smithay quirks become adapter workarounds (W-SM-14/15).
+- **Invariants:** INPUT-8, INPUT-10, INPUT-5 (constraint activation needs ActiveElementFocus), PROTO-1 (`activated`).
+- **Obligations:** OB-30, OB-18.
+- **Revisit trigger:** a Smithay release changing `PopupKeyboardGrab`/`PopupPointerGrab` semantics; T3 toolkits whose popups rely on keeping focus across element switches.
+

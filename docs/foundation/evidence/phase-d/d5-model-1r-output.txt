@@ -1,0 +1,72 @@
+
+==============================================================================================================
+R1  PD-F2-06 direct-manipulation pan algebra
+==============================================================================================================
+hand: 200 events of physical displacement (+3.7, -1.3) px on the pointer's output (dp_phys = dp_logical * s_O)
+check: physical displacement of an element's left edge on screen == hand physical displacement (+-1 px lattice rounding)
+ scale       zoom | worst |content - hand| px: corrected   sealed (negative control)
+   1.0   0.500000 |    0.600                       370.000
+   1.0   0.750000 |    0.700                       185.000
+   1.0   1.000000 |    0.800                         0.800
+   1.0   1.658986 |    0.800                       488.000
+   1.0   2.500000 |    0.700                      1110.000
+   1.5   0.500000 |    0.700                       370.000
+   1.5   0.750000 |    0.800                       185.000
+   1.5   1.000000 |    0.900                         0.900
+   1.5   1.658986 |    0.800                       488.000
+   1.5   2.500000 |    0.600                      1110.000
+R1 corrected algebra: content follows the hand within the lattice rounding (<= 1 px) at every zoom: True
+   sealed formula diverges from the hand whenever zoom != 1 (factor = zoom).
+
+==============================================================================================================
+R2  PD-F2-07 ScaleInteractionEpoch
+==============================================================================================================
+settlement timeout candidate T_settle = 300 ms (PROVISIONAL; TUNE)
+scenario                                                     | sealed | epoch (1R) | epoch disabled (NEG)
+reversing continuous pan (240 updates, 20 reversals)         |      1 |          1 |       20
+discrete pan wiggle across an output edge (40 ticks, 20 Hz)  |     40 |          1 |       40
+discrete zoom wiggle, no pointer motion (40 ticks)           |      1 |          1 |       40
+discrete zoom wiggle WITH pointer motion between ticks       |     40 |          1 |       40
+shell Navigate stream oscillating (40 commands, 60 Hz)       |     40 |          1 |       40
+observer enter/leave during an epoch + output unplug         |     21 |          3 |       21
+client self-resize near the device bound during an epoch     |     32 |          4 |       61
+R2 bound (rungs crossed + 1 settlement + <= 1 P7 forced decrease per non-client stimulus) holds in every case: True
+
+settlement-timeout sensitivity, discrete pan wiggle at 20 Hz (tick interval 50 ms):
+   T_settle=   40 ms -> hint changes 39   (T below the input interval: every tick is its own epoch)
+   T_settle=  100 ms -> hint changes 1
+   T_settle=  300 ms -> hint changes 1
+   T_settle= 1000 ms -> hint changes 1
+   architecture: a finite settlement rule bounds changes to (#epochs) x (rungs + 1); the VALUE only
+   decides how input is grouped into epochs (tuning; OB-23).
+
+==============================================================================================================
+R3  PD-F2-01 one-shot viewport-fit vs sealed re-fit (CP3B feedback clients, 60 client rounds)
+==============================================================================================================
+client                                   | sealed re-fit: hint changes / camera mutations | 1R one-shot: hint changes / camera mutations
+compliant (logical size constant)        |            1 / 1                          |          1 / 1
+constant-physical (1200x900 / h)         |            4 / 5                          |          1 / 1
+anti (logical grows with h)              |            1 / 2                          |          1 / 1
+toggling (size flips with each hint)     |            1 / 2                          |          1 / 1
+adversarial (inverts the last move)      |           60 / 60                         |          1 / 1
+R3 one-shot fit: exactly one camera mutation per authorized fit; client geometry never reaches the camera.
+
+==============================================================================================================
+R4  D5 epoch deltas under the 1R rules
+==============================================================================================================
+Epoch 2 shell stream (60 commands +15 Canvas px, monotone) as ONE epoch: hint changes:
+   1 settlement at the end of the stream (sealed gave 1 for this monotone stream; 40 for an oscillating one): 1
+Epoch 4 output removal under lock + client implicit grab (1R rule, cf. xlock_grab DEFER):
+   removal batch: leave(B) for all surfaces; physical pointer relocated to A (Arrangement-nearest, half-open);
+   constraint NOT reconciled while the client-owned grab sequence is active (core: Active == Smithay: Active);
+   no absolute motion delivered (pointer locked); at the client's button release the batch-end reconciliation
+   finds the lock point not observable through A -> delivered focus changes -> exactly one `unlocked`.
+Epoch 4 pan of A at zoom 1080/651 with the corrected algebra (hand -15.3 logical px x 120 on scale 1.0):
+   W leaves A at event 92 (v_A.x=1920.1033); content moved with the hand (R1).
+
+==============================================================================================================
+R5  PD-F2-05 confinement across independent cameras (seat interaction output)
+==============================================================================================================
+1R rule (clamp on the interaction output, no crossing): out-of-region=0 surface-local jumps=0 crossings=0
+NEG (Arrangement crossing allowed while confined):      out-of-region=7382 surface-local jumps=87 crossings=87
+R5 confinement holds under the 1R rule: True

@@ -1,6 +1,10 @@
 # Phase D — Falsification and formalisation (checkpoint 1: D1–D6)
 
-Status: **Phase D checkpoint 1 deliverables complete; UNCOMMITTED, for review.** Phase D checkpoint 2 (D7–D9) has not begun. Two Level A D-F2 findings (PD-F2-01, PD-F2-02) block advancement until the user disposes of them.
+Status: Phase D checkpoint 1 committed as the immutable **falsification baseline `e8ec03a2ab36f315ae025723ec666b9ad278ac83`**. **Corrective checkpoint 1R** ([1R/CORRECTIONS_1R.md](1R/CORRECTIONS_1R.md)) is complete and UNCOMMITTED for review.
+
+> **1R note.** The registers below are the baseline record and are kept unchanged. Dispositions: [1R/CORRECTIONS_1R.md](1R/CORRECTIONS_1R.md). Canonical amendments: FOUNDATION_ARCHITECTURE §C12.R1. Invariant diff: [1R/INVARIANT_DIFF_1R.md](1R/INVARIANT_DIFF_1R.md). Corrected machines: [1R/STATE_MACHINES_1R.md](1R/STATE_MACHINES_1R.md). Matrix deltas: [1R/MATRICES_1R.md](1R/MATRICES_1R.md). Contradiction audit: [1R/CONTRADICTION_AUDIT_1R.md](1R/CONTRADICTION_AUDIT_1R.md).
+
+Baseline status line (checkpoint 1): **Phase D checkpoint 1 deliverables complete.** Phase D checkpoint 2 (D7–D9) has not begun. Two Level A D-F2 findings (PD-F2-01, PD-F2-02) block advancement until the user disposes of them.
 
 Purpose: an adversarial test of the **sealed** Phase C architecture. It is not a fourth design phase. The 54 canonical `INV-*` invariants (FOUNDATION_ARCHITECTURE §C12) are hypotheses under test. Nothing in `audit/` amends them. Architecture corrections are **recorded** as D-F2 in [FOUNDATION_BLOCKERS.md § Phase D Architectural Findings](../FOUNDATION_BLOCKERS.md#phase-d-architectural-findings) and await disposition.
 

@@ -1,0 +1,32 @@
+xmaximize — xdg_toplevel maximize/fullscreen answer policy; smithay =0.7.0, lockstep
+
+=== maximize policy ON (decline with a configure)
+     client: W: xdg_toplevel.configure 0x0 []
+  set_maximized    configures answered=1 (want 1) | `maximized` granted=false (want false) | anchor Some((1000, 300)) (was Some((1000, 300))) | cameras [(0, 0), (600, 0)] (were [(0, 0), (600, 0)]) | ok
+     client: W: xdg_toplevel.configure 0x0 []
+  unset_maximized  configures answered=1 (want 1) | `maximized` granted=false (want false) | anchor Some((1000, 300)) (was Some((1000, 300))) | cameras [(0, 0), (600, 0)] (were [(0, 0), (600, 0)]) | ok
+  RESULT: PASS
+
+=== maximize policy OFF (record-only override: NEG control)
+  set_maximized    configures answered=0 (want 1) | `maximized` granted=false (want false) | anchor Some((1000, 300)) (was Some((1000, 300))) | cameras [(0, 0), (600, 0)] (were [(0, 0), (600, 0)]) | FAIL
+  unset_maximized  configures answered=0 (want 1) | `maximized` granted=false (want false) | anchor Some((1000, 300)) (was Some((1000, 300))) | cameras [(0, 0), (600, 0)] (were [(0, 0), (600, 0)]) | FAIL
+  RESULT: FAIL
+
+=== fullscreen policy ON (answer every request)
+     client: W: xdg_toplevel.configure 0x0 []
+  set_fullscreen while NOT focused   configures answered=1 (want 1) | `fullscreen` granted=false (want false) | anchor/camera unchanged=true | ok
+     client: W: xdg_toplevel.configure 1920x1080 [fullscreen]
+  set_fullscreen while focused       configures answered=1 (want 1) | `fullscreen` granted=true (want true) | anchor/camera unchanged=true | ok
+     client: W: xdg_toplevel.configure 0x0 []
+  unset_fullscreen                   configures answered=1 (want 1) | `fullscreen` granted=false (want false) | anchor/camera unchanged=true | ok
+  RESULT: PASS
+
+=== fullscreen policy OFF (sealed deferral: NEG control)
+  set_fullscreen while NOT focused   configures answered=0 (want 1) | `fullscreen` granted=false (want false) | anchor/camera unchanged=true | FAIL
+  set_fullscreen while focused       configures answered=0 (want 1) | `fullscreen` granted=false (want true) | anchor/camera unchanged=true | FAIL
+  unset_fullscreen                   configures answered=0 (want 1) | `fullscreen` granted=false (want false) | anchor/camera unchanged=true | FAIL
+  RESULT: FAIL
+
+maximize ON: PASS (expected PASS) | NEG maximize OFF: FAIL (expected FAIL)
+fullscreen ON: PASS (expected PASS) | NEG sealed deferral: FAIL (expected FAIL)
+ALL AS EXPECTED: true

@@ -104,6 +104,16 @@ pub struct Probe {
     pub kb: KbLogical,
     /// request presentation feedback with every draw (X-9); the u32 tags the commit
     pub feedback_seq: Option<u32>,
+    /// last input-event serial received (keyboard enter/key, pointer enter/button), for xdg_popup.grab
+    pub last_serial: u32,
+    /// destroy a popup (role, xdg_surface, wl_surface) when it receives popup_done (as toolkits do)
+    pub auto_destroy_popups: bool,
+    /// client-side wl_pointer focus checker (Phase D 1R): active surface and protocol-order violations
+    pub ptr_active: Option<String>,
+    pub ptr_violations: Vec<String>,
+    /// surfaces the client destroyed while they were keyboard/pointer-active: a leave naming them that
+    /// the server queued before it processed the destruction is a legal race, not a violation
+    pub destroyed_active: Vec<String>,
 }
 
 impl Probe {
@@ -143,6 +153,11 @@ impl Probe {
             feedback_seq: None,
             keyboard: None,
             kb: KbLogical::default(),
+            last_serial: 0,
+            auto_destroy_popups: false,
+            ptr_active: None,
+            ptr_violations: Vec::new(),
+            destroyed_active: Vec::new(),
         }
     }
 
@@ -310,6 +325,13 @@ impl Probe {
     /// Popup of `content` size with its own CSD shadow, positioned at `anchor_rect` (relative to
     /// the parent's window geometry) with gravity bottom-right from the anchor's top-left.
     pub fn create_popup(&mut self, qh: &QueueHandle<Self>, label: &str, parent: usize, content: (i32, i32), shadow: i32, anchor_rect: (i32, i32, i32, i32)) -> usize {
+        self.create_popup_ex(qh, label, parent, content, shadow, anchor_rect, false)
+    }
+
+    /// As `create_popup`; with `grab`, sends xdg_popup.grab(seat, last input serial) before the
+    /// initial commit (the protocol requires the grab before the popup is mapped).
+    #[allow(clippy::too_many_arguments)]
+    pub fn create_popup_ex(&mut self, qh: &QueueHandle<Self>, label: &str, parent: usize, content: (i32, i32), shadow: i32, anchor_rect: (i32, i32, i32, i32), grab: bool) -> usize {
         let size = (content.0 + 2 * shadow, content.1 + 2 * shadow);
         let (idx, wl, xdg) = self.new_surface(qh, label, size, false);
         let pos: XdgPositioner = self.wm_base.create_positioner(qh, ());
@@ -324,9 +346,33 @@ impl Probe {
         if shadow > 0 {
             xdg.set_window_geometry(shadow, shadow, content.0, content.1);
         }
+        if grab {
+            popup.grab(self.seat.as_ref().expect("bind_input first"), self.last_serial);
+        }
         self.surfaces[idx].popup = Some(popup);
         wl.commit();
         idx
+    }
+
+    /// Client destroys a popup (role object, xdg_surface, wl_surface, in protocol order).
+    pub fn destroy_popup(&mut self, idx: usize) {
+        let surf = &self.surfaces[idx];
+        if let Some(p) = &surf.popup {
+            p.destroy();
+        }
+        surf.xdg.destroy();
+        surf.wl.destroy();
+        let label = surf.label.clone();
+        if self.kb.active.as_deref() == Some(label.as_str()) {
+            self.kb.active = None;
+            self.destroyed_active.push(label.clone());
+        }
+        if self.ptr_active.as_deref() == Some(label.as_str()) {
+            self.ptr_active = None;
+            self.destroyed_active.push(label.clone());
+        }
+        let now = self.now.load(Ordering::Relaxed);
+        self.log.push((now, format!("client-side: destroyed popup {label}")));
     }
 
     pub fn draw(&mut self, qh: &QueueHandle<Self>, idx: usize) {
@@ -448,7 +494,12 @@ impl Dispatch<XdgPopup, usize> for Probe {
         let label = st.surfaces[*idx].label.clone();
         match ev {
             xdg_popup::Event::Configure { x, y, width, height } => st.rec(format!("{label}: xdg_popup.configure x={x} y={y} {width}x{height}")),
-            xdg_popup::Event::PopupDone => st.rec(format!("{label}: xdg_popup.popup_done")),
+            xdg_popup::Event::PopupDone => {
+                st.rec(format!("{label}: xdg_popup.popup_done"));
+                if st.auto_destroy_popups && st.surfaces[*idx].popup.is_some() {
+                    st.destroy_popup(*idx);
+                }
+            }
             _ => {}
         }
     }
@@ -501,7 +552,8 @@ impl Dispatch<WlKeyboard, ()> for Probe {
         let mut v: Vec<String> = Vec::new();
         let line = match ev {
             wl_keyboard::Event::Keymap { .. } | wl_keyboard::Event::RepeatInfo { .. } => return,
-            wl_keyboard::Event::Enter { surface, keys, .. } => {
+            wl_keyboard::Event::Enter { serial, surface, keys } => {
+                st.last_serial = serial;
                 let l = label_of(st, &surface);
                 if st.kb.active.is_some() {
                     v.push(format!("enter({l}) while already active on {:?}", st.kb.active));
@@ -513,6 +565,10 @@ impl Dispatch<WlKeyboard, ()> for Probe {
             }
             wl_keyboard::Event::Leave { surface, .. } => {
                 let l = label_of(st, &surface);
+                if st.kb.active.is_none() && st.destroyed_active.contains(&l) {
+                    // in-flight race: the server sent leave before it saw our destruction
+                    return st.log.push((now, format!("wl_keyboard.leave {l} (for a surface this client already destroyed: in-flight, legal)")));
+                }
                 if st.kb.active.as_deref() != Some(l.as_str()) {
                     v.push(format!("leave({l}) but active={:?}", st.kb.active));
                 }
@@ -523,7 +579,8 @@ impl Dispatch<WlKeyboard, ()> for Probe {
                 st.kb = KbLogical { violations: std::mem::take(&mut st.kb.violations), ..Default::default() };
                 format!("wl_keyboard.leave {l}")
             }
-            wl_keyboard::Event::Key { key, state, .. } => {
+            wl_keyboard::Event::Key { serial, key, state, .. } => {
+                st.last_serial = serial;
                 let pressed = matches!(state, wayland_client::WEnum::Value(wl_keyboard::KeyState::Pressed));
                 if st.kb.active.is_none() {
                     v.push(format!("key {key} without an active surface"));
@@ -564,17 +621,33 @@ fn label_of(st: &Probe, s: &WlSurface) -> String {
 impl Dispatch<WlPointer, ()> for Probe {
     fn event(st: &mut Self, _: &WlPointer, ev: wl_pointer::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match ev {
-            wl_pointer::Event::Enter { surface, surface_x, surface_y, .. } => {
+            wl_pointer::Event::Enter { serial, surface, surface_x, surface_y } => {
+                st.last_serial = serial;
                 let l = label_of(st, &surface);
+                if let Some(a) = &st.ptr_active {
+                    let now = st.now.load(Ordering::Relaxed);
+                    st.ptr_violations.push(format!("t={now}: wl_pointer.enter({l}) while already entered on {a}"));
+                }
+                st.ptr_active = Some(l.clone());
                 st.rec(format!("wl_pointer.enter {l} ({surface_x:.3},{surface_y:.3})"));
             }
             wl_pointer::Event::Leave { surface, .. } => {
                 let l = label_of(st, &surface);
+                if st.ptr_active.is_none() && st.destroyed_active.contains(&l) {
+                    st.rec(format!("wl_pointer.leave {l} (destroyed by this client: in-flight, legal)"));
+                    return;
+                }
+                if st.ptr_active.as_deref() != Some(l.as_str()) {
+                    let now = st.now.load(Ordering::Relaxed);
+                    st.ptr_violations.push(format!("t={now}: wl_pointer.leave({l}) but active={:?}", st.ptr_active));
+                }
+                st.ptr_active = None;
                 st.rec(format!("wl_pointer.leave {l}"));
                 // wl_pointer.leave does not release buttons in the protocol; keep the client's view as-is
             }
             wl_pointer::Event::Motion { surface_x, surface_y, .. } => st.rec(format!("wl_pointer.motion ({surface_x:.3},{surface_y:.3})")),
-            wl_pointer::Event::Button { button, state, .. } => {
+            wl_pointer::Event::Button { serial, button, state, .. } => {
+                st.last_serial = serial;
                 let pressed = matches!(state, wayland_client::WEnum::Value(wl_pointer::ButtonState::Pressed));
                 if pressed {
                     st.buttons_down.insert(button);

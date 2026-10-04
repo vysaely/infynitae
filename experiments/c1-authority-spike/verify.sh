@@ -26,6 +26,14 @@ echo "== 2c. storing an authority port in protocol state MUST NOT compile (ports
 if cargo build --offline -q -p spike-wayland --features probe_store_port_in_state 2>/tmp/c1p.err; then echo "VIOLATION: port stored in protocol state compiled"; fail=1
 elif grep -q "error\\[E0277\\]" /tmp/c1p.err; then echo "OK: rejected with E0277"; grep -m1 "cannot be sent" /tmp/c1p.err
 else echo "WRONG REASON:"; grep -m3 "^error" /tmp/c1p.err; fail=1; fi
+echo "== 2d. PD-F2-01: protocol policy re-fitting a camera on a client commit MUST NOT compile (proof cannot be minted)"
+if cargo build --offline -q -p spike-core --features probe_protocol_refits_camera 2>/tmp/c1p.err; then echo "VIOLATION: protocol re-fit compiled"; fail=1
+elif grep -q "error\[E0624\]" /tmp/c1p.err && grep -q "mint" /tmp/c1p.err; then echo "OK: rejected: $(grep -m1 'error\[E0624\]' /tmp/c1p.err)"
+else echo "WRONG REASON:"; grep -m3 "^error" /tmp/c1p.err; fail=1; fi
+echo "== 2e. PD-F2-01: Core retaining an authority proof (sticky fit mode) MUST NOT compile (protocol state Send assertion)"
+if cargo build --offline -q -p spike-wayland --features probe_sticky_fit 2>/tmp/c1p.err; then echo "VIOLATION: sticky authority compiled"; fail=1
+elif grep -q "error\[E0277\]" /tmp/c1p.err; then echo "OK: rejected with E0277"; grep -m1 "cannot be sent" /tmp/c1p.err
+else echo "WRONG REASON:"; grep -m3 "^error" /tmp/c1p.err; fail=1; fi
 echo "== 3. dependency direction: spike-core has no dependencies"
 deps=$(cargo tree --offline -p spike-core -e normal --depth 1 2>/dev/null | tail -n +2)
 if [ -n "$deps" ]; then echo "VIOLATION: $deps"; fail=1; else echo "OK: spike-core depends on nothing"; fi

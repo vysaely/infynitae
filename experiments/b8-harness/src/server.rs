@@ -18,7 +18,8 @@ use smithay::{
     delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
     delegate_output, delegate_pointer_constraints, delegate_presentation, delegate_relative_pointer, delegate_seat, delegate_shm,
     delegate_viewporter, delegate_xdg_shell,
-    desktop::{space::SpaceElement, utils::OutputPresentationFeedback, PopupKind, PopupManager, Window},
+    desktop::{find_popup_root_surface, space::SpaceElement, utils::OutputPresentationFeedback, PopupGrab, PopupKeyboardGrab, PopupKind, PopupManager, PopupPointerGrab, PopupUngrabStrategy, Window},
+    input::pointer::Focus,
     input::{pointer::PointerHandle, Seat, SeatHandler, SeatState},
     output::{Mode, Output, PhysicalProperties, Scale, Subpixel},
     reexports::{
@@ -172,6 +173,20 @@ pub struct Server {
     pub last_snapshot_len: usize,
     /// (time, element id, surface protocol id, buffer size in buffer pixels) for every commit with a buffer
     pub commit_sizes: Vec<(u64, u64, u32, (i32, i32))>,
+    /// Phase D 1R: honour xdg_popup.grab with Smithay's PopupGrab (off by default: earlier experiments
+    /// ran with the no-op handler)
+    pub popup_grabs_enabled: bool,
+    pub popup_grab: Option<PopupGrab<Server>>,
+    /// Phase D 1R (PD-F2-17): Foundation maximize policy — answer set/unset_maximized with a configure
+    /// that does not grant `maximized` (off by default: record-only W-SM-13 override)
+    pub maximize_policy: bool,
+    /// Phase D 1R: for a NESTED popup grab keep the installed PopupPointerGrab (it shares the grab chain)
+    /// instead of replacing it; replacing runs the old grab's unset(), which tears down the keyboard grab
+    pub nested_grab_keep_pointer: bool,
+    /// Phase D 1R (PD-F2-10): Foundation fullscreen answer policy; `focused` stands in for core
+    /// ActiveElementFocus (element id). Off by default (record-only W-SM-13 override).
+    pub fullscreen_policy: bool,
+    pub focused: Option<u64>,
 }
 
 #[derive(Default)]
@@ -256,6 +271,12 @@ impl Server {
             snapshots_taken: 0,
             last_snapshot_len: 0,
             commit_sizes: Vec::new(),
+            popup_grabs_enabled: false,
+            popup_grab: None,
+            maximize_policy: false,
+            nested_grab_keep_pointer: false,
+            fullscreen_policy: false,
+            focused: None,
         }
     }
 
@@ -630,15 +651,97 @@ impl XdgShellHandler for Server {
     fn maximize_request(&mut self, surface: ToplevelSurface) {
         let id = self.elements.iter().find(|e| e.window.toplevel() == Some(&surface)).map(|e| e.id);
         self.note(format!("E{} maximize_request (initial configure sent: {})", id.unwrap_or(0), surface.is_initial_configure_sent()));
+        self.answer_maximize(&surface);
+    }
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        let id = self.elements.iter().find(|e| e.window.toplevel() == Some(&surface)).map(|e| e.id);
+        self.note(format!("E{} unmaximize_request", id.unwrap_or(0)));
+        self.answer_maximize(&surface);
     }
     fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>) {
         let id = self.elements.iter().find(|e| e.window.toplevel() == Some(&surface)).map(|e| e.id);
         self.note(format!("E{} fullscreen_request output={} (initial configure sent: {})", id.unwrap_or(0), output.is_some(), surface.is_initial_configure_sent()));
+        if self.fullscreen_policy && surface.is_initial_configure_sent() {
+            // 1R: answer every request with a configure. Grant only to the focused element; else decline.
+            let grant = id.is_some() && id == self.focused;
+            let size = self.outputs.first().map(|o| o.size);
+            surface.with_pending_state(|s| {
+                if grant {
+                    s.states.set(xdg_toplevel::State::Fullscreen);
+                    s.size = size.map(|z| z.into());
+                } else {
+                    s.states.unset(xdg_toplevel::State::Fullscreen);
+                }
+            });
+            surface.send_configure();
+            self.note(format!("fullscreen policy: {}", if grant { "granted (focused)" } else { "declined (not focused): configure without `fullscreen`" }));
+        }
     }
-    fn grab(&mut self, _s: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        if self.fullscreen_policy && surface.is_initial_configure_sent() {
+            surface.with_pending_state(|s| {
+                s.states.unset(xdg_toplevel::State::Fullscreen);
+                s.size = None;
+            });
+            surface.send_configure();
+            self.note("fullscreen policy: unset answered with a configure without `fullscreen`".into());
+        }
+    }
+    fn grab(&mut self, surface: PopupSurface, _seat: wl_seat::WlSeat, serial: Serial) {
+        if !self.popup_grabs_enabled {
+            return;
+        }
+        let kind = PopupKind::Xdg(surface);
+        // W-SM-7 precondition: the root must exist and be an element root, else grab_popup asserts
+        let Ok(root) = find_popup_root_surface(&kind) else {
+            self.note("popup grab refused: root dead".into());
+            return;
+        };
+        if self.elem_by_root(&root).is_none() {
+            self.note("popup grab refused: root is not an element".into());
+            return;
+        }
+        let seat = self.seat.clone();
+        match self.popups.grab_popup::<Server>(root, kind, &seat, serial) {
+            Ok(mut grab) => {
+                let kb = seat.get_keyboard().unwrap();
+                if kb.is_grabbed() && !(kb.has_grab(serial) || kb.has_grab(grab.previous_serial().unwrap_or(serial))) {
+                    grab.ungrab(PopupUngrabStrategy::All);
+                    self.note("popup grab refused: keyboard grabbed by another sequence".into());
+                    return;
+                }
+                kb.set_focus(self, grab.current_grab(), serial);
+                kb.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
+                let ptr = seat.get_pointer().unwrap();
+                let nested = grab.previous_serial().is_some();
+                if nested && self.nested_grab_keep_pointer && ptr.is_grabbed() {
+                    self.note("nested popup grab: existing PopupPointerGrab kept".into());
+                } else if !(ptr.is_grabbed() && !(ptr.has_grab(serial) || ptr.has_grab(grab.previous_serial().unwrap_or(serial)))) {
+                    ptr.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
+                }
+                self.note("popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)".into());
+                self.popup_grab = Some(grab);
+            }
+            Err(e) => self.note(format!("popup grab refused by Smithay: {e:?}")),
+        }
+    }
     fn client_pong(&mut self, _client: smithay::wayland::shell::xdg::ShellClient) {
         let t = self.now_us;
         self.pongs.push(t);
+    }
+}
+
+impl Server {
+    /// PD-F2-17 policy under test: answer with a configure; never grant `maximized`; no Stage/camera change.
+    fn answer_maximize(&mut self, surface: &ToplevelSurface) {
+        if !self.maximize_policy || !surface.is_initial_configure_sent() {
+            return; // pre-map: recorded only; the initial configure proceeds normally
+        }
+        surface.with_pending_state(|s| {
+            s.states.unset(xdg_toplevel::State::Maximized);
+        });
+        surface.send_configure();
+        self.note("maximize policy: declined; configure sent without `maximized`".into());
     }
 }
 

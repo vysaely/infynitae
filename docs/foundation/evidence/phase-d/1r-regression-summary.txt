@@ -1,0 +1,55 @@
+Phase D 1R regression re-run of existing harness suites after the additive 1R harness changes
+(client.rs: last input serial, popup grab request, popup auto-destroy, pointer enter/leave checker;
+ server.rs: popup grab / maximize / fullscreen / nested-grab policies, all OFF by default)
+comparison = current output vs the recorded evidence file; differences listed verbatim
+
+== d5hit vs evidence/phase-d/d5hit-output.txt
+   (end of diff)
+== xhit vs evidence/phase-c/cp3a-xhit-output.txt
+   0a1,2
+   > $ ./target/release/xhit   (experiments/b8-harness; smithay =0.7.0 + renderer_test; lockstep)
+   > # 2026-10-04T14:32:17+03:00
+   (end of diff)
+== xsnap vs evidence/phase-c/xsnap-x15-output.txt
+   0a1,2
+   > $ ./target/release/xsnap   (experiments/b8-harness; smithay =0.7.0 + renderer_test; public API only; lockstep)
+   > # 2026-10-04T14:13:11+03:00
+   (end of diff)
+== x10 vs evidence/phase-c/x10-keyboard-output.txt
+   0a1,2
+   > $ ./target/release/x10   (experiments/b8-harness; smithay =0.7.0 seat keyboard; lockstep)
+   > # 2026-10-04T14:09:04+03:00
+   (end of diff)
+== x8 vs evidence/phase-b/x8-pan-input-output.txt
+   0a1,2
+   > $ ./target/release/x8   (experiments/b8-harness; smithay =0.7.0; lockstep, virtual time)
+   > # 2026-10-04T13:40:53+03:00
+   (end of diff)
+== x12 vs evidence/phase-b/x12-oneshot-lock-defect-output.txt
+   0a1,2
+   > $ ./target/release/x12   (experiments/b8-harness; smithay =0.7.0; lockstep, virtual time)
+   > # 2026-10-04T13:49:00+03:00
+   (end of diff)
+== x6 vs evidence/phase-b/x6-edges-output.txt
+   0a1,2
+   > $ ./target/release/x6   (experiments/b8-harness; smithay =0.7.0 + renderer_test; lockstep, virtual time)
+   > # 2026-10-04T13:36:25+03:00
+   (end of diff)
+== x9 vs evidence/phase-b/x9-presentation-output.txt
+   0a1,2
+   > $ ./target/release/x9   (experiments/b8-harness; smithay =0.7.0 + renderer_test; lockstep, virtual time)
+   > # 2026-10-04T13:36:25+03:00
+   (end of diff)
+== scenarios vs evidence/phase-b/b8-scenarios-output.txt
+   0a1,2
+   > $ cargo run --offline --release --bin scenarios   (experiments/b8-harness; smithay =0.7.0, lockstep, virtual time)
+   > # 2026-10-04T13:11:29+03:00
+   9c11
+   < t=   0.000ms  server  E1 mapped=true title=Some("W") app_id=None anchor=Some((1000, 300))
+   ---
+   > t=   0.000ms  server  E1 mapped=true
+   (end of diff)
+
+verdict: every difference is the recorded file's command/timestamp header, plus the scenarios
+'E1 mapped' line enriched in CP2 (already documented in FOUNDATION_ARCHITECTURE CP2 evidence).
+d5_model.py re-run: output bit-identical to evidence/phase-d/d5-model-output.txt

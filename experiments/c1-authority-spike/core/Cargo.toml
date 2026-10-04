@@ -11,3 +11,8 @@ publish = false
 # Negative build probe: enabling this makes protocol-handling code try to move a camera.
 # The build MUST fail (verify.sh asserts it).
 probe_protocol_moves_camera = []
+# PD-F2-01 (Phase D 1R): protocol policy re-fits a camera on a client commit. MUST NOT compile.
+probe_protocol_refits_camera = []
+# PD-F2-01 (Phase D 1R): Core keeps an authority proof for a sticky fit mode. MUST fail the protocol-state
+# Send assertion (built through spike-wayland's `probe_sticky_fit`).
+probe_sticky_fit_retains_authority = []

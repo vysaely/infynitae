@@ -1569,3 +1569,47 @@ Every CONDITIONALLY RESOLVED item has:
   - `set_minimized` is ignored (the protocol permits this).
   - `configure_bounds` is not sent (never camera-derived, EV-W06).
 - **More evidence needed:** no. T1: a client calls `set_maximized` after map and receives exactly one configure.
+
+---
+
+## Phase D Corrective Checkpoint 1R — dispositions of PD-F2-01 … PD-F2-17
+
+- **Falsification baseline (immutable):** `e8ec03a2ab36f315ae025723ec666b9ad278ac83`. The findings above are preserved unchanged.
+- **Status:** 1R corrections applied **uncommitted, for review**.
+- **Full chains** (sealed rule → counterexample → finding → replacement rule → INV → ADR → evidence): [audit/1R/CORRECTIONS_1R.md](audit/1R/CORRECTIONS_1R.md).
+- **Canonical wording:** FOUNDATION_ARCHITECTURE §C12.R1.
+- **Diff with provenance:** [audit/1R/INVARIANT_DIFF_1R.md](audit/1R/INVARIANT_DIFF_1R.md).
+
+| Finding | Level: baseline → 1R re-evaluation | Disposition | Replacement / destination | Evidence | Status |
+|---|---|---|---|---|---|
+| PD-F2-01 | A → A | A | INV-CAMERA-1/5: one-shot fit; per-action `Authorized` proof; no animation in Foundation 01 | ER-4 (probes 2d E0624, 2e E0277; tests), ER-5 R3 | **RESOLVED** |
+| PD-F2-02 | A → A | A | INV-INPUT-8 (ActiveElementFocus), **INV-INPUT-10 (new)** ProtocolSurfaceRoute with ordered preemption; W-SM-14/15 | ER-1 (7 PASS; NEG-1, NEG-2, OBS-1 fail as predicted) | **RESOLVED** |
+| PD-F2-03 | B → **A** (Core/protocol divergence) | A | INV-COORD-5 split state; surface-local lock point; INV-OUTPUT-1 | ER-2 | **RESOLVED** |
+| PD-F2-04 | B → **A** (divergence) | A | INV-INPUT-5 batch-end reconciliation, triggers, deferral | ER-2 | **RESOLVED** (T1: OB-3/OB-31) |
+| PD-F2-05 | B → **A** (mandatory protocol behaviour) | A | INV-INPUT-5 confinement clamp on the interaction output; no crossing | ER-5 R5 | **RESOLVED** (T1: OB-31) |
+| PD-F2-06 | B → B | A (algebra) + D (jitter) | INV-COORD-3 direct-manipulation algebra; jitter residual → OB-24 (rescoped) | ER-5 R1; ED-1 | algebra **RESOLVED**; jitter **OBLIGATION** |
+| PD-F2-07 | B → B | A | INV-SCALE-3/4 ScaleInteractionEpoch; T_settle provisional (OB-23) | ER-5 R2 | **RESOLVED** |
+| PD-F2-08 | C → C | A | INV-SCALE-2/5 text | ED-2 F3/F4 | **RESOLVED** |
+| PD-F2-09 | C → C | A | INV-SCALE-5 initial hint | ED-2 F8 | **RESOLVED** |
+| PD-F2-10 | C → **A** (unanswered `set_fullscreen`) | A | INV-PRES-1: answer every request; decline at once; timing; replacement | ER-3 | **RESOLVED** |
+| PD-F2-11 | C → C | B (+ orphaned-pan rule) | resolved by PD-F2-01; INV-OUTPUT-1 | ER-4 | **RESOLVED** |
+| PD-F2-12 | C → C | A | INV-COORD-2 adds R8 | ED-2 F7 | **RESOLVED** |
+| PD-F2-13 | C → C | C | OB-34: cross-output drag formula decision before interactive move | — | **OBLIGATION** |
+| PD-F2-14 | C → C | A (text) | INV-FRAME-6 `OutputsOff` | analysis | **RESOLVED** |
+| PD-F2-15 | C → C | C | OB-35: attention / `transient_for` lifecycle T1 | — | **OBLIGATION** |
+| PD-F2-16 | C → C | E (verified) + C | OB-33: restart on the same display via `-listenfd` | ER-6 | **OBLIGATION** |
+| PD-F2-17 | B → **A** (unanswered maximize) | A | **INV-PROTO-1 (new)** | ER-3 | **RESOLVED** |
+
+**Open Level-A findings after 1R: none.** **New D-F3 blockers: none.**
+
+Every authorization decision survived empirical testing:
+- PD-F2-01 one-shot fit: ER-4;
+- PD-F2-02 focus layering with protocol-valid preemption: ER-1, without new hidden state;
+- PD-F2-06 algebra: ER-5 R1;
+- PD-F2-03 constraint/output separation: ER-2;
+- PD-F2-07 epochs: ER-5 R2;
+- PD-F2-17 maximize: ER-3.
+
+Two empirical refinements were needed to make the decisions hold. Both are recorded, not forced:
+- **Nested grabs** must keep the pointer grab (W-SM-14).
+- **Constraint reconciliation** must be **deferred** during client-owned grab sequences. An explicit deactivate duplicates `unlocked` for persistent locks (ER-2 EXPLICIT; W-SM-4a).

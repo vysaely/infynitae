@@ -1,0 +1,223 @@
+xpopup_focus — smithay =0.7.0 PopupManager::grab_popup + PopupKeyboardGrab/PopupPointerGrab; lockstep
+
+=== NEG-1 grab active -> core focuses W2, NAIVE set_focus (sealed path)
+  -- client events before the focus change (popup open / grab):
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.leave W1
+       t=  11.0ms wl_keyboard.enter P keys={}
+       t=  11.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms P: xdg_popup.configure x=10 y=10 120x80
+       t=  11.0ms server: popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)
+  -- client events since the focus change:
+  core ActiveElementFocus=Some("W2") | Smithay keyboard focus=P | client logical focus=Some("P")
+  F-1 core==Smithay false | F-2 client==core false | F-3 no protocol-order violation true | F-4 single transition (enters=0) false | F-5 popup_done 0/1 false | F-6 no stuck key true
+  RESULT NEG-1 grab active -> core focuses W2, NAIVE set_focus (sealed path): FAIL
+
+=== NEG-2 grab active -> core focuses W2, POINTER-FIRST unset order
+  -- client events before the focus change (popup open / grab):
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.leave W1
+       t=  11.0ms wl_keyboard.enter P keys={}
+       t=  11.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms P: xdg_popup.configure x=10 y=10 120x80
+       t=  11.0ms server: popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)
+  -- client events since the focus change:
+       t=  12.0ms P: xdg_popup.popup_done
+       t=  12.0ms client-side: destroyed popup P
+       t=  12.0ms wl_keyboard.leave P (for a surface this client already destroyed: in-flight, legal)
+       t=  12.0ms wl_keyboard.enter W1 keys={}
+       t=  12.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  12.0ms wl_keyboard.leave W1
+       t=  12.0ms wl_keyboard.enter W2 keys={}
+       t=  12.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  core ActiveElementFocus=Some("W2") | Smithay keyboard focus=W2 | client logical focus=Some("W2")
+  F-1 core==Smithay true | F-2 client==core true | F-3 no protocol-order violation true | F-4 single transition (enters=2) false | F-5 popup_done 1/1 true | F-6 no stuck key true
+  RESULT NEG-2 grab active -> core focuses W2, POINTER-FIRST unset order: FAIL
+
+=== PF-1 grab active -> core focuses W2, ORDERED
+  -- client events before the focus change (popup open / grab):
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.leave W1
+       t=  11.0ms wl_keyboard.enter P keys={}
+       t=  11.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms P: xdg_popup.configure x=10 y=10 120x80
+       t=  11.0ms server: popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)
+  -- client events since the focus change:
+       t=  12.0ms P: xdg_popup.popup_done
+       t=  12.0ms client-side: destroyed popup P
+       t=  12.0ms wl_keyboard.leave P (for a surface this client already destroyed: in-flight, legal)
+       t=  12.0ms wl_keyboard.enter W2 keys={}
+       t=  12.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  core ActiveElementFocus=Some("W2") | Smithay keyboard focus=W2 | client logical focus=Some("W2")
+  F-1 core==Smithay true | F-2 client==core true | F-3 no protocol-order violation true | F-4 single transition (enters=1) true | F-5 popup_done 1/1 true | F-6 no stuck key true
+  RESULT PF-1 grab active -> core focuses W2, ORDERED: PASS
+
+=== PF-2 grab active -> core focus none, ORDERED
+  -- client events before the focus change (popup open / grab):
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.leave W1
+       t=  11.0ms wl_keyboard.enter P keys={}
+       t=  11.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms P: xdg_popup.configure x=10 y=10 120x80
+       t=  11.0ms server: popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)
+  -- client events since the focus change:
+       t=  12.0ms P: xdg_popup.popup_done
+       t=  12.0ms client-side: destroyed popup P
+       t=  12.0ms wl_keyboard.leave P (for a surface this client already destroyed: in-flight, legal)
+  core ActiveElementFocus=None | Smithay keyboard focus=none | client logical focus=None
+  F-1 core==Smithay true | F-2 client==core true | F-3 no protocol-order violation true | F-4 single transition (enters=0) true | F-5 popup_done 1/1 true | F-6 no stuck key true
+  RESULT PF-2 grab active -> core focus none, ORDERED: PASS
+
+=== PF-3 popup parent W1 destroyed by its client while the grab is active -> successor W2, ORDERED
+  -- client events before the focus change (popup open / grab):
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.leave W1
+       t=  11.0ms wl_keyboard.enter P keys={}
+       t=  11.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms P: xdg_popup.configure x=10 y=10 120x80
+       t=  11.0ms server: popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)
+  -- client events since the focus change:
+       t=  12.0ms client-side: destroyed popup P
+       t=  12.0ms wl_keyboard.enter W2 keys={}
+       t=  12.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  core ActiveElementFocus=Some("W2") | Smithay keyboard focus=W2 | client logical focus=Some("W2")
+  F-1 core==Smithay true | F-2 client==core true | F-3 no protocol-order violation true | F-4 single transition (enters=1) true | F-5 popup_done 0/0 true | F-6 no stuck key true
+  RESULT PF-3 popup parent W1 destroyed by its client while the grab is active -> successor W2, ORDERED: PASS
+
+=== PF-4 popup destroyed by the client in flight while core changes focus (destroy not yet dispatched), ORDERED
+  -- client events before the focus change (popup open / grab):
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.leave W1
+       t=  11.0ms wl_keyboard.enter P keys={}
+       t=  11.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms P: xdg_popup.configure x=10 y=10 120x80
+       t=  11.0ms server: popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)
+  -- client events since the focus change:
+       t=  12.0ms client-side: destroyed popup P
+       t=  12.0ms wl_keyboard.leave P (for a surface this client already destroyed: in-flight, legal)
+       t=  12.0ms wl_keyboard.enter W2 keys={}
+       t=  12.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  core ActiveElementFocus=Some("W2") | Smithay keyboard focus=W2 | client logical focus=Some("W2")
+  F-1 core==Smithay true | F-2 client==core true | F-3 no protocol-order violation true | F-4 single transition (enters=1) true | F-5 popup_done 0/0 true | F-6 no stuck key true
+  RESULT PF-4 popup destroyed by the client in flight while core changes focus (destroy not yet dispatched), ORDERED: PASS
+
+=== PF-5 popup destroyed and dispatched first (grab ended), then core focuses W2, ORDERED
+  -- client events before the focus change (popup open / grab):
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.leave W1
+       t=  11.0ms wl_keyboard.enter P keys={}
+       t=  11.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms P: xdg_popup.configure x=10 y=10 120x80
+       t=  11.0ms server: popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)
+  -- client events since the focus change:
+       t=  12.0ms client-side: destroyed popup P
+       t=  13.0ms wl_keyboard.enter W2 keys={}
+       t=  13.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  core ActiveElementFocus=Some("W2") | Smithay keyboard focus=W2 | client logical focus=Some("W2")
+  F-1 core==Smithay true | F-2 client==core true | F-3 no protocol-order violation true | F-4 single transition (enters=1) true | F-5 popup_done 0/0 true | F-6 no stuck key true
+  RESULT PF-5 popup destroyed and dispatched first (grab ended), then core focuses W2, ORDERED: PASS
+
+=== OBS-1 nested, grab REPLACES pointer grab (anvil order): P1 -> P2, key routing check, then core focuses W2, ORDERED
+  observation: after the nested grab a key is routed to Some("W1"); keyboard grab still installed: false
+  -- client events before the focus change (popup open / grab):
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.leave W1
+       t=  11.0ms wl_keyboard.enter P1 keys={}
+       t=  11.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms P1: xdg_popup.configure x=10 y=10 120x80
+       t=  12.0ms wl_keyboard.leave P1
+       t=  12.0ms wl_keyboard.enter P2 keys={}
+       t=  12.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  12.0ms wl_keyboard.leave P2
+       t=  12.0ms wl_keyboard.enter W1 keys={}
+       t=  12.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  12.0ms P2: xdg_popup.configure x=10 y=10 120x80
+       t=  13.0ms wl_keyboard.key 30 pressed
+       t=  14.0ms wl_keyboard.key 30 released
+       t=  11.0ms server: popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)
+       t=  12.0ms server: popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)
+  -- client events since the focus change:
+       t=  15.0ms P2: xdg_popup.popup_done
+       t=  15.0ms client-side: destroyed popup P2
+       t=  15.0ms P1: xdg_popup.popup_done
+       t=  15.0ms client-side: destroyed popup P1
+       t=  15.0ms wl_keyboard.leave W1
+       t=  15.0ms wl_keyboard.enter W2 keys={}
+       t=  15.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  core ActiveElementFocus=Some("W2") | Smithay keyboard focus=W2 | client logical focus=Some("W2")
+  F-1 core==Smithay true | F-2 client==core true | F-3 no protocol-order violation true | F-4 single transition (enters=1) true | F-5 popup_done 2/2 true | F-6 no stuck key true
+  scenario-specific check FAILED (see observation)
+  RESULT OBS-1 nested, grab REPLACES pointer grab (anvil order): P1 -> P2, key routing check, then core focuses W2, ORDERED: FAIL
+
+=== PF-6 nested, nested grab KEEPS the pointer grab: P1 -> P2, key routing check, then core focuses W2, ORDERED
+  observation: after the nested grab a key is routed to Some("P2"); keyboard grab still installed: true
+  -- client events before the focus change (popup open / grab):
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.leave W1
+       t=  11.0ms wl_keyboard.enter P1 keys={}
+       t=  11.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms P1: xdg_popup.configure x=10 y=10 120x80
+       t=  12.0ms wl_keyboard.leave P1
+       t=  12.0ms wl_keyboard.enter P2 keys={}
+       t=  12.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  12.0ms P2: xdg_popup.configure x=10 y=10 120x80
+       t=  13.0ms wl_keyboard.key 30 pressed
+       t=  14.0ms wl_keyboard.key 30 released
+       t=  11.0ms server: popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)
+       t=  12.0ms server: nested popup grab: existing PopupPointerGrab kept
+       t=  12.0ms server: popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)
+  -- client events since the focus change:
+       t=  15.0ms P2: xdg_popup.popup_done
+       t=  15.0ms client-side: destroyed popup P2
+       t=  15.0ms P1: xdg_popup.popup_done
+       t=  15.0ms client-side: destroyed popup P1
+       t=  15.0ms wl_keyboard.leave P2 (for a surface this client already destroyed: in-flight, legal)
+       t=  15.0ms wl_keyboard.enter W2 keys={}
+       t=  15.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  core ActiveElementFocus=Some("W2") | Smithay keyboard focus=W2 | client logical focus=Some("W2")
+  F-1 core==Smithay true | F-2 client==core true | F-3 no protocol-order violation true | F-4 single transition (enters=1) true | F-5 popup_done 2/2 true | F-6 no stuck key true
+  RESULT PF-6 nested, nested grab KEEPS the pointer grab: P1 -> P2, key routing check, then core focuses W2, ORDERED: PASS
+
+=== PF-7 client-owned key A held during the grab -> core focuses W2, ORDERED -> release A
+  -- client events before the focus change (popup open / grab):
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.leave W1
+       t=  11.0ms wl_keyboard.enter P keys={}
+       t=  11.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms P: xdg_popup.configure x=10 y=10 120x80
+       t=  12.0ms wl_keyboard.key 30 pressed
+       t=  11.0ms server: popup grab established (Smithay PopupKeyboardGrab + PopupPointerGrab)
+  -- client events since the focus change:
+       t=  13.0ms P: xdg_popup.popup_done
+       t=  13.0ms client-side: destroyed popup P
+       t=  13.0ms wl_keyboard.leave P (for a surface this client already destroyed: in-flight, legal)
+       t=  13.0ms wl_keyboard.enter W2 keys={30}
+       t=  13.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  14.0ms wl_keyboard.key 30 released
+  core ActiveElementFocus=Some("W2") | Smithay keyboard focus=W2 | client logical focus=Some("W2")
+  F-1 core==Smithay true | F-2 client==core true | F-3 no protocol-order violation true | F-4 single transition (enters=1) true | F-5 popup_done 1/1 true | F-6 no stuck key true
+  RESULT PF-7 client-owned key A held during the grab -> core focuses W2, ORDERED -> release A: PASS
+
+SUMMARY
+  NEG-1 naive                      FAIL (expected FAIL) 
+  NEG-2 pointer-first              FAIL (expected FAIL) 
+  PF-1 focus other element         PASS (expected PASS) 
+  PF-2 focus none                  PASS (expected PASS) 
+  PF-3 parent destroyed            PASS (expected PASS) 
+  PF-4 popup destroyed in flight   PASS (expected PASS) 
+  PF-5 popup destroyed first       PASS (expected PASS) 
+  OBS-1 nested, grab REPLACES pointer grab (anvil order) FAIL (expected FAIL) 
+  PF-6 nested, nested grab KEEPS the pointer grab PASS (expected PASS) 
+  PF-7 held key                    PASS (expected PASS) 
+
+ALL AS EXPECTED: true

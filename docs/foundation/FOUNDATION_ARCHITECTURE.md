@@ -1202,6 +1202,8 @@ Not kept as negative controls: things that would only inflate counts (e.g. "remo
 
 ## C12 — Canonical invariant registry
 
+> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`).
+
 **This table is authoritative.** Legacy identifiers map to it (C12.2). Where a rule was refined, the earlier wording is superseded and must not be cited as normative.
 
 Evidence class: P = protocol, S = Smithay source, E = experiment, M = executable model, D = decision.
@@ -1628,3 +1630,68 @@ Classes: A authoritative · P protocol · D derived · C cached · PO presentati
 | final contradiction audit without unresolved inconsistency | **yes** (AUD) |
 
 **PHASE C GATE: SATISFIED.** Stopped at the Phase C final review gate. Phase D has not begun.
+
+---
+---
+
+# §C12.R1 — Canonical registry amendments (Phase D corrective checkpoint 1R)
+
+Inputs:
+- the sealed registry C12 (`615b0ed`);
+- the Phase D falsification baseline `e8ec03a` (findings PD-F2-01…17, preserved in FOUNDATION_BLOCKERS.md).
+
+Provenance for every row (previous wording, trigger, reason, evidence, ADR, tests): [audit/1R/INVARIANT_DIFF_1R.md](audit/1R/INVARIANT_DIFF_1R.md). Corrections and dispositions: [audit/1R/CORRECTIONS_1R.md](audit/1R/CORRECTIONS_1R.md).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12. Every other C12 row is unchanged.** Registry size after 1R: 56.
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-CAMERA-1** | Camera state is mutated only inside `core::navigation`. Each mutation consumes a fresh `Authorized` proof, mintable only inside the port-carrying entry points (`physical_input(&mut InputPort)`, `shell_command(&mut ShellPort)`); the proof is not Clone, `!Send`, and consumed by value. Core retains no proof, mode, target or tracking state permitting a later mutation. No protocol event or client-originated change causes a camera mutation. Ports are unforgeable, `!Send`, bound to their Core, never stored in protocol state. Animation is not in Foundation 01; any later time-driven step must be an authorized action with its own proof. | core `navigation` | E+D | EC-1, EC-15, ER-4, ER-5 R3 | T0 probes incl. 2d/2e (OB-19) | PD-F2-01 |
+| **INV-CAMERA-5** | Viewport-fit is a one-shot authorized navigation action. It snapshots the element geometry at that instant, computes centre and zoom for the invoking output, performs one camera mutation, and terminates. It is not a mode, stores no target, and is never re-fitted by client changes. Restore is a separate authorized action using the camera value recorded at fit time. There is no isolation filter in Foundation 01. A fit never changes an element's size or anchor. | core `navigation` | E+D | ER-4, ER-5 R3 | T0 (spike tests), T1 | PD-F2-01/-11 |
+| **INV-COORD-2** | Rounding happens only at R1–R8: R7 = view-origin quantisation; R8 = inward rounding of a popup constraint target (ceiling at minimum edges, floor at maximum edges). F1–F7 are forbidden. | core | E+D | B1.4, C3.2, ED-2 F7 | T0 | PD-F2-12 |
+| **INV-COORD-3** | Direct-manipulation pan: `dP_canvas = dp_phys / (s_O · z_C)`; `C = C_start − Q16(Σ dp_phys / (s_O · z_C))`, with the sum in f64 from the gesture origin and quantised once per update (R2), never per event. Per-event terms are summed if `s_O` or `z_C` change within the gesture. Every gesture total follows the once-per-update rule. | core | E+M | B1 E2b, X-8, ER-5 R1 | T0; T4 (OB-21) | PD-F2-06 |
+| **INV-COORD-5** | Smithay's pointer global space is Canvas. The authoritative seat state is (a) **physical**: `(interaction output, OutputLogical p)`, and (b) **constraint**: `Option<{surface, kind lock/confine, lock point: SurfaceLocal}>`. A constraint never carries an output. The Canvas lock point is derived (`surface_origin + lock point`). Smithay's location is derived per dispatch. | core `PointerModel` | S+E | B2.5, X-8, ER-2 | T1 | PD-F2-03 |
+| **INV-INPUT-5** | A constraint is activated only when its element holds ActiveElementFocus, its surface has pointer focus, the pointer is inside the region, and no compositor pointer interaction is being acquired.<br><br>**Reconciliation** runs once at the end of every core batch in which any of these changed: the interaction output's view; the constrained surface's geometry or origin; the output set; ActiveElementFocus; the end of a compositor interaction; the end of a client-owned grab sequence.<br><br>Reconciliation is **deferred** while a compositor pointer interaction or a client-owned grab sequence is active. While deferred, core and Smithay keep the same constraint state, no absolute motion reaches a locked surface, and relative motion comes only from physical deltas.<br><br>A lock is kept only if its derived lock point is observable through the interaction output and its element holds ActiveElementFocus.<br><br>A confinement clamps the physical pointer half-open, in the interaction output's OutputLogical space, to the region's projection; Arrangement crossing is disabled; a pointer outside the region after a view change ends it; there is no warp.<br><br>Every end emits `unlocked`/`unconfined` exactly once. An explicit `deactivate` is used only when the delivered focus does not change in that batch; otherwise Smithay's `leave()` does it (W-SM-4a).<br><br>At most one true-position motion per batch; no replayed or synthetic motion. Output removal relocates the physical pointer at once (Arrangement-nearest, half-open). Destruction ends constraints through the protocol path. | core + adapter | E+M | B11.4, X-8, ER-2, ER-5 R5 | T1 (OB-3, OB-31) | PD-F2-02/-03/-04/-05 |
+| **INV-INPUT-8** | **ActiveElementFocus** (which element, or none, owns desktop keyboard focus) has one writer, the core FocusModel. It changes only by explicit action (click-to-focus, focus bindings, shell focus command, activation grant) or target loss. Camera, visibility, pointer motion and protocol routing never change it. Delivered keyboard routing is always within the focused element's tree (INV-INPUT-10), or none. | core `FocusModel` | D+E | D-B10-KBD, ER-1 | T0, T1 (OB-30) | PD-F2-02 |
+| **INV-INPUT-10** (new) | **ProtocolSurfaceRoute** (Smithay popup grabs and their root restore) is adapter state, subordinate to ActiveElementFocus. It routes only within the focused element's tree and never changes ActiveElementFocus.<br><br>A core focus change to another element or to none, while a grab is active, is applied in one batch in this order:<br>1. `PopupGrab::ungrab(All)`: `popup_done` topmost first, kick first if the client is unobserved;<br>2. keyboard `unset_grab`;<br>3. pointer `unset_grab`;<br>4. `set_focus(target)`.<br><br>A nested grab keeps the installed popup pointer grab (W-SM-14). A grab whose root is not the focused element, or that fails the W-SM-7 precondition, is refused. | adapter (Smithay grabs), core decides | S+E | ER-1, W-SM-14/15 | T1 (OB-30) | PD-F2-02 |
+| **INV-SCALE-2** | Every emitted hint is a rung of the ladder in force at emission. The ladder contains every connected output scale ≤ H_max(E), the integers, and the geometric fill. `H_max(E) = min(H_cfg, D_max / s_max(E))`, where `s_max` is the largest logical side over all surfaces of E's tree. `D_max` is queried from the renderer and re-queried on renderer recreation. If E's size makes h exceed the bound, h is lowered immediately (P7). A held or epoch-deferred hint may be off-ladder until the next permitted evaluation. | core `ScaleState` | E+M | EC-16/18, ED-2 F3/F4 | T0; T1 (OB-13) | PD-F2-08 |
+| **INV-SCALE-3** | **ScaleInteractionEpoch.** The camera changes of one logical interaction form one epoch: continuous pan or pinch; a run of discrete pan or zoom steps; a bounded shell navigation stream.<br><br>**During an epoch:** decreases are suppressed; increases happen only at rung crossings and only in the epoch's direction (P7 fixes it down); client responses cannot reverse it; individual camera updates are not each a hint change.<br><br>**The epoch ends** at an explicit end, at a settlement event (output add/remove/configuration), or after a **settlement timeout** with no further step (for inputs without an explicit end). Pointer motion does not end it.<br><br>At settlement, h is set to the target of the final requirement, evaluated once. The timeout's existence is architectural; its value is provisional (C14.5). Atomic camera actions are one-step epochs. | core | M | ER-5 R2 | T0 (+ NEG); T1/T3 (OB-23) | PD-F2-07 |
+| **INV-SCALE-4** | (a) No hint change per raw camera event. (b) Changes happen only at rung crossings, at settlement, or by P7. (c) Per epoch: at most rungs crossed + 1 settlement + one P7 forced decrease per non-client stimulus. (d) No oscillation: outside an epoch, client-caused re-evaluations move h only in the direction of the last non-client stimulus (SC-E); inside an epoch, INV-SCALE-3 applies. | core | M+E | EC-17/19/22, ER-5 R2 | T0 (+ NEG); T1 (OB-28) | PD-F2-07 |
+| **INV-SCALE-5** | At zoom 1 with no zoom interaction, and where the maximum observing output scale ≤ H_max(E), the policy equals Phase B MaxGesture. Integer hint = ⌈h⌉; emission only on change; unobserved elements hold h; evaluation once per core batch after all its updates. **Initial hint:** `h := t(ρ_pred)` over the presentations whose view intersects the placed window-geometry rect (or the anchor point when the size is 0×0); if none, `t(max connected output scale)`. | core | M | P4, S7, S8, AUD-25, ED-2 F8 | T0; T1 | PD-F2-08/-09 |
+| **INV-FRAME-6** | `suspended` is set only from semantic reasons {SessionLocked, **OutputsOff**, Parked}, each defined without reference to camera-derived membership; never from camera visibility. | core | E+D | D-B9-SUSPEND, SC4 | T1 | PD-F2-14 |
+| **INV-PRES-1** | Protocol fullscreen is an output presentation state.<br><br>**Every `set_fullscreen`/`unset_fullscreen` is answered with exactly one configure.** A request is granted only if W holds ActiveElementFocus, or before W's first map. Otherwise it is declined at once (configure without `fullscreen`, nothing stored).<br><br>The presentation starts at the grant decision and ends at the exit decision (unset, unmap, output removal, replacement). A newer grant replaces an older one on the same output; the older element gets a configure with its saved size. Focus loss does not end fullscreen. The output choice runs at grant. Fullscreen never touches cameras or anchors; other cameras observe W at its actual size. | core `protocol` + output model | P+D+E | EC-13/14, ER-3 | T1 (OB-22, OB-32) | PD-F2-10 |
+| **INV-PROTO-1** (new) | xdg_toplevel state policy (Foundation 01). `set_maximized`/`unset_maximized` are each answered with exactly one configure that does not grant `maximized`; they never invoke fit, move a camera or change the Stage (adapter overrides Smithay's default, W-SM-13). A pre-configure request is recorded and ignored. `set_minimized` is ignored. `activated` holds exactly when the element holds ActiveElementFocus and changes only on its transitions (a kick trigger if unobserved). No `configure_bounds` in Foundation 01. | core `protocol` + adapter | P+E | ER-3 | T1 (OB-32) | PD-F2-17 |
+| **INV-OUTPUT-1** | Output removal: membership `leave` before the global is destroyed; camera unbound and kept; fullscreen presentation dropped with the INV-PRES-1 configure; interactions orphaned (ownership kept until release, **no camera mutation**); physical pointer relocated at once to the Arrangement-nearest point of a surviving output (half-open); constraints reconciled per INV-INPUT-5 (deferred under a client grab); the removal is a ScaleInteractionEpoch settlement event. | core output manager | D+E | B7.2, C4.6, ER-2 | T1 (OB-3, OB-31) | PD-F2-03/-11 |
+
+## C12.R1.1 Sealed text superseded (must not be cited as normative)
+
+| Sealed text | Superseded by |
+|---|---|
+| C5.1: "W changes size while fitted: the zoom is re-fitted"; isolation flag; restore on unmap; the `ViewportFit{O}` mode | INV-CAMERA-5 (one-shot) |
+| C5.2: "Otherwise record it and decide when W next gains focus" | INV-PRES-1 (decline at once with a configure) |
+| C7.3: "A long-running effect (animated navigation) is a compositor interaction"; AUD-6 "it continues to its end" | INV-CAMERA-1 (no animation in Foundation 01; shell navigation is atomic) |
+| CP3A-5 cycle "h → client size → viewport-fit re-fit → zoom → ρ → h" | removed (no re-fit) |
+| C14.4 SC-D (incl. "ends at … pointer motion", decrease-settle delay) | INV-SCALE-3 ScaleInteractionEpoch |
+| B11.1 / C4 `camera = start − Q(Σ)` | INV-COORD-3 |
+| B11.4 / C4.3: reconciliation only at pan end; "focused" undefined; W-SM-4a decided on core's hit-test | INV-INPUT-5 |
+| INV-COORD-5 `Locked(SurfaceKey, Canvas lock point)` | INV-COORD-5 (split state) |
+| C2.1/C2.2/C-AUTH rows: `ViewportFit`, `PointerModel`, keyboard focus "Smithay = applied copy" | audit/1R/MATRICES_1R.md (D3 deltas) |
+| C4.5 "keyboard focus" | ActiveElementFocus (INV-INPUT-8) and ProtocolSurfaceRoute (INV-INPUT-10) |
+| AUD-12/13 wording referring to SC-D | INV-SCALE-3/4 |
+| C14.5 row "SC-D decrease-settle delay: off" | row "T_settle (ScaleInteractionEpoch settlement timeout): candidate 300 ms; allowed: finite and greater than the discrete-input repeat interval; tuned by OB-23" |
+
+## C12.R1.2 Smithay quirks added
+
+- **W-SM-14:** replacing a popup pointer grab for a nested grab tears the keyboard grab down. Workaround: keep the installed pointer grab.
+- **W-SM-15:** pointer-first popup-grab teardown refocuses the root transiently. Workaround: the INV-INPUT-10 order.
+
+Evidence: ER-1. Both are adapter-local (INV-ARCH-3).
+
+## C12.R1.3 Obligations
+
+- OB-19 (probes 2d/2e) extended.
+- OB-23, OB-24, OB-28 rescoped.
+- OB-30 … OB-35 added.
+
+Details: audit/1R/CORRECTIONS_1R.md § Obligation changes. OB-19 remains the unconditional Phase F entry gate.
+

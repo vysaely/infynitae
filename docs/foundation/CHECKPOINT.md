@@ -1,6 +1,6 @@
 # Checkpoint
 
-CURRENT_PHASE: **D — checkpoint 1 (D1–D6) deliverables complete, UNCOMMITTED, stopped at the Phase D checkpoint 1 review gate.** Two Level A D-F2 findings (PD-F2-01, PD-F2-02) block Phase D checkpoint 2 until disposed of. Phase C: COMPLETE and SEALED (`615b0ed2f3631b698b0c54783c28f696ef4ff34a`).
+CURRENT_PHASE: **D: corrective checkpoint 1R complete, UNCOMMITTED, stopped at the Checkpoint 1R review gate.** Phase D checkpoint 1 is committed as the immutable falsification baseline **`e8ec03a2ab36f315ae025723ec666b9ad278ac83`**. No Level-A finding is open after 1R. D7–D9 have not begun. Phase C: COMPLETE and SEALED (`615b0ed2f3631b698b0c54783c28f696ef4ff34a`).
 
 Date: 2026-10-04
 
@@ -12,7 +12,30 @@ Date: 2026-10-04
 - **Phase C checkpoint 3A:** `795800937a1e50e56587cd4080a73ce27d8a8b01` (hash recorded in `fd9a80c`)
 - **Phase C seal (checkpoint 3B):** `615b0ed2f3631b698b0c54783c28f696ef4ff34a`
 
-## PHASE D CHECKPOINT 1 (uncommitted)
+## PHASE D CORRECTIVE CHECKPOINT 1R (uncommitted)
+- **Baseline:** checkpoint 1 committed as `e8ec03a2ab36f315ae025723ec666b9ad278ac83` ("preserve Phase D falsification baseline"). This hash is recorded here and in audit/README.md, audit/1R/* and FOUNDATION_BLOCKERS.md.
+- **Dispositions:** all 17 PD-F2 findings disposed of (FOUNDATION_BLOCKERS.md § Phase D Corrective Checkpoint 1R; audit/1R/CORRECTIONS_1R.md).
+  - 13 resolved by architecture correction (A);
+  - 1 resolved by another correction (B, PD-F2-11);
+  - 3 now obligations: PD-F2-13 → OB-34, PD-F2-15 → OB-35, PD-F2-16 → OB-33;
+  - PD-F2-06 jitter residual → OB-24 rescoped.
+- **Re-evaluation:** 5 findings raised to Level A (PD-F2-03, -04, -05, -10, -17); all resolved.
+- **Registry:** amended under provenance in FOUNDATION_ARCHITECTURE §C12.R1 (sealed C12 table unaltered). 14 invariants amended, 2 new (INV-INPUT-10, INV-PROTO-1); 56 entries.
+- **Evidence:**
+  - ER-1 xpopup_focus;
+  - ER-2 xlock_grab;
+  - ER-3 xmaximize (maximize and fullscreen);
+  - ER-4 authority spike probes 2d/2e;
+  - ER-5 d5_model_1r;
+  - ER-6 satellite `-listenfd`;
+  - ER-7 regression re-run.
+  - Every experiment ran with its negative control, all as expected.
+- **New Smithay quirks:** W-SM-14 and W-SM-15. **New ADR:** ADR-14.
+- **Provisional constant:** T_settle candidate 300 ms (OB-23).
+- **Explicit residual (NOT resolved, NOT validated):** the ±1 physical-pixel shape variation at lattice-reference switches during zoomed pan (ED-1, ED-2 F1). It is not a rendering guarantee. OB-24 keeps it open as a **pre-implementation decision for zoomed navigation** (candidate: gesture-pinned reference; visual acceptance T3/T4).
+- **NEXT:** user review of 1R; commit only on authorisation; D7–D9 not begun.
+
+## PHASE D CHECKPOINT 1 (committed as e8ec03a)
 - Input baseline verified (audit/README.md §1): seal resolves; `a3ae907` records it; tree was clean; 54-entry C12 registry normative; BLOCKERS pointer present; OB-19 unconditional; T3–T5/UP/TUNE open.
 - D1 threat model; D2 22 state machines; D3 authority matrix (40 items, 6 searches); D4 coordinate matrix (16 domains, 26 conversions); D5 four-epoch audit; D6 FOUNDATION_DECISIONS.md (ADR-01…13).
 - Findings: 17 D-F2 (A: 2, B: 6, C: 9), recorded in FOUNDATION_BLOCKERS.md § Phase D Architectural Findings; 9 D-F1; 9 D-F0; no D-F3. Registry NOT edited.
