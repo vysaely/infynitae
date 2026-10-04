@@ -829,7 +829,7 @@ Classes: **R** reject operation · **L** recover locally · **D** reconstruct de
 ---
 ---
 
-# Phase C checkpoint 3A: scale/zoom, hit-testing, obligation registry
+# Phase C checkpoint 3A: scale/zoom, hit-testing, obligation registry (accepted, commit `795800937a1e50e56587cd4080a73ce27d8a8b01`)
 
 Checkpoint 2 accepted: `fc2dd68f843b1eb05828f4116f94e8bab4f478da`.
 

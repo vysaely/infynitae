@@ -9,7 +9,7 @@ Date: 2026-10-04
 - Phase B seal: `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`
 - Phase C checkpoint 1: `d596416cf57877116e9cfbc8cf6c6fe25c001c67`
 - **Phase C checkpoint 2 (C5–C10):** `fc2dd68f843b1eb05828f4116f94e8bab4f478da` (hash recorded in `2b3184a`)
-- Checkpoint 3A work below is **uncommitted** on top of `2b3184a`.
+- **Phase C checkpoint 3A:** `795800937a1e50e56587cd4080a73ce27d8a8b01`
 
 ## COMPLETED_WORK (3A)
 - CP2-Q1 resolved (no fullscreen override) and CP2-R1 refined into the unified scale model D-CP3A-SCALE:
