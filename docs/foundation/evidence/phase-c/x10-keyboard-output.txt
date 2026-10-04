@@ -1,0 +1,232 @@
+$ ./target/release/x10   (experiments/b8-harness; smithay =0.7.0 seat keyboard; lockstep)
+# 2026-10-04T14:09:04+03:00
+X-10 keyboard/modifier ownership — smithay =0.7.0 seat keyboard (default XKB: us/pc105), lockstep
+bindings (configuration data): Super+Enter=FocusNext, Super+B=Noop, Esc=Cancel, Shift=Noop (binding on a modifier key)
+
+=== K-1 ordinary client-owned press/release
+  focus -> Some("W1")                | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  A down                             | physical ["A"]                  owned []         | seat XKB pressed ["A"]                  mods dep=0x00 | client focus W1    keys ["A"]            dep=0x00 | ok
+  A up                               | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  -- protocol events seen by the client:
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.key 30 pressed
+       t=  12.0ms wl_keyboard.key 30 released
+  -- intake/focus decisions:
+       t=  10.0ms focus model: keyboard focus -> Some("W1") (initial focus W1)
+  RESULT K-1 ordinary client-owned press/release: PASS  (KV-4 end state: client keys {} dep=0x0 lat=0x0)
+
+=== K-2 modifier held while another client key is pressed
+  focus -> Some("W1")                | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  Super down                         | physical ["Super"]              owned []         | seat XKB pressed ["Super"]              mods dep=0x40 | client focus W1    keys ["Super"]        dep=0x40 | ok
+  A down                             | physical ["A", "Super"]         owned []         | seat XKB pressed ["A", "Super"]         mods dep=0x40 | client focus W1    keys ["A", "Super"]   dep=0x40 | ok
+  A up                               | physical ["Super"]              owned []         | seat XKB pressed ["Super"]              mods dep=0x40 | client focus W1    keys ["Super"]        dep=0x40 | ok
+  Super up                           | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  -- protocol events seen by the client:
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.key 125 pressed
+       t=  11.0ms wl_keyboard.modifiers dep=0x40 lat=0x0 lock=0x0
+       t=  12.0ms wl_keyboard.key 30 pressed
+       t=  13.0ms wl_keyboard.key 30 released
+       t=  14.0ms wl_keyboard.key 125 released
+       t=  14.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  -- intake/focus decisions:
+       t=  10.0ms focus model: keyboard focus -> Some("W1") (initial focus W1)
+  RESULT K-2 modifier held while another client key is pressed: PASS  (KV-4 end state: client keys {} dep=0x0 lat=0x0)
+
+=== K-3 compositor binding (Super+B) while modifier held
+  focus -> Some("W1")                | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  Super down                         | physical ["Super"]              owned []         | seat XKB pressed ["Super"]              mods dep=0x40 | client focus W1    keys ["Super"]        dep=0x40 | ok
+  B down                             | physical ["B", "Super"]         owned ["B"]      | seat XKB pressed ["B", "Super"]         mods dep=0x40 | client focus W1    keys ["Super"]        dep=0x40 | ok
+  B up                               | physical ["Super"]              owned []         | seat XKB pressed ["Super"]              mods dep=0x40 | client focus W1    keys ["Super"]        dep=0x40 | ok
+  Super up                           | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  -- protocol events seen by the client:
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.key 125 pressed
+       t=  11.0ms wl_keyboard.modifiers dep=0x40 lat=0x0 lock=0x0
+       t=  14.0ms wl_keyboard.key 125 released
+       t=  14.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  -- intake/focus decisions:
+       t=  10.0ms focus model: keyboard focus -> Some("W1") (initial focus W1)
+       t=  12.0ms intake: press 48 -> binding Noop: CONSUMED (compositor-owned)
+       t=  13.0ms intake: release 48: CONSUMED (compositor-owned press)
+  RESULT K-3 compositor binding (Super+B) while modifier held: PASS  (KV-4 end state: client keys {} dep=0x0 lat=0x0)
+
+=== K-4 focus transition (binding Super+Enter) while a modifier is held
+  focus -> Some("W1")                | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  Super down                         | physical ["Super"]              owned []         | seat XKB pressed ["Super"]              mods dep=0x40 | client focus W1    keys ["Super"]        dep=0x40 | ok
+  Enter down                         | physical ["Enter", "Super"]     owned ["Enter"]  | seat XKB pressed ["Enter", "Super"]     mods dep=0x40 | client focus W1    keys ["Super"]        dep=0x40 | ok
+  focus -> Some("W2")                | physical ["Enter", "Super"]     owned ["Enter"]  | seat XKB pressed ["Enter", "Super"]     mods dep=0x40 | client focus W2    keys ["Super"]        dep=0x40 | ok
+  Enter up                           | physical ["Super"]              owned []         | seat XKB pressed ["Super"]              mods dep=0x40 | client focus W2    keys ["Super"]        dep=0x40 | ok
+  Super up                           | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W2    keys []               dep=0x00 | ok
+  -- protocol events seen by the client:
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.key 125 pressed
+       t=  11.0ms wl_keyboard.modifiers dep=0x40 lat=0x0 lock=0x0
+       t=  13.0ms wl_keyboard.leave W1
+       t=  13.0ms wl_keyboard.enter W2 keys={125}
+       t=  13.0ms wl_keyboard.modifiers dep=0x40 lat=0x0 lock=0x0
+       t=  15.0ms wl_keyboard.key 125 released
+       t=  15.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  -- intake/focus decisions:
+       t=  10.0ms focus model: keyboard focus -> Some("W1") (initial focus W1)
+       t=  12.0ms intake: press 28 -> binding FocusNext: CONSUMED (compositor-owned)
+       t=  13.0ms focus model: keyboard focus -> Some("W2") (binding FocusNext)
+       t=  14.0ms intake: release 28: CONSUMED (compositor-owned press)
+  RESULT K-4 focus transition (binding Super+Enter) while a modifier is held: PASS  (KV-4 end state: client keys {} dep=0x0 lat=0x0)
+
+=== K-5 focus transition while a non-modifier client key is held
+  focus -> Some("W1")                | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  A down                             | physical ["A"]                  owned []         | seat XKB pressed ["A"]                  mods dep=0x00 | client focus W1    keys ["A"]            dep=0x00 | ok
+  focus -> Some("W2")                | physical ["A"]                  owned []         | seat XKB pressed ["A"]                  mods dep=0x00 | client focus W2    keys ["A"]            dep=0x00 | ok
+  A up                               | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W2    keys []               dep=0x00 | ok
+  -- protocol events seen by the client:
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.key 30 pressed
+       t=  12.0ms wl_keyboard.leave W1
+       t=  12.0ms wl_keyboard.enter W2 keys={30}
+       t=  12.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  13.0ms wl_keyboard.key 30 released
+  -- intake/focus decisions:
+       t=  10.0ms focus model: keyboard focus -> Some("W1") (initial focus W1)
+       t=  12.0ms focus model: keyboard focus -> Some("W2") (shell focus command)
+  RESULT K-5 focus transition while a non-modifier client key is held: PASS  (KV-4 end state: client keys {} dep=0x0 lat=0x0)
+
+=== K-6 focused client destroyed while Shift+A are held
+  focus -> Some("W1")                | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  focus -> Some("W2")                | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W2    keys []               dep=0x00 | ok
+  Shift down                         | physical ["Shift"]              owned []         | seat XKB pressed ["Shift"]              mods dep=0x01 | client focus W2    keys ["Shift"]        dep=0x01 | ok
+  A down                             | physical ["A", "Shift"]         owned []         | seat XKB pressed ["A", "Shift"]         mods dep=0x01 | client focus W2    keys ["A", "Shift"]   dep=0x01 | ok
+  W2 destroyed                       | physical ["A", "Shift"]         owned []         | seat XKB pressed ["A", "Shift"]         mods dep=0x01 | client focus -     keys ["A", "Shift"]   dep=0x01 | ok
+  focus -> Some("W1")                | physical ["A", "Shift"]         owned []         | seat XKB pressed ["A", "Shift"]         mods dep=0x01 | client focus W1    keys ["A", "Shift"]   dep=0x01 | ok
+  A up                               | physical ["Shift"]              owned []         | seat XKB pressed ["Shift"]              mods dep=0x01 | client focus W1    keys ["Shift"]        dep=0x01 | ok
+  Shift up                           | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  -- protocol events seen by the client:
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.leave W1
+       t=  11.0ms wl_keyboard.enter W2 keys={}
+       t=  11.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  12.0ms wl_keyboard.key 42 pressed
+       t=  12.0ms wl_keyboard.modifiers dep=0x1 lat=0x0 lock=0x0
+       t=  13.0ms wl_keyboard.key 30 pressed
+       t=  14.0ms client-side: destroyed its keyboard-active surface W2 -> logical active surface = null (implicit; no leave is deliverable)
+       t=  15.0ms wl_keyboard.enter W1 keys={30, 42}
+       t=  15.0ms wl_keyboard.modifiers dep=0x1 lat=0x0 lock=0x0
+       t=  16.0ms wl_keyboard.key 30 released
+       t=  17.0ms wl_keyboard.key 42 released
+       t=  17.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  -- intake/focus decisions:
+       t=  10.0ms focus model: keyboard focus -> Some("W1") (initial focus W1)
+       t=  11.0ms focus model: keyboard focus -> Some("W2") (focus W2)
+       t=  12.0ms intake: press 42 -> binding Noop on a MODIFIER key: observe mode, FORWARDED (K3)
+       t=  15.0ms focus model: keyboard focus -> Some("W1") (successor after target loss)
+  RESULT K-6 focused client destroyed while Shift+A are held: PASS  (KV-4 end state: client keys {} dep=0x0 lat=0x0)
+
+=== K-7 interaction cancelled while compositor-owned keys are held; focus changes meanwhile
+  focus -> Some("W1")                | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  Super down                         | physical ["Super"]              owned []         | seat XKB pressed ["Super"]              mods dep=0x40 | client focus W1    keys ["Super"]        dep=0x40 | ok
+  B down                             | physical ["B", "Super"]         owned ["B"]      | seat XKB pressed ["B", "Super"]         mods dep=0x40 | client focus W1    keys ["Super"]        dep=0x40 | ok
+  Esc down                           | physical ["Esc", "B", "Super"]  owned ["Esc", "B"] | seat XKB pressed ["Esc", "B", "Super"]  mods dep=0x40 | client focus W1    keys ["Super"]        dep=0x40 | ok
+  Enter down                         | physical ["Esc", "Enter", "B", "Super"] owned ["Esc", "Enter", "B"] | seat XKB pressed ["Esc", "Enter", "B", "Super"] mods dep=0x40 | client focus W1    keys ["Super"]        dep=0x40 | ok
+  focus -> Some("W2")                | physical ["Esc", "Enter", "B", "Super"] owned ["Esc", "Enter", "B"] | seat XKB pressed ["Esc", "Enter", "B", "Super"] mods dep=0x40 | client focus W2    keys ["Super"]        dep=0x40 | ok
+  Enter up                           | physical ["Esc", "B", "Super"]  owned ["Esc", "B"] | seat XKB pressed ["Esc", "B", "Super"]  mods dep=0x40 | client focus W2    keys ["Super"]        dep=0x40 | ok
+  B up                               | physical ["Esc", "Super"]       owned ["Esc"]    | seat XKB pressed ["Esc", "Super"]       mods dep=0x40 | client focus W2    keys ["Super"]        dep=0x40 | ok
+  Esc up                             | physical ["Super"]              owned []         | seat XKB pressed ["Super"]              mods dep=0x40 | client focus W2    keys ["Super"]        dep=0x40 | ok
+  Super up                           | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W2    keys []               dep=0x00 | ok
+  -- protocol events seen by the client:
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.key 125 pressed
+       t=  11.0ms wl_keyboard.modifiers dep=0x40 lat=0x0 lock=0x0
+       t=  15.0ms wl_keyboard.leave W1
+       t=  15.0ms wl_keyboard.enter W2 keys={125}
+       t=  15.0ms wl_keyboard.modifiers dep=0x40 lat=0x0 lock=0x0
+       t=  19.0ms wl_keyboard.key 125 released
+       t=  19.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  -- intake/focus decisions:
+       t=  10.0ms focus model: keyboard focus -> Some("W1") (initial focus W1)
+       t=  12.0ms intake: press 48 -> binding Noop: CONSUMED (compositor-owned)
+       t=  13.0ms intake: press 1 -> binding Cancel: CONSUMED (compositor-owned)
+       t=  14.0ms interaction: CANCELLED (compositor-owned keys stay owned; no key events synthesized)
+       t=  14.0ms intake: press 28 -> binding FocusNext: CONSUMED (compositor-owned)
+       t=  15.0ms focus model: keyboard focus -> Some("W2") (binding FocusNext)
+       t=  16.0ms intake: release 28: CONSUMED (compositor-owned press)
+       t=  17.0ms intake: release 48: CONSUMED (compositor-owned press)
+       t=  18.0ms intake: release 1: CONSUMED (compositor-owned press)
+  RESULT K-7 interaction cancelled while compositor-owned keys are held; focus changes meanwhile: PASS  (KV-4 end state: client keys {} dep=0x0 lat=0x0)
+
+=== K-8 binding on a MODIFIER key (Shift) with K3: observe mode; focus change while held
+  focus -> Some("W1")                | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  Shift down                         | physical ["Shift"]              owned []         | seat XKB pressed ["Shift"]              mods dep=0x01 | client focus W1    keys ["Shift"]        dep=0x01 | ok
+  focus -> Some("W2")                | physical ["Shift"]              owned []         | seat XKB pressed ["Shift"]              mods dep=0x01 | client focus W2    keys ["Shift"]        dep=0x01 | ok
+  Shift up                           | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W2    keys []               dep=0x00 | ok
+  -- protocol events seen by the client:
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.key 42 pressed
+       t=  11.0ms wl_keyboard.modifiers dep=0x1 lat=0x0 lock=0x0
+       t=  12.0ms wl_keyboard.leave W1
+       t=  12.0ms wl_keyboard.enter W2 keys={42}
+       t=  12.0ms wl_keyboard.modifiers dep=0x1 lat=0x0 lock=0x0
+       t=  13.0ms wl_keyboard.key 42 released
+       t=  13.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  -- intake/focus decisions:
+       t=  10.0ms focus model: keyboard focus -> Some("W1") (initial focus W1)
+       t=  11.0ms intake: press 42 -> binding Noop on a MODIFIER key: observe mode, FORWARDED (K3)
+       t=  12.0ms focus model: keyboard focus -> Some("W2") (shell focus command)
+  RESULT K-8 binding on a MODIFIER key (Shift) with K3: observe mode; focus change while held: PASS  (KV-4 end state: client keys {} dep=0x0 lat=0x0)
+
+=== K-9 keyboard focus lost (no target) while keys are held, then regained
+  focus -> Some("W1")                | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  Shift down                         | physical ["Shift"]              owned []         | seat XKB pressed ["Shift"]              mods dep=0x01 | client focus W1    keys ["Shift"]        dep=0x01 | ok
+  A down                             | physical ["A", "Shift"]         owned []         | seat XKB pressed ["A", "Shift"]         mods dep=0x01 | client focus W1    keys ["A", "Shift"]   dep=0x01 | ok
+  focus -> None                      | physical ["A", "Shift"]         owned []         | seat XKB pressed ["A", "Shift"]         mods dep=0x01 | client focus -     keys []               dep=0x00 | ok
+  A up                               | physical ["Shift"]              owned []         | seat XKB pressed ["Shift"]              mods dep=0x01 | client focus -     keys []               dep=0x00 | ok
+  focus -> Some("W2")                | physical ["Shift"]              owned []         | seat XKB pressed ["Shift"]              mods dep=0x01 | client focus W2    keys ["Shift"]        dep=0x01 | ok
+  Shift up                           | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W2    keys []               dep=0x00 | ok
+  -- protocol events seen by the client:
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  11.0ms wl_keyboard.key 42 pressed
+       t=  11.0ms wl_keyboard.modifiers dep=0x1 lat=0x0 lock=0x0
+       t=  12.0ms wl_keyboard.key 30 pressed
+       t=  13.0ms wl_keyboard.leave W1
+       t=  15.0ms wl_keyboard.enter W2 keys={42}
+       t=  15.0ms wl_keyboard.modifiers dep=0x1 lat=0x0 lock=0x0
+       t=  16.0ms wl_keyboard.key 42 released
+       t=  16.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+  -- intake/focus decisions:
+       t=  10.0ms focus model: keyboard focus -> Some("W1") (initial focus W1)
+       t=  11.0ms intake: press 42 -> binding Noop on a MODIFIER key: observe mode, FORWARDED (K3)
+       t=  13.0ms focus model: keyboard focus -> None (focus loss (e.g. focused element unmapped, no successor))
+       t=  15.0ms focus model: keyboard focus -> Some("W2") (focus regained)
+  RESULT K-9 keyboard focus lost (no target) while keys are held, then regained: PASS  (KV-4 end state: client keys {} dep=0x0 lat=0x0)
+
+--- NEGATIVE CONTROL: the same as K-8 with K3 DISABLED (modifier binding intercepted). Expected to FAIL: this is the hazard K3 exists to prevent.
+=== NEG K-8 without K3
+  focus -> Some("W1")                | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W1    keys []               dep=0x00 | ok
+  Shift down                         | physical ["Shift"]              owned ["Shift"]  | seat XKB pressed ["Shift"]              mods dep=0x01 | client focus W1    keys []               dep=0x00 | FAIL KV-3 client mods dep=0x0 lat=0x0 lock=0x0 != seat dep=0x1 lat=0x0 lock=0x0
+  focus -> Some("W2")                | physical ["Shift"]              owned ["Shift"]  | seat XKB pressed ["Shift"]              mods dep=0x01 | client focus W2    keys []               dep=0x01 | ok
+  Shift up                           | physical []                     owned []         | seat XKB pressed []                     mods dep=0x00 | client focus W2    keys []               dep=0x01 | FAIL KV-3 client mods dep=0x1 lat=0x0 lock=0x0 != seat dep=0x0 lat=0x0 lock=0x0
+  -- protocol events seen by the client:
+       t=  10.0ms wl_keyboard.enter W1 keys={}
+       t=  10.0ms wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0
+       t=  12.0ms wl_keyboard.leave W1
+       t=  12.0ms wl_keyboard.enter W2 keys={}
+       t=  12.0ms wl_keyboard.modifiers dep=0x1 lat=0x0 lock=0x0
+  -- intake/focus decisions:
+       t=  10.0ms focus model: keyboard focus -> Some("W1") (initial focus W1)
+       t=  11.0ms intake: press 42 -> binding Noop: CONSUMED (compositor-owned)
+       t=  12.0ms focus model: keyboard focus -> Some("W2") (shell focus command)
+       t=  13.0ms intake: release 42: CONSUMED (compositor-owned press)
+  RESULT NEG K-8 without K3: FAIL  (KV-4 end state: client keys {} dep=0x1 lat=0x0)
+
+NEGATIVE CONTROL outcome: FAIL (as expected) (expected FAIL)
+
+NOT REPRESENTED: output removal (K8: keyboard focus is output-independent; nothing to observe in this harness).
+ALL K3-ENFORCED SCENARIOS: PASS

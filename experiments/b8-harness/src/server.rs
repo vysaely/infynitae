@@ -168,6 +168,8 @@ pub struct Server {
     /// constraint-activation policy switch (X-12 models a policy that declines activation,
     /// e.g. pointer outside a lock region)
     pub activation_allowed: bool,
+    pub snapshots_taken: u64,
+    pub last_snapshot_len: usize,
 }
 
 #[derive(Default)]
@@ -249,6 +251,8 @@ impl Server {
             quiet: false,
             gesture_active: false,
             activation_allowed: true,
+            snapshots_taken: 0,
+            last_snapshot_len: 0,
         }
     }
 
@@ -499,6 +503,11 @@ impl CompositorHandler for Server {
             }
             if let Some(ei) = self.elem_by_root(&root) {
                 self.elements[ei].window.on_commit();
+                // dispatch-safety check: extract the full surface-tree snapshot INSIDE the commit
+                // handler, as the production adapter will (no re-entrant with_states deadlock)
+                let snap = crate::snapshot::extract(&self.elements[ei].window);
+                self.snapshots_taken += 1;
+                self.last_snapshot_len = snap.surfaces.len();
                 // count content commits on ANY surface of the element's tree (e.g. Firefox draws
                 // into a subsurface); the root's mapping logic below is separate
                 if &root != surface && with_renderer_surface_state(surface, |s| s.buffer().is_some()).unwrap_or(false) {
@@ -538,7 +547,17 @@ impl CompositorHandler for Server {
             }
             if has_buffer != self.elements[ei].mapped {
                 self.elements[ei].mapped = has_buffer;
-                self.note(format!("E{id} mapped={has_buffer}"));
+                let (title, app_id) = smithay::wayland::compositor::with_states(surface, |st| {
+                    st.data_map
+                        .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
+                        .map(|d| {
+                            let d = d.lock().unwrap();
+                            (d.title.clone(), d.app_id.clone())
+                        })
+                        .unwrap_or((None, None))
+                });
+                let anchor = self.elements[ei].anchor;
+                self.note(format!("E{id} mapped={has_buffer} title={title:?} app_id={app_id:?} anchor={anchor:?}"));
                 self.refresh_visibility();
             }
         }
@@ -585,13 +604,27 @@ impl XdgShellHandler for Server {
         self.note(format!("E{id} new_toplevel"));
     }
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        let gone: Vec<u64> = self.elements.iter().filter(|e| e.window.toplevel() == Some(&surface)).map(|e| e.id).collect();
         self.elements.retain(|e| e.window.toplevel() != Some(&surface));
+        for id in gone {
+            self.note(format!("E{id} toplevel_destroyed (element removed from Stage)"));
+        }
     }
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
         surface.with_pending_state(|s| s.geometry = positioner.get_geometry());
         let _ = self.popups.track_popup(PopupKind::Xdg(surface));
     }
     fn reposition_request(&mut self, _s: PopupSurface, _p: PositionerState, _t: u32) {}
+    // Smithay's DEFAULT implementations of these two call `send_configure()` immediately (W-SM-13).
+    // Overridden: record only; configures are sent by the compositor's own policy path.
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        let id = self.elements.iter().find(|e| e.window.toplevel() == Some(&surface)).map(|e| e.id);
+        self.note(format!("E{} maximize_request (initial configure sent: {})", id.unwrap_or(0), surface.is_initial_configure_sent()));
+    }
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<smithay::reexports::wayland_server::protocol::wl_output::WlOutput>) {
+        let id = self.elements.iter().find(|e| e.window.toplevel() == Some(&surface)).map(|e| e.id);
+        self.note(format!("E{} fullscreen_request output={} (initial configure sent: {})", id.unwrap_or(0), output.is_some(), surface.is_initial_configure_sent()));
+    }
     fn grab(&mut self, _s: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
     fn client_pong(&mut self, _client: smithay::wayland::shell::xdg::ShellClient) {
         let t = self.now_us;

@@ -13,13 +13,19 @@ else
   echo "OK: probe rejected by the compiler:"; grep -m2 "^error" /tmp/c1probe.err; grep -q "error\[E0624\]" /tmp/c1probe.err || { echo "WRONG REASON"; fail=1; }
 fi
 echo "== 2b. protocol-side forbidden paths (each must fail with its expected error code)"
-for pr in "p1_mutate_through_read_accessor E0624" "p2_forge_input_port E0451" "p3_physical_input_without_port E0061" "p4_call_navigation_internals E0603"; do
-  set -- $pr
-  if cargo build --offline -q -p spike-probes --features "$1" 2>/tmp/c1p.err; then echo "VIOLATION: $1 compiled"; fail=1
-  elif grep -q "error\[$2\]" /tmp/c1p.err; then echo "OK: $1 rejected with $2"
-  else echo "WRONG REASON: $1 failed but not with $2:"; grep -m3 "^error" /tmp/c1p.err; fail=1; fi
+# expected rejection: an error code, or (p2) the exact private-field diagnostic rustc emits when the
+# struct has several private fields (that diagnostic carries no error code)
+for pr in 'p1_mutate_through_read_accessor|error\[E0624\]' 'p2_forge_input_port|cannot construct `InputPort` with struct literal syntax due to private fields' 'p3_physical_input_without_port|error\[E0061\]' 'p4_call_navigation_internals|error\[E0603\]'; do
+  feat="${pr%%|*}"; want="${pr#*|}"
+  if cargo build --offline -q -p spike-probes --features "$feat" 2>/tmp/c1p.err; then echo "VIOLATION: $feat compiled"; fail=1
+  elif grep -q "$want" /tmp/c1p.err; then echo "OK: $feat rejected: $(grep -m1 "$want" /tmp/c1p.err)"
+  else echo "WRONG REASON: $feat failed but not with /$want/:"; grep -m3 "^error" /tmp/c1p.err; fail=1; fi
 done
 if cargo build --offline -q -p spike-probes --features p5_control_compiles 2>/tmp/c1p.err; then echo "OK: positive control compiles"; else echo "CONTROL BROKEN"; cat /tmp/c1p.err; fail=1; fi
+echo "== 2c. storing an authority port in protocol state MUST NOT compile (ports are !Send; protocol state is asserted Send)"
+if cargo build --offline -q -p spike-wayland --features probe_store_port_in_state 2>/tmp/c1p.err; then echo "VIOLATION: port stored in protocol state compiled"; fail=1
+elif grep -q "error\\[E0277\\]" /tmp/c1p.err; then echo "OK: rejected with E0277"; grep -m1 "cannot be sent" /tmp/c1p.err
+else echo "WRONG REASON:"; grep -m3 "^error" /tmp/c1p.err; fail=1; fi
 echo "== 3. dependency direction: spike-core has no dependencies"
 deps=$(cargo tree --offline -p spike-core -e normal --depth 1 2>/dev/null | tail -n +2)
 if [ -n "$deps" ]; then echo "VIOLATION: $deps"; fail=1; else echo "OK: spike-core depends on nothing"; fi

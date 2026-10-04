@@ -14,6 +14,7 @@ use wayland_client::{
         wl_callback::{self, WlCallback},
         wl_compositor::WlCompositor,
         wl_output::{self, WlOutput},
+        wl_keyboard::{self, WlKeyboard},
         wl_pointer::{self, WlPointer},
         wl_seat::WlSeat,
         wl_subcompositor::WlSubcompositor,
@@ -96,6 +97,9 @@ pub struct Probe {
     /// buttons the client currently believes are pressed
     pub buttons_down: std::collections::BTreeSet<u32>,
     pub presentation: Option<WpPresentation>,
+    pub keyboard: Option<WlKeyboard>,
+    /// client-side logical keyboard state per the wl_keyboard spec (X-10)
+    pub kb: KbLogical,
     /// request presentation feedback with every draw (X-9); the u32 tags the commit
     pub feedback_seq: Option<u32>,
 }
@@ -134,17 +138,37 @@ impl Probe {
             buttons_down: Default::default(),
             presentation: None,
             feedback_seq: None,
+            keyboard: None,
+            kb: KbLogical::default(),
         }
     }
 
     /// X-6: add a subsurface of `size` at `offset` (parent-surface-local) to surface `parent`,
     /// with its own buffer; applied on the parent's next commit.
     pub fn add_subsurface(&mut self, globals: &GlobalList, qh: &QueueHandle<Self>, parent: usize, label: &str, offset: (i32, i32), size: (i32, i32)) -> usize {
+        self.add_subsurface_ex(globals, qh, parent, label, offset, size, false)
+    }
+
+    /// Set the input region of surface `idx` to a single rectangle (surface-local), applied on commit.
+    pub fn set_input_rect(&mut self, qh: &QueueHandle<Self>, idx: usize, r: (i32, i32, i32, i32)) {
+        let region = self.compositor.create_region(qh, ());
+        region.add(r.0, r.1, r.2, r.3);
+        self.surfaces[idx].wl.set_input_region(Some(&region));
+        region.destroy();
+        self.surfaces[idx].wl.commit();
+    }
+
+    /// Like add_subsurface; `below` places the child below its parent (z-order).
+    /// Returns the WlSurface protocol id of the new subsurface (it has no Surf entry).
+    pub fn add_subsurface_ex(&mut self, globals: &GlobalList, qh: &QueueHandle<Self>, parent: usize, label: &str, offset: (i32, i32), size: (i32, i32), below: bool) -> usize {
         let subc: WlSubcompositor = globals.bind(qh, 1..=1, ()).expect("wl_subcompositor");
         let idx = self.surfaces.len();
         let wl = self.compositor.create_surface(qh, idx);
         let sub: WlSubsurface = subc.get_subsurface(&wl, &self.surfaces[parent].wl, qh, ());
         sub.set_position(offset.0, offset.1);
+        if below {
+            sub.place_below(&self.surfaces[parent].wl);
+        }
         sub.set_desync();
         // a plain surface (no xdg role); reuse Surf bookkeeping with a dummy xdg object is not
         // possible, so draw it directly here
@@ -160,9 +184,32 @@ impl Probe {
         wl.commit();
         self.surfaces[parent].wl.commit();
         let _ = label;
+        let pid = wl.id().protocol_id() as usize;
         std::mem::forget(sub);
         std::mem::forget(wl);
-        idx
+        let _ = idx;
+        pid
+    }
+
+    /// Client destroys a toplevel (role object, xdg_surface, wl_surface, in protocol order).
+    /// X-10 modelling note: the wl_keyboard spec does not say what happens to the logical
+    /// "active surface" when the CLIENT destroys it, and a server cannot send wl_keyboard.leave
+    /// naming a destroyed object (wayland-backend refuses: InvalidId). The only coherent reading
+    /// is that the client's own destruction nulls its logical active surface; keys/modifiers are
+    /// then overwritten by the next enter. This is recorded as a protocol ambiguity, not hidden.
+    pub fn destroy_toplevel(&mut self, idx: usize) {
+        let surf = &self.surfaces[idx];
+        if let Some(t) = &surf.toplevel {
+            t.destroy();
+        }
+        surf.xdg.destroy();
+        surf.wl.destroy();
+        let label = surf.label.clone();
+        if self.kb.active.as_deref() == Some(label.as_str()) {
+            self.kb.active = None;
+            let now = self.now.load(Ordering::Relaxed);
+            self.log.push((now, format!("client-side: destroyed its keyboard-active surface {label} -> logical active surface = null (implicit; no leave is deliverable)")));
+        }
     }
 
     /// Bind seat pointer, relative pointer and pointer constraints (X-8).
@@ -172,6 +219,7 @@ impl Probe {
         let rel_mgr: ZwpRelativePointerManagerV1 = globals.bind(qh, 1..=1, ()).expect("relative pointer manager");
         let relative = rel_mgr.get_relative_pointer(&pointer, qh, ());
         let constraints: ZwpPointerConstraintsV1 = globals.bind(qh, 1..=1, ()).expect("pointer constraints");
+        self.keyboard = Some(seat.get_keyboard(qh, ()));
         self.seat = Some(seat);
         self.pointer = Some(pointer);
         self.relative = Some(relative);
@@ -413,6 +461,82 @@ impl Dispatch<WlOutput, ()> for Probe {
         }
     }
 }
+/// wl_keyboard logical state as defined by the protocol, plus a checker for its MUST / MUST NOT rules.
+#[derive(Default, Debug)]
+pub struct KbLogical {
+    pub active: Option<String>,
+    pub keys: std::collections::BTreeSet<u32>,
+    pub depressed: u32,
+    pub latched: u32,
+    pub locked: u32,
+    /// `enter` must be followed by `modifiers`
+    pub awaiting_modifiers: bool,
+    pub violations: Vec<String>,
+}
+
+impl Dispatch<WlKeyboard, ()> for Probe {
+    fn event(st: &mut Self, _: &WlKeyboard, ev: wl_keyboard::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+        let now = st.now.load(Ordering::Relaxed);
+        let mut v: Vec<String> = Vec::new();
+        let line = match ev {
+            wl_keyboard::Event::Keymap { .. } | wl_keyboard::Event::RepeatInfo { .. } => return,
+            wl_keyboard::Event::Enter { surface, keys, .. } => {
+                let l = label_of(st, &surface);
+                if st.kb.active.is_some() {
+                    v.push(format!("enter({l}) while already active on {:?}", st.kb.active));
+                }
+                st.kb.active = Some(l.clone());
+                st.kb.keys = keys.chunks_exact(4).map(|c| u32::from_ne_bytes([c[0], c[1], c[2], c[3]])).collect();
+                st.kb.awaiting_modifiers = true;
+                format!("wl_keyboard.enter {l} keys={:?}", st.kb.keys)
+            }
+            wl_keyboard::Event::Leave { surface, .. } => {
+                let l = label_of(st, &surface);
+                if st.kb.active.as_deref() != Some(l.as_str()) {
+                    v.push(format!("leave({l}) but active={:?}", st.kb.active));
+                }
+                if st.kb.awaiting_modifiers {
+                    v.push("leave before the modifiers that must follow enter".into());
+                }
+                // "In the wl_keyboard logical state, this event resets all values to their defaults."
+                st.kb = KbLogical { violations: std::mem::take(&mut st.kb.violations), ..Default::default() };
+                format!("wl_keyboard.leave {l}")
+            }
+            wl_keyboard::Event::Key { key, state, .. } => {
+                let pressed = matches!(state, wayland_client::WEnum::Value(wl_keyboard::KeyState::Pressed));
+                if st.kb.active.is_none() {
+                    v.push(format!("key {key} without an active surface"));
+                }
+                if st.kb.awaiting_modifiers {
+                    v.push("key before the modifiers that must follow enter".into());
+                }
+                if pressed && !st.kb.keys.insert(key) {
+                    v.push(format!("pressed {key} already logically down"));
+                }
+                if !pressed && !st.kb.keys.remove(&key) {
+                    v.push(format!("released {key} not logically down"));
+                }
+                format!("wl_keyboard.key {key} {}", if pressed { "pressed" } else { "released" })
+            }
+            wl_keyboard::Event::Modifiers { mods_depressed, mods_latched, mods_locked, .. } => {
+                st.kb.awaiting_modifiers = false;
+                st.kb.depressed = mods_depressed;
+                st.kb.latched = mods_latched;
+                st.kb.locked = mods_locked;
+                format!("wl_keyboard.modifiers dep={mods_depressed:#x} lat={mods_latched:#x} lock={mods_locked:#x}")
+            }
+            _ => return,
+        };
+        for x in &v {
+            st.kb.violations.push(format!("t={now}: {x}"));
+        }
+        st.log.push((now, line));
+        for x in v {
+            st.log.push((now, format!("PROTOCOL VIOLATION: {x}")));
+        }
+    }
+}
+
 fn label_of(st: &Probe, s: &WlSurface) -> String {
     s.data::<usize>().map(|i| st.surfaces[*i].label.clone()).unwrap_or("?".into())
 }
@@ -472,6 +596,7 @@ impl Dispatch<WlSeat, ()> for Probe {
 }
 wayland_client::delegate_noop!(Probe: ignore ZwpRelativePointerManagerV1);
 wayland_client::delegate_noop!(Probe: ignore WlSubcompositor);
+wayland_client::delegate_noop!(Probe: ignore wayland_client::protocol::wl_region::WlRegion);
 wayland_client::delegate_noop!(Probe: ignore WpPresentation);
 impl Dispatch<WpPresentationFeedback, u32> for Probe {
     fn event(st: &mut Self, _: &WpPresentationFeedback, ev: wp_presentation_feedback::Event, seq: &u32, _: &Connection, _: &QueueHandle<Self>) {

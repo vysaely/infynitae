@@ -1,0 +1,43 @@
+$ ./target/release/xsnap   (experiments/b8-harness; smithay =0.7.0 + renderer_test; public API only; lockstep)
+# 2026-10-04T14:13:11+03:00
+snapshot / X-15 / X-13-slice — smithay =0.7.0, public API only, lockstep
+
+== snapshot (front-to-back), RootSurfaceLocal; window geometry Rectangle<smithay::utils::geometry::Logical> { x: 20, y: 20, width: 400, height: 300 }
+   PS         kind=PopupSub origin=( 115,  65) size= 30x30  mapped=true input=None
+   P(popup)   kind=Popup origin=( 110,  60) size=140x100 mapped=true input=None
+   S1         kind=Sub origin=(  37,  11) size=101x53  mapped=true input=None
+   W(root)    kind=Root origin=(   0,   0) size=440x340 mapped=true input=Some([(true, Rectangle<smithay::utils::geometry::Logical> { x: 20, y: 20, width: 400, height: 300 })])
+   S2(below)  kind=Sub origin=( -15,  50) size= 60x40  mapped=true input=None
+   truth P(popup)   origin (110, 60) size (140, 100): match
+   truth PS         origin (115, 65) size (30, 30): match
+   truth S1         origin (37, 11) size (101, 53): match
+   truth W(root)    origin (0, 0) size (440, 340): match
+   truth S2(below)  origin (-15, 50) size (60, 40): match
+[PASS] snapshot equals client ground truth (origins/sizes, incl. negative-offset below-subsurface and popup subsurface)
+
+== X-15 render order (front-to-back)
+   snapshot order: ["PS", "P(popup)", "S1", "W(root)", "S2(below)"]
+   Smithay Window::render_elements order: ["PS", "P(popup)", "S1", "W(root)", "S2(below)"]
+[PASS] X-15 order equivalence
+   PS         smithay geometry ( 115,  65)  30x30  vs snapshot ( 115,  65)  30x30  
+   P(popup)   smithay geometry ( 110,  60) 140x100 vs snapshot ( 110,  60) 140x100 
+   S1         smithay geometry (  37,  11) 101x53  vs snapshot (  37,  11) 101x53  
+   W(root)    smithay geometry (   0,   0) 440x340 vs snapshot (   0,   0) 440x340 
+   S2(below)  smithay geometry ( -15,  50)  60x40  vs snapshot ( -15,  50)  60x40  
+[PASS] X-15 positions equal (single origin function == Smithay's Window path at scale 1)
+
+== X-13 slice: hit-test agreement, 200000 points over the whole tree bbox (+margins)
+   mismatch (19.50,20.25): ours None smithay Some(("W(root)", Point<smithay::utils::geometry::Logical> { x: 0, y: 0 }))
+   mismatch (419.50,20.25): ours Some(("W(root)", Point<smithay::utils::geometry::Logical> { x: 0, y: 0 })) smithay None
+   mismatch (19.50,21.25): ours None smithay Some(("W(root)", Point<smithay::utils::geometry::Logical> { x: 0, y: 0 }))
+   mismatch (419.50,21.25): ours Some(("W(root)", Point<smithay::utils::geometry::Logical> { x: 0, y: 0 })) smithay None
+   mismatch (19.50,22.25): ours None smithay Some(("W(root)", Point<smithay::utils::geometry::Logical> { x: 0, y: 0 }))
+   1448 mismatches with half-open containment; unexplained (not within 0.5 px of an input-region edge): 848
+   with Smithay's round-to-nearest region test emulated: 928 mismatches, of which 928 are the W-SM-12 pattern (Smithay picks the BELOW subsurface S2 over its parent), 0 unexplained
+[PASS] hit-test agreement: every difference from Window::surface_under is W-SM-11 (region rounding) or W-SM-12 (below-subsurface wins over parent); none unexplained
+   Infynitae's snapshot hit-test is consistent with the RENDERED stacking (X-15: Smithay draws W(root) in front of S2(below)); Smithay's surface_under is not.
+
+== dispatch safety: snapshots extracted inside CompositorHandler::commit during this run: 7 (last had 3 surfaces); no deadlock
+
+SCOPE: integral scale 1, one popup level, one input region; fractional-scale render edges are covered by X-6; multi-level popups and region subtraction are T1 extensions.
+ALL: PASS

@@ -38,7 +38,16 @@ use spike_core::{protocol::ProtocolEvent, Core, Effect};
 
 pub struct Handlers {
     pub core: Core,
+    #[cfg(feature = "probe_store_port_in_state")]
+    pub leaked: spike_core::InputPort, // NEGATIVE PROBE: must fail the Send assertion below (E0277)
 }
+
+/// C-NB-2 hardening: protocol state must be `Send`; authority ports are `!Send`, so a port stored
+/// in protocol state is a compile error.
+const _: fn() = || {
+    fn assert_send<T: Send>() {}
+    assert_send::<Handlers>();
+};
 
 impl Handlers {
     /// xdg_activation_v1.activate after token validation
@@ -58,7 +67,7 @@ mod tests {
     #[test]
     fn activation_never_moves_cameras() {
         let (core, _input, _shell) = Core::new(2);
-        let mut h = Handlers { core };
+        let mut h = Handlers { core, #[cfg(feature = "probe_store_port_in_state")] leaked: unreachable!() };
         h.on_new_toplevel(7);
         let before = (h.core.cameras().center(0), h.core.cameras().center(1));
         let fx = h.on_activation(7);
@@ -69,7 +78,7 @@ mod tests {
     #[test]
     fn trusted_input_moves_camera_but_not_stage() {
         let (core, mut input, mut shell) = Core::new(1);
-        let mut h = Handlers { core };
+        let mut h = Handlers { core, #[cfg(feature = "probe_store_port_in_state")] leaked: unreachable!() };
         h.on_new_toplevel(1);
         let anchor = h.core.stage().anchor(1);
         h.core.physical_input(&mut input, PhysicalEvent::PanDelta { camera: 0, dx: 10, dy: -4 }).unwrap();

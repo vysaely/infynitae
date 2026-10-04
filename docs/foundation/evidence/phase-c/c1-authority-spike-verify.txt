@@ -1,5 +1,5 @@
 $ ./verify.sh   (experiments/c1-authority-spike; rustc 1.99.0; no external dependencies)
-# 2026-10-04T13:54:49+03:00
+# 2026-10-04T14:18:43+03:00
 == 1. positive tests + compile_fail doctests
 
 running 0 tests
@@ -21,11 +21,14 @@ OK: probe rejected by the compiler:
 error[E0624]: method `set_center` is private
 error: could not compile `spike-core` (lib) due to 1 previous error
 == 2b. protocol-side forbidden paths (each must fail with its expected error code)
-OK: p1_mutate_through_read_accessor rejected with E0624
-OK: p2_forge_input_port rejected with E0451
-OK: p3_physical_input_without_port rejected with E0061
-OK: p4_call_navigation_internals rejected with E0603
+OK: p1_mutate_through_read_accessor rejected: error[E0624]: method `set_center` is private
+OK: p2_forge_input_port rejected: error: cannot construct `InputPort` with struct literal syntax due to private fields
+OK: p3_physical_input_without_port rejected: error[E0061]: this method takes 2 arguments but 1 argument was supplied
+OK: p4_call_navigation_internals rejected: error[E0603]: enum `Authority` is private
 OK: positive control compiles
+== 2c. storing an authority port in protocol state MUST NOT compile (ports are !Send; protocol state is asserted Send)
+OK: rejected with E0277
+error[E0277]: `*const ()` cannot be sent between threads safely
 == 3. dependency direction: spike-core has no dependencies
 OK: spike-core depends on nothing
 == result: PASS

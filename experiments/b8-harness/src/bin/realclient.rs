@@ -220,4 +220,11 @@ fn main() {
     let pongs_after_return: Vec<u64> = run.server.pongs.iter().filter(|t| **t >= run.t_ret).map(|t| t - run.t_ret).collect();
     println!("pongs received after camera return (us after return): {:?}", pongs_after_return);
     println!("client exited during run: {:?}", run.exited_at.map(|t| t as f64 / 1e6));
+    println!("server element log:");
+    for (t, l) in &run.server.log {
+        if l.contains("E") {
+            println!("  t={:>8.3}s {l}", *t as f64 / 1e6);
+        }
+    }
+    println!("elements at end: {:?}", run.server.elements.iter().map(|e| (e.id, e.anchor, e.window.geometry())).collect::<Vec<_>>());
 }

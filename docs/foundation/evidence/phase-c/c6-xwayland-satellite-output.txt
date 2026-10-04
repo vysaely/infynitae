@@ -1,0 +1,44 @@
+# C6 experiment: xwayland-satellite 0.8.3 under the b8-harness real-time server (private socket, X display :97). 2026-10-04T14:17:04+03:00
+# script: c6-sat.sh (same directory). Harness overrides Smithay's default maximize/fullscreen handlers (W-SM-13); see FOUNDATION_ARCHITECTURE C6.
+# An earlier run WITHOUT the override mapped the element with anchor=None: Smithay's default fullscreen_request sent the initial configure before placement.
+# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 434995: ["/tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/sat.sh"]; policy starve
+[script] X11 window id: 4194317
+[script] X11 geometry before move:
+Window 4194317
+  Position: 0,0 (screen: 0)
+  Geometry: 1920x1080
+[script] X11 client requests a move to 777,333 (xdotool windowmove)
+[script] X11 geometry after move request:
+Window 4194317
+  Position: 0,0 (screen: 0)
+  Geometry: 1920x1080
+[script] WM_CLASS: WM_CLASS(STRING) = "kitty", "kitty"
+[script] killing xwayland-satellite (pid 434996) to simulate a crash
+XIO:  fatal IO error 0 (Success) on X server ":97"
+      after 384 requests (384 known processed) with 0 events remaining.
+/tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/sat.sh: line 19: 434996 Killed                     xwayland-satellite :97 > "$XDG_RUNTIME_DIR/sat.log" 2>&1
+[script] X11 kitty alive after satellite crash: no
+[script] satellite log (filtered):
+ 2026-10-04T11:17:04.699Z INFO  xwayland_satellite > Starting xwayland-satellite version 0.8.3
+ 2026-10-04T11:17:04.702Z WARN  xwayland_satellite::server > Could not bind xdg activation (NotPresent). Windows might not receive focus depending on compositor focus stealing policy.
+ 2026-10-04T11:17:04.702Z INFO  xwayland_satellite::server::selection > Primary selection unsupported.
+ 2026-10-04T11:17:04.750Z INFO  xwayland_satellite::xstate            > xfixes version: 1.0
+ 2026-10-04T11:17:04.751Z INFO  xwayland_satellite                    > Connected to Xwayland on :97
+ 2026-10-04T11:17:04.751Z INFO  xwayland_satellite                    > Successfully notified systemd of ready state.
+ 2026-10-04T11:17:04.755Z INFO  xwayland_process                      > >                   X11 cannot support keycodes above 255.
+mapped: true; first commit at Some(1654.551) ms
+phase          commits/s   client CPU %
+visible              1.0           0.0
+off-screen           0.0           0.0
+returned             0.0           0.0
+re-entry: first commit None us after the camera returned
+pongs received after camera return (us after return): []
+client exited during run: Some(7.515155)
+server element log:
+  t=   1.606s E1 new_toplevel
+  t=   1.606s E1 fullscreen_request output=false (initial configure sent: false)
+  t=   1.606s E1 initial configure (initial scale 1)
+  t=   1.655s E1 mapped=true title=Some("X11KITTY") app_id=Some("kitty") anchor=Some((100, 100))
+  t=   1.655s E1 visible-on A (overlap 1820x980)
+  t=   5.509s E1 toplevel_destroyed (element removed from Stage)
+elements at end: []

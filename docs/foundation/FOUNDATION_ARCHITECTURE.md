@@ -1,6 +1,6 @@
 # Infynitae Native — Foundation Architecture (Phase C)
 
-Status: checkpoint 1 (C1–C4) accepted, commit `d596416cf57877116e9cfbc8cf6c6fe25c001c67`. **Checkpoint 2 (C5–C10) in progress.** C11–C16 not started.
+Status: checkpoint 1 (C1–C4) accepted, commit `d596416cf57877116e9cfbc8cf6c6fe25c001c67`. **Checkpoint 2 (C5–C10) complete; stopped at the checkpoint 2 review gate.** C11–C16 not started.
 
 Inputs (frozen):
 - Phase B seal `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`, especially the carry-forward ledger at the end of [FOUNDATION_BLOCKERS.md](FOUNDATION_BLOCKERS.md).
@@ -449,3 +449,379 @@ The focus model's outputs are `Effect::KeyboardFocus(Option<target>)` and `Effec
 | D-B10-INTAKE (keys) | K1–K3 | **refined**: modifier/lock keys cannot be compositor-owned (C-NB-4) |
 
 **No Phase B decision is contradicted.** Two refinements (R7, K3) are recorded with evidence.
+
+---
+---
+
+# Phase C checkpoint 2 (C5–C10)
+
+Execution order as mandated: X-10 → snapshot boundary → C5 → C6 → C7 → C8 → C9 → C10 → contradiction pass.
+
+## CP2 evidence
+
+| ID | What | Where |
+|---|---|---|
+| EC-6 | **X-10** keyboard/modifier ownership on Smithay 0.7.0's real seat keyboard, with a client-side `wl_keyboard` protocol checker. 9 scenarios **PASS**; negative control (K3 disabled) **FAILS as predicted** (client left with `depressed=0x1` after the physical release) | `experiments/b8-harness/src/{keys.rs,bin/x10.rs}`; [`evidence/phase-c/x10-keyboard-output.txt`](evidence/phase-c/x10-keyboard-output.txt) |
+| EC-7 | wayland-backend 0.3.17 does not send an event whose object argument is a destroyed object (`get_object(..)?` → `InvalidId`, `rs/server_impl/client.rs:189-196`). Therefore no `wl_keyboard.leave` can name a surface the client destroyed. The spec (wayland 1.26) does not define the logical active surface after client-side destruction. | source + X-10 K-6 |
+| EC-8 | **Surface-tree snapshot via public API only** (external crate compiles): root, subsurfaces (incl. negative-offset, placed *below*), input regions, window geometry, popup with its own subsurface. Equals client ground truth; **extracted inside `CompositorHandler::commit` without deadlock** | `src/snapshot.rs`, `bin/xsnap.rs`; [`evidence/phase-c/xsnap-x15-output.txt`](evidence/phase-c/xsnap-x15-output.txt) |
+| EC-9 | **X-15 PASS**: snapshot front-to-back order **and** positions equal Smithay's `Window::render_elements` exactly | same |
+| EC-10 | **W-SM-11 (new)**: Smithay tests input regions with `point.to_i32_round()` (round-to-nearest) but surface bounds with exact containment, shifting every input region by −½ px (`desktop/wayland/utils.rs:25-50`) | source + xsnap (1,448 grid mismatches, all explained) |
+| EC-11 | **W-SM-12 (new)**: `under_from_surface_tree` overwrites its result for every match and early-stops only after a node's whole subtree (`desktop/wayland/utils.rs:94-150`). A subsurface placed **below** its parent wins hit-tests over the parent, contradicting the stacking Smithay itself renders (EC-9). 928/928 residual mismatches match this pattern; 0 unexplained. | source + xsnap |
+| EC-12 | **C6**: xwayland-satellite 0.8.3 against the harness: X11 window → ordinary `xdg_toplevel` (title from X11, `app_id` = WM_CLASS); an X11 move request (`xdotool windowmove 777 333`) leaves X11 position 0,0 and reaches nothing; satellite `kill -9` → Xwayland and X11 client die, element removed via the ordinary `toplevel_destroyed` path; satellite warns about missing `xdg_activation_v1` and primary selection | `realclient` + [`evidence/phase-c/c6-sat.sh`](evidence/phase-c/c6-sat.sh); [`evidence/phase-c/c6-xwayland-satellite-output.txt`](evidence/phase-c/c6-xwayland-satellite-output.txt) |
+| EC-13 | **W-SM-13 (new)**: Smithay's *default* `XdgShellHandler::{maximize_request, fullscreen_request}` call `send_configure()` (`shell/xdg/mod.rs:1143-1153`). xwayland-satellite sends `fullscreen_request` **before the first commit** for a screen-sized X11 window. With the defaults, the initial configure went out before Infynitae's placement ran (element mapped with no anchor). With overrides, placement ran normally. | source + C6 run (with and without override) |
+| EC-14 | PROTOCOL: `set_fullscreen` / `unset_fullscreen` / state `fullscreen` text (subject to compositor policy; centre + border fill; "other screen content not part of the same surface tree" must not be visible below) | `xdg-shell.xml` |
+| EC-15 | Authority-spike hardening: ports are `!Send`; protocol state is statically asserted `Send`. Storing a port in protocol state fails with **E0277**. All probes asserted on their exact diagnostic. **PASS**. **Real Smithay 0.7.0 protocol state is `Send`** (harness `Server` compiles under `assert_send`). | `experiments/c1-authority-spike/verify.sh`; `b8-harness/src/bin/sendcheck.rs`; [`evidence/phase-c/c1-authority-spike-verify.txt`](evidence/phase-c/c1-authority-spike-verify.txt) |
+
+All harness suites re-run after the CP2 harness changes: X-6, X-8, X-9, X-10, X-12 and xsnap pass; the Phase B scenario output is identical apart from the enriched log line.
+
+---
+
+## CP2-1. X-10 result (CR-2): K1–K9 NOT falsified
+
+| Scenario | Protocol sequence at the client (abridged) | Result |
+|---|---|---|
+| K-1 ordinary key | `key A pressed`, `key A released` | PASS |
+| K-2 modifier + key | `key Shift`, `modifiers dep=1`, `key A`, …, `modifiers dep=0` | PASS |
+| K-3 binding Super+B | Super forwarded (`dep=0x40`); B press **and** release consumed; client never sees B | PASS |
+| K-4 focus change via binding while Super held | `leave W1`; `enter W2 keys={125}` (Super only; the compositor-owned Enter is absent); `modifiers dep=0x40`; Super release delivered to W2 | PASS |
+| K-5 focus change while A held | `enter W2 keys={30}`; A's release delivered to W2 | PASS |
+| K-6 focused surface destroyed with Shift+A held | no `leave` (undeliverable, EC-7); `enter W1 keys={30,42}` + `modifiers dep=1`; releases to W1 | PASS* |
+| K-7 cancel with compositor-owned keys held, focus change meanwhile | `enter W2 keys={125}`: B, Esc and Enter absent; all their releases consumed; **nothing synthesized** | PASS |
+| K-8 binding on a modifier key (K3 observe mode), focus change while held | Shift forwarded; `enter W2 keys={42}` `dep=1`; release delivered; ends `dep=0` | PASS |
+| K-9 focus lost (none) while keys held, then regained | `leave`; later `enter keys={42}` `dep=1`; release delivered | PASS |
+| **NEG** K-8 with K3 disabled | Shift intercepted; `enter W2` + `modifiers dep=1` (seat-wide XKB, EC-3); the release is intercepted, so **W2 is left with Shift stuck** | FAIL, as predicted |
+
+Every step was checked against: no `wl_keyboard` must/must-not violation; focused client's logical keys = physically held client-owned keys; client modifiers = Smithay seat XKB (`serialized` depressed/latched/locked); nothing held at the end.
+
+\* **Protocol ambiguity (recorded, not hidden).** When the client destroys its focused surface, no `leave` is deliverable (EC-7) and the spec does not say what the logical active surface becomes. The checker treats client-side destruction as nulling the client's logical active surface. That is the only coherent reading, because the client itself performed the destruction. The following `enter` then sets keys and modifiers completely. Infynitae relies on this reading. **Risk RC-1** (low): a toolkit that treats a post-destruction `enter` as a violation would misbehave in any compositor; T3 observes real toolkits.
+
+Not represented: output removal (K8: keyboard focus is output-independent); compositor-side key repeat (K9: not used).
+
+**Smithay seat-wide XKB behaviour confirmed** by the negative control: it is the reason K3 exists, and K3 removes the failure.
+
+---
+
+## CP2-2. Surface-tree snapshot boundary (A-C1 → RESOLVED)
+
+### What core needs, and where it comes from (all public, EC-8)
+
+| Needed for | Datum | Smithay 0.7.0 public source |
+|---|---|---|
+| all | root surface, element association | `ToplevelSurface::wl_surface()`; adapter registry |
+| render order, membership, hit-test | subsurface tree + stacking order | `with_surface_tree_downward` (nearest first) |
+| projection, lattice rounding | subsurface offset relative to parent | `RendererSurfaceStateUserData` → `view().offset` (also `SubsurfaceCachedState.location`) |
+| projection, membership | surface logical size (after viewport/scale) | `view().dst` |
+| render, membership, hit-test | mapped (has buffer) | `RendererSurfaceState::buffer()` |
+| hit-test | input region | `SurfaceAttributes::input_region` → `RegionAttributes { rects }` |
+| anchor relationship | window geometry (RootSurfaceLocal) | `Window::geometry()` (W-SM-9 caveat) |
+| popup trees | popups of the toplevel + offset relative to the toplevel geometry; popup geometry | `PopupManager::popups_for_surface`, `PopupKind::geometry()` |
+| popup placement (constraint) | positioner | `PositionerState::get_unconstrained_geometry` (B6.2) |
+
+### Answers
+
+| Question | Answer |
+|---|---|
+| What remains in `infynitae-wayland` | Every handle (`WlSurface`, `ToplevelSurface`, `PopupKind`, `Window`); the `SurfaceKey ↔ WlSurface` registry; the extraction code (`snapshot.rs` pattern); render-element construction; applying effects |
+| What crosses into core | `SurfaceTree` per element: `geometry` (RootSurfaceLocal rect) + front-to-back list of `{key: SurfaceKey, kind: Root/Sub/Popup/PopupSub, origin: RootSurfaceLocal integral point, size, mapped, input: Option<Vec<(add, rect)>>}` and, for popups, configured position + constraint result. Values only. |
+| Do handles cross? | **No.** `SurfaceKey` is opaque (the adapter mints it; core cannot dereference it) |
+| Crate-private fields needed? | **No.** Compiled in an external crate. The private `surface_view` field (EB-18) is reached through public `view()`. |
+| Safe during dispatch? | **Yes.** Extracted inside `CompositorHandler::commit` on every commit in the run, no deadlock (EC-8). Rule: read per-surface data only from the `SurfaceData` passed to traversal callbacks; never call `with_states` for a surface inside its own traversal. |
+| Derived or authority? | **Derived** (C2.1): replaced wholesale per commit by a single writer (the adapter's commit hook), dropped on unmap/destroy, never holds an anchor, never written by core. Client state by definition; Stage authority is untouched. |
+
+### Consequences (DECISIONS)
+
+- **D-CP2-HIT:** core hit-tests from the snapshot (front-to-back, half-open containment for both surface bounds and input regions). **`Window::surface_under` is not used** for hit-testing:
+  - W-SM-11 shifts input regions by ½ px;
+  - W-SM-12 lets below-subsurfaces steal input from their parent, contradicting rendered stacking.
+
+  With both explained, the snapshot hit-test agrees with Smithay at every one of 200,000 grid points. CR-1 / NB-2 (single origin function) is therefore validated for render, hit-test and order at scale 1; fractional edges were already covered by X-6. Status: **RESOLVED for the tested shapes**. Multi-level popups and region subtraction are T1 extensions (CR-1 residual).
+- **X-15 / C-NB-3: RESOLVED** (EC-9).
+- The render list (C3.3) uses the snapshot's order directly; the adapter does not re-derive order.
+
+---
+
+## C5 — Protocol fullscreen versus viewport-fit
+
+Two different things with different authorities:
+
+| | **Viewport-fit** (Infynitae) | **Protocol fullscreen** (client request) |
+|---|---|---|
+| What it is | a **camera** operation on one output: frame element W | an **output presentation** state: one output exclusively presents W's surface tree (EC-14: "other screen content … not visible below") |
+| Who may start it | user input (`InputPort`) or shell (`ShellPort`) | a client request, accepted by core fullscreen **policy** |
+| State owner | `core::navigation` `ViewportFit` per output (saved camera) | `core` `FullscreenState` per element + `OutputPresentation` per output |
+| Touches cameras? | **yes** (that is what it is) | **never** (C1.5: protocol code cannot) |
+| Touches Stage anchor? | never | never |
+| Touches W's size? | never | yes, via configure (protocol-defined: the configure size is the fullscreen area) |
+
+### C5.1 Viewport-fit (D-C5-FIT)
+
+- **Fit** = `navigation::fit(output O, element W)`: camera of O gets `centre = centre(W.geometry)`, `zoom = min(view_w / W.w, view_h / W.h)`. Optional per-output **isolation** flag: only W's tree is rendered on O.
+- **Saved state** `ViewportFit{O}: {element, saved centre, saved zoom, isolation}` lives in `navigation`.
+- **Restore** = put the saved camera back.
+- **Ends when:** restored explicitly; the user navigates O's camera (user intent wins; no restore); W unmapped/destroyed (restore); O removed (restore the camera values, the camera survives unbound, B7).
+- **W changes size while fitted:** the zoom is re-fitted (camera follows; Stage untouched).
+- **Zoom dependency.** Fit needs camera zoom ≠ 1, so viewport-fit is the first Foundation consumer of zoom:
+  - projection already carries `k = zoom·scale` everywhere (B2, C3);
+  - a static fitted view has no pan jitter, so A-B1-1 (zoom anti-jitter during motion) is still not required;
+  - lattice tiling exactness (E5/E9) is a zoom-1 property; under fit, only W is relevant.
+- **REFINEMENT of D-B8-SCALE (needs approval; flagged, not silently adopted).** With zoom ≠ 1 the effective scale on O is `k_O = zoom·scale_O`. MaxGesture stated "max(scale(O))", which equals max(k_O) at zoom 1. Proposed generalisation: **max over observing outputs of k_O** (capped by a configured maximum). Without it, a fitted window is magnified from a lower-resolution buffer (blurry). At zoom 1 nothing changes, and the MaxGesture rule itself is unchanged.
+
+**Case A: worked example (viewport-fit W on output A)**
+
+Setup as B8: W window geometry 800×600 at anchor (1000,300) (root (980,280), 20 px CSD). A: 1920×1080 @1.0, 165 Hz. B: 3840×2160 @1.5 → 2560×1440 logical, 144 Hz.
+
+| Step | Value |
+|---|---|
+| Stage before | W.anchor = (1000,300) |
+| Camera A before | centre (960,540), zoom 1 → v_A = (0,0) |
+| Camera B before | centre (1880,720), zoom 1 → v_B = (600,0) |
+| Request | user binding (InputPort) or shell `ViewportFit{A, W}` (ShellPort) |
+| Camera A after | centre = (1400,600); zoom = min(1920/800, 1080/600) = min(2.4, 1.8) = **1.8**; v_A = (1400 − 1920/3.6, 600 − 1080/3.6) = (866.67, 300) → Q16 (R7) |
+| Stage after | **W.anchor = (1000,300): unchanged** |
+| Output A projection | k = 1.8; R = 840; C = round((866.67−840)·1.8+δ) = 48; W geometry edges → x 240…1680, y 0…1080: fills the height, 240 px bars left/right (isolation: bars are background, not other elements) |
+| Output B projection | **unchanged** (camera B untouched): W at x 570…1830 phys as before |
+| Membership | W observed on A and B (unchanged); with isolation, other elements leave A |
+| Focus | fit is an explicit user action on W: the focus model may focus W (D-B10-KBD permits explicit actions) |
+| Preferred scale | zoom-1 rule: max(1.0, 1.5) = 1.5 (W magnified ×1.2 on A). With the proposed generalisation: max(1.8, 1.5) = 1.8 (client buffer 1440×1080; sharp on A, minified on B) |
+| Frame clock | highest-refresh observing output: A (165 Hz); unchanged |
+| Restoration | camera A ← (960,540, zoom 1), isolation off; W untouched; scale re-evaluated at once (atomic camera change): 1.5 |
+
+### C5.2 Protocol fullscreen (D-C5-FS)
+
+**Policy and state:**
+- **Acceptance:** honour `set_fullscreen` when W has keyboard focus, or when the request arrives before W's first map. The pre-map form is exactly how xwayland-satellite expresses screen-sized X11 windows (EC-13). Otherwise record it and decide when W next gains focus. The spec permits deferral or refusal ("subject to compositor policies"). Rationale: a client must not seize an output's presentation while the user is elsewhere.
+- **Output choice:** the requested output if it exists. Else W's frame-clock output if W is observed. Else the output under the pointer. Else the first output.
+- **State:** `FullscreenState{element W, output O, saved: {window-geometry size, states}}` and `OutputPresentation(O) = Exclusive(W)`.
+- **Configure:** `fullscreen` state, size = O's logical size at zoom 1 (here 1920×1080).
+- **Rendering on O:** a **presentation view** replaces camera A's view: W's window-geometry origin maps to O's origin at k = scale_O, centred with border fill if smaller (EC-14). Only W's surface tree (popups included) is drawn on O. **Camera A is not touched.** The presentation view is a per-output render input, not a camera.
+- **Hit-testing and input on O** go through the presentation view (it is what `ProjectionFrame(O)` records, I9).
+- **Stage:** W.anchor unchanged. W's **size** changes, because the client resizes to 1920×1080 per configure.
+
+**Case B: worked example (fullscreen request targeting output A)**
+
+| Step | Value |
+|---|---|
+| Client request | `set_fullscreen(wl_output A)` while W focused → accepted |
+| Saved | geometry size 800×600; states [] |
+| Configure | `[fullscreen]` 1920×1080 |
+| Element after ack/commit | anchor (1000,300) (unchanged); window geometry **1920×1080**: client-owned size |
+| Output A | presentation view: W at physical (0,0)…(1920,1080); only W's tree drawn; other elements leave A (membership) |
+| **Output B (camera B unchanged)** | B renders the Stage as always, so it shows W **at its anchor with its new 1920×1080 size** (x 570… on B's physical grid). **This is the explicit consequence: one wl_surface has one size; every camera observing W sees the fullscreen-sized W.** Infynitae does not pretend otherwise and does not hide W on B. |
+| Preferred scale | **MaxGesture unchanged (frozen):** W observed on A (1.0) and B (1.5) → 1.5. A fullscreen game on A that is also visible on B renders at 1.5× (2880×1620 buffer). **Open policy question CP2-Q1** (not adopted): pin a fullscreen element's preferred scale to its fullscreen output while fullscreen. Requires approval and evidence (performance, DV-1). |
+| Popups | constraint boundary = output A (the fullscreen output); rendered in the presentation view |
+| Focus | unchanged by the request itself (no focus grant from a client request) |
+| Output A removed while fullscreen | presentation dropped; core sends a configure leaving fullscreen with the saved size (compositor policy; the spec allows the compositor to change states); camera A survives unbound (B7) |
+| Unfullscreen (`unset_fullscreen` or policy) | configure without `fullscreen`, offering the saved size (spec: "may include the previous window geometry dimensions"); presentation of A returns to camera A's view, which is **exactly as it was** |
+
+**Other cases (defined):**
+
+| Case | Behaviour |
+|---|---|
+| `set_fullscreen(NULL)` | output choice rule above |
+| W visible on several outputs | fullscreen on the chosen output only; other cameras observe W as in Case B |
+| unmap/remap while fullscreen | the spec discards client state on unmap, so `FullscreenState` and the presentation are dropped; on remap the client must request again |
+| request before first map (X11 via satellite) | recorded; the initial configure carries `fullscreen` if accepted; placement (anchor) runs first regardless (EC-13) |
+| fullscreen + viewport-fit on the same output | the presentation view takes precedence for rendering. A fit applied meanwhile changes camera A's state, which is shown when the presentation ends. Neither touches the other's state. |
+| restoration ownership | `FullscreenState.saved` is owned by core and only used for the unfullscreen configure; the client may choose its own size (protocol) |
+
+**Mechanical guarantee:** fullscreen handling lives in `core::protocol` (client-request policy) and output presentation state. It has no access to `navigation` (C1.5), so a fullscreen request **cannot** move a camera.
+
+---
+
+## C6 — XWayland: xwayland-satellite, deliberately narrow (D-C6)
+
+**Decision: adopt xwayland-satellite as Foundation 01's X11 path.** No internal XWM, no ICCCM/EWMH emulation, no X11 grab architecture.
+
+| Requirement | Finding | Class |
+|---|---|---|
+| Preserve Stage/Camera authority | satellite is an ordinary Wayland client. X11 toplevels arrive as `xdg_toplevel`s and become elements through the normal lifecycle (B5). An X11 **position request had no effect** at all (EC-12): there is no X11 path to Stage. | EXPERIMENT |
+| Representation to Infynitae | element with title (X11 name) and `app_id` (WM_CLASS); override-redirect windows (menus, tooltips) are presented by satellite as Wayland popups/subsurfaces of their parent (satellite's design; **not exercised here**, no menu-using X11 client) | EXPERIMENT (toplevel); ASSUMPTION (popups) → T3 |
+| Process/socket lifecycle | the compositor spawns satellite with `WAYLAND_DISPLAY` set to its own socket and a chosen free X display; satellite runs Xwayland itself | DECISION (supervisor in the bin crate; C1 later) |
+| Startup | lazy or at startup (configuration); `DISPLAY` exported to children spawned by the compositor/shell | DECISION |
+| Crash isolation | satellite crash → Xwayland and all X11 clients die; their elements are destroyed by the normal client-death path; Stage stays consistent (EC-12) | EXPERIMENT |
+| Restart | restart satellite with backoff; X11 apps do **not** survive (X11 clients died with the server) | EXPERIMENT (death); DECISION (restart) |
+| Identity across failure | **none** (new elements, new ids). Persistence/restore keys (Level D) may later re-match by `app_id`/title. | DECISION |
+| Focus/activation | ordinary keyboard focus on the satellite's surfaces; satellite uses `xdg_activation_v1` if offered (it warned when absent), so it is subject to the same B10.7 policy. X11 focus-stealing semantics are not emulated. | EXPERIMENT (warning); DECISION |
+| Global X11 coordinate assumptions | X11 sees a screen of the Arrangement size (here 1920×1080, window at 0,0); X11 move/configure requests do not reach Infynitae. Apps that position their own windows in screen coordinates will not be obeyed (by design: Stage is the authority) | EXPERIMENT |
+| Fullscreen | satellite sends `fullscreen_request` (pre-map for screen-sized windows) → C5 policy; requires **W-SM-13** overrides | EXPERIMENT |
+| Security | satellite is a normal client: no privilege, no camera path (C1.5) | DECISION |
+
+**Deferred:** internal XWM; broad ICCCM/EWMH; X11 grabs; legacy edge cases; override-redirect fidelity (T3 with Steam/menu-heavy apps); X11 primary selection (satellite: unsupported without the protocol).
+
+**XWayland can never become a second Stage authority:** its only channel into Infynitae is the Wayland protocol, and Wayland has no client-to-Stage position path.
+
+---
+
+## C7 — Trusted shell boundary (D-C7)
+
+### C7.1 Identity, trust, channel
+
+- **Channel:** a Unix stream socket `$XDG_RUNTIME_DIR/infynitae/shell.sock`, directory mode 0700, socket 0600.
+- **Admission:** `SO_PEERCRED` uid must equal the compositor's uid.
+- **Trust statement (honest):**
+  - Any process of the same user can connect, exactly as with `hyprctl`.
+  - The authority boundary C1.5 enforces is between the **Wayland protocol channel** and Infynitae authority. It is not between same-user processes, which the Linux desktop does not isolate anyway.
+  - Sandboxed (Flatpak) apps do not see the runtime directory unless it is exported.
+- **Crate:** `infynitae-ipc` (new; justified by C2: it is the only holder of `ShellPort`, and it isolates serialization dependencies away from zero-dependency core). Deps: `core` only (+ a serialization crate). Must not depend on `wayland` or backends. `ShellPort` lives in the IPC source closure, not in protocol state (C1.5, C7.4).
+
+### C7.2 Operations are semantic actions
+
+| Category | Examples (illustrative, **not** a frozen API) | Path in core |
+|---|---|---|
+| Navigation | `Navigate{output, to: Element | CanvasPos | Delta}`, `ViewportFit{output, element}`, `ViewportRestore{output}` | `navigation` (ShellPort) |
+| Focus | `Focus{element}`, `AcknowledgeAttention{element}` | focus model (explicit-action path) |
+| Spatial action | `MoveElement{element, to: CanvasPoint}`: **the same validated placement path as an interactive drag commit** (R3 rounding, ±2³⁶ bound, mapped, not fullscreen; rejected otherwise) | `stage::place` (single writer) |
+| Queries | `Snapshot{…}` → immutable, generation-stamped copy of Stage metadata, cameras, outputs, focus, attention | read-only |
+| Events | element lifecycle, focus, attention, camera changes, output changes, each with a monotonically increasing **generation** | read-only |
+
+**There is no `set_element_canvas_rect`, no raw state write, no mutable access to `Core`.** Every command is a value that core validates and executes through the same single-writer paths user input uses. **No size writes:** element size is client-owned protocol state (C5).
+
+### C7.3 Protocol semantics
+
+| Concern | Rule |
+|---|---|
+| Command ordering | per connection, executed in order; each response carries the request id and the resulting generation |
+| Event ordering | single totally ordered stream per connection (generation numbers); a subscriber that misses events re-syncs by `Snapshot` + events with generation > snapshot's |
+| Stale IDs | `(InstanceId, ElementId)` (D-B4); mismatch or destroyed → `StaleElement` error; never aliases |
+| Reconnect / shell restart | stateless from the compositor's view: Snapshot + Subscribe. Compositor keeps **no** shell-owned authoritative state. |
+| Shell crash | connection dropped; nothing to roll back (commands are atomic); compositor-owned animations started by shell commands continue or end on their own |
+| Cancellation | commands are atomic. A long-running effect (animated navigation) is a compositor interaction, superseded by the next navigation or by user input. |
+| Presentation-only state (shell-owned) | overview open/closed, launcher, HUD layout, thumbnail selection. The compositor does not store it. |
+| Authoritative vs derived | everything the shell receives is a **derived copy**; nothing the shell holds is authority |
+
+### C7.4 Camera authority hardening (C-NB-2 → mechanically guarded)
+
+| Mechanism | Effect | Evidence |
+|---|---|---|
+| navigation-module privacy, private port fields, port-required entry points | protocol code cannot move cameras or forge authority | EC-1 (E0624, private-field diagnostic, E0061, E0603) |
+| ports are `!Send`; adapter protocol state `const`-asserted `Send` | **storing a port in protocol state is a compile error (E0277)** | EC-15; real Smithay protocol state is `Send` |
+| ports consumed by value by their sinks (`backend::run(InputPort)`, `ipc::serve(ShellPort)`), minted only by `Core::new` | the composition root is the only place both exist | design |
+| `verify-architecture` source check: the `infynitae-wayland` sources must not mention `InputPort`, `ShellPort`, `physical_input`, `shell_command` | conspicuous, mechanical | to be ported in Phase F |
+| `infynitae-ipc` must not depend on `infynitae-wayland` (and vice versa) | shell privilege cannot leak into protocol handling | `cargo tree` check |
+
+Residual (accepted): a deliberate change to the composition root could pass a port into protocol code by parameter. That would be a conspicuous, reviewed edit and violate the source check. Accidental leakage through state is now a compile error.
+
+---
+
+## C8 — Failure model (D-C8)
+
+Classes: **R** reject operation · **L** recover locally · **D** reconstruct derived state · **S** restart subsystem · **G** degrade feature · **T** terminate compositor.
+
+| Failure | Class | Authoritative state that survives | Action |
+|---|---|---|---|
+| Wayland client crash/disconnect | L + D | Stage minus that client's elements (B5 destroy path; idempotent, any order: EB-5); cameras; focus history | elements destroyed; focus successor; membership/scale/clock recomputed |
+| Client protocol error | L | same | Smithay posts the error and disconnects → as above |
+| Shell crash/disconnect | L | everything (shell owns nothing authoritative) | drop the connection; nothing to roll back; shell reconnects with a Snapshot |
+| Invalid shell command | R | unchanged | error response; no partial effects (commands validated before any write) |
+| Stale `ElementId` (shell or internal) | R | unchanged | `StaleElement`; never aliases |
+| Output disappearance | L + D | Stage, cameras (unbound, B7), focus | B7.2: `leave` before the global goes; fullscreen presentation dropped (C5); interactions orphaned (C4.6); membership/scale/clock recomputed |
+| Input device disappearance | L | ownership table entries of that device's held buttons/keys | treat as physical release of every held input of that device (a **real** device state change, not synthesis); orphaned interactions end |
+| Renderer failure (GPU reset / context lost) | S (renderer) + D | all core state; client buffers | recreate renderer and damage trackers; re-import buffers; full damage; if recreation fails → T |
+| Backend failure (DRM device lost, winit window closed) | T (Foundation 01) | — | orderly shutdown; clients disconnected. DRM session pause/resume is Phase G. |
+| xwayland-satellite crash | S + L | Stage minus X11 elements | X11 clients die (EC-12), elements destroyed normally; restart satellite with backoff; repeated crash → G (X11 disabled; logged) |
+| Smithay adapter error (handler `Result` errors, unexpected protocol state) | L or R | core untouched | log + reject the operation, or disconnect the offending client (`post_error`). Never patch core state to "fit". |
+| Internal invariant violation in core (e.g. membership without element, two anchors) | T | — | **do not continue**: an inconsistent authority must not be "repaired" by guessing. Panic-free design: core functions return `Result`; invariant checks run in debug and on cheap checkpoints in release. A violation is a bug and terminates with a diagnostic dump. |
+| Persistence load failure (Level D) | G | empty/default Stage | start with nothing restored; never partially apply a corrupt file; keep the file for inspection |
+| Partial startup (some globals fail) | T for **required** globals; G for optional ones | — | required: compositor v6, xdg_wm_base, shm, seat, outputs, presentation, fractional-scale, viewporter. Optional: dmabuf (shm fallback), pointer-constraints/relative-pointer (games degrade), xdg-activation (no activation). |
+| Required protocol global initialisation failure | T | — | abort with diagnostics before accepting clients |
+
+**Rule: recovery rebuilds derived state from authority.** After any L/S action, `MembershipTable`, `ProjectionFrame`s, scale/clock assignments and render state are **recomputed from Stage + cameras + outputs + snapshots**, never patched incrementally from a possibly inconsistent mirror. Stage corruption is never hidden by best-effort recovery (it is the T row).
+
+---
+
+## C9 — `unsafe` and dependency-patch policy (compact)
+
+**`unsafe`:**
+- `infynitae-core`: `#![forbid(unsafe_code)]`.
+- `infynitae-ipc`: `#![forbid(unsafe_code)]`.
+- `infynitae-wayland` and backends: `#![deny(unsafe_code)]`, with per-site `#[allow(unsafe_code)]` only where safe Rust cannot express the operation. Each site must carry:
+  1. a `// SAFETY:` invariant;
+  2. the narrowest possible scope;
+  3. a listing in `docs/foundation/UNSAFE_INVENTORY.md` (created when the first site exists);
+  4. a verification note (test or argument);
+  5. no authority or ownership effect (an `unsafe` block may not touch core state).
+
+  The one known required site is calloop's `Generic::get_mut` for `Display::dispatch_clients` (the standard Smithay idiom).
+- `unsafe` can never bypass authority: core is `forbid`, and ports cannot be forged even with `unsafe` from outside without UB-level misuse, which review of the inventory catches.
+
+**Dependency patches:**
+- Smithay stays pinned per D-B12-PIN (`=0.7.0`, locked).
+- A patch is permitted only under the D-B12-PIN patch policy: reproduced defect (experiment), no public-API fix, an upstream issue/PR, one minimal commit, listed with its reproducer, and removed once upstream fixes it.
+- **No patch is made in this checkpoint.** W-SM-4b (X-12) remains a documented, reproduced, isolated integration defect.
+- No patch-management framework.
+
+---
+
+## C10 — Observability (D-C10)
+
+`tracing` spans and events, structured fields, no background machinery.
+
+| Field | Meaning |
+|---|---|
+| `element` | `ElementId` |
+| `camera` | `CameraId` |
+| `output` | `OutputId` |
+| `interaction` | interaction/gesture id |
+| `gen` | Stage/event generation |
+| `client` | client id |
+| `surface` | `SurfaceKey` |
+
+| Target (category) | Events (default level) |
+|---|---|
+| `inf::stage` | element created/mapped/unmapped/destroyed; **every Stage mutation** (anchor before→after, cause: drag/shell/placement) (INFO) |
+| `inf::camera` | camera mutation (cause and authority: input/shell/fit), fit/restore (DEBUG per change; INFO for fit) |
+| `inf::focus` | keyboard focus transitions (cause), attention (INFO) |
+| `inf::input` | ownership transitions (press owner, consumed release, acquisition, cancellation) (DEBUG); individual motion events are **TRACE only** |
+| `inf::visibility` | membership enter/leave, preferred-scale transitions, clock changes (DEBUG) |
+| `inf::frames` | kick (reason), fallback completion (DEBUG); per-frame activity TRACE only |
+| `inf::protocol` | configure generation (serial, cause), fullscreen requests/decisions, activation decisions (DEBUG/INFO) |
+| `inf::shell` | command received, result, generation (INFO) |
+| `inf::failure` | subsystem failure/recovery (WARN/ERROR) |
+| `inf::workaround` | activation of each W-SM workaround (e.g. a W-SM-13 override hit, a W-SM-4a ordering decision) (DEBUG) |
+
+**Rules:**
+- Observability is never read by any decision path; it is not state.
+- No telemetry, metrics daemon, polling, timers or network.
+- High-frequency categories are TRACE and compiled-in but disabled by default. With no subscriber interested, a disabled `tracing` callsite costs a cached check. That is negligible idle cost and starts no background subsystem.
+- Diagnostic dumps (the C8 T-row) are produced on demand or on fatal error only.
+
+---
+
+## CP2 contradiction pass
+
+| # | Check | Result |
+|---|---|---|
+| 1 | X-10 agrees with C4 | **Yes**: K1–K9 not falsified; the negative control shows K3 is necessary; one protocol ambiguity recorded (RC-1) |
+| 2 | Fullscreen and viewport-fit have separate state and authority | **Yes**: `ViewportFit` in `navigation` (ports) vs `FullscreenState` + `OutputPresentation` in protocol policy (C5) |
+| 3 | Protocol fullscreen cannot move cameras | **Yes**: the presentation view is a render input, not a camera; protocol policy cannot reach `navigation` (C1.5, EC-1) |
+| 4 | Multi-output fullscreen semantics explicit | **Yes**: Case B; the size consequence for other cameras is stated, not hidden |
+| 5 | XWayland cannot become Stage authority | **Yes**: X11 move request had no effect (EC-12); satellite is an ordinary client |
+| 6 | Shell privilege does not leak into protocol handling | **Yes**: ports outside protocol state (E0277 guard); `ipc ↛ wayland`, `wayland ↛ ipc` |
+| 7 | Shell IPC cannot become arbitrary Stage mutation | **Yes**: semantic commands only; `MoveElement` uses the drag-commit path; no size or raw writes (C7.2) |
+| 8 | Failure recovery reconstructs derived state | **Yes**: C8 rule; invariant violation terminates rather than repairs |
+| 9 | `unsafe`/patch policy cannot bypass authority | **Yes**: core and ipc `forbid(unsafe_code)`; no patch now |
+| 10 | Observability observational | **Yes**: no decision reads it (C10) |
+| 11 | Snapshot does not create a second spatial model | **Yes**: derived per commit, no anchors, single writer (CP2-2) |
+| 12 | Render order agrees with Smithay | **Yes**: X-15 PASS (EC-9) |
+| 13 | No new subsystem gains persistent spatial authority | **Yes**: new state is `ViewportFit` (camera snapshot), `FullscreenState` (saved size/states), `OutputPresentation` (render input) and the IPC connection; none holds anchors |
+| 14 | Hit-testing agrees with rendered stacking | **Contradiction found in Smithay, not in Infynitae**: `Window::surface_under` disagrees with rendered stacking (W-SM-12) and with half-open region containment (W-SM-11). Resolved by D-CP2-HIT. |
+| 15 | Fullscreen vs MaxGesture | **Tension recorded, not resolved by silent change**: MaxGesture (frozen) makes a fullscreen element also visible on a higher-scale output render at that higher scale. CP2-Q1 is an open policy question requiring approval. |
+| 16 | Viewport-fit vs MaxGesture | **Refinement proposed, not adopted**: generalise to effective scale `k = zoom·scale` (identical at zoom 1). Requires approval because it touches a frozen decision's wording. |
+
+**No Phase B or C1 invariant is contradicted.** Two items need your decision: CP2-Q1 and the MaxGesture effective-scale generalisation. Neither blocks the architecture: both are policy values over the same mechanism.
+
+## CP2 findings, conditions, risks
+
+| ID | Item | Status |
+|---|---|---|
+| A-C1 | snapshot via public API | **RESOLVED** (EC-8) |
+| C-NB-2 | port in protocol state | **mechanically guarded** (E0277) + source check; residual: deliberate composition-root edit |
+| C-NB-3 / X-15 | render order | **RESOLVED** (EC-9) |
+| CR-1 / NB-2 | single origin function | **RESOLVED for tested shapes** (D-CP2-HIT); multi-level popups and region subtraction → T1 |
+| CR-2 / X-10 | keyboard ownership | **VALIDATED** (EC-6) |
+| RC-1 (new) | client-side destruction of the keyboard-active surface: protocol ambiguity | low risk; T3 |
+| W-SM-11, W-SM-12, W-SM-13 (new) | Smithay quirks | adapter-local workarounds: own hit-test; override `maximize_request` / `fullscreen_request` |
+| CP2-Q1 (new) | preferred scale of a fullscreen element | **open policy question** (needs approval + evidence) |
+| CP2-R1 (new) | MaxGesture generalised to `k = zoom·scale` | **proposed refinement** (needs approval) |
+| C6-A1 (new) | satellite override-redirect fidelity (menus/tooltips) | ASSUMPTION → T3 |
+| CR-3, CR-4 | output removal during interaction; popup-grab dismissal | still T1 (X-11a/b), designs in C4.6 / C5 |

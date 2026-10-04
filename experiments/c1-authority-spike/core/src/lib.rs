@@ -120,13 +120,19 @@ pub enum ShellCommand {
     NavigateTo { camera: usize, to: geom::CanvasPos },
 }
 
-/// Authority to submit physical input. Minted only by `Core::new`; not Clone; private field.
+/// Marker making a type `!Send` (and `!Sync`). Ports are deliberately `!Send` so that any
+/// protocol-state type asserted `Send` cannot contain one (C-NB-2 hardening, E0277 on violation).
+type NotSend = std::marker::PhantomData<*const ()>;
+
+/// Authority to submit physical input. Minted only by `Core::new`; not Clone; private field; !Send.
 pub struct InputPort {
     core_id: u64,
+    _not_send: NotSend,
 }
-/// Authority to submit shell navigation. Minted only by `Core::new`; not Clone; private field.
+/// Authority to submit shell navigation. Minted only by `Core::new`; not Clone; private field; !Send.
 pub struct ShellPort {
     core_id: u64,
+    _not_send: NotSend,
 }
 
 #[derive(Debug, PartialEq)]
@@ -150,8 +156,8 @@ impl Core {
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
         (
             Core { id, stage: stage::Stage::default(), cameras: navigation::CameraSet::new(cameras), attention: vec![] },
-            InputPort { core_id: id },
-            ShellPort { core_id: id },
+            InputPort { core_id: id, _not_send: std::marker::PhantomData },
+            ShellPort { core_id: id, _not_send: std::marker::PhantomData },
         )
     }
     pub fn stage(&self) -> &stage::Stage {

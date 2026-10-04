@@ -7,3 +7,7 @@ publish = false
 # Stands in for the Smithay adapter: depends on core only (no Smithay needed to show the boundary).
 [dependencies]
 spike-core = { path = "../core" }
+
+[features]
+# negative clippy probe: storing an authority port in protocol state
+probe_store_port_in_state = []
