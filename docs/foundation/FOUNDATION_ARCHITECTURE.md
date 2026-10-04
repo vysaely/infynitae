@@ -1,6 +1,6 @@
 # Infynitae Native — Foundation Architecture (Phase C)
 
-Status: checkpoint 1 (C1–C4) accepted, commit `d596416cf57877116e9cfbc8cf6c6fe25c001c67`. Checkpoints 1, 2 and 3A accepted. **Checkpoint 3B (C11–C16) complete. Phase C gate SATISFIED; stopped at the Phase C final review gate.** The canonical invariant registry is in C12.
+Status: checkpoint 1 (C1–C4) accepted, commit `d596416cf57877116e9cfbc8cf6c6fe25c001c67`. **Phase C COMPLETE and SEALED** (seal commit `615b0ed2f3631b698b0c54783c28f696ef4ff34a`; final gate approved by the user). Approval means the architecture is sufficiently specified to advance, **not** that the compositor is physically validated. The canonical invariant registry is in C12.
 
 Inputs (frozen):
 - Phase B seal `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`, especially the carry-forward ledger at the end of [FOUNDATION_BLOCKERS.md](FOUNDATION_BLOCKERS.md).

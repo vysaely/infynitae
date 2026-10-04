@@ -1,6 +1,6 @@
 # Checkpoint
 
-CURRENT_PHASE: **C — COMPLETE. Phase C gate SATISFIED (checkpoint 3B). STOPPED at the Phase C final review gate. Phase D not begun.**
+CURRENT_PHASE: **C — COMPLETE and SEALED. Phase C final gate approved by the user (2026-10-04). Phase C seal commit: `615b0ed2f3631b698b0c54783c28f696ef4ff34a`. Phase D not begun.**
 
 Date: 2026-10-04
 
@@ -10,7 +10,7 @@ Date: 2026-10-04
 - Phase C checkpoint 1: `d596416cf57877116e9cfbc8cf6c6fe25c001c67`
 - Phase C checkpoint 2: `fc2dd68f843b1eb05828f4116f94e8bab4f478da`
 - **Phase C checkpoint 3A:** `795800937a1e50e56587cd4080a73ce27d8a8b01` (hash recorded in `fd9a80c`)
-- Checkpoint 3B work below is **uncommitted** on top of `fd9a80c`.
+- **Phase C seal (checkpoint 3B):** `615b0ed2f3631b698b0c54783c28f696ef4ff34a`
 
 ## COMPLETED_WORK (3B)
 - C11: verification tiers T0–T5 (environment, simulated/real, invariants, tests, cost, trigger, evidence, meaning of failure, tier-honesty rule); OB-1…OB-29 all mapped; negative controls retained.
@@ -29,7 +29,7 @@ Date: 2026-10-04
 - Final adversarial audit (25 scenarios): no contradictions between invariants; five under-specifications closed (AUD-4, -12/-13, -24, -25).
 - Phase C gate evaluation: satisfied.
 
-## FILES_CHANGED (uncommitted)
+## FILES_CHANGED (committed in the seal)
 - `docs/foundation/FOUNDATION_ARCHITECTURE.md` (3B sections)
 - `docs/foundation/FOUNDATION_BLOCKERS.md` (normative-pointer note)
 - `docs/foundation/CHECKPOINT.md`
@@ -47,4 +47,4 @@ H_cfg 3.0 · r 1.25 · σ 0.05 · P 1 s · SC-D decrease delay off · renderer f
 **No.** 3B ran only offline model scripts and documentation work; no clients, compositors or system changes.
 
 ## NEXT_ACTION
-Await the user's Phase C final review. Phase D (falsification and document reorganisation) only after explicit approval.
+Phase D (falsification and document reorganisation) only after explicit user authorisation. Approval scope: the architecture is sufficiently specified to advance; it is **not** physically validated or production-ready. T3–T5 and upstream obligations remain authoritative future requirements.
