@@ -1,0 +1,38 @@
+$ ./target/release/xhit   (experiments/b8-harness; smithay =0.7.0 + renderer_test; lockstep)
+# 2026-10-04T14:32:17+03:00
+xhit — physical-pixel hit-testing vs presented surfaces; smithay =0.7.0 + DummyRenderer; lockstep
+tree front-to-back: ["PS@(115,65) 30x30 input=all", "P@(110,60) 140x100 input=all", "S1a@(47,21) 30x20 input=all", "S1@(37,11) 101x53 input=all", "W@(0,0) 440x340 input=region", "S2(below)@(-15,50) 60x40 input=all"]
+
+== semantic cases (k=1; RootSurfaceLocal pixel centres; hand-derived expectations)
+   [PASS] root window area                                                       at (200,250): got Some("W") want Some("W")
+   [PASS] root CSD shadow (outside input region), nothing else there             at (  5,  5): got None want None
+   [PASS] S1 above root                                                          at ( 40, 15): got Some("S1") want Some("S1")
+   [PASS] S1a nested above S1                                                    at ( 50, 25): got Some("S1a") want Some("S1a")
+   [PASS] S1 outside root's input region (S1 has no region)                      at ( 40, 12): got Some("S1") want Some("S1")
+   [PASS] root over S2 (outside the hole): root wins (S2 is below)               at ( 30, 88): got Some("W") want Some("W")
+   [PASS] input-region HOLE over S2: falls through to S2(below)                  at ( 25, 60): got Some("S2(below)") want Some("S2(below)")
+   [PASS] S2 left of the root (x<0)                                              at (-10, 60): got Some("S2(below)") want Some("S2(below)")
+   [PASS] popup over root                                                        at (150,100): got Some("P") want Some("P")
+   [PASS] popup subsurface PS                                                    at (120, 70): got Some("PS") want Some("PS")
+   [PASS] right of the hole, below S1, inside the root input region              at ( 41, 70): got Some("W") want Some("W")
+   [PASS] point inside S1 next to the hole (S1 above root)                       at ( 41, 60): got Some("S1") want Some("S1")
+
+== physical-pixel selection vs presented surface (Smithay element geometry), all pixels over the tree
+   k=1    camera v=(400.00000,300.00000) pixels=159506 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:    0 | max coordinate clamp 0.000 logical px
+   k=1    camera v=(400.30000,300.70000) pixels=159506 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:    0 | max coordinate clamp 0.000 logical px
+   k=1    camera v=(401.71875,299.55000) pixels=159506 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:    0 | max coordinate clamp 0.000 logical px
+   k=1    camera v=(359.50000,241.25000) pixels=159506 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:    0 | max coordinate clamp 0.000 logical px
+   k=1.25 camera v=(400.00000,300.00000) pixels=247825 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:  399 | max coordinate clamp 0.000 logical px
+   k=1.25 camera v=(400.30000,300.70000) pixels=247825 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:  399 | max coordinate clamp 0.000 logical px
+   k=1.25 camera v=(401.71875,299.55000) pixels=247825 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:  399 | max coordinate clamp 0.000 logical px
+   k=1.25 camera v=(359.50000,241.25000) pixels=247825 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:  399 | max coordinate clamp 0.000 logical px
+   k=1.5  camera v=(400.00000,300.00000) pixels=355008 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:  617 | max coordinate clamp 0.000 logical px
+   k=1.5  camera v=(400.30000,300.70000) pixels=355008 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:  617 | max coordinate clamp 0.000 logical px
+   k=1.5  camera v=(401.71875,299.55000) pixels=355008 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:  617 | max coordinate clamp 0.000 logical px
+   k=1.5  camera v=(359.50000,241.25000) pixels=355008 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:  617 | max coordinate clamp 0.000 logical px
+   k=1.75 camera v=(400.00000,300.00000) pixels=482002 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:  558 | max coordinate clamp 0.000 logical px
+   k=1.75 camera v=(400.30000,300.70000) pixels=482002 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:  558 | max coordinate clamp 0.000 logical px
+   k=1.75 camera v=(401.71875,299.55000) pixels=482002 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:  558 | max coordinate clamp 0.000 logical px
+   k=1.75 camera v=(359.50000,241.25000) pixels=482002 | physical-selection mismatches vs presented: 0 | old canvas-exact rule mismatches:  558 | max coordinate clamp 0.000 logical px
+
+ALL: PASS

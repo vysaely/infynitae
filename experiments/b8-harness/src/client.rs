@@ -97,6 +97,8 @@ pub struct Probe {
     /// buttons the client currently believes are pressed
     pub buttons_down: std::collections::BTreeSet<u32>,
     pub presentation: Option<WpPresentation>,
+    /// subsurfaces created by add_subsurface_* (protocol id -> surface), so they can be parents
+    pub extra: Vec<(u32, WlSurface)>,
     pub keyboard: Option<WlKeyboard>,
     /// client-side logical keyboard state per the wl_keyboard spec (X-10)
     pub kb: KbLogical,
@@ -137,6 +139,7 @@ impl Probe {
             confined: None,
             buttons_down: Default::default(),
             presentation: None,
+            extra: Vec::new(),
             feedback_seq: None,
             keyboard: None,
             kb: KbLogical::default(),
@@ -158,16 +161,33 @@ impl Probe {
         self.surfaces[idx].wl.commit();
     }
 
+    /// Input region from add/subtract operations (surface-local), applied on commit.
+    pub fn set_input_ops(&mut self, qh: &QueueHandle<Self>, idx: usize, ops: &[(bool, (i32, i32, i32, i32))]) {
+        let region = self.compositor.create_region(qh, ());
+        for (add, r) in ops {
+            if *add {
+                region.add(r.0, r.1, r.2, r.3);
+            } else {
+                region.subtract(r.0, r.1, r.2, r.3);
+            }
+        }
+        self.surfaces[idx].wl.set_input_region(Some(&region));
+        region.destroy();
+        self.surfaces[idx].wl.commit();
+    }
+
     /// Like add_subsurface; `below` places the child below its parent (z-order).
+    /// `parent` is a Surf index, or the protocol id returned by a previous add_subsurface_*.
     /// Returns the WlSurface protocol id of the new subsurface (it has no Surf entry).
     pub fn add_subsurface_ex(&mut self, globals: &GlobalList, qh: &QueueHandle<Self>, parent: usize, label: &str, offset: (i32, i32), size: (i32, i32), below: bool) -> usize {
         let subc: WlSubcompositor = globals.bind(qh, 1..=1, ()).expect("wl_subcompositor");
         let idx = self.surfaces.len();
         let wl = self.compositor.create_surface(qh, idx);
-        let sub: WlSubsurface = subc.get_subsurface(&wl, &self.surfaces[parent].wl, qh, ());
+        let parent_wl = if parent < self.surfaces.len() { self.surfaces[parent].wl.clone() } else { self.extra.iter().find(|(id, _)| *id as usize == parent).expect("parent").1.clone() };
+        let sub: WlSubsurface = subc.get_subsurface(&wl, &parent_wl, qh, ());
         sub.set_position(offset.0, offset.1);
         if below {
-            sub.place_below(&self.surfaces[parent].wl);
+            sub.place_below(&parent_wl);
         }
         sub.set_desync();
         // a plain surface (no xdg role); reuse Surf bookkeeping with a dummy xdg object is not
@@ -182,9 +202,10 @@ impl Probe {
         wl.attach(Some(&buf), 0, 0);
         wl.damage_buffer(0, 0, w, h);
         wl.commit();
-        self.surfaces[parent].wl.commit();
+        parent_wl.commit();
         let _ = label;
         let pid = wl.id().protocol_id() as usize;
+        self.extra.push((pid as u32, wl.clone()));
         std::mem::forget(sub);
         std::mem::forget(wl);
         let _ = idx;

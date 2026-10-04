@@ -1,51 +1,51 @@
 # Checkpoint
 
-CURRENT_PHASE: **C — Phase C checkpoint 2 (C5–C10) COMPLETE. STOPPED at the checkpoint 2 review gate. C11 not started.**
+CURRENT_PHASE: **C — Phase C checkpoint 3A (scale/zoom, hit-testing, obligation registry) COMPLETE. STOPPED at the 3A review gate. Checkpoint 3B (C11–C16) not started.**
 
 Date: 2026-10-04
 
 ## Baselines
 - Phase A evidence: `2c8c163784e260af4aaa8c1dc05c6281b0476120`
 - Phase B seal: `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`
-- Phase C checkpoint 1 (C1–C4): `d596416cf57877116e9cfbc8cf6c6fe25c001c67` (hash recorded in `03448ad`)
-- **Phase C checkpoint 2 (C5–C10):** `fc2dd68f843b1eb05828f4116f94e8bab4f478da`
+- Phase C checkpoint 1: `d596416cf57877116e9cfbc8cf6c6fe25c001c67`
+- **Phase C checkpoint 2 (C5–C10):** `fc2dd68f843b1eb05828f4116f94e8bab4f478da` (hash recorded in `2b3184a`)
+- Checkpoint 3A work below is **uncommitted** on top of `2b3184a`.
 
-## COMPLETED_WORK (checkpoint 2, in the mandated order)
-1. X-10 keyboard/modifier ownership: 9 scenarios PASS; negative control FAILS as predicted (stuck modifier without K3). K1–K9 not falsified.
-2. Surface-tree snapshot boundary: public API only; dispatch-safe inside `commit`; equals ground truth. X-15 render order and positions PASS. Hit-test agreement with Smithay fully explained by two new Smithay quirks (W-SM-11, W-SM-12).
-3. C5 fullscreen vs viewport-fit, with both worked multi-output cases.
-4. C6 xwayland-satellite (experiment: ordinary toplevel; X11 move request ineffective; crash path clean; W-SM-13 found).
-5. C7 shell boundary, plus C-NB-2 hardening (ports `!Send`; protocol state asserted `Send` → E0277; real Smithay state is `Send`).
-6. C8 failure matrix. 7. C9 unsafe/patch policy. 8. C10 observability. 9. Contradiction pass.
+## COMPLETED_WORK (3A)
+- CP2-Q1 resolved (no fullscreen override) and CP2-R1 refined into the unified scale model D-CP3A-SCALE:
+  - rules S1–S9;
+  - frozen properties P1–P7;
+  - provisional constants H_cfg / r / σ;
+  - runtime D_max.
+- Evidence:
+  - device limits (EC-16);
+  - real-client scale response and storm cost for GTK4, kitty and Firefox (EC-17);
+  - buffer-cost table (EC-18);
+  - executable model with walkthroughs A–E (EC-19).
+- Hit-testing D-CP3A-HIT (physical-pixel selection = presented surface). xhit: 0 mismatches over 16 fractional configurations; 12 semantic cases (EC-20).
+- RC-1 validated with GTK 4.22.5 (EC-21) and reclassified.
+- Complete obligation registry OB-1…OB-29 with destinations.
+- Authority recheck: no new cycle.
 
-## DECISIONS MADE
-- D-CP2-HIT (own snapshot hit-test; `Window::surface_under` not used)
-- D-C5-FIT (viewport-fit = camera operation in `navigation`)
-- D-C5-FS (fullscreen = output presentation; never a camera)
-- D-C6 (satellite, narrow)
-- D-C7 (`infynitae-ipc` crate, semantic commands, generations)
-- D-C8 (failure classes; rebuild derived state; invariant violation terminates)
-- C9 policy
-- D-C10
+## DECISIONS
+D-CP3A-SCALE (S1–S9, P1–P7) · D-CP3A-HIT (refinement of D-B2-I9) · RC-1 disposition · registry destinations.
 
-## AWAITING USER DECISION (not adopted)
-- **CP2-Q1:** preferred scale of a fullscreen element (keep MaxGesture as frozen vs pin to the fullscreen output).
-- **CP2-R1:** generalise MaxGesture to the effective scale `k = zoom·scale` (identical at zoom 1; matters for viewport-fit).
+## PROVISIONAL (not established)
+- H_cfg = 3.0, r = 1.25, σ = 0.05 (X-16)
+- off-screen fallback P = 1 s (OB-8)
+- optional wheel decrease-settle delay (OB-23, default off)
 
 ## FILES_CHANGED (uncommitted)
-- `docs/foundation/FOUNDATION_ARCHITECTURE.md` (CP2 sections)
+- `docs/foundation/FOUNDATION_ARCHITECTURE.md` (CP3A sections; EC-20 pixel count corrected)
 - `docs/foundation/CHECKPOINT.md`
-- `docs/foundation/evidence/phase-c/`: `x10-keyboard-output.txt`, `xsnap-x15-output.txt`, `c6-xwayland-satellite-output.txt`, `c6-sat.sh`, `c1-authority-spike-verify.txt` (updated)
+- `docs/foundation/evidence/phase-c/`: `cp3a-scaleprobe-output.txt`, `cp3a-gtk4win.py`, `cp3a-buffer-cost.txt`, `cp3a-scale-model-output.txt`, `cp3a-xhit-output.txt`, `cp3a-rc1-gtk4.py`, `cp3a-rc1-gtk4-output.txt`
+- `experiments/cp3a-scale-model/model.py`
 - `experiments/b8-harness/`:
-  - new: `src/keys.rs`, `src/snapshot.rs`, `src/bin/{x10,xsnap,sendcheck}.rs`
-  - changed: `client.rs` (wl_keyboard + checker, region/subsurface helpers, destroy helper), `server.rs` (commit-time snapshot, W-SM-13 overrides, lifecycle logging), `realclient.rs` (element log)
-- `experiments/c1-authority-spike/` (`!Send` ports, Send assertion, port-in-state probe, verify.sh matching)
+  - new: `bin/scaleprobe.rs`, `bin/rc1.rs`, `bin/xhit.rs`
+  - changed: `client.rs` (nested subsurfaces, region add/subtract), `server.rs` (commit buffer sizes)
 
 ## LIVE_SYSTEM_TOUCHED
-**No changes to the live system.**
-- The C6 run started xwayland-satellite, Xwayland and an X11 kitty against the private harness socket on X display `:97`; all terminated and no files were left.
-- `/tmp/.X11-unix/X25` is stale from Prototype 01's session, not this work.
-- No Hyprland, configuration or package changes; Clippy was **not** installed (the toolchain was left unchanged).
+**No changes to the live system.** GTK4 (Python), kitty and Firefox ran against the private harness socket (Firefox with a temporary HOME/profile, `--no-remote`); all terminated. No Hyprland, configuration, package or toolchain changes.
 
 ## NEXT_ACTION
-Await the user's checkpoint 2 review (including CP2-Q1 and CP2-R1). If approved: Phase C checkpoint 3 (C11–C16).
+Await the user's 3A review. If approved: checkpoint 3B (C11–C16, final verification architecture, contradiction audit, Phase C gate).

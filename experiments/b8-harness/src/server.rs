@@ -170,6 +170,8 @@ pub struct Server {
     pub activation_allowed: bool,
     pub snapshots_taken: u64,
     pub last_snapshot_len: usize,
+    /// (time, element id, surface protocol id, buffer size in buffer pixels) for every commit with a buffer
+    pub commit_sizes: Vec<(u64, u64, u32, (i32, i32))>,
 }
 
 #[derive(Default)]
@@ -253,6 +255,7 @@ impl Server {
             activation_allowed: true,
             snapshots_taken: 0,
             last_snapshot_len: 0,
+            commit_sizes: Vec::new(),
         }
     }
 
@@ -505,6 +508,13 @@ impl CompositorHandler for Server {
                 self.elements[ei].window.on_commit();
                 // dispatch-safety check: extract the full surface-tree snapshot INSIDE the commit
                 // handler, as the production adapter will (no re-entrant with_states deadlock)
+                let bsize = with_renderer_surface_state(surface, |st| st.buffer_size().map(|sz| (sz.w, sz.h))).flatten();
+                if let Some(b) = bsize {
+                    let id = self.elements[ei].id;
+                    // buffer_size() is logical; multiply back by the buffer scale for buffer pixels
+                    let bs = with_renderer_surface_state(surface, |st| st.buffer_scale()).unwrap_or(1);
+                    self.commit_sizes.push((self.now_us, id, surface.id().protocol_id(), (b.0 * bs, b.1 * bs)));
+                }
                 let snap = crate::snapshot::extract(&self.elements[ei].window);
                 self.snapshots_taken += 1;
                 self.last_snapshot_len = snap.surfaces.len();

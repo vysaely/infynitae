@@ -1,6 +1,6 @@
 # Infynitae Native — Foundation Architecture (Phase C)
 
-Status: checkpoint 1 (C1–C4) accepted, commit `d596416cf57877116e9cfbc8cf6c6fe25c001c67`. **Checkpoint 2 (C5–C10) complete; stopped at the checkpoint 2 review gate.** C11–C16 not started.
+Status: checkpoint 1 (C1–C4) accepted, commit `d596416cf57877116e9cfbc8cf6c6fe25c001c67`. Checkpoint 2 (C5–C10) accepted. **Checkpoint 3A complete; stopped at the 3A review gate.** C11–C16 (checkpoint 3B) not started.
 
 Inputs (frozen):
 - Phase B seal `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`, especially the carry-forward ledger at the end of [FOUNDATION_BLOCKERS.md](FOUNDATION_BLOCKERS.md).
@@ -825,3 +825,304 @@ Classes: **R** reject operation · **L** recover locally · **D** reconstruct de
 | CP2-R1 (new) | MaxGesture generalised to `k = zoom·scale` | **proposed refinement** (needs approval) |
 | C6-A1 (new) | satellite override-redirect fidelity (menus/tooltips) | ASSUMPTION → T3 |
 | CR-3, CR-4 | output removal during interaction; popup-grab dismissal | still T1 (X-11a/b), designs in C4.6 / C5 |
+
+---
+---
+
+# Phase C checkpoint 3A: scale/zoom, hit-testing, obligation registry
+
+Checkpoint 2 accepted: `fc2dd68f843b1eb05828f4116f94e8bab4f478da`.
+
+## CP3A evidence
+
+| ID | What | Where |
+|---|---|---|
+| EC-16 | Device limits (vulkaninfo, RX 9070 XT / RADV): `maxImageDimension2D = 32768`, **`maxFramebufferWidth = 16384`**. A client cannot render a buffer wider than 16384 px, so for a window of logical width W the client scale is physically bounded by 16384/W. `wp_fractional_scale_v1` itself states **no** bound. | `vulkaninfo`; `fractional-scale-v1.xml` |
+| EC-17 | **scaleprobe**: GTK 4.22.5, kitty 0.49.2 (swrast), Firefox 157. **All three honour a 1/120 change with a full re-render and a new buffer** (628→633, 1920→1936, 1280→1291 px). Client CPU grows with scale² for software rendering (kitty 20.7% @1.0 → 218% @3.0). **A per-frame scale storm (60 changes/s)** costs one reallocation per change: GTK4 30% CPU, kitty 477%, Firefox 105% (vs a few % steady). | `b8-harness/src/bin/scaleprobe.rs`; [`evidence/phase-c/cp3a-scaleprobe-output.txt`](evidence/phase-c/cp3a-scaleprobe-output.txt) |
+| EC-18 | Buffer-cost table (computed) for candidate ceilings, double/triple buffering, plus a compositor copy for shm | [`evidence/phase-c/cp3a-buffer-cost.txt`](evidence/phase-c/cp3a-buffer-cost.txt) |
+| EC-19 | Executable **MODEL** of the unified scale policy (not an experiment): walkthroughs A–E with the candidate constants | `experiments/cp3a-scale-model/model.py`; [`evidence/phase-c/cp3a-scale-model-output.txt`](evidence/phase-c/cp3a-scale-model-output.txt) |
+| EC-20 | **xhit**: hit-testing at k ∈ {1.0, 1.25, 1.5, 1.75} × 4 fractional camera positions, every pixel over a tree with a nested subsurface, a below-parent subsurface reached through an **input-region hole**, and a popup + popup subsurface. **Physical-pixel selection vs the surface Smithay actually presents: 0 mismatches** (16 configurations, 159,506–482,002 pixels each). The Phase B canvas-exact rule would mismatch on 399–617 pixels per configuration at fractional k. 12 hand-derived semantic cases PASS. One hand oracle was itself wrong (point inside S1); it was corrected and the record is kept in the source. | `bin/xhit.rs`; [`evidence/phase-c/cp3a-xhit-output.txt`](evidence/phase-c/cp3a-xhit-output.txt) |
+| EC-21 | **RC-1 with a real toolkit (GTK 4.22.5)**: the client destroys its keyboard-focused window while Shift+A are held. Observed: no `leave` (undeliverable, EC-7); `enter(W1, keys=[A,Shift])` + `modifiers(shift)`; GTK activates W1 **without** emulating presses; delivers the A and Shift releases with correct state; a following `b` arrives with **no modifier**; 0 GTK warnings/criticals | `bin/rc1.rs`, `cp3a-rc1-gtk4.py`; [`evidence/phase-c/cp3a-rc1-gtk4-output.txt`](evidence/phase-c/cp3a-rc1-gtk4-output.txt) |
+
+---
+
+## CP3A-1. Unified scale model (resolves CP2-Q1 and CP2-R1)
+
+### Concepts kept separate
+
+| # | Concept | Definition | Owner |
+|---|---|---|---|
+| 1 | **Raw presentation requirement** ρ_p | `output_scale(O) × presentation_zoom(p)` for each presentation p observing element E. Camera views: `presentation_zoom = camera zoom`. Protocol-fullscreen presentation view (C5.2): `presentation_zoom = 1`. ρ(E) = max over observing p. | derived (core visibility) |
+| 2 | **Client scale hint** h(E) | the value sent: `wp_fractional_scale_v1.preferred_scale = round(h·120)` and `wl_surface.preferred_buffer_scale = ⌈h⌉`; a member of a finite ladder; bounded | core `ScaleState` (policy state) → protocol |
+| 3 | **Compositor factor** m_p = ρ_p / h | > 1: the compositor magnifies (upscale filter); < 1: it minifies (downscale filter) | derived per frame (renderer) |
+| 4 | **Gesture-time state** | during an active camera gesture h may only **increase**, and only at ladder-rung crossings | core |
+| 5 | **Settled state** | at gesture end or on an atomic camera change, `h := t(ρ)` exactly | core |
+
+**CP2-Q1 resolved: protocol fullscreen does not override MaxGesture.** The fullscreen presentation contributes ρ = scale_O like any presentation; B's 1.5 requirement still counts (Case C).
+
+**CP2-R1 resolved: camera zoom enters the requirement** (ρ includes zoom), but the requirement is **not** sent directly. It passes through the ladder and the ceiling.
+
+### Rules (DECISION D-CP3A-SCALE; S5/S6 = MaxGesture generalised)
+
+| Rule | Statement |
+|---|---|
+| S1 | ρ(E) = max over observing presentations of `output_scale × presentation_zoom` |
+| S2 | **Ladder** L (finite, sorted): every connected output's scale ∪ the integers 1..⌊H_max⌋ ∪ geometric fill such that consecutive rungs differ by a ratio ≤ r; all rungs ≤ H_max(E) |
+| S3 | **Ceiling** `H_max(E) = min(H_cfg, D_max / max(logical w, logical h of E))`. `D_max` is **queried from the renderer at runtime** (16384 on the target device), not a constant. |
+| S4 | **Target** `t(ρ) = smallest rung ≥ ρ / (1 + σ)`, else H_max (σ = sharpness tolerance) |
+| S5 | **Increase**: if t > h then h := t immediately, during gestures too (bounded: one change per rung crossed) |
+| S6 | **Decrease**: if t < h, only when no camera gesture is active (gesture end, atomic camera change, membership change outside a gesture) |
+| S7 | **Unobserved**: hold h |
+| S8 | **Emission**: only on change (Smithay dedupes, EB-12); fractional = round(h·120)/120; integer = ⌈h⌉ (D-B8-SCALE ⌈⌉ rule kept) |
+| S9 | **Beyond the ceiling** the compositor magnifies: m_p = ρ_p / h > 1 using `upscale_filter` (C3.5); visual quality is DV-2 |
+
+### Frozen properties (architecture; independent of tuning)
+
+1. **P1 Bounded hint.** h ≤ H_max(E) for any camera zoom. Camera zoom is unbounded; the hint is not. Grounded in the device limit (EC-16) and buffer cost (EC-18).
+2. **P2 Finite hint set.** h ∈ L, so |L| is the maximum number of distinct hints. Grounded in EC-17: clients reallocate on every 1/120 change, so protocol granularity must not be policy granularity.
+3. **P3 No storms.** Within one gesture, renegotiations ≤ the number of rungs crossed upward, plus one settlement. There are never per-event renegotiations. Grounded in EC-17 storm costs.
+4. **P4 Reduction to Phase B.** At zoom 1 with no zoom gestures, S1–S8 give exactly D-B8-SCALE MaxGesture, because every output scale is a rung (Case A).
+5. **P5 Determinism.** h is a pure function of (presentation set, zooms, gesture boundaries, ladder configuration). No timers.
+6. **P6 No decrease during a gesture** (MaxGesture).
+7. **P7 Correctness beats stability.** If E's logical size changes so that h > H_max(E) (device bound), h is lowered immediately, even mid-gesture.
+
+### Gesture settlement: why no timer
+
+- **Continuous zoom** (pinch, drag-zoom) has a physical begin/end, so settlement happens at gesture end (S6).
+- **Discrete zoom** (wheel ticks, key steps) has no end. Each tick is an atomic change, so increases and decreases settle exactly. Renegotiations are bounded by rung crossings and the user's discrete input rate.
+- The only residual case is a user wiggling the wheel exactly across a rung boundary (≤ 1 change per tick). It is **not** a storm per P3, but it is measurable.
+
+**OB-23** (registry) defines the experiment. If that case proves costly, an *optional* decrease-settle delay may be added, with a configured value: provisional, default off.
+
+### Candidate constants (PROVISIONAL, not established)
+
+| Constant | Candidate | Basis | Tuning experiment |
+|---|---|---|---|
+| H_cfg | 3.0 | a 1920×1080 window costs 71 MB/buffer at 3.0 vs 127 MB at 4.0 (×2–×3 swapchain); software-rendering client CPU ×9 at 3.0 (EC-17/18); typical output scales ≤ 3. **Not** a quality judgement. | X-16 |
+| r (rung ratio) | 1.25 | ≥ 25% steps make every renegotiation substantive (EC-17: 1/120 steps reallocate) while magnification between rungs stays ≤ r | X-16 |
+| σ (sharpness tolerance) | 0.05 | avoids jumping a rung for a ≤ 5% requirement excess (Case D: m = 1.039) | X-16 + DV-2 |
+| D_max | runtime query (16384 measured) | EC-16 | runtime, not tuned |
+
+**X-16 (tuning experiment):** a zoom sweep 1→8→1 with real clients (GTK4, Firefox, kitty, one game), measuring renegotiations, client CPU, memory and frame time. Plus a visual sharpness comparison at m ∈ {1.0, 1.04, 1.25, 2.0, 2.67}. Destination: T3/T4.
+
+### Mandatory walkthroughs (EC-19 MODEL output; candidate constants)
+
+Window W logical 800×600. Outputs: A scale 1.0, B scale 1.5. Ladder = [1.0, 1.2247, 1.5, 1.7321, 2.0, 2.4495, 3.0], H_max = 3.0.
+
+**Case A: mixed DPI baseline** (A zoom 1, B zoom 1)
+
+| | ρ_p | factor |
+|---|---|---|
+| A | 1.0 | 0.667 (minify) |
+| B | 1.5 | 1.000 |
+
+ρ = 1.5 → **h = 1.5** (`180/120`, integer 2). **Identical to Phase B** (SC1).
+
+**Case B: zoom dominates DPI** (A zoom 2.0, B zoom 1)
+
+| | ρ_p | factor |
+|---|---|---|
+| A | 2.0 | 1.000 |
+| B | 1.5 | 0.750 (minify) |
+
+ρ = 2.0 → **h = 2.0** (`240/120`, integer 2). Client-visible: one `preferred_scale 240` (+ `preferred_buffer_scale 2` unchanged from 2). The client re-renders at 1600×1200.
+
+**Case C: protocol fullscreen on A** (presentation zoom 1) **while B observes**
+
+| | ρ_p | factor |
+|---|---|---|
+| A (fullscreen view) | 1.0 | 0.667 |
+| B | 1.5 | 1.000 |
+
+ρ = 1.5 → **h = 1.5: no fullscreen override.** A 1920×1080 fullscreen surface then renders 2880×1620 (17.8 MB/buffer vs 7.9 MB at 1.0). That cost is accepted by decision CP2-Q1. When camera B stops observing W (an atomic change) → ρ = 1.0 → h = 1.0 (`120/120`).
+
+**Case D: viewport-fit on A** (zoom = min(1920/800, 1080/600) = 1.8), B normal
+
+| Step | Value |
+|---|---|
+| Stage | W anchor unchanged (C5.1) |
+| Camera A | centre on W, zoom 1.8 |
+| Camera B | unchanged |
+| ρ_A / ρ_B | 1.8 / 1.5 |
+| hint | 1.5 → **1.7321** (`208/120`, integer 2) at the fit (atomic) |
+| factors | A ×1.039 (slight magnify, within σ); B ×0.866 (minify) |
+| restore | ρ = 1.5 → h = 1.5 (atomic, exact settle) |
+
+Two renegotiations total.
+
+**Case E: continuous zoom of A from 1.0 to 8.0 (pinch, 240 updates at 120 Hz), reversal to 4.0 (120 updates), A pans away while still in the gesture, gesture ends**
+
+| Event | Hint |
+|---|---|
+| z = 1.583 | 1.5 → 1.7321 |
+| z = 1.834 | → 2.0 |
+| z = 2.107 | → 2.4495 |
+| z = 2.594 | → **3.0** (ceiling) |
+| z = 2.594 … 8.0 | 3.0. The compositor magnifies up to **×2.667** at z = 8 (S9). |
+| reversal 8.0 → 4.0 | **no change** (no decrease in a gesture) |
+| W leaves A during the gesture | 3.0 held (decrease deferred) |
+| gesture end | → 1.5 (B's requirement) |
+
+**Total: 5 renegotiations for 362 updates.** Without ladder and ceiling (hint = raw ρ at 1/120 granularity): **313** renegotiations and a final hint of 8.0 (an 800×600 window → 6400×4800 buffer, 117 MB each).
+
+### Buffer cost (EC-18, excerpt)
+
+| Logical window | Device bound | MB per buffer @1.0 / 1.5 / 2.0 / 3.0 / 4.0 / 8.0 | ×3 swapchain @3.0 |
+|---|---|---|---|
+| 800×600 | 20.48 | 1.8 / 4.1 / 7.3 / 16.5 / 29.3 / 117 | 49 MB |
+| 1920×1080 | 8.53 | 7.9 / 17.8 / 31.6 / 71.2 / 127 / 506 | 214 MB |
+| 2560×1440 | 6.40 | 14.1 / 31.6 / 56.3 / 127 / 225 / **exceeds** | 380 MB |
+| 3840×2160 | 4.27 | 31.6 / 71.2 / 127 / 285 / 506 / **exceeds** | 854 MB |
+
+Camera zoom cannot map without bound to client scale: at modest zoom the buffer cost rises quadratically into hundreds of MB per window, and beyond the device bound the buffer cannot even be rendered. The architecture freezes **P1–P7**. H_cfg is a provisional configuration value (OB-12).
+
+---
+
+## CP3A-2. Hit-testing (D-CP3A-HIT; REFINEMENT of D-B2-I9)
+
+**Rule:** the client surface selected by hit-testing is the surface **presented** at the pointer's physical pixel under Infynitae's render model, subject to Wayland input-region semantics. Protocol semantics outrank Smithay helper behaviour: `Window::surface_under` is not used (W-SM-11, W-SM-12).
+
+| Aspect | Specification |
+|---|---|
+| Order | exactly the render order (C3.3): elements in reverse Stage z-order; within an element: each popup tree (in `popups_for_surface` order), then the root tree. Each tree is traversed **downward** (subsurfaces placed above their parent, then the parent, then those placed below), recursively for nested subsurfaces. |
+| Pixel | pointer `(O, p)` → physical `u = p · scale_O` (output transform applied) → pixel `(⌊u_x⌋, ⌊u_y⌋)` |
+| Coverage | a surface covers the pixel iff `edge(x₀) ≤ i < edge(x₁)` and likewise for y, using **the same** `edge()` / `R` / `C` / `c_eff` as rendering (C3.2). Fractional camera positions and fractional scales are handled by those functions only. |
+| Input region | none ⇒ the whole surface. Otherwise the protocol's add/subtract sequence in request order; containment is **half-open** on the surface-local logical point `q − origin` (q = Canvas point at the pointer) clamped into the surface. Never round-to-nearest (W-SM-11). |
+| Selection | the first surface in order that covers the pixel **and** whose input region contains the point. A region hole falls through to whatever is below, including a below-parent subsurface (EC-20). |
+| Delivered coordinates | `q − origin` (Canvas, exact), clamped into `[0, w) × [0, h)`. At pixel centres the clamp is provably 0: `round(a) ≤ i ⇒ a ≤ i + ½` (EC-20: max clamp 0.000); off-centre ≤ ½ px / k. |
+| Popups | hit before their parent's tree; client-owned popup grabs (Smithay) still decide focus for their sequences (C4.2 P3) |
+| Exactness vs Phase B | D-B2-I9 tolerated ≤ ½ physical px of disagreement between hit edges and rendered edges. Measured: 399–617 pixels per configuration at fractional k. D-CP3A-HIT removes it: **0 mismatches** (EC-20). |
+
+**Verified now (EC-8, EC-9, EC-20):**
+- parent/subsurface overlap;
+- below-parent and above-parent subsurfaces;
+- nested subsurface;
+- popup/root overlap and popup subsurface;
+- input-region subtraction (single hole) with fall-through;
+- fractional boundaries at 4 scales × 4 cameras;
+- shared render/hit-test origins;
+- order equivalence with Smithay rendering.
+
+**For C11 (T0/T1):**
+- multi-level popups;
+- multi-rect regions with interleaved add/subtract;
+- rotated or flipped output transforms;
+- zoom ≠ 1 (k not of the form n/120);
+- sub-pixel pointer positions and the clamp bound;
+- surfaces spanning two outputs;
+- property-based random trees.
+
+Smithay's 1,448 disagreements are **not** reproduced and are not a target.
+
+---
+
+## CP3A-3. RC-1: keyboard focus when the client destroys its focused surface
+
+| Aspect | Finding | Class |
+|---|---|---|
+| Protocol text | wayland 1.26 defines the `wl_keyboard` logical state and that `leave` resets it, but says **nothing** about client-side destruction of the active surface. The ordering is implicit. | PROTOCOL (silence) |
+| Mechanism | a `leave` naming a destroyed object cannot be sent (wayland-backend refuses; EC-7) | SMITHAY/wayland-backend source |
+| Compositor internal transition | `toplevel_destroyed` → focus model picks the successor (most recently focused live element) → `KeyboardHandle::set_focus(successor)` | DECISION (C4.5) |
+| Client-visible sequence | (client) `wl_surface.destroy` → (server) `wl_keyboard.enter(successor, keys = client-owned held keys)` + `modifiers(seat XKB)`; no `leave` | EXPERIMENT (X-10 K-6, EC-21) |
+| Next-focus state | keys and modifiers exactly the held client-owned set; subsequent releases delivered to the successor | EXPERIMENT |
+| Stale state | **none observed** in GTK 4.22.5: releases processed with the right state, the next key unmodified, no warnings (EC-21) | EXPERIMENT (one toolkit) |
+| Remaining validation | Qt 6, SDL2/3 (games), Chromium/Electron, Firefox (multi-window), Wine/Proton | OB-10 → T3 |
+
+**Disposition:** RC-1 is reclassified from "unverified risk" to **"protocol-implicit; validated for GTK4; other toolkits in T3"**. It is not "standard harmless behaviour" by assertion.
+
+---
+
+## CP3A-4. Obligation registry (complete; every open item has a destination)
+
+Destinations:
+- **GATE-C**: must close before the Phase C gate (3B)
+- **T0**: pure unit/property tests
+- **T1**: headless/lockstep integration (production adapter)
+- **T2**: nested
+- **T3**: real-client compatibility
+- **T4**: physical DRM/KMS
+- **T5**: games/manual
+- **UP**: external/upstream
+- **TUNE**: provisional product/performance tuning
+
+| ID | Item | Current evidence | Owner / layer | Future test or decision | Pass/fail criterion | Destination | Blocks implementation? |
+|---|---|---|---|---|---|---|---|
+| OB-1 | Multi-level popups (CR-1 residual) | one popup level verified (EC-8/9/20) | core origin(), adapter extraction | nested popup chain: order/positions vs Smithay render; hit-test vs presented | 0 mismatches | T1 | no |
+| OB-2 | Input-region subtraction, general | single-hole fall-through verified (EC-20) | core hit-test | multi-rect, interleaved add/subtract; random property test | equals a reference region evaluator | T0 + T1 | no |
+| OB-3 | Output removal during an active interaction (CR-3, X-11a) | design C4.6 | core interaction + output manager | headless backend removes an output mid-pan/mid-move | INV-1/INV-2 hold; pointer placed on a remaining output; no stuck buttons | T1 | no |
+| OB-4 | Popup-grab dismissal on interaction acquisition (CR-4, X-11b) | design C4.6, B6.3 | core + adapter (W-SM-7 precondition) | pan acquired while a popup grab is active | `popup_done` in reverse creation order before the camera change; no panic | T1 | no |
+| OB-5 | X-7 games / network clients off-screen (DV-1) | vkcube blocked; kick bounds it (EB-9) | core frame policy | Wine/Proton game + a network client off-screen under withhold/kick/P | no disconnect/freeze beyond P; CPU within budget | T5 | no |
+| OB-6 | Fractional-camera snapping/rounding (CR-6) | fractional cameras × 4 scales hit-test/render consistent (EC-20); X-6 edges | core projection | T0 properties: edge = round(L); re-projection lands in the same pixel; magnitudes to 2³⁶; random cameras | all hold | T0 | no |
+| OB-7 | Downsampling / magnification quality (DV-2) | none (no renderer in harness) | backend renderer filters | visual comparison at m ∈ {0.67, 0.87, 1.04, 1.25, 2.67} | subjective acceptance; text legibility | T3/T4 | no |
+| OB-8 | Off-screen fallback period P (provisional 1 s) | EB-9 | configuration | from OB-5 results | as OB-5 | TUNE (after T5) | no |
+| OB-9 | xwayland-satellite override-redirect menus/tooltips (C6-A1) | toplevel path verified (EC-12); menus untested | satellite (external) + adapter popup path | X11 app with menus/tooltips (GTK3 `GDK_BACKEND=x11` under satellite in the harness; later Steam) | menus appear attached at the right place, receive input, dismiss correctly | T1 (GTK3/X11 headless) → T3 (Steam) | no |
+| OB-10 | RC-1 other toolkits | GTK4 verified (EC-21) | — | Qt6, SDL, Chromium/Electron, Firefox multi-window, Wine | no stale key/modifier; no client error | T3 | no |
+| OB-11 | Smithay oneshot-lock defect W-SM-4b | reproduced (X-12) | adapter / upstream | file upstream issue; decide patch vs accept when pointer-lock code is implemented | X-12 reproducer passes (no `unlocked` for a never-active lock) | UP + Phase F decision | no |
+| OB-12 | Scale constants H_cfg, r, σ (provisional) | EC-16–19 | configuration | X-16 zoom sweep with real clients + visual | renegotiations bounded per P3; CPU/memory acceptable; sharpness acceptable | TUNE (T3/T4) | no |
+| OB-13 | Runtime `D_max` query and enforcement | EC-16 | backend renderer → core ceiling | query from the renderer at startup; assert h ≤ H_max for large windows | no buffer exceeds the device limit | T1 | no |
+| OB-14 | Hit-test remaining coverage | see CP3A-2 | core | transforms, zoom ≠ 1, sub-pixel clamp, multi-output spanning, random trees | 0 mismatches vs presented; clamp ≤ ½ px/k | T0 + T1 | no |
+| OB-15 | Keyboard residual: compositor-side repeat (K9, unused) and output removal (K8 no-op) | X-10 | core | confirm no repeat events from the compositor; output removal changes no keyboard state | as stated | T1 | no |
+| OB-16 | Input delivery as a kick trigger (CR-7) | design (B10.5) | core frame policy | vkcube-class client off-screen + focused; keys delivered | first client response within one frame of the input | T1 (real-time harness) / T3 | no |
+| OB-17 | `Window::geometry` re-clamp (W-SM-9) | source | adapter | observe real CSD clients shrinking their tree | anchor stable; no jump | T3 | no |
+| OB-18 | `grab_popup` panic precondition (W-SM-7) and `ensure_configured` (W-SM-6) | source | adapter | misbehaving-client tests | protocol error to the client; compositor survives | T1 | no |
+| OB-19 | Port the authority checks to the real crates (`verify-architecture`: dependency DAG, probes, `!Send` assertion, source check) | spike PASS (EC-1, EC-15) | workspace tooling | the same script against the real crates | all probes fail for the expected reason; DAG checks pass | Phase F (first commit of the real workspace) | **yes**: required before any protocol feature work |
+| OB-20 | Games under KeepFocus pans and preserved locks (DV-3) | X-8 (protocol level) | core input | real games | no camera jumps, no lost locks, no phantom motion | T5 | no |
+| OB-21 | libinput device semantics under pan accumulation (DV-4) | none | backend | high-rate mice, touchpads (begin/end for gestures) | camera = start − Q(Σ); no drift | T4 | no |
+| OB-22 | Fullscreen acceptance policy (focused-only / pre-map) UX | C5.2 design; satellite pre-map (EC-13) | core protocol policy | games, video players, X11 via satellite | no output seized while the user is elsewhere; games enter fullscreen | T3/T5 | no |
+| OB-23 | Discrete-zoom (wheel) decrease oscillation at a rung boundary | MODEL analysis (bounded, ≤ 1 per tick) | core scale policy | wheel-wiggle experiment with real clients | renegotiation rate acceptable or an optional decrease-settle delay configured | TUNE (with X-16) | no |
+| OB-24 | Zoom anti-jitter during *animated/moving* zoom (A-B1-1) | static fit unaffected (C5.1) | core projection | decide a rule before zoom animation or zoomed panning ships | no relative jitter between elements while moving at zoom ≠ 1 | decision before the zoom-motion feature (Level C) | no (static fit OK) |
+| OB-25 | Real presentation timing (DRM flips, VRR) beyond X-9 | X-9 (virtual) | backend + core clock | DRM backend presentation feedback | `presented` timestamps from flips; clock output = sync_output | T4 | no |
+| OB-26 | Regression guard: never use `Window::surface_under`; keep xsnap/xhit/X-15 as tests | EC-9, EC-20 | core + adapter | port xsnap/xhit to T1 | all pass | T1 | no |
+| OB-27 | Satellite: activation and primary selection behaviour | warnings observed (EC-12) | adapter globals | offer `xdg_activation_v1` (+ primary selection when added); X11 apps request focus | B10.7 policy applies; no camera move | T3 | no |
+| OB-28 | Client resizing in response to scale hints (feedback loop with H_max and with viewport-fit re-fit), RC-2 | design reasoning (CP3A-5) | core scale + fit | misbehaving test client that changes logical size per hint | no unbounded oscillation (hint changes per P3 bounds; re-fit rate ≤ commit rate) | T1 | no |
+| OB-29 | Phase C 3B deliverables (C11–C16, final contradiction audit) | — | — | checkpoint 3B | per master program | **GATE-C** | — |
+
+**GATE-C items other than the 3B deliverables: none.** No open item requires an architecture decision before C11–C16. OB-19 is the only item that blocks implementation, and it belongs to the first Phase F commit.
+
+---
+
+## CP3A-5. Authority recheck (zoom in the scale path)
+
+```
+Camera (zoom, centre) ──► View(O) ──► ρ_p (derived) ──► ScaleState h (core policy state) ──► Effect::PreferredScale
+                                                                                                 │ (adapter)
+                                                                                                 ▼
+                                                                      wp_fractional_scale / preferred_buffer_scale (protocol state)
+                                                                                                 │ (client)
+                                                                                                 ▼
+                                                                      client buffer (client state; logical size unchanged by contract)
+                                                                                                 │ commit
+                                                                                                 ▼
+                                                     SurfaceTree snapshot (derived) ──► render list / factor m_p ──► renderer
+```
+
+| Check | Result |
+|---|---|
+| Camera owns view/zoom | yes: `navigation` only (C1.5); scale policy reads zoom and never writes it |
+| Stage owns persistent geometry | yes: no arrow in the chain writes anchors |
+| Scale policy derives requirements | yes: ρ is derived; h is policy state with a single writer (core) |
+| Client buffer scale is protocol state | yes: written by the client; the compositor only suggests it |
+| Renderer consumes the buffer | yes: m_p is derived per frame |
+| Buffer size never becomes Stage authority | yes: the snapshot carries **logical** size (`view().dst`), not buffer size; logical size is client geometry, never an anchor |
+| Fullscreen remains presentation state | yes: contributes ρ = scale_O and nothing else (Case C) |
+| Viewport-fit remains camera state | yes: zoom comes from `ViewportFit` in `navigation` (Case D) |
+
+**Possible cycles, examined:**
+
+| Cycle | Why it is bounded |
+|---|---|
+| h → client → logical size → H_max → h | a compliant client keeps its logical size when the scale changes (protocol: the scale affects the buffer, not window geometry). A non-compliant one is bounded by P1–P3 and S6 (no decrease mid-gesture). |
+| h → client size → viewport-fit re-fit → zoom → ρ → h | re-fit is triggered by logical geometry changes only. For a compliant client a hint change never triggers it; for a non-compliant one the loop is bounded by rung crossings and limited to the client's own commit rate. |
+
+Both cycles are the OB-28 test target.
+
+**No new authority cycle exists; no scale or render result writes Stage geometry.**
+
+## CP3A-6. Status of earlier text superseded here
+
+| Earlier text | Now |
+|---|---|
+| C5.1 "REFINEMENT of D-B8-SCALE (needs approval)" | **adopted** as D-CP3A-SCALE S1 (ρ = scale × zoom), with ladder and ceiling |
+| C5.2 Case B "Open policy question CP2-Q1" | **resolved**: no fullscreen override (Case C) |
+| C3.7 / D-B2-I9 "≤ ½ px agreement bound" | **refined** to exact physical-pixel agreement (CP3A-2) |
+| C2.1 `ScaleState` | now holds h, the ladder (derived from configuration + outputs + D_max) and the gesture flag |

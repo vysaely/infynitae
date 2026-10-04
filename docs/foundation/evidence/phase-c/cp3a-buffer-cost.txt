@@ -1,0 +1,58 @@
+# CP3A buffer-cost analysis (computed). ARGB8888 = 4 B/px. 'client' = client swapchain (double/triple);
+# '+copy' adds one compositor-side texture for shm clients (GPU import of an shm buffer). dmabuf clients share the buffer.
+# Device limit (vulkaninfo, RX 9070 XT RADV): maxFramebufferWidth = 16384 -> a client cannot render a buffer wider than 16384 px.
+
+== window 800x600 (small): device-limited max scale = 16384/800 = 20.48
+    scale      buffer px   1 buffer  x2 client  x3 client   x3 +copy  note
+     1.00    800x600          1.8MB      3.7MB      5.5MB      7.3MB  
+     1.25   1000x750          2.9MB      5.7MB      8.6MB     11.4MB  
+     1.50   1200x900          4.1MB      8.2MB     12.4MB     16.5MB  
+     2.00   1600x1200         7.3MB     14.6MB     22.0MB     29.3MB  
+     3.00   2400x1800        16.5MB     33.0MB     49.4MB     65.9MB  
+     4.00   3200x2400        29.3MB     58.6MB     87.9MB    117.2MB  
+     6.00   4800x3600        65.9MB    131.8MB    197.8MB    263.7MB  
+     8.00   6400x4800       117.2MB    234.4MB    351.6MB    468.8MB  
+
+== window 1920x1080 (FHD-sized window): device-limited max scale = 16384/1920 = 8.53
+    scale      buffer px   1 buffer  x2 client  x3 client   x3 +copy  note
+     1.00   1920x1080         7.9MB     15.8MB     23.7MB     31.6MB  
+     1.25   2400x1350        12.4MB     24.7MB     37.1MB     49.4MB  
+     1.50   2880x1620        17.8MB     35.6MB     53.4MB     71.2MB  
+     2.00   3840x2160        31.6MB     63.3MB     94.9MB    126.6MB  
+     3.00   5760x3240        71.2MB    142.4MB    213.6MB    284.8MB  
+     4.00   7680x4320       126.6MB    253.1MB    379.7MB    506.2MB  
+     6.00  11520x6480       284.8MB    569.5MB    854.3MB   1139.1MB  
+     8.00  15360x8640       506.2MB   1012.5MB   1518.8MB   2025.0MB  
+
+== window 2560x1440: device-limited max scale = 16384/2560 = 6.40
+    scale      buffer px   1 buffer  x2 client  x3 client   x3 +copy  note
+     1.00   2560x1440        14.1MB     28.1MB     42.2MB     56.2MB  
+     1.25   3200x1800        22.0MB     43.9MB     65.9MB     87.9MB  
+     1.50   3840x2160        31.6MB     63.3MB     94.9MB    126.6MB  
+     2.00   5120x2880        56.2MB    112.5MB    168.8MB    225.0MB  
+     3.00   7680x4320       126.6MB    253.1MB    379.7MB    506.2MB  
+     4.00  10240x5760       225.0MB    450.0MB    675.0MB    900.0MB  
+     6.00  15360x8640       506.2MB   1012.5MB   1518.8MB   2025.0MB  
+     8.00  20480x11520      900.0MB   1800.0MB   2700.0MB   3600.0MB  EXCEEDS device framebuffer limit
+
+== window 3840x2160 (window filling a 4K@1.0 output): device-limited max scale = 16384/3840 = 4.27
+    scale      buffer px   1 buffer  x2 client  x3 client   x3 +copy  note
+     1.00   3840x2160        31.6MB     63.3MB     94.9MB    126.6MB  
+     1.25   4800x2700        49.4MB     98.9MB    148.3MB    197.8MB  
+     1.50   5760x3240        71.2MB    142.4MB    213.6MB    284.8MB  
+     2.00   7680x4320       126.6MB    253.1MB    379.7MB    506.2MB  
+     3.00  11520x6480       284.8MB    569.5MB    854.3MB   1139.1MB  
+     4.00  15360x8640       506.2MB   1012.5MB   1518.8MB   2025.0MB  
+     6.00  23040x12960     1139.1MB   2278.1MB   3417.2MB   4556.2MB  EXCEEDS device framebuffer limit
+     8.00  30720x17280     2025.0MB   4050.0MB   6075.0MB   8100.0MB  EXCEEDS device framebuffer limit
+
+== pixels per frame relative to scale 1.0 grow with scale^2 (measured client CPU follows it for software rendering:
+   kitty/swrast 20.7% @1.0 -> 87.3% @1.5 -> 130% @2.0 -> 218% @3.0; Firefox 2% -> 10% -> 18.7% -> 38.7%; cp3a-scaleprobe-output.txt)
+   scale 1.00: x 1.00 pixels
+   scale 1.25: x 1.56 pixels
+   scale 1.50: x 2.25 pixels
+   scale 2.00: x 4.00 pixels
+   scale 3.00: x 9.00 pixels
+   scale 4.00: x16.00 pixels
+   scale 6.00: x36.00 pixels
+   scale 8.00: x64.00 pixels

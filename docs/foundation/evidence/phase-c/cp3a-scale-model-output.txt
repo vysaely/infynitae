@@ -1,0 +1,56 @@
+CP3A scale MODEL. Candidate constants: H_cfg=3.00 r=1.25 sigma=0.05; D_max=16384
+Ladder for output scales [1.0, 1.5], window (800, 600): [1.0, 1.2247, 1.5, 1.7321, 2.0, 2.4495, 3.0] ; H_max=3.000
+
+====================================================================================================
+Case A — mixed DPI baseline: A 1.0 x zoom 1, B 1.5 x zoom 1, W on both
+====================================================================================================
+  both observing
+     presentation A: output scale 1.0 x zoom 1.0 = raw requirement 1.000; compositor factor = 0.667 (downsample)
+     presentation B: output scale 1.5 x zoom 1.0 = raw requirement 1.500; compositor factor = 1.000 (1:1)
+     rho = 1.500 -> client hint h = 1.5000 (wp_fractional_scale 180/120, wl_surface.preferred_buffer_scale 2)
+  Phase B MaxGesture gave 1.5 (fractional 180, integer 2): reproduced = True
+
+====================================================================================================
+Case B — zoom dominates DPI: A 1.0 x zoom 2.0, B 1.5 x zoom 1
+====================================================================================================
+  both observing
+     presentation A: output scale 1.0 x zoom 2.0 = raw requirement 2.000; compositor factor = 1.000 (1:1)
+     presentation B: output scale 1.5 x zoom 1.0 = raw requirement 1.500; compositor factor = 0.750 (downsample)
+     rho = 2.000 -> client hint h = 2.0000 (wp_fractional_scale 240/120, wl_surface.preferred_buffer_scale 2)
+
+====================================================================================================
+Case C — protocol fullscreen on A (presentation zoom 1) while B (1.5) observes; NO fullscreen override
+====================================================================================================
+  fullscreen on A + B observing
+     presentation A(fullscreen view): output scale 1.0 x zoom 1.0 = raw requirement 1.000; compositor factor = 0.667 (downsample)
+     presentation B: output scale 1.5 x zoom 1.0 = raw requirement 1.500; compositor factor = 1.000 (1:1)
+     rho = 1.500 -> client hint h = 1.5000 (wp_fractional_scale 180/120, wl_surface.preferred_buffer_scale 2)
+  fullscreen size (1920, 1080) at h=1.5: buffer 2880x1620 = 17.8 MB per buffer (vs 7.9 MB at 1.0)
+  B stops observing (camera B moves away; atomic change)
+     presentation A(fullscreen view): output scale 1.0 x zoom 1.0 = raw requirement 1.000; compositor factor = 1.000 (1:1)
+     rho = 1.000 -> client hint h = 1.0000 (wp_fractional_scale 120/120, wl_surface.preferred_buffer_scale 1)
+
+====================================================================================================
+Case D — viewport-fit W on A (zoom = min(1920/800, 1080/600) = 1.8), B observes normally
+====================================================================================================
+  before fit: h = 1.5000 (wp_fractional_scale 180/120, wl_surface.preferred_buffer_scale 2)
+  fitted
+     presentation A: output scale 1.0 x zoom 1.8 = raw requirement 1.800; compositor factor = 1.039 (upsample)
+     presentation B: output scale 1.5 x zoom 1.0 = raw requirement 1.500; compositor factor = 0.866 (downsample)
+     rho = 1.800 -> client hint h = 1.7321 (wp_fractional_scale 208/120, wl_surface.preferred_buffer_scale 2)
+  hint transitions: [('fit (atomic camera change)', 1.5, 1.7321), ('restore (atomic camera change)', 1.7321, 1.5)]  -> after restore h = 1.5000 (wp_fractional_scale 180/120, wl_surface.preferred_buffer_scale 2)
+
+====================================================================================================
+Case E — continuous high zoom of camera A (pinch gesture) while B (1.5) observes
+====================================================================================================
+  camera updates during the gesture: 360
+     hint change at zoom-in z=1.583: 1.5000 -> 1.7321 (208/120)
+     hint change at zoom-in z=1.834: 1.7321 -> 2.0000 (240/120)
+     hint change at zoom-in z=2.107: 2.0000 -> 2.4495 (294/120)
+     hint change at zoom-in z=2.594: 2.4495 -> 3.0000 (360/120)
+  hint after zoom-in to 8.0 and reversal to 4.0 (still in gesture): 3.0000 (wp_fractional_scale 360/120, wl_surface.preferred_buffer_scale 3)  (no decrease during the gesture)
+  max compositor magnification on A beyond the client hint: x2.667 (A at zoom 8.0 / hint 3.00)
+  W leaves A while the gesture continues: hint 3.0000 (decrease deferred)
+  gesture end: hint -> 1.5000 (wp_fractional_scale 180/120, wl_surface.preferred_buffer_scale 2)
+  TOTAL client scale renegotiations for 362 camera/membership updates: 5
+  without the ladder/ceiling (hint = raw rho every update, protocol 1/120 granularity): 313 renegotiations, max hint 960/120 = 8.0 (800x600 window -> 6400x4800 buffer = 117 MB each)

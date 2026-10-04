@@ -1,0 +1,86 @@
+# RC-1 real-toolkit validation: GTK 4 22 5, two windows (cp3a-rc1-gtk4.py), b8-harness bin/rc1, private socket. 2026-10-04T14:30:36+03:00
+# Filter: client WAYLAND_DEBUG wl_keyboard events, xdg_toplevel.close, W2 surface/toplevel destroy, GTK-reported events, compositor/physical steps; GTK warnings/criticals (none expected).
+11:30:13.636750 {Default Queue} wl_registry#2.global(3, "wl_compositor", 6)
+11:30:13.636752 {Default Queue}  -> wl_registry#2.bind(3, "wl_compositor", 6, new id [unknown]#6)
+11:30:13.636753 {Default Queue} wl_registry#2.global(4, "wl_subcompositor", 1)
+11:30:13.636755 {Default Queue}  -> wl_registry#2.bind(4, "wl_subcompositor", 1, new id [unknown]#7)
+11:30:13.638103 {Default Queue}  -> wl_compositor#6.create_surface(new id wl_surface#17)
+11:30:13.653145 {Default Queue}  -> wl_compositor#6.create_surface(new id wl_surface#21)
+11:30:13.667438 {Default Queue} wl_registry#2.global(3, "wl_compositor", 6)
+11:30:13.667439 {Default Queue} wl_registry#2.global(4, "wl_subcompositor", 1)
+11:30:13.667554 {Default Queue} wl_registry#2.global(3, "wl_compositor", 6)
+11:30:13.667556 {Default Queue} wl_registry#2.global(4, "wl_subcompositor", 1)
+11:30:13.669241 {mesa formats query} wl_registry#24.global(3, "wl_compositor", 6)
+11:30:13.669243 {mesa formats query} wl_registry#24.global(4, "wl_subcompositor", 1)
+11:30:13.669316 {mesa formats query} wl_registry#25.global(3, "wl_compositor", 6)
+11:30:13.669317 {mesa formats query} wl_registry#25.global(4, "wl_subcompositor", 1)
+11:30:13.671535 {mesa egl display queue} wl_registry#27.global(3, "wl_compositor", 6)
+11:30:13.671538 {mesa egl display queue} wl_registry#27.global(4, "wl_subcompositor", 1)
+11:30:13.672869 {mesa egl display queue} wl_registry#28.global(3, "wl_compositor", 6)
+11:30:13.672871 {mesa egl display queue} wl_registry#28.global(4, "wl_subcompositor", 1)
+11:30:13.677534 {Default Queue} wl_registry#2.global(3, "wl_compositor", 6)
+11:30:13.677536 {Default Queue} wl_registry#2.global(4, "wl_subcompositor", 1)
+11:30:13.681741 {mesa egl swrast display queue} wl_registry#29.global(3, "wl_compositor", 6)
+11:30:13.681743 {mesa egl swrast display queue} wl_registry#29.global(4, "wl_subcompositor", 1)
+11:30:13.692343 {mesa formats query} wl_registry#30.global(3, "wl_compositor", 6)
+11:30:13.692345 {mesa formats query} wl_registry#30.global(4, "wl_subcompositor", 1)
+11:30:13.692410 {mesa formats query} wl_registry#32.global(3, "wl_compositor", 6)
+11:30:13.692411 {mesa formats query} wl_registry#32.global(4, "wl_subcompositor", 1)
+11:30:13.700045 {Default Queue}  -> wl_compositor#6.create_surface(new id wl_surface#36)
+11:30:13.700139 {mesa formats query} wl_registry#39.global(3, "wl_compositor", 6)
+11:30:13.700141 {mesa formats query} wl_registry#39.global(4, "wl_subcompositor", 1)
+11:30:13.700202 {mesa formats query} wl_registry#40.global(3, "wl_compositor", 6)
+11:30:13.700204 {mesa formats query} wl_registry#40.global(4, "wl_subcompositor", 1)
+11:30:13.700268 {mesa formats query} wl_registry#41.global(3, "wl_compositor", 6)
+11:30:13.700272 {mesa formats query} wl_registry#41.global(4, "wl_subcompositor", 1)
+11:30:13.700325 {mesa formats query} wl_registry#42.global(3, "wl_compositor", 6)
+11:30:13.700326 {mesa formats query} wl_registry#42.global(4, "wl_subcompositor", 1)
+11:30:13.707447 {Default Queue} wl_keyboard#5.keymap(1, fd 13, 35572)
+11:30:13.751935 {Default Queue}  -> wl_compositor#6.create_region(new id wl_region#47)
+11:30:13.751944 {Default Queue}  -> wl_compositor#6.create_region(new id wl_region#48)
+11:30:13.753360 {Default Queue}  -> wl_compositor#6.create_region(new id wl_region#53)
+11:30:13.753370 {Default Queue}  -> wl_compositor#6.create_region(new id wl_region#54)
+11:30:14.571236 {Default Queue} wl_keyboard#5.enter(3, wl_surface#36, array[0])
+11:30:14.571246 {Default Queue} wl_keyboard#5.modifiers(3, 0, 0, 0, 0)
+[gtk] W2 is-active=True
+11:30:14.875223 {Default Queue} wl_keyboard#5.key(4, 1, 42, 1)
+11:30:14.875235 {Default Queue} wl_keyboard#5.modifiers(4, 1, 0, 0, 0)
+[gtk] W2 key-pressed Shift_L code=50 state=['GDK_NO_MODIFIER_MASK']
+11:30:15.083230 {Default Queue} wl_keyboard#5.key(5, 2, 30, 1)
+[gtk] W2 modifiers ['GDK_NO_MODIFIER_MASK', 'GDK_SHIFT_MASK']
+[gtk] W2 key-pressed A code=38 state=['GDK_NO_MODIFIER_MASK', 'GDK_SHIFT_MASK']
+[gtk] W2 key-pressed A code=38 state=['GDK_NO_MODIFIER_MASK', 'GDK_SHIFT_MASK']
+[gtk] W2 key-pressed A code=38 state=['GDK_NO_MODIFIER_MASK', 'GDK_SHIFT_MASK']
+[gtk] W2 key-pressed A code=38 state=['GDK_NO_MODIFIER_MASK', 'GDK_SHIFT_MASK']
+11:30:15.387216 xdg_toplevel#44.close()
+11:30:15.387238 -> xdg_toplevel#44.destroy()
+11:30:15.387241 -> xdg_surface#43.destroy()
+[gtk] W2 is-active=False
+11:30:15.387714 -> wl_surface#36.destroy()
+[gtk] W2 destroyed
+11:30:15.403210 {Default Queue} wl_keyboard#5.enter(6, wl_surface#21, array[8])
+11:30:15.403214 {Default Queue} wl_keyboard#5.modifiers(6, 1, 0, 0, 0)
+[gtk] W1 is-active=True
+11:30:15.707213 {Default Queue} wl_keyboard#5.key(7, 3, 30, 0)
+[gtk] W1 modifiers ['GDK_NO_MODIFIER_MASK', 'GDK_SHIFT_MASK']
+[gtk] W1 key-released A code=38 state=['GDK_NO_MODIFIER_MASK', 'GDK_SHIFT_MASK']
+11:30:15.915212 {Default Queue} wl_keyboard#5.key(8, 4, 42, 0)
+11:30:15.915222 {Default Queue} wl_keyboard#5.modifiers(8, 0, 0, 0, 0)
+[gtk] W1 key-released Shift_L code=50 state=['GDK_NO_MODIFIER_MASK', 'GDK_SHIFT_MASK']
+11:30:16.219212 {Default Queue} wl_keyboard#5.key(9, 5, 48, 1)
+[gtk] W1 modifiers ['GDK_NO_MODIFIER_MASK']
+[gtk] W1 key-pressed b code=56 state=['GDK_NO_MODIFIER_MASK']
+11:30:16.331226 {Default Queue} wl_keyboard#5.key(10, 6, 48, 0)
+[gtk] W1 key-released b code=56 state=['GDK_NO_MODIFIER_MASK']
+== compositor/physical sequence
+   t=1.008s compositor: keyboard focus -> Some(2) (user focuses W2)
+   physical: Shift down (client-owned)
+   physical: A down (client-owned)
+   t=1.824s compositor: xdg_toplevel.close -> W2 (Shift and A still held)
+   t=1.840s compositor: keyboard focus -> Some(1) (successor after target loss)
+   physical: A up
+   physical: Shift up
+   physical: b down
+   physical: b up
+   reached step 9 of 10
+# GTK warnings/criticals count: 0
