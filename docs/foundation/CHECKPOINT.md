@@ -1,6 +1,6 @@
 # Checkpoint
 
-CURRENT_PHASE: **D: corrective checkpoint 1R complete, UNCOMMITTED, stopped at the Checkpoint 1R review gate.** Phase D checkpoint 1 is committed as the immutable falsification baseline **`e8ec03a2ab36f315ae025723ec666b9ad278ac83`**. No Level-A finding is open after 1R. D7–D9 have not begun. Phase C: COMPLETE and SEALED (`615b0ed2f3631b698b0c54783c28f696ef4ff34a`).
+CURRENT_PHASE: **D: corrective checkpoint 1R ACCEPTED and SEALED (1R seal commit `84ce620898445aaadb72f386ec3954e5bbfe2c2f`). D7–D9 not begun.** Phase D checkpoint 1 is committed as the immutable falsification baseline **`e8ec03a2ab36f315ae025723ec666b9ad278ac83`**. No Level-A finding is open after 1R. D7–D9 have not begun. Phase C: COMPLETE and SEALED (`615b0ed2f3631b698b0c54783c28f696ef4ff34a`).
 
 Date: 2026-10-04
 
@@ -12,7 +12,7 @@ Date: 2026-10-04
 - **Phase C checkpoint 3A:** `795800937a1e50e56587cd4080a73ce27d8a8b01` (hash recorded in `fd9a80c`)
 - **Phase C seal (checkpoint 3B):** `615b0ed2f3631b698b0c54783c28f696ef4ff34a`
 
-## PHASE D CORRECTIVE CHECKPOINT 1R (uncommitted)
+## PHASE D CORRECTIVE CHECKPOINT 1R (sealed: `84ce620898445aaadb72f386ec3954e5bbfe2c2f`)
 - **Baseline:** checkpoint 1 committed as `e8ec03a2ab36f315ae025723ec666b9ad278ac83` ("preserve Phase D falsification baseline"). This hash is recorded here and in audit/README.md, audit/1R/* and FOUNDATION_BLOCKERS.md.
 - **Dispositions:** all 17 PD-F2 findings disposed of (FOUNDATION_BLOCKERS.md § Phase D Corrective Checkpoint 1R; audit/1R/CORRECTIONS_1R.md).
   - 13 resolved by architecture correction (A);
@@ -33,7 +33,7 @@ Date: 2026-10-04
 - **New Smithay quirks:** W-SM-14 and W-SM-15. **New ADR:** ADR-14.
 - **Provisional constant:** T_settle candidate 300 ms (OB-23).
 - **Explicit residual (NOT resolved, NOT validated):** the ±1 physical-pixel shape variation at lattice-reference switches during zoomed pan (ED-1, ED-2 F1). It is not a rendering guarantee. OB-24 keeps it open as a **pre-implementation decision for zoomed navigation** (candidate: gesture-pinned reference; visual acceptance T3/T4).
-- **NEXT:** user review of 1R; commit only on authorisation; D7–D9 not begun.
+- **NEXT:** D7–D9 only after explicit user authorisation.
 
 ## PHASE D CHECKPOINT 1 (committed as e8ec03a)
 - Input baseline verified (audit/README.md §1): seal resolves; `a3ae907` records it; tree was clean; 54-entry C12 registry normative; BLOCKERS pointer present; OB-19 unconditional; T3–T5/UP/TUNE open.
