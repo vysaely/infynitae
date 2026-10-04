@@ -1,45 +1,47 @@
 # Checkpoint
 
-CURRENT_PHASE: **B — Resolve Architecture Blockers: atomic checkpoint 1 (B1–B6) complete. B7–B13 not started.**
+CURRENT_PHASE: **B — Resolve Architecture Blockers: checkpoint 2 (B7–B9) complete. B10–B13 not started.**
 Phase B is NOT complete. Do not advance to Phase C.
 
 Date: 2026-10-04
 
-## Baseline
-Phase A evidence baseline commit: `2c8c163784e260af4aaa8c1dc05c6281b0476120` (branch `main`).
-Phase B work below is **uncommitted** on top of it.
+## Baselines
+- Phase A evidence: `2c8c163784e260af4aaa8c1dc05c6281b0476120`
+- Phase B checkpoint 1 (B1–B6): `9f3f5d4`
+- Checkpoint 2 work below is **uncommitted** on top of `9f3f5d4`.
 
-## COMPLETED_WORK (Phase B, checkpoint 1)
-- B1: numeric model decided (Q16 i64, ±2³⁶ bound, integral anchors, rounding points, lattice edge rule). Experiment E1–E9.
-- B2: coordinate domains, transformation table T1–T10, anchor = window-geometry origin, pointer chain with Canvas as Smithay global space, I9 restated, type encoding. `Space` question answered (not used), with experiment S1–S7.
-- B3: object graph and negative ownership.
-- B4: identity (`NonZeroU64` monotonic, never reused; `(InstanceId, ElementId)` across IPC).
-- B5: lifecycle states and transition table, difficult cases.
-- B6: popups/subsurfaces (no stored position; constraint boundary policy; no pan repositioning; grab and lifetime rules).
+## COMPLETED_WORK (checkpoint 2)
+- Minimal experiment harness `experiments/b8-harness/`:
+  - Smithay 0.7.0 server (no renderer) plus a recording `wayland-client` probe, lockstep on a virtual vblank clock (`bin/scenarios`);
+  - a real-time variant for real clients on a private socket (`bin/realclient`).
+- Experiments run: SC1 (B8 worked example), SC2 (preferred-scale policies), SC3 (frame-callback liveness), SC4 (suspension and configure amplification), X5 (popup membership), X-2 (vkcube, kitty, Firefox off-screen: Starve, Throttle, kick).
+- B7 camera/output model, B8 multi-output semantics, B9 visibility/off-screen state machine and I3′, all written to FOUNDATION_BLOCKERS.md.
+
+## DECISIONS MADE (checkpoint 2)
+D-B7-CENTER, D-B8-SCALE (MaxGesture; ⌈⌉ integer), D-B8-CLOCK (highest refresh), D-B8-ENTER (own per-surface membership), D-B9-FRAMES (withhold + protocol kick + finite fallback P; P = 1 s provisional), D-B9-SUSPEND (never from camera visibility), I3′.
+Q-01, Q-02, Q-04, Q-06, Q-09 resolved. Q-07 open.
 
 ## FILES_CHANGED (uncommitted)
-- `docs/foundation/FOUNDATION_BLOCKERS.md` (new)
-- `docs/foundation/CHECKPOINT.md` (this file)
-- `docs/foundation/evidence/phase-b/b1-numeric-output.txt`, `b2-space-output.txt` (new)
-- `experiments/b1-numeric/` (no deps), `experiments/b2-space/` (smithay =0.7.0, Cargo.lock copied from Prototype 01; builds offline)
+- `docs/foundation/FOUNDATION_BLOCKERS.md`
+- `docs/foundation/CHECKPOINT.md`
+- `docs/foundation/evidence/phase-b/b8-scenarios-output.txt`, `x2-realclients-output.txt` (new)
+- `experiments/b8-harness/` (new)
 
 ## EVIDENCE_CREATED
-EB-1…EB-7 (see FOUNDATION_BLOCKERS §0). Re-run: `cargo run --release --offline` in `experiments/b1-numeric`, `cargo run --offline` in `experiments/b2-space`.
+EB-8 … EB-12 (FOUNDATION_BLOCKERS B8.1). Re-run in `experiments/b8-harness`:
+- `cargo run --offline --release --bin scenarios`
+- `target/release/realclient <private runtime dir> <starve|throttle:MS>[+kick] <vis_s> <off_s> <ret_s> -- <client>`
 
-## DECISIONS MADE
-D-B1, D-B2-ANCHOR, D-B2-SPACE, D-B2-PTR-SPACE, D-B2-PTR-STATE, D-B2-I9, D-B4, D-B5-REMAP, D-B6-BOUNDARY, D-B6-NO-PAN-REPOSITION. B6.3's grab-dismissal rule is provisional until B10.
-
-## OPEN_BLOCKERS
-Q-01 (off-screen callbacks), Q-02 (`suspended` vs I3), Q-06 (preferred scale), Q-07 (Smithay pin, Level B), Q-09 (restated I3). Q-04 is conditional on B8 and EB-H1.
-New: EB-H1 (popup enter/leave offset for CSD parents), RB-1…RB-4, X-6.
+## OPEN_BLOCKERS / PENDING
+- Q-07 (Smithay pin, B12).
+- X-6 (subsurface edge rounding), X-8 (pointer leakage during pan, B11), X-9 (presentation feedback, T1).
+- X-7 (off-screen game and network client) deferred to T5. It decides P's default, not the architecture.
 
 ## NEXT_ACTION
-Phase B checkpoint 2 (B7–B9):
-1. Build a minimal headless/nested experiment harness: Smithay compositor with ≥2 virtual outputs (different scales) plus a small Wayland test client that logs every received event. It needs no live-session access: a headless backend, or winit nested under the host.
-2. Run X-3 (two outputs 1.0/1.5) and X-5 (popup enter/leave), then X-1 (pan trace), then X-2 (off-screen clients: EGL swap-interval-1, Vulkan FIFO, Firefox, mpv).
-3. Write B7 (camera/output model), B8 (mandatory worked example), B9 (visibility/off-screen state machine; resolve Q-01, Q-02, Q-09).
-
-Then checkpoint 3: B10–B13 (input/activation, pan, backend boundary, blocker report finalization and Phase B gate).
+Phase B checkpoint 3: B10 (input/grab/activation model, including xdg-activation policy), B11 (camera pan input semantics, X-8; the harness needs a minimal seat/pointer injection path), B12 (backend boundary, Q-07 pin strategy), B13 (finalise blocker report and Phase B gate).
 
 ## LIVE_SYSTEM_TOUCHED
-**No.** No compositor run, nested or otherwise. No change to `~/infynitae` or `~/infynitae-native-prototype`. Experiments are pure computation (Smithay `Space` with dummy elements; no Wayland socket opened).
+**No changes to the live system.**
+- Real-client tests ran vkcube, kitty and Firefox as child processes against the harness on a private socket in the scratch directory. DISPLAY and HYPRLAND_* were removed from their environment, so they could not reach the running Hyprland session.
+- Firefox used a temporary HOME/profile in the scratch directory with `--no-remote`.
+- No changes to `~/infynitae`, `~/infynitae-native-prototype`, the Hyprland configuration, or installed packages.

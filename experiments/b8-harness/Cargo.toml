@@ -1,0 +1,13 @@
+[package]
+name = "b8-harness"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Minimal experiment harness for Phase B checkpoint 2 (B7-B9).
+# Not a compositor: no renderer, no input backend. Buffers are accepted, never drawn.
+[dependencies]
+smithay = { version = "=0.7.0", default-features = false, features = ["desktop", "wayland_frontend"] }
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
+libc = "0.2"

@@ -1,0 +1,136 @@
+$ cargo run --offline --release --bin scenarios   (experiments/b8-harness; smithay =0.7.0, lockstep, virtual time)
+# 2026-10-04T13:11:29+03:00
+b8-harness scenarios — smithay 0.7.0, wl_compositor v6 (CompositorState::new_v6), virtual time
+
+====================================================================================================
+SC1  B8 worked example: W on A(1920x1080@1.0,165Hz) and B(3840x2160@1.5,144Hz); A pans away; B pans away; A returns.
+     Policy: scale=Max, frames=Starve, clock=HighestRefresh, suspend=Never
+====================================================================================================
+t=   0.000ms  server  E1 new_toplevel
+t=   0.000ms  server  E1 initial configure (initial scale 1.5)
+t=   0.000ms  server  E1 mapped=true
+t=   0.000ms  server  E1 visible-on A (overlap 840x640)
+t=   0.000ms  server  E1 visible-on B (overlap 840x640)
+t=   0.000ms  client  W: wp_fractional_scale_v1.preferred_scale 180 (= 1.5)
+t=   0.000ms  client  W: wl_surface.preferred_buffer_scale 2
+t=   0.000ms  client  W: xdg_toplevel.configure 0x0 []
+t=   0.000ms  client  W: xdg_surface.configure serial=1 (acked)
+t=   0.000ms  client  W: wl_surface.enter A
+t=   0.000ms  client  W: wl_surface.enter B
+t=   0.000ms  client  W: wl_callback.done
+                     … 53 more wl_callback.done collapsed
+t= 327.273ms  server  E1 invisible-on A
+t= 327.273ms  client  W: wl_callback.done
+t= 327.273ms  client  W: wl_surface.leave A
+t= 333.333ms  client  W: wl_callback.done
+                     … 39 more wl_callback.done collapsed
+t= 611.111ms  server  E1 invisible-on B
+t= 611.111ms  client  W: wl_callback.done
+t= 611.111ms  client  W: wl_surface.leave B
+t=1186.111ms  server  E1 visible-on A (overlap 840x640)
+t=1186.111ms  server  E1 preferred-scale -> 1
+t=1186.111ms  client  W: wl_surface.enter A
+t=1186.111ms  client  W: wp_fractional_scale_v1.preferred_scale 120 (= 1)
+t=1186.111ms  client  W: wl_surface.preferred_buffer_scale 1
+t=1187.879ms  client  W: wl_callback.done
+                     … 7 more wl_callback.done collapsed
+
+-- SC1 summary --
+phase                       interval(ms)          done/s  configures  enter  leave  pref_scale
+both visible                    0.0-50.0         180.0          1      2      0          1
+A panning away                 50.0-351.5        162.5          0      0      1          0
+B only                        351.5-401.5        140.0          0      0      0          0
+B panning away                401.5-986.1         53.0          0      0      1          0
+off-screen (starve)           986.1-1186.1         0.0          0      0      0          0
+A returned                   1186.1-1236.1       160.0          0      1      0          1
+re-entry: camera returned at 1186.111ms, first wl_callback.done at Some(1187.879)ms -> latency Some(1768)us (A period 6061us)
+buffer allocations (time, w, h): [(0, 1260, 960), (1187879, 840, 640)]
+
+====================================================================================================
+SC2  Preferred-scale policy comparison (W content 800x600 + 20px shadow; anchor (1000,300))
+     choreography: (1) B sweeps across W while A shows W fully; (2) A shows W partially, B oscillates around the area crossover;
+     (3) B oscillates across its viewport edge (membership flapping)
+====================================================================================================
+policy          phase1    phase2    phase3      allocs       alloc MB    ms on B @<1.5    ms on A @>1.0
+Max                  2         1        19          23           79.0              0.0           1687.4
+MaxGesture           2         1         1           2            7.0              0.0           2173.5
+Min                  0         0         0           1            2.2           1687.4              0.0
+Primary              0         0         0           1            2.2           1687.4              0.0
+LargestArea          0        20         0          21           72.0           1340.2            347.2
+(columns phase1..3 = wp_fractional_scale_v1.preferred_scale events received by the client in that phase, including the gesture-end evaluation;
+ each phase is one camera gesture. Exposure columns are summed over all three phases.)
+
+====================================================================================================
+SC3  Frame-callback liveness: pending callbacks across invisibility, re-entry, multi-refresh visibility, output handover
+====================================================================================================
+Starve            client=frame-driven  off-screen 3000ms: dones=0   (max gap     0.0ms) pending-at-return=true  | re-entry first done after    303us; dones in next 100ms=17
+Starve            client=one-shot@off  off-screen 3000ms: dones=0   (max gap     0.0ms) pending-at-return=true  | re-entry first done after    303us; dones in next 100ms=1
+Throttle(100ms)   client=frame-driven  off-screen 3000ms: dones=30  (max gap   103.0ms) pending-at-return=true  | re-entry first done after    303us; dones in next 100ms=17
+Throttle(100ms)   client=one-shot@off  off-screen 3000ms: dones=1   (max gap     0.0ms) pending-at-return=false | re-entry first done after   noneus; dones in next 100ms=0
+Throttle(1000ms)  client=frame-driven  off-screen 3000ms: dones=3   (max gap  1006.1ms) pending-at-return=true  | re-entry first done after    303us; dones in next 100ms=17
+Throttle(1000ms)  client=one-shot@off  off-screen 3000ms: dones=1   (max gap     0.0ms) pending-at-return=false | re-entry first done after   noneus; dones in next 100ms=0
+(d) visible on A and B, clock=HighestRefresh: 165 dones in 1s (max gap 6.061ms)
+(d) visible on A and B, clock=Primary: 165 dones in 1s (max gap 6.061ms)
+(d2) A shows 20px sliver, B shows all, clock=HighestRefresh: 165 dones in 1s
+(d2) A shows 20px sliver, B shows all, clock=Primary: 144 dones in 1s
+(e) handover A->B at 100.000ms: first done after handover at +Some(4167)us (B period 6944us); max gap across handover 7.197ms; dones/s after = 145.0
+
+====================================================================================================
+SC4  xdg_toplevel `suspended`: protocol consequence and configure amplification under rapid pans
+====================================================================================================
+(a) Immediate suspension, 6 edge crossings (pan of 20px): client trace:
+    t=  20.000ms  server  E1 suspended=true
+    t=  20.000ms  client  W: wl_surface.leave A
+    t=  20.000ms  client  W: xdg_toplevel.configure 0x0 [suspended]
+    t=  20.000ms  client  W: xdg_surface.configure serial=19 (acked)
+    t=  30.000ms  server  E1 suspended=false
+    t=  30.000ms  client  W: wl_surface.enter A
+    t=  30.000ms  client  W: xdg_toplevel.configure 0x0 []
+    t=  30.000ms  client  W: xdg_surface.configure serial=20 (acked)
+    t=  40.000ms  server  E1 suspended=true
+    t=  40.000ms  client  W: wl_surface.leave A
+    t=  40.000ms  client  W: xdg_toplevel.configure 0x0 [suspended]
+    t=  40.000ms  client  W: xdg_surface.configure serial=21 (acked)
+    t=  50.000ms  server  E1 suspended=false
+    t=  50.000ms  client  W: wl_surface.enter A
+    t=  50.000ms  client  W: xdg_toplevel.configure 0x0 []
+    t=  50.000ms  client  W: xdg_surface.configure serial=22 (acked)
+    t=  60.000ms  server  E1 suspended=true
+    t=  60.000ms  client  W: wl_surface.leave A
+    t=  60.000ms  client  W: xdg_toplevel.configure 0x0 [suspended]
+    t=  60.000ms  client  W: xdg_surface.configure serial=23 (acked)
+    t=  70.000ms  server  E1 suspended=false
+    t=  70.000ms  client  W: wl_surface.enter A
+    t=  70.000ms  client  W: xdg_toplevel.configure 0x0 []
+    t=  70.000ms  client  W: xdg_surface.configure serial=24 (acked)
+
+(b) 48 windows, 8x6 grid, output 2560x1440@1.5 144Hz, horizontal pan across 8000px, client-observed traffic:
+policy               speed px/s     pan ms  conf in pan       conf/s  enter+leave       e+l /s    conf incl +3s
+Never                      2000       5451            0          0.0           48          8.8                0
+Never                      8000       1361            0          0.0           48         35.3                0
+Never                     30000        361            0          0.0           48        132.9                0
+Immediate                  2000       5451           48          8.8           48          8.8               48
+Immediate                  8000       1361           48         35.3           48         35.3               48
+Immediate                 30000        361           48        132.9           48        132.9               48
+Debounce(250ms)            2000       5451           45          8.3           48          8.8               48
+Debounce(250ms)            8000       1361           42         30.9           48         35.3               48
+Debounce(250ms)           30000        361           24         66.5           48        132.9               48
+Debounce(1s)               2000       5451           42          7.7           48          8.8               48
+Debounce(1s)               8000       1361           24         17.6           48         35.3               48
+Debounce(1s)              30000        361           24         66.5           48        132.9               48
+
+(c) same grid; camera scrubs back and forth 10x between x=0 and x=3000 at 8000 px/s, then 3s settle:
+policy                 conf total  enter+leave     conf per e+l
+Never                           0          180             0.00
+Immediate                     180          180             1.00
+Debounce(250ms)               126          180             0.70
+Debounce(1s)                   18          180             0.10
+
+====================================================================================================
+X5  EB-H1: popup wl_surface.enter/leave vs true popup geometry (toplevel shadow 20, popup shadow 10)
+====================================================================================================
+toplevel anchor (1000,300) -> root surface origin (980,280). Popup content 200x100, shadow 10, anchor rect (100,50) in parent geometry.
+True popup surface rect in Canvas: x 1090..1310 (geometry origin 1100 minus popup shadow 10).
+- viewport right edge at x=1085 (popup truly INVISIBLE): no enter expected; ["P: xdg_popup.configure x=100 y=50 200x100"]; popup events after move: ["P: wl_surface.enter A"]; popup currently entered on A: true
+- viewport left edge at x=1305 (popup truly VISIBLE, 5px): enter expected; ["P: xdg_popup.configure x=100 y=50 200x100"]; popup events after move: []; popup currently entered on A: false
+- viewport right edge at x=1095 (popup truly VISIBLE, 5px): enter expected; ["P: xdg_popup.configure x=100 y=50 200x100"]; popup events after move: ["P: wl_surface.enter A"]; popup currently entered on A: true

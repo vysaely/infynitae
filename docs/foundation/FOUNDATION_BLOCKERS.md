@@ -1,7 +1,8 @@
 # Infynitae Native — Foundation Blockers (Phase B)
 
-Status: **IN PROGRESS. Atomic checkpoint 1 of Phase B: B1–B6 complete. B7–B13 not started.**
-Phase B is **not** complete. Q-01, Q-02, Q-06, Q-07 and Q-09 belong to B7–B12 and are still open (§9).
+Status: **IN PROGRESS. Checkpoint 2 of Phase B: B1–B9 complete. B10–B13 not started.**
+Phase B is **not** complete. Q-07 (Smithay pin strategy, B12) is still open (§9).
+Checkpoint 1 (B1–B6) is commit `9f3f5d4`.
 
 Evidence baseline: Phase A artifacts at commit
 **`2c8c163784e260af4aaa8c1dc05c6281b0476120`** (`~/infynitae-native`, branch `main`).
@@ -15,6 +16,8 @@ New Phase B evidence uses `EB-*` IDs and lives in [`evidence/phase-b/`](evidence
 ---
 
 ## 0. Phase B evidence produced so far
+
+(EB-8 … EB-12 are listed in B8.1.)
 
 | ID | What | Where |
 |---|---|---|
@@ -240,7 +243,7 @@ Answers to the six questions, grounded in EB-2 (experiment) and EB-4 (source):
 
 Two Smithay defects this avoids:
 - **EV-S12 confirmed experimentally (EB-2 S5).** For F (root origin (100,100), bbox origin (70,70)) with output A's left edge at x=120, Space passed `overlap.loc.x = 50` (relative to the **bbox** origin). The correct root-surface-relative value is 20. `Window::refresh` → `output_update` interprets overlap relative to the **root surface** origin. Any element whose surface tree extends left/up of its root surface gets enter/leave computed against a shifted rectangle. Infynitae must pass overlap in RootSurfaceLocal coordinates.
-- **New OPEN hypothesis EB-H1** (SMITHAY, static only). In `Window::refresh` (`space/wayland/window.rs:68-80`), popup overlap is shifted by the popup's `location`, which is relative to the toplevel's **geometry** (`popups_for_surface`). But `Window::surface_under` places a popup's surface origin at `geometry.loc + location − popup.geometry.loc` relative to the root surface. Popup enter/leave may therefore be offset by `geometry.loc − popup.geometry.loc` (non-zero for any CSD toplevel). To be tested with a real client (X-5, §8). Affects B8.
+- **EB-H1, confirmed experimentally at checkpoint 2 (B8.5)**. Originally a static-only hypothesis: In `Window::refresh` (`space/wayland/window.rs:68-80`), popup overlap is shifted by the popup's `location`, which is relative to the toplevel's **geometry** (`popups_for_surface`). But `Window::surface_under` places a popup's surface origin at `geometry.loc + location − popup.geometry.loc` relative to the root surface. Popup enter/leave may therefore be offset by `geometry.loc − popup.geometry.loc` (non-zero for any CSD toplevel). To be tested with a real client (X-5, §8). Affects B8.
 
 ### B2.5 Pointer chain (resolves Q-05 and the Prototype 01 offset bug)
 
@@ -435,7 +438,7 @@ Subsurfaces likewise have no stored position: `surface_origin(S) = parent surfac
 - **PROTOCOL**: the boundary is "set by the compositor" (EV-W07). On an unbounded canvas it is pure policy.
 - **DECISION D-B6-BOUNDARY:** target = the OutputLogical viewport of the **anchor output**, mapped into Canvas by T5 and then into parent-geometry-relative coordinates. The anchor output is:
   1. the output on which the input event that caused the popup (the grab serial, else the seat's last input) occurred, if the parent is visible on it;
-  2. else the parent's primary output (selection policy is B8);
+  2. else the parent's frame-clock output (D-B8-CLOCK: highest-refresh observing output);
   3. else no constraint adjustment (`get_geometry()`).
 
   Rationale: the user is looking at the output where they clicked. Multi-output ambiguity is resolved by the input, which the protocol already ties popups to ("must be used in response to some sort of user action").
@@ -462,7 +465,300 @@ Subsurfaces likewise have no stored position: `surface_origin(S) = parent surfac
 | Parent popup dismissed by compositor | Dismiss all nested grabbing popups too, in reverse order (`popup_done` each) (PROTOCOL). |
 | Parent element unmapped or destroyed | Dismiss its whole popup tree (`popup_done`). Then no popup can reference an element that no longer renders. |
 | Client death | Arbitrary destruction order (EB-5). `PopupManager::cleanup` tolerates dead surfaces. No Stage state references popups, so there is nothing to purge in Stage. |
-| Popup visibility / enter-leave | Driven by the element's visibility pass through `Window::output_enter` (Smithay propagates to popups). Correctness for CSD parents is EB-H1 (open). |
+| Popup visibility / enter-leave | **Not** via `Window::output_enter`'s popup propagation, which X5 shows is offset (EB-H1 confirmed, B8.6). Infynitae computes per-surface membership for every surface of the element, popups included, with the B2.3 origin formulas, and calls `Output::enter`/`leave` itself (D-B8-ENTER). |
+
+---
+
+## B7 — Camera and output model
+
+Evidence: EV-H02 (no prior multi-output product experience), EB-2 (S2/S4: an output-as-camera can be independent, but `Space`'s version is integer-only), B1, B2. Hotplug behaviour is designed here, not implemented.
+
+### B7.1 Objects
+
+| Object | What it is | Identity | Owner |
+|---|---|---|---|
+| **Output** | A backend display sink: mode, physical size, transform, refresh, fractional scale. The Smithay `Output` / `wl_output` global is its protocol face. | `OutputId` (runtime, monotonic, never reused, like B4); stable `OutputKey` (connector + make/model/serial) for configuration matching | output manager (backend reports modes; configuration chooses mode/scale/transform) |
+| **Viewport(O)** | O's logical size = mode / scale, transform applied | derived | **nobody** (computed) |
+| **Camera** | A view into the Stage: `center: CanvasPos` (Q16), `zoom: f64` (= 1.0 in Foundation 01) | `CameraId` (monotonic, never reused) | **Camera set**, compositor domain state beside Stage, not inside it |
+| **Binding** | `OutputId → CameraId` | — | output manager (policy), stored in the camera set |
+| **Arrangement** | Pointer-crossing layout of outputs (B2.1) | — | output configuration |
+
+**DECISION D-B7-CENTER: a camera is anchored at its centre, not its top-left.** Each output derives its view origin:
+
+```
+v_O = camera.center − (viewport_O / 2) / zoom        (Q16, per output)
+```
+
+`v_O` is the "camera" in the B1.5 and B2.2 formulas (`R`, `C_O`, `c_eff,O` are all per output, computed from `v_O`). Centre anchoring was chosen because:
+- zoom (Level C) scales about the visual centre;
+- a camera shared by outputs of different sizes shows the same centre on both;
+- a mode or scale change keeps the content centred instead of pinned to the top-left.
+
+This changes no B1/B2 result. Those formulas only ever consumed the per-output origin.
+
+### B7.2 Answers to the B7 questions
+
+| Question | Answer | Class |
+|---|---|---|
+| Who owns Camera? | The camera set, compositor domain state alongside Stage. Not Output, renderer, Smithay, shell or Stage. Shell and IPC may *request* camera changes (C7). | DECISION |
+| Is Camera permanently tied to an Output? | No. Cameras are bound to outputs; a binding can change. | DECISION |
+| Can Camera survive output removal? | Yes. On removal the binding is dropped and the camera persists unbound. When the same `OutputKey` reappears, the binding (and thus the view) is restored. | DECISION |
+| Is Camera persistent? | Yes, across sessions, keyed by `OutputKey` (persistence format is Level D). `CameraId` is runtime-only. | DECISION (format deferred) |
+| Can two outputs share Camera state? | Yes: N outputs → 1 camera is a mirrored view. Each output still derives its own `v_O`, scale, edges and frame clock. B8's preferred-scale policy already covers a surface on outputs of different scale. | DECISION |
+| Hotplug (conceptual) | **Add:** create the `OutputId`; bind it to the remembered camera for its `OutputKey`, else to a new camera whose placement is Level D policy; run the visibility pass (B9). **Remove:** run the visibility pass with the output gone (every surface it had entered gets `wl_surface.leave`) *before* the `wl_output` global is destroyed; then unbind and keep the camera. Stage is never touched (I4). **Mode/scale/transform change:** recompute the viewport, rerun the visibility pass, re-evaluate preferred scale (B8.3). No configures are derived from it (I3′). | DECISION |
+
+### B7.3 Negative ownership
+
+| State | OWNS | DOES NOT OWN |
+|---|---|---|
+| Camera centre/zoom | camera set | Output, renderer, Smithay, `Space`, Stage, shell (requests only), XWayland |
+| Output properties (mode, scale, transform) | output manager / configuration | camera set, Stage, renderer (reads), clients |
+| Output↔camera binding | output manager | camera set (stores but does not decide), Stage |
+| Per-output view origin `v_O`, `R`, `C_O` | **nobody**: derived per frame | everything (I8) |
+| Arrangement | output configuration | camera set, Stage |
+
+---
+
+## B8 — Multi-output Wayland semantics (mandatory worked example)
+
+### B8.1 Harness and evidence (new)
+
+| ID | Evidence | Where |
+|---|---|---|
+| EB-8 | Minimal lockstep harness. A Smithay 0.7.0 server (`wl_compositor` v6, xdg-shell, shm, fractional-scale, viewporter, two `wl_output` globals) plus a recording `wayland-client` probe over a socketpair, on a virtual vblank clock. Real: protocol objects, Smithay enter/leave and frame/scale mechanisms, every client-observed event. Modelled (the policies under test): integer cameras, zoom 1, the visibility rule, the clock. | `experiments/b8-harness/` (`server.rs`, `client.rs`, `lockstep.rs`, `bin/scenarios.rs`); output [`evidence/phase-b/b8-scenarios-output.txt`](evidence/phase-b/b8-scenarios-output.txt) |
+| EB-9 | Real clients (vkcube/radv, kitty/swrast, Firefox 157) against the harness in real time on a private socket, no host compositor. They were shown on screen, moved off-screen under Starve / Throttle / kick, pinged while off-screen, then shown again. | `experiments/b8-harness/src/bin/realclient.rs`; output [`evidence/phase-b/x2-realclients-output.txt`](evidence/phase-b/x2-realclients-output.txt) |
+| EB-10 | SMITHAY: `CompositorState::new` advertises `wl_compositor` **v5**. v6 (`preferred_buffer_scale`) needs `new_v6` (`wayland/compositor/mod.rs:680-706`). Prototype 01 used v5. | source + harness (v6 bind fails against `new`) |
+| EB-11 | SMITHAY: pending frame callbacks accumulate across commits (`frame_callbacks.extend`, `wayland/compositor/handlers.rs:146`). A withheld callback is never dropped by a later commit. | source; confirmed by SC3 |
+| EB-12 | SMITHAY: `send_surface_state` sends an integer preferred scale; `FractionalScaleState::set_preferred_scale` sends `round(scale·120)`; both send only on change (EV-S07). | source; confirmed by SC1 |
+
+### B8.2 The worked example (EXPERIMENT, SC1; all numbers measured)
+
+Setup: W has 800×600 window geometry plus a 20 px CSD shadow, so its root surface is 840×640 with `geometry.loc = (20,20)`. Anchor (B2.3) = Canvas (1000, 300), so the root origin is (980, 280) and the Canvas bbox is x 980…1820, y 280…920.
+- **A**: 1920×1080, scale 1.0, 165 Hz; view origin `v_A = (0,0)`.
+- **B**: 3840×2160, scale 1.5 → logical 2560×1440, 144 Hz; `v_B = (600,0)`.
+
+Policies: scale = Max, frames = Starve (SC1 isolates the starvation case; the adopted frame policy is B9), clock = highest refresh, suspension = never.
+
+**Stage and projection (B1.5, B2.2):**
+- Stage holds exactly one datum for W: anchor (1000,300).
+- On A (k=1, R=0, C_A=0): W's left edge projects to physical x=1000, its root to 980.
+- On B (k=1.5, R=600, C_B=0): `edge(1000) = round(400·1.5+δ) = 600`, `edge(980) = 570`, `edge(1820) = 1830`.
+- The same Canvas point (1100.5, 400.25) is OutputLogical (1100.5, 400.25) on A and (500.5, 400.25) on B. Through T5→T9 both give client coordinates (120.5, 120.25). The client-visible position is the same whichever camera the pointer looks through (EV-W13, D-B2-PTR-SPACE).
+
+**Trace** (client-observed; the full trace is in EB-8):
+
+| t (ms) | Event | Client receives | Wayland requirement | Smithay mechanism | Infynitae policy |
+|---|---|---|---|---|---|
+| 0 | W maps; visible on A and B | `preferred_scale 180` (=1.5), `preferred_buffer_scale 2`, one `xdg_toplevel.configure` (the **initial** one), `enter A`, `enter B` | enter on scan-out overlap (EV-W03). Initial configure required (xdg_surface). Preferred scale before configure ("initial wl_surface state … followed by an xdg_surface.configure") | `Output::enter` per surface; `send_surface_state`; `with_fractional_scale` | Scale = max(1.0, 1.5); integer = ⌈1.5⌉ = 2 (B8.3) |
+| 0–50 | both visible | `wl_callback.done` at **165/s** (measured 165 in 1 s, SC3-d), not 165+144 | "must not send excessive updates, while still allowing the highest possible update rate" (wl_surface.frame) | `send_frames_surface_tree` with primary = clock output | Frame clock = highest-refresh observing output (A). Presentation `sync_output` = A |
+| 50–327 | **Camera A pans** 40 px per A-vblank | no configure; `done` continues at ≈165/s | — | — | I3′ (B9.7) |
+| 327.3 | W leaves A's viewport | `leave A` only | leave on losing overlap | `Output::leave` | Clock → B; preferred scale stays 1.5 (max over {B}) |
+| 327–611 | B only | `done` at **140–144/s** | — | — | Clock = B |
+| 611.1 | **Camera B pans**; W leaves B | `leave B` | — | — | W unobserved: callbacks withheld (in SC1; production adds kick + fallback, B9); scale held (no event); no configure; no suspension (B9.5) |
+| 611–1186 | unobserved | nothing (0 `done`) | spec: "should avoid signaling frame callbacks if the surface is not visible" | throttle `None` | (B9) |
+| 1186.1 | **Camera A jumps back** | `enter A`, `preferred_scale 120`, `preferred_buffer_scale 1` | — | — | Max over {A} = 1.0. A jump is an atomic camera change, so the decrease applies now (B8.3) |
+| 1187.9 | first frame after re-entry | `wl_callback.done` **1,768 µs** after the camera change (A period 6,061 µs); client reallocates to 840×640 | — | EB-11: the withheld callback was still pending | Liveness: completed at the first A vblank (B9.3) |
+
+Across the whole run W received exactly **one** `xdg_toplevel.configure` (the initial one), despite two pans and one jump. Damage is per output: a camera change damages only that output. Focus: camera motion never changes keyboard focus. Pointer focus is re-evaluated at the stationary pointer position after a camera change ends (detail in B10/B11).
+
+### B8.3 Preferred scale for a surface observed at several scales (resolves Q-06)
+
+**What the protocol says (PROTOCOL):** `wl_surface.preferred_buffer_scale` and `wp_fractional_scale_v1.preferred_scale` are **one value per surface**, "sent whenever the compositor's preference changes". `set_buffer_scale` says clients should "pick the same buffer scale as the scale of the output that the surface is displayed on". It is singular, and no text covers a surface displayed on several outputs at different scales. **The protocol does not mandate `max`.** Any choice is compositor policy. No claim about other compositors' consensus is made.
+
+**Measured comparison (EXPERIMENT, SC2).** Three camera gestures:
+1. B sweeps across W while A shows W fully.
+2. A shows 220 of W's 840 px while B oscillates between showing 300 and 120 px (the visible-area ordering flips every swing).
+3. B's viewport edge oscillates ±15 px across W's edge (B membership flaps).
+
+"Upsampled on B" = time W was visible on B while its buffer scale was < 1.5 (blurry). "Downsampled on A" = time visible on A with buffer scale > 1.0 (sharp, extra memory).
+
+| Policy | scale events: gesture 1 / 2 / 3 | buffer reallocations | MB allocated | upsampled on B (ms) | downsampled on A (ms) |
+|---|---|---|---|---|---|
+| Max (instant) | 2 / 1 / **19** | 23 | 79.0 | **0** | 1687 |
+| **MaxGesture** | 2 / 1 / **1** | **2** | 7.0 | **0** | 2174 |
+| Min | 0 / 0 / 0 | 1 | 2.2 | 1687 | 0 |
+| Primary (smithay-like 2×-area / refresh rule) | 0 / 0 / 0 | 1 | 2.2 | 1687 | 0 |
+| LargestArea | 0 / **20** / 0 | 21 | 72.0 | 1340 | 347 |
+
+Interpretation:
+- **Min and Primary** are stable but leave the high-DPI output blurry for the entire observation. Primary is biased to the higher refresh (A at 165 Hz) unless B shows ≥ 2× the area.
+- **LargestArea** changes with overlap area during camera motion. It flapped 20 times in a 20-swing oscillation with no membership change, and was still blurry 1340 ms. Rejected: it is the "continuous with overlap area" behaviour the directive warns against, and the measurement confirms the hazard.
+- **Max** is never blurry, and changes only when membership changes. Those changes are discrete events that already produce `enter`/`leave`. But an oscillation across an output edge renegotiates on every crossing (19 events, 23 reallocations).
+- **MaxGesture** keeps Max's zero-blur property and removes the edge-oscillation churn (1 event instead of 19). Its cost is holding the higher scale until the gesture ends (2174 ms vs 1687 ms of downsampled display on A).
+
+**DECISION D-B8-SCALE (INFYNITAE POLICY, not a protocol requirement):**
+1. `fractional_preferred(E) = max(scale(O))` over outputs O currently observing any surface of E.
+2. **Increases** apply immediately. That is the moment a higher-scale output starts observing E, so no observing output ever upsamples E's content beyond a transient frame.
+3. **Decreases** are evaluated only when no camera gesture is active: at the end of a CameraPan or WindowMove interaction, or atomically for discrete camera changes (jumps, bookmarks). No time constant is involved; "gesture" is defined by the interaction model (B10).
+4. While E is unobserved the last value is **held**: no events.
+5. `integer_preferred(E) = ⌈fractional_preferred(E)⌉`. Integer-only clients render at ≥ the largest scale and are downsampled elsewhere. This is consistent with Smithay advertising `wl_output.scale` rounded up (EB-6). It is policy.
+6. **Consequence on A:** with W on A (1.0) and B (1.5), the client renders a 1260×960 buffer (SC1). A shows it minified ×1/1.5. B shows it 1:1. Cost: 2.25× buffer bytes while multi-observed. Quality: minification instead of magnification on A. The minification filter is a renderer choice (C3). Visual quality was **not** measured here; the harness has no renderer.
+7. **Determinism:** the value is a pure function of (observing set, gesture boundaries). It never depends on overlap area, time, or event batching.
+
+### B8.4 Frame clock and presentation (EXPERIMENT, SC3)
+
+- When W is visible on A (165 Hz) and B (144 Hz), callbacks complete once per frame of **one** clock output: 165 per second measured, never the sum.
+- Clock rule **highest refresh** gives 165/s regardless of area (SC3-d2). The Smithay-like **Primary** rule picks B (144/s) when B shows ≥ 2× the area (SC3-d2).
+
+**DECISION D-B8-CLOCK:** the frame clock of E is the observing output with the highest refresh rate, ties broken by `OutputId`. It changes only on membership changes. Basis: the frame-request text asks for "the highest possible update rate for clients that wait for the reply"; this is a policy reading of that sentence. Presentation feedback for E synchronizes to the clock output (`sync_output`, EV-W09).
+
+Handover (SC3-e): when A stopped observing W while a callback was pending, it completed at B's next vblank (+4,167 µs; B period 6,944 µs). The maximum gap across the handover was 7.197 ms, bounded by old period + new period.
+
+### B8.5 Membership: computed by Infynitae, not by `Window::output_enter`
+
+**EB-H1 is CONFIRMED (EXPERIMENT, X5).** Setup: a CSD toplevel (shadow 20) with a CSD popup (shadow 10) whose true surface spans Canvas x 1090…1310. Smithay's popup membership (via `Window::output_enter` → `refresh`) is offset 10 px left (= `geometry.loc − popup.geometry.loc`):
+
+| Viewport edge | Truth | Observed |
+|---|---|---|
+| right edge at x=1085 | popup invisible | **`wl_surface.enter` sent** (wrong) |
+| left edge at x=1305 | popup visible (5 px) | **no enter** (wrong) |
+| right edge at x=1095 | popup visible | enter (correct) |
+
+Together with EV-S12/EB-2 S5 (bbox-relative overlap for the root tree), both Smithay paths for surface membership mis-place parts of the tree whenever window geometry ≠ surface origin, which is the common CSD case.
+
+**DECISION D-B8-ENTER:** Infynitae computes membership per surface:
+- traverse the element's surface tree and popup tree;
+- compute each surface's Canvas rect with the B2.3 formulas (root origin = anchor − geometry.loc; popup origin as in B6.1);
+- intersect with each output's Canvas viewport;
+- call the public `Output::enter`/`leave` (EV-S04) directly.
+
+`Window::output_enter`/`output_leave` are not used for membership. The obligation to read subsurface offsets from Smithay's public renderer surface state is checked in T1.
+
+### B8.6 Distinguishing requirement / mechanism / policy (summary)
+
+| Aspect | WAYLAND REQUIREMENT | SMITHAY MECHANISM | INFYNITAE POLICY |
+|---|---|---|---|
+| Stage identity | none (compositor-internal) | none | one element, one anchor (B2–B4) |
+| Surface tree | subsurface/popup positions are parent-relative | `PopupManager`, renderer surface state | derive Canvas origins (B2.3, B6.1) |
+| Visibility | `enter` when "some part … within the scanout region of an output" | `Output::enter/leave` | per-surface Canvas ∩ viewport (D-B8-ENTER) |
+| Preferred scale | one value per surface; send on change | `send_surface_state`, `set_preferred_scale` | D-B8-SCALE (MaxGesture, ⌈⌉ for integer) |
+| Viewporter | client maps buffer → destination size | `ViewporterState` | none (clients use it with fractional scale) |
+| Render scale | — | `from_surface` with f64 location | lattice edges per output (B1.5) |
+| Frame callbacks | "should avoid … if not visible"; "highest possible update rate" | `send_frames_surface_tree` (primary output, throttle) | D-B8-CLOCK; B9 off-screen policy |
+| Presentation feedback | one `sync_output`; `discarded` if never displayed | `take_presentation_feedback` | sync to clock output; B9.4 |
+| Damage | — | `OutputDamageTracker` per output | per-output damage; camera change damages only its output |
+| Focus | pointer focus is one surface per seat | seat | camera motion does not move keyboard focus (C4) |
+
+---
+
+## B9 — Visibility, off-screen behaviour and I3′
+
+### B9.1 Visibility state (per element; only defined while `Mapped`, B5)
+
+The master prompt's PartiallyVisible / VisibleOnOne / VisibleOnMany distinctions have **no protocol consequence of their own**. Membership is per output (B8.5), the clock depends on the set (B8.4), and scale depends on the set (B8.3). Partial vs full visibility changes nothing observable. The state model therefore keeps only what changes behaviour:
+
+| State | Definition |
+|---|---|
+| `Unobserved` | no surface of E overlaps any output viewport |
+| `Observed{set S ≠ ∅, clock c}` | S = outputs observing some surface of E; c = D-B8-CLOCK(S) |
+
+### B9.2 What the evidence says about off-screen callbacks (resolves Q-01)
+
+| Finding | Class | Evidence |
+|---|---|---|
+| The spec recommends withholding callbacks for invisible surfaces | PROTOCOL | EV-W02 |
+| Withheld callbacks are never lost; Smithay keeps them pending across commits | SMITHAY | EB-11 |
+| On re-entry, a pending callback completes at the first vblank of the new clock output: 303 µs (SC3) and 1,768 µs (SC1) in lockstep; 3–6 µs after the camera change in real time; ≤ one period of the clock output by construction | EXPERIMENT | SC1, SC3, EB-9 |
+| A one-shot callback requested **while** off-screen also stays pending and completes on re-entry (Starve) | EXPERIMENT | SC3 "one-shot@off" |
+| Starvation minimises cost: off-screen CPU 0.0% (vkcube), 0.4% (kitty, still committing ~4/s on its own), 1.2% (Firefox parent; 0 commits) | EXPERIMENT | EB-9 |
+| **Starvation can block a client's main loop for the entire off-screen period.** vkcube (Mesa Vulkan WSI, FIFO) answered `xdg_wm_base.ping`s sent while off-screen only after re-entry (2.0–4.0 s later). It cannot process `close`/configure in that state either (same blocked loop). Firefox and kitty answered immediately. | EXPERIMENT | EB-9 |
+| A periodic fallback bounds that: Throttle 1000 ms gave pong in 6–18 ms at 0.0–0.2% CPU (vkcube); kitty/swrast cost 10.4% CPU (vs 39% at 250 ms) | EXPERIMENT | EB-9 |
+| An **event-driven kick** (complete the client's withheld callbacks once, when the compositor sends it a request needing its main loop) bounds protocol responsiveness with no periodic cost: vkcube pong below harness resolution, 0.0% CPU, 0.6 commits/s off-screen | EXPERIMENT | EB-9 `starve+kick` |
+| Whether present-locked **game** loops (Wine/Proton) or network clients suffer from long off-screen starvation (frozen simulation, server timeouts) | **ASSUMPTION: not measured** | no game was run; X-7 |
+
+### B9.3 Decision D-B9-FRAMES
+
+1. **Never invent requests.** The compositor only completes callbacks clients requested (`wl_surface.frame`). It never creates them.
+2. **Observed:** complete pending callbacks once per frame of the clock output c (D-B8-CLOCK).
+3. **Unobserved:** withhold (spec-recommended), with two bounded exceptions:
+   - **(a) Protocol kick.** When the compositor sends a client a request that needs the client's main loop (`xdg_wm_base.ping`, `xdg_toplevel.close`, a non-initial configure, `xdg_popup.popup_done`), it first completes that client's withheld callbacks once. This bounds protocol responsiveness at zero idle cost (measured).
+   - **(b) Finite fallback cadence.** Each unobserved element receives at most one completion per fallback period P. **Architectural requirement: P is finite**, so no element is starved for an unbounded time. P is a runtime configuration parameter. Foundation 01's *provisional* default is P = 1 s:
+     - the measured cost at 1 s is negligible for GPU clients (vkcube 0.0–0.2%) and for Firefox (= Starve);
+     - it lets present-locked loops progress at 1 fps;
+     - **the value is not justified by a game measurement (X-7)** and is expected to be revisited in T5.
+     - Disabling the fallback (P = ∞) is permitted only per element, by explicit later policy (e.g. a parked state). It is never the global default.
+4. **Re-entry liveness invariant:** when E goes `Unobserved → Observed{…, c}`, every pending callback of E completes at c's first vblank after the transition. Bound: ≤ one refresh period of c, plus dispatch.
+5. **Multi-output:** completion only on the clock output (no double rate). On clock handover, pending callbacks complete at the new clock's next vblank. The gap is bounded by old + new period (SC3-e).
+6. **Complete off-screen pause** (Starve with no kick and no fallback) is **rejected**. It leaves Mesa-WSI-FIFO clients protocol-unresponsive for the whole off-screen period (vkcube, 2–4 s in a 5 s test; unbounded in general).
+
+### B9.4 Presentation feedback, damage, buffers, resources
+
+| Concern | Rule | Class |
+|---|---|---|
+| Presentation feedback while unobserved | A commit's feedback resolves as `discarded` when superseded by a newer commit (it can never be shown). The latest commit's feedback stays pending, and resolves `presented` (sync to the clock output) when re-observed and shown, or `discarded` if superseded or the element is destroyed. Bounded by client commit activity. | DECISION; T1 obligation (the harness had no presentation-time) |
+| Damage | A camera change damages only its output. Unobserved commits produce no damage anywhere. Re-entry damages the element's projected rect on the entering output. | DECISION |
+| Buffer retention | The latest committed buffer of every mapped element is retained while unobserved. It is needed for instant re-entry and future off-screen thumbnails (product §3.1). Renderer textures may be evicted under a budget (C3); the client buffer reference is kept. | DECISION |
+| Off-screen resource bound | Per element: one retained buffer, at most one callback completion per P, plus one per protocol kick. No compositor work per unobserved element per frame other than O(1) membership bookkeeping. | DECISION |
+
+### B9.5 Suspension (resolves Q-02)
+
+**Measured (EXPERIMENT, SC4):**
+- `suspended` is delivered as `xdg_toplevel.configure … [suspended]` plus an `xdg_surface.configure` that must be acked. Every toggle is a configure (EV-W05 confirmed at the client).
+- **Immediate (bound to camera visibility):** exactly 1 configure per visibility transition. 48 windows, 8×6 grid, 24 crossing the viewport, one horizontal sweep:
+
+  | Pan speed | Configures/s |
+  |---|---|
+  | 2,000 px/s | 8.8 |
+  | 8,000 px/s | 35.3 |
+  | 30,000 px/s | 132.9 |
+
+- **Debounce:**
+  - On a single sweep it only *delays*. Total configures including a 3 s settle were **48 for every debounce value**, the same as Immediate.
+  - On scrubbing (10 back-and-forth passes) it reduces configures from 1.00 per visibility transition (Immediate) to 0.70 (250 ms) and 0.10 (1 s). The benefit depends entirely on T relative to the user's scrub period, which is behaviour, not a protocol or system property.
+  - Delayed re-suspension is still a configure caused by camera translation.
+- **Never:** 0 configures in all runs.
+- The power benefit that suspension targets is largely obtained by B9.3 for frame-paced clients (vkcube 0.0%, Firefox 1.2%, kitty 0.4% off-screen CPU, with no configure). The residual benefit (clients that animate without frame callbacks, or that honour `suspended` specifically) was **not measured**.
+
+**DECISION D-B9-SUSPEND:** `suspended` is never derived from camera visibility, immediately or debounced.
+- **State machine:** `suspended(E) = OR(reasons(E))`, with `reasons ⊆ {SessionLocked, AllObservingOutputsOff, Parked}`.
+  - SessionLocked and output-off are Level C; Parked is an explicit user/shell action, Level D.
+  - `CameraUnobserved` is **not** a member.
+- Each reason change that flips the OR sends one configure; those are semantic transitions, not translation.
+- **Reserved extension:** a future `StableUnobserved(T)` reason may be added only with evidence (which clients benefit, what T). T would be configuration, not a constant. It is **not enabled** in Foundation 01.
+
+### B9.6 Transition table
+
+Events: camera change (pan tick or jump), element move/resize/geometry change, output add/remove/mode/scale change, map/unmap (B5), vblank of output O, fallback tick, protocol kick, gesture end.
+
+| State | Event | Next | Membership (`enter`/`leave`) | Frame callbacks | Presentation | Damage | Scale (D-B8-SCALE) | Configure |
+|---|---|---|---|---|---|---|---|---|
+| (unmapped) | map | `Observed` or `Unobserved` | enter for each observing output | per new state | — | element rect on observing outputs | set **before** the initial configure (B5) | initial only |
+| `Unobserved` | camera/move brings E into O's viewport | `Observed{O}` | `enter O` for each surface now overlapping | pending ones complete at O's next vblank (liveness, B9.3-4) | latest commit presented on O | E's rect on O | increase immediately if scale(O) > held value; a decrease waits for gesture end | **none** |
+| `Observed{S}` | camera/move adds O′ | `Observed{S∪O′}` | `enter O′` | clock may move to O′ if higher refresh (B8.4) | sync_output follows clock | E's rect on O′ | increase immediately if scale(O′) > current | none |
+| `Observed{S}` | camera/move removes O′ (S′ = S∖O′ ≠ ∅) | `Observed{S′}` | `leave O′` | if O′ was the clock: handover, pending complete at the new clock's next vblank | sync_output follows clock | O′ only | decrease deferred to gesture end (or applied now if no gesture) | none |
+| `Observed{S}` | last observing output stops observing | `Unobserved` | `leave` for each | withheld; kick + fallback P apply | superseded commits `discarded`; latest pending | none afterwards | held | none |
+| `Observed{S}` | vblank of clock c | same | — | complete pending callbacks once | presented (sync c) | — | — | — |
+| `Observed{S}` | vblank of O ∈ S, O ≠ c | same | — | none | — | per-output damage only | — | — |
+| `Unobserved` | fallback tick (≥ P since last completion) | same | — | complete pending callbacks once | superseded commits `discarded` | none | — | — |
+| any mapped | protocol request to E's client needing its main loop | same | — | if `Unobserved`: complete pending callbacks once, before the request | — | — | — | (the request itself, e.g. close/ping; never camera-caused) |
+| any mapped | gesture end | same | — | — | — | — | apply any deferred decrease | none |
+| any | output O added | recompute | enter for surfaces overlapping O's viewport | clock may change | — | O full | may increase | none |
+| any | output O removed | recompute | `leave O` for all surfaces **before** the global is destroyed (B7.2) | handover or → withheld | — | — | decrease follows the gesture rule (a removal is atomic, so applied now) | none |
+| any | output scale/mode change | recompute | as geometry dictates | as clock dictates | — | O full | re-evaluate (atomic) | none |
+| any mapped | unmap / destroy | (B5) | `leave` all | pending callbacks are moot (client may re-request after remap) | pending feedback `discarded` | old rect | held for remap / dropped | per B5 |
+
+Missing-transition check: every (state × event) pair above has a defined outcome. "Partial visibility" is not a state (B9.1), so it has no transitions. Zoom (Level C) is a camera change and falls under the camera rows.
+
+### B9.7 I3 restated (resolves Q-09)
+
+**I3′ — camera-translation invariant.** A change of camera state alone (centre, and future zoom) MUST NOT:
+- (a) change any element's Canvas geometry (I2);
+- (b) cause any `xdg_toplevel`/`xdg_popup`/`xdg_surface` configure: no size, state (including `suspended`, B9.5), bounds (EV-W06; bounds are never derived from camera or membership) or popup position (D-B6-NO-PAN-REPOSITION) is derived from camera state;
+- (c) deliver to clients any pointer motion, relative motion or button event originating from the camera-pan gesture itself (B11).
+
+A camera change MAY cause, as consequences of **output-membership** changes and never per pan tick:
+- `wl_surface.enter`/`leave` (protocol-required, EV-W03);
+- preferred-scale changes per D-B8-SCALE (an increase when a higher-scale output starts observing; a decrease only at gesture end);
+- frame-callback cadence and clock changes (D-B8-CLOCK, D-B9-FRAMES);
+- presentation `sync_output`/`discarded` outcomes.
+
+After a pan gesture ends, the pointer's new surface-local position may be delivered as ordinary pointer motion (B10/B11). It is the true pointer position, not a pan delta.
+
+**Measured:**
+- SC1: 2 pans + 1 jump gave 0 non-initial configures, 3 enter/leave events after mapping (leave A, leave B, enter A) and 1 preferred-scale change (at the jump).
+- SC4 with suspension Never: 0 configures over 48 windows at up to 30,000 px/s.
+
+Permanent regression test: client-observed `configure` count during pan = 0 (C12).
 
 ---
 
@@ -470,16 +766,24 @@ Subsurfaces likewise have no stored position: `surface_origin(S) = parent surfac
 
 | ID | Experiment | Status |
 |---|---|---|
-| E1–E9 | Numeric (EB-1) | **RUN**: results in B1 |
-| S1–S7 | `Space` semantics (EB-2) | **RUN**: results in B2.4 |
-| X-1 | Client-side trace of configure/enter/leave/scale/pointer during scripted pan | **PENDING**: needed for B9/B11 (I3, Q-09) |
-| X-2 | Off-screen frame-callback behavior of real clients (starve vs throttle) | **PENDING**: needed for B9 (Q-01) |
-| X-3 | Two outputs, scales 1.0 / 1.5, one spanning window | **PENDING**: needed for B8 (Q-06) |
-| X-4 | Smithay overlap convention with `bbox.loc ≠ 0` | **DONE for the Space side** (EB-2 S5 confirms the bbox-relative overlap). The `Window::refresh` interpretation is source-verified. |
-| X-5 (new) | Popup enter/leave offset for CSD toplevel (EB-H1) | **PENDING**: B8 |
-| X-6 (new) | Subsurface edge rounding with an f64 root location matches the lattice rule (B1.5 algebraic claim) | **PENDING**: T1 obligation, can run headless |
+| E1–E9 | Numeric (EB-1) | **RUN**: B1 |
+| S1–S7 | `Space` semantics (EB-2) | **RUN**: B2.4 |
+| X-1 | Client-side trace during scripted pan (configure, enter/leave, scale) | **RUN** (SC1, SC4): 0 pan-induced configures. *Pointer* leakage during pan is not covered; the harness has no input path. That part moves to B11 (X-8). |
+| X-2 | Real clients off-screen: Starve / Throttle / kick | **RUN** (EB-9): vkcube, kitty, Firefox. mpv and mesa-demos are not installed (not installed, to avoid system changes); games deferred (X-7). |
+| X-3 | Two outputs 1.0/1.5, one spanning window | **RUN** (SC1, SC2) |
+| X-4 | Smithay overlap convention | **RUN** (EB-2 S5) |
+| X-5 | Popup enter/leave offset (EB-H1) | **RUN**: confirmed (B8.5) |
+| X-6 | Subsurface edge rounding under f64 root location | **PENDING**: T1 |
+| X-7 (new) | Off-screen Wine/Proton game and a network client under D-B9-FRAMES (Starve vs P=1 s vs kick); detect frozen simulation or disconnects | **DEFERRED** to T5. Needs a real game and must not touch the live session. It decides P's default, not the architecture (P is already finite and configurable) |
+| X-8 (new) | Pointer/relative-motion leakage during CameraPan | **PENDING**: B11 |
+| X-9 (new) | Presentation-feedback resolution for unobserved commits (B9.4) | **PENDING**: T1 |
 
-X-1, X-2, X-3 and X-5 need a nested or headless compositor plus Wayland test clients. That harness does not exist yet. Building a minimal one is the first task of the B7–B9 checkpoint (§10).
+Harness limitations (stated so they are not mistaken for coverage):
+- integer cameras, zoom 1;
+- no renderer (visual quality of downsampling not measured);
+- no presentation-time;
+- no input backend;
+- real-client tests used a single output.
 
 ---
 
@@ -487,42 +791,51 @@ X-1, X-2, X-3 and X-5 need a nested or headless compositor plus Wayland test cli
 
 | Q | Question | Status | Where |
 |---|---|---|---|
-| Q-01 | Off-screen frame-callback policy | **OPEN** (B9; needs X-2) | — |
-| Q-02 | `suspended` vs I3 | **OPEN** (B9) | — |
+| Q-01 | Off-screen frame-callback policy | **RESOLVED**: D-B9-FRAMES (withhold + protocol kick + finite fallback P; P's default provisional pending X-7) | B9.2–B9.3 |
+| Q-02 | `suspended` vs I3 | **RESOLVED**: never from camera visibility; semantic reasons only (D-B9-SUSPEND) | B9.5 |
 | Q-03 | Stage anchor | **RESOLVED**: window-geometry origin | B2.3 |
-| Q-04 | Popup constraint boundary | **CONDITIONALLY RESOLVED**: anchor-output viewport | B6.2 |
-| Q-05 | Smithay pointer global space | **RESOLVED**: Canvas; authoritative pointer state is `(OutputId, OutputLogical)` | B2.5 |
-| Q-06 | Single preferred scale on mixed-scale outputs | **OPEN** (B8; needs X-3) | — |
+| Q-04 | Popup constraint boundary | **RESOLVED**: anchor-output viewport. Fallback rule 2 now uses the parent's frame-clock output (D-B8-CLOCK). EB-H1 affects only membership, which D-B8-ENTER handles | B6.2, B8.4 |
+| Q-05 | Smithay pointer global space | **RESOLVED**: Canvas; authoritative pointer = `(OutputId, OutputLogical)` | B2.5 |
+| Q-06 | Single preferred scale on mixed-scale outputs | **RESOLVED** as INFYNITAE POLICY: D-B8-SCALE (MaxGesture; ⌈⌉ for integer scale) | B8.3 |
 | Q-07 | Smithay pin strategy | **OPEN** (B12, Level B) | — |
-| Q-08 | Canvas numeric model | **RESOLVED**: Q16 i64, ±2³⁶ bound, integral anchors | B1 |
-| Q-09 | Restated I3 | **OPEN** (B9/B11). Partial input: popups are never repositioned by pan (D-B6-NO-PAN-REPOSITION) | — |
+| Q-08 | Canvas numeric model | **RESOLVED** | B1 |
+| Q-09 | Restated I3 | **RESOLVED**: I3′ | B9.7 |
 
 ---
 
-## 10. Risks and open hypotheses introduced in B1–B6
+## 10. Risks and open hypotheses
 
 | ID | Risk / hypothesis | Severity | Mitigation / test |
 |---|---|---|---|
-| RB-1 | Smithay `Window::geometry()` re-clamps dynamically (spec: fixed until next `set_window_geometry`) | low | Observe in T3. Infynitae can compute effective geometry itself if needed |
-| RB-2 | `PopupManager::grab_popup` panics (`assert_eq!`) on root mismatch | medium | Check the precondition before calling (C8) |
-| RB-3 | Buffer-before-configure enforcement is opt-in (`ensure_configured`) | medium | Call on every toplevel commit. T1 test with a misbehaving client |
-| RB-4 | Destruction order on client death is arbitrary | medium | Idempotent, ObjectId-keyed handlers. T1 crash test |
-| EB-H1 | Popup enter/leave offset by `geometry.loc − popup.geometry.loc` | medium | X-5 |
+| RB-1 | Smithay `Window::geometry()` re-clamps dynamically | low | T3 |
+| RB-2 | `PopupManager::grab_popup` panics on root mismatch | medium | Check precondition (C8) |
+| RB-3 | Buffer-before-configure enforcement is opt-in | medium | Call `ensure_configured`. T1 |
+| RB-4 | Arbitrary destruction order on client death | medium | Idempotent handlers. T1 |
+| RB-5 (new) | Smithay membership helpers wrong for CSD trees (EV-S12, EB-H1 confirmed) | **resolved by design** (D-B8-ENTER); medium if regressed | T1 regression: popup/CSD enter/leave against computed truth |
+| RB-6 (new) | Default `CompositorState::new` is v5; using it silently disables `preferred_buffer_scale` | low | Use `new_v6`; T1 asserts the bound version |
+| RB-7 (new) | MaxGesture holds the higher scale during gestures: 2.25× buffer memory while multi-observed | low | Measured cost (SC2). Revisit if memory pressure appears |
+| RB-8 (new) | Fallback P = 1 s may be too slow (game timeouts) or too costly (software clients: kitty/swrast 10% CPU) | medium | X-7; P is configurable |
+| RB-9 (new) | The protocol kick completes callbacks for every unobserved surface of a client, including ones the request was not about | low | Bounded: once per compositor request |
 | A-B1-1 | Zoom anti-jitter rule unresolved | low (Level C) | Before zoom work |
-| X-6 | Subsurface edge identity under f64 root location | low | Headless T1 |
 
 ---
 
-## Phase B checkpoint 1: gate status for this atomic boundary
+## Phase B gate status
 
 | B-item | Status |
 |---|---|
-| B1 Numeric model | **Complete**: D-B1 with measured basis (EB-1) |
-| B2 Coordinate algebra | **Complete**: domains, T1–T10, anchor, pointer chain, I9 restatement, Space decision, type encoding |
+| B1 Numeric model | **Complete** |
+| B2 Coordinate algebra | **Complete** |
 | B3 Object graph | **Complete** |
 | B4 Identity | **Complete** |
-| B5 Lifecycle | **Complete** (states, transitions, difficult cases). Test obligations recorded |
-| B6 Popups/subsurfaces | **Complete**, except Q-04 is conditional on B8 and EB-H1 |
-| B7–B13 | **Not started** |
+| B5 Lifecycle | **Complete** |
+| B6 Popups/subsurfaces | **Complete** (Q-04 resolved at checkpoint 2) |
+| B7 Camera/output model | **Complete** (checkpoint 2) |
+| B8 Multi-output semantics | **Complete** (checkpoint 2); worked example measured |
+| B9 Visibility/off-screen | **Complete** (checkpoint 2). P default provisional (X-7) |
+| B10 Input & activation | **Not started** |
+| B11 Camera pan | **Not started** (X-8) |
+| B12 Backend boundary | **Not started** (Q-07) |
+| B13 Blocker report finalisation | **Not started** |
 
 Phase B as a whole: **NOT COMPLETE.** Do not advance to Phase C.
