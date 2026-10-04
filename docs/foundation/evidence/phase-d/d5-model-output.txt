@@ -1,0 +1,126 @@
+
+==============================================================================================================
+Cross-check against d5hit (Smithay presented geometry); must be identical
+==============================================================================================================
+edge tables for A and B equal d5hit's Smithay geometry: OK
+
+==============================================================================================================
+EPOCH 1 — geometry and mixed projection
+==============================================================================================================
+Output A: mode 1920x1080 scale 1.0 165 Hz, Arrangement origin (640.0, 360.0); camera A centre Q16(1650.3,700.7) zoom 1080/651 = 1.6589861751
+Output B: mode 3840x2160 scale 1.5 144 Hz, Arrangement origin (2560.0, 0.0); camera B centre Q16(2200.45,900.15) zoom 1
+  View A: k=1.6589861751 v=(1071.633331,375.199997) R=(960, 360) C=(185, 25) c_eff=(1071.513885,375.069443)  Canvas viewport x[1071.5139,2228.8472) y[375.0694,1026.0694)
+  View B: k=1.5000000000 v=(920.449997,180.149994) R=(840, 120) C=(121, 90) c_eff=(920.666672,180.000000)  Canvas viewport x[920.6667,3480.6667) y[180.0000,1620.0000)
+Stage: W.anchor (1100,420) [only stored datum]; U.anchor (1700,800)
+Surface table (Canvas origin, size) and physical rects [x0,x1)x[y0,y1) per output, membership:
+  PS   origin (1195,465) 30x30    A x[205,255) y[149,199) on=True   B x[412,457) y[428,473) on=True
+  P    origin (1190,460) 140x100   A x[197,429) y[141,307) on=True   B x[404,614) y[420,570) on=True
+  S1a  origin (1127,421) 30x20    A x[92,142) y[76,109) on=True   B x[310,355) y[362,392) on=True
+  S1   origin (1117,411) 101x53    A x[75,243) y[60,148) on=True   B x[295,446) y[347,426) on=True
+  W    origin (1080,400) 840x640   A x[14,1408) y[41,1103) on=True   B x[239,1499) y[330,1290) on=True
+  S2   origin (1065,450) 60x40    A x[-11,89) y[124,191) on=True   B x[217,307) y[405,465) on=True
+  U    origin (1700,800) 400x300   A x[1043,1706) y[705,1203) on=True   B x[1169,1769) y[930,1380) on=True
+W observed on A by ['PS', 'P', 'S1a', 'S1', 'W', 'S2']; on B by ['PS', 'P', 'S1a', 'S1', 'W', 'S2']  -> Observed{A,B}, clock = A (165 Hz > 144 Hz), sync_output A
+raw requirements rho_A=1.6590 rho_B=1.5000 -> rho=1.6590
+ladder (outputs 1.0,1.5; largest surface 840x640): [1.0, 1.2247, 1.5, 1.7321, 2.0, 2.4495, 3.0] H_max=3.0
+target t = smallest rung >= rho/(1+sigma) = 1.5800 -> h = 1.7321 (preferred_scale 208/120, preferred_buffer_scale 2)
+compositor factors m = rho_p / h: A 0.9578 (minify), B 0.8660 (minify)
+buffer: root 840x640 at h -> 1455x1109 px
+
+Hit-tests (INV-HIT-1), pointer positions in OutputLogical:
+  [B] W root content: p=(300.2500,400.6000) Arrangement=(2860.2500,400.6000) pixel=(450, 600) Canvas q=(1220.916672,580.600006) -> W surface-local delivered (140.916672,180.600006) clamp=0.00e+00
+  [B] input-region hole over S2 (Canvas (1105.4,470.3)): p=(184.7333,290.3000) Arrangement=(2744.7333,290.3000) pixel=(277, 435) Canvas q=(1105.399994,470.300003) -> S2 surface-local delivered (40.399994,20.300003) clamp=0.00e+00
+  [A] popup P at sub-pixel position (Canvas (1250.3,500.9)): p=(296.6037,208.7512) Arrangement=(936.6037,568.7512) pixel=(296, 208) Canvas q=(1250.300003,500.899994) -> P surface-local delivered (60.300003,40.899994) clamp=0.00e+00
+  [A] near W's left edge on A: p=(8.7000,300.2000) Arrangement=(648.7000,660.2000) pixel=(8, 300) Canvas q=(1076.758057,556.023331) -> None
+  superseded canvas-exact rule (D-B2-I9) vs INV-HIT-1 along W's vertical edges on A: 0 disagreeing pixels (first None)
+
+==============================================================================================================
+EPOCH 2 — input and constraint overlap (lock via B; camera A moved by a shell Navigate stream)
+==============================================================================================================
+pointer Free(B, (300.25, 400.6)) over W root -> keyboard focus W (click-to-focus earlier); lock request (persistent, region = whole surface)
+activation policy: W focused AND pointer inside region -> activate -> client sees `locked`
+authoritative pointer (sealed INV-COORD-5): Locked(W, q_lock=Canvas (1220.916672,580.600006))  [no OutputId]
+   same point surface-local (root): (140.916672,180.600006)
+   physical delta accel (3.5, -1.25) unaccel (3.0, -1.0) -> relative_motion(dx=3.5, dy=-1.25, dx_unaccel=3.0, dy_unaccel=-1.0) [wl_fixed]; no wl_pointer.motion (locked)
+   physical delta accel (2.25, 0.5) unaccel (2.0, 0.5) -> relative_motion(dx=2.25, dy=0.5, dx_unaccel=2.0, dy_unaccel=0.5) [wl_fixed]; no wl_pointer.motion (locked)
+   physical delta accel (-1.7, 0.75) unaccel (-1.5, 0.6) -> relative_motion(dx=-1.69921875, dy=0.75, dx_unaccel=-1.5, dy_unaccel=0.6015625) [wl_fixed]; no wl_pointer.motion (locked)
+shell stream: Navigate{output A, Delta(+15,0)} x 60 at 60 Hz (each command atomic under C7.2/C7.3)
+   cmd  4: v_A.x=1131.6333 R_A=1080 surface S2  leave A
+   cmd  6: v_A.x=1161.6333 R_A=1080 surface S1a leave A
+   cmd 10: v_A.x=1221.6333 R_A=1200 surface S1  leave A
+   cmd 11: v_A.x=1236.6333 R_A=1200 surface PS  leave A
+   cmd 18: v_A.x=1341.6333 R_A=1320 surface P   leave A
+   cmd 57: v_A.x=1926.6333 R_A=1920 surface W   leave A
+   W fully leaves A at command 57; lattice-reference switches of view A during the stream: 8; distinct W root widths on A: [1393, 1394]
+   hint changes under the sealed rules (stream = atomic changes): [(57, 1.7321, 1.5)]; configures: 0; pointer/relative events from the stream: 0
+   end of epoch 2: camera A centre (2550.3000,700.7000); W Observed{B}; clock B 144 Hz; h = 1.5000 (preferred_scale 180/120, preferred_buffer_scale 2)
+   oscillating stream (40 steps across W's edge on A): hint changes sealed=40; if the stream had gesture semantics=1
+
+==============================================================================================================
+EPOCH 3 — protocol fullscreen on A while W is observed through B
+==============================================================================================================
+before: camera A view k=1.6589861751 v=(1971.633331,375.199997) R=(1920, 360) C=(86, 25) c_eff=(1971.838882,375.069443); on A: ['U']; W on B only; h = 1.5000 (preferred_scale 180/120, preferred_buffer_scale 2)
+W (focused) requests set_fullscreen(wl_output A) -> accepted (INV-PRES-1); saved {800x600, [activated]}; configure [fullscreen,activated] 1920x1080
+presentation view (before the client resizes; centred, border fill): v=(540.0,180.0) k=1.0000000000 v=(540.000000,180.000000) R=(480, 120) C=(60, 60) c_eff=(540.000000,180.000000)
+   PS   A x[655,685) y[285,315) on=True
+   P    A x[650,790) y[280,380) on=True
+   S1a  A x[587,617) y[241,261) on=True
+   S1   A x[577,678) y[231,284) on=True
+   W    A x[540,1380) y[220,860) on=True
+   S2   A x[525,585) y[270,310) on=True
+   U on A: before=True, after=False (only W's tree is presented)
+client acks + commits 1920x1080, CSD shadow dropped (geometry.loc (0,0)); anchor stays (1100,420); root origin (1080,400) -> (1100,420)
+presentation view after commit: k=1.0000000000 v=(1100.000000,420.000000) R=(1080, 360) C=(20, 60) c_eff=(1100.000000,420.000000)
+   PS   origin (1195,465) 30x30  A x[95,125) y[45,75) on=True   B x[412,457) y[428,473) on=True
+   P    origin (1190,460) 140x100  A x[90,230) y[40,140) on=True   B x[404,614) y[420,570) on=True
+   S1a  origin (1147,441) 30x20  A x[47,77) y[21,41) on=True   B x[340,385) y[392,422) on=True
+   S1   origin (1137,431) 101x53  A x[37,138) y[11,64) on=True   B x[325,476) y[377,456) on=True
+   W    origin (1100,420) 1920x1080  A x[0,1920) y[0,1080) on=True   B x[269,3149) y[360,1980) on=True
+   S2   origin (1085,470) 60x40  A x[-15,45) y[50,90) on=True   B x[247,337) y[435,495) on=True
+rho_A(presentation, zoom 1)=1.0 rho_B=1.5 -> rho=1.5; H_max=3.0; t=1.5 -> h 1.5000 (preferred_scale 180/120, preferred_buffer_scale 2) -> 1.5000 (preferred_scale 180/120, preferred_buffer_scale 2) (no change)
+   buffer 2880x1620 = 17.8 MB; factors A 0.667 B 1.000; no fullscreen override (CP2-Q1)
+clock: observing {A 165, B 144} -> A; presentation feedback sync_output A; camera A untouched: centre still (2550.3000,700.7000)
+lock: sealed Canvas q_lock (1220.916672,580.600006) is now root-local (120.916672,160.600006) instead of (140.916672,180.600006): the lock point moved 20,20 px relative to the surface without any event
+   surface-relative representation keeps (140.916672,180.600006) -> Canvas (1240.916672,600.600006); observable on B: True
+exit: client unset_fullscreen -> configure [activated] 800x600 (saved size) -> commit with CSD; presentation of A returns to camera A's view (unchanged)
+   W on A after exit: False -> leave A for all W surfaces; U on A again: True; rho=1.5 -> h unchanged 1.5000 (preferred_scale 180/120, preferred_buffer_scale 2); clock -> B 144 Hz
+
+==============================================================================================================
+EPOCH 4 — teardown/hotplug: remove B during lock + held button + held key + open popup; then pan A until W is off-screen
+==============================================================================================================
+shell Navigate{A, To(centre (1650.3,700.7))} (atomic) -> W enters A; rho = max(1.6590,1.5) -> h 1.5000 (preferred_scale 180/120, preferred_buffer_scale 2) -> 1.7321 (preferred_scale 208/120, preferred_buffer_scale 2)
+state at removal: Locked(W) via B; BTN_LEFT held (client-owned, Smithay implicit grab on W); key KEY_W held (client-owned); P open; keyboard focus W
+remove B:
+   1. visibility pass without B: wl_surface.leave(B) for ['PS', 'P', 'S1a', 'S1', 'W', 'S2'] of W and for U, BEFORE the wl_output B global is destroyed
+   2. ladder without B: [1.0, 1.1892, 1.4142, 1.6818, 2.0, 2.4495, 3.0]; current h=1.7321 in new ladder: False
+      rho = 1.6590 unchanged, target on the new ladder 1.6818 -> h 1.7321 (preferred_scale 208/120, preferred_buffer_scale 2) -> 1.6818 (preferred_scale 202/120, preferred_buffer_scale 2) (decrease; no gesture active; output removal = SC-E stimulus)
+   3. pointer: lock point on B p=(300.250000,400.600006) -> Arrangement (2860.250000,400.600006); Arrangement-nearest on A (2559.996094,400.600006) -> Free(A, (1919.996094,40.600006)) Canvas (2228.8449,399.5422); core hit-test -> None
+      Smithay's implicit click grab keeps pointer focus on W while BTN_LEFT is held -> delivered focus does NOT change; core's hit says None
+      motion delivered through the grab: surface-local (1148.8449,-0.4578) (outside W: legal under an implicit grab)
+   4. keys: KEY_W stays client-owned and logically down at W (K8: output removal has no keyboard effect)
+   5. camera B: unbound, kept, persisted under OutputKey(B); View(B), ProjectionFrame(B), damage tracker(B) dropped
+   6. popup P: anchor output was B; not repositioned (D-B6-NO-PAN-REPOSITION); still on A: True
+   7. clock: W observed on A only -> A (165 Hz); no handover needed (A already the clock)
+then: user releases BTN_LEFT (delivered to W, grab ends) and KEY_W (delivered); presses the pan binding on A (no client-owned button: acquisition OK)
+   sealed formula camera = start - Q(Sigma): W fully unobserved on A at event 56 (v_A.x=1928.4333); lattice switches 16; W root widths [1393, 1394]; W->U gap widths [-365]
+   zoom-aware camera = start - Q(Sigma/zoom): W fully unobserved on A at event 92 (v_A.x=1920.1033); lattice switches 9; W root widths [1393, 1394]; W->U gap widths [-365]
+   during the pan: per-surface wl_surface.leave(A) as each surface leaves; no configure; no pointer/relative/button to clients; h held (no decrease in a gesture)
+   W Unobserved: callbacks withheld; FrameLiveness.last_completion = last A vblank; fallback due last_completion + P (1 s), timer armed because a callback is pending
+   kick: KEY presses delivered to W (still keyboard focus) complete its withheld callbacks once, before delivery
+   pan end: Free(A, p) unchanged -> re-hit at Canvas (3335.4143,385.0756) -> None; deferred decrease: W unobserved -> hold h = 1.6818 (preferred_scale 202/120, preferred_buffer_scale 2)
+
+==============================================================================================================
+FALSIFICATION CHECKS (D4 / D2)
+==============================================================================================================
+F1 pan sweep 1221 Canvas px in 0.37-px steps, zoom 1, scale 1.5 (k = 180/120): element widths [1260], neighbour gap [240]
+F1 pan sweep 1221 Canvas px in 0.37-px steps, zoom 1080/651 (sealed R = floor(v/120)*120): element widths [1393, 1394], neighbour gap [265, 266]
+F1 pan sweep 1221 Canvas px in 0.37-px steps, zoom 1080/651, reference pinned for the gesture (alternative): element widths [1394], neighbour gap [265]
+F2 wheel-zoom wiggle 40 ticks across a rung boundary: NAIVE 40; SC-D without motion 1; SC-D with one pointer-motion event between ticks (zoom-at-cursor) 40
+   discrete PAN steps across an output edge (epoch-2 oscillation): sealed 40 changes / 40 steps (SC-D covers zoom only)
+F3 outputs (1.0, 3.0), window 6000x1000 at zoom 1, observed on the 3.0 output: Phase B MaxGesture -> 3.0 -> buffer width 18000 > D_max 16384; unified: H_max=2.7307, ladder [1.0, 1.1892, 1.4142, 1.6818, 2.0, 2.3369, 2.7307] (3.0 excluded), h=2.7307
+   window geometry 5450 wide + 20px shadows -> root 5490: H_max from geometry = 3.0000 -> root buffer 16470 px > 16384; from the largest surface = 2.9843
+F4 ladder with B: [1.0, 1.2247, 1.5, 1.7321, 2.0, 2.4495, 3.0]; without B: [1.0, 1.1892, 1.4142, 1.6818, 2.0, 2.4495, 3.0]; a held/deferred h=1.5 or 1.7321 is not a rung of the new ladder
+F5 viewport-fit of a 2147483647x1 window: zoom=8.941e-07; mode/(2k)=1.0737e+09 -> |v_O| up to 2^36 + 1.074e+09 (> CANVAS_LIMIT); far element edge at |x-R|=2^37, k=1.5: 2.062e+11 > i32 max 2147483647
+F6 pixel-centre delivered-coordinate clamp, 200k random (k, camera, edge): worst 0.000e+00 logical px (CP3A-2 states 'provably 0'; the Q16 terms allow ~2^-16)
+F7 popup constraint target = B's viewport in parent-geometry coordinates: x[-179.333328,2380.666672) y[-240.000000,1200.000000) -> Rectangle<i32,Logical> needs a rounding point not in R1-R7
+F8 initial hint: harness rule gives 1.5 (anchor point on A and B, zoom ignored); unified policy at map gives 1.7321 -> one extra renegotiation + reallocation at map

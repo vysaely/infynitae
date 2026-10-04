@@ -1270,3 +1270,302 @@ Every CONDITIONALLY RESOLVED item has:
 **B1–B13 status:** all complete.
 
 **Phase B gate: SATISFIED**, with the conditional resolutions and deferred validations above carried forward explicitly. **Stopped at the Phase B review gate. Phase C has not begun and requires explicit approval.**
+
+---
+---
+
+## Phase D Architectural Findings
+
+> **Change-control record (Phase D checkpoint 1).** This section lists every finding classified **D-F2** (architecture correction) during Phase D checkpoint 1. Input baseline: the Phase C seal `615b0ed2f3631b698b0c54783c28f696ef4ff34a`. **Nothing here amends the sealed architecture.** The canonical registry (FOUNDATION_ARCHITECTURE §C12) and every sealed rule quoted below stay normative until the user disposes of the finding. Each "minimal correction" is a **proposal**. D-F1/D-F0 findings and the full analysis are in [`audit/`](audit/README.md).
+>
+> Levels follow the master program: **A** = authority or architecture-breaking (stops advancement), **B** = correctness of a Foundation behaviour, **C** = specification gap with a local fix.
+
+| ID | Level | Title | Status |
+|---|---|---|---|
+| PD-F2-01 | **A** | Camera evolution without an authority port (viewport-fit re-fit, animated navigation) | OPEN: decision required |
+| PD-F2-02 | **A** | Smithay grabs decide focus behind the FocusModel / PointerModel (popup keyboard grab drops `set_focus`; implicit grab defeats the W-SM-4a decision) | OPEN: decision required; T1 reproducer recommended |
+| PD-F2-03 | B | `Locked` pointer state lacks its output and stores the lock point in Canvas | OPEN |
+| PD-F2-04 | B | Pointer reconciliation is defined only at pan termination | OPEN |
+| PD-F2-05 | B | Pointer confinement enforcement undefined across independent cameras | OPEN |
+| PD-F2-06 | B | Zoomed panning is reachable in Foundation 01; pan formula has no zoom term; OB-24's deferral premise is false | OPEN |
+| PD-F2-07 | B | Discrete camera interactions outside SC-D; SC-D ends on pointer motion | OPEN |
+| PD-F2-08 | C | Device bound vs ladder / Phase B equivalence; H_max size basis; off-ladder held hint | OPEN |
+| PD-F2-09 | C | Initial client scale hint undefined | OPEN |
+| PD-F2-10 | C | Protocol-fullscreen state machine incomplete | OPEN |
+| PD-F2-11 | C | Shared cameras vs output-keyed fit/isolation; orphaned-pan motion | OPEN |
+| PD-F2-12 | C | Popup constraint target needs a rounding point outside R1–R7 | OPEN |
+| PD-F2-13 | C | Window drag across outputs with independent cameras | OPEN |
+| PD-F2-14 | C | `AllObservingOutputsOff` is defined over camera-derived membership | OPEN |
+| PD-F2-15 | C | Attention / `transient_for` on unmap and destroy undefined | OPEN |
+| PD-F2-16 | C | xwayland-satellite restart: X display identity and socket ownership | OPEN: small experiment needed |
+| PD-F2-17 | B | xdg_toplevel state policy undefined (`activated`; `set_maximized` must be answered with a configure) | OPEN |
+
+**Advancement:** PD-F2-01 and PD-F2-02 are Level A. Under the Phase D change-control rule, Phase D checkpoint 2 cannot begin until the user has disposed of both. No D-F3 (unresolved blocker) was found.
+
+### PD-F2-01 (Level A): camera evolution without an authority port
+
+- **Sealed rules (preserved):**
+  - C1.5 step 2: "The only public entry points that reach `navigation` are `Core::physical_input(&mut InputPort, …)` and `Core::shell_command(&mut ShellPort, …)`".
+  - INV-CAMERA-1: camera state is mutated only inside `core::navigation`, reachable only with `InputPort` or `ShellPort`.
+  - C5.1: "W changes size while fitted: the zoom is re-fitted (camera follows; Stage untouched)".
+  - CP3A-5, cycle 2: "h → client size → viewport-fit re-fit → zoom → ρ → h"; OB-28 "re-fit rate ≤ commit rate".
+  - C7.3: "A long-running effect (animated navigation) is a compositor interaction"; AUD-6 "it continues to its end".
+  - C14.2: "animation timers | an animation is running".
+- **Counterexample:**
+  - A fitted element's client commits a new logical size. The commit is handled in `CompositorHandler::commit`, which reaches core through `protocol_event` and holds no port. The sealed re-fit rule nevertheless requires a camera centre/zoom change at that moment. The same holds for an animated navigation: each animation tick changes the camera from a timer or frame source, not from inside a `shell_command` call.
+  - Either core gains a port-free path into `navigation`, which breaks INV-CAMERA-1 and the C1.5 claim that EC-1 demonstrated, or the rules are unimplementable.
+  - In the re-fit case an untrusted client steers a camera's position and zoom by resizing itself. That is the exact capability C1.5's "required property" forbids.
+  - C-AUTH lists "clients" as forbidden writers of camera zoom, so the sealed text contradicts itself. AUD did not detect this.
+- **Affected:** INV-CAMERA-1, INV-CAMERA-5, INV-SHELL-1, INV-SCALE-4(d) (its reasoning assumed re-fit), C1.5, C5.1, C7.3, C14.2, CP3A-5, C-AUTH (camera rows), AUD-6, OB-19 (the probes cover only the two entry points), OB-28; ADR-04, ADR-08, ADR-09, ADR-11.
+- **Minimal correction (proposal; options):**
+  - **(a) Recommended: derived camera modes.**
+    - A port-authorised action stores a mode on the camera or output view: `Fitted{W, saved}` or `Animating{from, to, t0, duration, saved_target}`. The camera's stored centre/zoom changes only inside `physical_input`/`shell_command`.
+    - The effective view used by C3.2 [1] is a pure function of (mode, W's current snapshot geometry, frame time). A client commit therefore changes a derived View, never camera state. The CP3A-5 cycle stays bounded by SC-E as before.
+    - When the animation completes, it writes its target on the next port-carrying call, or the target is the stored value from the start (the animation only interpolates the view).
+    - Probe addition for OB-19: no public core function without a port mutates `CameraSet`.
+  - **(b)** Make re-fit a one-shot: drop "re-fit on resize" and keep the fitted zoom fixed. Drive animation ticks from a backend source that owns `InputPort`, e.g. `frame_tick(&mut InputPort, …)`. This changes C5.1 behaviour.
+  - **(c)** Rejected: a third public entry point without a port. It would re-open the protocol-to-camera path.
+- **More evidence needed:** no, this is a decision. After the decision, OB-19's probe list gains the "no port-free mutator" probe.
+
+### PD-F2-02 (Level A): Smithay grabs decide focus behind the FocusModel / PointerModel
+
+- **Sealed rules (preserved):**
+  - INV-INPUT-8: keyboard focus changes only through explicit actions or target loss.
+  - C2.2: keyboard focus owner is core `FocusModel`; Smithay's keyboard focus is an "applied copy".
+  - C4.2 P3: client-owned Smithay grabs choose pointer focus for their sequences.
+  - INV-INPUT-5 / W-SM-4a: explicit `deactivate` only when no pointer-focus change follows in the same batch.
+- **Counterexample (Smithay 0.7.0 source):**
+  - `PopupKeyboardGrab::set_focus` ignores every focus change while the popup grab is active, unless it targets the current popup (`desktop/wayland/popup/grab.rs:456-476`). `KeyboardHandle::set_focus` routes through the active grab (`input/keyboard/mod.rs:1052-1057`).
+  - When the grab ends, Smithay itself calls `keyboard.set_focus(root)` (`grab.rs:371-378`) or sets the grab's current focus on the next key (`grab.rs:441-447`).
+  - So an `Effect::KeyboardFocus` from the FocusModel during a popup grab is silently dropped. Causes include a shell `Focus` command, an activation grant, a focus binding, or the successor after target loss. Keystrokes then go to the popup's client, which the FocusModel did not choose, and Smithay writes keyboard focus on grab end without core. That is two writers to an authoritative datum.
+  - Pointer analogue (D5 epoch 4):
+    - A game holds a pointer lock and a client-owned button, so Smithay's implicit click grab is active, and the lock's output is removed.
+    - Core's hit-test at the relocated position finds no surface, so core predicts a focus change and, per W-SM-4a, does **not** deactivate explicitly.
+    - But the click grab keeps the delivered focus on W, so Smithay's `leave()` never runs and the lock stays active at the client while core believes it ended.
+- **Affected:** INV-INPUT-5, INV-INPUT-7, INV-INPUT-8, INV-OUTPUT-1, C2.1/C2.2, C4.2 P3, C4.5, C-AUTH (pointer/keyboard focus rows), B6.3, W-SM-4a; ADR-07.
+- **Minimal correction (proposal):**
+  1. Client grabs become explicit sub-states of the core models:
+     - the adapter reports `ProtocolEvent::{PopupGrabStarted, PopupGrabEnded, ImplicitGrab{surface}…}`;
+     - the FocusModel records `target = popup` during a popup grab and `target = root element` after Smithay's restore. This keeps a single writer of truth, with Smithay's behaviour mirrored and never contradicted.
+  2. A FocusModel-initiated keyboard-focus change while a popup grab is active first dismisses the grab chain (`popup_done` in protocol order; kick if unobserved), as C4.6 already does for pointer acquisition. It then applies the focus.
+  3. The W-SM-4a decision uses the **delivered** focus change (which, under a client-owned grab, is "no change"), not core's hit-test.
+- **More evidence needed:** the source evidence suffices for the decision. A T1 reproducer is recommended (set focus during a popup grab; lock + implicit grab + output removal) and should be added to OB-18 / OB-3.
+
+### PD-F2-03 (Level B): `Locked` pointer state lacks its output and stores the lock point in Canvas
+
+- **Sealed rules (preserved):**
+  - INV-COORD-5: authoritative pointer = `Free(OutputId, OutputLogical)` or `Locked(SurfaceKey, Canvas lock point)`.
+  - B10.2: "Pans never move elements (I2), so `q_lock` remains the lock point through any camera change".
+  - INV-INPUT-5 reconciles against "the pointer's output".
+- **Counterexample:**
+  - **(i) Missing output.** `Locked` carries no output. INV-INPUT-5's "observable on the pointer's output" and the choice of camera for a pan binding pressed while locked are therefore undefined whenever the locked surface is visible on two outputs (D5 epoch 2: W on A and B).
+  - **(ii) Detachment from the surface.** The Canvas lock point detaches from the surface whenever the root origin moves without a camera change. D5 epoch 3: fullscreen drops the CSD shadow (geometry.loc (20,20) → (0,0)), and the lock point moves from root-local (140.92, 180.60) to (120.92, 160.60) with no event (`evidence/phase-d/d5-model-output.txt`). Shell `MoveElement` or `WindowMove` of a locked element detach it entirely.
+- **Affected:** INV-COORD-5, INV-INPUT-5, B10.2, B11.4, C2.1 `PointerModel`; ADR-07.
+- **Minimal correction (proposal):** `Locked{output: OutputId, surface: SurfaceKey, at: SurfaceLocal}`. The Canvas lock point is derived as `surface_origin(surface) + at`. Camera-change behaviour (X-8 C3) is unchanged, because surfaces do not move with cameras.
+- **More evidence needed:** no.
+
+### PD-F2-04 (Level B): pointer reconciliation is defined only at pan termination
+
+- **Sealed rules (preserved):**
+  - B11.4 and INV-INPUT-5 define reconciliation "at pan end" and on output removal (AUD-4).
+  - INV-CAMERA-4 permits "after termination one true-position pointer event".
+- **Counterexample.** The following change what lies under a stationary pointer, or where a lock or confinement point is, without any reconciliation rule:
+  - atomic camera changes by the shell or keyboard (`Navigate`, jumps; D5 epochs 2 and 4);
+  - viewport-fit and restore on the pointer's output;
+  - start or end of a protocol-fullscreen presentation on the pointer's output (D5 epoch 3);
+  - output mode/scale/transform changes. A 1920×1080 output going from scale 1.0 to 1.5 shrinks its logical rect to 1280×720, so `Free(O, p)` can lie outside it;
+  - moves of a locked or confined element;
+  - the end of an orphaned interaction.
+
+  A lock point pushed off-screen by a shell `Navigate` stays active indefinitely.
+- **Affected:** INV-INPUT-5, INV-CAMERA-4 (wording of the permitted event), INV-OUTPUT-1, B11.4, C4.6; ADR-07.
+- **Minimal correction (proposal):**
+  - A single reconciliation step runs at the end of every core event batch (INV-SCALE-5's batch) in which any of the following changed: the pointer's output view (camera, presentation, output configuration), the pointer's focus-target geometry, or the pointer's output set.
+  - It applies B11.4's rules and clamps `p` half-open into the output.
+  - It emits at most one true-position motion (or leave/enter) per batch.
+  - During an active compositor interaction it is deferred to termination, as today.
+- **More evidence needed:** no. T1 tests are to be added to OB-3/OB-14.
+
+### PD-F2-05 (Level B): pointer confinement enforcement undefined across independent cameras
+
+- **Sealed rules (preserved):**
+  - C4.3: activation policy.
+  - B11.4: "Confined, pointer leaves the surface through the pan → free reconciliation".
+- **Counterexample:**
+  - The confinement region is surface-local, while pointer motion is in Arrangement/OutputLogical space. With independent cameras, crossing to another output gives a discontinuous surface-local position (W is shown elsewhere, or not at all, on the other output).
+  - Nothing states that confined motion is clamped in the pointer output's view, or that Arrangement crossing is blocked while confined.
+  - Nothing defines the state "pointer still over the surface but outside the region" after a camera or geometry change.
+- **Affected:** INV-INPUT-5, C4.3, B11.4; ADR-07.
+- **Minimal correction (proposal):**
+  - While confined, motion is clamped in `OutputLogical(output)` to the projection of the region on the pointer's output (half-open), and Arrangement crossing is disabled.
+  - After a view change (PD-F2-04), a pointer outside the region causes deactivation (`unconfined`; no warp, consistent with B11.4).
+- **More evidence needed:** no. A T1 test is needed (OB-14 extension).
+
+### PD-F2-06 (Level B): zoomed panning is reachable; the pan formula has no zoom term; OB-24's premise is false
+
+- **Sealed rules (preserved):**
+  - C5.1: "a static fitted view has no pan jitter, so A-B1-1 … is still not required"; fit ends when "the user navigates O's camera (user intent wins; no restore)".
+  - OB-24: "no (static fit OK)", decision deferred to the zoom-motion feature.
+  - B11.1 / INV-COORD-3: `camera = start − Q(Σ)`.
+- **Counterexample:**
+  - Ending a fit by navigation keeps the fitted zoom, so panning at zoom ≠ 1 occurs in Foundation 01. D5 uses k_A = 1080/651.
+  - **Real Smithay geometry** (`evidence/phase-d/d5hit-output.txt`): during a pan, W's width on A changes 1394 → 1393 px and S2's 100 → 99 px at lattice-reference switches.
+  - **Model F1** (`d5-model-output.txt`): widths {1393, 1394} and neighbour gaps {265, 266} at zoom 1080/651. They are constant at zoom 1 (k = 180/120), and also constant with a gesture-pinned reference.
+  - The formula `camera = start − Q(Σ)` has no zoom term, so content moves 1.659× faster than the hand at k_A. D5 epoch 4: W leaves A after 56 motion events, versus 92 with Σ/zoom.
+- **Affected:** INV-COORD-3, INV-RENDER-1 (reference-switch property), INV-CAMERA-5, C5.1, B1.6 A-B1-1, B11.1, OB-24; ADR-02, ADR-04.
+- **Minimal correction (options):**
+  - **(a) Recommended for Foundation 01:** navigation from a fitted view first restores the pre-fit zoom (fit stays a static-only feature; OB-24's deferral becomes true).
+  - **(b)** Keep the zoom, define `camera = start − Q(Σ/zoom)` (zoom constant within a gesture), and pull OB-24 forward. Model F1 suggests a gesture-pinned lattice reference; that would need an X-6-style Smithay experiment and a decision.
+- **More evidence needed:** none for (a); an experiment for (b).
+
+### PD-F2-07 (Level B): discrete camera interactions outside SC-D; SC-D ends on pointer motion
+
+- **Sealed rules (preserved):**
+  - C14.4 SC-D: "Begins at the first discrete zoom step … Ends at the first non-zoom input from any device (button, key, pointer motion)".
+  - INV-SCALE-3: decreases only when no camera gesture and no discrete-zoom interaction is active.
+  - INV-SCALE-4: churn contract; P3 "no storms".
+- **Counterexample (model):**
+  - Discrete **pan** steps are atomic camera changes that settle each time: wheel-bound pan, keyboard pan steps, or a shell `Navigate` delta stream.
+  - An oscillation across an output edge therefore renegotiates on every step. Model and D5 epoch 2: **40 changes in 40 steps**, versus 1 with gesture semantics. This is the SC2 edge-oscillation churn that MaxGesture removed, re-entering through non-gesture paths.
+  - For zoom, SC-D ends at any pointer motion. Zoom-at-cursor (motion between wheel ticks) therefore reverts to naive behaviour: **40/40**, versus 1 without motion (F2).
+- **Affected:** INV-SCALE-3, INV-SCALE-4 (b)/(c), C14.4, C7.3, OB-23; ADR-05.
+- **Minimal correction (proposal):**
+  - Generalise SC-D to a **discrete camera interaction**: any discrete camera step (pan or zoom; input binding or shell delta command).
+  - It ends at a non-camera button or key press, or at a settlement event. Pointer motion does not end it. Decreases are deferred, at memory cost only.
+  - Shell delta streams either carry begin/end brackets or fall under the same rule.
+- **More evidence needed:** no for the rule; OB-23 tunes it.
+
+### PD-F2-08 (Level C): device bound vs ladder and Phase B equivalence; H_max size basis; off-ladder held hint
+
+- **Sealed rules (preserved):**
+  - INV-SCALE-2: "a finite ladder containing every output scale and is ≤ H_max(E) = min(H_cfg, D_max / max logical side)".
+  - INV-SCALE-5 / P4: "At zoom 1 … the policy equals Phase B MaxGesture".
+- **Counterexample (model F3/F4):**
+  - **(i) Contradiction with "every output scale".** Outputs at 1.0 and 3.0, a 6000×1000 window at zoom 1: Phase B gives 3.0, a buffer 18000 px wide, above D_max 16384. The unified policy must give H_max = 2.7307 (`model.py` already excludes such scales). INV-SCALE-2's "every output scale" and P4's equivalence are both false in this regime.
+  - **(ii) "Logical size of E" is ambiguous.** A 5450-px window geometry plus 20-px shadows is a 5490-px root: H_max from the geometry is 3.0, which gives a 16470-px root buffer, above the device limit.
+  - **(iii) Hotplug changes the ladder.** A held (S7) or gesture-deferred h can then be a non-rung. Epoch 4: 1.7321 is not in the ladder without B.
+- **Affected:** INV-SCALE-2, INV-SCALE-5, CP3A-1 S2/S3/P4; ADR-05.
+- **Minimal correction (proposal):**
+  - The ladder contains the output scales ≤ H_max(E).
+  - H_max uses the largest logical side over all surfaces of E's tree (each is its own buffer).
+  - P4 holds where the maximum observing output scale ≤ H_max(E).
+  - "Every *emitted* hint is a rung of the ladder in force at emission; a held or deferred hint may be off-ladder until the next evaluation permitted to change it".
+- **More evidence needed:** no.
+
+### PD-F2-09 (Level C): initial client scale hint undefined
+
+- **Sealed rules (preserved):**
+  - B5.3: preferred scale is sent before the initial configure.
+  - INV-SCALE-1: ρ is defined over **observing** presentations.
+- **Counterexample:** before its first buffer an element observes nothing, so h is undefined. The harness used an ad-hoc rule: the maximum scale of outputs whose viewport contains the anchor point, ignoring zoom (`b8-harness/src/server.rs:535-548`). D5: that rule gives 1.5, then 1.7321 at map, which costs one extra renegotiation and reallocation (F8).
+- **Affected:** INV-SCALE-1, INV-SCALE-5, B5.3, B9.6 (map row); ADR-05.
+- **Minimal correction (proposal):** initial `h := t(ρ_pred)`. ρ_pred applies S1 to the presentations whose view intersects the placed window-geometry rect (anchor + configured size; the anchor point if the size is 0×0). If no presentation intersects it, use the maximum connected output scale (to be confirmed).
+- **More evidence needed:** no.
+
+### PD-F2-10 (Level C): protocol-fullscreen state machine incomplete
+
+- **Sealed rules (preserved):** C5.2 (acceptance, output choice, presentation view, removal, unfullscreen); INV-PRES-1.
+- **Undefined reachable transitions:**
+  1. Whether the presentation starts at acceptance or at the client's ack/commit, and ends at the exit decision or at the windowed commit.
+  2. Lifetime of a deferred request ("record it and decide when W next gains focus"): it has no cancellation by `unset_fullscreen`, unmap or destroy, and no bound.
+  3. A second element requests fullscreen on an output already `Exclusive(W)`.
+  4. W loses keyboard focus while fullscreen.
+  5. The requested output disappears between request and acceptance.
+- **Affected:** INV-PRES-1, C5.2, OB-22; ADR-09.
+- **Minimal correction (proposal):**
+  - The presentation starts at acceptance (border fill covers the size mismatch) and ends at the exit decision.
+  - A deferred request is cancelled by `unset_fullscreen`, unmap or destroy, and is evaluated only at the next focus gain.
+  - A newer accepted request on an occupied output replaces the old one; the old element gets a configure leaving fullscreen with its saved size.
+  - Focus loss does not end fullscreen.
+  - The output choice is re-run at acceptance.
+- **More evidence needed:** no (OB-22 remains for UX).
+
+### PD-F2-11 (Level C): shared cameras vs output-keyed fit and isolation; orphaned-pan motion
+
+- **Sealed rules (preserved):**
+  - INV-CAMERA-3: "N outputs may share one camera".
+  - C5.1: `ViewportFit{O}` and the isolation flag are per output; fit zoom is computed from O's viewport; "the user navigates O's camera" ends the fit.
+  - C4.6 / B10.4: an orphaned interaction keeps consuming motion.
+- **Undefined:**
+  - A fit on O changes a camera shared with O2, so O2 zooms too.
+  - Whether navigating the shared camera through O2 ends O's fit.
+  - Whether an orphaned pan's consumed motion still mutates the now-unbound camera.
+- **Affected:** INV-CAMERA-3, INV-CAMERA-5, INV-OUTPUT-1, C4.6, C5.1; ADR-04.
+- **Minimal correction (proposal):**
+  - Fit, restore and isolation are per-output **view modes** (same mechanism as PD-F2-01 (a)) that override the shared camera on that output only.
+  - Navigating a camera ends the fits of all outputs bound to it.
+  - An orphaned pan discards its motion (no camera mutation after its output is gone).
+- **More evidence needed:** no.
+
+### PD-F2-12 (Level C): popup constraint target needs a rounding point outside R1–R7
+
+- **Sealed rules (preserved):**
+  - INV-COORD-2: "Rounding happens only at R1–R7".
+  - D-B6-BOUNDARY maps the anchor output's viewport through T5 into parent-geometry coordinates.
+  - C3.6: the target is a `Rectangle<i32, Logical>` ("integral").
+- **Counterexample:** with a fractional camera at zoom 1, the target is fractional: x[−179.333328, 2380.666672) relative to W's geometry (F7). An unlisted rounding is therefore required.
+- **Affected:** INV-COORD-2, C3.6, D-B6-BOUNDARY; ADR-02.
+- **Minimal correction (proposal):** **R8**, inward rounding of the constraint target (ceil the minimum edges, floor the maximum edges), so a constrained popup never extends past the visible viewport.
+- **More evidence needed:** no.
+
+### PD-F2-13 (Level C): window drag across outputs with independent cameras
+
+- **Sealed rules (preserved):**
+  - B1.3-7 / R3: `anchor = round(anchor_at_drag_start + Q16(Σ canvas pointer deltas))`.
+  - INV-STAGE-1(b): interactive drag commit is a Stage writer (the move UX itself is deferred, C15).
+- **Undefined:** when the pointer crosses outputs, the "Canvas pointer delta" is the jump between two independent cameras' unprojections. It is undefined whether the element jumps to follow the cursor or continues by device deltas, ending up off-cursor.
+- **Affected:** INV-STAGE-1, INV-COORD-3, R3; ADR-01, ADR-04.
+- **Minimal correction (proposal):** `anchor = round_R3(q_now − grab_offset)`, where q_now is the pointer's current Canvas point (T5 on the authoritative pointer). It is a function of current state, so it is batching-independent (N5) and follows the cursor on whichever output shows it, including during concurrent camera changes.
+- **More evidence needed:** no.
+
+### PD-F2-14 (Level C): `AllObservingOutputsOff` is defined over camera-derived membership
+
+- **Sealed rules (preserved):**
+  - INV-FRAME-6: `suspended` only from {SessionLocked, AllObservingOutputsOff, Parked}; never from camera visibility.
+  - B9 §9-17: whether an off output "observes" is open.
+- **Counterexample:**
+  - Read literally, "all observing outputs off" is vacuously true for an unobserved element. A camera pan that makes E unobserved would then suspend it, which is exactly what INV-FRAME-6 forbids.
+  - Read as "non-empty and all off", a camera change that empties the observing set flips the reason, again a camera-caused configure.
+- **Affected:** INV-FRAME-6, D-B9-SUSPEND; ADR-06.
+- **Minimal correction (proposal):** define the reason independently of camera membership, e.g. `AllOutputsOff` (every connected output powered off), or freeze the observing set at power-off. The reason stays Level C (not in Foundation 01).
+- **More evidence needed:** no.
+
+### PD-F2-15 (Level C): attention and `transient_for` on unmap and destroy undefined
+
+- **Sealed rules (preserved):** B5.3 unmap/destroy side effects; C4.5 attention set; B5.4 `transient_for`.
+- **Undefined:**
+  - whether an unmapped element keeps its attention mark (it is shell-visible);
+  - whether destroy removes it, which is implied but not stated;
+  - whether `transient_for` survives the parent's unmap (B5.4 re-parents per spec for *protocol* children, but `transient_for` is Stage metadata).
+- **Affected:** INV-STAGE-4, INV-SHELL-2 (event stream); ADR-11.
+- **Minimal correction (proposal):** unmap clears attention, with a shell event; destroy purges every reference (already the rule for focus and grabs); `transient_for` follows the protocol re-parenting.
+- **More evidence needed:** no.
+
+### PD-F2-16 (Level C): xwayland-satellite restart, X display identity and socket ownership
+
+- **Sealed rules (preserved):** C6: "a chosen free X display"; "restart satellite with backoff"; "lazy or at startup".
+- **Undefined:**
+  - Whether a restart keeps the X display number. Children spawned with the old `DISPLAY` would otherwise point at nothing or at a foreign server.
+  - For lazy start, whether the compositor owns the X socket. That needs satellite's `-listenfd` support, which was **not verified** for 0.8.3.
+- **Affected:** INV-XWAYLAND-1, C6, C8 (satellite row); ADR-10.
+- **Minimal correction (proposal):** the compositor reserves the display number and socket paths for the session and restarts satellite on the same display.
+- **More evidence needed:** **yes**, a small T1 experiment: satellite 0.8.3 `-listenfd`, and a restart on the same display.
+
+### PD-F2-17 (Level B): xdg_toplevel state policy undefined (`activated`, maximize)
+
+- **Sealed rules (preserved):**
+  - B2.4 replaces `Space`'s activation side effect with "explicit focus model (C4)".
+  - C4.5: the focus model's outputs are `Effect::KeyboardFocus` and `Effect::Attention`.
+  - W-SM-13: override `maximize_request`/`fullscreen_request`, because Smithay's defaults send a configure.
+  - C15: "maximize/minimize policy: architecturally supported, not physically validated".
+- **Counterexample (protocol text, xdg-shell 1.49):**
+  - `set_maximized`: "the compositor **will respond by emitting a configure event**. Whether this configure actually sets the window maximized is subject to compositor policies".
+  - No Infynitae maximize policy exists, and the W-SM-13 override replaces the only code that sent a configure. A post-map `set_maximized` therefore gets no configure, against the protocol's stated expectation. It is a common path: GTK client-side decorations send it on a title-bar double-click.
+  - The `activated` state ("paint as if active") is never mapped from the FocusModel. Whether focus changes produce configures, which are kick triggers for unobserved elements, is therefore undefined.
+- **Affected:** INV-INPUT-8, INV-FRAME-3 (kick list includes non-initial configures), INV-CAMERA-4 (must stay true), C4.5, C15, W-SM-13; ADR-07, ADR-09.
+- **Minimal correction (proposal):**
+  - `activated` holds exactly when the FocusModel target is the element or one of its popups. It is emitted only on FocusModel transitions, never from camera or visibility.
+  - Foundation 01 **declines** maximize with a protocol-compliant configure that repeats the current states and size. A pre-map request is recorded and ignored, and the initial configure proceeds as usual.
+  - `set_minimized` is ignored (the protocol permits this).
+  - `configure_bounds` is not sent (never camera-derived, EV-W06).
+- **More evidence needed:** no. T1: a client calls `set_maximized` after map and receives exactly one configure.

@@ -1,6 +1,6 @@
 # Checkpoint
 
-CURRENT_PHASE: **C — COMPLETE and SEALED. Phase C final gate approved by the user (2026-10-04). Phase C seal commit: `615b0ed2f3631b698b0c54783c28f696ef4ff34a`. Phase D not begun.**
+CURRENT_PHASE: **D — checkpoint 1 (D1–D6) deliverables complete, UNCOMMITTED, stopped at the Phase D checkpoint 1 review gate.** Two Level A D-F2 findings (PD-F2-01, PD-F2-02) block Phase D checkpoint 2 until disposed of. Phase C: COMPLETE and SEALED (`615b0ed2f3631b698b0c54783c28f696ef4ff34a`).
 
 Date: 2026-10-04
 
@@ -11,6 +11,13 @@ Date: 2026-10-04
 - Phase C checkpoint 2: `fc2dd68f843b1eb05828f4116f94e8bab4f478da`
 - **Phase C checkpoint 3A:** `795800937a1e50e56587cd4080a73ce27d8a8b01` (hash recorded in `fd9a80c`)
 - **Phase C seal (checkpoint 3B):** `615b0ed2f3631b698b0c54783c28f696ef4ff34a`
+
+## PHASE D CHECKPOINT 1 (uncommitted)
+- Input baseline verified (audit/README.md §1): seal resolves; `a3ae907` records it; tree was clean; 54-entry C12 registry normative; BLOCKERS pointer present; OB-19 unconditional; T3–T5/UP/TUNE open.
+- D1 threat model; D2 22 state machines; D3 authority matrix (40 items, 6 searches); D4 coordinate matrix (16 domains, 26 conversions); D5 four-epoch audit; D6 FOUNDATION_DECISIONS.md (ADR-01…13).
+- Findings: 17 D-F2 (A: 2, B: 6, C: 9), recorded in FOUNDATION_BLOCKERS.md § Phase D Architectural Findings; 9 D-F1; 9 D-F0; no D-F3. Registry NOT edited.
+- New evidence: ED-1 d5hit (Smithay, 0 mismatches incl. k ∉ n/120), ED-2 d5_model (MODEL), ED-3/4/5 (source).
+- NEXT: user disposition of PD-F2-01/02 (Level A) and the other D-F2s; commit of checkpoint 1 only on authorisation; D7–D9 not begun.
 
 ## COMPLETED_WORK (3B)
 - C11: verification tiers T0–T5 (environment, simulated/real, invariants, tests, cost, trigger, evidence, meaning of failure, tier-honesty rule); OB-1…OB-29 all mapped; negative controls retained.
