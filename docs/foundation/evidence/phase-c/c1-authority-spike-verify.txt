@@ -1,0 +1,31 @@
+$ ./verify.sh   (experiments/c1-authority-spike; rustc 1.99.0; no external dependencies)
+# 2026-10-04T13:54:49+03:00
+== 1. positive tests + compile_fail doctests
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+== 2. negative build probe: protocol code moving a camera MUST NOT compile
+OK: probe rejected by the compiler:
+error[E0624]: method `set_center` is private
+error: could not compile `spike-core` (lib) due to 1 previous error
+== 2b. protocol-side forbidden paths (each must fail with its expected error code)
+OK: p1_mutate_through_read_accessor rejected with E0624
+OK: p2_forge_input_port rejected with E0451
+OK: p3_physical_input_without_port rejected with E0061
+OK: p4_call_navigation_internals rejected with E0603
+OK: positive control compiles
+== 3. dependency direction: spike-core has no dependencies
+OK: spike-core depends on nothing
+== result: PASS

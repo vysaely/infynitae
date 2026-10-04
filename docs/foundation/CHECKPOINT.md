@@ -1,57 +1,44 @@
 # Checkpoint
 
-CURRENT_PHASE: **B — COMPLETE and SEALED (review gate cleared by the user 2026-10-04).** **Phase B seal commit: `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`.**
-The carry-forward ledger (5 categories) is at the end of FOUNDATION_BLOCKERS.md.
+CURRENT_PHASE: **C — Phase C checkpoint 1 (C1–C4) COMPLETE. STOPPED at the checkpoint 1 review gate. C5 not started.**
 
 Date: 2026-10-04
 
 ## Baselines
 - Phase A evidence: `2c8c163784e260af4aaa8c1dc05c6281b0476120`
-- Phase B checkpoint 1 (B1–B6): `9f3f5d4`
-- Phase B checkpoint 2 (B7–B9): `90992b839af1bdbe07d128009d8b7460e21fcc88`
-- Phase B checkpoint 3 (B10–B13) + seal: `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`
+- Phase B checkpoint 1: `9f3f5d4`; checkpoint 2: `90992b839af1bdbe07d128009d8b7460e21fcc88`
+- **Phase B seal:** `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1` (hash recorded in `5647d5f`)
+- Phase C checkpoint 1 work below is **uncommitted** on top of `5647d5f`.
 
-## COMPLETED_WORK (checkpoint 3)
-- Harness additions, kept minimal:
-  - pointer, relative-pointer and constraints bindings in the probe;
-  - constraints, relative-pointer and presentation globals in the server;
-  - `input.rs`: the ownership model under test;
-  - subsurface support;
-  - `renderer_test` feature for X-6.
-- Experiments: X-8 (9 cases, 48 checks PASS), X-6 (0 / 134,478 edge mismatches), X-9 (PASS). SC1–SC4/X5 re-run after the harness changes: identical output.
-- Written to FOUNDATION_BLOCKERS.md: B10 (input/grab/focus/activation), B11 (pan semantics), B12 (backend boundary + Q-07 Smithay contract), B13 (adversarial audit), the final contradiction pass, and the gate evaluation.
+## COMPLETED_WORK (Phase C checkpoint 1)
+- `docs/foundation/FOUNDATION_ARCHITECTURE.md`:
+  - C1: 5 crates, per-crate contract, DAG, enforcement, camera-authority boundary.
+  - C2: complexity budget, authority matrix, negative ownership, rejected abstractions.
+  - C3: render pipeline with exact lattice integration, order, f64 entry points, I9 cache, index threshold.
+  - C4: input/focus architecture; keyboard/modifier rules K1–K9.
+  - Assumptions, new findings, verification, consistency check.
+- `experiments/c1-authority-spike/`: zero-dependency domain stand-in plus adapter stand-in. `verify.sh` covers behaviour tests, compile_fail doctests, 4 negative probes with asserted error codes, a positive control and a dependency check. Result: **PASS**.
 
-## DECISIONS MADE (checkpoint 3)
-- D-B10-INTAKE (ownership resolved before dispatch; acquisition only with no client-owned button)
-- D-B10-KBD (keyboard focus changes only by explicit action or target loss)
-- D-B10-ACTIVATION (no protocol path to cameras; token provenance)
-- D-B11-PAN / D-B11-FOCUS (KeepFocus)
-- D-B12-PIN (exact pin, locked, features, protocol versions, patch policy, upgrade + re-run suite)
-- Kick extended to input delivery
-- Locked pointer authoritative state `(surface, Canvas lock point)`
-- W-SM-4a ordering rule
+## DECISIONS MADE
+- Crate set and DAG (C1.1–C1.3).
+- Camera authority via navigation-module privacy + bound, unforgeable ports held outside `State` (C1.5).
+- Authority matrix (C2).
+- Render pipeline steps [1]–[7] with R7 (REFINEMENT) and explicit filters (provisional).
+- D-C4-KBD K1–K9 (REFINEMENT: modifier/lock keys are never compositor-owned).
 
 ## FILES_CHANGED (uncommitted)
-- `docs/foundation/FOUNDATION_BLOCKERS.md`
+- `docs/foundation/FOUNDATION_ARCHITECTURE.md` (new)
 - `docs/foundation/CHECKPOINT.md`
-- `docs/foundation/evidence/phase-b/x6-edges-output.txt`, `x8-pan-input-output.txt`, `x9-presentation-output.txt` (new)
-- `experiments/b8-harness/` (`input.rs`, `bin/x6.rs`, `bin/x8.rs`, `bin/x9.rs`, client/server/lockstep additions, Cargo.toml features)
+- `docs/foundation/evidence/phase-c/c1-authority-spike-verify.txt` (new)
+- `experiments/c1-authority-spike/` (new)
 
-## OPEN ITEMS CARRIED FORWARD (none is an unresolved Level A blocker)
-- Conditional resolutions with named validations:
-  - NB-1/NB-2 → X-13
-  - keys → X-10
-  - output removal + popup-grab dismissal → X-11
-  - W-SM-4b → X-12
-  - activation authority enforcement → X-14
-- Deferred: X-7 (games/network off-screen; decides fallback P), RB-10 (Smithay oneshot-constraint defect; patch policy).
-
-## SEAL ADDITIONS
-- X-12 reproducer for W-SM-4b (defect reproduced at the client; no fork, vendor or patch made).
-- Carry-forward ledger.
+## OPEN / CARRIED FORWARD
+- Phase B ledger categories 2–5 unchanged (CR-1…CR-7, provisional list, DV-1…DV-4, W-SM-1…10).
+- New: C-NB-2 (port-in-State residual risk), C-NB-3 / X-15 (render-order equivalence).
+- Obligations specified for Phase F: X-10 (keyboard, 8 cases + protocol checker), X-11a/b, X-13, X-15, CR-6 properties, `verify-architecture` port of the spike.
 
 ## NEXT_ACTION
-Phase C checkpoint 1 (C1–C4) as authorized.
+Await the user's checkpoint 1 review. If approved: Phase C checkpoint 2 (C5–C10).
 
 ## LIVE_SYSTEM_TOUCHED
-**No.** Checkpoint 3 experiments were in-process lockstep runs (socketpair, virtual time). No real clients were launched in this checkpoint. Nothing in `~/infynitae`, `~/infynitae-native-prototype`, the Hyprland configuration or system packages was changed.
+**No.** Only offline builds and tests of the spike and harness. No clients launched; no changes outside `~/infynitae-native`.

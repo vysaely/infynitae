@@ -1,0 +1,19 @@
+[package]
+name = "spike-probes"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Negative build probes. Each feature enables ONE forbidden authority path written as protocol-side
+# code would write it; verify.sh builds each alone and asserts the build fails with the EXPECTED
+# error code. (Stable rustdoc does not check compile_fail error codes, so doctests alone are weak.)
+[dependencies]
+spike-core = { path = "../core" }
+spike-wayland = { path = "../wayland" }
+
+[features]
+p1_mutate_through_read_accessor = []
+p2_forge_input_port = []
+p3_physical_input_without_port = []
+p4_call_navigation_internals = []
+p5_control_compiles = []

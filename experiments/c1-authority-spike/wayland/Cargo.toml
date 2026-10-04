@@ -1,0 +1,9 @@
+[package]
+name = "spike-wayland"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Stands in for the Smithay adapter: depends on core only (no Smithay needed to show the boundary).
+[dependencies]
+spike-core = { path = "../core" }

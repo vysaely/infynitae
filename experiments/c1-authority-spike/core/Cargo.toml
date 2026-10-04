@@ -1,0 +1,13 @@
+[package]
+name = "spike-core"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# No dependencies: the domain must exist without Smithay, Wayland, calloop or a backend.
+[dependencies]
+
+[features]
+# Negative build probe: enabling this makes protocol-handling code try to move a camera.
+# The build MUST fail (verify.sh asserts it).
+probe_protocol_moves_camera = []
