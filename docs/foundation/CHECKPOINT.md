@@ -8,7 +8,7 @@ Date: 2026-10-04
 - Phase A evidence: `2c8c163784e260af4aaa8c1dc05c6281b0476120`
 - Phase B checkpoint 1: `9f3f5d4`; checkpoint 2: `90992b839af1bdbe07d128009d8b7460e21fcc88`
 - **Phase B seal:** `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1` (hash recorded in `5647d5f`)
-- Phase C checkpoint 1 work below is **uncommitted** on top of `5647d5f`.
+- **Phase C checkpoint 1 (C1–C4):** `d596416cf57877116e9cfbc8cf6c6fe25c001c67`
 
 ## COMPLETED_WORK (Phase C checkpoint 1)
 - `docs/foundation/FOUNDATION_ARCHITECTURE.md`:

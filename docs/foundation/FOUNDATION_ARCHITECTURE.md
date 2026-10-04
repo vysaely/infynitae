@@ -1,6 +1,6 @@
 # Infynitae Native — Foundation Architecture (Phase C)
 
-Status: **Phase C checkpoint 1 (C1–C4) complete; stopped at the checkpoint 1 review gate.** C5–C16 not started.
+Status: checkpoint 1 (C1–C4) accepted, commit `d596416cf57877116e9cfbc8cf6c6fe25c001c67`. **Checkpoint 2 (C5–C10) in progress.** C11–C16 not started.
 
 Inputs (frozen):
 - Phase B seal `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`, especially the carry-forward ledger at the end of [FOUNDATION_BLOCKERS.md](FOUNDATION_BLOCKERS.md).
