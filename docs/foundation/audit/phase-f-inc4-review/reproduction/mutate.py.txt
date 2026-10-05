@@ -1,0 +1,122 @@
+#!/usr/bin/env python3
+"""Independent INC-4 review mutations. Each mutation is applied alone to the scratch worktree,
+the shipped workspace suite runs (ulimit -n 1024), the file is restored. Result per mutation:
+DETECTED (>=1 shipped test fails), MISSED (suite green), BROKEN (does not compile / not applied)."""
+import json, re, subprocess, sys, pathlib
+
+ROOT = pathlib.Path("/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/mut")
+W = "crates/infynitae-wayland/src"
+C = "crates/infynitae-core/src"
+H = "crates/infynitae-backend-headless/src"
+
+KB_COMP = "                Some(action) if !(mods_changed && self.k3_enforced) => {\n                    // K1: compositor-owned press is consumed\n                    self.core.key_ownership_mut().press(key, Owner::Compositor);\n                    self.apply_key_action(action);\n                }"
+KB_REL = "            if self.core.key_ownership_mut().release(key) == Some(Owner::Compositor) {"
+KB_NONE = "                None => {\n                    // Client-owned press: forwarded\n                    self.core.key_ownership_mut().press(key, Owner::Client);\n                    kb.input_forward("
+ORD = "                                self.unset_keyboard_grab(&kb);\n                                // 3. pointer.unset_grab\n                                self.unset_pointer_grab(serial);"
+
+M = [
+ ("A", "modifier binding evaluated with the state one event LATE (pre-update snapshot)", f"{W}/keyboard.rs",
+  "        let (matched, mods_changed) = kb.input_intercept(self, code, state, |state, mods, _sym| {\n            if !pressed {\n                return None;\n            }\n            let modifiers = convert::modifiers_from_smithay(mods);",
+  "        let stale = kb.modifier_state();\n        let (matched, mods_changed) = kb.input_intercept(self, code, state, |state, _mods, _sym| {\n            if !pressed {\n                return None;\n            }\n            let modifiers = convert::modifiers_from_smithay(&stale);"),
+ ("B", "client-visible modifier update dropped on client-owned release (mods_changed=false)", f"{W}/keyboard.rs",
+  "                // Client-owned release is forwarded to the current focus\n                kb.input_forward(\n                    self,\n                    code,\n                    state,\n                    SERIAL_COUNTER.next_serial(),\n                    time_ms,\n                    mods_changed,",
+  "                // Client-owned release is forwarded to the current focus\n                kb.input_forward(\n                    self,\n                    code,\n                    state,\n                    SERIAL_COUNTER.next_serial(),\n                    time_ms,\n                    false,"),
+ ("C", "compositor binding leaks the PRESS to the client", f"{W}/keyboard.rs", KB_COMP,
+  KB_COMP[:-len("                }")] + "                    kb.input_forward(self, code, state, SERIAL_COUNTER.next_serial(), time_ms, mods_changed);\n                }"),
+ ("D", "compositor binding leaks the RELEASE to the client", f"{W}/keyboard.rs", KB_REL,
+  "            if self.core.key_ownership_mut().release(key) == Some(Owner::Compositor) && false {"),
+ ("E", "client-owned non-modifier key swallowed (recorded Client, never forwarded)", f"{W}/keyboard.rs",
+  KB_NONE, "                None if !mods_changed => {\n                    self.core.key_ownership_mut().press(key, Owner::Client);\n                }\n" + KB_NONE),
+ ("F", "release owner RECOMPUTED from current bindings instead of remembered", f"{W}/keyboard.rs", KB_REL,
+  "            let _ = self.core.key_ownership_mut().release(key);\n            let mods_now = convert::modifiers_from_smithay(&kb.modifier_state());\n            if self.core.resolve_key_binding(key, mods_now).is_some() && !mods_changed {"),
+ ("G", "stale focused element survives destruction (no target loss)", f"{C}/protocol.rs",
+  "        let mut fx = self.focus.target_lost(id, &live);", "        let mut fx: Vec<Effect> = { let _ = &live; Vec::new() };"),
+ ("H", "focus fallback picks the bottom element instead of the MRU live element", f"{C}/input/focus.rs",
+  "        let successor = self\n            .history\n            .iter()\n            .copied()\n            .find(|e| live_elements.contains(e))\n            .or_else(|| live_elements.last().copied());",
+  "        let successor = live_elements.first().copied();"),
+ ("I", "ordered preemption swaps keyboard/pointer unset (pointer first)", f"{W}/outputs.rs", ORD,
+  "                                self.unset_pointer_grab(serial);\n                                // 3. pointer.unset_grab\n                                self.unset_keyboard_grab(&kb);"),
+ ("J", "keyboard grab survives focus transfer (kb.unset_grab omitted)", f"{W}/outputs.rs", ORD,
+  "                                let _ = &kb;\n                                // 3. pointer.unset_grab\n                                self.unset_pointer_grab(serial);"),
+ ("K", "pointer popup grab survives focus transfer (ptr.unset_grab omitted)", f"{W}/outputs.rs", ORD,
+  "                                self.unset_keyboard_grab(&kb);\n                                // 3. pointer.unset_grab\n                                let _ = serial;"),
+ ("L", "stale/foreign-sequence serial accepted (keyboard-grabbed refusal removed)", f"{W}/handlers.rs",
+  "            if kb.is_grabbed()\n                && !(kb.has_grab(serial)", "            if false && kb.is_grabbed()\n                && !(kb.has_grab(serial)"),
+ ("N", "popup root/focus check bypassed (grab on an unfocused element accepted)", f"{W}/handlers.rs",
+  "        if self.core.focus().target() != Some(elem_id) {\n            return;\n        }", "        let _ = elem_id;"),
+ ("O", "adapter ignores DismissPopupGrab on CameraPan acquisition", f"{W}/outputs.rs",
+  "                Effect::DismissPopupGrab(_) => {\n                    let serial = SERIAL_COUNTER.next_serial();\n                    if let Some(mut g) = self.popup_grab.take() {",
+  "                Effect::DismissPopupGrab(_) => {\n                    let serial = SERIAL_COUNTER.next_serial();\n                    if let Some(mut g) = None::<smithay::desktop::PopupGrab<WaylandState>> {"),
+ ("P", "rule 1 visibility guard dropped (causing output used even if parent not visible on it)", f"{C}/protocol.rs",
+  "            Some(o) if self.membership.observers(parent).contains(&o) => o,", "            Some(o) => o,"),
+ ("Q", "old toplevel remains activated (Activated never unset)", f"{W}/outputs.rs",
+  "                                s.states.unset(xdg_toplevel::State::Activated);", "                                let _ = &s;"),
+ ("R", "new toplevel never receives activation", f"{W}/outputs.rs",
+  "                                s.states.set(xdg_toplevel::State::Activated);", "                                let _ = &s;"),
+ ("S", "keys dropped while zero outputs exist (K8 violated)", f"{W}/keyboard.rs",
+  "    pub fn keyboard_key(&mut self, key: u32, pressed: bool, time_us: u64) {\n",
+  "    pub fn keyboard_key(&mut self, key: u32, pressed: bool, time_us: u64) {\n        if self.core.outputs().is_empty() { return; }\n"),
+ ("T", "backend keyboard intake skips the InputPort check", f"{H}/lib.rs",
+  "    state.core().check_port(port)?;\n    state.keyboard_key", "    let _ = port;\n    state.keyboard_key"),
+ ("U", "click-to-focus removed", f"{C}/entry.rs",
+  "            fx.extend(self.focus.set_focus(Some(hit.element)));", "            let _ = hit;"),
+ ("V", "W-SM-14 workaround disabled by default", f"{W}/lib.rs",
+  "            nested_grab_keep_pointer: true,", "            nested_grab_keep_pointer: false,"),
+ ("W", "unmap of the focused element keeps focus (no target loss on unmap)", f"{C}/protocol.rs",
+  "                    .filter(|&e| e != id)\n                    .collect();\n                self.focus.target_lost(id, &live)",
+  "                    .filter(|&e| e != id)\n                    .collect();\n                let _ = live;\n                vec![]"),
+ ("X", "focus_next walks backwards", f"{C}/input/focus.rs",
+  "                live_elements[(pos + 1) % live_elements.len()]", "                live_elements[(pos + live_elements.len() - 1) % live_elements.len()]"),
+ ("Y", "ToplevelConfigure for the previous element omitted (core)", f"{C}/input/focus.rs",
+  "        let mut effects = Vec::new();\n        if let Some(prev_id) = prev {\n            effects.push(Effect::ToplevelConfigure(prev_id));\n        }\n        if let Some(new_id) = next {",
+  "        let mut effects = Vec::new();\n        let _ = prev;\n        if let Some(new_id) = next {"),
+ ("Z", "grab handler does not move keyboard focus into the popup", f"{W}/handlers.rs",
+  "            kb.set_focus(self, grab.current_grab(), serial);", "            let _ = grab.current_grab();"),
+ ("AA", "preemption only ungrabs (no kb/ptr unset) for every strategy", f"{W}/outputs.rs", ORD,
+  "                                let _ = (&kb, serial);"),
+ ("AB", "K3 enforcement default off", f"{W}/lib.rs", "            k3_enforced: true,", "            k3_enforced: false,"),
+ ("AC", "DismissPopupGrab emitted AFTER the pan state change is irrelevant; emitted for no target", f"{C}/entry.rs",
+  "            if let Some(target) = self.focus.target() {\n                fx.push(Effect::DismissPopupGrab(target));\n            }",
+  "            if let Some(target) = self.focus.target() {\n                if false { fx.push(Effect::DismissPopupGrab(target)); }\n            }"),
+ ("AD", "successor allowed to be the dead element itself (history not purged)", f"{C}/input/focus.rs",
+  "        self.history.retain(|&e| e != dead);\n        if self.target != Some(dead) {",
+  "        if self.target != Some(dead) {"),
+]
+
+def run_suite():
+    cmd = "ulimit -n 1024; cargo test --locked --workspace --no-fail-fast 2>&1"
+    p = subprocess.run(["bash", "-c", cmd], cwd=ROOT, capture_output=True, text=True)
+    out = p.stdout + p.stderr
+    failed = sorted(set(re.findall(r"^test (\S+) \.\.\. FAILED", out, re.M)))
+    compile_err = "error[E" in out or "could not compile" in out
+    return p.returncode, failed, compile_err, out
+
+only = set(sys.argv[1:])
+res = []
+for mid, desc, f, old, new in M:
+    if only and mid not in only:
+        continue
+    path = ROOT / f
+    src = path.read_text()
+    n = src.count(old)
+    if n != 1:
+        res.append((mid, desc, "BROKEN", f"pattern count {n}")); print(mid, "BROKEN pattern", n, flush=True); continue
+    path.write_text(src.replace(old, new))
+    try:
+        rc, failed, cerr, out = run_suite()
+    finally:
+        path.write_text(src)
+    if cerr:
+        verdict, det = "BROKEN", "compile error: " + "; ".join(l for l in out.splitlines() if l.startswith("error"))[:300]
+    elif failed:
+        verdict, det = "DETECTED", ", ".join(failed)
+    elif rc == 0:
+        verdict, det = "MISSED", "suite green"
+    else:
+        verdict, det = "BROKEN", f"rc={rc} without failing test"
+    res.append((mid, desc, verdict, det))
+    print(f"{mid:3} {verdict:9} {desc} :: {det}", flush=True)
+
+out = ROOT.parent / ("mutations" + ("_" + "_".join(sorted(only)) if only else "") + ".json")
+out.write_text(json.dumps(res, indent=1))
+subprocess.run(["git", "diff", "--stat"], cwd=ROOT)

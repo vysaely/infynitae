@@ -1,0 +1,28 @@
+#!/usr/bin/env python3
+"""Re-run selected surviving mutations against the independent review tests (zz_review.rs)."""
+import importlib.util, subprocess, shutil, pathlib, re
+S = pathlib.Path("/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad")
+src = (S / "mutate.py").read_text().split("def run_suite")[0]
+ns = {}
+exec(src, ns)
+M = {m[0]: m for m in ns["M"]}
+ROOT = ns["ROOT"]
+test = ROOT / "crates/infynitae-backend-headless/tests/zz_review.rs"
+shutil.copy(S / "zz_review.rs", test)
+plan = {"F": "atk03", "N": "atk11", "U": "atk09", "I": "atk17"}
+try:
+    for mid, filt in plan.items():
+        _, desc, f, old, new = M[mid]
+        p = ROOT / f
+        s = p.read_text()
+        p.write_text(s.replace(old, new))
+        try:
+            r = subprocess.run(["bash", "-c", f"ulimit -n 1024; cargo test --locked -p infynitae-backend-headless --test zz_review {filt} 2>&1"],
+                               cwd=ROOT, capture_output=True, text=True)
+        finally:
+            p.write_text(s)
+        failed = re.findall(r"^test (\S+) \.\.\. FAILED", r.stdout, re.M)
+        msgs = re.findall(r"panicked at [^\n]*\n([^\n]*)", r.stdout)
+        print(mid, desc, "->", failed or "none failed", [m[:140] for m in msgs], flush=True)
+finally:
+    test.unlink()

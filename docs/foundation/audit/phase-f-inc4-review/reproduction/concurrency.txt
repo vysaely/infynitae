@@ -1,0 +1,11 @@
+pids: 2506401 2506402
+target dirs during the concurrent run:
+target/test-efficacy-2506401-88440lvm
+target/test-efficacy-2506402-m_vken01
+cargo processes and their CARGO_TARGET_DIR:
+      1 CARGO_TARGET_DIR=/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/inc4/target/test-efficacy-2506401-88440lvm
+      1 CARGO_TARGET_DIR=/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/inc4/target/test-efficacy-2506402-m_vken01
+lines so far: 0 / 0
+no FAIL/BROKEN lines so far
+after interrupt (dirs left):
+none

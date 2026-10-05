@@ -1,0 +1,418 @@
+//! INDEPENDENT REVIEW (INC-4) — adversarial T1 attacks. Scratch only; never committed.
+//! Every test asserts the CANONICAL expectation; a failure is a finding.
+
+mod common;
+
+use std::time::Duration;
+
+use common::input::{BTN_LEFT, BTN_MIDDLE, logo, none};
+use common::{Lockstep, PopupSpec, output};
+use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion};
+use infynitae_core::input::keys::{KEY_A, KEY_B, KEY_ENTER, KEY_ESC, KEY_LEFTMETA};
+use infynitae_core::stage::ElementId;
+
+const ACTIVATED: u32 = 4;
+
+struct R {
+    ls: Lockstep,
+    t: u64,
+    w: Vec<usize>,
+    e: Vec<ElementId>,
+}
+
+impl R {
+    fn new(n: usize) -> R {
+        let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+        let qh = ls.qh.clone();
+        let labels = ["W1", "W2", "W3"];
+        let mut w = Vec::new();
+        for l in labels.iter().take(n) {
+            w.push(ls.probe.toplevel(&qh, l, (400, 300), 0));
+        }
+        ls.pump();
+        let e: Vec<ElementId> = ls.state.elements().collect();
+        assert_eq!(e.len(), n);
+        let mut r = R { ls, t: 10_000, w, e };
+        r.adv();
+        r
+    }
+    fn adv(&mut self) {
+        self.ls.pump();
+        let t = self.ls.now + Duration::from_micros(16_667);
+        self.ls.run_until(t);
+    }
+    fn key(&mut self, k: u32, p: bool) {
+        self.t += 1000;
+        keyboard_key(&mut self.ls.state, &mut self.ls.input, k, p, self.t).expect("key");
+        self.adv();
+    }
+    fn motion(&mut self, d: (f64, f64)) {
+        self.t += 1000;
+        pointer_motion(&mut self.ls.state, &mut self.ls.input, d, d, self.t).expect("motion");
+        self.adv();
+    }
+    fn button(&mut self, b: u32, p: bool, m: infynitae_core::input::bindings::Modifiers) {
+        self.t += 1000;
+        pointer_button(&mut self.ls.state, &mut self.ls.input, b, p, m, self.t).expect("button");
+        self.adv();
+    }
+    fn focus(&mut self, t: Option<ElementId>) {
+        self.ls.state.set_focus(t);
+        self.adv();
+    }
+    fn target(&self) -> Option<ElementId> {
+        self.ls.state.core().focus().target()
+    }
+    fn popup(&mut self, label: &'static str, parent: usize) -> usize {
+        let qh = self.ls.qh.clone();
+        let p = self.ls.probe.popup_with_grab(
+            &qh,
+            label,
+            parent,
+            PopupSpec { content: (120, 80), shadow: 0, anchor_rect: (10, 10, 1, 1), slide: false },
+        );
+        self.adv();
+        p
+    }
+    fn last_activated(&self, idx: usize) -> Option<bool> {
+        self.ls
+            .probe
+            .toplevel_states
+            .iter()
+            .rev()
+            .find(|(i, _)| *i == idx)
+            .map(|(_, s)| s.contains(&ACTIVATED))
+    }
+    fn viol(&self) -> Vec<String> {
+        self.ls.probe.kb.violations.clone()
+    }
+}
+
+/// ATK-01 (product policy / gaming): Escape with no interaction active is a client key.
+#[test]
+fn atk01_plain_escape_reaches_the_focused_client() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    let n = r.ls.probe.key_events.len();
+    r.key(KEY_ESC, true);
+    r.key(KEY_ESC, false);
+    let got: Vec<_> = r.ls.probe.key_events[n..].to_vec();
+    assert_eq!(got, vec![(KEY_ESC, true), (KEY_ESC, false)], "Escape swallowed by compositor; kb_log={:?}", r.ls.probe.kb_log);
+}
+
+/// ATK-02 (K1/K2, M12 Down→press): a repeated press of a compositor-owned key must not leak.
+#[test]
+fn atk02_repeat_press_of_compositor_owned_key_does_not_leak() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    r.key(KEY_LEFTMETA, true);
+    r.key(KEY_B, true); // Super+B: compositor-owned
+    r.key(KEY_LEFTMETA, false);
+    r.key(KEY_B, true); // repeat / second press (evdev value 2 or device quirk)
+    r.key(KEY_B, false);
+    let b: Vec<_> = r.ls.probe.key_events.iter().filter(|(k, _)| *k == KEY_B).collect();
+    assert!(b.is_empty(), "compositor-owned B leaked to client: {b:?}; viol={:?}", r.viol());
+    assert!(r.ls.probe.kb.keys.is_empty(), "stuck keys {:?}", r.ls.probe.kb.keys);
+}
+
+/// ATK-03 (K2): release follows the press owner even when the modifier state changed in between.
+#[test]
+fn atk03_release_follows_press_owner_after_modifier_change() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    r.key(KEY_B, true); // client-owned (no Super)
+    r.key(KEY_LEFTMETA, true);
+    r.key(KEY_B, false); // Super+B would be a binding now; release must still follow the client owner
+    r.key(KEY_LEFTMETA, false);
+    assert!(r.viol().is_empty(), "{:?}", r.viol());
+    assert!(r.ls.probe.kb.keys.is_empty(), "client left holding {:?}", r.ls.probe.kb.keys);
+}
+
+/// ATK-04 (K2/protocol must-not): a release with no recorded press must not reach a client.
+#[test]
+fn atk04_release_without_press_is_not_forwarded() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    r.key(KEY_A, false);
+    assert!(r.viol().is_empty(), "protocol violation: {:?}", r.viol());
+}
+
+/// ATK-05 (OBJ-22 successor/live): focus_next must never select an unmapped element.
+#[test]
+fn atk05_focus_next_skips_unmapped_elements() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    let w2 = r.w[1];
+    r.ls.probe.unmap(w2);
+    r.adv();
+    r.key(KEY_LEFTMETA, true);
+    r.key(KEY_ENTER, true);
+    r.key(KEY_ENTER, false);
+    r.key(KEY_LEFTMETA, false);
+    assert_ne!(r.target(), Some(r.e[1]), "focus_next focused UNMAPPED W2; client kb={:?}", r.ls.probe.kb.active);
+    assert_ne!(r.ls.probe.kb.active.as_deref(), Some("W2"));
+}
+
+/// ATK-06 (K7/M11 successor): target loss must not hand focus to an unmapped element.
+#[test]
+fn atk06_successor_is_never_unmapped() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    let (w1, w2) = (r.w[0], r.w[1]);
+    r.ls.probe.unmap(w2);
+    r.adv();
+    r.ls.probe.destroy_toplevel(w1);
+    r.adv();
+    assert_ne!(r.target(), Some(r.e[1]), "successor is UNMAPPED W2 (stale render-list member)");
+}
+
+/// ATK-07 (canonical successor = MRU live element): an element never focused is not "most recently focused".
+#[test]
+fn atk07_successor_without_history_is_not_fabricated() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    let w1 = r.w[0];
+    r.ls.probe.destroy_toplevel(w1);
+    r.adv();
+    assert_eq!(r.target(), None, "successor fabricated from z-order (never-focused W2)");
+}
+
+/// ATK-08 (INV-PROTO-1): `activated` holds exactly on the focused element, through every transition.
+#[test]
+fn atk08_activated_tracks_active_element_focus() {
+    let mut r = R::new(3);
+    r.focus(Some(r.e[0]));
+    assert_eq!(r.last_activated(r.w[0]), Some(true));
+    r.focus(Some(r.e[1]));
+    assert_eq!(r.last_activated(r.w[0]), Some(false));
+    assert_eq!(r.last_activated(r.w[1]), Some(true));
+    assert_eq!(r.last_activated(r.w[2]).unwrap_or(false), false);
+    r.focus(None);
+    assert_eq!(r.last_activated(r.w[1]), Some(false));
+    r.focus(Some(r.e[2]));
+    r.focus(Some(r.e[1]));
+    let w2 = r.w[1];
+    r.ls.probe.destroy_toplevel(w2);
+    r.adv();
+    assert_eq!(r.target(), Some(r.e[2]));
+    assert_eq!(r.last_activated(r.w[2]), Some(true), "successor not activated");
+}
+
+/// ATK-09 (OB-4 × INV-INPUT-3): dismissing the grab on CameraPan acquisition must not deliver
+/// pointer events to any client.
+#[test]
+fn atk09_pan_acquisition_dismissal_emits_no_pointer_events() {
+    let mut r = R::new(1);
+    r.motion((50.0, 50.0));
+    r.button(BTN_LEFT, true, none()); // click-to-focus W1, serial for the grab
+    r.button(BTN_LEFT, false, none());
+    assert_eq!(r.target(), Some(r.e[0]), "click-to-focus");
+    r.popup("P", r.w[0]);
+    r.motion((5.0, 0.0));
+    let m = r.ls.probe.ptr.len();
+    r.button(BTN_MIDDLE, true, logo()); // CameraPan acquisition
+    let after: Vec<String> = r.ls.probe.ptr[m..].to_vec();
+    assert_eq!(r.ls.probe.popup_dones, vec!["P"]);
+    let leaked: Vec<&String> = after
+        .iter()
+        .filter(|l| l.starts_with("motion") || l.starts_with("enter") || l.starts_with("leave") || l.starts_with("button"))
+        .collect();
+    assert!(leaked.is_empty(), "INV-INPUT-3: pointer events at pan acquisition: {leaked:?}");
+}
+
+/// ATK-10 (INV-INPUT-10 / gaming): a keyboard focus change must not synthesize pointer motion.
+#[test]
+fn atk10_focus_change_with_grab_synthesizes_no_pointer_motion() {
+    let mut r = R::new(2);
+    r.motion((50.0, 50.0));
+    r.button(BTN_LEFT, true, none());
+    r.button(BTN_LEFT, false, none());
+    let top = r.target().expect("focused");
+    let other = if top == r.e[0] { r.e[1] } else { r.e[0] };
+    let parent = if top == r.e[0] { r.w[0] } else { r.w[1] };
+    r.popup("P", parent);
+    let m = r.ls.probe.ptr.len();
+    r.focus(Some(other));
+    let after: Vec<String> = r.ls.probe.ptr[m..].to_vec();
+    println!("ATK-10 pointer wire after focus change: {after:?}");
+    assert!(!after.iter().any(|l| l.starts_with("motion")), "synthesized wl_pointer.motion on keyboard focus change: {after:?}");
+}
+
+/// ATK-11 (protocol: a denied grab dismisses the popup; INV-INPUT-10 refusal): a grab on a popup
+/// of an element without ActiveElementFocus is refused, and the popup is dismissed.
+#[test]
+fn atk11_refused_grab_dismisses_the_popup() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    r.popup("Q", r.w[1]); // W2 is not focused
+    let kb = r.ls.state.keyboard_handle();
+    assert!(!kb.is_grabbed(), "grab installed for an unfocused element");
+    assert_eq!(r.ls.probe.popup_dones, vec!["Q"], "refused grab left the popup alive (no popup_done)");
+}
+
+/// ATK-12 (INC-3 zero-output state × INV-INPUT-10): preemption must not tear down the zero-output grab.
+#[test]
+fn atk12_preemption_keeps_the_zero_output_grab() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    r.key(KEY_A, true);
+    r.key(KEY_A, false); // serial for the grab
+    let o = r.ls.output();
+    r.ls.disconnect(o);
+    r.adv();
+    assert!(r.ls.state.seat().get_pointer().unwrap().is_grabbed(), "zero-output grab installed");
+    r.popup("P", r.w[0]);
+    r.focus(Some(r.e[1]));
+    assert!(
+        r.ls.state.seat().get_pointer().unwrap().is_grabbed(),
+        "zero-output grab torn down by popup preemption while no output exists"
+    );
+}
+
+/// ATK-13 (modifier authority): the CameraPan modifier test must read the seat's XKB state, the
+/// single modifier authority (OBJ-27), not a second backend-supplied snapshot.
+#[test]
+fn atk13_pan_modifier_comes_from_the_seat_xkb_state() {
+    let mut r = R::new(1);
+    r.focus(Some(r.e[0]));
+    r.motion((50.0, 50.0));
+    // Super physically held on the seat keyboard; the button arrives with a stale empty snapshot.
+    r.key(KEY_LEFTMETA, true);
+    r.button(BTN_MIDDLE, true, none());
+    let pan = r.ls.state.core().interaction().active();
+    r.button(BTN_MIDDLE, false, none());
+    r.key(KEY_LEFTMETA, false);
+    assert!(pan, "Super held on the seat but CameraPan not acquired: two modifier authorities");
+}
+
+/// ATK-14 (stale grab bookkeeping): after the client dismisses its own popup, a later focus change
+/// must not tear down an unrelated client-owned pointer grab (implicit button grab).
+#[test]
+fn atk14_stale_popup_grab_does_not_kill_implicit_button_grab() {
+    let mut r = R::new(2);
+    r.motion((50.0, 50.0));
+    r.button(BTN_LEFT, true, none());
+    r.button(BTN_LEFT, false, none());
+    let top = r.target().expect("focused");
+    let (parent, other) = if top == r.e[0] { (r.w[0], r.e[1]) } else { (r.w[1], r.e[0]) };
+    let p = r.popup("P", parent);
+    r.ls.probe.destroy_popup(p);
+    r.adv();
+    r.button(BTN_LEFT, true, none()); // client-owned implicit grab
+    let grabbed_before = r.ls.state.seat().get_pointer().unwrap().is_grabbed();
+    r.focus(Some(other));
+    let grabbed_after = r.ls.state.seat().get_pointer().unwrap().is_grabbed();
+    r.button(BTN_LEFT, false, none());
+    assert_eq!(grabbed_before, grabbed_after, "implicit client button grab removed by stale popup preemption");
+}
+
+/// ATK-15 (K8/OB-15 × popups): output removal changes no keyboard state, popup grab included.
+#[test]
+fn atk15_output_removal_keeps_popup_keyboard_route() {
+    let mut r = R::new(1);
+    r.focus(Some(r.e[0]));
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    r.popup("P", r.w[0]);
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("P"));
+    let o = r.ls.output();
+    r.ls.disconnect(o);
+    r.adv();
+    println!("ATK-15 kb_log={:?} dones={:?} kbgrab={}", r.ls.probe.kb_log, r.ls.probe.popup_dones, r.ls.state.keyboard_handle().is_grabbed());
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("P"), "output removal changed keyboard routing");
+    assert!(r.viol().is_empty(), "{:?}", r.viol());
+}
+
+/// ATK-16 (W-SM-14 strength): nested grab with the workaround OFF must lose routing (OBS-1 predicted
+/// failure). If it does not, OBS-1/PF-6 cannot distinguish the workaround.
+#[test]
+fn atk16_obs1_nested_replace_observably_fails() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    r.ls.state.set_nested_grab_keep_pointer(false);
+    let p1 = r.popup("P1", r.w[0]);
+    r.popup("P2", p1);
+    r.key(KEY_A, true);
+    let active = r.ls.probe.kb.active.clone();
+    let kbg = r.ls.state.keyboard_handle().is_grabbed();
+    r.key(KEY_A, false);
+    println!("ATK-16 OBS-1: kb active={active:?} kb grabbed={kbg}");
+    assert!(active.as_deref() != Some("P2") || !kbg, "OBS-1 shows no failure: routing intact without W-SM-14 workaround");
+}
+
+/// ATK-17 (W-SM-15 strength): pointer-first teardown must be observably different from ORDERED
+/// (transient root refocus). If not, NEG-2 cannot detect an order swap.
+#[test]
+fn atk17_neg2_pointer_first_observably_differs() {
+    fn run(s: infynitae_wayland::PreemptionStrategy) -> Vec<String> {
+        let mut r = R::new(2);
+        r.motion((50.0, 50.0));
+        r.button(BTN_LEFT, true, none());
+        r.button(BTN_LEFT, false, none());
+        let top = r.target().expect("focused");
+        let (parent, other) = if top == r.e[0] { (r.w[0], r.e[1]) } else { (r.w[1], r.e[0]) };
+        r.ls.state.set_preemption_strategy(s);
+        r.popup("P", parent);
+        let m = r.ls.probe.kb_log.len();
+        r.focus(Some(other));
+        r.ls.probe.kb_log[m..].iter().filter(|l| !l.starts_with("toplevel_configure")).cloned().collect()
+    }
+    let ordered = run(infynitae_wayland::PreemptionStrategy::Ordered);
+    let pfirst = run(infynitae_wayland::PreemptionStrategy::PointerFirst);
+    println!("ATK-17 ordered={ordered:?}\n       pointer-first={pfirst:?}");
+    assert_ne!(ordered, pfirst, "NEG-2 indistinguishable from ORDERED on the client wire");
+}
+
+/// ATK-18 (M3 "parent unmapped/destroyed → popup_done for the tree"): unmapping an UNFOCUSED
+/// parent dismisses its (non-grabbing) popup.
+#[test]
+fn atk18_unmapped_parent_dismisses_its_popup_tree() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    let qh = r.ls.qh.clone();
+    let w2 = r.w[1];
+    r.ls.probe.popup(&qh, "Q", w2, PopupSpec { content: (60, 40), shadow: 0, anchor_rect: (5, 5, 1, 1), slide: false });
+    r.adv();
+    r.ls.probe.unmap(w2);
+    r.adv();
+    assert_eq!(r.ls.probe.popup_dones, vec!["Q"], "popup of an unmapped parent not dismissed");
+}
+
+fn fds() -> usize {
+    std::fs::read_dir("/proc/self/fd").map(|d| d.count()).unwrap_or(0)
+}
+
+/// RES-1 (§21, INC3-F09 class): repeated client/keyboard/popup/grab/focus/output cycles keep the
+/// descriptor count bounded.
+#[test]
+fn res1_bounded_resources_over_inc4_cycles() {
+    let mut samples = Vec::new();
+    for i in 0..40 {
+        let mut r = R::new(2);
+        r.focus(Some(r.e[0]));
+        r.key(KEY_A, true);
+        r.key(KEY_A, false);
+        let p1 = r.popup("P1", r.w[0]);
+        r.popup("P2", p1);
+        r.key(KEY_LEFTMETA, true);
+        r.key(KEY_ENTER, true); // focus_next: ordered preemption
+        r.key(KEY_ENTER, false);
+        r.key(KEY_LEFTMETA, false);
+        let o = r.ls.output();
+        r.ls.disconnect(o);
+        r.adv();
+        r.ls.connect(&output((1920, 1080), 120));
+        r.adv();
+        let w = r.w[1];
+        r.ls.probe.destroy_toplevel(w);
+        r.adv();
+        drop(r);
+        if i == 4 || i == 39 {
+            samples.push(fds());
+        }
+    }
+    println!("RES-1 fds after cycle 5 / 40: {samples:?}");
+    assert!(samples[1] <= samples[0] + 5, "descriptor growth over 35 cycles: {samples:?}");
+}
