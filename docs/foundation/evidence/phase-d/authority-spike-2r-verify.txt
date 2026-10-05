@@ -1,0 +1,93 @@
+== 1. positive tests + compile_fail doctests
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 5 tests
+.....
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+== 2. negative build probe: protocol code moving a camera MUST NOT compile
+OK: probe rejected by the compiler:
+error[E0624]: method `set_center` is private
+error: could not compile `spike-core` (lib) due to 1 previous error
+== 2b. protocol-side forbidden paths (each must fail with its expected error code)
+OK: p1_mutate_through_read_accessor rejected: error[E0624]: method `set_center` is private
+OK: p2_forge_input_port rejected: error: cannot construct `InputPort` with struct literal syntax due to private fields
+OK: p3_physical_input_without_port rejected: error[E0061]: this method takes 2 arguments but 1 argument was supplied
+OK: p4_call_navigation_internals rejected: error[E0603]: enum `Authority` is private
+OK: positive control compiles
+== 2c. storing an authority port in protocol state MUST NOT compile (ports are !Send; protocol state is asserted Send)
+OK: rejected with E0277
+error[E0277]: `*const ()` cannot be sent between threads safely
+== 2d. PD-F2-01: protocol policy re-fitting a camera on a client commit MUST NOT compile (proof cannot be minted)
+OK: rejected: error[E0624]: associated function `mint` is private
+== 2e. PD-F2-01: Core retaining an authority proof (sticky fit mode) MUST NOT compile (protocol state Send assertion)
+OK: rejected with E0277
+error[E0277]: `*const ()` cannot be sent between threads safely
+== 2f. PD-F2-18: output lifecycle authority (each must fail with its expected diagnostic)
+OK: p6_output_connected_without_token rejected: error[E0061]: this method takes 2 arguments but 1 argument was supplied
+OK: p7_forge_output_token rejected: error: cannot construct `OutputLifecycleToken` with struct literal syntax due to private fields
+OK: p8_descriptor_with_coordinates rejected: error[E0560]: struct `OutputDescriptor` has no field named `center`
+OK: p9_public_restore_api rejected: error[E0599]: no method named `restore_persisted_state` found for struct `Core` in the current scope
+OK: probe_protocol_creates_camera rejected: error[E0624]: associated function `mint` is private
+OK: probe_store_output_token_in_state rejected with E0277
+error[E0277]: `*const ()` cannot be sent between threads safely
+== 2g. PD-F2-18: OutputLifecycleToken is constructed exactly once, inside Core::new; no other function returns it
+   construction sites=1 (want 1) | other functions returning the token=0 (want 0)
+OK: single construction site inside Core::new
+OK: negative control: a seeded reissue_token() is detected:
+   construction sites=2 (want 1) | other functions returning the token=1 (want 0)
+== 3. dependency direction: spike-core has no dependencies
+OK: spike-core depends on nothing
+== result: PASS
+
+== full unit-test listing
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 8 tests
+test tests::activation_never_moves_cameras ... ok
+test tests::fit_of_stale_element_mutates_nothing ... ok
+test tests::client_resize_after_fit_never_moves_camera ... ok
+test tests::output_disconnected_unbinds_and_preserves_camera ... ok
+test tests::output_connected_with_token_instantiates_and_binds_camera ... ok
+test tests::persisted_lookup_uses_the_single_authorized_path ... ok
+test tests::ports_are_bound_to_their_core ... ok
+test tests::trusted_input_moves_camera_but_not_stage ... ok
+test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 0 tests
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+running 5 tests
+test wayland/src/lib.rs - (line 6) - compile fail ... ok
+test wayland/src/lib.rs - (line 13) - compile fail ... ok
+test wayland/src/lib.rs - (line 18) - compile fail ... ok
+test wayland/src/lib.rs - (line 25) - compile fail ... ok
+test wayland/src/lib.rs - (line 33) ... ok
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s
+
+== probe isolation: each negative probe fails with exactly one compiler error (its intended violation)
+spike-probes/p1_mutate_through_read_accessor: 1 error(s): error[E0624]: method `set_center` is private
+spike-probes/p2_forge_input_port: 1 error(s): error: cannot construct `InputPort` with struct literal syntax due to private fields
+spike-probes/p3_physical_input_without_port: 1 error(s): error[E0061]: this method takes 2 arguments but 1 argument was supplied
+spike-probes/p4_call_navigation_internals: 1 error(s): error[E0603]: enum `Authority` is private
+spike-probes/p6_output_connected_without_token: 1 error(s): error[E0061]: this method takes 2 arguments but 1 argument was supplied
+spike-probes/p7_forge_output_token: 1 error(s): error: cannot construct `OutputLifecycleToken` with struct literal syntax due to private fields
+spike-probes/p8_descriptor_with_coordinates: 1 error(s): error[E0560]: struct `OutputDescriptor` has no field named `center`
+spike-probes/p9_public_restore_api: 1 error(s): error[E0599]: no method named `restore_persisted_state` found for struct `Core` in the current scope
+spike-core/probe_protocol_moves_camera: 1 error(s): error[E0624]: method `set_center` is private
+spike-core/probe_protocol_refits_camera: 1 error(s): error[E0624]: associated function `mint` is private
+spike-core/probe_protocol_creates_camera: 1 error(s): error[E0624]: associated function `mint` is private
+spike-wayland/probe_store_port_in_state: 1 error(s): error[E0277]: `*const ()` cannot be sent between threads safely
+spike-wayland/probe_sticky_fit: 1 error(s): error[E0277]: `*const ()` cannot be sent between threads safely
+spike-wayland/probe_store_output_token_in_state: 1 error(s): error[E0277]: `*const ()` cannot be sent between threads safely

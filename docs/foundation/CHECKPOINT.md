@@ -1,6 +1,6 @@
 # Checkpoint
 
-CURRENT_PHASE: **D: corrective checkpoint 1R ACCEPTED and SEALED (1R seal commit `84ce620898445aaadb72f386ec3954e5bbfe2c2f`). D7–D9 not begun.** Phase D checkpoint 1 is committed as the immutable falsification baseline **`e8ec03a2ab36f315ae025723ec666b9ad278ac83`**. No Level-A finding is open after 1R. D7–D9 have not begun. Phase C: COMPLETE and SEALED (`615b0ed2f3631b698b0c54783c28f696ef4ff34a`).
+CURRENT_PHASE: **D corrective checkpoint 2R complete (PD-F2-18, PD-F2-19 resolved), UNCOMMITTED, stopped at the Checkpoint 2R review gate.** D7–D9 have not been performed. 1R seal: `84ce620898445aaadb72f386ec3954e5bbfe2c2f`; HEAD `2ee8ab6`. Phase D checkpoint 1 is committed as the immutable falsification baseline **`e8ec03a2ab36f315ae025723ec666b9ad278ac83`**. No Level-A finding is open after 1R. D7–D9 have not begun. Phase C: COMPLETE and SEALED (`615b0ed2f3631b698b0c54783c28f696ef4ff34a`).
 
 Date: 2026-10-04
 
@@ -11,6 +11,22 @@ Date: 2026-10-04
 - Phase C checkpoint 2: `fc2dd68f843b1eb05828f4116f94e8bab4f478da`
 - **Phase C checkpoint 3A:** `795800937a1e50e56587cd4080a73ce27d8a8b01` (hash recorded in `fd9a80c`)
 - **Phase C seal (checkpoint 3B):** `615b0ed2f3631b698b0c54783c28f696ef4ff34a`
+
+## PHASE D CORRECTIVE CHECKPOINT 2R (uncommitted)
+- **Trigger:** D7–D9 stopped at PD-F2-18 (Level A). PD-F2-19 (Level C) and PD-F1-10 recorded at the same time (FOUNDATION_BLOCKERS.md § Phase D Checkpoint 2).
+- **PD-F2-18 resolved:**
+  - dedicated `OutputLifecycleToken` (INV-OUTPUT-2, new);
+  - INV-CAMERA-1/3 and INV-OUTPUT-1 amended;
+  - hardware-only descriptor; passive persisted lookup; no public restore API.
+  - Evidence ER2-1: authority spike, 6 new probes and 3 new tests; `verify.sh` PASS.
+- **PD-F2-19 resolved:** INV-SCALE-3/4 cover all spatial interactions. Evidence ER2-2 (`d5_model_2r`): window drag 39 → 1, with a negative control.
+- **Registry:** 57 entries (§C12.R2, audit/2R/INVARIANT_DIFF_2R.md).
+- **Clarifications at the seal (C12.R2.3, D-F0, non-semantic):**
+  - `OutputLifecycleToken` lifecycle: exactly one per Core, returned once to the composition root, never re-issued, lifecycle operations only. Backed by the `verify.sh` 2g source check with a seeded negative control.
+  - Device-bound (P7) exception: only when `h > H_max(E)`; never a damping bypass.
+  - 300 ms remains provisional (OB-23).
+- **PD-F1-10:** left open for D7.
+- **NEXT:** user review of 2R; commit only on authorisation; D7–D9 not begun.
 
 ## PHASE D CORRECTIVE CHECKPOINT 1R (sealed: `84ce620898445aaadb72f386ec3954e5bbfe2c2f`)
 - **Baseline:** checkpoint 1 committed as `e8ec03a2ab36f315ae025723ec666b9ad278ac83` ("preserve Phase D falsification baseline"). This hash is recorded here and in audit/README.md, audit/1R/* and FOUNDATION_BLOCKERS.md.

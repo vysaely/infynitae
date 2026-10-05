@@ -45,3 +45,5 @@ This document records changes against [../D3_AUTHORITY_MATRIX.md](../D3_AUTHORIT
 - **Multi-output inverse:** the `Locked` output gap is closed (PD-F2-03); confinement crossing is closed (PD-F2-05); drag across outputs is OB-34.
 
 **Rounding never leaks back into Stage geometry (re-check).** R8 produces a positioner target, which is protocol input and never Stage. X17 writes the camera from device Σ. The derived lock point is never stored. **Holds.**
+
+> **2R note:** rows 10/11/12 (camera centre/zoom/binding) and the camera-lifecycle authority are further amended in [../2R/MATRICES_2R.md](../2R/MATRICES_2R.md) (PD-F2-18). Row 22 (`ScaleState` epoch) is amended there for PD-F2-19.

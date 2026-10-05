@@ -15,8 +15,8 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 | ADR-01 | Stage is the sole spatial authority; Smithay `Space` rejected | Accepted; PD-F2-13 → obligation OB-34 (1R) |
 | ADR-02 | Fixed-point Q16 Canvas with a reference-relative lattice | Accepted; **amended 1R** (R8; zoom-aware pan; OB-24 rescoped) |
 | ADR-03 | Window-geometry anchor and exact physical-pixel hit-testing | Accepted |
-| ADR-04 | Independent centre-anchored cameras | Accepted; **amended 1R** (one-shot fit; direct-manipulation pan) |
-| ADR-05 | Unified effective scale: MaxGesture, bounded ladder hint, settlement | Accepted; **amended 1R** (ScaleInteractionEpoch; device-bound ladder; initial hint) |
+| ADR-04 | Independent centre-anchored cameras | Accepted; **amended 1R** (one-shot fit; direct-manipulation pan); **amended 2R** (output-lifecycle authority) |
+| ADR-05 | Unified effective scale: MaxGesture, bounded ladder hint, settlement | Accepted; **amended 1R** (ScaleInteractionEpoch; device-bound ladder; initial hint); **amended 2R** (epochs for all spatial interactions) |
 | ADR-06 | Off-screen withholding with kick/fallback; suspension separated from visibility | Accepted; **amended 1R** (`OutputsOff`) |
 | ADR-07 | Pre-client input ownership, gesture isolation, modifier observation | Accepted; **amended 1R** (split pointer/constraint state; reconciliation; confinement) |
 | ADR-08 | Compile-time camera-authority separation | Accepted; **amended 1R** (per-action `Authorized` proof; PD-F2-01 resolved) |
@@ -140,6 +140,11 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - Zoomed navigation is part of Foundation 01.
   - An orphaned pan mutates nothing (INV-OUTPUT-1).
   - Rejected in 1R: a sticky fit mode, because it is the client→camera path (PD-F2-01).
+- **2R amendment:**
+  - Cameras are created, bound and unbound only through the dedicated `OutputLifecycleToken` path (INV-OUTPUT-2). It is coordinate-free (hardware-only descriptors).
+  - Precedence on connect: remembered session camera, then passive persisted entry, then internal default.
+  - Startup equals hotplug. There is no public restore API (PD-F2-18; ER2-1).
+  - Rejected: overloading `InputPort` (it would merge device-input and display-lifecycle authority) and a port-free output entry (protocol-reachable camera path).
 
 ## ADR-05: unified effective scale (MaxGesture, bounded ladder hint, settlement)
 
@@ -182,6 +187,11 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - The ladder contains output scales ≤ H_max, with H_max over all surfaces (INV-SCALE-2).
   - Initial hint defined (INV-SCALE-5).
   - Evidence: ER-5 R2 (40 → 1 for discrete pan, zoom-at-cursor and shell streams; negative control 40).
+- **2R amendment:**
+  - ScaleInteractionEpoch covers every spatial interaction: CameraPan, CameraZoom, WindowMove, WindowResize, ShellStream (INV-SCALE-3).
+  - Window drags across a scale boundary settle in 1 change instead of 39 (ER2-2).
+  - P7 stays an immediate correctness exception.
+  - The 300 ms settlement timeout remains a provisional candidate (OB-23), not a frozen value.
 
 ## ADR-06: off-screen withholding with kick/fallback; suspension separated from visibility
 

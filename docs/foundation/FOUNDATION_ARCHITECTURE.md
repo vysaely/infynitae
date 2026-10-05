@@ -1202,7 +1202,7 @@ Not kept as negative controls: things that would only inflate counts (e.g. "remo
 
 ## C12 — Canonical invariant registry
 
-> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`).
+> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries).
 
 **This table is authoritative.** Legacy identifiers map to it (C12.2). Where a rule was refined, the earlier wording is superseded and must not be cited as normative.
 
@@ -1694,4 +1694,65 @@ Evidence: ER-1. Both are adapter-local (INV-ARCH-3).
 - OB-30 … OB-35 added.
 
 Details: audit/1R/CORRECTIONS_1R.md § Obligation changes. OB-19 remains the unconditional Phase F entry gate.
+
+---
+---
+
+# §C12.R2 — Canonical registry amendments (Phase D corrective checkpoint 2R)
+
+**Inputs:**
+- C12 (`615b0ed`) and C12.R1 (`84ce620`);
+- findings PD-F2-18 and PD-F2-19 (FOUNDATION_BLOCKERS.md § Phase D Checkpoint 2).
+
+**Provenance:** [audit/2R/INVARIANT_DIFF_2R.md](audit/2R/INVARIANT_DIFF_2R.md).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12 and C12.R1. Every other row is unchanged.** Registry size after 2R: 57.
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-CAMERA-1** | Camera state is mutated only inside `core::navigation`. Every mutation, **including camera creation and output↔camera binding/unbinding**, consumes a fresh `Authorized` proof.<br><br>A proof is mintable only inside `physical_input(&mut InputPort)`, `shell_command(&mut ShellPort)`, or `output_connected`/`output_disconnected(&mut OutputLifecycleToken)` (INV-OUTPUT-2). The proof is not Clone, `!Send`, and consumed by value.<br><br>The output-lifecycle entries only create, bind or unbind cameras. They never take a camera position, centre or zoom from their caller, and never change an existing camera's value.<br><br>Core retains no proof, mode, target or tracking state permitting a later mutation. No protocol event or client-originated change causes a camera mutation. Ports and tokens are unforgeable, `!Send`, bound to their Core, and never stored in protocol state. Animation is not in Foundation 01; any later time-driven step must be an authorized action with its own proof. | core `navigation` | E+D | EC-1, EC-15, ER-4, ER2-1 | T0 probes 2d/2e/2f (OB-19) | PD-F2-01, PD-F2-18 |
+| **INV-CAMERA-3** | Cameras are centre-anchored views (centre Q16, zoom); per-output view origin `v_O = centre − mode/(2k)` (R7).<br><br>Cameras come into existence **only** through `output_connected` (INV-OUTPUT-2). For the connecting `OutputKey`, the camera is the first of:<br>1. the camera remembered this session (re-bound, value unchanged);<br>2. a new camera seeded from the passive persisted lookup;<br>3. a new camera at Core's internal default placement (the placement policy itself is Level D).<br><br>Cameras survive output removal (unbound, value kept) and are not destroyed in-session. N outputs may share one camera. | core `navigation` | D+E | D-B7-CENTER, B7.2, ER2-1 | T0 (spike tests), T1 hotplug | PD-F2-18 |
+| **INV-OUTPUT-1** | Output removal enters Core **only** through `output_disconnected(&mut OutputLifecycleToken, …)`. Then: membership `leave` before the global is destroyed; camera unbound and kept (value unchanged); fullscreen presentation dropped with the INV-PRES-1 configure; interactions orphaned (ownership kept until release, no camera mutation); physical pointer relocated at once to the Arrangement-nearest point of a surviving output (half-open); constraints reconciled per INV-INPUT-5 (deferred under a client grab); the removal is a ScaleInteractionEpoch settlement event. | core output manager | D+E | B7.2, C4.6, ER-2, ER2-1 | T1 (OB-3, OB-31) | PD-F2-03/-11, PD-F2-18 |
+| **INV-OUTPUT-2** (new) | **Output lifecycle authority.** Output connect and disconnect, at startup and at runtime hotplug alike, enter Core only through `output_connected(&mut OutputLifecycleToken, OutputDescriptor)` and `output_disconnected(&mut OutputLifecycleToken, OutputId)`.<br><br>**The token** is a dedicated authority distinct from `InputPort`: minted only by `Core::new`; private fields (unforgeable); not Clone; `!Send` (never in protocol state); bound to its Core; held exclusively by the backend's output/display event source.<br><br>**`OutputDescriptor`** carries hardware facts only (`OutputKey`, mode, scale, refresh), with no field for camera position, centre, zoom or binding.<br><br>**Persisted camera state** is a passive read-only lookup table given to `Core::new` and consulted only inside `output_connected`. No public restore API exists. | core output manager + `navigation` | E+D | ER2-1 | T0 probes 2f (OB-19); T1 hotplug | PD-F2-18 |
+| **INV-SCALE-3** | **ScaleInteractionEpoch.** The spatial changes of one logical interaction form one epoch, for every `InteractionKind ∈ {CameraPan, CameraZoom, WindowMove, WindowResize, ShellStream}`: continuous pan, pinch, interactive window move or resize; a run of discrete pan or zoom steps; a bounded shell stream of navigation or `MoveElement` commands.<br><br>**During an epoch:** decreases are suppressed; increases happen only at rung crossings and only in the epoch's direction; client responses cannot reverse it; individual updates are not each a hint change.<br><br>**P7:** a device-bound decrease applies immediately and fixes the direction to down (correctness, not damping).<br><br>**The epoch ends** at interaction termination (gesture end, button release, explicit end-of-stream), at a settlement event (output add/remove/configuration), or, for discrete steps without an explicit end, at the **settlement timeout** with no further step. Pointer motion does not end it.<br><br>At settlement, h is set to the target of the final requirement, evaluated once. The timeout's existence is architectural; its value is provisional (C14.5; candidate 300 ms; OB-23). Atomic camera or Stage actions are one-step epochs. | core | M | ER-5 R2, ER2-2 | T0 (+ NEG); T1/T3 (OB-23) | PD-F2-07, PD-F2-19 |
+| **INV-SCALE-4** | (a) No hint change per raw spatial event (camera, Stage-move or resize update). (b) Changes happen only at rung crossings, at settlement, or by P7. (c) Per epoch: at most rungs crossed + 1 settlement + one P7 forced decrease per non-client stimulus. (d) No oscillation: outside an epoch, client-caused re-evaluations move h only in the direction of the last non-client stimulus (SC-E); inside an epoch, INV-SCALE-3 applies. | core | M+E | EC-17/19/22, ER-5 R2, ER2-2 | T0 (+ NEG); T1 (OB-28) | PD-F2-07, PD-F2-19 |
+
+## C12.R2.1 Sealed or amended text superseded (must not be cited as normative)
+
+| Text | Superseded by |
+|---|---|
+| C1.2 "output discovery → `OutputDescriptor`" (no authority) and the C1.2 public API list (no output entry) | INV-OUTPUT-2 (`output_connected`/`output_disconnected` with `OutputLifecycleToken`) |
+| C1.5 "The only public entry points that reach `navigation` are `Core::physical_input(&mut InputPort, …)` and `Core::shell_command(&mut ShellPort, …)`" | INV-CAMERA-1 (three authority entries; the output-lifecycle entries create, bind or unbind only) |
+| B7.2 hotplug "bind it to the remembered camera …, else to a new camera whose placement is Level D policy"; "When the same `OutputKey` reappears, the binding (and thus the view) is restored" | INV-CAMERA-3 (precedence: remembered, then persisted, then internal default; only via the token path) |
+| B7.3 / C2.1 "Binding … output manager (policy), stored in the camera set" and C-AUTH camera rows "Recovery source: persistence keyed by `OutputKey`" | INV-CAMERA-1/3, INV-OUTPUT-2; audit/2R/MATRICES_2R.md |
+| C12.R1 INV-SCALE-3/4 "camera changes" | INV-SCALE-3/4 (all spatial interactions) |
+| B10.4 / D-B8-SCALE.3 `gesture_active` for WindowMove/WindowResize | INV-SCALE-3 (expressed as `InteractionKind` epochs) |
+
+## C12.R2.2 Obligations
+
+- **OB-19** (still the unconditional Phase F entry gate) gains:
+  - the probes in `verify.sh` step 2f (p6–p9, `probe_protocol_creates_camera`, `probe_store_output_token_in_state`);
+  - a source rule: `infynitae-wayland` must not name `OutputLifecycleToken`, `output_connected` or `output_disconnected`.
+- **OB-23** now also covers the settlement timeout for discrete Stage-move steps (shell `MoveElement` streams).
+
+No obligation is closed by 2R.
+
+## C12.R2.3 Clarifications (D-F0, non-semantic; added at the 2R seal)
+
+These restate properties that INV-CAMERA-1, INV-OUTPUT-2 and INV-SCALE-3 above already imply. Nothing here changes behaviour. Each is backed by the evidence named.
+
+**`OutputLifecycleToken` lifecycle:**
+1. `Core::new` creates **exactly one** token per Core and returns it once, to its caller: the composition root, which moves it into the backend's output/display source. No method of an existing Core returns, clones, re-creates or replaces a token; the lifecycle entries borrow it (`&mut`) and return none.
+   - Evidence: `verify.sh` step 2g source check (one construction site, inside `Core::new`; no other function returns the type), with a seeded negative control.
+2. Code holding `&mut Core` (protocol handlers) cannot obtain the token: there is no accessor, the fields are private (probe p7), and it cannot be stored in protocol state (E0277).
+   - A second `Core::new` call yields a token bound to a **different** Core, which every entry rejects (`ForeignPort`; test `ports_are_bound_to_their_core`).
+3. `OutputDescriptor` conveys facts, not authority. Authority comes only from the borrowed token (probe p8: no camera field).
+4. The token authorizes only `output_connected`/`output_disconnected`, i.e. create, bind and unbind. It never authorizes navigation (pan, jump, fit, restore), which requires `InputPort`/`ShellPort`.
+   - The spike exposes no navigation entry taking the token; any new one is a reviewed architecture change.
+
+**Device-bound exception inside a ScaleInteractionEpoch (INV-SCALE-3, P7):**
+- A device/GPU feasibility bound may force an immediate decrease during an active epoch only when the current hint exceeds the element's device bound, i.e. `h > H_max(E)` (INV-SCALE-2).
+- It never applies to an ordinary decrease of the requirement ρ, and it cannot be used to bypass epoch damping.
+- After it fires, the epoch direction is down, so client responses cannot raise h again within the epoch (ER-5 R2, ER2-2).
+- The 300 ms settlement timeout remains a provisional candidate under OB-23; it is not frozen.
 

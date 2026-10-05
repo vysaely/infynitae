@@ -1613,3 +1613,81 @@ Every authorization decision survived empirical testing:
 Two empirical refinements were needed to make the decisions hold. Both are recorded, not forced:
 - **Nested grabs** must keep the pointer grab (W-SM-14).
 - **Constraint reconciliation** must be **deferred** during client-owned grab sequences. An explicit deactivate duplicates `unlocked` for persistent locks (ER-2 EXPLICIT; W-SM-4a).
+
+---
+
+## Phase D Checkpoint 2 (D7–D9): findings recorded under change control
+
+- **Baseline:** HEAD `2ee8ab6a94f64abce2115ad65812ade37f52b824` (1R seal `84ce620`).
+- **Found:** during the D7.2 namespace-authority analysis, **before any document was reorganized**.
+- **Status:** D7–D9 **stopped** at PD-F2-18 (Level A), per the checkpoint rule "If a new Level-A issue appears: STOP". **Nothing is repaired here.**
+
+| ID | Class | Level | Title | Status |
+|---|---|---|---|---|
+| PD-F2-18 | D-F2 | **A** | Camera creation, initial placement, output↔camera binding and persistence restore have no authorization path under the 1R proof rule | **OPEN: decision required; blocks the Phase D gate** |
+| PD-F2-19 | D-F2 | C | Effective ScaleInteractionEpoch covers camera changes only; Stage-move interactions (WindowMove/WindowResize, shell `MoveElement` streams) lost their sealed gesture damping | OPEN |
+| PD-F1-10 | D-F1 | — | Phase B provisional policies with no owning obligation (pan cursor behaviour, popup draw order, ⌈h⌉ integer scale, activation outcomes/shell UX, reserved `StableUnobserved(T)`) | OPEN: to be applied as obligation bookkeeping during D7 |
+
+### PD-F2-18 (Level A): camera-state writes outside the proof-gated entry points
+
+- **Effective rules (preserved, not edited):**
+  - **INV-CAMERA-1 (C12.R1 @ `84ce620`):** "Camera state is mutated only inside `core::navigation`. Each mutation consumes a fresh `Authorized` proof, mintable only inside the port-carrying entry points (`physical_input(&mut InputPort)`, `shell_command(&mut ShellPort)`) … Core retains no proof, mode, target or tracking state permitting a later mutation."
+  - **INV-CAMERA-3 (C12 @ `615b0ed`):** "cameras survive output removal; N outputs may share one camera".
+- **Sealed rules that write camera state with no stated authorization:**
+  - **B7.2 hotplug:** "**Add:** create the `OutputId`; bind it to the remembered camera for its `OutputKey`, else to **a new camera whose placement is Level D policy**". A remove unbinds; when the same `OutputKey` reappears, "the binding (and thus the view) is restored".
+  - **B7.2 / C-AUTH:** cameras are persisted and restored, keyed by `OutputKey` (C-AUTH "Recovery source: persistence keyed by `OutputKey`"; AUD-22).
+  - **B7.3 / C2.1:** the output↔camera **binding** is owned by the "output manager (policy)", "stored in the camera set".
+  - **C1.2:** the backend submits "device events → `PhysicalEvent` (**submitted with `InputPort`**)", but "output discovery → `OutputDescriptor`" has **no port**. The public Core API list (C1.2: `physical_input(&mut InputPort,…)`, `shell_command(&mut ShellPort,…)`, `protocol_event(…)`, `frame_tick(…)`, `render_list(…)`) contains no output entry at all.
+  - **1R M5'** (audit/1R/STATE_MACHINES_1R.md) dropped the baseline M5 row "output added, no remembered camera → new `CameraId`; placement Level D", and gave no authorization for creation or binding.
+- **Counterexample:**
+  - Creating a camera with an initial centre/zoom, binding or re-binding an output to a camera, and restoring persisted centres all **write camera state**. None of them can consume an `Authorized` proof, because none originates in `physical_input` or `shell_command`.
+  - The effective invariant therefore either forbids behaviour the architecture requires (hotplug, persistence) or is silently violated by it.
+  - **The mechanical consequence is the Level-A part.** The natural implementation of "output discovery → `OutputDescriptor`" is a public, port-free `Core` entry (e.g. `output_event(desc)`). Protocol handlers hold `&mut Core` (C1.5: "Smithay hands handlers the whole state"), so such an entry gives protocol-handling code a compile-time-reachable path to create cameras and to **re-bind which camera an output shows**: in effect, moving a user's view.
+  - The OB-19 probes (incl. 1R probes 2d/2e) cover only `navigation` mutators and the two port-gated entries, so this path would pass `verify-architecture`.
+  - This is the same class as PD-F2-01, an authority path outside the port boundary, and it meets the Level-A rigor criterion "competing authoritative writers" (output manager vs. navigation).
+- **Affected:**
+  - INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-ARCH-1;
+  - C1.2, C1.5, B7.2, B7.3, C2.1/C-AUTH (camera and binding rows), M5/M5';
+  - OB-19 (probe coverage);
+  - ADR-04, ADR-08.
+- **Minimal correction (proposal; options; NOT adopted):**
+  - **(a) Recommended.** Output descriptors (add, remove, mode/scale/transform change) enter Core through a **port-carrying entry owned by the backend**, e.g. `Core::output_event(&mut InputPort, OutputDescriptor)`. The backend already owns both `InputPort` and output discovery. That entry mints the proof for camera creation, initial placement (Level D policy) and binding.
+    - Persisted camera state is applied during `Core::new` (construction, before ports leave the composition root) or through the same port-carrying entry.
+    - OB-19 gains a probe: an output entry without a port fails to compile.
+  - **(b)** Define camera creation, binding and restore as "construction, not mutation", and make them reachable only from crate-private code called by the port-carrying entries. Same mechanical effect, more wording.
+  - **(c) Rejected:** a port-free public output entry. It re-opens a protocol-reachable camera path.
+- **More evidence needed:** after the decision, extend the authority spike with one negative probe (output entry without port → fails with its expected error) and one test (hotplug creates and binds a camera only through the port-carrying entry). This is the same scale as 1R's probes 2d/2e.
+
+### PD-F2-19 (Level C): Stage-move interactions are outside ScaleInteractionEpoch
+
+- **Effective rule (preserved):** INV-SCALE-3 (C12.R1) groups the "**camera changes** belonging to one logical interaction" into an epoch.
+- **Sealed rules:**
+  - B10.4: a binding press → `CameraPan / WindowMove / WindowResize` sets "`gesture_active` = true (B8.3)".
+  - D-B8-SCALE.3: decreases are evaluated "at the end of a CameraPan **or WindowMove** interaction".
+  - C14.4 SC-E (not superseded) counts "a membership change caused by camera **or Stage movement**" as a stimulus.
+- **Counterexample:** a window dragged back and forth across an output edge (WindowMove), or a shell `MoveElement` stream, changes membership at every crossing. No epoch covers it, so each crossing renegotiates: the SC2 edge-oscillation churn returns for Stage movement. The effective invariant and the B10.4 state machine disagree.
+- **Level C:** interactive move/resize UX is deferred (C15), and there is no authority or protocol consequence.
+- **Minimal correction (proposal):** a ScaleInteractionEpoch also groups the Stage-placement changes of one interaction (WindowMove, WindowResize, a bounded shell `MoveElement` stream), with the same settlement rules.
+- **Evidence:** analysis. A model case equivalent to ER-5 R2 is cheap to add once the rule is decided.
+
+### PD-F1-10 (D-F1): provisional policies without an owning obligation
+
+- The Phase B ledger category 3 lists provisional policies that have no `OB-*`: pan cursor behaviour, popup draw order, ⌈h⌉ integer scale, activation outcomes/shell UX, and the reserved `StableUnobserved(T)`.
+- The D8.6 requirement ("owning obligation") cannot be met for them as things stand.
+- **Proposed D7 application:** one new decision obligation per policy (or one grouped UX-policy obligation) with destination "decision before the feature ships". This is bookkeeping only; no behaviour changes.
+
+### Phase D Corrective Checkpoint 2R — dispositions (uncommitted, for review)
+
+- **Scope:** PD-F2-18 and PD-F2-19 only.
+- **Canonical wording:** FOUNDATION_ARCHITECTURE §C12.R2.
+- **Provenance:** [audit/2R/INVARIANT_DIFF_2R.md](audit/2R/INVARIANT_DIFF_2R.md).
+- The findings above are preserved unchanged.
+
+| Finding | Level | Replacement | Evidence | Status |
+|---|---|---|---|---|
+| PD-F2-18 | A | Dedicated `OutputLifecycleToken` (**INV-OUTPUT-2, new**). `output_connected`/`output_disconnected` are the only paths that create, bind or unbind cameras (INV-CAMERA-1/3, INV-OUTPUT-1 amended). Hardware-only `OutputDescriptor`. Passive persisted lookup given to `Core::new`, with no public restore API. Startup and runtime hotplug use the same path. | ER2-1: 6 new probes fail for their expected reasons (E0061, private fields, E0560, E0599, E0624, E0277); 3 new behaviour tests pass; all earlier probes still fail as expected | **RESOLVED** |
+| PD-F2-19 | C | ScaleInteractionEpoch generalised to `InteractionKind ∈ {CameraPan, CameraZoom, WindowMove, WindowResize, ShellStream}` (INV-SCALE-3/4 amended); P7 kept as an immediate correctness rule | ER2-2: window drag NEG 39 → 2R 1; resize NEG 39 → 1 (P7); shell `MoveElement` bursts NEG 29 → 5 (≤ 2 per epoch); camera regressions unchanged | **RESOLVED** |
+| PD-F1-10 | D-F1 | not in 2R scope; to be applied as bookkeeping in D7 | — | OPEN |
+
+**Open Level-A findings after 2R: none.**
+

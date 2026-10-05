@@ -13,3 +13,5 @@ spike-core = { path = "../core" }
 probe_store_port_in_state = []
 # PD-F2-01 (Phase D 1R): Core retains an authority proof for a sticky viewport-fit mode -> E0277
 probe_sticky_fit = ["spike-core/probe_sticky_fit_retains_authority"]
+# PD-F2-18 (Phase D 2R): storing the OutputLifecycleToken in protocol state -> E0277
+probe_store_output_token_in_state = []

@@ -40,6 +40,8 @@ pub struct Handlers {
     pub core: Core,
     #[cfg(feature = "probe_store_port_in_state")]
     pub leaked: spike_core::InputPort, // NEGATIVE PROBE: must fail the Send assertion below (E0277)
+    #[cfg(feature = "probe_store_output_token_in_state")]
+    pub leaked_output: spike_core::OutputLifecycleToken, // NEGATIVE PROBE (PD-F2-18): E0277
 }
 
 /// C-NB-2 hardening: protocol state must be `Send`; authority ports are `!Send`, so a port stored
@@ -66,12 +68,27 @@ impl Handlers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spike_core::{geom::CanvasPos, AuthorityError, PhysicalEvent, ShellCommand};
+    use spike_core::{geom::CanvasPos, navigation::OutputKey, AuthorityError, OutputDescriptor, PersistedCameras, PhysicalEvent, ShellCommand};
+
+    fn handlers(core: Core) -> Handlers {
+        Handlers {
+            core,
+            #[cfg(feature = "probe_store_port_in_state")]
+            leaked: unreachable!(),
+            #[cfg(feature = "probe_store_output_token_in_state")]
+            leaked_output: unreachable!(),
+        }
+    }
+    fn desc(key: u64) -> OutputDescriptor {
+        OutputDescriptor { key: OutputKey(key), mode: (1920, 1080), scale_120: 120, refresh_mhz: 60_000 }
+    }
 
     #[test]
     fn activation_never_moves_cameras() {
-        let (core, _input, _shell) = Core::new(2);
-        let mut h = Handlers { core, #[cfg(feature = "probe_store_port_in_state")] leaked: unreachable!() };
+        let (core, _input, _shell, mut outs) = Core::new(PersistedCameras::default());
+        let mut h = handlers(core);
+        h.core.output_connected(&mut outs, desc(1)).unwrap();
+        h.core.output_connected(&mut outs, desc(2)).unwrap();
         h.on_new_toplevel(7);
         let before = (h.core.cameras().center(0), h.core.cameras().center(1));
         let fx = h.on_activation(7);
@@ -81,8 +98,9 @@ mod tests {
 
     #[test]
     fn trusted_input_moves_camera_but_not_stage() {
-        let (core, mut input, mut shell) = Core::new(1);
-        let mut h = Handlers { core, #[cfg(feature = "probe_store_port_in_state")] leaked: unreachable!() };
+        let (core, mut input, mut shell, mut outs) = Core::new(PersistedCameras::default());
+        let mut h = handlers(core);
+        h.core.output_connected(&mut outs, desc(1)).unwrap();
         h.on_new_toplevel(1);
         let anchor = h.core.stage().anchor(1);
         h.core.physical_input(&mut input, PhysicalEvent::PanDelta { camera: 0, dx: 10, dy: -4 }).unwrap();
@@ -96,8 +114,9 @@ mod tests {
     /// any number) moves or zooms the camera; only a fresh authorized action does.
     #[test]
     fn client_resize_after_fit_never_moves_camera() {
-        let (core, _input, mut shell) = Core::new(1);
-        let mut h = Handlers { core, #[cfg(feature = "probe_store_port_in_state")] leaked: unreachable!() };
+        let (core, _input, mut shell, mut outs) = Core::new(PersistedCameras::default());
+        let mut h = handlers(core);
+        h.core.output_connected(&mut outs, desc(1)).unwrap();
         h.on_new_toplevel(5);
         h.core.shell_command(&mut shell, ShellCommand::FitViewport { camera: 0, element: 5, view: (1920, 1080) }).unwrap();
         let fitted = (h.core.cameras().center(0), h.core.cameras().zoom_milli(0));
@@ -107,7 +126,6 @@ mod tests {
             assert!(fx.is_empty(), "a client commit produced effects {fx:?}");
             assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), fitted, "client commit #{i} moved the camera");
         }
-        // a FRESH authorized fit uses the geometry at that instant
         h.core.shell_command(&mut shell, ShellCommand::FitViewport { camera: 0, element: 5, view: (1920, 1080) }).unwrap();
         assert_eq!(h.core.stage().size(5), Some((7500, 2250)));
         assert_eq!(h.core.cameras().center(0), CanvasPos { x: 3750, y: 1125 });
@@ -116,8 +134,9 @@ mod tests {
 
     #[test]
     fn fit_of_stale_element_mutates_nothing() {
-        let (core, _input, mut shell) = Core::new(1);
-        let mut h = Handlers { core, #[cfg(feature = "probe_store_port_in_state")] leaked: unreachable!() };
+        let (core, _input, mut shell, mut outs) = Core::new(PersistedCameras::default());
+        let mut h = handlers(core);
+        h.core.output_connected(&mut outs, desc(1)).unwrap();
         let before = (h.core.cameras().center(0), h.core.cameras().zoom_milli(0));
         assert_eq!(h.core.shell_command(&mut shell, ShellCommand::FitViewport { camera: 0, element: 99, view: (1920, 1080) }).unwrap(), vec![]);
         assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), before);
@@ -125,9 +144,88 @@ mod tests {
 
     #[test]
     fn ports_are_bound_to_their_core() {
-        let (mut a, _ia, _sa) = Core::new(1);
-        let (_b, mut ib, _sb) = Core::new(1);
-        // a port minted by a different Core::new call grants nothing
+        let (mut a, _ia, _sa, mut oa) = Core::new(PersistedCameras::default());
+        let (_b, mut ib, _sb, mut ob) = Core::new(PersistedCameras::default());
+        a.output_connected(&mut oa, desc(1)).unwrap();
+        // a port / token minted by a different Core::new call grants nothing
         assert_eq!(a.physical_input(&mut ib, PhysicalEvent::PanDelta { camera: 0, dx: 1, dy: 1 }).err(), Some(AuthorityError::ForeignPort));
+        assert_eq!(a.output_connected(&mut ob, desc(2)).err(), Some(AuthorityError::ForeignPort));
+        assert_eq!(a.cameras().len(), 1, "a foreign token created a camera");
+    }
+
+    /// PD-F2-18 (2R): no camera exists before an output is connected through the token; connecting
+    /// instantiates and binds a camera at Core-chosen placement; a second output does not touch it.
+    #[test]
+    fn output_connected_with_token_instantiates_and_binds_camera() {
+        let (core, _input, _shell, mut outs) = Core::new(PersistedCameras::default());
+        let mut h = handlers(core);
+        assert!(h.core.cameras().is_empty(), "cameras must not exist before an output is connected");
+        let (o1, fx) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        assert_eq!(fx, vec![Effect::CameraBound { camera: 0, output: o1 }]);
+        assert_eq!(h.core.cameras().camera_for_output(o1), Some(0));
+        assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), (CanvasPos { x: 0, y: 0 }, 1000), "internal default placement");
+        let c0 = h.core.cameras().center(0);
+        let (o2, _) = h.core.output_connected(&mut outs, desc(11)).unwrap();
+        assert_eq!(h.core.cameras().camera_for_output(o2), Some(1));
+        assert_eq!(h.core.cameras().center(0), c0, "connecting another output changed an existing camera");
+    }
+
+    /// PD-F2-18 (2R): disconnect unbinds and preserves the camera and its value; reconnecting the same
+    /// OutputKey re-binds the SAME camera unchanged (no new camera, no reset).
+    #[test]
+    fn output_disconnected_unbinds_and_preserves_camera() {
+        let (core, mut input, _shell, mut outs) = Core::new(PersistedCameras::default());
+        let mut h = handlers(core);
+        let (o1, _) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        h.core.physical_input(&mut input, PhysicalEvent::PanDelta { camera: 0, dx: -25, dy: 40 }).unwrap();
+        let value = (h.core.cameras().center(0), h.core.cameras().zoom_milli(0));
+        let fx = h.core.output_disconnected(&mut outs, o1).unwrap();
+        assert_eq!(fx, vec![Effect::CameraUnbound { camera: 0, output: o1 }]);
+        assert_eq!(h.core.cameras().len(), 1, "camera destroyed on disconnect");
+        assert_eq!(h.core.cameras().bound_output(0), None);
+        assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), value, "camera value changed on disconnect");
+        let (o2, fx) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        assert_ne!(o1, o2, "OutputId reused");
+        assert_eq!(fx, vec![Effect::CameraBound { camera: 0, output: o2 }]);
+        assert_eq!(h.core.cameras().len(), 1, "a second camera was created for a remembered OutputKey");
+        assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), value);
+    }
+
+    /// PD-F2-18 (2R): persisted state is a passive lookup consulted only by `output_connected`; the
+    /// startup connect and a later runtime hotplug of another persisted output take the same path.
+    /// A camera already remembered this session takes precedence over the persisted entry.
+    #[test]
+    fn persisted_lookup_uses_the_single_authorized_path() {
+        let persisted = PersistedCameras::from_entries(vec![
+            (OutputKey(10), CanvasPos { x: 5000, y: -700 }, 1500),
+            (OutputKey(30), CanvasPos { x: -123, y: 456 }, 750),
+        ]);
+        let (core, mut input, _shell, mut outs) = Core::new(persisted);
+        let mut h = handlers(core);
+        assert!(h.core.cameras().is_empty(), "persisted state must not create cameras by itself");
+        // "startup": the backend enumerates its outputs through the same entry
+        let (o10, _) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        let (o20, _) = h.core.output_connected(&mut outs, desc(20)).unwrap();
+        let c10 = h.core.cameras().camera_for_output(o10).unwrap();
+        let c20 = h.core.cameras().camera_for_output(o20).unwrap();
+        assert_eq!((h.core.cameras().center(c10), h.core.cameras().zoom_milli(c10)), (CanvasPos { x: 5000, y: -700 }, 1500));
+        assert_eq!((h.core.cameras().center(c20), h.core.cameras().zoom_milli(c20)), (CanvasPos { x: 0, y: 0 }, 1000));
+        // runtime hotplug of a persisted output: identical path, persisted value applied
+        let (o30, _) = h.core.output_connected(&mut outs, desc(30)).unwrap();
+        let c30 = h.core.cameras().camera_for_output(o30).unwrap();
+        assert_eq!((h.core.cameras().center(c30), h.core.cameras().zoom_milli(c30)), (CanvasPos { x: -123, y: 456 }, 750));
+        // the session's own value wins over the persisted table on reconnect
+        h.core.physical_input(&mut input, PhysicalEvent::PanDelta { camera: c10, dx: 100, dy: 0 }).unwrap();
+        let moved = h.core.cameras().center(c10);
+        h.core.output_disconnected(&mut outs, o10).unwrap();
+        let (o10b, _) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        assert_eq!(h.core.cameras().camera_for_output(o10b), Some(c10));
+        assert_eq!(h.core.cameras().center(c10), moved, "persisted table overrode the session's camera");
+        // protocol activity never creates cameras
+        let n = h.core.cameras().len();
+        h.on_new_toplevel(1);
+        h.on_commit(1, (300, 200));
+        h.on_activation(1);
+        assert_eq!(h.core.cameras().len(), n);
     }
 }

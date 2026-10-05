@@ -54,15 +54,35 @@ pub mod navigation {
 
     use crate::authority::Authorized;
 
+    /// Stable output identity for configuration/persistence matching (connector + make/model/serial).
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub struct OutputKey(pub u64);
+
     #[derive(Debug)]
     pub struct CameraSet {
         center: Vec<CanvasPos>,
         /// zoom in 1/1000 (spike simplification of the f64 zoom)
         zoom_milli: Vec<i64>,
+        /// the OutputKey each camera is remembered under (cameras survive outputs, INV-CAMERA-3)
+        key: Vec<OutputKey>,
+        /// runtime output currently bound to the camera, if any
+        bound: Vec<Option<u64>>,
     }
     impl CameraSet {
-        pub(crate) fn new(n: usize) -> Self {
-            CameraSet { center: vec![CanvasPos { x: 0, y: 0 }; n], zoom_milli: vec![1000; n] }
+        pub(crate) fn new() -> Self {
+            CameraSet { center: vec![], zoom_milli: vec![], key: vec![], bound: vec![] }
+        }
+        pub fn len(&self) -> usize {
+            self.center.len()
+        }
+        pub fn is_empty(&self) -> bool {
+            self.center.is_empty()
+        }
+        pub fn camera_for_output(&self, output: u64) -> Option<usize> {
+            self.bound.iter().position(|b| *b == Some(output))
+        }
+        pub fn bound_output(&self, cam: usize) -> Option<u64> {
+            self.bound[cam]
         }
         /// read access is public
         pub fn center(&self, cam: usize) -> CanvasPos {
@@ -92,6 +112,28 @@ pub mod navigation {
     }
     /// PD-F2-01: viewport-fit is ONE-SHOT. It snapshots the element geometry at this instant, computes
     /// centre and zoom, mutates the camera once, and terminates. No mode, no stored target, no proof kept.
+    /// PD-F2-18 (2R): camera creation / binding on output connect. Reached ONLY from the
+    /// `OutputLifecycleToken` entry. Placement is decided HERE, never by the caller: a camera remembered
+    /// this session for `key` is re-bound unchanged; else a passive persisted entry for `key` seeds it;
+    /// else the internal default placement (Level D policy; spike: origin, zoom 1).
+    pub(crate) fn bind_on_connect(cams: &mut CameraSet, _proof: Authorized, key: OutputKey, output: u64, persisted: &crate::PersistedCameras) -> usize {
+        if let Some(i) = cams.key.iter().position(|k| *k == key) {
+            cams.bound[i] = Some(output);
+            return i;
+        }
+        let (c, z) = persisted.lookup(key).unwrap_or((CanvasPos { x: 0, y: 0 }, 1000));
+        cams.center.push(c);
+        cams.zoom_milli.push(z);
+        cams.key.push(key);
+        cams.bound.push(Some(output));
+        cams.center.len() - 1
+    }
+    /// PD-F2-18 (2R): output disconnect unbinds; the camera and its value are preserved.
+    pub(crate) fn unbind_on_disconnect(cams: &mut CameraSet, _proof: Authorized, output: u64) -> Option<usize> {
+        let i = cams.camera_for_output(output)?;
+        cams.bound[i] = None;
+        Some(i)
+    }
     pub(crate) fn fit(cams: &mut CameraSet, _proof: Authorized, cam: usize, anchor: CanvasPos, size: (i64, i64), view: (i64, i64)) {
         let zoom = (view.0 * 1000 / size.0).min(view.1 * 1000 / size.1);
         cams.set_center(cam, CanvasPos { x: anchor.x + size.0 / 2, y: anchor.y + size.1 / 2 });
@@ -125,6 +167,12 @@ pub mod protocol {
             }
             ProtocolEvent::NewToplevel { element } => {
                 core.stage.insert(element, crate::geom::CanvasPos { x: 0, y: 0 });
+                #[cfg(feature = "probe_protocol_creates_camera")]
+                {
+                    // NEGATIVE PROBE (PD-F2-18): protocol policy creating/binding a camera. Must not compile.
+                    let p = &core.persisted;
+                    crate::navigation::bind_on_connect(&mut core.cameras, crate::authority::Authorized::mint(), crate::navigation::OutputKey(7), 99, p);
+                }
                 vec![]
             }
             ProtocolEvent::Commit { element, size } => {
@@ -147,6 +195,38 @@ pub mod protocol {
 pub enum Effect {
     CameraMoved(usize),
     AttentionRequested(u64),
+    /// output connected and bound to a camera (created or remembered)
+    CameraBound { camera: usize, output: u64 },
+    /// output disconnected; camera kept, unbound
+    CameraUnbound { camera: usize, output: u64 },
+}
+
+/// PD-F2-18 (2R): what the backend knows about an output: HARDWARE facts only. There is deliberately no
+/// position, centre, zoom or camera field: the caller cannot choose camera state (no backdoor
+/// `set_camera_position`). Initial placement and binding are decided inside Core.
+#[derive(Clone, Copy, Debug)]
+pub struct OutputDescriptor {
+    pub key: navigation::OutputKey,
+    pub mode: (i32, i32),
+    pub scale_120: u32,
+    pub refresh_mhz: u32,
+}
+
+/// PD-F2-18 (2R): persisted camera state, a PASSIVE read-only lookup table handed to `Core::new`.
+/// There is no public restore API: entries are consulted only inside `output_connected`, so startup
+/// and runtime hotplug take the identical authorized path.
+#[derive(Debug, Default)]
+pub struct PersistedCameras {
+    entries: Vec<(navigation::OutputKey, geom::CanvasPos, i64)>,
+}
+impl PersistedCameras {
+    /// composition root: built from the (validated, all-or-nothing) persistence file
+    pub fn from_entries(entries: Vec<(navigation::OutputKey, geom::CanvasPos, i64)>) -> Self {
+        PersistedCameras { entries }
+    }
+    pub(crate) fn lookup(&self, key: navigation::OutputKey) -> Option<(geom::CanvasPos, i64)> {
+        self.entries.iter().find(|(k, _, _)| *k == key).map(|(_, c, z)| (*c, *z))
+    }
 }
 
 /// Physical input as produced by a backend (backend-neutral).
@@ -176,6 +256,14 @@ pub struct ShellPort {
     _not_send: NotSend,
 }
 
+/// PD-F2-18 (2R): authority for output lifecycle events (connect/disconnect). A DEDICATED token, distinct
+/// from `InputPort`: minted only by `Core::new`; private fields (unforgeable); not Clone; `!Send` (cannot
+/// be stored in protocol state, E0277); bound to its Core. Held by the backend's output/display source.
+pub struct OutputLifecycleToken {
+    core_id: u64,
+    _not_send: NotSend,
+}
+
 #[derive(Debug, PartialEq)]
 pub enum AuthorityError {
     /// a port minted for another Core instance
@@ -187,14 +275,19 @@ pub struct Core {
     stage: stage::Stage,
     cameras: navigation::CameraSet,
     attention: Vec<u64>,
+    /// passive persisted camera lookup (read-only after construction)
+    persisted: PersistedCameras,
+    outputs: Vec<(u64, OutputDescriptor)>,
+    next_output: u64,
     /// NEGATIVE PROBE (PD-F2-01): a sticky fit mode that keeps authority to re-fit later
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
     sticky_fit: Option<(u64, authority::Authorized)>,
 }
 
 impl Core {
-    /// Composition root only: returns the Core and the two authority ports.
-    pub fn new(cameras: usize) -> (Core, InputPort, ShellPort) {
+    /// Composition root only: returns the Core, the two authority ports and the output-lifecycle token.
+    /// No camera exists until an output is connected through the token.
+    pub fn new(persisted: PersistedCameras) -> (Core, InputPort, ShellPort, OutputLifecycleToken) {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let id = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -202,13 +295,17 @@ impl Core {
             Core {
                 id,
                 stage: stage::Stage::default(),
-                cameras: navigation::CameraSet::new(cameras),
+                cameras: navigation::CameraSet::new(),
                 attention: vec![],
+                persisted,
+                outputs: vec![],
+                next_output: 1,
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
             },
             InputPort { core_id: id, _not_send: std::marker::PhantomData },
             ShellPort { core_id: id, _not_send: std::marker::PhantomData },
+            OutputLifecycleToken { core_id: id, _not_send: std::marker::PhantomData },
         )
     }
     pub fn stage(&self) -> &stage::Stage {
@@ -216,6 +313,9 @@ impl Core {
     }
     pub fn cameras(&self) -> &navigation::CameraSet {
         &self.cameras
+    }
+    pub fn outputs(&self) -> &[(u64, OutputDescriptor)] {
+        &self.outputs
     }
     pub fn protocol_event(&mut self, ev: protocol::ProtocolEvent) -> Vec<Effect> {
         protocol::handle(self, ev)
@@ -255,6 +355,28 @@ mod entry {
                 Ok(vec![Effect::CameraMoved(camera)])
             }
         }
+    }
+    /// PD-F2-18 (2R): the ONLY path that creates or binds cameras (startup and runtime hotplug alike).
+    pub fn output_connected(&mut self, token: &mut OutputLifecycleToken, desc: OutputDescriptor) -> Result<(u64, Vec<Effect>), AuthorityError> {
+        if token.core_id != self.id {
+            return Err(AuthorityError::ForeignPort);
+        }
+        let output = self.next_output;
+        self.next_output += 1;
+        self.outputs.push((output, desc));
+        let camera = navigation::bind_on_connect(&mut self.cameras, authority::Authorized::mint(), desc.key, output, &self.persisted);
+        Ok((output, vec![Effect::CameraBound { camera, output }]))
+    }
+    /// PD-F2-18 (2R): unbind; the camera and its value survive (INV-CAMERA-3).
+    pub fn output_disconnected(&mut self, token: &mut OutputLifecycleToken, output: u64) -> Result<Vec<Effect>, AuthorityError> {
+        if token.core_id != self.id {
+            return Err(AuthorityError::ForeignPort);
+        }
+        self.outputs.retain(|(o, _)| *o != output);
+        Ok(match navigation::unbind_on_disconnect(&mut self.cameras, authority::Authorized::mint(), output) {
+            Some(camera) => vec![Effect::CameraUnbound { camera, output }],
+            None => vec![],
+        })
     }
     pub fn shell_command(&mut self, port: &mut ShellPort, cmd: ShellCommand) -> Result<Vec<Effect>, AuthorityError> {
         if port.core_id != self.id {

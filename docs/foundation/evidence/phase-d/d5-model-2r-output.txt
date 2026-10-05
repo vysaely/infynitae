@@ -1,0 +1,12 @@
+PD-F2-19 model — ScaleInteractionEpoch generalised to spatial interactions
+ladder [1.0, 1.2247, 1.5, 1.7321, 2.0, 2.4495, 3.0]; T_settle candidate 300 ms (PROVISIONAL)
+
+case                                                                               | NEG (1R: camera-only epochs) | 2R (all spatial interactions)
+WindowMove: window dragged back and forth across B's edge (40 updates)             |                           39 |                             1
+WindowResize: resize oscillating across B's edge, device bound crossed twice       |                           39 |                             1
+ShellMove: shell MoveElement stream, 3 bursts x 10 oscillating steps, 1 s pauses   |                           29 |                             5
+CameraPan regression: pan oscillating across B's edge (40 updates)                 |                            1 |                             1
+ShellStream (camera) regression: 40 oscillating Navigate commands                  |                            1 |                             1
+
+window drag across a scale boundary: NEG churns, 2R settles in exactly 1 change: True
+P7 (device bound) still lowers h immediately inside an epoch; it is a correctness rule, not damping.

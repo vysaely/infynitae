@@ -16,3 +16,5 @@ probe_protocol_refits_camera = []
 # PD-F2-01 (Phase D 1R): Core keeps an authority proof for a sticky fit mode. MUST fail the protocol-state
 # Send assertion (built through spike-wayland's `probe_sticky_fit`).
 probe_sticky_fit_retains_authority = []
+# PD-F2-18 (Phase D 2R): protocol policy creating/binding a camera. MUST NOT compile (proof not mintable).
+probe_protocol_creates_camera = []

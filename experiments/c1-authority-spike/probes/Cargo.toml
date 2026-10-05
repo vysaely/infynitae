@@ -17,3 +17,8 @@ p2_forge_input_port = []
 p3_physical_input_without_port = []
 p4_call_navigation_internals = []
 p5_control_compiles = []
+# PD-F2-18 (Phase D 2R)
+p6_output_connected_without_token = []
+p7_forge_output_token = []
+p8_descriptor_with_coordinates = []
+p9_public_restore_api = []
