@@ -1,8 +1,25 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-3 IMPLEMENTED — PENDING INDEPENDENT REVIEW.** Pointer intake through `InputPort`, button ownership (OBJ-25), M22 CameraPan at zoom 1 (OBJ-26, F-PAN-1), routing through the ProjectionFrame hit test, KeepFocus, free-pointer reconciliation, the zero-output seat transition and interaction orphaning run on the production path. INC-0, INC-1 and INC-2 remain RATIFIED. **INC-3 is NOT ratified. INC-4 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-3 RATIFIED.** Pointer intake through `InputPort`, button ownership (OBJ-25), M22 CameraPan at zoom 1 (OBJ-26, F-PAN-1), routing through the ProjectionFrame hit test, KeepFocus, free-pointer reconciliation, the zero-output seat transition and interaction orphaning run on the production path. INC-0, INC-1, INC-2, and INC-3 are RATIFIED. OB-45 is CLOSED. **INC-4 has NOT begun.**
 
 Date: 2026-10-05
+
+## PHASE F — INC-3 RATIFICATION (record: evidence/phase-f/INC-3/corrective/)
+- **Review:** `INC-3 CONDITIONAL PASS — CORRECTIONS REQUIRED BEFORE RATIFICATION` (dossier recorded unchanged in `85d128a`). Findings INC3-F09 (Level B) resolved; INC3-F08 (Level C) and INC3-F06 (Observation) adjudicated.
+- **Corrective patch `0187344` (tests and controls only; production code unchanged):**
+  - **INC3-F09:** Resolved file-descriptor exhaustion under standard limit `ulimit -n 1024`. Single shared dynamically-resizing shm pool in test harness `Probe` reduces shm descriptors from 192 client/server FDs to 1 client/server FD per probe client. `Drop for Lockstep` deterministically terminates server client and purges buffer resources via `dispatch_single_client`. Peak test suite FD usage reduced from >1939 to 23 FDs (14 FDs in `ee1_c5`), returning to baseline 9 FDs.
+  - **Regression test:** Permanent test `inc3_f09_bounded_resource_cycles` in `crates/infynitae-backend-headless/tests/t1_transform.rs` asserts bounded FD growth ($\le 5$) over 20 repeated Lockstep + 192-subsurface cycles.
+- **Tooling isolation `ffc9725` (INC3-F06):** Isolated `target/test-efficacy-<pid>-<rand>` per execution in `tools/verify-test-efficacy` with automatic cleanup, eliminating concurrency races.
+- **Adjudication (INC3-F08):** Confirmed Level C finding that popup anchor-output rule 1 belongs canonically to INC-4 (`OB-4` / `OB-18`).
+- **Obligations:**
+  - `OB-45`: **CLOSED** (Render and hit-test agreement under coordinate transformations across all 10 cases passes cleanly under `ulimit -n 1024`; 0 mismatches; sealed control fails 9/9 non-Normal cases).
+  - Still `OPEN`: `OB-50` (constraints in INC-5), `OB-3` (constraint reconciliation in INC-5), `OB-21` (T4 intake in INC-4), `OB-4` (popup grab handling in INC-4), `OB-1`, `OB-6`, `OB-11`, `OB-14`, `OB-17`, `OB-48`.
+- **Verification:** everything PASS under `ulimit -n 1024`.
+  - Cargo: 122 tests (66 core T0, 50 distinct T1, 6 oracle self-tests), fmt, clippy `-D warnings`.
+  - Verifiers: `verify-architecture` (31 compile probes, 54 seeded controls); `verify-test-efficacy` (78/78 detected, judge controls PASS); development environment verifier PASS.
+- **Findings:** open Level A 0, Level B 0, Level C 2 (INC1-F01 in INC-7, INC3-F08 in INC-4).
+- **LIVE_SYSTEM_TOUCHED:** no.
+- **NEXT:** INC-4 only upon explicit owner authorization. INC-4 has NOT begun.
 
 ## PHASE F — INC-3 (implemented on baseline `6470e1a`; evidence: evidence/phase-f/INC-3/)
 - **Scope:** PRODUCT, HEADLESS, canonical INC-3 (mapping written before code: `IMPLEMENTATION_MAPPING.md`).

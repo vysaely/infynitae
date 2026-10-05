@@ -98,6 +98,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-3, INC-4
 - **Blocks:** INC-4 exit
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
+- **History:** INC-3 established the acquisition precondition ordering point. Adjudication of finding INC3-F08 confirms that D-B6-BOUNDARY rule 1 (anchor output selection from popup input event / grab serial) is owned by INC-4 alongside popup grab tracking and OB-4 dismissal.
 
 ### OB-5
 - **Status:** OPEN
@@ -591,16 +592,17 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Origin:** D7 (PD-F1-11)
 
 ### OB-45
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Non-Normal output transforms on the production path (E-F2-01, E1R-N1, E-F3-02): damage tracker sized `phys_O`, view `view_O`, render placement, damage, membership, hit-test, project/unproject round trip and boundary rounding for Normal/90/180/270 (+ flipped), asymmetric modes, fractional scale with rotation.
 - **Owner:** core + adapter
-- **Evidence available:** EE-1 (headless harness with a GLES-semantics recording renderer; not production, not a GPU)
+- **Evidence available:** EE-1 (headless harness with a GLES-semantics recording renderer; not production, not a GPU); INC-2 production damage tracker (`phys_O`); INC-3 production hit-testing (`ee1_c5_render_hit_agreement_on_the_production_path` across 10 transform cases, 0 mismatches, sealed hit control fails 9/9 non-Normal cases).
 - **Pass criterion:** the EE-1 matrix reproduced on the production adapter with the headless backend: 0 failing checks and 0 render/hit mismatches; the sealed tracker size and the sealed hit rule fail as negative controls
 - **Destination:** T1
 - **May be closed by:** T1 production tests (INC-2: tracker, membership, damage; INC-3: hit-test)
 - **Dependencies:** INC-2, INC-3
-- **Blocks:** INC-3 exit; any rotated-output product claim
+- **Blocks:** INC-3 exit. Satisfied and closed at INC-3.
 - **Origin:** E1R (E-F2-01, E1R-N1, E-F3-02)
+- **History:** E1R obligation for rotated output transforms. INC-2 satisfied tracker, membership, and damage. INC-3 satisfied physical hit-testing agreement and project/unproject round trips across all 10 transform cases under standard ulimit -n 1024. Ratified CLOSED at INC-3 exit following resolution of INC3-F09.
 
 ### OB-46
 - **Status:** OPEN
