@@ -1,6 +1,6 @@
 # Checkpoint
 
-CURRENT_PHASE: **D checkpoint 2 (D7–D9) complete, UNCOMMITTED, stopped at the Phase D final review gate. D9 verdict: `READY FOR INDEPENDENT ADVERSARIAL REVIEW — PHASE E`** (computed in FOUNDATION_BLOCKERS § D9). Phase E not begun. Baseline HEAD `ae0085f`; 2R seal `5827926782089dc8c6a1c203f844fbc879fce9be`.
+CURRENT_PHASE: **D: COMPLETE and SEALED. Phase D final seal commit `c0a1cee310e56b75d32cf30152a09975ff776700`. D9 verdict: `READY FOR INDEPENDENT ADVERSARIAL REVIEW — PHASE E`. Phase E not begun; it needs explicit authorization.**
 
 Date: 2026-10-04
 
@@ -12,14 +12,14 @@ Date: 2026-10-04
 - **Phase C checkpoint 3A:** `795800937a1e50e56587cd4080a73ce27d8a8b01` (hash recorded in `fd9a80c`)
 - **Phase C seal (checkpoint 3B):** `615b0ed2f3631b698b0c54783c28f696ef4ff34a`
 
-## PHASE D CHECKPOINT 2 — D7–D9 (uncommitted)
+## PHASE D CHECKPOINT 2 — D7–D9 (sealed: `c0a1cee310e56b75d32cf30152a09975ff776700`)
 - **Package:** 11 living documents. New: FOUNDATION_INVARIANTS, _OBJECT_MODEL, _STATE_MACHINES, _TEST_PLAN, _RISKS, _IMPLEMENTATION_PLAN. Living regions appended to ARCHITECTURE, EVIDENCE, BLOCKERS, DECISIONS and the LEDGER; historical text untouched.
 - **Namespace map** in ARCHITECTURE §P0; 17 namespaces, one home each.
 - **Registries:** 57 effective invariants; 19 `F-*`; 11 `PROV-*`; 44 `OB-*` (OB-36 checker CI; OB-37…41 PD-F1-10; OB-42…44 PD-F1-11); 66 risks; 114 evidence entries; 34 objects; 22 machines; 25 tests; 23 ledger entries; 18 increments.
 - **Findings in D7:** PD-F1-11 (D-F1, applied); PD-F0-10 and PD-F0-11 (editorial ADR notes). No new D-F2.
 - **Checker:** `tools/check-foundation-docs` PASS; `--self-test` 12/12 seeded defects detected.
 - **D9:** 19/19 PASS. Open D-F2: PD-F2-06 (B), PD-F2-13 (C), PD-F2-15 (C), PD-F2-16 (C).
-- **NEXT:** user review; commit only on authorisation; Phase E not begun.
+- **NEXT:** Phase E (independent adversarial review) only after explicit authorization.
 
 ## PHASE D CORRECTIVE CHECKPOINT 2R (sealed: `5827926782089dc8c6a1c203f844fbc879fce9be`)
 - **Trigger:** D7–D9 stopped at PD-F2-18 (Level A). PD-F2-19 (Level C) and PD-F1-10 recorded at the same time (FOUNDATION_BLOCKERS.md § Phase D Checkpoint 2).
