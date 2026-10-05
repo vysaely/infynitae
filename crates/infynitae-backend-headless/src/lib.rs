@@ -14,6 +14,7 @@ use infynitae_core::input::Axis;
 use infynitae_core::input::bindings::Modifiers;
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
 use infynitae_core::render::FrameEntry;
+use infynitae_core::stage::ElementId;
 use infynitae_core::{EntryError, FrameError, InputPort, OutputLifecycleToken, PhysicalEvent};
 use infynitae_wayland::{WaylandState, convert};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
@@ -130,10 +131,17 @@ pub fn pointer_button(
     modifiers: Modifiers,
     time_us: u64,
 ) -> Result<(), EntryError> {
+    let seat_mods = state.seat_modifiers();
+    let effective_modifiers = Modifiers {
+        shift: modifiers.shift || seat_mods.shift,
+        ctrl: modifiers.ctrl || seat_mods.ctrl,
+        alt: modifiers.alt || seat_mods.alt,
+        logo: modifiers.logo || seat_mods.logo,
+    };
     let ev = PhysicalEvent::PointerButton {
         button,
         pressed,
-        modifiers,
+        modifiers: effective_modifiers,
         time_us,
     };
     inject(state, port, ev)
@@ -158,8 +166,26 @@ pub fn keyboard_key(
     pressed: bool,
     time_us: u64,
 ) -> Result<(), EntryError> {
-    state.core().check_port(port)?;
-    state.keyboard_key(key, pressed, time_us);
+    let (modifiers, mods_changed) = state.sync_seat_key(key, pressed);
+    let ev = PhysicalEvent::KeyboardKey {
+        key,
+        pressed,
+        modifiers,
+        mods_changed,
+        time_us,
+    };
+    inject(state, port, ev)
+}
+
+/// Set keyboard focus to an element or clear focus.
+/// Must be authorized by holding an `InputPort` (K5, OBJ-11).
+pub fn set_focus(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    target: Option<ElementId>,
+) -> Result<(), EntryError> {
+    let effects = state.core_mut().set_focus(port, target)?;
+    state.apply(&effects);
     Ok(())
 }
 

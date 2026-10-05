@@ -3,7 +3,8 @@
 
 use smithay::backend::renderer::utils::{RendererSurfaceStateUserData, on_commit_buffer_handler};
 use smithay::desktop::{
-    PopupKeyboardGrab, PopupKind, PopupUngrabStrategy, Window, find_popup_root_surface,
+    PopupKeyboardGrab, PopupKind, PopupManager, PopupUngrabStrategy, Window,
+    find_popup_root_surface,
 };
 use smithay::input::{SeatHandler, SeatState};
 use smithay::reexports::wayland_server::Client;
@@ -53,6 +54,16 @@ impl WaylandState {
         let Some(tree) = snapshot::extract(&window, &mut self.registry) else {
             return;
         };
+        let was_unmapped = tree.root().is_none() || tree.root().is_some_and(|r| !r.mapped);
+        if was_unmapped && let Some(toplevel) = window.toplevel() {
+            let root_surface = toplevel.wl_surface();
+            let popups: Vec<_> = PopupManager::popups_for_surface(root_surface)
+                .map(|(p, _)| p)
+                .collect();
+            for p in popups {
+                let _ = PopupManager::dismiss_popup(root_surface, &p);
+            }
+        }
         // A refused snapshot or transition changes nothing in Core; the protocol side (for
         // example `ensure_configured` below) reports client errors itself.
         if let Ok(effects) = self.core.toplevel_committed(id, tree) {
@@ -63,10 +74,14 @@ impl WaylandState {
     /// M3: popup position = `get_unconstrained_geometry(target)` against the anchor output's
     /// viewport (R8), or the positioner's own geometry when Core has no target.
     fn place_popup(&self, surface: &PopupSurface, positioner: PositionerState) {
+        let causing_output = self.core.pointer_output();
         let target = surface
             .get_parent_surface()
             .and_then(|parent| self.element_index_by_root(&parent))
-            .and_then(|i| self.core.popup_constraint_target(self.elements[i].id, None));
+            .and_then(|i| {
+                self.core
+                    .popup_constraint_target(self.elements[i].id, causing_output)
+            });
         let geometry = match target {
             Some(t) => positioner.get_unconstrained_geometry(convert::parent_geometry_rect(t)),
             None => positioner.get_geometry(),
@@ -164,6 +179,13 @@ impl XdgShellHandler for WaylandState {
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
+        let root_surface = surface.wl_surface();
+        let popups: Vec<_> = PopupManager::popups_for_surface(root_surface)
+            .map(|(p, _)| p)
+            .collect();
+        for p in popups {
+            let _ = PopupManager::dismiss_popup(root_surface, &p);
+        }
         let gone: Vec<_> = self
             .elements
             .iter()
@@ -197,15 +219,18 @@ impl XdgShellHandler for WaylandState {
     /// Precondition W-SM-7: root surface must exist and be an element root, else grab_popup asserts.
     /// Focus precondition: root must match the element with ActiveElementFocus.
     fn grab(&mut self, surface: PopupSurface, _seat: wl_seat::WlSeat, serial: Serial) {
-        let kind = PopupKind::Xdg(surface);
+        let kind = PopupKind::Xdg(surface.clone());
         let Ok(root) = find_popup_root_surface(&kind) else {
+            surface.send_popup_done();
             return;
         };
         let Some(elem_idx) = self.element_index_by_root(&root) else {
+            surface.send_popup_done();
             return;
         };
         let elem_id = self.elements[elem_idx].id;
         if self.core.focus().target() != Some(elem_id) {
+            surface.send_popup_done();
             return;
         }
         let seat = self.seat.clone();
@@ -215,6 +240,7 @@ impl XdgShellHandler for WaylandState {
                 && !(kb.has_grab(serial) || kb.has_grab(grab.previous_serial().unwrap_or(serial)))
             {
                 grab.ungrab(PopupUngrabStrategy::All);
+                surface.send_popup_done();
                 return;
             }
             kb.set_focus(self, grab.current_grab(), serial);

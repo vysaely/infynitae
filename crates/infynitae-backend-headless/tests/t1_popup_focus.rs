@@ -14,10 +14,10 @@ mod common;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use common::input::{BTN_MIDDLE, logo};
+use common::input::{BTN_LEFT, BTN_MIDDLE, logo, none};
 use common::{Lockstep, PopupSpec, output};
-use infynitae_backend_headless::{keyboard_key, pointer_button};
-use infynitae_core::input::keys::KEY_A;
+use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
+use infynitae_core::input::keys::{KEY_A, KEY_LEFTMETA};
 use infynitae_core::input::ownership::Owner;
 use infynitae_core::stage::ElementId;
 use infynitae_wayland::PreemptionStrategy;
@@ -60,7 +60,7 @@ impl PopupHarness {
 
     fn advance(&mut self) {
         self.ls.pump();
-        let t = self.ls.now + Duration::from_micros(1000);
+        let t = self.ls.now + Duration::from_micros(16_667);
         self.ls.run_until(t);
     }
 
@@ -83,7 +83,7 @@ impl PopupHarness {
     }
 
     fn core_focus(&mut self, target: Option<ElementId>) {
-        self.ls.state.set_focus(target);
+        set_focus(&mut self.ls.state, &mut self.ls.input, target).expect("set_focus");
         self.advance();
     }
 
@@ -97,6 +97,26 @@ impl PopupHarness {
             self.time_us,
         )
         .expect("keyboard_key");
+        self.advance();
+    }
+
+    fn motion(&mut self, d: (f64, f64)) {
+        self.time_us += 1000;
+        pointer_motion(&mut self.ls.state, &mut self.ls.input, d, d, self.time_us).expect("motion");
+        self.advance();
+    }
+
+    fn button(&mut self, b: u32, p: bool, m: infynitae_core::input::bindings::Modifiers) {
+        self.time_us += 1000;
+        pointer_button(
+            &mut self.ls.state,
+            &mut self.ls.input,
+            b,
+            p,
+            m,
+            self.time_us,
+        )
+        .expect("button");
         self.advance();
     }
 
@@ -139,6 +159,10 @@ impl PopupHarness {
 fn pf1_grab_active_core_focuses_w2_ordered() {
     let mut h = PopupHarness::new();
     h.open_popup("P", h.w1);
+    assert!(
+        h.ls.state.keyboard_handle().is_grabbed(),
+        "popup grab must grab keyboard"
+    );
     h.core_focus(Some(h.e2));
     assert!(
         h.check_invariants(Some(h.e2), 1),
@@ -146,6 +170,14 @@ fn pf1_grab_active_core_focuses_w2_ordered() {
     );
     assert_eq!(h.ls.probe.popup_dones, vec!["P"]);
     assert_eq!(h.ls.probe.kb.active.as_deref(), Some("W2"));
+    assert!(
+        !h.ls.state.keyboard_handle().is_grabbed(),
+        "keyboard still grabbed after preemption"
+    );
+    assert!(
+        !h.ls.state.is_pointer_grabbed(),
+        "pointer still grabbed after preemption"
+    );
 }
 
 /// PF-2: Grab active -> core focuses None under ORDERED preemption.
@@ -163,6 +195,8 @@ fn pf2_grab_active_core_focuses_none_ordered() {
 #[test]
 fn pf3_parent_destroyed_during_grab_successor_focused_ordered() {
     let mut h = PopupHarness::new();
+    h.core_focus(Some(h.e2));
+    h.core_focus(Some(h.e1));
     let p = h.open_popup("P", h.w1);
     // Client tears down popup first, then parent toplevel in protocol order
     h.ls.probe.destroy_popup(p);
@@ -213,7 +247,6 @@ fn pf5_popup_destroyed_first_then_core_focuses_w2_ordered() {
 #[test]
 fn pf6_nested_popup_grab_keeps_pointer_grab() {
     let mut h = PopupHarness::new();
-    h.ls.state.set_nested_grab_keep_pointer(true);
     let p1 = h.open_popup("P1", h.w1);
     h.open_popup("P2", p1);
 
@@ -325,14 +358,56 @@ fn neg1_naive_set_focus_fails_popup_dismissal() {
 /// NEG-2: Pointer-first teardown negative control (W-SM-15 violation).
 #[test]
 fn neg2_pointer_first_teardown_control() {
-    let mut h = PopupHarness::new();
-    h.ls.state
-        .set_preemption_strategy(PreemptionStrategy::PointerFirst);
-    h.open_popup("P", h.w1);
-    h.core_focus(Some(h.e2));
-
-    // Pointer-first teardown was executed
-    assert_eq!(h.ls.probe.popup_dones, vec!["P"]);
+    fn run(s: PreemptionStrategy) -> Vec<String> {
+        let mut h = PopupHarness::new();
+        pointer_motion(
+            &mut h.ls.state,
+            &mut h.ls.input,
+            (50.0, 50.0),
+            (50.0, 50.0),
+            h.time_us,
+        )
+        .expect("motion");
+        pointer_button(
+            &mut h.ls.state,
+            &mut h.ls.input,
+            BTN_LEFT,
+            true,
+            none(),
+            h.time_us,
+        )
+        .expect("button");
+        pointer_button(
+            &mut h.ls.state,
+            &mut h.ls.input,
+            BTN_LEFT,
+            false,
+            none(),
+            h.time_us,
+        )
+        .expect("button");
+        let top = h.ls.state.core().focus().target().expect("focused");
+        let (parent, other) = if top == h.e1 {
+            (h.w1, h.e2)
+        } else {
+            (h._w2, h.e1)
+        };
+        h.ls.state.set_preemption_strategy(s);
+        h.open_popup("P", parent);
+        let m = h.ls.probe.kb_log.len();
+        h.core_focus(Some(other));
+        h.ls.probe.kb_log[m..]
+            .iter()
+            .filter(|l| !l.starts_with("toplevel_configure"))
+            .cloned()
+            .collect()
+    }
+    let ordered = run(PreemptionStrategy::Ordered);
+    let pfirst = run(PreemptionStrategy::PointerFirst);
+    assert_ne!(
+        ordered, pfirst,
+        "NEG-2 indistinguishable from ORDERED on the client wire"
+    );
 }
 
 /// OBS-1: Nested grab replaces pointer grab observation (Smithay default / anvil order).
@@ -345,6 +420,269 @@ fn obs1_nested_grab_replaces_pointer_grab_observation() {
 
     // Key routing check under unpatched anvil order
     h.key(KEY_A, true);
+    let active = h.ls.probe.kb.active.clone();
+    let kbg = h.ls.state.keyboard_handle().is_grabbed();
     h.key(KEY_A, false);
+    assert!(
+        active.as_deref() != Some("P2") || !kbg,
+        "OBS-1 shows no failure: routing intact without W-SM-14 workaround"
+    );
+}
+
+/// ATK-09 (OB-4 × INV-INPUT-3, F05): dismissing the grab on CameraPan acquisition must not deliver
+/// pointer events to any client.
+#[test]
+fn atk09_pan_acquisition_dismissal_emits_no_pointer_events() {
+    let mut h = PopupHarness::new();
+    h.motion((50.0, 50.0));
+    h.button(BTN_LEFT, true, none());
+    h.button(BTN_LEFT, false, none());
+    let top = h.ls.state.core().focus().target().expect("focused");
+    let parent = if top == h.e1 { h.w1 } else { h._w2 };
+    h.open_popup("P", parent);
+    h.motion((5.0, 0.0));
+    let m = h.ls.probe.ptr.len();
+    h.button(BTN_MIDDLE, true, logo());
+    let after: Vec<String> = h.ls.probe.ptr[m..].to_vec();
+    assert_eq!(h.ls.probe.popup_dones, vec!["P"]);
+    let leaked: Vec<&String> = after
+        .iter()
+        .filter(|l| {
+            l.starts_with("motion")
+                || l.starts_with("enter")
+                || l.starts_with("leave")
+                || l.starts_with("button")
+        })
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "INV-INPUT-3: pointer events at pan acquisition: {leaked:?}"
+    );
+}
+
+/// ATK-11 (protocol refusal, F08): a grab on an unfocused element is refused and dismissed.
+#[test]
+fn atk11_refused_grab_dismisses_the_popup() {
+    let mut h = PopupHarness::new();
+    let qh = h.ls.qh.clone();
+    h.ls.probe.popup_with_grab(
+        &qh,
+        "Q",
+        h._w2,
+        PopupSpec {
+            content: (120, 80),
+            shadow: 0,
+            anchor_rect: (10, 10, 1, 1),
+            slide: false,
+        },
+    );
+    h.advance();
+    let kb = h.ls.state.keyboard_handle();
+    assert!(!kb.is_grabbed(), "grab installed for an unfocused element");
+    assert_eq!(
+        h.ls.probe.popup_dones,
+        vec!["Q"],
+        "refused grab left the popup alive (no popup_done)"
+    );
+}
+
+/// ATK-12 (INC-3 zero-output state × INV-INPUT-10, F09): preemption must not tear down zero-output grab.
+#[test]
+fn atk12_preemption_keeps_the_zero_output_grab() {
+    let mut h = PopupHarness::new();
+    h.key(KEY_A, true);
+    h.key(KEY_A, false);
+    let o = h.ls.output();
+    h.ls.disconnect(o);
+    h.advance();
+    assert!(
+        h.ls.state.seat().get_pointer().unwrap().is_grabbed(),
+        "zero-output grab installed"
+    );
+    h.open_popup("P", h.w1);
     h.core_focus(Some(h.e2));
+    assert!(
+        h.ls.state.seat().get_pointer().unwrap().is_grabbed(),
+        "zero-output grab torn down by popup preemption while no output exists"
+    );
+}
+
+/// ATK-13 (modifier authority, F16): CameraPan reads seat XKB state (OBJ-27).
+#[test]
+fn atk13_pan_modifier_comes_from_the_seat_xkb_state() {
+    let mut h = PopupHarness::new();
+    pointer_motion(
+        &mut h.ls.state,
+        &mut h.ls.input,
+        (50.0, 50.0),
+        (50.0, 50.0),
+        h.time_us,
+    )
+    .expect("motion");
+    // Super physically held on the seat keyboard; the button arrives with a stale empty snapshot.
+    h.key(KEY_LEFTMETA, true);
+    pointer_button(
+        &mut h.ls.state,
+        &mut h.ls.input,
+        BTN_MIDDLE,
+        true,
+        none(),
+        h.time_us,
+    )
+    .expect("button");
+    let pan = h.ls.state.core().interaction().active();
+    pointer_button(
+        &mut h.ls.state,
+        &mut h.ls.input,
+        BTN_MIDDLE,
+        false,
+        none(),
+        h.time_us,
+    )
+    .expect("button");
+    h.key(KEY_LEFTMETA, false);
+    assert!(
+        pan,
+        "Super held on the seat but CameraPan not acquired: two modifier authorities"
+    );
+}
+
+/// ATK-14 (stale grab bookkeeping, F09): stale popup grab does not kill implicit button grab.
+#[test]
+fn atk14_stale_popup_grab_does_not_kill_implicit_button_grab() {
+    let mut h = PopupHarness::new();
+    h.motion((50.0, 50.0));
+    h.button(BTN_LEFT, true, none());
+    h.button(BTN_LEFT, false, none());
+    let top = h.ls.state.core().focus().target().expect("focused");
+    let (parent, other) = if top == h.e1 {
+        (h.w1, h.e2)
+    } else {
+        (h._w2, h.e1)
+    };
+    let p = h.open_popup("P", parent);
+    h.ls.probe.destroy_popup(p);
+    h.advance();
+    h.button(BTN_LEFT, true, none());
+    let grabbed_before = h.ls.state.seat().get_pointer().unwrap().is_grabbed();
+    h.core_focus(Some(other));
+    let grabbed_after = h.ls.state.seat().get_pointer().unwrap().is_grabbed();
+    h.button(BTN_LEFT, false, none());
+    assert_eq!(
+        grabbed_before, grabbed_after,
+        "implicit client button grab removed by stale popup preemption"
+    );
+}
+
+/// ATK-15 (K8/OB-15 × popups, F09): output removal keeps popup keyboard route.
+#[test]
+fn atk15_output_removal_keeps_popup_keyboard_route() {
+    let mut h = PopupHarness::new();
+    h.key(KEY_A, true);
+    h.key(KEY_A, false);
+    h.open_popup("P", h.w1);
+    assert_eq!(h.ls.probe.kb.active.as_deref(), Some("P"));
+    let o = h.ls.output();
+    h.ls.disconnect(o);
+    h.advance();
+    assert_eq!(
+        h.ls.probe.kb.active.as_deref(),
+        Some("P"),
+        "output removal changed keyboard routing"
+    );
+    assert!(h.ls.probe.kb.violations.is_empty());
+}
+
+/// ATK-18 (M3 parent unmapped/destroyed, F17): unmapping parent dismisses its child popups.
+#[test]
+fn atk18_unmapped_parent_dismisses_its_popup_tree() {
+    let mut h = PopupHarness::new();
+    let qh = h.ls.qh.clone();
+    let w2 = h._w2;
+    h.ls.probe.popup(
+        &qh,
+        "Q",
+        w2,
+        PopupSpec {
+            content: (60, 40),
+            shadow: 0,
+            anchor_rect: (5, 5, 1, 1),
+            slide: false,
+        },
+    );
+    h.advance();
+    h.ls.probe.unmap(w2);
+    h.advance();
+    assert_eq!(
+        h.ls.probe.popup_dones,
+        vec!["Q"],
+        "popup of an unmapped parent not dismissed"
+    );
+}
+
+/// Click-to-focus on mapped element acquires ActiveElementFocus (F12, Mutation U).
+#[test]
+fn click_to_focus_focuses_mapped_window() {
+    let mut h = PopupHarness::new();
+    h.core_focus(None);
+    assert_eq!(h.ls.probe.kb.active, None);
+    h.motion((50.0, 50.0));
+    h.button(BTN_LEFT, true, none());
+    h.button(BTN_LEFT, false, none());
+    assert!(
+        h.ls.state.core().focus().target().is_some(),
+        "click-to-focus did not acquire focus"
+    );
+}
+
+fn fds() -> usize {
+    std::fs::read_dir("/proc/self/fd")
+        .map(|d| d.count())
+        .unwrap_or(0)
+}
+
+/// RES-1 (INC3-F09 class): repeated client/keyboard/popup/grab/focus/output cycles keep
+/// descriptor count bounded.
+#[test]
+fn res1_bounded_resources_over_inc4_cycles() {
+    let mut samples = Vec::new();
+    for i in 0..40 {
+        let mut h = PopupHarness::new();
+        h.key(KEY_A, true);
+        h.key(KEY_A, false);
+        let p1 = h.open_popup("P1", h.w1);
+        h.open_popup("P2", p1);
+        h.core_focus(Some(h.e2));
+        let o = h.ls.output();
+        h.ls.disconnect(o);
+        h.advance();
+        h.ls.connect(&output((1920, 1080), 120));
+        h.advance();
+        let w2 = h._w2;
+        h.ls.probe.destroy_toplevel(w2);
+        h.advance();
+        drop(h);
+        if i == 4 || i == 39 {
+            samples.push(fds());
+        }
+    }
+    assert!(
+        samples[1] <= samples[0] + 5,
+        "descriptor growth over 35 cycles: {samples:?}"
+    );
+}
+
+/// Grab on toplevel refused when keyboard is already grabbed by an active grab (Mutation L).
+#[test]
+fn pf_grab_refused_when_keyboard_grabbed_by_another_sequence() {
+    let mut h = PopupHarness::new();
+    h.ls.state
+        .test_set_keyboard_grab(smithay::utils::Serial::from(42));
+    assert!(h.ls.state.keyboard_handle().is_grabbed());
+
+    let _p = h.open_popup("P", h.w1);
+    assert!(
+        h.ls.probe.popup_dones.contains(&"P"),
+        "foreign grab was not refused"
+    );
 }

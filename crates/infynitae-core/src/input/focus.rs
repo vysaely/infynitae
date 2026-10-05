@@ -69,8 +69,7 @@ impl FocusModel {
             .history
             .iter()
             .copied()
-            .find(|e| live_elements.contains(e))
-            .or_else(|| live_elements.last().copied());
+            .find(|e| live_elements.contains(e));
         let prev = self.target;
         self.target = successor;
         let mut effects = Vec::new();
@@ -154,6 +153,10 @@ mod tests {
         // target loss: e1 destroyed, live is [e2, e3].
         // history is [e1, e3, e2]. Successor should be e3!
         let fx = fm.target_lost(e1, &[e2, e3]);
+        assert!(
+            !fm.history().contains(&e1),
+            "dead element retained in history"
+        );
         assert_eq!(fm.target(), Some(e3));
         assert_eq!(
             fx,

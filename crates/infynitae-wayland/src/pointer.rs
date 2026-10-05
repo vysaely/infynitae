@@ -116,7 +116,7 @@ impl PointerGrab<WaylandState> for ZeroOutputGrab {
 
 impl WaylandState {
     /// The seat's pointer, created with the seat.
-    fn pointer_handle(&self) -> PointerHandle<WaylandState> {
+    pub(crate) fn pointer_handle(&self) -> PointerHandle<WaylandState> {
         self.seat.get_pointer().expect("the seat has a pointer")
     }
 
@@ -180,6 +180,13 @@ impl WaylandState {
             Effect::PointerAxis { axis, time_ms } => ptr.axis(self, axis_frame(axis, time_ms)),
             Effect::PointerFrame => ptr.frame(self),
             Effect::PointerZeroOutputBegin => {
+                let popup_target = self.popup_grab.as_ref().and_then(|g| {
+                    if !g.has_ended() {
+                        g.current_grab()
+                    } else {
+                        None
+                    }
+                });
                 let location = ptr.current_location();
                 let start = GrabStartData {
                     focus: None,
@@ -200,6 +207,10 @@ impl WaylandState {
                 };
                 ptr.motion(self, None, &event);
                 ptr.frame(self);
+                if let Some(target) = popup_target {
+                    let kb = self.keyboard_handle();
+                    kb.set_focus(self, Some(target), SERIAL_COUNTER.next_serial());
+                }
             }
             Effect::PointerZeroOutputEnd => {
                 ptr.unset_grab(self, SERIAL_COUNTER.next_serial(), 0);
@@ -228,12 +239,7 @@ impl WaylandState {
         );
     }
 
-    pub(crate) fn unset_pointer_grab(&mut self, serial: smithay::utils::Serial) {
-        let ptr = self.pointer_handle();
-        ptr.unset_grab(self, serial, 0);
-    }
-
-    pub(crate) fn is_pointer_grabbed(&self) -> bool {
+    pub fn is_pointer_grabbed(&self) -> bool {
         let ptr = self.pointer_handle();
         ptr.is_grabbed()
     }
@@ -241,6 +247,16 @@ impl WaylandState {
     pub(crate) fn pointer_has_grab(&self, serial: smithay::utils::Serial) -> bool {
         let ptr = self.pointer_handle();
         ptr.has_grab(serial)
+    }
+
+    pub(crate) fn pointer_unset_grab(&mut self, serial: smithay::utils::Serial, time: u32) {
+        let ptr = self.pointer_handle();
+        ptr.unset_grab(self, serial, time);
+    }
+
+    pub(crate) fn keyboard_unset_grab(&mut self) {
+        let kb = self.keyboard_handle();
+        kb.unset_grab(self);
     }
 
     pub(crate) fn set_keyboard_grab(
@@ -252,11 +268,39 @@ impl WaylandState {
         kb.set_grab(self, grab, serial);
     }
 
-    pub(crate) fn unset_keyboard_grab(
-        &mut self,
-        kb: &smithay::input::keyboard::KeyboardHandle<WaylandState>,
-    ) {
-        kb.unset_grab(self);
+    #[doc(hidden)]
+    pub fn test_set_keyboard_grab(&mut self, serial: smithay::utils::Serial) {
+        struct ForeignGrab;
+        impl smithay::input::keyboard::KeyboardGrab<WaylandState> for ForeignGrab {
+            fn input(
+                &mut self,
+                _data: &mut WaylandState,
+                _handle: &mut smithay::input::keyboard::KeyboardInnerHandle<'_, WaylandState>,
+                _keycode: smithay::backend::input::Keycode,
+                _state: smithay::backend::input::KeyState,
+                _modifiers: Option<smithay::input::keyboard::ModifiersState>,
+                _serial: smithay::utils::Serial,
+                _time: u32,
+            ) {
+            }
+            fn set_focus(
+                &mut self,
+                _data: &mut WaylandState,
+                _handle: &mut smithay::input::keyboard::KeyboardInnerHandle<'_, WaylandState>,
+                _focus: Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface>,
+                _serial: smithay::utils::Serial,
+            ) {
+            }
+            fn unset(&mut self, _data: &mut WaylandState) {}
+            fn start_data(&self) -> &smithay::input::keyboard::GrabStartData<WaylandState> {
+                static DATA: std::sync::OnceLock<
+                    smithay::input::keyboard::GrabStartData<WaylandState>,
+                > = std::sync::OnceLock::new();
+                DATA.get_or_init(|| smithay::input::keyboard::GrabStartData { focus: None })
+            }
+        }
+        let kb = self.keyboard_handle();
+        kb.set_grab(self, ForeignGrab, serial);
     }
 }
 

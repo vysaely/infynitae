@@ -32,7 +32,7 @@ const MINT_ENTRIES: [&str; 4] = [
 ];
 /// Names the Smithay adapter must never use (OB-19, C12.R2.2; `output_reconfigured` from
 /// INV-OUTPUT-2, which admits reconfiguration only through the token the adapter never holds).
-const WAYLAND_FORBIDDEN: [&str; 8] = [
+const WAYLAND_FORBIDDEN: [&str; 9] = [
     "InputPort",
     "ShellPort",
     "OutputLifecycleToken",
@@ -41,6 +41,7 @@ const WAYLAND_FORBIDDEN: [&str; 8] = [
     "output_connected",
     "output_reconfigured",
     "output_disconnected",
+    "key_ownership_mut",
 ];
 /// Identifiers that would give `output_reconfigured` camera authority (E1R, verify.sh step 2h).
 const RECONFIGURE_FORBIDDEN: [&str; 4] = ["mint", "Authorized", "navigation", "set_center"];

@@ -11,7 +11,8 @@ use crate::snapshot::SurfaceTree;
 pub struct ElementId(NonZeroU64);
 
 impl ElementId {
-    pub const fn new(id: NonZeroU64) -> Self {
+    #[allow(dead_code)]
+    pub(crate) const fn new(id: NonZeroU64) -> Self {
         ElementId(id)
     }
 
@@ -92,6 +93,15 @@ impl Stage {
     /// Z-order, bottom to top.
     pub fn z_order(&self) -> &[ElementId] {
         &self.z
+    }
+
+    /// Returns all element IDs currently in the mapped lifecycle state (OBJ-22, M11).
+    pub fn mapped_elements(&self) -> Vec<ElementId> {
+        self.z
+            .iter()
+            .copied()
+            .filter(|&id| self.state(id) == Some(Lifecycle::Mapped))
+            .collect()
     }
 
     /// Mapped elements front to back (reverse z-order) with anchor and snapshot.

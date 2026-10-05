@@ -82,6 +82,14 @@ pub enum PhysicalEvent {
     },
     /// Scrolling.
     PointerAxis { axis: input::Axis, time_us: u64 },
+    /// A physical key event on the virtual or hardware keyboard (C4.4, M12, K1–K3).
+    KeyboardKey {
+        key: u32,
+        pressed: bool,
+        modifiers: input::bindings::Modifiers,
+        mods_changed: bool,
+        time_us: u64,
+    },
 }
 
 /// A semantic command from the trusted shell (C7.2). No variants until INC-11 (shell IPC).
@@ -219,23 +227,29 @@ impl Core {
         &self.input.key_ownership
     }
 
-    pub fn key_ownership_mut(&mut self) -> &mut input::ownership::Ownership {
-        &mut self.input.key_ownership
-    }
-
     /// Read access to the keyboard focus model (OBJ-22).
     pub fn focus(&self) -> &input::focus::FocusModel {
         &self.focus
     }
 
-    /// Sets keyboard focus directly via an explicit action (INV-INPUT-8).
-    pub fn set_focus(&mut self, target: Option<stage::ElementId>) -> Vec<protocol::Effect> {
-        self.focus.set_focus(target)
+    /// Sets keyboard focus directly via an authorized input port (INV-INPUT-8).
+    pub fn set_focus(
+        &mut self,
+        port: &mut InputPort,
+        target: Option<stage::ElementId>,
+    ) -> Result<Vec<protocol::Effect>, EntryError> {
+        self.check_port(port)?;
+        if let Some(id) = target
+            && self.stage.state(id) != Some(stage::Lifecycle::Mapped)
+        {
+            return Err(EntryError::InvalidEvent);
+        }
+        Ok(self.focus.set_focus(target))
     }
 
-    /// FocusNext binding (Super+Enter): cycles focus to next live element in stage order.
-    pub fn focus_next(&mut self) -> Vec<protocol::Effect> {
-        let live: Vec<stage::ElementId> = self.stage.z_order().to_vec();
+    /// FocusNext binding (Super+Enter): cycles focus to next live mapped element in stage order.
+    pub(crate) fn focus_next(&mut self) -> Vec<protocol::Effect> {
+        let live = self.stage.mapped_elements();
         self.focus.focus_next(&live)
     }
 
@@ -244,8 +258,17 @@ impl Core {
         &self,
         key: u32,
         mods: input::bindings::Modifiers,
+        interaction_active: bool,
     ) -> Option<input::keys::KeyAction> {
-        input::keys::resolve_key_binding(key, mods)
+        input::keys::resolve_key_binding(key, mods, interaction_active)
+    }
+
+    /// The output the pointer is currently located on, if any.
+    pub fn pointer_output(&self) -> Option<output::OutputId> {
+        match self.pointer {
+            pointer::PointerState::Located { output, .. } => Some(output),
+            pointer::PointerState::NoOutput => None,
+        }
     }
 
     /// Validates that an input port belongs to this Core.

@@ -161,3 +161,21 @@ pub fn handler(core: &mut Core, proof: infynitae_core::authority::Authorized) {
 pub fn handler(_core: &mut Core) {
     let _ = infynitae_core::pointer::locate;
 }
+
+/// p22 (INC-4, F01): mutate key ownership from outside core. Expected E0599 (no such method).
+#[cfg(feature = "p22_mutate_key_ownership")]
+pub fn handler(core: &mut Core) {
+    core.key_ownership_mut();
+}
+
+/// p23 (INC-4, F01): forge ElementId from outside core. Expected E0624 (`new` is crate-private).
+#[cfg(feature = "p23_forge_element_id")]
+pub fn handler() -> infynitae_core::stage::ElementId {
+    infynitae_core::stage::ElementId::new(std::num::NonZeroU64::new(1).unwrap())
+}
+
+/// p24 (INC-4, F01): set keyboard focus without an InputPort. Expected E0061 (missing argument).
+#[cfg(feature = "p24_set_focus_without_port")]
+pub fn handler(core: &mut Core) {
+    let _ = core.set_focus(None);
+}

@@ -84,7 +84,6 @@ pub struct WaylandState {
     /// The single seat, with pointer and keyboard (INC-4).
     seat: Seat<WaylandState>,
     pub(crate) popup_grab: Option<smithay::desktop::PopupGrab<WaylandState>>,
-    pub(crate) k3_enforced: bool,
     pub(crate) nested_grab_keep_pointer: bool,
     pub(crate) ordered_preemption_strategy: keyboard::PreemptionStrategy,
     #[expect(
@@ -130,7 +129,6 @@ impl WaylandState {
             seats,
             seat,
             popup_grab: None,
-            k3_enforced: true,
             nested_grab_keep_pointer: true,
             ordered_preemption_strategy: keyboard::PreemptionStrategy::Ordered,
             relative_pointer: RelativePointerManagerState::new::<Self>(display),
@@ -165,6 +163,37 @@ impl WaylandState {
     /// Elements in creation order.
     pub fn elements(&self) -> impl Iterator<Item = ElementId> + '_ {
         self.elements.iter().map(|e| e.id)
+    }
+
+    /// Returns the current modifier state from Smithay's XKB seat state (OBJ-27).
+    pub fn seat_modifiers(&self) -> infynitae_core::input::bindings::Modifiers {
+        self.seat
+            .get_keyboard()
+            .map(|kb| convert::modifiers_from_smithay(&kb.modifier_state()))
+            .unwrap_or_default()
+    }
+
+    /// Updates Smithay's XKB state for a physical key and returns the updated modifiers
+    /// and whether modifier state changed, without forwarding the key to any client.
+    pub fn sync_seat_key(
+        &mut self,
+        key: u32,
+        pressed: bool,
+    ) -> (infynitae_core::input::bindings::Modifiers, bool) {
+        use smithay::backend::input::KeyState;
+        use smithay::input::keyboard::Keycode;
+
+        let kb = self.keyboard_handle();
+        let code = Keycode::new(key + 8);
+        let state = if pressed {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
+        let (_, mods_changed) =
+            kb.input_intercept(self, code, state, |_state, _mods, _sym| None::<()>);
+        let modifiers = convert::modifiers_from_smithay(&kb.modifier_state());
+        (modifiers, mods_changed)
     }
 }
 

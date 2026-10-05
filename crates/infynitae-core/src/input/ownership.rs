@@ -30,7 +30,7 @@ impl Ownership {
     }
 
     /// Records the owner decided at press. A button or key already pressed keeps its first owner.
-    pub fn press(&mut self, button: u32, owner: Owner) -> bool {
+    pub(crate) fn press(&mut self, button: u32, owner: Owner) -> bool {
         if self.owner(button).is_some() {
             return false;
         }
@@ -39,7 +39,7 @@ impl Ownership {
     }
 
     /// The owner the release follows; `None` for a button or key that was never pressed.
-    pub fn release(&mut self, button: u32) -> Option<Owner> {
+    pub(crate) fn release(&mut self, button: u32) -> Option<Owner> {
         let i = self.pressed.iter().position(|(b, _)| *b == button)?;
         Some(self.pressed.remove(i).1)
     }

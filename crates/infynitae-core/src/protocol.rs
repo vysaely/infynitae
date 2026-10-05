@@ -75,6 +75,15 @@ pub enum Effect {
     ToplevelConfigure(ElementId),
     /// Dismiss active popup grab for an element before a camera change (INV-INPUT-2, OB-4).
     DismissPopupGrab(ElementId),
+    /// A client-owned key event to forward to the focused client (K1, K2, K3).
+    KeyboardForward {
+        key: u32,
+        pressed: bool,
+        mods_changed: bool,
+        time_us: u64,
+    },
+    /// A compositor-owned key event intercepted and consumed by the compositor.
+    KeyboardIntercept { key: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -144,9 +153,8 @@ impl Core {
                     .map_err(stale)?;
                 let live: Vec<ElementId> = self
                     .stage
-                    .z_order()
-                    .iter()
-                    .copied()
+                    .mapped_elements()
+                    .into_iter()
                     .filter(|&e| e != id)
                     .collect();
                 self.focus.target_lost(id, &live)
@@ -167,7 +175,7 @@ impl Core {
         if !existed {
             return Vec::new();
         }
-        let live: Vec<ElementId> = self.stage.z_order().to_vec();
+        let live: Vec<ElementId> = self.stage.mapped_elements();
         let mut fx = self.focus.target_lost(id, &live);
         let vis = self.visibility_pass();
         debug_assert!(
@@ -447,8 +455,17 @@ mod tests {
         use crate::navigation::PersistedCameras;
         use crate::output::tests::key as okey;
 
-        // Setup two outputs
-        let (mut core, _, _, mut tok) = Core::new(PersistedCameras::default());
+        // Setup outputs: o1, o2, and o3 (with far-away camera)
+        let persisted = PersistedCameras::from_entries(vec![(
+            okey("out3"),
+            crate::geom::CanvasPos {
+                x: 100_000 << 16,
+                y: 100_000 << 16,
+            },
+            1.0,
+        )])
+        .unwrap();
+        let (mut core, _, _, mut tok) = Core::new(persisted);
         let (o1, _) = core
             .output_connected(
                 &mut tok,
@@ -473,6 +490,18 @@ mod tests {
                 },
             )
             .unwrap();
+        let (o3, _) = core
+            .output_connected(
+                &mut tok,
+                OutputDescriptor {
+                    key: okey("out3"),
+                    mode: (640, 480),
+                    transform: Transform::Normal,
+                    scale_120: 120,
+                    refresh_mhz: 30_000,
+                },
+            )
+            .unwrap();
 
         let id = core.toplevel_created();
         core.toplevel_committed(id, tree(false)).unwrap();
@@ -494,5 +523,11 @@ mod tests {
             let t_default = core.popup_constraint_target(id, None).unwrap();
             assert_eq!(t_default.size, LocalSize { w: 800, h: 600 });
         }
+
+        // Rule 1 visibility guard (ATK-12 / Mutation P): o3 does not observe parent id.
+        // Therefore passing Some(o3) must NOT select o3 (640x480), but fall back to Rule 2 (o2, 800x600)!
+        assert!(!core.membership().observers(id).contains(&o3));
+        let t_unobserved = core.popup_constraint_target(id, Some(o3)).unwrap();
+        assert_eq!(t_unobserved.size, LocalSize { w: 800, h: 600 });
     }
 }

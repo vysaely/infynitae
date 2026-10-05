@@ -59,7 +59,10 @@ impl WaylandState {
                             .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()))
                     });
                     let kb = self.keyboard_handle();
-                    if let Some(mut g) = self.popup_grab.take() {
+                    self.popups.cleanup();
+                    if let Some(mut g) = self.popup_grab.take()
+                        && !g.has_ended()
+                    {
                         if self.ordered_preemption_strategy == PreemptionStrategy::Naive {
                             // NEG-1: naive set_focus without ungrabbing popup
                             self.popup_grab = Some(g);
@@ -68,29 +71,67 @@ impl WaylandState {
                             if self.ordered_preemption_strategy == PreemptionStrategy::PointerFirst
                             {
                                 // NEG-2: pointer-first unset order (W-SM-15 violation)
-                                self.unset_pointer_grab(serial);
-                                self.unset_keyboard_grab(&kb);
+                                if self.pointer_has_grab(g.serial()) {
+                                    self.pointer_unset_grab(serial, 0);
+                                }
+                                if kb.has_grab(g.serial()) {
+                                    self.keyboard_unset_grab();
+                                }
                             } else {
                                 // Canonical ORDERED (INV-INPUT-10):
                                 // 1. PopupGrab::ungrab(All) (already done above)
                                 // 2. keyboard.unset_grab
-                                self.unset_keyboard_grab(&kb);
-                                // 3. pointer.unset_grab
-                                self.unset_pointer_grab(serial);
+                                if kb.has_grab(g.serial()) {
+                                    self.keyboard_unset_grab();
+                                }
+                                // 3. pointer.unset_grab (only if pointer has this grab)
+                                if self.pointer_has_grab(g.serial()) {
+                                    self.pointer_unset_grab(serial, 0);
+                                }
                             }
                         }
                     }
                     kb.set_focus(self, target_surface, serial);
                 }
                 Effect::DismissPopupGrab(_) => {
-                    let serial = SERIAL_COUNTER.next_serial();
-                    if let Some(mut g) = self.popup_grab.take() {
+                    self.popups.cleanup();
+                    if let Some(mut g) = self.popup_grab.take()
+                        && !g.has_ended()
+                    {
                         g.ungrab(PopupUngrabStrategy::All);
                         let kb = self.keyboard_handle();
-                        self.unset_keyboard_grab(&kb);
-                        self.unset_pointer_grab(serial);
+                        if kb.has_grab(g.serial()) {
+                            self.keyboard_unset_grab();
+                        }
                     }
                 }
+                Effect::KeyboardForward {
+                    key,
+                    pressed,
+                    mods_changed,
+                    time_us,
+                } => {
+                    use smithay::backend::input::KeyState;
+                    use smithay::input::keyboard::Keycode;
+
+                    let kb = self.keyboard_handle();
+                    let code = Keycode::new(key + 8);
+                    let state = if pressed {
+                        KeyState::Pressed
+                    } else {
+                        KeyState::Released
+                    };
+                    let time_ms = (time_us / 1000) as u32;
+                    kb.input_forward(
+                        self,
+                        code,
+                        state,
+                        SERIAL_COUNTER.next_serial(),
+                        time_ms,
+                        mods_changed,
+                    );
+                }
+                Effect::KeyboardIntercept { .. } => {}
                 Effect::OutputAdded(id) => self.output_added(id),
                 Effect::OutputChanged(id) => self.output_changed(id),
                 Effect::OutputRemoved(id) => self.output_removed(id),

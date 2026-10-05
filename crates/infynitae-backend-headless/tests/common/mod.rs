@@ -336,6 +336,51 @@ impl Probe {
         idx
     }
 
+    /// Popup with an explicit grab using a specific serial.
+    pub fn popup_with_grab_serial(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        label: &'static str,
+        parent: usize,
+        spec: PopupSpec,
+        serial: u32,
+    ) -> usize {
+        let PopupSpec {
+            content,
+            shadow,
+            anchor_rect,
+            slide,
+        } = spec;
+        let size = (content.0 + 2 * shadow, content.1 + 2 * shadow);
+        let idx = self.new_xdg_surface(qh, label, size);
+        let pos: XdgPositioner = self
+            .wm_base
+            .as_ref()
+            .expect("xdg_wm_base")
+            .create_positioner(qh, ());
+        pos.set_size(content.0, content.1);
+        pos.set_anchor_rect(anchor_rect.0, anchor_rect.1, anchor_rect.2, anchor_rect.3);
+        pos.set_anchor(xdg_positioner::Anchor::TopLeft);
+        pos.set_gravity(xdg_positioner::Gravity::BottomRight);
+        if slide {
+            pos.set_constraint_adjustment(
+                xdg_positioner::ConstraintAdjustment::SlideX
+                    | xdg_positioner::ConstraintAdjustment::SlideY,
+            );
+        }
+        let xdg = self.surfaces[idx].xdg.clone().expect("xdg");
+        let parent_xdg = self.surfaces[parent].xdg.clone().expect("parent xdg");
+        let popup = xdg.get_popup(Some(&parent_xdg), &pos, qh, idx);
+        pos.destroy();
+        if shadow > 0 {
+            xdg.set_window_geometry(shadow, shadow, content.0, content.1);
+        }
+        popup.grab(self.seat.as_ref().expect("seat"), serial);
+        self.surfaces[idx].popup = Some(popup);
+        self.surfaces[idx].wl.commit();
+        idx
+    }
+
     /// A desynchronised subsurface with a buffer; `below` places it under its parent.
     pub fn subsurface(
         &mut self,

@@ -97,6 +97,93 @@ impl Core {
                     Effect::PointerFrame,
                 ])
             }
+            PhysicalEvent::KeyboardKey {
+                key,
+                pressed,
+                modifiers,
+                mods_changed,
+                time_us,
+            } => Ok(if pressed {
+                self.keyboard_press(key, modifiers, mods_changed, time_us)
+            } else {
+                self.keyboard_release(key, mods_changed, time_us)
+            }),
+        }
+    }
+
+    /// K1/K3 keyboard press intake in Core (INV-INPUT-1, OBJ-25).
+    fn keyboard_press(
+        &mut self,
+        key: u32,
+        modifiers: crate::input::bindings::Modifiers,
+        mods_changed: bool,
+        time_us: u64,
+    ) -> Vec<Effect> {
+        // M12 Down->press repeat: if already held by Compositor, stay compositor-owned and consume (K1)
+        if self.input.key_ownership.owner(key) == Some(Owner::Compositor) {
+            return vec![Effect::KeyboardIntercept { key }];
+        }
+
+        let interaction_active = self.input.interaction.active();
+        let matched = self.resolve_key_binding(key, modifiers, interaction_active);
+
+        // K3: keys that change XKB modifier or lock state are never compositor-owned (observe mode)
+        if mods_changed {
+            self.input.key_ownership.press(key, Owner::Client);
+            let mut fx = Vec::new();
+            if let Some(action) = matched {
+                fx.extend(self.apply_key_action(action));
+            }
+            fx.push(Effect::KeyboardForward {
+                key,
+                pressed: true,
+                mods_changed: true,
+                time_us,
+            });
+            fx
+        } else if let Some(action) = matched {
+            // K1: compositor-owned press is consumed
+            self.input.key_ownership.press(key, Owner::Compositor);
+            let mut fx = self.apply_key_action(action);
+            fx.push(Effect::KeyboardIntercept { key });
+            fx
+        } else {
+            // Client-owned press: forwarded
+            self.input.key_ownership.press(key, Owner::Client);
+            vec![Effect::KeyboardForward {
+                key,
+                pressed: true,
+                mods_changed: false,
+                time_us,
+            }]
+        }
+    }
+
+    /// K2 keyboard release intake in Core (INV-INPUT-1, OBJ-25).
+    fn keyboard_release(&mut self, key: u32, mods_changed: bool, time_us: u64) -> Vec<Effect> {
+        // Release follows recorded owner. Orphan release (None) is dropped and never forwarded.
+        match self.input.key_ownership.release(key) {
+            Some(Owner::Client) => vec![Effect::KeyboardForward {
+                key,
+                pressed: false,
+                mods_changed,
+                time_us,
+            }],
+            Some(Owner::Compositor) => vec![Effect::KeyboardIntercept { key }],
+            None => Vec::new(),
+        }
+    }
+
+    fn apply_key_action(&mut self, action: crate::input::keys::KeyAction) -> Vec<Effect> {
+        match action {
+            crate::input::keys::KeyAction::FocusNext => self.focus_next(),
+            crate::input::keys::KeyAction::Cancel => {
+                if self.input.interaction.active() {
+                    self.input.interaction = Interaction::Idle;
+                }
+                Vec::new()
+            }
+            crate::input::keys::KeyAction::Noop => Vec::new(),
         }
     }
 

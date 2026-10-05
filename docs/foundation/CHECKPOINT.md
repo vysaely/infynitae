@@ -1,41 +1,37 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-4 IMPLEMENTED — READY FOR INDEPENDENT ADVERSARIAL REVIEW.** Keyboard ownership (K1–K9, M12), ActiveElementFocus (OBJ-22, M11, INV-INPUT-8), popup grab routing with ordered preemption (INV-INPUT-10, W-SM-7, W-SM-14, W-SM-15), surface activation state (INV-PROTO-1), and interaction popup dismissal (OB-4) implemented on the production path. INC-0, INC-1, INC-2, and INC-3 are RATIFIED. **INC-4 has NOT been ratified.** **INC-5 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-4 CORRECTIVE IMPLEMENTATION COMPLETE — READY FOR INDEPENDENT ADVERSARIAL RE-REVIEW.** Failed independent review dossier ingested and preserved byte-identically (`19231ef`). Corrective finding matrix committed (`aa216d3`). Level A finding F01 (authority boundary bypass) corrected via `Core::physical_input(InputPort, PhysicalEvent::KeyboardKey)` and `KeyboardForward` / `KeyboardIntercept` effects; all 11 Level B findings (F02–F09, F12, F14, F16) resolved; Level C findings (F10, F11, F13, F17) formally adjudicated; all 14 previously surviving mutations killed. INC-0, INC-1, INC-2, and INC-3 are RATIFIED. **INC-4 has NOT been ratified.** **INC-5 has NOT begun.**
 
 Date: 2026-10-05
 
-## PHASE F — INC-4 IMPLEMENTATION (evidence: evidence/phase-f/INC-4/)
-- **Scope:** PRODUCT, HEADLESS, canonical INC-4 (mapping preserved before implementation: `IMPLEMENTATION_MAPPING.md`).
-  - **core:**
-    - `input::keys`: canonical bindings (Super+Enter -> FocusNext, Super+B -> Noop, Esc -> Cancel, Shift -> Noop), pure binding resolver;
-    - `input::focus`: `FocusModel` (`OBJ-22`, `M11`, `INV-INPUT-8`), explicit focus transitions, `focus_next`, target loss successor selection with live element fallback;
-    - `input::mod`: `InputState` extended with `key_ownership: Ownership` (`OBJ-25`);
-    - `entry.rs`: click-to-focus on client button press, `Effect::DismissPopupGrab` on CameraPan acquisition (`OB-4`);
-    - `protocol.rs`: `Effect::KeyboardFocus`, `Effect::ToplevelConfigure`, `Effect::DismissPopupGrab`; popup constraint target calculation with anchor-output rule 1 (`D-B6-BOUNDARY`, `INC3-F08`).
-  - **adapter (`infynitae-wayland`):**
-    - `keyboard.rs`: `WaylandState::keyboard_key` two-phase dispatch (`input_intercept` + `input_forward`), K1–K9 ownership semantics, K3 observe mode enforcement, `PreemptionStrategy` configuration;
-    - `pointer.rs`: strictly encapsulated grab helpers (`set_popup_pointer_grab`, `unset_pointer_grab`, `set_keyboard_grab`, `unset_keyboard_grab`) preserving `smithay-pointer-only-in-adapter-pointer` compliance;
-    - `handlers.rs`: `XdgShellHandler::grab` with `W-SM-7` root checks and `W-SM-14` nested grab retention; `toplevel_destroyed` successor focus transition;
-    - `outputs.rs`: atomic ORDERED preemption under `Effect::KeyboardFocus` (ungrab(All) -> kb.unset -> ptr.unset -> set_focus) and `Effect::ToplevelConfigure` (sets/unsets `Activated`).
-  - **headless backend:** `keyboard_key` intake validating port authority via `state.core().check_port(port)`.
-- **Not implemented (owned later):**
-  - Pointer constraints, locks, and confinement (INC-5);
-  - Epochs and frame pacing (INC-6);
-  - Fullscreen and maximize (INC-7);
-  - Real-client integration and kick (INC-8);
-  - Zoom navigation and continuous scaling (INC-9/10).
-- **Tests:** 100% passing under `ulimit -n 1024`.
-  - `t1_keyboard.rs`: 13 tests (K1–K9, NEG-K3 modifier control, OB-15 output removal, OB-15 repeat probe).
-  - `t1_popup_focus.rs`: 13 tests (PF-1 through PF-7, PF-OB4 pan dismissal, PF-WSM7 unmapped grab rejection, NEG-1 naive control, NEG-2 pointer-first control, OBS-1 anvil order observation).
-  - Full workspace regression suite passes with 0 failures and 0 warnings.
-- **Enforcement:**
-  - `verify-architecture`: PASS (31 compile probes, 54 seeded controls, all structural source rules intact).
-  - `verify-test-efficacy`: PASS (68/68 seeded behavioural defects detected, including 5 new INC-4 mutation controls).
-  - `check-foundation-docs`: PASS (57 invariants, 20 formulas, 51 obligations intact).
+## PHASE F — INC-4 CORRECTIVE PROGRAM (record: evidence/phase-f/INC-4/corrective/)
+- **Review:** `INC-4 FAIL — ARCHITECTURAL CORRECTION REQUIRED` (dossier preserved byte-identically in `audit/phase-f-inc4-review/`, commit `19231ef`). Findings: Level A 1 (F01), Level B 11 (F02–F09, F12, F14, F16), Level C 4 (F10, F11, F13, F17), Observation 1 (F15).
+- **Corrective Finding Matrix:** `evidence/phase-f/INC-4/corrective/CORRECTIVE_FINDING_MATRIX.md` (commit `aa216d3`).
+- **Core Architecture & Authority Corrections:**
+  - **F01 (Level A):** Intake authority restored. Removed `Core::key_ownership_mut()`. Routed keyboard intake through `Core::physical_input(&mut InputPort, PhysicalEvent::KeyboardKey)`. Core evaluates bindings and ownership, emitting `Effect::KeyboardForward` and `Effect::KeyboardIntercept`. `ElementId::new` and ownership press/release made crate-private (`pub(crate)`). Probes `p22_mutate_key_ownership`, `p23_forge_element_id`, `p24_set_focus_without_port` added.
+  - **F02 (Level B):** Removed public test switch `k3_enforced` from `WaylandState`. K3 observe mode enforced unconditionally in Core (`entry.rs`).
+  - **F03 (Level B):** Fixed K1/K2 dispatch. Re-press of held compositor key consumed (`KeyboardIntercept`). Orphan release dropped (never forwarded).
+  - **F04 (Level B):** Plain Escape only cancels when an interaction is actively in progress (`interaction.active()`); forwarded to focused client otherwise.
+  - **F05 (Level B):** CameraPan acquisition dismisses popup grabs via `Effect::DismissPopupGrab` without invoking `ptr.unset_grab`, preventing synthetic motion replay.
+  - **F06 (Level B):** D-B6-BOUNDARY Rule 1 placed on production path via `Core::pointer_output()`.
+  - **F07 (Level B):** Port-gated `Core::set_focus` validates target is mapped (`Lifecycle::Mapped`). `mapped_elements()` added to `Stage`. Unmapping focused element triggers target loss.
+  - **F08 (Level B):** Refused grab on unfocused/mismatched surface immediately sends `xdg_popup.popup_done` and returns.
+  - **F09 (Level B):** `self.popups.cleanup()` invoked prior to grab preemption so dead grabs do not unset unrelated implicit button grabs. Grab state cleared across zero-output transitions if popup grab was active.
+  - **F10 (Level C):** Formally adjudicated: Smithay synthetic motion on ungrab is standard Wayland behavior, isolated under CameraPan, tracked under W-SM-16 for INC-5 locks.
+  - **F11 (Level C):** Formally adjudicated: Successor fallback without focus history transitions to `None` (`Unfocused`). Arbitrary z-order fallback eliminated.
+  - **F12 (Level B):** Shipped verification rebuilt with independent oracles, non-circular assertions, permanent regression tests ATK-01..ATK-18, and RES-1 resource stability.
+  - **F13 (Level C):** Formally adjudicated: Reassigned OB-21 to INC-16 / T4 physical libinput intake.
+  - **F14 (Level B):** Corrected test and control counts across all evidence documents.
+  - **F15 (Observation):** Reconciled brief SHA-1 hash to actual reviewed commit `d5b7b95cbc910c48377c72ae94ccec2b0c05e140`.
+  - **F16 (Level B):** Unified modifier authority via `WaylandState::seat_modifiers()`. Pointer button intake merges seat XKB modifiers.
+  - **F17 (Level C):** Formally adjudicated: Unmapping or destroying a parent window dismisses its child popups via `popup_done`.
+- **Enforcement & Verification:**
+  - `verify-architecture`: PASS (34 compile probes including p22, p23, p24; all structural source rules passing).
+  - `verify-test-efficacy`: PASS (all 14 previously surviving mutations F, I, J, K, L, N, P, Q, R, T, U, V, W, AB permanently detected; judge controls PASS).
+  - `check-foundation-docs`: PASS.
   - `verify-development-environment`: PASS.
-- **Obligations:**
-  - None closed by implementation. All obligations remain pending independent ratification review.
-- **NEXT:** STOP for independent adversarial review by another agent. Do NOT declare ratified. Do NOT begin INC-5.
+  - Full workspace regression suite: PASS (100% under `ulimit -n 1024`).
+- **NEXT:** STOP for independent adversarial re-review. Do NOT declare ratified. Do NOT begin INC-5.
 
 ## PHASE F — INC-3 RATIFICATION (record: evidence/phase-f/INC-3/corrective/)
 - **Review:** `INC-3 CONDITIONAL PASS — CORRECTIONS REQUIRED BEFORE RATIFICATION` (dossier recorded unchanged in `85d128a`). Findings INC3-F09 (Level B) resolved; INC3-F08 (Level C) and INC3-F06 (Observation) adjudicated.
@@ -46,7 +42,7 @@ Date: 2026-10-05
 - **Adjudication (INC3-F08):** Confirmed Level C finding that popup anchor-output rule 1 belongs canonically to INC-4 (`OB-4` / `OB-18`).
 - **Obligations:**
   - `OB-45`: **CLOSED** (Render and hit-test agreement under coordinate transformations across all 10 cases passes cleanly under `ulimit -n 1024`; 0 mismatches; sealed control fails 9/9 non-Normal cases).
-  - Still `OPEN`: `OB-50` (constraints in INC-5), `OB-3` (constraint reconciliation in INC-5), `OB-21` (T4 intake in INC-4), `OB-4` (popup grab handling in INC-4), `OB-1`, `OB-6`, `OB-11`, `OB-14`, `OB-17`, `OB-48`.
+  - Still `OPEN`: `OB-50` (constraints in INC-5), `OB-3` (constraint reconciliation in INC-5), `OB-21` (T4 physical intake in INC-16; corrected per INC4-F13), `OB-4` (popup grab handling in INC-4), `OB-1`, `OB-6`, `OB-11`, `OB-14`, `OB-17`, `OB-48`.
 - **Verification:** everything PASS under `ulimit -n 1024`.
   - Cargo: 122 tests (66 core T0, 50 distinct T1, 6 oracle self-tests), fmt, clippy `-D warnings`.
   - Verifiers: `verify-architecture` (31 compile probes, 54 seeded controls); `verify-test-efficacy` (78/78 detected, judge controls PASS); development environment verifier PASS.
@@ -89,7 +85,7 @@ Date: 2026-10-05
   - OB-45: all parts' pass criteria met (tracker INC-2, hit INC-3); OPEN pending review.
   - OB-50: pointer part satisfied; OPEN (INC-5).
   - OB-3: CameraPan orphaning satisfied; OPEN (INC-5).
-  - OB-21: T0 part; OPEN (T4).
+  - OB-21: T0 part; OPEN (INC-16 / T4 physical intake, corrected per INC4-F13).
   - OB-4: acquisition point only; no popup grab can exist before INC-4; OPEN.
 - **Findings:** no new Level A/B/C; observations INC3-F01…F08 (README §8). Open: Level C 1 (INC1-F01, INC-7).
 - **LIVE_SYSTEM_TOUCHED:** no.

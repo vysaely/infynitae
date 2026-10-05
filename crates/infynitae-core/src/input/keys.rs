@@ -44,7 +44,7 @@ pub const CANONICAL_BINDINGS: [KeyBinding; 4] = [
     },
     KeyBinding {
         evdev: KEY_ESC,
-        needs_logo: false,
+        needs_logo: true,
         action: KeyAction::Cancel,
     },
     // Binding on a modifier key itself: test subject for K3 observe mode
@@ -56,7 +56,19 @@ pub const CANONICAL_BINDINGS: [KeyBinding; 4] = [
 ];
 
 /// Pure binding filter: resolves an evdev keycode and modifier snapshot against bindings.
-pub fn resolve_key_binding(key: u32, mods: Modifiers) -> Option<KeyAction> {
+/// Plain Escape only cancels when an interaction is actively in progress (F04, K6).
+pub fn resolve_key_binding(
+    key: u32,
+    mods: Modifiers,
+    interaction_active: bool,
+) -> Option<KeyAction> {
+    if key == KEY_ESC && !mods.logo {
+        return if interaction_active {
+            Some(KeyAction::Cancel)
+        } else {
+            None
+        };
+    }
     for b in &CANONICAL_BINDINGS {
         if b.evdev == key && (!b.needs_logo || mods.logo) {
             return Some(b.action);
@@ -78,17 +90,28 @@ mod tests {
         let none = Modifiers::default();
 
         assert_eq!(
-            resolve_key_binding(KEY_ENTER, logo),
+            resolve_key_binding(KEY_ENTER, logo, false),
             Some(KeyAction::FocusNext)
         );
-        assert_eq!(resolve_key_binding(KEY_ENTER, none), None);
-        assert_eq!(resolve_key_binding(KEY_B, logo), Some(KeyAction::Noop));
-        assert_eq!(resolve_key_binding(KEY_B, none), None);
-        assert_eq!(resolve_key_binding(KEY_ESC, none), Some(KeyAction::Cancel));
+        assert_eq!(resolve_key_binding(KEY_ENTER, none, false), None);
         assert_eq!(
-            resolve_key_binding(KEY_LEFTSHIFT, none),
+            resolve_key_binding(KEY_B, logo, false),
             Some(KeyAction::Noop)
         );
-        assert_eq!(resolve_key_binding(KEY_A, logo), None);
+        assert_eq!(resolve_key_binding(KEY_B, none, false), None);
+        assert_eq!(resolve_key_binding(KEY_ESC, none, false), None);
+        assert_eq!(
+            resolve_key_binding(KEY_ESC, none, true),
+            Some(KeyAction::Cancel)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_ESC, logo, false),
+            Some(KeyAction::Cancel)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_LEFTSHIFT, none, false),
+            Some(KeyAction::Noop)
+        );
+        assert_eq!(resolve_key_binding(KEY_A, logo, false), None);
     }
 }

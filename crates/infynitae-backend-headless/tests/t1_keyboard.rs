@@ -13,8 +13,9 @@ mod common;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
+use common::input::{BTN_MIDDLE, none};
 use common::{Lockstep, output};
-use infynitae_backend_headless::keyboard_key;
+use infynitae_backend_headless::{keyboard_key, pointer_button, set_focus};
 use infynitae_core::input::keys::{KEY_A, KEY_B, KEY_ENTER, KEY_ESC, KEY_LEFTMETA, KEY_LEFTSHIFT};
 use infynitae_core::input::ownership::Owner;
 use infynitae_core::stage::ElementId;
@@ -30,9 +31,8 @@ struct S {
 }
 
 impl S {
-    fn new(k3_enforced: bool) -> Self {
+    fn new(_k3_enforced: bool) -> Self {
         let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
-        ls.state.set_k3_enforced(k3_enforced);
         let qh = ls.qh.clone();
         let w1 = ls.probe.toplevel(&qh, "W1", (400, 300), 0);
         let w2 = ls.probe.toplevel(&qh, "W2", (400, 300), 0);
@@ -80,7 +80,7 @@ impl S {
     }
 
     fn set_focus(&mut self, target: Option<ElementId>) {
-        self.ls.state.set_focus(target);
+        set_focus(&mut self.ls.state, &mut self.ls.input, target).expect("set_focus");
         self.advance();
         self.check(&format!("set_focus {:?}", target));
     }
@@ -143,6 +143,10 @@ impl S {
 fn k1_ordinary_client_owned_press_release() {
     let mut s = S::new(true);
     s.key(KEY_A, true);
+    assert!(
+        s.ls.probe.kb.keys.contains(&KEY_A),
+        "client did not receive press"
+    );
     s.key(KEY_A, false);
     s.assert_end();
 }
@@ -294,43 +298,227 @@ fn k9_keyboard_focus_lost_and_regained() {
     s.assert_end();
 }
 
-/// NEGATIVE CONTROL: K-8 with K3 DISABLED.
-/// Modifier binding is intercepted and consumed, causing stuck modifier / KV-3 failure.
+const ACTIVATED: u32 = 4;
+
+fn last_activated(ls: &Lockstep, idx: usize) -> Option<bool> {
+    ls.probe
+        .toplevel_states
+        .iter()
+        .rev()
+        .find(|(i, _)| *i == idx)
+        .map(|(_, s)| s.contains(&ACTIVATED))
+}
+
+/// ATK-01 (product policy / gaming, F04): Escape with no interaction active is a client key.
 #[test]
-fn neg_k3_without_k3_stuck_modifier_control() {
-    let mut s = S::new(false);
-    s.time_us += 1000;
-    s.held.insert(KEY_LEFTSHIFT);
-    keyboard_key(
+fn plain_escape_reaches_the_focused_client() {
+    let mut s = S::new(true);
+    let n = s.ls.probe.key_events.len();
+    s.key(KEY_ESC, true);
+    s.key(KEY_ESC, false);
+    let got: Vec<_> = s.ls.probe.key_events[n..].to_vec();
+    assert_eq!(
+        got,
+        vec![(KEY_ESC, true), (KEY_ESC, false)],
+        "Escape swallowed by compositor; kb_log={:?}",
+        s.ls.probe.kb_log
+    );
+    s.assert_end();
+}
+
+/// Plain Escape cancels an active interaction (F04, K6).
+#[test]
+fn plain_escape_cancels_active_interaction() {
+    let mut s = S::new(true);
+    s.key(KEY_LEFTMETA, true);
+    pointer_button(
         &mut s.ls.state,
         &mut s.ls.input,
-        KEY_LEFTSHIFT,
+        BTN_MIDDLE,
         true,
+        none(),
         s.time_us,
     )
-    .expect("keyboard_key");
+    .expect("pan button");
     s.advance();
-
-    // With K3 disabled, the seat's XKB state registered the modifier:
-    let seat_depressed =
-        s.ls.state
-            .keyboard_handle()
-            .modifier_state()
-            .serialized
-            .depressed;
-    assert_ne!(
-        seat_depressed, 0,
-        "Seat XKB registered Shift modifier press"
+    assert!(
+        s.ls.state.core().interaction().active(),
+        "CameraPan should be active"
     );
+    s.key(KEY_ESC, true);
+    assert!(
+        !s.ls.state.core().interaction().active(),
+        "interaction cancelled by plain Escape"
+    );
+    assert!(
+        !s.ls.probe.kb.keys.contains(&KEY_ESC),
+        "Escape was consumed by compositor to cancel interaction"
+    );
+    s.key(KEY_ESC, false);
+    pointer_button(
+        &mut s.ls.state,
+        &mut s.ls.input,
+        BTN_MIDDLE,
+        false,
+        none(),
+        s.time_us,
+    )
+    .expect("pan button up");
+    s.key(KEY_LEFTMETA, false);
+    s.assert_end();
+}
 
-    // But because the compositor consumed the press, the client never received it:
+/// ATK-02 (K1/K2, F03): a repeated press of a compositor-owned key must not leak.
+#[test]
+fn repeat_press_of_compositor_owned_key_does_not_leak() {
+    let mut s = S::new(true);
+    s.key(KEY_LEFTMETA, true);
+    s.key(KEY_B, true); // Super+B: compositor-owned
+    s.key(KEY_LEFTMETA, false);
+    s.key(KEY_B, true); // repeat / second press
+    s.key(KEY_B, false);
+    let b: Vec<_> =
+        s.ls.probe
+            .key_events
+            .iter()
+            .filter(|(k, _)| *k == KEY_B)
+            .collect();
+    assert!(
+        b.is_empty(),
+        "compositor-owned B leaked to client: {b:?}; viol={:?}",
+        s.ls.probe.kb.violations
+    );
+    assert!(
+        s.ls.probe.kb.keys.is_empty(),
+        "stuck keys {:?}",
+        s.ls.probe.kb.keys
+    );
+}
+
+/// ATK-03 (K2): release follows the press owner even when modifier state changed in between.
+#[test]
+fn release_follows_press_owner_after_modifier_change() {
+    let mut s = S::new(true);
+    s.key(KEY_B, true); // client-owned (no Super)
+    s.key(KEY_LEFTMETA, true);
+    s.key(KEY_B, false); // release follows client owner
+    s.key(KEY_LEFTMETA, false);
+    assert!(
+        s.ls.probe.kb.violations.is_empty(),
+        "{:?}",
+        s.ls.probe.kb.violations
+    );
+    assert!(
+        s.ls.probe.kb.keys.is_empty(),
+        "client left holding {:?}",
+        s.ls.probe.kb.keys
+    );
+}
+
+/// ATK-04 (K2/protocol must-not, F03): a release with no recorded press must not reach a client.
+#[test]
+fn release_without_press_is_not_forwarded() {
+    let mut s = S::new(true);
+    s.key(KEY_A, false);
+    assert!(
+        s.ls.probe.kb.violations.is_empty(),
+        "protocol violation: {:?}",
+        s.ls.probe.kb.violations
+    );
+}
+
+/// ATK-05 (OBJ-22 successor/live, F07): focus_next must never select an unmapped element.
+#[test]
+fn focus_next_skips_unmapped_elements() {
+    let mut s = S::new(true);
+    let w2 = s.w2;
+    s.ls.probe.unmap(w2);
+    s.advance();
+    s.key(KEY_LEFTMETA, true);
+    s.key(KEY_ENTER, true);
+    s.key(KEY_ENTER, false);
+    s.key(KEY_LEFTMETA, false);
+    assert_ne!(
+        s.ls.state.core().focus().target(),
+        Some(s.e2),
+        "focus_next focused UNMAPPED W2; client kb={:?}",
+        s.ls.probe.kb.active
+    );
+    assert_ne!(s.ls.probe.kb.active.as_deref(), Some("W2"));
+}
+
+/// ATK-06 (K7/M11 successor, F07): target loss must not hand focus to an unmapped element.
+#[test]
+fn successor_is_never_unmapped() {
+    let mut s = S::new(true);
+    let (w1, w2) = (s._w1, s.w2);
+    s.ls.probe.unmap(w2);
+    s.advance();
+    s.ls.probe.destroy_toplevel(w1);
+    s.advance();
+    assert_ne!(
+        s.ls.state.core().focus().target(),
+        Some(s.e2),
+        "successor is UNMAPPED W2"
+    );
+}
+
+/// ATK-07 (canonical successor = MRU live element, F11): an element never focused is not MRU.
+#[test]
+fn successor_without_history_is_not_fabricated() {
+    let mut s = S::new(true);
+    let w1 = s._w1;
+    s.ls.probe.destroy_toplevel(w1);
+    s.advance();
     assert_eq!(
-        s.ls.probe.kb.depressed, 0,
-        "Client was starved of modifier update: KV-3 violation"
+        s.ls.state.core().focus().target(),
+        None,
+        "successor fabricated from z-order (never-focused W2)"
     );
-    assert_ne!(
-        s.ls.probe.kb.depressed, seat_depressed,
-        "Negative control verifies modifier divergence when K3 is disabled"
+}
+
+/// ATK-08 (INV-PROTO-1): `activated` holds exactly on the focused element, through every transition.
+#[test]
+fn activated_tracks_active_element_focus() {
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    let qh = ls.qh.clone();
+    let w1 = ls.probe.toplevel(&qh, "W1", (400, 300), 0);
+    let w2 = ls.probe.toplevel(&qh, "W2", (400, 300), 0);
+    let w3 = ls.probe.toplevel(&qh, "W3", (400, 300), 0);
+    ls.pump();
+    let elements: Vec<ElementId> = ls.state.elements().collect();
+    assert_eq!(elements.len(), 3);
+    let (e1, e2, e3) = (elements[0], elements[1], elements[2]);
+
+    set_focus(&mut ls.state, &mut ls.input, Some(e1)).expect("focus e1");
+    ls.pump();
+    ls.run_until(ls.now + Duration::from_micros(1000));
+    assert_eq!(last_activated(&ls, w1), Some(true));
+
+    set_focus(&mut ls.state, &mut ls.input, Some(e2)).expect("focus e2");
+    ls.pump();
+    ls.run_until(ls.now + Duration::from_micros(1000));
+    assert_eq!(last_activated(&ls, w1), Some(false));
+    assert_eq!(last_activated(&ls, w2), Some(true));
+    assert!(!last_activated(&ls, w3).unwrap_or(false));
+
+    set_focus(&mut ls.state, &mut ls.input, None).expect("focus none");
+    ls.pump();
+    ls.run_until(ls.now + Duration::from_micros(1000));
+    assert_eq!(last_activated(&ls, w2), Some(false));
+
+    set_focus(&mut ls.state, &mut ls.input, Some(e3)).expect("focus e3");
+    set_focus(&mut ls.state, &mut ls.input, Some(e2)).expect("focus e2");
+    ls.pump();
+    ls.run_until(ls.now + Duration::from_micros(1000));
+    ls.probe.destroy_toplevel(w2);
+    ls.pump();
+    ls.run_until(ls.now + Duration::from_micros(1000));
+    assert_eq!(ls.state.core().focus().target(), Some(e3));
+    assert_eq!(
+        last_activated(&ls, w3),
+        Some(true),
+        "successor not activated"
     );
 }
 
@@ -379,4 +567,31 @@ fn k9_ob15_key_repeat_probe() {
 
     s.key(KEY_A, false);
     s.assert_end();
+}
+
+/// ATK-16 (M1 unmap target loss, F07): unmapping the focused element causes target loss.
+#[test]
+fn unmapped_focused_element_loses_focus() {
+    let mut s = S::new(true);
+    let w1 = s._w1;
+    s.ls.probe.unmap(w1);
+    s.advance();
+    assert_ne!(
+        s.ls.state.core().focus().target(),
+        Some(s.e1),
+        "unmapped focused element retained focus"
+    );
+}
+
+/// OBJ-25 / M12: backend keyboard intake requires a valid InputPort belonging to this Core.
+#[test]
+fn keyboard_key_rejects_foreign_port() {
+    let mut ls1 = Lockstep::new(Some(output((1920, 1080), 120)));
+    let mut ls2 = Lockstep::new(Some(output((1920, 1080), 120)));
+    let res =
+        infynitae_backend_headless::keyboard_key(&mut ls1.state, &mut ls2.input, KEY_A, true, 1000);
+    assert!(
+        res.is_err(),
+        "foreign input port was accepted by keyboard_key"
+    );
 }
