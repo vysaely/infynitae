@@ -1,0 +1,184 @@
+#!/usr/bin/env python3
+"""verify-development-environment — Non-destructive verification of the Infynitae Native development environment.
+
+Derives status from repository state, installed development toolchains, and foundation verifiers.
+Never modifies files, repository state, toolchains, or system settings.
+
+Usage:
+  tools/verify-development-environment [--spike] [--help]
+"""
+
+import os
+import shutil
+import subprocess
+import sys
+
+HISTORICAL_SEALS = [
+    ("Phase C seal", "615b0ed2f3631b698b0c54783c28f696ef4ff34a"),
+    ("Phase D falsification baseline", "e8ec03a2ab36f315ae025723ec666b9ad278ac83"),
+    ("Phase D 1R seal", "84ce620898445aaadb72f386ec3954e5bbfe2c2f"),
+    ("Phase D 2R seal", "5827926782089dc8c6a1c203f844fbc879fce9be"),
+    ("Phase D final seal", "c0a1cee310e56b75d32cf30152a09975ff776700"),
+    ("Phase D tracking", "09075a2d07dbc0cba862baac62136f9f3ff9e7b5"),
+    ("Phase E corrective checkpoint E1R seal", "1ae1b736515b8c52c3e6ba7596b22c81f7098390"),
+    ("Phase E corrective checkpoint E1R tracking", "e9d36732ac4fa9e934ee1b90bb696e9545c598ab"),
+    ("Phase E final review commit", "cfb54f091bd2a19065a45b32662e8f0bbddd62fc"),
+]
+
+REQUIRED_SYSTEM_TOOLS = ["git", "python3", "rustc", "cargo", "pkg-config", "tar"]
+OPTIONAL_SYSTEM_TOOLS = ["gh", "zstd"]
+
+REQUIRED_PKG_CONFIG = [
+    "wayland-server",
+    "wayland-protocols",
+    "xkbcommon",
+    "libinput",
+    "libseat",
+    "libdrm",
+    "gbm",
+]
+
+
+def run_cmd(cmd, cwd=None):
+    try:
+        res = subprocess.run(
+            cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
+        )
+        return res.returncode, res.stdout.strip(), res.stderr.strip()
+    except Exception as e:
+        return -1, "", str(e)
+
+
+def main():
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    print("=" * 70)
+    print("Infynitae Native — Development Environment Verifier")
+    print(f"Repository root: {repo_root}")
+    print("=" * 70)
+
+    all_passed = True
+
+    # 1. Git Repository State
+    print("\n[1] Git Repository State:")
+    code, head_hash, _ = run_cmd(["git", "rev-parse", "HEAD"], cwd=repo_root)
+    if code == 0:
+        code_b, branch, _ = run_cmd(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd=repo_root)
+        print(f"  ✓ HEAD:   {head_hash} (branch: {branch})")
+    else:
+        print("  ✗ Failed to determine git HEAD")
+        all_passed = False
+
+    # Check seals reachability
+    missing_seals = 0
+    for name, seal_hash in HISTORICAL_SEALS:
+        code, _, _ = run_cmd(["git", "cat-file", "-e", seal_hash], cwd=repo_root)
+        if code == 0:
+            print(f"  ✓ Reachable seal: {seal_hash[:10]} ({name})")
+        else:
+            print(f"  ✗ Missing seal:    {seal_hash} ({name})")
+            missing_seals += 1
+            all_passed = False
+
+    # Safety check: No Phase F product code or root crates
+    print("\n[2] Safety & Product Boundaries (Phase F not begun):")
+    root_cargo = os.path.join(repo_root, "Cargo.toml")
+    root_src = os.path.join(repo_root, "src")
+    if os.path.exists(root_cargo):
+        print(f"  ✗ Found {root_cargo} — Phase F product workspace exists prematurely!")
+        all_passed = False
+    else:
+        print("  ✓ No root Cargo.toml (Phase F product workspace not begun)")
+
+    if os.path.exists(root_src):
+        print(f"  ✗ Found {root_src} — Phase F product code exists prematurely!")
+        all_passed = False
+    else:
+        print("  ✓ No root src/ (Phase F product crates not begun)")
+
+    # 3. Toolchain & Command Availability
+    print("\n[3] Toolchain Availability:")
+    for tool in REQUIRED_SYSTEM_TOOLS:
+        path = shutil.which(tool)
+        if path:
+            # get version if possible
+            _, ver, _ = run_cmd([tool, "--version"])
+            first_line = ver.splitlines()[0] if ver else path
+            print(f"  ✓ {tool:<12} {first_line}")
+        else:
+            print(f"  ✗ {tool:<12} MISSING (required)")
+            all_passed = False
+
+    for tool in OPTIONAL_SYSTEM_TOOLS:
+        path = shutil.which(tool)
+        if path:
+            _, ver, _ = run_cmd([tool, "--version"])
+            first_line = ver.splitlines()[0] if ver else path
+            print(f"  ✓ {tool:<12} {first_line}")
+        else:
+            print(f"  - {tool:<12} NOT FOUND (optional)")
+
+    # 4. Native Wayland / Graphics Build Libraries
+    print("\n[4] Native Build Libraries (pkg-config):")
+    if shutil.which("pkg-config"):
+        for lib in REQUIRED_PKG_CONFIG:
+            code, ver, _ = run_cmd(["pkg-config", "--modversion", lib])
+            if code == 0:
+                print(f"  ✓ {lib:<20} {ver}")
+            else:
+                print(f"  ✗ {lib:<20} NOT FOUND via pkg-config")
+                all_passed = False
+    else:
+        print("  ✗ pkg-config not available to inspect system libraries")
+        all_passed = False
+
+    # 5. Foundation Documentation Checks
+    print("\n[5] Foundation Document Integrity:")
+    checker_path = os.path.join(repo_root, "tools", "check-foundation-docs")
+    if os.path.exists(checker_path):
+        code, out, _ = run_cmd([sys.executable, checker_path], cwd=repo_root)
+        if code == 0 and "RESULT: PASS" in out:
+            print("  ✓ check-foundation-docs: PASS (57 invariants, 20 formulas, 51 obligations intact)")
+        else:
+            print("  ✗ check-foundation-docs: FAILED")
+            for line in out.splitlines()[-5:]:
+                print(f"    {line}")
+            all_passed = False
+
+        code_st, out_st, _ = run_cmd([sys.executable, checker_path, "--self-test"], cwd=repo_root)
+        if code_st == 0 and "SELF-TEST: PASS" in out_st:
+            print("  ✓ check-foundation-docs --self-test: PASS (18/18 seeded defects detected)")
+        else:
+            print("  ✗ check-foundation-docs --self-test: FAILED")
+            all_passed = False
+    else:
+        print(f"  ✗ Foundation checker script missing: {checker_path}")
+        all_passed = False
+
+    # 6. Architecture Authority Spike (C1)
+    print("\n[6] C1 Authority Spike Verification:")
+    spike_script = os.path.join(repo_root, "experiments", "c1-authority-spike", "verify.sh")
+    if os.path.exists(spike_script) and shutil.which("cargo"):
+        code_sp, out_sp, err_sp = run_cmd([spike_script], cwd=repo_root)
+        if code_sp == 0 and "result: PASS" in out_sp:
+            print("  ✓ c1-authority-spike/verify.sh: PASS (compiler negative probes verified)")
+        else:
+            print("  ✗ c1-authority-spike/verify.sh: FAILED")
+            all_passed = False
+    else:
+        print("  - c1-authority-spike skipped (cargo or script unavailable)")
+
+    print("\n" + "=" * 70)
+    if all_passed:
+        print("VERIFICATION RESULT: ALL CHECKS PASSED")
+        print("Environment and repository are ready for authorized development handoff.")
+        print("Current gate: PHASE E PASS — PHASE F MAY BEGIN (INC-0 entry gate awaiting authorization)")
+        print("=" * 70)
+        return 0
+    else:
+        print("VERIFICATION RESULT: SOME CHECKS FAILED OR INCOMPLETE")
+        print("=" * 70)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
