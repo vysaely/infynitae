@@ -271,17 +271,17 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
 
 ### OB-19
-- **Status:** OPEN
-- **Item:** Port the architecture/authority enforcement to the real crates (`verify-architecture`): dependency DAG; camera-authority probes with asserted diagnostics (incl. 1R probes 2d/2e: no protocol re-fit, no retained proof; 2R probes 2f/2g: output-lifecycle token required, unforgeable, no coordinate fields, no public restore API, not storable in protocol state, single construction site); `!Send` port/token + `Send` protocol-state assertion; source rules (`infynitae-wayland` never names `InputPort`, `ShellPort`, `OutputLifecycleToken`, `physical_input`, `shell_command`, `output_connected`, `output_disconnected`; `Authorized::mint` only in the entry module); `#![forbid(unsafe_code)]` in core and ipc, `#![deny(unsafe_code)]` elsewhere; `cargo build --locked`; `smithay = "=0.7.0"`; pinned `rust-toolchain.toml`.
+- **Status:** CLOSED
+- **Item:** Port the architecture/authority enforcement to the real crates (`verify-architecture`): dependency DAG across all dependency classes; camera-authority probes with asserted diagnostics (incl. 1R probes 2d/2e: no protocol re-fit, no retained proof; 2R probes 2f/2g: output-lifecycle token required, unforgeable, no coordinate fields, no public restore API, not storable in protocol state, single construction site; E1R probes 2h: reconfiguration probes p10–p13, output_reconfigured carries no camera authority; runtime 2i negative control probe_sealed_key_steal transferred to INC-2 / OB-49 via Decision D); `!Send` port/token + `Send` protocol-state assertion; source rules (`infynitae-wayland` never names `InputPort`, `ShellPort`, `OutputLifecycleToken`, `physical_input`, `shell_command`, `output_connected`, `output_reconfigured`, `output_disconnected`; `Authorized::mint` only in the entry module; authority reference/pointer escape rejected); `#![forbid(unsafe_code)]` in core and ipc, `#![deny(unsafe_code)]` elsewhere; `cargo build --locked`; `smithay = "=0.7.0"`; pinned `rust-toolchain.toml`.
 - **Owner:** workspace tooling
-- **Evidence available:** EC-1, EC-15, ER-4, ER2-1 (spike `verify.sh` PASS)
-- **Pass criterion:** the same probes and checks run against the real crates in the first Phase F commit; every negative probe fails with its asserted diagnostic and no other error; every DAG/source check passes; CI-blocking
+- **Evidence available:** EC-1, EC-15, ER-4, ER2-1 (spike `verify.sh` PASS); INC-0 implementation (`632b1d0`), evidence commit (`0c229ad`), independent review dossier (`audit/phase-f-inc0-review/`), corrective patch and ratification
+- **Pass criterion:** the same probes and checks run against the real crates in the first Phase F commit; every negative probe fails with its asserted diagnostic and no other error; every DAG/source check passes; CI-blocking; runtime 2i negative control executed in INC-2 under OB-49
 - **Destination:** PHASE-F-ENTRY-GATE
 - **May be closed by:** ENFORCE increment INC-0 only (the first Phase F product-workspace commit)
 - **Dependencies:** —
-- **Blocks:** Phase F: unconditional entry gate; no protocol or product behaviour may precede it. Not waivable.
-- **Origin:** CP3A-4; OB-19 section; C12.R1.3; C12.R2.2
-- **History:** Unconditional Phase F entry gate since Phase C; probe list extended in 1R (2d/2e) and 2R (2f/2g). Not folded with OB-36.
+- **Blocks:** Phase F: unconditional entry gate; no protocol or product behaviour may precede it. Not waivable. Satisfied and closed at INC-0.
+- **Origin:** CP3A-4; OB-19 section; C12.R1.3; C12.R2.2; C12.E1R.4; Decision D
+- **History:** Unconditional Phase F entry gate since Phase C; probe list extended in 1R (2d/2e), 2R (2f/2g), and E1R (2h). Ratified CLOSED in INC-0 following independent adversarial review and corrective patch (closing findings INC0-F01 and INC0-F02), with Decision D transferring runtime 2i validation to INC-2 / OB-49 while preserving INV-CAMERA-3 and INV-OUTPUT-2 without waiver. Not folded with OB-36.
 
 ### OB-20
 - **Status:** OPEN
@@ -480,16 +480,17 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Origin:** CORRECTIONS_1R (1R)
 
 ### OB-36
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Run `tools/check-foundation-docs` (positive run and its seeded negative controls) in CI beginning with the first Phase F commit.
 - **Owner:** workspace tooling
-- **Evidence available:** TST-25 (checker PASS; negative controls fail as intended, D7)
+- **Evidence available:** TST-25 (checker PASS; negative controls fail as intended, D7); GitHub Actions CI workflow (`.github/workflows/ci.yml`) and passing CI runs on main
 - **Pass criterion:** a CI job executes `tools/check-foundation-docs` and `tools/check-foundation-docs --self-test` on every commit; any failure blocks merge
 - **Destination:** CI
 - **May be closed by:** ENFORCE increment INC-0 (separate check from OB-19)
 - **Dependencies:** —
 - **Blocks:** Phase F: required in the first Phase F commit alongside OB-19, but not part of OB-19
 - **Origin:** D7 (new)
+- **History:** Closed at INC-0 with CI automation established in `.github/workflows/ci.yml` and verified passing on remote main.
 
 ### OB-37
 - **Status:** OPEN
@@ -637,15 +638,15 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 
 ### OB-49
 - **Status:** OPEN
-- **Item:** Output reconfiguration on the production path (E-F2-03): `output_reconfigured` for mode, transform, scale and refresh changes; same `OutputId`; camera identity and value unchanged; tracker/view/membership rebuilt; F-RECONF-1; `wl_output`/`xdg_output` events; fullscreen configure; epoch settlement; rejection of unknown ids and key changes; reconnect tested separately.
+- **Item:** Output reconfiguration on the production path (E-F2-03): `output_reconfigured` for mode, transform, scale and refresh changes; same `OutputId`; camera identity and value unchanged; tracker/view/membership rebuilt; F-RECONF-1; `wl_output`/`xdg_output` events; fullscreen configure; epoch settlement; rejection of unknown ids and key changes; reconnect tested separately. Owns runtime 2i validation (transferred from OB-19 via Decision D): runtime 1:1 camera/output binding preservation and `OutputKey` collision negative control (`probe_sealed_key_steal` / `concurrent_output_key_collision`), proving that `INV-CAMERA-3` and `INV-OUTPUT-2` hold during multi-output binding.
 - **Owner:** core output manager + adapter
-- **Evidence available:** EE-4 (spike tests and probes p10–p13, 2h)
-- **Pass criterion:** the EE-4 reconfiguration tests ported to the production core and adapter; probes p10–p13 hold in the production crates; reconnect and reconfiguration remain separate test cases
+- **Evidence available:** EE-4 (spike tests and probes p10–p13, 2h; spike 2i `probe_sealed_key_steal`)
+- **Pass criterion:** the EE-4 reconfiguration tests ported to the production core and adapter; probes p10–p13 hold in the production crates; reconnect and reconfiguration remain separate test cases; runtime 2i negative control (`probe_sealed_key_steal` or production equivalent) executes against the real output manager and fails the buggy/stealing binding model while passing the 1:1 model. OB-49 cannot close without this runtime evidence.
 - **Destination:** T1
 - **May be closed by:** T1 production tests (INC-2)
 - **Dependencies:** INC-2
 - **Blocks:** INC-2 exit
-- **Origin:** E1R (E-F2-03)
+- **Origin:** E1R (E-F2-03); Decision D (OB-19 2i runtime validation transfer)
 
 ### OB-50
 - **Status:** OPEN

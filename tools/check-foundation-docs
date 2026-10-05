@@ -260,11 +260,12 @@ def run_checks(root):
             r.check('deferred-closed', status == 'OPEN', f'{oid} ({dest}) is {status}')
     ob19 = fields(obs.get('OB-19', ''))
     text19 = ' '.join(ob19.values())
-    ok19 = (ob19.get('Status') == 'OPEN' and ob19.get('Destination') == 'PHASE-F-ENTRY-GATE'
+    ok19 = (ob19.get('Status') == 'CLOSED' and ob19.get('Destination') == 'PHASE-F-ENTRY-GATE'
             and 'unconditional' in ob19.get('Blocks', '') and not re.search(r'(?<!un)conditional', text19.lower()))
     r.check('ob19-conditional', ok19, f'OB-19: {ob19.get("Status")} / {ob19.get("Destination")} / {ob19.get("Blocks")}')
-    r.check('ob36-scoped', 'OB-36' in obs and fields(obs['OB-36']).get('Destination') == 'CI' and 'not part of OB-19' in fields(obs['OB-36']).get('Blocks', ''),
-            'OB-36 must exist, destination CI, separate from OB-19')
+    ob36 = fields(obs.get('OB-36', ''))
+    r.check('ob36-scoped', 'OB-36' in obs and ob36.get('Status') == 'CLOSED' and ob36.get('Destination') == 'CI' and 'not part of OB-19' in ob36.get('Blocks', ''),
+            'OB-36 must exist, status CLOSED, destination CI, separate from OB-19')
 
     # ---- provisional values ------------------------------------------------------------------------
     prov_region = regions.get('PROV', [('', '')])[0][1]

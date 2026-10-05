@@ -1,17 +1,18 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F BEGUN — INC-0 IMPLEMENTED (`632b1d0`), PENDING INDEPENDENT INC-0 REVIEW.** OB-19 mechanically satisfied under the owner's INC-0 ruling; OB-19 and OB-36 remain `OPEN` until the review ratifies them. **INC-1 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-0 RATIFIED — READY FOR OWNER AUTHORIZATION OF INC-1.** OB-19 and OB-36 ratified `CLOSED`. All compile-time and enforcement boundaries verified. Runtime 2i transferred to INC-2 / OB-49 via Decision D. **INC-1 has NOT begun.**
 
 Date: 2026-10-05
 
-## PHASE F — INC-0 (implemented: `632b1d0`; evidence: evidence/phase-f/INC-0/)
+## PHASE F — INC-0 (implemented: `632b1d0`; evidence: evidence/phase-f/INC-0/; review: audit/phase-f-inc0-review/)
 - **Scope:** ENFORCE, HEADLESS. The production workspace (`crates/`: core, wayland, backend-headless, backend-winit, ipc, bin) carries the authority **shape** only; no product behaviour. Enforcement-only crates live in `enforcement/`.
 - **Pins:** `rust-toolchain.toml` 1.99.0; `Cargo.lock` tracked; `smithay = "=0.7.0"` from crates.io in the adapter; no patch (P1 stays experimental; OB-11 open).
-- **Enforcement:** `tools/verify-architecture` PASS: DAG; syn-based source rules (2g, 2h, mint location, wayland names, unsafe policy); 26 negative probes with asserted diagnostics plus 1 positive control; 24 seeded negative controls plus 3 judge controls. CI: `.github/workflows/ci.yml` (foundation-docs, verify-architecture, workspace-build).
-- **Owner ruling (this session):** probes compile against the real production boundaries. Runtime validation whose behaviour belongs to a later increment is deferred, never reported as tested. 2i (1:1 binding / OutputKey collision) is deferred to INC-2. The 2i/INC-0 wording inconsistency is recorded in evidence/phase-f/INC-0/README.md §1 for the review.
+- **Enforcement:** `tools/verify-architecture` PASS: DAG (normal, dev, build, target); syn-based source rules (2g, 2h, mint location, wayland names, unsafe policy, authority escape prevention across value/ref/mut/ptr/aliases); 26 negative probes with asserted diagnostics plus 1 positive control; 30 seeded negative controls plus 3 judge controls. CI: `.github/workflows/ci.yml` (foundation-docs, verify-architecture, workspace-build).
+- **Independent Review & Corrective Patch:** Independent adversarial review confirmed compiler probes, unsafe policy, and workspace isolation, identifying findings INC0-F01 (reference getters) and INC0-F02 (dev-dependencies). Corrective patch resolved both findings with seeded regression controls.
+- **Decision D Ratification:** OB-19 ratified `CLOSED` with explicit transfer of runtime 2i validation (`probe_sealed_key_steal` / `concurrent_output_key_collision`) to INC-2 / OB-49. `INV-CAMERA-3` and `INV-OUTPUT-2` remain mandatory without waiver. OB-36 ratified `CLOSED` with CI workflow execution verified.
 - **Registries:** unchanged (57 invariants, 20 `F-*`, OB-1…OB-51); checker PASS, self-test 18/18.
 - **LIVE_SYSTEM_TOUCHED:** no.
-- **NEXT:** independent INC-0 review (ratify or reject OB-19/OB-36 closure). INC-1 only after that review and explicit owner authorization.
+- **NEXT:** INC-1 only upon explicit owner authorization.
 
 ## PHASE E FINAL REVIEW (recorded: `cfb54f091bd2a19065a45b32662e8f0bbddd62fc`)
 - **Verdict:** `PHASE E PASS — PHASE F MAY BEGIN` (audit/phase-e-final/VERDICT.md). Baseline reviewed: E1R seal `1ae1b736515b8c52c3e6ba7596b22c81f7098390`, tracking `e9d36732ac4fa9e934ee1b90bb696e9545c598ab`. Zero unresolved Level-A findings.
