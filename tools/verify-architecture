@@ -261,7 +261,7 @@ def dag_problems(meta):
         out = []
         for d in nodes[pid]["deps"]:
             kinds = {k["kind"] for k in d["dep_kinds"]}
-            if kinds & {None, "build"}:
+            if kinds & {None, "build", "dev"}:
                 out.append(by_id[d["pkg"]]["name"])
         return out
 
@@ -270,7 +270,7 @@ def dag_problems(meta):
         while stack:
             for d in nodes[stack.pop()]["deps"]:
                 kinds = {k["kind"] for k in d["dep_kinds"]}
-                if kinds & {None, "build"} and d["pkg"] not in seen:
+                if kinds & {None, "build", "dev"} and d["pkg"] not in seen:
                     seen.add(d["pkg"])
                     stack.append(d["pkg"])
         return {by_id[i]["name"] for i in seen}
@@ -296,13 +296,18 @@ def dag_problems(meta):
         pkg = by_id.get(ws_names.get(name, ""))
         if not pkg:
             continue
+        if name == CORE and pkg["dependencies"]:
+            problems.append(f"{CORE} declares dependencies {[d['name'] for d in pkg['dependencies']]}; it must declare none (INV-ARCH-1)")
         for d in pkg["dependencies"]:
-            if d["kind"] not in (None, "build"):
+            if d.get("kind") not in (None, "build", "dev"):
                 continue
+            kind_str = f" ({d['kind']})" if d.get("kind") else ""
             if d["name"] in ws_names and d["name"] not in ALLOWED_INTERNAL[name]:
-                problems.append(f"declared edge {name} -> {d['name']} is forbidden")
+                problems.append(f"declared edge {name} -> {d['name']}{kind_str} is forbidden")
             elif d["name"] not in ws_names and d["name"] not in ALLOWED_EXTERNAL[name]:
-                problems.append(f"{name} declares external crate {d['name']!r}; allowed: {sorted(ALLOWED_EXTERNAL[name]) or 'none'}")
+                problems.append(f"{name} declares external crate {d['name']!r}{kind_str}; allowed: {sorted(ALLOWED_EXTERNAL[name]) or 'none'}")
+            if d["name"] in ENFORCEMENT:
+                problems.append(f"product crate {name} declares enforcement crate {d['name']}{kind_str}")
     for name in ENFORCEMENT:
         for p in PRODUCT:
             if p in ws_names and name in closure(ws_names[p]):
@@ -316,7 +321,7 @@ def check_dag(meta, r):
     for p in problems:
         r.fail(p)
     if not problems:
-        r.ok(f"{CORE} has no dependencies")
+        r.ok(f"{CORE} has no dependencies (normal, dev, or build)")
         r.ok("every workspace edge is allowed: wayland -> core; backends -> wayland, core; ipc -> core; bin -> all")
         r.ok("no wayland -> backend/ipc, ipc <-> wayland, backend <-> backend, product -> enforcement")
         r.ok("smithay reachable only from the adapter and its dependents; core and ipc closures exclude it")
@@ -516,6 +521,18 @@ SOURCE_SEEDS = [
                       "    vec![OutputLifecycleToken { core_id: id, _not_send: std::marker::PhantomData }]\n}\n")),
     ("token getter returning the token", "authority-return",
      CORE_LIB, append("\nimpl Core {\n    pub fn take_token(&mut self) -> Option<OutputLifecycleToken> {\n        None\n    }\n}\n")),
+    ("F01: token getter returning shared reference (&OutputLifecycleToken)", "authority-return",
+     CORE_LIB, append("\nimpl Core {\n    pub fn token_ref(&self) -> &OutputLifecycleToken {\n        loop {}\n    }\n}\n")),
+    ("F01: token getter returning mutable reference (&mut OutputLifecycleToken)", "authority-return",
+     CORE_LIB, append("\nimpl Core {\n    pub fn token_mut(&mut self) -> &mut OutputLifecycleToken {\n        loop {}\n    }\n}\n")),
+    ("F01: port getter returning shared reference (&InputPort)", "authority-return",
+     CORE_LIB, append("\nimpl Core {\n    pub fn input_port_ref(&self) -> &InputPort {\n        loop {}\n    }\n}\n")),
+    ("F01: port getter returning mutable reference (&mut ShellPort)", "authority-return",
+     CORE_LIB, append("\nimpl Core {\n    pub fn shell_port_mut(&mut self) -> &mut ShellPort {\n        loop {}\n    }\n}\n")),
+    ("F01: proof getter returning pointer (*const Authorized)", "authority-return",
+     CORE_LIB, append("\nimpl Core {\n    pub fn proof_ptr(&self) -> *const crate::authority::Authorized {\n        std::ptr::null()\n    }\n}\n")),
+    ("F01: authority escape through type alias", "authority-return",
+     CORE_LIB, append("\ntype EscapedToken = OutputLifecycleToken;\nimpl Core {\n    pub fn token_alias_ref(&self) -> &EscapedToken {\n        loop {}\n    }\n}\n")),
     ("derive(Clone) on InputPort", "authority-not-duplicable",
      CORE_LIB, replace("pub struct InputPort {", "#[derive(Clone)]\npub struct InputPort {")),
     ("2h: camera mutation injected into output_reconfigured", "reconfigured-no-camera-authority",
@@ -548,14 +565,26 @@ SOURCE_SEEDS = [
 GRAPH_SEEDS = [
     ("core gains a dependency (smithay)", "crates/infynitae-core/Cargo.toml",
      'smithay = { version = "=0.7.0", default-features = false }', "dag"),
+    ("F02: core gains a dev-dependency (smithay)", "crates/infynitae-core/Cargo.toml",
+     '\n[dev-dependencies]\nsmithay = { version = "=0.7.0", default-features = false }\n', "append-dag"),
+    ("F02: core gains a dev-dependency (wayland)", "crates/infynitae-core/Cargo.toml",
+     '\n[dev-dependencies]\ninfynitae-wayland = { path = "../infynitae-wayland" }\n', "append-dag"),
+    ("F02: core gains a build-dependency (smithay)", "crates/infynitae-core/Cargo.toml",
+     '\n[build-dependencies]\nsmithay = { version = "=0.7.0", default-features = false }\n', "append-dag"),
+    ("F02: core gains a target-specific dependency", "crates/infynitae-core/Cargo.toml",
+     '\n[target.\'cfg(unix)\'.dependencies]\nsmithay = { version = "=0.7.0", default-features = false }\n', "append-dag"),
     ("wayland -> backend edge", "crates/infynitae-wayland/Cargo.toml",
      'infynitae-backend-headless = { path = "../infynitae-backend-headless" }', "dag-acyclic"),
     ("ipc -> wayland edge", "crates/infynitae-ipc/Cargo.toml",
      'infynitae-wayland = { path = "../infynitae-wayland" }', "dag"),
+    ("F02: ipc -> wayland dev-dependency edge", "crates/infynitae-ipc/Cargo.toml",
+     '\n[dev-dependencies]\ninfynitae-wayland = { path = "../infynitae-wayland" }\n', "append-dag"),
     ("backend <-> backend edge", "crates/infynitae-backend-winit/Cargo.toml",
      'infynitae-backend-headless = { path = "../infynitae-backend-headless" }', "dag"),
     ("product -> enforcement edge", "crates/infynitae/Cargo.toml",
      'infynitae-architecture-probes = { path = "../../enforcement/probes" }', "dag"),
+    ("F02: product crate gains dev-dependency on enforcement crate", "crates/infynitae/Cargo.toml",
+     '\n[dev-dependencies]\ninfynitae-architecture-probes = { path = "../../enforcement/probes" }\n', "append-dag"),
     ("product -> binary-only enforcement crate (declared only)", "crates/infynitae/Cargo.toml",
      'infynitae-source-rules = { path = "../../enforcement/source-rules" }', "dag"),
     ("smithay requirement loosened", "crates/infynitae-wayland/Cargo.toml", None, "smithay"),
@@ -593,7 +622,10 @@ def check_mutations(binary, r):
                 edit(tmp, "crates/infynitae-backend-headless/Cargo.toml",
                      replace('infynitae-wayland = { path = "../infynitae-wayland" }\n', ""))
                 kind = "dag"
-            if kind == "dag":
+            if kind == "append-dag":
+                edit(tmp, rel, append(line))
+                hit = bool(dag_problems(metadata(tmp, locked=False)))
+            elif kind == "dag":
                 edit(tmp, rel, replace("[dependencies]\n", f"[dependencies]\n{line}\n"))
                 hit = bool(dag_problems(metadata(tmp, locked=False)))
             elif kind == "smithay":

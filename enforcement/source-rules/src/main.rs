@@ -9,7 +9,7 @@
 
 #![deny(unsafe_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
@@ -367,22 +367,38 @@ fn last_ident(path: &syn::Path) -> Option<String> {
     path.segments.last().map(|s| s.ident.to_string())
 }
 
-/// Type names that appear by value (not behind a reference) in a type.
-fn by_value_names(ty: &syn::Type, out: &mut Vec<String>) {
+/// Type names that appear in a type (by value, reference, pointer, tuple, generics, etc.).
+fn authority_names_in_type(ty: &syn::Type, out: &mut Vec<String>, impl_ty: Option<&str>) {
     match ty {
-        syn::Type::Reference(_) | syn::Type::Ptr(_) => {}
-        syn::Type::Tuple(t) => t.elems.iter().for_each(|e| by_value_names(e, out)),
-        syn::Type::Paren(p) => by_value_names(&p.elem, out),
-        syn::Type::Group(g) => by_value_names(&g.elem, out),
-        syn::Type::Array(a) => by_value_names(&a.elem, out),
-        syn::Type::Slice(s) => by_value_names(&s.elem, out),
+        syn::Type::Reference(r) => authority_names_in_type(&r.elem, out, impl_ty),
+        syn::Type::Ptr(p) => authority_names_in_type(&p.elem, out, impl_ty),
+        syn::Type::Tuple(t) => t
+            .elems
+            .iter()
+            .for_each(|e| authority_names_in_type(e, out, impl_ty)),
+        syn::Type::Paren(p) => authority_names_in_type(&p.elem, out, impl_ty),
+        syn::Type::Group(g) => authority_names_in_type(&g.elem, out, impl_ty),
+        syn::Type::Array(a) => authority_names_in_type(&a.elem, out, impl_ty),
+        syn::Type::Slice(s) => authority_names_in_type(&s.elem, out, impl_ty),
+        syn::Type::BareFn(f) => {
+            if let syn::ReturnType::Type(_, ret) = &f.output {
+                authority_names_in_type(ret, out, impl_ty);
+            }
+        }
         syn::Type::Path(p) => {
             for seg in &p.path.segments {
-                out.push(seg.ident.to_string());
+                let id = seg.ident.to_string();
+                if id == "Self" {
+                    if let Some(t) = impl_ty {
+                        out.push(t.to_string());
+                    }
+                } else {
+                    out.push(id);
+                }
                 if let syn::PathArguments::AngleBracketed(args) = &seg.arguments {
                     for a in &args.args {
                         if let syn::GenericArgument::Type(t) = a {
-                            by_value_names(t, out);
+                            authority_names_in_type(t, out, impl_ty);
                         }
                     }
                 }
@@ -391,9 +407,73 @@ fn by_value_names(ty: &syn::Type, out: &mut Vec<String>) {
         other => {
             let mut ids = Vec::new();
             idents(other.to_token_stream(), &mut ids);
-            out.extend(ids.iter().map(|i| i.to_string()));
+            for i in ids {
+                let id = i.to_string();
+                if id == "Self" {
+                    if let Some(t) = impl_ty {
+                        out.push(t.to_string());
+                    }
+                } else {
+                    out.push(id);
+                }
+            }
         }
     }
+}
+
+/// Collect authority types and their aliases/re-exports within core.
+fn collect_authority_types(files: &[SourceFile]) -> HashSet<String> {
+    let mut authority: HashSet<String> = PORTS
+        .iter()
+        .copied()
+        .chain([PROOF])
+        .map(String::from)
+        .collect();
+    let mut changed = true;
+    while changed {
+        changed = false;
+        for f in files {
+            struct AliasVisitor<'a> {
+                auth: &'a mut HashSet<String>,
+                changed: &'a mut bool,
+            }
+            impl<'ast> Visit<'ast> for AliasVisitor<'_> {
+                fn visit_item_type(&mut self, i: &'ast syn::ItemType) {
+                    let mut names = Vec::new();
+                    authority_names_in_type(&i.ty, &mut names, None);
+                    if names.iter().any(|n| self.auth.contains(n))
+                        && self.auth.insert(i.ident.to_string())
+                    {
+                        *self.changed = true;
+                    }
+                    syn::visit::visit_item_type(self, i);
+                }
+                fn visit_use_tree(&mut self, u: &'ast syn::UseTree) {
+                    match u {
+                        syn::UseTree::Path(p) => self.visit_use_tree(&p.tree),
+                        syn::UseTree::Group(g) => {
+                            for item in &g.items {
+                                self.visit_use_tree(item);
+                            }
+                        }
+                        syn::UseTree::Rename(r)
+                            if self.auth.contains(&r.ident.to_string())
+                                && self.auth.insert(r.rename.to_string()) =>
+                        {
+                            *self.changed = true;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            let mut v = AliasVisitor {
+                auth: &mut authority,
+                changed: &mut changed,
+            };
+            v.visit_file(&f.ast);
+        }
+    }
+    authority
 }
 
 // ---------------------------------------------------------------- core rules
@@ -425,18 +505,20 @@ struct CoreVisitor<'a> {
     file: &'a Path,
     ctx: Ctx,
     facts: &'a mut CoreFacts,
-}
-
-fn authority_type(name: &str) -> bool {
-    PORTS.contains(&name) || name == PROOF
+    authority_types: &'a HashSet<String>,
 }
 
 impl CoreVisitor<'_> {
+    fn authority_type(&self, name: &str) -> bool {
+        self.authority_types.contains(name)
+    }
+
     fn check_fn(&mut self, sig: &syn::Signature) {
         if let syn::ReturnType::Type(_, ty) = &sig.output {
             let mut names = Vec::new();
-            by_value_names(ty, &mut names);
-            for n in names.into_iter().filter(|n| authority_type(n)) {
+            authority_names_in_type(ty, &mut names, self.ctx.impl_ty.as_deref());
+            names.retain(|n| self.authority_type(n));
+            for n in names {
                 self.facts
                     .returns
                     .push((self.ctx.clone(), n, at(self.file, sig.ident.span())));
@@ -444,7 +526,7 @@ impl CoreVisitor<'_> {
         }
     }
     fn derives(&mut self, attrs: &[syn::Attribute], ty: &syn::Ident) {
-        if !authority_type(&ty.to_string()) {
+        if !self.authority_type(&ty.to_string()) {
             return;
         }
         for a in attrs.iter().filter(|a| a.path().is_ident("derive")) {
@@ -476,7 +558,7 @@ impl<'ast> Visit<'ast> for CoreVisitor<'_> {
         };
         if let (Some((_, tr, _)), Some(t)) = (&i.trait_, &self_ty) {
             let tr = last_ident(tr).unwrap_or_default();
-            if (tr == "Clone" || tr == "Copy") && authority_type(t) {
+            if (tr == "Clone" || tr == "Copy") && self.authority_type(t) {
                 self.facts
                     .duplicable
                     .push((t.clone(), at(self.file, i.impl_token.span)));
@@ -506,6 +588,13 @@ impl<'ast> Visit<'ast> for CoreVisitor<'_> {
         syn::visit::visit_impl_item_fn(self, f);
         self.ctx = saved;
     }
+    fn visit_trait_item_fn(&mut self, f: &'ast syn::TraitItemFn) {
+        let saved = self.ctx.clone();
+        self.ctx.func = Some(f.sig.ident.to_string());
+        self.check_fn(&f.sig);
+        syn::visit::visit_trait_item_fn(self, f);
+        self.ctx = saved;
+    }
     fn visit_item_fn(&mut self, f: &'ast syn::ItemFn) {
         let saved = self.ctx.clone();
         self.ctx.impl_ty = None;
@@ -523,7 +612,7 @@ impl<'ast> Visit<'ast> for CoreVisitor<'_> {
         syn::visit::visit_item_enum(self, e);
     }
     fn visit_expr_struct(&mut self, e: &'ast syn::ExprStruct) {
-        if let Some(t) = last_ident(&e.path).filter(|t| authority_type(t)) {
+        if let Some(t) = last_ident(&e.path).filter(|t| self.authority_type(t)) {
             let loc = at(
                 self.file,
                 e.path
@@ -563,7 +652,7 @@ fn scan_macro(tokens: &[TokenTree], v: &mut CoreVisitor<'_>) {
                 .facts
                 .mint_uses
                 .push((v.ctx.clone(), at(v.file, i.span()))),
-            TokenTree::Ident(i) if authority_type(&i.to_string()) => {
+            TokenTree::Ident(i) if v.authority_type(&i.to_string()) => {
                 if matches!(tokens.get(k + 1), Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Brace)
                 {
                     v.facts.constructions.push((
@@ -579,6 +668,7 @@ fn scan_macro(tokens: &[TokenTree], v: &mut CoreVisitor<'_>) {
 }
 
 fn check_core(files: &[SourceFile], r: &mut Report) {
+    let authority_set = collect_authority_types(files);
     let mut facts = CoreFacts::default();
     for f in files {
         let mut v = CoreVisitor {
@@ -588,6 +678,7 @@ fn check_core(files: &[SourceFile], r: &mut Report) {
                 ..Ctx::default()
             },
             facts: &mut facts,
+            authority_types: &authority_set,
         };
         v.visit_file(&f.ast);
     }
@@ -643,7 +734,7 @@ fn check_core(files: &[SourceFile], r: &mut Report) {
             r.fail(
                 R2,
                 format!(
-                    "{loc}: `{}` returns `{ty}` by value",
+                    "{loc}: `{}` returns `{ty}` (authority escape)",
                     c.func.clone().unwrap_or_default()
                 ),
             );
