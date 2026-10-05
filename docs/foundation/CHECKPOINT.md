@@ -1,8 +1,21 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-1 RATIFIED — READY FOR OWNER AUTHORIZATION OF INC-2.** Independent review (CONDITIONAL PASS, `audit/phase-f-inc1-review/`) → corrective patch `1fa72af` (INC1-F06, INC1-F07) → corrective verification (local and CI run 37291919770) → OB-2 and OB-26 ratified `CLOSED`. **INC-2 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-2 IMPLEMENTED, PENDING INDEPENDENT REVIEW.** Multi-output lifecycle, binding precedence (1:1, runtime 2i), membership, damage trackers sized `phys_O`, zero-output core state, frame clock and presentation feedback run on the production path (`0a03aab`). OB-49 is mechanically satisfied for every criterion that can execute in INC-2 and stays `OPEN` (finding INC2-F01). **INC-3 has NOT begun.**
 
 Date: 2026-10-05
+
+## PHASE F — INC-2 (implemented: `0a03aab`; evidence: evidence/phase-f/INC-2/)
+- **Scope:** PRODUCT, HEADLESS, canonical INC-2.
+  - **core:** output manager (M4/M5, OutputKey, PersistedCameras, Arrangement), PointerState (lifecycle part), visibility pass (OBJ-13) and frame clock.
+  - **adapter:** wl_output + xdg-output + presentation globals, enter/leave, damage trackers (`phys_O`), frame completion.
+  - **headless backend:** hotplug, reconfiguration, disconnection, virtual vblank.
+- **Not started (owned later):** zero-output seat grab and routed motion (INC-3), reconciliation (INC-5), epoch settlement (INC-6), fullscreen configure (INC-7), kick and fallback (INC-8).
+- **Tests:** 75 passing (T0 core 52; T1 19 distinct tests plus the oracle self-test in each of the 4 T1 binaries). Runtime 2i passes with the 1:1 rule and fails with "1:1 violated" under the sealed rule, on T0 and T1 (`verify-architecture` [5b]). EE-1 tracker matrix on the production adapter, with the sealed control failing 7/7 rotated cases.
+- **Enforcement:** `verify-architecture` PASS (27 probes, 47 seeded controls); `verify-test-efficacy` PASS (45/45, 21 new INC-2 controls); checker 57/20/51, self-test 18/18; no new dependencies; smithay `=0.7.0`; no unsafe; P1 not applied (OB-11 open).
+- **Obligations:** OB-49 mechanically satisfied except items that cannot execute yet (fullscreen configure, epoch settlement); OB-45 (tracker/membership/damage part), OB-50 (core part) and OB-3 (removal part) partly satisfied; all `OPEN`.
+- **Findings:** Level A 0, Level B 0, Level C 2 (INC1-F01, INC2-F01).
+- **LIVE_SYSTEM_TOUCHED:** no.
+- **NEXT:** independent adversarial INC-2 review. INC-3 only after that review and explicit owner authorization.
 
 ## PHASE F — INC-1 RATIFICATION (record: evidence/phase-f/INC-1/corrective/)
 - **Review:** `INC-1 CONDITIONAL PASS — CORRECTIONS REQUIRED BEFORE RATIFICATION` (dossier recorded unchanged in `38c60ca`). Findings INC1-F06 and INC1-F07 (Level B); INC1-F01…F05 adjudicated.
@@ -19,7 +32,7 @@ Date: 2026-10-05
   - OB-2 and OB-26 `CLOSED`.
   - Still `OPEN`: OB-1, OB-6 (T4 part), OB-14, OB-17, OB-49 (runtime 2i, INC-2).
 - **Findings:** open Level A 0, Level B 0, Level C 1 (INC1-F01, INC-7).
-- **NEXT:** INC-2 only upon explicit owner authorization.
+- **NEXT (at ratification):** INC-2 upon explicit owner authorization. Superseded by the INC-2 entry above.
 
 ## PHASE F — INC-1 (evidence: evidence/phase-f/INC-1/)
 - **Scope:** PRODUCT, HEADLESS, exactly the canonical INC-1.

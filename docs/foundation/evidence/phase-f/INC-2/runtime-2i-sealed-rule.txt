@@ -1,0 +1,7 @@
+# commit: 0a03aab31ead29757192fa3afb387d3419f21cb9
+test entry::tests::concurrent_output_key_collision_keeps_one_to_one ... FAILED
+1:1 violated: a=None b=Some(0)
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 51 filtered out; finished in 0.00s
+test same_key_outputs_keep_one_to_one ... FAILED
+1:1 violated: None Some(0)
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 8 filtered out; finished in 0.00s
