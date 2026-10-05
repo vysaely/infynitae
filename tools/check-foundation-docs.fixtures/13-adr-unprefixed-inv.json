@@ -1,0 +1,7 @@
+{
+ "name": "ADR cites an invariant without the INV- prefix (E-F1-01)",
+ "file": "FOUNDATION_DECISIONS.md",
+ "find": "- **Invariants:** INV-STAGE-1, ",
+ "replace": "- **Invariants:** STAGE-1, ",
+ "expect": "adr-unprefixed-inv"
+}

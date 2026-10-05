@@ -2,9 +2,9 @@
 
 Status: **Phase D checkpoint 2 (D7) living document.** Canonical living home of the state-machine namespace `M*` (FOUNDATION_ARCHITECTURE §P0).
 
-These are the **effective** machines after the 1R and 2R corrections. Every transition cites the invariant (FOUNDATION_INVARIANTS.md) or ADR (FOUNDATION_DECISIONS.md) it implements. Objects are named by `OBJ-*` (FOUNDATION_OBJECT_MODEL.md) and formulas by `F-*` (FOUNDATION_ARCHITECTURE §F).
+These are the **effective** machines after the 1R and 2R corrections and the unsealed Phase E corrective checkpoint E1R (FOUNDATION_ARCHITECTURE §C12.E1R). Every transition cites the invariant (FOUNDATION_INVARIANTS.md) or ADR (FOUNDATION_DECISIONS.md) it implements. Objects are named by `OBJ-*` (FOUNDATION_OBJECT_MODEL.md) and formulas by `F-*` (FOUNDATION_ARCHITECTURE §F).
 
-Historical tables are provenance only and are not edited: BLOCKERS B5.3, B9.6, B10.4 and B11 (Phase B); audit/D2 (e8ec03a); audit/1R/STATE_MACHINES_1R (84ce620); audit/2R/MATRICES_2R (5827926).
+Historical tables are provenance only and are not edited: BLOCKERS B5.3, B9.6, B10.4 and B11 (Phase B); audit/D2 (e8ec03a); audit/1R/STATE_MACHINES_1R (84ce620); audit/2R/MATRICES_2R (5827926). E1R changes: audit/E1R/INVARIANT_DIFF_E1R.md.
 
 One core batch performs, in order:
 1. state updates;
@@ -55,23 +55,27 @@ Object: OBJ-05, OBJ-23. Implements INV-RENDER-2, INV-HIT-1, INV-INPUT-10, INV-CO
 | any | parent unmapped/destroyed | Dismissed | `popup_done` for the tree | INV-STAGE-4 |
 
 ## M4 — Output lifecycle
-Object: OBJ-10, OBJ-07, OBJ-08. Implements INV-OUTPUT-1, INV-OUTPUT-2, INV-CAMERA-3.
+Object: OBJ-10, OBJ-07, OBJ-08, OBJ-20. Implements INV-OUTPUT-1, INV-OUTPUT-2, INV-CAMERA-3.
 
 | From | Trigger [guard] | To | Effects | Cites |
 |---|---|---|---|---|
-| Absent | `output_connected(&mut OutputLifecycleToken, descriptor)` (startup and hotplug alike) | Enabled | global created; camera bound by precedence remembered → persisted → default (M5); Views, membership, ladder; epoch settlement | INV-OUTPUT-2, INV-CAMERA-3, INV-SCALE-3 |
-| Enabled | mode/scale/transform change (descriptor update through the token entry) | Enabled | View/ProjectionFrame/damage tracker rebuilt (F-RENDER-1); membership; reconciliation trigger (M13); no camera value change | INV-OUTPUT-2, INV-INPUT-5 |
-| Enabled | `output_disconnected(&mut OutputLifecycleToken, id)` | Removed | leave before the global is destroyed; camera unbound and kept; fullscreen dropped with its configure; interactions orphaned without camera mutation; pointer relocated (F-RELOCATE-1); constraints reconciled (deferred under a client grab); settlement | INV-OUTPUT-1 |
-| any | protocol event or caller-supplied coordinates | — | impossible: no such entry or field | INV-OUTPUT-2 |
+| Absent | `output_connected(&mut OutputLifecycleToken, descriptor)` (startup and hotplug alike) | Enabled | global created; camera bound by precedence remembered-and-unbound → persisted (no collision) → default (M5); Views (`view_O`), damage tracker (`phys_O`), membership, ladder; epoch settlement; if the seat is `NoOutput`: zero-output grab removed, pointer placed at the centre of the new output (startup rule), one routed motion, reconciliation (M13) | INV-OUTPUT-2, INV-CAMERA-3, INV-SCALE-3, INV-OUTPUT-1 |
+| Enabled | `output_reconfigured(&mut OutputLifecycleToken, id, descriptor)` [known id ∧ same `OutputKey`]: mode, transform, scale or refresh change | Enabled (same `OutputId`) | View (`view_O`), ProjectionFrame and damage tracker (`phys_O`) rebuilt (F-VIEW-1, F-RENDER-1); membership; pointer clamp (F-RECONF-1); `wl_output`/`xdg_output` events; one configure only for an element in protocol fullscreen on this output; epoch settlement; reconciliation trigger (M13); no camera value change; no new `OutputId` | INV-OUTPUT-2, INV-INPUT-5, INV-SCALE-3 |
+| Enabled | `output_reconfigured` [unknown id ∨ changed `OutputKey`] | unchanged | rejected, nothing mutated (an identity change is a disconnect plus a connect) | INV-OUTPUT-2 |
+| Enabled | `output_disconnected(&mut OutputLifecycleToken, id)` [another output survives] | Removed | leave before the global is destroyed; camera unbound and kept; fullscreen dropped with its configure; interactions orphaned without camera mutation; pointer relocated (F-RELOCATE-1); constraints reconciled (deferred under a client grab); settlement | INV-OUTPUT-1 |
+| Enabled | `output_disconnected(&mut OutputLifecycleToken, id)` [last output] | Removed; seat `NoOutput` | as above, but no relocation: zero-output grab installed with `Focus::Clear` (client: `wl_pointer.leave`; active constraints end once), one `motion(None)` delivered to no one; physical pointer input consumed until the next connect | INV-OUTPUT-1, INV-INPUT-5 |
+| any | protocol event or caller-supplied coordinates or zoom | — | impossible: no such entry, field or parameter | INV-OUTPUT-2 |
 
 ## M5 — Camera lifecycle
 Object: OBJ-07, OBJ-09, OBJ-30. Implements INV-CAMERA-1, INV-CAMERA-3, INV-CAMERA-5.
 
 | From | Trigger | To | Effects | Cites |
 |---|---|---|---|---|
-| — | `output_connected`, no remembered camera for the key | Bound | new camera seeded from the persisted lookup or the internal default; one proof | INV-CAMERA-3, INV-OUTPUT-2 |
-| Unbound | `output_connected`, same `OutputKey` | Bound | re-bound, value unchanged | INV-CAMERA-3 |
-| Bound | last bound output disconnected | Unbound | value kept | INV-OUTPUT-1 |
+| — | `output_connected`, no **unbound** remembered camera for the key | Bound | new camera seeded from the persisted lookup (only if no camera with that key exists this session) or the internal default; one proof | INV-CAMERA-3, INV-OUTPUT-2 |
+| Unbound | `output_connected`, same `OutputKey` [lowest unbound camera with that key] | Bound | re-bound, value unchanged | INV-CAMERA-3 |
+| Bound | `output_connected`, same `OutputKey` (concurrent key collision) | Bound (unchanged) | never re-bound: binding is 1:1; the new output gets its own camera (row 1) | INV-CAMERA-3 |
+| Bound | `output_reconfigured` of its output | Bound | nothing (no proof minted) | INV-OUTPUT-2 |
+| Bound | its output disconnected | Unbound | value kept | INV-OUTPUT-1 |
 | Bound | navigation via `InputPort`/`ShellPort` (pan, jump, fit, restore) | Bound | one mutation per minted proof | INV-CAMERA-1 |
 | any | protocol event, client commit, timer | unchanged | — | INV-CAMERA-1 |
 
@@ -124,7 +128,7 @@ Object: OBJ-19. Implements INV-PRES-1.
 | Fullscreen{O} | O disconnected | Windowed | configure with the saved size | INV-OUTPUT-1 |
 
 ## M10 — Pointer focus
-Object: OBJ-20, OBJ-24, OBJ-15. Implements INV-HIT-1, INV-INPUT-3, INV-INPUT-5.
+Object: OBJ-20, OBJ-24, OBJ-15. Implements INV-HIT-1, INV-INPUT-3, INV-INPUT-5, INV-OUTPUT-1.
 
 | From | Trigger | To | Effects | Cites |
 |---|---|---|---|---|
@@ -133,6 +137,10 @@ Object: OBJ-20, OBJ-24, OBJ-15. Implements INV-HIT-1, INV-INPUT-3, INV-INPUT-5.
 | Kept | interaction ends | per re-hit | ≤ 1 true-position event per batch | INV-INPUT-5, INV-CAMERA-4 |
 | Focused | client button press | ClientGrab | Smithay decides the delivered focus; core uses the delivered focus for protocol-order decisions | INV-INPUT-5 |
 | any | view change, geometry change, output change, ActiveElementFocus change | per batch-end reconciliation | at most one true-position event | INV-INPUT-5 |
+| any | last output removed | `NoOutput` (no focus) | zero-output grab with `Focus::Clear`: `wl_pointer.leave`, no motion to the old focus | INV-OUTPUT-1 |
+| `NoOutput` | physical motion, button, axis | `NoOutput` | consumed; delivered nowhere; no relative motion | INV-OUTPUT-1 |
+| `NoOutput` | first output connected | per F-HIT-1 | grab removed; startup placement; one routed motion (enter) | INV-OUTPUT-1 |
+| Focused | interaction output reconfigured | per batch-end reconciliation | pointer clamped (F-RECONF-1); at most one true-position event | INV-OUTPUT-2, INV-INPUT-5 |
 
 ## M11 — ActiveElementFocus and ProtocolSurfaceRoute
 Object: OBJ-22, OBJ-23. Implements INV-INPUT-8, INV-INPUT-10, INV-PROTO-1. ADR-14.
@@ -165,11 +173,14 @@ Object: OBJ-20, OBJ-21, OBJ-24. Implements INV-COORD-5, INV-INPUT-5, INV-OUTPUT-
 | Requested | batch end [ActiveElementFocus = element(S) ∧ pointer focus S ∧ inside region ∧ no acquisition] | Active | `locked`/`confined` once | INV-INPUT-5 |
 | Active | any trigger while a compositor interaction or client-owned grab is active | Active (deferred) | core = Smithay; no absolute motion to a locked surface; relative only from physical deltas | INV-INPUT-5 |
 | Active (lock) | batch end [lock point (F-LOCK-1) observable through the interaction output ∧ ActiveElementFocus = element(S)] | Active | nothing | INV-INPUT-5 |
-| Active (lock) | batch end [otherwise] | Inactive / destroyed (oneshot) | exactly one `unlocked`; explicit deactivate only if the delivered focus does not change (W-SM-4) | INV-INPUT-5 |
+| Active (lock) | batch end [otherwise] | Inactive / destroyed (oneshot) | exactly one `unlocked`; explicit deactivate only if the delivered focus does not change (W-SM-4a); no later event (P1, W-SM-4c) | INV-INPUT-5 |
 | Active (confine) | motion | Active | clamp per F-CONFINE-1; no Arrangement crossing | INV-INPUT-5 |
 | Active (confine) | batch end [pointer outside the region] | Inactive | one `unconfined`; no warp | INV-INPUT-5 |
 | Active | interaction output disconnected | Active (deferred) or reconciled | pointer relocated at once (F-RELOCATE-1) | INV-OUTPUT-1 |
 | Active | S destroyed/unmapped | — | ended through the protocol path | INV-INPUT-5 |
+| Requested / Inactive (persistent) | pointer leaves S, S destroyed, later batches | unchanged | **no event**: deactivation only from Active (requires P1 or an upstream fix, OB-11) | INV-INPUT-5 |
+| Active | last output removed | Inactive / destroyed (oneshot) | one `unlocked`/`unconfined` through the zero-output grab's focus clear; reactivation only after reconnect and re-entry | INV-OUTPUT-1, INV-INPUT-5 |
+| Active | interaction output reconfigured | per batch-end reconciliation | lock kept iff its lock point is still observable; confinement re-clamped or ended | INV-INPUT-5, INV-OUTPUT-2 |
 
 ## M14 — Confinement clamp
 Part of M13 (the clamp rows). It keeps its identifier for continuity with audit/D2. Implements INV-INPUT-5 via F-CONFINE-1.
@@ -180,8 +191,10 @@ Object: OBJ-16. Implements INV-SCALE-1, INV-SCALE-2, INV-SCALE-5.
 | From | Trigger | To | Effects | Cites |
 |---|---|---|---|---|
 | — | placement done (before the initial configure) | h = `t(ρ_pred)` | emitted before the initial configure | INV-SCALE-5 |
-| any | batch-end evaluation | per M7 | target on the ladder in force (F-SCALE-2, F-SCALE-3); emission only on change; unobserved elements hold | INV-SCALE-2, INV-SCALE-5 |
+| any | batch-end evaluation | per M7 | target on the ladder in force (F-SCALE-2, F-SCALE-3); integer emission `b(h)` bounded by the device; emission only on change; unobserved elements hold | INV-SCALE-2, INV-SCALE-5 |
 | any | ladder change (hotplug) | held value may be off-ladder | every emitted value is a rung | INV-SCALE-2 |
+| — | initial commit with no buffer (`s_max(E) = 0`) | `H_max = H_cfg` | no division: `H_dev = +∞` by the domain of F-SCALE-2 | INV-SCALE-2 |
+| any | first buffer attached (`s_max` becomes > 0) | per P7 | immediate decrease if `h > H_max(E)` | INV-SCALE-2 |
 
 ## M16 — Off-screen frame callbacks
 Object: OBJ-17, OBJ-05. Implements INV-FRAME-1 … INV-FRAME-5, INV-IDLE-1.
@@ -218,7 +231,7 @@ Object: OBJ-32. Implements INV-XWAYLAND-1. ADR-10.
 | Crashed | repeated crashes | Degraded | X11 disabled; logged | INV-FAIL-1 |
 
 ## M20 — Persistence restore
-Object: OBJ-33, OBJ-09. Implements INV-OUTPUT-2, INV-FAIL-1. The file is validated all-or-nothing at startup and given to `Core::new` as a passive lookup. Cameras are applied only inside `output_connected` (M4/M5). Anchors are restored only through placement at initial commit (M1). There is no restore API.
+Object: OBJ-33, OBJ-09. Implements INV-OUTPUT-2, INV-FAIL-1. The file is validated all-or-nothing at startup and given to `Core::new` as a passive lookup. Cameras are applied only inside `output_connected` (M4/M5). Anchors are restored only through placement at initial commit (M1). There is no restore API. `OutputKey` is a persistence identity (INV-OUTPUT-2); on a concurrent key collision the persisted entry stays with the first holder and the duplicate gets a default camera (INV-CAMERA-3). Shipping persisted camera state across sessions is gated by G-OB48 (OB-48).
 
 ## M21 — Backend and renderer recovery
 Object: OBJ-29. Implements INV-FAIL-1, INV-SCALE-2.

@@ -182,6 +182,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** —
 - **Blocks:** INC-5 decision point (pointer constraints); release
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
+- **History:** E1R (unsealed, E-F2-02): scope extended from W-SM-4b to W-SM-4c (cross-batch duplicate `unlocked`/`unconfined` after an explicit deactivate; destruction; never-activated persistent). Candidate P1 (`if constraint.is_active()` in `leave()`) passes 11/11 sequences and X-12 (EE-2, EE-7). Patch-policy criteria: (1) reproduced — met; (2) no public-API fix — met; (3) upstream issue/PR — open (outward action for the user). The decision now gates the **whole** production constraint surface (INC-5), not only oneshot behaviour.
 
 ### OB-12
 - **Status:** OPEN
@@ -206,6 +207,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-6
 - **Blocks:** INC-6 exit
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
+- **History:** E1R (unsealed, E-F2-06, E1R-N3): enforcement includes the zero-extent domain (`H_dev = +∞`, no division) and the integer emission `b(h)` (an integer-scale client's buffer must fit); model evidence EE-5. Residual: a logical side > `D_max` at scale 1.
 
 ### OB-14
 - **Status:** OPEN
@@ -218,6 +220,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-1, INC-10
 - **Blocks:** INC-10 exit (zoom ≠ 1 part)
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
+- **History:** E1R (unsealed, E1R-N1, E-F3-02): non-Normal transforms are covered headlessly by EE-1 (harness, not production); F-HIT-1 corrected. The production transform part moves to OB-45.
 
 ### OB-15
 - **Status:** OPEN
@@ -583,6 +586,90 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-16
 - **Blocks:** release
 - **Origin:** D7 (PD-F1-11)
+
+### OB-45
+- **Status:** OPEN
+- **Item:** Non-Normal output transforms on the production path (E-F2-01, E1R-N1, E-F3-02): damage tracker sized `phys_O`, view `view_O`, render placement, damage, membership, hit-test, project/unproject round trip and boundary rounding for Normal/90/180/270 (+ flipped), asymmetric modes, fractional scale with rotation.
+- **Owner:** core + adapter
+- **Evidence available:** EE-1 (headless harness with a GLES-semantics recording renderer; not production, not a GPU)
+- **Pass criterion:** the EE-1 matrix reproduced on the production adapter with the headless backend: 0 failing checks and 0 render/hit mismatches; the sealed tracker size and the sealed hit rule fail as negative controls
+- **Destination:** T1
+- **May be closed by:** T1 production tests (INC-2: tracker, membership, damage; INC-3: hit-test)
+- **Dependencies:** INC-2, INC-3
+- **Blocks:** INC-3 exit; any rotated-output product claim
+- **Origin:** E1R (E-F2-01, E1R-N1, E-F3-02)
+
+### OB-46
+- **Status:** OPEN
+- **Item:** Rotated outputs on real hardware: DRM/KMS mode and transform, GLES viewport, cursor plane, handedness of 90°/270° on glass, damage on a rotated panel.
+- **Owner:** backend (Phase G DRM)
+- **Evidence available:** none physical (EE-1 is headless; INC-13 adds a NESTED GLES check)
+- **Pass criterion:** a 1920×1080 panel at 90°/270° and fractional scale shows no clipping, gap or extra pixels; hit-test agrees with what is shown
+- **Destination:** T4
+- **May be closed by:** T4 PHYSICAL campaign (EXCLUSIVE_HARDWARE, separately authorized)
+- **Dependencies:** INC-16
+- **Blocks:** release claims for rotated outputs
+- **Origin:** E1R (E-F2-01)
+
+### OB-47
+- **Status:** OPEN
+- **Item:** Production constraint-lifecycle regression (E-F2-02): the EE-2 sequences E1–E11 (explicit deactivate then later exit, destruction, output removal, reactivation, held button, confinement, never-activated persistent and oneshot, leave-instead alternative) and the EE-3 constraint cases on the production adapter.
+- **Owner:** adapter + core
+- **Evidence available:** EE-2, EE-3 (harness), EE-7
+- **Pass criterion:** every sequence valid (activation only from inactive, deactivation only from active, nothing after a oneshot end) with the dependency graph actually pinned; the published-Smithay build shows W-SM-4c as the negative control until OB-11 is decided
+- **Destination:** T1
+- **May be closed by:** T1 production tests in INC-5 after the OB-11 decision is applied to the pinned graph
+- **Dependencies:** OB-11, INC-5
+- **Blocks:** INC-5 exit
+- **Origin:** E1R (E-F2-02)
+
+### OB-48
+- **Status:** OPEN
+- **Item:** Output persistence identity (E-F3-03): how `OutputKey` behaves on real platforms — missing or zero EDID serial, two identical monitors, a physically different monitor on the same connector, dock/MST topology changes, connector reuse, virtual/headless outputs — and whether cameras for keys known to be ambiguous are persisted at all.
+- **Owner:** backend + core persistence
+- **Evidence available:** EE-4 (spike: deterministic collision rule); no platform observation
+- **Pass criterion:** documented key derivation per backend; observed behaviour on the listed topologies matches INV-CAMERA-3's collision rule; an architecture decision on persisting ambiguous keys
+- **Destination:** DECISION
+- **May be closed by:** architecture change control with T4 observations
+- **Dependencies:** INC-16 (observations)
+- **Blocks:** gate G-OB48 (cross-session persisted camera state as a product claim); in-session behaviour is not blocked
+- **Origin:** E1R (E-F3-03)
+
+### OB-49
+- **Status:** OPEN
+- **Item:** Output reconfiguration on the production path (E-F2-03): `output_reconfigured` for mode, transform, scale and refresh changes; same `OutputId`; camera identity and value unchanged; tracker/view/membership rebuilt; F-RECONF-1; `wl_output`/`xdg_output` events; fullscreen configure; epoch settlement; rejection of unknown ids and key changes; reconnect tested separately.
+- **Owner:** core output manager + adapter
+- **Evidence available:** EE-4 (spike tests and probes p10–p13, 2h)
+- **Pass criterion:** the EE-4 reconfiguration tests ported to the production core and adapter; probes p10–p13 hold in the production crates; reconnect and reconfiguration remain separate test cases
+- **Destination:** T1
+- **May be closed by:** T1 production tests (INC-2)
+- **Dependencies:** INC-2
+- **Blocks:** INC-2 exit
+- **Origin:** E1R (E-F2-03)
+
+### OB-50
+- **Status:** OPEN
+- **Item:** Zero-output lifecycle on the production path (E-F2-05): one output → focused interaction → last output removed → `NoOutput` → reconnect, with no constraint, persistent lock, oneshot lock, confinement and a client-held button; exact wire order of enter/leave/locked/unlocked.
+- **Owner:** core + adapter
+- **Evidence available:** EE-3 (harness, stock and P1), EE-4 (spike)
+- **Pass criterion:** the EE-3 cases valid on the production adapter (leave at removal, one constraint end, no event in the zero-output state, enter after reconnect, no absolute motion to a locked surface); N1–N3 negative controls fail
+- **Destination:** T1
+- **May be closed by:** T1 production tests (core part INC-2; pointer part INC-3; constraint part INC-5)
+- **Dependencies:** INC-2, INC-3, INC-5
+- **Blocks:** INC-5 exit (and the multi-output lifecycle is not complete before it)
+- **Origin:** E1R (E-F2-05)
+
+### OB-51
+- **Status:** OPEN
+- **Item:** E1R-N2: INV-INPUT-10 step 3 (pointer `unset_grab`) may deliver one absolute motion at an unchanged location to a surface holding an active lock (W-SM-16). Test the popup-grab + active-lock + focus-change sequence; if reproduced, replace step 3 by the zero-output-style `set_grab(…, Focus::Clear)` ordering through change control.
+- **Owner:** adapter
+- **Evidence available:** EE-3 N3 (the mechanism, in the zero-output configuration)
+- **Pass criterion:** no wl_pointer.motion reaches a locked surface during a focus preemption
+- **Destination:** T1
+- **May be closed by:** T1 production test in INC-5 (needs INC-4 popup routing)
+- **Dependencies:** INC-4, INC-5
+- **Blocks:** INC-5 exit
+- **Origin:** E1R (E1R-N2)
 
 <!-- /living -->
 

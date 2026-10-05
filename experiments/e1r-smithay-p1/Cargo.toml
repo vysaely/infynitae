@@ -1,0 +1,37 @@
+[package]
+name = "e1r-smithay-p1"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# E1R / E-F2-02: the shared xlock_batch source built against smithay =0.7.0 + one-line patch P1
+# (OB-11 patch-policy candidate). Isolated: no other experiment is affected.
+[dependencies]
+b8-harness = { path = "../b8-harness" }
+smithay = { version = "=0.7.0", default-features = false, features = ["desktop", "wayland_frontend", "renderer_test"] }
+
+[[bin]]
+name = "xlock_batch"
+path = "../b8-harness/src/bin/xlock_batch.rs"
+
+# regression: historical constraint experiments rebuilt unchanged against P1
+[[bin]]
+name = "x8"
+path = "../b8-harness/src/bin/x8.rs"
+
+[[bin]]
+name = "x12"
+path = "../b8-harness/src/bin/x12.rs"
+
+[[bin]]
+name = "xlock_grab"
+path = "../b8-harness/src/bin/xlock_grab.rs"
+
+[[bin]]
+name = "xzero"
+path = "../b8-harness/src/bin/xzero.rs"
+
+[patch.crates-io]
+smithay = { path = "vendor/smithay-0.7.0" }
+
+[workspace]

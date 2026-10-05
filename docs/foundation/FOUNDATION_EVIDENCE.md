@@ -407,13 +407,13 @@ the user explicitly clears it.
 
 Canonical living home of the EVID namespace (FOUNDATION_ARCHITECTURE §P0). Every evidence ID used anywhere in the package resolves to exactly one row below.
 
-The historical definition stays where it was written: EV in §5 above; EB in BLOCKERS; EC in ARCHITECTURE; ED in audit/README; ER in audit/1R; ER2 in audit/2R.
+The historical definition stays where it was written: EV in §5 above; EB in BLOCKERS; EC in ARCHITECTURE; ED in audit/README; ER in audit/1R; ER2 in audit/2R; EE (Phase E corrective, unsealed) in audit/E1R.
 
 **Class** says what kind of support the evidence gives. **Tier/category** follows the tier-honesty rule (FOUNDATION_TEST_PLAN §1).
 - No HARNESS, MODEL or spike entry is evidence about the production adapter, a GPU, toolkits, games or physical timing.
 - No Phase A–D evidence exercises the production adapter.
 
-Count: 114 entries.
+Count: 122 entries (114 through Phase D; EE-1…EE-8 added by the unsealed E1R).
 
 <!-- living:EVID -->
 | ID | What (short) | Class | Tier / category | Historical definition / artifact |
@@ -532,4 +532,12 @@ Count: 114 entries.
 | ER-7 | Regression re-run of d5hit, xhit, xsnap, x10, x8, x12, x6, x9 and scenarios after the additive harness changes; d5_model.py re-run | HARNESS regression | T1-style harness | audit/1R/CORRECTIONS_1R (84ce620) |
 | ER2-1 | Authority spike 2R: OutputLifecycleToken probes p6–p9, protocol camera creation, token in protocol state, 2g single-construction check; 8 unit tests | COMPILER PROBE (spike) + seeded negative control | T0 spike | audit/2R/INVARIANT_DIFF_2R (5827926); evidence/phase-d/authority-spike-2r-verify.txt |
 | ER2-2 | d5_model_2r: ScaleInteractionEpoch for all spatial interactions; window drag 39 → 1 with negative control | MODEL (+ negative control) | model | audit/2R/INVARIANT_DIFF_2R (5827926); evidence/phase-d/d5-model-2r-output.txt |
+| EE-1 | xtransform: rotated outputs through Smithay 0.7.0 `OutputDamageTracker::render_output` into a recording renderer with GLES2 viewport/scissor semantics; 10 transform × scale cases; sealed tracker size and both readings of the sealed hit rule as negative controls | HARNESS (+ negative controls) | headless harness; no GPU, no T4 claim | evidence/E1R/xtransform-output.txt; experiments/b8-harness/src/bin/xtransform.rs |
+| EE-2 | xlock_batch: 11 multi-batch constraint sequences on the wire, published Smithay (2/11 valid) vs Smithay + P1 (11/11 valid) | HARNESS (+ negative control) | T1-style harness | evidence/E1R/xlock-batch-{stock,p1}-output.txt; experiments/e1r-smithay-p1 |
+| EE-3 | xzero: zero-output transition, 6 cases (none, persistent, oneshot, confinement, held button, held button + lock) + N1 sealed F-RELOCATE-1 on ∅, N2 no grab handling, N3 `unset_grab` under a lock; identical on published Smithay and P1 | HARNESS (+ negative controls) | T1-style harness | evidence/E1R/xzero-{stock,p1}-output.txt |
+| EE-4 | Authority spike E1R: `output_reconfigured`, `PointerState`/`NoOutput`, relocation domain, OutputKey collisions; 14 tests; probes p10–p13; verify.sh 2h (with seeded negative control) and 2i | COMPILER PROBE (spike) + tests + seeded negative controls | T0-style spike | evidence/E1R/spike-verify-output.txt |
+| EE-5 | e1r_hmax: F-SCALE-2 domain at zero extent (0×0, 0×N, N×0, unbuffered trees, first buffer with P7) and the integer-emission device bound; sealed formula raises / exceeds `D_max` | MODEL (+ negative controls) | model | evidence/E1R/e1r-hmax-output.txt |
+| EE-6 | e1r_fullscreen: canonical scale policy for a fullscreen element on a 1.0 output observed from a 2.0 output at zoom 1–8; h ≤ H_cfg; the 8K claim does not follow | MODEL | model | evidence/E1R/e1r-fullscreen-output.txt |
+| EE-7 | P1 regression: x8 (48/48 unchanged), x12 (W-SM-4b no longer reproduced), xlock_grab (EXPLICIT/persistent becomes valid; SEALED still fails) rebuilt against Smithay + P1 | HARNESS regression | T1-style harness | evidence/E1R/p1-regress-*.txt |
+| EE-8 | E1R regression re-run of the affected historical experiments and models on the published Smithay | HARNESS / MODEL regression | as each original | audit/E1R/REGRESSION_E1R.md |
 <!-- /living -->

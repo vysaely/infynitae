@@ -68,7 +68,7 @@ impl Handlers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use spike_core::{geom::CanvasPos, navigation::OutputKey, AuthorityError, OutputDescriptor, PersistedCameras, PhysicalEvent, ShellCommand};
+    use spike_core::{geom::CanvasPos, navigation::OutputKey, AuthorityError, OutputDescriptor, PersistedCameras, PhysicalEvent, PointerState, ShellCommand, Transform};
 
     fn handlers(core: Core) -> Handlers {
         Handlers {
@@ -80,7 +80,7 @@ mod tests {
         }
     }
     fn desc(key: u64) -> OutputDescriptor {
-        OutputDescriptor { key: OutputKey(key), mode: (1920, 1080), scale_120: 120, refresh_mhz: 60_000 }
+        OutputDescriptor { key: OutputKey(key), mode: (1920, 1080), transform: Transform::Normal, scale_120: 120, refresh_mhz: 60_000 }
     }
 
     #[test]
@@ -161,7 +161,8 @@ mod tests {
         let mut h = handlers(core);
         assert!(h.core.cameras().is_empty(), "cameras must not exist before an output is connected");
         let (o1, fx) = h.core.output_connected(&mut outs, desc(10)).unwrap();
-        assert_eq!(fx, vec![Effect::CameraBound { camera: 0, output: o1 }]);
+        // E1R (E-F2-05): the first connect also leaves the zero-output pointer state (startup placement)
+        assert_eq!(fx, vec![Effect::CameraBound { camera: 0, output: o1 }, Effect::PointerState(PointerState::Located { output: o1, p: (960.0, 540.0) })]);
         assert_eq!(h.core.cameras().camera_for_output(o1), Some(0));
         assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), (CanvasPos { x: 0, y: 0 }, 1000), "internal default placement");
         let c0 = h.core.cameras().center(0);
@@ -180,13 +181,14 @@ mod tests {
         h.core.physical_input(&mut input, PhysicalEvent::PanDelta { camera: 0, dx: -25, dy: 40 }).unwrap();
         let value = (h.core.cameras().center(0), h.core.cameras().zoom_milli(0));
         let fx = h.core.output_disconnected(&mut outs, o1).unwrap();
-        assert_eq!(fx, vec![Effect::CameraUnbound { camera: 0, output: o1 }]);
+        // E1R (E-F2-05): removing the last output enters the zero-output pointer state
+        assert_eq!(fx, vec![Effect::CameraUnbound { camera: 0, output: o1 }, Effect::PointerState(PointerState::NoOutput)]);
         assert_eq!(h.core.cameras().len(), 1, "camera destroyed on disconnect");
         assert_eq!(h.core.cameras().bound_output(0), None);
         assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), value, "camera value changed on disconnect");
         let (o2, fx) = h.core.output_connected(&mut outs, desc(10)).unwrap();
         assert_ne!(o1, o2, "OutputId reused");
-        assert_eq!(fx, vec![Effect::CameraBound { camera: 0, output: o2 }]);
+        assert_eq!(fx, vec![Effect::CameraBound { camera: 0, output: o2 }, Effect::PointerState(PointerState::Located { output: o2, p: (960.0, 540.0) })]);
         assert_eq!(h.core.cameras().len(), 1, "a second camera was created for a remembered OutputKey");
         assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), value);
     }
@@ -227,5 +229,141 @@ mod tests {
         h.on_commit(1, (300, 200));
         h.on_activation(1);
         assert_eq!(h.core.cameras().len(), n);
+    }
+
+    // ------------------------------------------------------------------ E1R
+    fn rdesc(key: u64, mode: (i32, i32), transform: Transform, scale_120: u32, refresh_mhz: u32) -> OutputDescriptor {
+        OutputDescriptor { key: OutputKey(key), mode, transform, scale_120, refresh_mhz }
+    }
+
+    /// E1R (E-F2-03): mode, scale, transform and refresh changes keep the OutputId, the camera identity
+    /// and the camera value; no Authorized proof is minted; no new OutputId is allocated.
+    #[test]
+    fn output_reconfigured_keeps_identity_and_camera() {
+        let (core, mut input, _shell, mut outs) = Core::new(PersistedCameras::default());
+        let mut h = handlers(core);
+        let (o, _) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        h.core.physical_input(&mut input, PhysicalEvent::PanDelta { camera: 0, dx: 17, dy: -3 }).unwrap();
+        let value = (h.core.cameras().center(0), h.core.cameras().zoom_milli(0));
+        for d in [
+            rdesc(10, (2560, 1440), Transform::Normal, 120, 60_000),  // mode
+            rdesc(10, (2560, 1440), Transform::Normal, 150, 60_000),  // scale 1.25
+            rdesc(10, (2560, 1440), Transform::R90, 150, 60_000),     // transform
+            rdesc(10, (2560, 1440), Transform::R90, 150, 144_000),    // refresh
+        ] {
+            let fx = h.core.output_reconfigured(&mut outs, o, d).unwrap();
+            assert_eq!(fx[0], Effect::OutputReconfigured { output: o, camera: Some(0) });
+            assert!(fx.iter().all(|e| matches!(e, Effect::OutputReconfigured { .. } | Effect::PointerState(_))), "{fx:?}");
+            assert_eq!(h.core.outputs().len(), 1, "reconfiguration allocated or duplicated an output");
+            assert_eq!(h.core.outputs()[0], (o, d));
+            assert_eq!(h.core.cameras().camera_for_output(o), Some(0));
+            assert_eq!(h.core.cameras().len(), 1);
+            assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), value, "reconfiguration moved the camera");
+        }
+        assert_eq!(h.core.outputs()[0].1.view_phys(), (1440, 2560), "view uses the transformed mode");
+        assert_eq!(h.core.outputs()[0].1.mode, (2560, 1440), "descriptor keeps the physical mode");
+    }
+
+    /// E1R (E-F2-03): reconfiguration is not reconnect: an unknown id, a foreign token or a changed
+    /// OutputKey are rejected and mutate nothing. Reconnect (disconnect + connect) allocates a new
+    /// OutputId and re-binds the remembered camera — a separate, separately tested concept.
+    #[test]
+    fn output_reconfigured_rejects_unknown_foreign_and_identity_change() {
+        let (core, _input, _shell, mut outs) = Core::new(PersistedCameras::default());
+        let (_other, _i, _s, mut foreign) = Core::new(PersistedCameras::default());
+        let mut h = handlers(core);
+        let (o, _) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        let before = (h.core.outputs().to_vec(), h.core.pointer());
+        assert_eq!(h.core.output_reconfigured(&mut outs, o + 99, desc(10)).err(), Some(AuthorityError::UnknownOutput));
+        assert_eq!(h.core.output_reconfigured(&mut foreign, o, desc(10)).err(), Some(AuthorityError::ForeignPort));
+        assert_eq!(h.core.output_reconfigured(&mut outs, o, desc(11)).err(), Some(AuthorityError::IdentityChanged));
+        assert_eq!((h.core.outputs().to_vec(), h.core.pointer()), before, "a rejected reconfiguration mutated state");
+        // reconnect: a different concept
+        h.core.output_disconnected(&mut outs, o).unwrap();
+        let (o2, _) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        assert_ne!(o, o2);
+        assert_eq!(h.core.cameras().camera_for_output(o2), Some(0));
+        assert_eq!(h.core.output_reconfigured(&mut outs, o, desc(10)).err(), Some(AuthorityError::UnknownOutput), "stale OutputId accepted");
+    }
+
+    /// E1R (E-F2-03, F-RECONF-1): the pointer's OutputLogical p is clamped into the new extent
+    /// (half-open, wl_fixed); a p that stays inside is unchanged; no relative motion is synthesized.
+    #[test]
+    fn output_reconfigured_clamps_pointer_into_new_extent() {
+        let (core, _input, _shell, mut outs) = Core::new(PersistedCameras::default());
+        let mut h = handlers(core);
+        let (o, _) = h.core.output_connected(&mut outs, desc(10)).unwrap(); // p = (960, 540)
+        // rotate 90 at scale 1.5: logical extent 720 x 1280 -> x clamps to 720 - 2^-8, y unchanged
+        let fx = h.core.output_reconfigured(&mut outs, o, rdesc(10, (1920, 1080), Transform::R90, 180, 60_000)).unwrap();
+        let want = PointerState::Located { output: o, p: (720.0 - 1.0 / 256.0, 540.0) };
+        assert_eq!(fx, vec![Effect::OutputReconfigured { output: o, camera: Some(0) }, Effect::PointerState(want)]);
+        assert_eq!(h.core.pointer(), want);
+        // back to normal at scale 1: p inside -> unchanged, no pointer effect
+        let fx = h.core.output_reconfigured(&mut outs, o, desc(10)).unwrap();
+        assert_eq!(fx, vec![Effect::OutputReconfigured { output: o, camera: Some(0) }]);
+        assert_eq!(h.core.pointer(), want);
+    }
+
+    /// E1R (E-F2-05): one output -> last output removed -> stable zero-output state -> reconnect.
+    /// No panic, no fabricated output, no fabricated coordinate; cameras persist unbound.
+    #[test]
+    fn zero_output_state_is_stable_and_reconnect_reconciles() {
+        let (core, mut input, _shell, mut outs) = Core::new(PersistedCameras::default());
+        let mut h = handlers(core);
+        assert_eq!(h.core.pointer(), PointerState::NoOutput, "before any output: zero-output state");
+        let (o1, _) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        h.core.physical_input(&mut input, PhysicalEvent::PanDelta { camera: 0, dx: 5, dy: 5 }).unwrap();
+        let value = (h.core.cameras().center(0), h.core.cameras().zoom_milli(0));
+        h.core.output_disconnected(&mut outs, o1).unwrap();
+        assert!(h.core.outputs().is_empty());
+        assert_eq!(h.core.pointer(), PointerState::NoOutput, "no fabricated output / coordinate");
+        assert_eq!(h.core.cameras().bound_output(0), None);
+        assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), value);
+        // the zero-output state is stable: repeated / unknown disconnects are rejected, nothing changes
+        assert_eq!(h.core.output_disconnected(&mut outs, o1).err(), Some(AuthorityError::UnknownOutput));
+        assert_eq!(h.core.pointer(), PointerState::NoOutput);
+        // a different monitor arrives first: placement by the startup rule, its own camera
+        let (o2, fx) = h.core.output_connected(&mut outs, rdesc(20, (2560, 1440), Transform::R270, 240, 60_000)).unwrap();
+        assert!(fx.contains(&Effect::PointerState(PointerState::Located { output: o2, p: (360.0, 640.0) })), "{fx:?}");
+        assert_eq!(h.core.cameras().camera_for_output(o2), Some(1));
+        // the original monitor returns: same camera, value unchanged; the located pointer is not moved
+        let (o3, fx) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        assert_eq!(fx, vec![Effect::CameraBound { camera: 0, output: o3 }]);
+        assert_eq!((h.core.cameras().center(0), h.core.cameras().zoom_milli(0)), value);
+    }
+
+    /// E1R (E-F2-05): F-RELOCATE-1 is applied only on a non-empty survivor set; with survivors the
+    /// pointer moves to the Arrangement-nearest output (spike: left-to-right arrangement).
+    #[test]
+    fn relocation_uses_survivors_and_only_survivors() {
+        let (core, _input, _shell, mut outs) = Core::new(PersistedCameras::default());
+        let mut h = handlers(core);
+        let (a, _) = h.core.output_connected(&mut outs, desc(1)).unwrap(); // pointer on A at (960,540)
+        let (b, _) = h.core.output_connected(&mut outs, desc(2)).unwrap(); // B arranged at x = 1920
+        let fx = h.core.output_disconnected(&mut outs, a).unwrap();
+        // a = (960,540) in the Arrangement; B's rect is [1920, 3840) x [0, 1080): nearest point x = 1920
+        assert!(fx.contains(&Effect::PointerState(PointerState::Located { output: b, p: (0.0, 540.0) })), "{fx:?}");
+        let fx = h.core.output_disconnected(&mut outs, b).unwrap();
+        assert!(fx.contains(&Effect::PointerState(PointerState::NoOutput)));
+    }
+
+    /// E1R (E-F2-04, E-F3-03): two CONNECTED outputs presenting the same OutputKey (e.g. virtual outputs
+    /// without a distinguishing connector) each keep their own camera (1:1); the duplicate does not take
+    /// the persisted value; on reconnect the lowest unbound camera with the key is re-bound.
+    #[test]
+    fn concurrent_output_key_collision_keeps_one_to_one() {
+        let persisted = PersistedCameras::from_entries(vec![(OutputKey(10), CanvasPos { x: 77, y: 88 }, 1250)]);
+        let (core, _input, _shell, mut outs) = Core::new(persisted);
+        let mut h = handlers(core);
+        let (a, _) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        let (b, _) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        let (ca, cb) = (h.core.cameras().camera_for_output(a), h.core.cameras().camera_for_output(b));
+        assert!(ca.is_some() && cb.is_some() && ca != cb, "1:1 violated: a={ca:?} b={cb:?}");
+        assert_eq!((h.core.cameras().center(ca.unwrap()), h.core.cameras().zoom_milli(ca.unwrap())), (CanvasPos { x: 77, y: 88 }, 1250));
+        assert_eq!((h.core.cameras().center(cb.unwrap()), h.core.cameras().zoom_milli(cb.unwrap())), (CanvasPos { x: 0, y: 0 }, 1000), "duplicate seeded from persistence");
+        h.core.output_disconnected(&mut outs, a).unwrap();
+        h.core.output_disconnected(&mut outs, b).unwrap();
+        let (a2, _) = h.core.output_connected(&mut outs, desc(10)).unwrap();
+        assert_eq!(h.core.cameras().camera_for_output(a2), ca, "reconnect must take the lowest unbound camera");
     }
 }

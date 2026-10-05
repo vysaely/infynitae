@@ -480,8 +480,8 @@ Count: 66 risks.
 - **Origin:** Phase B §11 @ 4a0807e
 - **Risk:** W-SM-4b: never-activated oneshot lock destroyed on pointer leave
 - **Disposition:** UPSTREAM
-- **Mitigation / evidence:** W-SM-4b reproduced (X-12); upstream fix or patch decision
-- **Obligations:** OB-11
+- **Mitigation / evidence:** W-SM-4b reproduced (X-12); E1R: W-SM-4c reproduced (EE-2), candidate patch P1 validated (EE-2, EE-7); upstream fix or patch decision
+- **Obligations:** OB-11, OB-47
 - **Invariants:** INV-INPUT-5
 
 ### RB-11

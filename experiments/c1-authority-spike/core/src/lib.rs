@@ -54,7 +54,11 @@ pub mod navigation {
 
     use crate::authority::Authorized;
 
-    /// Stable output identity for configuration/persistence matching (connector + make/model/serial).
+    /// PERSISTENCE identity for configuration/camera matching (E1R, E-F3-03): derived by the backend
+    /// from (DRM device, connector name, EDID make, model, serial-if-present). It is NOT a physical-monitor
+    /// identity (serial may be absent; identical monitors on one connector are indistinguishable) and NOT
+    /// the runtime identity (`OutputId`, never reused). Collisions are handled deterministically in
+    /// `bind_on_connect`.
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
     pub struct OutputKey(pub u64);
 
@@ -116,12 +120,22 @@ pub mod navigation {
     /// `OutputLifecycleToken` entry. Placement is decided HERE, never by the caller: a camera remembered
     /// this session for `key` is re-bound unchanged; else a passive persisted entry for `key` seeds it;
     /// else the internal default placement (Level D policy; spike: origin, zoom 1).
+    /// E1R (E-F2-04 1:1, E-F3-03 collisions): a camera is bound to at most one output. A remembered camera
+    /// is re-bound only if UNBOUND (lowest camera index first, deterministic). If every camera with this key
+    /// is bound (a concurrent key collision), the output gets a NEW camera at default placement, not seeded
+    /// from persistence (the persisted entry belongs to the first holder of the key).
     pub(crate) fn bind_on_connect(cams: &mut CameraSet, _proof: Authorized, key: OutputKey, output: u64, persisted: &crate::PersistedCameras) -> usize {
-        if let Some(i) = cams.key.iter().position(|k| *k == key) {
+        #[cfg(feature = "probe_sealed_key_steal")]
+        let free = cams.key.iter().position(|k| *k == key); // NEGATIVE CONTROL: sealed 2R rule
+        #[cfg(not(feature = "probe_sealed_key_steal"))]
+        let free = (0..cams.key.len()).find(|&i| cams.key[i] == key && cams.bound[i].is_none());
+        if let Some(i) = free {
             cams.bound[i] = Some(output);
             return i;
         }
-        let (c, z) = persisted.lookup(key).unwrap_or((CanvasPos { x: 0, y: 0 }, 1000));
+        let collision = cams.key.iter().any(|k| *k == key);
+        let seeded = if collision { None } else { persisted.lookup(key) };
+        let (c, z) = seeded.unwrap_or((CanvasPos { x: 0, y: 0 }, 1000));
         cams.center.push(c);
         cams.zoom_milli.push(z);
         cams.key.push(key);
@@ -199,17 +213,77 @@ pub enum Effect {
     CameraBound { camera: usize, output: u64 },
     /// output disconnected; camera kept, unbound
     CameraUnbound { camera: usize, output: u64 },
+    /// E1R (E-F2-03): an already-connected output changed hardware facts. Same OutputId; the bound camera
+    /// (if any) keeps identity and value; derived state (view, membership, tracker) is rebuilt by the adapter.
+    OutputReconfigured { output: u64, camera: Option<usize> },
+    /// E1R (E-F2-05): the physical pointer state changed through output lifecycle (relocation, clamp,
+    /// zero-output, first placement). Never a camera change.
+    PointerState(PointerState),
+}
+
+/// E1R (E-F2-01): output transform (wl_output.transform). Hardware fact carried by the descriptor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Transform {
+    Normal,
+    R90,
+    R180,
+    R270,
+    Flipped,
+    Flipped90,
+    Flipped180,
+    Flipped270,
+}
+impl Transform {
+    /// true when the transform exchanges width and height (90/270 classes)
+    pub fn swaps(self) -> bool {
+        matches!(self, Transform::R90 | Transform::R270 | Transform::Flipped90 | Transform::Flipped270)
+    }
+}
+
+/// E1R (E-F2-05): seat physical pointer state (OBJ-20). `NoOutput` is the stable state for Outputs = ∅:
+/// no fabricated output, no fabricated coordinate.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PointerState {
+    /// (interaction output, OutputLogical p) — p within the output's half-open logical extent
+    Located { output: u64, p: (f64, f64) },
+    NoOutput,
 }
 
 /// PD-F2-18 (2R): what the backend knows about an output: HARDWARE facts only. There is deliberately no
 /// position, centre, zoom or camera field: the caller cannot choose camera state (no backdoor
 /// `set_camera_position`). Initial placement and binding are decided inside Core.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct OutputDescriptor {
     pub key: navigation::OutputKey,
+    /// E1R (E-F2-01): the PHYSICAL mode (framebuffer / wl_output.mode), BEFORE the transform. This is the
+    /// size handed to Smithay's `OutputDamageTracker`; the view uses `view_phys()`.
     pub mode: (i32, i32),
+    /// E1R (E-F2-01): wl_output.transform
+    pub transform: Transform,
     pub scale_120: u32,
     pub refresh_mhz: u32,
+}
+impl OutputDescriptor {
+    /// E1R (E-F2-01): view extent in physical px = mode AFTER the transform (F-VIEW-1 `view_O`)
+    pub fn view_phys(&self) -> (i32, i32) {
+        if self.transform.swaps() {
+            (self.mode.1, self.mode.0)
+        } else {
+            self.mode
+        }
+    }
+    /// OutputLogical extent = view_phys / scale
+    pub fn logical_extent(&self) -> (f64, f64) {
+        let (w, h) = self.view_phys();
+        let s = self.scale_120 as f64 / 120.0;
+        (w as f64 / s, h as f64 / s)
+    }
+}
+
+/// wl_fixed resolution (2⁻⁸): the half-open clamp bound used by F-RELOCATE-1 / F-RECONF-1
+const FIXED_EPS: f64 = 1.0 / 256.0;
+fn clamp_into(p: (f64, f64), ext: (f64, f64)) -> (f64, f64) {
+    (p.0.clamp(0.0, ext.0 - FIXED_EPS), p.1.clamp(0.0, ext.1 - FIXED_EPS))
 }
 
 /// PD-F2-18 (2R): persisted camera state, a PASSIVE read-only lookup table handed to `Core::new`.
@@ -268,6 +342,11 @@ pub struct OutputLifecycleToken {
 pub enum AuthorityError {
     /// a port minted for another Core instance
     ForeignPort,
+    /// E1R (E-F2-03): reconfiguration of an OutputId that is not connected
+    UnknownOutput,
+    /// E1R (E-F2-03): the descriptor names another OutputKey: an identity change is a disconnect +
+    /// connect, never a reconfiguration
+    IdentityChanged,
 }
 
 pub struct Core {
@@ -279,6 +358,11 @@ pub struct Core {
     persisted: PersistedCameras,
     outputs: Vec<(u64, OutputDescriptor)>,
     next_output: u64,
+    /// E1R (E-F2-05): OBJ-20 physical pointer state
+    pointer: PointerState,
+    /// Arrangement origin per output, fixed at connect (spike stand-in for the configured Arrangement:
+    /// the next free x to the right of the outputs present at connect time)
+    arr: Vec<(u64, (f64, f64))>,
     /// NEGATIVE PROBE (PD-F2-01): a sticky fit mode that keeps authority to re-fit later
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
     sticky_fit: Option<(u64, authority::Authorized)>,
@@ -300,6 +384,8 @@ impl Core {
                 persisted,
                 outputs: vec![],
                 next_output: 1,
+                pointer: PointerState::NoOutput,
+                arr: vec![],
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
             },
@@ -316,6 +402,14 @@ impl Core {
     }
     pub fn outputs(&self) -> &[(u64, OutputDescriptor)] {
         &self.outputs
+    }
+    pub fn pointer(&self) -> PointerState {
+        self.pointer
+    }
+    /// Arrangement origin of an output (fixed at connect; the production Arrangement is configuration,
+    /// Level D, and does not move when another output is removed).
+    fn arr_origin(&self, output: u64) -> (f64, f64) {
+        self.arr.iter().find(|(o, _)| *o == output).map(|(_, a)| *a).expect("arr_origin of an unknown output")
     }
     pub fn protocol_event(&mut self, ev: protocol::ProtocolEvent) -> Vec<Effect> {
         protocol::handle(self, ev)
@@ -363,20 +457,91 @@ mod entry {
         }
         let output = self.next_output;
         self.next_output += 1;
+        let x = self.outputs.iter().map(|(o, d)| self.arr_origin(*o).0 + d.logical_extent().0).fold(0.0, f64::max);
+        self.arr.push((output, (x, 0.0)));
         self.outputs.push((output, desc));
         let camera = navigation::bind_on_connect(&mut self.cameras, authority::Authorized::mint(), desc.key, output, &self.persisted);
-        Ok((output, vec![Effect::CameraBound { camera, output }]))
+        let mut fx = vec![Effect::CameraBound { camera, output }];
+        // E1R (E-F2-05): leaving the zero-output state uses the startup placement rule (centre of the
+        // first output's logical extent); a Located pointer is not moved by a connect.
+        if self.pointer == PointerState::NoOutput {
+            let e = desc.logical_extent();
+            self.pointer = PointerState::Located { output, p: clamp_into((e.0 / 2.0, e.1 / 2.0), e) };
+            fx.push(Effect::PointerState(self.pointer));
+        }
+        Ok((output, fx))
     }
     /// PD-F2-18 (2R): unbind; the camera and its value survive (INV-CAMERA-3).
     pub fn output_disconnected(&mut self, token: &mut OutputLifecycleToken, output: u64) -> Result<Vec<Effect>, AuthorityError> {
         if token.core_id != self.id {
             return Err(AuthorityError::ForeignPort);
         }
+        if !self.outputs.iter().any(|(o, _)| *o == output) {
+            return Err(AuthorityError::UnknownOutput);
+        }
+        // F-RELOCATE-1 (E1R domain): a = arr_origin(O_lost) + p computed BEFORE removal; nearest surviving
+        // output if Outputs \ {O_lost} ≠ ∅, else the zero-output state (no nearest-output selection on ∅).
+        let reloc = match self.pointer {
+            PointerState::Located { output: o, p } if o == output => {
+                let lost = self.arr_origin(output);
+                Some((lost.0 + p.0, lost.1 + p.1))
+            }
+            _ => None,
+        };
         self.outputs.retain(|(o, _)| *o != output);
-        Ok(match navigation::unbind_on_disconnect(&mut self.cameras, authority::Authorized::mint(), output) {
+        self.arr.retain(|(o, _)| *o != output);
+        let mut fx = match navigation::unbind_on_disconnect(&mut self.cameras, authority::Authorized::mint(), output) {
             Some(camera) => vec![Effect::CameraUnbound { camera, output }],
             None => vec![],
-        })
+        };
+        if let Some(a) = reloc {
+            self.pointer = if self.outputs.is_empty() {
+                PointerState::NoOutput
+            } else {
+                let mut best: Option<(f64, u64, (f64, f64), (f64, f64))> = None;
+                for (o, d) in &self.outputs {
+                    let org = self.arr_origin(*o);
+                    let e = d.logical_extent();
+                    let c = clamp_into((a.0 - org.0, a.1 - org.1), e);
+                    let dist = (org.0 + c.0 - a.0).powi(2) + (org.1 + c.1 - a.1).powi(2);
+                    if best.map_or(true, |b| dist < b.0) {
+                        best = Some((dist, *o, org, c));
+                    }
+                }
+                let (_, o, _, c) = best.expect("non-empty by the branch condition");
+                PointerState::Located { output: o, p: c }
+            };
+            fx.push(Effect::PointerState(self.pointer));
+        }
+        Ok(fx)
+    }
+    /// E1R (E-F2-03): an already-connected output changed hardware facts (mode, transform, scale,
+    /// refresh). Same OutputId; no camera argument exists; camera identity and value are untouched (no
+    /// `Authorized` proof is minted here). The pointer's OutputLogical p is clamped into the new extent
+    /// (F-RECONF-1). Derived state (view, membership, damage tracker, epoch settlement, M13
+    /// reconciliation) is rebuilt by the adapter from the new descriptor.
+    pub fn output_reconfigured(&mut self, token: &mut OutputLifecycleToken, output: u64, desc: OutputDescriptor) -> Result<Vec<Effect>, AuthorityError> {
+        if token.core_id != self.id {
+            return Err(AuthorityError::ForeignPort);
+        }
+        let Some(slot) = self.outputs.iter_mut().find(|(o, _)| *o == output) else {
+            return Err(AuthorityError::UnknownOutput);
+        };
+        if slot.1.key != desc.key {
+            return Err(AuthorityError::IdentityChanged);
+        }
+        slot.1 = desc;
+        let mut fx = vec![Effect::OutputReconfigured { output, camera: self.cameras.camera_for_output(output) }];
+        if let PointerState::Located { output: o, p } = self.pointer {
+            if o == output {
+                let c = clamp_into(p, desc.logical_extent());
+                if c != p {
+                    self.pointer = PointerState::Located { output, p: c };
+                    fx.push(Effect::PointerState(self.pointer));
+                }
+            }
+        }
+        Ok(fx)
     }
     pub fn shell_command(&mut self, port: &mut ShellPort, cmd: ShellCommand) -> Result<Vec<Effect>, AuthorityError> {
         if port.core_id != self.id {

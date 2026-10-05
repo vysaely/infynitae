@@ -1,0 +1,159 @@
+xtransform — E1R E-F2-01/E-F3-02: rotated-output dimensions through smithay =0.7.0 OutputDamageTracker
+renderer: ProbeRenderer (CPU raster, GLES2 viewport/scissor semantics); HEADLESS; no T4 claim
+
+case panel 1920x1080 transform Normal scale 1: view(after transform) 1920x1080 phys; OutputLogical 1920.000x1080.000
+  tracker rule E1r: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1920px@top m11:1920px@bottom m12:1078px@left m13:1078px@right
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1920x1080
+  tracker rule Sealed: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1920px@top m11:1920px@bottom m12:1078px@left m13:1078px@right
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1920x1080
+  C5 render/hit agreement, hit rule E1R p*s: 0/200 mismatches 
+  C5 render/hit agreement, hit rule SEALED t(p*s): 0/200 mismatches 
+  C5 render/hit agreement, hit rule SEALED t^-1(p*s): 0/200 mismatches 
+
+case panel 1920x1080 transform _90 scale 1: view(after transform) 1080x1920 phys; OutputLogical 1080.000x1920.000
+  tracker rule E1r: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1080px@left m11:1080px@right m12:1918px@bottom m13:1918px@top
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1080,1920) area 2073600; view 1080x1920
+  tracker rule Sealed: 4 failing check(s)
+    [FAIL] C1 viewport == panel: render(output_size=1080x1920) on panel 1920x1080
+    [FAIL] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=1814400, fragments outside panel=907200
+    [FAIL] C3 view edges land on the 4 panel edges, full length: m10:240px@left m11:0px@none m12:0px@none m13:1079px@none
+    [FAIL] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1080x1920
+  C5 render/hit agreement, hit rule E1R p*s: 0/200 mismatches 
+  C5 render/hit agreement, hit rule SEALED t(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=None; p=(1080.000,0.000) presented=Some(254) hit=None
+  C5 render/hit agreement, hit rule SEALED t^-1(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=Some(216100); p=(1080.000,0.000) presented=Some(254) hit=Some(100)
+
+case panel 1920x1080 transform _180 scale 1: view(after transform) 1920x1080 phys; OutputLogical 1920.000x1080.000
+  tracker rule E1r: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1920px@bottom m11:1920px@top m12:1078px@right m13:1078px@left
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1920x1080
+  tracker rule Sealed: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1920px@bottom m11:1920px@top m12:1078px@right m13:1078px@left
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1920x1080
+  C5 render/hit agreement, hit rule E1R p*s: 0/200 mismatches 
+  C5 render/hit agreement, hit rule SEALED t(p*s): 199/200 mismatches p=(0.000,0.000) presented=Some(100) hit=None; p=(1920.000,0.000) presented=Some(374) hit=None
+  C5 render/hit agreement, hit rule SEALED t^-1(p*s): 199/200 mismatches p=(0.000,0.000) presented=Some(100) hit=None; p=(1920.000,0.000) presented=Some(374) hit=None
+
+case panel 1920x1080 transform _270 scale 1: view(after transform) 1080x1920 phys; OutputLogical 1080.000x1920.000
+  tracker rule E1r: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1080px@right m11:1080px@left m12:1918px@top m13:1918px@bottom
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1080,1920) area 2073600; view 1080x1920
+  tracker rule Sealed: 4 failing check(s)
+    [FAIL] C1 viewport == panel: render(output_size=1080x1920) on panel 1920x1080
+    [FAIL] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=907200, fragments outside panel=907200
+    [FAIL] C3 view edges land on the 4 panel edges, full length: m10:1080px@none m11:0px@none m12:1079px@top m13:1079px@bottom
+    [FAIL] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1080x1920
+  C5 render/hit agreement, hit rule E1R p*s: 0/200 mismatches 
+  C5 render/hit agreement, hit rule SEALED t(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=Some(216100); p=(1080.000,0.000) presented=Some(254) hit=Some(100)
+  C5 render/hit agreement, hit rule SEALED t^-1(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=None; p=(1080.000,0.000) presented=Some(254) hit=None
+
+case panel 1920x1080 transform _90 scale 1.25: view(after transform) 1080x1920 phys; OutputLogical 864.000x1536.000
+  tracker rule E1r: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1080px@left m11:1080px@right m12:1918px@bottom m13:1918px@top
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1080,1920) area 2073600; view 1080x1920
+  tracker rule Sealed: 4 failing check(s)
+    [FAIL] C1 viewport == panel: render(output_size=1080x1920) on panel 1920x1080
+    [FAIL] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=1814400, fragments outside panel=907200
+    [FAIL] C3 view edges land on the 4 panel edges, full length: m10:240px@left m11:0px@none m12:0px@none m13:1079px@none
+    [FAIL] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1080x1920
+  C5 render/hit agreement, hit rule E1R p*s: 0/200 mismatches 
+  C5 render/hit agreement, hit rule SEALED t(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=None; p=(864.000,0.000) presented=Some(254) hit=None
+  C5 render/hit agreement, hit rule SEALED t^-1(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=Some(216100); p=(864.000,0.000) presented=Some(254) hit=Some(100)
+
+case panel 1920x1080 transform _270 scale 1.25: view(after transform) 1080x1920 phys; OutputLogical 864.000x1536.000
+  tracker rule E1r: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1080px@right m11:1080px@left m12:1918px@top m13:1918px@bottom
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1080,1920) area 2073600; view 1080x1920
+  tracker rule Sealed: 4 failing check(s)
+    [FAIL] C1 viewport == panel: render(output_size=1080x1920) on panel 1920x1080
+    [FAIL] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=907200, fragments outside panel=907200
+    [FAIL] C3 view edges land on the 4 panel edges, full length: m10:1080px@none m11:0px@none m12:1079px@top m13:1079px@bottom
+    [FAIL] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1080x1920
+  C5 render/hit agreement, hit rule E1R p*s: 0/200 mismatches 
+  C5 render/hit agreement, hit rule SEALED t(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=Some(216100); p=(864.000,0.000) presented=Some(254) hit=Some(100)
+  C5 render/hit agreement, hit rule SEALED t^-1(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=None; p=(864.000,0.000) presented=Some(254) hit=None
+
+case panel 1920x1080 transform _90 scale 1.5: view(after transform) 1080x1920 phys; OutputLogical 720.000x1280.000
+  tracker rule E1r: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1080px@left m11:1080px@right m12:1918px@bottom m13:1918px@top
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1080,1920) area 2073600; view 1080x1920
+  tracker rule Sealed: 4 failing check(s)
+    [FAIL] C1 viewport == panel: render(output_size=1080x1920) on panel 1920x1080
+    [FAIL] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=1814400, fragments outside panel=907200
+    [FAIL] C3 view edges land on the 4 panel edges, full length: m10:240px@left m11:0px@none m12:0px@none m13:1079px@none
+    [FAIL] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1080x1920
+  C5 render/hit agreement, hit rule E1R p*s: 0/200 mismatches 
+  C5 render/hit agreement, hit rule SEALED t(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=None; p=(720.000,0.000) presented=Some(254) hit=None
+  C5 render/hit agreement, hit rule SEALED t^-1(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=Some(216100); p=(720.000,0.000) presented=Some(254) hit=Some(100)
+
+case panel 1920x1080 transform _270 scale 1.5: view(after transform) 1080x1920 phys; OutputLogical 720.000x1280.000
+  tracker rule E1r: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1080px@right m11:1080px@left m12:1918px@top m13:1918px@bottom
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1080,1920) area 2073600; view 1080x1920
+  tracker rule Sealed: 4 failing check(s)
+    [FAIL] C1 viewport == panel: render(output_size=1080x1920) on panel 1920x1080
+    [FAIL] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=907200, fragments outside panel=907200
+    [FAIL] C3 view edges land on the 4 panel edges, full length: m10:1080px@none m11:0px@none m12:1079px@top m13:1079px@bottom
+    [FAIL] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1080x1920
+  C5 render/hit agreement, hit rule E1R p*s: 0/200 mismatches 
+  C5 render/hit agreement, hit rule SEALED t(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=Some(216100); p=(720.000,0.000) presented=Some(254) hit=Some(100)
+  C5 render/hit agreement, hit rule SEALED t^-1(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=None; p=(720.000,0.000) presented=Some(254) hit=None
+
+case panel 1920x1080 transform Flipped90 scale 1.25: view(after transform) 1080x1920 phys; OutputLogical 864.000x1536.000
+  tracker rule E1r: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1080px@left m11:1080px@right m12:1918px@top m13:1918px@bottom
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1080,1920) area 2073600; view 1080x1920
+  tracker rule Sealed: 4 failing check(s)
+    [FAIL] C1 viewport == panel: render(output_size=1080x1920) on panel 1920x1080
+    [FAIL] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=907200, fragments outside panel=907200
+    [FAIL] C3 view edges land on the 4 panel edges, full length: m10:1080px@left m11:0px@none m12:1079px@top m13:1079px@bottom
+    [FAIL] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1080x1920
+  C5 render/hit agreement, hit rule E1R p*s: 0/200 mismatches 
+  C5 render/hit agreement, hit rule SEALED t(p*s): 199/200 mismatches p=(864.000,0.000) presented=Some(254) hit=Some(215100); p=(0.000,1536.000) presented=Some(383100) hit=None
+  C5 render/hit agreement, hit rule SEALED t^-1(p*s): 200/200 mismatches p=(0.000,0.000) presented=Some(100) hit=None; p=(864.000,0.000) presented=Some(254) hit=None
+
+case panel 1920x1080 transform Flipped scale 1: view(after transform) 1920x1080 phys; OutputLogical 1920.000x1080.000
+  tracker rule E1r: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1920px@top m11:1920px@bottom m12:1078px@right m13:1078px@left
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1920x1080
+  tracker rule Sealed: 0 failing check(s)
+    [ok] C1 viewport == panel: render(output_size=1920x1080) on panel 1920x1080
+    [ok] C2 view covers panel exactly (no gap, no lost fragment): uncovered panel px=0, fragments outside panel=0
+    [ok] C3 view edges land on the 4 panel edges, full length: m10:1920px@top m11:1920px@bottom m12:1078px@right m13:1078px@left
+    [ok] C4 full-frame damage == view extent: damage bounds [0,0)..[1920,1080) area 2073600; view 1920x1080
+  C5 render/hit agreement, hit rule E1R p*s: 0/200 mismatches 
+  C5 render/hit agreement, hit rule SEALED t(p*s): 198/200 mismatches p=(0.000,0.000) presented=Some(100) hit=None; p=(1920.000,0.000) presented=Some(374) hit=Some(100)
+  C5 render/hit agreement, hit rule SEALED t^-1(p*s): 198/200 mismatches p=(0.000,0.000) presented=Some(100) hit=None; p=(1920.000,0.000) presented=Some(374) hit=Some(100)
+
+SUMMARY
+  E1R rules (tracker=physical mode, hit u=p*s): 0 failing checks/mismatches over 10 cases
+  SEALED tracker rule on 90/270-class transforms: failing in 7/7 cases (negative control)
+  SEALED tracker rule on Normal/180/Flipped: 0 failing checks (expected 0: no swap)
+  SEALED hit rule (both readings) on non-Normal transforms: failing in 18/18
+RESULT: PASS (corrected passes; sealed negative controls fail as predicted)

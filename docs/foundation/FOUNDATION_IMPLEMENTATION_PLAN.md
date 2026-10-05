@@ -1,6 +1,6 @@
 # Infynitae Native — Foundation Implementation Plan (D8)
 
-Status: **Phase D checkpoint 2 (D8) living document; a plan only.** Canonical living home of `INC-*` (FOUNDATION_ARCHITECTURE §P0). Nothing here creates a crate, manifest, workspace or source file. Planning an increment does not authorize running it.
+Status: **Phase D checkpoint 2 (D8) living document; a plan only.** Re-audited in the unsealed Phase E corrective checkpoint E1R (audit/E1R/D8_REAUDIT_E1R.md). Canonical living home of `INC-*` (FOUNDATION_ARCHITECTURE §P0). Nothing here creates a crate, manifest, workspace or source file. Planning an increment does not authorize running it.
 
 **Ordering rule.** Retire the highest architectural, authority and integration uncertainty as early and cheaply as possible, while respecting real dependencies.
 
@@ -32,7 +32,7 @@ INC-0 (ENFORCE: OB-19 + OB-36)
         └─► INC-2 (multi-output, output lifecycle token, membership, frames observed)
               ├─► INC-3 (pointer intake, CameraPan @ zoom 1)
               │     ├─► INC-4 (keyboard, ActiveElementFocus, popup routing)
-              │     │     └─► INC-5 (pointer constraints, reconciliation, output removal) ◄─ OB-11 decision point
+              │     │     └─► INC-5 (pointer constraints, reconciliation, output removal, zero outputs) ◄─ OB-11 decision before any constraint ships (E1R)
               │     └─► INC-6 (scale policy, ScaleInteractionEpoch) ◄── needs INC-2 membership + INC-3 interactions
               ├─► INC-7 (toplevel requests: fullscreen/maximize/activated) ◄── needs INC-4 focus
               └─► INC-8 (off-screen frames: withhold/kick/fallback)
@@ -42,6 +42,8 @@ INC-11 (shell IPC) ◄── INC-6, INC-7
 INC-12 (xwayland-satellite) ◄── INC-7 (pre-map fullscreen), INC-4
 INC-13 (winit + GLES, NESTED T2) ◄── INC-2, INC-6
 [GATE G-OB34: architecture change control] ──► INC-14 (interactive move/resize) ◄── INC-6, INC-5
+[GATE G-OB48: persistence identity decision] ──► cross-session camera persistence as a product claim
+[GATE G-MIRROR] shared cameras / mirroring: outside Foundation 01
 INC-15 (PHYSICAL T3)   INC-16 (PHYSICAL T4, Phase G DRM)   INC-17 (PHYSICAL T5)   — each separately authorized
 ```
 
@@ -83,15 +85,15 @@ INC-15 (PHYSICAL T3)   INC-16 (PHYSICAL T4, Phase G DRM)   INC-17 (PHYSICAL T5) 
 ### INC-2 — Multi-output, output lifecycle, membership, observed frames
 - **Category:** PRODUCT
 - **Execution class:** HEADLESS
-- **Objective:** several outputs through `output_connected`/`output_disconnected` (startup and runtime hotplug); camera creation/binding precedence; per-surface membership; frame clock; presentation feedback (observed elements).
+- **Objective:** several outputs through `output_connected`/`output_reconfigured`/`output_disconnected` (startup, runtime hotplug and runtime mode/transform/scale changes); camera creation/binding precedence (1:1, collision rule); per-surface membership in `view_O` space; damage trackers sized `phys_O`; the zero-output state; frame clock; presentation feedback (observed elements).
 - **Crates/modules:** core output manager, `navigation` camera lifecycle, visibility pass, frame clock; adapter `Output` globals and enter/leave; headless backend hotplug.
 - **Authoritative state introduced:** OBJ-07, OBJ-08, OBJ-09, OBJ-10, OBJ-13, OBJ-17 (observed part).
 - **Seam touched:** `wl_output` globals, `wl_surface.enter/leave`, presentation-time.
 - **Invariants exercised:** INV-OUTPUT-1, INV-OUTPUT-2, INV-CAMERA-1, INV-CAMERA-3, INV-RENDER-3, INV-FRAME-1, INV-FRAME-2, INV-FRAME-5.
 - **Risks retired:** TT-3, TC-9, RB-5, A-C1 (popup membership).
-- **Obligations:** OB-3 (removal part, without interactions), OB-19 runtime counterpart (token-only output entry).
-- **Exit tests:** the 2R output-lifecycle tests ported; TST-03 SC1/SC3 and X5; TST-06 x9.
-- **Negative controls:** `Window::output_enter` popup membership (X5); a probe that the output entry is not callable without the token.
+- **Obligations:** OB-3 (removal part, without interactions), OB-19 runtime counterpart (token-only output entry), OB-45 (tracker, membership, damage part), OB-49, OB-50 (core part).
+- **Exit tests:** the 2R output-lifecycle tests ported; TST-03 SC1/SC3 and X5; TST-06 x9; E1R: the EE-1 transform matrix (tracker size, membership, damage) on the production adapter; `output_reconfigured` tests (EE-4) and reconnect as a separate case; zero-output core state (no fabricated output or coordinate; first connect leaves it).
+- **Negative controls:** `Window::output_enter` popup membership (X5); a probe that the output entry is not callable without the token; E1R: the sealed tracker size (transformed mode) must fail EE-1 C1–C4; reconfiguration probes p10–p13; sealed F-RELOCATE-1 on an empty survivor set must be unreachable.
 - **Entry conditions:** INC-1 exit.
 - **Stop / rollback:** any camera write outside the token or port entries stops the increment.
 - **Architecture decision required first:** no.
@@ -106,8 +108,8 @@ INC-15 (PHYSICAL T3)   INC-16 (PHYSICAL T4, Phase G DRM)   INC-17 (PHYSICAL T5) 
 - **Seam touched:** `wl_pointer`, relative pointer.
 - **Invariants exercised:** INV-INPUT-1, INV-INPUT-2, INV-INPUT-3, INV-INPUT-4, INV-COORD-3, INV-COORD-5, INV-CAMERA-2, INV-CAMERA-4.
 - **Risks retired:** TP-1, TT-4 (pan part), NB-12 (input path).
-- **Obligations:** OB-4 (acquisition part), OB-21 (T0 part only; T4 later).
-- **Exit tests:** TST-05 x8 (48 checks) on the production path; zero configures during pan (client-observed).
+- **Obligations:** OB-4 (acquisition part), OB-21 (T0 part only; T4 later); OB-45 (hit-test part), OB-50 (pointer part).
+- **Exit tests:** TST-05 x8 (48 checks) on the production path; zero configures during pan (client-observed); E1R: EE-1 C5 render/hit agreement on Normal/90/180/270 (+ flipped) with the corrected F-HIT-1; zero-output pointer transition (EE-3, no constraint).
 - **Negative controls:** the INV-INPUT-3 bypass switch (motion delivered during pan) must fail.
 - **Entry conditions:** INC-2 exit.
 - **Stop / rollback:** any pan-originated client event.
@@ -140,12 +142,12 @@ INC-15 (PHYSICAL T3)   INC-16 (PHYSICAL T4, Phase G DRM)   INC-17 (PHYSICAL T5) 
 - **Seam touched:** `zwp_pointer_constraints_v1`.
 - **Invariants exercised:** INV-INPUT-5, INV-COORD-5, INV-OUTPUT-1.
 - **Risks retired:** TA-4, TF-1, TP-3, TC-7, RB-12.
-- **Obligations:** OB-31, OB-3, OB-11 (**decision point**: upstream fix or patch per D-B12-PIN), OB-20 (T0/T1 parts).
-- **Exit tests:** TST-21 xlock_grab DEFER (persistent and oneshot) on the production path; TST-05 x8 C3/C4; TST-23 R5 confinement cases.
-- **Negative controls:** SEALED (divergence) and EXPLICIT/persistent (duplicate `unlocked`) must fail; TST-08 x12 shows W-SM-4b until OB-11 is decided.
+- **Obligations:** OB-31, OB-3, OB-11 (**decision point**: upstream fix or patch per D-B12-PIN; E1R: covers W-SM-4c), OB-20 (T0/T1 parts), OB-47, OB-50 (constraint part), OB-51.
+- **Exit tests:** TST-21 xlock_grab DEFER (persistent and oneshot) on the production path; TST-05 x8 C3/C4; TST-23 R5 confinement cases; E1R: EE-2 sequences E1–E11 and EE-3 zero-output constraint cases on the production path (OB-47, OB-50).
+- **Negative controls:** SEALED (divergence) must fail; EXPLICIT/persistent (duplicate `unlocked`) and TST-08 x12 (W-SM-4b) fail on the published Smithay and pass only with the OB-11 decision applied (EE-7); EE-2 on the published Smithay shows W-SM-4c; EE-3 N3 (`unset_grab` under a lock) must fail.
 - **Entry conditions:** INC-4 exit.
 - **Stop / rollback:** core/Smithay constraint divergence.
-- **Architecture decision required first:** OB-11 must be decided (patch or accept) before shipping oneshot-lock behaviour, not before starting the increment.
+- **Architecture decision required first:** OB-11 must be decided before shipping **any** production constraint behaviour (E1R: W-SM-4c affects persistent locks and confinements too, and INV-INPUT-5 depends on P1 or an upstream fix). Starting the increment is allowed.
 - **Why next:** games depend on it, and it was two Level-A-rigor findings (PD-F2-03/04).
 
 ### INC-6 — Scale policy and ScaleInteractionEpoch
@@ -157,8 +159,8 @@ INC-15 (PHYSICAL T3)   INC-16 (PHYSICAL T4, Phase G DRM)   INC-17 (PHYSICAL T5) 
 - **Seam touched:** `wp_fractional_scale_v1`, `wl_surface.preferred_buffer_scale`.
 - **Invariants exercised:** INV-SCALE-1 … INV-SCALE-5, INV-IDLE-1 (settlement timer armed only while an epoch is open).
 - **Risks retired:** TR-1, TR-2, TR-5, TR-6, RC-2.
-- **Obligations:** OB-13, OB-28, OB-23 (T0/T1 part; tuning stays open), OB-42.
-- **Exit tests:** TST-16, TST-17, TST-23 R2 and TST-24 as T0 properties; TST-03 SC2 on the production path; adversarial self-resizing client (T1).
+- **Obligations:** OB-13 (incl. E1R zero-extent domain and integer bound), OB-28, OB-23 (T0/T1 part; tuning stays open), OB-42.
+- **Exit tests:** TST-16, TST-17, TST-23 R2 and TST-24 as T0 properties; TST-03 SC2 on the production path; adversarial self-resizing client (T1); E1R: EE-5 properties (initial commit with no buffer, 0×N/N×0, first buffer with P7, integer emission within `D_max`).
 - **Negative controls:** epoch disabled (40/40 churn); 1R camera-only rule for Stage moves (39).
 - **Entry conditions:** INC-2 and INC-3 exits.
 - **Stop / rollback:** a hint change per raw spatial event.
@@ -282,11 +284,17 @@ No PRODUCT increment may create a state where **persistent zoom ≠ 1 and camera
 - **Invariants exercised:** INV-RENDER-1, INV-SCALE-2, INV-FAIL-1 (renderer recreation).
 - **Risks retired:** TC-8, TF-2.
 - **Obligations:** OB-7 (T2 smoke), OB-13 (real `D_max`).
-- **Exit tests:** T2 smoke (map, render, pan, multi-window, unmap); renderer filters exercised.
+- **Exit tests:** T2 smoke (map, render, pan, multi-window, unmap); renderer filters exercised; E1R: a rotated output (90° and 270°, fractional scale) renders under real GLES without clipping or gaps (NESTED; renderer-dependent part of OB-45; no T4 claim).
 - **Negative controls:** `from_output` tracker at zoom ≠ 1 renders the wrong size (if INC-10 is active).
 - **Entry conditions:** INC-2, INC-6 exits; user authorization for a nested run.
 - **Stop / rollback:** any effect on the host session beyond being a client.
 - **Architecture decision required first:** no.
+
+### GATE G-OB48 (architecture decision, not an increment)
+No PRODUCT increment may claim cross-session camera persistence (loading or saving the persistence file as a product feature) until OB-48 is decided. In-session remembering and the INV-CAMERA-3 collision rule are implemented in INC-2 and are not blocked.
+
+### GATE G-MIRROR (scope boundary, not an increment)
+Shared cameras (N outputs → 1 camera, mirroring) are not part of Foundation 01 (INV-CAMERA-3, E-F2-04). Adding them requires architecture change control covering invariants, CameraSet, lifecycle API, persistence, fit semantics (PD-F2-11), state machines and tests together.
 
 ### GATE G-OB34 (architecture change control, not an increment)
 The cross-output drag definition (F-DRAG-1) is an open decision (OB-34). Interactive window move/resize may not start before it is recorded.

@@ -137,7 +137,7 @@ impl Intake {
     }
 
     /// Deliver the pointer's true position to the seat (normal routing / reconciliation).
-    fn deliver_position(&mut self, srv: &mut Server) {
+    pub fn deliver_position(&mut self, srv: &mut Server) {
         let ptr = srv.seat.get_pointer().expect("pointer");
         let q = self.canvas(srv);
         let focus = surface_origin_and_target(srv, q);

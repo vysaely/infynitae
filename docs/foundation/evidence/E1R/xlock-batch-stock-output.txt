@@ -1,0 +1,97 @@
+xlock_batch — E-F2-02 multi-batch constraint lifecycle; build: b8-harness
+smithay =0.7.0 (published, unpatched); lockstep; HEADLESS
+
+=== E1 persistent lock: explicit deactivate, later exit to W2 [Lock { oneshot: false }; A=ExplicitDeactivate; B=ExitToW2]
+    t= 41.000ms locked_pointer.locked
+    t= 41.500ms locked_pointer.unlocked
+    t= 42.000ms wl_pointer.leave W
+    t= 42.000ms locked_pointer.unlocked
+    t= 42.000ms wl_pointer.enter W2 (220.000,220.000)
+    VIOLATION: locked_pointer.unlocked while not active (duplicate / unpaired)
+    -> INVALID
+
+=== E2 persistent lock: explicit deactivate, later exit to empty [Lock { oneshot: false }; A=ExplicitDeactivate; B=ExitToEmpty]
+    t= 41.000ms locked_pointer.locked
+    t= 41.500ms locked_pointer.unlocked
+    t= 42.000ms wl_pointer.leave W
+    t= 42.000ms locked_pointer.unlocked
+    VIOLATION: locked_pointer.unlocked while not active (duplicate / unpaired)
+    -> INVALID
+
+=== E3 oneshot lock: explicit deactivate, later exit [Lock { oneshot: true }; A=ExplicitDeactivate; B=ExitToW2]
+    t= 41.000ms locked_pointer.locked
+    t= 41.500ms locked_pointer.unlocked
+    t= 42.000ms wl_pointer.leave W
+    t= 42.000ms wl_pointer.enter W2 (220.000,220.000)
+    -> VALID
+
+=== E4 persistent lock: explicit deactivate, surface destroyed [Lock { oneshot: false }; A=ExplicitDeactivate; B=DestroySurface]
+    t= 41.000ms locked_pointer.locked
+    t= 41.500ms locked_pointer.unlocked
+    t= 42.500ms locked_pointer.unlocked
+    VIOLATION: locked_pointer.unlocked while not active (duplicate / unpaired)
+    -> INVALID
+
+=== E5 persistent lock: explicit deactivate, output removed [Lock { oneshot: false }; A=ExplicitDeactivate; B=OutputRemoved]
+    t= 41.000ms locked_pointer.locked
+    t= 41.500ms locked_pointer.unlocked
+    t= 42.000ms wl_pointer.leave W
+    t= 42.000ms locked_pointer.unlocked
+    VIOLATION: locked_pointer.unlocked while not active (duplicate / unpaired)
+    -> INVALID
+
+=== E6 persistent lock: explicit deactivate, reactivation, exit [Lock { oneshot: false }; A=ExplicitDeactivate; B=ReactivateThenExit]
+    t= 41.000ms locked_pointer.locked
+    t= 41.500ms locked_pointer.unlocked
+    t= 42.000ms locked_pointer.locked
+    t= 42.500ms wl_pointer.leave W
+    t= 42.500ms locked_pointer.unlocked
+    -> VALID
+
+=== E7 persistent lock: explicit deactivate, held button, exit [Lock { oneshot: false }; A=ExplicitDeactivate; B=HeldButtonThenExit]
+    t= 41.000ms locked_pointer.locked
+    t= 41.500ms locked_pointer.unlocked
+    t= 42.000ms wl_pointer.button 272 pressed
+    t= 42.500ms wl_pointer.motion (1120.000,220.000)
+    t= 43.000ms wl_pointer.button 272 released
+    t= 43.500ms wl_pointer.leave W
+    t= 43.500ms locked_pointer.unlocked
+    t= 43.500ms wl_pointer.enter W2 (221.000,220.000)
+    VIOLATION: locked_pointer.unlocked while not active (duplicate / unpaired)
+    -> INVALID
+
+=== E8 persistent confinement: explicit deactivate, later exit [Confine; A=ExplicitDeactivate; B=ExitToW2]
+    t= 41.000ms confined_pointer.confined
+    t= 41.500ms confined_pointer.unconfined
+    t= 42.000ms wl_pointer.leave W
+    t= 42.000ms confined_pointer.unconfined
+    t= 42.000ms wl_pointer.enter W2 (220.000,220.000)
+    VIOLATION: confined_pointer.unconfined while not active (duplicate / unpaired)
+    -> INVALID
+
+=== E9 persistent lock never activated, exit (W-SM-4b persistent) [Lock { oneshot: false }; A=NeverActivated; B=ExitToW2]
+    t= 41.000ms wl_pointer.leave W
+    t= 41.000ms locked_pointer.unlocked
+    t= 41.000ms wl_pointer.enter W2 (220.000,220.000)
+    VIOLATION: locked_pointer.unlocked while not active (duplicate / unpaired)
+    -> INVALID
+
+=== E10 oneshot lock never activated, exit (W-SM-4b / X-12) [Lock { oneshot: true }; A=NeverActivated; B=ExitToW2]
+    t= 41.000ms wl_pointer.leave W
+    t= 41.000ms locked_pointer.unlocked
+    t= 41.000ms wl_pointer.enter W2 (220.000,220.000)
+    VIOLATION: locked_pointer.unlocked while not active (duplicate / unpaired)
+    -> INVALID
+
+=== E11 public-API alternative: end by leave, return, exit [Lock { oneshot: false }; A=LeaveInsteadThenReturn; B=ExitToW2]
+    t= 41.000ms locked_pointer.locked
+    t= 41.500ms wl_pointer.leave W
+    t= 41.500ms locked_pointer.unlocked
+    t= 42.000ms wl_pointer.enter W (221.000,220.000)
+    t= 42.500ms wl_pointer.leave W
+    t= 42.500ms locked_pointer.unlocked
+    t= 42.500ms wl_pointer.enter W2 (221.000,220.000)
+    VIOLATION: locked_pointer.unlocked while not active (duplicate / unpaired)
+    -> INVALID
+
+SUMMARY: 2/11 cases VALID; INVALID: ["E1", "E2", "E4", "E5", "E7", "E8", "E9", "E10", "E11"]

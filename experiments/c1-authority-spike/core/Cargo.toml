@@ -18,3 +18,5 @@ probe_protocol_refits_camera = []
 probe_sticky_fit_retains_authority = []
 # PD-F2-18 (Phase D 2R): protocol policy creating/binding a camera. MUST NOT compile (proof not mintable).
 probe_protocol_creates_camera = []
+# E1R (E-F3-03) negative control: the sealed 2R binding rule (re-binds a camera that is already bound)
+probe_sealed_key_steal = []

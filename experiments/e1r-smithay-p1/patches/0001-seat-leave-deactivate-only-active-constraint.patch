@@ -1,0 +1,13 @@
+--- a/src/wayland/seat/pointer.rs
++++ b/src/wayland/seat/pointer.rs
+@@ -250,7 +250,9 @@
+ 
+             with_pointer_constraint(self, &pointer, |constraint| {
+                 if let Some(constraint) = constraint {
+-                    constraint.deactivate();
++                    if constraint.is_active() {
++                        constraint.deactivate();
++                    }
+                 }
+             });
+         }

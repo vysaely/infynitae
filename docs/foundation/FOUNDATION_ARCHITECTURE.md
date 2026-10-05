@@ -1761,6 +1761,129 @@ These restate properties that INV-CAMERA-1, INV-OUTPUT-2 and INV-SCALE-3 above a
 ---
 ---
 
+# §C12.E1R — Canonical registry amendments (Phase E corrective checkpoint E1R)
+
+**Status: UNSEALED — awaiting the E1R external review gate.** Nothing in this layer is sealed. It does not declare Phase E passed.
+
+**Inputs:**
+- C12 (`615b0ed`), C12.R1 (`84ce620`) and C12.R2 (`5827926`), effective as sealed in the Phase D final seal `c0a1cee`;
+- the independent Phase E audit `audit/phase-e/` (verdict `PHASE E FAIL — ARCHITECTURE CORRECTIONS REQUIRED`; findings E-F1-01, E-F2-01…07, E-F3-01…03; kept unmodified as evidence);
+- three findings discovered while reproducing them (§C12.E1R.5: E1R-N1, E1R-N2, E1R-N3).
+
+**Provenance:**
+- per-invariant records: [audit/E1R/INVARIANT_DIFF_E1R.md](audit/E1R/INVARIANT_DIFF_E1R.md);
+- dispositions: [audit/E1R/DISPOSITIONS_E1R.md](audit/E1R/DISPOSITIONS_E1R.md);
+- reproductions and evidence: [audit/E1R/REPRODUCTION_E1R.md](audit/E1R/REPRODUCTION_E1R.md), `evidence/E1R/`.
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12, C12.R1 and C12.R2. Every other row is unchanged.** Registry size after E1R: 57 (no invariant added or removed).
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-CAMERA-3** | Cameras are centre-anchored views (centre Q16, zoom); per-output view origin `v_O = centre − view_O/(2k)`, where `view_O` is the output's physical mode after its transform (R7).<br><br>Cameras come into existence **only** through `output_connected` (INV-OUTPUT-2). For the connecting `OutputKey`, the camera is the first of:<br>1. the lowest-indexed camera remembered this session for that key that is **currently unbound** (re-bound, value unchanged);<br>2. a new camera seeded from the passive persisted lookup, unless a camera with that key already exists this session (a concurrent key collision), in which case 3 applies;<br>3. a new camera at Core's internal default placement (the placement policy itself is Level D).<br><br>Cameras survive output removal (unbound, value kept) and are not destroyed in-session. **Binding is 1:1 in Foundation 01:** each connected output is bound to exactly one camera, and a camera is bound to at most one output. Shared cameras (mirroring) are not part of Foundation 01 (gate G-MIRROR). | core `navigation` | D+E | D-B7-CENTER, B7.2, ER2-1, EE-1, EE-4 | T0 (spike tests), T1 hotplug (OB-49) | E-F2-01, E-F2-04, E-F3-03 |
+| **INV-INPUT-5** | A constraint is activated only when its element holds ActiveElementFocus, its surface has pointer focus, the pointer is inside the region, and no compositor pointer interaction is being acquired.<br><br>**Reconciliation** runs once at the end of every core batch in which any of these changed: the interaction output's view or descriptor (including `output_reconfigured`); the constrained surface's geometry or origin; the output set; ActiveElementFocus; the end of a compositor interaction; the end of a client-owned grab sequence.<br><br>Reconciliation is **deferred** while a compositor pointer interaction or a client-owned grab sequence is active. While deferred, core and Smithay keep the same constraint state, no absolute motion reaches a locked surface, and relative motion comes only from physical deltas.<br><br>A lock is kept only if its derived lock point is observable through the interaction output and its element holds ActiveElementFocus.<br><br>A confinement clamps the physical pointer half-open, in the interaction output's OutputLogical space, to the region's projection; Arrangement crossing is disabled; a pointer outside the region after a view change ends it; there is no warp.<br><br>Every end emits `unlocked`/`unconfined` exactly once, and **only from the active state**: no deactivation event is ever sent for an inactive constraint — not on a later `leave()` after an explicit deactivate (any lifetime, any later batch), not on surface destruction, and not for a constraint that was never activated. An explicit `deactivate` is used only when the delivered focus does not change in that batch; otherwise Smithay's `leave()` does it (W-SM-4a). Smithay 0.7.0's `leave()` deactivates unconditionally and no public API avoids it (W-SM-4c), so this invariant depends on the one-line dependency patch P1 (`leave()` deactivates only an active constraint) or an equivalent upstream fix, adopted under the patch policy (INV-ARCH-3, OB-11).<br><br>At most one true-position motion per batch; no replayed or synthetic motion. Output removal relocates the physical pointer at once (F-RELOCATE-1) or, when no output survives, enters `NoOutput` (INV-OUTPUT-1). Destruction ends constraints through the protocol path. | core + adapter | E+M | B11.4, X-8, ER-2, ER-5 R5, EE-2, EE-3 | T1 (OB-3, OB-31, OB-47) | E-F2-02, E-F2-03, E-F2-05 |
+| **INV-OUTPUT-1** | Output removal enters Core **only** through `output_disconnected(&mut OutputLifecycleToken, …)`. Then: membership `leave` before the global is destroyed; camera unbound and kept (value unchanged); fullscreen presentation dropped with the INV-PRES-1 configure; interactions orphaned (ownership kept until release, no camera mutation); if the interaction output was removed and **another output survives**, the physical pointer is relocated at once to the Arrangement-nearest point of a surviving output (half-open, F-RELOCATE-1); constraints reconciled per INV-INPUT-5 (deferred under a client grab); the removal is a ScaleInteractionEpoch settlement event.<br><br>**Zero outputs.** When no output survives, the seat enters the stable `NoOutput` state (OBJ-20); no output and no coordinate is fabricated, and nearest-output selection is never evaluated on an empty set. In the same batch the adapter installs a compositor zero-output pointer grab with `Focus::Clear`, replacing any client implicit grab: the client receives `wl_pointer.leave`, Smithay ends only *active* constraints (one `unlocked`/`unconfined` each), and no absolute motion is delivered. It then submits one `motion(focus = None)` at Smithay's stored location, delivered to no one. While `NoOutput`, physical pointer motion, buttons and axes are consumed by core and delivered nowhere; ActiveElementFocus and keyboard routing are unchanged (not output-bound); cameras stay unbound with their values. The first `output_connected` leaves `NoOutput`: the zero-output grab is removed first, then the pointer is placed by the startup rule (centre of the new output's logical extent) with one routed motion, and constraint reconciliation follows (INV-INPUT-5). | core output manager | D+E | B7.2, C4.6, ER-2, ER2-1, EE-3, EE-4 | T1 (OB-3, OB-31, OB-50) | E-F2-05 |
+| **INV-OUTPUT-2** | **Output lifecycle authority.** Output connect, reconfiguration and disconnect, at startup and at runtime alike, enter Core only through `output_connected(&mut OutputLifecycleToken, OutputDescriptor)`, `output_reconfigured(&mut OutputLifecycleToken, OutputId, OutputDescriptor)` and `output_disconnected(&mut OutputLifecycleToken, OutputId)`.<br><br>**The token** is a dedicated authority distinct from `InputPort`: minted only by `Core::new`; private fields (unforgeable); not Clone; `!Send` (never in protocol state); bound to its Core; held exclusively by the backend's output/display event source.<br><br>**`OutputDescriptor`** carries hardware facts only (`OutputKey`, physical mode before the transform, transform, scale, refresh), with no field for camera position, centre, zoom or binding.<br><br>**Reconfiguration** changes the hardware facts of a connected output and is not a reconnect. The `OutputId` is kept and no id is allocated; an unknown id is rejected, and so is a changed `OutputKey` (an identity change is a disconnect plus a connect). It mints no `Authorized` proof, so camera identity and value are unchanged. Derived state (`view_O`, ProjectionFrame, damage tracker, membership) is rebuilt from the new descriptor; the physical pointer on that output is clamped into its new extent (F-RECONF-1); the change is a ScaleInteractionEpoch settlement event and an INV-INPUT-5 reconciliation trigger. Client-visible effects are the `wl_output`/`xdg_output` property events and, only for an element in protocol fullscreen on that output, one configure with the new size.<br><br>**`OutputKey`** is a persistence identity (DRM device, connector, EDID make/model/serial when present). It is distinct from the runtime `OutputId` (never reused) and is not a physical-monitor identity; collisions follow INV-CAMERA-3.<br><br>**Persisted camera state** is a passive read-only lookup table given to `Core::new` and consulted only inside `output_connected`. No public restore API exists. | core output manager + `navigation` | E+D | ER2-1, EE-4 | T0 probes 2f/2h/2i (OB-19); T1 hotplug and reconfiguration (OB-49) | E-F2-01, E-F2-03, E-F3-03 |
+| **INV-SCALE-2** | Every emitted hint is a rung of the ladder in force at emission. The ladder contains every connected output scale ≤ H_max(E), the integers, and the geometric fill. `H_max(E) = min(H_cfg, H_dev(E))`, where the device bound `H_dev(E)` is the supremum of the hints whose buffers fit the device: `D_max / s_max(E)` when `s_max(E) > 0` and `+∞` when `s_max(E) = 0`; `s_max` is the largest logical side over all surfaces of E's tree and is 0 exactly when no surface has a non-zero extent (every initial commit). With no buffer there is nothing to bound, so `H_max(E) = H_cfg`. `D_max` is queried from the renderer and re-queried on renderer recreation. If E's size makes h exceed the bound, h is lowered immediately (P7). A held or epoch-deferred hint may be off-ladder until the next permitted evaluation. | core `ScaleState` | E+M | EC-16/18, ED-2 F3/F4, EE-5 | T0; T1 (OB-13) | E-F2-06 |
+| **INV-SCALE-5** | At zoom 1 with no zoom interaction, and where the maximum observing output scale ≤ H_max(E), the policy equals Phase B MaxGesture. Integer hint = ⌈h⌉, lowered to `max(1, ⌊H_dev(E)⌋)` when ⌈h⌉ > H_dev(E), so that an integer-scale client's buffer also fits the device; emission only on change; unobserved elements hold h; evaluation once per core batch after all its updates. **Initial hint:** `h := t(ρ_pred)` over the presentations whose view intersects the placed window-geometry rect (or the anchor point when the size is 0×0); if none, `t(max connected output scale)`. | core | M | P4, S7, S8, AUD-25, ED-2 F8, EE-5 | T0; T1 (OB-13) | E1R-N3 |
+
+## C12.E1R.1 Sealed or amended text superseded (must not be cited as normative)
+
+| Text | Superseded by |
+|---|---|
+| §D7.R PD-F1-04 / F-VIEW-1 "`mode_O` is the output mode **after** the output transform", and its use as the `OutputDamageTracker` size in F-RENDER-1 (PD-F1-03) | F-VIEW-1 / F-RENDER-1 (C12.E1R): `phys_O` for the damage tracker, `view_O` for the view (E-F2-01) |
+| F-HIT-1 "physical `u = transform_O(p · scale_O)`"; ARCHITECTURE CP3A-2 / audit D4 X4 and BLOCKERS T3 "`u = transform_O(p · scale_O)`" used as the hit-test space | F-HIT-1 (C12.E1R): `u = p · scale_O` in view space (E1R-N1) |
+| C12.R2 INV-CAMERA-3 "N outputs may share one camera"; B7.2 "Can two outputs share Camera state? Yes"; ADR-04 "N outputs may share one camera" | INV-CAMERA-3 (C12.E1R): 1:1 binding; shared cameras behind G-MIRROR (E-F2-04) |
+| C12.R2 INV-CAMERA-3 rule 1 "the camera remembered this session (re-bound …)" when that camera is currently bound | INV-CAMERA-3 (C12.E1R): only an unbound remembered camera is re-bound (E-F3-03) |
+| C12.R1 INV-INPUT-5 "Every end emits `unlocked`/`unconfined` exactly once" as satisfiable by the W-SM-4a ordering rule alone | INV-INPUT-5 (C12.E1R): only-from-active, dependent on P1 (E-F2-02) |
+| C12.R2 INV-OUTPUT-1 "physical pointer relocated at once to the Arrangement-nearest point of a surviving output" without an empty-set case; OBJ-20 mandatory `(interaction output, p)` | INV-OUTPUT-1 (C12.E1R) zero-output state; OBJ-20 `PointerState` (E-F2-05) |
+| STATE_MACHINES M4 row 2 "descriptor update through the token entry" (no such entry existed) | INV-OUTPUT-2 (C12.E1R) `output_reconfigured`; M4 (E-F2-03) |
+| C12.R1 INV-SCALE-2 / F-SCALE-2 "`H_max(E) = min(H_cfg, D_max / s_max(E))`" without a domain | INV-SCALE-2 / F-SCALE-2 (C12.E1R) with `H_dev` (E-F2-06) |
+| C12.R1 INV-SCALE-5 / F-SCALE-3 "Integer hint = ⌈h⌉" without the device bound | INV-SCALE-5 / F-SCALE-3 (C12.E1R) (E1R-N3) |
+
+## C12.E1R.2 Formula amendments (living §F carries the corrected text; the previous text is recorded here verbatim)
+
+Formulas reviewed and **unchanged**: F-ORIGIN-1, F-UNPROJECT-1, F-PROJECT-1, F-PAN-1, F-DRAG-1, F-ROUND-1, F-LOCK-1, F-CONFINE-1, F-SCALE-1 (E-F2-07 disproved, §C12.E1R.6), F-FIT-1 (already in view terms).
+
+### F-VIEW-1 (E-F2-01)
+- **Previous (c0a1cee):** `v_O = Q16(centre − mode_O / (2·k_O))`, with `k_O = zoom_C · scale_O` (camera C bound to output O).
+- **Previous (c0a1cee):** `mode_O` is the output mode **after** the output transform (rotated outputs swap width and height). [PD-F1-04]
+- **Previous (c0a1cee):** Derived range: stored Canvas values obey |v| ≤ 2³⁶ (INV-COORD-1), but a derived view origin may reach |v_O| ≤ 2³⁶ + mode_O/(2k_O) (≈ 2³⁶ + 2³⁰ for a fit of a 2³¹-wide window); it stays exact in f64 because |v_O| < 2³⁷. [PD-F1-02]
+- **Reason:** the single symbol `mode_O` was used both for the view (correctly transformed) and for Smithay's damage tracker (which expects the untransformed mode), so 90°/270° outputs were double-swapped.
+- **Affected invariants:** INV-CAMERA-3 (extracted text), INV-RENDER-1, INV-RENDER-3, INV-HIT-1.
+- **Boundary cases:** Normal/180°/flipped: `view_O = phys_O` (no behaviour change); 90°/270° classes: width and height exchanged exactly once.
+- **Evidence / negative control:** EE-1 — sealed rule fails 7/7 rotated cases (viewport 1080×1920 on a 1920×1080 panel, 907 200 lost fragments); corrected rule passes 10/10.
+
+### F-LATTICE-1 (E-F2-01)
+- **Previous (c0a1cee):** Evaluation order: compute `(x − R_O)·k_O` in f64 and cull against `[0, mode_O)` **before** any i32 conversion; far elements reach |x − R|·k ≈ 2³⁷·k, beyond `i32::MAX`. [PD-F1-01]
+- **Reason:** culling happens in view (element) space; the symbol is now explicit. No value changes for any transform (the sealed `mode_O` already meant the transformed size here).
+
+### F-RENDER-1 (E-F2-01)
+- **Previous (c0a1cee):** The output's damage tracker is built with `OutputDamageTracker::new(mode_O, Scale(k_O), transform_O)` and rebuilt when k_O changes; `OutputDamageTracker::from_output` (output scale only) is not used, because it ignores zoom. [PD-F1-03]
+- **Reason:** Smithay 0.7.0 `render_output` computes the element space as `transform.invert().transform_size(size)` and passes `size` to `Renderer::render`, whose contract is "dimensions of the display **before** the dst_transform" (renderer/mod.rs:405-407); GLES sets `glViewport(0, 0, size)` and swaps only its projection (gles/mod.rs:2056-2068).
+- **Negative control:** EE-1 C1–C4 fail for the sealed size on every 90°/270°-class case.
+
+### F-MEMBER-1 (E-F2-01)
+- **Previous (c0a1cee):** Surface S is on output O iff its F-LATTICE-1 physical rect intersects `[0, mode_O)`; element E is observed by O iff any surface of E is on O. Membership is per surface (popups included) and applied with `Output::enter/leave`.
+- **Reason:** explicit view-space symbol; no value change.
+
+### F-HIT-1 (E1R-N1)
+- **Previous (c0a1cee):** Pointer (O, p): physical `u = transform_O(p · scale_O)`, pixel `(⌊u_x⌋, ⌊u_y⌋)`. Traverse in render order (INV-RENDER-2). Select the first surface whose F-LATTICE-1 rect covers the pixel **and** whose input region (protocol add/subtract in request order; half-open cell test on the surface-local point `q − origin`, clamped into the surface; never round-to-nearest) contains `q` = F-UNPROJECT-1(p). Delivered coordinates: `q − origin`, clamped into `[0, w) × [0, h)`.
+- **Reason:** F-LATTICE-1 rects live in view (element) space; applying the output transform to the pointer moves it into panel space, so for every non-Normal transform the hit pixel and the presented pixel disagree (INV-HIT-1 violated).
+- **Evidence / negative control:** EE-1 C5 — both readings of the sealed rule (t and t⁻¹) mismatch on 18/18 non-Normal cases (≈ 200/200 points each); the corrected rule has 0 mismatches over 2 000 points in 10 cases.
+
+### F-RELOCATE-1 (E-F2-05)
+- **Previous (c0a1cee):** On loss of the interaction output: `a = arr_origin(O_lost) + p`; choose the surviving output whose Arrangement rect is nearest to a; clamp a into that rect half-open (each coordinate into `[origin, origin + size − 2⁻⁸]`, wl_fixed resolution); `p' = a − arr_origin(O')`. [PD-F1-05]
+- **Reason:** nearest-output selection had no domain; on an empty survivor set it is undefined (EE-3 N1: panics).
+- **Domain:** survivor set ≠ ∅; ∅ is handled by INV-OUTPUT-1 `NoOutput`, never by this formula.
+
+### F-RECONF-1 (new; E-F2-03)
+- **Previous:** none (no reconfiguration entry existed).
+- **Reason:** a reconfiguration can shrink or rotate the interaction output's logical extent; the pointer must stay inside the half-open extent without inventing a Canvas target or a camera change.
+
+### F-SCALE-2 (E-F2-06)
+- **Previous (c0a1cee):** `H_max(E) = min(H_cfg, D_max / s_max(E))`, `s_max(E)` = largest logical side over all surfaces of E's tree, `D_max` queried from the renderer (re-queried on renderer recreation, PD-F1-08).
+- **Reason:** `s_max(E) = 0` is reachable at every initial commit (no buffer); the division had no defined value there. The corrected definition derives the value from the meaning of the bound (a supremum over an empty constraint set), not from an implementation guard.
+- **Boundary cases:** 0×0 → `H_cfg`; 0×N and N×0 → `s_max = N > 0` (no singularity); unbuffered subsurface beside a buffered root → unchanged; first buffer → P7 applies if `h > H_max` (EE-5).
+- **Negative control:** EE-5 — the sealed formula raises `ZeroDivisionError`.
+
+### F-SCALE-3 (E1R-N3)
+- **Previous (c0a1cee):** Target `t(ρ)` = smallest rung of L(E) ≥ ρ/(1 + σ), else H_max(E) (σ = PROV-3). Emission: `preferred_scale = round(h·120)`, `preferred_buffer_scale = ⌈h⌉`, only on change. Initial hint: `h := t(ρ_pred)` with ρ_pred = F-SCALE-1 over the presentations whose view intersects the placed window-geometry rect (or the anchor point when its size is 0×0); if none, `t(max connected output scale)`.
+- **Reason:** with `H_dev(E)` non-integer, ⌈h⌉ can exceed it (8000-px side: h = 2.048, ⌈h⌉ = 3 → 24 000 px > `D_max`).
+- **Negative control:** EE-5 — sealed ⌈h⌉ exceeds `D_max` in 2 cases; corrected `b(h)` fits in every case except the stated residual (a logical side > `D_max` at scale 1).
+
+### F-PRESENT-1 (E-F2-01)
+- **Previous (c0a1cee):** A per-output view with zoom 1: `v_P = anchor(W) − max(0, (mode_O/scale_O − size(W)) / 2)` (componentwise), then F-VIEW-1's R7 quantisation and F-LATTICE-1 with k = scale_O; a surface larger than the output is origin-aligned and cropped. [PD-F1-09]
+- **Reason:** the fullscreen logical extent is the transformed extent; explicit symbol, no value change for unrotated outputs.
+
+## C12.E1R.3 Smithay quirks added
+
+- **W-SM-4c:** seat `leave()` deactivates a constraint that is already inactive, in a later batch (persistent lock or confinement after an explicit deactivate; on surface destruction; never-activated persistent lock). Wire-reproduced (EE-2, 9/11 sequences invalid). No public-API workaround: `PointerHandle.wl_pointer` is `pub(crate)`, the constraint map is private, and ending a lock through `leave` instead fails at the next re-entry (EE-2 E11). Correction: P1 (`if constraint.is_active()` in `leave()`), which also removes W-SM-4b.
+- **W-SM-16:** `PointerHandle::unset_grab` restores focus through a `motion` at the stored location, which reaches the grabbed surface even when it holds an active lock (EE-3 N3). The zero-output transition therefore uses `set_grab(…, Focus::Clear)` instead.
+
+## C12.E1R.4 Obligations
+
+- **OB-19** (still the unconditional Phase F entry gate) gains the probes in `verify.sh` step 2h (p10–p13 and the no-camera-authority source check of `output_reconfigured`) and step 2i (`probe_sealed_key_steal` negative control).
+- **OB-11** is amended: its decision now covers W-SM-4b **and** W-SM-4c; criteria (1) reproduced and (2) not fixable through public API are met (EE-2); criterion (3), an upstream issue or PR, is open and is an outward action for the user.
+- **OB-13** gains the integer-emission device bound (E1R-N3). **OB-14** records that non-Normal transforms are covered headlessly by EE-1 (production T1 still open).
+- New: OB-45 … OB-51 (FOUNDATION_TEST_PLAN.md).
+
+No obligation is closed by E1R.
+
+## C12.E1R.5 Findings discovered during E1R
+
+| ID | Level | Statement | Disposition |
+|---|---|---|---|
+| E1R-N1 | **A** | F-HIT-1 applies the output transform to the pointer before testing view-space rects: on every non-Normal output (including 180° and flipped), input is delivered to a surface other than the one presented under the pointer (INV-HIT-1). Not covered by E-F2-01 (which attacked F-VIEW-1/F-RENDER-1). | CONFIRMED — CORRECTED (F-HIT-1; EE-1 C5 with negative control). Under §26 of the E1R authorization a new Level-A finding blocks E1R pending review. |
+| E1R-N2 | C | INV-INPUT-10 step 3 (pointer `unset_grab`) can deliver one absolute motion at an unchanged location to a surface holding an active lock (W-SM-16). Not reproduced in the popup-grab configuration. | VALIDATION OBLIGATION (OB-51) |
+| E1R-N3 | B | The integer emission ⌈h⌉ can exceed the device bound for an integer-scale client. | CONFIRMED — CORRECTED (F-SCALE-3, INV-SCALE-5; EE-5 with negative control) |
+
+## C12.E1R.6 Findings disproved or narrowed
+
+- **E-F2-07** (fullscreen ρ = 4.0 → 7680×4320 buffer): disproved for the canonical formulas. `h = t(4.0) = H_max(E) = min(H_cfg = 3.0, 16384/1920)` = 3.0, buffer 5760×3240 (≤ `D_max`); the ×9 cost is the accepted RB-7 trade-off; the reviewer's clamp is the still-open policy question CP2-Q1, not a defect fix (EE-6).
+
+---
+---
+
 # Phase D package (D7): living regions of this document
 
 Everything above this line is historical:
@@ -1810,31 +1933,35 @@ Each normative formula or coordinate algorithm is defined once here. Its text is
 <!-- living:F -->
 
 ### F-VIEW-1 — Per-output view origin
-- **Definition:** `v_O = Q16(centre − mode_O / (2·k_O))`, with `k_O = zoom_C · scale_O` (camera C bound to output O).
-- **Definition:** `mode_O` is the output mode **after** the output transform (rotated outputs swap width and height). [PD-F1-04]
-- **Definition:** Derived range: stored Canvas values obey |v| ≤ 2³⁶ (INV-COORD-1), but a derived view origin may reach |v_O| ≤ 2³⁶ + mode_O/(2k_O) (≈ 2³⁶ + 2³⁰ for a fit of a 2³¹-wide window); it stays exact in f64 because |v_O| < 2³⁷. [PD-F1-02]
+- **Definition:** `v_O = Q16(centre − view_O / (2·k_O))`, with `k_O = zoom_C · scale_O` (camera C bound to output O).
+- **Definition:** `phys_O` is the output's physical mode (framebuffer size, `wl_output.mode`) **before** the output transform; `view_O = transform_size_O(phys_O)` is the view extent in physical px (90°/270° classes exchange width and height exactly once). `phys_O` is used only for the damage tracker and the framebuffer (F-RENDER-1); every view, cull, membership, hit and fit computation uses `view_O`. [E-F2-01; supersedes PD-F1-04]
+- **Definition:** Derived range: stored Canvas values obey |v| ≤ 2³⁶ (INV-COORD-1), but a derived view origin may reach |v_O| ≤ 2³⁶ + view_O/(2k_O) (≈ 2³⁶ + 2³⁰ for a fit of a 2³¹-wide window); it stays exact in f64 because |v_O| < 2³⁷. [PD-F1-02]
 - **Definition:** Quantisation: rounding point R7 (round-ties-even to Q16).
-- **Extracted invariant text:** INV-CAMERA-3 ⟦`v_O = centre − mode/(2k)`⟧
+- **Extracted invariant text:** INV-CAMERA-3 ⟦`v_O = centre − view_O/(2k)`⟧
 - **Historical sources:** C3.2 [1]; B7.1 D-B7-CENTER; C12 INV-CAMERA-3
+- **Amended:** C12.E1R (E-F2-01); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
 
 ### F-LATTICE-1 — Reference-relative lattice and physical edges
 - **Definition:** `R_O = floor(v_O / 120) · 120` (integral Canvas lattice reference); `δ = 2⁻²⁰`; `k_O = zoom_C · scale_O`.
 - **Definition:** `C_O = round((v_O − R_O)·k_O + δ)` (integer: the camera on O's physical grid); `c_eff,O = R_O + Q16(C_O / k_O)` (snapped camera, rounding R5).
 - **Definition:** `edge(x) = round((x − R_O)·k_O + δ) − C_O` for an integral Canvas edge x (rounding R4); a surface's physical rect is `[edge(x₀), edge(x₁)) × [edge(y₀), edge(y₁))`; origin and size are never rounded separately (F6).
-- **Definition:** Evaluation order: compute `(x − R_O)·k_O` in f64 and cull against `[0, mode_O)` **before** any i32 conversion; far elements reach |x − R|·k ≈ 2³⁷·k, beyond `i32::MAX`. [PD-F1-01]
+- **Definition:** Evaluation order: compute `(x − R_O)·k_O` in f64 and cull against `[0, view_O)` **before** any i32 conversion; far elements reach |x − R|·k ≈ 2³⁷·k, beyond `i32::MAX`. [PD-F1-01; E-F2-01 symbol]
 - **Definition:** Known residual: at k ∉ n/120 a lattice-reference switch can change a width or gap by ±1 physical px during camera motion (ED-1, ED-2 F1); render/hit agreement is unaffected. Open decision OB-24.
 - **Extracted invariant text:** INV-RENDER-1 ⟦`edge(x) = round((x − R)·k + δ) − C_O` with R a 120-lattice reference, δ = 2⁻²⁰, k = zoom·scale⟧
 - **Historical sources:** B1.5; C3.2 [1],[3]; C12 INV-RENDER-1
+- **Amended:** C12.E1R (E-F2-01); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
 
 ### F-RENDER-1 — Render location handed to Smithay
 - **Definition:** `L(x) = (x − R_O)·k_O + δ − C_O` (f64) for each surface origin x (and y); the adapter builds `WaylandSurfaceRenderElement::from_surface(.., Point<f64, Physical>(L), ..)`; Smithay rounds `round(L)` and `round(L + dst·k_O)`, which equals F-LATTICE-1 (X-6, ED-1).
-- **Definition:** The output's damage tracker is built with `OutputDamageTracker::new(mode_O, Scale(k_O), transform_O)` and rebuilt when k_O changes; `OutputDamageTracker::from_output` (output scale only) is not used, because it ignores zoom. [PD-F1-03]
+- **Definition:** The output's damage tracker is built with `OutputDamageTracker::new(phys_O, Scale(k_O), transform_O)` — the **untransformed** physical mode — and rebuilt when k_O or the descriptor changes; Smithay derives the element space `transform_size(phys_O) = view_O` itself and GLES sets the viewport to `phys_O`. `OutputDamageTracker::from_output` (output scale only) is not used, because it ignores zoom. [PD-F1-03; E-F2-01]
 - **Extracted invariant text:** INV-RENDER-1 ⟦`(x − R)·k + δ − C_O`⟧
 - **Historical sources:** B1.5; C3.2 [4],[5]; C3.6; ED-4
+- **Amended:** C12.E1R (E-F2-01); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
 
 ### F-MEMBER-1 — Output membership
-- **Definition:** Surface S is on output O iff its F-LATTICE-1 physical rect intersects `[0, mode_O)`; element E is observed by O iff any surface of E is on O. Membership is per surface (popups included) and applied with `Output::enter/leave`.
+- **Definition:** Surface S is on output O iff its F-LATTICE-1 physical rect intersects `[0, view_O)`; element E is observed by O iff any surface of E is on O. Membership is per surface (popups included) and applied with `Output::enter/leave`.
 - **Historical sources:** C3.2 [3]; D-B8-ENTER
+- **Amended:** C12.E1R (E-F2-01); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
 
 ### F-UNPROJECT-1 — Output-logical point to Canvas (T5)
 - **Definition:** `q = c_eff,O + Q16(p / zoom_C)` for an OutputLogical point p on output O (rounding R1; the Q16 term and c_eff's snap give ≤ 2⁻¹⁷ px + the R5 snap).
@@ -1845,9 +1972,10 @@ Each normative formula or coordinate algorithm is defined once here. Its text is
 - **Historical sources:** B2.2 T6
 
 ### F-HIT-1 — Physical-pixel hit selection
-- **Definition:** Pointer (O, p): physical `u = transform_O(p · scale_O)`, pixel `(⌊u_x⌋, ⌊u_y⌋)`. Traverse in render order (INV-RENDER-2). Select the first surface whose F-LATTICE-1 rect covers the pixel **and** whose input region (protocol add/subtract in request order; half-open cell test on the surface-local point `q − origin`, clamped into the surface; never round-to-nearest) contains `q` = F-UNPROJECT-1(p). Delivered coordinates: `q − origin`, clamped into `[0, w) × [0, h)`.
+- **Definition:** Pointer (O, p): view-space physical `u = p · scale_O` (the space of F-LATTICE-1 rects; the output transform is applied only by the renderer), pixel `(⌊u_x⌋, ⌊u_y⌋)`. Traverse in render order (INV-RENDER-2). Select the first surface whose F-LATTICE-1 rect covers the pixel **and** whose input region (protocol add/subtract in request order; half-open cell test on the surface-local point `q − origin`, clamped into the surface; never round-to-nearest) contains `q` = F-UNPROJECT-1(p). Delivered coordinates: `q − origin`, clamped into `[0, w) × [0, h)`. [E1R-N1]
 - **Definition:** Entries of a ProjectionFrame whose surface no longer exists fail closed (no delivery) until the next frame. [PD-F1-07]
 - **Historical sources:** CP3A-2; D-CP3A-HIT
+- **Amended:** C12.E1R (E1R-N1); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
 
 ### F-ORIGIN-1 — Single surface-origin function
 - **Definition:** `root_origin(E) = anchor(E) − geometry(E).loc`; subsurface: parent origin + `wl_subsurface` position (accumulated); popup: `root_origin + geometry.loc + popup_pos − popup.geometry.loc`. All origins are integral Canvas values. This is the only source of surface Canvas origins for render, membership, hit-test and input.
@@ -1875,8 +2003,15 @@ Each normative formula or coordinate algorithm is defined once here. Its text is
 - **Historical sources:** C12.R1 INV-COORD-5
 
 ### F-RELOCATE-1 — Pointer relocation to a surviving output
-- **Definition:** On loss of the interaction output: `a = arr_origin(O_lost) + p`; choose the surviving output whose Arrangement rect is nearest to a; clamp a into that rect half-open (each coordinate into `[origin, origin + size − 2⁻⁸]`, wl_fixed resolution); `p' = a − arr_origin(O')`. [PD-F1-05]
+- **Definition:** Domain: the survivor set S = Outputs ∖ {O_lost} is non-empty. On loss of the interaction output: `a = arr_origin(O_lost) + p` (evaluated before removal); choose the output of S whose Arrangement rect is nearest to a; clamp a into that rect half-open (each coordinate into `[origin, origin + size − 2⁻⁸]`, wl_fixed resolution); `p' = a − arr_origin(O')`. [PD-F1-05]
+- **Definition:** S = ∅ is outside the domain: the formula is not evaluated and the seat enters `NoOutput` (INV-OUTPUT-1). [E-F2-05]
 - **Historical sources:** C4.6; AUD-4; C12.R1 INV-INPUT-5
+- **Amended:** C12.E1R (E-F2-05); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
+
+### F-RECONF-1 — Pointer on output reconfiguration
+- **Definition:** On `output_reconfigured` of the interaction output O: `p' = clamp_halfopen(p, [0, logical_O'))`, each coordinate into `[0, extent − 2⁻⁸]` (wl_fixed resolution), with `logical_O' = view_O' / scale_O'` from the new descriptor; a p already inside is unchanged; no camera value is read or written; the true position is delivered by the batch-end routed motion (INV-INPUT-5); no relative motion is synthesized. [E-F2-03]
+- **Historical sources:** C12.E1R INV-OUTPUT-2; spike test output_reconfigured_clamps_pointer_into_new_extent
+- **Amended:** C12.E1R (E-F2-03); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
 
 ### F-CONFINE-1 — Confinement clamp
 - **Definition:** While a confinement is active on the interaction output O: `p := clamp_halfopen(p + Δ, project_O(region) ∩ [0, logical_O))` with `project_O` = F-PROJECT-1 applied to the region's Canvas rect (region + surface origin); no Arrangement crossing.
@@ -1888,22 +2023,26 @@ Each normative formula or coordinate algorithm is defined once here. Its text is
 - **Historical sources:** CP3A-1 S1
 
 ### F-SCALE-2 — Ladder and device ceiling
-- **Definition:** `H_max(E) = min(H_cfg, D_max / s_max(E))`, `s_max(E)` = largest logical side over all surfaces of E's tree, `D_max` queried from the renderer (re-queried on renderer recreation, PD-F1-08).
+- **Definition:** `H_max(E) = min(H_cfg, H_dev(E))`. Device bound `H_dev(E) = sup{h > 0 : h · side ≤ D_max for every logical side of every buffered surface of E}` = `D_max / s_max(E)` if `s_max(E) > 0`, `+∞` if `s_max(E) = 0`. `s_max(E)` = largest logical side over all surfaces of E's tree (0 iff no surface has a non-zero extent, e.g. every initial commit); `D_max` queried from the renderer (re-queried on renderer recreation, PD-F1-08). Domain: every E; the value is finite because `H_cfg` is finite (PROV-1). [E-F2-06]
 - **Definition:** Ladder L(E): every connected output scale ≤ H_max(E) ∪ the integers 1…⌊H_max⌋ ∪ geometric fill so that consecutive rungs differ by a ratio ≤ r, all rungs ≤ H_max(E) (constants: PROV-1, PROV-2).
-- **Extracted invariant text:** INV-SCALE-2 ⟦`H_max(E) = min(H_cfg, D_max / s_max(E))`⟧
+- **Extracted invariant text:** INV-SCALE-2 ⟦`H_max(E) = min(H_cfg, H_dev(E))`⟧
 - **Historical sources:** CP3A-1 S2/S3; C12.R1 INV-SCALE-2
+- **Amended:** C12.E1R (E-F2-06); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
 
 ### F-SCALE-3 — Target, emission and initial hint
-- **Definition:** Target `t(ρ)` = smallest rung of L(E) ≥ ρ/(1 + σ), else H_max(E) (σ = PROV-3). Emission: `preferred_scale = round(h·120)`, `preferred_buffer_scale = ⌈h⌉`, only on change. Initial hint: `h := t(ρ_pred)` with ρ_pred = F-SCALE-1 over the presentations whose view intersects the placed window-geometry rect (or the anchor point when its size is 0×0); if none, `t(max connected output scale)`.
+- **Definition:** Target `t(ρ)` = smallest rung of L(E) ≥ ρ/(1 + σ), else H_max(E) (σ = PROV-3). Emission: `preferred_scale = round(h·120)`, `preferred_buffer_scale = b(h)` with `b(h) = ⌈h⌉` if `⌈h⌉ ≤ H_dev(E)`, else `max(1, ⌊H_dev(E)⌋)`, only on change. Initial hint: `h := t(ρ_pred)` with ρ_pred = F-SCALE-1 over the presentations whose view intersects the placed window-geometry rect (or the anchor point when its size is 0×0); if none, `t(max connected output scale)`. [E1R-N3]
+- **Definition:** Residual: if `s_max(E) > D_max` no scale ≥ 1 fits the device (the client's own logical size exceeds it at scale 1); `b = 1` and the residual is carried by OB-13.
 - **Historical sources:** CP3A-1 S4/S8; C12.R1 INV-SCALE-5
+- **Amended:** C12.E1R (E1R-N3); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
 
 ### F-FIT-1 — Viewport-fit (one-shot)
 - **Definition:** For output O and element W (geometry snapshot at the instant of the authorized action): `centre = centre(W.geometry)`; `zoom = min(view_w,O / W.w, view_h,O / W.h)`; one camera mutation; the previous camera value is recorded for an optional authorized restore.
 - **Historical sources:** C5.1; C12.R1 INV-CAMERA-5
 
 ### F-PRESENT-1 — Protocol-fullscreen presentation view
-- **Definition:** A per-output view with zoom 1: `v_P = anchor(W) − max(0, (mode_O/scale_O − size(W)) / 2)` (componentwise), then F-VIEW-1's R7 quantisation and F-LATTICE-1 with k = scale_O; a surface larger than the output is origin-aligned and cropped. [PD-F1-09]
+- **Definition:** A per-output view with zoom 1: `v_P = anchor(W) − max(0, (view_O/scale_O − size(W)) / 2)` (componentwise), then F-VIEW-1's R7 quantisation and F-LATTICE-1 with k = scale_O; a surface larger than the output is origin-aligned and cropped. [PD-F1-09; E-F2-01 symbol]
 - **Historical sources:** C5.2; C12.R1 INV-PRES-1
+- **Amended:** C12.E1R (E-F2-01); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
 
 <!-- /living -->
 
@@ -2029,4 +2168,6 @@ Each D-F1 is applied **only** inside the living `F-*`, `OBJ-*` or `OB-*` text na
 | PD-F1-09 | C5.2 "centred with border fill if smaller" | F-PRESENT-1 | presentation view expressed through F-VIEW-1/R7 | same geometry; names the existing rounding point instead of an unlisted one |
 | PD-F1-10 | BLOCKERS ledger category 3 policies without owners | PROV-7…PROV-11; OB-37…OB-41 | each policy has an owning obligation and a freeze/decision destination | bookkeeping only; no policy value changes |
 | PD-F1-11 | C14.3 counting-allocator test, C8 persistence load rule, C14.1/C14.2 T4 procedures (no owning obligation) | OB-42, OB-43, OB-44 | specified tests now have owning obligations | bookkeeping only; tests and rules unchanged |
+
+> **E1R (unsealed):** PD-F1-04 is superseded and PD-F1-03's tracker size corrected by §C12.E1R (E-F2-01): the damage tracker takes the untransformed `phys_O`, the view takes `view_O`. The rows above remain as D7 provenance.
 

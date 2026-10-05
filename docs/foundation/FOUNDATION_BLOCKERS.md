@@ -1990,10 +1990,10 @@ Original finding text: the sections above (PD-F2) and audit/README (PD-F1-01…0
 - **Obligations:** OB-19
 
 ### W-SM-4
-- **Quirk:** seat `leave()` deactivates constraints unconditionally (4a: duplicate `unlocked` after an explicit deactivate; 4b: a never-activated oneshot lock is destroyed)
-- **Infynitae response:** 4a: explicit deactivate only when the delivered focus does not change; reconciliation deferred under client grabs (INV-INPUT-5). 4b: upstream/patch decision
-- **Evidence:** EB-16, ER-2, X-12 (TST-08)
-- **Obligations:** OB-11, OB-31
+- **Quirk:** seat `leave()` deactivates constraints unconditionally (4a: duplicate `unlocked` after an explicit deactivate; 4b: a never-activated oneshot lock is destroyed; 4c (E1R, E-F2-02): an already-inactive persistent lock or confinement gets a second `unlocked`/`unconfined` when focus leaves in a later batch or the surface is destroyed, and a never-activated persistent lock gets `unlocked`)
+- **Infynitae response:** 4a: explicit deactivate only when the delivered focus does not change; reconciliation deferred under client grabs (INV-INPUT-5). 4b and 4c: no public-API workaround (EE-2 E11); dependency patch P1 (`if constraint.is_active()` in `leave()`) or an upstream fix, decided under OB-11
+- **Evidence:** EB-16, ER-2, X-12 (TST-08), EE-2, EE-7
+- **Obligations:** OB-11, OB-31, OB-47
 
 ### W-SM-5
 - **Quirk:** `render_elements_from_surface_tree` takes an i32 root
@@ -2060,6 +2060,12 @@ Original finding text: the sections above (PD-F2) and audit/README (PD-F1-01…0
 - **Infynitae response:** fixed preemption order (INV-INPUT-10)
 - **Evidence:** ER-1
 - **Obligations:** OB-30
+
+### W-SM-16
+- **Quirk:** `PointerHandle::unset_grab` restores focus with a `motion` at the stored location, delivered to the grabbed surface even while it holds an active lock (E1R)
+- **Infynitae response:** the zero-output transition uses `set_grab(…, Focus::Clear)` with a compositor grab that delivers nothing (INV-OUTPUT-1); INV-INPUT-10 step 3 is under test (OB-51)
+- **Evidence:** EE-3 (N3)
+- **Obligations:** OB-50, OB-51
 
 <!-- /living -->
 

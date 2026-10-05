@@ -61,6 +61,29 @@ printf '\nimpl Core {\n    pub fn reissue_token(&self) -> OutputLifecycleToken {
 if token_check "$seed" >/tmp/c1seed.out; then echo "NEGATIVE CONTROL BROKEN: a seeded reissue_token() was not detected"; fail=1
 else echo "OK: negative control: a seeded reissue_token() is detected:"; cat /tmp/c1seed.out; fi
 rm -f "$seed"
+echo "== 2h. E1R (E-F2-03): output reconfiguration authority (each must fail with its expected diagnostic)"
+for pr in 'p10_reconfigure_without_token|error\[E0061\]' 'p11_reconfigure_with_input_port|error\[E0308\]' 'p12_reconfigure_descriptor_with_zoom|error\[E0560\]' 'p13_reconfigure_with_camera_argument|error\[E0061\]'; do
+  feat="${pr%%|*}"; want="${pr#*|}"
+  if cargo build --offline -q -p spike-probes --features "$feat" 2>/tmp/c1p.err; then echo "VIOLATION: $feat compiled"; fail=1
+  elif grep -q "$want" /tmp/c1p.err; then echo "OK: $feat rejected: $(grep -m1 "$want" /tmp/c1p.err)"
+  else echo "WRONG REASON: $feat failed but not with /$want/:"; grep -m3 "^error" /tmp/c1p.err; fail=1; fi
+done
+# output_reconfigured must not be a navigation authority: its body mints no Authorized proof and calls
+# no navigation:: function (camera identity and value are untouched by construction)
+reconf_check() { # $1 = core source file
+  awk '/pub fn output_reconfigured\(/{f=1} f{print} f&&/^    }$/{exit}' "$1" > /tmp/c1reconf.body
+  local n_mint n_nav; n_mint=$(grep -c "mint()" /tmp/c1reconf.body); n_nav=$(grep -c "navigation::" /tmp/c1reconf.body)
+  echo "   output_reconfigured: body lines=$(wc -l < /tmp/c1reconf.body) mint()=$n_mint navigation::=$n_nav (want >0, 0, 0)"
+  [ -s /tmp/c1reconf.body ] && [ "$n_mint" = 0 ] && [ "$n_nav" = 0 ]
+}
+if reconf_check core/src/lib.rs; then echo "OK: output_reconfigured carries no camera authority"; else echo "VIOLATION"; fail=1; fi
+seed=$(mktemp); sed 's|        slot.1 = desc;|        slot.1 = desc;\n        navigation::jump(\&mut self.cameras, authority::Authorized::mint(), navigation::Authority::Shell, 0, geom::CanvasPos { x: 0, y: 0 });|' core/src/lib.rs > "$seed"
+if reconf_check "$seed" >/tmp/c1seed.out; then echo "NEGATIVE CONTROL BROKEN: a seeded camera mutation in output_reconfigured was not detected"; fail=1
+else echo "OK: negative control: a seeded camera mutation is detected:"; cat /tmp/c1seed.out; fi
+rm -f "$seed"
+echo "== 2i. E1R (E-F3-03): OutputKey collision negative control (sealed 2R rule MUST fail the 1:1 test)"
+if cargo test --offline -q -p spike-wayland --features probe_sealed_key_steal concurrent_output_key_collision 2>&1 | grep -q "1:1 violated"; then echo "OK: sealed rule steals a bound camera: $(cargo test --offline -q -p spike-wayland --features probe_sealed_key_steal concurrent_output_key_collision 2>&1 | grep -m1 '1:1 violated')"
+else echo "NEGATIVE CONTROL BROKEN: sealed binding rule not detected"; fail=1; fi
 echo "== 3. dependency direction: spike-core has no dependencies"
 deps=$(cargo tree --offline -p spike-core -e normal --depth 1 2>/dev/null | tail -n +2)
 if [ -n "$deps" ]; then echo "VIOLATION: $deps"; fail=1; else echo "OK: spike-core depends on nothing"; fi

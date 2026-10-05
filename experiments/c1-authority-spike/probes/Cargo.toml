@@ -22,3 +22,8 @@ p6_output_connected_without_token = []
 p7_forge_output_token = []
 p8_descriptor_with_coordinates = []
 p9_public_restore_api = []
+# E1R (E-F2-03)
+p10_reconfigure_without_token = []
+p11_reconfigure_with_input_port = []
+p12_reconfigure_descriptor_with_zoom = []
+p13_reconfigure_with_camera_argument = []

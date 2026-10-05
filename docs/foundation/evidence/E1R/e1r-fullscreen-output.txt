@@ -1,0 +1,14 @@
+E1R E-F2-07 — fullscreen on A (1.0) observed through B's camera (scale 2.0). H_cfg=3.0 D_max=16384
+ladder [1.0, 1.1892, 1.4142, 1.6818, 2.0, 2.4495, 3.0] H_max(E)=3.0000  (= min(H_cfg, D_max/1920 = 8.533))
+  B zoom None: rho= 1.0 -> h=1.0000 (preferred_scale 120/120, buffer_scale 1) buffer 1920x1080 =    7.9 MiB (x 1.0 of scale-1)  device-safe=True
+  B zoom  1.0: rho= 2.0 -> h=2.0000 (preferred_scale 240/120, buffer_scale 2) buffer 3840x2160 =   31.6 MiB (x 4.0 of scale-1)  device-safe=True  B sampling density 1.00
+  B zoom  1.5: rho= 3.0 -> h=3.0000 (preferred_scale 360/120, buffer_scale 3) buffer 5760x3240 =   71.2 MiB (x 9.0 of scale-1)  device-safe=True  B sampling density 1.00
+  B zoom  2.0: rho= 4.0 -> h=3.0000 (preferred_scale 360/120, buffer_scale 3) buffer 5760x3240 =   71.2 MiB (x 9.0 of scale-1)  device-safe=True  B sampling density 0.75
+  B zoom  4.0: rho= 8.0 -> h=3.0000 (preferred_scale 360/120, buffer_scale 3) buffer 5760x3240 =   71.2 MiB (x 9.0 of scale-1)  device-safe=True  B sampling density 0.38
+  B zoom  8.0: rho=16.0 -> h=3.0000 (preferred_scale 360/120, buffer_scale 3) buffer 5760x3240 =   71.2 MiB (x 9.0 of scale-1)  device-safe=True  B sampling density 0.19
+
+Phase E arithmetic (rho=4.0 sent as preferred_scale 4.0, 7680x4320): h would need to exceed H_cfg=3.0; canonical h = t(4.0) = 3.0
+  claimed 8K buffer follows from the canonical formulas: False
+
+Reviewer's clamp (rho := scale_A = 1.0 while fullscreen): h=1.0000 buffer 1920x1080; B at zoom 2 samples 0.25 buffer px per physical px => 4x upsampling on B. That changes the frozen MaxGesture policy (INV-SCALE-1: rho = max over observing presentations, no fullscreen override; CP2-Q1 left open, cost accepted as RB-7), so it is a policy decision, not a defect fix.
+RESULT: PASS (claim disproved: bounded by H_cfg; cost = accepted RB-7 trade-off; device-safe)

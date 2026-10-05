@@ -1,0 +1,82 @@
+xzero — E-F2-05 zero-output transition; build: b8-harness; smithay =0.7.0 (published); lockstep; HEADLESS
+
+
+thread 'main' (43205) panicked at src/bin/xzero.rs:112:10:
+F-RELOCATE-1: nearest surviving output
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+N1 sealed F-RELOCATE-1 with survivors = ∅: PANICS (negative control reproduces E-F2-05)
+   control: sealed F-RELOCATE-1 with one survivor -> (0, (-1820.0, 100.0))
+
+=== constraint=None held_button=false removal mode=E1r
+    t= 21.000ms [removal   ] wl_pointer.leave W
+    t= 22.000ms [reconnect ] wl_pointer.enter W (380.000,260.000)
+    focus cleared at removal=true | wl_pointer.leave at removal=true | constraint end events at removal=0 (want 0) | events in zero-output state=0 (want 0) | enter after reconnect=true
+    -> VALID
+
+=== constraint=PersistentLock held_button=false removal mode=E1r
+    t= 21.000ms [focused   ] locked_pointer.locked
+    t= 21.500ms [removal   ] wl_pointer.leave W
+    t= 21.500ms [removal   ] locked_pointer.unlocked
+    t= 22.500ms [reconnect ] wl_pointer.enter W (380.000,260.000)
+    t= 23.000ms [reconnect ] locked_pointer.locked
+    focus cleared at removal=true | wl_pointer.leave at removal=true | constraint end events at removal=1 (want 1) | events in zero-output state=0 (want 0) | enter after reconnect=true
+    -> VALID
+
+=== constraint=OneshotLock held_button=false removal mode=E1r
+    t= 21.000ms [focused   ] locked_pointer.locked
+    t= 21.500ms [removal   ] wl_pointer.leave W
+    t= 21.500ms [removal   ] locked_pointer.unlocked
+    t= 22.500ms [reconnect ] wl_pointer.enter W (380.000,260.000)
+    focus cleared at removal=true | wl_pointer.leave at removal=true | constraint end events at removal=1 (want 1) | events in zero-output state=0 (want 0) | enter after reconnect=true
+    -> VALID
+
+=== constraint=Confine held_button=false removal mode=E1r
+    t= 21.000ms [focused   ] confined_pointer.confined
+    t= 21.500ms [removal   ] wl_pointer.leave W
+    t= 21.500ms [removal   ] confined_pointer.unconfined
+    t= 22.500ms [reconnect ] wl_pointer.enter W (380.000,260.000)
+    t= 23.000ms [reconnect ] confined_pointer.confined
+    focus cleared at removal=true | wl_pointer.leave at removal=true | constraint end events at removal=1 (want 1) | events in zero-output state=0 (want 0) | enter after reconnect=true
+    -> VALID
+
+=== constraint=None held_button=true removal mode=E1r
+    t= 21.000ms [focused   ] wl_pointer.button 272 pressed
+    t= 21.500ms [removal   ] wl_pointer.leave W
+    t= 22.500ms [reconnect ] wl_pointer.enter W (380.000,260.000)
+    focus cleared at removal=true | wl_pointer.leave at removal=true | constraint end events at removal=0 (want 0) | events in zero-output state=0 (want 0) | enter after reconnect=true
+    -> VALID
+
+=== constraint=PersistentLock held_button=true removal mode=E1r
+    t= 21.000ms [focused   ] locked_pointer.locked
+    t= 21.500ms [focused   ] wl_pointer.button 272 pressed
+    t= 22.000ms [removal   ] wl_pointer.leave W
+    t= 22.000ms [removal   ] locked_pointer.unlocked
+    t= 23.000ms [reconnect ] wl_pointer.enter W (380.000,260.000)
+    t= 23.500ms [reconnect ] locked_pointer.locked
+    focus cleared at removal=true | wl_pointer.leave at removal=true | constraint end events at removal=1 (want 1) | events in zero-output state=0 (want 0) | enter after reconnect=true
+    -> VALID
+
+N2: zero-output transition WITHOUT grab handling under a held client button (negative control):
+=== constraint=None held_button=true removal mode=Nothing
+    t= 21.000ms [focused   ] wl_pointer.button 272 pressed
+    t= 21.500ms [removal   ] wl_pointer.motion (120.000,120.000)
+    t= 22.500ms [reconnect ] wl_pointer.motion (380.000,260.000)
+    focus cleared at removal=false | wl_pointer.leave at removal=false | constraint end events at removal=0 (want 0) | events in zero-output state=0 (want 0) | enter after reconnect=false
+    -> INVALID
+N2 -> INVALID as predicted: the implicit grab keeps focus on a surface of a vanished output
+
+N3: public unset_grab instead of the zero-output grab, held button + active lock (negative control):
+=== constraint=PersistentLock held_button=true removal mode=UnsetGrab
+    t= 21.000ms [focused   ] locked_pointer.locked
+    t= 21.500ms [focused   ] wl_pointer.button 272 pressed
+    t= 22.000ms [removal   ] wl_pointer.motion (120.000,120.000)
+    t= 22.000ms [removal   ] wl_pointer.leave W
+    t= 22.000ms [removal   ] locked_pointer.unlocked
+    t= 23.000ms [reconnect ] wl_pointer.enter W (380.000,260.000)
+    t= 23.500ms [reconnect ] locked_pointer.locked
+    VIOLATION: wl_pointer.motion (120.000,120.000) delivered to a LOCKED surface (INV-INPUT-5)
+    focus cleared at removal=true | wl_pointer.leave at removal=true | constraint end events at removal=1 (want 1) | events in zero-output state=0 (want 0) | enter after reconnect=true
+    -> INVALID
+N3 -> INVALID as predicted: unset_grab's focus restore delivers an absolute motion to the locked surface
+
+RESULT: PASS (E1R rule valid in all cases; negative controls fail)

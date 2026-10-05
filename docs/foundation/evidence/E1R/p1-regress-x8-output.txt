@@ -1,0 +1,186 @@
+X-8 camera-pan input ownership — b8-harness, smithay 0.7.0, lockstep
+W: content 800x600 + 20px CSD shadow, anchor (100,100), root surface origin (80,80); output A 1920x1080@1.0; pointer at (300,300).
+Pan deltas: 30 x (7.3,-2.1) (accel), unaccel = 0.9 x accel. Expected camera after pan: start - round(sum) = (0,0) - (219,-63) = (-219,63).
+
+=== C1/C2 free pointer, mode KeepFocus: motion before acquisition, pan, termination, first genuine motion
+    t= 20.500ms client wl_pointer.motion (230.000,220.000)
+    t= 20.500ms client relative_motion (10.000,0.000) unaccel (9.000,0.000)
+    t= 21.000ms        intake: press 274 ACQUIRES CameraPan (mode KeepFocus)
+    t= 36.500ms        intake: release 274 consumed (compositor-owned)
+    t= 36.500ms        intake: CameraPan ends (accumulated 219.000,-63.000)
+    t= 36.500ms        intake: free pointer re-hit-tested at unchanged output-local position
+    t= 36.500ms client wl_pointer.motion (11.000,283.000)
+    t= 37.000ms client wl_pointer.motion (12.000,283.000)
+    t= 37.000ms client relative_motion (1.000,0.000) unaccel (0.898,0.000)
+  [PASS] INV-1 no client motion/relative/button while pan owns the pointer: motion=0 relative=0 button=0
+  [PASS] INV-2 no stuck buttons: client believes pressed: {}
+  [PASS] INV-3 Stage anchor unchanged: Some((100, 100)) -> Some((100, 100))
+  [PASS] camera = start - round(sum): (-219, 63)
+  [PASS] INV-4/5 only the genuine delta is reported relatively after termination: ["relative_motion (1.000,0.000) unaccel (0.898,0.000)"]
+  [PASS] reconciliation delivers the TRUE position once, then genuine motion continues from it: ["wl_pointer.motion (11.000,283.000)", "wl_pointer.motion (12.000,283.000)"]
+
+=== C1/C2 free pointer, mode LeaveFocus: motion before acquisition, pan, termination, first genuine motion
+    t= 20.500ms client wl_pointer.motion (230.000,220.000)
+    t= 20.500ms client relative_motion (10.000,0.000) unaccel (9.000,0.000)
+    t= 21.000ms        intake: press 274 ACQUIRES CameraPan (mode LeaveFocus)
+    t= 21.000ms client wl_pointer.leave W
+    t= 36.500ms        intake: release 274 consumed (compositor-owned)
+    t= 36.500ms        intake: CameraPan ends (accumulated 219.000,-63.000)
+    t= 36.500ms        intake: free pointer re-hit-tested at unchanged output-local position
+    t= 36.500ms client wl_pointer.enter W (11.000,283.000)
+    t= 37.000ms client wl_pointer.motion (12.000,283.000)
+    t= 37.000ms client relative_motion (1.000,0.000) unaccel (0.898,0.000)
+  [PASS] INV-1 no client motion/relative/button while pan owns the pointer: motion=0 relative=0 button=0
+  [PASS] INV-2 no stuck buttons: client believes pressed: {}
+  [PASS] INV-3 Stage anchor unchanged: Some((100, 100)) -> Some((100, 100))
+  [PASS] camera = start - round(sum): (-219, 63)
+  [PASS] INV-4/5 only the genuine delta is reported relatively after termination: ["relative_motion (1.000,0.000) unaccel (0.898,0.000)"]
+  [PASS] reconciliation delivers the TRUE position once, then genuine motion continues from it: ["wl_pointer.enter W (11.000,283.000)", "wl_pointer.motion (12.000,283.000)"]
+
+=== C3 locked pointer (persistent), mode KeepFocus
+    t= 20.500ms client locked_pointer.locked
+    t= 21.000ms client relative_motion (5.000,0.000) unaccel (4.500,0.000)
+    t= 21.500ms        intake: press 274 ACQUIRES CameraPan (mode KeepFocus)
+    t= 37.000ms        intake: release 274 consumed (compositor-owned)
+    t= 37.000ms        intake: CameraPan ends (accumulated 219.000,-63.000)
+    t= 37.000ms        intake: lock kept; pointer re-derived from Canvas lock point -> output-local (519.000,237.000); no client event
+    t= 37.500ms client relative_motion (1.000,0.000) unaccel (0.898,0.000)
+  [PASS] INV-1 no client motion/relative/button while pan owns the pointer: motion=0 relative=0 button=0
+  [PASS] INV-2 no stuck buttons: client believes pressed: {}
+  [PASS] INV-3 Stage anchor unchanged: Some((100, 100)) -> Some((100, 100))
+  [INFO] locked_pointer.unlocked events caused by the pan interaction: 0
+  [INFO] client pointer events for the first genuine motion (+1,0) after termination: ["relative_motion (1.000,0.000) unaccel (0.898,0.000)"]
+  [PASS] KeepFocus: lock survives the pan (no unlocked): unlocked=0
+  [PASS] INV-4 locked: genuine motion -> relative only, exactly the delta: ["relative_motion (1.000,0.000) unaccel (0.898,0.000)"]
+
+=== C3 locked pointer (persistent), mode LeaveFocus
+    t= 20.500ms client locked_pointer.locked
+    t= 21.000ms client relative_motion (5.000,0.000) unaccel (4.500,0.000)
+    t= 21.500ms        intake: press 274 ACQUIRES CameraPan (mode LeaveFocus)
+    t= 21.500ms client wl_pointer.leave W
+    t= 21.500ms client locked_pointer.unlocked
+    t= 37.000ms        intake: release 274 consumed (compositor-owned)
+    t= 37.000ms        intake: CameraPan ends (accumulated 219.000,-63.000)
+    t= 37.000ms        intake: lock kept; pointer re-derived from Canvas lock point -> output-local (519.000,237.000); no client event
+    t= 37.500ms client wl_pointer.enter W (221.000,220.000)
+    t= 37.500ms client locked_pointer.locked
+    t= 37.500ms client relative_motion (1.000,0.000) unaccel (0.898,0.000)
+  [PASS] INV-1 no client motion/relative/button while pan owns the pointer: motion=0 relative=0 button=0
+  [PASS] INV-2 no stuck buttons: client believes pressed: {}
+  [PASS] INV-3 Stage anchor unchanged: Some((100, 100)) -> Some((100, 100))
+  [INFO] locked_pointer.unlocked events caused by the pan interaction: 1
+  [INFO] client pointer events for the first genuine motion (+1,0) after termination: ["relative_motion (1.000,0.000) unaccel (0.898,0.000)"]
+
+=== C3 locked pointer (oneshot), mode KeepFocus
+    t= 20.500ms client locked_pointer.locked
+    t= 21.000ms client relative_motion (5.000,0.000) unaccel (4.500,0.000)
+    t= 21.500ms        intake: press 274 ACQUIRES CameraPan (mode KeepFocus)
+    t= 37.000ms        intake: release 274 consumed (compositor-owned)
+    t= 37.000ms        intake: CameraPan ends (accumulated 219.000,-63.000)
+    t= 37.000ms        intake: lock kept; pointer re-derived from Canvas lock point -> output-local (519.000,237.000); no client event
+    t= 37.500ms client relative_motion (1.000,0.000) unaccel (0.898,0.000)
+  [PASS] INV-1 no client motion/relative/button while pan owns the pointer: motion=0 relative=0 button=0
+  [PASS] INV-2 no stuck buttons: client believes pressed: {}
+  [PASS] INV-3 Stage anchor unchanged: Some((100, 100)) -> Some((100, 100))
+  [INFO] locked_pointer.unlocked events caused by the pan interaction: 0
+  [INFO] client pointer events for the first genuine motion (+1,0) after termination: ["relative_motion (1.000,0.000) unaccel (0.898,0.000)"]
+  [PASS] KeepFocus: lock survives the pan (no unlocked): unlocked=0
+  [PASS] INV-4 locked: genuine motion -> relative only, exactly the delta: ["relative_motion (1.000,0.000) unaccel (0.898,0.000)"]
+
+=== C3 locked pointer (oneshot), mode LeaveFocus
+    t= 20.500ms client locked_pointer.locked
+    t= 21.000ms client relative_motion (5.000,0.000) unaccel (4.500,0.000)
+    t= 21.500ms        intake: press 274 ACQUIRES CameraPan (mode LeaveFocus)
+    t= 21.500ms client wl_pointer.leave W
+    t= 21.500ms client locked_pointer.unlocked
+    t= 37.000ms        intake: release 274 consumed (compositor-owned)
+    t= 37.000ms        intake: CameraPan ends (accumulated 219.000,-63.000)
+    t= 37.000ms        intake: lock kept; pointer re-derived from Canvas lock point -> output-local (519.000,237.000); no client event
+    t= 37.500ms client wl_pointer.enter W (221.000,220.000)
+    t= 37.500ms client relative_motion (1.000,0.000) unaccel (0.898,0.000)
+  [PASS] INV-1 no client motion/relative/button while pan owns the pointer: motion=0 relative=0 button=0
+  [PASS] INV-2 no stuck buttons: client believes pressed: {}
+  [PASS] INV-3 Stage anchor unchanged: Some((100, 100)) -> Some((100, 100))
+  [INFO] locked_pointer.unlocked events caused by the pan interaction: 1
+  [INFO] client pointer events for the first genuine motion (+1,0) after termination: ["relative_motion (1.000,0.000) unaccel (0.898,0.000)"]
+
+=== C4 locked pointer, pan moves the lock point off the output (KeepFocus)
+    t= 20.500ms client locked_pointer.locked
+    t= 21.000ms        intake: press 274 ACQUIRES CameraPan (mode KeepFocus)
+    t= 39.500ms client W: wl_surface.leave A
+    t= 71.500ms        intake: release 274 consumed (compositor-owned)
+    t= 71.500ms        intake: CameraPan ends (accumulated -2500.000,0.000)
+    t= 71.500ms        intake: lock point unobservable, focus will change -> deactivation left to leave()
+    t= 71.500ms client wl_pointer.leave W
+    t= 71.500ms client locked_pointer.unlocked
+  [PASS] INV-1 no client motion/relative/button while pan owns the pointer: motion=0 relative=0 button=0
+  [PASS] INV-2 no stuck buttons: client believes pressed: {}
+  [PASS] INV-3 Stage anchor unchanged: Some((100, 100)) -> Some((100, 100))
+  [PASS] W-SM-4 ordering rule: exactly one unlocked when the lock ends at reconciliation: unlocked events=1
+  [PASS] INV-5 no relative motion synthesized at termination: relative after release=0
+
+=== C5 confined pointer (KeepFocus): small pan (pointer stays over W) and large pan (W leaves the pointer)
+  -- small pan
+    t= 20.500ms client confined_pointer.confined
+    t= 21.000ms        intake: press 274 ACQUIRES CameraPan (mode KeepFocus)
+    t= 26.500ms        intake: release 274 consumed (compositor-owned)
+    t= 26.500ms        intake: CameraPan ends (accumulated 20.000,0.000)
+    t= 26.500ms        intake: free pointer re-hit-tested at unchanged output-local position
+    t= 26.500ms client wl_pointer.motion (200.000,220.000)
+  [PASS] INV-1 no client motion/relative/button while pan owns the pointer: motion=0 relative=0 button=0
+  [PASS] INV-2 no stuck buttons: client believes pressed: {}
+  [PASS] INV-3 Stage anchor unchanged: Some((100, 100)) -> Some((100, 100))
+  -- large pan
+    t= 20.500ms client confined_pointer.confined
+    t= 21.000ms        intake: press 274 ACQUIRES CameraPan (mode KeepFocus)
+    t= 36.500ms client W: wl_surface.leave A
+    t= 41.500ms        intake: release 274 consumed (compositor-owned)
+    t= 41.500ms        intake: CameraPan ends (accumulated -1200.000,0.000)
+    t= 41.500ms        intake: free pointer re-hit-tested at unchanged output-local position
+    t= 41.500ms client wl_pointer.leave W
+    t= 41.500ms client confined_pointer.unconfined
+  [PASS] INV-1 no client motion/relative/button while pan owns the pointer: motion=0 relative=0 button=0
+  [PASS] INV-2 no stuck buttons: client believes pressed: {}
+  [PASS] INV-3 Stage anchor unchanged: Some((100, 100)) -> Some((100, 100))
+
+=== C6 stuck-button prevention: client holds BTN_LEFT, then the pan binding is pressed
+    t= 20.500ms client wl_pointer.button 272 pressed
+    t= 21.000ms        intake: press 274 matches binding but client owns {272}: delivered to client (no acquisition)
+    t= 21.000ms client wl_pointer.button 274 pressed
+    t= 21.500ms client wl_pointer.motion (224.000,220.000)
+    t= 21.500ms client relative_motion (4.000,0.000) unaccel (3.598,0.000)
+    t= 22.000ms client wl_pointer.button 274 released
+    t= 22.500ms client wl_pointer.button 272 released
+  [PASS] INV-2 no stuck buttons: {}
+  [PASS] no acquisition while a client owns a button: 
+
+=== C7 buttons pressed DURING the pan are compositor-owned through their release, even after the pan ends
+    t= 20.500ms        intake: press 274 ACQUIRES CameraPan (mode KeepFocus)
+    t= 21.500ms        intake: press 272 consumed (owned by CameraPan)
+    t= 22.000ms        intake: release 274 consumed (compositor-owned)
+    t= 22.000ms        intake: CameraPan ends (accumulated 3.000,0.000)
+    t= 22.000ms        intake: free pointer re-hit-tested at unchanged output-local position
+    t= 22.000ms client wl_pointer.motion (217.000,220.000)
+    t= 22.500ms client wl_pointer.motion (218.000,220.000)
+    t= 22.500ms client relative_motion (1.000,0.000) unaccel (0.898,0.000)
+    t= 23.000ms        intake: release 272 consumed (compositor-owned)
+  [PASS] client saw neither press nor release of a compositor-owned button: button events=0
+  [PASS] INV-2 no stuck buttons: {}
+
+=== C8 modifier released before the initiating button: ownership follows the button, not the modifier
+  [PASS] INV-1 no client motion/relative/button while pan owns the pointer: motion=0 relative=0 button=0
+  [PASS] INV-2 no stuck buttons: client believes pressed: {}
+  [PASS] INV-3 Stage anchor unchanged: Some((100, 100)) -> Some((100, 100))
+
+=== C9 focused (locked) surface destroyed during the pan
+    t= 20.500ms client locked_pointer.locked
+    t= 21.000ms        intake: press 274 ACQUIRES CameraPan (mode KeepFocus)
+    t= 23.000ms        intake: release 274 consumed (compositor-owned)
+    t= 23.000ms        intake: CameraPan ends (accumulated 10.000,0.000)
+    t= 23.000ms        intake: free pointer re-hit-tested at unchanged output-local position
+  [PASS] pan survives target destruction and terminates cleanly: 
+  [PASS] Stage has no element left for the destroyed toplevel: 0 elements
+
+NOT REPRESENTED by this harness (no claim made): output removal during a pan; real libinput device semantics (acceleration, pointer clipping at device level); a real game's response to lock/unlock.
+
+ALL CHECKS: PASS

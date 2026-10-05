@@ -1,8 +1,15 @@
 # Checkpoint
 
-CURRENT_PHASE: **D: COMPLETE and SEALED. Phase D final seal commit `c0a1cee310e56b75d32cf30152a09975ff776700`. D9 verdict: `READY FOR INDEPENDENT ADVERSARIAL REVIEW — PHASE E`. Phase E not begun; it needs explicit authorization.**
+CURRENT_PHASE: **E1R (Phase E corrective checkpoint): work complete, UNCOMMITTED, stopped at the E1R review gate.** Phase D final seal `c0a1cee310e56b75d32cf30152a09975ff776700` intact. Phase E audit (`audit/phase-e/`, untracked, unmodified) verdict: `PHASE E FAIL — ARCHITECTURE CORRECTIONS REQUIRED`. Phase E is not declared passed; Phase F not begun.
 
 Date: 2026-10-04
+
+## PHASE E CORRECTIVE CHECKPOINT E1R (UNSEALED, uncommitted)
+- **Record:** audit/E1R/ (README, DISPOSITIONS, REPRODUCTION, INVARIANT_DIFF, D8_REAUDIT, REGRESSION).
+- **Layer:** FOUNDATION_ARCHITECTURE §C12.E1R amends 6 invariants (INV-CAMERA-3, INV-INPUT-5, INV-OUTPUT-1, INV-OUTPUT-2, INV-SCALE-2, INV-SCALE-5); 57 effective invariants; 20 `F-*` (10 amended incl. new F-RECONF-1); OB-45…51; EE-1…8; W-SM-4c, W-SM-16; gates G-OB48, G-MIRROR.
+- **Level A:** E-F2-01 and E-F2-02 corrected with regression evidence and negative controls; E-F2-02's correction depends on dependency patch P1 or an upstream fix (OB-11 criterion 3 open). **New Level A E1R-N1 (F-HIT-1 transform) found and corrected; under the E1R rules it blocks E1R pending review.**
+- **Checker:** PASS; self-test 18/18.
+- **NEXT:** external review of the complete E1R result. Do not seal; do not begin Phase F.
 
 ## Baselines
 - Phase A evidence: `2c8c163784e260af4aaa8c1dc05c6281b0476120`

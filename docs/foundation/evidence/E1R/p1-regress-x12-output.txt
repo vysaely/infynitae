@@ -1,0 +1,16 @@
+X-12 W-SM-4b reproducer — smithay =0.7.0, lockstep
+-- lifetime=oneshot trace:
+    t= 20.000ms client wl_pointer.enter W (220.000,220.000)
+    t= 21.000ms client wl_pointer.leave W
+    t= 21.500ms client wl_pointer.enter W (220.000,220.000)
+    t= 21.500ms client locked_pointer.locked
+oneshot:    locked before leave=false  unlocked on leave=false  locked after return=true
+  => DEFECT REPRODUCED: false
+     (never-active oneshot lock got `unlocked` = defunct, and cannot activate when activation becomes allowed)
+-- lifetime=persistent trace:
+    t= 20.000ms client wl_pointer.enter W (220.000,220.000)
+    t= 21.000ms client wl_pointer.leave W
+    t= 21.500ms client wl_pointer.enter W (220.000,220.000)
+    t= 21.500ms client locked_pointer.locked
+persistent: locked before leave=false  unlocked on leave=false  locked after return=true
+  => spurious `unlocked` for a never-active persistent lock: false (lock survives and activates later: true)

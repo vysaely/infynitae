@@ -1,0 +1,91 @@
+xlock_grab — lock + client implicit grab + interaction-output loss; smithay =0.7.0; lockstep
+
+=== strategy Sealed, lifetime persistent
+  lock established                                                       core lock active=true  Smithay active=true  agree
+  client-owned BTN_LEFT held (implicit grab)                             core lock active=true  Smithay active=true  agree
+  after relocation (output removed)                                      core lock active=false Smithay active=true  DIVERGED
+  client releases BTN_LEFT (implicit grab ends)                          core lock active=false Smithay active=true  DIVERGED
+  reconciliation (true position, nothing under it)                       core lock active=false Smithay active=false agree
+     client: wl_pointer.motion (1820.000,920.000)
+     client: wl_pointer.button 272 released
+     client: wl_pointer.leave W
+     client: locked_pointer.unlocked
+  unlocked events=1 (want 1) | relative events=0 (want 0) | motion while locked=1 (want 0) | pointer-order violations=0 | core==Smithay at every step=false
+  RESULT Sealed/persistent: FAIL
+
+  >> Sealed/persistent: FAIL (expected FAIL)
+
+=== strategy Sealed, lifetime oneshot
+  lock established                                                       core lock active=true  Smithay active=true  agree
+  client-owned BTN_LEFT held (implicit grab)                             core lock active=true  Smithay active=true  agree
+  after relocation (output removed)                                      core lock active=false Smithay active=true  DIVERGED
+  client releases BTN_LEFT (implicit grab ends)                          core lock active=false Smithay active=true  DIVERGED
+  reconciliation (true position, nothing under it)                       core lock active=false Smithay active=false agree
+     client: wl_pointer.motion (1820.000,920.000)
+     client: wl_pointer.button 272 released
+     client: wl_pointer.leave W
+     client: locked_pointer.unlocked
+  unlocked events=1 (want 1) | relative events=0 (want 0) | motion while locked=1 (want 0) | pointer-order violations=0 | core==Smithay at every step=false
+  RESULT Sealed/oneshot: FAIL
+
+  >> Sealed/oneshot: FAIL (expected FAIL)
+
+=== strategy Explicit, lifetime persistent
+  lock established                                                       core lock active=true  Smithay active=true  agree
+  client-owned BTN_LEFT held (implicit grab)                             core lock active=true  Smithay active=true  agree
+  after relocation (output removed)                                      core lock active=false Smithay active=false agree
+  client releases BTN_LEFT (implicit grab ends)                          core lock active=false Smithay active=false agree
+  reconciliation (true position, nothing under it)                       core lock active=false Smithay active=false agree
+     client: locked_pointer.unlocked
+     client: wl_pointer.motion (1820.000,920.000)
+     client: wl_pointer.button 272 released
+     client: wl_pointer.leave W
+  unlocked events=1 (want 1) | relative events=0 (want 0) | motion while locked=0 (want 0) | pointer-order violations=0 | core==Smithay at every step=true
+  RESULT Explicit/persistent: PASS
+
+  >> Explicit/persistent: PASS (expected FAIL)  <-- UNEXPECTED
+
+=== strategy Explicit, lifetime oneshot
+  lock established                                                       core lock active=true  Smithay active=true  agree
+  client-owned BTN_LEFT held (implicit grab)                             core lock active=true  Smithay active=true  agree
+  after relocation (output removed)                                      core lock active=false Smithay active=false agree
+  client releases BTN_LEFT (implicit grab ends)                          core lock active=false Smithay active=false agree
+  reconciliation (true position, nothing under it)                       core lock active=false Smithay active=false agree
+     client: locked_pointer.unlocked
+     client: wl_pointer.motion (1820.000,920.000)
+     client: wl_pointer.button 272 released
+     client: wl_pointer.leave W
+  unlocked events=1 (want 1) | relative events=0 (want 0) | motion while locked=0 (want 0) | pointer-order violations=0 | core==Smithay at every step=true
+  RESULT Explicit/oneshot: PASS
+
+  >> Explicit/oneshot: PASS (expected PASS)
+
+=== strategy Defer, lifetime persistent
+  lock established                                                       core lock active=true  Smithay active=true  agree
+  client-owned BTN_LEFT held (implicit grab)                             core lock active=true  Smithay active=true  agree
+  after relocation (output removed)                                      core lock active=true  Smithay active=true  agree
+  client releases BTN_LEFT (implicit grab ends)                          core lock active=true  Smithay active=true  agree
+  reconciliation (true position, nothing under it)                       core lock active=false Smithay active=false agree
+     client: wl_pointer.button 272 released
+     client: wl_pointer.leave W
+     client: locked_pointer.unlocked
+  unlocked events=1 (want 1) | relative events=0 (want 0) | motion while locked=0 (want 0) | pointer-order violations=0 | core==Smithay at every step=true
+  RESULT Defer/persistent: PASS
+
+  >> Defer/persistent: PASS (expected PASS)
+
+=== strategy Defer, lifetime oneshot
+  lock established                                                       core lock active=true  Smithay active=true  agree
+  client-owned BTN_LEFT held (implicit grab)                             core lock active=true  Smithay active=true  agree
+  after relocation (output removed)                                      core lock active=true  Smithay active=true  agree
+  client releases BTN_LEFT (implicit grab ends)                          core lock active=true  Smithay active=true  agree
+  reconciliation (true position, nothing under it)                       core lock active=false Smithay active=false agree
+     client: wl_pointer.button 272 released
+     client: wl_pointer.leave W
+     client: locked_pointer.unlocked
+  unlocked events=1 (want 1) | relative events=0 (want 0) | motion while locked=0 (want 0) | pointer-order violations=0 | core==Smithay at every step=true
+  RESULT Defer/oneshot: PASS
+
+  >> Defer/oneshot: PASS (expected PASS)
+
+ALL AS EXPECTED: false

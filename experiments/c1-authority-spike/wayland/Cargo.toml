@@ -15,3 +15,5 @@ probe_store_port_in_state = []
 probe_sticky_fit = ["spike-core/probe_sticky_fit_retains_authority"]
 # PD-F2-18 (Phase D 2R): storing the OutputLifecycleToken in protocol state -> E0277
 probe_store_output_token_in_state = []
+# E1R (E-F3-03) negative control passthrough
+probe_sealed_key_steal = ["spike-core/probe_sealed_key_steal"]

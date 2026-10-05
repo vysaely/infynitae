@@ -78,6 +78,7 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Reconstruction:** remembered → persisted (OBJ-09) → default, on connect
 - **Forbidden writers:** protocol handlers, client commits, timers, output descriptor contents
 - **Invariants:** INV-CAMERA-1, INV-CAMERA-2, INV-CAMERA-3, INV-CAMERA-5, INV-OUTPUT-2
+- **E1R (unsealed):** binding cardinality 1:1 (a camera is bound to at most one output; each connected output to exactly one camera). Re-binding takes the lowest **unbound** camera with the key; a concurrent key collision creates a new default camera not seeded from persistence (INV-CAMERA-3; EE-4). `output_reconfigured` is not a writer.
 
 ### OBJ-08 — Authority ports and tokens (`InputPort`, `ShellPort`, `OutputLifecycleToken`, per-action `Authorized`)
 - **Class:** A (capabilities)
@@ -98,6 +99,7 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Reconstruction:** persistence file
 - **Forbidden writers:** any public restore API (none exists)
 - **Invariants:** INV-OUTPUT-2, INV-FAIL-1
+- **E1R (unsealed):** keyed by `OutputKey`, a persistence identity — not a physical-monitor identity, not the runtime `OutputId`. Cross-session use is gated by G-OB48 (OB-48).
 
 ### OBJ-10 — OutputModel (mode, scale, transform, refresh)
 - **Class:** A
@@ -108,6 +110,7 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Reconstruction:** backend re-enumeration through the same entry
 - **Forbidden writers:** Smithay `Output` (written from it), clients
 - **Invariants:** INV-OUTPUT-1, INV-OUTPUT-2
+- **E1R (unsealed):** fields are `OutputKey`, physical mode `phys_O` (before the transform), transform, scale, refresh. `view_O = transform_size(phys_O)` is derived, never stored. Writers: `output_connected` and `output_reconfigured` (same `OutputId`, same `OutputKey`); `output_disconnected` removes (INV-OUTPUT-2).
 
 ### OBJ-11 — Arrangement
 - **Class:** A
@@ -128,6 +131,7 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Reconstruction:** recompute
 - **Forbidden writers:** everything (never written back, INV-STAGE-6)
 - **Invariants:** INV-CAMERA-3, INV-COORD-2
+- **E1R (unsealed):** derived from `view_O` (F-VIEW-1); rebuilt on `output_reconfigured`.
 
 ### OBJ-13 — MembershipTable
 - **Class:** D
@@ -199,7 +203,7 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Forbidden writers:** `navigation`, shell
 - **Invariants:** INV-PRES-1
 
-### OBJ-20 — Seat physical pointer state `(interaction output, OutputLogical p)`
+### OBJ-20 — Seat physical pointer state `Located(interaction output, OutputLogical p) | NoOutput`
 - **Class:** A
 - **Owner:** core intake
 - **Writers (authority per cited invariants):** intake; reconciliation; relocation (F-RELOCATE-1)
@@ -208,6 +212,7 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Reconstruction:** Arrangement-nearest on output loss
 - **Forbidden writers:** Smithay (applied copy), cameras
 - **Invariants:** INV-COORD-5, INV-INPUT-5
+- **E1R (unsealed, E-F2-05):** the state is `PointerState = Located { output, p } | NoOutput`. As data this is equivalent to `Option<(OutputId, OutputLogical)>`; the named state is kept because it is paired with the adapter's zero-output pointer grab (INV-OUTPUT-1). `NoOutput` holds before the first output and after the last one is removed; no output or coordinate is fabricated. Transitions: F-RELOCATE-1 (survivor set non-empty), `NoOutput` (empty), startup placement on the first connect, F-RECONF-1 on reconfiguration. Spike: `PointerState` (EE-4).
 
 ### OBJ-21 — Constraint state `{surface, kind, lock point: SurfaceLocal}`
 - **Class:** A (policy) + P (protocol object)
@@ -218,6 +223,7 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Reconstruction:** protocol
 - **Forbidden writers:** camera code
 - **Invariants:** INV-COORD-5, INV-INPUT-5
+- **E1R (unsealed, E-F2-02):** a deactivation event leaves this object only from the active state; Smithay's `leave()` must not deactivate an inactive constraint (P1 / upstream, OB-11; W-SM-4c).
 
 ### OBJ-22 — ActiveElementFocus (+ focus history)
 - **Class:** A
@@ -298,6 +304,7 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Reconstruction:** re-import; re-query
 - **Forbidden writers:** —
 - **Invariants:** INV-RENDER-1, INV-SCALE-2
+- **E1R (unsealed, E-F2-01):** each damage tracker is `OutputDamageTracker::new(phys_O, Scale(k_O), transform_O)` (physical, untransformed size); render elements live in `view_O` space.
 
 ### OBJ-30 — Navigation history (camera value before the last fit)
 - **Class:** A (data)
@@ -338,6 +345,7 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Reconstruction:** last good copy; all-or-nothing
 - **Forbidden writers:** partial application
 - **Invariants:** INV-FAIL-1
+- **E1R (unsealed, E-F3-03):** entries are keyed by `OutputKey` (persistence identity). Collision handling: INV-CAMERA-3. Cross-session product claims gated by G-OB48.
 
 ### OBJ-34 — Observability (`tracing`)
 - **Class:** PO

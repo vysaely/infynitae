@@ -48,7 +48,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - a scene graph.
 - **Rejected:** all three. A mirror is a second, lossy authority that has to be resynchronised on every pan; per-output `Space`s are integer-only; a scene graph is a C16 non-goal.
 - **Consequences:** Infynitae owns membership, hit-testing and render collection (ADR-03). Every Smithay helper that assumes `Space` is bypassed. That is W-SM-1/2, and the workarounds are adapter-local (ADR-13).
-- **Invariants:** STAGE-1, STAGE-2, STAGE-6, RENDER-3, RENDER-4.
+- **Invariants:** INV-STAGE-1, INV-STAGE-2, INV-STAGE-6, INV-RENDER-3, INV-RENDER-4.
 - **Obligations:** OB-26 (regression guard).
 - **Revisit trigger:** a Smithay `Space` that supports i64/fixed-point locations and non-activating raises **and** passes xsnap/xhit/X5 unmodified.
 
@@ -75,7 +75,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - The domain carries explicit types and rounding functions (INV-COORD-4).
   - Smithay receives an f64 location built by one adapter function (W-SM-5 avoided).
   - At zoom ≠ 1 the reference switch is not shape-invariant. ED-1 measured a ±1 px width change.
-- **Invariants:** COORD-1, COORD-2, COORD-3, COORD-4, RENDER-1.
+- **Invariants:** INV-COORD-1, INV-COORD-2, INV-COORD-3, INV-COORD-4, INV-RENDER-1.
 - **Obligations:** OB-6, OB-24.
 - **Revisit trigger:** a zoom-motion feature (OB-24), or PD-F2-06 disposed with option (b); a renderer that accepts sub-pixel positioning.
 - **1R amendment:**
@@ -106,9 +106,10 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Consequences:**
   - Core needs a public-API surface-tree snapshot per commit (CP2-2).
   - Hit-testing uses the last rendered frame (I9 trade-off, PD-F0-06).
-- **Invariants:** STAGE-2, COORD-6, HIT-1, RENDER-2.
+- **Invariants:** INV-STAGE-2, INV-COORD-6, INV-HIT-1, INV-RENDER-2.
 - **Obligations:** OB-1, OB-2, OB-14, OB-17, OB-26.
 - **Revisit trigger:** a protocol-level change to window-geometry semantics; T3 evidence that W-SM-9 re-clamping harms real clients.
+- **E1R amendment (unsealed, E1R-N1):** the hit pixel is computed in view space, `u = p · scale_O` (F-HIT-1); the output transform belongs to the renderer only. The sealed `transform_O(p · scale_O)` disagreed with the presented surface on every non-Normal output (EE-1). The decision (exact physical-pixel hit-testing against presented geometry) is unchanged.
 
 ## ADR-04: independent centre-anchored cameras
 
@@ -135,7 +136,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - Its Canvas position is per-output (T5).
   - A window drag across outputs has no continuous Canvas path (PD-F2-13).
   - Crossing during a client grab jumps (PD-F0-01).
-- **Invariants:** CAMERA-2, CAMERA-3, CAMERA-5, OUTPUT-1.
+- **Invariants:** INV-CAMERA-2, INV-CAMERA-3, INV-CAMERA-5, INV-OUTPUT-1.
 - **Obligations:** OB-3, OB-24.
 - **Revisit trigger:** a decision on PD-F2-01/-06/-11; the zoom-motion feature.
 - **1R amendment:**
@@ -149,6 +150,11 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - Precedence on connect: remembered session camera, then passive persisted entry, then internal default.
   - Startup equals hotplug. There is no public restore API (PD-F2-18; ER2-1).
   - Rejected: overloading `InputPort` (it would merge device-input and display-lifecycle authority) and a port-free output entry (protocol-reachable camera path).
+- **E1R amendment (unsealed; E-F2-01, E-F2-03, E-F2-04, E-F3-03):**
+  - Foundation 01 binds cameras **1:1** to outputs. "N outputs may share one camera" is withdrawn; shared cameras (mirroring) are deferred behind gate G-MIRROR (FOUNDATION_IMPLEMENTATION_PLAN).
+  - The view uses the transformed `view_O`; Smithay's damage tracker uses the physical `phys_O` (F-VIEW-1, F-RENDER-1).
+  - Output reconfiguration is a third lifecycle entry, `output_reconfigured`; it never mints camera authority (INV-OUTPUT-2).
+  - `OutputKey` is a persistence identity, not a physical-monitor identity; collisions are resolved deterministically (INV-CAMERA-3). Persisting cameras across sessions is gated by G-OB48.
 
 ## ADR-05: unified effective scale (MaxGesture, bounded ladder hint, settlement)
 
@@ -183,7 +189,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - Buffer cost while multi-observed rises as (s_max/s)².
   - Minification on lower-scale outputs (DV-2).
   - Compositor magnification beyond the ceiling.
-- **Invariants:** SCALE-1 … SCALE-5.
+- **Invariants:** INV-SCALE-1, INV-SCALE-2, INV-SCALE-3, INV-SCALE-4, INV-SCALE-5.
 - **Obligations:** OB-7, OB-12, OB-13, OB-23, OB-28.
 - **Revisit trigger:** X-16 tuning (TUNE); a disposition of PD-F2-07/-08/-09.
 - **1R amendment:**
@@ -196,6 +202,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - Window drags across a scale boundary settle in 1 change instead of 39 (ER2-2).
   - P7 stays an immediate correctness exception.
   - The 300 ms settlement timeout remains a provisional candidate (OB-23), not a frozen value.
+- **E1R amendment (unsealed; E-F2-06, E1R-N3, E-F2-07):** `H_max(E) = min(H_cfg, H_dev(E))` with `H_dev = +∞` at zero extent (F-SCALE-2); the integer hint is bounded by the device, `b(h)` (F-SCALE-3). The fullscreen policy is unchanged: E-F2-07's 8K claim does not follow from the formulas (h ≤ H_cfg = 3.0, EE-6); CP2-Q1 remains an open policy question.
 
 ## ADR-06: off-screen withholding with kick/fallback; suspension separated from visibility
 
@@ -215,7 +222,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Alternatives:** pure starve; periodic throttle only; visibility-driven `suspended` (immediate or debounced).
 - **Rejected:** pure starve (liveness failure); throttle only (periodic cost); visibility-driven `suspended` (configure storms; debounce only delays them, 48 = 48).
 - **Consequences:** Present-locked games run at about 1 fps off-screen (X-7 unmeasured, OB-5). Core must know when callbacks are pending (PD-F1-06).
-- **Invariants:** FRAME-1 … FRAME-6, IDLE-1.
+- **Invariants:** INV-FRAME-1, INV-FRAME-2, INV-FRAME-3, INV-FRAME-4, INV-FRAME-5, INV-FRAME-6, INV-IDLE-1.
 - **Obligations:** OB-5, OB-8, OB-16, OB-25.
 - **Revisit trigger:** X-7 game/network results; evidence of benefit for a `StableUnobserved(T)` reason.
 - **1R amendment:** the reason `AllObservingOutputsOff` is replaced by `OutputsOff`, defined without camera membership (INV-FRAME-6, PD-F2-14).
@@ -253,7 +260,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - Clients see the modifiers of compositor bindings.
   - Focus may stay on an off-screen window; input to it is a kick.
   - Grabs owned by Smithay must be reconciled with the core models (PD-F2-02).
-- **Invariants:** INPUT-1 … INPUT-9, COORD-5.
+- **Invariants:** INV-INPUT-1, INV-INPUT-2, INV-INPUT-3, INV-INPUT-4, INV-INPUT-5, INV-INPUT-6, INV-INPUT-7, INV-INPUT-8, INV-INPUT-9, INV-COORD-5.
 - **Obligations:** OB-3, OB-4, OB-10, OB-11, OB-15, OB-16, OB-20, OB-21.
 - **Revisit trigger:** a disposition of PD-F2-02…05/-17; T5 game results (DV-3); a Smithay fix for W-SM-4b.
 - **1R amendment:**
@@ -262,6 +269,9 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - Confinement is clamped on the interaction output with no crossing (ER-5 R5).
   - Focus layering: ADR-14.
 - **D7 note (PD-F0-11, editorial):** affected invariants also include INV-CAMERA-4. Pan-originated input never reaches clients.
+- **E1R amendment (unsealed; E-F2-02, E-F2-05):**
+  - A constraint deactivation event is sent only from the active state. This needs the dependency patch P1 (Smithay `leave()` deactivates only an active constraint) or an upstream fix, under ADR-13's patch policy (OB-11); no public-API alternative exists (W-SM-4c, EE-2).
+  - Zero outputs: the seat enters `NoOutput` through a compositor zero-output grab installed with `Focus::Clear`, never through `unset_grab` (W-SM-16, EE-3).
 
 ## ADR-08: compile-time camera-authority separation
 
@@ -278,13 +288,14 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Consequences:**
   - The composition root distributes ports.
   - Any time-driven or derived camera behaviour must be expressed without a port-free mutator. PD-F2-01's recommended correction is derived view modes.
-- **Invariants:** CAMERA-1, SHELL-1, ARCH-1.
+- **Invariants:** INV-CAMERA-1, INV-SHELL-1, INV-ARCH-1.
 - **Obligations:** OB-19 (probe list to be extended per PD-F2-01).
 - **Revisit trigger:** the PD-F2-01 disposition; any new camera behaviour.
 - **1R amendment:**
   - Authority is per action: each camera mutation consumes a fresh `Authorized` proof minted only in the port-carrying entry module (E0624 elsewhere), and retaining one fails the `Send` assertion (E0277).
   - This closes PD-F2-01's "authority retained for later" path, which port-gating alone did not cover (ER-4).
 - **D7 note (PD-F0-10, editorial):** effective since 2R, camera authority has three proof-minting entries: `InputPort`, `ShellPort`, and the dedicated `OutputLifecycleToken` for output connect/disconnect, which can only create, bind or unbind cameras (INV-CAMERA-1, INV-OUTPUT-2). The decision text above predates 2R; it is not rewritten.
+- **E1R note (unsealed, E-F2-03):** `output_reconfigured` borrows the `OutputLifecycleToken` but mints no `Authorized` proof; the three camera-authority entries are unchanged (verify.sh 2h, EE-4).
 
 ## ADR-09: protocol fullscreen is output presentation; viewport-fit is a camera operation
 
@@ -309,7 +320,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - hiding W lies about the protocol state (one surface, one size);
   - a fullscreen-only scale was the user's decision (cost accepted).
 - **Consequences:** A fullscreen game also visible on a higher-scale camera renders at that scale (AUD-1: up to 71 MB/buffer).
-- **Invariants:** PRES-1, CAMERA-5, SCALE-1.
+- **Invariants:** INV-PRES-1, INV-CAMERA-5, INV-SCALE-1.
 - **Obligations:** OB-22.
 - **Revisit trigger:** OB-22 results; a PD-F2-10 disposition.
 - **1R amendment:**
@@ -327,7 +338,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Alternatives:** Smithay's `xwayland` feature with an internal XWM.
 - **Rejected:** the internal XWM is a second authority and a large surface (C16 non-goal).
 - **Consequences:** X11 apps lose self-positioning and do not survive a satellite crash. Override-redirect fidelity is OB-9.
-- **Invariants:** XWAYLAND-1, STAGE-1.
+- **Invariants:** INV-XWAYLAND-1, INV-STAGE-1.
 - **Obligations:** OB-9, OB-27.
 - **Revisit trigger:** T3 evidence that satellite fails a required app class.
 - **1R:** xwayland-satellite 0.8.3 supports `-listenfd` (ER-6). Restart on the same X display is OB-33.
@@ -351,7 +362,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - an in-process shell couples crash domains;
   - a protocol-based shell puts privilege on the client channel (ADR-08).
 - **Consequences:** Shell restart is stateless. Shell delta streams need gesture semantics for scale (PD-F2-07).
-- **Invariants:** SHELL-1, SHELL-2, CAMERA-1.
+- **Invariants:** INV-SHELL-1, INV-SHELL-2, INV-CAMERA-1.
 - **Obligations:** T1 IPC tests.
 - **Revisit trigger:** shell design (Level D); the PD-F2-01 disposition.
 - **1R amendment:** shell navigation commands are atomic. Animated navigation is not part of Foundation 01 (INV-CAMERA-1). Shell delta streams form a ScaleInteractionEpoch (INV-SCALE-3).
@@ -372,7 +383,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Alternatives:** best-effort performance; enforcement later in Phase F.
 - **Rejected:** best-effort hides regressions; late enforcement is exactly when layering collapses.
 - **Consequences:** The early commits of Phase F are tooling. Performance claims wait for T4.
-- **Invariants:** IDLE-1, ALLOC-1, ARCH-1, ARCH-2, ARCH-3.
+- **Invariants:** INV-IDLE-1, INV-ALLOC-1, INV-ARCH-1, INV-ARCH-2, INV-ARCH-3.
 - **Obligations:** OB-19 (gate) and the C14 measurements.
 - **Revisit trigger:** T4 baselines (to freeze budgets). The gate itself is not revisitable without a user decision.
 
@@ -393,10 +404,11 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Consequences:**
   - Upgrades follow B12.5 and re-run the suite (including d5hit).
   - Grab-related behaviour must be mirrored in core (PD-F2-02).
-- **Invariants:** ARCH-3.
+- **Invariants:** INV-ARCH-3.
 - **Obligations:** OB-11, OB-18, OB-26.
 - **Revisit trigger:** a Smithay release fixing W-SM-4b/11/12; the PD-F2-02 disposition.
 - **1R:** W-SM-14 (a nested popup grab replacing the pointer grab tears down the keyboard grab) and W-SM-15 (pointer-first grab teardown refocuses the root) were added, both with adapter-local workarounds (ER-1).
+- **E1R amendment (unsealed, E-F2-02):** P1 is the first patch candidate meeting criterion (1) reproduced (EE-2) and criterion (2) no public-API fix (W-SM-4c). Criterion (3), an upstream issue or PR, is open (OB-11) and is the user's outward action. The pin stays the published crate until that decision; P1 lives only in the isolated experiment `experiments/e1r-smithay-p1`.
 
 ## ADR-14: element-level focus authority vs protocol surface routing (new, 1R)
 
@@ -426,7 +438,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - The shell, activation and focus bindings act on elements.
   - Smithay's root restore is accepted as routing inside the same element.
   - Two Smithay quirks become adapter workarounds (W-SM-14/15).
-- **Invariants:** INPUT-8, INPUT-10, INPUT-5 (constraint activation needs ActiveElementFocus), PROTO-1 (`activated`).
+- **Invariants:** INV-INPUT-8, INV-INPUT-10, INV-INPUT-5 (constraint activation needs ActiveElementFocus), INV-PROTO-1 (`activated`).
 - **Obligations:** OB-30, OB-18.
 - **Revisit trigger:** a Smithay release changing `PopupKeyboardGrab`/`PopupPointerGrab` semantics; T3 toolkits whose popups rely on keeping focus across element switches.
 <!-- /living -->

@@ -1,0 +1,7 @@
+{
+ "name": "formula Definition with an unbalanced code span (E-F3-01)",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "`p' = clamp_halfopen(p, [0, logical_O'))`",
+ "replace": "`p' = clamp_halfopen(p, [0, logical_O')`",
+ "expect": "formula-syntax"
+}

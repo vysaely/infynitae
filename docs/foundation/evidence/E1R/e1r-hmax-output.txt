@@ -1,0 +1,25 @@
+E1R E-F2-06 — F-SCALE-2 domain at zero extent. H_cfg=3.00 D_max=16384
+  first commit: toplevel, no buffer (0x0)            s_max=    0  sealed H_max=ZeroDivisionError (division by zero)          E1R H_max=3.0000  ok
+  unbuffered tree: root + subsurface, no buffers     s_max=    0  sealed H_max=ZeroDivisionError (division by zero)          E1R H_max=3.0000  ok
+  0xN (degenerate side, other side N)                s_max=  600  sealed H_max=3.0000                                        E1R H_max=3.0000  ok
+  Nx0                                                s_max=  800  sealed H_max=3.0000                                        E1R H_max=3.0000  ok
+  buffered root + unbuffered subsurface              s_max=  800  sealed H_max=3.0000                                        E1R H_max=3.0000  ok
+  ordinary 800x600                                   s_max=  800  sealed H_max=3.0000                                        E1R H_max=3.0000  ok
+  large 8000x100 (device bound below H_cfg)          s_max= 8000  sealed H_max=2.0480                                        E1R H_max=2.0480  ok
+
+Transition zero extent -> first buffer (P7 device bound applies at the commit that attaches it):
+  0x0 (h=3.0000, H_max=3.0000) -> (800, 600): H_max=3.0000; P7 forced decrease=False; h=3.0000; buffer 2400x1800 <= 16384: ok
+  0x0 (h=3.0000, H_max=3.0000) -> (8000, 100): H_max=2.0480; P7 forced decrease=True; h=2.0480; buffer 16384x205 <= 16384: ok
+  0x0 (h=3.0000, H_max=3.0000) -> (16384, 16384): H_max=1.0000; P7 forced decrease=True; h=1.0000; buffer 16384x16384 <= 16384: ok
+
+E1R-N3 — integer emission vs the device bound (integer-scale clients render at preferred_buffer_scale):
+  s_max=   800 h=3.0000  sealed ceil=3 ->   2400px fits | E1R b=3 ->   2400px fits
+  s_max=  8000 h=2.0480  sealed ceil=3 ->  24000px EXCEEDS D_max | E1R b=2 ->  16000px fits
+  s_max=  6000 h=2.7307  sealed ceil=3 ->  18000px EXCEEDS D_max | E1R b=2 ->  12000px fits
+  s_max=  5000 h=3.0000  sealed ceil=3 ->  15000px fits | E1R b=3 ->  15000px fits
+  s_max=     0 h=3.0000  sealed ceil=3 ->      0px fits | E1R b=3 ->      0px fits
+  s_max= 20000 h=0.8192  sealed ceil=1 ->  20000px EXCEEDS D_max | E1R b=1 ->  20000px RESIDUAL: side > D_max at scale 1
+  negative control: sealed ceil(h) exceeds D_max in 2 case(s) (reproduces E1R-N3)
+
+NEGATIVE CONTROL: sealed formula raises ZeroDivisionError on s_max = 0 (negative control reproduces E-F2-06)
+RESULT: PASS

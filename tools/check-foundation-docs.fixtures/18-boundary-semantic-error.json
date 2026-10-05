@@ -1,0 +1,7 @@
+{
+ "name": "boundary-semantic-error-not-detected (not a theorem prover)",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "view-space physical `u = p · scale_O`",
+ "replace": "view-space physical `u = p / scale_O`",
+ "expect": "__none__"
+}
