@@ -19,7 +19,6 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-TARGET = os.path.join(ROOT, "target", "test-efficacy")
 COPY_ITEMS = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates", "enforcement"]
 
 CORE = "crates/infynitae-core/src"
@@ -318,7 +317,7 @@ def digest():
     return h.hexdigest()
 
 
-def run_control(prop, rel, old, new, package, target, name):
+def run_control(prop, rel, old, new, package, target, name, target_dir):
     tmp = tempfile.mkdtemp(prefix="verify-test-efficacy-")
     try:
         for item in COPY_ITEMS:
@@ -332,7 +331,7 @@ def run_control(prop, rel, old, new, package, target, name):
         with open(path, "w") as f:
             f.write(text.replace(old, new, 1))
         cmd = ["cargo", "test", "--locked", "-p", package, *target, name, "--", "--test-threads=1"]
-        p = subprocess.run(cmd, cwd=tmp, env={**os.environ, "CARGO_TARGET_DIR": TARGET},
+        p = subprocess.run(cmd, cwd=tmp, env={**os.environ, "CARGO_TARGET_DIR": target_dir},
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         out = p.stdout
         if "error[E" in out or "could not compile" in out:
@@ -356,25 +355,31 @@ def main():
     print("=" * 72)
     print("verify-test-efficacy — seeded behavioural defects (INC-1, INC1-F06/F07 corrective, INC-2, INC-3)")
     print("=" * 72)
-    before = digest()
-    failures = 0
-    for prop, rel, old, new, package, target, name in CONTROLS:
-        verdict, detail = run_control(prop, rel, old, new, package, target, name)
-        ok = verdict == "DETECTED"
-        failures += not ok
-        print(f"  {'ok  ' if ok else 'FAIL'}  {verdict:<9} {prop}\n          {package} {' '.join(target)} {name}: {detail}")
-    for prop, want, rel, old, new, package, target, name in JUDGE:
-        verdict, detail = run_control(prop, rel, old, new, package, target, name)
-        ok = verdict == want
-        failures += not ok
-        print(f"  {'ok  ' if ok else 'FAIL'}  {verdict:<9} {prop} (want {want})")
-    same = digest() == before
-    if not same:
-        failures += 1
-    print(f"  {'ok  ' if same else 'FAIL'}  canonical tree byte-identical after all controls")
-    print("=" * 72)
-    print(f"== verify-test-efficacy: {'PASS' if failures == 0 else f'FAIL ({failures})'}")
-    return 0 if failures == 0 else 1
+    target_base = os.path.join(ROOT, "target")
+    os.makedirs(target_base, exist_ok=True)
+    target_dir = tempfile.mkdtemp(prefix=f"test-efficacy-{os.getpid()}-", dir=target_base)
+    try:
+        before = digest()
+        failures = 0
+        for prop, rel, old, new, package, target, name in CONTROLS:
+            verdict, detail = run_control(prop, rel, old, new, package, target, name, target_dir)
+            ok = verdict == "DETECTED"
+            failures += not ok
+            print(f"  {'ok  ' if ok else 'FAIL'}  {verdict:<9} {prop}\n          {package} {' '.join(target)} {name}: {detail}")
+        for prop, want, rel, old, new, package, target, name in JUDGE:
+            verdict, detail = run_control(prop, rel, old, new, package, target, name, target_dir)
+            ok = verdict == want
+            failures += not ok
+            print(f"  {'ok  ' if ok else 'FAIL'}  {verdict:<9} {prop} (want {want})")
+        same = digest() == before
+        if not same:
+            failures += 1
+        print(f"  {'ok  ' if same else 'FAIL'}  canonical tree byte-identical after all controls")
+        print("=" * 72)
+        print(f"== verify-test-efficacy: {'PASS' if failures == 0 else f'FAIL ({failures})'}")
+        return 0 if failures == 0 else 1
+    finally:
+        shutil.rmtree(target_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":
