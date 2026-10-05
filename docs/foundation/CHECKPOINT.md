@@ -1,8 +1,14 @@
 # Checkpoint
 
-CURRENT_PHASE: **E1R: SEALED (`1ae1b736515b8c52c3e6ba7596b22c81f7098390`) after passing independent adversarial re-review (`E1R PASS — READY TO SEAL AND RE-ENTER INDEPENDENT PHASE E REVIEW`).** Pending the independent final Phase E review of the sealed E1R baseline. Phase E is NOT declared passed. Phase F remains locked.
+CURRENT_PHASE: **PHASE E PASS — PHASE F MAY BEGIN.** Final independent Phase E review of the sealed E1R baseline recorded in `cfb54f091bd2a19065a45b32662e8f0bbddd62fc` (audit/phase-e-final/VERDICT.md). Phase F is authorized but **not begun**; INC-0 has **not begun**.
 
-Date: 2026-10-04
+Date: 2026-10-05
+
+## PHASE E FINAL REVIEW (recorded: `cfb54f091bd2a19065a45b32662e8f0bbddd62fc`)
+- **Verdict:** `PHASE E PASS — PHASE F MAY BEGIN` (audit/phase-e-final/VERDICT.md). Baseline reviewed: E1R seal `1ae1b736515b8c52c3e6ba7596b22c81f7098390`, tracking `e9d36732ac4fa9e934ee1b90bb696e9545c598ab`. Zero unresolved Level-A findings.
+- **Architecture:** unchanged by the review and by this entry; registries as in E1R (57 effective invariants; 20 `F-*`; OB-1…OB-51).
+- **Downstream gates (from the verdict, not new):** OB-11 before INC-5; OB-24 (G-OB24) before INC-10; OB-34 (G-OB34) before INC-14; OB-45 at INC-3 exit; OB-46 for physical rotation claims; G-MIRROR; G-OB48.
+- **NEXT:** Phase F entry increment **INC-0** (closes OB-19, unconditional entry gate), only on explicit owner authorization. Not begun.
 
 ## PHASE E CORRECTIVE CHECKPOINT E1R (sealed: `1ae1b736515b8c52c3e6ba7596b22c81f7098390`)
 - **E1R_SEAL:** `1ae1b736515b8c52c3e6ba7596b22c81f7098390`. Independent re-review: `E1R PASS — READY TO SEAL AND RE-ENTER INDEPENDENT PHASE E REVIEW` (audit/phase-e-e1r-review/); accepted E1R-N1 correction (no second corrective layer) and P1 as the minimal pinned framework correction.
