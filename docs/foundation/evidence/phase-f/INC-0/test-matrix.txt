@@ -1,0 +1,36 @@
+# commit: 632b1d03e3febbfda01dbe49c66f6108dc3a8f1f
+$ cargo check --workspace --locked
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+exit: 0
+$ cargo build --workspace --locked
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.02s
+exit: 0
+$ cargo test --workspace --locked
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+exit: 0
+$ cargo fmt --all -- --check
+exit: 0
+$ cargo clippy --workspace --all-targets --locked -- -D warnings
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.03s
+exit: 0
+$ ./tools/check-foundation-docs
+  ok   risk-backed                  passed=66 failed=0
+  ok   risk-disposition             passed=66 failed=0
+  ok   sm-cites-inv                 passed=22 failed=0
+RESULT: PASS
+exit: 0
+$ ./tools/check-foundation-docs --self-test
+  detected amended formula silently reverted to its previous text expected check "formula-provenance" -> failing checks ['formula-provenance']
+  detected E1R layer row edited without regenerating the registry expected check "inv-wording-mismatch" -> failing checks ['inv-wording-mismatch']
+  boundary boundary-semantic-error-not-detected (not a theorem prover) expected NO failing check -> failing checks []
+SELF-TEST: PASS (every seeded defect detected)
+exit: 0
+$ ./experiments/c1-authority-spike/verify.sh
+OK: sealed rule steals a bound camera: 1:1 violated: a=None b=Some(0)
+== 3. dependency direction: spike-core has no dependencies
+OK: spike-core depends on nothing
+== result: PASS
+exit: 0

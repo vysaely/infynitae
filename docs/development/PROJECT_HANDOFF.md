@@ -2,7 +2,7 @@
 
 **This is a navigation aid, not an authority.** Every statement here summarises a canonical document in `docs/foundation/`. Where this file and a canonical document disagree, the canonical document wins, and this file should be corrected. Do not cite this file as normative.
 
-State as of the handoff commit: Phase E **passed**; Phase F **authorized but not begun**. INC-0 needs a separate, explicit go-ahead from the project owner.
+State: Phase E **passed**; Phase F **begun**. INC-0 is implemented in `632b1d0` and awaits independent review; INC-1 has not begun. See `docs/foundation/CHECKPOINT.md`.
 
 ---
 
@@ -19,7 +19,7 @@ One authoritative model of space, owned by a dependency-free core crate:
 - One unified scale policy with bounded hints and ScaleInteractionEpochs (ADR-05).
 - Off-screen frame withholding and idle discipline (ADR-06, ADR-12).
 
-Crates planned for Foundation 01 (FOUNDATION_ARCHITECTURE §C1.1): `infynitae-core` (zero dependencies), `infynitae-wayland` (Smithay adapter), `infynitae-backend-headless`, `infynitae-backend-winit`, `infynitae` (bin), `infynitae-ipc`; Phase G adds `backend-drm`. **None of them exists yet.**
+Crates planned for Foundation 01 (FOUNDATION_ARCHITECTURE §C1.1): `infynitae-core` (zero dependencies), `infynitae-wayland` (Smithay adapter), `infynitae-backend-headless`, `infynitae-backend-winit`, `infynitae` (bin), `infynitae-ipc`; Phase G adds `backend-drm`. Since INC-0 they exist under `crates/` as authority shapes without product behaviour; enforcement-only crates are under `enforcement/`.
 
 ## 3. Why a native compositor, not the old Hyprland plugin
 
@@ -105,7 +105,7 @@ Nothing has been validated on the production adapter, a GPU, real toolkits, game
 
 **Does:** creates the workspace skeleton and the enforcement before any behaviour — workspace manifests; `verify-architecture` ported from `experiments/c1-authority-spike/verify.sh` (probes 2d/2e/2f/2g plus E1R 2h/2i); CI jobs for `verify-architecture` and `tools/check-foundation-docs` (OB-36, a separate job); minimal type skeletons for ports, `OutputLifecycleToken` and `Authorized` only as the probes need them.
 
-**Must not:** add product or Wayland protocol code; introduce authoritative state (no Stage, no CameraSet); touch any Wayland seam; change canonical architecture or audit records. Any probe that passes, or fails for the wrong reason, stops Phase F.
+**Must not:** add product or Wayland protocol code; introduce authoritative state (no Stage; `CameraSet` exists only as a never-populated type shape, per the owner's INC-0 ruling recorded in `evidence/phase-f/INC-0/README.md`); touch any Wayland seam; change canonical architecture or audit records. Any probe that passes, or fails for the wrong reason, stops Phase F.
 
 ## 29. INC-1
 

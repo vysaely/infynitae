@@ -104,9 +104,8 @@ Direct the agent to:
 2. Inspect `docs/foundation/CHECKPOINT.md` to confirm the active gate.
 3. Confirm that the current gate is:
    - **Phase E: PASSED** (`audit/phase-e-final/VERDICT.md`).
-   - **Phase F: Authorized but NOT begun**.
-   - Entry increment is **INC-0** (closing **OB-19**).
-4. **DO NOT BEGIN INC-0** until the project owner explicitly gives the go-ahead in the session.
+   - **Phase F: begun**; INC-0 implemented, pending independent review.
+4. **Do not begin any increment** until the project owner explicitly gives the go-ahead in the session.
 
 ---
 
@@ -114,4 +113,4 @@ Direct the agent to:
 
 - **Execution Class**: All initial testing is HEADLESS. Do not launch live compositors on DRM/KMS or against active desktop sessions.
 - **System Integrity**: Do not touch live compositor sessions, DRM nodes, VT state, system packages, or Rust toolchain settings.
-- **Implementation Gate**: No product code (`Cargo.toml` in root or `src/`) may be created prior to explicit owner authorization for INC-0.
+- **Implementation Gate**: Each increment needs explicit owner authorization; `tools/verify-architecture` must pass before and after every change.

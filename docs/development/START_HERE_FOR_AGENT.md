@@ -1,13 +1,14 @@
 # START HERE — Infynitae Native (for coding agents)
 
-You are continuing **Infynitae Native**, a Rust/Smithay spatial Wayland compositor. The architecture is complete and reviewed. **No product code exists yet.**
+You are continuing **Infynitae Native**, a Rust/Smithay spatial Wayland compositor. The architecture is complete and reviewed. Phase F has begun: INC-0 created the production workspace and its architecture enforcement. **No product behaviour exists yet.**
 
 ## Current state
 
 - Phase E final verdict: **`PHASE E PASS — PHASE F MAY BEGIN`** (`docs/foundation/audit/phase-e-final/VERDICT.md`).
 - Last architecture seal: E1R `1ae1b736515b8c52c3e6ba7596b22c81f7098390`; tracking `e9d36732ac4fa9e934ee1b90bb696e9545c598ab`; final review recorded in `cfb54f091bd2a19065a45b32662e8f0bbddd62fc`; this handoff is in the commit after it.
-- Check: `git log --oneline -5` should show those commits at the top, on branch `main`, with a clean `git status`.
-- Phase F is **authorized but not begun**. Begin only when the project owner explicitly says so in the current session.
+- Phase F **begun**: INC-0 implemented in `632b1d0` (evidence: `docs/foundation/evidence/phase-f/INC-0/`). OB-19 is mechanically satisfied but stays `OPEN` pending the **independent INC-0 review**.
+- **INC-1 has not begun.** It needs that review and explicit owner authorization in the current session.
+- `docs/foundation/CHECKPOINT.md` is the source of the current gate; `git log` gives the current HEAD.
 
 ## Workflow on a new machine / fresh environment
 
@@ -23,7 +24,7 @@ When resuming on another OS or new installation (e.g. Arch Linux / CachyOS):
    experiments/c1-authority-spike/verify.sh
    ```
 4. **Launch agent (Claude / AGY)**: navigate to repository root and start the assistant.
-5. **Continue from the recorded project gate**: check `docs/foundation/CHECKPOINT.md`. Confirm Phase E PASS verdict is intact. Phase F entry increment is **INC-0** (closing **OB-19**); wait for explicit authorization from the project owner before creating any product crates or implementation code.
+5. **Continue from the recorded project gate**: check `docs/foundation/CHECKPOINT.md`. Confirm Phase E PASS verdict is intact and the INC-0 state recorded there. Wait for explicit authorization from the project owner before starting any increment.
 
 ## Implementation gate
 
@@ -47,8 +48,11 @@ INC-1 (the thin vertical seam) follows only after INC-0 exits.
 ```sh
 tools/check-foundation-docs              # expect RESULT: PASS
 tools/check-foundation-docs --self-test  # expect 18/18 seeded defects detected
-experiments/c1-authority-spike/verify.sh # expect == result: PASS
-tools/verify-development-environment     # tool availability report (non-destructive)
+experiments/c1-authority-spike/verify.sh # expect == result: PASS (historical spike)
+tools/verify-architecture                # expect == verify-architecture: PASS (OB-19, production)
+tools/verify-development-environment     # environment + workspace report (non-destructive)
+cargo build --workspace --locked && cargo test --workspace --locked
+cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
 ## Rules

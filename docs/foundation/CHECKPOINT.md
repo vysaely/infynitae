@@ -1,8 +1,17 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE E PASS — PHASE F MAY BEGIN.** Final independent Phase E review of the sealed E1R baseline recorded in `cfb54f091bd2a19065a45b32662e8f0bbddd62fc` (audit/phase-e-final/VERDICT.md). Phase F is authorized but **not begun**; INC-0 has **not begun**.
+CURRENT_PHASE: **PHASE F BEGUN — INC-0 IMPLEMENTED (`632b1d0`), PENDING INDEPENDENT INC-0 REVIEW.** OB-19 mechanically satisfied under the owner's INC-0 ruling; OB-19 and OB-36 remain `OPEN` until the review ratifies them. **INC-1 has NOT begun.**
 
 Date: 2026-10-05
+
+## PHASE F — INC-0 (implemented: `632b1d0`; evidence: evidence/phase-f/INC-0/)
+- **Scope:** ENFORCE, HEADLESS. The production workspace (`crates/`: core, wayland, backend-headless, backend-winit, ipc, bin) carries the authority **shape** only; no product behaviour. Enforcement-only crates live in `enforcement/`.
+- **Pins:** `rust-toolchain.toml` 1.99.0; `Cargo.lock` tracked; `smithay = "=0.7.0"` from crates.io in the adapter; no patch (P1 stays experimental; OB-11 open).
+- **Enforcement:** `tools/verify-architecture` PASS: DAG; syn-based source rules (2g, 2h, mint location, wayland names, unsafe policy); 26 negative probes with asserted diagnostics plus 1 positive control; 24 seeded negative controls plus 3 judge controls. CI: `.github/workflows/ci.yml` (foundation-docs, verify-architecture, workspace-build).
+- **Owner ruling (this session):** probes compile against the real production boundaries. Runtime validation whose behaviour belongs to a later increment is deferred, never reported as tested. 2i (1:1 binding / OutputKey collision) is deferred to INC-2. The 2i/INC-0 wording inconsistency is recorded in evidence/phase-f/INC-0/README.md §1 for the review.
+- **Registries:** unchanged (57 invariants, 20 `F-*`, OB-1…OB-51); checker PASS, self-test 18/18.
+- **LIVE_SYSTEM_TOUCHED:** no.
+- **NEXT:** independent INC-0 review (ratify or reject OB-19/OB-36 closure). INC-1 only after that review and explicit owner authorization.
 
 ## PHASE E FINAL REVIEW (recorded: `cfb54f091bd2a19065a45b32662e8f0bbddd62fc`)
 - **Verdict:** `PHASE E PASS — PHASE F MAY BEGIN` (audit/phase-e-final/VERDICT.md). Baseline reviewed: E1R seal `1ae1b736515b8c52c3e6ba7596b22c81f7098390`, tracking `e9d36732ac4fa9e934ee1b90bb696e9545c598ab`. Zero unresolved Level-A findings.
