@@ -2,7 +2,7 @@
 
 **This is a navigation aid, not an authority.** Every statement here summarises a canonical document in `docs/foundation/`. Where this file and a canonical document disagree, the canonical document wins, and this file should be corrected. Do not cite this file as normative.
 
-State: Phase E **passed**; Phase F **begun**. INC-0 is implemented in `632b1d0` and awaits independent review; INC-1 has not begun. See `docs/foundation/CHECKPOINT.md`.
+State: Phase E **passed**; Phase F under way. INC-0 ratified; INC-1 implemented and awaiting independent review; INC-2 has not begun. See `docs/foundation/CHECKPOINT.md`.
 
 ---
 
@@ -19,7 +19,7 @@ One authoritative model of space, owned by a dependency-free core crate:
 - One unified scale policy with bounded hints and ScaleInteractionEpochs (ADR-05).
 - Off-screen frame withholding and idle discipline (ADR-06, ADR-12).
 
-Crates planned for Foundation 01 (FOUNDATION_ARCHITECTURE §C1.1): `infynitae-core` (zero dependencies), `infynitae-wayland` (Smithay adapter), `infynitae-backend-headless`, `infynitae-backend-winit`, `infynitae` (bin), `infynitae-ipc`; Phase G adds `backend-drm`. Since INC-0 they exist under `crates/` as authority shapes without product behaviour; enforcement-only crates are under `enforcement/`.
+Crates planned for Foundation 01 (FOUNDATION_ARCHITECTURE §C1.1): `infynitae-core` (zero dependencies), `infynitae-wayland` (Smithay adapter), `infynitae-backend-headless`, `infynitae-backend-winit`, `infynitae` (bin), `infynitae-ipc`; Phase G adds `backend-drm`. They exist under `crates/`; since INC-1 core, adapter and headless backend carry the first vertical seam (the others are still empty). Enforcement-only crates are under `enforcement/`.
 
 ## 3. Why a native compositor, not the old Hyprland plugin
 

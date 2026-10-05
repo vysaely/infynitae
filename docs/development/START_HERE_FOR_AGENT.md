@@ -1,13 +1,14 @@
 # START HERE — Infynitae Native (for coding agents)
 
-You are continuing **Infynitae Native**, a Rust/Smithay spatial Wayland compositor. The architecture is complete and reviewed. Phase F has begun: INC-0 created the production workspace and its architecture enforcement. **No product behaviour exists yet.**
+You are continuing **Infynitae Native**, a Rust/Smithay spatial Wayland compositor. The architecture is complete and reviewed. Phase F is under way: INC-0 created the production workspace and its architecture enforcement; INC-1 implemented the first vertical seam (one element, one output, one camera at zoom 1, headless).
 
 ## Current state
 
 - Phase E final verdict: **`PHASE E PASS — PHASE F MAY BEGIN`** (`docs/foundation/audit/phase-e-final/VERDICT.md`).
 - Last architecture seal: E1R `1ae1b736515b8c52c3e6ba7596b22c81f7098390`; tracking `e9d36732ac4fa9e934ee1b90bb696e9545c598ab`; final review recorded in `cfb54f091bd2a19065a45b32662e8f0bbddd62fc`; this handoff is in the commit after it.
-- Phase F **begun**: INC-0 implemented in `632b1d0` (evidence: `docs/foundation/evidence/phase-f/INC-0/`). OB-19 is mechanically satisfied but stays `OPEN` pending the **independent INC-0 review**.
-- **INC-1 has not begun.** It needs that review and explicit owner authorization in the current session.
+- INC-0 ratified after independent review (`audit/phase-f-inc0-review/`); OB-19 and OB-36 `CLOSED`; runtime 2i owned by INC-2 / OB-49.
+- INC-1 implemented (evidence: `docs/foundation/evidence/phase-f/INC-1/`), **pending independent review**; OB-2 and OB-26 mechanically satisfied, still `OPEN`.
+- **INC-2 has not begun.** It needs the INC-1 review and explicit owner authorization in the current session.
 - `docs/foundation/CHECKPOINT.md` is the source of the current gate; `git log` gives the current HEAD.
 
 ## Workflow on a new machine / fresh environment
@@ -50,6 +51,7 @@ tools/check-foundation-docs              # expect RESULT: PASS
 tools/check-foundation-docs --self-test  # expect 18/18 seeded defects detected
 experiments/c1-authority-spike/verify.sh # expect == result: PASS (historical spike)
 tools/verify-architecture                # expect == verify-architecture: PASS (OB-19, production)
+tools/verify-test-efficacy               # expect == verify-test-efficacy: PASS (seeded behavioural defects)
 tools/verify-development-environment     # environment + workspace report (non-destructive)
 cargo build --workspace --locked && cargo test --workspace --locked
 cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked -- -D warnings

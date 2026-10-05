@@ -1,8 +1,24 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-0 RATIFIED — READY FOR OWNER AUTHORIZATION OF INC-1.** OB-19 and OB-36 ratified `CLOSED`. All compile-time and enforcement boundaries verified. Runtime 2i transferred to INC-2 / OB-49 via Decision D. **INC-1 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-1 IMPLEMENTED, PENDING INDEPENDENT REVIEW.** The minimal real vertical seam runs on the production path (snapshot → core → render list → DummyRenderer → physical-pixel hit-test, one output, one camera at zoom 1). OB-2 and OB-26 are mechanically satisfied and stay `OPEN` until the review ratifies them. **INC-2 has NOT begun.**
 
 Date: 2026-10-05
+
+## PHASE F — INC-1 (evidence: evidence/phase-f/INC-1/)
+- **Scope:** PRODUCT, HEADLESS, exactly the canonical INC-1.
+  - **core:** `stage`, `snapshot` + F-ORIGIN-1, `projection` (F-VIEW-1, F-LATTICE-1, F-UNPROJECT-1), `render` (ProjectionFrame, F-HIT-1), M1 lifecycle in `protocol`, single-output `output_connected` creating and binding one camera.
+  - **adapter:** compositor/xdg-shell handlers, snapshot extraction, `SurfaceKey` registry, `convert` (F-RENDER-1).
+  - **headless backend:** one virtual output, DummyRenderer.
+- **Tests:** 32 core T0 and 7 T1 lockstep tests with a real probe client. Every pixel matches the presented surface at four output scales; xsnap/X-15, x6, xhit and the d5hit zoom-1 configuration are ported with their negative controls.
+- **Enforcement:** `tools/verify-architecture` PASS.
+  - **New rules:** `stage-single-writer`, `smithay-rejected-apis`, `smithay-geometry-only-in-convert`; unsafe scan now covers `tests/`.
+  - **Dependencies:** dev-only `wayland-client`/`wayland-protocols` for the headless backend's T1 tests.
+  - **Seeds:** 46 seeded controls.
+- **Test efficacy:** new `tools/verify-test-efficacy` PASS (18/18 seeded behavioural defects caught; also in CI).
+- **Not started:** multi-output, binding precedence, 2i (INC-2 / OB-49); input (INC-3/4); scale (INC-6); toplevel requests (INC-7, finding INC1-F01, Level C).
+- **Registries:** unchanged (57 invariants, 20 `F-*`, OB-1…OB-51); checker PASS, self-test 18/18.
+- **LIVE_SYSTEM_TOUCHED:** no.
+- **NEXT:** independent INC-1 review (ratify OB-2/OB-26; dispositions INC1-F01…F05). INC-2 only after that review and explicit owner authorization.
 
 ## PHASE F — INC-0 (implemented: `632b1d0`; evidence: evidence/phase-f/INC-0/; review: audit/phase-f-inc0-review/)
 - **Scope:** ENFORCE, HEADLESS. The production workspace (`crates/`: core, wayland, backend-headless, backend-winit, ipc, bin) carries the authority **shape** only; no product behaviour. Enforcement-only crates live in `enforcement/`.

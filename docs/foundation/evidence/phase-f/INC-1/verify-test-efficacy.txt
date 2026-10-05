@@ -1,0 +1,44 @@
+========================================================================
+verify-test-efficacy — seeded behavioural defects (INC-1)
+========================================================================
+  ok    DETECTED  F-LATTICE-1 R4: edges floor instead of round
+          infynitae-core --lib ob6_edge_equals_round_l: test projection::tests::ob6_edge_equals_round_l_and_reprojection_lands_in_the_same_pixel ... FAILED
+  ok    DETECTED  F-LATTICE-1 R4: edges floor instead of round (T1 x6 on Smithay)
+          infynitae-backend-headless --test t1_parity tst04_x6: test tst04_x6_render_edges_equal_lattice_edges ... FAILED
+  ok    DETECTED  F-VIEW-1 R7: view origin rounds half away from zero
+          infynitae-core --lib view_origin_is_centre_minus_half_view_ties_even: test projection::tests::view_origin_is_centre_minus_half_view_ties_even ... FAILED
+  ok    DETECTED  F-LATTICE-1: lattice reference truncates instead of flooring
+          infynitae-core --lib lattice_reference_floors_negative_origins: test projection::tests::lattice_reference_floors_negative_origins ... FAILED
+  ok    DETECTED  F-ORIGIN-1: popup geometry offset added instead of subtracted
+          infynitae-backend-headless --test t1_parity tst09_xsnap: test tst09_xsnap_x15_and_surface_under_control ... FAILED
+  ok    DETECTED  input region: first matching request decides instead of the last
+          infynitae-core --lib ob2_region_equals_reference_evaluator: test render::tests::ob2_region_equals_reference_evaluator ... FAILED
+  ok    DETECTED  F-HIT-1: delivered coordinates not clamped into the surface
+          infynitae-core --lib delivered_coordinates_are_clamped: test render::tests::delivered_coordinates_are_clamped_into_the_surface ... FAILED
+  ok    DETECTED  F-HIT-1: entries traversed back to front
+          infynitae-core --lib xhit_semantic_cases_at_scale_one: test render::tests::xhit_semantic_cases_at_scale_one ... FAILED
+  ok    DETECTED  F-HIT-1: entries traversed back to front (T1 vs presented)
+          infynitae-backend-headless --test t1_slice vertical_slice_hit_test_equals_presented_surface: test vertical_slice_hit_test_equals_presented_surface ... FAILED
+  ok    DETECTED  INV-RENDER-2: elements back to front
+          infynitae-core --lib render_list_is_front_to_back: test tests::render_list_is_front_to_back ... FAILED
+  ok    DETECTED  PD-F1-07: dead frame entries delivered instead of failing closed
+          infynitae-core --lib dead_frame_entries_fail_closed: test tests::dead_frame_entries_fail_closed_until_the_next_frame ... FAILED
+  ok    DETECTED  M1 / OBJ-05: unmap keeps the snapshot
+          infynitae-core --lib m1_map_unmap_remap_destroy: test protocol::tests::m1_map_unmap_remap_destroy ... FAILED
+  ok    DETECTED  M1: buffer before the initial configure accepted
+          infynitae-core --lib m1_illegal_transitions: test protocol::tests::m1_illegal_transitions_are_rejected_without_mutation ... FAILED
+  ok    DETECTED  INC-1 scope: a second output connected
+          infynitae-core --lib second_connect_is_refused: test entry::tests::second_connect_is_refused_without_mutation ... FAILED
+  ok    DETECTED  M3 R8: popup target min edges floored instead of ceiled
+          infynitae-core --lib popup_target_is_the_viewport_inward_rounded: test protocol::tests::popup_target_is_the_viewport_inward_rounded ... FAILED
+  ok    DETECTED  adapter: popup geometry origin dropped from the snapshot
+          infynitae-backend-headless --test t1_parity tst09_xsnap: test tst09_xsnap_x15_and_surface_under_control ... FAILED
+  ok    DETECTED  adapter convert: render location floored (not the F-RENDER-1 f64 value)
+          infynitae-backend-headless --test t1_slice vertical_slice_hit_test_equals_presented_surface: test vertical_slice_hit_test_equals_presented_surface ... FAILED
+  ok    DETECTED  adapter: subsurface stacking ignored (root tree traversed upward)
+          infynitae-backend-headless --test t1_parity tst09_xsnap: test tst09_xsnap_x15_and_surface_under_control ... FAILED
+  ok    MISSED    judge: a harmless seed is not reported as detected (want MISSED)
+  ok    BROKEN    judge: a filter matching no test is a broken control (want BROKEN)
+  ok    canonical tree byte-identical after all controls
+========================================================================
+== verify-test-efficacy: PASS
