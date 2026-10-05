@@ -260,3 +260,213 @@ fn production_render_output_damages_the_view() {
         assert_eq!((x0, y0, x1, y1), (0, 0, v.0, v.1), "{t:?} at {s}/120");
     }
 }
+
+/// The C5 measurement on one output: a client tiles the view with subsurfaces; the production
+/// render list (core → `convert::render_elements`) gives each tile's Smithay placement; tiles are
+/// redrawn as solid ids at exactly those placements through the production damage tracker. For
+/// 200 OutputLogical points p the presented tile is read where a 1×1 cursor at ⌊p·k⌋ lands on
+/// the panel (same tracker); the hit tile is `Core::hit_test(O, p)` on the recorded
+/// ProjectionFrame. Returns (mismatches, sealed-rule mismatches, hit surface per point).
+struct C5 {
+    mismatches: usize,
+    sealed_mismatches: usize,
+    hits: Vec<Option<infynitae_core::snapshot::SurfaceKey>>,
+}
+
+/// W's root plus a 12×16 grid of 167×131 tiles around the camera centre, Canvas
+/// [−1002, 1002) × [−1048, 1048).
+fn tile_view(ls: &mut Lockstep) {
+    let qh = ls.qh.clone();
+    let w = ls.probe.toplevel(&qh, "W", (40, 30), 0);
+    // the window geometry is the root alone, so the anchor (camera centre) is the root origin
+    let xdg = ls.probe.surfaces[w].xdg.clone().expect("xdg");
+    xdg.set_window_geometry(0, 0, 40, 30);
+    ls.pump();
+    for iy in 0..16 {
+        for ix in 0..12 {
+            let off = (-1002 + ix * 167, -1048 + iy * 131);
+            ls.probe.subsurface(&qh, "T", w, off, (167, 131), false);
+        }
+    }
+    ls.pump();
+}
+
+fn c5_measure(ls: &mut Lockstep, t: Transform, s: u32) -> C5 {
+    use infynitae_backend_headless::render_frame;
+    use infynitae_core::geom::OutputLogicalPoint;
+    use smithay::backend::renderer::element::Element;
+
+    let o = ls.output();
+    let (model, view) = (
+        ls.state.core().output(o).unwrap().clone(),
+        ls.state.core().view(o).unwrap(),
+    );
+    let k = s as f64 / 120.0;
+    let rendered = render_frame(&mut ls.state, &mut DummyRenderer, o).expect("render");
+    assert!(rendered.len() > 20, "{t:?}: too few visible tiles");
+    // tile id per render-list position (front to back), placed where Smithay places it
+    let ids: Vec<_> = rendered.iter().map(|(e, _)| e.surface).collect();
+    let geo: Vec<Rectangle<i32, Physical>> = rendered
+        .iter()
+        .map(|(_, el)| el.geometry(Scale::from(k)))
+        .collect();
+    let solids: Vec<_> = geo
+        .iter()
+        .enumerate()
+        .map(|(i, g)| solid(*g, 100 + i as u32))
+        .collect();
+    let (scene, _, _) = frame(&mut convert::damage_tracker(&model, &view), &solids);
+    let (vw, vh) = (view.size.0 as f64, view.size.1 as f64);
+    let (lw, lh) = (vw / k, vh / k);
+    let mut pts = vec![
+        (0.0, 0.0),
+        (lw - 1e-6, 0.0),
+        (0.0, lh - 1e-6),
+        (lw - 1e-6, lh - 1e-6),
+        (lw / 2.0, lh / 2.0),
+    ];
+    let mut rng: u64 = 0x9E37_79B9_7F4A_7C15;
+    let mut next = || {
+        rng = rng
+            .wrapping_mul(6364136223846793005)
+            .wrapping_add(1442695040888963407);
+        (rng >> 11) as f64 / (1u64 << 53) as f64
+    };
+    for _ in 0..195 {
+        let (a, b) = (next(), next());
+        pts.push((a * lw, b * lh));
+    }
+    let st = convert_transform(t);
+    let vsize = Size::<f64, Physical>::from((vw, vh));
+    let tile_at = |u: smithay::utils::Point<f64, Physical>| {
+        let (ux, uy) = (u.x.floor() as i32, u.y.floor() as i32);
+        geo.iter()
+            .position(|g| {
+                ux >= g.loc.x && uy >= g.loc.y && ux < g.loc.x + g.size.w && uy < g.loc.y + g.size.h
+            })
+            .map(|i| 100 + i as u32)
+    };
+    let mut out = C5 {
+        mismatches: 0,
+        sealed_mismatches: 0,
+        hits: Vec::new(),
+    };
+    // one cursor tracker: after the first full frame, buffer age 1 repaints only the old and new
+    // cursor pixels
+    let fbcell = Rc::new(RefCell::new(Fb::new(1920, 1080)));
+    let mut cursor_tracker = convert::damage_tracker(&model, &view);
+    for (n, &(px, py)) in pts.iter().enumerate() {
+        let cur = Rectangle::new(
+            ((px * k).floor() as i32, (py * k).floor() as i32).into(),
+            (1, 1).into(),
+        );
+        fbcell.borrow_mut().first_hit = None;
+        let mut r = ProbeRenderer { fb: fbcell.clone() };
+        cursor_tracker
+            .render_output(
+                &mut r,
+                &mut ProbeTex,
+                usize::from(n > 0),
+                &[solid(cur, 7)],
+                Color32F::new(CLEAR as f32, 0.0, 0.0, 1.0),
+            )
+            .expect("cursor frame");
+        drop(r);
+        let presented = fbcell
+            .borrow()
+            .first_hit
+            .map(|i| scene.px[i])
+            .filter(|id| *id != CLEAR);
+        let hit_surface = ls
+            .state
+            .core_mut()
+            .hit_test(o, OutputLogicalPoint { x: px, y: py })
+            .map(|h| h.surface);
+        let hit = hit_surface
+            .and_then(|s| ids.iter().position(|x| *x == s))
+            .map(|i| 100 + i as u32);
+        out.hits.push(hit_surface);
+        out.mismatches += usize::from(presented.is_none() || presented != hit);
+        let e = smithay::utils::Point::<f64, Physical>::from((px * k, py * k));
+        let sealed_a = tile_at(st.transform_point_in(e, &vsize));
+        let sealed_b = tile_at(st.invert().transform_point_in(e, &vsize));
+        out.sealed_mismatches += usize::from(sealed_a != presented || sealed_b != presented);
+    }
+    out
+}
+
+/// EE-1 C5 on the production path (OB-45 hit-test part): render/hit agreement on every point of
+/// all 10 transform cases. Negative control: the sealed hit rule (the transformed point t(p·k)
+/// or t⁻¹(p·k), E1R) disagrees on every non-Normal case and agrees at Normal.
+#[test]
+fn ee1_c5_render_hit_agreement_on_the_production_path() {
+    let (mut sealed_nonnormal_failed, mut nonnormal) = (0, 0);
+    for (t, s) in CASES {
+        let mut ls = Lockstep::new(Some(rotated(t, s)));
+        tile_view(&mut ls);
+        let m = c5_measure(&mut ls, t, s);
+        assert_eq!(m.mismatches, 0, "{t:?} at {s}/120: render/hit mismatches");
+        if t != Transform::Normal {
+            nonnormal += 1;
+            sealed_nonnormal_failed += usize::from(m.sealed_mismatches > 0);
+        } else {
+            assert_eq!(
+                m.sealed_mismatches, 0,
+                "the sealed rule is the identity at Normal"
+            );
+        }
+    }
+    assert_eq!(
+        sealed_nonnormal_failed, nonnormal,
+        "negative control: the sealed hit rule must fail every non-Normal case"
+    );
+    assert_eq!(nonnormal, 9);
+}
+
+/// Adversarial N: a pan moves rendering and hit-testing together. After a pan of
+/// Σ = (−37.25, −211.5) (camera (37.25, 211.5), a fractional Canvas camera) the C5 agreement
+/// still holds on every point, and the hit at most points changed: both moved, not one.
+#[test]
+fn n_pan_moves_render_and_hit_together() {
+    use common::input::{BTN_MIDDLE, logo};
+    use infynitae_backend_headless::{pointer_button, pointer_motion};
+    for (t, s) in [(Transform::Normal, 120), (Transform::R90, 150)] {
+        let mut ls = Lockstep::new(Some(rotated(t, s)));
+        tile_view(&mut ls);
+        let before = c5_measure(&mut ls, t, s);
+        assert_eq!(before.mismatches, 0);
+        pointer_button(&mut ls.state, &mut ls.input, BTN_MIDDLE, true, logo(), 1).unwrap();
+        pointer_motion(
+            &mut ls.state,
+            &mut ls.input,
+            (-37.25, -211.5),
+            (0.0, 0.0),
+            2,
+        )
+        .unwrap();
+        pointer_button(&mut ls.state, &mut ls.input, BTN_MIDDLE, false, logo(), 3).unwrap();
+        ls.pump();
+        assert_eq!(
+            ls.state.core().cameras().center(0),
+            Some(CanvasPos {
+                x: 37 * 65536 + 16384,
+                y: 211 * 65536 + 32768
+            })
+        );
+        let after = c5_measure(&mut ls, t, s);
+        assert_eq!(
+            after.mismatches, 0,
+            "{t:?}: render and hit disagree after a pan"
+        );
+        let moved = before
+            .hits
+            .iter()
+            .zip(&after.hits)
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(
+            moved > 150,
+            "{t:?}: only {moved}/200 hits changed: hit-test did not move"
+        );
+    }
+}

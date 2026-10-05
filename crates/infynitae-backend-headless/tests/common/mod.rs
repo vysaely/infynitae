@@ -4,6 +4,7 @@
 
 #![allow(dead_code)]
 
+pub mod input;
 pub mod oracle;
 pub mod probe_renderer;
 
@@ -16,7 +17,7 @@ use std::time::Duration;
 use infynitae_backend_headless::{VirtualOutput, connect, vblank, vblank_period};
 use infynitae_core::navigation::PersistedCameras;
 use infynitae_core::output::{OutputId, Transform};
-use infynitae_core::{Core, OutputLifecycleToken};
+use infynitae_core::{Core, InputPort, OutputLifecycleToken};
 use infynitae_wayland::{ClientState, WaylandState};
 use smithay::reexports::wayland_server::Display;
 use wayland_client::protocol::{
@@ -24,8 +25,10 @@ use wayland_client::protocol::{
     wl_callback::{self, WlCallback},
     wl_compositor::WlCompositor,
     wl_output::{self, WlOutput},
+    wl_pointer::{self, WlPointer},
     wl_region::WlRegion,
     wl_registry::{self, WlRegistry},
+    wl_seat::{self, WlSeat},
     wl_shm::{self, WlShm},
     wl_shm_pool::WlShmPool,
     wl_subcompositor::WlSubcompositor,
@@ -36,6 +39,10 @@ use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, deleg
 use wayland_protocols::wp::presentation_time::client::{
     wp_presentation::{self, WpPresentation},
     wp_presentation_feedback::{self, WpPresentationFeedback},
+};
+use wayland_protocols::wp::relative_pointer::zv1::client::{
+    zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1,
+    zwp_relative_pointer_v1::{self, ZwpRelativePointerV1},
 };
 use wayland_protocols::xdg::shell::client::{
     xdg_popup::{self, XdgPopup},
@@ -99,6 +106,16 @@ pub struct Probe {
     pub wm_base: Option<XdgWmBase>,
     pub surfaces: Vec<Surf>,
     files: Vec<File>,
+    pub seat: Option<WlSeat>,
+    pub pointer: Option<WlPointer>,
+    pub relative: Option<ZwpRelativePointerV1>,
+    /// Ordered wire log of the seat's pointer (the independent oracle for client-observed input):
+    /// "enter S x,y", "leave S", "motion x,y", "button B pressed|released", "axis A v",
+    /// "axis_v120 A n", "frame", "relative dx,dy unaccel ux,uy". Coordinates are the wl_fixed
+    /// values the client received.
+    pub ptr: Vec<String>,
+    /// Every xdg_surface.configure received, by surface label, in order.
+    pub configures: Vec<&'static str>,
 }
 
 /// Unique shm file names across the tests of this process.
@@ -558,6 +575,7 @@ impl Dispatch<XdgSurface, usize> for Probe {
         qh: &QueueHandle<Self>,
     ) {
         if let xdg_surface::Event::Configure { serial } = ev {
+            st.configures.push(st.surfaces[*idx].label);
             xdg.ack_configure(serial);
             if !st.surfaces[*idx].configured {
                 st.surfaces[*idx].configured = true;
@@ -600,6 +618,83 @@ impl Dispatch<XdgPopup, usize> for Probe {
     }
 }
 
+impl Dispatch<WlSeat, ()> for Probe {
+    fn event(
+        _: &mut Self,
+        _: &WlSeat,
+        _: wl_seat::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WlPointer, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &WlPointer,
+        ev: wl_pointer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let line = match ev {
+            wl_pointer::Event::Enter {
+                surface,
+                surface_x,
+                surface_y,
+                ..
+            } => format!("enter {} {surface_x},{surface_y}", st.label_of(&surface)),
+            wl_pointer::Event::Leave { surface, .. } => format!("leave {}", st.label_of(&surface)),
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            } => format!("motion {surface_x},{surface_y}"),
+            wl_pointer::Event::Button { button, state, .. } => {
+                let s = match state.into_result() {
+                    Ok(wl_pointer::ButtonState::Pressed) => "pressed",
+                    _ => "released",
+                };
+                format!("button {button} {s}")
+            }
+            wl_pointer::Event::Axis { axis, value, .. } => format!("axis {axis:?} {value}"),
+            wl_pointer::Event::AxisValue120 { axis, value120 } => {
+                format!("axis_v120 {axis:?} {value120}")
+            }
+            wl_pointer::Event::Frame => "frame".to_string(),
+            _ => return,
+        };
+        st.ptr.push(line);
+    }
+}
+
+impl Dispatch<ZwpRelativePointerV1, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &ZwpRelativePointerV1,
+        ev: zwp_relative_pointer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zwp_relative_pointer_v1::Event::RelativeMotion {
+            dx,
+            dy,
+            dx_unaccel,
+            dy_unaccel,
+            ..
+        } = ev
+        {
+            st.ptr.push(format!(
+                "relative {dx},{dy} unaccel {dx_unaccel},{dy_unaccel}"
+            ));
+        }
+    }
+}
+
+delegate_noop!(Probe: ignore ZwpRelativePointerManagerV1);
 delegate_noop!(Probe: ignore WlCompositor);
 delegate_noop!(Probe: ignore WlSubcompositor);
 delegate_noop!(Probe: ignore WlShm);
@@ -616,6 +711,8 @@ pub struct Lockstep {
     pub display: Display<WaylandState>,
     pub state: WaylandState,
     pub token: OutputLifecycleToken,
+    /// The virtual input device's port (the test is the composition root).
+    pub input: InputPort,
     pub output: Option<OutputId>,
     pub conn: Connection,
     pub queue: EventQueue<Probe>,
@@ -635,7 +732,7 @@ impl Lockstep {
 
     /// A Core with a persisted camera table and the given outputs connected at startup.
     pub fn with(persisted: PersistedCameras, outputs: &[VirtualOutput]) -> Lockstep {
-        let (core, _input, _shell, token) = Core::new(persisted);
+        let (core, input, _shell, token) = Core::new(persisted);
         let display: Display<WaylandState> = Display::new().expect("display");
         let state = WaylandState::new(&display.handle(), core);
         let (server_end, client_end) = UnixStream::pair().expect("socketpair");
@@ -654,6 +751,7 @@ impl Lockstep {
             display,
             state,
             token,
+            input,
             output: None,
             conn,
             queue,
@@ -744,6 +842,14 @@ impl Lockstep {
         self.probe.xdg_output_manager = Some(registry.bind(n, v.min(3), &self.qh, ()));
         let (n, _) = find("wp_presentation");
         self.probe.presentation = Some(registry.bind(n, 1, &self.qh, ()));
+        let (n, v) = find("wl_seat");
+        let seat: WlSeat = registry.bind(n, v.min(9), &self.qh, ());
+        let pointer = seat.get_pointer(&self.qh, ());
+        let (n, _) = find("zwp_relative_pointer_manager_v1");
+        let manager: ZwpRelativePointerManagerV1 = registry.bind(n, 1, &self.qh, ());
+        self.probe.relative = Some(manager.get_relative_pointer(&pointer, &self.qh, ()));
+        self.probe.seat = Some(seat);
+        self.probe.pointer = Some(pointer);
         self.pump();
     }
 
