@@ -9,6 +9,7 @@
 
 mod common;
 
+use common::oracle::{self, Camera};
 use common::{Lockstep, PopupSpec, build_xhit_tree, output};
 use infynitae_backend_headless::render_frame;
 use infynitae_core::geom::{CanvasPoint, CanvasPos, OutputLogicalPoint, Q16_ONE};
@@ -39,23 +40,38 @@ fn edges(e: &FrameEntry) -> (i64, i64, i64, i64) {
     (e.rect.x0, e.rect.y0, e.rect.x1, e.rect.y1)
 }
 
-fn eligible(e: &FrameEntry, q: CanvasPos) -> bool {
-    let lx = (q.x - e.origin.x * Q16_ONE).clamp(0, e.size.w as i64 * Q16_ONE - 1);
-    let ly = (q.y - e.origin.y * Q16_ONE).clamp(0, e.size.h as i64 * Q16_ONE - 1);
-    e.input
-        .contains(lx.div_euclid(Q16_ONE), ly.div_euclid(Q16_ONE))
+/// Oracle eligibility (INC1-F06): the clamped surface-local cell of an independently unprojected
+/// Canvas point `q` (Q16), tested with the independent region evaluator.
+fn eligible(e: &FrameEntry, q: (i64, i64)) -> bool {
+    let lx = (q.0 - e.origin.x * Q16_ONE).clamp(0, e.size.w as i64 * Q16_ONE - 1);
+    let ly = (q.1 - e.origin.y * Q16_ONE).clamp(0, e.size.h as i64 * Q16_ONE - 1);
+    oracle::region_contains(&e.input, lx.div_euclid(Q16_ONE), ly.div_euclid(Q16_ONE))
 }
 
-fn view_at(v: (f64, f64), scale: f64, size: (u32, u32)) -> View {
-    // centre such that the view origin is v (F-VIEW-1)
+/// A camera whose view origin is about `v` (F-VIEW-1), at scale `scale_120`/120 and zoom 1.
+fn camera_at(v: (f64, f64), scale_120: u32, size: (u32, u32)) -> Camera {
+    let k = scale_120 as f64 / 120.0;
+    let q16 = |x: f64| (x * Q16_ONE as f64).round_ties_even() as i64;
+    Camera {
+        centre: (
+            q16(v.0 + size.0 as f64 / (2.0 * k)),
+            q16(v.1 + size.1 as f64 / (2.0 * k)),
+        ),
+        scale_120,
+        view_size: size,
+    }
+}
+
+/// The production view of a camera.
+fn view_of(cam: &Camera) -> View {
     View::new(ViewParams {
         centre: CanvasPos {
-            x: ((v.0 + size.0 as f64 / (2.0 * scale)) * Q16_ONE as f64).round_ties_even() as i64,
-            y: ((v.1 + size.1 as f64 / (2.0 * scale)) * Q16_ONE as f64).round_ties_even() as i64,
+            x: cam.centre.0,
+            y: cam.centre.1,
         },
         zoom: 1.0,
-        scale,
-        view_size: size,
+        scale: cam.scale_120 as f64 / 120.0,
+        view_size: cam.view_size,
     })
     .unwrap()
 }
@@ -229,11 +245,11 @@ fn tst04_x6_render_edges_equal_lattice_edges() {
                     x: root.0 + 17,
                     y: root.1 + 17,
                 };
-                let view = view_at(
+                let view = view_of(&camera_at(
                     ((base - 400 + dx % 7) as f64, (base / 3 - 300) as f64),
-                    k,
+                    n as u32,
                     (1920, 1080),
-                );
+                ));
                 let entries = entries_for(&view, id, anchor, &tree);
                 let elements =
                     convert::render_elements(&mut renderer, ls.state.registry(), &entries).unwrap();
@@ -290,9 +306,16 @@ fn tst04_x6_render_edges_equal_lattice_edges() {
 fn hit_parity(
     ls: &Lockstep,
     renderer: &mut DummyRenderer,
-    view: View,
+    cam: Camera,
     anchor: CanvasPoint,
 ) -> (u64, u64, u64) {
+    let view = view_of(&cam);
+    // the production lattice agrees with the independent derivation of c_eff
+    assert_eq!(
+        (view.c_eff.x, view.c_eff.y),
+        oracle::c_eff(&cam),
+        "c_eff for {cam:?}"
+    );
     let id = element(ls);
     let tree = ls.state.core().stage().tree(id).unwrap();
     let entries = entries_for(&view, id, anchor, tree);
@@ -312,7 +335,7 @@ fn hit_parity(
                 x: (i as f64 + 0.5) / view.scale,
                 y: (j as f64 + 0.5) / view.scale,
             };
-            let q = view.unproject(p);
+            let q = oracle::unproject(&cam, (p.x, p.y));
             let oracle = elements
                 .iter()
                 .find(|(e, el)| {
@@ -328,8 +351,8 @@ fn hit_parity(
                 .entries
                 .iter()
                 .find(|e| {
-                    let lx = q.x - e.origin.x * Q16_ONE;
-                    let ly = q.y - e.origin.y * Q16_ONE;
+                    let lx = q.0 - e.origin.x * Q16_ONE;
+                    let ly = q.1 - e.origin.y * Q16_ONE;
                     lx >= 0
                         && ly >= 0
                         && lx < e.size.w as i64 * Q16_ONE
@@ -354,18 +377,23 @@ fn tst10_xhit_selection_equals_presented() {
     let mut renderer = DummyRenderer;
     let anchor = CanvasPoint { x: 500, y: 400 };
     let mut old_total = 0;
-    for k in [1.0, 1.25, 1.5, 1.75] {
+    for scale_120 in [120, 150, 180, 210] {
         for v in [
             (400.0, 300.0),
             (400.3, 300.7),
             (401.71875, 299.55),
             (359.5, 241.25),
         ] {
-            let (n, bad, old) = hit_parity(&ls, &mut renderer, view_at(v, k, (1920, 1080)), anchor);
+            let (n, bad, old) = hit_parity(
+                &ls,
+                &mut renderer,
+                camera_at(v, scale_120, (1920, 1080)),
+                anchor,
+            );
             assert!(n > 100_000);
             assert_eq!(
                 bad, 0,
-                "k={k} v={v:?}: {bad} of {n} pixels differ from the presented surface"
+                "scale {scale_120}/120 v={v:?}: {bad} of {n} pixels differ from the presented surface"
             );
             old_total += old;
         }
@@ -383,17 +411,15 @@ fn tst18_d5hit_zoom1_configurations() {
     let mut ls = Lockstep::new(Some(output((3840, 2160), 180)));
     build_xhit_tree(&mut ls, (800, 600), true);
     let mut renderer = DummyRenderer;
-    let view = View::new(ViewParams {
-        centre: CanvasPos {
-            x: (2200.45 * Q16_ONE as f64).round_ties_even() as i64,
-            y: (900.15 * Q16_ONE as f64).round_ties_even() as i64,
-        },
-        zoom: 1.0,
-        scale: 1.5,
+    let cam = Camera {
+        centre: (
+            (2200.45 * Q16_ONE as f64).round_ties_even() as i64,
+            (900.15 * Q16_ONE as f64).round_ties_even() as i64,
+        ),
+        scale_120: 180,
         view_size: (3840, 2160),
-    })
-    .unwrap();
-    let (n, bad, _) = hit_parity(&ls, &mut renderer, view, CanvasPoint { x: 1100, y: 420 });
+    };
+    let (n, bad, _) = hit_parity(&ls, &mut renderer, cam, CanvasPoint { x: 1100, y: 420 });
     assert!(n > 100_000);
     assert_eq!(
         bad, 0,

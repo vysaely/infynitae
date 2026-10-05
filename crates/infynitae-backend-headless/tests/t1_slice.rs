@@ -6,9 +6,10 @@
 
 mod common;
 
+use common::oracle::{self, Camera};
 use common::{Lockstep, build_xhit_tree, output};
 use infynitae_backend_headless::render_frame;
-use infynitae_core::geom::{CanvasPos, OutputLogicalPoint, Q16_ONE};
+use infynitae_core::geom::{OutputLogicalPoint, Q16_ONE};
 use infynitae_core::render::FrameEntry;
 use infynitae_core::stage::Lifecycle;
 use smithay::backend::renderer::element::Element;
@@ -30,13 +31,12 @@ fn edges(e: &FrameEntry) -> (i64, i64, i64, i64) {
     (e.rect.x0, e.rect.y0, e.rect.x1, e.rect.y1)
 }
 
-/// Input-region eligibility of a Canvas point for an entry: the oracle side of xhit (half-open on
-/// the clamped surface-local point).
-fn eligible(e: &FrameEntry, q: CanvasPos) -> bool {
-    let lx = (q.x - e.origin.x * Q16_ONE).clamp(0, e.size.w as i64 * Q16_ONE - 1);
-    let ly = (q.y - e.origin.y * Q16_ONE).clamp(0, e.size.h as i64 * Q16_ONE - 1);
-    e.input
-        .contains(lx.div_euclid(Q16_ONE), ly.div_euclid(Q16_ONE))
+/// Input-region eligibility of an independently unprojected Canvas point `q` (Q16): the oracle
+/// side of xhit (INC1-F06), half-open on the clamped surface-local point.
+fn eligible(e: &FrameEntry, q: (i64, i64)) -> bool {
+    let lx = (q.0 - e.origin.x * Q16_ONE).clamp(0, e.size.w as i64 * Q16_ONE - 1);
+    let ly = (q.1 - e.origin.y * Q16_ONE).clamp(0, e.size.h as i64 * Q16_ONE - 1);
+    oracle::region_contains(&e.input, lx.div_euclid(Q16_ONE), ly.div_euclid(Q16_ONE))
 }
 
 /// The whole slice with the real camera: every pixel over the tree, Core's hit-test against the
@@ -61,7 +61,17 @@ fn vertical_slice_hit_test_equals_presented_surface() {
                 "core edges != presented at k={k}"
             );
         }
-        let view = ls.state.core().view(o).unwrap();
+        // the oracle derives c_eff and q itself from the camera state and output facts
+        let core = ls.state.core();
+        let camera = core.cameras().camera_for_output(o).expect("bound camera");
+        let centre = core.cameras().center(camera).unwrap();
+        let cam = Camera {
+            centre: (centre.x, centre.y),
+            scale_120,
+            view_size: (1920, 1080),
+        };
+        let view = core.view(o).unwrap();
+        assert_eq!((view.c_eff.x, view.c_eff.y), oracle::c_eff(&cam));
         let (x0, y0, x1, y1) =
             frame
                 .iter()
@@ -80,7 +90,7 @@ fn vertical_slice_hit_test_equals_presented_surface() {
                     x: (i as f64 + 0.5) / k,
                     y: (j as f64 + 0.5) / k,
                 };
-                let q = view.unproject(p);
+                let q = oracle::unproject(&cam, (p.x, p.y));
                 let oracle = frame
                     .iter()
                     .find(|(e, el)| {
@@ -123,5 +133,103 @@ fn destroyed_element_leaves_the_render_list() {
         render_frame(&mut ls.state, &mut renderer, o)
             .unwrap()
             .is_empty()
+    );
+}
+
+/// INC1-F07 on the production path: a real client unmaps subsurface S1 (null buffer). S1 and its
+/// nested subsurface S1a leave the frame (Smithay presents neither: it skips the children of a
+/// surface without a view), the pixel under S1 hits the root, and remapping S1 restores both.
+#[test]
+fn unmapped_subsurface_leaves_the_frame_and_returns() {
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    build_xhit_tree(&mut ls, (400, 300), true);
+    let o = ls.output();
+    let idx = |ls: &Lockstep, label: &str| {
+        ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == label)
+            .unwrap()
+    };
+    let mut renderer = DummyRenderer;
+    let first: Vec<_> = render_frame(&mut ls.state, &mut renderer, o)
+        .unwrap()
+        .into_iter()
+        .map(|(e, _)| e.surface)
+        .collect();
+    // the key of a client surface, through the registry entries of the presented frame
+    let key = |ls: &Lockstep, label: &str| {
+        use wayland_client::Proxy;
+        let client_id = ls.probe.surfaces[idx(ls, label)].wl.id().protocol_id();
+        *first
+            .iter()
+            .find(|k| {
+                let s = ls.state.registry().surface(**k).unwrap();
+                smithay::reexports::wayland_server::Resource::id(s).protocol_id() == client_id
+            })
+            .unwrap()
+    };
+    let (s1, s1a, w) = (key(&ls, "S1"), key(&ls, "S1a"), key(&ls, "W"));
+    let keys = |ls: &mut Lockstep, r: &mut DummyRenderer| -> Vec<_> {
+        render_frame(&mut ls.state, r, o)
+            .unwrap()
+            .into_iter()
+            .map(|(e, _)| e.surface)
+            .collect()
+    };
+    let before = keys(&mut ls, &mut renderer);
+    assert!(before.contains(&s1) && before.contains(&s1a));
+    // a pixel inside S1 but outside S1a: S1's origin is root (anchor − 20) + (37,11)
+    let view = ls.state.core().view(o).unwrap();
+    let px = (
+        view.edge_x(-20 + 37 + 60) as f64 + 0.5,
+        view.edge_y(-20 + 11 + 40) as f64 + 0.5,
+    );
+    let p = OutputLogicalPoint { x: px.0, y: px.1 };
+    assert_eq!(
+        ls.state.core_mut().hit_test(o, p).map(|h| h.surface),
+        Some(s1)
+    );
+
+    let i = idx(&ls, "S1");
+    ls.probe.unmap(i);
+    ls.pump();
+    let after = keys(&mut ls, &mut renderer);
+    assert!(!after.contains(&s1), "unmapped S1 is still in the frame");
+    assert!(
+        !after.contains(&s1a),
+        "S1a under an unmapped parent is still in the frame"
+    );
+    assert_eq!(after.len(), before.len() - 2);
+    assert_eq!(
+        ls.state.core_mut().hit_test(o, p).map(|h| h.surface),
+        Some(w)
+    );
+    // Smithay agrees: its own Window path presents neither surface
+    let id = ls.state.elements().next().unwrap();
+    let window = ls.state.window(id).unwrap().clone();
+    let smithay: Vec<
+        smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement<DummyRenderer>,
+    > = smithay::backend::renderer::element::AsRenderElements::render_elements(
+        &window,
+        &mut renderer,
+        (0, 0).into(),
+        Scale::from(1.0),
+        1.0,
+    );
+    assert_eq!(
+        smithay.len(),
+        after.len(),
+        "Smithay presents the same number of surfaces"
+    );
+
+    let qh = ls.qh.clone();
+    ls.probe.draw(&qh, i);
+    ls.pump();
+    let again = keys(&mut ls, &mut renderer);
+    assert!(again.contains(&s1) && again.contains(&s1a));
+    assert_eq!(
+        ls.state.core_mut().hit_test(o, p).map(|h| h.surface),
+        Some(s1)
     );
 }

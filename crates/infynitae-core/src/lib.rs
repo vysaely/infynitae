@@ -274,6 +274,137 @@ mod tests {
         assert_eq!(order, vec![(b, 3), (a, 2), (a, 1)]);
     }
 
+    /// A tree for the INC1-F07 cases: root 1 (200x100) and subsurfaces given as
+    /// (key, parent index, offset, mapped); the root is the last surface (front to back).
+    fn tree_with(subs: &[(u64, usize, (i32, i32), bool)]) -> SurfaceTree {
+        let mut surfaces: Vec<SnapshotSurface> = subs
+            .iter()
+            .map(|&(k, parent, (x, y), mapped)| SnapshotSurface {
+                key: key(k),
+                role: SurfaceRole::Subsurface {
+                    parent,
+                    offset: LocalPoint { x, y },
+                },
+                size: LocalSize { w: 20, h: 20 },
+                mapped,
+                input: InputRegion::Infinite,
+            })
+            .collect();
+        surfaces.push(SnapshotSurface {
+            key: key(1),
+            role: SurfaceRole::Root,
+            size: LocalSize { w: 200, h: 100 },
+            mapped: true,
+            input: InputRegion::Infinite,
+        });
+        SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w: 200, h: 100 },
+            },
+            surfaces,
+        }
+    }
+
+    fn frame_keys(core: &mut Core, o: output::OutputId) -> Vec<u64> {
+        core.render_list(o)
+            .unwrap()
+            .entries
+            .iter()
+            .map(|e| e.surface.raw().get())
+            .collect()
+    }
+
+    /// Output-logical point at the centre of a subsurface at `offset` (anchor (0,0) is at the
+    /// view centre (960,540), scale 1).
+    fn over(offset: (i32, i32)) -> OutputLogicalPoint {
+        OutputLogicalPoint {
+            x: 960.0 + offset.0 as f64 + 10.5,
+            y: 540.0 + offset.1 as f64 + 10.5,
+        }
+    }
+
+    /// INC1-F07: shown root + unshown subsurface. The unshown key is absent from
+    /// `ProjectionFrame::entries` and cannot be hit; the root below it is.
+    #[test]
+    fn unshown_subsurface_is_not_in_the_frame() {
+        let (mut core, o) = connected();
+        // the root is the last surface: index 1
+        mapped(&mut core, tree_with(&[(2, 1, (10, 10), false)]));
+        assert_eq!(frame_keys(&mut core, o), vec![1]);
+        assert_eq!(
+            core.hit_test(o, over((10, 10)))
+                .map(|h| h.surface.raw().get()),
+            Some(1)
+        );
+    }
+
+    /// INC1-F07: shown root + shown sibling + unshown sibling.
+    #[test]
+    fn unshown_sibling_is_not_in_the_frame() {
+        let (mut core, o) = connected();
+        mapped(
+            &mut core,
+            tree_with(&[(2, 2, (10, 10), true), (3, 2, (50, 10), false)]),
+        );
+        assert_eq!(frame_keys(&mut core, o), vec![2, 1]);
+        assert_eq!(
+            core.hit_test(o, over((10, 10)))
+                .map(|h| h.surface.raw().get()),
+            Some(2)
+        );
+        assert_eq!(
+            core.hit_test(o, over((50, 10)))
+                .map(|h| h.surface.raw().get()),
+            Some(1)
+        );
+    }
+
+    /// INC1-F07: nested subsurfaces. A mapped child of an unmapped parent is not shown (Smithay
+    /// skips the children of a surface without a view); an unmapped child of a mapped parent is
+    /// not shown while its parent is.
+    #[test]
+    fn unshown_nested_subsurfaces_are_not_in_the_frame() {
+        let (mut core, o) = connected();
+        // 3 (child of 2) mapped, 2 unmapped; root index 2
+        mapped(
+            &mut core,
+            tree_with(&[(3, 1, (5, 5), true), (2, 2, (10, 10), false)]),
+        );
+        assert_eq!(frame_keys(&mut core, o), vec![1]);
+        let (mut core, o) = connected();
+        // 3 (child of 2) unmapped, 2 mapped
+        mapped(
+            &mut core,
+            tree_with(&[(3, 1, (5, 5), false), (2, 2, (10, 10), true)]),
+        );
+        assert_eq!(frame_keys(&mut core, o), vec![2, 1]);
+    }
+
+    /// INC1-F07: a subsurface leaves the frame when it is unmapped and returns when remapped.
+    #[test]
+    fn subsurface_unmap_and_remap_change_the_frame() {
+        let (mut core, o) = connected();
+        let id = mapped(&mut core, tree_with(&[(2, 1, (10, 10), true)]));
+        assert_eq!(frame_keys(&mut core, o), vec![2, 1]);
+        core.toplevel_committed(id, tree_with(&[(2, 1, (10, 10), false)]))
+            .unwrap();
+        assert_eq!(frame_keys(&mut core, o), vec![1]);
+        assert_eq!(
+            core.hit_test(o, over((10, 10)))
+                .map(|h| h.surface.raw().get()),
+            Some(1)
+        );
+        core.toplevel_committed(id, tree_with(&[(2, 1, (10, 10), true)]))
+            .unwrap();
+        assert_eq!(frame_keys(&mut core, o), vec![2, 1]);
+        assert_eq!(
+            core.hit_test(o, over((10, 10)))
+                .map(|h| h.surface.raw().get()),
+            Some(2)
+        );
+    }
+
     /// PD-F1-07: an entry of the last frame whose surface no longer exists fails closed (no
     /// delivery, no fall-through to the surface below) until the next frame is produced.
     #[test]

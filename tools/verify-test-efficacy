@@ -82,6 +82,33 @@ CONTROLS = [
     ("adapter convert: render location floored (not the F-RENDER-1 f64 value)", f"{WAYLAND}/convert.rs",
      "    Point::from((l.x, l.y))", "    Point::from((l.x.floor(), l.y.floor()))",
      "infynitae-backend-headless", ["--test", "t1_slice"], "vertical_slice_hit_test_equals_presented_surface"),
+    # INC1-F06 (corrective): unprojection defects against the independent oracle (ADV-MUT-3 and
+    # two further plausible defects)
+    ("INC1-F06 ADV-MUT-3: unproject transposes x and y (T1 xhit, independent oracle)", f"{CORE}/projection.rs",
+     "            x: self.c_eff.x + q16(p.x / self.zoom),\n            y: self.c_eff.y + q16(p.y / self.zoom),",
+     "            x: self.c_eff.x + q16(p.y / self.zoom),\n            y: self.c_eff.y + q16(p.x / self.zoom),",
+     "infynitae-backend-headless", ["--test", "t1_parity"], "tst10_xhit"),
+    ("INC1-F06 ADV-MUT-3: unproject transposes x and y (T1 slice, independent oracle)", f"{CORE}/projection.rs",
+     "            x: self.c_eff.x + q16(p.x / self.zoom),\n            y: self.c_eff.y + q16(p.y / self.zoom),",
+     "            x: self.c_eff.x + q16(p.y / self.zoom),\n            y: self.c_eff.y + q16(p.x / self.zoom),",
+     "infynitae-backend-headless", ["--test", "t1_slice"], "vertical_slice_hit_test_equals_presented_surface"),
+    ("INC1-F06 ADV-MUT-3: unproject transposes x and y (T0 reference table)", f"{CORE}/projection.rs",
+     "            x: self.c_eff.x + q16(p.x / self.zoom),\n            y: self.c_eff.y + q16(p.y / self.zoom),",
+     "            x: self.c_eff.x + q16(p.y / self.zoom),\n            y: self.c_eff.y + q16(p.x / self.zoom),",
+     "infynitae-core", ["--lib"], "unproject_matches_the_independent_reference"),
+    ("INC1-F06: unproject sign inversion on x", f"{CORE}/projection.rs",
+     "            x: self.c_eff.x + q16(p.x / self.zoom),", "            x: self.c_eff.x - q16(p.x / self.zoom),",
+     "infynitae-backend-headless", ["--test", "t1_parity"], "tst10_xhit"),
+    ("INC1-F06: unproject omits the camera offset on y", f"{CORE}/projection.rs",
+     "            y: self.c_eff.y + q16(p.y / self.zoom),", "            y: q16(p.y / self.zoom),",
+     "infynitae-backend-headless", ["--test", "t1_parity"], "tst10_xhit"),
+    # INC1-F07 (corrective): unshown surfaces must not enter the frame (ADV-MUT-2)
+    ("INC1-F07 ADV-MUT-2: unshown surfaces kept in the render list (T0)", f"{CORE}/render.rs",
+     "        if !shown {\n            continue;\n        }\n", "",
+     "infynitae-core", ["--lib"], "unshown_subsurface_is_not_in_the_frame"),
+    ("INC1-F07 ADV-MUT-2: unshown surfaces kept in the render list (T1 real unmap)", f"{CORE}/render.rs",
+     "        if !shown {\n            continue;\n        }\n", "",
+     "infynitae-backend-headless", ["--test", "t1_slice"], "unmapped_subsurface_leaves_the_frame_and_returns"),
     ("adapter: subsurface stacking ignored (root tree traversed upward)", f"{WAYLAND}/snapshot.rs",
      "    with_surface_tree_downward(\n        root,", "    smithay::wayland::compositor::with_surface_tree_upward(\n        root,",
      "infynitae-backend-headless", ["--test", "t1_parity"], "tst09_xsnap"),
@@ -146,7 +173,7 @@ def main():
         print(__doc__)
         return 2
     print("=" * 72)
-    print("verify-test-efficacy — seeded behavioural defects (INC-1)")
+    print("verify-test-efficacy — seeded behavioural defects (INC-1, incl. INC1-F06/F07 corrective)")
     print("=" * 72)
     before = digest()
     failures = 0

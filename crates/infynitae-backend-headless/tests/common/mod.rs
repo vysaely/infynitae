@@ -4,6 +4,8 @@
 
 #![allow(dead_code)]
 
+pub mod oracle;
+
 use std::fs::File;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
@@ -102,7 +104,8 @@ impl Probe {
         buf
     }
 
-    fn draw(&mut self, qh: &QueueHandle<Self>, idx: usize) {
+    /// Attaches a fresh buffer of the surface's size and commits (map or remap).
+    pub fn draw(&mut self, qh: &QueueHandle<Self>, idx: usize) {
         let (w, h) = self.surfaces[idx].size;
         let buf = self.buffer(qh, w, h);
         let wl = &self.surfaces[idx].wl;
@@ -266,6 +269,13 @@ impl Probe {
         self.surfaces[idx].wl.set_input_region(Some(&region));
         region.destroy();
         self.surfaces[idx].wl.commit();
+    }
+
+    /// Attaches a null buffer and commits: the surface is unmapped.
+    pub fn unmap(&mut self, idx: usize) {
+        let wl = &self.surfaces[idx].wl;
+        wl.attach(None, 0, 0);
+        wl.commit();
     }
 
     pub fn destroy_toplevel(&mut self, idx: usize) {
