@@ -29,6 +29,10 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 
 ---
 
+
+> **D7:** this document is the canonical living home of `ADR-*` (FOUNDATION_ARCHITECTURE §P0). Normative rules live in FOUNDATION_INVARIANTS.md (`INV-*`), FOUNDATION_ARCHITECTURE.md (`F-*`, `PROV-*`) and FOUNDATION_TEST_PLAN.md (`OB-*`); ADRs explain why and cite those IDs.
+
+<!-- living:ADR -->
 ## ADR-01: Stage is the sole spatial authority; Smithay `Space` rejected
 
 - **Status:** Accepted (B2.4, C2; INV-STAGE-1). Under Phase D review for the drag formula across outputs (PD-F2-13). The authority decision itself is not in question.
@@ -215,6 +219,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Obligations:** OB-5, OB-8, OB-16, OB-25.
 - **Revisit trigger:** X-7 game/network results; evidence of benefit for a `StableUnobserved(T)` reason.
 - **1R amendment:** the reason `AllObservingOutputsOff` is replaced by `OutputsOff`, defined without camera membership (INV-FRAME-6, PD-F2-14).
+- **D7 note (PD-F0-11, editorial):** affected invariants also include INV-CAMERA-4. A camera change causes no configure, which is the reason `suspended` is never derived from visibility.
 
 ## ADR-07: pre-client input ownership, gesture isolation, modifier observation
 
@@ -256,6 +261,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - One batch-end reconciliation, deferred during compositor interactions **and client-owned grab sequences** (INV-INPUT-5; ER-2 shows the deferral is the only strategy that keeps core and Smithay equal with exactly one `unlocked`).
   - Confinement is clamped on the interaction output with no crossing (ER-5 R5).
   - Focus layering: ADR-14.
+- **D7 note (PD-F0-11, editorial):** affected invariants also include INV-CAMERA-4. Pan-originated input never reaches clients.
 
 ## ADR-08: compile-time camera-authority separation
 
@@ -278,6 +284,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **1R amendment:**
   - Authority is per action: each camera mutation consumes a fresh `Authorized` proof minted only in the port-carrying entry module (E0624 elsewhere), and retaining one fails the `Send` assertion (E0277).
   - This closes PD-F2-01's "authority retained for later" path, which port-gating alone did not cover (ER-4).
+- **D7 note (PD-F0-10, editorial):** effective since 2R, camera authority has three proof-minting entries: `InputPort`, `ShellPort`, and the dedicated `OutputLifecycleToken` for output connect/disconnect, which can only create, bind or unbind cameras (INV-CAMERA-1, INV-OUTPUT-2). The decision text above predates 2R; it is not rewritten.
 
 ## ADR-09: protocol fullscreen is output presentation; viewport-fit is a camera operation
 
@@ -422,4 +429,4 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **Invariants:** INPUT-8, INPUT-10, INPUT-5 (constraint activation needs ActiveElementFocus), PROTO-1 (`activated`).
 - **Obligations:** OB-30, OB-18.
 - **Revisit trigger:** a Smithay release changing `PopupKeyboardGrab`/`PopupPointerGrab` semantics; T3 toolkits whose popups rely on keeping focus across element switches.
-
+<!-- /living -->

@@ -1,0 +1,7 @@
+{
+ "name": "obligation without a pass criterion",
+ "file": "FOUNDATION_TEST_PLAN.md",
+ "find": "- **Pass criterion:** no disconnect/freeze beyond P; CPU within budget",
+ "replace": "- **Pass criterion:** ",
+ "expect": "ob-missing-pass"
+}

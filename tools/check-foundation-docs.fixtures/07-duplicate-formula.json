@@ -1,0 +1,7 @@
+{
+ "name": "duplicate F-* definition",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "### F-PAN-1 — Direct-manipulation pan",
+ "replace": "### F-PAN-1 — duplicate\n- **Definition:** x\n\n### F-PAN-1 — Direct-manipulation pan",
+ "expect": "formula-duplicate"
+}

@@ -1,0 +1,325 @@
+#!/usr/bin/env python3
+"""check-foundation-docs — read-only verifier of the Infynitae Native foundation package.
+
+This tool is NOT an architecture authority. It derives every expectation from the canonical
+documents themselves:
+  * the namespace authority map (FOUNDATION_ARCHITECTURE.md, living region NS);
+  * the historical registry layers C12 / C12.R1 / C12.R2 (FOUNDATION_ARCHITECTURE.md), which define the
+    expected effective INV set and wording;
+  * the historical PD-F2 finding headings (FOUNDATION_BLOCKERS.md);
+and checks structure, uniqueness, provenance and cross-references of the living regions
+(`<!-- living:NAME -->` … `<!-- /living -->`).
+
+Usage:
+  tools/check-foundation-docs [--root DOCS_DIR]       run all checks (exit 0 = pass, 1 = failures)
+  tools/check-foundation-docs --self-test             run seeded-defect negative controls on a temporary
+                                                      copy (fixtures in tools/check-foundation-docs.fixtures/)
+Python standard library only. Never writes to the documents it checks.
+"""
+import json, os, re, shutil, sys, tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_ROOT = os.path.normpath(os.path.join(HERE, '..', 'docs', 'foundation'))
+FIXTURES = os.path.join(HERE, 'check-foundation-docs.fixtures')
+PACKAGE = ['FOUNDATION_ARCHITECTURE.md', 'FOUNDATION_INVARIANTS.md', 'FOUNDATION_EVIDENCE.md', 'FOUNDATION_BLOCKERS.md',
+           'FOUNDATION_DECISIONS.md', 'FOUNDATION_OBJECT_MODEL.md', 'FOUNDATION_STATE_MACHINES.md', 'FOUNDATION_TEST_PLAN.md',
+           'PROTOTYPE_DECISION_LEDGER.md', 'FOUNDATION_RISKS.md', 'FOUNDATION_IMPLEMENTATION_PLAN.md']
+# definition markers (structure of each namespace's living region); identity patterns come from the NS map
+DEF = {
+    'INV': r'^### (INV-[A-Z]+-\d+)\b', 'F': r'^### (F-[A-Z]+-\d+)\b', 'PROV': r'^### (PROV-\d+)\b', 'OB': r'^### (OB-\d+)\b',
+    'TIER': r'^### (T[0-5])\b', 'TST': r'^### (TST-\d+)\b', 'ADR': r'^## (ADR-\d+)\b',
+    'EVID': r'^\| (EV-[PHSW]\d+|EB-\d+|EB-H1|EC-\d+|ED-\d+|ER2-\d+|ER-\d+) \|',
+    'RISK': r'^### (RB-\d+|RC-\d+|T[ATCPRF]-\d+|NB-\d+|A-C1|A-B1-1|C-NB-2)\b', 'PDF': r'^### (PD-F[0-3]-\d+)\b',
+    'WSM': r'^### (W-SM-\d+)\b', 'SM': r'^## (M\d+)\b', 'OBJ': r'^### (OBJ-\d+)\b', 'PL': r'^### (PL-\d+)\b',
+    'INC': r'^### (INC-\d+)\b',
+}
+REF = {  # reference token patterns (checked inside living regions)
+    'INV': r'\bINV-[A-Z]+-\d+\b', 'F': r'\bF-[A-Z]+-\d+\b', 'PROV': r'\bPROV-\d+\b', 'OB': r'\bOB-\d+\b', 'TST': r'\bTST-\d+\b',
+    'ADR': r'\bADR-\d+\b', 'EVID': r'\b(?:EV-[PHSW]\d+|EB-\d+|EB-H1|EC-\d+|ED-\d+|ER2-\d+|ER-\d+)\b',
+    'RISK': r'\b(?:RB-\d+|RC-\d+|T[ATCPRF]-\d+|A-C1|A-B1-1|C-NB-2)\b', 'PDF': r'\bPD-F[0-3]-\d+\b', 'WSM': r'\bW-SM-\d+\b',
+    'OBJ': r'\bOBJ-\d+\b', 'PL': r'\bPL-\d+\b', 'INC': r'\bINC-\d+\b',
+}
+DEFERRED_DEST = {'T3', 'T4', 'T5', 'TUNE', 'UP', 'DECISION'}
+DEST_VOCAB = {'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'UP', 'TUNE', 'DECISION', 'PHASE-F-ENTRY-GATE', 'CI', 'GATE-C'}
+VERDICTS = ['READY FOR INDEPENDENT ADVERSARIAL REVIEW — PHASE E', 'NOT READY — ARCHITECTURE BLOCKERS REMAIN', 'NOT READY — PHASE D GATE INCOMPLETE']
+
+
+class Run:
+    def __init__(self, root):
+        self.root, self.fail, self.passed = root, [], []
+
+    def check(self, name, ok, detail=''):
+        (self.passed if ok else self.fail).append((name, detail))
+
+    def read(self, f):
+        return open(os.path.join(self.root, f), encoding='utf-8').read()
+
+
+def split_row(line):
+    return [c.strip() for c in re.split(r'(?<!\\)\|', line.strip())[1:-1]]
+
+
+def living(text):
+    return [(m.group(1), m.group(2)) for m in re.finditer(r'<!-- living:(\w+) -->(.*?)<!-- /living -->', text, re.S)]
+
+
+def fields(block):
+    out = {}
+    for m in re.finditer(r'^- \*\*(.+?):\*\*[ ]?(.*)$', block, re.M):
+        out[m.group(1)] = m.group(2).strip()
+    return out
+
+
+def blocks(region, marker):
+    pos = [(m.start(), m.group(1)) for m in re.finditer(marker, region, re.M)]
+    for i, (p, ident) in enumerate(pos):
+        end = pos[i + 1][0] if i + 1 < len(pos) else len(region)
+        yield ident, region[p:end]
+
+
+def layer_rows(text, start, end=None):
+    a = text.index(start)
+    b = text.index(end, a) if end else len(text)
+    rows = {}
+    for line in text[a:b].splitlines():
+        if line.startswith('| **INV-'):
+            c = split_row(line)
+            rows[re.match(r'\*\*(INV-[A-Z]+-\d+)', c[0]).group(1)] = c
+    return rows
+
+
+def run_checks(root):
+    r = Run(root)
+    docs = {}
+    for f in PACKAGE:
+        ok = os.path.exists(os.path.join(root, f))
+        r.check('package-exists', ok, f)
+        if ok:
+            docs[f] = r.read(f)
+    if len(docs) != len(PACKAGE):
+        return r
+    arch = docs['FOUNDATION_ARCHITECTURE.md']
+
+    # ---- namespace authority map -------------------------------------------------------------
+    ns_regions = [b for t, b in living(arch) if t == 'NS']
+    r.check('ns-map-present', len(ns_regions) == 1, f'{len(ns_regions)} NS regions')
+    home = {}
+    dup = []
+    for line in (ns_regions[0] if ns_regions else '').splitlines():
+        if line.startswith('| ') and not line.startswith('| Namespace') and not line.startswith('|---'):
+            c = split_row(line)
+            if c[0] in home:
+                dup.append(f'{c[0]}: {home[c[0]]} and {c[2]}')
+            home.setdefault(c[0], c[2])
+    r.check('ns-duplicate-ownership', not dup, '; '.join(dup))
+    expected_ns = set(DEF) | {'NS', 'D9'}
+    r.check('ns-complete', expected_ns <= set(home), f'missing {sorted(expected_ns - set(home))}')
+    r.check('ns-homes-in-package', all(h in PACKAGE for h in home.values()), str({k: v for k, v in home.items() if v not in PACKAGE}))
+
+    # ---- living regions: each tag must sit in its namespace's home --------------------------------
+    regions = {}  # ns -> list of (doc, text)
+    for f, t in docs.items():
+        for tag, body in living(t):
+            regions.setdefault(tag, []).append((f, body))
+            r.check('region-in-home', home.get(tag) == f, f'living:{tag} found in {f}, home is {home.get(tag)}')
+    for ns in DEF:
+        r.check('region-present', ns in regions, ns)
+
+    # ---- definitions: unique, only in home region --------------------------------------------------
+    defined = {}
+    for ns, marker in DEF.items():
+        ids = []
+        for tag, regs in regions.items():
+            for f, body in regs:
+                for m in re.finditer(marker, body, re.M):
+                    if tag != ns:
+                        r.check('definition-outside-home', False, f'{m.group(1)} ({ns}) defined in living:{tag} of {f}')
+                    else:
+                        ids.append(m.group(1))
+        dups = sorted({i for i in ids if ids.count(i) > 1})
+        name = {'INV': 'inv-duplicate', 'F': 'formula-duplicate'}.get(ns, 'id-duplicate')
+        r.check(name, not dups, f'{ns}: {dups}')
+        defined[ns] = set(ids)
+
+    # ---- cross-references inside living regions resolve ----------------------------------------------
+    unresolved = set()
+    for tag, regs in regions.items():
+        for f, body in regs:
+            for ns, pat in REF.items():
+                for tok in re.findall(pat, body):
+                    if tok not in defined.get(ns, set()):
+                        unresolved.add(f'{tok} (in {f}:{tag})')
+    r.check('refs-resolve', not unresolved, '; '.join(sorted(unresolved)[:40]))
+
+    # ---- INV: effective registry vs historical layers ------------------------------------------------
+    c12 = layer_rows(arch, '## C12 — Canonical invariant registry', '### C12.2')
+    r1 = layer_rows(arch, '# §C12.R1', '# §C12.R2')
+    r2 = layer_rows(arch, '# §C12.R2', '# Phase D package (D7)')
+    latest = {}
+    for i, row in c12.items(): latest[i] = ('C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a', row, '—')
+    for i, row in r1.items(): latest[i] = ('C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f', row, row[6])
+    for i, row in r2.items(): latest[i] = ('C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be', row, row[6])
+    inv_region = regions.get('INV', [('', '')])[0][1]
+    inv_blocks = dict(blocks(inv_region, DEF['INV']))
+    r.check('inv-count', len(inv_blocks) == len(latest), f'{len(inv_blocks)} entries, layers give {len(latest)}')
+    r.check('inv-set', set(inv_blocks) == set(latest), f'extra {sorted(set(inv_blocks) - set(latest))} missing {sorted(set(latest) - set(inv_blocks))}')
+    f_region = regions.get('F', [('', '')])[0][1]
+    extracted = {}  # (inv, F) -> fragment
+    for fid, blk in blocks(f_region, DEF['F']):
+        for m in re.finditer(r'^- \*\*Extracted invariant text:\*\* (INV-[A-Z]+-\d+) ⟦(.*)⟧$', blk, re.M):
+            extracted[(m.group(1), fid)] = m.group(2)
+    for iid, blk in inv_blocks.items():
+        fl = fields(blk)
+        need = ['Wording', 'Owner', 'Violation', 'Origin', 'Trigger', 'Evidence', 'Obligations', 'Formulas', 'ADR']
+        missing = [k for k in need if not fl.get(k)]
+        r.check('inv-fields', not missing, f'{iid} missing {missing}')
+        if iid not in latest:
+            continue
+        origin, row, trig = latest[iid]
+        r.check('inv-provenance', fl.get('Origin') == origin, f'{iid}: Origin "{fl.get("Origin")}" expected "{origin}"')
+        r.check('inv-provenance', fl.get('Trigger', '') == trig, f'{iid}: Trigger "{fl.get("Trigger")}" expected "{trig}"')
+        wording = fl.get('Wording', '')
+        for fid in re.findall(r'\[(F-[A-Z]+-\d+)\]', wording):
+            frag = extracted.get((iid, fid))
+            r.check('formula-ref', frag is not None, f'{iid}: [{fid}] has no extracted text in §F')
+            if frag is not None:
+                wording = wording.replace('[' + fid + ']', frag, 1)
+        r.check('inv-wording-mismatch', wording == row[1], f'{iid}: effective wording does not reproduce its historical layer row')
+        for fid in [x.strip() for x in fl.get('Formulas', '—').split(',') if x.strip() and x.strip() != '—']:
+            r.check('formula-ref', fid in defined['F'], f'{iid}: formula {fid} undefined')
+
+    # ---- OB registry --------------------------------------------------------------------------------
+    ob_region = regions.get('OB', [('', '')])[0][1]
+    obs = dict(blocks(ob_region, DEF['OB']))
+    for oid, blk in obs.items():
+        fl = fields(blk)
+        need = ['Status', 'Item', 'Owner', 'Evidence available', 'Pass criterion', 'Destination', 'May be closed by', 'Dependencies', 'Blocks']
+        for k in need:
+            name = {'Pass criterion': 'ob-missing-pass', 'Destination': 'ob-missing-destination'}.get(k, 'ob-fields')
+            r.check(name, bool(fl.get(k)), f'{oid}: {k}')
+        dest = fl.get('Destination', '').split()[0] if fl.get('Destination') else ''
+        r.check('ob-destination-vocab', dest in DEST_VOCAB, f'{oid}: "{dest}"')
+        status = fl.get('Status', '')
+        r.check('ob-status-vocab', status in ('OPEN', 'CLOSED'), f'{oid}: "{status}"')
+        if dest in DEFERRED_DEST:
+            r.check('deferred-closed', status == 'OPEN', f'{oid} ({dest}) is {status}')
+    ob19 = fields(obs.get('OB-19', ''))
+    text19 = ' '.join(ob19.values())
+    ok19 = (ob19.get('Status') == 'OPEN' and ob19.get('Destination') == 'PHASE-F-ENTRY-GATE'
+            and 'unconditional' in ob19.get('Blocks', '') and not re.search(r'(?<!un)conditional', text19.lower()))
+    r.check('ob19-conditional', ok19, f'OB-19: {ob19.get("Status")} / {ob19.get("Destination")} / {ob19.get("Blocks")}')
+    r.check('ob36-scoped', 'OB-36' in obs and fields(obs['OB-36']).get('Destination') == 'CI' and 'not part of OB-19' in fields(obs['OB-36']).get('Blocks', ''),
+            'OB-36 must exist, destination CI, separate from OB-19')
+
+    # ---- provisional values ------------------------------------------------------------------------
+    prov_region = regions.get('PROV', [('', '')])[0][1]
+    for pid, blk in blocks(prov_region, DEF['PROV']):
+        fl = fields(blk)
+        for k in ['Candidate', 'Owning obligation', 'Freeze tier', 'Measurement', 'Change class', 'Status']:
+            r.check('prov-fields', bool(fl.get(k)), f'{pid}: {k}')
+        st = fl.get('Status', '')
+        r.check('deferred-closed', st == 'PROVISIONAL' or (st == 'FROZEN' and bool(fl.get('Frozen by'))), f'{pid}: status {st}')
+
+    # ---- PD-F2 traceability --------------------------------------------------------------------------
+    blk_text = docs['FOUNDATION_BLOCKERS.md']
+    living_spans = [m.span() for m in re.finditer(r'<!-- living:\w+ -->.*?<!-- /living -->', blk_text, re.S)]
+    historical = set()
+    for m in re.finditer(r'^### (PD-F2-\d+) \(', blk_text, re.M):
+        if not any(a <= m.start() < b for a, b in living_spans):
+            historical.add(m.group(1))
+    pdf = dict(blocks(regions.get('PDF', [('', '')])[0][1], DEF['PDF']))
+    r.check('pdf2-missing', historical <= set(pdf), f'not in the living register: {sorted(historical - set(pdf))}')
+    d9 = regions.get('D9', [('', '')])[0][1]
+    for pid, blk in pdf.items():
+        st = fields(blk).get('Status', '')
+        r.check('pdf-status', st in ('RESOLVED', 'OPEN', 'APPLIED', 'NOTED'), f'{pid}: {st}')
+        if pid.startswith('PD-F2') and st == 'OPEN':
+            r.check('pdf2-open-listed', pid in d9, f'{pid} OPEN but not listed in D9')
+
+    # ---- risks, increments, state machines --------------------------------------------------------
+    for rid, blk in blocks(regions.get('RISK', [('', '')])[0][1], DEF['RISK']):
+        fl = fields(blk)
+        disp = fl.get('Disposition', '')
+        r.check('risk-disposition', disp in ('MITIGATED', 'OBLIGATION', 'ACCEPTED', 'DEFERRED', 'UPSTREAM'), f'{rid}: "{disp}"')
+        r.check('risk-backed', bool(fl.get('Mitigation / evidence')) and (fl.get('Obligations', '—') != '—' or disp in ('ACCEPTED', 'MITIGATED')), rid)
+    incs = dict(blocks(regions.get('INC', [('', '')])[0][1], DEF['INC']))
+    for iid, blk in incs.items():
+        fl = fields(blk)
+        r.check('inc-category', fl.get('Category') in ('ENFORCE', 'HARNESS', 'PRODUCT', 'PHYSICAL'), f'{iid}: {fl.get("Category")}')
+        ec = fl.get('Execution class', '')
+        r.check('inc-exec-class', bool(re.match(r'\**(HEADLESS|NESTED|EXCLUSIVE_HARDWARE)', ec)), f'{iid}: {ec}')
+        for k in ['Objective', 'Invariants exercised', 'Obligations', 'Exit tests', 'Entry conditions', 'Stop / rollback', 'Architecture decision required first']:
+            r.check('inc-fields', bool(fl.get(k)) or any(x.startswith(k) for x in fl), f'{iid}: {k}')
+        if fl.get('Category') == 'PHYSICAL':
+            r.check('inc-physical-authorization', 'authoriz' in blk, f'{iid} must require separate authorization')
+    r.check('inc-slice0-ob19', 'INC-0' in incs and 'OB-19' in fields(incs['INC-0']).get('Obligations', '') and fields(incs['INC-0']).get('Category') == 'ENFORCE', 'INC-0 must be ENFORCE and carry OB-19')
+    r.check('inc-slice1-seam', 'INC-1' in incs and fields(incs['INC-1']).get('Category') == 'PRODUCT' and 'snapshot' in incs['INC-1'] and 'hit-test' in incs['INC-1'], 'INC-1 must be the PRODUCT vertical seam')
+    r.check('inc-ob24-gate', bool(re.search(r'OB-24', fields(incs.get('INC-10', '')).get('Architecture decision required first', ''))), 'INC-10 must be gated by OB-24')
+    for mid, blk in blocks(regions.get('SM', [('', '')])[0][1], DEF['SM']):
+        r.check('sm-cites-inv', bool(re.search(REF['INV'], blk)), mid)
+
+    # ---- D9 verdict -----------------------------------------------------------------------------------
+    if d9:
+        vs = [v for v in VERDICTS if re.search(r'^\*\*Verdict:\*\* `' + re.escape(v) + '`$', d9, re.M)]
+        r.check('d9-verdict', len(vs) == 1, f'{len(vs)} verdict lines')
+    return r
+
+
+def report(r, quiet=False):
+    names = sorted({n for n, _ in r.passed} | {n for n, _ in r.fail})
+    if not quiet:
+        for n in names:
+            bad = [d for m, d in r.fail if m == n]
+            good = sum(1 for m, _ in r.passed if m == n)
+            print(f'  {"FAIL" if bad else "ok  "} {n:<28} passed={good} failed={len(bad)}')
+            for d in bad[:8]:
+                print(f'         - {d}')
+    return not r.fail
+
+
+def self_test():
+    print('check-foundation-docs --self-test: seeded defects on a temporary copy (canonical documents untouched)')
+    base = run_checks(DEFAULT_ROOT)
+    if base.fail:
+        print('  baseline package does not pass; fix it before the self-test is meaningful')
+        report(base)
+        return False
+    ok = True
+    for fx in sorted(os.listdir(FIXTURES)):
+        if not fx.endswith('.json'):
+            continue
+        spec = json.load(open(os.path.join(FIXTURES, fx), encoding='utf-8'))
+        with tempfile.TemporaryDirectory() as tmp:
+            shutil.copytree(DEFAULT_ROOT, os.path.join(tmp, 'f'))
+            p = os.path.join(tmp, 'f', spec['file'])
+            text = open(p, encoding='utf-8').read()
+            if spec['find'] not in text:
+                print(f'  BROKEN FIXTURE {fx}: anchor not found')
+                ok = False
+                continue
+            open(p, 'w', encoding='utf-8').write(text.replace(spec['find'], spec['replace'], 1))
+            res = run_checks(os.path.join(tmp, 'f'))
+            caught = [n for n, _ in res.fail]
+            hit = spec['expect'] in caught
+            ok &= hit
+            print(f'  {"detected" if hit else "MISSED  "} {spec["name"]:<52} expected check "{spec["expect"]}" -> failing checks {sorted(set(caught))}')
+    print('SELF-TEST:', 'PASS (every seeded defect detected)' if ok else 'FAIL')
+    return ok
+
+
+def main():
+    args = sys.argv[1:]
+    if args and args[0] == '--self-test':
+        sys.exit(0 if self_test() else 1)
+    root = DEFAULT_ROOT
+    if args and args[0] == '--root':
+        root = args[1]
+    r = run_checks(root)
+    print(f'check-foundation-docs: {root}')
+    ok = report(r)
+    print('RESULT:', 'PASS' if ok else f'FAIL ({len(r.fail)} failures)')
+    sys.exit(0 if ok else 1)
+
+
+if __name__ == '__main__':
+    main()

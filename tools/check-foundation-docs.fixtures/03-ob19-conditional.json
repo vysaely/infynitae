@@ -1,0 +1,7 @@
+{
+ "name": "OB-19 made conditional",
+ "file": "FOUNDATION_TEST_PLAN.md",
+ "find": "Phase F: unconditional entry gate",
+ "replace": "Phase F: conditional entry gate",
+ "expect": "ob19-conditional"
+}

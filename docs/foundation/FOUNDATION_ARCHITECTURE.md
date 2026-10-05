@@ -6,6 +6,8 @@ Inputs (frozen):
 - Phase B seal `4a0807ed721ae257e1f4b0e5287d1dfd8c1038c1`, especially the carry-forward ledger at the end of [FOUNDATION_BLOCKERS.md](FOUNDATION_BLOCKERS.md).
 - Decision IDs (`D-B…`), ledger categories (`CR-n` conditional obligations, `DV-n` deferred validation, `W-SM-n` Smithay quirks) and evidence IDs (`EV-`, `EB-`) refer to that document and to [FOUNDATION_EVIDENCE.md](FOUNDATION_EVIDENCE.md).
 
+> **Effective package (Phase D D7, added as a pointer; historical text below is unchanged):** namespace authority map §P0, formula registry §F and provisional registry §PROV are at the end of this document. Effective invariants: [FOUNDATION_INVARIANTS.md](FOUNDATION_INVARIANTS.md).
+
 Rule of this phase: architecture **encodes** Phase B; it does not redesign it. Where C1–C4 refine a Phase B decision, the refinement is labelled **REFINEMENT** with its evidence. No Phase B decision was contradicted (see §C-Z).
 
 New evidence in this checkpoint:
@@ -1755,4 +1757,276 @@ These restate properties that INV-CAMERA-1, INV-OUTPUT-2 and INV-SCALE-3 above a
 - It never applies to an ordinary decrease of the requirement ρ, and it cannot be used to bypass epoch damping.
 - After it fires, the epoch direction is down, so client responses cannot raise h again within the epoch (ER-5 R2, ER2-2).
 - The 300 ms settlement timeout remains a provisional candidate under OB-23; it is not frozen.
+
+---
+---
+
+# Phase D package (D7): living regions of this document
+
+Everything above this line is historical:
+- Phase C at its checkpoints and seal;
+- the C12.R1 layer (1R) and the C12.R2 layer (2R).
+
+It is preserved verbatim. The sections below are **living** (marked `living:` for `tools/check-foundation-docs`) and are canonical only for the namespaces §P0 assigns to this document: the namespace map itself (`NS`), `F-*` and `PROV-*`.
+
+## §P0 Namespace authority map
+
+Every identifier family has **exactly one canonical living home**. Other documents cite identifiers and never redefine them.
+
+Historical locations stay where they are as provenance. They are never moved, and they are not normative once a living home exists.
+
+A definition counts only inside a `living:` region of the home document, using the namespace's definition marker. A definition marker for the same namespace anywhere else in a living region is a checker failure.
+
+<!-- living:NS -->
+| Namespace | ID pattern | Canonical living home | Definition marker | Historical definitions (provenance only) | Other documents may |
+|---|---|---|---|---|---|
+| NS | `NS` | FOUNDATION_ARCHITECTURE.md | this table | — | reference |
+| INV | `INV-[A-Z]+-[0-9]+` | FOUNDATION_INVARIANTS.md | heading `### INV-…` | ARCHITECTURE C12 (615b0ed), C12.R1 (84ce620), C12.R2 (5827926); legacy I1–I10 in BLOCKERS | reference only |
+| F | `F-[A-Z]+-[0-9]+` | FOUNDATION_ARCHITECTURE.md | heading `### F-…` | ARCHITECTURE C3.2/C3.6/CP3A-1/C5; BLOCKERS B1.4/B1.5/B2.2/B2.3/B6.1; invariant rows in C12/C12.R1/C12.R2 | reference only |
+| PROV | `PROV-[0-9]+` | FOUNDATION_ARCHITECTURE.md | heading `### PROV-…` | ARCHITECTURE C14.5; BLOCKERS ledger category 3 | reference only |
+| OB | `OB-[0-9]+` | FOUNDATION_TEST_PLAN.md | heading `### OB-…` | ARCHITECTURE CP3A-4, C11.2, C12.R1.3, C12.R2.2; audit/1R CORRECTIONS_1R | reference only |
+| TIER | `T[0-5]` | FOUNDATION_TEST_PLAN.md | heading `### T…` | ARCHITECTURE C11.1 | reference only |
+| TST | `TST-[0-9]+` | FOUNDATION_TEST_PLAN.md | heading `### TST-…` | experiment sources and evidence files | reference only |
+| ADR | `ADR-[0-9]+` | FOUNDATION_DECISIONS.md | heading `## ADR-…` | — | reference only |
+| EVID | `EV-[PHSW][0-9]+`, `EB-[0-9]+`, `EB-H1`, `EC-[0-9]+`, `ED-[0-9]+`, `ER-[0-9]+`, `ER2-[0-9]+` | FOUNDATION_EVIDENCE.md | catalogue table row `\| ID \|` | EV: this same document §5 (Phase A); EB: BLOCKERS §0/B8.1/B10.1; EC: ARCHITECTURE evidence tables; ED: audit/README; ER: audit/1R; ER2: audit/2R | reference only |
+| RISK | `RB-[0-9]+`, `RC-[0-9]+`, `T[ATCPRF]-[0-9]+`, `NB-[0-9]+`, `A-C1`, `A-B1-1`, `C-NB-2` | FOUNDATION_RISKS.md | heading `### …` | BLOCKERS §11/B13.2, ARCHITECTURE C-B/CP2, audit/D1 | reference only |
+| PDF | `PD-F[0-3]-[0-9]+` | FOUNDATION_BLOCKERS.md | heading `### PD-F…` (living register) | BLOCKERS finding sections (append-only), audit/README registers | reference only |
+| WSM | `W-SM-[0-9]+` | FOUNDATION_BLOCKERS.md | heading `### W-SM-…` (living catalogue) | BLOCKERS B12.4 / ledger cat. 5, ARCHITECTURE C12.R1.2 | reference only |
+| SM | `M[0-9]+` | FOUNDATION_STATE_MACHINES.md | heading `## M…` | BLOCKERS B5.3/B9.6/B10.4/B11; audit D2, 1R, 2R | reference only |
+| OBJ | `OBJ-[0-9]+` | FOUNDATION_OBJECT_MODEL.md | heading `### OBJ-…` | ARCHITECTURE C2.1/C2.2/C-AUTH; audit D3, 1R, 2R | reference only |
+| PL | `PL-[0-9]+` | PROTOTYPE_DECISION_LEDGER.md | heading `### PL-…` | Phase A ledger table (same document) | reference only |
+| INC | `INC-[0-9]+` | FOUNDATION_IMPLEMENTATION_PLAN.md | heading `### INC-…` | — | reference only |
+| D9 | `D9` (gate checklist, verdict, Phase E handoff) | FOUNDATION_BLOCKERS.md | heading `## D9` | — | reference only |
+<!-- /living -->
+
+`audit/` and `CHECKPOINT.md` are historical/tracking records. They are never a canonical home.
+
+## §F Formula registry (canonical `F-*`)
+
+Each normative formula or coordinate algorithm is defined once here. Its text is taken from the historical sources it names, with D7-applied PD-F1 refinements tagged `[PD-F1-…]`.
+
+"Extracted invariant text" records, verbatim, the fragment of an invariant's historical wording that FOUNDATION_INVARIANTS.md replaces with this reference. The checker reverses the substitution.
+
+<!-- living:F -->
+
+### F-VIEW-1 — Per-output view origin
+- **Definition:** `v_O = Q16(centre − mode_O / (2·k_O))`, with `k_O = zoom_C · scale_O` (camera C bound to output O).
+- **Definition:** `mode_O` is the output mode **after** the output transform (rotated outputs swap width and height). [PD-F1-04]
+- **Definition:** Derived range: stored Canvas values obey |v| ≤ 2³⁶ (INV-COORD-1), but a derived view origin may reach |v_O| ≤ 2³⁶ + mode_O/(2k_O) (≈ 2³⁶ + 2³⁰ for a fit of a 2³¹-wide window); it stays exact in f64 because |v_O| < 2³⁷. [PD-F1-02]
+- **Definition:** Quantisation: rounding point R7 (round-ties-even to Q16).
+- **Extracted invariant text:** INV-CAMERA-3 ⟦`v_O = centre − mode/(2k)`⟧
+- **Historical sources:** C3.2 [1]; B7.1 D-B7-CENTER; C12 INV-CAMERA-3
+
+### F-LATTICE-1 — Reference-relative lattice and physical edges
+- **Definition:** `R_O = floor(v_O / 120) · 120` (integral Canvas lattice reference); `δ = 2⁻²⁰`; `k_O = zoom_C · scale_O`.
+- **Definition:** `C_O = round((v_O − R_O)·k_O + δ)` (integer: the camera on O's physical grid); `c_eff,O = R_O + Q16(C_O / k_O)` (snapped camera, rounding R5).
+- **Definition:** `edge(x) = round((x − R_O)·k_O + δ) − C_O` for an integral Canvas edge x (rounding R4); a surface's physical rect is `[edge(x₀), edge(x₁)) × [edge(y₀), edge(y₁))`; origin and size are never rounded separately (F6).
+- **Definition:** Evaluation order: compute `(x − R_O)·k_O` in f64 and cull against `[0, mode_O)` **before** any i32 conversion; far elements reach |x − R|·k ≈ 2³⁷·k, beyond `i32::MAX`. [PD-F1-01]
+- **Definition:** Known residual: at k ∉ n/120 a lattice-reference switch can change a width or gap by ±1 physical px during camera motion (ED-1, ED-2 F1); render/hit agreement is unaffected. Open decision OB-24.
+- **Extracted invariant text:** INV-RENDER-1 ⟦`edge(x) = round((x − R)·k + δ) − C_O` with R a 120-lattice reference, δ = 2⁻²⁰, k = zoom·scale⟧
+- **Historical sources:** B1.5; C3.2 [1],[3]; C12 INV-RENDER-1
+
+### F-RENDER-1 — Render location handed to Smithay
+- **Definition:** `L(x) = (x − R_O)·k_O + δ − C_O` (f64) for each surface origin x (and y); the adapter builds `WaylandSurfaceRenderElement::from_surface(.., Point<f64, Physical>(L), ..)`; Smithay rounds `round(L)` and `round(L + dst·k_O)`, which equals F-LATTICE-1 (X-6, ED-1).
+- **Definition:** The output's damage tracker is built with `OutputDamageTracker::new(mode_O, Scale(k_O), transform_O)` and rebuilt when k_O changes; `OutputDamageTracker::from_output` (output scale only) is not used, because it ignores zoom. [PD-F1-03]
+- **Extracted invariant text:** INV-RENDER-1 ⟦`(x − R)·k + δ − C_O`⟧
+- **Historical sources:** B1.5; C3.2 [4],[5]; C3.6; ED-4
+
+### F-MEMBER-1 — Output membership
+- **Definition:** Surface S is on output O iff its F-LATTICE-1 physical rect intersects `[0, mode_O)`; element E is observed by O iff any surface of E is on O. Membership is per surface (popups included) and applied with `Output::enter/leave`.
+- **Historical sources:** C3.2 [3]; D-B8-ENTER
+
+### F-UNPROJECT-1 — Output-logical point to Canvas (T5)
+- **Definition:** `q = c_eff,O + Q16(p / zoom_C)` for an OutputLogical point p on output O (rounding R1; the Q16 term and c_eff's snap give ≤ 2⁻¹⁷ px + the R5 snap).
+- **Historical sources:** B2.2 T5
+
+### F-PROJECT-1 — Canvas to output-logical point (T6)
+- **Definition:** `p = (q − c_eff,O) · zoom_C` (exact up to the F-UNPROJECT-1 quantum).
+- **Historical sources:** B2.2 T6
+
+### F-HIT-1 — Physical-pixel hit selection
+- **Definition:** Pointer (O, p): physical `u = transform_O(p · scale_O)`, pixel `(⌊u_x⌋, ⌊u_y⌋)`. Traverse in render order (INV-RENDER-2). Select the first surface whose F-LATTICE-1 rect covers the pixel **and** whose input region (protocol add/subtract in request order; half-open cell test on the surface-local point `q − origin`, clamped into the surface; never round-to-nearest) contains `q` = F-UNPROJECT-1(p). Delivered coordinates: `q − origin`, clamped into `[0, w) × [0, h)`.
+- **Definition:** Entries of a ProjectionFrame whose surface no longer exists fail closed (no delivery) until the next frame. [PD-F1-07]
+- **Historical sources:** CP3A-2; D-CP3A-HIT
+
+### F-ORIGIN-1 — Single surface-origin function
+- **Definition:** `root_origin(E) = anchor(E) − geometry(E).loc`; subsurface: parent origin + `wl_subsurface` position (accumulated); popup: `root_origin + geometry.loc + popup_pos − popup.geometry.loc`. All origins are integral Canvas values. This is the only source of surface Canvas origins for render, membership, hit-test and input.
+- **Extracted invariant text:** INV-COORD-6 ⟦anchor − geometry.loc + subsurface/popup offsets⟧
+- **Historical sources:** B2.3; B6.1; C3.2 [2]
+
+### F-PAN-1 — Direct-manipulation pan
+- **Definition:** `dP_canvas = dp_phys / (s_O · z_C)` for physical displacement `dp_phys = dp_logical · s_O` on the interaction output O; camera `C = C_start − Q16(Σ dp_phys / (s_O · z_C))`, summed in f64 from the gesture origin and quantised once per update (R2). If s_O or z_C change within a gesture, the per-event terms are summed in f64.
+- **Extracted invariant text:** INV-COORD-3 ⟦`dP_canvas = dp_phys / (s_O · z_C)`; `C = C_start − Q16(Σ dp_phys / (s_O · z_C))`⟧
+- **Historical sources:** C12.R1 INV-COORD-3; ER-5 R1
+
+### F-DRAG-1 — Element drag placement
+- **Definition:** `anchor = R3(anchor₀ + Q16(Σ Canvas pointer deltas since the drag start))`, quantised once per update. **Open:** the definition across an Arrangement crossing between independently-camera'd outputs is the OB-34 decision (candidate `anchor = R3(q_now − grab_offset)`, not adopted).
+- **Historical sources:** B1.3-7; PD-F2-13
+
+### F-ROUND-1 — Rounding points
+- **Definition:** R1 unproject OutputLogical → CanvasPos (Q16, ties-even); R2 camera gesture update (Q16 of the f64 gesture sum); R3 placement commit (CanvasPos → integral CanvasPoint, half-even); R4 physical edges (F-LATTICE-1); R5 snapped camera c_eff; R6 host-device deltas: none; R7 view-origin quantisation (F-VIEW-1); R8 popup constraint target: inward rounding (ceiling at the minimum edges, floor at the maximum edges). Forbidden: F1–F7 (B1.4).
+- **Definition:** External quantisations (not Infynitae rounding points): protocol `wl_fixed` (1/256) for client pointer and relative-motion values; `preferred_scale` in 1/120 steps; `wl_output.scale` = ⌈scale⌉.
+- **Extracted invariant text:** INV-COORD-2 ⟦R7 = view-origin quantisation; R8 = inward rounding of a popup constraint target (ceiling at minimum edges, floor at maximum edges)⟧
+- **Historical sources:** B1.4; C3.2 R7; C12.R1 R8
+
+### F-LOCK-1 — Derived Canvas lock point
+- **Definition:** `q_lock = surface_origin(S) + lock_point` (F-ORIGIN-1 + the constraint's SurfaceLocal lock point); never stored.
+- **Extracted invariant text:** INV-COORD-5 ⟦`surface_origin + lock point`⟧
+- **Historical sources:** C12.R1 INV-COORD-5
+
+### F-RELOCATE-1 — Pointer relocation to a surviving output
+- **Definition:** On loss of the interaction output: `a = arr_origin(O_lost) + p`; choose the surviving output whose Arrangement rect is nearest to a; clamp a into that rect half-open (each coordinate into `[origin, origin + size − 2⁻⁸]`, wl_fixed resolution); `p' = a − arr_origin(O')`. [PD-F1-05]
+- **Historical sources:** C4.6; AUD-4; C12.R1 INV-INPUT-5
+
+### F-CONFINE-1 — Confinement clamp
+- **Definition:** While a confinement is active on the interaction output O: `p := clamp_halfopen(p + Δ, project_O(region) ∩ [0, logical_O))` with `project_O` = F-PROJECT-1 applied to the region's Canvas rect (region + surface origin); no Arrangement crossing.
+- **Historical sources:** C12.R1 INV-INPUT-5; ER-5 R5
+
+### F-SCALE-1 — Scale requirement ρ
+- **Definition:** `ρ(E) = max over observing presentations p of output_scale(p) × presentation_zoom(p)`; camera presentations use the camera zoom; a protocol-fullscreen presentation uses zoom 1.
+- **Extracted invariant text:** INV-SCALE-1 ⟦max over observing presentations of `output_scale × presentation_zoom`⟧
+- **Historical sources:** CP3A-1 S1
+
+### F-SCALE-2 — Ladder and device ceiling
+- **Definition:** `H_max(E) = min(H_cfg, D_max / s_max(E))`, `s_max(E)` = largest logical side over all surfaces of E's tree, `D_max` queried from the renderer (re-queried on renderer recreation, PD-F1-08).
+- **Definition:** Ladder L(E): every connected output scale ≤ H_max(E) ∪ the integers 1…⌊H_max⌋ ∪ geometric fill so that consecutive rungs differ by a ratio ≤ r, all rungs ≤ H_max(E) (constants: PROV-1, PROV-2).
+- **Extracted invariant text:** INV-SCALE-2 ⟦`H_max(E) = min(H_cfg, D_max / s_max(E))`⟧
+- **Historical sources:** CP3A-1 S2/S3; C12.R1 INV-SCALE-2
+
+### F-SCALE-3 — Target, emission and initial hint
+- **Definition:** Target `t(ρ)` = smallest rung of L(E) ≥ ρ/(1 + σ), else H_max(E) (σ = PROV-3). Emission: `preferred_scale = round(h·120)`, `preferred_buffer_scale = ⌈h⌉`, only on change. Initial hint: `h := t(ρ_pred)` with ρ_pred = F-SCALE-1 over the presentations whose view intersects the placed window-geometry rect (or the anchor point when its size is 0×0); if none, `t(max connected output scale)`.
+- **Historical sources:** CP3A-1 S4/S8; C12.R1 INV-SCALE-5
+
+### F-FIT-1 — Viewport-fit (one-shot)
+- **Definition:** For output O and element W (geometry snapshot at the instant of the authorized action): `centre = centre(W.geometry)`; `zoom = min(view_w,O / W.w, view_h,O / W.h)`; one camera mutation; the previous camera value is recorded for an optional authorized restore.
+- **Historical sources:** C5.1; C12.R1 INV-CAMERA-5
+
+### F-PRESENT-1 — Protocol-fullscreen presentation view
+- **Definition:** A per-output view with zoom 1: `v_P = anchor(W) − max(0, (mode_O/scale_O − size(W)) / 2)` (componentwise), then F-VIEW-1's R7 quantisation and F-LATTICE-1 with k = scale_O; a surface larger than the output is origin-aligned and cropped. [PD-F1-09]
+- **Historical sources:** C5.2; C12.R1 INV-PRES-1
+
+<!-- /living -->
+
+## §PROV Provisional constants and policies (freeze map)
+
+Changing a value **inside** its allowed range is tuning, closed through its owning obligation. Changing a policy whose current choice is written into an invariant requires an architecture amendment. No value freezes from harness or model evidence alone when its destination tier is T3 or above.
+
+<!-- living:PROV -->
+### PROV-1 — Client scale ceiling H_cfg
+- **Candidate:** 3.0
+- **Allowed range:** ≥ max connected output scale; the effective ceiling is always min(H_cfg, D_max/s_max) (F-SCALE-2)
+- **Owning obligation:** OB-12
+- **Freeze tier:** T3 (client CPU/memory, X-16) + T4 (buffer memory, frame time)
+- **Measurement:** X-16 zoom sweep: renegotiations, client CPU, buffer MB (fdinfo), sharpness at m ∈ {1, 1.04, 1.25, 2, 2.67}
+- **Change class:** tuning
+- **Status:** PROVISIONAL
+
+### PROV-2 — Ladder ratio r
+- **Candidate:** 1.25
+- **Allowed range:** 1 < r ≤ 2
+- **Owning obligation:** OB-12
+- **Freeze tier:** T3/T4
+- **Measurement:** as PROV-1
+- **Change class:** tuning
+- **Status:** PROVISIONAL
+
+### PROV-3 — Sharpness tolerance σ
+- **Candidate:** 0.05
+- **Allowed range:** 0 ≤ σ < r − 1
+- **Owning obligation:** OB-12 (with OB-7 visual)
+- **Freeze tier:** T3/T4 visual
+- **Measurement:** visibility of magnification m ≤ 1 + σ
+- **Change class:** tuning
+- **Status:** PROVISIONAL
+
+### PROV-4 — Off-screen fallback period P
+- **Candidate:** 1 s
+- **Allowed range:** finite and > 0 (INV-FRAME-3)
+- **Owning obligation:** OB-8 (after OB-5)
+- **Freeze tier:** T5
+- **Measurement:** X-7 game/network survival off-screen; off-screen CPU
+- **Change class:** tuning (P = ∞ globally would violate INV-FRAME-3)
+- **Status:** PROVISIONAL
+
+### PROV-5 — ScaleInteractionEpoch settlement timeout T_settle
+- **Candidate:** 300 ms
+- **Allowed range:** finite and greater than the repeat interval of discrete spatial input (INV-SCALE-3)
+- **Owning obligation:** OB-23
+- **Freeze tier:** T3 (real clients) + T4 (real wheel/key timing)
+- **Measurement:** renegotiations per discrete interaction, wheel/key/shell-stream inter-step timing distributions
+- **Change class:** tuning (the timeout's existence is architectural)
+- **Status:** PROVISIONAL
+
+### PROV-6 — Renderer filters
+- **Candidate:** Linear (downscale) / Linear (upscale)
+- **Allowed range:** any filter supported by the renderer (no geometry effect)
+- **Owning obligation:** OB-7
+- **Freeze tier:** T3/T4 visual
+- **Measurement:** visual comparison at m ∈ {0.67, 0.87, 1.04, 1.25, 2.67}
+- **Change class:** tuning
+- **Status:** PROVISIONAL
+
+### PROV-7 — Pan cursor behaviour
+- **Candidate:** cursor frozen on screen, world slides under it
+- **Allowed range:** frozen-cursor or cursor-follows-world
+- **Owning obligation:** OB-37
+- **Freeze tier:** T3 (UX) / T5 (games)
+- **Measurement:** user evaluation; game behaviour under pan
+- **Change class:** **invariant amendment** if changed (INV-INPUT-3 KeepFocus and INV-COORD-5 physical pointer state assume the frozen cursor)
+- **Status:** PROVISIONAL
+
+### PROV-8 — Popup draw order
+- **Candidate:** a popup tree renders immediately above its own element
+- **Allowed range:** —
+- **Owning obligation:** OB-38
+- **Freeze tier:** Level D UX decision
+- **Measurement:** occlusion cases with real toolkits (T3)
+- **Change class:** **invariant amendment** if changed (INV-RENDER-2, INV-HIT-1 order)
+- **Status:** PROVISIONAL
+
+### PROV-9 — Integer preferred scale
+- **Candidate:** ⌈h⌉
+- **Allowed range:** —
+- **Owning obligation:** OB-39
+- **Freeze tier:** T3 (integer-only clients)
+- **Measurement:** integer-only client sharpness/memory
+- **Change class:** **invariant amendment** if changed (INV-SCALE-5 wording)
+- **Status:** PROVISIONAL
+
+### PROV-10 — Activation outcomes and shell UX
+- **Candidate:** focus grant / attention / ignore; no auto-navigation
+- **Allowed range:** auto-navigation only as explicit user policy executed through `ShellPort`
+- **Owning obligation:** OB-40
+- **Freeze tier:** Level D shell design + T3 (OB-27)
+- **Measurement:** activation behaviour of real toolkits
+- **Change class:** **invariant amendment** if outcomes change (INV-INPUT-9)
+- **Status:** PROVISIONAL
+
+### PROV-11 — Reserved suspension reason StableUnobserved(T)
+- **Candidate:** disabled
+- **Allowed range:** disabled, or finite T as configuration
+- **Owning obligation:** OB-41
+- **Freeze tier:** T3/T5 (evidence of benefit required)
+- **Measurement:** which clients benefit; CPU/energy off-screen
+- **Change class:** **invariant amendment** to enable (INV-FRAME-6 reason set)
+- **Status:** PROVISIONAL
+<!-- /living -->
+
+## §D7.R PD-F1 refinement layer (applied in D7; provenance-tagged)
+
+Each D-F1 is applied **only** inside the living `F-*`, `OBJ-*` or `OB-*` text named below. Historical text is unchanged.
+
+| PD-F1 | Original (historical) text | Applied where | Replacement / clarification | Why semantics are unchanged |
+|---|---|---|---|---|
+| PD-F1-01 | C3.2 [3] "i64 → f64 → i32" (no order) | F-LATTICE-1 | compute in f64 and cull before any i32 conversion | membership is already defined as intersection with `[0, mode)`; only the evaluation order that avoids overflow is fixed |
+| PD-F1-02 | INV-COORD-1 "\|v\| ≤ 2³⁶" for Canvas | F-VIEW-1 | stored values ≤ 2³⁶; derived view origins ≤ 2³⁶ + mode/(2k), exact below 2³⁷ | states the existing derived bound; no value changes |
+| PD-F1-03 | C3.1 [6] "per-output `OutputDamageTracker`" (scale unspecified) | F-RENDER-1 | `OutputDamageTracker::new(mode, Scale(k_O), transform)`, rebuilt when k_O changes | the edge formula already requires scale k_O; this names the API that honours it (ED-4) |
+| PD-F1-04 | INV-CAMERA-3 / C3.2 [1] `mode` | F-VIEW-1 | mode after the output transform | rotated outputs present the transformed mode; no behaviour change for unrotated outputs |
+| PD-F1-05 | AUD-4 / C4.6 "Arrangement-nearest" | F-RELOCATE-1 | half-open clamp to `size − 2⁻⁸` | already adopted by 1R (INV-INPUT-5 "half-open"); recorded here as the formula |
+| PD-F1-06 | CP2-2 snapshot field list (no frame-callback datum) | OBJ-05 (FOUNDATION_OBJECT_MODEL) | snapshot carries `frame_requested`; core clears it when it emits `CompleteFrames` | INV-FRAME-3 already requires arming the fallback only while a callback is pending; this names the datum that makes it implementable |
+| PD-F1-07 | C3.7 ProjectionFrame (stale entries unspecified) | F-HIT-1; OBJ-15 | dead surfaces fail closed until the next frame | B4/B10.6 "lookups fail closed" already applies |
+| PD-F1-08 | C8 renderer-recreation row | F-SCALE-2 | `D_max` re-queried on renderer recreation | already normative in C12.R1 INV-SCALE-2; recorded in the formula |
+| PD-F1-09 | C5.2 "centred with border fill if smaller" | F-PRESENT-1 | presentation view expressed through F-VIEW-1/R7 | same geometry; names the existing rounding point instead of an unlisted one |
+| PD-F1-10 | BLOCKERS ledger category 3 policies without owners | PROV-7…PROV-11; OB-37…OB-41 | each policy has an owning obligation and a freeze/decision destination | bookkeeping only; no policy value changes |
+| PD-F1-11 | C14.3 counting-allocator test, C8 persistence load rule, C14.1/C14.2 T4 procedures (no owning obligation) | OB-42, OB-43, OB-44 | specified tests now have owning obligations | bookkeeping only; tests and rules unchanged |
 

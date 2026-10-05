@@ -1,0 +1,7 @@
+{
+ "name": "reference to an undefined invariant",
+ "file": "FOUNDATION_STATE_MACHINES.md",
+ "find": "INV-STAGE-3 |",
+ "replace": "INV-STAGE-99 |",
+ "expect": "refs-resolve"
+}

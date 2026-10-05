@@ -1,0 +1,7 @@
+{
+ "name": "duplicate INV-* definition",
+ "file": "FOUNDATION_INVARIANTS.md",
+ "find": "### INV-STAGE-2\n",
+ "replace": "### INV-STAGE-1\n- **Wording:** duplicate\n\n### INV-STAGE-2\n",
+ "expect": "inv-duplicate"
+}

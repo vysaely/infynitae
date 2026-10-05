@@ -37,3 +37,152 @@ small set of *ideas*.
 | Placement policy | Diagonal stagger by element count | **DEFER** | Level D UX. | — |
 | Focus | Click → raise + keyboard focus; no `set_activated` | **REIMPLEMENT** | C4 focus model. Note `set_activated` would emit configures (activation state), legitimately not pan-induced. | — |
 | Data device | `set_data_device_focus` on keyboard focus | **ADAPT** | Minimal correct clipboard plumbing. DnD is part of B10. | — |
+
+---
+
+## D7 effective projection (living; canonical `PL-*`)
+
+Each row carries forward one row of the Phase A table above, which stays unchanged as history. The current class is unchanged from Phase A, and its justification cites the effective invariants and ADRs.
+
+**No new decision is introduced here.** Where the Phase A reason named a Phase B/C section ("B4", "C4"), the effective rule is the cited invariant.
+
+<!-- living:PL -->
+### PL-01 — Stage representation
+- **Class (Phase A, unchanged):** ADAPT
+- **Effective consequence:** Stage is the sole spatial authority, owned by core without Smithay types
+- **Justified by:** INV-STAGE-1, INV-STAGE-6, INV-ARCH-1
+- **ADR:** ADR-01
+
+### PL-02 — Element identity
+- **Class (Phase A, unchanged):** ADAPT
+- **Effective consequence:** `ElementId` NonZeroU64, never reused; `(InstanceId, ElementId)` externally; O(1) surface association
+- **Justified by:** INV-STAGE-3
+- **ADR:** —
+
+### PL-03 — Canvas numeric type
+- **Class (Phase A, unchanged):** REIMPLEMENT
+- **Effective consequence:** Q16 i64 with rounding points
+- **Justified by:** INV-COORD-1, INV-COORD-2, INV-COORD-3
+- **ADR:** ADR-02
+
+### PL-04 — Camera representation
+- **Class (Phase A, unchanged):** REIMPLEMENT
+- **Effective consequence:** centre-anchored cameras with zoom; created and bound only through the output-lifecycle path
+- **Justified by:** INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-2
+- **ADR:** ADR-04, ADR-08
+
+### PL-05 — Rendering projection
+- **Class (Phase A, unchanged):** ADAPT
+- **Effective consequence:** draw-time projection kept; lattice edges, f64 location
+- **Justified by:** INV-RENDER-1, INV-STAGE-6
+- **ADR:** ADR-02, ADR-03
+
+### PL-06 — Inverse hit testing
+- **Class (Phase A, unchanged):** REIMPLEMENT
+- **Effective consequence:** physical-pixel hit selection in render order
+- **Justified by:** INV-HIT-1, INV-COORD-6
+- **ADR:** ADR-03
+
+### PL-07 — Input / pan
+- **Class (Phase A, unchanged):** REIMPLEMENT
+- **Effective consequence:** ownership table, interaction state machine, direct-manipulation pan
+- **Justified by:** INV-INPUT-1, INV-INPUT-3, INV-COORD-3
+- **ADR:** ADR-07
+
+### PL-08 — Pan instrumentation
+- **Class (Phase A, unchanged):** DISCARD
+- **Effective consequence:** client-observed measurement replaces internal counters
+- **Justified by:** INV-CAMERA-4, INV-OBS-1
+- **ADR:** —
+
+### PL-09 — Protocol-state organization
+- **Class (Phase A, unchanged):** REIMPLEMENT
+- **Effective consequence:** five-crate split; core without Smithay
+- **Justified by:** INV-ARCH-1
+- **ADR:** ADR-08, ADR-12
+
+### PL-10 — Smithay `Window` ownership
+- **Class (Phase A, unchanged):** ADAPT
+- **Effective consequence:** `Window` in the adapter, associated with `ElementId`
+- **Justified by:** INV-ARCH-1, INV-STAGE-1
+- **ADR:** ADR-01, ADR-13
+
+### PL-11 — Smithay `Space`
+- **Class (Phase A, unchanged):** REUSE (decision)
+- **Effective consequence:** not used
+- **Justified by:** INV-STAGE-1, INV-RENDER-3
+- **ADR:** ADR-01
+
+### PL-12 — Toplevel lifecycle
+- **Class (Phase A, unchanged):** REIMPLEMENT
+- **Effective consequence:** B5 lifecycle; idempotent destroy
+- **Justified by:** INV-STAGE-4, INV-STAGE-5
+- **ADR:** —
+
+### PL-13 — Popups / subsurfaces
+- **Class (Phase A, unchanged):** REIMPLEMENT
+- **Effective consequence:** single origin function; own membership; ordered popup preemption
+- **Justified by:** INV-COORD-6, INV-RENDER-2, INV-INPUT-10
+- **ADR:** ADR-03, ADR-14
+
+### PL-14 — Output enter/leave, scale
+- **Class (Phase A, unchanged):** REIMPLEMENT
+- **Effective consequence:** own per-surface membership; unified scale with epochs
+- **Justified by:** INV-RENDER-3, INV-SCALE-1, INV-SCALE-3
+- **ADR:** ADR-05
+
+### PL-15 — Frame callbacks
+- **Class (Phase A, unchanged):** DISCARD
+- **Effective consequence:** withhold / kick / fallback; no continuous redraw
+- **Justified by:** INV-FRAME-1, INV-FRAME-3, INV-IDLE-1
+- **ADR:** ADR-06, ADR-12
+
+### PL-16 — Pointer constraints / relative pointer
+- **Class (Phase A, unchanged):** REIMPLEMENT
+- **Effective consequence:** compositor activation policy; reconciliation; confinement clamp
+- **Justified by:** INV-INPUT-4, INV-INPUT-5
+- **ADR:** ADR-07
+
+### PL-17 — Winit coupling
+- **Class (Phase A, unchanged):** REIMPLEMENT
+- **Effective consequence:** winit backend behind the backend boundary (T2)
+- **Justified by:** INV-ARCH-1
+- **ADR:** ADR-12
+
+### PL-18 — xwayland-satellite
+- **Class (Phase A, unchanged):** ADAPT
+- **Effective consequence:** satellite as an ordinary client under a supervisor; restart on the same display (OB-33)
+- **Justified by:** INV-XWAYLAND-1
+- **ADR:** ADR-10
+
+### PL-19 — Error handling
+- **Class (Phase A, unchanged):** REIMPLEMENT
+- **Effective consequence:** failure model; `unsafe` policy
+- **Justified by:** INV-FAIL-1, INV-ARCH-2
+- **ADR:** —
+
+### PL-20 — Test architecture
+- **Class (Phase A, unchanged):** DISCARD
+- **Effective consequence:** T0–T5 strategy (FOUNDATION_TEST_PLAN)
+- **Justified by:** INV-ARCH-1
+- **ADR:** ADR-12
+
+### PL-21 — Placement policy
+- **Class (Phase A, unchanged):** DEFER
+- **Effective consequence:** Level D UX (camera default placement is also Level D, INV-CAMERA-3)
+- **Justified by:** INV-STAGE-1
+- **ADR:** —
+
+### PL-22 — Focus
+- **Class (Phase A, unchanged):** REIMPLEMENT
+- **Effective consequence:** ActiveElementFocus; `activated` per INV-PROTO-1
+- **Justified by:** INV-INPUT-8, INV-PROTO-1
+- **ADR:** ADR-07, ADR-14
+
+### PL-23 — Data device
+- **Class (Phase A, unchanged):** ADAPT
+- **Effective consequence:** clipboard plumbing follows ActiveElementFocus; DnD is a client-owned grab sequence
+- **Justified by:** INV-INPUT-1, INV-INPUT-8
+- **ADR:** ADR-07
+
+<!-- /living -->

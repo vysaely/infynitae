@@ -1,0 +1,7 @@
+{
+ "name": "deferred decision OB-24 falsely marked closed",
+ "file": "FOUNDATION_TEST_PLAN.md",
+ "find": "### OB-24\n- **Status:** OPEN",
+ "replace": "### OB-24\n- **Status:** CLOSED",
+ "expect": "deferred-closed"
+}

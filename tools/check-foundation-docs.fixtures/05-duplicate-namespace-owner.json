@@ -1,0 +1,7 @@
+{
+ "name": "OB namespace assigned to a second canonical home",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "| F | `F-[A-Z]+-[0-9]+` |",
+ "replace": "| OB | `OB-[0-9]+` | FOUNDATION_BLOCKERS.md | heading `### OB-…` | — | reference only |\n| F | `F-[A-Z]+-[0-9]+` |",
+ "expect": "ns-duplicate-ownership"
+}

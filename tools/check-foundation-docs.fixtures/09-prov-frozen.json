@@ -1,0 +1,7 @@
+{
+ "name": "provisional constant frozen without evidence",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "- **Status:** PROVISIONAL\n\n### PROV-2",
+ "replace": "- **Status:** FROZEN\n\n### PROV-2",
+ "expect": "deferred-closed"
+}

@@ -1,0 +1,7 @@
+{
+ "name": "OB-* defined inside another document's living region",
+ "file": "FOUNDATION_RISKS.md",
+ "find": "### RB-1\n",
+ "replace": "### OB-99\n- **Status:** OPEN\n\n### RB-1\n",
+ "expect": "definition-outside-home"
+}

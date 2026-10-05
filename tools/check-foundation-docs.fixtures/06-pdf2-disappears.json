@@ -1,0 +1,7 @@
+{
+ "name": "original PD-F2 finding missing from the living register",
+ "file": "FOUNDATION_BLOCKERS.md",
+ "find": "### PD-F2-13\n- **Class:** D-F2",
+ "replace": "### PD-F2-99\n- **Class:** D-F2",
+ "expect": "pdf2-missing"
+}

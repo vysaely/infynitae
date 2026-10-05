@@ -1691,3 +1691,464 @@ Two empirical refinements were needed to make the decisions hold. Both are recor
 
 **Open Level-A findings after 2R: none.**
 
+---
+
+## Phase D package (D7): living registers
+
+Everything above this heading is historical:
+- the Phase B record;
+- the Phase D findings (checkpoint 1, 1R, checkpoint 2, 2R).
+
+It stays append-only and unchanged. The regions below are the canonical living homes of `PD-F*`, `W-SM-*` and D9 (FOUNDATION_ARCHITECTURE §P0).
+
+### Finding register (canonical PD-F*)
+
+Status vocabulary:
+- `RESOLVED`: the architecture was corrected under change control;
+- `OPEN`: dispositioned to an obligation or decision that is not yet satisfied;
+- `APPLIED`: a D-F1 applied in the D7 refinement layer;
+- `NOTED`: D-F0 clarification.
+
+Original finding text: the sections above (PD-F2) and audit/README (PD-F1-01…09, PD-F0-01…09, historical).
+
+<!-- living:PDF -->
+### PD-F2-01
+- **Class:** D-F2
+- **Level (found → re-evaluated):** A → A
+- **Title:** Camera evolution without an authority port
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: INV-CAMERA-1, INV-CAMERA-5 (ER-4)
+
+### PD-F2-02
+- **Class:** D-F2
+- **Level (found → re-evaluated):** A → A
+- **Title:** Smithay grabs decide focus behind the core models
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: INV-INPUT-8, INV-INPUT-10 (ER-1)
+
+### PD-F2-03
+- **Class:** D-F2
+- **Level (found → re-evaluated):** B → A
+- **Title:** `Locked` lacks output; Canvas lock point detaches
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: INV-COORD-5, INV-INPUT-5 (ER-2)
+
+### PD-F2-04
+- **Class:** D-F2
+- **Level (found → re-evaluated):** B → A
+- **Title:** Pointer reconciliation only at pan termination
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: INV-INPUT-5 (ER-2)
+
+### PD-F2-05
+- **Class:** D-F2
+- **Level (found → re-evaluated):** B → A
+- **Title:** Confinement enforcement across independent cameras
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: INV-INPUT-5 (ER-5)
+
+### PD-F2-06
+- **Class:** D-F2
+- **Level (found → re-evaluated):** B → B
+- **Title:** Zoomed panning reachable; pan formula lacks zoom; OB-24 premise false
+- **Status:** OPEN
+- **Resolution / destination:** algebra resolved in 1R (INV-COORD-3, F-PAN-1); ±1 px shape residual open as decision OB-24
+
+### PD-F2-07
+- **Class:** D-F2
+- **Level (found → re-evaluated):** B → B
+- **Title:** Discrete camera interactions outside SC-D
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: INV-SCALE-3/4 (ER-5)
+
+### PD-F2-08
+- **Class:** D-F2
+- **Level (found → re-evaluated):** C → C
+- **Title:** Device bound vs ladder/P4; H_max basis; off-ladder hint
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: INV-SCALE-2/5 (ED-2)
+
+### PD-F2-09
+- **Class:** D-F2
+- **Level (found → re-evaluated):** C → C
+- **Title:** Initial scale hint undefined
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: INV-SCALE-5 (ED-2)
+
+### PD-F2-10
+- **Class:** D-F2
+- **Level (found → re-evaluated):** C → A
+- **Title:** Protocol-fullscreen state machine incomplete; unanswered requests
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: INV-PRES-1 (ER-3)
+
+### PD-F2-11
+- **Class:** D-F2
+- **Level (found → re-evaluated):** C → C
+- **Title:** Shared camera vs output-keyed fit; orphaned pan
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: by PD-F2-01 + INV-OUTPUT-1
+
+### PD-F2-12
+- **Class:** D-F2
+- **Level (found → re-evaluated):** C → C
+- **Title:** Popup constraint target rounding point
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: INV-COORD-2 R8
+
+### PD-F2-13
+- **Class:** D-F2
+- **Level (found → re-evaluated):** C → C
+- **Title:** Window drag across outputs
+- **Status:** OPEN
+- **Resolution / destination:** decision OB-34 (F-DRAG-1 open); gates INC-14
+
+### PD-F2-14
+- **Class:** D-F2
+- **Level (found → re-evaluated):** C → C
+- **Title:** `AllObservingOutputsOff` over camera membership
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: INV-FRAME-6
+
+### PD-F2-15
+- **Class:** D-F2
+- **Level (found → re-evaluated):** C → C
+- **Title:** Attention / `transient_for` on unmap/destroy
+- **Status:** OPEN
+- **Resolution / destination:** implementation obligation OB-35
+
+### PD-F2-16
+- **Class:** D-F2
+- **Level (found → re-evaluated):** C → C
+- **Title:** Satellite restart display identity / socket ownership
+- **Status:** OPEN
+- **Resolution / destination:** `-listenfd` verified (ER-6); implementation obligation OB-33
+
+### PD-F2-17
+- **Class:** D-F2
+- **Level (found → re-evaluated):** B → A
+- **Title:** xdg_toplevel state policy (maximize answer, `activated`)
+- **Status:** RESOLVED
+- **Resolution / destination:** 1R: INV-PROTO-1 (ER-3)
+
+### PD-F2-18
+- **Class:** D-F2
+- **Level (found → re-evaluated):** A → A
+- **Title:** Camera creation/binding/restore without authorization
+- **Status:** RESOLVED
+- **Resolution / destination:** 2R: INV-OUTPUT-2, INV-CAMERA-1/3, INV-OUTPUT-1 (ER2-1)
+
+### PD-F2-19
+- **Class:** D-F2
+- **Level (found → re-evaluated):** C → C
+- **Title:** Stage-move interactions outside ScaleInteractionEpoch
+- **Status:** RESOLVED
+- **Resolution / destination:** 2R: INV-SCALE-3/4 (ER2-2)
+
+### PD-F1-01
+- **Class:** D-F1
+- **Status:** APPLIED
+- **Applied in:** FOUNDATION_ARCHITECTURE §D7.R → F-LATTICE-1
+- **Semantics:** unchanged (justification in §D7.R)
+
+### PD-F1-02
+- **Class:** D-F1
+- **Status:** APPLIED
+- **Applied in:** FOUNDATION_ARCHITECTURE §D7.R → F-VIEW-1
+- **Semantics:** unchanged (justification in §D7.R)
+
+### PD-F1-03
+- **Class:** D-F1
+- **Status:** APPLIED
+- **Applied in:** FOUNDATION_ARCHITECTURE §D7.R → F-RENDER-1
+- **Semantics:** unchanged (justification in §D7.R)
+
+### PD-F1-04
+- **Class:** D-F1
+- **Status:** APPLIED
+- **Applied in:** FOUNDATION_ARCHITECTURE §D7.R → F-VIEW-1
+- **Semantics:** unchanged (justification in §D7.R)
+
+### PD-F1-05
+- **Class:** D-F1
+- **Status:** APPLIED
+- **Applied in:** FOUNDATION_ARCHITECTURE §D7.R → F-RELOCATE-1
+- **Semantics:** unchanged (justification in §D7.R)
+
+### PD-F1-06
+- **Class:** D-F1
+- **Status:** APPLIED
+- **Applied in:** FOUNDATION_ARCHITECTURE §D7.R → OBJ-05
+- **Semantics:** unchanged (justification in §D7.R)
+
+### PD-F1-07
+- **Class:** D-F1
+- **Status:** APPLIED
+- **Applied in:** FOUNDATION_ARCHITECTURE §D7.R → F-HIT-1, OBJ-15
+- **Semantics:** unchanged (justification in §D7.R)
+
+### PD-F1-08
+- **Class:** D-F1
+- **Status:** APPLIED
+- **Applied in:** FOUNDATION_ARCHITECTURE §D7.R → F-SCALE-2
+- **Semantics:** unchanged (justification in §D7.R)
+
+### PD-F1-09
+- **Class:** D-F1
+- **Status:** APPLIED
+- **Applied in:** FOUNDATION_ARCHITECTURE §D7.R → F-PRESENT-1
+- **Semantics:** unchanged (justification in §D7.R)
+
+### PD-F1-10
+- **Class:** D-F1
+- **Status:** APPLIED
+- **Applied in:** FOUNDATION_ARCHITECTURE §D7.R → PROV-7…PROV-11, OB-37…OB-41
+- **Semantics:** unchanged (justification in §D7.R)
+
+### PD-F1-11
+- **Class:** D-F1
+- **Status:** APPLIED
+- **Applied in:** FOUNDATION_TEST_PLAN OB-42 (INV-ALLOC-1 counting-allocator test), OB-43 (persistence all-or-nothing load), OB-44 (C14 performance/idle T4 baselines); FOUNDATION_RISKS TR-7, TF-6, TR-4
+- **Semantics:** unchanged. Specified tests (C14.3, C8, C14.1/C14.2) that had no owning obligation now have one; found in D7 by the checker (`risk-backed`).
+
+### PD-F0-01
+- **Class:** D-F0
+- **Status:** NOTED
+- **Note:** crossing outputs during a client implicit grab yields a surface-local jump (expected)
+
+### PD-F0-02
+- **Class:** D-F0
+- **Status:** NOTED
+- **Note:** pixel-centre clamp bound ≤ ~2⁻¹⁶ (measured 0)
+
+### PD-F0-03
+- **Class:** D-F0
+- **Status:** NOTED
+- **Note:** B9.6 removal decrease vs INV-SCALE-3 during gestures: the registry prevails
+
+### PD-F0-04
+- **Class:** D-F0
+- **Status:** NOTED
+- **Note:** T5 omits δ (2⁻²⁰/k): immaterial
+
+### PD-F0-05
+- **Class:** D-F0
+- **Status:** NOTED
+- **Note:** kick rate bounded by physical input rate
+
+### PD-F0-06
+- **Class:** D-F0
+- **Status:** NOTED
+- **Note:** ≤ 1-frame ProjectionFrame staleness (I9 trade-off)
+
+### PD-F0-07
+- **Class:** D-F0
+- **Status:** NOTED
+- **Note:** camera retention per OutputKey is a Level D persistence policy
+
+### PD-F0-08
+- **Class:** D-F0
+- **Status:** NOTED
+- **Note:** hotplug of a ladder-rung output can renegotiate without a ρ change (bounded)
+
+### PD-F0-09
+- **Class:** D-F0
+- **Status:** NOTED
+- **Note:** pointer Canvas point defined on the snapped camera; no write-back of rendered values
+
+### PD-F0-10
+- **Class:** D-F0
+- **Status:** NOTED
+- **Note:** ADR-08 decision text predates the 2R output-lifecycle entry: D7 editorial note added
+
+### PD-F0-11
+- **Class:** D-F0
+- **Status:** NOTED
+- **Note:** INV-CAMERA-4 missing from ADR-06/ADR-07 affected-invariant lists: D7 editorial notes added
+
+<!-- /living -->
+
+### Smithay quirk catalogue (canonical W-SM-*)
+
+<!-- living:WSM -->
+### W-SM-1
+- **Quirk:** `Space` owns placement/z-order/activation
+- **Infynitae response:** not used (ADR-01)
+- **Evidence:** EB-2
+- **Obligations:** OB-26
+
+### W-SM-2
+- **Quirk:** `Window::output_enter` / `Space::refresh` mis-compute CSD/popup membership
+- **Infynitae response:** own per-surface membership (F-MEMBER-1)
+- **Evidence:** EB-2, EB-H1
+- **Obligations:** OB-26
+
+### W-SM-3
+- **Quirk:** `CompositorState::new` advertises `wl_compositor` v5
+- **Infynitae response:** always `new_v6`
+- **Evidence:** EB-10
+- **Obligations:** OB-19
+
+### W-SM-4
+- **Quirk:** seat `leave()` deactivates constraints unconditionally (4a: duplicate `unlocked` after an explicit deactivate; 4b: a never-activated oneshot lock is destroyed)
+- **Infynitae response:** 4a: explicit deactivate only when the delivered focus does not change; reconciliation deferred under client grabs (INV-INPUT-5). 4b: upstream/patch decision
+- **Evidence:** EB-16, ER-2, X-12 (TST-08)
+- **Obligations:** OB-11, OB-31
+
+### W-SM-5
+- **Quirk:** `render_elements_from_surface_tree` takes an i32 root
+- **Infynitae response:** `from_surface` with f64 location (F-RENDER-1)
+- **Evidence:** EB-14
+- **Obligations:** OB-26
+
+### W-SM-6
+- **Quirk:** `ensure_configured` is opt-in
+- **Infynitae response:** call on every role commit
+- **Evidence:** EB-6
+- **Obligations:** OB-18
+
+### W-SM-7
+- **Quirk:** `grab_popup` asserts the root
+- **Infynitae response:** check the precondition; refuse invalid grabs (INV-INPUT-10)
+- **Evidence:** EB-6, ER-1
+- **Obligations:** OB-18
+
+### W-SM-8
+- **Quirk:** `token_created` accepts every token
+- **Infynitae response:** provenance override (INV-INPUT-9)
+- **Evidence:** EB-19
+- **Obligations:** OB-27
+
+### W-SM-9
+- **Quirk:** `Window::geometry` re-clamps to the current bbox
+- **Infynitae response:** accepted; revisit on T3 evidence
+- **Evidence:** EB-6
+- **Obligations:** OB-17
+
+### W-SM-10
+- **Quirk:** `RendererSurfaceState::surface_view` private
+- **Infynitae response:** use `view()`
+- **Evidence:** EB-18
+- **Obligations:** OB-26
+
+### W-SM-11
+- **Quirk:** input regions tested with round-to-nearest (½ px shift)
+- **Infynitae response:** own hit-test (F-HIT-1)
+- **Evidence:** EC-10
+- **Obligations:** OB-26
+
+### W-SM-12
+- **Quirk:** below-subsurface wins `surface_under`
+- **Infynitae response:** own hit-test in render order
+- **Evidence:** EC-11
+- **Obligations:** OB-26
+
+### W-SM-13
+- **Quirk:** default maximize/fullscreen handlers send configure early
+- **Infynitae response:** overrides; answers per INV-PROTO-1 / INV-PRES-1
+- **Evidence:** EC-13, ER-3
+- **Obligations:** OB-32
+
+### W-SM-14
+- **Quirk:** a nested popup grab replacing the `PopupPointerGrab` tears down the keyboard grab
+- **Infynitae response:** keep the installed pointer grab for nested grabs
+- **Evidence:** ER-1
+- **Obligations:** OB-30
+
+### W-SM-15
+- **Quirk:** pointer-first popup-grab teardown refocuses the root transiently
+- **Infynitae response:** fixed preemption order (INV-INPUT-10)
+- **Evidence:** ER-1
+- **Obligations:** OB-30
+
+<!-- /living -->
+
+## D9 — Phase D final readiness judgment
+
+**Method:** a fixed PASS/FAIL checklist. The verdict is computed from it: READY only if every mandatory item passes.
+
+**Mechanical items** are verified by `tools/check-foundation-docs` (exit 0) and `tools/check-foundation-docs --self-test` (every seeded defect detected). Run commands and outputs: `docs/foundation/evidence/phase-d/d7-checker-output.txt` and `d7-checker-selftest-output.txt`.
+
+<!-- living:D9 -->
+| # | Gate item | Result | Evidence / reference | If FAIL |
+|---|---|---|---|---|
+| 1 | Baseline/seal provenance intact | PASS | HEAD `ae0085f`; seals `615b0ed`, `e8ec03a`, `84ce620`, `5827926` resolve and are ancestors; C12 (54 rows) byte-identical to `615b0ed`; C12.R1 to `84ce620`; C12.R2 to `5827926`; FOUNDATION_BLOCKERS append-only | stop: history altered |
+| 2 | Namespace authority map complete and unique | PASS | ARCHITECTURE §P0; checks `ns-complete`, `ns-duplicate-ownership`, `region-in-home` | gate incomplete |
+| 3 | Exactly 57 effective invariants with provenance | PASS | FOUNDATION_INVARIANTS (39 C12 + 12 C12.R1 + 6 C12.R2); checks `inv-count`, `inv-set`, `inv-provenance`, `inv-wording-mismatch` (57/57 reproduce their historical rows) | gate incomplete |
+| 4 | No duplicate normative authority | PASS | checks `inv-duplicate`, `formula-duplicate`, `id-duplicate`, `definition-outside-home`; 19 `F-*` defined once | gate incomplete |
+| 5 | Obligations complete, canonical in FOUNDATION_TEST_PLAN | PASS | OB-1…OB-44, each with status, owner, evidence, pass criterion, destination, closer, dependencies, blocks; checks `ob-*` | gate incomplete |
+| 6 | PD-F1 bookkeeping resolved or carried | PASS | PD-F1-01…PD-F1-11 APPLIED (ARCHITECTURE §D7.R); PD-F1-10 closed via PROV-7…11 / OB-37…41; PD-F1-11 found in D7 (OB-42…44) | gate incomplete |
+| 7 | All open D-F2 findings listed | PASS | listed below the verdict (PD-F2-06, PD-F2-13, PD-F2-15, PD-F2-16); check `pdf2-open-listed` | gate incomplete |
+| 8 | No Level-A D-F2 open | PASS | all Level-A findings (PD-F2-01/02/03/04/05/10/17/18) RESOLVED; no new D-F2 in D7 | architecture blockers remain |
+| 9 | OB-19 unconditional | PASS | OB-19: OPEN, PHASE-F-ENTRY-GATE, "unconditional"; check `ob19-conditional` | gate incomplete |
+| 10 | OB-36 exists and is correctly scoped | PASS | OB-36: CI, separate from OB-19; check `ob36-scoped` | gate incomplete |
+| 11 | Deferred T3–T5 / tuning / upstream items honestly open | PASS | every OB with destination T3/T4/T5/TUNE/UP/DECISION is OPEN; PROV-1…11 PROVISIONAL; check `deferred-closed` | gate incomplete |
+| 12 | OB-24 and OB-34 visibly remain decisions | PASS | OB-24, OB-34: DECISION/OPEN; gates G-OB24 (before INC-10, with the conservative fallback) and G-OB34 (before INC-14) | gate incomplete |
+| 13 | Retained checker passes | PASS | `tools/check-foundation-docs` exit 0 | gate incomplete |
+| 14 | Checker negative controls fail as intended | PASS | `--self-test`: 12 seeded defects, all detected (duplicate INV, OB without pass criterion, OB-19 conditional, deferred item closed, duplicate namespace ownership, plus 7 more) | gate incomplete |
+| 15 | D8 risk-ordered, with Slice 0 / Slice 1 | PASS | FOUNDATION_IMPLEMENTATION_PLAN dependency graph and rationale; INC-0 = OB-19 (ENFORCE), INC-1 = PRODUCT seam; checks `inc-slice0-ob19`, `inc-slice1-seam` | gate incomplete |
+| 16 | Harness → product parity mapped | PASS | FOUNDATION_TEST_PLAN §4; exit tests in INC-1…INC-14 | gate incomplete |
+| 17 | Work categories and live-system classes complete | PASS | 18 increments; checks `inc-category`, `inc-exec-class`, `inc-physical-authorization` | gate incomplete |
+| 18 | No product implementation created in D7–D9 | PASS | changes limited to `docs/foundation/**` and `tools/check-foundation-docs[.fixtures]`; no crate, manifest, workspace, CI config or product source | stop |
+| 19 | Phase E handoff complete | PASS | section "Phase E handoff" below | gate incomplete |
+
+**Verdict:** `READY FOR INDEPENDENT ADVERSARIAL REVIEW — PHASE E`
+
+**Open D-F2 findings (any level):**
+- **PD-F2-06** (Level B): the ±1 physical-pixel shape variation during zoomed pan is **unresolved**. OB-24 is a decision gate before INC-10; the conservative fallback is named.
+- **PD-F2-13** (Level C): the cross-output drag definition is an open decision (OB-34; gate before INC-14).
+- **PD-F2-15** (Level C): the attention / `transient_for` lifecycle is an implementation obligation (OB-35).
+- **PD-F2-16** (Level C): satellite restart on the same display is an implementation obligation (OB-33); `-listenfd` is verified (ER-6).
+
+**Claims that still rest only on harness, model or source evidence** (no production adapter, no physical system):
+- **Render/hit agreement, snapshot extraction, membership:** ED-1, EC-8, EC-9, EC-20, EB-14 (HARNESS, DummyRenderer).
+- **Input ownership, keyboard rules, popup preemption, constraint deferral:** EB-13, EC-6, ER-1, ER-2 (HARNESS).
+- **Maximize/fullscreen answers:** ER-3 (HARNESS).
+- **Camera, port and output-lifecycle authority:** EC-1, EC-15, ER-4, ER2-1. These are compiler probes in the spike, not the real crates; OB-19 ports them.
+- **Scale ladder, epochs, feedback damping, pan algebra, confinement:** EC-19, EC-22, ER-5, ER2-2, ED-2 (MODEL).
+- **Off-screen liveness:** EB-9 (real clients with the harness, not the product).
+- **Smithay behaviour (grabs, damage-tracker scale, quirks W-SM-1…15):** source reading plus harness; pinned to Smithay 0.7.0.
+- **No T3–T5 claim is made.** Toolkit, GPU, timing, game and hardware behaviour are open obligations.
+
+### Phase E handoff
+
+**To the independent reviewer.** Your task is to **falsify** this architecture. Do not assume this checkpoint's READY verdict is correct; the verdict only says the package is internally coherent enough to be attacked. Findings that contradict an invariant belong under change control as new findings, not as edits to this package.
+
+1. **Immutable baseline:**
+   - Phase C seal `615b0ed2f3631b698b0c54783c28f696ef4ff34a`;
+   - Phase D falsification baseline `e8ec03a2ab36f315ae025723ec666b9ad278ac83`;
+   - 1R seal `84ce620898445aaadb72f386ec3954e5bbfe2c2f`;
+   - 2R seal `5827926782089dc8c6a1c203f844fbc879fce9be`;
+   - D7–D9 package: uncommitted at the time of writing; its seal hash is to be recorded by the user.
+2. **The 57-invariant effective registry:** FOUNDATION_INVARIANTS.md, with layer provenance and `F-*` references.
+   - Attack the amended entries first: INV-CAMERA-1/3/5, INV-OUTPUT-1/2, INV-INPUT-5/8/10, INV-SCALE-2/3/4/5, INV-PRES-1, INV-PROTO-1, INV-COORD-2/3/5.
+   - Check that the substitution mechanism (§F "Extracted invariant text") cannot hide a semantic change.
+3. **Namespace authority map:** ARCHITECTURE §P0. Look for facts that are still effectively normative only in historical text (e.g. C-sections that no `INV-*`, `F-*` or `OB-*` captures).
+4. **Authority boundaries:**
+   - The three proof-minting entries (`InputPort`, `ShellPort`, `OutputLifecycleToken`). Is any camera, Stage or focus write reachable without them? Is the per-action `Authorized` proof really not retainable? Does the composition-root residual (C-NB-2) matter?
+   - Persistence as a passive lookup: does any startup path bypass `output_connected`?
+5. **Popup focus/grab reconciliation:** INV-INPUT-10's ordered preemption relies on Smithay 0.7.0 internals (W-SM-14/15). Try grab chains, DnD, implicit grabs and keyboard grabs other than popups.
+6. **Pointer constraints and output removal:** the deferral during client-owned grab sequences (ER-2). Is a constraint left active too long? Is any duplicate or missing `unlocked` reachable? Confinement on rotated or zoomed outputs.
+7. **Scale interaction epochs:** settlement timeout semantics. Are there epoch boundaries that a client can force? Can P7 be abused as a damping bypass? What about multi-observer cases and the ladder after hotplug?
+8. **Protocol responses:** fullscreen/maximize answer policy versus real toolkit expectations; `activated` configure storms on rapid focus changes.
+9. **Multi-output scale policy:** the accepted cost (AUD-1, RB-7); the device bound per surface.
+10. **Frame kick/fallback:** kick ordering versus deferred constraints and popup preemption; idle guarantees (INV-IDLE-1, OB-44).
+11. **XWayland boundary:** satellite override-redirect windows (OB-9), restart identity (OB-33), activation (OB-27).
+12. **The production-versus-harness gap:** every claim listed above under "harness, model or source evidence". The highest-risk assumptions in Slice 0 / Slice 1 are:
+    - (a) the spike's probes and the `!Send` guard port to the real crates with Smithay types in the adapter;
+    - (b) public-API snapshot extraction is complete and deadlock-free in the production commit path;
+    - (c) render/hit agreement survives the real `Effect` boundary;
+    - (d) `Space` stays absent.
+13. **Open design decisions:** OB-24 (zoomed-pan ±1 px residual; candidate gesture-pinned lattice, not adopted) and OB-34 (cross-output drag).
+14. **Provisional constants:** PROV-1…PROV-11. Is any allowed range wrong? Does any invariant depend on a candidate value?
+15. **Smithay quirks:** W-SM-1…15, including the upstream oneshot-lock defect W-SM-4b (OB-11) and the adapter-local workarounds. Would a Smithay upgrade silently break one?
+16. **Negative controls to challenge independently:**
+    - spike probes (do they fail for the stated reason only?);
+    - X-10 NEG;
+    - xpopup_focus NEG-1/NEG-2/OBS-1;
+    - xlock_grab SEALED/EXPLICIT;
+    - xmaximize OFF;
+    - epoch-disabled models;
+    - the checker's seeded defects (can a semantic change pass the checker?).
+17. **Deferred physical validation:** all T3–T5 obligations (FOUNDATION_TEST_PLAN) are open. No physical claim is made.
+<!-- /living -->

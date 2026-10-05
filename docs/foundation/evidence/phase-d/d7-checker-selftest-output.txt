@@ -1,0 +1,14 @@
+check-foundation-docs --self-test: seeded defects on a temporary copy (canonical documents untouched)
+  detected duplicate INV-* definition                           expected check "inv-duplicate" -> failing checks ['inv-duplicate', 'inv-fields', 'inv-provenance', 'inv-wording-mismatch']
+  detected obligation without a pass criterion                  expected check "ob-missing-pass" -> failing checks ['ob-missing-pass']
+  detected OB-19 made conditional                               expected check "ob19-conditional" -> failing checks ['ob19-conditional']
+  detected deferred decision OB-24 falsely marked closed        expected check "deferred-closed" -> failing checks ['deferred-closed']
+  detected OB namespace assigned to a second canonical home     expected check "ns-duplicate-ownership" -> failing checks ['ns-duplicate-ownership', 'region-in-home']
+  detected original PD-F2 finding missing from the living register expected check "pdf2-missing" -> failing checks ['pdf2-missing', 'pdf2-open-listed', 'refs-resolve']
+  detected duplicate F-* definition                             expected check "formula-duplicate" -> failing checks ['formula-duplicate']
+  detected effective wording drifts from its historical layer   expected check "inv-wording-mismatch" -> failing checks ['inv-wording-mismatch']
+  detected provisional constant frozen without evidence         expected check "deferred-closed" -> failing checks ['deferred-closed']
+  detected OB-* defined inside another document's living region expected check "definition-outside-home" -> failing checks ['definition-outside-home', 'refs-resolve']
+  detected reference to an undefined invariant                  expected check "refs-resolve" -> failing checks ['refs-resolve']
+  detected invariant provenance altered                         expected check "inv-provenance" -> failing checks ['inv-provenance']
+SELF-TEST: PASS (every seeded defect detected)

@@ -1,0 +1,7 @@
+{
+ "name": "invariant provenance altered",
+ "file": "FOUNDATION_INVARIANTS.md",
+ "find": "- **Origin:** C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be",
+ "replace": "- **Origin:** C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a",
+ "expect": "inv-provenance"
+}
