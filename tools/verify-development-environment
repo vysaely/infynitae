@@ -30,12 +30,19 @@ OPTIONAL_SYSTEM_TOOLS = ["gh", "zstd"]
 
 REQUIRED_PKG_CONFIG = [
     "wayland-server",
-    "wayland-protocols",
     "xkbcommon",
     "libinput",
-    "libseat",
     "libdrm",
     "gbm",
+]
+
+# Reported but not required: no current build needs them.
+# wayland-protocols: system protocol XML (Phase A reference reading); the Rust
+#   `wayland-protocols` crate bundles its own XML.
+# libseat (Arch package `seatd`): Smithay `backend_session_libseat`, Phase G DRM backend only.
+DEFERRED_PKG_CONFIG = [
+    ("wayland-protocols", "reference XML only"),
+    ("libseat", "Phase G session backend; package seatd"),
 ]
 
 
@@ -127,6 +134,12 @@ def main():
             else:
                 print(f"  ✗ {lib:<20} NOT FOUND via pkg-config")
                 all_passed = False
+        for lib, why in DEFERRED_PKG_CONFIG:
+            code, ver, _ = run_cmd(["pkg-config", "--modversion", lib])
+            if code == 0:
+                print(f"  ✓ {lib:<20} {ver}")
+            else:
+                print(f"  - {lib:<20} NOT FOUND (not required: {why})")
     else:
         print("  ✗ pkg-config not available to inspect system libraries")
         all_passed = False

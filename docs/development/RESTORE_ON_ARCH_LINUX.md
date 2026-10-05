@@ -18,13 +18,15 @@ sudo pacman -S --needed \
     pkgconf \
     rustup \
     wayland \
-    wayland-protocols \
     libxkbcommon \
     libinput \
-    libseat \
     libdrm \
     mesa
 ```
+
+`rustup` conflicts with the distro `rust` package; pacman offers to remove `rust`. Use rustup: on CachyOS the distro `rust` (from `[extra]`) can break against CachyOS's rebuilt `llvm-libs`.
+
+Not needed until later phases (the verifier reports them but does not require them): `wayland-protocols` (system protocol XML, reference only) and `seatd` (provides `libseat`; Phase G DRM session backend).
 
 Configure Rust stable toolchain:
 
