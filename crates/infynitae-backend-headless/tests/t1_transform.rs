@@ -470,3 +470,36 @@ fn n_pan_moves_render_and_hit_together() {
         );
     }
 }
+
+/// INC3-F09 regression: verify bounded descriptor usage across repeated Lockstep
+/// construction/destruction cycles. Without the fix (shared shm pool and Lockstep Drop client
+/// cleanup), each cycle leaked 193 file descriptors, exhausting standard ulimit (1024) in 5 cycles.
+#[test]
+fn inc3_f09_bounded_resource_cycles() {
+    #[cfg(target_os = "linux")]
+    let fd_count = || -> usize {
+        std::fs::read_dir("/proc/self/fd")
+            .map(|entries| entries.flatten().count())
+            .unwrap_or(0)
+    };
+
+    #[cfg(target_os = "linux")]
+    let before = fd_count();
+
+    for _ in 0..20 {
+        let mut ls = Lockstep::new(Some(rotated(Transform::Normal, 120)));
+        tile_view(&mut ls);
+        drop(ls);
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        let after = fd_count();
+        // Allow up to 5 descriptors of variance for standard test runner background threads.
+        // The uncorrected leak would accumulate 20 * 193 = 3860 descriptors.
+        assert!(
+            after <= before + 5,
+            "INC3-F09 regression: file descriptors accumulated across construction/destruction cycles (before: {before}, after: {after})"
+        );
+    }
+}

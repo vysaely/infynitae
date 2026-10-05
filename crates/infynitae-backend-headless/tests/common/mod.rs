@@ -105,7 +105,7 @@ pub struct Probe {
     pub shm: Option<WlShm>,
     pub wm_base: Option<XdgWmBase>,
     pub surfaces: Vec<Surf>,
-    files: Vec<File>,
+    shm_pool: Option<(WlShmPool, File, usize)>,
     pub seat: Option<WlSeat>,
     pub pointer: Option<WlPointer>,
     pub relative: Option<ZwpRelativePointerV1>,
@@ -124,30 +124,42 @@ static SHM_FILES: AtomicU64 = AtomicU64::new(0);
 impl Probe {
     fn buffer(&mut self, qh: &QueueHandle<Self>, w: i32, h: i32) -> WlBuffer {
         let stride = w * 4;
-        let len = (stride * h).max(4);
-        let path = std::env::temp_dir().join(format!(
-            "infynitae-t1-{}-{}",
-            std::process::id(),
-            SHM_FILES.fetch_add(1, Ordering::Relaxed)
-        ));
-        let file = File::options()
-            .read(true)
-            .write(true)
-            .create_new(true)
-            .open(&path)
-            .expect("shm file");
-        std::fs::remove_file(&path).expect("unlink shm file");
-        file.set_len(len as u64).expect("size shm file");
-        let pool: WlShmPool = self.shm.as_ref().expect("wl_shm").create_pool(
-            std::os::fd::AsFd::as_fd(&file),
-            len,
-            qh,
-            (),
-        );
-        let buf = pool.create_buffer(0, w, h, stride, wl_shm::Format::Argb8888, qh, ());
-        pool.destroy();
-        self.files.push(file);
-        buf
+        let len = (stride * h).max(4) as usize;
+        let pool = match &mut self.shm_pool {
+            Some((pool, file, cap)) if *cap >= len => pool.clone(),
+            Some((pool, file, cap)) => {
+                let new_cap = len.max(*cap * 2);
+                file.set_len(new_cap as u64).expect("resize shm file");
+                pool.resize(new_cap as i32);
+                *cap = new_cap;
+                pool.clone()
+            }
+            None => {
+                let initial_cap = len.max(4 * 1024 * 1024);
+                let path = std::env::temp_dir().join(format!(
+                    "infynitae-t1-{}-{}",
+                    std::process::id(),
+                    SHM_FILES.fetch_add(1, Ordering::Relaxed)
+                ));
+                let file = File::options()
+                    .read(true)
+                    .write(true)
+                    .create_new(true)
+                    .open(&path)
+                    .expect("shm file");
+                let _ = std::fs::remove_file(&path);
+                file.set_len(initial_cap as u64).expect("size shm file");
+                let pool: WlShmPool = self.shm.as_ref().expect("wl_shm").create_pool(
+                    std::os::fd::AsFd::as_fd(&file),
+                    initial_cap as i32,
+                    qh,
+                    (),
+                );
+                self.shm_pool = Some((pool.clone(), file, initial_cap));
+                pool
+            }
+        };
+        pool.create_buffer(0, w, h, stride, wl_shm::Format::Argb8888, qh, ())
     }
 
     /// Attaches a fresh buffer of the surface's size and commits (map or remap).
@@ -723,6 +735,7 @@ pub struct Lockstep {
     vblanks: Vec<(OutputId, Duration)>,
     /// The client's single wl_registry (a second one would bind every output twice).
     registry: WlRegistry,
+    client: smithay::reexports::wayland_server::Client,
 }
 
 impl Lockstep {
@@ -739,7 +752,7 @@ impl Lockstep {
         client_end
             .set_nonblocking(true)
             .expect("non-blocking client socket");
-        display
+        let client = display
             .handle()
             .insert_client(server_end, Arc::new(ClientState::default()))
             .expect("insert client");
@@ -760,6 +773,7 @@ impl Lockstep {
             now: Duration::ZERO,
             vblanks: Vec::new(),
             registry,
+            client,
         };
         // bind the managers first so wl_output globals get their xdg_output at announcement
         ls.pump();
@@ -891,6 +905,20 @@ impl Lockstep {
 
     pub fn output(&self) -> OutputId {
         self.output.expect("an output was connected")
+    }
+}
+
+impl Drop for Lockstep {
+    fn drop(&mut self) {
+        self.display.handle().backend_handle().kill_client(
+            self.client.id(),
+            smithay::reexports::wayland_server::backend::DisconnectReason::ConnectionClosed,
+        );
+        let _ = self
+            .display
+            .backend()
+            .dispatch_single_client(&mut self.state, self.client.id());
+        let _ = self.display.flush_clients();
     }
 }
 
