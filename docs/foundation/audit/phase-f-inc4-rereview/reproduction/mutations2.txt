@@ -1,0 +1,38 @@
+F   DETECTED  release owner recomputed from current bindings (Core) :: release_follows_press_owner_after_modifier_change, release_without_press_is_not_forwarded, repeat_press_of_compositor_owned_key_does_not_leak
+I   DETECTED  ordered preemption: pointer unset before keyboard unset :: neg2_pointer_first_teardown_control
+J   DETECTED  ordered preemption: keyboard unset omitted :: neg2_pointer_first_teardown_control
+K   DETECTED  ordered preemption: pointer unset omitted :: pf1_grab_active_core_focuses_w2_ordered
+L   DETECTED  keyboard-grabbed-by-another-sequence refusal removed :: pf_grab_refused_when_keyboard_grabbed_by_another_sequence
+N   DETECTED  grab root/focus check bypassed :: atk11_refused_grab_dismisses_the_popup
+P   DETECTED  rule 1 visibility guard dropped :: protocol::tests::popup_target_causing_output_rule1_and_rule2_fallback
+Q   DETECTED  old toplevel keeps Activated :: activated_tracks_active_element_focus
+R   DETECTED  new toplevel never Activated :: activated_tracks_active_element_focus
+T   DETECTED  Core accepts keyboard events without a valid port (check skipped for keys) :: keyboard_key_rejects_foreign_port
+U   DETECTED  click-to-focus removed :: click_to_focus_focuses_mapped_window
+V   DETECTED  W-SM-14 workaround default off :: pf6_nested_popup_grab_keeps_pointer_grab
+W   DETECTED  unmap of focused element keeps focus :: unmapped_focused_element_loses_focus
+AB  DETECTED  K3 observe mode disabled in Core intake :: focus_next_skips_unmapped_elements, k2_modifier_held_while_another_client_key_pressed, k3_compositor_binding_super_b_consumed, k4_focus_transition_binding_super_enter_while_modifier_held, k6_focused_client_destroyed_while_shift_a_held, k7_interaction_cancelled_while_compositor_keys_held, k8_binding_on_modifier_key_with_k3_observe_mode, k9_keyboard_focus_lost_and_regained, plain_escape_cancels_active_interaction, release_follows_press_owner_after_modifier_change, repeat_press_of_compositor_owned_key_does_not_leak
+N01 MISSED    one-event-late modifiers: backend reads seat modifiers BEFORE the XKB update :: suite green
+N02 DETECTED  pointer button uses only the backend snapshot (seat XKB ignored) :: atk13_pan_modifier_comes_from_the_seat_xkb_state, plain_escape_cancels_active_interaction
+N03 DETECTED  pointer button uses only the seat XKB state (snapshot ignored) [the canonical design] :: atk09_pan_acquisition_dismissal_emits_no_pointer_events, axis_is_routed_and_consumed_during_a_pan, c_negative_canvas_coordinates, d_large_canvas_coordinates_near_the_bound, h_first_output_returns_without_history, m_pan_never_writes_the_stage, n_pan_moves_render_and_hit_together, pan_membership_changes_without_configures, reconfiguration_clamps_and_sends_one_true_position, release_before_the_next_frame_uses_the_panned_camera, removing_the_pan_output_orphans_the_pan, x8_c1_keepfocus_pan_then_true_position, x8_c7_presses_during_the_pan_stay_compositor_owned, x8_c8_modifier_released_first, x8_c9_focused_surface_destroyed_mid_pan
+N04 DETECTED  repeated compositor press guard removed :: repeat_press_of_compositor_owned_key_does_not_leak
+N05 DETECTED  orphan release forwarded :: release_without_press_is_not_forwarded
+N06 DETECTED  refusal on unfocused root sends no popup_done :: atk11_refused_grab_dismisses_the_popup
+N07 DETECTED  OB-4 dismissal reintroduces pointer unset_grab (F05 regression) :: atk09_pan_acquisition_dismissal_emits_no_pointer_events
+N08 MISSED    OB-4 dismissal skips keyboard unset :: suite green
+N09 MISSED    ordered: keyboard focus set BEFORE ungrab :: suite green
+N10 DETECTED  ordered: ungrab(All) omitted :: pf1_grab_active_core_focuses_w2_ordered, pf2_grab_active_core_focuses_none_ordered, pf6_nested_popup_grab_keeps_pointer_grab, pf7_client_owned_key_held_during_grab_core_focuses_w2_release
+N11 DETECTED  stale popup state preserved (has_ended filter removed in focus path) :: atk14_stale_popup_grab_does_not_kill_implicit_button_grab
+N12 DETECTED  ordered: unset unconditionally (pre-correction behaviour; kills unrelated grabs) :: atk12_preemption_keeps_the_zero_output_grab
+N13 DETECTED  zero-output begin: popup keyboard refocus removed :: atk15_output_removal_keeps_popup_keyboard_route
+N14 DETECTED  unmapped parent popups not dismissed :: atk18_unmapped_parent_dismisses_its_popup_tree
+N15 DETECTED  F11 z-order fallback reintroduced :: successor_without_history_is_not_fabricated
+N16 DETECTED  focus_next live set includes unmapped elements :: focus_next_skips_unmapped_elements
+N17 MISSED    set_focus port check removed :: suite green
+N18 MISSED    set_focus mapped check removed :: suite green
+N19 DETECTED  plain Escape always compositor-owned (F04 regression) :: input::keys::tests::binding_resolution_honours_logo_modifier, plain_escape_reaches_the_focused_client
+N20 DETECTED  Cancel does not end the interaction (K6) :: plain_escape_cancels_active_interaction
+N21 MISSED    rule 1 wiring removed in the adapter (causing output = None) :: suite green
+N22 DETECTED  keyboard forward drops the client-visible modifiers update :: focus_next_skips_unmapped_elements, k2_modifier_held_while_another_client_key_pressed, k3_compositor_binding_super_b_consumed, k4_focus_transition_binding_super_enter_while_modifier_held, k6_focused_client_destroyed_while_shift_a_held, k7_interaction_cancelled_while_compositor_keys_held, k8_binding_on_modifier_key_with_k3_observe_mode, k9_keyboard_focus_lost_and_regained, plain_escape_cancels_active_interaction, release_follows_press_owner_after_modifier_change, repeat_press_of_compositor_owned_key_does_not_leak
+N23 DETECTED  KeyboardIntercept forwarded anyway (adapter-side policy leak) :: focus_next_skips_unmapped_elements, k3_compositor_binding_super_b_consumed, k4_focus_transition_binding_super_enter_while_modifier_held, k7_interaction_cancelled_while_compositor_keys_held, plain_escape_cancels_active_interaction, repeat_press_of_compositor_owned_key_does_not_leak
+N24 MISSED    foreign-port keyboard event: XKB synced even when rejected [current behaviour] vs port checked first :: suite green

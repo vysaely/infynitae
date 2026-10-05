@@ -1,0 +1,29 @@
+A   MISSED    modifier binding evaluated with the state one event LATE (pre-update snapshot) :: suite green
+B   DETECTED  client-visible modifier update dropped on client-owned release (mods_changed=false) :: k2_modifier_held_while_another_client_key_pressed, k3_compositor_binding_super_b_consumed, k4_focus_transition_binding_super_enter_while_modifier_held, k6_focused_client_destroyed_while_shift_a_held, k7_interaction_cancelled_while_compositor_keys_held, k8_binding_on_modifier_key_with_k3_observe_mode, k9_keyboard_focus_lost_and_regained
+C   DETECTED  compositor binding leaks the PRESS to the client :: k3_compositor_binding_super_b_consumed, k4_focus_transition_binding_super_enter_while_modifier_held, k7_interaction_cancelled_while_compositor_keys_held, neg_k3_without_k3_stuck_modifier_control
+D   DETECTED  compositor binding leaks the RELEASE to the client :: k3_compositor_binding_super_b_consumed, k4_focus_transition_binding_super_enter_while_modifier_held, k7_interaction_cancelled_while_compositor_keys_held
+E   DETECTED  client-owned non-modifier key swallowed (recorded Client, never forwarded) :: k1_ordinary_client_owned_press_release, k2_modifier_held_while_another_client_key_pressed, k5_focus_transition_while_client_key_held, k6_focused_client_destroyed_while_shift_a_held, k8_ob15_output_removal_under_held_keys, k9_keyboard_focus_lost_and_regained, k9_ob15_key_repeat_probe, pf6_nested_popup_grab_keeps_pointer_grab, pf7_client_owned_key_held_during_grab_core_focuses_w2_release
+F   MISSED    release owner RECOMPUTED from current bindings instead of remembered :: suite green
+G   DETECTED  stale focused element survives destruction (no target loss) :: k6_focused_client_destroyed_while_shift_a_held, pf3_parent_destroyed_during_grab_successor_focused_ordered
+H   DETECTED  focus fallback picks the bottom element instead of the MRU live element :: input::focus::tests::focus_transitions_and_successor_policy
+I   MISSED    ordered preemption swaps keyboard/pointer unset (pointer first) :: suite green
+J   MISSED    keyboard grab survives focus transfer (kb.unset_grab omitted) :: suite green
+K   MISSED    pointer popup grab survives focus transfer (ptr.unset_grab omitted) :: suite green
+L   MISSED    stale/foreign-sequence serial accepted (keyboard-grabbed refusal removed) :: suite green
+N   MISSED    popup root/focus check bypassed (grab on an unfocused element accepted) :: suite green
+O   DETECTED  adapter ignores DismissPopupGrab on CameraPan acquisition :: pf_ob4_interaction_acquisition_dismisses_popup_grab
+P   MISSED    rule 1 visibility guard dropped (causing output used even if parent not visible on it) :: suite green
+Q   MISSED    old toplevel remains activated (Activated never unset) :: suite green
+R   MISSED    new toplevel never receives activation :: suite green
+S   DETECTED  keys dropped while zero outputs exist (K8 violated) :: k8_ob15_output_removal_under_held_keys
+T   MISSED    backend keyboard intake skips the InputPort check :: suite green
+U   MISSED    click-to-focus removed :: suite green
+V   MISSED    W-SM-14 workaround disabled by default :: suite green
+W   MISSED    unmap of the focused element keeps focus (no target loss on unmap) :: suite green
+X   DETECTED  focus_next walks backwards :: input::focus::tests::focus_transitions_and_successor_policy
+Y   DETECTED  ToplevelConfigure for the previous element omitted (core) :: input::focus::tests::focus_transitions_and_successor_policy
+Z   DETECTED  grab handler does not move keyboard focus into the popup :: pf6_nested_popup_grab_keeps_pointer_grab, pf7_client_owned_key_held_during_grab_core_focuses_w2_release
+AA  DETECTED  preemption only ungrabs (no kb/ptr unset) for every strategy :: pf1_grab_active_core_focuses_w2_ordered, pf2_grab_active_core_focuses_none_ordered, pf3_parent_destroyed_during_grab_successor_focused_ordered, pf4_popup_destroyed_in_flight_while_core_changes_focus_ordered, pf5_popup_destroyed_first_then_core_focuses_w2_ordered, pf6_nested_popup_grab_keeps_pointer_grab, pf7_client_owned_key_held_during_grab_core_focuses_w2_release
+AB  MISSED    K3 enforcement default off :: suite green
+AC  DETECTED  DismissPopupGrab emitted AFTER the pan state change is irrelevant; emitted for no target :: pf_ob4_interaction_acquisition_dismisses_popup_grab
+AD  MISSED    successor allowed to be the dead element itself (history not purged) :: suite green

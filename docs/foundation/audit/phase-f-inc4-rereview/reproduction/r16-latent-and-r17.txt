@@ -1,0 +1,3 @@
+R16 replayed on d5b7b95 (pre-correction):
+OLD R16 smithay_focus_alive=Some(false) client_active=None viol=["key 30 without active surface", "key 30 without active surface"]
+R17 (fds, history, keys, buttons, elements, ptr_grabbed, kb_grabbed) @10 / @150: [(10, 1, 0, 0, 1, false, false), (10, 1, 0, 0, 1, false, false)]; viol=600

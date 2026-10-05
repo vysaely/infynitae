@@ -1,0 +1,59 @@
+test atk01_plain_escape_reaches_the_focused_client ... 
+thread 'atk01_plain_escape_reaches_the_focused_client' (2665484) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:100:5:
+assertion `left == right` failed: Escape swallowed by compositor; kb_log=["wl_keyboard.repeat_info rate=25 delay=200", "toplevel_configure W1 activated=false", "toplevel_configure W2 activated=false", "toplevel_configure W1 activated=true", "wl_keyboard.enter W1 keys={}", "wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0"]
+  left: []
+ right: [(1, true), (1, false)]
+test atk02_repeat_press_of_compositor_owned_key_does_not_leak ... 
+thread 'atk02_repeat_press_of_compositor_owned_key_does_not_leak' (2665486) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:114:5:
+test atk03_release_follows_press_owner_after_modifier_change ... ok
+test atk04_release_without_press_is_not_forwarded ... 
+thread 'atk04_release_without_press_is_not_forwarded' (2665488) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:137:5:
+test atk05_focus_next_skips_unmapped_elements ... 
+thread 'atk05_focus_next_skips_unmapped_elements' (2665489) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:152:5:
+assertion `left != right` failed: focus_next focused UNMAPPED W2; client kb=Some("W2")
+  left: Some(ElementId(2))
+ right: Some(ElementId(2))
+test atk06_successor_is_never_unmapped ... 
+thread 'atk06_successor_is_never_unmapped' (2665490) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:166:5:
+assertion `left != right` failed: successor is UNMAPPED W2 (stale render-list member)
+  left: Some(ElementId(2))
+ right: Some(ElementId(2))
+test atk07_successor_without_history_is_not_fabricated ... 
+thread 'atk07_successor_without_history_is_not_fabricated' (2665491) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:177:5:
+assertion `left == right` failed: successor fabricated from z-order (never-focused W2)
+  left: Some(ElementId(2))
+ right: None
+test atk08_activated_tracks_active_element_focus ... ok
+test atk09_pan_acquisition_dismissal_emits_no_pointer_events ... 
+thread 'atk09_pan_acquisition_dismissal_emits_no_pointer_events' (2665493) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:220:5:
+test atk10_focus_change_with_grab_synthesizes_no_pointer_motion ... ATK-10 pointer wire after focus change: ["motion 50,50"]
+thread 'atk10_focus_change_with_grab_synthesizes_no_pointer_motion' (2665494) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:238:5:
+test atk11_refused_grab_dismisses_the_popup ... 
+thread 'atk11_refused_grab_dismisses_the_popup' (2665495) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:250:5:
+assertion `left == right` failed: refused grab left the popup alive (no popup_done)
+  left: []
+ right: ["Q"]
+test atk12_preemption_keeps_the_zero_output_grab ... 
+thread 'atk12_preemption_keeps_the_zero_output_grab' (2665496) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:266:5:
+test atk13_pan_modifier_comes_from_the_seat_xkb_state ... 
+thread 'atk13_pan_modifier_comes_from_the_seat_xkb_state' (2665497) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:285:5:
+test atk14_stale_popup_grab_does_not_kill_implicit_button_grab ... 
+thread 'atk14_stale_popup_grab_does_not_kill_implicit_button_grab' (2665498) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:306:5:
+assertion `left == right` failed: implicit client button grab removed by stale popup preemption
+  left: true
+ right: false
+test atk15_output_removal_keeps_popup_keyboard_route ... ATK-15 kb_log=["wl_keyboard.repeat_info rate=25 delay=200", "toplevel_configure W1 activated=false", "toplevel_configure W1 activated=true", "wl_keyboard.enter W1 keys={}", "wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0", "wl_keyboard.key 30 pressed", "wl_keyboard.key 30 released", "wl_keyboard.leave W1", "wl_keyboard.enter P keys={}", "wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0", "wl_keyboard.leave P", "wl_keyboard.enter W1 keys={}", "wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0"] dones=[] kbgrab=false
+thread 'atk15_output_removal_keeps_popup_keyboard_route' (2665499) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:322:5:
+assertion `left == right` failed: output removal changed keyboard routing
+  left: Some("W1")
+ right: Some("P")
+test atk16_obs1_nested_replace_observably_fails ... ATK-16 OBS-1: kb active=Some("W1") kb grabbed=false
+test atk17_neg2_pointer_first_observably_differs ... ATK-17 ordered=["popup_done P", "wl_keyboard.leave P", "wl_keyboard.enter W1 keys={}", "wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0"]
+test atk18_unmapped_parent_dismisses_its_popup_tree ... 
+thread 'atk18_unmapped_parent_dismisses_its_popup_tree' (2665502) panicked at crates/infynitae-backend-headless/tests/zz_review.rs:380:5:
+assertion `left == right` failed: popup of an unmapped parent not dismissed
+  left: []
+ right: ["Q"]
+test common::oracle::tests::rounding_helpers ... ok
+test res1_bounded_resources_over_inc4_cycles ... RES-1 fds after cycle 5 / 40: [4, 4]
+test result: FAILED. 6 passed; 14 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.39s

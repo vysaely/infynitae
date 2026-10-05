@@ -1,0 +1,19 @@
+verify-test-efficacy — seeded behavioural defects (INC-1, INC1-F06/F07 corrective, INC-2, INC-3, INC-4)
+  ok    DETECTED  INC-4 K1: compositor press forwarded to client instead of consumed
+  ok    DETECTED  INC-4 K3 / AB: modifier key consumed instead of observe mode
+  ok    DETECTED  INC-4 F: release owner recomputed from current bindings instead of remembered
+  ok    DETECTED  INC-4 OB-4: interaction acquisition does not dismiss popup grabs
+  ok    DETECTED  INC-4 U: click-to-focus removed
+  ok    DETECTED  INC-4 P: rule 1 visibility guard dropped (causing output used even if parent not visible on it)
+  ok    DETECTED  INC-4 W: unmap of the focused element retains focus
+  ok    DETECTED  INC-4 INV-INPUT-10: popup grab not ungrabbed on focus change
+  ok    DETECTED  INC-4 I: ordered preemption swaps keyboard and pointer unset (pointer first)
+  ok    DETECTED  INC-4 J: keyboard grab survives focus transfer (kb.unset_grab omitted)
+  ok    DETECTED  INC-4 K: pointer popup grab survives focus transfer (ptr.unset_grab omitted)
+  ok    DETECTED  INC-4 Q: old toplevel remains activated (Activated never unset)
+  ok    DETECTED  INC-4 R: new toplevel never receives activation
+  ok    DETECTED  INC-4 V: W-SM-14 nested grab workaround disabled by default
+  ok    DETECTED  INC-4 N: popup root/focus check bypassed (grab on unfocused element accepted)
+  ok    DETECTED  INC-4 L: stale or foreign-sequence serial accepted (keyboard-grabbed refusal removed)
+  ok    DETECTED  INC-4 T: backend keyboard intake skips injection
+== verify-test-efficacy: PASS

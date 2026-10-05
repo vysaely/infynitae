@@ -1,0 +1,13 @@
+[1] Pins (OB-19 item 3, INV-ARCH-3)
+[2] Dependency DAG (INV-ARCH-1; C1.3, C1.4, C7.1, C7.4)
+[3] Probe-feature hygiene
+[4] Structural source rules (2g, 2h, mint location, wayland names, unsafe policy)
+[5] Compile probes (each built alone; exactly one error, in its own file, with the asserted diagnostic)
+  ok    p22_mutate_key_ownership: [E0599] no method named `key_ownership_mut` found for mutable reference `&mut Core` in the current scope (enforcement/probes/src/lib.rs:168)
+  ok    p23_forge_element_id: [E0624] associated function `new` is private (enforcement/probes/src/lib.rs:174)
+  ok    p24_set_focus_without_port: [E0061] this method takes 2 arguments but 1 argument was supplied (enforcement/probes/src/lib.rs:180)
+[5b] Runtime 2i (OB-49): 1:1 binding holds; the sealed key-steal rule is caught
+[5c] INV-INPUT-3 (INC-3): KeepFocus holds; the bypass switch is caught; ports are bound
+[6] Seeded negative controls (temporary copies; each defect must be detected)
+[7] Deferred runtime validation (NOT tested here)
+== verify-architecture: PASS
