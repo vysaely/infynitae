@@ -120,6 +120,20 @@ const STAGE_WRITERS: [&str; 6] = [
     "destroy",
 ];
 
+/// Smithay pointer delivery (INC-3, C4.2): called only by the adapter's `pointer` module, which
+/// applies Core's pointer effects. Anything else calling them would route input around Core
+/// (INV-INPUT-1/3/4).
+const POINTER_DELIVERY: [&str; 8] = [
+    "motion",
+    "relative_motion",
+    "button",
+    "axis",
+    "frame",
+    "set_grab",
+    "unset_grab",
+    "get_pointer",
+];
+
 const UNSAFE_INVENTORY: &str = "docs/foundation/UNSAFE_INVENTORY.md";
 
 struct SourceFile {
@@ -174,6 +188,8 @@ fn main() -> ExitCode {
         check_wayland_geometry(wayland, &mut report);
     }
     check_rejected_apis(&crates, &mut report);
+    check_effects_only_from_core(&crates, &mut report);
+    check_pointer_delivery(&crates, &mut report);
     check_unsafe(&root, &crates, &mut report);
 
     let mut failed = false;
@@ -917,6 +933,163 @@ fn check_rejected_apis(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report)
                 .filter(|i| REJECTED_SMITHAY.iter().any(|x| *i == x))
             {
                 r.fail(R, format!("{}: names `{i}` (OB-26)", at(&f.path, i.span())));
+            }
+        }
+    }
+}
+
+/// Core's `Effect` values are decisions: product crates other than core may match them but never
+/// construct them (INC-3: a fabricated pointer effect would deliver input Core did not route).
+/// Renaming or glob/variant imports of `Effect` are refused (fail closed); macro bodies are
+/// scanned for `Effect ::`.
+fn check_effects_only_from_core(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report) {
+    const R: &str = "effects-only-from-core";
+    r.rule(R);
+    struct V<'a> {
+        file: &'a Path,
+        in_pat: usize,
+        found: Vec<String>,
+    }
+    fn effect_variant(p: &syn::Path) -> bool {
+        let segs: Vec<String> = p.segments.iter().map(|s| s.ident.to_string()).collect();
+        segs.windows(2).any(|w| w[0] == "Effect")
+    }
+    impl<'ast> Visit<'ast> for V<'_> {
+        fn visit_pat(&mut self, p: &'ast syn::Pat) {
+            self.in_pat += 1;
+            syn::visit::visit_pat(self, p);
+            self.in_pat -= 1;
+        }
+        fn visit_expr_path(&mut self, e: &'ast syn::ExprPath) {
+            if self.in_pat == 0 && effect_variant(&e.path) {
+                self.found
+                    .push(at(self.file, e.path.segments[0].ident.span()));
+            }
+            syn::visit::visit_expr_path(self, e);
+        }
+        fn visit_expr_struct(&mut self, e: &'ast syn::ExprStruct) {
+            if effect_variant(&e.path) {
+                self.found
+                    .push(at(self.file, e.path.segments[0].ident.span()));
+            }
+            syn::visit::visit_expr_struct(self, e);
+        }
+        fn visit_use_tree(&mut self, u: &'ast syn::UseTree) {
+            match u {
+                syn::UseTree::Path(p) if p.ident == "Effect" => {
+                    self.found.push(at(self.file, p.ident.span()))
+                }
+                syn::UseTree::Rename(r) if r.ident == "Effect" => {
+                    self.found.push(at(self.file, r.ident.span()))
+                }
+                _ => {}
+            }
+            syn::visit::visit_use_tree(self, u);
+        }
+        fn visit_macro(&mut self, m: &'ast syn::Macro) {
+            fn scan(ts: TokenStream, v: &mut V<'_>) {
+                let toks: Vec<TokenTree> = ts.into_iter().collect();
+                for (k, t) in toks.iter().enumerate() {
+                    match t {
+                        TokenTree::Group(g) => scan(g.stream(), v),
+                        TokenTree::Ident(i)
+                            if i == "Effect"
+                                && matches!(toks.get(k + 1), Some(TokenTree::Punct(p)) if p.as_char() == ':') =>
+                        {
+                            v.found.push(at(v.file, i.span()))
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            scan(m.tokens.clone(), self);
+            syn::visit::visit_macro(self, m);
+        }
+    }
+    for (name, _, _) in CRATES[..PRODUCT_CRATES]
+        .iter()
+        .filter(|(n, _, _)| *n != "infynitae-core")
+    {
+        let Some(files) = crates.get(name) else {
+            continue;
+        };
+        for f in files {
+            let mut v = V {
+                file: &f.path,
+                in_pat: 0,
+                found: Vec::new(),
+            };
+            v.visit_file(&f.ast);
+            for loc in v.found {
+                r.fail(
+                    R,
+                    format!("{loc}: constructs or re-imports a core `Effect` outside core"),
+                );
+            }
+        }
+    }
+}
+
+/// Smithay pointer delivery only in `infynitae-wayland`'s `pointer` module (INC-3). Method calls,
+/// qualified calls and macro tokens are all checked.
+fn check_pointer_delivery(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report) {
+    const R: &str = "smithay-pointer-only-in-adapter-pointer";
+    r.rule(R);
+    struct V<'a> {
+        file: &'a Path,
+        found: Vec<(String, String)>,
+    }
+    impl<'ast> Visit<'ast> for V<'_> {
+        fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
+            if POINTER_DELIVERY.iter().any(|n| m.method == n) {
+                self.found
+                    .push((m.method.to_string(), at(self.file, m.method.span())));
+            }
+            syn::visit::visit_expr_method_call(self, m);
+        }
+        fn visit_expr_path(&mut self, e: &'ast syn::ExprPath) {
+            if let Some(last) = e.path.segments.last()
+                && e.path.segments.len() >= 2
+                && POINTER_DELIVERY.iter().any(|n| last.ident == n)
+            {
+                self.found
+                    .push((last.ident.to_string(), at(self.file, last.ident.span())));
+            }
+            syn::visit::visit_expr_path(self, e);
+        }
+        fn visit_macro(&mut self, m: &'ast syn::Macro) {
+            let mut ids = Vec::new();
+            idents(m.tokens.clone(), &mut ids);
+            for i in ids
+                .iter()
+                .filter(|i| POINTER_DELIVERY.iter().any(|n| *i == n))
+            {
+                self.found.push((i.to_string(), at(self.file, i.span())));
+            }
+            syn::visit::visit_macro(self, m);
+        }
+    }
+    for (name, _, _) in CRATES[..PRODUCT_CRATES]
+        .iter()
+        .filter(|(n, _, _)| *n != "infynitae-core")
+    {
+        let Some(files) = crates.get(name) else {
+            continue;
+        };
+        for f in files {
+            if *name == "infynitae-wayland" && f.module == ["pointer"] {
+                continue;
+            }
+            let mut v = V {
+                file: &f.path,
+                found: Vec::new(),
+            };
+            v.visit_file(&f.ast);
+            for (n, loc) in v.found {
+                r.fail(
+                    R,
+                    format!("{loc}: calls `{n}` outside infynitae-wayland::pointer (C4.2)"),
+                );
             }
         }
     }

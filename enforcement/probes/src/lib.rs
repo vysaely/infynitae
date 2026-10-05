@@ -126,3 +126,38 @@ pub fn handler() {
 pub fn handler() {
     require_clone::<infynitae_core::authority::Authorized>();
 }
+
+/// p18 (INC-3, attack O): hit-test with a Canvas position where an OutputLogical point is required.
+/// Expected E0308 (coordinate domains are distinct types, INV-COORD-4).
+#[cfg(feature = "p18_hit_test_with_canvas_position")]
+pub fn handler(core: &mut Core, o: OutputId) {
+    let _ = core.hit_test(o, CanvasPos { x: 0, y: 0 });
+}
+
+/// p19 (INC-3, attack O): a Canvas value submitted as a device delta. Expected E0308.
+#[cfg(feature = "p19_canvas_value_as_device_delta")]
+pub fn handler(core: &mut Core, port: &mut InputPort) {
+    let _ = core.physical_input(
+        port,
+        PhysicalEvent::PointerMotion {
+            delta: CanvasPos { x: 1, y: 1 },
+            delta_unaccel: (1.0, 1.0),
+            time_us: 0,
+        },
+    );
+}
+
+/// p20 (INC-3): pan a camera from outside core. Expected E0624 (`pan` is crate-private and
+/// consumes a proof only `entry` can mint).
+#[cfg(feature = "p20_pan_from_outside_core")]
+pub fn handler(core: &mut Core, proof: infynitae_core::authority::Authorized) {
+    core.cameras()
+        .pan(proof, 0, CanvasPos { x: 0, y: 0 }, (1.0, 0.0));
+}
+
+/// p21 (INC-3): place the pointer from outside core (a second pointer writer). Expected E0603
+/// (`locate` is crate-private; OBJ-20 has one writer).
+#[cfg(feature = "p21_place_pointer_from_outside_core")]
+pub fn handler(_core: &mut Core) {
+    let _ = infynitae_core::pointer::locate;
+}

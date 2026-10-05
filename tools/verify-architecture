@@ -98,6 +98,14 @@ PROBES_INVENTORY = [
     ("p4_call_navigation_internals", "B protocol-side paths", PROBES, "p4_call_navigation_internals",
      ("code", "E0603", "enum `Authority` is private"), "enforcement/probes/src/lib.rs"),
     ("p5_control_compiles", "B positive control", PROBES, "p5_control_compiles", ("compiles",), None),
+    ("p18_hit_test_with_canvas_position", "O coordinate domains (INC-3)", PROBES, "p18_hit_test_with_canvas_position",
+     ("code", "E0308", "mismatched types"), "enforcement/probes/src/lib.rs"),
+    ("p19_canvas_value_as_device_delta", "O coordinate domains (INC-3)", PROBES, "p19_canvas_value_as_device_delta",
+     ("code", "E0308", "mismatched types"), "enforcement/probes/src/lib.rs"),
+    ("p20_pan_from_outside_core", "B protocol-side paths (INC-3)", PROBES, "p20_pan_from_outside_core",
+     ("code", "E0624", "pan"), "enforcement/probes/src/lib.rs"),
+    ("p21_place_pointer_from_outside_core", "B protocol-side paths (INC-3)", PROBES, "p21_place_pointer_from_outside_core",
+     ("code", "E0603", "locate"), "enforcement/probes/src/lib.rs"),
     ("probe_store_port_in_state", "C protocol state", WAYLAND, "probe_store_port_in_state",
      ("code", "E0277", "cannot be sent between threads safely"), "crates/infynitae-wayland/src/lib.rs"),
     ("probe_protocol_refits_camera", "D 1R re-fit", CORE, "probe_protocol_refits_camera",
@@ -144,9 +152,9 @@ PROBES_INVENTORY = [
 
 # Runtime validation that cannot exist before its increment (owner ruling, INC-0).
 DEFERRED = [
-    ("ports/token bound to their Core for physical_input, shell_command",
-     "input and shell vocabularies have no variants yet, so these entries cannot be called",
-     "INC-3 (physical_input), INC-11 (shell_command)"),
+    ("port bound to its Core for shell_command",
+     "the shell vocabulary has no variants yet, so the entry cannot be called",
+     "INC-11 (shell_command)"),
 ]
 
 # Runtime 2i (OB-49, transferred from OB-19 by Decision D): the production 1:1 collision tests pass
@@ -155,6 +163,18 @@ DEFERRED = [
 RUNTIME_2I = [
     ("T0 core", ["-p", CORE, "--lib"], CORE, "concurrent_output_key_collision_keeps_one_to_one"),
     ("T1 lockstep", ["-p", HEADLESS, "--test", "t1_outputs"], HEADLESS, "same_key_outputs_keep_one_to_one"),
+]
+
+# INV-INPUT-3 bypass switch (TST-05 negative control, INC-3): the KeepFocus pan tests pass, and fail
+# with "INV-INPUT-3 violated" when feature probe_pan_motion_bypass delivers pan motion to the client.
+RUNTIME_INPUT3 = [
+    ("T0 core", ["-p", CORE, "--lib"], "a_pan_emits_no_client_effect_and_ends_with_one_true_position"),
+    ("T1 lockstep", ["-p", HEADLESS, "--test", "t1_input"], "x8_c1_keepfocus_pan_then_true_position"),
+]
+
+# Runtime port binding (C1.5; was DEFERRED until INC-3): physical_input refuses a foreign InputPort.
+RUNTIME_PORTS = [
+    ("T1 lockstep", ["-p", HEADLESS, "--test", "t1_input"], "intake_rejects_foreign_ports_and_non_finite_values"),
 ]
 
 
@@ -493,6 +513,28 @@ def check_runtime_2i(r):
                 f"{name}: sealed key-steal rule NOT caught (exit {code}):\n{text[-1500:]}")
 
 
+def check_runtime_input3(r):
+    print("\n[5c] INV-INPUT-3 (INC-3): KeepFocus holds; the bypass switch is caught; ports are bound")
+    env = {"CARGO_TARGET_DIR": PROBE_TARGET}
+    for name, args, test in RUNTIME_INPUT3:
+        code, out, err = run(["cargo", "test", "--locked", *args, test], env=env)
+        text = out + err
+        passed = code == 0 and "test result: ok. 1 passed" in text
+        r.check(passed, f"{name}: {test} passes", f"{name}: {test} did not pass:\n{text[-1500:]}")
+        code, out, err = run(["cargo", "test", "--locked", *args, "--features", "probe_pan_motion_bypass", test],
+                             env=env)
+        text = out + err
+        caught = code != 0 and "INV-INPUT-3 violated" in text and "1 failed" in text
+        r.check(caught, f"{name}: the bypass switch fails it with \"INV-INPUT-3 violated\"",
+                f"{name}: INV-INPUT-3 bypass NOT caught (exit {code}):\n{text[-1500:]}")
+    for name, args, test in RUNTIME_PORTS:
+        code, out, err = run(["cargo", "test", "--locked", *args, test], env=env)
+        text = out + err
+        passed = code == 0 and "test result: ok. 1 passed" in text
+        r.check(passed, f"{name}: {test} passes (physical_input port binding)",
+                f"{name}: {test} did not pass:\n{text[-1500:]}")
+
+
 # ------------------------------------------------------------------ [6] seeded negative controls
 
 COPY_ITEMS = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates", "enforcement"]
@@ -548,6 +590,10 @@ CORE_ENTRY = "crates/infynitae-core/src/entry.rs"
 RECONF_ANCHOR = "        let mut fx = vec![Effect::OutputChanged(output)];\n"
 
 WAYLAND_LIB = "crates/infynitae-wayland/src/lib.rs"
+WAYLAND_OUTPUTS = "crates/infynitae-wayland/src/outputs.rs"
+HEADLESS_LIB = "crates/infynitae-backend-headless/src/lib.rs"
+# a line inside Core::button_press only (INC-3 mint-location seed)
+PRESS_ANCHOR = "            return Vec::new(); // a repeated press keeps its first owner\n"
 
 SOURCE_SEEDS = [
     ("INC-1: adapter imports Smithay Space (W-SM-1)", "smithay-rejected-apis",
@@ -607,6 +653,27 @@ SOURCE_SEEDS = [
      CORE_LIB, append("\nmod rogue {\n    fn f() {\n        let _ = crate::authority::Authorized::mint();\n    }\n}\n")),
     ("mint made crate-visible", "mint-location",
      CORE_ENTRY, replace("pub(in crate::entry) fn mint()", "pub(crate) fn mint()")),
+    ("INC-3: adapter fabricates a pointer effect", "effects-only-from-core",
+     WAYLAND_OUTPUTS, append("\nimpl WaylandState {\n    pub fn rogue_frame(&mut self) {\n"
+                             "        self.apply(&[Effect::PointerFrame]);\n    }\n}\n")),
+    ("INC-3: pointer effect built through a renamed import", "effects-only-from-core",
+     WAYLAND_OUTPUTS, append("\nuse infynitae_core::protocol::Effect as E;\nimpl WaylandState {\n"
+                             "    pub fn rogue_e(&mut self) {\n        self.apply(&[E::PointerZeroOutputEnd]);\n    }\n}\n")),
+    ("INC-3: backend fabricates a pointer effect inside a macro", "effects-only-from-core",
+     HEADLESS_LIB, append("\npub fn rogue(state: &mut WaylandState) {\n"
+                          "    state.apply(&vec![infynitae_core::protocol::Effect::PointerFrame]);\n}\n")),
+    ("INC-3: adapter drives the Smithay pointer outside the pointer module", "smithay-pointer-only-in-adapter-pointer",
+     WAYLAND_OUTPUTS, append("\nimpl WaylandState {\n    pub fn rogue_ptr(&mut self) {\n"
+                             "        if let Some(p) = self.seat().get_pointer() {\n            p.frame(self);\n        }\n    }\n}\n")),
+    ("INC-3: backend calls PointerHandle by a qualified path", "smithay-pointer-only-in-adapter-pointer",
+     HEADLESS_LIB, append("\npub fn rogue(state: &mut WaylandState, p: &smithay::input::pointer::PointerHandle<WaylandState>) {\n"
+                          "    smithay::input::pointer::PointerHandle::frame(p, state);\n}\n")),
+    ("INC-3: mint in a physical_input helper (button_press)", "mint-location",
+     CORE_ENTRY, replace(PRESS_ANCHOR, PRESS_ANCHOR + "        }\n        {\n            let _p = authority::Authorized::mint();\n")),
+    ("INC-3: input module pans a camera with its own proof", "mint-location",
+     "crates/infynitae-core/src/input/interaction.rs",
+     append("\nimpl crate::Core {\n    pub fn rogue_pan(&mut self) {\n        self.cameras.pan(crate::authority::Authorized::mint(), 0,"
+            " CanvasPos { x: 0, y: 0 }, (0.0, 0.0));\n    }\n}\n")),
     ("wayland names InputPort", "wayland-names-no-authority",
      "crates/infynitae-wayland/src/lib.rs", append("\n#[allow(unused_imports)]\nuse infynitae_core::InputPort;\n")),
     ("wayland names output_connected inside a macro", "wayland-names-no-authority",
@@ -745,6 +812,7 @@ def main():
         check_source_rules(binary, r)
         check_probes(r)
         check_runtime_2i(r)
+        check_runtime_input3(r)
         if skip_mutations:
             r.fail("seeded negative controls skipped (--skip-mutations): not a passing run")
         else:
