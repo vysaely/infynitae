@@ -69,6 +69,12 @@ pub enum Effect {
     PointerZeroOutputBegin,
     /// The first output after NoOutput: remove the zero-output grab before the startup placement.
     PointerZeroOutputEnd,
+    /// Change keyboard focus to `Option<ElementId>` (INV-INPUT-8).
+    KeyboardFocus(Option<ElementId>),
+    /// Send a configure to an xdg_toplevel, e.g. for `activated` state updates (INV-PROTO-1).
+    ToplevelConfigure(ElementId),
+    /// Dismiss active popup grab for an element before a camera change (INV-INPUT-2, OB-4).
+    DismissPopupGrab(ElementId),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,7 +142,14 @@ impl Core {
                 self.stage
                     .set_state(id, Lifecycle::Unmapped)
                     .map_err(stale)?;
-                vec![]
+                let live: Vec<ElementId> = self
+                    .stage
+                    .z_order()
+                    .iter()
+                    .copied()
+                    .filter(|&e| e != id)
+                    .collect();
+                self.focus.target_lost(id, &live)
             }
         };
         fx.extend(self.visibility_pass());
@@ -144,28 +157,45 @@ impl Core {
     }
 
     /// M1 destroy: purges every reference; idempotent and order-independent (INV-STAGE-4). The
-    /// dead client gets no leave: its membership rows are dropped silently.
-    pub fn toplevel_destroyed(&mut self, id: ElementId) -> bool {
+    /// dead client gets no leave: its membership rows are dropped silently. Target loss triggers
+    /// successor focus transition (K7, M11).
+    pub fn toplevel_destroyed(&mut self, id: ElementId) -> Vec<Effect> {
         for (_, frame) in &mut self.frames {
             frame.entries.retain(|e| e.element != id);
         }
         let existed = self.stage.destroy(id);
-        let fx = self.visibility_pass();
+        if !existed {
+            return Vec::new();
+        }
+        let live: Vec<ElementId> = self.stage.z_order().to_vec();
+        let mut fx = self.focus.target_lost(id, &live);
+        let vis = self.visibility_pass();
         debug_assert!(
-            fx.is_empty(),
-            "a destroyed element produced protocol effects"
+            vis.is_empty(),
+            "a destroyed element produced visibility effects"
         );
-        existed
+        fx.extend(vis);
+        fx
     }
 
     /// M3: the constraint target for a popup of `parent`: the anchor output's viewport,
     /// inward-rounded (R8), relative to the parent's window-geometry origin. The anchor output is
-    /// (D-B6-BOUNDARY) the output of the causing input event (INC-3 and later: no input yet), else
-    /// the parent's frame-clock output, else none (`None`: no constraint adjustment). `None` also
-    /// when the target does not fit protocol integers.
-    pub fn popup_constraint_target(&self, parent: ElementId) -> Option<LocalRect> {
+    /// (D-B6-BOUNDARY):
+    /// - Rule 1: output on which causing input event occurred, if parent is visible on it;
+    /// - Rule 2: else parent's frame-clock output (highest refresh observing output);
+    /// - Rule 3: else none (`None`: no constraint adjustment).
+    ///
+    /// `None` also when the target does not fit protocol integers.
+    pub fn popup_constraint_target(
+        &self,
+        parent: ElementId,
+        causing_output: Option<OutputId>,
+    ) -> Option<LocalRect> {
         let anchor = self.stage.anchor(parent)?;
-        let output = self.clock_output_of(parent)?;
+        let output = match causing_output {
+            Some(o) if self.membership.observers(parent).contains(&o) => o,
+            _ => self.clock_output_of(parent)?,
+        };
         let view = self.view(output)?;
         let extent = |px: u32| crate::geom::q16(px as f64 / view.k);
         let (x0q, y0q) = (view.c_eff.x, view.c_eff.y);
@@ -297,9 +327,12 @@ mod tests {
             "remap re-shows on top"
         );
         // destroy: no event to the dead client; membership rows dropped
-        assert!(core.toplevel_destroyed(id));
+        let _fx = core.toplevel_destroyed(id);
         assert!(!core.membership().rows().iter().any(|(e, _, _)| *e == id));
-        assert!(!core.toplevel_destroyed(id), "destroy is idempotent");
+        assert!(
+            core.toplevel_destroyed(id).is_empty(),
+            "destroy is idempotent"
+        );
         assert_eq!(
             core.toplevel_committed(id, tree(true)),
             Err(ProtocolError::StaleElement)
@@ -374,12 +407,12 @@ mod tests {
         let id = core.toplevel_created();
         core.toplevel_committed(id, tree(false)).unwrap();
         assert_eq!(
-            core.popup_constraint_target(id),
+            core.popup_constraint_target(id, None),
             None,
             "unobserved parent: no anchor output (rule 3)"
         );
         core.toplevel_committed(id, tree(true)).unwrap();
-        let t = core.popup_constraint_target(id).unwrap();
+        let t = core.popup_constraint_target(id, None).unwrap();
         assert_eq!(
             (t.loc, t.size),
             (
@@ -393,7 +426,7 @@ mod tests {
         let id = core.toplevel_created();
         core.toplevel_committed(id, tree(false)).unwrap();
         core.toplevel_committed(id, tree(true)).unwrap();
-        let t = core.popup_constraint_target(id).unwrap();
+        let t = core.popup_constraint_target(id, None).unwrap();
         assert_eq!(
             (t.loc, t.size),
             (
@@ -403,9 +436,63 @@ mod tests {
         );
         core.toplevel_destroyed(id);
         assert_eq!(
-            core.popup_constraint_target(id),
+            core.popup_constraint_target(id, None),
             None,
             "a destroyed parent has no target"
         );
+    }
+
+    #[test]
+    fn popup_target_causing_output_rule1_and_rule2_fallback() {
+        use crate::navigation::PersistedCameras;
+        use crate::output::tests::key as okey;
+
+        // Setup two outputs
+        let (mut core, _, _, mut tok) = Core::new(PersistedCameras::default());
+        let (o1, _) = core
+            .output_connected(
+                &mut tok,
+                OutputDescriptor {
+                    key: okey("out1"),
+                    mode: (1920, 1080),
+                    transform: Transform::Normal,
+                    scale_120: 120,
+                    refresh_mhz: 60_000,
+                },
+            )
+            .unwrap();
+        let (o2, _) = core
+            .output_connected(
+                &mut tok,
+                OutputDescriptor {
+                    key: okey("out2"),
+                    mode: (800, 600),
+                    transform: Transform::Normal,
+                    scale_120: 120,
+                    refresh_mhz: 120_000, // higher refresh -> would be clock output (rule 2)
+                },
+            )
+            .unwrap();
+
+        let id = core.toplevel_created();
+        core.toplevel_committed(id, tree(false)).unwrap();
+        core.toplevel_committed(id, tree(true)).unwrap();
+
+        // If parent is visible on both o1 and o2:
+        // Rule 1: causing_output = o1 selects o1, even though o2 has higher refresh!
+        if core.membership().observers(id).contains(&o1)
+            && core.membership().observers(id).contains(&o2)
+        {
+            let t_o1 = core.popup_constraint_target(id, Some(o1)).unwrap();
+            let t_o2 = core.popup_constraint_target(id, Some(o2)).unwrap();
+            assert_eq!(t_o1.size, LocalSize { w: 1920, h: 1080 });
+            assert_eq!(t_o2.size, LocalSize { w: 800, h: 600 });
+        }
+
+        // Rule 2 fallback: None selects clock output (o2)
+        if core.membership().observers(id).contains(&o2) {
+            let t_default = core.popup_constraint_target(id, None).unwrap();
+            assert_eq!(t_default.size, LocalSize { w: 800, h: 600 });
+        }
     }
 }

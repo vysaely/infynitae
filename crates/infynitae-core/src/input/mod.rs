@@ -5,13 +5,16 @@
 //! mutable access to either: `entry::physical_input` applies its decisions (INV-CAMERA-1).
 
 pub mod bindings;
+pub mod focus;
 pub mod interaction;
+pub mod keys;
 pub mod ownership;
 
 /// Core's input state. The pointer position is not here: it is OBJ-20 (`Core.pointer`).
 #[derive(Debug, Default)]
 pub(crate) struct InputState {
     pub(crate) ownership: ownership::Ownership,
+    pub(crate) key_ownership: ownership::Ownership,
     pub(crate) interaction: interaction::Interaction,
 }
 

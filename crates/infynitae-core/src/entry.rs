@@ -184,7 +184,7 @@ impl Core {
             return Vec::new(); // a repeated press keeps its first owner
         }
         // M22: any press during an interaction is owned by it; M10: NoOutput consumes presses
-        let PointerState::Located { output, .. } = self.pointer else {
+        let PointerState::Located { output, p } = self.pointer else {
             self.input.ownership.press(button, Owner::Compositor);
             return Vec::new();
         };
@@ -201,8 +201,8 @@ impl Core {
         if let (true, Some(camera), Some(start)) =
             (acquire, camera, camera.and_then(|c| self.cameras.center(c)))
         {
-            // M6 Idle → Panning: the press is consumed; KeepFocus (no event). Popup grabs would be
-            // dismissed here; none can exist before INC-4 (OB-4).
+            // M6 Idle → Panning: the press is consumed; KeepFocus (no event).
+            // OB-4: Dismiss active popup grabs before the camera change.
             self.input.interaction = Interaction::CameraPan {
                 output,
                 camera,
@@ -211,17 +211,27 @@ impl Core {
                 sum: (0.0, 0.0),
             };
             self.input.ownership.press(button, Owner::Compositor);
-            return Vec::new();
+            let mut fx = Vec::new();
+            if let Some(target) = self.focus.target() {
+                fx.push(Effect::DismissPopupGrab(target));
+            }
+            return fx;
         }
         self.input.ownership.press(button, Owner::Client);
-        vec![
-            Effect::PointerButton {
-                button,
-                pressed: true,
-                time_ms,
-            },
-            Effect::PointerFrame,
-        ]
+        let mut fx = Vec::new();
+        // Click-to-focus (INV-INPUT-8, M11): an explicit user action.
+        // If the click hits an element, that element gains ActiveElementFocus.
+        let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
+        if let Some(hit) = self.hit_test(output, pt) {
+            fx.extend(self.focus.set_focus(Some(hit.element)));
+        }
+        fx.push(Effect::PointerButton {
+            button,
+            pressed: true,
+            time_ms,
+        });
+        fx.push(Effect::PointerFrame);
+        fx
     }
 
     /// A release follows the press owner (INV-INPUT-1). The initiator's release ends the

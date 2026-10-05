@@ -57,6 +57,17 @@ pub(crate) fn global_delta(d: (f64, f64)) -> GlobalPoint {
     Point::from(d)
 }
 
+pub fn modifiers_from_smithay(
+    mods: &smithay::input::keyboard::ModifiersState,
+) -> infynitae_core::input::bindings::Modifiers {
+    infynitae_core::input::bindings::Modifiers {
+        logo: mods.logo,
+        ctrl: mods.ctrl,
+        alt: mods.alt,
+        shift: mods.shift,
+    }
+}
+
 pub fn projected_to_smithay_physical(l: RenderLocation) -> Point<f64, Physical> {
     Point::from((l.x, l.y))
 }

@@ -149,6 +149,20 @@ pub fn pointer_axis(
     inject(state, port, PhysicalEvent::PointerAxis { axis, time_us })
 }
 
+/// A physical key event on the virtual keyboard (evdev keycode and press/release).
+/// Submitted through `InputPort` (C1.5, INV-INPUT-1, K1–K3).
+pub fn keyboard_key(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    key: u32,
+    pressed: bool,
+    time_us: u64,
+) -> Result<(), EntryError> {
+    state.core().check_port(port)?;
+    state.keyboard_key(key, pressed, time_us);
+    Ok(())
+}
+
 /// A virtual vblank of `output` at `now` (monotonic): the backend produces the output's frame
 /// with the test renderer (recording its ProjectionFrame, so hit-testing reads what was shown,
 /// INV-HIT-1); then Core's frame clock decides which observed elements complete, and the adapter

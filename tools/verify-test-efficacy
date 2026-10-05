@@ -292,6 +292,28 @@ CONTROLS = [
     ("INC-3 M10 reconfiguration: no true-position event (stale frame routing)", f"{CORE}/entry.rs",
      "        if on_it && !self.input.interaction.active() {", "        if false && on_it {",
      "infynitae-backend-headless", ["--test", "t1_adversarial"], "l_no_stale_frame_after_reconfiguration"),
+
+    # ---- INC-4: keyboard ownership, ActiveElementFocus, popup routing (TST-07, TST-20, OB-15, OB-30, OB-4)
+    ("INC-4 K1: compositor press forwarded to client instead of consumed", f"{WAYLAND}/keyboard.rs",
+     "                Some(action) if !(mods_changed && self.k3_enforced) => {",
+     "                Some(action) if false => {",
+     "infynitae-backend-headless", ["--test", "t1_keyboard"], "k3_compositor_binding_super_b_consumed"),
+    ("INC-4 K3: modifier key consumed instead of observe mode", f"{WAYLAND}/keyboard.rs",
+     "                Some(action) if !(mods_changed && self.k3_enforced) => {",
+     "                Some(action) if true => {",
+     "infynitae-backend-headless", ["--test", "t1_keyboard"], "k8_binding_on_modifier_key_with_k3_observe_mode"),
+    ("INC-4 OB-4: interaction acquisition does not dismiss popup grabs", f"{CORE}/entry.rs",
+     "            if let Some(target) = self.focus.target() {\n                fx.push(Effect::DismissPopupGrab(target));\n            }",
+     "            if false {\n                if let Some(target) = self.focus.target() {\n                    fx.push(Effect::DismissPopupGrab(target));\n                }\n            }",
+     "infynitae-backend-headless", ["--test", "t1_popup_focus"], "pf_ob4_interaction_acquisition_dismisses_popup_grab"),
+    ("INC-4 INV-INPUT-10: popup grab not ungrabbed on focus change", f"{WAYLAND}/outputs.rs",
+     "                            g.ungrab(PopupUngrabStrategy::All);",
+     "                            let _ = &mut g;",
+     "infynitae-backend-headless", ["--test", "t1_popup_focus"], "pf1_grab_active_core_focuses_w2_ordered"),
+    ("INC-4 D-B6-BOUNDARY: causing output rule 1 not applied (fallback to parent)", f"{CORE}/protocol.rs",
+     "        let output = match causing_output {",
+     "        let output = match None {",
+     "infynitae-core", ["--lib"], "popup_target_causing_output_rule1_and_rule2_fallback"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

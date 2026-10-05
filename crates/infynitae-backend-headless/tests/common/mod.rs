@@ -24,6 +24,7 @@ use wayland_client::protocol::{
     wl_buffer::WlBuffer,
     wl_callback::{self, WlCallback},
     wl_compositor::WlCompositor,
+    wl_keyboard::{self, WlKeyboard},
     wl_output::{self, WlOutput},
     wl_pointer::{self, WlPointer},
     wl_region::WlRegion,
@@ -83,6 +84,19 @@ pub struct Surf {
     pub frame_driven: bool,
 }
 
+/// `wl_keyboard` logical state as defined by the protocol, plus invariant checkers.
+#[derive(Default, Debug, Clone)]
+pub struct KbLogical {
+    pub active: Option<String>,
+    pub keys: std::collections::BTreeSet<u32>,
+    pub depressed: u32,
+    pub latched: u32,
+    pub locked: u32,
+    pub group: u32,
+    pub awaiting_modifiers: bool,
+    pub violations: Vec<String>,
+}
+
 #[derive(Default)]
 pub struct Probe {
     globals: Vec<(u32, String, u32)>,
@@ -108,6 +122,7 @@ pub struct Probe {
     shm_pool: Option<(WlShmPool, File, usize)>,
     pub seat: Option<WlSeat>,
     pub pointer: Option<WlPointer>,
+    pub keyboard: Option<WlKeyboard>,
     pub relative: Option<ZwpRelativePointerV1>,
     /// Ordered wire log of the seat's pointer (the independent oracle for client-observed input):
     /// "enter S x,y", "leave S", "motion x,y", "button B pressed|released", "axis A v",
@@ -116,6 +131,15 @@ pub struct Probe {
     pub ptr: Vec<String>,
     /// Every xdg_surface.configure received, by surface label, in order.
     pub configures: Vec<&'static str>,
+    pub kb: KbLogical,
+    pub kb_log: Vec<String>,
+    pub key_events: Vec<(u32, bool)>,
+    pub repeat_info: Option<(i32, i32)>,
+    pub destroyed_active: Vec<String>,
+    pub auto_destroy_popups: bool,
+    pub popup_dones: Vec<&'static str>,
+    pub last_serial: u32,
+    pub toplevel_states: Vec<(usize, Vec<u32>)>,
 }
 
 /// Unique shm file names across the tests of this process.
@@ -268,6 +292,50 @@ impl Probe {
         idx
     }
 
+    /// Popup with an explicit grab: sends `xdg_popup.grab(seat, serial)` before initial commit.
+    pub fn popup_with_grab(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        label: &'static str,
+        parent: usize,
+        spec: PopupSpec,
+    ) -> usize {
+        let PopupSpec {
+            content,
+            shadow,
+            anchor_rect,
+            slide,
+        } = spec;
+        let size = (content.0 + 2 * shadow, content.1 + 2 * shadow);
+        let idx = self.new_xdg_surface(qh, label, size);
+        let pos: XdgPositioner = self
+            .wm_base
+            .as_ref()
+            .expect("xdg_wm_base")
+            .create_positioner(qh, ());
+        pos.set_size(content.0, content.1);
+        pos.set_anchor_rect(anchor_rect.0, anchor_rect.1, anchor_rect.2, anchor_rect.3);
+        pos.set_anchor(xdg_positioner::Anchor::TopLeft);
+        pos.set_gravity(xdg_positioner::Gravity::BottomRight);
+        if slide {
+            pos.set_constraint_adjustment(
+                xdg_positioner::ConstraintAdjustment::SlideX
+                    | xdg_positioner::ConstraintAdjustment::SlideY,
+            );
+        }
+        let xdg = self.surfaces[idx].xdg.clone().expect("xdg");
+        let parent_xdg = self.surfaces[parent].xdg.clone().expect("parent xdg");
+        let popup = xdg.get_popup(Some(&parent_xdg), &pos, qh, idx);
+        pos.destroy();
+        if shadow > 0 {
+            xdg.set_window_geometry(shadow, shadow, content.0, content.1);
+        }
+        popup.grab(self.seat.as_ref().expect("seat"), self.last_serial);
+        self.surfaces[idx].popup = Some(popup);
+        self.surfaces[idx].wl.commit();
+        idx
+    }
+
     /// A desynchronised subsurface with a buffer; `below` places it under its parent.
     pub fn subsurface(
         &mut self,
@@ -339,14 +407,37 @@ impl Probe {
     }
 
     pub fn destroy_toplevel(&mut self, idx: usize) {
-        let s = &self.surfaces[idx];
-        if let Some(t) = &s.toplevel {
+        let s = &mut self.surfaces[idx];
+        if let Some(t) = s.toplevel.take() {
             t.destroy();
         }
-        if let Some(x) = &s.xdg {
+        if let Some(x) = s.xdg.take() {
             x.destroy();
         }
         s.wl.destroy();
+        let label = s.label;
+        if self.kb.active.as_deref() == Some(label) {
+            self.kb.active = None;
+            self.destroyed_active.push(label.to_string());
+        }
+        self.kb_log.push(format!("destroy_toplevel {label}"));
+    }
+
+    pub fn destroy_popup(&mut self, idx: usize) {
+        let s = &mut self.surfaces[idx];
+        if let Some(p) = s.popup.take() {
+            p.destroy();
+        }
+        if let Some(x) = s.xdg.take() {
+            x.destroy();
+        }
+        s.wl.destroy();
+        let label = s.label;
+        if self.kb.active.as_deref() == Some(label) {
+            self.kb.active = None;
+            self.destroyed_active.push(label.to_string());
+        }
+        self.kb_log.push(format!("destroy_popup {label}"));
     }
 
     /// Label of a client surface (for the wire log).
@@ -599,13 +690,27 @@ impl Dispatch<XdgSurface, usize> for Probe {
 
 impl Dispatch<XdgToplevel, usize> for Probe {
     fn event(
-        _: &mut Self,
+        st: &mut Self,
         _: &XdgToplevel,
-        _: xdg_toplevel::Event,
-        _: &usize,
+        ev: xdg_toplevel::Event,
+        idx: &usize,
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
+        if let xdg_toplevel::Event::Configure { states, .. } = ev {
+            let label = st.surfaces[*idx].label;
+            let raw_states: Vec<u32> = states
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|c| u32::from_ne_bytes(*c))
+                .collect();
+            let is_activated = raw_states.contains(&4);
+            st.toplevel_states.push((*idx, raw_states));
+            st.kb_log.push(format!(
+                "toplevel_configure {label} activated={is_activated}"
+            ));
+        }
     }
 }
 
@@ -618,14 +723,24 @@ impl Dispatch<XdgPopup, usize> for Probe {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let xdg_popup::Event::Configure {
-            x,
-            y,
-            width,
-            height,
-        } = ev
-        {
-            st.surfaces[*idx].popup_configure = Some((x, y, width, height));
+        match ev {
+            xdg_popup::Event::Configure {
+                x,
+                y,
+                width,
+                height,
+            } => {
+                st.surfaces[*idx].popup_configure = Some((x, y, width, height));
+            }
+            xdg_popup::Event::PopupDone => {
+                let label = st.surfaces[*idx].label;
+                st.popup_dones.push(label);
+                st.kb_log.push(format!("popup_done {label}"));
+                if st.auto_destroy_popups && st.surfaces[*idx].popup.is_some() {
+                    st.destroy_popup(*idx);
+                }
+            }
+            _ => {}
         }
     }
 }
@@ -653,18 +768,28 @@ impl Dispatch<WlPointer, ()> for Probe {
     ) {
         let line = match ev {
             wl_pointer::Event::Enter {
+                serial,
                 surface,
                 surface_x,
                 surface_y,
                 ..
-            } => format!("enter {} {surface_x},{surface_y}", st.label_of(&surface)),
+            } => {
+                st.last_serial = serial;
+                format!("enter {} {surface_x},{surface_y}", st.label_of(&surface))
+            }
             wl_pointer::Event::Leave { surface, .. } => format!("leave {}", st.label_of(&surface)),
             wl_pointer::Event::Motion {
                 surface_x,
                 surface_y,
                 ..
             } => format!("motion {surface_x},{surface_y}"),
-            wl_pointer::Event::Button { button, state, .. } => {
+            wl_pointer::Event::Button {
+                serial,
+                button,
+                state,
+                ..
+            } => {
+                st.last_serial = serial;
                 let s = match state.into_result() {
                     Ok(wl_pointer::ButtonState::Pressed) => "pressed",
                     _ => "released",
@@ -679,6 +804,131 @@ impl Dispatch<WlPointer, ()> for Probe {
             _ => return,
         };
         st.ptr.push(line);
+    }
+}
+
+impl Dispatch<WlKeyboard, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &WlKeyboard,
+        ev: wl_keyboard::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match ev {
+            wl_keyboard::Event::Keymap { fd, .. } => {
+                // fd is an OwnedFd. Dropping it closes the shm file descriptor immediately.
+                drop(fd);
+            }
+            wl_keyboard::Event::Enter {
+                serial,
+                surface,
+                keys,
+            } => {
+                st.last_serial = serial;
+                let label = st.label_of(&surface);
+                if st.kb.active.is_some() {
+                    st.kb.violations.push(format!(
+                        "enter({label}) while already active on {:?}",
+                        st.kb.active
+                    ));
+                }
+                st.kb.active = Some(label.clone());
+                st.kb.keys = keys
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .map(|c| u32::from_ne_bytes(*c))
+                    .collect();
+                st.kb.awaiting_modifiers = true;
+                st.kb_log
+                    .push(format!("wl_keyboard.enter {label} keys={:?}", st.kb.keys));
+            }
+            wl_keyboard::Event::Leave { surface, .. } => {
+                let label = st.label_of(&surface);
+                if st.kb.active.is_none() && st.destroyed_active.contains(&label) {
+                    st.kb_log.push(format!(
+                        "wl_keyboard.leave {label} (in-flight after destroy)"
+                    ));
+                    return;
+                }
+                if st.kb.active.as_deref() != Some(label.as_str()) {
+                    st.kb
+                        .violations
+                        .push(format!("leave({label}) but active={:?}", st.kb.active));
+                }
+                if st.kb.awaiting_modifiers {
+                    st.kb
+                        .violations
+                        .push("leave before modifiers following enter".into());
+                }
+                st.kb.active = None;
+                st.kb.keys.clear();
+                st.kb.depressed = 0;
+                st.kb.latched = 0;
+                st.kb.locked = 0;
+                st.kb.awaiting_modifiers = false;
+                st.kb_log.push(format!("wl_keyboard.leave {label}"));
+            }
+            wl_keyboard::Event::Key {
+                serial, key, state, ..
+            } => {
+                st.last_serial = serial;
+                let pressed = matches!(
+                    state,
+                    wayland_client::WEnum::Value(wl_keyboard::KeyState::Pressed)
+                );
+                if st.kb.active.is_none() {
+                    st.kb
+                        .violations
+                        .push(format!("key {key} without active surface"));
+                }
+                if st.kb.awaiting_modifiers {
+                    st.kb
+                        .violations
+                        .push("key before modifiers following enter".into());
+                }
+                if pressed && !st.kb.keys.insert(key) {
+                    st.kb
+                        .violations
+                        .push(format!("pressed {key} already logically down"));
+                }
+                if !pressed && !st.kb.keys.remove(&key) {
+                    st.kb
+                        .violations
+                        .push(format!("released {key} not logically down"));
+                }
+                st.key_events.push((key, pressed));
+                st.kb_log.push(format!(
+                    "wl_keyboard.key {key} {}",
+                    if pressed { "pressed" } else { "released" }
+                ));
+            }
+            wl_keyboard::Event::Modifiers {
+                serial,
+                mods_depressed,
+                mods_latched,
+                mods_locked,
+                group,
+            } => {
+                st.last_serial = serial;
+                st.kb.awaiting_modifiers = false;
+                st.kb.depressed = mods_depressed;
+                st.kb.latched = mods_latched;
+                st.kb.locked = mods_locked;
+                st.kb.group = group;
+                st.kb_log.push(format!(
+                    "wl_keyboard.modifiers dep={mods_depressed:#x} lat={mods_latched:#x} lock={mods_locked:#x}"
+                ));
+            }
+            wl_keyboard::Event::RepeatInfo { rate, delay } => {
+                st.repeat_info = Some((rate, delay));
+                st.kb_log
+                    .push(format!("wl_keyboard.repeat_info rate={rate} delay={delay}"));
+            }
+            _ => {}
+        }
     }
 }
 
@@ -859,11 +1109,13 @@ impl Lockstep {
         let (n, v) = find("wl_seat");
         let seat: WlSeat = registry.bind(n, v.min(9), &self.qh, ());
         let pointer = seat.get_pointer(&self.qh, ());
+        let keyboard = seat.get_keyboard(&self.qh, ());
         let (n, _) = find("zwp_relative_pointer_manager_v1");
         let manager: ZwpRelativePointerManagerV1 = registry.bind(n, 1, &self.qh, ());
         self.probe.relative = Some(manager.get_relative_pointer(&pointer, &self.qh, ()));
         self.probe.seat = Some(seat);
         self.probe.pointer = Some(pointer);
+        self.probe.keyboard = Some(keyboard);
         self.pump();
     }
 

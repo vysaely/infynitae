@@ -10,11 +10,15 @@ use infynitae_core::output::OutputId;
 use infynitae_core::protocol::Effect;
 use infynitae_core::stage::ElementId;
 use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::desktop::PopupUngrabStrategy;
 use smithay::output::{Output, PhysicalProperties, Subpixel};
 use smithay::reexports::wayland_protocols::wp::presentation_time::server::wp_presentation_feedback;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::backend::GlobalId;
+use smithay::utils::SERIAL_COUNTER;
 use smithay::wayland::presentation::Refresh;
 
+use crate::keyboard::PreemptionStrategy;
 use crate::{WaylandState, convert};
 
 /// The adapter's handles for one connected output.
@@ -33,6 +37,58 @@ impl WaylandState {
                 Effect::InitialConfigure(id) => {
                     if let Some(t) = self.window(id).and_then(|w| w.toplevel()) {
                         t.send_configure();
+                    }
+                }
+                Effect::ToplevelConfigure(id) => {
+                    if let Some(t) = self.window(id).and_then(|w| w.toplevel()) {
+                        let activated = self.core.focus().target() == Some(id);
+                        t.with_pending_state(|s| {
+                            if activated {
+                                s.states.set(xdg_toplevel::State::Activated);
+                            } else {
+                                s.states.unset(xdg_toplevel::State::Activated);
+                            }
+                        });
+                        t.send_configure();
+                    }
+                }
+                Effect::KeyboardFocus(target) => {
+                    let serial = SERIAL_COUNTER.next_serial();
+                    let target_surface = target.and_then(|id| {
+                        self.window(id)
+                            .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()))
+                    });
+                    let kb = self.keyboard_handle();
+                    if let Some(mut g) = self.popup_grab.take() {
+                        if self.ordered_preemption_strategy == PreemptionStrategy::Naive {
+                            // NEG-1: naive set_focus without ungrabbing popup
+                            self.popup_grab = Some(g);
+                        } else {
+                            g.ungrab(PopupUngrabStrategy::All);
+                            if self.ordered_preemption_strategy == PreemptionStrategy::PointerFirst
+                            {
+                                // NEG-2: pointer-first unset order (W-SM-15 violation)
+                                self.unset_pointer_grab(serial);
+                                self.unset_keyboard_grab(&kb);
+                            } else {
+                                // Canonical ORDERED (INV-INPUT-10):
+                                // 1. PopupGrab::ungrab(All) (already done above)
+                                // 2. keyboard.unset_grab
+                                self.unset_keyboard_grab(&kb);
+                                // 3. pointer.unset_grab
+                                self.unset_pointer_grab(serial);
+                            }
+                        }
+                    }
+                    kb.set_focus(self, target_surface, serial);
+                }
+                Effect::DismissPopupGrab(_) => {
+                    let serial = SERIAL_COUNTER.next_serial();
+                    if let Some(mut g) = self.popup_grab.take() {
+                        g.ungrab(PopupUngrabStrategy::All);
+                        let kb = self.keyboard_handle();
+                        self.unset_keyboard_grab(&kb);
+                        self.unset_pointer_grab(serial);
                     }
                 }
                 Effect::OutputAdded(id) => self.output_added(id),

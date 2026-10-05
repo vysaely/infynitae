@@ -17,10 +17,13 @@
 
 pub mod convert;
 mod handlers;
+mod keyboard;
 mod outputs;
 mod pointer;
 pub mod registry;
 mod snapshot;
+
+pub use keyboard::PreemptionStrategy;
 
 use infynitae_core::Core;
 use infynitae_core::stage::ElementId;
@@ -78,8 +81,12 @@ pub struct WaylandState {
     shm: ShmState,
     popups: PopupManager,
     seats: SeatState<WaylandState>,
-    /// The single seat, with a pointer (INC-3); no keyboard before INC-4.
+    /// The single seat, with pointer and keyboard (INC-4).
     seat: Seat<WaylandState>,
+    pub(crate) popup_grab: Option<smithay::desktop::PopupGrab<WaylandState>>,
+    pub(crate) k3_enforced: bool,
+    pub(crate) nested_grab_keep_pointer: bool,
+    pub(crate) ordered_preemption_strategy: keyboard::PreemptionStrategy,
     #[expect(
         dead_code,
         reason = "owns the zwp_relative_pointer_manager_v1 global for the state's lifetime"
@@ -87,6 +94,7 @@ pub struct WaylandState {
     relative_pointer: RelativePointerManagerState,
     registry: SurfaceRegistry,
     elements: Vec<ElementHandle>,
+    // probe builds only: the Send assertion must be the one and only error
     #[cfg(feature = "probe_store_port_in_state")]
     leaked_port: infynitae_core::InputPort,
     #[cfg(feature = "probe_store_output_token_in_state")]
@@ -101,12 +109,14 @@ const _: fn() = || {
 
 impl WaylandState {
     /// Creates the globals (`wl_compositor` v6 and `wl_subcompositor`, `wl_shm`, `xdg_wm_base`,
-    /// `zxdg_output_manager_v1`, `wp_presentation`, `wl_seat` with a pointer,
+    /// `zxdg_output_manager_v1`, `wp_presentation`, `wl_seat` with pointer and keyboard,
     /// `zwp_relative_pointer_manager_v1`). Output globals follow Core's effects.
     pub fn new(display: &DisplayHandle, core: Core) -> Self {
         let mut seats = SeatState::new();
         let mut seat = seats.new_wl_seat(display, "seat0");
         seat.add_pointer();
+        seat.add_keyboard(Default::default(), 200, 25)
+            .expect("the seat has a keyboard");
         WaylandState {
             core,
             dh: display.clone(),
@@ -119,6 +129,10 @@ impl WaylandState {
             popups: PopupManager::default(),
             seats,
             seat,
+            popup_grab: None,
+            k3_enforced: true,
+            nested_grab_keep_pointer: true,
+            ordered_preemption_strategy: keyboard::PreemptionStrategy::Ordered,
             relative_pointer: RelativePointerManagerState::new::<Self>(display),
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),

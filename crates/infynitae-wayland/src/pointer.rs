@@ -213,6 +213,51 @@ impl WaylandState {
     pub fn seat(&self) -> &Seat<WaylandState> {
         &self.seat
     }
+
+    pub(crate) fn set_popup_pointer_grab(
+        &mut self,
+        grab: &smithay::desktop::PopupGrab<WaylandState>,
+        serial: smithay::utils::Serial,
+    ) {
+        let ptr = self.pointer_handle();
+        ptr.set_grab(
+            self,
+            smithay::desktop::PopupPointerGrab::new(grab),
+            serial,
+            smithay::input::pointer::Focus::Keep,
+        );
+    }
+
+    pub(crate) fn unset_pointer_grab(&mut self, serial: smithay::utils::Serial) {
+        let ptr = self.pointer_handle();
+        ptr.unset_grab(self, serial, 0);
+    }
+
+    pub(crate) fn is_pointer_grabbed(&self) -> bool {
+        let ptr = self.pointer_handle();
+        ptr.is_grabbed()
+    }
+
+    pub(crate) fn pointer_has_grab(&self, serial: smithay::utils::Serial) -> bool {
+        let ptr = self.pointer_handle();
+        ptr.has_grab(serial)
+    }
+
+    pub(crate) fn set_keyboard_grab(
+        &mut self,
+        kb: &smithay::input::keyboard::KeyboardHandle<WaylandState>,
+        grab: smithay::desktop::PopupKeyboardGrab<WaylandState>,
+        serial: smithay::utils::Serial,
+    ) {
+        kb.set_grab(self, grab, serial);
+    }
+
+    pub(crate) fn unset_keyboard_grab(
+        &mut self,
+        kb: &smithay::input::keyboard::KeyboardHandle<WaylandState>,
+    ) {
+        kb.unset_grab(self);
+    }
 }
 
 fn axis_frame(axis: Axis, time_ms: u32) -> AxisFrame {

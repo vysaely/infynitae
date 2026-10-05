@@ -11,6 +11,10 @@ use crate::snapshot::SurfaceTree;
 pub struct ElementId(NonZeroU64);
 
 impl ElementId {
+    pub const fn new(id: NonZeroU64) -> Self {
+        ElementId(id)
+    }
+
     pub fn get(self) -> NonZeroU64 {
         self.0
     }

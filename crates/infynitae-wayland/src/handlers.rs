@@ -2,7 +2,9 @@
 //! protocol actions. Handlers never decide placement, order or camera state.
 
 use smithay::backend::renderer::utils::{RendererSurfaceStateUserData, on_commit_buffer_handler};
-use smithay::desktop::{PopupKind, Window, find_popup_root_surface};
+use smithay::desktop::{
+    PopupKeyboardGrab, PopupKind, PopupUngrabStrategy, Window, find_popup_root_surface,
+};
 use smithay::input::{SeatHandler, SeatState};
 use smithay::reexports::wayland_server::Client;
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_seat, wl_surface::WlSurface};
@@ -64,7 +66,7 @@ impl WaylandState {
         let target = surface
             .get_parent_surface()
             .and_then(|parent| self.element_index_by_root(&parent))
-            .and_then(|i| self.core.popup_constraint_target(self.elements[i].id));
+            .and_then(|i| self.core.popup_constraint_target(self.elements[i].id, None));
         let geometry = match target {
             Some(t) => positioner.get_unconstrained_geometry(convert::parent_geometry_rect(t)),
             None => positioner.get_geometry(),
@@ -171,7 +173,8 @@ impl XdgShellHandler for WaylandState {
         self.elements
             .retain(|e| e.window.toplevel() != Some(&surface));
         for id in gone {
-            self.core.toplevel_destroyed(id);
+            let effects = self.core.toplevel_destroyed(id);
+            self.apply(&effects);
         }
     }
 
@@ -190,9 +193,45 @@ impl XdgShellHandler for WaylandState {
         surface.send_repositioned(token);
     }
 
-    /// Popup grabs are INC-4 (keyboard focus, popup routing): not honoured before it, so no
-    /// popup grab exists when an interaction is acquired (OB-4 acquisition part).
-    fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
+    /// Popup grabs (INC-4, M3, INV-INPUT-10).
+    /// Precondition W-SM-7: root surface must exist and be an element root, else grab_popup asserts.
+    /// Focus precondition: root must match the element with ActiveElementFocus.
+    fn grab(&mut self, surface: PopupSurface, _seat: wl_seat::WlSeat, serial: Serial) {
+        let kind = PopupKind::Xdg(surface);
+        let Ok(root) = find_popup_root_surface(&kind) else {
+            return;
+        };
+        let Some(elem_idx) = self.element_index_by_root(&root) else {
+            return;
+        };
+        let elem_id = self.elements[elem_idx].id;
+        if self.core.focus().target() != Some(elem_id) {
+            return;
+        }
+        let seat = self.seat.clone();
+        if let Ok(mut grab) = self.popups.grab_popup(root, kind, &seat, serial) {
+            let kb = seat.get_keyboard().unwrap();
+            if kb.is_grabbed()
+                && !(kb.has_grab(serial) || kb.has_grab(grab.previous_serial().unwrap_or(serial)))
+            {
+                grab.ungrab(PopupUngrabStrategy::All);
+                return;
+            }
+            kb.set_focus(self, grab.current_grab(), serial);
+            self.set_keyboard_grab(&kb, PopupKeyboardGrab::new(&grab), serial);
+            let nested = grab.previous_serial().is_some();
+            let ptr_grabbed = self.is_pointer_grabbed();
+            if nested && self.nested_grab_keep_pointer && ptr_grabbed {
+                // W-SM-14: Keep existing pointer grab for nested popup
+            } else if !(ptr_grabbed
+                && !(self.pointer_has_grab(serial)
+                    || self.pointer_has_grab(grab.previous_serial().unwrap_or(serial))))
+            {
+                self.set_popup_pointer_grab(&grab, serial);
+            }
+            self.popup_grab = Some(grab);
+        }
+    }
 }
 
 impl SeatHandler for WaylandState {

@@ -126,6 +126,8 @@ pub struct Core {
     pointer: pointer::PointerState,
     /// OBJ-25 and OBJ-26.
     input: input::InputState,
+    /// OBJ-22: ActiveElementFocus.
+    focus: input::focus::FocusModel,
     /// OBJ-09: read only by `output_connected`.
     persisted: navigation::PersistedCameras,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
@@ -154,6 +156,7 @@ impl Core {
                 membership: visibility::MembershipTable::default(),
                 pointer: pointer::PointerState::NoOutput,
                 input: input::InputState::default(),
+                focus: input::focus::FocusModel::default(),
                 persisted,
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
@@ -205,6 +208,52 @@ impl Core {
     /// The button ownership table (OBJ-25).
     pub fn buttons(&self) -> &input::ownership::Ownership {
         &self.input.ownership
+    }
+
+    /// The key ownership table (OBJ-25).
+    pub fn keys(&self) -> &input::ownership::Ownership {
+        &self.input.key_ownership
+    }
+
+    pub fn key_ownership(&self) -> &input::ownership::Ownership {
+        &self.input.key_ownership
+    }
+
+    pub fn key_ownership_mut(&mut self) -> &mut input::ownership::Ownership {
+        &mut self.input.key_ownership
+    }
+
+    /// Read access to the keyboard focus model (OBJ-22).
+    pub fn focus(&self) -> &input::focus::FocusModel {
+        &self.focus
+    }
+
+    /// Sets keyboard focus directly via an explicit action (INV-INPUT-8).
+    pub fn set_focus(&mut self, target: Option<stage::ElementId>) -> Vec<protocol::Effect> {
+        self.focus.set_focus(target)
+    }
+
+    /// FocusNext binding (Super+Enter): cycles focus to next live element in stage order.
+    pub fn focus_next(&mut self) -> Vec<protocol::Effect> {
+        let live: Vec<stage::ElementId> = self.stage.z_order().to_vec();
+        self.focus.focus_next(&live)
+    }
+
+    /// Resolves an evdev keycode and modifier snapshot against bindings.
+    pub fn resolve_key_binding(
+        &self,
+        key: u32,
+        mods: input::bindings::Modifiers,
+    ) -> Option<input::keys::KeyAction> {
+        input::keys::resolve_key_binding(key, mods)
+    }
+
+    /// Validates that an input port belongs to this Core.
+    pub fn check_port(&self, port: &InputPort) -> Result<(), EntryError> {
+        if port.core_id != self.id {
+            return Err(EntryError::ForeignPort);
+        }
+        Ok(())
     }
 
     /// The current per-surface output membership (OBJ-13).

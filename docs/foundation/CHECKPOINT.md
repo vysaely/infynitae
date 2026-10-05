@@ -1,8 +1,41 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-3 RATIFIED.** Pointer intake through `InputPort`, button ownership (OBJ-25), M22 CameraPan at zoom 1 (OBJ-26, F-PAN-1), routing through the ProjectionFrame hit test, KeepFocus, free-pointer reconciliation, the zero-output seat transition and interaction orphaning run on the production path. INC-0, INC-1, INC-2, and INC-3 are RATIFIED. OB-45 is CLOSED. **INC-4 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-4 IMPLEMENTED — READY FOR INDEPENDENT ADVERSARIAL REVIEW.** Keyboard ownership (K1–K9, M12), ActiveElementFocus (OBJ-22, M11, INV-INPUT-8), popup grab routing with ordered preemption (INV-INPUT-10, W-SM-7, W-SM-14, W-SM-15), surface activation state (INV-PROTO-1), and interaction popup dismissal (OB-4) implemented on the production path. INC-0, INC-1, INC-2, and INC-3 are RATIFIED. **INC-4 has NOT been ratified.** **INC-5 has NOT begun.**
 
 Date: 2026-10-05
+
+## PHASE F — INC-4 IMPLEMENTATION (evidence: evidence/phase-f/INC-4/)
+- **Scope:** PRODUCT, HEADLESS, canonical INC-4 (mapping preserved before implementation: `IMPLEMENTATION_MAPPING.md`).
+  - **core:**
+    - `input::keys`: canonical bindings (Super+Enter -> FocusNext, Super+B -> Noop, Esc -> Cancel, Shift -> Noop), pure binding resolver;
+    - `input::focus`: `FocusModel` (`OBJ-22`, `M11`, `INV-INPUT-8`), explicit focus transitions, `focus_next`, target loss successor selection with live element fallback;
+    - `input::mod`: `InputState` extended with `key_ownership: Ownership` (`OBJ-25`);
+    - `entry.rs`: click-to-focus on client button press, `Effect::DismissPopupGrab` on CameraPan acquisition (`OB-4`);
+    - `protocol.rs`: `Effect::KeyboardFocus`, `Effect::ToplevelConfigure`, `Effect::DismissPopupGrab`; popup constraint target calculation with anchor-output rule 1 (`D-B6-BOUNDARY`, `INC3-F08`).
+  - **adapter (`infynitae-wayland`):**
+    - `keyboard.rs`: `WaylandState::keyboard_key` two-phase dispatch (`input_intercept` + `input_forward`), K1–K9 ownership semantics, K3 observe mode enforcement, `PreemptionStrategy` configuration;
+    - `pointer.rs`: strictly encapsulated grab helpers (`set_popup_pointer_grab`, `unset_pointer_grab`, `set_keyboard_grab`, `unset_keyboard_grab`) preserving `smithay-pointer-only-in-adapter-pointer` compliance;
+    - `handlers.rs`: `XdgShellHandler::grab` with `W-SM-7` root checks and `W-SM-14` nested grab retention; `toplevel_destroyed` successor focus transition;
+    - `outputs.rs`: atomic ORDERED preemption under `Effect::KeyboardFocus` (ungrab(All) -> kb.unset -> ptr.unset -> set_focus) and `Effect::ToplevelConfigure` (sets/unsets `Activated`).
+  - **headless backend:** `keyboard_key` intake validating port authority via `state.core().check_port(port)`.
+- **Not implemented (owned later):**
+  - Pointer constraints, locks, and confinement (INC-5);
+  - Epochs and frame pacing (INC-6);
+  - Fullscreen and maximize (INC-7);
+  - Real-client integration and kick (INC-8);
+  - Zoom navigation and continuous scaling (INC-9/10).
+- **Tests:** 100% passing under `ulimit -n 1024`.
+  - `t1_keyboard.rs`: 13 tests (K1–K9, NEG-K3 modifier control, OB-15 output removal, OB-15 repeat probe).
+  - `t1_popup_focus.rs`: 13 tests (PF-1 through PF-7, PF-OB4 pan dismissal, PF-WSM7 unmapped grab rejection, NEG-1 naive control, NEG-2 pointer-first control, OBS-1 anvil order observation).
+  - Full workspace regression suite passes with 0 failures and 0 warnings.
+- **Enforcement:**
+  - `verify-architecture`: PASS (31 compile probes, 54 seeded controls, all structural source rules intact).
+  - `verify-test-efficacy`: PASS (68/68 seeded behavioural defects detected, including 5 new INC-4 mutation controls).
+  - `check-foundation-docs`: PASS (57 invariants, 20 formulas, 51 obligations intact).
+  - `verify-development-environment`: PASS.
+- **Obligations:**
+  - None closed by implementation. All obligations remain pending independent ratification review.
+- **NEXT:** STOP for independent adversarial review by another agent. Do NOT declare ratified. Do NOT begin INC-5.
 
 ## PHASE F — INC-3 RATIFICATION (record: evidence/phase-f/INC-3/corrective/)
 - **Review:** `INC-3 CONDITIONAL PASS — CORRECTIONS REQUIRED BEFORE RATIFICATION` (dossier recorded unchanged in `85d128a`). Findings INC3-F09 (Level B) resolved; INC3-F08 (Level C) and INC3-F06 (Observation) adjudicated.
