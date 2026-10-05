@@ -609,6 +609,80 @@ mod tests {
         );
     }
 
+    /// INC2-F07: A ProjectionFrame belongs strictly to the output/view configuration from which it
+    /// was built and must not survive output_reconfigured. Before reconfiguration, p_before hits
+    /// the frame; reconfiguring mode, transform or scale invalidates the frame so that the stale
+    /// frame is not used by a subsequent hit-test.
+    #[test]
+    fn reconfiguration_drops_the_output_frame() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let id = c.toplevel_created();
+        let tree = |mapped| crate::snapshot::SurfaceTree {
+            geometry: crate::geom::LocalRect {
+                loc: crate::geom::LocalPoint::default(),
+                size: crate::geom::LocalSize { w: 100, h: 100 },
+            },
+            surfaces: vec![crate::snapshot::SnapshotSurface {
+                key: crate::snapshot::tests::key(1),
+                role: crate::snapshot::SurfaceRole::Root,
+                size: crate::geom::LocalSize { w: 100, h: 100 },
+                mapped,
+                input: crate::snapshot::InputRegion::Infinite,
+            }],
+        };
+        c.toplevel_committed(id, tree(false)).unwrap();
+        c.toplevel_committed(id, tree(true)).unwrap();
+        c.render_list(a).unwrap();
+        // At 1920x1080 scale 1.0, window [0,100)x[0,100) is at OutputLogical [960,1060)x[540,640).
+        let p_before = crate::geom::OutputLogicalPoint { x: 970.5, y: 550.5 };
+        assert!(c.hit_test(a, p_before).is_some());
+
+        // 1. Mode shrink: 800x600. p_before (970.5, 550.5) is outside the new extent.
+        c.output_reconfigured(
+            &mut t,
+            a,
+            desc_k(key("A"), (800, 600), Transform::Normal, 120, 60_000),
+        )
+        .unwrap();
+        assert_eq!(
+            c.hit_test(a, p_before),
+            None,
+            "stale frame survived mode reconfiguration"
+        );
+
+        // Populate new frame for 800x600: window is at logical [400,500)x[300,400).
+        let p_800 = crate::geom::OutputLogicalPoint { x: 410.5, y: 310.5 };
+        assert!(c.hit_test(a, p_800).is_some());
+
+        // 2. Transform change: R90 on 1920x1080 -> view_size (1080, 1920).
+        c.output_reconfigured(
+            &mut t,
+            a,
+            desc_k(key("A"), (1920, 1080), Transform::R90, 120, 60_000),
+        )
+        .unwrap();
+        // Window on R90 is centered in 1080x1920: [540,640)x[960,1060). p_800 (410.5, 310.5) misses:
+        assert_eq!(
+            c.hit_test(a, p_800),
+            None,
+            "stale frame survived transform reconfiguration"
+        );
+
+        // 3. Scale change: scale 2.0 (scale_120 = 240) on 1920x1080 Normal -> logical extent 960x540.
+        c.output_reconfigured(
+            &mut t,
+            a,
+            desc_k(key("A"), (1920, 1080), Transform::Normal, 240, 60_000),
+        )
+        .unwrap();
+        assert_eq!(
+            c.hit_test(a, p_before),
+            None,
+            "stale frame survived scale reconfiguration"
+        );
+    }
+
     /// An invalid descriptor creates nothing and allocates no id.
     #[test]
     fn invalid_descriptor_is_rejected_without_mutation() {
