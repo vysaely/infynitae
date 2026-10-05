@@ -1,8 +1,25 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-1 IMPLEMENTED, PENDING INDEPENDENT REVIEW.** The minimal real vertical seam runs on the production path (snapshot → core → render list → DummyRenderer → physical-pixel hit-test, one output, one camera at zoom 1). OB-2 and OB-26 are mechanically satisfied and stay `OPEN` until the review ratifies them. **INC-2 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-1 RATIFIED — READY FOR OWNER AUTHORIZATION OF INC-2.** Independent review (CONDITIONAL PASS, `audit/phase-f-inc1-review/`) → corrective patch `1fa72af` (INC1-F06, INC1-F07) → corrective verification (local and CI run 37291919770) → OB-2 and OB-26 ratified `CLOSED`. **INC-2 has NOT begun.**
 
 Date: 2026-10-05
+
+## PHASE F — INC-1 RATIFICATION (record: evidence/phase-f/INC-1/corrective/)
+- **Review:** `INC-1 CONDITIONAL PASS — CORRECTIONS REQUIRED BEFORE RATIFICATION` (dossier recorded unchanged in `38c60ca`). Findings INC1-F06 and INC1-F07 (Level B); INC1-F01…F05 adjudicated.
+- **Corrective patch `1fa72af` (tests and controls only; production code unchanged):**
+  - **INC1-F06:** an independent exact-integer unprojection and region oracle for T1, plus a 56-row hand-derived T0 table.
+  - **INC1-F07:** T0 and T1 coverage of unshown surfaces.
+  - **Controls:** 7 permanent mutation controls (ADV-MUT-3 ×3, sign inversion, camera-offset omission, ADV-MUT-2 ×2), all detected.
+- **Verification:** everything PASS.
+  - Cargo: 47 tests, fmt, clippy.
+  - Verifiers: `verify-architecture`; `verify-test-efficacy` 25/25.
+  - Repository checks: checker 57/20/51 (self-test 18/18), spike, environment verifier.
+  - CI: run 37291919770 on `1fa72af`.
+- **Obligations:**
+  - OB-2 and OB-26 `CLOSED`.
+  - Still `OPEN`: OB-1, OB-6 (T4 part), OB-14, OB-17, OB-49 (runtime 2i, INC-2).
+- **Findings:** open Level A 0, Level B 0, Level C 1 (INC1-F01, INC-7).
+- **NEXT:** INC-2 only upon explicit owner authorization.
 
 ## PHASE F — INC-1 (evidence: evidence/phase-f/INC-1/)
 - **Scope:** PRODUCT, HEADLESS, exactly the canonical INC-1.
@@ -18,7 +35,7 @@ Date: 2026-10-05
 - **Not started:** multi-output, binding precedence, 2i (INC-2 / OB-49); input (INC-3/4); scale (INC-6); toplevel requests (INC-7, finding INC1-F01, Level C).
 - **Registries:** unchanged (57 invariants, 20 `F-*`, OB-1…OB-51); checker PASS, self-test 18/18.
 - **LIVE_SYSTEM_TOUCHED:** no.
-- **NEXT:** independent INC-1 review (ratify OB-2/OB-26; dispositions INC1-F01…F05). INC-2 only after that review and explicit owner authorization.
+- **NEXT (at implementation):** independent INC-1 review. Superseded by the ratification entry above.
 
 ## PHASE F — INC-0 (implemented: `632b1d0`; evidence: evidence/phase-f/INC-0/; review: audit/phase-f-inc0-review/)
 - **Scope:** ENFORCE, HEADLESS. The production workspace (`crates/`: core, wayland, backend-headless, backend-winit, ipc, bin) carries the authority **shape** only; no product behaviour. Enforcement-only crates live in `enforcement/`.

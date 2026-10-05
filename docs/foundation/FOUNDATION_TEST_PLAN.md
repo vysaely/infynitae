@@ -62,16 +62,17 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
 
 ### OB-2
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Input-region subtraction, general. Test/decision: multi-rect, interleaved add/subtract; random property test
 - **Owner:** core hit-test
-- **Evidence available:** single-hole fall-through verified (EC-20)
+- **Evidence available:** single-hole fall-through verified (EC-20); INC-1 production: T0 `ob2_region_equals_reference_evaluator` (400 random regions vs a bitmap reference evaluator), T1 xhit port against an independent region and unprojection oracle (`8f44f8b`, corrective `1fa72af`); independent review `audit/phase-f-inc1-review/`
 - **Pass criterion:** equals a reference region evaluator
 - **Destination:** T0
 - **May be closed by:** T0 property test against a reference region evaluator + T1 xhit port
 - **Dependencies:** INC-1
 - **Blocks:** INC-1 exit
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
+- **History:** Ratified CLOSED at INC-1 after independent review (CONDITIONAL PASS, findings INC1-F06/F07) and corrective verification (`1fa72af`, CI run 37291919770); record in evidence/phase-f/INC-1/corrective/.
 
 ### OB-3
 - **Status:** OPEN
@@ -359,16 +360,17 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
 
 ### OB-26
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Regression guard: never use `Window::surface_under`; keep xsnap/xhit/X-15 as tests. Test/decision: port xsnap/xhit to T1
 - **Owner:** core + adapter
-- **Evidence available:** EC-9, EC-20
+- **Evidence available:** EC-9, EC-20; INC-1 production: T1 `tst09_xsnap_x15_and_surface_under_control`, `tst10_xhit_selection_equals_presented`, `tst04_x6…`, `tst18_d5hit_zoom1…` with their negative controls; source rule `smithay-rejected-apis` (`Space`, `surface_under`, `render_elements_from_surface_tree`, `output_enter/leave`) with seeded controls (`8f44f8b`, corrective `1fa72af`); independent review `audit/phase-f-inc1-review/`
 - **Pass criterion:** all pass
 - **Destination:** T1
 - **May be closed by:** T1 production test (PRODUCT increment, production core + adapter + headless backend) (xsnap/xhit/X-15 ported; `Window::surface_under` never used)
 - **Dependencies:** INC-1
 - **Blocks:** INC-1 exit
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
+- **History:** Ratified CLOSED at INC-1 after independent review (CONDITIONAL PASS, findings INC1-F06/F07) and corrective verification (`1fa72af`, CI run 37291919770); the regression guard stays enforced by `tools/verify-architecture` and the T1 tests; record in evidence/phase-f/INC-1/corrective/.
 
 ### OB-27
 - **Status:** OPEN

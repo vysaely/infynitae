@@ -7,8 +7,8 @@ You are continuing **Infynitae Native**, a Rust/Smithay spatial Wayland composit
 - Phase E final verdict: **`PHASE E PASS — PHASE F MAY BEGIN`** (`docs/foundation/audit/phase-e-final/VERDICT.md`).
 - Last architecture seal: E1R `1ae1b736515b8c52c3e6ba7596b22c81f7098390`; tracking `e9d36732ac4fa9e934ee1b90bb696e9545c598ab`; final review recorded in `cfb54f091bd2a19065a45b32662e8f0bbddd62fc`; this handoff is in the commit after it.
 - INC-0 ratified after independent review (`audit/phase-f-inc0-review/`); OB-19 and OB-36 `CLOSED`; runtime 2i owned by INC-2 / OB-49.
-- INC-1 implemented (evidence: `docs/foundation/evidence/phase-f/INC-1/`), **pending independent review**; OB-2 and OB-26 mechanically satisfied, still `OPEN`.
-- **INC-2 has not begun.** It needs the INC-1 review and explicit owner authorization in the current session.
+- INC-1 ratified after independent review and corrective patch (evidence: `docs/foundation/evidence/phase-f/INC-1/`, record `corrective/README.md`; review `audit/phase-f-inc1-review/`); OB-2 and OB-26 `CLOSED`.
+- **INC-2 has not begun.** It needs explicit owner authorization in the current session.
 - `docs/foundation/CHECKPOINT.md` is the source of the current gate; `git log` gives the current HEAD.
 
 ## Workflow on a new machine / fresh environment
