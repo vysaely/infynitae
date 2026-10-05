@@ -2,7 +2,7 @@
 
 **This is a navigation aid, not an authority.** Every statement here summarises a canonical document in `docs/foundation/`. Where this file and a canonical document disagree, the canonical document wins, and this file should be corrected. Do not cite this file as normative.
 
-State: Phase E **passed**; Phase F under way. INC-0 and INC-1 ratified; INC-2 implemented and awaiting independent review; INC-3 has not begun. See `docs/foundation/CHECKPOINT.md`.
+State: Phase E **passed**; Phase F under way. INC-0, INC-1 and INC-2 ratified; INC-3 has not begun. See `docs/foundation/CHECKPOINT.md`.
 
 ---
 

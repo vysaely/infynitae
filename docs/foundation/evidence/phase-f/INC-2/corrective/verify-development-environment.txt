@@ -1,0 +1,63 @@
+======================================================================
+Infynitae Native — Development Environment Verifier
+Repository root: /home/vysaely/infynitae-native
+======================================================================
+
+[1] Git Repository State:
+  ✓ HEAD:   b22946283db98ccffb50d6561bd075ff0e65cf5e (branch: main)
+  ✓ Reachable seal: 615b0ed2f3 (Phase C seal)
+  ✓ Reachable seal: e8ec03a2ab (Phase D falsification baseline)
+  ✓ Reachable seal: 84ce620898 (Phase D 1R seal)
+  ✓ Reachable seal: 5827926782 (Phase D 2R seal)
+  ✓ Reachable seal: c0a1cee310 (Phase D final seal)
+  ✓ Reachable seal: 09075a2d07 (Phase D tracking)
+  ✓ Reachable seal: 1ae1b73651 (Phase E corrective checkpoint E1R seal)
+  ✓ Reachable seal: e9d36732ac (Phase E corrective checkpoint E1R tracking)
+  ✓ Reachable seal: cfb54f091b (Phase E final review commit)
+
+[2] Phase F Workspace Integrity:
+  ✓ root workspace: 8 members
+  ✓ rust-toolchain.toml pins 1.99.0
+  ✓ Cargo.lock tracked
+  ✓ tools/verify-architecture
+  ✓ tools/verify-test-efficacy
+  ✓ .github/workflows/ci.yml
+  ✓ no root src/ (production crates live under crates/)
+
+[3] Toolchain Availability:
+  ✓ git          git version 2.56.0
+  ✓ python3      Python 3.14.7
+  ✓ rustc        rustc 1.99.0 (b940084d7 2026-09-28)
+  ✓ cargo        cargo 1.99.0 (5f94df478 2026-08-27)
+  ✓ pkg-config   3.0.7
+  ✓ tar          tar (GNU tar) 1.35
+  ✓ gh           gh version 2.102.0 (2026-09-30)
+  ✓ zstd         *** Zstandard CLI (64-bit) v1.5.7, by Yann Collet ***
+
+[4] Native Build Libraries (pkg-config):
+  ✓ wayland-server       1.26.0
+  ✓ xkbcommon            1.13.2
+  ✓ libinput             1.32.0
+  ✓ libdrm               2.4.134
+  ✓ gbm                  26.2.4-arch3.1
+  - wayland-protocols    NOT FOUND (not required: reference XML only)
+  - libseat              NOT FOUND (not required: Phase G session backend; package seatd)
+
+[5] Foundation Document Integrity:
+  ✓ check-foundation-docs: PASS (57 invariants, 20 formulas, 51 obligations intact)
+  ✓ check-foundation-docs --self-test: PASS (18/18 seeded defects detected)
+
+[6] C1 Authority Spike Verification:
+  ✓ c1-authority-spike/verify.sh: PASS (compiler negative probes verified)
+
+[7] Production Architecture Verification:
+  ✓ tools/verify-architecture: PASS
+
+[8] Product Test Efficacy:
+  ✓ tools/verify-test-efficacy: PASS
+
+======================================================================
+VERIFICATION RESULT: ALL CHECKS PASSED
+Environment and repository are ready for authorized development handoff.
+Current gate (docs/foundation/CHECKPOINT.md): CURRENT_PHASE: **PHASE F — INC-2 RATIFIED.** Multi-output lifecycle, binding precedence (1:1, runtime 2i), membership, damage trackers sized `phys_O`, zero-output core state, frame clock and presentation feedback run on the production path (`0a03aab`). Level B finding INC2-F07 resolved with test and mutation control. Decision E ratifies OB-49 ownership correction (fullscreen configure -> INC-7, epoch settlement -> INC-6); OB-49 is `CLOSED`. **INC-3 has NOT begun.**
+======================================================================

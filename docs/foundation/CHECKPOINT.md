@@ -1,8 +1,28 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-2 IMPLEMENTED, PENDING INDEPENDENT REVIEW.** Multi-output lifecycle, binding precedence (1:1, runtime 2i), membership, damage trackers sized `phys_O`, zero-output core state, frame clock and presentation feedback run on the production path (`0a03aab`). OB-49 is mechanically satisfied for every criterion that can execute in INC-2 and stays `OPEN` (finding INC2-F01). **INC-3 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-2 RATIFIED.** Multi-output lifecycle, binding precedence (1:1, runtime 2i), membership, damage trackers sized `phys_O`, zero-output core state, frame clock and presentation feedback run on the production path (`0a03aab`). Level B finding INC2-F07 resolved with test and mutation control. Decision E ratifies OB-49 ownership correction (fullscreen configure -> INC-7, epoch settlement -> INC-6); OB-49 is `CLOSED`. **INC-3 has NOT begun.**
 
 Date: 2026-10-05
+
+## PHASE F — INC-2 RATIFICATION (record: evidence/phase-f/INC-2/corrective/)
+- **Review:** `INC-2 CONDITIONAL PASS — CORRECTIONS REQUIRED BEFORE RATIFICATION` (dossier recorded unchanged in `b229462`). Findings INC2-F07 (Level B) and INC2-F01 (Level C) adjudicated.
+- **Corrective patch (tests and controls only; production code unchanged):**
+  - **INC2-F07:** `reconfiguration_drops_the_output_frame` in `crates/infynitae-core/src/entry.rs` verifying that mode shrink, 90° transform change, and scale change immediately invalidate and drop the cached `ProjectionFrame`, preventing stale hit-testing or frame reuse before a new frame is rendered.
+  - **Controls:** Permanent mutation control in `tools/verify-test-efficacy` (INC2-F07: neutralizing frame invalidation on reconfiguration), detected (46/46).
+- **Decision E Ratification:**
+  - Formally ratified Decision E: OB-49 ownership correction transferring protocol fullscreen configure to INC-7 (`INV-PRES-1`, `OB-22`/`OB-32`) and ScaleInteractionEpoch settlement to INC-6 (`ScaleInteractionEpoch`, `OB-13`/`OB-47`).
+  - All INC-2 reconfiguration criteria and runtime 2i negative controls are satisfied.
+  - OB-49 is marked `CLOSED`.
+- **Verification:** everything PASS.
+  - Cargo: 76 tests (53 core, 19 distinct T1 + 4 self-tests), fmt, clippy `-D warnings`.
+  - Verifiers: `verify-architecture` (27 probes, 47 seeded controls); `verify-test-efficacy` (46/46).
+  - Repository checks: checker 57/20/51 (self-test 18/18), spike, environment verifier.
+- **Obligations:**
+  - OB-49 `CLOSED`.
+  - Still `OPEN`: OB-1, OB-6 (T4 part), OB-11 (P1 gate), OB-14, OB-17, OB-45 (hit-test portion owned by INC-3), OB-48, OB-50 (adapter/constraint portions owned by INC-3/5), OB-3 (interaction orphaning owned by INC-3).
+- **Findings:** open Level A 0, Level B 0 (INC2-F07 resolved), Level C 1 (INC1-F01, INC-7).
+- **LIVE_SYSTEM_TOUCHED:** no.
+- **NEXT:** INC-3 only upon explicit owner authorization. INC-3 has NOT begun.
 
 ## PHASE F — INC-2 (implemented: `0a03aab`; evidence: evidence/phase-f/INC-2/)
 - **Scope:** PRODUCT, HEADLESS, canonical INC-2.
@@ -15,7 +35,7 @@ Date: 2026-10-05
 - **Obligations:** OB-49 mechanically satisfied except items that cannot execute yet (fullscreen configure, epoch settlement); OB-45 (tracker/membership/damage part), OB-50 (core part) and OB-3 (removal part) partly satisfied; all `OPEN`.
 - **Findings:** Level A 0, Level B 0, Level C 2 (INC1-F01, INC2-F01).
 - **LIVE_SYSTEM_TOUCHED:** no.
-- **NEXT:** independent adversarial INC-2 review. INC-3 only after that review and explicit owner authorization.
+- **NEXT (at implementation):** independent adversarial INC-2 review. Superseded by the ratification entry above.
 
 ## PHASE F — INC-1 RATIFICATION (record: evidence/phase-f/INC-1/corrective/)
 - **Review:** `INC-1 CONDITIONAL PASS — CORRECTIONS REQUIRED BEFORE RATIFICATION` (dossier recorded unchanged in `38c60ca`). Findings INC1-F06 and INC1-F07 (Level B); INC1-F01…F05 adjudicated.

@@ -639,16 +639,17 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Origin:** E1R (E-F3-03)
 
 ### OB-49
-- **Status:** OPEN
-- **Item:** Output reconfiguration on the production path (E-F2-03): `output_reconfigured` for mode, transform, scale and refresh changes; same `OutputId`; camera identity and value unchanged; tracker/view/membership rebuilt; F-RECONF-1; `wl_output`/`xdg_output` events; fullscreen configure; epoch settlement; rejection of unknown ids and key changes; reconnect tested separately. Owns runtime 2i validation (transferred from OB-19 via Decision D): runtime 1:1 camera/output binding preservation and `OutputKey` collision negative control (`probe_sealed_key_steal` / `concurrent_output_key_collision`), proving that `INV-CAMERA-3` and `INV-OUTPUT-2` hold during multi-output binding.
+- **Status:** CLOSED
+- **Item:** Output reconfiguration on the production path (E-F2-03): `output_reconfigured` for mode, transform, scale and refresh changes; same `OutputId`; camera identity and value unchanged; tracker/view/membership rebuilt; F-RECONF-1; `wl_output`/`xdg_output` events; rejection of unknown ids and key changes; reconnect tested separately; ProjectionFrame dropped on reconfiguration (closing INC2-F07). Owns runtime 2i validation (transferred from OB-19 via Decision D): runtime 1:1 camera/output binding preservation and `OutputKey` collision negative control (`probe_sealed_key_steal` / `concurrent_output_key_collision`), proving that `INV-CAMERA-3` and `INV-OUTPUT-2` hold during multi-output binding. Decision E ownership correction: protocol fullscreen configure is transferred to INC-7 (INV-PRES-1, OB-22/OB-32); ScaleInteractionEpoch settlement is transferred to INC-6 (ScaleInteractionEpoch, OB-13/OB-47); neither blocks INC-2 exit.
 - **Owner:** core output manager + adapter
-- **Evidence available:** EE-4 (spike tests and probes p10–p13, 2h; spike 2i `probe_sealed_key_steal`)
-- **Pass criterion:** the EE-4 reconfiguration tests ported to the production core and adapter; probes p10–p13 hold in the production crates; reconnect and reconfiguration remain separate test cases; runtime 2i negative control (`probe_sealed_key_steal` or production equivalent) executes against the real output manager and fails the buggy/stealing binding model while passing the 1:1 model. OB-49 cannot close without this runtime evidence.
+- **Evidence available:** EE-4 (spike tests and probes p10–p13, 2h; spike 2i `probe_sealed_key_steal`); INC-2 implementation (`0a03aab`), review dossier (`audit/phase-f-inc2-review/`), and corrective verification
+- **Pass criterion:** the EE-4 reconfiguration tests ported to the production core and adapter; probes p10–p13 hold in the production crates; reconnect and reconfiguration remain separate test cases; runtime 2i negative control (`probe_sealed_key_steal`) executes against the real output manager and fails the buggy/stealing binding model while passing the 1:1 model; `reconfiguration_drops_the_output_frame` verifies ProjectionFrame invalidation on reconfiguration (closing finding INC2-F07); Decision E ratifies transfer of fullscreen configure to INC-7 and epoch settlement to INC-6.
 - **Destination:** T1
 - **May be closed by:** T1 production tests (INC-2)
 - **Dependencies:** INC-2
-- **Blocks:** INC-2 exit
-- **Origin:** E1R (E-F2-03); Decision D (OB-19 2i runtime validation transfer)
+- **Blocks:** INC-2 exit. Satisfied and closed at INC-2.
+- **Origin:** E1R (E-F2-03); Decision D (OB-19 2i runtime validation transfer); Decision E (ownership correction transfer of fullscreen configure to INC-7 and epoch settlement to INC-6)
+- **History:** E1R obligation for output reconfiguration. Decision D added runtime 2i validation. Ratified CLOSED in INC-2 following independent adversarial review and corrective patch (closing finding INC2-F07), with Decision E transferring protocol fullscreen configure to INC-7 and ScaleInteractionEpoch settlement to INC-6 while preserving INV-CAMERA-3 and INV-OUTPUT-2 without waiver.
 
 ### OB-50
 - **Status:** OPEN

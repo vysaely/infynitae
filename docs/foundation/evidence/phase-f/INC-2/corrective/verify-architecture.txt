@@ -1,0 +1,143 @@
+========================================================================
+verify-architecture — Infynitae Native (OB-19)
+root: /home/vysaely/infynitae-native
+========================================================================
+
+[1] Pins (OB-19 item 3, INV-ARCH-3)
+  ok    rust-toolchain.toml pins channel 1.99.0
+  ok    active compiler: rustc 1.99.0 (b940084d7 2026-09-28)
+  ok    Cargo.lock present and not git-ignored
+  ok    root Cargo.toml has no [patch] or [replace] (P1 not productionized; OB-11 open)
+  ok    cargo build --workspace --locked
+  ok    resolved smithay is exactly 0.7.0 from crates.io
+  ok    infynitae-backend-headless declares smithay =0.7.0 from crates.io
+  ok    infynitae-wayland declares smithay =0.7.0 from crates.io
+
+[2] Dependency DAG (INV-ARCH-1; C1.3, C1.4, C7.1, C7.4)
+  ok    infynitae-core has no dependencies (normal, dev, or build)
+  ok    every workspace edge is allowed: wayland -> core; backends -> wayland, core; ipc -> core; bin -> all
+  ok    no wayland -> backend/ipc, ipc <-> wayland, backend <-> backend, product -> enforcement
+  ok    smithay reachable only from the adapter and its dependents; core and ipc closures exclude it
+
+[3] Probe-feature hygiene
+  ok    probe features are named probe_*, off by default, never enabled by a dependency declaration
+
+[4] Structural source rules (2g, 2h, mint location, wayland names, unsafe policy)
+  ok    authority-construction
+  ok    authority-not-duplicable
+  ok    authority-return
+  ok    load
+  ok    mint-location
+  ok    reconfigured-no-camera-authority
+  ok    smithay-geometry-only-in-convert
+  ok    smithay-rejected-apis
+  ok    stage-single-writer
+  ok    unsafe-policy
+  ok    wayland-names-no-authority
+
+[5] Compile probes (each built alone; exactly one error, in its own file, with the asserted diagnostic)
+  -- A camera authority
+  ok    probe_protocol_moves_camera: [E0624] method `set_center` is private (crates/infynitae-core/src/probes.rs:14)
+  -- B protocol-side paths
+  ok    p1_mutate_through_read_accessor: [E0624] method `set_center` is private (enforcement/probes/src/lib.rs:18)
+  ok    p2_forge_input_port: cannot construct `InputPort` with struct literal syntax due to private fields (enforcement/probes/src/lib.rs:24)
+  ok    p3_physical_input_without_port: [E0061] this method takes 2 arguments but 1 argument was supplied (enforcement/probes/src/lib.rs:30)
+  ok    p4_call_navigation_internals: [E0603] enum `Authority` is private (enforcement/probes/src/lib.rs:36)
+  -- B positive control
+  ok    p5_control_compiles: compiles
+  -- C protocol state
+  ok    probe_store_port_in_state: [E0277] `*const ()` cannot be sent between threads safely (crates/infynitae-wayland/src/lib.rs:91)
+  -- D 1R re-fit
+  ok    probe_protocol_refits_camera: [E0624] associated function `mint` is private (crates/infynitae-core/src/probes.rs:21)
+  -- E 1R retained proof
+  ok    probe_sticky_fit: [E0277] `*const ()` cannot be sent between threads safely (crates/infynitae-wayland/src/lib.rs:91)
+  -- F 2R lifecycle
+  ok    p6_output_connected_without_token: [E0061] this method takes 2 arguments but 1 argument was supplied (enforcement/probes/src/lib.rs:48)
+  ok    p7_forge_output_token: cannot construct `OutputLifecycleToken` with struct literal syntax due to private fields (enforcement/probes/src/lib.rs:54)
+  ok    p8_descriptor_with_coordinates: [E0560] struct `OutputDescriptor` has no field named `center` (enforcement/probes/src/lib.rs:61)
+  ok    p9_public_restore_api: [E0599] no method named `restore_persisted_state` found for mutable reference `&mut Core` in the current scope (enforcement/probes/src/lib.rs:69)
+  ok    probe_protocol_creates_camera: [E0624] associated function `mint` is private (crates/infynitae-core/src/probes.rs:27)
+  ok    probe_store_output_token_in_state: [E0277] `*const ()` cannot be sent between threads safely (crates/infynitae-wayland/src/lib.rs:91)
+  -- H E1R reconfiguration
+  ok    p10_reconfigure_without_token: [E0061] this method takes 3 arguments but 2 arguments were supplied (enforcement/probes/src/lib.rs:75)
+  ok    p11_reconfigure_with_input_port: [E0308] mismatched types (enforcement/probes/src/lib.rs:81)
+  ok    p12_reconfigure_descriptor_with_zoom: [E0560] struct `OutputDescriptor` has no field named `zoom_milli` (enforcement/probes/src/lib.rs:88)
+  ok    p13_reconfigure_with_camera_argument: [E0061] this method takes 3 arguments but 4 arguments were supplied (enforcement/probes/src/lib.rs:101)
+  -- authority not Clone
+  ok    p14_clone_output_token: [E0277] the trait bound `OutputLifecycleToken: Clone` is not satisfied (enforcement/probes/src/lib.rs:109)
+  ok    p15_clone_input_port: [E0277] the trait bound `InputPort: Clone` is not satisfied (enforcement/probes/src/lib.rs:115)
+  ok    p16_clone_shell_port: [E0277] the trait bound `ShellPort: Clone` is not satisfied (enforcement/probes/src/lib.rs:121)
+  ok    p17_clone_authorized: [E0277] the trait bound `Authorized: Clone` is not satisfied (enforcement/probes/src/lib.rs:127)
+  -- I unsafe policy
+  ok    probe_unsafe_block (core): [unsafe_code] usage of an `unsafe` block (crates/infynitae-core/src/probes.rs:33)
+  ok    probe_unsafe_allow_override (core): [E0453] allow(unsafe_code) incompatible with previous forbid (crates/infynitae-core/src/probes.rs:38)
+  ok    probe_unsafe_block (ipc): [unsafe_code] usage of an `unsafe` block (crates/infynitae-ipc/src/lib.rs:11)
+  ok    probe_unsafe_block (wayland): [unsafe_code] usage of an `unsafe` block (crates/infynitae-wayland/src/lib.rs:146)
+  ok    probe harness builds with no probe enabled
+
+[5b] Runtime 2i (OB-49): 1:1 binding holds; the sealed key-steal rule is caught
+  ok    T0 core: concurrent_output_key_collision_keeps_one_to_one passes with the 1:1 rule
+  ok    T0 core: the sealed rule fails it with "1:1 violated"
+  ok    T1 lockstep: same_key_outputs_keep_one_to_one passes with the 1:1 rule
+  ok    T1 lockstep: the sealed rule fails it with "1:1 violated"
+
+[6] Seeded negative controls (temporary copies; each defect must be detected)
+  ok    detected: INC-1: adapter imports Smithay Space (W-SM-1) (smithay-rejected-apis)
+  ok    detected: INC-1: adapter hit-tests with Window::surface_under (W-SM-11/12) (smithay-rejected-apis)
+  ok    detected: INC-1: i32-root render path (W-SM-5) (smithay-rejected-apis)
+  ok    detected: INC-1: adapter constructs a Smithay Point outside convert (INV-COORD-4) (smithay-geometry-only-in-convert)
+  ok    detected: INC-1: render module writes the Stage (ownership inversion, INV-STAGE-1/6) (stage-single-writer)
+  ok    detected: INC-1: protocol policy creates a camera with a minted proof (mint-location)
+  ok    detected: INC-1: unsafe block in a T1 integration test (unsafe-policy)
+  ok    detected: 2g: reissue_token() on an existing Core (authority-construction)
+  ok    detected: public token constructor (authority-construction)
+  ok    detected: token construction hidden in a macro (authority-construction)
+  ok    detected: token getter returning the token (authority-return)
+  ok    detected: F01: token getter returning shared reference (&OutputLifecycleToken) (authority-return)
+  ok    detected: F01: token getter returning mutable reference (&mut OutputLifecycleToken) (authority-return)
+  ok    detected: F01: port getter returning shared reference (&InputPort) (authority-return)
+  ok    detected: F01: port getter returning mutable reference (&mut ShellPort) (authority-return)
+  ok    detected: F01: proof getter returning pointer (*const Authorized) (authority-return)
+  ok    detected: F01: authority escape through type alias (authority-return)
+  ok    detected: derive(Clone) on InputPort (authority-not-duplicable)
+  ok    detected: 2h: camera mutation injected into output_reconfigured (reconfigured-no-camera-authority)
+  ok    detected: 2h: navigation call injected into output_reconfigured (reconfigured-no-camera-authority)
+  ok    detected: INC-2: output_reconfigured re-binds a camera (camera write outside connect/disconnect) (reconfigured-no-camera-authority)
+  ok    detected: mint outside the entry points (mint-location)
+  ok    detected: mint made crate-visible (mint-location)
+  ok    detected: wayland names InputPort (wayland-names-no-authority)
+  ok    detected: wayland names output_connected inside a macro (wayland-names-no-authority)
+  ok    detected: forbid(unsafe_code) removed from core (unsafe-policy)
+  ok    detected: forbid weakened to deny in ipc (unsafe-policy)
+  ok    detected: unsafe block in a backend (unsafe-policy)
+  ok    detected: allow(unsafe_code) in wayland without an inventory (unsafe-policy)
+  ok    detected: INC-1: wayland-client as a normal dependency of the headless backend
+  ok    detected: INC-1: wayland-client dev-dependency of the adapter
+  ok    detected: INC-1: wayland-client dev-dependency of ipc
+  ok    detected: core gains a dependency (smithay)
+  ok    detected: F02: core gains a dev-dependency (smithay)
+  ok    detected: F02: core gains a dev-dependency (wayland)
+  ok    detected: F02: core gains a build-dependency (smithay)
+  ok    detected: F02: core gains a target-specific dependency
+  ok    detected: wayland -> backend edge
+  ok    detected: ipc -> wayland edge
+  ok    detected: F02: ipc -> wayland dev-dependency edge
+  ok    detected: backend <-> backend edge
+  ok    detected: product -> enforcement edge
+  ok    detected: F02: product crate gains dev-dependency on enforcement crate
+  ok    detected: product -> binary-only enforcement crate (declared only)
+  ok    detected: smithay requirement loosened
+  ok    detected: toolchain unpinned
+  ok    detected: [patch.crates-io] smithay override
+  ok    judge: a probe that compiles is a VIOLATION
+  ok    judge: a failure with another error code is WRONG REASON
+  ok    judge: a cargo failure without a compiler diagnostic is a HARNESS ERROR
+  ok    canonical tree byte-identical after all seeded controls
+
+[7] Deferred runtime validation (NOT tested here)
+  DEFERRED  ports/token bound to their Core for physical_input, shell_command
+            reason: input and shell vocabularies have no variants yet, so these entries cannot be called
+            owner:  INC-3 (physical_input), INC-11 (shell_command)
+
+========================================================================
+== verify-architecture: PASS

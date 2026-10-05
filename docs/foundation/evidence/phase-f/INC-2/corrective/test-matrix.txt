@@ -1,0 +1,192 @@
+   Compiling infynitae-core v0.0.0 (/home/vysaely/infynitae-native/crates/infynitae-core)
+   Compiling infynitae-wayland v0.0.0 (/home/vysaely/infynitae-native/crates/infynitae-wayland)
+   Compiling infynitae-ipc v0.0.0 (/home/vysaely/infynitae-native/crates/infynitae-ipc)
+   Compiling infynitae-architecture-probes v0.0.0 (/home/vysaely/infynitae-native/enforcement/probes)
+   Compiling infynitae-backend-headless v0.0.0 (/home/vysaely/infynitae-native/crates/infynitae-backend-headless)
+   Compiling infynitae-backend-winit v0.0.0 (/home/vysaely/infynitae-native/crates/infynitae-backend-winit)
+   Compiling infynitae v0.0.0 (/home/vysaely/infynitae-native/crates/infynitae)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
+     Running unittests src/main.rs (target/debug/deps/infynitae-8ead003d598a3a42)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/infynitae_architecture_probes-a93117e7df71995d)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/infynitae_backend_headless-0579a6565c38cae4)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/t1_outputs.rs (target/debug/deps/t1_outputs-305b8268f8e4dc8f)
+
+running 9 tests
+test common::oracle::tests::rounding_helpers ... ok
+test clock_does_not_depend_on_visible_area ... ok
+test reconfiguration_on_the_wire ... ok
+test same_key_outputs_keep_one_to_one ... ok
+test lifecycle_on_the_wire ... ok
+test starve_reentry_and_handover ... ok
+test x9_presentation_feedback ... ok
+test x5_popup_membership_and_output_enter_control ... ok
+test clock_is_the_highest_refresh_observer ... ok
+
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s
+
+     Running tests/t1_parity.rs (target/debug/deps/t1_parity-9c5838abfba68e8d)
+
+running 6 tests
+test common::oracle::tests::rounding_helpers ... ok
+test popup_is_configured_inside_the_output_target ... ok
+test tst04_x6_render_edges_equal_lattice_edges ... ok
+test tst09_xsnap_x15_and_surface_under_control ... ok
+test tst18_d5hit_zoom1_configurations ... ok
+test tst10_xhit_selection_equals_presented ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.85s
+
+     Running tests/t1_slice.rs (target/debug/deps/t1_slice-01f42728b96ef18d)
+
+running 4 tests
+test common::oracle::tests::rounding_helpers ... ok
+test destroyed_element_leaves_the_render_list ... ok
+test unmapped_subsurface_leaves_the_frame_and_returns ... ok
+test vertical_slice_hit_test_equals_presented_surface ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.72s
+
+     Running tests/t1_transform.rs (target/debug/deps/t1_transform-19eae55f0efa9f7f)
+
+running 4 tests
+test common::oracle::tests::rounding_helpers ... ok
+test membership_uses_the_transformed_view ... ok
+test production_render_output_damages_the_view ... ok
+test ee1_tracker_matrix_on_the_production_adapter ... ok
+
+test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 3.81s
+
+     Running unittests src/lib.rs (target/debug/deps/infynitae_backend_winit-d2309e2f8d1b8259)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/infynitae_core-4d6b2402f8797791)
+
+running 53 tests
+test entry::tests::concurrent_output_key_collision_keeps_one_to_one ... ok
+test entry::tests::connect_creates_and_binds_one_camera_per_output ... ok
+test entry::tests::disconnect_keeps_the_camera_and_reconnect_rebinds_it ... ok
+test entry::tests::disconnect_drops_the_output_frame ... ok
+test entry::tests::foreign_tokens_grant_nothing ... ok
+test entry::tests::invalid_descriptor_is_rejected_without_mutation ... ok
+test entry::tests::reconfiguration_clamps_the_pointer ... ok
+test entry::tests::reconfiguration_keeps_identity_and_camera ... ok
+test entry::tests::reconfiguration_drops_the_output_frame ... ok
+test entry::tests::reconfiguration_rejections_mutate_nothing ... ok
+test entry::tests::relocation_picks_the_nearest_survivor ... ok
+test entry::tests::relocation_uses_survivors_only ... ok
+test entry::tests::remembered_camera_wins_over_the_persisted_entry ... ok
+test entry::tests::zero_output_state_is_stable_and_the_first_connect_leaves_it ... ok
+test navigation::tests::persisted_table_is_validated_all_or_nothing ... ok
+test output::tests::ids_are_never_reused ... ok
+test output::tests::invalid_descriptors_are_rejected ... ok
+test output::tests::keys_compare_by_value ... ok
+test output::tests::view_extent_swaps_exactly_for_quarter_turns ... ok
+test projection::tests::far_surfaces_cull_without_overflow ... ok
+test projection::tests::invalid_parameters_are_rejected ... ok
+test projection::tests::lattice_reference_floors_negative_origins ... ok
+test projection::tests::unproject_matches_the_independent_reference ... ok
+test projection::tests::view_origin_is_centre_minus_half_view_ties_even ... ok
+test projection::tests::zero_width_rects_are_not_visible ... ok
+test protocol::tests::m1_illegal_transitions_are_rejected_without_mutation ... ok
+test protocol::tests::m1_map_unmap_remap_destroy ... ok
+test protocol::tests::popup_target_is_the_viewport_inward_rounded ... ok
+test protocol::tests::protocol_events_never_move_cameras ... ok
+test render::tests::delivered_coordinates_are_clamped_into_the_surface ... ok
+test render::tests::xhit_semantic_cases_at_scale_one ... ok
+test snapshot::tests::children_of_an_unmapped_surface_are_not_shown ... ok
+test snapshot::tests::input_region_is_evaluated_in_request_order ... ok
+test snapshot::tests::malformed_trees_are_rejected ... ok
+test snapshot::tests::nested_subsurfaces_accumulate ... ok
+test snapshot::tests::origin_function_matches_hand_derived_xsnap_truth ... ok
+test stage::tests::destroy_is_idempotent_and_external_refs_go_stale ... ok
+test stage::tests::ids_are_nonzero_monotonic_and_never_reused ... ok
+test stage::tests::raise_puts_on_top_once ... ok
+test projection::tests::ob6_edge_equals_round_l_and_reprojection_lands_in_the_same_pixel ... ok
+test tests::dead_frame_entries_fail_closed_until_the_next_frame ... ok
+test tests::no_camera_exists_before_an_output_is_connected ... ok
+test tests::render_list_is_front_to_back ... ok
+test tests::subsurface_unmap_and_remap_change_the_frame ... ok
+test tests::unshown_nested_subsurfaces_are_not_in_the_frame ... ok
+test tests::unshown_sibling_is_not_in_the_frame ... ok
+test tests::unshown_subsurface_is_not_in_the_frame ... ok
+test visibility::tests::connect_emits_addition_then_enters ... ok
+test visibility::tests::clock_selection_and_frame_tick ... ok
+test visibility::tests::disconnect_emits_leaves_then_removal ... ok
+test visibility::tests::unmapped_elements_are_not_observed ... ok
+test render::tests::physical_selection_differs_from_the_canvas_exact_rule_at_fractional_scale ... ok
+test render::tests::ob2_region_equals_reference_evaluator ... ok
+
+test result: ok. 53 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running unittests src/lib.rs (target/debug/deps/infynitae_ipc-93a6d075839a8f46)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/main.rs (target/debug/deps/infynitae_source_rules-566fa3f721edbded)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/infynitae_wayland-4c55d59ca6214680)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests infynitae_architecture_probes
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests infynitae_backend_headless
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests infynitae_backend_winit
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests infynitae_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests infynitae_ipc
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests infynitae_wayland
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
