@@ -31,6 +31,8 @@ pub struct FrameEntry {
 pub struct Hit {
     pub element: ElementId,
     pub surface: SurfaceKey,
+    /// The surface's Canvas origin (F-ORIGIN-1), the focus origin given to Smithay (B2.5).
+    pub origin: CanvasPoint,
     /// Delivered coordinates: `q − origin`, clamped into `[0, w) × [0, h)` (Q16).
     pub local: LocalPos,
 }
@@ -107,6 +109,7 @@ impl ProjectionFrame {
                 return Some(Hit {
                     element: e.element,
                     surface: e.surface,
+                    origin: e.origin,
                     local,
                 });
             }

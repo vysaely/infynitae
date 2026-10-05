@@ -4,8 +4,9 @@
 //! presentation-time globals; the commit hook extracts the surface-tree snapshot and hands it to
 //! Core; Core's effects (initial configures, output globals, enter/leave) are applied in order;
 //! render elements are built from Core's render list and drawn through per-output damage trackers
-//! sized `phys_O` (`convert`); observed frames complete on Core's frame clock. No seat, input
-//! routing or scale policy yet (INC-3 onwards).
+//! sized `phys_O` (`convert`); observed frames complete on Core's frame clock. INC-3: one seat
+//! (`seat0`) with a pointer and the relative-pointer manager; Core's pointer effects are applied in
+//! order (`pointer`). No keyboard (INC-4), constraints (INC-5) or scale policy (INC-6) yet.
 //!
 //! Every Smithay handler receives `&mut` protocol state. That state holds the Core but never an
 //! authority port or the output-lifecycle token: those types are `!Send` and the state is asserted
@@ -17,18 +18,20 @@
 pub mod convert;
 mod handlers;
 mod outputs;
+mod pointer;
 pub mod registry;
 mod snapshot;
 
 use infynitae_core::Core;
 use infynitae_core::stage::ElementId;
 use smithay::desktop::{PopupManager, Window};
-use smithay::input::SeatState;
+use smithay::input::{Seat, SeatState};
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::presentation::PresentationState;
+use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
 
@@ -74,9 +77,14 @@ pub struct WaylandState {
     xdg_shell: XdgShellState,
     shm: ShmState,
     popups: PopupManager,
-    /// Required by Smithay's xdg-shell delegate (popup grabs name a seat). No seat and no
-    /// `wl_seat` global exist until input intake (INC-3, INC-4).
     seats: SeatState<WaylandState>,
+    /// The single seat, with a pointer (INC-3); no keyboard before INC-4.
+    seat: Seat<WaylandState>,
+    #[expect(
+        dead_code,
+        reason = "owns the zwp_relative_pointer_manager_v1 global for the state's lifetime"
+    )]
+    relative_pointer: RelativePointerManagerState,
     registry: SurfaceRegistry,
     elements: Vec<ElementHandle>,
     #[cfg(feature = "probe_store_port_in_state")]
@@ -93,8 +101,12 @@ const _: fn() = || {
 
 impl WaylandState {
     /// Creates the globals (`wl_compositor` v6 and `wl_subcompositor`, `wl_shm`, `xdg_wm_base`,
-    /// `zxdg_output_manager_v1`, `wp_presentation`). Output globals follow Core's effects.
+    /// `zxdg_output_manager_v1`, `wp_presentation`, `wl_seat` with a pointer,
+    /// `zwp_relative_pointer_manager_v1`). Output globals follow Core's effects.
     pub fn new(display: &DisplayHandle, core: Core) -> Self {
+        let mut seats = SeatState::new();
+        let mut seat = seats.new_wl_seat(display, "seat0");
+        seat.add_pointer();
         WaylandState {
             core,
             dh: display.clone(),
@@ -105,7 +117,9 @@ impl WaylandState {
             xdg_shell: XdgShellState::new::<Self>(display),
             shm: ShmState::new::<Self>(display, []),
             popups: PopupManager::default(),
-            seats: SeatState::new(),
+            seats,
+            seat,
+            relative_pointer: RelativePointerManagerState::new::<Self>(display),
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
             // probe builds only: the Send assertion must be the one and only error

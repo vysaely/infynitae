@@ -4,13 +4,22 @@
 //! (INV-CAMERA-1).
 
 use crate::Core;
-use crate::geom::{CanvasPoint, LocalPoint, LocalRect, LocalSize, Q16_ONE};
+use crate::geom::{CanvasPoint, CanvasPos, LocalPoint, LocalRect, LocalSize, Q16_ONE};
+use crate::input::Axis;
 use crate::output::OutputId;
 use crate::snapshot::{SnapshotError, SurfaceKey, SurfaceTree};
 use crate::stage::{ElementId, Lifecycle};
 
-/// Decisions the adapter applies to protocol objects (C2.1 `Effect` list), in order.
+/// The surface a pointer event is routed to and its Canvas origin (B2.5): Smithay's focus.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PointerTarget {
+    pub surface: SurfaceKey,
+    pub origin: CanvasPoint,
+}
+
+/// Decisions the adapter applies to protocol objects (C2.1 `Effect` list), in order. Only core
+/// constructs them (source rule `effects-only-from-core`).
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Effect {
     /// Send the toplevel's initial configure (M1).
     InitialConfigure(ElementId),
@@ -30,6 +39,36 @@ pub enum Effect {
         output: OutputId,
         surface: SurfaceKey,
     },
+    /// Routed absolute motion at the pointer's true position (M10): Smithay `motion` with focus
+    /// `target` and `location` in Canvas (INV-COORD-5). `target = None` clears the focus.
+    PointerMotion {
+        target: Option<PointerTarget>,
+        location: CanvasPos,
+        time_ms: u32,
+    },
+    /// Relative motion from a physical delta on the client path only (INV-INPUT-4). `target` is
+    /// the routing of the same event (Smithay's pending focus).
+    PointerRelative {
+        target: Option<PointerTarget>,
+        delta: (f64, f64),
+        delta_unaccel: (f64, f64),
+        time_us: u64,
+    },
+    /// A client-owned button (INV-INPUT-1).
+    PointerButton {
+        button: u32,
+        pressed: bool,
+        time_ms: u32,
+    },
+    /// A client-routed axis event.
+    PointerAxis { axis: Axis, time_ms: u32 },
+    /// `wl_pointer.frame`: ends the events of one physical event.
+    PointerFrame,
+    /// The last output is gone (M10 → NoOutput, EE-3): install the zero-output grab with
+    /// `Focus::Clear` (one `wl_pointer.leave`, nothing delivered while installed).
+    PointerZeroOutputBegin,
+    /// The first output after NoOutput: remove the zero-output grab before the startup placement.
+    PointerZeroOutputEnd,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

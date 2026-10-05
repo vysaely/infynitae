@@ -181,6 +181,17 @@ mod tests {
                     output: a,
                     surface: skey(1)
                 },
+                // the pointer (960, 540) on A relocates to (0, 540) on B (F-RELOCATE-1); B's
+                // c_eff is (−960, −540), so Canvas (−960, 0): outside W [0, 400) × [0, 300)
+                Effect::PointerMotion {
+                    target: None,
+                    location: CanvasPos {
+                        x: -960 << 16,
+                        y: 0
+                    },
+                    time_ms: 0
+                },
+                Effect::PointerFrame,
                 Effect::OutputRemoved(a)
             ]
         );

@@ -1,6 +1,8 @@
 //! The only conversions between Infynitae values and Smithay geometry types (C3.6, INV-COORD-4).
 
-use infynitae_core::geom::{LocalPoint, LocalRect, LocalSize, RenderLocation};
+use infynitae_core::geom::{
+    CanvasPoint, CanvasPos, LocalPoint, LocalRect, LocalSize, Q16_ONE, RenderLocation,
+};
 use infynitae_core::output::{OutputId, OutputModel, Transform};
 use infynitae_core::projection::View;
 use infynitae_core::render::FrameEntry;
@@ -36,6 +38,25 @@ pub(crate) fn parent_geometry_rect(r: LocalRect) -> Rectangle<i32, Logical> {
 }
 
 /// F-RENDER-1: the f64 render location, unchanged.
+/// A point in Smithay's global pointer space, which is Canvas (D-B2-PTR-SPACE, INV-COORD-5).
+pub type GlobalPoint = Point<f64, Logical>;
+
+/// Canvas Q16 → Smithay global (B2.7 `canvas_to_smithay_global`): exact, |x| ≤ 2⁵² units.
+pub fn canvas_to_global(q: CanvasPos) -> GlobalPoint {
+    let px = |v: i64| v as f64 / Q16_ONE as f64;
+    Point::from((px(q.x), px(q.y)))
+}
+
+/// An integral Canvas point (a surface origin) → Smithay global.
+pub fn canvas_point_to_global(p: CanvasPoint) -> GlobalPoint {
+    canvas_to_global(CanvasPos::from_point(p))
+}
+
+/// A physical device delta, unchanged (R6: no rounding), as Smithay's relative-motion type.
+pub(crate) fn global_delta(d: (f64, f64)) -> GlobalPoint {
+    Point::from(d)
+}
+
 pub fn projected_to_smithay_physical(l: RenderLocation) -> Point<f64, Physical> {
     Point::from((l.x, l.y))
 }

@@ -10,9 +10,11 @@
 
 use std::time::Duration;
 
+use infynitae_core::input::Axis;
+use infynitae_core::input::bindings::Modifiers;
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
 use infynitae_core::render::FrameEntry;
-use infynitae_core::{EntryError, FrameError, OutputLifecycleToken};
+use infynitae_core::{EntryError, FrameError, InputPort, OutputLifecycleToken, PhysicalEvent};
 use infynitae_wayland::{WaylandState, convert};
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::test::DummyRenderer;
@@ -91,9 +93,69 @@ pub fn disconnect(
     Ok(())
 }
 
-/// A virtual vblank of `output` at `now` (monotonic): Core's frame clock decides which observed
-/// elements complete, the adapter completes their callbacks and presents their feedback.
+/// The virtual input device: one physical event through the input port; the adapter applies
+/// Core's effects in order.
+pub fn inject(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    ev: PhysicalEvent,
+) -> Result<(), EntryError> {
+    let effects = state.core_mut().physical_input(port, ev)?;
+    state.apply(&effects);
+    Ok(())
+}
+
+/// Relative motion of the virtual mouse (accelerated and unaccelerated logical deltas).
+pub fn pointer_motion(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    delta: (f64, f64),
+    delta_unaccel: (f64, f64),
+    time_us: u64,
+) -> Result<(), EntryError> {
+    let ev = PhysicalEvent::PointerMotion {
+        delta,
+        delta_unaccel,
+        time_us,
+    };
+    inject(state, port, ev)
+}
+
+/// A button of the virtual mouse, with the seat's modifier snapshot at that event.
+pub fn pointer_button(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    button: u32,
+    pressed: bool,
+    modifiers: Modifiers,
+    time_us: u64,
+) -> Result<(), EntryError> {
+    let ev = PhysicalEvent::PointerButton {
+        button,
+        pressed,
+        modifiers,
+        time_us,
+    };
+    inject(state, port, ev)
+}
+
+/// Scrolling on the virtual mouse.
+pub fn pointer_axis(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    axis: Axis,
+    time_us: u64,
+) -> Result<(), EntryError> {
+    inject(state, port, PhysicalEvent::PointerAxis { axis, time_us })
+}
+
+/// A virtual vblank of `output` at `now` (monotonic): the backend produces the output's frame
+/// with the test renderer (recording its ProjectionFrame, so hit-testing reads what was shown,
+/// INV-HIT-1); then Core's frame clock decides which observed elements complete, and the adapter
+/// completes their callbacks and presents their feedback.
 pub fn vblank(state: &mut WaylandState, output: OutputId, now: Duration) {
+    // an output without a view has no frame to produce; the frame clock still ticks
+    let _ = render_frame(state, &mut DummyRenderer, output);
     let elements = state.core().frame_tick(output);
     state.complete_frames(output, &elements, now);
 }

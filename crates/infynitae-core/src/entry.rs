@@ -1,11 +1,16 @@
 //! Port-carrying entry points (C1.5, INV-CAMERA-1, INV-OUTPUT-2). The only module in which an
 //! `Authorized` proof can be minted.
 //!
-//! Each entry point first checks that its port or token belongs to this Core. INC-2 state:
+//! Each entry point first checks that its port or token belongs to this Core. INC-3 state:
 //! * the three output-lifecycle entries implement M4/M5 for any number of outputs (startup and
-//!   hotplug alike, reconfiguration, disconnection, the zero-output state);
-//! * input and shell vocabularies have no variants yet (INC-3, INC-11).
+//!   hotplug alike, reconfiguration, disconnection, the zero-output state) and the pointer's M10
+//!   transitions;
+//! * physical pointer input (C4.2: ownership, M22 CameraPan, routing, KeepFocus);
+//! * the shell vocabulary has no variants yet (INC-11).
 
+use crate::input::bindings;
+use crate::input::interaction::Interaction;
+use crate::input::ownership::Owner;
 use crate::output::{self, OutputDescriptor, OutputId, OutputModel};
 use crate::pointer::{self, PointerState};
 use crate::protocol::Effect;
@@ -39,13 +44,209 @@ impl Core {
         }
     }
 
+    /// C4.2 pointer intake. P0 validate; P1 ownership continuation (releases follow the press
+    /// owner, motion follows the interaction); P2 binding resolution before any client dispatch;
+    /// P3/P4 routing through the ProjectionFrame hit test. Returns the effects in order.
     pub fn physical_input(
         &mut self,
         port: &mut InputPort,
         ev: PhysicalEvent,
-    ) -> Result<(), EntryError> {
+    ) -> Result<Vec<Effect>, EntryError> {
         self.check(port.core_id)?;
-        match ev {}
+        match ev {
+            PhysicalEvent::PointerMotion {
+                delta,
+                delta_unaccel,
+                time_us,
+            } => {
+                let finite = [delta.0, delta.1, delta_unaccel.0, delta_unaccel.1]
+                    .iter()
+                    .all(|v| v.is_finite());
+                if !finite {
+                    return Err(EntryError::InvalidEvent);
+                }
+                // a motion owned by a pan mutates a camera: its proof is minted here, per event
+                let proof = matches!(self.input.interaction, Interaction::CameraPan { .. })
+                    .then(authority::Authorized::mint);
+                Ok(self.pointer_motion(proof, delta, delta_unaccel, time_us))
+            }
+            PhysicalEvent::PointerButton {
+                button,
+                pressed,
+                modifiers,
+                time_us,
+            } => Ok(if pressed {
+                self.button_press(button, modifiers, ms(time_us))
+            } else {
+                self.button_release(button, ms(time_us))
+            }),
+            PhysicalEvent::PointerAxis { axis, time_us } => {
+                let finite = [axis.amount.0, axis.amount.1].iter().all(|v| v.is_finite());
+                if !finite {
+                    return Err(EntryError::InvalidEvent);
+                }
+                // consumed during an interaction and in NoOutput (M10, M22)
+                if self.input.interaction.active() || self.pointer == PointerState::NoOutput {
+                    return Ok(Vec::new());
+                }
+                Ok(vec![
+                    Effect::PointerAxis {
+                        axis,
+                        time_ms: ms(time_us),
+                    },
+                    Effect::PointerFrame,
+                ])
+            }
+        }
+    }
+
+    /// Motion follows the interaction (INV-INPUT-1): a pan moves the camera and nothing reaches a
+    /// client (INV-INPUT-3, KeepFocus); an orphaned interaction or NoOutput consumes it; otherwise
+    /// the pointer moves in the Arrangement and the event is routed, with its relative motion.
+    fn pointer_motion(
+        &mut self,
+        proof: Option<authority::Authorized>,
+        delta: (f64, f64),
+        delta_unaccel: (f64, f64),
+        time_us: u64,
+    ) -> Vec<Effect> {
+        match self.input.interaction {
+            Interaction::CameraPan { output, camera, .. } => {
+                let (Some(scale), Some(zoom)) = (
+                    self.output(output).map(|o| o.scale),
+                    self.cameras.zoom(camera),
+                ) else {
+                    return Vec::new();
+                };
+                let (Some(proof), Some((camera, start, sum))) =
+                    (proof, self.input.interaction.pan_motion(delta, scale, zoom))
+                else {
+                    return Vec::new();
+                };
+                self.cameras.pan(proof, camera, start, sum);
+                self.frames.retain(|(o, _)| *o != output);
+                #[allow(unused_mut)]
+                let mut fx = self.visibility_pass();
+                #[cfg(feature = "probe_pan_motion_bypass")]
+                // NEGATIVE CONTROL (INV-INPUT-3 bypass switch, TST-05): pan motion also reaches
+                // the client. The x8 tests must fail under it.
+                fx.extend(self.routed_motion(delta, delta_unaccel, time_us));
+                fx
+            }
+            Interaction::Orphaned { .. } => Vec::new(),
+            Interaction::Idle => {
+                let PointerState::Located { output, p } = self.pointer else {
+                    return Vec::new();
+                };
+                if let Some(moved) = pointer::moved(&self.outputs, output, p, delta) {
+                    self.pointer = moved;
+                }
+                self.routed_motion(delta, delta_unaccel, time_us)
+            }
+        }
+    }
+
+    /// The client path of one motion event: the true-position motion, the relative motion of the
+    /// physical delta to the same routing (INV-INPUT-4), one frame.
+    fn routed_motion(
+        &mut self,
+        delta: (f64, f64),
+        delta_unaccel: (f64, f64),
+        time_us: u64,
+    ) -> Vec<Effect> {
+        let Some((target, location)) = self.route_pointer() else {
+            return Vec::new();
+        };
+        vec![
+            Effect::PointerMotion {
+                target,
+                location,
+                time_ms: ms(time_us),
+            },
+            Effect::PointerRelative {
+                target,
+                delta,
+                delta_unaccel,
+                time_us,
+            },
+            Effect::PointerFrame,
+        ]
+    }
+
+    /// Ownership is decided here, at press, before any client dispatch (INV-INPUT-1, C4.2 P2).
+    fn button_press(
+        &mut self,
+        button: u32,
+        mods: bindings::Modifiers,
+        time_ms: u32,
+    ) -> Vec<Effect> {
+        if self.input.ownership.owner(button).is_some() {
+            return Vec::new(); // a repeated press keeps its first owner
+        }
+        // M22: any press during an interaction is owned by it; M10: NoOutput consumes presses
+        let PointerState::Located { output, .. } = self.pointer else {
+            self.input.ownership.press(button, Owner::Compositor);
+            return Vec::new();
+        };
+        if self.input.interaction.active() {
+            self.input.ownership.press(button, Owner::Compositor);
+            return Vec::new();
+        }
+        let camera = self.cameras.camera_for_output(output);
+        let acquire = bindings::is_pan_binding(button, mods)
+            // INV-INPUT-2: never while the client owns a button
+            && !self.input.ownership.client_owns_any()
+            // OB-24 gate: no pan coexists with a persistent zoom ≠ 1
+            && camera.and_then(|c| self.cameras.zoom(c)) == Some(1.0);
+        if let (true, Some(camera), Some(start)) =
+            (acquire, camera, camera.and_then(|c| self.cameras.center(c)))
+        {
+            // M6 Idle → Panning: the press is consumed; KeepFocus (no event). Popup grabs would be
+            // dismissed here; none can exist before INC-4 (OB-4).
+            self.input.interaction = Interaction::CameraPan {
+                output,
+                camera,
+                initiator: button,
+                start,
+                sum: (0.0, 0.0),
+            };
+            self.input.ownership.press(button, Owner::Compositor);
+            return Vec::new();
+        }
+        self.input.ownership.press(button, Owner::Client);
+        vec![
+            Effect::PointerButton {
+                button,
+                pressed: true,
+                time_ms,
+            },
+            Effect::PointerFrame,
+        ]
+    }
+
+    /// A release follows the press owner (INV-INPUT-1). The initiator's release ends the
+    /// interaction with batch-end reconciliation: one true-position event (M10).
+    fn button_release(&mut self, button: u32, time_ms: u32) -> Vec<Effect> {
+        match self.input.ownership.release(button) {
+            None => Vec::new(),
+            Some(Owner::Compositor) => {
+                if self.input.interaction.initiator() != Some(button) {
+                    return Vec::new();
+                }
+                self.input.interaction = Interaction::Idle;
+                self.true_position(time_ms)
+            }
+            // In NoOutput the zero-output grab receives it and delivers nothing, keeping
+            // Smithay's pressed-button set truthful (no stuck implicit grab after reconnect).
+            Some(Owner::Client) => vec![
+                Effect::PointerButton {
+                    button,
+                    pressed: false,
+                    time_ms,
+                },
+                Effect::PointerFrame,
+            ],
+        }
     }
 
     pub fn shell_command(
@@ -83,12 +284,21 @@ impl Core {
             id,
             &self.persisted,
         );
-        if self.pointer == PointerState::NoOutput {
+        let was_zero = self.pointer == PointerState::NoOutput;
+        if was_zero {
             self.pointer = pointer::startup(&model);
         }
         self.outputs.push(model);
         let mut fx = vec![Effect::OutputAdded(id)];
         fx.extend(self.visibility_pass());
+        if was_zero {
+            // M10 NoOutput → Located: the grab goes first, then one routed motion (enter) unless
+            // an orphaned interaction still owns the pointer
+            fx.push(Effect::PointerZeroOutputEnd);
+            if !self.input.interaction.active() {
+                fx.extend(self.true_position(0));
+            }
+        }
         Ok((id, fx))
     }
 
@@ -121,6 +331,11 @@ impl Core {
         self.pointer = pointer::reconfigured(self.pointer, &model);
         let mut fx = vec![Effect::OutputChanged(output)];
         fx.extend(self.visibility_pass());
+        // M10: at most one true-position event, none while an interaction owns the pointer
+        let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
+        if on_it && !self.input.interaction.active() {
+            fx.extend(self.true_position(0));
+        }
         Ok(fx)
     }
 
@@ -143,6 +358,9 @@ impl Core {
         self.frames.retain(|(o, _)| *o != output);
         self.cameras
             .unbind_on_disconnect(authority::Authorized::mint(), output);
+        // C4.6: a pan on the removed output keeps its ownership and consumes motion until release
+        self.input.interaction.orphan_if_on(output);
+        let mut pointer_fx = Vec::new();
         if let PointerState::Located { output: o, p } = self.pointer
             && o == output
         {
@@ -150,11 +368,23 @@ impl Core {
                 Some((first, rest)) => pointer::relocate(&lost, p, first, rest),
                 None => PointerState::NoOutput,
             };
+            if self.pointer == PointerState::NoOutput {
+                // M10 → NoOutput: Focus::Clear grab (leave), nothing to the old focus
+                pointer_fx.push(Effect::PointerZeroOutputBegin);
+            } else if !self.input.interaction.active() {
+                pointer_fx = self.true_position(0);
+            }
         }
         let mut fx = self.visibility_pass();
+        fx.extend(pointer_fx);
         fx.push(Effect::OutputRemoved(output));
         Ok(fx)
     }
+}
+
+/// `wl_pointer` timestamps: milliseconds with wrap-around.
+fn ms(time_us: u64) -> u32 {
+    (time_us / 1000) as u32
 }
 
 #[cfg(test)]
@@ -233,7 +463,21 @@ mod tests {
         let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
         assert!(c.cameras().is_empty());
         let (a, fx) = c.output_connected(&mut t, desc("A")).unwrap();
-        assert_eq!(fx, vec![Effect::OutputAdded(a)]);
+        // M10 NoOutput → Located: the startup pointer (960, 540) unprojects through
+        // c_eff = (−960, −540) to Canvas (0, 0); nothing is mapped, so the focus stays clear
+        assert_eq!(
+            fx,
+            vec![
+                Effect::OutputAdded(a),
+                Effect::PointerZeroOutputEnd,
+                Effect::PointerMotion {
+                    target: None,
+                    location: pos(0, 0),
+                    time_ms: 0
+                },
+                Effect::PointerFrame
+            ]
+        );
         assert_eq!(camera_of(&c, a), 0);
         assert_eq!(
             (c.cameras().center(0), c.cameras().zoom(0)),
@@ -265,7 +509,11 @@ mod tests {
         let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
         assert_eq!(c.cameras().center(0), Some(pos(-25, 40)));
         let fx = c.output_disconnected(&mut t, a).unwrap();
-        assert_eq!(fx, vec![Effect::OutputRemoved(a)]);
+        // the last output: M10 → NoOutput installs the zero-output grab before the removal
+        assert_eq!(
+            fx,
+            vec![Effect::PointerZeroOutputBegin, Effect::OutputRemoved(a)]
+        );
         assert_eq!(c.cameras().len(), 1, "camera destroyed on disconnect");
         assert_eq!(c.cameras().bound_output(0), None);
         assert_eq!(c.cameras().center(0), Some(pos(-25, 40)));

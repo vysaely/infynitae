@@ -53,6 +53,10 @@ impl WaylandState {
                         h.output.leave(s);
                     }
                 }
+                ref pointer => {
+                    let applied = self.apply_pointer(pointer);
+                    debug_assert!(applied, "unhandled effect {pointer:?}");
+                }
             }
         }
     }

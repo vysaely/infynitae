@@ -16,6 +16,7 @@
 #![forbid(unsafe_code)]
 
 pub mod geom;
+pub mod input;
 pub mod navigation;
 pub mod output;
 pub mod pointer;
@@ -61,8 +62,27 @@ pub struct OutputLifecycleToken {
     _not_send: NotSend,
 }
 
-/// Physical input produced by a backend. No variants until INC-3 (pointer intake).
-pub enum PhysicalEvent {}
+/// Physical input produced by a backend (C4.1), submitted through [`InputPort`]. Times are the
+/// device's monotonic microseconds.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PhysicalEvent {
+    /// A relative pointer device moved: accelerated and unaccelerated deltas in logical px.
+    PointerMotion {
+        delta: (f64, f64),
+        delta_unaccel: (f64, f64),
+        time_us: u64,
+    },
+    /// A pointer button changed. `modifiers` is the seat's modifier snapshot at this event (C4.4:
+    /// core keeps no copy).
+    PointerButton {
+        button: u32,
+        pressed: bool,
+        modifiers: input::bindings::Modifiers,
+        time_us: u64,
+    },
+    /// Scrolling.
+    PointerAxis { axis: input::Axis, time_us: u64 },
+}
 
 /// A semantic command from the trusted shell (C7.2). No variants until INC-11 (shell IPC).
 pub enum ShellCommand {}
@@ -79,6 +99,8 @@ pub enum EntryError {
     /// Reconfiguration named a different `OutputKey`: an identity change is a disconnect plus a
     /// connect, never a reconfiguration (INV-OUTPUT-2).
     IdentityChanged,
+    /// A physical event with a non-finite value; nothing was changed.
+    InvalidEvent,
 }
 
 /// Why no frame could be produced for an output.
@@ -102,6 +124,8 @@ pub struct Core {
     membership: visibility::MembershipTable,
     /// OBJ-20, core part.
     pointer: pointer::PointerState,
+    /// OBJ-25 and OBJ-26.
+    input: input::InputState,
     /// OBJ-09: read only by `output_connected`.
     persisted: navigation::PersistedCameras,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
@@ -129,6 +153,7 @@ impl Core {
                 frames: Vec::new(),
                 membership: visibility::MembershipTable::default(),
                 pointer: pointer::PointerState::NoOutput,
+                input: input::InputState::default(),
                 persisted,
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
@@ -170,6 +195,16 @@ impl Core {
     /// The seat's physical pointer state (OBJ-20, core part).
     pub fn pointer(&self) -> pointer::PointerState {
         self.pointer
+    }
+
+    /// The interaction state (OBJ-26).
+    pub fn interaction(&self) -> input::interaction::Interaction {
+        self.input.interaction
+    }
+
+    /// The button ownership table (OBJ-25).
+    pub fn buttons(&self) -> &input::ownership::Ownership {
+        &self.input.ownership
     }
 
     /// The current per-surface output membership (OBJ-13).
@@ -257,6 +292,49 @@ impl Core {
             .tree(hit.element)
             .is_some_and(|t| t.surfaces.iter().any(|s| s.key == hit.surface));
         alive.then_some(hit)
+    }
+
+    /// The single pointer → client path (B2.5, M10): the true position `(O, p)` is hit-tested on
+    /// O's ProjectionFrame (F-HIT-1). With a hit, the Smithay location is `origin + local`, so the
+    /// client receives exactly the delivered coordinate; without one, it is `q` (F-UNPROJECT-1 on
+    /// the same frame's view) and the focus is cleared. `None` when the pointer has no output.
+    pub(crate) fn route_pointer(
+        &mut self,
+    ) -> Option<(Option<protocol::PointerTarget>, geom::CanvasPos)> {
+        let pointer::PointerState::Located { output, p } = self.pointer else {
+            return None;
+        };
+        let pt = geom::OutputLogicalPoint { x: p.0, y: p.1 };
+        let hit = self.hit_test(output, pt);
+        let view = self.frames.iter().find(|(o, _)| *o == output)?.1.view;
+        Some(match hit {
+            Some(h) => (
+                Some(protocol::PointerTarget {
+                    surface: h.surface,
+                    origin: h.origin,
+                }),
+                geom::CanvasPos {
+                    x: h.origin.x * geom::Q16_ONE + h.local.x,
+                    y: h.origin.y * geom::Q16_ONE + h.local.y,
+                },
+            ),
+            None => (None, view.unproject(pt)),
+        })
+    }
+
+    /// One true-position event (M10 reconciliation): a routed motion and its frame.
+    pub(crate) fn true_position(&mut self, time_ms: u32) -> Vec<protocol::Effect> {
+        match self.route_pointer() {
+            Some((target, location)) => vec![
+                protocol::Effect::PointerMotion {
+                    target,
+                    location,
+                    time_ms,
+                },
+                protocol::Effect::PointerFrame,
+            ],
+            None => Vec::new(),
+        }
     }
 }
 

@@ -18,7 +18,8 @@ use smithay::wayland::shell::xdg::{
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{
-    delegate_compositor, delegate_output, delegate_presentation, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_output, delegate_presentation, delegate_relative_pointer,
+    delegate_seat, delegate_shm, delegate_xdg_shell,
 };
 
 use crate::{ClientState, ElementHandle, WaylandState, convert, snapshot};
@@ -189,7 +190,8 @@ impl XdgShellHandler for WaylandState {
         surface.send_repositioned(token);
     }
 
-    /// Popup grabs are INC-4 (keyboard focus, popup routing); no seat exists yet.
+    /// Popup grabs are INC-4 (keyboard focus, popup routing): not honoured before it, so no
+    /// popup grab exists when an interaction is acquired (OB-4 acquisition part).
     fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
 }
 
@@ -209,5 +211,7 @@ impl OutputHandler for WaylandState {}
 delegate_compositor!(WaylandState);
 delegate_output!(WaylandState);
 delegate_presentation!(WaylandState);
+delegate_relative_pointer!(WaylandState);
+delegate_seat!(WaylandState);
 delegate_shm!(WaylandState);
 delegate_xdg_shell!(WaylandState);

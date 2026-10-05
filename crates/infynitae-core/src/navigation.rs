@@ -2,10 +2,11 @@
 //!
 //! INC-2: cameras are created, bound and unbound only through the output-lifecycle entries
 //! (M5): binding precedence remembered-and-unbound → persisted (no collision) → default, 1:1
-//! (INV-CAMERA-3). Navigation (pan, jump, fit) arrives with INC-3 and later.
+//! (INV-CAMERA-3). INC-3: direct-manipulation pan (F-PAN-1) from physical input. Jump and fit
+//! arrive later.
 
 use crate::authority::Authorized;
-use crate::geom::{CanvasPoint, CanvasPos};
+use crate::geom::{CANVAS_LIMIT_PX, CanvasPoint, CanvasPos, Q16_ONE, q16};
 use crate::output::{OutputId, OutputKey};
 
 #[derive(Debug)]
@@ -154,11 +155,19 @@ impl CameraSet {
         Some(i)
     }
 
+    /// F-PAN-1 update of a pan gesture: the camera becomes `start − Q16(sum)`, quantised once from
+    /// the f64 sum of the whole gesture (R2, INV-COORD-3). Consumes a proof (INV-CAMERA-1).
+    pub(crate) fn pan(
+        &mut self,
+        proof: Authorized,
+        camera: usize,
+        start: CanvasPos,
+        sum: (f64, f64),
+    ) {
+        self.set_center(proof, camera, pan_target(start, sum));
+    }
+
     /// Mutation is private to this module and consumes a proof.
-    #[expect(
-        dead_code,
-        reason = "authority shape; first caller arrives with INC-3 (navigation)"
-    )]
     fn set_center(&mut self, _proof: Authorized, camera: usize, center: CanvasPos) {
         if let Some(c) = self.cameras.get_mut(camera) {
             c.center = center;
@@ -166,10 +175,22 @@ impl CameraSet {
     }
 }
 
-/// The trusted source of a navigation request. Not visible outside core.
+/// F-PAN-1: `C = C_start − Q16(Σ)`, Q16 ties-even, saturated at the stored-Canvas bound ±2³⁶ px
+/// (INV-COORD-1). Pure.
+pub fn pan_target(start: CanvasPos, sum: (f64, f64)) -> CanvasPos {
+    let limit = CANVAS_LIMIT_PX * Q16_ONE;
+    let axis = |c: i64, s: f64| c.saturating_sub(q16(s)).clamp(-limit, limit);
+    CanvasPos {
+        x: axis(start.x, sum.0),
+        y: axis(start.y, sum.1),
+    }
+}
+
+/// The trusted source of a navigation request. Not visible outside core. The physical-input pan
+/// is identified by its mint site; the distinction is first needed by shell navigation commands.
 #[expect(
     dead_code,
-    reason = "authority shape; first use arrives with INC-3 (navigation)"
+    reason = "authority shape; first use arrives with INC-11 (shell navigation commands)"
 )]
 pub(crate) enum Authority {
     PhysicalInput,
@@ -186,6 +207,21 @@ mod tests {
             x: x << 16,
             y: y << 16,
         }
+    }
+
+    /// F-PAN-1 oracle: hand-derived Q16 values (ties-even at the Q16 half step) and saturation.
+    #[test]
+    fn pan_target_quantises_the_sum_once() {
+        let s = pos(100, -50);
+        assert_eq!(pan_target(s, (219.0, -63.0)), pos(-119, 13));
+        // 0.5 / 65536 px is a tie: rounds to the even Q16 value 0
+        let half = 0.5 / 65536.0;
+        assert_eq!(pan_target(s, (half, 0.0)), s);
+        // 1.5 / 65536 px rounds to 2 units
+        let r = pan_target(s, (3.0 * half, 0.0));
+        assert_eq!(r.x, s.x - 2);
+        let far = pan_target(s, (-1e30, 1e30));
+        assert_eq!((far.x, far.y), ((1 << 36) << 16, -((1 << 36) << 16)));
     }
 
     #[test]

@@ -22,3 +22,6 @@ probe_unsafe_allow_override = []
 # Runtime 2i negative control (OB-49): the sealed 2R binding rule, which steals a bound camera.
 # tools/verify-architecture requires the 1:1 collision tests to fail with "1:1 violated" under it.
 probe_sealed_key_steal = []
+# INV-INPUT-3 bypass switch (TST-05 negative control): pan motion also reaches the client.
+# tools/verify-architecture requires the x8 KeepFocus tests to fail under it.
+probe_pan_motion_bypass = []
