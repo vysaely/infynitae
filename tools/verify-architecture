@@ -63,6 +63,18 @@ ALLOWED_EXTERNAL = {
     IPC: set(),
     BIN: set(),
 }
+# Test-only external crates (dev-dependencies) a product crate may add on top of
+# ALLOWED_EXTERNAL. T1 is "production core + adapter + headless backend ... with recording probe
+# clients over socketpairs" (FOUNDATION_TEST_PLAN T1; C1.2 testing row: T1 via the headless
+# backend), so only the headless backend may name a Wayland client library, and only for tests.
+ALLOWED_DEV_EXTERNAL = {
+    CORE: set(),
+    WAYLAND: set(),
+    HEADLESS: {"wayland-client", "wayland-protocols"},
+    WINIT: set(),
+    IPC: set(),
+    BIN: set(),
+}
 # Crates whose transitive closure must never contain these (C1.2 forbidden deps, C7.4).
 FORBIDDEN_TRANSITIVE = {
     IPC: {"smithay", WAYLAND, HEADLESS, WINIT, "calloop", "winit", "drm", "input"},
@@ -258,12 +270,16 @@ def dag_problems(meta):
     nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
 
     def direct(pid):
+        """(name, dev_only) for every direct dependency of any class."""
         out = []
         for d in nodes[pid]["deps"]:
             kinds = {k["kind"] for k in d["dep_kinds"]}
             if kinds & {None, "build", "dev"}:
-                out.append(by_id[d["pkg"]]["name"])
+                out.append((by_id[d["pkg"]]["name"], kinds == {"dev"}))
         return out
+
+    def allowed_external(name, dev_only):
+        return ALLOWED_EXTERNAL[name] | (ALLOWED_DEV_EXTERNAL[name] if dev_only else set())
 
     def closure(pid):
         seen, stack = set(), [pid]
@@ -281,13 +297,13 @@ def dag_problems(meta):
         pid = ws_names[name]
         deps = direct(pid)
         if name == CORE and deps:
-            problems.append(f"{CORE} has dependencies {deps}; it must have none (INV-ARCH-1)")
-        for d in deps:
+            problems.append(f"{CORE} has dependencies {[d for d, _ in deps]}; it must have none (INV-ARCH-1)")
+        for d, dev_only in deps:
             if d in ws_names:
                 if d not in ALLOWED_INTERNAL[name]:
                     problems.append(f"forbidden edge {name} -> {d}")
-            elif d not in ALLOWED_EXTERNAL[name]:
-                problems.append(f"{name} depends on external crate {d!r}; allowed: {sorted(ALLOWED_EXTERNAL[name]) or 'none'}")
+            elif d not in allowed_external(name, dev_only):
+                problems.append(f"{name} depends on external crate {d!r}{' (dev)' if dev_only else ''}; allowed: {sorted(allowed_external(name, dev_only)) or 'none'}")
         for bad in sorted(closure(pid) & FORBIDDEN_TRANSITIVE.get(name, set())):
             problems.append(f"{name} transitively depends on forbidden {bad}")
     # declared manifest edges too: a declaration Cargo drops from the resolve (for example a
@@ -304,8 +320,8 @@ def dag_problems(meta):
             kind_str = f" ({d['kind']})" if d.get("kind") else ""
             if d["name"] in ws_names and d["name"] not in ALLOWED_INTERNAL[name]:
                 problems.append(f"declared edge {name} -> {d['name']}{kind_str} is forbidden")
-            elif d["name"] not in ws_names and d["name"] not in ALLOWED_EXTERNAL[name]:
-                problems.append(f"{name} declares external crate {d['name']!r}{kind_str}; allowed: {sorted(ALLOWED_EXTERNAL[name]) or 'none'}")
+            elif d["name"] not in ws_names and d["name"] not in allowed_external(name, d.get("kind") == "dev"):
+                problems.append(f"{name} declares external crate {d['name']!r}{kind_str}; allowed: {sorted(allowed_external(name, d.get('kind') == 'dev')) or 'none'}")
             if d["name"] in ENFORCEMENT:
                 problems.append(f"product crate {name} declares enforcement crate {d['name']}{kind_str}")
     for name in ENFORCEMENT:
@@ -509,7 +525,31 @@ def replace(old, new):
 CORE_LIB = "crates/infynitae-core/src/lib.rs"
 CORE_ENTRY = "crates/infynitae-core/src/entry.rs"
 
+WAYLAND_LIB = "crates/infynitae-wayland/src/lib.rs"
+
 SOURCE_SEEDS = [
+    ("INC-1: adapter imports Smithay Space (W-SM-1)", "smithay-rejected-apis",
+     WAYLAND_LIB, append("\n#[allow(unused_imports)]\nuse smithay::desktop::Space;\n")),
+    ("INC-1: adapter hit-tests with Window::surface_under (W-SM-11/12)", "smithay-rejected-apis",
+     "crates/infynitae-wayland/src/handlers.rs",
+     append("\nfn rogue_hit(w: &Window) -> bool {\n"
+            "    w.surface_under((0.0, 0.0), smithay::desktop::WindowSurfaceType::ALL).is_some()\n}\n")),
+    ("INC-1: i32-root render path (W-SM-5)", "smithay-rejected-apis",
+     "crates/infynitae-wayland/src/convert.rs",
+     append("\n#[allow(unused_imports)]\nuse smithay::backend::renderer::element::surface::render_elements_from_surface_tree;\n")),
+    ("INC-1: adapter constructs a Smithay Point outside convert (INV-COORD-4)", "smithay-geometry-only-in-convert",
+     "crates/infynitae-wayland/src/snapshot.rs",
+     append("\nfn rogue_point() -> smithay::utils::Point<i32, smithay::utils::Logical> {\n    (0, 0).into()\n}\n")),
+    ("INC-1: render module writes the Stage (ownership inversion, INV-STAGE-1/6)", "stage-single-writer",
+     "crates/infynitae-core/src/render.rs",
+     append("\nimpl crate::Core {\n    pub fn rogue_place(&mut self, id: ElementId) {\n"
+            "        let _ = self.stage.place(id, CanvasPoint { x: 0, y: 0 });\n    }\n}\n")),
+    ("INC-1: protocol policy creates a camera with a minted proof", "mint-location",
+     "crates/infynitae-core/src/protocol.rs",
+     append("\nimpl Core {\n    pub fn rogue_camera(&mut self, o: crate::output::OutputId) {\n"
+            "        self.cameras.create_bound(crate::authority::Authorized::mint(), o);\n    }\n}\n")),
+    ("INC-1: unsafe block in a T1 integration test", "unsafe-policy",
+     "crates/infynitae-backend-headless/tests/t1_slice.rs", append("\n#[test]\nfn rogue() {\n    unsafe {}\n}\n")),
     ("2g: reissue_token() on an existing Core", "authority-construction",
      CORE_LIB, append("\nimpl Core {\n    pub fn reissue_token(&self) -> OutputLifecycleToken {\n"
                       "        OutputLifecycleToken { core_id: self.id, _not_send: std::marker::PhantomData }\n    }\n}\n")),
@@ -563,6 +603,12 @@ SOURCE_SEEDS = [
 
 
 GRAPH_SEEDS = [
+    ("INC-1: wayland-client as a normal dependency of the headless backend",
+     "crates/infynitae-backend-headless/Cargo.toml", 'wayland-client = "=0.31.15"', "dag"),
+    ("INC-1: wayland-client dev-dependency of the adapter", "crates/infynitae-wayland/Cargo.toml",
+     '\n[dev-dependencies]\nwayland-client = "=0.31.15"\n', "append-dag"),
+    ("INC-1: wayland-client dev-dependency of ipc", "crates/infynitae-ipc/Cargo.toml",
+     '\n[dev-dependencies]\nwayland-client = "=0.31.15"\n', "append-dag"),
     ("core gains a dependency (smithay)", "crates/infynitae-core/Cargo.toml",
      'smithay = { version = "=0.7.0", default-features = false }', "dag"),
     ("F02: core gains a dev-dependency (smithay)", "crates/infynitae-core/Cargo.toml",

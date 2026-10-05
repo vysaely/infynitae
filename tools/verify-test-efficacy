@@ -1,0 +1,173 @@
+#!/usr/bin/env python3
+"""verify-test-efficacy — seeded behavioural defects must be caught by the product tests.
+
+Each control copies the workspace to a temporary directory, injects ONE subtle defect into
+production code, and runs the named test. The control passes only if that test FAILS as a test
+(a compile error or a missing test is a broken control, not a detection). The canonical tree is
+never edited; its digest is compared before and after.
+
+Headless, deterministic, non-interactive. Exit status 0 only when every control detects its defect.
+Usage: tools/verify-test-efficacy
+"""
+
+import hashlib
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+TARGET = os.path.join(ROOT, "target", "test-efficacy")
+COPY_ITEMS = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates", "enforcement"]
+
+CORE = "crates/infynitae-core/src"
+WAYLAND = "crates/infynitae-wayland/src"
+
+# (property, file, old, new, package, test target args, test name filter)
+CONTROLS = [
+    ("F-LATTICE-1 R4: edges floor instead of round", f"{CORE}/projection.rs",
+     "((x - r) as f64 * k + DELTA).round() as i64 - c", "((x - r) as f64 * k + DELTA).floor() as i64 - c",
+     "infynitae-core", ["--lib"], "ob6_edge_equals_round_l"),
+    ("F-LATTICE-1 R4: edges floor instead of round (T1 x6 on Smithay)", f"{CORE}/projection.rs",
+     "((x - r) as f64 * k + DELTA).round() as i64 - c", "((x - r) as f64 * k + DELTA).floor() as i64 - c",
+     "infynitae-backend-headless", ["--test", "t1_parity"], "tst04_x6"),
+    ("F-VIEW-1 R7: view origin rounds half away from zero", "crates/infynitae-core/src/geom.rs",
+     "(px * Q16_ONE as f64).round_ties_even() as i64", "(px * Q16_ONE as f64).round() as i64",
+     "infynitae-core", ["--lib"], "view_origin_is_centre_minus_half_view_ties_even"),
+    ("F-LATTICE-1: lattice reference truncates instead of flooring", f"{CORE}/projection.rs",
+     "let r = v_q.div_euclid(LATTICE * Q16_ONE) * LATTICE;", "let r = v_q / (LATTICE * Q16_ONE) * LATTICE;",
+     "infynitae-core", ["--lib"], "lattice_reference_floors_negative_origins"),
+    ("F-ORIGIN-1: popup geometry offset added instead of subtracted", f"{CORE}/snapshot.rs",
+     "- geometry_loc.x as i64,", "+ geometry_loc.x as i64,",
+     "infynitae-backend-headless", ["--test", "t1_parity"], "tst09_xsnap"),
+    ("input region: first matching request decides instead of the last", f"{CORE}/snapshot.rs",
+     "                .rev()\n                .find(|op| op.rect.contains(x, y))", "                .find(|op| op.rect.contains(x, y))",
+     "infynitae-core", ["--lib"], "ob2_region_equals_reference_evaluator"),
+    ("F-HIT-1: delivered coordinates not clamped into the surface", f"{CORE}/render.rs",
+     "let clamp = |v: i64, extent: i32| v.clamp(0, extent as i64 * Q16_ONE - 1);",
+     "let clamp = |v: i64, extent: i32| v + 0 * extent as i64;",
+     "infynitae-core", ["--lib"], "delivered_coordinates_are_clamped"),
+    ("F-HIT-1: entries traversed back to front", f"{CORE}/render.rs",
+     "        for e in &self.entries {", "        for e in self.entries.iter().rev() {",
+     "infynitae-core", ["--lib"], "xhit_semantic_cases_at_scale_one"),
+    ("F-HIT-1: entries traversed back to front (T1 vs presented)", f"{CORE}/render.rs",
+     "        for e in &self.entries {", "        for e in self.entries.iter().rev() {",
+     "infynitae-backend-headless", ["--test", "t1_slice"], "vertical_slice_hit_test_equals_presented_surface"),
+    ("INV-RENDER-2: elements back to front", f"{CORE}/stage.rs",
+     "self.z.iter().rev().filter_map(", "self.z.iter().filter_map(",
+     "infynitae-core", ["--lib"], "render_list_is_front_to_back"),
+    ("PD-F1-07: dead frame entries delivered instead of failing closed", f"{CORE}/lib.rs",
+     "alive.then_some(hit)", "{ let _ = alive; Some(hit) }",
+     "infynitae-core", ["--lib"], "dead_frame_entries_fail_closed"),
+    ("M1 / OBJ-05: unmap keeps the snapshot", f"{CORE}/protocol.rs",
+     "                self.stage.set_tree(id, None).map_err(stale)?;\n                self.stage\n                    .set_state(id, Lifecycle::Unmapped)",
+     "                self.stage.set_tree(id, Some(tree)).map_err(stale)?;\n                self.stage\n                    .set_state(id, Lifecycle::Unmapped)",
+     "infynitae-core", ["--lib"], "m1_map_unmap_remap_destroy"),
+    ("M1: buffer before the initial configure accepted", f"{CORE}/protocol.rs",
+     "            (Lifecycle::AwaitingInitialCommit | Lifecycle::Unmapped, true) => {\n                Err(ProtocolError::BufferBeforeConfigure)\n            }",
+     "            (Lifecycle::AwaitingInitialCommit | Lifecycle::Unmapped, true) => Ok(vec![]),",
+     "infynitae-core", ["--lib"], "m1_illegal_transitions"),
+    ("INC-1 scope: a second output connected", f"{CORE}/entry.rs",
+     "        if !self.outputs.is_empty() {\n            return Err(EntryError::Unsupported);\n        }", "",
+     "infynitae-core", ["--lib"], "second_connect_is_refused"),
+    ("M3 R8: popup target min edges floored instead of ceiled", f"{CORE}/protocol.rs",
+     "let ceil = |v: i64| -(-v).div_euclid(Q16_ONE);", "let ceil = |v: i64| v.div_euclid(Q16_ONE);",
+     "infynitae-core", ["--lib"], "popup_target_is_the_viewport_inward_rounded"),
+    ("adapter: popup geometry origin dropped from the snapshot", f"{WAYLAND}/snapshot.rs",
+     "                convert::local_point(geometry_loc),\n            )),",
+     "                LocalPoint::default(),\n            )),",
+     "infynitae-backend-headless", ["--test", "t1_parity"], "tst09_xsnap"),
+    ("adapter convert: render location floored (not the F-RENDER-1 f64 value)", f"{WAYLAND}/convert.rs",
+     "    Point::from((l.x, l.y))", "    Point::from((l.x.floor(), l.y.floor()))",
+     "infynitae-backend-headless", ["--test", "t1_slice"], "vertical_slice_hit_test_equals_presented_surface"),
+    ("adapter: subsurface stacking ignored (root tree traversed upward)", f"{WAYLAND}/snapshot.rs",
+     "    with_surface_tree_downward(\n        root,", "    smithay::wayland::compositor::with_surface_tree_upward(\n        root,",
+     "infynitae-backend-headless", ["--test", "t1_parity"], "tst09_xsnap"),
+]
+
+# Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.
+JUDGE = [
+    ("judge: a harmless seed is not reported as detected", "MISSED", f"{CORE}/projection.rs",
+     "fn edge(x: i64, r: i64, c: i64, k: f64) -> i64 {", "fn edge(x: i64, r: i64, c: i64, k: f64) -> i64 {\n    // seeded comment",
+     "infynitae-core", ["--lib"], "ob6_edge_equals_round_l"),
+    ("judge: a filter matching no test is a broken control", "BROKEN", f"{CORE}/projection.rs",
+     "((x - r) as f64 * k + DELTA).round() as i64 - c", "((x - r) as f64 * k + DELTA).floor() as i64 - c",
+     "infynitae-core", ["--lib"], "no_such_test_name"),
+]
+
+
+def digest():
+    h = hashlib.sha256()
+    for item in COPY_ITEMS:
+        p = os.path.join(ROOT, item)
+        files = [p] if os.path.isfile(p) else sorted(os.path.join(d, f) for d, _, fs in os.walk(p) for f in fs)
+        for f in files:
+            h.update(os.path.relpath(f, ROOT).encode())
+            with open(f, "rb") as fh:
+                h.update(fh.read())
+    return h.hexdigest()
+
+
+def run_control(prop, rel, old, new, package, target, name):
+    tmp = tempfile.mkdtemp(prefix="verify-test-efficacy-")
+    try:
+        for item in COPY_ITEMS:
+            src, dst = os.path.join(ROOT, item), os.path.join(tmp, item)
+            (shutil.copytree if os.path.isdir(src) else shutil.copy2)(src, dst)
+        path = os.path.join(tmp, rel)
+        with open(path) as f:
+            text = f.read()
+        if text.count(old) != 1:
+            return "BROKEN", f"seed anchor found {text.count(old)} times in {rel}"
+        with open(path, "w") as f:
+            f.write(text.replace(old, new, 1))
+        cmd = ["cargo", "test", "--locked", "-p", package, *target, name, "--", "--test-threads=1"]
+        p = subprocess.run(cmd, cwd=tmp, env={**os.environ, "CARGO_TARGET_DIR": TARGET},
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        out = p.stdout
+        if "error[E" in out or "could not compile" in out:
+            return "BROKEN", "the seeded tree does not compile"
+        failed = [l for l in out.splitlines() if l.startswith("test ") and l.endswith("FAILED") and name in l]
+        if p.returncode != 0 and failed:
+            return "DETECTED", failed[0]
+        ran = sum(int(m) for m in re.findall(r"test result: \w+\. (\d+) passed; (?:\d+) failed", out))
+        ran += sum(int(m) for m in re.findall(r"test result: \w+\. \d+ passed; (\d+) failed", out))
+        if ran == 0:
+            return "BROKEN", f"no test matched {name!r}"
+        return "MISSED", "the named test passed with the defect"
+    finally:
+        shutil.rmtree(tmp)
+
+
+def main():
+    if sys.argv[1:]:
+        print(__doc__)
+        return 2
+    print("=" * 72)
+    print("verify-test-efficacy — seeded behavioural defects (INC-1)")
+    print("=" * 72)
+    before = digest()
+    failures = 0
+    for prop, rel, old, new, package, target, name in CONTROLS:
+        verdict, detail = run_control(prop, rel, old, new, package, target, name)
+        ok = verdict == "DETECTED"
+        failures += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'}  {verdict:<9} {prop}\n          {package} {' '.join(target)} {name}: {detail}")
+    for prop, want, rel, old, new, package, target, name in JUDGE:
+        verdict, detail = run_control(prop, rel, old, new, package, target, name)
+        ok = verdict == want
+        failures += not ok
+        print(f"  {'ok  ' if ok else 'FAIL'}  {verdict:<9} {prop} (want {want})")
+    same = digest() == before
+    if not same:
+        failures += 1
+    print(f"  {'ok  ' if same else 'FAIL'}  canonical tree byte-identical after all controls")
+    print("=" * 72)
+    print(f"== verify-test-efficacy: {'PASS' if failures == 0 else f'FAIL ({failures})'}")
+    return 0 if failures == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

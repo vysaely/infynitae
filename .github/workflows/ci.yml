@@ -51,3 +51,5 @@ jobs:
       - run: cargo build --workspace --locked
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - name: Seeded behavioural defects must fail the product tests
+        run: ./tools/verify-test-efficacy

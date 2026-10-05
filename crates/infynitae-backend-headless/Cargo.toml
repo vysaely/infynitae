@@ -7,7 +7,13 @@ rust-version.workspace = true
 publish.workspace = true
 
 # C1.2: may depend on core, wayland and Smithay backend features; never on the other backend.
-# INC-0 declares no Smithay backend features (they arrive with the increment that uses them).
 [dependencies]
 infynitae-core = { path = "../infynitae-core" }
 infynitae-wayland = { path = "../infynitae-wayland" }
+# C1.3: the headless backend renders with Smithay's test renderer.
+smithay = { version = "=0.7.0", default-features = false, features = ["renderer_test"] }
+
+# T1 probe clients over socketpairs (FOUNDATION_TEST_PLAN T1; C1.2 testing row). Test-only.
+[dev-dependencies]
+wayland-client = "=0.31.15"
+wayland-protocols = { version = "=0.32.13", features = ["client"] }

@@ -95,6 +95,31 @@ const CRATES: [(&str, &str, UnsafeLevel); 8] = [
     ),
 ];
 
+/// Smithay APIs the architecture rejects in product code (OB-26): `Space` (W-SM-1, ADR-01),
+/// `Window::surface_under` (W-SM-11/12, INV-HIT-1), `render_elements_from_surface_tree` with its
+/// i32 root (W-SM-5, F-RENDER-1), `Window::output_enter/leave` (INV-RENDER-3).
+const REJECTED_SMITHAY: [&str; 5] = [
+    "Space",
+    "surface_under",
+    "render_elements_from_surface_tree",
+    "output_enter",
+    "output_leave",
+];
+/// Smithay geometry types: constructed and named only in the adapter's `convert` module
+/// (INV-COORD-4, C3.6).
+const SMITHAY_GEOMETRY: [&str; 6] = ["Point", "Rectangle", "Size", "Scale", "Logical", "Physical"];
+/// Product crates (the first six of `CRATES`).
+const PRODUCT_CRATES: usize = 6;
+/// Stage writers (INV-STAGE-1): callable only from `core::protocol` (lifecycle and placement policy).
+const STAGE_WRITERS: [&str; 6] = [
+    "create",
+    "place",
+    "set_state",
+    "set_tree",
+    "raise",
+    "destroy",
+];
+
 const UNSAFE_INVENTORY: &str = "docs/foundation/UNSAFE_INVENTORY.md";
 
 struct SourceFile {
@@ -142,10 +167,13 @@ fn main() -> ExitCode {
     report.rule("load");
     if let Some(core) = crates.get("infynitae-core") {
         check_core(core, &mut report);
+        check_stage_writers(core, &mut report);
     }
     if let Some(wayland) = crates.get("infynitae-wayland") {
         check_wayland(wayland, &mut report);
+        check_wayland_geometry(wayland, &mut report);
     }
+    check_rejected_apis(&crates, &mut report);
     check_unsafe(&root, &crates, &mut report);
 
     let mut failed = false;
@@ -825,6 +853,96 @@ fn check_core(files: &[SourceFile], r: &mut Report) {
 
 // ---------------------------------------------------------------- wayland rule
 
+// ---------------------------------------------------------------- Stage single writer
+
+struct StageWriters<'a> {
+    file: &'a Path,
+    module: Vec<String>,
+    out: Vec<String>,
+}
+
+impl<'ast> Visit<'ast> for StageWriters<'_> {
+    fn visit_item_mod(&mut self, m: &'ast syn::ItemMod) {
+        if m.content.is_some() {
+            self.module.push(m.ident.to_string());
+            syn::visit::visit_item_mod(self, m);
+            self.module.pop();
+        }
+    }
+    fn visit_expr_method_call(&mut self, c: &'ast syn::ExprMethodCall) {
+        let on_stage = matches!(&*c.receiver, syn::Expr::Field(f)
+            if matches!(&f.member, syn::Member::Named(n) if n == "stage"));
+        let writer = STAGE_WRITERS.iter().any(|w| c.method == w);
+        if on_stage && writer && self.module.first().map(String::as_str) != Some("protocol") {
+            self.out.push(format!(
+                "{}: `stage.{}` called outside `core::protocol` (INV-STAGE-1 single writer)",
+                at(self.file, c.method.span()),
+                c.method
+            ));
+        }
+        syn::visit::visit_expr_method_call(self, c);
+    }
+}
+
+fn check_stage_writers(files: &[SourceFile], r: &mut Report) {
+    const R: &str = "stage-single-writer";
+    r.rule(R);
+    for f in files {
+        let mut v = StageWriters {
+            file: &f.path,
+            module: f.module.clone(),
+            out: Vec::new(),
+        };
+        v.visit_file(&f.ast);
+        for m in v.out {
+            r.fail(R, m);
+        }
+    }
+}
+
+// ---------------------------------------------------------------- rejected Smithay APIs
+
+fn check_rejected_apis(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report) {
+    const R: &str = "smithay-rejected-apis";
+    r.rule(R);
+    for (name, _, _) in &CRATES[..PRODUCT_CRATES] {
+        let Some(files) = crates.get(name) else {
+            continue;
+        };
+        for f in files {
+            let mut ids = Vec::new();
+            idents(f.ast.to_token_stream(), &mut ids);
+            for i in ids
+                .iter()
+                .filter(|i| REJECTED_SMITHAY.iter().any(|x| *i == x))
+            {
+                r.fail(R, format!("{}: names `{i}` (OB-26)", at(&f.path, i.span())));
+            }
+        }
+    }
+}
+
+fn check_wayland_geometry(files: &[SourceFile], r: &mut Report) {
+    const R: &str = "smithay-geometry-only-in-convert";
+    r.rule(R);
+    for f in files.iter().filter(|f| f.module != ["convert"]) {
+        let mut ids = Vec::new();
+        idents(f.ast.to_token_stream(), &mut ids);
+        for i in ids
+            .iter()
+            .filter(|i| SMITHAY_GEOMETRY.iter().any(|g| *i == g))
+        {
+            r.fail(
+                R,
+                format!(
+                    "{}: names `{i}` outside `convert` (INV-COORD-4)",
+                    at(&f.path, i.span())
+                ),
+            );
+        }
+    }
+}
+
 fn check_wayland(files: &[SourceFile], r: &mut Report) {
     const R: &str = "wayland-names-no-authority";
     r.rule(R);
@@ -872,7 +990,31 @@ fn check_unsafe(root: &Path, crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut R
                 ),
             );
         }
-        for f in files {
+        // integration tests, benches, examples and build scripts of the crate are code too
+        let crate_dir = root_file
+            .path
+            .parent()
+            .and_then(Path::parent)
+            .unwrap_or(Path::new("."));
+        let mut extra = Vec::new();
+        for sub in ["tests", "benches", "examples"] {
+            rust_files(&crate_dir.join(sub), &mut extra);
+        }
+        if crate_dir.join("build.rs").exists() {
+            extra.push(crate_dir.join("build.rs"));
+        }
+        let mut extra_files = Vec::new();
+        for path in extra {
+            match parse(&path) {
+                Ok(ast) => extra_files.push(SourceFile {
+                    path,
+                    module: vec![],
+                    ast,
+                }),
+                Err(e) => r.fail(R, format!("unparsable file (fail closed): {e}")),
+            }
+        }
+        for f in files.iter().chain(&extra_files) {
             let mut tokens = Vec::new();
             relax_and_unsafe(f.ast.to_token_stream(), &mut tokens);
             for (what, span) in tokens {
@@ -883,6 +1025,22 @@ fn check_unsafe(root: &Path, crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut R
                     r.fail(R, format!("{msg} in a forbid crate"));
                 }
             }
+        }
+    }
+}
+
+/// Every `.rs` file under `dir`, recursively, in a stable order.
+fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(read) = std::fs::read_dir(dir) else {
+        return;
+    };
+    let mut entries: Vec<PathBuf> = read.filter_map(|e| e.ok().map(|e| e.path())).collect();
+    entries.sort();
+    for p in entries {
+        if p.is_dir() {
+            rust_files(&p, out);
+        } else if p.extension().is_some_and(|e| e == "rs") {
+            out.push(p);
         }
     }
 }

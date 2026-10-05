@@ -122,7 +122,7 @@ def main():
     else:
         print("  ✗ Cargo.lock missing")
         all_passed = False
-    for rel in ("tools/verify-architecture", ".github/workflows/ci.yml"):
+    for rel in ("tools/verify-architecture", "tools/verify-test-efficacy", ".github/workflows/ci.yml"):
         path = os.path.join(repo_root, rel)
         if os.path.exists(path) and (rel.endswith(".yml") or os.access(path, os.X_OK)):
             print(f"  ✓ {rel}")
@@ -228,6 +228,20 @@ def main():
             all_passed = False
     else:
         print("  ✗ tools/verify-architecture missing or cargo unavailable")
+        all_passed = False
+
+    # 8. Product test efficacy (seeded behavioural defects)
+    print("\n[8] Product Test Efficacy:")
+    te = os.path.join(repo_root, "tools", "verify-test-efficacy")
+    if os.path.exists(te) and shutil.which("cargo"):
+        code_te, out_te, _ = run_cmd([te], cwd=repo_root)
+        if code_te == 0 and "== verify-test-efficacy: PASS" in out_te:
+            print("  ✓ tools/verify-test-efficacy: PASS")
+        else:
+            print("  ✗ tools/verify-test-efficacy: FAILED")
+            all_passed = False
+    else:
+        print("  ✗ tools/verify-test-efficacy missing or cargo unavailable")
         all_passed = False
 
     print("\n" + "=" * 70)
