@@ -1,8 +1,49 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-2 RATIFIED.** Multi-output lifecycle, binding precedence (1:1, runtime 2i), membership, damage trackers sized `phys_O`, zero-output core state, frame clock and presentation feedback run on the production path (`0a03aab`). Level B finding INC2-F07 resolved with test and mutation control. Decision E ratifies OB-49 ownership correction (fullscreen configure -> INC-7, epoch settlement -> INC-6); OB-49 is `CLOSED`. **INC-3 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-3 IMPLEMENTED — PENDING INDEPENDENT REVIEW.** Pointer intake through `InputPort`, button ownership (OBJ-25), M22 CameraPan at zoom 1 (OBJ-26, F-PAN-1), routing through the ProjectionFrame hit test, KeepFocus, free-pointer reconciliation, the zero-output seat transition and interaction orphaning run on the production path. INC-0, INC-1 and INC-2 remain RATIFIED. **INC-3 is NOT ratified. INC-4 has NOT begun.**
 
 Date: 2026-10-05
+
+## PHASE F — INC-3 (implemented on baseline `6470e1a`; evidence: evidence/phase-f/INC-3/)
+- **Scope:** PRODUCT, HEADLESS, canonical INC-3 (mapping written before code: `IMPLEMENTATION_MAPPING.md`).
+  - **core:**
+    - `input::{ownership, interaction, bindings}`;
+    - `PhysicalEvent` variants (motion, button with a modifier snapshot, axis);
+    - `physical_input`;
+    - `navigation::CameraSet::pan` + `pan_target` (F-PAN-1, R2, saturating at ±2³⁶);
+    - `pointer::{moved, locate}` (Arrangement union clamp);
+    - `Core::route_pointer` through `hit_test`;
+    - M10 pointer effects on connect, reconfigure and disconnect;
+    - orphaning (C4.6);
+    - a camera change drops the output's ProjectionFrame.
+  - **adapter:**
+    - seat `seat0` with a pointer, `zwp_relative_pointer_manager_v1`;
+    - `pointer` module (the only `PointerHandle` caller);
+    - the zero-output grab (`Focus::Clear`, then `motion(None)`);
+    - Canvas↔Smithay global conversion in `convert`.
+  - **headless backend:** injected virtual-mouse input; `vblank` produces the output's frame.
+- **Not implemented (owned later):**
+  - keyboard and XKB, popup grabs, D-B6-BOUNDARY rule 1 (INC-4);
+  - constraints and reconciliation with locks (INC-5);
+  - epochs (INC-6), fullscreen (INC-7), kick (INC-8);
+  - zoom (gated by OB-24, INC-9/10).
+- **Tests:** 121 passing.
+  - T0 66 (13 new).
+  - T1: 49 distinct tests (30 new: x8 C1/C6/C7/C8/C9, EE-3, orphaning, adversarial A–N, EE-1 C5 across 10 transform cases with the sealed hit rule failing 9/9, pan render/hit agreement), plus the oracle self-test in each of the 6 T1 binaries.
+- **Enforcement:**
+  - `verify-architecture` PASS: 31 compile probes; 54 seeded controls; new rules `effects-only-from-core` and `smithay-pointer-only-in-adapter-pointer`; [5c] INV-INPUT-3 bypass switch caught on T0 and T1; `physical_input` port binding at runtime (DEFERRED: `shell_command` only).
+  - `verify-test-efficacy` PASS (76/76, 30 new INC-3 controls).
+  - Checker PASS (self-test PASS); spike PASS; environment verifier PASS.
+  - fmt and clippy `-D warnings` clean. No new dependencies; smithay `=0.7.0`; no unsafe; P1 not applied.
+- **Obligations (none closed):**
+  - OB-45: all parts' pass criteria met (tracker INC-2, hit INC-3); OPEN pending review.
+  - OB-50: pointer part satisfied; OPEN (INC-5).
+  - OB-3: CameraPan orphaning satisfied; OPEN (INC-5).
+  - OB-21: T0 part; OPEN (T4).
+  - OB-4: acquisition point only; no popup grab can exist before INC-4; OPEN.
+- **Findings:** no new Level A/B/C; observations INC3-F01…F08 (README §8). Open: Level C 1 (INC1-F01, INC-7).
+- **LIVE_SYSTEM_TOUCHED:** no.
+- **NEXT:** independent adversarial review of INC-3. Do not begin INC-4.
 
 ## PHASE F — INC-2 RATIFICATION (record: evidence/phase-f/INC-2/corrective/)
 - **Review:** `INC-2 CONDITIONAL PASS — CORRECTIONS REQUIRED BEFORE RATIFICATION` (dossier recorded unchanged in `b229462`). Findings INC2-F07 (Level B) and INC2-F01 (Level C) adjudicated.

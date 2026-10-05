@@ -9,7 +9,8 @@ You are continuing **Infynitae Native**, a Rust/Smithay spatial Wayland composit
 - INC-0 ratified after independent review (`audit/phase-f-inc0-review/`); OB-19 and OB-36 `CLOSED`; runtime 2i owned by INC-2 / OB-49.
 - INC-1 ratified after independent review and corrective patch (evidence: `docs/foundation/evidence/phase-f/INC-1/`, record `corrective/README.md`; review `audit/phase-f-inc1-review/`); OB-2 and OB-26 `CLOSED`.
 - INC-2 ratified after independent review and corrective patch (evidence: `docs/foundation/evidence/phase-f/INC-2/`, record `corrective/README.md`; review `audit/phase-f-inc2-review/`); OB-49 `CLOSED` (Decision E).
-- **INC-3 has not begun.** It needs explicit owner authorization in the current session.
+- INC-3 implemented on baseline `6470e1a` (pointer intake, ownership, CameraPan at zoom 1, ProjectionFrame routing, zero-output seat transition; evidence: `docs/foundation/evidence/phase-f/INC-3/`). **Pending independent review; not ratified.**
+- **INC-4 has not begun.** It needs ratification of INC-3 and explicit owner authorization.
 - `docs/foundation/CHECKPOINT.md` is the source of the current gate; `git log` gives the current HEAD.
 
 ## Workflow on a new machine / fresh environment
