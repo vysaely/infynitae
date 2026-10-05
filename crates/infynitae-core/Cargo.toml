@@ -1,0 +1,21 @@
+[package]
+name = "infynitae-core"
+description = "Spatial and policy authority of Infynitae Native (FOUNDATION_ARCHITECTURE C1.2)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# INV-ARCH-1: core has no dependencies (std only). tools/verify-architecture enforces it.
+[dependencies]
+
+# Negative probes (OB-19). Each feature adds ONE forbidden authority path to core-internal code;
+# tools/verify-architecture builds it alone and requires the build to fail with the asserted
+# diagnostic and no other error. Never enabled by default or by any product crate.
+[features]
+probe_protocol_moves_camera = []
+probe_protocol_refits_camera = []
+probe_protocol_creates_camera = []
+probe_sticky_fit_retains_authority = []
+probe_unsafe_block = []
+probe_unsafe_allow_override = []

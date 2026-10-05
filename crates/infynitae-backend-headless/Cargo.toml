@@ -1,0 +1,13 @@
+[package]
+name = "infynitae-backend-headless"
+description = "Headless test backend of Infynitae Native (FOUNDATION_ARCHITECTURE C1.1)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# C1.2: may depend on core, wayland and Smithay backend features; never on the other backend.
+# INC-0 declares no Smithay backend features (they arrive with the increment that uses them).
+[dependencies]
+infynitae-core = { path = "../infynitae-core" }
+infynitae-wayland = { path = "../infynitae-wayland" }

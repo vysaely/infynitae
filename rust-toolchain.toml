@@ -1,0 +1,5 @@
+# Pinned compiler (OB-19, INV-ARCH-3). Change only by a reviewed commit.
+[toolchain]
+channel = "1.99.0"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

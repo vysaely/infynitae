@@ -1,0 +1,22 @@
+# Infynitae Native workspace (Phase F, INC-0).
+#
+# crates/       production crates (FOUNDATION_ARCHITECTURE C1.1, C7.1)
+# enforcement/  architecture enforcement only (OB-19); never a dependency of a product crate
+[workspace]
+resolver = "2"
+members = [
+    "crates/infynitae-core",
+    "crates/infynitae-wayland",
+    "crates/infynitae-backend-headless",
+    "crates/infynitae-backend-winit",
+    "crates/infynitae-ipc",
+    "crates/infynitae",
+    "enforcement/probes",
+    "enforcement/source-rules",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.99.0"
+publish = false

@@ -1,0 +1,53 @@
+# Infynitae Native CI (OB-19, OB-36). Every job is blocking; there is no deploy, release or hardware job.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  # OB-36: the documentation checker and its seeded negative controls, on every commit.
+  foundation-docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: python3 --version
+      - run: ./tools/check-foundation-docs
+      - run: ./tools/check-foundation-docs --self-test
+
+  # OB-19: production architecture enforcement.
+  verify-architecture:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native build dependencies (xkbcommon is linked through smithay =0.7.0)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev
+      - name: Toolchain pinned by rust-toolchain.toml
+        run: |
+          channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
+          rustc --version
+      - run: ./tools/verify-architecture
+
+  workspace-build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Native build dependencies (xkbcommon is linked through smithay =0.7.0)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev
+      - name: Toolchain pinned by rust-toolchain.toml
+        run: |
+          channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
+          rustup toolchain install "$channel" --profile minimal --component rustfmt,clippy
+          rustc --version
+      - run: cargo fmt --all -- --check
+      - run: cargo check --workspace --locked
+      - run: cargo build --workspace --locked
+      - run: cargo test --workspace --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings

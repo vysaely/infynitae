@@ -2,13 +2,14 @@
 """verify-development-environment — Non-destructive verification of the Infynitae Native development environment.
 
 Derives status from repository state, installed development toolchains, and foundation verifiers.
-Never modifies files, repository state, toolchains, or system settings.
+Never modifies tracked files, toolchains or system settings; cargo build artifacts go to target/ (git-ignored).
 
 Usage:
   tools/verify-development-environment [--spike] [--help]
 """
 
 import os
+import tomllib
 import shutil
 import subprocess
 import sys
@@ -24,6 +25,8 @@ HISTORICAL_SEALS = [
     ("Phase E corrective checkpoint E1R tracking", "e9d36732ac4fa9e934ee1b90bb696e9545c598ab"),
     ("Phase E final review commit", "cfb54f091bd2a19065a45b32662e8f0bbddd62fc"),
 ]
+
+PINNED_TOOLCHAIN = "1.99.0"
 
 REQUIRED_SYSTEM_TOOLS = ["git", "python3", "rustc", "cargo", "pkg-config", "tar"]
 OPTIONAL_SYSTEM_TOOLS = ["gh", "zstd"]
@@ -86,21 +89,51 @@ def main():
             missing_seals += 1
             all_passed = False
 
-    # Safety check: No Phase F product code or root crates
-    print("\n[2] Safety & Product Boundaries (Phase F not begun):")
-    root_cargo = os.path.join(repo_root, "Cargo.toml")
-    root_src = os.path.join(repo_root, "src")
-    if os.path.exists(root_cargo):
-        print(f"  ✗ Found {root_cargo} — Phase F product workspace exists prematurely!")
+    # 2. Phase F workspace integrity (INC-0 onwards)
+    print("\n[2] Phase F Workspace Integrity:")
+    try:
+        with open(os.path.join(repo_root, "Cargo.toml"), "rb") as f:
+            manifest = tomllib.load(f)
+        members = manifest.get("workspace", {}).get("members", [])
+        if members:
+            print(f"  ✓ root workspace: {len(members)} members")
+        else:
+            print("  ✗ root Cargo.toml has no [workspace] members")
+            all_passed = False
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        print(f"  ✗ root Cargo.toml unreadable: {e}")
+        all_passed = False
+    try:
+        with open(os.path.join(repo_root, "rust-toolchain.toml"), "rb") as f:
+            channel = tomllib.load(f).get("toolchain", {}).get("channel")
+        if channel == PINNED_TOOLCHAIN:
+            print(f"  ✓ rust-toolchain.toml pins {PINNED_TOOLCHAIN}")
+        else:
+            print(f"  ✗ rust-toolchain.toml channel {channel!r}; {PINNED_TOOLCHAIN!r} expected")
+            all_passed = False
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        print(f"  ✗ rust-toolchain.toml unreadable: {e}")
+        all_passed = False
+    code_l, _, _ = run_cmd(["git", "ls-files", "--error-unmatch", "Cargo.lock"], cwd=repo_root)
+    if code_l == 0:
+        print("  ✓ Cargo.lock tracked")
+    elif os.path.exists(os.path.join(repo_root, "Cargo.lock")):
+        print("  - Cargo.lock present but not yet committed")
+    else:
+        print("  ✗ Cargo.lock missing")
+        all_passed = False
+    for rel in ("tools/verify-architecture", ".github/workflows/ci.yml"):
+        path = os.path.join(repo_root, rel)
+        if os.path.exists(path) and (rel.endswith(".yml") or os.access(path, os.X_OK)):
+            print(f"  ✓ {rel}")
+        else:
+            print(f"  ✗ {rel} missing or not executable")
+            all_passed = False
+    if os.path.exists(os.path.join(repo_root, "src")):
+        print("  ✗ root src/ exists; production code lives under crates/")
         all_passed = False
     else:
-        print("  ✓ No root Cargo.toml (Phase F product workspace not begun)")
-
-    if os.path.exists(root_src):
-        print(f"  ✗ Found {root_src} — Phase F product code exists prematurely!")
-        all_passed = False
-    else:
-        print("  ✓ No root src/ (Phase F product crates not begun)")
+        print("  ✓ no root src/ (production crates live under crates/)")
 
     # 3. Toolchain & Command Availability
     print("\n[3] Toolchain Availability:")
@@ -180,11 +213,33 @@ def main():
     else:
         print("  - c1-authority-spike skipped (cargo or script unavailable)")
 
+    # 7. Production architecture enforcement (OB-19)
+    print("\n[7] Production Architecture Verification:")
+    va = os.path.join(repo_root, "tools", "verify-architecture")
+    if os.path.exists(va) and shutil.which("cargo"):
+        code_va, out_va, _ = run_cmd([va], cwd=repo_root)
+        if code_va == 0 and "== verify-architecture: PASS" in out_va:
+            print("  ✓ tools/verify-architecture: PASS")
+        else:
+            print("  ✗ tools/verify-architecture: FAILED")
+            for line in out_va.splitlines():
+                if "FAIL" in line:
+                    print(f"    {line.strip()}")
+            all_passed = False
+    else:
+        print("  ✗ tools/verify-architecture missing or cargo unavailable")
+        all_passed = False
+
     print("\n" + "=" * 70)
     if all_passed:
         print("VERIFICATION RESULT: ALL CHECKS PASSED")
         print("Environment and repository are ready for authorized development handoff.")
-        print("Current gate: PHASE E PASS — PHASE F MAY BEGIN (INC-0 entry gate awaiting authorization)")
+        try:
+            with open(os.path.join(repo_root, "docs", "foundation", "CHECKPOINT.md")) as f:
+                phase = next((l.strip() for l in f if l.startswith("CURRENT_PHASE:")), "unknown")
+        except OSError:
+            phase = "CHECKPOINT.md unreadable"
+        print(f"Current gate (docs/foundation/CHECKPOINT.md): {phase}")
         print("=" * 70)
         return 0
     else:

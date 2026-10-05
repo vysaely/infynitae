@@ -1,0 +1,665 @@
+#!/usr/bin/env python3
+"""verify-architecture — production architecture enforcement for Infynitae Native (OB-19).
+
+Ported from experiments/c1-authority-spike/verify.sh to the production workspace. Headless,
+non-interactive and deterministic. Exit status 0 only when every mandatory check passes.
+
+Checks:
+  [1] pins: rust-toolchain.toml, active compiler, Cargo.lock, Smithay =0.7.0 (INV-ARCH-3)
+  [2] dependency DAG (INV-ARCH-1, C1.3, C7.1)
+  [3] probe-feature hygiene
+  [4] structural source rules (2g, 2h, mint location, wayland names, unsafe policy)
+  [5] negative compile probes with asserted diagnostics, positive controls
+  [6] seeded negative controls: the checks above must detect injected defects
+  [7] deferred runtime validation (reported, never counted as tested)
+
+Usage: tools/verify-architecture [--skip-mutations]
+"""
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROBE_TARGET = os.path.join(ROOT, "target", "verify-architecture")
+TOOLCHAIN = "1.99.0"
+SMITHAY_REQ = "=0.7.0"
+SMITHAY_VERSION = "0.7.0"
+CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
+
+CORE = "infynitae-core"
+WAYLAND = "infynitae-wayland"
+HEADLESS = "infynitae-backend-headless"
+WINIT = "infynitae-backend-winit"
+IPC = "infynitae-ipc"
+BIN = "infynitae"
+PROBES = "infynitae-architecture-probes"
+RULES = "infynitae-source-rules"
+PRODUCT = [CORE, WAYLAND, HEADLESS, WINIT, IPC, BIN]
+ENFORCEMENT = [PROBES, RULES]
+
+# Workspace edges each product crate may have (normal and build dependencies). C1.2, C1.3, C7.1.
+ALLOWED_INTERNAL = {
+    CORE: set(),
+    WAYLAND: {CORE},
+    HEADLESS: {CORE, WAYLAND},
+    WINIT: {CORE, WAYLAND},
+    IPC: {CORE},
+    BIN: {CORE, WAYLAND, HEADLESS, WINIT, IPC},
+}
+# External crates a product crate may name directly. C1.2 (core: std only); C7.1 (ipc: core only,
+# plus a serialization crate once the protocol exists); smithay only in adapter and backends.
+ALLOWED_EXTERNAL = {
+    CORE: set(),
+    WAYLAND: {"smithay"},
+    HEADLESS: {"smithay"},
+    WINIT: {"smithay"},
+    IPC: set(),
+    BIN: set(),
+}
+# Crates whose transitive closure must never contain these (C1.2 forbidden deps, C7.4).
+FORBIDDEN_TRANSITIVE = {
+    IPC: {"smithay", WAYLAND, HEADLESS, WINIT, "calloop", "winit", "drm", "input"},
+    WAYLAND: {HEADLESS, WINIT, IPC},
+    HEADLESS: {WINIT, IPC},
+    WINIT: {HEADLESS, IPC},
+}
+
+# (id, family, package, feature, expected) — expected is ("code", code, required substring) or
+# ("message", exact phrase) or ("compiles",). Every negative probe must fail with exactly one error,
+# located in the probe's own source file, matching its expectation.
+PROBES_INVENTORY = [
+    ("probe_protocol_moves_camera", "A camera authority", CORE, "probe_protocol_moves_camera",
+     ("code", "E0624", "set_center"), "crates/infynitae-core/src/probes.rs"),
+    ("p1_mutate_through_read_accessor", "B protocol-side paths", PROBES, "p1_mutate_through_read_accessor",
+     ("code", "E0624", "set_center"), "enforcement/probes/src/lib.rs"),
+    ("p2_forge_input_port", "B protocol-side paths", PROBES, "p2_forge_input_port",
+     ("message", "cannot construct `InputPort` with struct literal syntax due to private fields"), "enforcement/probes/src/lib.rs"),
+    ("p3_physical_input_without_port", "B protocol-side paths", PROBES, "p3_physical_input_without_port",
+     ("code", "E0061", "physical_input"), "enforcement/probes/src/lib.rs"),
+    ("p4_call_navigation_internals", "B protocol-side paths", PROBES, "p4_call_navigation_internals",
+     ("code", "E0603", "enum `Authority` is private"), "enforcement/probes/src/lib.rs"),
+    ("p5_control_compiles", "B positive control", PROBES, "p5_control_compiles", ("compiles",), None),
+    ("probe_store_port_in_state", "C protocol state", WAYLAND, "probe_store_port_in_state",
+     ("code", "E0277", "cannot be sent between threads safely"), "crates/infynitae-wayland/src/lib.rs"),
+    ("probe_protocol_refits_camera", "D 1R re-fit", CORE, "probe_protocol_refits_camera",
+     ("code", "E0624", "mint"), "crates/infynitae-core/src/probes.rs"),
+    ("probe_sticky_fit", "E 1R retained proof", WAYLAND, "probe_sticky_fit",
+     ("code", "E0277", "cannot be sent between threads safely"), "crates/infynitae-wayland/src/lib.rs"),
+    ("p6_output_connected_without_token", "F 2R lifecycle", PROBES, "p6_output_connected_without_token",
+     ("code", "E0061", "output_connected"), "enforcement/probes/src/lib.rs"),
+    ("p7_forge_output_token", "F 2R lifecycle", PROBES, "p7_forge_output_token",
+     ("message", "cannot construct `OutputLifecycleToken` with struct literal syntax due to private fields"), "enforcement/probes/src/lib.rs"),
+    ("p8_descriptor_with_coordinates", "F 2R lifecycle", PROBES, "p8_descriptor_with_coordinates",
+     ("code", "E0560", "has no field named `center`"), "enforcement/probes/src/lib.rs"),
+    ("p9_public_restore_api", "F 2R lifecycle", PROBES, "p9_public_restore_api",
+     ("code", "E0599", "restore_persisted_state"), "enforcement/probes/src/lib.rs"),
+    ("probe_protocol_creates_camera", "F 2R lifecycle", CORE, "probe_protocol_creates_camera",
+     ("code", "E0624", "mint"), "crates/infynitae-core/src/probes.rs"),
+    ("probe_store_output_token_in_state", "F 2R lifecycle", WAYLAND, "probe_store_output_token_in_state",
+     ("code", "E0277", "cannot be sent between threads safely"), "crates/infynitae-wayland/src/lib.rs"),
+    ("p10_reconfigure_without_token", "H E1R reconfiguration", PROBES, "p10_reconfigure_without_token",
+     ("code", "E0061", "output_reconfigured"), "enforcement/probes/src/lib.rs"),
+    ("p11_reconfigure_with_input_port", "H E1R reconfiguration", PROBES, "p11_reconfigure_with_input_port",
+     ("code", "E0308", "mismatched types"), "enforcement/probes/src/lib.rs"),
+    ("p12_reconfigure_descriptor_with_zoom", "H E1R reconfiguration", PROBES, "p12_reconfigure_descriptor_with_zoom",
+     ("code", "E0560", "has no field named `zoom_milli`"), "enforcement/probes/src/lib.rs"),
+    ("p13_reconfigure_with_camera_argument", "H E1R reconfiguration", PROBES, "p13_reconfigure_with_camera_argument",
+     ("code", "E0061", "output_reconfigured"), "enforcement/probes/src/lib.rs"),
+    ("p14_clone_output_token", "authority not Clone", PROBES, "p14_clone_output_token",
+     ("code", "E0277", "OutputLifecycleToken: Clone"), "enforcement/probes/src/lib.rs"),
+    ("p15_clone_input_port", "authority not Clone", PROBES, "p15_clone_input_port",
+     ("code", "E0277", "InputPort: Clone"), "enforcement/probes/src/lib.rs"),
+    ("p16_clone_shell_port", "authority not Clone", PROBES, "p16_clone_shell_port",
+     ("code", "E0277", "ShellPort: Clone"), "enforcement/probes/src/lib.rs"),
+    ("p17_clone_authorized", "authority not Clone", PROBES, "p17_clone_authorized",
+     ("code", "E0277", "Authorized: Clone"), "enforcement/probes/src/lib.rs"),
+    ("probe_unsafe_block (core)", "I unsafe policy", CORE, "probe_unsafe_block",
+     ("code", "unsafe_code", "usage of an `unsafe` block"), "crates/infynitae-core/src/probes.rs"),
+    ("probe_unsafe_allow_override (core)", "I unsafe policy", CORE, "probe_unsafe_allow_override",
+     ("code", "E0453", "allow(unsafe_code) incompatible with previous forbid"), "crates/infynitae-core/src/probes.rs"),
+    ("probe_unsafe_block (ipc)", "I unsafe policy", IPC, "probe_unsafe_block",
+     ("code", "unsafe_code", "usage of an `unsafe` block"), "crates/infynitae-ipc/src/lib.rs"),
+    ("probe_unsafe_block (wayland)", "I unsafe policy", WAYLAND, "probe_unsafe_block",
+     ("code", "unsafe_code", "usage of an `unsafe` block"), "crates/infynitae-wayland/src/lib.rs"),
+]
+
+# Runtime validation that cannot exist before its increment (owner ruling, INC-0).
+DEFERRED = [
+    ("2i OutputKey collision / 1:1 binding (sealed 2R rule must fail the 1:1 test)",
+     "runtime output-to-camera binding does not exist in INC-0",
+     "INC-2 (first owner of output_connected binding; T1 OB-49)"),
+    ("ports/token bound to their Core for physical_input, shell_command",
+     "input and shell vocabularies have no variants in INC-0, so these entries cannot be called",
+     "INC-3 (physical_input), INC-11 (shell_command)"),
+]
+
+
+class Results:
+    def __init__(self):
+        self.failures = 0
+
+    def ok(self, msg):
+        print(f"  ok    {msg}")
+
+    def fail(self, msg):
+        self.failures += 1
+        print(f"  FAIL  {msg}")
+
+    def check(self, cond, ok_msg, fail_msg):
+        if cond:
+            self.ok(ok_msg)
+        else:
+            self.fail(fail_msg)
+        return cond
+
+
+def run(cmd, cwd=ROOT, env=None):
+    e = dict(os.environ)
+    if env:
+        e.update(env)
+    p = subprocess.run(cmd, cwd=cwd, env=e, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return p.returncode, p.stdout, p.stderr
+
+
+def metadata(root, locked=True):
+    cmd = ["cargo", "metadata", "--format-version", "1", "--manifest-path", os.path.join(root, "Cargo.toml")]
+    if locked:
+        cmd.append("--locked")
+    else:
+        cmd.append("--offline")
+    code, out, err = run(cmd, cwd=root)
+    if code != 0:
+        raise RuntimeError(f"cargo metadata failed: {err.strip()}")
+    return json.loads(out)
+
+
+# ------------------------------------------------------------------ [1] pins
+
+def check_toolchain(root, r):
+    path = os.path.join(root, "rust-toolchain.toml")
+    try:
+        with open(path, "rb") as f:
+            channel = tomllib.load(f).get("toolchain", {}).get("channel")
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        return r.check(False, "", f"rust-toolchain.toml unreadable: {e}")
+    return r.check(channel == TOOLCHAIN, f"rust-toolchain.toml pins channel {TOOLCHAIN}",
+                   f"rust-toolchain.toml channel is {channel!r}; {TOOLCHAIN!r} required")
+
+
+def check_root_manifest(root, r):
+    with open(os.path.join(root, "Cargo.toml"), "rb") as f:
+        manifest = tomllib.load(f)
+    bad = [k for k in ("patch", "replace") if k in manifest]
+    ok = r.check(not bad, "root Cargo.toml has no [patch] or [replace] (P1 not productionized; OB-11 open)",
+                 f"root Cargo.toml contains {bad}: a dependency patch needs the patch policy (OB-11)")
+    for cfg in (".cargo/config.toml", ".cargo/config"):
+        p = os.path.join(root, cfg)
+        if os.path.exists(p):
+            with open(p) as f:
+                text = f.read()
+            ok &= r.check(not re.search(r"^\s*(\[patch|paths\s*=)", text, re.M), f"{cfg} has no patch/paths override",
+                          f"{cfg} overrides dependency sources")
+    return ok
+
+
+def check_smithay(meta, r):
+    ok = True
+    pkgs = [p for p in meta["packages"] if p["name"] == "smithay"]
+    ok &= r.check(len(pkgs) == 1 and pkgs[0]["version"] == SMITHAY_VERSION and pkgs[0]["source"] == CRATES_IO,
+                  f"resolved smithay is exactly {SMITHAY_VERSION} from crates.io",
+                  f"resolved smithay packages: {[(p['version'], p['source']) for p in pkgs]}")
+    ws = set(meta["workspace_members"])
+    for p in meta["packages"]:
+        if p["id"] not in ws:
+            continue
+        for d in p["dependencies"]:
+            if d["name"] == "smithay":
+                ok &= r.check(d["req"] == SMITHAY_REQ and d["source"] == CRATES_IO,
+                              f"{p['name']} declares smithay {SMITHAY_REQ} from crates.io",
+                              f"{p['name']} declares smithay {d['req']!r} from {d['source']!r}; {SMITHAY_REQ} from crates.io required")
+    return ok
+
+
+def check_pins(r):
+    print("\n[1] Pins (OB-19 item 3, INV-ARCH-3)")
+    check_toolchain(ROOT, r)
+    code, out, _ = run(["rustc", "--version"])
+    r.check(code == 0 and out.startswith(f"rustc {TOOLCHAIN} "), f"active compiler: {out.strip()}",
+            f"active compiler is {out.strip()!r}; rustc {TOOLCHAIN} required")
+    lock = os.path.join(ROOT, "Cargo.lock")
+    ignored = run(["git", "check-ignore", "-q", "Cargo.lock"])[0] == 0
+    r.check(os.path.exists(lock) and not ignored, "Cargo.lock present and not git-ignored",
+            "Cargo.lock missing or git-ignored")
+    check_root_manifest(ROOT, r)
+    code, _, err = run(["cargo", "build", "--workspace", "--locked", "-q"])
+    r.check(code == 0, "cargo build --workspace --locked", f"cargo build --workspace --locked failed:\n{err[-2000:]}")
+    meta = metadata(ROOT)
+    check_smithay(meta, r)
+    return meta
+
+
+# ------------------------------------------------------------------ [2] DAG
+
+def dag_problems(meta):
+    """Returns a list of DAG violations; empty when the graph matches the architecture."""
+    problems = []
+    by_id = {p["id"]: p for p in meta["packages"]}
+    ws_names = {by_id[i]["name"]: i for i in meta["workspace_members"]}
+    expected = set(PRODUCT + ENFORCEMENT)
+    if set(ws_names) != expected:
+        problems.append(f"workspace members {sorted(ws_names)} != expected {sorted(expected)}")
+    nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
+
+    def direct(pid):
+        out = []
+        for d in nodes[pid]["deps"]:
+            kinds = {k["kind"] for k in d["dep_kinds"]}
+            if kinds & {None, "build"}:
+                out.append(by_id[d["pkg"]]["name"])
+        return out
+
+    def closure(pid):
+        seen, stack = set(), [pid]
+        while stack:
+            for d in nodes[stack.pop()]["deps"]:
+                kinds = {k["kind"] for k in d["dep_kinds"]}
+                if kinds & {None, "build"} and d["pkg"] not in seen:
+                    seen.add(d["pkg"])
+                    stack.append(d["pkg"])
+        return {by_id[i]["name"] for i in seen}
+
+    for name in PRODUCT:
+        if name not in ws_names:
+            continue
+        pid = ws_names[name]
+        deps = direct(pid)
+        if name == CORE and deps:
+            problems.append(f"{CORE} has dependencies {deps}; it must have none (INV-ARCH-1)")
+        for d in deps:
+            if d in ws_names:
+                if d not in ALLOWED_INTERNAL[name]:
+                    problems.append(f"forbidden edge {name} -> {d}")
+            elif d not in ALLOWED_EXTERNAL[name]:
+                problems.append(f"{name} depends on external crate {d!r}; allowed: {sorted(ALLOWED_EXTERNAL[name]) or 'none'}")
+        for bad in sorted(closure(pid) & FORBIDDEN_TRANSITIVE.get(name, set())):
+            problems.append(f"{name} transitively depends on forbidden {bad}")
+    # declared manifest edges too: a declaration Cargo drops from the resolve (for example a
+    # dependency without a library target) is still a layering violation
+    for name in PRODUCT:
+        pkg = by_id.get(ws_names.get(name, ""))
+        if not pkg:
+            continue
+        for d in pkg["dependencies"]:
+            if d["kind"] not in (None, "build"):
+                continue
+            if d["name"] in ws_names and d["name"] not in ALLOWED_INTERNAL[name]:
+                problems.append(f"declared edge {name} -> {d['name']} is forbidden")
+            elif d["name"] not in ws_names and d["name"] not in ALLOWED_EXTERNAL[name]:
+                problems.append(f"{name} declares external crate {d['name']!r}; allowed: {sorted(ALLOWED_EXTERNAL[name]) or 'none'}")
+    for name in ENFORCEMENT:
+        for p in PRODUCT:
+            if p in ws_names and name in closure(ws_names[p]):
+                problems.append(f"product crate {p} depends on enforcement crate {name}")
+    return problems
+
+
+def check_dag(meta, r):
+    print("\n[2] Dependency DAG (INV-ARCH-1; C1.3, C1.4, C7.1, C7.4)")
+    problems = dag_problems(meta)
+    for p in problems:
+        r.fail(p)
+    if not problems:
+        r.ok(f"{CORE} has no dependencies")
+        r.ok("every workspace edge is allowed: wayland -> core; backends -> wayland, core; ipc -> core; bin -> all")
+        r.ok("no wayland -> backend/ipc, ipc <-> wayland, backend <-> backend, product -> enforcement")
+        r.ok("smithay reachable only from the adapter and its dependents; core and ipc closures exclude it")
+
+
+# ------------------------------------------------------------------ [3] probe features
+
+def check_probe_features(meta, r):
+    print("\n[3] Probe-feature hygiene")
+    problems = []
+    by_name = {p["name"]: p for p in meta["packages"] if p["id"] in meta["workspace_members"]}
+    for name in PRODUCT:
+        p = by_name.get(name)
+        if not p:
+            continue
+        feats = p["features"]
+        for f, enables in feats.items():
+            if f == "default":
+                if any("probe_" in e for e in enables):
+                    problems.append(f"{name}: default features enable a probe: {enables}")
+            elif not f.startswith("probe_"):
+                problems.append(f"{name}: feature {f!r} is not a probe; INC-0 product crates declare probe features only")
+            elif any(not e.split("/")[-1].startswith("probe_") for e in enables):
+                problems.append(f"{name}: probe feature {f!r} enables non-probe {enables}")
+        for d in p["dependencies"]:
+            if any(x.startswith("probe_") for x in d["features"]):
+                problems.append(f"{name}: dependency {d['name']} is declared with probe features {d['features']}")
+    for x in problems:
+        r.fail(x)
+    if not problems:
+        r.ok("probe features are named probe_*, off by default, never enabled by a dependency declaration")
+
+
+# ------------------------------------------------------------------ [4] source rules
+
+def rules_binary():
+    code, _, err = run(["cargo", "build", "--locked", "-q", "-p", RULES], env={"CARGO_TARGET_DIR": PROBE_TARGET})
+    if code != 0:
+        raise RuntimeError(f"building {RULES} failed:\n{err}")
+    return os.path.join(PROBE_TARGET, "debug", RULES)
+
+
+def source_rules(binary, root):
+    code, out, err = run([binary, "--root", root])
+    return code, out + err
+
+
+def check_source_rules(binary, r):
+    print("\n[4] Structural source rules (2g, 2h, mint location, wayland names, unsafe policy)")
+    code, out = source_rules(binary, ROOT)
+    for line in out.splitlines():
+        if line.startswith("ok"):
+            r.ok(line[2:].strip())
+        elif line.strip():
+            r.fail(line.removeprefix("FAIL").strip())
+    if code != 0 and "FAIL" not in out:
+        r.fail(f"{RULES} exited {code}")
+
+
+# ------------------------------------------------------------------ [5] compile probes
+
+def compile_probe(package, feature):
+    """Returns (exit code, [error diagnostics], cargo stderr)."""
+    code, out, err = run(["cargo", "build", "--locked", "-p", package, "--features", feature,
+                          "--message-format=json"], env={"CARGO_TARGET_DIR": PROBE_TARGET})
+    errors = []
+    for line in out.splitlines():
+        try:
+            m = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if m.get("reason") != "compiler-message":
+            continue
+        d = m["message"]
+        if d["level"] not in ("error", "error: internal compiler error"):
+            continue
+        if d["message"].startswith("aborting due to"):
+            continue
+        primary = [s for s in d["spans"] if s["is_primary"]]
+        errors.append({
+            "code": (d.get("code") or {}).get("code"),
+            "message": d["message"],
+            "rendered": d.get("rendered") or d["message"],
+            "file": primary[0]["file_name"] if primary else None,
+            "line": primary[0]["line_start"] if primary else None,
+            "package": m.get("package_id", ""),
+        })
+    return code, errors, err
+
+
+def judge(expected, file, code, errors, stderr):
+    """VERDICT for one probe: ('PASS'|'VIOLATION'|'WRONG REASON'|'HARNESS ERROR', detail)."""
+    if expected[0] == "compiles":
+        if code == 0:
+            return "PASS", "compiles"
+        return "CONTROL BROKEN", "; ".join(e["message"] for e in errors) or stderr.strip()[-300:]
+    if code == 0:
+        return "VIOLATION", "compiled"
+    if not errors:
+        return "HARNESS ERROR", stderr.strip()[-300:] or "cargo failed without a compiler diagnostic"
+    if len(errors) != 1:
+        return "WRONG REASON", f"{len(errors)} errors: " + " | ".join(f"[{e['code']}] {e['message']}" for e in errors)
+    e = errors[0]
+    where = f"{e['file']}:{e['line']}"
+    if file and (not e["file"] or not os.path.normpath(e["file"]).endswith(os.path.normpath(file))):
+        return "WRONG REASON", f"error at {where}, expected in {file}: [{e['code']}] {e['message']}"
+    if expected[0] == "code":
+        _, want_code, want_text = expected
+        if e["code"] != want_code or want_text not in e["rendered"]:
+            return "WRONG REASON", f"got [{e['code']}] {e['message']} at {where}; want [{want_code}] containing {want_text!r}"
+        return "PASS", f"[{e['code']}] {e['message']} ({where})"
+    _, phrase = expected
+    if e["code"] is not None or phrase not in e["message"]:
+        return "WRONG REASON", f"got [{e['code']}] {e['message']} at {where}; want {phrase!r}"
+    return "PASS", f"{e['message']} ({where})"
+
+
+def check_probes(r):
+    print("\n[5] Compile probes (each built alone; exactly one error, in its own file, with the asserted diagnostic)")
+    family = None
+    for pid, fam, package, feature, expected, file in PROBES_INVENTORY:
+        if fam != family:
+            family = fam
+            print(f"  -- {fam}")
+        code, errors, stderr = compile_probe(package, feature)
+        verdict, detail = judge(expected, file, code, errors, stderr)
+        if verdict == "PASS":
+            r.ok(f"{pid}: {detail}")
+        else:
+            r.fail(f"{pid}: {verdict}: {detail}")
+    # the probe harness itself builds with no probe enabled (a broken harness is not a pass)
+    code, _, err = run(["cargo", "build", "--locked", "-q", "-p", PROBES], env={"CARGO_TARGET_DIR": PROBE_TARGET})
+    r.check(code == 0, "probe harness builds with no probe enabled", f"probe harness broken:\n{err[-1000:]}")
+
+
+# ------------------------------------------------------------------ [6] seeded negative controls
+
+COPY_ITEMS = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates", "enforcement"]
+
+
+def tree_digest():
+    h = hashlib.sha256()
+    for item in COPY_ITEMS:
+        p = os.path.join(ROOT, item)
+        files = [p] if os.path.isfile(p) else sorted(
+            os.path.join(d, f) for d, _, fs in os.walk(p) for f in fs)
+        for f in files:
+            h.update(os.path.relpath(f, ROOT).encode())
+            with open(f, "rb") as fh:
+                h.update(fh.read())
+    return h.hexdigest()
+
+
+def fresh_copy():
+    tmp = tempfile.mkdtemp(prefix="verify-architecture-")
+    for item in COPY_ITEMS:
+        src = os.path.join(ROOT, item)
+        dst = os.path.join(tmp, item)
+        if os.path.isdir(src):
+            shutil.copytree(src, dst)
+        else:
+            shutil.copy2(src, dst)
+    return tmp
+
+
+def edit(root, rel, fn):
+    p = os.path.join(root, rel)
+    with open(p) as f:
+        text = f.read()
+    new = fn(text)
+    if new == text:
+        raise RuntimeError(f"seed did not change {rel}")
+    with open(p, "w") as f:
+        f.write(new)
+
+
+def append(text):
+    return lambda t: t + text
+
+
+def replace(old, new):
+    return lambda t: t.replace(old, new, 1)
+
+
+CORE_LIB = "crates/infynitae-core/src/lib.rs"
+CORE_ENTRY = "crates/infynitae-core/src/entry.rs"
+
+SOURCE_SEEDS = [
+    ("2g: reissue_token() on an existing Core", "authority-construction",
+     CORE_LIB, append("\nimpl Core {\n    pub fn reissue_token(&self) -> OutputLifecycleToken {\n"
+                      "        OutputLifecycleToken { core_id: self.id, _not_send: std::marker::PhantomData }\n    }\n}\n")),
+    ("public token constructor", "authority-construction",
+     CORE_LIB, append("\nimpl OutputLifecycleToken {\n    pub fn new() -> Self {\n"
+                      "        OutputLifecycleToken { core_id: 0, _not_send: std::marker::PhantomData }\n    }\n}\n")),
+    ("token construction hidden in a macro", "authority-construction",
+     CORE_LIB, append("\nfn hidden(id: u64) -> Vec<OutputLifecycleToken> {\n"
+                      "    vec![OutputLifecycleToken { core_id: id, _not_send: std::marker::PhantomData }]\n}\n")),
+    ("token getter returning the token", "authority-return",
+     CORE_LIB, append("\nimpl Core {\n    pub fn take_token(&mut self) -> Option<OutputLifecycleToken> {\n        None\n    }\n}\n")),
+    ("derive(Clone) on InputPort", "authority-not-duplicable",
+     CORE_LIB, replace("pub struct InputPort {", "#[derive(Clone)]\npub struct InputPort {")),
+    ("2h: camera mutation injected into output_reconfigured", "reconfigured-no-camera-authority",
+     CORE_ENTRY, replace("        self.check(token.core_id)?;\n        Err(EntryError::Unsupported)\n    }\n\n    pub fn output_disconnected",
+                         "        self.check(token.core_id)?;\n        let _p = authority::Authorized::mint();\n"
+                         "        Err(EntryError::Unsupported)\n    }\n\n    pub fn output_disconnected")),
+    ("2h: navigation call injected into output_reconfigured", "reconfigured-no-camera-authority",
+     CORE_ENTRY, replace("        self.check(token.core_id)?;\n        Err(EntryError::Unsupported)\n    }\n\n    pub fn output_disconnected",
+                         "        self.check(token.core_id)?;\n        crate::navigation::CameraSet::empty();\n"
+                         "        Err(EntryError::Unsupported)\n    }\n\n    pub fn output_disconnected")),
+    ("mint outside the entry points", "mint-location",
+     CORE_LIB, append("\nmod rogue {\n    fn f() {\n        let _ = crate::authority::Authorized::mint();\n    }\n}\n")),
+    ("mint made crate-visible", "mint-location",
+     CORE_ENTRY, replace("pub(in crate::entry) fn mint()", "pub(crate) fn mint()")),
+    ("wayland names InputPort", "wayland-names-no-authority",
+     "crates/infynitae-wayland/src/lib.rs", append("\n#[allow(unused_imports)]\nuse infynitae_core::InputPort;\n")),
+    ("wayland names output_connected inside a macro", "wayland-names-no-authority",
+     "crates/infynitae-wayland/src/lib.rs", append("\nconst _: &str = stringify!(output_connected);\n")),
+    ("forbid(unsafe_code) removed from core", "unsafe-policy",
+     CORE_LIB, replace("#![forbid(unsafe_code)]", "")),
+    ("forbid weakened to deny in ipc", "unsafe-policy",
+     "crates/infynitae-ipc/src/lib.rs", replace("#![forbid(unsafe_code)]", "#![deny(unsafe_code)]")),
+    ("unsafe block in a backend", "unsafe-policy",
+     "crates/infynitae-backend-headless/src/lib.rs", append("\npub fn f() {\n    unsafe {}\n}\n")),
+    ("allow(unsafe_code) in wayland without an inventory", "unsafe-policy",
+     "crates/infynitae-wayland/src/lib.rs", append("\n#[allow(unsafe_code)]\npub fn g() {}\n")),
+]
+
+
+GRAPH_SEEDS = [
+    ("core gains a dependency (smithay)", "crates/infynitae-core/Cargo.toml",
+     'smithay = { version = "=0.7.0", default-features = false }', "dag"),
+    ("wayland -> backend edge", "crates/infynitae-wayland/Cargo.toml",
+     'infynitae-backend-headless = { path = "../infynitae-backend-headless" }', "dag-acyclic"),
+    ("ipc -> wayland edge", "crates/infynitae-ipc/Cargo.toml",
+     'infynitae-wayland = { path = "../infynitae-wayland" }', "dag"),
+    ("backend <-> backend edge", "crates/infynitae-backend-winit/Cargo.toml",
+     'infynitae-backend-headless = { path = "../infynitae-backend-headless" }', "dag"),
+    ("product -> enforcement edge", "crates/infynitae/Cargo.toml",
+     'infynitae-architecture-probes = { path = "../../enforcement/probes" }', "dag"),
+    ("product -> binary-only enforcement crate (declared only)", "crates/infynitae/Cargo.toml",
+     'infynitae-source-rules = { path = "../../enforcement/source-rules" }', "dag"),
+    ("smithay requirement loosened", "crates/infynitae-wayland/Cargo.toml", None, "smithay"),
+    ("toolchain unpinned", "rust-toolchain.toml", None, "toolchain"),
+    ("[patch.crates-io] smithay override", "Cargo.toml", None, "patch"),
+]
+
+
+class Quiet(Results):
+    def ok(self, msg):
+        pass
+
+    def fail(self, msg):
+        self.failures += 1
+
+
+def check_mutations(binary, r):
+    print("\n[6] Seeded negative controls (temporary copies; each defect must be detected)")
+    before = tree_digest()
+    for desc, rule, rel, seed in SOURCE_SEEDS:
+        tmp = fresh_copy()
+        try:
+            edit(tmp, rel, seed)
+            code, out = source_rules(binary, tmp)
+            hit = code != 0 and any(l.startswith(f"FAIL {rule}:") for l in out.splitlines())
+            r.check(hit, f"detected: {desc} ({rule})", f"NOT DETECTED: {desc} (expected {rule})\n{out}")
+        finally:
+            shutil.rmtree(tmp)
+    for desc, rel, line, kind in GRAPH_SEEDS:
+        tmp = fresh_copy()
+        try:
+            q = Quiet()
+            if kind == "dag-acyclic":
+                # remove the backend's own adapter edge first so the seed is not a Cargo cycle
+                edit(tmp, "crates/infynitae-backend-headless/Cargo.toml",
+                     replace('infynitae-wayland = { path = "../infynitae-wayland" }\n', ""))
+                kind = "dag"
+            if kind == "dag":
+                edit(tmp, rel, replace("[dependencies]\n", f"[dependencies]\n{line}\n"))
+                hit = bool(dag_problems(metadata(tmp, locked=False)))
+            elif kind == "smithay":
+                edit(tmp, rel, replace('version = "=0.7.0"', 'version = "0.7"'))
+                hit = not check_smithay(metadata(tmp, locked=False), q)
+            elif kind == "toolchain":
+                edit(tmp, rel, replace(f'channel = "{TOOLCHAIN}"', 'channel = "stable"'))
+                hit = not check_toolchain(tmp, q)
+            else:
+                edit(tmp, rel, append('\n[patch.crates-io]\nsmithay = { path = "vendor/smithay" }\n'))
+                hit = not check_root_manifest(tmp, q)
+            r.check(hit, f"detected: {desc}", f"NOT DETECTED: {desc}")
+        except Exception as e:  # a seed the checks never saw is a broken control, not a detection
+            r.fail(f"CONTROL BROKEN: {desc}: {e}")
+        finally:
+            shutil.rmtree(tmp)
+    # The probe judge rejects compilation, wrong error codes and harness failures.
+    by_id = {p[0]: p for p in PROBES_INVENTORY}
+    _, _, pkg, feat, _, _ = by_id["p5_control_compiles"]
+    v, _ = judge(("code", "E0624", "set_center"), "enforcement/probes/src/lib.rs", *compile_probe(pkg, feat))
+    r.check(v == "VIOLATION", "judge: a probe that compiles is a VIOLATION", f"judge accepted a compiling probe ({v})")
+    _, _, pkg, feat, _, file = by_id["p1_mutate_through_read_accessor"]
+    v, _ = judge(("code", "E0603", "Authority"), file, *compile_probe(pkg, feat))
+    r.check(v == "WRONG REASON", "judge: a failure with another error code is WRONG REASON",
+            f"judge accepted an unexpected error code ({v})")
+    v, _ = judge(("code", "E0624", "set_center"), file, *compile_probe(PROBES, "no_such_probe_feature"))
+    r.check(v == "HARNESS ERROR", "judge: a cargo failure without a compiler diagnostic is a HARNESS ERROR",
+            f"judge accepted a broken harness ({v})")
+    after = tree_digest()
+    r.check(before == after, "canonical tree byte-identical after all seeded controls",
+            "canonical tree CHANGED during seeded controls")
+
+
+# ------------------------------------------------------------------ main
+
+def main():
+    skip_mutations = "--skip-mutations" in sys.argv[1:]
+    if any(a not in ("--skip-mutations",) for a in sys.argv[1:]):
+        print(__doc__)
+        return 2
+    print("=" * 72)
+    print("verify-architecture — Infynitae Native (OB-19)")
+    print(f"root: {ROOT}")
+    print("=" * 72)
+    r = Results()
+    try:
+        meta = check_pins(r)
+        check_dag(meta, r)
+        check_probe_features(meta, r)
+        binary = rules_binary()
+        check_source_rules(binary, r)
+        check_probes(r)
+        if skip_mutations:
+            r.fail("seeded negative controls skipped (--skip-mutations): not a passing run")
+        else:
+            check_mutations(binary, r)
+    except Exception as e:  # fail closed
+        r.fail(f"verifier error: {e}")
+    print("\n[7] Deferred runtime validation (owner ruling for INC-0; NOT tested here)")
+    for what, why, owner in DEFERRED:
+        print(f"  DEFERRED  {what}\n            reason: {why}\n            owner:  {owner}")
+    print("\n" + "=" * 72)
+    verdict = "PASS" if r.failures == 0 else f"FAIL ({r.failures} failing checks)"
+    print(f"== verify-architecture: {verdict}")
+    return 0 if r.failures == 0 else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

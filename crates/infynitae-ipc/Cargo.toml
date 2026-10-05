@@ -1,0 +1,15 @@
+[package]
+name = "infynitae-ipc"
+description = "Trusted shell IPC of Infynitae Native, the only holder of ShellPort (FOUNDATION_ARCHITECTURE C7)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# C7.1: core only (plus a serialization crate when the protocol exists); never wayland or a backend.
+[dependencies]
+infynitae-core = { path = "../infynitae-core" }
+
+# Negative probe (OB-19); see tools/verify-architecture.
+[features]
+probe_unsafe_block = []
