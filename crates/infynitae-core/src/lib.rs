@@ -18,11 +18,13 @@
 pub mod geom;
 pub mod navigation;
 pub mod output;
+pub mod pointer;
 pub mod projection;
 pub mod protocol;
 pub mod render;
 pub mod snapshot;
 pub mod stage;
+pub mod visibility;
 
 mod entry;
 pub use entry::authority;
@@ -70,11 +72,13 @@ pub enum ShellCommand {}
 pub enum EntryError {
     /// The port or token was minted by another Core (C1.5, C12.R2.3).
     ForeignPort,
-    /// The request is outside the implemented increments: a second output, reconfiguration and
-    /// disconnect arrive with INC-2.
-    Unsupported,
     /// The output descriptor is empty or has a non-positive scale.
     InvalidDescriptor,
+    /// The `OutputId` is not connected (unknown, or already disconnected).
+    UnknownOutput,
+    /// Reconfiguration named a different `OutputKey`: an identity change is a disconnect plus a
+    /// connect, never a reconfiguration (INV-OUTPUT-2).
+    IdentityChanged,
 }
 
 /// Why no frame could be produced for an output.
@@ -94,6 +98,12 @@ pub struct Core {
     output_ids: output::OutputIds,
     /// ProjectionFrame per output (OBJ-15): the last list produced for that output.
     frames: Vec<(output::OutputId, render::ProjectionFrame)>,
+    /// OBJ-13, rewritten by every visibility pass.
+    membership: visibility::MembershipTable,
+    /// OBJ-20, core part.
+    pointer: pointer::PointerState,
+    /// OBJ-09: read only by `output_connected`.
+    persisted: navigation::PersistedCameras,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
     /// protocol state fail its `Send` assertion (built through infynitae-wayland's probe feature).
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -101,8 +111,11 @@ pub struct Core {
 }
 
 impl Core {
-    /// Composition root only: the Core, both authority ports and the output-lifecycle token.
-    pub fn new() -> (Core, InputPort, ShellPort, OutputLifecycleToken) {
+    /// Composition root only: the Core, both authority ports and the output-lifecycle token. The
+    /// persisted camera table is a passive lookup consulted only by `output_connected`.
+    pub fn new(
+        persisted: navigation::PersistedCameras,
+    ) -> (Core, InputPort, ShellPort, OutputLifecycleToken) {
         use std::sync::atomic::{AtomicU64, Ordering};
         static NEXT_ID: AtomicU64 = AtomicU64::new(1);
         let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
@@ -114,6 +127,9 @@ impl Core {
                 outputs: Vec::new(),
                 output_ids: output::OutputIds::default(),
                 frames: Vec::new(),
+                membership: visibility::MembershipTable::default(),
+                pointer: pointer::PointerState::NoOutput,
+                persisted,
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
             },
@@ -142,8 +158,58 @@ impl Core {
         &self.stage
     }
 
+    /// Connected outputs, in connection order.
     pub fn outputs(&self) -> &[output::OutputModel] {
         &self.outputs
+    }
+
+    pub fn output(&self, id: output::OutputId) -> Option<&output::OutputModel> {
+        self.outputs.iter().find(|o| o.id == id)
+    }
+
+    /// The seat's physical pointer state (OBJ-20, core part).
+    pub fn pointer(&self) -> pointer::PointerState {
+        self.pointer
+    }
+
+    /// The current per-surface output membership (OBJ-13).
+    pub fn membership(&self) -> &visibility::MembershipTable {
+        &self.membership
+    }
+
+    /// INV-FRAME-2: the element's frame-clock output (highest-refresh observing output).
+    pub fn clock_output_of(&self, element: stage::ElementId) -> Option<output::OutputId> {
+        visibility::clock_output(&self.membership.observers(element), &self.outputs)
+    }
+
+    /// A vblank of `output` (the backend's frame tick): the observed elements clocked by it, whose
+    /// requested callbacks complete once and whose feedback is presented with `sync_output` =
+    /// `output` (INV-FRAME-1, INV-FRAME-2, M16). Unobserved elements are not completed here
+    /// (kick and fallback are INC-8).
+    pub fn frame_tick(&self, output: output::OutputId) -> Vec<stage::ElementId> {
+        let mut out: Vec<stage::ElementId> = self
+            .stage
+            .z_order()
+            .iter()
+            .copied()
+            .filter(|&e| self.clock_output_of(e) == Some(output))
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The visibility pass (OBJ-13): membership recomputed from Stage, cameras and outputs; its
+    /// diff becomes enter/leave effects. Run at the end of every core batch that can change it.
+    pub(crate) fn visibility_pass(&mut self) -> Vec<protocol::Effect> {
+        let views: Vec<_> = self
+            .outputs
+            .iter()
+            .filter_map(|o| self.view(o.id).map(|v| (o.id, v)))
+            .collect();
+        let new = visibility::MembershipTable::compute(&self.stage, &views);
+        let fx = self.membership.diff(&new, &self.stage);
+        self.membership = new;
+        fx
     }
 
     /// View(O) from the camera bound to the output (F-VIEW-1, F-LATTICE-1).
@@ -199,7 +265,7 @@ mod tests {
     use super::*;
 
     use crate::geom::{LocalPoint, LocalRect, LocalSize, OutputLogicalPoint};
-    use crate::output::{OutputDescriptor, OutputKey, Transform};
+    use crate::output::{OutputDescriptor, Transform};
     use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceRole, SurfaceTree, tests::key};
 
     fn tree(root: u64, sub: Option<u64>) -> SurfaceTree {
@@ -242,19 +308,21 @@ mod tests {
     }
 
     fn connected() -> (Core, output::OutputId) {
-        let (mut core, _i, _s, mut token) = Core::new();
+        let (mut core, _i, _s, mut token) =
+            Core::new(crate::navigation::PersistedCameras::default());
         let o = core
             .output_connected(
                 &mut token,
                 OutputDescriptor {
-                    key: OutputKey::opaque(),
+                    key: crate::output::tests::key("A"),
                     mode: (1920, 1080),
                     transform: Transform::Normal,
                     scale_120: 120,
                     refresh_mhz: 60_000,
                 },
             )
-            .unwrap();
+            .unwrap()
+            .0;
         (core, o)
     }
 
@@ -428,7 +496,8 @@ mod tests {
 
     #[test]
     fn no_camera_exists_before_an_output_is_connected() {
-        let (core, _input, _shell, _token) = Core::new();
+        let (core, _input, _shell, _token) =
+            Core::new(crate::navigation::PersistedCameras::default());
         assert_eq!(core.cameras().center(0), None);
     }
 }

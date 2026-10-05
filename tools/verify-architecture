@@ -144,12 +144,17 @@ PROBES_INVENTORY = [
 
 # Runtime validation that cannot exist before its increment (owner ruling, INC-0).
 DEFERRED = [
-    ("2i OutputKey collision / 1:1 binding (sealed 2R rule must fail the 1:1 test)",
-     "runtime output-to-camera binding does not exist in INC-0",
-     "INC-2 (first owner of output_connected binding; T1 OB-49)"),
     ("ports/token bound to their Core for physical_input, shell_command",
-     "input and shell vocabularies have no variants in INC-0, so these entries cannot be called",
+     "input and shell vocabularies have no variants yet, so these entries cannot be called",
      "INC-3 (physical_input), INC-11 (shell_command)"),
+]
+
+# Runtime 2i (OB-49, transferred from OB-19 by Decision D): the production 1:1 collision tests pass
+# with the real binding rule and fail with "1:1 violated" under the sealed 2R rule
+# (feature probe_sealed_key_steal), on the core (T0) and on the lockstep production path (T1).
+RUNTIME_2I = [
+    ("T0 core", ["-p", CORE, "--lib"], CORE, "concurrent_output_key_collision_keeps_one_to_one"),
+    ("T1 lockstep", ["-p", HEADLESS, "--test", "t1_outputs"], HEADLESS, "same_key_outputs_keep_one_to_one"),
 ]
 
 
@@ -473,6 +478,21 @@ def check_probes(r):
     r.check(code == 0, "probe harness builds with no probe enabled", f"probe harness broken:\n{err[-1000:]}")
 
 
+def check_runtime_2i(r):
+    print("\n[5b] Runtime 2i (OB-49): 1:1 binding holds; the sealed key-steal rule is caught")
+    env = {"CARGO_TARGET_DIR": PROBE_TARGET}
+    for name, args, _pkg, test in RUNTIME_2I:
+        code, out, err = run(["cargo", "test", "--locked", *args, test], env=env)
+        text = out + err
+        passed = code == 0 and "test result: ok. 1 passed" in text
+        r.check(passed, f"{name}: {test} passes with the 1:1 rule", f"{name}: {test} did not pass:\n{text[-1500:]}")
+        code, out, err = run(["cargo", "test", "--locked", *args, "--features", "probe_sealed_key_steal", test], env=env)
+        text = out + err
+        caught = code != 0 and "1:1 violated" in text and "1 failed" in text
+        r.check(caught, f"{name}: the sealed rule fails it with \"1:1 violated\"",
+                f"{name}: sealed key-steal rule NOT caught (exit {code}):\n{text[-1500:]}")
+
+
 # ------------------------------------------------------------------ [6] seeded negative controls
 
 COPY_ITEMS = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates", "enforcement"]
@@ -524,6 +544,8 @@ def replace(old, new):
 
 CORE_LIB = "crates/infynitae-core/src/lib.rs"
 CORE_ENTRY = "crates/infynitae-core/src/entry.rs"
+# a line inside Core::output_reconfigured only (2h seeds inject before it)
+RECONF_ANCHOR = "        let mut fx = vec![Effect::OutputChanged(output)];\n"
 
 WAYLAND_LIB = "crates/infynitae-wayland/src/lib.rs"
 
@@ -576,13 +598,11 @@ SOURCE_SEEDS = [
     ("derive(Clone) on InputPort", "authority-not-duplicable",
      CORE_LIB, replace("pub struct InputPort {", "#[derive(Clone)]\npub struct InputPort {")),
     ("2h: camera mutation injected into output_reconfigured", "reconfigured-no-camera-authority",
-     CORE_ENTRY, replace("        self.check(token.core_id)?;\n        Err(EntryError::Unsupported)\n    }\n\n    pub fn output_disconnected",
-                         "        self.check(token.core_id)?;\n        let _p = authority::Authorized::mint();\n"
-                         "        Err(EntryError::Unsupported)\n    }\n\n    pub fn output_disconnected")),
+     CORE_ENTRY, replace(RECONF_ANCHOR, "        let _p = authority::Authorized::mint();\n" + RECONF_ANCHOR)),
     ("2h: navigation call injected into output_reconfigured", "reconfigured-no-camera-authority",
-     CORE_ENTRY, replace("        self.check(token.core_id)?;\n        Err(EntryError::Unsupported)\n    }\n\n    pub fn output_disconnected",
-                         "        self.check(token.core_id)?;\n        crate::navigation::CameraSet::empty();\n"
-                         "        Err(EntryError::Unsupported)\n    }\n\n    pub fn output_disconnected")),
+     CORE_ENTRY, replace(RECONF_ANCHOR, "        crate::navigation::CameraSet::empty();\n" + RECONF_ANCHOR)),
+    ("INC-2: output_reconfigured re-binds a camera (camera write outside connect/disconnect)", "reconfigured-no-camera-authority",
+     CORE_ENTRY, replace(RECONF_ANCHOR, "        self.cameras.bind_on_connect(authority::Authorized::mint(), &desc.key, output, &self.persisted);\n" + RECONF_ANCHOR)),
     ("mint outside the entry points", "mint-location",
      CORE_LIB, append("\nmod rogue {\n    fn f() {\n        let _ = crate::authority::Authorized::mint();\n    }\n}\n")),
     ("mint made crate-visible", "mint-location",
@@ -724,13 +744,14 @@ def main():
         binary = rules_binary()
         check_source_rules(binary, r)
         check_probes(r)
+        check_runtime_2i(r)
         if skip_mutations:
             r.fail("seeded negative controls skipped (--skip-mutations): not a passing run")
         else:
             check_mutations(binary, r)
     except Exception as e:  # fail closed
         r.fail(f"verifier error: {e}")
-    print("\n[7] Deferred runtime validation (owner ruling for INC-0; NOT tested here)")
+    print("\n[7] Deferred runtime validation (NOT tested here)")
     for what, why, owner in DEFERRED:
         print(f"  DEFERRED  {what}\n            reason: {why}\n            owner:  {owner}")
     print("\n" + "=" * 72)

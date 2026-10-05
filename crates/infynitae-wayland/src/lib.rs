@@ -1,9 +1,11 @@
 //! Infynitae Native Smithay adapter (FOUNDATION_ARCHITECTURE C1.2).
 //!
-//! INC-1 state: compositor, subcompositor, shm and xdg-shell globals; the commit hook extracts the
-//! surface-tree snapshot and hands it to Core; Core's effects (initial configures) are applied
-//! here; render elements are built from Core's render list in `convert`. No output global, seat,
-//! input routing or scale policy yet (INC-2 onwards).
+//! INC-2 state: compositor, subcompositor, shm, xdg-shell, `wl_output` + xdg-output and
+//! presentation-time globals; the commit hook extracts the surface-tree snapshot and hands it to
+//! Core; Core's effects (initial configures, output globals, enter/leave) are applied in order;
+//! render elements are built from Core's render list and drawn through per-output damage trackers
+//! sized `phys_O` (`convert`); observed frames complete on Core's frame clock. No seat, input
+//! routing or scale policy yet (INC-3 onwards).
 //!
 //! Every Smithay handler receives `&mut` protocol state. That state holds the Core but never an
 //! authority port or the output-lifecycle token: those types are `!Send` and the state is asserted
@@ -14,6 +16,7 @@
 
 pub mod convert;
 mod handlers;
+mod outputs;
 pub mod registry;
 mod snapshot;
 
@@ -24,8 +27,14 @@ use smithay::input::SeatState;
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
+use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
+
+/// `clk_id` announced by `wp_presentation`: CLOCK_MONOTONIC on Linux. Frame times handed to
+/// `complete_frames` are on this clock.
+const CLOCK_MONOTONIC: u32 = 1;
 
 pub use registry::SurfaceRegistry;
 
@@ -49,7 +58,19 @@ struct ElementHandle {
 /// Protocol state handed to every Smithay handler.
 pub struct WaylandState {
     core: Core,
+    dh: DisplayHandle,
     compositor: CompositorState,
+    #[expect(
+        dead_code,
+        reason = "owns the xdg-output manager global for the state's lifetime"
+    )]
+    output_manager: OutputManagerState,
+    #[expect(
+        dead_code,
+        reason = "owns the wp_presentation global for the state's lifetime"
+    )]
+    presentation: PresentationState,
+    outputs: Vec<outputs::OutputHandle>,
     xdg_shell: XdgShellState,
     shm: ShmState,
     popups: PopupManager,
@@ -71,11 +92,16 @@ const _: fn() = || {
 };
 
 impl WaylandState {
-    /// Creates the globals (`wl_compositor` v6 and `wl_subcompositor`, `wl_shm`, `xdg_wm_base`).
+    /// Creates the globals (`wl_compositor` v6 and `wl_subcompositor`, `wl_shm`, `xdg_wm_base`,
+    /// `zxdg_output_manager_v1`, `wp_presentation`). Output globals follow Core's effects.
     pub fn new(display: &DisplayHandle, core: Core) -> Self {
         WaylandState {
             core,
+            dh: display.clone(),
             compositor: CompositorState::new_v6::<Self>(display),
+            output_manager: OutputManagerState::new_with_xdg_output::<Self>(display),
+            presentation: PresentationState::new::<Self>(display, CLOCK_MONOTONIC),
+            outputs: Vec::new(),
             xdg_shell: XdgShellState::new::<Self>(display),
             shm: ShmState::new::<Self>(display, []),
             popups: PopupManager::default(),

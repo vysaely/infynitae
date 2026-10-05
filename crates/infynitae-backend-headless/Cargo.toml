@@ -13,6 +13,11 @@ infynitae-wayland = { path = "../infynitae-wayland" }
 # C1.3: the headless backend renders with Smithay's test renderer.
 smithay = { version = "=0.7.0", default-features = false, features = ["renderer_test"] }
 
+# Runtime 2i negative control (OB-49) on the T1 path; see tools/verify-architecture. Never enabled
+# by default.
+[features]
+probe_sealed_key_steal = ["infynitae-core/probe_sealed_key_steal"]
+
 # T1 probe clients over socketpairs (FOUNDATION_TEST_PLAN T1; C1.2 testing row). Test-only.
 [dev-dependencies]
 wayland-client = "=0.31.15"

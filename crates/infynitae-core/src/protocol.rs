@@ -1,17 +1,35 @@
 //! Policy for events derived from untrusted Wayland client requests (C1.5 item 4): element
-//! lifecycle (M1) and popup placement targets (M3). No camera vocabulary: nothing here can mint an
-//! `Authorized` proof, so nothing here can mutate a camera (INV-CAMERA-1).
+//! lifecycle (M1), popup placement targets (M3), and the `Effect` vocabulary. No camera
+//! vocabulary: nothing here can mint an `Authorized` proof, so nothing here can mutate a camera
+//! (INV-CAMERA-1).
 
 use crate::Core;
 use crate::geom::{CanvasPoint, LocalPoint, LocalRect, LocalSize, Q16_ONE};
-use crate::snapshot::{SnapshotError, SurfaceTree};
+use crate::output::OutputId;
+use crate::snapshot::{SnapshotError, SurfaceKey, SurfaceTree};
 use crate::stage::{ElementId, Lifecycle};
 
-/// Decisions the adapter applies to protocol objects (C2.1 `Effect` list).
+/// Decisions the adapter applies to protocol objects (C2.1 `Effect` list), in order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Effect {
     /// Send the toplevel's initial configure (M1).
     InitialConfigure(ElementId),
+    /// Create the output's `wl_output` global from Core's OutputModel (M4).
+    OutputAdded(OutputId),
+    /// Re-announce the output's state from Core's OutputModel (M4 reconfiguration).
+    OutputChanged(OutputId),
+    /// Destroy the output's global; every leave for it precedes this effect (INV-OUTPUT-1).
+    OutputRemoved(OutputId),
+    /// `wl_surface.enter` (F-MEMBER-1, INV-RENDER-3).
+    Enter {
+        output: OutputId,
+        surface: SurfaceKey,
+    },
+    /// `wl_surface.leave`.
+    Leave {
+        output: OutputId,
+        surface: SurfaceKey,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,9 +60,9 @@ impl Core {
         let state = self.stage.state(id).ok_or(ProtocolError::StaleElement)?;
         let has_buffer = tree.root().is_some_and(|r| r.mapped);
         let stale = |_| ProtocolError::StaleElement;
-        match (state, has_buffer) {
+        let mut fx = match (state, has_buffer) {
             (Lifecycle::AwaitingInitialCommit | Lifecycle::Unmapped, true) => {
-                Err(ProtocolError::BufferBeforeConfigure)
+                return Err(ProtocolError::BufferBeforeConfigure);
             }
             (Lifecycle::AwaitingInitialCommit, false) => {
                 let anchor = self.initial_anchor();
@@ -53,7 +71,7 @@ impl Core {
                 self.stage
                     .set_state(id, Lifecycle::AwaitingFirstBuffer)
                     .map_err(stale)?;
-                Ok(vec![Effect::InitialConfigure(id)])
+                vec![Effect::InitialConfigure(id)]
             }
             (Lifecycle::Unmapped, false) => {
                 // anchor kept (INV-STAGE-5)
@@ -61,17 +79,17 @@ impl Core {
                 self.stage
                     .set_state(id, Lifecycle::AwaitingFirstBuffer)
                     .map_err(stale)?;
-                Ok(vec![Effect::InitialConfigure(id)])
+                vec![Effect::InitialConfigure(id)]
             }
             (Lifecycle::AwaitingFirstBuffer, false) | (Lifecycle::Mapped, true) => {
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
-                Ok(vec![])
+                vec![]
             }
             (Lifecycle::AwaitingFirstBuffer, true) => {
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
                 self.stage.set_state(id, Lifecycle::Mapped).map_err(stale)?;
                 self.stage.raise(id);
-                Ok(vec![])
+                vec![]
             }
             (Lifecycle::Mapped, false) => {
                 // null-buffer commit: unmap; identity and anchor kept, snapshot dropped
@@ -79,27 +97,37 @@ impl Core {
                 self.stage
                     .set_state(id, Lifecycle::Unmapped)
                     .map_err(stale)?;
-                Ok(vec![])
+                vec![]
             }
-        }
+        };
+        fx.extend(self.visibility_pass());
+        Ok(fx)
     }
 
-    /// M1 destroy: purges every reference; idempotent and order-independent (INV-STAGE-4).
+    /// M1 destroy: purges every reference; idempotent and order-independent (INV-STAGE-4). The
+    /// dead client gets no leave: its membership rows are dropped silently.
     pub fn toplevel_destroyed(&mut self, id: ElementId) -> bool {
         for (_, frame) in &mut self.frames {
             frame.entries.retain(|e| e.element != id);
         }
-        self.stage.destroy(id)
+        let existed = self.stage.destroy(id);
+        let fx = self.visibility_pass();
+        debug_assert!(
+            fx.is_empty(),
+            "a destroyed element produced protocol effects"
+        );
+        existed
     }
 
     /// M3: the constraint target for a popup of `parent`: the anchor output's viewport,
-    /// inward-rounded (R8), relative to the parent's window-geometry origin. INC-1 has one output,
-    /// which is the anchor output. `None` without an output, an anchor, or when the target does
-    /// not fit protocol integers.
+    /// inward-rounded (R8), relative to the parent's window-geometry origin. The anchor output is
+    /// (D-B6-BOUNDARY) the output of the causing input event (INC-3 and later: no input yet), else
+    /// the parent's frame-clock output, else none (`None`: no constraint adjustment). `None` also
+    /// when the target does not fit protocol integers.
     pub fn popup_constraint_target(&self, parent: ElementId) -> Option<LocalRect> {
         let anchor = self.stage.anchor(parent)?;
-        let output = self.outputs.first()?;
-        let view = self.view(output.id)?;
+        let output = self.clock_output_of(parent)?;
+        let view = self.view(output)?;
         let extent = |px: u32| crate::geom::q16(px as f64 / view.k);
         let (x0q, y0q) = (view.c_eff.x, view.c_eff.y);
         let (x1q, y1q) = (x0q + extent(view.size.0), y0q + extent(view.size.1));
@@ -121,7 +149,7 @@ impl Core {
     }
 
     /// Placement policy at initial commit (Level D): the bound camera's centre of the first
-    /// output, rounded R3; the Canvas origin without an output.
+    /// connected output (lowest `OutputId`), rounded R3; the Canvas origin without an output.
     fn initial_anchor(&self) -> CanvasPoint {
         self.outputs
             .first()
@@ -135,8 +163,7 @@ impl Core {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::geom::OutputLogicalPoint;
-    use crate::output::{OutputDescriptor, OutputKey, Transform};
+    use crate::output::{OutputDescriptor, Transform};
     use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceRole, tests::key};
 
     fn tree(mapped: bool) -> SurfaceTree {
@@ -160,11 +187,12 @@ mod tests {
     }
 
     fn connected(scale_120: u32) -> Core {
-        let (mut core, _i, _s, mut token) = Core::new();
+        let (mut core, _i, _s, mut token) =
+            Core::new(crate::navigation::PersistedCameras::default());
         core.output_connected(
             &mut token,
             OutputDescriptor {
-                key: OutputKey::opaque(),
+                key: crate::output::tests::key("A"),
                 mode: (1920, 1080),
                 transform: Transform::Normal,
                 scale_120,
@@ -178,6 +206,15 @@ mod tests {
     #[test]
     fn m1_map_unmap_remap_destroy() {
         let mut core = connected(120);
+        let o = core.outputs()[0].id;
+        let enter = Effect::Enter {
+            output: o,
+            surface: key(1),
+        };
+        let leave = Effect::Leave {
+            output: o,
+            surface: key(1),
+        };
         let id = core.toplevel_created();
         assert_eq!(
             core.stage().state(id),
@@ -191,11 +228,17 @@ mod tests {
         let anchor = core.stage().anchor(id).expect("placed at initial commit");
         assert_eq!(anchor, CanvasPoint { x: 0, y: 0 }, "default camera centre");
         assert_eq!(core.toplevel_committed(id, tree(false)), Ok(vec![]));
-        assert_eq!(core.toplevel_committed(id, tree(true)), Ok(vec![]));
+        // first buffer: mapped, on top, and its surface enters the output (F-MEMBER-1)
+        assert_eq!(core.toplevel_committed(id, tree(true)), Ok(vec![enter]));
         assert_eq!(core.stage().state(id), Some(Lifecycle::Mapped));
         assert_eq!(core.stage().z_order(), &[id]);
-        // unmap keeps id and anchor, drops the snapshot
-        assert_eq!(core.toplevel_committed(id, tree(false)), Ok(vec![]));
+        assert_eq!(
+            core.toplevel_committed(id, tree(true)),
+            Ok(vec![]),
+            "no repeated enter"
+        );
+        // unmap keeps id and anchor, drops the snapshot, and leaves every output (M1)
+        assert_eq!(core.toplevel_committed(id, tree(false)), Ok(vec![leave]));
         assert_eq!(core.stage().state(id), Some(Lifecycle::Unmapped));
         assert_eq!(core.stage().anchor(id), Some(anchor));
         assert!(core.stage().tree(id).is_none());
@@ -207,14 +250,16 @@ mod tests {
             core.toplevel_committed(id, tree(false)),
             Ok(vec![Effect::InitialConfigure(id)])
         );
-        core.toplevel_committed(id, tree(true)).unwrap();
+        assert_eq!(core.toplevel_committed(id, tree(true)), Ok(vec![enter]));
         assert_eq!(core.stage().anchor(id), Some(anchor));
         assert_eq!(
             core.stage().z_order(),
             &[other, id],
             "remap re-shows on top"
         );
+        // destroy: no event to the dead client; membership rows dropped
         assert!(core.toplevel_destroyed(id));
+        assert!(!core.membership().rows().iter().any(|(e, _, _)| *e == id));
         assert!(!core.toplevel_destroyed(id), "destroy is idempotent");
         assert_eq!(
             core.toplevel_committed(id, tree(true)),
@@ -279,28 +324,44 @@ mod tests {
         );
     }
 
-    /// M3 / R8: the target is the output viewport, inward-rounded, relative to the parent's
-    /// geometry origin (the anchor).
+    /// M3 / R8 / D-B6-BOUNDARY: the target is the anchor output's viewport (here the parent's
+    /// clock output), inward-rounded, relative to the parent's geometry origin (the anchor).
+    /// Expected values are hand-derived with exact rational arithmetic
+    /// (evidence/phase-f/INC-1/corrective/unproject_reference.py), not with production code.
     #[test]
     fn popup_target_is_the_viewport_inward_rounded() {
+        // k = 1, camera centre (0,0), 1920x1080 → viewport [−960,960) × [−540,540); anchor (0,0)
         let mut core = connected(120);
         let id = core.toplevel_created();
         core.toplevel_committed(id, tree(false)).unwrap();
-        // camera centre (0,0), 1920x1080 at k=1 → viewport [−960,960) × [−540,540); anchor (0,0)
+        assert_eq!(
+            core.popup_constraint_target(id),
+            None,
+            "unobserved parent: no anchor output (rule 3)"
+        );
+        core.toplevel_committed(id, tree(true)).unwrap();
         let t = core.popup_constraint_target(id).unwrap();
-        assert_eq!(t.loc, LocalPoint { x: -960, y: -540 });
-        assert_eq!(t.size, LocalSize { w: 1920, h: 1080 });
-        // at k = 1.25 the viewport is 1536 x 864 Canvas px; at k = 1.75, 1097.14… x 617.14…:
-        // fractional edges round inward
+        assert_eq!(
+            (t.loc, t.size),
+            (
+                LocalPoint { x: -960, y: -540 },
+                LocalSize { w: 1920, h: 1080 }
+            )
+        );
+        // k = 1.75: c_eff = (−35951177, −20222537) Q16; the viewport's fractional edges
+        // (−548.57…, 548.57…) × (−308.57…, 308.57…) round inward
         let mut core = connected(210);
         let id = core.toplevel_created();
         core.toplevel_committed(id, tree(false)).unwrap();
+        core.toplevel_committed(id, tree(true)).unwrap();
         let t = core.popup_constraint_target(id).unwrap();
-        let v = core.view(core.outputs()[0].id).unwrap();
-        let lo = v.unproject(OutputLogicalPoint { x: 0.0, y: 0.0 });
-        assert!(t.loc.x as i64 * Q16_ONE >= lo.x && t.loc.y as i64 * Q16_ONE >= lo.y);
-        assert!((t.loc.x + t.size.w) as f64 <= lo.x as f64 / Q16_ONE as f64 + 1920.0 / 1.75);
-        assert!((t.loc.y + t.size.h) as f64 <= lo.y as f64 / Q16_ONE as f64 + 1080.0 / 1.75);
+        assert_eq!(
+            (t.loc, t.size),
+            (
+                LocalPoint { x: -548, y: -308 },
+                LocalSize { w: 1096, h: 616 }
+            )
+        );
         core.toplevel_destroyed(id);
         assert_eq!(
             core.popup_constraint_target(id),

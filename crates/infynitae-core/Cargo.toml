@@ -19,3 +19,6 @@ probe_protocol_creates_camera = []
 probe_sticky_fit_retains_authority = []
 probe_unsafe_block = []
 probe_unsafe_allow_override = []
+# Runtime 2i negative control (OB-49): the sealed 2R binding rule, which steals a bound camera.
+# tools/verify-architecture requires the 1:1 collision tests to fail with "1:1 violated" under it.
+probe_sealed_key_steal = []

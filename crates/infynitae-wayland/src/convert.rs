@@ -1,13 +1,18 @@
 //! The only conversions between Infynitae values and Smithay geometry types (C3.6, INV-COORD-4).
 
 use infynitae_core::geom::{LocalPoint, LocalRect, LocalSize, RenderLocation};
+use infynitae_core::output::{OutputId, OutputModel, Transform};
+use infynitae_core::projection::View;
 use infynitae_core::render::FrameEntry;
+use smithay::backend::renderer::Color32F;
+use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::{ImportAll, Renderer};
-use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
+use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
 use smithay::wayland::compositor::with_states;
 
+use crate::WaylandState;
 use crate::registry::SurfaceRegistry;
 
 pub(crate) fn local_point(p: Point<i32, Logical>) -> LocalPoint {
@@ -66,4 +71,112 @@ where
         }
     }
     Ok(out)
+}
+
+// ------------------------------------------------------------------ outputs (INC-2)
+
+/// `wl_output.geometry` physical size: not a hardware fact Core carries; reported as unknown.
+pub(crate) fn unknown_physical_size() -> Size<i32, smithay::utils::Raw> {
+    (0, 0).into()
+}
+
+/// `wl_output.mode` from the physical mode `phys_O` (before the transform) and refresh (mHz).
+pub(crate) fn output_mode(model: &OutputModel) -> smithay::output::Mode {
+    smithay::output::Mode {
+        size: (model.phys.0 as i32, model.phys.1 as i32).into(),
+        refresh: model.refresh_mhz as i32,
+    }
+}
+
+pub(crate) fn output_transform(t: Transform) -> smithay::utils::Transform {
+    use smithay::utils::Transform as S;
+    match t {
+        Transform::Normal => S::Normal,
+        Transform::R90 => S::_90,
+        Transform::R180 => S::_180,
+        Transform::R270 => S::_270,
+        Transform::Flipped => S::Flipped,
+        Transform::Flipped90 => S::Flipped90,
+        Transform::Flipped180 => S::Flipped180,
+        Transform::Flipped270 => S::Flipped270,
+    }
+}
+
+/// The output scale (fractional; `wl_output.scale` is its ceiling, sent by Smithay).
+pub(crate) fn output_scale(model: &OutputModel) -> smithay::output::Scale {
+    smithay::output::Scale::Fractional(model.scale)
+}
+
+/// xdg_output logical position: the output's Arrangement origin.
+pub(crate) fn output_location(model: &OutputModel) -> Point<i32, Logical> {
+    (
+        model.arrangement.0.round() as i32,
+        model.arrangement.1.round() as i32,
+    )
+        .into()
+}
+
+/// F-RENDER-1: `OutputDamageTracker::new(phys_O, Scale(k_O), transform_O)`, the **untransformed**
+/// physical mode; Smithay derives the element space `transform_size(phys_O) = view_O` itself.
+/// `OutputDamageTracker::from_output` is not used: it ignores zoom.
+pub fn damage_tracker(model: &OutputModel, view: &View) -> OutputDamageTracker {
+    OutputDamageTracker::new(
+        (model.phys.0 as i32, model.phys.1 as i32),
+        Scale::from(view.k),
+        output_transform(model.transform),
+    )
+}
+
+/// One frame of an output through its damage tracker: Core's render list (recorded as the
+/// output's ProjectionFrame) → render elements → `OutputDamageTracker::render_output`. Returns
+/// the damage, or `None` when nothing changed.
+pub fn render_output<R>(
+    state: &mut WaylandState,
+    renderer: &mut R,
+    framebuffer: &mut R::Framebuffer<'_>,
+    output: OutputId,
+    age: usize,
+) -> Result<Option<Damage>, RenderOutputError<R::Error>>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    let entries = state
+        .core
+        .render_list(output)
+        .map_err(|_| RenderOutputError::NoFrame)?
+        .entries
+        .clone();
+    let elements: Vec<_> = render_elements(renderer, &state.registry, &entries)
+        .map_err(RenderOutputError::Renderer)?
+        .into_iter()
+        .map(|(_, e)| e)
+        .collect();
+    let handle = state
+        .outputs
+        .iter_mut()
+        .find(|h| h.id == output)
+        .ok_or(RenderOutputError::NoFrame)?;
+    let result = handle
+        .tracker
+        .render_output(renderer, framebuffer, age, &elements, Color32F::TRANSPARENT)
+        .map_err(|e| match e {
+            smithay::backend::renderer::damage::Error::Rendering(e) => {
+                RenderOutputError::Renderer(e)
+            }
+            smithay::backend::renderer::damage::Error::OutputNoMode(_) => {
+                RenderOutputError::NoFrame
+            }
+        })?;
+    Ok(result.damage.cloned())
+}
+
+/// Damage of one frame, in the output's element (view) space.
+pub type Damage = Vec<Rectangle<i32, Physical>>;
+
+#[derive(Debug)]
+pub enum RenderOutputError<E> {
+    /// The output is not connected or has no view.
+    NoFrame,
+    Renderer(E),
 }

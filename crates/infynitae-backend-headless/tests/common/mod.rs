@@ -5,35 +5,48 @@
 #![allow(dead_code)]
 
 pub mod oracle;
+pub mod probe_renderer;
 
 use std::fs::File;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
-use infynitae_backend_headless::{VirtualOutput, connect};
+use infynitae_backend_headless::{VirtualOutput, connect, vblank, vblank_period};
+use infynitae_core::navigation::PersistedCameras;
 use infynitae_core::output::{OutputId, Transform};
 use infynitae_core::{Core, OutputLifecycleToken};
 use infynitae_wayland::{ClientState, WaylandState};
 use smithay::reexports::wayland_server::Display;
 use wayland_client::protocol::{
     wl_buffer::WlBuffer,
+    wl_callback::{self, WlCallback},
     wl_compositor::WlCompositor,
+    wl_output::{self, WlOutput},
     wl_region::WlRegion,
     wl_registry::{self, WlRegistry},
     wl_shm::{self, WlShm},
     wl_shm_pool::WlShmPool,
     wl_subcompositor::WlSubcompositor,
     wl_subsurface::WlSubsurface,
-    wl_surface::WlSurface,
+    wl_surface::{self, WlSurface},
 };
-use wayland_client::{Connection, Dispatch, EventQueue, QueueHandle, delegate_noop};
+use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop};
+use wayland_protocols::wp::presentation_time::client::{
+    wp_presentation::{self, WpPresentation},
+    wp_presentation_feedback::{self, WpPresentationFeedback},
+};
 use wayland_protocols::xdg::shell::client::{
     xdg_popup::{self, XdgPopup},
     xdg_positioner::{self, XdgPositioner},
     xdg_surface::{self, XdgSurface},
     xdg_toplevel::{self, XdgToplevel},
     xdg_wm_base::{self, XdgWmBase},
+};
+use wayland_protocols::xdg::xdg_output::zv1::client::{
+    zxdg_output_manager_v1::ZxdgOutputManagerV1,
+    zxdg_output_v1::{self, ZxdgOutputV1},
 };
 
 /// One `wl_region` request: (add?, (x, y, w, h)).
@@ -59,11 +72,27 @@ pub struct Surf {
     pub size: (i32, i32),
     pub configured: bool,
     pub popup_configure: Option<(i32, i32, i32, i32)>,
+    /// Requests the next frame and redraws on every `done` (a continuously animating client).
+    pub frame_driven: bool,
 }
 
 #[derive(Default)]
 pub struct Probe {
     globals: Vec<(u32, String, u32)>,
+    /// Ordered wire log of output-related events (the independent oracle for wire order):
+    /// "global wl_output N", "global_remove N", "N: mode WxH@R", "N: scale S", "N: geometry
+    /// transform T", "N: done", "N: xdg position X,Y", "N: xdg size W,H", "enter S N",
+    /// "leave S N", "frame S", "presented #K sync N", "discarded #K".
+    pub log: Vec<String>,
+    /// Bound wl_output proxies by global name.
+    pub outputs: Vec<(u32, WlOutput)>,
+    pub xdg_output_manager: Option<ZxdgOutputManagerV1>,
+    pub presentation: Option<WpPresentation>,
+    feedback_seq: u32,
+    /// Virtual time, set by the lockstep before each dispatch.
+    pub now: Duration,
+    /// (time, surface label) of every frame callback `done`.
+    pub frames: Vec<(Duration, &'static str)>,
     pub compositor: Option<WlCompositor>,
     pub subcompositor: Option<WlSubcompositor>,
     pub shm: Option<WlShm>,
@@ -141,6 +170,7 @@ impl Probe {
             size,
             configured: false,
             popup_configure: None,
+            frame_driven: false,
         });
         idx
     }
@@ -246,6 +276,7 @@ impl Probe {
             size,
             configured: true,
             popup_configure: None,
+            frame_driven: false,
         });
         self.draw(qh, idx);
         parent_wl.commit(); // position and stacking apply on the parent's commit
@@ -289,6 +320,37 @@ impl Probe {
         s.wl.destroy();
     }
 
+    /// Label of a client surface (for the wire log).
+    fn label_of(&self, s: &WlSurface) -> String {
+        self.surfaces
+            .iter()
+            .find(|x| &x.wl == s)
+            .map(|x| x.label.to_string())
+            .unwrap_or_else(|| format!("#{}", s.id().protocol_id()))
+    }
+
+    /// Global name of a bound wl_output.
+    fn output_name(&self, o: &WlOutput) -> u32 {
+        self.outputs
+            .iter()
+            .find(|(_, x)| x == o)
+            .map(|(n, _)| *n)
+            .unwrap_or(0)
+    }
+
+    /// Requests a frame callback and a presentation feedback (sequence number returned) for the
+    /// next commit of the surface, then draws and commits it.
+    pub fn frame_and_draw(&mut self, qh: &QueueHandle<Self>, idx: usize) -> u32 {
+        self.surfaces[idx].wl.frame(qh, idx);
+        self.feedback_seq += 1;
+        let seq = self.feedback_seq;
+        if let Some(p) = &self.presentation {
+            p.feedback(&self.surfaces[idx].wl, qh, seq);
+        }
+        self.draw(qh, idx);
+        seq
+    }
+
     pub fn by_label(&self, label: &str) -> &Surf {
         self.surfaces
             .iter()
@@ -300,22 +362,176 @@ impl Probe {
 impl Dispatch<WlRegistry, ()> for Probe {
     fn event(
         st: &mut Self,
-        _: &WlRegistry,
+        registry: &WlRegistry,
         ev: wl_registry::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match ev {
+            wl_registry::Event::Global {
+                name,
+                interface,
+                version,
+            } => {
+                if interface == "wl_output" {
+                    st.log.push(format!("global wl_output {name}"));
+                    let o: WlOutput = registry.bind(name, version.min(4), qh, ());
+                    if let Some(m) = &st.xdg_output_manager {
+                        m.get_xdg_output(&o, qh, name);
+                    }
+                    st.outputs.push((name, o));
+                }
+                st.globals.push((name, interface, version));
+            }
+            wl_registry::Event::GlobalRemove { name } => {
+                if st.outputs.iter().any(|(n, _)| *n == name) {
+                    st.log.push(format!("global_remove {name}"));
+                    st.outputs.retain(|(n, o)| {
+                        if *n == name {
+                            o.release();
+                        }
+                        *n != name
+                    });
+                }
+                st.globals.retain(|(n, _, _)| *n != name);
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlOutput, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        o: &WlOutput,
+        ev: wl_output::Event,
         _: &(),
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let wl_registry::Event::Global {
-            name,
-            interface,
-            version,
-        } = ev
-        {
-            st.globals.push((name, interface, version));
+        let n = st.output_name(o);
+        let line = match ev {
+            wl_output::Event::Mode {
+                width,
+                height,
+                refresh,
+                ..
+            } => format!("{n}: mode {width}x{height}@{refresh}"),
+            wl_output::Event::Scale { factor } => format!("{n}: scale {factor}"),
+            wl_output::Event::Geometry { transform, .. } => {
+                format!("{n}: geometry transform {transform:?}")
+            }
+            wl_output::Event::Done => format!("{n}: done"),
+            wl_output::Event::Name { name } => format!("{n}: name {name}"),
+            _ => return,
+        };
+        st.log.push(line);
+    }
+}
+
+impl Dispatch<ZxdgOutputV1, u32> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &ZxdgOutputV1,
+        ev: zxdg_output_v1::Event,
+        n: &u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match ev {
+            zxdg_output_v1::Event::LogicalPosition { x, y } => {
+                st.log.push(format!("{n}: xdg position {x},{y}"))
+            }
+            zxdg_output_v1::Event::LogicalSize { width, height } => {
+                st.log.push(format!("{n}: xdg size {width},{height}"))
+            }
+            _ => {}
         }
     }
 }
+
+impl Dispatch<WlSurface, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        s: &WlSurface,
+        ev: wl_surface::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let label = st.label_of(s);
+        match ev {
+            wl_surface::Event::Enter { output } => {
+                let n = st.output_name(&output);
+                st.log.push(format!("enter {label} {n}"));
+            }
+            wl_surface::Event::Leave { output } => {
+                let n = st.output_name(&output);
+                st.log.push(format!("leave {label} {n}"));
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<WlCallback, usize> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &WlCallback,
+        ev: wl_callback::Event,
+        idx: &usize,
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_callback::Event::Done { .. } = ev {
+            let label = st.surfaces[*idx].label;
+            st.log.push(format!("frame {label}"));
+            st.frames.push((st.now, label));
+            if st.surfaces[*idx].frame_driven {
+                st.surfaces[*idx].wl.frame(qh, *idx);
+                st.draw(qh, *idx);
+            }
+        }
+    }
+}
+
+impl Dispatch<WpPresentation, ()> for Probe {
+    fn event(
+        _: &mut Self,
+        _: &WpPresentation,
+        _: wp_presentation::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<WpPresentationFeedback, u32> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &WpPresentationFeedback,
+        ev: wp_presentation_feedback::Event,
+        seq: &u32,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match ev {
+            wp_presentation_feedback::Event::SyncOutput { output } => {
+                let n = st.output_name(&output);
+                st.log.push(format!("sync #{seq} {n}"));
+            }
+            wp_presentation_feedback::Event::Presented { .. } => {
+                st.log.push(format!("presented #{seq}"))
+            }
+            wp_presentation_feedback::Event::Discarded => st.log.push(format!("discarded #{seq}")),
+            _ => {}
+        }
+    }
+}
+
+delegate_noop!(Probe: ignore ZxdgOutputManagerV1);
 
 impl Dispatch<XdgWmBase, ()> for Probe {
     fn event(
@@ -389,13 +605,13 @@ delegate_noop!(Probe: ignore WlSubcompositor);
 delegate_noop!(Probe: ignore WlShm);
 delegate_noop!(Probe: ignore WlShmPool);
 delegate_noop!(Probe: ignore WlBuffer);
-delegate_noop!(Probe: ignore WlSurface);
 delegate_noop!(Probe: ignore WlSubsurface);
 delegate_noop!(Probe: ignore WlRegion);
 delegate_noop!(Probe: ignore XdgPositioner);
 
 /// The production stack plus one probe client. The test is the composition root: it holds the
-/// output-lifecycle token and connects the virtual output through the backend.
+/// output-lifecycle token and connects virtual outputs through the backend. Time is virtual: each
+/// connected output has a vblank every period, processed in time order (ties: lowest OutputId).
 pub struct Lockstep {
     pub display: Display<WaylandState>,
     pub state: WaylandState,
@@ -405,11 +621,21 @@ pub struct Lockstep {
     pub queue: EventQueue<Probe>,
     pub probe: Probe,
     pub qh: QueueHandle<Probe>,
+    pub now: Duration,
+    /// (output, next vblank time)
+    vblanks: Vec<(OutputId, Duration)>,
+    /// The client's single wl_registry (a second one would bind every output twice).
+    registry: WlRegistry,
 }
 
 impl Lockstep {
     pub fn new(output: Option<VirtualOutput>) -> Lockstep {
-        let (core, _input, _shell, token) = Core::new();
+        Lockstep::with(PersistedCameras::default(), output.as_slice())
+    }
+
+    /// A Core with a persisted camera table and the given outputs connected at startup.
+    pub fn with(persisted: PersistedCameras, outputs: &[VirtualOutput]) -> Lockstep {
+        let (core, _input, _shell, token) = Core::new(persisted);
         let display: Display<WaylandState> = Display::new().expect("display");
         let state = WaylandState::new(&display.handle(), core);
         let (server_end, client_end) = UnixStream::pair().expect("socketpair");
@@ -423,7 +649,7 @@ impl Lockstep {
         let conn = Connection::from_socket(client_end).expect("client connection");
         let queue = conn.new_event_queue();
         let qh = queue.handle();
-        let _registry = conn.display().get_registry(&qh, ());
+        let registry = conn.display().get_registry(&qh, ());
         let mut ls = Lockstep {
             display,
             state,
@@ -433,17 +659,71 @@ impl Lockstep {
             queue,
             probe: Probe::default(),
             qh,
+            now: Duration::ZERO,
+            vblanks: Vec::new(),
+            registry,
         };
-        if let Some(o) = output {
-            ls.output = Some(connect(&mut ls.state, &mut ls.token, &o).expect("connect output"));
-        }
+        // bind the managers first so wl_output globals get their xdg_output at announcement
         ls.pump();
         ls.bind();
+        for o in outputs {
+            let id = ls.connect(o);
+            ls.output.get_or_insert(id);
+        }
+        ls.pump();
         ls
     }
 
+    /// Hotplug (or startup) of a virtual output through the token.
+    pub fn connect(&mut self, o: &VirtualOutput) -> OutputId {
+        let id = connect(&mut self.state, &mut self.token, o).expect("connect output");
+        self.vblanks
+            .push((id, self.now + vblank_period(o.refresh_mhz)));
+        self.pump();
+        id
+    }
+
+    pub fn reconfigure(&mut self, id: OutputId, o: &VirtualOutput) {
+        infynitae_backend_headless::reconfigure(&mut self.state, &mut self.token, id, o)
+            .expect("reconfigure");
+        self.pump();
+    }
+
+    pub fn disconnect(&mut self, id: OutputId) {
+        infynitae_backend_headless::disconnect(&mut self.state, &mut self.token, id)
+            .expect("disconnect");
+        self.vblanks.retain(|(o, _)| *o != id);
+        self.pump();
+    }
+
+    /// Runs every vblank due up to `t` in time order, pumping after each.
+    pub fn run_until(&mut self, t: Duration) {
+        loop {
+            let next = self
+                .vblanks
+                .iter()
+                .copied()
+                .filter(|(_, at)| *at <= t)
+                .min_by_key(|(o, at)| (*at, *o));
+            let Some((o, at)) = next else { break };
+            self.now = at;
+            vblank(&mut self.state, o, at);
+            let refresh = self
+                .state
+                .core()
+                .output(o)
+                .map(|m| m.refresh_mhz)
+                .unwrap_or(60_000);
+            for v in self.vblanks.iter_mut().filter(|(x, _)| *x == o) {
+                v.1 = at + vblank_period(refresh);
+            }
+            self.pump();
+        }
+        self.now = t;
+    }
+
     fn bind(&mut self) {
-        let registry = self.conn.display().get_registry(&self.qh, ());
+        let registry = self.registry.clone();
         let find = |name: &str| {
             self.probe
                 .globals
@@ -460,6 +740,10 @@ impl Lockstep {
         self.probe.shm = Some(registry.bind(n, 1, &self.qh, ()));
         let (n, v) = find("xdg_wm_base");
         self.probe.wm_base = Some(registry.bind(n, v.min(6), &self.qh, ()));
+        let (n, v) = find("zxdg_output_manager_v1");
+        self.probe.xdg_output_manager = Some(registry.bind(n, v.min(3), &self.qh, ()));
+        let (n, _) = find("wp_presentation");
+        self.probe.presentation = Some(registry.bind(n, 1, &self.qh, ()));
         self.pump();
     }
 
@@ -481,6 +765,7 @@ impl Lockstep {
                     Err(e) => panic!("client read: {e}"),
                 }
             }
+            self.probe.now = self.now;
             let handled = self
                 .queue
                 .dispatch_pending(&mut self.probe)
@@ -504,11 +789,22 @@ impl Lockstep {
 }
 
 pub fn output(mode: (u32, u32), scale_120: u32) -> VirtualOutput {
+    output_k("A", mode, scale_120, 60_000)
+}
+
+/// A virtual output on a named connector.
+pub fn output_k(
+    connector: &str,
+    mode: (u32, u32),
+    scale_120: u32,
+    refresh_mhz: u32,
+) -> VirtualOutput {
     VirtualOutput {
+        key: VirtualOutput::key(connector),
         mode,
         transform: Transform::Normal,
         scale_120,
-        refresh_mhz: 60_000,
+        refresh_mhz,
     }
 }
 

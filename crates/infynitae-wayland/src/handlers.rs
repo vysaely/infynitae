@@ -1,7 +1,6 @@
 //! Smithay handler implementations: protocol events become Core calls, Core's effects become
 //! protocol actions. Handlers never decide placement, order or camera state.
 
-use infynitae_core::protocol::Effect;
 use smithay::backend::renderer::utils::{RendererSurfaceStateUserData, on_commit_buffer_handler};
 use smithay::desktop::{PopupKind, Window, find_popup_root_surface};
 use smithay::input::{SeatHandler, SeatState};
@@ -13,11 +12,14 @@ use smithay::wayland::compositor::{
     CompositorClientState, CompositorHandler, CompositorState, add_destruction_hook, get_parent,
     is_sync_subsurface, with_states,
 };
+use smithay::wayland::output::OutputHandler;
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
-use smithay::{delegate_compositor, delegate_shm, delegate_xdg_shell};
+use smithay::{
+    delegate_compositor, delegate_output, delegate_presentation, delegate_shm, delegate_xdg_shell,
+};
 
 use crate::{ClientState, ElementHandle, WaylandState, convert, snapshot};
 
@@ -51,15 +53,7 @@ impl WaylandState {
         // A refused snapshot or transition changes nothing in Core; the protocol side (for
         // example `ensure_configured` below) reports client errors itself.
         if let Ok(effects) = self.core.toplevel_committed(id, tree) {
-            for effect in effects {
-                match effect {
-                    Effect::InitialConfigure(_) => {
-                        if let Some(t) = window.toplevel() {
-                            t.send_configure();
-                        }
-                    }
-                }
-            }
+            self.apply(&effects);
         }
     }
 
@@ -209,6 +203,11 @@ impl SeatHandler for WaylandState {
     }
 }
 
+/// Smithay sends the current state and enters for already-entered surfaces on bind.
+impl OutputHandler for WaylandState {}
+
 delegate_compositor!(WaylandState);
+delegate_output!(WaylandState);
+delegate_presentation!(WaylandState);
 delegate_shm!(WaylandState);
 delegate_xdg_shell!(WaylandState);
