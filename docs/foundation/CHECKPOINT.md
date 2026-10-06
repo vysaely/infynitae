@@ -39,6 +39,7 @@ Date: 2026-10-06
   - OB-30: OPEN, behaviour and NEG/OBS gate met; awaiting review.
   - OB-18 (popup part): closable only at ratification.
   - OB-21: OPEN (INC-16 / T4).
+- **CI (exact HEAD):** run 37475576796 on `80a5328a6ba338ae4d2a8025e35b471c83649628` — foundation-docs, verify-architecture (incl. [5d]) and workspace-build all success; 214 tests; `verify-test-efficacy: PASS` (110 DETECTED, 0 FAIL). This entry's own commit is verified by the CI run on it.
 - **LIVE_SYSTEM_TOUCHED:** no.
 - **NEXT:** STOP for the fifth independent adversarial review. INC-4 is NOT ratified. INC-5 has NOT begun.
 
