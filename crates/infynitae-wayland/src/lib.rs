@@ -96,6 +96,9 @@ pub struct WaylandState {
     pub(crate) serial_outputs:
         std::collections::VecDeque<(smithay::utils::Serial, infynitae_core::output::OutputId)>,
     pub(crate) popup_pointer_grab_serial: Option<smithay::utils::Serial>,
+    /// Install serial of the popup keyboard grab (the latest level of the chain), the identity by
+    /// which teardown releases exactly that grab (A1).
+    pub(crate) popup_keyboard_grab_serial: Option<smithay::utils::Serial>,
     // probe builds only: the Send assertion must be the one and only error
     #[cfg(feature = "probe_store_port_in_state")]
     leaked_port: infynitae_core::InputPort,
@@ -133,6 +136,7 @@ impl WaylandState {
             seat,
             popup_grab: None,
             popup_pointer_grab_serial: None,
+            popup_keyboard_grab_serial: None,
             nested_grab_keep_pointer: true,
             ordered_preemption_strategy: keyboard::PreemptionStrategy::Ordered,
             relative_pointer: RelativePointerManagerState::new::<Self>(display),

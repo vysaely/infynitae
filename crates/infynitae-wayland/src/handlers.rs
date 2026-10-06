@@ -46,8 +46,54 @@ impl WaylandState {
         }
     }
 
-    /// Re-extracts the element's snapshot and applies Core's decision (M1).
-    fn element_committed(&mut self, index: usize) {
+    /// Input consequence of a popup's death (A1, INV-INPUT-8/10). The popup lifetime is owned by
+    /// the client (Smithay's chain is its record); ActiveElementFocus by Core; this keeps the
+    /// Smithay keyboard route consistent with both, explicitly — never through Smithay's lazy
+    /// refocus inside key delivery, which announces the key being pressed in `enter` and then
+    /// sends it again (`pressed` for a key already logically down).
+    /// - A grabbing popup is still live: keyboard focus moves to the topmost live one now.
+    /// - None is live (the chain ended), exactly once: release the popup keyboard grab and the
+    ///   popup pointer grab by their install serials (INV-INPUT-10 steps 2-3; step 1 is moot, the
+    ///   popups are dead), then route the keyboard to Core's ActiveElementFocus root, or to
+    ///   nothing when Core is unfocused (step 4).
+    fn reconcile_popup_chain(&mut self) {
+        let Some(g) = self.popup_grab.clone() else {
+            return;
+        };
+        let serial = SERIAL_COUNTER.next_serial();
+        let kb = self.keyboard_handle();
+        if !g.has_ended() {
+            let top = g.current_grab();
+            if top.is_some() && kb.current_focus() != top {
+                kb.set_focus(self, top, serial);
+            }
+            return;
+        }
+        self.popup_grab = None;
+        if let Some(ks) = self.popup_keyboard_grab_serial
+            && kb.has_grab(ks)
+        {
+            self.keyboard_unset_grab();
+        }
+        self.popup_keyboard_grab_serial = None;
+        if let Some(ps) = self.popup_pointer_grab_serial
+            && self.pointer_has_grab(ps)
+        {
+            self.pointer_unset_grab(serial, 0);
+        }
+        self.popup_pointer_grab_serial = None;
+        let target = self
+            .core
+            .focus()
+            .target()
+            .and_then(|id| self.window(id))
+            .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
+        kb.set_focus(self, target, serial);
+    }
+
+    /// The element's ROOT surface committed: re-extracts the snapshot and drives M1 (map, unmap,
+    /// initial configure). Only `commit` of the root surface itself may call this.
+    fn element_root_committed(&mut self, index: usize) {
         let ElementHandle { id, window } = &self.elements[index];
         let (id, window) = (*id, window.clone());
         window.on_commit();
@@ -67,6 +113,21 @@ impl WaylandState {
         // A refused snapshot or transition changes nothing in Core; the protocol side (for
         // example `ensure_configured` below) reports client errors itself.
         if let Ok(effects) = self.core.toplevel_committed(id, tree) {
+            self.apply(&effects);
+        }
+    }
+
+    /// The element's surface tree changed without a commit of its root (a child surface
+    /// committed, or a popup died): re-extracts the snapshot for hit-testing and rendering only.
+    /// Never a lifecycle transition, never a configure (B1).
+    fn element_tree_changed(&mut self, index: usize) {
+        let ElementHandle { id, window } = &self.elements[index];
+        let (id, window) = (*id, window.clone());
+        window.on_commit();
+        let Some(tree) = snapshot::extract(&window, &mut self.registry) else {
+            return;
+        };
+        if let Ok(effects) = self.core.toplevel_tree_changed(id, tree) {
             self.apply(&effects);
         }
     }
@@ -153,11 +214,15 @@ impl CompositorHandler for WaylandState {
         if is_sync_subsurface(surface) {
             return;
         }
-        if let Some(i) = self
+        // Only the root surface's own commit drives M1; a child commit (popup, desynchronised
+        // subsurface) only changes the element's surface tree.
+        if let Some(i) = self.element_index_by_root(surface) {
+            self.element_root_committed(i);
+        } else if let Some(i) = self
             .toplevel_root(surface)
             .and_then(|root| self.element_index_by_root(&root))
         {
-            self.element_committed(i);
+            self.element_tree_changed(i);
         }
     }
 }
@@ -272,31 +337,27 @@ impl XdgShellHandler for WaylandState {
         }
     }
 
-    /// When a popup is destroyed by the client, immediately purge it from the snapshot
-    /// and dismiss any stale grab, preventing dead surface input holes (R2-01).
+    /// A popup's lifetime ended (client `xdg_popup.destroy`; Smithay has already marked it dead).
+    /// Three separate consequences, none of which is a commit of the parent (B1):
+    /// 1. lifetime: Smithay's grab chain forgets the dead popup (`cleanup`);
+    /// 2. input: the popup grab chain is reconciled (A1, `reconcile_popup_chain`);
+    /// 3. scene: the element's surface tree changes, so the dead surface stops being hit-testable
+    ///    (R2-01) — through the tree-change path, never the root-commit (M1) path.
     fn popup_destroyed(&mut self, surface: PopupSurface) {
         let kind = PopupKind::Xdg(surface.clone());
         let root = find_popup_root_surface(&kind)
             .ok()
             .or_else(|| self.toplevel_root(surface.wl_surface()));
         self.popups.cleanup();
-        if let Some(g) = &self.popup_grab
-            && (g.has_ended() || g.current_grab().as_ref() == Some(surface.wl_surface()))
-        {
-            self.popup_grab = None;
-            if let Some(pg_serial) = self.popup_pointer_grab_serial.take()
-                && self.pointer_has_grab(pg_serial)
-            {
-                self.pointer_unset_grab(SERIAL_COUNTER.next_serial(), 0);
-            }
-        }
-        if let Some(root) = root {
-            if let Some(i) = self.element_index_by_root(&root) {
-                self.element_committed(i);
-            }
-        } else {
-            for i in 0..self.elements.len() {
-                self.element_committed(i);
+        self.reconcile_popup_chain();
+        match root.and_then(|root| self.element_index_by_root(&root)) {
+            Some(i) => self.element_tree_changed(i),
+            // the root could not be resolved (already gone): refresh every mapped tree; the
+            // tree-change path cannot advance any element's lifecycle
+            None => {
+                for i in 0..self.elements.len() {
+                    self.element_tree_changed(i);
+                }
             }
         }
     }

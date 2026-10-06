@@ -428,6 +428,7 @@ impl WaylandState {
     }
 
     pub(crate) fn keyboard_unset_grab(&mut self) {
+        self.popup_keyboard_grab_serial = None;
         let kb = self.keyboard_handle();
         kb.unset_grab(self);
     }
@@ -438,6 +439,7 @@ impl WaylandState {
         grab: smithay::desktop::PopupKeyboardGrab<WaylandState>,
         serial: smithay::utils::Serial,
     ) {
+        self.popup_keyboard_grab_serial = Some(serial);
         kb.set_grab(self, grab, serial);
     }
 

@@ -164,6 +164,30 @@ impl Core {
         Ok(fx)
     }
 
+    /// A change of a mapped element's surface tree that is NOT a commit of its root surface: a
+    /// child surface (popup, desynchronised subsurface) committed, or a popup was destroyed. It
+    /// replaces the snapshot of a Mapped element (hit-testing and rendering follow, INV-HIT-1) and
+    /// never drives M1: only the root surface's own commit (`toplevel_committed`) may map, unmap
+    /// or configure an element. An element that is not Mapped has no hit-testable tree, so the
+    /// change is ignored until its root commits. A rejected tree changes nothing.
+    pub fn toplevel_tree_changed(
+        &mut self,
+        id: ElementId,
+        tree: SurfaceTree,
+    ) -> Result<Vec<Effect>, ProtocolError> {
+        tree.validate().map_err(ProtocolError::Snapshot)?;
+        let state = self.stage.state(id).ok_or(ProtocolError::StaleElement)?;
+        // The root's mapped state is committed state of the root surface; only its own commit
+        // changes it, so a tree without a mapped root is never applied here.
+        if state != Lifecycle::Mapped || !tree.root().is_some_and(|r| r.mapped) {
+            return Ok(Vec::new());
+        }
+        self.stage
+            .set_tree(id, Some(tree))
+            .map_err(|_| ProtocolError::StaleElement)?;
+        Ok(self.visibility_pass())
+    }
+
     /// M1 destroy: purges every reference; idempotent and order-independent (INV-STAGE-4). The
     /// dead client gets no leave: its membership rows are dropped silently. Target loss triggers
     /// successor focus transition (K7, M11).
@@ -278,6 +302,47 @@ mod tests {
         )
         .unwrap();
         core
+    }
+
+    /// B1: a surface-tree change that is not a root commit never drives M1 — in every lifecycle
+    /// state the state, anchor and effects are those of a no-op, except that a Mapped element's
+    /// snapshot is replaced (literal expectations, independent of `toplevel_committed`).
+    #[test]
+    fn tree_change_never_drives_the_lifecycle() {
+        let mut core = connected(120);
+        let id = core.toplevel_created();
+        // AwaitingInitialCommit: no placement, no configure
+        assert_eq!(core.toplevel_tree_changed(id, tree(false)), Ok(vec![]));
+        assert_eq!(core.toplevel_tree_changed(id, tree(true)), Ok(vec![]));
+        assert_eq!(
+            core.stage().state(id),
+            Some(Lifecycle::AwaitingInitialCommit)
+        );
+        assert_eq!(core.stage().anchor(id), None);
+        core.toplevel_committed(id, tree(false)).unwrap();
+        // AwaitingFirstBuffer: a mapped-looking tree does not map it
+        assert_eq!(core.toplevel_tree_changed(id, tree(true)), Ok(vec![]));
+        assert_eq!(core.stage().state(id), Some(Lifecycle::AwaitingFirstBuffer));
+        core.toplevel_committed(id, tree(true)).unwrap();
+        // Mapped: an unmapped-looking tree does not unmap it; a mapped tree replaces the snapshot
+        assert_eq!(core.toplevel_tree_changed(id, tree(false)), Ok(vec![]));
+        assert_eq!(core.stage().state(id), Some(Lifecycle::Mapped));
+        assert!(core.stage().tree(id).is_some());
+        assert_eq!(core.toplevel_tree_changed(id, tree(true)), Ok(vec![]));
+        assert_eq!(core.stage().state(id), Some(Lifecycle::Mapped));
+        core.toplevel_committed(id, tree(false)).unwrap();
+        // Unmapped: no re-arming of the initial configure, and the snapshot stays dropped even for
+        // a mapped-looking tree (M1: an unmapped element has no hit-testable tree)
+        assert_eq!(core.toplevel_tree_changed(id, tree(false)), Ok(vec![]));
+        assert_eq!(core.toplevel_tree_changed(id, tree(true)), Ok(vec![]));
+        assert_eq!(core.stage().state(id), Some(Lifecycle::Unmapped));
+        assert!(core.stage().tree(id).is_none());
+        // a destroyed element is stale
+        core.toplevel_destroyed(id);
+        assert_eq!(
+            core.toplevel_tree_changed(id, tree(true)),
+            Err(ProtocolError::StaleElement)
+        );
     }
 
     #[test]
