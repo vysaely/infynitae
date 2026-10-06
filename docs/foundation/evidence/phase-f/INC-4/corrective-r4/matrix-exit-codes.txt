@@ -1,0 +1,13 @@
+check EXIT=0
+build EXIT=0
+test EXIT=0
+fmt EXIT=0
+clippy EXIT=0
+arch EXIT=0
+docs EXIT=0
+docs_self EXIT=0
+spike EXIT=0
+efficacy EXIT=0
+env EXIT=0
+probe_suite EXIT=0
+DONE

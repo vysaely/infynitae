@@ -1,0 +1,145 @@
+#!/usr/bin/env python3
+"""INC-4 Round-4 fresh mutation round (prompt §24). Each mutation is applied alone to a disposable
+worktree of the committed Round-4 tree; the detector is the shipped workspace suite at default
+features (what `cargo test --workspace --locked` / CI run). Result: DETECTED (>=1 shipped test
+fails) / MISSED (suite green) / BROKEN (does not compile or anchor not unique). Equivalence is
+argued in the record, not assumed here."""
+import json, re, subprocess, sys, pathlib
+
+ROOT = pathlib.Path(sys.argv[1])
+W = "crates/infynitae-wayland/src"
+C = "crates/infynitae-core/src"
+H = "crates/infynitae-backend-headless/src"
+
+REC_KB = """        if let Some(ks) = self.popup_keyboard_grab_serial
+            && kb.has_grab(ks)
+        {
+            self.keyboard_unset_grab();
+        }
+"""
+REC_PT = """        if let Some(ps) = self.popup_pointer_grab_serial
+            && self.pointer_has_grab(ps)
+        {
+            self.pointer_unset_grab(serial, 0);
+        }
+"""
+FOCUS = "        kb.set_focus(self, target, serial);\n    }\n"
+KB = """                            // 2. keyboard.unset_grab
+                            if kb.has_grab(g.serial())
+                                || g.previous_serial().is_some_and(|ps| kb.has_grab(ps))
+                            {
+                                self.keyboard_unset_grab();
+                            }
+"""
+PT = """                            // 3. pointer.unset_grab (only if pointer has this grab)
+                            if let Some(pg_serial) = self.popup_pointer_grab_serial.take() {
+                                if self.pointer_has_grab(pg_serial) {
+                                    self.pointer_unset_grab(serial, 0);
+                                }
+                            } else if self.pointer_has_grab(g.serial())
+                                || g.previous_serial()
+                                    .is_some_and(|ps| self.pointer_has_grab(ps))
+                            {
+                                self.pointer_unset_grab(serial, 0);
+                            }
+"""
+ROUND3 = """        self.popups.cleanup();
+        self.reconcile_popup_chain();
+"""
+ROUND3_NEW = """        self.popups.cleanup();
+        // Round-3 behaviour: only a pointer-grab release (relies on Smithay's serial-matched side effect)
+        if let Some(g) = &self.popup_grab
+            && (g.has_ended() || g.current_grab().as_ref() == Some(surface.wl_surface()))
+        {
+            self.popup_grab = None;
+            if let Some(pg_serial) = self.popup_pointer_grab_serial.take()
+                && self.pointer_has_grab(pg_serial)
+            {
+                self.pointer_unset_grab(SERIAL_COUNTER.next_serial(), 0);
+            }
+        }
+"""
+GATE = """        if pressed == is_down {
+            return (self.seat_modifiers(), false);
+        }
+"""
+
+M = [
+ # ---- A1
+ ("A1-a", "chain end: keyboard grab teardown omitted", f"{W}/handlers.rs", REC_KB, ""),
+ ("A1-b", "chain end: pointer grab teardown omitted", f"{W}/handlers.rs", REC_PT, ""),
+ ("A1-c", "chain end: focus reconciliation omitted", f"{W}/handlers.rs", FOCUS, "        let _ = (target, serial);\n    }\n"),
+ ("A1-d", "chain end: reconcile to the popup chain's current_grab (dead/root) instead of Core", f"{W}/handlers.rs",
+  FOCUS, "        let _ = target;\n        kb.set_focus(self, g.current_grab(), serial);\n    }\n"),
+ ("A1-e", "reconcile only like Round 3 (depth-1-only accidental path)", f"{W}/handlers.rs", ROUND3, ROUND3_NEW),
+ ("A1-f", "no cleanup before reconciliation (depth >= 2 chain never ends)", f"{W}/handlers.rs", ROUND3,
+  "        self.reconcile_popup_chain();\n"),
+ ("A1-g", "inner death: lazy refocus left to Smithay", f"{W}/handlers.rs",
+  "            if top.is_some() && kb.current_focus() != top {", "            if false && top.is_some() && kb.current_focus() != top {"),
+ # ---- B1
+ ("B1-a", "popup death runs the parent's root-commit lifecycle", f"{W}/handlers.rs",
+  "            Some(i) => self.element_tree_changed(i),", "            Some(i) => self.element_root_committed(i),"),
+ ("B1-b", "popup death does not rebuild the hit-test tree", f"{W}/handlers.rs",
+  "            Some(i) => self.element_tree_changed(i),", "            Some(i) => {\n                let _ = i;\n            }"),
+ ("B1-c", "child commit runs the parent's lifecycle", f"{W}/handlers.rs",
+  "            .and_then(|root| self.element_index_by_root(&root))\n        {\n            self.element_tree_changed(i);",
+  "            .and_then(|root| self.element_index_by_root(&root))\n        {\n            self.element_root_committed(i);"),
+ ("B1-d", "tree change sends a (duplicate) initial configure to a non-mapped element", f"{C}/protocol.rs",
+  "        if state != Lifecycle::Mapped || !tree.root().is_some_and(|r| r.mapped) {\n            return Ok(Vec::new());",
+  "        if state != Lifecycle::Mapped || !tree.root().is_some_and(|r| r.mapped) {\n            return Ok(if state == Lifecycle::Mapped { Vec::new() } else { vec![Effect::InitialConfigure(id)] });"),
+ ("B1-e", "tree change applied to non-mapped elements", f"{C}/protocol.rs",
+  "        if state != Lifecycle::Mapped || !tree.root().is_some_and(|r| r.mapped) {",
+  "        if !tree.root().is_some_and(|r| r.mapped) {"),
+ # ---- provenance
+ ("P-a", "provenance store unbounded", f"{W}/lib.rs", "            self.serial_outputs.pop_front();", "            let _ = 0;"),
+ ("P-b", "newest-first eviction", f"{W}/lib.rs", "            self.serial_outputs.pop_front();", "            self.serial_outputs.pop_back();"),
+ ("P-c", "unknown/evicted serial aliases the latest record", f"{W}/lib.rs",
+  "            .find(|(s, _)| *s == serial)\n", "            .find(|(s, _)| *s == serial)\n            .or(self.serial_outputs.back())\n"),
+ ("P-d", "valid serial falls back to the current pointer output", f"{W}/handlers.rs",
+  "        let causing_output = serial\n            .and_then(|s| self.serial_output(s))\n            .or_else(|| self.core.pointer_output());",
+  "        let causing_output = { let _ = serial; self.core.pointer_output() };"),
+ # ---- ordering
+ ("O-a", "ordered preemption: pointer unset before keyboard unset (W-SM-15)", f"{W}/outputs.rs", KB + PT, PT + KB),
+ ("O-b", "ordered preemption: keyboard unset omitted", f"{W}/outputs.rs", KB + PT, PT),
+ # ---- authority
+ ("Au-a", "duplicate key reaches the seat (transition gate removed)", f"{W}/lib.rs", GATE, ""),
+ ("Au-b", "cross-Core token accepted", f"{W}/lib.rs",
+  "        if token.core_id() != self.core.id() {", "        if false && token.core_id() != self.core.id() {"),
+ ("Au-c", "token key ignored: seat updated for a fixed key", f"{W}/lib.rs",
+  "        let (key, pressed) = (token.key(), token.pressed());", "        let (key, pressed) = (42u32, token.pressed());"),
+ # ---- bindings
+ ("Bi-a", "Super+B fixture restored", f"{C}/input/keys.rs",
+  "pub const CANONICAL_BINDINGS: [KeyBinding; 1] = [KeyBinding {",
+  "pub const CANONICAL_BINDINGS: [KeyBinding; 2] = [KeyBinding { evdev: KEY_B, needs_logo: true, action: KeyAction::Noop }, KeyBinding {"),
+]
+
+def run_suite():
+    cmd = "ulimit -n 1024; CARGO_BUILD_JOBS=4 cargo test --locked --workspace --no-fail-fast 2>&1"
+    p = subprocess.run(["bash", "-c", cmd], cwd=ROOT, capture_output=True, text=True)
+    out = p.stdout + p.stderr
+    failed = sorted(set(re.findall(r"^test (\S+) \.\.\. FAILED", out, re.M)))
+    return p.returncode, failed, ("error[E" in out or "could not compile" in out), out
+
+res = []
+for mid, desc, f, old, new in M:
+    path = ROOT / f
+    src = path.read_text()
+    n = src.count(old)
+    if n != 1:
+        res.append((mid, desc, "BROKEN", f"anchor count {n}")); print(f"{mid:5} BROKEN anchor {n} {desc}", flush=True); continue
+    path.write_text(src.replace(old, new))
+    try:
+        rc, failed, cerr, out = run_suite()
+    finally:
+        path.write_text(src)
+    if cerr:
+        v, d = "BROKEN", "; ".join(l for l in out.splitlines() if l.startswith("error"))[:300]
+    elif failed:
+        v, d = "DETECTED", ", ".join(failed)
+    elif rc == 0:
+        v, d = "MISSED", "suite green"
+    else:
+        v, d = "BROKEN", f"rc={rc}"
+    res.append((mid, desc, v, d)); print(f"{mid:5} {v:9} {desc} :: {d}", flush=True)
+pathlib.Path(sys.argv[2]).write_text(json.dumps(res, indent=1))
+print(subprocess.run(["git", "status", "--porcelain"], cwd=ROOT, capture_output=True, text=True).stdout or "worktree clean")

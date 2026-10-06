@@ -19,3 +19,28 @@ REQUIRED`: Level A 1, Level B 3, Level C 4).
 | C2 | C | Round-3 record: "34 compile probes", "54 seeded", efficacy PASS, `sync_seat_key` "asserts" | record written without mechanical derivation | change control | append-only correction with the fourth review's measured values and new mechanically derived counts | — | — |
 | C3 | C | token Core-bound but not event-bound; duplicate gate in the headless backend | gate placed at the backend call site; the key was passed separately from the proof | C4.4, C1.5 | token carries `(key, pressed)`; `sync_seat_key(token)`; gate inside `sync_seat_key`; compile probe p31 (reuse is E0382) | `t02b_token_is_bound_to_its_core`, `t04_duplicate_presses`, `r17` | efficacy: transition gate removed; probe p31 |
 | C4 | C | KV-2 asked Core for Escape; F-4 "last enter"; M08 size only; NEG/OBS ungated | oracle shortcuts | TST-07/TST-20 oracles | KV-2 reference model tracks the pan from the test sequence; F-4 counts enters since the focus change (exactly one); M08 extended (C1/B3 test); NEG/OBS gated by [5d] | as listed | — |
+
+---
+
+## Closure (appended after verification)
+
+Corrective commits: `a63b7c5` (A1, B1), `9da07d7` (C3), `d75746b` (tests and oracles), `cf743e5` (verification). Each commit passes `cargo test --workspace --locked` and `cargo fmt --check` on its own (`per-commit-checks.txt`).
+
+| ID | Closure evidence | Final disposition |
+|---|---|---|
+| A1 | `t1_popup_lifetime` A1 matrix (9 tests) green: Core focus = Smithay focus = client focus after every client-driven close; exactly one enter per surviving level, then the window once, before any key; no keyboard/pointer grab after the chain ends; 0 `wl_keyboard` violations. Efficacy controls detected: reconciliation removed, terminal focus omitted, pointer teardown omitted, topmost refocus omitted. Fresh mutations A1-b/c/e/f/g detected; A1-a and A1-d equivalent (see below) | **CORRECTED** (introduced by INC-4 `d5b7b95`; not an inherited INC-3 defect) |
+| B1 | B1 tests and core `tree_change_never_drives_the_lifecycle` green; re-show after unmap with a popup answered by exactly one configure; former popup area hits the parent; pending parent geometry not promoted; no configure from popup churn. Efficacy B1 ×4 detected; fresh B1-a…e detected | **CORRECTED** (Round-3 regression; also removes the pre-existing child-commit variant, fourth-review O-1) |
+| B2 | `verify-test-efficacy: PASS` — 110 seeded controls, 110 DETECTED, 0 MISSED, 0 BROKEN, + 2 judge; `verify-development-environment` PASS; every anchor occurs exactly once | **CORRECTED** |
+| B3 | F15/F16 detected by `serial_provenance_fifo_eviction_and_fallback`; N09d (W-SM-15) detected by the default-suite `ordered_preemption_exact_keyboard_wire` (efficacy I) and by pf1/pf2/pf4 in the fresh round (O-a); NEG-1/NEG-2/OBS-1 run unmutated by `verify-architecture` [5d] | **CORRECTED** |
+| C1 | correction appended to CHECKPOINT (Round-4 entry); behaviour unchanged and pinned | **CORRECTED (record)** |
+| C2 | correction appended to CHECKPOINT with measured values | **CORRECTED (record)** |
+| C3 | event-bound token, gate in `sync_seat_key`, probe p31 (E0382); fresh Au-a/b/c detected | **CORRECTED**; residual (a trusted port holder can mint a proof without submitting the event) recorded as an owner-level design boundary, not an INC-4 defect |
+| C4 | KV-2 model independent; F-4 exactly one; M08 semantics tested; NEG/OBS gated | **CORRECTED** |
+
+### Equivalent mutations (attempted, not detected, argued from pinned source)
+
+- **A1-a / retired efficacy control "chain end keeps the popup keyboard grab":** the next statement, `kb.set_focus(target)`, is routed through Smithay's `PopupKeyboardGrab::set_focus`. On an ended grab it sets the focus and unsets the grab itself (`desktop/wayland/popup/grab.rs`, `KeyboardGrab::set_focus`: `if self.popup_grab.has_ended() { handle.set_focus(..); handle.unset_grab(..) }`). The end state and the client wire are identical, and the exact enter sequences are asserted by `a1_client_closes_chain_of_depth_1_2_3`. The explicit release is kept as the canonical INV-INPUT-10 step 2.
+- **A1-d / retired efficacy control "chain end reconciles to the dead popup instead of Core's focus":**
+  - The invariant is: *a recorded popup grab exists only while Core's ActiveElementFocus is that chain's root.*
+  - It holds because a grab is only installed for the focused root (`XdgShellHandler::grab` refuses otherwise), and every Core focus change emits `Effect::KeyboardFocus`, whose apply `take()`s the record unconditionally; `Effect::DismissPopupGrab` takes it too.
+  - Therefore, at the terminal condition, `current_grab()` returns the chain's root, which equals Core's target root. The Core-derived target is kept because Core is the authority.

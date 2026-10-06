@@ -1,8 +1,46 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-4 ARCHITECTURAL CORRECTIVE PROGRAM (ROUND 3) COMPLETE — READY FOR FOURTH INDEPENDENT ADVERSARIAL REVIEW.** Third independent review dossier ingested and preserved byte-identically (`033be36`). Round-3 corrective finding matrix committed (`docs/foundation/evidence/phase-f/INC-4/corrective-r3/CORRECTIVE_FINDING_MATRIX.md`). All 7 Level B findings (R2-01 through R2-07) resolved; Level C findings (R2-08, R2-09, R2-10) resolved/canonicalized; all surviving mutants (M08, N08, N09) permanently detected; 34 compile probes passing; full workspace regression suite 100% green. INC-0, INC-1, INC-2, and INC-3 are RATIFIED. **INC-4 has NOT been ratified.** **INC-5 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-4 ROUND-4 CORRECTIVE IMPLEMENTATION COMPLETE — READY FOR FIFTH INDEPENDENT ADVERSARIAL REVIEW.** Fourth independent review dossier ingested byte-for-byte (`dc4d52e`). Round-4 matrix and closure: `docs/foundation/evidence/phase-f/INC-4/corrective-r4/`. INC-0, INC-1, INC-2, and INC-3 are RATIFIED. **INC-4 has NOT been ratified.** **INC-5 has NOT begun.**
 
 Date: 2026-10-06
+
+## PHASE F — INC-4 CORRECTIVE PROGRAM — ROUND 4 (record: evidence/phase-f/INC-4/corrective-r4/)
+- **Review:** `INC-4 FAIL — FURTHER CORRECTION REQUIRED` (fourth review, `audit/phase-f-inc4-rereview-3/`, ingested byte-for-byte as `dc4d52e`; reviewed HEAD `60e5429`). Findings: Level A 1 (A1), Level B 3 (B1–B3), Level C 4 (C1–C4).
+- **Corrective commits:** `b320cbe` (matrix, reconstruction), `a63b7c5` (A1, B1), `9da07d7` (C3), `d75746b` (tests, oracles), `cf743e5` (verification); each passes `cargo test --workspace --locked` and `fmt` on its own.
+- **A1 (Level A):** client-driven close of a popup chain of depth ≥ 2 left the keyboard grab installed and Smithay focus on a dead popup. Popup death now runs `reconcile_popup_chain`: the keyboard moves to the topmost live grabbing popup at once; when none is live, exactly once, the keyboard and pointer grabs are released by their install serials and the keyboard is routed to Core's ActiveElementFocus root. **Provenance:** introduced by INC-4 itself (`d5b7b95` reproduces it); cannot exist on the ratified INC-3 baseline `1ee520fa` (no keyboard, no popup grabs) — not an inherited foundation defect.
+- **B1 (Level B):** the Round-3 R2-01 fix ran the parent's M1 lifecycle on popup death (unmapped parent re-armed, re-show unanswered). New `Core::toplevel_tree_changed` (snapshot only, never M1) serves popup death and child-surface commits; M1 runs only on the root surface's own commit. The same split removes the pre-existing child-commit variant (fourth-review O-1). R2-01 stays fixed (former popup area hits the parent).
+- **B2 (Level B):** efficacy controls I and K were BROKEN (stale anchors after a rustfmt reflow); re-derived from current source. `verify-test-efficacy` and `verify-development-environment` PASS.
+- **B3 (Level B):** F15/F16 detected by a literal FIFO/fallback provenance test; N09d (W-SM-15) detected by the default-suite exact ORDERED keyboard-wire test; NEG-1, NEG-2, OBS-1 now run unmutated in `verify-architecture` [5d] (CI).
+- **C1 correction (appended; the Round-3 text is unchanged):** the Round-3 R2-10 entry called the provenance fallback "Rule 2 (output containing the pointer cursor)". That was wrong. Canonical D-B6-BOUNDARY:
+  - **Rule 1** is the output of the input event that caused the popup — the grab serial, *else the seat's last input* — if the parent is visible there.
+  - **Rule 2** is the parent's frame-clock output (highest-refresh observing output).
+  - **Rule 3** is no constraint adjustment.
+
+  The implementation already matches. A recorded serial resolves to its causing output; a missing, evicted or keyboard serial uses the pointer's current output under Rule 1's "else the seat's last input" clause; Rule 2 applies when the parent is not visible on that output. No code change.
+- **C2 correction (appended):** the Round-3 entry claimed
+  - "34 compile probes", "54 seeded controls" and `verify-test-efficacy` PASS;
+  - that `sync_seat_key` "asserts".
+
+  The fourth review measured 40 + 1 positive compile probes, 55 seeded + 3 judge architecture controls, and efficacy **FAIL (2)** with 99 seeded (97 detected, 2 BROKEN) + 2 judge. `sync_seat_key` fails closed without an assert. Cause: the record was written without mechanically deriving the counts or running the final gate.
+- **C3 (disposition):** the token now carries the key event it authorizes (`verify_input_port(port, key, pressed)`, `sync_seat_key(token)`). The duplicate/orphan transition gate moved from the headless backend into `sync_seat_key` (one implementation for every backend). Compile probe p31 pins single use (E0382). Residual (owner-level): a trusted port holder can mint a proof without submitting the event; the port is the root of trust, and Core cannot hold XKB (C4.4).
+- **C4 (disposition):** KV-2 reference model tracks CameraPan from the test sequence; F-4 asserts exactly one enter since the focus change; the provenance test checks FIFO order, retention and fallback, not only size; NEG/OBS gated.
+- **Equivalent mutations retired/recorded:** "chain end keeps the keyboard grab" and "reconcile to the chain's `current_grab()`" — argued from pinned Smithay and the grab-record invariant in the matrix §Closure.
+- **Verification (mechanically derived; `ulimit -n 1024`, `CARGO_BUILD_JOBS=4`):**
+  - **Cargo:** check, build and test PASS. **214 tests** = core 70 + T1 144 (adversarial 13, input 17, keyboard 36, outputs 12, parity 6, popup_focus 32, popup_lifetime 17, slice 4, transform 7); probe-feature `t1_popup_focus` 36 (218 in total). fmt and clippy `-D warnings` PASS.
+  - **`verify-architecture`:** PASS. 14 source rules; 41 compile probes + 1 positive control; runtime checks [5b] 4, [5c] 5, [5d] 4; 55 seeded + 3 judge controls.
+  - **`verify-test-efficacy`:** PASS. 110 seeded, 110 DETECTED, 0 MISSED, 0 BROKEN, + 2 judge.
+  - **Other gates:** foundation checker PASS (57 invariants, 20 formulas, 51 obligations); self-test PASS; authority spike PASS; `verify-development-environment` PASS.
+  - **Fresh mutation round:** 22 mutations; 20 detected, 0 meaningful missed, 2 equivalent, 0 broken.
+  - **Stress:** 200 cycles; asserted clean end state; FDs 10 → 10; 0 violations.
+- **INC-3 regression:** all ratified INC-3 suites and efficacy controls pass, including CameraPan/KeepFocus/true-position, zero output, ProjectionFrame invalidation, transform/hit agreement and the bounded-resource test.
+- **Obligations:**
+  - OB-4: OPEN, behaviour met; awaiting review.
+  - OB-15: OPEN, behaviour met; awaiting review.
+  - OB-30: OPEN, behaviour and NEG/OBS gate met; awaiting review.
+  - OB-18 (popup part): closable only at ratification.
+  - OB-21: OPEN (INC-16 / T4).
+- **LIVE_SYSTEM_TOUCHED:** no.
+- **NEXT:** STOP for the fifth independent adversarial review. INC-4 is NOT ratified. INC-5 has NOT begun.
 
 ## PHASE F — INC-4 CORRECTIVE PROGRAM — ROUND 3 (record: evidence/phase-f/INC-4/corrective-r3/)
 - **Review:** `INC-4 FAIL — FURTHER CORRECTION REQUIRED` (dossier preserved byte-identically in `audit/phase-f-inc4-rereview-2/`, commit `033be36`). Findings: Level A 0, Level B 7 (R2-01–R2-07), Level C 3 (R2-08–R2-10).

@@ -1,0 +1,7 @@
+a63b7c5 test EXIT=0
+a63b7c5 fmt EXIT=0
+9da07d7 test EXIT=0
+9da07d7 fmt EXIT=0
+d75746b test EXIT=0
+d75746b fmt EXIT=0
+DONE
