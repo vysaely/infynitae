@@ -30,30 +30,12 @@ pub struct KeyBinding {
     pub action: KeyAction,
 }
 
-/// Canonical key bindings for Foundation 01 (matching x10 harness).
-pub const CANONICAL_BINDINGS: [KeyBinding; 4] = [
-    KeyBinding {
-        evdev: KEY_ENTER,
-        needs_logo: true,
-        action: KeyAction::FocusNext,
-    },
-    KeyBinding {
-        evdev: KEY_B,
-        needs_logo: true,
-        action: KeyAction::Noop,
-    },
-    KeyBinding {
-        evdev: KEY_ESC,
-        needs_logo: true,
-        action: KeyAction::Cancel,
-    },
-    // Binding on a modifier key itself: test subject for K3 observe mode
-    KeyBinding {
-        evdev: KEY_LEFTSHIFT,
-        needs_logo: false,
-        action: KeyAction::Noop,
-    },
-];
+/// Canonical key bindings for Foundation 01.
+pub const CANONICAL_BINDINGS: [KeyBinding; 1] = [KeyBinding {
+    evdev: KEY_ENTER,
+    needs_logo: true,
+    action: KeyAction::FocusNext,
+}];
 
 /// Pure binding filter: resolves an evdev keycode and modifier snapshot against bindings.
 /// Plain Escape only cancels when an interaction is actively in progress (F04, K6).
@@ -94,10 +76,7 @@ mod tests {
             Some(KeyAction::FocusNext)
         );
         assert_eq!(resolve_key_binding(KEY_ENTER, none, false), None);
-        assert_eq!(
-            resolve_key_binding(KEY_B, logo, false),
-            Some(KeyAction::Noop)
-        );
+        assert_eq!(resolve_key_binding(KEY_B, logo, false), None);
         assert_eq!(resolve_key_binding(KEY_B, none, false), None);
         assert_eq!(resolve_key_binding(KEY_ESC, none, false), None);
         assert_eq!(
@@ -109,10 +88,7 @@ mod tests {
             resolve_key_binding(KEY_ESC, logo, true),
             Some(KeyAction::Cancel)
         );
-        assert_eq!(
-            resolve_key_binding(KEY_LEFTSHIFT, none, false),
-            Some(KeyAction::Noop)
-        );
+        assert_eq!(resolve_key_binding(KEY_LEFTSHIFT, none, false), None);
         assert_eq!(resolve_key_binding(KEY_A, logo, false), None);
     }
 }

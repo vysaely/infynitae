@@ -66,44 +66,46 @@ impl WaylandState {
                         if self.ordered_preemption_strategy == PreemptionStrategy::Naive {
                             // NEG-1: naive set_focus without ungrabbing popup
                             self.popup_grab = Some(g);
-                        } else {
-                            self.popup_preemption_pending = true;
+                        } else if self.ordered_preemption_strategy
+                            == PreemptionStrategy::PointerFirst
+                        {
                             g.ungrab(PopupUngrabStrategy::All);
-                            self.popup_preemption_pending = false;
-                            assert!(
-                                !self.popup_preemption_ordering_violated,
-                                "INV-INPUT-10 violated: keyboard focus set before popup ungrab"
-                            );
-                            if self.ordered_preemption_strategy == PreemptionStrategy::PointerFirst
+                            // NEG-2: pointer-first unset order (W-SM-15 violation)
+                            if let Some(pg_serial) = self.popup_pointer_grab_serial.take() {
+                                if self.pointer_has_grab(pg_serial) {
+                                    self.pointer_unset_grab(serial, 0);
+                                }
+                            } else if self.pointer_has_grab(g.serial())
+                                || g.previous_serial()
+                                    .is_some_and(|ps| self.pointer_has_grab(ps))
                             {
-                                // NEG-2: pointer-first unset order (W-SM-15 violation)
-                                if self.pointer_has_grab(g.serial())
-                                    || g.previous_serial()
-                                        .is_some_and(|ps| self.pointer_has_grab(ps))
-                                {
+                                self.pointer_unset_grab(serial, 0);
+                            }
+                            if kb.has_grab(g.serial())
+                                || g.previous_serial().is_some_and(|ps| kb.has_grab(ps))
+                            {
+                                self.keyboard_unset_grab();
+                            }
+                        } else {
+                            // Canonical ORDERED (INV-INPUT-10):
+                            // 1. PopupGrab::ungrab(All)
+                            g.ungrab(PopupUngrabStrategy::All);
+                            // 2. keyboard.unset_grab
+                            if kb.has_grab(g.serial())
+                                || g.previous_serial().is_some_and(|ps| kb.has_grab(ps))
+                            {
+                                self.keyboard_unset_grab();
+                            }
+                            // 3. pointer.unset_grab (only if pointer has this grab)
+                            if let Some(pg_serial) = self.popup_pointer_grab_serial.take() {
+                                if self.pointer_has_grab(pg_serial) {
                                     self.pointer_unset_grab(serial, 0);
                                 }
-                                if kb.has_grab(g.serial())
-                                    || g.previous_serial().is_some_and(|ps| kb.has_grab(ps))
-                                {
-                                    self.keyboard_unset_grab();
-                                }
-                            } else {
-                                // Canonical ORDERED (INV-INPUT-10):
-                                // 1. PopupGrab::ungrab(All) (already done above)
-                                // 2. keyboard.unset_grab
-                                if kb.has_grab(g.serial())
-                                    || g.previous_serial().is_some_and(|ps| kb.has_grab(ps))
-                                {
-                                    self.keyboard_unset_grab();
-                                }
-                                // 3. pointer.unset_grab (only if pointer has this grab)
-                                if self.pointer_has_grab(g.serial())
-                                    || g.previous_serial()
-                                        .is_some_and(|ps| self.pointer_has_grab(ps))
-                                {
-                                    self.pointer_unset_grab(serial, 0);
-                                }
+                            } else if self.pointer_has_grab(g.serial())
+                                || g.previous_serial()
+                                    .is_some_and(|ps| self.pointer_has_grab(ps))
+                            {
+                                self.pointer_unset_grab(serial, 0);
                             }
                         }
                     }
@@ -122,6 +124,13 @@ impl WaylandState {
                         {
                             self.keyboard_unset_grab();
                         }
+                    }
+                    if let Some(pg_serial) = self.popup_pointer_grab_serial.take() {
+                        if self.pointer_has_grab(pg_serial) {
+                            self.set_pan_dismissed_pointer_grab(serial);
+                        }
+                    } else if self.is_pointer_grabbed() {
+                        self.set_pan_dismissed_pointer_grab(serial);
                     }
                     let target_surface = self
                         .window(target)

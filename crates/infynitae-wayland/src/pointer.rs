@@ -15,6 +15,7 @@ use smithay::input::pointer::{
     PointerInnerHandle, RelativeMotionEvent,
 };
 use smithay::input::{Seat, SeatHandler};
+use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::SERIAL_COUNTER;
 
@@ -111,6 +112,133 @@ impl PointerGrab<WaylandState> for ZeroOutputGrab {
     fn start_data(&self) -> &GrabStartData<WaylandState> {
         &self.start
     }
+    fn unset(&mut self, _: &mut WaylandState) {}
+}
+
+/// A pointer grab installed when an active popup grab is dismissed by CameraPan acquisition.
+/// While active during the pan, all pointer motion is consumed by the camera pan interaction.
+/// At pan end, upon receiving the reconciled true-position motion or button event,
+/// it unsets the grab with `restore_focus: false` (preventing Smithay synthetic motion)
+/// and forwards the event to the client.
+struct PanDismissedPopupGrab {
+    start: GrabStartData<WaylandState>,
+}
+
+impl std::fmt::Debug for PanDismissedPopupGrab {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("PanDismissedPopupGrab")
+    }
+}
+
+impl PointerGrab<WaylandState> for PanDismissedPopupGrab {
+    fn motion(
+        &mut self,
+        data: &mut WaylandState,
+        handle: &mut Inner<'_>,
+        focus: Focus,
+        event: &MotionEvent,
+    ) {
+        handle.unset_grab(self, data, event.serial, event.time, false);
+        handle.motion(data, focus, event);
+    }
+
+    fn relative_motion(
+        &mut self,
+        data: &mut WaylandState,
+        handle: &mut Inner<'_>,
+        focus: Focus,
+        event: &RelativeMotionEvent,
+    ) {
+        handle.unset_grab(self, data, SERIAL_COUNTER.next_serial(), 0, false);
+        handle.relative_motion(data, focus, event);
+    }
+
+    fn button(&mut self, data: &mut WaylandState, handle: &mut Inner<'_>, event: &ButtonEvent) {
+        handle.unset_grab(self, data, event.serial, event.time, false);
+        handle.button(data, event);
+    }
+
+    fn axis(&mut self, data: &mut WaylandState, handle: &mut Inner<'_>, details: AxisFrame) {
+        handle.unset_grab(self, data, SERIAL_COUNTER.next_serial(), 0, false);
+        handle.axis(data, details);
+    }
+
+    fn frame(&mut self, data: &mut WaylandState, handle: &mut Inner<'_>) {
+        handle.frame(data);
+    }
+
+    fn gesture_swipe_begin(
+        &mut self,
+        data: &mut WaylandState,
+        handle: &mut Inner<'_>,
+        event: &GestureSwipeBeginEvent,
+    ) {
+        handle.unset_grab(self, data, event.serial, event.time, false);
+        handle.gesture_swipe_begin(data, event);
+    }
+    fn gesture_swipe_update(
+        &mut self,
+        data: &mut WaylandState,
+        handle: &mut Inner<'_>,
+        event: &GestureSwipeUpdateEvent,
+    ) {
+        handle.gesture_swipe_update(data, event);
+    }
+    fn gesture_swipe_end(
+        &mut self,
+        data: &mut WaylandState,
+        handle: &mut Inner<'_>,
+        event: &GestureSwipeEndEvent,
+    ) {
+        handle.gesture_swipe_end(data, event);
+    }
+    fn gesture_pinch_begin(
+        &mut self,
+        data: &mut WaylandState,
+        handle: &mut Inner<'_>,
+        event: &GesturePinchBeginEvent,
+    ) {
+        handle.unset_grab(self, data, event.serial, event.time, false);
+        handle.gesture_pinch_begin(data, event);
+    }
+    fn gesture_pinch_update(
+        &mut self,
+        data: &mut WaylandState,
+        handle: &mut Inner<'_>,
+        event: &GesturePinchUpdateEvent,
+    ) {
+        handle.gesture_pinch_update(data, event);
+    }
+    fn gesture_pinch_end(
+        &mut self,
+        data: &mut WaylandState,
+        handle: &mut Inner<'_>,
+        event: &GesturePinchEndEvent,
+    ) {
+        handle.gesture_pinch_end(data, event);
+    }
+    fn gesture_hold_begin(
+        &mut self,
+        data: &mut WaylandState,
+        handle: &mut Inner<'_>,
+        event: &GestureHoldBeginEvent,
+    ) {
+        handle.unset_grab(self, data, event.serial, event.time, false);
+        handle.gesture_hold_begin(data, event);
+    }
+    fn gesture_hold_end(
+        &mut self,
+        data: &mut WaylandState,
+        handle: &mut Inner<'_>,
+        event: &GestureHoldEndEvent,
+    ) {
+        handle.gesture_hold_end(data, event);
+    }
+
+    fn start_data(&self) -> &GrabStartData<WaylandState> {
+        &self.start
+    }
+
     fn unset(&mut self, _: &mut WaylandState) {}
 }
 
@@ -218,20 +346,49 @@ impl WaylandState {
             }
             Effect::PointerZeroOutputEnd => {
                 ptr.unset_grab(self, SERIAL_COUNTER.next_serial(), 0);
+                self.popups.cleanup();
                 let grab_opt = self.popup_grab.clone();
-                if let Some(g) = grab_opt
-                    && !g.has_ended()
-                {
+                let is_alive = grab_opt.as_ref().is_some_and(|g| {
+                    if g.has_ended() {
+                        return false;
+                    }
+                    if let Some(top) = g.current_grab() {
+                        top.is_alive() && self.popups.find_popup(&top).is_some()
+                    } else {
+                        false
+                    }
+                });
+                if is_alive && let Some(g) = grab_opt {
                     let serial = g.serial();
                     self.set_popup_pointer_grab(&g, serial);
                     let kb = self.keyboard_handle();
                     let grab = smithay::desktop::PopupKeyboardGrab::new(&g);
                     self.set_keyboard_grab(&kb, grab, serial);
+                } else {
+                    self.popup_grab = None;
+                    self.popup_pointer_grab_serial = None;
                 }
             }
             _ => return false,
         }
         true
+    }
+
+    pub(crate) fn set_pan_dismissed_pointer_grab(&mut self, serial: smithay::utils::Serial) {
+        self.popup_pointer_grab_serial = None;
+        let ptr = self.pointer_handle();
+        let location = ptr.current_location();
+        let start = GrabStartData {
+            focus: None,
+            button: 0,
+            location,
+        };
+        ptr.set_grab(
+            self,
+            PanDismissedPopupGrab { start },
+            serial,
+            smithay::input::pointer::Focus::Keep,
+        );
     }
 
     /// The seat (tests read Smithay's pointer state through it; nothing writes through it).
@@ -244,6 +401,7 @@ impl WaylandState {
         grab: &smithay::desktop::PopupGrab<WaylandState>,
         serial: smithay::utils::Serial,
     ) {
+        self.popup_pointer_grab_serial = Some(serial);
         let ptr = self.pointer_handle();
         ptr.set_grab(
             self,
@@ -264,6 +422,7 @@ impl WaylandState {
     }
 
     pub(crate) fn pointer_unset_grab(&mut self, serial: smithay::utils::Serial, time: u32) {
+        self.popup_pointer_grab_serial = None;
         let ptr = self.pointer_handle();
         ptr.unset_grab(self, serial, time);
     }

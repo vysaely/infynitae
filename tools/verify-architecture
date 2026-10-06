@@ -120,6 +120,10 @@ PROBES_INVENTORY = [
      ("code", "E0599", "test_set_keyboard_grab"), "enforcement/probes/src/lib.rs"),
     ("p28_portless_sync_seat_key", "B protocol-side paths (INC4R-02)", PROBES, "p28_portless_sync_seat_key",
      ("code", "E0061", "sync_seat_key"), "enforcement/probes/src/lib.rs"),
+    ("p29_keyboard_handle_outside_adapter", "B protocol-side paths (INC4R-03)", PROBES, "p29_keyboard_handle_outside_adapter",
+     ("code", "E0624", "keyboard_handle"), "enforcement/probes/src/lib.rs"),
+    ("p30_input_auth_token_send", "B protocol-side paths (INC4R-02)", PROBES, "p30_input_auth_token_send",
+     ("code", "E0277", "cannot be sent between threads safely"), "enforcement/probes/src/lib.rs"),
     ("probe_store_port_in_state", "C protocol state", WAYLAND, "probe_store_port_in_state",
      ("code", "E0277", "cannot be sent between threads safely"), "crates/infynitae-wayland/src/lib.rs"),
     ("probe_protocol_refits_camera", "D 1R re-fit", CORE, "probe_protocol_refits_camera",
@@ -682,6 +686,9 @@ SOURCE_SEEDS = [
     ("INC-3: backend calls PointerHandle by a qualified path", "smithay-pointer-only-in-adapter-pointer",
      HEADLESS_LIB, append("\npub fn rogue(state: &mut WaylandState, p: &smithay::input::pointer::PointerHandle<WaylandState>) {\n"
                           "    smithay::input::pointer::PointerHandle::frame(p, state);\n}\n")),
+    ("INC-4: backend calls Smithay get_keyboard", "smithay-keyboard-only-in-adapter",
+     HEADLESS_LIB, append("\npub fn rogue_kb(seat: &smithay::input::Seat<WaylandState>) {\n"
+                          "    let _ = seat.get_keyboard();\n}\n")),
     ("INC-3: mint in a physical_input helper (button_press)", "mint-location",
      CORE_ENTRY, replace(PRESS_ANCHOR, PRESS_ANCHOR + "        }\n        {\n            let _p = authority::Authorized::mint();\n")),
     ("INC-3: input module pans a camera with its own proof", "mint-location",

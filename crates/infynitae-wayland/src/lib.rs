@@ -95,8 +95,7 @@ pub struct WaylandState {
     elements: Vec<ElementHandle>,
     pub(crate) serial_outputs:
         std::collections::VecDeque<(smithay::utils::Serial, infynitae_core::output::OutputId)>,
-    pub(crate) popup_preemption_pending: bool,
-    pub(crate) popup_preemption_ordering_violated: bool,
+    pub(crate) popup_pointer_grab_serial: Option<smithay::utils::Serial>,
     // probe builds only: the Send assertion must be the one and only error
     #[cfg(feature = "probe_store_port_in_state")]
     leaked_port: infynitae_core::InputPort,
@@ -133,14 +132,13 @@ impl WaylandState {
             seats,
             seat,
             popup_grab: None,
+            popup_pointer_grab_serial: None,
             nested_grab_keep_pointer: true,
             ordered_preemption_strategy: keyboard::PreemptionStrategy::Ordered,
             relative_pointer: RelativePointerManagerState::new::<Self>(display),
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),
-            popup_preemption_pending: false,
-            popup_preemption_ordering_violated: false,
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
             leaked_port: unreachable!(),
@@ -180,15 +178,36 @@ impl WaylandState {
             .unwrap_or_default()
     }
 
+    /// Returns whether the seat's keyboard currently has an active grab.
+    pub fn keyboard_is_grabbed(&self) -> bool {
+        self.keyboard_handle().is_grabbed()
+    }
+
+    /// Returns the currently focused surface of the seat's keyboard, if any.
+    pub fn keyboard_current_focus(
+        &self,
+    ) -> Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface> {
+        self.keyboard_handle().current_focus()
+    }
+
+    /// Returns Smithay's raw XKB modifier state for testing and observation.
+    pub fn keyboard_modifier_state(&self) -> smithay::input::keyboard::ModifiersState {
+        self.keyboard_handle().modifier_state()
+    }
+
     /// Updates Smithay's XKB state for a physical key and returns the updated modifiers
     /// and whether modifier state changed, without forwarding the key to any client.
     /// Requires an InputAuthToken capability proof minted by Core for an authenticated InputPort (INC4R-02).
+    /// Consumes the token by value; rejects foreign tokens minted by another Core with zero state mutation (R2-02).
     pub fn sync_seat_key(
         &mut self,
-        _token: &infynitae_core::InputAuthToken,
+        token: infynitae_core::InputAuthToken,
         key: u32,
         pressed: bool,
     ) -> (infynitae_core::input::bindings::Modifiers, bool) {
+        if token.core_id() != self.core.id() {
+            return (self.seat_modifiers(), false);
+        }
         use smithay::backend::input::KeyState;
         use smithay::input::keyboard::Keycode;
 
@@ -203,6 +222,11 @@ impl WaylandState {
             kb.input_intercept(self, code, state, |_state, _mods, _sym| None::<()>);
         let modifiers = convert::modifiers_from_smithay(&kb.modifier_state());
         (modifiers, mods_changed)
+    }
+
+    /// Returns the number of interaction serials currently held in the provenance ring buffer.
+    pub fn serial_outputs_len(&self) -> usize {
+        self.serial_outputs.len()
     }
 
     /// Records the causal output on which a user interaction serial occurred (D-B6 Rule 1 provenance).

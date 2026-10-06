@@ -203,3 +203,16 @@ pub fn handler(state: &mut infynitae_wayland::WaylandState) {
 pub fn handler(state: &mut infynitae_wayland::WaylandState) {
     state.sync_seat_key(30, true);
 }
+
+/// p29 (INC4R-03 / R2-03): call keyboard_handle outside adapter. Expected E0624.
+#[cfg(feature = "p29_keyboard_handle_outside_adapter")]
+pub fn handler(state: &infynitae_wayland::WaylandState) {
+    let _ = state.keyboard_handle();
+}
+
+/// p30 (INC4R-02 / R2-02): InputAuthToken must not be Send. Expected E0277.
+#[cfg(feature = "p30_input_auth_token_send")]
+pub fn handler() {
+    fn assert_send<T: Send>() {}
+    assert_send::<infynitae_core::InputAuthToken>();
+}

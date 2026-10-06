@@ -69,7 +69,7 @@ impl S {
             let super_down = self.held.contains(&KEY_LEFTMETA);
             let is_compositor = already_compositor
                 || (k == KEY_ESC && self.ls.state.core().interaction().active())
-                || (super_down && (k == KEY_B || k == KEY_ENTER));
+                || (super_down && k == KEY_ENTER);
             if !is_compositor {
                 self.client_held.insert(k);
             }
@@ -102,8 +102,7 @@ impl S {
     }
 
     fn check(&self, step: &str) {
-        let kb = self.ls.state.keyboard_handle();
-        let seat_mods = kb.modifier_state().serialized;
+        let seat_mods = self.ls.state.keyboard_modifier_state().serialized;
         let c = &self.ls.probe.kb;
         assert!(
             c.violations.is_empty(),
@@ -172,15 +171,15 @@ fn k2_modifier_held_while_another_client_key_pressed() {
     s.assert_end();
 }
 
-/// K-3: Compositor binding (Super+B) while modifier held: consumed at press, release consumed.
+/// K-3: Compositor binding (Super+Enter) while modifier held: consumed at press, release consumed.
 #[test]
-fn k3_compositor_binding_super_b_consumed() {
+fn k3_compositor_binding_super_enter_consumed() {
     let mut s = S::new(true);
     s.key(KEY_LEFTMETA, true);
     let events_before = s.ls.probe.key_events.len();
-    s.key(KEY_B, true);
-    s.key(KEY_B, false);
-    // Client never received B press or release
+    s.key(KEY_ENTER, true);
+    s.key(KEY_ENTER, false);
+    // Client never received Enter press or release
     assert_eq!(s.ls.probe.key_events.len(), events_before);
     s.key(KEY_LEFTMETA, false);
     s.assert_end();
@@ -251,12 +250,10 @@ fn k6_focused_client_destroyed_while_shift_a_held() {
 fn k7_interaction_cancelled_while_compositor_keys_held() {
     let mut s = S::new(true);
     s.key(KEY_LEFTMETA, true);
-    s.key(KEY_B, true); // compositor-owned (Noop)
     s.key(KEY_ESC, true); // compositor-owned (Cancel)
     s.key(KEY_ENTER, true); // FocusNext
     assert_eq!(s.ls.probe.kb.active.as_deref(), Some("W2"));
     s.key(KEY_ENTER, false);
-    s.key(KEY_B, false);
     s.key(KEY_ESC, false);
     s.key(KEY_LEFTMETA, false);
     s.assert_end();
@@ -383,19 +380,19 @@ fn plain_escape_cancels_active_interaction() {
 fn repeat_press_of_compositor_owned_key_does_not_leak() {
     let mut s = S::new(true);
     s.key(KEY_LEFTMETA, true);
-    s.key(KEY_B, true); // Super+B: compositor-owned
+    s.key(KEY_ENTER, true); // Super+Enter: compositor-owned
     s.key(KEY_LEFTMETA, false);
-    s.key(KEY_B, true); // repeat / second press
-    s.key(KEY_B, false);
-    let b: Vec<_> =
+    s.key(KEY_ENTER, true); // repeat / second press
+    s.key(KEY_ENTER, false);
+    let enter_events: Vec<_> =
         s.ls.probe
             .key_events
             .iter()
-            .filter(|(k, _)| *k == KEY_B)
+            .filter(|(k, _)| *k == KEY_ENTER)
             .collect();
     assert!(
-        b.is_empty(),
-        "compositor-owned B leaked to client: {b:?}; viol={:?}",
+        enter_events.is_empty(),
+        "compositor-owned Enter leaked to client: {enter_events:?}; viol={:?}",
         s.ls.probe.kb.violations
     );
     assert!(
@@ -618,20 +615,10 @@ fn r01_foreign_port_key_leaves_no_xkb_trace() {
     let elements: Vec<ElementId> = ls1.state.elements().collect();
     set_focus(&mut ls1.state, &mut ls1.input, Some(elements[0])).expect("focus");
     let mut other = Lockstep::new(Some(output((1920, 1080), 120)));
-    let before = ls1
-        .state
-        .keyboard_handle()
-        .modifier_state()
-        .serialized
-        .depressed;
+    let before = ls1.state.keyboard_modifier_state().serialized.depressed;
     let res = keyboard_key(&mut ls1.state, &mut other.input, KEY_LEFTSHIFT, true, 1);
     assert!(res.is_err(), "foreign port accepted");
-    let after = ls1
-        .state
-        .keyboard_handle()
-        .modifier_state()
-        .serialized
-        .depressed;
+    let after = ls1.state.keyboard_modifier_state().serialized.depressed;
     set_focus(&mut ls1.state, &mut ls1.input, Some(elements[1])).expect("focus");
     let t = ls1.now + Duration::from_micros(16_667);
     ls1.run_until(t);
@@ -929,4 +916,191 @@ fn set_focus_rejects_foreign_port() {
     let e = ls1.state.elements().next().unwrap();
     let res = set_focus(&mut ls1.state, &mut ls2.input, Some(e));
     assert!(res.is_err(), "set_focus must reject foreign InputPort");
+}
+
+/// R2-04 duplicate key and modifier press sequences: seat XKB and client state remain truthful.
+#[test]
+fn t04_duplicate_presses() {
+    const KEY_LEFTCTRL: u32 = 29;
+    const KEY_LEFTALT: u32 = 56;
+    let seqs = vec![
+        (
+            "dup",
+            vec![
+                ("key", KEY_A, true),
+                ("key", KEY_A, true),
+                ("key", KEY_A, false),
+            ],
+        ),
+        (
+            "dup x2",
+            vec![
+                ("key", KEY_A, true),
+                ("key", KEY_A, true),
+                ("key", KEY_A, true),
+                ("key", KEY_A, false),
+            ],
+        ),
+        (
+            "dup after modifier",
+            vec![
+                ("key", KEY_A, true),
+                ("key", KEY_LEFTSHIFT, true),
+                ("key", KEY_A, true),
+                ("key", KEY_A, false),
+                ("key", KEY_LEFTSHIFT, false),
+            ],
+        ),
+        (
+            "dup after focus",
+            vec![
+                ("key", KEY_A, true),
+                ("focus2", 0, false),
+                ("key", KEY_A, true),
+                ("key", KEY_A, false),
+            ],
+        ),
+        (
+            "dup modifier Shift",
+            vec![
+                ("key", KEY_LEFTSHIFT, true),
+                ("key", KEY_LEFTSHIFT, true),
+                ("key", KEY_LEFTSHIFT, false),
+            ],
+        ),
+        (
+            "dup modifier Super",
+            vec![
+                ("key", KEY_LEFTMETA, true),
+                ("key", KEY_LEFTMETA, true),
+                ("key", KEY_LEFTMETA, false),
+            ],
+        ),
+        (
+            "dup modifier Ctrl",
+            vec![
+                ("key", KEY_LEFTCTRL, true),
+                ("key", KEY_LEFTCTRL, true),
+                ("key", KEY_LEFTCTRL, false),
+            ],
+        ),
+        (
+            "dup modifier Alt",
+            vec![
+                ("key", KEY_LEFTALT, true),
+                ("key", KEY_LEFTALT, true),
+                ("key", KEY_LEFTALT, false),
+            ],
+        ),
+    ];
+    for (name, steps) in seqs {
+        let mut s = S::new(true);
+        s.set_focus(Some(s.e1));
+        for &(op, k, p) in &steps {
+            match op {
+                "key" => s.key(k, p),
+                "focus2" => s.set_focus(Some(s.e2)),
+                _ => unreachable!(),
+            }
+        }
+        let mods = s.ls.state.keyboard_modifier_state();
+        let dep = mods.serialized.depressed;
+        let c_keys = &s.ls.probe.kb.keys;
+        let c_dep = s.ls.probe.kb.depressed;
+        let viols = &s.ls.probe.kb.violations;
+        assert!(
+            viols.is_empty() && dep == 0 && c_keys.is_empty() && c_dep == 0,
+            "T04 {name}: viols={viols:?} seat_dep={dep:#x} client_keys={c_keys:?} client_dep={c_dep:#x}"
+        );
+    }
+}
+
+/// R2-02 token capability binding: a token minted by ANOTHER Core must not authorize this seat.
+#[test]
+fn t02b_token_is_bound_to_its_core() {
+    let mut s1 = S::new(true);
+    s1.set_focus(Some(s1.e1));
+    let s2 = S::new(true);
+    let foreign_token = s2
+        .ls
+        .state
+        .core()
+        .verify_input_port(&s2.ls.input)
+        .expect("foreign token");
+    let before = s1.ls.state.keyboard_modifier_state().serialized.depressed;
+    let ok = s1
+        .ls
+        .state
+        .sync_seat_key(foreign_token, KEY_LEFTSHIFT, true);
+    let after = s1.ls.state.keyboard_modifier_state().serialized.depressed;
+    assert!(!ok.1, "foreign token must be rejected by sync_seat_key");
+    assert_eq!(
+        after, before,
+        "foreign token must not mutate seat modifier state"
+    );
+}
+
+/// R2-02 token lifetime and consume semantics: an InputAuthToken is consumed by sync_seat_key.
+#[test]
+fn t02c_token_consumed_and_cannot_be_reused() {
+    let mut s = S::new(true);
+    s.set_focus(Some(s.e1));
+    let token =
+        s.ls.state
+            .core()
+            .verify_input_port(&s.ls.input)
+            .expect("token");
+    let ok = s.ls.state.sync_seat_key(token, KEY_LEFTSHIFT, true);
+    assert!(ok.1, "valid token authorizes seat key sync");
+}
+
+/// R2-06 unconfigured keys are delivered to client and never swallowed by compositor bindings.
+#[test]
+fn t11_unconfigured_keys_are_never_swallowed() {
+    const KEY_K: u32 = 37;
+    let mut out = Vec::new();
+    for (name, combo) in [
+        ("plain Esc", vec![KEY_ESC]),
+        ("idle Super+Esc", vec![KEY_LEFTMETA, KEY_ESC]),
+        ("idle Super+B", vec![KEY_LEFTMETA, KEY_B]),
+        ("Super+K (unconfigured)", vec![KEY_LEFTMETA, KEY_K]),
+        ("Shift alone", vec![KEY_LEFTSHIFT]),
+    ] {
+        let mut s = S::new(true);
+        s.set_focus(Some(s.e1));
+        let n = s.ls.probe.key_events.len();
+        for &k in &combo {
+            s.key(k, true);
+        }
+        for &k in combo.iter().rev() {
+            s.key(k, false);
+        }
+        let last = *combo.last().unwrap();
+        let delivered = s.ls.probe.key_events[n..]
+            .iter()
+            .filter(|(k, _)| *k == last)
+            .count();
+        out.push((name, delivered));
+    }
+    // configured action: Super+Enter is consumed (FocusNext)
+    let mut s = S::new(true);
+    s.set_focus(Some(s.e1));
+    s.key(KEY_LEFTMETA, true);
+    s.key(KEY_ENTER, true);
+    s.key(KEY_ENTER, false);
+    s.key(KEY_LEFTMETA, false);
+    let enter =
+        s.ls.probe
+            .key_events
+            .iter()
+            .filter(|(k, _)| *k == KEY_ENTER)
+            .count();
+    assert_eq!(
+        enter, 0,
+        "configured Super+Enter must be swallowed by compositor"
+    );
+    assert!(
+        out.iter().all(|(_, d)| *d == 2),
+        "unconfigured keys not delivered: {out:?}"
+    );
 }

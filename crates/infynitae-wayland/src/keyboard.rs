@@ -28,8 +28,8 @@ pub enum PreemptionStrategy {
 }
 
 impl WaylandState {
-    /// The seat's keyboard handle.
-    pub fn keyboard_handle(&self) -> KeyboardHandle<WaylandState> {
+    /// The seat's keyboard handle (internal to adapter).
+    pub(crate) fn keyboard_handle(&self) -> KeyboardHandle<WaylandState> {
         self.seat.get_keyboard().expect("the seat has a keyboard")
     }
 

@@ -9,7 +9,7 @@ use smithay::desktop::{
 use smithay::input::{SeatHandler, SeatState};
 use smithay::reexports::wayland_server::Client;
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_seat, wl_surface::WlSurface};
-use smithay::utils::Serial;
+use smithay::utils::{SERIAL_COUNTER, Serial};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     CompositorClientState, CompositorHandler, CompositorState, add_destruction_hook, get_parent,
@@ -266,8 +266,38 @@ impl XdgShellHandler for WaylandState {
                     || self.pointer_has_grab(grab.previous_serial().unwrap_or(serial))))
             {
                 self.set_popup_pointer_grab(&grab, serial);
+                self.popup_pointer_grab_serial = Some(serial);
             }
             self.popup_grab = Some(grab);
+        }
+    }
+
+    /// When a popup is destroyed by the client, immediately purge it from the snapshot
+    /// and dismiss any stale grab, preventing dead surface input holes (R2-01).
+    fn popup_destroyed(&mut self, surface: PopupSurface) {
+        let kind = PopupKind::Xdg(surface.clone());
+        let root = find_popup_root_surface(&kind)
+            .ok()
+            .or_else(|| self.toplevel_root(surface.wl_surface()));
+        self.popups.cleanup();
+        if let Some(g) = &self.popup_grab
+            && (g.has_ended() || g.current_grab().as_ref() == Some(surface.wl_surface()))
+        {
+            self.popup_grab = None;
+            if let Some(pg_serial) = self.popup_pointer_grab_serial.take()
+                && self.pointer_has_grab(pg_serial)
+            {
+                self.pointer_unset_grab(SERIAL_COUNTER.next_serial(), 0);
+            }
+        }
+        if let Some(root) = root {
+            if let Some(i) = self.element_index_by_root(&root) {
+                self.element_committed(i);
+            }
+        } else {
+            for i in 0..self.elements.len() {
+                self.element_committed(i);
+            }
         }
     }
 }
@@ -278,9 +308,6 @@ impl SeatHandler for WaylandState {
     type TouchFocus = WlSurface;
 
     fn seat_state(&mut self) -> &mut SeatState<Self> {
-        if self.popup_preemption_pending {
-            self.popup_preemption_ordering_violated = true;
-        }
         &mut self.seats
     }
 }

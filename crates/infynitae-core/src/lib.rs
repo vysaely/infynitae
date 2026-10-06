@@ -65,7 +65,15 @@ pub struct OutputLifecycleToken {
 /// Capability proof granted by Core to an authenticated InputPort for adapter-side key synchronization.
 #[derive(Debug)]
 pub struct InputAuthToken {
-    pub(crate) _private: (),
+    core_id: u64,
+    _not_send: NotSend,
+}
+
+impl InputAuthToken {
+    /// The ID of the Core instance that minted this capability proof.
+    pub fn core_id(&self) -> u64 {
+        self.core_id
+    }
 }
 
 /// Physical input produced by a backend (C4.1), submitted through [`InputPort`]. Times are the
@@ -277,6 +285,16 @@ impl Core {
         }
     }
 
+    /// The unique identity of this Core instance.
+    pub fn id(&self) -> u64 {
+        self.id
+    }
+
+    /// Whether `key` is currently recorded as held down (INV-INPUT-1).
+    pub fn is_key_down(&self, key: u32) -> bool {
+        self.input.key_ownership.owner(key).is_some()
+    }
+
     /// Validates that an input port belongs to this Core.
     pub fn check_port(&self, port: &InputPort) -> Result<(), EntryError> {
         if port.core_id != self.id {
@@ -285,10 +303,13 @@ impl Core {
         Ok(())
     }
 
-    /// Verifies an InputPort and returns an InputAuthToken capability proof.
+    /// Verifies an InputPort and returns an InputAuthToken capability proof bound to this Core.
     pub fn verify_input_port(&self, port: &InputPort) -> Result<InputAuthToken, EntryError> {
         self.check_port(port)?;
-        Ok(InputAuthToken { _private: () })
+        Ok(InputAuthToken {
+            core_id: self.id,
+            _not_send: std::marker::PhantomData,
+        })
     }
 
     /// The current per-surface output membership (OBJ-13).

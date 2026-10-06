@@ -17,7 +17,7 @@ use std::time::Duration;
 use common::input::{BTN_LEFT, BTN_MIDDLE, logo, none};
 use common::{Lockstep, PopupSpec, output};
 use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
-use infynitae_core::input::keys::{KEY_A, KEY_ENTER, KEY_LEFTMETA};
+use infynitae_core::input::keys::{KEY_A, KEY_B, KEY_ENTER, KEY_LEFTMETA};
 use infynitae_core::stage::ElementId;
 #[cfg(feature = "probe_preemption_strategy")]
 use infynitae_wayland::PreemptionStrategy;
@@ -134,8 +134,7 @@ impl PopupHarness {
     }
 
     fn check_invariants(&self, target: Option<ElementId>, expected_dones: usize) -> bool {
-        let kb = self.ls.state.keyboard_handle();
-        let srv_focus = kb.current_focus();
+        let srv_focus = self.ls.state.keyboard_current_focus();
         let want_surface = target.and_then(|id| {
             self.ls
                 .state
@@ -178,7 +177,7 @@ fn pf1_grab_active_core_focuses_w2_ordered() {
     let mut h = PopupHarness::new();
     h.open_popup("P", h.w1);
     assert!(
-        h.ls.state.keyboard_handle().is_grabbed(),
+        h.ls.state.keyboard_is_grabbed(),
         "popup grab must grab keyboard"
     );
     h.core_focus(Some(h.e2));
@@ -205,7 +204,7 @@ fn pf1_grab_active_core_focuses_w2_ordered() {
         "popup_done must arrive BEFORE wl_keyboard.enter on preemption (INV-INPUT-10 ordering)"
     );
     assert!(
-        !h.ls.state.keyboard_handle().is_grabbed(),
+        !h.ls.state.keyboard_is_grabbed(),
         "keyboard still grabbed after preemption"
     );
     assert!(
@@ -364,7 +363,7 @@ fn pf_wsm7_grab_on_unmapped_parent_handled_gracefully() {
         "grab on unmapped parent must be refused with popup_done"
     );
     assert!(
-        !h.ls.state.keyboard_handle().is_grabbed(),
+        !h.ls.state.keyboard_is_grabbed(),
         "keyboard must not be grabbed"
     );
     assert!(h.ls.probe.kb.violations.is_empty());
@@ -387,7 +386,7 @@ fn neg1_naive_set_focus_fails_popup_dismissal() {
         "Naive strategy failed to ungrab popup (NEG-1 reproducer confirmed)"
     );
     assert!(
-        h.ls.state.keyboard_handle().is_grabbed(),
+        h.ls.state.keyboard_is_grabbed(),
         "Naive strategy left keyboard grabbed"
     );
 }
@@ -460,7 +459,7 @@ fn obs1_nested_grab_replaces_pointer_grab_observation() {
     // Key routing check under unpatched anvil order
     h.key(KEY_A, true);
     let active = h.ls.probe.kb.active.clone();
-    let kbg = h.ls.state.keyboard_handle().is_grabbed();
+    let kbg = h.ls.state.keyboard_is_grabbed();
     h.key(KEY_A, false);
     assert!(
         active.as_deref() != Some("P2") || !kbg,
@@ -516,8 +515,10 @@ fn atk11_refused_grab_dismisses_the_popup() {
         },
     );
     h.advance();
-    let kb = h.ls.state.keyboard_handle();
-    assert!(!kb.is_grabbed(), "grab installed for an unfocused element");
+    assert!(
+        !h.ls.state.keyboard_is_grabbed(),
+        "grab installed for an unfocused element"
+    );
     assert_eq!(
         h.ls.probe.popup_dones,
         vec!["Q"],
@@ -718,7 +719,7 @@ fn pf_grab_refused_when_keyboard_grabbed_by_another_sequence() {
     let mut h = PopupHarness::new();
     h.ls.state
         .test_set_keyboard_grab(smithay::utils::Serial::from(42));
-    assert!(h.ls.state.keyboard_handle().is_grabbed());
+    assert!(h.ls.state.keyboard_is_grabbed());
 
     let _p = h.open_popup("P", h.w1);
     assert!(
@@ -804,6 +805,31 @@ impl R {
         self.adv();
         p
     }
+    fn grab_popup(&mut self, label: &'static str, parent: usize, serial: u32) -> usize {
+        let qh = self.ls.qh.clone();
+        let p = self.ls.probe.popup_with_grab_serial(
+            &qh,
+            label,
+            parent,
+            PopupSpec {
+                content: (120, 80),
+                shadow: 0,
+                anchor_rect: (10, 10, 1, 1),
+                slide: false,
+            },
+            serial,
+        );
+        self.adv();
+        p
+    }
+    fn pan_press(&mut self) {
+        self.key(KEY_LEFTMETA, true);
+        self.button(BTN_MIDDLE, true, logo());
+    }
+    fn pan_release(&mut self) {
+        self.button(BTN_MIDDLE, false, none());
+        self.key(KEY_LEFTMETA, false);
+    }
     fn viol(&self) -> Vec<String> {
         self.ls.probe.kb.violations.clone()
     }
@@ -811,7 +837,7 @@ impl R {
         self.ls.state.seat().get_pointer().unwrap().is_grabbed()
     }
     fn kb_grabbed(&self) -> bool {
-        self.ls.state.keyboard_handle().is_grabbed()
+        self.ls.state.keyboard_is_grabbed()
     }
     /// Click-to-focus on the topmost window under the pointer; returns its (probe idx, element).
     fn click_focus(&mut self) -> (usize, ElementId) {
@@ -1009,8 +1035,7 @@ fn r16_keyboard_focus_after_pan_dismissal() {
     r.button(BTN_MIDDLE, true, none());
     r.button(BTN_MIDDLE, false, none());
     r.key(KEY_LEFTMETA, false);
-    let kb = r.ls.state.keyboard_handle();
-    let smithay_focus = kb.current_focus();
+    let smithay_focus = r.ls.state.keyboard_current_focus();
     let root =
         r.ls.state
             .window(top)
@@ -1089,4 +1114,152 @@ fn r17_long_lived_stress_bounded_state() {
         b.0 <= a.0 + 5 && b.1 <= a.1 && b.2 == 0 && b.3 == 0 && b.4 <= a.4,
         "unbounded state: {samples:?}"
     );
+    assert_eq!(
+        r.ls.probe.kb.violations.len(),
+        0,
+        "protocol violations in r17: {:?}",
+        r.ls.probe.kb.violations
+    );
+    assert_eq!(
+        r.ls.state.keyboard_modifier_state().serialized.depressed,
+        0,
+        "seat modifier depressed != 0"
+    );
+    assert_eq!(r.ls.probe.kb.depressed, 0, "client modifier depressed != 0");
+}
+
+/// R2-05 / OB-4: nested popup grab dismissed by CameraPan leaves NO residual grabs.
+#[test]
+fn t01b_nested_pan_dismissal() {
+    let mut r = R::new(1);
+    let (wp, _) = r.click_focus();
+    let s1 = r.ls.probe.last_serial;
+    let p1 = r.grab_popup("P1", wp, s1);
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    let s2 = r.ls.probe.last_serial;
+    let _p2 = r.grab_popup("P2", p1, s2);
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("P2"));
+    r.pan_press();
+    assert!(
+        !r.kb_grabbed(),
+        "nested keyboard grab must be unset upon pan acquisition"
+    );
+    r.pan_release();
+    assert_eq!(r.ls.probe.popup_dones, vec!["P2", "P1"]);
+    assert!(
+        !r.kb_grabbed() && !r.ptr_grabbed(),
+        "residual grab kb={} ptr={}",
+        r.kb_grabbed(),
+        r.ptr_grabbed()
+    );
+}
+
+/// R2-05: 3-level nested distinct serial popup grab unsets pointer grab on focus transfer.
+#[test]
+fn t06a_three_level_nested_distinct_serials_focus_transfer() {
+    let mut r = R::new(2);
+    let (wp, top) = r.click_focus();
+    let other = if top == r.e[0] { r.e[1] } else { r.e[0] };
+    let s1 = r.ls.probe.last_serial;
+    let p1 = r.grab_popup("P1", wp, s1);
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    let s2 = r.ls.probe.last_serial;
+    let p2 = r.grab_popup("P2", p1, s2);
+    r.key(KEY_B, true);
+    r.key(KEY_B, false);
+    let s3 = r.ls.probe.last_serial;
+    let _p3 = r.grab_popup("P3", p2, s3);
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("P3"));
+    r.focus(Some(other));
+    assert_eq!(r.ls.probe.popup_dones, vec!["P3", "P2", "P1"]);
+    assert!(
+        !r.kb_grabbed() && !r.ptr_grabbed(),
+        "residual grab after 3-level focus transfer"
+    );
+}
+
+/// R2-05: zero-output reconnect does not re-install grab for client-destroyed popup chain.
+#[test]
+fn t06d_implicit_button_grab_then_zero_outputs_with_popup() {
+    let mut r = R::new(1);
+    let (wp, _) = r.click_focus();
+    let s = r.ls.probe.last_serial;
+    let p = r.grab_popup("P", wp, s);
+    r.ls.probe.destroy_popup(p);
+    r.adv();
+    r.button(BTN_LEFT, true, none());
+    let o = r.ls.output();
+    r.ls.disconnect(o);
+    r.adv();
+    let zero_grab = r.ptr_grabbed();
+    r.ls.connect(&output((1920, 1080), 120));
+    r.adv();
+    r.button(BTN_LEFT, false, none());
+    assert!(
+        zero_grab && !r.ptr_grabbed(),
+        "grab re-installed for destroyed popup after reconnect"
+    );
+}
+
+/// R2-01: popup destroyed by client leaves no dead input hole.
+#[test]
+fn t99g_popup_destroyed_by_client_then_clicks() {
+    let mut r = R::new(1);
+    let (wp, _) = r.click_focus();
+    let s = r.ls.probe.last_serial;
+    let p = r.grab_popup("P", wp, s);
+    r.ls.probe.destroy_popup(p);
+    r.adv();
+    let m = r.ls.probe.ptr.len();
+    r.motion((5.0, 5.0));
+    r.button(BTN_LEFT, true, none());
+    r.button(BTN_LEFT, false, none());
+    let wire: Vec<String> = r.ls.probe.ptr[m..].to_vec();
+    let buttons = wire.iter().filter(|l| l.starts_with("button")).count();
+    assert_eq!(
+        buttons, 2,
+        "clicks into former popup area must reach root element"
+    );
+}
+
+/// R2-01: destroyed popup (with or without grab) delivers clicks in former popup area.
+#[test]
+fn t99j_stale_popup_area() {
+    for grab in [false, true] {
+        let mut r = R::new(1);
+        let (wp, _) = r.click_focus();
+        let p = if grab {
+            let s = r.ls.probe.last_serial;
+            r.grab_popup("P", wp, s)
+        } else {
+            let qh = r.ls.qh.clone();
+            let p = r.ls.probe.popup(
+                &qh,
+                "P",
+                wp,
+                PopupSpec {
+                    content: (120, 80),
+                    shadow: 0,
+                    anchor_rect: (10, 10, 1, 1),
+                    slide: false,
+                },
+            );
+            r.adv();
+            p
+        };
+        r.ls.probe.destroy_popup(p);
+        r.adv();
+        let m = r.ls.probe.ptr.len();
+        r.motion((1.0, 1.0));
+        r.button(BTN_LEFT, true, none());
+        r.button(BTN_LEFT, false, none());
+        let wire: Vec<String> = r.ls.probe.ptr[m..].to_vec();
+        let buttons = wire.iter().filter(|l| l.starts_with("button")).count();
+        assert_eq!(
+            buttons, 2,
+            "clicks inside destroyed popup area must reach parent without requiring redraw"
+        );
+    }
 }

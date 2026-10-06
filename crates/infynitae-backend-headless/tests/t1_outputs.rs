@@ -634,3 +634,30 @@ fn r15_rule1_uses_the_causing_event_output() {
         "popup constrained to the wrong output's viewport"
     );
 }
+
+/// M08 verification: causal serial outputs store is strictly capped at 64 entries.
+#[test]
+fn serial_outputs_storage_bounded_at_capacity() {
+    use common::input::{BTN_LEFT, none};
+    use infynitae_backend_headless::pointer_button;
+
+    let mut ls = Lockstep::new(Some(common::output((1920, 1080), 120)));
+    for i in 0..100 {
+        let t = 10_000 + (i as u64) * 1000;
+        pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, true, none(), t).expect("press");
+        pointer_button(
+            &mut ls.state,
+            &mut ls.input,
+            BTN_LEFT,
+            false,
+            none(),
+            t + 500,
+        )
+        .expect("release");
+    }
+    assert_eq!(
+        ls.state.serial_outputs_len(),
+        64,
+        "serial outputs must be capped at 64 entries (M08)"
+    );
+}

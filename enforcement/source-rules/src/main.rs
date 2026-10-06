@@ -134,6 +134,8 @@ const POINTER_DELIVERY: [&str; 8] = [
     "unset_grab",
     "get_pointer",
 ];
+/// Smithay keyboard delivery and acquisition (INC-4, R2-03): callable only within `infynitae-wayland`.
+const KEYBOARD_DELIVERY: [&str; 3] = ["input_forward", "input_intercept", "get_keyboard"];
 
 const UNSAFE_INVENTORY: &str = "docs/foundation/UNSAFE_INVENTORY.md";
 
@@ -191,6 +193,7 @@ fn main() -> ExitCode {
     check_rejected_apis(&crates, &mut report);
     check_effects_only_from_core(&crates, &mut report);
     check_pointer_delivery(&crates, &mut report);
+    check_keyboard_delivery(&crates, &mut report);
     check_unsafe(&root, &crates, &mut report);
 
     let mut failed = false;
@@ -1090,6 +1093,68 @@ fn check_pointer_delivery(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Repo
                 r.fail(
                     R,
                     format!("{loc}: calls `{n}` outside infynitae-wayland::pointer (C4.2)"),
+                );
+            }
+        }
+    }
+}
+
+/// Smithay keyboard input only in `infynitae-wayland` (INC-4, R2-03). Method calls, qualified calls and
+/// macro tokens are checked across all other product crates.
+fn check_keyboard_delivery(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report) {
+    const R: &str = "smithay-keyboard-only-in-adapter";
+    r.rule(R);
+    struct V<'a> {
+        file: &'a Path,
+        found: Vec<(String, String)>,
+    }
+    impl<'ast> Visit<'ast> for V<'_> {
+        fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
+            if KEYBOARD_DELIVERY.iter().any(|n| m.method == n) {
+                self.found
+                    .push((m.method.to_string(), at(self.file, m.method.span())));
+            }
+            syn::visit::visit_expr_method_call(self, m);
+        }
+        fn visit_expr_path(&mut self, e: &'ast syn::ExprPath) {
+            if let Some(last) = e.path.segments.last()
+                && e.path.segments.len() >= 2
+                && KEYBOARD_DELIVERY.iter().any(|n| last.ident == n)
+            {
+                self.found
+                    .push((last.ident.to_string(), at(self.file, last.ident.span())));
+            }
+            syn::visit::visit_expr_path(self, e);
+        }
+        fn visit_macro(&mut self, m: &'ast syn::Macro) {
+            let mut ids = Vec::new();
+            idents(m.tokens.clone(), &mut ids);
+            for i in ids
+                .iter()
+                .filter(|i| KEYBOARD_DELIVERY.iter().any(|n| *i == n))
+            {
+                self.found.push((i.to_string(), at(self.file, i.span())));
+            }
+            syn::visit::visit_macro(self, m);
+        }
+    }
+    for (name, _, _) in CRATES[..PRODUCT_CRATES]
+        .iter()
+        .filter(|(n, _, _)| *n != "infynitae-wayland" && *n != "infynitae-core")
+    {
+        let Some(files) = crates.get(name) else {
+            continue;
+        };
+        for f in files {
+            let mut v = V {
+                file: &f.path,
+                found: Vec::new(),
+            };
+            v.visit_file(&f.ast);
+            for (n, loc) in v.found {
+                r.fail(
+                    R,
+                    format!("{loc}: calls Smithay keyboard method `{n}` outside adapter"),
                 );
             }
         }
