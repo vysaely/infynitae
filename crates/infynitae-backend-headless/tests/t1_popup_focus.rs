@@ -31,6 +31,8 @@ struct PopupHarness {
     e2: ElementId,
     popups: Vec<usize>,
     held: BTreeSet<u32>,
+    /// `kb_log` length at the last Core focus change (F-4 counts transitions after it).
+    focus_mark: usize,
 }
 
 impl PopupHarness {
@@ -54,6 +56,7 @@ impl PopupHarness {
             e2,
             popups: Vec::new(),
             held: BTreeSet::new(),
+            focus_mark: 0,
         };
         // Initial focus on W1
         h.core_focus(Some(e1));
@@ -85,6 +88,7 @@ impl PopupHarness {
     }
 
     fn core_focus(&mut self, target: Option<ElementId>) {
+        self.focus_mark = self.ls.probe.kb_log.len();
         set_focus(&mut self.ls.state, &mut self.ls.input, target).expect("set_focus");
         self.advance();
     }
@@ -149,19 +153,18 @@ impl PopupHarness {
         let f2 = client_focus.as_deref() == want_label;
         // F-3: No protocol violations
         let f3 = self.ls.probe.kb.violations.is_empty();
-        // F-4: Exactly one keyboard transition into the target
+        // F-4: since the last Core focus change, EXACTLY one keyboard enter, into the target
+        // (none when the target is None) — a transient re-entry of the old root (W-SM-15) or a
+        // duplicate enter fails it
+        let enters: Vec<&String> = self.ls.probe.kb_log[self.focus_mark..]
+            .iter()
+            .filter(|l| l.starts_with("wl_keyboard.enter"))
+            .collect();
         let f4 = match want_label {
             Some(lbl) => {
-                let enters: Vec<_> = self
-                    .ls
-                    .probe
-                    .kb_log
-                    .iter()
-                    .filter(|l| l.starts_with("wl_keyboard.enter"))
-                    .collect();
-                enters.last().map(|l| l.contains(lbl)).unwrap_or(false)
+                enters.len() == 1 && enters[0].starts_with(&format!("wl_keyboard.enter {lbl} "))
             }
-            None => true,
+            None => enters.is_empty(),
         };
         // F-5: Popup done count
         let f5 = self.ls.probe.popup_dones.len() >= expected_dones;

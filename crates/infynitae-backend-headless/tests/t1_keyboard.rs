@@ -28,6 +28,10 @@ struct S {
     e2: ElementId,
     held: BTreeSet<u32>,
     client_held: BTreeSet<u32>,
+    /// Reference model (KV-2): a CameraPan is in progress according to the test's own sequence
+    /// (Super held at the MMB press, until the MMB release or an Escape cancel) — never read
+    /// back from Core.
+    pan: bool,
 }
 
 impl S {
@@ -50,6 +54,7 @@ impl S {
             e2,
             held: BTreeSet::new(),
             client_held: BTreeSet::new(),
+            pan: false,
         };
         s.set_focus(Some(e1));
         s
@@ -67,11 +72,13 @@ impl S {
             let already_compositor = self.held.contains(&k) && !self.client_held.contains(&k);
             self.held.insert(k);
             let super_down = self.held.contains(&KEY_LEFTMETA);
-            let is_compositor = already_compositor
-                || (k == KEY_ESC && self.ls.state.core().interaction().active())
-                || (super_down && k == KEY_ENTER);
+            let is_compositor =
+                already_compositor || (k == KEY_ESC && self.pan) || (super_down && k == KEY_ENTER);
             if !is_compositor {
                 self.client_held.insert(k);
+            }
+            if k == KEY_ESC && self.pan && !already_compositor {
+                self.pan = false; // K6: Escape cancels the interaction
             }
         } else {
             self.held.remove(&k);
@@ -87,6 +94,26 @@ impl S {
         .expect("keyboard_key");
         self.advance();
         self.check(&format!("key {k} {}", if pressed { "down" } else { "up" }));
+    }
+
+    /// The middle button; the model starts a pan on a press with Super held (the CameraPan chord).
+    fn mmb(&mut self, pressed: bool) {
+        self.time_us += 1000;
+        if pressed {
+            self.pan = self.held.contains(&KEY_LEFTMETA);
+        } else {
+            self.pan = false;
+        }
+        pointer_button(
+            &mut self.ls.state,
+            &mut self.ls.input,
+            BTN_MIDDLE,
+            pressed,
+            none(),
+            self.time_us,
+        )
+        .expect("middle button");
+        self.advance();
     }
 
     fn motion(&mut self, d: (f64, f64)) {
@@ -338,16 +365,7 @@ fn plain_escape_reaches_the_focused_client() {
 fn plain_escape_cancels_active_interaction() {
     let mut s = S::new(true);
     s.key(KEY_LEFTMETA, true);
-    pointer_button(
-        &mut s.ls.state,
-        &mut s.ls.input,
-        BTN_MIDDLE,
-        true,
-        none(),
-        s.time_us,
-    )
-    .expect("pan button");
-    s.advance();
+    s.mmb(true);
     assert!(
         s.ls.state.core().interaction().active(),
         "CameraPan should be active"
@@ -362,15 +380,7 @@ fn plain_escape_cancels_active_interaction() {
         "Escape was consumed by compositor to cancel interaction"
     );
     s.key(KEY_ESC, false);
-    pointer_button(
-        &mut s.ls.state,
-        &mut s.ls.input,
-        BTN_MIDDLE,
-        false,
-        none(),
-        s.time_us,
-    )
-    .expect("pan button up");
+    s.mmb(false);
     s.key(KEY_LEFTMETA, false);
     s.assert_end();
 }
@@ -868,15 +878,7 @@ fn r08_k6_cancel_is_externally_observable() {
     s.set_focus(Some(s.e1));
     s.motion((50.0, 50.0));
     s.key(KEY_LEFTMETA, true);
-    pointer_button(
-        &mut s.ls.state,
-        &mut s.ls.input,
-        BTN_MIDDLE,
-        true,
-        none(),
-        1000,
-    )
-    .expect("button");
+    s.mmb(true);
     s.key(KEY_LEFTMETA, false);
     let cam0 = s.ls.state.core().cameras().center(0).unwrap();
     s.key(KEY_ESC, true);
@@ -884,15 +886,7 @@ fn r08_k6_cancel_is_externally_observable() {
     let m = s.ls.probe.ptr.len();
     s.motion((40.0, 0.0));
     let cam1 = s.ls.state.core().cameras().center(0).unwrap();
-    pointer_button(
-        &mut s.ls.state,
-        &mut s.ls.input,
-        BTN_MIDDLE,
-        false,
-        none(),
-        2000,
-    )
-    .expect("button");
+    s.mmb(false);
     let after: Vec<String> = s.ls.probe.ptr[m..].to_vec();
     assert_eq!(cam0, cam1, "camera kept panning after Esc cancel");
     assert!(

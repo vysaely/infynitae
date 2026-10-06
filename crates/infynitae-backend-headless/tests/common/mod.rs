@@ -228,6 +228,20 @@ impl Probe {
         idx
     }
 
+    /// Toplevel role assigned but NO initial commit yet (protocol-legal; B1 lifecycle tests).
+    pub fn toplevel_uncommitted(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        label: &'static str,
+        content: (i32, i32),
+    ) -> usize {
+        let idx = self.new_xdg_surface(qh, label, content);
+        let xdg = self.surfaces[idx].xdg.clone().expect("xdg");
+        let tl = xdg.get_toplevel(qh, idx);
+        self.surfaces[idx].toplevel = Some(tl);
+        idx
+    }
+
     /// Toplevel of `content` size with a CSD shadow; initial commit without a buffer.
     pub fn toplevel(
         &mut self,

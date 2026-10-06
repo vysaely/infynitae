@@ -661,3 +661,115 @@ fn serial_outputs_storage_bounded_at_capacity() {
         "serial outputs must be capped at 64 entries (M08)"
     );
 }
+
+/// Rule-1 provenance store SEMANTICS (B3: F15/F16), literal truth from the test's own sequence.
+/// Outputs A (1920x1080, 60 Hz), B (800x600, 60 Hz), C (1280x720, 144 Hz = the parent's frame
+/// clock), all cameras centred on the parent. A 600-wide sliding popup at x = 390 lands at
+/// x = 360 on A's viewport, -200 on B's, 40 on C's. Sequence: one click on A (s_old), 20 clicks
+/// on C, 20 clicks on A (2 records per click: 82 records, capacity 64, FIFO), pointer parked on
+/// B. Retained: the last 32 clicks (C #9..#20, A #21..#40). Expected by literal:
+/// s_old (evicted) -> pointer output B; C #5 (evicted) -> B; C #15 -> C; A #30 -> A;
+/// newest (A #40) -> A; a never-issued serial -> B. A newest-first eviction (F15) or an unknown
+/// serial aliasing the latest record (F16) cannot satisfy all six.
+#[test]
+fn serial_provenance_fifo_eviction_and_fallback() {
+    use common::input::{BTN_LEFT, none};
+    use common::{PopupSpec, output_k};
+    use infynitae_backend_headless::{pointer_button, pointer_motion};
+    use infynitae_core::geom::CanvasPos;
+    use infynitae_core::navigation::PersistedCameras;
+
+    let entries = ["A", "B", "C"]
+        .iter()
+        .map(|k| {
+            (
+                infynitae_backend_headless::VirtualOutput::key(k),
+                CanvasPos { x: 0, y: 0 },
+                1.0,
+            )
+        })
+        .collect();
+    let mut ls = Lockstep::with(
+        PersistedCameras::from_entries(entries).unwrap(),
+        &[
+            output_k("A", (1920, 1080), 120, 60_000),
+            output_k("B", (800, 600), 120, 60_000),
+            output_k("C", (1280, 720), 120, 144_000),
+        ],
+    );
+    ls.probe.auto_destroy_popups = true;
+    let qh = ls.qh.clone();
+    let w = ls.probe.toplevel(&qh, "W1", (400, 300), 0);
+    ls.pump();
+    let mut t = 10_000u64;
+    let adv = |ls: &mut Lockstep| {
+        ls.pump();
+        let n = ls.now + Duration::from_micros(16_667);
+        ls.run_until(n);
+    };
+    adv(&mut ls);
+    let motion = |ls: &mut Lockstep, t: &mut u64, d: (f64, f64)| {
+        *t += 1000;
+        pointer_motion(&mut ls.state, &mut ls.input, d, d, *t).expect("motion");
+        adv(ls);
+    };
+    // returns the press serial (the cause a client would hand to xdg_popup.grab)
+    let click = |ls: &mut Lockstep, t: &mut u64| -> u32 {
+        *t += 1000;
+        pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, true, none(), *t).expect("press");
+        adv(ls);
+        let s = ls.probe.last_serial;
+        *t += 1000;
+        pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, false, none(), *t).expect("release");
+        adv(ls);
+        s
+    };
+    motion(&mut ls, &mut t, (50.0, 50.0)); // on W1, output A
+    let s_old = click(&mut ls, &mut t); // focuses W1
+    // onto W1's area on output C (C-local x 700; W1 spans 640..1040 there): the client receives
+    // every press, so each serial is a real causing event
+    motion(&mut ls, &mut t, (2410.0, 0.0));
+    let c: Vec<u32> = (0..20).map(|_| click(&mut ls, &mut t)).collect();
+    motion(&mut ls, &mut t, (-2410.0, 0.0)); // back onto W1 on output A
+    let a: Vec<u32> = (0..20).map(|_| click(&mut ls, &mut t)).collect();
+    motion(&mut ls, &mut t, (1000.0, 0.0)); // output B (fallback)
+    assert_eq!(ls.state.serial_outputs_len(), 64);
+    let place = |ls: &mut Lockstep, serial: u32| -> Option<i32> {
+        let p = ls.probe.popup_with_grab_serial(
+            &qh,
+            "P",
+            w,
+            PopupSpec {
+                content: (600, 50),
+                shadow: 0,
+                anchor_rect: (390, 10, 1, 1),
+                slide: true,
+            },
+            serial,
+        );
+        adv(ls);
+        let x = ls.probe.surfaces[p].popup_configure.map(|c| c.0);
+        ls.probe.destroy_popup(p);
+        adv(ls);
+        x
+    };
+    let got = [
+        ("s_old (evicted)", place(&mut ls, s_old)),
+        ("C #5 (evicted)", place(&mut ls, c[4])),
+        ("C #15 (retained)", place(&mut ls, c[14])),
+        ("A #30 (retained)", place(&mut ls, a[9])),
+        ("A #40 (newest)", place(&mut ls, a[19])),
+        ("never issued", place(&mut ls, 4_000_000)),
+    ];
+    let want = [
+        Some(-200),
+        Some(-200),
+        Some(40),
+        Some(360),
+        Some(360),
+        Some(-200),
+    ];
+    for ((name, g), w) in got.iter().zip(want) {
+        assert_eq!(*g, w, "{name}: provenance resolution");
+    }
+}
