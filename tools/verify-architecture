@@ -124,6 +124,8 @@ PROBES_INVENTORY = [
      ("code", "E0624", "keyboard_handle"), "enforcement/probes/src/lib.rs"),
     ("p30_input_auth_token_send", "B protocol-side paths (INC4R-02)", PROBES, "p30_input_auth_token_send",
      ("code", "E0277", "cannot be sent between threads safely"), "enforcement/probes/src/lib.rs"),
+    ("p31_input_auth_token_reuse", "B protocol-side paths (INC-4 Round 4, C3)", PROBES, "p31_input_auth_token_reuse",
+     ("code", "E0382", "token"), "enforcement/probes/src/lib.rs"),
     ("probe_store_port_in_state", "C protocol state", WAYLAND, "probe_store_port_in_state",
      ("code", "E0277", "cannot be sent between threads safely"), "crates/infynitae-wayland/src/lib.rs"),
     ("probe_protocol_refits_camera", "D 1R re-fit", CORE, "probe_protocol_refits_camera",
@@ -188,6 +190,19 @@ RUNTIME_2I = [
 RUNTIME_INPUT3 = [
     ("T0 core", ["-p", CORE, "--lib"], "a_pan_emits_no_client_effect_and_ends_with_one_true_position"),
     ("T1 lockstep", ["-p", HEADLESS, "--test", "t1_input"], "x8_c1_keepfocus_pan_then_true_position"),
+]
+
+# INC-4 OB-30 negative controls (TST-20 NEG-1, NEG-2, OBS-1) and the foreign-grab refusal: each
+# runs UNMUTATED with its probe feature and must pass — each asserts its predicted failure mode
+# (naive set_focus leaves the grab, pointer-first teardown differs on the wire from ORDERED, a
+# replaced nested pointer grab loses routing, a foreign keyboard grab refuses the popup). The probe
+# features exist only in these test builds; the default product gate never enables them.
+POPUP_NEG_FEATURES = "probe_preemption_strategy,probe_nested_grab_keep_pointer,probe_test_keyboard_grab"
+POPUP_NEG = [
+    "neg1_naive_set_focus_fails_popup_dismissal",
+    "neg2_pointer_first_teardown_control",
+    "obs1_nested_grab_replaces_pointer_grab_observation",
+    "pf_grab_refused_when_keyboard_grabbed_by_another_sequence",
 ]
 
 # Runtime port binding (C1.5; was DEFERRED until INC-3): physical_input refuses a foreign InputPort.
@@ -553,6 +568,18 @@ def check_runtime_input3(r):
                 f"{name}: {test} did not pass:\n{text[-1500:]}")
 
 
+def check_popup_negative_controls(r):
+    print("\n[5d] OB-30 negative controls (INC-4): NEG-1, NEG-2, OBS-1 and the foreign-grab refusal run")
+    env = {"CARGO_TARGET_DIR": PROBE_TARGET}
+    for test in POPUP_NEG:
+        code, out, err = run(["cargo", "test", "--locked", "-p", HEADLESS, "--test", "t1_popup_focus",
+                              "--features", POPUP_NEG_FEATURES, test, "--", "--exact"], env=env)
+        text = out + err
+        passed = code == 0 and "test result: ok. 1 passed" in text
+        r.check(passed, f"T1 lockstep: {test} passes (predicted failure mode observed)",
+                f"T1 lockstep: {test} did not pass:\n{text[-1500:]}")
+
+
 # ------------------------------------------------------------------ [6] seeded negative controls
 
 COPY_ITEMS = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates", "enforcement"]
@@ -836,6 +863,7 @@ def main():
         check_probes(r)
         check_runtime_2i(r)
         check_runtime_input3(r)
+        check_popup_negative_controls(r)
         if skip_mutations:
             r.fail("seeded negative controls skipped (--skip-mutations): not a passing run")
         else:

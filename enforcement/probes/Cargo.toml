@@ -44,4 +44,5 @@ p27_test_set_keyboard_grab_in_production = []
 p28_portless_sync_seat_key = []
 p29_keyboard_handle_outside_adapter = []
 p30_input_auth_token_send = []
+p31_input_auth_token_reuse = []
 

@@ -216,3 +216,12 @@ pub fn handler() {
     fn assert_send<T: Send>() {}
     assert_send::<infynitae_core::InputAuthToken>();
 }
+
+/// p31 (INC-4 Round 4, C3): an InputAuthToken authorizes exactly one seat update — it is consumed.
+/// Expected E0382 (use of moved value).
+#[cfg(feature = "p31_input_auth_token_reuse")]
+pub fn handler(state: &mut infynitae_wayland::WaylandState, port: &infynitae_core::InputPort) {
+    let token = state.core().verify_input_port(port, 30, true).unwrap();
+    let _ = state.sync_seat_key(token);
+    let _ = state.sync_seat_key(token);
+}
