@@ -1,0 +1,33 @@
+HEAD 6819c8a, ulimit -n 1024, scratch worktree (t3_attacks.rs.txt)
+
+t99a nested pan            : grabbed before=true after-motion=true wire=[] (pointer over destroyed-popup area)
+t99b 3-level focus transfer: grabbed before=true after-motion=true wire=["leave W2","frame"]
+t99c dead popup + reconnect: grabbed before=true after-motion=true wire=[motion, relative, frame, button pressed, frame, button released, frame]
+t99d single popup pan      : grabbed before=true after-motion=true wire=[]
+t99e lockout persistence   : buttons delivered after 10 clicks=0/20, after Super+Enter=0/2, after reconnect=2/2
+t99f CONTROL no popup      : grabbed=false; motion + both buttons delivered
+t99g client closes its own popup (no pan): grabbed=true; wire=["leave W1","frame"]
+t99h click-outside dismissal: grabbed=false; wire=[]
+t99i client closes menu, 5 x (motion, click): iter0 ["leave W1","frame"], iters 1-4 [] ; grabbed=false from iter0
+t99j grab=false/true identical: inside former popup area -> 0 buttons; outside -> 2 buttons; after parent commit -> 2 buttons
+t99k popups placed AWAY from the pointer:
+  single-pan : grabbed after pan=true; clicks delivered normally; grabbed still true after clicks (stale PopupPointerGrab persists)
+  nested-pan : same as single
+  3-level focus transfer: grabbed after transfer=true; first click delivers an extra synthetic "motion 51,51" (unset_grab restore), then grab gone
+
+T17 (R17 loop, 150 cycles): @10/@150 (fds,history,keys,buttons,elements,ptr,kb,xkb):
+  [(10,1,0,0,1,false,false,(64,0,0,0)), (10,1,0,0,1,false,false,(64,0,0,0))]; violations=0
+  -> zero protocol violations; bounded; seat XKB left with Super depressed (0x40) by the loop's repeated Super press.
+T04 duplicate modifier press: "dup modifier" seat dep=1 client dep=0x1; "dup Super" seat dep=0x40 client dep=0x40 after release.
+T02b foreign-Core token: xkb (0,0,0,0) -> (1,0,0,1); client told dep=0x1.
+T02c retained token: xkb (0,0,0,0) -> (1,0,0,1); InputAuthToken is Send.
+T11 delivered (want 2): plain Esc 2, idle Super+Esc 2, idle Super+B 0, Super+K 2, Shift 2; configured Super+Enter 0 (correct).
+
+Probe-feature run: t1_popup_focus with probe_preemption_strategy,probe_nested_grab_keep_pointer,probe_test_keyboard_grab:
+  31 passed (neg1, neg2, obs1, pf_grab_refused_when_keyboard_grabbed_by_another_sequence included).
+
+Capability-equivalent bypass probe (backend production code, all compile):
+  keyboard_handle().input_forward(..)  -> passes all source rules
+  keyboard_handle().set_focus(..)      -> passes all source rules
+  seat().get_pointer().unset_grab(..)  -> CAUGHT by smithay-pointer-only-in-adapter-pointer (2 FAIL lines)
+  sync_seat_key(&retained_token, ..)   -> compiles

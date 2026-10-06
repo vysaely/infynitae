@@ -1,0 +1,5 @@
+Pointer lockout probe (snapshot-logo pan + popup, then 5 clicks):
+2bca2b9: LOCKOUT pan=true buttons delivered after pan dismissal: 0/10
+d5b7b95: LOCKOUT pan=true buttons delivered after pan dismissal: 0/10
+Ratified INC-3 baseline 1ee520fa (no grabs; plain popup destroyed): BASELINE HOLE buttons delivered 0/6 wire=["leave W1", "frame"]
+Root cause isolated by t99j (HEAD): clicks inside the destroyed popup area lost, outside delivered, cured by a parent commit; identical with and without a grab.

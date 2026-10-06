@@ -1,0 +1,32 @@
+mod common;
+use std::time::Duration;
+use common::input::{BTN_LEFT, BTN_MIDDLE, none, logo};
+use common::{Lockstep, PopupSpec, output};
+use infynitae_backend_headless::{pointer_button, pointer_motion};
+
+/// Pointer lockout probe for older commits (snapshot `logo` acquires the pan there).
+#[test]
+fn lockout_after_pan_dismissal() {
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    ls.probe.auto_destroy_popups = true;
+    let qh = ls.qh.clone();
+    let w = ls.probe.toplevel(&qh, "W1", (400, 300), 0);
+    let mut t = 10_000u64;
+    macro_rules! adv { () => {{ ls.pump(); let n = ls.now + Duration::from_micros(16_667); ls.run_until(n); }} }
+    adv!();
+    t += 1000; pointer_motion(&mut ls.state, &mut ls.input, (50.0, 50.0), (50.0, 50.0), t).unwrap(); adv!();
+    t += 1000; pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, true, none(), t).unwrap(); adv!();
+    t += 1000; pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, false, none(), t).unwrap(); adv!();
+    ls.probe.popup_with_grab(&qh, "P", w, PopupSpec { content: (120, 80), shadow: 0, anchor_rect: (10, 10, 1, 1), slide: false }); adv!();
+    t += 1000; pointer_button(&mut ls.state, &mut ls.input, BTN_MIDDLE, true, logo(), t).unwrap(); adv!();
+    let pan = ls.state.core().interaction().active();
+    t += 1000; pointer_button(&mut ls.state, &mut ls.input, BTN_MIDDLE, false, logo(), t).unwrap(); adv!();
+    let m = ls.probe.ptr.len();
+    for _ in 0..5 {
+        t += 1000; pointer_motion(&mut ls.state, &mut ls.input, (3.0, 2.0), (3.0, 2.0), t).unwrap(); adv!();
+        t += 1000; pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, true, none(), t).unwrap(); adv!();
+        t += 1000; pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, false, none(), t).unwrap(); adv!();
+    }
+    let b = ls.probe.ptr[m..].iter().filter(|l| l.starts_with("button")).count();
+    println!("LOCKOUT pan={pan} buttons delivered after pan dismissal: {b}/10; dones={:?}", ls.probe.popup_dones);
+}

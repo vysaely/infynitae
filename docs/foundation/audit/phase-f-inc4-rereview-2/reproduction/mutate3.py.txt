@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Third-review INC-4 mutations: each applied alone in a disposable worktree; detector = the shipped
+workspace suite at default features (what CI runs). DETECTED / MISSED / BROKEN."""
+import json, re, subprocess, sys, pathlib, os
+ROOT = pathlib.Path("/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/r3/mut")
+W = "crates/infynitae-wayland/src"; C = "crates/infynitae-core/src"; H = "crates/infynitae-backend-headless/src"
+KBU = """                                if kb.has_grab(g.serial())
+                                    || g.previous_serial().is_some_and(|ps| kb.has_grab(ps))
+                                {
+                                    self.keyboard_unset_grab();
+                                }"""
+PTU = """                                if self.pointer_has_grab(g.serial())
+                                    || g.previous_serial()
+                                        .is_some_and(|ps| self.pointer_has_grab(ps))
+                                {
+                                    self.pointer_unset_grab(serial, 0);
+                                }"""
+ORD = KBU + "\n                                // 3. pointer.unset_grab (only if pointer has this grab)\n" + PTU
+DIS_KB = """                        if kb.has_grab(g.serial())
+                            || g.previous_serial().is_some_and(|ps| kb.has_grab(ps))
+                        {
+                            self.keyboard_unset_grab();
+                        }
+                    }
+                    let target_surface"""
+M = [
+ ("N08", "OB-4 dismissal skips keyboard unset", f"{W}/outputs.rs", DIS_KB, "                        let _ = kb;\n                    }\n                    let target_surface"),
+ ("N09a", "ordered: focus set before ungrab (outside the instrumented window)", f"{W}/outputs.rs",
+  "                            self.popup_preemption_pending = true;\n                            g.ungrab(PopupUngrabStrategy::All);",
+  "                            kb.set_focus(self, target_surface.clone(), serial);\n                            self.popup_preemption_pending = true;\n                            g.ungrab(PopupUngrabStrategy::All);"),
+ ("N09b", "ordered: focus set after ungrab, before keyboard unset", f"{W}/outputs.rs", ORD,
+  "                                kb.set_focus(self, target_surface.clone(), serial);\n" + ORD),
+ ("N09c", "ordered: focus set after keyboard unset, before pointer unset", f"{W}/outputs.rs", ORD,
+  KBU + "\n                                kb.set_focus(self, target_surface.clone(), serial);\n" + PTU),
+ ("N09d", "ordered: pointer unset before keyboard unset", f"{W}/outputs.rs", ORD, PTU + "\n" + KBU),
+ ("N09e", "ordered: pointer unset omitted", f"{W}/outputs.rs", ORD, KBU),
+ ("N09f", "ordered: keyboard unset omitted", f"{W}/outputs.rs", ORD, PTU),
+ ("N09g", "ordered: previous_serial clause dropped (pointer)", f"{W}/outputs.rs", PTU,
+  "                                if self.pointer_has_grab(g.serial())\n                                {\n                                    self.pointer_unset_grab(serial, 0);\n                                }"),
+ ("N17", "set_focus port check removed", f"{C}/lib.rs",
+  "    ) -> Result<Vec<protocol::Effect>, EntryError> {\n        self.check_port(port)?;", "    ) -> Result<Vec<protocol::Effect>, EntryError> {\n        let _ = port;"),
+ ("N18", "set_focus mapped check removed", f"{C}/lib.rs",
+  "            && self.stage.state(id) != Some(stage::Lifecycle::Mapped)", "            && false"),
+ ("N21", "rule-1 causal wiring removed (causing output = None)", f"{W}/handlers.rs",
+  "        let causing_output = serial\n            .and_then(|s| self.serial_output(s))\n            .or_else(|| self.core.pointer_output());",
+  "        let causing_output: Option<infynitae_core::output::OutputId> = { let _ = serial; None };"),
+ ("M01", "verify_input_port mints without checking the port", f"{C}/lib.rs",
+  "        self.check_port(port)?;\n        Ok(InputAuthToken { _private: () })", "        let _ = port;\n        Ok(InputAuthToken { _private: () })"),
+ ("M03", "OB-4: focus reconciliation after dismissal skipped", f"{W}/outputs.rs",
+  "                    let kb = self.keyboard_handle();\n                    kb.set_focus(self, target_surface, serial);\n                }\n                Effect::KeyboardForward",
+  "                    let _ = (target_surface, serial);\n                }\n                Effect::KeyboardForward"),
+ ("M04", "OB-4: reconcile to the wrong target (None)", f"{W}/outputs.rs",
+  "                    let kb = self.keyboard_handle();\n                    kb.set_focus(self, target_surface, serial);\n                }\n                Effect::KeyboardForward",
+  "                    let _ = target_surface;\n                    let kb = self.keyboard_handle();\n                    kb.set_focus(self, None, serial);\n                }\n                Effect::KeyboardForward"),
+ ("M05", "duplicate client press guard removed", f"{C}/entry.rs",
+  "        if self.input.key_ownership.owner(key) == Some(Owner::Client) {\n            return Vec::new();",
+  "        if false && self.input.key_ownership.owner(key) == Some(Owner::Client) {\n            return Vec::new();"),
+ ("M06", "backend modifier snapshot restored as authority", f"{H}/lib.rs",
+  "        modifiers: seat_mods,", "        modifiers: _modifiers,"),
+ ("M07", "rule 1: current pointer output instead of the causal serial output", f"{W}/handlers.rs",
+  "        let causing_output = serial\n            .and_then(|s| self.serial_output(s))\n            .or_else(|| self.core.pointer_output());",
+  "        let causing_output = { let _ = serial; self.core.pointer_output() };"),
+ ("M08", "causal serial records unbounded", f"{W}/lib.rs",
+  "            self.serial_outputs.pop_front();", "            let _ = 0;"),
+ ("M10", "reconnect does not restore popup grab semantics", f"{W}/pointer.rs",
+  "                let grab_opt = self.popup_grab.clone();", "                let grab_opt: Option<smithay::desktop::PopupGrab<WaylandState>> = None;"),
+ ("M12", "unconfigured Super+key swallowed", f"{C}/input/keys.rs",
+  "            return Some(b.action);\n        }\n    }\n    None", "            return Some(b.action);\n        }\n    }\n    if mods.logo && key != KEY_LEFTMETA { return Some(KeyAction::Noop); }\n    None"),
+ ("M13", "OB-4 leaks synthetic pointer replay", f"{W}/outputs.rs",
+  "                    let kb = self.keyboard_handle();\n                    kb.set_focus(self, target_surface, serial);\n                }\n                Effect::KeyboardForward",
+  "                    self.pointer_unset_grab(SERIAL_COUNTER.next_serial(), 0);\n                    let kb = self.keyboard_handle();\n                    kb.set_focus(self, target_surface, serial);\n                }\n                Effect::KeyboardForward"),
+ ("M14", "K3 observe mode disabled", f"{C}/entry.rs", "        if mods_changed {", "        if false && mods_changed {"),
+ ("M15", "Esc never cancels (K6)", f"{C}/input/keys.rs", "        return if interaction_active {", "        return if false {"),
+ ("M16", "zero-output begin: popup keyboard refocus removed", f"{W}/pointer.rs",
+  "                if let Some(target) = popup_target {", "                if let Some(target) = popup_target.filter(|_| false) {"),
+ ("M17", "refusal on unfocused root without popup_done", f"{W}/handlers.rs",
+  "        if self.core.focus().target() != Some(elem_id) {\n            surface.send_popup_done();", "        if self.core.focus().target() != Some(elem_id) {\n            let _ = &surface;"),
+ ("M18", "grab re-placement with causal serial removed", f"{W}/handlers.rs",
+  "            self.place_popup(&surface, pos, Some(serial));", "            self.place_popup(&surface, pos, None);"),
+ ("M19", "button serials not recorded", f"{W}/pointer.rs",
+  "                    self.record_serial_output(serial, out);", "                    let _ = (serial, out);"),
+]
+
+def run_suite():
+    cmd = "ulimit -n 1024; CARGO_BUILD_JOBS=4 cargo test --locked --workspace --no-fail-fast 2>&1"
+    p = subprocess.run(["bash", "-c", cmd], cwd=ROOT, capture_output=True, text=True)
+    out = p.stdout + p.stderr
+    failed = sorted(set(re.findall(r"^test (\S+) \.\.\. FAILED", out, re.M)))
+    return p.returncode, failed, ("error[E" in out or "could not compile" in out), out
+
+only = set(sys.argv[1:])
+res = []
+for mid, desc, f, old, new in M:
+    if only and mid not in only: continue
+    path = ROOT / f; src = path.read_text(); n = src.count(old)
+    if n != 1:
+        res.append((mid, desc, "BROKEN", f"anchor count {n}")); print(mid, "BROKEN anchor", n, flush=True); continue
+    path.write_text(src.replace(old, new))
+    try:
+        rc, failed, cerr, out = run_suite()
+    finally:
+        path.write_text(src)
+    if cerr:
+        v, d = "BROKEN", "; ".join(l for l in out.splitlines() if l.startswith("error"))[:300]
+    elif failed: v, d = "DETECTED", ", ".join(failed)
+    elif rc == 0: v, d = "MISSED", "suite green"
+    else: v, d = "BROKEN", f"rc={rc}"
+    res.append((mid, desc, v, d)); print(f"{mid:5} {v:9} {desc} :: {d}", flush=True)
+(ROOT.parent / "mutations3.json").write_text(json.dumps(res, indent=1))
+subprocess.run(["git", "status", "--porcelain"], cwd=ROOT)

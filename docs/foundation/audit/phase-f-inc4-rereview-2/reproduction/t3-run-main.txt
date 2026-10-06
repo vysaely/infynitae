@@ -1,0 +1,52 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.02s
+     Running tests/t3_attacks.rs (target/debug/deps/t3_attacks-7ff0c5993f2ef171)
+test common::oracle::tests::rounding_helpers ... ok
+test t01a2_pan_dismissal_client_keeps_popup_alive ... ok
+test t01a_pan_dismissal_popup_destroyed_then_key ... ok
+test t01b_nested_pan_dismissal ... 
+thread 't01b_nested_pan_dismissal' (170026) panicked at crates/infynitae-backend-headless/tests/t3_attacks.rs:185:5:
+test t01c_root_unmaps_during_pan_after_dismissal ... ok
+test t01d_root_destroyed_during_pan_after_dismissal ... ok
+test t01e_dismissal_then_focus_change ... ok
+test t01f_dismissal_zero_outputs_reconnect ... ok
+test t01g_stress_160_cycles_zero_violations ... T01G violations=0 history=1 keys=0 buttons=0 kbgrab=false ptrgrab=true
+test t02_rejected_events_leave_no_trace ... T02 foreign press -> valid release: before=((0, 0, 0, 0), [], 10) after=((0, 0, 0, 0), [], 10) viol=[]
+test t02b_token_is_bound_to_its_core ... T02b xkb before=(0, 0, 0, 0) after-foreign-token=(1, 0, 0, 1) client dep=0x1
+thread 't02b_token_is_bound_to_its_core' (170169) panicked at crates/infynitae-backend-headless/tests/t3_attacks.rs:337:5:
+assertion `left == right` failed: a foreign Core's token mutated this seat's XKB state
+test t02c_retained_token_reuse_after_the_fact ... T02c retained token mutated XKB: (0, 0, 0, 0) -> (1, 0, 0, 1)
+thread 't02c_retained_token_reuse_after_the_fact' (170170) panicked at crates/infynitae-backend-headless/tests/t3_attacks.rs:353:5:
+assertion `left == right` failed: retained token is a portless XKB capability (and is Send)
+test t04_duplicate_presses ... T04 dup: viol=[] seat(dep,lat,lock,pressed)=(0, 0, 0, 0) client keys={} dep=0x0
+T04 dup x2: viol=[] seat(dep,lat,lock,pressed)=(0, 0, 0, 0) client keys={} dep=0x0
+T04 dup after modifier: viol=[] seat(dep,lat,lock,pressed)=(0, 0, 0, 0) client keys={} dep=0x0
+T04 dup after focus: viol=[] seat(dep,lat,lock,pressed)=(0, 0, 0, 0) client keys={} dep=0x0
+T04 dup modifier: viol=[] seat(dep,lat,lock,pressed)=(1, 0, 0, 0) client keys={} dep=0x1
+T04 dup Super: viol=[] seat(dep,lat,lock,pressed)=(64, 0, 0, 0) client keys={} dep=0x40
+thread 't04_duplicate_presses' (170171) panicked at crates/infynitae-backend-headless/tests/t3_attacks.rs:392:5:
+test t04b_dup_press_across_popup_and_zero_outputs ... T04b viol=[] client keys={} seat=(0, 0, 0, 0)
+test t05_rule1_variants ... T05 rows (got, want): [("click A, pointer B, clock C", Some(360), Some(360)), ("click A, pointer A", Some(360), Some(360)), ("click A, pointer C (clock)", Some(360), Some(360)), ("click A, cross x7, pointer B", Some(360), Some(360)), ("click A (serial used), later click B", Some(360), Some(360))]
+test t05b_rule1_edges ... T05b causing-output-removed=Some(40) (want 40) key-serial=Some(-200) evicted-serial=Some(-200)
+test t06a_three_level_nested_distinct_serials_focus_transfer ... T06a dones=["P3", "P2", "P1"] kb=false ptr=true
+thread 't06a_three_level_nested_distinct_serials_focus_transfer' (170175) panicked at crates/infynitae-backend-headless/tests/t3_attacks.rs:622:5:
+test t06b_zero_output_cycles_keep_grab_semantics ... T06b after 3 cycles kb_grab=true ptr_grab=true dones=["P"] viol=[]
+test t06c_nested_zero_output_reconnect_then_focus_transfer ... T06c dones=["P2", "P1"] kb=false ptr=false
+test t06d_implicit_button_grab_then_zero_outputs_with_popup ... T06d zero-output grab present=true after reconnect ptr=true viol=[]
+thread 't06d_implicit_button_grab_then_zero_outputs_with_popup' (170178) panicked at crates/infynitae-backend-headless/tests/t3_attacks.rs:684:5:
+assertion failed: zero_grab && !r.ptr_grabbed()
+test t07_modifier_single_authority_and_ordering ... T07 [("snapshot logo / seat none", false, false), ("seat logo / snapshot none", true, true), ("MMB then Super", false, false), ("Super down/up then MMB", false, false), ("Super, focus transfer, MMB", true, true), ("Super, zero outputs, reconnect, MMB", true, true)]
+test t10_reconnect_with_popup_emits_same_pointer_wire_as_control ... T10 control=["leave W1", "frame", "enter W1 0,0", "frame"]
+    popup  =["leave W1", "frame", "enter W1 0,0", "frame"]
+test t10b_nested_pan_dismissal_no_pointer_events ... T10b during=[]
+test t11_unconfigured_keys_are_never_swallowed ... T11 delivered (want 2 each): [("plain Esc", 2), ("idle Super+Esc", 2), ("idle Super+B", 0), ("Super+K (unconfigured)", 2), ("Shift alone", 2)]; configured Super+Enter delivered=0 (want 0)
+thread 't11_unconfigured_keys_are_never_swallowed' (170182) panicked at crates/infynitae-backend-headless/tests/t3_attacks.rs:764:5:
+test t13_preemption_wire_order_single_and_nested ... T13 single=["popup_done P1", "destroy_popup P1", "wl_keyboard.leave P1 (in-flight after destroy)", "wl_keyboard.enter W1 keys={}", "wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0", "PTR [\"motion 50,50\"]", "GRABS kb=false ptr=false"]
+    nested=["popup_done P2", "destroy_popup P2", "popup_done P1", "destroy_popup P1", "wl_keyboard.leave P2 (in-flight after destroy)", "wl_keyboard.enter W1 keys={}", "wl_keyboard.modifiers dep=0x0 lat=0x0 lock=0x0", "PTR [\"motion 50,50\"]", "GRABS kb=false ptr=false"]
+    t01b_nested_pan_dismissal
+    t02b_token_is_bound_to_its_core
+    t02c_retained_token_reuse_after_the_fact
+    t04_duplicate_presses
+    t06a_three_level_nested_distinct_serials_focus_transfer
+    t06d_implicit_button_grab_then_zero_outputs_with_popup
+    t11_unconfigured_keys_are_never_swallowed
+test result: FAILED. 18 passed; 7 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.54s

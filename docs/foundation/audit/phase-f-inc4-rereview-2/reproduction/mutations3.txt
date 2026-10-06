@@ -1,0 +1,27 @@
+N08   DETECTED  OB-4 dismissal skips keyboard unset :: r16_keyboard_focus_after_pan_dismissal
+N09a  MISSED    ordered: focus set before ungrab (outside the instrumented window) :: suite green
+N09b  MISSED    ordered: focus set after ungrab, before keyboard unset :: suite green
+N09c  MISSED    ordered: focus set after keyboard unset, before pointer unset :: suite green
+N09d  MISSED    ordered: pointer unset before keyboard unset :: suite green
+N09e  DETECTED  ordered: pointer unset omitted :: pf1_grab_active_core_focuses_w2_ordered, r09_nested_preemption_removes_retained_pointer_grab, r09b_nested_preemption_with_distinct_serials
+N09f  MISSED    ordered: keyboard unset omitted :: suite green
+N09g BROKEN anchor 2
+N17   DETECTED  set_focus port check removed :: set_focus_rejects_foreign_port
+N18   DETECTED  set_focus mapped check removed :: r07_set_focus_on_unmapped_is_refused
+N21   DETECTED  rule-1 causal wiring removed (causing output = None) :: r15_rule1_uses_the_causing_event_output
+M01   DETECTED  verify_input_port mints without checking the port :: r01_foreign_port_key_leaves_no_xkb_trace, r02_portless_sync_seat_key_requires_token
+M03   DETECTED  OB-4: focus reconciliation after dismissal skipped :: r10_pan_with_popup_no_synthetic_events_and_clean_return, r16_keyboard_focus_after_pan_dismissal
+M04   DETECTED  OB-4: reconcile to the wrong target (None) :: r10_pan_with_popup_no_synthetic_events_and_clean_return, r16_keyboard_focus_after_pan_dismissal
+M05   DETECTED  duplicate client press guard removed :: r03_repeated_client_press_is_not_duplicated
+M06   DETECTED  backend modifier snapshot restored as authority :: atk13_pan_modifier_comes_from_the_seat_xkb_state, plain_escape_cancels_active_interaction, r04_snapshot_logo_without_seat_super_does_not_pan, r05_temporal_modifier_boundaries, r08_k6_cancel_is_externally_observable, r10_pan_with_popup_no_synthetic_events_and_clean_return, r16_keyboard_focus_after_pan_dismissal
+M07   DETECTED  rule 1: current pointer output instead of the causal serial output :: r15_rule1_uses_the_causing_event_output
+M08   MISSED    causal serial records unbounded :: suite green
+M10   DETECTED  reconnect does not restore popup grab semantics :: r12_popup_grab_semantics_across_zero_outputs
+M12   DETECTED  unconfigured Super+key swallowed :: input::keys::tests::binding_resolution_honours_logo_modifier, k2_modifier_held_while_another_client_key_pressed
+M13   DETECTED  OB-4 leaks synthetic pointer replay :: atk09_pan_acquisition_dismissal_emits_no_pointer_events, r10_pan_with_popup_no_synthetic_events_and_clean_return
+M14   DETECTED  K3 observe mode disabled :: focus_next_skips_unmapped_elements, k2_modifier_held_while_another_client_key_pressed, k3_compositor_binding_super_b_consumed, k4_focus_transition_binding_super_enter_while_modifier_held, k6_focused_client_destroyed_while_shift_a_held, k7_interaction_cancelled_while_compositor_keys_held, k8_binding_on_modifier_key_with_k3_observe_mode, k9_keyboard_focus_lost_and_regained, plain_escape_cancels_active_interaction, r05_temporal_modifier_boundaries, r08_k6_cancel_is_externally_observable, release_follows_press_owner_after_modifier_change, repeat_press_of_compositor_owned_key_does_not_leak
+M15   DETECTED  Esc never cancels (K6) :: input::keys::tests::binding_resolution_honours_logo_modifier, plain_escape_cancels_active_interaction, r08_k6_cancel_is_externally_observable
+M16   DETECTED  zero-output begin: popup keyboard refocus removed :: atk15_output_removal_keeps_popup_keyboard_route
+M17   DETECTED  refusal on unfocused root without popup_done :: atk11_refused_grab_dismisses_the_popup, pf_wsm7_grab_on_unmapped_parent_handled_gracefully
+M18   DETECTED  grab re-placement with causal serial removed :: r15_rule1_uses_the_causing_event_output
+M19   DETECTED  button serials not recorded :: r15_rule1_uses_the_causing_event_output

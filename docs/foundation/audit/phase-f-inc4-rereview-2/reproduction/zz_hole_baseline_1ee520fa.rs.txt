@@ -1,0 +1,33 @@
+mod common;
+use std::time::Duration;
+use common::input::{BTN_LEFT, none};
+use common::{Lockstep, PopupSpec, output};
+use infynitae_backend_headless::{pointer_button, pointer_motion};
+
+/// Destroyed popup hit-test hole on the ratified INC-3 baseline (no grabs exist there).
+#[test]
+fn stale_popup_hole_on_baseline() {
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    let qh = ls.qh.clone();
+    let w = ls.probe.toplevel(&qh, "W1", (400, 300), 0);
+    let mut t = 10_000u64;
+    macro_rules! adv { () => {{ ls.pump(); let n = ls.now + Duration::from_micros(16_667); ls.run_until(n); }} }
+    adv!();
+    t += 1000; pointer_motion(&mut ls.state, &mut ls.input, (50.0, 50.0), (50.0, 50.0), t).unwrap(); adv!();
+    let p = ls.probe.popup(&qh, "P", w, PopupSpec { content: (120, 80), shadow: 0, anchor_rect: (10, 10, 1, 1), slide: false });
+    adv!();
+    let s = &mut ls.probe.surfaces[p];
+    if let Some(pp) = s.popup.take() { pp.destroy(); }
+    if let Some(x) = s.xdg.take() { x.destroy(); }
+    s.wl.destroy();
+    adv!();
+    let m = ls.probe.ptr.len();
+    for _ in 0..3 {
+        t += 1000; pointer_motion(&mut ls.state, &mut ls.input, (1.0, 1.0), (1.0, 1.0), t).unwrap(); adv!();
+        t += 1000; pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, true, none(), t).unwrap(); adv!();
+        t += 1000; pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, false, none(), t).unwrap(); adv!();
+    }
+    let w2: Vec<String> = ls.probe.ptr[m..].to_vec();
+    let b = w2.iter().filter(|l| l.starts_with("button")).count();
+    println!("BASELINE HOLE buttons delivered {b}/6 wire={w2:?}");
+}

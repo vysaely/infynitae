@@ -1,0 +1,41 @@
+#!/usr/bin/env python3
+"""N09 family: each variant against (a) shipped t1_popup_focus WITH probe features, (b) the
+reviewer's wire-level oracles (t3 t13 / t06a / t01*). Prints failing tests and T13 wire."""
+import re, subprocess, pathlib
+S = pathlib.Path("/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/r3")
+ns = {}
+exec((S / "mutate3.py").read_text().split("def run_suite")[0], ns)
+ROOT = S / "probe"
+M = {m[0]: m for m in ns["M"]}
+PTU_PF = """                                if self.pointer_has_grab(g.serial())
+                                    || g.previous_serial()
+                                        .is_some_and(|ps| self.pointer_has_grab(ps))
+                                {
+                                    self.pointer_unset_grab(serial, 0);
+                                }
+                            }
+                        }
+                    }
+                    kb.set_focus(self, target_surface, serial);"""
+M["N09g"] = ("N09g", "ordered: previous_serial clause dropped (pointer, ordered branch)", ns["W"] + "/outputs.rs", PTU_PF,
+             PTU_PF.replace("                                    || g.previous_serial()\n                                        .is_some_and(|ps| self.pointer_has_grab(ps))\n", ""))
+FEAT = "probe_preemption_strategy,probe_nested_grab_keep_pointer,probe_test_keyboard_grab"
+def run(cmd):
+    p = subprocess.run(["bash", "-c", "ulimit -n 1024; CARGO_BUILD_JOBS=4 " + cmd + " 2>&1"], cwd=ROOT, capture_output=True, text=True)
+    return p.stdout
+for mid in ["BASE", "N09a", "N09b", "N09c", "N09d", "N09f", "N09g"]:
+    if mid != "BASE":
+        _, desc, f, old, new = M[mid]
+        p = ROOT / f; src = p.read_text()
+        assert src.count(old) == 1, (mid, src.count(old))
+        p.write_text(src.replace(old, new))
+    try:
+        a = ""
+        b = run("cargo test --locked -p infynitae-backend-headless --test t3_attacks t13 -- --nocapture --test-threads=1")
+    finally:
+        if mid != "BASE":
+            p.write_text(src)
+    fa = re.findall(r"^test (\S+) \.\.\. FAILED", a, re.M)
+    fb = re.findall(r"^test (\S+) \.\.\. FAILED", b, re.M)
+    t13 = [l for l in b.splitlines() if l.startswith("T13") or l.startswith("    nested=")]
+    print(f"== {mid}: shipped(probe features) failed={fa}\n   reviewer oracles failed={fb}\n   " + "\n   ".join(t13), flush=True)

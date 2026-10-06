@@ -1,0 +1,1109 @@
+//! THIRD INDEPENDENT REVIEW (INC-4 round-2, 6819c8a) — adversarial T1 attacks. Scratch only.
+//! Oracles: client wire (wl_keyboard / wl_pointer / xdg events), Smithay seat state as the
+//! protocol-side authority, hand-derived literals. Core state is only ever compared, never the
+//! expected value.
+
+mod common;
+
+use std::time::Duration;
+
+use common::input::{BTN_LEFT, BTN_MIDDLE, none};
+use common::{Lockstep, PopupSpec, output, output_k};
+use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
+use infynitae_core::geom::CanvasPos;
+use infynitae_core::input::keys::{KEY_A, KEY_B, KEY_ENTER, KEY_ESC, KEY_LEFTMETA, KEY_LEFTSHIFT};
+use infynitae_core::navigation::PersistedCameras;
+use infynitae_core::output::OutputId;
+use infynitae_core::stage::ElementId;
+use smithay::reexports::wayland_server::Resource;
+
+const KEY_K: u32 = 37;
+
+struct R {
+    ls: Lockstep,
+    t: u64,
+    w: Vec<usize>,
+    e: Vec<ElementId>,
+}
+
+impl R {
+    fn from(mut ls: Lockstep, n: usize, auto_destroy: bool) -> R {
+        ls.probe.auto_destroy_popups = auto_destroy;
+        let qh = ls.qh.clone();
+        let labels = ["W1", "W2", "W3", "W4"];
+        let mut w = Vec::new();
+        for l in labels.iter().take(n) {
+            w.push(ls.probe.toplevel(&qh, l, (400, 300), 0));
+        }
+        ls.pump();
+        let e: Vec<ElementId> = ls.state.elements().collect();
+        let mut r = R { ls, t: 10_000, w, e };
+        r.adv();
+        r
+    }
+    fn new(n: usize) -> R {
+        R::from(Lockstep::new(Some(output((1920, 1080), 120))), n, true)
+    }
+    fn adv(&mut self) {
+        self.ls.pump();
+        let t = self.ls.now + Duration::from_micros(16_667);
+        self.ls.run_until(t);
+    }
+    fn key(&mut self, k: u32, p: bool) {
+        self.t += 1000;
+        keyboard_key(&mut self.ls.state, &mut self.ls.input, k, p, self.t).expect("key");
+        self.adv();
+    }
+    fn motion(&mut self, d: (f64, f64)) {
+        self.t += 1000;
+        pointer_motion(&mut self.ls.state, &mut self.ls.input, d, d, self.t).expect("motion");
+        self.adv();
+    }
+    fn button(&mut self, b: u32, p: bool) {
+        self.t += 1000;
+        pointer_button(&mut self.ls.state, &mut self.ls.input, b, p, none(), self.t).expect("button");
+        self.adv();
+    }
+    fn focus(&mut self, t: Option<ElementId>) {
+        set_focus(&mut self.ls.state, &mut self.ls.input, t).expect("focus");
+        self.adv();
+    }
+    fn target(&self) -> Option<ElementId> {
+        self.ls.state.core().focus().target()
+    }
+    fn grab_popup(&mut self, label: &'static str, parent: usize, serial: u32) -> usize {
+        let qh = self.ls.qh.clone();
+        let p = self.ls.probe.popup_with_grab_serial(
+            &qh,
+            label,
+            parent,
+            PopupSpec { content: (120, 80), shadow: 0, anchor_rect: (10, 10, 1, 1), slide: false },
+            serial,
+        );
+        self.adv();
+        p
+    }
+    fn viol(&self) -> Vec<String> {
+        self.ls.probe.kb.violations.clone()
+    }
+    fn ptr_grabbed(&self) -> bool {
+        self.ls.state.seat().get_pointer().unwrap().is_grabbed()
+    }
+    fn kb_grabbed(&self) -> bool {
+        self.ls.state.keyboard_handle().is_grabbed()
+    }
+    fn click_focus(&mut self) -> (usize, ElementId, u32) {
+        self.motion((50.0, 50.0));
+        self.button(BTN_LEFT, true);
+        let s = self.ls.probe.last_serial;
+        self.button(BTN_LEFT, false);
+        let top = self.target().expect("click-to-focus");
+        let i = self.e.iter().position(|&x| x == top).unwrap();
+        (self.w[i], top, s)
+    }
+    fn root_of(&self, id: ElementId) -> Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface> {
+        self.ls.state.window(id).and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()))
+    }
+    /// Coherence oracle: Core target vs Smithay keyboard focus vs client logical focus, then a
+    /// probe key must be legally delivered (no wire violation) to the focused element's tree.
+    fn coherent(&mut self, ctx: &str) {
+        let tgt = self.target();
+        let sf = self.ls.state.keyboard_handle().current_focus();
+        let root = tgt.and_then(|t| self.root_of(t));
+        let sf_alive = sf.as_ref().map(|s| s.is_alive());
+        let client = self.ls.probe.kb.active.clone();
+        let n = self.ls.probe.key_events.len();
+        let v0 = self.viol().len();
+        self.key(KEY_K, true);
+        self.key(KEY_K, false);
+        let got = self.ls.probe.key_events.len() - n;
+        let newv: Vec<String> = self.viol()[v0..].to_vec();
+        let ok = match tgt {
+            Some(_) => sf_alive == Some(true) && client.is_some() && got == 2 && newv.is_empty()
+                && (sf == root || client.as_deref().is_some_and(|c| c.starts_with('P'))),
+            None => client.is_none() && got == 0 && newv.is_empty(),
+        };
+        assert!(
+            ok,
+            "[{ctx}] INCOHERENT: core={tgt:?} smithay_is_root={} smithay_alive={sf_alive:?} client={client:?} keys_delivered={got} new_violations={newv:?}",
+            sf == root
+        );
+    }
+    fn pan_press(&mut self) {
+        self.key(KEY_LEFTMETA, true);
+        self.button(BTN_MIDDLE, true);
+    }
+    fn pan_release(&mut self) {
+        self.button(BTN_MIDDLE, false);
+        self.key(KEY_LEFTMETA, false);
+    }
+    fn xkb(&self) -> (u32, u32, u32, usize) {
+        let kb = self.ls.state.keyboard_handle();
+        let m = kb.modifier_state().serialized;
+        (m.depressed, m.latched, m.locked, kb.pressed_keys().len())
+    }
+}
+
+// ================================================================ INC4R-01 coherence
+
+#[test]
+fn t01a_pan_dismissal_popup_destroyed_then_key() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    r.grab_popup("P", wp, s);
+    r.pan_press();
+    r.motion((20.0, 0.0));
+    r.pan_release();
+    r.coherent("A");
+}
+
+#[test]
+fn t01a2_pan_dismissal_client_keeps_popup_alive() {
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    ls.probe.auto_destroy_popups = false;
+    let mut r = R::from(ls, 1, false);
+    let (wp, _, s) = r.click_focus();
+    r.grab_popup("P", wp, s);
+    r.pan_press();
+    r.pan_release();
+    r.coherent("A2 popup kept alive by client after popup_done");
+}
+
+#[test]
+fn t01b_nested_pan_dismissal() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    let p1 = r.grab_popup("P1", wp, s);
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    let s2 = r.ls.probe.last_serial;
+    r.grab_popup("P2", p1, s2);
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("P2"));
+    r.pan_press();
+    r.pan_release();
+    assert_eq!(r.ls.probe.popup_dones, vec!["P2", "P1"]);
+    assert!(!r.kb_grabbed() && !r.ptr_grabbed(), "residual grab kb={} ptr={}", r.kb_grabbed(), r.ptr_grabbed());
+    r.coherent("B");
+}
+
+#[test]
+fn t01c_root_unmaps_during_pan_after_dismissal() {
+    let mut r = R::new(2);
+    let (wp, top, s) = r.click_focus();
+    let other = if top == r.e[0] { r.e[1] } else { r.e[0] };
+    r.focus(Some(other));
+    r.focus(Some(top));
+    r.grab_popup("P", wp, s);
+    r.pan_press();
+    r.ls.probe.unmap(wp);
+    r.adv();
+    r.pan_release();
+    assert_eq!(r.target(), Some(other));
+    r.coherent("C");
+}
+
+#[test]
+fn t01d_root_destroyed_during_pan_after_dismissal() {
+    let mut r = R::new(2);
+    let (wp, top, s) = r.click_focus();
+    let other = if top == r.e[0] { r.e[1] } else { r.e[0] };
+    r.focus(Some(other));
+    r.focus(Some(top));
+    r.grab_popup("P", wp, s);
+    r.pan_press();
+    r.ls.probe.destroy_toplevel(wp);
+    r.adv();
+    r.pan_release();
+    assert_eq!(r.target(), Some(other));
+    r.coherent("D");
+}
+
+#[test]
+fn t01e_dismissal_then_focus_change() {
+    let mut r = R::new(2);
+    let (wp, top, s) = r.click_focus();
+    let other = if top == r.e[0] { r.e[1] } else { r.e[0] };
+    r.grab_popup("P", wp, s);
+    r.pan_press();
+    r.pan_release();
+    r.focus(Some(other));
+    r.coherent("E");
+}
+
+#[test]
+fn t01f_dismissal_zero_outputs_reconnect() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    r.grab_popup("P", wp, s);
+    r.pan_press();
+    r.pan_release();
+    let o = r.ls.output();
+    r.ls.disconnect(o);
+    r.adv();
+    r.coherent("F zero outputs");
+    r.ls.connect(&output((1920, 1080), 120));
+    r.adv();
+    r.coherent("F reconnected");
+}
+
+#[test]
+fn t01g_stress_160_cycles_zero_violations() {
+    let mut r = R::new(2);
+    let mut cur = r.ls.output();
+    for i in 0..160 {
+        let (wp, _, s) = r.click_focus();
+        let p1 = r.grab_popup("P1", wp, s);
+        if i % 2 == 0 {
+            r.key(KEY_A, true);
+            r.key(KEY_A, false);
+            let s2 = r.ls.probe.last_serial;
+            r.grab_popup("P2", p1, s2);
+        }
+        r.pan_press();
+        r.motion((1.0, 0.0));
+        r.pan_release();
+        r.motion((-1.0, 0.0));
+        if i % 5 == 0 {
+            r.ls.disconnect(cur);
+            r.adv();
+            cur = r.ls.connect(&output((1920, 1080), 120));
+            r.adv();
+        }
+        r.key(KEY_K, true);
+        r.key(KEY_K, false);
+    }
+    let core = r.ls.state.core();
+    println!(
+        "T01G violations={} history={} keys={} buttons={} kbgrab={} ptrgrab={}",
+        r.viol().len(), core.focus().history().len(), core.keys().pressed().len(), core.buttons().pressed().len(), r.kb_grabbed(), r.ptr_grabbed()
+    );
+    assert!(r.viol().is_empty(), "protocol violations: {} first={:?}", r.viol().len(), r.viol().first());
+}
+
+// ================================================================ INC4R-02 fail-closed
+
+fn foreign() -> Lockstep {
+    Lockstep::new(Some(output((1920, 1080), 120)))
+}
+
+#[test]
+fn t02_rejected_events_leave_no_trace() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    let mut f = foreign();
+    let snap = |r: &R| (r.xkb(), r.ls.state.core().keys().pressed().to_vec(), r.ls.probe.kb_log.len());
+    let cases: Vec<(&str, u32, bool, bool)> = vec![
+        ("foreign Shift press", KEY_LEFTSHIFT, true, false),
+        ("foreign Super press", KEY_LEFTMETA, true, false),
+        ("foreign A press", KEY_A, true, false),
+        ("foreign A release", KEY_A, false, false),
+    ];
+    for (name, k, p, _) in cases {
+        let before = snap(&r);
+        let res = keyboard_key(&mut r.ls.state, &mut f.input, k, p, 1);
+        r.adv();
+        assert!(res.is_err(), "{name}: accepted");
+        assert_eq!(snap(&r), before, "{name}: rejected event left a trace");
+    }
+    // valid press -> foreign release (must not release) -> valid release
+    r.key(KEY_LEFTSHIFT, true);
+    let held = snap(&r);
+    assert!(keyboard_key(&mut r.ls.state, &mut f.input, KEY_LEFTSHIFT, false, 1).is_err());
+    r.adv();
+    assert_eq!(snap(&r), held, "foreign release changed state of a valid press");
+    r.key(KEY_LEFTSHIFT, false);
+    // foreign press -> valid release (orphan): no client event
+    let before = snap(&r);
+    assert!(keyboard_key(&mut r.ls.state, &mut f.input, KEY_LEFTSHIFT, true, 1).is_err());
+    r.key(KEY_LEFTSHIFT, false);
+    let after = snap(&r);
+    println!("T02 foreign press -> valid release: before={before:?} after={after:?} viol={:?}", r.viol());
+    assert_eq!(after.0, before.0, "XKB changed");
+    assert!(r.viol().is_empty(), "{:?}", r.viol());
+}
+
+/// INC4R-02 capability binding: a token minted by ANOTHER Core must not authorize this seat.
+#[test]
+fn t02b_token_is_bound_to_its_core() {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    let f = foreign();
+    let token = f.state.core().verify_input_port(&f.input).expect("foreign core mints for its own port");
+    let before = r.xkb();
+    let _ = r.ls.state.sync_seat_key(&token, KEY_LEFTSHIFT, true);
+    let after = r.xkb();
+    r.focus(Some(r.e[1]));
+    println!("T02b xkb before={before:?} after-foreign-token={after:?} client dep={:#x}", r.ls.probe.kb.depressed);
+    assert_eq!(after, before, "a foreign Core's token mutated this seat's XKB state");
+}
+
+/// INC4R-02 token lifetime: a token outlives the port check and can be reused indefinitely.
+#[test]
+fn t02c_retained_token_reuse_after_the_fact() {
+    let mut r = R::new(1);
+    r.focus(Some(r.e[0]));
+    let token = r.ls.state.core().verify_input_port(&r.ls.input).unwrap();
+    // ... arbitrarily later, with no port in hand:
+    let before = r.xkb();
+    let _ = r.ls.state.sync_seat_key(&token, KEY_LEFTSHIFT, true);
+    let after = r.xkb();
+    println!("T02c retained token mutated XKB: {before:?} -> {after:?}");
+    fn assert_send<T: Send>() {}
+    assert_send::<infynitae_core::InputAuthToken>();
+    assert_eq!(after, before, "retained token is a portless XKB capability (and is Send)");
+}
+
+// ================================================================ INC4R-04 / K1 / M12
+
+fn kb_seq(steps: &[(&str, u32, bool)]) -> R {
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    for &(op, k, p) in steps {
+        match op {
+            "key" => r.key(k, p),
+            "focus2" => r.focus(Some(r.e[1])),
+            _ => unreachable!(),
+        }
+    }
+    r
+}
+
+#[test]
+fn t04_duplicate_presses() {
+    let seqs: Vec<(&str, Vec<(&str, u32, bool)>)> = vec![
+        ("dup", vec![("key", KEY_A, true), ("key", KEY_A, true), ("key", KEY_A, false)]),
+        ("dup x2", vec![("key", KEY_A, true), ("key", KEY_A, true), ("key", KEY_A, true), ("key", KEY_A, false)]),
+        ("dup after modifier", vec![("key", KEY_A, true), ("key", KEY_LEFTSHIFT, true), ("key", KEY_A, true), ("key", KEY_A, false), ("key", KEY_LEFTSHIFT, false)]),
+        ("dup after focus", vec![("key", KEY_A, true), ("focus2", 0, false), ("key", KEY_A, true), ("key", KEY_A, false)]),
+        ("dup modifier", vec![("key", KEY_LEFTSHIFT, true), ("key", KEY_LEFTSHIFT, true), ("key", KEY_LEFTSHIFT, false)]),
+        ("dup Super", vec![("key", KEY_LEFTMETA, true), ("key", KEY_LEFTMETA, true), ("key", KEY_LEFTMETA, false)]),
+    ];
+    let mut fails = Vec::new();
+    for (name, s) in seqs {
+        let r = kb_seq(&s);
+        let x = r.xkb();
+        let c = (&r.ls.probe.kb.keys, r.ls.probe.kb.depressed);
+        let ok = r.viol().is_empty() && x.0 == 0 && x.3 == 0 && c.0.is_empty() && c.1 == 0;
+        println!("T04 {name}: viol={:?} seat(dep,lat,lock,pressed)={x:?} client keys={:?} dep={:#x}", r.viol(), c.0, c.1);
+        if !ok {
+            fails.push(name);
+        }
+    }
+    assert!(fails.is_empty(), "duplicate-press sequences left inconsistent state: {fails:?}");
+}
+
+#[test]
+fn t04b_dup_press_across_popup_and_zero_outputs() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    r.key(KEY_A, true);
+    r.grab_popup("P", wp, s);
+    r.key(KEY_A, true);
+    let o = r.ls.output();
+    r.ls.disconnect(o);
+    r.adv();
+    r.key(KEY_A, true);
+    r.ls.connect(&output((1920, 1080), 120));
+    r.adv();
+    r.key(KEY_A, false);
+    println!("T04b viol={:?} client keys={:?} seat={:?}", r.viol(), r.ls.probe.kb.keys, r.xkb());
+    assert!(r.viol().is_empty() && r.ls.probe.kb.keys.is_empty());
+}
+
+// ================================================================ INC4R-07 modifiers
+
+fn pan_active(r: &R) -> bool {
+    r.ls.state.core().interaction().active()
+}
+
+#[test]
+fn t07_modifier_single_authority_and_ordering() {
+    let mut res = Vec::new();
+    // snapshot says logo, seat says none
+    {
+        let mut r = R::new(1);
+        r.focus(Some(r.e[0]));
+        r.motion((50.0, 50.0));
+        r.t += 1000;
+        pointer_button(&mut r.ls.state, &mut r.ls.input, BTN_MIDDLE, true, common::input::logo(), r.t).unwrap();
+        res.push(("snapshot logo / seat none", pan_active(&r), false));
+    }
+    // seat logo, snapshot none
+    {
+        let mut r = R::new(1);
+        r.focus(Some(r.e[0]));
+        r.motion((50.0, 50.0));
+        r.key(KEY_LEFTMETA, true);
+        r.button(BTN_MIDDLE, true);
+        res.push(("seat logo / snapshot none", pan_active(&r), true));
+    }
+    // MMB then Super
+    {
+        let mut r = R::new(1);
+        r.focus(Some(r.e[0]));
+        r.motion((50.0, 50.0));
+        r.button(BTN_MIDDLE, true);
+        r.key(KEY_LEFTMETA, true);
+        res.push(("MMB then Super", pan_active(&r), false));
+    }
+    // Super down, release, MMB
+    {
+        let mut r = R::new(1);
+        r.focus(Some(r.e[0]));
+        r.motion((50.0, 50.0));
+        r.key(KEY_LEFTMETA, true);
+        r.key(KEY_LEFTMETA, false);
+        r.button(BTN_MIDDLE, true);
+        res.push(("Super down/up then MMB", pan_active(&r), false));
+    }
+    // Super down, focus transfer, MMB
+    {
+        let mut r = R::new(2);
+        r.focus(Some(r.e[0]));
+        r.motion((50.0, 50.0));
+        r.key(KEY_LEFTMETA, true);
+        r.focus(Some(r.e[1]));
+        r.button(BTN_MIDDLE, true);
+        res.push(("Super, focus transfer, MMB", pan_active(&r), true));
+    }
+    // Super down, zero outputs, reconnect, MMB
+    {
+        let mut r = R::new(1);
+        r.focus(Some(r.e[0]));
+        r.key(KEY_LEFTMETA, true);
+        let o = r.ls.output();
+        r.ls.disconnect(o);
+        r.adv();
+        r.ls.connect(&output((1920, 1080), 120));
+        r.adv();
+        r.motion((50.0, 50.0));
+        r.button(BTN_MIDDLE, true);
+        res.push(("Super, zero outputs, reconnect, MMB", pan_active(&r), true));
+    }
+    println!("T07 {res:?}");
+    assert!(res.iter().all(|(_, got, want)| got == want), "{res:?}");
+}
+
+// ================================================================ INC4R-05 rule 1 provenance
+
+fn three() -> R {
+    let entries = ["A", "B", "C"]
+        .iter()
+        .map(|k| (infynitae_backend_headless::VirtualOutput::key(k), CanvasPos { x: 0, y: 0 }, 1.0))
+        .collect();
+    let ls = Lockstep::with(
+        PersistedCameras::from_entries(entries).unwrap(),
+        &[
+            output_k("A", (1920, 1080), 120, 60_000),
+            output_k("B", (800, 600), 120, 60_000),
+            output_k("C", (1280, 720), 120, 144_000),
+        ],
+    );
+    R::from(ls, 1, true)
+}
+
+fn slide_popup(r: &mut R, serial: u32) -> Option<i32> {
+    let qh = r.ls.qh.clone();
+    let p = r.ls.probe.popup_with_grab_serial(
+        &qh,
+        "P",
+        r.w[0],
+        PopupSpec { content: (600, 50), shadow: 0, anchor_rect: (390, 10, 1, 1), slide: true },
+        serial,
+    );
+    r.adv();
+    r.ls.probe.surfaces[p].popup_configure.map(|c| c.0)
+}
+
+fn out(r: &R) -> Option<OutputId> {
+    r.ls.state.core().pointer_output()
+}
+
+/// Expected x: A 360, B -200, C 40.
+#[test]
+fn t05_rule1_variants() {
+    let mut rows = Vec::new();
+    // A != B != C (R15)
+    {
+        let mut r = three();
+        let (_, _, s) = r.click_focus();
+        r.motion((1000.0, 0.0));
+        rows.push(("click A, pointer B, clock C", slide_popup(&mut r, s), Some(360)));
+    }
+    // A == B != C
+    {
+        let mut r = three();
+        let (_, _, s) = r.click_focus();
+        rows.push(("click A, pointer A", slide_popup(&mut r, s), Some(360)));
+    }
+    // A != B == C
+    {
+        let mut r = three();
+        let (_, _, s) = r.click_focus();
+        r.motion((1900.0, 0.0));
+        let o = out(&r);
+        rows.push(("click A, pointer C (clock)", slide_popup(&mut r, s), Some(360)));
+        let _ = o;
+    }
+    // repeated crossings
+    {
+        let mut r = three();
+        let (_, _, s) = r.click_focus();
+        for _ in 0..3 {
+            r.motion((1000.0, 0.0));
+            r.motion((-1000.0, 0.0));
+        }
+        r.motion((1000.0, 0.0));
+        rows.push(("click A, cross x7, pointer B", slide_popup(&mut r, s), Some(360)));
+    }
+    // a later click on B: serial of the EARLIER click on A must still mean A
+    {
+        let mut r = three();
+        let (_, _, s) = r.click_focus();
+        r.motion((1000.0, 0.0));
+        r.button(BTN_LEFT, true);
+        r.button(BTN_LEFT, false);
+        rows.push(("click A (serial used), later click B", slide_popup(&mut r, s), Some(360)));
+    }
+    println!("T05 rows (got, want): {rows:?}");
+    assert!(rows.iter().all(|(_, g, w)| g == w), "{rows:?}");
+}
+
+/// Provenance edge cases: printed for the dossier; asserted where the canon is unambiguous.
+#[test]
+fn t05b_rule1_edges() {
+    // causing output removed before the popup request: rule 1 cannot apply -> rule 2 (clock C = 40)
+    let mut r = three();
+    let (_, _, s) = r.click_focus();
+    let a = out(&r).unwrap();
+    r.motion((1000.0, 0.0));
+    r.ls.disconnect(a);
+    r.adv();
+    let removed = slide_popup(&mut r, s);
+    // serial with no record (keyboard serial): fallback
+    let mut r2 = three();
+    r2.click_focus();
+    r2.motion((1000.0, 0.0));
+    r2.key(KEY_A, true);
+    r2.key(KEY_A, false);
+    let ks = r2.ls.probe.last_serial;
+    let keyserial = slide_popup(&mut r2, ks);
+    // storage bound: 70 later button serials evict the causing one
+    let mut r3 = three();
+    let (_, _, s3) = r3.click_focus();
+    r3.motion((1000.0, 0.0));
+    for _ in 0..35 {
+        r3.button(BTN_LEFT, true);
+        r3.button(BTN_LEFT, false);
+    }
+    let evicted = slide_popup(&mut r3, s3);
+    println!("T05b causing-output-removed={removed:?} (want 40) key-serial={keyserial:?} evicted-serial={evicted:?}");
+    assert_eq!(removed, Some(40), "removed causing output did not fall to rule 2");
+}
+
+// ================================================================ INC4R-06 popup authority
+
+#[test]
+fn t06a_three_level_nested_distinct_serials_focus_transfer() {
+    let mut r = R::new(2);
+    let (wp, top, s) = r.click_focus();
+    let other = if top == r.e[0] { r.e[1] } else { r.e[0] };
+    let p1 = r.grab_popup("P1", wp, s);
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    let p2 = r.grab_popup("P2", p1, r.ls.probe.last_serial);
+    r.key(KEY_B, true);
+    r.key(KEY_B, false);
+    r.grab_popup("P3", p2, r.ls.probe.last_serial);
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("P3"));
+    r.focus(Some(other));
+    println!("T06a dones={:?} kb={} ptr={}", r.ls.probe.popup_dones, r.kb_grabbed(), r.ptr_grabbed());
+    assert_eq!(r.ls.probe.popup_dones, vec!["P3", "P2", "P1"]);
+    assert!(!r.kb_grabbed() && !r.ptr_grabbed(), "residual grab");
+    r.coherent("06a");
+}
+
+#[test]
+fn t06b_zero_output_cycles_keep_grab_semantics() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    r.grab_popup("P", wp, s);
+    let mut cur = r.ls.output();
+    for _ in 0..3 {
+        r.ls.disconnect(cur);
+        r.adv();
+        cur = r.ls.connect(&output((1920, 1080), 120));
+        r.adv();
+    }
+    let kb = r.kb_grabbed();
+    let ptr = r.ptr_grabbed();
+    r.motion((600.0, 300.0));
+    r.button(BTN_LEFT, true);
+    r.button(BTN_LEFT, false);
+    println!("T06b after 3 cycles kb_grab={kb} ptr_grab={ptr} dones={:?} viol={:?}", r.ls.probe.popup_dones, r.viol());
+    assert_eq!(r.ls.probe.popup_dones, vec!["P"], "click outside after zero-output cycles did not dismiss");
+    r.coherent("06b");
+}
+
+#[test]
+fn t06c_nested_zero_output_reconnect_then_focus_transfer() {
+    let mut r = R::new(2);
+    let (wp, top, s) = r.click_focus();
+    let other = if top == r.e[0] { r.e[1] } else { r.e[0] };
+    let p1 = r.grab_popup("P1", wp, s);
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    r.grab_popup("P2", p1, r.ls.probe.last_serial);
+    let o = r.ls.output();
+    r.ls.disconnect(o);
+    r.adv();
+    r.ls.connect(&output((1920, 1080), 120));
+    r.adv();
+    r.focus(Some(other));
+    println!("T06c dones={:?} kb={} ptr={}", r.ls.probe.popup_dones, r.kb_grabbed(), r.ptr_grabbed());
+    assert!(!r.kb_grabbed() && !r.ptr_grabbed(), "stale grab after nested reconnect + focus transfer");
+    r.coherent("06c");
+}
+
+#[test]
+fn t06d_implicit_button_grab_then_zero_outputs_with_popup() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    let p = r.grab_popup("P", wp, s);
+    r.ls.probe.destroy_popup(p);
+    r.adv();
+    r.button(BTN_LEFT, true); // implicit grab
+    let o = r.ls.output();
+    r.ls.disconnect(o);
+    r.adv();
+    let zero_grab = r.ptr_grabbed();
+    r.ls.connect(&output((1920, 1080), 120));
+    r.adv();
+    r.button(BTN_LEFT, false);
+    println!("T06d zero-output grab present={zero_grab} after reconnect ptr={} viol={:?}", r.ptr_grabbed(), r.viol());
+    assert!(zero_grab && !r.ptr_grabbed());
+}
+
+// ================================================================ INC4R-10 synthetic motion boundary
+
+#[test]
+fn t10_reconnect_with_popup_emits_same_pointer_wire_as_control() {
+    fn run(popup: bool) -> Vec<String> {
+        let mut r = R::new(1);
+        let (wp, _, s) = r.click_focus();
+        if popup {
+            r.grab_popup("P", wp, s);
+        }
+        let o = r.ls.output();
+        let m = r.ls.probe.ptr.len();
+        r.ls.disconnect(o);
+        r.adv();
+        r.ls.connect(&output((1920, 1080), 120));
+        r.adv();
+        r.ls.probe.ptr[m..].to_vec()
+    }
+    let c = run(false);
+    let p = run(true);
+    println!("T10 control={c:?}\n    popup  ={p:?}");
+    assert_eq!(p, c, "popup grab changes the client pointer wire across a zero-output cycle");
+}
+
+#[test]
+fn t10b_nested_pan_dismissal_no_pointer_events() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    let p1 = r.grab_popup("P1", wp, s);
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    r.grab_popup("P2", p1, r.ls.probe.last_serial);
+    r.key(KEY_LEFTMETA, true);
+    let m = r.ls.probe.ptr.len();
+    r.button(BTN_MIDDLE, true);
+    r.motion((10.0, 0.0));
+    let during: Vec<String> = r.ls.probe.ptr[m..].to_vec();
+    r.button(BTN_MIDDLE, false);
+    r.key(KEY_LEFTMETA, false);
+    println!("T10b during={during:?}");
+    assert!(during.iter().all(|l| l == "frame"), "pointer events during pan after nested dismissal: {during:?}");
+}
+
+// ================================================================ INC4R-11 bindings
+
+#[test]
+fn t11_unconfigured_keys_are_never_swallowed() {
+    let mut out = Vec::new();
+    for (name, combo) in [
+        ("plain Esc", vec![KEY_ESC]),
+        ("idle Super+Esc", vec![KEY_LEFTMETA, KEY_ESC]),
+        ("idle Super+B", vec![KEY_LEFTMETA, KEY_B]),
+        ("Super+K (unconfigured)", vec![KEY_LEFTMETA, KEY_K]),
+        ("Shift alone", vec![KEY_LEFTSHIFT]),
+    ] {
+        let mut r = R::new(2);
+        r.focus(Some(r.e[0]));
+        let n = r.ls.probe.key_events.len();
+        for &k in &combo {
+            r.key(k, true);
+        }
+        for &k in combo.iter().rev() {
+            r.key(k, false);
+        }
+        let last = *combo.last().unwrap();
+        let delivered = r.ls.probe.key_events[n..].iter().filter(|(k, _)| *k == last).count();
+        out.push((name, delivered));
+    }
+    // configured action: Super+Enter is consumed (FocusNext)
+    let mut r = R::new(2);
+    r.focus(Some(r.e[0]));
+    r.key(KEY_LEFTMETA, true);
+    r.key(KEY_ENTER, true);
+    r.key(KEY_ENTER, false);
+    r.key(KEY_LEFTMETA, false);
+    let enter = r.ls.probe.key_events.iter().filter(|(k, _)| *k == KEY_ENTER).count();
+    println!("T11 delivered (want 2 each): {out:?}; configured Super+Enter delivered={enter} (want 0)");
+    assert!(out.iter().all(|(_, d)| *d == 2), "{out:?}");
+}
+
+// ================================================================ ordered preemption observability
+
+#[test]
+fn t13_preemption_wire_order_single_and_nested() {
+    fn run(nested: bool) -> Vec<String> {
+        let mut r = R::new(2);
+        let (wp, top, s) = r.click_focus();
+        let other = if top == r.e[0] { r.e[1] } else { r.e[0] };
+        let p1 = r.grab_popup("P1", wp, s);
+        if nested {
+            r.key(KEY_A, true);
+            r.key(KEY_A, false);
+            r.grab_popup("P2", p1, r.ls.probe.last_serial);
+        }
+        let m = r.ls.probe.kb_log.len();
+        let mp = r.ls.probe.ptr.len();
+        r.focus(Some(other));
+        let mut v: Vec<String> = r.ls.probe.kb_log[m..].iter().filter(|l| !l.starts_with("toplevel_configure")).cloned().collect();
+        v.push(format!("PTR {:?}", &r.ls.probe.ptr[mp..]));
+        v.push(format!("GRABS kb={} ptr={}", r.kb_grabbed(), r.ptr_grabbed()));
+        v
+    }
+    let single = run(false);
+    let nested = run(true);
+    println!("T13 single={single:?}\n    nested={nested:?}");
+    let expect_tail = |v: &Vec<String>| v.iter().any(|l| l == "GRABS kb=false ptr=false");
+    assert!(expect_tail(&single) && expect_tail(&nested));
+    let first_enter = |v: &Vec<String>| v.iter().filter(|l| l.starts_with("wl_keyboard.enter")).count();
+    assert_eq!(first_enter(&single), 1, "transient/duplicate enter (W-SM-15 class)");
+    assert_eq!(first_enter(&nested), 1, "transient/duplicate enter (W-SM-15 class), nested");
+}
+
+/// T99: is a residual pointer grab inert? After it, a click on ANOTHER window must reach that
+/// window (wire: enter/button on W2) and focus it; a click on the root must reach the root.
+fn residual_probe(mut r: R, ctx: &str) {
+    let g0 = r.ptr_grabbed();
+    let m = r.ls.probe.ptr.len();
+    r.motion((5.0, 5.0));
+    let g1 = r.ptr_grabbed();
+    r.button(BTN_LEFT, true);
+    r.button(BTN_LEFT, false);
+    let wire: Vec<String> = r.ls.probe.ptr[m..].to_vec();
+    let buttons = wire.iter().filter(|l| l.starts_with("button")).count();
+    println!("T99[{ctx}] grabbed before={g0} after-motion={g1} wire={wire:?} viol={:?}", r.viol());
+    assert!(!g1, "[{ctx}] residual pointer grab survives a motion");
+    assert_eq!(buttons, 2, "[{ctx}] click after residual grab not delivered normally");
+}
+
+#[test]
+fn t99a_residual_after_nested_pan() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    let p1 = r.grab_popup("P1", wp, s);
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    r.grab_popup("P2", p1, r.ls.probe.last_serial);
+    r.pan_press();
+    r.pan_release();
+    residual_probe(r, "nested pan");
+}
+
+#[test]
+fn t99b_residual_after_three_level_focus_transfer() {
+    let mut r = R::new(2);
+    let (wp, top, s) = r.click_focus();
+    let other = if top == r.e[0] { r.e[1] } else { r.e[0] };
+    let p1 = r.grab_popup("P1", wp, s);
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    let p2 = r.grab_popup("P2", p1, r.ls.probe.last_serial);
+    r.key(KEY_B, true);
+    r.key(KEY_B, false);
+    r.grab_popup("P3", p2, r.ls.probe.last_serial);
+    r.focus(Some(other));
+    residual_probe(r, "3-level focus transfer");
+}
+
+#[test]
+fn t99c_residual_after_dead_popup_reconnect() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    let p = r.grab_popup("P", wp, s);
+    r.ls.probe.destroy_popup(p);
+    r.adv();
+    let o = r.ls.output();
+    r.ls.disconnect(o);
+    r.adv();
+    r.ls.connect(&output((1920, 1080), 120));
+    r.adv();
+    residual_probe(r, "dead popup + reconnect");
+}
+
+#[test]
+fn t99d_residual_after_single_popup_pan() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    r.grab_popup("P", wp, s);
+    r.pan_press();
+    r.pan_release();
+    residual_probe(r, "single popup pan");
+}
+
+/// T99e: does the pointer lockout after nested-pan dismissal ever recover? 10 clicks, a keyboard
+/// focus change (Super+Enter), a second window, and a zero-output cycle.
+#[test]
+fn t99e_lockout_persistence() {
+    let mut r = R::new(2);
+    let (wp, _, s) = r.click_focus();
+    let p1 = r.grab_popup("P1", wp, s);
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    r.grab_popup("P2", p1, r.ls.probe.last_serial);
+    r.pan_press();
+    r.pan_release();
+    let m = r.ls.probe.ptr.len();
+    for _ in 0..10 {
+        r.motion((3.0, 2.0));
+        r.button(BTN_LEFT, true);
+        r.button(BTN_LEFT, false);
+    }
+    let after_clicks = r.ls.probe.ptr[m..].iter().filter(|l| l.starts_with("button")).count();
+    r.key(KEY_LEFTMETA, true);
+    r.key(KEY_ENTER, true);
+    r.key(KEY_ENTER, false);
+    r.key(KEY_LEFTMETA, false);
+    let m2 = r.ls.probe.ptr.len();
+    r.button(BTN_LEFT, true);
+    r.button(BTN_LEFT, false);
+    let after_focus_next = r.ls.probe.ptr[m2..].iter().filter(|l| l.starts_with("button")).count();
+    let o = r.ls.output();
+    r.ls.disconnect(o);
+    r.adv();
+    r.ls.connect(&output((1920, 1080), 120));
+    r.adv();
+    let m3 = r.ls.probe.ptr.len();
+    r.motion((3.0, 2.0));
+    r.button(BTN_LEFT, true);
+    r.button(BTN_LEFT, false);
+    let after_reconnect = r.ls.probe.ptr[m3..].iter().filter(|l| l.starts_with("button")).count();
+    println!(
+        "T99e buttons delivered: after 10 clicks={after_clicks}/20, after Super+Enter={after_focus_next}/2, after reconnect={after_reconnect}/2; core buttons owned={:?}; grabbed={}",
+        r.ls.state.core().buttons().pressed(), r.ptr_grabbed()
+    );
+    assert_eq!((after_clicks, after_focus_next, after_reconnect), (20, 2, 2));
+}
+
+/// T99f: CONTROL — identical sequence with no popup: clicks after a pan must be delivered.
+#[test]
+fn t99f_control_no_popup() {
+    let mut r = R::new(1);
+    r.click_focus();
+    r.pan_press();
+    r.pan_release();
+    residual_probe(r, "control: pan without popup");
+}
+
+/// T99g: popup grab dismissed by the client itself (no pan), then clicks.
+#[test]
+fn t99g_popup_destroyed_by_client_then_clicks() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    let p = r.grab_popup("P", wp, s);
+    r.ls.probe.destroy_popup(p);
+    r.adv();
+    residual_probe(r, "client destroys popup, no pan");
+}
+
+/// T99h: popup grab, click OUTSIDE (Smithay's own dismissal), then clicks.
+#[test]
+fn t99h_popup_dismissed_by_click_outside_then_clicks() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    r.grab_popup("P", wp, s);
+    r.motion((600.0, 300.0));
+    r.button(BTN_LEFT, true);
+    r.button(BTN_LEFT, false);
+    r.motion((-600.0, -300.0));
+    residual_probe(r, "click-outside dismissal");
+}
+
+/// T99i: ordinary menu close by the client, then 5 x (motion, click): full wire per iteration.
+#[test]
+fn t99i_client_closes_menu_then_clicks() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    let p = r.grab_popup("P", wp, s);
+    r.ls.probe.destroy_popup(p);
+    r.adv();
+    let mut total = 0;
+    for i in 0..5 {
+        let m = r.ls.probe.ptr.len();
+        r.motion((2.0, 1.0));
+        r.button(BTN_LEFT, true);
+        r.button(BTN_LEFT, false);
+        let w: Vec<String> = r.ls.probe.ptr[m..].to_vec();
+        total += w.iter().filter(|l| l.starts_with("button")).count();
+        println!("T99i iter {i}: grabbed={} wire={w:?}", r.ptr_grabbed());
+    }
+    assert_eq!(total, 10, "client lost clicks after closing its own menu");
+}
+
+fn clicks_at(r: &mut R, d: (f64, f64)) -> (usize, Vec<String>) {
+    let m = r.ls.probe.ptr.len();
+    r.motion(d);
+    r.button(BTN_LEFT, true);
+    r.button(BTN_LEFT, false);
+    let w: Vec<String> = r.ls.probe.ptr[m..].to_vec();
+    (w.iter().filter(|l| l.starts_with("button")).count(), w)
+}
+
+/// T99j: destroyed popup (with and without grab): clicks inside its former area vs outside.
+#[test]
+fn t99j_stale_popup_area() {
+    for grab in [false, true] {
+        let mut r = R::new(1);
+        let (wp, _, s) = r.click_focus(); // pointer at W-local (50,50): inside the popup's area
+        let p = if grab {
+            r.grab_popup("P", wp, s)
+        } else {
+            let qh = r.ls.qh.clone();
+            let p = r.ls.probe.popup(&qh, "P", wp, PopupSpec { content: (120, 80), shadow: 0, anchor_rect: (10, 10, 1, 1), slide: false });
+            r.adv();
+            p
+        };
+        r.ls.probe.destroy_popup(p);
+        r.adv();
+        let inside1 = clicks_at(&mut r, (1.0, 1.0));
+        let inside2 = clicks_at(&mut r, (1.0, 1.0));
+        let outside = clicks_at(&mut r, (200.0, 150.0));
+        let back = clicks_at(&mut r, (-200.0, -150.0));
+        // a later commit of the parent (client redraw) refreshes the snapshot?
+        let qh = r.ls.qh.clone();
+        r.ls.probe.draw(&qh, wp);
+        r.adv();
+        let after_commit = clicks_at(&mut r, (1.0, 1.0));
+        println!("T99j grab={grab}: inside1={inside1:?}\n    inside2={inside2:?}\n    outside={outside:?}\n    back-inside={back:?}\n    after parent commit={after_commit:?}");
+    }
+}
+
+fn far_popup(r: &mut R, label: &'static str, parent: usize, serial: u32, at: (i32, i32)) -> usize {
+    let qh = r.ls.qh.clone();
+    let p = r.ls.probe.popup_with_grab_serial(
+        &qh, label, parent,
+        PopupSpec { content: (40, 20), shadow: 0, anchor_rect: (at.0, at.1, 1, 1), slide: false },
+        serial,
+    );
+    r.adv();
+    p
+}
+
+/// T99k: residual grab effects with popups placed AWAY from the pointer (no stale-snapshot hole).
+#[test]
+fn t99k_residual_grab_without_hole() {
+    // single popup + CameraPan
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    far_popup(&mut r, "P", wp, s, (300, 250));
+    r.pan_press();
+    r.pan_release();
+    let g = r.ptr_grabbed();
+    let a = clicks_at(&mut r, (1.0, 1.0));
+    let a2 = clicks_at(&mut r, (1.0, 1.0));
+    println!("T99k single-pan: grabbed after pan={g} click1={a:?} click2={a2:?} grabbed now={}", r.ptr_grabbed());
+    // nested + CameraPan
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    let p1 = far_popup(&mut r, "P1", wp, s, (300, 250));
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    let ls_ = r.ls.probe.last_serial; far_popup(&mut r, "P2", p1, ls_, (5, 5));
+    r.pan_press();
+    r.pan_release();
+    let g = r.ptr_grabbed();
+    let b = clicks_at(&mut r, (1.0, 1.0));
+    let b2 = clicks_at(&mut r, (1.0, 1.0));
+    println!("T99k nested-pan: grabbed after pan={g} click1={b:?} click2={b2:?} grabbed now={}", r.ptr_grabbed());
+    // 3-level + focus transfer
+    let mut r = R::new(2);
+    let (wp, top, s) = r.click_focus();
+    let other = if top == r.e[0] { r.e[1] } else { r.e[0] };
+    let p1 = far_popup(&mut r, "P1", wp, s, (300, 250));
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    let ls_ = r.ls.probe.last_serial; let p2 = far_popup(&mut r, "P2", p1, ls_, (5, 5));
+    r.key(KEY_B, true);
+    r.key(KEY_B, false);
+    let ls_ = r.ls.probe.last_serial; far_popup(&mut r, "P3", p2, ls_, (5, 5));
+    r.focus(Some(other));
+    let g = r.ptr_grabbed();
+    let c = clicks_at(&mut r, (1.0, 1.0));
+    let c2 = clicks_at(&mut r, (1.0, 1.0));
+    println!("T99k 3-level-focus: grabbed after transfer={g} click1={c:?} click2={c2:?} grabbed now={} target={:?}", r.ptr_grabbed(), r.target());
+}
+
+fn fds() -> usize {
+    std::fs::read_dir("/proc/self/fd").map(|d| d.count()).unwrap_or(0)
+}
+
+/// T17: the second review's R17 loop (150 cycles, one Lockstep) — now asserting ZERO violations.
+#[test]
+fn t17_r17_zero_violations() {
+    let mut r = R::new(1);
+    let mut cur = r.ls.output();
+    let mut samples = Vec::new();
+    for i in 0..150 {
+        let qh = r.ls.qh.clone();
+        let w = r.ls.probe.toplevel(&qh, "X", (300, 200), 0);
+        r.adv();
+        r.motion((1.0, 1.0));
+        r.motion((-1.0, -1.0));
+        r.button(BTN_LEFT, true);
+        let s = r.ls.probe.last_serial;
+        r.button(BTN_LEFT, false);
+        let p1 = r.grab_popup("P1", w, s);
+        r.key(KEY_A, true);
+        r.key(KEY_A, false);
+        let s2 = r.ls.probe.last_serial;
+        r.ls.probe.popup_with_grab_serial(&qh, "P2", p1, PopupSpec { content: (40, 30), shadow: 0, anchor_rect: (1, 1, 1, 1), slide: false }, s2);
+        r.adv();
+        r.key(KEY_LEFTMETA, true);
+        r.button(BTN_MIDDLE, true);
+        r.motion((3.0, 0.0));
+        r.button(BTN_MIDDLE, false);
+        r.key(KEY_LEFTMETA, true);
+        r.key(KEY_LEFTMETA, false);
+        r.key(KEY_LEFTMETA, true);
+        r.key(KEY_ENTER, true);
+        r.key(KEY_ENTER, false);
+        r.key(KEY_LEFTMETA, false);
+        r.ls.disconnect(cur);
+        r.adv();
+        cur = r.ls.connect(&output((1920, 1080), 120));
+        r.adv();
+        r.ls.probe.destroy_toplevel(w);
+        r.adv();
+        if i == 9 || i == 149 {
+            let core = r.ls.state.core();
+            samples.push((fds(), core.focus().history().len(), core.keys().pressed().len(), core.buttons().pressed().len(), r.ls.state.elements().count(), r.ptr_grabbed(), r.kb_grabbed(), r.xkb()));
+        }
+    }
+    println!("T17 @10/@150 (fds,history,keys,buttons,elements,ptr,kb,xkb): {samples:?}; violations={} first={:?}", r.viol().len(), r.viol().first());
+    assert!(r.viol().is_empty());
+}
