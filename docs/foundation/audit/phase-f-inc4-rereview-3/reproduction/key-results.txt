@@ -1,0 +1,39 @@
+HEAD 60e5429, ulimit -n 1024, CARGO_BUILD_JOBS=4, scratch worktrees. Reviewer suite: u4_attacks.rs.txt
+(+ scratch-only harness helper toplevel_uncommitted, see harness-helper diff).
+
+BLOCKING
+A1 nested-menu close (client destroys P2,P1 or P3,P2,P1 in protocol order; no compositor dismissal):
+  D02 depth=1: before key (kb_grabbed, client_active)=(false, Some("W2")); new violations=[]
+  D02 depth=2: before key (kb_grabbed, client_active)=(true, None);  new violations=["pressed 37 already logically down"]
+  D02 depth=3: before key (kb_grabbed, client_active)=(true, None);  new violations=["pressed 37 already logically down"]
+  C09 depth=3: Smithay focus is_root=false alive=false while Core target = W2; next key -> enter W2 keys={37} + key 37 pressed
+  Same on 6819c8a (round 2): BASE D02 depth2: new violations=["pressed 37 already logically down"]  -> latent, not introduced by round 3
+B1 popup destruction treated as a parent commit:
+  C01c unmap without popup: parent Unmapped, configures since unmap=["W2"]
+  C01c unmap with popup (client destroys the dismissed popup): parent AwaitingFirstBuffer, configures=["W2","W2"]
+  D01 re-initial commit after unmap: without popup -> 1 configure; WITH popup -> 0 configures (state stays AwaitingFirstBuffer)
+  6819c8a: BASE D01 = 1 configure  -> introduced by round 3 (popup_destroyed -> element_committed -> toplevel_committed)
+B2 verify-test-efficacy FAIL (2) at HEAD: INC-4 I and INC-4 K controls BROKEN (seed anchor found 0 times in outputs.rs);
+  CI run 37450191322 (headSha 60e5429821793ac2745ec6a9fcc171217061f224): workspace-build FAILURE, "== verify-test-efficacy: FAIL (2)".
+B3 survivors of the shipped default suite: N09d (pointer unset before keyboard unset) MISSED; F15 (newest evicted) MISSED;
+  F16 (unknown serial aliases latest record) MISSED. Reviewer tests U12/U12b/U12c kill F15/F16; the probe-feature NEG-2 is the
+  only N09d detector and no gate runs it.
+
+RESOLVED / PASSING
+U01a former-area clicks: 2/2, 2/2.  U01e immediate destroy, zero-output destroy+reconnect, 20 create/destroy: all delivered.
+U04 duplicates A/Shift/Ctrl/Alt/Super x {dup, dup2, focus, popup, zero-output}: 0 failures (seat, client, Core clean).
+U04b wire [(30,true),(30,false)] (no legit release lost).
+U02 cross-Core token: seat unchanged (returns current modifiers). Same-Core sync without inject: seat dep=0x1, Core no Shift (C3).
+U05 PanDismissedPopupGrab: cases 1,2,3,6,Esc: no events during pan, grab gone after first motion, clicks delivered.
+  case 4 (zero outputs+reconnect during pan): clicks 0 — identical in the no-popup control C05 (not INC-4).
+U05b 30 pan/dismiss cycles: 0 leaks, no residual grabs, 0 violations.
+U09 3-level: focus other root / pan / zero outputs+reconnect: clean. destroy P3,P2,P1: kb grab left (A1).
+U10 reconnect: no pointer grab resurrected; kb grab left after client destroyed nested popups (A1).
+U11 Super+B/Super+Esc/Super+K/Super+A/Esc/Shift/Super delivered 2/2; Super+Enter consumed, focus moved; Esc during pan cancels,
+  camera frozen after cancel, Esc not leaked, client-owned A held through it, 0 violations.
+U12 store len=64; newest serial on A -> 360; evicted A serial -> -200 (pointer output); missing serial -> -200.
+U12b evicted serial with latest record on C, pointer on B -> -200 (not 40, not 360).  U12c recent A serial after overflow -> 360.
+U23 170-cycle combined stress: @10/@170 (fds,history,keys,buttons,elements,ptr,kb,seat_dep,serials) =
+  (10,1,0,0,2,false,false,0,60) / (10,1,0,0,2,false,false,0,64); violations=0.
+Probe-feature t1_popup_focus: 36 passed (neg1, neg2, obs1, pf_grab_refused... included).
+Equivalent mutations: F10, F18, F20 (no observable difference under the reviewer suite).

@@ -1,0 +1,22 @@
+test common::oracle::tests::rounding_helpers ... ok
+test u01a_former_area_clicks ... U01a (2, ["motion 51,51", "relative 1,1 unaccel 1,1", "frame", "button 272 pressed", "frame", "button 272 released", "frame"]) (2, ["motion 52,52", "relative 1,1 unaccel 1,1", "frame", "button 272 pressed", "frame", "button 272 released", "frame"])
+test u01b_popup_destroy_does_not_commit_an_uncommitted_parent ... U01b X configures before=0 after popup destroy=1; stage states=[Some(Mapped), Some(Mapped)]
+test u01c_popup_destroy_does_not_advance_an_unmapped_parent ... U01c parent state after unmap=Some(AwaitingFirstBuffer) after popup destroy=Some(AwaitingFirstBuffer); configures since unmap=["W2", "W2"]
+test u01d_orphan_popup_destroy_does_not_commit_everyone ... U01d X configures=0 viol=[]
+test u01e_destroy_edge_cases ... U01e immediate=(2, ["motion 51,51", "relative 1,1 unaccel 1,1", "frame", "button 272 pressed", "frame", "button 272 released", "frame"]) zero-output=(2, ["motion 1,1", "relative 1,1 unaccel 1,1", "frame", "button 272 pressed", "frame", "button 272 released", "frame"]) repeated-20 clicks=40/40 grabs ptr=false kb=false viol=[]
+test u02_token_attacks ... U02 cross-core: before=0x0 after=0x0 ret=(Modifiers { logo: false, ctrl: false, alt: false, shift: false }, false); same-core uninjected sync: seat dep=0x1, Core thinks Shift down=false
+test u04_duplicates_all_keys_and_contexts ... U04 failures: []
+test u04b_no_legit_release_lost ... U04b wire [(30, true), (30, false)]
+test u05_pan_dismissed_grab_state_machine ... U05[1] during=[] ptr_grabbed_after_first_motion=false clicks=(2, ["motion 32,50", "relative 1,0 unaccel 1,0", "frame", "button 272 pressed", "frame", "button 272 released", "frame"]) kb=Some("W2") viol=[]
+U05[2] during=[] ptr_grabbed_after_first_motion=false clicks=(2, ["motion 32,50", "relative 1,0 unaccel 1,0", "frame", "button 272 pressed", "frame", "button 272 released", "frame"]) kb=Some("W2") viol=[]
+U05[3] during=[] ptr_grabbed_after_first_motion=false clicks=(2, ["motion 32,50", "relative 1,0 unaccel 1,0", "frame", "button 272 pressed", "frame", "button 272 released", "frame"]) kb=Some("W2") viol=[]
+U05[4] during=["leave W2", "frame"] ptr_grabbed_after_first_motion=false clicks=(0, []) kb=Some("W2") viol=[]
+U05[6] during=[] ptr_grabbed_after_first_motion=false clicks=(2, ["motion 32,50", "relative 1,0 unaccel 1,0", "frame", "button 272 pressed", "frame", "button 272 released", "frame"]) kb=Some("W2") viol=[]
+U05[esc] during=["motion 50,50", "relative 10,0 unaccel 10,0", "frame"] ptr_grabbed_after_first_motion=false clicks=(2, ["motion 52,50", "relative 1,0 unaccel 1,0", "frame", "button 272 pressed", "frame", "button 272 released", "frame"]) kb=Some("W2") viol=[]
+test u05b_repeated_pan_dismiss_cycles ... U05b leaks during pans=0 ptr_grabbed=false kb_grabbed=false viol=[] dones=30
+test u09_three_level_trees ... U09 (case, (ptr,kb) grabbed after a motion, clicks delivered, violations): [("destroy P3,P2,P1", (false, true), 2, 0), ("focus other root", (false, false), 2, 0), ("pan", (false, false), 2, 0), ("zero outputs+reconnect", (false, false), 2, 0)]
+test u10_reconnect_never_resurrects ... U10 (case, (ptr,kb) grabbed after reconnect, kb active, clicks, viol): [("destroy, disconnect, reconnect", (false, true), None, 2, 0), ("disconnect, destroy, reconnect", (false, true), None, 2, 0), ("nested destroy while disconnected", (true, true), None, 2, 0), ("root destroyed while disconnected", (false, false), None, 2, 0), ("repeated x5", (false, true), None, 2, 0)]
+test u11_bindings_and_escape ... U11 delivered (want 2): [("Super+B", 2), ("Super+Esc", 2), ("Super+K", 2), ("Super+A", 2), ("Esc", 2), ("Shift", 2), ("Super", 2)]; Super+Enter delivered=0 focus moved=true; pan Esc: active after Esc=false camera moved after cancel=false Esc leaked=false viol=[]
+test u12_serial_store_semantics ... U12 store len=64 (cap 64); newest-on-A=Some(360) (want 360); evicted-A-serial=Some(-200); missing-serial=Some(-200) (pointer on B: B=-200, canonical rule 2 C=40)
+test u23_long_run_combined_stress ... U23 @10/@170 (fds,history,keys,buttons,elements,ptr,kb,seat_dep,serials): [(10, 1, 0, 0, 2, false, false, 0, 60), (10, 1, 0, 0, 2, false, false, 0, 64)]; violations=0 first=None
+test result: FAILED. 11 passed; 5 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1.11s

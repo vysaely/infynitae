@@ -1,0 +1,61 @@
+mod common;
+use std::time::Duration;
+use common::input::{BTN_LEFT, none};
+use common::{Lockstep, PopupSpec, output};
+use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion};
+
+/// Run on 6819c8a (round 2) to attribute D01 / D02 to round 3 or earlier.
+fn setup() -> (Lockstep, usize, u32, u64) {
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    let qh = ls.qh.clone();
+    ls.probe.toplevel(&qh, "W1", (400, 300), 0);
+    let w = ls.probe.toplevel(&qh, "W2", (400, 300), 0);
+    let mut t = 10_000u64;
+    ls.pump(); let n = ls.now + Duration::from_micros(16_667); ls.run_until(n);
+    t += 1000; pointer_motion(&mut ls.state, &mut ls.input, (50.0, 50.0), (50.0, 50.0), t).unwrap();
+    ls.pump(); let n = ls.now + Duration::from_micros(16_667); ls.run_until(n);
+    t += 1000; pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, true, none(), t).unwrap();
+    ls.pump(); let n = ls.now + Duration::from_micros(16_667); ls.run_until(n);
+    let s = ls.probe.last_serial;
+    t += 1000; pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, false, none(), t).unwrap();
+    ls.pump(); let n = ls.now + Duration::from_micros(16_667); ls.run_until(n);
+    (ls, w, s, t)
+}
+fn adv(ls: &mut Lockstep) { ls.pump(); let n = ls.now + Duration::from_micros(16_667); ls.run_until(n); }
+fn pop(ls: &mut Lockstep, label: &'static str, parent: usize, serial: u32) -> usize {
+    let qh = ls.qh.clone();
+    let p = ls.probe.popup_with_grab_serial(&qh, label, parent, PopupSpec { content: (40, 20), shadow: 0, anchor_rect: (300, 250, 1, 1), slide: false }, serial);
+    adv(ls);
+    p
+}
+
+#[test]
+fn base_d01() {
+    let (mut ls, w, s, _) = setup();
+    ls.probe.auto_destroy_popups = true;
+    pop(&mut ls, "P", w, s);
+    ls.probe.unmap(w);
+    adv(&mut ls);
+    let c0 = ls.probe.configures.len();
+    ls.probe.surfaces[w].wl.commit();
+    adv(&mut ls);
+    let answered = ls.probe.configures[c0..].iter().filter(|l| **l == "W2").count();
+    println!("BASE D01: configures answering re-initial commit after unmap with popup = {answered}");
+}
+
+#[test]
+fn base_d02() {
+    let (mut ls, w, s, mut t) = setup();
+    ls.probe.auto_destroy_popups = false;
+    let p1 = pop(&mut ls, "P1", w, s);
+    t += 1000; keyboard_key(&mut ls.state, &mut ls.input, 30, true, t).unwrap(); adv(&mut ls);
+    t += 1000; keyboard_key(&mut ls.state, &mut ls.input, 30, false, t).unwrap(); adv(&mut ls);
+    let s2 = ls.probe.last_serial;
+    let p2 = pop(&mut ls, "P2", p1, s2);
+    ls.probe.destroy_popup(p2); adv(&mut ls);
+    ls.probe.destroy_popup(p1); adv(&mut ls);
+    let v0 = ls.probe.kb.violations.len();
+    t += 1000; keyboard_key(&mut ls.state, &mut ls.input, 37, true, t).unwrap(); adv(&mut ls);
+    t += 1000; keyboard_key(&mut ls.state, &mut ls.input, 37, false, t).unwrap(); adv(&mut ls);
+    println!("BASE D02 depth2: new violations={:?}", &ls.probe.kb.violations[v0..]);
+}

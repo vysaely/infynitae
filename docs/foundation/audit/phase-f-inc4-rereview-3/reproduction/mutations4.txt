@@ -1,0 +1,15 @@
+F01   DETECTED  duplicate press reaches the seat again (transition gate removed) :: r17_long_lived_stress_bounded_state, t04_duplicate_presses
+F02   DETECTED  cross-Core token accepted (core_id check removed) :: t02b_token_is_bound_to_its_core
+F07   DETECTED  popup destruction does not purge the hit target :: t99g_popup_destroyed_by_client_then_clicks, t99j_stale_popup_area
+F09   DETECTED  PanDismissedPopupGrab never cleared (forwards without unset) :: t01b_nested_pan_dismissal
+F10   MISSED    reconnect resurrects a dead popup grab (liveness check removed) :: suite green
+F11   DETECTED  preemption ignores the install serial (latest/previous serial only) :: t06a_three_level_nested_distinct_serials_focus_transfer
+F12   DETECTED  Super+B swallowed again :: input::keys::tests::binding_resolution_honours_logo_modifier, t11_unconfigured_keys_are_never_swallowed
+F13   DETECTED  Escape never cancels :: input::keys::tests::binding_resolution_honours_logo_modifier, plain_escape_cancels_active_interaction, r08_k6_cancel_is_externally_observable
+F14   DETECTED  serial store unbounded :: serial_outputs_storage_bounded_at_capacity
+F15   MISSED    wrong eviction order (newest evicted) :: suite green
+F16   MISSED    unknown/evicted serial resolves to the most recent record :: suite green
+F17   DETECTED  synthetic motion leaked at pan end (restore_focus true) :: r10_pan_with_popup_no_synthetic_events_and_clean_return
+F18   MISSED    orphan release synced into XKB :: suite green
+F19   DETECTED  pan dismissal installs no PanDismissed grab (stale PopupPointerGrab kept) :: r10_pan_with_popup_no_synthetic_events_and_clean_return
+F20   MISSED    popup_destroyed leaves the popup grab bookkeeping :: suite green

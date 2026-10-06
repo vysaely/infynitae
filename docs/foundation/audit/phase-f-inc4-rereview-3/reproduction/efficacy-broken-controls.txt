@@ -1,0 +1,5 @@
+172:  FAIL  BROKEN    INC-4 I: ordered preemption swaps keyboard and pointer unset (pointer first)
+173-          infynitae-backend-headless --test t1_popup_focus --features probe_preemption_strategy neg2_pointer_first_teardown_control: seed anchor found 0 times in crates/infynitae-wayland/src/outputs.rs
+--
+176:  FAIL  BROKEN    INC-4 K: pointer popup grab survives focus transfer (ptr.unset_grab omitted)
+177-          infynitae-backend-headless --test t1_popup_focus pf1_grab_active_core_focuses_w2_ordered: seed anchor found 0 times in crates/infynitae-wayland/src/outputs.rs

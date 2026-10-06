@@ -1,0 +1,20 @@
+#!/usr/bin/env python3
+"""Run survivors F10/F15/F16/F18/F20 against the reviewer suite (u4_attacks) in the probe worktree."""
+import re, subprocess, pathlib
+S = pathlib.Path("/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/r4")
+ns = {}; exec((S / "mutate4.py").read_text().split("def run_suite")[0], ns)
+ROOT = S / "probe"; M = {m[0]: m for m in ns["M"]}
+def run():
+    p = subprocess.run(["bash", "-c", "ulimit -n 1024; CARGO_BUILD_JOBS=4 cargo test --locked -p infynitae-backend-headless --test u4_attacks -- --test-threads=1 2>&1"], cwd=ROOT, capture_output=True, text=True)
+    return sorted(set(re.findall(r"^test (\S+) \.\.\. FAILED", p.stdout, re.M)))
+base = run()
+print("BASE failing (HEAD):", base, flush=True)
+for mid in ["F16"]:
+    _, desc, f, old, new = M[mid]
+    path = ROOT / f; src = path.read_text(); assert src.count(old) == 1
+    path.write_text(src.replace(old, new))
+    try:
+        failed = run()
+    finally:
+        path.write_text(src)
+    print(f"{mid} {desc}: newly failing vs HEAD = {sorted(set(failed) - set(base))}", flush=True)

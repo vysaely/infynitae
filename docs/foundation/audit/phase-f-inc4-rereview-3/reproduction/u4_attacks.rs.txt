@@ -1,0 +1,820 @@
+//! FOURTH INDEPENDENT REVIEW (INC-4 round-3, 60e5429) — adversarial T1 attacks. Scratch only.
+//! Oracles: client wire, Smithay seat state through the adapter's read-only observers, literals.
+
+mod common;
+
+use std::time::Duration;
+
+use common::input::{BTN_LEFT, BTN_MIDDLE, none};
+use common::{Lockstep, PopupSpec, output, output_k};
+use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
+use infynitae_core::geom::CanvasPos;
+use infynitae_core::input::keys::{KEY_A, KEY_B, KEY_ENTER, KEY_ESC, KEY_LEFTMETA, KEY_LEFTSHIFT};
+use infynitae_core::navigation::PersistedCameras;
+use infynitae_core::stage::{ElementId, Lifecycle};
+
+const KEY_K: u32 = 37;
+const KEY_LEFTCTRL: u32 = 29;
+const KEY_LEFTALT: u32 = 56;
+
+struct R {
+    ls: Lockstep,
+    t: u64,
+    w: Vec<usize>,
+    e: Vec<ElementId>,
+}
+
+impl R {
+    fn from(mut ls: Lockstep, n: usize) -> R {
+        ls.probe.auto_destroy_popups = true;
+        let qh = ls.qh.clone();
+        let labels = ["W1", "W2", "W3", "W4"];
+        let mut w = Vec::new();
+        for l in labels.iter().take(n) {
+            w.push(ls.probe.toplevel(&qh, l, (400, 300), 0));
+        }
+        ls.pump();
+        let e: Vec<ElementId> = ls.state.elements().collect();
+        let mut r = R { ls, t: 10_000, w, e };
+        r.adv();
+        r
+    }
+    fn new(n: usize) -> R {
+        R::from(Lockstep::new(Some(output((1920, 1080), 120))), n)
+    }
+    fn adv(&mut self) {
+        self.ls.pump();
+        let t = self.ls.now + Duration::from_micros(16_667);
+        self.ls.run_until(t);
+    }
+    fn key(&mut self, k: u32, p: bool) {
+        self.t += 1000;
+        keyboard_key(&mut self.ls.state, &mut self.ls.input, k, p, self.t).expect("key");
+        self.adv();
+    }
+    fn motion(&mut self, d: (f64, f64)) {
+        self.t += 1000;
+        pointer_motion(&mut self.ls.state, &mut self.ls.input, d, d, self.t).expect("motion");
+        self.adv();
+    }
+    fn button(&mut self, b: u32, p: bool) {
+        self.t += 1000;
+        pointer_button(&mut self.ls.state, &mut self.ls.input, b, p, none(), self.t).expect("button");
+        self.adv();
+    }
+    fn focus(&mut self, t: Option<ElementId>) {
+        set_focus(&mut self.ls.state, &mut self.ls.input, t).expect("focus");
+        self.adv();
+    }
+    fn target(&self) -> Option<ElementId> {
+        self.ls.state.core().focus().target()
+    }
+    fn popup_at(&mut self, label: &'static str, parent: usize, serial: u32, at: (i32, i32), size: (i32, i32)) -> usize {
+        let qh = self.ls.qh.clone();
+        let p = self.ls.probe.popup_with_grab_serial(
+            &qh, label, parent,
+            PopupSpec { content: size, shadow: 0, anchor_rect: (at.0, at.1, 1, 1), slide: false },
+            serial,
+        );
+        self.adv();
+        p
+    }
+    fn popup(&mut self, label: &'static str, parent: usize, serial: u32) -> usize {
+        self.popup_at(label, parent, serial, (10, 10), (120, 80))
+    }
+    fn viol(&self) -> Vec<String> {
+        self.ls.probe.kb.violations.clone()
+    }
+    fn ptr_grabbed(&self) -> bool {
+        self.ls.state.is_pointer_grabbed()
+    }
+    fn kb_grabbed(&self) -> bool {
+        self.ls.state.keyboard_is_grabbed()
+    }
+    fn mods(&self) -> u32 {
+        self.ls.state.keyboard_modifier_state().serialized.depressed
+    }
+    fn click_focus(&mut self) -> (usize, ElementId, u32) {
+        self.motion((50.0, 50.0));
+        self.button(BTN_LEFT, true);
+        let s = self.ls.probe.last_serial;
+        self.button(BTN_LEFT, false);
+        let top = self.target().expect("click-to-focus");
+        let i = self.e.iter().position(|&x| x == top).unwrap();
+        (self.w[i], top, s)
+    }
+    fn clicks(&mut self, d: (f64, f64)) -> (usize, Vec<String>) {
+        let m = self.ls.probe.ptr.len();
+        self.motion(d);
+        self.button(BTN_LEFT, true);
+        self.button(BTN_LEFT, false);
+        let w: Vec<String> = self.ls.probe.ptr[m..].to_vec();
+        (w.iter().filter(|l| l.starts_with("button")).count(), w)
+    }
+    fn pan_press(&mut self) {
+        self.key(KEY_LEFTMETA, true);
+        self.button(BTN_MIDDLE, true);
+    }
+    fn pan_release(&mut self) {
+        self.button(BTN_MIDDLE, false);
+        self.key(KEY_LEFTMETA, false);
+    }
+    /// Independent end-state oracle: a fresh focus transfer must `enter` with no keys and no
+    /// depressed modifiers; the seat holds no modifiers; Core owns no keys; no violations.
+    fn clean_keyboard(&mut self, ctx: &str) {
+        let other = if self.target() == Some(self.e[0]) && self.e.len() > 1 { self.e[1] } else { self.e[0] };
+        self.focus(Some(other));
+        let c = &self.ls.probe.kb;
+        let ok = self.viol().is_empty() && self.mods() == 0 && c.keys.is_empty() && c.depressed == 0
+            && self.ls.state.core().keys().pressed().is_empty();
+        assert!(ok, "[{ctx}] keyboard not clean: viol={:?} seat_dep={:#x} client_keys={:?} client_dep={:#x} core_keys={:?}",
+            self.viol(), self.mods(), c.keys, c.depressed, self.ls.state.core().keys().pressed());
+    }
+}
+
+// ================================================================ R2-04 duplicates / M12
+
+#[test]
+fn u04_duplicates_all_keys_and_contexts() {
+    let keys = [("A", KEY_A), ("Shift", KEY_LEFTSHIFT), ("Ctrl", KEY_LEFTCTRL), ("Alt", KEY_LEFTALT), ("Super", KEY_LEFTMETA)];
+    let mut fails = Vec::new();
+    for (name, k) in keys {
+        for ctx in ["dup", "dup2", "focus", "popup", "zero"] {
+            let mut r = R::new(2);
+            let (wp, _, s) = r.click_focus();
+            r.key(k, true);
+            match ctx {
+                "dup" => r.key(k, true),
+                "dup2" => { r.key(k, true); r.key(k, true); }
+                "focus" => { let o = if r.target() == Some(r.e[0]) { r.e[1] } else { r.e[0] }; r.focus(Some(o)); r.key(k, true); }
+                "popup" => { r.popup("P", wp, s); r.key(k, true); }
+                "zero" => {
+                    let o = r.ls.output();
+                    r.ls.disconnect(o);
+                    r.adv();
+                    r.key(k, true);
+                    r.ls.connect(&output((1920, 1080), 120));
+                    r.adv();
+                }
+                _ => unreachable!(),
+            }
+            r.key(k, false);
+            let mods_after = r.mods();
+            let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| r.clean_keyboard(&format!("{name}/{ctx}"))));
+            if res.is_err() || mods_after != 0 {
+                fails.push(format!("{name}/{ctx} (seat dep after release {mods_after:#x})"));
+            }
+        }
+    }
+    println!("U04 failures: {fails:?}");
+    assert!(fails.is_empty(), "{fails:?}");
+}
+
+/// Orphan release + legit release after a duplicate is never lost.
+#[test]
+fn u04b_no_legit_release_lost() {
+    let mut r = R::new(2);
+    r.click_focus();
+    let n = r.ls.probe.key_events.len();
+    r.key(KEY_A, true);
+    r.key(KEY_A, true);
+    r.key(KEY_A, false);
+    r.key(KEY_A, false); // orphan
+    let ev: Vec<_> = r.ls.probe.key_events[n..].to_vec();
+    println!("U04b wire {ev:?}");
+    assert_eq!(ev, vec![(KEY_A, true), (KEY_A, false)]);
+    r.clean_keyboard("u04b");
+}
+
+// ================================================================ R2-02 token
+
+#[test]
+fn u02_token_attacks() {
+    let mut r = R::new(2);
+    r.click_focus();
+    let f = Lockstep::new(Some(output((1920, 1080), 120)));
+    // cross-Core token
+    let t = f.state.core().verify_input_port(&f.input).unwrap();
+    let before = r.mods();
+    let res = r.ls.state.sync_seat_key(t, KEY_LEFTSHIFT, true);
+    let cross = r.mods();
+    // same-Core token used for an event Core never sees (wrong-event / no inject)
+    let t2 = r.ls.state.core().verify_input_port(&r.ls.input).unwrap();
+    let _ = r.ls.state.sync_seat_key(t2, KEY_LEFTSHIFT, true);
+    let wrong_event = r.mods();
+    let core_has_shift = r.ls.state.core().is_key_down(KEY_LEFTSHIFT);
+    println!("U02 cross-core: before={before:#x} after={cross:#x} ret={res:?}; same-core uninjected sync: seat dep={wrong_event:#x}, Core thinks Shift down={core_has_shift}");
+    assert_eq!(cross, before, "cross-Core token mutated the seat");
+}
+
+// ================================================================ R2-01 destroyed popup lifecycle
+
+#[test]
+fn u01a_former_area_clicks() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    let p = r.popup("P", wp, s);
+    r.ls.probe.destroy_popup(p);
+    r.adv();
+    let a = r.clicks((1.0, 1.0));
+    let b = r.clicks((1.0, 1.0));
+    println!("U01a {a:?} {b:?}");
+    assert_eq!((a.0, b.0), (2, 2));
+}
+
+/// Destroying a popup must not act as a commit of its PARENT: an uncommitted parent must not
+/// receive its initial configure (nor be placed) before its own initial commit.
+#[test]
+fn u01b_popup_destroy_does_not_commit_an_uncommitted_parent() {
+    let mut r = R::new(1);
+    let (_, _, s) = r.click_focus();
+    let qh = r.ls.qh.clone();
+    let x = r.ls.probe.toplevel_uncommitted(&qh, "X", (200, 200));
+    r.adv();
+    let cfg_before = r.ls.probe.configures.iter().filter(|l| **l == "X").count();
+    let p = r.ls.probe.popup_with_grab_serial(&qh, "PX", x, PopupSpec { content: (40, 30), shadow: 0, anchor_rect: (1, 1, 1, 1), slide: false }, s);
+    r.adv();
+    r.ls.probe.destroy_popup(p);
+    r.adv();
+    let cfg_after = r.ls.probe.configures.iter().filter(|l| **l == "X").count();
+    let ids: Vec<ElementId> = r.ls.state.elements().collect();
+    let states: Vec<_> = ids.iter().map(|&i| r.ls.state.core().stage().state(i)).collect();
+    println!("U01b X configures before={cfg_before} after popup destroy={cfg_after}; stage states={states:?}");
+    assert_eq!(cfg_after, 0, "parent received an initial configure triggered by popup destruction, without its own initial commit");
+}
+
+/// An UNMAPPED parent (null-buffer commit) whose popup is then destroyed must stay Unmapped
+/// (no lifecycle advance, no configure) until the client re-commits.
+#[test]
+fn u01c_popup_destroy_does_not_advance_an_unmapped_parent() {
+    let mut r = R::new(2);
+    let (wp, top, s) = r.click_focus();
+    let p = r.popup_at("P", wp, s, (300, 250), (40, 20));
+    let _ = p;
+    let cfg0 = r.ls.probe.configures.len();
+    r.ls.probe.unmap(wp);
+    r.adv();
+    let st_unmapped = r.ls.state.core().stage().state(top);
+    let cfg1 = r.ls.probe.configures.len();
+    // popup_done was sent on unmap; auto-destroy already destroyed P -> popup_destroyed ran.
+    let st_after = r.ls.state.core().stage().state(top);
+    println!("U01c parent state after unmap={st_unmapped:?} after popup destroy={st_after:?}; configures since unmap={:?}", &r.ls.probe.configures[cfg0..]);
+    let _ = cfg1;
+    assert_eq!(st_after, Some(Lifecycle::Unmapped), "popup destruction advanced an unmapped parent's lifecycle without a client commit");
+}
+
+/// Root destroyed BEFORE its popup (root lookup fails): popup destruction must not "commit"
+/// unrelated elements (here an uncommitted toplevel X).
+#[test]
+fn u01d_orphan_popup_destroy_does_not_commit_everyone() {
+    let mut r = R::new(2);
+    let (wp, _, s) = r.click_focus();
+    let qh = r.ls.qh.clone();
+    let x = r.ls.probe.toplevel_uncommitted(&qh, "X", (200, 200));
+    r.adv();
+    r.ls.probe.auto_destroy_popups = false;
+    let p = r.popup("P", wp, s);
+    // destroy the root toplevel first (misbehaving order), then the popup
+    r.ls.probe.destroy_toplevel(wp);
+    r.adv();
+    r.ls.probe.destroy_popup(p);
+    r.adv();
+    let xcfg = r.ls.probe.configures.iter().filter(|l| **l == "X").count();
+    println!("U01d X configures={xcfg} viol={:?}", r.viol());
+    let _ = x;
+    assert_eq!(xcfg, 0, "unrelated uncommitted toplevel configured by an orphan popup's destruction");
+}
+
+#[test]
+fn u01e_destroy_edge_cases() {
+    // immediately after creation (before its own commit is processed)
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    let qh = r.ls.qh.clone();
+    let p = r.ls.probe.popup_with_grab_serial(&qh, "P", wp, PopupSpec { content: (120, 80), shadow: 0, anchor_rect: (10, 10, 1, 1), slide: false }, s);
+    r.ls.probe.destroy_popup(p);
+    r.adv();
+    let a = r.clicks((1.0, 1.0));
+    // with zero outputs, then reconnect
+    let p2 = r.popup("P2", wp, r.ls.probe.last_serial);
+    let o = r.ls.output();
+    r.ls.disconnect(o);
+    r.adv();
+    r.ls.probe.destroy_popup(p2);
+    r.adv();
+    r.ls.connect(&output((1920, 1080), 120));
+    r.adv();
+    let b = r.clicks((1.0, 1.0));
+    // repeated create/destroy
+    let mut c = 0;
+    for _ in 0..20 {
+        let s = r.ls.probe.last_serial;
+        let p = r.popup("PR", wp, s);
+        r.ls.probe.destroy_popup(p);
+        r.adv();
+        c += r.clicks((0.0, 0.0)).0;
+    }
+    println!("U01e immediate={a:?} zero-output={b:?} repeated-20 clicks={c}/40 grabs ptr={} kb={} viol={:?}", r.ptr_grabbed(), r.kb_grabbed(), r.viol());
+    assert_eq!((a.0, b.0, c), (2, 2, 40));
+}
+
+// ================================================================ R2-05 PanDismissedPopupGrab
+
+fn pan_case(ctx: &str, setup: impl FnOnce(&mut R, usize, u32), during: impl FnOnce(&mut R)) -> (Vec<String>, bool, (usize, Vec<String>)) {
+    let mut r = R::new(2);
+    let (wp, _, s) = r.click_focus();
+    setup(&mut r, wp, s);
+    r.key(KEY_LEFTMETA, true);
+    let m = r.ls.probe.ptr.len();
+    r.button(BTN_MIDDLE, true);
+    r.motion((10.0, 0.0));
+    during(&mut r);
+    r.motion((10.0, 0.0));
+    let wire_during: Vec<String> = r.ls.probe.ptr[m..].to_vec();
+    r.button(BTN_MIDDLE, false);
+    r.key(KEY_LEFTMETA, false);
+    let after_motion = {
+        r.motion((1.0, 0.0));
+        r.ptr_grabbed()
+    };
+    let clicks = r.clicks((1.0, 0.0));
+    println!("U05[{ctx}] during={wire_during:?} ptr_grabbed_after_first_motion={after_motion} clicks={clicks:?} kb={:?} viol={:?}", r.ls.probe.kb.active, r.viol());
+    (wire_during, after_motion, clicks)
+}
+
+#[test]
+fn u05_pan_dismissed_grab_state_machine() {
+    let mut results = Vec::new();
+    // pointer kept away from popups so the stale-snapshot class cannot mask results
+    results.push(("1 destroy popup during pan", pan_case("1",
+        |r, wp, s| { r.ls.probe.auto_destroy_popups = false; r.popup_at("P", wp, s, (300, 250), (40, 20)); },
+        |r| { let i = r.ls.probe.surfaces.iter().position(|x| x.label == "P").unwrap(); r.ls.probe.destroy_popup(i); r.adv(); })));
+    results.push(("2 nested, destroy inner during pan", pan_case("2",
+        |r, wp, s| { r.ls.probe.auto_destroy_popups = false; let p1 = r.popup_at("P1", wp, s, (300, 250), (40, 20)); r.key(KEY_A, true); r.key(KEY_A, false); let s2 = r.ls.probe.last_serial; r.popup_at("P2", p1, s2, (5, 5), (20, 10)); },
+        |r| { let i = r.ls.probe.surfaces.iter().position(|x| x.label == "P2").unwrap(); r.ls.probe.destroy_popup(i); r.adv(); })));
+    results.push(("3 three-level, destroy top-down during pan", pan_case("3",
+        |r, wp, s| { r.ls.probe.auto_destroy_popups = false; let p1 = r.popup_at("P1", wp, s, (300, 250), (40, 20)); r.key(KEY_A, true); r.key(KEY_A, false); let s2 = r.ls.probe.last_serial; let p2 = r.popup_at("P2", p1, s2, (5, 5), (20, 10)); r.key(KEY_B, true); r.key(KEY_B, false); let s3 = r.ls.probe.last_serial; r.popup_at("P3", p2, s3, (2, 2), (10, 5)); },
+        |r| { for l in ["P3", "P2", "P1"] { let i = r.ls.probe.surfaces.iter().position(|x| x.label == l).unwrap(); r.ls.probe.destroy_popup(i); r.adv(); } })));
+    results.push(("4 zero outputs + reconnect during pan", pan_case("4",
+        |r, wp, s| { r.popup_at("P", wp, s, (300, 250), (40, 20)); },
+        |r| { let o = r.ls.output(); r.ls.disconnect(o); r.adv(); r.ls.connect(&output((1920, 1080), 120)); r.adv(); })));
+    results.push(("6 focus change during pan", pan_case("6",
+        |r, wp, s| { r.popup_at("P", wp, s, (300, 250), (40, 20)); },
+        |r| { let o = if r.target() == Some(r.e[0]) { r.e[1] } else { r.e[0] }; r.focus(Some(o)); })));
+    results.push(("Esc cancel during pan", pan_case("esc",
+        |r, wp, s| { r.popup_at("P", wp, s, (300, 250), (40, 20)); },
+        |r| { r.key(KEY_ESC, true); r.key(KEY_ESC, false); })));
+    let mut bad = Vec::new();
+    for (name, (during, grabbed, clicks)) in &results {
+        let leaked = during.iter().any(|l| l.starts_with("motion") || l.starts_with("relative") || l.starts_with("enter") || l.starts_with("leave") || l.starts_with("button"));
+        // Esc cancels the pan: motion after cancel legitimately reaches the client
+        let leaked = leaked && !name.starts_with("Esc");
+        if leaked || *grabbed || clicks.0 != 2 {
+            bad.push(*name);
+        }
+    }
+    assert!(bad.is_empty(), "{bad:?}");
+}
+
+#[test]
+fn u05b_repeated_pan_dismiss_cycles() {
+    let mut r = R::new(1);
+    let (wp, _, s) = r.click_focus();
+    let mut serial = s;
+    let mut leaks = 0;
+    let mut delivered = 0;
+    for _ in 0..30 {
+        r.popup_at("P", wp, serial, (300, 250), (40, 20));
+        r.key(KEY_LEFTMETA, true);
+        let m = r.ls.probe.ptr.len();
+        r.button(BTN_MIDDLE, true);
+        r.motion((2.0, 0.0));
+        leaks += r.ls.probe.ptr[m..].iter().filter(|l| *l != "frame").count();
+        r.button(BTN_MIDDLE, false);
+        r.key(KEY_LEFTMETA, false);
+        r.motion((-2.0, 0.0));
+        r.button(BTN_LEFT, true);
+        serial = r.ls.probe.last_serial;
+        r.button(BTN_LEFT, false);
+        delivered += 1;
+    }
+    println!("U05b leaks during pans={leaks} ptr_grabbed={} kb_grabbed={} viol={:?} dones={}", r.ptr_grabbed(), r.kb_grabbed(), r.viol(), r.ls.probe.popup_dones.len());
+    assert_eq!(leaks, 0);
+    assert!(!r.ptr_grabbed() && !r.kb_grabbed() && r.viol().is_empty());
+    let _ = delivered;
+}
+
+// ================================================================ three-level trees
+
+#[test]
+fn u09_three_level_trees() {
+    let mut out = Vec::new();
+    for case in ["destroy P3,P2,P1", "focus other root", "pan", "zero outputs+reconnect"] {
+        let mut r = R::new(2);
+        r.ls.probe.auto_destroy_popups = case != "destroy P3,P2,P1";
+        let (wp, top, s) = r.click_focus();
+        let other = if top == r.e[0] { r.e[1] } else { r.e[0] };
+        let p1 = r.popup_at("P1", wp, s, (300, 250), (40, 20));
+        r.key(KEY_A, true);
+        r.key(KEY_A, false);
+        let s2 = r.ls.probe.last_serial;
+        let p2 = r.popup_at("P2", p1, s2, (5, 5), (20, 10));
+        r.key(KEY_B, true);
+        r.key(KEY_B, false);
+        let s3 = r.ls.probe.last_serial;
+        let p3 = r.popup_at("P3", p2, s3, (2, 2), (10, 5));
+        match case {
+            "destroy P3,P2,P1" => { for p in [p3, p2, p1] { r.ls.probe.destroy_popup(p); r.adv(); } }
+            "focus other root" => r.focus(Some(other)),
+            "pan" => { r.pan_press(); r.pan_release(); }
+            _ => { let o = r.ls.output(); r.ls.disconnect(o); r.adv(); r.ls.connect(&output((1920, 1080), 120)); r.adv(); r.focus(Some(other)); }
+        }
+        r.motion((1.0, 0.0));
+        let g = (r.ptr_grabbed(), r.kb_grabbed());
+        let c = r.clicks((1.0, 0.0));
+        out.push((case, g, c.0, r.viol().len()));
+    }
+    println!("U09 (case, (ptr,kb) grabbed after a motion, clicks delivered, violations): {out:?}");
+    assert!(out.iter().all(|(_, g, c, v)| *g == (false, false) && *c == 2 && *v == 0), "{out:?}");
+}
+
+// ================================================================ reconnect resurrection
+
+#[test]
+fn u10_reconnect_never_resurrects() {
+    let mut out = Vec::new();
+    for case in ["destroy, disconnect, reconnect", "disconnect, destroy, reconnect", "nested destroy while disconnected", "root destroyed while disconnected", "repeated x5"] {
+        let mut r = R::new(2);
+        r.ls.probe.auto_destroy_popups = false;
+        let (wp, _, s) = r.click_focus();
+        let p1 = r.popup_at("P1", wp, s, (300, 250), (40, 20));
+        r.key(KEY_A, true);
+        r.key(KEY_A, false);
+        let s2 = r.ls.probe.last_serial;
+        let p2 = r.popup_at("P2", p1, s2, (5, 5), (20, 10));
+        let mut cur = r.ls.output();
+        match case {
+            "destroy, disconnect, reconnect" => { r.ls.probe.destroy_popup(p2); r.ls.probe.destroy_popup(p1); r.adv(); r.ls.disconnect(cur); r.adv(); r.ls.connect(&output((1920, 1080), 120)); r.adv(); }
+            "disconnect, destroy, reconnect" => { r.ls.disconnect(cur); r.adv(); r.ls.probe.destroy_popup(p2); r.ls.probe.destroy_popup(p1); r.adv(); r.ls.connect(&output((1920, 1080), 120)); r.adv(); }
+            "nested destroy while disconnected" => { r.ls.disconnect(cur); r.adv(); r.ls.probe.destroy_popup(p2); r.adv(); r.ls.connect(&output((1920, 1080), 120)); r.adv(); }
+            "root destroyed while disconnected" => { r.ls.disconnect(cur); r.adv(); r.ls.probe.destroy_popup(p2); r.ls.probe.destroy_popup(p1); r.ls.probe.destroy_toplevel(wp); r.adv(); r.ls.connect(&output((1920, 1080), 120)); r.adv(); }
+            _ => { r.ls.probe.destroy_popup(p2); r.ls.probe.destroy_popup(p1); r.adv(); for _ in 0..5 { r.ls.disconnect(cur); r.adv(); cur = r.ls.connect(&output((1920, 1080), 120)); r.adv(); } }
+        }
+        let g_after = (r.ptr_grabbed(), r.kb_grabbed());
+        let active = r.ls.probe.kb.active.clone();
+        let c = r.clicks((1.0, 0.0));
+        out.push((case, g_after, active, c.0, r.viol().len()));
+    }
+    println!("U10 (case, (ptr,kb) grabbed after reconnect, kb active, clicks, viol): {out:?}");
+    // nested-destroy-while-disconnected leaves P1 alive: its grab legitimately persists (route P1)
+    for (case, g, active, c, v) in &out {
+        if *case == "nested destroy while disconnected" {
+            assert!(active.as_deref() == Some("P1") && *v == 0, "{case}: {g:?} {active:?}");
+        } else {
+            assert!(*g == (false, false) && *c == 2 && *v == 0 && active.as_deref() != Some("P1") && active.as_deref() != Some("P2"), "{case}: {g:?} {active:?} clicks={c}");
+        }
+    }
+}
+
+// ================================================================ R2-06 bindings / K6
+
+#[test]
+fn u11_bindings_and_escape() {
+    let mut out = Vec::new();
+    for (name, combo) in [
+        ("Super+B", vec![KEY_LEFTMETA, KEY_B]), ("Super+Esc", vec![KEY_LEFTMETA, KEY_ESC]),
+        ("Super+K", vec![KEY_LEFTMETA, KEY_K]), ("Super+A", vec![KEY_LEFTMETA, KEY_A]),
+        ("Esc", vec![KEY_ESC]), ("Shift", vec![KEY_LEFTSHIFT]), ("Super", vec![KEY_LEFTMETA]),
+    ] {
+        let mut r = R::new(2);
+        r.click_focus();
+        let n = r.ls.probe.key_events.len();
+        for &k in &combo { r.key(k, true); }
+        for &k in combo.iter().rev() { r.key(k, false); }
+        let last = *combo.last().unwrap();
+        out.push((name, r.ls.probe.key_events[n..].iter().filter(|(k, _)| *k == last).count()));
+    }
+    // Super+Enter consumed and focus moves
+    let mut r = R::new(2);
+    let (_, top, _) = r.click_focus();
+    r.key(KEY_LEFTMETA, true); r.key(KEY_ENTER, true); r.key(KEY_ENTER, false); r.key(KEY_LEFTMETA, false);
+    let enter = r.ls.probe.key_events.iter().filter(|(k, _)| *k == KEY_ENTER).count();
+    let moved = r.target() != Some(top);
+    // Esc during pan (with popup, and with a client-owned key held)
+    let mut r2 = R::new(1);
+    let (wp, _, s) = r2.click_focus();
+    r2.popup_at("P", wp, s, (300, 250), (40, 20));
+    r2.key(KEY_A, true);
+    r2.pan_press();
+    let cam0 = r2.ls.state.core().cameras().center(0).unwrap();
+    r2.key(KEY_ESC, true);
+    let active_after_esc = r2.ls.state.core().interaction().active();
+    r2.key(KEY_ESC, false);
+    r2.motion((30.0, 0.0));
+    let cam1 = r2.ls.state.core().cameras().center(0).unwrap();
+    r2.button(BTN_MIDDLE, false);
+    r2.key(KEY_LEFTMETA, false);
+    r2.key(KEY_A, false);
+    let esc_leaked = r2.ls.probe.key_events.iter().any(|(k, _)| *k == KEY_ESC);
+    println!("U11 delivered (want 2): {out:?}; Super+Enter delivered={enter} focus moved={moved}; pan Esc: active after Esc={active_after_esc} camera moved after cancel={} Esc leaked={esc_leaked} viol={:?}", cam0 != cam1, r2.viol());
+    assert!(out.iter().all(|(_, d)| *d == 2), "{out:?}");
+    assert!(enter == 0 && moved && !active_after_esc && cam0 == cam1 && !esc_leaked && r2.viol().is_empty());
+}
+
+// ================================================================ R2-07 serial store / R2-10 fallback
+
+fn three() -> R {
+    let entries = ["A", "B", "C"].iter()
+        .map(|k| (infynitae_backend_headless::VirtualOutput::key(k), CanvasPos { x: 0, y: 0 }, 1.0)).collect();
+    let ls = Lockstep::with(PersistedCameras::from_entries(entries).unwrap(), &[
+        output_k("A", (1920, 1080), 120, 60_000),
+        output_k("B", (800, 600), 120, 60_000),
+        output_k("C", (1280, 720), 120, 144_000),
+    ]);
+    R::from(ls, 1)
+}
+fn slide(r: &mut R, serial: u32) -> Option<i32> {
+    let qh = r.ls.qh.clone();
+    let p = r.ls.probe.popup_with_grab_serial(&qh, "P", r.w[0], PopupSpec { content: (600, 50), shadow: 0, anchor_rect: (390, 10, 1, 1), slide: true }, serial);
+    r.adv();
+    r.ls.probe.surfaces[p].popup_configure.map(|c| c.0)
+}
+
+/// A 360, B -200, C(clock) 40.
+#[test]
+fn u12_serial_store_semantics() {
+    // newest valid entry after >64 events: click on A last, pointer on B
+    let mut r = three();
+    r.click_focus();
+    r.motion((1000.0, 0.0)); // B
+    for _ in 0..40 { r.button(BTN_LEFT, true); r.button(BTN_LEFT, false); } // 80 serials on B
+    r.motion((-1000.0, 0.0)); // A
+    r.button(BTN_LEFT, true);
+    let s_new = r.ls.probe.last_serial;
+    r.button(BTN_LEFT, false);
+    r.motion((1000.0, 0.0)); // B
+    let len = r.ls.state.serial_outputs_len();
+    let newest = slide(&mut r, s_new);
+    // evicted serial: first click on A, then >64 serials on B, pointer on B
+    let mut r2 = three();
+    let (_, _, s_old) = r2.click_focus();
+    r2.motion((1000.0, 0.0));
+    for _ in 0..40 { r2.button(BTN_LEFT, true); r2.button(BTN_LEFT, false); }
+    let evicted = slide(&mut r2, s_old);
+    // missing (never-issued) serial
+    let mut r3 = three();
+    r3.click_focus();
+    r3.motion((1000.0, 0.0));
+    let missing = slide(&mut r3, 999_999);
+    println!("U12 store len={len} (cap 64); newest-on-A={newest:?} (want 360); evicted-A-serial={evicted:?}; missing-serial={missing:?} (pointer on B: B=-200, canonical rule 2 C=40)");
+    assert!(len <= 64);
+    assert_eq!(newest, Some(360));
+    assert_ne!(evicted, Some(360), "evicted serial resolved as if still recorded");
+}
+
+// ================================================================ long-run stress
+
+fn fds() -> usize {
+    std::fs::read_dir("/proc/self/fd").map(|d| d.count()).unwrap_or(0)
+}
+
+#[test]
+fn u23_long_run_combined_stress() {
+    let mut r = R::new(2);
+    let mut cur = r.ls.output();
+    let mut samples = Vec::new();
+    for i in 0..170 {
+        let qh = r.ls.qh.clone();
+        let w = r.ls.probe.toplevel(&qh, "X", (300, 200), 0);
+        r.adv();
+        r.motion((1.0, 1.0));
+        r.motion((-1.0, -1.0));
+        r.button(BTN_LEFT, true);
+        let s = r.ls.probe.last_serial;
+        r.button(BTN_LEFT, false);
+        r.ls.probe.auto_destroy_popups = i % 3 != 0;
+        let p1 = r.popup_at("P1", w, s, (200, 150), (40, 20));
+        r.key(KEY_LEFTSHIFT, true);
+        r.key(KEY_LEFTSHIFT, true); // duplicate modifier
+        r.key(KEY_LEFTSHIFT, false);
+        let s2 = r.ls.probe.last_serial;
+        let p2 = r.popup_at("P2", p1, s2, (5, 5), (20, 10));
+        let s3 = r.ls.probe.last_serial;
+        let p3 = r.popup_at("P3", p2, s3, (2, 2), (10, 5));
+        if i % 3 == 0 {
+            // destroy during pan
+            r.key(KEY_LEFTMETA, true);
+            r.button(BTN_MIDDLE, true);
+            for p in [p3, p2, p1] { r.ls.probe.destroy_popup(p); }
+            r.adv();
+            r.motion((2.0, 0.0));
+            r.button(BTN_MIDDLE, false);
+            r.key(KEY_LEFTMETA, false);
+        } else {
+            r.key(KEY_LEFTMETA, true);
+            r.button(BTN_MIDDLE, true);
+            r.motion((2.0, 0.0));
+            r.button(BTN_MIDDLE, false);
+            r.key(KEY_LEFTMETA, true); // duplicate Super
+            r.key(KEY_LEFTMETA, false);
+        }
+        for _ in 0..2 { r.button(BTN_LEFT, true); r.button(BTN_LEFT, false); } // provenance churn
+        if i % 4 == 0 {
+            r.ls.disconnect(cur);
+            r.adv();
+            cur = r.ls.connect(&output((1920, 1080), 120));
+            r.adv();
+        }
+        r.key(KEY_LEFTMETA, true);
+        r.key(KEY_ENTER, true);
+        r.key(KEY_ENTER, false);
+        r.key(KEY_LEFTMETA, false);
+        r.ls.probe.destroy_toplevel(w);
+        r.adv();
+        if i == 9 || i == 169 {
+            let core = r.ls.state.core();
+            samples.push((fds(), core.focus().history().len(), core.keys().pressed().len(), core.buttons().pressed().len(),
+                r.ls.state.elements().count(), r.ptr_grabbed(), r.kb_grabbed(), r.mods(), r.ls.state.serial_outputs_len()));
+        }
+    }
+    println!("U23 @10/@170 (fds,history,keys,buttons,elements,ptr,kb,seat_dep,serials): {samples:?}; violations={} first={:?}", r.viol().len(), r.viol().first());
+    let (a, b) = (samples[0], samples[1]);
+    assert!(r.viol().is_empty() && b.0 <= a.0 + 5 && b.2 == 0 && b.3 == 0 && b.4 <= a.4 && b.7 == 0 && b.8 <= 64 && !b.5 && !b.6, "{samples:?}");
+}
+
+// ================================================================ attribution controls
+
+#[test]
+fn c01b_uncommitted_parent_stepwise() {
+    for destroy in [false, true] {
+        let mut r = R::new(1);
+        let (_, _, s) = r.click_focus();
+        let qh = r.ls.qh.clone();
+        let x = r.ls.probe.toplevel_uncommitted(&qh, "X", (200, 200));
+        r.adv();
+        let c0 = r.ls.probe.configures.iter().filter(|l| **l == "X").count();
+        let p = r.ls.probe.popup_with_grab_serial(&qh, "PX", x, PopupSpec { content: (40, 30), shadow: 0, anchor_rect: (1, 1, 1, 1), slide: false }, s);
+        r.adv();
+        let c1 = r.ls.probe.configures.iter().filter(|l| **l == "X").count();
+        if destroy {
+            r.ls.probe.destroy_popup(p);
+            r.adv();
+        }
+        let c2 = r.ls.probe.configures.iter().filter(|l| **l == "X").count();
+        let xid = r.ls.state.elements().last().unwrap();
+        println!("C01b destroy={destroy}: X configures after create-X={c0}, after popup create={c1}, final={c2}; X stage state={:?}", r.ls.state.core().stage().state(xid));
+    }
+}
+
+#[test]
+fn c01c_unmap_control_without_popup() {
+    for with_popup in [false, true] {
+        let mut r = R::new(2);
+        let (wp, top, s) = r.click_focus();
+        if with_popup {
+            r.popup_at("P", wp, s, (300, 250), (40, 20));
+        }
+        let c0 = r.ls.probe.configures.len();
+        r.ls.probe.unmap(wp);
+        r.adv();
+        println!("C01c with_popup={with_popup}: parent state={:?} configures since unmap={:?}", r.ls.state.core().stage().state(top), &r.ls.probe.configures[c0..]);
+    }
+}
+
+#[test]
+fn c05_zero_output_during_pan_control() {
+    for with_popup in [false, true] {
+        let mut r = R::new(2);
+        let (wp, _, s) = r.click_focus();
+        if with_popup {
+            r.popup_at("P", wp, s, (300, 250), (40, 20));
+        }
+        r.key(KEY_LEFTMETA, true);
+        r.button(BTN_MIDDLE, true);
+        r.motion((10.0, 0.0));
+        let o = r.ls.output();
+        r.ls.disconnect(o);
+        r.adv();
+        r.ls.connect(&output((1920, 1080), 120));
+        r.adv();
+        r.motion((10.0, 0.0));
+        r.button(BTN_MIDDLE, false);
+        r.key(KEY_LEFTMETA, false);
+        let m = r.ls.probe.ptr.len();
+        r.motion((1.0, 0.0));
+        let g = r.ptr_grabbed();
+        let c = r.clicks((1.0, 0.0));
+        println!("C05 with_popup={with_popup}: after-release motion wire={:?} grabbed={g} clicks={c:?} pointer={:?}", &r.ls.probe.ptr[m..], r.ls.state.core().pointer());
+    }
+}
+
+/// After the client destroys all of its popups (normal menu close, no compositor dismissal):
+/// Core vs Smithay vs client keyboard focus, and delivery of the next key.
+#[test]
+fn c09_client_closes_menus_then_keys() {
+    for depth in [1, 3] {
+        let mut r = R::new(2);
+        r.ls.probe.auto_destroy_popups = false;
+        let (wp, top, s) = r.click_focus();
+        let mut ps = vec![r.popup_at("P1", wp, s, (300, 250), (40, 20))];
+        if depth == 3 {
+            r.key(KEY_A, true); r.key(KEY_A, false);
+            let s2 = r.ls.probe.last_serial;
+            ps.push(r.popup_at("P2", ps[0], s2, (5, 5), (20, 10)));
+            r.key(KEY_B, true); r.key(KEY_B, false);
+            let s3 = r.ls.probe.last_serial;
+            ps.push(r.popup_at("P3", ps[1], s3, (2, 2), (10, 5)));
+        }
+        for &p in ps.iter().rev() { r.ls.probe.destroy_popup(p); r.adv(); }
+        let root = r.ls.state.window(top).and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
+        let sf = r.ls.state.keyboard_current_focus();
+        let state = (r.kb_grabbed(), sf == root, sf.as_ref().map(|s| { use smithay::reexports::wayland_server::Resource; s.is_alive() }), r.ls.probe.kb.active.clone());
+        let n = r.ls.probe.key_events.len();
+        let v0 = r.viol().len();
+        r.key(KEY_K, true);
+        let after_key = (r.ls.probe.kb.active.clone(), r.ls.probe.key_events.len() - n, r.viol()[v0..].to_vec());
+        r.key(KEY_K, false);
+        println!("C09 depth={depth}: before key (kb_grabbed, smithay_is_root, smithay_alive, client_active)={state:?}; after key (client_active, key events, new violations)={after_key:?}");
+    }
+}
+
+/// D01: unmap a parent with an open popup (client destroys the dismissed popup), then the client
+/// re-shows the window the protocol way: initial commit WITHOUT a buffer, then waits for a
+/// configure. The compositor must answer that commit with a configure.
+#[test]
+fn d01_remap_after_unmap_with_popup() {
+    for with_popup in [false, true] {
+        let mut r = R::new(2);
+        let (wp, top, s) = r.click_focus();
+        if with_popup {
+            r.popup_at("P", wp, s, (300, 250), (40, 20));
+        }
+        r.ls.probe.unmap(wp);
+        r.adv();
+        let st_unmapped = r.ls.state.core().stage().state(top);
+        let c0 = r.ls.probe.configures.len();
+        r.ls.probe.surfaces[wp].wl.commit(); // re-initial commit, no buffer
+        r.adv();
+        let answered = r.ls.probe.configures[c0..].iter().filter(|l| **l == r.ls.probe.surfaces[wp].label).count();
+        println!("D01 with_popup={with_popup}: state after unmap(+popup destroy)={st_unmapped:?}; configures answering the re-initial commit={answered}; state now={:?}", r.ls.state.core().stage().state(top));
+    }
+}
+
+/// D02: client closes nested menus of depth 1..3 (reverse order); then one key.
+#[test]
+fn d02_close_menu_depths() {
+    for depth in 1..=3 {
+        let mut r = R::new(2);
+        r.ls.probe.auto_destroy_popups = false;
+        let (wp, _, s) = r.click_focus();
+        let mut ps = vec![r.popup_at("P1", wp, s, (300, 250), (40, 20))];
+        for d in 1..depth {
+            r.key(KEY_A, true); r.key(KEY_A, false);
+            let sn = r.ls.probe.last_serial;
+            let lbl: &'static str = if d == 1 { "P2" } else { "P3" };
+            ps.push(r.popup_at(lbl, ps[d - 1], sn, (2, 2), (10, 5)));
+        }
+        for &p in ps.iter().rev() { r.ls.probe.destroy_popup(p); r.adv(); }
+        let before = (r.kb_grabbed(), r.ls.probe.kb.active.clone());
+        let v0 = r.viol().len();
+        r.key(KEY_K, true);
+        r.key(KEY_K, false);
+        println!("D02 depth={depth}: before key (kb_grabbed, client_active)={before:?}; new violations={:?}", &r.viol()[v0..]);
+    }
+}
+
+/// U12b: evicted / unknown serial while the most recent record is on C and the pointer is on B.
+/// Fallback (implementation's documented behaviour) = pointer output B (-200); it must never be
+/// "whatever was recorded last" (C, 40) and never A (360).
+#[test]
+fn u12b_unknown_serial_does_not_alias_the_latest_record() {
+    let mut r = three();
+    let (_, _, s_old) = r.click_focus(); // A
+    r.motion((1000.0, 0.0)); // B
+    for _ in 0..40 { r.button(BTN_LEFT, true); r.button(BTN_LEFT, false); } // evict A's serial
+    r.motion((1000.0, 0.0)); // C (clock)
+    r.button(BTN_LEFT, true); r.button(BTN_LEFT, false); // latest record on C
+    r.motion((-1000.0, 0.0)); // back to B
+    let evicted = slide(&mut r, s_old);
+    println!("U12b evicted={evicted:?} (pointer B=-200, latest record C=40, A=360)");
+    assert_eq!(evicted, Some(-200));
+}
+
+/// U12c: newest entries survive overflow: 80 serials on B, then the causing click on A,
+/// then 10 more on B: the A serial (newest-but-10) must still resolve to A.
+#[test]
+fn u12c_recent_entries_survive_overflow() {
+    let mut r = three();
+    r.click_focus();
+    r.motion((1000.0, 0.0));
+    for _ in 0..40 { r.button(BTN_LEFT, true); r.button(BTN_LEFT, false); }
+    r.motion((-1000.0, 0.0));
+    r.button(BTN_LEFT, true);
+    let s_a = r.ls.probe.last_serial;
+    r.button(BTN_LEFT, false);
+    r.motion((1000.0, 0.0));
+    for _ in 0..5 { r.button(BTN_LEFT, true); r.button(BTN_LEFT, false); }
+    let x = slide(&mut r, s_a);
+    println!("U12c recent A serial after overflow -> {x:?} (want 360)");
+    assert_eq!(x, Some(360));
+}

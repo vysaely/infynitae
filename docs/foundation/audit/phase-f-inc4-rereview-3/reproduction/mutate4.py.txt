@@ -1,0 +1,99 @@
+#!/usr/bin/env python3
+"""Third-review INC-4 mutations: each applied alone in a disposable worktree; detector = the shipped
+workspace suite at default features (what CI runs). DETECTED / MISSED / BROKEN."""
+import json, re, subprocess, sys, pathlib, os
+ROOT = pathlib.Path("/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/r4/mut")
+W = "crates/infynitae-wayland/src"; C = "crates/infynitae-core/src"; H = "crates/infynitae-backend-headless/src"
+KBU = """                                if kb.has_grab(g.serial())
+                                    || g.previous_serial().is_some_and(|ps| kb.has_grab(ps))
+                                {
+                                    self.keyboard_unset_grab();
+                                }"""
+PTU = """                                if self.pointer_has_grab(g.serial())
+                                    || g.previous_serial()
+                                        .is_some_and(|ps| self.pointer_has_grab(ps))
+                                {
+                                    self.pointer_unset_grab(serial, 0);
+                                }"""
+ORD = KBU + "\n                                // 3. pointer.unset_grab (only if pointer has this grab)\n" + PTU
+DIS_KB = """                        if kb.has_grab(g.serial())
+                            || g.previous_serial().is_some_and(|ps| kb.has_grab(ps))
+                        {
+                            self.keyboard_unset_grab();
+                        }
+                    }
+                    let target_surface"""
+
+PG = """                            if let Some(pg_serial) = self.popup_pointer_grab_serial.take() {
+                                if self.pointer_has_grab(pg_serial) {
+                                    self.pointer_unset_grab(serial, 0);
+                                }
+                            } else if self.pointer_has_grab(g.serial())
+                                || g.previous_serial()
+                                    .is_some_and(|ps| self.pointer_has_grab(ps))
+                            {
+                                self.pointer_unset_grab(serial, 0);
+                            }
+                        }
+                    }
+                    kb.set_focus(self, target_surface, serial);"""
+M = [
+ ("F01", "duplicate press reaches the seat again (transition gate removed)", f"{H}/lib.rs",
+  "    let (modifiers, mods_changed) = if is_transition {", "    let (modifiers, mods_changed) = if true || is_transition {"),
+ ("F02", "cross-Core token accepted (core_id check removed)", f"{W}/lib.rs",
+  "        if token.core_id() != self.core.id() {", "        if false && token.core_id() != self.core.id() {"),
+ ("F07", "popup destruction does not purge the hit target", f"{W}/handlers.rs",
+  "            if let Some(i) = self.element_index_by_root(&root) {\n                self.element_committed(i);",
+  "            if let Some(i) = self.element_index_by_root(&root) {\n                let _ = i;"),
+ ("F09", "PanDismissedPopupGrab never cleared (forwards without unset)", f"{W}/pointer.rs",
+  "        handle.unset_grab(self, data, event.serial, event.time, false);\n        handle.motion(data, focus, event);",
+  "        handle.motion(data, focus, event);"),
+ ("F10", "reconnect resurrects a dead popup grab (liveness check removed)", f"{W}/pointer.rs",
+  "                        top.is_alive() && self.popups.find_popup(&top).is_some()", "                        { let _ = &top; true }"),
+ ("F11", "preemption ignores the install serial (latest/previous serial only)", f"{W}/outputs.rs", PG,
+  PG.replace("if let Some(pg_serial) = self.popup_pointer_grab_serial.take() {", "if let Some(pg_serial) = self.popup_pointer_grab_serial.take().filter(|_| false) {")),
+ ("F12", "Super+B swallowed again", f"{C}/input/keys.rs",
+  "pub const CANONICAL_BINDINGS: [KeyBinding; 1] = [KeyBinding {", "pub const CANONICAL_BINDINGS: [KeyBinding; 2] = [KeyBinding { evdev: KEY_B, needs_logo: true, action: KeyAction::Noop }, KeyBinding {"),
+ ("F13", "Escape never cancels", f"{C}/input/keys.rs", "        return if interaction_active {", "        return if false {"),
+ ("F14", "serial store unbounded", f"{W}/lib.rs", "            self.serial_outputs.pop_front();", "            let _ = 0;"),
+ ("F15", "wrong eviction order (newest evicted)", f"{W}/lib.rs", "            self.serial_outputs.pop_front();", "            self.serial_outputs.pop_back();"),
+ ("F16", "unknown/evicted serial resolves to the most recent record", f"{W}/lib.rs",
+  "            .find(|(s, _)| *s == serial)", "            .find(|(s, _)| *s == serial || true)"),
+ ("F17", "synthetic motion leaked at pan end (restore_focus true)", f"{W}/pointer.rs",
+  "        handle.unset_grab(self, data, event.serial, event.time, false);\n        handle.motion(data, focus, event);",
+  "        handle.unset_grab(self, data, event.serial, event.time, true);\n        handle.motion(data, focus, event);"),
+ ("F18", "orphan release synced into XKB", f"{H}/lib.rs",
+  "    let is_transition = if pressed { !is_down } else { is_down };", "    let is_transition = if pressed { !is_down } else { true };"),
+ ("F19", "pan dismissal installs no PanDismissed grab (stale PopupPointerGrab kept)", f"{W}/outputs.rs",
+  "                            self.set_pan_dismissed_pointer_grab(serial);\n                        }\n                    } else if self.is_pointer_grabbed() {",
+  "                            let _ = serial;\n                        }\n                    } else if self.is_pointer_grabbed() {"),
+ ("F20", "popup_destroyed leaves the popup grab bookkeeping", f"{W}/handlers.rs",
+  "            self.popup_grab = None;\n            if let Some(pg_serial)", "            let _ = 0;\n            if let Some(pg_serial)"),
+]
+def run_suite():
+    cmd = "ulimit -n 1024; CARGO_BUILD_JOBS=4 cargo test --locked --workspace --no-fail-fast 2>&1"
+    p = subprocess.run(["bash", "-c", cmd], cwd=ROOT, capture_output=True, text=True)
+    out = p.stdout + p.stderr
+    failed = sorted(set(re.findall(r"^test (\S+) \.\.\. FAILED", out, re.M)))
+    return p.returncode, failed, ("error[E" in out or "could not compile" in out), out
+
+only = set(sys.argv[1:])
+res = []
+for mid, desc, f, old, new in M:
+    if only and mid not in only: continue
+    path = ROOT / f; src = path.read_text(); n = src.count(old)
+    if n != 1:
+        res.append((mid, desc, "BROKEN", f"anchor count {n}")); print(mid, "BROKEN anchor", n, flush=True); continue
+    path.write_text(src.replace(old, new))
+    try:
+        rc, failed, cerr, out = run_suite()
+    finally:
+        path.write_text(src)
+    if cerr:
+        v, d = "BROKEN", "; ".join(l for l in out.splitlines() if l.startswith("error"))[:300]
+    elif failed: v, d = "DETECTED", ", ".join(failed)
+    elif rc == 0: v, d = "MISSED", "suite green"
+    else: v, d = "BROKEN", f"rc={rc}"
+    res.append((mid, desc, v, d)); print(f"{mid:5} {v:9} {desc} :: {d}", flush=True)
+(ROOT.parent / "mutations4.json").write_text(json.dumps(res, indent=1))
+subprocess.run(["git", "status", "--porcelain"], cwd=ROOT)
