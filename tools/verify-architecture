@@ -112,6 +112,14 @@ PROBES_INVENTORY = [
      ("code", "E0624", "new"), "enforcement/probes/src/lib.rs"),
     ("p24_set_focus_without_port", "B protocol-side paths (INC-4)", PROBES, "p24_set_focus_without_port",
      ("code", "E0061", "set_focus"), "enforcement/probes/src/lib.rs"),
+    ("p25_set_preemption_strategy_in_production", "B protocol-side paths (INC4R-03)", PROBES, "p25_set_preemption_strategy_in_production",
+     ("code", "E0599", "set_preemption_strategy"), "enforcement/probes/src/lib.rs"),
+    ("p26_set_nested_grab_keep_pointer_in_production", "B protocol-side paths (INC4R-03)", PROBES, "p26_set_nested_grab_keep_pointer_in_production",
+     ("code", "E0599", "set_nested_grab_keep_pointer"), "enforcement/probes/src/lib.rs"),
+    ("p27_test_set_keyboard_grab_in_production", "B protocol-side paths (INC4R-03)", PROBES, "p27_test_set_keyboard_grab_in_production",
+     ("code", "E0599", "test_set_keyboard_grab"), "enforcement/probes/src/lib.rs"),
+    ("p28_portless_sync_seat_key", "B protocol-side paths (INC4R-02)", PROBES, "p28_portless_sync_seat_key",
+     ("code", "E0061", "sync_seat_key"), "enforcement/probes/src/lib.rs"),
     ("probe_store_port_in_state", "C protocol state", WAYLAND, "probe_store_port_in_state",
      ("code", "E0277", "cannot be sent between threads safely"), "crates/infynitae-wayland/src/lib.rs"),
     ("probe_protocol_refits_camera", "D 1R re-fit", CORE, "probe_protocol_refits_camera",
@@ -758,8 +766,10 @@ def check_mutations(binary, r):
             q = Quiet()
             if kind == "dag-acyclic":
                 # remove the backend's own adapter edge first so the seed is not a Cargo cycle
-                edit(tmp, "crates/infynitae-backend-headless/Cargo.toml",
-                     replace('infynitae-wayland = { path = "../infynitae-wayland" }\n', ""))
+                def strip_adapter_edge(text):
+                    t = text.replace('infynitae-wayland = { path = "../infynitae-wayland" }\n', '')
+                    return re.sub(r'probe_[a-z_]+ = \["infynitae-wayland/[a-z_]+"\]\n?', '', t)
+                edit(tmp, "crates/infynitae-backend-headless/Cargo.toml", strip_adapter_edge)
                 kind = "dag"
             if kind == "append-dag":
                 edit(tmp, rel, append(line))

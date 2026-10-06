@@ -62,6 +62,12 @@ pub struct OutputLifecycleToken {
     _not_send: NotSend,
 }
 
+/// Capability proof granted by Core to an authenticated InputPort for adapter-side key synchronization.
+#[derive(Debug)]
+pub struct InputAuthToken {
+    pub(crate) _private: (),
+}
+
 /// Physical input produced by a backend (C4.1), submitted through [`InputPort`]. Times are the
 /// device's monotonic microseconds.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -277,6 +283,12 @@ impl Core {
             return Err(EntryError::ForeignPort);
         }
         Ok(())
+    }
+
+    /// Verifies an InputPort and returns an InputAuthToken capability proof.
+    pub fn verify_input_port(&self, port: &InputPort) -> Result<InputAuthToken, EntryError> {
+        self.check_port(port)?;
+        Ok(InputAuthToken { _private: () })
     }
 
     /// The current per-surface output membership (OBJ-13).

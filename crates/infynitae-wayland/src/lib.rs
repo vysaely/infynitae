@@ -93,6 +93,10 @@ pub struct WaylandState {
     relative_pointer: RelativePointerManagerState,
     registry: SurfaceRegistry,
     elements: Vec<ElementHandle>,
+    pub(crate) serial_outputs:
+        std::collections::VecDeque<(smithay::utils::Serial, infynitae_core::output::OutputId)>,
+    pub(crate) popup_preemption_pending: bool,
+    pub(crate) popup_preemption_ordering_violated: bool,
     // probe builds only: the Send assertion must be the one and only error
     #[cfg(feature = "probe_store_port_in_state")]
     leaked_port: infynitae_core::InputPort,
@@ -134,6 +138,9 @@ impl WaylandState {
             relative_pointer: RelativePointerManagerState::new::<Self>(display),
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
+            serial_outputs: std::collections::VecDeque::new(),
+            popup_preemption_pending: false,
+            popup_preemption_ordering_violated: false,
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
             leaked_port: unreachable!(),
@@ -175,8 +182,10 @@ impl WaylandState {
 
     /// Updates Smithay's XKB state for a physical key and returns the updated modifiers
     /// and whether modifier state changed, without forwarding the key to any client.
+    /// Requires an InputAuthToken capability proof minted by Core for an authenticated InputPort (INC4R-02).
     pub fn sync_seat_key(
         &mut self,
+        _token: &infynitae_core::InputAuthToken,
         key: u32,
         pressed: bool,
     ) -> (infynitae_core::input::bindings::Modifiers, bool) {
@@ -194,6 +203,30 @@ impl WaylandState {
             kb.input_intercept(self, code, state, |_state, _mods, _sym| None::<()>);
         let modifiers = convert::modifiers_from_smithay(&kb.modifier_state());
         (modifiers, mods_changed)
+    }
+
+    /// Records the causal output on which a user interaction serial occurred (D-B6 Rule 1 provenance).
+    pub(crate) fn record_serial_output(
+        &mut self,
+        serial: smithay::utils::Serial,
+        output: infynitae_core::output::OutputId,
+    ) {
+        if self.serial_outputs.len() >= 64 {
+            self.serial_outputs.pop_front();
+        }
+        self.serial_outputs.push_back((serial, output));
+    }
+
+    /// Retrieves the causal output mapped to a serial, if known.
+    pub(crate) fn serial_output(
+        &self,
+        serial: smithay::utils::Serial,
+    ) -> Option<infynitae_core::output::OutputId> {
+        self.serial_outputs
+            .iter()
+            .rev()
+            .find(|(s, _)| *s == serial)
+            .map(|(_, o)| *o)
     }
 }
 

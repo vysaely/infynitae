@@ -128,20 +128,14 @@ pub fn pointer_button(
     port: &mut InputPort,
     button: u32,
     pressed: bool,
-    modifiers: Modifiers,
+    _modifiers: Modifiers,
     time_us: u64,
 ) -> Result<(), EntryError> {
     let seat_mods = state.seat_modifiers();
-    let effective_modifiers = Modifiers {
-        shift: modifiers.shift || seat_mods.shift,
-        ctrl: modifiers.ctrl || seat_mods.ctrl,
-        alt: modifiers.alt || seat_mods.alt,
-        logo: modifiers.logo || seat_mods.logo,
-    };
     let ev = PhysicalEvent::PointerButton {
         button,
         pressed,
-        modifiers: effective_modifiers,
+        modifiers: seat_mods,
         time_us,
     };
     inject(state, port, ev)
@@ -166,7 +160,8 @@ pub fn keyboard_key(
     pressed: bool,
     time_us: u64,
 ) -> Result<(), EntryError> {
-    let (modifiers, mods_changed) = state.sync_seat_key(key, pressed);
+    let token = state.core().verify_input_port(port)?;
+    let (modifiers, mods_changed) = state.sync_seat_key(&token, key, pressed);
     let ev = PhysicalEvent::KeyboardKey {
         key,
         pressed,

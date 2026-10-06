@@ -123,6 +123,10 @@ impl Core {
         if self.input.key_ownership.owner(key) == Some(Owner::Compositor) {
             return vec![Effect::KeyboardIntercept { key }];
         }
+        // Repeated press of already logically-down client key must not emit duplicate pressed (R03, K1/M12)
+        if self.input.key_ownership.owner(key) == Some(Owner::Client) {
+            return Vec::new();
+        }
 
         let interaction_active = self.input.interaction.active();
         let matched = self.resolve_key_binding(key, modifiers, interaction_active);

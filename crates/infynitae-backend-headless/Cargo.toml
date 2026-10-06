@@ -19,6 +19,9 @@ smithay = { version = "=0.7.0", default-features = false, features = ["renderer_
 probe_sealed_key_steal = ["infynitae-core/probe_sealed_key_steal"]
 # INV-INPUT-3 bypass switch (TST-05); see tools/verify-architecture. Never enabled by default.
 probe_pan_motion_bypass = ["infynitae-core/probe_pan_motion_bypass"]
+probe_preemption_strategy = ["infynitae-wayland/probe_preemption_strategy"]
+probe_nested_grab_keep_pointer = ["infynitae-wayland/probe_nested_grab_keep_pointer"]
+probe_test_keyboard_grab = ["infynitae-wayland/probe_test_keyboard_grab"]
 
 # T1 probe clients over socketpairs (FOUNDATION_TEST_PLAN T1; C1.2 testing row). Test-only.
 [dev-dependencies]

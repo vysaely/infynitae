@@ -62,7 +62,7 @@ pub fn resolve_key_binding(
     mods: Modifiers,
     interaction_active: bool,
 ) -> Option<KeyAction> {
-    if key == KEY_ESC && !mods.logo {
+    if key == KEY_ESC {
         return if interaction_active {
             Some(KeyAction::Cancel)
         } else {
@@ -104,8 +104,9 @@ mod tests {
             resolve_key_binding(KEY_ESC, none, true),
             Some(KeyAction::Cancel)
         );
+        assert_eq!(resolve_key_binding(KEY_ESC, logo, false), None);
         assert_eq!(
-            resolve_key_binding(KEY_ESC, logo, false),
+            resolve_key_binding(KEY_ESC, logo, true),
             Some(KeyAction::Cancel)
         );
         assert_eq!(

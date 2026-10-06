@@ -179,3 +179,27 @@ pub fn handler() -> infynitae_core::stage::ElementId {
 pub fn handler(core: &mut Core) {
     let _ = core.set_focus(None);
 }
+
+/// p25 (INC4R-03): call set_preemption_strategy in production. Expected E0599.
+#[cfg(feature = "p25_set_preemption_strategy_in_production")]
+pub fn handler(state: &mut infynitae_wayland::WaylandState) {
+    state.set_preemption_strategy(());
+}
+
+/// p26 (INC4R-03): call set_nested_grab_keep_pointer in production. Expected E0599.
+#[cfg(feature = "p26_set_nested_grab_keep_pointer_in_production")]
+pub fn handler(state: &mut infynitae_wayland::WaylandState) {
+    state.set_nested_grab_keep_pointer(false);
+}
+
+/// p27 (INC4R-03): call test_set_keyboard_grab in production. Expected E0599.
+#[cfg(feature = "p27_test_set_keyboard_grab_in_production")]
+pub fn handler(state: &mut infynitae_wayland::WaylandState) {
+    state.test_set_keyboard_grab(0);
+}
+
+/// p28 (INC4R-02): call sync_seat_key without an auth token. Expected E0061.
+#[cfg(feature = "p28_portless_sync_seat_key")]
+pub fn handler(state: &mut infynitae_wayland::WaylandState) {
+    state.sync_seat_key(30, true);
+}

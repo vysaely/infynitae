@@ -36,11 +36,16 @@ pub fn a_1080() -> VirtualOutput {
 pub struct Rig {
     pub ls: Lockstep,
     pub t: u64,
+    pub meta_held: bool,
 }
 
 impl Rig {
     pub fn new(ls: Lockstep) -> Rig {
-        Rig { ls, t: 0 }
+        Rig {
+            ls,
+            t: 0,
+            meta_held: false,
+        }
     }
 
     /// x8 setup: W mapped on A, pointer moved onto W at W-local (230, 220).
@@ -81,6 +86,17 @@ impl Rig {
     }
 
     pub fn button(&mut self, b: u32, pressed: bool, mods: Modifiers) {
+        if mods.logo && pressed && !self.meta_held {
+            self.t += 1000;
+            let _ = infynitae_backend_headless::keyboard_key(
+                &mut self.ls.state,
+                &mut self.ls.input,
+                infynitae_core::input::keys::KEY_LEFTMETA,
+                true,
+                self.t,
+            );
+            self.meta_held = true;
+        }
         self.t += 1000;
         pointer_button(
             &mut self.ls.state,
@@ -91,6 +107,17 @@ impl Rig {
             self.t,
         )
         .expect("button");
+        if !pressed && self.meta_held {
+            self.t += 1000;
+            let _ = infynitae_backend_headless::keyboard_key(
+                &mut self.ls.state,
+                &mut self.ls.input,
+                infynitae_core::input::keys::KEY_LEFTMETA,
+                false,
+                self.t,
+            );
+            self.meta_held = false;
+        }
         self.ls.pump();
         self.frame();
     }

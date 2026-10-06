@@ -529,3 +529,108 @@ fn x5_popup_membership_and_output_enter_control() {
         }
     }
 }
+
+/// R15 / N21 detection: causing (grab-serial) output A != current pointer output B != clock output C.
+/// All cameras centred on the parent; parent visible on A, B, C. Popup: 600 wide at x=390 with
+/// slide. Expected x by target: A(1920) 360, B(800) -200, C(1280) 40.
+#[test]
+fn r15_rule1_uses_the_causing_event_output() {
+    use common::input::{BTN_LEFT, none};
+    use common::{PopupSpec, output_k};
+    use infynitae_backend_headless::{pointer_button, pointer_motion, set_focus};
+    use infynitae_core::geom::CanvasPos;
+    use infynitae_core::navigation::PersistedCameras;
+    use infynitae_core::stage::ElementId;
+
+    let entries = ["A", "B", "C"]
+        .iter()
+        .map(|k| {
+            (
+                infynitae_backend_headless::VirtualOutput::key(k),
+                CanvasPos { x: 0, y: 0 },
+                1.0,
+            )
+        })
+        .collect();
+    let mut ls = Lockstep::with(
+        PersistedCameras::from_entries(entries).unwrap(),
+        &[
+            output_k("A", (1920, 1080), 120, 60_000),
+            output_k("B", (800, 600), 120, 60_000),
+            output_k("C", (1280, 720), 120, 144_000),
+        ],
+    );
+    ls.probe.auto_destroy_popups = true;
+    let qh = ls.qh.clone();
+    let w = ls.probe.toplevel(&qh, "W1", (400, 300), 0);
+    ls.pump();
+    let t = ls.now + Duration::from_micros(16_667);
+    ls.run_until(t);
+    let elements: Vec<ElementId> = ls.state.elements().collect();
+    assert_eq!(elements.len(), 1);
+
+    pointer_motion(
+        &mut ls.state,
+        &mut ls.input,
+        (50.0, 50.0),
+        (50.0, 50.0),
+        10_000,
+    )
+    .expect("motion");
+    let t = ls.now + Duration::from_micros(16_667);
+    ls.run_until(t);
+
+    // Click on A (the causing event)
+    pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, true, none(), 11_000).expect("button");
+    ls.pump();
+    let serial = ls.probe.last_serial;
+    let out_click = ls.state.core().pointer_output();
+    pointer_button(
+        &mut ls.state,
+        &mut ls.input,
+        BTN_LEFT,
+        false,
+        none(),
+        12_000,
+    )
+    .expect("button");
+    ls.pump();
+    set_focus(&mut ls.state, &mut ls.input, Some(elements[0])).expect("focus");
+    let t = ls.now + Duration::from_micros(16_667);
+    ls.run_until(t);
+
+    // Pointer moves to B
+    pointer_motion(
+        &mut ls.state,
+        &mut ls.input,
+        (1000.0, 0.0),
+        (1000.0, 0.0),
+        13_000,
+    )
+    .expect("motion");
+    let t = ls.now + Duration::from_micros(16_667);
+    ls.run_until(t);
+    let out_now = ls.state.core().pointer_output();
+    assert_ne!(out_click, out_now, "pointer did not change output");
+
+    let p = ls.probe.popup_with_grab_serial(
+        &qh,
+        "P",
+        w,
+        PopupSpec {
+            content: (600, 50),
+            shadow: 0,
+            anchor_rect: (390, 10, 1, 1),
+            slide: true,
+        },
+        serial,
+    );
+    let t = ls.now + Duration::from_micros(16_667);
+    ls.run_until(t);
+    let cfg = ls.probe.surfaces[p].popup_configure;
+    assert_eq!(
+        cfg.map(|c| c.0),
+        Some(360),
+        "popup constrained to the wrong output's viewport"
+    );
+}

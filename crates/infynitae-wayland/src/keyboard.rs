@@ -35,12 +35,14 @@ impl WaylandState {
 
     /// Sets whether nested popup grabs preserve the installed pointer grab (W-SM-14).
     #[doc(hidden)]
+    #[cfg(feature = "probe_nested_grab_keep_pointer")]
     pub fn set_nested_grab_keep_pointer(&mut self, keep: bool) {
         self.nested_grab_keep_pointer = keep;
     }
 
     /// Sets the preemption strategy under focus changes (default: Ordered).
     #[doc(hidden)]
+    #[cfg(feature = "probe_preemption_strategy")]
     pub fn set_preemption_strategy(&mut self, strategy: PreemptionStrategy) {
         self.ordered_preemption_strategy = strategy;
     }

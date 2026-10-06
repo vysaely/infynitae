@@ -169,8 +169,12 @@ impl WaylandState {
                 } else {
                     smithay::backend::input::ButtonState::Released
                 };
+                let serial = SERIAL_COUNTER.next_serial();
+                if let Some(out) = self.core.pointer_output() {
+                    self.record_serial_output(serial, out);
+                }
                 let event = ButtonEvent {
-                    serial: SERIAL_COUNTER.next_serial(),
+                    serial,
                     time: time_ms,
                     button,
                     state,
@@ -214,6 +218,16 @@ impl WaylandState {
             }
             Effect::PointerZeroOutputEnd => {
                 ptr.unset_grab(self, SERIAL_COUNTER.next_serial(), 0);
+                let grab_opt = self.popup_grab.clone();
+                if let Some(g) = grab_opt
+                    && !g.has_ended()
+                {
+                    let serial = g.serial();
+                    self.set_popup_pointer_grab(&g, serial);
+                    let kb = self.keyboard_handle();
+                    let grab = smithay::desktop::PopupKeyboardGrab::new(&g);
+                    self.set_keyboard_grab(&kb, grab, serial);
+                }
             }
             _ => return false,
         }
@@ -269,6 +283,7 @@ impl WaylandState {
     }
 
     #[doc(hidden)]
+    #[cfg(feature = "probe_test_keyboard_grab")]
     pub fn test_set_keyboard_grab(&mut self, serial: smithay::utils::Serial) {
         struct ForeignGrab;
         impl smithay::input::keyboard::KeyboardGrab<WaylandState> for ForeignGrab {

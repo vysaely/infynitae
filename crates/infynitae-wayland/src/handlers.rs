@@ -73,8 +73,15 @@ impl WaylandState {
 
     /// M3: popup position = `get_unconstrained_geometry(target)` against the anchor output's
     /// viewport (R8), or the positioner's own geometry when Core has no target.
-    fn place_popup(&self, surface: &PopupSurface, positioner: PositionerState) {
-        let causing_output = self.core.pointer_output();
+    fn place_popup(
+        &self,
+        surface: &PopupSurface,
+        positioner: PositionerState,
+        serial: Option<Serial>,
+    ) {
+        let causing_output = serial
+            .and_then(|s| self.serial_output(s))
+            .or_else(|| self.core.pointer_output());
         let target = surface
             .get_parent_surface()
             .and_then(|parent| self.element_index_by_root(&parent))
@@ -201,7 +208,7 @@ impl XdgShellHandler for WaylandState {
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
-        self.place_popup(&surface, positioner);
+        self.place_popup(&surface, positioner, None);
         let _ = self.popups.track_popup(PopupKind::Xdg(surface));
     }
 
@@ -211,7 +218,7 @@ impl XdgShellHandler for WaylandState {
         positioner: PositionerState,
         token: u32,
     ) {
-        self.place_popup(&surface, positioner);
+        self.place_popup(&surface, positioner, None);
         surface.send_repositioned(token);
     }
 
@@ -243,6 +250,11 @@ impl XdgShellHandler for WaylandState {
                 surface.send_popup_done();
                 return;
             }
+            let pos = surface.with_pending_state(|s| s.positioner);
+            self.place_popup(&surface, pos, Some(serial));
+            if surface.is_initial_configure_sent() {
+                let _ = surface.send_configure();
+            }
             kb.set_focus(self, grab.current_grab(), serial);
             self.set_keyboard_grab(&kb, PopupKeyboardGrab::new(&grab), serial);
             let nested = grab.previous_serial().is_some();
@@ -266,6 +278,9 @@ impl SeatHandler for WaylandState {
     type TouchFocus = WlSurface;
 
     fn seat_state(&mut self) -> &mut SeatState<Self> {
+        if self.popup_preemption_pending {
+            self.popup_preemption_ordering_violated = true;
+        }
         &mut self.seats
     }
 }

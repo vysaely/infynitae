@@ -13,11 +13,10 @@ mod common;
 use std::collections::BTreeSet;
 use std::time::Duration;
 
-use common::input::{BTN_MIDDLE, none};
+use common::input::{BTN_MIDDLE, logo, none};
 use common::{Lockstep, output};
-use infynitae_backend_headless::{keyboard_key, pointer_button, set_focus};
+use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
 use infynitae_core::input::keys::{KEY_A, KEY_B, KEY_ENTER, KEY_ESC, KEY_LEFTMETA, KEY_LEFTSHIFT};
-use infynitae_core::input::ownership::Owner;
 use infynitae_core::stage::ElementId;
 
 struct S {
@@ -28,6 +27,7 @@ struct S {
     e1: ElementId,
     e2: ElementId,
     held: BTreeSet<u32>,
+    client_held: BTreeSet<u32>,
 }
 
 impl S {
@@ -49,6 +49,7 @@ impl S {
             e1,
             e2,
             held: BTreeSet::new(),
+            client_held: BTreeSet::new(),
         };
         s.set_focus(Some(e1));
         s
@@ -63,9 +64,18 @@ impl S {
     fn key(&mut self, k: u32, pressed: bool) {
         self.time_us += 1000;
         if pressed {
+            let already_compositor = self.held.contains(&k) && !self.client_held.contains(&k);
             self.held.insert(k);
+            let super_down = self.held.contains(&KEY_LEFTMETA);
+            let is_compositor = already_compositor
+                || (k == KEY_ESC && self.ls.state.core().interaction().active())
+                || (super_down && (k == KEY_B || k == KEY_ENTER));
+            if !is_compositor {
+                self.client_held.insert(k);
+            }
         } else {
             self.held.remove(&k);
+            self.client_held.remove(&k);
         }
         keyboard_key(
             &mut self.ls.state,
@@ -77,6 +87,12 @@ impl S {
         .expect("keyboard_key");
         self.advance();
         self.check(&format!("key {k} {}", if pressed { "down" } else { "up" }));
+    }
+
+    fn motion(&mut self, d: (f64, f64)) {
+        self.time_us += 1000;
+        pointer_motion(&mut self.ls.state, &mut self.ls.input, d, d, self.time_us).expect("motion");
+        self.advance();
     }
 
     fn set_focus(&mut self, target: Option<ElementId>) {
@@ -94,15 +110,9 @@ impl S {
             "KV-1 protocol violations at {step}: {:?}",
             c.violations
         );
-        let client_owned_held: BTreeSet<u32> = self
-            .held
-            .iter()
-            .copied()
-            .filter(|&k| self.ls.state.core().key_ownership().owner(k) == Some(Owner::Client))
-            .collect();
         if c.active.is_some() {
             assert_eq!(
-                c.keys, client_owned_held,
+                c.keys, self.client_held,
                 "KV-2 client keys != client-owned held keys at {step}"
             );
             assert_eq!(
@@ -594,4 +604,329 @@ fn keyboard_key_rejects_foreign_port() {
         res.is_err(),
         "foreign input port was accepted by keyboard_key"
     );
+}
+
+/// R01: a key event submitted with a FOREIGN port must fail closed — including the seat XKB
+/// state (OBJ-27). Otherwise a rejected Shift becomes a modifier announced to clients on `enter`.
+#[test]
+fn r01_foreign_port_key_leaves_no_xkb_trace() {
+    let mut ls1 = Lockstep::new(Some(output((1920, 1080), 120)));
+    let qh = ls1.qh.clone();
+    let _w1 = ls1.probe.toplevel(&qh, "W1", (400, 300), 0);
+    let _w2 = ls1.probe.toplevel(&qh, "W2", (400, 300), 0);
+    ls1.pump();
+    let elements: Vec<ElementId> = ls1.state.elements().collect();
+    set_focus(&mut ls1.state, &mut ls1.input, Some(elements[0])).expect("focus");
+    let mut other = Lockstep::new(Some(output((1920, 1080), 120)));
+    let before = ls1
+        .state
+        .keyboard_handle()
+        .modifier_state()
+        .serialized
+        .depressed;
+    let res = keyboard_key(&mut ls1.state, &mut other.input, KEY_LEFTSHIFT, true, 1);
+    assert!(res.is_err(), "foreign port accepted");
+    let after = ls1
+        .state
+        .keyboard_handle()
+        .modifier_state()
+        .serialized
+        .depressed;
+    set_focus(&mut ls1.state, &mut ls1.input, Some(elements[1])).expect("focus");
+    let t = ls1.now + Duration::from_micros(16_667);
+    ls1.run_until(t);
+    assert_eq!(
+        after, before,
+        "REJECTED event mutated seat XKB state (no fail-closed)"
+    );
+    assert_eq!(
+        ls1.probe.kb.depressed, 0,
+        "client told a modifier is held that no accepted event pressed"
+    );
+}
+
+/// R02: portless sync_seat_key requires a verified InputAuthToken from Core.
+#[test]
+fn r02_portless_sync_seat_key_requires_token() {
+    let ls1 = Lockstep::new(Some(output((1920, 1080), 120)));
+    let ls2 = Lockstep::new(Some(output((1920, 1080), 120)));
+    let err = ls1.state.core().verify_input_port(&ls2.input);
+    assert_eq!(err.unwrap_err(), infynitae_core::EntryError::ForeignPort);
+}
+
+/// R03 (K1/M12 Down(Client) -> press): a repeated press of a CLIENT-owned key must not produce a
+/// second `pressed` for a logically-down key (protocol must-not).
+#[test]
+fn r03_repeated_client_press_is_not_duplicated() {
+    let mut s = S::new(true);
+    s.set_focus(Some(s.e1));
+    s.key(KEY_A, true);
+    s.key(KEY_A, true);
+    s.key(KEY_A, false);
+    assert!(
+        s.ls.probe.kb.violations.is_empty(),
+        "protocol violation: {:?}",
+        s.ls.probe.kb.violations
+    );
+}
+
+/// R04: the backend snapshot must not be a second modifier authority: `logo` in the snapshot
+/// with no Super held on the seat must NOT acquire a CameraPan (OBJ-27 single authority).
+#[test]
+fn r04_snapshot_logo_without_seat_super_does_not_pan() {
+    let mut s = S::new(true);
+    s.set_focus(Some(s.e1));
+    s.motion((50.0, 50.0));
+    pointer_button(
+        &mut s.ls.state,
+        &mut s.ls.input,
+        BTN_MIDDLE,
+        true,
+        logo(),
+        1000,
+    )
+    .expect("button");
+    let pan = s.ls.state.core().interaction().active();
+    pointer_button(
+        &mut s.ls.state,
+        &mut s.ls.input,
+        BTN_MIDDLE,
+        false,
+        logo(),
+        2000,
+    )
+    .expect("button");
+    assert!(
+        !pan,
+        "CameraPan acquired from a backend snapshot while the seat has no Super held"
+    );
+}
+
+/// R05: temporal sequences — the pan chord sees the seat state at the button's event boundary.
+#[test]
+fn r05_temporal_modifier_boundaries() {
+    // (a) Super down, MMB down, motion, MMB up, Super up: pan; client sees no button
+    let mut s1 = S::new(true);
+    s1.set_focus(Some(s1.e1));
+    s1.motion((50.0, 50.0));
+    s1.key(KEY_LEFTMETA, true);
+    let m = s1.ls.probe.ptr.len();
+    pointer_button(
+        &mut s1.ls.state,
+        &mut s1.ls.input,
+        BTN_MIDDLE,
+        true,
+        none(),
+        1000,
+    )
+    .expect("button");
+    let a_pan = s1.ls.state.core().interaction().active();
+    s1.motion((30.0, 0.0));
+    pointer_button(
+        &mut s1.ls.state,
+        &mut s1.ls.input,
+        BTN_MIDDLE,
+        false,
+        none(),
+        2000,
+    )
+    .expect("button");
+    s1.key(KEY_LEFTMETA, false);
+    let a_buttons: Vec<String> = s1.ls.probe.ptr[m..]
+        .iter()
+        .filter(|l| l.starts_with("button"))
+        .cloned()
+        .collect();
+
+    // (b) MMB down before Super: client-owned, no pan
+    let mut s2 = S::new(true);
+    s2.set_focus(Some(s2.e1));
+    s2.motion((50.0, 50.0));
+    pointer_button(
+        &mut s2.ls.state,
+        &mut s2.ls.input,
+        BTN_MIDDLE,
+        true,
+        none(),
+        1000,
+    )
+    .expect("button");
+    s2.key(KEY_LEFTMETA, true);
+    let b_pan = s2.ls.state.core().interaction().active();
+    pointer_button(
+        &mut s2.ls.state,
+        &mut s2.ls.input,
+        BTN_MIDDLE,
+        false,
+        none(),
+        2000,
+    )
+    .expect("button");
+    s2.key(KEY_LEFTMETA, false);
+
+    // (c) Super released immediately before MMB: no pan (no one-event lag)
+    let mut s3 = S::new(true);
+    s3.set_focus(Some(s3.e1));
+    s3.motion((50.0, 50.0));
+    s3.key(KEY_LEFTMETA, true);
+    s3.key(KEY_LEFTMETA, false);
+    pointer_button(
+        &mut s3.ls.state,
+        &mut s3.ls.input,
+        BTN_MIDDLE,
+        true,
+        none(),
+        1000,
+    )
+    .expect("button");
+    let c_pan = s3.ls.state.core().interaction().active();
+    pointer_button(
+        &mut s3.ls.state,
+        &mut s3.ls.input,
+        BTN_MIDDLE,
+        false,
+        none(),
+        2000,
+    )
+    .expect("button");
+
+    assert!(a_pan && a_buttons.is_empty() && !b_pan && !c_pan);
+}
+
+/// R06: MRU sequence; arbitrary z-order fallback gone; no auto-focus on remap/create.
+#[test]
+fn r06_mru_history_sequence() {
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    let qh = ls.qh.clone();
+    let wa = ls.probe.toplevel(&qh, "W1", (400, 300), 0);
+    let wb = ls.probe.toplevel(&qh, "W2", (400, 300), 0);
+    let wc = ls.probe.toplevel(&qh, "W3", (400, 300), 0);
+    ls.pump();
+    let e: Vec<ElementId> = ls.state.elements().collect();
+    assert_eq!(e.len(), 3);
+    let (a, b, c) = (e[0], e[1], e[2]);
+
+    set_focus(&mut ls.state, &mut ls.input, Some(a)).unwrap();
+    set_focus(&mut ls.state, &mut ls.input, Some(b)).unwrap();
+    set_focus(&mut ls.state, &mut ls.input, Some(c)).unwrap();
+
+    ls.probe.destroy_toplevel(wc);
+    let t = ls.now + Duration::from_micros(16_667);
+    ls.run_until(t);
+    assert_eq!(
+        ls.state.core().focus().target(),
+        Some(b),
+        "destroy C -> B (MRU)"
+    );
+    assert_eq!(ls.probe.kb.active.as_deref(), Some("W2"));
+
+    ls.probe.unmap(wb);
+    let t = ls.now + Duration::from_micros(16_667);
+    ls.run_until(t);
+    assert_eq!(ls.state.core().focus().target(), Some(a), "unmap B -> A");
+    assert_eq!(ls.probe.kb.active.as_deref(), Some("W1"));
+
+    ls.probe.destroy_toplevel(wb);
+    let t = ls.now + Duration::from_micros(16_667);
+    ls.run_until(t);
+    assert_eq!(
+        ls.state.core().focus().target(),
+        Some(a),
+        "destroying unfocused unmapped B keeps A"
+    );
+
+    ls.probe.destroy_toplevel(wa);
+    let t = ls.now + Duration::from_micros(16_667);
+    ls.run_until(t);
+    assert_eq!(
+        ls.state.core().focus().target(),
+        None,
+        "no MRU successor -> Unfocused"
+    );
+    assert_eq!(ls.probe.kb.active, None);
+
+    let qh = ls.qh.clone();
+    ls.probe.toplevel(&qh, "D", (200, 200), 0);
+    let t = ls.now + Duration::from_micros(16_667);
+    ls.run_until(t);
+    assert_eq!(
+        ls.state.core().focus().target(),
+        None,
+        "creating D does not take focus"
+    );
+    assert!(ls.probe.kb.violations.is_empty());
+}
+
+/// R07: focus cannot be set on an unmapped element through the port-gated entry.
+#[test]
+fn r07_set_focus_on_unmapped_is_refused() {
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    let qh = ls.qh.clone();
+    let _w1 = ls.probe.toplevel(&qh, "W1", (400, 300), 0);
+    let w2 = ls.probe.toplevel(&qh, "W2", (400, 300), 0);
+    ls.pump();
+    let e: Vec<ElementId> = ls.state.elements().collect();
+    ls.probe.unmap(w2);
+    let t = ls.now + Duration::from_micros(16_667);
+    ls.run_until(t);
+    let res = set_focus(&mut ls.state, &mut ls.input, Some(e[1]));
+    assert!(res.is_err(), "unmapped element accepted as focus target");
+}
+
+/// R08: K6 / M22 cancel observable on the wire and on the camera: after Esc cancels a pan,
+/// further motion moves no camera, and the compositor-owned MMB release is still consumed.
+#[test]
+fn r08_k6_cancel_is_externally_observable() {
+    let mut s = S::new(true);
+    s.set_focus(Some(s.e1));
+    s.motion((50.0, 50.0));
+    s.key(KEY_LEFTMETA, true);
+    pointer_button(
+        &mut s.ls.state,
+        &mut s.ls.input,
+        BTN_MIDDLE,
+        true,
+        none(),
+        1000,
+    )
+    .expect("button");
+    s.key(KEY_LEFTMETA, false);
+    let cam0 = s.ls.state.core().cameras().center(0).unwrap();
+    s.key(KEY_ESC, true);
+    s.key(KEY_ESC, false);
+    let m = s.ls.probe.ptr.len();
+    s.motion((40.0, 0.0));
+    let cam1 = s.ls.state.core().cameras().center(0).unwrap();
+    pointer_button(
+        &mut s.ls.state,
+        &mut s.ls.input,
+        BTN_MIDDLE,
+        false,
+        none(),
+        2000,
+    )
+    .expect("button");
+    let after: Vec<String> = s.ls.probe.ptr[m..].to_vec();
+    assert_eq!(cam0, cam1, "camera kept panning after Esc cancel");
+    assert!(
+        !after.iter().any(|l| l.starts_with("button")),
+        "owned MMB release leaked after cancel"
+    );
+    assert!(
+        !s.ls.probe.key_events.iter().any(|(k, _)| *k == KEY_ESC),
+        "Esc leaked while cancelling"
+    );
+}
+
+/// N17 detection: set_focus must reject an InputPort that does not belong to its Core.
+#[test]
+fn set_focus_rejects_foreign_port() {
+    let mut ls1 = Lockstep::new(Some(output((1920, 1080), 120)));
+    let mut ls2 = Lockstep::new(Some(output((1920, 1080), 120)));
+    let qh = ls1.qh.clone();
+    let _w = ls1.probe.toplevel(&qh, "W", (400, 300), 0);
+    ls1.pump();
+    let e = ls1.state.elements().next().unwrap();
+    let res = set_focus(&mut ls1.state, &mut ls2.input, Some(e));
+    assert!(res.is_err(), "set_focus must reject foreign InputPort");
 }

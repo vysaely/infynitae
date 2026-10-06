@@ -429,22 +429,25 @@ fn ee1_c5_render_hit_agreement_on_the_production_path() {
 #[test]
 fn n_pan_moves_render_and_hit_together() {
     use common::input::{BTN_MIDDLE, logo};
-    use infynitae_backend_headless::{pointer_button, pointer_motion};
+    use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion};
+    use infynitae_core::input::keys::KEY_LEFTMETA;
     for (t, s) in [(Transform::Normal, 120), (Transform::R90, 150)] {
         let mut ls = Lockstep::new(Some(rotated(t, s)));
         tile_view(&mut ls);
         let before = c5_measure(&mut ls, t, s);
         assert_eq!(before.mismatches, 0);
-        pointer_button(&mut ls.state, &mut ls.input, BTN_MIDDLE, true, logo(), 1).unwrap();
+        keyboard_key(&mut ls.state, &mut ls.input, KEY_LEFTMETA, true, 1).unwrap();
+        pointer_button(&mut ls.state, &mut ls.input, BTN_MIDDLE, true, logo(), 2).unwrap();
         pointer_motion(
             &mut ls.state,
             &mut ls.input,
             (-37.25, -211.5),
             (0.0, 0.0),
-            2,
+            3,
         )
         .unwrap();
-        pointer_button(&mut ls.state, &mut ls.input, BTN_MIDDLE, false, logo(), 3).unwrap();
+        pointer_button(&mut ls.state, &mut ls.input, BTN_MIDDLE, false, logo(), 4).unwrap();
+        keyboard_key(&mut ls.state, &mut ls.input, KEY_LEFTMETA, false, 5).unwrap();
         ls.pump();
         assert_eq!(
             ls.state.core().cameras().center(0),

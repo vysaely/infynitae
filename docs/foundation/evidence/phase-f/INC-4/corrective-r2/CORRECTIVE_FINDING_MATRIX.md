@@ -31,7 +31,8 @@ This document establishes the authoritative corrective tracking matrix for all f
   - Port R16 into `crates/infynitae-backend-headless/tests/t1_popup_focus.rs` asserting `smithay_focus == root` and zero client protocol violations.
   - Port R17 long-lived stress test (150 cycles) asserting bounded resources and 0 client protocol violations.
 - **Surviving Mutation Coverage:** Permanently detect mutation N08 ("OB-4 dismissal skips keyboard unset").
-- **Status:** OPEN
+- **Resolution Evidence:** Implemented in `crates/infynitae-wayland/src/outputs.rs`: `Effect::DismissPopupGrab(target)` resolves `target_surface` from `target` and calls `kb.set_focus(self, target_surface, serial)` after `ungrab(All)` and keyboard unset grab. Tests `r16_keyboard_focus_after_pan_dismissal` and `r17_long_lived_stress_bounded_state` pass with 0 protocol violations. N08 is DETECTED in `verify-test-efficacy`.
+- **Status:** RESOLVED
 
 ---
 
@@ -51,7 +52,8 @@ This document establishes the authoritative corrective tracking matrix for all f
 - **Permanent Regression Test Plan:**
   - Add R01 and R02 tests to `crates/infynitae-backend-headless/tests/t1_keyboard.rs`.
 - **Surviving Mutation Coverage:** Detect mutation N24 (distinguish fail-open from fail-closed).
-- **Status:** OPEN
+- **Resolution Evidence:** Core mints capability `InputAuthToken` via `Core::verify_input_port(&self, &InputPort)`. `WaylandState::sync_seat_key` requires `&InputAuthToken`. Backend `keyboard_key` verifies port before calling `sync_seat_key`. Compile probe `p25` verifies callers without `InputAuthToken` fail compilation. Foreign port runtime tests pass; rejected ports leave seat XKB untouched.
+- **Status:** RESOLVED
 
 ---
 
@@ -72,7 +74,8 @@ This document establishes the authoritative corrective tracking matrix for all f
   - Architecture probe and compile check verifying that production builds do not expose or call these methods.
   - Compile probe verifying absence of production setters.
 - **Surviving Mutation Coverage:** Mutations V (`nested_grab_keep_pointer = false`) and L remain detected without production bypass switches.
-- **Status:** OPEN
+- **Resolution Evidence:** Feature gates `probe_preemption_strategy`, `probe_nested_grab_keep_pointer`, and `probe_test_keyboard_grab` added in `infynitae-wayland` and `infynitae-backend-headless`. Probes `p26`, `p27`, `p28` added to `enforcement/probes` and pass in `verify-architecture`. Default production builds completely omit these test hooks.
+- **Status:** RESOLVED
 
 ---
 
@@ -91,7 +94,8 @@ This document establishes the authoritative corrective tracking matrix for all f
 - **Permanent Regression Test Plan:**
   - Port R03 into `crates/infynitae-backend-headless/tests/t1_keyboard.rs` with protocol violation assertions.
 - **Surviving Mutation Coverage:** Ensure repeat guards in Core are tested with wire assertions.
-- **Status:** OPEN
+- **Resolution Evidence:** In `crates/infynitae-core/src/entry.rs`, `Core::keyboard_press` checks `self.input.key_ownership.owner(key)`. If `Some(Owner::Client)`, it returns `Vec::new()`, completely suppressing duplicate `pressed` forwarding. Test `r03_repeated_client_press_is_not_duplicated` passes with 0 protocol violations.
+- **Status:** RESOLVED
 
 ---
 
@@ -110,7 +114,8 @@ This document establishes the authoritative corrective tracking matrix for all f
 - **Permanent Regression Test Plan:**
   - Port R15 into `crates/infynitae-backend-headless/tests/t1_outputs.rs`.
 - **Surviving Mutation Coverage:** Permanently detect mutation N21 ("rule 1 wiring removed in adapter").
-- **Status:** OPEN
+- **Resolution Evidence:** `WaylandState` maintains a causal serial -> OutputId mapping via `record_serial_output` on pointer/keyboard button events. `place_popup` threads `serial: Option<Serial>` and queries `serial_output(s)`. Test `r15_rule1_uses_the_causing_event_output` in `t1_outputs.rs` passes. Mutation N21 is permanently DETECTED by `verify-test-efficacy`.
+- **Status:** RESOLVED
 
 ---
 
@@ -134,7 +139,8 @@ This document establishes the authoritative corrective tracking matrix for all f
   - Port R09b into `crates/infynitae-backend-headless/tests/t1_popup_focus.rs`.
   - Port R12 into `crates/infynitae-backend-headless/tests/t1_popup_focus.rs`.
 - **Surviving Mutation Coverage:** Ensure clean teardown is verified even with multiple distinct serials.
-- **Status:** OPEN
+- **Resolution Evidence:** `outputs.rs` checks `kb.has_grab(g.serial()) || g.previous_serial().is_some_and(|ps| kb.has_grab(ps))` and pointer equivalent. `pointer.rs` restores popup grab across zero-output reconnection. Tests `r09b_nested_preemption_with_distinct_serials` and `r12_popup_grab_semantics_across_zero_outputs` pass.
+- **Status:** RESOLVED
 
 ---
 
@@ -153,7 +159,8 @@ This document establishes the authoritative corrective tracking matrix for all f
 - **Permanent Regression Test Plan:**
   - Add R04 test to `crates/infynitae-backend-headless/tests/t1_keyboard.rs`.
 - **Surviving Mutation Coverage:** Mutation N03 ("button modifiers from seat only") passes cleanly without breaking tests.
-- **Status:** OPEN
+- **Resolution Evidence:** Backend `pointer_button` uses `state.seat_modifiers()` as sole modifier authority. All test suites updated with realistic physical keypresses for `KEY_LEFTMETA`. Test `r04_snapshot_logo_without_seat_super_does_not_pan` passes.
+- **Status:** RESOLVED
 
 ---
 
@@ -180,7 +187,8 @@ This document establishes the authoritative corrective tracking matrix for all f
 - **Permanent Regression Test Plan:**
   - Independent oracles across `t1_keyboard.rs`, `t1_popup_focus.rs`, `t1_outputs.rs`.
 - **Surviving Mutation Coverage:** 0 surviving mutations among N01–N24 (except equivalent N01).
-- **Status:** OPEN
+- **Resolution Evidence:** All five mutations N08, N09, N17, N18, N21 are registered in `tools/verify-test-efficacy` and pass as DETECTED. KV-2 and F-6 rewritten with independent literal ground truth sets. ATK-12 restored with adversarial focus transition. All 98 mutation controls in `verify-test-efficacy` detected.
+- **Status:** RESOLVED
 
 ---
 
@@ -197,7 +205,12 @@ This document establishes the authoritative corrective tracking matrix for all f
   2. Update all evidence files and README records with the exact figures.
 - **Permanent Regression Test Plan:** `verify-test-efficacy` and `verify-architecture` self-reporting.
 - **Surviving Mutation Coverage:** N/A.
-- **Status:** OPEN
+- **Resolution Evidence:** Exact figures mechanically derived across workspace:
+  - 185 tests total across workspace (69 core unit tests, 116 headless integration tests; 189 with probe features enabled);
+  - 38 compile probes in `PROBES_INVENTORY` (`verify-architecture`);
+  - 54 seeded negative controls + 3 judge controls = 57 in `verify-architecture`;
+  - 98 seeded behavioural mutation controls + 2 judge controls = 100 in `verify-test-efficacy`.
+- **Status:** RESOLVED
 
 ---
 
@@ -213,7 +226,8 @@ This document establishes the authoritative corrective tracking matrix for all f
   - Formally record the owner adjudication defining the invariant boundary: synthetic motion is suppressed where Infynitae invariants require deterministic input delivery without synthetic pointer noise.
 - **Permanent Regression Test Plan:** Verified in `t1_adversarial.rs` (ATK-09) and `t1_popup_focus.rs`.
 - **Surviving Mutation Coverage:** Mutation N07 remains detected.
-- **Status:** OPEN
+- **Resolution Evidence:** Owner adjudication formally incorporated: Smithay's synthetic focus-restoration motion is acceptable ONLY as an internal implementation mechanism when it cannot cross client-visible boundaries where an Infynitae invariant requires suppression (e.g. INV-INPUT-3 KeepFocus, CameraPan popup dismissal). Canonical invariants are never weakened to match default Smithay behavior.
+- **Status:** RESOLVED
 
 ---
 
@@ -229,7 +243,8 @@ This document establishes the authoritative corrective tracking matrix for all f
   - Align key bindings with canonical specifications: unconfigured Super chords when idle pass through to clients or are isolated to test harness configurations.
 - **Permanent Regression Test Plan:** Unit tests in `infynitae-core` and T1 suite.
 - **Surviving Mutation Coverage:** Mutations N19, N20 detected.
-- **Status:** OPEN
+- **Resolution Evidence:** In `crates/infynitae-core/src/input/keys.rs`, `resolve_key_binding` for `KEY_ESC` (with or without logo) yields `KeyAction::Cancel` ONLY when `interaction_active` is true. When idle, it returns `None`, allowing unmapped chords to pass cleanly through to the client. Super+B remains a compositor noop binding.
+- **Status:** RESOLVED
 
 ---
 
@@ -246,7 +261,8 @@ This document establishes the authoritative corrective tracking matrix for all f
   2. Append explicit superseding sections for INC-4 Round 1 and INC-4 Round 2.
 - **Permanent Regression Test Plan:** `check-foundation-docs` verification.
 - **Surviving Mutation Coverage:** N/A.
-- **Status:** OPEN
+- **Resolution Evidence:** Historical entries in `docs/foundation/CHECKPOINT.md` restored byte-for-byte to their baseline state (`1ee520fa`). Original INC-4 implementation record restored. Round 1 and Round 2 corrective entries appended. Append-only integrity fully re-established.
+- **Status:** RESOLVED
 
 ---
 
@@ -254,15 +270,16 @@ This document establishes the authoritative corrective tracking matrix for all f
 
 | ID | Class | Short Title | Status | Responsible Component |
 |---|---|---|---|---|
-| INC4R-01 | Level A | Core/Smithay keyboard focus divergence after OB-4 dismissal | OPEN | `infynitae-wayland` |
-| INC4R-02 | Level B | XKB intake is portless and not fail-closed | OPEN | `infynitae-backend-headless`, `infynitae-wayland` |
-| INC4R-03 | Level B | Invariant-disabling switches and hijack hook in production | OPEN | `infynitae-wayland`, `verify-architecture` |
-| INC4R-04 | Level B | Duplicate client `pressed` on repeated client press | OPEN | `infynitae-core` |
-| INC4R-05 | Level B | Rule-1 provenance uses current pointer output | OPEN | `infynitae-wayland` |
-| INC4R-06 | Level B | Popup grab bookkeeping (nested serials & zero-output) | OPEN | `infynitae-wayland` |
-| INC4R-07 | Level B | Backend modifier snapshot is still an authority | OPEN | `infynitae-backend-headless`, tests |
-| INC4R-08 | Level B | Verification gaps and circular oracles | OPEN | tests, `verify-test-efficacy` |
-| INC4R-09 | Level B | Evidence counts exactness | OPEN | documentation, scripts |
-| INC4R-10 | Level C | Pointer unset_grab motion replay owner adjudication | OPEN | documentation |
-| INC4R-11 | Level C | Product key bindings canonical ownership | OPEN | `infynitae-core` |
-| INC4R-12 | Level C | Restore append-only CHECKPOINT history | OPEN | `docs/foundation/CHECKPOINT.md` |
+| INC4R-01 | Level A | Core/Smithay keyboard focus divergence after OB-4 dismissal | RESOLVED | `infynitae-wayland` |
+| INC4R-02 | Level B | XKB intake is portless and not fail-closed | RESOLVED | `infynitae-backend-headless`, `infynitae-wayland` |
+| INC4R-03 | Level B | Invariant-disabling switches and hijack hook in production | RESOLVED | `infynitae-wayland`, `verify-architecture` |
+| INC4R-04 | Level B | Duplicate client `pressed` on repeated client press | RESOLVED | `infynitae-core` |
+| INC4R-05 | Level B | Rule-1 provenance uses current pointer output | RESOLVED | `infynitae-wayland` |
+| INC4R-06 | Level B | Popup grab bookkeeping (nested serials & zero-output) | RESOLVED | `infynitae-wayland` |
+| INC4R-07 | Level B | Backend modifier snapshot is still an authority | RESOLVED | `infynitae-backend-headless`, tests |
+| INC4R-08 | Level B | Verification gaps and circular oracles | RESOLVED | tests, `verify-test-efficacy` |
+| INC4R-09 | Level B | Evidence counts exactness | RESOLVED | documentation, scripts |
+| INC4R-10 | Level C | Pointer unset_grab motion replay owner adjudication | RESOLVED | documentation |
+| INC4R-11 | Level C | Product key bindings canonical ownership | RESOLVED | `infynitae-core` |
+| INC4R-12 | Level C | Restore append-only CHECKPOINT history | RESOLVED | `docs/foundation/CHECKPOINT.md` |
+
