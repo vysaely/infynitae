@@ -199,17 +199,22 @@ impl WaylandState {
         self.keyboard_handle().modifier_state()
     }
 
-    /// Updates Smithay's XKB state for a physical key and returns the updated modifiers
-    /// and whether modifier state changed, without forwarding the key to any client.
-    /// Requires an InputAuthToken capability proof minted by Core for an authenticated InputPort (INC4R-02).
-    /// Consumes the token by value; rejects foreign tokens minted by another Core with zero state mutation (R2-02).
+    /// Updates Smithay's XKB state for the physical key event carried by `token` and returns the
+    /// resulting modifiers and whether the modifier state changed, without forwarding the key to
+    /// any client. The token is consumed; a token minted by another Core mutates nothing (R2-02).
+    /// Only a logical transition reaches XKB (R2-04, single implementation for every backend,
+    /// C3): a press of a key Core already holds, or a release of a key Core does not hold, is a
+    /// duplicate/orphan that Core will absorb, so the seat must not see it either.
     pub fn sync_seat_key(
         &mut self,
         token: infynitae_core::InputAuthToken,
-        key: u32,
-        pressed: bool,
     ) -> (infynitae_core::input::bindings::Modifiers, bool) {
         if token.core_id() != self.core.id() {
+            return (self.seat_modifiers(), false);
+        }
+        let (key, pressed) = (token.key(), token.pressed());
+        let is_down = self.core.is_key_down(key);
+        if pressed == is_down {
             return (self.seat_modifiers(), false);
         }
         use smithay::backend::input::KeyState;

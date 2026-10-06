@@ -62,10 +62,15 @@ pub struct OutputLifecycleToken {
     _not_send: NotSend,
 }
 
-/// Capability proof granted by Core to an authenticated InputPort for adapter-side key synchronization.
+/// Capability proof granted by Core to an authenticated InputPort for the adapter-side seat
+/// (XKB) update of ONE physical key event. It carries the event it authorizes, so the adapter
+/// takes the key and direction from the proof, not from a separate argument (C3): a proof for
+/// key X cannot update the seat for key Y. Bound to its Core, consumed on use, `!Send`.
 #[derive(Debug)]
 pub struct InputAuthToken {
     core_id: u64,
+    key: u32,
+    pressed: bool,
     _not_send: NotSend,
 }
 
@@ -73,6 +78,16 @@ impl InputAuthToken {
     /// The ID of the Core instance that minted this capability proof.
     pub fn core_id(&self) -> u64 {
         self.core_id
+    }
+
+    /// The evdev keycode of the authorized event.
+    pub fn key(&self) -> u32 {
+        self.key
+    }
+
+    /// Whether the authorized event is a press.
+    pub fn pressed(&self) -> bool {
+        self.pressed
     }
 }
 
@@ -303,11 +318,19 @@ impl Core {
         Ok(())
     }
 
-    /// Verifies an InputPort and returns an InputAuthToken capability proof bound to this Core.
-    pub fn verify_input_port(&self, port: &InputPort) -> Result<InputAuthToken, EntryError> {
+    /// Verifies an InputPort and returns a capability proof, bound to this Core, for the seat
+    /// update of exactly one physical key event (`key`, `pressed`).
+    pub fn verify_input_port(
+        &self,
+        port: &InputPort,
+        key: u32,
+        pressed: bool,
+    ) -> Result<InputAuthToken, EntryError> {
         self.check_port(port)?;
         Ok(InputAuthToken {
             core_id: self.id,
+            key,
+            pressed,
             _not_send: std::marker::PhantomData,
         })
     }

@@ -637,7 +637,7 @@ fn r01_foreign_port_key_leaves_no_xkb_trace() {
 fn r02_portless_sync_seat_key_requires_token() {
     let ls1 = Lockstep::new(Some(output((1920, 1080), 120)));
     let ls2 = Lockstep::new(Some(output((1920, 1080), 120)));
-    let err = ls1.state.core().verify_input_port(&ls2.input);
+    let err = ls1.state.core().verify_input_port(&ls2.input, KEY_A, true);
     assert_eq!(err.unwrap_err(), infynitae_core::EntryError::ForeignPort);
 }
 
@@ -1025,13 +1025,10 @@ fn t02b_token_is_bound_to_its_core() {
         .ls
         .state
         .core()
-        .verify_input_port(&s2.ls.input)
+        .verify_input_port(&s2.ls.input, KEY_LEFTSHIFT, true)
         .expect("foreign token");
     let before = s1.ls.state.keyboard_modifier_state().serialized.depressed;
-    let ok = s1
-        .ls
-        .state
-        .sync_seat_key(foreign_token, KEY_LEFTSHIFT, true);
+    let ok = s1.ls.state.sync_seat_key(foreign_token);
     let after = s1.ls.state.keyboard_modifier_state().serialized.depressed;
     assert!(!ok.1, "foreign token must be rejected by sync_seat_key");
     assert_eq!(
@@ -1048,9 +1045,9 @@ fn t02c_token_consumed_and_cannot_be_reused() {
     let token =
         s.ls.state
             .core()
-            .verify_input_port(&s.ls.input)
+            .verify_input_port(&s.ls.input, KEY_LEFTSHIFT, true)
             .expect("token");
-    let ok = s.ls.state.sync_seat_key(token, KEY_LEFTSHIFT, true);
+    let ok = s.ls.state.sync_seat_key(token);
     assert!(ok.1, "valid token authorizes seat key sync");
 }
 

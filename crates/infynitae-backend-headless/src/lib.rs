@@ -160,14 +160,8 @@ pub fn keyboard_key(
     pressed: bool,
     time_us: u64,
 ) -> Result<(), EntryError> {
-    let token = state.core().verify_input_port(port)?;
-    let is_down = state.core().is_key_down(key);
-    let is_transition = if pressed { !is_down } else { is_down };
-    let (modifiers, mods_changed) = if is_transition {
-        state.sync_seat_key(token, key, pressed)
-    } else {
-        (state.seat_modifiers(), false)
-    };
+    let token = state.core().verify_input_port(port, key, pressed)?;
+    let (modifiers, mods_changed) = state.sync_seat_key(token);
     let ev = PhysicalEvent::KeyboardKey {
         key,
         pressed,
