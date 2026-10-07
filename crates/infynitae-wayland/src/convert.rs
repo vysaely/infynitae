@@ -212,3 +212,41 @@ pub enum RenderOutputError<E> {
     NoFrame,
     Renderer(E),
 }
+
+pub fn hint_to_local_point(location: GlobalPoint) -> LocalPoint {
+    LocalPoint {
+        x: location.x as i32,
+        y: location.y as i32,
+    }
+}
+
+pub(crate) fn convert_region(
+    attrs: &smithay::wayland::compositor::RegionAttributes,
+) -> Option<LocalRect> {
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+    let mut any = false;
+    for (kind, r) in &attrs.rects {
+        if matches!(kind, smithay::wayland::compositor::RectangleKind::Add) {
+            any = true;
+            min_x = min_x.min(r.loc.x);
+            min_y = min_y.min(r.loc.y);
+            max_x = max_x.max(r.loc.x + r.size.w);
+            max_y = max_y.max(r.loc.y + r.size.h);
+        }
+    }
+    if any && max_x > min_x && max_y > min_y {
+        Some(LocalRect {
+            loc: LocalPoint { x: min_x, y: min_y },
+            size: LocalSize {
+                w: max_x - min_x,
+                h: max_y - min_y,
+            },
+        })
+    } else {
+        None
+    }
+}
+

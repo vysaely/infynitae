@@ -417,7 +417,7 @@ impl PointerConstraintsHandler for WaylandState {
         let info = with_pointer_constraint(surface, pointer, |c| {
             c.map(|c| {
                 let lifetime = infynitae_core::pointer::ConstraintLifetime::Persistent;
-                let region = c.region().and_then(convert_region);
+                let region = c.region().and_then(convert::convert_region);
                 match &*c {
                     smithay::wayland::pointer_constraints::PointerConstraint::Locked(locked) => {
                         let hint = locked.cursor_position_hint().map(|p| infynitae_core::geom::LocalPoint {
@@ -445,46 +445,13 @@ impl PointerConstraintsHandler for WaylandState {
         &mut self,
         surface: &WlSurface,
         _pointer: &smithay::input::pointer::PointerHandle<Self>,
-        location: smithay::utils::Point<f64, smithay::utils::Logical>,
+        location: convert::GlobalPoint,
     ) {
         if let Some(key) = self.registry.key(surface) {
-            let hint = infynitae_core::geom::LocalPoint {
-                x: location.x as i32,
-                y: location.y as i32,
-            };
+            let hint = convert::hint_to_local_point(location);
             self.core.set_cursor_position_hint(key, hint);
             let fx = self.core.reconcile_constraints();
             self.apply(&fx);
         }
-    }
-}
-
-fn convert_region(
-    attrs: &smithay::wayland::compositor::RegionAttributes,
-) -> Option<infynitae_core::geom::LocalRect> {
-    let mut min_x = i32::MAX;
-    let mut min_y = i32::MAX;
-    let mut max_x = i32::MIN;
-    let mut max_y = i32::MIN;
-    let mut any = false;
-    for (kind, r) in &attrs.rects {
-        if matches!(kind, smithay::wayland::compositor::RectangleKind::Add) {
-            any = true;
-            min_x = min_x.min(r.loc.x);
-            min_y = min_y.min(r.loc.y);
-            max_x = max_x.max(r.loc.x + r.size.w);
-            max_y = max_y.max(r.loc.y + r.size.h);
-        }
-    }
-    if any && max_x > min_x && max_y > min_y {
-        Some(infynitae_core::geom::LocalRect {
-            loc: infynitae_core::geom::LocalPoint { x: min_x, y: min_y },
-            size: infynitae_core::geom::LocalSize {
-                w: max_x - min_x,
-                h: max_y - min_y,
-            },
-        })
-    } else {
-        None
     }
 }
