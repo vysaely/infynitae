@@ -37,6 +37,11 @@ use wayland_client::protocol::{
     wl_surface::{self, WlSurface},
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop};
+use wayland_protocols::wp::pointer_constraints::zv1::client::{
+    zwp_confined_pointer_v1::{self, ZwpConfinedPointerV1},
+    zwp_locked_pointer_v1::{self, ZwpLockedPointerV1},
+    zwp_pointer_constraints_v1::{self, ZwpPointerConstraintsV1},
+};
 use wayland_protocols::wp::presentation_time::client::{
     wp_presentation::{self, WpPresentation},
     wp_presentation_feedback::{self, WpPresentationFeedback},
@@ -124,6 +129,9 @@ pub struct Probe {
     pub pointer: Option<WlPointer>,
     pub keyboard: Option<WlKeyboard>,
     pub relative: Option<ZwpRelativePointerV1>,
+    pub constraints: Option<ZwpPointerConstraintsV1>,
+    pub locked: Option<ZwpLockedPointerV1>,
+    pub confined: Option<ZwpConfinedPointerV1>,
     /// Ordered wire log of the seat's pointer (the independent oracle for client-observed input):
     /// "enter S x,y", "leave S", "motion x,y", "button B pressed|released", "axis A v",
     /// "axis_v120 A n", "frame", "relative dx,dy unaccel ux,uy". Coordinates are the wl_fixed
@@ -535,6 +543,100 @@ impl Probe {
             .iter()
             .find(|s| s.label == label)
             .expect("label")
+    }
+
+    pub fn lock_pointer(&mut self, qh: &QueueHandle<Self>, idx: usize, oneshot: bool) {
+        let lt = if oneshot {
+            zwp_pointer_constraints_v1::Lifetime::Oneshot
+        } else {
+            zwp_pointer_constraints_v1::Lifetime::Persistent
+        };
+        let c = self.constraints.as_ref().expect("constraints bound");
+        let l = c.lock_pointer(
+            &self.surfaces[idx].wl,
+            self.pointer.as_ref().expect("pointer bound"),
+            None,
+            lt,
+            qh,
+            (),
+        );
+        self.surfaces[idx].wl.commit();
+        self.locked = Some(l);
+    }
+
+    pub fn lock_pointer_with_hint(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        idx: usize,
+        oneshot: bool,
+        hint: (f64, f64),
+    ) {
+        let lt = if oneshot {
+            zwp_pointer_constraints_v1::Lifetime::Oneshot
+        } else {
+            zwp_pointer_constraints_v1::Lifetime::Persistent
+        };
+        let c = self.constraints.as_ref().expect("constraints bound");
+        let l = c.lock_pointer(
+            &self.surfaces[idx].wl,
+            self.pointer.as_ref().expect("pointer bound"),
+            None,
+            lt,
+            qh,
+            (),
+        );
+        l.set_cursor_position_hint(hint.0, hint.1);
+        self.surfaces[idx].wl.commit();
+        self.locked = Some(l);
+    }
+
+    pub fn confine_pointer(&mut self, qh: &QueueHandle<Self>, idx: usize) {
+        let c = self.constraints.as_ref().expect("constraints bound");
+        let cf = c.confine_pointer(
+            &self.surfaces[idx].wl,
+            self.pointer.as_ref().expect("pointer bound"),
+            None,
+            zwp_pointer_constraints_v1::Lifetime::Persistent,
+            qh,
+            (),
+        );
+        self.surfaces[idx].wl.commit();
+        self.confined = Some(cf);
+    }
+
+    pub fn confine_pointer_with_region(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        idx: usize,
+        region: (i32, i32, i32, i32),
+    ) {
+        let comp = self.compositor.as_ref().expect("compositor");
+        let r = comp.create_region(qh, ());
+        r.add(region.0, region.1, region.2, region.3);
+        let c = self.constraints.as_ref().expect("constraints bound");
+        let cf = c.confine_pointer(
+            &self.surfaces[idx].wl,
+            self.pointer.as_ref().expect("pointer bound"),
+            Some(&r),
+            zwp_pointer_constraints_v1::Lifetime::Persistent,
+            qh,
+            (),
+        );
+        self.surfaces[idx].wl.commit();
+        r.destroy();
+        self.confined = Some(cf);
+    }
+
+    pub fn destroy_lock(&mut self) {
+        if let Some(l) = self.locked.take() {
+            l.destroy();
+        }
+    }
+
+    pub fn destroy_confinement(&mut self) {
+        if let Some(cf) = self.confined.take() {
+            cf.destroy();
+        }
     }
 }
 
@@ -1015,6 +1117,41 @@ impl Dispatch<ZwpRelativePointerV1, ()> for Probe {
     }
 }
 
+impl Dispatch<ZwpLockedPointerV1, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &ZwpLockedPointerV1,
+        ev: zwp_locked_pointer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match ev {
+            zwp_locked_pointer_v1::Event::Locked => st.ptr.push("locked".into()),
+            zwp_locked_pointer_v1::Event::Unlocked => st.ptr.push("unlocked".into()),
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ZwpConfinedPointerV1, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &ZwpConfinedPointerV1,
+        ev: zwp_confined_pointer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match ev {
+            zwp_confined_pointer_v1::Event::Confined => st.ptr.push("confined".into()),
+            zwp_confined_pointer_v1::Event::Unconfined => st.ptr.push("unconfined".into()),
+            _ => {}
+        }
+    }
+}
+
+delegate_noop!(Probe: ignore ZwpPointerConstraintsV1);
 delegate_noop!(Probe: ignore ZwpRelativePointerManagerV1);
 delegate_noop!(Probe: ignore WlCompositor);
 delegate_noop!(Probe: ignore WlSubcompositor);
@@ -1172,6 +1309,8 @@ impl Lockstep {
         let (n, _) = find("zwp_relative_pointer_manager_v1");
         let manager: ZwpRelativePointerManagerV1 = registry.bind(n, 1, &self.qh, ());
         self.probe.relative = Some(manager.get_relative_pointer(&pointer, &self.qh, ()));
+        let (n, _) = find("zwp_pointer_constraints_v1");
+        self.probe.constraints = Some(registry.bind(n, 1, &self.qh, ()));
         self.probe.seat = Some(seat);
         self.probe.pointer = Some(pointer);
         self.probe.keyboard = Some(keyboard);
