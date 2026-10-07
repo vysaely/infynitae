@@ -300,12 +300,6 @@ impl Core {
             region,
         };
 
-        if let Some(cur) = self.constraint {
-            if cur.surface == surface && cur.kind == kind {
-                return Vec::new();
-            }
-        }
-
         self.pending_constraint = Some(candidate);
 
         if self.can_activate_constraint(&candidate) {

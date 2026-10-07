@@ -487,3 +487,85 @@ fn ob47_e3_oneshot_explicit_deactivate_defunct() {
         "Oneshot constraint must be defunct after deactivation"
     );
 }
+
+// ==============================================================================
+// Checkpoint L: 200-cycle Long-Lived Pointer Constraint Stress
+// ==============================================================================
+
+#[test]
+fn round5_pointer_constraints_stress_200_cycles() {
+    let mut r = Rig::x8();
+    focus_element(&mut r, 0);
+    let qh = r.ls.qh.clone();
+
+    for i in 0..200usize {
+        match i % 3 {
+            0 => {
+                // Persistent lock + pan with lock + unlock
+                r.ls.probe.lock_pointer(&qh, 0, false);
+                r.ls.pump();
+                r.frame();
+                assert!(helper_smithay_active(&r, 0));
+
+                r.button(BTN_MIDDLE, true, logo());
+                r.motion((10.0, 10.0));
+                r.motion((-10.0, -10.0));
+                r.button(BTN_MIDDLE, false, logo());
+                r.ls.pump();
+                r.frame();
+
+                assert!(helper_smithay_active(&r, 0));
+
+                r.ls.probe.destroy_lock();
+                r.ls.pump();
+                r.frame();
+                assert!(!helper_smithay_active(&r, 0));
+            }
+            1 => {
+                // Confine + pan with confinement + destroy
+                r.ls.probe.confine_pointer(&qh, 0);
+                r.ls.pump();
+                r.frame();
+                assert!(helper_smithay_active(&r, 0));
+
+                r.button(BTN_MIDDLE, true, logo());
+                r.motion((5.0, 5.0));
+                r.motion((-5.0, -5.0));
+                r.button(BTN_MIDDLE, false, logo());
+                r.ls.pump();
+                r.frame();
+
+                assert!(helper_smithay_active(&r, 0));
+
+                r.ls.probe.destroy_confinement();
+                r.ls.pump();
+                r.frame();
+                assert!(!helper_smithay_active(&r, 0));
+            }
+            _ => {
+                // Oneshot lock + explicit destroy
+                r.ls.probe.lock_pointer(&qh, 0, true);
+                r.ls.pump();
+                r.frame();
+                assert!(helper_smithay_active(&r, 0));
+
+                r.ls.probe.destroy_lock();
+                r.ls.pump();
+                r.frame();
+                assert!(!helper_smithay_active(&r, 0));
+            }
+        }
+    }
+
+    let root = helper_server_surface(&r, 0);
+    let surface_key = r.ls.state.registry().key(&root).unwrap();
+    let fx = r.ls.state.core_mut().destroy_pointer_constraint(surface_key);
+    r.ls.state.apply(&fx);
+    r.ls.pump();
+    r.frame();
+
+    assert!(!r.ls.state.is_pointer_grabbed());
+    assert!(r.ls.state.core().constraint().is_none());
+    assert!(!helper_smithay_active(&r, 0));
+}
+
