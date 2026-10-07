@@ -104,6 +104,21 @@ impl Stage {
             .collect()
     }
 
+    /// Finds the mapped element that contains `surface` in its surface tree.
+    pub fn element_containing_surface(&self, surface: crate::snapshot::SurfaceKey) -> Option<ElementId> {
+        self.records.iter().find_map(|r| {
+            if r.state == Lifecycle::Mapped
+                && r.tree
+                    .as_ref()
+                    .is_some_and(|t| t.surfaces.iter().any(|s| s.key == surface))
+            {
+                Some(r.id)
+            } else {
+                None
+            }
+        })
+    }
+
     /// Mapped elements front to back (reverse z-order) with anchor and snapshot.
     pub fn front_to_back(&self) -> impl Iterator<Item = (ElementId, CanvasPoint, &SurfaceTree)> {
         self.z.iter().rev().filter_map(|&id| {

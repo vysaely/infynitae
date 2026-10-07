@@ -369,6 +369,8 @@ impl WaylandState {
                     self.popup_pointer_grab_serial = None;
                 }
             }
+            Effect::ConstraintActivate { .. } => {}
+            Effect::ConstraintDeactivate { .. } => {}
             _ => return false,
         }
         true

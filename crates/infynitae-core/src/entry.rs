@@ -229,6 +229,15 @@ impl Core {
                 let PointerState::Located { output, p } = self.pointer else {
                     return Vec::new();
                 };
+                if let Some(c) = self.constraint {
+                    if c.kind == pointer::ConstraintKind::Lock {
+                        return self.locked_motion(delta, delta_unaccel, time_us);
+                    }
+                    if c.kind == pointer::ConstraintKind::Confine {
+                        self.pointer = self.confined_motion(output, p, delta, &c);
+                        return self.routed_motion(delta, delta_unaccel, time_us);
+                    }
+                }
                 if let Some(moved) = pointer::moved(&self.outputs, output, p, delta) {
                     self.pointer = moved;
                 }
@@ -335,18 +344,28 @@ impl Core {
                     return Vec::new();
                 }
                 self.input.interaction = Interaction::Idle;
-                self.true_position(time_ms)
+                let mut fx = self.reconcile_constraints();
+                if self.constraint.is_none() {
+                    fx.extend(self.true_position(time_ms));
+                }
+                fx
             }
             // In NoOutput the zero-output grab receives it and delivers nothing, keeping
             // Smithay's pressed-button set truthful (no stuck implicit grab after reconnect).
-            Some(Owner::Client) => vec![
-                Effect::PointerButton {
-                    button,
-                    pressed: false,
-                    time_ms,
-                },
-                Effect::PointerFrame,
-            ],
+            Some(Owner::Client) => {
+                let mut fx = vec![
+                    Effect::PointerButton {
+                        button,
+                        pressed: false,
+                        time_ms,
+                    },
+                    Effect::PointerFrame,
+                ];
+                if !self.input.ownership.client_owns_any() {
+                    fx.extend(self.reconcile_constraints());
+                }
+                fx
+            }
         }
     }
 
@@ -400,6 +419,7 @@ impl Core {
                 fx.extend(self.true_position(0));
             }
         }
+        fx.extend(self.reconcile_constraints());
         Ok((id, fx))
     }
 
@@ -437,6 +457,7 @@ impl Core {
         if on_it && !self.input.interaction.active() {
             fx.extend(self.true_position(0));
         }
+        fx.extend(self.reconcile_constraints());
         Ok(fx)
     }
 
@@ -471,9 +492,14 @@ impl Core {
             };
             if self.pointer == PointerState::NoOutput {
                 // M10 → NoOutput: Focus::Clear grab (leave), nothing to the old focus
+                self.constraint = None;
                 pointer_fx.push(Effect::PointerZeroOutputBegin);
-            } else if !self.input.interaction.active() {
-                pointer_fx = self.true_position(0);
+            } else {
+                let recon_fx = self.reconcile_constraints();
+                pointer_fx.extend(recon_fx);
+                if !self.input.interaction.active() && self.constraint.is_none() {
+                    pointer_fx.extend(self.true_position(0));
+                }
             }
         }
         let mut fx = self.visibility_pass();

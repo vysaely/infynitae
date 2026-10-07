@@ -165,6 +165,10 @@ pub struct Core {
     input: input::InputState,
     /// OBJ-22: ActiveElementFocus.
     focus: input::focus::FocusModel,
+    /// OBJ-21: authoritative active pointer constraint.
+    constraint: Option<pointer::ConstraintState>,
+    /// OBJ-21: authoritative pending pointer constraint.
+    pending_constraint: Option<pointer::ConstraintState>,
     /// OBJ-09: read only by `output_connected`.
     persisted: navigation::PersistedCameras,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
@@ -194,6 +198,8 @@ impl Core {
                 pointer: pointer::PointerState::NoOutput,
                 input: input::InputState::default(),
                 focus: input::focus::FocusModel::default(),
+                constraint: None,
+                pending_constraint: None,
                 persisted,
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
@@ -261,6 +267,26 @@ impl Core {
         &self.focus
     }
 
+    /// Read access to the authoritative active pointer constraint (OBJ-21).
+    pub fn constraint(&self) -> Option<pointer::ConstraintState> {
+        self.constraint
+    }
+
+    /// Read access to the authoritative pending pointer constraint (OBJ-21).
+    pub fn pending_constraint(&self) -> Option<pointer::ConstraintState> {
+        self.pending_constraint
+    }
+
+    /// Canvas origin of a surface from the single origin function (F-ORIGIN-1).
+    pub fn surface_origin(&self, surface: snapshot::SurfaceKey) -> Option<geom::CanvasPoint> {
+        let element = self.stage.element_containing_surface(surface)?;
+        let anchor = self.stage.anchor(element)?;
+        let tree = self.stage.tree(element)?;
+        let origins = tree.origins(anchor).ok()?;
+        let idx = tree.surfaces.iter().position(|s| s.key == surface)?;
+        origins.get(idx).copied()
+    }
+
     /// Sets keyboard focus directly via an authorized input port (INV-INPUT-8).
     pub fn set_focus(
         &mut self,
@@ -273,13 +299,17 @@ impl Core {
         {
             return Err(EntryError::InvalidEvent);
         }
-        Ok(self.focus.set_focus(target))
+        let mut fx = self.focus.set_focus(target);
+        fx.extend(self.reconcile_constraints());
+        Ok(fx)
     }
 
     /// FocusNext binding (Super+Enter): cycles focus to next live mapped element in stage order.
     pub(crate) fn focus_next(&mut self) -> Vec<protocol::Effect> {
         let live = self.stage.mapped_elements();
-        self.focus.focus_next(&live)
+        let mut fx = self.focus.focus_next(&live);
+        fx.extend(self.reconcile_constraints());
+        fx
     }
 
     /// Resolves an evdev keycode and modifier snapshot against bindings.
