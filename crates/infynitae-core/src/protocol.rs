@@ -508,11 +508,7 @@ impl Core {
                 let q_lock = crate::pointer::derive_lock_point(origin, c.lock_point);
                 let p_lock = view.project(q_lock);
                 let extent = model.logical_extent();
-                if p_lock.x < 0.0 || p_lock.y < 0.0 || p_lock.x >= extent.0 || p_lock.y >= extent.1 {
-                    return false;
-                }
-                let pt = geom::OutputLogicalPoint { x: p_lock.x, y: p_lock.y };
-                self.hit_test(output, pt).is_some_and(|h| h.surface == c.surface)
+                p_lock.x >= 0.0 && p_lock.y >= 0.0 && p_lock.x < extent.0 && p_lock.y < extent.1
             }
             crate::pointer::ConstraintKind::Confine => {
                 let Some(local_pt) = self.route_pointer_hit_local(c.surface) else {

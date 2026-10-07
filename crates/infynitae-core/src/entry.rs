@@ -362,7 +362,11 @@ impl Core {
                     Effect::PointerFrame,
                 ];
                 if !self.input.ownership.client_owns_any() {
+                    let had_constraint = self.constraint.is_some();
                     fx.extend(self.reconcile_constraints());
+                    if had_constraint && self.constraint.is_none() {
+                        fx.extend(self.true_position(time_ms));
+                    }
                 }
                 fx
             }

@@ -91,7 +91,20 @@ impl WaylandState {
             .target()
             .and_then(|id| self.window(id))
             .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
-        kb.set_focus(self, target, serial);
+        kb.set_focus(self, target.clone(), serial);
+        if let Some(target) = &target {
+            let target_key = self.registry.key(target);
+            if self.core.constraint().is_some_and(|c| Some(c.surface) == target_key) {
+                let ptr = self.pointer_handle();
+                with_pointer_constraint(target, &ptr, |c| {
+                    if let Some(c) = c
+                        && !c.is_active()
+                    {
+                        c.activate();
+                    }
+                });
+            }
+        }
     }
 
     /// The element's ROOT surface committed: re-extracts the snapshot and drives M1 (map, unmap,
