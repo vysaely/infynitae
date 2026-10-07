@@ -327,7 +327,10 @@ mod tests {
             None,
             None,
         );
-        assert!(fx.is_empty(), "must not activate without ActiveElementFocus");
+        assert!(
+            fx.is_empty(),
+            "must not activate without ActiveElementFocus"
+        );
         assert_eq!(core.constraint(), None);
         assert!(core.pending_constraint().is_some());
 
@@ -354,7 +357,8 @@ mod tests {
             "no absolute motion while locked"
         );
         assert!(
-            fx.iter().any(|e| matches!(e, Effect::PointerRelative { .. })),
+            fx.iter()
+                .any(|e| matches!(e, Effect::PointerRelative { .. })),
             "relative motion delivered while locked"
         );
         // Physical pointer position on output does NOT move
@@ -542,8 +546,14 @@ mod tests {
         // ActiveElementFocus moves to None while button is held:
         // Because client grab is active, reconciliation is DEFERRED!
         let fx = core.set_focus(&mut input_port, None).unwrap();
-        assert!(!fx.iter().any(|e| matches!(e, Effect::ConstraintDeactivate { .. })));
-        assert!(core.constraint().is_some(), "constraint must stay active while deferred");
+        assert!(
+            !fx.iter()
+                .any(|e| matches!(e, Effect::ConstraintDeactivate { .. }))
+        );
+        assert!(
+            core.constraint().is_some(),
+            "constraint must stay active while deferred"
+        );
 
         // Client releases button: grab sequence ends -> reconciliation runs!
         let btn_up = PhysicalEvent::PointerButton {

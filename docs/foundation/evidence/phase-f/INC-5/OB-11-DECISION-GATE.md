@@ -143,3 +143,48 @@ The architect recommends **Option A** for Phase F INC-5:
 5. If the project owner desires Option B in a future increment, `tools/verify-architecture` check 1 and `Cargo.toml` can be updated simultaneously under formal owner authorization.
 
 This completes the `OB-11` Decision Gate evaluation.
+
+---
+
+## 8. Owner Adjudication & Formal Adoption of Option B (Patch P1)
+
+### 8.1 Formal Owner Adjudication
+The repository owner has adjudicated `OB-11`:
+> **OPTION B — ADOPT PATCH P1**
+> Apply the evaluated minimal Smithay 0.7.0 P1 correction under the canonical `D-B12-PIN` patch policy.
+>
+> Rationale:
+> - Infynitae must not knowingly ship incorrect pointer-constraint lifecycle semantics merely to remain identical to the published crates.io source.
+> - The stock Smithay 0.7.0 `W-SM-4c` behavior remains valuable as a negative control, but it is not acceptable as final production behavior.
+> - P1 has already been evaluated as the minimal candidate that eliminates the duplicate unlocked transition.
+> - Pointer constraints are foundational to later gaming/input correctness.
+> - The patch must remain narrowly scoped, auditable, pinned, and removable when an equivalent upstream fix is adopted.
+
+### 8.2 Production Patch Implementation (D-B12-PIN)
+1. **Preserved Stock Defect Evidence:**
+   - Canonical reproduction documented in `docs/foundation/evidence/phase-f/INC-5/OB-11-STOCK-DEFECT-REPRODUCTION.md`.
+2. **Canonical Patch File:**
+   - Pinned patch file recorded at `patches/0001-seat-leave-deactivate-only-active-constraint.patch`.
+3. **Materialized Vendored Dependency:**
+   - Materialized at `vendor/smithay-0.7.0` (matching published crates.io `smithay 0.7.0` byte-for-byte with only the 4-line P1 correction in `src/wayland/seat/pointer.rs`).
+4. **Manifest Pinning:**
+   - Root `Cargo.toml` specifies:
+     ```toml
+     [patch.crates-io]
+     smithay = { path = "vendor/smithay-0.7.0" }
+     ```
+   - `Cargo.lock` updated and tracked in git.
+5. **Architectural Verification & Negative Controls:**
+   - `./tools/verify-architecture` enforces:
+     - Root manifest has `[patch.crates-io]` pinning only `smithay = { path = "vendor/smithay-0.7.0" }`.
+     - `vendor/smithay-0.7.0/src/wayland/seat/pointer.rs` matches exact SHA-256: `9c120d4101d7b2d3907d018a400dcd52e32e3be6b6cf6b64c80d0b421bbcb512`.
+     - Zero other source modifications against published crates.io registry.
+     - Rejection of: arbitrary patches, unpinned sources, different revisions, extra local modifications, dependency upgrades, and patch removal.
+     - 6 seeded negative controls in verifier verify rejection of each forbidden perturbation.
+6. **Production Wire Behavior:**
+   - Production T1 test `ob47_e1_persistent_explicit_deactivate_then_exit` asserts `duplicate_unlocked == 0`.
+   - All 13 pointer constraint tests in `t1_pointer_constraints.rs` pass.
+
+### 8.3 Disposition
+- **OB-11 Status for Phase F INC-5:** **SATISFIED / CLOSED for the INC-5 decision gate** under `D-B12-PIN`.
+- **Upstream Landing:** Upstream issue/PR submission remains an outward tracking action; this adjudication does NOT claim an upstream fix has merged upstream, but fulfills the release prerequisite under repository policy. The patch is removable once an equivalent upstream version is released.

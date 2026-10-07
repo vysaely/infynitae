@@ -304,13 +304,13 @@ impl Core {
 
         if self.can_activate_constraint(&candidate) {
             let mut fx = Vec::new();
-            if let Some(prev) = self.constraint {
-                if prev.surface != surface || prev.kind != kind {
-                    fx.push(Effect::ConstraintDeactivate {
-                        surface: prev.surface,
-                        kind: prev.kind,
-                    });
-                }
+            if let Some(prev) = self.constraint
+                && (prev.surface != surface || prev.kind != kind)
+            {
+                fx.push(Effect::ConstraintDeactivate {
+                    surface: prev.surface,
+                    kind: prev.kind,
+                });
             }
             self.constraint = Some(candidate);
             if candidate.lifetime == crate::pointer::ConstraintLifetime::Oneshot {
@@ -325,41 +325,43 @@ impl Core {
 
     /// Sets or updates the cursor position hint of a locked pointer constraint.
     pub fn set_cursor_position_hint(&mut self, surface: SurfaceKey, hint: LocalPoint) {
-        if let Some(c) = &mut self.constraint {
-            if c.surface == surface && c.kind == crate::pointer::ConstraintKind::Lock {
-                c.lock_point = hint;
-            }
+        if let Some(c) = &mut self.constraint
+            && c.surface == surface
+            && c.kind == crate::pointer::ConstraintKind::Lock
+        {
+            c.lock_point = hint;
         }
-        if let Some(c) = &mut self.pending_constraint {
-            if c.surface == surface && c.kind == crate::pointer::ConstraintKind::Lock {
-                c.lock_point = hint;
-            }
+        if let Some(c) = &mut self.pending_constraint
+            && c.surface == surface
+            && c.kind == crate::pointer::ConstraintKind::Lock
+        {
+            c.lock_point = hint;
         }
     }
 
     /// Client destroys a pointer constraint (M13).
     pub fn destroy_pointer_constraint(&mut self, surface: SurfaceKey) -> Vec<Effect> {
         let mut fx = Vec::new();
-        if let Some(c) = self.constraint {
-            if c.surface == surface {
-                self.constraint = None;
-                // W-SM-4a: deactivate only if delivered focus does not change in this batch
-                let delivered_focus = self
-                    .route_pointer()
-                    .and_then(|(tgt, _)| tgt)
-                    .map(|t| t.surface);
-                if delivered_focus == Some(surface) {
-                    fx.push(Effect::ConstraintDeactivate {
-                        surface,
-                        kind: c.kind,
-                    });
-                }
+        if let Some(c) = self.constraint
+            && c.surface == surface
+        {
+            self.constraint = None;
+            // W-SM-4a: deactivate only if delivered focus does not change in this batch
+            let delivered_focus = self
+                .route_pointer()
+                .and_then(|(tgt, _)| tgt)
+                .map(|t| t.surface);
+            if delivered_focus == Some(surface) {
+                fx.push(Effect::ConstraintDeactivate {
+                    surface,
+                    kind: c.kind,
+                });
             }
         }
-        if let Some(c) = self.pending_constraint {
-            if c.surface == surface {
-                self.pending_constraint = None;
-            }
+        if let Some(c) = self.pending_constraint
+            && c.surface == surface
+        {
+            self.pending_constraint = None;
         }
         fx
     }
@@ -398,31 +400,30 @@ impl Core {
                 }
             } else if c.kind == crate::pointer::ConstraintKind::Lock {
                 // Lock is maintained. Update physical pointer to derived lock point.
-                if let Some(p_lock) = self.derived_lock_output_point(&c) {
-                    if let pointer::PointerState::Located { output, .. } = self.pointer {
-                        self.pointer = pointer::PointerState::Located {
-                            output,
-                            p: (p_lock.x, p_lock.y),
-                        };
-                    }
+                if let Some(p_lock) = self.derived_lock_output_point(&c)
+                    && let pointer::PointerState::Located { output, .. } = self.pointer
+                {
+                    self.pointer = pointer::PointerState::Located {
+                        output,
+                        p: (p_lock.x, p_lock.y),
+                    };
                 }
             }
         }
 
         // 2. If no constraint is active, check if pending constraint can activate
-        if self.constraint.is_none() {
-            if let Some(pending) = self.pending_constraint {
-                if self.can_activate_constraint(&pending) {
-                    self.constraint = Some(pending);
-                    if pending.lifetime == crate::pointer::ConstraintLifetime::Oneshot {
-                        self.pending_constraint = None;
-                    }
-                    fx.push(Effect::ConstraintActivate {
-                        surface: pending.surface,
-                        kind: pending.kind,
-                    });
-                }
+        if self.constraint.is_none()
+            && let Some(pending) = self.pending_constraint
+            && self.can_activate_constraint(&pending)
+        {
+            self.constraint = Some(pending);
+            if pending.lifetime == crate::pointer::ConstraintLifetime::Oneshot {
+                self.pending_constraint = None;
             }
+            fx.push(Effect::ConstraintActivate {
+                surface: pending.surface,
+                kind: pending.kind,
+            });
         }
 
         fx
@@ -467,10 +468,10 @@ impl Core {
         };
 
         // 4. Pointer inside region
-        if let Some(r) = c.region {
-            if !r.contains(local_pt.x as i64, local_pt.y as i64) {
-                return false;
-            }
+        if let Some(r) = c.region
+            && !r.contains(local_pt.x as i64, local_pt.y as i64)
+        {
+            return false;
         }
 
         true
@@ -508,10 +509,10 @@ impl Core {
                 let Some(local_pt) = self.route_pointer_hit_local(c.surface) else {
                     return false;
                 };
-                if let Some(r) = c.region {
-                    if !r.contains(local_pt.x as i64, local_pt.y as i64) {
-                        return false;
-                    }
+                if let Some(r) = c.region
+                    && !r.contains(local_pt.x as i64, local_pt.y as i64)
+                {
+                    return false;
                 }
                 true
             }

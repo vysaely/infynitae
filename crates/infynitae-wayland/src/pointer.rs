@@ -374,10 +374,10 @@ impl WaylandState {
                 let ptr = self.pointer_handle();
                 if let Some(s) = self.registry.surface(surface) {
                     with_pointer_constraint(s, &ptr, |c| {
-                        if let Some(c) = c {
-                            if !c.is_active() {
-                                c.activate();
-                            }
+                        if let Some(c) = c
+                            && !c.is_active()
+                        {
+                            c.activate();
                         }
                     });
                 }
@@ -386,10 +386,10 @@ impl WaylandState {
                 let ptr = self.pointer_handle();
                 if let Some(s) = self.registry.surface(surface) {
                     with_pointer_constraint(s, &ptr, |c| {
-                        if let Some(c) = c {
-                            if c.is_active() {
-                                c.deactivate();
-                            }
+                        if let Some(c) = c
+                            && c.is_active()
+                        {
+                            c.deactivate();
                         }
                     });
                     let still_present = with_pointer_constraint(s, &ptr, |c| c.is_some());

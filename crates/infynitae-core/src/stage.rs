@@ -105,7 +105,10 @@ impl Stage {
     }
 
     /// Finds the mapped element that contains `surface` in its surface tree.
-    pub fn element_containing_surface(&self, surface: crate::snapshot::SurfaceKey) -> Option<ElementId> {
+    pub fn element_containing_surface(
+        &self,
+        surface: crate::snapshot::SurfaceKey,
+    ) -> Option<ElementId> {
         self.records.iter().find_map(|r| {
             if r.state == Lifecycle::Mapped
                 && r.tree

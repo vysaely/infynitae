@@ -32,6 +32,9 @@ TOOLCHAIN = "1.99.0"
 SMITHAY_REQ = "=0.7.0"
 SMITHAY_VERSION = "0.7.0"
 CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
+AUTHORIZED_SMITHAY_PATCH_REL = "vendor/smithay-0.7.0"
+AUTHORIZED_POINTER_SHA256 = "9c120d4101d7b2d3907d018a400dcd52e32e3be6b6cf6b64c80d0b421bbcb512"
+
 
 CORE = "infynitae-core"
 WAYLAND = "infynitae-wayland"
@@ -264,11 +267,27 @@ def check_toolchain(root, r):
 
 
 def check_root_manifest(root, r):
-    with open(os.path.join(root, "Cargo.toml"), "rb") as f:
-        manifest = tomllib.load(f)
-    bad = [k for k in ("patch", "replace") if k in manifest]
-    ok = r.check(not bad, "root Cargo.toml has no [patch] or [replace] (P1 not productionized; OB-11 open)",
-                 f"root Cargo.toml contains {bad}: a dependency patch needs the patch policy (OB-11)")
+    path = os.path.join(root, "Cargo.toml")
+    try:
+        with open(path, "rb") as f:
+            manifest = tomllib.load(f)
+    except (OSError, tomllib.TOMLDecodeError) as e:
+        return r.check(False, "", f"root Cargo.toml unreadable: {e}")
+    ok = True
+    if "replace" in manifest:
+        ok &= r.check(False, "", "root Cargo.toml contains [replace]: forbidden by dependency policy")
+    patch = manifest.get("patch")
+    if patch is None:
+        return r.check(False, "", "root Cargo.toml missing [patch]: authorized P1 patch required for INC-5 (OB-11)")
+    if set(patch.keys()) != {"crates-io"}:
+        return r.check(False, "", f"root Cargo.toml contains unauthorized patch targets: {list(patch.keys())}")
+    crates_io = patch["crates-io"]
+    if set(crates_io.keys()) != {"smithay"}:
+        return r.check(False, "", f"root Cargo.toml contains arbitrary [patch.crates-io] additions: {list(crates_io.keys())}")
+    smithay_patch = crates_io["smithay"]
+    if not isinstance(smithay_patch, dict) or set(smithay_patch.keys()) != {"path"} or smithay_patch.get("path") != AUTHORIZED_SMITHAY_PATCH_REL:
+        return r.check(False, "", f"root Cargo.toml smithay patch must pin path {AUTHORIZED_SMITHAY_PATCH_REL!r}; got {smithay_patch!r}")
+    r.ok(f"root Cargo.toml specifies exactly authorized D-B12-PIN patch: smithay = {{ path = '{AUTHORIZED_SMITHAY_PATCH_REL}' }}")
     for cfg in (".cargo/config.toml", ".cargo/config"):
         p = os.path.join(root, cfg)
         if os.path.exists(p):
@@ -279,12 +298,35 @@ def check_root_manifest(root, r):
     return ok
 
 
-def check_smithay(meta, r):
+def check_authorized_p1_patch(root, r):
+    patch_dir = os.path.join(root, AUTHORIZED_SMITHAY_PATCH_REL)
+    if not os.path.isdir(patch_dir):
+        return r.check(False, "", f"authorized patch directory {AUTHORIZED_SMITHAY_PATCH_REL} does not exist")
+    pointer_rs = os.path.join(patch_dir, "src", "wayland", "seat", "pointer.rs")
+    if not os.path.exists(pointer_rs):
+        return r.check(False, "", f"{pointer_rs} missing from vendor directory")
+    with open(pointer_rs, "rb") as f:
+        h = hashlib.sha256(f.read()).hexdigest()
+    if h != AUTHORIZED_POINTER_SHA256:
+        return r.check(False, "", f"pointer.rs sha256 mismatch (expected authorized P1 {AUTHORIZED_POINTER_SHA256}, got {h})")
+    import glob
+    reg_matches = glob.glob(os.path.expanduser("~/.cargo/registry/src/*/smithay-0.7.0"))
+    if reg_matches and os.path.isdir(reg_matches[0]):
+        code, out, _ = run(["diff", "-rq", os.path.join(reg_matches[0], "src"), os.path.join(patch_dir, "src")])
+        diff_lines = [l.strip() for l in out.splitlines() if l.strip()]
+        if len(diff_lines) != 1 or not diff_lines[0].endswith("pointer.rs differ"):
+            return r.check(False, "", f"vendor smithay has unauthorized local modifications beyond P1: {diff_lines}")
+    r.ok(f"vendor smithay source matches authorized minimal P1 patch (zero unauthorized modifications)")
+    return True
+
+
+def check_smithay(meta, root, r):
     ok = True
     pkgs = [p for p in meta["packages"] if p["name"] == "smithay"]
-    ok &= r.check(len(pkgs) == 1 and pkgs[0]["version"] == SMITHAY_VERSION and pkgs[0]["source"] == CRATES_IO,
-                  f"resolved smithay is exactly {SMITHAY_VERSION} from crates.io",
-                  f"resolved smithay packages: {[(p['version'], p['source']) for p in pkgs]}")
+    expected_manifest = os.path.realpath(os.path.join(root, AUTHORIZED_SMITHAY_PATCH_REL, "Cargo.toml"))
+    ok &= r.check(len(pkgs) == 1 and pkgs[0]["version"] == SMITHAY_VERSION and os.path.realpath(pkgs[0]["manifest_path"]) == expected_manifest,
+                  f"resolved smithay is exactly {SMITHAY_VERSION} at authorized path {AUTHORIZED_SMITHAY_PATCH_REL}",
+                  f"resolved smithay packages: {[(p['version'], p.get('source'), p.get('manifest_path')) for p in pkgs]}")
     ws = set(meta["workspace_members"])
     for p in meta["packages"]:
         if p["id"] not in ws:
@@ -294,6 +336,22 @@ def check_smithay(meta, r):
                 ok &= r.check(d["req"] == SMITHAY_REQ and d["source"] == CRATES_IO,
                               f"{p['name']} declares smithay {SMITHAY_REQ} from crates.io",
                               f"{p['name']} declares smithay {d['req']!r} from {d['source']!r}; {SMITHAY_REQ} from crates.io required")
+    return ok
+
+
+def check_manifest_pins(root, r):
+    ok = True
+    for crate in [WAYLAND, HEADLESS]:
+        p = os.path.join(root, "crates", crate, "Cargo.toml")
+        try:
+            with open(p, "rb") as f:
+                c = tomllib.load(f)
+            dep = c.get("dependencies", {}).get("smithay")
+            req = dep.get("version") if isinstance(dep, dict) else dep
+            ok &= r.check(req == SMITHAY_REQ, f"{crate} declares smithay {SMITHAY_REQ}",
+                          f"{crate} declares smithay version {req!r}; {SMITHAY_REQ} required")
+        except Exception as e:
+            ok &= r.check(False, "", f"{p} unreadable: {e}")
     return ok
 
 
@@ -308,10 +366,12 @@ def check_pins(r):
     r.check(os.path.exists(lock) and not ignored, "Cargo.lock present and not git-ignored",
             "Cargo.lock missing or git-ignored")
     check_root_manifest(ROOT, r)
+    check_authorized_p1_patch(ROOT, r)
+    check_manifest_pins(ROOT, r)
     code, _, err = run(["cargo", "build", "--workspace", "--locked", "-q"])
     r.check(code == 0, "cargo build --workspace --locked", f"cargo build --workspace --locked failed:\n{err[-2000:]}")
     meta = metadata(ROOT)
-    check_smithay(meta, r)
+    check_smithay(meta, ROOT, r)
     return meta
 
 
@@ -582,7 +642,7 @@ def check_popup_negative_controls(r):
 
 # ------------------------------------------------------------------ [6] seeded negative controls
 
-COPY_ITEMS = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates", "enforcement"]
+COPY_ITEMS = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates", "enforcement", "vendor", "patches"]
 
 
 def tree_digest():
@@ -770,7 +830,12 @@ GRAPH_SEEDS = [
      'infynitae-source-rules = { path = "../../enforcement/source-rules" }', "dag"),
     ("smithay requirement loosened", "crates/infynitae-wayland/Cargo.toml", None, "smithay"),
     ("toolchain unpinned", "rust-toolchain.toml", None, "toolchain"),
-    ("[patch.crates-io] smithay override", "Cargo.toml", None, "patch"),
+    ("removal of the required patch while INC-5 depends on it", "Cargo.toml", None, "patch-remove"),
+    ("arbitrary [patch.crates-io] additions", "Cargo.toml", None, "patch-arbitrary"),
+    ("unpinned Smithay sources", "Cargo.toml", None, "patch-unpinned"),
+    ("different Smithay revisions", "Cargo.toml", None, "patch-revision"),
+    ("additional local Smithay modifications", f"{AUTHORIZED_SMITHAY_PATCH_REL}/src/wayland/seat/pointer.rs", None, "patch-modification"),
+    ("dependency upgrades", "crates/infynitae-wayland/Cargo.toml", None, "dep-upgrade"),
 ]
 
 
@@ -813,13 +878,29 @@ def check_mutations(binary, r):
                 hit = bool(dag_problems(metadata(tmp, locked=False)))
             elif kind == "smithay":
                 edit(tmp, rel, replace('version = "=0.7.0"', 'version = "0.7"'))
-                hit = not check_smithay(metadata(tmp, locked=False), q)
+                hit = not check_smithay(metadata(tmp, locked=False), tmp, q)
             elif kind == "toolchain":
                 edit(tmp, rel, replace(f'channel = "{TOOLCHAIN}"', 'channel = "stable"'))
                 hit = not check_toolchain(tmp, q)
-            else:
-                edit(tmp, rel, append('\n[patch.crates-io]\nsmithay = { path = "vendor/smithay" }\n'))
+            elif kind == "patch-remove":
+                edit(tmp, rel, replace(f'\n# Canonical dependency patch authorized under D-B12-PIN (OB-11 Option B):\n# Smithay 0.7.0 minimal P1 correction for defect W-SM-4c (seat pointer leave deactivation).\n[patch.crates-io]\nsmithay = {{ path = "{AUTHORIZED_SMITHAY_PATCH_REL}" }}\n', ''))
                 hit = not check_root_manifest(tmp, q)
+            elif kind == "patch-arbitrary":
+                edit(tmp, rel, replace(f'smithay = {{ path = "{AUTHORIZED_SMITHAY_PATCH_REL}" }}',
+                                       f'smithay = {{ path = "{AUTHORIZED_SMITHAY_PATCH_REL}" }}\ncalloop = {{ path = "vendor/calloop" }}'))
+                hit = not check_root_manifest(tmp, q)
+            elif kind == "patch-unpinned":
+                edit(tmp, rel, replace(f'path = "{AUTHORIZED_SMITHAY_PATCH_REL}"', 'git = "https://github.com/smithay/smithay"'))
+                hit = not check_root_manifest(tmp, q)
+            elif kind == "patch-revision":
+                edit(tmp, rel, replace(f'path = "{AUTHORIZED_SMITHAY_PATCH_REL}"', 'path = "vendor/smithay-0.7.1"'))
+                hit = not check_root_manifest(tmp, q)
+            elif kind == "patch-modification":
+                edit(tmp, rel, append('\n// unauthorized modification\n'))
+                hit = not check_authorized_p1_patch(tmp, q)
+            elif kind == "dep-upgrade":
+                edit(tmp, rel, replace('version = "=0.7.0"', 'version = "=0.8.0"'))
+                hit = not check_manifest_pins(tmp, q)
             r.check(hit, f"detected: {desc}", f"NOT DETECTED: {desc}")
         except Exception as e:  # a seed the checks never saw is a broken control, not a detection
             r.fail(f"CONTROL BROKEN: {desc}: {e}")

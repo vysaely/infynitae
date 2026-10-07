@@ -21,8 +21,7 @@ use smithay::wayland::pointer_constraints::with_pointer_constraint;
 
 fn helper_server_surface(r: &Rig, idx: usize) -> ServerSurface {
     let elem_id = r.ls.state.elements().nth(idx).expect("element");
-    r.ls
-        .state
+    r.ls.state
         .window(elem_id)
         .expect("window")
         .toplevel()
@@ -34,9 +33,7 @@ fn helper_server_surface(r: &Rig, idx: usize) -> ServerSurface {
 fn helper_smithay_active(r: &Rig, idx: usize) -> bool {
     let root = helper_server_surface(r, idx);
     let ptr = r.ls.state.seat().get_pointer().expect("seat pointer");
-    with_pointer_constraint(&root, &ptr, |c| {
-        c.map(|c| c.is_active()).unwrap_or(false)
-    })
+    with_pointer_constraint(&root, &ptr, |c| c.map(|c| c.is_active()).unwrap_or(false))
 }
 
 fn focus_element(r: &mut Rig, idx: usize) {
@@ -68,10 +65,7 @@ fn run_xlock_grab_test(oneshot: bool) {
     ];
     let ls = Lockstep::with(
         PersistedCameras::from_entries(entries).unwrap(),
-        &[
-            a_1080(),
-            output_k("B", (1920, 1080), 120, 60_000),
-        ],
+        &[a_1080(), output_k("B", (1920, 1080), 120, 60_000)],
     );
     let mut r = Rig::new(ls);
     r.map_w();
@@ -180,7 +174,10 @@ fn ob20_x8_c3_pan_with_lock() {
 
     // Start compositor pan: Logo + BTN_MIDDLE
     r.button(BTN_MIDDLE, true, logo());
-    assert_eq!(r.ls.state.core().interaction().initiator(), Some(BTN_MIDDLE));
+    assert_eq!(
+        r.ls.state.core().interaction().initiator(),
+        Some(BTN_MIDDLE)
+    );
 
     // Pan moves camera across several steps
     for _ in 0..10 {
@@ -437,7 +434,10 @@ fn ob47_e1_persistent_explicit_deactivate_then_exit() {
     // Deactivate lock while focus is held by deactivating constraint
     let root = helper_server_surface(&r, 0);
     let surface_key = r.ls.state.registry().key(&root).unwrap();
-    let fx = r.ls.state.core_mut().destroy_pointer_constraint(surface_key);
+    let fx =
+        r.ls.state
+            .core_mut()
+            .destroy_pointer_constraint(surface_key);
     r.ls.state.apply(&fx);
     r.ls.pump();
     r.frame();
@@ -445,17 +445,15 @@ fn ob47_e1_persistent_explicit_deactivate_then_exit() {
     assert!(!helper_smithay_active(&r, 0));
 
     // Move pointer off surface:
-    // On published stock Smithay 0.7.0 (unpatched), leave() unconditionally deactivates,
-    // reproducing defect W-SM-4c (spurious duplicate unlocked; TST-08 / EE-2 E1).
-    // Under patch P1 (OB-11 candidate in experiments/e1r-smithay-p1), leave() deactivates
-    // only an active constraint, eliminating the duplicate unlocked.
+    // Under patch P1 (authorized under D-B12-PIN), leave() deactivates only active constraints.
+    // Because the constraint was already deactivated, zero duplicate unlocked events are emitted.
     let m = r.mark();
     r.motion((1000.0, 1000.0));
     let exit_events = r.since(m);
     let duplicate_unlocked = exit_events.iter().filter(|s| **s == "unlocked").count();
     assert_eq!(
-        duplicate_unlocked, 1,
-        "Stock Smithay 0.7.0 reproduces W-SM-4c defect (spurious duplicate unlocked on leave)"
+        duplicate_unlocked, 0,
+        "Under authorized patch P1, leave() emits zero duplicate unlocked events (W-SM-4c resolved)"
     );
 }
 
@@ -473,7 +471,10 @@ fn ob47_e3_oneshot_explicit_deactivate_defunct() {
     // Deactivate oneshot
     let root = helper_server_surface(&r, 0);
     let surface_key = r.ls.state.registry().key(&root).unwrap();
-    let fx = r.ls.state.core_mut().destroy_pointer_constraint(surface_key);
+    let fx =
+        r.ls.state
+            .core_mut()
+            .destroy_pointer_constraint(surface_key);
     r.ls.state.apply(&fx);
     r.ls.pump();
     r.frame();
@@ -559,7 +560,10 @@ fn round5_pointer_constraints_stress_200_cycles() {
 
     let root = helper_server_surface(&r, 0);
     let surface_key = r.ls.state.registry().key(&root).unwrap();
-    let fx = r.ls.state.core_mut().destroy_pointer_constraint(surface_key);
+    let fx =
+        r.ls.state
+            .core_mut()
+            .destroy_pointer_constraint(surface_key);
     r.ls.state.apply(&fx);
     r.ls.pump();
     r.frame();
@@ -568,4 +572,3 @@ fn round5_pointer_constraints_stress_200_cycles() {
     assert!(r.ls.state.core().constraint().is_none());
     assert!(!helper_smithay_active(&r, 0));
 }
-

@@ -16,11 +16,9 @@ use smithay::wayland::compositor::{
     is_sync_subsurface, with_states,
 };
 use smithay::wayland::output::OutputHandler;
+use smithay::wayland::pointer_constraints::{PointerConstraintsHandler, with_pointer_constraint};
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
-};
-use smithay::wayland::pointer_constraints::{
-    PointerConstraintsHandler, with_pointer_constraint,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{
@@ -91,10 +89,23 @@ impl WaylandState {
             .target()
             .and_then(|id| self.window(id))
             .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
-        kb.set_focus(self, target.clone(), serial);
+        kb.set_focus(self, target, serial);
+    }
+
+    fn restore_preempted_constraint(&mut self) {
+        let target = self
+            .core
+            .focus()
+            .target()
+            .and_then(|id| self.window(id))
+            .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
         if let Some(target) = &target {
             let target_key = self.registry.key(target);
-            if self.core.constraint().is_some_and(|c| Some(c.surface) == target_key) {
+            if self
+                .core
+                .constraint()
+                .is_some_and(|c| Some(c.surface) == target_key)
+            {
                 let ptr = self.pointer_handle();
                 with_pointer_constraint(target, &ptr, |c| {
                     if let Some(c) = c
@@ -372,6 +383,7 @@ impl XdgShellHandler for WaylandState {
             .or_else(|| self.toplevel_root(surface.wl_surface()));
         self.popups.cleanup();
         self.reconcile_popup_chain();
+        self.restore_preempted_constraint();
         match root.and_then(|root| self.element_index_by_root(&root)) {
             Some(i) => self.element_tree_changed(i),
             // the root could not be resolved (already gone): refresh every mapped tree; the
@@ -420,15 +432,25 @@ impl PointerConstraintsHandler for WaylandState {
                 let region = c.region().and_then(convert::convert_region);
                 match &*c {
                     smithay::wayland::pointer_constraints::PointerConstraint::Locked(locked) => {
-                        let hint = locked.cursor_position_hint().map(|p| infynitae_core::geom::LocalPoint {
-                            x: p.x as i32,
-                            y: p.y as i32,
+                        let hint = locked.cursor_position_hint().map(|p| {
+                            infynitae_core::geom::LocalPoint {
+                                x: p.x as i32,
+                                y: p.y as i32,
+                            }
                         });
-                        (infynitae_core::pointer::ConstraintKind::Lock, lifetime, region, hint)
+                        (
+                            infynitae_core::pointer::ConstraintKind::Lock,
+                            lifetime,
+                            region,
+                            hint,
+                        )
                     }
-                    smithay::wayland::pointer_constraints::PointerConstraint::Confined(_) => {
-                        (infynitae_core::pointer::ConstraintKind::Confine, lifetime, region, None)
-                    }
+                    smithay::wayland::pointer_constraints::PointerConstraint::Confined(_) => (
+                        infynitae_core::pointer::ConstraintKind::Confine,
+                        lifetime,
+                        region,
+                        None,
+                    ),
                 }
             })
         });

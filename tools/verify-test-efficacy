@@ -19,7 +19,7 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-COPY_ITEMS = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates", "enforcement"]
+COPY_ITEMS = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates", "enforcement", "vendor", "patches"]
 
 CORE = "crates/infynitae-core/src"
 WAYLAND = "crates/infynitae-wayland/src"
@@ -242,8 +242,8 @@ CONTROLS = [
      "        self.input.interaction.orphan_if_on(output);\n", "        let _ = output;\n",
      "infynitae-backend-headless", ["--test", "t1_input"], "removing_the_pan_output_orphans_the_pan"),
     ("INC-3 M10 KeepFocus: no true-position event at the end of a pan", f"{CORE}/entry.rs",
-     "                self.input.interaction = Interaction::Idle;\n                self.true_position(time_ms)\n",
-     "                self.input.interaction = Interaction::Idle;\n                Vec::new()\n",
+     "                if self.constraint.is_none() {\n                    fx.extend(self.true_position(time_ms));\n",
+     "                if false {\n                    fx.extend(self.true_position(time_ms));\n",
      "infynitae-backend-headless", ["--test", "t1_input"], "x8_c1_keepfocus_pan_then_true_position"),
     ("INC-3 INV-INPUT-4: relative motion synthesised at reconciliation", f"{CORE}/lib.rs",
      "                protocol::Effect::PointerFrame,\n            ],\n            None => Vec::new(),",
@@ -283,11 +283,11 @@ CONTROLS = [
      "            fx.push(Effect::PointerZeroOutputEnd);", "            let _ = Effect::PointerZeroOutputEnd;",
      "infynitae-backend-headless", ["--test", "t1_input"], "zero_output_transition_free_pointer"),
     ("INC-3 zero outputs: a client release is dropped (stuck implicit grab after reconnect)", f"{CORE}/entry.rs",
-     "            // In NoOutput the zero-output grab receives it and delivers nothing, keeping\n            // Smithay's pressed-button set truthful (no stuck implicit grab after reconnect).\n            Some(Owner::Client) => vec![",
-     "            Some(Owner::Client) if self.pointer == PointerState::NoOutput => Vec::new(),\n            Some(Owner::Client) => vec![",
+     "            // In NoOutput the zero-output grab receives it and delivers nothing, keeping\n            // Smithay's pressed-button set truthful (no stuck implicit grab after reconnect).\n            Some(Owner::Client) => {",
+     "            Some(Owner::Client) if self.pointer == PointerState::NoOutput => return Vec::new(),\n            Some(Owner::Client) => {",
      "infynitae-backend-headless", ["--test", "t1_input"], "zero_output_transition_with_a_held_button"),
     ("INC-3 output removal: relocated pointer not re-routed (stale focus)", f"{CORE}/entry.rs",
-     "                pointer_fx = self.true_position(0);", "                pointer_fx = Vec::new();",
+     "                    pointer_fx.extend(self.true_position(0));", "                    // pointer_fx.extend(self.true_position(0));",
      "infynitae-backend-headless", ["--test", "t1_adversarial"], "f_output_removal_relocates_to_the_nearest_survivor"),
     ("INC-3 M10 reconfiguration: no true-position event (stale frame routing)", f"{CORE}/entry.rs",
      "        if on_it && !self.input.interaction.active() {", "        if false && on_it {",

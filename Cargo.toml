@@ -20,3 +20,9 @@ version = "0.0.0"
 edition = "2024"
 rust-version = "1.99.0"
 publish = false
+
+# Canonical dependency patch authorized under D-B12-PIN (OB-11 Option B):
+# Smithay 0.7.0 minimal P1 correction for defect W-SM-4c (seat pointer leave deactivation).
+[patch.crates-io]
+smithay = { path = "vendor/smithay-0.7.0" }
+

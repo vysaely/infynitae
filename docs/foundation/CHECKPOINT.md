@@ -1,8 +1,33 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-4 RATIFIED — SEALED AND READY FOR INC-5 AUTHORIZATION.** Ratified implementation commit `4c01cca2d43e38f4f3a80e9202ec1b7ab0430179` (origin/main) over ratified INC-3 baseline `1ee520fa0079d45193f2a7274b31018e9276b0ed`. Fifth independent adversarial review dossier ingested byte-identically (`b22da28` in `docs/foundation/audit/phase-f-inc4-rereview-4/`). INC-0, INC-1, INC-2, INC-3, and INC-4 are RATIFIED. **INC-5 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-5 IMPLEMENTED — READY FOR INDEPENDENT ADVERSARIAL REVIEW.** Pointer constraints (`zwp_pointer_constraints_v1`), lock/confinement policy (M13, M14), confinement clamp (F-CONFINE-1), constraint reconciliation on output removal (F-RELOCATE-1), and interaction preemption restoration implemented on the production path. OB-11 adjudicated under Option B (P1 adopted under D-B12-PIN). INC-0, INC-1, INC-2, INC-3, and INC-4 are RATIFIED. **INC-5 has NOT been ratified.** **INC-6 has NOT begun.**
 
 Date: 2026-10-07
+
+## PHASE F — INC-5 IMPLEMENTATION (evidence: evidence/phase-f/INC-5/)
+- **Baseline commit:** `2680b99eb6d5353473ff362f5b4a904372f1fdfb` (ratified INC-4).
+- **Scope & Deliverables:**
+  - Protocol seam: `zwp_pointer_constraints_v1` support in `infynitae-wayland` (`LockedPointer` and `ConfinedPointer` global and surface handlers).
+  - Core authority: `Core::pointer_constraint_request`, `Core::pointer_constraint_destroy`, `OBJ-21`, `M13` state machine, `F-LOCK-1` region/lifetime evaluation, and `F-CONFINE-1` continuous confinement bounding clamp.
+  - Interaction preemption & reconciliation: grab preemption restoration on popup close (`Core::pointer_preemption_restored`), and output removal reconciliation (`F-RELOCATE-1`).
+  - Integration test suite: 13 tests in `crates/infynitae-backend-headless/tests/t1_pointer_constraints.rs` covering OB-31 (pointer lock), OB-20 (confinement), OB-50 (confinement clamp), OB-51 (output removal under lock), OB-47 (explicit deactivate then exit under P1), and Checkpoint L 200-cycle stress test.
+- **OB-11 Owner Adjudication & Patch P1 Adoption (D-B12-PIN):**
+  - Owner decision: Option B — Adopt Patch P1 (minimal 4-line guard `if constraint.is_active() { constraint.deactivate(); }` in Smithay `PointerHandle::leave()`).
+  - Stock defect reproduction: documented in `docs/foundation/evidence/phase-f/INC-5/OB-11-STOCK-DEFECT-REPRODUCTION.md`.
+  - Canonical patch file: `patches/0001-seat-leave-deactivate-only-active-constraint.patch`.
+  - Vendored dependency: pinned `vendor/smithay-0.7.0` under root `[patch.crates-io]`.
+  - Strict architectural pinning: `tools/verify-architecture` enforces SHA-256 of `pointer.rs` (`9c120d4101d7b2d3907d018a400dcd52e32e3be6b6cf6b64c80d0b421bbcb512`), verifies byte-identity with crates.io registry for all other files, and enforces 6 seeded negative controls (patch removal, arbitrary patches, unpinned sources, revision changes, local modifications, dependency upgrades).
+  - Wire verification: `ob47_e1` asserts `duplicate_unlocked == 0`.
+  - Upstream status: tracked as outward submission; no upstream fix claimed landed. Patch remains pinned and removable when upstream lands an equivalent fix.
+- **Obligation dispositions:**
+  - **OB-11:** SATISFIED / CLOSED for the INC-5 decision gate under Option B (patch P1 under D-B12-PIN).
+  - **OB-3, OB-20, OB-31, OB-47, OB-50, OB-51:** Satisfied and verified on the production path.
+- **Declaration:**
+  - INC-0 through INC-4 are RATIFIED.
+  - **INC-5 has NOT been ratified.**
+  - **INC-6 has NOT begun.**
+  - Headless execution only; live compositor and physical display untouched.
+
 
 ## PHASE F — INC-4 FORMAL RATIFICATION AND SEAL
 - **Ratified implementation commit:** `4c01cca2d43e38f4f3a80e9202ec1b7ab0430179` (origin/main).
