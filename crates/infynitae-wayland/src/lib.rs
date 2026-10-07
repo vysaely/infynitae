@@ -33,6 +33,7 @@ use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
 use smithay::wayland::output::OutputManagerState;
+use smithay::wayland::pointer_constraints::PointerConstraintsState;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::shell::xdg::XdgShellState;
@@ -88,6 +89,11 @@ pub struct WaylandState {
     pub(crate) ordered_preemption_strategy: keyboard::PreemptionStrategy,
     #[expect(
         dead_code,
+        reason = "owns the zwp_pointer_constraints_v1 global for the state's lifetime"
+    )]
+    pointer_constraints: PointerConstraintsState,
+    #[expect(
+        dead_code,
         reason = "owns the zwp_relative_pointer_manager_v1 global for the state's lifetime"
     )]
     relative_pointer: RelativePointerManagerState,
@@ -139,6 +145,7 @@ impl WaylandState {
             popup_keyboard_grab_serial: None,
             nested_grab_keep_pointer: true,
             ordered_preemption_strategy: keyboard::PreemptionStrategy::Ordered,
+            pointer_constraints: PointerConstraintsState::new::<Self>(display),
             relative_pointer: RelativePointerManagerState::new::<Self>(display),
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),

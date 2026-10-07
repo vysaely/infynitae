@@ -19,10 +19,13 @@ use smithay::wayland::output::OutputHandler;
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
 };
+use smithay::wayland::pointer_constraints::{
+    PointerConstraintsHandler, with_pointer_constraint,
+};
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{
-    delegate_compositor, delegate_output, delegate_presentation, delegate_relative_pointer,
-    delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_output, delegate_pointer_constraints, delegate_presentation,
+    delegate_relative_pointer, delegate_seat, delegate_shm, delegate_xdg_shell,
 };
 
 use crate::{ClientState, ElementHandle, WaylandState, convert, snapshot};
@@ -174,7 +177,13 @@ impl CompositorHandler for WaylandState {
     }
 
     fn new_surface(&mut self, surface: &WlSurface) {
-        add_destruction_hook(surface, |state: &mut Self, s| state.registry.remove(s));
+        add_destruction_hook(surface, |state: &mut Self, s| {
+            if let Some(key) = state.registry.key(s) {
+                let fx = state.core.destroy_pointer_constraint(key);
+                state.apply(&fx);
+            }
+            state.registry.remove(s);
+        });
     }
 
     fn commit(&mut self, surface: &WlSurface) {
@@ -378,8 +387,91 @@ impl OutputHandler for WaylandState {}
 
 delegate_compositor!(WaylandState);
 delegate_output!(WaylandState);
+delegate_pointer_constraints!(WaylandState);
 delegate_presentation!(WaylandState);
 delegate_relative_pointer!(WaylandState);
 delegate_seat!(WaylandState);
 delegate_shm!(WaylandState);
 delegate_xdg_shell!(WaylandState);
+
+impl PointerConstraintsHandler for WaylandState {
+    fn new_constraint(
+        &mut self,
+        surface: &WlSurface,
+        pointer: &smithay::input::pointer::PointerHandle<Self>,
+    ) {
+        let key = self.registry.key_for(surface);
+        let info = with_pointer_constraint(surface, pointer, |c| {
+            c.map(|c| {
+                let lifetime = infynitae_core::pointer::ConstraintLifetime::Persistent;
+                let region = c.region().and_then(convert_region);
+                match &*c {
+                    smithay::wayland::pointer_constraints::PointerConstraint::Locked(locked) => {
+                        let hint = locked.cursor_position_hint().map(|p| infynitae_core::geom::LocalPoint {
+                            x: p.x as i32,
+                            y: p.y as i32,
+                        });
+                        (infynitae_core::pointer::ConstraintKind::Lock, lifetime, region, hint)
+                    }
+                    smithay::wayland::pointer_constraints::PointerConstraint::Confined(_) => {
+                        (infynitae_core::pointer::ConstraintKind::Confine, lifetime, region, None)
+                    }
+                }
+            })
+        });
+
+        if let Some((kind, lifetime, region, hint)) = info {
+            let fx = self
+                .core
+                .request_pointer_constraint(key, kind, lifetime, region, hint);
+            self.apply(&fx);
+        }
+    }
+
+    fn cursor_position_hint(
+        &mut self,
+        surface: &WlSurface,
+        _pointer: &smithay::input::pointer::PointerHandle<Self>,
+        location: smithay::utils::Point<f64, smithay::utils::Logical>,
+    ) {
+        if let Some(key) = self.registry.key(surface) {
+            let hint = infynitae_core::geom::LocalPoint {
+                x: location.x as i32,
+                y: location.y as i32,
+            };
+            self.core.set_cursor_position_hint(key, hint);
+            let fx = self.core.reconcile_constraints();
+            self.apply(&fx);
+        }
+    }
+}
+
+fn convert_region(
+    attrs: &smithay::wayland::compositor::RegionAttributes,
+) -> Option<infynitae_core::geom::LocalRect> {
+    let mut min_x = i32::MAX;
+    let mut min_y = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut max_y = i32::MIN;
+    let mut any = false;
+    for (kind, r) in &attrs.rects {
+        if matches!(kind, smithay::wayland::compositor::RectangleKind::Add) {
+            any = true;
+            min_x = min_x.min(r.loc.x);
+            min_y = min_y.min(r.loc.y);
+            max_x = max_x.max(r.loc.x + r.size.w);
+            max_y = max_y.max(r.loc.y + r.size.h);
+        }
+    }
+    if any && max_x > min_x && max_y > min_y {
+        Some(infynitae_core::geom::LocalRect {
+            loc: infynitae_core::geom::LocalPoint { x: min_x, y: min_y },
+            size: infynitae_core::geom::LocalSize {
+                w: max_x - min_x,
+                h: max_y - min_y,
+            },
+        })
+    } else {
+        None
+    }
+}

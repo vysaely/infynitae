@@ -18,6 +18,7 @@ use smithay::input::{Seat, SeatHandler};
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::SERIAL_COUNTER;
+use smithay::wayland::pointer_constraints::with_pointer_constraint;
 
 use crate::{WaylandState, convert};
 
@@ -369,8 +370,34 @@ impl WaylandState {
                     self.popup_pointer_grab_serial = None;
                 }
             }
-            Effect::ConstraintActivate { .. } => {}
-            Effect::ConstraintDeactivate { .. } => {}
+            Effect::ConstraintActivate { surface, .. } => {
+                let ptr = self.pointer_handle();
+                if let Some(s) = self.registry.surface(surface) {
+                    with_pointer_constraint(s, &ptr, |c| {
+                        if let Some(c) = c {
+                            if !c.is_active() {
+                                c.activate();
+                            }
+                        }
+                    });
+                }
+            }
+            Effect::ConstraintDeactivate { surface, .. } => {
+                let ptr = self.pointer_handle();
+                if let Some(s) = self.registry.surface(surface) {
+                    with_pointer_constraint(s, &ptr, |c| {
+                        if let Some(c) = c {
+                            if c.is_active() {
+                                c.deactivate();
+                            }
+                        }
+                    });
+                    let still_present = with_pointer_constraint(s, &ptr, |c| c.is_some());
+                    if !still_present {
+                        let _ = self.core.destroy_pointer_constraint(surface);
+                    }
+                }
+            }
             _ => return false,
         }
         true
