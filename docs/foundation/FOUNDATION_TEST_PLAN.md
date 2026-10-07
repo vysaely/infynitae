@@ -88,7 +88,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **History:** 1R: constraint reconciliation rules (INV-INPUT-5) and 2R: removal via `output_disconnected` (INV-OUTPUT-1/2) are part of its criterion; see OB-31.
 
 ### OB-4
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Popup-grab dismissal on interaction acquisition (CR-4, X-11b). Test/decision: pan acquired while a popup grab is active
 - **Owner:** core + adapter (W-SM-7 precondition)
 - **Evidence available:** design C4.6, B6.3
@@ -98,7 +98,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-3, INC-4
 - **Blocks:** INC-4 exit
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
-- **History:** INC-3 established the acquisition precondition ordering point. Adjudication of finding INC3-F08 confirms that D-B6-BOUNDARY rule 1 (anchor output selection from popup input event / grab serial) is owned by INC-4 alongside popup grab tracking and OB-4 dismissal.
+- **History:** INC-3 established the acquisition precondition ordering point. Adjudication of finding INC3-F08 confirms that D-B6-BOUNDARY rule 1 (anchor output selection from popup input event / grab serial) is owned by INC-4 alongside popup grab tracking and OB-4 dismissal. Ratified CLOSED at INC-4 exit following fifth independent review and ratification audit; verified by T1 production tests (`pf_ob4_interaction_acquisition_dismisses_popup_grab`, `r10_pan_with_popup_no_synthetic_events_and_clean_return`, and `a1_camerapan_overlapping_destruction`).
 
 ### OB-5
 - **Status:** OPEN
@@ -225,7 +225,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **History:** E1R (unsealed, E1R-N1, E-F3-02): non-Normal transforms are covered headlessly by EE-1 (harness, not production); F-HIT-1 corrected. The production transform part moves to OB-45.
 
 ### OB-15
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Keyboard residual: compositor-side repeat (K9, unused) and output removal (K8 no-op). Test/decision: confirm no repeat events from the compositor; output removal changes no keyboard state
 - **Owner:** core
 - **Evidence available:** X-10
@@ -235,6 +235,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-4
 - **Blocks:** INC-4 exit
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
+- **History:** Ratified CLOSED at INC-4 exit following fifth independent review and ratification audit; verified by T1 production tests (`k8_ob15_output_removal_under_held_keys`, `k9_ob15_key_repeat_probe`, `t04_duplicate_presses`, `release_follows_press_owner_after_modifier_change`, and `sync_seat_key`).
 
 ### OB-16
 - **Status:** OPEN
@@ -271,6 +272,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-4, INC-7
 - **Blocks:** INC-7 exit
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
+- **History:** INC-4 satisfies the W-SM-7 popup grab panic precondition via `grab_popup` validation, `reconcile_popup_chain`, and adversarial tests (`a1_inner_popup_closes_then_key`, `a1_client_closes_whole_chain_then_key`, `a1_middle_popup_disappears_then_key`, `a1_outer_popup_disappears_then_key`, `a1_root_unmaps_then_key`, `a1_destruction_at_depth_4`). Per observation C-1, the W-SM-6 popup portion (`ensure_configured` / initial commit carrying buffer) remains open pending INC-7. OB-18 therefore remains OPEN blocking INC-7 exit.
 
 ### OB-19
 - **Status:** CLOSED
@@ -411,7 +413,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
 
 ### OB-30
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Port xpopup_focus (ER-1) to T1 against the production adapter: ActiveElementFocus vs ProtocolSurfaceRoute, ordered preemption (INV-INPUT-10), nested-grab W-SM-14 workaround.
 - **Owner:** core FocusModel + adapter
 - **Evidence available:** ER-1 (harness, T1-style)
@@ -421,6 +423,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-4
 - **Blocks:** INC-4 exit
 - **Origin:** CORRECTIONS_1R (1R)
+- **History:** Ratified CLOSED at INC-4 exit following fifth independent review and ratification audit; verified by T1 production tests (`pf_1_active_element_vs_protocol_surface_route` through `pf_7_protocol_error_on_unmapped_grab`, `ordered_preemption_exact_keyboard_wire`) and permanently gated by `./tools/verify-architecture` check 5d verifying negative controls NEG-1, NEG-2, and OBS-1 under probe flags.
 
 ### OB-31
 - **Status:** OPEN

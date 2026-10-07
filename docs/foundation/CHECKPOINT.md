@@ -1,8 +1,44 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-4 ROUND-4 CORRECTIVE IMPLEMENTATION COMPLETE — READY FOR FIFTH INDEPENDENT ADVERSARIAL REVIEW.** Fourth independent review dossier ingested byte-for-byte (`dc4d52e`). Round-4 matrix and closure: `docs/foundation/evidence/phase-f/INC-4/corrective-r4/`. INC-0, INC-1, INC-2, and INC-3 are RATIFIED. **INC-4 has NOT been ratified.** **INC-5 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-4 RATIFIED — SEALED AND READY FOR INC-5 AUTHORIZATION.** Ratified implementation commit `4c01cca2d43e38f4f3a80e9202ec1b7ab0430179` (origin/main) over ratified INC-3 baseline `1ee520fa0079d45193f2a7274b31018e9276b0ed`. Fifth independent adversarial review dossier ingested byte-identically (`b22da28` in `docs/foundation/audit/phase-f-inc4-rereview-4/`). INC-0, INC-1, INC-2, INC-3, and INC-4 are RATIFIED. **INC-5 has NOT begun.**
 
-Date: 2026-10-06
+Date: 2026-10-07
+
+## PHASE F — INC-4 FORMAL RATIFICATION AND SEAL
+- **Ratified implementation commit:** `4c01cca2d43e38f4f3a80e9202ec1b7ab0430179` (origin/main).
+- **Ratified baseline:** INC-3 commit `1ee520fa0079d45193f2a7274b31018e9276b0ed`.
+- **Review verdicts:**
+  - Fifth independent adversarial review (`audit/phase-f-inc4-rereview-4/`, commit `b22da28`): `PASS — READY FOR FORMAL RATIFICATION` (Level A = 0, Level B = 0).
+  - Final focused ratification audit: `PASS — FORMAL RATIFICATION AUTHORIZED` (Level A = 0, Level B = 0).
+- **Final defect counts:** Level A = 0, Level B = 0.
+- **Level-C residual observations (non-blocking for INC-4 ratification):**
+  - **C-1:** Popup first commit already carrying a buffer is currently accepted (toplevel equivalent is rejected correctly). W-SM-6 popup portion (`ensure_configured`) remains unresolved and is deferred to INC-7.
+  - **C-2:** Focused-window unmap may produce a deactivation configure; non-blocking observation.
+  - **C-3:** Fifth-review obligation recommendations for OB-18 and OB-21 were corrected by the final ratification audit using the canonical obligation register (`FOUNDATION_TEST_PLAN.md`), keeping parent obligations with deferred or unfulfilled components OPEN while recording partial progress in history.
+  - **Carried observations:**
+    - Trusted `InputPort` holder boundary: the port is the root of trust; Core cannot inspect XKB keymaps (C4.4).
+    - Pinned Smithay 0.7.0 middle-popup behavior: Smithay grab teardown unrolls cleanly to the live ancestor or active element root.
+    - Two semantically equivalent Round-4 mutations (A1-a: chain end keeps grab; A1-d: reconcile to `current_grab()`) retired and documented in Round-4 matrix.
+- **Obligation dispositions (`docs/foundation/FOUNDATION_TEST_PLAN.md`):**
+  - **OB-4:** CLOSED. Popup-grab dismissal on interaction acquisition (CR-4, X-11b) verified by T1 production tests (`pf_ob4_interaction_acquisition_dismisses_popup_grab`, `r10_pan_with_popup_no_synthetic_events_and_clean_return`, and `a1_camerapan_overlapping_destruction`).
+  - **OB-15:** CLOSED. Compositor-side repeat (K9 unused) and output removal (K8 no-op) verified by T1 production tests (`k8_ob15_output_removal_under_held_keys`, `k9_ob15_key_repeat_probe`, `t04_duplicate_presses`, `release_follows_press_owner_after_modifier_change`, and `sync_seat_key`).
+  - **OB-30:** CLOSED. Port `xpopup_focus` (ER-1) to T1 against production adapter (ActiveElementFocus vs ProtocolSurfaceRoute, ordered preemption INV-INPUT-10, nested-grab W-SM-14 workaround) verified by T1 production tests (`pf_1` through `pf_7`, `ordered_preemption_exact_keyboard_wire`) and permanently gated by `./tools/verify-architecture` [5d] against negative controls NEG-1, NEG-2, and OBS-1 under probe flags.
+  - **OB-18:** OPEN. The W-SM-7 popup grab panic precondition is fully satisfied at INC-4 via `grab_popup` validation, `reconcile_popup_chain`, and depth 1..4 adversarial tests (`a1_inner_popup_closes_then_key`, `a1_client_closes_whole_chain_then_key`, `a1_middle_popup_disappears_then_key`, `a1_outer_popup_disappears_then_key`, `a1_root_unmaps_then_key`, `a1_destruction_at_depth_4`). Per C-1, the W-SM-6 popup portion (`ensure_configured` / initial commit carrying buffer) remains open pending INC-7. OB-18 therefore remains OPEN in the register, blocking INC-7 exit.
+  - **OB-21:** OPEN. libinput device semantics under pan accumulation (DV-4) destination is T4 (physical hardware testing); ownership remains INC-16 / T4.
+- **Derived verification evidence (`ulimit -n 1024`, `CARGO_BUILD_JOBS=4`):**
+  - Workspace test suite: 214 normal tests pass (core 70, T1 144: adversarial 13, input 17, keyboard 36, outputs 12, parity 6, popup_focus 32, popup_lifetime 17, slice 4, transform 7); probe-feature `t1_popup_focus` 36 tests pass (218 total).
+  - Cargo fmt and clippy (`--workspace --all-targets --locked -- -D warnings`): PASS.
+  - `./tools/verify-architecture`: PASS (14 source rules, 41 compile probes + 1 positive control, runtime checks [5b] 4, [5c] 5, [5d] 4, 55 seeded + 3 judge controls).
+  - `./tools/verify-test-efficacy`: PASS (110 seeded, 110 DETECTED, 0 MISSED, 0 BROKEN, + 2 judge).
+  - `./tools/check-foundation-docs` and `--self-test`: PASS (57 invariants, 20 formulas, 51 obligations).
+  - `./experiments/c1-authority-spike/verify.sh`: PASS.
+  - `./tools/verify-development-environment`: PASS.
+  - CI verification on implementation commit `4c01cca2d43e38f4f3a80e9202ec1b7ab0430179`: run `37476629305` (all jobs green: foundation-docs, verify-architecture, workspace-build).
+- **Ratification declaration:**
+  **Phase F INC-4 is RATIFIED.**
+  No production behavior was changed during ratification.
+  The live system was untouched.
+  **INC-5 has NOT begun.**
 
 ## PHASE F — INC-4 CORRECTIVE PROGRAM — ROUND 4 (record: evidence/phase-f/INC-4/corrective-r4/)
 - **Review:** `INC-4 FAIL — FURTHER CORRECTION REQUIRED` (fourth review, `audit/phase-f-inc4-rereview-3/`, ingested byte-for-byte as `dc4d52e`; reviewed HEAD `60e5429`). Findings: Level A 1 (A1), Level B 3 (B1–B3), Level C 4 (C1–C4).
