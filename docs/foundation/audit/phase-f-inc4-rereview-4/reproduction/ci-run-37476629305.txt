@@ -1,0 +1,45 @@
+======================================================================
+GitHub Actions CI Run Record
+Run ID: 37476629305
+Commit: 4c01cca2d43e38f4f3a80e9202ec1b7ab0430179
+Event: push (branch: main)
+Conclusion: success
+======================================================================
+
+Job 1: verify-architecture
+  ID: 112313619680
+  Status: completed (success)
+  Duration: 2m 3s
+  Steps:
+    - Set up job: success
+    - Run actions/checkout@v4: success
+    - Native build dependencies: success
+    - Toolchain pinned by rust-toolchain.toml: success
+    - Run ./tools/verify-architecture: success (41 probes + 1 positive, 14 source rules, [5b]-[5d], 55 seeded + 3 judge)
+
+Job 2: workspace-build
+  ID: 112313620083
+  Status: completed (success)
+  Duration: 7m 29s
+  Steps:
+    - Set up job: success
+    - Run actions/checkout@v4: success
+    - Native build dependencies: success
+    - Toolchain pinned by rust-toolchain.toml: success
+    - Run cargo fmt --all -- --check: success
+    - Run cargo check --workspace --locked: success
+    - Run cargo build --workspace --locked: success
+    - Run cargo test --workspace --locked: success (214 tests pass)
+    - Run cargo clippy --workspace --all-targets --locked -- -D warnings: success
+    - Seeded behavioural defects must fail the product tests (./tools/verify-test-efficacy): success (110 DETECTED, 0 MISSED, 0 BROKEN)
+
+Job 3: foundation-docs
+  ID: 112313620170
+  Status: completed (success)
+  Duration: 10s
+  Steps:
+    - Set up job: success
+    - Run actions/checkout@v4: success
+    - Run python3 --version: success
+    - Run ./tools/check-foundation-docs: success (57 invariants, 20 formulas, 51 obligations intact)
+    - Run ./tools/check-foundation-docs --self-test: success (18/18 detected)

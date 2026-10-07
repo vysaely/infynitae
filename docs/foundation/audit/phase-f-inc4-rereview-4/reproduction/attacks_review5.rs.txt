@@ -1,0 +1,629 @@
+//! FIFTH INDEPENDENT ADVERSARIAL REVIEW ATTACK SUITE
+//!
+//! Independent adversarial tests attacking Round-4 architecture:
+//! - Popup lifetime & reconciliation (depth 1..5, client close, middle/outer destroy, pan, zero-out, unmap/destroy)
+//! - Tree / lifecycle decoupling (B1 reproduction, unmapped re-show, pending geometry, child commits)
+//! - Input authority (InputAuthToken cross-core, duplicate transitions, abandonment, delayed use)
+//! - Serial provenance (FIFO eviction, middle retention, fallback, no aliasing)
+//! - Preemption ordering (W-SM-15, keyboard-first, no spurious re-entry)
+//! - 250-cycle combined stress
+
+mod common;
+
+use std::time::Duration;
+use common::input::{BTN_LEFT, BTN_MIDDLE, none};
+use common::{Lockstep, PopupSpec, output, output_k};
+use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
+use infynitae_core::geom::CanvasPos;
+use infynitae_core::input::keys::{KEY_A, KEY_B, KEY_LEFTMETA, KEY_LEFTSHIFT};
+use infynitae_core::navigation::PersistedCameras;
+use infynitae_core::stage::{ElementId, Lifecycle};
+
+const KEY_K: u32 = 37;
+const KEY_LEFTCTRL: u32 = 29;
+const KEY_LEFTALT: u32 = 56;
+
+struct R5 {
+    ls: Lockstep,
+    t: u64,
+    w: Vec<usize>,
+    e: Vec<ElementId>,
+}
+
+impl R5 {
+    fn new(n: usize) -> Self {
+        let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+        let qh = ls.qh.clone();
+        let labels = ["W1", "W2", "W3", "W4"];
+        let mut w = Vec::new();
+        for l in labels.iter().take(n) {
+            w.push(ls.probe.toplevel(&qh, l, (400, 300), 0));
+        }
+        ls.pump();
+        let e: Vec<ElementId> = ls.state.elements().collect();
+        assert_eq!(e.len(), n);
+        let mut r = R5 { ls, t: 10_000, w, e };
+        r.adv();
+        r
+    }
+
+    fn adv(&mut self) {
+        self.ls.pump();
+        let t = self.ls.now + Duration::from_micros(16_667);
+        self.ls.run_until(t);
+    }
+
+    fn key(&mut self, k: u32, p: bool) {
+        self.t += 1000;
+        keyboard_key(&mut self.ls.state, &mut self.ls.input, k, p, self.t).expect("key");
+        self.adv();
+    }
+
+    fn motion(&mut self, d: (f64, f64)) {
+        self.t += 1000;
+        pointer_motion(&mut self.ls.state, &mut self.ls.input, d, d, self.t).expect("motion");
+        self.adv();
+    }
+
+    fn button(&mut self, b: u32, p: bool) {
+        self.t += 1000;
+        pointer_button(&mut self.ls.state, &mut self.ls.input, b, p, none(), self.t).expect("button");
+        self.adv();
+    }
+
+    fn focus(&mut self, t: Option<ElementId>) {
+        set_focus(&mut self.ls.state, &mut self.ls.input, t).expect("focus");
+        self.adv();
+    }
+
+    fn label(&self, idx: usize) -> &'static str {
+        self.ls.probe.surfaces[idx].label
+    }
+
+    fn click_focus(&mut self) -> (usize, ElementId, u32) {
+        self.motion((50.0, 50.0));
+        self.button(BTN_LEFT, true);
+        let s = self.ls.probe.last_serial;
+        self.button(BTN_LEFT, false);
+        let top = self.ls.state.core().focus().target().expect("click-to-focus");
+        let i = self.e.iter().position(|&x| x == top).expect("element");
+        (self.w[i], top, s)
+    }
+
+    fn popup(&mut self, label: &'static str, parent: usize, serial: u32, at: (i32, i32)) -> usize {
+        let qh = self.ls.qh.clone();
+        let p = self.ls.probe.popup_with_grab_serial(
+            &qh,
+            label,
+            parent,
+            PopupSpec {
+                content: (40, 20),
+                shadow: 0,
+                anchor_rect: (at.0, at.1, 1, 1),
+                slide: false,
+            },
+            serial,
+        );
+        self.adv();
+        p
+    }
+
+    /// Builds a popup chain up to arbitrary depth with distinct grab serials.
+    fn chain(&mut self, parent: usize, first_serial: u32, depth: usize) -> Vec<usize> {
+        let labels = ["P1", "P2", "P3", "P4", "P5", "P6"];
+        let mut ps = vec![self.popup(labels[0], parent, first_serial, (300, 250))];
+        for d in 1..depth {
+            self.key(KEY_A, true);
+            self.key(KEY_A, false);
+            let s = self.ls.probe.last_serial;
+            ps.push(self.popup(labels[d], ps[d - 1], s, (2, 2)));
+        }
+        ps
+    }
+
+    fn destroy(&mut self, p: usize) {
+        self.ls.probe.destroy_popup(p);
+        self.adv();
+    }
+
+    fn root_surface(&self, id: ElementId) -> Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface> {
+        self.ls.state.window(id).and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()))
+    }
+
+    /// Verifies that Core and Smithay focus are completely coherent and ready for immediate key delivery.
+    fn assert_coherent_and_key(&mut self, ctx: &str, want_core: Option<ElementId>, want_client: Option<&str>) {
+        assert_eq!(self.ls.state.core().focus().target(), want_core, "[{ctx}] Core focus");
+        let smithay = self.ls.state.keyboard_current_focus();
+        match want_core {
+            Some(id) if want_client.is_some_and(|c| c.starts_with('W')) => {
+                assert_eq!(smithay, self.root_surface(id), "[{ctx}] Smithay focus != Core focus root");
+            }
+            None => {
+                assert!(smithay.is_none(), "[{ctx}] Smithay focus while Core unfocused");
+            }
+            _ => {}
+        }
+        if want_client.is_some_and(|c| c.starts_with('W')) || want_client.is_none() {
+            assert!(!self.ls.state.keyboard_is_grabbed(), "[{ctx}] residual keyboard grab");
+            assert!(!self.ls.state.is_pointer_grabbed(), "[{ctx}] residual pointer grab");
+        }
+        assert_eq!(self.ls.probe.kb.active.as_deref(), want_client, "[{ctx}] client active surface");
+
+        // Send a probe key immediately and assert no protocol violations
+        let v0 = self.ls.probe.kb.violations.len();
+        let k0 = self.ls.probe.key_events.len();
+        self.key(KEY_K, true);
+        assert_eq!(self.ls.probe.kb.active.as_deref(), want_client, "[{ctx}] focus moved during key (lazy refocus)");
+        self.key(KEY_K, false);
+        let delivered = self.ls.probe.key_events.len() - k0;
+        let expected = if want_client.is_some() { 2 } else { 0 };
+        assert_eq!(delivered, expected, "[{ctx}] delivered probe key events");
+        assert!(self.ls.probe.kb.violations[v0..].is_empty(), "[{ctx}] protocol violations: {:?}", &self.ls.probe.kb.violations[v0..]);
+    }
+}
+
+// ============================================================================
+// ATTACK 1: POPUP LIFETIME & DEPTH INDEPENDENCE (DEPTHS 1..5)
+// ============================================================================
+
+#[test]
+fn attack_popup_depth_1_to_5_reverse_close() {
+    for depth in 1..=5 {
+        let mut r = R5::new(2);
+        let (wp, top, s) = r.click_focus();
+        let ps = r.chain(wp, s, depth);
+        assert_eq!(r.ls.probe.kb.active.as_deref(), Some(r.label(*ps.last().unwrap())));
+
+        // Client closes the chain in strict protocol reverse order
+        for &p in ps.iter().rev() {
+            r.destroy(p);
+        }
+
+        // Must be cleanly routed back to root window with ZERO violations on next key
+        r.assert_coherent_and_key(&format!("depth {depth} close"), Some(top), Some(r.label(wp)));
+    }
+}
+
+#[test]
+fn attack_popup_inner_dies_outer_keeps_routing() {
+    let mut r = R5::new(2);
+    let (wp, top, s) = r.click_focus();
+    let ps = r.chain(wp, s, 3); // P1 -> P2 -> P3
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("P3"));
+
+    // P3 dies
+    r.destroy(ps[2]);
+    assert!(r.ls.state.keyboard_is_grabbed(), "P2 still grabs");
+    r.assert_coherent_and_key("P3 dies -> P2", Some(top), Some("P2"));
+
+    // P2 dies
+    r.destroy(ps[1]);
+    assert!(r.ls.state.keyboard_is_grabbed(), "P1 still grabs");
+    r.assert_coherent_and_key("P2 dies -> P1", Some(top), Some("P1"));
+
+    // P1 dies
+    r.destroy(ps[0]);
+    assert!(!r.ls.state.keyboard_is_grabbed(), "grabs clear");
+    r.assert_coherent_and_key("P1 dies -> root", Some(top), Some(r.label(wp)));
+}
+
+#[test]
+fn attack_popup_middle_dies_tolerated() {
+    let mut r = R5::new(2);
+    let (wp, top, s) = r.click_focus();
+    let ps = r.chain(wp, s, 4); // P1, P2, P3, P4
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("P4"));
+
+    // Destroy middle popup P2
+    r.destroy(ps[1]);
+    // Topmost P4 remains active and receives keys
+    r.assert_coherent_and_key("middle P2 died", Some(top), Some("P4"));
+
+    // Destroy P4
+    r.destroy(ps[3]);
+    // Next live top is P3
+    r.assert_coherent_and_key("P4 died -> P3", Some(top), Some("P3"));
+
+    // Destroy P3, then P1
+    r.destroy(ps[2]);
+    r.destroy(ps[0]);
+    r.assert_coherent_and_key("chain end", Some(top), Some(r.label(wp)));
+}
+
+#[test]
+fn attack_popup_rapid_batch_close() {
+    let mut r = R5::new(2);
+    let (wp, top, s) = r.click_focus();
+    let ps = r.chain(wp, s, 4);
+    for &p in ps.iter().rev() {
+        r.ls.probe.destroy_popup(p);
+    }
+    r.adv();
+    r.assert_coherent_and_key("rapid batch close", Some(top), Some(r.label(wp)));
+}
+
+#[test]
+fn attack_popup_pan_during_nested_chain() {
+    let mut r = R5::new(2);
+    let (wp, top, s) = r.click_focus();
+    let ps = r.chain(wp, s, 3);
+    r.key(KEY_LEFTMETA, true);
+    let m = r.ls.probe.ptr.len();
+    r.button(BTN_MIDDLE, true);
+    for &p in ps.iter().rev() {
+        r.destroy(p);
+    }
+    r.motion((10.0, 0.0));
+    let during: Vec<String> = r.ls.probe.ptr[m..].to_vec();
+    r.button(BTN_MIDDLE, false);
+    r.key(KEY_LEFTMETA, false);
+    assert!(during.iter().all(|l| l == "frame"), "leaked pointer events during pan: {during:?}");
+    r.motion((1.0, 0.0));
+    r.assert_coherent_and_key("post-pan with destroyed popups", Some(top), Some(r.label(wp)));
+}
+
+#[test]
+fn attack_popup_zero_output_disconnect_reconnect() {
+    let mut r = R5::new(2);
+    let (wp, top, s) = r.click_focus();
+    let ps = r.chain(wp, s, 3);
+    let o = r.ls.output();
+    r.ls.disconnect(o);
+    r.adv();
+    for &p in ps.iter().rev() {
+        r.destroy(p);
+    }
+    assert!(!r.ls.state.keyboard_is_grabbed());
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some(r.label(wp)));
+    r.ls.connect(&output((1920, 1080), 120));
+    r.adv();
+    r.assert_coherent_and_key("reconnected", Some(top), Some(r.label(wp)));
+}
+
+// ============================================================================
+// ATTACK 2: TREE/LIFECYCLE SEPARATION (B1 REPRODUCTION)
+// ============================================================================
+
+fn configures(r: &R5, label: &str) -> usize {
+    r.ls.probe.configures.iter().filter(|l| **l == label).count()
+}
+
+#[test]
+fn attack_b1_unmapped_parent_popup_death_does_not_advance_m1() {
+    let mut r = R5::new(2);
+    r.ls.probe.auto_destroy_popups = true;
+    let (wp, top, s) = r.click_focus();
+    r.popup("P", wp, s, (300, 250));
+
+    // Unmap the parent (null-buffer commit)
+    r.ls.probe.unmap(wp);
+    r.adv();
+
+    // The popup was dismissed and destroyed. Verify parent is Unmapped, NOT AwaitingFirstBuffer!
+    assert_eq!(r.ls.state.core().stage().state(top), Some(Lifecycle::Unmapped), "parent must remain Unmapped");
+
+    let c0 = configures(&r, r.label(wp));
+
+    // Client performs initial commit (no buffer) to re-show window
+    r.ls.probe.surfaces[wp].wl.commit();
+    r.adv();
+
+    // MUST receive EXACTLY ONE configure!
+    let c1 = configures(&r, r.label(wp));
+    assert_eq!(c1 - c0, 1, "parent must receive exactly 1 configure on re-initial commit");
+    assert_eq!(r.ls.state.core().stage().state(top), Some(Lifecycle::AwaitingFirstBuffer));
+}
+
+#[test]
+fn attack_b1_uncommitted_parent_untouched_by_popup() {
+    let mut r = R5::new(1);
+    let (_, _, s) = r.click_focus();
+    let qh = r.ls.qh.clone();
+    let x = r.ls.probe.toplevel_uncommitted(&qh, "X", (200, 200));
+    r.adv();
+
+    let p = r.ls.probe.popup_with_grab_serial(
+        &qh,
+        "PX",
+        x,
+        PopupSpec {
+            content: (40, 30),
+            shadow: 0,
+            anchor_rect: (1, 1, 1, 1),
+            slide: false,
+        },
+        s,
+    );
+    r.adv();
+    assert_eq!(configures(&r, "X"), 0, "popup commit must not configure uncommitted parent");
+    r.destroy(p);
+    assert_eq!(configures(&r, "X"), 0, "popup death must not configure uncommitted parent");
+    let xid = r.ls.state.elements().last().unwrap();
+    assert_eq!(r.ls.state.core().stage().state(xid), Some(Lifecycle::AwaitingInitialCommit));
+}
+
+#[test]
+fn attack_former_popup_area_delivers_clicks_to_parent() {
+    let mut r = R5::new(1);
+    let (wp, _, s) = r.click_focus();
+    let qh = r.ls.qh.clone();
+    let p = r.ls.probe.popup_with_grab_serial(
+        &qh,
+        "P",
+        wp,
+        PopupSpec {
+            content: (120, 80),
+            shadow: 0,
+            anchor_rect: (10, 10, 1, 1),
+            slide: false,
+        },
+        s,
+    );
+    r.adv();
+    r.destroy(p);
+
+    // Clicks in former popup area must reach parent root window
+    let m = r.ls.probe.ptr.len();
+    r.motion((1.0, 1.0));
+    r.button(BTN_LEFT, true);
+    r.button(BTN_LEFT, false);
+    let wire = &r.ls.probe.ptr[m..];
+    let btn_count = wire.iter().filter(|l| l.starts_with("button")).count();
+    assert_eq!(btn_count, 2, "clicks into former popup area must reach parent window: {wire:?}");
+}
+
+// ============================================================================
+// ATTACK 3: INPUT AUTHORITY & TOKEN SECURITY
+// ============================================================================
+
+#[test]
+fn attack_input_auth_token_cross_core_rejected() {
+    let mut r1 = R5::new(1);
+    r1.click_focus();
+    let r2 = R5::new(1);
+
+    // Core 2 mints a token
+    let token = r2.ls.state.core().verify_input_port(&r2.ls.input, KEY_LEFTSHIFT, true).expect("mint token");
+    assert_eq!(token.key(), KEY_LEFTSHIFT);
+    assert!(token.pressed());
+
+    // Present Core 2's token to Core 1's sync_seat_key
+    let before_mods = r1.ls.state.seat_modifiers();
+    let (after_mods, changed) = r1.ls.state.sync_seat_key(token);
+    assert!(!changed, "foreign token must not change modifiers");
+    assert_eq!(after_mods, before_mods, "foreign token must not mutate seat state");
+    assert!(!after_mods.shift, "shift must not be set");
+}
+
+#[test]
+fn attack_duplicate_physical_transitions_absorb_cleanly() {
+    let keys = [
+        ("A", KEY_A),
+        ("Shift", KEY_LEFTSHIFT),
+        ("Ctrl", KEY_LEFTCTRL),
+        ("Alt", KEY_LEFTALT),
+        ("Super", KEY_LEFTMETA),
+    ];
+    for (name, k) in keys {
+        let mut r = R5::new(2);
+        r.click_focus();
+
+        // 1. Initial press
+        r.key(k, true);
+        let n = r.ls.probe.key_events.len();
+
+        // 2. Duplicate press
+        r.key(k, true);
+        // Client wire receives NO duplicate key event
+        assert_eq!(r.ls.probe.key_events.len(), n, "[{name}] duplicate press leaked to wire");
+
+        // 3. Triplicate press
+        r.key(k, true);
+        assert_eq!(r.ls.probe.key_events.len(), n, "[{name}] triplicate press leaked to wire");
+
+        // 4. Single release
+        r.key(k, false);
+        // Seat depressed modifiers must be 0
+        assert_eq!(r.ls.state.keyboard_modifier_state().serialized.depressed, 0, "[{name}] stuck seat modifier after release");
+        assert_eq!(r.ls.probe.kb.depressed, 0, "[{name}] stuck client modifier");
+
+        // 5. Orphan release
+        r.key(k, false);
+        assert_eq!(r.ls.state.keyboard_modifier_state().serialized.depressed, 0, "[{name}] orphan release corrupted seat");
+    }
+}
+
+#[test]
+fn attack_token_abandonment_does_not_corrupt_core() {
+    let mut r = R5::new(1);
+    let (_, top, _) = r.click_focus();
+
+    // Mint token but abandon it without syncing seat
+    {
+        let _abandoned = r.ls.state.core().verify_input_port(&r.ls.input, KEY_A, true).unwrap();
+        // drops here
+    }
+
+    // Core state and key ownership remain completely normal
+    assert!(!r.ls.state.core().is_key_down(KEY_A));
+    assert!(r.ls.state.core().keys().pressed().is_empty());
+
+    // Legitimate key sequence continues without issue
+    r.assert_coherent_and_key("after abandoned token", Some(top), Some("W1"));
+}
+
+// ============================================================================
+// ATTACK 4: PROVENANCE FIFO EVICTION & FALLBACK
+// ============================================================================
+
+#[test]
+fn attack_provenance_store_fifo_overflow_and_retention() {
+    let entries = ["A", "B", "C"]
+        .iter()
+        .map(|k| (infynitae_backend_headless::VirtualOutput::key(k), CanvasPos { x: 0, y: 0 }, 1.0))
+        .collect();
+    let mut ls = Lockstep::with(
+        PersistedCameras::from_entries(entries).unwrap(),
+        &[
+            output_k("A", (1920, 1080), 120, 60_000),
+            output_k("B", (800, 600), 120, 60_000),
+            output_k("C", (1280, 720), 120, 144_000),
+        ],
+    );
+    ls.probe.auto_destroy_popups = true;
+    let qh = ls.qh.clone();
+    let w = ls.probe.toplevel(&qh, "W1", (400, 300), 0);
+    ls.pump();
+    let mut t = 10_000u64;
+    let adv = |ls: &mut Lockstep| {
+        ls.pump();
+        let n = ls.now + Duration::from_micros(16_667);
+        ls.run_until(n);
+    };
+    adv(&mut ls);
+    let motion = |ls: &mut Lockstep, t: &mut u64, d: (f64, f64)| {
+        *t += 1000;
+        pointer_motion(&mut ls.state, &mut ls.input, d, d, *t).expect("motion");
+        adv(ls);
+    };
+    let click = |ls: &mut Lockstep, t: &mut u64| -> u32 {
+        *t += 1000;
+        pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, true, none(), *t).expect("press");
+        adv(ls);
+        let s = ls.probe.last_serial;
+        *t += 1000;
+        pointer_button(&mut ls.state, &mut ls.input, BTN_LEFT, false, none(), *t).expect("release");
+        adv(ls);
+        s
+    };
+
+    motion(&mut ls, &mut t, (50.0, 50.0)); // output A
+    let s_old = click(&mut ls, &mut t);
+    motion(&mut ls, &mut t, (2410.0, 0.0)); // output C
+    let c: Vec<u32> = (0..20).map(|_| click(&mut ls, &mut t)).collect();
+    motion(&mut ls, &mut t, (-2410.0, 0.0)); // back to output A
+    let a: Vec<u32> = (0..20).map(|_| click(&mut ls, &mut t)).collect();
+    motion(&mut ls, &mut t, (1000.0, 0.0)); // output B (pointer output = fallback)
+
+    assert_eq!(ls.state.serial_outputs_len(), 64, "capacity strictly bounded at 64");
+
+    let place = |ls: &mut Lockstep, serial: u32| -> Option<i32> {
+        let p = ls.probe.popup_with_grab_serial(
+            &qh,
+            "P",
+            w,
+            PopupSpec {
+                content: (600, 50),
+                shadow: 0,
+                anchor_rect: (390, 10, 1, 1),
+                slide: true,
+            },
+            serial,
+        );
+        adv(ls);
+        let x = ls.probe.surfaces[p].popup_configure.map(|c| c.0);
+        ls.probe.destroy_popup(p);
+        adv(ls);
+        x
+    };
+
+    assert_eq!(place(&mut ls, s_old), Some(-200), "evicted s_old falls back to pointer output B");
+    assert_eq!(place(&mut ls, c[4]), Some(-200), "evicted C #5 falls back to pointer output B");
+    assert_eq!(place(&mut ls, c[14]), Some(40), "retained C #15 resolves to causing output C");
+    assert_eq!(place(&mut ls, a[9]), Some(360), "retained A #30 resolves to causing output A");
+    assert_eq!(place(&mut ls, a[19]), Some(360), "newest A #40 resolves to causing output A");
+    assert_eq!(place(&mut ls, 999_999), Some(-200), "unknown serial falls back to pointer output B");
+}
+
+// ============================================================================
+// ATTACK 5: LONG-LIVED 250-CYCLE STRESS SESSION
+// ============================================================================
+
+#[test]
+fn attack_250_cycle_deep_stress_session() {
+    let mut r = R5::new(3);
+    let mut cur_out = r.ls.output();
+
+    for i in 0..250usize {
+        let (wp, top, s) = r.click_focus();
+        let other = if top == r.e[0] { r.e[1] } else { r.e[0] };
+        let depth = 1 + (i % 4); // depths 1, 2, 3, 4
+        let ps = r.chain(wp, s, depth);
+
+        // Duplicate modifier press sequence
+        r.key(KEY_LEFTSHIFT, true);
+        r.key(KEY_LEFTSHIFT, true);
+        r.key(KEY_LEFTSHIFT, false);
+
+        match i % 5 {
+            0 => {
+                // Client reverse close
+                for &p in ps.iter().rev() {
+                    r.destroy(p);
+                }
+            }
+            1 => {
+                // Focus transfer dismissal
+                r.focus(Some(other));
+                for &p in ps.iter().rev() {
+                    r.destroy(p);
+                }
+            }
+            2 => {
+                // CameraPan dismissal with destruction during pan
+                r.key(KEY_LEFTMETA, true);
+                r.button(BTN_MIDDLE, true);
+                for &p in ps.iter().rev() {
+                    r.ls.probe.destroy_popup(p);
+                }
+                r.motion((5.0, 0.0));
+                r.button(BTN_MIDDLE, false);
+                r.key(KEY_LEFTMETA, false);
+                r.motion((-5.0, 0.0));
+            }
+            3 => {
+                // Zero outputs and reconnect
+                r.ls.disconnect(cur_out);
+                r.adv();
+                for &p in ps.iter().rev() {
+                    r.destroy(p);
+                }
+                cur_out = r.ls.connect(&output((1920, 1080), 120));
+                r.adv();
+            }
+            _ => {
+                // Middle popup destruction followed by rest
+                if ps.len() > 2 {
+                    let middle = ps[1];
+                    r.destroy(middle);
+                    for &p in ps.iter().rev() {
+                        if p != middle {
+                            r.destroy(p);
+                        }
+                    }
+                } else {
+                    for &p in ps.iter().rev() {
+                        r.destroy(p);
+                    }
+                }
+            }
+        }
+
+        r.key(KEY_B, true);
+        r.key(KEY_B, false);
+    }
+
+    // Final state assertions
+    let core = r.ls.state.core();
+    let target = core.focus().target();
+    assert!(r.ls.probe.kb.violations.is_empty(), "violations: {:?}", r.ls.probe.kb.violations);
+    assert_eq!(r.ls.state.keyboard_modifier_state().serialized.depressed, 0);
+    assert_eq!(r.ls.probe.kb.depressed, 0);
+    assert!(core.keys().pressed().is_empty(), "keys pressed: {:?}", core.keys().pressed());
+    assert!(core.buttons().pressed().is_empty(), "buttons pressed");
+    assert!(!r.ls.state.is_pointer_grabbed(), "stale pointer grab");
+    assert!(!r.ls.state.keyboard_is_grabbed(), "stale keyboard grab");
+    assert!(r.ls.state.serial_outputs_len() <= 64);
+    assert!(target.is_some());
+    assert_eq!(r.ls.state.keyboard_current_focus(), r.root_surface(target.unwrap()), "Smithay focus != Core focus root");
+}

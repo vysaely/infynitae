@@ -1,0 +1,54 @@
+======================================================================
+Infynitae Native — Phase F INC-4 Fifth Independent Review
+Mechanically Derived Counts (HEAD: 4c01cca2d43e38f4f3a80e9202ec1b7ab0430179)
+======================================================================
+
+1. CARGO TEST COUNTS:
+   Total normal workspace tests: 214
+     - infynitae-core (unit tests): 70
+     - infynitae-backend-headless (T1 tests): 144
+         - t1_adversarial: 13
+         - t1_input: 17
+         - t1_keyboard: 36
+         - t1_outputs: 12
+         - t1_parity: 6
+         - t1_popup_focus: 32
+         - t1_popup_lifetime: 17
+         - t1_slice: 4
+         - t1_transform: 7
+   Feature-gated tests:
+     - t1_popup_focus with probe features: 36 tests (+4 feature-gated)
+     - Total tests across workspace with probes: 218
+
+2. VERIFY-ARCHITECTURE COUNTS:
+   - Compile probes: 41 rejected + 1 positive control (harness builds)
+   - Source rules: 14 AST / syntax rules
+   - Runtime 2i assertions [5b]: 4
+   - Runtime INV-INPUT-3 assertions [5c]: 5
+   - Runtime OB-30 negative controls [5d]: 4 (NEG-1, NEG-2, OBS-1, pf_grab_refused)
+   - Seeded negative controls [6]: 55 seeded + 3 judge controls = 58
+   - Canonical tree identity: byte-identical after controls
+
+3. VERIFY-TEST-EFFICACY COUNTS:
+   - Seeded mutation controls: 110
+   - Detected controls: 110 (100%)
+   - Missed controls: 0
+   - Broken controls: 0
+   - Judge controls: 2 (harmless -> MISSED, non-existent -> BROKEN)
+   - Canonical tree identity: byte-identical after controls
+
+4. FOUNDATION DOCS COUNTS:
+   - Invariants: 57
+   - Formulas: 20
+   - Obligations: 51
+   - Self-test seeded defect detection: 18 / 18
+
+5. FRESH MUTATION TEST COUNTS:
+   - Total mutations: 22
+   - Detected: 20
+   - Missed (equivalent): 2 (A1-a, A1-d)
+   - Broken: 0
+
+6. LONG-LIVED STRESS SESSIONS:
+   - Shipped long-lived stress: 200 cycles, 0 violations, 0 depressed mods, FDs 10 -> 10
+   - Independent long-lived attack stress: 250 cycles, 0 violations, 0 depressed mods, clean grabs
