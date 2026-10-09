@@ -221,3 +221,148 @@ pub fn render_frame(
         .clone();
     convert::render_elements(renderer, state.registry(), &entries).map_err(RenderError::Renderer)
 }
+
+/// Options for configuring headless compositor execution.
+#[derive(Clone, Debug)]
+pub struct HeadlessCompositorOptions {
+    /// Wayland socket name (e.g. "wayland-1"). If None, automatically selects an available socket.
+    pub socket_name: Option<String>,
+    /// Optional command to execute on compositor startup (e.g. "weston-terminal").
+    pub exec: Option<String>,
+    /// Virtual output width.
+    pub width: u32,
+    /// Virtual output height.
+    pub height: u32,
+    /// Virtual output refresh in mHz.
+    pub refresh_mhz: u32,
+    /// Optional maximum run duration before clean exit.
+    pub duration: Option<Duration>,
+    /// Optional maximum frame count before clean exit.
+    pub max_frames: Option<u64>,
+}
+
+impl Default for HeadlessCompositorOptions {
+    fn default() -> Self {
+        Self {
+            socket_name: None,
+            exec: None,
+            width: 1920,
+            height: 1080,
+            refresh_mhz: 60_000,
+            duration: None,
+            max_frames: None,
+        }
+    }
+}
+
+/// Runs a headless compositor session.
+///
+/// Connects a virtual output, opens a Wayland listening socket, accepts clients, ticks
+/// virtual vblank frames, and exits cleanly when requested or when duration/frame limits are reached.
+pub fn run_headless(
+    core: infynitae_core::Core,
+    _input_port: infynitae_core::InputPort,
+    mut output_token: infynitae_core::OutputLifecycleToken,
+    options: HeadlessCompositorOptions,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use smithay::reexports::calloop::EventLoop;
+    use smithay::reexports::wayland_server::Display;
+    use smithay::wayland::socket::ListeningSocketSource;
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    let display: Display<WaylandState> = Display::new()?;
+    let mut state = WaylandState::new(&display.handle(), core);
+
+    let socket_source = match options.socket_name.as_deref() {
+        Some(name) => ListeningSocketSource::with_name(name)?,
+        None => ListeningSocketSource::new_auto()?,
+    };
+    let socket_name = socket_source.socket_name().to_string_lossy().to_string();
+    println!("[infynitae] Headless listening on Wayland socket: {socket_name}");
+    println!("[infynitae] To connect clients, set WAYLAND_DISPLAY={socket_name}");
+
+    let virtual_output = VirtualOutput {
+        key: VirtualOutput::key("HEADLESS-0"),
+        mode: (options.width, options.height),
+        transform: Transform::Normal,
+        scale_120: 120,
+        refresh_mhz: options.refresh_mhz,
+    };
+    let output_id = connect(&mut state, &mut output_token, &virtual_output)
+        .map_err(|e| format!("Failed to connect headless output: {e:?}"))?;
+
+    // Spawn client if requested
+    if let Some(cmd) = &options.exec {
+        println!("[infynitae] Spawning initial client: {cmd}");
+        let mut parts = cmd.split_whitespace();
+        if let Some(bin) = parts.next() {
+            let mut command = std::process::Command::new(bin);
+            command.args(parts);
+            command.env("WAYLAND_DISPLAY", &socket_name);
+            match command.spawn() {
+                Ok(child) => {
+                    println!("[infynitae] Client spawned with PID {}", child.id());
+                }
+                Err(e) => {
+                    eprintln!("[infynitae] Failed to spawn {cmd}: {e}");
+                }
+            }
+        }
+    }
+
+    struct HeadlessData {
+        display: Display<WaylandState>,
+    }
+
+    let mut event_loop: EventLoop<HeadlessData> = EventLoop::try_new()?;
+    event_loop
+        .handle()
+        .insert_source(socket_source, |stream, _, data| {
+            let _ = data
+                .display
+                .handle()
+                .insert_client(stream, Arc::new(infynitae_wayland::ClientState::default()));
+        })
+        .map_err(|e| format!("Failed to register socket: {e}"))?;
+
+    let mut data = HeadlessData { display };
+    let start_time = Instant::now();
+    let period = vblank_period(options.refresh_mhz);
+    let mut frame_count = 0u64;
+    let mut last_vblank = Instant::now();
+
+    println!("[infynitae] Headless compositor running.");
+    loop {
+        if let Some(max_dur) = options.duration
+            && start_time.elapsed() >= max_dur
+        {
+            break;
+        }
+        if let Some(max_frames) = options.max_frames
+            && frame_count >= max_frames
+        {
+            break;
+        }
+
+        let elapsed = last_vblank.elapsed();
+        let timeout = period.saturating_sub(elapsed);
+        event_loop.dispatch(Some(timeout), &mut data)?;
+
+        let _ = data.display.dispatch_clients(&mut state);
+        let _ = data.display.flush_clients();
+
+        if last_vblank.elapsed() >= period {
+            vblank(&mut state, output_id, start_time.elapsed());
+            frame_count += 1;
+            last_vblank = Instant::now();
+            let _ = data.display.flush_clients();
+        }
+    }
+
+    println!("[infynitae] Headless compositor shutting down...");
+    let _ = disconnect(&mut state, &mut output_token, output_id);
+    let _ = data.display.flush_clients();
+    println!("[infynitae] Headless compositor exited cleanly.");
+    Ok(())
+}
