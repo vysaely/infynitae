@@ -295,6 +295,37 @@ fn test_tiny_compositor_child_process_reaping() {
 }
 
 #[test]
+fn test_tiny_compositor_graceful_child_termination() {
+    let socket_name = format!("infynitae-graceful-child-test-{}", std::process::id());
+    let socket_name_clone = socket_name.clone();
+
+    // Spawn a long-running child process (sleep 60) that exits immediately upon SIGTERM
+    let start = std::time::Instant::now();
+    let compositor_handle = thread::spawn(move || {
+        let (core, input_port, _shell_port, output_token) = Core::new(PersistedCameras::default());
+        let options = HeadlessCompositorOptions {
+            socket_name: Some(socket_name_clone),
+            exec: Some("sleep 60".to_string()),
+            width: 1280,
+            height: 800,
+            refresh_mhz: 60_000,
+            duration: Some(Duration::from_millis(150)),
+            max_frames: None,
+        };
+        run_headless(core, input_port, output_token, options).expect("compositor exited cleanly");
+    });
+
+    compositor_handle.join().expect("compositor thread join");
+    let elapsed = start.elapsed();
+    // Must terminate within bounded time (far less than 60s)
+    assert!(
+        elapsed < Duration::from_secs(2),
+        "graceful child termination took too long: {:?}",
+        elapsed
+    );
+}
+
+#[test]
 fn test_tiny_compositor_client_event_loop_wakeup() {
     let socket_name = format!("infynitae-wakeup-test-{}", std::process::id());
     let socket_name_clone = socket_name.clone();

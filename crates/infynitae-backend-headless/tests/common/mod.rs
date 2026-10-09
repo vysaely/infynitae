@@ -1008,11 +1008,20 @@ impl Dispatch<WlKeyboard, ()> for Probe {
             }
             wl_keyboard::Event::Leave { surface, .. } => {
                 let label = st.label_of(&surface);
-                if st.kb.active.is_none() && st.destroyed_active.contains(&label) {
-                    st.kb_log.push(format!(
-                        "wl_keyboard.leave {label} (in-flight after destroy)"
-                    ));
-                    return;
+                if st.kb.active.is_none() {
+                    if let Some(pos) = st.destroyed_active.iter().position(|x| x == &label) {
+                        let destroyed = st.destroyed_active.remove(pos);
+                        st.kb_log.push(format!(
+                            "wl_keyboard.leave {destroyed} (in-flight after destroy)"
+                        ));
+                        return;
+                    } else if surface.id().protocol_id() == 0 && !st.destroyed_active.is_empty() {
+                        let destroyed = st.destroyed_active.pop().unwrap();
+                        st.kb_log.push(format!(
+                            "wl_keyboard.leave {destroyed} (in-flight after destroy)"
+                        ));
+                        return;
+                    }
                 }
                 if st.kb.active.as_deref() != Some(label.as_str()) {
                     st.kb

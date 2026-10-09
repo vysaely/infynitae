@@ -404,19 +404,165 @@ pub fn run_headless(
         }
     }
 
-    // Terminate and reap any remaining children (Defect E)
-    for child in &mut data.children {
-        println!(
-            "[infynitae] Terminating headless child process {}",
-            child.id()
-        );
-        let _ = child.kill();
-        let _ = child.wait();
-    }
+    // Terminate and reap any remaining children gracefully (Task A)
+    terminate_children(&mut data.children, Duration::from_millis(500));
 
     println!("[infynitae] Headless compositor shutting down...");
     let _ = disconnect(&mut state, &mut output_token, output_id);
     let _ = data.display.flush_clients();
     println!("[infynitae] Headless compositor exited cleanly.");
     Ok(())
+}
+
+/// Gracefully terminates and reaps compositor-owned child processes.
+///
+/// Implements a bounded two-stage shutdown policy:
+/// 1. Reaps any children that have already exited.
+/// 2. Sends `SIGTERM` to remaining live children.
+/// 3. Polls with non-blocking checks up to `grace_period` (default ~500ms).
+/// 4. Escalates to `SIGKILL` only for children that remain alive after grace interval.
+/// 5. Blocks to reap all direct child processes, preventing zombies.
+///
+/// Correctly handles `ESRCH` (process exited in race), already-exited children,
+/// and repeated invocations.
+pub fn terminate_children(children: &mut Vec<std::process::Child>, grace_period: Duration) {
+    use smithay::reexports::rustix::io::Errno;
+    use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
+    use std::time::Instant;
+
+    // 1. Initial non-blocking reap for children that already exited normally
+    children.retain_mut(|child| {
+        match child.try_wait() {
+            Ok(Some(_status)) => false, // exited and reaped
+            Ok(None) => true,           // still running
+            Err(_) => false,
+        }
+    });
+
+    if children.is_empty() {
+        return;
+    }
+
+    // 2. Send SIGTERM to all remaining living children
+    for child in children.iter_mut() {
+        let pid_raw = child.id() as i32;
+        if let Some(pid) = Pid::from_raw(pid_raw) {
+            match kill_process(pid, Signal::TERM) {
+                Ok(()) => {}
+                Err(Errno::SRCH) => {} // Process already exited (normal race)
+                Err(e) => {
+                    eprintln!("[infynitae] Failed to send SIGTERM to child {pid_raw}: {e}");
+                }
+            }
+        }
+    }
+
+    // 3 & 4. Bounded grace wait (drain interval)
+    let start = Instant::now();
+    let poll_interval = Duration::from_millis(10);
+    while start.elapsed() < grace_period && !children.is_empty() {
+        children.retain_mut(|child| {
+            match child.try_wait() {
+                Ok(Some(_status)) => false, // reaped during grace
+                Ok(None) => true,           // still running
+                Err(_) => false,
+            }
+        });
+        if children.is_empty() {
+            break;
+        }
+        std::thread::sleep(poll_interval);
+    }
+
+    // 5 & 6. Escalate to SIGKILL for any stubborn children and reap all remaining
+    for child in children.iter_mut() {
+        println!(
+            "[infynitae] Child {} did not exit within grace period, escalating to SIGKILL",
+            child.id()
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    children.clear();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    #[test]
+    fn test_terminate_children_normal_exit() {
+        let mut children = vec![Command::new("true").spawn().unwrap()];
+        std::thread::sleep(Duration::from_millis(50));
+        terminate_children(&mut children, Duration::from_millis(500));
+        assert!(children.is_empty());
+    }
+
+    #[test]
+    fn test_terminate_children_sigterm_handling() {
+        let mut children = vec![Command::new("sleep").arg("10").spawn().unwrap()];
+        let start = std::time::Instant::now();
+        terminate_children(&mut children, Duration::from_millis(1000));
+        let elapsed = start.elapsed();
+        assert!(children.is_empty());
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "SIGTERM took {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn test_terminate_children_ignored_sigterm_escalates_to_sigkill() {
+        let mut children = vec![
+            Command::new("sh")
+                .args(["-c", "trap '' TERM; while true; do sleep 1; done"])
+                .spawn()
+                .unwrap(),
+        ];
+        // Allow shell process to start and install trap handler
+        std::thread::sleep(Duration::from_millis(50));
+        let start = std::time::Instant::now();
+        terminate_children(&mut children, Duration::from_millis(100));
+        let elapsed = start.elapsed();
+        assert!(children.is_empty());
+        assert!(
+            elapsed >= Duration::from_millis(80),
+            "escalated too quickly: {:?}",
+            elapsed
+        );
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "escalation hung: {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn test_terminate_children_repeated_shutdown_idempotent() {
+        let mut children = vec![Command::new("sleep").arg("10").spawn().unwrap()];
+        terminate_children(&mut children, Duration::from_millis(500));
+        assert!(children.is_empty());
+        terminate_children(&mut children, Duration::from_millis(500));
+        assert!(children.is_empty());
+    }
+
+    #[test]
+    fn test_terminate_children_zombie_prevention() {
+        let child = Command::new("sleep").arg("10").spawn().unwrap();
+        let pid = child.id();
+        let mut children = vec![child];
+        terminate_children(&mut children, Duration::from_millis(500));
+        assert!(children.is_empty());
+
+        let status_path = format!("/proc/{pid}/status");
+        if let Ok(status) = std::fs::read_to_string(&status_path) {
+            for line in status.lines() {
+                if line.starts_with("State:") {
+                    assert!(!line.contains('Z'), "process {pid} left as zombie: {line}");
+                }
+            }
+        }
+    }
 }

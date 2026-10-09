@@ -1095,3 +1095,83 @@ fn t11_unconfigured_keys_are_never_swallowed() {
         "unconfigured keys not delivered: {out:?}"
     );
 }
+
+/// Negative control: proves that genuinely incorrect or spurious keyboard leave events
+/// are reliably detected as protocol violations by the probe harness.
+#[test]
+fn negative_control_invalid_leave_event_detected() {
+    use wayland_client::protocol::wl_keyboard;
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    let qh = ls.qh.clone();
+    let w1 = ls.probe.toplevel(&qh, "W1", (400, 300), 0);
+    let w2 = ls.probe.toplevel(&qh, "W2", (400, 300), 0);
+    ls.pump();
+
+    let s1 = ls.probe.surfaces[w1].wl.clone();
+    let s2 = ls.probe.surfaces[w2].wl.clone();
+    let kb = ls.probe.keyboard.as_ref().unwrap().clone();
+    let conn = ls.conn.clone();
+
+    // 1. Initially unfocused (active=None, destroyed_active empty):
+    // Spurious leave targeting W1 must be flagged as a protocol violation.
+    <common::Probe as wayland_client::Dispatch<wl_keyboard::WlKeyboard, ()>>::event(
+        &mut ls.probe,
+        &kb,
+        wl_keyboard::Event::Leave {
+            serial: 1,
+            surface: s1,
+        },
+        &(),
+        &conn,
+        &qh,
+    );
+    assert_eq!(
+        ls.probe.kb.violations,
+        vec!["leave(W1) but active=None".to_string()]
+    );
+    ls.probe.kb.violations.clear();
+
+    // 2. Focused on W1: spurious leave targeting W2 must be flagged as a violation.
+    ls.probe.kb.active = Some("W1".to_string());
+    <common::Probe as wayland_client::Dispatch<wl_keyboard::WlKeyboard, ()>>::event(
+        &mut ls.probe,
+        &kb,
+        wl_keyboard::Event::Leave {
+            serial: 2,
+            surface: s2,
+        },
+        &(),
+        &conn,
+        &qh,
+    );
+    assert_eq!(
+        ls.probe.kb.violations,
+        vec!["leave(W2) but active=Some(\"W1\")".to_string()]
+    );
+    ls.probe.kb.violations.clear();
+
+    // 3. Spurious dummy/null leave (#0) while focused on W1 must be flagged as a violation.
+    // (A null leave is only legal in-flight for an active surface that was destroyed).
+    let dummy_s = ls
+        .probe
+        .compositor
+        .as_ref()
+        .unwrap()
+        .create_surface(&qh, ());
+    dummy_s.destroy();
+    <common::Probe as wayland_client::Dispatch<wl_keyboard::WlKeyboard, ()>>::event(
+        &mut ls.probe,
+        &kb,
+        wl_keyboard::Event::Leave {
+            serial: 3,
+            surface: dummy_s,
+        },
+        &(),
+        &conn,
+        &qh,
+    );
+    assert!(
+        !ls.probe.kb.violations.is_empty(),
+        "spurious destroyed leave while focused must be flagged as violation"
+    );
+}
