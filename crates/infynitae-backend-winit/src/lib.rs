@@ -14,7 +14,7 @@ use infynitae_wayland::{ClientState, WaylandState, convert};
 
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputEvent, KeyState, KeyboardKeyEvent,
-    PointerAxisEvent, PointerButtonEvent,
+    PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::winit::{self, WinitEvent, WinitGraphicsBackend};
@@ -225,6 +225,17 @@ pub fn run_nested(
         let _ = data.display.dispatch_clients(&mut data.state);
         let _ = data.display.flush_clients();
 
+        // Auto-focus first mapped element if keyboard focus is currently empty
+        if data.state.core().focus().target().is_none()
+            && let Some(&first) = data.state.core().stage().mapped_elements().first()
+            && let Ok(effects) = data
+                .state
+                .core_mut()
+                .set_focus(&mut data.input_port, Some(first))
+        {
+            data.state.apply(&effects);
+        }
+
         // Render frame if frame interval has elapsed
         if last_frame.elapsed() >= target_frame_duration {
             render_and_present(&mut data);
@@ -252,6 +263,8 @@ fn handle_winit_event(data: &mut LoopData, event: WinitEvent) {
         WinitEvent::Resized { size, scale_factor } => {
             let width = size.w.max(1) as u32;
             let height = size.h.max(1) as u32;
+            data.options.width = width;
+            data.options.height = height;
             let scale_120 = (scale_factor * 120.0).round().max(1.0) as u32;
             let descriptor = OutputDescriptor {
                 key: data.output_key.clone(),
@@ -312,14 +325,38 @@ fn handle_input_event(
                 }
             }
         }
-        InputEvent::PointerMotion { event: _ } => {
-            // Winit relative pointer motion
+        InputEvent::PointerMotion { event } => {
+            let delta = (
+                PointerMotionEvent::<smithay::backend::winit::WinitInput>::delta_x(&event),
+                PointerMotionEvent::<smithay::backend::winit::WinitInput>::delta_y(&event),
+            );
+            let delta_unaccel = (
+                PointerMotionEvent::<smithay::backend::winit::WinitInput>::delta_x_unaccel(&event),
+                PointerMotionEvent::<smithay::backend::winit::WinitInput>::delta_y_unaccel(&event),
+            );
+            let time_us = Event::<smithay::backend::winit::WinitInput>::time(&event);
+            let phys = PhysicalEvent::PointerMotion {
+                delta,
+                delta_unaccel,
+                time_us,
+            };
+            if let Ok(effects) = data
+                .state
+                .core_mut()
+                .physical_input(&mut data.input_port, phys)
+            {
+                data.state.apply(&effects);
+            }
         }
         InputEvent::PointerMotionAbsolute { event } => {
             let pos = (event.x(), event.y());
             let delta = match data.last_abs_pos {
                 Some(prev) => (pos.0 - prev.0, pos.1 - prev.1),
-                None => (0.0, 0.0),
+                None => {
+                    let cx = data.options.width as f64 / 2.0;
+                    let cy = data.options.height as f64 / 2.0;
+                    (pos.0 - cx, pos.1 - cy)
+                }
             };
             data.last_abs_pos = Some(pos);
             if delta.0 != 0.0 || delta.1 != 0.0 {
