@@ -28,6 +28,27 @@ Date: 2026-10-07
   - **INC-6 has NOT begun.**
   - Headless execution only; live compositor and physical display untouched.
 
+## PHASE F — EXPERIMENTAL RUNNABLE PROTOTYPE (TINY COMPOSITOR) INTEGRATION
+- **Integrated Candidate:** `4e7a7f892491df198216c384fae0a0ef74e5472a`
+- **Baseline Commit:** `4d2fb3dc01ece2fabd37f1467c9f9831795e7ed4` (Phase F INC-5 candidate).
+- **Scope & Deliverables:**
+  - Runnable Nested Compositor: `infynitae-backend-winit::run_nested` with Winit event loop, GL presentation, and Calloop dispatch.
+  - Headless Compositor Runner: `infynitae-backend-headless::run_headless` with virtual outputs and automated duration/frame bounds.
+  - CLI Composition Root: `crates/infynitae/src/main.rs` with socket selection, client execution (`--exec`), sizing, and refresh rate pacing.
+  - Core Initial Focus Activation: `Core::grant_initial_focus` and `FocusModel::grant_initial_focus` enforcing `INV-INPUT-8` (activation grant on first map without focus-stealing on subsequent mappings).
+  - Child Process Supervision: `terminate_children` implementing bounded 500 ms graceful SIGTERM polling, SIGKILL escalation, and waitpid zombie reaping.
+  - Performance & Event Hardening: Calloop generic display event loop integration, configurable refresh pacing (60–240 Hz), and suppression of redundant idle GPU buffer presentation.
+  - Extended Test Suite: 5 end-to-end integration tests in `tests/t1_tiny_compositor.rs` and robust in-flight leave tracking under C Wayland backend (`client_system`).
+- **Deferred Protocol Capabilities (Documented Future Increment Ownership):**
+  - `wp_fractional_scale_v1`: Canonical future increment INC-6 (F-SCALE-1/2/3).
+  - `wp_viewporter`: Canonical future increments INC-6 / INC-15.
+  - `wp_cursor_shape_v1`: Canonical future increment INC-15.
+- **Declaration:**
+  - INC-0 through INC-4 are RATIFIED.
+  - **INC-5 has NOT been ratified.**
+  - **INC-6 has NOT begun.**
+  - Live nested compositor execution enabled for testing; host KWin desktop preserved.
+
 
 ## PHASE F — INC-4 FORMAL RATIFICATION AND SEAL
 - **Ratified implementation commit:** `4c01cca2d43e38f4f3a80e9202ec1b7ab0430179` (origin/main).
