@@ -25,6 +25,7 @@ OPTIONS:
     --title <TITLE>          Title of the nested window (default: \"Infynitae Native Compositor\")
     --width <PIXELS>         Window / output width (default: 1280)
     --height <PIXELS>        Window / output height (default: 800)
+    --refresh <MHZ>          Output refresh rate in mHz (default: 60000 = 60 Hz)
     --headless               Run in headless mode with virtual output
     --duration <SECONDS>     Exit after N seconds (useful for tests and automation)
     --max-frames <COUNT>     Exit after N frames (useful for benchmarks and tests)
@@ -39,6 +40,7 @@ fn main() -> ExitCode {
     let mut title = "Infynitae Native Compositor".to_string();
     let mut width = 1280u32;
     let mut height = 800u32;
+    let mut refresh_mhz = 60_000u32;
     let mut headless = false;
     let mut duration: Option<Duration> = None;
     let mut max_frames: Option<u64> = None;
@@ -105,6 +107,22 @@ fn main() -> ExitCode {
             "--headless" => {
                 headless = true;
             }
+            "--refresh" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!(
+                        "Error: --refresh requires an argument in mHz (e.g. 60000 or 144000)"
+                    );
+                    return ExitCode::FAILURE;
+                }
+                refresh_mhz = match args[i].parse() {
+                    Ok(r) => r,
+                    Err(_) => {
+                        eprintln!("Error: invalid refresh '{}'", args[i]);
+                        return ExitCode::FAILURE;
+                    }
+                };
+            }
             "--duration" => {
                 i += 1;
                 if i >= args.len() {
@@ -153,7 +171,7 @@ fn main() -> ExitCode {
             exec: exec_cmd,
             width,
             height,
-            refresh_mhz: 60_000,
+            refresh_mhz,
             duration,
             max_frames,
         };
@@ -172,6 +190,7 @@ fn main() -> ExitCode {
             title,
             width,
             height,
+            refresh_mhz,
             duration,
             max_frames,
         };

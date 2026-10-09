@@ -38,6 +38,8 @@ pub struct WinitCompositorOptions {
     pub width: u32,
     /// Initial window height.
     pub height: u32,
+    /// Target output refresh rate in mHz (default: 60_000 mHz = 60 Hz).
+    pub refresh_mhz: u32,
     /// Optional maximum run duration (useful for automated testing / benchmarks).
     pub duration: Option<Duration>,
     /// Optional maximum frame count before clean exit.
@@ -52,10 +54,16 @@ impl Default for WinitCompositorOptions {
             title: "Infynitae Native Compositor".to_string(),
             width: 1280,
             height: 800,
+            refresh_mhz: 60_000,
             duration: None,
             max_frames: None,
         }
     }
+}
+
+/// Calculates the frame duration for a given refresh rate in mHz.
+pub fn vblank_period(refresh_mhz: u32) -> Duration {
+    Duration::from_nanos(1_000_000_000_000 / u64::from(refresh_mhz.max(1)))
 }
 
 /// Internal event-loop data structure passed to calloop.
@@ -129,11 +137,7 @@ pub fn run_nested(
         .handle()
         .insert_source(
             Generic::new(display_fd, Interest::READ, Mode::Level),
-            |_event, _metadata, data| {
-                let _ = data.display.dispatch_clients(&mut data.state);
-                let _ = data.display.flush_clients();
-                Ok(PostAction::Continue)
-            },
+            |_event, _metadata, _data| Ok(PostAction::Continue),
         )
         .map_err(|e| format!("Failed to register display event source: {e}"))?;
 
@@ -162,7 +166,7 @@ pub fn run_nested(
         mode: (options.width, options.height),
         transform: Transform::Normal,
         scale_120: 120, // 1.0x scale
-        refresh_mhz: 60_000,
+        refresh_mhz: options.refresh_mhz,
     };
     let (output_id, effects) = state
         .core_mut()
@@ -220,7 +224,7 @@ pub fn run_nested(
 
     // 8. Event loop runner
     println!("[infynitae] Compositor running. Press Ctrl+C or close window to exit.");
-    let target_frame_duration = Duration::from_micros(16_667); // ~60 Hz
+    let target_frame_duration = vblank_period(data.options.refresh_mhz);
 
     while running.load(Ordering::SeqCst) {
         // Run calloop with timeout to pace frames
@@ -275,6 +279,7 @@ pub fn run_nested(
                 .grant_initial_focus(&mut data.input_port, topmost)
         {
             data.state.apply(&effects);
+            let _ = data.display.flush_clients();
         }
 
         // Render frame if frame interval has elapsed (Defect C)
@@ -320,7 +325,7 @@ fn handle_winit_event(data: &mut LoopData, event: WinitEvent) {
                 mode: (width, height),
                 transform: Transform::Normal,
                 scale_120,
-                refresh_mhz: 60_000,
+                refresh_mhz: data.options.refresh_mhz,
             };
             if let Ok(effects) = data.state.core_mut().output_reconfigured(
                 &mut data.output_token,
@@ -343,7 +348,7 @@ fn handle_winit_event(data: &mut LoopData, event: WinitEvent) {
         }
         WinitEvent::Redraw => {
             // Prevent duplicate presentation: only render if target frame duration has elapsed (Defect C)
-            let target_frame_duration = Duration::from_micros(16_667);
+            let target_frame_duration = vblank_period(data.options.refresh_mhz);
             if data.last_frame.elapsed() >= target_frame_duration {
                 render_and_present(data);
             }
@@ -502,20 +507,22 @@ fn render_and_present(data: &mut LoopData) {
         }
     };
 
-    // Submit buffer to GPU/host
-    if let Err(e) = data.backend.submit(damage.as_deref()) {
-        eprintln!("[infynitae] Submit error: {e:?}");
-        return;
+    // Submit buffer to GPU/host when damaged
+    if let Some(damage_rects) = &damage {
+        if let Err(e) = data.backend.submit(Some(damage_rects)) {
+            eprintln!("[infynitae] Submit error: {e:?}");
+            return;
+        }
+        data.frame_count += 1;
     }
 
-    // Complete frame callbacks and presentation feedback ONLY after successful submission (Defect C)
+    // Complete frame callbacks and presentation feedback for clocked elements
     let now = data.start_time.elapsed();
     let elements = data.state.core().frame_tick(data.output_id);
     data.state.complete_frames(data.output_id, &elements, now);
     let _ = data.display.flush_clients();
 
     data.last_frame = Instant::now();
-    data.frame_count += 1;
 }
 
 /// Calculates logical pointer motion delta from an absolute physical position sample,
@@ -602,5 +609,28 @@ mod tests {
             (10.0, 20.0),
             "motion delta must be scaled to logical coordinates"
         );
+    }
+
+    #[test]
+    fn test_vblank_period_calculation_across_refresh_rates() {
+        // 60 Hz (60,000 mHz): ~16.666 ms
+        let p60 = vblank_period(60_000);
+        assert_eq!(p60.as_micros(), 16_666);
+
+        // 120 Hz (120,000 mHz): ~8.333 ms
+        let p120 = vblank_period(120_000);
+        assert_eq!(p120.as_micros(), 8_333);
+
+        // 144 Hz (144,000 mHz): ~6.944 ms
+        let p144 = vblank_period(144_000);
+        assert_eq!(p144.as_micros(), 6_944);
+
+        // 165 Hz (165,000 mHz, user host monitor): ~6.060 ms
+        let p165 = vblank_period(165_000);
+        assert_eq!(p165.as_micros(), 6_060);
+
+        // 240 Hz (240,000 mHz): ~4.166 ms
+        let p240 = vblank_period(240_000);
+        assert_eq!(p240.as_micros(), 4_166);
     }
 }

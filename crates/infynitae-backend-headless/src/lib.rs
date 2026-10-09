@@ -393,6 +393,7 @@ pub fn run_headless(
                 .grant_initial_focus(&mut input_port, topmost)
         {
             state.apply(&effects);
+            let _ = data.display.flush_clients();
         }
 
         if last_vblank.elapsed() >= period {
