@@ -9,11 +9,23 @@ use crate::protocol::Effect;
 use crate::stage::ElementId;
 
 /// Authoritative keyboard focus model for the seat.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FocusModel {
     target: Option<ElementId>,
     /// Focus history: most recently focused live elements first.
     history: Vec<ElementId>,
+    /// Whether the seat is eligible for initial automatic activation on first map.
+    initial_eligible: bool,
+}
+
+impl Default for FocusModel {
+    fn default() -> Self {
+        Self {
+            target: None,
+            history: Vec::new(),
+            initial_eligible: true,
+        }
+    }
 }
 
 impl FocusModel {
@@ -21,8 +33,32 @@ impl FocusModel {
         self.target
     }
 
+    /// Whether the seat is eligible for initial automatic activation.
+    pub fn is_initial_eligible(&self) -> bool {
+        self.initial_eligible
+    }
+
+    /// Grants initial focus to `candidate` if the seat is eligible for initial automatic activation.
+    pub fn grant_initial_focus(&mut self, candidate: ElementId) -> Vec<Effect> {
+        if self.target.is_none() && self.initial_eligible {
+            self.initial_eligible = false;
+            self.set_focus(Some(candidate))
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Explicitly clears focus (e.g. background click), preventing automatic initial activation.
+    pub fn clear_focus_explicit(&mut self) -> Vec<Effect> {
+        self.initial_eligible = false;
+        self.set_focus(None)
+    }
+
     /// Sets keyboard focus directly via an explicit action (click-to-focus, activation, shell).
     pub fn set_focus(&mut self, next: Option<ElementId>) -> Vec<Effect> {
+        if next.is_some() {
+            self.initial_eligible = false;
+        }
         if self.target == next {
             return Vec::new();
         }
@@ -45,6 +81,7 @@ impl FocusModel {
 
     /// FocusNext binding (Super+Enter): cycles to the next live element in stage order.
     pub fn focus_next(&mut self, live_elements: &[ElementId]) -> Vec<Effect> {
+        self.initial_eligible = false;
         if live_elements.is_empty() {
             return self.set_focus(None);
         }
@@ -62,6 +99,9 @@ impl FocusModel {
     /// The successor policy selects the most recently focused live element.
     pub fn target_lost(&mut self, dead: ElementId, live_elements: &[ElementId]) -> Vec<Effect> {
         self.history.retain(|&e| e != dead);
+        if live_elements.is_empty() {
+            self.initial_eligible = true;
+        }
         if self.target != Some(dead) {
             return Vec::new();
         }
@@ -166,5 +206,68 @@ mod tests {
                 Effect::KeyboardFocus(Some(e3)),
             ]
         );
+    }
+
+    #[test]
+    fn initial_focus_eligibility_and_explicit_unfocus() {
+        use std::num::NonZeroU64;
+        let mut fm = FocusModel::default();
+        let e1 = ElementId::new(NonZeroU64::new(1).unwrap());
+        let e2 = ElementId::new(NonZeroU64::new(2).unwrap());
+
+        assert!(fm.is_initial_eligible());
+        assert_eq!(fm.target(), None);
+
+        // 1. Initial activation grant to first toplevel succeeds
+        let fx = fm.grant_initial_focus(e1);
+        assert_eq!(
+            fx,
+            vec![
+                Effect::ToplevelConfigure(e1),
+                Effect::KeyboardFocus(Some(e1)),
+            ]
+        );
+        assert_eq!(fm.target(), Some(e1));
+        assert!(!fm.is_initial_eligible());
+
+        // 2. Second toplevel mapping cannot steal focus
+        let fx = fm.grant_initial_focus(e2);
+        assert!(fx.is_empty(), "second window stole focus");
+        assert_eq!(fm.target(), Some(e1));
+
+        // 3. Explicit background click clears focus
+        let fx = fm.clear_focus_explicit();
+        assert_eq!(
+            fx,
+            vec![Effect::ToplevelConfigure(e1), Effect::KeyboardFocus(None),]
+        );
+        assert_eq!(fm.target(), None);
+        assert!(
+            !fm.is_initial_eligible(),
+            "explicit unfocus must not remain eligible"
+        );
+
+        // 4. Repeated grant attempts while explicitly unfocused are rejected
+        let fx = fm.grant_initial_focus(e2);
+        assert!(fx.is_empty(), "mapping after explicit unfocus stole focus");
+        assert_eq!(fm.target(), None);
+
+        // 5. Explicit user click sets focus to e2
+        let fx = fm.set_focus(Some(e2));
+        assert_eq!(fm.target(), Some(e2));
+        assert!(!fx.is_empty());
+
+        // 6. When all windows are closed, eligibility re-arms
+        fm.target_lost(e2, &[]);
+        assert_eq!(fm.target(), None);
+        assert!(
+            fm.is_initial_eligible(),
+            "eligibility re-arms when all windows are gone"
+        );
+
+        // 7. Newly mapped window receives initial focus again
+        let fx = fm.grant_initial_focus(e1);
+        assert_eq!(fm.target(), Some(e1));
+        assert!(!fx.is_empty());
     }
 }

@@ -18,7 +18,8 @@ use smithay::backend::input::{
 };
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::winit::{self, WinitEvent, WinitGraphicsBackend};
-use smithay::reexports::calloop::EventLoop;
+use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
 use smithay::reexports::wayland_server::Display;
 use smithay::reexports::winit::dpi::LogicalSize;
 use smithay::reexports::winit::window::Window as WinitWindow;
@@ -68,7 +69,10 @@ struct LoopData {
     backend: WinitGraphicsBackend<GlesRenderer>,
     start_time: Instant,
     last_abs_pos: Option<(f64, f64)>,
+    scale_120: u32,
+    last_frame: Instant,
     frame_count: u64,
+    children: Vec<std::process::Child>,
     running: Arc<AtomicBool>,
     options: WinitCompositorOptions,
 }
@@ -88,7 +92,7 @@ pub fn run_nested(
     let mut event_loop: EventLoop<LoopData> = EventLoop::try_new()?;
 
     // 1. Initialize Wayland server display
-    let display: Display<WaylandState> = Display::new()?;
+    let mut display: Display<WaylandState> = Display::new()?;
     let mut state = WaylandState::new(&display.handle(), core);
 
     // 2. Initialize Wayland listening socket
@@ -118,6 +122,20 @@ pub fn run_nested(
             }
         })
         .map_err(|e| format!("Failed to register listening socket: {e}"))?;
+
+    // Insert display client poll FD into calloop (Defect D: event loop starvation)
+    let display_fd = display.backend().poll_fd().try_clone_to_owned()?;
+    event_loop
+        .handle()
+        .insert_source(
+            Generic::new(display_fd, Interest::READ, Mode::Level),
+            |_event, _metadata, data| {
+                let _ = data.display.dispatch_clients(&mut data.state);
+                let _ = data.display.flush_clients();
+                Ok(PostAction::Continue)
+            },
+        )
+        .map_err(|e| format!("Failed to register display event source: {e}"))?;
 
     // 3. Initialize Winit backend & window
     let window_attributes = WinitWindow::default_attributes()
@@ -153,6 +171,7 @@ pub fn run_nested(
     state.apply(&effects);
 
     // 5. Spawn client command if requested
+    let mut children = Vec::new();
     if let Some(cmd) = &options.exec {
         println!("[infynitae] Spawning initial client: {cmd}");
         let mut parts = cmd.split_whitespace();
@@ -163,6 +182,7 @@ pub fn run_nested(
             match command.spawn() {
                 Ok(child) => {
                     println!("[infynitae] Client spawned with PID {}", child.id());
+                    children.push(child);
                 }
                 Err(e) => {
                     eprintln!("[infynitae] Failed to spawn {cmd}: {e}");
@@ -182,7 +202,10 @@ pub fn run_nested(
         backend,
         start_time: Instant::now(),
         last_abs_pos: None,
+        scale_120: 120,
+        last_frame: Instant::now(),
         frame_count: 0,
+        children,
         running: running.clone(),
         options,
     };
@@ -198,14 +221,32 @@ pub fn run_nested(
     // 8. Event loop runner
     println!("[infynitae] Compositor running. Press Ctrl+C or close window to exit.");
     let target_frame_duration = Duration::from_micros(16_667); // ~60 Hz
-    let mut last_frame = Instant::now();
 
     while running.load(Ordering::SeqCst) {
         // Run calloop with timeout to pace frames
-        let elapsed = last_frame.elapsed();
+        let elapsed = data.last_frame.elapsed();
         let timeout = target_frame_duration.saturating_sub(elapsed);
 
         event_loop.dispatch(Some(timeout), &mut data)?;
+
+        // Non-blocking child process reaping (Defect E)
+        data.children.retain_mut(|child| {
+            match child.try_wait() {
+                Ok(Some(status)) => {
+                    println!(
+                        "[infynitae] Child process {} exited with status {}",
+                        child.id(),
+                        status
+                    );
+                    false // remove reaped child
+                }
+                Ok(None) => true, // still running
+                Err(e) => {
+                    eprintln!("[infynitae] Failed to wait on child {}: {}", child.id(), e);
+                    false
+                }
+            }
+        });
 
         // Check test duration limit if configured
         if let Some(max_dur) = data.options.duration
@@ -225,22 +266,28 @@ pub fn run_nested(
         let _ = data.display.dispatch_clients(&mut data.state);
         let _ = data.display.flush_clients();
 
-        // Auto-focus first mapped element if keyboard focus is currently empty
-        if data.state.core().focus().target().is_none()
-            && let Some(&first) = data.state.core().stage().mapped_elements().first()
+        // Initial focus grant on topmost mapped element if seat is eligible (Defect A: INV-INPUT-8)
+        if data.state.core().focus().is_initial_eligible()
+            && let Some(&topmost) = data.state.core().stage().mapped_elements().last()
             && let Ok(effects) = data
                 .state
                 .core_mut()
-                .set_focus(&mut data.input_port, Some(first))
+                .grant_initial_focus(&mut data.input_port, topmost)
         {
             data.state.apply(&effects);
         }
 
-        // Render frame if frame interval has elapsed
-        if last_frame.elapsed() >= target_frame_duration {
+        // Render frame if frame interval has elapsed (Defect C)
+        if data.last_frame.elapsed() >= target_frame_duration {
             render_and_present(&mut data);
-            last_frame = Instant::now();
         }
+    }
+
+    // Terminate and reap any remaining children (Defect E)
+    for child in &mut data.children {
+        println!("[infynitae] Terminating child process {}", child.id());
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     // 9. Clean shutdown: disconnect output
@@ -266,6 +313,8 @@ fn handle_winit_event(data: &mut LoopData, event: WinitEvent) {
             data.options.width = width;
             data.options.height = height;
             let scale_120 = (scale_factor * 120.0).round().max(1.0) as u32;
+            data.scale_120 = scale_120;
+            data.last_abs_pos = None; // Reset baseline on resize (Defect B)
             let descriptor = OutputDescriptor {
                 key: data.output_key.clone(),
                 mode: (width, height),
@@ -281,6 +330,11 @@ fn handle_winit_event(data: &mut LoopData, event: WinitEvent) {
                 data.state.apply(&effects);
             }
         }
+        WinitEvent::Focus(focused) => {
+            if !focused {
+                data.last_abs_pos = None; // Reset baseline on focus loss / cursor leave (Defect B)
+            }
+        }
         WinitEvent::CloseRequested => {
             data.running.store(false, Ordering::SeqCst);
         }
@@ -288,9 +342,12 @@ fn handle_winit_event(data: &mut LoopData, event: WinitEvent) {
             handle_input_event(data, input_event);
         }
         WinitEvent::Redraw => {
-            render_and_present(data);
+            // Prevent duplicate presentation: only render if target frame duration has elapsed (Defect C)
+            let target_frame_duration = Duration::from_micros(16_667);
+            if data.last_frame.elapsed() >= target_frame_duration {
+                render_and_present(data);
+            }
         }
-        _ => {}
     }
 }
 
@@ -326,14 +383,16 @@ fn handle_input_event(
             }
         }
         InputEvent::PointerMotion { event } => {
-            let delta = (
+            let raw_delta = (
                 PointerMotionEvent::<smithay::backend::winit::WinitInput>::delta_x(&event),
                 PointerMotionEvent::<smithay::backend::winit::WinitInput>::delta_y(&event),
             );
-            let delta_unaccel = (
+            let raw_unaccel = (
                 PointerMotionEvent::<smithay::backend::winit::WinitInput>::delta_x_unaccel(&event),
                 PointerMotionEvent::<smithay::backend::winit::WinitInput>::delta_y_unaccel(&event),
             );
+            let delta = normalize_rel_motion(raw_delta, data.scale_120);
+            let delta_unaccel = normalize_rel_motion(raw_unaccel, data.scale_120);
             let time_us = Event::<smithay::backend::winit::WinitInput>::time(&event);
             let phys = PhysicalEvent::PointerMotion {
                 delta,
@@ -350,15 +409,7 @@ fn handle_input_event(
         }
         InputEvent::PointerMotionAbsolute { event } => {
             let pos = (event.x(), event.y());
-            let delta = match data.last_abs_pos {
-                Some(prev) => (pos.0 - prev.0, pos.1 - prev.1),
-                None => {
-                    let cx = data.options.width as f64 / 2.0;
-                    let cy = data.options.height as f64 / 2.0;
-                    (pos.0 - cx, pos.1 - cy)
-                }
-            };
-            data.last_abs_pos = Some(pos);
+            let delta = normalize_abs_motion(&mut data.last_abs_pos, pos, data.scale_120);
             if delta.0 != 0.0 || delta.1 != 0.0 {
                 let time_us = Event::time(&event);
                 let phys = PhysicalEvent::PointerMotion {
@@ -430,28 +481,126 @@ fn handle_input_event(
 
 fn render_and_present(data: &mut LoopData) {
     let age = data.backend.buffer_age().unwrap_or(0);
-    let damage_slice = {
-        if let Ok((renderer, mut framebuffer)) = data.backend.bind() {
-            let damage = convert::render_output(
-                &mut data.state,
-                renderer,
-                &mut framebuffer,
-                data.output_id,
-                age,
-            );
-            let now = data.start_time.elapsed();
-            let elements = data.state.core().frame_tick(data.output_id);
-            data.state.complete_frames(data.output_id, &elements, now);
-            match damage {
-                Ok(Some(d)) => Some(d),
-                _ => None,
-            }
-        } else {
-            None
+    let render_res = if let Ok((renderer, mut framebuffer)) = data.backend.bind() {
+        convert::render_output(
+            &mut data.state,
+            renderer,
+            &mut framebuffer,
+            data.output_id,
+            age,
+        )
+    } else {
+        return;
+    };
+
+    let damage = match render_res {
+        Ok(Some(d)) => Some(d),
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("[infynitae] Render error: {e:?}");
+            return;
         }
     };
 
-    let damage_ref = damage_slice.as_deref();
-    let _ = data.backend.submit(damage_ref);
+    // Submit buffer to GPU/host
+    if let Err(e) = data.backend.submit(damage.as_deref()) {
+        eprintln!("[infynitae] Submit error: {e:?}");
+        return;
+    }
+
+    // Complete frame callbacks and presentation feedback ONLY after successful submission (Defect C)
+    let now = data.start_time.elapsed();
+    let elements = data.state.core().frame_tick(data.output_id);
+    data.state.complete_frames(data.output_id, &elements, now);
+    let _ = data.display.flush_clients();
+
+    data.last_frame = Instant::now();
     data.frame_count += 1;
+}
+
+/// Calculates logical pointer motion delta from an absolute physical position sample,
+/// establishing a baseline on entry/re-entry without warping (Defect B).
+pub fn normalize_abs_motion(
+    last_abs_pos: &mut Option<(f64, f64)>,
+    pos: (f64, f64),
+    scale_120: u32,
+) -> (f64, f64) {
+    let scale = (scale_120 as f64 / 120.0).max(0.001);
+    let delta = match *last_abs_pos {
+        Some(prev) => ((pos.0 - prev.0) / scale, (pos.1 - prev.1) / scale),
+        None => (0.0, 0.0),
+    };
+    *last_abs_pos = Some(pos);
+    delta
+}
+
+/// Normalizes relative physical motion delta by scale factor (Defect B).
+pub fn normalize_rel_motion(delta: (f64, f64), scale_120: u32) -> (f64, f64) {
+    let scale = (scale_120 as f64 / 120.0).max(0.001);
+    (delta.0 / scale, delta.1 / scale)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pointer_relative_normalization_across_scales() {
+        // 1.0x scale (120/120)
+        assert_eq!(normalize_rel_motion((10.0, 20.0), 120), (10.0, 20.0));
+        // 1.25x scale (150/120)
+        assert_eq!(normalize_rel_motion((12.5, 25.0), 150), (10.0, 20.0));
+        // 1.5x scale (180/120)
+        assert_eq!(normalize_rel_motion((15.0, 30.0), 180), (10.0, 20.0));
+        // 2.0x scale (240/120)
+        assert_eq!(normalize_rel_motion((20.0, 40.0), 240), (10.0, 20.0));
+    }
+
+    #[test]
+    fn test_pointer_reentrance_baseline_and_warp_prevention() {
+        let mut last_abs = None;
+
+        // Initial cursor entry: baseline established without synthetic delta
+        let delta = normalize_abs_motion(&mut last_abs, (400.0, 300.0), 120);
+        assert_eq!(
+            delta,
+            (0.0, 0.0),
+            "initial entry must establish baseline with zero delta"
+        );
+        assert_eq!(last_abs, Some((400.0, 300.0)));
+
+        // Normal movement within window
+        let delta = normalize_abs_motion(&mut last_abs, (410.0, 320.0), 120);
+        assert_eq!(delta, (10.0, 20.0));
+        assert_eq!(last_abs, Some((410.0, 320.0)));
+
+        // Host window focus loss or pointer leave: reset baseline
+        last_abs = None;
+
+        // Re-entry from completely different position: baseline established, no multi-hundred-pixel warp!
+        let delta = normalize_abs_motion(&mut last_abs, (100.0, 50.0), 120);
+        assert_eq!(
+            delta,
+            (0.0, 0.0),
+            "re-entry must establish new baseline with zero delta"
+        );
+        assert_eq!(last_abs, Some((100.0, 50.0)));
+
+        // Continued movement from new baseline
+        let delta = normalize_abs_motion(&mut last_abs, (105.0, 52.0), 120);
+        assert_eq!(delta, (5.0, 2.0));
+    }
+
+    #[test]
+    fn test_pointer_absolute_normalization_under_hidpi() {
+        let mut last_abs = None;
+        // 2.0x scale
+        normalize_abs_motion(&mut last_abs, (100.0, 100.0), 240);
+        let delta = normalize_abs_motion(&mut last_abs, (120.0, 140.0), 240);
+        assert_eq!(
+            delta,
+            (10.0, 20.0),
+            "motion delta must be scaled to logical coordinates"
+        );
+    }
 }

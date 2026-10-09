@@ -304,6 +304,23 @@ impl Core {
         Ok(fx)
     }
 
+    /// Grants initial focus to `target` if the seat is eligible for initial activation (INV-INPUT-8, Section 5).
+    pub fn grant_initial_focus(
+        &mut self,
+        port: &mut InputPort,
+        target: stage::ElementId,
+    ) -> Result<Vec<protocol::Effect>, EntryError> {
+        self.check_port(port)?;
+        if self.stage.state(target) != Some(stage::Lifecycle::Mapped) {
+            return Err(EntryError::InvalidEvent);
+        }
+        let mut fx = self.focus.grant_initial_focus(target);
+        if !fx.is_empty() {
+            fx.extend(self.reconcile_constraints());
+        }
+        Ok(fx)
+    }
+
     /// FocusNext binding (Super+Enter): cycles focus to next live mapped element in stage order.
     pub(crate) fn focus_next(&mut self) -> Vec<protocol::Effect> {
         let live = self.stage.mapped_elements();
