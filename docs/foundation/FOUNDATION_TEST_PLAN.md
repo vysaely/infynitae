@@ -75,7 +75,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **History:** Ratified CLOSED at INC-1 after independent review (CONDITIONAL PASS, findings INC1-F06/F07) and corrective verification (`1fa72af`, CI run 37291919770); record in evidence/phase-f/INC-1/corrective/.
 
 ### OB-3
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Output removal during an active interaction (CR-3, X-11a). Test/decision: headless backend removes an output mid-pan/mid-move
 - **Owner:** core interaction + output manager
 - **Evidence available:** design C4.6
@@ -85,7 +85,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-2, INC-5
 - **Blocks:** INC-5 exit
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
-- **History:** 1R: constraint reconciliation rules (INV-INPUT-5) and 2R: removal via `output_disconnected` (INV-OUTPUT-1/2) are part of its criterion; see OB-31.
+- **History:** 1R: constraint reconciliation rules (INV-INPUT-5) and 2R: removal via `output_disconnected` (INV-OUTPUT-1/2) are part of its criterion; see OB-31. Ratified CLOSED at INC-5 exit following independent adversarial review and owner ratification; verified by T1 production tests `removing_the_pan_output_orphans_the_pan` (`t1_input.rs`) and `ob31_xlock_grab_persistent_defer` (`t1_pointer_constraints.rs`).
 
 ### OB-4
 - **Status:** CLOSED
@@ -184,7 +184,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** —
 - **Blocks:** INC-5 decision point (pointer constraints); release
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
-- **History:** E1R (unsealed, E-F2-02): scope extended from W-SM-4b to W-SM-4c (cross-batch duplicate `unlocked`/`unconfined` after an explicit deactivate; destruction; never-activated persistent). Candidate P1 (`if constraint.is_active()` in `leave()`) passes 11/11 sequences and X-12 (EE-2, EE-7). Patch-policy criteria: (1) reproduced — met; (2) no public-API fix — met; (3) upstream issue/PR — open (outward action for the user). The decision now gates the **whole** production constraint surface (INC-5), not only oneshot behaviour.
+- **History:** E1R (unsealed, E-F2-02): scope extended from W-SM-4b to W-SM-4c (cross-batch duplicate `unlocked`/`unconfined` after an explicit deactivate; destruction; never-activated persistent). Candidate P1 (`if constraint.is_active()` in `leave()`) passes 11/11 sequences and X-12 (EE-2, EE-7). Patch-policy criteria: (1) reproduced — met; (2) no public-API fix — met; (3) upstream issue/PR — open (outward action for the user). The decision now gates the **whole** production constraint surface (INC-5), not only oneshot behaviour. Option B formally adjudicated and adopted by owner on October 7, 2026 under D-B12-PIN; satisfied and closed for the Phase F INC-5 release gate with patch P1 pinned in vendor/smithay-0.7.0; upstream issue submission tracked as outward user action.
 
 ### OB-12
 - **Status:** OPEN
@@ -298,6 +298,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-5, INC-17
 - **Blocks:** release
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
+- **History:** Protocol-tier obligations (TST-05 x8 C3 pan with lock, C4 pan with confinement) verified at INC-5 exit by T1 production tests (`ob20_x8_c3_pan_with_lock`, `ob20_x8_c4_pan_with_confinement`). Physical hardware game testing remains assigned to INC-17 (T5 PHYSICAL).
 
 ### OB-21
 - **Status:** OPEN
@@ -426,7 +427,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **History:** Ratified CLOSED at INC-4 exit following fifth independent review and ratification audit; verified by T1 production tests (`pf_1_active_element_vs_protocol_surface_route` through `pf_7_protocol_error_on_unmapped_grab`, `ordered_preemption_exact_keyboard_wire`) and permanently gated by `./tools/verify-architecture` check 5d verifying negative controls NEG-1, NEG-2, and OBS-1 under probe flags.
 
 ### OB-31
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Port xlock_grab (ER-2) to T1 with real headless output removal; add confinement cases (ER-5 R5).
 - **Owner:** core PointerModel + adapter
 - **Evidence available:** ER-2 (harness), ER-5 R5 (model)
@@ -436,6 +437,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-5
 - **Blocks:** INC-5 exit
 - **Origin:** CORRECTIONS_1R (1R)
+- **History:** Ratified CLOSED at INC-5 exit following independent adversarial review and owner ratification; verified by T1 production tests (`ob31_xlock_grab_persistent_defer`, `ob31_xlock_grab_oneshot_defer`) and core unit tests (`pointer.rs::m14_confinement_clamping_and_arrangement_isolation`, `m13_reconciliation_deferred_under_client_grab`).
 
 ### OB-32
 - **Status:** OPEN
@@ -620,7 +622,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Origin:** E1R (E-F2-01)
 
 ### OB-47
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Production constraint-lifecycle regression (E-F2-02): the EE-2 sequences E1–E11 (explicit deactivate then later exit, destruction, output removal, reactivation, held button, confinement, never-activated persistent and oneshot, leave-instead alternative) and the EE-3 constraint cases on the production adapter.
 - **Owner:** adapter + core
 - **Evidence available:** EE-2, EE-3 (harness), EE-7
@@ -630,6 +632,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** OB-11, INC-5
 - **Blocks:** INC-5 exit
 - **Origin:** E1R (E-F2-02)
+- **History:** Ratified CLOSED at INC-5 exit following independent adversarial review and owner ratification; verified by T1 production tests (`ob47_e1_persistent_explicit_deactivate_then_exit`, `ob47_e3_oneshot_explicit_deactivate_defunct`, `round5_pointer_constraints_stress_200_cycles`); zero duplicate deactivations under authorized patch P1.
 
 ### OB-48
 - **Status:** OPEN
@@ -657,7 +660,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **History:** E1R obligation for output reconfiguration. Decision D added runtime 2i validation. Ratified CLOSED in INC-2 following independent adversarial review and corrective patch (closing finding INC2-F07), with Decision E transferring protocol fullscreen configure to INC-7 and ScaleInteractionEpoch settlement to INC-6 while preserving INV-CAMERA-3 and INV-OUTPUT-2 without waiver.
 
 ### OB-50
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Zero-output lifecycle on the production path (E-F2-05): one output → focused interaction → last output removed → `NoOutput` → reconnect, with no constraint, persistent lock, oneshot lock, confinement and a client-held button; exact wire order of enter/leave/locked/unlocked.
 - **Owner:** core + adapter
 - **Evidence available:** EE-3 (harness, stock and P1), EE-4 (spike)
@@ -667,9 +670,10 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-2, INC-3, INC-5
 - **Blocks:** INC-5 exit (and the multi-output lifecycle is not complete before it)
 - **Origin:** E1R (E-F2-05)
+- **History:** Ratified CLOSED at INC-5 exit following independent adversarial review and owner ratification; verified across persistent lock, oneshot lock, confinement, and held button by T1 production tests (`ob50_zero_output_persistent_lock`, `ob50_zero_output_oneshot_lock`, `ob50_zero_output_confinement`, `ob50_zero_output_with_held_button`).
 
 ### OB-51
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** E1R-N2: INV-INPUT-10 step 3 (pointer `unset_grab`) may deliver one absolute motion at an unchanged location to a surface holding an active lock (W-SM-16). Test the popup-grab + active-lock + focus-change sequence; if reproduced, replace step 3 by the zero-output-style `set_grab(…, Focus::Clear)` ordering through change control.
 - **Owner:** adapter
 - **Evidence available:** EE-3 N3 (the mechanism, in the zero-output configuration)
@@ -679,6 +683,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-4, INC-5
 - **Blocks:** INC-5 exit
 - **Origin:** E1R (E1R-N2)
+- **History:** Ratified CLOSED at INC-5 exit following independent adversarial review and owner ratification; verified by T1 production test `ob51_popup_preemption_under_lock` (zero absolute motion to locked root surface W during popup grab; lock survives popup teardown).
 
 <!-- /living -->
 

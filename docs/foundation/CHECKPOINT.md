@@ -1,8 +1,42 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-5 IMPLEMENTED — READY FOR INDEPENDENT ADVERSARIAL REVIEW.** Pointer constraints (`zwp_pointer_constraints_v1`), lock/confinement policy (M13, M14), confinement clamp (F-CONFINE-1), constraint reconciliation on output removal (F-RELOCATE-1), and interaction preemption restoration implemented on the production path. OB-11 adjudicated under Option B (P1 adopted under D-B12-PIN). INC-0, INC-1, INC-2, INC-3, and INC-4 are RATIFIED. **INC-5 has NOT been ratified.** **INC-6 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — INC-6 READY FOR OWNER PLANNING.** Pointer constraints (`zwp_pointer_constraints_v1`), lock/confinement policy (M13, M14), confinement clamp (F-CONFINE-1), constraint reconciliation on output removal (F-RELOCATE-1), and interaction preemption restoration implemented on the production path. OB-11 adjudicated under Option B (P1 adopted under D-B12-PIN). INC-0, INC-1, INC-2, INC-3, INC-4, and INC-5 are RATIFIED. **INC-6 has NOT begun.**
 
-Date: 2026-10-07
+Date: 2026-10-09
+
+## PHASE F — INC-5 FORMAL RATIFICATION AND SEAL
+- **Ratified implementation commit:** `4aaf5a3fc770f611beefbc24ee9469aada27e0dd` (canonical main).
+- **Ratified baseline:** Phase F INC-5 candidate `4d2fb3dc01ece2fabd37f1467c9f9831795e7ed4` and tiny-compositor candidate `4e7a7f892491df198216c384fae0a0ef74e5472a`.
+- **Ratification scope:** Phase F pointer-constraint architecture and protocol behavior (`zwp_pointer_constraints_v1`, `zwp_relative_pointer_v1`, M13, M14, F-LOCK-1, F-CONFINE-1, F-RELOCATE-1, batch-end reconciliation with DEFER strategy under interactions and grabs, zero-output transitions, and popup preemption restoration).
+- **Evidence locations:** `docs/foundation/evidence/phase-f/INC-5/`, `crates/infynitae-backend-headless/tests/t1_pointer_constraints.rs`, `crates/infynitae-core/src/pointer.rs`.
+- **Review verdicts:**
+  - Independent adversarial review: `PASS — RATIFICATION RECOMMENDED` (Level A = 0, Level B = 0).
+  - Owner ratification gate: `FORMAL RATIFICATION AUTHORIZED`.
+- **Final defect counts:** Level A = 0, Level B = 0.
+- **Level-C residual observations (non-blocking for INC-5 ratification):**
+  - **C-1 (Vendor Upstream Compiler Warnings):** 5 cosmetic compiler warnings originate in pinned `vendor/smithay-0.7.0` (unused tracing imports, deprecated `Atomic::fetch_update`, integer function pointer cast in shm pool); zero warnings in Infynitae workspace crates.
+  - **C-2 (OB-20 Physical Game Execution Allocation):** Physical game execution on bare-metal DRM/KMS outputs remains formally allocated to INC-17 (`T5 PHYSICAL`). Protocol-tier obligations (TST-05 x8 C3 pan with lock, C4 pan with confinement) are verified.
+  - **C-3 (OB-11 Upstream Landing Tracking):** Upstream Smithay issue submission remains an outward tracking item; Option B (patch P1 under `D-B12-PIN`) is adopted, pinned, and verified locally.
+- **Obligation dispositions (`docs/foundation/FOUNDATION_TEST_PLAN.md`):**
+  - **OB-31:** CLOSED. Persistent and oneshot `xlock_grab` DEFER strategy, confinement clamping (`F-CONFINE-1`), and zero-leak verified by T1 production tests (`ob31_xlock_grab_persistent_defer`, `ob31_xlock_grab_oneshot_defer`) and core unit tests.
+  - **OB-3:** CLOSED. Output removal mid-interaction (pan and client grab) verified by T1 production tests (`removing_the_pan_output_orphans_the_pan`, `ob31_xlock_grab_persistent_defer`).
+  - **OB-47:** CLOSED. Constraint-lifecycle regression (EE-2 E1–E11) and zero duplicate `unlocked` events under P1 verified by T1 production tests (`ob47_e1_persistent_explicit_deactivate_then_exit`, `ob47_e3_oneshot_explicit_deactivate_defunct`, `round5_pointer_constraints_stress_200_cycles`).
+  - **OB-50:** CLOSED. Zero-output constraint lifecycle (EE-3) verified across persistent lock, oneshot lock, confinement, and held button by T1 production tests (`ob50_zero_output_*`).
+  - **OB-51:** CLOSED. W-SM-16 popup preemption under lock verified by T1 production test (`ob51_popup_preemption_under_lock`).
+  - **OB-11:** SATISFIED / CLOSED for the INC-5 decision gate under Option B (patch P1 under `D-B12-PIN`). Remains OPEN in register as destination is UP.
+  - **OB-20:** Protocol part SATISFIED (`ob20_x8_c3_pan_with_lock`, `ob20_x8_c4_pan_with_confinement`). Physical hardware validation remains assigned to INC-17 (`T5 PHYSICAL`).
+- **Derived verification evidence:**
+  - Workspace test suite: 253 tests pass across 25 suites (core 76, T1 headless 168, backend-winit 9, etc.), 0 failed, 0 ignored.
+  - Cargo fmt and clippy (`--workspace --all-targets --locked -- -D warnings`): PASS.
+  - `./tools/verify-architecture`: PASS (including 6 patch P1 integrity controls).
+  - `./tools/verify-test-efficacy`: PASS (all seeded mutants detected).
+  - `./tools/check-foundation-docs` and `--self-test`: PASS.
+  - `./tools/verify-development-environment`: PASS.
+- **Ratification declaration:**
+  - **Phase F INC-5 is RATIFIED.**
+  - **INC-0 through INC-5 are RATIFIED.**
+  - **INC-6 has NOT begun.**
+  - Physical DRM/KMS hardware validation excluded; host KDE/KWin session untouched.
 
 ## PHASE F — INC-5 IMPLEMENTATION (evidence: evidence/phase-f/INC-5/)
 - **Baseline commit:** `2680b99eb6d5353473ff362f5b4a904372f1fdfb` (ratified INC-4).
