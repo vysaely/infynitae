@@ -11,3 +11,4 @@ publish.workspace = true
 [dependencies]
 infynitae-core = { path = "../infynitae-core" }
 infynitae-wayland = { path = "../infynitae-wayland" }
+smithay = { version = "=0.7.0", default-features = false, features = ["backend_winit"] }
