@@ -37,6 +37,10 @@ use wayland_client::protocol::{
     wl_surface::{self, WlSurface},
 };
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle, delegate_noop};
+use wayland_protocols::wp::fractional_scale::v1::client::{
+    wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1,
+    wp_fractional_scale_v1::{self, WpFractionalScaleV1},
+};
 use wayland_protocols::wp::pointer_constraints::zv1::client::{
     zwp_confined_pointer_v1::{self, ZwpConfinedPointerV1},
     zwp_locked_pointer_v1::{self, ZwpLockedPointerV1},
@@ -49,6 +53,9 @@ use wayland_protocols::wp::presentation_time::client::{
 use wayland_protocols::wp::relative_pointer::zv1::client::{
     zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1,
     zwp_relative_pointer_v1::{self, ZwpRelativePointerV1},
+};
+use wayland_protocols::wp::viewporter::client::{
+    wp_viewport::WpViewport, wp_viewporter::WpViewporter,
 };
 use wayland_protocols::xdg::shell::client::{
     xdg_popup::{self, XdgPopup},
@@ -132,6 +139,12 @@ pub struct Probe {
     pub constraints: Option<ZwpPointerConstraintsV1>,
     pub locked: Option<ZwpLockedPointerV1>,
     pub confined: Option<ZwpConfinedPointerV1>,
+    pub fractional_scale_manager: Option<WpFractionalScaleManagerV1>,
+    pub fractional_scales: Vec<(usize, WpFractionalScaleV1)>,
+    pub preferred_scales: Vec<(String, u32)>,
+    pub preferred_buffer_scales: Vec<(String, i32)>,
+    pub viewporter: Option<WpViewporter>,
+    pub viewports: Vec<(usize, WpViewport)>,
     /// Ordered wire log of the seat's pointer (the independent oracle for client-observed input):
     /// "enter S x,y", "leave S", "motion x,y", "button B pressed|released", "axis A v",
     /// "axis_v120 A n", "frame", "relative dx,dy unaccel ux,uy". Coordinates are the wl_fixed
@@ -268,6 +281,41 @@ impl Probe {
         self.surfaces[idx].toplevel = Some(tl);
         self.surfaces[idx].wl.commit();
         idx
+    }
+
+    /// Toplevel with fractional scale bound before initial commit.
+    pub fn toplevel_with_fractional_scale(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        label: &'static str,
+        content: (i32, i32),
+        shadow: i32,
+    ) -> usize {
+        let size = (content.0 + 2 * shadow, content.1 + 2 * shadow);
+        let idx = self.new_xdg_surface(qh, label, size);
+        let xdg = self.surfaces[idx].xdg.clone().expect("xdg");
+        let tl = xdg.get_toplevel(qh, idx);
+        if shadow > 0 {
+            xdg.set_window_geometry(shadow, shadow, content.0, content.1);
+        }
+        self.surfaces[idx].toplevel = Some(tl);
+        self.get_fractional_scale(qh, idx);
+        self.surfaces[idx].wl.commit();
+        idx
+    }
+
+    pub fn get_fractional_scale(&mut self, qh: &QueueHandle<Self>, idx: usize) {
+        if let Some(mgr) = &self.fractional_scale_manager {
+            let fs = mgr.get_fractional_scale(&self.surfaces[idx].wl, qh, idx);
+            self.fractional_scales.push((idx, fs));
+        }
+    }
+
+    pub fn get_viewport(&mut self, qh: &QueueHandle<Self>, idx: usize) -> Option<WpViewport> {
+        let mgr = self.viewporter.as_ref()?;
+        let vp = mgr.get_viewport(&self.surfaces[idx].wl, qh, ());
+        self.viewports.push((idx, vp.clone()));
+        Some(vp)
     }
 
     /// Popup of `content` size with a CSD shadow at `anchor_rect` in the parent's window
@@ -751,6 +799,11 @@ impl Dispatch<WlSurface, ()> for Probe {
                 let n = st.output_name(&output);
                 st.log.push(format!("leave {label} {n}"));
             }
+            wl_surface::Event::PreferredBufferScale { factor } => {
+                st.log
+                    .push(format!("preferred_buffer_scale {label} {factor}"));
+                st.preferred_buffer_scales.push((label, factor));
+            }
             _ => {}
         }
     }
@@ -813,6 +866,26 @@ impl Dispatch<WpPresentationFeedback, u32> for Probe {
 }
 
 delegate_noop!(Probe: ignore ZxdgOutputManagerV1);
+delegate_noop!(Probe: ignore WpFractionalScaleManagerV1);
+delegate_noop!(Probe: ignore WpViewporter);
+delegate_noop!(Probe: ignore WpViewport);
+
+impl Dispatch<WpFractionalScaleV1, usize> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &WpFractionalScaleV1,
+        ev: wp_fractional_scale_v1::Event,
+        idx: &usize,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wp_fractional_scale_v1::Event::PreferredScale { scale } = ev {
+            let label = st.surfaces[*idx].label;
+            st.log.push(format!("preferred_scale {label} {scale}"));
+            st.preferred_scales.push((label.to_string(), scale));
+        }
+    }
+}
 
 impl Dispatch<XdgWmBase, ()> for Probe {
     fn event(
@@ -1320,6 +1393,24 @@ impl Lockstep {
         self.probe.relative = Some(manager.get_relative_pointer(&pointer, &self.qh, ()));
         let (n, _) = find("zwp_pointer_constraints_v1");
         self.probe.constraints = Some(registry.bind(n, 1, &self.qh, ()));
+        if let Some((n, v)) = self
+            .probe
+            .globals
+            .iter()
+            .find(|(_, i, _)| i == "wp_fractional_scale_manager_v1")
+            .map(|(n, _, v)| (*n, *v))
+        {
+            self.probe.fractional_scale_manager = Some(registry.bind(n, v.min(1), &self.qh, ()));
+        }
+        if let Some((n, v)) = self
+            .probe
+            .globals
+            .iter()
+            .find(|(_, i, _)| i == "wp_viewporter")
+            .map(|(n, _, v)| (*n, *v))
+        {
+            self.probe.viewporter = Some(registry.bind(n, v.min(1), &self.qh, ()));
+        }
         self.probe.seat = Some(seat);
         self.probe.pointer = Some(pointer);
         self.probe.keyboard = Some(keyboard);

@@ -22,8 +22,9 @@ use smithay::wayland::shell::xdg::{
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{
-    delegate_compositor, delegate_output, delegate_pointer_constraints, delegate_presentation,
-    delegate_relative_pointer, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_fractional_scale, delegate_output, delegate_pointer_constraints,
+    delegate_presentation, delegate_relative_pointer, delegate_seat, delegate_shm,
+    delegate_viewporter, delegate_xdg_shell,
 };
 
 use crate::{ClientState, ElementHandle, WaylandState, convert, snapshot};
@@ -411,13 +412,26 @@ impl SeatHandler for WaylandState {
 impl OutputHandler for WaylandState {}
 
 delegate_compositor!(WaylandState);
+delegate_fractional_scale!(WaylandState);
 delegate_output!(WaylandState);
 delegate_pointer_constraints!(WaylandState);
 delegate_presentation!(WaylandState);
 delegate_relative_pointer!(WaylandState);
 delegate_seat!(WaylandState);
 delegate_shm!(WaylandState);
+delegate_viewporter!(WaylandState);
 delegate_xdg_shell!(WaylandState);
+
+impl smithay::wayland::fractional_scale::FractionalScaleHandler for WaylandState {
+    fn new_fractional_scale(&mut self, surface: WlSurface) {
+        if let Some(key) = self.registry.key(&surface)
+            && let Some(element) = self.core.stage().element_containing_surface(key)
+            && let Some((scale_120, integer_scale)) = self.core.preferred_scale_of(element)
+        {
+            convert::send_preferred_scale_to_surface(&surface, scale_120, integer_scale);
+        }
+    }
+}
 
 impl PointerConstraintsHandler for WaylandState {
     fn new_constraint(

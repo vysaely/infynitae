@@ -174,6 +174,9 @@ pub fn run_nested(
         .map_err(|e| format!("Failed to connect output: {e:?}"))?;
     state.apply(&effects);
 
+    // Ingest renderer device ceiling D_max = 16384 (OB-23, F-SCALE-2)
+    state.core_mut().set_renderer_device_max(16384);
+
     // 5. Spawn client command if requested
     let mut children = Vec::new();
     if let Some(cmd) = &options.exec {
@@ -279,6 +282,14 @@ pub fn run_nested(
                 .grant_initial_focus(&mut data.input_port, topmost)
         {
             data.state.apply(&effects);
+            let _ = data.display.flush_clients();
+        }
+
+        // Advance scale settlement timer
+        let now_ms = data.start_time.elapsed().as_millis() as u64;
+        let scale_fx = data.state.core_mut().scale_tick(now_ms);
+        if !scale_fx.is_empty() {
+            data.state.apply(&scale_fx);
             let _ = data.display.flush_clients();
         }
 

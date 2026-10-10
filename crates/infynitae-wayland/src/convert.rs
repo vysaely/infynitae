@@ -249,3 +249,34 @@ pub(crate) fn convert_region(
         None
     }
 }
+
+/// Sends preferred fractional scale and integer buffer scale to every surface in `window`.
+pub fn send_preferred_scale_to_window(
+    window: &smithay::desktop::Window,
+    scale_120: u32,
+    integer_scale: u32,
+) {
+    if let Some(toplevel) = window.toplevel() {
+        let root = toplevel.wl_surface();
+        send_preferred_scale_to_surface(root, scale_120, integer_scale);
+    }
+}
+
+/// Sends preferred fractional scale and integer buffer scale to a surface.
+pub fn send_preferred_scale_to_surface(
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    scale_120: u32,
+    integer_scale: u32,
+) {
+    with_states(surface, |states| {
+        smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
+            fs.set_preferred_scale(scale_120 as f64 / 120.0);
+        });
+        smithay::wayland::compositor::send_surface_state(
+            surface,
+            states,
+            integer_scale as i32,
+            smithay::utils::Transform::Normal,
+        );
+    });
+}

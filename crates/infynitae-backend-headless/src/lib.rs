@@ -340,6 +340,9 @@ pub fn run_headless(
         )
         .map_err(|e| format!("Failed to register display event source: {e}"))?;
 
+    // Ingest renderer device ceiling D_max = 16384 (OB-23, F-SCALE-2)
+    state.core_mut().set_renderer_device_max(16384);
+
     let mut data = HeadlessData { display, children };
     let start_time = Instant::now();
     let period = vblank_period(options.refresh_mhz);
@@ -349,7 +352,12 @@ pub fn run_headless(
     println!("[infynitae] Headless compositor running.");
     loop {
         let elapsed = last_vblank.elapsed();
-        let timeout = period.saturating_sub(elapsed);
+        let mut timeout = period.saturating_sub(elapsed);
+        let now_ms = start_time.elapsed().as_millis() as u64;
+        if let Some(deadline) = state.core().next_settlement_deadline() {
+            let remain = Duration::from_millis(deadline.saturating_sub(now_ms));
+            timeout = timeout.min(remain);
+        }
         event_loop.dispatch(Some(timeout), &mut data)?;
 
         // Non-blocking child process reaping (Defect E)
@@ -393,6 +401,14 @@ pub fn run_headless(
                 .grant_initial_focus(&mut input_port, topmost)
         {
             state.apply(&effects);
+            let _ = data.display.flush_clients();
+        }
+
+        // Advance scale settlement timer
+        let now_ms = start_time.elapsed().as_millis() as u64;
+        let scale_fx = state.core_mut().scale_tick(now_ms);
+        if !scale_fx.is_empty() {
+            state.apply(&scale_fx);
             let _ = data.display.flush_clients();
         }
 
