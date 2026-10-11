@@ -513,7 +513,7 @@ fn render_and_present(data: &mut LoopData) {
     }
 
     // Complete frame callbacks and presentation feedback for clocked elements
-    let now = data.start_time.elapsed();
+    let now = infynitae_wayland::presentation_clock_now();
     let elements = data.state.core().frame_tick(data.output_id);
     data.state.complete_frames(data.output_id, &elements, now);
     let _ = data.display.flush_clients();

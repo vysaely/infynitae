@@ -397,7 +397,11 @@ pub fn run_headless(
         }
 
         if last_vblank.elapsed() >= period {
-            vblank(&mut state, output_id, start_time.elapsed());
+            vblank(
+                &mut state,
+                output_id,
+                infynitae_wayland::presentation_clock_now(),
+            );
             frame_count += 1;
             last_vblank = Instant::now();
             let _ = data.display.flush_clients();

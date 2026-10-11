@@ -43,6 +43,16 @@ use smithay::wayland::shm::ShmState;
 /// `complete_frames` are on this clock.
 const CLOCK_MONOTONIC: u32 = 1;
 
+/// The current time on the clock `wp_presentation` announces. A backend that presents in real
+/// time takes the frame time it hands to `complete_frames` from here and from nowhere else, so
+/// the timestamps clients receive are on the clock they were told (a lockstep test supplies
+/// virtual frame times instead).
+pub fn presentation_clock_now() -> std::time::Duration {
+    smithay::utils::Clock::<smithay::utils::Monotonic>::new()
+        .now()
+        .into()
+}
+
 pub use registry::SurfaceRegistry;
 
 /// Per-client data the composition root attaches when inserting a client.
