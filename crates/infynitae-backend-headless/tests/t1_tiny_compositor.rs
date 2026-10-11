@@ -797,3 +797,56 @@ fn presentation_timestamps_are_on_the_announced_clock() {
     drop(conn);
     compositor.join().expect("compositor thread");
 }
+
+/// The command started with the session is a child of the session: it is running while the
+/// session runs and gone (not running, not a zombie) when `run_headless` returns. The command
+/// is a shell that records its own pid and then sleeps.
+#[test]
+fn the_session_command_does_not_outlive_the_session() {
+    let dir = std::env::temp_dir().join(format!("infynitae-child-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let script = dir.join("child.sh");
+    let pid_file = dir.join("pid");
+    std::fs::write(
+        &script,
+        // stdio detached and a short sleep: if the session fails to end it, the leftover
+        // neither holds the test runner's output pipe nor lingers
+        format!(
+            "#!/bin/sh\necho $$ > {}\nexec sleep 30 </dev/null >/dev/null 2>&1\n",
+            pid_file.display()
+        ),
+    )
+    .expect("script");
+    let options = HeadlessCompositorOptions {
+        socket_name: Some(format!("infynitae-own-child-test-{}", std::process::id())),
+        exec: Some(format!("sh {}", script.display())),
+        width: 1280,
+        height: 800,
+        refresh_mhz: 60_000,
+        duration: Some(Duration::from_millis(700)),
+        max_frames: None,
+    };
+    let compositor = thread::spawn(move || {
+        let (core, input_port, _shell_port, output_token) = Core::new(PersistedCameras::default());
+        run_headless(core, input_port, output_token, options).expect("compositor exited cleanly");
+    });
+    let mut pid = None;
+    for _ in 0..60 {
+        if let Ok(text) = std::fs::read_to_string(&pid_file)
+            && let Ok(p) = text.trim().parse::<u32>()
+        {
+            pid = Some(p);
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let pid = pid.expect("the session command started");
+    let proc_dir = std::path::PathBuf::from(format!("/proc/{pid}"));
+    assert!(proc_dir.exists(), "the command runs while the session runs");
+    compositor.join().expect("compositor thread");
+    assert!(
+        !proc_dir.exists(),
+        "process {pid} outlived the session (running or zombie)"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

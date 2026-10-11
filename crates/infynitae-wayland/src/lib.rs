@@ -21,6 +21,7 @@ mod keyboard;
 mod outputs;
 mod pointer;
 pub mod registry;
+pub mod session;
 mod snapshot;
 
 pub use keyboard::PreemptionStrategy;
