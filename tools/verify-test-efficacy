@@ -435,13 +435,13 @@ CONTROLS = [
 
     # ---- INC-6 hardening: independent-audit findings C1 and C2, M15 wire order, device ceiling
     ("INC-6 C1: preferred_scale floored at 120 (the audited defect; T0)", f"{CORE}/scale.rs",
-     "(h * 120.0).round().clamp(1.0, u32::MAX as f64) as u32", "(h * 120.0).round().clamp(120.0, u32::MAX as f64) as u32",
+     "(h * 120.0).round().max(1.0).min(u32::MAX as f64) as u32", "(h * 120.0).round().max(120.0).min(u32::MAX as f64) as u32",
      "infynitae-core", ["--lib"], "c1_preferred_scale_is_round_h_times_120_below_one"),
     ("INC-6 C1: preferred_scale floored at 120 (T1, output scale 0.75 on the wire)", f"{CORE}/scale.rs",
-     "(h * 120.0).round().clamp(1.0, u32::MAX as f64) as u32", "(h * 120.0).round().clamp(120.0, u32::MAX as f64) as u32",
+     "(h * 120.0).round().max(1.0).min(u32::MAX as f64) as u32", "(h * 120.0).round().max(120.0).min(u32::MAX as f64) as u32",
      "infynitae-backend-headless", ["--test", "t1_scale"], "c1_output_scale_below_one_reaches_the_client"),
     ("INC-6 C1: a positive hint may be sent as 0 (wire lower bound dropped)", f"{CORE}/scale.rs",
-     "(h * 120.0).round().clamp(1.0, u32::MAX as f64) as u32", "(h * 120.0).round().clamp(0.0, u32::MAX as f64) as u32",
+     "(h * 120.0).round().max(1.0).min(u32::MAX as f64) as u32", "(h * 120.0).round().max(0.0).min(u32::MAX as f64) as u32",
      "infynitae-core", ["--lib"], "c1_preferred_scale_wire_bounds"),
     ("INC-6 C1: D_max = 0 accepted at the Core boundary", f"{CORE}/scale.rs",
      "        if self.d_max == 0 {", "        if false {",
@@ -494,8 +494,26 @@ CONTROLS = [
      "        if self.epoch.open {",
      "infynitae-backend-headless", ["--test", "t1_scale"], "p7_applies_inside_an_open_epoch"),
     ("INC-6 P7: a lower D_max reported at runtime forces no decrease", f"{CORE}/lib.rs",
-     "            if st.p7_check(&ladder, h_max, self.scale_config.sigma) {", "            if false && st.p7_check(&ladder, h_max, self.scale_config.sigma) {",
+     "            let lowered = st.p7_check(&ladder, h_max, self.scale_config.sigma);", "            let lowered = false;",
      "infynitae-backend-headless", ["--test", "t1_scale"], "device_ceiling_lowered_at_runtime_and_invalid_value_refused"),
+    ("INC-6 E1R-N3: a D_max change that only lowers b(h) emits nothing", f"{CORE}/lib.rs",
+     "            if lowered\n                || st.last_emitted_scale_120 != Some(s120)\n                || st.last_emitted_buffer_scale != Some(b)\n            {",
+     "            if lowered {",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "integer_hint_follows_a_device_ceiling_change"),
+    ("INC-6 C1: set_scale_config stores an unvalidated configuration", f"{CORE}/lib.rs",
+     "        config.validate()?;\n        self.scale_config = config;", "        self.scale_config = config;",
+     "infynitae-core", ["--lib"], "scale_config_is_validated_at_the_core_boundary"),
+    ("INC-6 C2: hint changes skip the popup trees", f"{WAYLAND}/convert.rs",
+     "    window.with_surfaces(|surface, states| {\n        send_preferred_scale(surface, states, scale_120, integer_scale);\n    });\n",
+     "    if let Some(toplevel) = window.toplevel() {\n"
+     "        smithay::desktop::utils::with_surfaces_surface_tree(toplevel.wl_surface(), |surface, states| {\n"
+     "            send_preferred_scale(surface, states, scale_120, integer_scale);\n        });\n    }\n",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "c2_popup_trees_follow_scale_changes"),
+    ("INC-6 C2: a joining subtree's own subsurfaces are not told", f"{WAYLAND}/convert.rs",
+     "    smithay::desktop::utils::with_surfaces_surface_tree(root, |surface, states| {\n"
+     "        send_preferred_scale(surface, states, scale_120, integer_scale);\n    });\n",
+     "    with_states(root, |states| send_preferred_scale(root, states, scale_120, integer_scale));\n",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "c2_late_surfaces_learn_their_own_elements_hint"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

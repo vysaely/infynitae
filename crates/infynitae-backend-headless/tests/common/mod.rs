@@ -482,36 +482,61 @@ impl Probe {
         size: (i32, i32),
         below: bool,
     ) -> usize {
+        let idx = self.bare_surface(qh, label, size);
+        self.make_subsurface(qh, idx, parent, offset, below);
+        idx
+    }
+
+    /// A `wl_surface` with no role.
+    pub fn bare_surface(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        label: &'static str,
+        size: (i32, i32),
+    ) -> usize {
         let idx = self.surfaces.len();
         let wl = self
             .compositor
             .as_ref()
             .expect("wl_compositor")
             .create_surface(qh, ());
-        let parent_wl = self.surfaces[parent].wl.clone();
-        let sub = self
-            .subcompositor
-            .as_ref()
-            .expect("wl_subcompositor")
-            .get_subsurface(&wl, &parent_wl, qh, ());
-        sub.set_position(offset.0, offset.1);
-        if below {
-            sub.place_below(&parent_wl);
-        }
-        sub.set_desync();
         self.surfaces.push(Surf {
             label,
             wl,
             xdg: None,
             toplevel: None,
             popup: None,
-            subsurface: Some(sub),
+            subsurface: None,
             size,
             configured: true,
             popup_configure: None,
             frame_driven: false,
         });
         idx
+    }
+
+    /// Gives a role-less surface the (desynchronised) subsurface role under `parent`; whatever
+    /// subsurfaces it already has join the parent's tree with it.
+    pub fn make_subsurface(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        idx: usize,
+        parent: usize,
+        offset: (i32, i32),
+        below: bool,
+    ) {
+        let parent_wl = self.surfaces[parent].wl.clone();
+        let sub = self
+            .subcompositor
+            .as_ref()
+            .expect("wl_subcompositor")
+            .get_subsurface(&self.surfaces[idx].wl, &parent_wl, qh, ());
+        sub.set_position(offset.0, offset.1);
+        if below {
+            sub.place_below(&parent_wl);
+        }
+        sub.set_desync();
+        self.surfaces[idx].subsurface = Some(sub);
     }
 
     /// Destroys the surface's `wp_fractional_scale_v1`; the surface itself stays.

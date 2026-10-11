@@ -599,6 +599,19 @@ fn c2_late_surfaces_learn_their_own_elements_hint() {
     );
     assert!(ls.probe.preferred_buffer_scales_of("XF").is_empty());
 
+    // a subtree built before it belongs to any element: Y under a role-less X hears nothing;
+    // when X becomes a subsurface of W, both are told W's hint
+    let x_sub = ls.probe.bare_surface(&qh, "SX", (64, 48));
+    let y = join_subsurface(&mut ls, "SY", x_sub, true);
+    assert!(ls.probe.preferred_scales_of("SY").is_empty());
+    assert!(ls.probe.preferred_buffer_scales_of("SY").is_empty());
+    ls.probe.make_subsurface(&qh, x_sub, w, (20, 20), false);
+    ls.pump();
+    assert_eq!(ls.probe.preferred_scales_of("SY"), vec![180]);
+    assert_eq!(ls.probe.preferred_buffer_scales_of("SY"), vec![2]);
+    assert_eq!(ls.probe.preferred_buffer_scales_of("SX"), vec![2]);
+    let _ = y;
+
     // a wp_fractional_scale_v1 bound long after the surface joined and committed
     map_subsurface(&mut ls, ws, w);
     ls.probe.get_fractional_scale(&qh, ws);
@@ -637,6 +650,94 @@ fn c2_late_surfaces_learn_their_own_elements_hint() {
         assert_eq!(ls.probe.preferred_scales_of(label), want, "{label}");
     }
     assert!(ls.conn.protocol_error().is_none());
+}
+
+/// C2: popup trees are part of the element's tree (the snapshot Core receives contains them):
+/// a popup, a popup's subsurface and a nested popup follow a later hint change.
+#[test]
+fn c2_popup_trees_follow_scale_changes() {
+    let mut ls = Lockstep::new(Some(output_b())); // 1.5x
+    let b_id = ls.output();
+    let qh = ls.qh.clone();
+    let w = ls
+        .probe
+        .toplevel_with_fractional_scale(&qh, "W", (800, 600), 0);
+    ls.pump();
+    ls.probe.draw(&qh, w);
+    ls.pump();
+    let spec = |at: i32| common::PopupSpec {
+        content: (120, 80),
+        shadow: 0,
+        anchor_rect: (at, at, 20, 20),
+        slide: false,
+    };
+    let p = ls.probe.popup(&qh, "P", w, spec(10));
+    ls.probe.get_fractional_scale(&qh, p);
+    ls.pump();
+    let ps = join_subsurface(&mut ls, "PS", p, true);
+    map_subsurface(&mut ls, ps, p);
+    let p2 = ls.probe.popup(&qh, "P2", p, spec(5));
+    ls.probe.get_fractional_scale(&qh, p2);
+    ls.pump();
+    let tree = ["W", "P", "PS", "P2"];
+    for label in tree {
+        assert_eq!(ls.probe.preferred_scales_of(label), vec![180], "{label}");
+        assert_eq!(ls.probe.preferred_buffer_scales_of(label), vec![2]);
+    }
+
+    ls.reconfigure(b_id, &output_scaled("B", 360)); // 1.5x -> 3.0x
+    for label in tree {
+        assert_eq!(
+            ls.probe.preferred_scales_of(label),
+            vec![180, 360],
+            "{label} follows the element"
+        );
+        assert_eq!(ls.probe.preferred_buffer_scales_of(label), vec![2, 3]);
+    }
+    assert!(ls.conn.protocol_error().is_none());
+}
+
+/// E1R-N3 on a `D_max` change: `b(h)` depends on `H_dev(E)`, so a lower device limit can lower
+/// the integer hint while h itself still fits (no P7). The integer-scale buffer must fit at once.
+#[test]
+fn integer_hint_follows_a_device_ceiling_change() {
+    let mut ls = Lockstep::new(Some(output_scaled("Q", 300))); // 2.5x
+    let qh = ls.qh.clone();
+    let w = ls
+        .probe
+        .toplevel_with_fractional_scale(&qh, "W", (800, 600), 0);
+    ls.pump();
+    ls.probe.draw(&qh, w);
+    ls.pump();
+    let vp = ls.probe.get_viewport(&qh, w).expect("wp_viewporter");
+    vp.set_destination(5000, 600);
+    ls.probe.surfaces[w].wl.commit();
+    ls.pump();
+    assert_eq!(ls.probe.preferred_scales_of("W"), vec![300]);
+    assert_eq!(
+        ls.probe.preferred_buffer_scales_of("W"),
+        vec![3],
+        "5000 × 3 = 15000 fits 16384"
+    );
+
+    // H_dev = 13000 / 5000 = 2.6 >= h = 2.5: h holds, but ceil(h) = 3 no longer fits
+    let fx = ls
+        .state
+        .core_mut()
+        .set_renderer_device_max(13000)
+        .expect("valid D_max");
+    ls.state.apply(&fx);
+    ls.pump();
+    assert_eq!(
+        ls.probe.preferred_scales_of("W"),
+        vec![300],
+        "h is unchanged"
+    );
+    assert_eq!(
+        ls.probe.preferred_buffer_scales_of("W"),
+        vec![3, 2],
+        "5000 × 2 = 10000 fits 13000"
+    );
 }
 
 /// INV-SCALE-2 / P7 at several device ceilings: when a surface grows so that `h > H_max(E)`,
@@ -703,9 +804,14 @@ fn p7_forced_decrease_at_device_ceilings() {
             "D_max {d_max}, side {side}: one forced decrease"
         );
         assert_eq!(ls.probe.preferred_buffer_scales_of("W"), want_buffers);
+        let b = *ls
+            .probe
+            .preferred_buffer_scales_of("W")
+            .last()
+            .expect("an integer hint was sent");
         assert!(
-            side as i64 * want_b as i64 <= d_max as i64,
-            "integer-scale buffer {side} × {want_b} fits D_max {d_max}"
+            side as i64 * b as i64 <= d_max as i64,
+            "integer-scale buffer {side} × {b} fits D_max {d_max}"
         );
     }
 }
