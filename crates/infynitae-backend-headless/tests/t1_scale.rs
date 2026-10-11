@@ -674,6 +674,10 @@ fn c2_popup_trees_follow_scale_changes() {
     let p = ls.probe.popup(&qh, "P", w, spec(10));
     ls.probe.get_fractional_scale(&qh, p);
     ls.pump();
+    assert!(
+        ls.probe.surfaces[p].configured,
+        "P drew on its configure: a popup's parent must be mapped"
+    );
     let ps = join_subsurface(&mut ls, "PS", p, true);
     map_subsurface(&mut ls, ps, p);
     let p2 = ls.probe.popup(&qh, "P2", p, spec(5));
@@ -869,6 +873,55 @@ fn p7_applies_inside_an_open_epoch() {
         vec![360, 246],
         "settlement keeps the device-bound hint"
     );
+}
+
+/// INV-SCALE-2: P7 does not wait for an observer. W is mapped but in no output's view (ρ is
+/// undefined, the hint is held); growing past the device bound still lowers the hint at once —
+/// by a commit of the root, and by a commit of a subsurface.
+#[test]
+fn p7_applies_to_an_unobserved_element() {
+    for grow_root in [true, false] {
+        let mut r = Rig::new(Lockstep::new(Some(output_scaled("H", 360)))); // 3.0x
+        let qh = r.ls.qh.clone();
+        let w =
+            r.ls.probe
+                .toplevel_with_fractional_scale(&qh, "W", (800, 600), 0);
+        r.ls.pump();
+        r.ls.probe.draw(&qh, w);
+        r.ls.pump();
+        let s = join_subsurface(&mut r.ls, "S", w, true);
+        map_subsurface(&mut r.ls, s, w);
+        r.frame();
+
+        // pan W out of the only view
+        r.button(BTN_MIDDLE, true, logo());
+        r.motion((5000.0, 0.0));
+        r.button(BTN_MIDDLE, false, logo());
+        r.ls.pump();
+        r.frame();
+        let element = r.ls.state.elements().next().expect("element");
+        assert_eq!(
+            r.ls.state.core().compute_rho(element),
+            None,
+            "W is unobserved"
+        );
+        assert_eq!(r.ls.probe.preferred_scales_of("W"), vec![360], "held");
+
+        let grown = if grow_root { w } else { s };
+        let vp = r.ls.probe.get_viewport(&qh, grown).expect("wp_viewporter");
+        vp.set_destination(8000, 48); // H_max = 16384 / 8000 = 2.048
+        r.ls.probe.surfaces[grown].wl.commit();
+        r.ls.pump();
+        for label in ["W", "S"] {
+            assert_eq!(
+                r.ls.probe.preferred_scales_of(label),
+                vec![360, 246],
+                "{label}, grown by the {}",
+                if grow_root { "root" } else { "subsurface" }
+            );
+            assert_eq!(r.ls.probe.preferred_buffer_scales_of(label), vec![3, 2]);
+        }
+    }
 }
 
 /// OBJ-29 / M-renderer: a lower `D_max` reported later (renderer recreation) forces the

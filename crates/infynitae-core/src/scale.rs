@@ -367,6 +367,11 @@ pub fn target(rho: f64, ladder: &[f64], h_max: f64, sigma: f64) -> f64 {
 /// builds. A release build still never puts 0 on the wire (`max` maps NaN to 1).
 pub fn preferred_scale_120(h: f64) -> u32 {
     debug_assert!(h.is_finite() && h > 0.0, "hint {h} outside its domain");
+    wire_scale_120(h)
+}
+
+/// The wire conversion alone, total over f64.
+fn wire_scale_120(h: f64) -> u32 {
     (h * 120.0).round().max(1.0).min(u32::MAX as f64) as u32
 }
 
@@ -891,6 +896,17 @@ mod tests {
     #[should_panic(expected = "outside its domain")]
     fn c1_out_of_domain_hint_is_reported() {
         preferred_scale_120(f64::NAN);
+    }
+
+    /// C1: whatever reaches the wire conversion, 0 never leaves it (a release build has no
+    /// assertion in front of it).
+    #[test]
+    fn c1_wire_conversion_never_yields_zero() {
+        for h in [f64::NAN, 0.0, -0.0, -3.0, f64::NEG_INFINITY] {
+            assert_eq!(wire_scale_120(h), 1, "{h}");
+        }
+        assert_eq!(wire_scale_120(f64::INFINITY), u32::MAX);
+        assert_eq!(wire_scale_120(0.75), 90);
     }
 
     /// C1: values outside the domain of h are refused where they would enter Core, not hidden

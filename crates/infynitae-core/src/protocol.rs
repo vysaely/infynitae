@@ -210,6 +210,9 @@ impl Core {
                 self.focus.target_lost(id, &live)
             }
         };
+        // P7 does not wait for an observer: batch-end evaluation holds an unobserved element's
+        // hint (INV-SCALE-5), the device bound does not (INV-SCALE-2).
+        fx.extend(self.p7_check_element(id));
         fx.extend(self.visibility_pass_client());
         fx.extend(self.reconcile_constraints());
         Ok(fx)
