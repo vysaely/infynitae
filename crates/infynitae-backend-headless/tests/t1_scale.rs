@@ -72,29 +72,26 @@ fn initial_scale_hint_emitted_before_first_configure() {
         .collect();
     assert_eq!(buf_scales, vec![2], "Initial buffer scale for 1.5x is 2");
 
-    // Verify ordering: preferred_scale must precede the initial xdg_surface.configure
-    let scale_idx = ls
-        .probe
-        .log
-        .iter()
-        .position(|l| l == "preferred_scale W 180")
-        .expect("preferred_scale logged");
-    let _config_idx = ls
-        .probe
-        .configures
-        .iter()
-        .position(|&l| l == "W")
-        .expect("configure received");
-    let wl_config_idx = ls
-        .probe
-        .log
-        .iter()
-        .position(|l| l.contains("toplevel_configure W"))
-        .unwrap_or(usize::MAX);
-
+    // Verify ordering on one ordered wire log: both hints precede the initial
+    // xdg_surface.configure. A missing line fails the test (it used to make it vacuous: the
+    // configure was looked up in a log that never records it).
+    let at = |line: &str| {
+        ls.probe
+            .scale_log
+            .iter()
+            .position(|l| l == line)
+            .unwrap_or_else(|| panic!("`{line}` not on the wire: {:?}", ls.probe.scale_log))
+    };
+    let configure = at("configure W");
     assert!(
-        scale_idx < wl_config_idx,
-        "preferred_scale (idx {scale_idx}) must precede configure (idx {wl_config_idx}) on the wire (M15)"
+        at("preferred_scale W 180") < configure,
+        "preferred_scale must precede the initial configure (M15): {:?}",
+        ls.probe.scale_log
+    );
+    assert!(
+        at("preferred_buffer_scale W 2") < configure,
+        "preferred_buffer_scale must precede the initial configure (M15): {:?}",
+        ls.probe.scale_log
     );
 }
 
@@ -348,4 +345,414 @@ fn adversarial_client_churn_bounds_sc_e() {
         renegotiations <= 2,
         "Adversarial client caused {renegotiations} scale renegotiations; SC-E requires <= 2"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// INC-6 hardening (independent audit findings C1, C2; device ceiling at several D_max)
+// ---------------------------------------------------------------------------------------------
+
+fn output_scaled(key: &str, scale_120: u32) -> VirtualOutput {
+    VirtualOutput {
+        key: VirtualOutput::key(key),
+        mode: (1920, 1080),
+        transform: infynitae_core::output::Transform::Normal,
+        scale_120,
+        refresh_mhz: 60_000,
+    }
+}
+
+/// A subsurface of `parent` with its role only; `fractional` binds `wp_fractional_scale_v1`
+/// before the surface's first commit, as toolkits do.
+fn join_subsurface(
+    ls: &mut Lockstep,
+    label: &'static str,
+    parent: usize,
+    fractional: bool,
+) -> usize {
+    let qh = ls.qh.clone();
+    let s = ls
+        .probe
+        .subsurface_uncommitted(&qh, label, parent, (10, 10), (64, 48), false);
+    if fractional {
+        ls.probe.get_fractional_scale(&qh, s);
+    }
+    ls.pump();
+    s
+}
+
+/// Gives a joined subsurface its buffer; the parent's commit applies position and stacking.
+fn map_subsurface(ls: &mut Lockstep, s: usize, parent: usize) {
+    let qh = ls.qh.clone();
+    ls.probe.draw(&qh, s);
+    ls.probe.surfaces[parent].wl.commit();
+    ls.pump();
+}
+
+/// C1 on the wire: an output scale below 1 is a rung and is sent as `round(h · 120)`, not
+/// raised to 120.
+#[test]
+fn c1_output_scale_below_one_reaches_the_client() {
+    let mut ls = Lockstep::new(Some(output_scaled("C", 90))); // 0.75x
+    let w = ls
+        .probe
+        .toplevel_with_fractional_scale(&ls.qh, "W", (800, 600), 0);
+    ls.pump();
+    assert_eq!(ls.probe.preferred_scales_of("W"), vec![90]);
+    ls.probe.draw(&ls.qh, w);
+    ls.pump();
+    assert_eq!(ls.probe.preferred_scales_of("W"), vec![90]);
+    // b(0.75) = 1, the value a surface has before any event: nothing to send
+    assert_eq!(ls.probe.preferred_buffer_scales_of("W"), Vec::<i32>::new());
+}
+
+/// C2: every surface of the element's tree follows the element's hint — at the hotplug of a
+/// differently scaled output, when the element leaves that output's view, and at an output
+/// scale change — and a surface that left the tree, lost its `wp_fractional_scale_v1` or was
+/// destroyed causes neither a stale event nor a protocol error.
+#[test]
+fn c2_subsurface_tree_follows_scale_changes() {
+    let mut r = Rig::new(Lockstep::new(Some(output_a())));
+    let a_id = r.ls.output();
+    let w =
+        r.ls.probe
+            .toplevel_with_fractional_scale(&r.ls.qh, "W", (800, 600), 0);
+    r.ls.pump();
+    r.ls.probe.draw(&r.ls.qh, w);
+    r.ls.pump();
+
+    let s1 = join_subsurface(&mut r.ls, "S1", w, true);
+    let s1a = join_subsurface(&mut r.ls, "S1a", s1, true);
+    let s2 = join_subsurface(&mut r.ls, "S2", w, false); // integer-scale only
+    let s3 = join_subsurface(&mut r.ls, "S3", w, true); // will leave the tree
+    let s4 = join_subsurface(&mut r.ls, "S4", w, true); // will lose its fractional-scale object
+    for (s, parent) in [(s1, w), (s1a, s1), (s2, w), (s3, w), (s4, w)] {
+        map_subsurface(&mut r.ls, s, parent);
+    }
+    r.frame();
+
+    // initial hints: the element's current value, once per fractional-scale object
+    for label in ["W", "S1", "S1a", "S3", "S4"] {
+        assert_eq!(r.ls.probe.preferred_scales_of(label), vec![120], "{label}");
+    }
+    for label in ["W", "S1", "S1a", "S2", "S3", "S4"] {
+        assert!(
+            r.ls.probe.preferred_buffer_scales_of(label).is_empty(),
+            "{label}: integer hint 1 is the protocol default"
+        );
+    }
+
+    // a 1.5x output starts observing W: the whole tree renegotiates, once
+    let b_id = r.ls.connect(&output_b());
+    for label in ["W", "S1", "S1a", "S3", "S4"] {
+        assert_eq!(
+            r.ls.probe.preferred_scales_of(label),
+            vec![120, 180],
+            "{label} follows the element to 1.5"
+        );
+    }
+    for label in ["W", "S1", "S1a", "S2", "S3", "S4"] {
+        assert_eq!(
+            r.ls.probe.preferred_buffer_scales_of(label),
+            vec![2],
+            "{label}"
+        );
+    }
+
+    // W leaves the 1.5x output's view (its camera pans away): settles to 1.0 on release
+    r.motion((1000.0, 0.0));
+    r.button(BTN_MIDDLE, true, logo());
+    r.motion((5000.0, 0.0));
+    r.ls.pump();
+    assert_eq!(
+        r.ls.probe.preferred_scales_of("S1"),
+        vec![120, 180],
+        "INV-SCALE-3: no decrease reaches a subsurface during the epoch either"
+    );
+    r.button(BTN_MIDDLE, false, logo());
+    r.ls.pump();
+    r.frame();
+    for label in ["W", "S1", "S1a", "S3", "S4"] {
+        assert_eq!(
+            r.ls.probe.preferred_scales_of(label),
+            vec![120, 180, 120],
+            "{label} settles with the element"
+        );
+    }
+    for label in ["W", "S1", "S1a", "S2", "S3", "S4"] {
+        assert_eq!(
+            r.ls.probe.preferred_buffer_scales_of(label),
+            vec![2, 1],
+            "{label}"
+        );
+    }
+
+    // lifecycle: S1 unmaps (stays in the tree), S2 is destroyed, S3 gives up its role (leaves
+    // the tree, surface and wp_fractional_scale_v1 alive), S4 destroys its wp_fractional_scale_v1
+    r.ls.probe.unmap(s1);
+    {
+        let s = &mut r.ls.probe.surfaces[s2];
+        s.subsurface.take().expect("S2 role").destroy();
+        s.wl.destroy();
+    }
+    r.ls.probe.surfaces[s3]
+        .subsurface
+        .take()
+        .expect("S3 role")
+        .destroy();
+    r.ls.probe.destroy_fractional_scale(s4);
+    r.ls.probe.surfaces[w].wl.commit();
+    r.ls.pump();
+
+    // the remaining output changes scale 1.0 -> 2.0
+    r.ls.reconfigure(a_id, &output_scaled("A", 240));
+    r.frame();
+    for label in ["W", "S1", "S1a"] {
+        assert_eq!(
+            r.ls.probe.preferred_scales_of(label),
+            vec![120, 180, 120, 240],
+            "{label}: in the tree (S1 unmapped, S1a under it)"
+        );
+        assert_eq!(
+            r.ls.probe.preferred_buffer_scales_of(label),
+            vec![2, 1, 2],
+            "{label}"
+        );
+    }
+    assert_eq!(
+        r.ls.probe.preferred_scales_of("S3"),
+        vec![120, 180, 120],
+        "S3 left the tree: no hint of an element it no longer belongs to"
+    );
+    assert_eq!(r.ls.probe.preferred_buffer_scales_of("S3"), vec![2, 1]);
+    assert_eq!(
+        r.ls.probe.preferred_scales_of("S4"),
+        vec![120, 180, 120],
+        "S4 has no wp_fractional_scale_v1 any more"
+    );
+    assert_eq!(
+        r.ls.probe.preferred_buffer_scales_of("S4"),
+        vec![2, 1, 2],
+        "S4 is still in the tree: its wl_surface hint follows"
+    );
+    assert_eq!(r.ls.probe.preferred_buffer_scales_of("S2"), vec![2, 1]);
+
+    // S1 remaps at the scale it was told while unmapped: nothing further to say
+    map_subsurface(&mut r.ls, s1, w);
+    r.frame();
+    assert_eq!(
+        r.ls.probe.preferred_scales_of("S1"),
+        vec![120, 180, 120, 240]
+    );
+    assert!(
+        r.ls.conn.protocol_error().is_none(),
+        "no protocol error across the subsurface lifecycle"
+    );
+    let _ = b_id;
+}
+
+/// C2: a surface that joins a tree after the element's hint was last sent (new subsurface,
+/// popup, late `wp_fractional_scale_v1`) is told the current hint of ITS element — before its
+/// first commit and before a popup's initial configure — and never another element's.
+#[test]
+fn c2_late_surfaces_learn_their_own_elements_hint() {
+    let mut ls = Lockstep::new(Some(output_b())); // 1.5x
+    let fx = ls
+        .state
+        .core_mut()
+        .set_renderer_device_max(4096)
+        .expect("valid D_max");
+    ls.state.apply(&fx);
+    let qh = ls.qh.clone();
+
+    let w = ls
+        .probe
+        .toplevel_with_fractional_scale(&qh, "W", (800, 600), 0);
+    let x = ls
+        .probe
+        .toplevel_with_fractional_scale(&qh, "X", (300, 200), 0);
+    ls.pump();
+    ls.probe.draw(&qh, w);
+    ls.probe.draw(&qh, x);
+    ls.pump();
+    // X stretches to a logical side of 5000 > D_max: H_max(X) = 4096 / 5000 = 0.8192 (P7)
+    let vp = ls.probe.get_viewport(&qh, x).expect("wp_viewporter");
+    vp.set_destination(5000, 100);
+    ls.probe.surfaces[x].wl.commit();
+    ls.pump();
+    assert_eq!(ls.probe.preferred_scales_of("W"), vec![180]);
+    assert_eq!(ls.probe.preferred_buffer_scales_of("W"), vec![2]);
+    assert_eq!(ls.probe.preferred_scales_of("X"), vec![180, 98]);
+    assert_eq!(ls.probe.preferred_buffer_scales_of("X"), vec![2, 1]);
+
+    // integer-scale subsurface of W: told at creation, before any commit of its own
+    let ws = join_subsurface(&mut ls, "WS", w, false);
+    assert_eq!(ls.probe.preferred_buffer_scales_of("WS"), vec![2]);
+    // fractional-scale subsurfaces: each gets its own element's hint
+    join_subsurface(&mut ls, "WF", w, true);
+    assert_eq!(ls.probe.preferred_scales_of("WF"), vec![180]);
+    assert_eq!(ls.probe.preferred_buffer_scales_of("WF"), vec![2]);
+    join_subsurface(&mut ls, "XF", x, true);
+    assert_eq!(
+        ls.probe.preferred_scales_of("XF"),
+        vec![98],
+        "X's hint, not W's"
+    );
+    assert!(ls.probe.preferred_buffer_scales_of("XF").is_empty());
+
+    // a wp_fractional_scale_v1 bound long after the surface joined and committed
+    map_subsurface(&mut ls, ws, w);
+    ls.probe.get_fractional_scale(&qh, ws);
+    ls.pump();
+    assert_eq!(ls.probe.preferred_scales_of("WS"), vec![180]);
+
+    // popup of W: the integer hint precedes its initial configure
+    let p = ls.probe.popup(
+        &qh,
+        "P",
+        w,
+        common::PopupSpec {
+            content: (120, 80),
+            shadow: 0,
+            anchor_rect: (10, 10, 20, 20),
+            slide: false,
+        },
+    );
+    ls.probe.get_fractional_scale(&qh, p);
+    ls.pump();
+    let at = |line: &str| {
+        ls.probe
+            .scale_log
+            .iter()
+            .position(|l| l == line)
+            .unwrap_or_else(|| panic!("`{line}` not on the wire: {:?}", ls.probe.scale_log))
+    };
+    assert!(
+        at("preferred_buffer_scale P 2") < at("configure P"),
+        "a popup learns the scale before its initial configure"
+    );
+    assert_eq!(ls.probe.preferred_scales_of("P"), vec![180]);
+
+    // nothing leaked across elements, and nobody was told twice
+    for (label, want) in [("W", vec![180]), ("X", vec![180, 98]), ("WF", vec![180])] {
+        assert_eq!(ls.probe.preferred_scales_of(label), want, "{label}");
+    }
+    assert!(ls.conn.protocol_error().is_none());
+}
+
+/// INV-SCALE-2 / P7 at several device ceilings: when a surface grows so that `h > H_max(E)`,
+/// the hint drops at once to `H_max(E) = D_max / s_max(E)`, exactly once, and the integer hint
+/// `b(h)` keeps an integer-scale buffer within `D_max` (E1R-N3). Values are F-SCALE-3's
+/// `round(h · 120)`.
+#[test]
+fn p7_forced_decrease_at_device_ceilings() {
+    // (D_max, logical side, preferred_scale after P7, b(h))
+    let cases: [(u32, i32, u32, i32); 4] = [
+        (4096, 3000, 164, 1),  // H_max = 1.3653
+        (8192, 3000, 328, 2),  // H_max = 2.7307
+        (16384, 8000, 246, 2), // H_max = 2.048
+        (16384, 3000, 360, 3), // H_dev = 5.46 > H_cfg: no decrease
+    ];
+    for (d_max, side, want_120, want_b) in cases {
+        let mut ls = Lockstep::new(Some(output_scaled("H", 360))); // 3.0x = H_cfg
+        let fx = ls
+            .state
+            .core_mut()
+            .set_renderer_device_max(d_max)
+            .expect("valid D_max");
+        ls.state.apply(&fx);
+        let qh = ls.qh.clone();
+        let w = ls
+            .probe
+            .toplevel_with_fractional_scale(&qh, "W", (800, 600), 0);
+        ls.pump();
+        ls.probe.draw(&qh, w);
+        ls.pump();
+        assert_eq!(
+            ls.probe.preferred_scales_of("W"),
+            vec![360],
+            "D_max {d_max}"
+        );
+        assert_eq!(ls.probe.preferred_buffer_scales_of("W"), vec![3]);
+
+        let vp = ls.probe.get_viewport(&qh, w).expect("wp_viewporter");
+        vp.set_destination(side, 600);
+        ls.probe.surfaces[w].wl.commit();
+        ls.pump();
+
+        let element = ls.state.elements().next().expect("element");
+        let h = ls.state.core().scale_state(element).expect("OBJ-16").h;
+        let h_max = (d_max as f64 / side as f64).min(3.0);
+        assert!(
+            (h - h_max).abs() < 1e-9,
+            "D_max {d_max}: h {h} = H_max {h_max}"
+        );
+        let mut want_scales = vec![360];
+        let mut want_buffers = vec![3];
+        if want_120 != 360 {
+            want_scales.push(want_120);
+            want_buffers.push(want_b);
+        }
+        assert_eq!(
+            ls.probe.preferred_scales_of("W"),
+            want_scales,
+            "D_max {d_max}, side {side}: one forced decrease"
+        );
+        assert_eq!(ls.probe.preferred_buffer_scales_of("W"), want_buffers);
+        assert!(
+            side as i64 * want_b as i64 <= d_max as i64,
+            "integer-scale buffer {side} × {want_b} fits D_max {d_max}"
+        );
+    }
+}
+
+/// OBJ-29 / M-renderer: a lower `D_max` reported later (renderer recreation) forces the
+/// decrease immediately; an invalid one is refused and changes nothing.
+#[test]
+fn device_ceiling_lowered_at_runtime_and_invalid_value_refused() {
+    let mut ls = Lockstep::new(Some(output_scaled("H", 360)));
+    let qh = ls.qh.clone();
+    let w = ls
+        .probe
+        .toplevel_with_fractional_scale(&qh, "W", (800, 600), 0);
+    ls.pump();
+    ls.probe.draw(&qh, w);
+    ls.pump();
+    let vp = ls.probe.get_viewport(&qh, w).expect("wp_viewporter");
+    vp.set_destination(3000, 600);
+    ls.probe.surfaces[w].wl.commit();
+    ls.pump();
+    assert_eq!(
+        ls.state.core().scale_config().d_max,
+        16384,
+        "the default ceiling is the EC-16 fixture"
+    );
+    assert_eq!(ls.probe.preferred_scales_of("W"), vec![360]);
+
+    for (d_max, want_120, want_b) in [(8192u32, 328u32, 2i32), (4096, 164, 1)] {
+        let fx = ls
+            .state
+            .core_mut()
+            .set_renderer_device_max(d_max)
+            .expect("valid D_max");
+        ls.state.apply(&fx);
+        ls.pump();
+        assert_eq!(
+            ls.probe.preferred_scales_of("W").last(),
+            Some(&want_120),
+            "D_max {d_max}"
+        );
+        assert_eq!(
+            ls.probe.preferred_buffer_scales_of("W").last(),
+            Some(&want_b)
+        );
+    }
+    assert_eq!(ls.probe.preferred_scales_of("W"), vec![360, 328, 164]);
+
+    assert_eq!(
+        ls.state.core_mut().set_renderer_device_max(0),
+        Err(infynitae_core::scale::ScaleConfigError::DeviceMax)
+    );
+    assert_eq!(ls.state.core().scale_config().d_max, 4096, "kept");
+    ls.pump();
+    assert_eq!(ls.probe.preferred_scales_of("W"), vec![360, 328, 164]);
 }

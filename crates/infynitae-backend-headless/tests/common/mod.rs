@@ -143,6 +143,9 @@ pub struct Probe {
     pub fractional_scales: Vec<(usize, WpFractionalScaleV1)>,
     pub preferred_scales: Vec<(String, u32)>,
     pub preferred_buffer_scales: Vec<(String, i32)>,
+    /// Ordered wire log of the scale hints and the configures they must precede:
+    /// "preferred_scale S N", "preferred_buffer_scale S N", "configure S" (xdg_surface).
+    pub scale_log: Vec<String>,
     pub viewporter: Option<WpViewporter>,
     pub viewports: Vec<(usize, WpViewport)>,
     /// Ordered wire log of the seat's pointer (the independent oracle for client-observed input):
@@ -461,6 +464,24 @@ impl Probe {
         size: (i32, i32),
         below: bool,
     ) -> usize {
+        let idx = self.subsurface_uncommitted(qh, label, parent, offset, size, below);
+        self.draw(qh, idx);
+        // position and stacking apply on the parent's commit
+        self.surfaces[parent].wl.commit();
+        idx
+    }
+
+    /// A desynchronised subsurface that has its role but no commit yet (neither its own nor
+    /// its parent's): the instant a surface joins a tree.
+    pub fn subsurface_uncommitted(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        label: &'static str,
+        parent: usize,
+        offset: (i32, i32),
+        size: (i32, i32),
+        below: bool,
+    ) -> usize {
         let idx = self.surfaces.len();
         let wl = self
             .compositor
@@ -490,9 +511,35 @@ impl Probe {
             popup_configure: None,
             frame_driven: false,
         });
-        self.draw(qh, idx);
-        parent_wl.commit(); // position and stacking apply on the parent's commit
         idx
+    }
+
+    /// Destroys the surface's `wp_fractional_scale_v1`; the surface itself stays.
+    pub fn destroy_fractional_scale(&mut self, idx: usize) {
+        self.fractional_scales.retain(|(i, fs)| {
+            if *i == idx {
+                fs.destroy();
+            }
+            *i != idx
+        });
+    }
+
+    /// Every `wp_fractional_scale_v1.preferred_scale` the surface received, in order.
+    pub fn preferred_scales_of(&self, label: &str) -> Vec<u32> {
+        self.preferred_scales
+            .iter()
+            .filter(|(l, _)| l == label)
+            .map(|(_, s)| *s)
+            .collect()
+    }
+
+    /// Every `wl_surface.preferred_buffer_scale` the surface received, in order.
+    pub fn preferred_buffer_scales_of(&self, label: &str) -> Vec<i32> {
+        self.preferred_buffer_scales
+            .iter()
+            .filter(|(l, _)| l == label)
+            .map(|(_, b)| *b)
+            .collect()
     }
 
     /// `wl_surface.set_input_region` from add/subtract operations, then commit.
@@ -802,6 +849,8 @@ impl Dispatch<WlSurface, ()> for Probe {
             wl_surface::Event::PreferredBufferScale { factor } => {
                 st.log
                     .push(format!("preferred_buffer_scale {label} {factor}"));
+                st.scale_log
+                    .push(format!("preferred_buffer_scale {label} {factor}"));
                 st.preferred_buffer_scales.push((label, factor));
             }
             _ => {}
@@ -882,6 +931,8 @@ impl Dispatch<WpFractionalScaleV1, usize> for Probe {
         if let wp_fractional_scale_v1::Event::PreferredScale { scale } = ev {
             let label = st.surfaces[*idx].label;
             st.log.push(format!("preferred_scale {label} {scale}"));
+            st.scale_log
+                .push(format!("preferred_scale {label} {scale}"));
             st.preferred_scales.push((label.to_string(), scale));
         }
     }
@@ -913,6 +964,8 @@ impl Dispatch<XdgSurface, usize> for Probe {
     ) {
         if let xdg_surface::Event::Configure { serial } = ev {
             st.configures.push(st.surfaces[*idx].label);
+            st.scale_log
+                .push(format!("configure {}", st.surfaces[*idx].label));
             xdg.ack_configure(serial);
             if !st.surfaces[*idx].configured {
                 st.surfaces[*idx].configured = true;
