@@ -175,7 +175,7 @@ impl ScaleState {
             self.epoch.deadline = if continuous {
                 None
             } else {
-                Some(now_ms + config.t_settle_ms)
+                Some(now_ms.saturating_add(config.t_settle_ms))
             };
         }
 
@@ -362,9 +362,12 @@ pub fn target(rho: f64, ladder: &[f64], h_max: f64, sigma: f64) -> f64 {
 /// ([`ScalePolicyConfig::validate`]). h < 1 is in the domain (an output scale below 1; a logical
 /// side above `D_max`) and is emitted as such. The only bounds applied are those of the wire
 /// type, a `uint` numerator: at least 1, at most `u32::MAX`.
+///
+/// A value outside the domain is a Core defect, reported by the assertion in debug and test
+/// builds. A release build still never puts 0 on the wire (`max` maps NaN to 1).
 pub fn preferred_scale_120(h: f64) -> u32 {
     debug_assert!(h.is_finite() && h > 0.0, "hint {h} outside its domain");
-    (h * 120.0).round().clamp(1.0, u32::MAX as f64) as u32
+    (h * 120.0).round().max(1.0).min(u32::MAX as f64) as u32
 }
 
 /// F-SCALE-3 / E1R-N3: Integer buffer scale b(h) bounded by H_dev(E).
@@ -879,6 +882,15 @@ mod tests {
         assert_eq!(preferred_scale_120(35_791_394.0), 4_294_967_280);
         assert_eq!(preferred_scale_120(35_791_395.0), u32::MAX, "saturates");
         assert_eq!(preferred_scale_120(1e300), u32::MAX);
+    }
+
+    /// C1: an out-of-domain hint is a Core defect and is reported, not emitted (debug and test
+    /// builds; a release build keeps the wire value at least 1).
+    #[cfg(debug_assertions)]
+    #[test]
+    #[should_panic(expected = "outside its domain")]
+    fn c1_out_of_domain_hint_is_reported() {
+        preferred_scale_120(f64::NAN);
     }
 
     /// C1: values outside the domain of h are refused where they would enter Core, not hidden

@@ -477,9 +477,14 @@ impl Core {
             let h_dev = scale::h_dev(s_max, d_max);
             let h_max = scale::h_max(self.scale_config.h_cfg, s_max, d_max);
             let ladder = scale::ladder(&output_scales, h_max, self.scale_config.r);
-            if st.p7_check(&ladder, h_max, self.scale_config.sigma) {
-                let s120 = scale::preferred_scale_120(st.h);
-                let b = scale::preferred_buffer_scale(st.h, h_dev);
+            let lowered = st.p7_check(&ladder, h_max, self.scale_config.sigma);
+            // b(h) depends on H_dev(E) even when h itself still fits (E1R-N3)
+            let s120 = scale::preferred_scale_120(st.h);
+            let b = scale::preferred_buffer_scale(st.h, h_dev);
+            if lowered
+                || st.last_emitted_scale_120 != Some(s120)
+                || st.last_emitted_buffer_scale != Some(b)
+            {
                 st.last_emitted_scale_120 = Some(s120);
                 st.last_emitted_buffer_scale = Some(b);
                 fx.push(protocol::Effect::PreferredScale {
@@ -568,7 +573,7 @@ impl Core {
             st.epoch.deadline = if continuous {
                 None
             } else {
-                Some(now_ms + self.scale_config.t_settle_ms)
+                Some(now_ms.saturating_add(self.scale_config.t_settle_ms))
             };
             st.epoch.direction = 0;
         }
@@ -866,6 +871,50 @@ mod tests {
         core.toplevel_committed(id, first).unwrap();
         core.toplevel_committed(id, t).unwrap();
         id
+    }
+
+    /// C1: a scale parameter outside its §PROV range is refused at the Core boundary and the
+    /// configuration in force is kept; a valid one replaces it.
+    #[test]
+    fn scale_config_is_validated_at_the_core_boundary() {
+        let (mut core, _o) = connected();
+        let in_force = *core.scale_config();
+        for bad in [
+            scale::ScalePolicyConfig {
+                h_cfg: f64::NAN,
+                ..in_force
+            },
+            scale::ScalePolicyConfig { r: 1.0, ..in_force },
+            scale::ScalePolicyConfig {
+                sigma: 0.25,
+                ..in_force
+            },
+            scale::ScalePolicyConfig {
+                t_settle_ms: 0,
+                ..in_force
+            },
+            scale::ScalePolicyConfig {
+                d_max: 0,
+                ..in_force
+            },
+        ] {
+            assert!(core.set_scale_config(bad).is_err(), "{bad:?}");
+            assert_eq!(*core.scale_config(), in_force, "kept after {bad:?}");
+        }
+        assert_eq!(
+            core.set_renderer_device_max(0),
+            Err(scale::ScaleConfigError::DeviceMax)
+        );
+        assert_eq!(*core.scale_config(), in_force);
+        let tuned = scale::ScalePolicyConfig {
+            h_cfg: 2.0,
+            r: 1.5,
+            sigma: 0.1,
+            t_settle_ms: 250,
+            d_max: 8192,
+        };
+        assert_eq!(core.set_scale_config(tuned), Ok(()));
+        assert_eq!(*core.scale_config(), tuned);
     }
 
     fn connected() -> (Core, output::OutputId) {
