@@ -141,12 +141,18 @@ impl Stage {
         }
     }
 
+    /// `records` is ascending by id: `create` appends a strictly larger id and `destroy` keeps
+    /// the order, so a lookup is a binary search.
+    fn index(&self, id: ElementId) -> Option<usize> {
+        self.records.binary_search_by_key(&id, |r| r.id).ok()
+    }
+
     fn record(&self, id: ElementId) -> Option<&Record> {
-        self.records.iter().find(|r| r.id == id)
+        self.index(id).map(|i| &self.records[i])
     }
 
     fn record_mut(&mut self, id: ElementId) -> Option<&mut Record> {
-        self.records.iter_mut().find(|r| r.id == id)
+        self.index(id).map(|i| &mut self.records[i])
     }
 
     // ------------------------------------------------------------ writers (crate-private)
@@ -242,6 +248,38 @@ mod tests {
         assert!(!s.destroy(a));
         assert_eq!(s.resolve(r), Err(StaleElement));
         assert_eq!(s.place(a, CanvasPoint { x: 0, y: 0 }), Err(StaleElement));
+    }
+
+    /// The lookup is a binary search over `records`; it must agree with a linear scan through
+    /// creates and destroys in any order.
+    #[test]
+    fn lookup_agrees_with_a_linear_scan_under_churn() {
+        let mut s = Stage::new(InstanceId(1));
+        let mut live: Vec<ElementId> = Vec::new();
+        let mut dead: Vec<ElementId> = Vec::new();
+        let mut x = 0x9e37_79b9_7f4a_7c15u64;
+        for _ in 0..2000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            if live.is_empty() || x % 3 != 0 {
+                live.push(s.create());
+            } else {
+                let id = live.remove((x >> 8) as usize % live.len());
+                assert!(s.destroy(id));
+                dead.push(id);
+            }
+            assert!(s.records.windows(2).all(|w| w[0].id < w[1].id));
+            for &id in &live {
+                let linear = s.records.iter().position(|r| r.id == id);
+                assert!(linear.is_some());
+                assert_eq!(s.index(id), linear);
+            }
+            for &id in &dead {
+                assert_eq!(s.index(id), None);
+                assert_eq!(s.state(id), None);
+            }
+        }
     }
 
     #[test]
