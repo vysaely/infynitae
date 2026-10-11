@@ -340,8 +340,13 @@ pub fn run_headless(
         )
         .map_err(|e| format!("Failed to register display event source: {e}"))?;
 
-    // Ingest renderer device ceiling D_max = 16384 (OB-23, F-SCALE-2)
-    state.core_mut().set_renderer_device_max(16384);
+    // Device ceiling D_max (OB-13, F-SCALE-2, OBJ-29). The headless backend has no GPU to ask:
+    // this is the EC-16 device fact supplied as an explicit, deterministic fixture, not a query.
+    let fx = state
+        .core_mut()
+        .set_renderer_device_max(infynitae_core::scale::DEFAULT_D_MAX)
+        .map_err(|e| format!("Invalid renderer device limit: {e:?}"))?;
+    state.apply(&fx);
 
     let mut data = HeadlessData { display, children };
     let start_time = Instant::now();

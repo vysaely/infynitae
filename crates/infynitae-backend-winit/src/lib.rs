@@ -174,8 +174,14 @@ pub fn run_nested(
         .map_err(|e| format!("Failed to connect output: {e:?}"))?;
     state.apply(&effects);
 
-    // Ingest renderer device ceiling D_max = 16384 (OB-23, F-SCALE-2)
-    state.core_mut().set_renderer_device_max(16384);
+    // Device ceiling D_max (OB-13, F-SCALE-2, OBJ-29). PROVISIONAL: the EC-16 device fact, not
+    // a value discovered from this GLES renderer; the host GPU's real limit may be lower. Runtime
+    // discovery for the nested backend is not implemented (OB-13 residual).
+    let fx = state
+        .core_mut()
+        .set_renderer_device_max(infynitae_core::scale::DEFAULT_D_MAX)
+        .map_err(|e| format!("Invalid renderer device limit: {e:?}"))?;
+    state.apply(&fx);
 
     // 5. Spawn client command if requested
     let mut children = Vec::new();

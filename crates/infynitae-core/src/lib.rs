@@ -447,13 +447,28 @@ impl Core {
         &self.scale_config
     }
 
-    /// Update scale policy configuration.
-    pub fn set_scale_config(&mut self, config: scale::ScalePolicyConfig) {
+    /// Update scale policy configuration. A value outside its allowed range (§PROV) is refused
+    /// and the configuration in force is kept.
+    pub fn set_scale_config(
+        &mut self,
+        config: scale::ScalePolicyConfig,
+    ) -> Result<(), scale::ScaleConfigError> {
+        config.validate()?;
         self.scale_config = config;
+        Ok(())
     }
 
-    /// Ingests renderer device maximum dimension D_max (OB-23, F-SCALE-2) and runs P7 checks.
-    pub fn set_renderer_device_max(&mut self, d_max: u32) -> Vec<protocol::Effect> {
+    /// Ingests the renderer's device limit `D_max` (OB-13, F-SCALE-2, OBJ-29) and runs P7.
+    /// `D_max = 0` is refused: the ceiling in force is kept and nothing is emitted.
+    pub fn set_renderer_device_max(
+        &mut self,
+        d_max: u32,
+    ) -> Result<Vec<protocol::Effect>, scale::ScaleConfigError> {
+        scale::ScalePolicyConfig {
+            d_max,
+            ..self.scale_config
+        }
+        .validate()?;
         self.scale_config.d_max = d_max;
         let output_scales: Vec<f64> = self.outputs.iter().map(|o| o.scale).collect();
         let mut fx = Vec::new();
@@ -474,7 +489,7 @@ impl Core {
                 });
             }
         }
-        fx
+        Ok(fx)
     }
 
     /// Preferred scale for an element: (scale_120, integer_buffer_scale).

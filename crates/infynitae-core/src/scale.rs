@@ -26,6 +26,8 @@ pub const DEFAULT_H_CFG: f64 = 3.0;
 pub const DEFAULT_R: f64 = 1.25;
 pub const DEFAULT_SIGMA: f64 = 0.05;
 pub const DEFAULT_T_SETTLE_MS: u64 = 300;
+/// EC-16 (`maxFramebufferWidth`, RX 9070 XT / RADV): a recorded device fact used as the
+/// provisional `D_max`, not a runtime query.
 pub const DEFAULT_D_MAX: u32 = 16384;
 
 /// Configurable scale policy parameters (PROV-1..3, PROV-5).
@@ -39,7 +41,8 @@ pub struct ScalePolicyConfig {
     pub sigma: f64,
     /// ScaleInteractionEpoch settlement timeout T_settle in milliseconds (PROV-5, candidate 300 ms).
     pub t_settle_ms: u64,
-    /// Maximum texture side D_max queried from renderer capability (default 16384).
+    /// Device limit `D_max` supplied by the backend for its renderer (F-SCALE-2, OBJ-29).
+    /// The default is the EC-16 device fact, not a query.
     pub d_max: u32,
 }
 
@@ -52,6 +55,44 @@ impl Default for ScalePolicyConfig {
             t_settle_ms: DEFAULT_T_SETTLE_MS,
             d_max: DEFAULT_D_MAX,
         }
+    }
+}
+
+/// A scale policy parameter outside its allowed range (§PROV, F-SCALE-2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ScaleConfigError {
+    /// `H_cfg` not finite and positive (PROV-1; F-SCALE-2 needs it finite).
+    HCfg,
+    /// `r` outside `1 < r ≤ 2` (PROV-2).
+    Ratio,
+    /// `σ` outside `0 ≤ σ < r − 1` (PROV-3).
+    Sigma,
+    /// `T_settle` not positive (PROV-5).
+    SettleTimeout,
+    /// `D_max` is 0: no buffer fits such a device and `H_dev` would be 0 (F-SCALE-2).
+    DeviceMax,
+}
+
+impl ScalePolicyConfig {
+    /// The per-value ranges of §PROV. They are what keeps h in `(0, H_cfg]`: every hint is a
+    /// rung `≤ H_max(E) = min(H_cfg, D_max / s_max(E))`.
+    pub fn validate(&self) -> Result<(), ScaleConfigError> {
+        if !(self.h_cfg.is_finite() && self.h_cfg > 0.0) {
+            return Err(ScaleConfigError::HCfg);
+        }
+        if !(self.r > 1.0 && self.r <= 2.0) {
+            return Err(ScaleConfigError::Ratio);
+        }
+        if !(self.sigma >= 0.0 && self.sigma < self.r - 1.0) {
+            return Err(ScaleConfigError::Sigma);
+        }
+        if self.t_settle_ms == 0 {
+            return Err(ScaleConfigError::SettleTimeout);
+        }
+        if self.d_max == 0 {
+            return Err(ScaleConfigError::DeviceMax);
+        }
+        Ok(())
     }
 }
 
@@ -314,9 +355,16 @@ pub fn target(rho: f64, ladder: &[f64], h_max: f64, sigma: f64) -> f64 {
     h_max
 }
 
-/// F-SCALE-3 / wp_fractional_scale_v1: Preferred scale in 1/120 units.
+/// F-SCALE-3 / wp_fractional_scale_v1: `preferred_scale = round(h · 120)`, in 1/120 units.
+///
+/// Domain: h finite and positive. That holds for every authoritative hint, because the
+/// parameters that bound it are validated where they enter Core
+/// ([`ScalePolicyConfig::validate`]). h < 1 is in the domain (an output scale below 1; a logical
+/// side above `D_max`) and is emitted as such. The only bounds applied are those of the wire
+/// type, a `uint` numerator: at least 1, at most `u32::MAX`.
 pub fn preferred_scale_120(h: f64) -> u32 {
-    (h * 120.0).round().max(120.0) as u32
+    debug_assert!(h.is_finite() && h > 0.0, "hint {h} outside its domain");
+    (h * 120.0).round().clamp(1.0, u32::MAX as f64) as u32
 }
 
 /// F-SCALE-3 / E1R-N3: Integer buffer scale b(h) bounded by H_dev(E).
@@ -796,6 +844,113 @@ mod tests {
                     "side {side} * b {b} = {} must fit D_max {d_max}",
                     side * b
                 );
+            }
+        }
+    }
+
+    /// C1 (INC-6 hardening): `preferred_scale = round(h · 120)` over the whole domain of h
+    /// (F-SCALE-3). h < 1 is legitimate: an output scale below 1 is a rung (F-SCALE-2), and
+    /// `H_max(E) < 1` when a logical side exceeds `D_max` (the EE-5 case `(20000, 0.8192)`).
+    #[test]
+    fn c1_preferred_scale_is_round_h_times_120_below_one() {
+        assert_eq!(preferred_scale_120(0.75), 90);
+        assert_eq!(preferred_scale_120(1.0), 120);
+        assert_eq!(preferred_scale_120(1.25), 150);
+        assert_eq!(preferred_scale_120(0.8192), 98, "EE-5: side 20000 at D_max");
+        assert_eq!(preferred_scale_120(2.048), 246);
+    }
+
+    /// C1: the only bounds are those of the wire type. `wp_fractional_scale_v1.preferred_scale`
+    /// is a `uint` numerator over 120, so a positive h never becomes 0 and never wraps.
+    #[test]
+    fn c1_preferred_scale_wire_bounds() {
+        assert_eq!(preferred_scale_120(1.0 / 120.0), 1);
+        assert_eq!(
+            preferred_scale_120(1.0 / 240.0),
+            1,
+            "0.5 rounds away from zero"
+        );
+        assert_eq!(
+            preferred_scale_120(1e-9),
+            1,
+            "positive h is never sent as 0"
+        );
+        assert_eq!(preferred_scale_120(f64::MIN_POSITIVE), 1);
+        assert_eq!(preferred_scale_120(35_791_394.0), 4_294_967_280);
+        assert_eq!(preferred_scale_120(35_791_395.0), u32::MAX, "saturates");
+        assert_eq!(preferred_scale_120(1e300), u32::MAX);
+    }
+
+    /// C1: values outside the domain of h are refused where they would enter Core, not hidden
+    /// by the emission: every parameter that determines `H_max` is validated (PROV-1…3, PROV-5,
+    /// `D_max`).
+    #[test]
+    fn c1_invalid_policy_parameters_are_rejected() {
+        let ok = ScalePolicyConfig::default();
+        assert_eq!(ok.validate(), Ok(()));
+        for h_cfg in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, 0.0, -1.0] {
+            let c = ScalePolicyConfig { h_cfg, ..ok };
+            assert_eq!(c.validate(), Err(ScaleConfigError::HCfg), "h_cfg {h_cfg}");
+        }
+        for r in [f64::NAN, f64::INFINITY, 1.0, 0.5, 2.5] {
+            let c = ScalePolicyConfig { r, ..ok };
+            assert_eq!(c.validate(), Err(ScaleConfigError::Ratio), "r {r}");
+        }
+        for sigma in [f64::NAN, f64::INFINITY, -0.01, 0.25, 1.0] {
+            let c = ScalePolicyConfig { sigma, ..ok };
+            assert_eq!(c.validate(), Err(ScaleConfigError::Sigma), "sigma {sigma}");
+        }
+        let c = ScalePolicyConfig {
+            t_settle_ms: 0,
+            ..ok
+        };
+        assert_eq!(c.validate(), Err(ScaleConfigError::SettleTimeout));
+        let c = ScalePolicyConfig { d_max: 0, ..ok };
+        assert_eq!(c.validate(), Err(ScaleConfigError::DeviceMax));
+        // the edges of the allowed ranges are accepted
+        let c = ScalePolicyConfig {
+            r: 2.0,
+            sigma: 0.0,
+            d_max: 1,
+            ..ok
+        };
+        assert_eq!(c.validate(), Ok(()));
+    }
+
+    /// C1: with valid parameters h never leaves its domain, so the emission never needs a
+    /// policy clamp. Sweeps `D_max` ∈ {4096, 8192, 16384}, extents from 0 to past `i32::MAX / 2`
+    /// and output scales on both sides of 1.
+    #[test]
+    fn c1_hint_domain_is_closed_under_valid_parameters() {
+        let outputs: [&[f64]; 5] = [&[], &[0.75], &[1.0, 1.5], &[0.5, 2.0, 3.0], &[1.0 / 120.0]];
+        for d_max in [4096u32, 8192, 16384] {
+            for h_cfg in [1.0f64, 1.5, 3.0, 8.0] {
+                for r in [1.05f64, 1.25, 2.0] {
+                    for s_max in [0u32, 1, 600, 4096, 4097, 5000, 8000, 20000, 1_500_000_000] {
+                        for scales in outputs {
+                            let hm = h_max(h_cfg, s_max, d_max);
+                            let hd = h_dev(s_max, d_max);
+                            assert!(hm.is_finite() && hm > 0.0);
+                            let l = ladder(scales, hm, r);
+                            for rho in [0.01f64, 0.5, 0.75, 1.0, 1.5, 2.9, 3.0, 50.0] {
+                                let h = target(rho, &l, hm, 0.04);
+                                assert!(
+                                    h.is_finite() && h > 0.0 && h <= hm + 1e-12,
+                                    "h {h} outside (0, H_max {hm}]"
+                                );
+                                assert!(preferred_scale_120(h) >= 1);
+                                let b = preferred_buffer_scale(h, hd);
+                                assert!(b >= 1);
+                                if s_max > 0 && s_max <= d_max {
+                                    assert!(
+                                        s_max as u64 * b as u64 <= d_max as u64,
+                                        "integer buffer {s_max} × {b} exceeds D_max {d_max}"
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }

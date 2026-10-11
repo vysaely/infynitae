@@ -291,7 +291,11 @@ fn viewporter_destination_sizing_and_p7_ceiling() {
     ls.pump();
 
     // Ingest D_max = 16384
-    let fx = ls.state.core_mut().set_renderer_device_max(16384);
+    let fx = ls
+        .state
+        .core_mut()
+        .set_renderer_device_max(16384)
+        .expect("valid D_max");
     ls.state.apply(&fx);
     ls.pump();
 
