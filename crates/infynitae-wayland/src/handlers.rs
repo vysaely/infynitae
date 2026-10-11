@@ -48,6 +48,20 @@ impl WaylandState {
         }
     }
 
+    /// A surface that joins an element's tree after the hint was last sent — a new subsurface
+    /// or a new popup — is told the element's current hint, with the subsurfaces already below
+    /// it. Later changes reach it with the rest of the tree (`Effect::PreferredScale`). The
+    /// value is Core's (OBJ-16); only the routing is decided here.
+    fn send_current_preferred_scale(&self, surface: &WlSurface) {
+        if let Some((scale_120, integer_scale)) = self
+            .toplevel_root(surface)
+            .and_then(|root| self.element_index_by_root(&root))
+            .and_then(|i| self.core.preferred_scale_of(self.elements[i].id))
+        {
+            convert::send_preferred_scale_to_tree(surface, scale_120, integer_scale);
+        }
+    }
+
     /// Input consequence of a popup's death (A1, INV-INPUT-8/10). The popup lifetime is owned by
     /// the client (Smithay's chain is its record); ActiveElementFocus by Core; this keeps the
     /// Smithay keyboard route consistent with both, explicitly — never through Smithay's lazy
@@ -211,6 +225,10 @@ impl CompositorHandler for WaylandState {
         });
     }
 
+    fn new_subsurface(&mut self, surface: &WlSurface, _parent: &WlSurface) {
+        self.send_current_preferred_scale(surface);
+    }
+
     fn commit(&mut self, surface: &WlSurface) {
         on_commit_buffer_handler::<Self>(surface);
         self.popups.commit(surface);
@@ -308,7 +326,10 @@ impl XdgShellHandler for WaylandState {
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
         self.place_popup(&surface, positioner, None);
+        let wl_surface = surface.wl_surface().clone();
         let _ = self.popups.track_popup(PopupKind::Xdg(surface));
+        // before the popup's initial configure, which waits for its initial commit
+        self.send_current_preferred_scale(&wl_surface);
     }
 
     fn reposition_request(
@@ -422,16 +443,10 @@ delegate_shm!(WaylandState);
 delegate_viewporter!(WaylandState);
 delegate_xdg_shell!(WaylandState);
 
-impl smithay::wayland::fractional_scale::FractionalScaleHandler for WaylandState {
-    fn new_fractional_scale(&mut self, surface: WlSurface) {
-        if let Some(key) = self.registry.key(&surface)
-            && let Some(element) = self.core.stage().element_containing_surface(key)
-            && let Some((scale_120, integer_scale)) = self.core.preferred_scale_of(element)
-        {
-            convert::send_preferred_scale_to_surface(&surface, scale_120, integer_scale);
-        }
-    }
-}
+/// Nothing to do at bind time: every surface of an element's tree already holds the element's
+/// hint (it was told when it joined, and with every change since), and Smithay sends the held
+/// value to a `wp_fractional_scale_v1` when it is created.
+impl smithay::wayland::fractional_scale::FractionalScaleHandler for WaylandState {}
 
 impl PointerConstraintsHandler for WaylandState {
     fn new_constraint(

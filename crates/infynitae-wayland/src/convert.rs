@@ -250,33 +250,47 @@ pub(crate) fn convert_region(
     }
 }
 
-/// Sends preferred fractional scale and integer buffer scale to every surface in `window`.
+/// Sends an element's hint to every surface of its tree: the root tree and each popup tree, the
+/// set the snapshot reports to Core and `s_max(E)` ranges over (F-SCALE-2).
 pub fn send_preferred_scale_to_window(
     window: &smithay::desktop::Window,
     scale_120: u32,
     integer_scale: u32,
 ) {
-    if let Some(toplevel) = window.toplevel() {
-        let root = toplevel.wl_surface();
-        send_preferred_scale_to_surface(root, scale_120, integer_scale);
-    }
+    window.with_surfaces(|surface, states| {
+        send_preferred_scale(surface, states, scale_120, integer_scale);
+    });
 }
 
-/// Sends preferred fractional scale and integer buffer scale to a surface.
-pub fn send_preferred_scale_to_surface(
-    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+/// Sends a hint to `root` and the subsurfaces below it: a subtree that joined an element.
+pub(crate) fn send_preferred_scale_to_tree(
+    root: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     scale_120: u32,
     integer_scale: u32,
 ) {
-    with_states(surface, |states| {
-        smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
-            fs.set_preferred_scale(scale_120 as f64 / 120.0);
-        });
-        smithay::wayland::compositor::send_surface_state(
-            surface,
-            states,
-            integer_scale as i32,
-            smithay::utils::Transform::Normal,
-        );
+    smithay::desktop::utils::with_surfaces_surface_tree(root, |surface, states| {
+        send_preferred_scale(surface, states, scale_120, integer_scale);
     });
+}
+
+/// `wp_fractional_scale_v1.preferred_scale` and `wl_surface.preferred_buffer_scale` for one
+/// surface; Smithay sends each only when it differs from what the surface was last told.
+///
+/// Dispatch safety: `states` is the `SurfaceData` the traversal hands out while it holds the
+/// surface's lock. A `with_states` call for the same surface here would deadlock.
+fn send_preferred_scale(
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    states: &smithay::wayland::compositor::SurfaceData,
+    scale_120: u32,
+    integer_scale: u32,
+) {
+    smithay::wayland::fractional_scale::with_fractional_scale(states, |fs| {
+        fs.set_preferred_scale(scale_120 as f64 / 120.0);
+    });
+    smithay::wayland::compositor::send_surface_state(
+        surface,
+        states,
+        integer_scale as i32,
+        smithay::utils::Transform::Normal,
+    );
 }
