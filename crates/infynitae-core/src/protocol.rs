@@ -171,7 +171,7 @@ impl Core {
                 self.focus.target_lost(id, &live)
             }
         };
-        fx.extend(self.visibility_pass());
+        fx.extend(self.visibility_pass_element(id));
         fx.extend(self.reconcile_constraints());
         Ok(fx)
     }
@@ -197,7 +197,7 @@ impl Core {
         self.stage
             .set_tree(id, Some(tree))
             .map_err(|_| ProtocolError::StaleElement)?;
-        let mut fx = self.visibility_pass();
+        let mut fx = self.visibility_pass_element(id);
         fx.extend(self.reconcile_constraints());
         Ok(fx)
     }
@@ -215,7 +215,7 @@ impl Core {
         }
         let live: Vec<ElementId> = self.stage.mapped_elements();
         let mut fx = self.focus.target_lost(id, &live);
-        let vis = self.visibility_pass();
+        let vis = self.visibility_pass_element(id);
         debug_assert!(
             vis.is_empty(),
             "a destroyed element produced visibility effects"

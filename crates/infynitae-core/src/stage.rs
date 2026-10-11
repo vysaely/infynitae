@@ -4,7 +4,7 @@
 use std::num::NonZeroU64;
 
 use crate::geom::CanvasPoint;
-use crate::snapshot::SurfaceTree;
+use crate::snapshot::{Extent, SurfaceTree};
 
 /// Element identity: non-zero, monotonic, never reused within a process (INV-STAGE-3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -50,6 +50,20 @@ struct Record {
     state: Lifecycle,
     anchor: Option<CanvasPoint>,
     tree: Option<SurfaceTree>,
+    /// `tree.extent()`, written with the tree in `set_tree` (its only writer).
+    extent: Option<Extent>,
+}
+
+/// An element's bounding box in Canvas pixels: `[x0, x1) × [y0, y1)`.
+pub(crate) type CanvasBox = (i64, i64, i64, i64);
+
+fn at(anchor: CanvasPoint, e: Extent) -> CanvasBox {
+    (
+        anchor.x + e.x0,
+        anchor.y + e.y0,
+        anchor.x + e.x1,
+        anchor.y + e.y1,
+    )
 }
 
 #[derive(Debug)]
@@ -133,6 +147,44 @@ impl Stage {
         })
     }
 
+    /// One mapped element's anchor, snapshot and Canvas bounding box (`None` box: nothing of it
+    /// can be shown).
+    pub(crate) fn mapped(
+        &self,
+        id: ElementId,
+    ) -> Option<(CanvasPoint, &SurfaceTree, Option<CanvasBox>)> {
+        let r = self.record(id)?;
+        match (r.state, r.anchor, r.tree.as_ref()) {
+            (Lifecycle::Mapped, Some(a), Some(t)) => Some((a, t, r.extent.map(|e| at(a, e)))),
+            _ => None,
+        }
+    }
+
+    /// Every mapped element with its Canvas bounding box, in no meaningful order (ascending id):
+    /// for consumers that do not depend on z-order, without a lookup per element.
+    pub(crate) fn mapped_boxed(
+        &self,
+    ) -> impl Iterator<Item = (ElementId, CanvasPoint, &SurfaceTree, Option<CanvasBox>)> {
+        self.records
+            .iter()
+            .filter_map(|r| match (r.state, r.anchor, r.tree.as_ref()) {
+                (Lifecycle::Mapped, Some(a), Some(t)) => {
+                    Some((r.id, a, t, r.extent.map(|e| at(a, e))))
+                }
+                _ => None,
+            })
+    }
+
+    /// [`Stage::front_to_back`] with each element's Canvas bounding box.
+    pub(crate) fn front_to_back_boxed(
+        &self,
+    ) -> impl Iterator<Item = (ElementId, CanvasPoint, &SurfaceTree, Option<CanvasBox>)> {
+        self.z.iter().rev().filter_map(|&id| {
+            let (a, t, b) = self.mapped(id)?;
+            Some((id, a, t, b))
+        })
+    }
+
     pub fn resolve(&self, r: ElementRef) -> Result<ElementId, StaleElement> {
         if r.instance == self.instance && self.record(r.element).is_some() {
             Ok(r.element)
@@ -166,6 +218,7 @@ impl Stage {
             state: Lifecycle::AwaitingInitialCommit,
             anchor: None,
             tree: None,
+            extent: None,
         });
         id
     }
@@ -192,7 +245,9 @@ impl Stage {
         id: ElementId,
         tree: Option<SurfaceTree>,
     ) -> Result<(), StaleElement> {
-        self.record_mut(id).ok_or(StaleElement)?.tree = tree;
+        let r = self.record_mut(id).ok_or(StaleElement)?;
+        r.extent = tree.as_ref().and_then(SurfaceTree::extent);
+        r.tree = tree;
         Ok(())
     }
 
@@ -262,7 +317,7 @@ mod tests {
             x ^= x << 13;
             x ^= x >> 7;
             x ^= x << 17;
-            if live.is_empty() || x % 3 != 0 {
+            if live.is_empty() || !x.is_multiple_of(3) {
                 live.push(s.create());
             } else {
                 let id = live.remove((x >> 8) as usize % live.len());

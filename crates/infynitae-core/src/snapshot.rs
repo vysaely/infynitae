@@ -86,6 +86,15 @@ pub struct SurfaceTree {
     pub surfaces: Vec<SnapshotSurface>,
 }
 
+/// Integral Canvas edges relative to an element's anchor (see [`SurfaceTree::extent`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Extent {
+    pub x0: i64,
+    pub y0: i64,
+    pub x1: i64,
+    pub y1: i64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SnapshotError {
     /// Not exactly one root surface.
@@ -199,6 +208,36 @@ impl SurfaceTree {
                 }
             })
             .collect()
+    }
+
+    /// The bounding box, relative to the anchor, of every surface that can produce a render-list
+    /// entry: shown and of positive size. `None` when there is none (or the tree is invalid), so
+    /// the element is on no output whatever the view. Origins are the anchor plus integers
+    /// (F-ORIGIN-1), so the box translates with the anchor exactly.
+    pub fn extent(&self) -> Option<Extent> {
+        let origins = self.origins(CanvasPoint { x: 0, y: 0 }).ok()?;
+        let mut out: Option<Extent> = None;
+        for ((s, o), shown) in self.surfaces.iter().zip(origins).zip(self.shown()) {
+            if !shown || s.size.w <= 0 || s.size.h <= 0 {
+                continue;
+            }
+            let e = Extent {
+                x0: o.x,
+                y0: o.y,
+                x1: o.x + s.size.w as i64,
+                y1: o.y + s.size.h as i64,
+            };
+            out = Some(match out {
+                None => e,
+                Some(b) => Extent {
+                    x0: b.x0.min(e.x0),
+                    y0: b.y0.min(e.y0),
+                    x1: b.x1.max(e.x1),
+                    y1: b.y1.max(e.y1),
+                },
+            });
+        }
+        out
     }
 
     pub fn root(&self) -> Option<&SnapshotSurface> {

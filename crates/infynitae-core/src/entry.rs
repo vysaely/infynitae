@@ -217,7 +217,7 @@ impl Core {
                 self.cameras.pan(proof, camera, start, sum);
                 self.frames.retain(|(o, _)| *o != output);
                 #[allow(unused_mut)]
-                let mut fx = self.visibility_pass();
+                let mut fx = self.visibility_pass_camera(camera);
                 #[cfg(feature = "probe_pan_motion_bypass")]
                 // NEGATIVE CONTROL (INV-INPUT-3 bypass switch, TST-05): pan motion also reaches
                 // the client. The x8 tests must fail under it.

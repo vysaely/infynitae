@@ -13,7 +13,9 @@ use infynitae_core::geom::{LocalPoint, LocalRect, LocalSize};
 use infynitae_core::input::bindings::Modifiers;
 use infynitae_core::navigation::PersistedCameras;
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
-use infynitae_core::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+use infynitae_core::snapshot::{
+    InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree,
+};
 use infynitae_core::stage::ElementId;
 use infynitae_core::{Core, InputPort, PhysicalEvent};
 
@@ -158,7 +160,12 @@ fn scaling(n: usize, two_outputs: bool) {
     let mut ids = Vec::new();
     for i in 0..n {
         ids.push(map(&mut core, i as u64 + 1));
-        pan(&mut core, &mut port, -700.0, if i % 40 == 39 { -520.0 } else { 0.0 });
+        pan(
+            &mut core,
+            &mut port,
+            -700.0,
+            if i % 40 == 39 { -520.0 } else { 0.0 },
+        );
     }
     let (cx, cy) = centre(&core, o);
     pan(&mut core, &mut port, cx, cy);
@@ -190,7 +197,10 @@ fn scaling(n: usize, two_outputs: bool) {
     });
     let far = ids[n - 1];
     let commit_far = timed(iters, |_| {
-        std::hint::black_box(core.toplevel_committed(far, tree(n as u64, true, 2)).unwrap());
+        std::hint::black_box(
+            core.toplevel_committed(far, tree(n as u64, true, 2))
+                .unwrap(),
+        );
     });
     // unmap, initial commit and map of one visible window
     let remap = timed(iters, |_| {
@@ -224,7 +234,10 @@ fn scaling(n: usize, two_outputs: bool) {
 }
 
 fn main() {
-    let args: Vec<usize> = std::env::args().skip(1).filter_map(|a| a.parse().ok()).collect();
+    let args: Vec<usize> = std::env::args()
+        .skip(1)
+        .filter_map(|a| a.parse().ok())
+        .collect();
     let sizes = if args.is_empty() {
         vec![1, 10, 100, 1000, 3000, 10000]
     } else {
@@ -233,7 +246,19 @@ fn main() {
     println!("microseconds per operation (release build expected)");
     println!(
         "{:>6} {:>2} {:>4} | {:>9} {:>9} {:>9} | {:>9} {:>9} {:>9} {:>9} | {:>9} {:>9} {:>9}",
-        "N", "O", "vis", "pan", "pan-cross", "render", "commit", "commit-far", "remap", "churn", "motion", "tick", "hotplug"
+        "N",
+        "O",
+        "vis",
+        "pan",
+        "pan-cross",
+        "render",
+        "commit",
+        "commit-far",
+        "remap",
+        "churn",
+        "motion",
+        "tick",
+        "hotplug"
     );
     for two in [false, true] {
         for &n in &sizes {

@@ -397,26 +397,59 @@ impl Core {
     /// `output` (INV-FRAME-1, INV-FRAME-2, M16). Unobserved elements are not completed here
     /// (kick and fallback are INC-8).
     pub fn frame_tick(&self, output: output::OutputId) -> Vec<stage::ElementId> {
-        let mut out: Vec<stage::ElementId> = self
-            .stage
-            .z_order()
-            .iter()
-            .copied()
+        // only an observed element has a clock, so the membership rows are the candidates
+        self.membership
+            .observed()
             .filter(|&e| self.clock_output_of(e) == Some(output))
-            .collect();
-        out.sort();
-        out
+            .collect()
+    }
+
+    pub(crate) fn views(&self) -> Vec<(output::OutputId, projection::View)> {
+        self.outputs
+            .iter()
+            .filter_map(|o| self.view(o.id).map(|v| (o.id, v)))
+            .collect()
     }
 
     /// The visibility pass (OBJ-13): membership recomputed from Stage, cameras and outputs; its
-    /// diff becomes enter/leave effects. Run at the end of every core batch that can change it.
+    /// diff becomes enter/leave effects. Run at the end of a core batch that changes the set of
+    /// outputs or an output's hardware facts; a batch that changes one element or one camera
+    /// runs the scoped pass for it.
     pub(crate) fn visibility_pass(&mut self) -> Vec<protocol::Effect> {
-        let views: Vec<_> = self
-            .outputs
-            .iter()
-            .filter_map(|o| self.view(o.id).map(|v| (o.id, v)))
-            .collect();
-        let new = visibility::MembershipTable::compute(&self.stage, &views);
+        let new = visibility::MembershipTable::compute(&self.stage, &self.views());
+        let fx = self.membership.diff(&new, &self.stage);
+        self.membership = new;
+        fx
+    }
+
+    /// The visibility pass of a batch that changed only `element` (its snapshot, lifecycle or
+    /// anchor): no other element's membership depends on it.
+    pub(crate) fn visibility_pass_element(
+        &mut self,
+        element: stage::ElementId,
+    ) -> Vec<protocol::Effect> {
+        let views = self.views();
+        self.membership
+            .replace_element(element, &self.stage, &views)
+    }
+
+    /// The visibility pass of a batch that changed only `camera`: the outputs it is bound to are
+    /// the only views that moved.
+    pub(crate) fn visibility_pass_camera(&mut self, camera: usize) -> Vec<protocol::Effect> {
+        let mut new = None;
+        for o in &self.outputs {
+            if self.cameras.camera_for_output(o.id) == Some(camera) {
+                let view = self.view(o.id);
+                new = Some(new.as_ref().unwrap_or(&self.membership).with_output(
+                    o.id,
+                    view.as_ref(),
+                    &self.stage,
+                ));
+            }
+        }
+        let Some(new) = new else {
+            return Vec::new();
+        };
         let fx = self.membership.diff(&new, &self.stage);
         self.membership = new;
         fx

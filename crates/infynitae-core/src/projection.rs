@@ -117,6 +117,17 @@ impl View {
             && r.y0 < self.size.1 as i64
     }
 
+    /// Conservative cull of a Canvas box `[x0, x1) × [y0, y1)`: `false` only when no surface
+    /// inside the box can intersect the view. `edge` is non-decreasing in its argument (k > 0),
+    /// so a surface inside the box has `edge(sx1) ≤ edge(x1)` and `edge(sx0) ≥ edge(x0)`; each
+    /// test that fails here therefore fails for the surface in [`View::intersects_view`].
+    pub fn may_show(&self, x0: i64, y0: i64, x1: i64, y1: i64) -> bool {
+        self.edge_x(x1) > 0
+            && self.edge_y(y1) > 0
+            && self.edge_x(x0) < self.size.0 as i64
+            && self.edge_y(y0) < self.size.1 as i64
+    }
+
     /// F-RENDER-1: `L(x) = (x − R)·k + δ − C`.
     pub fn render_location(&self, origin: CanvasPoint) -> RenderLocation {
         RenderLocation {

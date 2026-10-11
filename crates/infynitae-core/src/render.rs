@@ -10,7 +10,7 @@ use crate::geom::{
 };
 use crate::projection::View;
 use crate::snapshot::{InputRegion, SurfaceKey, SurfaceTree};
-use crate::stage::{ElementId, Stage};
+use crate::stage::{CanvasBox, ElementId, Stage};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameEntry {
@@ -71,6 +71,23 @@ pub fn entries_for(
     out
 }
 
+/// [`entries_for`] behind the element's bounding box: an element whose box cannot intersect the
+/// view ([`View::may_show`]) has no entries, and is skipped without projecting its surfaces.
+pub(crate) fn entries_culled(
+    view: &View,
+    element: ElementId,
+    anchor: CanvasPoint,
+    tree: &SurfaceTree,
+    bounds: Option<CanvasBox>,
+) -> Vec<FrameEntry> {
+    match bounds {
+        Some((x0, y0, x1, y1)) if view.may_show(x0, y0, x1, y1) => {
+            entries_for(view, element, anchor, tree)
+        }
+        _ => Vec::new(),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectionFrame {
     pub view: View,
@@ -81,6 +98,17 @@ pub struct ProjectionFrame {
 impl ProjectionFrame {
     /// Builds the render list of every mapped element of `stage` under `view`.
     pub fn build(view: View, stage: &Stage) -> ProjectionFrame {
+        let mut entries = Vec::new();
+        for (element, anchor, tree, bounds) in stage.front_to_back_boxed() {
+            entries.extend(entries_culled(&view, element, anchor, tree, bounds));
+        }
+        ProjectionFrame { view, entries }
+    }
+
+    /// The render list without the bounding-box cull: every surface of every mapped element is
+    /// projected. The oracle of the differential tests.
+    #[cfg(test)]
+    pub(crate) fn build_reference(view: View, stage: &Stage) -> ProjectionFrame {
         let mut entries = Vec::new();
         for (element, anchor, tree) in stage.front_to_back() {
             entries.extend(entries_for(&view, element, anchor, tree));
