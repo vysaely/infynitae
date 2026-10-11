@@ -710,31 +710,6 @@ impl Core {
         fx
     }
 
-    /// P7 check on surface tree mutation (INV-SCALE-2, INV-SCALE-3).
-    pub(crate) fn p7_check_element(&mut self, element: stage::ElementId) -> Vec<protocol::Effect> {
-        let output_scales: Vec<f64> = self.outputs.iter().map(|o| o.scale).collect();
-        let s_max = scale::s_max_for_tree(self.stage.tree(element));
-        let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
-        let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
-        let ladder = scale::ladder(&output_scales, h_max, self.scale_config.r);
-
-        let mut fx = Vec::new();
-        if let Some((_, st)) = self.scales.iter_mut().find(|(e, _)| *e == element)
-            && st.p7_check(&ladder, h_max, self.scale_config.sigma)
-        {
-            let s120 = scale::preferred_scale_120(st.h);
-            let b = scale::preferred_buffer_scale(st.h, h_dev);
-            st.last_emitted_scale_120 = Some(s120);
-            st.last_emitted_buffer_scale = Some(b);
-            fx.push(protocol::Effect::PreferredScale {
-                element,
-                scale_120: s120,
-                integer_scale: b,
-            });
-        }
-        fx
-    }
-
     /// View(O) from the camera bound to the output (F-VIEW-1, F-LATTICE-1).
     pub fn view(&self, output: output::OutputId) -> Option<projection::View> {
         let model = self.outputs.iter().find(|o| o.id == output)?;

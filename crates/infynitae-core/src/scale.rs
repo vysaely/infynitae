@@ -179,21 +179,24 @@ impl ScaleState {
             };
         }
 
+        // P7: Device ceiling exceeded is a correctness rule, not damping.
+        // Immediate decrease applies and fixes direction to down (INV-SCALE-2, INV-SCALE-3).
+        // It comes before everything else: an unobserved element holds its hint against
+        // ordinary evaluation, not against the device bound.
+        if self.h > h_max + 1e-12 {
+            let t = target(rho.unwrap_or(self.h), ladder, h_max, config.sigma);
+            self.h = t.min(h_max);
+            self.epoch.direction = -1;
+            self.last_stimulus_direction = -1;
+            return true;
+        }
+
         let Some(req) = rho else {
             // Unobserved elements hold h (INV-SCALE-5, M15).
             return false;
         };
 
         let t = target(req, ladder, h_max, config.sigma);
-
-        // P7: Device ceiling exceeded is a correctness rule, not damping.
-        // Immediate decrease applies and fixes direction to down (INV-SCALE-2, INV-SCALE-3).
-        if self.h > h_max + 1e-12 {
-            self.h = t.min(h_max);
-            self.epoch.direction = -1;
-            self.last_stimulus_direction = -1;
-            return true;
-        }
 
         if self.epoch.open {
             // Grouped interaction epoch (INV-SCALE-3):

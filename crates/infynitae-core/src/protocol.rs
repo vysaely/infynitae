@@ -210,9 +210,6 @@ impl Core {
                 self.focus.target_lost(id, &live)
             }
         };
-        // P7 does not wait for an observer: batch-end evaluation holds an unobserved element's
-        // hint (INV-SCALE-5), the device bound does not (INV-SCALE-2).
-        fx.extend(self.p7_check_element(id));
         fx.extend(self.visibility_pass_client());
         fx.extend(self.reconcile_constraints());
         Ok(fx)
@@ -239,8 +236,8 @@ impl Core {
         self.stage
             .set_tree(id, Some(tree))
             .map_err(|_| ProtocolError::StaleElement)?;
-        let mut fx = self.p7_check_element(id);
-        fx.extend(self.visibility_pass_client());
+        // P7 for the new tree is the first rule of the batch-end evaluation (ScaleState::step)
+        let mut fx = self.visibility_pass_client();
         fx.extend(self.reconcile_constraints());
         Ok(fx)
     }
