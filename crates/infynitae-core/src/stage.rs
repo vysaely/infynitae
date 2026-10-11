@@ -138,13 +138,7 @@ impl Stage {
 
     /// Mapped elements front to back (reverse z-order) with anchor and snapshot.
     pub fn front_to_back(&self) -> impl Iterator<Item = (ElementId, CanvasPoint, &SurfaceTree)> {
-        self.z.iter().rev().filter_map(|&id| {
-            let r = self.record(id)?;
-            match (r.state, r.anchor, r.tree.as_ref()) {
-                (Lifecycle::Mapped, Some(a), Some(t)) => Some((id, a, t)),
-                _ => None,
-            }
-        })
+        self.front_to_back_boxed().map(|(id, a, t, _)| (id, a, t))
     }
 
     /// One mapped element's anchor, snapshot and Canvas bounding box (`None` box: nothing of it
@@ -175,7 +169,8 @@ impl Stage {
             })
     }
 
-    /// [`Stage::front_to_back`] with each element's Canvas bounding box.
+    /// The z-order walk (INV-RENDER-2): mapped elements front to back, with each element's
+    /// Canvas bounding box. The render list is built from this.
     pub(crate) fn front_to_back_boxed(
         &self,
     ) -> impl Iterator<Item = (ElementId, CanvasPoint, &SurfaceTree, Option<CanvasBox>)> {
