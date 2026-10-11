@@ -114,12 +114,12 @@ T1 (`t1_scale`, production Core + adapter + headless backend, real `wayland-clie
 Red before green: the two `c1_*` value tests failed on the unfixed emission (`left: 120, right: 90`); the two
 original `c2_*` tests failed on the unfixed adapter (`S1: left [] right [120]`, `WS: left [] right [2]`).
 
-Negative controls: `tools/verify-test-efficacy` had **no** INC-6 control. It now seeds 23, each of which must
+Negative controls: `tools/verify-test-efficacy` had **no** INC-6 control. It now seeds 22, each of which must
 make its named test fail: the audited C1 floor (T0 and T1); a zero wire value; `D_max = 0` and non-finite
 `H_cfg` accepted; unvalidated `set_scale_config`; the audited C2 root-only dispatch; popup trees skipped;
 join-time hint missing (subsurface ×2, popup, subtree); hint taken from the wrong element; configure before
 the initial hint; `H_dev` ignoring `D_max`; sealed `⌈h⌉`; no P7 at batch-end evaluation (×2); no P7 on a
-lowered `D_max`; no P7 for an unobserved element (root commit, child commit); `b(h)` not re-emitted; NaN
+lowered `D_max`; P7 waiting for an observer; `b(h)` not re-emitted; NaN
 reaching the wire as 0.
 
 ## 4. Other defects found and corrected
@@ -129,7 +129,7 @@ reaching the wire as 0.
 | H-5 | C | The M15 order test searched `probe.log` for `toplevel_configure`, which is only ever written to `kb_log`, and fell back to `usize::MAX`. It passed with the configure emitted *before* the hint (verified by seeding that order). The audit's "wire event log confirms" rested on it. The implementation's order was in fact correct. | Test repaired; seed added |
 | H-6 | C | Removing the P7 branch of `ScaleState::step` was detected by no test, T0 or T1 | Two discriminating T1 tests; seeds |
 | H-7 | C | `set_renderer_device_max` emitted only when P7 lowered h; when only `b(h)` changed, an integer-scale client kept a buffer scale that no longer fitted | Emission compares with the last emitted pair; test; seed |
-| H-13 | B | P7 was skipped for a mapped element that no output currently observes when its **root** surface grew past the device bound: `step` returns before its P7 branch when ρ is undefined, and `toplevel_committed` did not call `p7_check_element` (only the child-commit path did). The fractional hint stayed at 360 against `H_max` 2.048 while the integer hint dropped — INV-SCALE-2 says the decrease is immediate. Found by the independent reviewer. | `toplevel_committed` runs `p7_check_element`; `p7_applies_to_an_unobserved_element` (root and subsurface growth); two seeds |
+| H-13 | B | P7 was skipped for a mapped element that no output currently observes when its **root** surface grew past the device bound: `step` returns before its P7 branch when ρ is undefined, and `toplevel_committed` did not call `p7_check_element` (only the child-commit path did). The fractional hint stayed at 360 against `H_max` 2.048 while the integer hint dropped — INV-SCALE-2 says the decrease is immediate. Found by the independent reviewer. | P7 is now one rule in one place: the first step of the batch-end evaluation (`ScaleState::step`), ahead of the "unobserved holds" return. The per-commit `p7_check_element` is removed. `p7_applies_to_an_unobserved_element` (root and subsurface growth); seed |
 | H-12 | C | Backends discarded the effects of `set_renderer_device_max`; comments cited OB-23 for `D_max` (it is OB-13); `f64::clamp` keeps NaN (→ 0 on the wire in release); `now + T_settle` could overflow | Corrected |
 
 ## 5. Open findings — not corrected here, owner decision required
@@ -180,6 +180,15 @@ H-2, H-3 and H-4, and raised the items corrected in `0c7cdf2` and `16ab4cb` (NaN
 `set_scale_config`, popup trees untested for changes, `b(h)` on a `D_max` change, a self-referential
 assertion). A second pass over `8e5c96a..16ab4cb` again approved with findings: no regression, 20/20 seeds
 detected by its own replay, and two further items — H-13 (corrected in the commit that follows) and H-14
-(open). The commit that corrects H-13 and this record were **not** reviewed by it. Untested by its account:
+(open). The two commits that correct H-13 and this record were **not** reviewed by it. Untested by its account:
 `saturating_add` on epoch deadlines (no test distinguishes it from wrapping). It is a second AI context, not a human review, and does not replace the owner's independent
 review gate.
+
+## 8. Rehearsal history
+
+The first integration rehearsal (candidate `a88badb`, merge `23a0fd7`) **failed** `tools/verify-test-efficacy`
+(2 of 131 controls MISSED) and with it `tools/verify-development-environment`. The first correction of H-13
+had added a second P7 call on the root-commit path, which made the P7 branch of `ScaleState::step` redundant,
+so the two seeds removing that branch could no longer be detected. The correction was redone as a single P7
+path (above) instead of relaxing the seeds. `candidate/inc-6-hardened-a88badb` and
+`rehearsal/inc-6-hardening-merge` are kept as the record of that attempt; they are superseded.
