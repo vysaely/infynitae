@@ -381,6 +381,8 @@ fn render_and_present(data: &mut LoopData) {
             age,
         )
     } else {
+        // retried at the next cadence point, so clients waiting for a frame are not stalled
+        data.session.request_frame();
         return;
     };
 
@@ -389,6 +391,8 @@ fn render_and_present(data: &mut LoopData) {
         Ok(None) => None,
         Err(e) => {
             eprintln!("[infynitae] Render error: {e:?}");
+            // retried at the next cadence point, so clients waiting for a frame are not stalled
+            data.session.request_frame();
             return;
         }
     };
@@ -397,6 +401,8 @@ fn render_and_present(data: &mut LoopData) {
     if let Some(damage_rects) = &damage {
         if let Err(e) = data.backend.submit(Some(damage_rects)) {
             eprintln!("[infynitae] Submit error: {e:?}");
+            // retried at the next cadence point, so clients waiting for a frame are not stalled
+            data.session.request_frame();
             return;
         }
         data.session.count_frame();

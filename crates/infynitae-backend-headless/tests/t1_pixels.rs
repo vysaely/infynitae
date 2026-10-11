@@ -134,9 +134,10 @@ type Layer = ((i64, i64, i64, i64), u32);
 
 /// Every pixel of the frame against a painter's oracle over `layers`. With `exact_edges` every
 /// pixel must equal the front-most layer covering it. Without it (a scaled buffer: the software
-/// renderer filters the outermost pixel row of a layer) a pixel must equal the colour of some
-/// layer whose interior covers it if the front-most layer does, and no pixel outside every layer
-/// may be touched.
+/// renderer filters the outermost pixel row of a layer) the outermost one-pixel ring of the
+/// front-most layer is not checked, so an edge that is off by one pixel inwards goes unnoticed
+/// at fractional scales; every other pixel must equal the front-most layer, and no pixel
+/// outside every layer may be touched.
 fn assert_pixels(
     pixels: &[u32],
     size: (i32, i32),

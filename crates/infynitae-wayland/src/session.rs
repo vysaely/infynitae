@@ -7,8 +7,10 @@
 //! frame is, and (for a backend driven by real page flips) when a frame happens. Nothing here
 //! takes an authority port.
 
+use std::cell::Cell;
 use std::error::Error;
 use std::process::{Child, Command};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -113,6 +115,9 @@ pub struct Session {
     frames: u64,
     duration: Option<Duration>,
     max_frames: Option<u64>,
+    /// The display became readable since the last dispatch: a request arrived or a client
+    /// went away.
+    display_ready: Rc<Cell<bool>>,
 }
 
 impl Session {
@@ -138,11 +143,16 @@ impl Session {
             })
             .map_err(|e| format!("Failed to register listening socket: {e}"))?;
         // a readable display wakes the loop; the requests are dispatched by `dispatch`
+        let display_ready = Rc::new(Cell::new(false));
+        let ready = display_ready.clone();
         let display_fd = display.backend().poll_fd().try_clone_to_owned()?;
         handle
             .insert_source(
                 Generic::new(display_fd, Interest::READ, Mode::Level),
-                |_, _, _| Ok(PostAction::Continue),
+                move |_, _, _| {
+                    ready.set(true);
+                    Ok(PostAction::Continue)
+                },
             )
             .map_err(|e| format!("Failed to register display event source: {e}"))?;
         println!("[infynitae] Listening on Wayland socket: {socket_name}");
@@ -157,6 +167,7 @@ impl Session {
             frames: 0,
             duration: options.duration,
             max_frames: options.max_frames,
+            display_ready,
         };
         if let Some(cmd) = &options.exec {
             session.spawn(handle, cmd);
@@ -211,8 +222,9 @@ impl Session {
     }
 
     /// After the loop woke: reaps exited children, dispatches the clients' requests and flushes
-    /// the replies. Any request may have changed what is shown or asked for a frame callback, so
-    /// it requests a frame.
+    /// the replies. A request may have changed what is shown or asked for a frame callback, and
+    /// a client that went away (which dispatches no request) took its surfaces with it, so any
+    /// activity on the display requests a frame.
     pub fn dispatch(&mut self, state: &mut WaylandState) {
         self.children.retain_mut(|child| match child.try_wait() {
             Ok(Some(status)) => {
@@ -228,10 +240,14 @@ impl Session {
                 false
             }
         });
+        let ready = self.display_ready.take();
         match self.display.dispatch_clients(state) {
-            Ok(0) => {}
+            Ok(0) if !ready => {}
             Ok(_) => self.request_frame(),
-            Err(e) => eprintln!("[infynitae] Client dispatch error: {e}"),
+            Err(e) => {
+                eprintln!("[infynitae] Client dispatch error: {e}");
+                self.request_frame();
+            }
         }
         self.flush();
     }
@@ -242,9 +258,16 @@ impl Session {
         self.timer.request(Instant::now());
     }
 
-    /// Whether the frame timer's tick is due; taking it ends the request.
+    /// Whether the frame timer's tick is due; taking it ends the request. Under a frame limit
+    /// the next frame is requested at once: the limit asks for that many frames, whether or not
+    /// a client is active.
     pub fn frame_due(&mut self) -> bool {
-        self.timer.take_due(Instant::now())
+        let now = Instant::now();
+        let due = self.timer.take_due(now);
+        if due && self.max_frames.is_some() {
+            self.timer.request(now);
+        }
+        due
     }
 
     /// Counts a frame towards the frame limit.
@@ -406,11 +429,12 @@ mod tests {
         assert_eq!(timer.until_due(later), Some(Duration::ZERO));
     }
 
+    use smithay::reexports::calloop::EventLoop;
+
     /// A session with no client and no child: after its first frame it has no deadline, so its
     /// loop sleeps until an event; with a duration limit the only deadline is that limit.
     #[test]
     fn an_idle_session_has_nothing_to_wake_for() {
-        use smithay::reexports::calloop::EventLoop;
         for duration in [None, Some(Duration::from_secs(30))] {
             let (core, _input, _shell, _outputs) =
                 infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
@@ -444,6 +468,79 @@ mod tests {
             assert!(!session.finished());
             drop(event_loop);
         }
+    }
+
+    fn session(
+        name: &str,
+        max_frames: Option<u64>,
+    ) -> (Session, WaylandState, EventLoop<'static, ()>) {
+        let (core, _input, _shell, _outputs) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<WaylandState> = Display::new().unwrap();
+        let state = WaylandState::new(&display.handle(), core);
+        let event_loop: EventLoop<()> = EventLoop::try_new().unwrap();
+        let options = SessionOptions {
+            socket_name: Some(format!("infynitae-{name}-test-{}", std::process::id())),
+            refresh_mhz: 1_000_000,
+            max_frames,
+            ..SessionOptions::default()
+        };
+        let session = Session::new(display, &event_loop.handle(), &options).unwrap();
+        (session, state, event_loop)
+    }
+
+    /// One loop turn; whether a frame was taken.
+    fn turn(
+        session: &mut Session,
+        state: &mut WaylandState,
+        event_loop: &mut EventLoop<()>,
+    ) -> bool {
+        event_loop
+            .dispatch(Some(Duration::from_millis(5)), &mut ())
+            .unwrap();
+        session.dispatch(state);
+        session.frame_due()
+    }
+
+    /// A client that goes away without a request (killed, or its connection dropped) dispatches
+    /// nothing, yet what is shown changed: the session must still produce a frame.
+    #[test]
+    fn a_vanished_client_gets_a_frame() {
+        let (mut session, mut state, mut event_loop) = session("vanish", None);
+        let path = std::path::PathBuf::from(std::env::var("XDG_RUNTIME_DIR").unwrap())
+            .join(session.socket_name());
+        let client = std::os::unix::net::UnixStream::connect(path).unwrap();
+        // accept the client and let the session go idle
+        for _ in 0..5 {
+            turn(&mut session, &mut state, &mut event_loop);
+        }
+        assert_eq!(session.timeout(), None, "idle with a silent client");
+        drop(client);
+        let framed = (0..20).any(|_| turn(&mut session, &mut state, &mut event_loop));
+        assert!(framed, "no frame after the client vanished");
+        assert_eq!(session.timeout(), None, "idle again afterwards");
+    }
+
+    /// A frame limit ends a session that has no client: frames keep coming until it is reached.
+    #[test]
+    fn a_frame_limit_is_reached_without_clients() {
+        let (mut session, mut state, mut event_loop) = session("limit", Some(5));
+        let mut frames = 0;
+        for _ in 0..200 {
+            if session.finished() {
+                break;
+            }
+            assert!(
+                session.timeout().is_some(),
+                "nothing to wake for before the limit"
+            );
+            if turn(&mut session, &mut state, &mut event_loop) {
+                session.count_frame();
+                frames += 1;
+            }
+        }
+        assert!(session.finished());
+        assert_eq!(frames, 5);
     }
 
     fn spawn(cmd: &str, args: &[&str]) -> Child {
