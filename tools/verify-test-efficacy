@@ -433,9 +433,9 @@ CONTROLS = [
      '',
      'infynitae-backend-headless', ['--test', 't1_keyboard'], 't04_duplicate_presses'),
     # --- runtime (headless runner through a real socket)
-    ("presentation: frame times counted from compositor start, not on the announced clock",
+    ("presentation: frame times not read from the announced clock",
      "crates/infynitae-backend-headless/src/lib.rs",
-     "                infynitae_wayland::presentation_clock_now(),", "                start_time.elapsed(),",
+     "                infynitae_wayland::presentation_clock_now(),", "                std::time::Duration::from_millis(16),",
      "infynitae-backend-headless", ["--test", "t1_tiny_compositor"], "presentation_timestamps_are_on_the_announced_clock"),
     ("presentation: the adapter's clock reads CLOCK_REALTIME",
      "crates/infynitae-wayland/src/lib.rs",
