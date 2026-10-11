@@ -25,5 +25,8 @@ probe_test_keyboard_grab = ["infynitae-wayland/probe_test_keyboard_grab"]
 
 # T1 probe clients over socketpairs (FOUNDATION_TEST_PLAN T1; C1.2 testing row). Test-only.
 [dev-dependencies]
+# Pixel tests (t1_pixels) composite the production render path with Smithay's software renderer
+# and read the framebuffer back. Test builds only.
+smithay = { version = "=0.7.0", default-features = false, features = ["renderer_test", "renderer_pixman"] }
 wayland-client = "=0.31.15"
 wayland-protocols = { version = "=0.32.13", features = ["client"] }
