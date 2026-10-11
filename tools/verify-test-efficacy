@@ -483,6 +483,16 @@ CONTROLS = [
     ("INC-6 E1R-N3: integer hint is the sealed ceil(h), unbounded by the device", f"{CORE}/scale.rs",
      "    if (c as f64) <= h_dev + 1e-9 {", "    if true {",
      "infynitae-backend-headless", ["--test", "t1_scale"], "p7_forced_decrease_at_device_ceilings"),
+    ("INC-6 P7: no forced decrease at batch-end evaluation (SC-E holds h above H_max)", f"{CORE}/scale.rs",
+     "        if self.h > h_max + 1e-12 {\n            self.h = t.min(h_max);\n            self.epoch.direction = -1;\n"
+     "            self.last_stimulus_direction = -1;\n            return true;\n        }\n\n        if self.epoch.open {",
+     "        if self.epoch.open {",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "p7_forced_decrease_at_device_ceilings"),
+    ("INC-6 P7: no forced decrease at batch-end evaluation (suppressed inside an open epoch)", f"{CORE}/scale.rs",
+     "        if self.h > h_max + 1e-12 {\n            self.h = t.min(h_max);\n            self.epoch.direction = -1;\n"
+     "            self.last_stimulus_direction = -1;\n            return true;\n        }\n\n        if self.epoch.open {",
+     "        if self.epoch.open {",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "p7_applies_inside_an_open_epoch"),
     ("INC-6 P7: a lower D_max reported at runtime forces no decrease", f"{CORE}/lib.rs",
      "            if st.p7_check(&ladder, h_max, self.scale_config.sigma) {", "            if false && st.p7_check(&ladder, h_max, self.scale_config.sigma) {",
      "infynitae-backend-headless", ["--test", "t1_scale"], "device_ceiling_lowered_at_runtime_and_invalid_value_refused"),

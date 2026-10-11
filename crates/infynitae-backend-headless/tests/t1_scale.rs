@@ -643,6 +643,10 @@ fn c2_late_surfaces_learn_their_own_elements_hint() {
 /// the hint drops at once to `H_max(E) = D_max / s_max(E)`, exactly once, and the integer hint
 /// `b(h)` keeps an integer-scale buffer within `D_max` (E1R-N3). Values are F-SCALE-3's
 /// `round(h · 120)`.
+///
+/// The last non-client stimulus is an INCREASE (a 3.0x output starts observing W), so the
+/// client's growth is a client-caused re-evaluation against that direction: SC-E alone would
+/// hold h (INV-SCALE-4 d). Only P7 — correctness, not damping — may lower it.
 #[test]
 fn p7_forced_decrease_at_device_ceilings() {
     // (D_max, logical side, preferred_scale after P7, b(h))
@@ -653,7 +657,7 @@ fn p7_forced_decrease_at_device_ceilings() {
         (16384, 3000, 360, 3), // H_dev = 5.46 > H_cfg: no decrease
     ];
     for (d_max, side, want_120, want_b) in cases {
-        let mut ls = Lockstep::new(Some(output_scaled("H", 360))); // 3.0x = H_cfg
+        let mut ls = Lockstep::new(Some(output_a())); // 1.0x
         let fx = ls
             .state
             .core_mut()
@@ -667,9 +671,10 @@ fn p7_forced_decrease_at_device_ceilings() {
         ls.pump();
         ls.probe.draw(&qh, w);
         ls.pump();
+        ls.connect(&output_scaled("H", 360)); // 3.0x = H_cfg: the stimulus, upwards
         assert_eq!(
             ls.probe.preferred_scales_of("W"),
-            vec![360],
+            vec![120, 360],
             "D_max {d_max}"
         );
         assert_eq!(ls.probe.preferred_buffer_scales_of("W"), vec![3]);
@@ -686,7 +691,7 @@ fn p7_forced_decrease_at_device_ceilings() {
             (h - h_max).abs() < 1e-9,
             "D_max {d_max}: h {h} = H_max {h_max}"
         );
-        let mut want_scales = vec![360];
+        let mut want_scales = vec![120, 360];
         let mut want_buffers = vec![3];
         if want_120 != 360 {
             want_scales.push(want_120);
@@ -703,6 +708,61 @@ fn p7_forced_decrease_at_device_ceilings() {
             "integer-scale buffer {side} × {want_b} fits D_max {d_max}"
         );
     }
+}
+
+/// M7 `Open | h > H_max(E) → Open{down}`: P7 applies immediately inside an open
+/// ScaleInteractionEpoch, where every ordinary decrease is suppressed, and the epoch's
+/// settlement does not undo it.
+#[test]
+fn p7_applies_inside_an_open_epoch() {
+    let mut r = Rig::new(Lockstep::new(Some(output_scaled("H", 360)))); // 3.0x, D_max 16384
+    let qh = r.ls.qh.clone();
+    let w =
+        r.ls.probe
+            .toplevel_with_fractional_scale(&qh, "W", (800, 600), 0);
+    r.ls.pump();
+    r.ls.probe.draw(&qh, w);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(r.ls.probe.preferred_scales_of("W"), vec![360]);
+
+    r.button(BTN_MIDDLE, true, logo());
+    r.motion((8.0, 0.0)); // W stays in view: ρ is unchanged
+    r.ls.pump();
+    let element = r.ls.state.elements().next().expect("element");
+    assert!(
+        r.ls.state
+            .core()
+            .scale_state(element)
+            .expect("OBJ-16")
+            .epoch
+            .open,
+        "the CameraPan epoch is open"
+    );
+
+    let vp = r.ls.probe.get_viewport(&qh, w).expect("wp_viewporter");
+    vp.set_destination(8000, 600); // H_max = 16384 / 8000 = 2.048
+    r.ls.probe.surfaces[w].wl.commit();
+    r.ls.pump();
+    assert_eq!(
+        r.ls.probe.preferred_scales_of("W"),
+        vec![360, 246],
+        "forced decrease while the pan is still held"
+    );
+    assert_eq!(r.ls.probe.preferred_buffer_scales_of("W"), vec![3, 2]);
+    assert_eq!(
+        r.ls.state.core().interaction().initiator(),
+        Some(BTN_MIDDLE)
+    );
+
+    r.button(BTN_MIDDLE, false, logo());
+    r.ls.pump();
+    r.frame();
+    assert_eq!(
+        r.ls.probe.preferred_scales_of("W"),
+        vec![360, 246],
+        "settlement keeps the device-bound hint"
+    );
 }
 
 /// OBJ-29 / M-renderer: a lower `D_max` reported later (renderer recreation) forces the
