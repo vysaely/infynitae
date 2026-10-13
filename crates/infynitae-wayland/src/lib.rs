@@ -18,6 +18,7 @@
 pub mod convert;
 mod handlers;
 mod keyboard;
+pub mod limits;
 mod outputs;
 mod pointer;
 pub mod registry;

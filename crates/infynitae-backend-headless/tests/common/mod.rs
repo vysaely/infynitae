@@ -1379,7 +1379,11 @@ impl Lockstep {
     pub fn with(persisted: PersistedCameras, outputs: &[VirtualOutput]) -> Lockstep {
         let (core, input, _shell, token) = Core::new(persisted);
         let display: Display<WaylandState> = Display::new().expect("display");
-        let state = WaylandState::new(&display.handle(), core);
+        let mut state = WaylandState::new(&display.handle(), core);
+        // as the run loop does: the ceiling is what the renderer reports (OB-13)
+        state
+            .report_renderer_limits(&infynitae_backend_headless::HeadlessRenderer::default())
+            .expect("the fixture renderer reports its limit");
         let (server_end, client_end) = UnixStream::pair().expect("socketpair");
         client_end
             .set_nonblocking(true)

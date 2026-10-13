@@ -194,6 +194,7 @@ fn main() -> ExitCode {
     check_effects_only_from_core(&crates, &mut report);
     check_pointer_delivery(&crates, &mut report);
     check_keyboard_delivery(&crates, &mut report);
+    check_device_limit(&crates, &mut report);
     check_unsafe(&root, &crates, &mut report);
 
     let mut failed = false;
@@ -1093,6 +1094,70 @@ fn check_pointer_delivery(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Repo
                 r.fail(
                     R,
                     format!("{loc}: calls `{n}` outside infynitae-wayland::pointer (C4.2)"),
+                );
+            }
+        }
+    }
+}
+
+/// The device ceiling reaches Core only from `infynitae-wayland`'s `limits` module, which takes
+/// it from a renderer's `RendererLimits` (OB-13): no backend hands Core a number of its own.
+/// Method calls, qualified calls and macro tokens are all checked.
+fn check_device_limit(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report) {
+    const R: &str = "device-limit-only-through-renderer-limits";
+    const SETTER: &str = "set_renderer_device_max";
+    r.rule(R);
+    struct V<'a> {
+        file: &'a Path,
+        found: Vec<String>,
+    }
+    impl<'ast> Visit<'ast> for V<'_> {
+        fn visit_expr_method_call(&mut self, m: &'ast syn::ExprMethodCall) {
+            if m.method == SETTER {
+                self.found.push(at(self.file, m.method.span()));
+            }
+            syn::visit::visit_expr_method_call(self, m);
+        }
+        fn visit_expr_path(&mut self, e: &'ast syn::ExprPath) {
+            if let Some(last) = e.path.segments.last()
+                && last.ident == SETTER
+            {
+                self.found.push(at(self.file, last.ident.span()));
+            }
+            syn::visit::visit_expr_path(self, e);
+        }
+        fn visit_macro(&mut self, m: &'ast syn::Macro) {
+            let mut ids = Vec::new();
+            idents(m.tokens.clone(), &mut ids);
+            for i in ids.iter().filter(|i| *i == SETTER) {
+                self.found.push(at(self.file, i.span()));
+            }
+            syn::visit::visit_macro(self, m);
+        }
+    }
+    for (name, _, _) in CRATES[..PRODUCT_CRATES]
+        .iter()
+        .filter(|(n, _, _)| *n != "infynitae-core")
+    {
+        let Some(files) = crates.get(name) else {
+            continue;
+        };
+        for f in files {
+            if *name == "infynitae-wayland" && f.module == ["limits"] {
+                continue;
+            }
+            let mut v = V {
+                file: &f.path,
+                found: Vec::new(),
+            };
+            v.visit_file(&f.ast);
+            for loc in v.found {
+                r.fail(
+                    R,
+                    format!(
+                        "{loc}: calls `{SETTER}` outside infynitae-wayland::limits (OB-13: the \
+                         device limit comes from a renderer's RendererLimits)"
+                    ),
                 );
             }
         }

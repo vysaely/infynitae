@@ -79,6 +79,19 @@ struct LoopData {
     options: WinitCompositorOptions,
 }
 
+/// The nested backend's answer to "what is the device limit": **not a query**. The GLES
+/// renderer is not asked (`GL_MAX_TEXTURE_SIZE`; OB-52, INC-13). The value is the limit
+/// recorded for the reference device (EC-16) and the host GPU's real limit may be lower, in
+/// which case a buffer Core allowed can fail to import. Provisional with the rest of this
+/// experimental backend.
+struct AssumedGlesLimits;
+
+impl infynitae_wayland::limits::RendererLimits for AssumedGlesLimits {
+    fn max_buffer_side(&self) -> Result<u32, infynitae_wayland::limits::LimitQueryError> {
+        Ok(infynitae_core::scale::DEFAULT_D_MAX)
+    }
+}
+
 /// Runs the nested compositor with Winit backend.
 ///
 /// Takes ownership of `Core` and the composition root's authority ports (`InputPort`,
@@ -129,14 +142,10 @@ pub fn run_nested(
         .map_err(|e| format!("Failed to connect output: {e:?}"))?;
     state.apply(&effects);
 
-    // Device ceiling D_max (OB-13, F-SCALE-2, OBJ-29). PROVISIONAL: the EC-16 device fact, not
-    // a value discovered from this GLES renderer; the host GPU's real limit may be lower. Runtime
-    // discovery for the nested backend is not implemented (OB-13 residual).
-    let fx = state
-        .core_mut()
-        .set_renderer_device_max(infynitae_core::scale::DEFAULT_D_MAX)
-        .map_err(|e| format!("Invalid renderer device limit: {e:?}"))?;
-    state.apply(&fx);
+    // Device ceiling D_max (OB-13, F-SCALE-2, OBJ-29), through the renderer-limit interface.
+    // This backend does not ask its GLES renderer yet (OB-52, INC-13): it reports an assumed
+    // limit and says so.
+    state.report_renderer_limits(&AssumedGlesLimits)?;
 
     let session = Session::new(
         display,

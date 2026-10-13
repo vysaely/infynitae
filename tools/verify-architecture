@@ -797,6 +797,13 @@ SOURCE_SEEDS = [
     ("INC-4: backend calls Smithay get_keyboard", "smithay-keyboard-only-in-adapter",
      HEADLESS_LIB, append("\npub fn rogue_kb(seat: &smithay::input::Seat<WaylandState>) {\n"
                           "    let _ = seat.get_keyboard();\n}\n")),
+    ("INC-6: backend hands Core a device limit of its own", "device-limit-only-through-renderer-limits",
+     HEADLESS_LIB, append("\npub fn rogue_limit(state: &mut WaylandState) {\n"
+                          "    let _ = state.core_mut().set_renderer_device_max(16384);\n}\n")),
+    ("INC-6: adapter sets the device limit outside the limits module, by a qualified path",
+     "device-limit-only-through-renderer-limits",
+     WAYLAND_OUTPUTS, append("\nimpl WaylandState {\n    pub fn rogue_limit(&mut self) {\n"
+                             "        let _ = infynitae_core::Core::set_renderer_device_max(self.core_mut(), 4096);\n    }\n}\n")),
     ("INC-3: mint in a physical_input helper (button_press)", "mint-location",
      CORE_ENTRY, replace(PRESS_ANCHOR, PRESS_ANCHOR + "        }\n        {\n            let _p = authority::Authorized::mint();\n")),
     ("INC-3: input module pans a camera with its own proof", "mint-location",

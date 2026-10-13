@@ -30,11 +30,20 @@ time therefore does not type-check where a deadline time is expected.
 | No stale deadline wake-up | the session holds no timer: its sleep bound is rewritten from Core's current deadline every turn, and `None` clears it | `the_wake_up_follows_the_deadline_and_is_cancelled_with_the_epoch`; session unit test |
 | No unnecessary idle wake-up | no deadline, no bound: `Session::timeout` is `None`; a continuous epoch has no deadline | `a_real_camera_drag_opens_an_epoch_without_a_deadline`, `waiting_for_a_deadline_is_one_sleep_not_a_poll` |
 
-## Proposed wording for M7 (not adopted)
+## Sealed wording (adopted 2026-10-14 as C12.F4, on `main`)
 
-> The time of a discrete step is the session clock's time when the step enters Core
-> (`SessionTime`); the deadline `now + T_settle` and every comparison with it are on that clock.
-> Input event timestamps and presentation timestamps are other clocks and take no part.
+INV-SCALE-3, clock clause, and three rows of M7:
+
+> **Clock:** the settlement timeout is measured on the session's monotonic clock, from the time
+> the last step of the interaction entered Core. A deadline is written only by a step of the
+> interaction, never by a client response or any other evaluation, and it never moves earlier.
+> Input-event timestamps and presentation timestamps are separate clocks and take no part.
+
+Each sentence against this branch: the clock is `SessionTime`, stamped by `Session::now()`;
+only `ScaleState::discrete_step` writes a discrete deadline; an evaluation has no clock; an
+earlier time is read as the latest one Core was given. The tests in the table above are the
+evidence. The branch remains experimental: the wording is adopted, the implementation is not
+ratified.
 
 ## What is still not built
 

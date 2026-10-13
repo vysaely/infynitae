@@ -1,17 +1,19 @@
-# OB-13 — evidence and disposition (INC-6, experimental)
+# OB-13 — evidence (INC-6, experimental)
 
-Status: **OB-13 remains OPEN. It was not closed and cannot be closed as it stands.** This file
-records what the INC-6 line proves, what it does not, and the decision that is needed.
+Status: **OB-13 is OPEN.** It was split by the owner on 2026-10-14 (record on `main`:
+`docs/foundation/evidence/phase-f/ob-13-split/RECORD.md`). This file records what the INC-6
+line shows for the INC-6 half. The split did not close anything: OB-13 closes at the INC-6 exit
+review, and **OB-52 (the real renderer's limit on a GPU, INC-13, T2) is open and untouched**.
 
-## The ratified record (FOUNDATION_TEST_PLAN, verbatim in substance)
+## The obligation as split
 
-- **Item:** Runtime `D_max` query and enforcement. Test/decision: query from the renderer at
-  startup; assert h ≤ H_max for large windows.
-- **Pass criterion:** no buffer exceeds the device limit.
-- **Destination:** T1. **May be closed by:** T1 production test (production core + adapter +
-  headless backend). **Dependencies:** INC-6. **Blocks:** INC-6 exit.
-- It is listed by two increments: INC-6 ("OB-13, incl. E1R zero-extent domain and integer
-  bound") and INC-13 ("OB-13 (real `D_max`)").
+- **OB-13 (INC-6, T1):** Core enforces the reported device limit; the backend obtains that limit
+  through the renderer interface; a headless fixture may report a documented deterministic
+  limit; no unexplained constant is passed directly into Core. Pass criterion: no buffer
+  exceeds the limit Core was given.
+- **OB-52 (INC-13, T2):** the limit is queried from the real renderer, re-queried when the
+  renderer is recreated, and enforcement is shown against that value on a GPU. No fixture
+  result counts.
 
 ## What the INC-6 line proves (the enforcement half)
 
@@ -26,42 +28,36 @@ records what the INC-6 line proves, what it does not, and the decision that is n
 Stated residual, not a failure of the criterion as amended: a logical side above 120·`D_max`
 cannot fit at any emittable scale.
 
-## What it does not prove (the query half)
+## The capability path (added 2026-10-14)
 
-**No backend queries a renderer.** Both run loops hand Core the constant `DEFAULT_D_MAX`
-(16384, the EC-16 device fact):
+| Requirement of the split | Implementation | Evidence |
+|---|---|---|
+| The backend obtains the limit through the renderer interface | `infynitae_wayland::limits::RendererLimits`; `WaylandState::report_renderer_limits` asks the renderer, hands the answer to Core and applies Core's effects | T1 `t1_device_limit` (5 tests) |
+| No constant is passed directly into Core | `Core::set_renderer_device_max` may be named only in `infynitae-wayland::limits`; source rule `device-limit-only-through-renderer-limits`, with two seeded violations in `tools/verify-architecture` | architecture gate |
+| A headless fixture may report a documented deterministic limit | `HeadlessRenderer` (Smithay's test renderer plus a `DeviceLimit`); default 16384 = EC-16, documented at `HEADLESS_REFERENCE_DEVICE_LIMIT`; configurable through `HeadlessCompositorOptions::device_limit` | `the_ceiling_at_startup_is_what_the_renderer_reports` |
+| Limit changes | a changed limit takes effect when reported, not before, and then at once (16384 → 8192 → 4096: hints 360 → 327 → 163, integer hint 3 → 2 → 1; raised again: still fits) | `a_changed_limit_is_enforced_when_reported` |
+| Boundary values | `u32::MAX`, 9000 and 8999, 6000, 3001 and 3000 for a 3000-pixel side, each with hand-derived hints | `boundary_limits` |
+| Error handling | a failing query and a limit of 0 leave Core's ceiling and the client's hints untouched; the headless session does not start without a usable limit | `a_failed_query_and_a_refused_limit_change_nothing`, `the_session_does_not_start_without_a_device_limit` |
 
-- headless: "an explicit, deterministic fixture, not a query";
-- nested (winit/GLES): "PROVISIONAL … not a value discovered from this GLES renderer; the host
-  GPU's real limit may be lower. Runtime discovery for the nested backend is not implemented".
+Six seeded controls cover the path (constant instead of the reported value; fallback on a
+failed query; the run loop ignoring its option; the run loop ignoring the result; a fixture
+that reports the default whatever it was given; a test harness that does not ask).
 
-So the first half of the item, "query from the renderer at startup", is unmet on every backend,
-including the headless one that INC-6's own objective names ("`D_max` queried from the (Dummy)
-renderer"). The windowless GLES test on the application-validation branch is experimental
-evidence that a GPU context can be created headlessly; it queries no limit and is not renderer
-ratification.
+## What is not shown, stated plainly
 
-## Why it cannot simply be closed or split here
+- **Nothing asks a GPU.** The headless renderer has no device. The nested (winit/GLES) backend
+  reports through the same interface from a type named `AssumedGlesLimits`, which returns the
+  EC-16 value and says in its documentation that it is not a query. On a host whose real limit
+  is lower, a buffer Core allowed can fail to import. That is OB-52.
+- **Core has a ceiling before anyone reports one**: `ScalePolicyConfig::default()` carries
+  `DEFAULT_D_MAX` (16384). Both run loops and the test harness report before serving a client,
+  so no client is served under the unreported default; a future backend that forgot to report
+  would run on it silently. Making the unreported state explicit in Core would change Core's
+  configuration type and was not done here.
+- A logical side above 120·`D_max` cannot fit at any emittable scale (stated residual of
+  C12.F2).
 
-1. **Not all of it is met**, as above.
-2. **It is one obligation shared by two increments.** Closing it at the INC-6 exit would also
-   discharge INC-13's "OB-13 (real `D_max`)". Keeping the real-GPU part open means making it a
-   separate obligation, which changes the sealed test plan and implementation plan.
-3. **Obligations are closed at an increment's exit ratification**, after independent review
-   (every closed record says so in its history). INC-6's exit is not authorized.
+## What remains before OB-13 can close
 
-## The decision needed
-
-Split OB-13 by amendment into:
-
-- **OB-13a (INC-6, T0/T1):** enforcement — the hint and the integer hint never ask for a buffer
-  above the limit handed to Core, with the zero-extent domain and the residual stated. Evidence
-  above. Closable at the INC-6 exit.
-- **OB-13b (INC-13, T2):** the limit is queried from the real renderer at startup and after
-  renderer recreation, and enforcement is shown against that value on a real GPU.
-
-and decide which of the two the Dummy renderer's "query" belongs to: either the headless backend
-must ask its Dummy renderer for a (configurable) limit before INC-6 can exit, or a fixture
-constant is accepted for INC-6 and the query is wholly INC-13's.
-
-Until that is decided OB-13 stays OPEN and keeps blocking the INC-6 exit.
+The INC-6 exit review. The requirements of the INC-6 half are met on this experimental branch
+by the evidence above; closing the record is the owner's act at that review.
