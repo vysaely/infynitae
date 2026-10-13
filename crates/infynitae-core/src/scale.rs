@@ -295,10 +295,23 @@ pub fn s_max_for_tree(tree: Option<&SurfaceTree>) -> u32 {
     s_max
 }
 
-/// F-SCALE-2: Device bound H_dev(E) = D_max / s_max(E) when s_max > 0, +∞ when s_max = 0 (E-F2-06).
+/// F-SCALE-2 as proposed by the H-1 amendment (formulation B; EXPERIMENTAL, not adopted):
+/// the device bound is the largest multiple of 1/120 that does not exceed `D_max / s_max(E)`,
+/// `H_dev(E) = ⌊120 · D_max / s_max(E)⌋ / 120`, and `+∞` when `s_max(E) = 0` (E-F2-06).
+///
+/// A hint is put on the wire in 1/120 units, so a bound that is itself such a unit is emitted
+/// exactly, and `s · h ≤ D_max` holds for every side `s ≤ s_max(E)` before the client rounds:
+/// the buffer fits whether the client rounds down, to nearest or up. The sealed bound
+/// `D_max / s_max(E)` is emitted as `round(120 · D_max / s_max(E))`, which exceeds it in about
+/// half the cases (H-1).
+///
+/// The quotient is computed in integers (`120 · D_max < 2³⁹`). When it is 0
+/// (`s_max(E) > 120 · D_max`) the bound is `1/120`, the wire minimum; that buffer does not fit
+/// the device and nothing emittable would (stated residual).
 pub fn h_dev(s_max: u32, d_max: u32) -> f64 {
     if s_max > 0 {
-        d_max as f64 / s_max as f64
+        let units = (120 * u64::from(d_max) / u64::from(s_max)).max(1);
+        units as f64 / 120.0
     } else {
         f64::INFINITY
     }
@@ -820,7 +833,8 @@ mod tests {
         assert_eq!(h_max(h_cfg, 0, d_max), 3.0);
         assert_eq!(h_max(h_cfg, 600, d_max), 3.0);
         assert_eq!(h_max(h_cfg, 800, d_max), 3.0);
-        assert!((h_max(h_cfg, 8000, d_max) - 2.048).abs() < 1e-9);
+        // H-1 (B): 120·16384/8000 = 245.76, so the bound is 245/120, not 2.048
+        assert_eq!(h_max(h_cfg, 8000, d_max), 245.0 / 120.0);
 
         // Transition zero extent -> first buffer with P7 device bound:
         let h0 = 3.0;
@@ -830,7 +844,7 @@ mod tests {
         let l = ladder(&[1.0, 1.5], hm_8000, 1.25);
         let p7_triggered = st.p7_check(&l, hm_8000, 0.05);
         assert!(p7_triggered, "P7 triggered when buffer 8000 attaches");
-        assert!((st.h - 2.048).abs() < 1e-9);
+        assert_eq!(st.h, 245.0 / 120.0);
         assert_eq!(st.last_stimulus_direction, -1);
 
         // E1R-N3: Integer emission b(h) does not exceed D_max.
@@ -984,6 +998,63 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// H-1 (B), the function alone: `h_dev` is `⌊120·D/s⌋/120` computed in integers, exact
+    /// in f64 (the wire conversion gives the same integer back), never 0, monotone, and safe at
+    /// the ends of `u32`.
+    #[test]
+    fn h1_device_bound_function_is_exact_and_total() {
+        // exhaustive over every wire value a 16384-pixel device can produce
+        for units in 1..=120u32 * 16384 {
+            assert_eq!(wire_scale_120(f64::from(units) / 120.0), units);
+        }
+        for d_max in [1u32, 2, 4096, 16384, 65536, i32::MAX as u32, u32::MAX] {
+            let mut prev = f64::INFINITY;
+            for s in [
+                1u32,
+                2,
+                3,
+                7,
+                119,
+                120,
+                121,
+                4095,
+                4096,
+                4097,
+                16384,
+                65535,
+                1 << 20,
+                i32::MAX as u32,
+                u32::MAX,
+            ] {
+                let units = (120 * u64::from(d_max) / u64::from(s)).max(1);
+                let h = h_dev(s, d_max);
+                assert!(h.is_finite() && h > 0.0);
+                assert_eq!(h, units as f64 / 120.0, "D_max {d_max}, side {s}");
+                assert!(h <= prev, "not monotone in the side");
+                prev = h;
+                if units <= u64::from(u32::MAX) {
+                    assert_eq!(u64::from(preferred_scale_120(h)), units);
+                }
+                // s·h ≤ D_max in exact arithmetic, unless nothing emittable fits
+                if 120 * u64::from(d_max) >= u64::from(s) {
+                    assert!(u64::from(s) * units <= 120 * u64::from(d_max));
+                }
+                // b(h) is unchanged by the quantisation: ⌊⌊120x⌋/120⌋ = ⌊x⌋
+                assert_eq!(
+                    u64::from(preferred_buffer_scale(h, h)),
+                    (u64::from(d_max) / u64::from(s)).clamp(1, u64::from(u32::MAX))
+                );
+            }
+        }
+        assert_eq!(h_dev(0, 4096), f64::INFINITY);
+        assert_eq!(h_dev(4096, 4096), 1.0);
+        assert_eq!(
+            h_dev(u32::MAX, 1),
+            1.0 / 120.0,
+            "residual: the wire minimum"
+        );
     }
 
     /// Negative control: sealed ceil(h) exceeds D_max in exactly 2 cases (reproducing E1R-N3).

@@ -756,9 +756,9 @@ fn integer_hint_follows_a_device_ceiling_change() {
 fn p7_forced_decrease_at_device_ceilings() {
     // (D_max, logical side, preferred_scale after P7, b(h))
     let cases: [(u32, i32, u32, i32); 4] = [
-        (4096, 3000, 164, 1),  // H_max = 1.3653
-        (8192, 3000, 328, 2),  // H_max = 2.7307
-        (16384, 8000, 246, 2), // H_max = 2.048
+        (4096, 3000, 163, 1),  // H_max = ⌊163.84⌋/120 (H-1, B)
+        (8192, 3000, 327, 2),  // H_max = ⌊327.68⌋/120
+        (16384, 8000, 245, 2), // H_max = ⌊245.76⌋/120
         (16384, 3000, 360, 3), // H_dev = 5.46 > H_cfg: no decrease
     ];
     for (d_max, side, want_120, want_b) in cases {
@@ -791,7 +791,7 @@ fn p7_forced_decrease_at_device_ceilings() {
 
         let element = ls.state.elements().next().expect("element");
         let h = ls.state.core().scale_state(element).expect("OBJ-16").h;
-        let h_max = (d_max as f64 / side as f64).min(3.0);
+        let h_max = ((120 * d_max as u64 / side as u64) as f64 / 120.0).min(3.0);
         assert!(
             (h - h_max).abs() < 1e-9,
             "D_max {d_max}: h {h} = H_max {h_max}"
@@ -851,12 +851,12 @@ fn p7_applies_inside_an_open_epoch() {
     );
 
     let vp = r.ls.probe.get_viewport(&qh, w).expect("wp_viewporter");
-    vp.set_destination(8000, 600); // H_max = 16384 / 8000 = 2.048
+    vp.set_destination(8000, 600); // H_max = ⌊120·16384/8000⌋/120 = 245/120 (H-1, B)
     r.ls.probe.surfaces[w].wl.commit();
     r.ls.pump();
     assert_eq!(
         r.ls.probe.preferred_scales_of("W"),
-        vec![360, 246],
+        vec![360, 245],
         "forced decrease while the pan is still held"
     );
     assert_eq!(r.ls.probe.preferred_buffer_scales_of("W"), vec![3, 2]);
@@ -870,7 +870,7 @@ fn p7_applies_inside_an_open_epoch() {
     r.frame();
     assert_eq!(
         r.ls.probe.preferred_scales_of("W"),
-        vec![360, 246],
+        vec![360, 245],
         "settlement keeps the device-bound hint"
     );
 }
@@ -909,13 +909,13 @@ fn p7_applies_to_an_unobserved_element() {
 
         let grown = if grow_root { w } else { s };
         let vp = r.ls.probe.get_viewport(&qh, grown).expect("wp_viewporter");
-        vp.set_destination(8000, 48); // H_max = 16384 / 8000 = 2.048
+        vp.set_destination(8000, 48); // H_max = ⌊120·16384/8000⌋/120 = 245/120 (H-1, B)
         r.ls.probe.surfaces[grown].wl.commit();
         r.ls.pump();
         for label in ["W", "S"] {
             assert_eq!(
                 r.ls.probe.preferred_scales_of(label),
-                vec![360, 246],
+                vec![360, 245],
                 "{label}, grown by the {}",
                 if grow_root { "root" } else { "subsurface" }
             );
@@ -947,7 +947,7 @@ fn device_ceiling_lowered_at_runtime_and_invalid_value_refused() {
     );
     assert_eq!(ls.probe.preferred_scales_of("W"), vec![360]);
 
-    for (d_max, want_120, want_b) in [(8192u32, 328u32, 2i32), (4096, 164, 1)] {
+    for (d_max, want_120, want_b) in [(8192u32, 327u32, 2i32), (4096, 163, 1)] {
         let fx = ls
             .state
             .core_mut()
@@ -965,7 +965,7 @@ fn device_ceiling_lowered_at_runtime_and_invalid_value_refused() {
             Some(&want_b)
         );
     }
-    assert_eq!(ls.probe.preferred_scales_of("W"), vec![360, 328, 164]);
+    assert_eq!(ls.probe.preferred_scales_of("W"), vec![360, 327, 163]);
 
     assert_eq!(
         ls.state.core_mut().set_renderer_device_max(0),
@@ -973,5 +973,5 @@ fn device_ceiling_lowered_at_runtime_and_invalid_value_refused() {
     );
     assert_eq!(ls.state.core().scale_config().d_max, 4096, "kept");
     ls.pump();
-    assert_eq!(ls.probe.preferred_scales_of("W"), vec![360, 328, 164]);
+    assert_eq!(ls.probe.preferred_scales_of("W"), vec![360, 327, 163]);
 }
