@@ -15,7 +15,7 @@ mod common;
 use common::Lockstep;
 use common::input::*;
 use infynitae_backend_headless::VirtualOutput;
-use infynitae_core::scale::InteractionKind;
+use infynitae_core::scale::{InteractionKind, SessionTime};
 
 fn output_a() -> VirtualOutput {
     VirtualOutput {
@@ -228,7 +228,7 @@ fn tst24_scale_interaction_epoch_settlement_timer() {
         element_id,
         InteractionKind::WindowResize,
         false, // discrete: deadline = now + 300 ms
-        0,
+        SessionTime::from_millis(0),
     );
 
     // Move pointer to B and pan camera B away so rho drops to 1.0
@@ -240,7 +240,10 @@ fn tst24_scale_interaction_epoch_settlement_timer() {
     r.frame();
 
     // At t = 100 ms: deadline (300 ms) has not arrived yet -> decrease suppressed
-    let tick_fx_100 = r.ls.state.core_mut().scale_tick(100);
+    let tick_fx_100 =
+        r.ls.state
+            .core_mut()
+            .scale_tick(SessionTime::from_millis(100));
     assert!(
         tick_fx_100.is_empty(),
         "No settlement before 300 ms deadline"
@@ -252,7 +255,10 @@ fn tst24_scale_interaction_epoch_settlement_timer() {
     );
 
     // At t = 300 ms: deadline reached -> settles to 120 (1.0)
-    let tick_fx_300 = r.ls.state.core_mut().scale_tick(300);
+    let tick_fx_300 =
+        r.ls.state
+            .core_mut()
+            .scale_tick(SessionTime::from_millis(300));
     assert!(!tick_fx_300.is_empty(), "Settlement fires at 300 ms");
     r.ls.state.apply(&tick_fx_300);
     r.ls.pump();

@@ -306,7 +306,7 @@ pub fn run_headless(
         // An open scale-settlement deadline (INV-SCALE-3) is a wake-up of its own: the loop
         // sleeps until it even if no client and no frame is pending, and has nothing to wake
         // for when no epoch is open (INV-IDLE-1).
-        session.wake_at_ms(state.core().next_settlement_deadline());
+        session.wake_at(state.core().next_settlement_deadline());
         event_loop.dispatch(session.timeout(), &mut ())?;
         session.dispatch(&mut state);
 
@@ -322,13 +322,13 @@ pub fn run_headless(
         }
 
         // Settle the scale epochs whose deadline has passed, on the session clock.
-        let now_ms = session.now_ms();
+        let now = session.now();
         if state
             .core()
             .next_settlement_deadline()
-            .is_some_and(|deadline| now_ms >= deadline)
+            .is_some_and(|deadline| now >= deadline)
         {
-            let scale_fx = state.core_mut().scale_tick(now_ms);
+            let scale_fx = state.core_mut().scale_tick(now);
             state.apply(&scale_fx);
             session.flush();
         }

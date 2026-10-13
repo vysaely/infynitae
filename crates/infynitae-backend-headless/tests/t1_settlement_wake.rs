@@ -142,20 +142,25 @@ impl Loop {
     }
 
     fn deadline(&self) -> Option<u64> {
-        self.state.core().next_settlement_deadline()
+        self.state
+            .core()
+            .next_settlement_deadline()
+            .map(|d| d.millis())
     }
 
     /// The sleep the loop would take now, with Core's deadline handed to the session as the run
     /// loop does at the top of every turn.
     fn sleep(&mut self) -> Option<Duration> {
-        self.session.wake_at_ms(self.deadline());
+        self.session
+            .wake_at(self.state.core().next_settlement_deadline());
         self.session.timeout()
     }
 
     /// One turn of the run loop: `run_headless`'s loop body, statement for statement (the
     /// initial-focus grant left out: there is no client surface to focus).
     fn turn(&mut self, cap: Option<Duration>) {
-        self.session.wake_at_ms(self.deadline());
+        self.session
+            .wake_at(self.state.core().next_settlement_deadline());
         let sleep = match (self.session.timeout(), cap) {
             (Some(t), Some(c)) => Some(t.min(c)),
             (t, c) => t.or(c),
@@ -163,9 +168,15 @@ impl Loop {
         self.event_loop.dispatch(sleep, &mut ()).unwrap();
         self.session.dispatch(&mut self.state);
 
-        let now_ms = self.session.now_ms();
-        if self.deadline().is_some_and(|deadline| now_ms >= deadline) {
-            let fx = self.state.core_mut().scale_tick(now_ms);
+        let now = self.session.now();
+        let now_ms = now.millis();
+        if self
+            .state
+            .core()
+            .next_settlement_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
+            let fx = self.state.core_mut().scale_tick(now);
             for e in &fx {
                 if let Effect::PreferredScale { scale_120, .. } = e {
                     self.settled.push((now_ms, *scale_120));
@@ -248,14 +259,14 @@ impl Loop {
     }
 
     fn open_discrete(&mut self) -> u64 {
-        let now = self.session.now_ms();
+        let now = self.session.now();
         self.state.core_mut().start_scale_interaction(
             self.w,
             InteractionKind::WindowResize,
             false,
             now,
         );
-        now
+        now.millis()
     }
 }
 

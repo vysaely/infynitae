@@ -96,6 +96,28 @@ impl ScalePolicyConfig {
     }
 }
 
+/// A time on the session's monotonic clock, in milliseconds since the session started. It is
+/// the only clock a scale-epoch deadline is expressed on and compared with (M7).
+///
+/// Two other clocks exist in a running compositor and are different clocks: the time an input
+/// device stamps on an event (forwarded to clients, never compared with a deadline), and the
+/// presentation clock announced by `wp_presentation` (frame times). Neither is a `SessionTime`,
+/// and there is deliberately no conversion from a bare number, no `Default` and no zero
+/// constant: a caller has to say which clock it read.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct SessionTime(u64);
+
+impl SessionTime {
+    /// `ms` milliseconds after the session started. For the session clock's owner (and tests).
+    pub const fn from_millis(ms: u64) -> SessionTime {
+        SessionTime(ms)
+    }
+
+    pub const fn millis(self) -> u64 {
+        self.0
+    }
+}
+
 /// Interaction kinds participating in ScaleInteractionEpoch (INV-SCALE-3, M7).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InteractionKind {
@@ -192,11 +214,17 @@ impl ScaleState {
     /// A discrete step at `now_ms` (M7 `Closed → Open{discrete, deadline = now + T_settle}` and
     /// `Open | further step`): opens the epoch if none is open and moves its deadline to
     /// `now_ms + T_settle`. With [`ScaleState::continuous_step`] the only writer of a deadline,
-    /// and the only one that needs the time of the step.
+    /// and the only one that needs the time of the step. A discrete epoch's deadline never moves
+    /// earlier: a step stamped before the previous one keeps the later deadline.
     pub fn discrete_step(&mut self, kind: InteractionKind, now_ms: u64, t_settle_ms: u64) {
+        let was_discrete = self.epoch.open && !self.epoch.continuous;
         self.open(kind);
         self.epoch.continuous = false;
-        self.epoch.deadline = Some(now_ms.saturating_add(t_settle_ms));
+        let deadline = now_ms.saturating_add(t_settle_ms);
+        self.epoch.deadline = Some(match self.epoch.deadline {
+            Some(earlier) if was_discrete => earlier.max(deadline),
+            _ => deadline,
+        });
     }
 
     /// One evaluation of the policy against the requirement `rho`, with no notion of time: it

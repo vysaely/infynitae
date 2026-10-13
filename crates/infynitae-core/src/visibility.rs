@@ -845,18 +845,35 @@ mod tests {
         assert_eq!(c.next_settlement_deadline(), None, "no element, no epoch");
         let id = map(&mut c);
         assert_eq!(c.next_settlement_deadline(), None, "no epoch open");
-        c.start_scale_interaction(id, InteractionKind::CameraZoom, false, 1_000);
+        c.start_scale_interaction(
+            id,
+            InteractionKind::CameraZoom,
+            false,
+            crate::scale::SessionTime::from_millis(1_000),
+        );
         let deadline = 1_000 + DEFAULT_T_SETTLE_MS;
-        assert_eq!(c.next_settlement_deadline(), Some(deadline));
-        c.scale_tick(deadline - 1);
-        assert_eq!(c.next_settlement_deadline(), Some(deadline), "not due yet");
-        c.scale_tick(deadline);
+        assert_eq!(
+            c.next_settlement_deadline(),
+            Some(crate::scale::SessionTime::from_millis(deadline))
+        );
+        c.scale_tick(crate::scale::SessionTime::from_millis(deadline - 1));
+        assert_eq!(
+            c.next_settlement_deadline(),
+            Some(crate::scale::SessionTime::from_millis(deadline)),
+            "not due yet"
+        );
+        c.scale_tick(crate::scale::SessionTime::from_millis(deadline));
         assert_eq!(
             c.next_settlement_deadline(),
             None,
             "settled: nothing left to wake for"
         );
-        c.start_scale_interaction(id, InteractionKind::CameraPan, true, 5_000);
+        c.start_scale_interaction(
+            id,
+            InteractionKind::CameraPan,
+            true,
+            crate::scale::SessionTime::from_millis(5_000),
+        );
         assert_eq!(
             c.next_settlement_deadline(),
             None,
@@ -879,13 +896,22 @@ mod tests {
         c.output_connected(&mut t, desc("A", 60_000)).unwrap();
         let id = map(&mut c);
         let step = 5_000;
-        c.start_scale_interaction(id, InteractionKind::WindowResize, false, step);
+        c.start_scale_interaction(
+            id,
+            InteractionKind::WindowResize,
+            false,
+            crate::scale::SessionTime::from_millis(step),
+        );
         let deadline = step + DEFAULT_T_SETTLE_MS;
         let unchanged = |c: &Core, what: &str| {
             let e = c.scale_state(id).unwrap().epoch;
             assert!(e.open && !e.continuous, "{what}: {e:?}");
             assert_eq!(e.kind, Some(InteractionKind::WindowResize), "{what}");
-            assert_eq!(c.next_settlement_deadline(), Some(deadline), "{what}");
+            assert_eq!(
+                c.next_settlement_deadline(),
+                Some(crate::scale::SessionTime::from_millis(deadline)),
+                "{what}"
+            );
         };
         unchanged(&c, "opened");
         for w in [500, 401, 400] {
@@ -921,24 +947,126 @@ mod tests {
         c.physical_input(&mut i, button(false)).unwrap();
         unchanged(&c, "the drag's release settles drag epochs only");
 
-        assert!(c.scale_tick(deadline - 1).is_empty());
+        assert!(
+            c.scale_tick(crate::scale::SessionTime::from_millis(deadline - 1))
+                .is_empty()
+        );
         unchanged(&c, "a tick before the deadline");
-        // a further step of the discrete interaction does move it
-        c.start_scale_interaction(id, InteractionKind::WindowResize, false, step + 200);
-        assert_eq!(c.next_settlement_deadline(), Some(deadline + 200));
-        c.scale_tick(deadline);
+        // a further step of the discrete interaction does move it. The clock has reached
+        // `deadline − 1` (the tick above), so the step is taken there: 299 ms after the first.
+        let second = deadline - 1;
+        c.start_scale_interaction(
+            id,
+            InteractionKind::WindowResize,
+            false,
+            crate::scale::SessionTime::from_millis(second),
+        );
         assert_eq!(
             c.next_settlement_deadline(),
-            Some(deadline + 200),
+            Some(crate::scale::SessionTime::from_millis(
+                second + DEFAULT_T_SETTLE_MS
+            ))
+        );
+        c.scale_tick(crate::scale::SessionTime::from_millis(deadline));
+        assert_eq!(
+            c.next_settlement_deadline(),
+            Some(crate::scale::SessionTime::from_millis(
+                second + DEFAULT_T_SETTLE_MS
+            )),
             "superseded"
         );
-        c.scale_tick(deadline + 200);
+        c.scale_tick(crate::scale::SessionTime::from_millis(
+            second + DEFAULT_T_SETTLE_MS,
+        ));
         assert_eq!(
             c.next_settlement_deadline(),
             None,
             "settled at its deadline"
         );
         assert!(!c.scale_state(id).unwrap().epoch.open);
+    }
+
+    /// The session clock is monotonic as far as the scale policy is concerned. A time earlier
+    /// than one already seen is read as the latest seen: a step stamped in the past cannot pull a
+    /// deadline earlier or place one behind the clock, and a tick with an old time settles
+    /// nothing that a later tick would not have.
+    #[test]
+    fn epoch_deadlines_do_not_go_backwards_with_the_clock() {
+        use crate::scale::{DEFAULT_T_SETTLE_MS, InteractionKind};
+        let t = DEFAULT_T_SETTLE_MS;
+        let (mut c, _, _, mut tok) = Core::new(persisted(false));
+        c.output_connected(&mut tok, desc("A", 60_000)).unwrap();
+        let id = map(&mut c);
+        c.start_scale_interaction(
+            id,
+            InteractionKind::CameraZoom,
+            false,
+            crate::scale::SessionTime::from_millis(5_000),
+        );
+        assert_eq!(
+            c.next_settlement_deadline(),
+            Some(crate::scale::SessionTime::from_millis(5_000 + t))
+        );
+        // a step stamped two seconds in the past: read as 5 000, the deadline stays
+        c.start_scale_interaction(
+            id,
+            InteractionKind::CameraZoom,
+            false,
+            crate::scale::SessionTime::from_millis(3_000),
+        );
+        assert_eq!(
+            c.next_settlement_deadline(),
+            Some(crate::scale::SessionTime::from_millis(5_000 + t))
+        );
+        // a later step moves it later
+        c.start_scale_interaction(
+            id,
+            InteractionKind::CameraZoom,
+            false,
+            crate::scale::SessionTime::from_millis(5_100),
+        );
+        assert_eq!(
+            c.next_settlement_deadline(),
+            Some(crate::scale::SessionTime::from_millis(5_100 + t))
+        );
+        // a tick with an old time does not settle; the clock Core holds is still 5 100
+        assert!(
+            c.scale_tick(crate::scale::SessionTime::from_millis(1))
+                .is_empty()
+        );
+        assert!(c.scale_state(id).unwrap().epoch.open);
+        c.scale_tick(crate::scale::SessionTime::from_millis(5_100 + t));
+        assert_eq!(c.next_settlement_deadline(), None);
+        // after a settlement at 5 400, a new epoch stamped at 100 is armed from 5 400, not 100
+        c.start_scale_interaction(
+            id,
+            InteractionKind::CameraZoom,
+            false,
+            crate::scale::SessionTime::from_millis(100),
+        );
+        assert_eq!(
+            c.next_settlement_deadline(),
+            Some(crate::scale::SessionTime::from_millis(5_100 + 2 * t))
+        );
+        // a continuous epoch that becomes discrete takes the step's deadline
+        c.scale_tick(crate::scale::SessionTime::from_millis(5_100 + 2 * t));
+        c.start_scale_interaction(
+            id,
+            InteractionKind::CameraPan,
+            true,
+            crate::scale::SessionTime::from_millis(9_000),
+        );
+        assert_eq!(c.next_settlement_deadline(), None);
+        c.start_scale_interaction(
+            id,
+            InteractionKind::CameraPan,
+            false,
+            crate::scale::SessionTime::from_millis(9_050),
+        );
+        assert_eq!(
+            c.next_settlement_deadline(),
+            Some(crate::scale::SessionTime::from_millis(9_050 + t))
+        );
     }
 
     // ------------------------------------------------------------ differential tests

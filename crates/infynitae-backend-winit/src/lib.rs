@@ -178,7 +178,7 @@ pub fn run_nested(
         // An open scale-settlement deadline (INV-SCALE-3) wakes the loop by itself; none is
         // armed while no epoch is open (INV-IDLE-1).
         data.session
-            .wake_at_ms(data.state.core().next_settlement_deadline());
+            .wake_at(data.state.core().next_settlement_deadline());
         event_loop.dispatch(data.session.timeout(), &mut data)?;
         data.session.dispatch(&mut data.state);
 
@@ -195,14 +195,14 @@ pub fn run_nested(
         }
 
         // Settle the scale epochs whose deadline has passed, on the session clock.
-        let now_ms = data.session.now_ms();
+        let now = data.session.now();
         if data
             .state
             .core()
             .next_settlement_deadline()
-            .is_some_and(|deadline| now_ms >= deadline)
+            .is_some_and(|deadline| now >= deadline)
         {
-            let scale_fx = data.state.core_mut().scale_tick(now_ms);
+            let scale_fx = data.state.core_mut().scale_tick(now);
             data.state.apply(&scale_fx);
             data.session.flush();
         }

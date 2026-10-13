@@ -176,6 +176,8 @@ pub struct Core {
     scale_config: scale::ScalePolicyConfig,
     /// OBJ-16: Authoritative scale state per element.
     scales: Vec<(stage::ElementId, scale::ScaleState)>,
+    /// The latest session time handed to the scale policy (M7 deadlines are on this clock).
+    scale_clock: Option<scale::SessionTime>,
     /// The placement policy of elements not yet mapped (INV-STAGE-1 writer (a)).
     placement: protocol::PlacementPolicy,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
@@ -210,6 +212,7 @@ impl Core {
                 persisted,
                 scale_config: scale::ScalePolicyConfig::default(),
                 scales: Vec::new(),
+                scale_clock: None,
                 placement: protocol::PlacementPolicy::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
@@ -559,7 +562,7 @@ impl Core {
     }
 
     /// Returns the smallest active deadline among open ScaleInteractionEpochs.
-    pub fn next_settlement_deadline(&self) -> Option<u64> {
+    pub fn next_settlement_deadline(&self) -> Option<scale::SessionTime> {
         self.scales
             .iter()
             .filter_map(|(_, st)| {
@@ -570,10 +573,20 @@ impl Core {
                 }
             })
             .min()
+            .map(scale::SessionTime::from_millis)
+    }
+
+    /// The session clock as Core has seen it: the latest [`scale::SessionTime`] any caller
+    /// handed in. A time earlier than that is read as that latest time, so a clock that steps
+    /// backwards cannot produce a deadline in the past or settle an epoch out of order.
+    fn session_time(&mut self, now: scale::SessionTime) -> u64 {
+        self.scale_clock = self.scale_clock.max(Some(now));
+        self.scale_clock.unwrap_or(now).millis()
     }
 
     /// Advances time for active ScaleInteractionEpochs, settling those whose deadline expired.
-    pub fn scale_tick(&mut self, now_ms: u64) -> Vec<protocol::Effect> {
+    pub fn scale_tick(&mut self, now: scale::SessionTime) -> Vec<protocol::Effect> {
+        let now_ms = self.session_time(now);
         let output_scales: Vec<f64> = self.outputs.iter().map(|o| o.scale).collect();
         let mut fx = Vec::new();
         for (element, st) in &mut self.scales {
@@ -602,8 +615,9 @@ impl Core {
         element: stage::ElementId,
         kind: scale::InteractionKind,
         continuous: bool,
-        now_ms: u64,
+        now: scale::SessionTime,
     ) {
+        let now_ms = self.session_time(now);
         if let Some((_, st)) = self.scales.iter_mut().find(|(e, _)| *e == element) {
             if continuous {
                 st.continuous_step(kind);
