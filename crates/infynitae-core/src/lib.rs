@@ -179,6 +179,10 @@ pub struct Core {
     /// M2 pre-configure: toplevels that asked for fullscreen before their initial commit, with
     /// the output they named. Decided at the initial commit.
     premap_fullscreen: Vec<(stage::ElementId, Option<output::OutputId>)>,
+    /// The size offered to an element when its fullscreen ended, kept until its window geometry
+    /// changes: until then its geometry is still the fullscreen one, so a new grant saves this
+    /// size and not that one. Written by `core::protocol` alone.
+    restore_offers: Vec<(stage::ElementId, geom::LocalSize)>,
     /// Elements that left protocol fullscreen before ever having been placed as a window, with
     /// the geometry size they had then. Their default placement is resolved at the first commit
     /// with another size: the client's first windowed size.
@@ -216,6 +220,7 @@ impl Core {
                 placement: protocol::PlacementPolicy::default(),
                 fullscreen: Vec::new(),
                 premap_fullscreen: Vec::new(),
+                restore_offers: Vec::new(),
                 windowed_placement_pending: Vec::new(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
