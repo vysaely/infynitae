@@ -229,6 +229,15 @@ impl Core {
         &self.fullscreen
     }
 
+    /// The elements whose default placement was postponed past a fullscreen first map and is
+    /// still waiting for their first windowed size, read-only.
+    pub fn placements_pending(&self) -> Vec<ElementId> {
+        self.windowed_placement_pending
+            .iter()
+            .map(|(e, _)| *e)
+            .collect()
+    }
+
     pub fn fullscreen_of(&self, id: ElementId) -> Option<FullscreenState> {
         self.fullscreen.iter().copied().find(|f| f.element == id)
     }
@@ -2170,7 +2179,20 @@ mod tests {
         c.toplevel_committed(z, win(4, 1920, 1080, true)).unwrap();
         c.toplevel_request(z, ToplevelRequest::UnsetFullscreen)
             .unwrap();
+        assert_eq!(c.placements_pending(), vec![z], "waiting for its size");
         c.toplevel_destroyed(z);
+        assert!(c.placements_pending().is_empty(), "gone with the element");
+        // the same when it is unmapped instead
+        let u = c.toplevel_created();
+        c.toplevel_request(u, FS).unwrap();
+        c.toplevel_committed(u, win(6, 0, 0, false)).unwrap();
+        c.toplevel_committed(u, win(6, 1920, 1080, true)).unwrap();
+        c.toplevel_request(u, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        assert_eq!(c.placements_pending(), vec![u]);
+        c.toplevel_committed(u, win(6, 0, 0, false)).unwrap(); // unmap
+        assert!(c.placements_pending().is_empty(), "gone with the unmap");
+        c.toplevel_destroyed(u);
         let n = c.toplevel_created();
         c.toplevel_committed(n, win(5, 0, 0, false)).unwrap();
         c.toplevel_committed(n, win(5, 200, 100, true)).unwrap();
