@@ -159,7 +159,7 @@ INC-15 (PHYSICAL T3)   INC-16 (PHYSICAL T4, Phase G DRM)   INC-17 (PHYSICAL T5) 
 - **Seam touched:** `wp_fractional_scale_v1`, `wl_surface.preferred_buffer_scale`.
 - **Invariants exercised:** INV-SCALE-1 … INV-SCALE-5, INV-IDLE-1 (settlement timer armed only while an epoch is open).
 - **Risks retired:** TR-1, TR-2, TR-5, TR-6, RC-2.
-- **Obligations:** OB-13 (incl. E1R zero-extent domain and integer bound), OB-28, OB-23 (T0/T1 part; tuning stays open), OB-42.
+- **Obligations:** OB-13 (enforcement, and the limit obtained through the renderer capability interface; incl. E1R zero-extent domain and integer bound), OB-28, OB-23 (T0/T1 part; tuning stays open), OB-42.
 - **Exit tests:** TST-16, TST-17, TST-23 R2 and TST-24 as T0 properties; TST-03 SC2 on the production path; adversarial self-resizing client (T1); E1R: EE-5 properties (initial commit with no buffer, 0×N/N×0, first buffer with P7, integer emission within `D_max`).
 - **Negative controls:** epoch disabled (40/40 churn); 1R camera-only rule for Stage moves (39).
 - **Entry conditions:** INC-2 and INC-3 exits.
@@ -283,7 +283,7 @@ No PRODUCT increment may create a state where **persistent zoom ≠ 1 and camera
 - **Seam touched:** EGL/GLES, winit.
 - **Invariants exercised:** INV-RENDER-1, INV-SCALE-2, INV-FAIL-1 (renderer recreation).
 - **Risks retired:** TC-8, TF-2.
-- **Obligations:** OB-7 (T2 smoke), OB-13 (real `D_max`).
+- **Obligations:** OB-7 (T2 smoke), OB-52 (real `D_max`; split from OB-13 on 2026-10-14).
 - **Exit tests:** T2 smoke (map, render, pan, multi-window, unmap); renderer filters exercised; E1R: a rotated output (90° and 270°, fractional scale) renders under real GLES without clipping or gaps (NESTED; renderer-dependent part of OB-45; no T4 claim).
 - **Negative controls:** `from_output` tracker at zoom ≠ 1 renders the wrong size (if INC-10 is active).
 - **Entry conditions:** INC-2, INC-6 exits; user authorization for a nested run.

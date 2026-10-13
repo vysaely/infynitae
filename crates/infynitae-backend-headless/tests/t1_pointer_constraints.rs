@@ -497,6 +497,11 @@ fn ob47_e3_oneshot_explicit_deactivate_defunct() {
 fn round5_pointer_constraints_stress_200_cycles() {
     let mut r = Rig::x8();
     focus_element(&mut r, 0);
+    // every cycle needs the pointer on W, where a constraint can activate: x8's position,
+    // (210, 200) from the view centre, which is local (610, 500) of the 800x600 window geometry.
+    // The pans below are symmetric, so it is checked again at the end.
+    let w = r.ls.state.elements().next().expect("W");
+    common::assert_pointer_at(&mut r.ls, w, (610.0, 500.0), "round5 start");
     let qh = r.ls.qh.clone();
 
     for i in 0..200usize {
@@ -571,4 +576,10 @@ fn round5_pointer_constraints_stress_200_cycles() {
     assert!(!r.ls.state.is_pointer_grabbed());
     assert!(r.ls.state.core().constraint().is_none());
     assert!(!helper_smithay_active(&r, 0));
+    common::assert_pointer_at(&mut r.ls, w, (610.0, 500.0), "round5 end");
+    assert_eq!(
+        r.camera(),
+        pos(0, 0),
+        "200 symmetric pans left the camera elsewhere"
+    );
 }

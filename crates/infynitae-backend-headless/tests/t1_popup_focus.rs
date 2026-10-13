@@ -412,6 +412,7 @@ fn neg2_pointer_first_teardown_control() {
             h.time_us,
         )
         .expect("motion");
+        common::assert_pointer_on_a_window_at(&mut h.ls, (50.0, 50.0));
         pointer_button(
             &mut h.ls.state,
             &mut h.ls.input,
@@ -480,6 +481,7 @@ fn obs1_nested_grab_replaces_pointer_grab_observation() {
 fn atk09_pan_acquisition_dismissal_emits_no_pointer_events() {
     let mut h = PopupHarness::new();
     h.motion(TO_LOCAL_50_50);
+    common::assert_pointer_on_a_window_at(&mut h.ls, (50.0, 50.0));
     h.button(BTN_LEFT, true, none());
     h.button(BTN_LEFT, false, none());
     let top = h.ls.state.core().focus().target().expect("focused");
@@ -566,6 +568,7 @@ fn atk13_pan_modifier_comes_from_the_seat_xkb_state() {
         h.time_us,
     )
     .expect("motion");
+    common::assert_pointer_on_a_window_at(&mut h.ls, (50.0, 50.0));
     // Super physically held on the seat keyboard; the button arrives with a stale empty snapshot.
     h.key(KEY_LEFTMETA, true);
     pointer_button(
@@ -599,6 +602,7 @@ fn atk13_pan_modifier_comes_from_the_seat_xkb_state() {
 fn atk14_stale_popup_grab_does_not_kill_implicit_button_grab() {
     let mut h = PopupHarness::new();
     h.motion(TO_LOCAL_50_50);
+    common::assert_pointer_on_a_window_at(&mut h.ls, (50.0, 50.0));
     h.button(BTN_LEFT, true, none());
     h.button(BTN_LEFT, false, none());
     let top = h.ls.state.core().focus().target().expect("focused");
@@ -674,6 +678,7 @@ fn click_to_focus_focuses_mapped_window() {
     h.core_focus(None);
     assert_eq!(h.ls.probe.kb.active, None);
     h.motion(TO_LOCAL_50_50);
+    common::assert_pointer_on_a_window_at(&mut h.ls, (50.0, 50.0));
     h.button(BTN_LEFT, true, none());
     h.button(BTN_LEFT, false, none());
     assert!(
@@ -846,12 +851,36 @@ impl R {
     fn kb_grabbed(&self) -> bool {
         self.ls.state.keyboard_is_grabbed()
     }
-    /// Click-to-focus on the topmost window under the pointer; returns its (probe idx, element).
+    /// Moves the pointer to `local` of `element`'s window geometry, wherever the pointer is now,
+    /// and checks with the production hit-test that it arrived there.
+    fn point_at(&mut self, element: ElementId, local: (f64, f64)) {
+        let d = common::delta_to(&self.ls, element, local);
+        self.motion(d);
+        common::assert_pointer_at(&mut self.ls, element, local, "point_at");
+    }
+    /// Click-to-focus on the topmost window at its local (50, 50), inside the 120x80 popup that
+    /// `popup` opens at (10, 10); returns its (probe idx, element). The pointer target is
+    /// explicit and verified, the client must receive the press, and the window must hold the
+    /// focus afterwards.
     fn click_focus(&mut self) -> (usize, ElementId) {
-        self.motion(TO_LOCAL_50_50);
+        let top = *self
+            .ls
+            .state
+            .core()
+            .stage()
+            .mapped_elements()
+            .last()
+            .expect("a mapped window");
+        self.point_at(top, (50.0, 50.0));
+        let before = self.ls.probe.ptr.len();
         self.button(BTN_LEFT, true, none());
         self.button(BTN_LEFT, false, none());
-        let top = self.target().expect("click-to-focus");
+        let presses = self.ls.probe.ptr[before..]
+            .iter()
+            .filter(|l| l.starts_with("button") && l.ends_with("pressed"))
+            .count();
+        assert_eq!(presses, 1, "the client did not receive the focusing click");
+        assert_eq!(self.target(), Some(top), "click-to-focus");
         let i = self.e.iter().position(|&x| x == top).unwrap();
         (self.w[i], top)
     }
@@ -1066,11 +1095,31 @@ fn r17_long_lived_stress_bounded_state() {
         let qh = r.ls.qh.clone();
         let w = r.ls.probe.toplevel(&qh, "X", (300, 200), 0);
         r.adv();
+        // The click must land on this cycle's window, outside the 120x80 popup that opens at
+        // (10, 10): X-local (4, 4). Explicit and verified, then the two motions of the original
+        // cycle around that point.
+        let x = r.ls.state.elements().last().expect("X is an element");
+        r.point_at(x, (4.0, 4.0));
         r.motion((1.0, 1.0));
         r.motion((-1.0, -1.0));
+        common::assert_pointer_at(&mut r.ls, x, (4.0, 4.0), "r17 before the click");
+        let before = r.ls.probe.ptr.len();
         r.button(BTN_LEFT, true, none());
         r.button(BTN_LEFT, false, none());
+        assert_eq!(
+            r.ls.probe.ptr[before..]
+                .iter()
+                .filter(|l| l.starts_with("button"))
+                .count(),
+            2,
+            "cycle {i}: X did not receive the click"
+        );
+        assert_eq!(r.target(), Some(x), "cycle {i}: the click did not focus X");
         let p1 = r.popup("P1", w);
+        assert!(
+            r.kb_grabbed() && r.ptr_grabbed(),
+            "cycle {i}: the popup holds no grab"
+        );
         r.key(KEY_A, true);
         r.key(KEY_A, false);
         let s2 = r.ls.probe.last_serial;
