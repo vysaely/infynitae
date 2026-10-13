@@ -1,8 +1,8 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — INC-6 READY FOR OWNER PLANNING.** Pointer constraints (`zwp_pointer_constraints_v1`), lock/confinement policy (M13, M14), confinement clamp (F-CONFINE-1), constraint reconciliation on output removal (F-RELOCATE-1), and interaction preemption restoration implemented on the production path. OB-11 adjudicated under Option B (P1 adopted under D-B12-PIN). INC-0, INC-1, INC-2, INC-3, INC-4, and INC-5 are RATIFIED. **INC-6 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — CORE VISIBILITY REMEDIATION INTEGRATION FORMALLY RATIFIED — INC-6 ACTIVE (EXPERIMENTAL, EXIT NOT AUTHORIZED).** INC-0, INC-1, INC-2, INC-3, INC-4, and INC-5 are RATIFIED. The Core visibility remediation (`85a74cb`; scoped visibility pass, bounding-box cull, `Stage` lookup by binary search) is integrated on canonical main and FORMALLY RATIFIED. **INC-6 (scale policy) is the active experimental implementation phase; it is NOT ratified and INC-6 exit is NOT authorized.** The runnable prototype runtime (winit and headless run loops) remains EXPERIMENTAL pending INC-13. **OB-42 (INV-ALLOC-1) and OB-44 (C14 baselines) remain OPEN.**
 
-Date: 2026-10-09
+Date: 2026-10-13
 
 ## PHASE F — CORE VISIBILITY REMEDIATION INTEGRATION (record: evidence/phase-f/core-visibility/)
 - **Integrated commit:** `85a74cbffd3692fa9965cbe6c68465d3972c6022` (local canonical main; fast-forward of 6 commits `b5b6dc4`, `2da6b23`, `be449fe`, `24536d4`, `ec11a62`, `85a74cb`; not pushed).
@@ -23,10 +23,10 @@ Date: 2026-10-09
 - **Review verdicts:**
   - Owner integration authorization: `GRANTED` (2026-10-13, Core visibility remediation only).
   - Owner acceptance of `85a74cb` as canonical local main tip: `GRANTED` (2026-10-13).
-  - Owner ratification gate: `PENDING`.
+  - Owner ratification gate: `FORMAL RATIFICATION AUTHORIZED` (2026-10-13).
 - **Declaration:**
   - INC-0 through INC-5 are RATIFIED.
-  - **The Core visibility remediation is INTEGRATED and NOT RATIFIED.**
+  - **The Core visibility remediation is INTEGRATED and RATIFIED.**
   - **INC-6 is NOT ratified;** the runtime remediation is NOT integrated.
   - Host KDE/KWin session untouched; no nested compositor run.
 
