@@ -4,13 +4,12 @@
 #![deny(unsafe_code)]
 
 use std::error::Error;
-use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
 use infynitae_core::{Core, InputPort, OutputLifecycleToken, PhysicalEvent};
-use infynitae_wayland::{ClientState, WaylandState, convert};
+use infynitae_wayland::session::{Session, SessionOptions};
+use infynitae_wayland::{WaylandState, convert};
 
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Event, InputEvent, KeyState, KeyboardKeyEvent,
@@ -18,12 +17,10 @@ use smithay::backend::input::{
 };
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::winit::{self, WinitEvent, WinitGraphicsBackend};
-use smithay::reexports::calloop::generic::Generic;
-use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
+use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
 use smithay::reexports::winit::dpi::LogicalSize;
 use smithay::reexports::winit::window::Window as WinitWindow;
-use smithay::wayland::socket::ListeningSocketSource;
 
 /// Options for configuring the nested winit compositor.
 #[derive(Clone, Debug)]
@@ -69,79 +66,39 @@ pub fn vblank_period(refresh_mhz: u32) -> Duration {
 /// Internal event-loop data structure passed to calloop.
 struct LoopData {
     state: WaylandState,
-    display: Display<WaylandState>,
+    session: Session,
     input_port: InputPort,
     output_token: OutputLifecycleToken,
     output_id: OutputId,
     output_key: OutputKey,
     backend: WinitGraphicsBackend<GlesRenderer>,
-    start_time: Instant,
     last_abs_pos: Option<(f64, f64)>,
     scale_120: u32,
-    last_frame: Instant,
-    frame_count: u64,
-    children: Vec<std::process::Child>,
-    running: Arc<AtomicBool>,
+    /// The host asked to close the window.
+    closed: bool,
     options: WinitCompositorOptions,
 }
 
 /// Runs the nested compositor with Winit backend.
 ///
 /// Takes ownership of `Core` and the composition root's authority ports (`InputPort`,
-/// `OutputLifecycleToken`), wires the nested window, listening socket, renderer and
-/// event loop, and blocks until the window is closed or a termination signal is received.
+/// `OutputLifecycleToken`), wires the nested window, the session, the renderer and the event
+/// loop, and blocks until the window is closed or a run limit is reached.
+///
+/// Frames are paced by the session's frame timer at the configured refresh rate. The host
+/// compositor is the display: a submit may wait for it, and when the picture reaches a screen is
+/// not known here, so presentation feedback carries the time of the submit and no flags.
 pub fn run_nested(
     core: Core,
     input_port: InputPort,
     mut output_token: OutputLifecycleToken,
     options: WinitCompositorOptions,
 ) -> Result<(), Box<dyn Error>> {
-    let running = Arc::new(AtomicBool::new(true));
     let mut event_loop: EventLoop<LoopData> = EventLoop::try_new()?;
 
-    // 1. Initialize Wayland server display
-    let mut display: Display<WaylandState> = Display::new()?;
+    let display: Display<WaylandState> = Display::new()?;
     let mut state = WaylandState::new(&display.handle(), core);
 
-    // 2. Initialize Wayland listening socket
-    let socket_source = match options.socket_name.as_deref() {
-        Some(name) => ListeningSocketSource::with_name(name)?,
-        None => ListeningSocketSource::new_auto()?,
-    };
-    let socket_name = socket_source.socket_name().to_string_lossy().to_string();
-    println!("[infynitae] Listening on Wayland display socket: {socket_name}");
-    println!("[infynitae] To connect clients, set WAYLAND_DISPLAY={socket_name}");
-
-    // Insert listening socket into calloop
-    event_loop
-        .handle()
-        .insert_source(socket_source, |stream, _, data| {
-            let client_res = data
-                .display
-                .handle()
-                .insert_client(stream, Arc::new(ClientState::default()));
-            match client_res {
-                Ok(client) => {
-                    println!("[infynitae] Client connected: {client:?}");
-                }
-                Err(e) => {
-                    eprintln!("[infynitae] Failed to insert client: {e}");
-                }
-            }
-        })
-        .map_err(|e| format!("Failed to register listening socket: {e}"))?;
-
-    // Insert display client poll FD into calloop (Defect D: event loop starvation)
-    let display_fd = display.backend().poll_fd().try_clone_to_owned()?;
-    event_loop
-        .handle()
-        .insert_source(
-            Generic::new(display_fd, Interest::READ, Mode::Level),
-            |_event, _metadata, _data| Ok(PostAction::Continue),
-        )
-        .map_err(|e| format!("Failed to register display event source: {e}"))?;
-
-    // 3. Initialize Winit backend & window
     let window_attributes = WinitWindow::default_attributes()
         .with_inner_size(LogicalSize::new(
             options.width as f64,
@@ -149,11 +106,9 @@ pub fn run_nested(
         ))
         .with_title(&options.title)
         .with_visible(true);
-
     let (backend, winit_event_loop) =
         winit::init_from_attributes::<GlesRenderer>(window_attributes)?;
 
-    // 4. Connect initial output in Core via OutputLifecycleToken
     let output_key = OutputKey {
         device: "winit".into(),
         connector: "WINIT-0".into(),
@@ -174,103 +129,47 @@ pub fn run_nested(
         .map_err(|e| format!("Failed to connect output: {e:?}"))?;
     state.apply(&effects);
 
-    // 5. Spawn client command if requested
-    let mut children = Vec::new();
-    if let Some(cmd) = &options.exec {
-        println!("[infynitae] Spawning initial client: {cmd}");
-        let mut parts = cmd.split_whitespace();
-        if let Some(bin) = parts.next() {
-            let mut command = std::process::Command::new(bin);
-            command.args(parts);
-            command.env("WAYLAND_DISPLAY", &socket_name);
-            match command.spawn() {
-                Ok(child) => {
-                    println!("[infynitae] Client spawned with PID {}", child.id());
-                    children.push(child);
-                }
-                Err(e) => {
-                    eprintln!("[infynitae] Failed to spawn {cmd}: {e}");
-                }
-            }
-        }
-    }
+    let session = Session::new(
+        display,
+        &event_loop.handle(),
+        &SessionOptions {
+            socket_name: options.socket_name.clone(),
+            exec: options.exec.clone(),
+            refresh_mhz: options.refresh_mhz,
+            duration: options.duration,
+            max_frames: options.max_frames,
+        },
+    )?;
 
-    // 6. Assemble LoopData
     let mut data = LoopData {
         state,
-        display,
+        session,
         input_port,
         output_token,
         output_id,
         output_key,
         backend,
-        start_time: Instant::now(),
         last_abs_pos: None,
         scale_120: 120,
-        last_frame: Instant::now(),
-        frame_count: 0,
-        children,
-        running: running.clone(),
+        closed: false,
         options,
     };
 
-    // 7. Insert WinitEventLoop into calloop
+    // every host event (input, resize, redraw request) may change what is shown
     event_loop
         .handle()
         .insert_source(winit_event_loop, |event, _, data| {
             handle_winit_event(data, event);
+            data.session.request_frame();
         })
         .map_err(|e| format!("Failed to register winit event source: {e}"))?;
 
-    // 8. Event loop runner
-    println!("[infynitae] Compositor running. Press Ctrl+C or close window to exit.");
-    let target_frame_duration = vblank_period(data.options.refresh_mhz);
+    println!("[infynitae] Compositor running. Close the window to exit.");
+    while !data.closed && !data.session.finished() {
+        event_loop.dispatch(data.session.timeout(), &mut data)?;
+        data.session.dispatch(&mut data.state);
 
-    while running.load(Ordering::SeqCst) {
-        // Run calloop with timeout to pace frames
-        let elapsed = data.last_frame.elapsed();
-        let timeout = target_frame_duration.saturating_sub(elapsed);
-
-        event_loop.dispatch(Some(timeout), &mut data)?;
-
-        // Non-blocking child process reaping (Defect E)
-        data.children.retain_mut(|child| {
-            match child.try_wait() {
-                Ok(Some(status)) => {
-                    println!(
-                        "[infynitae] Child process {} exited with status {}",
-                        child.id(),
-                        status
-                    );
-                    false // remove reaped child
-                }
-                Ok(None) => true, // still running
-                Err(e) => {
-                    eprintln!("[infynitae] Failed to wait on child {}: {}", child.id(), e);
-                    false
-                }
-            }
-        });
-
-        // Check test duration limit if configured
-        if let Some(max_dur) = data.options.duration
-            && data.start_time.elapsed() >= max_dur
-        {
-            break;
-        }
-
-        // Check frame limit if configured
-        if let Some(max_frames) = data.options.max_frames
-            && data.frame_count >= max_frames
-        {
-            break;
-        }
-
-        // Dispatch Wayland client requests
-        let _ = data.display.dispatch_clients(&mut data.state);
-        let _ = data.display.flush_clients();
-
-        // Initial focus grant on topmost mapped element if seat is eligible (Defect A: INV-INPUT-8)
+        // Initial focus grant on topmost mapped element if seat is eligible (INV-INPUT-8)
         if data.state.core().focus().is_initial_eligible()
             && let Some(&topmost) = data.state.core().stage().mapped_elements().last()
             && let Ok(effects) = data
@@ -279,20 +178,16 @@ pub fn run_nested(
                 .grant_initial_focus(&mut data.input_port, topmost)
         {
             data.state.apply(&effects);
-            let _ = data.display.flush_clients();
+            data.session.flush();
         }
 
-        // Render frame if frame interval has elapsed (Defect C)
-        if data.last_frame.elapsed() >= target_frame_duration {
+        if data.session.frame_due() {
             render_and_present(&mut data);
         }
     }
 
-    // Terminate and reap any remaining children gracefully (Task A)
-    terminate_children(&mut data.children, Duration::from_millis(500));
-
-    // 9. Clean shutdown: disconnect output
     println!("[infynitae] Shutting down compositor...");
+    data.session.shutdown();
     if let Ok(effects) = data
         .state
         .core_mut()
@@ -300,7 +195,7 @@ pub fn run_nested(
     {
         data.state.apply(&effects);
     }
-    let _ = data.display.flush_clients();
+    data.session.flush();
 
     println!("[infynitae] Compositor exited cleanly.");
     Ok(())
@@ -337,18 +232,13 @@ fn handle_winit_event(data: &mut LoopData, event: WinitEvent) {
             }
         }
         WinitEvent::CloseRequested => {
-            data.running.store(false, Ordering::SeqCst);
+            data.closed = true;
         }
         WinitEvent::Input(input_event) => {
             handle_input_event(data, input_event);
         }
-        WinitEvent::Redraw => {
-            // Prevent duplicate presentation: only render if target frame duration has elapsed (Defect C)
-            let target_frame_duration = vblank_period(data.options.refresh_mhz);
-            if data.last_frame.elapsed() >= target_frame_duration {
-                render_and_present(data);
-            }
-        }
+        // the frame is requested by the caller, like for every other host event
+        WinitEvent::Redraw => {}
     }
 }
 
@@ -491,6 +381,8 @@ fn render_and_present(data: &mut LoopData) {
             age,
         )
     } else {
+        // retried at the next cadence point, so clients waiting for a frame are not stalled
+        data.session.request_frame();
         return;
     };
 
@@ -499,6 +391,8 @@ fn render_and_present(data: &mut LoopData) {
         Ok(None) => None,
         Err(e) => {
             eprintln!("[infynitae] Render error: {e:?}");
+            // retried at the next cadence point, so clients waiting for a frame are not stalled
+            data.session.request_frame();
             return;
         }
     };
@@ -507,18 +401,18 @@ fn render_and_present(data: &mut LoopData) {
     if let Some(damage_rects) = &damage {
         if let Err(e) = data.backend.submit(Some(damage_rects)) {
             eprintln!("[infynitae] Submit error: {e:?}");
+            // retried at the next cadence point, so clients waiting for a frame are not stalled
+            data.session.request_frame();
             return;
         }
-        data.frame_count += 1;
+        data.session.count_frame();
     }
 
     // Complete frame callbacks and presentation feedback for clocked elements
-    let now = data.start_time.elapsed();
+    let now = infynitae_wayland::presentation_clock_now();
     let elements = data.state.core().frame_tick(data.output_id);
     data.state.complete_frames(data.output_id, &elements, now);
-    let _ = data.display.flush_clients();
-
-    data.last_frame = Instant::now();
+    data.session.flush();
 }
 
 /// Calculates logical pointer motion delta from an absolute physical position sample,
@@ -541,77 +435,6 @@ pub fn normalize_abs_motion(
 pub fn normalize_rel_motion(delta: (f64, f64), scale_120: u32) -> (f64, f64) {
     let scale = (scale_120 as f64 / 120.0).max(0.001);
     (delta.0 / scale, delta.1 / scale)
-}
-
-/// Gracefully terminates and reaps compositor-owned child processes.
-///
-/// Implements a bounded two-stage shutdown policy:
-/// 1. Reaps any children that have already exited.
-/// 2. Sends `SIGTERM` to remaining live children.
-/// 3. Polls with non-blocking checks up to `grace_period` (default ~500ms).
-/// 4. Escalates to `SIGKILL` only for children that remain alive after grace interval.
-/// 5. Blocks to reap all direct child processes, preventing zombies.
-///
-/// Correctly handles `ESRCH` (process exited in race), already-exited children,
-/// and repeated invocations.
-pub fn terminate_children(children: &mut Vec<std::process::Child>, grace_period: Duration) {
-    use smithay::reexports::rustix::io::Errno;
-    use smithay::reexports::rustix::process::{Pid, Signal, kill_process};
-
-    // 1. Initial non-blocking reap for children that already exited normally
-    children.retain_mut(|child| {
-        match child.try_wait() {
-            Ok(Some(_status)) => false, // exited and reaped
-            Ok(None) => true,           // still running
-            Err(_) => false,
-        }
-    });
-
-    if children.is_empty() {
-        return;
-    }
-
-    // 2. Send SIGTERM to all remaining living children
-    for child in children.iter_mut() {
-        let pid_raw = child.id() as i32;
-        if let Some(pid) = Pid::from_raw(pid_raw) {
-            match kill_process(pid, Signal::TERM) {
-                Ok(()) => {}
-                Err(Errno::SRCH) => {} // Process already exited (normal race)
-                Err(e) => {
-                    eprintln!("[infynitae] Failed to send SIGTERM to child {pid_raw}: {e}");
-                }
-            }
-        }
-    }
-
-    // 3 & 4. Bounded grace wait (drain interval)
-    let start = Instant::now();
-    let poll_interval = Duration::from_millis(10);
-    while start.elapsed() < grace_period && !children.is_empty() {
-        children.retain_mut(|child| {
-            match child.try_wait() {
-                Ok(Some(_status)) => false, // reaped during grace
-                Ok(None) => true,           // still running
-                Err(_) => false,
-            }
-        });
-        if children.is_empty() {
-            break;
-        }
-        std::thread::sleep(poll_interval);
-    }
-
-    // 5 & 6. Escalate to SIGKILL for any stubborn children and reap all remaining
-    for child in children.iter_mut() {
-        println!(
-            "[infynitae] Child {} did not exit within grace period, escalating to SIGKILL",
-            child.id()
-        );
-        let _ = child.kill();
-        let _ = child.wait();
-    }
-    children.clear();
 }
 
 #[cfg(test)]
@@ -699,92 +522,5 @@ mod tests {
         // 240 Hz (240,000 mHz): ~4.166 ms
         let p240 = vblank_period(240_000);
         assert_eq!(p240.as_micros(), 4_166);
-    }
-
-    #[test]
-    fn test_terminate_children_normal_exit() {
-        let mut children = vec![std::process::Command::new("true").spawn().unwrap()];
-        std::thread::sleep(Duration::from_millis(50));
-        terminate_children(&mut children, Duration::from_millis(500));
-        assert!(children.is_empty());
-    }
-
-    #[test]
-    fn test_terminate_children_sigterm_handling() {
-        let mut children = vec![
-            std::process::Command::new("sleep")
-                .arg("10")
-                .spawn()
-                .unwrap(),
-        ];
-        let start = std::time::Instant::now();
-        terminate_children(&mut children, Duration::from_millis(1000));
-        let elapsed = start.elapsed();
-        assert!(children.is_empty());
-        assert!(
-            elapsed < Duration::from_millis(500),
-            "SIGTERM took {:?}",
-            elapsed
-        );
-    }
-
-    #[test]
-    fn test_terminate_children_ignored_sigterm_escalates_to_sigkill() {
-        let mut children = vec![
-            std::process::Command::new("sh")
-                .args(["-c", "trap '' TERM; while true; do sleep 1; done"])
-                .spawn()
-                .unwrap(),
-        ];
-        std::thread::sleep(Duration::from_millis(50));
-        let start = std::time::Instant::now();
-        terminate_children(&mut children, Duration::from_millis(100));
-        let elapsed = start.elapsed();
-        assert!(children.is_empty());
-        assert!(
-            elapsed >= Duration::from_millis(80),
-            "escalated too quickly: {:?}",
-            elapsed
-        );
-        assert!(
-            elapsed < Duration::from_millis(500),
-            "escalation hung: {:?}",
-            elapsed
-        );
-    }
-
-    #[test]
-    fn test_terminate_children_repeated_shutdown_idempotent() {
-        let mut children = vec![
-            std::process::Command::new("sleep")
-                .arg("10")
-                .spawn()
-                .unwrap(),
-        ];
-        terminate_children(&mut children, Duration::from_millis(500));
-        assert!(children.is_empty());
-        terminate_children(&mut children, Duration::from_millis(500));
-        assert!(children.is_empty());
-    }
-
-    #[test]
-    fn test_terminate_children_zombie_prevention() {
-        let child = std::process::Command::new("sleep")
-            .arg("10")
-            .spawn()
-            .unwrap();
-        let pid = child.id();
-        let mut children = vec![child];
-        terminate_children(&mut children, Duration::from_millis(500));
-        assert!(children.is_empty());
-
-        let status_path = format!("/proc/{pid}/status");
-        if let Ok(status) = std::fs::read_to_string(&status_path) {
-            for line in status.lines() {
-                if line.starts_with("State:") {
-                    assert!(!line.contains('Z'), "process {pid} left as zombie: {line}");
-                }
-            }
-        }
     }
 }
