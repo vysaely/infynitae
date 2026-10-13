@@ -1199,6 +1199,13 @@ fn check_wayland(files: &[SourceFile], r: &mut Report) {
 
 // ---------------------------------------------------------------- unsafe policy
 
+/// Matches every `unsafe` site of the workspace to one entry of the inventory (C9, INV-ARCH-2).
+///
+/// The rule reads source tokens, so it sees `unsafe` written in this workspace, including inside
+/// macro definitions and macro invocations. It does not see `unsafe` that only exists after
+/// expanding a macro defined in another crate: the token is in that crate's source, not here.
+/// Such a site is outside this rule and outside the inventory; only review of the dependency
+/// covers it. Whether rustc's `unsafe_code` lint reports it is not relied on.
 fn check_unsafe(root: &Path, crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report) {
     const R: &str = "unsafe-policy";
     r.rule(R);

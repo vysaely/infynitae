@@ -4,6 +4,14 @@ CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — CORE VISIBILITY REMEDIATION INTE
 
 Date: 2026-10-13
 
+## PHASE F — UNSAFE-INVENTORY ENFORCEMENT INTEGRATION (record: evidence/phase-f/unsafe-inventory-gate/)
+- **Integrated commit:** `804ab6554860b7884eb72c3020a6136651fcf482` (fast-forward of one commit on `ede1541`; not pushed). Owner authorization: 2026-10-13.
+- **Scope:** `enforcement/source-rules` (rule `unsafe-policy`) and `tools/verify-architecture` (19 seeded controls). No crate under `crates/` changes; C9 and INV-ARCH-2 are unchanged.
+- **Effect:** every `unsafe` site must match exactly one row of `docs/foundation/UNSAFE_INVENTORY.md` by file, enclosing item, count and class (`test` or `production`); unlisted, duplicate, ambiguous, stale, malformed or incomplete rows fail; an inventory that merely exists authorises nothing. The workspace has no `unsafe` site and no inventory at this commit.
+- **Limitation:** `unsafe` produced by expanding a macro defined in another crate is invisible to the rule (it reads source tokens). Recorded in the rule's doc comment and in the integration record §4.
+- **Not claimed:** authorization of any `unsafe` site; the windowless GLES test and its inventory row remain experimental.
+- **Declaration:** INC-6 is NOT ratified and INC-6 exit is NOT authorized; the runtime remains EXPERIMENTAL pending INC-13; OB-42 and OB-44 remain OPEN.
+
 ## PHASE F — RUNTIME REMEDIATION INTEGRATION — EXPERIMENTAL PENDING INC-13 (record: evidence/phase-f/runtime-remediation/)
 - **Integrated candidate:** `remediation/a-runtime` `e53cb3bde018fef7c33011d82e151316292c9c94`, merged as `59723f2532fe8fb04f3148cba5d2a4529c5f716f` on main `85a74cb` (not pushed).
 - **Scope:** `infynitae-wayland::session` (`Session`, `FrameTimer`, one `terminate_children`), both prototype run loops reduced to a loop body, presentation timestamps on the announced clock, repaint for a vanished client, software-renderer pixel tests of the production render path. No Core change. No authority port taken by shared code; no `Backend` trait.
