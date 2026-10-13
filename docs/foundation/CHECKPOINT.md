@@ -4,6 +4,32 @@ CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — INC-6 READY FOR OWNER PLANNING.*
 
 Date: 2026-10-09
 
+## PHASE F — CORE VISIBILITY REMEDIATION INTEGRATION (record: evidence/phase-f/core-visibility/)
+- **Integrated commit:** `85a74cbffd3692fa9965cbe6c68465d3972c6022` (local canonical main; fast-forward of 6 commits `b5b6dc4`, `2da6b23`, `be449fe`, `24536d4`, `ec11a62`, `85a74cb`; not pushed).
+- **Baseline commit:** `db254c24bfbb6c5598fdb5c7bf4fd79ba12f4524` (ratified INC-5).
+- **Scope:** Core only (`infynitae-core`, `tools/verify-test-efficacy`). `Stage` lookup by binary search; visibility pass scoped to the element or camera a batch changed (full pass kept for output connect, reconfigure, disconnect); per-element bounding-box cull; `frame_tick` from the membership table. No effect added, dropped or reordered; no authority moved; no dependency change. Not a spatial index (C3.8 threshold remains unevaluated; INV-RENDER-4 unaffected).
+- **Origin:** viability review finding F1 (O(E²) event cost in the INC-0…5 Core), reproduced 2026-10-11.
+- **Tests:** T0 differential tests against the unscoped, unculled reference (`scoped_visibility_equals_the_full_reference`, `output_changes_under_a_pan_equal_the_full_reference`), `cull_agrees_with_the_reference_at_the_view_edges`, `lookup_agrees_with_a_linear_scan_under_churn`; 16 seeded controls added.
+- **Derived verification evidence (at `85a74cb`, before and after integration):**
+  - Workspace test suite: 257 tests pass across 25 suites, 0 failed, 0 ignored.
+  - Cargo fmt and clippy (`--workspace --all-targets --locked -- -D warnings`): PASS.
+  - `./tools/verify-architecture`: PASS.
+  - `./tools/verify-test-efficacy`: PASS (126 seeded controls detected, 2 judges).
+  - `./tools/check-foundation-docs` and `--self-test`: PASS.
+  - `./tools/verify-development-environment`: PASS.
+- **Measured (T0 model, headless, `core_bench`; not C14 baselines):** at 3,000 elements a pan event 2,624 µs → 23.5 µs, a commit 2,624 µs → 0.34 µs, render-list construction 2,641 µs → 101 µs. No frame-time, presentation or input-latency claim; no renderer, GPU or hardware involved.
+- **Limitations:** pan, render list, remap and hotplug remain linear in mapped elements; INV-ALLOC-1 is not met (OB-42 stays OPEN); OB-44 stays OPEN; no human review recorded.
+- **INC-6 implication:** the frozen INC-6 candidate `f57315c` conflicts with this main in three files; a resolution and the correction of a pre-INC-6 debug assertion exposed by it exist only on `experimental/inc-6-on-core-85a74cb` (experimental, unratified).
+- **Review verdicts:**
+  - Owner integration authorization: `GRANTED` (2026-10-13, Core visibility remediation only).
+  - Owner acceptance of `85a74cb` as canonical local main tip: `GRANTED` (2026-10-13).
+  - Owner ratification gate: `PENDING`.
+- **Declaration:**
+  - INC-0 through INC-5 are RATIFIED.
+  - **The Core visibility remediation is INTEGRATED and NOT RATIFIED.**
+  - **INC-6 is NOT ratified;** the runtime remediation is NOT integrated.
+  - Host KDE/KWin session untouched; no nested compositor run.
+
 ## PHASE F — INC-5 FORMAL RATIFICATION AND SEAL
 - **Ratified implementation commit:** `4aaf5a3fc770f611beefbc24ee9469aada27e0dd` (canonical main).
 - **Ratified baseline:** Phase F INC-5 candidate `4d2fb3dc01ece2fabd37f1467c9f9831795e7ed4` and tiny-compositor candidate `4e7a7f892491df198216c384fae0a0ef74e5472a`.
