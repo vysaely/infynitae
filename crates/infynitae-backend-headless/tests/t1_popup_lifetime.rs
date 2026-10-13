@@ -9,10 +9,6 @@
 
 mod common;
 
-/// The motion that takes the startup pointer to local (50, 50) of a 400x300 window. The pointer
-/// starts at the view centre, and a window is centred there (F-PLACE-1): its local (200, 150).
-const TO_LOCAL_50_50: (f64, f64) = (-150.0, -100.0);
-
 use std::time::Duration;
 
 use common::input::{BTN_LEFT, BTN_MIDDLE, none};
@@ -81,20 +77,42 @@ impl H {
     fn label(&self, idx: usize) -> &'static str {
         self.ls.probe.surfaces[idx].label
     }
+    /// Moves the pointer to `local` of `element`'s window geometry, wherever the pointer is now,
+    /// and checks with the production hit-test that it arrived there.
+    fn point_at(&mut self, element: ElementId, local: (f64, f64)) {
+        let d = common::delta_to(&self.ls, element, local);
+        self.motion(d);
+        common::assert_pointer_at(&mut self.ls, element, local, "point_at");
+    }
     /// Pointer onto the topmost window at its local (50, 50); a click focuses it. Returns the
-    /// window's probe index, element and the press serial (the cause of a menu).
+    /// window's probe index, element and the press serial (the cause of a menu). The target is
+    /// explicit and verified: the pointer is put on that window from wherever it is, the client
+    /// must receive the press, and the window must hold the focus afterwards. (The earlier form
+    /// was a relative motion: repeated in a loop it walked the pointer off the window.)
     fn click_focus(&mut self) -> (usize, ElementId, u32) {
-        self.motion(TO_LOCAL_50_50);
-        self.button(BTN_LEFT, true);
-        let s = self.ls.probe.last_serial;
-        self.button(BTN_LEFT, false);
-        let top = self
+        let top = *self
             .ls
             .state
             .core()
-            .focus()
-            .target()
-            .expect("click-to-focus");
+            .stage()
+            .mapped_elements()
+            .last()
+            .expect("a mapped window");
+        self.point_at(top, (50.0, 50.0));
+        let before = self.ls.probe.ptr.len();
+        self.button(BTN_LEFT, true);
+        let s = self.ls.probe.last_serial;
+        self.button(BTN_LEFT, false);
+        let presses = self.ls.probe.ptr[before..]
+            .iter()
+            .filter(|l| l.starts_with("button") && l.ends_with("pressed"))
+            .count();
+        assert_eq!(presses, 1, "the client did not receive the focusing click");
+        assert_eq!(
+            self.ls.state.core().focus().target(),
+            Some(top),
+            "click-to-focus"
+        );
         let i = self.e.iter().position(|&x| x == top).expect("element");
         (self.w[i], top, s)
     }
@@ -662,7 +680,19 @@ fn round4_long_lived_combined_stress() {
     for i in 0..200usize {
         let (wp, top, s) = h.click_focus();
         let other = if top == h.e[0] { h.e[1] } else { h.e[0] };
+        let dismissed = h.ls.probe.popup_dones.len();
         let ps = h.chain(wp, s, 1 + i % 3);
+        // the cycle is only a stress of the grab paths if the chain really holds the grabs
+        assert!(
+            h.ls.state.keyboard_is_grabbed() && h.ls.state.is_pointer_grabbed(),
+            "cycle {i}: the menu chain of depth {} holds no grab",
+            1 + i % 3
+        );
+        assert_eq!(
+            h.ls.probe.popup_dones.len(),
+            dismissed,
+            "cycle {i}: a popup of the chain was dismissed before the cycle acted"
+        );
         h.key(KEY_LEFTMETA, true);
         h.key(KEY_LEFTMETA, true); // duplicate modifier
         h.key(KEY_LEFTMETA, false);

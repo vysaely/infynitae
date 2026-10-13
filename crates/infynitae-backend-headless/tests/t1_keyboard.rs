@@ -678,6 +678,7 @@ fn r04_snapshot_logo_without_seat_super_does_not_pan() {
     let mut s = S::new(true);
     s.set_focus(Some(s.e1));
     s.motion(TO_LOCAL_50_50);
+    // (where the pointer is does not matter here: a camera pan needs no window under it)
     pointer_button(
         &mut s.ls.state,
         &mut s.ls.input,
@@ -710,6 +711,7 @@ fn r05_temporal_modifier_boundaries() {
     let mut s1 = S::new(true);
     s1.set_focus(Some(s1.e1));
     s1.motion(TO_LOCAL_50_50);
+    // (where the pointer is does not matter here: a camera pan needs no window under it)
     s1.key(KEY_LEFTMETA, true);
     let m = s1.ls.probe.ptr.len();
     pointer_button(
@@ -743,6 +745,7 @@ fn r05_temporal_modifier_boundaries() {
     let mut s2 = S::new(true);
     s2.set_focus(Some(s2.e1));
     s2.motion(TO_LOCAL_50_50);
+    // (where the pointer is does not matter here: a camera pan needs no window under it)
     pointer_button(
         &mut s2.ls.state,
         &mut s2.ls.input,
@@ -769,6 +772,7 @@ fn r05_temporal_modifier_boundaries() {
     let mut s3 = S::new(true);
     s3.set_focus(Some(s3.e1));
     s3.motion(TO_LOCAL_50_50);
+    // (where the pointer is does not matter here: a camera pan needs no window under it)
     s3.key(KEY_LEFTMETA, true);
     s3.key(KEY_LEFTMETA, false);
     pointer_button(
@@ -881,6 +885,7 @@ fn r08_k6_cancel_is_externally_observable() {
     let mut s = S::new(true);
     s.set_focus(Some(s.e1));
     s.motion(TO_LOCAL_50_50);
+    // (where the pointer is does not matter here: a camera pan needs no window under it)
     s.key(KEY_LEFTMETA, true);
     s.mmb(true);
     s.key(KEY_LEFTMETA, false);

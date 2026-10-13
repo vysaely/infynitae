@@ -98,10 +98,10 @@ Object: OBJ-16. Implements INV-SCALE-3, INV-SCALE-4, INV-IDLE-1. Kinds: CameraPa
 | From | Trigger | To | Effects | Cites |
 |---|---|---|---|---|
 | Closed | continuous interaction begins | Open{continuous} | — | INV-SCALE-3 |
-| Closed | discrete spatial step or shell stream command | Open{discrete, deadline = now + T_settle (PROV-5)} | evaluate (increase only) | INV-SCALE-3 |
+| Closed | discrete spatial step or shell stream command | Open{discrete, deadline = now + T_settle (PROV-5)}, `now` = the session's monotonic clock when the step enters Core (C12.F4) | evaluate (increase only) | INV-SCALE-3 |
 | Closed | atomic camera or Stage action | Closed | evaluate once and settle | INV-SCALE-3 |
-| Open | further step | Open | increases at rung crossings in the epoch direction; decreases suppressed | INV-SCALE-4 |
-| Open | client response | Open | no reversal of direction | INV-SCALE-4 |
+| Open | further step | Open | increases at rung crossings in the epoch direction; decreases suppressed; a discrete step moves the deadline to its own `now + T_settle`, never earlier | INV-SCALE-3, INV-SCALE-4 |
+| Open | client response | Open | no reversal of direction; the deadline is not touched (a response is not a step) | INV-SCALE-3, INV-SCALE-4 |
 | Open | `h > H_max(E)` (device bound) | Open{down} | immediate decrease (P7); never used for ordinary decreases | INV-SCALE-2, INV-SCALE-3 |
 | Open | pointer motion / unrelated key or button | Open | nothing | INV-SCALE-3 |
 | Open | gesture end / release / end-of-stream / deadline / output settlement event | Closed | settle once to `t(ρ)` (F-SCALE-3) | INV-SCALE-3, INV-SCALE-5 |

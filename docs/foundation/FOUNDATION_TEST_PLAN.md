@@ -200,16 +200,16 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 
 ### OB-13
 - **Status:** OPEN
-- **Item:** Runtime `D_max` query and enforcement. Test/decision: query from the renderer at startup; assert h ≤ H_max for large windows
+- **Item:** Device-limit enforcement and its supply through the renderer interface (the INC-6 part of the original OB-13). Core enforces the device capability it is given: h ≤ H_max for large windows, the integer hint bounded, the zero-extent domain. The backend obtains that capability from its renderer through the renderer capability interface at startup; a headless fixture may report a documented deterministic limit; no unexplained constant is passed directly into Core
 - **Owner:** backend renderer → core ceiling
 - **Evidence available:** EC-16
-- **Pass criterion:** no buffer exceeds the device limit
+- **Pass criterion:** no buffer exceeds the reported device limit; the limit reaches Core only through the renderer capability interface; a change of the limit, the boundary values and an invalid limit are handled
 - **Destination:** T1
 - **May be closed by:** T1 production test (PRODUCT increment, production core + adapter + headless backend)
 - **Dependencies:** INC-6
 - **Blocks:** INC-6 exit
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
-- **History:** E1R (unsealed, E-F2-06, E1R-N3): enforcement includes the zero-extent domain (`H_dev = +∞`, no division) and the integer emission `b(h)` (an integer-scale client's buffer must fit); model evidence EE-5. Residual: a logical side > `D_max` at scale 1. C12.F2 (owner amendment 2026-10-13, H-1): the device bound is on the 1/120 lattice, so the fractional hint itself no longer exceeds the device; the criterion is thereby achievable on the fixture for fractional-scale clients. Status unchanged: OPEN (a real renderer's limit is validated at INC-13).
+- **History:** E1R (unsealed, E-F2-06, E1R-N3): enforcement includes the zero-extent domain (`H_dev = +∞`, no division) and the integer emission `b(h)` (an integer-scale client's buffer must fit); model evidence EE-5. Residual: a logical side > `D_max` at scale 1. C12.F2 (owner amendment 2026-10-13, H-1): the device bound is on the 1/120 lattice, so the fractional hint itself no longer exceeds the device; the criterion is thereby achievable on the fixture for fractional-scale clients. Status unchanged: OPEN (a real renderer's limit is validated at INC-13). **Split 2026-10-14 (owner decision):** the original item, "Runtime `D_max` query and enforcement. Test/decision: query from the renderer at startup; assert h ≤ H_max for large windows", was listed by INC-6 and by INC-13 ("real `D_max`"). It is now two obligations whose union is the original: this one (enforcement, and the query through the renderer interface with a deterministic headless fixture) and OB-52 (the real renderer's limit, on a GPU). Nothing of the original criterion is dropped, and this one is not closed by the split.
 
 ### OB-14
 - **Status:** OPEN
@@ -686,6 +686,19 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Blocks:** INC-5 exit
 - **Origin:** E1R (E1R-N2)
 - **History:** Ratified CLOSED at INC-5 exit following independent adversarial review and owner ratification; verified by T1 production test `ob51_popup_preemption_under_lock` (zero absolute motion to locked root surface W during popup grab; lock survives popup teardown).
+
+### OB-52
+- **Status:** OPEN
+- **Item:** Real renderer device limit (the INC-13 part of the original OB-13). The limit is queried from the real renderer and device at startup and again after renderer recreation, propagated to Core through the same renderer capability interface, and the enforcement of OB-13 is shown against that value on a real GPU. No fixture result substitutes for hardware evidence
+- **Owner:** backend renderer (GLES) → core ceiling
+- **Evidence available:** none: the nested backend reports the provisional EC-16 value without querying its renderer, and the windowless GLES test queries no limit
+- **Pass criterion:** the value Core holds equals the limit the GPU driver reports; no buffer exceeds it in a nested run; after renderer recreation the value is re-queried
+- **Destination:** T2
+- **May be closed by:** T2 nested run on a real GPU in INC-13 (separately authorized); not by any headless or fixture test
+- **Dependencies:** INC-13, OB-13
+- **Blocks:** INC-13 exit
+- **Origin:** OB-13 split (owner decision 2026-10-14); the requirement itself: CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
+- **History:** Created by the split of OB-13. Until then INC-13 cited "OB-13 (real `D_max`)".
 
 <!-- /living -->
 
