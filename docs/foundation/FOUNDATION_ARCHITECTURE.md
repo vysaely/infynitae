@@ -1204,7 +1204,7 @@ Not kept as negative controls: things that would only inflate counts (e.g. "remo
 
 ## C12 — Canonical invariant registry
 
-> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map).
+> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice).
 
 **This table is authoritative.** Legacy identifiers map to it (C12.2). Where a rule was refined, the earlier wording is superseded and must not be cited as normative.
 
@@ -1923,6 +1923,46 @@ New formula **F-PLACE-1** (living §F). It amends no existing formula: F-ROUND-1
 
 ---
 
+# §C12.F2 — Canonical registry amendment (Phase F: the device bound on the 1/120 lattice, H-1)
+
+**Status: ADOPTED 2026-10-13 by owner approval** of "the corrected pre-client-rounding device-bound formulation". One invariant clause and one formula definition change; no invariant is added or removed (57). Base: local main `2436dd4`.
+
+**Inputs:**
+- C12.E1R INV-SCALE-2 and F-SCALE-2 as effective at `2436dd4`;
+- finding H-1 of the INC-6 hardening review: the sealed bound `D_max / s_max(E)` is put on the wire as `round(120 · D_max / s_max(E))` (F-SCALE-3), which exceeds the bound whenever the rounding goes up, so a fractional-scale client is asked for a buffer larger than the device accepts.
+
+**Provenance:** [evidence/phase-f/h1-amendment/AMENDMENT_RECORD.md](evidence/phase-f/h1-amendment/AMENDMENT_RECORD.md) (independent verification of the formula and rounding direction; the Core proof and regression suite; the re-derived expectations).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12, C12.R1 and C12.E1R. Every other row is unchanged.**
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-SCALE-2** | Every emitted hint is a rung of the ladder in force at emission. The ladder contains every connected output scale ≤ H_max(E), the integers, and the geometric fill. `H_max(E) = min(H_cfg, H_dev(E))`, where the device bound `H_dev(E)` is the largest hint expressible on the wire (a multiple of 1/120) for which `s · h ≤ D_max` on every side: `⌊120 · D_max / s_max(E)⌋ / 120` when `s_max(E) > 0` and `+∞` when `s_max(E) = 0`; `s_max` is the largest logical side over all surfaces of E's tree and is 0 exactly when no surface has a non-zero extent (every initial commit). With no buffer there is nothing to bound, so `H_max(E) = H_cfg`. `D_max` is queried from the renderer and re-queried on renderer recreation. If E's size makes h exceed the bound, h is lowered immediately (P7). A held or epoch-deferred hint may be off-ladder until the next permitted evaluation. | core `ScaleState` | E+M | EC-16/18, ED-2 F3/F4, EE-5; evidence/phase-f/h1-amendment | T0 (every side at three device limits; resize alternation); T1 (OB-13) | owner amendment 2026-10-13 (H-1) |
+
+## C12.F2.1 Amended text superseded (must not be cited as normative)
+
+| Superseded | Replaced by |
+|---|---|
+| C12.E1R INV-SCALE-2 "the supremum of the hints whose buffers fit the device: `D_max / s_max(E)`" | INV-SCALE-2 (C12.F2): the largest multiple of 1/120 with `s · h ≤ D_max` |
+| C12.E1R F-SCALE-2 "`H_dev(E) = sup{…}` = `D_max / s_max(E)`" | F-SCALE-2 (C12.F2) |
+| "the effective ceiling is always min(H_cfg, D_max/s_max)" (PROV-1 allowed range) | `min(H_cfg, H_dev(E))` with `H_dev` per F-SCALE-2 (C12.F2) |
+
+## C12.F2.2 Formula amendments (living §F carries the corrected text; the previous text is recorded here verbatim)
+
+### F-SCALE-2 (H-1)
+- **Previous (C12.E1R):** `H_max(E) = min(H_cfg, H_dev(E))`. Device bound `H_dev(E) = sup{h > 0 : h · side ≤ D_max for every logical side of every buffered surface of E}` = `D_max / s_max(E)` if `s_max(E) > 0`, `+∞` if `s_max(E) = 0`. `s_max(E)` = largest logical side over all surfaces of E's tree (0 iff no surface has a non-zero extent, e.g. every initial commit); `D_max` queried from the renderer (re-queried on renderer recreation, PD-F1-08). Domain: every E; the value is finite because `H_cfg` is finite (PROV-1). [E-F2-06]
+- **Reason:** a hint reaches a client in 1/120 units (`preferred_scale = round(h·120)`, F-SCALE-3). A bound that is not itself such a unit is emitted rounded to nearest, and in about half the device-bound cases that is above the bound. Lowering the bound to the lattice makes the emitted value the bound itself.
+- **Rounding direction:** down. Rounding to nearest is the defect; rounding up is worse.
+- **Bound and client rounding are separate:** the bound is defined by `h · side ≤ D_max` on the exact product, before the client turns it into a buffer size. It therefore holds whether the client rounds its buffer size down, to nearest or up, and the compositor assumes none of them. It is not "the largest hint whose buffer fits": a client that rounds to nearest could sometimes fit one more step.
+- **Boundary cases:** `s_max = 0` → `+∞` (unchanged); `s_max = D_max` → exactly 1; `s_max = D_max + 1` → 119/120; `s_max = 120 · D_max` → 1/120; beyond it the quotient is 0 and the bound is the wire minimum 1/120 (residual). The integer hint `b(h)` (F-SCALE-3) is unchanged in value, because `⌊⌊120x⌋/120⌋ = ⌊x⌋`.
+- **Negative control:** with the previous definition, of the sides 1…4·`D_max` on which the device binds, 7,300 of 15,019 (`D_max` 4096), 14,739 of 30,038 (8192) and 29,639 of 60,075 (16384) are emitted above the device; with this one, none.
+
+## C12.F2.3 What this layer does not change
+
+F-SCALE-3 (target, emission `round(h·120)`, integer hint, initial hint), the ladder definition, `H_cfg` and its range, P7, SC-E, the epoch rules, and the held-hint rules. Raising `D_max` still does not by itself raise a held fractional hint. OB-13 stays OPEN: the amendment makes its fixture-level criterion achievable for fractional-scale clients; validation against a real renderer's limit remains at INC-13.
+
+---
+
 # Phase D package (D7): living regions of this document
 
 Everything above this line is historical:
@@ -2067,11 +2107,11 @@ Each normative formula or coordinate algorithm is defined once here. Its text is
 - **Historical sources:** CP3A-1 S1
 
 ### F-SCALE-2 — Ladder and device ceiling
-- **Definition:** `H_max(E) = min(H_cfg, H_dev(E))`. Device bound `H_dev(E) = sup{h > 0 : h · side ≤ D_max for every logical side of every buffered surface of E}` = `D_max / s_max(E)` if `s_max(E) > 0`, `+∞` if `s_max(E) = 0`. `s_max(E)` = largest logical side over all surfaces of E's tree (0 iff no surface has a non-zero extent, e.g. every initial commit); `D_max` queried from the renderer (re-queried on renderer recreation, PD-F1-08). Domain: every E; the value is finite because `H_cfg` is finite (PROV-1). [E-F2-06]
+- **Definition:** `H_max(E) = min(H_cfg, H_dev(E))`. Device bound `H_dev(E) = ⌊120 · D_max / s_max(E)⌋ / 120` if `s_max(E) > 0`: the largest multiple of 1/120 that does not exceed `D_max / s_max(E)`, so that `h · side ≤ D_max` holds for every logical side of every buffered surface of E before the client rounds its buffer size; `+∞` if `s_max(E) = 0`. If the quotient is 0 (`s_max(E) > 120 · D_max`) the bound is `1/120`, the wire minimum: that buffer exceeds the device and no emittable hint would fit (residual, OB-13). `s_max(E)` = largest logical side over all surfaces of E's tree (0 iff no surface has a non-zero extent, e.g. every initial commit); `D_max` queried from the renderer (re-queried on renderer recreation, PD-F1-08). Domain: every E; the value is finite because `H_cfg` is finite (PROV-1). [E-F2-06; H-1]
 - **Definition:** Ladder L(E): every connected output scale ≤ H_max(E) ∪ the integers 1…⌊H_max⌋ ∪ geometric fill so that consecutive rungs differ by a ratio ≤ r, all rungs ≤ H_max(E) (constants: PROV-1, PROV-2).
 - **Extracted invariant text:** INV-SCALE-2 ⟦`H_max(E) = min(H_cfg, H_dev(E))`⟧
 - **Historical sources:** CP3A-1 S2/S3; C12.R1 INV-SCALE-2
-- **Amended:** C12.E1R (E-F2-06); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
+- **Amended:** C12.E1R (E-F2-06); C12.F2 (H-1); previous definitions recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2 and §C12.F2.2
 
 ### F-SCALE-3 — Target, emission and initial hint
 - **Definition:** Target `t(ρ)` = smallest rung of L(E) ≥ ρ/(1 + σ), else H_max(E) (σ = PROV-3). Emission: `preferred_scale = round(h·120)`, `preferred_buffer_scale = b(h)` with `b(h) = ⌈h⌉` if `⌈h⌉ ≤ H_dev(E)`, else `max(1, ⌊H_dev(E)⌋)`, only on change. Initial hint: `h := t(ρ_pred)` with ρ_pred = F-SCALE-1 over the presentations whose view intersects the placed window-geometry rect (or the anchor point when its size is 0×0); if none, `t(max connected output scale)`. [E1R-N3]
@@ -2097,7 +2137,7 @@ Changing a value **inside** its allowed range is tuning, closed through its owni
 <!-- living:PROV -->
 ### PROV-1 — Client scale ceiling H_cfg
 - **Candidate:** 3.0
-- **Allowed range:** ≥ max connected output scale; the effective ceiling is always min(H_cfg, D_max/s_max) (F-SCALE-2)
+- **Allowed range:** ≥ max connected output scale; the effective ceiling is always `min(H_cfg, H_dev(E))` (F-SCALE-2)
 - **Owning obligation:** OB-12
 - **Freeze tier:** T3 (client CPU/memory, X-16) + T4 (buffer memory, frame time)
 - **Measurement:** X-16 zoom sweep: renegotiations, client CPU, buffer MB (fdinfo), sharpness at m ∈ {1, 1.04, 1.25, 2, 2.67}

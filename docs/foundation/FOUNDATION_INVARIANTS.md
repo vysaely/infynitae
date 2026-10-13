@@ -1,13 +1,14 @@
 # Infynitae Native — Foundation Invariants (effective registry)
 
-Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layer C12.F1 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
+Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1 and C12.F2 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
 
-This registry is the **effective projection** of five layers. The layers themselves stay where they are and are not edited:
+This registry is the **effective projection** of six layers. The layers themselves stay where they are and are not edited:
 - **C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a**: FOUNDATION_ARCHITECTURE §C12 (sealed Phase C registry, 54 rows);
 - **C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f**: FOUNDATION_ARCHITECTURE §C12.R1 (Phase D 1R amendments, 16 rows);
 - **C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be**: FOUNDATION_ARCHITECTURE §C12.R2 (Phase D 2R amendments, 6 rows);
 - **C12.E1R @ UNSEALED (E1R review gate; base 09075a2)**: FOUNDATION_ARCHITECTURE §C12.E1R (Phase E corrective amendments, 6 rows; not sealed);
-- **C12.F1 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)**: FOUNDATION_ARCHITECTURE §C12.F1 (Phase F amendment: default placement at first map, 1 row).
+- **C12.F1 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)**: FOUNDATION_ARCHITECTURE §C12.F1 (Phase F amendment: default placement at first map, 1 row);
+- **C12.F2 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)**: FOUNDATION_ARCHITECTURE §C12.F2 (Phase F amendment: device bound on the 1/120 lattice, 1 row).
 
 Rules:
 - Each entry's **wording** is the statement of its latest layer, verbatim, except that complete formula text is replaced by an `[F-…]` reference.
@@ -15,7 +16,7 @@ Rules:
 - **Consequence of violation** is the C12 "Violation means" column. For the three invariants first introduced in 1R/2R it is a D7-authored description, marked as such (D-F0). E1R adds no invariant.
 - **ADR** links are derived from FOUNDATION_DECISIONS.md. **Obligations** are cited by ID; their records live in FOUNDATION_TEST_PLAN.md.
 
-Count: **57** effective invariants: 38 from C12, 9 from C12.R1, 3 from C12.R2, 6 from C12.E1R, 1 from C12.F1.
+Count: **57** effective invariants: 38 from C12, 9 from C12.R1, 3 from C12.R2, 5 from C12.E1R, 1 from C12.F1, 1 from C12.F2.
 
 <!-- living:INV -->
 
@@ -468,15 +469,15 @@ Count: **57** effective invariants: 38 from C12, 9 from C12.R1, 3 from C12.R2, 6
 - **ADR:** ADR-05, ADR-09
 
 ### INV-SCALE-2
-- **Wording:** Every emitted hint is a rung of the ladder in force at emission. The ladder contains every connected output scale ≤ H_max(E), the integers, and the geometric fill. [F-SCALE-2], where the device bound `H_dev(E)` is the supremum of the hints whose buffers fit the device: `D_max / s_max(E)` when `s_max(E) > 0` and `+∞` when `s_max(E) = 0`; `s_max` is the largest logical side over all surfaces of E's tree and is 0 exactly when no surface has a non-zero extent (every initial commit). With no buffer there is nothing to bound, so `H_max(E) = H_cfg`. `D_max` is queried from the renderer and re-queried on renderer recreation. If E's size makes h exceed the bound, h is lowered immediately (P7). A held or epoch-deferred hint may be off-ladder until the next permitted evaluation.
+- **Wording:** Every emitted hint is a rung of the ladder in force at emission. The ladder contains every connected output scale ≤ H_max(E), the integers, and the geometric fill. [F-SCALE-2], where the device bound `H_dev(E)` is the largest hint expressible on the wire (a multiple of 1/120) for which `s · h ≤ D_max` on every side: `⌊120 · D_max / s_max(E)⌋ / 120` when `s_max(E) > 0` and `+∞` when `s_max(E) = 0`; `s_max` is the largest logical side over all surfaces of E's tree and is 0 exactly when no surface has a non-zero extent (every initial commit). With no buffer there is nothing to bound, so `H_max(E) = H_cfg`. `D_max` is queried from the renderer and re-queried on renderer recreation. If E's size makes h exceed the bound, h is lowered immediately (P7). A held or epoch-deferred hint may be off-ladder until the next permitted evaluation.
 - **Owner:** core `ScaleState`
 - **Class:** E+M
 - **Violation:** unrenderable/huge buffers
-- **Origin:** C12.E1R @ UNSEALED (E1R review gate; base 09075a2)
-- **Layers:** C12 → C12.R1 → C12.E1R
-- **Trigger:** E-F2-06
-- **Evidence:** EC-16/18, ED-2 F3/F4, EE-5
-- **Tests (historical column):** T0; T1 (OB-13)
+- **Origin:** C12.F2 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)
+- **Layers:** C12 → C12.R1 → C12.E1R → C12.F2
+- **Trigger:** owner amendment 2026-10-13 (H-1)
+- **Evidence:** EC-16/18, ED-2 F3/F4, EE-5; evidence/phase-f/h1-amendment
+- **Tests (historical column):** T0 (every side at three device limits; resize alternation); T1 (OB-13)
 - **Obligations:** OB-13
 - **Formulas:** F-SCALE-2
 - **ADR:** ADR-05
