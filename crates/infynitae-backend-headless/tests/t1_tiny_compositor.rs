@@ -562,3 +562,291 @@ fn test_tiny_compositor_initial_focus_and_activation() {
     drop(conn2);
     compositor_handle.join().unwrap();
 }
+
+// ---------------------------------------------------------------- presentation clock (F2)
+
+use wayland_protocols::wp::presentation_time::client::{
+    wp_presentation::{self, WpPresentation},
+    wp_presentation_feedback::{self, WpPresentationFeedback},
+};
+
+#[derive(Default)]
+struct PresentationClient {
+    compositor: Option<WlCompositor>,
+    shm: Option<WlShm>,
+    wm_base: Option<XdgWmBase>,
+    presentation: Option<WpPresentation>,
+    configured: bool,
+    clock_id: Option<u32>,
+    /// (seconds, nanoseconds, refresh in ns) of each `presented` event.
+    presented: Vec<(u64, u32, u32)>,
+}
+
+impl Dispatch<WlRegistry, ()> for PresentationClient {
+    fn event(
+        app: &mut Self,
+        registry: &WlRegistry,
+        event: wl_registry::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        if let wl_registry::Event::Global {
+            name, interface, ..
+        } = event
+        {
+            match interface.as_str() {
+                "wl_compositor" => app.compositor = Some(registry.bind(name, 4, qh, ())),
+                "wl_shm" => app.shm = Some(registry.bind(name, 1, qh, ())),
+                "xdg_wm_base" => app.wm_base = Some(registry.bind(name, 1, qh, ())),
+                "wp_presentation" => app.presentation = Some(registry.bind(name, 1, qh, ())),
+                _ => {}
+            }
+        }
+    }
+}
+
+delegate_noop!(PresentationClient: ignore WlCompositor);
+delegate_noop!(PresentationClient: ignore WlSurface);
+delegate_noop!(PresentationClient: ignore WlShm);
+delegate_noop!(PresentationClient: ignore WlShmPool);
+delegate_noop!(PresentationClient: ignore WlBuffer);
+delegate_noop!(PresentationClient: ignore XdgToplevel);
+
+impl Dispatch<XdgWmBase, ()> for PresentationClient {
+    fn event(
+        _: &mut Self,
+        wm_base: &XdgWmBase,
+        event: xdg_wm_base::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_wm_base::Event::Ping { serial } = event {
+            wm_base.pong(serial);
+        }
+    }
+}
+
+impl Dispatch<XdgSurface, ()> for PresentationClient {
+    fn event(
+        app: &mut Self,
+        xdg_surface: &XdgSurface,
+        event: xdg_surface::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_surface::Event::Configure { serial } = event {
+            xdg_surface.ack_configure(serial);
+            app.configured = true;
+        }
+    }
+}
+
+impl Dispatch<WpPresentation, ()> for PresentationClient {
+    fn event(
+        app: &mut Self,
+        _: &WpPresentation,
+        event: wp_presentation::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wp_presentation::Event::ClockId { clk_id } = event {
+            app.clock_id = Some(clk_id);
+        }
+    }
+}
+
+impl Dispatch<WpPresentationFeedback, ()> for PresentationClient {
+    fn event(
+        app: &mut Self,
+        _: &WpPresentationFeedback,
+        event: wp_presentation_feedback::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wp_presentation_feedback::Event::Presented {
+            tv_sec_hi,
+            tv_sec_lo,
+            tv_nsec,
+            refresh,
+            ..
+        } = event
+        {
+            app.presented.push((
+                (u64::from(tv_sec_hi) << 32) | u64::from(tv_sec_lo),
+                tv_nsec,
+                refresh,
+            ));
+        }
+    }
+}
+
+/// The client's own reading of CLOCK_MONOTONIC.
+fn monotonic_now() -> Duration {
+    use smithay::reexports::rustix::time::{ClockId, clock_gettime};
+    let t = clock_gettime(ClockId::Monotonic);
+    Duration::new(t.tv_sec as u64, t.tv_nsec as u32)
+}
+
+/// `wp_presentation` announces a clock, and `presented` timestamps are instants on that clock
+/// (presentation-time: "the clock ... used for the timestamps"). A client that reads the
+/// announced clock before the commit and after the event must find the timestamp in between:
+/// a timestamp on any other time base (for example seconds since the compositor started) is
+/// outside that window unless the machine booted within the last few seconds.
+#[test]
+fn presentation_timestamps_are_on_the_announced_clock() {
+    let socket_name = format!("infynitae-presentation-test-{}", std::process::id());
+    let options = HeadlessCompositorOptions {
+        socket_name: Some(socket_name.clone()),
+        exec: None,
+        width: 1280,
+        height: 800,
+        refresh_mhz: 60_000,
+        duration: Some(Duration::from_secs(3)),
+        max_frames: None,
+    };
+    let compositor = thread::spawn(move || {
+        let (core, input_port, _shell_port, output_token) = Core::new(PersistedCameras::default());
+        run_headless(core, input_port, output_token, options).expect("compositor exited cleanly");
+    });
+    let socket_path =
+        std::path::PathBuf::from(std::env::var("XDG_RUNTIME_DIR").expect("XDG_RUNTIME_DIR is set"))
+            .join(&socket_name);
+    for _ in 0..100 {
+        if socket_path.exists() {
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let stream = std::os::unix::net::UnixStream::connect(&socket_path).expect("connect");
+    let conn = Connection::from_socket(stream).expect("client connection");
+    let mut queue: EventQueue<PresentationClient> = conn.new_event_queue();
+    let qh = queue.handle();
+    let mut app = PresentationClient::default();
+    let _registry = conn.display().get_registry(&qh, ());
+    queue.roundtrip(&mut app).expect("globals");
+    queue.roundtrip(&mut app).expect("clock id");
+    assert_eq!(app.clock_id, Some(1), "CLOCK_MONOTONIC is announced");
+
+    let surface = app.compositor.as_ref().unwrap().create_surface(&qh, ());
+    let xdg_surface = app
+        .wm_base
+        .as_ref()
+        .unwrap()
+        .get_xdg_surface(&surface, &qh, ());
+    let _toplevel = xdg_surface.get_toplevel(&qh, ());
+    surface.commit();
+    queue.roundtrip(&mut app).expect("configure");
+    assert!(app.configured);
+
+    let file = std::fs::File::from(
+        smithay::reexports::rustix::fs::memfd_create(
+            "infynitae-presentation-test",
+            smithay::reexports::rustix::fs::MemfdFlags::CLOEXEC,
+        )
+        .expect("memfd"),
+    );
+    file.set_len(64 * 64 * 4).expect("size");
+    let pool = app
+        .shm
+        .as_ref()
+        .unwrap()
+        .create_pool(file.as_fd(), 64 * 64 * 4, &qh, ());
+    let buffer = pool.create_buffer(0, 64, 64, 256, wl_shm::Format::Argb8888, &qh, ());
+
+    let presentation = app
+        .presentation
+        .clone()
+        .expect("wp_presentation is advertised");
+    for _ in 0..3 {
+        let count = app.presented.len();
+        let before = monotonic_now();
+        presentation.feedback(&surface, &qh, ());
+        surface.attach(Some(&buffer), 0, 0);
+        surface.damage(0, 0, 64, 64);
+        surface.commit();
+        for _ in 0..200 {
+            queue.roundtrip(&mut app).expect("roundtrip");
+            if app.presented.len() > count {
+                break;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+        let after = monotonic_now();
+        assert_eq!(
+            app.presented.len(),
+            count + 1,
+            "one presented event per feedback"
+        );
+        let (sec, nsec, refresh) = app.presented[count];
+        let at = Duration::new(sec, nsec);
+        assert!(
+            before <= at && at <= after,
+            "presented at {at:?} on the announced clock, outside the client's window \
+             [{before:?}, {after:?}]"
+        );
+        assert_eq!(
+            refresh, 16_666_666,
+            "refresh of a 60 Hz output in nanoseconds"
+        );
+    }
+    drop(conn);
+    compositor.join().expect("compositor thread");
+}
+
+/// The command started with the session is a child of the session: it is running while the
+/// session runs and gone (not running, not a zombie) when `run_headless` returns. The command
+/// is a shell that records its own pid and then sleeps.
+#[test]
+fn the_session_command_does_not_outlive_the_session() {
+    let dir = std::env::temp_dir().join(format!("infynitae-child-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let script = dir.join("child.sh");
+    let pid_file = dir.join("pid");
+    std::fs::write(
+        &script,
+        // stdio detached and a short sleep: if the session fails to end it, the leftover
+        // neither holds the test runner's output pipe nor lingers
+        format!(
+            "#!/bin/sh\necho $$ > {}\nexec sleep 30 </dev/null >/dev/null 2>&1\n",
+            pid_file.display()
+        ),
+    )
+    .expect("script");
+    let options = HeadlessCompositorOptions {
+        socket_name: Some(format!("infynitae-own-child-test-{}", std::process::id())),
+        exec: Some(format!("sh {}", script.display())),
+        width: 1280,
+        height: 800,
+        refresh_mhz: 60_000,
+        duration: Some(Duration::from_millis(700)),
+        max_frames: None,
+    };
+    let compositor = thread::spawn(move || {
+        let (core, input_port, _shell_port, output_token) = Core::new(PersistedCameras::default());
+        run_headless(core, input_port, output_token, options).expect("compositor exited cleanly");
+    });
+    let mut pid = None;
+    for _ in 0..60 {
+        if let Ok(text) = std::fs::read_to_string(&pid_file)
+            && let Ok(p) = text.trim().parse::<u32>()
+        {
+            pid = Some(p);
+            break;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    let pid = pid.expect("the session command started");
+    let proc_dir = std::path::PathBuf::from(format!("/proc/{pid}"));
+    assert!(proc_dir.exists(), "the command runs while the session runs");
+    compositor.join().expect("compositor thread");
+    assert!(
+        !proc_dir.exists(),
+        "process {pid} outlived the session (running or zombie)"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -1,8 +1,48 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — INC-6 READY FOR OWNER PLANNING.** Pointer constraints (`zwp_pointer_constraints_v1`), lock/confinement policy (M13, M14), confinement clamp (F-CONFINE-1), constraint reconciliation on output removal (F-RELOCATE-1), and interaction preemption restoration implemented on the production path. OB-11 adjudicated under Option B (P1 adopted under D-B12-PIN). INC-0, INC-1, INC-2, INC-3, INC-4, and INC-5 are RATIFIED. **INC-6 has NOT begun.**
+CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — CORE VISIBILITY REMEDIATION INTEGRATION FORMALLY RATIFIED — INC-6 ACTIVE (EXPERIMENTAL, EXIT NOT AUTHORIZED).** INC-0, INC-1, INC-2, INC-3, INC-4, and INC-5 are RATIFIED. The Core visibility remediation (`85a74cb`; scoped visibility pass, bounding-box cull, `Stage` lookup by binary search) is integrated on canonical main and FORMALLY RATIFIED. **INC-6 (scale policy) is the active experimental implementation phase; it is NOT ratified and INC-6 exit is NOT authorized.** The runnable prototype runtime, with the runtime remediation integrated (one `Session`, on-demand frames, announced presentation clock), remains EXPERIMENTAL pending INC-13. **OB-42 (INV-ALLOC-1) and OB-44 (C14 baselines) remain OPEN.**
 
-Date: 2026-10-09
+Date: 2026-10-13
+
+## PHASE F — RUNTIME REMEDIATION INTEGRATION — EXPERIMENTAL PENDING INC-13 (record: evidence/phase-f/runtime-remediation/)
+- **Integrated candidate:** `remediation/a-runtime` `e53cb3bde018fef7c33011d82e151316292c9c94`, merged as `59723f2532fe8fb04f3148cba5d2a4529c5f716f` on main `85a74cb` (not pushed).
+- **Scope:** `infynitae-wayland::session` (`Session`, `FrameTimer`, one `terminate_children`), both prototype run loops reduced to a loop body, presentation timestamps on the announced clock, repaint for a vanished client, software-renderer pixel tests of the production render path. No Core change. No authority port taken by shared code; no `Backend` trait.
+- **Owner policies (2026-10-13):** (1) the runtime remains experimental pending INC-13; (2) pixman is restricted to tests and development fixtures (dev-dependency of `infynitae-backend-headless` only); (3) the headless runner produces frames on demand, never continuously; (4) shared runtime code in the adapter crate is accepted provisionally.
+- **Dependencies added (test builds only):** Smithay features `renderer_test`, `renderer_pixman` as dev-dependencies; `pixman`, `pixman-sys`, `paste` in `Cargo.lock`.
+- **Open findings carried:** B-1 (SIGTERM/SIGINT without cleanup; blocked on the signal-handling dependency decision); no pixel test of the GLES path; nested idle, nested input and real applications unverified; duplicated `vblank_period` helper kept with its test.
+- **INC-6 implication:** the INC-6 candidate now conflicts with main in both backend loops (scale-settlement deadline and tick) as well as in Core; a design step is required.
+- **Not claimed:** INC-13 entry or exit; any GLES, GPU, nested-presentation or hardware result; OB-7, OB-13, OB-25 and OB-44 are unchanged.
+- **Declaration:**
+  - INC-0 through INC-5 are RATIFIED; the Core visibility remediation is RATIFIED.
+  - **The runtime remediation is INTEGRATED, EXPERIMENTAL pending INC-13, and NOT RATIFIED.**
+  - **INC-6 is NOT ratified; INC-6 exit is NOT authorized.**
+  - Host KDE/KWin session untouched; no nested compositor run for this integration.
+
+## PHASE F — CORE VISIBILITY REMEDIATION INTEGRATION (record: evidence/phase-f/core-visibility/)
+- **Integrated commit:** `85a74cbffd3692fa9965cbe6c68465d3972c6022` (local canonical main; fast-forward of 6 commits `b5b6dc4`, `2da6b23`, `be449fe`, `24536d4`, `ec11a62`, `85a74cb`; not pushed).
+- **Baseline commit:** `db254c24bfbb6c5598fdb5c7bf4fd79ba12f4524` (ratified INC-5).
+- **Scope:** Core only (`infynitae-core`, `tools/verify-test-efficacy`). `Stage` lookup by binary search; visibility pass scoped to the element or camera a batch changed (full pass kept for output connect, reconfigure, disconnect); per-element bounding-box cull; `frame_tick` from the membership table. No effect added, dropped or reordered; no authority moved; no dependency change. Not a spatial index (C3.8 threshold remains unevaluated; INV-RENDER-4 unaffected).
+- **Origin:** viability review finding F1 (O(E²) event cost in the INC-0…5 Core), reproduced 2026-10-11.
+- **Tests:** T0 differential tests against the unscoped, unculled reference (`scoped_visibility_equals_the_full_reference`, `output_changes_under_a_pan_equal_the_full_reference`), `cull_agrees_with_the_reference_at_the_view_edges`, `lookup_agrees_with_a_linear_scan_under_churn`; 16 seeded controls added.
+- **Derived verification evidence (at `85a74cb`, before and after integration):**
+  - Workspace test suite: 257 tests pass across 25 suites, 0 failed, 0 ignored.
+  - Cargo fmt and clippy (`--workspace --all-targets --locked -- -D warnings`): PASS.
+  - `./tools/verify-architecture`: PASS.
+  - `./tools/verify-test-efficacy`: PASS (126 seeded controls detected, 2 judges).
+  - `./tools/check-foundation-docs` and `--self-test`: PASS.
+  - `./tools/verify-development-environment`: PASS.
+- **Measured (T0 model, headless, `core_bench`; not C14 baselines):** at 3,000 elements a pan event 2,624 µs → 23.5 µs, a commit 2,624 µs → 0.34 µs, render-list construction 2,641 µs → 101 µs. No frame-time, presentation or input-latency claim; no renderer, GPU or hardware involved.
+- **Limitations:** pan, render list, remap and hotplug remain linear in mapped elements; INV-ALLOC-1 is not met (OB-42 stays OPEN); OB-44 stays OPEN; no human review recorded.
+- **INC-6 implication:** the frozen INC-6 candidate `f57315c` conflicts with this main in three files; a resolution and the correction of a pre-INC-6 debug assertion exposed by it exist only on `experimental/inc-6-on-core-85a74cb` (experimental, unratified).
+- **Review verdicts:**
+  - Owner integration authorization: `GRANTED` (2026-10-13, Core visibility remediation only).
+  - Owner acceptance of `85a74cb` as canonical local main tip: `GRANTED` (2026-10-13).
+  - Owner ratification gate: `FORMAL RATIFICATION AUTHORIZED` (2026-10-13).
+- **Declaration:**
+  - INC-0 through INC-5 are RATIFIED.
+  - **The Core visibility remediation is INTEGRATED and RATIFIED.**
+  - **INC-6 is NOT ratified;** the runtime remediation is NOT integrated.
+  - Host KDE/KWin session untouched; no nested compositor run.
 
 ## PHASE F — INC-5 FORMAL RATIFICATION AND SEAL
 - **Ratified implementation commit:** `4aaf5a3fc770f611beefbc24ee9469aada27e0dd` (canonical main).

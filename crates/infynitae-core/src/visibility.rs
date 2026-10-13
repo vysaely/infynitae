@@ -507,6 +507,37 @@ mod tests {
         assert_eq!(c.preferred_scale_of(y), Some((240, 2)));
     }
 
+    /// The settlement deadline a backend's loop sleeps on (INV-SCALE-3, INV-IDLE-1): none while
+    /// no discrete epoch is open, one while it is, unchanged by a tick before it is due, and
+    /// consumed by the tick that settles it — a loop that sleeps until the deadline and then
+    /// ticks does not spin on a deadline that stays due. A continuous epoch has no deadline.
+    #[test]
+    fn a_due_settlement_deadline_is_consumed_by_the_tick() {
+        use crate::scale::{DEFAULT_T_SETTLE_MS, InteractionKind};
+        let (mut c, _, _, mut t) = Core::new(persisted(false));
+        c.output_connected(&mut t, desc("A", 60_000)).unwrap();
+        assert_eq!(c.next_settlement_deadline(), None, "no element, no epoch");
+        let id = map(&mut c);
+        assert_eq!(c.next_settlement_deadline(), None, "no epoch open");
+        c.start_scale_interaction(id, InteractionKind::CameraZoom, false, 1_000);
+        let deadline = 1_000 + DEFAULT_T_SETTLE_MS;
+        assert_eq!(c.next_settlement_deadline(), Some(deadline));
+        c.scale_tick(deadline - 1);
+        assert_eq!(c.next_settlement_deadline(), Some(deadline), "not due yet");
+        c.scale_tick(deadline);
+        assert_eq!(
+            c.next_settlement_deadline(),
+            None,
+            "settled: nothing left to wake for"
+        );
+        c.start_scale_interaction(id, InteractionKind::CameraPan, true, 5_000);
+        assert_eq!(
+            c.next_settlement_deadline(),
+            None,
+            "a continuous epoch has no deadline"
+        );
+    }
+
     // ------------------------------------------------------------ differential tests
 
     use crate::input::bindings::Modifiers;

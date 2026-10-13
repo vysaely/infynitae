@@ -571,6 +571,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-3, INC-6
 - **Blocks:** INC-6 exit (all listed hot paths exist by then)
 - **Origin:** D7 (PD-F1-11)
+- **History:** Core visibility remediation (`85a74cb`, 2026-10-13): allocations per call counted outside the repository with a counting allocator in a copy of `core_bench` at 3,000 elements — pan event 9,005 → 10, render list 9,004 → 10, commit 9,006 → 10, pointer motion 1, frame tick 3. The criterion (zero) is not met and no T0 counting-allocator test exists; status unchanged.
 
 ### OB-43
 - **Status:** OPEN
@@ -595,6 +596,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-16
 - **Blocks:** release
 - **Origin:** D7 (PD-F1-11)
+- **History:** Core visibility remediation (`85a74cb`, 2026-10-13): T0 model timings of Core entry points are recorded in `evidence/phase-f/core-visibility/INTEGRATION_RECORD.md`. They are not C14 baselines (no hardware, no renderer); status unchanged.
 
 ### OB-45
 - **Status:** CLOSED
