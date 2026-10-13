@@ -17,6 +17,8 @@ use std::time::Duration;
 use infynitae_backend_headless::{VirtualOutput, connect, vblank, vblank_period};
 use infynitae_core::navigation::PersistedCameras;
 use infynitae_core::output::{OutputId, Transform};
+use infynitae_core::pointer::PointerState;
+use infynitae_core::stage::ElementId;
 use infynitae_core::{Core, InputPort, OutputLifecycleToken};
 use infynitae_wayland::{ClientState, WaylandState};
 use smithay::reexports::wayland_server::Display;
@@ -1379,6 +1381,68 @@ impl Drop for Lockstep {
             .dispatch_single_client(&mut self.state, self.client.id());
         let _ = self.display.flush_clients();
     }
+}
+
+/// The relative motion that takes the pointer from where Core has it to `local` (logical px) of
+/// `element`'s window geometry, through the view of the pointer's output. A test that needs the
+/// pointer over a particular place says so with this instead of relying on where an earlier
+/// motion happened to leave it; it then checks the result with [`hit_under_pointer`].
+pub fn delta_to(ls: &Lockstep, element: ElementId, local: (f64, f64)) -> (f64, f64) {
+    use infynitae_core::geom::{CanvasPos, Q16_ONE};
+    let core = ls.state.core();
+    let PointerState::Located { output, p } = core.pointer() else {
+        panic!("the pointer has no output");
+    };
+    let anchor = core.stage().anchor(element).expect("the element is placed");
+    let view = core.view(output).expect("the pointer's output has a view");
+    let q = |a: i64, l: f64| a * Q16_ONE + (l * Q16_ONE as f64).round() as i64;
+    let target = view.project(CanvasPos {
+        x: q(anchor.x, local.0),
+        y: q(anchor.y, local.1),
+    });
+    (target.x - p.0, target.y - p.1)
+}
+
+/// What the production hit-test finds under the pointer: the element and the point local to its
+/// window geometry (logical px, rounded to 1/256 as a client would receive it).
+pub fn hit_under_pointer(ls: &mut Lockstep) -> Option<(ElementId, (f64, f64))> {
+    use infynitae_core::geom::{OutputLogicalPoint, Q16_ONE};
+    let PointerState::Located { output, p } = ls.state.core().pointer() else {
+        return None;
+    };
+    let hit = ls
+        .state
+        .core_mut()
+        .hit_test(output, OutputLogicalPoint { x: p.0, y: p.1 })?;
+    let anchor = ls.state.core().stage().anchor(hit.element)?;
+    let wl_fixed = |v: f64| (v * 256.0).round() / 256.0;
+    let local =
+        |origin: i64, l: i64, a: i64| wl_fixed((origin - a) as f64 + l as f64 / Q16_ONE as f64);
+    Some((
+        hit.element,
+        (
+            local(hit.origin.x, hit.local.x, anchor.x),
+            local(hit.origin.y, hit.local.y, anchor.y),
+        ),
+    ))
+}
+
+/// Asserts that the pointer is over some window at `local` of its window geometry.
+pub fn assert_pointer_on_a_window_at(ls: &mut Lockstep, local: (f64, f64)) {
+    assert_eq!(
+        hit_under_pointer(ls).map(|(_, l)| l),
+        Some(local),
+        "the pointer is not at the window-local position the scenario needs"
+    );
+}
+
+/// Asserts that the pointer is over `element` at `local` of its window geometry.
+pub fn assert_pointer_at(ls: &mut Lockstep, element: ElementId, local: (f64, f64), what: &str) {
+    assert_eq!(
+        hit_under_pointer(ls),
+        Some((element, local)),
+        "{what}: the pointer is not where the scenario needs it"
+    );
 }
 
 pub fn output(mode: (u32, u32), scale_120: u32) -> VirtualOutput {
