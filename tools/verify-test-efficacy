@@ -476,6 +476,15 @@ CONTROLS = [
     ("Stage lookup: binary search over a mis-ordered key", f"{CORE}/stage.rs",
      "self.records.binary_search_by_key(&id, |r| r.id).ok()", "self.records.binary_search_by_key(&id.get().get().wrapping_mul(3), |r| r.id.get().get()).ok()",
      "infynitae-core", ["--lib"], "lookup_agrees_with_a_linear_scan_under_churn"),
+    # --- outputs changing while a pan is held (the pass of an output batch is the full one)
+    ("visibility: output reconfigured under a pan recomputes no membership", f"{CORE}/entry.rs",
+     "        let mut fx = vec![Effect::OutputChanged(output)];\n        fx.extend(self.visibility_pass());",
+     "        let mut fx = vec![Effect::OutputChanged(output)];\n        if !self.input.interaction.active() {\n            fx.extend(self.visibility_pass());\n        }",
+     "infynitae-core", ["--lib"], "output_changes_under_a_pan_equal_the_full_reference"),
+    ("visibility: output removed under a pan keeps its membership rows", f"{CORE}/entry.rs",
+     "        let mut fx = self.visibility_pass();\n        fx.extend(pointer_fx);",
+     "        let mut fx = if self.input.interaction.active() {\n            Vec::new()\n        } else {\n            self.visibility_pass()\n        };\n        fx.extend(pointer_fx);",
+     "infynitae-core", ["--lib"], "output_changes_under_a_pan_equal_the_full_reference"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

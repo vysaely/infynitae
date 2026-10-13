@@ -713,6 +713,174 @@ mod tests {
         );
     }
 
+    /// One sequence in which outputs, elements and the pan interleave freely: the pan button is
+    /// pressed and released as its own operation, so outputs are connected, reconfigured and
+    /// removed, and elements are mapped, committed and destroyed, while a pan is held or orphaned.
+    /// Returns (output changes under an active pan, of which membership changed, pan outputs
+    /// removed under the pan, motions consumed by an orphaned pan).
+    fn run_under_pan(seed: u64, ops: usize) -> (usize, usize, usize, usize) {
+        use crate::input::interaction::Interaction;
+        let mut rng = Rng(seed);
+        let (mut c, mut port, _shell, mut t): (Core, InputPort, _, OutputLifecycleToken) =
+            Core::new(persisted(false));
+        let mut outputs: Vec<(OutputId, String)> = Vec::new();
+        let mut elements: Vec<(ElementId, u64)> = Vec::new();
+        let mut next_key = 1u64;
+        let mut next_connector = 0u32;
+        let mut pressed = false;
+        let (mut under_pan, mut changed, mut removed, mut consumed) = (0, 0, 0, 0);
+        let button = |pressed| PhysicalEvent::PointerButton {
+            button: 0x112,
+            pressed,
+            modifiers: LOGO,
+            time_us: 0,
+        };
+        for _ in 0..ops {
+            let before = c.membership().clone();
+            let panning = matches!(c.input.interaction, Interaction::CameraPan { .. });
+            let pan_output = match c.input.interaction {
+                Interaction::CameraPan { output, .. } => Some(output),
+                _ => None,
+            };
+            let mut output_op = false;
+            match rng.below(100) {
+                0..=7 => {
+                    pressed = !pressed;
+                    let fx = c.physical_input(&mut port, button(pressed)).unwrap();
+                    check(&mut c, &before, &fx, "pan button");
+                }
+                8..=37 => {
+                    let d = if rng.below(6) == 0 { 6000 } else { 90 };
+                    let delta = (rng.range(-d, d) as f64 + 0.25, rng.range(-d, d) as f64);
+                    let orphaned = matches!(c.input.interaction, Interaction::Orphaned { .. });
+                    let fx = c
+                        .physical_input(
+                            &mut port,
+                            PhysicalEvent::PointerMotion {
+                                delta,
+                                delta_unaccel: delta,
+                                time_us: 0,
+                            },
+                        )
+                        .unwrap();
+                    if orphaned {
+                        assert_eq!(c.membership(), &before, "an orphaned pan moved a view");
+                        consumed += 1;
+                    }
+                    check(&mut c, &before, &fx, "motion");
+                }
+                38..=47 if outputs.len() < 3 => {
+                    let name = format!("X{next_connector}");
+                    next_connector += 1;
+                    let (o, fx) = c
+                        .output_connected(&mut t, random_desc(&mut rng, &name))
+                        .unwrap();
+                    outputs.push((o, name));
+                    check(&mut c, &before, &fx, "output connect under a pan");
+                    output_op = true;
+                }
+                48..=55 if !outputs.is_empty() => {
+                    let (o, _) = outputs.remove(rng.below(outputs.len() as u64) as usize);
+                    let fx = c.output_disconnected(&mut t, o).unwrap();
+                    check(&mut c, &before, &fx, "output disconnect under a pan");
+                    output_op = true;
+                    if pan_output == Some(o) {
+                        assert!(
+                            matches!(c.input.interaction, Interaction::Orphaned { .. }),
+                            "the pan outlived its output"
+                        );
+                        removed += 1;
+                    }
+                }
+                56..=69 if !outputs.is_empty() => {
+                    // half of the time the output the pan is on, when there is one
+                    let pick = outputs
+                        .iter()
+                        .position(|(o, _)| Some(*o) == pan_output)
+                        .filter(|_| rng.below(2) == 0)
+                        .unwrap_or(rng.below(outputs.len() as u64) as usize);
+                    let (o, name) = outputs[pick].clone();
+                    let fx = c
+                        .output_reconfigured(&mut t, o, random_desc(&mut rng, &name))
+                        .unwrap();
+                    check(&mut c, &before, &fx, "output reconfigure under a pan");
+                    output_op = true;
+                }
+                70..=81 => {
+                    let id = c.toplevel_created();
+                    let base = next_key;
+                    next_key += 8;
+                    let fx = c
+                        .toplevel_committed(id, random_tree(&mut rng, base, false))
+                        .unwrap();
+                    check(&mut c, &before, &fx, "initial commit under a pan");
+                    let before = c.membership().clone();
+                    let fx = c
+                        .toplevel_committed(id, random_tree(&mut rng, base, true))
+                        .unwrap();
+                    check(&mut c, &before, &fx, "map under a pan");
+                    elements.push((id, base));
+                }
+                82..=93 if !elements.is_empty() => {
+                    let (id, base) = elements[rng.below(elements.len() as u64) as usize];
+                    let tree = random_tree(&mut rng, base, true);
+                    let fx = if rng.below(2) == 0 {
+                        c.toplevel_committed(id, tree).unwrap()
+                    } else {
+                        c.toplevel_tree_changed(id, tree).unwrap()
+                    };
+                    check(&mut c, &before, &fx, "commit under a pan");
+                }
+                94..=99 if elements.len() > 4 => {
+                    let (id, _) = elements.remove(rng.below(elements.len() as u64) as usize);
+                    let fx = c.toplevel_destroyed(id);
+                    check(&mut c, &before, &fx, "destroy under a pan");
+                }
+                _ => {}
+            }
+            if output_op && panning {
+                under_pan += 1;
+                if c.membership() != &before {
+                    changed += 1;
+                }
+            }
+        }
+        (under_pan, changed, removed, consumed)
+    }
+
+    /// F-MEMBER-1, INV-RENDER-3, INV-FRAME-2 when the set of outputs or an output's facts change
+    /// while a camera pan is held (C4.6, INV-OUTPUT-1): after every operation the scoped passes
+    /// equal the full reference, a pan whose output is removed is orphaned, and an orphaned pan
+    /// moves no view.
+    #[test]
+    fn output_changes_under_a_pan_equal_the_full_reference() {
+        let (mut under_pan, mut changed, mut removed, mut consumed) = (0, 0, 0, 0);
+        for seed in 1..=40u64 {
+            let (u, c, r, m) = run_under_pan(seed.wrapping_mul(0xd1b5_4a32_d192_ed03), 600);
+            under_pan += u;
+            changed += c;
+            removed += r;
+            consumed += m;
+        }
+        // the sequences must exercise the thing under test
+        assert!(
+            under_pan > 1000,
+            "only {under_pan} output changes under a pan"
+        );
+        assert!(
+            changed > 800,
+            "membership changed in only {changed} of them"
+        );
+        assert!(
+            removed > 100,
+            "the pan's own output was removed only {removed} times"
+        );
+        assert!(
+            consumed > 500,
+            "an orphaned pan consumed only {consumed} motions"
+        );
+    }
+
     /// The cull is conservative at the view edges: an element one Canvas pixel inside the view on
     /// each side is a member, and one that only touches the edge is not, under fractional scales
     /// and at the Canvas bound; both agree with the reference.
