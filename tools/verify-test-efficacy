@@ -455,7 +455,7 @@ CONTROLS = [
      "            .filter(|(_, _, o)| *o != output)", "            .filter(|(_, _, o)| *o == output || *o != output)",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("visibility: tree change recomputes no membership", f"{CORE}/protocol.rs",
-     "        let mut fx = self.visibility_pass_element(id);", "        let mut fx: Vec<Effect> = Vec::new();",
+     "        let mut fx = self.visibility_pass_element(id, true);", "        let mut fx: Vec<Effect> = Vec::new();",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("visibility: element pass computes rows on the first output only", f"{CORE}/visibility.rs",
      "        if let Some((anchor, tree, bounds)) = stage.mapped(element) {\n            for (output, view) in views {",
@@ -465,10 +465,10 @@ CONTROLS = [
      "        if stage.state(element).is_some() {\n            for &(_, s, o) in old", "        if stage.state(element).is_none() {\n            for &(_, s, o) in old",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("visibility: destroyed element keeps its rows", f"{CORE}/protocol.rs",
-     "        let vis = self.visibility_pass_element(id);", "        let vis: Vec<Effect> = Vec::new();",
+     "        let vis = self.visibility_pass_element(id, false);", "        let vis: Vec<Effect> = Vec::new();",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("visibility: root commit recomputes no membership", f"{CORE}/protocol.rs",
-     "        fx.extend(self.visibility_pass_element(id));", "        fx.extend(Vec::<Effect>::new());",
+     "        fx.extend(self.visibility_pass_element(id, true));", "        fx.extend(Vec::<Effect>::new());",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("frame tick: observed elements clocked by another output complete on this one", f"{CORE}/lib.rs",
      "            .filter(|&e| self.clock_output_of(e) == Some(output))", "            .filter(|&e| self.clock_output_of(e).is_some_and(|o| o >= output))",
@@ -485,6 +485,93 @@ CONTROLS = [
      "        let mut fx = self.visibility_pass();\n        fx.extend(pointer_fx);",
      "        let mut fx = if self.input.interaction.active() {\n            Vec::new()\n        } else {\n            self.visibility_pass()\n        };\n        fx.extend(pointer_fx);",
      "infynitae-core", ["--lib"], "output_changes_under_a_pan_equal_the_full_reference"),
+
+    # ---- INC-6 hardening: independent-audit findings C1 and C2, M15 wire order, device ceiling
+    ("INC-6 C1: preferred_scale floored at 120 (the audited defect; T0)", f"{CORE}/scale.rs",
+     "(h * 120.0).round().max(1.0).min(u32::MAX as f64) as u32", "(h * 120.0).round().max(120.0).min(u32::MAX as f64) as u32",
+     "infynitae-core", ["--lib"], "c1_preferred_scale_is_round_h_times_120_below_one"),
+    ("INC-6 C1: preferred_scale floored at 120 (T1, output scale 0.75 on the wire)", f"{CORE}/scale.rs",
+     "(h * 120.0).round().max(1.0).min(u32::MAX as f64) as u32", "(h * 120.0).round().max(120.0).min(u32::MAX as f64) as u32",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "c1_output_scale_below_one_reaches_the_client"),
+    ("INC-6 C1: a positive hint may be sent as 0 (wire lower bound dropped)", f"{CORE}/scale.rs",
+     "(h * 120.0).round().max(1.0).min(u32::MAX as f64) as u32", "(h * 120.0).round().max(0.0).min(u32::MAX as f64) as u32",
+     "infynitae-core", ["--lib"], "c1_preferred_scale_wire_bounds"),
+    ("INC-6 C1: D_max = 0 accepted at the Core boundary", f"{CORE}/scale.rs",
+     "        if self.d_max == 0 {", "        if false {",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "device_ceiling_lowered_at_runtime_and_invalid_value_refused"),
+    ("INC-6 C1: non-finite H_cfg accepted at the Core boundary", f"{CORE}/scale.rs",
+     "        if !(self.h_cfg.is_finite() && self.h_cfg > 0.0) {", "        if self.h_cfg <= 0.0 {",
+     "infynitae-core", ["--lib"], "c1_invalid_policy_parameters_are_rejected"),
+    ("INC-6 C2: hint changes dispatched to the root surface only (the audited defect)", f"{WAYLAND}/convert.rs",
+     "    window.with_surfaces(|surface, states| {\n        send_preferred_scale(surface, states, scale_120, integer_scale);\n    });\n",
+     "    if let Some(toplevel) = window.toplevel() {\n        let root = toplevel.wl_surface();\n"
+     "        with_states(root, |states| send_preferred_scale(root, states, scale_120, integer_scale));\n    }\n",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "c2_subsurface_tree_follows_scale_changes"),
+    ("INC-6 C2: a new subsurface is not told its element's current hint", f"{WAYLAND}/handlers.rs",
+     "    fn new_subsurface(&mut self, surface: &WlSurface, _parent: &WlSurface) {\n        self.send_current_preferred_scale(surface);\n",
+     "    fn new_subsurface(&mut self, surface: &WlSurface, _parent: &WlSurface) {\n        let _ = surface;\n",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "c2_late_surfaces_learn_their_own_elements_hint"),
+    ("INC-6 C2: a new subsurface is not told its element's current hint (initial hints of a tree)", f"{WAYLAND}/handlers.rs",
+     "    fn new_subsurface(&mut self, surface: &WlSurface, _parent: &WlSurface) {\n        self.send_current_preferred_scale(surface);\n",
+     "    fn new_subsurface(&mut self, surface: &WlSurface, _parent: &WlSurface) {\n        let _ = surface;\n",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "c2_subsurface_tree_follows_scale_changes"),
+    ("INC-6 C2: a new popup is not told its element's current hint", f"{WAYLAND}/handlers.rs",
+     "        self.send_current_preferred_scale(&wl_surface);\n", "        let _ = &wl_surface;\n",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "c2_late_surfaces_learn_their_own_elements_hint"),
+    ("INC-6 C2: a joining surface is told the hint of the first element, not its own", f"{WAYLAND}/handlers.rs",
+     "            .and_then(|i| self.core.preferred_scale_of(self.elements[i].id))\n        {\n            convert::send_preferred_scale_to_tree(",
+     "            .and_then(|_| self.core.preferred_scale_of(self.elements[0].id))\n        {\n            convert::send_preferred_scale_to_tree(",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "c2_late_surfaces_learn_their_own_elements_hint"),
+    ("INC-6 M15: initial configure emitted before the initial hint", f"{CORE}/protocol.rs",
+     "                vec![\n                    Effect::PreferredScale {\n                        element: id,\n"
+     "                        scale_120: s120,\n                        integer_scale: b,\n                    },\n"
+     "                    Effect::InitialConfigure(id),\n                ]",
+     "                vec![\n                    Effect::InitialConfigure(id),\n                    Effect::PreferredScale {\n"
+     "                        element: id,\n                        scale_120: s120,\n                        integer_scale: b,\n"
+     "                    },\n                ]",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "initial_scale_hint_emitted_before_first_configure"),
+    ("INC-6 F-SCALE-2: H_dev ignores the reported D_max (EC-16 value hard-wired)", f"{CORE}/scale.rs",
+     "        d_max as f64 / s_max as f64", "        { let _ = d_max; 16384.0 / s_max as f64 }",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "p7_forced_decrease_at_device_ceilings"),
+    ("INC-6 E1R-N3: integer hint is the sealed ceil(h), unbounded by the device", f"{CORE}/scale.rs",
+     "    if (c as f64) <= h_dev + 1e-9 {", "    if true {",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "p7_forced_decrease_at_device_ceilings"),
+    ("INC-6 P7: no forced decrease at batch-end evaluation (SC-E holds h above H_max)", f"{CORE}/scale.rs",
+     "        if self.h > h_max + 1e-12 {\n            let t = target(rho.unwrap_or(self.h), ladder, h_max, config.sigma);",
+     "        if false {\n            let t = target(rho.unwrap_or(self.h), ladder, h_max, config.sigma);",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "p7_forced_decrease_at_device_ceilings"),
+    ("INC-6 P7: no forced decrease at batch-end evaluation (suppressed inside an open epoch)", f"{CORE}/scale.rs",
+     "        if self.h > h_max + 1e-12 {\n            let t = target(rho.unwrap_or(self.h), ladder, h_max, config.sigma);",
+     "        if false {\n            let t = target(rho.unwrap_or(self.h), ladder, h_max, config.sigma);",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "p7_applies_inside_an_open_epoch"),
+    ("INC-6 P7: the forced decrease waits for an observer", f"{CORE}/scale.rs",
+     "        if self.h > h_max + 1e-12 {\n            let t = target(rho.unwrap_or(self.h), ladder, h_max, config.sigma);",
+     "        if rho.is_some() && self.h > h_max + 1e-12 {\n            let t = target(rho.unwrap_or(self.h), ladder, h_max, config.sigma);",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "p7_applies_to_an_unobserved_element"),
+    ("INC-6 C1: the wire conversion lets NaN through as 0", f"{CORE}/scale.rs",
+     "(h * 120.0).round().max(1.0).min(u32::MAX as f64) as u32", "(h * 120.0).round().clamp(1.0, u32::MAX as f64) as u32",
+     "infynitae-core", ["--lib"], "c1_wire_conversion_never_yields_zero"),
+    ("INC-6 P7: a lower D_max reported at runtime forces no decrease", f"{CORE}/lib.rs",
+     "            let lowered = st.p7_check(&ladder, h_max, self.scale_config.sigma);", "            let lowered = false;",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "device_ceiling_lowered_at_runtime_and_invalid_value_refused"),
+    ("INC-6 E1R-N3: a D_max change that only lowers b(h) emits nothing", f"{CORE}/lib.rs",
+     "            if lowered\n                || st.last_emitted_scale_120 != Some(s120)\n                || st.last_emitted_buffer_scale != Some(b)\n            {",
+     "            if lowered {",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "integer_hint_follows_a_device_ceiling_change"),
+    ("INC-6 C1: set_scale_config stores an unvalidated configuration", f"{CORE}/lib.rs",
+     "        config.validate()?;\n        self.scale_config = config;", "        self.scale_config = config;",
+     "infynitae-core", ["--lib"], "scale_config_is_validated_at_the_core_boundary"),
+    ("INC-6 C2: hint changes skip the popup trees", f"{WAYLAND}/convert.rs",
+     "    window.with_surfaces(|surface, states| {\n        send_preferred_scale(surface, states, scale_120, integer_scale);\n    });\n",
+     "    if let Some(toplevel) = window.toplevel() {\n"
+     "        smithay::desktop::utils::with_surfaces_surface_tree(toplevel.wl_surface(), |surface, states| {\n"
+     "            send_preferred_scale(surface, states, scale_120, integer_scale);\n        });\n    }\n",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "c2_popup_trees_follow_scale_changes"),
+    ("INC-6 C2: a joining subtree's own subsurfaces are not told", f"{WAYLAND}/convert.rs",
+     "    smithay::desktop::utils::with_surfaces_surface_tree(root, |surface, states| {\n"
+     "        send_preferred_scale(surface, states, scale_120, integer_scale);\n    });\n",
+     "    with_states(root, |states| send_preferred_scale(root, states, scale_120, integer_scale));\n",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "c2_late_surfaces_learn_their_own_elements_hint"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.
@@ -546,7 +633,7 @@ def main():
         print(__doc__)
         return 2
     print("=" * 72)
-    print("verify-test-efficacy — seeded behavioural defects (INC-1, INC1-F06/F07 corrective, INC-2, INC-3, INC-4)")
+    print("verify-test-efficacy — seeded behavioural defects (INC-1, INC1-F06/F07 corrective, INC-2, INC-3, INC-4, INC-6 hardening)")
     print("=" * 72)
     target_base = os.path.join(ROOT, "target")
     os.makedirs(target_base, exist_ok=True)

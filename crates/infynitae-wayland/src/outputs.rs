@@ -52,6 +52,15 @@ impl WaylandState {
                         t.send_configure();
                     }
                 }
+                Effect::PreferredScale {
+                    element,
+                    scale_120,
+                    integer_scale,
+                } => {
+                    if let Some(w) = self.window(element) {
+                        convert::send_preferred_scale_to_window(w, scale_120, integer_scale);
+                    }
+                }
                 Effect::KeyboardFocus(target) => {
                     let serial = SERIAL_COUNTER.next_serial();
                     let target_surface = target.and_then(|id| {

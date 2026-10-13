@@ -95,6 +95,12 @@ pub enum Effect {
         surface: SurfaceKey,
         kind: crate::pointer::ConstraintKind,
     },
+    /// A preferred scale update for an element (F-SCALE-3, INV-SCALE-5).
+    PreferredScale {
+        element: ElementId,
+        scale_120: u32,
+        integer_scale: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -132,11 +138,44 @@ impl Core {
             (Lifecycle::AwaitingInitialCommit, false) => {
                 let anchor = self.initial_anchor();
                 self.stage.place(id, anchor).map_err(stale)?;
-                self.stage.set_tree(id, Some(tree)).map_err(stale)?;
+                self.stage.set_tree(id, Some(tree.clone())).map_err(stale)?;
                 self.stage
                     .set_state(id, Lifecycle::AwaitingFirstBuffer)
                     .map_err(stale)?;
-                vec![Effect::InitialConfigure(id)]
+                // M15 / F-SCALE-3: Initial scale prediction & emission before InitialConfigure
+                let views: Vec<_> = self
+                    .outputs
+                    .iter()
+                    .filter_map(|o| self.view(o.id).map(|v| (o.id, v)))
+                    .collect();
+                let rho_pred =
+                    crate::scale::predict_rho(anchor, tree.geometry, &self.outputs, &views);
+                let output_scales: Vec<f64> = self.outputs.iter().map(|o| o.scale).collect();
+                let s_max = crate::scale::s_max_for_tree(Some(&tree));
+                let h_dev = crate::scale::h_dev(s_max, self.scale_config.d_max);
+                let h_max =
+                    crate::scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
+                let ladder = crate::scale::ladder(&output_scales, h_max, self.scale_config.r);
+                let initial_h =
+                    crate::scale::target(rho_pred, &ladder, h_max, self.scale_config.sigma);
+                let s120 = crate::scale::preferred_scale_120(initial_h);
+                let b = crate::scale::preferred_buffer_scale(initial_h, h_dev);
+
+                let mut st = crate::scale::ScaleState::new(initial_h);
+                st.last_emitted_scale_120 = Some(s120);
+                st.last_emitted_buffer_scale = Some(b);
+                st.last_rho = Some(rho_pred);
+                self.scales.retain(|(e, _)| *e != id);
+                self.scales.push((id, st));
+
+                vec![
+                    Effect::PreferredScale {
+                        element: id,
+                        scale_120: s120,
+                        integer_scale: b,
+                    },
+                    Effect::InitialConfigure(id),
+                ]
             }
             (Lifecycle::Unmapped, false) => {
                 // anchor kept (INV-STAGE-5)
@@ -171,7 +210,7 @@ impl Core {
                 self.focus.target_lost(id, &live)
             }
         };
-        fx.extend(self.visibility_pass_element(id));
+        fx.extend(self.visibility_pass_element(id, true));
         fx.extend(self.reconcile_constraints());
         Ok(fx)
     }
@@ -197,7 +236,8 @@ impl Core {
         self.stage
             .set_tree(id, Some(tree))
             .map_err(|_| ProtocolError::StaleElement)?;
-        let mut fx = self.visibility_pass_element(id);
+        // P7 for the new tree is the first rule of the batch-end evaluation (ScaleState::step)
+        let mut fx = self.visibility_pass_element(id, true);
         fx.extend(self.reconcile_constraints());
         Ok(fx)
     }
@@ -206,6 +246,7 @@ impl Core {
     /// dead client gets no leave: its membership rows are dropped silently. Target loss triggers
     /// successor focus transition (K7, M11).
     pub fn toplevel_destroyed(&mut self, id: ElementId) -> Vec<Effect> {
+        self.scales.retain(|(e, _)| *e != id);
         for (_, frame) in &mut self.frames {
             frame.entries.retain(|e| e.element != id);
         }
@@ -215,7 +256,7 @@ impl Core {
         }
         let live: Vec<ElementId> = self.stage.mapped_elements();
         let mut fx = self.focus.target_lost(id, &live);
-        let vis = self.visibility_pass_element(id);
+        let vis = self.visibility_pass_element(id, false);
         debug_assert!(
             vis.is_empty(),
             "a destroyed element produced visibility effects"
@@ -715,7 +756,14 @@ mod tests {
         assert_eq!(core.stage().anchor(id), None);
         assert_eq!(
             core.toplevel_committed(id, tree(false)),
-            Ok(vec![Effect::InitialConfigure(id)])
+            Ok(vec![
+                Effect::PreferredScale {
+                    element: id,
+                    scale_120: 120,
+                    integer_scale: 1,
+                },
+                Effect::InitialConfigure(id),
+            ])
         );
         let anchor = core.stage().anchor(id).expect("placed at initial commit");
         assert_eq!(anchor, CanvasPoint { x: 0, y: 0 }, "default camera centre");

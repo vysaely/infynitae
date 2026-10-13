@@ -340,6 +340,14 @@ pub fn run_headless(
         )
         .map_err(|e| format!("Failed to register display event source: {e}"))?;
 
+    // Device ceiling D_max (OB-13, F-SCALE-2, OBJ-29). The headless backend has no GPU to ask:
+    // this is the EC-16 device fact supplied as an explicit, deterministic fixture, not a query.
+    let fx = state
+        .core_mut()
+        .set_renderer_device_max(infynitae_core::scale::DEFAULT_D_MAX)
+        .map_err(|e| format!("Invalid renderer device limit: {e:?}"))?;
+    state.apply(&fx);
+
     let mut data = HeadlessData { display, children };
     let start_time = Instant::now();
     let period = vblank_period(options.refresh_mhz);
@@ -349,7 +357,12 @@ pub fn run_headless(
     println!("[infynitae] Headless compositor running.");
     loop {
         let elapsed = last_vblank.elapsed();
-        let timeout = period.saturating_sub(elapsed);
+        let mut timeout = period.saturating_sub(elapsed);
+        let now_ms = start_time.elapsed().as_millis() as u64;
+        if let Some(deadline) = state.core().next_settlement_deadline() {
+            let remain = Duration::from_millis(deadline.saturating_sub(now_ms));
+            timeout = timeout.min(remain);
+        }
         event_loop.dispatch(Some(timeout), &mut data)?;
 
         // Non-blocking child process reaping (Defect E)
@@ -393,6 +406,14 @@ pub fn run_headless(
                 .grant_initial_focus(&mut input_port, topmost)
         {
             state.apply(&effects);
+            let _ = data.display.flush_clients();
+        }
+
+        // Advance scale settlement timer
+        let now_ms = start_time.elapsed().as_millis() as u64;
+        let scale_fx = state.core_mut().scale_tick(now_ms);
+        if !scale_fx.is_empty() {
+            state.apply(&scale_fx);
             let _ = data.display.flush_clients();
         }
 
