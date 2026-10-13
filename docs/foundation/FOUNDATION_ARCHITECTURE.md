@@ -1204,7 +1204,7 @@ Not kept as negative controls: things that would only inflate counts (e.g. "remo
 
 ## C12 — Canonical invariant registry
 
-> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice).
+> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice). §C12.F3 supersedes INV-PROTO-1 (`configure_bounds`). §C12.F4 supersedes INV-SCALE-3 (epoch time authority).
 
 **This table is authoritative.** Legacy identifiers map to it (C12.2). Where a rule was refined, the earlier wording is superseded and must not be cited as normative.
 
@@ -1960,6 +1960,63 @@ New formula **F-PLACE-1** (living §F). It amends no existing formula: F-ROUND-1
 ## C12.F2.3 What this layer does not change
 
 F-SCALE-3 (target, emission `round(h·120)`, integer hint, initial hint), the ladder definition, `H_cfg` and its range, P7, SC-E, the epoch rules, and the held-hint rules. Raising `D_max` still does not by itself raise a held fractional hint. OB-13 stays OPEN: the amendment makes its fixture-level criterion achievable for fractional-scale clients; validation against a real renderer's limit remains at INC-13.
+
+---
+
+# §C12.F3 — Canonical registry amendment (Phase F: `configure_bounds(0, 0)` and INV-PROTO-1)
+
+**Status: ADOPTED 2026-10-14 by owner approval.** Authorized meaning: Smithay may emit `configure_bounds(0, 0)` during the initial configure for supported xdg-shell versions; zero dimensions are nonrestrictive and semantically equivalent to no bounds being specified. Non-zero bounds and any broader protocol change are **not** authorized by this layer. One sentence of one invariant changes; none is added or removed (57). Base: local main `d6714f6`.
+
+**Inputs:**
+- C12.R1 INV-PROTO-1 as effective at `d6714f6`;
+- xdg-shell, `xdg_toplevel.configure_bounds` (since version 4): "If width and height are 0, it means bounds is unknown and equivalent to as if no configure_bounds event was ever sent for this surface";
+- Smithay 0.7.0 (pinned): the event is sent with a toplevel's first configure, and whenever the bounds change, to a client that bound `xdg_wm_base` ≥ 4; with no bounds set the value is `(0, 0)`. No API omits it, and capping the protocol version would also remove `wm_capabilities` (version 5).
+
+**Provenance:** [evidence/phase-f/configure-bounds-amendment/AMENDMENT_RECORD.md](evidence/phase-f/configure-bounds-amendment/AMENDMENT_RECORD.md).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12.R1. Every other row is unchanged.**
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-PROTO-1** | xdg_toplevel state policy (Foundation 01). `set_maximized`/`unset_maximized` are each answered with exactly one configure that does not grant `maximized`; they never invoke fit, move a camera or change the Stage (adapter overrides Smithay's default, W-SM-13). A pre-configure request is recorded and ignored. `set_minimized` is ignored. `activated` holds exactly when the element holds ActiveElementFocus and changes only on its transitions (a kick trigger if unobserved). No bounds are proposed in Foundation 01. `configure_bounds` is sent only as `(0, 0)` and only with a toplevel's initial configure, where Smithay emits it for a client that binds `xdg_wm_base` version 4 or later (W-SM-17); xdg-shell defines zero dimensions as bounds unknown, equivalent to the event never having been sent. A non-zero bound is never sent. | core `protocol` + adapter | P+E | ER-3; evidence/phase-f/configure-bounds-amendment | T1 (OB-32); T1 `configure_bounds_is_zero_and_only_with_an_initial_configure` | owner amendment 2026-10-14 (configure_bounds) |
+
+## C12.F3.1 Sealed text superseded (must not be cited as normative)
+
+| Superseded | Replaced by |
+|---|---|
+| C12.R1 INV-PROTO-1 "No `configure_bounds` in Foundation 01." | INV-PROTO-1 (C12.F3): no bounds are proposed; the event occurs only as `(0, 0)` with an initial configure |
+
+## C12.F3.2 What this layer does not change
+
+No bounds policy exists and none is introduced: `ToplevelState.bounds` is never set. INV-CAMERA-4 ("a camera change alone causes no configure (… bounds …)") is unchanged and holds. Every other sentence of INV-PROTO-1 is unchanged. A new Smithay-quirk record W-SM-17 documents the library behaviour.
+
+---
+
+# §C12.F4 — Canonical registry amendment (Phase F: the time authority of scale epochs, M7)
+
+**Status: ADOPTED 2026-10-14 by owner approval.** The session monotonic clock is the authority for discrete scale-epoch deadlines. One clause is added to one invariant and one row of state machine M7 names the clock; no invariant is added or removed (57). Base: local main `d6714f6`.
+
+**Inputs:**
+- C12.R2 INV-SCALE-3 and STATE_MACHINES M7 as effective at `d6714f6`;
+- finding H-2 of the INC-6 hardening review: M7 says `deadline = now + T_settle` without saying which clock `now` is, and a compositor has three (the session's monotonic clock, the time an input device stamps on an event, the presentation clock).
+
+**Provenance:** [evidence/phase-f/epoch-time-authority/AMENDMENT_RECORD.md](evidence/phase-f/epoch-time-authority/AMENDMENT_RECORD.md).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12.R2. Every other row is unchanged.**
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-SCALE-3** | **ScaleInteractionEpoch.** The spatial changes of one logical interaction form one epoch, for every `InteractionKind ∈ {CameraPan, CameraZoom, WindowMove, WindowResize, ShellStream}`: continuous pan, pinch, interactive window move or resize; a run of discrete pan or zoom steps; a bounded shell stream of navigation or `MoveElement` commands.<br><br>**During an epoch:** decreases are suppressed; increases happen only at rung crossings and only in the epoch's direction; client responses cannot reverse it; individual updates are not each a hint change.<br><br>**P7:** a device-bound decrease applies immediately and fixes the direction to down (correctness, not damping).<br><br>**The epoch ends** at interaction termination (gesture end, button release, explicit end-of-stream), at a settlement event (output add/remove/configuration), or, for discrete steps without an explicit end, at the **settlement timeout** with no further step. Pointer motion does not end it.<br><br>At settlement, h is set to the target of the final requirement, evaluated once. The timeout's existence is architectural; its value is provisional (C14.5; candidate 300 ms; OB-23). Atomic camera or Stage actions are one-step epochs. **Clock:** the settlement timeout is measured on the session's monotonic clock, from the time the last step of the interaction entered Core. A deadline is written only by a step of the interaction, never by a client response or any other evaluation, and it never moves earlier. Input-event timestamps and presentation timestamps are separate clocks and take no part. | core | M | ER-5 R2, ER2-2; evidence/phase-f/epoch-time-authority | T0 (+ NEG); T1/T3 (OB-23) | owner amendment 2026-10-14 (epoch time authority, H-2) |
+
+## C12.F4.1 Sealed text superseded (must not be cited as normative)
+
+| Superseded | Replaced by |
+|---|---|
+| STATE_MACHINES M7 "`deadline = now + T_settle (PROV-5)`" with `now` unspecified | M7 (C12.F4): `now` is the session's monotonic clock when the step enters Core |
+
+## C12.F4.2 What this layer does not change
+
+The existence and value of the settlement timeout (PROV-5, OB-23), what ends an epoch, and every rule of INV-SCALE-4. It introduces no discrete interaction: discrete pan and zoom steps, shell streams and interactive move and resize remain with INC-10, INC-11 and INC-14, each of which stamps its steps on this clock. The scale policy itself is INC-6 work and is not on main; this layer is sealed text only.
 
 ---
 

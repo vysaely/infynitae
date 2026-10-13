@@ -531,6 +531,10 @@ CONTROLS = [
      "crates/infynitae-backend-headless/tests/t1_pointer_constraints.rs",
      "                r.motion((-10.0, -10.0));", "                r.motion((-10.0, -9.0));",
      "infynitae-backend-headless", ["--test", "t1_pointer_constraints"], "round5_pointer_constraints_stress_200_cycles"),
+    ("INV-PROTO-1 (C12.F3): a bound is proposed in a later configure", f"{WAYLAND}/outputs.rs",
+     "                        t.with_pending_state(|s| {\n                            if activated {",
+     "                        t.with_pending_state(|s| {\n                            s.bounds = Some((800, 600).into());\n                            if activated {",
+     "infynitae-backend-headless", ["--test", "t1_protocol_bounds"], "configure_bounds_is_zero_and_only_with_an_initial_configure"),
     # --- runtime (headless runner through a real socket)
     ("presentation: frame times not read from the announced clock",
      "crates/infynitae-backend-headless/src/lib.rs",

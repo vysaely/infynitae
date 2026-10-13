@@ -1,0 +1,7 @@
+{
+ "name": "the split obligation OB-52 closed by a fixture (deferred destination)",
+ "file": "FOUNDATION_TEST_PLAN.md",
+ "find": "### OB-52\n- **Status:** OPEN",
+ "replace": "### OB-52\n- **Status:** CLOSED",
+ "expect": "deferred-closed"
+}

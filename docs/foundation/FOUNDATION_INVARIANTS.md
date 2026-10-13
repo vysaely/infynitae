@@ -1,14 +1,16 @@
 # Infynitae Native — Foundation Invariants (effective registry)
 
-Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1 and C12.F2 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
+Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1, C12.F2, C12.F3 and C12.F4 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
 
-This registry is the **effective projection** of six layers. The layers themselves stay where they are and are not edited:
+This registry is the **effective projection** of eight layers. The layers themselves stay where they are and are not edited:
 - **C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a**: FOUNDATION_ARCHITECTURE §C12 (sealed Phase C registry, 54 rows);
 - **C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f**: FOUNDATION_ARCHITECTURE §C12.R1 (Phase D 1R amendments, 16 rows);
 - **C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be**: FOUNDATION_ARCHITECTURE §C12.R2 (Phase D 2R amendments, 6 rows);
 - **C12.E1R @ UNSEALED (E1R review gate; base 09075a2)**: FOUNDATION_ARCHITECTURE §C12.E1R (Phase E corrective amendments, 6 rows; not sealed);
 - **C12.F1 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)**: FOUNDATION_ARCHITECTURE §C12.F1 (Phase F amendment: default placement at first map, 1 row);
-- **C12.F2 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)**: FOUNDATION_ARCHITECTURE §C12.F2 (Phase F amendment: device bound on the 1/120 lattice, 1 row).
+- **C12.F2 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)**: FOUNDATION_ARCHITECTURE §C12.F2 (Phase F amendment: device bound on the 1/120 lattice, 1 row);
+- **C12.F3 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)**: FOUNDATION_ARCHITECTURE §C12.F3 (Phase F amendment: `configure_bounds(0, 0)`, 1 row);
+- **C12.F4 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)**: FOUNDATION_ARCHITECTURE §C12.F4 (Phase F amendment: epoch time authority, 1 row).
 
 Rules:
 - Each entry's **wording** is the statement of its latest layer, verbatim, except that complete formula text is replaced by an `[F-…]` reference.
@@ -16,7 +18,7 @@ Rules:
 - **Consequence of violation** is the C12 "Violation means" column. For the three invariants first introduced in 1R/2R it is a D7-authored description, marked as such (D-F0). E1R adds no invariant.
 - **ADR** links are derived from FOUNDATION_DECISIONS.md. **Obligations** are cited by ID; their records live in FOUNDATION_TEST_PLAN.md.
 
-Count: **57** effective invariants: 38 from C12, 9 from C12.R1, 3 from C12.R2, 5 from C12.E1R, 1 from C12.F1, 1 from C12.F2.
+Count: **57** effective invariants: 38 from C12, 8 from C12.R1, 2 from C12.R2, 5 from C12.E1R, 1 from C12.F1, 1 from C12.F2, 1 from C12.F3, 1 from C12.F4.
 
 <!-- living:INV -->
 
@@ -478,18 +480,18 @@ Count: **57** effective invariants: 38 from C12, 9 from C12.R1, 3 from C12.R2, 5
 - **Trigger:** owner amendment 2026-10-13 (H-1)
 - **Evidence:** EC-16/18, ED-2 F3/F4, EE-5; evidence/phase-f/h1-amendment
 - **Tests (historical column):** T0 (every side at three device limits; resize alternation); T1 (OB-13)
-- **Obligations:** OB-13
+- **Obligations:** OB-13, OB-52
 - **Formulas:** F-SCALE-2
 - **ADR:** ADR-05
 
 ### INV-SCALE-3
-- **Wording:** **ScaleInteractionEpoch.** The spatial changes of one logical interaction form one epoch, for every `InteractionKind ∈ {CameraPan, CameraZoom, WindowMove, WindowResize, ShellStream}`: continuous pan, pinch, interactive window move or resize; a run of discrete pan or zoom steps; a bounded shell stream of navigation or `MoveElement` commands.<br><br>**During an epoch:** decreases are suppressed; increases happen only at rung crossings and only in the epoch's direction; client responses cannot reverse it; individual updates are not each a hint change.<br><br>**P7:** a device-bound decrease applies immediately and fixes the direction to down (correctness, not damping).<br><br>**The epoch ends** at interaction termination (gesture end, button release, explicit end-of-stream), at a settlement event (output add/remove/configuration), or, for discrete steps without an explicit end, at the **settlement timeout** with no further step. Pointer motion does not end it.<br><br>At settlement, h is set to the target of the final requirement, evaluated once. The timeout's existence is architectural; its value is provisional (C14.5; candidate 300 ms; OB-23). Atomic camera or Stage actions are one-step epochs.
+- **Wording:** **ScaleInteractionEpoch.** The spatial changes of one logical interaction form one epoch, for every `InteractionKind ∈ {CameraPan, CameraZoom, WindowMove, WindowResize, ShellStream}`: continuous pan, pinch, interactive window move or resize; a run of discrete pan or zoom steps; a bounded shell stream of navigation or `MoveElement` commands.<br><br>**During an epoch:** decreases are suppressed; increases happen only at rung crossings and only in the epoch's direction; client responses cannot reverse it; individual updates are not each a hint change.<br><br>**P7:** a device-bound decrease applies immediately and fixes the direction to down (correctness, not damping).<br><br>**The epoch ends** at interaction termination (gesture end, button release, explicit end-of-stream), at a settlement event (output add/remove/configuration), or, for discrete steps without an explicit end, at the **settlement timeout** with no further step. Pointer motion does not end it.<br><br>At settlement, h is set to the target of the final requirement, evaluated once. The timeout's existence is architectural; its value is provisional (C14.5; candidate 300 ms; OB-23). Atomic camera or Stage actions are one-step epochs. **Clock:** the settlement timeout is measured on the session's monotonic clock, from the time the last step of the interaction entered Core. A deadline is written only by a step of the interaction, never by a client response or any other evaluation, and it never moves earlier. Input-event timestamps and presentation timestamps are separate clocks and take no part.
 - **Owner:** core
 - **Class:** M
 - **Violation:** per-event renegotiation
-- **Origin:** C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be
-- **Layers:** C12 → C12.R1 → C12.R2
-- **Trigger:** PD-F2-07, PD-F2-19
+- **Origin:** C12.F4 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)
+- **Layers:** C12 → C12.R1 → C12.R2 → C12.F4
+- **Trigger:** owner amendment 2026-10-14 (epoch time authority, H-2)
 - **Evidence:** ER-5 R2, ER2-2
 - **Tests (historical column):** T0 (+ NEG); T1/T3 (OB-23)
 - **Obligations:** OB-23
@@ -791,13 +793,13 @@ Count: **57** effective invariants: 38 from C12, 9 from C12.R1, 3 from C12.R2, 5
 - **ADR:** ADR-14
 
 ### INV-PROTO-1
-- **Wording:** xdg_toplevel state policy (Foundation 01). `set_maximized`/`unset_maximized` are each answered with exactly one configure that does not grant `maximized`; they never invoke fit, move a camera or change the Stage (adapter overrides Smithay's default, W-SM-13). A pre-configure request is recorded and ignored. `set_minimized` is ignored. `activated` holds exactly when the element holds ActiveElementFocus and changes only on its transitions (a kick trigger if unobserved). No `configure_bounds` in Foundation 01.
+- **Wording:** xdg_toplevel state policy (Foundation 01). `set_maximized`/`unset_maximized` are each answered with exactly one configure that does not grant `maximized`; they never invoke fit, move a camera or change the Stage (adapter overrides Smithay's default, W-SM-13). A pre-configure request is recorded and ignored. `set_minimized` is ignored. `activated` holds exactly when the element holds ActiveElementFocus and changes only on its transitions (a kick trigger if unobserved). No bounds are proposed in Foundation 01. `configure_bounds` is sent only as `(0, 0)` and only with a toplevel's initial configure, where Smithay emits it for a client that binds `xdg_wm_base` version 4 or later (W-SM-17); xdg-shell defines zero dimensions as bounds unknown, equivalent to the event never having been sent. A non-zero bound is never sent.
 - **Owner:** core `protocol` + adapter
 - **Class:** P+E
 - **Violation:** D7-authored (D-F0): mandatory xdg_toplevel requests left unanswered, or maximize used as a camera/Stage path
-- **Origin:** C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f
-- **Layers:** C12.R1
-- **Trigger:** PD-F2-17
+- **Origin:** C12.F3 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)
+- **Layers:** C12.R1 → C12.F3
+- **Trigger:** owner amendment 2026-10-14 (configure_bounds)
 - **Evidence:** ER-3
 - **Tests (historical column):** T1 (OB-32)
 - **Obligations:** OB-32

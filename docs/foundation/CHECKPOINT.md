@@ -4,6 +4,14 @@ CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — CORE VISIBILITY REMEDIATION INTE
 
 Date: 2026-10-13
 
+## PHASE F — GOVERNANCE RESOLUTION 2026-10-14: C12.F3, C12.F4, OB-13 SPLIT, STRESS-TEST REPAIR
+- **Stress-test repair integrated** (`d6714f6`, fast-forward): the long-lived stress tests establish and verify their pointer target in every cycle. Before it, 26 of the 200 cycles of `round4_long_lived_combined_stress` delivered their click and the menu chain held its grabs in 52; the test passed regardless. 5 seeded controls.
+- **C12.F3 adopted** (record: evidence/phase-f/configure-bounds-amendment/): INV-PROTO-1's last sentence. `configure_bounds` occurs only as `(0, 0)` with an initial configure (Smithay, W-SM-17), which xdg-shell defines as equivalent to no event. Non-zero bounds are not authorized. T1 `t1_protocol_bounds`.
+- **C12.F4 adopted** (record: evidence/phase-f/epoch-time-authority/): INV-SCALE-3 gains the clock clause; M7 names the session's monotonic clock. Sealed text only: the scale policy is INC-6.
+- **OB-13 split** (record: evidence/phase-f/ob-13-split/): OB-13 keeps enforcement and the query through the renderer capability interface (INC-6, T1); new **OB-52** carries the real renderer's limit on a GPU (INC-13, T2). Both OPEN. The checker treats T2 as a deferred destination.
+- **Registry:** 57 invariants (8 layers), 21 formulas, 52 obligations, W-SM-1…17; docs self-test 28 fixtures.
+- **Declaration:** INC-6 is NOT ratified and INC-6 exit is NOT authorized; INC-7 is experimental; the runtime remains EXPERIMENTAL pending INC-13; OB-13, OB-42, OB-44 and OB-52 are OPEN.
+
 ## PHASE F — H-1 AMENDMENT C12.F2 ADOPTED (record: evidence/phase-f/h1-amendment/)
 - **Authority:** owner approval 2026-10-13 of "the corrected pre-client-rounding device-bound formulation".
 - **Registry:** new layer FOUNDATION_ARCHITECTURE §C12.F2 (one row, INV-SCALE-2; formula record C12.F2.2); F-SCALE-2: `H_dev(E) = ⌊120 · D_max / s_max(E)⌋ / 120`, `+∞` at zero extent, `1/120` when the quotient is 0. F-SCALE-3 unchanged. 57 invariants, 21 formulas.
