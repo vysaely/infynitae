@@ -567,6 +567,10 @@ CONTROLS = [
      "        smithay::desktop::utils::with_surfaces_surface_tree(toplevel.wl_surface(), |surface, states| {\n"
      "            send_preferred_scale(surface, states, scale_120, integer_scale);\n        });\n    }\n",
      "infynitae-backend-headless", ["--test", "t1_scale"], "c2_popup_trees_follow_scale_changes"),
+    ("INC-6: destroy asserts that its pass returns no effect at all (pre-INC-6 premise)", f"{CORE}/protocol.rs",
+     "            !vis.iter()\n                .any(|e| matches!(e, Effect::Enter { .. } | Effect::Leave { .. })),",
+     "            vis.is_empty(),",
+     "infynitae-core", ["--lib"], "destroying_an_element_may_change_the_scale_hint_of_another"),
     ("INC-6 C2: a joining subtree's own subsurfaces are not told", f"{WAYLAND}/convert.rs",
      "    smithay::desktop::utils::with_surfaces_surface_tree(root, |surface, states| {\n"
      "        send_preferred_scale(surface, states, scale_120, integer_scale);\n    });\n",

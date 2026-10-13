@@ -257,9 +257,12 @@ impl Core {
         let live: Vec<ElementId> = self.stage.mapped_elements();
         let mut fx = self.focus.target_lost(id, &live);
         let vis = self.visibility_pass_element(id, false);
+        // The pass also evaluates the scale policy of the surviving elements (INV-SCALE-5), so
+        // it may return their hints. The destroyed element itself has no row left to diff.
         debug_assert!(
-            vis.is_empty(),
-            "a destroyed element produced visibility effects"
+            !vis.iter()
+                .any(|e| matches!(e, Effect::Enter { .. } | Effect::Leave { .. })),
+            "a destroyed element produced enter or leave effects"
         );
         fx.extend(vis);
         fx.extend(self.reconcile_constraints());
