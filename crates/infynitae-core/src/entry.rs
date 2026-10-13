@@ -455,6 +455,7 @@ impl Core {
         self.frames.retain(|(o, _)| *o != output);
         self.pointer = pointer::reconfigured(self.pointer, &model);
         let mut fx = vec![Effect::OutputChanged(output)];
+        fx.extend(self.fullscreen_output_reconfigured(output));
         fx.extend(self.visibility_pass());
         // M10: at most one true-position event, none while an interaction owns the pointer
         let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
@@ -506,7 +507,10 @@ impl Core {
                 }
             }
         }
+        // INV-OUTPUT-1: "fullscreen presentation dropped with the INV-PRES-1 configure"
+        let restored = self.fullscreen_output_removed(output);
         let mut fx = self.visibility_pass();
+        fx.extend(restored);
         fx.extend(pointer_fx);
         fx.push(Effect::OutputRemoved(output));
         Ok(fx)

@@ -72,8 +72,12 @@ pub enum Effect {
     PointerZeroOutputEnd,
     /// Change keyboard focus to `Option<ElementId>` (INV-INPUT-8).
     KeyboardFocus(Option<ElementId>),
-    /// Send a configure to an xdg_toplevel, e.g. for `activated` state updates (INV-PROTO-1).
+    /// Send a configure to an xdg_toplevel, e.g. for `activated` state updates (INV-PROTO-1). Its
+    /// states and size are Core's at that moment ([`Core::toplevel_configure_state`]).
     ToplevelConfigure(ElementId),
+    /// Send one configure that is not fullscreen and offers `size` (M9: the size saved when
+    /// fullscreen was granted). The offer is made once; later configures carry no size.
+    ToplevelConfigureSize { element: ElementId, size: LocalSize },
     /// Dismiss active popup grab for an element before a camera change (INV-INPUT-2, OB-4).
     DismissPopupGrab(ElementId),
     /// A client-owned key event to forward to the focused client (K1, K2, K3).
@@ -128,7 +132,10 @@ pub enum PlacementPolicy {
 pub enum ToplevelRequest {
     SetMaximized,
     UnsetMaximized,
-    SetFullscreen,
+    /// `xdg_toplevel.set_fullscreen`, with the output the client named if it is one of ours.
+    SetFullscreen {
+        output: Option<OutputId>,
+    },
     UnsetFullscreen,
     SetMinimized,
     /// `xdg_toplevel.move`: an interactive move. Owned by INC-14.
@@ -142,7 +149,7 @@ impl ToplevelRequest {
     pub const ALL: [ToplevelRequest; 8] = [
         ToplevelRequest::SetMaximized,
         ToplevelRequest::UnsetMaximized,
-        ToplevelRequest::SetFullscreen,
+        ToplevelRequest::SetFullscreen { output: None },
         ToplevelRequest::UnsetFullscreen,
         ToplevelRequest::SetMinimized,
         ToplevelRequest::Move,
@@ -154,12 +161,21 @@ impl ToplevelRequest {
 /// What Core does with a [`ToplevelRequest`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToplevelDecision {
+    /// Fullscreen granted on an output (M9 `Windowed → Fullscreen{O}`): exactly one configure
+    /// with `fullscreen` and the output's logical size.
+    Granted,
+    /// Fullscreen ended at the client's request (M9 `Fullscreen{O} → Windowed`): exactly one
+    /// configure without `fullscreen`, offering the size saved at the grant.
+    Released,
     /// Answered with exactly one configure that does not grant the state asked for. Nothing is
     /// stored, and no anchor, camera, focus or lifecycle state changes.
     Declined,
+    /// A fullscreen request before the initial commit (M2 pre-configure): remembered, not
+    /// answered; the initial configure carries the decision.
+    Recorded,
     /// Not answered: the protocol requires no answer to this request, or the toplevel has no
-    /// configure sequence to answer in (before its initial configure, or unmapped). Nothing is
-    /// stored and nothing changes.
+    /// configure sequence to answer in (unmapped, or a non-fullscreen request before its initial
+    /// configure). Nothing is stored and nothing changes.
     Ignored,
 }
 
@@ -174,55 +190,321 @@ pub struct ToplevelCapabilities {
     pub minimize: bool,
 }
 
+/// OBJ-19 `FullscreenState`: element W is in protocol fullscreen on output O. While W is mapped,
+/// `OutputPresentation(O) = Exclusive(W)`: O shows W's tree through the presentation view
+/// (F-PRESENT-1) instead of its camera's view. The anchor of W and every camera are untouched.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FullscreenState {
+    pub element: ElementId,
+    pub output: OutputId,
+    /// W's window-geometry size at the grant, offered back when fullscreen ends. `None` when W
+    /// had no size yet (a grant before its first map).
+    pub saved: Option<LocalSize>,
+}
+
+/// What a configure of a toplevel carries besides `activated`, as Core holds it now. The adapter
+/// copies it into every configure it sends; it keeps no fullscreen state of its own.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ToplevelConfigureState {
+    /// The output the element is fullscreen on.
+    pub fullscreen: Option<OutputId>,
+    /// The size asked of the client: the fullscreen output's logical size, or none (0×0: the
+    /// client chooses).
+    pub size: Option<LocalSize>,
+}
+
 impl Core {
-    /// The toplevel-request policy (M2), in one place.
-    ///
-    /// - `set_maximized` / `unset_maximized`: declined; `maximized` is never granted
-    ///   (INV-PROTO-1).
-    /// - `set_fullscreen` / `unset_fullscreen`: declined. INV-PRES-1 grants fullscreen to the
-    ///   focused element and before the first map; that needs the output presentation (M9,
-    ///   F-PRESENT-1), which does not exist yet. Until it does, every request is still answered
-    ///   with exactly one configure, as INV-PRES-1 requires of a declined one.
-    /// - `set_minimized`: ignored (INV-PROTO-1).
-    /// - `move`, `resize`: ignored; interactive move and resize are INC-14.
-    /// - `show_window_menu`: ignored; there is no window menu.
-    ///
-    /// A request that arrives where no configure can answer it — before the initial configure
-    /// (INV-PROTO-1: "recorded and ignored") or while unmapped — is ignored.
-    pub fn toplevel_policy(request: ToplevelRequest, state: Lifecycle) -> ToplevelDecision {
-        use ToplevelRequest::*;
-        let answerable = matches!(state, Lifecycle::AwaitingFirstBuffer | Lifecycle::Mapped);
-        match request {
-            SetMaximized | UnsetMaximized | SetFullscreen | UnsetFullscreen if answerable => {
-                ToplevelDecision::Declined
-            }
-            SetMaximized | UnsetMaximized | SetFullscreen | UnsetFullscreen => {
-                ToplevelDecision::Ignored
-            }
-            SetMinimized | Move | Resize | ShowWindowMenu => ToplevelDecision::Ignored,
+    /// The capabilities to advertise: those the policy can grant. Fullscreen is granted to the
+    /// focused element and before a first map (INV-PRES-1); maximize and minimize never are
+    /// (INV-PROTO-1); there is no window menu.
+    pub fn toplevel_capabilities(&self) -> ToplevelCapabilities {
+        ToplevelCapabilities {
+            fullscreen: true,
+            ..ToplevelCapabilities::default()
         }
     }
 
-    /// The capabilities to advertise: those the policy can grant. None today.
-    pub fn toplevel_capabilities(&self) -> ToplevelCapabilities {
-        ToplevelCapabilities::default()
+    /// OBJ-19, read-only.
+    pub fn fullscreen(&self) -> &[FullscreenState] {
+        &self.fullscreen
     }
 
-    /// M2: a client's `xdg_toplevel` request. Returns the decision and its effects: one
-    /// [`Effect::ToplevelConfigure`] for a declined request, none for an ignored one. It writes
-    /// nothing: no Stage, camera, focus or lifecycle state depends on a client's request here.
+    pub fn fullscreen_of(&self, id: ElementId) -> Option<FullscreenState> {
+        self.fullscreen.iter().copied().find(|f| f.element == id)
+    }
+
+    /// The element presented exclusively on `output`, if any: a fullscreen element that is
+    /// mapped. A grant whose element is not mapped yet presents nothing.
+    pub fn presentation(&self, output: OutputId) -> Option<ElementId> {
+        self.fullscreen
+            .iter()
+            .find(|f| f.output == output && self.stage.mapped(f.element).is_some())
+            .map(|f| f.element)
+    }
+
+    /// The state a configure of `id` carries (C5.2 "Configure: `fullscreen` state, size = O's
+    /// logical size at zoom 1"). A fractional logical size is rounded down, so the client's
+    /// surface is never larger than the output; F-PRESENT-1 centres the remainder.
+    pub fn toplevel_configure_state(&self, id: ElementId) -> ToplevelConfigureState {
+        let Some(fs) = self.fullscreen_of(id) else {
+            return ToplevelConfigureState::default();
+        };
+        let size = self.outputs.iter().find(|o| o.id == fs.output).map(|o| {
+            let (w, h) = o.logical_extent();
+            LocalSize {
+                w: w.floor() as i32,
+                h: h.floor() as i32,
+            }
+        });
+        ToplevelConfigureState {
+            fullscreen: Some(fs.output),
+            size,
+        }
+    }
+
+    /// F-PRESENT-1: the presentation view of the mapped fullscreen element of `model`'s output.
+    /// Zoom 1; W's window-geometry origin at the output's origin, or W centred if it is smaller
+    /// than the output: `v_P = anchor(W) − max(0, (view_O/scale_O − size(W)) / 2)`.
+    pub(crate) fn presentation_view(
+        &self,
+        model: &crate::output::OutputModel,
+    ) -> Option<crate::projection::View> {
+        let fs = self.fullscreen.iter().find(|f| f.output == model.id)?;
+        let (anchor, tree, _) = self.stage.mapped(fs.element)?;
+        let extent = model.logical_extent();
+        // the centre of a view whose origin is v_P
+        let centre = |anchor: i64, extent: f64, size: i32| {
+            let margin = ((extent - f64::from(size)) / 2.0).max(0.0);
+            crate::geom::q16(anchor as f64 - margin + extent / 2.0)
+        };
+        let mut view = crate::projection::View::new(crate::projection::ViewParams {
+            centre: crate::geom::CanvasPos {
+                x: centre(anchor.x, extent.0, tree.geometry.size.w),
+                y: centre(anchor.y, extent.1, tree.geometry.size.h),
+            },
+            zoom: 1.0,
+            scale: model.scale,
+            view_size: model.view_size(),
+        })
+        .ok()?;
+        view.only = Some(fs.element);
+        Some(view)
+    }
+
+    /// C5.2 output choice: the output the client named; else W's frame-clock output if W is
+    /// observed; else the output under the pointer; else the first output.
+    fn fullscreen_output(&self, id: ElementId, requested: Option<OutputId>) -> Option<OutputId> {
+        requested
+            .filter(|r| self.outputs.iter().any(|o| o.id == *r))
+            .or_else(|| self.clock_output_of(id))
+            .or_else(|| self.pointer_output())
+            .or_else(|| self.outputs.first().map(|o| o.id))
+    }
+
+    /// The effects of an output's presentation having started, ended or changed shape: its
+    /// ProjectionFrame is dropped, its membership recomputed (other elements leave or return),
+    /// the pointer gets one true position if it is on that output and free (M10), and the
+    /// constraints are reconciled (M13).
+    fn presentation_changed(&mut self, outputs: &[OutputId]) -> Vec<Effect> {
+        let mut new = None;
+        for &o in outputs {
+            self.frames.retain(|(f, _)| *f != o);
+            if self.outputs.iter().any(|m| m.id == o) {
+                let view = self.view(o);
+                new = Some(new.as_ref().unwrap_or(&self.membership).with_output(
+                    o,
+                    view.as_ref(),
+                    &self.stage,
+                ));
+            }
+        }
+        let mut fx = Vec::new();
+        if let Some(new) = new {
+            fx = self.membership.diff(&new, &self.stage);
+            self.membership = new;
+        }
+        let on_one = matches!(self.pointer, crate::pointer::PointerState::Located { output, .. } if outputs.contains(&output));
+        if on_one && !self.input.interaction.active() {
+            fx.extend(self.true_position(0));
+        }
+        fx.extend(self.reconcile_constraints());
+        fx
+    }
+
+    /// What every output presents now, to tell afterwards which presentations a change touched.
+    fn presentations(&self) -> Vec<(OutputId, Option<ElementId>)> {
+        self.outputs
+            .iter()
+            .map(|o| (o.id, self.presentation(o.id)))
+            .collect()
+    }
+
+    /// [`Core::presentation_changed`] for the outputs whose presentation differs from `before`;
+    /// when none does (a grant to an element that is not mapped yet, say), only the constraints
+    /// are reconciled and the pointer is left alone.
+    fn presentation_changed_since(
+        &mut self,
+        before: &[(OutputId, Option<ElementId>)],
+    ) -> Vec<Effect> {
+        let changed: Vec<OutputId> = before
+            .iter()
+            .filter(|(o, p)| self.presentation(*o) != *p)
+            .map(|(o, _)| *o)
+            .collect();
+        if changed.is_empty() {
+            self.reconcile_constraints()
+        } else {
+            self.presentation_changed(&changed)
+        }
+    }
+
+    /// The configure that tells `old`'s element it is no longer fullscreen, offering the size
+    /// saved at its grant (M9: "configure with the saved size").
+    fn restore_effect(old: FullscreenState) -> Effect {
+        match old.saved {
+            Some(size) => Effect::ToplevelConfigureSize {
+                element: old.element,
+                size,
+            },
+            None => Effect::ToplevelConfigure(old.element),
+        }
+    }
+
+    /// M9 `Windowed → Fullscreen{O}`: stores the state (replacing an older grant on O, whose
+    /// element is told so, and moving W's own if it was fullscreen elsewhere). Returns the
+    /// replaced element's configure. It sends no configure to W: the caller does, as the answer
+    /// to the request.
+    fn store_fullscreen(
+        &mut self,
+        id: ElementId,
+        output: OutputId,
+        saved: Option<LocalSize>,
+    ) -> Vec<Effect> {
+        let mut fx = Vec::new();
+        let mut saved = saved;
+        if let Some(i) = self.fullscreen.iter().position(|f| f.element == id) {
+            // still fullscreen: the size to return to is the one saved at the first grant
+            saved = self.fullscreen.remove(i).saved;
+        }
+        if let Some(i) = self.fullscreen.iter().position(|f| f.output == output) {
+            fx.push(Self::restore_effect(self.fullscreen.remove(i)));
+        }
+        self.fullscreen.push(FullscreenState {
+            element: id,
+            output,
+            saved,
+        });
+        fx
+    }
+
+    /// Forgets `id`'s fullscreen state and any recorded pre-map request, without telling the
+    /// client (unmap and destruction: the protocol state went with the surface's role state).
+    /// The caller reports the presentation that ended.
+    fn drop_fullscreen(&mut self, id: ElementId) {
+        self.premap_fullscreen.retain(|(e, _)| *e != id);
+        self.fullscreen.retain(|f| f.element != id);
+    }
+
+    /// INV-OUTPUT-1 / M9 `Fullscreen{O} | O disconnected → Windowed`: the states on a removed
+    /// output are dropped, each with its configure.
+    pub(crate) fn fullscreen_output_removed(&mut self, output: OutputId) -> Vec<Effect> {
+        let mut fx = Vec::new();
+        self.premap_fullscreen
+            .iter_mut()
+            .filter(|(_, o)| *o == Some(output))
+            .for_each(|(_, o)| *o = None);
+        while let Some(i) = self.fullscreen.iter().position(|f| f.output == output) {
+            fx.push(Self::restore_effect(self.fullscreen.remove(i)));
+        }
+        fx
+    }
+
+    /// M4 reconfiguration: "one configure only for an element in protocol fullscreen on this
+    /// output" — its size follows the output's.
+    pub(crate) fn fullscreen_output_reconfigured(&self, output: OutputId) -> Vec<Effect> {
+        self.fullscreen
+            .iter()
+            .filter(|f| f.output == output)
+            .map(|f| Effect::ToplevelConfigure(f.element))
+            .collect()
+    }
+
+    /// M2 / M9: a client's `xdg_toplevel` request. The policy, in one place:
+    ///
+    /// - `set_maximized` / `unset_maximized`: declined, one configure; `maximized` is never
+    ///   granted (INV-PROTO-1).
+    /// - `set_fullscreen`: granted if the element holds ActiveElementFocus, or before its first
+    ///   map; otherwise declined at once, nothing stored (INV-PRES-1). Before the initial commit
+    ///   it is recorded and decided in the initial configure. Either way exactly one configure
+    ///   answers it.
+    /// - `unset_fullscreen`: ends fullscreen with one configure offering the saved size; when
+    ///   not fullscreen, one configure.
+    /// - `set_minimized`: ignored (INV-PROTO-1). `show_window_menu`: ignored, there is none.
+    /// - `move`, `resize`: ignored; interactive move and resize are INC-14.
+    ///
+    /// Nothing is answered while the toplevel is unmapped. No request moves an anchor, a camera
+    /// or the focus.
     pub fn toplevel_request(
         &mut self,
         id: ElementId,
         request: ToplevelRequest,
     ) -> Result<(ToplevelDecision, Vec<Effect>), ProtocolError> {
+        use ToplevelDecision::*;
+        use ToplevelRequest::*;
         let state = self.stage.state(id).ok_or(ProtocolError::StaleElement)?;
-        let decision = Self::toplevel_policy(request, state);
-        let effects = match decision {
-            ToplevelDecision::Declined => vec![Effect::ToplevelConfigure(id)],
-            ToplevelDecision::Ignored => Vec::new(),
+        let answerable = matches!(state, Lifecycle::AwaitingFirstBuffer | Lifecycle::Mapped);
+        let declined = |answerable: bool| match answerable {
+            true => (Declined, vec![Effect::ToplevelConfigure(id)]),
+            false => (Ignored, Vec::new()),
         };
-        Ok((decision, effects))
+        Ok(match request {
+            SetMaximized | UnsetMaximized => declined(answerable),
+            SetMinimized | Move | Resize | ShowWindowMenu => (Ignored, Vec::new()),
+            SetFullscreen { output } => match state {
+                Lifecycle::AwaitingInitialCommit => {
+                    self.premap_fullscreen.retain(|(e, _)| *e != id);
+                    self.premap_fullscreen.push((id, output));
+                    (Recorded, Vec::new())
+                }
+                Lifecycle::Unmapped => (Ignored, Vec::new()),
+                Lifecycle::AwaitingFirstBuffer | Lifecycle::Mapped => {
+                    let before_first_map = !self.stage.mapped_before(id);
+                    let allowed = before_first_map || self.focus.target() == Some(id);
+                    match self.fullscreen_output(id, output).filter(|_| allowed) {
+                        Some(o) => {
+                            let saved =
+                                self.stage.mapped(id).map(|(_, tree, _)| tree.geometry.size);
+                            let before = self.presentations();
+                            let replaced = self.store_fullscreen(id, o, saved);
+                            let mut fx = vec![Effect::ToplevelConfigure(id)];
+                            fx.extend(replaced);
+                            fx.extend(self.presentation_changed_since(&before));
+                            (Granted, fx)
+                        }
+                        None => declined(true),
+                    }
+                }
+            },
+            UnsetFullscreen => match state {
+                Lifecycle::AwaitingInitialCommit => {
+                    self.premap_fullscreen.retain(|(e, _)| *e != id);
+                    (Ignored, Vec::new())
+                }
+                Lifecycle::Unmapped => (Ignored, Vec::new()),
+                Lifecycle::AwaitingFirstBuffer | Lifecycle::Mapped => {
+                    match self.fullscreen.iter().position(|f| f.element == id) {
+                        Some(i) => {
+                            let before = self.presentations();
+                            let old = self.fullscreen.remove(i);
+                            let mut fx = vec![Self::restore_effect(old)];
+                            fx.extend(self.presentation_changed_since(&before));
+                            (Released, fx)
+                        }
+                        None => declined(true),
+                    }
+                }
+            },
+        })
     }
 
     /// M1 `new_toplevel`: mints an `ElementId`; no anchor yet.
@@ -241,6 +523,7 @@ impl Core {
         let state = self.stage.state(id).ok_or(ProtocolError::StaleElement)?;
         let has_buffer = tree.root().is_some_and(|r| r.mapped);
         let stale = |_| ProtocolError::StaleElement;
+        let before = self.presentations();
         let mut fx = match (state, has_buffer) {
             (Lifecycle::AwaitingInitialCommit | Lifecycle::Unmapped, true) => {
                 return Err(ProtocolError::BufferBeforeConfigure);
@@ -252,7 +535,16 @@ impl Core {
                 self.stage
                     .set_state(id, Lifecycle::AwaitingFirstBuffer)
                     .map_err(stale)?;
-                vec![Effect::InitialConfigure(id)]
+                // M2 pre-configure: a recorded fullscreen request is granted in the initial
+                // configure (before the first map, INV-PRES-1); placement ran first (C5.2).
+                let mut fx = vec![Effect::InitialConfigure(id)];
+                if let Some(i) = self.premap_fullscreen.iter().position(|(e, _)| *e == id) {
+                    let (_, requested) = self.premap_fullscreen.remove(i);
+                    if let Some(o) = self.fullscreen_output(id, requested) {
+                        fx.extend(self.store_fullscreen(id, o, None));
+                    }
+                }
+                fx
             }
             (Lifecycle::Unmapped, false) => {
                 // anchor kept (INV-STAGE-5)
@@ -291,11 +583,31 @@ impl Core {
                     .into_iter()
                     .filter(|&e| e != id)
                     .collect();
+                // M1: "fullscreen dropped (M9)"; the client must request it again after a remap
+                self.drop_fullscreen(id);
                 self.focus.target_lost(id, &live)
             }
         };
         fx.extend(self.visibility_pass_element(id));
-        fx.extend(self.reconcile_constraints());
+        // A presentation that started or ended in this commit (a fullscreen element's first map;
+        // an older grant replaced), and any commit of a presented element: its view depends on
+        // its geometry (F-PRESENT-1).
+        let mut touched: Vec<OutputId> = before
+            .iter()
+            .filter(|(o, p)| self.presentation(*o) != *p)
+            .map(|(o, _)| *o)
+            .collect();
+        if let Some(fs) = self.fullscreen_of(id)
+            && self.presentation(fs.output) == Some(id)
+            && !touched.contains(&fs.output)
+        {
+            touched.push(fs.output);
+        }
+        if touched.is_empty() {
+            fx.extend(self.reconcile_constraints());
+        } else {
+            fx.extend(self.presentation_changed(&touched));
+        }
         Ok(fx)
     }
 
@@ -321,7 +633,13 @@ impl Core {
             .set_tree(id, Some(tree))
             .map_err(|_| ProtocolError::StaleElement)?;
         let mut fx = self.visibility_pass_element(id);
-        fx.extend(self.reconcile_constraints());
+        // the presentation view of a fullscreen element depends on its geometry (F-PRESENT-1)
+        match self.fullscreen_of(id) {
+            Some(fs) if self.presentation(fs.output) == Some(id) => {
+                fx.extend(self.presentation_changed(&[fs.output]))
+            }
+            _ => fx.extend(self.reconcile_constraints()),
+        }
         Ok(fx)
     }
 
@@ -332,12 +650,22 @@ impl Core {
         for (_, frame) in &mut self.frames {
             frame.entries.retain(|e| e.element != id);
         }
+        let before = self.presentations();
         let existed = self.stage.destroy(id);
         if !existed {
             return Vec::new();
         }
         let live: Vec<ElementId> = self.stage.mapped_elements();
         let mut fx = self.focus.target_lost(id, &live);
+        self.drop_fullscreen(id);
+        let ended: Vec<OutputId> = before
+            .iter()
+            .filter(|(_, p)| *p == Some(id))
+            .map(|(o, _)| *o)
+            .collect();
+        if !ended.is_empty() {
+            fx.extend(self.presentation_changed(&ended));
+        }
         let vis = self.visibility_pass_element(id);
         debug_assert!(
             vis.is_empty(),
@@ -362,8 +690,14 @@ impl Core {
         causing_output: Option<OutputId>,
     ) -> Option<LocalRect> {
         let anchor = self.stage.anchor(parent)?;
-        let output = match causing_output {
-            Some(o) if self.membership.observers(parent).contains(&o) => o,
+        // C5.2: the popups of a fullscreen element are constrained to its fullscreen output
+        let presented = self
+            .fullscreen_of(parent)
+            .map(|f| f.output)
+            .filter(|o| self.presentation(*o) == Some(parent));
+        let output = match (presented, causing_output) {
+            (Some(o), _) => o,
+            (None, Some(o)) if self.membership.observers(parent).contains(&o) => o,
             _ => self.clock_output_of(parent)?,
         };
         let view = self.view(output)?;
@@ -1123,77 +1457,154 @@ mod tests {
         let t_unobserved = core.popup_constraint_target(id, Some(o3)).unwrap();
         assert_eq!(t_unobserved.size, LocalSize { w: 800, h: 600 });
     }
-    // ------------------------------------------------------------ toplevel requests (M2)
+    // ------------------------------------------------------------ toplevel requests (M2, M9)
 
-    /// Everything a client's request could be tempted to change.
-    fn authority_state(c: &Core, id: ElementId) -> String {
+    use crate::{InputPort, OutputLifecycleToken};
+
+    /// A `w × h` single-surface tree with key `k`.
+    fn win(k: u64, w: i32, h: i32, mapped: bool) -> SurfaceTree {
+        SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: key(k),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+            }],
+        }
+    }
+
+    fn map_win(c: &mut Core, k: u64, w: i32, h: i32) -> ElementId {
+        let id = c.toplevel_created();
+        c.toplevel_committed(id, win(k, w, h, false)).unwrap();
+        c.toplevel_committed(id, win(k, w, h, true)).unwrap();
+        id
+    }
+
+    fn out(
+        c: &mut Core,
+        t: &mut OutputLifecycleToken,
+        name: &str,
+        mode: (u32, u32),
+        scale_120: u32,
+    ) -> OutputId {
+        c.output_connected(
+            t,
+            OutputDescriptor {
+                key: crate::output::tests::key(name),
+                mode,
+                transform: Transform::Normal,
+                scale_120,
+                refresh_mhz: 60_000,
+            },
+        )
+        .unwrap()
+        .0
+    }
+
+    fn focus(c: &mut Core, i: &mut InputPort, id: ElementId) {
+        c.set_focus(i, Some(id)).unwrap();
+    }
+
+    const FS: ToplevelRequest = ToplevelRequest::SetFullscreen { output: None };
+
+    /// What a client's request must never change: anchors, lifecycle, z-order, cameras, focus.
+    fn authority_state(c: &Core) -> String {
+        let elements: Vec<_> = c
+            .stage()
+            .z_order()
+            .iter()
+            .map(|id| (*id, c.stage().anchor(*id), c.stage().state(*id)))
+            .collect();
         format!(
             "{:?}",
             (
-                c.stage().state(id),
-                c.stage().anchor(id),
-                c.stage().z_order(),
-                c.stage().tree(id),
+                elements,
                 c.cameras().center(0),
                 c.cameras().zoom(0),
+                c.cameras().center(1),
                 c.focus().target(),
-                c.membership().observers(id),
             )
         )
     }
 
-    /// M2 as a table: for every request in every lifecycle state, the decision, the effects
-    /// (exactly one configure for a declined request, nothing for an ignored one) and no change
-    /// to Stage, camera, focus or membership.
+    fn rects(c: &mut Core, o: OutputId) -> Vec<(ElementId, (i64, i64, i64, i64))> {
+        c.render_list(o)
+            .unwrap()
+            .entries
+            .iter()
+            .map(|e| (e.element, (e.rect.x0, e.rect.y0, e.rect.x1, e.rect.y1)))
+            .collect()
+    }
+
+    /// M2 as a table for an element that does not hold the focus: for every request in every
+    /// lifecycle state, the decision and the effects. Stage, cameras and focus never change.
     #[test]
     fn toplevel_requests_are_answered_by_policy_and_change_nothing() {
-        use ToplevelDecision::{Declined, Ignored};
+        use ToplevelDecision::*;
         use ToplevelRequest::*;
-        let answered = [SetMaximized, UnsetMaximized, SetFullscreen, UnsetFullscreen];
-        // (state reached, whether a configure sequence exists to answer in)
-        let reach: [(Lifecycle, bool); 4] = [
-            (Lifecycle::AwaitingInitialCommit, false),
-            (Lifecycle::AwaitingFirstBuffer, true),
-            (Lifecycle::Mapped, true),
-            (Lifecycle::Unmapped, false),
+        let reach = [
+            Lifecycle::AwaitingInitialCommit,
+            Lifecycle::AwaitingFirstBuffer,
+            Lifecycle::Mapped,
+            Lifecycle::Unmapped,
         ];
-        for (state, answerable) in reach {
-            let mut c = connected(120);
-            let id = c.toplevel_created();
-            if state != Lifecycle::AwaitingInitialCommit {
-                c.toplevel_committed(id, tree(false)).unwrap();
-            }
-            if matches!(state, Lifecycle::Mapped | Lifecycle::Unmapped) {
-                c.toplevel_committed(id, tree(true)).unwrap();
-            }
-            if state == Lifecycle::Unmapped {
-                c.toplevel_committed(id, tree(false)).unwrap();
-            }
-            assert_eq!(c.stage().state(id), Some(state));
+        for state in reach {
             for request in ToplevelRequest::ALL {
-                let before = authority_state(&c, id);
-                let want = if answerable && answered.contains(&request) {
-                    Declined
-                } else {
-                    Ignored
+                let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+                out(&mut c, &mut t, "A", (1920, 1080), 120);
+                let other = map_win(&mut c, 9, 300, 200);
+                focus(&mut c, &mut i, other);
+                let id = c.toplevel_created();
+                if state != Lifecycle::AwaitingInitialCommit {
+                    c.toplevel_committed(id, win(1, 100, 50, false)).unwrap();
+                }
+                if matches!(state, Lifecycle::Mapped | Lifecycle::Unmapped) {
+                    c.toplevel_committed(id, win(1, 100, 50, true)).unwrap();
+                }
+                if state == Lifecycle::Unmapped {
+                    c.toplevel_committed(id, win(1, 100, 50, false)).unwrap();
+                }
+                assert_eq!(c.stage().state(id), Some(state));
+                let configured =
+                    matches!(state, Lifecycle::AwaitingFirstBuffer | Lifecycle::Mapped);
+                let want = match (request, state) {
+                    (SetFullscreen { .. }, Lifecycle::AwaitingInitialCommit) => Recorded,
+                    // before the first map: granted without the focus
+                    (SetFullscreen { .. }, Lifecycle::AwaitingFirstBuffer) => Granted,
+                    (SetMaximized | UnsetMaximized | SetFullscreen { .. } | UnsetFullscreen, _)
+                        if configured =>
+                    {
+                        Declined
+                    }
+                    _ => Ignored,
                 };
+                let before = authority_state(&c);
                 let (decision, fx) = c.toplevel_request(id, request).unwrap();
                 assert_eq!(decision, want, "{request:?} in {state:?}");
                 assert_eq!(
                     fx,
                     match want {
-                        Declined => vec![Effect::ToplevelConfigure(id)],
-                        Ignored => vec![],
+                        Granted | Declined => vec![Effect::ToplevelConfigure(id)],
+                        Released => unreachable!(),
+                        Recorded | Ignored => vec![],
                     },
                     "{request:?} in {state:?}"
                 );
+                assert_eq!(authority_state(&c), before, "{request:?} in {state:?}");
                 assert_eq!(
-                    authority_state(&c, id),
-                    before,
-                    "{request:?} in {state:?} changed authoritative state"
+                    c.fullscreen_of(id).is_some(),
+                    want == Granted,
+                    "{request:?} in {state:?}: stored state"
                 );
-                // repeating it gives the same answer: nothing was recorded
-                assert_eq!(c.toplevel_request(id, request).unwrap().0, want);
             }
         }
     }
@@ -1202,9 +1613,7 @@ mod tests {
     #[test]
     fn a_toplevel_request_on_a_destroyed_element_is_stale() {
         let mut c = connected(120);
-        let id = c.toplevel_created();
-        c.toplevel_committed(id, tree(false)).unwrap();
-        c.toplevel_committed(id, tree(true)).unwrap();
+        let id = map_win(&mut c, 1, 100, 50);
         c.toplevel_destroyed(id);
         for request in ToplevelRequest::ALL {
             assert_eq!(
@@ -1214,38 +1623,697 @@ mod tests {
         }
     }
 
-    /// The advertised capabilities are what the policy can grant: a capability is announced only
-    /// if some reachable state grants the request it stands for. The policy grants nothing yet,
-    /// so nothing is announced. This test fails if a capability is switched on without a grant,
-    /// or a grant added without the capability.
+    /// What is advertised is what the policy can grant: fullscreen, and nothing else. Found by
+    /// trying every request in every lifecycle state, with and without the focus.
     #[test]
     fn advertised_capabilities_are_exactly_what_the_policy_grants() {
         use ToplevelRequest::*;
-        let states = [
-            Lifecycle::AwaitingInitialCommit,
-            Lifecycle::AwaitingFirstBuffer,
-            Lifecycle::Mapped,
-            Lifecycle::Unmapped,
-        ];
-        // a decision other than Declined or Ignored is a grant
-        let grants = |request: ToplevelRequest| {
-            states.iter().any(|s| {
-                !matches!(
-                    Core::toplevel_policy(request, *s),
-                    ToplevelDecision::Declined | ToplevelDecision::Ignored
-                )
-            })
-        };
+        let mut granted = Vec::new();
+        for focused in [false, true] {
+            for stage in 0..4 {
+                for request in ToplevelRequest::ALL {
+                    let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+                    out(&mut c, &mut t, "A", (1920, 1080), 120);
+                    let id = c.toplevel_created();
+                    if stage >= 1 {
+                        c.toplevel_committed(id, win(1, 100, 50, false)).unwrap();
+                    }
+                    if stage >= 2 {
+                        c.toplevel_committed(id, win(1, 100, 50, true)).unwrap();
+                        if focused {
+                            focus(&mut c, &mut i, id);
+                        }
+                    }
+                    if stage == 3 {
+                        c.toplevel_committed(id, win(1, 100, 50, false)).unwrap();
+                    }
+                    if c.toplevel_request(id, request).unwrap().0 == ToplevelDecision::Granted {
+                        granted.push(request);
+                    }
+                }
+            }
+        }
+        granted.dedup();
+        assert!(granted.iter().all(|r| *r == FS), "{granted:?}");
         let caps = connected(120).toplevel_capabilities();
-        assert_eq!(caps.maximize, grants(SetMaximized));
-        assert_eq!(caps.fullscreen, grants(SetFullscreen));
-        assert_eq!(caps.minimize, grants(SetMinimized));
-        assert_eq!(caps.window_menu, grants(ShowWindowMenu));
+        assert_eq!(caps.fullscreen, granted.contains(&FS));
+        assert_eq!(caps.maximize, granted.contains(&SetMaximized));
+        assert_eq!(caps.minimize, granted.contains(&SetMinimized));
+        assert_eq!(caps.window_menu, granted.contains(&ShowWindowMenu));
         assert_eq!(
             caps,
-            ToplevelCapabilities::default(),
-            "nothing is granted yet"
+            ToplevelCapabilities {
+                fullscreen: true,
+                ..ToplevelCapabilities::default()
+            }
         );
+    }
+
+    /// M9 rows 1, 2, 3 and C5.2 Case B, with values derived by hand. Output A 1920x1080 at scale
+    /// 1, camera (0,0). W1 and W2 are 400x300, centred: anchor (−200,−150).
+    ///
+    /// - W2 (not focused) asks: declined, one configure, nothing stored.
+    /// - W1 (focused) asks: granted on A. Saved size 400x300. Its configure carries `fullscreen`
+    ///   and 1920x1080. W2 leaves A. While W1 is still 400x300 the presentation view centres it:
+    ///   v_P = (−200,−150) − ((1920−400)/2, (1080−300)/2) = (−960,−540), so it is drawn at
+    ///   [760,1160)x[390,690), where the camera showed it.
+    /// - W1 commits 1920x1080: v_P = anchor, so it covers [0,1920)x[0,1080); the anchor is still
+    ///   (−200,−150).
+    /// - W1 asks to leave: one configure offering 400x300; W2 returns; the view is the camera's
+    ///   again, exactly as before.
+    #[test]
+    fn fullscreen_is_granted_to_the_focused_element_and_presented_on_its_output() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let w1 = map_win(&mut c, 1, 400, 300);
+        let w2 = map_win(&mut c, 2, 400, 300);
+        focus(&mut c, &mut i, w1);
+        let camera_view = c.view(a).unwrap();
+        let untouched = authority_state(&c);
+        assert_eq!(
+            rects(&mut c, a),
+            vec![(w2, (760, 390, 1160, 690)), (w1, (760, 390, 1160, 690))]
+        );
+
+        // not focused: declined
+        let (d, fx) = c.toplevel_request(w2, FS).unwrap();
+        assert_eq!(
+            (d, fx),
+            (
+                ToplevelDecision::Declined,
+                vec![Effect::ToplevelConfigure(w2)]
+            )
+        );
+        assert!(
+            c.fullscreen().is_empty(),
+            "a declined request stored something"
+        );
+        assert_eq!(
+            c.toplevel_configure_state(w2),
+            ToplevelConfigureState::default()
+        );
+
+        // focused: granted
+        let (d, fx) = c.toplevel_request(w1, FS).unwrap();
+        assert_eq!(d, ToplevelDecision::Granted);
+        assert_eq!(
+            fx[0],
+            Effect::ToplevelConfigure(w1),
+            "the answer comes first"
+        );
+        assert_eq!(
+            fx.iter()
+                .filter(|e| matches!(
+                    e,
+                    Effect::ToplevelConfigure(_) | Effect::ToplevelConfigureSize { .. }
+                ))
+                .count(),
+            1,
+            "exactly one configure: {fx:?}"
+        );
+        assert!(
+            fx.contains(&Effect::Leave {
+                output: a,
+                surface: key(2)
+            }),
+            "the other element leaves the output: {fx:?}"
+        );
+        assert!(
+            !fx.iter()
+                .any(|e| matches!(e, Effect::Leave { surface, .. } if *surface == key(1)))
+        );
+        assert_eq!(
+            c.fullscreen(),
+            &[FullscreenState {
+                element: w1,
+                output: a,
+                saved: Some(LocalSize { w: 400, h: 300 })
+            }]
+        );
+        assert_eq!(
+            c.toplevel_configure_state(w1),
+            ToplevelConfigureState {
+                fullscreen: Some(a),
+                size: Some(LocalSize { w: 1920, h: 1080 })
+            }
+        );
+        assert_eq!(c.presentation(a), Some(w1));
+        assert_eq!(c.membership().observers(w2), vec![], "W2 is not shown on A");
+        let v = c.view(a).unwrap();
+        assert_eq!(v.only, Some(w1));
+        assert_eq!(
+            (v.v.x, v.v.y, v.zoom),
+            (-960 * Q16_ONE, -540 * Q16_ONE, 1.0)
+        );
+        assert_eq!(rects(&mut c, a), vec![(w1, (760, 390, 1160, 690))]);
+        assert_eq!(
+            authority_state(&c),
+            untouched,
+            "a grant moved an anchor, a camera or the focus"
+        );
+
+        // the client resizes to the configured size
+        let fx = c.toplevel_committed(w1, win(1, 1920, 1080, true)).unwrap();
+        assert!(
+            !fx.iter().any(|e| matches!(e, Effect::ToplevelConfigure(_))),
+            "{fx:?}"
+        );
+        assert_eq!(c.stage().anchor(w1), Some(CanvasPoint { x: -200, y: -150 }));
+        let v = c.view(a).unwrap();
+        assert_eq!(
+            (v.v.x, v.v.y),
+            (-200 * Q16_ONE, -150 * Q16_ONE),
+            "v_P = anchor"
+        );
+        assert_eq!(rects(&mut c, a), vec![(w1, (0, 0, 1920, 1080))]);
+        // every pixel of the output is W1's: the corners hit it at its own local coordinates
+        for (p, local) in [((0.5, 0.5), (0, 0)), ((1919.5, 1079.5), (1919, 1079))] {
+            let hit = c
+                .hit_test(a, crate::geom::OutputLogicalPoint { x: p.0, y: p.1 })
+                .unwrap();
+            assert_eq!(hit.element, w1);
+            assert_eq!((hit.local.x / Q16_ONE, hit.local.y / Q16_ONE), local);
+        }
+        // popups of the fullscreen element are constrained to the output: its whole surface
+        assert_eq!(
+            c.popup_constraint_target(w1, None),
+            Some(LocalRect {
+                loc: LocalPoint { x: 0, y: 0 },
+                size: LocalSize { w: 1920, h: 1080 }
+            })
+        );
+
+        // a second request while fullscreen is answered, and the saved size is not overwritten
+        let (d, fx) = c.toplevel_request(w1, FS).unwrap();
+        assert_eq!(
+            (d, fx),
+            (
+                ToplevelDecision::Granted,
+                vec![Effect::ToplevelConfigure(w1)]
+            )
+        );
+        assert_eq!(c.fullscreen()[0].saved, Some(LocalSize { w: 400, h: 300 }));
+
+        // leave
+        let (d, fx) = c
+            .toplevel_request(w1, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        assert_eq!(d, ToplevelDecision::Released);
+        assert_eq!(
+            fx[0],
+            Effect::ToplevelConfigureSize {
+                element: w1,
+                size: LocalSize { w: 400, h: 300 }
+            }
+        );
+        assert!(
+            fx.contains(&Effect::Enter {
+                output: a,
+                surface: key(2)
+            }),
+            "W2 returns: {fx:?}"
+        );
+        assert!(c.fullscreen().is_empty());
+        assert_eq!(
+            c.toplevel_configure_state(w1),
+            ToplevelConfigureState::default()
+        );
+        assert_eq!(
+            c.view(a),
+            Some(camera_view),
+            "the camera's view, exactly as it was"
+        );
+        assert_eq!(authority_state(&c), untouched);
+        // not fullscreen any more: a further unset is answered once and changes nothing
+        let (d, fx) = c
+            .toplevel_request(w1, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        assert_eq!(
+            (d, fx),
+            (
+                ToplevelDecision::Declined,
+                vec![Effect::ToplevelConfigure(w1)]
+            )
+        );
+    }
+
+    /// M2 pre-configure and C5.2 "request before first map": the request is recorded, the
+    /// initial configure carries `fullscreen` and the output's size, nothing is presented until
+    /// the element is mapped, and placement runs regardless. An unset before the initial commit
+    /// withdraws it. After a remap the client must ask again, and then needs the focus.
+    #[test]
+    fn a_fullscreen_request_before_the_first_map_is_granted_in_the_initial_configure() {
+        let (mut c, _i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let other = map_win(&mut c, 9, 300, 200);
+        let w = c.toplevel_created();
+        assert_eq!(
+            c.toplevel_request(w, FS).unwrap(),
+            (ToplevelDecision::Recorded, vec![])
+        );
+        assert!(
+            c.fullscreen().is_empty(),
+            "decided at the initial commit, not before"
+        );
+        let fx = c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        assert_eq!(
+            fx,
+            vec![Effect::InitialConfigure(w)],
+            "one configure, the initial one"
+        );
+        assert_eq!(
+            c.toplevel_configure_state(w),
+            ToplevelConfigureState {
+                fullscreen: Some(a),
+                size: Some(LocalSize { w: 1920, h: 1080 })
+            }
+        );
+        assert_eq!(
+            c.fullscreen(),
+            &[FullscreenState {
+                element: w,
+                output: a,
+                saved: None
+            }]
+        );
+        assert_eq!(
+            c.presentation(a),
+            None,
+            "nothing of W exists to present yet"
+        );
+        assert_eq!(
+            c.membership().observers(other),
+            vec![a],
+            "the output still shows the Stage"
+        );
+        // first map at the configured size: placed (F-PLACE-1: it fills the view, so its origin
+        // is the view's), presented, and the other element leaves
+        let fx = c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        assert_eq!(c.stage().anchor(w), Some(CanvasPoint { x: -960, y: -540 }));
+        assert!(
+            fx.contains(&Effect::Leave {
+                output: a,
+                surface: key(9)
+            }),
+            "{fx:?}"
+        );
+        assert!(
+            fx.contains(&Effect::Enter {
+                output: a,
+                surface: key(1)
+            }),
+            "{fx:?}"
+        );
+        assert_eq!(c.presentation(a), Some(w));
+        assert_eq!(rects(&mut c, a), vec![(w, (0, 0, 1920, 1080))]);
+        // leaving: no size was saved, so none is offered
+        let (d, fx) = c
+            .toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        assert_eq!(d, ToplevelDecision::Released);
+        assert_eq!(fx[0], Effect::ToplevelConfigure(w));
+        // unmap, re-show: before the buffer, without the focus, the request is declined
+        c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        assert_eq!(
+            c.toplevel_request(w, FS).unwrap(),
+            (ToplevelDecision::Ignored, vec![])
+        );
+        c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        assert_eq!(c.stage().state(w), Some(Lifecycle::AwaitingFirstBuffer));
+        assert_eq!(
+            c.toplevel_request(w, FS).unwrap(),
+            (
+                ToplevelDecision::Declined,
+                vec![Effect::ToplevelConfigure(w)]
+            ),
+            "a remap is not a first map"
+        );
+
+        // withdrawn before the initial commit
+        let x = c.toplevel_created();
+        c.toplevel_request(x, FS).unwrap();
+        assert_eq!(
+            c.toplevel_request(x, ToplevelRequest::UnsetFullscreen)
+                .unwrap(),
+            (ToplevelDecision::Ignored, vec![])
+        );
+        c.toplevel_committed(x, win(3, 0, 0, false)).unwrap();
+        assert_eq!(
+            c.toplevel_configure_state(x),
+            ToplevelConfigureState::default()
+        );
+        // between the initial configure and the first buffer: granted at once, one configure
+        let (d, fx) = c.toplevel_request(x, FS).unwrap();
+        assert_eq!(
+            (d, fx),
+            (
+                ToplevelDecision::Granted,
+                vec![Effect::ToplevelConfigure(x)]
+            )
+        );
+    }
+
+    /// M9 rows 4 and 5: losing the focus does not end fullscreen; a newer grant on the same
+    /// output replaces the older one, whose element gets one configure with its saved size.
+    #[test]
+    fn a_newer_grant_replaces_the_older_one_and_focus_loss_does_not() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let w1 = map_win(&mut c, 1, 400, 300);
+        let w2 = map_win(&mut c, 2, 500, 350);
+        focus(&mut c, &mut i, w1);
+        c.toplevel_request(w1, FS).unwrap();
+        focus(&mut c, &mut i, w2);
+        assert_eq!(c.presentation(a), Some(w1), "focus loss ended fullscreen");
+        assert_eq!(c.fullscreen().len(), 1);
+        let (d, fx) = c.toplevel_request(w2, FS).unwrap();
+        assert_eq!(d, ToplevelDecision::Granted);
+        assert_eq!(fx[0], Effect::ToplevelConfigure(w2));
+        assert_eq!(
+            fx[1],
+            Effect::ToplevelConfigureSize {
+                element: w1,
+                size: LocalSize { w: 400, h: 300 }
+            },
+            "the replaced element is told, with its saved size"
+        );
+        assert!(fx.contains(&Effect::Leave {
+            output: a,
+            surface: key(1)
+        }));
+        assert!(fx.contains(&Effect::Enter {
+            output: a,
+            surface: key(2)
+        }));
+        assert_eq!(
+            c.fullscreen(),
+            &[FullscreenState {
+                element: w2,
+                output: a,
+                saved: Some(LocalSize { w: 500, h: 350 })
+            }]
+        );
+        assert_eq!(
+            c.toplevel_configure_state(w1),
+            ToplevelConfigureState::default()
+        );
+    }
+
+    /// Every way a presentation ends leaves no state behind: unmap, destruction (mapped, and
+    /// between grant and first map), and removal of the output, which sends the configure with
+    /// the saved size before the output goes. A reconfigured output re-sends one configure with
+    /// its new size.
+    #[test]
+    fn fullscreen_ends_cleanly_on_unmap_destroy_and_output_changes() {
+        // unmap
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let other = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, FS).unwrap();
+        assert_eq!(c.membership().observers(other), vec![]);
+        let fx = c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        assert!(c.fullscreen().is_empty(), "state survived the unmap");
+        assert!(
+            fx.contains(&Effect::Enter {
+                output: a,
+                surface: key(9)
+            }),
+            "{fx:?}"
+        );
+        assert!(
+            !fx.iter()
+                .any(|e| matches!(e, Effect::ToplevelConfigureSize { .. })),
+            "an unmapped surface was sent a size: {fx:?}"
+        );
+        assert_eq!(c.presentation(a), None);
+        // remapped: not fullscreen, and placed where it was
+        c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        c.toplevel_committed(w, win(1, 400, 300, true)).unwrap();
+        assert_eq!(
+            c.toplevel_configure_state(w),
+            ToplevelConfigureState::default()
+        );
+        assert_eq!(c.stage().anchor(w), Some(CanvasPoint { x: -200, y: -150 }));
+
+        // destroyed while presented
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, FS).unwrap();
+        assert_eq!(c.presentation(a), Some(w));
+        let fx = c.toplevel_destroyed(w);
+        assert!(c.fullscreen().is_empty());
+        assert!(
+            fx.contains(&Effect::Enter {
+                output: a,
+                surface: key(9)
+            }),
+            "{fx:?}"
+        );
+        assert_eq!(c.membership().observers(other), vec![a]);
+        // destroyed between the grant and the first map, and with a request only recorded
+        let x = c.toplevel_created();
+        c.toplevel_request(x, FS).unwrap();
+        c.toplevel_committed(x, win(3, 0, 0, false)).unwrap();
+        assert_eq!(c.fullscreen().len(), 1);
+        c.toplevel_destroyed(x);
+        let y = c.toplevel_created();
+        c.toplevel_request(y, FS).unwrap();
+        c.toplevel_destroyed(y);
+        assert!(c.fullscreen().is_empty());
+        let z = c.toplevel_created();
+        c.toplevel_committed(z, win(4, 0, 0, false)).unwrap();
+        assert_eq!(
+            c.toplevel_configure_state(z),
+            ToplevelConfigureState::default(),
+            "a dead element's recorded request reached another"
+        );
+
+        // output reconfigured, then removed
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let b = out(&mut c, &mut t, "B", (1280, 720), 120);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        let (d, _) = c
+            .toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert_eq!(d, ToplevelDecision::Granted);
+        assert_eq!(c.fullscreen()[0].output, b, "the output the client named");
+        assert_eq!(
+            c.toplevel_configure_state(w).size,
+            Some(LocalSize { w: 1280, h: 720 })
+        );
+        assert_eq!(
+            c.membership().observers(w),
+            vec![a, b],
+            "A's camera still shows it"
+        );
+        let fx = c
+            .output_reconfigured(
+                &mut t,
+                b,
+                OutputDescriptor {
+                    key: crate::output::tests::key("B"),
+                    mode: (2560, 1440),
+                    transform: Transform::Normal,
+                    scale_120: 240,
+                    refresh_mhz: 60_000,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            fx.iter()
+                .filter(|e| **e == Effect::ToplevelConfigure(w))
+                .count(),
+            1,
+            "one configure for the element in fullscreen on it: {fx:?}"
+        );
+        assert_eq!(
+            c.toplevel_configure_state(w).size,
+            Some(LocalSize { w: 1280, h: 720 })
+        );
+        let fx = c.output_disconnected(&mut t, b).unwrap();
+        let restore = fx
+            .iter()
+            .position(|e| {
+                *e == Effect::ToplevelConfigureSize {
+                    element: w,
+                    size: LocalSize { w: 400, h: 300 },
+                }
+            })
+            .expect("the configure with the saved size");
+        let removed = fx
+            .iter()
+            .position(|e| *e == Effect::OutputRemoved(b))
+            .unwrap();
+        assert!(restore < removed);
+        assert!(c.fullscreen().is_empty());
+        assert_eq!(
+            c.toplevel_configure_state(w),
+            ToplevelConfigureState::default()
+        );
+    }
+
+    /// C5.2 output choice: the named output if it exists; else the frame-clock output of an
+    /// observed element; else the output under the pointer.
+    #[test]
+    fn the_fullscreen_output_is_chosen_by_the_sealed_rule() {
+        let far = PersistedCameras::from_entries(vec![(
+            crate::output::tests::key("B"),
+            CanvasPos {
+                x: 50_000 * Q16_ONE,
+                y: 0,
+            },
+            1.0,
+        )])
+        .unwrap();
+        let (mut c, mut i, _, mut t) = Core::new(far);
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let b = out(&mut c, &mut t, "B", (1280, 720), 120);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        assert_eq!(c.membership().observers(w), vec![a], "shown on A only");
+        let on = |c: &mut Core, output| {
+            c.toplevel_request(w, ToplevelRequest::SetFullscreen { output })
+                .unwrap();
+            let o = c.fullscreen()[0].output;
+            c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+                .unwrap();
+            o
+        };
+        assert_eq!(on(&mut c, Some(b)), b, "named");
+        assert_eq!(on(&mut c, None), a, "its clock output");
+        let gone = {
+            let x = out(&mut c, &mut t, "X", (800, 600), 120);
+            c.output_disconnected(&mut t, x).unwrap();
+            x
+        };
+        assert_eq!(
+            on(&mut c, Some(gone)),
+            a,
+            "a named output that no longer exists"
+        );
+        // presented on B while A's camera still shows it at its real size and place
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert_eq!(c.presentation(b), Some(w));
+        assert_eq!(c.presentation(a), None);
+        assert_eq!(rects(&mut c, a), vec![(w, (760, 390, 1160, 690))]);
+        // centred on B: (1280−400)/2 = 440, (720−300)/2 = 210
+        assert_eq!(rects(&mut c, b), vec![(w, (440, 210, 840, 510))]);
+        assert_eq!(
+            c.cameras().center(1),
+            Some(CanvasPos {
+                x: 50_000 * Q16_ONE,
+                y: 0
+            })
+        );
+    }
+
+    /// F-PRESENT-1 on fractional outputs, by hand. The anchor of a 400x300 window centred on a
+    /// camera at (0,0) is (−200,−150).
+    ///
+    /// - 1920x1080 at scale 1.5: logical 1280x720, the configure size. Smaller window: margins
+    ///   (440, 210), v_P = (−640,−360), drawn at physical [660,1260)x[315,765). A 2000x1000
+    ///   window: wider than the output, so x is origin-aligned and cropped (v_P.x = anchor.x);
+    ///   taller too (1000 > 720): v_P.y = anchor.y.
+    /// - 1366x768 at scale 1.25: logical 1092.8x614.4; the configure size rounds down to
+    ///   1092x614, and a window of that size has margins (0.4, 0.2).
+    #[test]
+    fn the_presentation_view_is_f_present_1() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 180);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, FS).unwrap();
+        assert_eq!(
+            c.toplevel_configure_state(w).size,
+            Some(LocalSize { w: 1280, h: 720 })
+        );
+        let v = c.view(a).unwrap();
+        assert_eq!((v.v.x, v.v.y, v.k), (-640 * Q16_ONE, -360 * Q16_ONE, 1.5));
+        assert_eq!(rects(&mut c, a), vec![(w, (660, 315, 1260, 765))]);
+        c.toplevel_committed(w, win(1, 2000, 1000, true)).unwrap();
+        let v = c.view(a).unwrap();
+        assert_eq!(
+            (v.v.x, v.v.y),
+            (-200 * Q16_ONE, -150 * Q16_ONE),
+            "origin-aligned"
+        );
+        assert_eq!(
+            rects(&mut c, a),
+            vec![(w, (0, 0, 3000, 1500))],
+            "cropped by the output"
+        );
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1366, 768), 150);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, FS).unwrap();
+        assert_eq!(
+            c.toplevel_configure_state(w).size,
+            Some(LocalSize { w: 1092, h: 614 })
+        );
+        c.toplevel_committed(w, win(1, 1092, 614, true)).unwrap();
+        let v = c.view(a).unwrap();
+        // v_P = (−200 − 0.4, −150 − 0.2), Q16 by R7: 0.4·65536 = 26214.4 → 26214, 0.2·65536 = 13107.2 → 13107
+        assert_eq!(
+            (v.v.x, v.v.y),
+            (-200 * Q16_ONE - 26214, -150 * Q16_ONE - 13107)
+        );
+    }
+
+    /// "Fullscreen never touches cameras": a camera drag on a fullscreen output moves that
+    /// output's camera and not what the output shows; when fullscreen ends, the output shows the
+    /// camera where the drag left it.
+    #[test]
+    fn a_presentation_is_independent_of_the_camera() {
+        use crate::PhysicalEvent;
+        use crate::input::bindings::Modifiers;
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, FS).unwrap();
+        c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        let presented = c.view(a).unwrap();
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let button = |pressed| PhysicalEvent::PointerButton {
+            button: 0x112,
+            pressed,
+            modifiers: logo,
+            time_us: 0,
+        };
+        c.physical_input(&mut i, button(true)).unwrap();
+        c.physical_input(
+            &mut i,
+            PhysicalEvent::PointerMotion {
+                delta: (-300.0, 0.0),
+                delta_unaccel: (-300.0, 0.0),
+                time_us: 0,
+            },
+        )
+        .unwrap();
+        c.physical_input(&mut i, button(false)).unwrap();
+        assert_eq!(
+            c.cameras().center(0),
+            Some(CanvasPos {
+                x: 300 * Q16_ONE,
+                y: 0
+            }),
+            "the camera moved"
+        );
+        assert_eq!(c.view(a), Some(presented), "what the output shows did not");
+        assert_eq!(c.stage().anchor(w), Some(CanvasPoint { x: -200, y: -150 }));
+        c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        let v = c.view(a).unwrap();
+        assert_eq!((v.only, v.v.x), (None, (300 - 960) * Q16_ONE));
     }
 
     // ------------------------------------------------------------ placement at first map

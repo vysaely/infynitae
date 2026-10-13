@@ -1,15 +1,14 @@
 //! INC-7 (experimental), M2 on the production path: what a real client gets back for each
 //! `xdg_toplevel` request, and what the compositor tells it it can do.
 //!
-//! TST-22 (xmaximize) ported for the answer policy: `set_maximized`, `unset_maximized`,
-//! `set_fullscreen` and `unset_fullscreen` are each answered by exactly one configure that
-//! grants nothing; `set_minimized`, `move`, `resize` and `show_window_menu` are answered by
-//! none; a request before the initial configure, or while unmapped, is not answered. No request
-//! moves a window, a camera or the focus. The oracle is the client's own record of the events it
-//! received (`probe.toplevel_configures`, `probe.wm_capabilities`).
+//! TST-22 (xmaximize) ported: `set_maximized`, `unset_maximized`, `set_fullscreen` and
+//! `unset_fullscreen` are each answered by exactly one configure; `set_minimized`, `move`,
+//! `resize` and `show_window_menu` are answered by none; a request before the initial configure,
+//! or while unmapped, is not answered. No request moves a window, a camera or the focus. The
+//! oracle is the client's own record of the events it received (`probe.toplevel_configures`,
+//! `probe.wm_capabilities`).
 //!
-//! Not here, because it does not exist yet: a granted fullscreen (M9, F-PRESENT-1). Every
-//! fullscreen request is declined, including the focused and pre-map ones that INV-PRES-1 grants.
+//! What a granted fullscreen looks like on the output is in `t1_fullscreen`.
 
 mod common;
 
@@ -72,7 +71,12 @@ impl T {
             .toplevel_configures
             .iter()
             .filter(|(i, _, _)| *i == idx)
-            .map(|(_, size, states)| (*size, states.clone()))
+            .map(|(_, size, states)| {
+                // the states array is a set: its order on the wire carries no meaning
+                let mut states = states.clone();
+                states.sort_unstable();
+                (*size, states)
+            })
             .collect()
     }
 
@@ -161,11 +165,7 @@ fn tst22_each_request_gets_its_policy_answer_and_nothing_moves() {
         declined,
         "unset_maximized"
     );
-    assert_eq!(
-        t.ask(w, |tl| tl.set_fullscreen(None)),
-        declined,
-        "set_fullscreen"
-    );
+    // not fullscreen: an unset is answered once and changes nothing
     assert_eq!(
         t.ask(w, |tl| tl.unset_fullscreen()),
         declined,
@@ -279,8 +279,8 @@ fn requests_while_unmapped_are_not_answered() {
 }
 
 /// What the compositor says it can do is what its policy grants. The client is told once, with
-/// its first configure, and the set is empty: no maximize, fullscreen, minimize or window menu.
-/// (A client that reads the set shows no control for them.)
+/// its first configure, and the set is fullscreen alone: no maximize, minimize or window menu.
+/// (A client that reads the set shows no control for those.)
 ///
 /// Also recorded: Smithay sends `configure_bounds(0, 0)` with the first configure. Zero means
 /// "no bounds"; INV-PROTO-1 says none is sent in Foundation 01, and no bound is ever proposed.
@@ -298,7 +298,7 @@ fn the_announced_capabilities_are_what_the_policy_grants() {
     .into_iter()
     .filter_map(|(on, v)| on.then_some(v))
     .collect();
-    assert_eq!(want, Vec::<u32>::new(), "Core grants nothing yet");
+    assert_eq!(want, vec![3], "fullscreen, and nothing else");
     assert_eq!(t.ls.probe.wm_capabilities, vec![(w, want.clone())]);
     // later configures do not repeat or change it
     set_focus(&mut t.ls.state, &mut t.ls.input, Some(id)).expect("focus");
@@ -308,9 +308,11 @@ fn the_announced_capabilities_are_what_the_policy_grants() {
     assert_eq!(t.ls.probe.configure_bounds, vec![(w, (0, 0))]);
 }
 
-/// 300 requests in a fixed pseudo-random order on a focused window: the configures received are
-/// exactly one per state request, in order, each `[activated]` with no size; nothing else
-/// changes.
+/// 300 requests in a fixed pseudo-random order on a focused window that never resizes: the
+/// configures received are exactly one per state request, in order, and each is what a model of
+/// the policy predicts — `[fullscreen, activated]` with the output's size while fullscreen, the
+/// saved 400x300 once when it ends, `[activated]` with no size otherwise. No anchor, camera or
+/// focus changes.
 #[test]
 fn a_stream_of_requests_is_answered_one_for_one() {
     let mut t = T::new();
@@ -322,7 +324,10 @@ fn a_stream_of_requests_is_answered_one_for_one() {
     let before = t.authority();
     let start = t.configures(w).len();
     let mut x = 0x9E37_79B9_7F4A_7C15u64;
-    let mut expected = 0;
+    let mut expected = Vec::new();
+    let mut fullscreen = false;
+    let windowed = ((0, 0), vec![ACTIVATED]);
+    let full = ((1920, 1080), vec![FULLSCREEN, ACTIVATED]);
     for _ in 0..300 {
         x ^= x << 13;
         x ^= x >> 7;
@@ -338,14 +343,28 @@ fn a_stream_of_requests_is_answered_one_for_one() {
             6 => tl.resize(&seat, serial, ResizeEdge::Top),
             _ => tl.show_window_menu(&seat, serial, 1, 1),
         }
-        expected += usize::from(x % 8 < 4);
+        match x % 8 {
+            0 | 1 if fullscreen => expected.push(full.clone()),
+            0 | 1 => expected.push(windowed.clone()),
+            2 => {
+                fullscreen = true;
+                expected.push(full.clone());
+            }
+            3 if fullscreen => {
+                fullscreen = false;
+                expected.push(((400, 300), vec![ACTIVATED]));
+            }
+            3 => expected.push(windowed.clone()),
+            _ => {}
+        }
         if x.is_multiple_of(5) {
             t.adv();
         }
     }
     t.adv();
     let got = &t.configures(w)[start..];
-    assert_eq!(got.len(), expected, "one configure per state request");
-    assert!(got.iter().all(|c| *c == ((0, 0), vec![ACTIVATED])));
+    assert_eq!(got.len(), expected.len(), "one configure per state request");
+    assert_eq!(got, expected.as_slice());
+    assert!(expected.contains(&full) && expected.contains(&((400, 300), vec![ACTIVATED])));
     assert_eq!(t.authority(), before);
 }

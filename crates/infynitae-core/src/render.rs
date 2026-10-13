@@ -45,6 +45,10 @@ pub fn entries_for(
     anchor: CanvasPoint,
     tree: &SurfaceTree,
 ) -> Vec<FrameEntry> {
+    // a presentation view shows one element's tree and nothing else (OBJ-19)
+    if view.only.is_some_and(|w| w != element) {
+        return Vec::new();
+    }
     let Ok(origins) = tree.origins(anchor) else {
         return Vec::new();
     };

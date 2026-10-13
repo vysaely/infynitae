@@ -34,23 +34,11 @@ impl WaylandState {
     pub fn apply(&mut self, effects: &[Effect]) {
         for effect in effects {
             match *effect {
-                Effect::InitialConfigure(id) => {
-                    if let Some(t) = self.window(id).and_then(|w| w.toplevel()) {
-                        t.send_configure();
-                    }
+                Effect::InitialConfigure(id) | Effect::ToplevelConfigure(id) => {
+                    self.configure_toplevel(id, None);
                 }
-                Effect::ToplevelConfigure(id) => {
-                    if let Some(t) = self.window(id).and_then(|w| w.toplevel()) {
-                        let activated = self.core.focus().target() == Some(id);
-                        t.with_pending_state(|s| {
-                            if activated {
-                                s.states.set(xdg_toplevel::State::Activated);
-                            } else {
-                                s.states.unset(xdg_toplevel::State::Activated);
-                            }
-                        });
-                        t.send_configure();
-                    }
+                Effect::ToplevelConfigureSize { element, size } => {
+                    self.configure_toplevel(element, Some((size.w, size.h)));
                 }
                 Effect::KeyboardFocus(target) => {
                     let serial = SERIAL_COUNTER.next_serial();
@@ -192,6 +180,51 @@ impl WaylandState {
     }
 
     /// The Smithay output of a connected output (for render oracles and backends).
+    /// Sends one `xdg_toplevel.configure` whose states and size are Core's at this moment:
+    /// `activated` from the focus (INV-PROTO-1), `fullscreen` and the fullscreen size from
+    /// OBJ-19 (INV-PRES-1). `offered` is a one-time size offer for a toplevel that is not
+    /// fullscreen (the size saved when fullscreen was granted). Every field is written on every
+    /// configure, so nothing of an earlier one survives in Smithay's pending state: the adapter
+    /// holds no fullscreen state of its own.
+    fn configure_toplevel(&mut self, id: ElementId, offered: Option<(i32, i32)>) {
+        let Some(t) = self.window(id).and_then(|w| w.toplevel()) else {
+            return;
+        };
+        let activated = self.core.focus().target() == Some(id);
+        let state = self.core.toplevel_configure_state(id);
+        let size = state.size.map(|s| (s.w, s.h)).or(offered);
+        let set = |states: &mut smithay::wayland::shell::xdg::ToplevelStateSet, flag, on: bool| {
+            if on {
+                states.set(flag);
+            } else {
+                states.unset(flag);
+            }
+        };
+        t.with_pending_state(|s| {
+            set(&mut s.states, xdg_toplevel::State::Activated, activated);
+            set(
+                &mut s.states,
+                xdg_toplevel::State::Fullscreen,
+                state.fullscreen.is_some(),
+            );
+            s.size = size.map(Into::into);
+            s.fullscreen_output = None;
+        });
+        t.send_configure();
+    }
+
+    /// The Core output a client's `wl_output` object stands for.
+    pub(crate) fn output_id_of(
+        &self,
+        wl_output: &smithay::reexports::wayland_server::protocol::wl_output::WlOutput,
+    ) -> Option<OutputId> {
+        let output = Output::from_resource(wl_output)?;
+        self.outputs
+            .iter()
+            .find(|h| h.output == output)
+            .map(|h| h.id)
+    }
+
     pub fn smithay_output(&self, id: OutputId) -> Option<&Output> {
         self.handle(id).map(|h| &h.output)
     }

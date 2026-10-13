@@ -173,6 +173,12 @@ pub struct Core {
     persisted: navigation::PersistedCameras,
     /// The placement policy of elements not yet mapped (INV-STAGE-1 writer (a)).
     placement: protocol::PlacementPolicy,
+    /// OBJ-19: the protocol-fullscreen states, at most one per output and one per element. The
+    /// only store of fullscreen state; written by `core::protocol` alone (INV-PRES-1).
+    fullscreen: Vec<protocol::FullscreenState>,
+    /// M2 pre-configure: toplevels that asked for fullscreen before their initial commit, with
+    /// the output they named. Decided at the initial commit.
+    premap_fullscreen: Vec<(stage::ElementId, Option<output::OutputId>)>,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
     /// protocol state fail its `Send` assertion (built through infynitae-wayland's probe feature).
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -204,6 +210,8 @@ impl Core {
                 pending_constraint: None,
                 persisted,
                 placement: protocol::PlacementPolicy::default(),
+                fullscreen: Vec::new(),
+                premap_fullscreen: Vec::new(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
             },
@@ -458,9 +466,14 @@ impl Core {
         fx
     }
 
-    /// View(O) from the camera bound to the output (F-VIEW-1, F-LATTICE-1).
+    /// View(O): the presentation view of a mapped protocol-fullscreen element on the output
+    /// (F-PRESENT-1), else the view of the camera bound to it (F-VIEW-1, F-LATTICE-1). The
+    /// camera is not consulted, read or changed while a presentation view replaces it.
     pub fn view(&self, output: output::OutputId) -> Option<projection::View> {
         let model = self.outputs.iter().find(|o| o.id == output)?;
+        if let Some(view) = self.presentation_view(model) {
+            return Some(view);
+        }
         let camera = self.cameras.camera_for_output(output)?;
         projection::View::new(projection::ViewParams {
             centre: self.cameras.center(camera)?,

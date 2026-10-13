@@ -47,6 +47,9 @@ pub struct View {
     pub c_eff: CanvasPos,
     /// `view_O` in physical px.
     pub size: (u32, u32),
+    /// `OutputPresentation(O) = Exclusive(W)` (OBJ-19, C5.2): when set, this is a presentation
+    /// view and only W's surface tree is shown through it. `None` for a camera's view.
+    pub only: Option<crate::stage::ElementId>,
 }
 
 impl View {
@@ -84,6 +87,7 @@ impl View {
             c: (cx, cy),
             c_eff: CanvasPos { x: ex, y: ey },
             size: p.view_size,
+            only: None,
         })
     }
 

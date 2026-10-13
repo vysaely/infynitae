@@ -331,8 +331,11 @@ impl XdgShellHandler for WaylandState {
         self.toplevel_request(&surface, ToplevelRequest::UnsetMaximized);
     }
 
-    fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<WlOutput>) {
-        self.toplevel_request(&surface, ToplevelRequest::SetFullscreen);
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<WlOutput>) {
+        // the output the client named, if it is one of Core's; which output is used is Core's
+        // choice (C5.2)
+        let output = output.and_then(|o| self.output_id_of(&o));
+        self.toplevel_request(&surface, ToplevelRequest::SetFullscreen { output });
     }
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
