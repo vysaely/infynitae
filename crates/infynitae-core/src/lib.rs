@@ -179,6 +179,10 @@ pub struct Core {
     /// M2 pre-configure: toplevels that asked for fullscreen before their initial commit, with
     /// the output they named. Decided at the initial commit.
     premap_fullscreen: Vec<(stage::ElementId, Option<output::OutputId>)>,
+    /// Elements that left protocol fullscreen before ever having been placed as a window, with
+    /// the geometry size they had then. Their default placement is resolved at the first commit
+    /// with another size: the client's first windowed size.
+    windowed_placement_pending: Vec<(stage::ElementId, geom::LocalSize)>,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
     /// protocol state fail its `Send` assertion (built through infynitae-wayland's probe feature).
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -212,6 +216,7 @@ impl Core {
                 placement: protocol::PlacementPolicy::default(),
                 fullscreen: Vec::new(),
                 premap_fullscreen: Vec::new(),
+                windowed_placement_pending: Vec::new(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
             },

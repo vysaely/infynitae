@@ -387,7 +387,8 @@ impl Core {
             saved = self.fullscreen.remove(i).saved;
         }
         if let Some(i) = self.fullscreen.iter().position(|f| f.output == output) {
-            fx.push(Self::restore_effect(self.fullscreen.remove(i)));
+            let old = self.fullscreen.remove(i);
+            fx.push(self.fullscreen_ended(old));
         }
         self.fullscreen.push(FullscreenState {
             element: id,
@@ -397,12 +398,43 @@ impl Core {
         fx
     }
 
-    /// Forgets `id`'s fullscreen state and any recorded pre-map request, without telling the
-    /// client (unmap and destruction: the protocol state went with the surface's role state).
-    /// The caller reports the presentation that ended.
+    /// Forgets `id`'s fullscreen state and every pending piece of it — a recorded pre-map
+    /// request, a postponed windowed placement — without telling the client (unmap and
+    /// destruction: the protocol state went with the surface's role state). The caller reports
+    /// the presentation that ended.
     fn drop_fullscreen(&mut self, id: ElementId) {
         self.premap_fullscreen.retain(|(e, _)| *e != id);
         self.fullscreen.retain(|f| f.element != id);
+        self.windowed_placement_pending.retain(|(e, _)| *e != id);
+    }
+
+    /// Default windowed placement (F-PLACE-1), resolved once per element through `stage::place`.
+    /// Does nothing for an element already placed.
+    fn place_by_default(&mut self, id: ElementId, tree: &SurfaceTree) -> Result<(), ProtocolError> {
+        self.windowed_placement_pending.retain(|(e, _)| *e != id);
+        if self.stage.default_placed(id) {
+            return Ok(());
+        }
+        let stale = |_| ProtocolError::StaleElement;
+        if let Some(anchor) = self.first_map_anchor(tree) {
+            self.stage.place(id, anchor).map_err(stale)?;
+        }
+        self.stage.set_default_placed(id).map_err(stale)
+    }
+
+    /// An element's fullscreen ended while it stays mapped (unset, replacement, output removal):
+    /// returns the configure that tells it so, and, if it has never been placed as a window,
+    /// notes the size it has now so that its first windowed size can be recognised.
+    fn fullscreen_ended(&mut self, old: FullscreenState) -> Effect {
+        if !self.stage.default_placed(old.element)
+            && let Some((_, tree, _)) = self.stage.mapped(old.element)
+        {
+            let size = tree.geometry.size;
+            self.windowed_placement_pending
+                .retain(|(e, _)| *e != old.element);
+            self.windowed_placement_pending.push((old.element, size));
+        }
+        Self::restore_effect(old)
     }
 
     /// INV-OUTPUT-1 / M9 `Fullscreen{O} | O disconnected → Windowed`: the states on a removed
@@ -414,7 +446,8 @@ impl Core {
             .filter(|(_, o)| *o == Some(output))
             .for_each(|(_, o)| *o = None);
         while let Some(i) = self.fullscreen.iter().position(|f| f.output == output) {
-            fx.push(Self::restore_effect(self.fullscreen.remove(i)));
+            let old = self.fullscreen.remove(i);
+            fx.push(self.fullscreen_ended(old));
         }
         fx
     }
@@ -496,7 +529,7 @@ impl Core {
                         Some(i) => {
                             let before = self.presentations();
                             let old = self.fullscreen.remove(i);
-                            let mut fx = vec![Self::restore_effect(old)];
+                            let mut fx = vec![self.fullscreen_ended(old)];
                             fx.extend(self.presentation_changed_since(&before));
                             (Released, fx)
                         }
@@ -554,17 +587,32 @@ impl Core {
                     .map_err(stale)?;
                 vec![Effect::InitialConfigure(id)]
             }
-            (Lifecycle::AwaitingFirstBuffer, false) | (Lifecycle::Mapped, true) => {
+            (Lifecycle::AwaitingFirstBuffer, false) => {
+                self.stage.set_tree(id, Some(tree)).map_err(stale)?;
+                vec![]
+            }
+            (Lifecycle::Mapped, true) => {
+                // An element that left fullscreen without ever having been a window is placed
+                // when its first windowed size arrives: a commit whose geometry differs from the
+                // one it had when fullscreen ended (commits still in flight at the old size are
+                // not that).
+                let arrived = self
+                    .windowed_placement_pending
+                    .iter()
+                    .any(|(e, old)| *e == id && *old != tree.geometry.size);
+                if arrived && self.fullscreen_of(id).is_none() {
+                    self.place_by_default(id, &tree)?;
+                }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
                 vec![]
             }
             (Lifecycle::AwaitingFirstBuffer, true) => {
-                // First map only: the size is known now, so the placement policy can use it.
-                // A remap keeps its anchor (INV-STAGE-5).
-                if !self.stage.mapped_before(id)
-                    && let Some(anchor) = self.first_map_anchor(&tree)
-                {
-                    self.stage.place(id, anchor).map_err(stale)?;
+                // The size is known now, so the placement policy can use it: default placement
+                // is resolved at the element's first windowed presentation. A map in protocol
+                // fullscreen is not one and leaves the opportunity for later; a remap of a
+                // placed element keeps its anchor (INV-STAGE-5).
+                if self.fullscreen_of(id).is_none() {
+                    self.place_by_default(id, &tree)?;
                 }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
                 self.stage.set_state(id, Lifecycle::Mapped).map_err(stale)?;
@@ -1906,10 +1954,14 @@ mod tests {
             vec![a],
             "the output still shows the Stage"
         );
-        // first map at the configured size: placed (F-PLACE-1: it fills the view, so its origin
-        // is the view's), presented, and the other element leaves
+        // first map at the configured size: presented, and the other element leaves. It is not
+        // placed as a window yet: the anchor is still the provisional one, the camera centre
         let fx = c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
-        assert_eq!(c.stage().anchor(w), Some(CanvasPoint { x: -960, y: -540 }));
+        assert_eq!(c.stage().anchor(w), Some(CanvasPoint { x: 0, y: 0 }));
+        assert!(
+            !c.stage().default_placed(w),
+            "a fullscreen map used up the placement"
+        );
         assert!(
             fx.contains(&Effect::Leave {
                 output: a,
@@ -1970,6 +2022,163 @@ mod tests {
                 ToplevelDecision::Granted,
                 vec![Effect::ToplevelConfigure(x)]
             )
+        );
+    }
+
+    /// A window whose first map is in protocol fullscreen keeps its default-placement
+    /// opportunity. It is placed by F-PLACE-1 at its first windowed presentation: the first
+    /// commit, after fullscreen ended, whose geometry differs from the one it had then. Commits
+    /// still in flight at the fullscreen size are not that. After it, the anchor is final.
+    /// Camera at (700, −300), so every value differs from the default-camera case:
+    /// provisional anchor (700, −300); 400x300 centred there is (500, −450).
+    #[test]
+    fn a_window_that_starts_fullscreen_is_placed_at_its_first_windowed_size() {
+        let cam = PersistedCameras::from_entries(vec![(
+            crate::output::tests::key("A"),
+            CanvasPos {
+                x: 700 * Q16_ONE,
+                y: -300 * Q16_ONE,
+            },
+            1.0,
+        )])
+        .unwrap();
+        let (mut c, _i, _, mut t) = Core::new(cam);
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let w = c.toplevel_created();
+        c.toplevel_request(w, FS).unwrap();
+        c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        let provisional = CanvasPoint { x: 700, y: -300 };
+        assert_eq!(c.stage().anchor(w), Some(provisional));
+        assert_eq!(
+            rects(&mut c, a),
+            vec![(w, (0, 0, 1920, 1080))],
+            "presented at the origin"
+        );
+        // a second commit while fullscreen changes nothing about placement
+        c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        assert!(!c.stage().default_placed(w));
+
+        c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        assert_eq!(
+            c.stage().anchor(w),
+            Some(provisional),
+            "the exit itself moves nothing"
+        );
+        // a frame still in flight at the fullscreen size
+        c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        assert_eq!(
+            c.stage().anchor(w),
+            Some(provisional),
+            "placed from the fullscreen size"
+        );
+        // the first windowed size: placed now, centred on the camera
+        c.toplevel_committed(w, win(1, 400, 300, true)).unwrap();
+        assert_eq!(c.stage().anchor(w), Some(CanvasPoint { x: 500, y: -450 }));
+        assert!(c.stage().default_placed(w));
+        assert_eq!(
+            rects(&mut c, a),
+            vec![(w, (760, 390, 1160, 690))],
+            "centred in the view"
+        );
+        // final: a later size, another fullscreen round trip and a remap keep it
+        let placed = CanvasPoint { x: 500, y: -450 };
+        c.toplevel_committed(w, win(1, 640, 480, true)).unwrap();
+        assert_eq!(c.stage().anchor(w), Some(placed));
+        c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        c.toplevel_committed(w, win(1, 300, 200, true)).unwrap();
+        assert_eq!(c.stage().anchor(w), Some(placed), "a remap placed it again");
+    }
+
+    /// The other ways such a window first becomes a window: fullscreen ends by replacement or by
+    /// the removal of its output (placed at its next size, like after an unset); it is unmapped
+    /// while fullscreen and re-shown as a window (placed at that map). And a window that was
+    /// placed before going fullscreen returns to exactly its anchor: nothing is re-resolved.
+    #[test]
+    fn placement_after_fullscreen_covers_every_exit_and_restores_existing_anchors() {
+        // unmapped while fullscreen-first, re-shown windowed
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let w = c.toplevel_created();
+        c.toplevel_request(w, FS).unwrap();
+        c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        c.toplevel_committed(w, win(1, 0, 0, false)).unwrap(); // unmap
+        assert!(c.fullscreen().is_empty());
+        c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        c.toplevel_committed(w, win(1, 400, 300, true)).unwrap();
+        assert_eq!(
+            c.stage().anchor(w),
+            Some(CanvasPoint { x: -200, y: -150 }),
+            "placed at the re-show"
+        );
+
+        // replaced by a newer grant, then resized
+        let x = c.toplevel_created();
+        c.toplevel_request(x, FS).unwrap();
+        c.toplevel_committed(x, win(2, 0, 0, false)).unwrap();
+        c.toplevel_committed(x, win(2, 1920, 1080, true)).unwrap();
+        assert_eq!(c.presentation(a), Some(x));
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, FS).unwrap(); // replaces x on A
+        assert_eq!(c.presentation(a), Some(w));
+        assert_eq!(
+            c.stage().anchor(x),
+            Some(CanvasPoint { x: 0, y: 0 }),
+            "still provisional"
+        );
+        c.toplevel_committed(x, win(2, 600, 400, true)).unwrap();
+        assert_eq!(c.stage().anchor(x), Some(CanvasPoint { x: -300, y: -200 }));
+
+        // w was a placed window before it went fullscreen: its anchor comes back untouched
+        c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        c.toplevel_committed(w, win(1, 400, 300, true)).unwrap();
+        assert_eq!(c.stage().anchor(w), Some(CanvasPoint { x: -200, y: -150 }));
+        c.toplevel_committed(w, win(1, 500, 300, true)).unwrap();
+        assert_eq!(
+            c.stage().anchor(w),
+            Some(CanvasPoint { x: -200, y: -150 }),
+            "re-centred"
+        );
+
+        // its output is removed while it is fullscreen-first; destroyed before its first
+        // windowed size, it leaves nothing pending for a later element
+        let (mut c, _i, _, mut t) = Core::new(PersistedCameras::default());
+        let _a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let b = out(&mut c, &mut t, "B", (1280, 720), 120);
+        let y = c.toplevel_created();
+        c.toplevel_request(y, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        c.toplevel_committed(y, win(3, 0, 0, false)).unwrap();
+        c.toplevel_committed(y, win(3, 1280, 720, true)).unwrap();
+        c.output_disconnected(&mut t, b).unwrap();
+        assert!(c.fullscreen().is_empty());
+        assert!(!c.stage().default_placed(y));
+        c.toplevel_committed(y, win(3, 500, 300, true)).unwrap();
+        assert_eq!(
+            c.stage().anchor(y),
+            Some(CanvasPoint { x: -250, y: -150 }),
+            "placed on the surviving output"
+        );
+        let z = c.toplevel_created();
+        c.toplevel_request(z, FS).unwrap();
+        c.toplevel_committed(z, win(4, 0, 0, false)).unwrap();
+        c.toplevel_committed(z, win(4, 1920, 1080, true)).unwrap();
+        c.toplevel_request(z, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        c.toplevel_destroyed(z);
+        let n = c.toplevel_created();
+        c.toplevel_committed(n, win(5, 0, 0, false)).unwrap();
+        c.toplevel_committed(n, win(5, 200, 100, true)).unwrap();
+        c.toplevel_committed(n, win(5, 300, 100, true)).unwrap();
+        assert_eq!(
+            c.stage().anchor(n),
+            Some(CanvasPoint { x: -100, y: -50 }),
+            "an ordinary window, placed once"
         );
     }
 

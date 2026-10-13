@@ -339,6 +339,127 @@ fn a_client_that_asks_before_mapping_starts_fullscreen() {
     assert_eq!(got.len(), 1);
     assert_eq!(got[0].0, (0, 0), "no size was saved, none is offered");
     assert!(!got[0].1.contains(&FULLSCREEN));
+    // It has never been a window, so its first windowed size is where default placement
+    // happens: a 200x100 window is centred, not left in the corner it filled the output from.
+    t.resize(w, (200, 100), RED);
+    assert_layers(&t.frame(), &[W_WINDOWED, OTHER], "its first windowed size");
+    // and it stays there
+    t.resize(w, (240, 100), RED);
+    assert_layers(
+        &t.frame(),
+        &[((220, 190, 460, 290), RED), OTHER],
+        "a later size keeps the anchor",
+    );
+}
+
+/// A camera drag on a fullscreen output is allowed and moves the hidden camera only: the picture
+/// does not change, the client receives no pointer event during the drag, and a pointer lock
+/// the client holds stays active through the grant, the drag and the release.
+#[test]
+fn a_hidden_camera_drag_respects_the_presentation_and_a_pointer_lock() {
+    use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion};
+    use infynitae_core::input::bindings::Modifiers;
+    use infynitae_core::input::keys::KEY_LEFTMETA;
+    let mut t = T::new();
+    let (w, id) = t.map("W", (200, 100), RED);
+    t.map("O", (120, 80), BLUE);
+    t.focus(id);
+    // The pointer starts at the view centre (320, 240), where the other window lies on top of W.
+    // (−95, −45) takes it to (225, 195): inside W [220,420)x[190,290), outside O
+    // [260,380)x[200,280). The motion gives W the pointer focus.
+    pointer_motion(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        (-95.0, -45.0),
+        (-95.0, -45.0),
+        1000,
+    )
+    .unwrap();
+    t.adv();
+    assert_eq!(
+        t.ls.probe
+            .ptr
+            .iter()
+            .rev()
+            .find(|l| l.starts_with("enter"))
+            .map(String::as_str),
+        Some("enter W 5,5"),
+        "the pointer is not on W"
+    );
+    let qh = t.ls.qh.clone();
+    t.ls.probe.lock_pointer(&qh, w, false);
+    t.adv();
+    let locked = |t: &T| t.ls.state.core().constraint().is_some();
+    assert!(locked(&t), "the lock did not activate");
+
+    t.ask(w, |tl| tl.set_fullscreen(None));
+    t.resize(w, (640, 480), RED);
+    assert!(locked(&t), "the grant ended the lock");
+    let picture = t.frame();
+    assert_layers(&picture, &[((0, 0, 640, 480), RED)], "fullscreen");
+    let camera = t.ls.state.core().cameras().center(0);
+
+    let events = t.ls.probe.ptr.len();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_LEFTMETA, true, 2000).unwrap();
+    pointer_button(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        0x112,
+        true,
+        Modifiers::default(),
+        3000,
+    )
+    .unwrap();
+    pointer_motion(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        (-90.0, 40.0),
+        (-90.0, 40.0),
+        4000,
+    )
+    .unwrap();
+    t.adv();
+    let during: Vec<String> = t.ls.probe.ptr[events..]
+        .iter()
+        .filter(|l| *l != "frame")
+        .cloned()
+        .collect();
+    assert_eq!(
+        during,
+        Vec::<String>::new(),
+        "pointer events during the drag"
+    );
+    pointer_button(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        0x112,
+        false,
+        Modifiers::default(),
+        5000,
+    )
+    .unwrap();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_LEFTMETA, false, 6000).unwrap();
+    t.adv();
+    assert_ne!(
+        t.ls.state.core().cameras().center(0),
+        camera,
+        "the camera did not move"
+    );
+    assert_eq!(t.frame(), picture, "the drag changed what the output shows");
+    assert!(locked(&t), "the drag ended the lock");
+
+    t.ask(w, |tl| tl.unset_fullscreen());
+    t.resize(w, (200, 100), RED);
+    assert!(t.ls.state.core().fullscreen().is_empty());
+    // the output now shows the camera where the drag left it: 90 px right, 40 px up of before
+    assert_layers(
+        &t.frame(),
+        &[
+            ((260 - 90, 200 + 40, 380 - 90, 280 + 40), BLUE),
+            ((220 - 90, 190 + 40, 420 - 90, 290 + 40), RED),
+        ],
+        "the dragged camera's view",
+    );
 }
 
 /// A client may ignore the size it is given. Its smaller surface is presented centred on the

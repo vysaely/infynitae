@@ -55,6 +55,10 @@ struct Record {
     /// The element has been Mapped at least once (written by `set_state`): its placement is
     /// final and a remap keeps it (INV-STAGE-5).
     mapped_once: bool,
+    /// The default windowed placement has been resolved for this element (written by
+    /// `set_default_placed`): at its first windowed presentation, which is its first map
+    /// unless it was in protocol fullscreen then. From then on only a drag or the shell moves it.
+    default_placed: bool,
 }
 
 /// An element's bounding box in Canvas pixels: `[x0, x1) × [y0, y1)`.
@@ -106,6 +110,16 @@ impl Stage {
     /// Whether the element has been Mapped before (now or earlier).
     pub fn mapped_before(&self, id: ElementId) -> bool {
         self.record(id).is_some_and(|r| r.mapped_once)
+    }
+
+    /// Whether the element's default windowed placement has been resolved.
+    pub fn default_placed(&self, id: ElementId) -> bool {
+        self.record(id).is_some_and(|r| r.default_placed)
+    }
+
+    pub(crate) fn set_default_placed(&mut self, id: ElementId) -> Result<(), StaleElement> {
+        self.record_mut(id).ok_or(StaleElement)?.default_placed = true;
+        Ok(())
     }
 
     pub fn tree(&self, id: ElementId) -> Option<&SurfaceTree> {
@@ -223,6 +237,7 @@ impl Stage {
             tree: None,
             extent: None,
             mapped_once: false,
+            default_placed: false,
         });
         id
     }
