@@ -914,6 +914,13 @@ mod tests {
             );
         };
         unchanged(&c, "opened");
+        // the session clock moves on (no deadline is due): an evaluation after this must not
+        // re-arm the epoch from the later time either
+        assert!(
+            c.scale_tick(crate::scale::SessionTime::from_millis(step + 100))
+                .is_empty()
+        );
+        unchanged(&c, "a tick before the deadline");
         for w in [500, 401, 400] {
             c.toplevel_committed(id, side(w, true)).unwrap();
             unchanged(&c, "a client commit");
