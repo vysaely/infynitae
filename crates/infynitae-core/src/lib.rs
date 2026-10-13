@@ -171,6 +171,8 @@ pub struct Core {
     pending_constraint: Option<pointer::ConstraintState>,
     /// OBJ-09: read only by `output_connected`.
     persisted: navigation::PersistedCameras,
+    /// The placement policy of elements not yet mapped (INV-STAGE-1 writer (a)).
+    placement: protocol::PlacementPolicy,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
     /// protocol state fail its `Send` assertion (built through infynitae-wayland's probe feature).
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -201,6 +203,7 @@ impl Core {
                 constraint: None,
                 pending_constraint: None,
                 persisted,
+                placement: protocol::PlacementPolicy::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
             },

@@ -269,6 +269,11 @@ pub fn run_headless(
 
     let display: Display<WaylandState> = Display::new()?;
     let mut state = WaylandState::new(&display.handle(), core);
+    // Product default placement: new windows are centred in the view at first map. Core's own
+    // default stays the INC-1 rule that its test oracles are derived for.
+    state
+        .core_mut()
+        .set_placement_policy(infynitae_core::protocol::PlacementPolicy::CentredInView);
 
     let virtual_output = VirtualOutput {
         key: VirtualOutput::key("HEADLESS-0"),

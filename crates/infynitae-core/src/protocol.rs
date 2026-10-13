@@ -108,6 +108,19 @@ pub enum ProtocolError {
     BufferBeforeConfigure,
 }
 
+/// Where the placement policy puts an ordinary toplevel (INV-STAGE-1 writer (a), Level D).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum PlacementPolicy {
+    /// The window-geometry origin at the placement output's camera centre, decided at the
+    /// initial commit and never revised. The rule of INC-1…INC-5; the hand-derived oracles of
+    /// the T0 and T1 suites are written for it, so it stays Core's default.
+    #[default]
+    OriginAtCameraCentre,
+    /// The window geometry centred in the placement output's usable region at first map; an
+    /// oversized window aligned to the region's origin. What the run loops select.
+    CentredInView,
+}
+
 impl Core {
     /// M1 `new_toplevel`: mints an `ElementId`; no anchor yet.
     pub fn toplevel_created(&mut self) -> ElementId {
@@ -151,6 +164,13 @@ impl Core {
                 vec![]
             }
             (Lifecycle::AwaitingFirstBuffer, true) => {
+                // First map only: the size is known now, so the placement policy can use it.
+                // A remap keeps its anchor (INV-STAGE-5).
+                if !self.stage.mapped_before(id)
+                    && let Some(anchor) = self.first_map_anchor(&tree)
+                {
+                    self.stage.place(id, anchor).map_err(stale)?;
+                }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
                 self.stage.set_state(id, Lifecycle::Mapped).map_err(stale)?;
                 self.stage.raise(id);
@@ -273,6 +293,52 @@ impl Core {
             .and_then(|c| self.cameras.center(c))
             .and_then(|c| c.round_to_point())
             .unwrap_or(CanvasPoint { x: 0, y: 0 })
+    }
+
+    /// Placement policy at first map, when the window-geometry size is known.
+    ///
+    /// [`PlacementPolicy::CentredInView`]: the window geometry is centred in the usable region of
+    /// the placement output (the first connected output, as for [`Core::initial_anchor`]), in
+    /// Canvas coordinates through that output's camera: per axis, with `c` the camera centre,
+    /// `u` the usable logical extent and `s` the outer size,
+    /// `anchor = c − u/2 + (u − s)/2 = c − s/2` when `s ≤ u`. A window larger than the region on
+    /// an axis is aligned to the region's origin on that axis (`anchor = c − u/2`), so that its
+    /// top-left corner — title bar, menus — is the part that stays reachable. The result is
+    /// rounded once by R3 ([`CanvasPos::round_to_point`]). The usable region is the whole
+    /// output view; nothing reserves part of it yet.
+    ///
+    /// `None` keeps the anchor of the initial commit: the legacy policy, no output, or a
+    /// position outside the Canvas bound.
+    fn first_map_anchor(&self, tree: &SurfaceTree) -> Option<CanvasPoint> {
+        if self.placement != PlacementPolicy::CentredInView {
+            return None;
+        }
+        let output = self.outputs.first()?;
+        let centre = self
+            .cameras
+            .camera_for_output(output.id)
+            .and_then(|c| self.cameras.center(c))?;
+        let usable = output.logical_extent();
+        let axis = |c: i64, usable: f64, outer: i32| {
+            let half_outer = i64::from(outer.max(0)) * Q16_ONE / 2;
+            let half_usable = geom::q16(usable / 2.0);
+            c - half_outer.min(half_usable)
+        };
+        CanvasPos {
+            x: axis(centre.x, usable.0, tree.geometry.size.w),
+            y: axis(centre.y, usable.1, tree.geometry.size.h),
+        }
+        .round_to_point()
+    }
+
+    /// The placement policy for elements mapped from now on. It never moves an element that is
+    /// already placed.
+    pub fn set_placement_policy(&mut self, policy: PlacementPolicy) {
+        self.placement = policy;
+    }
+
+    pub fn placement_policy(&self) -> PlacementPolicy {
+        self.placement
     }
 
     /// Requests a pointer constraint from client protocol (M13, OBJ-21).
@@ -944,5 +1010,281 @@ mod tests {
         assert!(!core.membership().observers(id).contains(&o3));
         let t_unobserved = core.popup_constraint_target(id, Some(o3)).unwrap();
         assert_eq!(t_unobserved.size, LocalSize { w: 800, h: 600 });
+    }
+    // ------------------------------------------------------------ placement at first map
+
+    fn sized(w: i32, h: i32, mapped: bool) -> SurfaceTree {
+        SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: key(1),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+            }],
+        }
+    }
+
+    use crate::PhysicalEvent;
+    use crate::input::bindings::Modifiers;
+    use crate::navigation::PersistedCameras;
+    use crate::output::tests::key as okey;
+
+    fn plain(connector: &str) -> OutputDescriptor {
+        OutputDescriptor {
+            key: okey(connector),
+            mode: (1280, 800),
+            transform: Transform::Normal,
+            scale_120: 120,
+            refresh_mhz: 60_000,
+        }
+    }
+
+    fn placed(c: &mut Core, w: i32, h: i32) -> (ElementId, CanvasPoint) {
+        let id = c.toplevel_created();
+        c.toplevel_committed(id, sized(w, h, false)).unwrap();
+        c.toplevel_committed(id, sized(w, h, true)).unwrap();
+        (id, c.stage().anchor(id).unwrap())
+    }
+
+    fn centred(mode: (u32, u32), scale_120: u32, camera: Option<(i64, i64)>) -> Core {
+        let entries = camera
+            .map(|(x, y)| {
+                vec![(
+                    okey("A"),
+                    CanvasPos {
+                        x: x * Q16_ONE,
+                        y: y * Q16_ONE,
+                    },
+                    1.0,
+                )]
+            })
+            .unwrap_or_default();
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::from_entries(entries).unwrap());
+        c.set_placement_policy(PlacementPolicy::CentredInView);
+        let d = OutputDescriptor {
+            key: okey("A"),
+            mode,
+            transform: Transform::Normal,
+            scale_120,
+            refresh_mhz: 60_000,
+        };
+        c.output_connected(&mut t, d).unwrap();
+        c
+    }
+
+    /// Core's default is the legacy rule: the geometry origin at the camera centre.
+    #[test]
+    fn default_policy_places_the_origin_at_the_camera_centre() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        assert_eq!(c.placement_policy(), PlacementPolicy::OriginAtCameraCentre);
+        c.output_connected(&mut t, plain("A")).unwrap();
+        assert_eq!(placed(&mut c, 646, 513).1, CanvasPoint { x: 0, y: 0 });
+    }
+
+    /// A window that fits is centred: x = usable_x + (usable_w − w)/2, y likewise. KCalc's
+    /// 646x513 on a 1280x800 output with the camera at the Canvas origin: the view is
+    /// [−640, 640) × [−400, 400), so the anchor is (−640 + 317, −400 + 143.5) = (−323, −256.5),
+    /// and R3 (ties to even) gives −256. The whole window is inside the view.
+    #[test]
+    fn a_window_that_fits_is_centred_in_the_view() {
+        let mut c = centred((1280, 800), 120, None);
+        let (_, a) = placed(&mut c, 646, 513);
+        assert_eq!(a, CanvasPoint { x: -323, y: -256 });
+        assert!(a.x >= -640 && a.x + 646 <= 640 && a.y >= -400 && a.y + 513 <= 400);
+        // even sizes centre exactly
+        let (_, a) = placed(&mut c, 400, 300);
+        assert_eq!(a, CanvasPoint { x: -200, y: -150 });
+    }
+
+    /// An oversized window is aligned to the region's origin on the axis it does not fit, and
+    /// centred on the other: its top-left corner is what stays reachable.
+    #[test]
+    fn an_oversized_window_is_aligned_to_the_region_origin() {
+        let mut c = centred((1280, 800), 120, None);
+        assert_eq!(
+            placed(&mut c, 2000, 300).1,
+            CanvasPoint { x: -640, y: -150 }
+        );
+        assert_eq!(
+            placed(&mut c, 300, 2000).1,
+            CanvasPoint { x: -150, y: -400 }
+        );
+        assert_eq!(
+            placed(&mut c, 5000, 4000).1,
+            CanvasPoint { x: -640, y: -400 }
+        );
+        // exactly the size of the region: both rules agree
+        assert_eq!(
+            placed(&mut c, 1280, 800).1,
+            CanvasPoint { x: -640, y: -400 }
+        );
+    }
+
+    /// The usable region is the output's logical extent, so the output scale matters and the
+    /// physical mode does not: 1920x1080 at 1.5 is 1280x720 logical; 3840x2160 at 2.0 is
+    /// 1920x1080 logical.
+    #[test]
+    fn placement_uses_the_logical_extent_of_a_scaled_output() {
+        let mut c = centred((1920, 1080), 180, None);
+        assert_eq!(placed(&mut c, 646, 513).1, CanvasPoint { x: -323, y: -256 });
+        // 800 logical px fits in 1280 but 750 does not fit in 720: aligned to the top
+        assert_eq!(placed(&mut c, 800, 750).1, CanvasPoint { x: -400, y: -360 });
+        let mut c = centred((3840, 2160), 240, None);
+        assert_eq!(
+            placed(&mut c, 1900, 1000).1,
+            CanvasPoint { x: -950, y: -500 }
+        );
+        assert_eq!(
+            placed(&mut c, 2000, 1000).1,
+            CanvasPoint { x: -960, y: -500 }
+        );
+    }
+
+    /// Placement goes through the camera: with the camera elsewhere on the Canvas, positive or
+    /// negative, the window is centred in what that camera shows.
+    #[test]
+    fn placement_follows_the_camera_including_negative_canvas_coordinates() {
+        let mut c = centred((1280, 800), 120, Some((9000, 700)));
+        assert_eq!(
+            placed(&mut c, 646, 513).1,
+            CanvasPoint {
+                x: 9000 - 323,
+                y: 700 - 256
+            }
+        );
+        let mut c = centred((1280, 800), 120, Some((-5000, -3000)));
+        // −3000 − 256.5 = −3256.5, ties to even: −3256
+        assert_eq!(
+            placed(&mut c, 646, 513).1,
+            CanvasPoint { x: -5323, y: -3256 }
+        );
+        assert_eq!(
+            placed(&mut c, 2000, 300).1,
+            CanvasPoint { x: -5640, y: -3150 }
+        );
+    }
+
+    /// Placement happens once. A later commit with another size, a tree change, a camera pan,
+    /// an output reconfiguration, a second output, and an unmap followed by a remap all leave
+    /// the anchor where it is (INV-STAGE-5; placement is not camera movement).
+    #[test]
+    fn a_placed_window_is_not_moved_again() {
+        let entries = PersistedCameras::default();
+        let (mut c, mut port, _, mut t) = Core::new(entries);
+        c.set_placement_policy(PlacementPolicy::CentredInView);
+        let d = |mode, scale_120| OutputDescriptor {
+            key: okey("A"),
+            mode,
+            transform: Transform::Normal,
+            scale_120,
+            refresh_mhz: 60_000,
+        };
+        let (o, _) = c.output_connected(&mut t, d((1280, 800), 120)).unwrap();
+        let (id, a) = placed(&mut c, 646, 513);
+        assert_eq!(a, CanvasPoint { x: -323, y: -256 });
+        let anchor = |c: &Core| c.stage().anchor(id).unwrap();
+
+        c.toplevel_committed(id, sized(900, 700, true)).unwrap();
+        assert_eq!(anchor(&c), a, "a resize commit");
+        c.toplevel_tree_changed(id, sized(300, 200, true)).unwrap();
+        assert_eq!(anchor(&c), a, "a tree change");
+
+        let button = |pressed| PhysicalEvent::PointerButton {
+            button: 0x112,
+            pressed,
+            modifiers: Modifiers {
+                logo: true,
+                ..Modifiers::default()
+            },
+            time_us: 0,
+        };
+        c.physical_input(&mut port, button(true)).unwrap();
+        c.physical_input(
+            &mut port,
+            PhysicalEvent::PointerMotion {
+                delta: (-400.0, 250.0),
+                delta_unaccel: (-400.0, 250.0),
+                time_us: 0,
+            },
+        )
+        .unwrap();
+        c.physical_input(&mut port, button(false)).unwrap();
+        assert_eq!(anchor(&c), a, "a camera pan");
+
+        c.output_reconfigured(&mut t, o, d((2560, 1440), 180))
+            .unwrap();
+        assert_eq!(anchor(&c), a, "an output reconfiguration");
+        let second = OutputDescriptor {
+            key: okey("B"),
+            ..d((1920, 1080), 120)
+        };
+        c.output_connected(&mut t, second).unwrap();
+        assert_eq!(anchor(&c), a, "another output");
+
+        c.toplevel_committed(id, sized(300, 200, false)).unwrap(); // unmap
+        c.toplevel_committed(id, sized(300, 200, false)).unwrap(); // initial commit of the remap
+        c.toplevel_committed(id, sized(300, 200, true)).unwrap(); // remap
+        assert_eq!(anchor(&c), a, "a remap keeps its anchor");
+
+        // a new window is placed by the camera as it is now, not as it was
+        let (_, b) = placed(&mut c, 400, 300);
+        assert_ne!(
+            b,
+            CanvasPoint { x: -200, y: -150 },
+            "the pan moved the view"
+        );
+    }
+
+    /// Popups and subsurfaces belong to their parent's tree: they do not change where the
+    /// window is placed (only the window geometry counts) and are never placed by themselves.
+    #[test]
+    fn popups_and_subsurfaces_do_not_take_part_in_placement() {
+        let mut c = centred((1280, 800), 120, None);
+        let id = c.toplevel_created();
+        c.toplevel_committed(id, sized(646, 513, false)).unwrap();
+        let mut tree = sized(646, 513, true);
+        tree.surfaces.push(SnapshotSurface {
+            key: key(2),
+            role: SurfaceRole::Subsurface {
+                parent: 0,
+                offset: LocalPoint { x: -200, y: 900 },
+            },
+            size: LocalSize { w: 3000, h: 50 },
+            mapped: true,
+            input: InputRegion::Infinite,
+        });
+        tree.surfaces.push(SnapshotSurface {
+            key: key(3),
+            role: SurfaceRole::Popup {
+                position: LocalPoint { x: 10, y: 30 },
+                geometry_loc: LocalPoint::default(),
+            },
+            size: LocalSize { w: 180, h: 240 },
+            mapped: true,
+            input: InputRegion::Infinite,
+        });
+        c.toplevel_committed(id, tree).unwrap();
+        assert_eq!(c.stage().anchor(id), Some(CanvasPoint { x: -323, y: -256 }));
+    }
+
+    /// Without an output there is no view to centre in: the anchor of the initial commit is
+    /// kept, and an output that connects later does not move the window.
+    #[test]
+    fn without_an_output_the_initial_anchor_is_kept() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        c.set_placement_policy(PlacementPolicy::CentredInView);
+        let (id, a) = placed(&mut c, 646, 513);
+        assert_eq!(a, CanvasPoint { x: 0, y: 0 });
+        c.output_connected(&mut t, plain("A")).unwrap();
+        assert_eq!(c.stage().anchor(id), Some(a));
     }
 }
