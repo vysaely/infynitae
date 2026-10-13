@@ -1,0 +1,7 @@
+{
+ "name": "C12.F2 invariant clause reverted to the E1R wording",
+ "file": "FOUNDATION_INVARIANTS.md",
+ "find": "is the largest hint expressible on the wire (a multiple of 1/120) for which `s · h ≤ D_max` on every side: `⌊120 · D_max / s_max(E)⌋ / 120`",
+ "replace": "is the supremum of the hints whose buffers fit the device: `D_max / s_max(E)`",
+ "expect": "inv-wording-mismatch"
+}

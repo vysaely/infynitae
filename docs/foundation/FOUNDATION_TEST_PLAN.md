@@ -209,7 +209,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-6
 - **Blocks:** INC-6 exit
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
-- **History:** E1R (unsealed, E-F2-06, E1R-N3): enforcement includes the zero-extent domain (`H_dev = +∞`, no division) and the integer emission `b(h)` (an integer-scale client's buffer must fit); model evidence EE-5. Residual: a logical side > `D_max` at scale 1.
+- **History:** E1R (unsealed, E-F2-06, E1R-N3): enforcement includes the zero-extent domain (`H_dev = +∞`, no division) and the integer emission `b(h)` (an integer-scale client's buffer must fit); model evidence EE-5. Residual: a logical side > `D_max` at scale 1. C12.F2 (owner amendment 2026-10-13, H-1): the device bound is on the 1/120 lattice, so the fractional hint itself no longer exceeds the device; the criterion is thereby achievable on the fixture for fractional-scale clients. Status unchanged: OPEN (a real renderer's limit is validated at INC-13).
 
 ### OB-14
 - **Status:** OPEN

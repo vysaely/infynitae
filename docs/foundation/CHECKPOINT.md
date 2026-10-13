@@ -4,6 +4,14 @@ CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — CORE VISIBILITY REMEDIATION INTE
 
 Date: 2026-10-13
 
+## PHASE F — H-1 AMENDMENT C12.F2 ADOPTED (record: evidence/phase-f/h1-amendment/)
+- **Authority:** owner approval 2026-10-13 of "the corrected pre-client-rounding device-bound formulation".
+- **Registry:** new layer FOUNDATION_ARCHITECTURE §C12.F2 (one row, INV-SCALE-2; formula record C12.F2.2); F-SCALE-2: `H_dev(E) = ⌊120 · D_max / s_max(E)⌋ / 120`, `+∞` at zero extent, `1/120` when the quotient is 0. F-SCALE-3 unchanged. 57 invariants, 21 formulas.
+- **Checker:** 3 seeded fixtures added (25 in the self-test); the `Amended` field must name each amending layer exactly.
+- **Implementation:** not on main (the scale policy is INC-6). The Core change and its proof suite are on the INC-6 experimental line.
+- **Obligations:** OB-13 history updated; **OB-13 stays OPEN**. OB-42 and OB-44 unchanged.
+- **Declaration:** INC-6 is NOT ratified and INC-6 exit is NOT authorized; the runtime remains EXPERIMENTAL pending INC-13.
+
 ## PHASE F — PLACEMENT AMENDMENT C12.F1 ADOPTED (record: evidence/phase-f/placement-amendment/)
 - **Authority:** owner approval 2026-10-13: "Default placement is resolved once at first map, when authoritative initial window geometry becomes available, rather than at the initial surface commit."
 - **Registry:** new layer FOUNDATION_ARCHITECTURE §C12.F1 (one row, INV-STAGE-1); new formula F-PLACE-1; STATE_MACHINES M1 (two rows); PROTOTYPE_DECISION_LEDGER PL-21. The sealed C12 table is unaltered; 57 invariants, 21 formulas.

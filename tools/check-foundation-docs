@@ -248,7 +248,8 @@ def run_checks(root):
         recs = amend_recs.get(fid, [])
         r.check('formula-provenance', amended == bool(recs), f'{fid}: Amended field {"present" if amended else "absent"} but amendment record {"present" if recs else "absent"}')
         for layer, rec in recs if amended else []:
-            r.check('formula-provenance', layer in fl.get('Amended', ''), f'{fid}: amended by {layer} but its Amended field does not name that layer')
+            r.check('formula-provenance', bool(re.search(r'(?<![§.\w])' + re.escape(layer) + r' \(', fl.get('Amended', ''))),
+                    f'{fid}: amended by {layer} but its Amended field does not name that layer as "{layer} (<finding>)"')
             prev = re.findall(r'^- \*\*Previous(?: \([^)]*\))?:\*\* (.*)$', rec, re.M)
             r.check('formula-provenance', bool(prev) and bool(re.search(r'^- \*\*Reason:\*\*', rec, re.M)), f'{fid}: {layer}.2 record needs Previous and Reason lines')
             for pv in prev:

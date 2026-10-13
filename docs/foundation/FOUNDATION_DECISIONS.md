@@ -16,7 +16,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 | ADR-02 | Fixed-point Q16 Canvas with a reference-relative lattice | Accepted; **amended 1R** (R8; zoom-aware pan; OB-24 rescoped) |
 | ADR-03 | Window-geometry anchor and exact physical-pixel hit-testing | Accepted |
 | ADR-04 | Independent centre-anchored cameras | Accepted; **amended 1R** (one-shot fit; direct-manipulation pan); **amended 2R** (output-lifecycle authority) |
-| ADR-05 | Unified effective scale: MaxGesture, bounded ladder hint, settlement | Accepted; **amended 1R** (ScaleInteractionEpoch; device-bound ladder; initial hint); **amended 2R** (epochs for all spatial interactions) |
+| ADR-05 | Unified effective scale: MaxGesture, bounded ladder hint, settlement | Accepted; **amended 1R** (ScaleInteractionEpoch; device-bound ladder; initial hint); **amended 2R** (epochs for all spatial interactions); **amended F2** (device bound on the 1/120 lattice) |
 | ADR-06 | Off-screen withholding with kick/fallback; suspension separated from visibility | Accepted; **amended 1R** (`OutputsOff`) |
 | ADR-07 | Pre-client input ownership, gesture isolation, modifier observation | Accepted; **amended 1R** (split pointer/constraint state; reconciliation; confinement) |
 | ADR-08 | Compile-time camera-authority separation | Accepted; **amended 1R** (per-action `Authorized` proof; PD-F2-01 resolved) |
@@ -203,6 +203,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - P7 stays an immediate correctness exception.
   - The 300 ms settlement timeout remains a provisional candidate (OB-23), not a frozen value.
 - **E1R amendment (unsealed; E-F2-06, E1R-N3, E-F2-07):** `H_max(E) = min(H_cfg, H_dev(E))` with `H_dev = +∞` at zero extent (F-SCALE-2); the integer hint is bounded by the device, `b(h)` (F-SCALE-3). The fullscreen policy is unchanged: E-F2-07's 8K claim does not follow from the formulas (h ≤ H_cfg = 3.0, EE-6); CP2-Q1 remains an open policy question.
+- **F2 amendment (C12.F2, owner approval 2026-10-13; H-1):** the device bound is the largest multiple of 1/120 not above `D_max / s_max(E)`, `H_dev(E) = ⌊120 · D_max / s_max(E)⌋ / 120` (F-SCALE-2), so that the emitted fractional hint never exceeds it. The bound is on the exact product `h · side`; how a client rounds its buffer size is not assumed. The ladder, the target, the emission and the integer hint are unchanged.
 
 ## ADR-06: off-screen withholding with kick/fallback; suspension separated from visibility
 

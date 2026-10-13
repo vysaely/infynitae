@@ -1,0 +1,7 @@
+{
+ "name": "C12.F2 formula silently reverted to the E1R definition",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "- **Definition:** `H_max(E) = min(H_cfg, H_dev(E))`. Device bound `H_dev(E) = ⌊120 · D_max / s_max(E)⌋ / 120` if `s_max(E) > 0`: the largest multiple of 1/120 that does not exceed `D_max / s_max(E)`, so that `h · side ≤ D_max` holds for every logical side of every buffered surface of E before the client rounds its buffer size; `+∞` if `s_max(E) = 0`. If the quotient is 0 (`s_max(E) > 120 · D_max`) the bound is `1/120`, the wire minimum: that buffer exceeds the device and no emittable hint would fit (residual, OB-13). `s_max(E)` = largest logical side over all surfaces of E's tree (0 iff no surface has a non-zero extent, e.g. every initial commit); `D_max` queried from the renderer (re-queried on renderer recreation, PD-F1-08). Domain: every E; the value is finite because `H_cfg` is finite (PROV-1). [E-F2-06; H-1]",
+ "replace": "- **Definition:** `H_max(E) = min(H_cfg, H_dev(E))`. Device bound `H_dev(E) = sup{h > 0 : h · side ≤ D_max for every logical side of every buffered surface of E}` = `D_max / s_max(E)` if `s_max(E) > 0`, `+∞` if `s_max(E) = 0`. `s_max(E)` = largest logical side over all surfaces of E's tree (0 iff no surface has a non-zero extent, e.g. every initial commit); `D_max` queried from the renderer (re-queried on renderer recreation, PD-F1-08). Domain: every E; the value is finite because `H_cfg` is finite (PROV-1). [E-F2-06]",
+ "expect": "formula-provenance"
+}
