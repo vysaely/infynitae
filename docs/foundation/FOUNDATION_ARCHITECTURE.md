@@ -1204,7 +1204,7 @@ Not kept as negative controls: things that would only inflate counts (e.g. "remo
 
 ## C12 — Canonical invariant registry
 
-> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries).
+> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map).
 
 **This table is authoritative.** Legacy identifiers map to it (C12.2). Where a rule was refined, the earlier wording is superseded and must not be cited as normative.
 
@@ -1884,6 +1884,45 @@ No obligation is closed by E1R.
 ---
 ---
 
+# §C12.F1 — Canonical registry amendment (Phase F: default placement at first map)
+
+**Status: ADOPTED 2026-10-13 by owner approval.** Approved semantics, verbatim: "Default placement is resolved once at first map, when authoritative initial window geometry becomes available, rather than at the initial surface commit." One invariant is reworded; none is added or removed (57). Base: local main `2436dd4`.
+
+**Inputs:**
+- C12 (`615b0ed`), C12.R1 (`84ce620`), C12.R2 (`5827926`) and C12.E1R (unsealed), as effective at `2436dd4`;
+- the Level D placement decision of the owner (2026-10-13): ordinary new toplevels centred in the usable output region; oversized windows aligned top-left; explicit and restored placement take precedence; placement performed once; camera movement never repositions a window; a remap keeps its placement; output changes follow the existing output lifecycle policy.
+
+**Provenance:** [evidence/phase-f/placement-amendment/AMENDMENT_RECORD.md](evidence/phase-f/placement-amendment/AMENDMENT_RECORD.md) (verification against the approved semantics, the independently derived coordinate examples, the re-derivation of every affected test expectation).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12. Every other row is unchanged.**
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-STAGE-1** | Stage is the **only** store and writer of persistent placement (anchors) and z-order. Writers: `stage::place` via (a) placement policy — a provisional anchor at initial commit, and the default placement resolved **once, at the element's first map**, when its window-geometry size is authoritative; an explicit or restored anchor is final at initial commit and is not resolved again — (b) interactive drag commit, (c) shell `MoveElement` (same path). | core `Stage` | D | B2–B5, C2; evidence/phase-f/placement-amendment | T0 single-writer API tests; T0 placement properties against an exact model; T1 INV-3 (X-8) | owner amendment 2026-10-13 (placement at first map) |
+
+## C12.F1.1 Sealed text superseded (must not be cited as normative)
+
+| Superseded | Replaced by |
+|---|---|
+| C12 INV-STAGE-1 "(a) placement policy at initial commit" | INV-STAGE-1 (C12.F1): a provisional anchor at initial commit; the default placement at the first map, once |
+| STATE_MACHINES M1 "AwaitingInitialCommit → AwaitingFirstBuffer: placement via `stage::place`" as the final placement, and "AwaitingFirstBuffer → Mapped" without a placement effect | M1 (C12.F1): provisional placement at initial commit; default placement at the first map |
+| PROTOTYPE_DECISION_LEDGER PL-21 "Level D UX" as an open deferral, and B5 "choose anchor (placement policy …)" at `AwaitingInitialCommit` as the final choice | F-PLACE-1 (C12.F1) |
+
+## C12.F1.2 Formulas
+
+New formula **F-PLACE-1** (living §F). It amends no existing formula: F-ROUND-1 (R3) is used as sealed, and F-DRAG-1 is untouched.
+
+## C12.F1.3 What this layer does not change
+
+- **Ownership.** Stage remains the only store and writer of anchors; the write is `stage::place`, from Core's protocol entry, at both moments. No camera, renderer, adapter or client writes placement, and no client request positions a toplevel.
+- **Coordinate spaces.** The anchor is an integral Canvas point (INV-COORD-1). The camera centre is Canvas Q16; the usable extent is output-logical (`view_O / scale_O`, after the output transform); one R3 rounding.
+- **Remap and camera.** INV-STAGE-5 (the anchor is kept across unmap and remap) and INV-CAMERA-2/-4 (a pan writes no anchor and causes no configure) are unchanged. Placement is evaluated for an element exactly once.
+- **Initial hint.** M15 "placement done (before the initial configure) → `h = t(ρ_pred)`" is unchanged: the prediction reads the provisional anchor, which lies in the same output's view as the resolved one.
+- **Not defined here:** placement of transient windows relative to a parent (OB-35 area), reserved regions (none exist), and placement under a persistent camera zoom ≠ 1 (gated by OB-24).
+- **Not exercisable yet:** "an explicit or restored anchor is final". Core has no restored-anchor path (persistence is deferred) and xdg-shell gives a client no way to position a toplevel; the clause binds those paths when they are introduced.
+
+---
+
 # Phase D package (D7): living regions of this document
 
 Everything above this line is historical:
@@ -1990,6 +2029,11 @@ Each normative formula or coordinate algorithm is defined once here. Its text is
 ### F-DRAG-1 — Element drag placement
 - **Definition:** `anchor = R3(anchor₀ + Q16(Σ Canvas pointer deltas since the drag start))`, quantised once per update. **Open:** the definition across an Arrangement crossing between independently-camera'd outputs is the OB-34 decision (candidate `anchor = R3(q_now − grab_offset)`, not adopted).
 - **Historical sources:** B1.3-7; PD-F2-13
+
+### F-PLACE-1 — Default placement at first map
+- **Definition:** Per axis, the anchor is `a = c − min(s, u)/2`, rounded once by R3 (F-ROUND-1), where `c` is the camera centre of the placement output (Canvas px), `s` the window-geometry size at the element's first map and `u = view_O / scale_O` the usable output-logical extent (the whole view until a reserved region exists). For `s ≤ u` the window geometry is centred in the usable region, `a = (c − u/2) + (u − s)/2`; for `s > u` its origin is aligned with the region's origin, `a = c − u/2`.
+- **Definition:** The placement output is the first connected output (lowest `OutputId`), whose camera centre is also the provisional anchor written at initial commit. With no output the provisional anchor is kept. Domain: camera zoom 1, where `u` is the Canvas extent of the view; under a persistent zoom ≠ 1 (gated by OB-24) the fitting case is still centred on the camera and the oversized case is not defined by this formula.
+- **Historical sources:** C12.F1 (owner amendment 2026-10-13); PL-21
 
 ### F-ROUND-1 — Rounding points
 - **Definition:** R1 unproject OutputLogical → CanvasPos (Q16, ties-even); R2 camera gesture update (Q16 of the f64 gesture sum); R3 placement commit (CanvasPos → integral CanvasPoint, half-even); R4 physical edges (F-LATTICE-1); R5 snapped camera c_eff; R6 host-device deltas: none; R7 view-origin quantisation (F-VIEW-1); R8 popup constraint target: inward rounding (ceiling at the minimum edges, floor at the maximum edges). Forbidden: F1–F7 (B1.4).

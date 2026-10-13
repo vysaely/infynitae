@@ -176,6 +176,8 @@ pub struct Core {
     scale_config: scale::ScalePolicyConfig,
     /// OBJ-16: Authoritative scale state per element.
     scales: Vec<(stage::ElementId, scale::ScaleState)>,
+    /// The placement policy of elements not yet mapped (INV-STAGE-1 writer (a)).
+    placement: protocol::PlacementPolicy,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
     /// protocol state fail its `Send` assertion (built through infynitae-wayland's probe feature).
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -208,6 +210,7 @@ impl Core {
                 persisted,
                 scale_config: scale::ScalePolicyConfig::default(),
                 scales: Vec::new(),
+                placement: protocol::PlacementPolicy::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
             },
@@ -1003,12 +1006,13 @@ mod tests {
             .collect()
     }
 
-    /// Output-logical point at the centre of a subsurface at `offset` (anchor (0,0) is at the
-    /// view centre (960,540), scale 1).
+    /// Output-logical point at the centre of a 20x20 subsurface at `offset`. The 200x100 window
+    /// is centred on the view centre (960,540) at scale 1, so its anchor (−100,−50) is at
+    /// (860,490).
     fn over(offset: (i32, i32)) -> OutputLogicalPoint {
         OutputLogicalPoint {
-            x: 960.0 + offset.0 as f64 + 10.5,
-            y: 540.0 + offset.1 as f64 + 10.5,
+            x: 860.0 + offset.0 as f64 + 10.5,
+            y: 490.0 + offset.1 as f64 + 10.5,
         }
     }
 
@@ -1100,8 +1104,9 @@ mod tests {
         let (mut core, o) = connected();
         let a = mapped(&mut core, tree(1, Some(2)));
         core.render_list(o).unwrap();
-        // anchor (0,0) is at the view centre (960,540); the subsurface covers (970..990, 550..570)
-        let p = OutputLogicalPoint { x: 975.5, y: 555.5 };
+        // the 200x100 window is centred: anchor (−100,−50) is at (860,490) and the subsurface at
+        // (+10,+10) covers (870..890, 500..520)
+        let p = OutputLogicalPoint { x: 875.5, y: 505.5 };
         assert_eq!(core.hit_test(o, p).map(|h| h.surface.raw().get()), Some(2));
         // the client destroys the subsurface; the snapshot no longer has it
         core.toplevel_committed(a, tree(1, None)).unwrap();

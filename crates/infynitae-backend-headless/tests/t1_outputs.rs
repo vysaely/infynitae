@@ -150,8 +150,8 @@ fn lifecycle_on_the_wire() {
 /// OutputId and camera; membership is recomputed (enter on growth, leave on shrink).
 #[test]
 fn reconfiguration_on_the_wire() {
-    // A shows W at its centre; B's camera at (1500,150): its 1920-wide view [540, 2460) misses
-    // W's [0, 400)
+    // A shows W (400x300) centred, Canvas x [−200, 200); B's camera at (1500,150): its 1920-wide
+    // view [540, 2460) misses it
     let mut ls = Lockstep::with(
         persisted(&[("B", (1500, 150))]),
         &[
@@ -249,7 +249,7 @@ fn same_key_outputs_keep_one_to_one() {
         names[1].split(": name ").nth(1),
         "wl_output names must be unique"
     );
-    // each output's membership is its own: W (anchored at the first camera's centre) enters both
+    // each output's membership is its own: W (centred on the first camera's centre) enters both
     map_w(&mut ls, (400, 300));
     assert_eq!(
         ls.probe
@@ -310,10 +310,11 @@ fn clock_is_the_highest_refresh_observer() {
 /// SC3(d2): A shows a 20 px sliver, B shows all of W: the clock is still A (highest refresh).
 #[test]
 fn clock_does_not_depend_on_visible_area() {
-    // B connects first, so W's anchor is B's camera centre (1400,600): W = [1400,2200) × [600,1200).
-    // A's camera centre 440 → view [−520, 1400): only... none of W; A at 460 → [−500,1420): 20 px.
+    // B connects first, so W (800x600) is centred on B's camera centre (1400,600):
+    // W = [1000,1800) × [300,900). A's camera centre 40 → view [−920, 1000): none of W; A at 60 →
+    // [−900, 1020): 20 px.
     let mut ls = Lockstep::with(
-        persisted(&[("B", (1400, 600)), ("A", (460, 600))]),
+        persisted(&[("B", (1400, 600)), ("A", (60, 600))]),
         &[
             output_k("B", (3840, 2160), 180, 144_000),
             output_k("A", (1920, 1080), 120, 165_000),
@@ -465,15 +466,16 @@ fn x9_presentation_feedback() {
 /// drives it, enters the popup on an output that shows none of it.
 #[test]
 fn x5_popup_membership_and_output_enter_control() {
-    // W anchor (1000,300) on A; root origin (980,280); popup geometry origin (1100,350), surface
-    // origin (1090,340), surface 220x120 → true Canvas x range [1090, 1310).
+    // A's camera centre (1400,600) places W (800x600, centred) at anchor (1000,300), X5's
+    // position; root origin (980,280); popup geometry origin (1100,350), surface origin
+    // (1090,340), surface 220x120 → true Canvas x range [1090, 1310).
     for (case, b_centre_x, popup_visible) in [
         ("B right edge at 1085: popup invisible", 1085 - 960, false),
         ("B left edge at 1305: popup visible 5 px", 1305 + 960, true),
         ("B right edge at 1095: popup visible 5 px", 1095 - 960, true),
     ] {
         let mut ls = Lockstep::with(
-            persisted(&[("A", (1000, 300)), ("B", (b_centre_x, 300))]),
+            persisted(&[("A", (1400, 600)), ("B", (b_centre_x, 300))]),
             &[
                 output_k("A", (1920, 1080), 120, 165_000),
                 output_k("B", (1920, 1080), 120, 60_000),
@@ -531,8 +533,11 @@ fn x5_popup_membership_and_output_enter_control() {
 }
 
 /// R15 / N21 detection: causing (grab-serial) output A != current pointer output B != clock output C.
-/// All cameras centred on the parent; parent visible on A, B, C. Popup: 600 wide at x=390 with
-/// slide. Expected x by target: A(1920) 360, B(800) -200, C(1280) 40.
+/// All cameras at the Canvas origin, where the parent W1 (400x300) is centred: it spans Canvas x
+/// [−200, 200) and is visible on A, B, C. Popup: 600 wide at parent x = 390 with slide, so
+/// unconstrained it spans Canvas x [190, 790). Expected parent-relative x by target, from the
+/// view's right edge e: slid to Canvas e − 600, i.e. e − 600 + 200. A (e = 960): fits, 390
+/// unchanged; B (e = 400): 0; C (e = 640): 240.
 #[test]
 fn r15_rule1_uses_the_causing_event_output() {
     use common::input::{BTN_LEFT, none};
@@ -630,7 +635,7 @@ fn r15_rule1_uses_the_causing_event_output() {
     let cfg = ls.probe.surfaces[p].popup_configure;
     assert_eq!(
         cfg.map(|c| c.0),
-        Some(360),
+        Some(390),
         "popup constrained to the wrong output's viewport"
     );
 }
@@ -724,10 +729,12 @@ fn serial_provenance_fifo_eviction_and_fallback() {
         adv(ls);
         s
     };
-    motion(&mut ls, &mut t, (50.0, 50.0)); // on W1, output A
+    // q (50, −50): on W1 (Canvas [−200,200)x[−150,150)), output A
+    motion(&mut ls, &mut t, (50.0, -50.0));
     let s_old = click(&mut ls, &mut t); // focuses W1
-    // onto W1's area on output C (C-local x 700; W1 spans 640..1040 there): the client receives
-    // every press, so each serial is a real causing event
+    // onto W1's area on output C (C-local (700, 490) is q (60, 130); W1 spans C-local x 440..840
+    // and y 210..510 there): the client receives every press, so each serial is a real causing
+    // event
     motion(&mut ls, &mut t, (2410.0, 0.0));
     let c: Vec<u32> = (0..20).map(|_| click(&mut ls, &mut t)).collect();
     motion(&mut ls, &mut t, (-2410.0, 0.0)); // back onto W1 on output A
@@ -761,14 +768,9 @@ fn serial_provenance_fifo_eviction_and_fallback() {
         ("A #40 (newest)", place(&mut ls, a[19])),
         ("never issued", place(&mut ls, 4_000_000)),
     ];
-    let want = [
-        Some(-200),
-        Some(-200),
-        Some(40),
-        Some(360),
-        Some(360),
-        Some(-200),
-    ];
+    // parent-relative x by target, as in `r15_rule1_uses_the_causing_event_output`:
+    // B (fallback) 0, C 240, A 390
+    let want = [Some(0), Some(0), Some(240), Some(390), Some(390), Some(0)];
     for ((name, g), w) in got.iter().zip(want) {
         assert_eq!(*g, w, "{name}: provenance resolution");
     }

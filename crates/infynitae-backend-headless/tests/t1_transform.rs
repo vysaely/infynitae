@@ -200,12 +200,12 @@ fn convert_transform(t: Transform) -> smithay::utils::Transform {
 }
 
 /// F-MEMBER-1 in `view_O` space on a rotated output: B (1920x1080 at 90°, scale 1) has a
-/// 1080-wide view. W occupies Canvas x [0, 400). With B's camera centre x = 1000 the view is
-/// [460, 1540): no enter (an unswapped 1920-wide reading would show W). At x = 900 it is
-/// [360, 1440): W enters.
+/// 1080-wide view. W (400x300) is centred on A's camera at the Canvas origin and occupies Canvas
+/// x [−200, 200). With B's camera centre x = 800 the view is [260, 1340): no enter (an unswapped
+/// 1920-wide reading, [−160, 1760), would show W). At x = 700 it is [160, 1240): W enters.
 #[test]
 fn membership_uses_the_transformed_view() {
-    for (cx, visible) in [(1000i64, false), (900, true)] {
+    for (cx, visible) in [(800i64, false), (700, true)] {
         let entries = vec![(
             VirtualOutput::key("B"),
             CanvasPos { x: cx << 16, y: 0 },
@@ -278,13 +278,14 @@ struct C5 {
 fn tile_view(ls: &mut Lockstep) {
     let qh = ls.qh.clone();
     let w = ls.probe.toplevel(&qh, "W", (40, 30), 0);
-    // the window geometry is the root alone, so the anchor (camera centre) is the root origin
+    // the window geometry is the root alone (40x30), centred on the camera: the root origin is
+    // the camera centre − (20, 15), and the grid is offset by (20, 15) to stay around the centre
     let xdg = ls.probe.surfaces[w].xdg.clone().expect("xdg");
     xdg.set_window_geometry(0, 0, 40, 30);
     ls.pump();
     for iy in 0..16 {
         for ix in 0..12 {
-            let off = (-1002 + ix * 167, -1048 + iy * 131);
+            let off = (20 - 1002 + ix * 167, 15 - 1048 + iy * 131);
             ls.probe.subsurface(&qh, "T", w, off, (167, 131), false);
         }
     }

@@ -11,6 +11,10 @@
 
 mod common;
 
+/// The motion that takes the startup pointer to local (50, 50) of a 400x300 window. The pointer
+/// starts at the view centre, and a window is centred there (F-PLACE-1): its local (200, 150).
+const TO_LOCAL_50_50: (f64, f64) = (-150.0, -100.0);
+
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -403,8 +407,8 @@ fn neg2_pointer_first_teardown_control() {
         pointer_motion(
             &mut h.ls.state,
             &mut h.ls.input,
-            (50.0, 50.0),
-            (50.0, 50.0),
+            TO_LOCAL_50_50,
+            TO_LOCAL_50_50,
             h.time_us,
         )
         .expect("motion");
@@ -475,7 +479,7 @@ fn obs1_nested_grab_replaces_pointer_grab_observation() {
 #[test]
 fn atk09_pan_acquisition_dismissal_emits_no_pointer_events() {
     let mut h = PopupHarness::new();
-    h.motion((50.0, 50.0));
+    h.motion(TO_LOCAL_50_50);
     h.button(BTN_LEFT, true, none());
     h.button(BTN_LEFT, false, none());
     let top = h.ls.state.core().focus().target().expect("focused");
@@ -557,8 +561,8 @@ fn atk13_pan_modifier_comes_from_the_seat_xkb_state() {
     pointer_motion(
         &mut h.ls.state,
         &mut h.ls.input,
-        (50.0, 50.0),
-        (50.0, 50.0),
+        TO_LOCAL_50_50,
+        TO_LOCAL_50_50,
         h.time_us,
     )
     .expect("motion");
@@ -594,7 +598,7 @@ fn atk13_pan_modifier_comes_from_the_seat_xkb_state() {
 #[test]
 fn atk14_stale_popup_grab_does_not_kill_implicit_button_grab() {
     let mut h = PopupHarness::new();
-    h.motion((50.0, 50.0));
+    h.motion(TO_LOCAL_50_50);
     h.button(BTN_LEFT, true, none());
     h.button(BTN_LEFT, false, none());
     let top = h.ls.state.core().focus().target().expect("focused");
@@ -669,7 +673,7 @@ fn click_to_focus_focuses_mapped_window() {
     let mut h = PopupHarness::new();
     h.core_focus(None);
     assert_eq!(h.ls.probe.kb.active, None);
-    h.motion((50.0, 50.0));
+    h.motion(TO_LOCAL_50_50);
     h.button(BTN_LEFT, true, none());
     h.button(BTN_LEFT, false, none());
     assert!(
@@ -844,7 +848,7 @@ impl R {
     }
     /// Click-to-focus on the topmost window under the pointer; returns its (probe idx, element).
     fn click_focus(&mut self) -> (usize, ElementId) {
-        self.motion((50.0, 50.0));
+        self.motion(TO_LOCAL_50_50);
         self.button(BTN_LEFT, true, none());
         self.button(BTN_LEFT, false, none());
         let top = self.target().expect("click-to-focus");

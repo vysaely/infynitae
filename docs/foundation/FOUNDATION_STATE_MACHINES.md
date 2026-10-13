@@ -20,9 +20,9 @@ Object: OBJ-01/02. Implements INV-STAGE-3, INV-STAGE-4, INV-STAGE-5.
 | From | Trigger [guard] | To | Effects | Cites |
 |---|---|---|---|---|
 | — | `new_toplevel` | AwaitingInitialCommit | mint `ElementId`; no anchor | INV-STAGE-3 |
-| AwaitingInitialCommit | commit without buffer | AwaitingFirstBuffer | placement via `stage::place`; initial hint `t(ρ_pred)` (F-SCALE-3); initial configure (pre-map fullscreen granted in it, INV-PRES-1) | INV-STAGE-1, INV-SCALE-5 |
+| AwaitingInitialCommit | commit without buffer | AwaitingFirstBuffer | provisional placement via `stage::place` (a restored or explicit anchor is final); initial hint `t(ρ_pred)` (F-SCALE-3); initial configure (pre-map fullscreen granted in it, INV-PRES-1) | INV-STAGE-1, INV-SCALE-5 |
 | AwaitingInitialCommit | commit with buffer | client error | `ensure_configured` → protocol error → client death (W-SM-6) | INV-STAGE-4 |
-| AwaitingFirstBuffer | buffer commit after ack | Mapped | z-top; membership (F-MEMBER-1); epoch settlement | INV-STAGE-4, INV-RENDER-3 |
+| AwaitingFirstBuffer | buffer commit after ack | Mapped | **first map only, and only for a provisional anchor:** default placement via `stage::place` (F-PLACE-1); z-top; membership (F-MEMBER-1); epoch settlement | INV-STAGE-1, INV-STAGE-4, INV-RENDER-3 |
 | Mapped | commit with buffer | Mapped | snapshot replaced (OBJ-05); membership if geometry changed; P7 check | INV-COORD-6, INV-SCALE-2 |
 | Mapped | null-buffer commit | Unmapped | leave all outputs; popups dismissed; interactions cancelled; focus successor; constraints end (M13); fullscreen dropped (M9); hint held | INV-STAGE-5, INV-INPUT-8, INV-PRES-1 |
 | Unmapped | initial commit again | AwaitingFirstBuffer | initial configure; anchor kept | INV-STAGE-5 |

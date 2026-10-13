@@ -437,9 +437,11 @@ mod tests {
         // Focus element
         let _ = core.set_focus(&mut input_port, Some(elem)).unwrap();
 
-        // Request confinement to [0, 0] size 100x100 (which contains startup pointer at (0, 0))
+        // The 400x300 window is centred on the 800x600 view: anchor (−200, −150), so the startup
+        // pointer (Canvas (0, 0)) is at surface-local (200, 150). Request confinement to the
+        // 100x100 region whose corner is that point: Canvas [0, 100)², projected x up to 500.
         let region = LocalRect {
-            loc: LocalPoint { x: 0, y: 0 },
+            loc: LocalPoint { x: 200, y: 150 },
             size: LocalSize { w: 100, h: 100 },
         };
         let fx = core.request_pointer_constraint(

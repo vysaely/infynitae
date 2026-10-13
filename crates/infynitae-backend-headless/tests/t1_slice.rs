@@ -179,11 +179,12 @@ fn unmapped_subsurface_leaves_the_frame_and_returns() {
     };
     let before = keys(&mut ls, &mut renderer);
     assert!(before.contains(&s1) && before.contains(&s1a));
-    // a pixel inside S1 but outside S1a: S1's origin is root (anchor − 20) + (37,11)
+    // a pixel inside S1 but outside S1a, S1-local (60, 40). W (400x300) is centred: anchor
+    // (−200, −150); S1's origin is root (anchor − 20) + (37,11)
     let view = ls.state.core().view(o).unwrap();
     let px = (
-        view.edge_x(-20 + 37 + 60) as f64 + 0.5,
-        view.edge_y(-20 + 11 + 40) as f64 + 0.5,
+        view.edge_x(-200 - 20 + 37 + 60) as f64 + 0.5,
+        view.edge_y(-150 - 20 + 11 + 40) as f64 + 0.5,
     );
     let p = OutputLogicalPoint { x: px.0, y: px.1 };
     assert_eq!(

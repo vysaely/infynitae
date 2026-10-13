@@ -10,6 +10,10 @@
 
 mod common;
 
+/// The motion that takes the startup pointer to local (50, 50) of a 400x300 window. The pointer
+/// starts at the view centre, and a window is centred there (F-PLACE-1): its local (200, 150).
+const TO_LOCAL_50_50: (f64, f64) = (-150.0, -100.0);
+
 use std::collections::BTreeSet;
 use std::time::Duration;
 
@@ -673,7 +677,7 @@ fn r03_repeated_client_press_is_not_duplicated() {
 fn r04_snapshot_logo_without_seat_super_does_not_pan() {
     let mut s = S::new(true);
     s.set_focus(Some(s.e1));
-    s.motion((50.0, 50.0));
+    s.motion(TO_LOCAL_50_50);
     pointer_button(
         &mut s.ls.state,
         &mut s.ls.input,
@@ -705,7 +709,7 @@ fn r05_temporal_modifier_boundaries() {
     // (a) Super down, MMB down, motion, MMB up, Super up: pan; client sees no button
     let mut s1 = S::new(true);
     s1.set_focus(Some(s1.e1));
-    s1.motion((50.0, 50.0));
+    s1.motion(TO_LOCAL_50_50);
     s1.key(KEY_LEFTMETA, true);
     let m = s1.ls.probe.ptr.len();
     pointer_button(
@@ -738,7 +742,7 @@ fn r05_temporal_modifier_boundaries() {
     // (b) MMB down before Super: client-owned, no pan
     let mut s2 = S::new(true);
     s2.set_focus(Some(s2.e1));
-    s2.motion((50.0, 50.0));
+    s2.motion(TO_LOCAL_50_50);
     pointer_button(
         &mut s2.ls.state,
         &mut s2.ls.input,
@@ -764,7 +768,7 @@ fn r05_temporal_modifier_boundaries() {
     // (c) Super released immediately before MMB: no pan (no one-event lag)
     let mut s3 = S::new(true);
     s3.set_focus(Some(s3.e1));
-    s3.motion((50.0, 50.0));
+    s3.motion(TO_LOCAL_50_50);
     s3.key(KEY_LEFTMETA, true);
     s3.key(KEY_LEFTMETA, false);
     pointer_button(
@@ -876,7 +880,7 @@ fn r07_set_focus_on_unmapped_is_refused() {
 fn r08_k6_cancel_is_externally_observable() {
     let mut s = S::new(true);
     s.set_focus(Some(s.e1));
-    s.motion((50.0, 50.0));
+    s.motion(TO_LOCAL_50_50);
     s.key(KEY_LEFTMETA, true);
     s.mmb(true);
     s.key(KEY_LEFTMETA, false);

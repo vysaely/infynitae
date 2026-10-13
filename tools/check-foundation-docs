@@ -4,7 +4,8 @@
 This tool is NOT an architecture authority. It derives every expectation from the canonical
 documents themselves:
   * the namespace authority map (FOUNDATION_ARCHITECTURE.md, living region NS);
-  * the registry layers C12 / C12.R1 / C12.R2 (sealed) and C12.E1R (unsealed, Phase E corrective)
+  * the registry layers C12 / C12.R1 / C12.R2 (sealed), C12.E1R (unsealed, Phase E corrective) and
+    the Phase F amendment layers C12.F1, C12.F2 (adopted by owner approval, one decision each)
     in FOUNDATION_ARCHITECTURE.md, which define the expected effective INV set and wording;
   * the historical PD-F2 finding headings (FOUNDATION_BLOCKERS.md);
 and checks structure, uniqueness, provenance and cross-references of the living regions
@@ -52,6 +53,11 @@ REF = {  # reference token patterns (checked inside living regions)
 DEFERRED_DEST = {'T3', 'T4', 'T5', 'TUNE', 'UP', 'DECISION'}
 DEST_VOCAB = {'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'UP', 'TUNE', 'DECISION', 'PHASE-F-ENTRY-GATE', 'CI', 'GATE-C'}
 E1R_ORIGIN = 'C12.E1R @ UNSEALED (E1R review gate; base 09075a2)'
+# Phase F amendment layers, in order. Each is one owner-approved amendment; a layer is optional (a tree
+# from before its adoption has none) but when present it must follow the earlier ones.
+F_LAYERS = [('C12.F1', 'C12.F1 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)'),
+            ('C12.F2', 'C12.F2 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)')]
+PACKAGE_START = '# Phase D package (D7)'
 OPEN_CLOSE = {'(': ')]', '[': ')]', '{': '}', '⟦': '⟧'}
 VERDICTS = ['READY FOR INDEPENDENT ADVERSARIAL REVIEW — PHASE E', 'NOT READY — ARCHITECTURE BLOCKERS REMAIN', 'NOT READY — PHASE D GATE INCOMPLETE']
 
@@ -167,14 +173,36 @@ def run_checks(root):
     c12 = layer_rows(arch, '## C12 — Canonical invariant registry', '### C12.2')
     r1 = layer_rows(arch, '# §C12.R1', '# §C12.R2')
     has_e1r = '# §C12.E1R' in arch
-    r2 = layer_rows(arch, '# §C12.R2', '# §C12.E1R' if has_e1r else '# Phase D package (D7)')
-    e1r = layer_rows(arch, '# §C12.E1R', '# Phase D package (D7)') if has_e1r else {}
+    # layers after C12.R2, in document order; each ends where the next begins
+    heads = [h for h in ['# §C12.E1R'] + ['# §' + n for n, _ in F_LAYERS] if re.search('^' + re.escape(h) + r'\b', arch, re.M)]
+    start = {h: re.search('^' + re.escape(h) + r'\b', arch, re.M).start() for h in heads}
+    r.check('layer-order', [start[h] for h in heads] == sorted(start[h] for h in heads) and all(start[h] < arch.index(PACKAGE_START) for h in heads),
+            f'amendment layers out of order or below the living regions: {heads}')
+
+    def layer_end(h):
+        later = [start[x] for x in heads if start[x] > start[h]]
+        return min(later) if later else arch.index(PACKAGE_START)
+
+    def layer_text(h):
+        return arch[start[h]:layer_end(h)]
+
+    def rows_of(h):
+        return layer_rows(arch[:layer_end(h)], h)
+
+    r2 = layer_rows(arch[:min(start.values())] if heads else arch, '# §C12.R2', None if heads else PACKAGE_START)
+    e1r = rows_of('# §C12.E1R') if has_e1r else {}
+    f_layers = [(n, o, rows_of('# §' + n)) for n, o in F_LAYERS if '# §' + n in heads]
     latest = {}
     for i, row in c12.items(): latest[i] = ('C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a', row, '—')
     for i, row in r1.items(): latest[i] = ('C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f', row, row[6])
     for i, row in r2.items(): latest[i] = ('C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be', row, row[6])
     for i, row in e1r.items(): latest[i] = (E1R_ORIGIN, row, row[6])
     r.check('e1r-adds-no-inv', all(i in c12 or i in r1 or i in r2 for i in e1r), f'C12.E1R introduces {sorted(i for i in e1r if i not in c12 and i not in r1 and i not in r2)}')
+    for name, origin, rows in f_layers:
+        r.check('f-layer-rows', bool(rows), f'{name} carries no invariant row')
+        r.check('f-layer-adds-no-inv', all(i in latest for i in rows), f'{name} introduces {sorted(i for i in rows if i not in latest)}')
+        r.check('f-layer-status', bool(re.search(r'^\*\*Status: ADOPTED \d{4}-\d{2}-\d{2}', layer_text('# §' + name), re.M)), f'{name} has no "Status: ADOPTED <date>" line')
+        for i, row in rows.items(): latest[i] = (origin, row, row[6])
     inv_region = regions.get('INV', [('', '')])[0][1]
     inv_blocks = dict(blocks(inv_region, DEF['INV']))
     r.check('inv-count', len(inv_blocks) == len(latest), f'{len(inv_blocks)} entries, layers give {len(latest)}')
@@ -185,9 +213,21 @@ def run_checks(root):
         for m in re.finditer(r'^- \*\*Extracted invariant text:\*\* (INV-[A-Z]+-\d+) ⟦(.*)⟧$', blk, re.M):
             extracted[(m.group(1), fid)] = m.group(2)
     # ---- F: structure, syntax, amendment provenance (E1R, E-F3-01; NOT a semantic check) ------------
-    e1r_text = arch[arch.index('# §C12.E1R'):arch.index('# Phase D package (D7)')] if has_e1r else ''
+    e1r_text = layer_text('# §C12.E1R') if has_e1r else ''
     e1r_f2 = e1r_text[e1r_text.index('## C12.E1R.2'):e1r_text.index('## C12.E1R.3')] if '## C12.E1R.2' in e1r_text else ''
-    amend_rec = dict(blocks(e1r_f2, r'^### (F-[A-Z]+-\d+)\b'))
+    # formula amendment records: section ".2" of every amending layer; a formula may be amended by several
+    amend_recs = {}  # fid -> [(layer, record)]
+    for fid, rec in blocks(e1r_f2, r'^### (F-[A-Z]+-\d+)\b'):
+        amend_recs.setdefault(fid, []).append(('C12.E1R', rec))
+    for name, _, _ in f_layers:
+        text = layer_text('# §' + name)
+        m = re.search('^## ' + re.escape(name) + r'\.2\b.*$', text, re.M)
+        if m:
+            nxt = re.search(r'^## ', text[m.end():], re.M)
+            sec = text[m.end():m.end() + nxt.start()] if nxt else text[m.end():]
+            for fid, rec in blocks(sec, r'^### (F-[A-Z]+-\d+)\b'):
+                amend_recs.setdefault(fid, []).append((name, rec))
+    amend_rec = {fid: recs[0][1] for fid, recs in amend_recs.items()}
     for fid, blk in blocks(f_region, DEF['F']):
         defs = re.findall(r'^- \*\*Definition:\*\* (.*)$', blk, re.M)
         fl = fields(blk)
@@ -205,11 +245,12 @@ def run_checks(root):
                             break
                 r.check('formula-syntax', not bad and not stack and span.strip() != '', f'{fid}: unbalanced or empty code span `{span[:60]}`')
         amended = 'Amended' in fl
-        rec = amend_rec.get(fid)
-        r.check('formula-provenance', amended == (rec is not None), f'{fid}: Amended field {"present" if amended else "absent"} but C12.E1R.2 record {"absent" if rec is None else "present"}')
-        if amended and rec is not None:
-            prev = re.findall(r'^- \*\*Previous(?: \(c0a1cee\))?:\*\* (.*)$', rec, re.M)
-            r.check('formula-provenance', bool(prev) and bool(re.search(r'^- \*\*Reason:\*\*', rec, re.M)), f'{fid}: C12.E1R.2 record needs Previous and Reason lines')
+        recs = amend_recs.get(fid, [])
+        r.check('formula-provenance', amended == bool(recs), f'{fid}: Amended field {"present" if amended else "absent"} but amendment record {"present" if recs else "absent"}')
+        for layer, rec in recs if amended else []:
+            r.check('formula-provenance', layer in fl.get('Amended', ''), f'{fid}: amended by {layer} but its Amended field does not name that layer')
+            prev = re.findall(r'^- \*\*Previous(?: \([^)]*\))?:\*\* (.*)$', rec, re.M)
+            r.check('formula-provenance', bool(prev) and bool(re.search(r'^- \*\*Reason:\*\*', rec, re.M)), f'{fid}: {layer}.2 record needs Previous and Reason lines')
             for pv in prev:
                 if pv != 'none (no reconfiguration entry existed).':
                     r.check('formula-provenance', pv not in defs, f'{fid}: recorded previous definition still present verbatim (nothing was amended)')

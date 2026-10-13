@@ -52,6 +52,9 @@ struct Record {
     tree: Option<SurfaceTree>,
     /// `tree.extent()`, written with the tree in `set_tree` (its only writer).
     extent: Option<Extent>,
+    /// The element has been Mapped at least once (written by `set_state`): its placement is
+    /// final and a remap keeps it (INV-STAGE-5).
+    mapped_once: bool,
 }
 
 /// An element's bounding box in Canvas pixels: `[x0, x1) × [y0, y1)`.
@@ -98,6 +101,11 @@ impl Stage {
     /// The anchor: the Canvas position of the window-geometry origin (INV-STAGE-2).
     pub fn anchor(&self, id: ElementId) -> Option<CanvasPoint> {
         self.record(id).and_then(|r| r.anchor)
+    }
+
+    /// Whether the element has been Mapped before (now or earlier).
+    pub fn mapped_before(&self, id: ElementId) -> bool {
+        self.record(id).is_some_and(|r| r.mapped_once)
     }
 
     pub fn tree(&self, id: ElementId) -> Option<&SurfaceTree> {
@@ -214,6 +222,7 @@ impl Stage {
             anchor: None,
             tree: None,
             extent: None,
+            mapped_once: false,
         });
         id
     }
@@ -230,7 +239,9 @@ impl Stage {
         id: ElementId,
         state: Lifecycle,
     ) -> Result<(), StaleElement> {
-        self.record_mut(id).ok_or(StaleElement)?.state = state;
+        let r = self.record_mut(id).ok_or(StaleElement)?;
+        r.state = state;
+        r.mapped_once |= state == Lifecycle::Mapped;
         Ok(())
     }
 

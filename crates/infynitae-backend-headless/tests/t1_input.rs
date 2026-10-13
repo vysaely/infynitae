@@ -7,12 +7,14 @@
 //!
 //! Output A 1920x1080 at scale 1, camera centre (0,0): v = (−960, −540) lies on the 120 lattice,
 //! so c_eff = (−960, −540) and q = p + (−960, −540). W: content 800x600 with a 20 px shadow,
-//! anchored at the camera centre, so its root surface origin is Canvas (−20, −20) and the
-//! startup pointer (960, 540) is W-local (20, 20). Motions (200,200) then (10,0) put the pointer
-//! at p = (1170, 740), W-local (230, 220) — x8's position before acquisition.
+//! centred in the view (F-PLACE-1, C12.F1): anchor (−400, −300), so its root surface origin is
+//! Canvas (−420, −320), W-local = q + (420, 320), and the startup pointer (960, 540) is W-local
+//! (420, 320). Motions (200,200) then (10,0) put the pointer at p = (1170, 740), W-local
+//! (630, 520). (x8 itself had W's origin at the camera centre and the pointer at (230, 220);
+//! every W-local value here is x8's plus (400, 300).)
 //! The pan: 30 × (7.3, −2.1) ⇒ C = (0,0) − Q16(219, −63) = (−219, 63) (x8). New view origin
 //! (−1179, −477): R = (−1200, −480), C = (21, 3), c_eff = (−1179, −477) ⇒ q = (−9, 263) ⇒
-//! W-local (11, 283) — x8's "motion (11,283)"; the next genuine (1,0) gives (12, 283).
+//! W-local (411, 583) — x8's "motion (11,283)"; the next genuine (1,0) gives (412, 583).
 
 mod common;
 
@@ -35,10 +37,10 @@ fn routed_motion_enters_then_moves_with_relative_deltas() {
     assert_eq!(
         r.since(0),
         vec![
-            "enter W 220,220",
+            "enter W 620,520",
             "relative 200,200 unaccel 180,180",
             "frame",
-            "motion 230,220",
+            "motion 630,520",
             "relative 10,0 unaccel 9,0",
             "frame",
         ]
@@ -79,13 +81,17 @@ fn x8_c1_keepfocus_pan_then_true_position() {
         configures,
         "INV-CAMERA-4: configure during pan"
     );
-    assert_eq!(r.since(m1), vec!["motion 11,283", "frame"]);
+    assert_eq!(r.since(m1), vec!["motion 411,583", "frame"]);
     let m2 = r.mark();
     r.motion((1.0, 0.0));
     assert_eq!(wl_fixed(0.9), 0.8984375);
     assert_eq!(
         r.since(m2),
-        vec!["motion 12,283", "relative 1,0 unaccel 0.8984375,0", "frame"]
+        vec![
+            "motion 412,583",
+            "relative 1,0 unaccel 0.8984375,0",
+            "frame"
+        ]
     );
     assert_eq!(r.ls.state.core().interaction(), Interaction::Idle);
     assert!(r.client_buttons_down().is_empty());
@@ -116,7 +122,7 @@ fn release_before_the_next_frame_uses_the_panned_camera() {
     )
     .unwrap();
     r.ls.pump();
-    assert_eq!(r.since(m), vec!["motion 11,283", "frame"]);
+    assert_eq!(r.since(m), vec!["motion 411,583", "frame"]);
 }
 
 /// TST-05 C6: the client holds BTN_LEFT, then the binding is pressed: no acquisition (INV-INPUT-2);
@@ -143,7 +149,7 @@ fn x8_c6_no_acquisition_while_the_client_owns_a_button() {
             "frame",
             "button 274 pressed",
             "frame",
-            "motion 234,220",
+            "motion 634,520",
             relative.as_str(),
             "frame",
             "button 274 released",
@@ -178,13 +184,13 @@ fn x8_c7_presses_during_the_pan_stay_compositor_owned() {
         !lines.iter().any(|l| l.starts_with("button")),
         "client saw a compositor-owned button: {lines:?}"
     );
-    // camera −3 ⇒ W-local x 230 − 3 = 227 at reconciliation, 228 after the genuine motion
+    // camera −3 ⇒ W-local x 630 − 3 = 627 at reconciliation, 628 after the genuine motion
     assert_eq!(
         lines,
         vec![
-            "motion 227,220",
+            "motion 627,520",
             "frame",
-            "motion 228,220",
+            "motion 628,520",
             "relative 1,0 unaccel 0.8984375,0",
             "frame"
         ]
@@ -268,7 +274,7 @@ fn pan_membership_changes_without_configures() {
     let m0 = r.mark();
     let n = r.ls.probe.outputs[0].0;
     r.button(BTN_MIDDLE, true, logo());
-    // camera x +2000: view [1040, 2960) ∌ W [−20, 820)
+    // camera x +2000: view [1040, 2960) ∌ W [−420, 420)
     for _ in 0..20 {
         r.motion((-100.0, 0.0));
     }
@@ -289,7 +295,7 @@ fn pan_membership_changes_without_configures() {
         configures,
         "configure during pan"
     );
-    assert_eq!(r.since(m0), vec!["motion 230,220", "frame"]);
+    assert_eq!(r.since(m0), vec!["motion 630,520", "frame"]);
 }
 
 /// OB-24 gate: a camera with persistent zoom ≠ 1 is never panned; the binding press follows the
@@ -346,8 +352,8 @@ fn zero_output_transition_with_a_held_button() {
     assert!(r.ls.state.core().buttons().pressed().is_empty());
     let m2 = r.mark();
     r.ls.connect(&a_1080());
-    // startup placement (960, 540) ⇒ q = (0, 0) ⇒ W-local (20, 20)
-    assert_eq!(r.since(m2), vec!["enter W 20,20", "frame"]);
+    // startup placement (960, 540) ⇒ q = (0, 0) ⇒ W-local (420, 320)
+    assert_eq!(r.since(m2), vec!["enter W 420,320", "frame"]);
     assert!(!r.smithay_grabbed(), "zero-output grab not removed");
     r.button(BTN_RIGHT, true, none());
     r.button(BTN_RIGHT, false, none());
@@ -371,15 +377,15 @@ fn zero_output_transition_free_pointer() {
     r.ls.connect(&a_1080());
     assert_eq!(
         r.since(m0),
-        vec!["leave W", "frame", "enter W 20,20", "frame"]
+        vec!["leave W", "frame", "enter W 420,320", "frame"]
     );
 }
 
 /// C4.6 / OB-3 (interaction orphaning): the pan's output is removed mid-pan; ownership is kept,
 /// motion is consumed, and the initiator's release reconciles on the relocated output. B's
 /// persisted camera centre (1060, −100) gives c_eff (100, −640); the pointer (1170+3, 740) on A
-/// relocates to (0, 740) on B ⇒ q = (100, 100) ⇒ W-local (120, 120). W kept the focus throughout
-/// (KeepFocus), so the true position arrives as a motion.
+/// relocates to (0, 740) on B ⇒ q = (100, 100) ⇒ W-local (100 + 420, 100 + 320) = (520, 420). W
+/// kept the focus throughout (KeepFocus), so the true position arrives as a motion.
 #[test]
 fn removing_the_pan_output_orphans_the_pan() {
     let entries = vec![(VirtualOutput::key("B"), pos(1060, -100), 1.0)];
@@ -408,21 +414,26 @@ fn removing_the_pan_output_orphans_the_pan() {
     assert_nothing_delivered(&r.since(m0), "orphaned pan");
     r.button(BTN_MIDDLE, false, logo());
     assert_eq!(r.ls.state.core().interaction(), Interaction::Idle);
-    assert_eq!(r.since(m0), vec!["motion 120,120", "frame"]);
+    assert_eq!(r.since(m0), vec!["motion 520,420", "frame"]);
     assert!(r.ls.state.core().buttons().pressed().is_empty());
 }
 
 /// M10 reconfiguration: the pointer is clamped (F-RECONF-1) and exactly one true-position event
-/// follows. A 1280x720: c_eff (−640, −360); p = (1170, 740) clamps to (1170, 720 − 2⁻⁸) ⇒
-/// q = (530, 359.99609375) ⇒ W-local (550, 379.99609375). During a pan the reconfiguration sends
-/// nothing.
+/// follows. A 800x600: c_eff (−400, −300); p = (1170, 740) clamps on both axes to
+/// (800 − 2⁻⁸, 600 − 2⁻⁸) ⇒ q = (400 − 2⁻⁸, 300 − 2⁻⁸) ⇒ W-local (820 − 2⁻⁸, 620 − 2⁻⁸), inside
+/// the 840x640 root. (A mode larger than the centred window would leave every clamped position
+/// outside it: the window is not moved by the reconfiguration.) During a pan the
+/// reconfiguration sends nothing.
 #[test]
 fn reconfiguration_clamps_and_sends_one_true_position() {
     let mut r = Rig::x8();
     let o = r.ls.output();
     let m0 = r.mark();
-    r.ls.reconfigure(o, &output_k("A", (1280, 720), 120, 60_000));
-    assert_eq!(r.since(m0), vec!["motion 550,379.99609375", "frame"]);
+    r.ls.reconfigure(o, &output_k("A", (800, 600), 120, 60_000));
+    assert_eq!(
+        r.since(m0),
+        vec!["motion 819.99609375,619.99609375", "frame"]
+    );
     r.button(BTN_MIDDLE, true, logo());
     let m1 = r.mark();
     r.ls.reconfigure(o, &a_1080());

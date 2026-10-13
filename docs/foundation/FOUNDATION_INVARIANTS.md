@@ -1,12 +1,13 @@
 # Infynitae Native — Foundation Invariants (effective registry)
 
-Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R.** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
+Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layer C12.F1 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
 
-This registry is the **effective projection** of four layers. The layers themselves stay where they are and are not edited:
+This registry is the **effective projection** of five layers. The layers themselves stay where they are and are not edited:
 - **C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a**: FOUNDATION_ARCHITECTURE §C12 (sealed Phase C registry, 54 rows);
 - **C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f**: FOUNDATION_ARCHITECTURE §C12.R1 (Phase D 1R amendments, 16 rows);
 - **C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be**: FOUNDATION_ARCHITECTURE §C12.R2 (Phase D 2R amendments, 6 rows);
-- **C12.E1R @ UNSEALED (E1R review gate; base 09075a2)**: FOUNDATION_ARCHITECTURE §C12.E1R (Phase E corrective amendments, 6 rows; not sealed).
+- **C12.E1R @ UNSEALED (E1R review gate; base 09075a2)**: FOUNDATION_ARCHITECTURE §C12.E1R (Phase E corrective amendments, 6 rows; not sealed);
+- **C12.F1 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)**: FOUNDATION_ARCHITECTURE §C12.F1 (Phase F amendment: default placement at first map, 1 row).
 
 Rules:
 - Each entry's **wording** is the statement of its latest layer, verbatim, except that complete formula text is replaced by an `[F-…]` reference.
@@ -14,22 +15,22 @@ Rules:
 - **Consequence of violation** is the C12 "Violation means" column. For the three invariants first introduced in 1R/2R it is a D7-authored description, marked as such (D-F0). E1R adds no invariant.
 - **ADR** links are derived from FOUNDATION_DECISIONS.md. **Obligations** are cited by ID; their records live in FOUNDATION_TEST_PLAN.md.
 
-Count: **57** effective invariants: 39 from C12, 9 from C12.R1, 3 from C12.R2, 6 from C12.E1R.
+Count: **57** effective invariants: 38 from C12, 9 from C12.R1, 3 from C12.R2, 6 from C12.E1R, 1 from C12.F1.
 
 <!-- living:INV -->
 
 ### INV-STAGE-1
-- **Wording:** Stage is the **only** store and writer of persistent placement (anchors) and z-order. Writers: `stage::place` via (a) placement policy at initial commit, (b) interactive drag commit, (c) shell `MoveElement` (same path).
+- **Wording:** Stage is the **only** store and writer of persistent placement (anchors) and z-order. Writers: `stage::place` via (a) placement policy — a provisional anchor at initial commit, and the default placement resolved **once, at the element's first map**, when its window-geometry size is authoritative; an explicit or restored anchor is final at initial commit and is not resolved again — (b) interactive drag commit, (c) shell `MoveElement` (same path).
 - **Owner:** core `Stage`
 - **Class:** D
 - **Violation:** second spatial authority (Level A)
-- **Origin:** C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a
-- **Layers:** C12
-- **Trigger:** —
-- **Evidence:** B2–B5, C2
-- **Tests (historical column):** T0 single-writer API tests; T1 INV-3 (X-8)
+- **Origin:** C12.F1 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)
+- **Layers:** C12 → C12.F1
+- **Trigger:** owner amendment 2026-10-13 (placement at first map)
+- **Evidence:** B2–B5, C2; evidence/phase-f/placement-amendment
+- **Tests (historical column):** T0 single-writer API tests; T0 placement properties against an exact model; T1 INV-3 (X-8)
 - **Obligations:** —
-- **Formulas:** F-DRAG-1
+- **Formulas:** F-DRAG-1, F-PLACE-1
 - **ADR:** ADR-01, ADR-10
 
 ### INV-STAGE-2
