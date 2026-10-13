@@ -1149,6 +1149,60 @@ mod tests {
         );
     }
 
+    /// F-PLACE-1 in exact integers, independent of Core's Q16 and f64 path: per axis
+    /// `c − min(s, u)/2` with `u = 120·view/scale_120`, rounded half to even.
+    fn exact_axis(c: i64, view: u32, scale_120: u32, s: i32) -> i64 {
+        let d = 2 * i128::from(scale_120);
+        let half = (i128::from(s) * i128::from(scale_120)).min(120 * i128::from(view));
+        let n = 2 * i128::from(c) * i128::from(scale_120) - half;
+        let (q, r) = (n.div_euclid(d), n.rem_euclid(d));
+        let up = 2 * r > d || (2 * r == d && q % 2 != 0);
+        (q + i128::from(up)) as i64
+    }
+
+    /// The five examples of the amendment draft that no other test carries (fractional usable
+    /// extent, half-pixel ties of both parities), then a sweep against the exact model:
+    /// 6 scales × 3 cameras × 4 modes × 40 sizes.
+    #[test]
+    fn placement_agrees_with_the_exact_model_on_fractional_extents_and_ties() {
+        let mut c = centred((1366, 768), 150, None); // 1092.8 × 614.4 logical
+        assert_eq!(placed(&mut c, 801, 601).1, CanvasPoint { x: -400, y: -300 });
+        assert_eq!(
+            placed(&mut c, 2000, 601).1,
+            CanvasPoint { x: -546, y: -300 }
+        );
+        let mut c = centred((1280, 800), 120, None);
+        // −322.5 → −322 and −255.5 → −256: ties go to the even pixel
+        assert_eq!(placed(&mut c, 645, 511).1, CanvasPoint { x: -322, y: -256 });
+        assert_eq!(placed(&mut c, 1, 1).1, CanvasPoint { x: 0, y: 0 });
+        let mut c = centred((1280, 800), 120, Some((1, 1)));
+        // −321.5 → −322 and −254.5 → −254
+        assert_eq!(placed(&mut c, 645, 511).1, CanvasPoint { x: -322, y: -254 });
+
+        let mut checked = 0;
+        for scale_120 in [90u32, 120, 150, 180, 210, 240] {
+            for camera in [(0i64, 0i64), (7001, 333), (-123_457, -9)] {
+                for mode in [(1280u32, 800u32), (1366, 768), (1365, 767), (3840, 2160)] {
+                    let mut c = centred(mode, scale_120, Some(camera));
+                    for k in 0..40 {
+                        let (w, h) = (1 + 97 * k, 3 + 61 * k);
+                        let want = CanvasPoint {
+                            x: exact_axis(camera.0, mode.0, scale_120, w),
+                            y: exact_axis(camera.1, mode.1, scale_120, h),
+                        };
+                        assert_eq!(
+                            placed(&mut c, w, h).1,
+                            want,
+                            "{w}×{h} on {mode:?} at {scale_120}/120, camera {camera:?}"
+                        );
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(checked, 2880);
+    }
+
     /// Placement goes through the camera: with the camera elsewhere on the Canvas, positive or
     /// negative, the window is centred in what that camera shows.
     #[test]
