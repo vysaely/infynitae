@@ -605,15 +605,11 @@ impl Core {
         now_ms: u64,
     ) {
         if let Some((_, st)) = self.scales.iter_mut().find(|(e, _)| *e == element) {
-            st.epoch.open = true;
-            st.epoch.kind = Some(kind);
-            st.epoch.continuous = continuous;
-            st.epoch.deadline = if continuous {
-                None
+            if continuous {
+                st.continuous_step(kind);
             } else {
-                Some(now_ms.saturating_add(self.scale_config.t_settle_ms))
-            };
-            st.epoch.direction = 0;
+                st.discrete_step(kind, now_ms, self.scale_config.t_settle_ms);
+            }
         }
     }
 
@@ -681,13 +677,16 @@ impl Core {
         let output_scales: Vec<f64> = self.outputs.iter().map(|o| o.scale).collect();
         let mut fx = Vec::new();
         let mapped = self.stage.mapped_elements();
-        let now_ms = 0u64;
 
-        let (active_kind, is_continuous) = match self.input.interaction {
+        // The interaction this batch belongs to. A camera drag is continuous: its epoch has no
+        // deadline and is settled by the release. This path has no clock, so it can open only
+        // such an epoch; a discrete step needs the time of the step and enters through
+        // `start_scale_interaction`.
+        let continuous_kind = match self.input.interaction {
             input::interaction::Interaction::CameraPan { .. } => {
-                (Some(scale::InteractionKind::CameraPan), true)
+                Some(scale::InteractionKind::CameraPan)
             }
-            _ => (None, false),
+            _ => None,
         };
 
         for element in mapped {
@@ -706,28 +705,15 @@ impl Core {
             };
 
             let scale_state = &mut self.scales[state_idx].1;
-            let kind = if scale_state.epoch.open {
-                scale_state.epoch.kind
-            } else {
-                active_kind
-            };
-            let continuous = if scale_state.epoch.open {
-                scale_state.epoch.continuous
-            } else {
-                is_continuous
-            };
-
-            let changed = scale_state.step(
-                now_ms,
-                kind,
-                rho,
-                continuous,
-                &ladder,
-                h_max,
-                h_dev,
-                &self.scale_config,
-                is_client_response,
-            );
+            // An epoch that is already open is left as it is: an evaluation is not a step, and
+            // re-arming it here would move a discrete epoch's deadline at every client commit.
+            if !scale_state.epoch.open
+                && let Some(kind) = continuous_kind
+            {
+                scale_state.continuous_step(kind);
+            }
+            let changed =
+                scale_state.evaluate(rho, &ladder, h_max, &self.scale_config, is_client_response);
 
             let s120 = scale::preferred_scale_120(scale_state.h);
             let b = scale::preferred_buffer_scale(scale_state.h, h_dev);

@@ -147,7 +147,9 @@ impl ScaleState {
         }
     }
 
-    /// Evaluates one step of scale policy for this element.
+    /// A timed step of an interaction followed by one evaluation: [`ScaleState::tick`], then
+    /// [`ScaleState::arm`] if `kind` is given, then [`ScaleState::evaluate`]. The model tests
+    /// (TST-16/17/24) drive the policy through it with explicit times.
     /// Returns true if authoritative hint `h` changed.
     #[allow(clippy::too_many_arguments)]
     pub fn step(
@@ -163,21 +165,52 @@ impl ScaleState {
         is_client_response: bool,
     ) -> bool {
         self.tick(now_ms, ladder, h_max, config.sigma);
-        self.last_rho = rho;
-
-        if let Some(k) = kind {
-            if !self.epoch.open {
-                self.epoch.open = true;
-                self.epoch.kind = Some(k);
-                self.epoch.direction = 0;
-            }
-            self.epoch.continuous = continuous;
-            self.epoch.deadline = if continuous {
-                None
-            } else {
-                Some(now_ms.saturating_add(config.t_settle_ms))
-            };
+        match kind {
+            Some(k) if continuous => self.continuous_step(k),
+            Some(k) => self.discrete_step(k, now_ms, config.t_settle_ms),
+            None => {}
         }
+        self.evaluate(rho, ladder, h_max, config, is_client_response)
+    }
+
+    fn open(&mut self, kind: InteractionKind) {
+        if !self.epoch.open {
+            self.epoch.open = true;
+            self.epoch.kind = Some(kind);
+            self.epoch.direction = 0;
+        }
+    }
+
+    /// A step of a continuous interaction (M7 `Closed → Open{continuous}`): opens the epoch if
+    /// none is open. It has no deadline, so it needs no time; its end settles it.
+    pub fn continuous_step(&mut self, kind: InteractionKind) {
+        self.open(kind);
+        self.epoch.continuous = true;
+        self.epoch.deadline = None;
+    }
+
+    /// A discrete step at `now_ms` (M7 `Closed → Open{discrete, deadline = now + T_settle}` and
+    /// `Open | further step`): opens the epoch if none is open and moves its deadline to
+    /// `now_ms + T_settle`. With [`ScaleState::continuous_step`] the only writer of a deadline,
+    /// and the only one that needs the time of the step.
+    pub fn discrete_step(&mut self, kind: InteractionKind, now_ms: u64, t_settle_ms: u64) {
+        self.open(kind);
+        self.epoch.continuous = false;
+        self.epoch.deadline = Some(now_ms.saturating_add(t_settle_ms));
+    }
+
+    /// One evaluation of the policy against the requirement `rho`, with no notion of time: it
+    /// neither opens nor re-arms nor settles an epoch (M7 `Open | client response | Open`). What
+    /// Core runs at the end of a batch. Returns true if the authoritative hint `h` changed.
+    pub fn evaluate(
+        &mut self,
+        rho: Option<f64>,
+        ladder: &[f64],
+        h_max: f64,
+        config: &ScalePolicyConfig,
+        is_client_response: bool,
+    ) -> bool {
+        self.last_rho = rho;
 
         // P7: Device ceiling exceeded is a correctness rule, not damping.
         // Immediate decrease applies and fixes direction to down (INV-SCALE-2, INV-SCALE-3).

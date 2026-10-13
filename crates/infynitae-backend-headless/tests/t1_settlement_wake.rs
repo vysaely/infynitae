@@ -259,10 +259,16 @@ impl Loop {
     }
 }
 
-/// The pointer starts on A; one motion takes it onto B, where the drag pans B's camera.
+/// The pointer starts on A; one motion takes it onto B, where the drag pans B's camera. The
+/// session is then let run for 40 ms, so that no test opens its epoch at session time 0: a
+/// deadline computed from time 0 instead of the step's time is then a different number.
 fn on_b(name: &str) -> Loop {
     let mut l = Loop::new(name);
     l.motion((1000.0, 0.0));
+    while l.session.now_ms() < 40 {
+        l.turn(Some(Duration::from_millis(10)));
+    }
+    assert_eq!(l.sleep(), None, "idle before the test starts");
     l
 }
 

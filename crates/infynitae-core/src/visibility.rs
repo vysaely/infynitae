@@ -864,6 +864,83 @@ mod tests {
         );
     }
 
+    /// M7 `Open | client response | Open`: only a step of the interaction moves a discrete
+    /// epoch's deadline. Core's batch-end evaluation is not a step and has no clock. Client
+    /// commits, another element's lifecycle and a camera drag (a continuous interaction, with
+    /// real input) all leave an open discrete epoch discrete, with the deadline its step set.
+    /// The defect this pins evaluated every batch as a step at time 0, which put the deadline at
+    /// `T_settle` after the session's start: already past for any session older than that.
+    #[test]
+    fn an_evaluation_does_not_move_an_open_epochs_deadline() {
+        use crate::PhysicalEvent;
+        use crate::input::bindings::Modifiers;
+        use crate::scale::{DEFAULT_T_SETTLE_MS, InteractionKind};
+        let (mut c, mut i, _, mut t) = Core::new(persisted(false));
+        c.output_connected(&mut t, desc("A", 60_000)).unwrap();
+        let id = map(&mut c);
+        let step = 5_000;
+        c.start_scale_interaction(id, InteractionKind::WindowResize, false, step);
+        let deadline = step + DEFAULT_T_SETTLE_MS;
+        let unchanged = |c: &Core, what: &str| {
+            let e = c.scale_state(id).unwrap().epoch;
+            assert!(e.open && !e.continuous, "{what}: {e:?}");
+            assert_eq!(e.kind, Some(InteractionKind::WindowResize), "{what}");
+            assert_eq!(c.next_settlement_deadline(), Some(deadline), "{what}");
+        };
+        unchanged(&c, "opened");
+        for w in [500, 401, 400] {
+            c.toplevel_committed(id, side(w, true)).unwrap();
+            unchanged(&c, "a client commit");
+        }
+        let other = c.toplevel_created();
+        c.toplevel_destroyed(other);
+        unchanged(&c, "another element's lifecycle");
+        // a camera drag: a continuous interaction is active while the discrete epoch is open
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let button = |pressed| PhysicalEvent::PointerButton {
+            button: 0x112,
+            pressed,
+            modifiers: logo,
+            time_us: 0,
+        };
+        c.physical_input(&mut i, button(true)).unwrap();
+        assert!(c.interaction().active(), "the drag was acquired");
+        c.physical_input(
+            &mut i,
+            PhysicalEvent::PointerMotion {
+                delta: (30.0, 0.0),
+                delta_unaccel: (30.0, 0.0),
+                time_us: 0,
+            },
+        )
+        .unwrap();
+        unchanged(&c, "a camera drag step");
+        c.physical_input(&mut i, button(false)).unwrap();
+        unchanged(&c, "the drag's release settles drag epochs only");
+
+        assert!(c.scale_tick(deadline - 1).is_empty());
+        unchanged(&c, "a tick before the deadline");
+        // a further step of the discrete interaction does move it
+        c.start_scale_interaction(id, InteractionKind::WindowResize, false, step + 200);
+        assert_eq!(c.next_settlement_deadline(), Some(deadline + 200));
+        c.scale_tick(deadline);
+        assert_eq!(
+            c.next_settlement_deadline(),
+            Some(deadline + 200),
+            "superseded"
+        );
+        c.scale_tick(deadline + 200);
+        assert_eq!(
+            c.next_settlement_deadline(),
+            None,
+            "settled at its deadline"
+        );
+        assert!(!c.scale_state(id).unwrap().epoch.open);
+    }
+
     // ------------------------------------------------------------ differential tests
 
     use crate::input::bindings::Modifiers;

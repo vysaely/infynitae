@@ -102,7 +102,7 @@ fn tst16_production_path_walkthroughs_a_to_d() {
     let mut ls = Lockstep::new(Some(output_a()));
     let _b_id = ls.connect(&output_b());
 
-    // Map W placed at centre of A (default anchor (0, 0))
+    // Map W, centred on A's camera (F-PLACE-1)
     let w = ls
         .probe
         .toplevel_with_fractional_scale(&ls.qh, "W", (800, 600), 0);
@@ -170,7 +170,7 @@ fn tst16_case_e_camera_pan_interaction_damping() {
 
     let count_before = r.ls.probe.preferred_scales.len();
 
-    // Pan camera B away by 5000 px: W (at Canvas 0,0) leaves output B's view!
+    // Pan camera B away by 5000 px: W (centred on the Canvas origin) leaves output B's view!
     // rho drops from 1.5 to 1.0, but CameraPan is still active.
     r.motion((5000.0, 0.0));
     r.ls.pump();
