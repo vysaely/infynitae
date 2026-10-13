@@ -465,7 +465,7 @@ CONTROLS = [
      "        if stage.state(element).is_some() {\n            for &(_, s, o) in old", "        if stage.state(element).is_none() {\n            for &(_, s, o) in old",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("visibility: destroyed element keeps its rows", f"{CORE}/protocol.rs",
-     "        let vis = self.visibility_pass_element(id, false);", "        let vis: Vec<Effect> = Vec::new();",
+     "        let vis = self.visibility_pass_element(id, true);", "        let vis: Vec<Effect> = Vec::new();",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("visibility: root commit recomputes no membership", f"{CORE}/protocol.rs",
      "        fx.extend(self.visibility_pass_element(id, true));", "        fx.extend(Vec::<Effect>::new());",
@@ -567,10 +567,9 @@ CONTROLS = [
      "        smithay::desktop::utils::with_surfaces_surface_tree(toplevel.wl_surface(), |surface, states| {\n"
      "            send_preferred_scale(surface, states, scale_120, integer_scale);\n        });\n    }\n",
      "infynitae-backend-headless", ["--test", "t1_scale"], "c2_popup_trees_follow_scale_changes"),
-    ("INC-6: destroy asserts that its pass returns no effect at all (pre-INC-6 premise)", f"{CORE}/protocol.rs",
-     "            !vis.iter()\n                .any(|e| matches!(e, Effect::Enter { .. } | Effect::Leave { .. })),",
-     "            vis.is_empty(),",
-     "infynitae-core", ["--lib"], "destroying_an_element_may_change_the_scale_hint_of_another"),
+    ("INC-6 SC-E: the destruction of an element is evaluated as a non-client stimulus", f"{CORE}/protocol.rs",
+     "        let vis = self.visibility_pass_element(id, true);", "        let vis = self.visibility_pass_element(id, false);",
+     "infynitae-core", ["--lib"], "destroying_an_element_is_not_a_scale_stimulus"),
     ("INC-6 C2: a joining subtree's own subsurfaces are not told", f"{WAYLAND}/convert.rs",
      "    smithay::desktop::utils::with_surfaces_surface_tree(root, |surface, states| {\n"
      "        send_preferred_scale(surface, states, scale_120, integer_scale);\n    });\n",

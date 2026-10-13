@@ -256,9 +256,13 @@ impl Core {
         }
         let live: Vec<ElementId> = self.stage.mapped_elements();
         let mut fx = self.focus.target_lost(id, &live);
-        let vis = self.visibility_pass_element(id, false);
+        // Evaluated as client-caused: the destruction of an element is not one of the
+        // non-client stimuli of SC-E (C14.4), so it must not reverse a hint another element
+        // is holding (INV-SCALE-4 d).
+        let vis = self.visibility_pass_element(id, true);
         // The pass also evaluates the scale policy of the surviving elements (INV-SCALE-5), so
-        // it may return their hints. The destroyed element itself has no row left to diff.
+        // it may return a hint that a client-caused evaluation is allowed to move. The destroyed
+        // element itself has no row left to diff.
         debug_assert!(
             !vis.iter()
                 .any(|e| matches!(e, Effect::Enter { .. } | Effect::Leave { .. })),

@@ -382,8 +382,10 @@ mod tests {
     /// The six calls: Y is mapped on a 2.0x output (hint 240/120); it grows to the device bound
     /// (P7 lowers the hint to 120/120, direction down); it shrinks again, and SC-E holds the
     /// client-caused increase; then an element that was never mapped is created and destroyed.
-    /// As implemented at this commit that destroy is evaluated as a non-client stimulus, so Y's
-    /// held increase is applied in its pass; the old assertion panicked on exactly that effect.
+    /// While a destroy was evaluated as a non-client stimulus, Y's held increase was applied in
+    /// its pass, and the old assertion panicked on exactly that effect. A destroy is now
+    /// evaluated as client-caused (see `destroying_an_element_is_not_a_scale_stimulus`), so in
+    /// these six calls the hint stays held; the shape asserted below holds either way.
     #[test]
     fn destroying_an_element_may_change_the_scale_hint_of_another() {
         let wide = |w: i32, mapped: bool| SurfaceTree {
@@ -433,6 +435,76 @@ mod tests {
             "Y's hint is neither held nor released: {:?}",
             c.preferred_scale_of(y)
         );
+    }
+
+    /// SC-E (C14.4, INV-SCALE-4 d): a hint held after a P7 decrease is reversed only by a
+    /// non-client stimulus. Destroying another element is not one, whether that element was
+    /// mapped or not, so one client cannot make the hint oscillate by pairing a resize with a
+    /// throwaway toplevel. An output change is a stimulus and does release the hold.
+    #[test]
+    fn destroying_an_element_is_not_a_scale_stimulus() {
+        let wide = |w: i32, mapped: bool| SurfaceTree {
+            surfaces: vec![SnapshotSurface {
+                size: if mapped {
+                    LocalSize { w, h: 300 }
+                } else {
+                    LocalSize::default()
+                },
+                ..tree(mapped).surfaces.remove(0)
+            }],
+            ..tree(mapped)
+        };
+        let other = |mapped: bool| SurfaceTree {
+            surfaces: vec![SnapshotSurface {
+                key: skey(2),
+                ..tree(mapped).surfaces.remove(0)
+            }],
+            ..tree(mapped)
+        };
+        let (mut c, _, _, mut t) = Core::new(persisted(false));
+        let d = || OutputDescriptor {
+            scale_120: 240,
+            ..desc("A", 60_000)
+        };
+        let (o, _) = c.output_connected(&mut t, d()).unwrap();
+        let y = c.toplevel_created();
+        c.toplevel_committed(y, wide(400, false)).unwrap();
+        c.toplevel_committed(y, wide(400, true)).unwrap();
+        assert_eq!(c.preferred_scale_of(y), Some((240, 2)));
+        let hints_of_y = |fx: &[Effect]| {
+            fx.iter()
+                .filter(|e| matches!(e, Effect::PreferredScale { element, .. } if *element == y))
+                .count()
+        };
+        let mut changes = 0;
+        for cycle in 0..50 {
+            changes += hints_of_y(&c.toplevel_committed(y, wide(16384, true)).unwrap());
+            changes += hints_of_y(&c.toplevel_committed(y, wide(400, true)).unwrap());
+            let x = c.toplevel_created();
+            if cycle % 2 == 1 {
+                // every other throwaway element is mapped before it is destroyed
+                c.toplevel_committed(x, other(false)).unwrap();
+                changes += hints_of_y(&c.toplevel_committed(x, other(true)).unwrap());
+            }
+            let fx = c.toplevel_destroyed(x);
+            assert!(
+                !fx.iter()
+                    .any(|e| matches!(e, Effect::Enter { .. } | Effect::Leave { .. })),
+                "cycle {cycle}: a destroy produced an enter or a leave: {fx:?}"
+            );
+            assert_eq!(
+                hints_of_y(&fx),
+                0,
+                "cycle {cycle}: destroying X re-hinted Y: {fx:?}"
+            );
+            changes += hints_of_y(&fx);
+        }
+        assert_eq!(changes, 1, "one P7 decrease, then the hint is held");
+        assert_eq!(c.preferred_scale_of(y), Some((120, 1)));
+        // a listed stimulus (output configuration change) releases the hold, once
+        let fx = c.output_reconfigured(&mut t, o, d()).unwrap();
+        assert_eq!(hints_of_y(&fx), 1, "an output change is a stimulus: {fx:?}");
+        assert_eq!(c.preferred_scale_of(y), Some((240, 2)));
     }
 
     // ------------------------------------------------------------ differential tests
