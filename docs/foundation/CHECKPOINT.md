@@ -1,8 +1,22 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — CORE VISIBILITY REMEDIATION INTEGRATION FORMALLY RATIFIED — INC-6 ACTIVE (EXPERIMENTAL, EXIT NOT AUTHORIZED).** INC-0, INC-1, INC-2, INC-3, INC-4, and INC-5 are RATIFIED. The Core visibility remediation (`85a74cb`; scoped visibility pass, bounding-box cull, `Stage` lookup by binary search) is integrated on canonical main and FORMALLY RATIFIED. **INC-6 (scale policy) is the active experimental implementation phase; it is NOT ratified and INC-6 exit is NOT authorized.** The runnable prototype runtime (winit and headless run loops) remains EXPERIMENTAL pending INC-13. **OB-42 (INV-ALLOC-1) and OB-44 (C14 baselines) remain OPEN.**
+CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — CORE VISIBILITY REMEDIATION INTEGRATION FORMALLY RATIFIED — INC-6 ACTIVE (EXPERIMENTAL, EXIT NOT AUTHORIZED).** INC-0, INC-1, INC-2, INC-3, INC-4, and INC-5 are RATIFIED. The Core visibility remediation (`85a74cb`; scoped visibility pass, bounding-box cull, `Stage` lookup by binary search) is integrated on canonical main and FORMALLY RATIFIED. **INC-6 (scale policy) is the active experimental implementation phase; it is NOT ratified and INC-6 exit is NOT authorized.** The runnable prototype runtime, with the runtime remediation integrated (one `Session`, on-demand frames, announced presentation clock), remains EXPERIMENTAL pending INC-13. **OB-42 (INV-ALLOC-1) and OB-44 (C14 baselines) remain OPEN.**
 
 Date: 2026-10-13
+
+## PHASE F — RUNTIME REMEDIATION INTEGRATION — EXPERIMENTAL PENDING INC-13 (record: evidence/phase-f/runtime-remediation/)
+- **Integrated candidate:** `remediation/a-runtime` `e53cb3bde018fef7c33011d82e151316292c9c94`, merged as `59723f2532fe8fb04f3148cba5d2a4529c5f716f` on main `85a74cb` (not pushed).
+- **Scope:** `infynitae-wayland::session` (`Session`, `FrameTimer`, one `terminate_children`), both prototype run loops reduced to a loop body, presentation timestamps on the announced clock, repaint for a vanished client, software-renderer pixel tests of the production render path. No Core change. No authority port taken by shared code; no `Backend` trait.
+- **Owner policies (2026-10-13):** (1) the runtime remains experimental pending INC-13; (2) pixman is restricted to tests and development fixtures (dev-dependency of `infynitae-backend-headless` only); (3) the headless runner produces frames on demand, never continuously; (4) shared runtime code in the adapter crate is accepted provisionally.
+- **Dependencies added (test builds only):** Smithay features `renderer_test`, `renderer_pixman` as dev-dependencies; `pixman`, `pixman-sys`, `paste` in `Cargo.lock`.
+- **Open findings carried:** B-1 (SIGTERM/SIGINT without cleanup; blocked on the signal-handling dependency decision); no pixel test of the GLES path; nested idle, nested input and real applications unverified; duplicated `vblank_period` helper kept with its test.
+- **INC-6 implication:** the INC-6 candidate now conflicts with main in both backend loops (scale-settlement deadline and tick) as well as in Core; a design step is required.
+- **Not claimed:** INC-13 entry or exit; any GLES, GPU, nested-presentation or hardware result; OB-7, OB-13, OB-25 and OB-44 are unchanged.
+- **Declaration:**
+  - INC-0 through INC-5 are RATIFIED; the Core visibility remediation is RATIFIED.
+  - **The runtime remediation is INTEGRATED, EXPERIMENTAL pending INC-13, and NOT RATIFIED.**
+  - **INC-6 is NOT ratified; INC-6 exit is NOT authorized.**
+  - Host KDE/KWin session untouched; no nested compositor run for this integration.
 
 ## PHASE F — CORE VISIBILITY REMEDIATION INTEGRATION (record: evidence/phase-f/core-visibility/)
 - **Integrated commit:** `85a74cbffd3692fa9965cbe6c68465d3972c6022` (local canonical main; fast-forward of 6 commits `b5b6dc4`, `2da6b23`, `be449fe`, `24536d4`, `ec11a62`, `85a74cb`; not pushed).
