@@ -1199,10 +1199,20 @@ fn check_wayland(files: &[SourceFile], r: &mut Report) {
 
 // ---------------------------------------------------------------- unsafe policy
 
+/// Matches every `unsafe` site of the workspace to one entry of the inventory (C9, INV-ARCH-2).
+///
+/// The rule reads source tokens, so it sees `unsafe` written in this workspace, including inside
+/// macro definitions and macro invocations. It does not see `unsafe` that only exists after
+/// expanding a macro defined in another crate: the token is in that crate's source, not here.
+/// Such a site is outside this rule and outside the inventory; only review of the dependency
+/// covers it. Whether rustc's `unsafe_code` lint reports it is not relied on.
 fn check_unsafe(root: &Path, crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report) {
     const R: &str = "unsafe-policy";
     r.rule(R);
-    let inventory = root.join(UNSAFE_INVENTORY).exists();
+    // An inventory that merely exists authorises nothing: each site must match an entry.
+    let inventory = read_inventory(root, r);
+    // (file, enclosing item) -> the sites found there
+    let mut sites: BTreeMap<(String, String), Vec<String>> = BTreeMap::new();
     for (name, _, level) in CRATES {
         let Some(files) = crates.get(name) else {
             continue;
@@ -1256,15 +1266,257 @@ fn check_unsafe(root: &Path, crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut R
         for f in files.iter().chain(&extra_files) {
             let mut tokens = Vec::new();
             relax_and_unsafe(f.ast.to_token_stream(), &mut tokens);
+            if tokens.is_empty() {
+                continue;
+            }
+            let rel = f.path.strip_prefix(root).unwrap_or(&f.path);
+            let rel = rel.to_string_lossy().replace('\\', "/");
+            let mut items = ItemSpans::default();
+            items.visit_file(&f.ast);
             for (what, span) in tokens {
                 let msg = format!("{}: {what}", at(&f.path, span));
-                if !inventory {
-                    r.fail(R, format!("{msg} without {UNSAFE_INVENTORY} (C9)"));
-                } else if level == UnsafeLevel::Forbid {
+                if level == UnsafeLevel::Forbid {
                     r.fail(R, format!("{msg} in a forbid crate"));
+                    continue;
+                }
+                if inventory.is_none() {
+                    r.fail(R, format!("{msg} without {UNSAFE_INVENTORY} (C9)"));
+                    continue;
+                }
+                let line = span.start().line;
+                match items.enclosing(line) {
+                    Ok(item) => sites.entry((rel.clone(), item)).or_default().push(msg),
+                    Err(names) => r.fail(
+                        R,
+                        format!("{msg}: ambiguous site, enclosed by {names} of the same extent"),
+                    ),
                 }
             }
         }
+    }
+    let Some(entries) = inventory else {
+        return;
+    };
+    // every site is listed exactly once, with its count and its class
+    for ((file, item), found) in &sites {
+        let listed: Vec<&InventoryEntry> = entries
+            .iter()
+            .filter(|e| &e.file == file && &e.item == item)
+            .collect();
+        match listed.as_slice() {
+            [] => {
+                for msg in found {
+                    r.fail(
+                        R,
+                        format!("{msg} in `{item}`: not listed in {UNSAFE_INVENTORY} (C9)"),
+                    );
+                }
+            }
+            [e] => {
+                if e.sites != found.len() {
+                    r.fail(
+                        R,
+                        format!(
+                            "{file}: `{item}` has {} unsafe site(s), {UNSAFE_INVENTORY} entry {} lists {}",
+                            found.len(),
+                            e.id,
+                            e.sites
+                        ),
+                    );
+                }
+                let want = if is_test_path(file) {
+                    "test"
+                } else {
+                    "production"
+                };
+                if e.class != want {
+                    r.fail(
+                        R,
+                        format!(
+                            "{file}: `{item}` is {want} code, {UNSAFE_INVENTORY} entry {} is classed `{}` (an entry of one class never authorises the other)",
+                            e.id, e.class
+                        ),
+                    );
+                }
+            }
+            many => r.fail(
+                R,
+                format!(
+                    "{file}: `{item}` is listed {} times in {UNSAFE_INVENTORY} ({})",
+                    many.len(),
+                    many.iter()
+                        .map(|e| e.id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            ),
+        }
+    }
+    // no entry without a site
+    for e in &entries {
+        if !sites.contains_key(&(e.file.clone(), e.item.clone())) {
+            r.fail(
+                R,
+                format!(
+                    "{UNSAFE_INVENTORY} entry {}: no unsafe site in `{}` of {} (stale entry)",
+                    e.id, e.item, e.file
+                ),
+            );
+        }
+    }
+}
+
+/// One row of `UNSAFE_INVENTORY.md`: a function (or macro, or the file scope) of one file, the
+/// number of `unsafe` tokens and `unsafe_code` relaxations it contains, and its class.
+struct InventoryEntry {
+    id: String,
+    file: String,
+    item: String,
+    sites: usize,
+    class: String,
+}
+
+/// Integration tests, benches and examples are test code; everything else is production code.
+fn is_test_path(rel: &str) -> bool {
+    ["/tests/", "/benches/", "/examples/"]
+        .iter()
+        .any(|d| rel.contains(d))
+}
+
+/// Parses the inventory. Rows are table lines whose first cell starts with `U-`:
+/// `| id | file | item | sites | class | purpose | preconditions | ownership | cleanup | verification |`.
+/// Anything malformed fails closed: a row with the wrong number of cells, an empty cell, a count
+/// that is not a positive number, a class other than `test` or `production`, a repeated id.
+fn read_inventory(root: &Path, r: &mut Report) -> Option<Vec<InventoryEntry>> {
+    const R: &str = "unsafe-policy";
+    let text = std::fs::read_to_string(root.join(UNSAFE_INVENTORY)).ok()?;
+    let mut entries: Vec<InventoryEntry> = Vec::new();
+    for (n, line) in text.lines().enumerate() {
+        let line = line.trim();
+        if !line.starts_with("| U-") && !line.starts_with("|U-") {
+            continue;
+        }
+        let cells: Vec<String> = line
+            .trim_matches('|')
+            .split('|')
+            .map(|c| c.trim().trim_matches('`').trim().to_string())
+            .collect();
+        let here = format!("{UNSAFE_INVENTORY}:{}", n + 1);
+        if cells.len() != 10 {
+            r.fail(R, format!("{here}: {} cells, expected 10", cells.len()));
+            continue;
+        }
+        if let Some(i) = cells.iter().position(String::is_empty) {
+            r.fail(R, format!("{here}: cell {} is empty", i + 1));
+            continue;
+        }
+        let Some(sites) = cells[3].parse::<usize>().ok().filter(|n| *n > 0) else {
+            r.fail(
+                R,
+                format!("{here}: site count `{}` is not a positive number", cells[3]),
+            );
+            continue;
+        };
+        if cells[4] != "test" && cells[4] != "production" {
+            r.fail(
+                R,
+                format!(
+                    "{here}: class `{}` is neither `test` nor `production`",
+                    cells[4]
+                ),
+            );
+            continue;
+        }
+        if entries.iter().any(|e| e.id == cells[0]) {
+            r.fail(R, format!("{here}: id {} is used twice", cells[0]));
+            continue;
+        }
+        entries.push(InventoryEntry {
+            id: cells[0].clone(),
+            file: cells[1].clone(),
+            item: cells[2].clone(),
+            sites,
+            class: cells[4].clone(),
+        });
+    }
+    Some(entries)
+}
+
+/// The line extents of every function, method and `macro_rules!` definition of a file, by
+/// qualified name (`Type::method`, `function`, `macro name`).
+#[derive(Default)]
+struct ItemSpans {
+    owner: Vec<String>,
+    items: Vec<(String, usize, usize)>,
+}
+
+impl ItemSpans {
+    fn add(&mut self, name: String, span: proc_macro2::Span) {
+        let name = match self.owner.last() {
+            Some(o) => format!("{o}::{name}"),
+            None => name,
+        };
+        self.items.push((name, span.start().line, span.end().line));
+    }
+
+    /// The innermost item containing `line`, or `<file>` when none does. Two different items of
+    /// the same innermost extent cannot be told apart and are an error.
+    fn enclosing(&self, line: usize) -> Result<String, String> {
+        let mut inside: Vec<&(String, usize, usize)> = self
+            .items
+            .iter()
+            .filter(|(_, a, b)| *a <= line && line <= *b)
+            .collect();
+        inside.sort_by_key(|(_, a, b)| b - a);
+        match inside.as_slice() {
+            [] => Ok("<file>".into()),
+            [one] => Ok(one.0.clone()),
+            [first, second, ..] => {
+                if first.2 - first.1 == second.2 - second.1 && first.0 != second.0 {
+                    Err(format!("`{}` and `{}`", first.0, second.0))
+                } else {
+                    Ok(first.0.clone())
+                }
+            }
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for ItemSpans {
+    fn visit_item_fn(&mut self, i: &'ast syn::ItemFn) {
+        self.add(i.sig.ident.to_string(), syn::spanned::Spanned::span(i));
+        syn::visit::visit_item_fn(self, i);
+    }
+    fn visit_item_impl(&mut self, i: &'ast syn::ItemImpl) {
+        let ty = i.self_ty.to_token_stream().to_string().replace(' ', "");
+        self.owner.push(ty);
+        syn::visit::visit_item_impl(self, i);
+        self.owner.pop();
+    }
+    fn visit_item_trait(&mut self, i: &'ast syn::ItemTrait) {
+        self.owner.push(i.ident.to_string());
+        syn::visit::visit_item_trait(self, i);
+        self.owner.pop();
+    }
+    fn visit_item_mod(&mut self, i: &'ast syn::ItemMod) {
+        self.owner.push(i.ident.to_string());
+        syn::visit::visit_item_mod(self, i);
+        self.owner.pop();
+    }
+    fn visit_impl_item_fn(&mut self, i: &'ast syn::ImplItemFn) {
+        self.add(i.sig.ident.to_string(), syn::spanned::Spanned::span(i));
+        syn::visit::visit_impl_item_fn(self, i);
+    }
+    fn visit_trait_item_fn(&mut self, i: &'ast syn::TraitItemFn) {
+        self.add(i.sig.ident.to_string(), syn::spanned::Spanned::span(i));
+        syn::visit::visit_trait_item_fn(self, i);
+    }
+    fn visit_item_macro(&mut self, i: &'ast syn::ItemMacro) {
+        let name = i
+            .ident
+            .as_ref()
+            .map_or("<unnamed>".into(), |n| n.to_string());
+        self.add(format!("macro {name}"), syn::spanned::Spanned::span(i));
     }
 }
 
