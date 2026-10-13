@@ -435,7 +435,8 @@ fn popup_is_configured_inside_the_output_target() {
     let qh = ls.qh.clone();
     let w = ls.probe.toplevel(&qh, "W", (400, 300), 0);
     ls.pump();
-    // the toplevel's anchor is the camera centre (0,0): viewport x ∈ [−960, 960)
+    // the toplevel (400x300) is centred on the camera: anchor (−200, −150), so the viewport
+    // x ∈ [−960, 960) is parent-relative [−760, 1160)
     let p = ls.probe.popup(
         &qh,
         "P",
@@ -452,7 +453,7 @@ fn popup_is_configured_inside_the_output_target() {
         .popup_configure
         .expect("popup configured");
     assert_eq!((width, height), (1200, 80));
-    assert_eq!(x, 960 - 1200, "slid left to the viewport's right edge");
+    assert_eq!(x, 1160 - 1200, "slid left to the viewport's right edge");
     assert_eq!(y, 50);
     // control: without slide the positioner's geometry is kept (it overflows the viewport)
     let q = ls.probe.popup(

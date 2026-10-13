@@ -1,0 +1,7 @@
+{
+ "name": "amendment layer introduces an invariant",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "| **INV-STAGE-1** | Stage is the **only** store and writer of persistent placement (anchors) and z-order. Writers: `stage::place` via (a) placement policy — a provisional",
+ "replace": "| **INV-STAGE-99** | Stage is the **only** store and writer of persistent placement (anchors) and z-order. Writers: `stage::place` via (a) placement policy — a provisional",
+ "expect": "f-layer-adds-no-inv"
+}

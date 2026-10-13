@@ -108,16 +108,16 @@ pub enum ProtocolError {
     BufferBeforeConfigure,
 }
 
-/// Where the placement policy puts an ordinary toplevel (INV-STAGE-1 writer (a), Level D).
+/// Where the placement policy puts an ordinary toplevel (INV-STAGE-1 writer (a), C12.F1).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PlacementPolicy {
     /// The window-geometry origin at the placement output's camera centre, decided at the
-    /// initial commit and never revised. The rule of INC-1…INC-5; the hand-derived oracles of
-    /// the T0 and T1 suites are written for it, so it stays Core's default.
-    #[default]
+    /// initial commit and never revised: the rule of INC-1…INC-5. Kept as an explicit policy.
     OriginAtCameraCentre,
-    /// The window geometry centred in the placement output's usable region at first map; an
-    /// oversized window aligned to the region's origin. What the run loops select.
+    /// F-PLACE-1, the default: the window geometry centred in the placement output's usable
+    /// region, resolved once at the first map; an oversized window aligned to the region's
+    /// origin.
+    #[default]
     CentredInView,
 }
 
@@ -284,8 +284,10 @@ impl Core {
         })
     }
 
-    /// Placement policy at initial commit (Level D): the bound camera's centre of the first
-    /// connected output (lowest `OutputId`), rounded R3; the Canvas origin without an output.
+    /// The anchor written at the initial commit (INV-STAGE-1, C12.F1): the bound camera's centre
+    /// of the first connected output (lowest `OutputId`), rounded R3; the Canvas origin without
+    /// an output. Under the default policy it is provisional until the first map; under
+    /// [`PlacementPolicy::OriginAtCameraCentre`] it is final.
     fn initial_anchor(&self) -> CanvasPoint {
         self.outputs
             .first()
@@ -295,7 +297,7 @@ impl Core {
             .unwrap_or(CanvasPoint { x: 0, y: 0 })
     }
 
-    /// Placement policy at first map, when the window-geometry size is known.
+    /// Default placement at first map, when the window-geometry size is known (F-PLACE-1).
     ///
     /// [`PlacementPolicy::CentredInView`]: the window geometry is centred in the usable region of
     /// the placement output (the first connected output, as for [`Core::initial_anchor`]), in
@@ -783,11 +785,15 @@ mod tests {
             core.toplevel_committed(id, tree(false)),
             Ok(vec![Effect::InitialConfigure(id)])
         );
-        let anchor = core.stage().anchor(id).expect("placed at initial commit");
-        assert_eq!(anchor, CanvasPoint { x: 0, y: 0 }, "default camera centre");
+        // INV-STAGE-1 (C12.F1): a provisional anchor at the initial commit, the camera centre
+        let provisional = core.stage().anchor(id).expect("placed at initial commit");
+        assert_eq!(provisional, CanvasPoint { x: 0, y: 0 }, "camera centre");
         assert_eq!(core.toplevel_committed(id, tree(false)), Ok(vec![]));
         // first buffer: mapped, on top, and its surface enters the output (F-MEMBER-1)
         assert_eq!(core.toplevel_committed(id, tree(true)), Ok(vec![enter]));
+        // default placement resolved at the first map: 100x50 centred on (0,0)
+        let anchor = core.stage().anchor(id).expect("placed");
+        assert_eq!(anchor, CanvasPoint { x: -50, y: -25 }, "F-PLACE-1");
         assert_eq!(core.stage().state(id), Some(Lifecycle::Mapped));
         assert_eq!(core.stage().z_order(), &[id]);
         assert_eq!(
@@ -891,7 +897,9 @@ mod tests {
     /// (evidence/phase-f/INC-1/corrective/unproject_reference.py), not with production code.
     #[test]
     fn popup_target_is_the_viewport_inward_rounded() {
-        // k = 1, camera centre (0,0), 1920x1080 → viewport [−960,960) × [−540,540); anchor (0,0)
+        // k = 1, camera centre (0,0), 1920x1080 → viewport [−960,960) × [−540,540). The target is
+        // parent-relative: before the first map the anchor is the camera centre; after it the
+        // 100x50 window is centred, anchor (−50,−25), and the viewport is at (−910,−515)
         let mut core = connected(120);
         let id = core.toplevel_created();
         core.toplevel_committed(id, tree(false)).unwrap();
@@ -905,12 +913,13 @@ mod tests {
         assert_eq!(
             (t.loc, t.size),
             (
-                LocalPoint { x: -960, y: -540 },
+                LocalPoint { x: -910, y: -515 },
                 LocalSize { w: 1920, h: 1080 }
             )
         );
         // k = 1.75: c_eff = (−35951177, −20222537) Q16; the viewport's fractional edges
-        // (−548.57…, 548.57…) × (−308.57…, 308.57…) round inward
+        // (−548.57…, 548.57…) × (−308.57…, 308.57…) round inward to [−548, 548) × [−308, 308);
+        // relative to the anchor (−50,−25) that is (−498,−283)
         let mut core = connected(210);
         let id = core.toplevel_created();
         core.toplevel_committed(id, tree(false)).unwrap();
@@ -919,7 +928,7 @@ mod tests {
         assert_eq!(
             (t.loc, t.size),
             (
-                LocalPoint { x: -548, y: -308 },
+                LocalPoint { x: -498, y: -283 },
                 LocalSize { w: 1096, h: 616 }
             )
         );
@@ -1081,13 +1090,45 @@ mod tests {
         c
     }
 
-    /// Core's default is the legacy rule: the geometry origin at the camera centre.
+    /// Core's default is the centred policy (C12.F1). The legacy rule stays available as an
+    /// explicit policy: the geometry origin at the camera centre, decided at the initial commit
+    /// and not revised at the first map, for any size.
     #[test]
-    fn default_policy_places_the_origin_at_the_camera_centre() {
+    fn the_legacy_policy_places_the_origin_at_the_camera_centre() {
         let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
-        assert_eq!(c.placement_policy(), PlacementPolicy::OriginAtCameraCentre);
+        assert_eq!(c.placement_policy(), PlacementPolicy::CentredInView);
+        c.set_placement_policy(PlacementPolicy::OriginAtCameraCentre);
         c.output_connected(&mut t, plain("A")).unwrap();
         assert_eq!(placed(&mut c, 646, 513).1, CanvasPoint { x: 0, y: 0 });
+        assert_eq!(placed(&mut c, 5000, 4000).1, CanvasPoint { x: 0, y: 0 });
+        // a window placed under the legacy rule keeps its anchor when the policy changes
+        let (id, a) = placed(&mut c, 400, 300);
+        c.set_placement_policy(PlacementPolicy::CentredInView);
+        c.toplevel_committed(id, sized(400, 300, true)).unwrap();
+        assert_eq!(c.stage().anchor(id), Some(a));
+        assert_eq!(placed(&mut c, 400, 300).1, CanvasPoint { x: -200, y: -150 });
+    }
+
+    /// The legacy rule through a persisted camera away from the origin, negative coordinates
+    /// included: the anchor is the camera centre, rounded by R3.
+    #[test]
+    fn the_legacy_policy_follows_the_camera() {
+        let entries = vec![(
+            okey("A"),
+            CanvasPos {
+                x: -5000 * Q16_ONE + Q16_ONE / 2,
+                y: 3001 * Q16_ONE + Q16_ONE / 2,
+            },
+            1.0,
+        )];
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::from_entries(entries).unwrap());
+        c.set_placement_policy(PlacementPolicy::OriginAtCameraCentre);
+        c.output_connected(&mut t, plain("A")).unwrap();
+        // −4999.5 → −5000 and 3001.5 → 3002: ties to even
+        assert_eq!(
+            placed(&mut c, 646, 513).1,
+            CanvasPoint { x: -5000, y: 3002 }
+        );
     }
 
     /// A window that fits is centred: x = usable_x + (usable_w − w)/2, y likewise. KCalc's

@@ -9,6 +9,10 @@
 
 mod common;
 
+/// The motion that takes the startup pointer to local (50, 50) of a 400x300 window. The pointer
+/// starts at the view centre, and a window is centred there (F-PLACE-1): its local (200, 150).
+const TO_LOCAL_50_50: (f64, f64) = (-150.0, -100.0);
+
 use std::time::Duration;
 
 use common::input::{BTN_LEFT, BTN_MIDDLE, none};
@@ -80,7 +84,7 @@ impl H {
     /// Pointer onto the topmost window at its local (50, 50); a click focuses it. Returns the
     /// window's probe index, element and the press serial (the cause of a menu).
     fn click_focus(&mut self) -> (usize, ElementId, u32) {
-        self.motion((50.0, 50.0));
+        self.motion(TO_LOCAL_50_50);
         self.button(BTN_LEFT, true);
         let s = self.ls.probe.last_serial;
         self.button(BTN_LEFT, false);
@@ -434,7 +438,7 @@ fn b1_mapped_parent_popup_destroyed_is_not_a_parent_commit() {
     let mut h = H::new(1);
     let (wp, top, s) = h.click_focus();
     let qh = h.ls.qh.clone();
-    // a popup right under the pointer (W-local 50,50 is inside it)
+    // a popup right under the pointer (W-local 50,50 is inside its [10,130) × [10,90))
     let p = h.ls.probe.popup_with_grab_serial(
         &qh,
         "P",

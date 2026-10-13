@@ -1,0 +1,7 @@
+{
+ "name": "an amended invariant still claims its sealed origin",
+ "file": "FOUNDATION_INVARIANTS.md",
+ "find": "- **Origin:** C12.F1 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)\n- **Layers:** C12 → C12.F1",
+ "replace": "- **Origin:** C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a\n- **Layers:** C12 → C12.F1",
+ "expect": "inv-provenance"
+}

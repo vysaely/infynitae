@@ -98,11 +98,6 @@ pub fn run_nested(
 
     let display: Display<WaylandState> = Display::new()?;
     let mut state = WaylandState::new(&display.handle(), core);
-    // Product default placement: new windows are centred in the view at first map. Core's own
-    // default stays the INC-1 rule that its test oracles are derived for.
-    state
-        .core_mut()
-        .set_placement_policy(infynitae_core::protocol::PlacementPolicy::CentredInView);
 
     let window_attributes = WinitWindow::default_attributes()
         .with_inner_size(LogicalSize::new(

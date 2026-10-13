@@ -97,7 +97,8 @@ mod tests {
         c.physical_input(port, ev).unwrap()
     }
 
-    /// W: one 400x300 root anchored at the camera centre (0, 0), infinite input region.
+    /// W: one 400x300 root centred on the camera centre (0, 0) — anchor (−200, −150) by
+    /// F-PLACE-1 — with an infinite input region.
     fn map_w(c: &mut Core) {
         let tree = |mapped: bool| SurfaceTree {
             geometry: LocalRect {
@@ -122,7 +123,7 @@ mod tests {
     }
 
     /// One output A, W mapped and shown (a frame produced after the map: hit-testing reads the
-    /// last frame shown), pointer at the startup centre (960, 540) ⇒ Canvas (0, 0) = W (0, 0).
+    /// last frame shown), pointer at the startup centre (960, 540) ⇒ Canvas (0, 0) = W (200, 150).
     fn rig(c: &mut Core, t: &mut OutputLifecycleToken) -> OutputId {
         let (a, _) = c.output_connected(t, desc("A")).unwrap();
         map_w(c);
@@ -133,7 +134,7 @@ mod tests {
     fn w_target() -> Option<PointerTarget> {
         Some(PointerTarget {
             surface: skey(1),
-            origin: crate::geom::CanvasPoint { x: 0, y: 0 },
+            origin: crate::geom::CanvasPoint { x: -200, y: -150 },
         })
     }
 
@@ -191,12 +192,12 @@ mod tests {
             "the pointer moved during a pan"
         );
         let fx = button(&mut c, &mut i, BTN_MIDDLE, false, logo());
-        // q = (0,0) + (50, −30) = (50, −30): above W [0, 300) ⇒ no target
+        // q = (0,0) + (50, −30) = (50, −30): inside W, Canvas [−200, 200) × [−150, 150) ⇒ W
         assert_eq!(
             fx,
             vec![
                 Effect::PointerMotion {
-                    target: None,
+                    target: w_target(),
                     location: pos(50, -30),
                     time_ms: 0
                 },

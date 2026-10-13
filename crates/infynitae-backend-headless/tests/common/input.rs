@@ -48,7 +48,8 @@ impl Rig {
         }
     }
 
-    /// x8 setup: W mapped on A, pointer moved onto W at W-local (230, 220).
+    /// x8 setup: W mapped on A (centred, anchor (−400, −300)), pointer moved by (210, 200) from
+    /// the view centre onto W at W-local (630, 520).
     pub fn x8() -> Rig {
         let mut r = Rig::new(Lockstep::new(Some(a_1080())));
         r.map_w();

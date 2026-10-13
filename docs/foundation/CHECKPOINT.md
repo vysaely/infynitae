@@ -4,6 +4,15 @@ CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — CORE VISIBILITY REMEDIATION INTE
 
 Date: 2026-10-13
 
+## PHASE F — PLACEMENT AMENDMENT C12.F1 ADOPTED (record: evidence/phase-f/placement-amendment/)
+- **Authority:** owner approval 2026-10-13: "Default placement is resolved once at first map, when authoritative initial window geometry becomes available, rather than at the initial surface commit."
+- **Registry:** new layer FOUNDATION_ARCHITECTURE §C12.F1 (one row, INV-STAGE-1); new formula F-PLACE-1; STATE_MACHINES M1 (two rows); PROTOTYPE_DECISION_LEDGER PL-21. The sealed C12 table is unaltered; 57 invariants, 21 formulas.
+- **Checker:** `tools/check-foundation-docs` reads ordered Phase F amendment layers (C12.F1, C12.F2); 4 seeded fixtures added (22 in the self-test).
+- **Core:** `PlacementPolicy::CentredInView` is the default; the backends no longer select it. `OriginAtCameraCentre` stays as an explicit policy with its own tests.
+- **Tests:** 41 expectations that encoded the legacy anchor re-derived from F-PLACE-1 (table in the record); 2 explicit legacy-policy tests; 3 seeded controls.
+- **Not claimed:** restored or explicit placement (no such path exists), transient windows, reserved regions, placement under zoom ≠ 1, any real-application or GPU result.
+- **Declaration:** INC-6 is NOT ratified and INC-6 exit is NOT authorized; the runtime remains EXPERIMENTAL pending INC-13; OB-42 and OB-44 remain OPEN.
+
 ## PHASE F — UNSAFE-INVENTORY ENFORCEMENT INTEGRATION (record: evidence/phase-f/unsafe-inventory-gate/)
 - **Integrated commit:** `804ab6554860b7884eb72c3020a6136651fcf482` (fast-forward of one commit on `ede1541`; not pushed). Owner authorization: 2026-10-13.
 - **Scope:** `enforcement/source-rules` (rule `unsafe-policy`) and `tools/verify-architecture` (19 seeded controls). No crate under `crates/` changes; C9 and INV-ARCH-2 are unchanged.

@@ -221,9 +221,10 @@ fn pan(ls: &mut Lockstep, delta: (f64, f64)) {
     ls.pump();
 }
 
-/// Buffer import and placement at scale 1, against positions derived by hand: the first window
-/// maps with its geometry origin at the camera centre, the centre of a 640x480 view is physical
-/// (320, 240), so a 100x80 buffer covers [320, 420) × [240, 320) and nothing else is drawn.
+/// Buffer import and placement at scale 1, against positions derived by hand: a window maps
+/// centred in the view (F-PLACE-1), the centre of a 640x480 view is physical (320, 240), so a
+/// 100x80 buffer has its origin at (320 − 50, 240 − 40) and covers [270, 370) × [200, 280), and
+/// nothing else is drawn.
 #[test]
 fn a_solid_buffer_lands_on_exactly_its_pixels() {
     let mut ls = Lockstep::new(Some(output((640, 480), 120)));
@@ -234,7 +235,7 @@ fn a_solid_buffer_lands_on_exactly_its_pixels() {
     assert_pixels(
         &pixels,
         (640, 480),
-        &[((320, 240, 420, 320), RED)],
+        &[((270, 200, 370, 280), RED)],
         true,
         "scale 1",
     );
@@ -242,12 +243,14 @@ fn a_solid_buffer_lands_on_exactly_its_pixels() {
 
 /// Surface-tree composition and window stacking at scale 1, against positions derived by hand.
 /// W1 is a red 200x150 root with a green 50x40 subsurface above it at (+20, +10) and a blue
-/// 60x44 subsurface below it at (−15, +50). No window geometry is set, so it is the bounding box
-/// of the tree (xdg_surface.set_window_geometry: "the full bounds of the surface, including any
-/// subsurfaces"): its origin is 15 px left of the root, and that origin is what maps at the
-/// camera centre (320, 240). The root is therefore at (335, 240). W2 (white 80x60) maps later at
-/// the same anchor and is above all of W1; of the blue subsurface only the part left of the root
-/// shows.
+/// 60x44 subsurface below it at (−15, +50). W1 is placed once, at its first map, when it is
+/// the 200x150 root alone: its geometry origin goes to (320 − 100, 240 − 75) = (220, 165). No
+/// window geometry is set, so it is the bounding box of the tree (xdg_surface.set_window_geometry:
+/// "the full bounds of the surface, including any subsurfaces"): once the blue subsurface exists
+/// the geometry origin is 15 px left of the root, and it is that origin which stays at
+/// (220, 165). The root is therefore at (235, 165), green at (255, 175) and blue at (220, 215).
+/// W2 (white 80x60) maps later, centred at (320 − 40, 240 − 30) = (280, 210), above all of W1;
+/// of the blue subsurface only the part left of the root shows.
 #[test]
 fn subsurfaces_and_windows_stack_in_render_order() {
     let mut ls = Lockstep::new(Some(output((640, 480), 120)));
@@ -258,10 +261,10 @@ fn subsurfaces_and_windows_stack_in_render_order() {
     let mut screen = Screen::new((640, 480));
     let (_, pixels) = screen.frame(&mut ls, 0);
     let layers = [
-        ((320, 240, 400, 300), WHITE),
-        ((355, 250, 405, 290), GREEN),
-        ((335, 240, 535, 390), RED),
-        ((320, 290, 380, 334), BLUE),
+        ((280, 210, 360, 270), WHITE),
+        ((255, 175, 305, 215), GREEN),
+        ((235, 165, 435, 315), RED),
+        ((220, 215, 280, 259), BLUE),
     ];
     assert_pixels(&pixels, (640, 480), &layers, true, "composition");
     // the same frame through Core's own render list: the list is what was drawn
@@ -298,10 +301,10 @@ fn scaled_and_clipped_surfaces_match_the_render_list() {
         let (_, pixels) = screen.frame(&mut ls, 0);
         assert_pixels(&pixels, (640, 480), &layers, exact, "in view");
 
-        // pan the camera right by the window's half width plus the distance to the left edge:
-        // the window now straddles the left view edge
+        // the window is centred, so its middle is at the view centre: pan the camera right by
+        // the distance from the centre to the left edge and the window straddles that edge
         let k = scale_120 as f64 / 120.0;
-        let to_edge = 320.0 / k + 60.0;
+        let to_edge = 320.0 / k;
         pan(&mut ls, (-to_edge, 0.0));
         let layers = layers_from_core(&mut ls, &colours);
         assert!(
@@ -346,14 +349,15 @@ fn damage_follows_commits_and_nothing_else() {
     let (damage, pixels) = screen.frame(&mut ls, 1);
     let damage = damage.expect("the commit damaged the output");
     let subsurface_rect: Rectangle<i32, Physical> =
-        Rectangle::new((330, 250).into(), (20, 20).into());
+        Rectangle::new((280, 210).into(), (20, 20).into());
     for d in &damage {
         assert!(
             subsurface_rect.contains_rect(*d),
             "damage {d:?} lies outside the committed surface {subsurface_rect:?}"
         );
     }
-    let layers = [((330, 250, 350, 270), BLUE), ((320, 240, 420, 320), RED)];
+    // W (100x80) at (270, 200) as above; S at W + (10, 10)
+    let layers = [((280, 210, 300, 230), BLUE), ((270, 200, 370, 280), RED)];
     assert_pixels(&pixels, (640, 480), &layers, true, "after a damaged redraw");
     let (_, full) = Screen::new((640, 480)).frame(&mut ls, 0);
     assert_eq!(pixels, full, "a damaged redraw equals a full redraw");

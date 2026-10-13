@@ -1013,7 +1013,8 @@ mod tests {
         c.toplevel_committed(id, tree(false)).unwrap();
         c.toplevel_committed(id, tree(true)).unwrap();
         c.render_list(a).unwrap();
-        // At 1920x1080 scale 1.0, window [0,100)x[0,100) is at OutputLogical [960,1060)x[540,640).
+        // The 100x100 window is centred (anchor (−50,−50)): at 1920x1080 scale 1.0 it is at
+        // OutputLogical [910,1010)x[490,590).
         let p_before = crate::geom::OutputLogicalPoint { x: 970.5, y: 550.5 };
         assert!(c.hit_test(a, p_before).is_some());
 
@@ -1030,7 +1031,7 @@ mod tests {
             "stale frame survived mode reconfiguration"
         );
 
-        // Populate new frame for 800x600: window is at logical [400,500)x[300,400).
+        // Populate new frame for 800x600: window is at logical [350,450)x[250,350).
         let p_800 = crate::geom::OutputLogicalPoint { x: 410.5, y: 310.5 };
         assert!(c.hit_test(a, p_800).is_some());
 
@@ -1041,7 +1042,7 @@ mod tests {
             desc_k(key("A"), (1920, 1080), Transform::R90, 120, 60_000),
         )
         .unwrap();
-        // Window on R90 is centered in 1080x1920: [540,640)x[960,1060). p_800 (410.5, 310.5) misses:
+        // On R90 the view is 1080x1920 and the window is at [490,590)x[910,1010). p_800 (410.5, 310.5) misses:
         assert_eq!(
             c.hit_test(a, p_800),
             None,
