@@ -1,4 +1,4 @@
-# INC-7 — toplevel request policy: experimental, slices 1 and 2
+# INC-7 — toplevel request policy: experimental, slices 1 to 3
 
 Status: **EXPERIMENTAL. Entry authorized by the owner 2026-10-13. Not ratified; INC-7's exit
 tests are not met and its exit is not claimed.** This file is evidence, not authority.
@@ -50,15 +50,28 @@ Slice 2 adds granted protocol fullscreen as sealed in C5.2, M9 and F-PRESENT-1:
 Not this: managed borderless fullscreen (a future compositor policy over windows and cameras),
 direct scanout, or any output-level optimisation. None is implemented or prejudged.
 
-## Readings of the sealed text made in slice 2 (for owner confirmation)
+## Fullscreen lifecycle decisions (owner, 2026-10-14) and where each is tested
 
-| Sealed text | What was implemented | Why |
+| Decision | Implementation | Test |
 |---|---|---|
-| M9: "`unset_fullscreen` / unmap → configure with the saved size" | on **unmap** the state is dropped and **no configure** is sent | C5.2: "the spec discards client state on unmap … on remap the client must request again"; an unmapped xdg_toplevel has no configure sequence until its next initial commit. On `unset_fullscreen` the configure is sent as written |
-| INV-PRES-1: "The presentation starts at the grant decision" | the state exists from the grant; the output is taken over when the element is **mapped** | before its first buffer there is nothing of the element to present; taking the output then would blank it for a client that never draws |
-| INV-PRES-1: "or before W's first map" | literal: a re-show after an unmap is not a first map and needs the focus | wording |
-| C5.2: "size = O's logical size at zoom 1" | a fractional logical size is rounded **down** | the surface is then never larger than the output; F-PRESENT-1 centres the remainder (under one pixel) |
-| C5.2 (fit meanwhile changes the camera, "shown when the presentation ends") | a camera drag on a fullscreen output is not blocked: it moves the hidden camera | same rule applied to the pan; whether the binding should be inert there is a UX question |
+| 1. Unmap invalidates the fullscreen state and every pending piece of it | the state, a recorded pre-map request and a postponed placement are dropped together | T0 `fullscreen_ends_cleanly…`, `placement_after_fullscreen…`; T1 `unmap_remap_and_destruction…` |
+| 2. Output takeover begins at map, not at grant | the presentation view is used only while the element is mapped | T0 `a_fullscreen_request_before_the_first_map…`; T1 `a_client_that_asks_before_mapping…` |
+| 3. A remap is not a first map for focus eligibility | the pre-map grant needs "never mapped before" | T0, same test; seeded control |
+| 4. Fractional output dimensions use the established rounding | inward (R8): the configured size is the floor of the logical extent | T0 `the_presentation_view_is_f_present_1`; seeded control |
+| 5. Hidden camera movement is permitted | a camera drag on a fullscreen output moves the camera and not the picture; the client receives no pointer event during it; a pointer lock stays active; a popup grab is dismissed first, as for any drag | T0 `a_presentation_is_independent_of_the_camera`; T1 `a_hidden_camera_drag_respects…`, `a_popup_chain_on_a_fullscreen_window_is_dismissed_by_a_camera_drag` |
+| 6. Initial fullscreen does not consume default placement | a map in fullscreen leaves the anchor provisional and the opportunity open | T0 `a_window_that_starts_fullscreen_is_placed_at_its_first_windowed_size` |
+| 7. The first windowed presentation establishes the anchor | at the first windowed map, or at the first commit after fullscreen ended whose geometry differs from the one it had then | same; T1 `a_client_that_asks_before_mapping…` (pixels) |
+| 8. An existing windowed anchor is restored | fullscreen never writes an anchor, and a placed element is never placed again | T0 `placement_after_fullscreen_covers_every_exit…` |
+
+**Sealed wording affected by 6 and 7 (not changed; amendment prepared for the owner):**
+INV-STAGE-1 (C12.F1) says default placement is "resolved once, at the element's first map", and
+F-PLACE-1 names "the window-geometry size at the element's first map". Decisions 6 and 7 make
+that "first windowed presentation". The behaviour is on this experimental branch only.
+
+One judgement inside decision 7: "the first windowed size" is recognised as the first commit
+whose geometry differs from the fullscreen one. A client's frames still in flight at the
+fullscreen size therefore do not trigger placement; a client that never changes size is never
+placed and keeps its provisional anchor.
 
 ## Per capability
 
@@ -75,13 +88,41 @@ direct scanout, or any output-level optimisation. None is implemented or prejudg
 | Resize (`xdg_toplevel.resize`) | no answer required; starts an interactive resize | **not implemented: INC-14** | no capability bit | Core: `Ignored`, explicitly | none; no configure ever proposes a size | none | T0, T1 |
 | `activated` | set exactly while the element holds ActiveElementFocus | yes (INC-4) | — | focus transitions | one configure per transition | — | INC-4 tests; here: declined answers carry `activated` exactly when focused |
 
+## Slice 3: popup policy
+
+Sealed popup items of INC-7: "popup robustness (W-SM-6/7)"; OB-18 (its W-SM-7 half was met at
+INC-4, its W-SM-6 popup half was open); OB-1 (nested popup chains: order and positions against
+Smithay's render, hit-test against what is presented, 0 mismatches); exit test "nested popup
+chain parity". Popups stay what the sealed model makes them: surfaces of their toplevel's tree,
+never Stage elements.
+
+| Item | Before | Now | Test |
+|---|---|---|---|
+| OB-18, buffer in a popup's **initial** commit | **accepted**: the offending commit was answered with a configure | protocol error, client disconnected; the check runs before the configure is sent | T1 `a_buffer_in_a_popups_initial_commit_is_a_protocol_error` |
+| OB-18, buffer before the configure is acknowledged | protocol error (present since INC-4), untested | unchanged, tested | T1 `a_popup_buffer_before_the_configure_is_acknowledged…` |
+| The same inside a grabbing chain | untested | the chain's grabs go with the client; no element, focus or membership row is left | T1 `an_offending_nested_popup_takes_its_chain…` |
+| OB-1, nested chains | one level verified | three levels, a sibling popup and a subsurface in a popup: snapshot equals hand-derived truth; order equals Smithay's; hit-test equals what is presented on every pixel, at scale 1 and 1.25 | T1 `ob1_nested_popup_chain_matches_what_is_presented` |
+| Popups over a fullscreen window | — | survive the grant with their grab; presented with the window; constrained to the fullscreen output, including when another output's camera also shows the window; dismissed by a camera drag topmost first | T1 `a_popup_survives_the_grant…`, `a_popup_chain_on_a_fullscreen_window…`; T0 output-choice test |
+
+Found while testing, not changed (each needs an owner ruling or a quirk record):
+
+- **Smithay's error code.** For a buffer on an unconfigured surface Smithay 0.7.0 posts
+  `xdg_surface` error 1 (`not_constructed`, "Surface has not been configured yet"); xdg-shell
+  names error 3 (`unconfigured_buffer`) for it. The client is disconnected either way. The tests
+  accept both codes.
+- **A dead client's popup pointer grab is removed at the next pointer event, not at the client's
+  death.** The keyboard grab goes at once. Nothing is routed to the dead client meanwhile; the
+  test sends one motion and one click and then requires no grab.
+- **Sibling popups of one parent are stacked oldest in front.** That is Smithay's tree order and
+  the render list follows it (the parity test includes a sibling). Overlapping siblings are
+  unusual; a later popup drawn under an earlier one would look wrong.
+
 ## Deferred inside INC-7
 
-- **Popup robustness** (W-SM-6 popup part, OB-18) and **nested popup parity** (OB-1).
 - The T3/T5 part of OB-22 (games, video players, X11 through the satellite).
-- OB-32 is **not closed here**: its criterion is met on this branch by the T1 tests
-  (`tst22…`, `t1_fullscreen`), but the branch is experimental and unratified, and closing an
-  obligation is the owner's act.
+- OB-32, OB-18 and OB-1: their criteria are met on this branch by the tests named above. They
+  are **not closed here**: the branch is experimental and unratified, and closing an obligation
+  belongs to the increment's exit review.
 
 ## Found, not changed
 
@@ -95,10 +136,11 @@ direct scanout, or any output-level optimisation. None is implemented or prejudg
 
 ## Tests
 
-T0 (Core): the request table (8 requests × 4 lifecycle states); stale element; capabilities
-equal what the policy grants; grant, presentation and release with hand-derived values; pre-map;
-replacement and focus loss; unmap, destruction and output changes; output choice; F-PRESENT-1 on
-fractional outputs; independence from the camera.
-T1 (a real client over the protocol): `t1_toplevel_requests` (6) and `t1_fullscreen` (6, each
-checking the client's configures, its enter/leave log and the output's pixels).
-Seeded controls: 26.
+T0 (Core): the request table; stale element; capabilities equal what the policy grants; grant,
+presentation and release with hand-derived values; pre-map; replacement and focus loss; unmap,
+destruction and output changes; output choice and popup constraint with two outputs;
+F-PRESENT-1 on fractional outputs; independence from the camera; placement after fullscreen
+(two tests).
+T1 (a real client over the protocol): `t1_toplevel_requests` (6), `t1_fullscreen` (10, with the
+output's pixels), `t1_popup_policy` (3), `t1_parity::ob1_…` (1), `t1_protocol_bounds` (1).
+Seeded controls: 35.

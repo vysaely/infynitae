@@ -2411,6 +2411,15 @@ mod tests {
         assert_eq!(rects(&mut c, a), vec![(w, (760, 390, 1160, 690))]);
         // centred on B: (1280−400)/2 = 440, (720−300)/2 = 210
         assert_eq!(rects(&mut c, b), vec![(w, (440, 210, 840, 510))]);
+        // its popups are constrained to the fullscreen output B, whose origin is (440, 210) up
+        // and left of the window — not to A's camera view, which would be (−760, −390) 1920x1080
+        assert_eq!(
+            c.popup_constraint_target(w, Some(a)),
+            Some(LocalRect {
+                loc: LocalPoint { x: -440, y: -210 },
+                size: LocalSize { w: 1280, h: 720 },
+            })
+        );
         assert_eq!(
             c.cameras().center(1),
             Some(CanvasPos {

@@ -470,3 +470,162 @@ fn popup_is_configured_inside_the_output_target() {
     ls.pump();
     assert_eq!(ls.probe.surfaces[q].popup_configure.map(|c| c.0), Some(390));
 }
+
+/// OB-1 (multi-level popups), INC-7: a chain three popups deep, with a sibling popup on the root
+/// and a subsurface inside the middle popup. At scale 1 and at a fractional scale:
+///
+/// 1. the production snapshot equals the client's ground truth, hand-derived in root-surface
+///    coordinates. W has a 20 px shadow, so its geometry origin is (20, 20). A popup's geometry
+///    origin is its parent's geometry origin plus its anchor point (anchor top-left, gravity
+///    bottom-right), and its surface origin is that minus its own shadow:
+///    P1 (160x120, shadow 10) at (100, 50) of W: geometry (120, 70), surface (110, 60), 180x140;
+///    P2 (90x60, shadow 5) at (30, 20) of P1: geometry (150, 90), surface (145, 85), 100x70;
+///    P3 (50x40) at (40, 30) of P2: (190, 120);
+///    PS, a 20x20 subsurface of P2 at (5, 5): (150, 90);
+///    Q (60x50), a second popup of W at (300, 200): (320, 220).
+/// 2. the render list is, in order and position, what Smithay's own `Window::render_elements`
+///    produces: the deepest popup in front, a popup's subsurface above it, then the root tree;
+/// 3. on every pixel around the tree the hit-test returns the front-most presented surface.
+#[test]
+fn ob1_nested_popup_chain_matches_what_is_presented() {
+    for scale_120 in [120u32, 150] {
+        let k = scale_120 as f64 / 120.0;
+        let mut ls = Lockstep::new(Some(output((1920, 1080), scale_120)));
+        let qh = ls.qh.clone();
+        let w = ls.probe.toplevel(&qh, "W", (400, 300), 20);
+        ls.pump();
+        let spec = |content, shadow, at: (i32, i32)| common::PopupSpec {
+            content,
+            shadow,
+            anchor_rect: (at.0, at.1, 1, 1),
+            slide: false,
+        };
+        let p1 = ls
+            .probe
+            .popup(&qh, "P1", w, spec((160, 120), 10, (100, 50)));
+        ls.pump();
+        let p2 = ls.probe.popup(&qh, "P2", p1, spec((90, 60), 5, (30, 20)));
+        ls.pump();
+        ls.probe.popup(&qh, "P3", p2, spec((50, 40), 0, (40, 30)));
+        ls.pump();
+        ls.probe.subsurface(&qh, "PS", p2, (5, 5), (20, 20), false);
+        ls.pump();
+        ls.probe.popup(&qh, "Q", w, spec((60, 50), 0, (300, 200)));
+        ls.pump();
+
+        let id = element(&ls);
+        let o = ls.output();
+        let core = ls.state.core();
+        let anchor = core.stage().anchor(id).unwrap();
+        let tree = core.stage().tree(id).unwrap().clone();
+        let origins = tree.origins(anchor).unwrap();
+        let root = CanvasPoint {
+            x: anchor.x - 20,
+            y: anchor.y - 20,
+        };
+        let got: Vec<SurfaceTruth> = tree
+            .surfaces
+            .iter()
+            .zip(&origins)
+            .map(|(s, o)| {
+                (
+                    label_of(&ls, s.key),
+                    (o.x - root.x, o.y - root.y),
+                    (s.size.w, s.size.h),
+                )
+            })
+            .collect();
+        let truth = vec![
+            ("P3", (190, 120), (50, 40)),
+            ("PS", (150, 90), (20, 20)),
+            ("P2", (145, 85), (100, 70)),
+            ("P1", (110, 60), (180, 140)),
+            ("Q", (320, 220), (60, 50)),
+            ("W", (0, 0), (440, 340)),
+        ];
+        assert_eq!(
+            got, truth,
+            "scale {scale_120}: snapshot != client ground truth"
+        );
+
+        let mut renderer = DummyRenderer;
+        let frame = render_frame(&mut ls.state, &mut renderer, o).unwrap();
+        assert_eq!(
+            frame.len(),
+            6,
+            "scale {scale_120}: all six surfaces are presented"
+        );
+        for (entry, el) in &frame {
+            assert_eq!(
+                edges(entry),
+                presented(el, k),
+                "scale {scale_120}: core edges != presented for {}",
+                label_of(&ls, entry.surface)
+            );
+        }
+        // order against Smithay's own Window path (and positions too at scale 1, where its
+        // placement and the lattice coincide)
+        let view = ls.state.core().view(o).unwrap();
+        let window = ls.state.window(id).unwrap().clone();
+        let root_px =
+            Point::<i32, Physical>::from((view.edge_x(root.x) as i32, view.edge_y(root.y) as i32));
+        let smithay: Vec<WaylandSurfaceRenderElement<DummyRenderer>> =
+            window.render_elements(&mut renderer, root_px, Scale::from(k), 1.0);
+        let id_of = |e: &FrameEntry| {
+            Id::from_wayland_resource(ls.state.registry().surface(e.surface).unwrap())
+        };
+        let ours: Vec<Id> = frame.iter().map(|(e, _)| id_of(e)).collect();
+        let theirs: Vec<Id> = smithay.iter().map(|e| e.id().clone()).collect();
+        assert_eq!(
+            ours, theirs,
+            "scale {scale_120}: render order differs from Smithay's"
+        );
+        if scale_120 == 120 {
+            for ((e, _), s) in frame.iter().zip(&smithay) {
+                assert_eq!(edges(e), presented(s, 1.0), "{}", label_of(&ls, e.surface));
+            }
+        }
+
+        // hit-test against what is presented, on every pixel of the tree's bounding box + 3
+        let rects: Vec<_> = frame
+            .iter()
+            .map(|(e, el)| (e.surface, presented(el, k)))
+            .collect();
+        let (x0, y0, x1, y1) =
+            rects
+                .iter()
+                .fold((i64::MAX, i64::MAX, i64::MIN, i64::MIN), |a, (_, r)| {
+                    (
+                        a.0.min(r.0 - 3),
+                        a.1.min(r.1 - 3),
+                        a.2.max(r.2 + 3),
+                        a.3.max(r.3 + 3),
+                    )
+                });
+        let (mut checked, mut on_popups) = (0, 0);
+        for j in y0..y1 {
+            for i in x0..x1 {
+                let p = OutputLogicalPoint {
+                    x: (i as f64 + 0.5) / k,
+                    y: (j as f64 + 0.5) / k,
+                };
+                let want = rects
+                    .iter()
+                    .find(|(_, (a, b, c, d))| i >= *a && i < *c && j >= *b && j < *d)
+                    .map(|(s, _)| *s);
+                let got = ls.state.core_mut().hit_test(o, p).map(|h| h.surface);
+                assert_eq!(
+                    got.map(|s| label_of(&ls, s)),
+                    want.map(|s| label_of(&ls, s)),
+                    "scale {scale_120}: pixel ({i},{j})"
+                );
+                checked += 1;
+                on_popups += usize::from(want.is_some_and(|s| label_of(&ls, s) != "W"));
+            }
+        }
+        assert!(
+            checked > 100_000 && on_popups > 20_000,
+            "{checked} / {on_popups}"
+        );
+    }
+}

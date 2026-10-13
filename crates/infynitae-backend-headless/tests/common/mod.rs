@@ -287,6 +287,20 @@ impl Probe {
         parent: usize,
         spec: PopupSpec,
     ) -> usize {
+        let idx = self.popup_uncommitted(qh, label, parent, spec);
+        self.surfaces[idx].wl.commit();
+        idx
+    }
+
+    /// A popup role object whose initial commit has not been made: what a client that
+    /// misbehaves (a buffer in the initial commit, W-SM-6) starts from.
+    pub fn popup_uncommitted(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        label: &'static str,
+        parent: usize,
+        spec: PopupSpec,
+    ) -> usize {
         let PopupSpec {
             content,
             shadow,
@@ -318,7 +332,6 @@ impl Probe {
             xdg.set_window_geometry(shadow, shadow, content.0, content.1);
         }
         self.surfaces[idx].popup = Some(popup);
-        self.surfaces[idx].wl.commit();
         idx
     }
 

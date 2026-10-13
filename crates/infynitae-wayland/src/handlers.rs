@@ -239,13 +239,16 @@ impl CompositorHandler for WaylandState {
                         .is_some()
                 })
         });
-        // M3: a popup's initial configure on its initial commit; W-SM-6: a buffer before the
-        // popup acked a configure is a protocol error
+        // W-SM-6 / OB-18: a buffer on a popup that has not acknowledged a configure is a protocol
+        // error, and that includes a buffer in its very first commit, before any configure was
+        // sent. Checked first, so that an offending initial commit is not answered with a
+        // configure as if it were a valid one. M3: a valid initial commit gets its configure.
         if let Some(PopupKind::Xdg(p)) = self.popups.find_popup(surface) {
+            if has_buffer && !p.ensure_configured() {
+                return;
+            }
             if !p.is_initial_configure_sent() {
                 let _ = p.send_configure();
-            } else if has_buffer && !p.ensure_configured() {
-                return;
             }
         }
         // W-SM-6: a buffer on a toplevel that has not acked a configure is a protocol error

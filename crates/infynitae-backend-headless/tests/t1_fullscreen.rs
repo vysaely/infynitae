@@ -584,3 +584,218 @@ fn the_client_can_name_the_output() {
     );
     assert!(t.ls.state.core().fullscreen().is_empty());
 }
+
+const GREEN: u32 = 0xFF00_FF00;
+
+impl T {
+    /// Moves the pointer by `d` (output-logical px).
+    fn move_by(&mut self, d: (f64, f64)) {
+        static T_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(50_000);
+        let t = T_US.fetch_add(1000, std::sync::atomic::Ordering::Relaxed);
+        infynitae_backend_headless::pointer_motion(&mut self.ls.state, &mut self.ls.input, d, d, t)
+            .expect("motion");
+        self.adv();
+    }
+
+    /// A left click where the pointer is; returns the press serial the client received.
+    fn click(&mut self) -> u32 {
+        static T_US: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(900_000);
+        for pressed in [true, false] {
+            let t = T_US.fetch_add(1000, std::sync::atomic::Ordering::Relaxed);
+            infynitae_backend_headless::pointer_button(
+                &mut self.ls.state,
+                &mut self.ls.input,
+                0x110,
+                pressed,
+                infynitae_core::input::bindings::Modifiers::default(),
+                t,
+            )
+            .expect("button");
+            self.adv();
+        }
+        self.ls.probe.last_serial
+    }
+
+    fn pixel(&mut self, x: i32, y: i32) -> u32 {
+        self.frame()[(y * SIZE.0 + x) as usize]
+    }
+}
+
+/// A grabbing popup opened before the window goes fullscreen survives the grant with its grab,
+/// and is presented with the window: at its place in the window's geometry, which the output's
+/// origin now is. The pointer reaches it through the presentation view. A further popup near the
+/// output's edge is constrained to the fullscreen output (C5.2). Leaving fullscreen keeps the
+/// popup and its grab too.
+#[test]
+fn a_popup_survives_the_grant_and_is_presented_with_its_fullscreen_window() {
+    let mut t = T::new();
+    let (w, id) = t.map("W", (200, 100), RED);
+    t.map("O", (120, 80), BLUE);
+    t.focus(id);
+    t.move_by((-95.0, -45.0)); // (225, 195): W-local (5, 5), outside the other window
+    let serial = t.click();
+    let qh = t.ls.qh.clone();
+    let spec = |content, at: (i32, i32), slide| common::PopupSpec {
+        content,
+        shadow: 0,
+        anchor_rect: (at.0, at.1, 1, 1),
+        slide,
+    };
+    let p =
+        t.ls.probe
+            .popup_with_grab_serial(&qh, "P", w, spec((60, 40), (20, 20), false), serial);
+    t.adv();
+    t.paint(p, GREEN);
+    assert!(t.ls.state.keyboard_is_grabbed(), "the popup holds no grab");
+    // windowed: the popup is at W's origin (220, 190) + (20, 20)
+    assert_eq!(t.pixel(245, 215), GREEN);
+
+    let got = t.ask(w, |tl| tl.set_fullscreen(None));
+    assert_eq!(got, vec![((640, 480), vec![FULLSCREEN, ACTIVATED])]);
+    t.resize(w, (640, 480), RED);
+    assert!(
+        t.ls.probe.popup_dones.is_empty(),
+        "the grant dismissed the popup"
+    );
+    assert!(
+        t.ls.state.keyboard_is_grabbed(),
+        "the grant ended the popup's grab"
+    );
+    assert_layers(
+        &t.frame(),
+        &[((20, 20, 80, 60), GREEN), ((0, 0, 640, 480), RED)],
+        "the popup, presented with its fullscreen window",
+    );
+    // the pointer is at (225, 195); (−195, −165) puts it at (30, 30), popup-local (10, 10)
+    let events = t.ls.probe.ptr.len();
+    t.move_by((-195.0, -165.0));
+    assert!(
+        t.ls.probe.ptr[events..]
+            .iter()
+            .any(|l| l == "enter P 10,10"),
+        "the pointer did not reach the popup: {:?}",
+        &t.ls.probe.ptr[events..]
+    );
+
+    // a popup that would leave the output is slid back inside it: 600 + 100 > 640, 450 + 60 > 480
+    let q =
+        t.ls.probe
+            .popup(&qh, "Q", w, spec((100, 60), (600, 450), true));
+    t.adv();
+    assert_eq!(
+        t.ls.probe.surfaces[q].popup_configure,
+        Some((540, 420, 100, 60)),
+        "constrained to the fullscreen output"
+    );
+
+    let got = t.ask(w, |tl| tl.unset_fullscreen());
+    assert_eq!(got, vec![((200, 100), vec![ACTIVATED])]);
+    t.resize(w, (200, 100), RED);
+    assert!(
+        t.ls.probe.popup_dones.is_empty(),
+        "leaving fullscreen dismissed the popup"
+    );
+    assert!(t.ls.state.keyboard_is_grabbed());
+    assert_eq!(
+        t.pixel(245, 215),
+        GREEN,
+        "the popup is back at its place in the window"
+    );
+}
+
+/// A grabbing popup opened on a fullscreen window obeys the compositor's dismissal rule: a
+/// camera drag acquired on that output dismisses it first (INV-INPUT-2), topmost first, and no
+/// grab is left. The client destroys what was dismissed and the output shows the window alone.
+#[test]
+fn a_popup_chain_on_a_fullscreen_window_is_dismissed_by_a_camera_drag() {
+    use infynitae_backend_headless::{keyboard_key, pointer_button};
+    use infynitae_core::input::bindings::Modifiers;
+    use infynitae_core::input::keys::KEY_LEFTMETA;
+    let mut t = T::new();
+    t.ls.probe.auto_destroy_popups = true;
+    let (w, id) = t.map("W", (200, 100), RED);
+    t.focus(id);
+    t.ask(w, |tl| tl.set_fullscreen(None));
+    t.resize(w, (640, 480), RED);
+    t.move_by((1.0, 1.0));
+    let serial = t.click();
+    let qh = t.ls.qh.clone();
+    let spec = |at: (i32, i32)| common::PopupSpec {
+        content: (60, 40),
+        shadow: 0,
+        anchor_rect: (at.0, at.1, 1, 1),
+        slide: false,
+    };
+    let p1 =
+        t.ls.probe
+            .popup_with_grab_serial(&qh, "P1", w, spec((100, 100)), serial);
+    t.adv();
+    t.paint(p1, GREEN);
+    // a second level, grabbed with a later event inside the first: a key press
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, 30, true, 2_000_000).unwrap();
+    t.adv();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, 30, false, 2_001_000).unwrap();
+    t.adv();
+    let s2 = t.ls.probe.last_serial;
+    let p2 =
+        t.ls.probe
+            .popup_with_grab_serial(&qh, "P2", p1, spec((20, 20)), s2);
+    t.adv();
+    t.paint(p2, BLUE);
+    assert!(t.ls.state.keyboard_is_grabbed() && t.ls.state.is_pointer_grabbed());
+    assert_layers(
+        &t.frame(),
+        &[
+            ((120, 120, 180, 160), BLUE),
+            ((100, 100, 160, 140), GREEN),
+            ((0, 0, 640, 480), RED),
+        ],
+        "a chain two deep over the fullscreen window",
+    );
+
+    keyboard_key(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        KEY_LEFTMETA,
+        true,
+        3_000_000,
+    )
+    .unwrap();
+    pointer_button(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        0x112,
+        true,
+        Modifiers::default(),
+        3_001_000,
+    )
+    .unwrap();
+    t.adv();
+    assert_eq!(t.ls.probe.popup_dones, vec!["P2", "P1"], "topmost first");
+    pointer_button(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        0x112,
+        false,
+        Modifiers::default(),
+        3_002_000,
+    )
+    .unwrap();
+    keyboard_key(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        KEY_LEFTMETA,
+        false,
+        3_003_000,
+    )
+    .unwrap();
+    t.adv();
+    assert!(!t.ls.state.keyboard_is_grabbed() && !t.ls.state.is_pointer_grabbed());
+    assert_layers(&t.frame(), &[((0, 0, 640, 480), RED)], "the window alone");
+    assert_eq!(t.ls.state.core().presentation(t.ls.output()), Some(id));
+    assert_eq!(
+        t.ls.probe.kb.active.as_deref(),
+        Some("W"),
+        "keyboard back on the window"
+    );
+}
