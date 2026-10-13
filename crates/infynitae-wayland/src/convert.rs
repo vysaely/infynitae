@@ -41,6 +41,27 @@ pub(crate) fn parent_geometry_rect(r: LocalRect) -> Rectangle<i32, Logical> {
 /// A point in Smithay's global pointer space, which is Canvas (D-B2-PTR-SPACE, INV-COORD-5).
 pub type GlobalPoint = Point<f64, Logical>;
 
+/// Where a client asks for its window menu (`xdg_toplevel.show_window_menu`), in the toplevel's
+/// window geometry. Named here so that no handler names a Smithay geometry type (INV-COORD-4);
+/// the request is ignored and the value never read.
+pub type WindowMenuLocation = Point<i32, Logical>;
+
+/// Core's toplevel capabilities as the `xdg_toplevel.wm_capabilities` set Smithay announces.
+pub fn wm_capabilities(
+    c: infynitae_core::protocol::ToplevelCapabilities,
+) -> Vec<smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::WmCapabilities> {
+    use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel::WmCapabilities as W;
+    [
+        (c.window_menu, W::WindowMenu),
+        (c.maximize, W::Maximize),
+        (c.fullscreen, W::Fullscreen),
+        (c.minimize, W::Minimize),
+    ]
+    .into_iter()
+    .filter_map(|(on, cap)| on.then_some(cap))
+    .collect()
+}
+
 /// Canvas Q16 → Smithay global (B2.7 `canvas_to_smithay_global`): exact, |x| ≤ 2⁵² units.
 pub fn canvas_to_global(q: CanvasPos) -> GlobalPoint {
     let px = |v: i64| v as f64 / Q16_ONE as f64;

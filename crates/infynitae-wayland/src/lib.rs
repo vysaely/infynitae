@@ -139,6 +139,7 @@ impl WaylandState {
         seat.add_pointer();
         seat.add_keyboard(Default::default(), 200, 25)
             .expect("the seat has a keyboard");
+        let capabilities = convert::wm_capabilities(core.toplevel_capabilities());
         WaylandState {
             core,
             dh: display.clone(),
@@ -146,7 +147,8 @@ impl WaylandState {
             output_manager: OutputManagerState::new_with_xdg_output::<Self>(display),
             presentation: PresentationState::new::<Self>(display, CLOCK_MONOTONIC),
             outputs: Vec::new(),
-            xdg_shell: XdgShellState::new::<Self>(display),
+            // only what Core's toplevel-request policy can grant is announced (M2)
+            xdg_shell: XdgShellState::new_with_capabilities::<Self>(display, capabilities),
             shm: ShmState::new::<Self>(display, []),
             popups: PopupManager::default(),
             seats,

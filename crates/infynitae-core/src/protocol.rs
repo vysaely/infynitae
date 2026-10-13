@@ -121,7 +121,110 @@ pub enum PlacementPolicy {
     CentredInView,
 }
 
+/// A request a client makes on its `xdg_toplevel` (M2). The adapter forwards every one of them
+/// and answers none by itself; what is answered, and with what, is decided here (INV-PROTO-1,
+/// INV-PRES-1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToplevelRequest {
+    SetMaximized,
+    UnsetMaximized,
+    SetFullscreen,
+    UnsetFullscreen,
+    SetMinimized,
+    /// `xdg_toplevel.move`: an interactive move. Owned by INC-14.
+    Move,
+    /// `xdg_toplevel.resize`: an interactive resize. Owned by INC-14.
+    Resize,
+    ShowWindowMenu,
+}
+
+impl ToplevelRequest {
+    pub const ALL: [ToplevelRequest; 8] = [
+        ToplevelRequest::SetMaximized,
+        ToplevelRequest::UnsetMaximized,
+        ToplevelRequest::SetFullscreen,
+        ToplevelRequest::UnsetFullscreen,
+        ToplevelRequest::SetMinimized,
+        ToplevelRequest::Move,
+        ToplevelRequest::Resize,
+        ToplevelRequest::ShowWindowMenu,
+    ];
+}
+
+/// What Core does with a [`ToplevelRequest`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToplevelDecision {
+    /// Answered with exactly one configure that does not grant the state asked for. Nothing is
+    /// stored, and no anchor, camera, focus or lifecycle state changes.
+    Declined,
+    /// Not answered: the protocol requires no answer to this request, or the toplevel has no
+    /// configure sequence to answer in (before its initial configure, or unmapped). Nothing is
+    /// stored and nothing changes.
+    Ignored,
+}
+
+/// What a toplevel is told the compositor can do (`xdg_toplevel.wm_capabilities`). A capability
+/// is set only if [`Core::toplevel_request`] can grant the corresponding request, so that a
+/// client is not shown a control that does nothing.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ToplevelCapabilities {
+    pub window_menu: bool,
+    pub maximize: bool,
+    pub fullscreen: bool,
+    pub minimize: bool,
+}
+
 impl Core {
+    /// The toplevel-request policy (M2), in one place.
+    ///
+    /// - `set_maximized` / `unset_maximized`: declined; `maximized` is never granted
+    ///   (INV-PROTO-1).
+    /// - `set_fullscreen` / `unset_fullscreen`: declined. INV-PRES-1 grants fullscreen to the
+    ///   focused element and before the first map; that needs the output presentation (M9,
+    ///   F-PRESENT-1), which does not exist yet. Until it does, every request is still answered
+    ///   with exactly one configure, as INV-PRES-1 requires of a declined one.
+    /// - `set_minimized`: ignored (INV-PROTO-1).
+    /// - `move`, `resize`: ignored; interactive move and resize are INC-14.
+    /// - `show_window_menu`: ignored; there is no window menu.
+    ///
+    /// A request that arrives where no configure can answer it — before the initial configure
+    /// (INV-PROTO-1: "recorded and ignored") or while unmapped — is ignored.
+    pub fn toplevel_policy(request: ToplevelRequest, state: Lifecycle) -> ToplevelDecision {
+        use ToplevelRequest::*;
+        let answerable = matches!(state, Lifecycle::AwaitingFirstBuffer | Lifecycle::Mapped);
+        match request {
+            SetMaximized | UnsetMaximized | SetFullscreen | UnsetFullscreen if answerable => {
+                ToplevelDecision::Declined
+            }
+            SetMaximized | UnsetMaximized | SetFullscreen | UnsetFullscreen => {
+                ToplevelDecision::Ignored
+            }
+            SetMinimized | Move | Resize | ShowWindowMenu => ToplevelDecision::Ignored,
+        }
+    }
+
+    /// The capabilities to advertise: those the policy can grant. None today.
+    pub fn toplevel_capabilities(&self) -> ToplevelCapabilities {
+        ToplevelCapabilities::default()
+    }
+
+    /// M2: a client's `xdg_toplevel` request. Returns the decision and its effects: one
+    /// [`Effect::ToplevelConfigure`] for a declined request, none for an ignored one. It writes
+    /// nothing: no Stage, camera, focus or lifecycle state depends on a client's request here.
+    pub fn toplevel_request(
+        &mut self,
+        id: ElementId,
+        request: ToplevelRequest,
+    ) -> Result<(ToplevelDecision, Vec<Effect>), ProtocolError> {
+        let state = self.stage.state(id).ok_or(ProtocolError::StaleElement)?;
+        let decision = Self::toplevel_policy(request, state);
+        let effects = match decision {
+            ToplevelDecision::Declined => vec![Effect::ToplevelConfigure(id)],
+            ToplevelDecision::Ignored => Vec::new(),
+        };
+        Ok((decision, effects))
+    }
+
     /// M1 `new_toplevel`: mints an `ElementId`; no anchor yet.
     pub fn toplevel_created(&mut self) -> ElementId {
         self.stage.create()
@@ -1020,6 +1123,131 @@ mod tests {
         let t_unobserved = core.popup_constraint_target(id, Some(o3)).unwrap();
         assert_eq!(t_unobserved.size, LocalSize { w: 800, h: 600 });
     }
+    // ------------------------------------------------------------ toplevel requests (M2)
+
+    /// Everything a client's request could be tempted to change.
+    fn authority_state(c: &Core, id: ElementId) -> String {
+        format!(
+            "{:?}",
+            (
+                c.stage().state(id),
+                c.stage().anchor(id),
+                c.stage().z_order(),
+                c.stage().tree(id),
+                c.cameras().center(0),
+                c.cameras().zoom(0),
+                c.focus().target(),
+                c.membership().observers(id),
+            )
+        )
+    }
+
+    /// M2 as a table: for every request in every lifecycle state, the decision, the effects
+    /// (exactly one configure for a declined request, nothing for an ignored one) and no change
+    /// to Stage, camera, focus or membership.
+    #[test]
+    fn toplevel_requests_are_answered_by_policy_and_change_nothing() {
+        use ToplevelDecision::{Declined, Ignored};
+        use ToplevelRequest::*;
+        let answered = [SetMaximized, UnsetMaximized, SetFullscreen, UnsetFullscreen];
+        // (state reached, whether a configure sequence exists to answer in)
+        let reach: [(Lifecycle, bool); 4] = [
+            (Lifecycle::AwaitingInitialCommit, false),
+            (Lifecycle::AwaitingFirstBuffer, true),
+            (Lifecycle::Mapped, true),
+            (Lifecycle::Unmapped, false),
+        ];
+        for (state, answerable) in reach {
+            let mut c = connected(120);
+            let id = c.toplevel_created();
+            if state != Lifecycle::AwaitingInitialCommit {
+                c.toplevel_committed(id, tree(false)).unwrap();
+            }
+            if matches!(state, Lifecycle::Mapped | Lifecycle::Unmapped) {
+                c.toplevel_committed(id, tree(true)).unwrap();
+            }
+            if state == Lifecycle::Unmapped {
+                c.toplevel_committed(id, tree(false)).unwrap();
+            }
+            assert_eq!(c.stage().state(id), Some(state));
+            for request in ToplevelRequest::ALL {
+                let before = authority_state(&c, id);
+                let want = if answerable && answered.contains(&request) {
+                    Declined
+                } else {
+                    Ignored
+                };
+                let (decision, fx) = c.toplevel_request(id, request).unwrap();
+                assert_eq!(decision, want, "{request:?} in {state:?}");
+                assert_eq!(
+                    fx,
+                    match want {
+                        Declined => vec![Effect::ToplevelConfigure(id)],
+                        Ignored => vec![],
+                    },
+                    "{request:?} in {state:?}"
+                );
+                assert_eq!(
+                    authority_state(&c, id),
+                    before,
+                    "{request:?} in {state:?} changed authoritative state"
+                );
+                // repeating it gives the same answer: nothing was recorded
+                assert_eq!(c.toplevel_request(id, request).unwrap().0, want);
+            }
+        }
+    }
+
+    /// A request on a destroyed element is stale, whatever it asks.
+    #[test]
+    fn a_toplevel_request_on_a_destroyed_element_is_stale() {
+        let mut c = connected(120);
+        let id = c.toplevel_created();
+        c.toplevel_committed(id, tree(false)).unwrap();
+        c.toplevel_committed(id, tree(true)).unwrap();
+        c.toplevel_destroyed(id);
+        for request in ToplevelRequest::ALL {
+            assert_eq!(
+                c.toplevel_request(id, request),
+                Err(ProtocolError::StaleElement)
+            );
+        }
+    }
+
+    /// The advertised capabilities are what the policy can grant: a capability is announced only
+    /// if some reachable state grants the request it stands for. The policy grants nothing yet,
+    /// so nothing is announced. This test fails if a capability is switched on without a grant,
+    /// or a grant added without the capability.
+    #[test]
+    fn advertised_capabilities_are_exactly_what_the_policy_grants() {
+        use ToplevelRequest::*;
+        let states = [
+            Lifecycle::AwaitingInitialCommit,
+            Lifecycle::AwaitingFirstBuffer,
+            Lifecycle::Mapped,
+            Lifecycle::Unmapped,
+        ];
+        // a decision other than Declined or Ignored is a grant
+        let grants = |request: ToplevelRequest| {
+            states.iter().any(|s| {
+                !matches!(
+                    Core::toplevel_policy(request, *s),
+                    ToplevelDecision::Declined | ToplevelDecision::Ignored
+                )
+            })
+        };
+        let caps = connected(120).toplevel_capabilities();
+        assert_eq!(caps.maximize, grants(SetMaximized));
+        assert_eq!(caps.fullscreen, grants(SetFullscreen));
+        assert_eq!(caps.minimize, grants(SetMinimized));
+        assert_eq!(caps.window_menu, grants(ShowWindowMenu));
+        assert_eq!(
+            caps,
+            ToplevelCapabilities::default(),
+            "nothing is granted yet"
+        );
+    }
+
     // ------------------------------------------------------------ placement at first map
 
     fn sized(w: i32, h: i32, mapped: bool) -> SurfaceTree {

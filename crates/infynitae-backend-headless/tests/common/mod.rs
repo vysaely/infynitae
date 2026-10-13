@@ -148,6 +148,12 @@ pub struct Probe {
     pub popup_dones: Vec<&'static str>,
     pub last_serial: u32,
     pub toplevel_states: Vec<(usize, Vec<u32>)>,
+    /// Every `xdg_toplevel.configure` as received: (surface, (width, height), states).
+    pub toplevel_configures: Vec<(usize, (i32, i32), Vec<u32>)>,
+    /// Every `xdg_toplevel.wm_capabilities` as received: (surface, capabilities).
+    pub wm_capabilities: Vec<(usize, Vec<u32>)>,
+    /// Every `xdg_toplevel.configure_bounds` as received.
+    pub configure_bounds: Vec<(usize, (i32, i32))>,
 }
 
 /// Unique shm file names across the tests of this process.
@@ -858,19 +864,37 @@ impl Dispatch<XdgToplevel, usize> for Probe {
         _: &Connection,
         _: &QueueHandle<Self>,
     ) {
-        if let xdg_toplevel::Event::Configure { states, .. } = ev {
-            let label = st.surfaces[*idx].label;
-            let raw_states: Vec<u32> = states
+        let words = |bytes: &[u8]| -> Vec<u32> {
+            bytes
                 .as_chunks::<4>()
                 .0
                 .iter()
                 .map(|c| u32::from_ne_bytes(*c))
-                .collect();
-            let is_activated = raw_states.contains(&4);
-            st.toplevel_states.push((*idx, raw_states));
-            st.kb_log.push(format!(
-                "toplevel_configure {label} activated={is_activated}"
-            ));
+                .collect()
+        };
+        match ev {
+            xdg_toplevel::Event::Configure {
+                width,
+                height,
+                states,
+            } => {
+                let label = st.surfaces[*idx].label;
+                let raw_states = words(&states);
+                let is_activated = raw_states.contains(&4);
+                st.toplevel_configures
+                    .push((*idx, (width, height), raw_states.clone()));
+                st.toplevel_states.push((*idx, raw_states));
+                st.kb_log.push(format!(
+                    "toplevel_configure {label} activated={is_activated}"
+                ));
+            }
+            xdg_toplevel::Event::WmCapabilities { capabilities } => {
+                st.wm_capabilities.push((*idx, words(&capabilities)));
+            }
+            xdg_toplevel::Event::ConfigureBounds { width, height } => {
+                st.configure_bounds.push((*idx, (width, height)));
+            }
+            _ => {}
         }
     }
 }

@@ -1,13 +1,16 @@
 //! Smithay handler implementations: protocol events become Core calls, Core's effects become
 //! protocol actions. Handlers never decide placement, order or camera state.
 
+use infynitae_core::protocol::ToplevelRequest;
 use smithay::backend::renderer::utils::{RendererSurfaceStateUserData, on_commit_buffer_handler};
 use smithay::desktop::{
     PopupKeyboardGrab, PopupKind, PopupManager, PopupUngrabStrategy, Window,
     find_popup_root_surface,
 };
 use smithay::input::{SeatHandler, SeatState};
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::Client;
+use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::{wl_buffer, wl_seat, wl_surface::WlSurface};
 use smithay::utils::{SERIAL_COUNTER, Serial};
 use smithay::wayland::buffer::BufferHandler;
@@ -29,6 +32,17 @@ use smithay::{
 use crate::{ClientState, ElementHandle, WaylandState, convert, snapshot};
 
 impl WaylandState {
+    /// Hands a client's xdg_toplevel request to Core and applies what Core decided. A request on
+    /// a toplevel that is not an element is dropped.
+    fn toplevel_request(&mut self, surface: &ToplevelSurface, request: ToplevelRequest) {
+        let Some(i) = self.element_index_by_root(surface.wl_surface()) else {
+            return;
+        };
+        if let Ok((_, effects)) = self.core.toplevel_request(self.elements[i].id, request) {
+            self.apply(&effects);
+        }
+    }
+
     fn element_index_by_root(&self, root: &WlSurface) -> Option<usize> {
         self.elements
             .iter()
@@ -303,6 +317,54 @@ impl XdgShellHandler for WaylandState {
             let effects = self.core.toplevel_destroyed(id);
             self.apply(&effects);
         }
+    }
+
+    // M2 (INV-PROTO-1, INV-PRES-1): every xdg_toplevel request is Core's to decide. Each handler
+    // below overrides Smithay's default, two of which answer by themselves (W-SM-13: the default
+    // maximize and fullscreen handlers send a configure, even before the initial one).
+
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        self.toplevel_request(&surface, ToplevelRequest::SetMaximized);
+    }
+
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        self.toplevel_request(&surface, ToplevelRequest::UnsetMaximized);
+    }
+
+    fn fullscreen_request(&mut self, surface: ToplevelSurface, _output: Option<WlOutput>) {
+        self.toplevel_request(&surface, ToplevelRequest::SetFullscreen);
+    }
+
+    fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        self.toplevel_request(&surface, ToplevelRequest::UnsetFullscreen);
+    }
+
+    fn minimize_request(&mut self, surface: ToplevelSurface) {
+        self.toplevel_request(&surface, ToplevelRequest::SetMinimized);
+    }
+
+    fn move_request(&mut self, surface: ToplevelSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
+        self.toplevel_request(&surface, ToplevelRequest::Move);
+    }
+
+    fn resize_request(
+        &mut self,
+        surface: ToplevelSurface,
+        _seat: wl_seat::WlSeat,
+        _serial: Serial,
+        _edges: xdg_toplevel::ResizeEdge,
+    ) {
+        self.toplevel_request(&surface, ToplevelRequest::Resize);
+    }
+
+    fn show_window_menu(
+        &mut self,
+        surface: ToplevelSurface,
+        _seat: wl_seat::WlSeat,
+        _serial: Serial,
+        _location: convert::WindowMenuLocation,
+    ) {
+        self.toplevel_request(&surface, ToplevelRequest::ShowWindowMenu);
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
