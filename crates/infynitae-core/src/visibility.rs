@@ -374,6 +374,55 @@ mod tests {
         assert!(c.frame_tick(a).is_empty());
     }
 
+    /// The pass that ends `toplevel_destroyed` evaluates the scale policy of every mapped
+    /// element (INV-SCALE-5: once per core batch), so it may return a `PreferredScale` for an
+    /// element other than the destroyed one. What a destroy never produces is an enter or a
+    /// leave (INV-STAGE-4).
+    ///
+    /// The six calls: Y is mapped on a 2.0x output (hint 240/120); it grows to the device bound
+    /// (P7 lowers the hint to 120/120, direction down); it shrinks again, and SC-E holds the
+    /// client-caused increase; then an element that was never mapped is created and destroyed.
+    /// That destroy is not a client response, so Y's held increase is applied in its pass.
+    #[test]
+    fn destroying_an_element_may_change_the_scale_hint_of_another() {
+        let wide = |w: i32, mapped: bool| SurfaceTree {
+            surfaces: vec![SnapshotSurface {
+                size: if mapped {
+                    LocalSize { w, h: 300 }
+                } else {
+                    LocalSize::default()
+                },
+                ..tree(mapped).surfaces.remove(0)
+            }],
+            ..tree(mapped)
+        };
+        let (mut c, _, _, mut t) = Core::new(persisted(false));
+        let d = OutputDescriptor {
+            scale_120: 240,
+            ..desc("A", 60_000)
+        };
+        c.output_connected(&mut t, d).unwrap();
+        let y = c.toplevel_created();
+        c.toplevel_committed(y, wide(400, false)).unwrap();
+        c.toplevel_committed(y, wide(400, true)).unwrap();
+        assert_eq!(c.preferred_scale_of(y), Some((240, 2)));
+        c.toplevel_committed(y, wide(16384, true)).unwrap();
+        assert_eq!(c.preferred_scale_of(y), Some((120, 1)), "P7 at the bound");
+        let fx = c.toplevel_committed(y, wide(400, true)).unwrap();
+        assert!(fx.is_empty(), "SC-E holds a client-caused increase: {fx:?}");
+        assert_eq!(c.preferred_scale_of(y), Some((120, 1)));
+        let x = c.toplevel_created();
+        let fx = c.toplevel_destroyed(x);
+        assert_eq!(
+            fx,
+            vec![Effect::PreferredScale {
+                element: y,
+                scale_120: 240,
+                integer_scale: 2,
+            }]
+        );
+    }
+
     // ------------------------------------------------------------ differential tests
 
     use crate::input::bindings::Modifiers;
