@@ -643,6 +643,8 @@ def check_popup_negative_controls(r):
 # ------------------------------------------------------------------ [6] seeded negative controls
 
 COPY_ITEMS = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "crates", "enforcement", "vendor", "patches"]
+# copied when present: the unsafe inventory is an input of the source rules (C9)
+OPTIONAL_COPY_ITEMS = ["docs/foundation/UNSAFE_INVENTORY.md"]
 
 
 def tree_digest():
@@ -667,7 +669,26 @@ def fresh_copy():
             shutil.copytree(src, dst)
         else:
             shutil.copy2(src, dst)
+    for item in OPTIONAL_COPY_ITEMS:
+        src = os.path.join(ROOT, item)
+        if os.path.isfile(src):
+            os.makedirs(os.path.dirname(os.path.join(tmp, item)), exist_ok=True)
+            shutil.copy2(src, os.path.join(tmp, item))
     return tmp
+
+
+def edit_or_create(root, rel, fn):
+    p = os.path.join(root, rel)
+    text = ""
+    if os.path.isfile(p):
+        with open(p) as f:
+            text = f.read()
+    new = fn(text)
+    if new == text:
+        raise RuntimeError(f"seed did not change {rel}")
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as f:
+        f.write(new)
 
 
 def edit(root, rel, fn):
@@ -797,6 +818,80 @@ SOURCE_SEEDS = [
 ]
 
 
+# ---- unsafe inventory (C9): every site matches exactly one entry of docs/foundation/UNSAFE_INVENTORY.md
+INVENTORY = "docs/foundation/UNSAFE_INVENTORY.md"
+T1_SLICE = "crates/infynitae-backend-headless/tests/t1_slice.rs"
+WINIT_LIB = "crates/infynitae-backend-winit/src/lib.rs"
+
+
+def inventory_row(uid, rel, item, sites="1", cls="test"):
+    return (f"| {uid} | `{rel}` | `{item}` | {sites} | {cls} | seeded control | none | none | none | none |\n")
+
+
+def inventory(*rows):
+    """The canonical inventory (if any) with the seeded rows appended."""
+    return lambda t: (t or "# Unsafe inventory (seeded control)\n\n") + "".join(rows)
+
+
+LISTED_SITE = append("\nfn listed() {\n    unsafe {}\n}\n")
+LISTED_ROW = inventory_row("U-900", T1_SLICE, "listed")
+
+# (description, expected verdict of rule unsafe-policy, [(file, edit)]); a missing file is created.
+INVENTORY_SEEDS = [
+    ("a test site with a matching entry is accepted (positive control)", "ok",
+     [(T1_SLICE, LISTED_SITE), (INVENTORY, inventory(LISTED_ROW))]),
+    ("an inventory file without entries authorises nothing", "FAIL",
+     [(T1_SLICE, LISTED_SITE), (INVENTORY, lambda _: "# Unsafe inventory\n\nAll unsafe code is reviewed.\n")]),
+    ("unlisted unsafe in the adapter beside a valid inventory", "FAIL",
+     [(T1_SLICE, LISTED_SITE), (INVENTORY, inventory(LISTED_ROW)),
+      (WAYLAND_LIB, append("\npub fn rogue() {\n    unsafe {}\n}\n"))]),
+    ("unlisted unsafe in the nested backend beside a valid inventory", "FAIL",
+     [(T1_SLICE, LISTED_SITE), (INVENTORY, inventory(LISTED_ROW)),
+      (WINIT_LIB, append("\npub fn rogue() {\n    unsafe {}\n}\n"))]),
+    ("unlisted unsafe in the headless backend beside a valid inventory", "FAIL",
+     [(T1_SLICE, LISTED_SITE), (INVENTORY, inventory(LISTED_ROW)),
+      (HEADLESS_LIB, append("\npub fn rogue() {\n    unsafe {}\n}\n"))]),
+    ("unlisted allow(unsafe_code) in the adapter beside a valid inventory", "FAIL",
+     [(T1_SLICE, LISTED_SITE), (INVENTORY, inventory(LISTED_ROW)),
+      (WAYLAND_LIB, append("\n#[allow(unsafe_code)]\npub fn rogue() {}\n"))]),
+    ("a second unsafe site inside a listed function (count mismatch)", "FAIL",
+     [(T1_SLICE, append("\nfn listed() {\n    unsafe {}\n    unsafe {}\n}\n")), (INVENTORY, inventory(LISTED_ROW))]),
+    ("unsafe in a different function of a listed file", "FAIL",
+     [(T1_SLICE, append("\nfn listed() {\n    unsafe {}\n}\nfn other() {\n    unsafe {}\n}\n")),
+      (INVENTORY, inventory(LISTED_ROW))]),
+    ("the same site listed twice", "FAIL",
+     [(T1_SLICE, LISTED_SITE),
+      (INVENTORY, inventory(LISTED_ROW, inventory_row("U-901", T1_SLICE, "listed")))]),
+    ("an inventory id used twice", "FAIL",
+     [(T1_SLICE, append("\nfn listed() {\n    unsafe {}\n}\nfn other() {\n    unsafe {}\n}\n")),
+      (INVENTORY, inventory(LISTED_ROW, inventory_row("U-900", T1_SLICE, "other")))]),
+    ("a stale entry (no such site)", "FAIL",
+     [(INVENTORY, inventory(LISTED_ROW))]),
+    ("a test-class entry used for production unsafe", "FAIL",
+     [(HEADLESS_LIB, append("\npub fn listed() {\n    unsafe {}\n}\n")),
+      (INVENTORY, inventory(inventory_row("U-900", HEADLESS_LIB, "listed", cls="test")))]),
+    ("a production-class entry used for a test site", "FAIL",
+     [(T1_SLICE, LISTED_SITE), (INVENTORY, inventory(inventory_row("U-900", T1_SLICE, "listed", cls="production")))]),
+    ("unsafe inside a macro definition in the adapter", "FAIL",
+     [(T1_SLICE, LISTED_SITE), (INVENTORY, inventory(LISTED_ROW)),
+      (WAYLAND_LIB, append("\nmacro_rules! rogue {\n    () => {\n        unsafe {}\n    };\n}\n"))]),
+    ("unsafe inside a macro invocation in a listed file, outside the listed function", "FAIL",
+     [(T1_SLICE, append("\nfn listed() {\n    unsafe {}\n}\nfn other() {\n    let _ = vec![unsafe { 0u8 }];\n}\n")),
+      (INVENTORY, inventory(LISTED_ROW))]),
+    ("unsafe impl at file scope listed under a function name", "FAIL",
+     [(T1_SLICE, append("\nstruct X;\nunsafe impl Send for X {}\n")), (INVENTORY, inventory(LISTED_ROW))]),
+    ("a malformed inventory row", "FAIL",
+     [(T1_SLICE, LISTED_SITE),
+      (INVENTORY, lambda _: f"| U-900 | `{T1_SLICE}` | `listed` | 1 | test | purpose only |\n")]),
+    ("an entry with an empty safety cell", "FAIL",
+     [(T1_SLICE, LISTED_SITE),
+      (INVENTORY, lambda _: f"| U-900 | `{T1_SLICE}` | `listed` | 1 | test | p |  | o | c | v |\n")]),
+    ("listed unsafe in the forbid crate (core)", "FAIL",
+     [(CORE_LIB, append("\npub fn listed() {\n    unsafe {}\n}\n")),
+      (INVENTORY, inventory(inventory_row("U-900", CORE_LIB, "listed", cls="production")))]),
+]
+
+
 GRAPH_SEEDS = [
     ("INC-1: wayland-client as a normal dependency of the headless backend",
      "crates/infynitae-backend-headless/Cargo.toml", 'wayland-client = "=0.31.15"', "dag"),
@@ -857,6 +952,20 @@ def check_mutations(binary, r):
             code, out = source_rules(binary, tmp)
             hit = code != 0 and any(l.startswith(f"FAIL {rule}:") for l in out.splitlines())
             r.check(hit, f"detected: {desc} ({rule})", f"NOT DETECTED: {desc} (expected {rule})\n{out}")
+        finally:
+            shutil.rmtree(tmp)
+    for desc, want, edits in INVENTORY_SEEDS:
+        tmp = fresh_copy()
+        try:
+            for rel, seed in edits:
+                edit_or_create(tmp, rel, seed)
+            code, out = source_rules(binary, tmp)
+            lines = out.splitlines()
+            failed = any(l.startswith("FAIL unsafe-policy:") for l in lines)
+            passed = "ok   unsafe-policy" in lines
+            hit = failed if want == "FAIL" else (passed and not failed)
+            r.check(hit, f"unsafe inventory: {desc} ({want})",
+                    f"unsafe inventory: {desc}: expected {want}\n{out}")
         finally:
             shutil.rmtree(tmp)
     for desc, rel, line, kind in GRAPH_SEEDS:
