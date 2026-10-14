@@ -9,7 +9,7 @@
 | **date** | 2026-10-14 |
 | **evidence_class** | EXPERIMENTALLY VERIFIED |
 | **applicability** | All Phase F / INC-7+ branches |
-| **affected_branches** | main, hardening/inc-6-scale-policy, experimental/inc7-exit-readiness-2026-10-14 |
+| **affected_branches** | main (f323c2d); historical: hardening/inc-6-scale-policy, experimental/inc7-exit-readiness-2026-10-14 |
 | **related_invariants** | INV-PRES-1, INV-CAMERA-4, F-PRESENT-1 |
 | **adoption_status** | IMPLEMENTED |
 | **next_action** | Maintain test coverage in t1_fullscreen |
@@ -20,6 +20,8 @@
 1. In Infynitae Native, when a mapped toplevel enters fullscreen (`SetFullscreen`), its canvas anchor and layout position are **never mutated** (`INV-PRES-1`, `INV-CAMERA-4`).
 2. Fullscreen presentation is implemented purely by the projection pipeline overriding the output viewport: the presenting element is projected directly to output bounds at scale 1.0, while background camera panning continues without moving the window's anchor.
 3. This completely prevents the coordinate corruption, window displacement, and complex recentering logic (`pending_recenter`) observed in traditional compositors like DriftWM.
+
+4. **Reconciliation 2026-10-14 (main `f323c2d`):** F-PRESENT-1 is a **zoom-1 view** of the element (`v_P = anchor(W) − max(0, (view_O/scale_O − size(W)) / 2)`): a smaller surface is centred, a larger one origin-aligned and cropped. It does not scale the element to the output bounds (Fact 2 says "projected directly to output bounds"; read it this way). INV-PRES-1 "fullscreen never touches cameras or anchors" is sealed and ratified. The "zero spurious damage" implication below is **not** a sealed or tested property (INV-CAMERA-4 concerns configures and pointer events; Core has no damage model) — see X-11.
 
 ## Unverified Hypotheses
 - Hypothesized that multi-output canvas panning under fullscreen presentation may benefit from hardware overlay plane direct scanout without any performance degradation.

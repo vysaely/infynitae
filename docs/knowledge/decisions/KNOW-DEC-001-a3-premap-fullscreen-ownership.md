@@ -5,11 +5,11 @@
 | **id** | KNOW-DEC-001 |
 | **title** | Pre-Map Fullscreen Request Ownership and Deferred Eviction (Finding A-3) |
 | **subsystem** | Core/Protocol |
-| **source_rev** | 07acfeb |
+| **source_rev** | 07acfeb (source line) → b1aa758 on main; layer C12.F6 32bfbfb; ratified 39ad614 |
 | **date** | 2026-10-14 |
 | **evidence_class** | EXPERIMENTALLY VERIFIED |
 | **applicability** | Fullscreen protocol lifecycle |
-| **affected_branches** | experimental/inc7-exit-readiness-2026-10-14 |
+| **affected_branches** | main (f323c2d); historical: experimental/inc7-exit-readiness-2026-10-14, integration/inc-7-exit-2026-10-14 |
 | **related_invariants** | INV-PRES-1, C12.F5 |
 | **adoption_status** | IMPLEMENTED |
 | **next_action** | Formally ratify C12.F5 amendment in governance |
@@ -21,7 +21,8 @@
 2. **The Decision & Resolution:** Adopt Option (b) from the INC-7 audit: a grant made before the first map is accepted and recorded in `self.fullscreen`, but does **not** take over the output (`take_output(id)`) until the element maps with its first non-zero buffer commit.
 3. **Ghost Newcomer Reaping:** If an unmapped newcomer requests fullscreen and is destroyed or unmapped before drawing, `drop_fullscreen(id)` reaps the waiting grant without the active presenter ever flickering.
 4. **Waiting-grant ordering (as implemented):** grants are kept in the order they were made. At its map, an element's grant ends the older grants on its output (the presented one and older waiting ones); a newer waiting grant survives an older one's map and replaces it at its own map. A focused, mapped element's grant ends every older grant on the output, waiting ones included. A replaced element gets a configure with its saved size if it has one (a never-mapped waiting grant has none and gets a plain configure).
-5. **Status:** UNRATIFIED. Sealed INV-PRES-1 still says the presentation starts at the grant decision; amendment layer C12.F6 is prepared for owner approval. Ported to `integration/inc-7-exit-2026-10-14` as `b1aa758`.
+5. **Status:** ~~UNRATIFIED. Sealed INV-PRES-1 still says the presentation starts at the grant decision; amendment layer C12.F6 is prepared for owner approval.~~ Ported to `integration/inc-7-exit-2026-10-14` as `b1aa758`.
+6. **Reconciliation 2026-10-14 (main `f323c2d`):** C12.F6 ("a pre-map grant takes the output when its element maps") adopted by owner approval (`32bfbfb`) and **ratified with INC-7** (`39ad614`). `b1aa758` is on main. Unmap of a fullscreen element: [KNOW-DEC-006](KNOW-DEC-006-c12f10-unmap-of-a-fullscreen-element.md) (C12.F10).
 
 ## Unverified Hypotheses
 - None; the behavior is formally verified in unit tests and integration tests.

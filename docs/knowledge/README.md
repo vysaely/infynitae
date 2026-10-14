@@ -84,3 +84,5 @@ The integrity of the knowledge system is enforced automatically by:
 tools/verify-knowledge
 ```
 The script validates record ID uniqueness, metadata completeness, link integrity, and ensures zero accidental modifications to `docs/foundation/`.
+
+Since 2026-10-14 it also: compares `docs/foundation/` with the merge base of `HEAD` and `main` (so main advancing is not reported as an edit); fails if a record present at that merge base was removed (mark it `SUPERSEDED` instead); fails if a record is not linked from `INDEX.md`; and checks relative links in the meta documents. It needs no network, service or dependency beyond Python 3 and git.

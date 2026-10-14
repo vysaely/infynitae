@@ -10,7 +10,10 @@ Enforces:
 4. Format consistency and required content sections.
 5. Resolution of internal relative markdown links.
 6. Explicit supersession links for SUPERSEDED records.
-7. Zero modification of sealed foundation governance files.
+7. Zero modification of sealed foundation governance files by this branch
+   (diffed against the merge base with main, so main advancing is not a failure).
+8. No record present at that merge base has been removed (no silent loss).
+9. Every record is listed in INDEX.md (discoverability).
 """
 
 import os
@@ -109,11 +112,23 @@ def parse_sections(text):
     return headers
 
 
-def check_sealed_files():
-    """Verify that no files under docs/foundation/ were modified."""
+def git(*args):
+    return subprocess.run(["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=False)
+
+
+def merge_base():
+    """The commit this branch forked from main (main itself when on main)."""
+    res = git("merge-base", "HEAD", "main")
+    return res.stdout.strip() if res.returncode == 0 and res.stdout.strip() else None
+
+
+def check_sealed_files(base):
+    """Verify that this branch (committed or not) modifies no file under docs/foundation/."""
+    if base is None:
+        return ["Could not find the merge base with main; sealed-file check not run"]
     try:
         diff_res = subprocess.run(
-            ["git", "diff", "--name-only", "main", "--", "docs/foundation"],
+            ["git", "diff", "--name-only", base, "--", "docs/foundation"],
             cwd=REPO_ROOT,
             capture_output=True,
             text=True,
@@ -136,7 +151,8 @@ def main():
         sys.exit(1)
 
     # 1. Sealed files check
-    foundation_errors = check_sealed_files()
+    base = merge_base()
+    foundation_errors = check_sealed_files(base)
     if foundation_errors:
         errors.extend(foundation_errors)
 
@@ -228,6 +244,33 @@ def main():
             if sup_id and sup_id not in seen_ids:
                 errors.append(f"{seen_ids[rec_id]}: Superseded by unknown ID '{sup_id}'")
 
+    # 3b. Relative links in the meta documents (INDEX.md, ledger, inventory, ...)
+    for name in sorted(NON_RECORD_FILES):
+        mpath = KNOWLEDGE_DIR / name
+        if not mpath.exists():
+            continue
+        for _, link_target in re.findall(r"\[([^\]]+)\]\(([^)]+)\)", mpath.read_text(encoding="utf-8")):
+            if link_target.startswith(("http://", "https://", "#", "file://")):
+                continue
+            clean_target = link_target.split("#")[0]
+            if clean_target and not (mpath.parent / clean_target).resolve().exists():
+                errors.append(f"docs/knowledge/{name}: Broken relative link to '{link_target}'")
+
+    # 4. No silent loss: every record file at the merge base still exists
+    if base is not None:
+        listed = git("ls-tree", "-r", "--name-only", base, "--", "docs/knowledge")
+        for name in listed.stdout.splitlines():
+            if Path(name).name in NON_RECORD_FILES or not name.endswith(".md"):
+                continue
+            if not (REPO_ROOT / name).exists():
+                errors.append(f"{name}: record present at merge base {base[:7]} was removed (mark it SUPERSEDED instead)")
+
+    # 5. Discoverability: every record is linked from INDEX.md
+    index_text = (KNOWLEDGE_DIR / "INDEX.md").read_text(encoding="utf-8") if (KNOWLEDGE_DIR / "INDEX.md").exists() else ""
+    for rec_id, (rpath, _) in records_by_id.items():
+        if str(rpath.relative_to(KNOWLEDGE_DIR)) not in index_text:
+            errors.append(f"{seen_ids[rec_id]}: not linked from INDEX.md")
+
     print("\n--- Validation Results ---")
     if warnings:
         print(f"Warnings ({len(warnings)}):")
@@ -243,7 +286,7 @@ def main():
     else:
         print(f"All {len(record_files)} knowledge records validated successfully.")
         print(f"Unique IDs: {len(seen_ids)}")
-        print("Sealed governance integrity: UNTOUCHED")
+        print(f"Sealed governance integrity: UNTOUCHED (against merge base {base[:7] if base else '?'})")
         print("RESULT: PASS")
         sys.exit(0)
 

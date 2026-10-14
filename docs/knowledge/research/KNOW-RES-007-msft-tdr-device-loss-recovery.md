@@ -17,6 +17,8 @@
 ---
 
 ## Verified Facts
+> **Reconciliation 2026-10-14 (main `f323c2d`):** the Microsoft statements below were not checked against Microsoft documentation in any session, and some are interpretations ("exact parity", magnitudes). Read them with the MS-DOC / INTERP / APPLY / WIN-ONLY classes of [KNOW-RES-008](KNOW-RES-008-msft-research-claim-classification.md).
+
 1. **TDR Mechanism:** When a GPU hardware engine hangs for more than 2 seconds (`TdrDelay`), WDDM resets the hung engine or adapter. DWM intercepts `DXGI_ERROR_DEVICE_RESET`, tears down its rendering device, recreates swapchains, and restores presentation without crashing the desktop session.
 2. **Infynitae Decoupled State Advantage:** Infynitae's Core owns all element IDs, anchors, layout, and surface tree snapshots with zero GPU references. If the rendering backend experiences an `EGL_CONTEXT_LOST` event, Core state remains 100% intact.
 

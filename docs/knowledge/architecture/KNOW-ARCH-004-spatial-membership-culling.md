@@ -9,7 +9,7 @@
 | **date** | 2026-10-14 |
 | **evidence_class** | EXPERIMENTALLY VERIFIED |
 | **applicability** | All Phase F / INC-6+ branches |
-| **affected_branches** | main, remediation/b-core-visibility, perf/inc-6-scale-index |
+| **affected_branches** | main (f323c2d): visibility pass, bounding-box cull, binary-search lookup (85a74cb, from remediation/b-core-visibility). INC-6 lines only (not main): scoped scale passes, OB-42 ratchet (f1ef262 on perf/inc-6-scale-index) |
 | **related_invariants** | F-MEMBER-1, INV-RENDER-3, INV-SCALE-1..5 |
 | **adoption_status** | IMPLEMENTED |
 | **next_action** | Maintain allocation bounds in t0_hot_path_allocations |
@@ -20,6 +20,8 @@
 1. Naive scene management iterates over all mapped elements ($\mathcal{O}(N)$) on every commit, camera motion, and scale pass.
 2. Infynitae Core implements `Membership`: exact 2D spatial tracking determining which elements intersect an output's viewport.
 3. During camera panning and window movement, scale policy evaluation ($P_7$) and render element building are strictly scoped to visible members (`entries_culled`), maintaining constant allocation counts independent of the total number of off-view windows.
+
+4. **Reconciliation 2026-10-14 (main `f323c2d`):** Fact 3 mixes two lines. On **main**: membership/visibility is a scoped pass with a bounding-box cull (`entries_culled`) and binary-search `Stage` lookup (`85a74cb`), still linear in mapped elements (CHECKPOINT: pan 23.5 µs, render list 101 µs at 3,000 elements, T0 model). Scale-policy (P7) scoping, the allocation ratchet and "< 31 µs pan at 3,000 windows" belong to **INC-6** (`f1ef262`, not ratified, not on main). The test `cull_agrees_with_the_reference_at_the_view_edges` is on main; `t0_hot_path_allocations` is not.
 
 ## Unverified Hypotheses
 - Hypothesized that spatial membership culling at Canvas bounds of $2^{36}$ coordinates maintains sub-pixel exactness under fractional scale lattices ($1/120$); verified by test `cull_agrees_with_the_reference_at_the_view_edges`.

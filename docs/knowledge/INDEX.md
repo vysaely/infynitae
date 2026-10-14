@@ -4,6 +4,24 @@
 **Purpose:** Permanent, evidence-driven engineering memory preserving architectural discoveries, experiments, benchmark results, external research, and negative knowledge across development sessions.  
 **Authority:** Non-authoritative engineering memory. Sealed governance lives exclusively in `docs/foundation/` (`CHECKPOINT.md`, `FOUNDATION_INVARIANTS.md`, `FOUNDATION_ARCHITECTURE.md`).
 
+**State of the code these records describe:** main = origin/main = `f323c2d`. INC-0…INC-5 and INC-7 are RATIFIED; INC-6 is experimental and unratified; INC-8 and INC-14 have not begun (`docs/foundation/CHECKPOINT.md`). Records name the branch each fact holds on; a commit not on main is provenance, not current behaviour (see CONTRADICTIONS_AND_SUPERSEDED X-06).
+
+**How to use this index:** read the task list in section 0, open only the records it names, then check `CHECKPOINT.md` and `FOUNDATION_INVARIANTS.md` for what is sealed. Kinds of knowledge are kept apart: `research/` (external systems), `decisions/` (what Infynitae decided and ratified), `architecture/` (implemented principles), `experiments/` (measurements), `pitfalls/` (rejected approaches), `roadmap/` (future work and residuals). Inside each record, "Unverified Hypotheses" holds what is not measured; the ledger holds every correction.
+
+---
+
+## 0. Start Here by Upcoming Work
+
+| Work | Read first | Then |
+| :--- | :--- | :--- |
+| **INC-6** (scale policy; rebase onto `f323c2d`) | KNOW-ARCH-004 (main vs INC-6 split), KNOW-EXP-002, KNOW-EXP-005 | KNOW-PITFALL-005, KNOW-DEC-005 (R-15 converges with INC-6), KNOW-ROAD-005 |
+| **INC-8** (frame callbacks, liveness) | KNOW-ROAD-005 (R-10), KNOW-PITFALL-006 | KNOW-RES-005, KNOW-RES-008 (heartbeat is a candidate; INV-FRAME-1 governs), KNOW-RES-009 (camera animation) |
+| **INC-14** (interactive move/resize, grabs) | KNOW-PITFALL-007 (W-SM-19 → R-07 entry condition), KNOW-RES-003 | KNOW-RES-009 (hit-testing, live input under camera motion), KNOW-RES-010 (scrutinee lint, `with_states`, constraint snapshots), KNOW-DEC-004, KNOW-PITFALL-003 |
+| **INC-13 / libinput** | KNOW-ARCH-002 (R-04, R-05) | KNOW-PITFALL-004 |
+| **DRM/KMS backend (Phase G)** | KNOW-RES-008 (what transfers from Windows and what does not), KNOW-ROAD-001 | KNOW-RES-004, KNOW-RES-006, KNOW-RES-007, KNOW-RES-010 (scanout gating, fence wait), KNOW-EXP-004, KNOW-ROAD-002..004 |
+| **Any DriftWM-inspired idea** | KNOW-RES-010 | the record its row names |
+| **Fullscreen / presentation / focus changes** | KNOW-ARCH-001, KNOW-DEC-001, KNOW-DEC-002, KNOW-DEC-006 | KNOW-ARCH-003, KNOW-DEC-003, KNOW-PITFALL-001 |
+
 ---
 
 ## 1. Subsystem Index
@@ -22,13 +40,17 @@
 - [KNOW-RES-005: DXGI Waitable Swapchains, Queue Depth, and Frame Pacing](research/KNOW-RES-005-msft-dxgi-waitable-frame-pacing.md) (1-frame queue pacing)
 - [KNOW-RES-006: WDDM Monitored Fences and Timeline Synchronization](research/KNOW-RES-006-msft-wddm-fences-timeline-sync.md) (Explicit timeline syncobjs)
 - [KNOW-RES-007: Timeout Detection and Recovery (TDR) and Device Loss Handling](research/KNOW-RES-007-msft-tdr-device-loss-recovery.md) (GPU reset resilience)
+- [KNOW-RES-008: Microsoft Graphics Research — Claim Classification and Transfer Limits](research/KNOW-RES-008-msft-research-claim-classification.md) (MS-DOC / INTERP / APPLY / WIN-ONLY; read before RES-004..007)
+- [KNOW-RES-009: DriftWM Camera, Viewport, Coordinates and Hit-Testing](research/KNOW-RES-009-driftwm-camera-viewport-and-hit-testing.md) (coverage gap; comparison with INV-CAMERA/INV-COORD)
+- [KNOW-RES-010: DriftWM Ideas — Disposition Register](research/KNOW-RES-010-driftwm-idea-disposition-register.md) (implemented / useful / rejected, one row per idea)
 
 ### Engineering Decisions & Protocol Bug Resolutions
 - [KNOW-DEC-001: Pre-Map Fullscreen Request Ownership and Deferred Eviction](decisions/KNOW-DEC-001-a3-premap-fullscreen-ownership.md) (Finding A-3, `INV-PRES-1`)
 - [KNOW-DEC-002: Rejection of Keyboard Focus on Occluded Windows](decisions/KNOW-DEC-002-a8-fullscreen-focus-eligibility.md) (Finding A-8, `INV-INPUT-8`)
 - [KNOW-DEC-003: Default Placement After Fullscreen Acknowledgement](decisions/KNOW-DEC-003-p9b-default-placement-acknowledgement.md) (Finding P9b, `F-PLACE-1`)
 - [KNOW-DEC-004: Popup Stacking Order and Smithay Traversal Defect](decisions/KNOW-DEC-004-p10-popup-stacking-w-sm-20.md) (W-SM-20, `X-15`, `OB-1`)
-- [KNOW-DEC-005: INC-7 Integration Provenance (INC-7 Without INC-6)](decisions/KNOW-DEC-005-inc7-integration-provenance.md) (`integration/inc-7-exit-2026-10-14`, UNRATIFIED)
+- [KNOW-DEC-005: INC-7 Integration Provenance (INC-7 Without INC-6)](decisions/KNOW-DEC-005-inc7-integration-provenance.md) (`integration/inc-7-exit-2026-10-14` → main)
+- [KNOW-DEC-006: Unmap of a Fullscreen Element (C12.F10, RC-1)](decisions/KNOW-DEC-006-c12f10-unmap-of-a-fullscreen-element.md) (`INV-PRES-1`, M9)
 
 ### Experiments, Benchmarks & Validation
 - [KNOW-EXP-001: Independent Reproduction of DriftWM Focus Pull Benchmark](experiments/KNOW-EXP-001-pull-cost-bench-reproduction.md) (Host reproduction)
@@ -51,7 +73,7 @@
 - [KNOW-ROAD-002: Explicit Timeline Synchronization with linux-drm-syncobj-v1](roadmap/KNOW-ROAD-002-explicit-timeline-sync-syncobj.md) (Explicit sync)
 - [KNOW-ROAD-003: Variable Refresh Rate (VRR) and Adaptive Frame Pacing](roadmap/KNOW-ROAD-003-vrr-adaptive-sync-pacing.md) (Adaptive sync)
 - [KNOW-ROAD-004: DRM Damage Clips and Panel Self Refresh (PSR) Optimization](roadmap/KNOW-ROAD-004-fb-damage-clips-psr.md) (Laptop battery optimization)
-- [KNOW-ROAD-005: Work Remaining After the INC-7 Exit Preparation](roadmap/KNOW-ROAD-005-inc7-follow-up-work.md) (C12.F5–F9, follow-ups)
+- [KNOW-ROAD-005: Work Remaining After the INC-7 Exit Preparation](roadmap/KNOW-ROAD-005-inc7-follow-up-work.md) (ratification outcome, residuals R-01…R-15 by owner)
 
 ---
 
@@ -68,8 +90,11 @@
 
 | Status | Knowledge Records |
 | :--- | :--- |
-| **IMPLEMENTED / VALIDATED** (INC-7 items UNRATIFIED: sealed amendments C12.F5–F8 pending) | KNOW-ARCH-001, KNOW-ARCH-002, KNOW-ARCH-003, KNOW-ARCH-004, KNOW-DEC-001, KNOW-DEC-002, KNOW-DEC-003, KNOW-DEC-004, KNOW-EXP-002, KNOW-EXP-003, KNOW-PITFALL-007 |
-| **RESEARCH / PROPOSED** | KNOW-DEC-005, KNOW-EXP-005, KNOW-RES-001, KNOW-RES-002, KNOW-RES-003, KNOW-RES-004, KNOW-RES-005, KNOW-RES-006, KNOW-RES-007, KNOW-EXP-004, KNOW-ROAD-001, KNOW-ROAD-002, KNOW-ROAD-003, KNOW-ROAD-004 |
-| **REJECTED** | KNOW-EXP-001, KNOW-PITFALL-001, KNOW-PITFALL-002, KNOW-PITFALL-003, KNOW-PITFALL-004, KNOW-PITFALL-006 |
+| **IMPLEMENTED on main, INC-7 RATIFIED 2026-10-14** | KNOW-ARCH-001, KNOW-ARCH-002, KNOW-ARCH-003, KNOW-DEC-001, KNOW-DEC-002, KNOW-DEC-003, KNOW-DEC-004, KNOW-DEC-005, KNOW-DEC-006, KNOW-PITFALL-007 |
+| **IMPLEMENTED, split main / INC-6** | KNOW-ARCH-004 (visibility on main; scale scoping INC-6 only) |
+| **IMPLEMENTED on INC-6 lines only (unratified)** | KNOW-EXP-002 |
+| **VALIDATED** | KNOW-EXP-003 |
+| **RESEARCH / PROPOSED** | KNOW-EXP-005, KNOW-RES-001…KNOW-RES-010, KNOW-EXP-004, KNOW-ROAD-001…KNOW-ROAD-004 |
+| **REJECTED** | KNOW-EXP-001, KNOW-PITFALL-001, KNOW-PITFALL-002 (evidence DISPUTED, X-08), KNOW-PITFALL-003, KNOW-PITFALL-004, KNOW-PITFALL-006 |
 | **DEFERRED** | KNOW-ROAD-005 |
 | **SUPERSEDED** | KNOW-PITFALL-005 (Superseded by KNOW-ARCH-004) |

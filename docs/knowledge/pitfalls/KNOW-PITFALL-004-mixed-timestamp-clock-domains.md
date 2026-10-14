@@ -22,6 +22,8 @@
 3. Client toolkits (Qt, Chromium, GTK) assert that pointer timestamps never decrease, triggering crashes or desynchronization upon backward time jumps.
 4. Infynitae correctly rejected this approach and implemented `InputClock` in Core commit [`e40eb70`](file:///home/vysaely/infynitae-native).
 
+5. **Reconciliation 2026-10-14 (main `f323c2d`):** **Corrections (X-09).** Fact 2's backward jump is reasoned from event-loop ordering, not observed: `fs_client` evidence shows the A-5 fix (times 0 → input-clock times), not the wall-clock race. Fact 3 ("Qt, Chromium, GTK assert … triggering crashes") has no source; treat as unverified. The rejection of adapter wall-clock time stands on KNOW-ARCH-002 (one clock for wire times, deterministic tests).
+
 ## Unverified Hypotheses
 - None; confirmed on the wire with adversarial client `fs_client` in `t1_inc7_adversarial`.
 

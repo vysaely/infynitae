@@ -21,6 +21,8 @@
 2. In an infinite canvas compositor with 3,000 background windows, an ungated 995ms heartbeat causes ~3,000 clients to wake up, re-render, and issue `wl_surface.commit` every second.
 3. In Infynitae, each commit triggers damage re-evaluation, stage accounting, and scale passes, inducing high background CPU churn and frame-scheduling tail latency.
 
+4. **Reconciliation 2026-10-14 (main `f323c2d`):** **Corrections (X-13).** "~3,000 commits per second" is arithmetic, not a measurement. On main, Core has no scale policy (INC-6 is unratified) and visibility work is scoped to outputs, so an off-screen commit does not trigger "scale passes" there. Hidden and off-screen windows get no frame callbacks today (residual R-10, owned by INC-8). INV-FRAME-1 permits completing a *requested* callback at a throttled rate; it forbids inventing one.
+
 ## Unverified Hypotheses
 - Hypothesized that clients can be categorized by activity (active media vs idle productivity) or gated via systemd cgroup freeze signals.
 

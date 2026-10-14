@@ -73,3 +73,63 @@ This document maintains an explicit, traceable record of all findings that were 
 - **Original Claim:** "The adapter extracts this from `current_state()` in the post-commit hook before invoking `CompositorHandler::commit`."
 - **Correction:** Smithay's post-commit hook makes the acknowledged state current; the adapter reads it inside `CompositorHandler::commit`. Placement also requires the element to be out of fullscreen at that commit (probe R5).
 - **Authoritative Record:** [KNOW-DEC-003](decisions/KNOW-DEC-003-p9b-default-placement-acknowledgement.md).
+
+---
+
+## 4. Reconciliation With Ratified INC-7 and the Original Research (2026-10-14, main `f323c2d`)
+
+Earlier entries above are kept as written. Records were corrected by dated, struck-through or appended notes ("Reconciliation 2026-10-14"), not by rewriting their original facts.
+
+### S-03: "UNRATIFIED" INC-7 status — superseded by ratification
+- **Original:** KNOW-DEC-001..004, KNOW-ARCH-002, KNOW-ARCH-003, KNOW-DEC-005, KNOW-ROAD-005 and the INDEX status table said the INC-7 behaviour was unratified and layers C12.F5–F8 prepared.
+- **Now:** C12.F5–F8 and C12.F10 adopted and INC-7 **ratified** (`39ad614`), main = origin/main = `f323c2d`. Accepted residuals R-01…R-15 are tracked follow-up work (KNOW-ROAD-005).
+
+### X-05: Mutation-testing record — control count and mechanism wrong
+- **Original:** KNOW-EXP-003: "over 700 seeded behavioral mutations", "temporary worktree", "fails with the expected failure diagnostic".
+- **Correction:** 231 controls on main; a temporary directory copy; a control passes only if the named test fails as a test (compile errors and missing tests are broken controls); no diagnostic text is matched.
+
+### X-06: Commit references point at source-line commits that are not on main
+- **Original:** records and C-01..C-04 cite `07acfeb`, `0fe8f06`, `df72202`, `3b0a3d7`, `489180e`, `e40eb70`.
+- **Correction:** none of these is on main. Main equivalents: A-3 `b1aa758`, A-8 `0f45cfd` + `2aa8d65`, P9b `334b9b3`, X-15 `23860b3` + `d350ed2`, A-5 `d70c3be` (KNOW-DEC-005 Facts 2 and 7). The original references stay valid as provenance.
+
+### X-07: KNOW-ARCH-004 mixes main and INC-6
+- **Original:** affected branches "main, …"; facts about scoped scale passes, the OB-42 ratchet and "< 31 µs pan at 3,000 windows".
+- **Correction:** main has the visibility pass, bounding-box cull and binary-search lookup (`85a74cb`; still linear; pan 23.5 µs at 3,000 elements, T0 model). Scale-pass scoping, the ratchet (`f1ef262`) and `t0_hot_path_allocations` are INC-6 only, not ratified.
+
+### X-08: Focus pull vs push — scaling claims unmeasured; Infynitae's model misdescribed
+- **Original:** INDEPENDENT_REVIEW §6, DISPUTED_FINDINGS §5, KNOW-PITFALL-002, KNOW-EXP-001: pull is O(N·E) with "severe tail-latency spikes" at 8 kHz and N = 3,000; "Model B outperforms Model A by over 18×"; Infynitae is "O(1) steady-state", recomputing focus "only on boundary crossing"; DriftWM's numbers were "+80 % in error".
+- **Correction:** only one 20-window run was measured (raw output archived). No harness or result for the 18× claim exists. On main, each motion is hit-tested by a linear scan of the output's culled `ProjectionFrame`, and Core emits true-position events at its own chokepoints (KNOW-RES-009). A single run on different hardware does not show DriftWM's documented numbers were wrong. The rejection of per-iteration pull stands on design grounds (Core is the chokepoint DriftWM lacks), not on a measured comparison. KNOW-PITFALL-002 evidence class: CONTRADICTED → DISPUTED.
+
+### X-09: Wall-clock adapter timestamps — race reasoned, toolkit crashes unsourced
+- **Original:** KNOW-PITFALL-004 Facts 2–3 and "confirmed on the wire with `fs_client`".
+- **Correction:** `fs_client` evidence shows the A-5 fix, not the wall-clock race; the race is an argument from event ordering. "Qt, Chromium, GTK assert" has no source.
+
+### X-10: Microsoft research — interpretations recorded as verified facts
+- **Original:** KNOW-RES-004..007 "Verified Facts" (e.g. "exact architectural parity", "without kernel transitions", "50–100 ms", "DWM suspends its composition thread entirely", "kernel ≥ 6.8 / Mesa ≥ 24.1"); the source's Class 4 "Windows anti-patterns".
+- **Correction:** no session fetched Microsoft documentation; the source cites page titles only. Each claim is now classed MS-DOC / INTERP / APPLY / WIN-ONLY in KNOW-RES-008. Class 4 items other than Blt-model presentation are DriftWM/AGY findings, not Windows mechanisms. "INC-8 must incorporate a gated heartbeat" is a candidate, not a requirement (INV-FRAME-1 governs).
+
+### X-11: Microsoft research — statements about Infynitae
+- **Original:** "INV-CAMERA-4 → no spurious damage on fullscreen outputs"; "Infynitae tracks damage deterministically per surface tree node"; KNOW-ARCH-001 "guarantees zero spurious damage propagation".
+- **Correction:** INV-CAMERA-4 concerns configures and pointer events from a pan. Core has no damage model; damage is Smithay's, in the adapter and backends. No damage property is sealed or tested.
+
+### X-12: KNOW-ARCH-001 — fullscreen projection is a zoom-1 view, not a fit to output bounds
+- **Original:** "the presenting element is projected directly to output bounds at scale 1.0".
+- **Correction:** F-PRESENT-1 is a zoom-1 view: a smaller surface is centred, a larger one origin-aligned and cropped.
+
+### X-13: KNOW-PITFALL-006 — heartbeat cost on Infynitae
+- **Original:** each off-screen commit "triggers damage re-evaluation, stage accounting, and scale passes"; ~3,000 commits per second.
+- **Correction:** the rate is arithmetic, not measured; main has no scale policy (INC-6 unratified) and scoped visibility work. The direction (gate any heartbeat) stands; R-10 assigns frame callbacks for hidden windows to INC-8.
+
+### X-14: `tools/verify-knowledge` reported foundation edits that did not exist
+- **Original:** the sealed-file check diffed the working tree against the moving `main` ref. After main advanced to `f323c2d`, the knowledge branch (based on `ccb82c5`) failed with 14 "Sealed foundation file modified" errors although it touches no foundation file.
+- **Correction:** the check now diffs against the merge base with main (what this branch changed). It also now checks that no record present at the merge base was removed, that every record is listed in INDEX.md, and that every `superseded_by` target exists.
+
+### X-15: Label errors kept for provenance
+- KNOW-RES-001 linked "INDEPENDENT_REVIEW.md" to KNOW-EXP-001 (fixed: now names the archived file). KNOW-RES-002, KNOW-ARCH-003 and KNOW-ARCH-004 list, under "Unverified Hypotheses", statements they then call verified; read those lines as facts with the cited test. Not rewritten.
+
+### X-16: KNOW-PITFALL-003 — severity overstated
+- **Original:** an invalid-serial grab lets a client "monopolize seat pointer and keyboard input"; "mathematically obvious".
+- **Correction:** the grab ends when the user clicks outside the client's surfaces; the effect is focus stealing until dismissed. No adversarial script exists. Infynitae's rejection (W-SM-7) is unchanged.
+
+### G-01: Coverage gap — DriftWM camera and viewport
+- **Finding:** no recovered study covers DriftWM's camera, viewport, coordinate types or "constant-time camera movement" beyond one audit table row and DriftWM's own documentation. KNOW-RES-009 records what is known and the gap. Not searched: the old Arch partition.

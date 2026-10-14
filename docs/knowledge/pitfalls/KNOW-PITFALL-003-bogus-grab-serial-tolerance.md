@@ -21,6 +21,8 @@
 2. The XDG Shell specification explicitly requires that popup grabs match a valid user interaction serial.
 3. Permissive tolerance allows an unprivileged background client to monopolize seat pointer and keyboard input without user interaction, creating an input hijacking and denial-of-service vulnerability.
 
+4. **Reconciliation 2026-10-14 (main `f323c2d`):** **Correction (X-16).** "Monopolize seat pointer and keyboard input" overstates the risk: a popup grab is ended when the user clicks outside the client's surfaces. The real effect of accepting an invalid serial is a grab (keyboard focus to the popup) without user interaction until dismissed — focus stealing. No adversarial client script exists; "mathematically obvious" below is not evidence. Infynitae rejects such grabs (W-SM-7, ratified since INC-4).
+
 ## Unverified Hypotheses
 - None; the security attack vector is mathematically obvious and demonstrable via an adversarial client script.
 

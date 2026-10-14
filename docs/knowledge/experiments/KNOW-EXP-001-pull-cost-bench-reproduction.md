@@ -24,6 +24,8 @@
    - Real absolute motion: **$15.80\,\mu\text{s}$** (+95.1% slower than claimed).
 3. The benchmark in DriftWM has no warm-up loop, tests only 20 windows, and fails to compute variance, standard deviation, or $p_{95}/p_{99}$ tail latency.
 
+4. **Reconciliation 2026-10-14 (main `f323c2d`):** The reproduction was really executed — **once**, release profile, in AGY trajectory `822720a8` (raw output preserved in `~/Infynitae-KNOWLEDGE-SOURCES-2026-10-14/README.md`). One run on a 12-thread host against DriftWM's documented 24-core run is a hardware difference, not proof that DriftWM's numbers were wrong; "+80 % error" overstates it. DriftWM's documentation labelled its numbers correctly; the fault was AGY presenting them as its own measurement. See X-08 for the scaling claims.
+
 ## Unverified Hypotheses
 - AGY previously asserted that pulling focus takes $<1\,\text{ms}$ CPU time per second; refuted under 8 kHz gaming mice where event-loop iteration frequency scales to 8,000 dispatches/sec.
 

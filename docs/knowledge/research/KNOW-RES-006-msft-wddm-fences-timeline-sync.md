@@ -17,6 +17,8 @@
 ---
 
 ## Verified Facts
+> **Reconciliation 2026-10-14 (main `f323c2d`):** the Microsoft statements below were not checked against Microsoft documentation in any session, and some are interpretations ("exact parity", magnitudes). Read them with the MS-DOC / INTERP / APPLY / WIN-ONLY classes of [KNOW-RES-008](KNOW-RES-008-msft-research-claim-classification.md).
+
 1. **Monitored Fences:** WDDM 2.0 introduced 64-bit monotonically increasing integer timeline fences (`ID3D12Fence`), shared cross-process between applications, the DWM, and display hardware without kernel transitions.
 2. **Implicit Sync Flaws:** Legacy Linux graphics relied on implicit synchronization (`dma-fence`), which couples buffer readiness to kernel memory allocations, risking priority inversion, driver deadlocks, and unpredictable pipeline stalls.
 3. **Linux Timeline Syncobjs:** The Linux DRM subsystem introduced `drm_syncobj` timeline points, and Wayland merged `linux-drm-syncobj-v1`, establishing exact parity with WDDM monitored fences.

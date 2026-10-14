@@ -5,11 +5,11 @@
 | **id** | KNOW-ARCH-002 |
 | **title** | Monotonic Input Clock for Synthesized Pointer Events |
 | **subsystem** | Core/Input |
-| **source_rev** | e40eb70 |
+| **source_rev** | e40eb70 (source line) → d70c3be on main; ratified 39ad614 |
 | **date** | 2026-10-14 |
 | **evidence_class** | EXPERIMENTALLY VERIFIED |
 | **applicability** | All Phase F / INC-7+ branches |
-| **affected_branches** | experimental/combined-perf-audit-2026-10-14, experimental/inc7-exit-readiness-2026-10-14 |
+| **affected_branches** | main (f323c2d); historical: experimental/combined-perf-audit-2026-10-14, experimental/inc7-exit-readiness-2026-10-14 |
 | **related_invariants** | INV-INPUT-5, M10 |
 | **adoption_status** | IMPLEMENTED |
 | **next_action** | Maintain monotonic clock ratchet in t1_inc7_adversarial |
@@ -34,7 +34,8 @@
 ## Limitations & Counterexamples
 - Before any physical input event is accepted by Core, the initial timestamp is `0`, which no valid subsequent event precedes.
 - **Far-future residual:** one device event stamped far ahead (review probe R4: 1 h ahead) holds every later synthesised time at that value until real time passes it; the device's own stream already went back at the next real event, the synthesised events repeat that reversal. Bounded by device-clock correctness.
-- UNRATIFIED as part of INC-7 (A-5 touches ratified INC-2/INC-5 code; no sealed text changes). Ported to `integration/inc-7-exit-2026-10-14` as `d70c3be`.
+- ~~UNRATIFIED as part of INC-7 (A-5 touches ratified INC-2/INC-5 code; no sealed text changes).~~ Ported to `integration/inc-7-exit-2026-10-14` as `d70c3be`.
+- **Reconciliation 2026-10-14 (main `f323c2d`):** pointer event times (A-5) are in INC-7's **ratification scope** (`39ad614`). The far-future case is accepted residual **R-04**; the libinput clock domain is unexercised until INC-13 (**R-05**).
 
 ## Reproduction Instructions
 Execute the adversarial pointer clock verification tests:

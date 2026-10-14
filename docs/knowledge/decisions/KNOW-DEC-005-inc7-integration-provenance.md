@@ -9,10 +9,10 @@
 | **date** | 2026-10-14 |
 | **evidence_class** | EXPERIMENTALLY VERIFIED |
 | **applicability** | UNRATIFIED integration candidate for the INC-7 exit; not merged, not pushed |
-| **affected_branches** | integration/inc-7-exit-2026-10-14, experimental/inc7-exit-readiness-2026-10-14, experimental/inc-7-toplevel-requests |
+| **affected_branches** | main (f323c2d); historical: integration/inc-7-exit-2026-10-14, experimental/inc7-exit-readiness-2026-10-14, experimental/inc-7-toplevel-requests |
 | **related_invariants** | INV-PRES-1, INV-INPUT-8, INV-STAGE-1, X-15, OB-1, OB-18, OB-32, OB-22 |
-| **adoption_status** | PROPOSED |
-| **next_action** | Owner decisions on C12.F5–F8; INC-7 exit review on 93c2605 (or its re-gated successor after the layers are added) |
+| **adoption_status** | IMPLEMENTED |
+| **next_action** | None for INC-7. INC-6 must be rebased onto main f323c2d; R-15 converges then |
 
 ---
 
@@ -24,8 +24,10 @@
 5. **Real clients on 93c2605:** `fs_client` 13/13 and KCalc 11/11 captures byte-identical to the source candidate's; A-5 times 1020, 1020, 1040, 1040, 1060; binary run clean.
 6. **Performance against the INC-7 line `f077e55`:** pan, commit, remap, churn, hotplug and allocations equal; render list +6.6 % and drag release +8 % at 3,000 windows — instruction counts per render list +7 % (1,024,592 → 1,096,531), but with `codegen-units = 1` 973,406 vs 973,415: a codegen-unit partitioning effect (see KNOW-EXP-005), not added logic.
 
+7. **Reconciliation 2026-10-14 (main `f323c2d`):** **Outcome.** The integration candidate `93c2605` was carried, unchanged in code, through the governance branches (`80ead2a` C12.F5–F8; `a43a149` C12.F10; `99c24cd` comment fix) to the ratification commit `39ad614` and the CHECKPOINT clarification `f323c2d`. Local `main` fast-forwarded `ccb82c5 → 39ad614 → f323c2d`, and `origin/main` was fast-forwarded `4d2fb3d → f323c2d` by owner approval (audit: `~/Infynitae-INC7-EXIT-PREPARATION-2026-10-14/INC7_RATIFICATION_AND_PUBLICATION_AUDIT.md`). The source-line commits cited elsewhere in this knowledge base (`07acfeb`, `0fe8f06`, `df72202`, `3b0a3d7`, `489180e`, `e40eb70`) are **not** on main; their main equivalents are listed in Fact 2.
+
 ## Unverified Hypotheses
-- A future merge of this branch into `main` (after ratification) is assumed conflict-free; not attempted.
+- ~~A future merge of this branch into `main` (after ratification) is assumed conflict-free; not attempted.~~ Resolved: it was a fast-forward (Fact 7).
 
 ## Performance & Correctness Implications
 - INC-7 can exit without waiting for INC-6, provided the owner adopts C12.F5–F8 (C12.F9 belongs to INC-6).

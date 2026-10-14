@@ -17,6 +17,8 @@
 ---
 
 ## Verified Facts
+> **Reconciliation 2026-10-14 (main `f323c2d`):** the Microsoft statements below were not checked against Microsoft documentation in any session, and some are interpretations ("exact parity", magnitudes). Read them with the MS-DOC / INTERP / APPLY / WIN-ONLY classes of [KNOW-RES-008](KNOW-RES-008-msft-research-claim-classification.md).
+
 1. **DirectFlip:** In Windows 8+, when a DXGI swapchain matches display dimensions and format with no overlapping translucent surfaces, DWM bypasses the composition blit and swaps the application buffer allocation directly to the primary scanout plane.
 2. **Independent Flip (IFlip):** In Windows 10+, DWM suspends its composition thread entirely; the application swapchain presents directly to display hardware via `dxgkrnl`, delivering Fullscreen Exclusive (FSE) latency while preserving windowed desktop semantics.
 3. **Multi-Plane Overlays (MPO):** Hardware display planes allow IFlip to remain active for a game/video surface while desktop UI, notification toasts, or subtitles are scanned out simultaneously on separate hardware planes.

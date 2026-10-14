@@ -38,4 +38,5 @@ view_file /home/vysaely/.gemini/antigravity/scratch/driftwm/src/stage/mod.rs
 
 ## Links & Citations
 - Upstream Repository: `https://github.com/malbiruk/driftwm`
-- Independent Review: [INDEPENDENT_REVIEW.md](../experiments/KNOW-EXP-001-pull-cost-bench-reproduction.md)
+- Independent Review: `INDEPENDENT_REVIEW.md` (archived in `~/Infynitae-KNOWLEDGE-SOURCES-2026-10-14/agy-scratch/`); benchmark reproduction: [KNOW-EXP-001](../experiments/KNOW-EXP-001-pull-cost-bench-reproduction.md)
+- Camera, viewport and hit-testing: [KNOW-RES-009](KNOW-RES-009-driftwm-camera-viewport-and-hit-testing.md)
