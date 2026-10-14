@@ -45,6 +45,7 @@ INC-1 (the thin vertical seam) follows only after INC-0 exits.
 4. `docs/foundation/FOUNDATION_TEST_PLAN.md` — OB-19, OB-36
 5. `docs/foundation/FOUNDATION_INVARIANTS.md`; `FOUNDATION_ARCHITECTURE.md` §C1 (crates/DAG), §P0 (namespace map), §F (formulas)
 6. `docs/foundation/FOUNDATION_DECISIONS.md` — ADR-08, ADR-12, ADR-13
+7. Before designing or changing architecture: `docs/knowledge/INDEX.md` §0 (records by upcoming work) and only the records it names. Non-authoritative engineering memory (research, decisions, measurements, rejected approaches); `docs/foundation/` wins on any conflict. Check `docs/knowledge/pitfalls/` before re-proposing an approach. Validate edits with `tools/verify-knowledge`.
 
 ## Verify before and after any change
 
