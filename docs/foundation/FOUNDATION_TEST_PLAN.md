@@ -50,16 +50,17 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 
 <!-- living:OB -->
 ### OB-1
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Multi-level popups (CR-1 residual). Test/decision: nested popup chain: order vs xdg-shell stacking (Smithay's except W-SM-20), positions vs Smithay render; hit-test vs presented (order criterion amended by FOUNDATION_ARCHITECTURE §C12.F8)
 - **Owner:** core origin(), adapter extraction
-- **Evidence available:** one popup level verified (EC-8/9/20)
+- **Evidence available:** one popup level verified (EC-8/9/20); INC-7 production: T1 `ob1_nested_popup_chain_matches_what_is_presented` (three-level chain, sibling, subsurface, scale 1 and 1.25; 0 mismatches against the hand-derived truth, Smithay positions, xdg-shell order per C12.F8, per-pixel hit-test), `a_nested_popup_is_constrained_like_a_first_level_one`, `a_newer_popup_is_stacked_above_every_older_one`
 - **Pass criterion:** 0 mismatches
 - **Destination:** T1
 - **May be closed by:** T1 production test (PRODUCT increment, production core + adapter + headless backend) porting xsnap/xhit to nested popup chains
 - **Dependencies:** INC-1
 - **Blocks:** INC-7 exit (popups)
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
+- **History:** Ratified CLOSED at INC-7 exit (owner, 2026-10-14) on `99c24cd`; the order criterion is xdg-shell's (FOUNDATION_ARCHITECTURE §C12.F8), Smithay's except W-SM-20.
 
 ### OB-2
 - **Status:** CLOSED
@@ -262,17 +263,17 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
 
 ### OB-18
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** `grab_popup` panic precondition (W-SM-7) and `ensure_configured` (W-SM-6). Test/decision: misbehaving-client tests
 - **Owner:** adapter
-- **Evidence available:** source
+- **Evidence available:** source; INC-7 production: T1 `t1_popup_policy` (3 tests), `t1_inc7_misbehaving` (6 tests, with a bystander client); the protocol error code is Smithay's (W-SM-18)
 - **Pass criterion:** protocol error to the client; compositor survives
 - **Destination:** T1
 - **May be closed by:** T1 production test (PRODUCT increment, production core + adapter + headless backend) with misbehaving clients
 - **Dependencies:** INC-4, INC-7
 - **Blocks:** INC-7 exit
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
-- **History:** INC-4 satisfies the W-SM-7 popup grab panic precondition via `grab_popup` validation, `reconcile_popup_chain`, and adversarial tests (`a1_inner_popup_closes_then_key`, `a1_client_closes_whole_chain_then_key`, `a1_middle_popup_disappears_then_key`, `a1_outer_popup_disappears_then_key`, `a1_root_unmaps_then_key`, `a1_destruction_at_depth_4`). Per observation C-1, the W-SM-6 popup portion (`ensure_configured` / initial commit carrying buffer) remains open pending INC-7. OB-18 therefore remains OPEN blocking INC-7 exit.
+- **History:** INC-4 satisfies the W-SM-7 popup grab panic precondition via `grab_popup` validation, `reconcile_popup_chain`, and adversarial tests (`a1_inner_popup_closes_then_key`, `a1_client_closes_whole_chain_then_key`, `a1_middle_popup_disappears_then_key`, `a1_outer_popup_disappears_then_key`, `a1_root_unmaps_then_key`, `a1_destruction_at_depth_4`). Per observation C-1, the W-SM-6 popup portion (`ensure_configured` / initial commit carrying buffer) remains open pending INC-7. OB-18 therefore remains OPEN blocking INC-7 exit. The W-SM-6 popup portion was closed by INC-7 slice 3 and the independent audit; ratified CLOSED at INC-7 exit (owner, 2026-10-14) on `99c24cd`.
 
 ### OB-19
 - **Status:** CLOSED
@@ -323,7 +324,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-7
 - **Blocks:** release (T3/T5 part)
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
-- **History:** 1R: every request is answered (INV-PRES-1); acceptance UX remains the open part.
+- **History:** 1R: every request is answered (INV-PRES-1); acceptance UX remains the open part. T1 answer-policy part met at INC-7 exit (owner, 2026-10-14): unfocused requests are declined (`an_unfocused_client_is_declined_and_nothing_changes`); a pre-map grant cannot end a presentation before its element maps (C12.F6; `a_pre_map_grant_takes_the_output_only_when_its_window_maps`, `a_pre_map_grant_that_never_draws_ends_nothing`); focus is not moved to hidden windows (C12.F7). The T3 (apps, video) and T5 (games) parts remain; release blocker.
 
 ### OB-23
 - **Status:** OPEN
@@ -440,16 +441,17 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **History:** Ratified CLOSED at INC-5 exit following independent adversarial review and owner ratification; verified by T1 production tests (`ob31_xlock_grab_persistent_defer`, `ob31_xlock_grab_oneshot_defer`) and core unit tests (`pointer.rs::m14_confinement_clamping_and_arrangement_isolation`, `m13_reconciliation_deferred_under_client_grab`).
 
 ### OB-32
-- **Status:** OPEN
+- **Status:** CLOSED
 - **Item:** Port xmaximize (ER-3) to T1 and test the `activated` mapping (INV-PROTO-1, INV-PRES-1).
 - **Owner:** core protocol policy + adapter
-- **Evidence available:** ER-3 (harness)
+- **Evidence available:** ER-3 (harness); INC-7 production: T1 `t1_toplevel_requests` (6 tests), `t1_fullscreen` (9 tests), the `t1_inc7_adversarial` request streams; record-only and deferral seeded controls detected (`tools/verify-test-efficacy`)
 - **Pass criterion:** maximize/unmaximize and set/unset_fullscreen each answered by exactly one configure with the policy state; record-only/deferral controls fail; `activated` set exactly on ActiveElementFocus; anchors and cameras unchanged
 - **Destination:** T1
 - **May be closed by:** T1 production test (PRODUCT increment, production core + adapter + headless backend)
 - **Dependencies:** INC-7
 - **Blocks:** INC-7 exit
 - **Origin:** CORRECTIONS_1R (1R)
+- **History:** Ratified CLOSED at INC-7 exit (owner, 2026-10-14) on `99c24cd`.
 
 ### OB-33
 - **Status:** OPEN
