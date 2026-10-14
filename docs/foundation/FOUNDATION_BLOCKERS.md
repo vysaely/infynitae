@@ -2073,6 +2073,24 @@ Original finding text: the sections above (PD-F2) and audit/README (PD-F1-01…0
 - **Evidence:** vendored Smithay 0.7.0 source; client traces (KCalc, fs_client); T1 `configure_bounds_is_zero_and_only_with_an_initial_configure`
 - **Obligations:** —
 
+### W-SM-18
+- **Quirk:** a buffer committed on an xdg surface that has not acknowledged a configure is answered with `xdg_surface.error` **1** (`not_constructed`, "Surface has not been configured yet") by `ToplevelSurface::ensure_configured` / `PopupSurface::ensure_configured`; xdg-shell names **3** (`unconfigured_buffer`). Upstream defect of Smithay 0.7.0 (2025-06-24, the pinned version); fixed upstream by commit `641d2ad` ("wayland/shell/xdg: Track configured state through MultiCache last_acked", PR #1817, merged 2025-09-17), which removes `ensure_configured` and posts `UnconfiguredBuffer` from pre-commit hooks. No released Smithay contains the fix as of 2026-10-14
+- **Infynitae response:** none: the client is disconnected either way and nothing else differs. No downstream patch. The adapter cannot post the right code itself (Smithay 0.7.0 exposes no `xdg_surface` handle). Tests accept both codes (`t1_popup_policy::assert_unconfigured_error`). At the next pin update: drop the adapter's two `ensure_configured` calls (upstream enforces the rule), require code 3 in the tests, retire this record
+- **Evidence:** vendored `wayland/shell/xdg/mod.rs` (1652, 2045); upstream commit `641d2ad`; T1 `t1_popup_policy`, `t1_inc7_misbehaving`
+- **Obligations:** — (pin update, D-B12-PIN)
+
+### W-SM-19
+- **Quirk:** when a client holding a popup grab disconnects, the keyboard grab ends at once but the pointer grab object stays installed until the next pointer event, when it finds its popup gone and ungrabs itself
+- **Infynitae response:** none today. Observable consequence: between the disconnect and the next pointer event the adapter's "pointer grabbed" reading (`is_pointer_grabbed`) is true; no event reaches the dead client or any other client, and nothing decides on that reading outside a pointer event. **INC-14 entry condition:** before interactive move/resize (or anything else) decides on the grab state without a pointer event, the adapter must end the pointer grab when the grabbing client's last popup is destroyed (`PointerHandle::unset_grab` in the popup-destruction path) and a T1 test must show no grab right after the disconnect
+- **Evidence:** T1 `t1_inc7_misbehaving` (no grab after one motion and one click); P10b
+- **Obligations:** INC-14 (above)
+
+### W-SM-20
+- **Quirk:** `PopupManager::popups_for_surface` (and so `Window::render_elements`) lists, for each root popup in creation order, its children oldest first and then itself: an older sibling, or an older popup's subtree, comes before (in front of) a newer popup. xdg-shell: "A newly created xdg_popup will be stacked on top of all previously created xdg_popup surfaces associated with the same xdg_toplevel"
+- **Infynitae response (experimental, X-15 amendment pending):** the adapter numbers each xdg popup at creation and orders a toplevel's popup trees newest first in the snapshot, so rendering and hit-testing follow the protocol; within one popup tree Smithay's order is kept. The render order equals Smithay's except where this quirk applies
+- **Evidence:** vendored `desktop/wayland/popup/manager.rs` (288, 347); T1 `a_newer_popup_is_stacked_above_every_older_one`, `ob1_nested_popup_chain_matches_what_is_presented`
+- **Obligations:** X-15 amendment (owner)
+
 <!-- /living -->
 
 ## D9 — Phase D final readiness judgment
