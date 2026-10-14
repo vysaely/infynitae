@@ -11,7 +11,7 @@ Date: 2026-10-14
 - **Evidence:** `~/Infynitae-INC7-EXIT-PREPARATION-2026-10-14/` (exit decision, governance consistency review, obligation closures, gate results); evidence/phase-f/INC-7/ and the C12.F5–F8 and C12.F10 amendment records.
 - **Obligation dispositions (FOUNDATION_TEST_PLAN):** OB-1 CLOSED; OB-18 CLOSED; OB-32 CLOSED; OB-22 T1 answer-policy part met, **stays OPEN** (T3/T5, release blocker).
 - **Exit tests:** TST-22 xmaximize on the production path (`t1_toplevel_requests`); nested popup chain parity (`ob1_nested_popup_chain_matches_what_is_presented`); record-only and deferral controls detected.
-- **Accepted residuals:** INC-7 residual register R-01…R-15 (`INC7_RESIDUAL_AND_FOLLOW_UP_REGISTER.md`): retained focus on a hidden window (R-01, owner policy); W-SM-19 → INC-14 entry condition (R-07); hidden windows get no frame callbacks → INC-8 (R-10); W-SM-18 until the next Smithay pin (R-06).
+- **Accepted residuals (tracked follow-up work, not resolved defects):** INC-7 residual register R-01…R-15 (`INC7_RESIDUAL_AND_FOLLOW_UP_REGISTER.md`): retained focus on a hidden window (R-01, owner policy); W-SM-19 → INC-14 entry condition (R-07); hidden windows get no frame callbacks → INC-8 (R-10); W-SM-18 until the next Smithay pin (R-06).
 - **Declaration:** **INC-7 is RATIFIED. INC-0 through INC-5 and INC-7 are RATIFIED.** INC-6 is NOT ratified, INC-6 exit is NOT authorized, and no INC-6 implementation is part of this ratification. INC-8 and INC-14 have NOT begun. OB-13, OB-22, OB-42, OB-44 and OB-52 are OPEN.
 
 ## PHASE F — INC-7 GOVERNANCE LAYERS C12.F5–C12.F8 ADOPTED 2026-10-14 (governance branch from the INC-7 integration candidate `93c2605`; not merged, not pushed)
