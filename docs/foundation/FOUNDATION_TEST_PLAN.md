@@ -571,7 +571,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-3, INC-6
 - **Blocks:** INC-6 exit (all listed hot paths exist by then)
 - **Origin:** D7 (PD-F1-11)
-- **History:** Core visibility remediation (`85a74cb`, 2026-10-13): allocations per call counted outside the repository with a counting allocator in a copy of `core_bench` at 3,000 elements — pan event 9,005 → 10, render list 9,004 → 10, commit 9,006 → 10, pointer motion 1, frame tick 3. The criterion (zero) is not met and no T0 counting-allocator test exists; status unchanged.
+- **History:** Core visibility remediation (`85a74cb`, 2026-10-13): allocations per call counted outside the repository with a counting allocator in a copy of `core_bench` at 3,000 elements — pan event 9,005 → 10, render list 9,004 → 10, commit 9,006 → 10, pointer motion 1, frame tick 3. The criterion (zero) is not met and no T0 counting-allocator test exists; status unchanged. INC-6 P-1 repair (`perf/inc-6-scale-index`, 2026-10-14, experimental): a T0 counting-allocator **ratchet** exists (`crates/infynitae-core/tests/t0_hot_path_allocations.rs`, owner-approved test-class unsafe, U-002…U-004): pan 15, route 1, key 2, commit 9, render list 15, frame tick 4 per event, equal to `main`, independent of the number of windows. It is not the zero-allocation criterion; status unchanged.
 
 ### OB-43
 - **Status:** OPEN

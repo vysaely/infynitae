@@ -828,6 +828,10 @@ SOURCE_SEEDS = [
 # ---- unsafe inventory (C9): every site matches exactly one entry of docs/foundation/UNSAFE_INVENTORY.md
 INVENTORY = "docs/foundation/UNSAFE_INVENTORY.md"
 T1_SLICE = "crates/infynitae-backend-headless/tests/t1_slice.rs"
+CORE_TEST = "crates/infynitae-core/tests/seeded_unsafe.rs"
+CORE_EXAMPLE = "crates/infynitae-core/examples/core_bench.rs"
+CORE_SRC_TESTS = "crates/infynitae-core/src/tests_seeded.rs"
+IPC_TEST = "crates/infynitae-ipc/tests/seeded_unsafe.rs"
 WINIT_LIB = "crates/infynitae-backend-winit/src/lib.rs"
 
 
@@ -896,6 +900,22 @@ INVENTORY_SEEDS = [
     ("listed unsafe in the forbid crate (core)", "FAIL",
      [(CORE_LIB, append("\npub fn listed() {\n    unsafe {}\n}\n")),
       (INVENTORY, inventory(inventory_row("U-900", CORE_LIB, "listed", cls="production")))]),
+    # Core's integration tests are the one place of a forbid crate where a listed test site is
+    # accepted (owner decision of 2026-10-14, the OB-42 counting allocator); nowhere else
+    ("a listed test site in a Core integration test is accepted (positive control)", "ok",
+     [(CORE_TEST, LISTED_SITE), (INVENTORY, inventory(inventory_row("U-900", CORE_TEST, "listed")))]),
+    ("unlisted unsafe in a Core integration test beside a valid inventory", "FAIL",
+     [(CORE_TEST, LISTED_SITE), (INVENTORY, inventory(LISTED_ROW)), (T1_SLICE, LISTED_SITE)]),
+    ("a production-class entry for a Core integration test site", "FAIL",
+     [(CORE_TEST, LISTED_SITE),
+      (INVENTORY, inventory(inventory_row("U-900", CORE_TEST, "listed", cls="production")))]),
+    ("listed unsafe in a Core example (forbid outside the integration tests)", "FAIL",
+     [(CORE_EXAMPLE, LISTED_SITE), (INVENTORY, inventory(inventory_row("U-900", CORE_EXAMPLE, "listed")))]),
+    ("listed unsafe in a Core library module named tests", "FAIL",
+     [(CORE_SRC_TESTS, LISTED_SITE), (CORE_LIB, append("\n#[cfg(test)]\nmod tests_seeded;\n")),
+      (INVENTORY, inventory(inventory_row("U-900", CORE_SRC_TESTS, "listed")))]),
+    ("listed unsafe in an ipc integration test (ipc forbids everywhere)", "FAIL",
+     [(IPC_TEST, LISTED_SITE), (INVENTORY, inventory(inventory_row("U-900", IPC_TEST, "listed")))]),
 ]
 
 

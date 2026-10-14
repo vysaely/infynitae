@@ -1461,6 +1461,69 @@ mod tests {
         );
     }
 
+    /// P-1: the steady state of a drag and a client's commits evaluate the scale policy for what
+    /// they changed, not for every element. On a Canvas of 200 windows: after its first step, a
+    /// drag's further steps are scoped passes, and so are commits during and after it; the first
+    /// step of a drag, its release (a settlement) and an output change are what visit every
+    /// element.
+    #[test]
+    fn steady_state_batches_do_not_evaluate_every_element() {
+        let (mut c, mut port, _shell, mut t): (Core, InputPort, _, OutputLifecycleToken) =
+            Core::new(persisted(false));
+        let (o, _) = c.output_connected(&mut t, desc("A", 60_000)).unwrap();
+        let ids: Vec<ElementId> = (0..200).map(|_| map(&mut c)).collect();
+        let button = |pressed| PhysicalEvent::PointerButton {
+            button: 0x112,
+            pressed,
+            modifiers: LOGO,
+            time_us: 0,
+        };
+        let motion = |d: f64| PhysicalEvent::PointerMotion {
+            delta: (d, 0.0),
+            delta_unaccel: (d, 0.0),
+            time_us: 0,
+        };
+        let full = |c: &Core| c.scale_passes.0;
+
+        // a drag: its first step visits every element (it opens their epochs), then no more
+        c.physical_input(&mut port, button(true)).unwrap();
+        let before = full(&c);
+        c.physical_input(&mut port, motion(5.0)).unwrap();
+        assert_eq!(
+            full(&c),
+            before + 1,
+            "the first step of a drag is a full pass"
+        );
+        let steady = full(&c);
+        for (i, &id) in ids.iter().take(50).enumerate() {
+            let d = if i % 2 == 0 { 900.0 } else { -900.0 };
+            c.physical_input(&mut port, motion(d)).unwrap();
+            c.toplevel_committed(id, tree(true)).unwrap();
+        }
+        assert_eq!(full(&c), steady, "steps and commits during a drag");
+        c.physical_input(&mut port, button(false)).unwrap();
+
+        // commits outside a drag
+        let steady = full(&c);
+        for &id in &ids[..50] {
+            c.toplevel_committed(id, tree(true)).unwrap();
+        }
+        assert_eq!(full(&c), steady, "commits outside a drag");
+
+        // an output change is evaluated for every element
+        let doubled = OutputDescriptor {
+            scale_120: 240,
+            ..desc("A", 60_000)
+        };
+        c.output_reconfigured(&mut t, o, doubled).unwrap();
+        assert!(full(&c) > steady, "an output change");
+        assert!(
+            c.scale_passes.1 >= 150,
+            "scoped passes: {}",
+            c.scale_passes.1
+        );
+    }
+
     /// One sequence of [`scoped_scale_evaluation_equals_the_full_reference`]. Returns (scoped
     /// passes, full passes, hint emissions, operations after which a mapped element was held,
     /// operations in which a drag opened an epoch, operations in which P7 lowered a hint).
