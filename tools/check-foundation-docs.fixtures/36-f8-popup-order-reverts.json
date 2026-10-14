@@ -1,0 +1,7 @@
+{
+ "name": "C12.F8: popup order slips back to popups_for_surface",
+ "file": "FOUNDATION_INVARIANTS.md",
+ "find": "within an element each popup tree — the toplevel's `xdg_popup`s newest first (xdg-shell; W-SM-20) — then the root tree",
+ "replace": "within an element each popup tree in `popups_for_surface` order, then the root tree",
+ "expect": "inv-wording-mismatch"
+}

@@ -5,7 +5,7 @@ This tool is NOT an architecture authority. It derives every expectation from th
 documents themselves:
   * the namespace authority map (FOUNDATION_ARCHITECTURE.md, living region NS);
   * the registry layers C12 / C12.R1 / C12.R2 (sealed), C12.E1R (unsealed, Phase E corrective) and
-    the Phase F amendment layers C12.F1 … C12.F7 (adopted by owner approval, one decision each)
+    the Phase F amendment layers C12.F1 … C12.F8 (adopted by owner approval, one decision each)
     in FOUNDATION_ARCHITECTURE.md, which define the expected effective INV set and wording;
   * the historical PD-F2 finding headings (FOUNDATION_BLOCKERS.md);
 and checks structure, uniqueness, provenance and cross-references of the living regions
@@ -63,7 +63,8 @@ F_LAYERS = [('C12.F1', 'C12.F1 @ ADOPTED 2026-10-13 (owner approval; base 2436dd
             ('C12.F4', 'C12.F4 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)'),
             ('C12.F5', 'C12.F5 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)'),
             ('C12.F6', 'C12.F6 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)'),
-            ('C12.F7', 'C12.F7 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)')]
+            ('C12.F7', 'C12.F7 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)'),
+            ('C12.F8', 'C12.F8 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)')]
 PACKAGE_START = '# Phase D package (D7)'
 OPEN_CLOSE = {'(': ')]', '[': ')]', '{': '}', '⟦': '⟧'}
 VERDICTS = ['READY FOR INDEPENDENT ADVERSARIAL REVIEW — PHASE E', 'NOT READY — ARCHITECTURE BLOCKERS REMAIN', 'NOT READY — PHASE D GATE INCOMPLETE']

@@ -2087,9 +2087,9 @@ Original finding text: the sections above (PD-F2) and audit/README (PD-F1-01…0
 
 ### W-SM-20
 - **Quirk:** `PopupManager::popups_for_surface` (and so `Window::render_elements`) lists, for each root popup in creation order, its children oldest first and then itself: an older sibling, or an older popup's subtree, comes before (in front of) a newer popup. xdg-shell: "A newly created xdg_popup will be stacked on top of all previously created xdg_popup surfaces associated with the same xdg_toplevel"
-- **Infynitae response (experimental, X-15 amendment pending):** the adapter numbers each xdg popup at creation and orders a toplevel's popup trees newest first in the snapshot, so rendering and hit-testing follow the protocol; within one popup tree Smithay's order is kept. The render order equals Smithay's except where this quirk applies
+- **Infynitae response:** (X-15 as amended by FOUNDATION_ARCHITECTURE §C12.F8, INV-RENDER-2) the adapter numbers each xdg popup at creation and orders a toplevel's popup trees newest first in the snapshot, so rendering and hit-testing follow the protocol; within one popup tree Smithay's order is kept. The render order equals Smithay's except where this quirk applies
 - **Evidence:** vendored `desktop/wayland/popup/manager.rs` (288, 347); T1 `a_newer_popup_is_stacked_above_every_older_one`, `ob1_nested_popup_chain_matches_what_is_presented`
-- **Obligations:** X-15 amendment (owner)
+- **Obligations:** X-15 (C12.F8); OB-1
 
 <!-- /living -->
 

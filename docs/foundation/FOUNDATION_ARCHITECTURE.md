@@ -1204,7 +1204,7 @@ Not kept as negative controls: things that would only inflate counts (e.g. "remo
 
 ## C12 — Canonical invariant registry
 
-> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice). §C12.F3 supersedes INV-PROTO-1 (`configure_bounds`). §C12.F4 supersedes INV-SCALE-3 (epoch time authority). §C12.F5 supersedes INV-STAGE-1 again (placement at the first windowed presentation). §C12.F6 supersedes INV-PRES-1 (a pre-map grant takes the output when its element maps). §C12.F7 supersedes INV-INPUT-8 (focus eligibility and retention under a presentation).
+> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice). §C12.F3 supersedes INV-PROTO-1 (`configure_bounds`). §C12.F4 supersedes INV-SCALE-3 (epoch time authority). §C12.F5 supersedes INV-STAGE-1 again (placement at the first windowed presentation). §C12.F6 supersedes INV-PRES-1 (a pre-map grant takes the output when its element maps). §C12.F7 supersedes INV-INPUT-8 (focus eligibility and retention under a presentation). §C12.F8 supersedes INV-RENDER-2 (popup stacking follows xdg-shell) and, through its table, C3.3 item 1 and X-15.
 
 **This table is authoritative.** Legacy identifiers map to it (C12.2). Where a rule was refined, the earlier wording is superseded and must not be cited as normative.
 
@@ -2122,6 +2122,40 @@ The first two paragraphs of INV-PRES-1 (exactly one configure per request; a gra
 ## C12.F7.2 What this layer does not change
 
 The single writer (FocusModel), the explicit actions themselves, target loss and the successor policy among the eligible elements, INV-INPUT-10 routing, M3 preemption, and `activated` (INV-PROTO-1). Without a presentation every mapped element is eligible, as before. **Residual (owner policy 2026-10-14):** a focused element hidden by a presentation keeps the focus and receives keyboard input while hidden (INC-7 residual R-01); a policy that clears or moves focus when a presentation starts is not adopted.
+
+---
+
+# §C12.F8 — Canonical registry amendment (Phase F: popup stacking follows xdg-shell, X-15)
+
+**Status: ADOPTED 2026-10-14 by owner approval.** Approved requirements: INV-RENDER-2's popup order is superseded; a toplevel's `xdg_popup`s are stacked newest first, as xdg-shell requires; the conflicting historical X-15, C3.3 and OB-1 text is superseded through this layer. One invariant is reworded; none is added or removed (57). Base: integration candidate `93c2605` (`integration/inc-7-exit-2026-10-14`).
+
+**Inputs:**
+- C12 INV-RENDER-2, C3.3 (order and Obligation X-15) and the CP3A-4 obligation row OB-1, as effective at `93c2605`;
+- xdg-shell, `xdg_popup`: "A newly created xdg_popup will be stacked on top of all previously created xdg_popup surfaces associated with the same xdg_toplevel";
+- Smithay 0.7.0 (W-SM-20): `PopupManager::popups_for_surface` lists a popup's children oldest first and the root popups in creation order, so an older sibling, or an older popup's subtree, is in front of a newer popup;
+- the implementation on `93c2605` (`23860b3`, `d350ed2`): the adapter numbers each `xdg_popup` at creation and the snapshot orders a toplevel's popups by that number, newest first (a stable sort); Core concatenates the order the adapter supplies.
+
+**Provenance:** [evidence/phase-f/popup-stacking/AMENDMENT_RECORD.md](evidence/phase-f/popup-stacking/AMENDMENT_RECORD.md).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12. Every other row is unchanged.**
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-RENDER-2** | Render order front-to-back: reverse Stage z-order; within an element each popup tree — the toplevel's `xdg_popup`s newest first (xdg-shell; W-SM-20) — then the root tree, each traversed downward | core (from snapshot order) | P+E | X-15 (C12.F8); W-SM-20; evidence/phase-f/popup-stacking | T1 `a_newer_popup_is_stacked_above_every_older_one`, `ob1_nested_popup_chain_matches_what_is_presented` | owner amendment 2026-10-14 (xdg-shell popup stacking, P10 #3) |
+
+## C12.F8.1 Sealed text superseded (must not be cited as normative)
+
+| Superseded | Replaced by |
+|---|---|
+| C12 INV-RENDER-2 "within an element each popup tree in `popups_for_surface` order" | INV-RENDER-2 (C12.F8): the toplevel's `xdg_popup`s newest first |
+| C3.3 "Within an element, the order reproduces Smithay's own `Window` path:" | "Within an element, the order is xdg-shell's; it reproduces Smithay's own `Window` path except for W-SM-20:" |
+| C3.3 item 1 "each popup tree in `PopupManager::popups_for_surface` order, using the same offset formula (`desktop/space/wayland/window.rs:106-121`);" | "each popup tree, the toplevel's `xdg_popup`s newest first — xdg-shell stacks a newly created `xdg_popup` above every previously created `xdg_popup` of the same toplevel (W-SM-20) — using the same offset formula (`desktop/space/wayland/window.rs:106-121`);" |
+| C3.3 "**Obligation X-15 (new):** an equivalence test shows that, for a tree with popups and above/below subsurfaces, the render list's surface order equals the order Smithay's `Window::render_elements` would produce." | "**Obligation X-15 (amended, C12.F8):** an equivalence test shows that, for a tree with popups and above/below subsurfaces, the render list's surface order is xdg-shell's stacking order — every `xdg_popup` above every `xdg_popup` of the same toplevel created before it, each popup's own surface tree in the order Smithay's `Window::render_elements` gives it, then the root tree — and equals Smithay's order except where W-SM-20 applies." |
+| CP3A-4 obligation registry, OB-1 test/decision "nested popup chain: order/positions vs Smithay render; hit-test vs presented" | "nested popup chain: order vs xdg-shell stacking (Smithay's except W-SM-20), positions vs Smithay render; hit-test vs presented" (living OB-1 in FOUNDATION_TEST_PLAN) |
+
+## C12.F8.2 What this layer does not change
+
+Reverse Stage z-order between elements; the root tree after the popups; the downward traversal of each tree; the popup offset formula (F-RENDER-1, `window.rs:106-121`); hit-testing through the presented order (INV-HIT-1, OB-26: `Window::surface_under` is never used). Core is unchanged. EC-9 (one popup level, Phase C) remains valid evidence: with a single popup the two orders agree. OB-1's status is decided at the INC-7 exit review, not by this layer.
 
 ---
 

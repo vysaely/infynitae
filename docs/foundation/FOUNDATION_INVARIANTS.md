@@ -1,8 +1,8 @@
 # Infynitae Native — Foundation Invariants (effective registry)
 
-Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1, C12.F2, C12.F3, C12.F4, C12.F5, C12.F6 and C12.F7 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
+Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1, C12.F2, C12.F3, C12.F4, C12.F5, C12.F6, C12.F7 and C12.F8 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
 
-This registry is the **effective projection** of eleven layers. The layers themselves stay where they are and are not edited:
+This registry is the **effective projection** of twelve layers. The layers themselves stay where they are and are not edited:
 - **C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a**: FOUNDATION_ARCHITECTURE §C12 (sealed Phase C registry, 54 rows);
 - **C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f**: FOUNDATION_ARCHITECTURE §C12.R1 (Phase D 1R amendments, 16 rows);
 - **C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be**: FOUNDATION_ARCHITECTURE §C12.R2 (Phase D 2R amendments, 6 rows);
@@ -13,7 +13,8 @@ This registry is the **effective projection** of eleven layers. The layers thems
 - **C12.F4 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)**: FOUNDATION_ARCHITECTURE §C12.F4 (Phase F amendment: epoch time authority, 1 row);
 - **C12.F5 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F5 (Phase F amendment: default placement at the first windowed presentation, 1 row);
 - **C12.F6 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F6 (Phase F amendment: a pre-map grant takes the output when its element maps, 1 row);
-- **C12.F7 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F7 (Phase F amendment: focus eligibility and retention under a presentation, 1 row).
+- **C12.F7 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F7 (Phase F amendment: focus eligibility and retention under a presentation, 1 row);
+- **C12.F8 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F8 (Phase F amendment: popup stacking follows xdg-shell, 1 row).
 
 Rules:
 - Each entry's **wording** is the statement of its latest layer, verbatim, except that complete formula text is replaced by an `[F-…]` reference.
@@ -21,7 +22,7 @@ Rules:
 - **Consequence of violation** is the C12 "Violation means" column. For the three invariants first introduced in 1R/2R it is a D7-authored description, marked as such (D-F0). E1R adds no invariant.
 - **ADR** links are derived from FOUNDATION_DECISIONS.md. **Obligations** are cited by ID; their records live in FOUNDATION_TEST_PLAN.md.
 
-Count: **57** effective invariants: 38 from C12, 6 from C12.R1, 2 from C12.R2, 5 from C12.E1R, 0 from C12.F1 (its row is superseded by C12.F5), 1 from C12.F2, 1 from C12.F3, 1 from C12.F4, 1 from C12.F5, 1 from C12.F6, 1 from C12.F7.
+Count: **57** effective invariants: 37 from C12, 6 from C12.R1, 2 from C12.R2, 5 from C12.E1R, 0 from C12.F1 (its row is superseded by C12.F5), 1 from C12.F2, 1 from C12.F3, 1 from C12.F4, 1 from C12.F5, 1 from C12.F6, 1 from C12.F7, 1 from C12.F8.
 
 <!-- living:INV -->
 
@@ -278,15 +279,15 @@ Count: **57** effective invariants: 38 from C12, 6 from C12.R1, 2 from C12.R2, 5
 - **ADR:** ADR-02
 
 ### INV-RENDER-2
-- **Wording:** Render order front-to-back: reverse Stage z-order; within an element each popup tree in `popups_for_surface` order, then the root tree, each traversed downward
+- **Wording:** Render order front-to-back: reverse Stage z-order; within an element each popup tree — the toplevel's `xdg_popup`s newest first (xdg-shell; W-SM-20) — then the root tree, each traversed downward
 - **Owner:** core (from snapshot order)
 - **Class:** E
 - **Violation:** wrong stacking
-- **Origin:** C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a
-- **Layers:** C12
-- **Trigger:** —
-- **Evidence:** X-15
-- **Tests (historical column):** T1
+- **Origin:** C12.F8 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)
+- **Layers:** C12 → C12.F8
+- **Trigger:** owner amendment 2026-10-14 (xdg-shell popup stacking, P10 #3)
+- **Evidence:** X-15 (C12.F8); W-SM-20; evidence/phase-f/popup-stacking
+- **Tests (historical column):** T1 `a_newer_popup_is_stacked_above_every_older_one`, `ob1_nested_popup_chain_matches_what_is_presented`
 - **Obligations:** —
 - **Formulas:** —
 - **ADR:** ADR-03

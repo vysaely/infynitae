@@ -51,7 +51,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 <!-- living:OB -->
 ### OB-1
 - **Status:** OPEN
-- **Item:** Multi-level popups (CR-1 residual). Test/decision: nested popup chain: order/positions vs Smithay render; hit-test vs presented
+- **Item:** Multi-level popups (CR-1 residual). Test/decision: nested popup chain: order vs xdg-shell stacking (Smithay's except W-SM-20), positions vs Smithay render; hit-test vs presented (order criterion amended by FOUNDATION_ARCHITECTURE §C12.F8)
 - **Owner:** core origin(), adapter extraction
 - **Evidence available:** one popup level verified (EC-8/9/20)
 - **Pass criterion:** 0 mismatches
