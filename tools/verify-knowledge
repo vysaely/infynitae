@@ -1,0 +1,252 @@
+#!/usr/bin/env python3
+"""
+verify-knowledge: Automated verification and schema validator for Infynitae Native's
+Permanent Engineering Knowledge System (docs/knowledge/).
+
+Enforces:
+1. Unique record IDs across the knowledge base.
+2. Required metadata fields present and non-empty.
+3. Allowed evidence classifications and adoption statuses.
+4. Format consistency and required content sections.
+5. Resolution of internal relative markdown links.
+6. Explicit supersession links for SUPERSEDED records.
+7. Zero modification of sealed foundation governance files.
+"""
+
+import os
+import re
+import sys
+import subprocess
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+KNOWLEDGE_DIR = REPO_ROOT / "docs" / "knowledge"
+FOUNDATION_DIR = REPO_ROOT / "docs" / "foundation"
+
+ALLOWED_EVIDENCE = {
+    "SOURCE-DERIVED",
+    "EXPERIMENTALLY VERIFIED",
+    "INDEPENDENTLY REPRODUCED",
+    "HYPOTHESIS",
+    "DISPUTED",
+    "CONTRADICTED",
+}
+
+ALLOWED_STATUSES = {
+    "RESEARCH",
+    "PROPOSED",
+    "APPROVED",
+    "IMPLEMENTED",
+    "VALIDATED",
+    "REJECTED",
+    "SUPERSEDED",
+    "DEFERRED",
+}
+
+REQUIRED_METADATA_FIELDS = [
+    "id",
+    "title",
+    "subsystem",
+    "source_rev",
+    "date",
+    "evidence_class",
+    "applicability",
+    "affected_branches",
+    "related_invariants",
+    "adoption_status",
+    "next_action",
+]
+
+REQUIRED_SECTIONS = [
+    "Verified Facts",
+    "Unverified Hypotheses",
+    "Performance & Correctness Implications",
+    "Limitations & Counterexamples",
+    "Reproduction Instructions",
+    "Links & Citations",
+]
+
+NON_RECORD_FILES = {
+    "INDEX.md",
+    "README.md",
+    "CONTRADICTIONS_AND_SUPERSEDED.md",
+    "PROVENANCE_INVENTORY.md",
+    "AGENT_INTEGRATION.md",
+    "WORKFLOW.md",
+}
+
+
+def parse_metadata_table(text):
+    """Extract metadata key-value pairs from a markdown table or frontmatter."""
+    metadata = {}
+    lines = text.splitlines()
+    in_table = False
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("|") and stripped.endswith("|"):
+            parts = [p.strip() for p in stripped.split("|")[1:-1]]
+            if len(parts) >= 2:
+                key_raw = parts[0].strip().replace("*", "").strip().lower().replace(" ", "_").replace("-", "_")
+                val_raw = parts[1].strip()
+                if key_raw in {"parameter", "field", "key", ":---", "---"}:
+                    continue
+                metadata[key_raw] = val_raw
+                in_table = True
+        elif in_table and not stripped.startswith("|"):
+            break
+    return metadata
+
+
+def parse_sections(text):
+    """Find markdown level 2 or level 3 headers."""
+    headers = set()
+    for line in text.splitlines():
+        match = re.match(r"^#{2,3}\s+(.+)$", line.strip())
+        if match:
+            header_name = match.group(1).strip()
+            # Normalize header
+            headers.add(header_name.lower())
+    return headers
+
+
+def check_sealed_files():
+    """Verify that no files under docs/foundation/ were modified."""
+    try:
+        diff_res = subprocess.run(
+            ["git", "diff", "--name-only", "main", "--", "docs/foundation"],
+            cwd=REPO_ROOT,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if diff_res.returncode == 0 and diff_res.stdout.strip():
+            return [f"Sealed foundation file modified: {f}" for f in diff_res.stdout.splitlines()]
+    except Exception as e:
+        return [f"Could not execute git diff: {e}"]
+    return []
+
+
+def main():
+    errors = []
+    warnings = []
+    seen_ids = {}
+
+    if not KNOWLEDGE_DIR.exists():
+        print(f"Error: Knowledge directory {KNOWLEDGE_DIR} does not exist.")
+        sys.exit(1)
+
+    # 1. Sealed files check
+    foundation_errors = check_sealed_files()
+    if foundation_errors:
+        errors.extend(foundation_errors)
+
+    record_files = []
+    for root, _, files in os.walk(KNOWLEDGE_DIR):
+        for f in files:
+            if f.endswith(".md"):
+                rel_path = Path(root, f).relative_to(KNOWLEDGE_DIR)
+                if f not in NON_RECORD_FILES and not rel_path.name.startswith("."):
+                    record_files.append(Path(root, f))
+
+    print(f"Validating {len(record_files)} knowledge records...")
+
+    # 2. Parse and validate records
+    records_by_id = {}
+    for rpath in record_files:
+        rel_str = str(rpath.relative_to(REPO_ROOT))
+        try:
+            content = rpath.read_text(encoding="utf-8")
+        except Exception as e:
+            errors.append(f"{rel_str}: Failed to read file: {e}")
+            continue
+
+        meta = parse_metadata_table(content)
+        sections = parse_sections(content)
+
+        # Check metadata fields
+        for field in REQUIRED_METADATA_FIELDS:
+            if field not in meta or not meta[field]:
+                errors.append(f"{rel_str}: Missing required metadata field '{field}'")
+
+        rec_id = meta.get("id")
+        if rec_id:
+            # Check ID format (e.g. KNOW-ARCH-001)
+            if not re.match(r"^KNOW-[A-Z]+-\d{3}$", rec_id):
+                errors.append(f"{rel_str}: Invalid ID format '{rec_id}'. Expected 'KNOW-<CATEGORY>-<NUM>'")
+            if rec_id in seen_ids:
+                errors.append(f"{rel_str}: Duplicate ID '{rec_id}' (first seen in {seen_ids[rec_id]})")
+            else:
+                seen_ids[rec_id] = rel_str
+                records_by_id[rec_id] = (rpath, meta)
+
+            # Check filename matches ID
+            if not rpath.name.startswith(rec_id):
+                warnings.append(f"{rel_str}: Filename does not start with ID '{rec_id}'")
+
+        # Check Evidence Classification
+        eclass = meta.get("evidence_class")
+        if eclass and eclass not in ALLOWED_EVIDENCE:
+            errors.append(f"{rel_str}: Invalid evidence_class '{eclass}'. Allowed: {sorted(ALLOWED_EVIDENCE)}")
+
+        # Check Adoption Status
+        astatus = meta.get("adoption_status")
+        if astatus and astatus not in ALLOWED_STATUSES:
+            errors.append(f"{rel_str}: Invalid adoption_status '{astatus}'. Allowed: {sorted(ALLOWED_STATUSES)}")
+
+        # Check Superseded requirement
+        if astatus == "SUPERSEDED":
+            if "superseded_by" not in meta or not meta["superseded_by"]:
+                errors.append(f"{rel_str}: Status is SUPERSEDED but 'superseded_by' metadata is missing or empty")
+
+        # Check Date format YYYY-MM-DD
+        dt = meta.get("date")
+        if dt and not re.match(r"^\d{4}-\d{2}-\d{2}$", dt):
+            errors.append(f"{rel_str}: Invalid date format '{dt}'. Expected YYYY-MM-DD")
+
+        # Check required content sections
+        for sec in REQUIRED_SECTIONS:
+            sec_lower = sec.lower()
+            if not any(sec_lower in s for s in sections):
+                errors.append(f"{rel_str}: Missing content section '{sec}'")
+
+        # Check local relative markdown links
+        link_matches = re.findall(r"\[([^\]]+)\]\(([^)]+)\)", content)
+        for link_text, link_target in link_matches:
+            if link_target.startswith("http://") or link_target.startswith("https://") or link_target.startswith("#") or link_target.startswith("file://"):
+                continue
+            # Strip fragment
+            clean_target = link_target.split("#")[0]
+            if clean_target:
+                target_path = (rpath.parent / clean_target).resolve()
+                if not target_path.exists():
+                    errors.append(f"{rel_str}: Broken relative link to '{link_target}'")
+
+    # 3. Check Supersession links
+    for rec_id, (rpath, meta) in records_by_id.items():
+        if meta.get("adoption_status") == "SUPERSEDED":
+            sup_id = meta.get("superseded_by", "").strip()
+            if sup_id and sup_id not in seen_ids:
+                errors.append(f"{seen_ids[rec_id]}: Superseded by unknown ID '{sup_id}'")
+
+    print("\n--- Validation Results ---")
+    if warnings:
+        print(f"Warnings ({len(warnings)}):")
+        for w in warnings:
+            print(f"  [WARN] {w}")
+
+    if errors:
+        print(f"\nErrors ({len(errors)}):")
+        for e in errors:
+            print(f"  [FAIL] {e}")
+        print("\nRESULT: FAILED")
+        sys.exit(1)
+    else:
+        print(f"All {len(record_files)} knowledge records validated successfully.")
+        print(f"Unique IDs: {len(seen_ids)}")
+        print("Sealed governance integrity: UNTOUCHED")
+        print("RESULT: PASS")
+        sys.exit(0)
+
+
+if __name__ == "__main__":
+    main()
