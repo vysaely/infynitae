@@ -278,8 +278,8 @@ impl Core {
         &self,
         model: &crate::output::OutputModel,
     ) -> Option<crate::projection::View> {
-        let fs = self.fullscreen.iter().find(|f| f.output == model.id)?;
-        let (anchor, tree, _) = self.stage.mapped(fs.element)?;
+        let element = self.presentation(model.id)?;
+        let (anchor, tree, _) = self.stage.mapped(element)?;
         let extent = model.logical_extent();
         // the centre of a view whose origin is v_P
         let centre = |anchor: i64, extent: f64, size: i32| {
@@ -296,7 +296,7 @@ impl Core {
             view_size: model.view_size(),
         })
         .ok()?;
-        view.only = Some(fs.element);
+        view.only = Some(element);
         Some(view)
     }
 
@@ -379,10 +379,12 @@ impl Core {
         }
     }
 
-    /// M9 `Windowed → Fullscreen{O}`: stores the state (replacing an older grant on O, whose
-    /// element is told so, and moving W's own if it was fullscreen elsewhere). Returns the
-    /// replaced element's configure. It sends no configure to W: the caller does, as the answer
-    /// to the request.
+    /// M9 `Windowed → Fullscreen{O}`: stores the state (moving W's own if it was fullscreen
+    /// elsewhere) and, if W is mapped, replaces every older grant on O, whose elements are told
+    /// so. A grant to an element that is not mapped replaces nothing yet: it does so when the
+    /// element maps ([`Core::take_output`]), so a client that never draws cannot end another
+    /// element's presentation (audit finding A-3). Returns the replaced elements' configures. It
+    /// sends no configure to W: the caller does, as the answer to the request.
     fn store_fullscreen(
         &mut self,
         id: ElementId,
@@ -395,16 +397,40 @@ impl Core {
             // still fullscreen: the size to return to is the one saved at the first grant
             saved = self.fullscreen.remove(i).saved;
         }
-        if let Some(i) = self.fullscreen.iter().position(|f| f.output == output) {
-            let old = self.fullscreen.remove(i);
-            fx.push(self.fullscreen_ended(old));
-        }
         self.fullscreen.push(FullscreenState {
             element: id,
             output,
             saved,
         });
+        if self.stage.mapped(id).is_some() {
+            fx.extend(self.take_output(id));
+        }
         fx
+    }
+
+    /// `id`'s grant, now that its element is mapped, replaces the older grants on its output
+    /// (INV-PRES-1 "a newer grant replaces an older one"): the presented element's, and any older
+    /// grant still waiting for its element's first map. A newer grant still waiting is kept: it
+    /// replaces this one when its element maps. `fullscreen` is kept in the order the grants
+    /// were made. Returns the replaced elements' configures.
+    fn take_output(&mut self, id: ElementId) -> Vec<Effect> {
+        let Some(mine) = self.fullscreen.iter().position(|f| f.element == id) else {
+            return Vec::new();
+        };
+        let output = self.fullscreen[mine].output;
+        let (ended, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.fullscreen)
+            .into_iter()
+            .enumerate()
+            .partition(|(i, f)| {
+                f.output == output
+                    && f.element != id
+                    && (*i < mine || self.stage.mapped(f.element).is_some())
+            });
+        self.fullscreen = kept.into_iter().map(|(_, f)| f).collect();
+        ended
+            .into_iter()
+            .map(|(_, old)| self.fullscreen_ended(old))
+            .collect()
     }
 
     /// Forgets `id`'s fullscreen state and every pending piece of it — a recorded pre-map
@@ -649,7 +675,8 @@ impl Core {
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
                 self.stage.set_state(id, Lifecycle::Mapped).map_err(stale)?;
                 self.stage.raise(id);
-                vec![]
+                // a grant made before this map takes its output now (A-3)
+                self.take_output(id)
             }
             (Lifecycle::Mapped, false) => {
                 // null-buffer commit: unmap; identity and anchor kept, snapshot dropped
@@ -2526,6 +2553,118 @@ mod tests {
             (v.v.x, v.v.y),
             (-200 * Q16_ONE - 26214, -150 * Q16_ONE - 13107)
         );
+    }
+
+    /// A-3: a grant made before an element's first map takes the output only when the element
+    /// maps. Until then the presented element keeps it and is told nothing; a newcomer that is
+    /// destroyed or unmapped first, or never draws, ends nothing. Two waiting grants take the
+    /// output in the order their elements map. A grant to a mapped, focused element still
+    /// replaces every older grant on the output, a waiting one included. Output removal ends
+    /// every grant on the output.
+    #[test]
+    fn a_pre_map_grant_takes_the_output_when_its_element_maps() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let o = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, FS).unwrap();
+        c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        assert_eq!(c.presentation(o), Some(w));
+        let told = |fx: &[Effect], e: ElementId| {
+            fx.iter().any(|f| {
+                matches!(f, Effect::ToplevelConfigure(x) | Effect::ToplevelConfigureSize { element: x, .. } if *x == e)
+            })
+        };
+        // a newcomer asks before its initial commit: granted, waiting, W untouched
+        let premap = |c: &mut Core, k: u64| {
+            let x = c.toplevel_created();
+            assert_eq!(
+                c.toplevel_request(x, FS).unwrap().0,
+                ToplevelDecision::Recorded
+            );
+            let fx = c.toplevel_committed(x, win(k, 0, 0, false)).unwrap();
+            (x, fx)
+        };
+        let (x, fx) = premap(&mut c, 2);
+        assert!(
+            !told(&fx, w),
+            "W was told to leave at another element's initial commit"
+        );
+        assert_eq!(c.presentation(o), Some(w));
+        assert_eq!(c.fullscreen_of(x).map(|f| f.output), Some(o));
+        // destroyed before drawing: nothing ends
+        let fx = c.toplevel_destroyed(x);
+        assert!(!told(&fx, w));
+        assert_eq!(c.presentation(o), Some(w));
+        assert_eq!(c.fullscreen_of(w).map(|f| f.output), Some(o));
+
+        // two waiting newcomers, the older maps first: it takes the output and the newer keeps
+        // waiting; when the newer maps, it replaces the older
+        let (x, _) = premap(&mut c, 3);
+        let (y, _) = premap(&mut c, 4);
+        assert_eq!(c.presentation(o), Some(w));
+        let fx = c.toplevel_committed(x, win(3, 1920, 1080, true)).unwrap();
+        assert!(
+            told(&fx, w),
+            "W keeps the output after a newer grant's element mapped"
+        );
+        assert!(
+            !told(&fx, y),
+            "a newer waiting grant was ended by an older one's map"
+        );
+        assert_eq!(c.presentation(o), Some(x));
+        assert_eq!(c.fullscreen_of(w), None);
+        let fx = c.toplevel_committed(y, win(4, 1920, 1080, true)).unwrap();
+        assert!(told(&fx, x));
+        assert_eq!(c.presentation(o), Some(y));
+        // the newer maps first: it replaces the presenter and the older waiting grant
+        let (p, _) = premap(&mut c, 8);
+        let (q, _) = premap(&mut c, 9);
+        let fx = c.toplevel_committed(q, win(9, 1920, 1080, true)).unwrap();
+        assert!(
+            told(&fx, y) && told(&fx, p),
+            "older grants survived a newer one's map"
+        );
+        assert_eq!(c.fullscreen_of(p), None);
+        c.toplevel_committed(p, win(8, 640, 480, true)).unwrap();
+        assert_eq!(
+            c.presentation(o),
+            Some(q),
+            "an ended waiting grant took the output"
+        );
+        let x = q;
+
+        // the presenter unmaps while a grant waits: no presentation until the waiting one maps
+        let (z, _) = premap(&mut c, 5);
+        c.toplevel_committed(x, win(3, 1920, 1080, false)).unwrap();
+        assert_eq!(c.presentation(o), None);
+        c.toplevel_committed(z, win(5, 1920, 1080, true)).unwrap();
+        assert_eq!(c.presentation(o), Some(z));
+
+        // a focused, mapped element's grant replaces the presenter and a waiting grant
+        let (v, _) = premap(&mut c, 6);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        let fx = c.toplevel_request(w, FS).unwrap().1;
+        assert!(
+            told(&fx, z) && told(&fx, v),
+            "older grants on the output survived"
+        );
+        assert_eq!(c.fullscreen_of(v), None);
+        c.toplevel_committed(v, win(6, 640, 480, true)).unwrap();
+        assert_eq!(
+            c.presentation(o),
+            Some(w),
+            "a replaced waiting grant took the output"
+        );
+
+        // output removal ends a waiting grant too
+        let (u, _) = premap(&mut c, 7);
+        assert!(c.fullscreen_of(u).is_some());
+        c.output_disconnected(&mut t, o).unwrap();
+        assert_eq!(c.fullscreen_of(u), None);
+        assert_eq!(c.fullscreen_of(w), None);
     }
 
     /// M9 "configure with the saved size": the size offered is the last *windowed* size. A grant

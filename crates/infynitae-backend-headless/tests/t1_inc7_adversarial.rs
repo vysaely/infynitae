@@ -872,33 +872,69 @@ fn fullscreen_on_outputs_of_different_scales() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Policy as sealed (characterisation; see the INC-7 audit, finding A-3)
+// Audit finding A-3: a grant made before the first map takes the output at that map
 // ---------------------------------------------------------------------------------------------
 
-/// INV-PRES-1 as sealed: "granted ... before W's first map" and "a newer grant replaces an
-/// older one on the same output". Together: a toplevel that has never drawn ends the focused
-/// element's fullscreen. This test records that consequence; it does not endorse it.
+/// A-3: a toplevel that asks for fullscreen before its first map is granted, but takes the
+/// output only when it maps. Until then the presented window keeps the output, its pixels and
+/// its configure state, and the user keeps focus; a newcomer that never draws ends nothing.
+/// When the newcomer draws, the presented window is told to leave with its saved size.
 #[test]
-fn as_sealed_a_pre_map_grant_replaces_a_presented_fullscreen() {
+fn a_pre_map_grant_takes_the_output_only_when_its_window_maps() {
     let (mut t, w, id, _) = T::scene();
     t.ask(w, |tl| tl.set_fullscreen(None));
     t.resize(w, (640, 480), RED);
     let qh = t.ls.qh.clone();
     let x = t.ls.probe.toplevel_uncommitted(&qh, "X", (640, 480));
-    // X never draws: it is marked as already configured so the probe does not paint it
+    // X does not draw yet: marked as configured so the probe does not paint it
     t.ls.probe.surfaces[x].configured = true;
     t.toplevel(x).set_fullscreen(None);
     let before = t.configures(w).len();
     t.ls.probe.surfaces[x].wl.commit();
     t.adv();
+    t.adv();
+    assert_eq!(
+        t.configures(w)[before..].to_vec(),
+        vec![],
+        "W was told to leave"
+    );
+    assert_eq!(t.ls.state.core().presentation(t.ls.output()), Some(id));
+    assert_eq!(t.ls.state.core().focus().target(), Some(id), "focus is W's");
+    assert_layers(&t.frame(), &[W_FULL], "W still presented");
+
+    // X draws: it takes the output, and W is offered its windowed size
+    t.paint(x, GREEN);
+    t.adv();
     assert_eq!(
         t.configures(w)[before..].to_vec(),
         vec![((200, 100), vec![ACTIVATED])],
-        "W is told to leave fullscreen"
+        "W is told to leave when X maps"
     );
-    assert_eq!(t.ls.state.core().fullscreen_of(id), None);
-    assert_eq!(t.ls.state.core().presentation(t.ls.output()), None);
-    assert_eq!(t.ls.state.core().focus().target(), Some(id), "focus is W's");
+    let xid = t.ls.state.elements().last().expect("X");
+    assert_eq!(t.ls.state.core().presentation(t.ls.output()), Some(xid));
+    assert_layers(&t.frame(), &[((0, 0, 640, 480), GREEN)], "X presented");
+}
+
+/// A-3: a newcomer granted before its first map that is destroyed without drawing ends nothing.
+#[test]
+fn a_pre_map_grant_that_never_draws_ends_nothing() {
+    let (mut t, w, id, _) = T::scene();
+    t.ask(w, |tl| tl.set_fullscreen(None));
+    t.resize(w, (640, 480), RED);
+    let qh = t.ls.qh.clone();
+    let x = t.ls.probe.toplevel_uncommitted(&qh, "X", (640, 480));
+    t.ls.probe.surfaces[x].configured = true;
+    t.toplevel(x).set_fullscreen(None);
+    t.ls.probe.surfaces[x].wl.commit();
+    t.adv();
+    let before = t.configures(w).len();
+    t.toplevel(x).destroy();
+    t.ls.probe.surfaces[x].xdg.as_ref().expect("xdg").destroy();
+    t.ls.probe.surfaces[x].wl.destroy();
+    t.adv();
+    assert_eq!(t.configures(w)[before..].to_vec(), vec![]);
+    assert_eq!(t.ls.state.core().presentation(t.ls.output()), Some(id));
+    assert_layers(&t.frame(), &[W_FULL], "W still presented");
 }
 
 /// INC-8 is not implemented (M16 withhold, kick, fallback): an element that no output observes
