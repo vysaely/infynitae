@@ -46,9 +46,9 @@
    | CSD "tiled" hack for corner clipping | Not needed | — | — |
    | Per-frame `Vec` allocations in composition | Rejected as a target | OB-42 (open, INC-6 line) | KNOW-EXP-002 |
    | *Added 2026-10-15 from the source study (KNOW-RES-011):* | | | |
-   | Camera momentum / animated zoom, with the pointer kept screen-fixed by warping its canvas location | Product feature, not specified | Would need an owner decision and per-step authorization (INV-CAMERA-1) | KNOW-RES-011 |
-   | Zoom-to-fit with dynamic minimum zoom from the windows' bounding box | Partly present | Viewport-fit is a one-shot authorized action (INV-CAMERA-5); no dynamic minimum | KNOW-RES-011 |
-   | `auto` placement next to the focused window's cluster | Not specified | F-PLACE-1 centres on the camera; any cluster placement is a product decision | KNOW-RES-011 |
+   | Camera momentum / animated zoom, with the pointer kept screen-fixed by warping its canvas location | Product candidate, not specified | Would need an owner decision and per-step authorization (INV-CAMERA-1) | KNOW-RES-011 |
+   | Zoom-to-fit with dynamic minimum zoom from the windows' bounding box | Product candidate; viewport-fit specified, not implemented | Viewport-fit is specified as a one-shot authorized action (INV-CAMERA-5); no code on main `c6d47c9`; no dynamic minimum | KNOW-RES-011 |
+   | `auto` placement next to the focused window's cluster | Product candidate, not specified | F-PLACE-1 centres on the camera; any cluster placement is a product decision | KNOW-RES-011 |
    | Camera as `f64` top-left, accumulated per pan event | Rejected (by existing design) | Q16 centre, re-derived from the gesture origin (INV-COORD-3) | KNOW-RES-011 |
    | Membership from the zoom-1 output rect while culling uses the zoomed rect | Rejected (divergence) | One `View` for render, membership and hit-test (F-MEMBER-1, F-HIT-1) | KNOW-RES-011 |
    | Per-iteration focus pull over all stage entries | Rejected on design grounds (unchanged; cost traced as O(W) per pick, not measured) | Core chokepoints | KNOW-RES-011, KNOW-PITFALL-002 |

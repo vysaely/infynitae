@@ -22,7 +22,7 @@ Executes the eight-question plan of KNOW-RES-009 (gap G-01). Owner approval: 202
 
 **Notation.** `W` mapped windows on the canvas (all outputs), `V` windows whose box meets an output's viewport, `O` outputs, `P` screen-pinned windows (DriftWM only), `S_V` surfaces of the visible windows, `R` membership rows (Infynitae).
 
-**Evidence labels.** *Traced* = read in source along the named call path, not executed. *Inference* = a conclusion drawn from traced facts that the source does not state. Nothing here was run or measured.
+**Evidence labels.** *Traced* = read in source along the named call path, not executed. *Inference* = a conclusion drawn from traced facts that the source does not state (all complexity tables are inference). *Not executed* = runtime behaviour predicted from source but never observed. *Unmeasured* = applies to every cost here: no magnitude was run or measured. *Product candidate* = a DriftWM feature Infynitae has not specified; a candidate for an owner decision, not an architecture requirement.
 
 ## Verified Facts
 
@@ -142,10 +142,10 @@ The O(W²) terms come from `Vec` scans comparing window handles. That is cheap p
 - **What Infynitae already does better** (the culled `ProjectionFrame`, binary-search `Stage`, chokepoint re-derivation, one shared `View` for render, membership and hit-test): it scales better asymptotically than DriftWM's per-iteration pull. No change is suggested.
 - **What DriftWM handles that Infynitae has not specified yet:**
   - camera animation (momentum, animated zoom), with input tracking the live camera and the pointer kept screen-fixed by warping its canvas location;
-  - zoom-to-fit and dynamic minimum zoom;
+  - a dynamic minimum zoom derived from the windows' extent (viewport-fit itself is specified by INV-CAMERA-5 but not implemented on main `c6d47c9`; *correction 2026-10-15*: the first version of this record listed zoom-to-fit as unspecified);
   - placement relative to existing windows (`auto`).
 
-  These are product features, not performance findings. Any of them would need its own owner decision and, for camera animation, a per-step authorization (INV-CAMERA-1).
+  These are product candidates, not performance findings and not requirements. Any of them would need its own owner decision and, for camera animation, a per-step authorization (INV-CAMERA-1).
 - **Where Infynitae differs by design:** DriftWM accumulates the camera per event in `f64`, while Infynitae re-derives from the gesture origin and quantises once (INV-COORD-3). That rule exists to prevent drift that per-event accumulation allows; no change is suggested.
 
 ## Limitations & Counterexamples
