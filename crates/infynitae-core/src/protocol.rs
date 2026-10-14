@@ -163,14 +163,13 @@ impl Core {
                     .collect();
                 let rho_pred =
                     crate::scale::predict_rho(anchor, tree.geometry, &self.outputs, &views);
-                let output_scales: Vec<f64> = self.outputs.iter().map(|o| o.scale).collect();
                 let s_max = crate::scale::s_max_for_tree(Some(&tree));
                 let h_dev = crate::scale::h_dev(s_max, self.scale_config.d_max);
                 let h_max =
                     crate::scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
-                let ladder = crate::scale::ladder(&output_scales, h_max, self.scale_config.r);
+                let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
                 let initial_h =
-                    crate::scale::target(rho_pred, &ladder, h_max, self.scale_config.sigma);
+                    crate::scale::target(rho_pred, ladder, h_max, self.scale_config.sigma);
                 let s120 = crate::scale::preferred_scale_120(initial_h);
                 let b = crate::scale::preferred_buffer_scale(initial_h, h_dev);
 
@@ -178,8 +177,7 @@ impl Core {
                 st.last_emitted_scale_120 = Some(s120);
                 st.last_emitted_buffer_scale = Some(b);
                 st.last_rho = Some(rho_pred);
-                self.scales.retain(|(e, _)| *e != id);
-                self.scales.push((id, st));
+                self.scales.set(id, st);
 
                 vec![
                     Effect::PreferredScale {
@@ -266,7 +264,7 @@ impl Core {
     /// dead client gets no leave: its membership rows are dropped silently. Target loss triggers
     /// successor focus transition (K7, M11).
     pub fn toplevel_destroyed(&mut self, id: ElementId) -> Vec<Effect> {
-        self.scales.retain(|(e, _)| *e != id);
+        self.scales.remove(id);
         for (_, frame) in &mut self.frames {
             frame.entries.retain(|e| e.element != id);
         }

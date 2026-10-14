@@ -20,6 +20,7 @@ use crate::geom::{LocalRect, Q16_ONE};
 use crate::output::OutputModel;
 use crate::projection::View;
 use crate::snapshot::SurfaceTree;
+use crate::stage::ElementId;
 
 /// Candidate constants (provisional, configurable, PROV-1, PROV-2, PROV-3, PROV-5).
 pub const DEFAULT_H_CFG: f64 = 3.0;
@@ -341,6 +342,70 @@ impl ScaleState {
     }
 }
 
+/// OBJ-16: the scale state of each element, and the only store of it. Kept sorted by element,
+/// so a lookup is a binary search, as the Stage's own records are: identities are monotonic and
+/// never reused (INV-STAGE-3), so a destroyed element's entry can never be found by a later one.
+/// Iteration is in element order.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct ScaleStates(Vec<(ElementId, ScaleState)>);
+
+impl ScaleStates {
+    fn find(&self, element: ElementId) -> Result<usize, usize> {
+        self.0.binary_search_by_key(&element, |(e, _)| *e)
+    }
+
+    pub(crate) fn get(&self, element: ElementId) -> Option<&ScaleState> {
+        self.find(element).ok().map(|i| &self.0[i].1)
+    }
+
+    pub(crate) fn get_mut(&mut self, element: ElementId) -> Option<&mut ScaleState> {
+        self.find(element).ok().map(|i| &mut self.0[i].1)
+    }
+
+    /// The state of `element`, created by `init` if it has none.
+    pub(crate) fn get_or_insert_with(
+        &mut self,
+        element: ElementId,
+        init: impl FnOnce() -> ScaleState,
+    ) -> &mut ScaleState {
+        let i = match self.find(element) {
+            Ok(i) => i,
+            Err(i) => {
+                self.0.insert(i, (element, init()));
+                i
+            }
+        };
+        &mut self.0[i].1
+    }
+
+    /// Sets the state of `element`, replacing the one it had.
+    pub(crate) fn set(&mut self, element: ElementId, state: ScaleState) {
+        match self.find(element) {
+            Ok(i) => self.0[i].1 = state,
+            Err(i) => self.0.insert(i, (element, state)),
+        }
+    }
+
+    pub(crate) fn remove(&mut self, element: ElementId) {
+        if let Ok(i) = self.find(element) {
+            self.0.remove(i);
+        }
+    }
+
+    pub(crate) fn iter(&self) -> std::slice::Iter<'_, (ElementId, ScaleState)> {
+        self.0.iter()
+    }
+}
+
+impl<'a> IntoIterator for &'a mut ScaleStates {
+    type Item = &'a mut (ElementId, ScaleState);
+    type IntoIter = std::slice::IterMut<'a, (ElementId, ScaleState)>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.iter_mut()
+    }
+}
+
 /// F-SCALE-2 / E-F2-06: Largest logical side over all surfaces of E's tree (0 if no surface has a non-zero extent).
 pub fn s_max_for_tree(tree: Option<&SurfaceTree>) -> u32 {
     let mut s_max = 0u32;
@@ -421,6 +486,109 @@ pub fn ladder(output_scales: &[f64], h_max: f64, r: f64) -> Vec<f64> {
     rungs
 }
 
+/// Which mapped elements a batch-end evaluation has to visit. Derived from the scale states and
+/// never authoritative: it decides only whether to visit, never what a hint is.
+///
+/// Evaluating an element again with unchanged inputs (its observers, their scales and zooms,
+/// its surface tree, the outputs, the configuration) changes nothing ([`ScaleState::evaluate`]),
+/// except in two cases:
+/// - its epoch is closed and the batch belongs to a continuous interaction: the epoch opens;
+/// - its epoch is closed, SC-E held its hint away from the target, and the batch is not
+///   client-caused: the hint moves.
+///
+/// A batch therefore visits the elements marked for it (those whose inputs it changed, and those
+/// a step changed outside an evaluation), unless another element may need it: when `all` says
+/// an input common to every element changed; when the batch belongs to a continuous interaction
+/// and `closed` says some mapped element may have a closed epoch; and always for a batch that is
+/// neither client-caused nor part of a continuous interaction (an element SC-E held could
+/// move). An element held by SC-E has a closed epoch, so inside a continuous interaction
+/// `closed` covers it. `closed` is set by whatever may close an epoch, and cleared only by a
+/// full pass, which computes it exactly; set without need, it costs one full pass.
+#[derive(Debug)]
+pub(crate) struct Sweep {
+    pub(crate) all: bool,
+    pub(crate) closed: bool,
+    /// The elements marked for the next evaluation, ascending; between passes also the buffer
+    /// a pass lists the elements it visits in (cleared, not freed).
+    marked: Vec<ElementId>,
+}
+
+impl Default for Sweep {
+    fn default() -> Self {
+        Sweep {
+            all: true,
+            closed: true,
+            marked: Vec::new(),
+        }
+    }
+}
+
+impl Sweep {
+    pub(crate) fn needs_full_pass(&self, continuous: bool, is_client_response: bool) -> bool {
+        self.all || (continuous && self.closed) || (!continuous && !is_client_response)
+    }
+
+    /// The next evaluation visits `element`.
+    pub(crate) fn mark(&mut self, element: ElementId) {
+        if let Err(i) = self.marked.binary_search(&element) {
+            self.marked.insert(i, element);
+        }
+    }
+
+    /// The marked elements, ascending; hand the list back with [`Sweep::evaluated`].
+    pub(crate) fn take_marked(&mut self) -> Vec<ElementId> {
+        std::mem::take(&mut self.marked)
+    }
+
+    /// After an evaluation that visited `visited` (the list [`Sweep::take_marked`] gave):
+    /// whether an element it visited was left with a closed epoch.
+    pub(crate) fn evaluated(&mut self, full: bool, closed: bool, mut visited: Vec<ElementId>) {
+        if full {
+            (self.all, self.closed) = (false, closed);
+        } else {
+            self.closed |= closed;
+        }
+        visited.clear();
+        self.marked = visited;
+    }
+}
+
+/// The last ladder built, with everything it was built from. `L(E)` depends on the element only
+/// through `H_max(E)`, and nearly every element has the same one (`H_cfg`), so most lookups find
+/// it. Derived and self-checking: a lookup compares the output scales, `r` and `H_max` it is
+/// given with those the ladder was built from and builds it again on any difference, so no
+/// change elsewhere has to invalidate it.
+#[derive(Debug, Default)]
+pub(crate) struct Ladders {
+    output_scales: Vec<f64>,
+    r: f64,
+    h_max: f64,
+    ladder: Vec<f64>,
+}
+
+impl Ladders {
+    /// [`ladder`] of the outputs' scales, `h_max` and `r`.
+    pub(crate) fn get(&mut self, outputs: &[OutputModel], h_max: f64, r: f64) -> &[f64] {
+        let same = |a: f64, b: f64| a.to_bits() == b.to_bits();
+        let built = !self.ladder.is_empty()
+            && same(self.h_max, h_max)
+            && same(self.r, r)
+            && self.output_scales.len() == outputs.len()
+            && self
+                .output_scales
+                .iter()
+                .zip(outputs)
+                .all(|(&s, o)| same(s, o.scale));
+        if !built {
+            self.output_scales.clear();
+            self.output_scales.extend(outputs.iter().map(|o| o.scale));
+            (self.h_max, self.r) = (h_max, r);
+            self.ladder = ladder(&self.output_scales, h_max, r);
+        }
+        &self.ladder
+    }
+}
+
 /// F-SCALE-3: Target t(ρ) = smallest rung of L(E) ≥ ρ / (1 + σ), else H_max(E).
 pub fn target(rho: f64, ladder: &[f64], h_max: f64, sigma: f64) -> f64 {
     let need = rho / (1.0 + sigma);
@@ -464,8 +632,9 @@ pub fn preferred_buffer_scale(h: f64, h_dev: f64) -> u32 {
 
 /// F-SCALE-1: Requirement ρ(E) over observing presentations.
 /// Camera presentations use camera zoom; protocol-fullscreen presentation uses zoom 1 (INV-SCALE-1).
-pub fn compute_rho(
-    observers: &[crate::output::OutputId],
+/// `observers` may name an output more than once.
+pub fn compute_rho<'a>(
+    observers: impl IntoIterator<Item = &'a crate::output::OutputId>,
     outputs: &[OutputModel],
     cameras: &crate::navigation::CameraSet,
     fullscreen_output: Option<crate::output::OutputId>,
@@ -554,6 +723,62 @@ pub fn predict_rho(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The ladder memo answers every lookup with exactly what [`ladder`] builds from the same
+    /// output scales, `H_max` and `r`, whichever of them changed since the previous lookup: one
+    /// at a time, and the output list growing or shrinking behind the same leading scales.
+    #[test]
+    fn the_ladder_memo_equals_a_fresh_ladder() {
+        use crate::output::{OutputDescriptor, OutputIds, Transform};
+        let mut ids = OutputIds::default();
+        let mut outputs = |scales: &[u32]| -> Vec<OutputModel> {
+            scales
+                .iter()
+                .map(|&scale_120| {
+                    let d = OutputDescriptor {
+                        key: crate::output::tests::key("A"),
+                        mode: (1920, 1080),
+                        transform: Transform::Normal,
+                        scale_120,
+                        refresh_mhz: 60_000,
+                    };
+                    OutputModel::from_descriptor(ids.next(), &d, (0.0, 0.0))
+                })
+                .collect()
+        };
+        let sets = [
+            outputs(&[]),
+            outputs(&[120]),
+            outputs(&[120, 240]),
+            outputs(&[120, 240, 150]),
+            outputs(&[150]),
+            outputs(&[90, 180]),
+        ];
+        let (h_maxes, rs) = ([3.0, 2.0, 1.5, 0.75, 2.4], [1.25, 1.5, 2.0]);
+        let mut memo = Ladders::default();
+        let mut x = 0x2545_f491_4f6c_dd1du64;
+        let (mut set, mut h, mut r) = (0, 0, 0);
+        for _ in 0..3000 {
+            x ^= x << 13;
+            x ^= x >> 7;
+            x ^= x << 17;
+            // change one input, or none
+            match x % 4 {
+                0 => set = (x / 4 % sets.len() as u64) as usize,
+                1 => h = (x / 4 % h_maxes.len() as u64) as usize,
+                2 => r = (x / 4 % rs.len() as u64) as usize,
+                _ => {}
+            }
+            let scales: Vec<f64> = sets[set].iter().map(|o| o.scale).collect();
+            assert_eq!(
+                memo.get(&sets[set], h_maxes[h], rs[r]),
+                ladder(&scales, h_maxes[h], rs[r]).as_slice(),
+                "outputs {scales:?}, H_max {}, r {}",
+                h_maxes[h],
+                rs[r]
+            );
+        }
+    }
 
     /// TST-16 — cp3a scale model (walkthroughs A–E, EC-19).
     #[test]

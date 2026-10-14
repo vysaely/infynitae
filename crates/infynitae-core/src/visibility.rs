@@ -47,6 +47,11 @@ impl MembershipTable {
         out
     }
 
+    /// Outputs observing an element, once per row: an output can repeat.
+    pub(crate) fn observing_outputs(&self, element: ElementId) -> impl Iterator<Item = &OutputId> {
+        self.rows[self.range(element)].iter().map(|(_, _, o)| o)
+    }
+
     /// The elements that have at least one row, ascending.
     pub(crate) fn observed(&self) -> impl Iterator<Item = ElementId> + '_ {
         self.rows.chunk_by(|a, b| a.0 == b.0).map(|rows| rows[0].0)
@@ -1413,6 +1418,262 @@ mod tests {
             nonempty > 8000,
             "membership was non-empty after only {nonempty} operations"
         );
+    }
+
+    /// The scoped batch-end scale evaluation (`scale::Sweep`) against the reference that
+    /// evaluates every mapped element at the end of every batch: after every operation of a
+    /// random sequence, every element's scale state (hint, requirement, emitted values, SC-E
+    /// direction, epoch) and every effect are the same. Operations: outputs connected, removed and
+    /// reconfigured; elements created, mapped, committed, unmapped, remapped and destroyed; a
+    /// camera drag pressed, moved and released as separate operations, so that commits and output
+    /// changes happen under it; discrete and continuous interaction steps; settlement ticks on an
+    /// advancing session clock; configuration and device-limit changes (small limits make P7
+    /// fire); a camera batch outside a drag.
+    #[test]
+    fn scoped_scale_evaluation_equals_the_full_reference() {
+        let mut totals = [0usize; 6];
+        for seed in 1..=40u64 {
+            let run = scale_run(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15), 400);
+            for (t, n) in totals.iter_mut().zip(run) {
+                *t += n;
+            }
+        }
+        let [scoped, full, hints, held, opened, lowered] = totals;
+        // the sequences must exercise what is under test: passes that skip elements, hints that
+        // change, SC-E holds, epochs a drag opens, and forced P7 decreases
+        assert!(
+            scoped > 5000,
+            "only {scoped} scoped evaluations ({full} full)"
+        );
+        assert!(full > 1000, "only {full} full evaluations");
+        assert!(hints > 7000, "only {hints} hint emissions");
+        assert!(
+            held > 750,
+            "an element was held after only {held} operations"
+        );
+        assert!(
+            opened > 400,
+            "a drag opened an epoch in only {opened} operations"
+        );
+        assert!(
+            lowered > 190,
+            "P7 lowered a hint in only {lowered} operations"
+        );
+    }
+
+    /// One sequence of [`scoped_scale_evaluation_equals_the_full_reference`]. Returns (scoped
+    /// passes, full passes, hint emissions, operations after which a mapped element was held,
+    /// operations in which a drag opened an epoch, operations in which P7 lowered a hint).
+    fn scale_run(seed: u64, ops: usize) -> [usize; 6] {
+        use crate::input::interaction::Interaction;
+        use crate::scale::{InteractionKind, ScalePolicyConfig, SessionTime};
+        let mut rng = Rng(seed);
+        // [scoped, reference]
+        let mut sides: Vec<(Core, InputPort, OutputLifecycleToken)> = (0..2)
+            .map(|_| {
+                let (c, port, _shell, t) = Core::new(persisted(false));
+                (c, port, t)
+            })
+            .collect();
+        sides[1].0.scale_reference = true;
+        let mut outputs: Vec<(OutputId, String)> = Vec::new();
+        // (element, mapped)
+        let mut elements: Vec<(ElementId, bool)> = Vec::new();
+        let (mut next_key, mut next_connector, mut now) = (1u64, 0u32, 0u64);
+        let (mut hints, mut held, mut opened, mut lowered) = (0, 0, 0, 0);
+        let button = |pressed| PhysicalEvent::PointerButton {
+            button: 0x112,
+            pressed,
+            modifiers: LOGO,
+            time_us: 0,
+        };
+        let mut pressed = false;
+        for _ in 0..ops {
+            // every random choice is drawn once, then applied to both sides
+            now += rng.below(400);
+            let op = rng.below(100);
+            let pick = rng.next();
+            let desc_seed = rng.next() | 1;
+            let desc = |name: &str| random_desc(&mut Rng(desc_seed), name);
+            let trees = [
+                random_tree(&mut rng, next_key, false),
+                random_tree(&mut rng, next_key, true),
+            ];
+            let d = if rng.below(6) == 0 { 6000 } else { 90 };
+            let delta = (rng.range(-d, d) as f64 + 0.25, rng.range(-d, d) as f64);
+            let kind = [
+                InteractionKind::CameraPan,
+                InteractionKind::CameraZoom,
+                InteractionKind::WindowMove,
+                InteractionKind::WindowResize,
+                InteractionKind::ShellStream,
+            ][rng.below(5) as usize];
+            let continuous = rng.below(3) == 0;
+            let config = ScalePolicyConfig {
+                h_cfg: [1.5, 2.0, 3.0][rng.below(3) as usize],
+                r: [1.25, 1.5, 2.0][rng.below(3) as usize],
+                sigma: [0.0, 0.05][rng.below(2) as usize],
+                t_settle_ms: [100, 300][rng.below(2) as usize],
+                d_max: 16384,
+            };
+            let d_max = [16384, 2000, 900, 500][rng.below(4) as usize];
+            let output = (!outputs.is_empty()).then(|| outputs[pick as usize % outputs.len()].0);
+            let element = (!elements.is_empty()).then(|| elements[pick as usize % elements.len()]);
+
+            let mut results = Vec::new();
+            for (i, (c, port, t)) in sides.iter_mut().enumerate() {
+                let before: Vec<Option<crate::scale::ScaleState>> = elements
+                    .iter()
+                    .map(|&(e, _)| c.scale_state(e).cloned())
+                    .collect();
+                let mut fx = Vec::new();
+                let mut connected = None;
+                match (op, element) {
+                    (0..=2, _) if outputs.len() < 3 => {
+                        let name = format!("X{next_connector}");
+                        let (o, f) = c.output_connected(t, desc(&name)).unwrap();
+                        connected = Some(o);
+                        fx = f;
+                    }
+                    (3, _) if output.is_some() => {
+                        fx = c.output_disconnected(t, output.unwrap()).unwrap();
+                    }
+                    (4..=6, _) if output.is_some() => {
+                        let o = output.unwrap();
+                        let name = &outputs.iter().find(|(x, _)| *x == o).unwrap().1;
+                        fx = c.output_reconfigured(t, o, desc(name)).unwrap();
+                    }
+                    (7..=21, _) => {
+                        let id = c.toplevel_created();
+                        fx.extend(c.toplevel_committed(id, trees[0].clone()).unwrap());
+                        fx.extend(c.toplevel_committed(id, trees[1].clone()).unwrap());
+                    }
+                    (22..=44, Some((id, true))) if pick % 7 < 4 => {
+                        fx = c.toplevel_committed(id, trees[1].clone()).unwrap();
+                    }
+                    (22..=44, Some((id, true))) => {
+                        fx = c.toplevel_tree_changed(id, trees[1].clone()).unwrap();
+                    }
+                    (22..=44, Some((id, false))) => {
+                        fx.extend(c.toplevel_committed(id, trees[0].clone()).unwrap());
+                        fx.extend(c.toplevel_committed(id, trees[1].clone()).unwrap());
+                    }
+                    (45..=49, Some((id, true))) => {
+                        fx = c.toplevel_committed(id, trees[0].clone()).unwrap();
+                    }
+                    (50..=53, Some((id, _))) => fx = c.toplevel_destroyed(id),
+                    (54..=59, _) => fx = c.physical_input(port, button(!pressed)).unwrap(),
+                    (60..=79, _) => {
+                        let motion = PhysicalEvent::PointerMotion {
+                            delta,
+                            delta_unaccel: delta,
+                            time_us: 0,
+                        };
+                        fx = c.physical_input(port, motion).unwrap();
+                    }
+                    (80..=85, Some((id, _))) => {
+                        let at = SessionTime::from_millis(now);
+                        c.start_scale_interaction(id, kind, continuous, at);
+                    }
+                    (86..=91, _) => fx = c.scale_tick(SessionTime::from_millis(now)),
+                    (92..=94, _) => c.set_scale_config(config).unwrap(),
+                    (95..=97, _) => fx = c.set_renderer_device_max(d_max).unwrap(),
+                    // a camera batch that is not part of a drag (none exists yet: the case a
+                    // future camera move outside a continuous interaction would hit)
+                    (98..=99, _) if output.is_some() && !pressed => {
+                        if let Some(camera) = c.cameras().camera_for_output(output.unwrap()) {
+                            fx = c.visibility_pass_camera(camera);
+                        }
+                    }
+                    _ => {}
+                }
+                // scale emissions compared as a set (a scoped pass visits elements in ascending
+                // order, a full one bottom to top), every other effect in order
+                let (mut scale, other): (Vec<Effect>, Vec<Effect>) = fx
+                    .into_iter()
+                    .partition(|e| matches!(e, Effect::PreferredScale { .. }));
+                scale.sort_by_key(|e| match e {
+                    Effect::PreferredScale { element, .. } => *element,
+                    _ => unreachable!(),
+                });
+                if i == 1 {
+                    hints += scale.len();
+                    let drag = matches!(c.input.interaction, Interaction::CameraPan { .. });
+                    let now_open = |e| c.scale_state(e).is_some_and(|s| s.epoch.open);
+                    if drag
+                        && elements.iter().zip(&before).any(|(&(e, _), b)| {
+                            b.as_ref().is_some_and(|b| !b.epoch.open) && now_open(e)
+                        })
+                    {
+                        opened += 1;
+                    }
+                    if elements.iter().zip(&before).any(|(&(e, _), b)| {
+                        matches!((b, c.scale_state(e)), (Some(b), Some(s)) if s.h < b.h && s.epoch.direction == -1 && b.epoch.direction != -1)
+                    }) {
+                        lowered += 1;
+                    }
+                }
+                results.push((scale, other, connected));
+            }
+            assert_eq!(
+                (&results[0].0, &results[0].1),
+                (&results[1].0, &results[1].1),
+                "effects of operation {op} (seed {seed:#x})"
+            );
+            let (a, r) = (&sides[0].0, &sides[1].0);
+            for &(e, _) in &elements {
+                assert_eq!(
+                    a.scale_state(e),
+                    r.scale_state(e),
+                    "scale state of {e:?} after operation {op} (seed {seed:#x})"
+                );
+            }
+
+            // the model, identical for both sides
+            match (op, element) {
+                (0..=2, _) if outputs.len() < 3 => {
+                    let o = results[0].2.unwrap();
+                    assert_eq!(Some(o), results[1].2, "output ids diverged");
+                    outputs.push((o, format!("X{next_connector}")));
+                    next_connector += 1;
+                }
+                (3, _) if output.is_some() => outputs.retain(|(o, _)| Some(*o) != output),
+                (7..=21, _) => {
+                    let id = r.stage().z_order().iter().copied().max().unwrap();
+                    elements.push((id, true));
+                    next_key += 8;
+                }
+                (22..=44, Some((id, _))) => {
+                    elements.iter_mut().find(|(e, _)| *e == id).unwrap().1 = true;
+                }
+                (45..=49, Some((id, _))) => {
+                    elements.iter_mut().find(|(e, _)| *e == id).unwrap().1 = false;
+                }
+                (50..=53, Some((id, _))) => elements.retain(|(e, _)| *e != id),
+                (54..=59, _) => pressed = !pressed,
+                _ => {}
+            }
+            let sigma = r.scale_config().sigma;
+            let is_held = |e: ElementId| {
+                let s_max = crate::scale::s_max_for_tree(r.stage().tree(e));
+                let cfg = r.scale_config();
+                let h_max = crate::scale::h_max(cfg.h_cfg, s_max, cfg.d_max);
+                let scales: Vec<f64> = r.outputs.iter().map(|o| o.scale).collect();
+                let ladder = crate::scale::ladder(&scales, h_max, cfg.r);
+                let target = r
+                    .compute_rho(e)
+                    .map(|rho| crate::scale::target(rho, &ladder, h_max, sigma));
+                // outside an epoch, SC-E held the hint away from its target
+                r.scale_state(e).is_some_and(|s| {
+                    !s.epoch.open && target.is_some_and(|t| (t - s.h).abs() > 1e-12)
+                })
+            };
+            if elements.iter().any(|&(e, mapped)| mapped && is_held(e)) {
+                held += 1;
+            }
+        }
+        let (full, scoped) = sides[0].0.scale_passes;
+        [scoped, full, hints, held, opened, lowered]
     }
 
     /// One sequence in which outputs, elements and the pan interleave freely: the pan button is
