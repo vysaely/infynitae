@@ -45,6 +45,13 @@
    | `xwayland-satellite` out-of-process X11 | Deferred | X11 milestone | — |
    | CSD "tiled" hack for corner clipping | Not needed | — | — |
    | Per-frame `Vec` allocations in composition | Rejected as a target | OB-42 (open, INC-6 line) | KNOW-EXP-002 |
+   | *Added 2026-10-15 from the source study (KNOW-RES-011):* | | | |
+   | Camera momentum / animated zoom, with the pointer kept screen-fixed by warping its canvas location | Product feature, not specified | Would need an owner decision and per-step authorization (INV-CAMERA-1) | KNOW-RES-011 |
+   | Zoom-to-fit with dynamic minimum zoom from the windows' bounding box | Partly present | Viewport-fit is a one-shot authorized action (INV-CAMERA-5); no dynamic minimum | KNOW-RES-011 |
+   | `auto` placement next to the focused window's cluster | Not specified | F-PLACE-1 centres on the camera; any cluster placement is a product decision | KNOW-RES-011 |
+   | Camera as `f64` top-left, accumulated per pan event | Rejected (by existing design) | Q16 centre, re-derived from the gesture origin (INV-COORD-3) | KNOW-RES-011 |
+   | Membership from the zoom-1 output rect while culling uses the zoomed rect | Rejected (divergence) | One `View` for render, membership and hit-test (F-MEMBER-1, F-HIT-1) | KNOW-RES-011 |
+   | Per-iteration focus pull over all stage entries | Rejected on design grounds (unchanged; cost traced as O(W) per pick, not measured) | Core chokepoints | KNOW-RES-011, KNOW-PITFALL-002 |
 
 ## Unverified Hypotheses
 - The rows marked "Useful" have not been prototyped in Infynitae; their value is argued, not measured.
@@ -53,7 +60,7 @@
 - Before importing a DriftWM idea, check this table and the pitfall records: four of the audit's "DriftWM stronger" recommendations (§9) turned out wrong or unnecessary for Infynitae.
 
 ## Limitations & Counterexamples
-- Coverage is limited to what the recovered reports mention; DriftWM is about 109,000 lines and was not studied as a whole (gap G-01).
+- Coverage is limited to what the recovered reports mention; DriftWM is about 109,000 lines and was not studied as a whole (gap G-01). *2026-10-15:* camera, viewport, culling, hit-testing and placement were then traced in source (KNOW-RES-011); the rest of DriftWM remains unstudied.
 
 ## Reproduction Instructions
 ```bash
@@ -63,5 +70,5 @@ git grep -c with_states main -- crates/infynitae-wayland/src
 ```
 
 ## Links & Citations
-- [KNOW-RES-001](KNOW-RES-001-driftwm-state-ownership.md), [KNOW-RES-002](KNOW-RES-002-driftwm-fullscreen-lifecycle.md), [KNOW-RES-003](KNOW-RES-003-driftwm-popups-and-locks.md), [KNOW-RES-009](KNOW-RES-009-driftwm-camera-viewport-and-hit-testing.md)
+- [KNOW-RES-011](KNOW-RES-011-driftwm-camera-viewport-source-study.md), [KNOW-RES-001](KNOW-RES-001-driftwm-state-ownership.md), [KNOW-RES-002](KNOW-RES-002-driftwm-fullscreen-lifecycle.md), [KNOW-RES-003](KNOW-RES-003-driftwm-popups-and-locks.md), [KNOW-RES-009](KNOW-RES-009-driftwm-camera-viewport-and-hit-testing.md)
 - [KNOW-ROAD-001](../roadmap/KNOW-ROAD-001-phase-g-hardware-drm-backend.md), [KNOW-ROAD-002](../roadmap/KNOW-ROAD-002-explicit-timeline-sync-syncobj.md), [KNOW-ROAD-005](../roadmap/KNOW-ROAD-005-inc7-follow-up-work.md)

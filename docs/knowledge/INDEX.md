@@ -15,11 +15,12 @@
 | Work | Read first | Then |
 | :--- | :--- | :--- |
 | **INC-6** (scale policy; rebase onto `f323c2d`) | KNOW-ARCH-004 (main vs INC-6 split), KNOW-EXP-002, KNOW-EXP-005 | KNOW-PITFALL-005, KNOW-DEC-005 (R-15 converges with INC-6), KNOW-ROAD-005 |
-| **INC-8** (frame callbacks, liveness) | KNOW-ROAD-005 (R-10), KNOW-PITFALL-006 | KNOW-RES-005, KNOW-RES-008 (heartbeat is a candidate; INV-FRAME-1 governs), KNOW-RES-009 (camera animation) |
-| **INC-14** (interactive move/resize, grabs) | KNOW-PITFALL-007 (W-SM-19 → R-07 entry condition), KNOW-RES-003 | KNOW-RES-009 (hit-testing, live input under camera motion), KNOW-RES-010 (scrutinee lint, `with_states`, constraint snapshots), KNOW-DEC-004, KNOW-PITFALL-003 |
+| **INC-8** (frame callbacks, liveness) | KNOW-ROAD-005 (R-10), KNOW-PITFALL-006 | KNOW-RES-005, KNOW-RES-008 (heartbeat is a candidate; INV-FRAME-1 governs), KNOW-RES-009 (camera animation), KNOW-RES-011 (DriftWM's per-frame frame-callback loop and off-screen throttle, traced) |
+| **INC-14** (interactive move/resize, grabs) | KNOW-PITFALL-007 (W-SM-19 → R-07 entry condition), KNOW-RES-003 | KNOW-RES-011 (DriftWM hit-test cascade and pan grab, traced), KNOW-RES-009 (live input under camera motion), KNOW-RES-010 (scrutinee lint, `with_states`, constraint snapshots), KNOW-DEC-004, KNOW-PITFALL-003 |
 | **INC-13 / libinput** | KNOW-ARCH-002 (R-04, R-05) | KNOW-PITFALL-004 |
 | **DRM/KMS backend (Phase G)** | KNOW-RES-008 (what transfers from Windows and what does not), KNOW-ROAD-001 | KNOW-RES-004, KNOW-RES-006, KNOW-RES-007, KNOW-RES-010 (scanout gating, fence wait), KNOW-EXP-004, KNOW-ROAD-002..004 |
 | **Any DriftWM-inspired idea** | KNOW-RES-010 | the record its row names |
+| **Camera, zoom, culling, hit-test or spatial-index work** | KNOW-RES-011 (DriftWM vs Infynitae, traced complexity) | KNOW-ARCH-004, KNOW-RES-009, KNOW-PITFALL-002 |
 | **Fullscreen / presentation / focus changes** | KNOW-ARCH-001, KNOW-DEC-001, KNOW-DEC-002, KNOW-DEC-006 | KNOW-ARCH-003, KNOW-DEC-003, KNOW-PITFALL-001 |
 
 ---
@@ -43,6 +44,7 @@
 - [KNOW-RES-008: Microsoft Graphics Research — Claim Classification and Transfer Limits](research/KNOW-RES-008-msft-research-claim-classification.md) (MS-DOC / INTERP / APPLY / WIN-ONLY; read before RES-004..007)
 - [KNOW-RES-009: DriftWM Camera, Viewport, Coordinates and Hit-Testing](research/KNOW-RES-009-driftwm-camera-viewport-and-hit-testing.md) (coverage gap; comparison with INV-CAMERA/INV-COORD)
 - [KNOW-RES-010: DriftWM Ideas — Disposition Register](research/KNOW-RES-010-driftwm-idea-disposition-register.md) (implemented / useful / rejected, one row per idea)
+- [KNOW-RES-011: DriftWM Camera, Viewport, Culling and Hit-Testing — Source Study](research/KNOW-RES-011-driftwm-camera-viewport-source-study.md) (closes G-01 at the source level; complexity traced, nothing measured)
 
 ### Engineering Decisions & Protocol Bug Resolutions
 - [KNOW-DEC-001: Pre-Map Fullscreen Request Ownership and Deferred Eviction](decisions/KNOW-DEC-001-a3-premap-fullscreen-ownership.md) (Finding A-3, `INV-PRES-1`)
@@ -94,7 +96,7 @@
 | **IMPLEMENTED, split main / INC-6** | KNOW-ARCH-004 (visibility on main; scale scoping INC-6 only) |
 | **IMPLEMENTED on INC-6 lines only (unratified)** | KNOW-EXP-002 |
 | **VALIDATED** | KNOW-EXP-003 |
-| **RESEARCH / PROPOSED** | KNOW-EXP-005, KNOW-RES-001…KNOW-RES-010, KNOW-EXP-004, KNOW-ROAD-001…KNOW-ROAD-004 |
+| **RESEARCH / PROPOSED** | KNOW-EXP-005, KNOW-RES-001…KNOW-RES-011, KNOW-EXP-004, KNOW-ROAD-001…KNOW-ROAD-004 |
 | **REJECTED** | KNOW-EXP-001, KNOW-PITFALL-001, KNOW-PITFALL-002 (evidence DISPUTED, X-08), KNOW-PITFALL-003, KNOW-PITFALL-004, KNOW-PITFALL-006 |
 | **DEFERRED** | KNOW-ROAD-005 |
 | **SUPERSEDED** | KNOW-PITFALL-005 (Superseded by KNOW-ARCH-004) |

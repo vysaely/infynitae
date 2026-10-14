@@ -12,7 +12,7 @@
 | **affected_branches** | main (Infynitae facts); N/A for DriftWM |
 | **related_invariants** | INV-CAMERA-1..5, INV-COORD-1..6, INV-PRES-1, INV-INPUT-8 |
 | **adoption_status** | RESEARCH |
-| **next_action** | If a camera-animation, zoomed-navigation or spatial-index design starts, execute the bounded source-study plan under Unverified Hypotheses first (owner approval needed) |
+| **next_action** | ~~If a camera-animation, zoomed-navigation or spatial-index design starts, execute the bounded source-study plan under Unverified Hypotheses first (owner approval needed)~~ Plan executed 2026-10-15; read KNOW-RES-011 first |
 
 ---
 
@@ -50,7 +50,7 @@
 ## Unverified Hypotheses
 - ~~Bounded follow-up if needed (not done here, per the owner's instruction to avoid new large research): read DriftWM's camera math, zoom pick-mode switch and viewport animation in the local clone at `352333a` (`src/state/viewport_animation.rs`, the canvas-math unit tests, `src/input/mod.rs` hit-test cascade). DriftWM is GPL-3.0-or-later: record concepts only, copy no code.~~ Superseded by the plan below (2026-10-15).
 
-### Bounded DriftWM source-study plan (G-01) — prepared 2026-10-15, NOT executed
+### Bounded DriftWM source-study plan (G-01) — prepared 2026-10-15, ~~NOT executed~~ executed 2026-10-15: see [KNOW-RES-011](KNOW-RES-011-driftwm-camera-viewport-source-study.md)
 Only file and function *names* were listed to prepare it; no DriftWM code was read for behaviour. Everything below is a question, not a finding.
 - **Subject.** DriftWM `352333a8fa1b22171492d4b71a54102045c9a19d`, local clone `~/.gemini/antigravity/scratch/driftwm` (GPL-3.0-or-later: write concepts and `path:line` references only; no code, no paraphrased code, nothing copied into the repository). Record the Smithay version from its `Cargo.lock` with each finding.
 - **Questions and where to read.**
