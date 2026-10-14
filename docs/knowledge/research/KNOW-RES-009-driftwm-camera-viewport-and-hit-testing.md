@@ -12,12 +12,12 @@
 | **affected_branches** | main (Infynitae facts); N/A for DriftWM |
 | **related_invariants** | INV-CAMERA-1..5, INV-COORD-1..6, INV-PRES-1, INV-INPUT-8 |
 | **adoption_status** | RESEARCH |
-| **next_action** | If a camera-animation or zoomed-navigation design starts, do the bounded DriftWM source read listed under Unverified Hypotheses first |
+| **next_action** | If a camera-animation, zoomed-navigation or spatial-index design starts, execute the bounded source-study plan under Unverified Hypotheses first (owner approval needed) |
 
 ---
 
 ## Verified Facts
-1. **Coverage gap (the main finding).** No recovered study examines DriftWM's camera, viewport, coordinate types, constant-time camera movement or projection in depth. The AGY audit gives them one table row (§2.2) and the rest of the recovered material mentions them in passing. Searched: `~/.gemini/antigravity/scratch/` (six reports), both AGY trajectories, all Claude session logs on this machine, every branch of the repository. Not searched: the old Arch partition (not mounted). Nothing below goes beyond what those sources and DriftWM's own documentation state.
+1. **Coverage gap (the main finding).** No recovered study examines DriftWM's camera, viewport, coordinate types, constant-time camera movement or projection in depth. The AGY audit gives them one table row (§2.2) and the rest of the recovered material mentions them in passing. Searched: `~/.gemini/antigravity/scratch/` (six reports), both AGY trajectories, all Claude session logs on this machine, every branch of the repository. ~~Not searched: the old Arch partition (not mounted).~~ *Reconciliation 2026-10-15:* the old Arch partition no longer exists on this machine and predates DriftWM's first appearance here (2026-10-14); it held no DriftWM research (ledger G-01). The AGY audit is the original study. Nothing below goes beyond what those sources and DriftWM's own documentation state.
 2. **DriftWM, as recorded.**
    - Model: "windows live at their native size on an infinite 2D canvas, and your display is a camera viewing it" (README); pan, zoom, scroll momentum, zoom-to-fit overview, configurable camera anchors.
    - Camera and zoom are per output, stored in `OutputState` behind a per-output mutex; `set_camera_on` refuses while the output is fullscreen, and `enter_fullscreen` writes `output_state` directly to get past that guard (audit §2.2).
@@ -48,7 +48,26 @@
    | Zoom-to-fit overview, camera anchors | Viewport-fit exists as a one-shot authorized action (INV-CAMERA-5); anchors not specified |
 
 ## Unverified Hypotheses
-- Bounded follow-up if needed (not done here, per the owner's instruction to avoid new large research): read DriftWM's camera math, zoom pick-mode switch and viewport animation in the local clone at `352333a` (`src/state/viewport_animation.rs`, the canvas-math unit tests, `src/input/mod.rs` hit-test cascade). DriftWM is GPL-3.0-or-later: record concepts only, copy no code.
+- ~~Bounded follow-up if needed (not done here, per the owner's instruction to avoid new large research): read DriftWM's camera math, zoom pick-mode switch and viewport animation in the local clone at `352333a` (`src/state/viewport_animation.rs`, the canvas-math unit tests, `src/input/mod.rs` hit-test cascade). DriftWM is GPL-3.0-or-later: record concepts only, copy no code.~~ Superseded by the plan below (2026-10-15).
+
+### Bounded DriftWM source-study plan (G-01) — prepared 2026-10-15, NOT executed
+Only file and function *names* were listed to prepare it; no DriftWM code was read for behaviour. Everything below is a question, not a finding.
+- **Subject.** DriftWM `352333a8fa1b22171492d4b71a54102045c9a19d`, local clone `~/.gemini/antigravity/scratch/driftwm` (GPL-3.0-or-later: write concepts and `path:line` references only; no code, no paraphrased code, nothing copied into the repository). Record the Smithay version from its `Cargo.lock` with each finding.
+- **Questions and where to read.**
+  | # | Question | DriftWM files (as named at `352333a`) | Infynitae counterpart (main) |
+  | :--- | :--- | :--- | :--- |
+  | 1 | Camera representation: what is stored (top-left or centre, units, float type), per output where | `src/state/output.rs` (`OutputState`), `src/state/viewport.rs` (`set_camera_on`), `src/canvas.rs` (`viewport_center`, `camera_for_center`) | INV-CAMERA-1..5, Q16 centre + zoom |
+  | 2 | World↔screen transforms and rounding | `src/canvas.rs` (`ScreenPos`, `CanvasPos`, `screen_to_canvas`, `canvas_to_screen`) and its 44 unit tests | INV-COORD-1..4, F-formulas, R1–R8 |
+  | 3 | Viewport representation and visibility tests | `src/canvas.rs` (`visible_canvas_rect`, `visible_fraction`, `is_point_visible`, `is_origin_visible`) | ProjectionFrame, Core cull (`85a74cb`) |
+  | 4 | Pan and zoom: input paths, anchoring, momentum, animation, pick-mode switch | `src/state/navigation.rs`, `src/state/edge_pan.rs`, `src/state/viewport_animation.rs` (`apply_zoom_animation`), `src/state/fit.rs`, `src/grabs/` pan/zoom grabs; tests `src/tests/camera_animation.rs` | INV-CAMERA-4, INV-COORD-3, INV-CAMERA-5 |
+  | 5 | Visibility and culling per frame | `src/render/mod.rs` (`compose_frame`), `src/render/elements.rs`, `src/state/render_cache.rs`, `src/state/redraw.rs` | Core render list (101 µs at 3,000, T0) |
+  | 6 | Hit-testing cascade and when it runs | `src/input/mod.rs` (`refresh_pointer_focus`, `element_under*`, `surface_under`), `src/stage/mod.rs` | F-HIT-1, `Core::hit_test`, `ProjectionFrame::select` |
+  | 7 | Window placement | `src/state/placement.rs` (`auto_placement_pos`, `place_adjacent_to`), `src/layout/auto_placement.rs` (`place_auto`) | `F-PLACE-1`, layer C12.F5 (placement after fullscreen); KNOW-DEC-003 |
+  | 8 | Per-window work on a camera move (membership, `enter`/`leave`, configures, frame callbacks) | `src/state/membership.rs` (`refresh_window_outputs`), `src/state/viewport.rs`, `src/render/` throttle | INV-CAMERA-2/4, Core membership, R-10 |
+- **Method.** (a) Read each path once and write, per question, the data structure and call path with `path:line`. (b) Derive asymptotic cost by following every loop on the camera-move path (Q4→Q5→Q6→Q8), stating the variable (windows, outputs, surfaces in a tree). Claim O(1) only where the whole path has no loop over windows. (c) Measure only if a DriftWM test or bench exercises the path headlessly; otherwise record "not measured". DriftWM has no `benches/` and no criterion dependency at `352333a`, so any measurement is new instrumentation and needs owner approval first.
+- **Measurement conditions to record**, if any are taken: commit, `rustc` version, profile, CPU and governor, window count, run count, raw output. Do not compare with Infynitae's T0 numbers unless both run the same scenario on the same machine.
+- **Output.** A new record (next free KNOW-RES number) with two columns kept apart, "DriftWM (source-derived)" and "Infynitae (main commit)". Update KNOW-RES-010 rows only through dated notes. No architecture change, no foundation edit, no requirement; anything worth adopting goes to the owner as a proposal.
+- **Bound.** The eight questions only; stop and report if a question needs more than the listed files plus their direct callees.
 - That a spatial index would pay off below several thousand windows is unmeasured; at 3,000 elements the culled pan is already 23.5 µs (T0 model).
 
 ## Performance & Correctness Implications
@@ -57,7 +76,7 @@
 
 ## Limitations & Counterexamples
 - The DriftWM facts are second-hand (AGY's audit and DriftWM's own documentation), not re-read in source for this record.
-- The coverage gap may be closed by material on the old Arch partition.
+- ~~The coverage gap may be closed by material on the old Arch partition.~~ It cannot (2026-10-15, ledger G-01); only the source-study plan above can close it.
 
 ## Reproduction Instructions
 ```bash

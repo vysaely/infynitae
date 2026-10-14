@@ -90,5 +90,5 @@ Trajectory `822720a8` also wrote the first version of this knowledge system (`81
 Packages: `~/Infynitae-INC7-EXIT-PREPARATION-2026-10-14/` (exit decision, residual register R-01…R-15, ratification and publication audit), `~/Infynitae-INC7-EXIT-REVIEW-2026-10-14/` (final governance review, residual risk register).
 
 ### 4.5 Not inspected
-- The old Arch Linux partition (historical Claude/AGY sessions; Hyprland-era Infynitae). Not mounted; mounting needs root. It may hold earlier DriftWM camera/viewport research (gap G-01).
+- ~~The old Arch Linux partition (historical Claude/AGY sessions; Hyprland-era Infynitae). Not mounted; mounting needs root. It may hold earlier DriftWM camera/viewport research (gap G-01).~~ **2026-10-15:** no longer present on this machine (its disk now holds Windows) and predates DriftWM's first appearance (2026-10-14); it held no DriftWM research. Details in the ledger, G-01. Nothing was mounted.
 - Microsoft Learn pages themselves (KNOW-RES-008).
