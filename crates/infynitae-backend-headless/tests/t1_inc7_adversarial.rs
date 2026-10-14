@@ -18,7 +18,7 @@ use std::time::Duration;
 use common::input::{BTN_LEFT, BTN_MIDDLE, none};
 use common::{Lockstep, PopupSpec, output, output_k};
 use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
-use infynitae_core::input::keys::{KEY_A, KEY_LEFTMETA};
+use infynitae_core::input::keys::{KEY_A, KEY_ENTER, KEY_LEFTMETA};
 use infynitae_core::navigation::PersistedCameras;
 use infynitae_core::output::OutputId;
 use infynitae_core::stage::{ElementId, Lifecycle};
@@ -915,6 +915,41 @@ fn a_pre_map_grant_takes_the_output_only_when_its_window_maps() {
     assert_layers(&t.frame(), &[((0, 0, 640, 480), GREEN)], "X presented");
 }
 
+/// A-8: keyboard focus does not move to a window the presentation hides. Super+Enter
+/// (FocusNext) and a focus request leave it on the presented window, which keeps `activated`
+/// and receives the keys; when the presentation ends, FocusNext reaches the other window again.
+#[test]
+fn focus_does_not_move_to_a_window_the_presentation_hides() {
+    let (mut t, w, id, other) = T::scene();
+    t.ask(w, |tl| tl.set_fullscreen(None));
+    t.resize(w, (640, 480), RED);
+    let configures = t.configures(w).len();
+    t.key(KEY_LEFTMETA, true);
+    t.key(KEY_ENTER, true);
+    t.key(KEY_ENTER, false);
+    t.key(KEY_LEFTMETA, false);
+    t.focus(other);
+    assert_eq!(t.ls.state.core().focus().target(), Some(id));
+    assert_eq!(t.ls.probe.kb.active.as_deref(), Some("W"));
+    assert_eq!(t.configures(w).len(), configures, "W lost activated");
+    t.key(KEY_A, true);
+    t.key(KEY_A, false);
+    assert_eq!(
+        t.ls.probe.kb.active.as_deref(),
+        Some("W"),
+        "the keys went elsewhere"
+    );
+
+    t.ask(w, |tl| tl.unset_fullscreen());
+    t.resize(w, (200, 100), RED);
+    t.key(KEY_LEFTMETA, true);
+    t.key(KEY_ENTER, true);
+    t.key(KEY_ENTER, false);
+    t.key(KEY_LEFTMETA, false);
+    assert_eq!(t.ls.state.core().focus().target(), Some(other));
+    assert_eq!(t.ls.probe.kb.active.as_deref(), Some("O"));
+}
+
 /// A-3: a newcomer granted before its first map that is destroyed without drawing ends nothing.
 #[test]
 fn a_pre_map_grant_that_never_draws_ends_nothing() {
@@ -1080,7 +1115,14 @@ fn a_menu_chain_of_a_fullscreen_window() {
     t.adv();
 
     let configures = t.configures(w).len();
+    // A-8: O is hidden by the presentation, so focus does not move to it and the menu stays
     t.focus(other);
+    assert_eq!(t.ls.state.core().focus().target(), Some(id));
+    assert_eq!(t.ls.probe.popup_dones, Vec::<&str>::new());
+    assert_eq!(t.configures(w).len(), configures);
+    // focus loss (focus cleared, as by a click on no window)
+    set_focus(&mut t.ls.state, &mut t.ls.input, None).expect("focus");
+    t.adv();
     assert_eq!(t.ls.probe.popup_dones, vec!["P2", "P1"], "innermost first");
     assert!(!t.ls.state.keyboard_is_grabbed(), "keyboard grab left");
     assert!(!t.ls.state.is_pointer_grabbed(), "pointer grab left");

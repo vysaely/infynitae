@@ -684,9 +684,9 @@ impl Core {
                 self.stage
                     .set_state(id, Lifecycle::Unmapped)
                     .map_err(stale)?;
+                // the successor is chosen among the elements focus may move to (A-8)
                 let live: Vec<ElementId> = self
-                    .stage
-                    .mapped_elements()
+                    .focusable_elements()
                     .into_iter()
                     .filter(|&e| e != id)
                     .collect();
@@ -762,7 +762,7 @@ impl Core {
         if !existed {
             return Vec::new();
         }
-        let live: Vec<ElementId> = self.stage.mapped_elements();
+        let live: Vec<ElementId> = self.focusable_elements();
         let mut fx = self.focus.target_lost(id, &live);
         self.drop_fullscreen(id);
         let ended: Vec<OutputId> = before
@@ -2180,8 +2180,12 @@ mod tests {
         c.toplevel_committed(x, win(2, 0, 0, false)).unwrap();
         c.toplevel_committed(x, win(2, 1920, 1080, true)).unwrap();
         assert_eq!(c.presentation(a), Some(x));
+        // W is hidden on A; a second output shows it, so it may take the focus (A-8)
+        let b = out(&mut c, &mut t, "B", (1920, 1080), 120);
         focus(&mut c, &mut i, w);
-        c.toplevel_request(w, FS).unwrap(); // replaces x on A
+        let on_a = ToplevelRequest::SetFullscreen { output: Some(a) };
+        c.toplevel_request(w, on_a).unwrap(); // replaces x on A
+        c.output_disconnected(&mut t, b).unwrap();
         assert_eq!(c.presentation(a), Some(w));
         assert_eq!(
             c.stage().anchor(x),
@@ -2264,10 +2268,15 @@ mod tests {
         let w2 = map_win(&mut c, 2, 500, 350);
         focus(&mut c, &mut i, w1);
         c.toplevel_request(w1, FS).unwrap();
+        // W2 is hidden on A by the presentation; a second output shows it, so it may take the
+        // focus (A-8), and it names A in its request
+        out(&mut c, &mut t, "B", (1920, 1080), 120);
         focus(&mut c, &mut i, w2);
+        assert_eq!(c.focus().target(), Some(w2));
         assert_eq!(c.presentation(a), Some(w1), "focus loss ended fullscreen");
         assert_eq!(c.fullscreen().len(), 1);
-        let (d, fx) = c.toplevel_request(w2, FS).unwrap();
+        let on_a = ToplevelRequest::SetFullscreen { output: Some(a) };
+        let (d, fx) = c.toplevel_request(w2, on_a).unwrap();
         assert_eq!(d, ToplevelDecision::Granted);
         assert_eq!(fx[0], Effect::ToplevelConfigure(w2));
         assert_eq!(
@@ -2553,6 +2562,78 @@ mod tests {
             (v.v.x, v.v.y),
             (-200 * Q16_ONE - 26214, -150 * Q16_ONE - 13107)
         );
+    }
+
+    /// A-8: keyboard focus does not move to an element a presentation hides (an output presents
+    /// another element and its camera would show this one, and no output observes it): neither
+    /// by `set_focus`, nor FocusNext, nor the initial grant, nor as the successor of a lost
+    /// target. The same element is focusable while another output shows it.
+    #[test]
+    fn focus_does_not_move_to_an_element_a_presentation_hides() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let w = map_win(&mut c, 1, 400, 300);
+        let o = map_win(&mut c, 2, 200, 100);
+        let v = map_win(&mut c, 3, 100, 100);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, FS).unwrap();
+        c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        assert_eq!(c.presentation(a), Some(w));
+        assert!(c.hidden_by_presentation(o) && c.hidden_by_presentation(v));
+        assert!(
+            !c.hidden_by_presentation(w),
+            "the presenter is never hidden"
+        );
+
+        // set_focus is declined; FocusNext cycles among what may be focused (W alone)
+        assert_eq!(c.set_focus(&mut i, Some(o)).unwrap(), vec![]);
+        assert_eq!(c.focus().target(), Some(w));
+        c.focus_next();
+        assert_eq!(
+            c.focus().target(),
+            Some(w),
+            "FocusNext moved to a hidden element"
+        );
+
+        // a second output whose camera shows O and V: they are not hidden there
+        let b = out(&mut c, &mut t, "B", (1920, 1080), 120);
+        assert!(!c.membership().observers(o).is_empty());
+        assert!(!c.hidden_by_presentation(o));
+        focus(&mut c, &mut i, o);
+        focus(&mut c, &mut i, v);
+        assert_eq!(c.focus().target(), Some(v));
+        // B goes: O and V are hidden again; V keeps the focus it had (nothing moved it)
+        c.output_disconnected(&mut t, b).unwrap();
+        assert!(c.hidden_by_presentation(o) && c.hidden_by_presentation(v));
+        // V goes: the successor skips O (more recent, hidden) for W
+        c.toplevel_destroyed(v);
+        assert_eq!(
+            c.focus().target(),
+            Some(w),
+            "the successor was a hidden element"
+        );
+
+        // the presentation ends: O is focusable again
+        c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        assert!(!c.hidden_by_presentation(o));
+        focus(&mut c, &mut i, o);
+        assert_eq!(c.focus().target(), Some(o));
+
+        // the initial grant (nothing focused yet) skips a hidden element
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let o = map_win(&mut c, 2, 200, 100);
+        let x = c.toplevel_created();
+        c.toplevel_request(x, FS).unwrap();
+        c.toplevel_committed(x, win(4, 0, 0, false)).unwrap();
+        c.toplevel_committed(x, win(4, 1920, 1080, true)).unwrap();
+        assert_eq!(c.presentation(a), Some(x));
+        assert_eq!(c.grant_initial_focus(&mut i, o).unwrap(), vec![]);
+        assert_eq!(c.focus().target(), None);
+        assert!(c.focus().is_initial_eligible());
+        c.grant_initial_focus(&mut i, x).unwrap();
+        assert_eq!(c.focus().target(), Some(x));
     }
 
     /// A-3: a grant made before an element's first map takes the output only when the element

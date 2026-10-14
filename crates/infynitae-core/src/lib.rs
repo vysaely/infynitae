@@ -320,6 +320,10 @@ impl Core {
         {
             return Err(EntryError::InvalidEvent);
         }
+        // A-8: focus does not move to an element a presentation hides; the request is declined
+        if target.is_some_and(|id| self.hidden_by_presentation(id)) {
+            return Ok(Vec::new());
+        }
         let mut fx = self.focus.set_focus(target);
         fx.extend(self.reconcile_constraints());
         Ok(fx)
@@ -335,6 +339,9 @@ impl Core {
         if self.stage.state(target) != Some(stage::Lifecycle::Mapped) {
             return Err(EntryError::InvalidEvent);
         }
+        if self.hidden_by_presentation(target) {
+            return Ok(Vec::new());
+        }
         let mut fx = self.focus.grant_initial_focus(target);
         if !fx.is_empty() {
             fx.extend(self.reconcile_constraints());
@@ -342,9 +349,37 @@ impl Core {
         Ok(fx)
     }
 
+    /// Audit finding A-8: `element` is hidden by a presentation — an output presents another
+    /// element, the camera bound to that output would show `element` were the presentation not
+    /// replacing its view, and no output observes it. Keyboard focus is not moved to such an
+    /// element (`set_focus`, the initial grant, FocusNext, the successor of a lost target). An
+    /// element no output would show anyway (far from every view) is not hidden by a
+    /// presentation and stays focusable, as without one.
+    pub fn hidden_by_presentation(&self, element: stage::ElementId) -> bool {
+        if !self.membership.observers(element).is_empty() {
+            return false;
+        }
+        let Some((anchor, tree, bounds)) = self.stage.mapped(element) else {
+            return false;
+        };
+        self.outputs.iter().any(|o| {
+            matches!(self.presentation(o.id), Some(p) if p != element)
+                && self.camera_view(o.id).is_some_and(|view| {
+                    !render::entries_culled(&view, element, anchor, tree, bounds).is_empty()
+                })
+        })
+    }
+
+    /// The mapped elements, bottom to top, that keyboard focus may move to (A-8).
+    pub(crate) fn focusable_elements(&self) -> Vec<stage::ElementId> {
+        let mut live = self.stage.mapped_elements();
+        live.retain(|&e| !self.hidden_by_presentation(e));
+        live
+    }
+
     /// FocusNext binding (Super+Enter): cycles focus to next live mapped element in stage order.
     pub(crate) fn focus_next(&mut self) -> Vec<protocol::Effect> {
-        let live = self.stage.mapped_elements();
+        let live = self.focusable_elements();
         let mut fx = self.focus.focus_next(&live);
         fx.extend(self.reconcile_constraints());
         fx
@@ -484,6 +519,12 @@ impl Core {
         if let Some(view) = self.presentation_view(model) {
             return Some(view);
         }
+        self.camera_view(output)
+    }
+
+    /// The view of the camera bound to `output`, whether or not a presentation replaces it.
+    fn camera_view(&self, output: output::OutputId) -> Option<projection::View> {
+        let model = self.outputs.iter().find(|o| o.id == output)?;
         let camera = self.cameras.camera_for_output(output)?;
         projection::View::new(projection::ViewParams {
             centre: self.cameras.center(camera)?,
