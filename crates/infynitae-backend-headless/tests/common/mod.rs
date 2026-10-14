@@ -156,6 +156,9 @@ pub struct Probe {
     pub wm_capabilities: Vec<(usize, Vec<u32>)>,
     /// Every `xdg_toplevel.configure_bounds` as received.
     pub configure_bounds: Vec<(usize, (i32, i32))>,
+    /// The `time` argument of every `wl_pointer` motion, button and axis event, in order, with
+    /// the event's kind ("motion", "button", "axis").
+    pub ptr_times: Vec<(&'static str, u32)>,
     /// While set, an `xdg_surface.configure` is recorded in `held_acks` and neither acknowledged
     /// nor drawn for: a client that is slow, or that never answers.
     pub hold_acks: bool,
@@ -1011,16 +1014,20 @@ impl Dispatch<WlPointer, ()> for Probe {
             }
             wl_pointer::Event::Leave { surface, .. } => format!("leave {}", st.label_of(&surface)),
             wl_pointer::Event::Motion {
+                time,
                 surface_x,
                 surface_y,
-                ..
-            } => format!("motion {surface_x},{surface_y}"),
+            } => {
+                st.ptr_times.push(("motion", time));
+                format!("motion {surface_x},{surface_y}")
+            }
             wl_pointer::Event::Button {
                 serial,
+                time,
                 button,
                 state,
-                ..
             } => {
+                st.ptr_times.push(("button", time));
                 st.last_serial = serial;
                 let s = match state.into_result() {
                     Ok(wl_pointer::ButtonState::Pressed) => "pressed",
@@ -1028,7 +1035,10 @@ impl Dispatch<WlPointer, ()> for Probe {
                 };
                 format!("button {button} {s}")
             }
-            wl_pointer::Event::Axis { axis, value, .. } => format!("axis {axis:?} {value}"),
+            wl_pointer::Event::Axis { time, axis, value } => {
+                st.ptr_times.push(("axis", time));
+                format!("axis {axis:?} {value}")
+            }
             wl_pointer::Event::AxisValue120 { axis, value120 } => {
                 format!("axis_v120 {axis:?} {value120}")
             }

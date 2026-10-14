@@ -600,6 +600,31 @@ fn a_hidden_window_gets_no_pointer_input() {
     assert_eq!(t.ls.probe.kb.active.as_deref(), Some("W"));
 }
 
+/// Audit finding A-5. `wl_pointer` event times are milliseconds on one clock, so a client sees
+/// them non-decreasing (toolkits measure double clicks and pointer velocity with them). The
+/// pointer event Core synthesises when a presentation starts or ends (M10 "one true position")
+/// must not go back in time. Ignored until the owner decides where its time comes from (Core has
+/// no clock on this line; the last input time or the session clock of C12.F4 would serve).
+#[test]
+#[ignore = "audit finding A-5: synthesised pointer events carry time 0; fix awaits an owner decision"]
+fn pointer_event_times_never_go_back_when_a_presentation_starts_or_ends() {
+    let (mut t, w, _, _) = T::scene();
+    t.motion((1.0, 0.0));
+    t.motion((-1.0, 0.0));
+    t.ask(w, |tl| tl.set_fullscreen(None));
+    t.resize(w, (640, 480), RED);
+    t.motion((1.0, 0.0));
+    t.ask(w, |tl| tl.unset_fullscreen());
+    let times = t.ls.probe.ptr_times.clone();
+    assert!(times.len() >= 3, "{times:?}");
+    for pair in times.windows(2) {
+        assert!(
+            pair[1].1 >= pair[0].1,
+            "a pointer event went back in time: {times:?}"
+        );
+    }
+}
+
 /// Invariant (INV-CAMERA-4; C5.2 "camera A is not touched ... a per-output render input, not a
 /// camera"): a camera pan on a fullscreen output changes no pixel and causes no configure. It
 /// moves the hidden camera, and that is what the output shows when the presentation ends.
