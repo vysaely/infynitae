@@ -1,43 +1,50 @@
-# KNOW-DEC-002: Rejection of Keyboard Focus on Occluded Windows (Finding A-8)
+# KNOW-DEC-002: Keyboard Focus and Windows Hidden by a Fullscreen Presentation (Finding A-8)
 
 | Field | Value |
 | :--- | :--- |
 | **id** | KNOW-DEC-002 |
-| **title** | Rejection of Keyboard Focus on Occluded Windows (Finding A-8) |
+| **title** | Keyboard Focus and Windows Hidden by a Fullscreen Presentation (Finding A-8) |
 | **subsystem** | Core/Focus |
-| **source_rev** | 0fe8f06 / 489180e |
+| **source_rev** | 0fe8f06 / 489180e (source line); 0f45cfd / 2aa8d65 (integration candidate) |
 | **date** | 2026-10-14 |
 | **evidence_class** | EXPERIMENTALLY VERIFIED |
-| **applicability** | Focus policy under fullscreen presentation |
-| **affected_branches** | experimental/inc7-exit-readiness-2026-10-14 |
+| **applicability** | UNRATIFIED. Implemented on experimental/inc7-exit-readiness-2026-10-14 and integration/inc-7-exit-2026-10-14; sealed INV-INPUT-8 still lacks it (amendment layer C12.F7 prepared, not adopted) |
+| **affected_branches** | experimental/inc7-exit-readiness-2026-10-14, integration/inc-7-exit-2026-10-14 |
 | **related_invariants** | INV-INPUT-8, INV-PRES-1 |
 | **adoption_status** | IMPLEMENTED |
-| **next_action** | Maintain test efficacy controls in verify-test-efficacy |
+| **next_action** | Owner decision on C12.F7 (owner-selected policy of 2026-10-14: reject transfers, keep retention, document it); revisit clearing focus on presentation start at INC-11 |
 
 ---
 
 ## Verified Facts
-1. **The Policy Vulnerability (Finding A-8):** Under naive fullscreen focus handling, focus loss did not end fullscreen, and programmatic or binding navigation (`FocusNext`, Alt-Tab, mouse hover) could move keyboard focus to a window occluded behind an active fullscreen presentation.
-2. **The Decision:** Keyboard focus must **never** move to an element hidden by an active fullscreen presentation unless that element is currently visible on another active display output.
-3. **Implementation:** Added `Core::hidden_by_presentation(element)` and filtered all focus candidate lists (`focusable_elements()`). In commit `489180e`, added early-exit check `!self.presenting()` to ensure zero overhead in normal desktop sessions.
+1. **Definition.** An element is *hidden by a presentation* when an output presents another element, the camera bound to that output would show this element (F-MEMBER-1 under that camera's view), and no output observes it. Implemented as `Core::hidden_by_presentation`.
+2. **Transfers are refused.** `set_focus` and `grant_initial_focus` decline a hidden target (no change, no effect); FocusNext and the successor after a target loss choose among `focusable_elements()`. Click-to-focus and pointer focus cannot reach a hidden element anyway: hit-testing goes through the presentation's view.
+3. **Retention is kept (owner policy, 2026-10-14).** A focused element that *becomes* hidden keeps the focus and keeps receiving keyboard input: (R1) a window granted fullscreen before its first map maps and takes the output while W is focused — W is hidden, focused, receives the keys, and the visible presenter is not activated; (R2) a window focused because a second output showed it becomes hidden when that output is removed. This follows sealed INV-INPUT-8 "Camera, visibility … never change it".
+4. **No focus from fullscreen.** Requesting or obtaining fullscreen gives a client no focus (moving focus to the presenter at takeover would let any client take keyboard focus by asking for fullscreen before its first map).
+5. **Cost.** With no presentation, `presenting()` makes both functions return at once: unmap + remap at 3,000 windows 47 µs, as before A-8 (the unguarded first version cost 122 µs).
+6. **Integration adaptation.** On the INC-7 integration line, where INC-6's `MembershipTable::observing_outputs` does not exist, the predicate uses `!observers(element).is_empty()` (same predicate, one small allocation per check while presenting).
 
 ## Unverified Hypotheses
-- None; the behavior is enforced with 4 seeded mutation controls in `tools/verify-test-efficacy`.
+- Whether users expect focus to follow the visible presenter after a pre-map takeover (R1) is a UX question, not measured.
 
 ## Performance & Correctness Implications
-- Prevents typing into invisible background windows, avoiding unintended data leaks or terminal command execution.
-- Optimized in `489180e` so unmap/remap operations at 3,000 windows run in $47\,\mu\text{s}$ (down from $122\,\mu\text{s}$ during unoptimized checks).
+- Keys can no longer be *moved* to an invisible window by a binding, a shell request or a successor choice.
+- Keys can still *continue* to an invisible window that was focused before it was hidden (R1, R2): text typed then — secrets included — reaches a window the user cannot see. One click on the visible presenter moves the focus.
+- With one output, nothing moves the focus away from a presented window except leaving fullscreen; a window shown on another output stays focusable.
 
 ## Limitations & Counterexamples
-- An element occluded on Output A but rendered inside the visible viewport of Output B remains eligible for focus.
+- Retention (Fact 3) is a deliberate limitation, recorded as residual R-01 of the INC-7 exit preparation; clearing the focus when a presentation hides the focused window would need INV-INPUT-8's "visibility never changes it" amended.
+- An element far from every camera is not "hidden by a presentation" and stays focusable, as without one.
 
 ## Reproduction Instructions
-Execute the focus presentation test suite:
 ```bash
 cargo test -p infynitae-core --lib focus_does_not_move_to_an_element_a_presentation_hides
+cargo test -p infynitae-backend-headless --test t1_inc7_adversarial focus_does_not_move_to_a_window_the_presentation_hides
 ```
+Retention probes R1–R3 (scratch, not in the repository): `~/Infynitae-INC7-EXIT-REVIEW-2026-10-14/evidence/review_probes.rs`, output `review_probes_output.txt`.
 
 ## Links & Citations
-- Source Commits: [`0fe8f06`](file:///home/vysaely/infynitae-native), [`489180e`](file:///home/vysaely/infynitae-native)
 - Related Architecture: [KNOW-ARCH-003: Presentation Visibility Gating](../architecture/KNOW-ARCH-003-presentation-visibility-gating.md)
+- Related Decision: [KNOW-DEC-001: Pre-Map Fullscreen Ownership](KNOW-DEC-001-a3-premap-fullscreen-ownership.md)
 - Related Pitfall: [KNOW-PITFALL-002: Global Focus Pull Loops](../pitfalls/KNOW-PITFALL-002-global-focus-pull-loops.md)
+- Integration provenance: [KNOW-DEC-005: INC-7 Integration Provenance](KNOW-DEC-005-inc7-integration-provenance.md)

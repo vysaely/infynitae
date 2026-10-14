@@ -19,13 +19,13 @@
 ## Verified Facts
 1. In traditional compositors (including DriftWM [`src/state/keyboard_focus.rs:106`](file:///home/vysaely/.gemini/antigravity/scratch/driftwm/src/state/keyboard_focus.rs#L106)), programmatic focus changes allow keyboard focus to be assigned to occluded windows hidden behind an active fullscreen presentation.
 2. Infynitae introduced `hidden_by_presentation(&self, element: ElementId) -> bool`: an element is considered hidden if an output presents another element, the output camera would show the element, and no other active output observes it.
-3. In commit `489180e`, `hidden_by_presentation` was optimized with `!self.presenting()` early-exit check, returning in $\mathcal{O}(1)$ when no fullscreen presentation is active.
+3. In commit `489180e`, `hidden_by_presentation` was optimized with `!self.presenting()` early-exit check, returning without visiting any element when no fullscreen presentation is active (it scans only the fullscreen grants).
 
 ## Unverified Hypotheses
 - Hypothesized that multi-monitor environments where an occluded window spans into a second active output should remain focusable; verified by test `focus_does_not_move_to_an_element_a_presentation_hides`.
 
 ## Performance & Correctness Implications
-- Eliminates the security risk of keystroke hijacking by invisible windows behind fullscreen applications.
+- Prevents keyboard focus from being *moved* to an invisible window behind a fullscreen presentation (bindings, shell requests, focus successor). It does not take focus away from a window that was focused before it became hidden: such a window keeps receiving keys (owner policy 2026-10-14, see KNOW-DEC-002 Fact 3). UNRATIFIED: sealed INV-INPUT-8 amendment C12.F7 prepared, not adopted.
 - Zero runtime overhead in steady-state desktop operations without active presentations.
 
 ## Limitations & Counterexamples

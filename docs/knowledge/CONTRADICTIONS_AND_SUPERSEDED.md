@@ -49,3 +49,27 @@ This document maintains an explicit, traceable record of all findings that were 
 - **Superseded Code:** In `782a3d3`, the saved size captured on fullscreen entry was the element's current geometry, which lost the windowed size if toggled rapidly.
 - **Superseding Code:** Fixed in `77cde7f` via `restore_offers` in Core, decoupling saved windowed size from live committed geometry.
 - **Superseding Record:** [KNOW-RES-002: DriftWM Fullscreen Lifecycle](research/KNOW-RES-002-driftwm-fullscreen-lifecycle.md)
+
+---
+
+## 3. Corrections Recorded by the INC-7 Exit Preparation (2026-10-14)
+
+### X-01: "Focus on occluded windows is resolved" (C-02, KNOW-DEC-002, KNOW-ARCH-003) — partially corrected
+- **Original Claim:** C-02 and the first versions of KNOW-DEC-002 / KNOW-ARCH-003 stated that Infynitae had resolved the loophole of keyboard focus resting on occluded windows, eliminating keystroke hijacking by invisible windows.
+- **Correction:** A-8 refuses *moving* focus to a window hidden by a presentation. A window focused *before* it became hidden keeps the focus and keeps receiving keys (INC-7 exit review probes R1, R2): after a pre-map grant's element takes the output, and after the output that showed the focused window is removed. The owner kept this retention on 2026-10-14 (consistent with INV-INPUT-8 "visibility … never change it"); it is recorded as residual R-01.
+- **Authoritative Record:** [KNOW-DEC-002](decisions/KNOW-DEC-002-a8-fullscreen-focus-eligibility.md) (rewritten), [KNOW-ARCH-003](architecture/KNOW-ARCH-003-presentation-visibility-gating.md) (corrected).
+
+### X-02: "The 3 µs pan-step difference is a code-layout effect" — contradicted
+- **Original Claim:** The performance-recovery checkpoint and the first exit-readiness record attributed the +3 µs pan step after `df72202` to code layout (alignment), without counting instructions.
+- **Correction:** Instructions per pan step rose 9.9 % (547,821 → 601,815) on identical data and identical call counts; with `codegen-units = 1` both builds execute exactly 568,466 instructions per step. The cause is codegen-unit partitioning changing register allocation in `MembershipTable::with_output`, not alignment and not the P9b logic.
+- **Authoritative Record:** [KNOW-EXP-005](experiments/KNOW-EXP-005-benchmark-codegen-unit-sensitivity.md).
+
+### X-03: KNOW-ARCH-002 reproduction names and API — corrected
+- **Original Claim:** KNOW-ARCH-002 cited `self.input.clock.latest()` and a test `audit_finding_a5_synthesised_pointer_events`.
+- **Correction:** The method is `InputClock::wire_ms()`, read by `true_position()`; the T1 tests are `pointer_event_times_never_go_back_*`. The far-future timestamp residual was missing and is now recorded.
+- **Authoritative Record:** [KNOW-ARCH-002](architecture/KNOW-ARCH-002-monotonic-input-clock.md).
+
+### X-04: KNOW-DEC-003 hook ordering — corrected
+- **Original Claim:** "The adapter extracts this from `current_state()` in the post-commit hook before invoking `CompositorHandler::commit`."
+- **Correction:** Smithay's post-commit hook makes the acknowledged state current; the adapter reads it inside `CompositorHandler::commit`. Placement also requires the element to be out of fullscreen at that commit (probe R5).
+- **Authoritative Record:** [KNOW-DEC-003](decisions/KNOW-DEC-003-p9b-default-placement-acknowledgement.md).

@@ -27,7 +27,7 @@
 - Guarantees protocol compliance: newest submenus and overlapping context menus stack cleanly above older menus.
 
 ## Limitations & Counterexamples
-- Deviates from stock Smithay `Window::render_elements` order (deviation W-SM-20). Sealed text amendment X-15 prepared for approval.
+- Deviates from stock Smithay `Window::render_elements` order (deviation W-SM-20). UNRATIFIED: the X-15 amendment (layer C12.F8, replacing C3.3 item 1) is prepared for owner approval, not adopted. Ported to `integration/inc-7-exit-2026-10-14` as `23860b3`. Related Smithay limitations: [KNOW-PITFALL-007](../pitfalls/KNOW-PITFALL-007-smithay-0-7-xdg-shell-limitations.md).
 
 ## Reproduction Instructions
 Execute the popup stacking order test:
