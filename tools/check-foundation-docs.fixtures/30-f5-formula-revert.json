@@ -1,0 +1,7 @@
+{
+ "name": "C12.F5: F-PLACE-1 reverts to its recorded previous definition",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "`s` the window-geometry size at the element's first windowed presentation (INV-STAGE-1) and",
+ "replace": "`s` the window-geometry size at the element's first map and",
+ "expect": "formula-provenance"
+}

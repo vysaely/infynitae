@@ -169,7 +169,7 @@ Each row carries forward one row of the Phase A table above, which stays unchang
 
 ### PL-21 — Placement policy
 - **Class (Phase A, unchanged):** DEFER
-- **Effective consequence:** Level D decision recorded 2026-10-13 (FOUNDATION_ARCHITECTURE §C12.F1): a new toplevel is centred in the usable region at its first map; an oversized one is aligned to the region's origin (F-PLACE-1). Camera default placement stays Level D (INV-CAMERA-3)
+- **Effective consequence:** Level D decision recorded 2026-10-13 (FOUNDATION_ARCHITECTURE §C12.F1), amended 2026-10-14 (§C12.F5): a new toplevel is centred in the usable region at its first windowed presentation (INV-STAGE-1); an oversized one is aligned to the region's origin (F-PLACE-1). Camera default placement stays Level D (INV-CAMERA-3)
 - **Justified by:** INV-STAGE-1
 - **ADR:** —
 

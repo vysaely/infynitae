@@ -1204,7 +1204,7 @@ Not kept as negative controls: things that would only inflate counts (e.g. "remo
 
 ## C12 — Canonical invariant registry
 
-> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice). §C12.F3 supersedes INV-PROTO-1 (`configure_bounds`). §C12.F4 supersedes INV-SCALE-3 (epoch time authority).
+> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice). §C12.F3 supersedes INV-PROTO-1 (`configure_bounds`). §C12.F4 supersedes INV-SCALE-3 (epoch time authority). §C12.F5 supersedes INV-STAGE-1 again (placement at the first windowed presentation).
 
 **This table is authoritative.** Legacy identifiers map to it (C12.2). Where a rule was refined, the earlier wording is superseded and must not be cited as normative.
 
@@ -2020,6 +2020,48 @@ The existence and value of the settlement timeout (PROV-5, OB-23), what ends an 
 
 ---
 
+# §C12.F5 — Canonical registry amendment (Phase F: default placement at the first windowed presentation)
+
+**Status: ADOPTED 2026-10-14 by owner approval.** Approved requirements: the default placement of an element first mapped in protocol fullscreen is resolved at its first windowed presentation, the first commit that applies an acknowledged configure without the fullscreen state; the element must be out of protocol fullscreen at that commit; PL-21's first-map statement is superseded. One clause of one invariant and one formula definition change; no invariant is added or removed (57). Base: integration candidate `93c2605` (`integration/inc-7-exit-2026-10-14`).
+
+**Inputs:**
+- C12.F1 INV-STAGE-1, F-PLACE-1, STATE_MACHINES M1 and PROTOTYPE_DECISION_LEDGER PL-21 as effective at `93c2605`;
+- INC-7 finding P9b: an element first mapped in protocol fullscreen has the fullscreen size at its first map. Placing it then centres the fullscreen size, not the windowed one, so the window is off-centre when it leaves fullscreen;
+- the implementation on `93c2605` (`334b9b3`): Core places an element that was never placed at the first commit carrying an acknowledged windowed state while the element is not in protocol fullscreen.
+
+**Provenance:** [evidence/phase-f/placement-windowed-presentation/AMENDMENT_RECORD.md](evidence/phase-f/placement-windowed-presentation/AMENDMENT_RECORD.md).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12 and C12.F1. Every other row is unchanged.**
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-STAGE-1** | Stage is the **only** store and writer of persistent placement (anchors) and z-order. Writers: `stage::place` via (a) placement policy — a provisional anchor at initial commit, and the default placement resolved **once, at the element's first windowed presentation**, when its windowed window-geometry size is authoritative: its first map, unless the element is in protocol fullscreen then, in which case the first commit that applies an acknowledged configure without the fullscreen state and is made while the element is not in protocol fullscreen; an explicit, restored or already resolved anchor is final and is not resolved again; protocol fullscreen never writes an anchor and never resizes the element — (b) interactive drag commit, (c) shell `MoveElement` (same path). | core `Stage` | D | B2–B5, C2; evidence/phase-f/placement-amendment; evidence/phase-f/placement-windowed-presentation | T0 single-writer API tests; T0 placement properties against an exact model; T1 INV-3 (X-8); T0 `a_window_keeping_the_fullscreen_size_is_placed_at_its_first_windowed_commit`; T1 `placement_after_fullscreen_waits_for_the_acknowledgement` | owner amendment 2026-10-14 (placement at the first windowed presentation, P9b) |
+
+## C12.F5.1 Sealed text superseded (must not be cited as normative)
+
+| Superseded | Replaced by |
+|---|---|
+| C12.F1 status "Default placement is resolved once at first map" and C12.F1 INV-STAGE-1 (a) "the default placement resolved **once, at the element's first map**, when its window-geometry size is authoritative; an explicit or restored anchor is final at initial commit and is not resolved again" | INV-STAGE-1 (C12.F5): at the first windowed presentation (the first map, unless the element is in protocol fullscreen then); an explicit, restored or already resolved anchor is final |
+| C12.F1 F-PLACE-1 heading "Default placement at first map" and "`s` the window-geometry size at the element's first map" | F-PLACE-1 (C12.F5), §C12.F5.2 |
+| STATE_MACHINES M1 (C12.F1) AwaitingFirstBuffer → Mapped "**first map only, and only for a provisional anchor:**", and Mapped → Mapped (commit with buffer) without a placement effect | M1 (C12.F5) |
+| PROTOTYPE_DECISION_LEDGER PL-21 (C12.F1) "a new toplevel is centred in the usable region at its first map" | PL-21 (C12.F5): at its first windowed presentation |
+
+## C12.F5.2 Formula amendments (living §F carries the corrected text; the previous text is recorded here verbatim)
+
+### F-PLACE-1 (P9b)
+- **Previous (C12.F1):** Per axis, the anchor is `a = c − min(s, u)/2`, rounded once by R3 (F-ROUND-1), where `c` is the camera centre of the placement output (Canvas px), `s` the window-geometry size at the element's first map and `u = view_O / scale_O` the usable output-logical extent (the whole view until a reserved region exists). For `s ≤ u` the window geometry is centred in the usable region, `a = (c − u/2) + (u − s)/2`; for `s > u` its origin is aligned with the region's origin, `a = c − u/2`.
+- **Reason:** for an element first mapped in protocol fullscreen, the size at its first map is the fullscreen size. The windowed size `s` becomes authoritative only at the first windowed presentation (INV-STAGE-1, C12.F5).
+- **Unchanged:** the formula itself (centre in the usable region; an oversized window aligned with the region's origin; one R3 rounding), the placement output and the domain. For an element first mapped windowed, the first windowed presentation is the first map, so its anchor is unchanged.
+
+## C12.F5.3 What this layer does not change
+
+- **Ownership.** Stage remains the only store and writer of anchors, through `stage::place` from Core. A client request never positions a toplevel, and protocol fullscreen writes no anchor.
+- **Once.** Placement is evaluated for an element exactly once. The provisional anchor at initial commit, INV-STAGE-5 (the anchor kept across unmap and remap) and INV-CAMERA-2/-4 are unchanged.
+- **Presentation.** INV-PRES-1 and M9 are not changed by this layer. The presentation view shows a fullscreen element regardless of its anchor; the anchor matters to other cameras and after fullscreen ends.
+- **Not exercisable yet:** "an explicit or restored anchor is final" (no such path exists, C12.F1.3).
+
+---
+
 # Phase D package (D7): living regions of this document
 
 Everything above this line is historical:
@@ -2127,10 +2169,11 @@ Each normative formula or coordinate algorithm is defined once here. Its text is
 - **Definition:** `anchor = R3(anchor₀ + Q16(Σ Canvas pointer deltas since the drag start))`, quantised once per update. **Open:** the definition across an Arrangement crossing between independently-camera'd outputs is the OB-34 decision (candidate `anchor = R3(q_now − grab_offset)`, not adopted).
 - **Historical sources:** B1.3-7; PD-F2-13
 
-### F-PLACE-1 — Default placement at first map
-- **Definition:** Per axis, the anchor is `a = c − min(s, u)/2`, rounded once by R3 (F-ROUND-1), where `c` is the camera centre of the placement output (Canvas px), `s` the window-geometry size at the element's first map and `u = view_O / scale_O` the usable output-logical extent (the whole view until a reserved region exists). For `s ≤ u` the window geometry is centred in the usable region, `a = (c − u/2) + (u − s)/2`; for `s > u` its origin is aligned with the region's origin, `a = c − u/2`.
+### F-PLACE-1 — Default placement at first windowed presentation
+- **Definition:** Per axis, the anchor is `a = c − min(s, u)/2`, rounded once by R3 (F-ROUND-1), where `c` is the camera centre of the placement output (Canvas px), `s` the window-geometry size at the element's first windowed presentation (INV-STAGE-1) and `u = view_O / scale_O` the usable output-logical extent (the whole view until a reserved region exists). For `s ≤ u` the window geometry is centred in the usable region, `a = (c − u/2) + (u − s)/2`; for `s > u` its origin is aligned with the region's origin, `a = c − u/2`.
 - **Definition:** The placement output is the first connected output (lowest `OutputId`), whose camera centre is also the provisional anchor written at initial commit. With no output the provisional anchor is kept. Domain: camera zoom 1, where `u` is the Canvas extent of the view; under a persistent zoom ≠ 1 (gated by OB-24) the fitting case is still centred on the camera and the oversized case is not defined by this formula.
 - **Historical sources:** C12.F1 (owner amendment 2026-10-13); PL-21
+- **Amended:** C12.F5 (P9b); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.F5.2
 
 ### F-ROUND-1 — Rounding points
 - **Definition:** R1 unproject OutputLogical → CanvasPos (Q16, ties-even); R2 camera gesture update (Q16 of the f64 gesture sum); R3 placement commit (CanvasPos → integral CanvasPoint, half-even); R4 physical edges (F-LATTICE-1); R5 snapped camera c_eff; R6 host-device deltas: none; R7 view-origin quantisation (F-VIEW-1); R8 popup constraint target: inward rounding (ceiling at the minimum edges, floor at the maximum edges). Forbidden: F1–F7 (B1.4).

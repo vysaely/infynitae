@@ -1,0 +1,7 @@
+{
+ "name": "C12.F5: placement slips back to the first map in the registry",
+ "file": "FOUNDATION_INVARIANTS.md",
+ "find": "resolved **once, at the element's first windowed presentation**, when its windowed window-geometry size is authoritative: its first map, unless",
+ "replace": "resolved **once, at the element's first map**, when its windowed window-geometry size is authoritative: its first map, unless",
+ "expect": "inv-wording-mismatch"
+}
