@@ -415,6 +415,7 @@ impl Core {
         self.premap_fullscreen.retain(|(e, _)| *e != id);
         self.fullscreen.retain(|f| f.element != id);
         self.windowed_placement_pending.retain(|(e, _)| *e != id);
+        self.restore_offers.retain(|(e, _)| *e != id);
     }
 
     /// Default windowed placement (F-PLACE-1), resolved once per element through `stage::place`.
@@ -442,6 +443,13 @@ impl Core {
             self.windowed_placement_pending
                 .retain(|(e, _)| *e != old.element);
             self.windowed_placement_pending.push((old.element, size));
+        }
+        // The size offered is remembered: the element's geometry is still the fullscreen one
+        // until it redraws, so a grant made before that must save the offered size again, not
+        // the geometry (the size a window returns to is its last windowed size).
+        self.restore_offers.retain(|(e, _)| *e != old.element);
+        if let Some(size) = old.saved {
+            self.restore_offers.push((old.element, size));
         }
         Self::restore_effect(old)
     }
@@ -514,8 +522,15 @@ impl Core {
                     let allowed = before_first_map || self.focus.target() == Some(id);
                     match self.fullscreen_output(id, output).filter(|_| allowed) {
                         Some(o) => {
-                            let saved =
-                                self.stage.mapped(id).map(|(_, tree, _)| tree.geometry.size);
+                            // the last windowed size: one still on offer, else the geometry
+                            let saved = self
+                                .restore_offers
+                                .iter()
+                                .find(|(e, _)| *e == id)
+                                .map(|(_, size)| *size)
+                                .or_else(|| {
+                                    self.stage.mapped(id).map(|(_, tree, _)| tree.geometry.size)
+                                });
                             let before = self.presentations();
                             let replaced = self.store_fullscreen(id, o, saved);
                             let mut fx = vec![Effect::ToplevelConfigure(id)];
@@ -611,6 +626,14 @@ impl Core {
                     .any(|(e, old)| *e == id && *old != tree.geometry.size);
                 if arrived && self.fullscreen_of(id).is_none() {
                     self.place_by_default(id, &tree)?;
+                }
+                // the client redrew at another size: a size still on offer is spent
+                if self
+                    .stage
+                    .tree(id)
+                    .is_some_and(|old| old.geometry.size != tree.geometry.size)
+                {
+                    self.restore_offers.retain(|(e, _)| *e != id);
                 }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
                 vec![]
@@ -2503,6 +2526,55 @@ mod tests {
             (v.v.x, v.v.y),
             (-200 * Q16_ONE - 26214, -150 * Q16_ONE - 13107)
         );
+    }
+
+    /// M9 "configure with the saved size": the size offered is the last *windowed* size. A grant
+    /// made while the element still has its fullscreen geometry (it was told to leave and has not
+    /// redrawn) saves the size on offer again; once the element redraws at another size the offer
+    /// is spent and the geometry is what is saved. Unmap and destruction forget the offer.
+    #[test]
+    fn the_saved_size_is_the_last_windowed_size() {
+        const UNFS: ToplevelRequest = ToplevelRequest::UnsetFullscreen;
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        let offer = |size: (i32, i32)| Effect::ToplevelConfigureSize {
+            element: w,
+            size: LocalSize {
+                w: size.0,
+                h: size.1,
+            },
+        };
+        let saved = |c: &Core| c.fullscreen_of(w).and_then(|f| f.saved).map(|s| (s.w, s.h));
+
+        c.toplevel_request(w, FS).unwrap();
+        assert_eq!(saved(&c), Some((400, 300)));
+        c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        assert_eq!(c.toplevel_request(w, UNFS).unwrap().1[0], offer((400, 300)));
+        // again before the element redrew: its geometry is still 1920x1080
+        c.toplevel_request(w, FS).unwrap();
+        assert_eq!(
+            saved(&c),
+            Some((400, 300)),
+            "the fullscreen geometry was saved"
+        );
+        assert_eq!(c.toplevel_request(w, UNFS).unwrap().1[0], offer((400, 300)));
+
+        // the element redraws at a size of its own choosing: the offer is spent
+        c.toplevel_committed(w, win(1, 500, 350, true)).unwrap();
+        c.toplevel_request(w, FS).unwrap();
+        assert_eq!(saved(&c), Some((500, 350)));
+        c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        assert_eq!(c.toplevel_request(w, UNFS).unwrap().1[0], offer((500, 350)));
+
+        // an unmap forgets the offer: after the re-show the geometry is the only size known
+        c.toplevel_committed(w, win(1, 1920, 1080, false)).unwrap();
+        c.toplevel_committed(w, win(1, 1920, 1080, false)).unwrap();
+        c.toplevel_committed(w, win(1, 640, 480, true)).unwrap();
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, FS).unwrap();
+        assert_eq!(saved(&c), Some((640, 480)));
     }
 
     /// "Fullscreen never touches cameras": a camera drag on a fullscreen output moves that

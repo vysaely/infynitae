@@ -156,6 +156,14 @@ pub struct Probe {
     pub wm_capabilities: Vec<(usize, Vec<u32>)>,
     /// Every `xdg_toplevel.configure_bounds` as received.
     pub configure_bounds: Vec<(usize, (i32, i32))>,
+    /// The `time` argument of every `wl_pointer` motion, button and axis event, in order, with
+    /// the event's kind ("motion", "button", "axis").
+    pub ptr_times: Vec<(&'static str, u32)>,
+    /// While set, an `xdg_surface.configure` is recorded in `held_acks` and neither acknowledged
+    /// nor drawn for: a client that is slow, or that never answers.
+    pub hold_acks: bool,
+    /// (surface, serial) of every configure received while `hold_acks` was set, in order.
+    pub held_acks: Vec<(usize, u32)>,
 }
 
 /// Unique shm file names across the tests of this process.
@@ -200,6 +208,29 @@ impl Probe {
             }
         };
         pool.create_buffer(0, w, h, stride, wl_shm::Format::Argb8888, qh, ())
+    }
+
+    /// Binds what a second, independent client needs to map a window and be focused: the
+    /// compositor, shm, xdg_wm_base and the seat's keyboard. For a probe that is not the
+    /// harness's own (which `Lockstep` binds in full).
+    pub fn bind_basic(&mut self, registry: &WlRegistry, qh: &QueueHandle<Self>) {
+        let find = |name: &str| {
+            self.globals
+                .iter()
+                .find(|(_, i, _)| i == name)
+                .map(|(n, _, v)| (*n, *v))
+                .unwrap_or_else(|| panic!("global {name} missing"))
+        };
+        let (n, _) = find("wl_compositor");
+        self.compositor = Some(registry.bind(n, 6, qh, ()));
+        let (n, _) = find("wl_shm");
+        self.shm = Some(registry.bind(n, 1, qh, ()));
+        let (n, v) = find("xdg_wm_base");
+        self.wm_base = Some(registry.bind(n, v.min(6), qh, ()));
+        let (n, v) = find("wl_seat");
+        let seat: WlSeat = registry.bind(n, v.min(9), qh, ());
+        self.keyboard = Some(seat.get_keyboard(qh, ()));
+        self.seat = Some(seat);
     }
 
     /// Attaches a fresh buffer of the surface's size and commits (map or remap).
@@ -861,6 +892,10 @@ impl Dispatch<XdgSurface, usize> for Probe {
     ) {
         if let xdg_surface::Event::Configure { serial } = ev {
             st.configures.push(st.surfaces[*idx].label);
+            if st.hold_acks {
+                st.held_acks.push((*idx, serial));
+                return;
+            }
             xdg.ack_configure(serial);
             if !st.surfaces[*idx].configured {
                 st.surfaces[*idx].configured = true;
@@ -979,16 +1014,20 @@ impl Dispatch<WlPointer, ()> for Probe {
             }
             wl_pointer::Event::Leave { surface, .. } => format!("leave {}", st.label_of(&surface)),
             wl_pointer::Event::Motion {
+                time,
                 surface_x,
                 surface_y,
-                ..
-            } => format!("motion {surface_x},{surface_y}"),
+            } => {
+                st.ptr_times.push(("motion", time));
+                format!("motion {surface_x},{surface_y}")
+            }
             wl_pointer::Event::Button {
                 serial,
+                time,
                 button,
                 state,
-                ..
             } => {
+                st.ptr_times.push(("button", time));
                 st.last_serial = serial;
                 let s = match state.into_result() {
                     Ok(wl_pointer::ButtonState::Pressed) => "pressed",
@@ -996,7 +1035,10 @@ impl Dispatch<WlPointer, ()> for Probe {
                 };
                 format!("button {button} {s}")
             }
-            wl_pointer::Event::Axis { axis, value, .. } => format!("axis {axis:?} {value}"),
+            wl_pointer::Event::Axis { time, axis, value } => {
+                st.ptr_times.push(("axis", time));
+                format!("axis {axis:?} {value}")
+            }
             wl_pointer::Event::AxisValue120 { axis, value120 } => {
                 format!("axis_v120 {axis:?} {value120}")
             }

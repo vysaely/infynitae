@@ -184,12 +184,27 @@ impl WaylandState {
         let causing_output = serial
             .and_then(|s| self.serial_output(s))
             .or_else(|| self.core.pointer_output());
-        let target = surface
-            .get_parent_surface()
-            .and_then(|parent| self.element_index_by_root(&parent))
+        // The positioner works in its parent's window geometry. For a popup of a popup (OB-1)
+        // Core's target, which is relative to the toplevel, is moved by the positions of the
+        // popups in between, each relative to its own parent.
+        let mut parent = surface.get_parent_surface();
+        let mut offset = (0, 0);
+        while let Some(PopupKind::Xdg(p)) = parent.as_ref().and_then(|s| self.popups.find_popup(s))
+        {
+            let loc = p.with_pending_state(|s| (s.geometry.loc.x, s.geometry.loc.y));
+            offset = (offset.0 + loc.0, offset.1 + loc.1);
+            parent = p.get_parent_surface();
+        }
+        let target = parent
+            .and_then(|root| self.element_index_by_root(&root))
             .and_then(|i| {
                 self.core
                     .popup_constraint_target(self.elements[i].id, causing_output)
+            })
+            .map(|mut t| {
+                t.loc.x -= offset.0;
+                t.loc.y -= offset.1;
+                t
             });
         let geometry = match target {
             Some(t) => positioner.get_unconstrained_geometry(convert::parent_geometry_rect(t)),
