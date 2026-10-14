@@ -230,12 +230,9 @@ impl Core {
     }
 
     /// The elements whose default placement was postponed past a fullscreen first map and is
-    /// still waiting for their first windowed size, read-only.
+    /// still waiting for their first windowed presentation, read-only.
     pub fn placements_pending(&self) -> Vec<ElementId> {
-        self.windowed_placement_pending
-            .iter()
-            .map(|(e, _)| *e)
-            .collect()
+        self.windowed_placement_pending.clone()
     }
 
     pub fn fullscreen_of(&self, id: ElementId) -> Option<FullscreenState> {
@@ -440,14 +437,14 @@ impl Core {
     fn drop_fullscreen(&mut self, id: ElementId) {
         self.premap_fullscreen.retain(|(e, _)| *e != id);
         self.fullscreen.retain(|f| f.element != id);
-        self.windowed_placement_pending.retain(|(e, _)| *e != id);
+        self.windowed_placement_pending.retain(|e| *e != id);
         self.restore_offers.retain(|(e, _)| *e != id);
     }
 
     /// Default windowed placement (F-PLACE-1), resolved once per element through `stage::place`.
     /// Does nothing for an element already placed.
     fn place_by_default(&mut self, id: ElementId, tree: &SurfaceTree) -> Result<(), ProtocolError> {
-        self.windowed_placement_pending.retain(|(e, _)| *e != id);
+        self.windowed_placement_pending.retain(|e| *e != id);
         if self.stage.default_placed(id) {
             return Ok(());
         }
@@ -460,15 +457,14 @@ impl Core {
 
     /// An element's fullscreen ended while it stays mapped (unset, replacement, output removal):
     /// returns the configure that tells it so, and, if it has never been placed as a window,
-    /// notes the size it has now so that its first windowed size can be recognised.
+    /// postpones its default placement to its first windowed presentation (P9b): the first
+    /// commit after the client acknowledged a configure without the fullscreen state.
     fn fullscreen_ended(&mut self, old: FullscreenState) -> Effect {
         if !self.stage.default_placed(old.element)
-            && let Some((_, tree, _)) = self.stage.mapped(old.element)
+            && self.stage.mapped(old.element).is_some()
+            && !self.windowed_placement_pending.contains(&old.element)
         {
-            let size = tree.geometry.size;
-            self.windowed_placement_pending
-                .retain(|(e, _)| *e != old.element);
-            self.windowed_placement_pending.push((old.element, size));
+            self.windowed_placement_pending.push(old.element);
         }
         // The size offered is remembered: the element's geometry is still the fullscreen one
         // until it redraws, so a grant made before that must save the offered size again, not
@@ -595,12 +591,29 @@ impl Core {
         self.stage.create()
     }
 
-    /// A committed surface-tree state of an element (written wholesale per commit, OBJ-05).
-    /// Drives M1 from the root surface's buffer state. A rejected commit changes nothing.
+    /// A committed surface-tree state of an element, for a caller that does not track the
+    /// client's acknowledgements: the commit is taken to carry the state Core decided last (a
+    /// client that acknowledges every configure before it commits). The adapter calls
+    /// [`Core::toplevel_committed_acked`].
     pub fn toplevel_committed(
         &mut self,
         id: ElementId,
         tree: SurfaceTree,
+    ) -> Result<Vec<Effect>, ProtocolError> {
+        let acked_fullscreen = self.fullscreen_of(id).is_some();
+        self.toplevel_committed_acked(id, tree, acked_fullscreen)
+    }
+
+    /// A committed surface-tree state of an element (written wholesale per commit, OBJ-05).
+    /// Drives M1 from the root surface's buffer state. `acked_fullscreen`: whether the state
+    /// this commit applies — the last configure the client acknowledged before it — contains
+    /// `fullscreen` (xdg-shell applies an acknowledged configure's state at the next commit).
+    /// A rejected commit changes nothing.
+    pub fn toplevel_committed_acked(
+        &mut self,
+        id: ElementId,
+        tree: SurfaceTree,
+        acked_fullscreen: bool,
     ) -> Result<Vec<Effect>, ProtocolError> {
         tree.validate().map_err(ProtocolError::Snapshot)?;
         let state = self.stage.state(id).ok_or(ProtocolError::StaleElement)?;
@@ -642,14 +655,11 @@ impl Core {
                 vec![]
             }
             (Lifecycle::Mapped, true) => {
-                // An element that left fullscreen without ever having been a window is placed
-                // when its first windowed size arrives: a commit whose geometry differs from the
-                // one it had when fullscreen ended (commits still in flight at the old size are
-                // not that).
-                let arrived = self
-                    .windowed_placement_pending
-                    .iter()
-                    .any(|(e, old)| *e == id && *old != tree.geometry.size);
+                // An element that left fullscreen without ever having been a window is placed at
+                // its first windowed presentation (P9b): the first commit after it acknowledged a
+                // configure without the fullscreen state, whatever its size. Frames committed
+                // before that acknowledgement are fullscreen frames, whatever their size.
+                let arrived = !acked_fullscreen && self.windowed_placement_pending.contains(&id);
                 if arrived && self.fullscreen_of(id).is_none() {
                     self.place_by_default(id, &tree)?;
                 }
@@ -2125,15 +2135,20 @@ mod tests {
             Some(provisional),
             "the exit itself moves nothing"
         );
-        // a frame still in flight at the fullscreen size
-        c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        // frames still in flight: committed before the client acknowledged the exit, whatever
+        // their size (P9b: the acknowledgement, not the size, marks the first windowed frame)
+        c.toplevel_committed_acked(w, win(1, 1920, 1080, true), true)
+            .unwrap();
+        c.toplevel_committed_acked(w, win(1, 400, 300, true), true)
+            .unwrap();
         assert_eq!(
             c.stage().anchor(w),
             Some(provisional),
-            "placed from the fullscreen size"
+            "placed at a frame committed under the fullscreen state"
         );
-        // the first windowed size: placed now, centred on the camera
-        c.toplevel_committed(w, win(1, 400, 300, true)).unwrap();
+        // the first commit after the acknowledgement: placed now, centred on the camera
+        c.toplevel_committed_acked(w, win(1, 400, 300, true), false)
+            .unwrap();
         assert_eq!(c.stage().anchor(w), Some(CanvasPoint { x: 500, y: -450 }));
         assert!(c.stage().default_placed(w));
         assert_eq!(
@@ -2149,6 +2164,54 @@ mod tests {
         c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
         c.toplevel_committed(w, win(1, 300, 200, true)).unwrap();
         assert_eq!(c.stage().anchor(w), Some(placed), "a remap placed it again");
+    }
+
+    /// P9b: a client that keeps the fullscreen size as its windowed size is placed at its first
+    /// windowed commit (oversized: F-PLACE-1's fallback puts its origin at the view's corner);
+    /// a second fullscreen round trip before it acknowledges keeps the placement waiting; Core
+    /// never resizes it.
+    #[test]
+    fn a_window_keeping_the_fullscreen_size_is_placed_at_its_first_windowed_commit() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let w = c.toplevel_created();
+        c.toplevel_request(w, FS).unwrap();
+        c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+        focus(&mut c, &mut i, w);
+        let provisional = c.stage().anchor(w);
+        // out of fullscreen and back in before the client acknowledged the exit
+        c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        let fx = c.toplevel_request(w, FS).unwrap().1;
+        assert!(
+            !fx.iter()
+                .any(|e| matches!(e, Effect::ToplevelConfigureSize { .. }))
+        );
+        c.toplevel_committed_acked(w, win(1, 1920, 1080, true), true)
+            .unwrap();
+        assert_eq!(c.stage().anchor(w), provisional, "placed while fullscreen");
+        // the exit, acknowledged; the client keeps 1920x1080. Placement sends nothing: no
+        // configure, no size (Core never resizes a client to place it)
+        c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        let fx = c
+            .toplevel_committed_acked(w, win(1, 1920, 1080, true), false)
+            .unwrap();
+        assert!(
+            !fx.iter().any(|e| matches!(
+                e,
+                Effect::ToplevelConfigure(_) | Effect::ToplevelConfigureSize { .. }
+            )),
+            "placement configured the client: {fx:?}"
+        );
+        assert!(
+            c.stage().default_placed(w),
+            "a window keeping its size is never placed"
+        );
+        // 1920x1080 fills the 1920x1080 view exactly: its origin at the view's corner
+        assert_eq!(c.stage().anchor(w), Some(CanvasPoint { x: -960, y: -540 }));
+        assert!(c.placements_pending().is_empty());
     }
 
     /// The other ways such a window first becomes a window: fullscreen ends by replacement or by

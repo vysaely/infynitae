@@ -153,7 +153,17 @@ impl WaylandState {
         }
         // A refused snapshot or transition changes nothing in Core; the protocol side (for
         // example `ensure_configured` below) reports client errors itself.
-        if let Ok(effects) = self.core.toplevel_committed(id, tree) {
+        // The state this commit applies is the last one the client acknowledged: Smithay's
+        // post-commit hook has made it current before this handler runs (P9b).
+        let acked_fullscreen = window.toplevel().is_some_and(|t| {
+            t.current_state()
+                .states
+                .contains(xdg_toplevel::State::Fullscreen)
+        });
+        if let Ok(effects) = self
+            .core
+            .toplevel_committed_acked(id, tree, acked_fullscreen)
+        {
             self.apply(&effects);
         }
     }

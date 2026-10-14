@@ -459,6 +459,52 @@ fn a_stale_acknowledgement_does_not_bring_fullscreen_back() {
     assert_layers(&t.frame(), &[OTHER, W_WINDOWED], "caught up");
 }
 
+/// P9b: a window whose first map is in fullscreen is placed at its first windowed presentation,
+/// the first commit after it acknowledged the configure that ends fullscreen. Frames it commits
+/// before acknowledging — at the fullscreen size, or already at its windowed size — leave its
+/// provisional anchor (its origin at the camera centre, the view's centre here); after the
+/// acknowledgement it is centred in the view. No configure is sent for the placement.
+#[test]
+fn placement_after_fullscreen_waits_for_the_acknowledgement() {
+    let mut t = T::new();
+    let qh = t.ls.qh.clone();
+    let x = t.ls.probe.toplevel_uncommitted(&qh, "X", (640, 480));
+    t.toplevel(x).set_fullscreen(None);
+    t.ls.probe.surfaces[x].wl.commit();
+    t.adv();
+    t.adv();
+    let id = t.ls.state.elements().last().expect("X");
+    assert_eq!(t.ls.state.core().presentation(t.ls.output()), Some(id));
+    t.focus(id);
+
+    t.ls.probe.hold_acks = true;
+    t.ask(x, |tl| tl.unset_fullscreen());
+    let configures = t.configures(x).len();
+    t.resize(x, (640, 480), GREEN);
+    t.resize(x, (200, 100), GREEN);
+    assert_eq!(t.ls.state.core().placements_pending(), vec![id]);
+    assert_layers(
+        &t.frame(),
+        &[((320, 240, 520, 340), GREEN)],
+        "not placed before the acknowledgement",
+    );
+    let held = t.ls.probe.held_acks.clone();
+    t.ls.probe.hold_acks = false;
+    t.ack(x, held.last().expect("held").1);
+    t.resize(x, (200, 100), GREEN);
+    assert!(t.ls.state.core().placements_pending().is_empty());
+    assert_layers(
+        &t.frame(),
+        &[((220, 190, 420, 290), GREEN)],
+        "placed at the first commit after the acknowledgement",
+    );
+    assert_eq!(
+        t.configures(x).len(),
+        configures,
+        "the placement configured X"
+    );
+}
+
 /// Invariant (INV-PRES-1; M2 "exactly one configure"): a client that never acknowledges and
 /// never redraws is presented as it is (centred, alone), is not sent the configure again, and
 /// can still leave: one configure, and the output is exactly as it was.

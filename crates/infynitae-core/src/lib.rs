@@ -183,10 +183,10 @@ pub struct Core {
     /// changes: until then its geometry is still the fullscreen one, so a new grant saves this
     /// size and not that one. Written by `core::protocol` alone.
     restore_offers: Vec<(stage::ElementId, geom::LocalSize)>,
-    /// Elements that left protocol fullscreen before ever having been placed as a window, with
-    /// the geometry size they had then. Their default placement is resolved at the first commit
-    /// with another size: the client's first windowed size.
-    windowed_placement_pending: Vec<(stage::ElementId, geom::LocalSize)>,
+    /// Elements that left protocol fullscreen before ever having been placed as a window. Their
+    /// default placement is resolved at their first windowed presentation: the first commit
+    /// after the client acknowledged a configure without the fullscreen state (P9b).
+    windowed_placement_pending: Vec<stage::ElementId>,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
     /// protocol state fail its `Send` assertion (built through infynitae-wayland's probe feature).
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
