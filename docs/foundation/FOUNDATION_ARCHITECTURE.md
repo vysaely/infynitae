@@ -1204,7 +1204,7 @@ Not kept as negative controls: things that would only inflate counts (e.g. "remo
 
 ## C12 — Canonical invariant registry
 
-> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice). §C12.F3 supersedes INV-PROTO-1 (`configure_bounds`). §C12.F4 supersedes INV-SCALE-3 (epoch time authority). §C12.F5 supersedes INV-STAGE-1 again (placement at the first windowed presentation). §C12.F6 supersedes INV-PRES-1 (a pre-map grant takes the output when its element maps).
+> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice). §C12.F3 supersedes INV-PROTO-1 (`configure_bounds`). §C12.F4 supersedes INV-SCALE-3 (epoch time authority). §C12.F5 supersedes INV-STAGE-1 again (placement at the first windowed presentation). §C12.F6 supersedes INV-PRES-1 (a pre-map grant takes the output when its element maps). §C12.F7 supersedes INV-INPUT-8 (focus eligibility and retention under a presentation).
 
 **This table is authoritative.** Legacy identifiers map to it (C12.2). Where a rule was refined, the earlier wording is superseded and must not be cited as normative.
 
@@ -2091,6 +2091,37 @@ The existence and value of the settlement timeout (PROV-5, OB-23), what ends an 
 ## C12.F6.2 What this layer does not change
 
 The first two paragraphs of INV-PRES-1 (exactly one configure per request; a grant only with ActiveElementFocus or before the first map; a declined request stores nothing), the output choice at grant, F-PRESENT-1, INV-OUTPUT-1, and "fullscreen never touches cameras or anchors". A waiting grant gives its element no focus (INV-INPUT-8). OB-22 stays OPEN: this layer supplies its pre-map requirement at T1; the T3 and T5 parts remain.
+
+---
+
+# §C12.F7 — Canonical registry amendment (Phase F: INV-INPUT-8, focus eligibility and retention under a presentation)
+
+**Status: ADOPTED 2026-10-14 by owner approval.** Approved requirements: new keyboard focus moves to a window hidden by a presentation are forbidden; existing focus is kept when visibility changes, even if the focused window becomes hidden; a fullscreen request or grant alone never moves keyboard focus; existing authorized focus transitions are kept; the conflicting M11 transitions are superseded. One invariant is reworded; none is added or removed (57). Base: integration candidate `93c2605` (`integration/inc-7-exit-2026-10-14`).
+
+**Inputs:**
+- C12.R1 INV-INPUT-8 and STATE_MACHINES M11 as effective at `93c2605`;
+- INC-7 audit finding A-8: an explicit focus action, the initial activation grant, FocusNext or the successor of a lost target could give the keyboard focus to a window that a presentation hides, so typing went to a window the user cannot see;
+- the implementation on `93c2605` (`0f45cfd`, `2aa8d65`): `Core::hidden_by_presentation`; `set_focus` and `grant_initial_focus` decline a hidden target; FocusNext and the successor of a lost target choose among `focusable_elements()`; no fullscreen request changes the focus.
+
+**Provenance:** [evidence/phase-f/focus-eligibility/AMENDMENT_RECORD.md](evidence/phase-f/focus-eligibility/AMENDMENT_RECORD.md).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12 and C12.R1. Every other row is unchanged.**
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-INPUT-8** | **ActiveElementFocus** (which element, or none, owns desktop keyboard focus) has one writer, the core FocusModel. It changes only by explicit action (click-to-focus, focus bindings, shell focus command, activation grant) or target loss, and never to an element **hidden by a presentation** — an output presents another element, the camera bound to that output would show this element, and no output observes it: such an action is declined and leaves the focus where it was, and the successor after a target loss is chosen among the other elements. Camera, visibility, pointer motion, protocol routing and fullscreen requests never change it: requesting or obtaining fullscreen gives a client no focus, and an element that holds the focus keeps it when a presentation or an output change hides it — it then receives keyboard input while hidden, until an explicit action or a target loss moves the focus. Delivered keyboard routing is always within the focused element's tree (INV-INPUT-10), or none. | core `FocusModel` | D+E | D-B10-KBD, ER-1; evidence/phase-f/focus-eligibility | T0, T1 (OB-30); T0 `focus_does_not_move_to_an_element_a_presentation_hides`; T1 `focus_does_not_move_to_a_window_the_presentation_hides`, `a_menu_chain_of_a_fullscreen_window` | owner amendment 2026-10-14 (focus eligibility and retention, A-8) |
+
+## C12.F7.1 Sealed text superseded (must not be cited as normative)
+
+| Superseded | Replaced by |
+|---|---|
+| C12 INV-INPUT-8 "Keyboard focus changes only by explicit action (click-to-focus, focus bindings, shell focus command, activation grant) or target loss" and C12.R1 INV-INPUT-8 "It changes only by explicit action (click-to-focus, focus bindings, shell focus command, activation grant) or target loss.", where the target or successor is hidden by a presentation | INV-INPUT-8 (C12.F7): such an action is declined; the successor is chosen among the other elements |
+| C12.R1 INV-INPUT-8 "Camera, visibility, pointer motion and protocol routing never change it." without fullscreen requests and without the hidden focused element | INV-INPUT-8 (C12.F7): fullscreen requests never change it; a focused element that becomes hidden keeps the focus |
+| STATE_MACHINES M11 "any \| click-to-focus, focus binding, shell focus, activation grant \| Element(E)" without a guard; "Element(E) \| target loss \| successor" among every element; "any \| camera, visibility, pointer motion \| unchanged" | M11 (C12.F7) |
+
+## C12.F7.2 What this layer does not change
+
+The single writer (FocusModel), the explicit actions themselves, target loss and the successor policy among the eligible elements, INV-INPUT-10 routing, M3 preemption, and `activated` (INV-PROTO-1). Without a presentation every mapped element is eligible, as before. **Residual (owner policy 2026-10-14):** a focused element hidden by a presentation keeps the focus and receives keyboard input while hidden (INC-7 residual R-01); a policy that clears or moves focus when a presentation starts is not adopted.
 
 ---
 

@@ -1,0 +1,7 @@
+{
+ "name": "C12.F7 layer row edited without regenerating the registry",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "requesting or obtaining fullscreen gives a client no focus, and an element that holds the focus keeps it",
+ "replace": "obtaining fullscreen gives a client the focus, and an element that holds the focus keeps it",
+ "expect": "inv-wording-mismatch"
+}

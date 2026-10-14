@@ -149,11 +149,12 @@ Object: OBJ-22, OBJ-23. Implements INV-INPUT-8, INV-INPUT-10, INV-PROTO-1. ADR-1
 
 | From | Trigger | To | Effects | Cites |
 |---|---|---|---|---|
-| any | click-to-focus, focus binding, shell focus, activation grant | Element(E) | M3 preemption if a grab is active; `leave`/`enter(keys)`; `activated` configures | INV-INPUT-8, INV-INPUT-10, INV-PROTO-1 |
+| any | click-to-focus, focus binding, shell focus, activation grant [E not hidden by a presentation, INV-INPUT-8] | Element(E) | M3 preemption if a grab is active; `leave`/`enter(keys)`; `activated` configures | INV-INPUT-8, INV-INPUT-10, INV-PROTO-1 |
+| any | the same actions [E hidden by a presentation] | unchanged | declined; no effect | INV-INPUT-8 |
 | Element(E), route ToRoot | valid popup grab in E | Element(E), route Grab | ActiveElementFocus unchanged | INV-INPUT-10 |
 | Element(E), route Grab | grab ends (client) | Element(E), route ToRoot | Smithay root restore inside E | INV-INPUT-10 |
-| Element(E) | target loss | successor | `enter(keys)` without `leave` after client-side destruction | INV-INPUT-7, INV-INPUT-8 |
-| any | camera, visibility, pointer motion | unchanged | — | INV-INPUT-8 |
+| Element(E) | target loss | successor, chosen among the elements not hidden by a presentation | `enter(keys)` without `leave` after client-side destruction | INV-INPUT-7, INV-INPUT-8 |
+| any | camera, visibility, pointer motion, fullscreen request or grant | unchanged (a focused element that becomes hidden keeps the focus) | — | INV-INPUT-8 |
 
 ## M12 — Physical-key ownership
 Object: OBJ-25, OBJ-27. Implements INV-INPUT-1, INV-INPUT-6, INV-INPUT-7.
