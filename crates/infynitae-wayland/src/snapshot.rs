@@ -6,7 +6,7 @@
 //! "a newly created xdg_popup on top of all previously created xdg_popup surfaces associated
 //! with the same xdg_toplevel". Smithay 0.7.0's popup tree lists the children of a popup oldest
 //! first, so between siblings and between popups of different branches its order differs
-//! (W-SM-20, proposed; X-15 amendment pending). A child is always created after its parent, so
+//! (W-SM-20; X-15 as amended by C12.F8). A child is always created after its parent, so
 //! it stays in front of it.
 //!
 //! Dispatch safety: per-surface data is read only from the `SurfaceData` handed to the traversal

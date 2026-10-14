@@ -487,7 +487,7 @@ fn popup_is_configured_inside_the_output_target() {
 ///    toplevel created before it, a popup's subsurface above it, then the root tree — so Q, the
 ///    newest, is in front; the positions are what Smithay's own `Window::render_elements`
 ///    produces, and so is the order except for Q, which Smithay 0.7.0 lists behind the older
-///    chain (W-SM-20, proposed; X-15 amendment pending);
+///    chain (W-SM-20; X-15 as amended by C12.F8);
 /// 3. on every pixel around the tree the hit-test returns the front-most presented surface.
 #[test]
 fn ob1_nested_popup_chain_matches_what_is_presented() {
