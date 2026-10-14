@@ -120,12 +120,14 @@ Object: OBJ-19. Implements INV-PRES-1.
 
 | From | Trigger [guard] | To | Effects | Cites |
 |---|---|---|---|---|
-| Windowed | `set_fullscreen(o)` [ActiveElementFocus = W, or pre-map] | Fullscreen{O} | output choice; configure `[fullscreen]`; presentation starts (F-PRESENT-1); other elements leave O; reconciliation trigger; settlement | INV-PRES-1 |
+| Windowed | `set_fullscreen(o)` [ActiveElementFocus = W, or pre-map] | Fullscreen{O} | output choice; configure `[fullscreen]`; if W is mapped: older grants on O end, presentation starts (F-PRESENT-1), other elements leave O, reconciliation trigger, settlement; if W is not mapped yet: the grant waits for W's map (INV-PRES-1) | INV-PRES-1 |
+| Fullscreen{O}, waiting (W not mapped) | W's first map | Fullscreen{O} | grants on O older than W's end (each element gets a configure with its saved size, if available); presentation starts (F-PRESENT-1); other elements leave O; reconciliation trigger; settlement | INV-PRES-1 |
+| Fullscreen{O}, waiting | W destroyed before its map | — | the grant is dropped; nothing else changes | INV-PRES-1 |
 | Windowed | `set_fullscreen` [not focused] | Windowed | configure without `fullscreen`; nothing stored | INV-PRES-1 |
-| Fullscreen{O} | `unset_fullscreen` / unmap | Windowed | configure with the saved size; presentation ends | INV-PRES-1 |
-| Fullscreen{O} by W | grant for O to another element | Windowed (W) | W gets a configure with its saved size | INV-PRES-1 |
+| Fullscreen{O} | `unset_fullscreen` / unmap | Windowed | configure with the saved size, if available; presentation ends, if it had started | INV-PRES-1 |
+| Fullscreen{O} by W | a newer grant for O whose element is mapped, at the grant or at that element's map | Windowed (W) | W gets a configure with its saved size, if available; a newer grant still waiting leaves W unchanged | INV-PRES-1 |
 | Fullscreen | W loses ActiveElementFocus | Fullscreen | unchanged | INV-PRES-1 |
-| Fullscreen{O} | O disconnected | Windowed | configure with the saved size | INV-OUTPUT-1 |
+| Fullscreen{O} | O disconnected | Windowed | configure with the saved size, if available | INV-OUTPUT-1 |
 
 ## M10 — Pointer focus
 Object: OBJ-20, OBJ-24, OBJ-15. Implements INV-HIT-1, INV-INPUT-3, INV-INPUT-5, INV-OUTPUT-1.

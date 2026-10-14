@@ -1,0 +1,7 @@
+{
+ "name": "C12.F6: a pre-map grant takes the output at once again",
+ "file": "FOUNDATION_INVARIANTS.md",
+ "find": "A grant replaces the older grants on its output when its element is mapped, not before:",
+ "replace": "A grant replaces the older grants on its output at once:",
+ "expect": "inv-wording-mismatch"
+}

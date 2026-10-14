@@ -1,8 +1,8 @@
 # Infynitae Native — Foundation Invariants (effective registry)
 
-Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1, C12.F2, C12.F3, C12.F4 and C12.F5 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
+Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1, C12.F2, C12.F3, C12.F4, C12.F5 and C12.F6 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
 
-This registry is the **effective projection** of nine layers. The layers themselves stay where they are and are not edited:
+This registry is the **effective projection** of ten layers. The layers themselves stay where they are and are not edited:
 - **C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a**: FOUNDATION_ARCHITECTURE §C12 (sealed Phase C registry, 54 rows);
 - **C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f**: FOUNDATION_ARCHITECTURE §C12.R1 (Phase D 1R amendments, 16 rows);
 - **C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be**: FOUNDATION_ARCHITECTURE §C12.R2 (Phase D 2R amendments, 6 rows);
@@ -11,7 +11,8 @@ This registry is the **effective projection** of nine layers. The layers themsel
 - **C12.F2 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)**: FOUNDATION_ARCHITECTURE §C12.F2 (Phase F amendment: device bound on the 1/120 lattice, 1 row);
 - **C12.F3 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)**: FOUNDATION_ARCHITECTURE §C12.F3 (Phase F amendment: `configure_bounds(0, 0)`, 1 row);
 - **C12.F4 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)**: FOUNDATION_ARCHITECTURE §C12.F4 (Phase F amendment: epoch time authority, 1 row);
-- **C12.F5 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F5 (Phase F amendment: default placement at the first windowed presentation, 1 row).
+- **C12.F5 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F5 (Phase F amendment: default placement at the first windowed presentation, 1 row);
+- **C12.F6 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F6 (Phase F amendment: a pre-map grant takes the output when its element maps, 1 row).
 
 Rules:
 - Each entry's **wording** is the statement of its latest layer, verbatim, except that complete formula text is replaced by an `[F-…]` reference.
@@ -19,7 +20,7 @@ Rules:
 - **Consequence of violation** is the C12 "Violation means" column. For the three invariants first introduced in 1R/2R it is a D7-authored description, marked as such (D-F0). E1R adds no invariant.
 - **ADR** links are derived from FOUNDATION_DECISIONS.md. **Obligations** are cited by ID; their records live in FOUNDATION_TEST_PLAN.md.
 
-Count: **57** effective invariants: 38 from C12, 8 from C12.R1, 2 from C12.R2, 5 from C12.E1R, 0 from C12.F1 (its row is superseded by C12.F5), 1 from C12.F2, 1 from C12.F3, 1 from C12.F4, 1 from C12.F5.
+Count: **57** effective invariants: 38 from C12, 7 from C12.R1, 2 from C12.R2, 5 from C12.E1R, 0 from C12.F1 (its row is superseded by C12.F5), 1 from C12.F2, 1 from C12.F3, 1 from C12.F4, 1 from C12.F5, 1 from C12.F6.
 
 <!-- living:INV -->
 
@@ -612,15 +613,15 @@ Count: **57** effective invariants: 38 from C12, 8 from C12.R1, 2 from C12.R2, 5
 - **ADR:** ADR-06
 
 ### INV-PRES-1
-- **Wording:** Protocol fullscreen is an output presentation state.<br><br>**Every `set_fullscreen`/`unset_fullscreen` is answered with exactly one configure.** A request is granted only if W holds ActiveElementFocus, or before W's first map. Otherwise it is declined at once (configure without `fullscreen`, nothing stored).<br><br>The presentation starts at the grant decision and ends at the exit decision (unset, unmap, output removal, replacement). A newer grant replaces an older one on the same output; the older element gets a configure with its saved size. Focus loss does not end fullscreen. The output choice runs at grant. Fullscreen never touches cameras or anchors; other cameras observe W at its actual size.
+- **Wording:** Protocol fullscreen is an output presentation state.<br><br>**Every `set_fullscreen`/`unset_fullscreen` is answered with exactly one configure.** A request is granted only if W holds ActiveElementFocus, or before W's first map. Otherwise it is declined at once (configure without `fullscreen`, nothing stored).<br><br>The presentation starts when the granted element is mapped — at the grant decision for a mapped element, at its first map for a grant made before it — and ends at the exit decision (unset, unmap, output removal, replacement). Grants are ordered by the time they were made. A grant replaces the older grants on its output when its element is mapped, not before: until then the presented element keeps the output and is told nothing, and a grant whose element is destroyed or unmapped before mapping ends nothing. A grant still waiting for its element's map is replaced by a newer grant whose element maps, never by the map of an older one. The replaced elements get a configure with their saved size, if available. Focus loss does not end fullscreen. The output choice runs at grant. Fullscreen never touches cameras or anchors; other cameras observe W at its actual size.
 - **Owner:** core `protocol` + output model
 - **Class:** P+D+E
 - **Violation:** camera hijack, hidden size effects
-- **Origin:** C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f
-- **Layers:** C12 → C12.R1
-- **Trigger:** PD-F2-10
-- **Evidence:** EC-13/14, ER-3
-- **Tests (historical column):** T1 (OB-22, OB-32)
+- **Origin:** C12.F6 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)
+- **Layers:** C12 → C12.R1 → C12.F6
+- **Trigger:** owner amendment 2026-10-14 (deferred takeover, A-3)
+- **Evidence:** EC-13/14, ER-3; evidence/phase-f/deferred-takeover
+- **Tests (historical column):** T1 (OB-22, OB-32); T0 `a_pre_map_grant_takes_the_output_when_its_element_maps`; T1 `a_pre_map_grant_takes_the_output_only_when_its_window_maps`, `a_pre_map_grant_that_never_draws_ends_nothing`
 - **Obligations:** OB-22, OB-32
 - **Formulas:** F-PRESENT-1
 - **ADR:** ADR-09

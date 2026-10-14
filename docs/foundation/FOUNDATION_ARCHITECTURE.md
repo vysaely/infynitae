@@ -1204,7 +1204,7 @@ Not kept as negative controls: things that would only inflate counts (e.g. "remo
 
 ## C12 — Canonical invariant registry
 
-> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice). §C12.F3 supersedes INV-PROTO-1 (`configure_bounds`). §C12.F4 supersedes INV-SCALE-3 (epoch time authority). §C12.F5 supersedes INV-STAGE-1 again (placement at the first windowed presentation).
+> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice). §C12.F3 supersedes INV-PROTO-1 (`configure_bounds`). §C12.F4 supersedes INV-SCALE-3 (epoch time authority). §C12.F5 supersedes INV-STAGE-1 again (placement at the first windowed presentation). §C12.F6 supersedes INV-PRES-1 (a pre-map grant takes the output when its element maps).
 
 **This table is authoritative.** Legacy identifiers map to it (C12.2). Where a rule was refined, the earlier wording is superseded and must not be cited as normative.
 
@@ -2059,6 +2059,38 @@ The existence and value of the settlement timeout (PROV-5, OB-23), what ends an 
 - **Once.** Placement is evaluated for an element exactly once. The provisional anchor at initial commit, INV-STAGE-5 (the anchor kept across unmap and remap) and INV-CAMERA-2/-4 are unchanged.
 - **Presentation.** INV-PRES-1 and M9 are not changed by this layer. The presentation view shows a fullscreen element regardless of its anchor; the anchor matters to other cameras and after fullscreen ends.
 - **Not exercisable yet:** "an explicit or restored anchor is final" (no such path exists, C12.F1.3).
+
+---
+
+# §C12.F6 — Canonical registry amendment (Phase F: INV-PRES-1, a pre-map grant takes the output when its element maps)
+
+**Status: ADOPTED 2026-10-14 by owner approval.** Approved requirements: deferred presentation takeover until the granted element is mapped; the current presenter is kept until the replacement actually takes over; waiting-grant ordering exactly as implemented; the saved size is optional; the conflicting M9 grant and replacement transitions are superseded. One paragraph of one invariant is reworded; no invariant is added or removed (57). Base: integration candidate `93c2605` (`integration/inc-7-exit-2026-10-14`).
+
+**Inputs:**
+- C12.R1 INV-PRES-1 and STATE_MACHINES M9 as effective at `93c2605`;
+- INC-7 audit finding A-3: a grant made before an element's first map replaced the presented element at once, so a client that never draws could end another element's presentation;
+- the implementation on `93c2605` (`b1aa758`): `store_fullscreen` replaces nothing for an element that is not mapped; `take_output`, at the grant of a mapped element or at the first map of a waiting one, ends the grants on the output that are older than the element's; `restore_effect` offers the saved size when one was saved.
+
+**Provenance:** [evidence/phase-f/deferred-takeover/AMENDMENT_RECORD.md](evidence/phase-f/deferred-takeover/AMENDMENT_RECORD.md).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12 and C12.R1. Every other row is unchanged.**
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-PRES-1** | Protocol fullscreen is an output presentation state.<br><br>**Every `set_fullscreen`/`unset_fullscreen` is answered with exactly one configure.** A request is granted only if W holds ActiveElementFocus, or before W's first map. Otherwise it is declined at once (configure without `fullscreen`, nothing stored).<br><br>The presentation starts when the granted element is mapped — at the grant decision for a mapped element, at its first map for a grant made before it — and ends at the exit decision (unset, unmap, output removal, replacement). Grants are ordered by the time they were made. A grant replaces the older grants on its output when its element is mapped, not before: until then the presented element keeps the output and is told nothing, and a grant whose element is destroyed or unmapped before mapping ends nothing. A grant still waiting for its element's map is replaced by a newer grant whose element maps, never by the map of an older one. The replaced elements get a configure with their saved size, if available. Focus loss does not end fullscreen. The output choice runs at grant. Fullscreen never touches cameras or anchors; other cameras observe W at its actual size. | core `protocol` + output model | P+D+E | EC-13/14, ER-3; evidence/phase-f/deferred-takeover | T1 (OB-22, OB-32); T0 `a_pre_map_grant_takes_the_output_when_its_element_maps`; T1 `a_pre_map_grant_takes_the_output_only_when_its_window_maps`, `a_pre_map_grant_that_never_draws_ends_nothing` | owner amendment 2026-10-14 (deferred takeover, A-3) |
+
+## C12.F6.1 Sealed text superseded (must not be cited as normative)
+
+| Superseded | Replaced by |
+|---|---|
+| C12.R1 INV-PRES-1 "The presentation starts at the grant decision" and "A newer grant replaces an older one on the same output; the older element gets a configure with its saved size." | INV-PRES-1 (C12.F6): the presentation starts when the granted element is mapped; grants are ordered by the time they were made; replacement when the newer grant's element is mapped; saved size, if available |
+| STATE_MACHINES M9 `Windowed → Fullscreen{O}` "presentation starts (F-PRESENT-1); other elements leave O" for a grant made before the first map; `Fullscreen{O} by W` "grant for O to another element → W gets a configure with its saved size"; "configure with the saved size" (unset, unmap, O disconnected) | M9 (C12.F6) |
+| C5.2 case B "core sends a configure leaving fullscreen with the saved size" and "offering the saved size", and the C12.R1 consistency row 9 "unfullscreen configure with saved size", where no size was saved (a grant made before the first map) | INV-PRES-1 (C12.F6): the saved size, if available |
+| FOUNDATION_BLOCKERS PD-F2-10 minimal correction "The presentation starts at acceptance" and "A newer accepted request on an occupied output replaces the old one; the old element gets a configure leaving fullscreen with its saved size." | INV-PRES-1 (C12.F6) |
+
+## C12.F6.2 What this layer does not change
+
+The first two paragraphs of INV-PRES-1 (exactly one configure per request; a grant only with ActiveElementFocus or before the first map; a declined request stores nothing), the output choice at grant, F-PRESENT-1, INV-OUTPUT-1, and "fullscreen never touches cameras or anchors". A waiting grant gives its element no focus (INV-INPUT-8). OB-22 stays OPEN: this layer supplies its pre-map requirement at T1; the T3 and T5 parts remain.
 
 ---
 
