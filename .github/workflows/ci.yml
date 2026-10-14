@@ -20,6 +20,9 @@ jobs:
       - run: python3 --version
       - run: ./tools/check-foundation-docs
       - run: ./tools/check-foundation-docs --self-test
+      # docs/knowledge (non-authoritative): record schema, IDs, links, INDEX.md, and its seeded defects.
+      - run: ./tools/verify-knowledge --content-only
+      - run: ./tools/verify-knowledge --self-test
 
   # OB-19: production architecture enforcement.
   verify-architecture:

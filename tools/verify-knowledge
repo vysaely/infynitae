@@ -14,12 +14,27 @@ Enforces:
    (diffed against the merge base with main, so main advancing is not a failure).
 8. No record present at that merge base has been removed (no silent loss).
 9. Every record is listed in INDEX.md (discoverability).
+
+Usage:
+  tools/verify-knowledge                 all checks (local use, on a branch or main)
+  tools/verify-knowledge --content-only  checks 1-6 and 9 only; skips the git checks 7-8,
+                                         which compare with the merge base of `main`. CI runs
+                                         this: its checkout is shallow and has no `main`, and
+                                         governance branches change docs/foundation legitimately
+                                         (tools/check-foundation-docs guards those). A deleted
+                                         record is still caught by INDEX.md's broken link.
+  tools/verify-knowledge --self-test     seeds one defect at a time into a temporary copy of
+                                         docs/knowledge and requires each to be detected.
 """
 
+import contextlib
+import io
 import os
 import re
+import shutil
 import sys
 import subprocess
+import tempfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -141,7 +156,7 @@ def check_sealed_files(base):
     return []
 
 
-def main():
+def main(content_only=False):
     errors = []
     warnings = []
     seen_ids = {}
@@ -151,8 +166,8 @@ def main():
         sys.exit(1)
 
     # 1. Sealed files check
-    base = merge_base()
-    foundation_errors = check_sealed_files(base)
+    base = None if content_only else merge_base()
+    foundation_errors = [] if content_only else check_sealed_files(base)
     if foundation_errors:
         errors.extend(foundation_errors)
 
@@ -169,7 +184,7 @@ def main():
     # 2. Parse and validate records
     records_by_id = {}
     for rpath in record_files:
-        rel_str = str(rpath.relative_to(REPO_ROOT))
+        rel_str = "docs/knowledge/" + str(rpath.relative_to(KNOWLEDGE_DIR))
         try:
             content = rpath.read_text(encoding="utf-8")
         except Exception as e:
@@ -286,10 +301,83 @@ def main():
     else:
         print(f"All {len(record_files)} knowledge records validated successfully.")
         print(f"Unique IDs: {len(seen_ids)}")
-        print(f"Sealed governance integrity: UNTOUCHED (against merge base {base[:7] if base else '?'})")
+        if content_only:
+            print("Sealed governance integrity: not checked (--content-only)")
+        else:
+            print(f"Sealed governance integrity: UNTOUCHED (against merge base {base[:7] if base else '?'})")
         print("RESULT: PASS")
         sys.exit(0)
 
 
+def _seed(path, old, new):
+    text = path.read_text(encoding="utf-8")
+    if old not in text:
+        raise RuntimeError(f"self-test: cannot seed defect, '{old}' not found in {path.name}")
+    path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+def self_test():
+    """Seed one defect at a time into a copy of docs/knowledge; each must fail with its message."""
+    src = REPO_ROOT / "docs" / "knowledge"
+    records = sorted(p for p in src.rglob("KNOW-*.md"))
+    if len(records) < 2:
+        print("self-test: need at least two records")
+        sys.exit(1)
+    a, b = (p.relative_to(src) for p in records[:2])
+    a_id = re.match(r"KNOW-[A-Z]+-\d{3}", a.name).group(0)
+
+    def new_record(k):
+        text = (k / a).read_text(encoding="utf-8").replace(a_id, "KNOW-SELFTEST-999")
+        (k / a.parent / "KNOW-SELFTEST-999-seeded.md").write_text(text, encoding="utf-8")
+
+    defects = [
+        ("duplicate ID", lambda k: shutil.copy(k / a, k / a.parent / ("dup-" + a.name)), "Duplicate ID"),
+        ("missing metadata field", lambda k: _seed(k / a, "| **next_action** |", "| **next_step** |"), "Missing required metadata field 'next_action'"),
+        ("invalid evidence class", lambda k: _seed(k / a, "| **evidence_class** | ", "| **evidence_class** | GUESSED "), "Invalid evidence_class"),
+        ("invalid adoption status", lambda k: _seed(k / a, "| **adoption_status** | ", "| **adoption_status** | MAYBE "), "Invalid adoption_status"),
+        ("invalid date", lambda k: _seed(k / a, "| **date** | ", "| **date** | 14 Oct "), "Invalid date format"),
+        ("missing section", lambda k: _seed(k / a, "## Limitations & Counterexamples", "## Caveats"), "Missing content section 'Limitations & Counterexamples'"),
+        ("broken link in a record", lambda k: _seed(k / a, "## Links & Citations", "## Links & Citations\n- [gone](KNOW-NOWHERE-000.md)"), "Broken relative link to 'KNOW-NOWHERE-000.md'"),
+        ("record not in INDEX.md", new_record, "not linked from INDEX.md"),
+        ("indexed record deleted", lambda k: (k / b).unlink(), f"Broken relative link to '{b}'"),
+    ]
+
+    global KNOWLEDGE_DIR
+    saved = KNOWLEDGE_DIR
+    failures = 0
+    try:
+        for label, seed, expect in [("clean copy", lambda k: None, None)] + defects:
+            with tempfile.TemporaryDirectory(prefix="verify-knowledge-") as tmp:
+                k = Path(tmp) / "knowledge"
+                shutil.copytree(src, k)
+                seed(k)
+                KNOWLEDGE_DIR = k
+                out = io.StringIO()
+                with contextlib.redirect_stdout(out):
+                    try:
+                        main(content_only=True)
+                        code = 0
+                    except SystemExit as e:
+                        code = e.code
+                text = out.getvalue()
+                ok = (code == 0) if expect is None else (code == 1 and expect in text)
+                print(f"  [{'ok' if ok else 'MISSED'}] {label}")
+                if not ok:
+                    failures += 1
+                    print("    " + "\n    ".join(text.splitlines()[-8:]))
+    finally:
+        KNOWLEDGE_DIR = saved
+    print(f"self-test: {len(defects) + 1 - failures}/{len(defects) + 1} cases correct (clean copy passes, {len(defects)} seeded defects detected)")
+    print("RESULT: PASS" if not failures else "RESULT: FAILED")
+    sys.exit(1 if failures else 0)
+
+
 if __name__ == "__main__":
-    main()
+    args = sys.argv[1:]
+    if args == ["--self-test"]:
+        self_test()
+    elif args in ([], ["--content-only"]):
+        main(content_only=bool(args))
+    else:
+        print(__doc__)
+        sys.exit(2)
