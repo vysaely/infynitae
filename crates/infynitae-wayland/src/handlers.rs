@@ -399,6 +399,8 @@ impl XdgShellHandler for WaylandState {
     }
 
     fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        self.popups_created += 1;
+        snapshot::set_popup_created(surface.wl_surface(), self.popups_created);
         self.place_popup(&surface, positioner, None);
         let _ = self.popups.track_popup(PopupKind::Xdg(surface));
     }

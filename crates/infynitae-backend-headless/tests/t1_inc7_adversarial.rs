@@ -646,6 +646,59 @@ fn a_hidden_window_gets_no_pointer_input() {
     assert_eq!(t.ls.probe.kb.active.as_deref(), Some("W"));
 }
 
+/// xdg-shell: "A newly created xdg_popup will be stacked on top of all previously created
+/// xdg_popup surfaces associated with the same xdg_toplevel" (P10 #3). Three popups of W, below
+/// O so only they and W can show: A, then B overlapping it (B in front), then A1, a child of A
+/// created after B and overlapping it (A1 in front of B, although its parent is behind B).
+/// Smithay 0.7.0 orders A's subtree before B (W-SM-20); the adapter orders by creation.
+#[test]
+fn a_newer_popup_is_stacked_above_every_older_one() {
+    let (mut t, w, _, _) = T::scene();
+    let qh = t.ls.qh.clone();
+    let spec = |content, at: (i32, i32)| PopupSpec {
+        content,
+        shadow: 0,
+        anchor_rect: (at.0, at.1, 1, 1),
+        slide: false,
+    };
+    let a = t.ls.probe.popup(&qh, "A", w, spec((60, 40), (10, 95)));
+    t.adv();
+    t.paint(a, GREEN);
+    let b = t.ls.probe.popup(&qh, "B", w, spec((60, 40), (40, 105)));
+    t.adv();
+    t.paint(b, YELLOW);
+    let a1 = t.ls.probe.popup(&qh, "A1", a, spec((40, 20), (20, 15)));
+    t.adv();
+    t.paint(a1, BLUE);
+    // W at (220, 190): A (230,285)-(290,325), B (260,295)-(320,335), A1 (250,300)-(290,320)
+    assert_layers(
+        &t.frame(),
+        &[
+            ((250, 300, 290, 320), BLUE),
+            ((260, 295, 320, 335), YELLOW),
+            ((230, 285, 290, 325), GREEN),
+            OTHER,
+            W_WINDOWED,
+        ],
+        "newest popup in front",
+    );
+    // hit-testing follows the same order (one snapshot drives both)
+    let o = t.ls.output();
+    let at = |t: &mut T, x: f64, y: f64| {
+        let p = infynitae_core::geom::OutputLogicalPoint { x, y };
+        t.ls.state.core_mut().hit_test(o, p).map(|h| h.surface)
+    };
+    let (in_a1, in_b_over_a, in_a) = (
+        at(&mut t, 270.5, 310.5),
+        at(&mut t, 270.5, 297.5),
+        at(&mut t, 240.5, 300.5),
+    );
+    assert!(in_a1.is_some() && in_b_over_a.is_some() && in_a.is_some());
+    assert_ne!(in_a1, in_b_over_a, "A1 is not in front of B");
+    assert_ne!(in_b_over_a, in_a, "B is not in front of A");
+    assert_eq!(at(&mut t, 252.5, 310.5), in_a1);
+}
+
 /// Audit finding A-5. `wl_pointer` event times are milliseconds on one clock, so a client sees
 /// them non-decreasing (toolkits measure double clicks and pointer velocity with them). A pointer
 /// event Core synthesises into the stream (M10's one true position, after a presentation, output

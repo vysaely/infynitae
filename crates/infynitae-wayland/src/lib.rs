@@ -92,6 +92,9 @@ pub struct WaylandState {
     xdg_shell: XdgShellState,
     shm: ShmState,
     popups: PopupManager,
+    /// The number of xdg popups created so far: each popup's creation number orders the
+    /// popups of its toplevel in the snapshot (xdg-shell stacking; see `snapshot`).
+    popups_created: u64,
     seats: SeatState<WaylandState>,
     /// The single seat, with pointer and keyboard (INC-4).
     seat: Seat<WaylandState>,
@@ -151,6 +154,7 @@ impl WaylandState {
             xdg_shell: XdgShellState::new_with_capabilities::<Self>(display, capabilities),
             shm: ShmState::new::<Self>(display, []),
             popups: PopupManager::default(),
+            popups_created: 0,
             seats,
             seat,
             popup_grab: None,

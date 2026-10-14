@@ -483,8 +483,11 @@ fn popup_is_configured_inside_the_output_target() {
 ///    P3 (50x40) at (40, 30) of P2: (190, 120);
 ///    PS, a 20x20 subsurface of P2 at (5, 5): (150, 90);
 ///    Q (60x50), a second popup of W at (300, 200): (320, 220).
-/// 2. the render list is, in order and position, what Smithay's own `Window::render_elements`
-///    produces: the deepest popup in front, a popup's subsurface above it, then the root tree;
+/// 2. the render list is in xdg-shell's stacking order — every popup above the popups of the
+///    toplevel created before it, a popup's subsurface above it, then the root tree — so Q, the
+///    newest, is in front; the positions are what Smithay's own `Window::render_elements`
+///    produces, and so is the order except for Q, which Smithay 0.7.0 lists behind the older
+///    chain (W-SM-20, proposed; X-15 amendment pending);
 /// 3. on every pixel around the tree the hit-test returns the front-most presented surface.
 #[test]
 fn ob1_nested_popup_chain_matches_what_is_presented() {
@@ -536,11 +539,11 @@ fn ob1_nested_popup_chain_matches_what_is_presented() {
             })
             .collect();
         let truth = vec![
+            ("Q", (320, 220), (60, 50)),
             ("P3", (190, 120), (50, 40)),
             ("PS", (150, 90), (20, 20)),
             ("P2", (145, 85), (100, 70)),
             ("P1", (110, 60), (180, 140)),
-            ("Q", (320, 220), (60, 50)),
             ("W", (0, 0), (440, 340)),
         ];
         assert_eq!(
@@ -576,12 +579,17 @@ fn ob1_nested_popup_chain_matches_what_is_presented() {
         };
         let ours: Vec<Id> = frame.iter().map(|(e, _)| id_of(e)).collect();
         let theirs: Vec<Id> = smithay.iter().map(|e| e.id().clone()).collect();
+        // Smithay 0.7.0: the same order with Q, the newest popup, behind the older chain
+        let mut smithay_order = ours.clone();
+        let q = smithay_order.remove(0);
+        smithay_order.insert(4, q);
         assert_eq!(
-            ours, theirs,
-            "scale {scale_120}: render order differs from Smithay's"
+            theirs, smithay_order,
+            "scale {scale_120}: render order differs from Smithay's by more than W-SM-20"
         );
         if scale_120 == 120 {
-            for ((e, _), s) in frame.iter().zip(&smithay) {
+            for (e, _) in &frame {
+                let s = smithay.iter().find(|s| *s.id() == id_of(e)).unwrap();
                 assert_eq!(edges(e), presented(s, 1.0), "{}", label_of(&ls, e.surface));
             }
         }
