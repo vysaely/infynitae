@@ -356,7 +356,7 @@ impl Core {
     /// element no output would show anyway (far from every view) is not hidden by a
     /// presentation and stays focusable, as without one.
     pub fn hidden_by_presentation(&self, element: stage::ElementId) -> bool {
-        if !self.membership.observers(element).is_empty() {
+        if !self.presenting() || !self.membership.observers(element).is_empty() {
             return false;
         }
         let Some((anchor, tree, bounds)) = self.stage.mapped(element) else {
@@ -370,11 +370,21 @@ impl Core {
         })
     }
 
-    /// The mapped elements, bottom to top, that keyboard focus may move to (A-8).
+    /// The mapped elements, bottom to top, that keyboard focus may move to (A-8). Without a
+    /// presentation that is every mapped element, at no extra cost.
     pub(crate) fn focusable_elements(&self) -> Vec<stage::ElementId> {
         let mut live = self.stage.mapped_elements();
-        live.retain(|&e| !self.hidden_by_presentation(e));
+        if self.presenting() {
+            live.retain(|&e| !self.hidden_by_presentation(e));
+        }
         live
+    }
+
+    /// Whether any output presents an element (a mapped fullscreen element).
+    fn presenting(&self) -> bool {
+        self.fullscreen()
+            .iter()
+            .any(|f| self.stage.mapped(f.element).is_some())
     }
 
     /// FocusNext binding (Super+Enter): cycles focus to next live mapped element in stage order.
