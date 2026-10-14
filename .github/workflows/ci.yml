@@ -29,8 +29,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Native build dependencies (xkbcommon is linked through smithay =0.7.0)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev
+      - name: Native build dependencies (xkbcommon and pixman-1 are linked through smithay =0.7.0)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev libpixman-1-dev
       - name: Toolchain pinned by rust-toolchain.toml
         run: |
           channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
@@ -42,8 +42,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - name: Native build dependencies (xkbcommon is linked through smithay =0.7.0)
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev
+      - name: Native build dependencies (xkbcommon and pixman-1 are linked through smithay =0.7.0)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libxkbcommon-dev libpixman-1-dev
       - name: Toolchain pinned by rust-toolchain.toml
         run: |
           channel=$(python3 -c 'import tomllib; print(tomllib.load(open("rust-toolchain.toml", "rb"))["toolchain"]["channel"])')
