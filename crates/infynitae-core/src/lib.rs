@@ -556,8 +556,10 @@ impl Core {
         })
     }
 
-    /// One true-position event (M10 reconciliation): a routed motion and its frame.
-    pub(crate) fn true_position(&mut self, time_ms: u32) -> Vec<protocol::Effect> {
+    /// One true-position event (M10 reconciliation): a routed motion and its frame, at the
+    /// input clock's time (the event that caused the batch, or the latest one before it).
+    pub(crate) fn true_position(&mut self) -> Vec<protocol::Effect> {
+        let time_ms = self.input.clock.wire_ms();
         match self.route_pointer() {
             Some((target, location)) => vec![
                 protocol::Effect::PointerMotion {

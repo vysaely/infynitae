@@ -26,6 +26,17 @@ WAYLAND = "crates/infynitae-wayland/src"
 
 # (property, file, old, new, package, test target args, test name filter)
 CONTROLS = [
+    # ---- audit finding A-5: a synthesised pointer event carries the input clock's time
+    ("A-5: a synthesised pointer event carries time 0 again", f"{CORE}/lib.rs",
+     "        let time_ms = self.input.clock.wire_ms();", "        let time_ms = 0;",
+     "infynitae-backend-headless", ["--test", "t1_inc7_adversarial"], "pointer_event_times_never_go_back_at_output_changes"),
+    ("A-5: a button release is not read on the input clock (its true position is a step behind)", f"{CORE}/entry.rs",
+     "                self.input.clock.accepted(time_us);\n                self.button_release(button, ms(time_us))",
+     "                self.button_release(button, ms(time_us))",
+     "infynitae-backend-headless", ["--test", "t1_inc7_adversarial"], "pointer_event_times_never_go_back_after_a_drag_and_under_a_grab"),
+    ("A-5: the input clock goes back with an event stamped earlier", f"{CORE}/input/mod.rs",
+     "        self.0 = Some(self.0.map_or(time_us, |t| t.max(time_us)));", "        self.0 = Some(time_us);",
+     "infynitae-core", ["--lib"], "the_input_clock_never_goes_back_and_wraps_like_the_wire"),
     ("F-LATTICE-1 R4: edges floor instead of round", f"{CORE}/projection.rs",
      "((x - r) as f64 * k + DELTA).round() as i64 - c", "((x - r) as f64 * k + DELTA).floor() as i64 - c",
      "infynitae-core", ["--lib"], "ob6_edge_equals_round_l"),
@@ -242,8 +253,8 @@ CONTROLS = [
      "        self.input.interaction.orphan_if_on(output);\n", "        let _ = output;\n",
      "infynitae-backend-headless", ["--test", "t1_input"], "removing_the_pan_output_orphans_the_pan"),
     ("INC-3 M10 KeepFocus: no true-position event at the end of a pan", f"{CORE}/entry.rs",
-     "                if self.constraint.is_none() {\n                    fx.extend(self.true_position(time_ms));\n",
-     "                if false {\n                    fx.extend(self.true_position(time_ms));\n",
+     "                if self.constraint.is_none() {\n                    fx.extend(self.true_position());\n",
+     "                if false {\n                    fx.extend(self.true_position());\n",
      "infynitae-backend-headless", ["--test", "t1_input"], "x8_c1_keepfocus_pan_then_true_position"),
     ("INC-3 INV-INPUT-4: relative motion synthesised at reconciliation", f"{CORE}/lib.rs",
      "                protocol::Effect::PointerFrame,\n            ],\n            None => Vec::new(),",
@@ -287,7 +298,7 @@ CONTROLS = [
      "            Some(Owner::Client) if self.pointer == PointerState::NoOutput => return Vec::new(),\n            Some(Owner::Client) => {",
      "infynitae-backend-headless", ["--test", "t1_input"], "zero_output_transition_with_a_held_button"),
     ("INC-3 output removal: relocated pointer not re-routed (stale focus)", f"{CORE}/entry.rs",
-     "                    pointer_fx.extend(self.true_position(0));", "                    // pointer_fx.extend(self.true_position(0));",
+     "                    pointer_fx.extend(self.true_position());", "                    // pointer_fx.extend(self.true_position());",
      "infynitae-backend-headless", ["--test", "t1_adversarial"], "f_output_removal_relocates_to_the_nearest_survivor"),
     ("INC-3 M10 reconfiguration: no true-position event (stale frame routing)", f"{CORE}/entry.rs",
      "        if on_it && !self.input.interaction.active() {", "        if false && on_it {",

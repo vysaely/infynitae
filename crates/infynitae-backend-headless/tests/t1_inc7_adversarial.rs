@@ -601,28 +601,128 @@ fn a_hidden_window_gets_no_pointer_input() {
 }
 
 /// Audit finding A-5. `wl_pointer` event times are milliseconds on one clock, so a client sees
-/// them non-decreasing (toolkits measure double clicks and pointer velocity with them). The
-/// pointer event Core synthesises when a presentation starts or ends (M10 "one true position")
-/// must not go back in time. Ignored until the owner decides where its time comes from (Core has
-/// no clock on this line; the last input time or the session clock of C12.F4 would serve).
+/// them non-decreasing (toolkits measure double clicks and pointer velocity with them). A pointer
+/// event Core synthesises into the stream (M10's one true position, after a presentation, output
+/// or interaction change) carries the input clock's time: that of the latest physical event Core
+/// accepted. The harness stamps its events 1 ms apart, so that time is known exactly. A
+/// synthesised event that changes the pointer focus reaches the client as `leave`/`enter`, which
+/// carry no time, so each test keeps the pointer over W alone, at (240, 240).
+impl T {
+    /// The scene with the pointer over W alone.
+    fn scene_over_w() -> (T, usize, ElementId) {
+        let (mut t, w, id, _) = T::scene();
+        t.motion((-80.0, 0.0));
+        (t, w, id)
+    }
+
+    /// The latest input time on the wire.
+    fn input_ms(&self) -> u32 {
+        (self.t / 1000) as u32
+    }
+
+    /// Asserts every `wl_pointer` time the client has received is at least the one before, and
+    /// that every event since `from` carries `ms`. Returns how many arrived since `from`.
+    fn pointer_times_since(&self, from: usize, ms: u32, what: &str) -> usize {
+        let times = &self.ls.probe.ptr_times;
+        for pair in times.windows(2) {
+            assert!(
+                pair[1].1 >= pair[0].1,
+                "{what}: a pointer event went back in time: {times:?}"
+            );
+        }
+        for (kind, time) in &times[from..] {
+            assert_eq!(*time, ms, "{what}: {kind} at {time}, not {ms}: {times:?}");
+        }
+        times.len() - from
+    }
+}
+
 #[test]
-#[ignore = "audit finding A-5: synthesised pointer events carry time 0; fix awaits an owner decision"]
 fn pointer_event_times_never_go_back_when_a_presentation_starts_or_ends() {
-    let (mut t, w, _, _) = T::scene();
+    let (mut t, w, _) = T::scene_over_w();
     t.motion((1.0, 0.0));
-    t.motion((-1.0, 0.0));
+    let from = t.ls.probe.ptr_times.len();
     t.ask(w, |tl| tl.set_fullscreen(None));
     t.resize(w, (640, 480), RED);
+    let granted = t.pointer_times_since(from, t.input_ms(), "the grant");
     t.motion((1.0, 0.0));
+    let from = t.ls.probe.ptr_times.len();
     t.ask(w, |tl| tl.unset_fullscreen());
-    let times = t.ls.probe.ptr_times.clone();
-    assert!(times.len() >= 3, "{times:?}");
-    for pair in times.windows(2) {
-        assert!(
-            pair[1].1 >= pair[0].1,
-            "a pointer event went back in time: {times:?}"
-        );
-    }
+    t.resize(w, (200, 100), RED);
+    let ended = t.pointer_times_since(from, t.input_ms(), "the end");
+    // the pointer was over W both times: each change reached it as one true position
+    assert!(
+        granted > 0 && ended > 0,
+        "nothing synthesised: {granted}, {ended}"
+    );
+}
+
+/// A-5 at output changes: the output reconfigured under the pointer, a second output connected,
+/// the pointer's output removed (relocation), every output removed (NoOutput) and one connected
+/// again (the pointer comes back). Every event a change synthesises carries the latest input time.
+#[test]
+fn pointer_event_times_never_go_back_at_output_changes() {
+    let (mut t, _, _) = T::scene_over_w();
+    let a = t.ls.output();
+    let mut synthesised = 0;
+    let mut step = |t: &mut T, what: &str, f: &mut dyn FnMut(&mut T)| {
+        let from = t.ls.probe.ptr_times.len();
+        f(t);
+        t.adv();
+        synthesised += t.pointer_times_since(from, t.input_ms(), what);
+    };
+    step(&mut t, "reconfigured", &mut |t| {
+        t.ls.reconfigure(a, &output_k("A", (640, 480), 120, 144_000))
+    });
+    let b = t.ls.connect(&output_k("B", (640, 480), 120, 60_000));
+    t.motion((-1.0, 0.0));
+    step(&mut t, "relocated", &mut |t| t.ls.disconnect(a));
+    t.motion((1.0, 0.0));
+    step(&mut t, "no output", &mut |t| t.ls.disconnect(b));
+    step(&mut t, "an output again", &mut |t| {
+        t.ls.connect(&output_k("C", (640, 480), 120, 60_000));
+    });
+    // the reconfiguration happens under the pointer, over W: one timed motion. Relocation and
+    // reconnection move the pointer off W here, so they reach the client as leave and enter.
+    assert!(synthesised >= 1, "no change synthesised a pointer event");
+}
+
+/// A-5 at the end of a camera drag (the true position carries the release's time) and under a
+/// popup's pointer grab (the synthesised event goes to the grab, at the latest input time).
+#[test]
+fn pointer_event_times_never_go_back_after_a_drag_and_under_a_grab() {
+    let (mut t, w, _) = T::scene_over_w();
+    t.key(KEY_LEFTMETA, true);
+    t.button(BTN_MIDDLE, true);
+    t.motion((30.0, 0.0));
+    t.motion((-30.0, 0.0));
+    let from = t.ls.probe.ptr_times.len();
+    t.button(BTN_MIDDLE, false);
+    let released = t.pointer_times_since(from, t.input_ms(), "the release");
+    assert!(released > 0, "the release delivered no true position");
+    t.key(KEY_LEFTMETA, false);
+
+    // a popup with a grab under the pointer, then the output changes under it
+    t.button(BTN_LEFT, true);
+    t.button(BTN_LEFT, false);
+    let qh = t.ls.qh.clone();
+    let spec = PopupSpec {
+        content: (60, 40),
+        shadow: 0,
+        anchor_rect: (15, 45, 1, 1),
+        slide: false,
+    };
+    let p = t.ls.probe.popup_with_grab(&qh, "P", w, spec);
+    t.adv();
+    t.paint(p, GREEN);
+    assert!(t.ls.state.keyboard_is_grabbed(), "the popup holds no grab");
+    t.motion((1.0, 1.0));
+    let from = t.ls.probe.ptr_times.len();
+    let a = t.ls.output();
+    t.ls.reconfigure(a, &output_k("A", (640, 480), 120, 144_000));
+    t.adv();
+    let grabbed = t.pointer_times_since(from, t.input_ms(), "under the grab");
+    assert!(grabbed > 0, "nothing synthesised under the grab");
 }
 
 /// Invariant (INV-CAMERA-4; C5.2 "camera A is not touched ... a per-output render input, not a

@@ -334,7 +334,7 @@ impl Core {
         }
         let on_one = matches!(self.pointer, crate::pointer::PointerState::Located { output, .. } if outputs.contains(&output));
         if on_one && !self.input.interaction.active() {
-            fx.extend(self.true_position(0));
+            fx.extend(self.true_position());
         }
         fx.extend(self.reconcile_constraints());
         fx

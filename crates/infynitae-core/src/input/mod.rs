@@ -16,6 +16,40 @@ pub(crate) struct InputState {
     pub(crate) ownership: ownership::Ownership,
     pub(crate) key_ownership: ownership::Ownership,
     pub(crate) interaction: interaction::Interaction,
+    pub(crate) clock: InputClock,
+}
+
+/// The input-event clock as Core has seen it: the latest time a device stamped on a physical
+/// event Core accepted (microseconds on that device clock). A pointer event Core synthesises into
+/// a client's stream — the one true position after an output, presentation or Stage change
+/// (M10, INV-INPUT-5) — carries this time, so the stream never goes back: every event a device
+/// delivers later carries at least this time, including one queued while Core synthesised.
+///
+/// It is neither of the other two clocks: not the session clock (M7 deadlines, milliseconds
+/// since the session started) and not the presentation clock. The nested backend's input times
+/// are absolute `CLOCK_MONOTONIC` readings, as libinput's are; a session time on the wire would
+/// jump back by the machine's uptime at the next real event. Before the first event there is no
+/// stream to continue and the time is 0, which no later event precedes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct InputClock(Option<u64>);
+
+impl InputClock {
+    /// A physical event stamped `time_us` was accepted. The clock never goes back: an event a
+    /// device stamped earlier than one already accepted (another device, behind) leaves it.
+    pub(crate) fn accepted(&mut self, time_us: u64) {
+        self.0 = Some(self.0.map_or(time_us, |t| t.max(time_us)));
+    }
+
+    /// The time of an event Core synthesises, on the wire.
+    pub(crate) fn wire_ms(self) -> u32 {
+        self.0.map_or(0, wire_ms)
+    }
+}
+
+/// An input time on the wire: `wl_pointer` and `wl_keyboard` times are milliseconds in a `u32`,
+/// which wraps (about every 49.7 days); clients compare them modulo 2³².
+pub(crate) fn wire_ms(time_us: u64) -> u32 {
+    (time_us / 1000) as u32
 }
 
 /// Where an axis event comes from (`wl_pointer.axis_source`).
@@ -54,6 +88,26 @@ mod tests {
     use crate::{Core, InputPort, OutputLifecycleToken, PhysicalEvent};
 
     const BTN_LEFT: u32 = 0x110;
+
+    /// A-5: the time of a synthesised pointer event is the latest input time Core accepted. The
+    /// clock never goes back (an event stamped earlier, from a device behind, leaves it), reads 0
+    /// before any event, and is put on the wire as `u32` milliseconds that wrap like every input
+    /// time.
+    #[test]
+    fn the_input_clock_never_goes_back_and_wraps_like_the_wire() {
+        let mut clock = super::InputClock::default();
+        assert_eq!(clock.wire_ms(), 0);
+        clock.accepted(12_345);
+        assert_eq!(clock.wire_ms(), 12);
+        clock.accepted(9_000);
+        assert_eq!(clock.wire_ms(), 12, "the clock went back");
+        clock.accepted(13_999);
+        assert_eq!(clock.wire_ms(), 13);
+        let wrap_us = (1u64 << 32) * 1000;
+        clock.accepted(wrap_us + 7_000);
+        assert_eq!(clock.wire_ms(), 7, "past 2^32 ms the wire time wraps");
+        assert_eq!(super::wire_ms(wrap_us - 1_000), u32::MAX);
+    }
 
     fn desc(c: &str) -> OutputDescriptor {
         OutputDescriptor {

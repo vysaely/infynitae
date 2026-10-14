@@ -65,6 +65,7 @@ impl Core {
                 if !finite {
                     return Err(EntryError::InvalidEvent);
                 }
+                self.input.clock.accepted(time_us);
                 // a motion owned by a pan mutates a camera: its proof is minted here, per event
                 let proof = matches!(self.input.interaction, Interaction::CameraPan { .. })
                     .then(authority::Authorized::mint);
@@ -76,8 +77,10 @@ impl Core {
                 modifiers,
                 time_us,
             } => Ok(if pressed {
+                self.input.clock.accepted(time_us);
                 self.button_press(button, modifiers, ms(time_us))
             } else {
+                self.input.clock.accepted(time_us);
                 self.button_release(button, ms(time_us))
             }),
             PhysicalEvent::PointerAxis { axis, time_us } => {
@@ -85,6 +88,7 @@ impl Core {
                 if !finite {
                     return Err(EntryError::InvalidEvent);
                 }
+                self.input.clock.accepted(time_us);
                 // consumed during an interaction and in NoOutput (M10, M22)
                 if self.input.interaction.active() || self.pointer == PointerState::NoOutput {
                     return Ok(Vec::new());
@@ -104,8 +108,10 @@ impl Core {
                 mods_changed,
                 time_us,
             } => Ok(if pressed {
+                self.input.clock.accepted(time_us);
                 self.keyboard_press(key, modifiers, mods_changed, time_us)
             } else {
+                self.input.clock.accepted(time_us);
                 self.keyboard_release(key, mods_changed, time_us)
             }),
         }
@@ -346,7 +352,7 @@ impl Core {
                 self.input.interaction = Interaction::Idle;
                 let mut fx = self.reconcile_constraints();
                 if self.constraint.is_none() {
-                    fx.extend(self.true_position(time_ms));
+                    fx.extend(self.true_position());
                 }
                 fx
             }
@@ -365,7 +371,7 @@ impl Core {
                     let had_constraint = self.constraint.is_some();
                     fx.extend(self.reconcile_constraints());
                     if had_constraint && self.constraint.is_none() {
-                        fx.extend(self.true_position(time_ms));
+                        fx.extend(self.true_position());
                     }
                 }
                 fx
@@ -420,7 +426,7 @@ impl Core {
             // an orphaned interaction still owns the pointer
             fx.push(Effect::PointerZeroOutputEnd);
             if !self.input.interaction.active() {
-                fx.extend(self.true_position(0));
+                fx.extend(self.true_position());
             }
         }
         fx.extend(self.reconcile_constraints());
@@ -460,7 +466,7 @@ impl Core {
         // M10: at most one true-position event, none while an interaction owns the pointer
         let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
         if on_it && !self.input.interaction.active() {
-            fx.extend(self.true_position(0));
+            fx.extend(self.true_position());
         }
         fx.extend(self.reconcile_constraints());
         Ok(fx)
@@ -503,7 +509,7 @@ impl Core {
                 let recon_fx = self.reconcile_constraints();
                 pointer_fx.extend(recon_fx);
                 if !self.input.interaction.active() && self.constraint.is_none() {
-                    pointer_fx.extend(self.true_position(0));
+                    pointer_fx.extend(self.true_position());
                 }
             }
         }
@@ -519,7 +525,7 @@ impl Core {
 
 /// `wl_pointer` timestamps: milliseconds with wrap-around.
 fn ms(time_us: u64) -> u32 {
-    (time_us / 1000) as u32
+    crate::input::wire_ms(time_us)
 }
 
 #[cfg(test)]
