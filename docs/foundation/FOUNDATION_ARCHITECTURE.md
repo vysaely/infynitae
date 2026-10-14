@@ -1204,7 +1204,7 @@ Not kept as negative controls: things that would only inflate counts (e.g. "remo
 
 ## C12 — Canonical invariant registry
 
-> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice). §C12.F3 supersedes INV-PROTO-1 (`configure_bounds`). §C12.F4 supersedes INV-SCALE-3 (epoch time authority). §C12.F5 supersedes INV-STAGE-1 again (placement at the first windowed presentation). §C12.F6 supersedes INV-PRES-1 (a pre-map grant takes the output when its element maps). §C12.F7 supersedes INV-INPUT-8 (focus eligibility and retention under a presentation). §C12.F8 supersedes INV-RENDER-2 (popup stacking follows xdg-shell) and, through its table, C3.3 item 1 and X-15.
+> **Phase D 1R amendment:** the rows INV-CAMERA-1, INV-CAMERA-5, INV-COORD-2, INV-COORD-3, INV-COORD-5, INV-INPUT-5, INV-INPUT-8, INV-SCALE-2…5, INV-FRAME-6, INV-PRES-1 and INV-OUTPUT-1 are **superseded by §C12.R1** (end of this document), which also adds INV-INPUT-10 and INV-PROTO-1. The table below is kept unaltered as the sealed Phase C registry (`615b0ed`). **Phase D 2R:** §C12.R2 further supersedes INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-SCALE-3 and INV-SCALE-4, and adds INV-OUTPUT-2 (57 entries). **Phase F:** §C12.F1 supersedes INV-STAGE-1 (placement at first map). §C12.F2 supersedes INV-SCALE-2 (device bound on the 1/120 lattice). §C12.F3 supersedes INV-PROTO-1 (`configure_bounds`). §C12.F4 supersedes INV-SCALE-3 (epoch time authority). §C12.F5 supersedes INV-STAGE-1 again (placement at the first windowed presentation). §C12.F6 supersedes INV-PRES-1 (a pre-map grant takes the output when its element maps). §C12.F7 supersedes INV-INPUT-8 (focus eligibility and retention under a presentation). §C12.F8 supersedes INV-RENDER-2 (popup stacking follows xdg-shell) and, through its table, C3.3 item 1 and X-15. §C12.F10 supersedes INV-PRES-1 again (unmap of a fullscreen element; C12.F9 is reserved for INC-6).
 
 **This table is authoritative.** Legacy identifiers map to it (C12.2). Where a rule was refined, the earlier wording is superseded and must not be cited as normative.
 
@@ -2156,6 +2156,36 @@ The single writer (FocusModel), the explicit actions themselves, target loss and
 ## C12.F8.2 What this layer does not change
 
 Reverse Stage z-order between elements; the root tree after the popups; the downward traversal of each tree; the popup offset formula (F-RENDER-1, `window.rs:106-121`); hit-testing through the presented order (INV-HIT-1, OB-26: `Window::surface_under` is never used). Core is unchanged. EC-9 (one popup level, Phase C) remains valid evidence: with a single popup the two orders agree. OB-1's status is decided at the INC-7 exit review, not by this layer.
+
+---
+
+# §C12.F10 — Canonical registry amendment (Phase F: INV-PRES-1 and M9, unmap of a fullscreen element; RC-1)
+
+**Status: ADOPTED 2026-10-14 by owner approval.** Corrects residual contradiction RC-1 of the INC-7 exit: the effective M9 row "`unset_fullscreen` / unmap → configure with the saved size" gives unmap the configure of `unset_fullscreen`. The sealed 1R machine kept them apart ("`unset_fullscreen` → configure with the saved size"; "unmap → state dropped (spec)", audit/1R/STATE_MACHINES_1R M9'), as the implementation does. The D7 consolidation merged the two rows. One sentence is added to one invariant, and M9's row is split in two. No invariant is added or removed (57), and no behaviour changes. Base: governance branch `80ead2a` (`governance/inc-7-layers-c12f5-f8`). The number C12.F9 stays reserved for the INC-6 allocator layer, and layers are ordered by adoption.
+
+**Inputs:**
+- C12.F6 INV-PRES-1 and STATE_MACHINES M9 as effective at `80ead2a`; audit/1R/STATE_MACHINES_1R M9' (`84ce620`);
+- xdg-shell: after a null-buffer commit the toplevel must repeat the initial commit-configure sequence (Smithay 0.7.0 resets `initial_configure_sent`);
+- the implementation at `80ead2a` (unchanged since `93c2605`): on a null-buffer commit Core drops the element's fullscreen state, any recorded pre-map request, any size on offer and any postponed placement (`drop_fullscreen`) and emits no fullscreen configure; the re-show's initial configure is not fullscreen.
+
+**Provenance:** [evidence/phase-f/fullscreen-unmap-rc1/AMENDMENT_RECORD.md](evidence/phase-f/fullscreen-unmap-rc1/AMENDMENT_RECORD.md).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12, C12.R1 and C12.F6. Every other row is unchanged.**
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-PRES-1** | Protocol fullscreen is an output presentation state.<br><br>**Every `set_fullscreen`/`unset_fullscreen` is answered with exactly one configure.** A request is granted only if W holds ActiveElementFocus, or before W's first map. Otherwise it is declined at once (configure without `fullscreen`, nothing stored).<br><br>The presentation starts when the granted element is mapped — at the grant decision for a mapped element, at its first map for a grant made before it — and ends at the exit decision (unset, unmap, output removal, replacement). Grants are ordered by the time they were made. A grant replaces the older grants on its output when its element is mapped, not before: until then the presented element keeps the output and is told nothing, and a grant whose element is destroyed or unmapped before mapping ends nothing. A grant still waiting for its element's map is replaced by a newer grant whose element maps, never by the map of an older one. The replaced elements get a configure with their saved size, if available. An unmap drops the element's state without answering it: protocol fullscreen sends it no configure and offers it no saved size (a focus-loss configure, INV-PROTO-1, carries neither `fullscreen` nor a size), and its next initial configure is not fullscreen. Focus loss does not end fullscreen. The output choice runs at grant. Fullscreen never touches cameras or anchors; other cameras observe W at its actual size. | core `protocol` + output model | P+D+E | EC-13/14, ER-3; evidence/phase-f/deferred-takeover; evidence/phase-f/fullscreen-unmap-rc1 | T1 (OB-22, OB-32); T0 `a_pre_map_grant_takes_the_output_when_its_element_maps`, `fullscreen_ends_cleanly_on_unmap_destroy_and_output_changes`; T1 `a_pre_map_grant_takes_the_output_only_when_its_window_maps`, `a_pre_map_grant_that_never_draws_ends_nothing`, `unmap_remap_and_destruction_leave_no_fullscreen_state` | owner amendment 2026-10-14 (unmap of a fullscreen element, RC-1) |
+
+## C12.F10.1 Sealed text superseded (must not be cited as normative)
+
+| Superseded | Replaced by |
+|---|---|
+| STATE_MACHINES M9 (D7 `c0a1cee`, and as qualified by C12.F6) "Fullscreen{O} \| `unset_fullscreen` / unmap \| Windowed \| configure with the saved size …", as far as it applies to unmap | M9 (C12.F10): `unset_fullscreen` and unmap are separate rows; unmap drops the state without a fullscreen configure (as 1R M9' "state dropped (spec)") |
+| C12.F6 INV-PRES-1, silent on what an unmap sends | INV-PRES-1 (C12.F10): no configure and no saved size from protocol fullscreen at unmap; the next initial configure is not fullscreen |
+
+## C12.F10.2 What this layer does not change
+
+Every other sentence of INV-PRES-1 (C12.F6), every other M9 row, M1 ("fullscreen dropped (M9)"; "Unmapped → initial commit again → initial configure"), M11 (the target-loss `activated` configure) and INV-PROTO-1. The implementation is unchanged. OB-22 and OB-32 are not affected.
 
 ---
 

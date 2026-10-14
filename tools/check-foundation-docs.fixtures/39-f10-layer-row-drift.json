@@ -1,0 +1,7 @@
+{
+ "name": "C12.F10 layer row edited without regenerating the registry",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "and its next initial configure is not fullscreen. Focus loss",
+ "replace": "and its next initial configure is fullscreen. Focus loss",
+ "expect": "inv-wording-mismatch"
+}

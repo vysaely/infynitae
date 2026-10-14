@@ -1,0 +1,7 @@
+{
+ "name": "C12.F10: unmap answers with the saved size again",
+ "file": "FOUNDATION_INVARIANTS.md",
+ "find": "protocol fullscreen sends it no configure and offers it no saved size",
+ "replace": "protocol fullscreen sends it a configure with its saved size",
+ "expect": "inv-wording-mismatch"
+}
