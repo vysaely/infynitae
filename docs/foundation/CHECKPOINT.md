@@ -4,6 +4,16 @@ CURRENT_PHASE: **PHASE F — INC-5 RATIFIED — CORE VISIBILITY REMEDIATION INTE
 
 Date: 2026-10-13
 
+## PHASE F — INC-7 GOVERNANCE LAYERS C12.F5–C12.F8 ADOPTED 2026-10-14 (governance branch from the INC-7 integration candidate `93c2605`; not merged, not pushed)
+- **Authority:** owner approval 2026-10-14 of the corrected C12.F5–F8 package and its supplementary scope (PL-21; M9; M11; INV-RENDER-2 with X-15, C3.3 and OB-1). Base stamp `93c2605` (`integration/inc-7-exit-2026-10-14`). C12.F9 (INV-ARCH-2 test-only allocator) is deferred to the INC-6 exit and is not applied.
+- **C12.F5 adopted** (record: evidence/phase-f/placement-windowed-presentation/): INV-STAGE-1 (a) and F-PLACE-1 — default placement at the first windowed presentation; M1 (two rows); PL-21. Implementation `334b9b3` (P9b).
+- **C12.F6 adopted** (record: evidence/phase-f/deferred-takeover/): INV-PRES-1 — a pre-map grant takes the output when its element maps; grants ordered by the time they were made; saved size, if available; M9. Implementation `b1aa758` (A-3).
+- **C12.F7 adopted** (record: evidence/phase-f/focus-eligibility/): INV-INPUT-8 — no focus move to an element hidden by a presentation; retained focus when hidden (residual R-01, owner policy); no focus from fullscreen requests; M11. Implementation `0f45cfd`, `2aa8d65` (A-8).
+- **C12.F8 adopted** (record: evidence/phase-f/popup-stacking/): INV-RENDER-2 — a toplevel's `xdg_popup`s newest first (xdg-shell; W-SM-20); C3.3, X-15 and the CP3A-4 OB-1 row superseded; living OB-1 item and W-SM-20 updated. Implementation `23860b3`, `d350ed2` (P10 #3).
+- **Registry:** 57 invariants (12 layers: 37 C12, 6 C12.R1, 2 C12.R2, 5 C12.E1R, 0 C12.F1, 1 each C12.F2…C12.F8), 21 formulas (F-PLACE-1 amended by C12.F5), 52 obligations; docs self-test 37 fixtures (fixtures 19 and 22 re-anchored on INV-STAGE-1's latest layer).
+- **No production code changed** by these layers (`git diff 93c2605 -- crates` is empty).
+- **Declaration:** INC-7 is NOT ratified and NOT closed; OB-1, OB-18, OB-22 and OB-32 are unchanged (OPEN) pending the INC-7 exit review. INC-6 is NOT ratified, INC-6 exit is NOT authorized, and no INC-6 material is on this branch; OB-13, OB-42, OB-44 and OB-52 are OPEN; the runtime remains EXPERIMENTAL pending INC-13.
+
 ## PHASE F — GOVERNANCE RESOLUTION 2026-10-14: C12.F3, C12.F4, OB-13 SPLIT, STRESS-TEST REPAIR
 - **Stress-test repair integrated** (`d6714f6`, fast-forward): the long-lived stress tests establish and verify their pointer target in every cycle. Before it, 26 of the 200 cycles of `round4_long_lived_combined_stress` delivered their click and the menu chain held its grabs in 52; the test passed regardless. 5 seeded controls.
 - **C12.F3 adopted** (record: evidence/phase-f/configure-bounds-amendment/): INV-PROTO-1's last sentence. `configure_bounds` occurs only as `(0, 0)` with an initial configure (Smithay, W-SM-17), which xdg-shell defines as equivalent to no event. Non-zero bounds are not authorized. T1 `t1_protocol_bounds`.
