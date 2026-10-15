@@ -540,14 +540,15 @@ impl Core {
     /// A vblank of `output` (the backend's frame tick): the observed elements clocked by it, whose
     /// requested callbacks complete once and whose feedback is presented with `sync_output` =
     /// `output` (INV-FRAME-1, INV-FRAME-2, M16). Unobserved elements are not completed here
-    /// (kick and fallback are INC-8).
-    pub fn frame_tick(&self, output: output::OutputId) -> Vec<stage::ElementId> {
+    /// (kick and fallback are INC-8). Allocating; adapters use [`Core::frame_tick_into`] (a
+    /// source rule forbids this form outside Core).
+    pub fn frame_tick_vec(&self, output: output::OutputId) -> Vec<stage::ElementId> {
         let mut out = Vec::new();
         self.frame_tick_into(output, &mut out);
         out
     }
 
-    /// [`Core::frame_tick`] into the caller's reusable buffer: the clocked elements are appended
+    /// [`Core::frame_tick_vec`] into the caller's reusable buffer: the clocked elements are appended
     /// to `out` (the caller clears it); allocation only when `out` must grow (INV-ALLOC-1).
     pub fn frame_tick_into(&self, output: output::OutputId, out: &mut Vec<stage::ElementId>) {
         // only an observed element has a clock, so the membership rows are the candidates

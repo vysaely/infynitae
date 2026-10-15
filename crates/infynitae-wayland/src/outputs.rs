@@ -315,7 +315,7 @@ impl WaylandState {
 
     /// A vblank of `output` at `now`: the requested frame callbacks of each element complete
     /// once, and its pending presentation feedback is presented with `sync_output` = `output`
-    /// (INV-FRAME-1, INV-FRAME-2, INV-FRAME-5). `elements` comes from `Core::frame_tick`.
+    /// (INV-FRAME-1, INV-FRAME-2, INV-FRAME-5). `elements` comes from `Core::frame_tick_into`.
     pub fn complete_frames(&mut self, output: OutputId, elements: &[ElementId], now: Duration) {
         let Some(h) = self.handle(output) else { return };
         let (o, refresh) = (

@@ -386,13 +386,13 @@ mod tests {
             Some(a),
             "equal refresh: lowest OutputId"
         );
-        assert_eq!(c.frame_tick(a), vec![id]);
+        assert_eq!(c.frame_tick_vec(a), vec![id]);
         assert!(
-            c.frame_tick(b).is_empty(),
+            c.frame_tick_vec(b).is_empty(),
             "an observer that is not the clock completes nothing"
         );
         assert!(
-            c.frame_tick(far).is_empty(),
+            c.frame_tick_vec(far).is_empty(),
             "C (240 Hz) does not observe the element"
         );
         let (fast, _) = c.output_connected(&mut t, desc("D", 144_000)).unwrap();
@@ -401,13 +401,13 @@ mod tests {
             Some(fast),
             "highest refresh observer"
         );
-        assert_eq!(c.frame_tick(fast), vec![id]);
-        assert!(c.frame_tick(a).is_empty());
+        assert_eq!(c.frame_tick_vec(fast), vec![id]);
+        assert!(c.frame_tick_vec(a).is_empty());
         for o in [a, b, fast] {
             c.output_disconnected(&mut t, o).unwrap();
         }
         assert_eq!(c.clock_output_of(id), None, "unobserved");
-        assert!(c.frame_tick(far).is_empty());
+        assert!(c.frame_tick_vec(far).is_empty());
         let _: OutputId = far;
     }
 
@@ -426,7 +426,7 @@ mod tests {
             }]
         );
         assert_eq!(c.clock_output_of(id), None);
-        assert!(c.frame_tick(a).is_empty());
+        assert!(c.frame_tick_vec(a).is_empty());
     }
 
     /// The pass that ends `toplevel_destroyed` evaluates the scale policy of every mapped
@@ -1272,7 +1272,7 @@ mod tests {
                 .filter(|&e| c.clock_output_of(e) == Some(o))
                 .collect();
             tick.sort();
-            assert_eq!(c.frame_tick(o), tick, "frame tick after {what}");
+            assert_eq!(c.frame_tick_vec(o), tick, "frame tick after {what}");
         }
         for &e in c.stage().z_order() {
             let mut observers: Vec<OutputId> = reference

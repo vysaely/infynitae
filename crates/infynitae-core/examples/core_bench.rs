@@ -218,7 +218,7 @@ fn scaling(n: usize, two_outputs: bool) {
         std::hint::black_box(core.physical_input_vec(&mut port, motion(d)).unwrap());
     });
     let tick = timed(iters, |_| {
-        std::hint::black_box(core.frame_tick(o));
+        std::hint::black_box(core.frame_tick_vec(o));
     });
     // output hotplug with N elements on the Canvas
     let hotplug = timed(iters.min(100), |_| {

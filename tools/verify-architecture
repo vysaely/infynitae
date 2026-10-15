@@ -810,6 +810,18 @@ SOURCE_SEEDS = [
      "crates/infynitae-core/src/input/interaction.rs",
      append("\nimpl crate::Core {\n    pub fn rogue_pan(&mut self) {\n        self.cameras.pan(crate::authority::Authorized::mint(), 0,"
             " CanvasPos { x: 0, y: 0 }, (0.0, 0.0));\n    }\n}\n")),
+    ("OB-42: backend calls Core's allocating physical_input_vec", "callers-use-caller-buffer-entries",
+     HEADLESS_LIB, append("\npub fn rogue_input(core: &mut infynitae_core::Core, ev: infynitae_core::PhysicalEvent,"
+                          " port: &mut infynitae_core::InputPort) {\n    let _ = core.physical_input_vec(port, ev);\n}\n")),
+    ("OB-42: adapter calls Core's allocating toplevel_committed_acked", "callers-use-caller-buffer-entries",
+     WAYLAND_OUTPUTS, append("\nimpl WaylandState {\n    pub fn rogue_commit(&mut self, id: infynitae_core::stage::ElementId,"
+                             " tree: infynitae_core::stage::SurfaceTree) {\n"
+                             "        let _ = self.core_mut().toplevel_committed_acked(id, tree, None);\n    }\n}\n")),
+    ("OB-42: winit backend calls Core's allocating frame_tick_vec by a qualified path", "callers-use-caller-buffer-entries",
+     "crates/infynitae-backend-winit/src/lib.rs", append("\npub fn rogue_tick(core: &infynitae_core::Core, o: infynitae_core::output::OutputId) {\n"
+                       "    let _ = infynitae_core::Core::frame_tick_vec(core, o);\n}\n")),
+    ("OB-42: binary names Core's allocating toplevel_committed in a macro", "callers-use-caller-buffer-entries",
+     "crates/infynitae/src/main.rs", append("\nconst _: &str = stringify!(toplevel_committed);\n")),
     ("wayland names InputPort", "wayland-names-no-authority",
      "crates/infynitae-wayland/src/lib.rs", append("\n#[allow(unused_imports)]\nuse infynitae_core::InputPort;\n")),
     ("wayland names output_connected inside a macro", "wayland-names-no-authority",

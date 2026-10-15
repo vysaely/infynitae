@@ -44,6 +44,22 @@ const WAYLAND_FORBIDDEN: [&str; 10] = [
     "output_disconnected",
     "key_ownership_mut",
 ];
+/// Core's allocating conveniences (INV-ALLOC-1, OB-42): each returns a fresh `Vec` per call.
+/// Product code outside Core uses the caller-buffer forms (`physical_input`,
+/// `toplevel_committed_acked_into`, `frame_tick_into`) that the zero-allocation test measures.
+const ALLOCATING_WRAPPERS: [&str; 4] = [
+    "physical_input_vec",
+    "toplevel_committed",
+    "toplevel_committed_acked",
+    "frame_tick_vec",
+];
+/// Product crates outside Core that call Core (the adapter, the backends, the binary).
+const CORE_CALLERS: [&str; 4] = [
+    "infynitae-wayland",
+    "infynitae-backend-headless",
+    "infynitae-backend-winit",
+    "infynitae",
+];
 /// Identifiers that would give `output_reconfigured` camera authority (E1R, verify.sh step 2h).
 const RECONFIGURE_FORBIDDEN: [&str; 4] = ["mint", "Authorized", "navigation", "set_center"];
 
@@ -196,6 +212,7 @@ fn main() -> ExitCode {
     check_pointer_delivery(&crates, &mut report);
     check_keyboard_delivery(&crates, &mut report);
     check_device_limit(&crates, &mut report);
+    check_allocating_wrappers(&crates, &mut report);
     check_unsafe(&root, &crates, &mut report);
 
     let mut failed = false;
@@ -1244,6 +1261,29 @@ fn check_wayland_geometry(files: &[SourceFile], r: &mut Report) {
                     at(&f.path, i.span())
                 ),
             );
+        }
+    }
+}
+
+fn check_allocating_wrappers(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report) {
+    const R: &str = "callers-use-caller-buffer-entries";
+    r.rule(R);
+    for name in CORE_CALLERS {
+        for f in crates.get(name).into_iter().flatten() {
+            let mut ids = Vec::new();
+            idents(f.ast.to_token_stream(), &mut ids);
+            for i in ids
+                .iter()
+                .filter(|i| ALLOCATING_WRAPPERS.iter().any(|w| *i == w))
+            {
+                r.fail(
+                    R,
+                    format!(
+                        "{}: names `{i}` (an allocating Core wrapper, INV-ALLOC-1)",
+                        at(&f.path, i.span())
+                    ),
+                );
+            }
         }
     }
 }
