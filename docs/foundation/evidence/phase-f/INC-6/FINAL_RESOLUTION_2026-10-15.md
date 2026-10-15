@@ -69,10 +69,12 @@ slots invalidated in place; reused scratch for views, rows, presentation snapsho
 outputs; `InputRegion::Ops(Arc<[RegionOp]>)`; exact integer cull thresholds (`View::cull`).
 Adapters migrated (`WaylandState::with_effects`, `WaylandState::frame_tick`, the commit handler).
 
-Latency, `core_bench`, release, 3,000 windows, one output, median of three (`0fb2c66` → `6e46962`;
-reproduced by the reviewer within a few per cent): pan 28.8 → 15.5 µs, crossing pan 28.2 → 15.3,
-render list 125 → 54, remap 48 → 40, frame tick 0.12 → 0.05, hotplug 800 → 690; commit and
-off-view commit within run-to-run noise (0.4–1.0 µs). The first version was 17 % slower on pan;
+Latency, `core_bench`, release, 3,000 windows, one output, median of three (`0fb2c66` → `6e46962`):
+pan 28.8 → 15.5 µs, crossing pan 28.2 → 15.3, render list 125 → 54, frame tick 0.12 → 0.05 (the
+reviewer reproduced these within a few per cent on `5aa04d0`); remap 48 → 40 and hotplug 800 → 690
+here, but not reproduced by the reviewer (its runs, concurrent with gate runs, gave ~50 and
+~771), so only "not slower" is claimed for them; commit and off-view commit within run-to-run noise
+(0.4–1.0 µs). The first version was 17 % slower on pan;
 the cause was measured (identical rounding work, 9,085 `edge` calls per pan, moved by codegen) and
 removed by the integer cull, equal to `may_show` on 80,000 random cases and at extreme scale
 factors (bounded search).
@@ -83,8 +85,10 @@ factors (bounded search).
   window could predict an output near the origin and renegotiate at map (`546bf83`, with a test).
 - `View::cull`'s threshold search could step ~10^12 times for a non-finite estimate; now bounded.
 
-Recorded, not changed (pre-existing on main): a persisted camera with a subnormal zoom makes
-`View::new` overflow (debug panic, release wrap); `PersistedCameras` checks only "finite, > 0".
+Recorded, not changed (pre-existing on main): a camera zoom below about 1e-11 (e.g. 1e-12; a
+persisted camera may carry one, `PersistedCameras` checks only "finite, > 0") makes `View::new`
+overflow: `view/(2k)` saturates the Q16 view origin (debug panic, release wrap). 1e-6 to 1e-11
+are fine (reviewer's probe).
 
 ## OB-13
 
@@ -119,3 +123,11 @@ authority and unsafe rules, the zero-allocation assertion at every size. Finding
 | Probe p3 imprecise | fixed |
 | Record and comment inaccuracies (`physical_input_into`, adapter commit entry, U-002, OB-42 scope, commit latency) | corrected here and in the test file |
 | Cull search could effectively hang | bounded |
+
+Round 2 (`b5afa89`, `ef6c97e`): the dispositions above verified (probes A, B, C, D, E re-run:
+churn 10 / raised / 10 on this branch, 0 / raised / 0 on the rehearsal; controls anchored and
+unique). New: on the rehearsal, C12.F13's hold was never ended once unneeded (probe F) and one
+mutant survived (a subject keeping its hold) — fixed there (`30e33bf`), with targeted tests;
+the overflow threshold and the latency claim above corrected. The full planted-defect run then
+showed seven controls that still mutated the reference projection (`entries_for`) or a match arm
+the zero-allocation work had changed (M1): re-anchored on the production code, all DETECTED.

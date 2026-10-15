@@ -35,7 +35,8 @@ C14.4, after the list of non-client stimuli:
 > change only because a client's request, commit or destruction started or ended a presentation,
 > the change may raise its hint (as a non-client stimulus) but never lowers it: the element holds
 > its hint against decreases until a non-client stimulus that is not such a change (an output
-> change, a camera action, its own fullscreen enter/exit) evaluates it. P7 applies regardless.
+> change, a camera action, its own fullscreen enter/exit) evaluates it, or until an evaluation
+> finds its requirement back at or above its hint. P7 applies regardless.
 > A presentation the system ends or starts (output added, removed, reconfigured) is a non-client
 > stimulus for every element.
 
@@ -52,6 +53,10 @@ client's presentation) keeps a higher hint until its next non-client stimulus."
   under-resolved by another client's presentation (the regression of the first implementation).
 - Cost: an element hidden by another client's presentation may keep a higher buffer scale than its
   remaining observers need (memory, never sharpness) until its next non-client stimulus.
+- Any camera drag releases every hold: its first step is a full non-client pass and its release
+  settles, even on an output that never observed the held element (independent re-review). This
+  follows from "a camera action" above; the owner may prefer to limit release to stimuli that touch
+  the element.
 
 ## What it does not change
 
