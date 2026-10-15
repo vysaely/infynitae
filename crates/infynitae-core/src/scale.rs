@@ -206,6 +206,13 @@ impl ScaleState {
 
     /// A step of a continuous interaction (M7 `Closed → Open{continuous}`): opens the epoch if
     /// none is open. It has no deadline, so it needs no time; its end settles it.
+    /// Closes an open epoch without evaluating (the evaluation that follows settles it, M7).
+    pub(crate) fn end_epoch(&mut self) {
+        self.epoch.open = false;
+        self.epoch.deadline = None;
+        self.epoch.kind = None;
+    }
+
     pub fn continuous_step(&mut self, kind: InteractionKind) {
         self.open(kind);
         self.epoch.continuous = true;
@@ -511,6 +518,15 @@ pub(crate) struct Sweep {
     /// The elements marked for the next evaluation, ascending; between passes also the buffer
     /// a pass lists the elements it visits in (cleared, not freed).
     marked: Vec<ElementId>,
+    /// The elements whose own protocol-fullscreen presentation started or ended in this batch
+    /// (C14.4 "fullscreen enter/exit"; M9 "settlement"): evaluated as a non-client stimulus,
+    /// their open epoch settled. Ascending; cleared, not freed.
+    stimulated: Vec<ElementId>,
+    /// Set by a batch in which a client's request, commit or destruction started or ended a
+    /// presentation: every element it visits that is not a subject is evaluated as a client
+    /// response and holds against a decrease, so one client cannot move another's hint down
+    /// (and back up) by presenting (INV-SCALE-4 d, INV-SCALE-5 "unobserved elements hold").
+    pub(crate) hold_decreases: bool,
 }
 
 impl Default for Sweep {
@@ -519,6 +535,8 @@ impl Default for Sweep {
             all: true,
             closed: true,
             marked: Vec::new(),
+            stimulated: Vec::new(),
+            hold_decreases: false,
         }
     }
 }
@@ -533,6 +551,19 @@ impl Sweep {
         if let Err(i) = self.marked.binary_search(&element) {
             self.marked.insert(i, element);
         }
+    }
+
+    /// `element`'s own presentation started or ended in this batch: the next evaluation visits
+    /// it as a non-client stimulus.
+    pub(crate) fn stimulate(&mut self, element: ElementId) {
+        self.mark(element);
+        if let Err(i) = self.stimulated.binary_search(&element) {
+            self.stimulated.insert(i, element);
+        }
+    }
+
+    pub(crate) fn is_stimulated(&self, element: ElementId) -> bool {
+        self.stimulated.binary_search(&element).is_ok()
     }
 
     /// The marked elements, ascending; hand the list back with [`Sweep::evaluated`].
@@ -550,6 +581,8 @@ impl Sweep {
         }
         visited.clear();
         self.marked = visited;
+        self.stimulated.clear();
+        self.hold_decreases = false;
     }
 }
 

@@ -1028,3 +1028,62 @@ fn device_ceiling_lowered_at_runtime_and_invalid_value_refused() {
     ls.pump();
     assert_eq!(ls.probe.preferred_scales_of("W"), vec![360, 327, 163]);
 }
+
+/// Fullscreen entry and exit on the wire: the hint for the presenting output reaches the client
+/// before the configure that asks for the fullscreen (and then the windowed) frame, as the
+/// initial hint precedes the initial configure (M15). W is focused on A (scale 1) and goes
+/// fullscreen on B (scale 2, its camera elsewhere), then back.
+#[test]
+fn fullscreen_entry_and_exit_send_the_hint_before_the_configure() {
+    let persisted = infynitae_core::navigation::PersistedCameras::from_entries(vec![(
+        VirtualOutput::key("B"),
+        infynitae_core::geom::CanvasPos {
+            x: 100_000 << 16,
+            y: 0,
+        },
+        1.0,
+    )])
+    .expect("valid persisted camera");
+    let mut ls = Lockstep::with(
+        persisted,
+        &[common::output_k("A", (1920, 1080), 120, 60_000)],
+    );
+    ls.connect(&common::output_k("B", (1920, 1080), 240, 60_000));
+    let w = ls
+        .probe
+        .toplevel_with_fractional_scale(&ls.qh, "W", (400, 300), 0);
+    ls.pump();
+    ls.probe.draw(&ls.qh, w);
+    ls.pump();
+    let element = ls.state.elements().next().expect("element");
+    infynitae_backend_headless::set_focus(&mut ls.state, &mut ls.input, Some(element))
+        .expect("focus");
+    ls.pump();
+    assert_eq!(ls.probe.preferred_scales_of("W").last(), Some(&120));
+    let wl_b = ls.probe.outputs[1].1.clone();
+    let toplevel = ls.probe.surfaces[w].toplevel.clone().expect("toplevel");
+    for (enter, scale, buffer) in [(true, 240, 2), (false, 120, 1)] {
+        let from = ls.probe.scale_log.len();
+        if enter {
+            toplevel.set_fullscreen(Some(&wl_b));
+        } else {
+            toplevel.unset_fullscreen();
+        }
+        ls.pump();
+        let log = ls.probe.scale_log[from..].to_vec();
+        let at = |line: &str| {
+            log.iter()
+                .position(|l| l == line)
+                .unwrap_or_else(|| panic!("`{line}` not on the wire: {log:?}"))
+        };
+        let configure = at("configure W");
+        assert!(
+            at(&format!("preferred_scale W {scale}")) < configure,
+            "{log:?}"
+        );
+        assert!(
+            at(&format!("preferred_buffer_scale W {buffer}")) < configure,
+            "{log:?}"
+        );
+    }
+}
