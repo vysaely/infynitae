@@ -4,7 +4,9 @@ Status: evidence, not authority. Branch `integration/inc-6-final-resolution-2026
 exit-hardening branch @ `3666286`. **INC-6 is not ratified; no obligation is closed; nothing is
 merged or published.** Owner direction of 2026-10-15, items 1–5, each checked against the
 canonical rules first. Builds on `EXIT_HARDENING_2026-10-15.md`. Amendments the directions need are
-rehearsed on `rehearsal/inc-6-scale-amendments-c12f11-f12` (never merge before adoption).
+rehearsed on `rehearsal/inc-6-scale-amendments-2026-10-15` (C12.F11, C12.F12, C12.F13 on top of
+this branch; never merge before adoption). An earlier rehearsal of C12.F11/F12 only,
+`rehearsal/inc-6-scale-amendments-c12f11-f12` @ `43369a5`, is superseded and kept.
 
 ## Policy decisions and governance
 

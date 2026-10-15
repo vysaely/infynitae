@@ -4,7 +4,7 @@ Status: **PROPOSAL, NOT ADOPTED** (2026-10-15). Evidence, not authority; no livi
 changed by it. Owner direction of 2026-10-15, item 4: "When a pre-map fullscreen grant already
 identifies an authoritative output, derive the initial scale hint from that output rather than an
 unrelated canvas position." Implemented only on the rehearsal branch
-`rehearsal/inc-6-scale-amendments-c12f11-f12` (never merge before adoption).
+`rehearsal/inc-6-scale-amendments-2026-10-15` (never merge before adoption).
 
 ## The contradiction
 

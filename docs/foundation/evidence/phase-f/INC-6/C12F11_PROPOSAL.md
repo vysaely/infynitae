@@ -4,7 +4,7 @@ Status: **PROPOSAL, NOT ADOPTED** (2026-10-15). Evidence, not authority; no livi
 changed by it. Owner direction of 2026-10-15, item 2: "Device-bound scale decisions must account
 for pending compositor-selected configure dimensions when those dimensions determine the next
 client buffer." Implemented only on the rehearsal branch
-`rehearsal/inc-6-scale-amendments-c12f11-f12` (never merge before adoption).
+`rehearsal/inc-6-scale-amendments-2026-10-15` (never merge before adoption).
 
 ## The contradiction
 

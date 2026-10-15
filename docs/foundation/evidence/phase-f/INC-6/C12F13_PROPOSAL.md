@@ -4,7 +4,7 @@ Status: **PROPOSAL, NOT ADOPTED** (2026-10-15). Evidence, not authority; no livi
 changed by it. Owner direction of 2026-10-15, item 1: "Client-requested fullscreen must not
 indiscriminately release unrelated clients' held scale hints. Separate the source of a request
 from the compositor's resulting authoritative state change. Preserve necessary scale reevaluation
-without enabling cross-client churn." Rehearsed on `rehearsal/inc-6-scale-amendments-c12f11-f12`
+without enabling cross-client churn." Rehearsed on `rehearsal/inc-6-scale-amendments-2026-10-15`
 (with C12.F11 and C12.F12); never merge before adoption.
 
 ## Why it needs a layer (the contradictions)
