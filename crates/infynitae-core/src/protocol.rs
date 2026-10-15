@@ -3365,13 +3365,10 @@ mod tests {
             .collect()
     }
 
-    /// Output A (scale 1) at the Canvas origin; output B (scale 2) whose camera is restored at
-    /// `b_centre_x` px with `b_zoom` (the persisted-camera path, INV-CAMERA-1). W is placed on A.
-    fn two_scales(
-        b_centre_x: i64,
-        b_zoom: f64,
-    ) -> (Core, InputPort, OutputLifecycleToken, OutputId, OutputId) {
-        let persisted = PersistedCameras::from_entries(vec![(
+    /// A persisted camera for output B centred at `b_centre_x` px with `b_zoom` (the
+    /// persisted-camera path, INV-CAMERA-1).
+    fn camera_b(b_centre_x: i64, b_zoom: f64) -> PersistedCameras {
+        PersistedCameras::from_entries(vec![(
             crate::output::tests::key("B"),
             crate::geom::CanvasPos {
                 x: b_centre_x << 16,
@@ -3379,11 +3376,15 @@ mod tests {
             },
             b_zoom,
         )])
-        .unwrap();
-        let (mut c, i, _, mut t) = Core::new(persisted);
-        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
-        let b = out(&mut c, &mut t, "B", (1920, 1080), 240);
-        (c, i, t, a, b)
+        .unwrap()
+    }
+
+    /// Output A (scale 1) at the Canvas origin, then output B (scale 2) with the camera of
+    /// [`camera_b`]. Windows are placed on A (the lowest-id output).
+    fn two_scales(c: &mut Core, t: &mut OutputLifecycleToken) -> (OutputId, OutputId) {
+        let a = out(c, t, "A", (1920, 1080), 120);
+        let b = out(c, t, "B", (1920, 1080), 240);
+        (a, b)
     }
 
     /// INV-SCALE-1 / C14.4: fullscreen enter and exit are non-client stimuli, so the hint follows
@@ -3391,7 +3392,8 @@ mod tests {
     /// returns when the presentation ends.
     #[test]
     fn fullscreen_enter_and_exit_move_the_hint_to_the_presenting_output() {
-        let (mut c, mut i, _t, _a, b) = two_scales(100_000, 1.0);
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(100_000, 1.0));
+        let (_a, b) = two_scales(&mut c, &mut t);
         let w = map_win(&mut c, 1, 400, 300);
         assert_eq!(
             c.preferred_scale_of(w),
@@ -3421,7 +3423,8 @@ mod tests {
     /// (rho 2), with no membership row added or removed by the presentation.
     #[test]
     fn a_presenting_output_contributes_its_scale_at_zoom_one() {
-        let (mut c, mut i, _t, a, b) = two_scales(0, 0.5);
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 0.5));
+        let (a, b) = two_scales(&mut c, &mut t);
         let w = map_win(&mut c, 1, 400, 300);
         assert!(c.membership().observers(w).contains(&a));
         assert!(
@@ -3445,7 +3448,8 @@ mod tests {
     /// presentation, not the camera, sets B's contribution.
     #[test]
     fn a_pre_map_grant_takes_the_presenting_outputs_scale_when_it_maps() {
-        let (mut c, _i, _t, _a, b) = two_scales(100_000, 0.5);
+        let (mut c, _i, _, mut t) = Core::new(camera_b(100_000, 0.5));
+        let (_a, b) = two_scales(&mut c, &mut t);
         let w = c.toplevel_created();
         let (d, _) = c
             .toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
@@ -3477,7 +3481,8 @@ mod tests {
     #[test]
     fn a_presentation_lowers_the_hint_of_the_elements_it_hides() {
         for premap in [false, true] {
-            let (mut c, mut i, _t, a, b) = two_scales(0, 1.0);
+            let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+            let (a, b) = two_scales(&mut c, &mut t);
             let x = map_win(&mut c, 9, 300, 200);
             assert_eq!(c.preferred_scale_of(x), Some((240, 2)), "A and B see X");
             let w = c.toplevel_created();
@@ -3506,7 +3511,8 @@ mod tests {
     #[test]
     fn the_end_of_a_presentation_restores_the_hint_of_the_elements_it_hid() {
         for end in ["unset", "unmap", "destroy"] {
-            let (mut c, mut i, _t, a, b) = two_scales(0, 1.0);
+            let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+            let (a, b) = two_scales(&mut c, &mut t);
             let x = map_win(&mut c, 9, 300, 200);
             let w = map_win(&mut c, 1, 400, 300);
             focus(&mut c, &mut i, w);
@@ -3532,7 +3538,8 @@ mod tests {
     /// B's removal ends the presentation (the hint returns to A's scale).
     #[test]
     fn output_changes_move_the_hint_of_a_presented_element() {
-        let (mut c, mut i, mut t, _a, b) = two_scales(100_000, 1.0);
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(100_000, 1.0));
+        let (_a, b) = two_scales(&mut c, &mut t);
         let w = map_win(&mut c, 1, 400, 300);
         focus(&mut c, &mut i, w);
         c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
@@ -3563,7 +3570,8 @@ mod tests {
     /// below A's requirement, and the next fullscreen on B raises it again.
     #[test]
     fn unmap_and_remap_of_a_presented_element() {
-        let (mut c, mut i, _t, a, b) = two_scales(100_000, 1.0);
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(100_000, 1.0));
+        let (a, b) = two_scales(&mut c, &mut t);
         let w = map_win(&mut c, 1, 400, 300);
         focus(&mut c, &mut i, w);
         c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
