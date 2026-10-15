@@ -150,17 +150,19 @@ pub enum FrameError {
     NoView,
 }
 
-/// `s_max(E)` (F-SCALE-2) as layer C12.F11 proposes it (REHEARSAL, NOT ADOPTED): the largest
-/// logical side of E's tree and of the protocol-fullscreen configure Core has sent E while it is
-/// granted (C5.2: the output's logical size, as `toplevel_configure_state` reports it).
+/// `s_max(E)` (F-SCALE-2, C12.F11): the largest logical side of E's tree and of every size Core
+/// asks E for while that request stands — the protocol-fullscreen size while E is granted (C5.2:
+/// the output's logical size, as `toplevel_configure_state` reports it) and the saved size
+/// offered when its fullscreen ended, until E redraws at another size (M9).
 fn s_max_of(
     stage: &stage::Stage,
     fullscreen: &[protocol::FullscreenState],
+    restore_offers: &[(stage::ElementId, geom::LocalSize)],
     outputs: &[output::OutputModel],
     element: stage::ElementId,
 ) -> u32 {
     let tree = scale::s_max_for_tree(stage.tree(element));
-    let configured = fullscreen
+    let granted = fullscreen
         .iter()
         .find(|f| f.element == element)
         .and_then(|f| outputs.iter().find(|o| o.id == f.output))
@@ -168,7 +170,11 @@ fn s_max_of(
             let (w, h) = o.logical_extent();
             (w.floor().max(0.0) as u32).max(h.floor().max(0.0) as u32)
         });
-    tree.max(configured)
+    let offered = restore_offers
+        .iter()
+        .find(|(e, _)| *e == element)
+        .map_or(0, |(_, size)| size.w.max(size.h).max(0) as u32);
+    tree.max(granted).max(offered)
 }
 
 /// The ProjectionFrame of one output and whether it is current: a change that makes it stale
@@ -702,7 +708,13 @@ impl Core {
         self.scale_sweep.all = true;
         let mut fx = Vec::new();
         for (element, st) in &mut self.scales {
-            let s_max = s_max_of(&self.stage, &self.fullscreen, &self.outputs, *element);
+            let s_max = s_max_of(
+                &self.stage,
+                &self.fullscreen,
+                &self.restore_offers,
+                &self.outputs,
+                *element,
+            );
             let h_dev = scale::h_dev(s_max, d_max);
             let h_max = scale::h_max(self.scale_config.h_cfg, s_max, d_max);
             let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
@@ -729,7 +741,13 @@ impl Core {
     /// Preferred scale for an element: (scale_120, integer_buffer_scale).
     pub fn preferred_scale_of(&self, element: stage::ElementId) -> Option<(u32, u32)> {
         self.scales.get(element).map(|st| {
-            let s_max = s_max_of(&self.stage, &self.fullscreen, &self.outputs, element);
+            let s_max = s_max_of(
+                &self.stage,
+                &self.fullscreen,
+                &self.restore_offers,
+                &self.outputs,
+                element,
+            );
             let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
             (
                 scale::preferred_scale_120(st.h),
@@ -771,7 +789,13 @@ impl Core {
         let now_ms = self.session_time(now);
         let mut fx = Vec::new();
         for (element, st) in &mut self.scales {
-            let s_max = s_max_of(&self.stage, &self.fullscreen, &self.outputs, *element);
+            let s_max = s_max_of(
+                &self.stage,
+                &self.fullscreen,
+                &self.restore_offers,
+                &self.outputs,
+                *element,
+            );
             let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
             let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
             let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
@@ -818,7 +842,13 @@ impl Core {
         let mut fx = Vec::new();
         for (element, st) in &mut self.scales {
             if st.epoch.open && st.epoch.kind == Some(kind) {
-                let s_max = s_max_of(&self.stage, &self.fullscreen, &self.outputs, *element);
+                let s_max = s_max_of(
+                    &self.stage,
+                    &self.fullscreen,
+                    &self.restore_offers,
+                    &self.outputs,
+                    *element,
+                );
                 let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
                 let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
                 let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
@@ -843,7 +873,13 @@ impl Core {
     pub fn settle_all_epochs(&mut self) -> Vec<protocol::Effect> {
         let mut fx = Vec::new();
         for (element, st) in &mut self.scales {
-            let s_max = s_max_of(&self.stage, &self.fullscreen, &self.outputs, *element);
+            let s_max = s_max_of(
+                &self.stage,
+                &self.fullscreen,
+                &self.restore_offers,
+                &self.outputs,
+                *element,
+            );
             let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
             let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
             let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
@@ -901,7 +937,11 @@ impl Core {
                 .scale_sweep
                 .needs_full_pass(continuous_kind.is_some(), is_client_response);
         let mapped = |e| self.stage.state(e) == Some(stage::Lifecycle::Mapped);
+        // an output or configuration change touches every element; otherwise the marks say which
+        // elements this batch's stimulus touched (C12.F13)
+        let everything = self.scale_sweep.all;
         let mut visit = self.scale_sweep.take_marked();
+        self.scale_sweep.remember_touched(&visit);
         if full {
             visit.clear();
             visit.extend(self.stage.z_order().iter().copied().filter(|&e| mapped(e)));
@@ -918,7 +958,13 @@ impl Core {
 
         for &element in &visit {
             let rho = self.compute_rho(element);
-            let s_max = s_max_of(&self.stage, &self.fullscreen, &self.outputs, element);
+            let s_max = s_max_of(
+                &self.stage,
+                &self.fullscreen,
+                &self.restore_offers,
+                &self.outputs,
+                element,
+            );
             let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
             let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
             let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
@@ -927,6 +973,7 @@ impl Core {
             // and the elements that presentation change touches
             let subject = self.scale_sweep.is_stimulated(element);
             let by_presentation = self.scale_sweep.presentation_change && !subject;
+            let touched = everything || self.scale_sweep.is_touched(element);
             let sigma = self.scale_config.sigma;
             let scale_state = self
                 .scales
@@ -960,9 +1007,16 @@ impl Core {
                 // at or above the hint ends the hold
                 scale_state.presentation_hold = false;
                 scale_state.evaluate(rho, ladder, h_max, &self.scale_config, false)
-            } else if !is_client_response {
-                // a non-client stimulus that is not another client's presentation releases it
+            } else if !is_client_response && touched {
+                // a non-client stimulus that touches it (and is not another client's
+                // presentation) releases the hold
                 scale_state.presentation_hold = false;
+                scale_state.evaluate(rho, ladder, h_max, &self.scale_config, false)
+            } else if !is_client_response && scale_state.presentation_hold && lowers {
+                // a camera action elsewhere (visited by a full pass, not touched) keeps the hold
+                scale_state.last_rho = rho;
+                false
+            } else if !is_client_response {
                 scale_state.evaluate(rho, ladder, h_max, &self.scale_config, false)
             } else if scale_state.presentation_hold && lowers {
                 scale_state.last_rho = rho;

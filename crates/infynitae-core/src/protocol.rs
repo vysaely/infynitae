@@ -3706,6 +3706,62 @@ mod tests {
         assert!(hint < configure, "{fx:?}");
     }
 
+    /// C12.F11: the saved size offered at fullscreen exit is a size Core asks for. X (3000 px
+    /// wide, seen by A at scale 1 and B at scale 2, D_max 4096) is presented on B and redraws at
+    /// B's 1920 px, so its hint rises to 2. The unset offers 3000 px again: the hint in force
+    /// when that configure is sent must bound it (3000 x 2 would be 6000 px), and stays bounded
+    /// until X redraws at another size.
+    #[test]
+    fn the_size_offered_at_fullscreen_exit_fits_the_device_limit() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        let (a, b) = two_scales(&mut c, &mut t);
+        c.set_renderer_device_max(4096).unwrap();
+        let x = map_win(&mut c, 9, 3000, 200);
+        let fits = |c: &Core, side: u64| {
+            let (s120, b) = c.preferred_scale_of(x).unwrap();
+            side * u64::from(b) <= 4096 && side * u64::from(s120) <= 4096 * 120
+        };
+        assert!(fits(&c, 3000));
+        focus(&mut c, &mut i, x);
+        c.toplevel_request(x, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        c.toplevel_committed(x, win(9, 1920, 1080, true)).unwrap();
+        // a non-client stimulus (A's refresh changes) re-evaluates X at its fullscreen size
+        c.output_reconfigured(
+            &mut t,
+            a,
+            OutputDescriptor {
+                key: crate::output::tests::key("A"),
+                mode: (1920, 1080),
+                transform: Transform::Normal,
+                scale_120: 120,
+                refresh_mhz: 75_000,
+            },
+        )
+        .unwrap();
+        assert_eq!(c.preferred_scale_of(x), Some((240, 2)), "presented on B");
+        focus(&mut c, &mut i, x);
+        let (_, fx) = c
+            .toplevel_request(x, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        let configure = fx
+            .iter()
+            .position(|e| {
+                matches!(e, Effect::ToplevelConfigureSize { element, size }
+                    if *element == x && (size.w, size.h) == (3000, 200))
+            })
+            .expect("the saved size is offered");
+        assert!(fits(&c, 3000), "{:?}", c.preferred_scale_of(x));
+        let hint = fx
+            .iter()
+            .position(|e| matches!(e, Effect::PreferredScale { element, .. } if *element == x))
+            .expect("lowered in the unset's batch");
+        assert!(hint < configure, "{fx:?}");
+        // a commit at the fullscreen size (the client has not redrawn yet) keeps the bound
+        c.toplevel_committed(x, win(9, 1920, 1080, true)).unwrap();
+        assert!(fits(&c, 3000), "{:?}", c.preferred_scale_of(x));
+    }
+
     /// C12.F11 + C12.F12 (REHEARSAL) at the initial commit: a pre-map grant's initial hint is
     /// already bounded by the configured size, so the first buffer fits D_max. P (scale 3) sees the
     /// placed rect, so the prediction is 3; O, the granted output, is 3840 logical px wide:
@@ -4112,6 +4168,61 @@ mod tests {
         let fx = c.toplevel_committed(x, win(9, 3000, 200, true)).unwrap();
         let (s120, _) = hints(&fx, x).pop().expect("P7 lowers it");
         assert!(u64::from(s120) * 3000 <= 4096 * 120, "{s120}");
+    }
+
+    /// C12.F13: a camera action releases the hold of the elements it touches only. The pointer
+    /// is on A (scale 1, the first output); X is seen by D (scale 1) and B (scale 2), not by A
+    /// (A's camera was panned away first), and is held at 2 while W is presented on B. A drag of
+    /// A far from X keeps the hold through the drag and its settling release; a drag that
+    /// brings X into A's view touches it: the hold ends and X takes its requirement (1).
+    #[test]
+    fn a_camera_drag_releases_only_the_holds_it_touches() {
+        use crate::PhysicalEvent;
+        use crate::input::bindings::Modifiers;
+        let (mut c, mut i, _, mut t) = Core::new(cameras_at(&[("B", 0), ("D", 0)]));
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let b = out(&mut c, &mut t, "B", (1920, 1080), 240);
+        let d = out(&mut c, &mut t, "D", (1920, 1080), 120);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        let button = |pressed| PhysicalEvent::PointerButton {
+            button: 0x112,
+            pressed,
+            modifiers: Modifiers {
+                logo: true,
+                ..Modifiers::default()
+            },
+            time_us: 0,
+        };
+        let motion = |dx: f64| PhysicalEvent::PointerMotion {
+            delta: (dx, 0.0),
+            delta_unaccel: (dx, 0.0),
+            time_us: 0,
+        };
+        let drag = |c: &mut Core, i: &mut InputPort, steps: &[f64]| {
+            let mut fx = c.physical_input_vec(i, button(true)).unwrap();
+            for dx in steps {
+                fx.extend(c.physical_input_vec(i, motion(*dx)).unwrap());
+            }
+            fx.extend(c.physical_input_vec(i, button(false)).unwrap());
+            fx
+        };
+        assert_eq!(c.pointer_output(), Some(a));
+        drag(&mut c, &mut i, &[-2500.0]);
+        assert_eq!(c.membership().observers(x), vec![b, d], "A panned away");
+        assert_eq!(c.preferred_scale_of(x), Some((240, 2)));
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert!(c.scale_state(x).unwrap().presentation_hold, "held");
+        let fx = drag(&mut c, &mut i, &[-500.0, -500.0]);
+        assert!(hints(&fx, x).is_empty(), "a drag elsewhere: {fx:?}");
+        assert!(c.scale_state(x).unwrap().presentation_hold, "kept");
+        assert_eq!(c.preferred_scale_of(x), Some((240, 2)));
+        let fx = drag(&mut c, &mut i, &[1750.0, 1750.0]);
+        assert_eq!(c.membership().observers(x), vec![a, d], "A sees X again");
+        assert!(!c.scale_state(x).unwrap().presentation_hold, "released");
+        assert_eq!(hints(&fx, x), vec![(120, 1)], "{fx:?}");
     }
 
     /// The end of a presentation, however its client ends it (unset, unmap, destroy), reveals

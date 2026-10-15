@@ -336,6 +336,11 @@ impl ScaleState {
         self.epoch.kind = None;
         if let Some(req) = self.last_rho {
             let t = target(req, ladder, h_max, sigma);
+            // C12.F13: a held element is not lowered by a settlement that never touched it; the
+            // device bound (P7) still applies
+            if self.presentation_hold && t < self.h - 1e-12 && self.h <= h_max + 1e-12 {
+                return false;
+            }
             if (t - self.h).abs() > 1e-12 {
                 self.last_stimulus_direction = if t > self.h { 1 } else { -1 };
                 self.h = t;
@@ -530,6 +535,10 @@ pub(crate) struct Sweep {
     /// C12.F13 (REHEARSAL): a client's request, commit or destruction started or ended a
     /// presentation in this batch; every other element it touches may rise, never fall.
     pub(crate) presentation_change: bool,
+    /// The elements this batch's stimulus touched (the marks it made), ascending, kept while
+    /// the pass runs: a camera action releases the hold of these only (C12.F13). Cleared, not
+    /// freed.
+    touched: Vec<ElementId>,
 }
 
 impl Default for Sweep {
@@ -540,6 +549,7 @@ impl Default for Sweep {
             marked: Vec::new(),
             stimulated: Vec::new(),
             presentation_change: false,
+            touched: Vec::new(),
         }
     }
 }
@@ -568,6 +578,16 @@ impl Sweep {
         self.stimulated.binary_search(&element).is_ok()
     }
 
+    /// Remembers the marks of this batch (the elements its stimulus touched) for the pass.
+    pub(crate) fn remember_touched(&mut self, marked: &[ElementId]) {
+        self.touched.clear();
+        self.touched.extend_from_slice(marked);
+    }
+
+    pub(crate) fn is_touched(&self, element: ElementId) -> bool {
+        self.touched.binary_search(&element).is_ok()
+    }
+
     /// The marked elements, ascending; hand the list back with [`Sweep::evaluated`].
     pub(crate) fn take_marked(&mut self) -> Vec<ElementId> {
         std::mem::take(&mut self.marked)
@@ -585,6 +605,7 @@ impl Sweep {
         self.marked = visited;
         self.stimulated.clear();
         self.presentation_change = false;
+        self.touched.clear();
     }
 }
 
