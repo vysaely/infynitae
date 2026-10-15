@@ -150,6 +150,27 @@ pub enum FrameError {
     NoView,
 }
 
+/// `s_max(E)` (F-SCALE-2) as layer C12.F11 proposes it (REHEARSAL, NOT ADOPTED): the largest
+/// logical side of E's tree and of the protocol-fullscreen configure Core has sent E while it is
+/// granted (C5.2: the output's logical size, as `toplevel_configure_state` reports it).
+fn s_max_of(
+    stage: &stage::Stage,
+    fullscreen: &[protocol::FullscreenState],
+    outputs: &[output::OutputModel],
+    element: stage::ElementId,
+) -> u32 {
+    let tree = scale::s_max_for_tree(stage.tree(element));
+    let configured = fullscreen
+        .iter()
+        .find(|f| f.element == element)
+        .and_then(|f| outputs.iter().find(|o| o.id == f.output))
+        .map_or(0, |o| {
+            let (w, h) = o.logical_extent();
+            (w.floor().max(0.0) as u32).max(h.floor().max(0.0) as u32)
+        });
+    tree.max(configured)
+}
+
 /// The ProjectionFrame of one output and whether it is current: a change that makes it stale
 /// (a pan, a presentation, an output reconfiguration) keeps its storage, and the next render list
 /// rebuilds into it.
@@ -681,7 +702,7 @@ impl Core {
         self.scale_sweep.all = true;
         let mut fx = Vec::new();
         for (element, st) in &mut self.scales {
-            let s_max = scale::s_max_for_tree(self.stage.tree(*element));
+            let s_max = s_max_of(&self.stage, &self.fullscreen, &self.outputs, *element);
             let h_dev = scale::h_dev(s_max, d_max);
             let h_max = scale::h_max(self.scale_config.h_cfg, s_max, d_max);
             let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
@@ -708,7 +729,7 @@ impl Core {
     /// Preferred scale for an element: (scale_120, integer_buffer_scale).
     pub fn preferred_scale_of(&self, element: stage::ElementId) -> Option<(u32, u32)> {
         self.scales.get(element).map(|st| {
-            let s_max = scale::s_max_for_tree(self.stage.tree(element));
+            let s_max = s_max_of(&self.stage, &self.fullscreen, &self.outputs, element);
             let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
             (
                 scale::preferred_scale_120(st.h),
@@ -750,7 +771,7 @@ impl Core {
         let now_ms = self.session_time(now);
         let mut fx = Vec::new();
         for (element, st) in &mut self.scales {
-            let s_max = scale::s_max_for_tree(self.stage.tree(*element));
+            let s_max = s_max_of(&self.stage, &self.fullscreen, &self.outputs, *element);
             let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
             let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
             let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
@@ -797,7 +818,7 @@ impl Core {
         let mut fx = Vec::new();
         for (element, st) in &mut self.scales {
             if st.epoch.open && st.epoch.kind == Some(kind) {
-                let s_max = scale::s_max_for_tree(self.stage.tree(*element));
+                let s_max = s_max_of(&self.stage, &self.fullscreen, &self.outputs, *element);
                 let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
                 let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
                 let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
@@ -822,7 +843,7 @@ impl Core {
     pub fn settle_all_epochs(&mut self) -> Vec<protocol::Effect> {
         let mut fx = Vec::new();
         for (element, st) in &mut self.scales {
-            let s_max = scale::s_max_for_tree(self.stage.tree(*element));
+            let s_max = s_max_of(&self.stage, &self.fullscreen, &self.outputs, *element);
             let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
             let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
             let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
@@ -897,7 +918,7 @@ impl Core {
 
         for &element in &visit {
             let rho = self.compute_rho(element);
-            let s_max = scale::s_max_for_tree(self.stage.tree(element));
+            let s_max = s_max_of(&self.stage, &self.fullscreen, &self.outputs, element);
             let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
             let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
             let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);

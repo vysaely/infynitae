@@ -778,15 +778,44 @@ impl Core {
                 self.stage
                     .set_state(id, Lifecycle::AwaitingFirstBuffer)
                     .map_err(stale)?;
+                // M2 pre-configure: a recorded fullscreen request is decided here, in the initial
+                // configure (before the first map, INV-PRES-1); placement ran first (C5.2)
+                let grant = match self.premap_fullscreen.iter().position(|(e, _)| *e == id) {
+                    Some(i) => {
+                        let (_, requested) = self.premap_fullscreen.remove(i);
+                        self.fullscreen_output(id, requested)
+                    }
+                    None => None,
+                };
                 // M15 / F-SCALE-3: Initial scale prediction & emission before InitialConfigure
                 let views: Vec<_> = self
                     .outputs
                     .iter()
                     .filter_map(|o| self.view(o.id).map(|v| (o.id, v)))
                     .collect();
-                let rho_pred =
-                    crate::scale::predict_rho(anchor, tree.geometry, &self.outputs, &views);
-                let s_max = crate::scale::s_max_for_tree(Some(&tree));
+                let granted = grant.and_then(|o| self.outputs.iter().find(|m| m.id == o));
+                let rho_pred = match granted {
+                    // C12.F12 (REHEARSAL, NOT ADOPTED): the presentation the grant starts at the
+                    // first map (scale_O, zoom 1) and the other outputs' cameras that see the rect
+                    Some(o) => {
+                        let others: Vec<_> =
+                            views.iter().copied().filter(|(v, _)| *v != o.id).collect();
+                        crate::scale::predict_rho_observed(
+                            anchor,
+                            tree.geometry,
+                            &self.outputs,
+                            &others,
+                        )
+                        .map_or(o.scale, |r| r.max(o.scale))
+                    }
+                    None => crate::scale::predict_rho(anchor, tree.geometry, &self.outputs, &views),
+                };
+                // C12.F11 (REHEARSAL, NOT ADOPTED): the configured fullscreen size bounds it too
+                let configured = granted.map_or(0, |o| {
+                    let (w, h) = o.logical_extent();
+                    (w.floor().max(0.0) as u32).max(h.floor().max(0.0) as u32)
+                });
+                let s_max = crate::scale::s_max_for_tree(Some(&tree)).max(configured);
                 let h_dev = crate::scale::h_dev(s_max, self.scale_config.d_max);
                 let h_max =
                     crate::scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
@@ -802,8 +831,6 @@ impl Core {
                 st.last_rho = Some(rho_pred);
                 self.scales.set(id, st);
 
-                // M2 pre-configure: a recorded fullscreen request is granted in the initial
-                // configure (before the first map, INV-PRES-1); placement ran first (C5.2).
                 out.extend([
                     Effect::PreferredScale {
                         element: id,
@@ -812,11 +839,8 @@ impl Core {
                     },
                     Effect::InitialConfigure(id),
                 ]);
-                if let Some(i) = self.premap_fullscreen.iter().position(|(e, _)| *e == id) {
-                    let (_, requested) = self.premap_fullscreen.remove(i);
-                    if let Some(o) = self.fullscreen_output(id, requested) {
-                        out.extend(self.store_fullscreen(id, o, None));
-                    }
+                if let Some(o) = grant {
+                    out.extend(self.store_fullscreen(id, o, None));
                 }
             }
             (Lifecycle::Unmapped, false) => {
@@ -3579,11 +3603,10 @@ mod tests {
         assert_eq!(hints(&fx, w), vec![(240, 2)]);
     }
 
-    /// A grant made before the first map (C12.F6): the initial hint precedes the initial
-    /// configure and is predicted from the views at the initial commit (F-SCALE-3; the
-    /// presentation starts only at the map, INV-PRES-1). The map starts the presentation, a
-    /// non-client stimulus, and the hint follows B in that batch. B's camera is at zoom 0.5: the
-    /// presentation, not the camera, sets B's contribution.
+    /// A grant made before the first map (C12.F6), as C12.F12 proposes (REHEARSAL): the initial
+    /// hint, still before the initial configure (M15), is predicted from the presentation the
+    /// grant starts (B, scale 2, zoom 1) and the other outputs' cameras (A sees the rect: 1), not
+    /// from B's camera (zoom 0.5); the map then finds it right and sends no second hint.
     #[test]
     fn a_pre_map_grant_takes_the_presenting_outputs_scale_when_it_maps() {
         let (mut c, _i, _, mut t) = Core::new(camera_b(100_000, 0.5));
@@ -3599,18 +3622,102 @@ mod tests {
             [
                 Effect::PreferredScale {
                     element: w,
-                    scale_120: 120,
-                    integer_scale: 1
+                    scale_120: 240,
+                    integer_scale: 2
                 },
                 Effect::InitialConfigure(w)
             ],
-            "the initial hint, then the one initial configure: {fx:?}"
+            "the initial hint is B's, before the one initial configure: {fx:?}"
         );
         assert_eq!(c.toplevel_configure_state(w).fullscreen, Some(b));
         assert_eq!(c.presentation(b), None, "not presented before the map");
         let fx = c.toplevel_committed(w, win(1, 960, 540, true)).unwrap();
         assert_eq!(c.presentation(b), Some(w));
-        assert_eq!(hints(&fx, w), vec![(240, 2)], "{fx:?}");
+        assert!(hints(&fx, w).is_empty(), "already right: {fx:?}");
+        assert_eq!(c.preferred_scale_of(w), Some((240, 2)));
+    }
+
+    /// OB-13 on the integration, with C12.F11 (REHEARSAL): a grant's configure asks for the
+    /// output's size, and the hint that reaches the client before it (item 3) already fits that
+    /// size within D_max. W is seen by a scale-3 output P; D_max 8192; granted fullscreen on a
+    /// 3840-wide scale-1 output O. Without C12.F11: hint 3, a 11,520-px first buffer.
+    #[test]
+    fn a_grant_never_asks_for_a_buffer_over_the_device_limit() {
+        let persisted = PersistedCameras::from_entries(vec![(
+            crate::output::tests::key("O"),
+            crate::geom::CanvasPos {
+                x: 100_000 << 16,
+                y: 0,
+            },
+            1.0,
+        )])
+        .unwrap();
+        let (mut c, mut i, _, mut t) = Core::new(persisted);
+        out(&mut c, &mut t, "P", (1920, 1080), 360);
+        let o = out(&mut c, &mut t, "O", (3840, 2160), 120);
+        c.set_renderer_device_max(8192).unwrap();
+        let w = map_win(&mut c, 1, 400, 300);
+        assert_eq!(c.preferred_scale_of(w), Some((360, 3)));
+        focus(&mut c, &mut i, w);
+        let (_, fx) = c
+            .toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(o) })
+            .unwrap();
+        let size = c
+            .toplevel_configure_state(w)
+            .size
+            .expect("a fullscreen size");
+        let (s120, b) = c.preferred_scale_of(w).unwrap();
+        let side = size.w.max(size.h) as u64;
+        assert!(side * u64::from(b) <= 8192, "integer: {side} x {b}");
+        assert!(
+            side * u64::from(s120) <= 8192 * 120,
+            "fractional: {side} x {s120}/120"
+        );
+        let hint = fx
+            .iter()
+            .position(|e| matches!(e, Effect::PreferredScale { element, .. } if *element == w))
+            .expect("the hint is lowered in the grant's batch");
+        let configure = fx
+            .iter()
+            .position(|e| matches!(e, Effect::ToplevelConfigure(e) if *e == w))
+            .unwrap();
+        assert!(hint < configure, "{fx:?}");
+    }
+
+    /// C12.F11 + C12.F12 (REHEARSAL) at the initial commit: a pre-map grant's initial hint is
+    /// already bounded by the configured size, so the first buffer fits D_max. P (scale 3) sees the
+    /// placed rect, so the prediction is 3; O, the granted output, is 3840 logical px wide:
+    /// unbounded, the first buffer would be 11,520 px for D_max 8192.
+    #[test]
+    fn a_pre_map_grant_initial_hint_fits_the_device_limit() {
+        let persisted = PersistedCameras::from_entries(vec![(
+            crate::output::tests::key("O"),
+            crate::geom::CanvasPos {
+                x: 100_000 << 16,
+                y: 0,
+            },
+            1.0,
+        )])
+        .unwrap();
+        let (mut c, _i, _, mut t) = Core::new(persisted);
+        out(&mut c, &mut t, "P", (1920, 1080), 360);
+        let o = out(&mut c, &mut t, "O", (3840, 2160), 120);
+        c.set_renderer_device_max(8192).unwrap();
+        let w = c.toplevel_created();
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(o) })
+            .unwrap();
+        c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        let size = c
+            .toplevel_configure_state(w)
+            .size
+            .expect("a fullscreen size");
+        let (s120, b) = c.preferred_scale_of(w).unwrap();
+        let side = size.w.max(size.h) as u64;
+        assert!(side * u64::from(b) <= 8192, "integer: {side} x {b}");
+        assert!(
+            side * u64::from(s120) <= 8192 * 120,
+            "fractional: {side} x {s120}/120"
+        );
     }
 
     /// A presentation hides every other element on its output (OBJ-19): X, seen by A (scale 1)

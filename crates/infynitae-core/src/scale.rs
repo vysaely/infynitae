@@ -671,6 +671,22 @@ pub fn predict_rho(
     outputs: &[OutputModel],
     views: &[(crate::output::OutputId, View)],
 ) -> f64 {
+    predict_rho_observed(anchor, geometry, outputs, views).unwrap_or_else(|| {
+        // Fallback: max connected output scale (INV-SCALE-5).
+        outputs
+            .iter()
+            .map(|o| o.scale)
+            .fold(1.0f64, |acc, s| acc.max(s))
+    })
+}
+
+/// [`predict_rho`] without its fallback: `None` when no view intersects the placed rect.
+pub fn predict_rho_observed(
+    anchor: crate::geom::CanvasPoint,
+    geometry: LocalRect,
+    outputs: &[OutputModel],
+    views: &[(crate::output::OutputId, View)],
+) -> Option<f64> {
     let mut max_rho = 0.0f64;
     let mut intersected = false;
 
@@ -712,15 +728,7 @@ pub fn predict_rho(
         }
     }
 
-    if intersected {
-        max_rho
-    } else {
-        // Fallback: max connected output scale (INV-SCALE-5).
-        outputs
-            .iter()
-            .map(|o| o.scale)
-            .fold(1.0f64, |acc, s| acc.max(s))
-    }
+    intersected.then_some(max_rho)
 }
 
 #[cfg(test)]
