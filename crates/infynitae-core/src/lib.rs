@@ -524,19 +524,18 @@ impl Core {
     }
 
     /// The visibility pass of a batch that changed only `element` (its snapshot, lifecycle or
-    /// anchor): no other element's membership depends on it, and the scale policy is evaluated
-    /// for it alone.
-    pub(crate) fn visibility_pass_element(
+    /// anchor): no other element's membership depends on it. It marks the element for the batch's
+    /// one scale evaluation (INV-SCALE-5), which the caller runs after every other change of the
+    /// batch (a presentation that started or ended).
+    pub(crate) fn membership_pass_element(
         &mut self,
         element: stage::ElementId,
-        is_client_response: bool,
     ) -> Vec<protocol::Effect> {
         let views = self.views();
-        let mut fx = self
+        let fx = self
             .membership
             .replace_element(element, &self.stage, &views);
         self.scale_sweep.mark(element);
-        fx.extend(self.evaluate_scale_policy(is_client_response));
         fx
     }
 
@@ -766,7 +765,10 @@ impl Core {
     /// Calculates required scale ρ(E) over observing presentations (F-SCALE-1, INV-SCALE-1).
     pub fn compute_rho(&self, element: stage::ElementId) -> Option<f64> {
         let observers = self.membership.observing_outputs(element);
-        scale::compute_rho(observers, &self.outputs, &self.cameras, None)
+        // an output presenting an element observes through the F-PRESENT-1 view, at zoom 1
+        scale::compute_rho(observers, &self.outputs, &self.cameras, |o| {
+            self.presentation(o).is_some()
+        })
     }
 
     /// The batch-end evaluation of the scale policy: for every mapped element whose evaluation

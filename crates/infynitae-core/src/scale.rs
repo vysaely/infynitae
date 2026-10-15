@@ -632,19 +632,20 @@ pub fn preferred_buffer_scale(h: f64, h_dev: f64) -> u32 {
 
 /// F-SCALE-1: Requirement ρ(E) over observing presentations.
 /// Camera presentations use camera zoom; protocol-fullscreen presentation uses zoom 1 (INV-SCALE-1).
+/// `presenting(O)`: O shows a protocol-fullscreen presentation (OBJ-19), not its camera's view.
 /// `observers` may name an output more than once.
 pub fn compute_rho<'a>(
     observers: impl IntoIterator<Item = &'a crate::output::OutputId>,
     outputs: &[OutputModel],
     cameras: &crate::navigation::CameraSet,
-    fullscreen_output: Option<crate::output::OutputId>,
+    presenting: impl Fn(crate::output::OutputId) -> bool,
 ) -> Option<f64> {
     let mut max_rho = 0.0f64;
     let mut observed = false;
     for &o_id in observers {
         if let Some(model) = outputs.iter().find(|o| o.id == o_id) {
             observed = true;
-            let zoom = if fullscreen_output == Some(o_id) {
+            let zoom = if presenting(o_id) {
                 1.0
             } else {
                 cameras

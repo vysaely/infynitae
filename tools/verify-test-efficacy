@@ -466,7 +466,7 @@ CONTROLS = [
      "            .filter(|(_, _, o)| *o != output)", "            .filter(|(_, _, o)| *o == output || *o != output)",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("visibility: tree change recomputes no membership", f"{CORE}/protocol.rs",
-     "        let mut fx = self.visibility_pass_element(id, true);", "        let mut fx: Vec<Effect> = Vec::new();",
+     "        let mut fx = self.membership_pass_element(id);", "        let mut fx: Vec<Effect> = Vec::new();",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("visibility: element pass computes rows on the first output only", f"{CORE}/visibility.rs",
      "        if let Some((anchor, tree, bounds)) = stage.mapped(element) {\n            for (output, view) in views {",
@@ -476,10 +476,10 @@ CONTROLS = [
      "        if stage.state(element).is_some() {\n            for &(_, s, o) in old", "        if stage.state(element).is_none() {\n            for &(_, s, o) in old",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("visibility: destroyed element keeps its rows", f"{CORE}/protocol.rs",
-     "        let vis = self.visibility_pass_element(id, true);", "        let vis: Vec<Effect> = Vec::new();",
+     "        let mut vis = self.membership_pass_element(id);", "        let mut vis: Vec<Effect> = Vec::new();",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("visibility: root commit recomputes no membership", f"{CORE}/protocol.rs",
-     "        fx.extend(self.visibility_pass_element(id, true));", "        fx.extend(Vec::<Effect>::new());",
+     "        fx.extend(self.membership_pass_element(id));", "        fx.extend(Vec::<Effect>::new());",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("frame tick: observed elements clocked by another output complete on this one", f"{CORE}/lib.rs",
      "            .filter(|&e| self.clock_output_of(e) == Some(output))", "            .filter(|&e| self.clock_output_of(e).is_some_and(|o| o >= output))",
@@ -600,7 +600,7 @@ CONTROLS = [
      "            send_preferred_scale(surface, states, scale_120, integer_scale);\n        });\n    }\n",
      "infynitae-backend-headless", ["--test", "t1_scale"], "c2_popup_trees_follow_scale_changes"),
     ("INC-6 SC-E: the destruction of an element is evaluated as a non-client stimulus", f"{CORE}/protocol.rs",
-     "        let vis = self.visibility_pass_element(id, true);", "        let vis = self.visibility_pass_element(id, false);",
+     "        vis.extend(self.evaluate_scale_policy(ended.is_empty()));", "        vis.extend(self.evaluate_scale_policy(false));",
      "infynitae-core", ["--lib"], "destroying_an_element_is_not_a_scale_stimulus"),
     ("INC-6 C2: a joining subtree's own subsurfaces are not told", f"{WAYLAND}/convert.rs",
      "    smithay::desktop::utils::with_surfaces_surface_tree(root, |surface, states| {\n"
@@ -1076,6 +1076,29 @@ CONTROLS = [
      f"{WAYLAND}/session.rs",
      "            match kill_process(pid, Signal::TERM) {", "            match kill_process(pid, Signal::CONT) {",
      "infynitae-wayland", ["--lib"], "a_running_child_exits_on_sigterm_within_the_grace_period"),
+    # INC-6 x INC-7 (H-9): the fullscreen clause of INV-SCALE-1 and fullscreen enter/exit as a
+    # non-client stimulus (C14.4)
+    ("H-9: a presenting output contributes its camera's zoom, not zoom 1", f"{CORE}/lib.rs",
+     "            self.presentation(o).is_some()\n", "            false && self.presentation(o).is_some()\n",
+     "infynitae-core", ["--lib"], "a_presenting_output_contributes_its_scale_at_zoom_one"),
+    ("H-9: a fullscreen request evaluates no scale policy", f"{CORE}/protocol.rs",
+     "        // fullscreen enter/exit is a non-client stimulus (C14.4 SC-E)\n        fx.extend(self.evaluate_scale_policy(false));\n",
+     "        // fullscreen enter/exit is a non-client stimulus (C14.4 SC-E)\n",
+     "infynitae-core", ["--lib"], "fullscreen_enter_and_exit_move_the_hint_to_the_presenting_output"),
+    ("H-9: a root commit evaluates the scale policy before the presentation it starts", f"{CORE}/protocol.rs",
+     "        if touched.is_empty() {\n            fx.extend(self.reconcile_constraints());\n        } else {\n"
+     "            fx.extend(self.presentation_membership(&touched));\n        }\n"
+     "        fx.extend(self.evaluate_scale_policy(client_response));\n",
+     "        fx.extend(self.evaluate_scale_policy(client_response));\n"
+     "        if touched.is_empty() {\n            fx.extend(self.reconcile_constraints());\n        } else {\n"
+     "            fx.extend(self.presentation_membership(&touched));\n        }\n",
+     "infynitae-core", ["--lib"], "a_presentation_lowers_the_hint_of_the_elements_it_hides"),
+    ("H-9: a root commit that ends a presentation is evaluated as a client response", f"{CORE}/protocol.rs",
+     "        let client_response = touched.is_empty();", "        let client_response = true;",
+     "infynitae-core", ["--lib"], "the_end_of_a_presentation_restores_the_hint_of_the_elements_it_hid"),
+    ("H-9: the destruction of a presented element is evaluated as a client response", f"{CORE}/protocol.rs",
+     "        vis.extend(self.evaluate_scale_policy(ended.is_empty()));", "        vis.extend(self.evaluate_scale_policy(true));",
+     "infynitae-core", ["--lib"], "the_end_of_a_presentation_restores_the_hint_of_the_elements_it_hid"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.
