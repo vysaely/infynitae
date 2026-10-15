@@ -3711,6 +3711,46 @@ mod tests {
         }
     }
 
+    /// A commit of a presented element that starts or ends no presentation is a client response
+    /// (SC-E): it must not release the hint SC-E holds for another element. X's hint was lowered
+    /// by a non-client stimulus (A's scale falls to 1) and then held at 1 although X grew onto B
+    /// (rho 2); W, presented on C, commits. Found by the independent review: evaluated as a
+    /// non-client stimulus, every frame of a fullscreen client would release every such hold.
+    #[test]
+    fn a_commit_of_the_presented_element_releases_no_held_hint() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(1500, 1.0));
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 132);
+        let b = out(&mut c, &mut t, "B", (1920, 1080), 240);
+        let o = out(&mut c, &mut t, "C", (1920, 1080), 120);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(o) })
+            .unwrap();
+        assert_eq!(c.presentation(o), Some(w));
+        let x = map_win(&mut c, 9, 400, 300);
+        c.output_reconfigured(
+            &mut t,
+            a,
+            OutputDescriptor {
+                key: crate::output::tests::key("A"),
+                mode: (1920, 1080),
+                transform: Transform::Normal,
+                scale_120: 120,
+                refresh_mhz: 60_000,
+            },
+        )
+        .unwrap();
+        c.toplevel_committed(x, win(9, 2000, 300, true)).unwrap();
+        assert!(c.membership().observers(x).contains(&b));
+        assert_eq!(c.compute_rho(x), Some(2.0));
+        assert_eq!(c.preferred_scale_of(x), Some((120, 1)), "held by SC-E");
+        for _ in 0..2 {
+            let fx = c.toplevel_committed(w, win(1, 1920, 1080, true)).unwrap();
+            assert!(hints(&fx, x).is_empty(), "{fx:?}");
+        }
+        assert_eq!(c.preferred_scale_of(x), Some((120, 1)));
+    }
+
     /// Output changes: B's scale changes while it presents W (the hint follows, at zoom 1), and
     /// B's removal ends the presentation (the hint returns to A's scale).
     #[test]

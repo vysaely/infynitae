@@ -30,8 +30,10 @@ and exit; zoom-1 contribution at camera zoom 0.5; pre-map grant (hint before the
 configure; B's scale at map); elements hidden by a presentation; restored at unset, unmap and
 destroy; output reconfigure and removal; unmap and remap; a presentation change during a camera
 drag equals the full reference; one evaluation per presentation batch; tree-change and root-commit
-growth are client responses under SC-E. Five of the first tests fail on `2753b35`. Nine seeded
-controls, all DETECTED.
+growth are client responses under SC-E; a presented element's commit releases no other element's
+held hint. Five of the first tests fail on `2753b35` (run there by the implementer). Seeded
+controls, all DETECTED: the seven named "H-9: …" in `tools/verify-test-efficacy`, and "SC-E: a
+child surface's commit …" and "SC-E: a commit of a presented element …".
 
 ## H-8 — OB-28 test efficacy
 
@@ -93,11 +95,13 @@ that first frame. Remedy needs a reading of F-SCALE-2 (include a Core-configured
 
 | Finding | Disposition |
 |---|---|
-| Two efficacy controls lost their anchors after the H-9 change (gate BROKEN) | fixed: re-anchored; all control anchors unique |
+| (round 1) Two efficacy controls lost their anchors after the H-9 change (gate BROKEN) | fixed: re-anchored; all control anchors unique |
 | Fullscreen enter/exit as non-client stimulus lets an unfocused client churn other clients' hints (probe: 40 changes in 20 create–grant–map–destroy cycles) | **open, owner decision**: C14.4 lists fullscreen enter/exit as non-client, but every such change is client-caused; C14.4's convergence argument does not hold for it |
 | Presentation change during a drag not evaluated for affected elements | fixed (marks); test + control |
-| Mutations survived: tree change as non-client; double evaluation | fixed: tests + controls (DETECTED). The presented-commit classification mutation remains undetected: while W is presented, B always observes it, so its own commit cannot reverse ρ — no reachable difference found |
+| Mutations survived: tree change as non-client; double evaluation; a presented element's commit as non-client | fixed: tests + controls (DETECTED). The third was first recorded here as unreachable; the re-review showed it releases the SC-E hold of *other* elements (a fullscreen client committing every frame would release every hold), so it got a test and a control too |
 | Hint emitted after the configure on fullscreen enter/exit | open, owner decision (M15 orders only the initial hint) |
 | Pre-map grant: two hints (canvas prediction, then B at map) | open, owner decision (F-SCALE-3 as written) |
 | OB-42 "any path" wording; presented commit unmeasured; U-002 text | fixed: "measured paths"; PresentedCommit path (24); U-002 text |
 | H-8/H-9 rows not updated | this record |
+
+Re-review of `ce5029c` (same agent): the fixes for its round-1 findings 1, 3, 4 and 7 verified; it refuted this record's claim that the presented-commit mutation was unreachable (corrected above) and the control count (corrected above).

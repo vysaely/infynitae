@@ -1125,6 +1125,10 @@ CONTROLS = [
      "            _ => fx.extend(self.reconcile_constraints()),\n        }\n        fx.extend(self.evaluate_scale_policy(true));",
      "            _ => fx.extend(self.reconcile_constraints()),\n        }\n        fx.extend(self.evaluate_scale_policy(false));",
      "infynitae-core", ["--lib"], "client_responses_do_not_reverse_a_lowered_hint"),
+    ("SC-E: a commit of a presented element is evaluated as a non-client stimulus", f"{CORE}/protocol.rs",
+     "        let client_response = touched.is_empty();",
+     "        let client_response = touched.is_empty() && self.fullscreen_of(id).is_none();",
+     "infynitae-core", ["--lib"], "a_commit_of_the_presented_element_releases_no_held_hint"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.
