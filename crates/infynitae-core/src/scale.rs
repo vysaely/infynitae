@@ -156,6 +156,10 @@ pub struct ScaleState {
     pub last_stimulus_direction: i8,
     /// Active interaction epoch state.
     pub epoch: ScaleInteractionEpoch,
+    /// C12.F13 (REHEARSAL, NOT ADOPTED): another client's presentation lowered this element's
+    /// requirement and its hint was held; client-response evaluations do not lower it until a
+    /// non-client stimulus (not another client's presentation) evaluates it.
+    pub presentation_hold: bool,
 }
 
 impl ScaleState {
@@ -167,6 +171,7 @@ impl ScaleState {
             last_emitted_buffer_scale: None,
             last_stimulus_direction: 0,
             epoch: ScaleInteractionEpoch::default(),
+            presentation_hold: false,
         }
     }
 
@@ -202,6 +207,14 @@ impl ScaleState {
             self.epoch.kind = Some(kind);
             self.epoch.direction = 0;
         }
+    }
+
+    /// Closes an open epoch without evaluating; the evaluation that follows settles it (M9
+    /// "settlement" of a fullscreen subject, C12.F13 REHEARSAL).
+    pub(crate) fn end_epoch(&mut self) {
+        self.epoch.open = false;
+        self.epoch.deadline = None;
+        self.epoch.kind = None;
     }
 
     /// A step of a continuous interaction (M7 `Closed → Open{continuous}`): opens the epoch if
@@ -511,6 +524,12 @@ pub(crate) struct Sweep {
     /// The elements marked for the next evaluation, ascending; between passes also the buffer
     /// a pass lists the elements it visits in (cleared, not freed).
     marked: Vec<ElementId>,
+    /// C12.F13 (REHEARSAL): the elements whose own presentation started or ended in this batch
+    /// (the subjects of a client's fullscreen enter/exit). Ascending; cleared, not freed.
+    stimulated: Vec<ElementId>,
+    /// C12.F13 (REHEARSAL): a client's request, commit or destruction started or ended a
+    /// presentation in this batch; every other element it touches may rise, never fall.
+    pub(crate) presentation_change: bool,
 }
 
 impl Default for Sweep {
@@ -519,6 +538,8 @@ impl Default for Sweep {
             all: true,
             closed: true,
             marked: Vec::new(),
+            stimulated: Vec::new(),
+            presentation_change: false,
         }
     }
 }
@@ -533,6 +554,18 @@ impl Sweep {
         if let Err(i) = self.marked.binary_search(&element) {
             self.marked.insert(i, element);
         }
+    }
+
+    /// C12.F13 (REHEARSAL): `element`'s own presentation started or ended in this batch.
+    pub(crate) fn stimulate(&mut self, element: ElementId) {
+        self.mark(element);
+        if let Err(i) = self.stimulated.binary_search(&element) {
+            self.stimulated.insert(i, element);
+        }
+    }
+
+    pub(crate) fn is_stimulated(&self, element: ElementId) -> bool {
+        self.stimulated.binary_search(&element).is_ok()
     }
 
     /// The marked elements, ascending; hand the list back with [`Sweep::evaluated`].
@@ -550,6 +583,8 @@ impl Sweep {
         }
         visited.clear();
         self.marked = visited;
+        self.stimulated.clear();
+        self.presentation_change = false;
     }
 }
 

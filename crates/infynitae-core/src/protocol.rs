@@ -357,6 +357,21 @@ impl Core {
             .or_else(|| self.outputs.first().map(|o| o.id))
     }
 
+    /// C12.F13 (REHEARSAL, NOT ADOPTED): the elements whose own presentation started or ended
+    /// since `before` are the subjects of a client's fullscreen enter/exit; every other element
+    /// the change touches may rise but not fall (`Sweep::presentation_change`).
+    fn presentation_stimulus(&mut self, before: &[(OutputId, Option<ElementId>)]) {
+        for &(o, p) in before {
+            let now = self.presentation(o);
+            if now != p {
+                for e in [p, now].into_iter().flatten() {
+                    self.scale_sweep.stimulate(e);
+                }
+                self.scale_sweep.presentation_change = true;
+            }
+        }
+    }
+
     /// The effects of an output's presentation having started, ended or changed shape, without
     /// the scale evaluation, which the caller runs once, after this (INV-SCALE-5): its
     /// ProjectionFrame is made stale, its membership recomputed (other elements leave or return)
@@ -455,10 +470,11 @@ impl Core {
         if changed.is_empty() {
             self.reconcile_constraints()
         } else {
+            self.presentation_stimulus(before);
             let mut fx = Vec::new();
             self.presentation_membership(&changed, &mut fx);
-            // fullscreen enter/exit is a non-client stimulus (C14.4 SC-E)
-            fx.extend(self.evaluate_scale_policy(false));
+            // C12.F13 (REHEARSAL): subjects and touched elements are classified per element
+            fx.extend(self.evaluate_scale_policy(true));
             fx
         }
     }
@@ -919,7 +935,11 @@ impl Core {
         // a presentation that started or ended is a non-client stimulus (C14.4 SC-E); a commit
         // alone is a client response
         let presentation_moved = !touched.is_empty();
-        let client_response = !presentation_moved;
+        if presentation_moved {
+            // C12.F13 (REHEARSAL): classified per element
+            self.presentation_stimulus(&before);
+        }
+        let client_response = true;
         if let Some(fs) = self.fullscreen_of(id)
             && self.presentation(fs.output) == Some(id)
             && !touched.contains(&fs.output)
@@ -997,6 +1017,8 @@ impl Core {
             .map(|(o, _)| *o)
             .collect();
         if !ended.is_empty() {
+            // C12.F13 (REHEARSAL): the elements it revealed may rise, not fall
+            self.presentation_stimulus(&before);
             self.presentation_membership(&ended, &mut fx);
         }
         // Evaluated as client-caused: the destruction of an element is not one of the
@@ -1004,7 +1026,7 @@ impl Core {
         // is holding (INV-SCALE-4 d). The end of a presentation it held is one (fullscreen exit).
         let mut vis = Vec::new();
         self.membership_pass_element(id, &mut vis);
-        vis.extend(self.evaluate_scale_policy(ended.is_empty()));
+        vis.extend(self.evaluate_scale_policy(true));
         // The pass also evaluates the scale policy of the surviving elements (INV-SCALE-5), so
         // it may return a hint that a client-caused evaluation is allowed to move. The destroyed
         // element itself has no row left to diff.
@@ -3720,11 +3742,12 @@ mod tests {
         );
     }
 
-    /// A presentation hides every other element on its output (OBJ-19): X, seen by A (scale 1)
-    /// and B (scale 2), loses B in the batch that starts W's presentation there, whether the grant
-    /// is made to a mapped W or before W's first map, and its hint drops to A's in that batch.
+    /// A presentation hides every other element on its output (OBJ-19). X, seen by A (scale 1)
+    /// and B (scale 2), loses B when W's presentation starts there, whether the grant is made to
+    /// a mapped W or before W's first map. The change comes from W's client: X's hint holds (it
+    /// is not lowered by another client's presentation), while W, the subject, takes B's scale.
     #[test]
-    fn a_presentation_lowers_the_hint_of_the_elements_it_hides() {
+    fn a_clients_presentation_holds_the_hints_of_the_elements_it_hides() {
         for premap in [false, true] {
             let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
             let (a, b) = two_scales(&mut c, &mut t);
@@ -3746,15 +3769,186 @@ mod tests {
             };
             assert_eq!(c.presentation(b), Some(w), "premap {premap}");
             assert_eq!(c.membership().observers(x), vec![a], "premap {premap}");
-            assert_eq!(hints(&fx, x), vec![(120, 1)], "premap {premap}: {fx:?}");
+            assert_eq!(c.compute_rho(x), Some(1.0));
+            assert!(hints(&fx, x).is_empty(), "premap {premap}: {fx:?}");
+            assert_eq!(c.preferred_scale_of(x), Some((240, 2)), "held");
+            assert_eq!(c.preferred_scale_of(w), Some((240, 2)), "premap {premap}");
         }
     }
 
-    /// The end of a presentation is a non-client stimulus (C14.4 fullscreen exit) however it ends:
-    /// X, hidden on B while W is presented there, is seen by B again and its hint rises back in
-    /// that batch (a client-caused evaluation could not reverse the earlier decrease, SC-E).
+    /// A presentation the system ends (its output removed) is a non-client change for everyone
+    /// (a full pass, INV-OUTPUT-1): unlike a client's, it may lower an unrelated element's hint.
     #[test]
-    fn the_end_of_a_presentation_restores_the_hint_of_the_elements_it_hid() {
+    fn a_presentation_the_system_ends_moves_unrelated_hints() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        let (a, b) = two_scales(&mut c, &mut t);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert_eq!(c.preferred_scale_of(x), Some((240, 2)), "held while hidden");
+        let fx = c.output_disconnected(&mut t, b).unwrap();
+        assert_eq!(c.membership().observers(x), vec![a]);
+        assert_eq!(hints(&fx, x), vec![(120, 1)], "{fx:?}");
+    }
+
+    /// M9 "settlement": W's fullscreen exit during a camera drag settles W's epoch at once, so
+    /// the decrease a drag suppresses happens in that batch; X, another client's window, keeps
+    /// its epoch and its hint.
+    #[test]
+    fn a_subjects_fullscreen_exit_during_a_drag_settles_its_epoch() {
+        use crate::PhysicalEvent;
+        use crate::input::bindings::Modifiers;
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(100_000, 1.0));
+        let (_a, b) = two_scales(&mut c, &mut t);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert_eq!(c.preferred_scale_of(w), Some((240, 2)));
+        let button = |pressed| PhysicalEvent::PointerButton {
+            button: 0x112,
+            pressed,
+            modifiers: Modifiers {
+                logo: true,
+                ..Modifiers::default()
+            },
+            time_us: 0,
+        };
+        c.physical_input_vec(&mut i, button(true)).unwrap();
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::PointerMotion {
+                delta: (-3.0, 0.0),
+                delta_unaccel: (-3.0, 0.0),
+                time_us: 0,
+            },
+        )
+        .unwrap();
+        assert!(
+            c.scale_state(w).unwrap().epoch.open,
+            "the drag opened W's epoch"
+        );
+        assert!(c.scale_state(x).unwrap().epoch.open);
+        let (_, fx) = c
+            .toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        assert_eq!(hints(&fx, w), vec![(120, 1)], "settled now: {fx:?}");
+        assert!(!c.scale_state(w).unwrap().epoch.open);
+        assert!(c.scale_state(x).unwrap().epoch.open, "X's epoch is not W's");
+        assert!(hints(&fx, x).is_empty());
+        c.physical_input_vec(&mut i, button(false)).unwrap();
+    }
+
+    /// C12.F13 (REHEARSAL). Cross-client churn (independent review, 2026-10-15): a client that never holds focus
+    /// cycles create, pre-map grant, map and destroy; another client focused toggles fullscreen.
+    /// X, seen by A and B, never changes its hint; the presenting clients' own windows may.
+    #[test]
+    fn a_client_cycling_fullscreen_does_not_churn_another_clients_hint() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        let (_a, b) = two_scales(&mut c, &mut t);
+        let x = map_win(&mut c, 9, 300, 200);
+        let held = c.preferred_scale_of(x);
+        let mut changes = 0;
+        for k in 0..20u64 {
+            let w = c.toplevel_created();
+            c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+                .unwrap();
+            c.toplevel_committed(w, win(100 + k, 0, 0, false)).unwrap();
+            let fx = c
+                .toplevel_committed(w, win(100 + k, 960, 540, true))
+                .unwrap();
+            assert_eq!(c.presentation(b), Some(w));
+            changes += hints(&fx, x).len();
+            changes += hints(&c.toplevel_destroyed(w), x).len();
+        }
+        let v = map_win(&mut c, 50, 400, 300);
+        for _ in 0..20 {
+            focus(&mut c, &mut i, v);
+            let (_, fx) = c
+                .toplevel_request(v, ToplevelRequest::SetFullscreen { output: Some(b) })
+                .unwrap();
+            changes += hints(&fx, x).len();
+            let (_, fx) = c
+                .toplevel_request(v, ToplevelRequest::UnsetFullscreen)
+                .unwrap();
+            changes += hints(&fx, x).len();
+        }
+        assert_eq!(changes, 0);
+        assert_eq!(c.preferred_scale_of(x), held);
+    }
+
+    /// C12.F13 (REHEARSAL), review probe A: X, seen by A (scale 1) and B (scale 2), commits
+    /// between another client's fullscreen toggles on B. Hidden, X is held; its own commits do
+    /// not lower it (the hold lasts until a non-client stimulus): no change at all.
+    #[test]
+    fn a_held_window_committing_between_toggles_keeps_its_hint() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        let (_a, b) = two_scales(&mut c, &mut t);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        let mut changes = 0;
+        for _ in 0..5 {
+            focus(&mut c, &mut i, w);
+            let (_, fx) = c
+                .toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+                .unwrap();
+            changes += hints(&fx, x).len();
+            changes += hints(&c.toplevel_committed(x, win(9, 300, 200, true)).unwrap(), x).len();
+            let (_, fx) = c
+                .toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+                .unwrap();
+            changes += hints(&fx, x).len();
+            changes += hints(&c.toplevel_committed(x, win(9, 300, 200, true)).unwrap(), x).len();
+        }
+        assert_eq!(changes, 0);
+        assert_eq!(c.preferred_scale_of(x), Some((240, 2)));
+    }
+
+    /// C12.F13 (REHEARSAL), review probe C: X never commits; W1 toggles fullscreen on B while a
+    /// second client cycles create / pre-map grant on C / map / destroy. No change of X's hint.
+    #[test]
+    fn a_passive_window_under_two_presentations_keeps_its_hint() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        let (_a, b) = two_scales(&mut c, &mut t);
+        let o3 = out(&mut c, &mut t, "C", (1920, 1080), 180);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w1 = map_win(&mut c, 1, 400, 300);
+        let mut changes = 0;
+        for k in 0..5u64 {
+            focus(&mut c, &mut i, w1);
+            let (_, fx) = c
+                .toplevel_request(w1, ToplevelRequest::SetFullscreen { output: Some(b) })
+                .unwrap();
+            changes += hints(&fx, x).len();
+            let v = c.toplevel_created();
+            c.toplevel_request(v, ToplevelRequest::SetFullscreen { output: Some(o3) })
+                .unwrap();
+            c.toplevel_committed(v, win(100 + k, 0, 0, false)).unwrap();
+            changes += hints(
+                &c.toplevel_committed(v, win(100 + k, 960, 540, true))
+                    .unwrap(),
+                x,
+            )
+            .len();
+            changes += hints(&c.toplevel_destroyed(v), x).len();
+            focus(&mut c, &mut i, w1);
+            let (_, fx) = c
+                .toplevel_request(w1, ToplevelRequest::UnsetFullscreen)
+                .unwrap();
+            changes += hints(&fx, x).len();
+        }
+        assert_eq!(changes, 0);
+    }
+
+    /// C12.F13 (REHEARSAL), review probe B: X is held at B's scale while W is presented on B; a
+    /// system change (A reconfigured) is a non-client stimulus and lowers X; when W's client ends
+    /// the presentation (unset, unmap, destroy), X is revealed on B and is raised again (a rise
+    /// is never refused).
+    #[test]
+    fn a_revealed_window_is_raised_after_a_system_change_lowered_it() {
         for end in ["unset", "unmap", "destroy"] {
             let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
             let (a, b) = two_scales(&mut c, &mut t);
@@ -3763,7 +3957,24 @@ mod tests {
             focus(&mut c, &mut i, w);
             c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
                 .unwrap();
-            assert_eq!(c.preferred_scale_of(x), Some((120, 1)), "{end}");
+            assert_eq!(c.preferred_scale_of(x), Some((240, 2)), "{end}: held");
+            c.output_reconfigured(
+                &mut t,
+                a,
+                OutputDescriptor {
+                    key: crate::output::tests::key("A"),
+                    mode: (1920, 1080),
+                    transform: Transform::Normal,
+                    scale_120: 120,
+                    refresh_mhz: 75_000,
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                c.preferred_scale_of(x),
+                Some((120, 1)),
+                "{end}: lowered by the system"
+            );
             let fx = match end {
                 "unset" => {
                     c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
@@ -3773,10 +3984,31 @@ mod tests {
                 "unmap" => c.toplevel_committed(w, win(1, 400, 300, false)).unwrap(),
                 _ => c.toplevel_destroyed(w),
             };
-            assert_eq!(c.presentation(b), None, "{end}");
-            assert_eq!(c.membership().observers(x), vec![a, b], "{end}");
-            assert_eq!(hints(&fx, x), vec![(240, 2)], "{end}: {fx:?}");
+            assert_eq!(
+                hints(&fx, x),
+                vec![(240, 2)],
+                "{end}: revealed on B: {fx:?}"
+            );
         }
+    }
+
+    /// C12.F13 (REHEARSAL): P7 lowers a held window (the device bound is a correctness rule).
+    #[test]
+    fn p7_lowers_a_held_window() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        let (_a, b) = two_scales(&mut c, &mut t);
+        c.set_renderer_device_max(4096).unwrap();
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert_eq!(c.preferred_scale_of(x), Some((240, 2)), "held");
+        assert!(c.scale_state(x).unwrap().presentation_hold);
+        // X grows to 3000 px: 3000 x 2 > 4096
+        let fx = c.toplevel_committed(x, win(9, 3000, 200, true)).unwrap();
+        let (s120, _) = hints(&fx, x).pop().expect("P7 lowers it");
+        assert!(u64::from(s120) * 3000 <= 4096 * 120, "{s120}");
     }
 
     /// The end of a presentation, however its client ends it (unset, unmap, destroy), reveals

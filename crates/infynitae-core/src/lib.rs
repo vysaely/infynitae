@@ -923,18 +923,51 @@ impl Core {
             let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
             let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
 
+            // C12.F13 (REHEARSAL, NOT ADOPTED): the subject of a client's fullscreen enter/exit,
+            // and the elements that presentation change touches
+            let subject = self.scale_sweep.is_stimulated(element);
+            let by_presentation = self.scale_sweep.presentation_change && !subject;
+            let sigma = self.scale_config.sigma;
             let scale_state = self
                 .scales
                 .get_or_insert_with(element, || scale::ScaleState::new(rho.unwrap_or(1.0)));
-            // An epoch that is already open is left as it is: an evaluation is not a step, and
-            // re-arming it here would move a discrete epoch's deadline at every client commit.
-            if !scale_state.epoch.open
+            if subject {
+                // its own fullscreen enter/exit settles its epoch (M9)
+                scale_state.end_epoch();
+            } else if !scale_state.epoch.open
                 && let Some(kind) = continuous_kind
             {
+                // An epoch that is already open is left as it is: an evaluation is not a step,
+                // and re-arming it here would move a discrete epoch's deadline at every client
+                // commit.
                 scale_state.continuous_step(kind);
             }
-            let changed =
-                scale_state.evaluate(rho, ladder, h_max, &self.scale_config, is_client_response);
+            // a decrease other than P7 (P7 always applies)
+            let lowers = scale_state.h <= h_max + 1e-12
+                && rho.is_some_and(|r| {
+                    scale::target(r, ladder, h_max, sigma) < scale_state.h - 1e-12
+                });
+            let changed = if subject {
+                scale_state.presentation_hold = false;
+                scale_state.evaluate(rho, ladder, h_max, &self.scale_config, false)
+            } else if by_presentation && lowers {
+                // another client's presentation never lowers this element: held
+                scale_state.presentation_hold = true;
+                scale_state.last_rho = rho;
+                false
+            } else if by_presentation {
+                // ... but may raise it (a revealed window is never left low)
+                scale_state.evaluate(rho, ladder, h_max, &self.scale_config, false)
+            } else if !is_client_response {
+                // a non-client stimulus that is not another client's presentation releases it
+                scale_state.presentation_hold = false;
+                scale_state.evaluate(rho, ladder, h_max, &self.scale_config, false)
+            } else if scale_state.presentation_hold && lowers {
+                scale_state.last_rho = rho;
+                false
+            } else {
+                scale_state.evaluate(rho, ladder, h_max, &self.scale_config, true)
+            };
 
             let s120 = scale::preferred_scale_120(scale_state.h);
             let b = scale::preferred_buffer_scale(scale_state.h, h_dev);
