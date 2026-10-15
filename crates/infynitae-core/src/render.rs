@@ -10,7 +10,7 @@ use crate::geom::{
 };
 use crate::projection::View;
 use crate::snapshot::{InputRegion, SurfaceKey, SurfaceTree};
-use crate::stage::{CanvasBox, ElementId, Stage};
+use crate::stage::{CanvasBox, ElementId, Placed, Stage};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FrameEntry {
@@ -75,6 +75,36 @@ pub fn entries_for(
     out
 }
 
+/// The production projection of one element under `view`, shared by the render list and
+/// membership: for each shown surface (snapshot order) whose physical rect intersects the view,
+/// `f(surface index, Canvas origin, rect)`. Behind the bounding-box cull ([`View::may_show`]),
+/// from the element's stored layout, without allocating (INV-ALLOC-1). [`entries_for`], which
+/// recomputes origins and shown flags from the tree, is its reference.
+pub(crate) fn visit_entries(
+    view: &View,
+    p: &Placed<'_>,
+    mut f: impl FnMut(usize, CanvasPoint, PhysicalRect),
+) {
+    // a presentation view shows one element's tree and nothing else (OBJ-19)
+    if view.only.is_some_and(|w| w != p.id) || !p.layout.is_valid() {
+        return;
+    }
+    match p.bounds {
+        Some((x0, y0, x1, y1)) if view.may_show(x0, y0, x1, y1) => {}
+        _ => return,
+    }
+    for (i, s) in p.tree.surfaces.iter().enumerate() {
+        if !p.layout.shown(i) {
+            continue;
+        }
+        let origin = p.layout.origin(i, p.anchor);
+        let rect = view.physical_rect(origin, s.size);
+        if view.intersects_view(&rect) {
+            f(i, origin, rect);
+        }
+    }
+}
+
 /// [`entries_for`] behind the element's bounding box: an element whose box cannot intersect the
 /// view ([`View::may_show`]) has no entries, and is skipped without projecting its surfaces.
 pub(crate) fn entries_culled(
@@ -102,11 +132,35 @@ pub struct ProjectionFrame {
 impl ProjectionFrame {
     /// Builds the render list of every mapped element of `stage` under `view`.
     pub fn build(view: View, stage: &Stage) -> ProjectionFrame {
-        let mut entries = Vec::new();
-        for (element, anchor, tree, bounds) in stage.front_to_back_boxed() {
-            entries.extend(entries_culled(&view, element, anchor, tree, bounds));
+        let mut frame = ProjectionFrame {
+            view,
+            entries: Vec::new(),
+        };
+        frame.rebuild(view, stage);
+        frame
+    }
+
+    /// [`ProjectionFrame::build`] into this frame's storage: the entries are cleared, not freed,
+    /// so a frame rebuilt every vblank allocates only when it holds more entries than ever before
+    /// (C14.3 "per-output buffers reused frame to frame").
+    pub(crate) fn rebuild(&mut self, view: View, stage: &Stage) {
+        self.view = view;
+        self.entries.clear();
+        let entries = &mut self.entries;
+        for p in stage.placed_front_to_back() {
+            visit_entries(&view, &p, |i, origin, rect| {
+                let s = &p.tree.surfaces[i];
+                entries.push(FrameEntry {
+                    element: p.id,
+                    surface: s.key,
+                    origin,
+                    size: s.size,
+                    rect,
+                    location: view.render_location(origin),
+                    input: s.input.clone(),
+                });
+            });
         }
-        ProjectionFrame { view, entries }
     }
 
     /// The render list without the bounding-box cull: every surface of every mapped element is
@@ -181,7 +235,7 @@ mod tests {
     /// geometry minus a hole (20,55) 20x30; S1 above, S1a nested above S1, S2 below at (−15,50);
     /// popup P (shadow 10) at (100,50) with PS. Front-to-back. Keys: W=1 S1=2 S1a=3 S2=4 P=5 PS=6.
     fn xhit_tree() -> SurfaceTree {
-        let w_region = InputRegion::Ops(vec![
+        let w_region = InputRegion::Ops(std::sync::Arc::from(vec![
             RegionOp {
                 add: true,
                 rect: rect(20, 20, 400, 300),
@@ -190,7 +244,7 @@ mod tests {
                 add: false,
                 rect: rect(20, 55, 20, 30),
             },
-        ]);
+        ]));
         SurfaceTree {
             geometry: rect(20, 20, 400, 300),
             surfaces: vec![
@@ -377,7 +431,7 @@ mod tests {
                 })
                 .collect();
             let want = reference(&ops, extent);
-            let region = InputRegion::Ops(ops);
+            let region = InputRegion::Ops(ops.into());
             let n = (extent * 2) as usize;
             for y in -extent..extent {
                 for x in -extent..extent {

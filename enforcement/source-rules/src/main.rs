@@ -32,11 +32,12 @@ const MINT_ENTRIES: [&str; 4] = [
 ];
 /// Names the Smithay adapter must never use (OB-19, C12.R2.2; `output_reconfigured` from
 /// INV-OUTPUT-2, which admits reconfiguration only through the token the adapter never holds).
-const WAYLAND_FORBIDDEN: [&str; 9] = [
+const WAYLAND_FORBIDDEN: [&str; 10] = [
     "InputPort",
     "ShellPort",
     "OutputLifecycleToken",
     "physical_input",
+    "physical_input_vec",
     "shell_command",
     "output_connected",
     "output_reconfigured",

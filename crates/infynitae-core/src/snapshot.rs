@@ -44,11 +44,13 @@ pub struct RegionOp {
     pub rect: LocalRect,
 }
 
-/// `wl_surface.set_input_region`: unset means the whole surface.
+/// `wl_surface.set_input_region`: unset means the whole surface. The operations are shared, not
+/// copied: every render list that shows the surface holds the same list (a clone is a reference
+/// count, so building a frame allocates nothing for it, INV-ALLOC-1).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputRegion {
     Infinite,
-    Ops(Vec<RegionOp>),
+    Ops(std::sync::Arc<[RegionOp]>),
 }
 
 impl InputRegion {
@@ -245,6 +247,145 @@ impl SurfaceTree {
     }
 }
 
+/// F-ORIGIN-1 and the shown flags of one surface tree, relative to its anchor, computed once per
+/// snapshot into storage that its owner reuses (the Stage keeps one per element): the render list,
+/// membership and the bounding box read it instead of recomputing them on every pass, and a new
+/// snapshot rewrites it in place, cleared, not freed (INV-ALLOC-1, C14.3). Equal by construction
+/// to [`SurfaceTree::origins`] and [`SurfaceTree::shown`], its reference implementations.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub(crate) struct TreeLayout {
+    /// The Canvas origin of each surface with the anchor at (0, 0), in snapshot order.
+    rel: Vec<CanvasPoint>,
+    /// Whether each surface is shown: it has a buffer, and so does every ancestor.
+    shown: Vec<bool>,
+    /// Scratch of the origin computation (which origins are resolved).
+    done: Vec<bool>,
+    /// The tree was valid; an invalid tree has an empty layout and no entries.
+    valid: bool,
+}
+
+impl TreeLayout {
+    /// Rewrites the layout for `tree` (`None`: no tree), reusing this layout's storage.
+    pub(crate) fn compute(&mut self, tree: Option<&SurfaceTree>) {
+        self.rel.clear();
+        self.shown.clear();
+        self.done.clear();
+        self.valid = false;
+        let Some(tree) = tree else {
+            return;
+        };
+        if tree.validate().is_err() {
+            return;
+        }
+        let n = tree.surfaces.len();
+        let root = CanvasPoint {
+            x: -(tree.geometry.loc.x as i64),
+            y: -(tree.geometry.loc.y as i64),
+        };
+        self.rel.resize(n, root);
+        self.done.resize(n, false);
+        // validate() guarantees every chain terminates, so this converges in at most n passes
+        while self.done.iter().any(|d| !d) {
+            for (i, s) in tree.surfaces.iter().enumerate() {
+                if self.done[i] {
+                    continue;
+                }
+                match s.role {
+                    SurfaceRole::Root => {
+                        self.rel[i] = root;
+                        self.done[i] = true;
+                    }
+                    SurfaceRole::Popup {
+                        position,
+                        geometry_loc,
+                    } => {
+                        self.rel[i] = CanvasPoint {
+                            x: root.x + tree.geometry.loc.x as i64 + position.x as i64
+                                - geometry_loc.x as i64,
+                            y: root.y + tree.geometry.loc.y as i64 + position.y as i64
+                                - geometry_loc.y as i64,
+                        };
+                        self.done[i] = true;
+                    }
+                    SurfaceRole::Subsurface { parent, offset } => {
+                        if self.done[parent] {
+                            let p = self.rel[parent];
+                            self.rel[i] = CanvasPoint {
+                                x: p.x + offset.x as i64,
+                                y: p.y + offset.y as i64,
+                            };
+                            self.done[i] = true;
+                        }
+                    }
+                }
+            }
+        }
+        for i in 0..n {
+            let mut cur = i;
+            let shown = loop {
+                let s = &tree.surfaces[cur];
+                if !s.mapped {
+                    break false;
+                }
+                match s.role {
+                    SurfaceRole::Subsurface { parent, .. } if parent < n => cur = parent,
+                    _ => break true,
+                }
+            };
+            self.shown.push(shown);
+        }
+        self.valid = true;
+    }
+
+    /// Whether the layout is of a valid tree (an invalid one projects nothing).
+    pub(crate) fn is_valid(&self) -> bool {
+        self.valid
+    }
+
+    /// Surface `i`'s Canvas origin for the element anchored at `anchor` (F-ORIGIN-1).
+    pub(crate) fn origin(&self, i: usize, anchor: CanvasPoint) -> CanvasPoint {
+        CanvasPoint {
+            x: anchor.x + self.rel[i].x,
+            y: anchor.y + self.rel[i].y,
+        }
+    }
+
+    pub(crate) fn shown(&self, i: usize) -> bool {
+        self.shown[i]
+    }
+
+    /// [`SurfaceTree::extent`] from the layout: the box, relative to the anchor, of every shown
+    /// surface of positive size.
+    pub(crate) fn extent(&self, tree: &SurfaceTree) -> Option<Extent> {
+        if !self.valid {
+            return None;
+        }
+        let mut out: Option<Extent> = None;
+        for (i, s) in tree.surfaces.iter().enumerate() {
+            if !self.shown[i] || s.size.w <= 0 || s.size.h <= 0 {
+                continue;
+            }
+            let o = self.rel[i];
+            let e = Extent {
+                x0: o.x,
+                y0: o.y,
+                x1: o.x + s.size.w as i64,
+                y1: o.y + s.size.h as i64,
+            };
+            out = Some(match out {
+                None => e,
+                Some(b) => Extent {
+                    x0: b.x0.min(e.x0),
+                    y0: b.y0.min(e.y0),
+                    x1: b.x1.max(e.x1),
+                    y1: b.y1.max(e.y1),
+                },
+            });
+        }
+        out
+    }
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -420,7 +561,7 @@ pub(crate) mod tests {
             loc: pt(x, y),
             size: LocalSize { w, h },
         };
-        let region = InputRegion::Ops(vec![
+        let region = InputRegion::Ops(std::sync::Arc::from(vec![
             RegionOp {
                 add: true,
                 rect: r(0, 0, 10, 10),
@@ -433,13 +574,16 @@ pub(crate) mod tests {
                 add: true,
                 rect: r(3, 3, 1, 1),
             },
-        ]);
+        ]));
         assert!(region.contains(0, 0));
         assert!(!region.contains(2, 2));
         assert!(region.contains(3, 3));
         assert!(!region.contains(5, 5));
         assert!(region.contains(6, 6));
         assert!(!region.contains(10, 0), "half-open");
-        assert!(!InputRegion::Ops(vec![]).contains(0, 0), "empty region");
+        assert!(
+            !InputRegion::Ops(std::sync::Arc::from(Vec::new())).contains(0, 0),
+            "empty region"
+        );
     }
 }

@@ -46,12 +46,19 @@ impl Core {
 
     /// C4.2 pointer intake. P0 validate; P1 ownership continuation (releases follow the press
     /// owner, motion follows the interaction); P2 binding resolution before any client dispatch;
-    /// P3/P4 routing through the ProjectionFrame hit test. Returns the effects in order.
+    /// P3/P4 routing through the ProjectionFrame hit test.
+    ///
+    /// The effects are appended, in order, to the caller's reusable
+    /// [`EffectBuf`](crate::protocol::EffectBuf) (C14.3: "C1's `Vec<Effect>` return type becomes a
+    /// caller-provided buffer"; pointer intake and routing, camera pan and keyboard intake write
+    /// into it, no `Vec` per event). On an error nothing is appended.
     pub fn physical_input(
         &mut self,
         port: &mut InputPort,
         ev: PhysicalEvent,
-    ) -> Result<Vec<Effect>, EntryError> {
+        buf: &mut crate::protocol::EffectBuf,
+    ) -> Result<(), EntryError> {
+        let out = &mut buf.fx;
         self.check(port.core_id)?;
         match ev {
             PhysicalEvent::PointerMotion {
@@ -69,20 +76,23 @@ impl Core {
                 // a motion owned by a pan mutates a camera: its proof is minted here, per event
                 let proof = matches!(self.input.interaction, Interaction::CameraPan { .. })
                     .then(authority::Authorized::mint);
-                Ok(self.pointer_motion(proof, delta, delta_unaccel, time_us))
+                self.pointer_motion(proof, delta, delta_unaccel, time_us, out);
+                Ok(())
             }
             PhysicalEvent::PointerButton {
                 button,
                 pressed,
                 modifiers,
                 time_us,
-            } => Ok(if pressed {
+            } => {
                 self.input.clock.accepted(time_us);
-                self.button_press(button, modifiers, ms(time_us))
-            } else {
-                self.input.clock.accepted(time_us);
-                self.button_release(button, ms(time_us))
-            }),
+                out.extend(if pressed {
+                    self.button_press(button, modifiers, ms(time_us))
+                } else {
+                    self.button_release(button, ms(time_us))
+                });
+                Ok(())
+            }
             PhysicalEvent::PointerAxis { axis, time_us } => {
                 let finite = [axis.amount.0, axis.amount.1].iter().all(|v| v.is_finite());
                 if !finite {
@@ -91,15 +101,16 @@ impl Core {
                 self.input.clock.accepted(time_us);
                 // consumed during an interaction and in NoOutput (M10, M22)
                 if self.input.interaction.active() || self.pointer == PointerState::NoOutput {
-                    return Ok(Vec::new());
+                    return Ok(());
                 }
-                Ok(vec![
+                out.extend([
                     Effect::PointerAxis {
                         axis,
                         time_ms: ms(time_us),
                     },
                     Effect::PointerFrame,
-                ])
+                ]);
+                Ok(())
             }
             PhysicalEvent::KeyboardKey {
                 key,
@@ -107,14 +118,28 @@ impl Core {
                 modifiers,
                 mods_changed,
                 time_us,
-            } => Ok(if pressed {
+            } => {
                 self.input.clock.accepted(time_us);
-                self.keyboard_press(key, modifiers, mods_changed, time_us)
-            } else {
-                self.input.clock.accepted(time_us);
-                self.keyboard_release(key, mods_changed, time_us)
-            }),
+                if pressed {
+                    self.keyboard_press(key, modifiers, mods_changed, time_us, out);
+                } else {
+                    self.keyboard_release(key, mods_changed, time_us, out);
+                }
+                Ok(())
+            }
         }
+    }
+
+    /// [`Core::physical_input`] into a new `Vec`: for tests and one-off callers. It allocates;
+    /// the adapter uses [`Core::physical_input`] with its reusable buffer.
+    pub fn physical_input_vec(
+        &mut self,
+        port: &mut InputPort,
+        ev: PhysicalEvent,
+    ) -> Result<Vec<Effect>, EntryError> {
+        let mut out = crate::protocol::EffectBuf::new();
+        self.physical_input(port, ev, &mut out)?;
+        Ok(out.into_vec())
     }
 
     /// K1/K3 keyboard press intake in Core (INV-INPUT-1, OBJ-25).
@@ -124,14 +149,16 @@ impl Core {
         modifiers: crate::input::bindings::Modifiers,
         mods_changed: bool,
         time_us: u64,
-    ) -> Vec<Effect> {
+        out: &mut Vec<Effect>,
+    ) {
         // M12 Down->press repeat: if already held by Compositor, stay compositor-owned and consume (K1)
         if self.input.key_ownership.owner(key) == Some(Owner::Compositor) {
-            return vec![Effect::KeyboardIntercept { key }];
+            out.push(Effect::KeyboardIntercept { key });
+            return;
         }
         // Repeated press of already logically-down client key must not emit duplicate pressed (R03, K1/M12)
         if self.input.key_ownership.owner(key) == Some(Owner::Client) {
-            return Vec::new();
+            return;
         }
 
         let interaction_active = self.input.interaction.active();
@@ -140,47 +167,50 @@ impl Core {
         // K3: keys that change XKB modifier or lock state are never compositor-owned (observe mode)
         if mods_changed {
             self.input.key_ownership.press(key, Owner::Client);
-            let mut fx = Vec::new();
             if let Some(action) = matched {
-                fx.extend(self.apply_key_action(action));
+                out.extend(self.apply_key_action(action));
             }
-            fx.push(Effect::KeyboardForward {
+            out.push(Effect::KeyboardForward {
                 key,
                 pressed: true,
                 mods_changed: true,
                 time_us,
             });
-            fx
         } else if let Some(action) = matched {
             // K1: compositor-owned press is consumed
             self.input.key_ownership.press(key, Owner::Compositor);
-            let mut fx = self.apply_key_action(action);
-            fx.push(Effect::KeyboardIntercept { key });
-            fx
+            out.extend(self.apply_key_action(action));
+            out.push(Effect::KeyboardIntercept { key });
         } else {
             // Client-owned press: forwarded
             self.input.key_ownership.press(key, Owner::Client);
-            vec![Effect::KeyboardForward {
+            out.push(Effect::KeyboardForward {
                 key,
                 pressed: true,
                 mods_changed: false,
                 time_us,
-            }]
+            });
         }
     }
 
     /// K2 keyboard release intake in Core (INV-INPUT-1, OBJ-25).
-    fn keyboard_release(&mut self, key: u32, mods_changed: bool, time_us: u64) -> Vec<Effect> {
+    fn keyboard_release(
+        &mut self,
+        key: u32,
+        mods_changed: bool,
+        time_us: u64,
+        out: &mut Vec<Effect>,
+    ) {
         // Release follows recorded owner. Orphan release (None) is dropped and never forwarded.
         match self.input.key_ownership.release(key) {
-            Some(Owner::Client) => vec![Effect::KeyboardForward {
+            Some(Owner::Client) => out.push(Effect::KeyboardForward {
                 key,
                 pressed: false,
                 mods_changed,
                 time_us,
-            }],
-            Some(Owner::Compositor) => vec![Effect::KeyboardIntercept { key }],
-            None => Vec::new(),
+            }),
+            Some(Owner::Compositor) => out.push(Effect::KeyboardIntercept { key }),
+            None => {}
         }
     }
 
@@ -206,48 +236,49 @@ impl Core {
         delta: (f64, f64),
         delta_unaccel: (f64, f64),
         time_us: u64,
-    ) -> Vec<Effect> {
+        out: &mut Vec<Effect>,
+    ) {
         match self.input.interaction {
             Interaction::CameraPan { output, camera, .. } => {
                 let (Some(scale), Some(zoom)) = (
                     self.output(output).map(|o| o.scale),
                     self.cameras.zoom(camera),
                 ) else {
-                    return Vec::new();
+                    return;
                 };
                 let (Some(proof), Some((camera, start, sum))) =
                     (proof, self.input.interaction.pan_motion(delta, scale, zoom))
                 else {
-                    return Vec::new();
+                    return;
                 };
                 self.cameras.pan(proof, camera, start, sum);
-                self.frames.retain(|(o, _)| *o != output);
-                #[allow(unused_mut)]
-                let mut fx = self.visibility_pass_camera(camera);
+                self.invalidate_frame(output);
+                self.visibility_pass_camera(camera, out);
                 #[cfg(feature = "probe_pan_motion_bypass")]
                 // NEGATIVE CONTROL (INV-INPUT-3 bypass switch, TST-05): pan motion also reaches
                 // the client. The x8 tests must fail under it.
-                fx.extend(self.routed_motion(delta, delta_unaccel, time_us));
-                fx
+                self.routed_motion(delta, delta_unaccel, time_us, out);
             }
-            Interaction::Orphaned { .. } => Vec::new(),
+            Interaction::Orphaned { .. } => {}
             Interaction::Idle => {
                 let PointerState::Located { output, p } = self.pointer else {
-                    return Vec::new();
+                    return;
                 };
                 if let Some(c) = self.constraint {
                     if c.kind == pointer::ConstraintKind::Lock {
-                        return self.locked_motion(delta, delta_unaccel, time_us);
+                        out.extend(self.locked_motion(delta, delta_unaccel, time_us));
+                        return;
                     }
                     if c.kind == pointer::ConstraintKind::Confine {
                         self.pointer = self.confined_motion(output, p, delta, &c);
-                        return self.routed_motion(delta, delta_unaccel, time_us);
+                        self.routed_motion(delta, delta_unaccel, time_us, out);
+                        return;
                     }
                 }
                 if let Some(moved) = pointer::moved(&self.outputs, output, p, delta) {
                     self.pointer = moved;
                 }
-                self.routed_motion(delta, delta_unaccel, time_us)
+                self.routed_motion(delta, delta_unaccel, time_us, out);
             }
         }
     }
@@ -259,11 +290,12 @@ impl Core {
         delta: (f64, f64),
         delta_unaccel: (f64, f64),
         time_us: u64,
-    ) -> Vec<Effect> {
+        out: &mut Vec<Effect>,
+    ) {
         let Some((target, location)) = self.route_pointer() else {
-            return Vec::new();
+            return;
         };
-        vec![
+        out.extend([
             Effect::PointerMotion {
                 target,
                 location,
@@ -276,7 +308,7 @@ impl Core {
                 time_us,
             },
             Effect::PointerFrame,
-        ]
+        ]);
     }
 
     /// Ownership is decided here, at press, before any client dispatch (INV-INPUT-1, C4.2 P2).
@@ -460,7 +492,7 @@ impl Core {
         }
         *slot = OutputModel::from_descriptor(output, &desc, slot.arrangement);
         let model = slot.clone();
-        self.frames.retain(|(o, _)| *o != output);
+        self.invalidate_frame(output);
         self.pointer = pointer::reconfigured(self.pointer, &model);
         let mut fx = vec![Effect::OutputChanged(output)];
         fx.extend(self.fullscreen_output_reconfigured(output));
@@ -491,7 +523,7 @@ impl Core {
             .position(|o| o.id == output)
             .ok_or(EntryError::UnknownOutput)?;
         let lost = self.outputs.remove(index);
-        self.frames.retain(|(o, _)| *o != output);
+        self.remove_frame(output);
         self.cameras
             .unbind_on_disconnect(authority::Authorized::mint(), output);
         // C4.6: a pan on the removed output keeps its ownership and consumes motion until release

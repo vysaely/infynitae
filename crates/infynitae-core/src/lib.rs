@@ -150,16 +150,37 @@ pub enum FrameError {
     NoView,
 }
 
+/// The ProjectionFrame of one output and whether it is current: a change that makes it stale
+/// (a pan, a presentation, an output reconfiguration) keeps its storage, and the next render list
+/// rebuilds into it.
+struct FrameSlot {
+    output: output::OutputId,
+    frame: render::ProjectionFrame,
+    current: bool,
+}
+
 pub struct Core {
     id: u64,
     stage: stage::Stage,
     cameras: navigation::CameraSet,
     outputs: Vec<output::OutputModel>,
     output_ids: output::OutputIds,
-    /// ProjectionFrame per output (OBJ-15): the last list produced for that output.
-    frames: Vec<(output::OutputId, render::ProjectionFrame)>,
+    /// ProjectionFrame per output (OBJ-15): the last list produced for that output, and whether
+    /// it is still current. A stale frame keeps its storage for the next list (C14.3).
+    frames: Vec<FrameSlot>,
     /// OBJ-13, rewritten by every visibility pass.
     membership: visibility::MembershipTable,
+    /// The storage of the next membership table of a scoped pass; swapped with `membership`
+    /// (C14.3: per-output buffers reused; INV-ALLOC-1).
+    membership_next: visibility::MembershipTable,
+    /// Reused storage: every output's view, for one pass (`with_views`).
+    views_buf: Vec<(output::OutputId, projection::View)>,
+    /// Reused storage: one element's new membership rows.
+    rows_buf: Vec<visibility::Row>,
+    /// Reused storage: what every output presents, before a commit.
+    presentations_buf: Vec<(output::OutputId, Option<stage::ElementId>)>,
+    /// Reused storage: the outputs whose presentation a commit touched.
+    touched_buf: Vec<output::OutputId>,
     /// OBJ-20, core part.
     pointer: pointer::PointerState,
     /// OBJ-25 and OBJ-26.
@@ -228,6 +249,11 @@ impl Core {
                 output_ids: output::OutputIds::default(),
                 frames: Vec::new(),
                 membership: visibility::MembershipTable::default(),
+                membership_next: visibility::MembershipTable::default(),
+                views_buf: Vec::new(),
+                rows_buf: Vec::new(),
+                presentations_buf: Vec::new(),
+                touched_buf: Vec::new(),
                 pointer: pointer::PointerState::NoOutput,
                 input: input::InputState::default(),
                 focus: input::focus::FocusModel::default(),
@@ -382,7 +408,7 @@ impl Core {
     /// element no output would show anyway (far from every view) is not hidden by a
     /// presentation and stays focusable, as without one.
     pub fn hidden_by_presentation(&self, element: stage::ElementId) -> bool {
-        if !self.presenting() || !self.membership.observers(element).is_empty() {
+        if !self.presenting() || self.membership.observing_outputs(element).next().is_some() {
             return false;
         }
         let Some((anchor, tree, bounds)) = self.stage.mapped(element) else {
@@ -481,7 +507,7 @@ impl Core {
 
     /// INV-FRAME-2: the element's frame-clock output (highest-refresh observing output).
     pub fn clock_output_of(&self, element: stage::ElementId) -> Option<output::OutputId> {
-        visibility::clock_output(&self.membership.observers(element), &self.outputs)
+        visibility::clock_output(self.membership.observing_outputs(element), &self.outputs)
     }
 
     /// A vblank of `output` (the backend's frame tick): the observed elements clocked by it, whose
@@ -489,18 +515,56 @@ impl Core {
     /// `output` (INV-FRAME-1, INV-FRAME-2, M16). Unobserved elements are not completed here
     /// (kick and fallback are INC-8).
     pub fn frame_tick(&self, output: output::OutputId) -> Vec<stage::ElementId> {
+        let mut out = Vec::new();
+        self.frame_tick_into(output, &mut out);
+        out
+    }
+
+    /// [`Core::frame_tick`] into the caller's reusable buffer: the clocked elements are appended
+    /// to `out` (the caller clears it); allocation only when `out` must grow (INV-ALLOC-1).
+    pub fn frame_tick_into(&self, output: output::OutputId, out: &mut Vec<stage::ElementId>) {
         // only an observed element has a clock, so the membership rows are the candidates
-        self.membership
-            .observed()
-            .filter(|&e| self.clock_output_of(e) == Some(output))
-            .collect()
+        out.extend(
+            self.membership
+                .observed()
+                .filter(|&e| self.clock_output_of(e) == Some(output)),
+        );
     }
 
     pub(crate) fn views(&self) -> Vec<(output::OutputId, projection::View)> {
-        self.outputs
+        let mut out = Vec::new();
+        self.fill_views(&mut out);
+        out
+    }
+
+    /// Every output's view, into reused storage (cleared, not freed).
+    fn fill_views(&self, out: &mut Vec<(output::OutputId, projection::View)>) {
+        out.clear();
+        out.extend(
+            self.outputs
+                .iter()
+                .filter_map(|o| self.view(o.id).map(|v| (o.id, v))),
+        );
+    }
+
+    /// The output's frame is stale (its view or what it shows changed); its storage is kept.
+    pub(crate) fn invalidate_frame(&mut self, output: output::OutputId) {
+        for slot in self.frames.iter_mut().filter(|s| s.output == output) {
+            slot.current = false;
+        }
+    }
+
+    /// The output is gone: its frame and storage go with it.
+    pub(crate) fn remove_frame(&mut self, output: output::OutputId) {
+        self.frames.retain(|s| s.output != output);
+    }
+
+    /// The output's current frame, if one is.
+    fn current_frame(&self, output: output::OutputId) -> Option<&render::ProjectionFrame> {
+        self.frames
             .iter()
-            .filter_map(|o| self.view(o.id).map(|v| (o.id, v)))
-            .collect()
+            .find(|s| s.output == output && s.current)
+            .map(|s| &s.frame)
     }
 
     /// The visibility pass (OBJ-13): membership recomputed from Stage, cameras and outputs; its
@@ -516,7 +580,8 @@ impl Core {
         is_client_response: bool,
     ) -> Vec<protocol::Effect> {
         let new = visibility::MembershipTable::compute(&self.stage, &self.views());
-        let mut fx = self.membership.diff(&new, &self.stage);
+        let mut fx = Vec::new();
+        self.membership.diff(&new, &self.stage, &mut fx);
         self.membership = new;
         self.scale_sweep.all = true;
         fx.extend(self.evaluate_scale_policy(is_client_response));
@@ -530,43 +595,52 @@ impl Core {
     pub(crate) fn membership_pass_element(
         &mut self,
         element: stage::ElementId,
-    ) -> Vec<protocol::Effect> {
-        let views = self.views();
-        let fx = self
-            .membership
-            .replace_element(element, &self.stage, &views);
+        out: &mut Vec<protocol::Effect>,
+    ) {
+        let mut views = std::mem::take(&mut self.views_buf);
+        self.fill_views(&mut views);
+        self.membership
+            .replace_element(element, &self.stage, &views, &mut self.rows_buf, out);
+        self.views_buf = views;
         self.scale_sweep.mark(element);
-        fx
     }
 
     /// The visibility pass of a batch that changed only `camera`: the outputs it is bound to are
     /// the only views that moved. The scale policy is evaluated for the elements those views
     /// observed before or observe after: no other element's requirement ρ can have changed.
-    pub(crate) fn visibility_pass_camera(&mut self, camera: usize) -> Vec<protocol::Effect> {
-        let mut new = None;
-        for o in &self.outputs {
-            if self.cameras.camera_for_output(o.id) == Some(camera) {
-                let view = self.view(o.id);
-                new = Some(new.as_ref().unwrap_or(&self.membership).with_output(
-                    o.id,
-                    view.as_ref(),
-                    &self.stage,
-                ));
+    pub(crate) fn visibility_pass_camera(
+        &mut self,
+        camera: usize,
+        out: &mut Vec<protocol::Effect>,
+    ) {
+        // the next table is built in its reused storage: a copy of this one, then each moved
+        // output's rows recomputed in place
+        let mut next = std::mem::take(&mut self.membership_next);
+        let mut moved_any = false;
+        for i in 0..self.outputs.len() {
+            let o = self.outputs[i].id;
+            if self.cameras.camera_for_output(o) == Some(camera) {
+                let view = self.view(o);
+                if moved_any {
+                    next.recompute_output(o, view.as_ref(), &self.stage);
+                } else {
+                    next.assign_with_output(&self.membership, o, view.as_ref(), &self.stage);
+                    moved_any = true;
+                }
             }
         }
-        let mut fx = Vec::new();
-        if let Some(new) = new {
+        if moved_any {
             let moved = |o| self.cameras.camera_for_output(o) == Some(camera);
-            for (element, _, o) in self.membership.rows().iter().chain(new.rows()) {
+            for (element, _, o) in self.membership.rows().iter().chain(next.rows()) {
                 if moved(*o) {
                     self.scale_sweep.mark(*element);
                 }
             }
-            fx = self.membership.diff(&new, &self.stage);
-            self.membership = new;
+            self.membership.diff(&next, &self.stage, out);
+            std::mem::swap(&mut self.membership, &mut next);
         }
-        fx.extend(self.evaluate_scale_policy(false));
-        fx
+        self.membership_next = next;
+        out.extend(self.evaluate_scale_policy(false));
     }
 
     /// Read scale policy configuration (PROV-1..3, PROV-5).
@@ -910,10 +984,25 @@ impl Core {
             return Err(FrameError::UnknownOutput);
         }
         let view = self.view(output).ok_or(FrameError::NoView)?;
-        let frame = render::ProjectionFrame::build(view, &self.stage);
-        self.frames.retain(|(o, _)| *o != output);
-        self.frames.push((output, frame));
-        Ok(&self.frames.last().expect("just pushed").1)
+        let i = match self.frames.iter().position(|s| s.output == output) {
+            Some(i) => i,
+            None => {
+                self.frames.push(FrameSlot {
+                    output,
+                    frame: render::ProjectionFrame {
+                        view,
+                        entries: Vec::new(),
+                    },
+                    current: false,
+                });
+                self.frames.len() - 1
+            }
+        };
+        let stage = &self.stage;
+        let slot = &mut self.frames[i];
+        slot.frame.rebuild(view, stage);
+        slot.current = true;
+        Ok(&self.frames[i].frame)
     }
 
     /// F-HIT-1 against the last frame shown on the output (built on demand if none exists yet).
@@ -923,10 +1012,10 @@ impl Core {
         output: output::OutputId,
         p: geom::OutputLogicalPoint,
     ) -> Option<render::Hit> {
-        if !self.frames.iter().any(|(o, _)| *o == output) {
+        if self.current_frame(output).is_none() {
             self.render_list(output).ok()?;
         }
-        let frame = &self.frames.iter().find(|(o, _)| *o == output)?.1;
+        let frame = self.current_frame(output)?;
         let hit = frame.select(p)?;
         let alive = self
             .stage
@@ -947,7 +1036,7 @@ impl Core {
         };
         let pt = geom::OutputLogicalPoint { x: p.0, y: p.1 };
         let hit = self.hit_test(output, pt);
-        let view = self.frames.iter().find(|(o, _)| *o == output)?.1.view;
+        let view = self.current_frame(output)?.view;
         Some(match hit {
             Some(h) => (
                 Some(protocol::PointerTarget {
@@ -966,17 +1055,23 @@ impl Core {
     /// One true-position event (M10 reconciliation): a routed motion and its frame, at the
     /// input clock's time (the event that caused the batch, or the latest one before it).
     pub(crate) fn true_position(&mut self) -> Vec<protocol::Effect> {
+        let mut out = Vec::new();
+        self.true_position_into(&mut out);
+        out
+    }
+
+    /// [`Core::true_position`] appended to `out`.
+    pub(crate) fn true_position_into(&mut self, out: &mut Vec<protocol::Effect>) {
         let time_ms = self.input.clock.wire_ms();
-        match self.route_pointer() {
-            Some((target, location)) => vec![
+        if let Some((target, location)) = self.route_pointer() {
+            out.extend([
                 protocol::Effect::PointerMotion {
                     target,
                     location,
                     time_ms,
                 },
                 protocol::Effect::PointerFrame,
-            ],
-            None => Vec::new(),
+            ]);
         }
     }
 }

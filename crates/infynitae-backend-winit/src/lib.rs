@@ -299,13 +299,10 @@ fn handle_input_event(
                     mods_changed,
                     time_us,
                 };
-                if let Ok(effects) = data
+                let port = &mut data.input_port;
+                let _ = data
                     .state
-                    .core_mut()
-                    .physical_input(&mut data.input_port, phys)
-                {
-                    data.state.apply(&effects);
-                }
+                    .with_effects(|core, fx| core.physical_input(port, phys, fx));
             }
         }
         InputEvent::PointerMotion { event } => {
@@ -325,13 +322,10 @@ fn handle_input_event(
                 delta_unaccel,
                 time_us,
             };
-            if let Ok(effects) = data
+            let port = &mut data.input_port;
+            let _ = data
                 .state
-                .core_mut()
-                .physical_input(&mut data.input_port, phys)
-            {
-                data.state.apply(&effects);
-            }
+                .with_effects(|core, fx| core.physical_input(port, phys, fx));
         }
         InputEvent::PointerMotionAbsolute { event } => {
             let pos = (event.x(), event.y());
@@ -343,13 +337,10 @@ fn handle_input_event(
                     delta_unaccel: delta,
                     time_us,
                 };
-                if let Ok(effects) = data
+                let port = &mut data.input_port;
+                let _ = data
                     .state
-                    .core_mut()
-                    .physical_input(&mut data.input_port, phys)
-                {
-                    data.state.apply(&effects);
-                }
+                    .with_effects(|core, fx| core.physical_input(port, phys, fx));
             }
         }
         InputEvent::PointerButton { event } => {
@@ -363,13 +354,10 @@ fn handle_input_event(
                 modifiers,
                 time_us,
             };
-            if let Ok(effects) = data
+            let port = &mut data.input_port;
+            let _ = data
                 .state
-                .core_mut()
-                .physical_input(&mut data.input_port, phys)
-            {
-                data.state.apply(&effects);
-            }
+                .with_effects(|core, fx| core.physical_input(port, phys, fx));
         }
         InputEvent::PointerAxis { event } => {
             let h = event
@@ -393,13 +381,10 @@ fn handle_input_event(
                 },
                 time_us,
             };
-            if let Ok(effects) = data
+            let port = &mut data.input_port;
+            let _ = data
                 .state
-                .core_mut()
-                .physical_input(&mut data.input_port, phys)
-            {
-                data.state.apply(&effects);
-            }
+                .with_effects(|core, fx| core.physical_input(port, phys, fx));
         }
         _ => {}
     }
@@ -445,8 +430,7 @@ fn render_and_present(data: &mut LoopData) {
 
     // Complete frame callbacks and presentation feedback for clocked elements
     let now = infynitae_wayland::presentation_clock_now();
-    let elements = data.state.core().frame_tick(data.output_id);
-    data.state.complete_frames(data.output_id, &elements, now);
+    data.state.frame_tick(data.output_id, now);
     data.session.flush();
 }
 

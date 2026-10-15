@@ -144,6 +144,7 @@ pub fn handler(core: &mut Core, port: &mut InputPort) {
             delta_unaccel: (1.0, 1.0),
             time_us: 0,
         },
+        &mut infynitae_core::protocol::EffectBuf::new(),
     );
 }
 

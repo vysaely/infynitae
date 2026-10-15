@@ -101,9 +101,7 @@ pub fn inject(
     port: &mut InputPort,
     ev: PhysicalEvent,
 ) -> Result<(), EntryError> {
-    let effects = state.core_mut().physical_input(port, ev)?;
-    state.apply(&effects);
-    Ok(())
+    state.with_effects(|core, fx| core.physical_input(port, ev, fx))
 }
 
 /// Relative motion of the virtual mouse (accelerated and unaccelerated logical deltas).
@@ -191,8 +189,7 @@ pub fn set_focus(
 pub fn vblank(state: &mut WaylandState, output: OutputId, now: Duration) {
     // an output without a view has no frame to produce; the frame clock still ticks
     let _ = render_frame(state, &mut DummyRenderer, output);
-    let elements = state.core().frame_tick(output);
-    state.complete_frames(output, &elements, now);
+    state.frame_tick(output, now);
 }
 
 /// The virtual vblank period of an output (refresh in mHz).

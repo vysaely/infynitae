@@ -76,7 +76,7 @@ pub fn region_contains(region: &InputRegion, x: i64, y: i64) -> bool {
         InputRegion::Infinite => true,
         InputRegion::Ops(ops) => {
             let mut inside = false;
-            for op in ops {
+            for op in ops.iter() {
                 let r = op.rect;
                 let (x0, y0) = (r.loc.x as i64, r.loc.y as i64);
                 let (x1, y1) = (x0 + r.size.w as i64, y0 + r.size.h as i64);

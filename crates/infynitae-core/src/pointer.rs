@@ -351,7 +351,7 @@ mod tests {
             delta_unaccel: (8.0, 4.0),
             time_us: 1000,
         };
-        let fx = core.physical_input(&mut input_port, motion_ev).unwrap();
+        let fx = core.physical_input_vec(&mut input_port, motion_ev).unwrap();
         assert!(
             !fx.iter().any(|e| matches!(e, Effect::PointerMotion { .. })),
             "no absolute motion while locked"
@@ -463,7 +463,7 @@ mod tests {
             delta_unaccel: (5000.0, 0.0),
             time_us: 1000,
         };
-        let fx = core.physical_input(&mut input_port, motion_ev).unwrap();
+        let fx = core.physical_input_vec(&mut input_port, motion_ev).unwrap();
         assert!(fx.iter().any(|e| matches!(e, Effect::PointerMotion { .. })));
 
         // Pointer must stay on O1 and be clamped
@@ -542,7 +542,7 @@ mod tests {
             modifiers: Modifiers::default(),
             time_us: 1000,
         };
-        let _ = core.physical_input(&mut input_port, btn_down).unwrap();
+        let _ = core.physical_input_vec(&mut input_port, btn_down).unwrap();
         assert!(core.buttons().client_owns_any());
 
         // ActiveElementFocus moves to None while button is held:
@@ -564,7 +564,7 @@ mod tests {
             modifiers: Modifiers::default(),
             time_us: 2000,
         };
-        let fx = core.physical_input(&mut input_port, btn_up).unwrap();
+        let fx = core.physical_input_vec(&mut input_port, btn_up).unwrap();
         assert!(
             fx.contains(&Effect::ConstraintDeactivate {
                 surface: skey,

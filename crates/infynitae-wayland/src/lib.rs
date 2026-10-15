@@ -132,6 +132,11 @@ pub struct WaylandState {
     /// Install serial of the popup keyboard grab (the latest level of the chain), the identity by
     /// which teardown releases exactly that grab (A1).
     pub(crate) popup_keyboard_grab_serial: Option<smithay::utils::Serial>,
+    /// The caller-owned effect buffer of C14.3 for the hot entries (input, commit): cleared,
+    /// not freed, between events.
+    effects: infynitae_core::protocol::EffectBuf,
+    /// Reused storage: the elements one frame tick completes.
+    ticked: Vec<infynitae_core::stage::ElementId>,
     // probe builds only: the Send assertion must be the one and only error
     #[cfg(feature = "probe_store_port_in_state")]
     leaked_port: infynitae_core::InputPort,
@@ -182,6 +187,8 @@ impl WaylandState {
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),
+            effects: infynitae_core::protocol::EffectBuf::new(),
+            ticked: Vec::new(),
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
             leaked_port: unreachable!(),
@@ -197,6 +204,38 @@ impl WaylandState {
     /// The composition root and backends reach Core through the state, as handlers do.
     pub fn core_mut(&mut self) -> &mut Core {
         &mut self.core
+    }
+
+    /// One Core entry into the state's reusable [`EffectBuf`](infynitae_core::protocol::EffectBuf)
+    /// (C14.3), whose effects are then applied in order: `f` calls an `_into` entry of Core. On
+    /// an error nothing is applied. The buffer is cleared, not freed, so a steady stream of
+    /// events allocates nothing for its effects (INV-ALLOC-1).
+    pub fn with_effects<R, E>(
+        &mut self,
+        f: impl FnOnce(&mut Core, &mut infynitae_core::protocol::EffectBuf) -> Result<R, E>,
+    ) -> Result<R, E> {
+        let mut fx = std::mem::take(&mut self.effects);
+        fx.clear();
+        let result = f(&mut self.core, &mut fx);
+        if result.is_ok() {
+            self.apply(&fx);
+        }
+        self.effects = fx;
+        result
+    }
+
+    /// A vblank of `output`: Core's frame clock decides which observed elements complete (into
+    /// reused storage), and their callbacks complete and their feedback is presented.
+    pub fn frame_tick(
+        &mut self,
+        output: infynitae_core::output::OutputId,
+        now: std::time::Duration,
+    ) {
+        let mut ticked = std::mem::take(&mut self.ticked);
+        ticked.clear();
+        self.core.frame_tick_into(output, &mut ticked);
+        self.complete_frames(output, &ticked, now);
+        self.ticked = ticked;
     }
 
     pub fn registry(&self) -> &SurfaceRegistry {

@@ -8,19 +8,24 @@
 //! A row (E, s, O) depends on E's anchor and snapshot and on O's view, and on nothing else. So a
 //! change of one element rewrites that element's rows ([`MembershipTable::replace_element`]), a
 //! change of one view rewrites that output's rows ([`MembershipTable::with_output`]), and only
-//! output lifecycle recomputes the table ([`MembershipTable::compute`]).
+//! output lifecycle recomputes the table ([`MembershipTable::compute`]). The scoped passes write
+//! into storage their caller reuses (C14.3: membership diffs into a reused buffer) and sort
+//! without allocating: rows are unique after `dedup`, so an unstable sort orders them the same.
 
 use crate::output::{OutputId, OutputModel};
 use crate::projection::View;
 use crate::protocol::Effect;
-use crate::render::entries_culled;
+use crate::render::visit_entries;
 use crate::snapshot::SurfaceKey;
 use crate::stage::{ElementId, Stage};
+
+/// One membership row: (element, surface, output).
+pub(crate) type Row = (ElementId, SurfaceKey, OutputId);
 
 /// (element, surface, output) rows, sorted.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct MembershipTable {
-    rows: Vec<(ElementId, SurfaceKey, OutputId)>,
+    rows: Vec<Row>,
 }
 
 impl MembershipTable {
@@ -48,7 +53,10 @@ impl MembershipTable {
     }
 
     /// Outputs observing an element, once per row: an output can repeat.
-    pub(crate) fn observing_outputs(&self, element: ElementId) -> impl Iterator<Item = &OutputId> {
+    pub(crate) fn observing_outputs(
+        &self,
+        element: ElementId,
+    ) -> impl Iterator<Item = &OutputId> + Clone {
         self.rows[self.range(element)].iter().map(|(_, _, o)| o)
     }
 
@@ -64,14 +72,14 @@ impl MembershipTable {
     /// F-MEMBER-1 over every mapped element and every output view.
     pub(crate) fn compute(stage: &Stage, views: &[(OutputId, View)]) -> MembershipTable {
         let mut rows = Vec::new();
-        for (element, anchor, tree, bounds) in stage.mapped_boxed() {
+        for p in stage.placed_all() {
             for (output, view) in views {
-                for e in entries_culled(view, element, anchor, tree, bounds) {
-                    rows.push((element, e.surface, *output));
-                }
+                visit_entries(view, &p, |i, _, _| {
+                    rows.push((p.id, p.tree.surfaces[i].key, *output));
+                });
             }
         }
-        rows.sort();
+        rows.sort_unstable();
         rows.dedup();
         MembershipTable { rows }
     }
@@ -94,78 +102,89 @@ impl MembershipTable {
     }
 
     /// Rewrites the rows of one element after its anchor, snapshot or lifecycle changed, and
-    /// returns its leaves then its enters: what [`MembershipTable::diff`] returns when only this
-    /// element's rows differ. An element that is not mapped has no rows.
+    /// appends its leaves then its enters to `out`: what [`MembershipTable::diff`] gives when only
+    /// this element's rows differ. An element that is not mapped has no rows. `scratch` is the
+    /// caller's reusable storage for the new rows (cleared, not freed).
     pub(crate) fn replace_element(
         &mut self,
         element: ElementId,
         stage: &Stage,
         views: &[(OutputId, View)],
-    ) -> Vec<Effect> {
-        let mut new = Vec::new();
-        if let Some((anchor, tree, bounds)) = stage.mapped(element) {
+        scratch: &mut Vec<Row>,
+        out: &mut Vec<Effect>,
+    ) {
+        scratch.clear();
+        if let Some(p) = stage.placed(element) {
             for (output, view) in views {
-                for e in entries_culled(view, element, anchor, tree, bounds) {
-                    new.push((element, e.surface, *output));
-                }
+                visit_entries(view, &p, |i, _, _| {
+                    scratch.push((element, p.tree.surfaces[i].key, *output));
+                });
             }
         }
-        new.sort();
-        new.dedup();
+        scratch.sort_unstable();
+        scratch.dedup();
         let range = self.range(element);
         let old = &self.rows[range.clone()];
-        let mut fx = Vec::new();
         if stage.state(element).is_some() {
-            for &(_, s, o) in old.iter().filter(|r| new.binary_search(r).is_err()) {
-                fx.push(Effect::Leave {
+            for &(_, s, o) in old.iter().filter(|r| scratch.binary_search(r).is_err()) {
+                out.push(Effect::Leave {
                     output: o,
                     surface: s,
                 });
             }
         }
-        for &(_, s, o) in new.iter().filter(|r| old.binary_search(r).is_err()) {
-            fx.push(Effect::Enter {
+        for &(_, s, o) in scratch.iter().filter(|r| old.binary_search(r).is_err()) {
+            out.push(Effect::Enter {
                 output: o,
                 surface: s,
             });
         }
-        self.rows.splice(range, new);
-        fx
+        // an exact-size drain: the tail moves once, nothing is collected on the side
+        self.rows.splice(range, scratch.drain(..));
     }
 
-    /// The table after the view of one output changed: the rows of every other output are kept
-    /// and this output's rows are recomputed.
-    pub(crate) fn with_output(
-        &self,
+    /// This table becomes a copy of `from` with the rows of `output` recomputed under `view`
+    /// (`None`: the output has none): the table after the view of one output changed, built in
+    /// this table's storage. Applied once per output to a table that already has the other
+    /// outputs' new rows, it recomputes several outputs in turn.
+    pub(crate) fn assign_with_output(
+        &mut self,
+        from: &MembershipTable,
         output: OutputId,
         view: Option<&View>,
         stage: &Stage,
-    ) -> MembershipTable {
-        let mut rows: Vec<_> = self
-            .rows
-            .iter()
-            .copied()
-            .filter(|(_, _, o)| *o != output)
-            .collect();
+    ) {
+        self.rows.clear();
+        self.rows.extend_from_slice(&from.rows);
+        self.recompute_output(output, view, stage);
+    }
+
+    /// The rows of `output` recomputed under `view`, in place.
+    pub(crate) fn recompute_output(
+        &mut self,
+        output: OutputId,
+        view: Option<&View>,
+        stage: &Stage,
+    ) {
+        self.rows.retain(|(_, _, o)| *o != output);
         if let Some(view) = view {
-            for (element, anchor, tree, bounds) in stage.mapped_boxed() {
-                for e in entries_culled(view, element, anchor, tree, bounds) {
-                    rows.push((element, e.surface, output));
-                }
+            let rows = &mut self.rows;
+            for p in stage.placed_all() {
+                visit_entries(view, &p, |i, _, _| {
+                    rows.push((p.id, p.tree.surfaces[i].key, output));
+                });
             }
         }
-        rows.sort();
-        rows.dedup();
-        MembershipTable { rows }
+        self.rows.sort_unstable();
+        self.rows.dedup();
     }
 
     /// Enter/leave effects from `self` (old) to `new`, leaves first. A leave is emitted only while
     /// its element exists: a destroyed client gets no event (INV-STAGE-4).
-    pub(crate) fn diff(&self, new: &MembershipTable, stage: &Stage) -> Vec<Effect> {
-        let mut fx = Vec::new();
+    pub(crate) fn diff(&self, new: &MembershipTable, stage: &Stage, out: &mut Vec<Effect>) {
         for &(e, s, o) in &self.rows {
             if !new.contains(e, s, o) && stage.state(e).is_some() {
-                fx.push(Effect::Leave {
+                out.push(Effect::Leave {
                     output: o,
                     surface: s,
                 });
@@ -173,21 +192,26 @@ impl MembershipTable {
         }
         for &(e, s, o) in &new.rows {
             if !self.contains(e, s, o) {
-                fx.push(Effect::Enter {
+                out.push(Effect::Enter {
                     output: o,
                     surface: s,
                 });
             }
         }
-        fx
     }
 }
 
 /// INV-FRAME-2: the clock output of an element is its highest-refresh observing output; ties go
 /// to the lowest `OutputId`. `None` when unobserved.
-pub(crate) fn clock_output(observers: &[OutputId], outputs: &[OutputModel]) -> Option<OutputId> {
+pub(crate) fn clock_output<'a>(
+    observers: impl Iterator<Item = &'a OutputId> + Clone,
+    outputs: &[OutputModel],
+) -> Option<OutputId> {
     let mut best: Option<&OutputModel> = None;
-    for o in outputs.iter().filter(|o| observers.contains(&o.id)) {
+    for o in outputs
+        .iter()
+        .filter(|o| observers.clone().any(|x| *x == o.id))
+    {
         best = match best {
             Some(b)
                 if b.refresh_mhz > o.refresh_mhz
@@ -944,9 +968,9 @@ mod tests {
             modifiers: logo,
             time_us: 0,
         };
-        c.physical_input(&mut i, button(true)).unwrap();
+        c.physical_input_vec(&mut i, button(true)).unwrap();
         assert!(c.interaction().active(), "the drag was acquired");
-        c.physical_input(
+        c.physical_input_vec(
             &mut i,
             PhysicalEvent::PointerMotion {
                 delta: (30.0, 0.0),
@@ -956,7 +980,7 @@ mod tests {
         )
         .unwrap();
         unchanged(&c, "a camera drag step");
-        c.physical_input(&mut i, button(false)).unwrap();
+        c.physical_input_vec(&mut i, button(false)).unwrap();
         unchanged(&c, "the drag's release settles drag epochs only");
 
         assert!(
@@ -1200,7 +1224,8 @@ mod tests {
         let views = c.views();
         let reference = MembershipTable::compute_reference(c.stage(), &views);
         assert_eq!(c.membership(), &reference, "membership table after {what}");
-        let expected = before.diff(&reference, c.stage());
+        let mut expected = Vec::new();
+        before.diff(&reference, c.stage(), &mut expected);
         let got: Vec<Effect> = fx
             .iter()
             .filter(|e| matches!(e, Effect::Enter { .. } | Effect::Leave { .. }))
@@ -1261,7 +1286,7 @@ mod tests {
             modifiers: LOGO,
             time_us: 0,
         };
-        let fx = c.physical_input(port, button(true)).unwrap();
+        let fx = c.physical_input_vec(port, button(true)).unwrap();
         check(c, before, &fx, "pan press");
         for _ in 0..steps {
             // mostly small steps (elements cross the view edge one at a time), sometimes a jump
@@ -1269,7 +1294,7 @@ mod tests {
             let delta = (rng.range(-d, d) as f64 + 0.25, rng.range(-d, d) as f64);
             *before = c.membership().clone();
             let fx = c
-                .physical_input(
+                .physical_input_vec(
                     port,
                     PhysicalEvent::PointerMotion {
                         delta,
@@ -1281,7 +1306,7 @@ mod tests {
             check(c, before, &fx, "pan motion");
         }
         *before = c.membership().clone();
-        let fx = c.physical_input(port, button(false)).unwrap();
+        let fx = c.physical_input_vec(port, button(false)).unwrap();
         check(c, before, &fx, "pan release");
     }
 
@@ -1486,9 +1511,9 @@ mod tests {
         let full = |c: &Core| c.scale_passes.0;
 
         // a drag: its first step visits every element (it opens their epochs), then no more
-        c.physical_input(&mut port, button(true)).unwrap();
+        c.physical_input_vec(&mut port, button(true)).unwrap();
         let before = full(&c);
-        c.physical_input(&mut port, motion(5.0)).unwrap();
+        c.physical_input_vec(&mut port, motion(5.0)).unwrap();
         assert_eq!(
             full(&c),
             before + 1,
@@ -1497,11 +1522,11 @@ mod tests {
         let steady = full(&c);
         for (i, &id) in ids.iter().take(50).enumerate() {
             let d = if i % 2 == 0 { 900.0 } else { -900.0 };
-            c.physical_input(&mut port, motion(d)).unwrap();
+            c.physical_input_vec(&mut port, motion(d)).unwrap();
             c.toplevel_committed(id, tree(true)).unwrap();
         }
         assert_eq!(full(&c), steady, "steps and commits during a drag");
-        c.physical_input(&mut port, button(false)).unwrap();
+        c.physical_input_vec(&mut port, button(false)).unwrap();
 
         // commits outside a drag
         let steady = full(&c);
@@ -1625,14 +1650,14 @@ mod tests {
                         fx = c.toplevel_committed(id, trees[0].clone()).unwrap();
                     }
                     (50..=53, Some((id, _))) => fx = c.toplevel_destroyed(id),
-                    (54..=59, _) => fx = c.physical_input(port, button(!pressed)).unwrap(),
+                    (54..=59, _) => fx = c.physical_input_vec(port, button(!pressed)).unwrap(),
                     (60..=79, _) => {
                         let motion = PhysicalEvent::PointerMotion {
                             delta,
                             delta_unaccel: delta,
                             time_us: 0,
                         };
-                        fx = c.physical_input(port, motion).unwrap();
+                        fx = c.physical_input_vec(port, motion).unwrap();
                     }
                     (80..=85, Some((id, _))) => {
                         let at = SessionTime::from_millis(now);
@@ -1645,7 +1670,8 @@ mod tests {
                     // future camera move outside a continuous interaction would hit)
                     (98..=99, _) if output.is_some() && !pressed => {
                         if let Some(camera) = c.cameras().camera_for_output(output.unwrap()) {
-                            fx = c.visibility_pass_camera(camera);
+                            fx = Vec::new();
+                            c.visibility_pass_camera(camera, &mut fx);
                         }
                     }
                     _ => {}
@@ -1782,7 +1808,7 @@ mod tests {
             match rng.below(100) {
                 0..=7 => {
                     pressed = !pressed;
-                    let fx = c.physical_input(&mut port, button(pressed)).unwrap();
+                    let fx = c.physical_input_vec(&mut port, button(pressed)).unwrap();
                     check(&mut c, &before, &fx, "pan button");
                 }
                 8..=37 => {
@@ -1790,7 +1816,7 @@ mod tests {
                     let delta = (rng.range(-d, d) as f64 + 0.25, rng.range(-d, d) as f64);
                     let orphaned = matches!(c.input.interaction, Interaction::Orphaned { .. });
                     let fx = c
-                        .physical_input(
+                        .physical_input_vec(
                             &mut port,
                             PhysicalEvent::PointerMotion {
                                 delta,
@@ -1948,12 +1974,12 @@ mod tests {
                         modifiers: LOGO,
                         time_us: 0,
                     };
-                    c.physical_input(&mut port, button(true)).unwrap();
+                    c.physical_input_vec(&mut port, button(true)).unwrap();
                     let mut seen = [false; 2];
                     for _ in 0..1800 {
                         let before = c.membership().clone();
                         let fx = c
-                            .physical_input(
+                            .physical_input_vec(
                                 &mut port,
                                 PhysicalEvent::PointerMotion {
                                     delta: step,

@@ -107,6 +107,50 @@ pub enum Effect {
     },
 }
 
+/// Caller-owned, reusable storage for the effects of one Core entry (C14.3 `EffectBuf`). An
+/// entry appends its effects in order and never removes one; the caller applies them and clears
+/// the buffer before the next event (`clear` keeps the capacity). Capacity and overflow: it
+/// grows, by one allocation, only when an event produces more effects than it has room for;
+/// nothing is ever dropped or truncated. A steady state produces no larger batch than its warm-up,
+/// so after warm-up it allocates nothing (INV-ALLOC-1, OB-42).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct EffectBuf {
+    pub(crate) fx: Vec<Effect>,
+}
+
+impl EffectBuf {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// A buffer with room for `n` effects before it must grow.
+    pub fn with_capacity(n: usize) -> Self {
+        EffectBuf {
+            fx: Vec::with_capacity(n),
+        }
+    }
+
+    /// Forgets the effects, keeps the storage.
+    pub fn clear(&mut self) {
+        self.fx.clear();
+    }
+
+    pub fn capacity(&self) -> usize {
+        self.fx.capacity()
+    }
+
+    pub fn into_vec(self) -> Vec<Effect> {
+        self.fx
+    }
+}
+
+impl std::ops::Deref for EffectBuf {
+    type Target = [Effect];
+    fn deref(&self) -> &[Effect] {
+        &self.fx
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProtocolError {
     /// The element does not exist (destroyed or never created).
@@ -340,45 +384,52 @@ impl Core {
     /// client's batch is scoped (`Sweep`): only the marks make it visit the elements a
     /// presentation hid or revealed, and [`Core::presentation_stimulus`] says which of them are
     /// the subjects.
-    fn presentation_membership(&mut self, outputs: &[OutputId]) -> Vec<Effect> {
-        let mut new = None;
+    fn presentation_membership(&mut self, outputs: &[OutputId], out: &mut Vec<Effect>) {
+        // the next table is built in its reused storage (as in `visibility_pass_camera`)
+        let mut next = std::mem::take(&mut self.membership_next);
+        let mut changed = false;
         for &o in outputs {
-            self.frames.retain(|(f, _)| *f != o);
+            self.invalidate_frame(o);
             if self.outputs.iter().any(|m| m.id == o) {
                 let view = self.view(o);
-                new = Some(new.as_ref().unwrap_or(&self.membership).with_output(
-                    o,
-                    view.as_ref(),
-                    &self.stage,
-                ));
+                if changed {
+                    next.recompute_output(o, view.as_ref(), &self.stage);
+                } else {
+                    next.assign_with_output(&self.membership, o, view.as_ref(), &self.stage);
+                    changed = true;
+                }
             }
         }
-        let mut fx = Vec::new();
-        if let Some(new) = new {
+        if changed {
             // a scoped evaluation (during a camera drag the pass is not full) must still visit
             // every element these outputs observed before or observe now
-            for (element, _, o) in self.membership.rows().iter().chain(new.rows()) {
+            for (element, _, o) in self.membership.rows().iter().chain(next.rows()) {
                 if outputs.contains(o) {
                     self.scale_sweep.mark(*element);
                 }
             }
-            fx = self.membership.diff(&new, &self.stage);
-            self.membership = new;
+            self.membership.diff(&next, &self.stage, out);
+            std::mem::swap(&mut self.membership, &mut next);
         }
+        self.membership_next = next;
         let on_one = matches!(self.pointer, crate::pointer::PointerState::Located { output, .. } if outputs.contains(&output));
         if on_one && !self.input.interaction.active() {
-            fx.extend(self.true_position());
+            self.true_position_into(out);
         }
-        fx.extend(self.reconcile_constraints());
-        fx
+        out.extend(self.reconcile_constraints());
     }
 
     /// What every output presents now, to tell afterwards which presentations a change touched.
     fn presentations(&self) -> Vec<(OutputId, Option<ElementId>)> {
-        self.outputs
-            .iter()
-            .map(|o| (o.id, self.presentation(o.id)))
-            .collect()
+        let mut out = Vec::new();
+        self.fill_presentations(&mut out);
+        out
+    }
+
+    /// [`Core::presentations`] into reused storage (cleared, not freed).
+    fn fill_presentations(&self, out: &mut Vec<(OutputId, Option<ElementId>)>) {
+        out.clear();
+        out.extend(self.outputs.iter().map(|o| (o.id, self.presentation(o.id))));
     }
 
     /// Fullscreen entry and exit: every scale hint of the batch goes before its first configure,
@@ -419,7 +470,8 @@ impl Core {
             self.reconcile_constraints()
         } else {
             self.presentation_stimulus(before);
-            let mut fx = self.presentation_membership(&changed);
+            let mut fx = Vec::new();
+            self.presentation_membership(&changed, &mut fx);
             fx.extend(self.evaluate_scale_policy(true));
             fx
         }
@@ -663,8 +715,37 @@ impl Core {
         id: ElementId,
         tree: SurfaceTree,
     ) -> Result<Vec<Effect>, ProtocolError> {
+        let mut out = EffectBuf::new();
+        self.toplevel_committed_into(id, tree, &mut out)?;
+        Ok(out.into_vec())
+    }
+
+    /// [`Core::toplevel_committed`] into the caller's reusable [`EffectBuf`] (C14.3).
+    pub fn toplevel_committed_into(
+        &mut self,
+        id: ElementId,
+        tree: SurfaceTree,
+        out: &mut EffectBuf,
+    ) -> Result<(), ProtocolError> {
         let acked_fullscreen = self.fullscreen_of(id).is_some();
-        self.toplevel_committed_acked(id, tree, acked_fullscreen)
+        self.toplevel_committed_acked_into(id, tree, acked_fullscreen, out)
+    }
+
+    /// [`Core::toplevel_committed_acked`] into the caller's reusable [`EffectBuf`] (C14.3): the
+    /// effects are appended in order; on an error nothing is appended.
+    pub fn toplevel_committed_acked_into(
+        &mut self,
+        id: ElementId,
+        tree: SurfaceTree,
+        acked_fullscreen: bool,
+        out: &mut EffectBuf,
+    ) -> Result<(), ProtocolError> {
+        let start = out.fx.len();
+        let result = self.committed(id, tree, acked_fullscreen, &mut out.fx, start);
+        if result.is_err() {
+            out.fx.truncate(start);
+        }
+        result
     }
 
     /// A committed surface-tree state of an element (written wholesale per commit, OBJ-05).
@@ -678,12 +759,29 @@ impl Core {
         tree: SurfaceTree,
         acked_fullscreen: bool,
     ) -> Result<Vec<Effect>, ProtocolError> {
+        let mut out = EffectBuf::new();
+        self.toplevel_committed_acked_into(id, tree, acked_fullscreen, &mut out)?;
+        Ok(out.into_vec())
+    }
+
+    /// The body of [`Core::toplevel_committed_acked`]: appends to `out` from `start`. The
+    /// presentation snapshot and the touched outputs use reused storage (C14.3); an error leaves
+    /// that storage empty, which costs only its capacity.
+    fn committed(
+        &mut self,
+        id: ElementId,
+        tree: SurfaceTree,
+        acked_fullscreen: bool,
+        out: &mut Vec<Effect>,
+        start: usize,
+    ) -> Result<(), ProtocolError> {
         tree.validate().map_err(ProtocolError::Snapshot)?;
         let state = self.stage.state(id).ok_or(ProtocolError::StaleElement)?;
         let has_buffer = tree.root().is_some_and(|r| r.mapped);
         let stale = |_| ProtocolError::StaleElement;
-        let before = self.presentations();
-        let mut fx = match (state, has_buffer) {
+        let mut before = std::mem::take(&mut self.presentations_buf);
+        self.fill_presentations(&mut before);
+        match (state, has_buffer) {
             (Lifecycle::AwaitingInitialCommit | Lifecycle::Unmapped, true) => {
                 return Err(ProtocolError::BufferBeforeConfigure);
             }
@@ -720,21 +818,20 @@ impl Core {
 
                 // M2 pre-configure: a recorded fullscreen request is granted in the initial
                 // configure (before the first map, INV-PRES-1); placement ran first (C5.2).
-                let mut fx = vec![
+                out.extend([
                     Effect::PreferredScale {
                         element: id,
                         scale_120: s120,
                         integer_scale: b,
                     },
                     Effect::InitialConfigure(id),
-                ];
+                ]);
                 if let Some(i) = self.premap_fullscreen.iter().position(|(e, _)| *e == id) {
                     let (_, requested) = self.premap_fullscreen.remove(i);
                     if let Some(o) = self.fullscreen_output(id, requested) {
-                        fx.extend(self.store_fullscreen(id, o, None));
+                        out.extend(self.store_fullscreen(id, o, None));
                     }
                 }
-                fx
             }
             (Lifecycle::Unmapped, false) => {
                 // anchor kept (INV-STAGE-5)
@@ -742,11 +839,10 @@ impl Core {
                 self.stage
                     .set_state(id, Lifecycle::AwaitingFirstBuffer)
                     .map_err(stale)?;
-                vec![Effect::InitialConfigure(id)]
+                out.push(Effect::InitialConfigure(id));
             }
             (Lifecycle::AwaitingFirstBuffer, false) => {
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
-                vec![]
             }
             (Lifecycle::Mapped, true) => {
                 // An element that left fullscreen without ever having been a window is placed at
@@ -766,7 +862,6 @@ impl Core {
                     self.restore_offers.retain(|(e, _)| *e != id);
                 }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
-                vec![]
             }
             (Lifecycle::AwaitingFirstBuffer, true) => {
                 // The size is known now, so the placement policy can use it: default placement
@@ -780,7 +875,7 @@ impl Core {
                 self.stage.set_state(id, Lifecycle::Mapped).map_err(stale)?;
                 self.stage.raise(id);
                 // a grant made before this map takes its output now (A-3)
-                self.take_output(id)
+                out.extend(self.take_output(id));
             }
             (Lifecycle::Mapped, false) => {
                 // null-buffer commit: unmap; identity and anchor kept, snapshot dropped
@@ -796,18 +891,21 @@ impl Core {
                     .collect();
                 // M1: "fullscreen dropped (M9)"; the client must request it again after a remap
                 self.drop_fullscreen(id);
-                self.focus.target_lost(id, &live)
+                out.extend(self.focus.target_lost(id, &live));
             }
-        };
-        fx.extend(self.membership_pass_element(id));
+        }
+        self.membership_pass_element(id, out);
         // A presentation that started or ended in this commit (a fullscreen element's first map;
         // an older grant replaced), and any commit of a presented element: its view depends on
         // its geometry (F-PRESENT-1).
-        let mut touched: Vec<OutputId> = before
-            .iter()
-            .filter(|(o, p)| self.presentation(*o) != *p)
-            .map(|(o, _)| *o)
-            .collect();
+        let mut touched = std::mem::take(&mut self.touched_buf);
+        touched.clear();
+        touched.extend(
+            before
+                .iter()
+                .filter(|(o, p)| self.presentation(*o) != *p)
+                .map(|(o, _)| *o),
+        );
         // a presentation that started or ended: its subjects' fullscreen enter/exit (C14.4)
         let presentation_moved = !touched.is_empty();
         if presentation_moved {
@@ -820,15 +918,17 @@ impl Core {
             touched.push(fs.output);
         }
         if touched.is_empty() {
-            fx.extend(self.reconcile_constraints());
+            out.extend(self.reconcile_constraints());
         } else {
-            fx.extend(self.presentation_membership(&touched));
+            self.presentation_membership(&touched, out);
         }
-        fx.extend(self.evaluate_scale_policy(true));
+        self.touched_buf = touched;
+        self.presentations_buf = before;
+        out.extend(self.evaluate_scale_policy(true));
         if presentation_moved {
-            Self::hints_before_configures(&mut fx);
+            Self::hints_before_configures(&mut out[start..]);
         }
-        Ok(fx)
+        Ok(())
     }
 
     /// A change of a mapped element's surface tree that is NOT a commit of its root surface: a
@@ -853,11 +953,12 @@ impl Core {
             .set_tree(id, Some(tree))
             .map_err(|_| ProtocolError::StaleElement)?;
         // P7 for the new tree is the first rule of the batch-end evaluation (ScaleState::step)
-        let mut fx = self.membership_pass_element(id);
+        let mut fx = Vec::new();
+        self.membership_pass_element(id, &mut fx);
         // the presentation view of a fullscreen element depends on its geometry (F-PRESENT-1)
         match self.fullscreen_of(id) {
             Some(fs) if self.presentation(fs.output) == Some(id) => {
-                fx.extend(self.presentation_membership(&[fs.output]))
+                self.presentation_membership(&[fs.output], &mut fx)
             }
             _ => fx.extend(self.reconcile_constraints()),
         }
@@ -870,8 +971,8 @@ impl Core {
     /// successor focus transition (K7, M11).
     pub fn toplevel_destroyed(&mut self, id: ElementId) -> Vec<Effect> {
         self.scales.remove(id);
-        for (_, frame) in &mut self.frames {
-            frame.entries.retain(|e| e.element != id);
+        for slot in &mut self.frames {
+            slot.frame.entries.retain(|e| e.element != id);
         }
         let before = self.presentations();
         let existed = self.stage.destroy(id);
@@ -889,12 +990,13 @@ impl Core {
         if !ended.is_empty() {
             // the elements it revealed: their requirement can only rise, and a client response
             // may raise it (no subject is left to stimulate, and no hold is needed)
-            fx.extend(self.presentation_membership(&ended));
+            self.presentation_membership(&ended, &mut fx);
         }
         // Evaluated as client-caused: the destruction of an element is not one of the
         // non-client stimuli of SC-E (C14.4), so it must not reverse a hint another element
         // is holding (INV-SCALE-4 d).
-        let mut vis = self.membership_pass_element(id);
+        let mut vis = Vec::new();
+        self.membership_pass_element(id, &mut vis);
         vis.extend(self.evaluate_scale_policy(true));
         // The pass also evaluates the scale policy of the surviving elements (INV-SCALE-5), so
         // it may return a hint that a client-caused evaluation is allowed to move. The destroyed
@@ -3012,8 +3114,8 @@ mod tests {
             modifiers: logo,
             time_us: 0,
         };
-        c.physical_input(&mut i, button(true)).unwrap();
-        c.physical_input(
+        c.physical_input_vec(&mut i, button(true)).unwrap();
+        c.physical_input_vec(
             &mut i,
             PhysicalEvent::PointerMotion {
                 delta: (-300.0, 0.0),
@@ -3022,7 +3124,7 @@ mod tests {
             },
         )
         .unwrap();
-        c.physical_input(&mut i, button(false)).unwrap();
+        c.physical_input_vec(&mut i, button(false)).unwrap();
         assert_eq!(
             c.cameras().center(0),
             Some(CanvasPos {
@@ -3321,8 +3423,8 @@ mod tests {
             },
             time_us: 0,
         };
-        c.physical_input(&mut port, button(true)).unwrap();
-        c.physical_input(
+        c.physical_input_vec(&mut port, button(true)).unwrap();
+        c.physical_input_vec(
             &mut port,
             PhysicalEvent::PointerMotion {
                 delta: (-400.0, 250.0),
@@ -3331,7 +3433,7 @@ mod tests {
             },
         )
         .unwrap();
-        c.physical_input(&mut port, button(false)).unwrap();
+        c.physical_input_vec(&mut port, button(false)).unwrap();
         assert_eq!(anchor(&c), a, "a camera pan");
 
         c.output_reconfigured(&mut t, o, d((2560, 1440), 180))
@@ -3706,8 +3808,8 @@ mod tests {
             },
             time_us: 0,
         };
-        c.physical_input(&mut i, button(true)).unwrap();
-        c.physical_input(
+        c.physical_input_vec(&mut i, button(true)).unwrap();
+        c.physical_input_vec(
             &mut i,
             PhysicalEvent::PointerMotion {
                 delta: (-3.0, 0.0),
@@ -3728,7 +3830,7 @@ mod tests {
         assert!(!c.scale_state(w).unwrap().epoch.open);
         assert!(c.scale_state(x).unwrap().epoch.open, "X's epoch is not W's");
         assert!(hints(&fx, x).is_empty());
-        c.physical_input(&mut i, button(false)).unwrap();
+        c.physical_input_vec(&mut i, button(false)).unwrap();
     }
 
     /// Fullscreen entry and exit put every scale hint of the batch before its first configure
@@ -3814,9 +3916,9 @@ mod tests {
             seen.extend(hints(fx, w));
             seen.push((1, 1));
         };
-        log(&c.physical_input(&mut i, button(true)).unwrap());
+        log(&c.physical_input_vec(&mut i, button(true)).unwrap());
         log(&c
-            .physical_input(
+            .physical_input_vec(
                 &mut i,
                 PhysicalEvent::PointerMotion {
                     delta: (-3.0, 0.0),
@@ -3831,7 +3933,7 @@ mod tests {
             ToplevelRequest::UnsetFullscreen
         };
         log(&c.toplevel_request(w, request).unwrap().1);
-        log(&c.physical_input(&mut i, button(false)).unwrap());
+        log(&c.physical_input_vec(&mut i, button(false)).unwrap());
         log(&c.toplevel_committed(x, win(9, 300, 200, true)).unwrap());
         seen.extend(c.preferred_scale_of(x));
         seen.extend(c.preferred_scale_of(w));

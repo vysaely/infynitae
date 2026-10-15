@@ -132,7 +132,7 @@ mod tests {
             delta_unaccel: d,
             time_us: 0,
         };
-        c.physical_input(port, ev).unwrap()
+        c.physical_input_vec(port, ev).unwrap()
     }
 
     fn button(
@@ -148,7 +148,7 @@ mod tests {
             modifiers,
             time_us: 0,
         };
-        c.physical_input(port, ev).unwrap()
+        c.physical_input_vec(port, ev).unwrap()
     }
 
     /// W: one 400x300 root centred on the camera centre (0, 0) — anchor (−200, −150) by
@@ -385,8 +385,9 @@ mod tests {
         assert!(matches!(c.pointer(), PointerState::Located { output, .. } if output == b));
     }
 
-    /// INC2-F07 rule extended to camera changes: a pan drops the output's ProjectionFrame, so
-    /// the next hit test never reads a frame from a camera that no longer exists.
+    /// INC2-F07 rule extended to camera changes: a pan makes the output's ProjectionFrame stale
+    /// (its storage is kept for the next list, C14.3), so the next hit test never reads a frame
+    /// from a camera that no longer exists.
     #[test]
     fn a_pan_drops_the_output_frame() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
@@ -394,6 +395,6 @@ mod tests {
         c.render_list(a).unwrap();
         button(&mut c, &mut i, BTN_MIDDLE, true, logo());
         motion(&mut c, &mut i, (1.0, 0.0));
-        assert!(!c.frames.iter().any(|(o, _)| *o == a), "stale frame kept");
+        assert!(c.current_frame(a).is_none(), "stale frame kept");
     }
 }

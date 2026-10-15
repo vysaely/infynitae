@@ -175,12 +175,9 @@ impl WaylandState {
                 .states
                 .contains(xdg_toplevel::State::Fullscreen)
         });
-        if let Ok(effects) = self
-            .core
-            .toplevel_committed_acked(id, tree, acked_fullscreen)
-        {
-            self.apply(&effects);
-        }
+        let _ = self.with_effects(|core, fx| {
+            core.toplevel_committed_acked_into(id, tree, acked_fullscreen, fx)
+        });
     }
 
     /// The element's surface tree changed without a commit of its root (a child surface

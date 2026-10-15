@@ -522,7 +522,7 @@ fn intake_rejects_foreign_ports_and_non_finite_values() {
         time_us: 1,
     };
     assert_eq!(
-        r.ls.state.core_mut().physical_input(&mut foreign, ev),
+        r.ls.state.core_mut().physical_input_vec(&mut foreign, ev),
         Err(EntryError::ForeignPort)
     );
     for bad in [f64::NAN, f64::INFINITY] {
@@ -532,7 +532,9 @@ fn intake_rejects_foreign_ports_and_non_finite_values() {
             time_us: 1,
         };
         assert_eq!(
-            r.ls.state.core_mut().physical_input(&mut r.ls.input, ev),
+            r.ls.state
+                .core_mut()
+                .physical_input_vec(&mut r.ls.input, ev),
             Err(EntryError::InvalidEvent)
         );
     }

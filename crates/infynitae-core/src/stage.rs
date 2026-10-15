@@ -4,7 +4,7 @@
 use std::num::NonZeroU64;
 
 use crate::geom::CanvasPoint;
-use crate::snapshot::{Extent, SurfaceTree};
+use crate::snapshot::{Extent, SurfaceTree, TreeLayout};
 
 /// Element identity: non-zero, monotonic, never reused within a process (INV-STAGE-3).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -44,6 +44,17 @@ pub enum Lifecycle {
     Unmapped,
 }
 
+/// A mapped element as the projection reads it: anchor, snapshot, the snapshot's layout and its
+/// Canvas bounding box (`None`: nothing of it can be shown).
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Placed<'a> {
+    pub(crate) id: ElementId,
+    pub(crate) anchor: CanvasPoint,
+    pub(crate) tree: &'a SurfaceTree,
+    pub(crate) layout: &'a TreeLayout,
+    pub(crate) bounds: Option<CanvasBox>,
+}
+
 #[derive(Debug)]
 struct Record {
     id: ElementId,
@@ -52,6 +63,8 @@ struct Record {
     tree: Option<SurfaceTree>,
     /// `tree.extent()`, written with the tree in `set_tree` (its only writer).
     extent: Option<Extent>,
+    /// The tree's origins and shown flags (F-ORIGIN-1), rewritten in place by `set_tree`.
+    layout: TreeLayout,
     /// The element has been Mapped at least once (written by `set_state`): its placement is
     /// final and a remap keeps it (INV-STAGE-5).
     mapped_once: bool,
@@ -176,19 +189,32 @@ impl Stage {
         }
     }
 
-    /// Every mapped element with its Canvas bounding box, in no meaningful order (ascending id):
-    /// for consumers that do not depend on z-order, without a lookup per element.
-    pub(crate) fn mapped_boxed(
-        &self,
-    ) -> impl Iterator<Item = (ElementId, CanvasPoint, &SurfaceTree, Option<CanvasBox>)> {
-        self.records
-            .iter()
-            .filter_map(|r| match (r.state, r.anchor, r.tree.as_ref()) {
-                (Lifecycle::Mapped, Some(a), Some(t)) => {
-                    Some((r.id, a, t, r.extent.map(|e| at(a, e))))
-                }
-                _ => None,
-            })
+    /// One mapped element as the projection reads it ([`Placed`]).
+    pub(crate) fn placed(&self, id: ElementId) -> Option<Placed<'_>> {
+        Self::placed_record(self.record(id)?)
+    }
+
+    /// Every mapped element as the projection reads it, ascending id (no z-order meaning).
+    pub(crate) fn placed_all(&self) -> impl Iterator<Item = Placed<'_>> {
+        self.records.iter().filter_map(Self::placed_record)
+    }
+
+    /// Every mapped element as the projection reads it, front to back (INV-RENDER-2).
+    pub(crate) fn placed_front_to_back(&self) -> impl Iterator<Item = Placed<'_>> {
+        self.z.iter().rev().filter_map(|&id| self.placed(id))
+    }
+
+    fn placed_record(r: &Record) -> Option<Placed<'_>> {
+        match (r.state, r.anchor, r.tree.as_ref()) {
+            (Lifecycle::Mapped, Some(anchor), Some(tree)) => Some(Placed {
+                id: r.id,
+                anchor,
+                tree,
+                layout: &r.layout,
+                bounds: r.extent.map(|e| at(anchor, e)),
+            }),
+            _ => None,
+        }
     }
 
     /// The z-order walk (INV-RENDER-2): mapped elements front to back, with each element's
@@ -236,6 +262,7 @@ impl Stage {
             anchor: None,
             tree: None,
             extent: None,
+            layout: TreeLayout::default(),
             mapped_once: false,
             default_placed: false,
         });
@@ -267,7 +294,8 @@ impl Stage {
         tree: Option<SurfaceTree>,
     ) -> Result<(), StaleElement> {
         let r = self.record_mut(id).ok_or(StaleElement)?;
-        r.extent = tree.as_ref().and_then(SurfaceTree::extent);
+        r.layout.compute(tree.as_ref());
+        r.extent = tree.as_ref().and_then(|t| r.layout.extent(t));
         r.tree = tree;
         Ok(())
     }

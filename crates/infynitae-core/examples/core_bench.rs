@@ -82,7 +82,7 @@ fn tree(key: u64, mapped: bool, subs: u64) -> SurfaceTree {
 
 fn pan(core: &mut Core, port: &mut InputPort, dx: f64, dy: f64) -> usize {
     let mut n = 0;
-    let mut ev = |core: &mut Core, e| n += core.physical_input(port, e).unwrap().len();
+    let mut ev = |core: &mut Core, e| n += core.physical_input_vec(port, e).unwrap().len();
     ev(
         core,
         PhysicalEvent::PointerButton {
@@ -177,17 +177,17 @@ fn scaling(n: usize, two_outputs: bool) {
     let iters = if n >= 1000 { 300 } else { 3000 };
 
     // camera translation that changes no membership (3 px back and forth)
-    core.physical_input(&mut port, button(true)).unwrap();
+    core.physical_input_vec(&mut port, button(true)).unwrap();
     let pan_small = timed(iters, |i| {
         let d = if i % 2 == 0 { 3.0 } else { -3.0 };
-        std::hint::black_box(core.physical_input(&mut port, motion(d)).unwrap());
+        std::hint::black_box(core.physical_input_vec(&mut port, motion(d)).unwrap());
     });
     // camera translation that changes membership (one grid column back and forth)
     let pan_cross = timed(iters, |i| {
         let d = if i % 2 == 0 { -700.0 } else { 700.0 };
-        std::hint::black_box(core.physical_input(&mut port, motion(d)).unwrap());
+        std::hint::black_box(core.physical_input_vec(&mut port, motion(d)).unwrap());
     });
-    core.physical_input(&mut port, button(false)).unwrap();
+    core.physical_input_vec(&mut port, button(false)).unwrap();
     let render = timed(iters, |_| {
         std::hint::black_box(core.render_list(o).unwrap().entries.len());
     });
@@ -215,7 +215,7 @@ fn scaling(n: usize, two_outputs: bool) {
     });
     let idle_motion = timed(iters, |i| {
         let d = if i % 2 == 0 { 1.0 } else { -1.0 };
-        std::hint::black_box(core.physical_input(&mut port, motion(d)).unwrap());
+        std::hint::black_box(core.physical_input_vec(&mut port, motion(d)).unwrap());
     });
     let tick = timed(iters, |_| {
         std::hint::black_box(core.frame_tick(o));

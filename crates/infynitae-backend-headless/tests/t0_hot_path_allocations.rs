@@ -1,14 +1,14 @@
 //! OB-42 (INV-ALLOC-1, C14.3) instrumentation: heap allocations of Core's hot paths, counted
 //! by a test-only global allocator (UNSAFE_INVENTORY U-002 … U-004).
 //!
-//! This is a **ratchet, not the contract**. The contract is zero allocations after warm-up; it
-//! needs Core entries that write into caller-owned buffers instead of returning a `Vec` of
-//! effects, which no branch has. What this file asserts:
+//! This is **the contract** of OB-42: zero heap allocations per event after warm-up, on every
+//! measured hot path, at 10, 100 and 1,000 windows, every round. The events go through the
+//! entries the adapter uses (`physical_input_into`, `toplevel_committed_into`, `render_list`,
+//! `frame_tick_into`) with caller-owned buffers created once, outside every count (C14.3: an
+//! `EffectBuf` and a `Vec` of elements, cleared, not freed). Only the Core call is counted: the
+//! trees a commit takes are built before it, and what is freed is not counted.
 //!
-//! - no hot path allocates more than it does today (the counts below, recorded on this branch);
-//! - the counts do not depend on the number of windows on the Canvas (no per-window allocation,
-//!   so nothing proportional to, or quadratic in, the number of windows);
-//! - repeating an event repeats its count (no growth across repeated events).
+//! (Until 2026-10-15 this file was a ratchet on non-zero counts; the history is at [`RATCHET`].)
 //!
 //! Counting is per thread: the allocator counts only on a thread that switched counting on,
 //! and only between the two calls of [`count`], so other tests of this binary, the harness and
@@ -23,9 +23,9 @@ use infynitae_core::geom::{LocalPoint, LocalRect, LocalSize};
 use infynitae_core::input::bindings::Modifiers;
 use infynitae_core::navigation::PersistedCameras;
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
-use infynitae_core::protocol::ToplevelRequest;
+use infynitae_core::protocol::{EffectBuf, ToplevelRequest};
 use infynitae_core::snapshot::{
-    InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree,
+    InputRegion, RegionOp, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree,
 };
 use infynitae_core::stage::ElementId;
 use infynitae_core::{Core, InputPort, PhysicalEvent};
@@ -95,7 +95,9 @@ fn desc(name: &str) -> OutputDescriptor {
     }
 }
 
-/// A 640x480 window with two 50x50 subsurfaces (the `core_bench` window).
+/// A 640x480 window with two 50x50 subsurfaces (the `core_bench` window). Window 1, the one the
+/// pointer routes to, that is committed and presented, has an explicit input region (a hole in
+/// one corner): its render-list entries carry it, and a region is shared, not copied.
 fn tree(key: u64, mapped: bool) -> SurfaceTree {
     let k = |n: u64| SurfaceKey::from_raw(NonZeroU64::new(n).unwrap());
     let subs = if mapped { 2 } else { 0 };
@@ -124,7 +126,26 @@ fn tree(key: u64, mapped: bool) -> SurfaceTree {
             LocalSize::default()
         },
         mapped,
-        input: InputRegion::Infinite,
+        input: if key == 1 {
+            InputRegion::Ops(std::sync::Arc::from(vec![
+                RegionOp {
+                    add: true,
+                    rect: LocalRect {
+                        loc: LocalPoint::default(),
+                        size: LocalSize { w: 640, h: 480 },
+                    },
+                },
+                RegionOp {
+                    add: false,
+                    rect: LocalRect {
+                        loc: LocalPoint { x: 600, y: 0 },
+                        size: LocalSize { w: 40, h: 40 },
+                    },
+                },
+            ]))
+        } else {
+            InputRegion::Infinite
+        },
     });
     SurfaceTree {
         geometry: LocalRect {
@@ -176,20 +197,25 @@ fn canvas(n: usize) -> (Core, InputPort, OutputId, Vec<ElementId>) {
             .unwrap();
         ids.push(id);
         // move the camera one grid cell on, so the next window is placed there
-        core.physical_input(&mut port, pan_button(true)).unwrap();
+        core.physical_input_vec(&mut port, pan_button(true))
+            .unwrap();
         let dy = if i % 40 == 39 { -520.0 } else { 0.0 };
-        core.physical_input(&mut port, motion(-700.0, dy)).unwrap();
-        core.physical_input(&mut port, pan_button(false)).unwrap();
+        core.physical_input_vec(&mut port, motion(-700.0, dy))
+            .unwrap();
+        core.physical_input_vec(&mut port, pan_button(false))
+            .unwrap();
     }
     let camera = core.cameras().camera_for_output(o).unwrap();
     let c = core.cameras().center(camera).unwrap();
-    core.physical_input(&mut port, pan_button(true)).unwrap();
-    core.physical_input(
+    core.physical_input_vec(&mut port, pan_button(true))
+        .unwrap();
+    core.physical_input_vec(
         &mut port,
         motion(c.x as f64 / 65536.0, c.y as f64 / 65536.0),
     )
     .unwrap();
-    core.physical_input(&mut port, pan_button(false)).unwrap();
+    core.physical_input_vec(&mut port, pan_button(false))
+        .unwrap();
     core.grant_initial_focus(&mut port, ids[0]).unwrap();
     (core, port, o, ids)
 }
@@ -237,6 +263,10 @@ const PATHS: [Path; 9] = [
 fn measure(n: usize) -> Vec<(Path, Vec<u64>)> {
     let (mut core, mut port, o, ids) = canvas(n);
     let (first, last) = (ids[0], *ids.last().unwrap());
+    // the caller-owned buffers of C14.3, created once outside every count, as the adapter
+    // holds them: each event clears and refills them
+    let mut fx = EffectBuf::new();
+    let mut ticked = Vec::new();
     let mut out = Vec::new();
     for path in PATHS {
         let mut counts = Vec::new();
@@ -246,51 +276,64 @@ fn measure(n: usize) -> Vec<(Path, Vec<u64>)> {
             assert_eq!(core.presentation(o), Some(first));
         }
         if matches!(path, Path::Pan | Path::PanCrossing) {
-            core.physical_input(&mut port, pan_button(true)).unwrap();
+            core.physical_input_vec(&mut port, pan_button(true))
+                .unwrap();
             // the first step of a drag opens every element's epoch; not the steady state
-            core.physical_input(&mut port, motion(1.0, 0.0)).unwrap();
-            core.physical_input(&mut port, motion(-1.0, 0.0)).unwrap();
+            core.physical_input_vec(&mut port, motion(1.0, 0.0))
+                .unwrap();
+            core.physical_input_vec(&mut port, motion(-1.0, 0.0))
+                .unwrap();
         }
         for round in 0..WARM_UP + ROUNDS {
             let sign = if round % 2 == 0 { 1.0 } else { -1.0 };
             let c = match path {
                 Path::Pan => count(|| {
-                    core.physical_input(&mut port, motion(3.0 * sign, 0.0))
+                    fx.clear();
+                    core.physical_input(&mut port, motion(3.0 * sign, 0.0), &mut fx)
                         .unwrap();
                 }),
                 Path::PanCrossing => count(|| {
-                    core.physical_input(&mut port, motion(-700.0 * sign, 0.0))
+                    fx.clear();
+                    core.physical_input(&mut port, motion(-700.0 * sign, 0.0), &mut fx)
                         .unwrap();
                 }),
                 Path::Route => count(|| {
-                    core.physical_input(&mut port, motion(sign, 0.0)).unwrap();
+                    fx.clear();
+                    core.physical_input(&mut port, motion(sign, 0.0), &mut fx)
+                        .unwrap();
                 }),
                 Path::Key => count(|| {
-                    core.physical_input(&mut port, key(true)).unwrap();
-                    core.physical_input(&mut port, key(false)).unwrap();
+                    fx.clear();
+                    core.physical_input(&mut port, key(true), &mut fx).unwrap();
+                    fx.clear();
+                    core.physical_input(&mut port, key(false), &mut fx).unwrap();
                 }),
                 Path::Commit => {
                     let t = tree(1, true);
                     count(|| {
-                        core.toplevel_committed(first, t).unwrap();
+                        fx.clear();
+                        core.toplevel_committed_into(first, t, &mut fx).unwrap();
                     })
                 }
                 Path::CommitOffView => {
                     let t = tree(n as u64, true);
                     count(|| {
-                        core.toplevel_committed(last, t).unwrap();
+                        fx.clear();
+                        core.toplevel_committed_into(last, t, &mut fx).unwrap();
                     })
                 }
                 Path::RenderList => count(|| {
                     core.render_list(o).unwrap();
                 }),
                 Path::FrameTick => count(|| {
-                    core.frame_tick(o);
+                    ticked.clear();
+                    core.frame_tick_into(o, &mut ticked);
                 }),
                 Path::PresentedCommit => {
                     let t = tree(1, true);
                     count(|| {
-                        core.toplevel_committed(first, t).unwrap();
+                        fx.clear();
+                        core.toplevel_committed_into(first, t, &mut fx).unwrap();
                     })
                 }
             };
@@ -299,14 +342,16 @@ fn measure(n: usize) -> Vec<(Path, Vec<u64>)> {
             }
         }
         if matches!(path, Path::Pan | Path::PanCrossing) {
-            core.physical_input(&mut port, pan_button(false)).unwrap();
+            core.physical_input_vec(&mut port, pan_button(false))
+                .unwrap();
         }
         out.push((path, counts));
     }
     out
 }
 
-/// The most each path may allocate per event (debug build, the Canvas above), measured on
+/// The most each path may allocate per event: 0 (OB-42). History, kept: the counts were first a
+/// ratchet (debug build, the Canvas above), measured on
 /// `main` at `ccb82c5` and on this branch with this file: the counts are equal, so the INC-6
 /// scale policy adds no allocation to these paths. (`40ddd7d`, before P-1 was repaired, allocated
 /// 5,028 per pan step and 5,022 per commit at 1,000 windows.) Lower a count when a change removes
@@ -319,21 +364,23 @@ fn measure(n: usize) -> Vec<(Path, Vec<u64>)> {
 /// PresentedCommit (added on `integration/inc-6-exit-hardening-2026-10-15`): a commit of a
 /// window INC-7 presents fullscreen re-derives that output's presentation view and membership
 /// (`presentation_membership`); 24 per commit whatever the number of windows, as on `23752f1`.
+/// All set to 0 on `integration/inc-6-final-resolution-2026-10-15` (2026-10-15): C14.3's
+/// caller-owned effect buffers, per-element tree layouts, reused membership, frame and scratch
+/// storage, and shared input regions.
 const RATCHET: [(Path, u64); 9] = [
-    (Path::Pan, 15),
-    (Path::PanCrossing, 20),
-    (Path::Route, 1),
-    (Path::Key, 2),
-    (Path::Commit, 10),
-    (Path::CommitOffView, 5),
-    (Path::RenderList, 15),
-    (Path::FrameTick, 4),
-    (Path::PresentedCommit, 24),
+    (Path::Pan, 0),
+    (Path::PanCrossing, 0),
+    (Path::Route, 0),
+    (Path::Key, 0),
+    (Path::Commit, 0),
+    (Path::CommitOffView, 0),
+    (Path::RenderList, 0),
+    (Path::FrameTick, 0),
+    (Path::PresentedCommit, 0),
 ];
 
-/// OB-42 ratchet (not the contract; see the file comment): on Canvases of 10, 100 and 1,000
-/// windows, every hot path allocates at most its recorded count, exactly as much whatever the
-/// number of windows, and the same again each time the same event repeats.
+/// OB-42: on Canvases of 10, 100 and 1,000 windows, every hot path allocates nothing after
+/// warm-up (at most its count in [`RATCHET`], which is 0 for every path), in every round.
 #[test]
 fn hot_path_allocations_do_not_grow() {
     let sizes = [10, 100, 1000];
