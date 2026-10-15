@@ -295,13 +295,18 @@ fn measure(n: usize) -> Vec<(Path, Vec<u64>)> {
 /// scale policy adds no allocation to these paths. (`40ddd7d`, before P-1 was repaired, allocated
 /// 5,028 per pan step and 5,022 per commit at 1,000 windows.) Lower a count when a change removes
 /// allocations; raising one needs a recorded reason. The contract (OB-42) is 0 for every path.
+///
+/// Raised on the integration with INC-7 (main `23752f1`): Commit 9 → 10 and CommitOffView 4 → 5.
+/// Ratified INC-7 snapshots each output's presentation at every root commit
+/// (`Core::presentations`, from `f98309b`), one `Vec` per commit whatever the number of windows.
+/// This file run on `23752f1` alone gives the same 10 and 5; INC-6 adds nothing.
 const RATCHET: [(Path, u64); 8] = [
     (Path::Pan, 15),
     (Path::PanCrossing, 20),
     (Path::Route, 1),
     (Path::Key, 2),
-    (Path::Commit, 9),
-    (Path::CommitOffView, 4),
+    (Path::Commit, 10),
+    (Path::CommitOffView, 5),
     (Path::RenderList, 15),
     (Path::FrameTick, 4),
 ];

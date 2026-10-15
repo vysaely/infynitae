@@ -2046,9 +2046,14 @@ mod tests {
             "decided at the initial commit, not before"
         );
         let fx = c.toplevel_committed(w, win(1, 0, 0, false)).unwrap();
+        // with the scale policy present the initial hint precedes the configure (M15)
+        assert!(
+            matches!(fx.first(), Some(Effect::PreferredScale { element, .. }) if *element == w),
+            "the initial scale hint comes first: {fx:?}"
+        );
         assert_eq!(
-            fx,
-            vec![Effect::InitialConfigure(w)],
+            fx[1..],
+            [Effect::InitialConfigure(w)],
             "one configure, the initial one"
         );
         assert_eq!(
