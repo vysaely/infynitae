@@ -395,7 +395,13 @@ impl Core {
                 if changed {
                     next.recompute_output(o, view.as_ref(), &self.stage);
                 } else {
-                    next.assign_with_output(&self.membership, o, view.as_ref(), &self.stage);
+                    next.assign_with_output(
+                        &self.membership,
+                        o,
+                        view.as_ref(),
+                        &self.stage,
+                        &mut self.rows_buf,
+                    );
                     changed = true;
                 }
             }

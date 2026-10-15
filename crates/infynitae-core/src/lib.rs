@@ -624,7 +624,13 @@ impl Core {
                 if moved_any {
                     next.recompute_output(o, view.as_ref(), &self.stage);
                 } else {
-                    next.assign_with_output(&self.membership, o, view.as_ref(), &self.stage);
+                    next.assign_with_output(
+                        &self.membership,
+                        o,
+                        view.as_ref(),
+                        &self.stage,
+                        &mut self.rows_buf,
+                    );
                     moved_any = true;
                 }
             }

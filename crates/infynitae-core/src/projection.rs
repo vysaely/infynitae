@@ -132,6 +132,18 @@ impl View {
             && self.edge_y(y0) < self.size.1 as i64
     }
 
+    /// [`View::may_show`] as four integer thresholds, computed once per view (see [`Cull`]).
+    pub fn cull(&self) -> Cull {
+        let (w, h) = (self.size.0 as i64, self.size.1 as i64);
+        let (r, c, k) = (self.r, self.c, self.k);
+        Cull {
+            x_min: first_edge_at_least(1, r.0, c.0, k),
+            y_min: first_edge_at_least(1, r.1, c.1, k),
+            x_max: first_edge_at_least(w, r.0, c.0, k) - 1,
+            y_max: first_edge_at_least(h, r.1, c.1, k) - 1,
+        }
+    }
+
     /// F-RENDER-1: `L(x) = (x − R)·k + δ − C`.
     pub fn render_location(&self, origin: CanvasPoint) -> RenderLocation {
         RenderLocation {
@@ -169,6 +181,51 @@ fn edge(x: i64, r: i64, c: i64, k: f64) -> i64 {
     ((x - r) as f64 * k + DELTA).round() as i64 - c
 }
 
+/// [`View::may_show`] without a rounding per box: `edge` is non-decreasing in its argument
+/// (k > 0), so `edge(x1) > 0` holds exactly for `x1 >= x_min`, where `x_min` is the smallest
+/// Canvas coordinate whose edge is at least 1, and `edge(x0) < view_w` exactly for
+/// `x0 <= x_max`, the largest whose edge is below `view_w` (likewise y). Each threshold is found
+/// with `edge` itself, so this is the same predicate; a pass computes it once per view and then
+/// culls every element with four integer comparisons.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Cull {
+    x_min: i64,
+    y_min: i64,
+    x_max: i64,
+    y_max: i64,
+}
+
+impl Cull {
+    /// Whether a surface inside the Canvas box `[x0, x1) × [y0, y1)` can intersect the view:
+    /// equal to [`View::may_show`] for every Canvas coordinate (INV-COORD-1 range).
+    pub fn admits(&self, x0: i64, y0: i64, x1: i64, y1: i64) -> bool {
+        x1 >= self.x_min && y1 >= self.y_min && x0 <= self.x_max && y0 <= self.y_max
+    }
+}
+
+/// The search range of the thresholds: beyond every Canvas coordinate (±2^36, INV-COORD-1), so a
+/// threshold clamped to it decides every coordinate the same way `edge` does.
+const CULL_LIMIT: i64 = 1 << 40;
+
+/// The smallest `x` in `[-CULL_LIMIT, CULL_LIMIT]` with `edge(x) >= target`, `CULL_LIMIT` if
+/// none is. From the inverse of `edge`, then corrected by stepping with `edge` itself (a few
+/// steps: the estimate is off by the rounding of a few floating-point operations).
+fn first_edge_at_least(target: i64, r: i64, c: i64, k: f64) -> i64 {
+    let estimate = r as f64 + ((target + c) as f64 - 0.5 - DELTA) / k;
+    let mut x = if estimate.is_finite() {
+        (estimate.floor() as i64).clamp(-CULL_LIMIT, CULL_LIMIT)
+    } else {
+        0
+    };
+    while x > -CULL_LIMIT && edge(x - 1, r, c, k) >= target {
+        x -= 1;
+    }
+    while x < CULL_LIMIT && edge(x, r, c, k) < target {
+        x += 1;
+    }
+    x
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -200,6 +257,58 @@ pub(crate) mod tests {
             view_size: size,
         })
         .unwrap()
+    }
+
+    /// `Cull::admits` equals `View::may_show` on random views (zoom, scale, centre, size) and
+    /// boxes concentrated around the view edges, where a threshold off by one would show.
+    #[test]
+    fn cull_thresholds_equal_may_show() {
+        let mut rng = Rng(0x5eed_c011_u64.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+        let zooms = [0.001, 0.07, 0.25, 0.5, 1.0, 1.25, 2.0, 3.7, 8.0];
+        let scales = [0.75, 1.0, 1.25, 1.5, 2.0, 3.0];
+        let mut checked = 0;
+        for _ in 0..400 {
+            let zoom = zooms[rng.range(0, zooms.len() as i64 - 1) as usize];
+            let scale = scales[rng.range(0, scales.len() as i64 - 1) as usize];
+            let v = View::new(ViewParams {
+                centre: CanvasPos {
+                    x: rng.range(-(1 << 30), 1 << 30) * Q16_ONE / 7,
+                    y: rng.range(-(1 << 30), 1 << 30) * Q16_ONE / 11,
+                },
+                zoom,
+                scale,
+                view_size: (rng.range(1, 5000) as u32, rng.range(1, 3000) as u32),
+            })
+            .unwrap();
+            let cull = v.cull();
+            // Canvas coordinates near each view edge, and anywhere
+            let near = |rng: &mut Rng, phys: i64, along_x: bool| {
+                let canvas = if along_x {
+                    v.r.0 + ((phys + v.c.0) as f64 / v.k) as i64
+                } else {
+                    v.r.1 + ((phys + v.c.1) as f64 / v.k) as i64
+                };
+                canvas + rng.range(-3, 3)
+            };
+            for _ in 0..200 {
+                let pick = |rng: &mut Rng, along_x: bool, size: i64| match rng.range(0, 2) {
+                    0 => near(rng, 0, along_x),
+                    1 => near(rng, size, along_x),
+                    _ => rng.range(-(1 << 36), 1 << 36),
+                };
+                let (w, h) = (v.size.0 as i64, v.size.1 as i64);
+                let (a, b) = (pick(&mut rng, true, w), pick(&mut rng, true, w));
+                let (c, d) = (pick(&mut rng, false, h), pick(&mut rng, false, h));
+                let (x0, x1, y0, y1) = (a.min(b), a.max(b), c.min(d), c.max(d));
+                assert_eq!(
+                    cull.admits(x0, y0, x1, y1),
+                    v.may_show(x0, y0, x1, y1),
+                    "view {v:?} box ({x0}, {y0}, {x1}, {y1})"
+                );
+                checked += 1;
+            }
+        }
+        assert_eq!(checked, 80_000);
     }
 
     #[test]

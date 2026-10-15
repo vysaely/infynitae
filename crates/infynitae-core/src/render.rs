@@ -8,7 +8,7 @@
 use crate::geom::{
     CanvasPoint, LocalPos, LocalSize, OutputLogicalPoint, PhysicalRect, Q16_ONE, RenderLocation,
 };
-use crate::projection::View;
+use crate::projection::{Cull, View};
 use crate::snapshot::{InputRegion, SurfaceKey, SurfaceTree};
 use crate::stage::{CanvasBox, ElementId, Placed, Stage};
 
@@ -82,16 +82,21 @@ pub fn entries_for(
 /// recomputes origins and shown flags from the tree, is its reference.
 pub(crate) fn visit_entries(
     view: &View,
+    cull: &Cull,
     p: &Placed<'_>,
     mut f: impl FnMut(usize, CanvasPoint, PhysicalRect),
 ) {
-    // a presentation view shows one element's tree and nothing else (OBJ-19)
-    if view.only.is_some_and(|w| w != p.id) || !p.layout.is_valid() {
+    // a presentation view shows one element's tree and nothing else (OBJ-19); the cull reads
+    // only the record's box, so the layout of an element out of view is never touched
+    if view.only.is_some_and(|w| w != p.id) {
         return;
     }
     match p.bounds {
-        Some((x0, y0, x1, y1)) if view.may_show(x0, y0, x1, y1) => {}
+        Some((x0, y0, x1, y1)) if cull.admits(x0, y0, x1, y1) => {}
         _ => return,
+    }
+    if !p.layout.is_valid() {
+        return;
     }
     for (i, s) in p.tree.surfaces.iter().enumerate() {
         if !p.layout.shown(i) {
@@ -147,8 +152,9 @@ impl ProjectionFrame {
         self.view = view;
         self.entries.clear();
         let entries = &mut self.entries;
+        let cull = view.cull();
         for p in stage.placed_front_to_back() {
-            visit_entries(&view, &p, |i, origin, rect| {
+            visit_entries(&view, &cull, &p, |i, origin, rect| {
                 let s = &p.tree.surfaces[i];
                 entries.push(FrameEntry {
                     element: p.id,

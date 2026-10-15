@@ -63,8 +63,9 @@ struct Record {
     tree: Option<SurfaceTree>,
     /// `tree.extent()`, written with the tree in `set_tree` (its only writer).
     extent: Option<Extent>,
-    /// The tree's origins and shown flags (F-ORIGIN-1), rewritten in place by `set_tree`.
-    layout: TreeLayout,
+    /// The tree's origins and shown flags (F-ORIGIN-1), rewritten in place by `set_tree`. Out of
+    /// line: the cull walks every record, and reads a layout only for an element in view.
+    layout: Box<TreeLayout>,
     /// The element has been Mapped at least once (written by `set_state`): its placement is
     /// final and a remap keeps it (INV-STAGE-5).
     mapped_once: bool,
@@ -262,7 +263,7 @@ impl Stage {
             anchor: None,
             tree: None,
             extent: None,
-            layout: TreeLayout::default(),
+            layout: Box::default(),
             mapped_once: false,
             default_placed: false,
         });

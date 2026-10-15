@@ -72,9 +72,10 @@ impl MembershipTable {
     /// F-MEMBER-1 over every mapped element and every output view.
     pub(crate) fn compute(stage: &Stage, views: &[(OutputId, View)]) -> MembershipTable {
         let mut rows = Vec::new();
+        let culls: Vec<_> = views.iter().map(|(_, v)| v.cull()).collect();
         for p in stage.placed_all() {
-            for (output, view) in views {
-                visit_entries(view, &p, |i, _, _| {
+            for ((output, view), cull) in views.iter().zip(&culls) {
+                visit_entries(view, cull, &p, |i, _, _| {
                     rows.push((p.id, p.tree.surfaces[i].key, *output));
                 });
             }
@@ -116,7 +117,7 @@ impl MembershipTable {
         scratch.clear();
         if let Some(p) = stage.placed(element) {
             for (output, view) in views {
-                visit_entries(view, &p, |i, _, _| {
+                visit_entries(view, &view.cull(), &p, |i, _, _| {
                     scratch.push((element, p.tree.surfaces[i].key, *output));
                 });
             }
@@ -143,23 +144,46 @@ impl MembershipTable {
         self.rows.splice(range, scratch.drain(..));
     }
 
-    /// This table becomes a copy of `from` with the rows of `output` recomputed under `view`
-    /// (`None`: the output has none): the table after the view of one output changed, built in
-    /// this table's storage. Applied once per output to a table that already has the other
-    /// outputs' new rows, it recomputes several outputs in turn.
+    /// This table becomes `from` with the rows of `output` recomputed under `view` (`None`: the
+    /// output has none): the table after the view of one output changed, built in this table's
+    /// storage. The other outputs' rows of `from` are already sorted, so only the new rows (the
+    /// surfaces in view) are sorted, in `scratch`, and the two runs are merged: linear in the
+    /// table, no allocation once the storage has grown.
     pub(crate) fn assign_with_output(
         &mut self,
         from: &MembershipTable,
         output: OutputId,
         view: Option<&View>,
         stage: &Stage,
+        scratch: &mut Vec<Row>,
     ) {
+        scratch.clear();
+        if let Some(view) = view {
+            let cull = view.cull();
+            for p in stage.placed_all() {
+                visit_entries(view, &cull, &p, |i, _, _| {
+                    scratch.push((p.id, p.tree.surfaces[i].key, output));
+                });
+            }
+        }
+        scratch.sort_unstable();
+        scratch.dedup();
         self.rows.clear();
-        self.rows.extend_from_slice(&from.rows);
-        self.recompute_output(output, view, stage);
+        let mut kept = from.rows.iter().filter(|(_, _, o)| *o != output).peekable();
+        let mut new = scratch.iter().peekable();
+        loop {
+            let next = match (kept.peek(), new.peek()) {
+                (Some(a), Some(b)) if a <= b => kept.next(),
+                (Some(_), Some(_)) | (None, Some(_)) => new.next(),
+                (Some(_), None) => kept.next(),
+                (None, None) => break,
+            };
+            self.rows.extend(next.copied());
+        }
     }
 
-    /// The rows of `output` recomputed under `view`, in place.
+    /// The rows of `output` recomputed under `view`, in place (a second output in one pass,
+    /// rare: a camera shown on several outputs, a presentation change on several outputs).
     pub(crate) fn recompute_output(
         &mut self,
         output: OutputId,
@@ -169,8 +193,9 @@ impl MembershipTable {
         self.rows.retain(|(_, _, o)| *o != output);
         if let Some(view) = view {
             let rows = &mut self.rows;
+            let cull = view.cull();
             for p in stage.placed_all() {
-                visit_entries(view, &p, |i, _, _| {
+                visit_entries(view, &cull, &p, |i, _, _| {
                     rows.push((p.id, p.tree.surfaces[i].key, output));
                 });
             }
