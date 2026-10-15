@@ -1252,6 +1252,18 @@ CONTROLS = [
      "                scale_state.end_epoch();\n",
      "                let _ = &scale_state;\n",
      "infynitae-core", ["--lib"], "a_subjects_fullscreen_exit_during_a_drag_settles_its_epoch"),
+    ("C12.F13 (rehearsal): a presentation that no longer lowers a window leaves its hold", f"{CORE}/lib.rs",
+     "                // at or above the hint ends the hold\n                scale_state.presentation_hold = false;\n",
+     "                // at or above the hint ends the hold\n",
+     "infynitae-core", ["--lib"], "a_hold_ends_when_the_presentation_that_caused_it_ends"),
+    ("C12.F13 (rehearsal): the window's own evaluation leaves a stale hold", f"{CORE}/lib.rs",
+     "                if !lowers {\n                    scale_state.presentation_hold = false;\n                }\n",
+     "",
+     "infynitae-core", ["--lib"], "a_held_windows_own_growth_ends_its_hold"),
+    ("C12.F13 (rehearsal): a subject keeps a hold through its own fullscreen", f"{CORE}/lib.rs",
+     "            let changed = if subject {\n                scale_state.presentation_hold = false;\n",
+     "            let changed = if subject {\n",
+     "infynitae-core", ["--lib"], "a_held_windows_own_fullscreen_ends_its_hold"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

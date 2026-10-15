@@ -956,7 +956,9 @@ impl Core {
                 scale_state.last_rho = rho;
                 false
             } else if by_presentation {
-                // ... but may raise it (a revealed window is never left low)
+                // ... but may raise it (a revealed window is never left low); a requirement back
+                // at or above the hint ends the hold
+                scale_state.presentation_hold = false;
                 scale_state.evaluate(rho, ladder, h_max, &self.scale_config, false)
             } else if !is_client_response {
                 // a non-client stimulus that is not another client's presentation releases it
@@ -966,6 +968,11 @@ impl Core {
                 scale_state.last_rho = rho;
                 false
             } else {
+                // a requirement at or above the hint ends a hold: from then on the element's own
+                // geometry decides again (SC-E), with nothing left of another client's change
+                if !lowers {
+                    scale_state.presentation_hold = false;
+                }
                 scale_state.evaluate(rho, ladder, h_max, &self.scale_config, true)
             };
 

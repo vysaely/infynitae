@@ -3992,6 +3992,109 @@ mod tests {
         }
     }
 
+    /// C12.F13 (REHEARSAL), review probe F: a hold ends when it is no longer needed. X reaches
+    /// into B (scale 2) by its own size; another client toggles fullscreen on B (set, unset);
+    /// then X shrinks itself off B: its own geometry lowers its hint, as without the toggle.
+    #[test]
+    fn a_hold_ends_when_the_presentation_that_caused_it_ends() {
+        for toggle in [false, true] {
+            let (mut c, mut i, _, mut t) = Core::new(camera_b(1000, 1.0));
+            let (a, b) = two_scales(&mut c, &mut t);
+            let x = map_win(&mut c, 9, 1200, 200);
+            assert_eq!(c.preferred_scale_of(x), Some((240, 2)), "X reaches into B");
+            if toggle {
+                let w = map_win(&mut c, 1, 400, 300);
+                focus(&mut c, &mut i, w);
+                c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+                    .unwrap();
+                focus(&mut c, &mut i, w);
+                c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+                    .unwrap();
+                assert!(!c.scale_state(x).unwrap().presentation_hold, "no hold left");
+            }
+            let fx = c.toplevel_committed(x, win(9, 300, 200, true)).unwrap();
+            assert_eq!(c.membership().observers(x), vec![a], "toggle {toggle}");
+            assert_eq!(hints(&fx, x), vec![(120, 1)], "toggle {toggle}: {fx:?}");
+        }
+    }
+
+    /// Persisted cameras at the given x centres (px), zoom 1, for the outputs named.
+    fn cameras_at(at: &[(&str, i64)]) -> PersistedCameras {
+        PersistedCameras::from_entries(
+            at.iter()
+                .map(|(name, x)| {
+                    (
+                        crate::output::tests::key(name),
+                        crate::geom::CanvasPos { x: x << 16, y: 0 },
+                        1.0,
+                    )
+                })
+                .collect(),
+        )
+        .unwrap()
+    }
+
+    /// C12.F13 (REHEARSAL): the element's own evaluation ends a hold its requirement no longer
+    /// needs. X (300 px, seen by A and B) is held while W is presented on B; X grows onto D
+    /// (scale 2): its requirement is back at its hint, the hold ends; X shrinks off D: its own
+    /// geometry lowers it.
+    #[test]
+    fn a_held_windows_own_growth_ends_its_hold() {
+        let (mut c, mut i, _, mut t) = Core::new(cameras_at(&[("B", 0), ("D", 1500)]));
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let b = out(&mut c, &mut t, "B", (1920, 1080), 240);
+        let d = out(&mut c, &mut t, "D", (1920, 1080), 240);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert!(c.scale_state(x).unwrap().presentation_hold, "held");
+        c.toplevel_committed(x, win(9, 2400, 200, true)).unwrap();
+        assert!(c.membership().observers(x).contains(&d));
+        assert!(
+            !c.scale_state(x).unwrap().presentation_hold,
+            "needed no more"
+        );
+        let fx = c.toplevel_committed(x, win(9, 300, 200, true)).unwrap();
+        assert_eq!(c.membership().observers(x), vec![a]);
+        assert_eq!(hints(&fx, x), vec![(120, 1)], "{fx:?}");
+    }
+
+    /// C12.F13 (REHEARSAL): a subject's own fullscreen ends its hold. X (seen by A, E and B) is
+    /// held while W is presented on B; X goes fullscreen on A and back (a subject both times);
+    /// then X shrinks off A, onto E alone (scale 0.75): its own geometry lowers it.
+    #[test]
+    fn a_held_windows_own_fullscreen_ends_its_hold() {
+        let (mut c, mut i, _, mut t) = Core::new(cameras_at(&[("A", 1500), ("B", 1500)]));
+        // E first: X is placed on E (the lowest-id output), origin-aligned (wider than E's view),
+        // and A and B see its right part
+        let e = out(&mut c, &mut t, "E", (1920, 1080), 90);
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let b = out(&mut c, &mut t, "B", (1920, 1080), 240);
+        let x = map_win(&mut c, 9, 3000, 200);
+        assert_eq!(c.membership().observers(x), vec![e, a, b]);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert!(c.scale_state(x).unwrap().presentation_hold, "held");
+        focus(&mut c, &mut i, x);
+        c.toplevel_request(x, ToplevelRequest::SetFullscreen { output: Some(a) })
+            .unwrap();
+        focus(&mut c, &mut i, x);
+        c.toplevel_request(x, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        assert!(
+            !c.scale_state(x).unwrap().presentation_hold,
+            "its own fullscreen ended it"
+        );
+        let fx = c.toplevel_committed(x, win(9, 300, 200, true)).unwrap();
+        assert_eq!(c.membership().observers(x), vec![e], "off A, on E alone");
+        let (s120, _) = hints(&fx, x).pop().expect("lowered by its own geometry");
+        assert_eq!(s120, 90, "{fx:?}");
+    }
+
     /// C12.F13 (REHEARSAL): P7 lowers a held window (the device bound is a correctness rule).
     #[test]
     fn p7_lowers_a_held_window() {
