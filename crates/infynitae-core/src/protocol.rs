@@ -99,6 +99,12 @@ pub enum Effect {
         surface: SurfaceKey,
         kind: crate::pointer::ConstraintKind,
     },
+    /// A preferred scale update for an element (F-SCALE-3, INV-SCALE-5).
+    PreferredScale {
+        element: ElementId,
+        scale_120: u32,
+        integer_scale: u32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -627,13 +633,44 @@ impl Core {
             (Lifecycle::AwaitingInitialCommit, false) => {
                 let anchor = self.initial_anchor();
                 self.stage.place(id, anchor).map_err(stale)?;
-                self.stage.set_tree(id, Some(tree)).map_err(stale)?;
+                self.stage.set_tree(id, Some(tree.clone())).map_err(stale)?;
                 self.stage
                     .set_state(id, Lifecycle::AwaitingFirstBuffer)
                     .map_err(stale)?;
+                // M15 / F-SCALE-3: Initial scale prediction & emission before InitialConfigure
+                let views: Vec<_> = self
+                    .outputs
+                    .iter()
+                    .filter_map(|o| self.view(o.id).map(|v| (o.id, v)))
+                    .collect();
+                let rho_pred =
+                    crate::scale::predict_rho(anchor, tree.geometry, &self.outputs, &views);
+                let s_max = crate::scale::s_max_for_tree(Some(&tree));
+                let h_dev = crate::scale::h_dev(s_max, self.scale_config.d_max);
+                let h_max =
+                    crate::scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
+                let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
+                let initial_h =
+                    crate::scale::target(rho_pred, ladder, h_max, self.scale_config.sigma);
+                let s120 = crate::scale::preferred_scale_120(initial_h);
+                let b = crate::scale::preferred_buffer_scale(initial_h, h_dev);
+
+                let mut st = crate::scale::ScaleState::new(initial_h);
+                st.last_emitted_scale_120 = Some(s120);
+                st.last_emitted_buffer_scale = Some(b);
+                st.last_rho = Some(rho_pred);
+                self.scales.set(id, st);
+
                 // M2 pre-configure: a recorded fullscreen request is granted in the initial
                 // configure (before the first map, INV-PRES-1); placement ran first (C5.2).
-                let mut fx = vec![Effect::InitialConfigure(id)];
+                let mut fx = vec![
+                    Effect::PreferredScale {
+                        element: id,
+                        scale_120: s120,
+                        integer_scale: b,
+                    },
+                    Effect::InitialConfigure(id),
+                ];
                 if let Some(i) = self.premap_fullscreen.iter().position(|(e, _)| *e == id) {
                     let (_, requested) = self.premap_fullscreen.remove(i);
                     if let Some(o) = self.fullscreen_output(id, requested) {
@@ -705,7 +742,7 @@ impl Core {
                 self.focus.target_lost(id, &live)
             }
         };
-        fx.extend(self.visibility_pass_element(id));
+        fx.extend(self.visibility_pass_element(id, true));
         // A presentation that started or ended in this commit (a fullscreen element's first map;
         // an older grant replaced), and any commit of a presented element: its view depends on
         // its geometry (F-PRESENT-1).
@@ -749,7 +786,8 @@ impl Core {
         self.stage
             .set_tree(id, Some(tree))
             .map_err(|_| ProtocolError::StaleElement)?;
-        let mut fx = self.visibility_pass_element(id);
+        // P7 for the new tree is the first rule of the batch-end evaluation (ScaleState::step)
+        let mut fx = self.visibility_pass_element(id, true);
         // the presentation view of a fullscreen element depends on its geometry (F-PRESENT-1)
         match self.fullscreen_of(id) {
             Some(fs) if self.presentation(fs.output) == Some(id) => {
@@ -764,6 +802,7 @@ impl Core {
     /// dead client gets no leave: its membership rows are dropped silently. Target loss triggers
     /// successor focus transition (K7, M11).
     pub fn toplevel_destroyed(&mut self, id: ElementId) -> Vec<Effect> {
+        self.scales.remove(id);
         for (_, frame) in &mut self.frames {
             frame.entries.retain(|e| e.element != id);
         }
@@ -783,10 +822,17 @@ impl Core {
         if !ended.is_empty() {
             fx.extend(self.presentation_changed(&ended));
         }
-        let vis = self.visibility_pass_element(id);
+        // Evaluated as client-caused: the destruction of an element is not one of the
+        // non-client stimuli of SC-E (C14.4), so it must not reverse a hint another element
+        // is holding (INV-SCALE-4 d).
+        let vis = self.visibility_pass_element(id, true);
+        // The pass also evaluates the scale policy of the surviving elements (INV-SCALE-5), so
+        // it may return a hint that a client-caused evaluation is allowed to move. The destroyed
+        // element itself has no row left to diff.
         debug_assert!(
-            vis.is_empty(),
-            "a destroyed element produced visibility effects"
+            !vis.iter()
+                .any(|e| matches!(e, Effect::Enter { .. } | Effect::Leave { .. })),
+            "a destroyed element produced enter or leave effects"
         );
         fx.extend(vis);
         fx.extend(self.reconcile_constraints());
@@ -1337,7 +1383,14 @@ mod tests {
         assert_eq!(core.stage().anchor(id), None);
         assert_eq!(
             core.toplevel_committed(id, tree(false)),
-            Ok(vec![Effect::InitialConfigure(id)])
+            Ok(vec![
+                Effect::PreferredScale {
+                    element: id,
+                    scale_120: 120,
+                    integer_scale: 1,
+                },
+                Effect::InitialConfigure(id),
+            ])
         );
         // INV-STAGE-1 (C12.F1): a provisional anchor at the initial commit, the camera centre
         let provisional = core.stage().anchor(id).expect("placed at initial commit");

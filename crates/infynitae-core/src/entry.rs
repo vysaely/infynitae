@@ -354,6 +354,7 @@ impl Core {
                 if self.constraint.is_none() {
                     fx.extend(self.true_position());
                 }
+                fx.extend(self.settle_interaction(crate::scale::InteractionKind::CameraPan));
                 fx
             }
             // In NoOutput the zero-output grab receives it and delivers nothing, keeping
@@ -430,6 +431,7 @@ impl Core {
             }
         }
         fx.extend(self.reconcile_constraints());
+        fx.extend(self.settle_all_epochs());
         Ok((id, fx))
     }
 
@@ -469,6 +471,7 @@ impl Core {
             fx.extend(self.true_position());
         }
         fx.extend(self.reconcile_constraints());
+        fx.extend(self.settle_all_epochs());
         Ok(fx)
     }
 
@@ -519,6 +522,7 @@ impl Core {
         fx.extend(restored);
         fx.extend(pointer_fx);
         fx.push(Effect::OutputRemoved(output));
+        fx.extend(self.settle_all_epochs());
         Ok(fx)
     }
 }

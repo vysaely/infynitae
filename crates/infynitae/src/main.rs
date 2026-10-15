@@ -174,6 +174,7 @@ fn main() -> ExitCode {
             refresh_mhz,
             duration,
             max_frames,
+            device_limit: infynitae_backend_headless::DeviceLimit::default(),
         };
         match infynitae_backend_headless::run_headless(core, input_port, output_token, options) {
             Ok(()) => ExitCode::SUCCESS,

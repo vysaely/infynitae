@@ -14,6 +14,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use infynitae_core::scale::SessionTime;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction};
 use smithay::reexports::rustix::io::Errno;
@@ -118,6 +119,9 @@ pub struct Session {
     /// The display became readable since the last dispatch: a request arrived or a client
     /// went away.
     display_ready: Rc<Cell<bool>>,
+    /// A deadline of Core's own on the session clock (a scale-settlement deadline); `None`
+    /// when Core has nothing pending.
+    wake: Option<Instant>,
 }
 
 impl Session {
@@ -168,6 +172,7 @@ impl Session {
             duration: options.duration,
             max_frames: options.max_frames,
             display_ready,
+            wake: None,
         };
         if let Some(cmd) = &options.exec {
             session.spawn(handle, cmd);
@@ -208,17 +213,40 @@ impl Session {
         }
     }
 
-    /// How long the loop may sleep: until the pending frame or the duration limit, whichever is
-    /// first; `None` when neither exists, and the loop then waits for events only.
+    /// Milliseconds since the session started, on a monotonic clock.
+    pub fn now_ms(&self) -> u64 {
+        self.started.elapsed().as_millis() as u64
+    }
+
+    /// The session clock: the one clock Core's scale-epoch deadlines are expressed on (M7). The
+    /// session is its owner; nothing else mints a [`SessionTime`] in a running compositor. It is
+    /// not the time an input event carries and not the presentation clock.
+    pub fn now(&self) -> SessionTime {
+        SessionTime::from_millis(self.now_ms())
+    }
+
+    /// Arms, moves or cancels the wake-up for a deadline of Core's. The loop's own sleep is
+    /// bounded by it, so the deadline wakes the loop with no client request and no frame
+    /// pending; `None` cancels it, and an idle session then has nothing to wake for. Calling it
+    /// every turn with Core's current deadline is the whole protocol: there is no timer object
+    /// to keep in step, so a deadline that no longer exists cannot fire.
+    pub fn wake_at(&mut self, deadline: Option<SessionTime>) {
+        self.wake = deadline.map(|at| self.started + Duration::from_millis(at.millis()));
+    }
+
+    /// How long the loop may sleep: until the pending frame, the duration limit or Core's
+    /// deadline, whichever is first; `None` when none exists, and the loop then waits for events
+    /// only.
     pub fn timeout(&self) -> Option<Duration> {
         let now = Instant::now();
         let limit = self
             .duration
             .map(|d| (self.started + d).saturating_duration_since(now));
-        match (self.timer.until_due(now), limit) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        let wake = self.wake.map(|at| at.saturating_duration_since(now));
+        [self.timer.until_due(now), limit, wake]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// After the loop woke: reaps exited children, dispatches the clients' requests and flushes
@@ -487,6 +515,62 @@ mod tests {
         };
         let session = Session::new(display, &event_loop.handle(), &options).unwrap();
         (session, state, event_loop)
+    }
+
+    /// A deadline of Core's (a scale-settlement deadline, INV-SCALE-3) wakes an otherwise idle
+    /// session by itself: no client request, no frame. It is not a frame; it can be moved in
+    /// both directions; a deadline already past gives a zero sleep, not a negative one; and when
+    /// it is cancelled the idle session again has nothing to wake for (INV-IDLE-1).
+    #[test]
+    fn a_core_deadline_wakes_an_idle_session_and_only_while_armed() {
+        let (mut session, mut state, mut event_loop) = session("wake", None);
+        while session.timeout().is_some() {
+            turn(&mut session, &mut state, &mut event_loop);
+        }
+        assert_eq!(session.timeout(), None, "idle: nothing to wake for");
+
+        let at = session.now_ms() + 60;
+        session.wake_at(Some(SessionTime::from_millis(at)));
+        let sleep = session
+            .timeout()
+            .expect("an armed deadline bounds the sleep");
+        assert!(
+            sleep <= Duration::from_millis(60),
+            "sleeps past the deadline: {sleep:?}"
+        );
+        assert!(
+            sleep >= Duration::from_millis(20),
+            "the deadline is 60 ms away: {sleep:?}"
+        );
+        // the loop itself sleeps until the deadline and returns with no event to dispatch
+        let before = Instant::now();
+        event_loop.dispatch(session.timeout(), &mut ()).unwrap();
+        session.dispatch(&mut state);
+        assert!(session.now_ms() >= at, "woke before the deadline");
+        assert!(
+            before.elapsed() < Duration::from_secs(2),
+            "did not wake at the deadline"
+        );
+        assert!(!session.frame_due(), "a settlement deadline is not a frame");
+        assert_eq!(
+            session.timeout(),
+            Some(Duration::ZERO),
+            "a due deadline: no sleep"
+        );
+
+        session.wake_at(Some(SessionTime::from_millis(at + 10_000)));
+        assert!(
+            session.timeout().unwrap() > Duration::from_secs(9),
+            "moved later"
+        );
+        session.wake_at(Some(SessionTime::from_millis(at + 100)));
+        assert!(
+            session.timeout().unwrap() <= Duration::from_millis(100),
+            "moved earlier"
+        );
+        session.wake_at(None);
+        assert_eq!(session.timeout(), None, "cancelled: idle again");
+        drop(event_loop);
     }
 
     /// One loop turn; whether a frame was taken.

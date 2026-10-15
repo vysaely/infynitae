@@ -79,6 +79,19 @@ struct LoopData {
     options: WinitCompositorOptions,
 }
 
+/// The nested backend's answer to "what is the device limit": **not a query**. The GLES
+/// renderer is not asked (`GL_MAX_TEXTURE_SIZE`; OB-52, INC-13). The value is the limit
+/// recorded for the reference device (EC-16) and the host GPU's real limit may be lower, in
+/// which case a buffer Core allowed can fail to import. Provisional with the rest of this
+/// experimental backend.
+struct AssumedGlesLimits;
+
+impl infynitae_wayland::limits::RendererLimits for AssumedGlesLimits {
+    fn max_buffer_side(&self) -> Result<u32, infynitae_wayland::limits::LimitQueryError> {
+        Ok(infynitae_core::scale::DEFAULT_D_MAX)
+    }
+}
+
 /// Runs the nested compositor with Winit backend.
 ///
 /// Takes ownership of `Core` and the composition root's authority ports (`InputPort`,
@@ -129,6 +142,11 @@ pub fn run_nested(
         .map_err(|e| format!("Failed to connect output: {e:?}"))?;
     state.apply(&effects);
 
+    // Device ceiling D_max (OB-13, F-SCALE-2, OBJ-29), through the renderer-limit interface.
+    // This backend does not ask its GLES renderer yet (OB-52, INC-13): it reports an assumed
+    // limit and says so.
+    state.report_renderer_limits(&AssumedGlesLimits)?;
+
     let session = Session::new(
         display,
         &event_loop.handle(),
@@ -166,6 +184,10 @@ pub fn run_nested(
 
     println!("[infynitae] Compositor running. Close the window to exit.");
     while !data.closed && !data.session.finished() {
+        // An open scale-settlement deadline (INV-SCALE-3) wakes the loop by itself; none is
+        // armed while no epoch is open (INV-IDLE-1).
+        data.session
+            .wake_at(data.state.core().next_settlement_deadline());
         event_loop.dispatch(data.session.timeout(), &mut data)?;
         data.session.dispatch(&mut data.state);
 
@@ -178,6 +200,19 @@ pub fn run_nested(
                 .grant_initial_focus(&mut data.input_port, topmost)
         {
             data.state.apply(&effects);
+            data.session.flush();
+        }
+
+        // Settle the scale epochs whose deadline has passed, on the session clock.
+        let now = data.session.now();
+        if data
+            .state
+            .core()
+            .next_settlement_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
+            let scale_fx = data.state.core_mut().scale_tick(now);
+            data.state.apply(&scale_fx);
             data.session.flush();
         }
 

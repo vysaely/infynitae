@@ -200,6 +200,70 @@ pub fn vblank_period(refresh_mhz: u32) -> Duration {
     Duration::from_nanos(1_000_000_000_000 / u64::from(refresh_mhz.max(1)))
 }
 
+/// What the headless renderer reports as its device limit.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DeviceLimit {
+    /// The largest buffer side, in device pixels.
+    MaxBufferSide(u32),
+    /// The query fails, as a real renderer's may (a lost context, a driver error).
+    Unavailable(String),
+}
+
+impl Default for DeviceLimit {
+    /// 16384: the framebuffer limit recorded for the reference device (EC-16). A fixture value,
+    /// chosen so that headless runs behave as the reference device would; it says nothing about
+    /// the machine the tests run on.
+    fn default() -> Self {
+        DeviceLimit::MaxBufferSide(HEADLESS_REFERENCE_DEVICE_LIMIT)
+    }
+}
+
+/// EC-16, `maxFramebufferWidth` of the reference device: the headless renderer's default limit.
+pub const HEADLESS_REFERENCE_DEVICE_LIMIT: u32 = 16384;
+
+/// The headless backend's renderer: Smithay's test renderer, which draws nothing, together with
+/// the device limit a real renderer would have. There is no device behind it, so the limit is a
+/// documented, deterministic fixture value, configurable so that tests can stand in for devices
+/// with other limits. It is reported through the same interface a real renderer uses (OB-13);
+/// what a real GPU reports is OB-52 and is not shown by anything this type does.
+#[derive(Debug)]
+pub struct HeadlessRenderer {
+    pub dummy: DummyRenderer,
+    limit: DeviceLimit,
+}
+
+impl HeadlessRenderer {
+    pub fn new(limit: DeviceLimit) -> Self {
+        Self {
+            dummy: DummyRenderer,
+            limit,
+        }
+    }
+
+    /// Replaces what the device reports, as a renderer recreated on another device would. The
+    /// compositor learns of it only when the limits are reported again.
+    pub fn set_device_limit(&mut self, limit: DeviceLimit) {
+        self.limit = limit;
+    }
+}
+
+impl Default for HeadlessRenderer {
+    fn default() -> Self {
+        Self::new(DeviceLimit::default())
+    }
+}
+
+impl infynitae_wayland::limits::RendererLimits for HeadlessRenderer {
+    fn max_buffer_side(&self) -> Result<u32, infynitae_wayland::limits::LimitQueryError> {
+        match &self.limit {
+            DeviceLimit::MaxBufferSide(side) => Ok(*side),
+            DeviceLimit::Unavailable(why) => {
+                Err(infynitae_wayland::limits::LimitQueryError(why.clone()))
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
 pub enum RenderError {
     Frame(FrameError),
@@ -239,6 +303,8 @@ pub struct HeadlessCompositorOptions {
     pub duration: Option<Duration>,
     /// Optional maximum frame count before clean exit.
     pub max_frames: Option<u64>,
+    /// What the headless renderer reports as its device limit.
+    pub device_limit: DeviceLimit,
 }
 
 impl Default for HeadlessCompositorOptions {
@@ -251,6 +317,7 @@ impl Default for HeadlessCompositorOptions {
             refresh_mhz: 60_000,
             duration: None,
             max_frames: None,
+            device_limit: DeviceLimit::default(),
         }
     }
 }
@@ -280,6 +347,11 @@ pub fn run_headless(
     let output_id = connect(&mut state, &mut output_token, &virtual_output)
         .map_err(|e| format!("Failed to connect headless output: {e:?}"))?;
 
+    // Device ceiling D_max (OB-13, F-SCALE-2, OBJ-29): asked of the renderer, as every backend
+    // must. The headless renderer is a fixture and reports the limit it was configured with.
+    let renderer = HeadlessRenderer::new(options.device_limit);
+    state.report_renderer_limits(&renderer)?;
+
     let mut event_loop: EventLoop<()> = EventLoop::try_new()?;
     let mut session = Session::new(
         display,
@@ -295,6 +367,10 @@ pub fn run_headless(
 
     println!("[infynitae] Headless compositor running.");
     while !session.finished() {
+        // An open scale-settlement deadline (INV-SCALE-3) is a wake-up of its own: the loop
+        // sleeps until it even if no client and no frame is pending, and has nothing to wake
+        // for when no epoch is open (INV-IDLE-1).
+        session.wake_at(state.core().next_settlement_deadline());
         event_loop.dispatch(session.timeout(), &mut ())?;
         session.dispatch(&mut state);
 
@@ -306,6 +382,18 @@ pub fn run_headless(
                 .grant_initial_focus(&mut input_port, topmost)
         {
             state.apply(&effects);
+            session.flush();
+        }
+
+        // Settle the scale epochs whose deadline has passed, on the session clock.
+        let now = session.now();
+        if state
+            .core()
+            .next_settlement_deadline()
+            .is_some_and(|deadline| now >= deadline)
+        {
+            let scale_fx = state.core_mut().scale_tick(now);
+            state.apply(&scale_fx);
             session.flush();
         }
 

@@ -23,6 +23,7 @@ pub mod pointer;
 pub mod projection;
 pub mod protocol;
 pub mod render;
+pub mod scale;
 pub mod snapshot;
 pub mod stage;
 pub mod visibility;
@@ -171,6 +172,22 @@ pub struct Core {
     pending_constraint: Option<pointer::ConstraintState>,
     /// OBJ-09: read only by `output_connected`.
     persisted: navigation::PersistedCameras,
+    /// Authoritative scale policy configuration (PROV-1..3, PROV-5).
+    scale_config: scale::ScalePolicyConfig,
+    /// OBJ-16: Authoritative scale state per element.
+    scales: scale::ScaleStates,
+    /// Which elements the next batch-end scale evaluation visits (derived from `scales`).
+    scale_sweep: scale::Sweep,
+    /// The last ladder built (derived from the outputs and the configuration).
+    ladders: scale::Ladders,
+    /// Test reference: every batch-end scale evaluation visits every mapped element.
+    #[cfg(test)]
+    scale_reference: bool,
+    /// Test observation: batch-end scale evaluations so far, (full, scoped).
+    #[cfg(test)]
+    scale_passes: (usize, usize),
+    /// The latest session time handed to the scale policy (M7 deadlines are on this clock).
+    scale_clock: Option<scale::SessionTime>,
     /// The placement policy of elements not yet mapped (INV-STAGE-1 writer (a)).
     placement: protocol::PlacementPolicy,
     /// OBJ-19: the protocol-fullscreen states, at most one per output and one per element. The
@@ -217,6 +234,15 @@ impl Core {
                 constraint: None,
                 pending_constraint: None,
                 persisted,
+                scale_config: scale::ScalePolicyConfig::default(),
+                scales: scale::ScaleStates::default(),
+                scale_sweep: scale::Sweep::default(),
+                ladders: scale::Ladders::default(),
+                #[cfg(test)]
+                scale_reference: false,
+                #[cfg(test)]
+                scale_passes: (0, 0),
+                scale_clock: None,
                 placement: protocol::PlacementPolicy::default(),
                 fullscreen: Vec::new(),
                 premap_fullscreen: Vec::new(),
@@ -482,25 +508,41 @@ impl Core {
     /// outputs or an output's hardware facts; a batch that changes one element or one camera
     /// runs the scoped pass for it.
     pub(crate) fn visibility_pass(&mut self) -> Vec<protocol::Effect> {
+        self.visibility_pass_internal(false)
+    }
+
+    pub(crate) fn visibility_pass_internal(
+        &mut self,
+        is_client_response: bool,
+    ) -> Vec<protocol::Effect> {
         let new = visibility::MembershipTable::compute(&self.stage, &self.views());
-        let fx = self.membership.diff(&new, &self.stage);
+        let mut fx = self.membership.diff(&new, &self.stage);
         self.membership = new;
+        self.scale_sweep.all = true;
+        fx.extend(self.evaluate_scale_policy(is_client_response));
         fx
     }
 
     /// The visibility pass of a batch that changed only `element` (its snapshot, lifecycle or
-    /// anchor): no other element's membership depends on it.
+    /// anchor): no other element's membership depends on it, and the scale policy is evaluated
+    /// for it alone.
     pub(crate) fn visibility_pass_element(
         &mut self,
         element: stage::ElementId,
+        is_client_response: bool,
     ) -> Vec<protocol::Effect> {
         let views = self.views();
-        self.membership
-            .replace_element(element, &self.stage, &views)
+        let mut fx = self
+            .membership
+            .replace_element(element, &self.stage, &views);
+        self.scale_sweep.mark(element);
+        fx.extend(self.evaluate_scale_policy(is_client_response));
+        fx
     }
 
     /// The visibility pass of a batch that changed only `camera`: the outputs it is bound to are
-    /// the only views that moved.
+    /// the only views that moved. The scale policy is evaluated for the elements those views
+    /// observed before or observe after: no other element's requirement ρ can have changed.
     pub(crate) fn visibility_pass_camera(&mut self, camera: usize) -> Vec<protocol::Effect> {
         let mut new = None;
         for o in &self.outputs {
@@ -513,11 +555,302 @@ impl Core {
                 ));
             }
         }
-        let Some(new) = new else {
-            return Vec::new();
+        let mut fx = Vec::new();
+        if let Some(new) = new {
+            let moved = |o| self.cameras.camera_for_output(o) == Some(camera);
+            for (element, _, o) in self.membership.rows().iter().chain(new.rows()) {
+                if moved(*o) {
+                    self.scale_sweep.mark(*element);
+                }
+            }
+            fx = self.membership.diff(&new, &self.stage);
+            self.membership = new;
+        }
+        fx.extend(self.evaluate_scale_policy(false));
+        fx
+    }
+
+    /// Read scale policy configuration (PROV-1..3, PROV-5).
+    pub fn scale_config(&self) -> &scale::ScalePolicyConfig {
+        &self.scale_config
+    }
+
+    /// Update scale policy configuration. A value outside its allowed range (§PROV) is refused
+    /// and the configuration in force is kept.
+    pub fn set_scale_config(
+        &mut self,
+        config: scale::ScalePolicyConfig,
+    ) -> Result<(), scale::ScaleConfigError> {
+        config.validate()?;
+        self.scale_config = config;
+        self.scale_sweep.all = true;
+        Ok(())
+    }
+
+    /// Ingests the renderer's device limit `D_max` (OB-13, F-SCALE-2, OBJ-29) and runs P7.
+    /// `D_max = 0` is refused: the ceiling in force is kept and nothing is emitted.
+    pub fn set_renderer_device_max(
+        &mut self,
+        d_max: u32,
+    ) -> Result<Vec<protocol::Effect>, scale::ScaleConfigError> {
+        scale::ScalePolicyConfig {
+            d_max,
+            ..self.scale_config
+        }
+        .validate()?;
+        self.scale_config.d_max = d_max;
+        self.scale_sweep.all = true;
+        let mut fx = Vec::new();
+        for (element, st) in &mut self.scales {
+            let s_max = scale::s_max_for_tree(self.stage.tree(*element));
+            let h_dev = scale::h_dev(s_max, d_max);
+            let h_max = scale::h_max(self.scale_config.h_cfg, s_max, d_max);
+            let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
+            let lowered = st.p7_check(ladder, h_max, self.scale_config.sigma);
+            // b(h) depends on H_dev(E) even when h itself still fits (E1R-N3)
+            let s120 = scale::preferred_scale_120(st.h);
+            let b = scale::preferred_buffer_scale(st.h, h_dev);
+            if lowered
+                || st.last_emitted_scale_120 != Some(s120)
+                || st.last_emitted_buffer_scale != Some(b)
+            {
+                st.last_emitted_scale_120 = Some(s120);
+                st.last_emitted_buffer_scale = Some(b);
+                fx.push(protocol::Effect::PreferredScale {
+                    element: *element,
+                    scale_120: s120,
+                    integer_scale: b,
+                });
+            }
+        }
+        Ok(fx)
+    }
+
+    /// Preferred scale for an element: (scale_120, integer_buffer_scale).
+    pub fn preferred_scale_of(&self, element: stage::ElementId) -> Option<(u32, u32)> {
+        self.scales.get(element).map(|st| {
+            let s_max = scale::s_max_for_tree(self.stage.tree(element));
+            let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
+            (
+                scale::preferred_scale_120(st.h),
+                scale::preferred_buffer_scale(st.h, h_dev),
+            )
+        })
+    }
+
+    /// Read scale state of an element.
+    pub fn scale_state(&self, element: stage::ElementId) -> Option<&scale::ScaleState> {
+        self.scales.get(element)
+    }
+
+    /// Returns the smallest active deadline among open ScaleInteractionEpochs.
+    pub fn next_settlement_deadline(&self) -> Option<scale::SessionTime> {
+        self.scales
+            .iter()
+            .filter_map(|(_, st)| {
+                if st.epoch.open {
+                    st.epoch.deadline
+                } else {
+                    None
+                }
+            })
+            .min()
+            .map(scale::SessionTime::from_millis)
+    }
+
+    /// The session clock as Core has seen it: the latest [`scale::SessionTime`] any caller
+    /// handed in. A time earlier than that is read as that latest time, so a clock that steps
+    /// backwards cannot produce a deadline in the past or settle an epoch out of order.
+    fn session_time(&mut self, now: scale::SessionTime) -> u64 {
+        self.scale_clock = self.scale_clock.max(Some(now));
+        self.scale_clock.unwrap_or(now).millis()
+    }
+
+    /// Advances time for active ScaleInteractionEpochs, settling those whose deadline expired.
+    pub fn scale_tick(&mut self, now: scale::SessionTime) -> Vec<protocol::Effect> {
+        let now_ms = self.session_time(now);
+        let mut fx = Vec::new();
+        for (element, st) in &mut self.scales {
+            let s_max = scale::s_max_for_tree(self.stage.tree(*element));
+            let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
+            let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
+            let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
+            let open = st.epoch.open;
+            let settled = st.tick(now_ms, ladder, h_max, self.scale_config.sigma);
+            self.scale_sweep.closed |= open && !st.epoch.open;
+            if settled {
+                let s120 = scale::preferred_scale_120(st.h);
+                let b = scale::preferred_buffer_scale(st.h, h_dev);
+                st.last_emitted_scale_120 = Some(s120);
+                st.last_emitted_buffer_scale = Some(b);
+                fx.push(protocol::Effect::PreferredScale {
+                    element: *element,
+                    scale_120: s120,
+                    integer_scale: b,
+                });
+            }
+        }
+        fx
+    }
+
+    /// Explicitly opens a ScaleInteractionEpoch on an element (TST-24).
+    pub fn start_scale_interaction(
+        &mut self,
+        element: stage::ElementId,
+        kind: scale::InteractionKind,
+        continuous: bool,
+        now: scale::SessionTime,
+    ) {
+        let now_ms = self.session_time(now);
+        if let Some(st) = self.scales.get_mut(element) {
+            // A step is not an evaluation: the batch that ends after it evaluates the element.
+            self.scale_sweep.mark(element);
+            if continuous {
+                st.continuous_step(kind);
+            } else {
+                st.discrete_step(kind, now_ms, self.scale_config.t_settle_ms);
+            }
+        }
+    }
+
+    /// Settles open epochs matching `kind` across all elements.
+    pub fn settle_interaction(&mut self, kind: scale::InteractionKind) -> Vec<protocol::Effect> {
+        let mut fx = Vec::new();
+        for (element, st) in &mut self.scales {
+            if st.epoch.open && st.epoch.kind == Some(kind) {
+                let s_max = scale::s_max_for_tree(self.stage.tree(*element));
+                let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
+                let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
+                let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
+                self.scale_sweep.closed = true;
+                if st.settle(ladder, h_max, self.scale_config.sigma) {
+                    let s120 = scale::preferred_scale_120(st.h);
+                    let b = scale::preferred_buffer_scale(st.h, h_dev);
+                    st.last_emitted_scale_120 = Some(s120);
+                    st.last_emitted_buffer_scale = Some(b);
+                    fx.push(protocol::Effect::PreferredScale {
+                        element: *element,
+                        scale_120: s120,
+                        integer_scale: b,
+                    });
+                }
+            }
+        }
+        fx
+    }
+
+    /// Settles all open epochs immediately (on output topology changes).
+    pub fn settle_all_epochs(&mut self) -> Vec<protocol::Effect> {
+        let mut fx = Vec::new();
+        for (element, st) in &mut self.scales {
+            let s_max = scale::s_max_for_tree(self.stage.tree(*element));
+            let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
+            let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
+            let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
+            self.scale_sweep.closed |= st.epoch.open;
+            if st.settle(ladder, h_max, self.scale_config.sigma) {
+                let s120 = scale::preferred_scale_120(st.h);
+                let b = scale::preferred_buffer_scale(st.h, h_dev);
+                st.last_emitted_scale_120 = Some(s120);
+                st.last_emitted_buffer_scale = Some(b);
+                fx.push(protocol::Effect::PreferredScale {
+                    element: *element,
+                    scale_120: s120,
+                    integer_scale: b,
+                });
+            }
+        }
+        fx
+    }
+
+    /// Calculates required scale ρ(E) over observing presentations (F-SCALE-1, INV-SCALE-1).
+    pub fn compute_rho(&self, element: stage::ElementId) -> Option<f64> {
+        let observers = self.membership.observing_outputs(element);
+        scale::compute_rho(observers, &self.outputs, &self.cameras, None)
+    }
+
+    /// The batch-end evaluation of the scale policy: for every mapped element whose evaluation
+    /// can change anything, which [`scale::Sweep`] decides from the elements marked in it (whose
+    /// inputs this batch changed) and the kind of batch. A full pass visits the mapped elements
+    /// bottom to top; a scoped one, the marked elements in ascending order.
+    pub(crate) fn evaluate_scale_policy(
+        &mut self,
+        is_client_response: bool,
+    ) -> Vec<protocol::Effect> {
+        let mut fx = Vec::new();
+
+        // The interaction this batch belongs to. A camera drag is continuous: its epoch has no
+        // deadline and is settled by the release. This path has no clock, so it can open only
+        // such an epoch; a discrete step needs the time of the step and enters through
+        // `start_scale_interaction`.
+        let continuous_kind = match self.input.interaction {
+            input::interaction::Interaction::CameraPan { .. } => {
+                Some(scale::InteractionKind::CameraPan)
+            }
+            _ => None,
         };
-        let fx = self.membership.diff(&new, &self.stage);
-        self.membership = new;
+        #[cfg(not(test))]
+        let reference = false;
+        #[cfg(test)]
+        let reference = self.scale_reference;
+        let full = reference
+            || self
+                .scale_sweep
+                .needs_full_pass(continuous_kind.is_some(), is_client_response);
+        let mapped = |e| self.stage.state(e) == Some(stage::Lifecycle::Mapped);
+        let mut visit = self.scale_sweep.take_marked();
+        if full {
+            visit.clear();
+            visit.extend(self.stage.z_order().iter().copied().filter(|&e| mapped(e)));
+        } else {
+            visit.retain(|&e| mapped(e));
+        }
+        let mut closed = false;
+        #[cfg(test)]
+        if full {
+            self.scale_passes.0 += 1;
+        } else {
+            self.scale_passes.1 += 1;
+        }
+
+        for &element in &visit {
+            let rho = self.compute_rho(element);
+            let s_max = scale::s_max_for_tree(self.stage.tree(element));
+            let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
+            let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
+            let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
+
+            let scale_state = self
+                .scales
+                .get_or_insert_with(element, || scale::ScaleState::new(rho.unwrap_or(1.0)));
+            // An epoch that is already open is left as it is: an evaluation is not a step, and
+            // re-arming it here would move a discrete epoch's deadline at every client commit.
+            if !scale_state.epoch.open
+                && let Some(kind) = continuous_kind
+            {
+                scale_state.continuous_step(kind);
+            }
+            let changed =
+                scale_state.evaluate(rho, ladder, h_max, &self.scale_config, is_client_response);
+
+            let s120 = scale::preferred_scale_120(scale_state.h);
+            let b = scale::preferred_buffer_scale(scale_state.h, h_dev);
+
+            if changed
+                || scale_state.last_emitted_scale_120 != Some(s120)
+                || scale_state.last_emitted_buffer_scale != Some(b)
+            {
+                scale_state.last_emitted_scale_120 = Some(s120);
+                scale_state.last_emitted_buffer_scale = Some(b);
+                fx.push(protocol::Effect::PreferredScale {
+                    element,
+                    scale_120: s120,
+                    integer_scale: b,
+                });
+            }
+            closed |= !scale_state.epoch.open;
+        }
+        self.scale_sweep.evaluated(full, closed, visit);
         fx
     }
 
@@ -670,6 +1003,50 @@ mod tests {
         core.toplevel_committed(id, first).unwrap();
         core.toplevel_committed(id, t).unwrap();
         id
+    }
+
+    /// C1: a scale parameter outside its §PROV range is refused at the Core boundary and the
+    /// configuration in force is kept; a valid one replaces it.
+    #[test]
+    fn scale_config_is_validated_at_the_core_boundary() {
+        let (mut core, _o) = connected();
+        let in_force = *core.scale_config();
+        for bad in [
+            scale::ScalePolicyConfig {
+                h_cfg: f64::NAN,
+                ..in_force
+            },
+            scale::ScalePolicyConfig { r: 1.0, ..in_force },
+            scale::ScalePolicyConfig {
+                sigma: 0.25,
+                ..in_force
+            },
+            scale::ScalePolicyConfig {
+                t_settle_ms: 0,
+                ..in_force
+            },
+            scale::ScalePolicyConfig {
+                d_max: 0,
+                ..in_force
+            },
+        ] {
+            assert!(core.set_scale_config(bad).is_err(), "{bad:?}");
+            assert_eq!(*core.scale_config(), in_force, "kept after {bad:?}");
+        }
+        assert_eq!(
+            core.set_renderer_device_max(0),
+            Err(scale::ScaleConfigError::DeviceMax)
+        );
+        assert_eq!(*core.scale_config(), in_force);
+        let tuned = scale::ScalePolicyConfig {
+            h_cfg: 2.0,
+            r: 1.5,
+            sigma: 0.1,
+            t_settle_ms: 250,
+            d_max: 8192,
+        };
+        assert_eq!(core.set_scale_config(tuned), Ok(()));
+        assert_eq!(*core.scale_config(), tuned);
     }
 
     fn connected() -> (Core, output::OutputId) {

@@ -18,6 +18,7 @@
 pub mod convert;
 mod handlers;
 mod keyboard;
+pub mod limits;
 mod outputs;
 mod pointer;
 pub mod registry;
@@ -33,12 +34,14 @@ use smithay::input::{Seat, SeatState};
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
+use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::pointer_constraints::PointerConstraintsState;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
+use smithay::wayland::viewporter::ViewporterState;
 
 /// `clk_id` announced by `wp_presentation`: CLOCK_MONOTONIC on Linux. Frame times handed to
 /// `complete_frames` are on this clock.
@@ -111,6 +114,16 @@ pub struct WaylandState {
         reason = "owns the zwp_relative_pointer_manager_v1 global for the state's lifetime"
     )]
     relative_pointer: RelativePointerManagerState,
+    #[expect(
+        dead_code,
+        reason = "owns the wp_fractional_scale_manager_v1 global for the state's lifetime"
+    )]
+    fractional_scale_manager: FractionalScaleManagerState,
+    #[expect(
+        dead_code,
+        reason = "owns the wp_viewporter global for the state's lifetime"
+    )]
+    viewporter: ViewporterState,
     registry: SurfaceRegistry,
     elements: Vec<ElementHandle>,
     pub(crate) serial_outputs:
@@ -164,6 +177,8 @@ impl WaylandState {
             ordered_preemption_strategy: keyboard::PreemptionStrategy::Ordered,
             pointer_constraints: PointerConstraintsState::new::<Self>(display),
             relative_pointer: RelativePointerManagerState::new::<Self>(display),
+            fractional_scale_manager: FractionalScaleManagerState::new::<Self>(display),
+            viewporter: ViewporterState::new::<Self>(display),
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),
