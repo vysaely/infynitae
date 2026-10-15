@@ -534,12 +534,12 @@ CONTROLS = [
      "            .and_then(|_| self.core.preferred_scale_of(self.elements[0].id))\n        {\n            convert::send_preferred_scale_to_tree(",
      "infynitae-backend-headless", ["--test", "t1_scale"], "c2_late_surfaces_learn_their_own_elements_hint"),
     ("INC-6 M15: initial configure emitted before the initial hint", f"{CORE}/protocol.rs",
-     "                vec![\n                    Effect::PreferredScale {\n                        element: id,\n"
+     "                let mut fx = vec![\n                    Effect::PreferredScale {\n                        element: id,\n"
      "                        scale_120: s120,\n                        integer_scale: b,\n                    },\n"
-     "                    Effect::InitialConfigure(id),\n                ]",
-     "                vec![\n                    Effect::InitialConfigure(id),\n                    Effect::PreferredScale {\n"
+     "                    Effect::InitialConfigure(id),\n                ];",
+     "                let mut fx = vec![\n                    Effect::InitialConfigure(id),\n                    Effect::PreferredScale {\n"
      "                        element: id,\n                        scale_120: s120,\n                        integer_scale: b,\n"
-     "                    },\n                ]",
+     "                    },\n                ];",
      "infynitae-backend-headless", ["--test", "t1_scale"], "initial_scale_hint_emitted_before_first_configure"),
     ("INC-6 F-SCALE-2: H_dev ignores the reported D_max (EC-16 value hard-wired)", f"{CORE}/scale.rs",
      "        let units = (120 * u64::from(d_max) / u64::from(s_max)).max(1);", "        let units = (120 * 16384 / u64::from(s_max)).max(1);",
