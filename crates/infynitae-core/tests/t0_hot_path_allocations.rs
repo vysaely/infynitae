@@ -23,6 +23,7 @@ use infynitae_core::geom::{LocalPoint, LocalRect, LocalSize};
 use infynitae_core::input::bindings::Modifiers;
 use infynitae_core::navigation::PersistedCameras;
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
+use infynitae_core::protocol::ToplevelRequest;
 use infynitae_core::snapshot::{
     InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree,
 };
@@ -215,9 +216,12 @@ enum Path {
     RenderList,
     /// The frame tick of the output.
     FrameTick,
+    /// A commit of the focused window while it is presented fullscreen on the output (INC-7;
+    /// measured last: the presentation hides every other window).
+    PresentedCommit,
 }
 
-const PATHS: [Path; 8] = [
+const PATHS: [Path; 9] = [
     Path::Pan,
     Path::PanCrossing,
     Path::Route,
@@ -226,6 +230,7 @@ const PATHS: [Path; 8] = [
     Path::CommitOffView,
     Path::RenderList,
     Path::FrameTick,
+    Path::PresentedCommit,
 ];
 
 /// Each path's counts, round by round, on a Canvas of `n` windows.
@@ -235,6 +240,11 @@ fn measure(n: usize) -> Vec<(Path, Vec<u64>)> {
     let mut out = Vec::new();
     for path in PATHS {
         let mut counts = Vec::new();
+        if path == Path::PresentedCommit {
+            core.toplevel_request(first, ToplevelRequest::SetFullscreen { output: Some(o) })
+                .unwrap();
+            assert_eq!(core.presentation(o), Some(first));
+        }
         if matches!(path, Path::Pan | Path::PanCrossing) {
             core.physical_input(&mut port, pan_button(true)).unwrap();
             // the first step of a drag opens every element's epoch; not the steady state
@@ -277,6 +287,12 @@ fn measure(n: usize) -> Vec<(Path, Vec<u64>)> {
                 Path::FrameTick => count(|| {
                     core.frame_tick(o);
                 }),
+                Path::PresentedCommit => {
+                    let t = tree(1, true);
+                    count(|| {
+                        core.toplevel_committed(first, t).unwrap();
+                    })
+                }
             };
             if round >= WARM_UP {
                 counts.push(c);
@@ -300,7 +316,10 @@ fn measure(n: usize) -> Vec<(Path, Vec<u64>)> {
 /// Ratified INC-7 snapshots each output's presentation at every root commit
 /// (`Core::presentations`, from `f98309b`), one `Vec` per commit whatever the number of windows.
 /// This file run on `23752f1` alone gives the same 10 and 5; INC-6 adds nothing.
-const RATCHET: [(Path, u64); 8] = [
+/// PresentedCommit (added on `integration/inc-6-exit-hardening-2026-10-15`): a commit of a
+/// window INC-7 presents fullscreen re-derives that output's presentation view and membership
+/// (`presentation_membership`); 24 per commit whatever the number of windows, as on `23752f1`.
+const RATCHET: [(Path, u64); 9] = [
     (Path::Pan, 15),
     (Path::PanCrossing, 20),
     (Path::Route, 1),
@@ -309,6 +328,7 @@ const RATCHET: [(Path, u64); 8] = [
     (Path::CommitOffView, 5),
     (Path::RenderList, 15),
     (Path::FrameTick, 4),
+    (Path::PresentedCommit, 24),
 ];
 
 /// OB-42 ratchet (not the contract; see the file comment): on Canvases of 10, 100 and 1,000

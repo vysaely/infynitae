@@ -325,9 +325,10 @@ impl Core {
     }
 
     /// [`Core::presentation_changed`] without the scale evaluation, which the caller runs once,
-    /// after this: the membership of `outputs` follows their views. A presentation that started
-    /// or ended is a non-client stimulus, whose evaluation is a full pass (`Sweep`); a commit of
-    /// a presented element changes only that element's rows, and its pass marked it.
+    /// after this: the membership of `outputs` follows their views, and every element they
+    /// observed before or observe now is marked for that evaluation. Outside a camera drag a
+    /// non-client evaluation is a full pass anyway; during one it is scoped (`Sweep`), and only
+    /// the marks make it visit the elements a presentation hid or revealed.
     fn presentation_membership(&mut self, outputs: &[OutputId]) -> Vec<Effect> {
         let mut new = None;
         for &o in outputs {
@@ -343,6 +344,13 @@ impl Core {
         }
         let mut fx = Vec::new();
         if let Some(new) = new {
+            // a scoped evaluation (during a camera drag the pass is not full) must still visit
+            // every element these outputs observed before or observe now
+            for (element, _, o) in self.membership.rows().iter().chain(new.rows()) {
+                if outputs.contains(o) {
+                    self.scale_sweep.mark(*element);
+                }
+            }
             fx = self.membership.diff(&new, &self.stage);
             self.membership = new;
         }
@@ -3531,6 +3539,175 @@ mod tests {
             assert_eq!(c.presentation(b), None, "{end}");
             assert_eq!(c.membership().observers(x), vec![a, b], "{end}");
             assert_eq!(hints(&fx, x), vec![(240, 2)], "{end}: {fx:?}");
+        }
+    }
+
+    /// The scale hints of a run in which a presentation starts or ends during a camera drag
+    /// (the evaluation of a drag's batches is scoped, `Sweep`), with the scoped or the full
+    /// reference evaluation.
+    fn presentation_under_a_drag(reference: bool, start: bool) -> Vec<(u32, u32)> {
+        use crate::PhysicalEvent;
+        use crate::input::bindings::Modifiers;
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        c.scale_reference = reference;
+        let (_a, b) = two_scales(&mut c, &mut t);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        if !start {
+            c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+                .unwrap();
+        }
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let button = |pressed| PhysicalEvent::PointerButton {
+            button: 0x112,
+            pressed,
+            modifiers: logo,
+            time_us: 0,
+        };
+        let mut seen = Vec::new();
+        let mut log = |fx: &[Effect]| {
+            seen.extend(hints(fx, x));
+            seen.push((0, 0));
+            seen.extend(hints(fx, w));
+            seen.push((1, 1));
+        };
+        log(&c.physical_input(&mut i, button(true)).unwrap());
+        log(&c
+            .physical_input(
+                &mut i,
+                PhysicalEvent::PointerMotion {
+                    delta: (-3.0, 0.0),
+                    delta_unaccel: (-3.0, 0.0),
+                    time_us: 0,
+                },
+            )
+            .unwrap());
+        let request = if start {
+            ToplevelRequest::SetFullscreen { output: Some(b) }
+        } else {
+            ToplevelRequest::UnsetFullscreen
+        };
+        log(&c.toplevel_request(w, request).unwrap().1);
+        log(&c.physical_input(&mut i, button(false)).unwrap());
+        log(&c.toplevel_committed(x, win(9, 300, 200, true)).unwrap());
+        seen.extend(c.preferred_scale_of(x));
+        seen.extend(c.preferred_scale_of(w));
+        seen
+    }
+
+    /// A presentation that starts or ends during a camera drag: the drag's scoped evaluation
+    /// visits the elements it hides or reveals, so the hints equal the full reference.
+    #[test]
+    fn a_presentation_change_during_a_camera_drag_matches_the_full_reference() {
+        for start in [true, false] {
+            assert_eq!(
+                presentation_under_a_drag(false, start),
+                presentation_under_a_drag(true, start),
+                "start {start}"
+            );
+        }
+    }
+
+    /// INV-SCALE-5 "evaluation once per core batch after all its updates": every batch that
+    /// starts, ends or re-derives a presentation evaluates the policy exactly once.
+    #[test]
+    fn each_presentation_batch_evaluates_the_policy_once() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        let (_a, b) = two_scales(&mut c, &mut t);
+        map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        let passes = |c: &Core| c.scale_passes.0 + c.scale_passes.1;
+        let once = |c: &mut Core, what: &str, f: &mut dyn FnMut(&mut Core)| {
+            let before = passes(c);
+            f(c);
+            assert_eq!(passes(c), before + 1, "{what}");
+        };
+        focus(&mut c, &mut i, w);
+        let fs = ToplevelRequest::SetFullscreen { output: Some(b) };
+        once(&mut c, "grant", &mut |c| {
+            c.toplevel_request(w, fs).unwrap();
+        });
+        once(&mut c, "commit of the presented element", &mut |c| {
+            c.toplevel_committed(w, win(1, 960, 540, true)).unwrap();
+        });
+        once(&mut c, "tree change of the presented element", &mut |c| {
+            c.toplevel_tree_changed(w, win(1, 960, 540, true)).unwrap();
+        });
+        once(&mut c, "unset", &mut |c| {
+            c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+                .unwrap();
+        });
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, fs).unwrap();
+        once(&mut c, "unmap of the presented element", &mut |c| {
+            c.toplevel_committed(w, win(1, 400, 300, false)).unwrap();
+        });
+        let v = c.toplevel_created();
+        c.toplevel_request(v, fs).unwrap();
+        c.toplevel_committed(v, win(2, 0, 0, false)).unwrap();
+        once(&mut c, "first map of a pre-map grant", &mut |c| {
+            c.toplevel_committed(v, win(2, 960, 540, true)).unwrap();
+        });
+        once(&mut c, "destruction of the presented element", &mut |c| {
+            c.toplevel_destroyed(v);
+        });
+    }
+
+    /// A child surface's commit (`toplevel_tree_changed`) is a client response (SC-E): after a
+    /// non-client stimulus lowered W's hint, a subsurface that reaches B (scale 2) does not raise
+    /// it; a root commit that grows onto B does not either.
+    #[test]
+    fn client_responses_do_not_reverse_a_lowered_hint() {
+        for by_child in [true, false] {
+            let (mut c, _i, _, mut t) = Core::new(camera_b(1500, 1.0));
+            let a = out(&mut c, &mut t, "A", (1920, 1080), 132);
+            let b = out(&mut c, &mut t, "B", (1920, 1080), 240);
+            let w = map_win(&mut c, 1, 400, 300);
+            assert_eq!(c.preferred_scale_of(w), Some((132, 2)));
+            // the non-client stimulus: A's scale falls to 1
+            c.output_reconfigured(
+                &mut t,
+                a,
+                OutputDescriptor {
+                    key: crate::output::tests::key("A"),
+                    mode: (1920, 1080),
+                    transform: Transform::Normal,
+                    scale_120: 120,
+                    refresh_mhz: 60_000,
+                },
+            )
+            .unwrap();
+            assert_eq!(c.preferred_scale_of(w), Some((120, 1)));
+            let fx = if by_child {
+                let mut tree = win(1, 400, 300, true);
+                tree.surfaces.insert(
+                    0,
+                    SnapshotSurface {
+                        key: key(2),
+                        role: SurfaceRole::Subsurface {
+                            parent: 1,
+                            offset: LocalPoint { x: 1500, y: 0 },
+                        },
+                        size: LocalSize { w: 400, h: 300 },
+                        mapped: true,
+                        input: InputRegion::Infinite,
+                    },
+                );
+                c.toplevel_tree_changed(w, tree).unwrap()
+            } else {
+                c.toplevel_committed(w, win(1, 2000, 300, true)).unwrap()
+            };
+            assert!(
+                c.membership().observers(w).contains(&b),
+                "by child {by_child}"
+            );
+            assert_eq!(c.compute_rho(w), Some(2.0));
+            assert!(hints(&fx, w).is_empty(), "by child {by_child}: {fx:?}");
+            assert_eq!(c.preferred_scale_of(w), Some((120, 1)));
         }
     }
 
