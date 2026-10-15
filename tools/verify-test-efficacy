@@ -1198,6 +1198,18 @@ CONTROLS = [
      "        self.edge_x(x1) > 0\n            && self.edge_y(y1) > 0",
      "        self.edge_x(x0) > 0\n            && self.edge_y(y1) > 0",
      "infynitae-core", ["--lib"], "cull_thresholds_equal_may_show"),
+    ("OB-28 under P7: a P7 decrease leaves the stimulus direction unset", f"{CORE}/scale.rs",
+     "            let t = target(rho.unwrap_or(self.h), ladder, h_max, config.sigma);\n            self.h = t.min(h_max);\n            self.epoch.direction = -1;\n            self.last_stimulus_direction = -1;\n            return true;",
+     "            let t = target(rho.unwrap_or(self.h), ladder, h_max, config.sigma);\n            self.h = t.min(h_max);\n            self.epoch.direction = -1;\n            return true;",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "adversarial_client_under_p7_changes_the_hint_once"),
+    ("OB-28 under P7: SC-E disabled, the client reverses P7's decrease", f"{CORE}/scale.rs",
+     "                if is_client_response {\n                    // SC-E:",
+     "                if false && is_client_response {\n                    // SC-E:",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "adversarial_client_under_p7_changes_the_hint_once"),
+    ("OB-28 in an epoch: an open epoch does not suppress decreases", f"{CORE}/scale.rs",
+     "        if self.epoch.open {\n            // Grouped interaction epoch (INV-SCALE-3):",
+     "        if false && self.epoch.open {\n            // Grouped interaction epoch (INV-SCALE-3):",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "adversarial_client_inside_a_pan_epoch"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

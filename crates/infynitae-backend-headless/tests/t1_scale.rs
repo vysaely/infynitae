@@ -1087,3 +1087,106 @@ fn fullscreen_entry_and_exit_send_the_hint_before_the_configure() {
         );
     }
 }
+
+/// OB-28 under P7 (INV-SCALE-2, INV-SCALE-4 c/d): an adversarial client that answers every hint
+/// by growing past the device bound when its hint is high and shrinking back when it is low. On
+/// one scale-2 output with D_max 2000: at 800 px the bound allows 2.5 (hint 2); at 1200 px it
+/// allows 1.67, so P7 lowers the hint at once (a correctness rule, direction down). Shrinking
+/// back makes 2 allowed again, but that would be a client-caused reversal of P7's direction
+/// (SC-E): exactly one change, every buffer within D_max, quiescent. Lockstep only.
+#[test]
+fn adversarial_client_under_p7_changes_the_hint_once() {
+    let mut ls = Lockstep::new(Some(common::output_k("A", (1920, 1080), 240, 60_000)));
+    let fx = ls
+        .state
+        .core_mut()
+        .set_renderer_device_max(2000)
+        .expect("valid D_max");
+    ls.state.apply(&fx);
+    let w = ls
+        .probe
+        .toplevel_with_fractional_scale(&ls.qh, "W", (800, 300), 0);
+    ls.pump();
+    ls.probe.draw(&ls.qh, w);
+    ls.pump();
+    let vp = ls.probe.get_viewport(&ls.qh, w).expect("viewport");
+    vp.set_destination(800, 300);
+    ls.probe.surfaces[w].wl.commit();
+    ls.pump();
+    assert_eq!(ls.probe.preferred_scales_of("W").last(), Some(&240));
+    let start = ls.probe.preferred_scales_of("W").len();
+    for _ in 0..30 {
+        let hint = *ls.probe.preferred_scales_of("W").last().expect("a hint");
+        let side = if hint >= 240 { 1200 } else { 800 };
+        vp.set_destination(side, 300);
+        ls.probe.surfaces[w].wl.commit();
+        ls.pump();
+        let now = *ls.probe.preferred_scales_of("W").last().unwrap();
+        assert!(
+            u64::from(now) * 1200 <= 2000 * 120 || side == 800,
+            "a 1200-px buffer at hint {now}/120 exceeds D_max"
+        );
+    }
+    let after: Vec<u32> = ls.probe.preferred_scales_of("W")[start..].to_vec();
+    assert_eq!(
+        after.len(),
+        1,
+        "one P7 decrease, then no reversal: {after:?}"
+    );
+    assert!(after[0] < 240 && after[0] * 1200 <= 2000 * 120, "{after:?}");
+}
+
+/// OB-28 inside a ScaleInteractionEpoch (INV-SCALE-3, INV-SCALE-4 c): the adversary of
+/// `adversarial_client_churn_bounds_sc_e` answers every hint while the user drags the camera (a
+/// continuous epoch, open from the first pan step). Inside the epoch its growth onto B raises
+/// the hint (a rung crossing, in the epoch's direction) and its shrinking back cannot lower it
+/// (decreases are suppressed); the release settles once to t(ρ). At most rungs crossed + one
+/// settlement: exactly [240, 120]. Lockstep only.
+#[test]
+fn adversarial_client_inside_a_pan_epoch() {
+    let persisted = infynitae_core::navigation::PersistedCameras::from_entries(vec![(
+        VirtualOutput::key("B"),
+        infynitae_core::geom::CanvasPos {
+            x: 1500 << 16,
+            y: 0,
+        },
+        1.0,
+    )])
+    .expect("valid persisted camera");
+    let ls = Lockstep::with(
+        persisted,
+        &[common::output_k("A", (1920, 1080), 120, 60_000)],
+    );
+    let mut r = Rig::new(ls);
+    r.ls.connect(&common::output_k("B", (1920, 1080), 240, 60_000));
+    let w =
+        r.ls.probe
+            .toplevel_with_fractional_scale(&r.ls.qh, "W", (800, 600), 0);
+    r.ls.pump();
+    r.ls.probe.draw(&r.ls.qh, w);
+    r.ls.pump();
+    let vp = r.ls.probe.get_viewport(&r.ls.qh, w).expect("viewport");
+    assert_eq!(r.ls.probe.preferred_scales_of("W").last(), Some(&120));
+    let start = r.ls.probe.preferred_scales_of("W").len();
+
+    r.button(BTN_MIDDLE, true, logo());
+    for i in 0..30 {
+        let step = if i % 2 == 0 { 1.0 } else { -1.0 };
+        r.motion((step, 0.0)); // the drag goes on: the epoch stays open
+        let hint = *r.ls.probe.preferred_scales_of("W").last().expect("a hint");
+        let side = if hint < 240 { 2400 } else { 300 };
+        vp.set_destination(side, 300);
+        r.ls.probe.surfaces[w].wl.commit();
+        r.ls.pump();
+    }
+    let during: Vec<u32> = r.ls.probe.preferred_scales_of("W")[start..].to_vec();
+    assert_eq!(
+        during,
+        vec![240],
+        "inside the epoch: one rung crossing, no decrease"
+    );
+    // W is small now (ρ = 1): the release settles once
+    r.button(BTN_MIDDLE, false, logo());
+    let after: Vec<u32> = r.ls.probe.preferred_scales_of("W")[start..].to_vec();
+    assert_eq!(after, vec![240, 120], "rungs crossed + one settlement");
+}
