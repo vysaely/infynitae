@@ -902,39 +902,18 @@ impl Core {
             let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
             let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
 
-            let stimulated = self.scale_sweep.is_stimulated(element);
-            let held = self.scale_sweep.hold_decreases && !stimulated;
             let scale_state = self
                 .scales
                 .get_or_insert_with(element, || scale::ScaleState::new(rho.unwrap_or(1.0)));
-            if stimulated {
-                // its own fullscreen enter/exit settles its epoch (M9) and is a non-client
-                // stimulus (C14.4): the evaluation below moves it to t(rho)
-                scale_state.end_epoch();
-            } else if !scale_state.epoch.open
+            // An epoch that is already open is left as it is: an evaluation is not a step, and
+            // re-arming it here would move a discrete epoch's deadline at every client commit.
+            if !scale_state.epoch.open
                 && let Some(kind) = continuous_kind
             {
-                // An epoch that is already open is left as it is: an evaluation is not a step,
-                // and re-arming it here would move a discrete epoch's deadline at every client
-                // commit.
                 scale_state.continuous_step(kind);
             }
-            // Another client's presentation never lowers this element's hint; P7 still does.
-            let lowered = rho.is_some_and(|r| {
-                scale::target(r, ladder, h_max, self.scale_config.sigma) < scale_state.h - 1e-12
-            });
-            let changed = if held && lowered && scale_state.h <= h_max + 1e-12 {
-                scale_state.last_rho = rho;
-                false
-            } else {
-                scale_state.evaluate(
-                    rho,
-                    ladder,
-                    h_max,
-                    &self.scale_config,
-                    is_client_response && !stimulated,
-                )
-            };
+            let changed =
+                scale_state.evaluate(rho, ladder, h_max, &self.scale_config, is_client_response);
 
             let s120 = scale::preferred_scale_120(scale_state.h);
             let b = scale::preferred_buffer_scale(scale_state.h, h_dev);

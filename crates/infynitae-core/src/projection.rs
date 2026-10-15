@@ -209,21 +209,40 @@ const CULL_LIMIT: i64 = 1 << 40;
 
 /// The smallest `x` in `[-CULL_LIMIT, CULL_LIMIT]` with `edge(x) >= target`, `CULL_LIMIT` if
 /// none is. From the inverse of `edge`, then corrected by stepping with `edge` itself (a few
-/// steps: the estimate is off by the rounding of a few floating-point operations).
+/// steps: the estimate is off by the rounding of a few floating-point operations). If the
+/// estimate is not usable (a zoom so small or large that it is not finite, or still off after
+/// `STEPS` steps), a binary search over the whole range, which `edge` being non-decreasing allows:
+/// at most 42 evaluations, whatever the view.
 fn first_edge_at_least(target: i64, r: i64, c: i64, k: f64) -> i64 {
+    const STEPS: u32 = 16;
+    let at_least = |x: i64| edge(x, r, c, k) >= target;
     let estimate = r as f64 + ((target + c) as f64 - 0.5 - DELTA) / k;
-    let mut x = if estimate.is_finite() {
-        (estimate.floor() as i64).clamp(-CULL_LIMIT, CULL_LIMIT)
-    } else {
-        0
-    };
-    while x > -CULL_LIMIT && edge(x - 1, r, c, k) >= target {
-        x -= 1;
+    if estimate.is_finite() {
+        let mut x = (estimate.floor() as i64).clamp(-CULL_LIMIT, CULL_LIMIT);
+        for _ in 0..STEPS {
+            if x > -CULL_LIMIT && at_least(x - 1) {
+                x -= 1;
+            } else if x < CULL_LIMIT && !at_least(x) {
+                x += 1;
+            } else {
+                return x;
+            }
+        }
     }
-    while x < CULL_LIMIT && edge(x, r, c, k) < target {
-        x += 1;
+    // invariant: the answer is in (lo, hi]
+    if at_least(-CULL_LIMIT) {
+        return -CULL_LIMIT;
     }
-    x
+    let (mut lo, mut hi) = (-CULL_LIMIT, CULL_LIMIT);
+    while hi - lo > 1 {
+        let mid = lo + (hi - lo) / 2;
+        if at_least(mid) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    hi
 }
 
 #[cfg(test)]
@@ -257,6 +276,49 @@ pub(crate) mod tests {
             view_size: size,
         })
         .unwrap()
+    }
+
+    /// The cull thresholds when the inverse estimate is useless: a subnormal or an infinite scale
+    /// factor makes it non-finite, so the bounded binary search decides; it finds the same
+    /// threshold a linear scan would (edge is non-decreasing), in at most 42 evaluations. Whole
+    /// views at the extreme zooms `View::new` accepts agree with `may_show`.
+    #[test]
+    fn cull_thresholds_at_extreme_scale_factors() {
+        for k in [1e-310, f64::MIN_POSITIVE, 1e300] {
+            for target in [1, 1920] {
+                let x = first_edge_at_least(target, 0, 0, k);
+                assert!(
+                    x == CULL_LIMIT || edge(x, 0, 0, k) >= target,
+                    "k {k} target {target}"
+                );
+                assert!(
+                    x == -CULL_LIMIT || edge(x - 1, 0, 0, k) < target,
+                    "k {k} target {target}: not the smallest"
+                );
+            }
+        }
+        for zoom in [1e-6, 1e-3, 1e3, 1e6] {
+            let v = View::new(ViewParams {
+                centre: CanvasPos { x: 0, y: 0 },
+                zoom,
+                scale: 1.0,
+                view_size: (1920, 1080),
+            })
+            .unwrap();
+            let cull = v.cull();
+            for (x0, y0, x1, y1) in [
+                (-10, -10, 10, 10),
+                (-(1 << 36), -(1 << 36), 1 << 36, 1 << 36),
+                (5, 5, 6, 6),
+                (-(1 << 36), 0, -(1 << 35), 1),
+            ] {
+                assert_eq!(
+                    cull.admits(x0, y0, x1, y1),
+                    v.may_show(x0, y0, x1, y1),
+                    "zoom {zoom}"
+                );
+            }
+        }
     }
 
     /// `Cull::admits` equals `View::may_show` on random views (zoom, scale, centre, size) and

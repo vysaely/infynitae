@@ -504,6 +504,8 @@ impl Core {
         }
         fx.extend(self.reconcile_constraints());
         fx.extend(self.settle_all_epochs());
+        // a presented element is told its new size: the hint for it goes first (as at entry)
+        Self::hints_before_configures(&mut fx);
         Ok(fx)
     }
 

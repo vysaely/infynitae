@@ -27,7 +27,8 @@ pub fn handler(_core: &mut Core) -> InputPort {
 /// p3: submit physical input without a port. Expected E0061 (missing argument).
 #[cfg(feature = "p3_physical_input_without_port")]
 pub fn handler(core: &mut Core, ev: PhysicalEvent) {
-    let _ = core.physical_input(ev);
+    // everything but the port, so the one missing argument is the port
+    let _ = core.physical_input(ev, &mut infynitae_core::protocol::EffectBuf::new());
 }
 
 /// p4: reach the navigation internals. Expected E0603 (`Authority` is private).

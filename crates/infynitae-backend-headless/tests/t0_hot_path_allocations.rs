@@ -3,7 +3,8 @@
 //!
 //! This is **the contract** of OB-42: zero heap allocations per event after warm-up, on every
 //! measured hot path, at 10, 100 and 1,000 windows, every round. The events go through the
-//! entries the adapter uses (`physical_input_into`, `toplevel_committed_into`, `render_list`,
+//! entries the adapter uses (`physical_input`, `toplevel_committed_into` (the adapter: its `_acked`
+//! twin), `render_list`,
 //! `frame_tick_into`) with caller-owned buffers created once, outside every count (C14.3: an
 //! `EffectBuf` and a `Vec` of elements, cleared, not freed). Only the Core call is counted: the
 //! trees a commit takes are built before it, and what is freed is not counted.
