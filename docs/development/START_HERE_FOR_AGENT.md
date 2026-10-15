@@ -4,14 +4,33 @@ You are continuing **Infynitae Native**, a Rust/Smithay spatial Wayland composit
 
 ## Current state
 
-- Phase E final verdict: **`PHASE E PASS — PHASE F MAY BEGIN`** (`docs/foundation/audit/phase-e-final/VERDICT.md`).
-- Last architecture seal: E1R `1ae1b736515b8c52c3e6ba7596b22c81f7098390`; tracking `e9d36732ac4fa9e934ee1b90bb696e9545c598ab`; final review recorded in `cfb54f091bd2a19065a45b32662e8f0bbddd62fc`; this handoff is in the commit after it.
-- INC-0 ratified after independent review (`audit/phase-f-inc0-review/`); OB-19 and OB-36 `CLOSED`; runtime 2i owned by INC-2 / OB-49.
-- INC-1 ratified after independent review and corrective patch (evidence: `docs/foundation/evidence/phase-f/INC-1/`, record `corrective/README.md`; review `audit/phase-f-inc1-review/`); OB-2 and OB-26 `CLOSED`.
-- INC-2 ratified after independent review and corrective patch (evidence: `docs/foundation/evidence/phase-f/INC-2/`, record `corrective/README.md`; review `audit/phase-f-inc2-review/`); OB-49 `CLOSED` (Decision E).
-- INC-3 implemented on baseline `6470e1a` (pointer intake, ownership, CameraPan at zoom 1, ProjectionFrame routing, zero-output seat transition; evidence: `docs/foundation/evidence/phase-f/INC-3/`). **Pending independent review; not ratified.**
-- **INC-4 has not begun.** It needs ratification of INC-3 and explicit owner authorization.
-- `docs/foundation/CHECKPOINT.md` is the source of the current gate; `git log` gives the current HEAD.
+> **Updated 2026-10-16.** The INC-0…INC-3 history that this section used to describe is kept in
+> `git log` and `docs/foundation/CHECKPOINT.md`; it is no longer the current state.
+
+- `docs/foundation/CHECKPOINT.md` is the source of the current gate; `git log` gives HEAD.
+- **Ratified:** INC-0 … INC-5, INC-7 (without INC-6), the Core visibility remediation.
+  Published `main` = `origin/main`.
+- **INC-6 (scale policy): experimental, exit NOT authorized.** Newest line:
+  `candidate/inc-6-exit-2026-10-16`. Its exit waits on owner adoption of amendments
+  C12.F11, C12.F12, C12.F13 (commits marked "AMENDMENT NOT ADOPTED, NEVER MERGE BEFORE
+  ADOPTION"). Every other `*inc-6*` branch is an ancestor or a superseded rehearsal of it.
+- **INC-8 (off-screen frame policy): experimental, not ratified** on
+  `experimental/inc-8-offscreen-frames` (from `main`; independent of INC-6). Record:
+  `docs/foundation/evidence/phase-f/INC-8/README.md`.
+- **Runtime:** experimental pending INC-13; headless and nested (winit) prototypes only. Not a
+  usable desktop yet.
+- **Open obligations that block exits:** OB-13, OB-42, OB-44 (INC-6); OB-16 real-time harness
+  part (INC-8); OB-22 T3/T5, OB-52.
+
+## Worktrees and branches
+
+- Canonical repository: `~/infynitae-native` (the primary checkout stays on `main`; do not work
+  in it). `~/infynitae` is an empty directory, not the project.
+- Work in a dedicated worktree with its own `CARGO_TARGET_DIR` (never share a target dir
+  between worktrees). Existing worktrees live under `~/.cache/infynitae-integration/`.
+- One writer per worktree. Before committing, check whether another agent session is active
+  on the same branch.
+- Never merge to `main`, push, delete branches or adopt an amendment without the owner.
 
 ## Workflow on a new machine / fresh environment
 
@@ -27,15 +46,14 @@ When resuming on another OS or new installation (e.g. Arch Linux / CachyOS):
    experiments/c1-authority-spike/verify.sh
    ```
 4. **Launch agent (Claude / AGY)**: navigate to repository root and start the assistant.
-5. **Continue from the recorded project gate**: check `docs/foundation/CHECKPOINT.md`. Confirm Phase E PASS verdict is intact and the INC-0 state recorded there. Wait for explicit authorization from the project owner before starting any increment.
+5. **Continue from the recorded project gate**: check `docs/foundation/CHECKPOINT.md` and the current state above.
 
 ## Implementation gate
 
-Phase F starts **only** with **INC-0**, which closes **OB-19**, the unconditional Phase F entry gate.
-
-INC-0 is **enforcement-only**: workspace skeleton, `verify-architecture` (port of `experiments/c1-authority-spike/verify.sh` with every probe asserting its expected diagnostic), CI for it and for `tools/check-foundation-docs` (OB-36), and type skeletons only where the probes need them. **No** Wayland/protocol code, **no** Stage, CameraSet or other authoritative state, **no** product behaviour. Any probe passing, or failing for the wrong reason, stops Phase F.
-
-INC-1 (the thin vertical seam) follows only after INC-0 exits.
+Each increment (FOUNDATION_IMPLEMENTATION_PLAN.md) is implemented on its own branch, gated
+(`tools/verify-development-environment`), recorded under `docs/foundation/evidence/phase-f/`,
+independently reviewed and ratified by the owner before it reaches `main`. Architecture changes
+go through a new amendment layer; never edit sealed text.
 
 ## Read, in this order
 
@@ -51,7 +69,7 @@ INC-1 (the thin vertical seam) follows only after INC-0 exits.
 
 ```sh
 tools/check-foundation-docs              # expect RESULT: PASS
-tools/check-foundation-docs --self-test  # expect 18/18 seeded defects detected
+tools/check-foundation-docs --self-test  # expect every seeded fixture detected
 experiments/c1-authority-spike/verify.sh # expect == result: PASS (historical spike)
 tools/verify-architecture                # expect == verify-architecture: PASS (OB-19, production)
 tools/verify-test-efficacy               # expect == verify-test-efficacy: PASS (seeded behavioural defects)
@@ -67,6 +85,6 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked --
 - **Do not invent missing architecture.** If something needed is not specified, stop and ask; architecture changes go through change control (a new amendment layer with provenance), never silent edits.
 - **Historical evidence is not current authority:** `docs/foundation/audit/**`, `docs/foundation/evidence/**` and `experiments/**` record what was tested and decided; do not reinterpret them as live rules.
 - **Do not casually modify architecture documents.** Never edit sealed history or audit records.
-- **Smithay** is pinned exactly at `=0.7.0`. Patch P1 lives only in `experiments/e1r-smithay-p1/`; adopting it is OB-11's decision (before INC-5).
-- **Live system:** do not start the compositor on the live session, touch the user's Hyprland, access DRM/KMS, switch VTs, install packages or change the toolchain unless a later, explicitly authorized test requires it. Default execution class is HEADLESS.
+- **Smithay** is pinned exactly at `=0.7.0`, vendored in `vendor/smithay-0.7.0` with patch P1 (adopted for INC-5 under D-B12-PIN, OB-11 Option B).
+- **Live system:** do not start the compositor on the live session, touch the user's desktop session (KDE Plasma / KWin on 2026-10-16), run test clients under `dbus-run-session`, access DRM/KMS, switch VTs, install packages or change the toolchain unless a later, explicitly authorized test requires it. Default execution class is HEADLESS.
 - **Commits** only when the owner asks; author `vysaely <vysaely@users.noreply.github.com>`. Never force-push.

@@ -338,3 +338,47 @@ fn a_window_that_stopped_drawing_arms_no_timer_when_it_leaves() {
     assert!(!f.observed());
     assert_eq!(f.deadline(), None, "no pending callback: no timer");
 }
+
+/// INV-FRAME-5, TST-06 (INC-8 part): the presentation feedback of an unobserved commit stays
+/// pending through the kick and the fallback; a newer commit discards it; the latest is
+/// `presented` once W is shown again, synchronised to its clock output.
+#[test]
+fn unobserved_feedback_stays_pending_until_shown_or_superseded() {
+    let mut f = F::new();
+    let a = f.r.ls.output();
+    f.r.ls.disconnect(a);
+    let qh = f.r.ls.qh.clone();
+    let first = f.r.ls.probe.frame_and_draw(&qh, f.w);
+    f.r.ls.pump();
+    let m = f.r.ls.probe.log.len();
+    f.run(2 * P);
+    keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_A, true, 1).unwrap();
+    f.r.ls.pump();
+    let log = |f: &F, m: usize| f.r.ls.probe.log[m..].to_vec();
+    assert!(
+        !log(&f, m).iter().any(|l| l.contains(&format!("#{first}"))),
+        "feedback answered while unobserved: {:?}",
+        log(&f, m)
+    );
+    let second = f.r.ls.probe.frame_and_draw(&qh, f.w);
+    f.r.ls.pump();
+    assert!(
+        log(&f, m).contains(&format!("discarded #{first}")),
+        "superseded: {:?}",
+        log(&f, m)
+    );
+    let a = f.r.ls.connect(&a_1080());
+    f.run(Duration::from_micros(16_667));
+    let l = log(&f, m);
+    assert!(l.contains(&format!("presented #{second}")), "{l:?}");
+    let name = l
+        .iter()
+        .find_map(|x| x.strip_prefix(&format!("sync #{second} ")))
+        .expect("sync_output");
+    assert!(
+        l.contains(&format!("global wl_output {name}")),
+        "synchronised to the reconnected output {a:?}: {l:?}"
+    );
+    keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_A, false, 2).unwrap();
+    f.r.ls.pump();
+}
