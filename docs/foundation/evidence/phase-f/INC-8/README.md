@@ -121,7 +121,23 @@ rewritten `Session::timeout`.
 |---|---|
 | TST-03 SC3 (off-screen withhold/kick/fallback, production parity) | covered at T1 by the suite above (lockstep, virtual time) |
 | TST-06 x9 (presentation feedback, INC-8 part) | covered at T1 by `unobserved_feedback_stays_pending_until_shown_or_superseded`: pending through the fallback and a kick, `discarded` when superseded, the latest `presented` at the first vblank after re-entry with `sync_output` = the new clock output. No seeded control yet |
-| TST-11 T1 part: a real-time harness port with a callback-blocked client | **not done**: the T1 tests are lockstep, not real time; OB-16 therefore stays OPEN |
+| TST-11 T1 part: a real-time harness port with a callback-blocked client | covered by `t1_frames_realtime::a_key_unblocks_a_fifo_client_off_screen_within_one_frame` (below). OB-16's T1 pass criterion is met in this harness; the obligation stays OPEN until review and its T3 part (real toolkits) |
+
+## Real-time harness (TST-11 T1 part, OB-16)
+
+`crates/infynitae-backend-headless/tests/t1_frames_realtime.rs`. The production stack runs on
+the test thread in real time (60 Hz vblank on the presentation clock, fallback evaluated each
+iteration). The client runs in its own thread with its own connection and presents like a Mesa
+WSI FIFO swapchain: it commits a frame with its callback on a private event queue and blocks
+on that queue alone, so its input waits unread. The window is focused, then panned 3000 px off
+the output; the client blocks; 300 ms later (inside P) a key is injected.
+
+Measured on the owner's machine (Ryzen 5 7600X3D, debug build, in-process, load average 0.6),
+50 runs, time from the key's injection to the client handling it: min 78 µs, median 86 µs,
+p95 110 µs, max 131 µs. Pass criterion (OB-16): within one frame (16.7 ms). The seeded control
+with the kick disabled is DETECTED: the client stays blocked until the fallback (~700 ms after
+the key). 30/30 repeated runs passed. This is not a vkcube/Mesa run (T3) and not a latency
+baseline (C14, OB-44).
 
 ## Residuals
 

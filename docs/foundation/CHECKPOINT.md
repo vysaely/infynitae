@@ -8,8 +8,8 @@ Date: 2026-10-14
 - **Branch:** `experimental/inc-8-offscreen-frames` from canonical main `23752f1`; not merged, not pushed. Implemented 2026-10-16 under the owner's continuation brief (autonomous local work on branches). INC-8 depends on INC-2 only; no INC-6 material is on this branch.
 - **Scope:** M16 — withhold, kick (non-initial configure, `popup_done`, input incl. focus enter/leave; OB-16 CR-7), fallback once per P (PROV-4 candidate 1 s) on a timer armed only while an unobserved element has a pending callback (INV-IDLE-1), re-entry at the first vblank (INV-FRAME-4); OBJ-17 in Core; OBJ-05 `frame_requested`. M17 suspension: no reason producible, nothing implemented.
 - **Residual R-10 (INC-7):** the placeholder test is replaced by its INC-8 acceptance test (a window hidden by a presentation gets the fallback).
-- **Tests:** 7 Core, 12 T1 (`t1_frames`), 1 replaced T1, 1 session; 13 seeded controls.
-- **Not met / not claimed:** TST-11 real-time harness port (OB-16 stays OPEN); OB-5 (T5); any nested, GPU or real-application result; independent review.
+- **Tests:** 7 Core, 12 T1 (`t1_frames`), 1 real-time T1 harness (`t1_frames_realtime`, TST-11 T1 part: a FIFO-blocked off-screen client answers a key in 86 µs median, max 131 µs over 50 runs; kick disabled ≈ 700 ms), 1 replaced T1, 1 session; 14 seeded controls.
+- **Not met / not claimed:** OB-16 stays OPEN (T3 part; review); OB-5 (T5); any nested, GPU or real-application result; independent review.
 - **Declaration:** INC-8 is EXPERIMENTAL and NOT ratified; INC-8 exit is NOT authorized. INC-6 is unchanged (NOT ratified, exit NOT authorized). OB-13, OB-16, OB-22, OB-42, OB-44 and OB-52 are OPEN.
 
 ## PHASE F — INC-7 FORMAL RATIFICATION (toplevel request policy: fullscreen, maximize, `activated`; popup robustness)
