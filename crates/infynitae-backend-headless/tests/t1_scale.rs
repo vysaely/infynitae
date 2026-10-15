@@ -317,40 +317,87 @@ fn viewporter_destination_sizing_and_p7_ceiling() {
     assert_eq!(b, 2, "Preferred buffer scale is 2");
 }
 
-/// Adversarial self-resizing client churn bounds (SC-E).
+/// OB-28 (INV-SCALE-4 d, SC-E, EC-22): an adversarial client that resizes in response to every
+/// hint so that the hint must reverse. Output A (scale 1) shows the Canvas origin; output B (scale
+/// 2) has its camera restored 1,500 px to the right, so W (placed on A) is seen by B only while it
+/// is wide. The client grows to 2400 px whenever its hint is below 2 and shrinks to 300 px when it
+/// is 2: with no SC-E every response reverses the hint. After one non-client stimulus (A
+/// reconfigured to scale 1.1, as round 0 of the TST-17 model), client responses may move the hint
+/// only in that stimulus's direction (up): at most one change for the stimulus and one for the
+/// growth, never a decrease, quiescent at the end, and no camera moves (INV-CAMERA-1). Lockstep
+/// only: no timing.
 #[test]
 fn adversarial_client_churn_bounds_sc_e() {
-    let mut ls = Lockstep::new(Some(output_a()));
+    let persisted = infynitae_core::navigation::PersistedCameras::from_entries(vec![(
+        VirtualOutput::key("B"),
+        infynitae_core::geom::CanvasPos {
+            x: 1500 << 16,
+            y: 0,
+        },
+        1.0,
+    )])
+    .expect("valid persisted camera");
+    let a_desc = common::output_k("A", (1920, 1080), 120, 60_000);
+    let mut ls = Lockstep::with(persisted, std::slice::from_ref(&a_desc));
+    let a = ls.output();
+    let b = ls.connect(&common::output_k("B", (1920, 1080), 240, 60_000));
     let w = ls
         .probe
         .toplevel_with_fractional_scale(&ls.qh, "W", (800, 600), 0);
     ls.pump();
     ls.probe.draw(&ls.qh, w);
     ls.pump();
-
-    let _element_id = ls.state.elements().next().expect("element");
+    let element = ls.state.elements().next().expect("element");
     let vp = ls.probe.get_viewport(&ls.qh, w).expect("viewport");
+    let cameras = |ls: &Lockstep| {
+        let core = ls.state.core();
+        format!(
+            "{:?}",
+            [core.view(a).map(|v| v.v), core.view(b).map(|v| v.v)]
+        )
+    };
+    assert_eq!(
+        ls.state.core().membership().observers(element),
+        vec![a],
+        "placed on A, not seen by B"
+    );
+    assert_eq!(ls.probe.preferred_scales_of("W").last(), Some(&120));
 
-    let initial_count = ls.probe.preferred_scales.len();
-    let mut renegotiations = 0;
+    // the non-client stimulus: A's scale rises to 1.1
+    ls.reconfigure(a, &common::output_k("A", (1920, 1080), 132, 60_000));
+    let start = ls.probe.preferred_scales_of("W").len();
+    assert_eq!(ls.probe.preferred_scales_of("W").last(), Some(&132));
+    let before = cameras(&ls);
 
-    // Simulate 30 rounds of client resizing in response to scale:
-    for i in 0..30 {
-        let side = if i % 2 == 0 { 1200 } else { 300 };
-        vp.set_destination(side, side);
+    let mut seen_by_b = 0;
+    for _ in 0..30 {
+        let hint = *ls.probe.preferred_scales_of("W").last().expect("a hint");
+        let side = if hint < 240 { 2400 } else { 300 };
+        vp.set_destination(side, 300);
         ls.probe.surfaces[w].wl.commit();
         ls.pump();
-
-        if ls.probe.preferred_scales.len() > initial_count + renegotiations {
-            renegotiations = ls.probe.preferred_scales.len() - initial_count;
-        }
+        seen_by_b += usize::from(ls.state.core().membership().observers(element).contains(&b));
     }
-
-    // SC-E: client-caused re-evaluations cannot oscillate; bounded to <= 2
+    let after: Vec<u32> = ls.probe.preferred_scales_of("W")[start..].to_vec();
+    assert!(seen_by_b > 0, "the adversary's growth must reach B");
     assert!(
-        renegotiations <= 2,
-        "Adversarial client caused {renegotiations} scale renegotiations; SC-E requires <= 2"
+        after.len() <= 2,
+        "the adversary caused {} hint changes after one stimulus: {after:?}",
+        after.len()
     );
+    assert!(
+        after.windows(2).all(|p| p[1] >= p[0]) && after.iter().all(|&s| s >= 132),
+        "client responses reversed the stimulus's direction: {after:?}"
+    );
+    assert_eq!(after, vec![240], "the growth onto B is the one change");
+    let quiet = ls.probe.preferred_scales_of("W").len();
+    for _ in 0..5 {
+        vp.set_destination(300, 300);
+        ls.probe.surfaces[w].wl.commit();
+        ls.pump();
+    }
+    assert_eq!(ls.probe.preferred_scales_of("W").len(), quiet, "quiescent");
+    assert_eq!(cameras(&ls), before, "client geometry moved no camera");
 }
 
 // ---------------------------------------------------------------------------------------------

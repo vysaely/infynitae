@@ -1099,6 +1099,11 @@ CONTROLS = [
     ("H-9: the destruction of a presented element is evaluated as a client response", f"{CORE}/protocol.rs",
      "        vis.extend(self.evaluate_scale_policy(ended.is_empty()));", "        vis.extend(self.evaluate_scale_policy(true));",
      "infynitae-core", ["--lib"], "the_end_of_a_presentation_restores_the_hint_of_the_elements_it_hid"),
+    # OB-28 (H-8): the T1 adversary must fail without SC-E (INV-SCALE-4 d)
+    ("OB-28: SC-E disabled, client responses may reverse the hint", f"{CORE}/scale.rs",
+     "                if is_client_response {\n                    // SC-E:",
+     "                if false && is_client_response {\n                    // SC-E:",
+     "infynitae-backend-headless", ["--test", "t1_scale"], "adversarial_client_churn_bounds_sc_e"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.
