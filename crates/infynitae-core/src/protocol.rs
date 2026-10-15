@@ -615,6 +615,19 @@ impl Core {
         tree: SurfaceTree,
         acked_fullscreen: bool,
     ) -> Result<Vec<Effect>, ProtocolError> {
+        let requested = tree.frame_requested();
+        let fx = self.toplevel_committed_tree(id, tree, acked_fullscreen)?;
+        // OBJ-17: what the commit left pending (M16)
+        self.frame_liveness.committed(id, requested);
+        Ok(fx)
+    }
+
+    fn toplevel_committed_tree(
+        &mut self,
+        id: ElementId,
+        tree: SurfaceTree,
+        acked_fullscreen: bool,
+    ) -> Result<Vec<Effect>, ProtocolError> {
         tree.validate().map_err(ProtocolError::Snapshot)?;
         let state = self.stage.state(id).ok_or(ProtocolError::StaleElement)?;
         let has_buffer = tree.root().is_some_and(|r| r.mapped);
@@ -741,6 +754,8 @@ impl Core {
     ) -> Result<Vec<Effect>, ProtocolError> {
         tree.validate().map_err(ProtocolError::Snapshot)?;
         let state = self.stage.state(id).ok_or(ProtocolError::StaleElement)?;
+        // OBJ-17: a child surface's commit may leave a callback pending (M16)
+        self.frame_liveness.committed(id, tree.frame_requested());
         // The root's mapped state is committed state of the root surface; only its own commit
         // changes it, so a tree without a mapped root is never applied here.
         if state != Lifecycle::Mapped || !tree.root().is_some_and(|r| r.mapped) {
@@ -772,6 +787,7 @@ impl Core {
         if !existed {
             return Vec::new();
         }
+        self.frame_liveness.destroyed(id);
         let live: Vec<ElementId> = self.focusable_elements();
         let mut fx = self.focus.target_lost(id, &live);
         self.drop_fullscreen(id);
@@ -1255,6 +1271,7 @@ mod tests {
                 },
                 mapped,
                 input: InputRegion::Infinite,
+                frame_requested: false,
             }],
         }
     }
@@ -1595,6 +1612,7 @@ mod tests {
                 },
                 mapped,
                 input: InputRegion::Infinite,
+                frame_requested: false,
             }],
         }
     }
@@ -2929,6 +2947,7 @@ mod tests {
                 },
                 mapped,
                 input: InputRegion::Infinite,
+                frame_requested: false,
             }],
         }
     }
@@ -3247,6 +3266,7 @@ mod tests {
             size: LocalSize { w: 3000, h: 50 },
             mapped: true,
             input: InputRegion::Infinite,
+            frame_requested: false,
         });
         tree.surfaces.push(SnapshotSurface {
             key: key(3),
@@ -3257,6 +3277,7 @@ mod tests {
             size: LocalSize { w: 180, h: 240 },
             mapped: true,
             input: InputRegion::Infinite,
+            frame_requested: false,
         });
         c.toplevel_committed(id, tree).unwrap();
         assert_eq!(c.stage().anchor(id), Some(CanvasPoint { x: -323, y: -256 }));

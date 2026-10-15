@@ -169,6 +169,7 @@ mod tests {
                 },
                 mapped,
                 input: InputRegion::Infinite,
+                frame_requested: false,
             }],
         };
         let id = c.toplevel_created();

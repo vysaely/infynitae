@@ -33,6 +33,7 @@ impl WaylandState {
     /// Applies Core's effects in order (C1.2 `WaylandState::apply`).
     pub fn apply(&mut self, effects: &[Effect]) {
         for effect in effects {
+            self.kick_before(effect);
             match *effect {
                 Effect::InitialConfigure(id) | Effect::ToplevelConfigure(id) => {
                     self.configure_toplevel(id, None);

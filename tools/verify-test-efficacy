@@ -833,7 +833,7 @@ CONTROLS = [
      "infynitae-wayland", ["--lib"], "a_stall_is_not_made_up_for"),
     ("session: the loop is given the frame period as its timeout whatever is pending",
      f"{WAYLAND}/session.rs",
-     "        match (self.timer.until_due(now), limit) {", "        match (Some(self.timer.until_due(now).unwrap_or(self.timer.period())), limit) {",
+     "        [self.timer.until_due(now), fallback, limit]", "        [Some(self.timer.until_due(now).unwrap_or(self.timer.period())), fallback, limit]",
      "infynitae-wayland", ["--lib"], "an_idle_session_has_nothing_to_wake_for"),
     ("session: client requests ask for no frame",
      f"{WAYLAND}/session.rs",
@@ -859,6 +859,43 @@ CONTROLS = [
      f"{WAYLAND}/session.rs",
      "            match kill_process(pid, Signal::TERM) {", "            match kill_process(pid, Signal::CONT) {",
      "infynitae-wayland", ["--lib"], "a_running_child_exits_on_sigterm_within_the_grace_period"),
+    ("M16: the session's sleep ignores the fallback deadline", f"{WAYLAND}/session.rs",
+     "        let fallback = self.fallback.map(|t| t.saturating_duration_since(now));", "        let fallback = self.fallback.map(|t| t.saturating_duration_since(now)).filter(|_| false);",
+     "infynitae-wayland", ["--lib"], "the_fallback_deadline_bounds_the_sleep_only_while_armed"),
+    # ---- INC-8: off-screen frame policy (M16; INV-FRAME-3, INV-FRAME-4, INV-IDLE-1; OB-16)
+    ("INV-FRAME-3 (a): no kick before input (OB-16: a focused off-screen client blocks)", f"{CORE}/lib.rs",
+     "                self.frame_liveness.kick(e, observed)", "                {\n                    let _ = (e, observed);\n                    false\n                }",
+     "infynitae-backend-headless", ["--test", "t1_frames"], "a_key_kicks_a_focused_unobserved_client_before_the_key_arrives"),
+    ("INV-FRAME-3 (a): no kick before a non-initial configure", f"{CORE}/lib.rs",
+     "                self.frame_liveness.kick(e, observed)", "                {\n                    let _ = (e, observed);\n                    false\n                }",
+     "infynitae-backend-headless", ["--test", "t1_frames"], "a_configure_kicks_before_it_is_sent"),
+    ("INV-FRAME-2/3: an observed element is kicked (callbacks at double rate)", f"{CORE}/frames.rs",
+     "        if observed || !self.requested(element) {", "        if !self.requested(element) {",
+     "infynitae-backend-headless", ["--test", "t1_frames"], "an_observed_client_is_not_kicked"),
+    ("INV-FRAME-3 (b): no fallback (pure starve)", f"{CORE}/frames.rs",
+     "                due.push(*e);", "                let _ = e;",
+     "infynitae-backend-headless", ["--test", "t1_frames"], "an_unobserved_window_gets_one_callback_per_fallback_period"),
+    ("INV-FRAME-3 (b): no fallback with zero outputs", f"{CORE}/frames.rs",
+     "                due.push(*e);", "                let _ = e;",
+     "infynitae-backend-headless", ["--test", "t1_frames"], "zero_outputs_still_complete_on_the_fallback"),
+    ("AUD-24: a kick does not restart the fallback period", f"{CORE}/frames.rs",
+     "        self.completed(element);\n        true", "        if let Ok(i) = self.find(element) {\n            self.entries[i].1.requested = false;\n        }\n        true",
+     "infynitae-backend-headless", ["--test", "t1_frames"], "a_kick_restarts_the_fallback_period"),
+    ("INV-IDLE-1: the fallback timer is armed for an observed element", f"{CORE}/frames.rs",
+     "            .filter(|(e, l)| l.requested && !observed(*e))\n            .map(|(_, l)| {", "            .filter(|(e, l)| l.requested && !observed(*e) || l.requested)\n            .map(|(_, l)| {",
+     "infynitae-backend-headless", ["--test", "t1_frames"], "an_observed_client_is_clocked_by_vblank_and_arms_no_timer"),
+    ("OBJ-17: a vblank completion is not recorded (timer armed with nothing pending)", f"{CORE}/lib.rs",
+     "        for &e in &elements {\n            self.frame_liveness.completed(e);\n        }", "        for &e in &elements {\n            let _ = e;\n        }",
+     "infynitae-backend-headless", ["--test", "t1_frames"], "a_window_that_stopped_drawing_arms_no_timer_when_it_leaves"),
+    ("OBJ-05: frame_requested is not extracted from committed state", f"{WAYLAND}/snapshot.rs",
+     "            let frame_requested = !attributes.frame_callbacks.is_empty();", "            let frame_requested = attributes.frame_callbacks.is_empty() && false;",
+     "infynitae-backend-headless", ["--test", "t1_frames"], "an_unobserved_window_gets_one_callback_per_fallback_period"),
+    ("INV-FRAME-3 (b): a vblank that completed nothing restarts the period (late fallback)", f"{CORE}/frames.rs",
+     "        if let Ok(i) = self.find(element)\n            && self.entries[i].1.requested\n        {", "        if let Ok(i) = self.find(element) {",
+     "infynitae-backend-headless", ["--test", "t1_inc7_adversarial"], "a_window_hidden_by_a_presentation_gets_the_fallback_and_re_entry"),
+    ("M16: the adapter does not complete withheld callbacks", f"{WAYLAND}/frames.rs",
+     "                callback.done(time_ms);", "                let _ = (callback, time_ms);",
+     "infynitae-backend-headless", ["--test", "t1_frames"], "a_key_kicks_a_focused_unobserved_client_before_the_key_arrives"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.
@@ -920,7 +957,7 @@ def main():
         print(__doc__)
         return 2
     print("=" * 72)
-    print("verify-test-efficacy — seeded behavioural defects (INC-1, INC1-F06/F07 corrective, INC-2, INC-3, INC-4)")
+    print("verify-test-efficacy — seeded behavioural defects (INC-1, INC1-F06/F07 corrective, INC-2, INC-3, INC-4, INC-8)")
     print("=" * 72)
     target_base = os.path.join(ROOT, "target")
     os.makedirs(target_base, exist_ok=True)

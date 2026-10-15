@@ -1,0 +1,340 @@
+//! INC-8 T1: the off-screen frame policy (M16; INV-FRAME-1, INV-FRAME-3, INV-FRAME-4,
+//! INV-IDLE-1; OB-16; TST-03 SC3 and TST-06 on the production path).
+//!
+//! The production Core, adapter and headless backend with a recording client. Time is virtual:
+//! the lockstep runs vblanks and the fallback timer in time order and ends every pump with the
+//! fallback evaluation, as a backend's loop iteration does. The oracle is the client's own wire
+//! log (`probe.wire`: one ordered log across objects) and the times of its callbacks
+//! (`probe.frames`).
+//!
+//! Scene: output A 1920x1080 at 60 Hz; W 800x600 with a 20 px shadow, centred, focused. W is
+//! made unobserved by a camera pan (Super + middle button) of 10 × (300, 0): the view moves
+//! 3000 px, W's 840 px wide tree spans at most 1380 px from the view centre, so no pixel of it
+//! is on A. Panning back by the same amount brings it back.
+
+mod common;
+
+use std::time::Duration;
+
+use common::Lockstep;
+use common::input::{BTN_MIDDLE, Rig, a_1080, logo};
+use infynitae_backend_headless::{keyboard_key, set_focus};
+use infynitae_core::input::keys::KEY_A;
+use infynitae_core::stage::ElementId;
+
+const P: Duration = Duration::from_secs(1);
+const MS: Duration = Duration::from_millis(1);
+
+struct F {
+    r: Rig,
+    w: usize,
+    e: ElementId,
+}
+
+impl F {
+    /// W mapped and focused on A, observed.
+    fn new() -> F {
+        let mut r = Rig::new(Lockstep::new(Some(a_1080())));
+        r.map_w();
+        let w =
+            r.ls.probe
+                .surfaces
+                .iter()
+                .position(|s| s.label == "W")
+                .unwrap();
+        let e = r.ls.state.elements().next().unwrap();
+        set_focus(&mut r.ls.state, &mut r.ls.input, Some(e)).unwrap();
+        r.ls.pump();
+        r.frame();
+        let mut f = F { r, w, e };
+        assert!(f.observed(), "W starts on A");
+        f.r.frame();
+        f
+    }
+
+    /// W and the scene after a pan that takes W off A.
+    fn off_screen() -> F {
+        let mut f = F::new();
+        f.pan(300.0);
+        assert!(!f.observed(), "the pan took W off A");
+        f
+    }
+
+    fn pan(&mut self, dx: f64) {
+        self.r.button(BTN_MIDDLE, true, logo());
+        for _ in 0..10 {
+            self.r.motion((dx, 0.0));
+        }
+        self.r.button(BTN_MIDDLE, false, logo());
+    }
+
+    fn observed(&self) -> bool {
+        self.r.ls.state.core().membership().is_observed(self.e)
+    }
+
+    fn request(&mut self) {
+        let qh = self.r.ls.qh.clone();
+        self.r.ls.probe.frame_and_draw(&qh, self.w);
+        self.r.ls.pump();
+    }
+
+    fn now(&self) -> Duration {
+        self.r.ls.now
+    }
+
+    fn run(&mut self, d: Duration) {
+        let t = self.r.ls.now + d;
+        self.r.ls.run_until(t);
+    }
+
+    fn frames_w(&self) -> Vec<Duration> {
+        self.r
+            .ls
+            .probe
+            .frames
+            .iter()
+            .filter(|(_, l)| *l == "W")
+            .map(|(t, _)| *t)
+            .collect()
+    }
+
+    fn wire_mark(&self) -> usize {
+        self.r.ls.probe.wire.len()
+    }
+
+    fn wire_since(&self, m: usize) -> Vec<&str> {
+        self.r.ls.probe.wire[m..]
+            .iter()
+            .map(|s| s.as_str())
+            .collect()
+    }
+
+    fn deadline(&self) -> Option<Duration> {
+        self.r.ls.state.core().frame_fallback_deadline()
+    }
+}
+
+/// INV-FRAME-3 (b), TST-03 SC3: an unobserved window's callback is withheld for one period P
+/// from the moment it became pending, then completes once; nothing more completes without a new
+/// request (INV-FRAME-1); a continuously requesting client gets exactly one completion per P.
+#[test]
+fn an_unobserved_window_gets_one_callback_per_fallback_period() {
+    let mut f = F::off_screen();
+    let before = f.frames_w().len();
+    f.request();
+    let t0 = f.now();
+    assert_eq!(
+        f.deadline(),
+        Some(t0 + P),
+        "the timer is armed for one period"
+    );
+    f.run(P - MS);
+    assert_eq!(f.frames_w().len(), before, "withheld for P");
+    f.run(MS);
+    assert_eq!(f.frames_w()[before..], [t0 + P], "one completion at P");
+    assert_eq!(f.deadline(), None, "nothing pending: no timer (INV-IDLE-1)");
+    f.run(5 * P);
+    assert_eq!(f.frames_w().len(), before + 1, "no invented callback");
+
+    // a client that redraws on every `done`: its last completion is more than P ago, so the
+    // first request completes at once, then one per P
+    f.r.ls.probe.surfaces[f.w].frame_driven = true;
+    f.request();
+    let t1 = f.now();
+    f.run(5 * P);
+    let got = f.frames_w()[before + 1..].to_vec();
+    assert_eq!(got, (0..=5).map(|k| t1 + k * P).collect::<Vec<_>>());
+}
+
+/// INV-IDLE-1: an observed animating client is clocked by A's vblank and never arms the
+/// fallback timer; once it stops, nothing is armed.
+#[test]
+fn an_observed_client_is_clocked_by_vblank_and_arms_no_timer() {
+    let mut f = F::new();
+    let before = f.frames_w().len();
+    f.r.ls.probe.surfaces[f.w].frame_driven = true;
+    f.request();
+    for _ in 0..120 {
+        f.r.frame();
+        assert_eq!(f.deadline(), None, "an observed element arms no timer");
+    }
+    let got = f.frames_w().len() - before;
+    assert!(
+        (119..=121).contains(&got),
+        "one completion per vblank, got {got}"
+    );
+    f.r.ls.probe.surfaces[f.w].frame_driven = false;
+    f.r.frame();
+    f.r.frame();
+    assert_eq!(f.deadline(), None);
+}
+
+/// OB-16 (CR-7), INV-FRAME-3 (a): input delivered to a focused, unobserved client with a
+/// pending callback completes it first — in the same dispatch, before the key event, and once.
+#[test]
+fn a_key_kicks_a_focused_unobserved_client_before_the_key_arrives() {
+    let mut f = F::off_screen();
+    let before = f.frames_w().len();
+    f.request();
+    f.run(100 * MS);
+    let at = f.now();
+    let m = f.wire_mark();
+    keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_A, true, 1).unwrap();
+    f.r.ls.pump();
+    assert_eq!(
+        f.wire_since(m),
+        ["frame W", &format!("key {KEY_A}")],
+        "the withheld callback completes before the key, once"
+    );
+    assert_eq!(
+        f.frames_w()[before..],
+        [at],
+        "first response within the dispatch"
+    );
+    let m = f.wire_mark();
+    keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_A, false, 2).unwrap();
+    f.r.ls.pump();
+    assert_eq!(
+        f.wire_since(m),
+        [format!("key {KEY_A}")],
+        "nothing pending: no kick"
+    );
+    assert_eq!(f.deadline(), None);
+}
+
+/// INV-FRAME-3 (a): a non-initial configure (here the `activated` change of a focus loss) and
+/// the keyboard `leave` are preceded by the completion of the withheld callback.
+#[test]
+fn a_configure_kicks_before_it_is_sent() {
+    let mut f = F::off_screen();
+    f.request();
+    let m = f.wire_mark();
+    set_focus(&mut f.r.ls.state, &mut f.r.ls.input, None).unwrap();
+    f.r.ls.pump();
+    let wire = f.wire_since(m);
+    assert_eq!(wire.first(), Some(&"frame W"), "kick first: {wire:?}");
+    assert!(wire.contains(&"configure W"), "{wire:?}");
+    assert_eq!(
+        wire.iter().filter(|l| **l == "frame W").count(),
+        1,
+        "{wire:?}"
+    );
+}
+
+/// AUD-24: the fallback period is measured from the last completion, kick included, so a
+/// fallback never follows a kick within P.
+#[test]
+fn a_kick_restarts_the_fallback_period() {
+    let mut f = F::off_screen();
+    f.request();
+    f.run(P / 2);
+    keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_A, true, 1).unwrap();
+    f.r.ls.pump();
+    let kick = f.now();
+    assert_eq!(f.frames_w().last(), Some(&kick));
+    f.request();
+    f.run(P - MS);
+    assert_eq!(
+        f.frames_w().last(),
+        Some(&kick),
+        "no fallback within P of the kick"
+    );
+    f.run(MS);
+    assert_eq!(f.frames_w().last(), Some(&(kick + P)));
+    keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_A, false, 2).unwrap();
+    f.r.ls.pump();
+}
+
+/// INV-FRAME-4: when W is observed again, its pending callback completes at the first vblank
+/// of its clock output, without waiting for the fallback. Here re-entry is the reconnection of
+/// the only output: nothing completes at the connection itself, then exactly at A's first vblank.
+#[test]
+fn re_entry_completes_at_the_first_vblank() {
+    let mut f = F::new();
+    let a = f.r.ls.output();
+    f.r.ls.disconnect(a);
+    f.request();
+    f.run(100 * MS);
+    let before = f.frames_w().len();
+    let connected = f.now();
+    f.r.ls.connect(&a_1080());
+    assert!(f.observed(), "W is on the new output");
+    assert_eq!(
+        f.frames_w().len(),
+        before,
+        "nothing completes before the vblank"
+    );
+    assert!(f.r.ls.state.core().frame_pending(f.e));
+    assert_eq!(f.deadline(), None, "observed: the timer is disarmed");
+    f.run(Duration::from_micros(16_667));
+    assert_eq!(
+        f.frames_w()[before..],
+        [connected + Duration::from_nanos(16_666_666)],
+        "at the first vblank of the clock output"
+    );
+}
+
+/// INV-FRAME-4 after a camera pan: the callback withheld while W was off A completes once W is
+/// back, long before the fallback would have run.
+#[test]
+fn re_entry_after_a_pan_completes_before_the_fallback() {
+    let mut f = F::off_screen();
+    f.request();
+    let requested = f.now();
+    f.run(100 * MS);
+    let before = f.frames_w().len();
+    f.pan(-300.0);
+    assert!(f.observed(), "the pan brought W back");
+    let got = f.frames_w()[before..].to_vec();
+    assert_eq!(got.len(), 1, "one completion: {got:?}");
+    assert!(got[0] < requested + P, "{got:?}");
+    assert_eq!(f.deadline(), None);
+}
+
+/// M16 with zero outputs: every element is unobserved; a pending callback still completes once
+/// per P, so a client does not freeze while no output is connected.
+#[test]
+fn zero_outputs_still_complete_on_the_fallback() {
+    let mut f = F::new();
+    let a = f.r.ls.output();
+    f.r.ls.disconnect(a);
+    assert!(!f.observed());
+    let before = f.frames_w().len();
+    f.request();
+    let t0 = f.now();
+    f.run(3 * P);
+    assert_eq!(f.frames_w()[before..], [t0 + P]);
+}
+
+/// INV-FRAME-2, INV-FRAME-3: an observed client is never kicked; input reaches it at once and its
+/// callback still completes at the next vblank of its clock output (no double rate).
+#[test]
+fn an_observed_client_is_not_kicked() {
+    let mut f = F::new();
+    f.request();
+    let m = f.wire_mark();
+    keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_A, true, 1).unwrap();
+    f.r.ls.pump();
+    assert_eq!(f.wire_since(m), [format!("key {KEY_A}")]);
+    f.r.frame();
+    assert_eq!(f.wire_since(m), [format!("key {KEY_A}"), "frame W".into()]);
+    keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_A, false, 2).unwrap();
+    f.r.ls.pump();
+}
+
+/// OBJ-17, INV-IDLE-1: callbacks completed by vblanks are recorded as completed, so a window
+/// that drew while observed and then stopped arms no timer when it leaves the view.
+#[test]
+fn a_window_that_stopped_drawing_arms_no_timer_when_it_leaves() {
+    let mut f = F::new();
+    f.request();
+    f.r.frame();
+    f.r.frame();
+    assert!(
+        !f.r.ls.state.core().frame_pending(f.e),
+        "completed at the vblank"
+    );
+    f.pan(300.0);
+    assert!(!f.observed());
+    assert_eq!(f.deadline(), None, "no pending callback: no timer");
+}

@@ -174,6 +174,7 @@ mod tests {
             size: LocalSize { w, h },
             mapped: true,
             input,
+            frame_requested: false,
         }
     }
 

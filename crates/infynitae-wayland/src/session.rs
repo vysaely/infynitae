@@ -118,6 +118,9 @@ pub struct Session {
     /// The display became readable since the last dispatch: a request arrived or a client
     /// went away.
     display_ready: Rc<Cell<bool>>,
+    /// When the off-screen fallback timer fires (M16); `None` while no unobserved element has a
+    /// pending callback, and then it is not armed (INV-IDLE-1).
+    fallback: Option<Instant>,
 }
 
 impl Session {
@@ -168,6 +171,7 @@ impl Session {
             duration: options.duration,
             max_frames: options.max_frames,
             display_ready,
+            fallback: None,
         };
         if let Some(cmd) = &options.exec {
             session.spawn(handle, cmd);
@@ -208,17 +212,25 @@ impl Session {
         }
     }
 
-    /// How long the loop may sleep: until the pending frame or the duration limit, whichever is
-    /// first; `None` when neither exists, and the loop then waits for events only.
+    /// How long the loop may sleep: until the pending frame, the off-screen fallback or the
+    /// duration limit, whichever is first; `None` when none exists, and the loop then waits for
+    /// events only.
     pub fn timeout(&self) -> Option<Duration> {
         let now = Instant::now();
         let limit = self
             .duration
             .map(|d| (self.started + d).saturating_duration_since(now));
-        match (self.timer.until_due(now), limit) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        let fallback = self.fallback.map(|t| t.saturating_duration_since(now));
+        [self.timer.until_due(now), fallback, limit]
+            .into_iter()
+            .flatten()
+            .min()
+    }
+
+    /// Arms the off-screen fallback timer for `deadline`, given on the presentation clock whose
+    /// current time is `now` (Core's [`crate::WaylandState::frame_fallback`]), or disarms it.
+    pub fn set_fallback_deadline(&mut self, deadline: Option<Duration>, now: Duration) {
+        self.fallback = deadline.map(|d| Instant::now() + d.saturating_sub(now));
     }
 
     /// After the loop woke: reaps exited children, dispatches the clients' requests and flushes
@@ -468,6 +480,36 @@ mod tests {
             assert!(!session.finished());
             drop(event_loop);
         }
+    }
+
+    /// M16 / INV-IDLE-1: the off-screen fallback deadline bounds the loop's sleep while it is
+    /// armed and not at all once disarmed; a deadline already passed wakes the loop at once.
+    #[test]
+    fn the_fallback_deadline_bounds_the_sleep_only_while_armed() {
+        let (core, _input, _shell, _outputs) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<WaylandState> = Display::new().unwrap();
+        let mut state = WaylandState::new(&display.handle(), core);
+        let mut event_loop: EventLoop<()> = EventLoop::try_new().unwrap();
+        let options = SessionOptions {
+            socket_name: Some(format!("infynitae-fallback-test-{}", std::process::id())),
+            refresh_mhz: 60_000,
+            ..SessionOptions::default()
+        };
+        let mut session = Session::new(display, &event_loop.handle(), &options).unwrap();
+        event_loop.dispatch(Some(Duration::ZERO), &mut ()).unwrap();
+        session.dispatch(&mut state);
+        assert!(session.frame_due());
+        assert_eq!(session.timeout(), None, "idle");
+        let now = Duration::from_secs(100);
+        session.set_fallback_deadline(Some(now + 500 * MS), now);
+        let t = session.timeout().expect("armed");
+        assert!(t <= 500 * MS && t > 450 * MS, "{t:?}");
+        session.set_fallback_deadline(Some(now - MS), now);
+        assert_eq!(session.timeout(), Some(Duration::ZERO), "overdue");
+        session.set_fallback_deadline(None, now);
+        assert_eq!(session.timeout(), None, "disarmed");
+        drop(event_loop);
     }
 
     fn session(

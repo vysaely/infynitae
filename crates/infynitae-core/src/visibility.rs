@@ -47,6 +47,11 @@ impl MembershipTable {
         out
     }
 
+    /// Whether any output observes the element (M16: Observed).
+    pub fn is_observed(&self, element: ElementId) -> bool {
+        !self.range(element).is_empty()
+    }
+
     /// The elements that have at least one row, ascending.
     pub(crate) fn observed(&self) -> impl Iterator<Item = ElementId> + '_ {
         self.rows.chunk_by(|a, b| a.0 == b.0).map(|rows| rows[0].0)
@@ -234,6 +239,7 @@ mod tests {
                 },
                 mapped,
                 input: InputRegion::Infinite,
+                frame_requested: false,
             }],
         }
     }
@@ -424,6 +430,7 @@ mod tests {
             },
             mapped,
             input: InputRegion::Infinite,
+            frame_requested: false,
         }];
         if mapped {
             for i in 0..rng.below(4) {
@@ -437,6 +444,7 @@ mod tests {
                     size: size(rng),
                     mapped: rng.below(5) != 0,
                     input: InputRegion::Infinite,
+                    frame_requested: false,
                 });
             }
             if rng.below(3) == 0 {
@@ -453,6 +461,7 @@ mod tests {
                     size: size(rng),
                     mapped: true,
                     input: InputRegion::Infinite,
+                    frame_requested: false,
                 });
                 surfaces.push(SnapshotSurface {
                     key: skey(base + 7),
@@ -463,6 +472,7 @@ mod tests {
                     size: size(rng),
                     mapped: true,
                     input: InputRegion::Infinite,
+                    frame_requested: false,
                 });
             }
         }

@@ -297,6 +297,7 @@ mod tests {
                 size: LocalSize { w: 400, h: 300 },
                 input: InputRegion::Infinite,
                 mapped: true,
+                frame_requested: false,
             }],
         };
 
@@ -424,6 +425,7 @@ mod tests {
                 size: LocalSize { w: 400, h: 300 },
                 input: InputRegion::Infinite,
                 mapped: true,
+                frame_requested: false,
             }],
         };
         let mut tree_unmapped = tree.clone();
@@ -511,6 +513,7 @@ mod tests {
                 size: LocalSize { w: 400, h: 300 },
                 input: InputRegion::Infinite,
                 mapped: true,
+                frame_requested: false,
             }],
         };
         let mut tree_unmapped = tree.clone();

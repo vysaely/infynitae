@@ -184,6 +184,13 @@ pub fn run_nested(
         if data.session.frame_due() {
             render_and_present(&mut data);
         }
+
+        // M16: withheld callbacks of unobserved elements, on a timer armed only while one is
+        // pending (INV-IDLE-1)
+        let now = infynitae_wayland::presentation_clock_now();
+        let deadline = data.state.frame_fallback(now);
+        data.session.set_fallback_deadline(deadline, now);
+        data.session.flush();
     }
 
     println!("[infynitae] Shutting down compositor...");
@@ -410,7 +417,7 @@ fn render_and_present(data: &mut LoopData) {
 
     // Complete frame callbacks and presentation feedback for clocked elements
     let now = infynitae_wayland::presentation_clock_now();
-    let elements = data.state.core().frame_tick(data.output_id);
+    let elements = data.state.core_mut().frame_tick(data.output_id);
     data.state.complete_frames(data.output_id, &elements, now);
     data.session.flush();
 }

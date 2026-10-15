@@ -75,6 +75,9 @@ pub struct SnapshotSurface {
     /// The surface has a buffer.
     pub mapped: bool,
     pub input: InputRegion,
+    /// The surface has frame callbacks that have not completed yet (`wl_surface.frame` in
+    /// committed state; D7 refinement PD-F1-06). Read by the frame policy (OBJ-17, M16).
+    pub frame_requested: bool,
 }
 
 /// One element's surfaces, front-to-back: each popup tree, then the root tree, each traversed
@@ -110,6 +113,11 @@ pub enum SnapshotError {
 }
 
 impl SurfaceTree {
+    /// Whether any surface of the tree has a pending frame callback (OBJ-05).
+    pub fn frame_requested(&self) -> bool {
+        self.surfaces.iter().any(|s| s.frame_requested)
+    }
+
     /// Structural validation; a snapshot that fails it is rejected whole.
     pub fn validate(&self) -> Result<(), SnapshotError> {
         let n = self.surfaces.len();
@@ -260,6 +268,7 @@ pub(crate) mod tests {
             size: LocalSize { w, h },
             mapped: true,
             input: InputRegion::Infinite,
+            frame_requested: false,
         }
     }
 

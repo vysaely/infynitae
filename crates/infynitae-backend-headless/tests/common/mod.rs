@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use infynitae_backend_headless::{VirtualOutput, connect, vblank, vblank_period};
+use infynitae_backend_headless::{VirtualOutput, connect, frame_fallback, vblank, vblank_period};
 use infynitae_core::navigation::PersistedCameras;
 use infynitae_core::output::{OutputId, Transform};
 use infynitae_core::pointer::PointerState;
@@ -121,6 +121,10 @@ pub struct Probe {
     pub now: Duration,
     /// (time, surface label) of every frame callback `done`.
     pub frames: Vec<(Duration, &'static str)>,
+    /// One ordered wire log across objects, for the order of a frame callback relative to the
+    /// event that kicked it (M16): "frame S", "configure S", "popup_done S", "kb_enter S",
+    /// "kb_leave S", "key K", "pointer <line as in `ptr`>".
+    pub wire: Vec<String>,
     pub compositor: Option<WlCompositor>,
     pub subcompositor: Option<WlSubcompositor>,
     pub shm: Option<WlShm>,
@@ -820,6 +824,7 @@ impl Dispatch<WlCallback, usize> for Probe {
         if let wl_callback::Event::Done { .. } = ev {
             let label = st.surfaces[*idx].label;
             st.log.push(format!("frame {label}"));
+            st.wire.push(format!("frame {label}"));
             st.frames.push((st.now, label));
             if st.surfaces[*idx].frame_driven {
                 st.surfaces[*idx].wl.frame(qh, *idx);
@@ -937,6 +942,7 @@ impl Dispatch<XdgToplevel, usize> for Probe {
                 st.kb_log.push(format!(
                     "toplevel_configure {label} activated={is_activated}"
                 ));
+                st.wire.push(format!("configure {label}"));
             }
             xdg_toplevel::Event::WmCapabilities { capabilities } => {
                 st.wm_capabilities.push((*idx, words(&capabilities)));
@@ -970,6 +976,7 @@ impl Dispatch<XdgPopup, usize> for Probe {
             xdg_popup::Event::PopupDone => {
                 let label = st.surfaces[*idx].label;
                 st.popup_dones.push(label);
+                st.wire.push(format!("popup_done {label}"));
                 st.kb_log.push(format!("popup_done {label}"));
                 if st.auto_destroy_popups && st.surfaces[*idx].popup.is_some() {
                     st.destroy_popup(*idx);
@@ -1045,6 +1052,7 @@ impl Dispatch<WlPointer, ()> for Probe {
             wl_pointer::Event::Frame => "frame".to_string(),
             _ => return,
         };
+        st.wire.push(format!("pointer {line}"));
         st.ptr.push(line);
     }
 }
@@ -1086,6 +1094,7 @@ impl Dispatch<WlKeyboard, ()> for Probe {
                 st.kb.awaiting_modifiers = true;
                 st.kb_log
                     .push(format!("wl_keyboard.enter {label} keys={:?}", st.kb.keys));
+                st.wire.push(format!("kb_enter {label}"));
             }
             wl_keyboard::Event::Leave { surface, .. } => {
                 let label = st.label_of(&surface);
@@ -1121,6 +1130,7 @@ impl Dispatch<WlKeyboard, ()> for Probe {
                 st.kb.locked = 0;
                 st.kb.awaiting_modifiers = false;
                 st.kb_log.push(format!("wl_keyboard.leave {label}"));
+                st.wire.push(format!("kb_leave {label}"));
             }
             wl_keyboard::Event::Key {
                 serial, key, state, ..
@@ -1151,6 +1161,7 @@ impl Dispatch<WlKeyboard, ()> for Probe {
                         .push(format!("released {key} not logically down"));
                 }
                 st.key_events.push((key, pressed));
+                st.wire.push(format!("key {key}"));
                 st.kb_log.push(format!(
                     "wl_keyboard.key {key} {}",
                     if pressed { "pressed" } else { "released" }
@@ -1344,7 +1355,8 @@ impl Lockstep {
         self.pump();
     }
 
-    /// Runs every vblank due up to `t` in time order, pumping after each.
+    /// Runs every vblank and every off-screen fallback (M16) due up to `t` in time order,
+    /// pumping after each. A fallback due at a vblank's time runs after it.
     pub fn run_until(&mut self, t: Duration) {
         loop {
             let next = self
@@ -1353,6 +1365,17 @@ impl Lockstep {
                 .copied()
                 .filter(|(_, at)| *at <= t)
                 .min_by_key(|(o, at)| (*at, *o));
+            let fallback = self
+                .state
+                .core()
+                .frame_fallback_deadline()
+                .map(|d| d.max(self.now))
+                .filter(|d| *d <= t && next.is_none_or(|(_, at)| *d < at));
+            if let Some(at) = fallback {
+                self.now = at;
+                self.pump();
+                continue;
+            }
             let Some((o, at)) = next else { break };
             self.now = at;
             vblank(&mut self.state, o, at);
@@ -1407,7 +1430,8 @@ impl Lockstep {
         self.pump();
     }
 
-    /// Exchanges messages until both sides are quiescent.
+    /// Exchanges messages until both sides are quiescent. Like a backend's loop iteration,
+    /// every round ends with the off-screen fallback evaluation at the current virtual time.
     pub fn pump(&mut self) {
         let mut idle = 0;
         for _ in 0..10_000 {
@@ -1415,6 +1439,7 @@ impl Lockstep {
                 .display
                 .dispatch_clients(&mut self.state)
                 .expect("server dispatch");
+            frame_fallback(&mut self.state, self.now);
             self.display.flush_clients().expect("server flush");
             self.conn.flush().expect("client flush");
             if let Some(guard) = self.conn.prepare_read() {

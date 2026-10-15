@@ -191,8 +191,14 @@ pub fn set_focus(
 pub fn vblank(state: &mut WaylandState, output: OutputId, now: Duration) {
     // an output without a view has no frame to produce; the frame clock still ticks
     let _ = render_frame(state, &mut DummyRenderer, output);
-    let elements = state.core().frame_tick(output);
+    let elements = state.core_mut().frame_tick(output);
     state.complete_frames(output, &elements, now);
+}
+
+/// The off-screen fallback timer at `now` (monotonic, M16): due unobserved elements complete;
+/// returns when the timer must fire next, `None` when it is not armed (INV-IDLE-1).
+pub fn frame_fallback(state: &mut WaylandState, now: Duration) -> Option<Duration> {
+    state.frame_fallback(now)
 }
 
 /// The virtual vblank period of an output (refresh in mHz).
@@ -318,6 +324,12 @@ pub fn run_headless(
             session.count_frame();
             session.flush();
         }
+
+        // M16: withheld callbacks of unobserved elements, on a timer armed only while one is
+        // pending (INV-IDLE-1)
+        let now = infynitae_wayland::presentation_clock_now();
+        session.set_fallback_deadline(state.frame_fallback(now), now);
+        session.flush();
     }
 
     println!("[infynitae] Headless compositor shutting down...");
