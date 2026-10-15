@@ -18,7 +18,7 @@
 
 ## Verified Facts
 1. **OB-42 Contract:** Demands zero heap allocation on steady-state hot paths.
-2. **The Test-Class Unsafe Allocator (Decision of 2026-10-14):** Implemented in `crates/infynitae-core/tests/t0_hot_path_allocations.rs`, a custom `Counting` global allocator intercepts `alloc`/`dealloc` using a thread-local counter (`COUNT`), forwarding all operations to `System` (UNSAFE_INVENTORY U-002..U-004).
+2. **The Test-Class Unsafe Allocator (Decision of 2026-10-14):** Implemented in `crates/infynitae-core/tests/t0_hot_path_allocations.rs`, a custom `Counting` global allocator intercepts `alloc`/`dealloc` using a thread-local counter (`COUNT`), forwarding all operations to `System` (UNSAFE_INVENTORY U-002..U-004). *2026-10-15 (INC-6 final-resolution branch, owner direction):* moved unchanged to `crates/infynitae-backend-headless/tests/t0_hot_path_allocations.rs`; Core's integration-test exception removed; C12.F9 not adopted.
 3. **Ratchet Invariants Verified:** At $N=10$, $N=100$, and $N=1,000$ windows:
    - `Pan`: $\le 15$ allocations.
    - `PanCrossing`: $\le 20$ allocations.
@@ -42,10 +42,11 @@
 ## Reproduction Instructions
 Execute the counting-allocator ratchet test:
 ```bash
-cargo test -p infynitae-core --test t0_hot_path_allocations
+cargo test -p infynitae-core --test t0_hot_path_allocations   # until 2026-10-15
+cargo test -p infynitae-backend-headless --test t0_hot_path_allocations   # from 2026-10-15 (INC-6 final-resolution branch)
 ```
 
 ## Links & Citations
-- Source Test: `crates/infynitae-core/tests/t0_hot_path_allocations.rs`
+- Source Test: `crates/infynitae-core/tests/t0_hot_path_allocations.rs` (*2026-10-15:* `crates/infynitae-backend-headless/tests/t0_hot_path_allocations.rs` on the INC-6 final-resolution branch)
 - Governance Evidence: `docs/foundation/evidence/phase-f/INC-6/PERFORMANCE_P1_REPAIR.md`
 - Related Pitfall: [KNOW-PITFALL-005: Quadratic Scale-State Evaluation](../pitfalls/KNOW-PITFALL-005-quadratic-scale-state-evaluation.md)

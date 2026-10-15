@@ -37,7 +37,8 @@
 Execute the spatial culling edge reference tests:
 ```bash
 cargo test -p infynitae-core --lib cull_agrees_with_the_reference_at_the_view_edges
-cargo test -p infynitae-core --test t0_hot_path_allocations
+cargo test -p infynitae-core --test t0_hot_path_allocations   # until 2026-10-15
+cargo test -p infynitae-backend-headless --test t0_hot_path_allocations   # from 2026-10-15 (INC-6 final-resolution branch)
 ```
 
 ## Links & Citations

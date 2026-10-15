@@ -138,12 +138,6 @@ const POINTER_DELIVERY: [&str; 8] = [
 const KEYBOARD_DELIVERY: [&str; 3] = ["input_forward", "input_intercept", "get_keyboard"];
 
 const UNSAFE_INVENTORY: &str = "docs/foundation/UNSAFE_INVENTORY.md";
-/// The one place of a `forbid` crate where a listed test-class site is matched against the
-/// inventory instead of failing outright: Core's integration tests, each a separate crate that
-/// never links into Core's library (owner decision of 2026-10-14: the OB-42 counting allocator).
-/// Core's library, examples, benches and build script, and every file of `infynitae-ipc`, still
-/// fail for any site, listed or not.
-const CORE_INTEGRATION_TESTS: &str = "crates/infynitae-core/tests/";
 
 struct SourceFile {
     path: PathBuf,
@@ -1344,8 +1338,7 @@ fn check_unsafe(root: &Path, crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut R
             let rel = rel.to_string_lossy().replace('\\', "/");
             let mut items = ItemSpans::default();
             items.visit_file(&f.ast);
-            let listable = level == UnsafeLevel::Deny
-                || (name == "infynitae-core" && rel.starts_with(CORE_INTEGRATION_TESTS));
+            let listable = level == UnsafeLevel::Deny;
             for (what, span) in tokens {
                 let msg = format!("{}: {what}", at(&f.path, span));
                 if !listable {

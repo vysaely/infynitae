@@ -34,7 +34,10 @@
 ## Reproduction Instructions
 Execute the P-1 scale repair integration test:
 ```bash
-cargo test -p infynitae-core --test t0_hot_path_allocations steady_state_batches_do_not_evaluate_every_element
+cargo test -p infynitae-core --test t0_hot_path_allocations steady_state_batches_do_not_evaluate_every_element   # as recorded; correction 2026-10-15 below
+# 2026-10-15: steady_state_batches_do_not_evaluate_every_element is a Core library test, and the ratchet moved:
+cargo test -p infynitae-core --lib steady_state_batches_do_not_evaluate_every_element
+cargo test -p infynitae-backend-headless --test t0_hot_path_allocations
 ```
 
 ## Links & Citations

@@ -1055,10 +1055,10 @@ CONTROLS = [
      "        let observers = self.membership.observers(element);\n"
      "        // an output presenting an element observes through the F-PRESENT-1 view, at zoom 1\n"
      "        scale::compute_rho(&observers,",
-     "infynitae-core", ["--test", "t0_hot_path_allocations"], "hot_path_allocations_do_not_grow"),
+     "infynitae-backend-headless", ["--test", "t0_hot_path_allocations"], "hot_path_allocations_do_not_grow"),
     ("OB-42 ratchet: the scale pass lists the elements it visits in a new vector", f"{CORE}/lib.rs",
      "        let mut visit = self.scale_sweep.take_marked();", "        let mut visit = self.scale_sweep.take_marked().to_vec();",
-     "infynitae-core", ["--test", "t0_hot_path_allocations"], "hot_path_allocations_do_not_grow"),
+     "infynitae-backend-headless", ["--test", "t0_hot_path_allocations"], "hot_path_allocations_do_not_grow"),
     ("session: client requests ask for no frame",
      f"{WAYLAND}/session.rs",
      "            Ok(_) => self.request_frame(),", "            Ok(_) => {}",

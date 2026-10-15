@@ -1,6 +1,17 @@
 # C12.F9 — INV-ARCH-2 and C9: a test-class `unsafe` site in Core's integration tests — PROPOSAL
 
-Status: **PROPOSAL, NOT ADOPTED.** Drafted 2026-10-15 on the rehearsal branch
+Status: **SUPERSEDED BY RELOCATION, NOT ADOPTED (2026-10-15).** By owner direction the counting
+allocator moved unchanged to `crates/infynitae-backend-headless/tests/` on
+`integration/inc-6-final-resolution-2026-10-15`, the Core integration-test exception was removed
+from `enforcement/source-rules`, and INV-ARCH-2 stays as written. The owner decision of 2026-10-14
+(allocator in a Core integration test) needs a formal correction; proposed text: "The OB-42
+counting allocator is a test-class `unsafe` site in the headless backend's integration tests, a
+`deny` crate (C9); Core and ipc forbid `unsafe` everywhere, their integration tests included. The
+decision of 2026-10-14 placing it in a Core integration test is withdrawn." OB-42's "May be closed
+by: T0 PRODUCT test in core" is then read as a T0 test of Core's API. The text below is kept as
+drafted.
+
+Original status: **PROPOSAL, NOT ADOPTED.** Drafted 2026-10-15 on the rehearsal branch
 `rehearsal/inc-6-on-main-23752f1` (INC-6 `f1ef262` merged onto main `23752f1`). This file is
 evidence, not authority. No living document is changed by it. Adoption needs the owner's approval
 and then the layer process (a §C12.F9 section in FOUNDATION_ARCHITECTURE, the effective row in
