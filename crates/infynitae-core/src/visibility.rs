@@ -1684,6 +1684,16 @@ mod tests {
                 "effects of operation {op} (seed {seed:#x})"
             );
             let (a, r) = (&sides[0].0, &sides[1].0);
+            // no stale entry: every scale state belongs to an element the Stage still has
+            // (destruction removes it; an unmapped element keeps its hint, INV-SCALE-5)
+            for c in [a, r] {
+                for (e, _) in c.scales.iter() {
+                    assert!(
+                        c.stage().state(*e).is_some(),
+                        "a scale state outlives {e:?} after operation {op} (seed {seed:#x})"
+                    );
+                }
+            }
             for &(e, _) in &elements {
                 assert_eq!(
                     a.scale_state(e),

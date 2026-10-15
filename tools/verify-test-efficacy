@@ -1104,6 +1104,11 @@ CONTROLS = [
      "                if is_client_response {\n                    // SC-E:",
      "                if false && is_client_response {\n                    // SC-E:",
      "infynitae-backend-headless", ["--test", "t1_scale"], "adversarial_client_churn_bounds_sc_e"),
+    # P-1 (ported from the combined candidate 489180e): no scale state outlives its element
+    ("scale states: a destroyed element's entry is kept (stale index entry)", f"{CORE}/protocol.rs",
+     "    pub fn toplevel_destroyed(&mut self, id: ElementId) -> Vec<Effect> {\n        self.scales.remove(id);",
+     "    pub fn toplevel_destroyed(&mut self, id: ElementId) -> Vec<Effect> {\n        let _ = id;",
+     "infynitae-core", ["--lib"], "scoped_scale_evaluation_equals_the_full_reference"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.
