@@ -2191,13 +2191,11 @@ Every other sentence of INV-PRES-1 (C12.F6), every other M9 row, M1 ("fullscreen
 
 # §C12.F11 — Canonical registry amendment (Phase F: the device bound counts a size Core asks for, OB-13)
 
-**Status: ADOPTED 2026-10-16 by owner approval** (owner approval 2026-10-16 of INC-6 adoption package revision 2 (brief "Ratification, Clipboard, Orderly Shutdown and First Nested Runtime", Phase 1: approve the package as reported, subject to the live texts matching and no material contradiction); adoption check: texts unchanged, one code correction (`eebb5c3`) so the code meets P-3). F-SCALE-2's `s_max(E)` also counts every size Core has asked E for while that request stands. One definition of one formula changes, and the INV-SCALE-2 clause that restates it; no invariant is added or removed (57). Base: candidate `eebb5c3` (`candidate/inc-6-exit-r2-2026-10-16`).
+**Status: ADOPTED 2026-10-16 by owner approval.** F-SCALE-2's `s_max(E)` also counts every size Core has asked E for while that request stands. One definition of one formula changes; no invariant is added or removed (57). Base: `eebb5c3`.
 
-**Inputs:**
-- F-SCALE-2 (C12.F2) as effective at the base; C12.F6 INV-PRES-1 and C5.2 (a grant's configure asks for the output's logical size); M9 (the exit configure offers the saved size);
-- OB-13's measurement (`D_max` 8192, scale-3 observer, 3840 px output: a first fullscreen buffer of 11,520 px); the restore-offer case (3000 px window, hint 2, `D_max` 4096).
+**Inputs:** F-SCALE-2 (C12.F2) as effective at the base; C12.F6 INV-PRES-1 and C5.2 (a grant's configure asks for the output's logical size); M9 (the exit configure offers the saved size); OB-13's measurement (`D_max` 8192, scale-3 observer, 3840 px output: a first fullscreen buffer of 11,520 px); the restore-offer case (3000 px window, hint 2, `D_max` 4096).
 
-**Provenance:** [evidence/phase-f/INC-6/C12F11_PROPOSAL.md](evidence/phase-f/INC-6/C12F11_PROPOSAL.md) (corrected 2026-10-16), [evidence/phase-f/INC-6/EXIT_REVIEW_R2_2026-10-16.md](evidence/phase-f/INC-6/EXIT_REVIEW_R2_2026-10-16.md), [evidence/phase-f/INC-6/ADOPTION_PACKAGE_2026-10-16.md](evidence/phase-f/INC-6/ADOPTION_PACKAGE_2026-10-16.md) (P-1), [evidence/phase-f/INC-6/ADOPTION_RECORD_2026-10-16.md](evidence/phase-f/INC-6/ADOPTION_RECORD_2026-10-16.md).
+**Provenance:** `evidence/phase-f/INC-6/C12F11_PROPOSAL.md` (corrected 2026-10-16), `evidence/phase-f/INC-6/EXIT_REVIEW_R2_2026-10-16.md`.
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12.F2. Every other row is unchanged.**
 
@@ -2216,19 +2214,19 @@ Every other sentence of INV-PRES-1 (C12.F6), every other M9 row, M1 ("fullscreen
 
 ### F-SCALE-2 (OB-13)
 - **Previous (C12.F2):** `H_max(E) = min(H_cfg, H_dev(E))`. Device bound `H_dev(E) = ⌊120 · D_max / s_max(E)⌋ / 120` if `s_max(E) > 0`: the largest multiple of 1/120 that does not exceed `D_max / s_max(E)`, so that `h · side ≤ D_max` holds for every logical side of every buffered surface of E before the client rounds its buffer size; `+∞` if `s_max(E) = 0`. If the quotient is 0 (`s_max(E) > 120 · D_max`) the bound is `1/120`, the wire minimum: that buffer exceeds the device and no emittable hint would fit (residual, OB-13). `s_max(E)` = largest logical side over all surfaces of E's tree (0 iff no surface has a non-zero extent, e.g. every initial commit); `D_max` queried from the renderer (re-queried on renderer recreation, PD-F1-08). Domain: every E; the value is finite because `H_cfg` is finite (PROV-1). [E-F2-06; H-1]
-- **Reason:** a protocol-fullscreen grant asks the client for the output's size, and an unset offers the saved size, while the hint in force was bounded by the tree the client had drawn; the first buffer at the requested size could exceed `D_max` (measured 11,520 px for 8192). Counting every size Core asks for makes the hint sent before that configure fit it.
+- **Reason:** OB-13 — `evidence/phase-f/INC-6/C12F11_PROPOSAL.md`, "The defect it closes" (registry record; the approved text of this layer is adoption package P-1).
 
 ## C12.F11.3 What this layer does not change
 
-The ladder, `H_cfg`, P7's trigger and effect, the integer emission rule, SC-E, the epochs. A client-chosen size (a windowed resize) still enters only with the buffer that has it. M15's row "first buffer attached (`s_max` becomes > 0)" gains "or a size Core asks for". A re-grant made while a size is on offer saves that size (the last windowed size), not the fullscreen geometry. OB-13 is not closed by this layer. Tests (T0, `infynitae-core`): `a_grant_never_asks_for_a_buffer_over_the_device_limit`, `a_pre_map_grant_initial_hint_fits_the_device_limit`, `the_size_offered_at_fullscreen_exit_fits_the_device_limit`, `a_spent_restore_offer_no_longer_bounds_the_hint`, `an_unmap_spends_the_restore_offer`, `a_re_grant_before_the_redraw_offers_the_windowed_size_again`; seeded controls "C12.F11: …".
+the ladder, `H_cfg`, P7's trigger and effect, the integer emission rule, SC-E, the epochs. A client-chosen size (a windowed resize) still enters only with the buffer that has it. M15's row "first buffer attached (`s_max` becomes > 0)" gains "or a size Core asks for". A re-grant made while a size is on offer saves that size (the last windowed size), not the fullscreen geometry. OB-13 is not closed by this layer. Tests (T0, `infynitae-core`): `a_grant_never_asks_for_a_buffer_over_the_device_limit`, `a_pre_map_grant_initial_hint_fits_the_device_limit`, `the_size_offered_at_fullscreen_exit_fits_the_device_limit`, `a_spent_restore_offer_no_longer_bounds_the_hint`, `an_unmap_spends_the_restore_offer`, `a_re_grant_before_the_redraw_offers_the_windowed_size_again`; seeded controls "C12.F11: …".
 
 ---
 
 # §C12.F12 — Canonical registry amendment (Phase F: the initial hint of a pre-map fullscreen grant)
 
-**Status: ADOPTED 2026-10-16 by owner approval** (owner approval 2026-10-16 of INC-6 adoption package revision 2 (brief "Ratification, Clipboard, Orderly Shutdown and First Nested Runtime", Phase 1: approve the package as reported, subject to the live texts matching and no material contradiction); adoption check: texts unchanged, one code correction (`eebb5c3`) so the code meets P-3). One clause is added to the initial hint of F-SCALE-3 and INV-SCALE-5; no invariant is added or removed (57). Base: candidate `eebb5c3`.
+**Status: ADOPTED 2026-10-16 by owner approval.** One clause is added to the initial hint of F-SCALE-3 and INV-SCALE-5; no invariant is added or removed (57). Base: `eebb5c3`.
 
-**Provenance:** [evidence/phase-f/INC-6/C12F12_PROPOSAL.md](evidence/phase-f/INC-6/C12F12_PROPOSAL.md) (corrected 2026-10-16), [evidence/phase-f/INC-6/ADOPTION_PACKAGE_2026-10-16.md](evidence/phase-f/INC-6/ADOPTION_PACKAGE_2026-10-16.md) (P-2).
+**Provenance:** `evidence/phase-f/INC-6/C12F12_PROPOSAL.md` (corrected 2026-10-16).
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12.E1R. Every other row is unchanged.**
 
@@ -2246,21 +2244,21 @@ The ladder, `H_cfg`, P7's trigger and effect, the integer emission rule, SC-E, t
 
 ### F-SCALE-3 (pre-map grant)
 - **Previous (C12.E1R):** Target `t(ρ)` = smallest rung of L(E) ≥ ρ/(1 + σ), else H_max(E) (σ = PROV-3). Emission: `preferred_scale = round(h·120)`, `preferred_buffer_scale = b(h)` with `b(h) = ⌈h⌉` if `⌈h⌉ ≤ H_dev(E)`, else `max(1, ⌊H_dev(E)⌋)`, only on change. Initial hint: `h := t(ρ_pred)` with ρ_pred = F-SCALE-1 over the presentations whose view intersects the placed window-geometry rect (or the anchor point when its size is 0×0); if none, `t(max connected output scale)`. [E1R-N3]
-- **Reason:** a grant made in the initial configure starts its presentation only at the first map, so the prediction used the canvas placement and the first map replaced the hint: one wasted client render per pre-map grant.
+- **Reason:** `evidence/phase-f/INC-6/C12F12_PROPOSAL.md`, "Observed effect today" (registry record; the approved text of this layer is adoption package P-2).
 
 ## C12.F12.3 What this layer does not change
 
-The prediction of every element without a pre-map grant; its geometric character (a view intersecting the placed rect counts even if, at the first map, another element's presentation hides the new one there: the first-map evaluation corrects such an over-prediction, as for any element); M15's order (hint before the initial configure); the evaluation at the first map. Tests (T0): `a_pre_map_grant_takes_the_presenting_outputs_scale_when_it_maps`, `a_pre_map_grant_initial_hint_fits_the_device_limit`.
+the prediction of every element without a pre-map grant; its geometric character (a view intersecting the placed rect counts even if, at the first map, another element's presentation hides the new one there: the first-map evaluation corrects such an over-prediction, as for any element); M15's order (hint before the initial configure); the evaluation at the first map. Tests (T0): `a_pre_map_grant_takes_the_presenting_outputs_scale_when_it_maps`, `a_pre_map_grant_initial_hint_fits_the_device_limit`.
 
 ---
 
 # §C12.F13 — Canonical registry amendment (Phase F: whose stimulus a presentation change is)
 
-**Status: ADOPTED 2026-10-16 by owner approval** (owner approval 2026-10-16 of INC-6 adoption package revision 2 (brief "Ratification, Clipboard, Orderly Shutdown and First Nested Runtime", Phase 1: approve the package as reported, subject to the live texts matching and no material contradiction); adoption check: texts unchanged, one code correction (`eebb5c3`) so the code meets P-3). C14.4 gains one paragraph (canonical here; the sealed C14.4 is not edited) and INV-SCALE-5 one exception; no invariant is added or removed (57). Base: candidate `eebb5c3`.
+**Status: ADOPTED 2026-10-16 by owner approval.** C14.4 gains one paragraph and INV-SCALE-5 one exception; no invariant is added or removed (57). Base: `eebb5c3`.
 
-**Provenance:** [evidence/phase-f/INC-6/C12F13_PROPOSAL.md](evidence/phase-f/INC-6/C12F13_PROPOSAL.md) (corrected 2026-10-16), [evidence/phase-f/INC-6/ADOPTION_PACKAGE_2026-10-16.md](evidence/phase-f/INC-6/ADOPTION_PACKAGE_2026-10-16.md) (P-3).
+**Provenance:** `evidence/phase-f/INC-6/C12F13_PROPOSAL.md` (corrected 2026-10-16).
 
-**C14.4, after the list of non-client stimuli of SC-E (canonical):**
+**C14.4, after the list of non-client stimuli of SC-E:**
 
 Fullscreen enter/exit is a non-client stimulus for the element whose presentation starts or ends (its subject); its open epoch settles (M9 "settlement"). For every other element whose observers change only because a client's request, commit or destruction started or ended a presentation, the change may raise its hint (as a non-client stimulus) but never lowers it: the element **holds** its hint against decreases until a non-client stimulus that is not such a change and that **touches** the element evaluates it, or until an evaluation finds its requirement back at or above its hint. Touching: an output added, removed or reconfigured touches every element; a camera action touches the elements that an output bound to the moved camera observed before it or observes after it; an element's own fullscreen enter/exit touches it. A reported device limit (`D_max`) or a change of the scale configuration touches no element: P7 applies at once, and the re-evaluation they cause releases no hold. A settlement does not lower a held element its stimulus never touched. P7 applies regardless. A presentation the system ends or starts (output added, removed, reconfigured) is a non-client stimulus for every element.
 
@@ -2274,12 +2272,12 @@ Fullscreen enter/exit is a non-client stimulus for the element whose presentatio
 
 | Superseded | Replaced by |
 |---|---|
-| C14.4 SC-E, as far as it makes another client's fullscreen enter/exit a non-client stimulus for a third element | C14.4 paragraph of C12.F13 |
-| INV-SCALE-5 "equals Phase B MaxGesture", for a held element | INV-SCALE-5 (C12.F13) |
+| C14.4 SC-E as far as it makes another client's fullscreen enter/exit a non-client stimulus for a third element | C14.4 paragraph of C12.F13 |
+| INV-SCALE-5 "equals Phase B MaxGesture" for a held element | INV-SCALE-5 (C12.F13) |
 
 ## C12.F13.2 What this layer does not change
 
-SC-E for a client's own geometry; P7; system changes; the order of hints before configures. Cost, accepted by this layer: a held element may keep a higher buffer scale than its remaining observers need (memory, never sharpness) until a stimulus touches it. Tests (T0): `a_client_cycling_fullscreen_does_not_churn_another_clients_hint`, `a_clients_presentation_holds_the_hints_of_the_elements_it_hides`, `a_held_window_committing_between_toggles_keeps_its_hint`, `a_passive_window_under_two_presentations_keeps_its_hint`, `a_revealed_window_is_raised_after_a_system_change_lowered_it`, `a_hold_ends_when_the_presentation_that_caused_it_ends`, `a_held_windows_own_growth_ends_its_hold`, `a_held_windows_own_fullscreen_ends_its_hold`, `p7_lowers_a_held_window`, `a_camera_drag_releases_only_the_holds_it_touches`, `an_output_connected_releases_every_hold`, `a_device_limit_report_releases_no_hold_now_or_later`, `a_configuration_change_applies_p7_at_once_and_releases_no_hold`, `the_end_of_a_presentation_raises_the_hint_of_a_revealed_element`; T1 (integration line) `a_hidden_windows_lowered_hint_releases_no_withheld_callback`; seeded controls "C12.F13: …".
+SC-E for a client's own geometry; P7; system changes; the order of hints before configures. Cost, accepted by this layer: a held element may keep a higher buffer scale than its remaining observers need (memory, never sharpness) until a stimulus touches it. Tests (T0): `a_client_cycling_fullscreen_does_not_churn_another_clients_hint`, `a_clients_presentation_holds_the_hints_of_the_elements_it_hides`, `a_held_window_committing_between_toggles_keeps_its_hint`, `a_passive_window_under_two_presentations_keeps_its_hint`, `a_revealed_window_is_raised_after_a_system_change_lowered_it`, `a_hold_ends_when_the_presentation_that_caused_it_ends`, `a_held_windows_own_growth_ends_its_hold`, `a_held_windows_own_fullscreen_ends_its_hold`, `p7_lowers_a_held_window`, `a_camera_drag_releases_only_the_holds_it_touches`, `an_output_connected_releases_every_hold`, `a_device_limit_report_releases_no_hold_now_or_later`, `the_end_of_a_presentation_raises_the_hint_of_a_revealed_element`; T1 (integration line) `a_hidden_windows_lowered_hint_releases_no_withheld_callback`; seeded controls "C12.F13: …".
 
 ---
 

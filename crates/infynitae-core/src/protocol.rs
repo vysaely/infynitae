@@ -4417,6 +4417,66 @@ mod tests {
         assert_eq!(c.preferred_scale_of(x), held);
     }
 
+    /// C12.F13 as adopted (P-3): the re-evaluation a scale-configuration change causes releases
+    /// no hold, now or later. As `a_device_limit_report_releases_no_hold_now_or_later`: X is held
+    /// at B's scale (2) while W is presented on B; a configuration change that does not lower it
+    /// (a higher `H_cfg`) emits nothing for X, and neither it nor the full pass it schedules (run
+    /// by a later drag elsewhere) releases the hold. When P7 does lower a held element, it lowers
+    /// it to the target of its requirement, after which the hold ends by the rule "requirement
+    /// back at or above its hint" (`a_configuration_change_applies_p7_at_once_and_releases_no_hold`).
+    #[test]
+    fn a_configuration_change_releases_no_hold_later() {
+        use crate::PhysicalEvent;
+        use crate::input::bindings::Modifiers;
+        let (mut c, mut i, _, mut t) = Core::new(cameras_at(&[("B", 0), ("D", 0)]));
+        let _a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let b = out(&mut c, &mut t, "B", (1920, 1080), 240);
+        let _d = out(&mut c, &mut t, "D", (1920, 1080), 120);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        let button = |pressed| PhysicalEvent::PointerButton {
+            button: 0x112,
+            pressed,
+            modifiers: Modifiers {
+                logo: true,
+                ..Modifiers::default()
+            },
+            time_us: 0,
+        };
+        let motion = |dx: f64| PhysicalEvent::PointerMotion {
+            delta: (dx, 0.0),
+            delta_unaccel: (dx, 0.0),
+            time_us: 0,
+        };
+        let drag = |c: &mut Core, i: &mut InputPort, dx: f64| {
+            c.physical_input_vec(i, button(true)).unwrap();
+            c.physical_input_vec(i, motion(dx)).unwrap();
+            c.physical_input_vec(i, button(false)).unwrap();
+        };
+        drag(&mut c, &mut i, -2500.0);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert!(c.scale_state(x).unwrap().presentation_hold, "held");
+        let config = crate::scale::ScalePolicyConfig {
+            h_cfg: c.scale_config().h_cfg * 2.0,
+            ..*c.scale_config()
+        };
+        let fx = c.set_scale_config(config).unwrap();
+        assert!(hints(&fx, x).is_empty(), "{fx:?}");
+        assert!(
+            c.scale_state(x).unwrap().presentation_hold,
+            "not released by the change"
+        );
+        let held = c.preferred_scale_of(x);
+        drag(&mut c, &mut i, -500.0);
+        assert!(
+            c.scale_state(x).unwrap().presentation_hold,
+            "a drag elsewhere after the change does not release it"
+        );
+        assert_eq!(c.preferred_scale_of(x), held);
+    }
+
     /// C12.F13 as adopted (package rev. 2, P-3): a change of the scale configuration applies P7
     /// at once and releases no hold. X (300 px, A and B: hint 2) is held while W is presented on
     /// B; H_cfg is lowered to 1.5: X is lowered in that call, to a hint the new ceiling allows,
