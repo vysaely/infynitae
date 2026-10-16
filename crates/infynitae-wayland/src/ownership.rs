@@ -86,11 +86,31 @@ struct Member {
     fd: OwnedFd,
 }
 
-/// The subtree below this process, each member pinned by a pidfd opened while it was still the
-/// child of its listed parent (a pid recycled in between has another parent and is skipped).
-fn members() -> Vec<Member> {
+/// The session's members: the given `roots` (the session's own children) and every child of
+/// this process that no owner registered (orphans it adopted), with all their descendants. A
+/// child another owner registered (the satellite, a test's own client) is not a member, nor is
+/// anything below it. Each member is pinned by a pidfd opened while it was still the child of its
+/// listed parent (a pid recycled in between has another parent and is skipped).
+fn members(roots: &[i32]) -> Vec<Member> {
+    let me = getpid().as_raw_nonzero().get();
+    let owned = OWNED.lock().unwrap().clone();
     let mut out = Vec::new();
-    let mut parents = vec![getpid().as_raw_nonzero().get()];
+    let mut parents = Vec::new();
+    for pid in children_of(me) {
+        if !(roots.contains(&pid) || !owned.contains(&pid)) {
+            continue;
+        }
+        let Some(p) = Pid::from_raw(pid) else {
+            continue;
+        };
+        let Ok(fd) = pidfd_open(p, PidfdFlags::empty()) else {
+            continue;
+        };
+        if stat_of(pid).is_some_and(|(_, ppid)| ppid == me) {
+            out.push(Member { pid, fd });
+            parents.push(pid);
+        }
+    }
     while let Some(parent) = parents.pop() {
         for pid in children_of(parent) {
             let Some(p) = Pid::from_raw(pid) else {
@@ -143,7 +163,7 @@ pub struct Teardown {
     pub survivors: usize,
 }
 
-/// Ends the session's whole subtree: SIGTERM to every member (members appearing during the
+/// Ends the session's processes (`members`): SIGTERM to every member (members appearing during the
 /// grace period get it too), up to `grace` for all of them to exit, then SIGKILL to those left,
 /// then a bounded wait (`grace` again at most). `children` (the owner's `Child` handles) are
 /// reaped through their handles, adopted orphans here. Nothing outside the subtree is touched.
@@ -166,10 +186,11 @@ pub fn end_session_tree(children: &mut Vec<Child>, grace: Duration) -> Teardown 
             .filter(|m| stat_of(m.pid).is_some_and(|(s, _)| s != 'Z'))
             .count()
     };
+    let roots = |children: &[Child]| children.iter().map(|c| c.id() as i32).collect::<Vec<_>>();
     let start = Instant::now();
     loop {
         reap(children);
-        let members = members();
+        let members = members(&roots(children));
         for m in members {
             if let std::collections::btree_map::Entry::Vacant(slot) = signalled.entry(m.pid) {
                 let _ = pidfd_send_signal(&m.fd, Signal::TERM);
@@ -177,12 +198,12 @@ pub fn end_session_tree(children: &mut Vec<Child>, grace: Duration) -> Teardown 
                 slot.insert(m.fd);
             }
         }
-        if alive(&self::members()) == 0 || start.elapsed() >= grace {
+        if alive(&self::members(&roots(children))) == 0 || start.elapsed() >= grace {
             break;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    let left = members();
+    let left = members(&roots(children));
     for m in &left {
         if stat_of(m.pid).is_some_and(|(s, _)| s != 'Z') {
             eprintln!(
@@ -196,7 +217,7 @@ pub fn end_session_tree(children: &mut Vec<Child>, grace: Duration) -> Teardown 
     let end = Instant::now() + grace;
     loop {
         reap(children);
-        let live = alive(&members());
+        let live = alive(&members(&roots(children)));
         if (live == 0 && children.is_empty()) || Instant::now() >= end {
             report.survivors = live;
             break;
@@ -223,6 +244,8 @@ mod tests {
         let odd = dir.join("x) (y ) z");
         std::os::unix::fs::symlink("/bin/sleep", &odd).unwrap();
         let mut child = Command::new(&odd).arg("5").spawn().unwrap();
+        // owned by this test: a session shut down by another test in this process leaves it alone
+        register_spawned(child.id());
         std::thread::sleep(Duration::from_millis(50));
         let comm = std::fs::read_to_string(format!("/proc/{}/comm", child.id())).unwrap();
         assert_eq!(comm.trim(), "x) (y ) z");

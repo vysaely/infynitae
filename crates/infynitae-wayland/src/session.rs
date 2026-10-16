@@ -172,24 +172,29 @@ impl Session {
                 "[infynitae] Not a child subreaper ({e}): orphans of session processes escape the session"
             );
         }
-        let (mut child_wake, child_notify) = UnixStream::pair()?;
-        child_wake.set_nonblocking(true)?;
-        signal_ids.push(signal_hook::low_level::pipe::register(
-            SIGCHLD,
-            child_notify,
-        )?);
-        let child_fd = child_wake.try_clone()?;
-        handle
-            .insert_source(
-                Generic::new(child_fd, Interest::READ, Mode::Level),
-                move |_, _, _| {
-                    let mut drain = [0u8; 64];
-                    while matches!(child_wake.read(&mut drain), Ok(n) if n > 0) {}
-                    crate::ownership::reap_adopted();
-                    Ok(PostAction::Continue)
-                },
-            )
-            .map_err(|e| format!("Failed to register child-exit source: {e}"))?;
+        // Only a session that starts processes listens for SIGCHLD: an idle session that started
+        // nothing has nothing to wake for (INV-IDLE-1), whatever else exits in this process.
+        let starts_processes = options.exec.is_some();
+        if starts_processes {
+            let (mut child_wake, child_notify) = UnixStream::pair()?;
+            child_wake.set_nonblocking(true)?;
+            signal_ids.push(signal_hook::low_level::pipe::register(
+                SIGCHLD,
+                child_notify,
+            )?);
+            let child_fd = child_wake.try_clone()?;
+            handle
+                .insert_source(
+                    Generic::new(child_fd, Interest::READ, Mode::Level),
+                    move |_, _, _| {
+                        let mut drain = [0u8; 64];
+                        while matches!(child_wake.read(&mut drain), Ok(n) if n > 0) {}
+                        crate::ownership::reap_adopted();
+                        Ok(PostAction::Continue)
+                    },
+                )
+                .map_err(|e| format!("Failed to register child-exit source: {e}"))?;
+        }
         let socket = match options.socket_name.as_deref() {
             Some(name) => ListeningSocketSource::with_name(name)?,
             None => ListeningSocketSource::new_auto()?,
@@ -630,8 +635,12 @@ mod tests {
         assert_eq!(frames, 5);
     }
 
+    /// A child of this test, registered as owned (session process ownership): a session another
+    /// test shuts down in this process leaves it alone.
     fn spawn(cmd: &str, args: &[&str]) -> Child {
-        Command::new(cmd).args(args).spawn().unwrap()
+        let child = Command::new(cmd).args(args).spawn().unwrap();
+        crate::ownership::register_spawned(child.id());
+        child
     }
 
     /// Whether the process still exists in any state, a zombie included.

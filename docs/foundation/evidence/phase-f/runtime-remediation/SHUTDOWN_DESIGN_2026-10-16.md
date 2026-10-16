@@ -69,14 +69,19 @@ Status: **PROPOSAL for the owner.** No new dependency (rustix through Smithay's 
 **Boundary:** the compositor's own process subtree. At start-up (after the signal handlers,
 before any child) the compositor becomes a **child subreaper** (`PR_SET_CHILD_SUBREAPER`): a
 descendant whose parent exits — a double-forked daemon, a `setsid` process — is re-parented to
-the compositor, not to init or the desktop's service manager. A process is a member only while
-the kernel lists it as a child (`/proc/<pid>/task/<tid>/children`) of the compositor or of
-another member; each is pinned by a pidfd opened while that link held, and signalled through
+the compositor, not to init or the desktop's service manager. **Members** are the session's own
+children (its `--exec` command) and every child of the compositor that no owner registered
+(adopted orphans), with all their descendants — a child another owner registered (the satellite,
+which its supervisor ends first; a test's own client) is not a member, nor is anything below it.
+A process is a member only while the kernel lists it as a child
+(`/proc/<pid>/task/<tid>/children`) of the compositor or of another member; each is pinned by a pidfd opened while that link held, and signalled through
 the pidfd, so a recycled pid is never signalled. No process group, session id, name or uid
 selects a target. Outside by construction: processes another service starts for a client
 (D-Bus activation, the user's service manager); sessions run with D-Bus disabled.
 
-**Runtime:** SIGCHLD (signal-hook pipe, no mask) wakes the loop; adopted orphans that exited are
+**Runtime:** a session that starts processes listens for SIGCHLD (signal-hook pipe, no mask); a
+session that starts none registers no SIGCHLD source, so an idle session has nothing to wake
+for (INV-IDLE-1) whatever else exits in the process. SIGCHLD wakes the loop; adopted orphans that exited are
 reaped (`reap_adopted`), never a child an owner holds (`register_spawned` /
 `forget_spawned`). **Teardown** (`end_session_tree`, from `Session::shutdown`): SIGTERM to every
 member, re-scanning for members that appear during the grace period; after `CHILD_GRACE`
@@ -101,3 +106,10 @@ registered as an owned child there; its Xwayland is a member of the subtree and 
 (`register_spawned` / `forget_spawned`), or the orphan reaper may take their exit status. Found on
 the runtime line: the real-satellite T1 test hosts a session and spawns X clients itself; it now
 registers them (and the satellite supervisor registers the satellite, INC-12 review r2 R2-4).
+
+**Revision (2026-10-17, found on the runtime line r2):** the first version treated every
+descendant of the compositor process as a member and every session listened for SIGCHLD. In a
+process hosting several sessions (the test binaries) one session's shutdown then ended another
+test's children, and an idle session was woken by another test's child exiting (INC-8's
+`a_core_deadline_wakes_an_idle_session_and_only_while_armed` failed). Production behaviour (one
+session per process) is unchanged by the revision; the boundary is now stated as above.
