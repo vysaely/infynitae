@@ -95,6 +95,20 @@ before and after every run.
    back to stderr only when syslog is unreachable. Tests hide the journal socket inside the
    mount namespace; a real session would log to the journal.
 
+6. **OB-9 (T1 part): X11 menus work through satellite.** A GTK3 window under
+   `GDK_BACKEND=x11` (D-Bus disabled, no accessibility bridge) pops a menu at its button's
+   bottom centre; satellite turns the override-redirect window into an `xdg_popup` of the
+   window, positioned at (150, 200) with gravity and anchor rect from the X geometry, and
+   Infynitae configures it exactly there. A click on the first item activates it; Escape
+   dismisses the menu and its popup goes away. Satellite parents an override-redirect window to
+   the *last focused* toplevel: in a first run of the test loop, which (unlike the run loops)
+   granted no initial focus, satellite logged "No last focused toplevel" and no popup reached
+   the window within 30 s. The test now grants the initial focus as the run loops do. A
+   compositor session in which nothing has focus would therefore show no X11 menus.
+7. **Killing the compositor drops every client at once** (seen as satellite's "Connection reset
+   by peer" panic): there is no SIGTERM/SIGINT handling yet (`proposal/a-signals`, waiting on
+   its dependency decision).
+
 ## Tests
 
 | Test | Tier | What it shows | Seeded control |
@@ -114,11 +128,13 @@ before and after every run.
 | `t1_activation::a_token_from_the_focused_client_activates_a_window` | T1 | a token with the focused client's enter serial activates V; no camera moves; a token is used once | "B10.7: an activation token can be used again" |
 | `t1_activation::a_token_without_a_serial_activates_nothing` | T1 | W-SM-8 | "W-SM-8: a token without a serial is accepted" |
 | `t1_activation::a_token_with_a_serial_older_than_the_last_focus_change_activates_nothing` | T1 | W-SM-8 | "W-SM-8: a serial older than the last focus enter is accepted" |
+| `t1_xwayland_satellite::an_x11_menu_is_a_popup_at_its_place_takes_input_and_dismisses` | **T1, ignored by default** (also needs python3 + GTK3) | OB-9's T1 part, see finding 6 | — |
 | `t1_xwayland_satellite::a_satellite_restarts_on_the_same_display_and_its_clients_die_with_it` | **T1, ignored by default** (needs the satellite binary, `unshare`, `mount`, `xmessage`) | real satellite + Xwayland + `xmessage` against the production session, Core, adapter and headless backend, isolated: no satellite runs before an X11 client connects; that connection starts it; the X window maps as an element with an anchor; SIGKILL of the satellite destroys it through client death and the X client exits non-zero; the restarted satellite serves the same `DISPLAY` and a new client maps | — |
 
-The T1 test fails on this branch at its first step (the satellite exits until Degraded: no
-`wp_viewporter`); it is run on the rehearsal merge with the INC-6 × INC-8 integration line (see
-CHECKPOINT / the rehearsal commit). How to run it:
+Both T1 satellite tests fail on this branch at their first step (the satellite exits until
+Degraded: no `wp_viewporter`). They pass on the rehearsal merge with the INC-6 × INC-8
+integration line (`rehearsal/inc-12-on-inc-6-inc-8-r2-2026-10-16`), three runs out of three
+(about 2.4 s together). How to run them:
 
 ```
 INFYNITAE_XWAYLAND_SATELLITE=<path to xwayland-satellite> \
@@ -128,6 +144,7 @@ INFYNITAE_XWAYLAND_SATELLITE=<path to xwayland-satellite> \
 ## Not run
 
 Any nested (winit) or real session with the satellite; the live desktop was never given an X
-display by this work. No GPU. OB-9 untouched; OB-27's activation part implemented and tested at
+display by this work. No GPU. OB-9: T1 part shown on the rehearsal (its T3 part, Steam, open);
+OB-27's activation part implemented and tested at
 T0/T1 only (its destination is T3 with real toolkits); OB-40 (the outcome policy) open. OB-33 stays OPEN until the owner accepts
 the T1 run on the integrated line.
