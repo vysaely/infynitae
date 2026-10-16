@@ -249,3 +249,27 @@ fn a_hovered_client_cannot_take_the_focus() {
         "attention instead"
     );
 }
+
+/// Review r2: unused tokens are not kept without bound. A client that creates far more tokens
+/// than the limit leaves at most `ACTIVATION_TOKENS_KEPT` behind, and the newest still works.
+#[test]
+fn unused_tokens_are_bounded() {
+    let mut s = scene();
+    let serial = s.ls.probe.last_serial;
+    let n = infynitae_wayland::ACTIVATION_TOKENS_KEPT + 100;
+    let mut last = String::new();
+    for _ in 0..n {
+        last = s.token(Some(serial));
+    }
+    let kept = s.ls.state.activation_tokens_kept();
+    assert!(
+        kept <= infynitae_wayland::ACTIVATION_TOKENS_KEPT,
+        "{kept} tokens kept"
+    );
+    s.activate(&last, s.v);
+    assert_eq!(
+        s.ls.probe.kb.active.as_deref(),
+        Some("V"),
+        "the newest token works"
+    );
+}

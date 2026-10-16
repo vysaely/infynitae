@@ -25,6 +25,7 @@ pub mod session;
 mod snapshot;
 pub mod xwayland;
 
+pub use handlers::ACTIVATION_TOKENS_KEPT;
 pub use keyboard::PreemptionStrategy;
 
 use infynitae_core::Core;

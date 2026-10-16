@@ -860,6 +860,13 @@ CONTROLS = [
      "            match kill_process(pid, Signal::TERM) {", "            match kill_process(pid, Signal::CONT) {",
      "infynitae-wayland", ["--lib"], "a_running_child_exits_on_sigterm_within_the_grace_period"),
     # ---- INC-12 (experimental): the xwayland-satellite supervisor (M19, OB-33, INV-XWAYLAND-1)
+    ("INC-12 r2: unused activation tokens are kept without bound", f"{WAYLAND}/handlers.rs",
+     "        self.prune_activation_tokens();\n", "",
+     "infynitae-backend-headless", ["--test", "t1_activation"], "unused_tokens_are_bounded"),
+    ("INC-12 r2: a dead session's files are kept (the pid check is skipped)", f"{WAYLAND}/xwayland.rs",
+     "            || Path::new(&format!(\"/proc/{pid}\")).exists()\n        {\n            continue;",
+     "        {\n            continue;",
+     "infynitae-wayland", ["--lib"], "stale_session_files_of_dead_processes_are_reclaimed"),
     ("INC-12 fix: a reaped satellite's private runtime directory is kept (its socket leaks)", f"{WAYLAND}/xwayland.rs",
      "            self.child = None;\n            self.release_runtime();\n", "            self.child = None;\n",
      "infynitae-wayland", ["--lib"], "the_satellite_runtime_directory_goes_with_the_satellite"),

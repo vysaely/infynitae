@@ -112,6 +112,51 @@ fn stale_and_ours(lock_path: &Path) -> bool {
         && pid.is_some_and(|pid| pid > 0 && !Path::new(&format!("/proc/{pid}")).exists())
 }
 
+/// Removes what a session of ours that died without cleaning up (SIGKILL, a crash) left in the
+/// runtime directory `dir`: its X cookies `infynitae-xauth-<pid>-<n>` and its satellites'
+/// runtime directories `infynitae-satellite-<pid>-<n>`. Only entries owned by our uid whose pid
+/// names no running process, and only these two name patterns (INC-12 review r2).
+pub fn reclaim_stale_session_files(dir: &Path) {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    let uid = rustix::process::getuid().as_raw();
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let Some(name) = name.to_str() else {
+            continue;
+        };
+        let Some(rest) = name
+            .strip_prefix("infynitae-xauth-")
+            .or_else(|| name.strip_prefix("infynitae-satellite-"))
+        else {
+            continue;
+        };
+        let Some((pid, n)) = rest.split_once('-') else {
+            continue;
+        };
+        let (Ok(pid), Ok(_)) = (pid.parse::<u32>(), n.parse::<u32>()) else {
+            continue;
+        };
+        let Ok(meta) = fs::symlink_metadata(entry.path()) else {
+            continue;
+        };
+        if pid == 0
+            || pid == std::process::id()
+            || meta.uid() != uid
+            || Path::new(&format!("/proc/{pid}")).exists()
+        {
+            continue;
+        }
+        let _ = if meta.is_dir() {
+            fs::remove_dir_all(entry.path())
+        } else {
+            fs::remove_file(entry.path())
+        };
+    }
+}
+
 impl XDisplay {
     /// Reserves the first display number in `numbers` that is free under `root`: its lock file
     /// can be created and both sockets can be bound (never over an existing file). A number in
@@ -270,6 +315,7 @@ pub fn reserve_for_session(satellite: Option<&Path>) -> io::Result<Option<XDispl
             "XDG_RUNTIME_DIR is not set: no private place for the X cookie",
         )
     })?;
+    reclaim_stale_session_files(Path::new(&runtime));
     XDisplay::reserve(Path::new("/tmp"), SESSION_DISPLAY_NUMBERS)?
         .with_authority(Path::new(&runtime))
         .map(Some)
@@ -734,6 +780,42 @@ mod tests {
         s.shutdown(Duration::from_millis(500));
         assert!(!private.exists(), "removed at shutdown");
         drop(s);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Review r2: a dead session's cookie and satellite directory are reclaimed; a live
+    /// process's entries, other names, and malformed names are left alone.
+    #[test]
+    fn stale_session_files_of_dead_processes_are_reclaimed() {
+        let root = root("stale-files");
+        // a pid that does not exist: above the kernel's pid_max ceiling
+        let dead = 4_194_305u32;
+        let me = std::process::id();
+        fs::write(root.join(format!("infynitae-xauth-{dead}-3")), "x").unwrap();
+        fs::create_dir_all(root.join(format!("infynitae-satellite-{dead}-3"))).unwrap();
+        fs::write(
+            root.join(format!("infynitae-satellite-{dead}-3/xwls-1")),
+            "",
+        )
+        .unwrap();
+        fs::write(root.join(format!("infynitae-xauth-{me}-4")), "x").unwrap();
+        fs::write(root.join("infynitae-xauth-1-5"), "x").unwrap(); // init is alive
+        fs::write(root.join(format!("other-{dead}-3")), "x").unwrap();
+        fs::write(root.join(format!("infynitae-xauth-{dead}")), "x").unwrap();
+        reclaim_stale_session_files(&root);
+        let mut left: Vec<String> = fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name().into_string().unwrap())
+            .collect();
+        left.sort();
+        let mut want = vec![
+            format!("infynitae-xauth-{me}-4"),
+            "infynitae-xauth-1-5".to_string(),
+            format!("other-{dead}-3"),
+            format!("infynitae-xauth-{dead}"),
+        ];
+        want.sort();
+        assert_eq!(left, want);
         fs::remove_dir_all(&root).unwrap();
     }
 

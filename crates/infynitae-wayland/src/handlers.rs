@@ -546,6 +546,42 @@ impl WaylandState {
 
 /// How long an activation token validates a request after it was created (provisional; B10.7).
 const ACTIVATION_TOKEN_LIFETIME: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long an unused token is kept: a request with an expired token still asks for attention,
+/// so tokens outlive their validity; but not for ever (INC-12 review r2).
+const ACTIVATION_TOKEN_RETENTION: std::time::Duration = std::time::Duration::from_secs(300);
+/// At most this many unused tokens are kept (the oldest go first): a client may create tokens
+/// without end, and Smithay removes one only when it is used (INC-12 review r2).
+pub const ACTIVATION_TOKENS_KEPT: usize = 256;
+
+impl WaylandState {
+    /// Unused activation tokens kept (for tests).
+    pub fn activation_tokens_kept(&mut self) -> usize {
+        let mut n = 0;
+        self.activation.retain_tokens(|_, _| {
+            n += 1;
+            true
+        });
+        n
+    }
+
+    /// Bounds the tokens kept: older than the retention period, or beyond the newest
+    /// `ACTIVATION_TOKENS_KEPT - 1` (room for the one being created), they are dropped.
+    fn prune_activation_tokens(&mut self) {
+        let mut stamps = Vec::new();
+        self.activation.retain_tokens(|_, d| {
+            let keep = d.timestamp.elapsed() <= ACTIVATION_TOKEN_RETENTION;
+            if keep {
+                stamps.push(d.timestamp);
+            }
+            keep
+        });
+        if stamps.len() >= ACTIVATION_TOKENS_KEPT {
+            stamps.sort_unstable();
+            let cutoff = stamps[stamps.len() - (ACTIVATION_TOKENS_KEPT - 1)];
+            self.activation.retain_tokens(|_, d| d.timestamp >= cutoff);
+        }
+    }
+}
 
 impl XdgActivationHandler for WaylandState {
     fn activation_state(&mut self) -> &mut XdgActivationState {
@@ -559,6 +595,7 @@ impl XdgActivationHandler for WaylandState {
     /// keyboard's last focus `enter`. A client the user merely points at receives fresh pointer
     /// serials, but not the focus: its tokens are not validated (focus-stealing prevention).
     fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
+        self.prune_activation_tokens();
         let validated = self.token_validated(&data);
         data.user_data
             .insert_if_missing(|| TokenProvenance { validated });
