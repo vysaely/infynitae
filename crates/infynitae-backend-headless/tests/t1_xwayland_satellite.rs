@@ -104,6 +104,17 @@ impl Run {
             .min();
             self.event_loop.dispatch(wait, &mut ()).unwrap();
             self.session.dispatch(&mut self.state);
+            // as the run loops do: the first mapped element gets the initial focus (INV-INPUT-8)
+            if self.state.core().focus().is_initial_eligible()
+                && let Some(&top) = self.state.core().stage().mapped_elements().last()
+                && let Ok(effects) = self
+                    .state
+                    .core_mut()
+                    .grant_initial_focus(&mut self.input, top)
+            {
+                self.state.apply(&effects);
+                self.session.flush();
+            }
             if self.session.frame_due() {
                 vblank(
                     &mut self.state,
@@ -156,6 +167,15 @@ impl Run {
         self.session.flush();
     }
 
+    /// Runs the loop for `d`, doing nothing else.
+    fn idle(&mut self, d: Duration) {
+        let end = Instant::now() + d;
+        self.until(d + Duration::from_secs(1), "a pause", |_| {
+            Instant::now() >= end
+        });
+    }
+
+    /// A left click as a hand makes one: press, a short hold, release.
     fn click(&mut self) {
         for pressed in [true, false] {
             pointer_button(
@@ -168,6 +188,7 @@ impl Run {
             )
             .unwrap();
             self.session.flush();
+            self.idle(Duration::from_millis(80));
         }
     }
 
@@ -388,11 +409,15 @@ fn an_x11_menu_is_a_popup_at_its_place_takes_input_and_dismisses() {
         let out = lines(&mut app);
         let mut seen = Vec::new();
         run.until(Duration::from_secs(30), "the X11 menu pops up", |r| {
-            seen.extend(out.try_iter());
+            for l in out.try_iter() {
+                eprintln!("[client] {l}");
+                seen.push(l);
+            }
+            // the popup is in the tree from its initial commit; it is shown once it has a buffer
             r.mapped() == 1
-                && !r
-                    .popups(r.state.core().stage().mapped_elements()[0])
-                    .is_empty()
+                && r.popups(r.state.core().stage().mapped_elements()[0])
+                    .iter()
+                    .any(|(_, (w, h))| *w > 0 && *h > 0)
         });
         let element = run.state.core().stage().mapped_elements()[0];
         let popups = run.popups(element);
@@ -411,8 +436,13 @@ fn an_x11_menu_is_a_popup_at_its_place_takes_input_and_dismisses() {
             assert!(!seen.iter().any(|l| l.starts_with("ACTIVATED")), "{seen:?}");
             let _ = app.kill();
         } else {
-            // the first item, a few px inside the menu's top-left corner
-            run.point_at(element, (f64::from(x) + 12.0, f64::from(y) + 10.0));
+            // the first item, a few px inside the menu's top-left corner; GTK ignores a release
+            // that follows its popup too closely, so the hand arrives after a moment
+            run.idle(Duration::from_millis(600));
+            run.point_at(element, (f64::from(x) + 12.0, f64::from(y) + 8.0));
+            run.idle(Duration::from_millis(100));
+            run.point_at(element, (f64::from(x) + 14.0, f64::from(y) + 10.0));
+            run.idle(Duration::from_millis(100));
             run.click();
             run.until(Duration::from_secs(10), "the item is activated", |_| {
                 seen.extend(out.try_iter());
