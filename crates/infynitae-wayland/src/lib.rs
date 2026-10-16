@@ -19,6 +19,7 @@ pub mod convert;
 mod handlers;
 mod keyboard;
 mod outputs;
+pub mod ownership;
 mod pointer;
 pub mod registry;
 pub mod session;

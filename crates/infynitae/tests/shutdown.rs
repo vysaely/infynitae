@@ -216,3 +216,190 @@ fn a_signal_during_start_up_leaves_nothing_behind() {
         r.assert_clean(child);
     }
 }
+
+// ---- session process ownership (2026-10-16): the session's whole process subtree ends with it
+
+fn state(pid: u32) -> Option<char> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    stat[stat.rfind(')')? + 2..].chars().next()
+}
+
+/// Alive and not a zombie.
+fn running(pid: u32) -> bool {
+    state(pid).is_some_and(|s| s != 'Z')
+}
+
+fn read_pid(dir: &Path, name: &str) -> u32 {
+    let f = dir.join(name);
+    wait_for(name, Duration::from_secs(5), || {
+        std::fs::read_to_string(&f).is_ok_and(|s| s.ends_with('\n'))
+    });
+    std::fs::read_to_string(&f).unwrap().trim().parse().unwrap()
+}
+
+/// A grandchild, a daemon that double-forked away with `setsid` (its parent already gone), and
+/// optionally a grandchild that ignores SIGTERM.
+fn tree_script(stubborn: bool) -> String {
+    let mut s = String::from(
+        "D=$(dirname $PIDF)\n\
+         sleep 30 </dev/null >/dev/null 2>&1 & echo $! > $D/grandchild\n\
+         setsid sh -c 'sleep 30 </dev/null >/dev/null 2>&1 & echo $! > '$D'/daemon' &\n",
+    );
+    if stubborn {
+        s.push_str(
+            // its child inherits the ignored SIGTERM and lives under a living parent until the
+            // SIGKILL phase: only a walk of the whole subtree reaches it
+            "sh -c 'trap \"\" TERM; sleep 30 & echo $! > '$D'/stubchild; echo $$ > '$D'/stubborn; while :; do sleep 0.05; done' </dev/null >/dev/null 2>&1 &\n",
+        );
+    }
+    s.push_str("echo $$ > $PIDF\nwait\n");
+    s
+}
+
+fn shut_down_tree(name: &str, stubborn: bool) -> (Vec<u32>, Duration) {
+    // an outsider: started by the test itself, a sibling of the compositor, never its member
+    let mut outsider = Command::new("sleep").arg("30").spawn().unwrap();
+    let mut r = start(name, &tree_script(stubborn));
+    let mut pids = vec![
+        r.child_pid(),
+        read_pid(&r.dir, "grandchild"),
+        read_pid(&r.dir, "daemon"),
+    ];
+    if stubborn {
+        pids.push(read_pid(&r.dir, "stubborn"));
+        pids.push(read_pid(&r.dir, "stubchild"));
+    }
+    let compositor = r.compositor.id();
+    // the daemon's parent has exited: it now belongs to the compositor (subreaper), not to init
+    wait_for("the daemon's adoption", Duration::from_secs(5), || {
+        std::fs::read_to_string(format!("/proc/{}/stat", pids[2]))
+            .ok()
+            .and_then(|s| {
+                s[s.rfind(')').unwrap() + 2..]
+                    .split(' ')
+                    .nth(1)
+                    .map(str::to_owned)
+            })
+            .is_some_and(|ppid| ppid == compositor.to_string())
+    });
+    wait_for("the socket", Duration::from_secs(5), || r.socket.exists());
+    let t = Instant::now();
+    r.signal("TERM");
+    let (status, took) = r.exit(t);
+    eprintln!("{name}: exited {status} after {took:?}");
+    assert!(status.success(), "{status}");
+    for pid in &pids {
+        let left = running(*pid);
+        if left {
+            let _ = Command::new("kill")
+                .args(["-KILL", &pid.to_string()])
+                .status();
+        }
+        assert!(!left, "session process {pid} outlived the compositor");
+    }
+    r.assert_clean(None);
+    assert!(running(outsider.id()), "the outsider was signalled");
+    outsider.kill().unwrap();
+    outsider.wait().unwrap();
+    (pids, took)
+}
+
+/// The session command's grandchild and a double-forked `setsid` daemon end with the session;
+/// a process outside the session (the test's own) is untouched. Measured.
+#[test]
+fn descendants_and_daemons_end_with_the_session() {
+    let (_, took) = shut_down_tree("tree", false);
+    assert!(took < Duration::from_millis(400), "{took:?}");
+}
+
+/// A descendant that ignores SIGTERM, and its child (which inherits the ignored SIGTERM), get
+/// SIGKILL after the grace period; the rest of the tree ends on SIGTERM. Measured.
+#[test]
+fn a_descendant_ignoring_sigterm_is_killed_after_the_grace_period() {
+    let (_, took) = shut_down_tree("tree-stubborn", true);
+    assert!(took >= Duration::from_millis(450), "{took:?}");
+    assert!(took < Duration::from_secs(3), "{took:?}");
+}
+
+/// Repeated signals while the tree is being ended change nothing.
+#[test]
+fn repeated_signals_end_the_tree_once() {
+    let mut outsider = Command::new("sleep").arg("30").spawn().unwrap();
+    let mut r = start("tree-repeat", &tree_script(true));
+    let pids = [
+        r.child_pid(),
+        read_pid(&r.dir, "grandchild"),
+        read_pid(&r.dir, "daemon"),
+        read_pid(&r.dir, "stubborn"),
+    ];
+    wait_for("the socket", Duration::from_secs(5), || r.socket.exists());
+    let t = Instant::now();
+    r.signal("TERM");
+    std::thread::sleep(Duration::from_millis(100));
+    r.signal("INT");
+    r.signal("TERM");
+    let (status, took) = r.exit(t);
+    eprintln!("tree + repeated signals: exited {status} after {took:?}");
+    assert!(status.success(), "{status}");
+    assert!(pids.iter().all(|p| !running(*p)), "{pids:?}");
+    r.assert_clean(None);
+    assert!(running(outsider.id()));
+    outsider.kill().unwrap();
+    outsider.wait().unwrap();
+}
+
+/// A signal at any moment of start-up, with a session command that builds a tree: whatever had
+/// started is gone afterwards (before the handlers exist, the default action ends the compositor
+/// before it started anything).
+#[test]
+fn a_signal_during_start_up_leaves_no_session_process() {
+    for delay_ms in [0u64, 2, 5, 10, 20, 40, 80] {
+        let mut r = start(&format!("tree-early-{delay_ms}"), &tree_script(false));
+        std::thread::sleep(Duration::from_millis(delay_ms));
+        let t = Instant::now();
+        r.signal("TERM");
+        let (status, took) = r.exit(t);
+        // a member that was being started when the compositor ended may report its pid late
+        std::thread::sleep(Duration::from_millis(100));
+        let pids: Vec<u32> = ["child.pid", "grandchild", "daemon"]
+            .iter()
+            .filter_map(|f| std::fs::read_to_string(r.dir.join(f)).ok())
+            .filter_map(|s| s.trim().parse().ok())
+            .collect();
+        eprintln!(
+            "tree, SIGTERM {delay_ms} ms after start: {status} after {took:?}, members seen {pids:?}"
+        );
+        for pid in &pids {
+            let left = running(*pid);
+            if left {
+                let _ = Command::new("kill")
+                    .args(["-KILL", &pid.to_string()])
+                    .status();
+            }
+            assert!(!left, "{delay_ms} ms: {pid} survived");
+        }
+        r.assert_clean(None);
+    }
+}
+
+/// While the session runs, an adopted orphan that exits is reaped (no zombie accumulates).
+#[test]
+fn an_adopted_orphan_is_reaped_while_the_session_runs() {
+    let mut r = start(
+        "orphan",
+        "D=$(dirname $PIDF)\n\
+         setsid sh -c 'sleep 0.2 & echo $! > '$D'/orphan' &\n\
+         echo $$ > $PIDF\nexec sleep 30 </dev/null >/dev/null 2>&1",
+    );
+    let child = r.child_pid();
+    let orphan = read_pid(&r.dir, "orphan");
+    wait_for(
+        "the orphan's exit and reaping",
+        Duration::from_secs(5),
+        || state(orphan).is_none(),
+    );
+    r.signal("TERM");
+    let (status, _) = r.exit(Instant::now());
+    assert!(status.success());
+    r.assert_clean(Some(child));
+}

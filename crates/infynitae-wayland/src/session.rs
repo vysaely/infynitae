@@ -17,7 +17,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use signal_hook::SigId;
-use signal_hook::consts::{SIGINT, SIGTERM};
+use signal_hook::consts::{SIGCHLD, SIGINT, SIGTERM};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction};
 use smithay::reexports::rustix::io::Errno;
@@ -148,7 +148,7 @@ impl Session {
         let flag = terminated.clone();
         let (mut wake, notify) = UnixStream::pair()?;
         wake.set_nonblocking(true)?;
-        let signal_ids = vec![
+        let mut signal_ids = vec![
             signal_hook::low_level::pipe::register(SIGTERM, notify.try_clone()?)?,
             signal_hook::low_level::pipe::register(SIGINT, notify)?,
         ];
@@ -164,6 +164,32 @@ impl Session {
                 },
             )
             .map_err(|e| format!("Failed to register signal source: {e}"))?;
+        // Every process the session starts, and everything those start, belongs to the session
+        // and ends with it (`ownership`): orphaned descendants are re-parented to the compositor,
+        // which reaps them when SIGCHLD says one exited.
+        if let Err(e) = crate::ownership::become_subreaper() {
+            eprintln!(
+                "[infynitae] Not a child subreaper ({e}): orphans of session processes escape the session"
+            );
+        }
+        let (mut child_wake, child_notify) = UnixStream::pair()?;
+        child_wake.set_nonblocking(true)?;
+        signal_ids.push(signal_hook::low_level::pipe::register(
+            SIGCHLD,
+            child_notify,
+        )?);
+        let child_fd = child_wake.try_clone()?;
+        handle
+            .insert_source(
+                Generic::new(child_fd, Interest::READ, Mode::Level),
+                move |_, _, _| {
+                    let mut drain = [0u8; 64];
+                    while matches!(child_wake.read(&mut drain), Ok(n) if n > 0) {}
+                    crate::ownership::reap_adopted();
+                    Ok(PostAction::Continue)
+                },
+            )
+            .map_err(|e| format!("Failed to register child-exit source: {e}"))?;
         let socket = match options.socket_name.as_deref() {
             Some(name) => ListeningSocketSource::with_name(name)?,
             None => ListeningSocketSource::new_auto()?,
@@ -231,6 +257,7 @@ impl Session {
         match command.spawn() {
             Ok(child) => {
                 println!("[infynitae] Client spawned with PID {}", child.id());
+                crate::ownership::register_spawned(child.id());
                 let exited = Pid::from_raw(child.id() as i32)
                     .and_then(|pid| pidfd_open(pid, PidfdFlags::empty()).ok());
                 if let Some(fd) = exited {
@@ -269,11 +296,13 @@ impl Session {
                     "[infynitae] Child process {} exited with status {status}",
                     child.id()
                 );
+                crate::ownership::forget_spawned(child.id());
                 false
             }
             Ok(None) => true,
             Err(e) => {
                 eprintln!("[infynitae] Failed to wait on child {}: {e}", child.id());
+                crate::ownership::forget_spawned(child.id());
                 false
             }
         });
@@ -323,9 +352,21 @@ impl Session {
             || self.max_frames.is_some_and(|n| self.frames >= n)
     }
 
-    /// Ends the session's children: SIGTERM, a bounded wait, then SIGKILL; every one is reaped.
+    /// Ends the session's processes — its children and all their descendants, including
+    /// orphans it adopted (`ownership`): SIGTERM, a bounded wait, then SIGKILL; every one is
+    /// reaped. Nothing outside the compositor's own process subtree is signalled.
     pub fn shutdown(&mut self) {
-        terminate_children(&mut self.children, CHILD_GRACE);
+        let t = Instant::now();
+        let report = crate::ownership::end_session_tree(&mut self.children, CHILD_GRACE);
+        if report.terminated > 0 {
+            println!(
+                "[infynitae] Session processes ended in {:?}: {} terminated, {} killed, {} left",
+                t.elapsed(),
+                report.terminated,
+                report.killed,
+                report.survivors
+            );
+        }
         self.flush();
     }
 }
