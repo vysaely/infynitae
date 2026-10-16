@@ -181,6 +181,51 @@ self-test, knowledge (content-only), verify-test-efficacy 351 detected: all PASS
 - **F-4.** PROV-4 stays provisional (P = 1 s); OB-5 (games and network clients off-screen, T5)
   is untouched.
 
+## Independent review r2 (2026-10-16)
+
+Brief of 2026-10-16: treat `891cbb0` as a candidate, try to falsify it, repair what fails. Each
+item below was checked against the code and, where a test was missing, by a new test that fails
+without the rule it tests.
+
+| Area | Verdict | Evidence |
+|---|---|---|
+| Withholding off-screen | holds | existing T1 `an_unobserved_window_gets_one_callback_per_fallback_period`, `an_observed_client_is_not_kicked` |
+| Release before input (key, pointer, focus enter/leave) | holds | `a_key_kicks…`, `a_configure_kicks…` (keyboard `leave`), `a_pointer_leave_kicks…`; real time: TST-11 |
+| Release before configure | holds | `a_configure_kicks_before_it_is_sent` |
+| **Release before `popup_done`** | **DEFECT, fixed** | see below; `a_popup_done_kicks_before_it_is_sent`, `a_pan_press_without_a_popup_grab_kicks_nothing` |
+| Timer scheduling / zero idle wake-ups | holds | the deadline is armed only for an unobserved element with a pending callback; evaluation and deadline use the same predicate, so a due element is always completed in the evaluation that finds it (no busy loop). `a_window_that_stopped_drawing_arms_no_timer_when_it_leaves`, session `the_fallback_deadline_bounds_the_sleep_only_while_armed` |
+| Visibility changes, re-entry | holds | `re_entry_completes_at_the_first_vblank`, `re_entry_after_a_pan_completes_before_the_fallback` |
+| Repeated transitions (starvation, duplication) | holds | new `repeated_visibility_transitions_neither_starve_nor_duplicate`: 12 transitions at dwell phases 7…422 ms; every request completed exactly once, none waited more than P plus two vblanks |
+| Hidden behind fullscreen | holds | session test `a_window_hidden_by_a_presentation_gets_the_fallback_and_re_entry` |
+| Pointer leave after hiding | holds (fixed in `a45b0f0`) | `a_pointer_leave_kicks_a_window_hidden_after_the_pointer_entered_it` |
+| Multiple outputs | holds by construction | "observed" is membership on any output; the clock output is INV-FRAME-2's (unchanged); losing every output: `zero_outputs_still_complete_on_the_fallback` |
+| Surface destruction | holds | new `a_destroyed_window_disarms_the_fallback_timer` (unfocused first, so that no focus change kicks it); control "OBJ-17: a destroyed element keeps its liveness entry" |
+| Child commits (popups, desynchronised subsurfaces) | holds | `toplevel_tree_changed` records `frame_requested` over the whole tree; the adapter completes the root tree and every popup tree |
+| Vblank vs. adapter completion | consistent | `complete_frames` uses `send_frame(…, throttle None, …, Some(o))`: every callback of a ticked element completes, so Core's record never claims a completion that did not happen |
+| Allocations / CPU | no new steady-state allocation | `frame_fallback` returns an empty `Vec` (no allocation) when nothing is due; the liveness table grows once per element; `frame_kick` is a binary search or a scan of pending unobserved elements (F-3). Not measured on hardware |
+
+**Defect found (r2-1).** A camera-pan press emits `DismissPopupGrab(focus target)` whether or
+not a popup grab exists, and Core kicked that element. With no grab no `popup_done` is sent, so an
+off-screen focused window had its withheld callback completed although nothing reached it (an
+early completion: INV-FRAME-3 (a) allows a kick only before an event that reaches the client).
+And the grab's owner, which does receive `popup_done`, need not be the element Core named.
+Reproduced by `a_pan_press_without_a_popup_grab_kicks_nothing` (Super held first, so the key's
+own legitimate kick is out of the way; it failed with `["frame W"]`). **Fix:** the adapter, which
+owns the popup grab, passes the grab's owner to `Core::frame_kick(effect, popup_grab_owner)`;
+for `DismissPopupGrab` Core kicks that owner, or nobody when no grab is active. (A first version
+that rebuilt the effect in the adapter was refused by `verify-architecture`,
+`effects-only-from-core`; the owner is passed as data instead.) Controls: "a dismissal with no
+popup grab kicks the element Core named", "no kick before popup_done", both DETECTED.
+
+Gates at the r2 tree (`891cbb0` + the fix, tests and controls), 2026-10-16: fmt, clippy, `cargo
+test --workspace` 373 passed / 0 failed, verify-architecture, docs and self-test, knowledge,
+verify-test-efficacy 251 detected: all PASS. Headless only.
+
+**Verdict.** INC-8 is **implemented and tested (T0/T1, headless) and reviewed**; one defect was
+found and repaired. It is **not ratified** and **not integrated**. OB-16 stays OPEN: its T3 part
+(real applications, real time) has not been run. F-1 remains: Smithay's own outside-click
+`popup_done` does not pass through the kick; no path was found that leaves its owner unobserved.
+
 ## Gate results
 
 At `60c05a1` (the implementation commit; worktree `~/.cache/infynitae-integration/inc8`, own

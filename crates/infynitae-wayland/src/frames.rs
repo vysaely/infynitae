@@ -55,10 +55,25 @@ impl WaylandState {
         }
     }
 
+    /// The element whose popup holds the active popup grab: the one client a `popup_done`
+    /// reaches when the grab is dismissed.
+    fn popup_grab_owner(&self) -> Option<ElementId> {
+        let grab = self.popup_grab.as_ref().filter(|g| !g.has_ended())?;
+        let root = self.toplevel_root(&grab.current_grab()?)?;
+        self.element_index_by_root(&root)
+            .map(|i| self.elements[i].id)
+    }
+
     /// INV-FRAME-3 (a): before `effect` reaches a client, the withheld callbacks of each
-    /// unobserved recipient Core names complete once.
+    /// unobserved recipient Core names complete once. A dismissal reaches the owner of the
+    /// active popup grab, whichever element Core named, and no client when no grab is active;
+    /// the adapter, which holds the grab, tells Core which.
     pub(crate) fn kick_before(&mut self, effect: &Effect) {
-        let kicked = self.core.frame_kick(effect);
+        let grab_owner = match effect {
+            Effect::DismissPopupGrab(_) => self.popup_grab_owner(),
+            _ => None,
+        };
+        let kicked = self.core.frame_kick(effect, grab_owner);
         if kicked.iter().any(Option::is_some) {
             let now = crate::presentation_clock_now();
             for element in kicked.into_iter().flatten() {

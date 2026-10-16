@@ -16,10 +16,10 @@ mod common;
 
 use std::time::Duration;
 
-use common::Lockstep;
 use common::input::{BTN_MIDDLE, Rig, a_1080, logo};
+use common::{Lockstep, PopupSpec};
 use infynitae_backend_headless::{keyboard_key, set_focus};
-use infynitae_core::input::keys::KEY_A;
+use infynitae_core::input::keys::{KEY_A, KEY_LEFTMETA};
 use infynitae_core::stage::ElementId;
 
 const P: Duration = Duration::from_secs(1);
@@ -422,4 +422,130 @@ fn a_pointer_leave_kicks_a_window_hidden_after_the_pointer_entered_it() {
         Some(leave - 1),
         "kick right before the leave: {wire:?}"
     );
+}
+
+/// INC-8 review r2. A camera-pan press dismisses popup grabs (OB-4); with no popup grab no
+/// `popup_done` is sent, so nothing reaches W and nothing may complete its withheld callback
+/// before the fallback (INV-FRAME-1: a kick only precedes an event that reaches the client).
+/// Super is pressed first (it reaches W, K3, and kicks it), then W asks for a frame, then the
+/// middle button: that press reaches no client.
+#[test]
+fn a_pan_press_without_a_popup_grab_kicks_nothing() {
+    let mut f = F::off_screen();
+    keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_LEFTMETA, true, 1).unwrap();
+    f.r.ls.pump();
+    f.r.meta_held = true;
+    f.request();
+    f.run(100 * MS);
+    let m = f.wire_mark();
+    f.r.button(BTN_MIDDLE, true, logo());
+    let wire = f.wire_since(m);
+    assert!(!wire.contains(&"frame W"), "spurious kick: {wire:?}");
+    assert!(f.r.ls.state.core().frame_pending(f.e), "still withheld");
+    f.r.button(BTN_MIDDLE, false, logo());
+}
+
+/// INV-FRAME-3 (a), review r2: `popup_done` is preceded by the withheld callback of the client
+/// that receives it. W, off A and focused, takes a popup grab (with the serial of a key it was
+/// sent); with Super already held, a pan press dismisses the grab: W's callback completes, then
+/// `popup_done` arrives.
+#[test]
+fn a_popup_done_kicks_before_it_is_sent() {
+    let mut f = F::off_screen();
+    keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_A, true, 1).unwrap();
+    f.r.ls.pump();
+    keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_A, false, 2).unwrap();
+    f.r.ls.pump();
+    let qh = f.r.ls.qh.clone();
+    f.r.ls.probe.popup_with_grab(
+        &qh,
+        "P",
+        f.w,
+        PopupSpec {
+            content: (120, 80),
+            shadow: 0,
+            anchor_rect: (10, 10, 1, 1),
+            slide: false,
+        },
+    );
+    f.r.ls.pump();
+    f.run(20 * MS);
+    assert!(f.r.ls.probe.popup_dones.is_empty(), "the grab was accepted");
+    // Super first: it reaches W's popup and kicks W; the request after it is what the
+    // dismissal must complete
+    keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_LEFTMETA, true, 3).unwrap();
+    f.r.ls.pump();
+    f.r.meta_held = true;
+    f.request();
+    f.run(MS);
+    assert!(f.r.ls.state.core().frame_pending(f.e));
+    let m = f.wire_mark();
+    f.r.button(BTN_MIDDLE, true, logo());
+    let wire = f.wire_since(m);
+    let done = wire
+        .iter()
+        .position(|l| *l == "popup_done P")
+        .unwrap_or_else(|| panic!("no popup_done: {wire:?}"));
+    let frame = wire
+        .iter()
+        .position(|l| *l == "frame W")
+        .unwrap_or_else(|| panic!("no kick: {wire:?}"));
+    assert!(frame < done, "{wire:?}");
+    f.r.button(BTN_MIDDLE, false, logo());
+}
+
+/// Surface destruction, review r2: a destroyed window with a withheld callback disarms the
+/// fallback timer (INV-IDLE-1) and nothing is completed for it afterwards.
+#[test]
+fn a_destroyed_window_disarms_the_fallback_timer() {
+    let mut f = F::off_screen();
+    // unfocused first, so that the destruction sends W no focus change (which would kick it)
+    set_focus(&mut f.r.ls.state, &mut f.r.ls.input, None).unwrap();
+    f.r.ls.pump();
+    f.request();
+    assert!(f.deadline().is_some(), "armed for W");
+    f.r.ls.probe.destroy_toplevel(f.w);
+    f.r.ls.pump();
+    assert_eq!(f.deadline(), None);
+    let n = f.frames_w().len();
+    f.run(3 * P);
+    assert_eq!(f.frames_w().len(), n);
+}
+
+/// Repeated visibility transitions, review r2: W leaves and re-enters A again and again while
+/// it keeps asking for frames. Every request completes exactly once (INV-FRAME-1) and none
+/// waits longer than P plus one vblank (no starvation, INV-FRAME-3/4).
+#[test]
+fn repeated_visibility_transitions_neither_starve_nor_duplicate() {
+    let mut f = F::new();
+    let vblank = Duration::from_micros(16_667);
+    for i in 0..12u32 {
+        f.request();
+        let asked = f.now();
+        let before = f.frames_w().len();
+        f.pan(if i % 2 == 0 { 300.0 } else { -300.0 });
+        // a dwell of a few ms to most of a period, so transitions fall at every phase
+        f.run(Duration::from_millis(u64::from(7 + 83 * (i % 6))));
+        let deadline = asked + P + 2 * vblank;
+        while f.frames_w().len() == before && f.now() < deadline {
+            f.run(MS);
+        }
+        let new = f.frames_w()[before..].to_vec();
+        assert_eq!(
+            new.len(),
+            1,
+            "transition {i}: exactly one completion: {new:?}"
+        );
+        assert!(
+            new[0] - asked <= P + 2 * vblank,
+            "transition {i}: waited {:?}",
+            new[0] - asked
+        );
+        f.run(5 * MS);
+        assert_eq!(
+            f.frames_w().len(),
+            before + 1,
+            "transition {i}: no second completion"
+        );
+    }
 }

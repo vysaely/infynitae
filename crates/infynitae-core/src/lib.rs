@@ -488,14 +488,21 @@ impl Core {
     /// non-initial configure, a `popup_done` or an input event (including focus `enter`/`leave`)
     /// through `effect`; their withheld callbacks must complete before the effect is applied,
     /// and are recorded as completed. Initial configures and `wl_surface` enter/leave do not
-    /// kick.
-    pub fn frame_kick(&mut self, effect: &protocol::Effect) -> [Option<stage::ElementId>; 2] {
+    /// kick. A `DismissPopupGrab` reaches the element whose popup holds the active grab, which
+    /// the adapter owns and passes as `popup_grab_owner` (`None`: no grab, no `popup_done`, no
+    /// kick); it is ignored for every other effect.
+    pub fn frame_kick(
+        &mut self,
+        effect: &protocol::Effect,
+        popup_grab_owner: Option<stage::ElementId>,
+    ) -> [Option<stage::ElementId>; 2] {
         use protocol::Effect as E;
         let mut recipients = [None, None];
         match *effect {
-            E::ToplevelConfigure(e)
-            | E::ToplevelConfigureSize { element: e, .. }
-            | E::DismissPopupGrab(e) => recipients[0] = Some(e),
+            E::ToplevelConfigure(e) | E::ToplevelConfigureSize { element: e, .. } => {
+                recipients[0] = Some(e)
+            }
+            E::DismissPopupGrab(_) => recipients[0] = popup_grab_owner,
             E::KeyboardFocus(new) => {
                 let old = std::mem::replace(&mut self.frame_liveness.keyboard_recipient, new);
                 recipients = [old, new.filter(|n| Some(*n) != old)];
