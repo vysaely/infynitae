@@ -689,11 +689,12 @@ impl Core {
     pub fn set_scale_config(
         &mut self,
         config: scale::ScalePolicyConfig,
-    ) -> Result<(), scale::ScaleConfigError> {
+    ) -> Result<Vec<protocol::Effect>, scale::ScaleConfigError> {
         config.validate()?;
         self.scale_config = config;
         self.scale_sweep.all = true;
-        Ok(())
+        // C12.F13: a configuration change touches no element; P7 applies at once
+        Ok(self.apply_device_bound_now())
     }
 
     /// Ingests the renderer's device limit `D_max` (OB-13, F-SCALE-2, OBJ-29) and runs P7.
@@ -709,6 +710,13 @@ impl Core {
         .validate()?;
         self.scale_config.d_max = d_max;
         self.scale_sweep.all = true;
+        Ok(self.apply_device_bound_now())
+    }
+
+    /// P7 for every element under the configuration in force, at once (a reported device limit,
+    /// a configuration change): lowered hints, and integer hints whose bound changed. Releases no
+    /// hold (C12.F13).
+    fn apply_device_bound_now(&mut self) -> Vec<protocol::Effect> {
         let mut fx = Vec::new();
         for (element, st) in &mut self.scales {
             let s_max = s_max_of(
@@ -718,8 +726,8 @@ impl Core {
                 &self.outputs,
                 *element,
             );
-            let h_dev = scale::h_dev(s_max, d_max);
-            let h_max = scale::h_max(self.scale_config.h_cfg, s_max, d_max);
+            let h_dev = scale::h_dev(s_max, self.scale_config.d_max);
+            let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
             let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
             let lowered = st.p7_check(ladder, h_max, self.scale_config.sigma);
             // b(h) depends on H_dev(E) even when h itself still fits (E1R-N3)
@@ -738,7 +746,7 @@ impl Core {
                 });
             }
         }
-        Ok(fx)
+        fx
     }
 
     /// Preferred scale for an element: (scale_120, integer_buffer_scale).
@@ -1267,7 +1275,7 @@ mod tests {
             t_settle_ms: 250,
             d_max: 8192,
         };
-        assert_eq!(core.set_scale_config(tuned), Ok(()));
+        assert_eq!(core.set_scale_config(tuned).map(|_| ()), Ok(()));
         assert_eq!(*core.scale_config(), tuned);
     }
 

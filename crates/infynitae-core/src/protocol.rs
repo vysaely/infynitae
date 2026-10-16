@@ -4417,6 +4417,30 @@ mod tests {
         assert_eq!(c.preferred_scale_of(x), held);
     }
 
+    /// C12.F13 as adopted (package rev. 2, P-3): a change of the scale configuration applies P7
+    /// at once and releases no hold. X (300 px, A and B: hint 2) is held while W is presented on
+    /// B; H_cfg is lowered to 1.5: X is lowered in that call, to a hint the new ceiling allows,
+    /// and stays held.
+    #[test]
+    fn a_configuration_change_applies_p7_at_once_and_releases_no_hold() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        let (_a, b) = two_scales(&mut c, &mut t);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert!(c.scale_state(x).unwrap().presentation_hold, "held");
+        let config = crate::scale::ScalePolicyConfig {
+            h_cfg: 1.5,
+            ..*c.scale_config()
+        };
+        let fx = c.set_scale_config(config).unwrap();
+        let (s120, _) = hints(&fx, x).pop().expect("P7 at once");
+        assert!(s120 <= 180, "{s120}");
+        assert!(c.scale_state(x).unwrap().presentation_hold, "still held");
+    }
+
     /// C12.F13 (adversarial): a hold survives no change of identity. X is held while W is
     /// presented on B; X is destroyed; a new window Y mapped at the same place is not held and
     /// takes its requirement (A and B's, 2, once W's presentation ends).

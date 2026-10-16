@@ -1689,7 +1689,7 @@ mod tests {
                         c.start_scale_interaction(id, kind, continuous, at);
                     }
                     (86..=91, _) => fx = c.scale_tick(SessionTime::from_millis(now)),
-                    (92..=94, _) => c.set_scale_config(config).unwrap(),
+                    (92..=94, _) => fx = c.set_scale_config(config).unwrap(),
                     (95..=97, _) => fx = c.set_renderer_device_max(d_max).unwrap(),
                     // a camera batch that is not part of a drag (none exists yet: the case a
                     // future camera move outside a continuous interaction would hit)
