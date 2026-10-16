@@ -259,10 +259,9 @@ impl Session {
         command
             .args(parts)
             .env("WAYLAND_DISPLAY", &self.socket_name);
-        match command.spawn() {
+        match crate::ownership::spawn_owned(&mut command) {
             Ok(child) => {
                 println!("[infynitae] Client spawned with PID {}", child.id());
-                crate::ownership::register_spawned(child.id());
                 let exited = Pid::from_raw(child.id() as i32)
                     .and_then(|pid| pidfd_open(pid, PidfdFlags::empty()).ok());
                 if let Some(fd) = exited {
@@ -638,9 +637,7 @@ mod tests {
     /// A child of this test, registered as owned (session process ownership): a session another
     /// test shuts down in this process leaves it alone.
     fn spawn(cmd: &str, args: &[&str]) -> Child {
-        let child = Command::new(cmd).args(args).spawn().unwrap();
-        crate::ownership::register_spawned(child.id());
-        child
+        crate::ownership::spawn_owned(Command::new(cmd).args(args)).unwrap()
     }
 
     /// Whether the process still exists in any state, a zombie included.

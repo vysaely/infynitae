@@ -36,8 +36,20 @@ use smithay::reexports::rustix::process::{
 static OWNED: Mutex<BTreeSet<i32>> = Mutex::new(BTreeSet::new());
 
 /// A child was spawned by an owner that reaps it (`Session::spawn`, the satellite supervisor).
+/// Prefer [`spawn_owned`]: registering after `spawn` leaves a window in which a child that exits
+/// at once can be reaped by a reaper on another thread.
 pub fn register_spawned(pid: u32) {
     OWNED.lock().unwrap().insert(pid as i32);
+}
+
+/// Spawns `command` and registers the child as owned atomically with respect to
+/// [`reap_adopted`] (both hold the registry lock), so the orphan reaper never takes the exit
+/// status of a child its owner will wait for.
+pub fn spawn_owned(command: &mut std::process::Command) -> std::io::Result<Child> {
+    let mut owned = OWNED.lock().unwrap();
+    let child = command.spawn()?;
+    owned.insert(child.id() as i32);
+    Ok(child)
 }
 
 /// Its owner reaped it.
@@ -132,7 +144,8 @@ fn members(roots: &[i32]) -> Vec<Member> {
 /// many were reaped.
 pub fn reap_adopted() -> usize {
     let me = getpid().as_raw_nonzero().get();
-    let owned = OWNED.lock().unwrap().clone();
+    // held for the whole scan: a `spawn_owned` in progress completes its registration first
+    let owned = OWNED.lock().unwrap();
     let mut reaped = 0;
     for pid in children_of(me) {
         if owned.contains(&pid) || !stat_of(pid).is_some_and(|(s, _)| s == 'Z') {
@@ -243,9 +256,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let odd = dir.join("x) (y ) z");
         std::os::unix::fs::symlink("/bin/sleep", &odd).unwrap();
-        let mut child = Command::new(&odd).arg("5").spawn().unwrap();
         // owned by this test: a session shut down by another test in this process leaves it alone
-        register_spawned(child.id());
+        let mut child = spawn_owned(Command::new(&odd).arg("5")).unwrap();
         std::thread::sleep(Duration::from_millis(50));
         let comm = std::fs::read_to_string(format!("/proc/{}/comm", child.id())).unwrap();
         assert_eq!(comm.trim(), "x) (y ) z");
