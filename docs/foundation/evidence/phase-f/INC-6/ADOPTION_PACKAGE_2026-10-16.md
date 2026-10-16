@@ -1,5 +1,9 @@
 # INC-6 exit — adoption package (prepared 2026-10-16, revision 2; NOT ADOPTED)
 
+> **Adopted 2026-10-16 by owner approval, unchanged** (D1–D6; D7 approved for the exit): see
+> [ADOPTION_RECORD_2026-10-16.md](ADOPTION_RECORD_2026-10-16.md). The text below is kept as
+> approved; its "NOT ADOPTED" status lines describe it before that decision.
+
 Status: **PREPARED FOR THE OWNER'S DECISION. Nothing here is adopted.** Each item below is one
 decision, with the exact text that a governance commit would apply if the owner approves it.
 `<DATE>` and `<BASE>` are filled at adoption, never before. No invariant is added or removed

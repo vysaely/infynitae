@@ -156,7 +156,7 @@ pub struct ScaleState {
     pub last_stimulus_direction: i8,
     /// Active interaction epoch state.
     pub epoch: ScaleInteractionEpoch,
-    /// C12.F13 (REHEARSAL, NOT ADOPTED): another client's presentation lowered this element's
+    /// C12.F13: another client's presentation lowered this element's
     /// requirement and its hint was held; client-response evaluations do not lower it until a
     /// non-client stimulus (not another client's presentation) evaluates it.
     pub presentation_hold: bool,
@@ -210,7 +210,7 @@ impl ScaleState {
     }
 
     /// Closes an open epoch without evaluating; the evaluation that follows settles it (M9
-    /// "settlement" of a fullscreen subject, C12.F13 REHEARSAL).
+    /// "settlement" of a fullscreen subject, C12.F13).
     pub(crate) fn end_epoch(&mut self) {
         self.epoch.open = false;
         self.epoch.deadline = None;
@@ -529,10 +529,10 @@ pub(crate) struct Sweep {
     /// The elements marked for the next evaluation, ascending; between passes also the buffer
     /// a pass lists the elements it visits in (cleared, not freed).
     marked: Vec<ElementId>,
-    /// C12.F13 (REHEARSAL): the elements whose own presentation started or ended in this batch
+    /// C12.F13: the elements whose own presentation started or ended in this batch
     /// (the subjects of a client's fullscreen enter/exit). Ascending; cleared, not freed.
     stimulated: Vec<ElementId>,
-    /// C12.F13 (REHEARSAL): a client's request, commit or destruction started or ended a
+    /// C12.F13: a client's request, commit or destruction started or ended a
     /// presentation in this batch; every other element it touches may rise, never fall.
     pub(crate) presentation_change: bool,
     /// The elements this batch's stimulus touched (the marks it made), ascending, kept while
@@ -571,7 +571,7 @@ impl Sweep {
         }
     }
 
-    /// C12.F13 (REHEARSAL): `element`'s own presentation started or ended in this batch.
+    /// C12.F13: `element`'s own presentation started or ended in this batch.
     pub(crate) fn stimulate(&mut self, element: ElementId) {
         self.mark(element);
         if let Err(i) = self.stimulated.binary_search(&element) {

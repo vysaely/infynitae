@@ -981,7 +981,7 @@ impl Core {
             let h_max = scale::h_max(self.scale_config.h_cfg, s_max, self.scale_config.d_max);
             let ladder = self.ladders.get(&self.outputs, h_max, self.scale_config.r);
 
-            // C12.F13 (REHEARSAL, NOT ADOPTED): the subject of a client's fullscreen enter/exit,
+            // C12.F13: the subject of a client's fullscreen enter/exit,
             // and the elements that presentation change touches
             let subject = self.scale_sweep.is_stimulated(element);
             let by_presentation = self.scale_sweep.presentation_change && !subject;

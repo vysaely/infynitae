@@ -1,0 +1,7 @@
+{
+ "name": "C12.F12: the pre-map grant clause dropped from INV-SCALE-5",
+ "file": "FOUNDATION_INVARIANTS.md",
+ "find": " If the initial configure grants protocol fullscreen on output O (C12.F6), ρ_pred = max(`scale_O`, F-SCALE-1 over the current views of the other outputs whose view intersects the placed window-geometry rect, or the anchor point when its size is 0×0). The grant's own presentation contributes `scale_O` at zoom 1; O's current view does not count.",
+ "replace": "",
+ "expect": "inv-wording-mismatch"
+}

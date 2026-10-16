@@ -13,8 +13,8 @@ History: the OB-42 counting allocator was first placed in a Core integration tes
 exception for Core's integration tests (owner decision of 2026-10-14). On 2026-10-15, by owner
 direction, it moved unchanged to the headless backend's tests (a `deny` crate, where a listed
 `test` site is permitted) and the exception was removed; layer C12.F9, drafted to legitimise the
-exception, is not adopted. The 2026-10-14 decision awaits the owner's formal correction
-(`evidence/phase-f/INC-6/C12F9_PROPOSAL.md`).
+exception, is not adopted. The 2026-10-14 decision was corrected by the owner on 2026-10-16 (C12.F9
+withdrawn; `evidence/phase-f/INC-6/ADOPTION_RECORD_2026-10-16.md`).
 
 Production sites: **none.**
 

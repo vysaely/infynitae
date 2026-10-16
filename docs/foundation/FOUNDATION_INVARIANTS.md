@@ -1,8 +1,8 @@
 # Infynitae Native — Foundation Invariants (effective registry)
 
-Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1, C12.F2, C12.F3, C12.F4, C12.F5, C12.F6, C12.F7, C12.F8 and C12.F10 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
+Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1, C12.F2, C12.F3, C12.F4, C12.F5, C12.F6, C12.F7, C12.F8, C12.F10, C12.F11, C12.F12 and C12.F13 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
 
-This registry is the **effective projection** of thirteen layers. The layers themselves stay where they are and are not edited:
+This registry is the **effective projection** of sixteen layers. The layers themselves stay where they are and are not edited:
 - **C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a**: FOUNDATION_ARCHITECTURE §C12 (sealed Phase C registry, 54 rows);
 - **C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f**: FOUNDATION_ARCHITECTURE §C12.R1 (Phase D 1R amendments, 16 rows);
 - **C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be**: FOUNDATION_ARCHITECTURE §C12.R2 (Phase D 2R amendments, 6 rows);
@@ -15,7 +15,10 @@ This registry is the **effective projection** of thirteen layers. The layers the
 - **C12.F6 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F6 (Phase F amendment: a pre-map grant takes the output when its element maps, 1 row);
 - **C12.F7 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F7 (Phase F amendment: focus eligibility and retention under a presentation, 1 row);
 - **C12.F8 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F8 (Phase F amendment: popup stacking follows xdg-shell, 1 row);
-- **C12.F10 @ ADOPTED 2026-10-14 (owner approval; base 80ead2a)**: FOUNDATION_ARCHITECTURE §C12.F10 (Phase F amendment: unmap of a fullscreen element, RC-1, 1 row; C12.F9 is reserved for the INC-6 exit).
+- **C12.F10 @ ADOPTED 2026-10-14 (owner approval; base 80ead2a)**: FOUNDATION_ARCHITECTURE §C12.F10 (Phase F amendment: unmap of a fullscreen element, RC-1, 1 row; C12.F9 is reserved for the INC-6 exit — withdrawn 2026-10-16; the number stays unused);
+- **C12.F11 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)**: FOUNDATION_ARCHITECTURE §C12.F11 (Phase F amendment: the device bound counts a size Core asks for, OB-13, 1 row);
+- **C12.F12 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)**: FOUNDATION_ARCHITECTURE §C12.F12 (Phase F amendment: the initial hint of a pre-map fullscreen grant, 1 row);
+- **C12.F13 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)**: FOUNDATION_ARCHITECTURE §C12.F13 (Phase F amendment: whose stimulus a presentation change is, 1 row).
 
 Rules:
 - Each entry's **wording** is the statement of its latest layer, verbatim, except that complete formula text is replaced by an `[F-…]` reference.
@@ -476,14 +479,14 @@ Count: **57** effective invariants: 37 from C12, 6 from C12.R1, 2 from C12.R2, 5
 - **ADR:** ADR-05, ADR-09
 
 ### INV-SCALE-2
-- **Wording:** Every emitted hint is a rung of the ladder in force at emission. The ladder contains every connected output scale ≤ H_max(E), the integers, and the geometric fill. [F-SCALE-2], where the device bound `H_dev(E)` is the largest hint expressible on the wire (a multiple of 1/120) for which `s · h ≤ D_max` on every side: `⌊120 · D_max / s_max(E)⌋ / 120` when `s_max(E) > 0` and `+∞` when `s_max(E) = 0`; `s_max` is the largest logical side over all surfaces of E's tree and is 0 exactly when no surface has a non-zero extent (every initial commit). With no buffer there is nothing to bound, so `H_max(E) = H_cfg`. `D_max` is queried from the renderer and re-queried on renderer recreation. If E's size makes h exceed the bound, h is lowered immediately (P7). A held or epoch-deferred hint may be off-ladder until the next permitted evaluation.
+- **Wording:** Every emitted hint is a rung of the ladder in force at emission. The ladder contains every connected output scale ≤ H_max(E), the integers, and the geometric fill. [F-SCALE-2], where the device bound `H_dev(E)` is the largest hint expressible on the wire (a multiple of 1/120) for which `s · h ≤ D_max` on every side: `⌊120 · D_max / s_max(E)⌋ / 120` when `s_max(E) > 0` and `+∞` when `s_max(E) = 0`; `s_max(E)` = the largest logical side over all surfaces of E's tree and over every size Core has asked E for while that request stands: the size of the protocol-fullscreen configure while E is granted (C5.2: the output's logical size; at the initial commit, of the grant made in the initial configure), and the saved size offered in the configure that ended E's fullscreen (M9), until E commits a tree whose window-geometry size differs from the one it replaces, is unmapped, or is destroyed (0 iff none has a non-zero extent, e.g. every initial commit without a grant). With no buffer there is nothing to bound, so `H_max(E) = H_cfg`. `D_max` is queried from the renderer and re-queried on renderer recreation. If E's size makes h exceed the bound, h is lowered immediately (P7). A held or epoch-deferred hint may be off-ladder until the next permitted evaluation.
 - **Owner:** core `ScaleState`
 - **Class:** E+M
 - **Violation:** unrenderable/huge buffers
-- **Origin:** C12.F2 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)
-- **Layers:** C12 → C12.R1 → C12.E1R → C12.F2
-- **Trigger:** owner amendment 2026-10-13 (H-1)
-- **Evidence:** EC-16/18, ED-2 F3/F4, EE-5; evidence/phase-f/h1-amendment
+- **Origin:** C12.F11 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)
+- **Layers:** C12 → C12.R1 → C12.E1R → C12.F2 → C12.F11
+- **Trigger:** owner amendment 2026-10-16 (C12.F11, OB-13)
+- **Evidence:** EC-16/18, ED-2 F3/F4, EE-5; evidence/phase-f/h1-amendment; evidence/phase-f/INC-6
 - **Tests (historical column):** T0 (every side at three device limits; resize alternation); T1 (OB-13)
 - **Obligations:** OB-13, OB-52
 - **Formulas:** F-SCALE-2
@@ -513,19 +516,19 @@ Count: **57** effective invariants: 37 from C12, 6 from C12.R1, 2 from C12.R2, 5
 - **Trigger:** PD-F2-07, PD-F2-19
 - **Evidence:** EC-17/19/22, ER-5 R2, ER2-2
 - **Tests (historical column):** T0 (+ NEG); T1 (OB-28)
-- **Obligations:** OB-28
+- **Obligations:** OB-28, OB-53
 - **Formulas:** —
 - **ADR:** ADR-05
 
 ### INV-SCALE-5
-- **Wording:** At zoom 1 with no zoom interaction, and where the maximum observing output scale ≤ H_max(E), the policy equals Phase B MaxGesture. Integer hint = ⌈h⌉, lowered to `max(1, ⌊H_dev(E)⌋)` when ⌈h⌉ > H_dev(E), so that an integer-scale client's buffer also fits the device; emission only on change; unobserved elements hold h; evaluation once per core batch after all its updates. **Initial hint:** `h := t(ρ_pred)` over the presentations whose view intersects the placed window-geometry rect (or the anchor point when the size is 0×0); if none, `t(max connected output scale)`.
+- **Wording:** At zoom 1 with no zoom interaction, and where the maximum observing output scale ≤ H_max(E), the policy equals Phase B MaxGesture, except that an element held under C14.4 (another client's presentation) keeps a higher hint until a non-client stimulus that touches it. Integer hint = ⌈h⌉, lowered to `max(1, ⌊H_dev(E)⌋)` when ⌈h⌉ > H_dev(E), so that an integer-scale client's buffer also fits the device; emission only on change; unobserved elements hold h; evaluation once per core batch after all its updates. **Initial hint:** `h := t(ρ_pred)` over the presentations whose view intersects the placed window-geometry rect (or the anchor point when the size is 0×0); if none, `t(max connected output scale)`. If the initial configure grants protocol fullscreen on output O (C12.F6), ρ_pred = max(`scale_O`, F-SCALE-1 over the current views of the other outputs whose view intersects the placed window-geometry rect, or the anchor point when its size is 0×0). The grant's own presentation contributes `scale_O` at zoom 1; O's current view does not count.
 - **Owner:** core
 - **Class:** M
 - **Violation:** regressions vs Phase B, double renegotiation
-- **Origin:** C12.E1R @ UNSEALED (E1R review gate; base 09075a2)
-- **Layers:** C12 → C12.R1 → C12.E1R
-- **Trigger:** E1R-N3
-- **Evidence:** P4, S7, S8, AUD-25, ED-2 F8, EE-5
+- **Origin:** C12.F13 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)
+- **Layers:** C12 → C12.R1 → C12.E1R → C12.F12 → C12.F13
+- **Trigger:** owner amendment 2026-10-16 (C12.F13, presentation holds)
+- **Evidence:** P4, S7, S8, AUD-25, ED-2 F8, EE-5; evidence/phase-f/INC-6
 - **Tests (historical column):** T0; T1 (OB-13)
 - **Obligations:** OB-13
 - **Formulas:** F-SCALE-3

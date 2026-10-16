@@ -48,3 +48,5 @@ tools/check-foundation-docs --self-test && tools/verify-test-efficacy && tools/v
 - Preparation package: `~/Infynitae-INC7-EXIT-PREPARATION-2026-10-14/` (dependency graph, approval package, gate results, obligations evidence, register, checklist)
 - [KNOW-ROAD-005: Remaining Work](../roadmap/KNOW-ROAD-005-inc7-follow-up-work.md)
 - [KNOW-EXP-005: Codegen-Unit Sensitivity](../experiments/KNOW-EXP-005-benchmark-codegen-unit-sensitivity.md)
+
+*2026-10-16:* C12.F9 was withdrawn by the owner (the allocator test moved to the headless backend; INV-ARCH-2 unchanged); C12.F11–C12.F13 were adopted for INC-6 on `governance/inc-6-exit-adoption-2026-10-16` (not ratified).

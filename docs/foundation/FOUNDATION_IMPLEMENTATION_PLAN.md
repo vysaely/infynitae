@@ -234,7 +234,7 @@ No PRODUCT increment may create a state where **persistent zoom ≠ 1 and camera
 - **Seam touched:** none new (camera views).
 - **Invariants exercised:** INV-CAMERA-5, INV-COORD-3, INV-SCALE-1, INV-RENDER-1 at k ∉ n/120.
 - **Risks retired:** TC-1 (production), TC-3, TA-1 (production confirmation).
-- **Obligations:** OB-14 (zoom ≠ 1 part), OB-24 (consumes the decision; does not make it).
+- **Obligations:** OB-14 (zoom ≠ 1 part), OB-24 (consumes the decision; does not make it), OB-53 (its part).
 - **Exit tests:** TST-18 d5hit zoomed configurations; TST-23 R1 and TST-19 as T0 properties; the 200-commit "client resize never moves the camera" test on the production path.
 - **Negative controls:** the sealed pan formula (content ≠ hand); a sticky-fit probe (E0277).
 - **Entry conditions:** INC-3, INC-6 exits **and** (G-OB24 resolved **or** the fallback active).
@@ -251,7 +251,7 @@ No PRODUCT increment may create a state where **persistent zoom ≠ 1 and camera
 - **Seam touched:** Unix socket (`SO_PEERCRED`).
 - **Invariants exercised:** INV-SHELL-1, INV-SHELL-2, INV-CAMERA-1, INV-SCALE-3, INV-STAGE-3.
 - **Risks retired:** TA-7, TT-9, TF-5.
-- **Obligations:** OB-35.
+- **Obligations:** OB-35, OB-53 (its part).
 - **Exit tests:** stale-ID, reconnect and command-atomicity T1 tests; shell stream epoch case (TST-23/TST-24 cases on the production path).
 - **Negative controls:** a raw-state command does not exist (probe); shell stream without epoch (churn).
 - **Entry conditions:** INC-6, INC-7 exits.
@@ -308,7 +308,7 @@ The cross-output drag definition (F-DRAG-1) is an open decision (OB-34). Interac
 - **Seam touched:** `xdg_toplevel.move/resize`.
 - **Invariants exercised:** INV-STAGE-1, INV-INPUT-2, INV-SCALE-3.
 - **Risks retired:** TC-6.
-- **Obligations:** OB-34 (consumes the decision).
+- **Obligations:** OB-34 (consumes the decision), OB-53 (its part).
 - **Exit tests:** TST-24 WindowMove/Resize cases on the production path (1 settle, not 39); drag stays consistent across an Arrangement crossing per the decision.
 - **Negative controls:** epoch disabled for Stage moves (churn).
 - **Entry conditions:** **G-OB34 resolved**; INC-5, INC-6 exits.

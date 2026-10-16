@@ -521,7 +521,7 @@ Count: 66 risks.
 - **Risk:** client resizing in response to scale hints (feedback loop)
 - **Disposition:** MITIGATED
 - **Mitigation / evidence:** one-shot fit removed the re-fit loop (ER-5 R3); epochs + P7 (ER-5 R2, ER2-2)
-- **Obligations:** OB-28
+- **Obligations:** OB-28, OB-53
 - **Invariants:** INV-SCALE-3, INV-SCALE-4
 
 ### A-C1

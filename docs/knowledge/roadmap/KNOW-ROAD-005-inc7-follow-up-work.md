@@ -55,3 +55,5 @@ See the exit preparation package: `~/Infynitae-INC7-EXIT-PREPARATION-2026-10-14/
 - [KNOW-DEC-005: INC-7 Integration Provenance](../decisions/KNOW-DEC-005-inc7-integration-provenance.md)
 - [KNOW-DEC-002: Focus Eligibility and Retention](../decisions/KNOW-DEC-002-a8-fullscreen-focus-eligibility.md)
 - [KNOW-PITFALL-007: Smithay 0.7.0 Limitations](../pitfalls/KNOW-PITFALL-007-smithay-0-7-xdg-shell-limitations.md)
+
+*2026-10-16:* C12.F9 was withdrawn by the owner (the allocator test moved to the headless backend; INV-ARCH-2 unchanged); C12.F11–C12.F13 were adopted for INC-6 on `governance/inc-6-exit-adoption-2026-10-16` (not ratified).

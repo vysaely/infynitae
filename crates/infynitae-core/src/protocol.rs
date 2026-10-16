@@ -357,7 +357,7 @@ impl Core {
             .or_else(|| self.outputs.first().map(|o| o.id))
     }
 
-    /// C12.F13 (REHEARSAL, NOT ADOPTED): the elements whose own presentation started or ended
+    /// C12.F13: the elements whose own presentation started or ended
     /// since `before` are the subjects of a client's fullscreen enter/exit; every other element
     /// the change touches may rise but not fall (`Sweep::presentation_change`).
     fn presentation_stimulus(&mut self, before: &[(OutputId, Option<ElementId>)]) {
@@ -473,7 +473,7 @@ impl Core {
             self.presentation_stimulus(before);
             let mut fx = Vec::new();
             self.presentation_membership(&changed, &mut fx);
-            // C12.F13 (REHEARSAL): subjects and touched elements are classified per element
+            // C12.F13: subjects and touched elements are classified per element
             fx.extend(self.evaluate_scale_policy(true));
             fx
         }
@@ -811,7 +811,7 @@ impl Core {
                     .collect();
                 let granted = grant.and_then(|o| self.outputs.iter().find(|m| m.id == o));
                 let rho_pred = match granted {
-                    // C12.F12 (REHEARSAL, NOT ADOPTED): the presentation the grant starts at the
+                    // C12.F12: the presentation the grant starts at the
                     // first map (scale_O, zoom 1) and the other outputs' cameras that see the rect
                     Some(o) => {
                         let others: Vec<_> =
@@ -826,7 +826,7 @@ impl Core {
                     }
                     None => crate::scale::predict_rho(anchor, tree.geometry, &self.outputs, &views),
                 };
-                // C12.F11 (REHEARSAL, NOT ADOPTED): the configured fullscreen size bounds it too
+                // C12.F11: the configured fullscreen size bounds it too
                 let configured = granted.map_or(0, |o| {
                     let (w, h) = o.logical_extent();
                     (w.floor().max(0.0) as u32).max(h.floor().max(0.0) as u32)
@@ -936,7 +936,7 @@ impl Core {
         // alone is a client response
         let presentation_moved = !touched.is_empty();
         if presentation_moved {
-            // C12.F13 (REHEARSAL): classified per element
+            // C12.F13: classified per element
             self.presentation_stimulus(&before);
         }
         let client_response = true;
@@ -1017,7 +1017,7 @@ impl Core {
             .map(|(o, _)| *o)
             .collect();
         if !ended.is_empty() {
-            // C12.F13 (REHEARSAL): the elements it revealed may rise, not fall
+            // C12.F13: the elements it revealed may rise, not fall
             self.presentation_stimulus(&before);
             self.presentation_membership(&ended, &mut fx);
         }
@@ -3625,7 +3625,7 @@ mod tests {
         assert_eq!(hints(&fx, w), vec![(240, 2)]);
     }
 
-    /// A grant made before the first map (C12.F6), as C12.F12 proposes (REHEARSAL): the initial
+    /// A grant made before the first map (C12.F6), as C12.F12 adopts: the initial
     /// hint, still before the initial configure (M15), is predicted from the presentation the
     /// grant starts (B, scale 2, zoom 1) and the other outputs' cameras (A sees the rect: 1), not
     /// from B's camera (zoom 0.5); the map then finds it right and sends no second hint.
@@ -3659,7 +3659,7 @@ mod tests {
         assert_eq!(c.preferred_scale_of(w), Some((240, 2)));
     }
 
-    /// OB-13 on the integration, with C12.F11 (REHEARSAL): a grant's configure asks for the
+    /// OB-13 on the integration, with C12.F11: a grant's configure asks for the
     /// output's size, and the hint that reaches the client before it (item 3) already fits that
     /// size within D_max. W is seen by a scale-3 output P; D_max 8192; granted fullscreen on a
     /// 3840-wide scale-1 output O. Without C12.F11: hint 3, a 11,520-px first buffer.
@@ -3762,7 +3762,7 @@ mod tests {
         assert!(fits(&c, 3000), "{:?}", c.preferred_scale_of(x));
     }
 
-    /// C12.F11 + C12.F12 (REHEARSAL) at the initial commit: a pre-map grant's initial hint is
+    /// C12.F11 + C12.F12 at the initial commit: a pre-map grant's initial hint is
     /// already bounded by the configured size, so the first buffer fits D_max. P (scale 3) sees the
     /// placed rect, so the prediction is 3; O, the granted output, is 3840 logical px wide:
     /// unbounded, the first buffer would be 11,520 px for D_max 8192.
@@ -3898,7 +3898,7 @@ mod tests {
         c.physical_input_vec(&mut i, button(false)).unwrap();
     }
 
-    /// C12.F13 (REHEARSAL). Cross-client churn (independent review, 2026-10-15): a client that never holds focus
+    /// C12.F13. Cross-client churn (independent review, 2026-10-15): a client that never holds focus
     /// cycles create, pre-map grant, map and destroy; another client focused toggles fullscreen.
     /// X, seen by A and B, never changes its hint; the presenting clients' own windows may.
     #[test]
@@ -3936,7 +3936,7 @@ mod tests {
         assert_eq!(c.preferred_scale_of(x), held);
     }
 
-    /// C12.F13 (REHEARSAL), review probe A: X, seen by A (scale 1) and B (scale 2), commits
+    /// C12.F13, review probe A: X, seen by A (scale 1) and B (scale 2), commits
     /// between another client's fullscreen toggles on B. Hidden, X is held; its own commits do
     /// not lower it (the hold lasts until a non-client stimulus): no change at all.
     #[test]
@@ -3963,7 +3963,7 @@ mod tests {
         assert_eq!(c.preferred_scale_of(x), Some((240, 2)));
     }
 
-    /// C12.F13 (REHEARSAL), review probe C: X never commits; W1 toggles fullscreen on B while a
+    /// C12.F13, review probe C: X never commits; W1 toggles fullscreen on B while a
     /// second client cycles create / pre-map grant on C / map / destroy. No change of X's hint.
     #[test]
     fn a_passive_window_under_two_presentations_keeps_its_hint() {
@@ -3999,7 +3999,7 @@ mod tests {
         assert_eq!(changes, 0);
     }
 
-    /// C12.F13 (REHEARSAL), review probe B: X is held at B's scale while W is presented on B; a
+    /// C12.F13, review probe B: X is held at B's scale while W is presented on B; a
     /// system change (A reconfigured) is a non-client stimulus and lowers X; when W's client ends
     /// the presentation (unset, unmap, destroy), X is revealed on B and is raised again (a rise
     /// is never refused).
@@ -4048,7 +4048,7 @@ mod tests {
         }
     }
 
-    /// C12.F13 (REHEARSAL), review probe F: a hold ends when it is no longer needed. X reaches
+    /// C12.F13, review probe F: a hold ends when it is no longer needed. X reaches
     /// into B (scale 2) by its own size; another client toggles fullscreen on B (set, unset);
     /// then X shrinks itself off B: its own geometry lowers its hint, as without the toggle.
     #[test]
@@ -4090,7 +4090,7 @@ mod tests {
         .unwrap()
     }
 
-    /// C12.F13 (REHEARSAL): the element's own evaluation ends a hold its requirement no longer
+    /// C12.F13: the element's own evaluation ends a hold its requirement no longer
     /// needs. X (300 px, seen by A and B) is held while W is presented on B; X grows onto D
     /// (scale 2): its requirement is back at its hint, the hold ends; X shrinks off D: its own
     /// geometry lowers it.
@@ -4117,7 +4117,7 @@ mod tests {
         assert_eq!(hints(&fx, x), vec![(120, 1)], "{fx:?}");
     }
 
-    /// C12.F13 (REHEARSAL): a subject's own fullscreen ends its hold. X (seen by A, E and B) is
+    /// C12.F13: a subject's own fullscreen ends its hold. X (seen by A, E and B) is
     /// held while W is presented on B; X goes fullscreen on A and back (a subject both times);
     /// then X shrinks off A, onto E alone (scale 0.75): its own geometry lowers it.
     #[test]
@@ -4151,7 +4151,7 @@ mod tests {
         assert_eq!(s120, 90, "{fx:?}");
     }
 
-    /// C12.F13 (REHEARSAL): P7 lowers a held window (the device bound is a correctness rule).
+    /// C12.F13: P7 lowers a held window (the device bound is a correctness rule).
     #[test]
     fn p7_lowers_a_held_window() {
         let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));

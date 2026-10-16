@@ -1,0 +1,7 @@
+{
+ "name": "C12.F13: the presentation-hold exception dropped from INV-SCALE-5",
+ "file": "FOUNDATION_INVARIANTS.md",
+ "find": ", except that an element held under C14.4 (another client's presentation) keeps a higher hint until a non-client stimulus that touches it",
+ "replace": "",
+ "expect": "inv-wording-mismatch"
+}

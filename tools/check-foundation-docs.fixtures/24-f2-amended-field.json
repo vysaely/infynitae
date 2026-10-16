@@ -1,7 +1,7 @@
 {
  "name": "formula amended by C12.F2 without naming the layer",
  "file": "FOUNDATION_ARCHITECTURE.md",
- "find": "- **Amended:** C12.E1R (E-F2-06); C12.F2 (H-1); previous definitions",
- "replace": "- **Amended:** C12.E1R (E-F2-06); previous definitions",
+ "find": "- **Amended:** C12.E1R (E-F2-06); C12.F2 (H-1); C12.F11 (OB-13); previous definitions",
+ "replace": "- **Amended:** C12.E1R (E-F2-06); C12.F11 (OB-13); previous definitions",
  "expect": "formula-provenance"
 }
