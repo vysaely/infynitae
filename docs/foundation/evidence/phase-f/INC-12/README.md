@@ -66,7 +66,11 @@ before and after every run.
    killed with SIGKILL: Xwayland goes with it, the X client's connection breaks ("X connection
    to :7 broken") and it exits 1; a satellite started again on the same two sockets serves a new
    client with the same `DISPLAY`, which runs and exits 0.
-4. **In `-listenfd` mode satellite logs to syslog** (`/dev/log`, the host journal) and falls
+4. **Xwayland probes the GPU's render node** (`/dev/dri/renderD*`) for glamor when it can see
+   it; in the first T1 run it could not query it (EACCES inside the user namespace) and fell
+   back to software. The T1 test now masks `/dev/dri` with a tmpfs and refuses to run if a node
+   is visible, so it touches no GPU device.
+5. **In `-listenfd` mode satellite logs to syslog** (`/dev/log`, the host journal) and falls
    back to stderr only when syslog is unreachable. Tests hide the journal socket inside the
    mount namespace; a real session would log to the journal.
 

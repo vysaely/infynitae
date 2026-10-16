@@ -6,7 +6,8 @@
 //! the journal's socket directory, and refuses to run unless `/tmp` is that private tmpfs. The X
 //! display, its lock file and both its sockets (the abstract one lives in the private network
 //! namespace) never touch the host's, so the desktop's own Xwayland is never seen or disturbed;
-//! satellite cannot reach the host's journal and logs to stderr.
+//! satellite cannot reach the host's journal and logs to stderr. `/dev/dri` is masked too, so
+//! Xwayland finds no GPU render node and renders in software: the test touches no GPU device.
 //!
 //! Ignored by default. Needs `INFYNITAE_XWAYLAND_SATELLITE` (the satellite binary), `unshare`,
 //! `mount` and `xmessage`; run with `--ignored`. The satellite (0.8.3) needs `wp_viewporter`
@@ -36,6 +37,7 @@ fn rerun_isolated() {
     let exe = std::env::current_exe().expect("test binary");
     let script = "mount -t tmpfs tmpfs /tmp && \
         { [ ! -d /run/systemd/journal ] || mount -t tmpfs tmpfs /run/systemd/journal; } && \
+        { [ ! -d /dev/dri ] || mount -t tmpfs tmpfs /dev/dri; } && \
         mkdir -m 700 /tmp/rt && exec \"$0\" \"$@\"";
     let status = Command::new("unshare")
         .args(["-Urnm", "--", "sh", "-c", script])
@@ -68,6 +70,10 @@ fn assert_isolated() {
     assert!(tmp_is_tmpfs, "refusing to run: /tmp is not private");
     assert_eq!(std::env::var("XDG_RUNTIME_DIR").as_deref(), Ok("/tmp/rt"));
     assert!(std::env::var_os("DISPLAY").is_none());
+    let dri = std::fs::read_dir("/dev/dri")
+        .map(|d| d.count())
+        .unwrap_or(0);
+    assert_eq!(dri, 0, "refusing to run: a GPU device node is visible");
 }
 
 struct Run {
