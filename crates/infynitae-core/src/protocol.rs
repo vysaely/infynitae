@@ -501,6 +501,25 @@ impl Core {
             .collect()
     }
 
+    /// B10.7 / INV-INPUT-9: an `xdg_activation_v1` request for `id`, whose token the adapter
+    /// has already validated by provenance (W-SM-8). Outcome (PROV-10, provisional; OB-40): an
+    /// element that may take keyboard focus — mapped and not hidden by a presentation
+    /// (INV-INPUT-8) — is focused, an activation grant; any other mapped element is marked for
+    /// attention, which only the shell renders; an element that is not mapped is ignored. It
+    /// never moves a camera or an anchor: nothing here can name one.
+    pub fn activation_request(&mut self, id: ElementId) -> Result<Vec<Effect>, ProtocolError> {
+        let state = self.stage.state(id).ok_or(ProtocolError::StaleElement)?;
+        if state != Lifecycle::Mapped {
+            return Ok(Vec::new());
+        }
+        let eligible = !self.hidden_by_presentation(id);
+        let mut fx = self.focus.activation(id, eligible);
+        if !fx.is_empty() {
+            fx.extend(self.reconcile_constraints());
+        }
+        Ok(fx)
+    }
+
     /// M2 / M9: a client's `xdg_toplevel` request. The policy, in one place:
     ///
     /// - `set_maximized` / `unset_maximized`: declined, one configure; `maximized` is never
@@ -3272,5 +3291,96 @@ mod tests {
         assert_eq!(a, CanvasPoint { x: 0, y: 0 });
         c.output_connected(&mut t, plain("A")).unwrap();
         assert_eq!(c.stage().anchor(id), Some(a));
+    }
+
+    /// The cameras and anchors: what an activation must never change (INV-INPUT-9, B10.7).
+    fn spatial_state(c: &Core) -> String {
+        let cams: Vec<_> = (0..c.cameras().len())
+            .map(|i| (c.cameras().center(i), c.cameras().zoom(i)))
+            .collect();
+        let anchors: Vec<_> = c
+            .stage()
+            .z_order()
+            .iter()
+            .map(|id| c.stage().anchor(*id))
+            .collect();
+        format!("{cams:?} {anchors:?}")
+    }
+
+    /// INC-12 / INV-INPUT-9 (PROV-10, provisional): a validated activation of a window that may
+    /// take focus is a focus grant: the focus moves, with its configures, and no camera or
+    /// anchor changes.
+    #[test]
+    fn an_activation_grants_focus_and_moves_nothing_spatial() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let a = map_win(&mut c, 1, 400, 300);
+        let w = map_win(&mut c, 2, 300, 200);
+        focus(&mut c, &mut i, a);
+        let before = spatial_state(&c);
+        let fx = c.activation_request(w).unwrap();
+        assert_eq!(c.focus().target(), Some(w));
+        assert!(fx.contains(&Effect::KeyboardFocus(Some(w))), "{fx:?}");
+        assert!(
+            fx.contains(&Effect::ToplevelConfigure(a)),
+            "a loses `activated`"
+        );
+        assert_eq!(spatial_state(&c), before);
+        assert!(c.focus().attention().is_empty());
+        assert!(
+            c.activation_request(w).unwrap().is_empty(),
+            "already focused: nothing"
+        );
+    }
+
+    /// INC-12 / INV-INPUT-8 + INV-INPUT-9: a window hidden by a presentation may not take focus
+    /// (A-8), so its activation asks for attention instead; focus stays; the attention ends when
+    /// the window gets focus by an explicit action.
+    #[test]
+    fn an_activation_of_a_hidden_window_asks_for_attention() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(a) })
+            .unwrap();
+        assert!(c.hidden_by_presentation(x));
+        let before = spatial_state(&c);
+        let fx = c.activation_request(x).unwrap();
+        assert!(fx.is_empty(), "{fx:?}");
+        assert_eq!(c.focus().target(), Some(w), "focus stays");
+        assert_eq!(c.focus().attention(), [x]);
+        assert!(c.activation_request(x).unwrap().is_empty());
+        assert_eq!(c.focus().attention(), [x], "marked once");
+        assert_eq!(spatial_state(&c), before);
+        c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        focus(&mut c, &mut i, x);
+        assert!(c.focus().attention().is_empty(), "focused: no attention");
+    }
+
+    /// INC-12: an activation of an element that is not mapped is ignored; of a destroyed one,
+    /// refused as stale; an element that asked for attention and is destroyed leaves no trace.
+    #[test]
+    fn an_activation_of_an_unmapped_or_destroyed_window_changes_nothing() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let w = map_win(&mut c, 1, 400, 300);
+        let u = c.toplevel_created();
+        assert!(c.activation_request(u).unwrap().is_empty(), "not mapped");
+        assert_eq!(c.focus().target(), None);
+        let x = map_win(&mut c, 9, 300, 200);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(a) })
+            .unwrap();
+        c.activation_request(x).unwrap();
+        assert_eq!(c.focus().attention(), [x]);
+        c.toplevel_destroyed(x);
+        assert!(
+            c.focus().attention().is_empty(),
+            "no attention for the dead"
+        );
+        assert_eq!(c.activation_request(x), Err(ProtocolError::StaleElement));
     }
 }

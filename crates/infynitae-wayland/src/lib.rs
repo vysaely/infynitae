@@ -40,6 +40,7 @@ use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
+use smithay::wayland::xdg_activation::XdgActivationState;
 
 /// `clk_id` announced by `wp_presentation`: CLOCK_MONOTONIC on Linux. Frame times handed to
 /// `complete_frames` are on this clock.
@@ -112,6 +113,8 @@ pub struct WaylandState {
         reason = "owns the zwp_relative_pointer_manager_v1 global for the state's lifetime"
     )]
     relative_pointer: RelativePointerManagerState,
+    /// `xdg_activation_v1` (B10.7, INV-INPUT-9, W-SM-8; INC-12).
+    activation: XdgActivationState,
     registry: SurfaceRegistry,
     elements: Vec<ElementHandle>,
     pub(crate) serial_outputs:
@@ -165,6 +168,7 @@ impl WaylandState {
             ordered_preemption_strategy: keyboard::PreemptionStrategy::Ordered,
             pointer_constraints: PointerConstraintsState::new::<Self>(display),
             relative_pointer: RelativePointerManagerState::new::<Self>(display),
+            activation: XdgActivationState::new::<Self>(display),
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),

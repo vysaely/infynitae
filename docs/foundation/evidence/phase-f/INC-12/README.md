@@ -41,9 +41,24 @@ no interference with KDE's Xwayland; no X11 path activated in the live session).
 - Nothing reaches Core: the satellite is an ordinary Wayland client; its windows are ordinary
   elements, placed by Core's placement policy.
 
+- **Activation (INC-12 objective "activation"; B10.7; INV-INPUT-9; W-SM-8):** the adapter offers
+  `xdg_activation_v1` (satellite used to warn "Could not bind xdg activation"). Smithay accepts
+  every token by default; the adapter keeps a token only if it was created with a serial of the
+  seat no older than the keyboard's last focus `enter` (the requesting client held the focus or
+  received input since), refuses a token without a serial, uses a token once and lets it expire
+  after 10 s (provisional). A valid activation enters Core through
+  `Core::activation_request(element)`, which has no camera vocabulary. **Outcome policy
+  (PROV-10, provisional; OB-40 stays open):** a mapped element that may take focus (not hidden
+  by a presentation, INV-INPUT-8 / A-8) is focused, an activation grant; any other mapped
+  element is added to FocusModel's attention set (designed in C2, now implemented; no client
+  sees it, the shell will render it); an unmapped element is ignored. The attention set loses an
+  element when it gets focus or dies.
+
 **Not implemented:** M19's "first X11 connection" trigger (the satellite starts at startup);
-`xdg_activation_v1` and primary selection (OB-27, T3); override-redirect menus (OB-9, needs a
-GTK3/X11 run).
+primary selection (OB-27, T3); override-redirect menus (OB-9, needs a GTK3/X11 run); any shell
+rendering of attention (Level D). **Gap found, outside the sealed scope:** the compositor offers
+no `wl_data_device_manager`, so no client has a clipboard or drag-and-drop (satellite warns
+"Clipboard will not work"). No increment of the plan owns it; it needs an owner decision.
 
 ## Findings from the isolated experiments (2026-10-16)
 
@@ -86,6 +101,12 @@ before and after every run.
 | `…::shutdown_ends_the_satellite_and_the_display_files_go` | T0 | SIGTERM/SIGKILL, reaped, files removed | — |
 | `session::tests::a_client_command_sets_or_removes_display` | T0 | the session's `DISPLAY` or none, independent of the test's own environment | "INV-XWAYLAND-1: a session client inherits the compositor's own DISPLAY" |
 | `session::tests::a_session_client_gets_the_sessions_x_display_or_none` | T0 | the same through a real spawned client | — |
+| `protocol::tests::an_activation_grants_focus_and_moves_nothing_spatial` | T0 | a grant moves the focus (configures, `KeyboardFocus`) and no camera or anchor | "INV-INPUT-9: a valid activation never grants focus" |
+| `protocol::tests::an_activation_of_a_hidden_window_asks_for_attention` | T0 | hidden by a presentation: attention, focus stays, marked once; attention ends at focus | "INV-INPUT-8 (A-8): an activation focuses a window a presentation hides" |
+| `protocol::tests::an_activation_of_an_unmapped_or_destroyed_window_changes_nothing` | T0 | unmapped ignored, destroyed stale, attention dies with the element | "INV-INPUT-9: attention outlives its element" |
+| `t1_activation::a_token_from_the_focused_client_activates_a_window` | T1 | a token with the focused client's enter serial activates V; no camera moves; a token is used once | "B10.7: an activation token can be used again" |
+| `t1_activation::a_token_without_a_serial_activates_nothing` | T1 | W-SM-8 | "W-SM-8: a token without a serial is accepted" |
+| `t1_activation::a_token_with_a_serial_older_than_the_last_focus_change_activates_nothing` | T1 | W-SM-8 | "W-SM-8: a serial older than the last focus enter is accepted" |
 | `t1_xwayland_satellite::a_satellite_restarts_on_the_same_display_and_its_clients_die_with_it` | **T1, ignored by default** (needs the satellite binary, `unshare`, `mount`, `xmessage`) | real satellite + Xwayland + `xmessage` against the production session, Core, adapter and headless backend, isolated: the X window maps as an element with an anchor; SIGKILL of the satellite destroys it through client death and the X client exits non-zero; the restarted satellite serves the same `DISPLAY` and a new client maps | — |
 
 The T1 test fails on this branch at its first step (the satellite exits until Degraded: no
@@ -100,5 +121,6 @@ INFYNITAE_XWAYLAND_SATELLITE=<path to xwayland-satellite> \
 ## Not run
 
 Any nested (winit) or real session with the satellite; the live desktop was never given an X
-display by this work. No GPU. OB-9 and OB-27 untouched. OB-33 stays OPEN until the owner accepts
+display by this work. No GPU. OB-9 untouched; OB-27's activation part implemented and tested at
+T0/T1 only (its destination is T3 with real toolkits); OB-40 (the outcome policy) open. OB-33 stays OPEN until the owner accepts
 the T1 run on the integrated line.

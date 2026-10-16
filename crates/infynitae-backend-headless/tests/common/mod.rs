@@ -52,6 +52,10 @@ use wayland_protocols::wp::relative_pointer::zv1::client::{
     zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1,
     zwp_relative_pointer_v1::{self, ZwpRelativePointerV1},
 };
+use wayland_protocols::xdg::activation::v1::client::{
+    xdg_activation_token_v1::{self, XdgActivationTokenV1},
+    xdg_activation_v1::XdgActivationV1,
+};
 use wayland_protocols::xdg::shell::client::{
     xdg_popup::{self, XdgPopup},
     xdg_positioner::{self, XdgPositioner},
@@ -107,6 +111,8 @@ pub struct KbLogical {
 #[derive(Default)]
 pub struct Probe {
     globals: Vec<(u32, String, u32)>,
+    /// The `xdg_activation_token_v1.done` tokens received, in order.
+    pub activation_tokens: Vec<String>,
     /// Ordered wire log of output-related events (the independent oracle for wire order):
     /// "global wl_output N", "global_remove N", "N: mode WxH@R", "N: scale S", "N: geometry
     /// transform T", "N: done", "N: xdg position X,Y", "N: xdg size W,H", "enter S N",
@@ -1244,6 +1250,22 @@ impl Dispatch<ZwpConfinedPointerV1, ()> for Probe {
 delegate_noop!(Probe: ignore ZwpPointerConstraintsV1);
 delegate_noop!(Probe: ignore ZwpRelativePointerManagerV1);
 delegate_noop!(Probe: ignore WlCompositor);
+delegate_noop!(Probe: ignore XdgActivationV1);
+
+impl Dispatch<XdgActivationTokenV1, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &XdgActivationTokenV1,
+        ev: xdg_activation_token_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let xdg_activation_token_v1::Event::Done { token } = ev {
+            st.activation_tokens.push(token);
+        }
+    }
+}
 delegate_noop!(Probe: ignore WlSubcompositor);
 delegate_noop!(Probe: ignore WlShm);
 delegate_noop!(Probe: ignore WlShmPool);
@@ -1405,6 +1427,18 @@ impl Lockstep {
         self.probe.pointer = Some(pointer);
         self.probe.keyboard = Some(keyboard);
         self.pump();
+    }
+
+    /// Binds `xdg_activation_v1` (INC-12).
+    pub fn activation(&mut self) -> XdgActivationV1 {
+        let (n, _, _) = self
+            .probe
+            .globals
+            .iter()
+            .find(|(_, i, _)| i == "xdg_activation_v1")
+            .expect("xdg_activation_v1 is offered")
+            .clone();
+        self.registry.bind(n, 1, &self.qh, ())
     }
 
     /// Exchanges messages until both sides are quiescent.

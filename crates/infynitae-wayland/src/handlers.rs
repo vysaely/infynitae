@@ -24,9 +24,13 @@ use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
+use smithay::wayland::xdg_activation::{
+    XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
+};
 use smithay::{
     delegate_compositor, delegate_output, delegate_pointer_constraints, delegate_presentation,
-    delegate_relative_pointer, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_relative_pointer, delegate_seat, delegate_shm, delegate_xdg_activation,
+    delegate_xdg_shell,
 };
 
 use crate::{ClientState, ElementHandle, WaylandState, convert, snapshot};
@@ -513,6 +517,53 @@ delegate_relative_pointer!(WaylandState);
 delegate_seat!(WaylandState);
 delegate_shm!(WaylandState);
 delegate_xdg_shell!(WaylandState);
+delegate_xdg_activation!(WaylandState);
+
+/// How long an activation token stays usable after it was created (provisional; B10.7).
+const ACTIVATION_TOKEN_LIFETIME: std::time::Duration = std::time::Duration::from_secs(10);
+
+impl XdgActivationHandler for WaylandState {
+    fn activation_state(&mut self) -> &mut XdgActivationState {
+        &mut self.activation
+    }
+
+    /// W-SM-8 (INV-INPUT-9): Smithay accepts every token by default. Here a token is kept only
+    /// if it was created with a serial of this seat that is no older than the keyboard's last
+    /// focus `enter`: the requesting client held the keyboard focus, or received input since,
+    /// when its user acted. A token without a serial is refused.
+    fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
+        let Some((serial, seat)) = data.serial else {
+            return false;
+        };
+        let ours = smithay::input::Seat::<WaylandState>::from_resource(&seat)
+            .is_some_and(|s| s == self.seat);
+        ours && self
+            .keyboard_handle()
+            .last_enter()
+            .is_some_and(|last| serial.is_no_older_than(&last))
+    }
+
+    /// B10.7: a validated, unexpired token activates the element whose toplevel `surface` is;
+    /// Core decides between focus and attention (INV-INPUT-9). A token is used once.
+    fn request_activation(
+        &mut self,
+        token: XdgActivationToken,
+        token_data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
+        self.activation.remove_token(&token);
+        if token_data.timestamp.elapsed() > ACTIVATION_TOKEN_LIFETIME {
+            return;
+        }
+        let Some(i) = self.element_index_by_root(&surface) else {
+            return;
+        };
+        let id = self.elements[i].id;
+        if let Ok(effects) = self.core.activation_request(id) {
+            self.apply(&effects);
+        }
+    }
+}
 
 impl PointerConstraintsHandler for WaylandState {
     fn new_constraint(
