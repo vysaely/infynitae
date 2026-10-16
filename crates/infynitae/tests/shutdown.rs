@@ -110,6 +110,18 @@ impl Run {
     }
 }
 
+/// A test that fails (or a seeded defect) must not leave its compositor running: it is killed
+/// and reaped when the handle goes, whatever happened (its own children end with it or, at the
+/// latest, with their `sleep`).
+impl Drop for Run {
+    fn drop(&mut self) {
+        if matches!(self.compositor.try_wait(), Ok(None)) {
+            let _ = self.compositor.kill();
+            let _ = self.compositor.wait();
+        }
+    }
+}
+
 const SLEEPER: &str = "echo $$ > $PIDF\nexec sleep 30 </dev/null >/dev/null 2>&1";
 
 fn clean_shutdown(signal: &str) {
