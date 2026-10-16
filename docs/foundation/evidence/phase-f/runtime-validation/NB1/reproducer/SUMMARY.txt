@@ -1,0 +1,37 @@
+# One line per reproducer run (repro.sh). exit_at/term_at are seconds from start; a STALL run was killed by the watchdog and has no end time, so its exit_at is meaningless (negative). verdict STALL = still running when the watchdog (30 s, or 60 s for cmp-*) fired.
+cmp-nb1-r2fix-noterm-1 | verdict ok exit=0 exit_at=15.56s term_at=-1792192278.36s minimised=2 last_frame_done=23:11:28.144003 left=0
+cmp-nb1-r2fix-noterm-2 | verdict ok exit=0 exit_at=15.56s term_at=-1792192356.42s minimised=2 last_frame_done=23:12:39.471139 left=0
+cmp-nb1-r2fix-noterm-3 | verdict ok exit=0 exit_at=15.55s term_at=-1792192434.5s minimised=2 last_frame_done=23:13:57.545284 left=0
+cmp-nb1-r2fix-term-1 | verdict ok exit=0 exit_at=8.52s term_at=8.0s minimised=2 last_frame_done=23:06:07.669802 left=0
+cmp-nb1-r2fix-term-2 | verdict ok exit=0 exit_at=8.52s term_at=8.0s minimised=2 last_frame_done=23:07:17.739081 left=0
+cmp-nb1-r2fix-term-3 | verdict ok exit=0 exit_at=8.52s term_at=8.0s minimised=2 last_frame_done=23:08:28.787676 left=0
+cmp-nb1-r2fix-term-4 | verdict ok exit=0 exit_at=8.52s term_at=8.0s minimised=2 last_frame_done=23:09:39.860397 left=0
+cmp-nb1-r2fix-term-5 | verdict ok exit=0 exit_at=8.52s term_at=8.0s minimised=2 last_frame_done=23:10:50.915853 left=0
+cmp-nb1-r2-noterm-1 | verdict ok exit=0 exit_at=20.93s term_at=-1792192257.11s minimised=2 last_frame_done=23:11:17.477214 left=0
+cmp-nb1-r2-noterm-2 | verdict STALL  exit_at=-1792192294.61s term_at=-1792192294.61s minimised=2 last_frame_done=23:11:44.436767 left=0
+cmp-nb1-r2-noterm-3 | verdict STALL  exit_at=-1792192372.67s term_at=-1792192372.67s minimised=2 last_frame_done=23:12:55.711356 left=0
+cmp-nb1-r2-term-1 | verdict STALL  exit_at=-1792191902.72s term_at=8.0s minimised=2 last_frame_done=23:05:05.761848 left=0
+cmp-nb1-r2-term-2 | verdict STALL  exit_at=-1792191973.86s term_at=8.0s minimised=2 last_frame_done=23:06:16.900173 left=0
+cmp-nb1-r2-term-3 | verdict STALL  exit_at=-1792192043.93s term_at=8.0s minimised=2 last_frame_done=23:07:26.995196 left=0
+cmp-nb1-r2-term-4 | verdict STALL  exit_at=-1792192114.98s term_at=8.0s minimised=2 last_frame_done=23:08:38.016449 left=0
+cmp-nb1-r2-term-5 | verdict STALL  exit_at=-1792192186.05s term_at=8.0s minimised=2 last_frame_done=23:09:49.094479 left=0
+nb1-fix-ctl-1 | verdict ok exit=143 exit_at=8.01s term_at=8.0s minimised=1 last_frame_done=23:03:41.839533 left=0
+nb1-fix-min-1 | verdict ok exit=143 exit_at=8.01s term_at=8.0s minimised=2 last_frame_done=23:02:55.688208 left=0
+nb1-fix-min-2 | verdict ok exit=143 exit_at=8.01s term_at=8.0s minimised=2 last_frame_done=23:03:12.146185 left=0
+nb1-fix-min-3 | verdict ok exit=143 exit_at=8.01s term_at=8.0s minimised=2 last_frame_done=23:03:20.386593 left=0
+nb1-fix-min-4 | verdict ok exit=143 exit_at=8.01s term_at=8.0s minimised=2 last_frame_done=23:03:28.674336 left=0
+nb1-fix-minnoterm-1 | verdict ok exit=0 exit_at=15.58s term_at=-1792191830.33s minimised=2 last_frame_done=23:03:53.381502 left=0
+nb1-main-ctl-1 | verdict ok exit=143 exit_at=8.01s term_at=8.0s minimised=1 last_frame_done=23:03:50.101022 left=0
+nb1-main-min-1 | verdict ok exit=143 exit_at=8.01s term_at=8.0s minimised=2 last_frame_done=23:02:47.433092 left=0
+nb1-main-min-2 | verdict ok exit=143 exit_at=8.01s term_at=8.0s minimised=2 last_frame_done=23:03:03.915194 left=0
+nb1-main-minnoterm-1 | verdict ok exit=0 exit_at=21.61s term_at=-1792191846.57s minimised=2 last_frame_done=23:04:27.626227 left=0
+nb1-r1-ctl-1 | verdict ok exit=0 exit_at=8.51s term_at=8.0s minimised=1 last_frame_done=23:00:00.142624 left=0
+nb1-r1-min-1 | verdict STALL  exit_at=-1792191465.0s term_at=8.0s minimised=2 last_frame_done=22:57:48.035699 left=0
+nb1-r1-min-2 | verdict STALL  exit_at=-1792191528.57s term_at=8.0s minimised=2 last_frame_done=22:58:53.950431 left=0
+nb1-r2-ctl-1 | verdict ok exit=0 exit_at=8.51s term_at=8.0s minimised=1 last_frame_done=23:00:09.379952 left=0
+nb1-r2-min-1 | verdict STALL  exit_at=-1792191496.79s term_at=8.0s minimised=2 last_frame_done=22:58:19.838102 left=0
+nb1-r2-min-2 | verdict STALL  exit_at=-1792191560.36s term_at=8.0s minimised=2 last_frame_done=22:59:23.413056 left=0
+vis-nb1-r2-1 | verdict ok exit=0 exit_at=8.51s term_at=8.0s minimised=1 last_frame_done=23:14:31.820673 left=0
+vis-nb1-r2-2 | verdict ok exit=0 exit_at=8.52s term_at=8.0s minimised=1 last_frame_done=23:14:50.305708 left=0
+vis-nb1-r2fix-1 | verdict ok exit=0 exit_at=8.52s term_at=8.0s minimised=1 last_frame_done=23:14:41.058927 left=0
+vis-nb1-r2fix-2 | verdict ok exit=0 exit_at=8.52s term_at=8.0s minimised=1 last_frame_done=23:14:59.552712 left=0

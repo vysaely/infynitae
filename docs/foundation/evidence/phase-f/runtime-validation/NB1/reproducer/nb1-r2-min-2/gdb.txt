@@ -1,0 +1,63 @@
+[New LWP 1971718 (id 2)]
+[New LWP 1971716 (id 3)]
+[New LWP 1971715 (id 4)]
+[New LWP 1971714 (id 5)]
+[New LWP 1971713 (id 6)]
+[New LWP 1971712 (id 7)]
+[New LWP 1971711 (id 8)]
+[New LWP 1971710 (id 9)]
+[New LWP 1971709 (id 10)]
+[New LWP 1971708 (id 11)]
+[New LWP 1971707 (id 12)]
+[New LWP 1971706 (id 13)]
+[New LWP 1971705 (id 14)]
+[New LWP 1971704 (id 15)]
+[New LWP 1971703 (id 16)]
+[New LWP 1971702 (id 17)]
+[New LWP 1971701 (id 18)]
+[New LWP 1971700 (id 19)]
+[New LWP 1971699 (id 20)]
+[New LWP 1971698 (id 21)]
+[New LWP 1971697 (id 22)]
+[New LWP 1971696 (id 23)]
+[New LWP 1971695 (id 24)]
+[New LWP 1971694 (id 25)]
+[New LWP 1971693 (id 26)]
+[New LWP 1971692 (id 27)]
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.archlinux.org>
+  <https://debuginfod.cachyos.org>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+
+warning: Target and debugger are in different PID namespaces; thread lists and other data are likely unreliable.  Connect to gdbserver inside the container.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/libthread_db.so.1".
+[Switching to thread 1 (Thread 0x7f058f370580 (LWP 1971690))]
+0x00007f058f0b6132 in ?? () from target:/usr/lib/libc.so.6
+[Switching to thread 1 (Thread 0x7f058f370580 (LWP 1971690))]
+#0  0x00007f058f0b6132 in ?? () from target:/usr/lib/libc.so.6
+#0  0x00007f058f0b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007f058f13c8f2 in ppoll () from target:/usr/lib/libc.so.6
+#2  0x00007f058f35aa9f in ?? () from target:/usr/lib/libwayland-client.so.0
+#3  0x00007f058f3619fe in wl_display_dispatch_queue_timeout () from target:/usr/lib/libwayland-client.so.0
+#4  0x00007f058f361b20 in wl_display_dispatch_queue () from target:/usr/lib/libwayland-client.so.0
+#5  0x00007f058f2fba89 in ?? () from target:/usr/lib/libEGL_mesa.so.0
+#6  0x00007f058f2f48ae in ?? () from target:/usr/lib/libEGL_mesa.so.0
+#7  0x00007f058f2f4a88 in ?? () from target:/usr/lib/libEGL_mesa.so.0
+#8  0x00007f058f2eb26d in ?? () from target:/usr/lib/libEGL_mesa.so.0
+#9  0x00007f058f2db1a2 in ?? () from target:/usr/lib/libEGL_mesa.so.0
+#10 0x000056148852641e in smithay::backend::egl::ffi::egl::SwapBuffersWithDamageKHR (dpy=0x56148fddd0f0, surface=0x56149191e5c0, rects=0x5614926368b0, n_rects=1) at /home/vysaely/.cache/infynitae-integration/nb1-r2-target/debug/build/smithay-f2f0e6f7cb8aa325/out/egl_bindings.rs:494
+#11 0x0000561488573318 in smithay::backend::egl::native::EGLNativeSurface::swap_buffers::{closure#0}<wayland_egl::WlEglSurface> () at vendor/smithay-0.7.0/src/backend/egl/native.rs:336
+#12 0x00005614885def1c in smithay::backend::egl::error::wrap_egl_call<u32, smithay::backend::egl::native::EGLNativeSurface::swap_buffers::{closure_env#0}<wayland_egl::WlEglSurface>> (call=..., err=0) at vendor/smithay-0.7.0/src/backend/egl/error.rs:164
+#13 0x00005614885df1a3 in smithay::backend::egl::error::wrap_egl_call_bool<smithay::backend::egl::native::EGLNativeSurface::swap_buffers::{closure_env#0}<wayland_egl::WlEglSurface>> (call=...) at vendor/smithay-0.7.0/src/backend/egl/error.rs:196
+#14 0x000056148853ea91 in smithay::backend::egl::native::EGLNativeSurface::swap_buffers<wayland_egl::WlEglSurface> (self=0x56149191ea50, display=0x7ffcce79d298, surface=0x56149191e5c0, damage=..., damage_impl=smithay::backend::egl::display::DamageSupport::KHR) at vendor/smithay-0.7.0/src/backend/egl/native.rs:333
+#15 0x00005614888f5a8d in smithay::backend::egl::surface::{impl#2}::swap_buffers::{closure#0} () at vendor/smithay-0.7.0/src/backend/egl/surface.rs:170
+#16 0x000056148897f797 in smithay::backend::egl::surface::EGLSurface::swap_buffers (self=0x7ffcce79d270, damage=...) at vendor/smithay-0.7.0/src/backend/egl/surface.rs:160
+#17 0x0000561488533220 in smithay::backend::winit::WinitGraphicsBackend<smithay::backend::renderer::gles::GlesRenderer>::submit<smithay::backend::renderer::gles::GlesRenderer> (self=0x7ffcce79b980, damage=...) at vendor/smithay-0.7.0/src/backend/winit/mod.rs:351
+#18 0x00005614884f7f02 in infynitae_backend_winit::render_and_present (data=0x7ffcce79b0e0) at crates/infynitae-backend-winit/src/lib.rs:469
+#19 0x00005614884f693f in infynitae_backend_winit::run_nested (core=..., input_port=..., output_token=..., options=...) at crates/infynitae-backend-winit/src/lib.rs:258
+#20 0x00005614884f1a86 in infynitae::main () at crates/infynitae/src/main.rs:233
+[Inferior 1 (process 1971690) detached]

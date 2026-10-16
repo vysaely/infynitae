@@ -1,0 +1,4 @@
+binary ../nested-logs/infynitae-nrt3 5a8d90fd25a0540d mode nested start 2026-10-17T01:39:04+03:00 load 6.76 4.31 3.06
+unshare 1586316 init 1586320
+STALL at 2026-10-17T01:40:05+03:00 compositor=1586329 elapsed=61s
+verdict STALL elapsed 63s results 14 left_compositors 0 end 2026-10-17T01:40:07+03:00
