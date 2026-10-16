@@ -105,7 +105,11 @@ struct Member {
 /// listed parent (a pid recycled in between has another parent and is skipped).
 fn members(roots: &[i32]) -> Vec<Member> {
     let me = getpid().as_raw_nonzero().get();
-    let owned = OWNED.lock().unwrap().clone();
+    // Held while the direct children are listed and filtered: a `spawn_owned` on another thread
+    // is then entirely before this scan (its child registered) or after it (its child not yet
+    // listed); copying the registry first would let a child spawned in between pass as an
+    // adopted orphan.
+    let owned = OWNED.lock().unwrap();
     let mut out = Vec::new();
     let mut parents = Vec::new();
     for pid in children_of(me) {
@@ -123,6 +127,7 @@ fn members(roots: &[i32]) -> Vec<Member> {
             parents.push(pid);
         }
     }
+    drop(owned);
     while let Some(parent) = parents.pop() {
         for pid in children_of(parent) {
             let Some(p) = Pid::from_raw(pid) else {
