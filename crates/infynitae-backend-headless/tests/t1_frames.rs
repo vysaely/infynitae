@@ -549,3 +549,64 @@ fn repeated_visibility_transitions_neither_starve_nor_duplicate() {
         );
     }
 }
+
+/// Multiple outputs (INC-8 ratification review): another output's vblanks never complete a
+/// window that output does not observe. W is observed by A only (B, 144 Hz, looks far away);
+/// A is disconnected: W is unobserved while B keeps ticking; W's callback is withheld through
+/// B's vblanks and completes once, by the fallback, P after its last completion.
+#[test]
+fn another_outputs_vblanks_do_not_clock_an_unobserved_window() {
+    use common::output_k;
+    use infynitae_core::geom::CanvasPos;
+    use infynitae_core::navigation::PersistedCameras;
+    let b_far = PersistedCameras::from_entries(vec![(
+        infynitae_backend_headless::VirtualOutput::key("B"),
+        CanvasPos {
+            x: 100_000 << 16,
+            y: 0,
+        },
+        1.0,
+    )])
+    .unwrap();
+    let mut r = Rig::new(Lockstep::with(
+        b_far,
+        &[a_1080(), output_k("B", (1920, 1080), 120, 144_000)],
+    ));
+    r.map_w();
+    let w =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
+    let e = r.ls.state.elements().next().unwrap();
+    let a = r.ls.state.core().outputs()[0].id;
+    let b = r.ls.state.core().outputs()[1].id;
+    assert_eq!(
+        r.ls.state.core().membership().observers(e),
+        vec![a],
+        "A only"
+    );
+    let mut f = F { r, w, e };
+    f.r.frame();
+    f.r.ls.disconnect(a);
+    assert!(!f.observed(), "no output observes W; B still runs");
+    assert!(f.r.ls.state.core().output(b).is_some());
+    let before = f.frames_w().len();
+    let last = f.frames_w().last().copied().unwrap_or_default();
+    f.request();
+    let t0 = f.now();
+    f.run(P / 2);
+    assert_eq!(
+        f.frames_w().len(),
+        before,
+        "B's vblanks complete nothing of W"
+    );
+    f.run(2 * P);
+    let new = f.frames_w()[before..].to_vec();
+    assert_eq!(new.len(), 1, "once: {new:?}");
+    assert!(
+        new[0] >= t0 && new[0] <= last.max(t0) + P,
+        "{new:?} t0 {t0:?}"
+    );
+}
