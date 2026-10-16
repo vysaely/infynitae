@@ -60,7 +60,7 @@ ALLOWED_INTERNAL = {
 # plus a serialization crate once the protocol exists); smithay only in adapter and backends.
 ALLOWED_EXTERNAL = {
     CORE: set(),
-    WAYLAND: {"smithay"},
+    WAYLAND: {"smithay", "signal-hook"},  # PROPOSAL (not approved): signal-hook for SIGTERM/SIGINT
     HEADLESS: {"smithay"},
     WINIT: {"smithay"},
     IPC: set(),

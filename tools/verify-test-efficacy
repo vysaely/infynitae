@@ -859,6 +859,13 @@ CONTROLS = [
      f"{WAYLAND}/session.rs",
      "            match kill_process(pid, Signal::TERM) {", "            match kill_process(pid, Signal::CONT) {",
      "infynitae-wayland", ["--lib"], "a_running_child_exits_on_sigterm_within_the_grace_period"),
+    # ---- orderly shutdown (2026-10-16): SIGTERM/SIGINT end the loop; children see no blocked mask
+    ("shutdown: SIGINT is not handled (the default action kills the compositor)", f"{WAYLAND}/session.rs",
+     "            signal_hook::low_level::pipe::register(SIGINT, notify)?,\n", "            signal_hook::low_level::pipe::register(SIGTERM, notify)?,\n",
+     "infynitae", ["--test", "shutdown"], "sigint_shuts_down_cleanly"),
+    ("shutdown: a signal does not end the loop", f"{WAYLAND}/session.rs",
+     "                    flag.set(true);\n", "                    let _ = &flag;\n",
+     "infynitae", ["--test", "shutdown"], "sigterm_shuts_down_cleanly"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

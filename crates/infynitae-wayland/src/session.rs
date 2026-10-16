@@ -9,11 +9,15 @@
 
 use std::cell::Cell;
 use std::error::Error;
+use std::io::Read;
+use std::os::unix::net::UnixStream;
 use std::process::{Child, Command};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use signal_hook::SigId;
+use signal_hook::consts::{SIGINT, SIGTERM};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction};
 use smithay::reexports::rustix::io::Errno;
@@ -118,6 +122,10 @@ pub struct Session {
     /// The display became readable since the last dispatch: a request arrived or a client
     /// went away.
     display_ready: Rc<Cell<bool>>,
+    /// SIGTERM or SIGINT arrived.
+    terminated: Rc<Cell<bool>>,
+    /// The handlers writing to the self-pipe; removed (the signals then ignored) on drop.
+    signal_ids: Vec<SigId>,
 }
 
 impl Session {
@@ -129,6 +137,33 @@ impl Session {
         handle: &LoopHandle<'_, D>,
         options: &SessionOptions,
     ) -> Result<Session, Box<dyn Error>> {
+        // SIGTERM and SIGINT, first: from here on they only end the loop (the caller then shuts
+        // down as for a run limit), so no signal can leave a socket behind half-way through
+        // start-up. A handler writes a byte to a self-pipe the loop watches; no signal is
+        // blocked, so the session's children inherit no blocked mask and the SIGTERM sent to
+        // them at shutdown reaches them (`session_children_do_not_inherit_blocked_signals`).
+        // Further signals only write again; once the session is dropped they are ignored, so a
+        // second signal never interrupts the teardown (`repeated_signals_shut_down_once`).
+        let terminated = Rc::new(Cell::new(false));
+        let flag = terminated.clone();
+        let (mut wake, notify) = UnixStream::pair()?;
+        wake.set_nonblocking(true)?;
+        let signal_ids = vec![
+            signal_hook::low_level::pipe::register(SIGTERM, notify.try_clone()?)?,
+            signal_hook::low_level::pipe::register(SIGINT, notify)?,
+        ];
+        let wake_fd = wake.try_clone()?;
+        handle
+            .insert_source(
+                Generic::new(wake_fd, Interest::READ, Mode::Level),
+                move |_, _, _| {
+                    let mut drain = [0u8; 64];
+                    while matches!(wake.read(&mut drain), Ok(n) if n > 0) {}
+                    flag.set(true);
+                    Ok(PostAction::Continue)
+                },
+            )
+            .map_err(|e| format!("Failed to register signal source: {e}"))?;
         let socket = match options.socket_name.as_deref() {
             Some(name) => ListeningSocketSource::with_name(name)?,
             None => ListeningSocketSource::new_auto()?,
@@ -168,6 +203,8 @@ impl Session {
             duration: options.duration,
             max_frames: options.max_frames,
             display_ready,
+            terminated,
+            signal_ids,
         };
         if let Some(cmd) = &options.exec {
             session.spawn(handle, cmd);
@@ -279,9 +316,10 @@ impl Session {
         let _ = self.display.flush_clients();
     }
 
-    /// Whether a run limit has been reached.
+    /// Whether a run limit has been reached or a termination signal arrived.
     pub fn finished(&self) -> bool {
-        self.duration.is_some_and(|d| self.started.elapsed() >= d)
+        self.terminated.get()
+            || self.duration.is_some_and(|d| self.started.elapsed() >= d)
             || self.max_frames.is_some_and(|n| self.frames >= n)
     }
 
@@ -289,6 +327,14 @@ impl Session {
     pub fn shutdown(&mut self) {
         terminate_children(&mut self.children, CHILD_GRACE);
         self.flush();
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        for id in self.signal_ids.drain(..) {
+            signal_hook::low_level::unregister(id);
+        }
     }
 }
 
