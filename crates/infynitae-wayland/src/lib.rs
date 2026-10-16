@@ -23,6 +23,7 @@ mod pointer;
 pub mod registry;
 pub mod session;
 mod snapshot;
+pub mod xwayland;
 
 pub use keyboard::PreemptionStrategy;
 

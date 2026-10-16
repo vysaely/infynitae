@@ -859,6 +859,27 @@ CONTROLS = [
      f"{WAYLAND}/session.rs",
      "            match kill_process(pid, Signal::TERM) {", "            match kill_process(pid, Signal::CONT) {",
      "infynitae-wayland", ["--lib"], "a_running_child_exits_on_sigterm_within_the_grace_period"),
+    # ---- INC-12 (experimental): the xwayland-satellite supervisor (M19, OB-33, INV-XWAYLAND-1)
+    ("M19: the satellite is not given the display's listening sockets", f"{WAYLAND}/xwayland.rs",
+     "            .args([\"-listenfd\", &fds[1].as_raw_fd().to_string()])\n",
+     "",
+     "infynitae-wayland", ["--lib"], "the_satellite_is_given_the_display_the_sockets_and_the_session"),
+    ("M19 / OB-33: an exited satellite is never started again", f"{WAYLAND}/xwayland.rs",
+     "                self.restart_at = Some(now + self.policy.backoff);\n",
+     "                self.restart_at = None;\n",
+     "infynitae-wayland", ["--lib"], "an_exited_satellite_restarts_on_the_same_display_until_it_exits_too_often"),
+    ("M19 / INV-FAIL-1: repeated exits never end in Degraded", f"{WAYLAND}/xwayland.rs",
+     "            if self.exits.len() >= self.policy.max_exits {\n",
+     "            if false && self.exits.len() >= self.policy.max_exits {\n",
+     "infynitae-wayland", ["--lib"], "an_exited_satellite_restarts_on_the_same_display_until_it_exits_too_often"),
+    ("INV-XWAYLAND-1: a session client inherits the compositor's own DISPLAY", f"{WAYLAND}/session.rs",
+     "        None => command.env_remove(\"DISPLAY\"),\n",
+     "        None => &mut command,\n",
+     "infynitae-wayland", ["--lib"], "a_client_command_sets_or_removes_display"),
+    ("M19: a taken display number is taken over", f"{WAYLAND}/xwayland.rs",
+     "            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => return Ok(None),\n",
+     "            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => OpenOptions::new().write(true).truncate(true).open(&lock_path)?,\n",
+     "infynitae-wayland", ["--lib"], "a_taken_number_is_skipped_and_left_alone"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

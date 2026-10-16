@@ -29,6 +29,10 @@ OPTIONS:
     --headless               Run in headless mode with virtual output
     --duration <SECONDS>     Exit after N seconds (useful for tests and automation)
     --max-frames <COUNT>     Exit after N frames (useful for benchmarks and tests)
+    --xwayland-satellite <PATH>
+                             EXPERIMENTAL (INC-12): supervise this xwayland-satellite on an X
+                             display the compositor owns; clients get it as DISPLAY. Off by
+                             default; without it clients get no DISPLAY
 "
     );
 }
@@ -44,6 +48,7 @@ fn main() -> ExitCode {
     let mut headless = false;
     let mut duration: Option<Duration> = None;
     let mut max_frames: Option<u64> = None;
+    let mut xwayland_satellite: Option<std::path::PathBuf> = None;
 
     let mut i = 1;
     while i < args.len() {
@@ -152,6 +157,14 @@ fn main() -> ExitCode {
                     }
                 };
             }
+            "--xwayland-satellite" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("Error: --xwayland-satellite requires a path");
+                    return ExitCode::FAILURE;
+                }
+                xwayland_satellite = Some(args[i].clone().into());
+            }
             other => {
                 eprintln!("Error: unknown argument '{other}'");
                 print_help();
@@ -174,6 +187,7 @@ fn main() -> ExitCode {
             refresh_mhz,
             duration,
             max_frames,
+            xwayland_satellite: xwayland_satellite.clone(),
         };
         match infynitae_backend_headless::run_headless(core, input_port, output_token, options) {
             Ok(()) => ExitCode::SUCCESS,
@@ -193,6 +207,7 @@ fn main() -> ExitCode {
             refresh_mhz,
             duration,
             max_frames,
+            xwayland_satellite,
         };
         match infynitae_backend_winit::run_nested(core, input_port, output_token, options) {
             Ok(()) => ExitCode::SUCCESS,

@@ -239,6 +239,8 @@ pub struct HeadlessCompositorOptions {
     pub duration: Option<Duration>,
     /// Optional maximum frame count before clean exit.
     pub max_frames: Option<u64>,
+    /// xwayland-satellite to supervise (M19, INC-12, experimental); `None`: no X11.
+    pub xwayland_satellite: Option<std::path::PathBuf>,
 }
 
 impl Default for HeadlessCompositorOptions {
@@ -251,6 +253,7 @@ impl Default for HeadlessCompositorOptions {
             refresh_mhz: 60_000,
             duration: None,
             max_frames: None,
+            xwayland_satellite: None,
         }
     }
 }
@@ -281,6 +284,8 @@ pub fn run_headless(
         .map_err(|e| format!("Failed to connect headless output: {e:?}"))?;
 
     let mut event_loop: EventLoop<()> = EventLoop::try_new()?;
+    let x_display =
+        infynitae_wayland::xwayland::reserve_for_session(options.xwayland_satellite.as_deref())?;
     let mut session = Session::new(
         display,
         &event_loop.handle(),
@@ -290,12 +295,28 @@ pub fn run_headless(
             refresh_mhz: options.refresh_mhz,
             duration: options.duration,
             max_frames: options.max_frames,
+            x_display: x_display.as_ref().map(|d| d.name()),
         },
     )?;
+    let mut xwayland = match (x_display, options.xwayland_satellite.as_deref()) {
+        (Some(d), Some(satellite)) => Some(infynitae_wayland::xwayland::start_for_session(
+            d,
+            satellite,
+            session.socket_name(),
+        )?),
+        _ => None,
+    };
 
     println!("[infynitae] Headless compositor running.");
     while !session.finished() {
-        event_loop.dispatch(session.timeout(), &mut ())?;
+        let restart = xwayland
+            .as_mut()
+            .and_then(|x| x.poll(std::time::Instant::now()));
+        let timeout = match (session.timeout(), restart) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        event_loop.dispatch(timeout, &mut ())?;
         session.dispatch(&mut state);
 
         // Initial focus grant on topmost mapped element if seat is eligible (INV-INPUT-8)
@@ -321,6 +342,8 @@ pub fn run_headless(
     }
 
     println!("[infynitae] Headless compositor shutting down...");
+    // the satellite first: it is a client of the session, and its display goes with it
+    drop(xwayland);
     session.shutdown();
     let _ = disconnect(&mut state, &mut output_token, output_id);
     session.flush();

@@ -103,6 +103,10 @@ pub struct SessionOptions {
     pub duration: Option<Duration>,
     /// Leave the loop after this many frames.
     pub max_frames: Option<u64>,
+    /// The X display this session's clients get as `DISPLAY` (the supervisor's, M19). `None`:
+    /// they get no `DISPLAY` at all, so an X11 client started here never reaches an X server
+    /// outside the session (INV-XWAYLAND-1).
+    pub x_display: Option<String>,
 }
 
 /// A listening Wayland session.
@@ -118,6 +122,7 @@ pub struct Session {
     /// The display became readable since the last dispatch: a request arrived or a client
     /// went away.
     display_ready: Rc<Cell<bool>>,
+    x_display: Option<String>,
 }
 
 impl Session {
@@ -168,6 +173,7 @@ impl Session {
             duration: options.duration,
             max_frames: options.max_frames,
             display_ready,
+            x_display: options.x_display.clone(),
         };
         if let Some(cmd) = &options.exec {
             session.spawn(handle, cmd);
@@ -185,12 +191,10 @@ impl Session {
     /// and not at the next unrelated event.
     fn spawn<D: 'static>(&mut self, handle: &LoopHandle<'_, D>, cmd: &str) {
         println!("[infynitae] Spawning initial client: {cmd}");
-        let mut parts = cmd.split_whitespace();
-        let Some(bin) = parts.next() else { return };
-        let mut command = Command::new(bin);
-        command
-            .args(parts)
-            .env("WAYLAND_DISPLAY", &self.socket_name);
+        let Some(mut command) = client_command(cmd, &self.socket_name, self.x_display.as_deref())
+        else {
+            return;
+        };
         match command.spawn() {
             Ok(child) => {
                 println!("[infynitae] Client spawned with PID {}", child.id());
@@ -290,6 +294,20 @@ impl Session {
         terminate_children(&mut self.children, CHILD_GRACE);
         self.flush();
     }
+}
+
+/// The command of a client the session starts: `cmd` split on whitespace, with the session's
+/// Wayland socket, and its X display or no `DISPLAY` at all (INV-XWAYLAND-1: never the one the
+/// compositor was started with). `None` for an empty command.
+fn client_command(cmd: &str, socket_name: &str, x_display: Option<&str>) -> Option<Command> {
+    let mut parts = cmd.split_whitespace();
+    let mut command = Command::new(parts.next()?);
+    command.args(parts).env("WAYLAND_DISPLAY", socket_name);
+    match x_display {
+        Some(x) => command.env("DISPLAY", x),
+        None => command.env_remove("DISPLAY"),
+    };
+    Some(command)
 }
 
 /// Terminates and reaps child processes: those already gone are reaped, the rest get SIGTERM,
@@ -519,6 +537,97 @@ mod tests {
         let framed = (0..20).any(|_| turn(&mut session, &mut state, &mut event_loop));
         assert!(framed, "no frame after the client vanished");
         assert_eq!(session.timeout(), None, "idle again afterwards");
+    }
+
+    /// INV-XWAYLAND-1 (INC-12): a client the session starts gets the session's X display, or no
+    /// `DISPLAY` at all, never the one the compositor itself was started with (this test's own
+    /// environment may well have one).
+    #[test]
+    fn a_session_client_gets_the_sessions_x_display_or_none() {
+        for (n, x_display) in [None, Some(":42".to_string())].into_iter().enumerate() {
+            let dir = std::env::temp_dir().join(format!(
+                "infynitae-session-display-{}-{n}",
+                std::process::id()
+            ));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            let out = dir.join("out");
+            let script = dir.join("client.sh");
+            std::fs::write(
+                &script,
+                format!(
+                    "#!/bin/sh\necho \"${{DISPLAY-unset}}\" > {}.tmp && mv {0}.tmp {0}\n",
+                    out.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+                .unwrap();
+            let (core, _input, _shell, _outputs) =
+                infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+            let display: Display<WaylandState> = Display::new().unwrap();
+            let _state = WaylandState::new(&display.handle(), core);
+            let event_loop: EventLoop<()> = EventLoop::try_new().unwrap();
+            let options = SessionOptions {
+                socket_name: Some(format!("infynitae-display-test-{}-{n}", std::process::id())),
+                exec: Some(script.display().to_string()),
+                refresh_mhz: 60_000,
+                x_display: x_display.clone(),
+                ..SessionOptions::default()
+            };
+            let mut session = Session::new(display, &event_loop.handle(), &options).unwrap();
+            let end = Instant::now() + Duration::from_secs(10);
+            while !out.exists() {
+                assert!(Instant::now() < end, "the client never ran");
+                std::thread::sleep(MS);
+            }
+            let got = std::fs::read_to_string(&out).unwrap();
+            assert_eq!(
+                got.trim(),
+                x_display.as_deref().unwrap_or("unset"),
+                "x_display {x_display:?}"
+            );
+            session.shutdown();
+            std::fs::remove_dir_all(&dir).unwrap();
+        }
+    }
+
+    /// INV-XWAYLAND-1: the explicit environment of a session client, whatever the environment
+    /// this test runs in: the session's socket, and its X display or `DISPLAY` removed.
+    #[test]
+    fn a_client_command_sets_or_removes_display() {
+        let env = |x| {
+            let c = client_command("prog a b", "wl-7", x).unwrap();
+            let mut e: Vec<(String, Option<String>)> = c
+                .get_envs()
+                .map(|(k, v)| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.map(|v| v.to_string_lossy().into_owned()),
+                    )
+                })
+                .collect();
+            e.sort();
+            (c.get_program().to_owned(), c.get_args().count(), e)
+        };
+        let (program, args, e) = env(None);
+        assert_eq!((program.to_str(), args), (Some("prog"), 2));
+        assert_eq!(
+            e,
+            [
+                ("DISPLAY".into(), None),
+                ("WAYLAND_DISPLAY".into(), Some("wl-7".into()))
+            ]
+        );
+        let (_, _, e) = env(Some(":3"));
+        assert_eq!(
+            e,
+            [
+                ("DISPLAY".into(), Some(":3".into())),
+                ("WAYLAND_DISPLAY".into(), Some("wl-7".into()))
+            ]
+        );
+        assert!(client_command("   ", "wl-7", None).is_none());
     }
 
     /// A frame limit ends a session that has no client: frames keep coming until it is reached.
