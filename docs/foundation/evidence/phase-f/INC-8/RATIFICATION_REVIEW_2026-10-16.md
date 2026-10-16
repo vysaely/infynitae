@@ -1,6 +1,6 @@
 # INC-8 — ratification review (2026-10-16)
 
-Status: **REVIEW for the owner's ratification decision. INC-8 is not ratified.** Subject:
+Status: **REVIEW. INC-8 was RATIFIED for its T1 scope on 2026-10-16 by owner decision (CHECKPOINT, `governance/inc-8-ratification-2026-10-16`); OB-16 stays OPEN.** Original status: review for the owner's ratification decision. Subject:
 `experimental/inc-8-offscreen-frames` @ `b110398` (implementation `60c05a1` … `a45b0f0`, review
 fix `bdeb219`, review test `b110398`), and its combination with INC-6 on
 `integration/inc-6-inc-8-r2-2026-10-16` (`9aea65d`). Everything below is headless (T0/T1).
