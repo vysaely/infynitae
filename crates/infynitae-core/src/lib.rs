@@ -502,16 +502,26 @@ impl Core {
             }
             E::KeyboardForward { .. } => recipients[0] = self.frame_liveness.keyboard_recipient,
             E::PointerMotion { target, .. } => {
-                let new = target.and_then(|t| self.frame_kick_surface(t.surface));
-                let old = std::mem::replace(&mut self.frame_liveness.pointer_recipient, new);
+                let new = target.map(|t| t.surface);
+                let old = std::mem::replace(&mut self.frame_liveness.pointer_surface, new);
                 // a pointer that leaves a surface sends it `leave`
-                recipients = [old.filter(|o| Some(*o) != new), new];
+                let old = old.filter(|o| Some(*o) != new);
+                recipients = [
+                    old.and_then(|s| self.frame_kick_surface(s)),
+                    new.and_then(|s| self.frame_kick_surface(s)),
+                ];
+                if recipients[0] == recipients[1] {
+                    recipients[1] = None;
+                }
             }
             E::PointerRelative { target, .. } => {
                 recipients[0] = target.and_then(|t| self.frame_kick_surface(t.surface));
             }
             E::PointerButton { .. } | E::PointerAxis { .. } => {
-                recipients[0] = self.frame_liveness.pointer_recipient;
+                recipients[0] = self
+                    .frame_liveness
+                    .pointer_surface
+                    .and_then(|s| self.frame_kick_surface(s));
             }
             E::ConstraintActivate { surface, .. } | E::ConstraintDeactivate { surface, .. } => {
                 recipients[0] = self.frame_kick_surface(surface);

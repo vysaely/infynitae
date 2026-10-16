@@ -21,6 +21,7 @@
 
 use std::time::Duration;
 
+use crate::snapshot::SurfaceKey;
 use crate::stage::ElementId;
 
 /// PROV-4: the candidate off-screen fallback period P (provisional; finite and > 0).
@@ -44,9 +45,10 @@ struct Liveness {
 pub(crate) struct FrameLiveness {
     period: Duration,
     entries: Vec<(ElementId, Liveness)>,
-    /// The element whose surface last received pointer focus (the recipient of buttons and axes,
-    /// which carry no target).
-    pub(crate) pointer_recipient: Option<ElementId>,
+    /// The surface that last received pointer focus (the recipient of buttons and axes, which
+    /// carry no target). Kept as a surface, not resolved: whether its element must be kicked is
+    /// decided when an event reaches it, from the element's state at that moment.
+    pub(crate) pointer_surface: Option<SurfaceKey>,
     /// The element whose surface last received keyboard focus.
     pub(crate) keyboard_recipient: Option<ElementId>,
 }
@@ -56,7 +58,7 @@ impl Default for FrameLiveness {
         FrameLiveness {
             period: DEFAULT_FALLBACK_PERIOD,
             entries: Vec::new(),
-            pointer_recipient: None,
+            pointer_surface: None,
             keyboard_recipient: None,
         }
     }
@@ -119,9 +121,6 @@ impl FrameLiveness {
     pub(crate) fn destroyed(&mut self, element: ElementId) {
         if let Ok(i) = self.find(element) {
             self.entries.remove(i);
-        }
-        if self.pointer_recipient == Some(element) {
-            self.pointer_recipient = None;
         }
         if self.keyboard_recipient == Some(element) {
             self.keyboard_recipient = None;
@@ -304,11 +303,9 @@ mod tests {
         let mut f = FrameLiveness::default();
         f.committed(e, true);
         f.keyboard_recipient = Some(e);
-        f.pointer_recipient = Some(e);
         f.destroyed(e);
         assert_eq!(f.deadline(|_| false), None);
         assert_eq!(f.keyboard_recipient, None);
-        assert_eq!(f.pointer_recipient, None);
     }
 
     #[test]

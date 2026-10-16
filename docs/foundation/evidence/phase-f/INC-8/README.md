@@ -41,9 +41,12 @@ dependency graph), so it is independent of the unratified INC-6 line.
   `DismissPopupGrab` (`popup_done`), `KeyboardFocus` (old and new focus: `leave`/`enter`),
   `KeyboardForward`, `PointerMotion` (old and new pointer focus), `PointerRelative`,
   `PointerButton`, `PointerAxis`, `ConstraintActivate`/`Deactivate`. Not kicking:
-  `InitialConfigure`, `wl_surface` enter/leave, output globals, `PointerFrame`. A surface is
-  resolved to its element by searching only the elements that are pending and unobserved, so an
-  event to an observed or idle surface costs no search.
+  `InitialConfigure`, `wl_surface` enter/leave, output globals, `PointerFrame`. The pointer
+  focus is tracked as a surface and resolved when an event reaches it, so a window hidden after
+  the pointer entered it is still kicked before its `leave` or a button (a first version
+  resolved it at entry and missed this; found in self-review, reproduced by a T1 test). A
+  surface is resolved to its element by searching only the elements that are pending and
+  unobserved, so an event to an observed or idle surface costs no search.
 - *Fallback* (INV-FRAME-3 (b)). `Core::frame_fallback(now)` completes every unobserved element
   whose callback is pending and whose last completion is at least P ago, and returns them.
   `Core::frame_fallback_deadline()` is the earliest `last + P` over unobserved pending elements,
@@ -82,7 +85,7 @@ one fallback per period from the last completion; a kick completes once and rest
 period; observed elements are never kicked or fallen back; an empty vblank is not a
 completion; destruction forgets the element; the period is finite and positive.
 
-T1 (`crates/infynitae-backend-headless/tests/t1_frames.rs`, 12 tests, real client over a socketpair,
+T1 (`crates/infynitae-backend-headless/tests/t1_frames.rs`, 13 tests, real client over a socketpair,
 virtual time; the lockstep runs the fallback timer as a virtual event and evaluates it at the
 end of every pump):
 
@@ -99,6 +102,7 @@ end of every pump):
 | `an_observed_client_is_not_kicked` | no double rate |
 | `a_window_that_stopped_drawing_arms_no_timer_when_it_leaves` | vblank completions are recorded |
 | `unobserved_feedback_stays_pending_until_shown_or_superseded` | INV-FRAME-5 (TST-06, INC-8 part) |
+| `a_pointer_leave_kicks_a_window_hidden_after_the_pointer_entered_it` | another window's presentation hides W under the pointer: `frame W` immediately before `pointer leave W` |
 
 `t1_inc7_adversarial::a_window_hidden_by_a_presentation_gets_the_fallback_and_re_entry`
 replaces `until_inc_8_a_window_hidden_by_a_presentation_gets_no_frame_callback` (INC-7 audit
@@ -142,8 +146,10 @@ baseline (C14, OB-44).
 ## Residuals
 
 - **F-1.** `popup_done` sent by Smithay's `PopupGrab` on a click outside the popup chain does not
-  pass through `Core::frame_kick`. The recipient is the focused element, which normally is
-  observed; an off-screen focused element with an open popup grab is not covered.
+  pass through `Core::frame_kick`. Its recipient is the grab owner, which holds focus. No path
+  found that hides a grab owner while its grab stays open: a camera pan dismisses the grab first
+  (INV-INPUT-2, `DismissPopupGrab`, which kicks), and a presentation needs focus elsewhere,
+  whose focus change ends the grab. Not covered by a test.
 - **F-2.** A kick's completion is stamped at the next evaluation rather than at the kick (Core
   reads no clock). Bounded by one loop iteration; never earlier than allowed.
 - **F-3.** `frame_kick` runs for every applied effect. For an observed or idle recipient it is a

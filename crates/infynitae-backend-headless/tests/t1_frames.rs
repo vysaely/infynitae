@@ -382,3 +382,44 @@ fn unobserved_feedback_stays_pending_until_shown_or_superseded() {
     keyboard_key(&mut f.r.ls.state, &mut f.r.ls.input, KEY_A, false, 2).unwrap();
     f.r.ls.pump();
 }
+
+/// INV-FRAME-3 (a): the pointer focus is followed by surface, whatever the element's state when
+/// the pointer entered it. W is under the pointer and visible, then another window's
+/// presentation hides it: the pointer `leave` that W receives is preceded by its withheld
+/// callback.
+#[test]
+fn a_pointer_leave_kicks_a_window_hidden_after_the_pointer_entered_it() {
+    let mut f = F::new();
+    let qh = f.r.ls.qh.clone();
+    let x = f.r.ls.probe.toplevel(&qh, "X", (200, 100), 0);
+    f.r.ls.pump();
+    f.r.frame();
+    let ex = f.r.ls.state.elements().last().unwrap();
+    // the pointer enters W (X is centred on top: move off it, still on W)
+    f.r.motion((-300.0, -200.0));
+    assert!(
+        f.r.ls.probe.ptr.iter().any(|l| l.starts_with("enter W")),
+        "{:?}",
+        f.r.ls.probe.ptr
+    );
+    set_focus(&mut f.r.ls.state, &mut f.r.ls.input, Some(ex)).unwrap();
+    f.r.ls.pump();
+    f.request();
+    assert!(f.observed() && f.r.ls.state.core().frame_pending(f.e));
+    let m = f.wire_mark();
+    let tl = f.r.ls.probe.surfaces[x].toplevel.clone().unwrap();
+    tl.set_fullscreen(None);
+    f.r.ls.pump();
+    f.r.frame();
+    assert!(!f.observed(), "hidden by X's presentation");
+    let wire = f.wire_since(m);
+    let leave = wire
+        .iter()
+        .position(|l| *l == "pointer leave W")
+        .unwrap_or_else(|| panic!("no pointer leave for W: {wire:?}"));
+    assert_eq!(
+        wire.iter().position(|l| *l == "frame W"),
+        Some(leave - 1),
+        "kick right before the leave: {wire:?}"
+    );
+}
