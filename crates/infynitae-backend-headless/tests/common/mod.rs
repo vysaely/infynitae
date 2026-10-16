@@ -176,6 +176,14 @@ pub struct Probe {
 static SHM_FILES: AtomicU64 = AtomicU64::new(0);
 
 impl Probe {
+    /// A global this client was told about: `(name, version)`.
+    pub fn global(&self, interface: &str) -> Option<(u32, u32)> {
+        self.globals
+            .iter()
+            .find(|(_, i, _)| i == interface)
+            .map(|(n, _, v)| (*n, *v))
+    }
+
     fn buffer(&mut self, qh: &QueueHandle<Self>, w: i32, h: i32) -> WlBuffer {
         let stride = w * 4;
         let len = (stride * h).max(4) as usize;

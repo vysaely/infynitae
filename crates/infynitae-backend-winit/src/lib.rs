@@ -144,6 +144,9 @@ pub fn run_nested(
             duration: options.duration,
             max_frames: options.max_frames,
             x_display: x_display.as_ref().map(|d| d.name()),
+            x_authority: x_display
+                .as_ref()
+                .and_then(|d| d.authority_path().map(|p| p.to_path_buf())),
         },
     )?;
     let mut xwayland = match (x_display, options.xwayland_satellite.as_deref()) {

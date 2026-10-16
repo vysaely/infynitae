@@ -13,6 +13,11 @@
 //! Nothing here reaches Core and nothing takes an authority port: there is no X11 path to Stage
 //! or cameras, and no window manager of our own.
 //!
+//! Access control: Xwayland is started with `-auth` and a private MIT-MAGIC-COOKIE-1
+//! ([`XAuthority`], mode 0600 in `XDG_RUNTIME_DIR`), so only clients that hold the cookie — those
+//! the session starts get `XAUTHORITY` — can connect. Both sockets stay bound: the abstract name,
+//! which libxcb tries first, cannot be taken by another process to impersonate the display.
+//!
 //! In `-listenfd` mode xwayland-satellite logs to syslog when it can reach it.
 
 use std::cell::Cell;
@@ -46,12 +51,73 @@ pub struct XDisplay {
     socket_path: PathBuf,
     abstract_listener: UnixListener,
     path_listener: UnixListener,
+    authority: Option<XAuthority>,
+}
+
+/// A private Xauthority file with one MIT-MAGIC-COOKIE-1 for one display (16 bytes from
+/// `/dev/urandom`; family "wild", so it matches whatever host name a client uses). Mode 0600;
+/// removed when dropped.
+#[derive(Debug)]
+pub struct XAuthority {
+    path: PathBuf,
+}
+
+impl XAuthority {
+    /// Writes the file `<dir>/infynitae-xauth-<pid>-<number>` (created exclusively, 0600).
+    pub fn create(dir: &Path, number: u32) -> io::Result<XAuthority> {
+        let mut cookie = [0u8; 16];
+        std::io::Read::read_exact(&mut File::open("/dev/urandom")?, &mut cookie)?;
+        let path = dir.join(format!("infynitae-xauth-{}-{number}", std::process::id()));
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        let field = |out: &mut Vec<u8>, bytes: &[u8]| {
+            out.extend_from_slice(&(bytes.len() as u16).to_be_bytes());
+            out.extend_from_slice(bytes);
+        };
+        // Xau entry: family (FamilyWild 0xffff), address, display number, auth name, auth data
+        let mut entry = 0xffffu16.to_be_bytes().to_vec();
+        field(&mut entry, b"");
+        field(&mut entry, number.to_string().as_bytes());
+        field(&mut entry, b"MIT-MAGIC-COOKIE-1");
+        field(&mut entry, &cookie);
+        let written = file.write_all(&entry).and_then(|()| file.flush());
+        let auth = XAuthority { path };
+        written.map(|()| auth)
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for XAuthority {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
+/// A lock this user left behind: owned by our uid, naming a process that no longer exists.
+fn stale_and_ours(lock_path: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    let Ok(meta) = fs::symlink_metadata(lock_path) else {
+        return false;
+    };
+    let pid = fs::read_to_string(lock_path)
+        .ok()
+        .and_then(|s| s.trim().parse::<u32>().ok());
+    meta.uid() == rustix::process::getuid().as_raw()
+        && pid.is_some_and(|pid| pid > 0 && !Path::new(&format!("/proc/{pid}")).exists())
 }
 
 impl XDisplay {
     /// Reserves the first display number in `numbers` that is free under `root`: its lock file
-    /// can be created (never an existing one, stale or not) and both sockets can be bound (never
-    /// over an existing file). A number in use by anyone else is skipped, never taken over.
+    /// can be created and both sockets can be bound (never over an existing file). A number in
+    /// use by anyone else is skipped, never taken over. One exception: a lock this user left
+    /// behind (owned by our uid, naming a dead process, e.g. after a crash) is reclaimed with its
+    /// socket file if that is ours too, so crashes do not use up display numbers.
     pub fn reserve(root: &Path, numbers: RangeInclusive<u32>) -> io::Result<XDisplay> {
         let dir = root.join(".X11-unix");
         if !dir.is_dir() {
@@ -71,6 +137,16 @@ impl XDisplay {
 
     fn try_reserve(root: &Path, dir: &Path, number: u32) -> io::Result<Option<XDisplay>> {
         let lock_path = root.join(format!(".X{number}-lock"));
+        if stale_and_ours(&lock_path) {
+            use std::os::unix::fs::MetadataExt;
+            let socket = dir.join(format!("X{number}"));
+            if fs::symlink_metadata(&socket).is_ok_and(|m| {
+                m.file_type().is_socket() && m.uid() == rustix::process::getuid().as_raw()
+            }) {
+                let _ = fs::remove_file(&socket);
+            }
+            let _ = fs::remove_file(&lock_path);
+        }
         let mut lock = match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -124,7 +200,20 @@ impl XDisplay {
             socket_path,
             abstract_listener,
             path_listener,
+            authority: None,
         }))
+    }
+
+    /// Requires X clients of this display to authenticate: a private Xauthority file is written
+    /// in `dir` (normally `XDG_RUNTIME_DIR`) and given to every satellite with `-auth`.
+    pub fn with_authority(mut self, dir: &Path) -> io::Result<XDisplay> {
+        self.authority = Some(XAuthority::create(dir, self.number)?);
+        Ok(self)
+    }
+
+    /// The Xauthority file clients of this display need as `XAUTHORITY`.
+    pub fn authority_path(&self) -> Option<&Path> {
+        self.authority.as_ref().map(XAuthority::path)
     }
 
     pub fn number(&self) -> u32 {
@@ -172,9 +261,18 @@ pub const SESSION_DISPLAY_NUMBERS: RangeInclusive<u32> = 1..=63;
 /// For a run loop: the X display a session owns when it runs `satellite` — reserved under
 /// `/tmp`, where X clients look — or `None` without one.
 pub fn reserve_for_session(satellite: Option<&Path>) -> io::Result<Option<XDisplay>> {
-    satellite
-        .map(|_| XDisplay::reserve(Path::new("/tmp"), SESSION_DISPLAY_NUMBERS))
-        .transpose()
+    if satellite.is_none() {
+        return Ok(None);
+    }
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR").ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            "XDG_RUNTIME_DIR is not set: no private place for the X cookie",
+        )
+    })?;
+    XDisplay::reserve(Path::new("/tmp"), SESSION_DISPLAY_NUMBERS)?
+        .with_authority(Path::new(&runtime))
+        .map(Some)
 }
 
 /// For a run loop: the supervisor of `satellite` on `display`, as a client of the session's
@@ -350,9 +448,17 @@ impl XwaylandSupervisor {
             .args(["-listenfd", &fds[0].as_raw_fd().to_string()])
             .args(["-listenfd", &fds[1].as_raw_fd().to_string()])
             .env("WAYLAND_DISPLAY", &self.wayland_display)
-            // its X server is the one it starts; it is not a systemd service of ours
+            // its X server is the one it starts; it is not a systemd service of ours; nothing of
+            // the compositor's own launch environment applies to it
             .env_remove("DISPLAY")
+            .env_remove("XAUTHORITY")
+            .env_remove("WAYLAND_SOCKET")
+            .env_remove("XDG_ACTIVATION_TOKEN")
+            .env_remove("DESKTOP_STARTUP_ID")
             .env_remove("NOTIFY_SOCKET");
+        if let Some(auth) = self.display.authority_path() {
+            command.arg("-auth").arg(auth);
+        }
         let child = command.spawn();
         // the copies were for the child only
         drop(fds);
@@ -504,14 +610,15 @@ mod tests {
     #[test]
     fn a_taken_number_is_skipped_and_left_alone() {
         let root = root("taken");
-        fs::write(root.join(".X0-lock"), "     99999\n").unwrap();
+        // a lock naming a live process (init): not ours to take, stale or not
+        fs::write(root.join(".X0-lock"), "         1\n").unwrap();
         fs::create_dir_all(root.join(".X11-unix")).unwrap();
         fs::write(root.join(".X11-unix/X1"), "").unwrap();
         let d = XDisplay::reserve(&root, 0..=3).unwrap();
         assert_eq!(d.number(), 2);
         assert_eq!(
             fs::read_to_string(root.join(".X0-lock")).unwrap(),
-            "     99999\n"
+            "         1\n"
         );
         assert!(
             !root.join(".X1-lock").exists(),
@@ -649,6 +756,65 @@ mod tests {
         assert_eq!(s.starts(), 1, "started once");
         s.shutdown(Duration::from_millis(500));
         drop(s);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// A lock this user left behind (its process is gone, e.g. after a crash) is reclaimed with
+    /// its socket file, so crashes do not use display numbers up.
+    #[test]
+    fn a_stale_lock_of_ours_is_reclaimed() {
+        let root = root("stale");
+        let mut child = Command::new("true").spawn().unwrap();
+        let dead = child.id();
+        child.wait().unwrap();
+        fs::create_dir_all(root.join(".X11-unix")).unwrap();
+        fs::write(root.join(".X0-lock"), format!("{dead:>10}\n")).unwrap();
+        let stale_socket = UnixListener::bind(root.join(".X11-unix/X0")).unwrap();
+        drop(stale_socket);
+        let d = XDisplay::reserve(&root, 0..=3).unwrap();
+        assert_eq!(d.number(), 0, "reclaimed");
+        assert_eq!(lock_owner(d.lock_path()), Some(std::process::id()));
+        drop(d);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The Xauthority file: private (0600), one MIT-MAGIC-COOKIE-1 entry for the display with a
+    /// 16-byte cookie, a different cookie each time, removed with its display; the satellite gets
+    /// it with `-auth`.
+    #[test]
+    fn the_display_has_a_private_cookie_the_satellite_is_given() {
+        let root = root("auth");
+        let d = XDisplay::reserve(&root, 0..=3)
+            .unwrap()
+            .with_authority(&root)
+            .unwrap();
+        let path = d.authority_path().unwrap().to_path_buf();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        let bytes = fs::read(&path).unwrap();
+        // family wild, empty address, "0", the auth name, 16 bytes of data
+        let mut want = vec![0xff, 0xff, 0, 0, 0, 1, b'0', 0, 18];
+        want.extend_from_slice(b"MIT-MAGIC-COOKIE-1");
+        want.extend_from_slice(&[0, 16]);
+        assert_eq!(&bytes[..want.len()], &want[..]);
+        assert_eq!(bytes.len(), want.len() + 16);
+        let other = XAuthority::create(&root, 9).unwrap();
+        assert_ne!(
+            fs::read(other.path()).unwrap()[want.len()..],
+            bytes[want.len()..]
+        );
+        drop(other);
+        let script = r#"[ "$6" = -auth ] && [ -f "$7" ] && exit 0; exit 9"#;
+        let mut s = XwaylandSupervisor::new(d, sh(script), "wl-test", FAST);
+        s.start().unwrap();
+        until_exited(&mut s, Instant::now());
+        assert_eq!(
+            s.last_exit().and_then(|e| e.code()),
+            Some(0),
+            "-auth <file>"
+        );
+        drop(s);
+        assert!(!path.exists(), "removed with the display");
         fs::remove_dir_all(&root).unwrap();
     }
 }

@@ -107,6 +107,9 @@ pub struct SessionOptions {
     /// they get no `DISPLAY` at all, so an X11 client started here never reaches an X server
     /// outside the session (INV-XWAYLAND-1).
     pub x_display: Option<String>,
+    /// The Xauthority file of that display, given to the clients as `XAUTHORITY`; without it
+    /// they get none (never the compositor's own).
+    pub x_authority: Option<std::path::PathBuf>,
 }
 
 /// A listening Wayland session.
@@ -123,6 +126,7 @@ pub struct Session {
     /// went away.
     display_ready: Rc<Cell<bool>>,
     x_display: Option<String>,
+    x_authority: Option<std::path::PathBuf>,
 }
 
 impl Session {
@@ -174,6 +178,7 @@ impl Session {
             max_frames: options.max_frames,
             display_ready,
             x_display: options.x_display.clone(),
+            x_authority: options.x_authority.clone(),
         };
         if let Some(cmd) = &options.exec {
             session.spawn(handle, cmd);
@@ -191,8 +196,12 @@ impl Session {
     /// and not at the next unrelated event.
     fn spawn<D: 'static>(&mut self, handle: &LoopHandle<'_, D>, cmd: &str) {
         println!("[infynitae] Spawning initial client: {cmd}");
-        let Some(mut command) = client_command(cmd, &self.socket_name, self.x_display.as_deref())
-        else {
+        let Some(mut command) = client_command(
+            cmd,
+            &self.socket_name,
+            self.x_display.as_deref(),
+            self.x_authority.as_deref(),
+        ) else {
             return;
         };
         match command.spawn() {
@@ -297,15 +306,31 @@ impl Session {
 }
 
 /// The command of a client the session starts: `cmd` split on whitespace, with the session's
-/// Wayland socket, and its X display or no `DISPLAY` at all (INV-XWAYLAND-1: never the one the
-/// compositor was started with). `None` for an empty command.
-fn client_command(cmd: &str, socket_name: &str, x_display: Option<&str>) -> Option<Command> {
+/// Wayland socket, and its X display and cookie or no `DISPLAY` / `XAUTHORITY` at all
+/// (INV-XWAYLAND-1: never the compositor's own). Nothing of the compositor's own launch that
+/// would misdirect the client is passed on: a `WAYLAND_SOCKET` fd, an activation token or
+/// startup id meant for the compositor itself. `None` for an empty command.
+fn client_command(
+    cmd: &str,
+    socket_name: &str,
+    x_display: Option<&str>,
+    x_authority: Option<&std::path::Path>,
+) -> Option<Command> {
     let mut parts = cmd.split_whitespace();
     let mut command = Command::new(parts.next()?);
-    command.args(parts).env("WAYLAND_DISPLAY", socket_name);
+    command
+        .args(parts)
+        .env("WAYLAND_DISPLAY", socket_name)
+        .env_remove("WAYLAND_SOCKET")
+        .env_remove("XDG_ACTIVATION_TOKEN")
+        .env_remove("DESKTOP_STARTUP_ID");
     match x_display {
         Some(x) => command.env("DISPLAY", x),
         None => command.env_remove("DISPLAY"),
+    };
+    match x_authority {
+        Some(a) => command.env("XAUTHORITY", a),
+        None => command.env_remove("XAUTHORITY"),
     };
     Some(command)
 }
@@ -596,8 +621,8 @@ mod tests {
     /// this test runs in: the session's socket, and its X display or `DISPLAY` removed.
     #[test]
     fn a_client_command_sets_or_removes_display() {
-        let env = |x| {
-            let c = client_command("prog a b", "wl-7", x).unwrap();
+        let env = |x, a: Option<&std::path::Path>| {
+            let c = client_command("prog a b", "wl-7", x, a).unwrap();
             let mut e: Vec<(String, Option<String>)> = c
                 .get_envs()
                 .map(|(k, v)| {
@@ -610,24 +635,27 @@ mod tests {
             e.sort();
             (c.get_program().to_owned(), c.get_args().count(), e)
         };
-        let (program, args, e) = env(None);
+        let removed = |k: &str| (k.to_string(), None);
+        let (program, args, e) = env(None, None);
         assert_eq!((program.to_str(), args), (Some("prog"), 2));
         assert_eq!(
             e,
             [
-                ("DISPLAY".into(), None),
-                ("WAYLAND_DISPLAY".into(), Some("wl-7".into()))
+                removed("DESKTOP_STARTUP_ID"),
+                removed("DISPLAY"),
+                ("WAYLAND_DISPLAY".into(), Some("wl-7".into())),
+                removed("WAYLAND_SOCKET"),
+                removed("XAUTHORITY"),
+                removed("XDG_ACTIVATION_TOKEN"),
             ]
         );
-        let (_, _, e) = env(Some(":3"));
-        assert_eq!(
-            e,
-            [
-                ("DISPLAY".into(), Some(":3".into())),
-                ("WAYLAND_DISPLAY".into(), Some("wl-7".into()))
-            ]
+        let (_, _, e) = env(Some(":3"), Some(std::path::Path::new("/run/x/cookie")));
+        assert!(e.contains(&("DISPLAY".into(), Some(":3".into()))), "{e:?}");
+        assert!(
+            e.contains(&("XAUTHORITY".into(), Some("/run/x/cookie".into()))),
+            "{e:?}"
         );
-        assert!(client_command("   ", "wl-7", None).is_none());
+        assert!(client_command("   ", "wl-7", None, None).is_none());
     }
 
     /// A frame limit ends a session that has no client: frames keep coming until it is reached.

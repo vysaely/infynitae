@@ -288,6 +288,12 @@ impl Core {
         &self.focus
     }
 
+    /// Sets what `xdg_activation_v1` requests may do (Level D configuration; the default is
+    /// `Strict`). Moves no focus by itself.
+    pub fn set_activation_policy(&mut self, policy: input::focus::ActivationPolicy) {
+        self.focus.set_activation_policy(policy);
+    }
+
     /// Read access to the authoritative active pointer constraint (OBJ-21).
     pub fn constraint(&self) -> Option<pointer::ConstraintState> {
         self.constraint

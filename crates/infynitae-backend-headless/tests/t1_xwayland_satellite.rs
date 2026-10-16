@@ -205,6 +205,7 @@ impl Run {
         Command::new("python3")
             .args(["-I", script, "30000"])
             .env("DISPLAY", self.x.display_name().expect("a display"))
+            .env("XAUTHORITY", self.cookie())
             .env("GDK_BACKEND", "x11")
             .env("DBUS_SESSION_BUS_ADDRESS", "disabled:")
             .env("NO_AT_BRIDGE", "1")
@@ -216,6 +217,15 @@ impl Run {
             .expect("python3 with GTK3")
     }
 
+    /// The display's Xauthority file.
+    fn cookie(&self) -> std::path::PathBuf {
+        self.x
+            .display()
+            .authority_path()
+            .expect("the display requires a cookie")
+            .to_path_buf()
+    }
+
     fn mapped(&self) -> usize {
         self.state.core().stage().mapped_elements().len()
     }
@@ -224,6 +234,7 @@ impl Run {
         Command::new("xmessage")
             .args(["-name", label, "-timeout", "60", label])
             .env("DISPLAY", self.x.display_name().expect("a display"))
+            .env("XAUTHORITY", self.cookie())
             .env_remove("WAYLAND_DISPLAY")
             .stderr(Stdio::piped())
             .spawn()
@@ -254,7 +265,10 @@ fn start_run() -> Run {
     )
     .unwrap();
     let event_loop: EventLoop<'static, ()> = EventLoop::try_new().unwrap();
-    let x_display = XDisplay::reserve(std::path::Path::new("/tmp"), 1..=63).unwrap();
+    let x_display = XDisplay::reserve(std::path::Path::new("/tmp"), 1..=63)
+        .unwrap()
+        .with_authority(std::path::Path::new("/tmp/rt"))
+        .unwrap();
     assert_eq!(
         x_display.name(),
         ":1",
@@ -267,6 +281,7 @@ fn start_run() -> Run {
             socket_name: Some("wl-inc12".into()),
             refresh_mhz: 60_000,
             x_display: Some(x_display.name()),
+            x_authority: x_display.authority_path().map(|p| p.to_path_buf()),
             ..SessionOptions::default()
         },
     )
@@ -333,6 +348,23 @@ fn a_satellite_restarts_on_the_same_display_and_its_clients_die_with_it() {
         r.mapped() == 1
     });
     assert_eq!(run.x.starts(), 1, "started by the first connection");
+
+    // access control: a client without the cookie is refused by the X server
+    let mut intruder = Command::new("xmessage")
+        .args(["-timeout", "5", "intruder"])
+        .env("DISPLAY", run.x.display_name().unwrap())
+        .env_remove("XAUTHORITY")
+        .env_remove("WAYLAND_DISPLAY")
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("xmessage");
+    let mut refused = None;
+    run.until(Duration::from_secs(10), "the intruder is refused", |_| {
+        refused = intruder.try_wait().unwrap();
+        refused.is_some()
+    });
+    assert!(!refused.unwrap().success(), "no cookie, no connection");
+    assert_eq!(run.mapped(), 1, "nothing of the intruder was mapped");
     let element = run.state.core().stage().mapped_elements()[0];
     assert!(
         run.state.core().stage().anchor(element).is_some(),

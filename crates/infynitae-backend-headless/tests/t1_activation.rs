@@ -9,9 +9,17 @@
 
 mod common;
 
-use common::{Lockstep, output};
-use infynitae_backend_headless::set_focus;
+use std::os::unix::net::UnixStream;
+use std::sync::Arc;
+
+use common::{Lockstep, Probe, delta_to, output};
+use infynitae_backend_headless::{pointer_motion, set_focus};
 use infynitae_core::stage::ElementId;
+use infynitae_wayland::ClientState;
+use wayland_client::backend::WaylandError;
+use wayland_client::protocol::wl_registry::WlRegistry;
+use wayland_client::{Connection, EventQueue, QueueHandle};
+use wayland_protocols::xdg::activation::v1::client::xdg_activation_v1::XdgActivationV1;
 
 struct S {
     ls: Lockstep,
@@ -91,7 +99,8 @@ fn a_token_from_the_focused_client_activates_a_window() {
     assert_eq!(s.ls.state.core().focus().target(), Some(s.ew), "spent");
 }
 
-/// W-SM-8: a token without a serial is refused at creation; activating with it does nothing.
+/// W-SM-8: a token without a serial is not validated; activating with it moves no focus and
+/// asks for attention.
 #[test]
 fn a_token_without_a_serial_activates_nothing() {
     let mut s = scene();
@@ -99,10 +108,11 @@ fn a_token_without_a_serial_activates_nothing() {
     s.activate(&token, s.v);
     assert_eq!(s.ls.state.core().focus().target(), Some(s.ew));
     assert_eq!(s.ls.probe.kb.active.as_deref(), Some("W"));
+    assert_eq!(s.ls.state.core().focus().attention(), [s.ev]);
 }
 
 /// W-SM-8: a serial from before the last focus change does not show that the user just acted
-/// in the requesting client; the token is refused.
+/// in the requesting client; the token is not validated: no focus, attention.
 #[test]
 fn a_token_with_a_serial_older_than_the_last_focus_change_activates_nothing() {
     let mut s = scene();
@@ -115,4 +125,127 @@ fn a_token_with_a_serial_older_than_the_last_focus_change_activates_nothing() {
     let token = s.token(Some(old));
     s.activate(&token, s.v);
     assert_eq!(s.ls.state.core().focus().target(), Some(s.ew));
+}
+
+/// A second client: the one that must not steal the focus.
+struct Other {
+    conn: Connection,
+    queue: EventQueue<Probe>,
+    probe: Probe,
+    qh: QueueHandle<Probe>,
+    registry: WlRegistry,
+}
+
+impl Other {
+    fn connect(ls: &mut Lockstep) -> Other {
+        let (server_end, client_end) = UnixStream::pair().expect("socketpair");
+        client_end.set_nonblocking(true).expect("non-blocking");
+        ls.display
+            .handle()
+            .insert_client(server_end, Arc::new(ClientState::default()))
+            .expect("insert the second client");
+        let conn = Connection::from_socket(client_end).expect("connection");
+        let queue = conn.new_event_queue();
+        let qh = queue.handle();
+        let registry = conn.display().get_registry(&qh, ());
+        Other {
+            conn,
+            queue,
+            probe: Probe::default(),
+            qh,
+            registry,
+        }
+    }
+
+    /// Exchanges messages between the compositor and both clients until quiescent.
+    fn drive(&mut self, ls: &mut Lockstep) {
+        let mut idle = 0;
+        for _ in 0..10_000 {
+            ls.pump();
+            self.conn.flush().expect("flush");
+            if let Some(guard) = self.conn.prepare_read() {
+                match guard.read() {
+                    Ok(_) => {}
+                    Err(WaylandError::Io(e)) if e.kind() == std::io::ErrorKind::WouldBlock => {}
+                    Err(e) => panic!("second client read: {e}"),
+                }
+            }
+            let handled = self
+                .queue
+                .dispatch_pending(&mut self.probe)
+                .expect("second client dispatch");
+            self.conn.flush().expect("flush");
+            let served = ls
+                .display
+                .dispatch_clients(&mut ls.state)
+                .expect("server dispatch");
+            ls.display.flush_clients().expect("server flush");
+            if handled == 0 && served == 0 {
+                idle += 1;
+                if idle >= 3 {
+                    return;
+                }
+            } else {
+                idle = 0;
+            }
+        }
+        panic!("the exchange did not settle");
+    }
+}
+
+/// Focus-stealing prevention (W-SM-8, INC-12 review): a client the user merely points at gets
+/// fresh pointer serials, newer than the last focus change, but not the keyboard focus. A token
+/// it creates with such a serial is not validated: activating its own window asks for attention
+/// and leaves the focus where it was. (The first rule, "a serial no older than the last focus
+/// enter", accepted it and let the hovered client take the focus.)
+#[test]
+fn a_hovered_client_cannot_take_the_focus() {
+    let mut s = scene();
+    let mut o = Other::connect(&mut s.ls);
+    o.drive(&mut s.ls);
+    o.probe.bind_basic(&o.registry, &o.qh);
+    let pointer = o.probe.seat.as_ref().unwrap().get_pointer(&o.qh, ());
+    o.probe.pointer = Some(pointer);
+    o.drive(&mut s.ls);
+    let b = o.probe.toplevel(&o.qh, "B", (200, 100), 0);
+    o.drive(&mut s.ls);
+    o.probe.draw(&o.qh, b);
+    o.drive(&mut s.ls);
+    let eb = s.ls.state.elements().last().unwrap();
+    assert!(eb != s.ew && eb != s.ev);
+    assert_eq!(s.ls.state.core().focus().target(), Some(s.ew));
+    // the pointer is (or moves) onto B: B has received `enter` with a serial newer than W's
+    // focus `enter`
+    // a frame that shows B: hit testing reads what was shown (INV-HIT-1)
+    let t = s.ls.now + std::time::Duration::from_millis(20);
+    s.ls.run_until(t);
+    o.drive(&mut s.ls);
+    let d = delta_to(&s.ls, eb, (20.0, 20.0));
+    pointer_motion(&mut s.ls.state, &mut s.ls.input, d, d, 1).unwrap();
+    o.drive(&mut s.ls);
+    // serials only grow: B's `enter`, after B mapped, is newer than W's focus `enter`
+    let serial = o.probe.last_serial;
+    assert!(
+        o.probe.ptr.iter().any(|l| l.starts_with("enter B")) && serial != 0,
+        "B received the pointer: {:?}",
+        o.probe.ptr
+    );
+    // B asks to activate its own window with that serial
+    let (n, _) = o.probe.global("xdg_activation_v1").expect("offered");
+    let activation: XdgActivationV1 = o.registry.bind(n, 1, &o.qh, ());
+    let token = activation.get_activation_token(&o.qh, ());
+    token.set_serial(serial, o.probe.seat.as_ref().unwrap());
+    token.set_surface(&o.probe.surfaces[b].wl);
+    token.commit();
+    o.drive(&mut s.ls);
+    let t = o.probe.activation_tokens.pop().expect("a token");
+    activation.activate(t, &o.probe.surfaces[b].wl);
+    o.drive(&mut s.ls);
+    assert_eq!(s.ls.state.core().focus().target(), Some(s.ew), "no steal");
+    assert_eq!(s.ls.probe.kb.active.as_deref(), Some("W"));
+    assert_eq!(
+        s.ls.state.core().focus().attention(),
+        [eb],
+        "attention instead"
+    );
 }

@@ -519,7 +519,32 @@ delegate_shm!(WaylandState);
 delegate_xdg_shell!(WaylandState);
 delegate_xdg_activation!(WaylandState);
 
-/// How long an activation token stays usable after it was created (provisional; B10.7).
+/// W-SM-8: whether an activation token passed the provenance check when it was created.
+struct TokenProvenance {
+    validated: bool,
+}
+
+impl WaylandState {
+    fn token_validated(&self, data: &XdgActivationTokenData) -> bool {
+        use smithay::reexports::wayland_server::Resource;
+        let Some((serial, seat)) = &data.serial else {
+            return false;
+        };
+        let ours = smithay::input::Seat::<WaylandState>::from_resource(seat)
+            .is_some_and(|s| s == self.seat);
+        let keyboard = self.keyboard_handle();
+        let fresh = keyboard
+            .last_enter()
+            .is_some_and(|last| serial.is_no_older_than(&last));
+        let focused_client = keyboard
+            .current_focus()
+            .and_then(|surface| surface.client())
+            .map(|client| client.id());
+        ours && fresh && focused_client.is_some() && focused_client == data.client_id
+    }
+}
+
+/// How long an activation token validates a request after it was created (provisional; B10.7).
 const ACTIVATION_TOKEN_LIFETIME: std::time::Duration = std::time::Duration::from_secs(10);
 
 impl XdgActivationHandler for WaylandState {
@@ -527,20 +552,17 @@ impl XdgActivationHandler for WaylandState {
         &mut self.activation
     }
 
-    /// W-SM-8 (INV-INPUT-9): Smithay accepts every token by default. Here a token is kept only
-    /// if it was created with a serial of this seat that is no older than the keyboard's last
-    /// focus `enter`: the requesting client held the keyboard focus, or received input since,
-    /// when its user acted. A token without a serial is refused.
+    /// W-SM-8 (INV-INPUT-9): Smithay accepts every token by default. Here every token is kept
+    /// (an unvalidated request still asks for attention, `ActivationPolicy`), and its provenance
+    /// is recorded when it is created: it is **validated** only if the client that created it
+    /// holds the keyboard focus, and its serial is one of this seat's, no older than the
+    /// keyboard's last focus `enter`. A client the user merely points at receives fresh pointer
+    /// serials, but not the focus: its tokens are not validated (focus-stealing prevention).
     fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
-        let Some((serial, seat)) = data.serial else {
-            return false;
-        };
-        let ours = smithay::input::Seat::<WaylandState>::from_resource(&seat)
-            .is_some_and(|s| s == self.seat);
-        ours && self
-            .keyboard_handle()
-            .last_enter()
-            .is_some_and(|last| serial.is_no_older_than(&last))
+        let validated = self.token_validated(&data);
+        data.user_data
+            .insert_if_missing(|| TokenProvenance { validated });
+        true
     }
 
     /// B10.7: a validated, unexpired token activates the element whose toplevel `surface` is;
@@ -552,14 +574,17 @@ impl XdgActivationHandler for WaylandState {
         surface: WlSurface,
     ) {
         self.activation.remove_token(&token);
-        if token_data.timestamp.elapsed() > ACTIVATION_TOKEN_LIFETIME {
-            return;
-        }
         let Some(i) = self.element_index_by_root(&surface) else {
             return;
         };
         let id = self.elements[i].id;
-        if let Ok(effects) = self.core.activation_request(id) {
+        // an expired token validates nothing: the request only asks for attention
+        let validated = token_data.timestamp.elapsed() <= ACTIVATION_TOKEN_LIFETIME
+            && token_data
+                .user_data
+                .get::<TokenProvenance>()
+                .is_some_and(|p| p.validated);
+        if let Ok(effects) = self.core.activation_request(id, validated) {
             self.apply(&effects);
         }
     }

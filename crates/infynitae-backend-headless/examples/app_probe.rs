@@ -157,6 +157,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             duration: Some(Duration::from_secs(limit)),
             max_frames: None,
             x_display: None,
+            x_authority: None,
         },
     )?;
 

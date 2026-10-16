@@ -501,19 +501,26 @@ impl Core {
             .collect()
     }
 
-    /// B10.7 / INV-INPUT-9: an `xdg_activation_v1` request for `id`, whose token the adapter
-    /// has already validated by provenance (W-SM-8). Outcome (PROV-10, provisional; OB-40): an
-    /// element that may take keyboard focus — mapped and not hidden by a presentation
-    /// (INV-INPUT-8) — is focused, an activation grant; any other mapped element is marked for
-    /// attention, which only the shell renders; an element that is not mapped is ignored. It
-    /// never moves a camera or an anchor: nothing here can name one.
-    pub fn activation_request(&mut self, id: ElementId) -> Result<Vec<Effect>, ProtocolError> {
+    /// B10.7 / INV-INPUT-9: an `xdg_activation_v1` request for `id`. `validated`: its token
+    /// passed the adapter's provenance check (W-SM-8: created by the client that held the
+    /// keyboard focus, with a serial of this seat no older than the last focus change, unused,
+    /// unexpired). Outcome (`ActivationPolicy`; PROV-10, provisional; OB-40): under the default
+    /// `Strict` policy a validated request for an element that may take keyboard focus — mapped
+    /// and not hidden by a presentation (INV-INPUT-8) — focuses it, an activation grant; every
+    /// other request for a mapped element marks it for attention, which only the shell renders;
+    /// an element that is not mapped is ignored. It never moves a camera or an anchor: nothing
+    /// here can name one.
+    pub fn activation_request(
+        &mut self,
+        id: ElementId,
+        validated: bool,
+    ) -> Result<Vec<Effect>, ProtocolError> {
         let state = self.stage.state(id).ok_or(ProtocolError::StaleElement)?;
         if state != Lifecycle::Mapped {
             return Ok(Vec::new());
         }
         let eligible = !self.hidden_by_presentation(id);
-        let mut fx = self.focus.activation(id, eligible);
+        let mut fx = self.focus.activation(id, validated, eligible);
         if !fx.is_empty() {
             fx.extend(self.reconcile_constraints());
         }
@@ -3318,7 +3325,7 @@ mod tests {
         let w = map_win(&mut c, 2, 300, 200);
         focus(&mut c, &mut i, a);
         let before = spatial_state(&c);
-        let fx = c.activation_request(w).unwrap();
+        let fx = c.activation_request(w, true).unwrap();
         assert_eq!(c.focus().target(), Some(w));
         assert!(fx.contains(&Effect::KeyboardFocus(Some(w))), "{fx:?}");
         assert!(
@@ -3328,7 +3335,7 @@ mod tests {
         assert_eq!(spatial_state(&c), before);
         assert!(c.focus().attention().is_empty());
         assert!(
-            c.activation_request(w).unwrap().is_empty(),
+            c.activation_request(w, true).unwrap().is_empty(),
             "already focused: nothing"
         );
     }
@@ -3347,11 +3354,11 @@ mod tests {
             .unwrap();
         assert!(c.hidden_by_presentation(x));
         let before = spatial_state(&c);
-        let fx = c.activation_request(x).unwrap();
+        let fx = c.activation_request(x, true).unwrap();
         assert!(fx.is_empty(), "{fx:?}");
         assert_eq!(c.focus().target(), Some(w), "focus stays");
         assert_eq!(c.focus().attention(), [x]);
-        assert!(c.activation_request(x).unwrap().is_empty());
+        assert!(c.activation_request(x, true).unwrap().is_empty());
         assert_eq!(c.focus().attention(), [x], "marked once");
         assert_eq!(spatial_state(&c), before);
         c.toplevel_request(w, ToplevelRequest::UnsetFullscreen)
@@ -3368,19 +3375,58 @@ mod tests {
         let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
         let w = map_win(&mut c, 1, 400, 300);
         let u = c.toplevel_created();
-        assert!(c.activation_request(u).unwrap().is_empty(), "not mapped");
+        assert!(
+            c.activation_request(u, true).unwrap().is_empty(),
+            "not mapped"
+        );
         assert_eq!(c.focus().target(), None);
         let x = map_win(&mut c, 9, 300, 200);
         focus(&mut c, &mut i, w);
         c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(a) })
             .unwrap();
-        c.activation_request(x).unwrap();
+        c.activation_request(x, true).unwrap();
         assert_eq!(c.focus().attention(), [x]);
         c.toplevel_destroyed(x);
         assert!(
             c.focus().attention().is_empty(),
             "no attention for the dead"
         );
-        assert_eq!(c.activation_request(x), Err(ProtocolError::StaleElement));
+        assert_eq!(
+            c.activation_request(x, true),
+            Err(ProtocolError::StaleElement)
+        );
+    }
+
+    /// INC-12 review (activation policy): under the default `Strict` policy only a validated
+    /// request focuses; an unvalidated one (no token from the focused client) only asks for
+    /// attention. `AttentionOnly` never focuses; `Permissive` focuses whatever the token. No
+    /// policy moves a camera or an anchor.
+    #[test]
+    fn the_activation_policy_decides_who_may_take_focus() {
+        use crate::input::focus::ActivationPolicy;
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let a = map_win(&mut c, 1, 400, 300);
+        let w = map_win(&mut c, 2, 300, 200);
+        focus(&mut c, &mut i, a);
+        let before = spatial_state(&c);
+        assert_eq!(
+            c.focus().activation_policy(),
+            ActivationPolicy::Strict,
+            "default"
+        );
+        assert!(c.activation_request(w, false).unwrap().is_empty());
+        assert_eq!(
+            (c.focus().target(), c.focus().attention()),
+            (Some(a), &[w][..])
+        );
+        c.set_activation_policy(ActivationPolicy::AttentionOnly);
+        assert!(c.activation_request(w, true).unwrap().is_empty());
+        assert_eq!(c.focus().target(), Some(a), "never under AttentionOnly");
+        c.set_activation_policy(ActivationPolicy::Permissive);
+        c.activation_request(w, false).unwrap();
+        assert_eq!(c.focus().target(), Some(w), "any request under Permissive");
+        assert!(c.focus().attention().is_empty());
+        assert_eq!(spatial_state(&c), before);
     }
 }

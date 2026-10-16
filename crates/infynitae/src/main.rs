@@ -29,6 +29,9 @@ OPTIONS:
     --headless               Run in headless mode with virtual output
     --duration <SECONDS>     Exit after N seconds (useful for tests and automation)
     --max-frames <COUNT>     Exit after N frames (useful for benchmarks and tests)
+    --activation-policy <strict|attention-only|permissive>
+                             What xdg-activation requests may do (default strict: focus only
+                             with a token from the focused client; otherwise attention)
     --xwayland-satellite <PATH>
                              EXPERIMENTAL (INC-12): supervise this xwayland-satellite on an X
                              display the compositor owns; clients get it as DISPLAY. Off by
@@ -49,6 +52,7 @@ fn main() -> ExitCode {
     let mut duration: Option<Duration> = None;
     let mut max_frames: Option<u64> = None;
     let mut xwayland_satellite: Option<std::path::PathBuf> = None;
+    let mut activation_policy = infynitae_core::input::focus::ActivationPolicy::Strict;
 
     let mut i = 1;
     while i < args.len() {
@@ -157,6 +161,21 @@ fn main() -> ExitCode {
                     }
                 };
             }
+            "--activation-policy" => {
+                use infynitae_core::input::focus::ActivationPolicy;
+                i += 1;
+                activation_policy = match args.get(i).map(String::as_str) {
+                    Some("strict") => ActivationPolicy::Strict,
+                    Some("attention-only") => ActivationPolicy::AttentionOnly,
+                    Some("permissive") => ActivationPolicy::Permissive,
+                    _ => {
+                        eprintln!(
+                            "Error: --activation-policy takes strict, attention-only or permissive"
+                        );
+                        return ExitCode::FAILURE;
+                    }
+                };
+            }
             "--xwayland-satellite" => {
                 i += 1;
                 if i >= args.len() {
@@ -175,7 +194,8 @@ fn main() -> ExitCode {
     }
 
     // Composition root: creates Core and authority ports (FOUNDATION_ARCHITECTURE C1.2, C1.5)
-    let (core, input_port, _shell_port, output_token) = Core::new(PersistedCameras::default());
+    let (mut core, input_port, _shell_port, output_token) = Core::new(PersistedCameras::default());
+    core.set_activation_policy(activation_policy);
 
     if headless {
         println!("[infynitae] Starting headless compositor...");
