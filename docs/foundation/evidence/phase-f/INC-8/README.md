@@ -143,6 +143,29 @@ with the kick disabled is DETECTED: the client stays blocked until the fallback 
 the key). 30/30 repeated runs passed. This is not a vkcube/Mesa run (T3) and not a latency
 baseline (C14, OB-44).
 
+## Integration with INC-6 (rehearsal, never merge)
+
+`rehearsal/inc-8-on-inc-6-candidate-2026-10-16` (worktree `~/.cache/infynitae-integration/inc8r`)
+merges this branch onto the INC-6 candidate `b784b55`. That base contains amendments C12.F11 to
+C12.F13, which are not adopted, so the branch must never be merged. Conflicts in 7 files,
+resolved semantically:
+
+- INC-6's allocation-free `frame_tick_into(out)` is kept; it takes `&mut self` and records
+  completions over the appended slice, adding no allocation (INC-6's OB-42 ratchet test passes).
+- INC-6 funnels every commit through `toplevel_committed_acked_into`; the OBJ-17 update is
+  applied there, only for an accepted commit.
+- INC-6's `Effect::PreferredScale` does not kick. It is not in INV-FRAME-3's kick list, and an
+  unobserved element's hint is held, not sent (ARCHITECTURE scenario 11). `frame_kick`'s
+  exhaustive match forced this decision at compile time.
+- The session sleeps until the earliest of: the frame, the fallback (presentation clock), the
+  duration limit, and INC-6's settlement wake (session clock). **Integration note for the
+  owner:** two clocks now bound one loop. They are consistent today, because each deadline is
+  converted to an `Instant` against its own clock. A single Core clock would be simpler; C12.F4
+  names the session clock for epochs and nothing names one for frames.
+
+Gates at the rehearsal merge `57c466f`: 457 tests, clippy, fmt, verify-architecture, docs and
+self-test, knowledge (content-only), verify-test-efficacy 351 detected: all PASS.
+
 ## Residuals
 
 - **F-1.** `popup_done` sent by Smithay's `PopupGrab` on a click outside the popup chain does not
