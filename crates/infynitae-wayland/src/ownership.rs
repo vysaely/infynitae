@@ -11,6 +11,11 @@
 //! process group, session id, name or user is used to choose a target: a process of the
 //! desktop or of another application is never a member.
 //!
+//! Contract for code in this process: a child spawned by anything other than the session must be
+//! registered (`register_spawned`, and `forget_spawned` once reaped) by its spawner, or the orphan
+//! reaper may take its exit status (`ECHILD` for the owner's `wait`). The session's spawner and the
+//! satellite supervisor do this; so must a test that hosts a session and spawns clients itself.
+//!
 //! Outside the boundary by construction: processes started for a client by another service
 //! (D-Bus activation, the user's service manager). The sessions this compositor starts run
 //! with D-Bus disabled.

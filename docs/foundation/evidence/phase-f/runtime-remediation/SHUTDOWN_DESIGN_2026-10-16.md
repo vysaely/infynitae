@@ -96,3 +96,8 @@ Seeded controls (all DETECTED): no subreaper; only direct children ended; adopte
 reaped. The satellite (INC-12 line) is ended first by its supervisor (`terminate_children`) and
 registered as an owned child there; its Xwayland is a member of the subtree and is swept too
 (exercised on the runtime line).
+
+**Contract:** every in-process spawner other than the session registers its children
+(`register_spawned` / `forget_spawned`), or the orphan reaper may take their exit status. Found on
+the runtime line: the real-satellite T1 test hosts a session and spawns X clients itself; it now
+registers them (and the satellite supervisor registers the satellite, INC-12 review r2 R2-4).
