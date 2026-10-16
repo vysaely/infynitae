@@ -9,6 +9,8 @@ pub mod oracle;
 pub mod probe_renderer;
 
 use std::fs::File;
+use std::io::Write as _;
+use std::os::fd::AsFd as _;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -26,6 +28,10 @@ use wayland_client::protocol::{
     wl_buffer::WlBuffer,
     wl_callback::{self, WlCallback},
     wl_compositor::WlCompositor,
+    wl_data_device::{self, WlDataDevice},
+    wl_data_device_manager::WlDataDeviceManager,
+    wl_data_offer::{self, WlDataOffer},
+    wl_data_source::{self, WlDataSource},
     wl_keyboard::{self, WlKeyboard},
     wl_output::{self, WlOutput},
     wl_pointer::{self, WlPointer},
@@ -47,6 +53,12 @@ use wayland_protocols::wp::pointer_constraints::zv1::client::{
 use wayland_protocols::wp::presentation_time::client::{
     wp_presentation::{self, WpPresentation},
     wp_presentation_feedback::{self, WpPresentationFeedback},
+};
+use wayland_protocols::wp::primary_selection::zv1::client::{
+    zwp_primary_selection_device_manager_v1::ZwpPrimarySelectionDeviceManagerV1,
+    zwp_primary_selection_device_v1::{self, ZwpPrimarySelectionDeviceV1},
+    zwp_primary_selection_offer_v1::{self, ZwpPrimarySelectionOfferV1},
+    zwp_primary_selection_source_v1::{self, ZwpPrimarySelectionSourceV1},
 };
 use wayland_protocols::wp::relative_pointer::zv1::client::{
     zwp_relative_pointer_manager_v1::ZwpRelativePointerManagerV1,
@@ -104,9 +116,37 @@ pub struct KbLogical {
     pub violations: Vec<String>,
 }
 
+/// What a probe client sees of the clipboard (wl_data_device): the offers it was given with
+/// their MIME types, the current selection offer, its sources' `send` requests and
+/// cancellations, in one ordered log ("offer N", "mime N type", "selection N|none",
+/// "send type", "cancelled").
+#[derive(Default)]
+pub struct Clipboard {
+    pub device: Option<WlDataDevice>,
+    pub log: Vec<String>,
+    /// The offer of the current selection, with its MIME types.
+    pub selection: Option<(WlDataOffer, Vec<String>)>,
+    pending: Vec<(WlDataOffer, Vec<String>)>,
+    /// What a source of this client writes when it is asked to send.
+    pub source_bytes: Vec<u8>,
+    /// Sources of this client still alive.
+    pub sources: Vec<WlDataSource>,
+}
+
 #[derive(Default)]
 pub struct Probe {
     globals: Vec<(u32, String, u32)>,
+    pub clipboard: Clipboard,
+    pub data_device_manager: Option<WlDataDeviceManager>,
+    /// The primary selection: (manager, device, current offer with its MIME types, bytes a
+    /// source of this client sends).
+    pub primary: Option<(
+        ZwpPrimarySelectionDeviceManagerV1,
+        ZwpPrimarySelectionDeviceV1,
+    )>,
+    pub primary_selection: Option<(ZwpPrimarySelectionOfferV1, Vec<String>)>,
+    primary_pending: Vec<(ZwpPrimarySelectionOfferV1, Vec<String>)>,
+    pub primary_bytes: Vec<u8>,
     /// Ordered wire log of output-related events (the independent oracle for wire order):
     /// "global wl_output N", "global_remove N", "N: mode WxH@R", "N: scale S", "N: geometry
     /// transform T", "N: done", "N: xdg position X,Y", "N: xdg size W,H", "enter S N",
@@ -980,6 +1020,233 @@ impl Dispatch<XdgPopup, usize> for Probe {
     }
 }
 
+impl Probe {
+    /// A global this client was told about: `(name, version)`.
+    pub fn global(&self, interface: &str) -> Option<(u32, u32)> {
+        self.globals
+            .iter()
+            .find(|(_, i, _)| i == interface)
+            .map(|(n, _, v)| (*n, *v))
+    }
+
+    /// Binds `wl_data_device_manager` (v3) and creates this client's data device.
+    pub fn bind_clipboard(&mut self, registry: &WlRegistry, qh: &QueueHandle<Self>) {
+        let (n, v) = self
+            .global("wl_data_device_manager")
+            .expect("wl_data_device_manager is offered");
+        let manager: WlDataDeviceManager = registry.bind(n, v.min(3), qh, ());
+        let device = manager.get_data_device(self.seat.as_ref().expect("seat"), qh, ());
+        self.clipboard.device = Some(device);
+        self.data_device_manager = Some(manager);
+    }
+
+    /// Offers `mimes` as the clipboard selection with `serial`; `bytes` is what is sent.
+    pub fn copy(&mut self, qh: &QueueHandle<Self>, mimes: &[&str], bytes: &[u8], serial: u32) {
+        let manager = self.data_device_manager.as_ref().expect("bound");
+        let source = manager.create_data_source(qh, ());
+        for m in mimes {
+            source.offer(m.to_string());
+        }
+        self.clipboard.source_bytes = bytes.to_vec();
+        self.clipboard
+            .device
+            .as_ref()
+            .expect("device")
+            .set_selection(Some(&source), serial);
+        self.clipboard.sources.push(source);
+    }
+
+    /// Asks the current selection for `mime`; returns the read end of the pipe.
+    pub fn paste(&mut self, mime: &str) -> std::io::PipeReader {
+        let (offer, _) = self
+            .clipboard
+            .selection
+            .as_ref()
+            .expect("a selection offer");
+        let (reader, writer) = std::io::pipe().expect("pipe");
+        offer.receive(mime.to_string(), writer.as_fd());
+        drop(writer);
+        reader
+    }
+}
+
+impl Dispatch<WlDataDevice, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &WlDataDevice,
+        ev: wl_data_device::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match ev {
+            wl_data_device::Event::DataOffer { id } => {
+                st.clipboard
+                    .log
+                    .push(format!("offer {}", id.id().protocol_id()));
+                st.clipboard.pending.push((id, Vec::new()));
+            }
+            wl_data_device::Event::Selection { id } => {
+                st.clipboard.selection = id.and_then(|id| {
+                    let i = st.clipboard.pending.iter().position(|(o, _)| *o == id)?;
+                    Some(st.clipboard.pending.swap_remove(i))
+                });
+                let line = match &st.clipboard.selection {
+                    Some((o, _)) => format!("selection {}", o.id().protocol_id()),
+                    None => "selection none".to_string(),
+                };
+                st.clipboard.log.push(line);
+            }
+            _ => {}
+        }
+    }
+
+    wayland_client::event_created_child!(Probe, WlDataDevice, [
+        wl_data_device::EVT_DATA_OFFER_OPCODE => (WlDataOffer, ()),
+    ]);
+}
+
+impl Dispatch<WlDataOffer, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        offer: &WlDataOffer,
+        ev: wl_data_offer::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let wl_data_offer::Event::Offer { mime_type } = ev {
+            st.clipboard
+                .log
+                .push(format!("mime {} {mime_type}", offer.id().protocol_id()));
+            if let Some((_, mimes)) = st.clipboard.pending.iter_mut().find(|(o, _)| o == offer) {
+                mimes.push(mime_type);
+            }
+        }
+    }
+}
+
+impl Dispatch<WlDataSource, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        source: &WlDataSource,
+        ev: wl_data_source::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match ev {
+            wl_data_source::Event::Send { mime_type, fd } => {
+                st.clipboard.log.push(format!("send {mime_type}"));
+                let mut file = File::from(fd);
+                let _ = file.write_all(&st.clipboard.source_bytes);
+            }
+            wl_data_source::Event::Cancelled => {
+                st.clipboard.log.push("cancelled".to_string());
+                st.clipboard.sources.retain(|s| s != source);
+                source.destroy();
+            }
+            _ => {}
+        }
+    }
+}
+
+delegate_noop!(Probe: ignore WlDataDeviceManager);
+delegate_noop!(Probe: ignore ZwpPrimarySelectionDeviceManagerV1);
+
+impl Probe {
+    /// Binds the primary selection manager and creates this client's device.
+    pub fn bind_primary(&mut self, registry: &WlRegistry, qh: &QueueHandle<Self>) {
+        let (n, _) = self
+            .global("zwp_primary_selection_device_manager_v1")
+            .expect("primary selection is offered");
+        let manager: ZwpPrimarySelectionDeviceManagerV1 = registry.bind(n, 1, qh, ());
+        let device = manager.get_device(self.seat.as_ref().expect("seat"), qh, ());
+        self.primary = Some((manager, device));
+    }
+
+    pub fn copy_primary(&mut self, qh: &QueueHandle<Self>, mime: &str, bytes: &[u8], serial: u32) {
+        let (manager, device) = self.primary.as_ref().expect("bound");
+        let source = manager.create_source(qh, ());
+        source.offer(mime.to_string());
+        self.primary_bytes = bytes.to_vec();
+        device.set_selection(Some(&source), serial);
+    }
+
+    pub fn paste_primary(&mut self, mime: &str) -> std::io::PipeReader {
+        let (offer, _) = self.primary_selection.as_ref().expect("a primary offer");
+        let (reader, writer) = std::io::pipe().expect("pipe");
+        offer.receive(mime.to_string(), writer.as_fd());
+        drop(writer);
+        reader
+    }
+}
+
+impl Dispatch<ZwpPrimarySelectionDeviceV1, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &ZwpPrimarySelectionDeviceV1,
+        ev: zwp_primary_selection_device_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match ev {
+            zwp_primary_selection_device_v1::Event::DataOffer { offer } => {
+                st.primary_pending.push((offer, Vec::new()));
+            }
+            zwp_primary_selection_device_v1::Event::Selection { id } => {
+                st.primary_selection = id.and_then(|id| {
+                    let i = st.primary_pending.iter().position(|(o, _)| *o == id)?;
+                    Some(st.primary_pending.swap_remove(i))
+                });
+            }
+            _ => {}
+        }
+    }
+
+    wayland_client::event_created_child!(Probe, ZwpPrimarySelectionDeviceV1, [
+        zwp_primary_selection_device_v1::EVT_DATA_OFFER_OPCODE => (ZwpPrimarySelectionOfferV1, ()),
+    ]);
+}
+
+impl Dispatch<ZwpPrimarySelectionOfferV1, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        offer: &ZwpPrimarySelectionOfferV1,
+        ev: zwp_primary_selection_offer_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        if let zwp_primary_selection_offer_v1::Event::Offer { mime_type } = ev
+            && let Some((_, m)) = st.primary_pending.iter_mut().find(|(o, _)| o == offer)
+        {
+            m.push(mime_type);
+        }
+    }
+}
+
+impl Dispatch<ZwpPrimarySelectionSourceV1, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        source: &ZwpPrimarySelectionSourceV1,
+        ev: zwp_primary_selection_source_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match ev {
+            zwp_primary_selection_source_v1::Event::Send { fd, .. } => {
+                let mut file = File::from(fd);
+                let _ = file.write_all(&st.primary_bytes);
+            }
+            zwp_primary_selection_source_v1::Event::Cancelled => source.destroy(),
+            _ => {}
+        }
+    }
+}
+
 impl Dispatch<WlSeat, ()> for Probe {
     fn event(
         _: &mut Self,
@@ -1407,6 +1674,11 @@ impl Lockstep {
         self.pump();
     }
 
+    /// The client's single registry.
+    pub fn registry(&self) -> &WlRegistry {
+        &self.registry
+    }
+
     /// Exchanges messages until both sides are quiescent.
     pub fn pump(&mut self) {
         let mut idle = 0;
@@ -1415,6 +1687,8 @@ impl Lockstep {
                 .display
                 .dispatch_clients(&mut self.state)
                 .expect("server dispatch");
+            // as the session does after each dispatch
+            self.state.clear_orphaned_selections();
             self.display.flush_clients().expect("server flush");
             self.conn.flush().expect("client flush");
             if let Some(guard) = self.conn.prepare_read() {

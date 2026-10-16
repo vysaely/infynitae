@@ -859,6 +859,16 @@ CONTROLS = [
      f"{WAYLAND}/session.rs",
      "            match kill_process(pid, Signal::TERM) {", "            match kill_process(pid, Signal::CONT) {",
      "infynitae-wayland", ["--lib"], "a_running_child_exits_on_sigterm_within_the_grace_period"),
+    # ---- clipboard slice (2026-10-16): selections follow the keyboard focus; orphans are cleared
+    ("clipboard: the selection focus does not follow the keyboard focus", f"{WAYLAND}/handlers.rs",
+     "        set_data_device_focus(&self.dh, seat, client.clone());\n", "        let _ = &client;\n",
+     "infynitae-backend-headless", ["--test", "t1_clipboard"], "a_copy_in_one_client_pastes_in_another"),
+    ("clipboard: the primary selection focus does not follow the keyboard focus", f"{WAYLAND}/handlers.rs",
+     "        set_primary_focus(&self.dh, seat, client);\n", "        let _ = client;\n",
+     "infynitae-backend-headless", ["--test", "t1_clipboard"], "the_primary_selection_follows_the_keyboard_focus"),
+    ("clipboard: a selection whose owner quit is not cleared", f"{WAYLAND}/handlers.rs",
+     "            smithay::wayland::selection::data_device::clear_data_device_selection(\n                &self.dh, &self.seat,\n            );\n", "",
+     "infynitae-backend-headless", ["--test", "t1_clipboard"], "a_quitting_owner_clears_the_selection"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

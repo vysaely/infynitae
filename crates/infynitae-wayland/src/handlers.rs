@@ -7,6 +7,7 @@ use smithay::desktop::{
     PopupKeyboardGrab, PopupKind, PopupManager, PopupUngrabStrategy, Window,
     find_popup_root_surface,
 };
+use smithay::input::Seat;
 use smithay::input::{SeatHandler, SeatState};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::Client;
@@ -20,13 +21,22 @@ use smithay::wayland::compositor::{
 };
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::pointer_constraints::{PointerConstraintsHandler, with_pointer_constraint};
+use smithay::wayland::selection::SelectionHandler;
+use smithay::wayland::selection::data_device::{
+    ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
+    set_data_device_focus,
+};
+use smithay::wayland::selection::primary_selection::{
+    PrimarySelectionHandler, PrimarySelectionState, set_primary_focus,
+};
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::{
-    delegate_compositor, delegate_output, delegate_pointer_constraints, delegate_presentation,
-    delegate_relative_pointer, delegate_seat, delegate_shm, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_output, delegate_pointer_constraints,
+    delegate_presentation, delegate_primary_selection, delegate_relative_pointer, delegate_seat,
+    delegate_shm, delegate_xdg_shell,
 };
 
 use crate::{ClientState, ElementHandle, WaylandState, convert, snapshot};
@@ -500,7 +510,95 @@ impl SeatHandler for WaylandState {
     fn seat_state(&mut self) -> &mut SeatState<Self> {
         &mut self.seats
     }
+
+    /// The keyboard focus moved (it follows Core's ActiveElementFocus, INV-INPUT-8): only the
+    /// focused client is offered the clipboard and the primary selection, and only it may set
+    /// them (Smithay refuses `set_selection` from a client without keyboard focus). No focus, no
+    /// offers: an unfocused client never sees the contents.
+    fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
+        use smithay::reexports::wayland_server::Resource;
+        let client = focused.and_then(|surface| surface.client());
+        set_data_device_focus(&self.dh, seat, client.clone());
+        set_primary_focus(&self.dh, seat, client);
+    }
 }
+
+impl SelectionHandler for WaylandState {
+    // the compositor offers no selection of its own
+    type SelectionUserData = ();
+
+    /// A client set (or cleared) a selection: Smithay accepted it only from the client with the
+    /// keyboard focus, so that client owns it.
+    fn new_selection(
+        &mut self,
+        ty: smithay::wayland::selection::SelectionTarget,
+        source: Option<smithay::wayland::selection::SelectionSource>,
+        _seat: Seat<Self>,
+    ) {
+        use smithay::reexports::wayland_server::Resource;
+        let owner = source.and_then(|_| {
+            self.keyboard_handle()
+                .current_focus()
+                .and_then(|surface| surface.client())
+                .map(|client| client.id())
+        });
+        let slot = match ty {
+            smithay::wayland::selection::SelectionTarget::Clipboard => 0,
+            smithay::wayland::selection::SelectionTarget::Primary => 1,
+        };
+        self.selection_owners[slot] = owner;
+    }
+}
+
+impl WaylandState {
+    /// Clears a selection whose owner disconnected, telling the focused client (`selection` with
+    /// no offer). Called after each client dispatch.
+    pub fn clear_orphaned_selections(&mut self) {
+        let gone =
+            |state: &Self,
+             owner: &Option<smithay::reexports::wayland_server::backend::ClientId>| {
+                owner.as_ref().is_some_and(|id| {
+                    state
+                        .dh
+                        .backend_handle()
+                        .get_client_data(id.clone())
+                        .is_err()
+                })
+            };
+        if gone(self, &self.selection_owners[0]) {
+            self.selection_owners[0] = None;
+            smithay::wayland::selection::data_device::clear_data_device_selection(
+                &self.dh, &self.seat,
+            );
+        }
+        if gone(self, &self.selection_owners[1]) {
+            self.selection_owners[1] = None;
+            smithay::wayland::selection::primary_selection::clear_primary_selection(
+                &self.dh, &self.seat,
+            );
+        }
+    }
+}
+
+impl DataDeviceHandler for WaylandState {
+    fn data_device_state(&self) -> &DataDeviceState {
+        &self.data_device
+    }
+}
+
+// Drag and drop: Smithay's defaults (a drag starts only from a client's implicit pointer grab).
+// Not validated against Core's pointer ownership yet (clipboard slice; DnD needs its own review).
+impl ClientDndGrabHandler for WaylandState {}
+impl ServerDndGrabHandler for WaylandState {}
+
+impl PrimarySelectionHandler for WaylandState {
+    fn primary_selection_state(&self) -> &PrimarySelectionState {
+        &self.primary_selection
+    }
+}
+
+delegate_data_device!(WaylandState);
+delegate_primary_selection!(WaylandState);
 
 /// Smithay sends the current state and enters for already-entered surfaces on bind.
 impl OutputHandler for WaylandState {}

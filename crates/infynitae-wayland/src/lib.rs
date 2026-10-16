@@ -37,6 +37,8 @@ use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::pointer_constraints::PointerConstraintsState;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
+use smithay::wayland::selection::data_device::DataDeviceState;
+use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
 
@@ -111,6 +113,16 @@ pub struct WaylandState {
         reason = "owns the zwp_relative_pointer_manager_v1 global for the state's lifetime"
     )]
     relative_pointer: RelativePointerManagerState,
+    /// `wl_data_device_manager`: clipboard selection and drag-and-drop offers (clipboard slice,
+    /// 2026-10-16). Selections are Smithay protocol objects; who sees and sets them follows Core's
+    /// keyboard focus (`SeatHandler::focus_changed`).
+    data_device: DataDeviceState,
+    /// `zwp_primary_selection_device_manager_v1`: the primary selection, same focus rule.
+    primary_selection: PrimarySelectionState,
+    /// The client that set the clipboard and the primary selection (Smithay accepts a selection
+    /// only from the keyboard-focused client). A selection whose owner's connection is gone is
+    /// cleared, so other clients are told it is gone (Smithay does not do it by itself).
+    selection_owners: [Option<ClientId>; 2],
     registry: SurfaceRegistry,
     elements: Vec<ElementHandle>,
     pub(crate) serial_outputs:
@@ -164,6 +176,9 @@ impl WaylandState {
             ordered_preemption_strategy: keyboard::PreemptionStrategy::Ordered,
             pointer_constraints: PointerConstraintsState::new::<Self>(display),
             relative_pointer: RelativePointerManagerState::new::<Self>(display),
+            data_device: DataDeviceState::new::<Self>(display),
+            primary_selection: PrimarySelectionState::new::<Self>(display),
+            selection_owners: [None, None],
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),

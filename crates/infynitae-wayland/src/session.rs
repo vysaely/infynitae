@@ -249,6 +249,7 @@ impl Session {
                 self.request_frame();
             }
         }
+        state.clear_orphaned_selections();
         self.flush();
     }
 
