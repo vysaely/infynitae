@@ -860,6 +860,12 @@ CONTROLS = [
      "            match kill_process(pid, Signal::TERM) {", "            match kill_process(pid, Signal::CONT) {",
      "infynitae-wayland", ["--lib"], "a_running_child_exits_on_sigterm_within_the_grace_period"),
     # ---- INC-12 (experimental): the xwayland-satellite supervisor (M19, OB-33, INV-XWAYLAND-1)
+    ("INC-12 fix: a reaped satellite's private runtime directory is kept (its socket leaks)", f"{WAYLAND}/xwayland.rs",
+     "            self.child = None;\n            self.release_runtime();\n", "            self.child = None;\n",
+     "infynitae-wayland", ["--lib"], "the_satellite_runtime_directory_goes_with_the_satellite"),
+    ("INC-12 fix: the satellite runs in the session's runtime directory", f"{WAYLAND}/xwayland.rs",
+     "                .env(\"XDG_RUNTIME_DIR\", &private)\n", "",
+     "infynitae-wayland", ["--lib"], "the_satellite_runtime_directory_goes_with_the_satellite"),
     ("M19: the satellite is not given the display's listening sockets", f"{WAYLAND}/xwayland.rs",
      "            .args([\"-listenfd\", &fds[1].as_raw_fd().to_string()])\n",
      "",

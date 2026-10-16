@@ -351,6 +351,8 @@ pub struct XwaylandSupervisor {
     /// Set when an X11 client connected while no satellite had started (M19 "first X11
     /// connection"); the next `poll` starts it.
     wanted: Rc<Cell<bool>>,
+    /// The running satellite's own runtime directory (see `spawn`), removed once it is reaped.
+    private_runtime: Option<PathBuf>,
 }
 
 impl XwaylandSupervisor {
@@ -372,6 +374,7 @@ impl XwaylandSupervisor {
             last_exit: None,
             starts: 0,
             wanted: Rc::new(Cell::new(false)),
+            private_runtime: None,
         }
     }
 
@@ -459,10 +462,34 @@ impl XwaylandSupervisor {
         if let Some(auth) = self.display.authority_path() {
             command.arg("-auth").arg(auth);
         }
+        // The satellite binds a Wayland socket of its own for Xwayland (`xwls-<n>`) in its
+        // XDG_RUNTIME_DIR and removes it only when it exits by itself; it is ended by a signal
+        // (or crashes). It gets a private directory beside the session's X cookie, removed after
+        // it is reaped, so no stop or restart leaves a socket in the session's runtime directory.
+        // The session's socket is then named by its absolute path.
+        self.release_runtime();
+        if let Some(dir) = self.display.authority_path().and_then(Path::parent) {
+            let private = dir.join(format!(
+                "infynitae-satellite-{}-{}",
+                std::process::id(),
+                self.display.number()
+            ));
+            fs::DirBuilder::new().mode(0o700).create(&private)?;
+            command
+                .env("XDG_RUNTIME_DIR", &private)
+                .env("WAYLAND_DISPLAY", dir.join(&self.wayland_display));
+            self.private_runtime = Some(private);
+        }
         let child = command.spawn();
         // the copies were for the child only
         drop(fds);
-        let child = child?;
+        let child = match child {
+            Ok(child) => child,
+            Err(e) => {
+                self.release_runtime();
+                return Err(e);
+            }
+        };
         self.child = Some(child);
         self.state = SatelliteState::Running;
         self.restart_at = None;
@@ -487,6 +514,7 @@ impl XwaylandSupervisor {
             && let Ok(Some(status)) = child.try_wait()
         {
             self.child = None;
+            self.release_runtime();
             self.last_exit = Some(status);
             self.exits.push_back(now);
             while self
@@ -537,7 +565,15 @@ impl XwaylandSupervisor {
             let mut children = vec![child];
             crate::session::terminate_children(&mut children, grace);
         }
+        self.release_runtime();
         self.restart_at = None;
+    }
+
+    /// Removes the reaped satellite's private runtime directory (only that directory).
+    fn release_runtime(&mut self) {
+        if let Some(dir) = self.private_runtime.take() {
+            let _ = fs::remove_dir_all(dir);
+        }
     }
 }
 
@@ -647,6 +683,56 @@ mod tests {
         assert_eq!(s.state(), SatelliteState::Running);
         until_exited(&mut s, Instant::now());
         assert_eq!(s.last_exit().and_then(|e| e.code()), Some(0));
+        drop(s);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// The satellite's own Wayland socket (`xwls-<n>`, which it removes only when it exits by
+    /// itself) lives in a private runtime directory beside the X cookie, and the session's socket
+    /// is named by its absolute path. A satellite ended by a signal — at shutdown or after a
+    /// crash and before its restart — leaves nothing behind.
+    #[test]
+    fn the_satellite_runtime_directory_goes_with_the_satellite() {
+        let root = root("runtime");
+        let d = XDisplay::reserve(&root, 0..=3)
+            .unwrap()
+            .with_authority(&root)
+            .unwrap();
+        let report = root.join("seen");
+        let script = format!(
+            r#": > "$XDG_RUNTIME_DIR/xwls-1"; echo "$XDG_RUNTIME_DIR $WAYLAND_DISPLAY" > {}
+            [ -e {}/crash ] && exit 3; exec sleep 30"#,
+            report.display(),
+            root.display()
+        );
+        let private = root.join(format!("infynitae-satellite-{}-0", std::process::id()));
+        // a crash, then the restart, then a shutdown by signal
+        fs::write(root.join("crash"), "").unwrap();
+        let mut s = XwaylandSupervisor::new(d, sh(&script), "wl-test", FAST);
+        s.start().unwrap();
+        until_exited(&mut s, Instant::now());
+        assert_eq!(s.state(), SatelliteState::Crashed);
+        assert!(
+            !private.exists(),
+            "removed when the crashed satellite was reaped"
+        );
+        assert_eq!(
+            fs::read_to_string(&report).unwrap().trim(),
+            format!("{} {}", private.display(), root.join("wl-test").display())
+        );
+        fs::remove_file(root.join("crash")).unwrap();
+        s.poll(Instant::now() + Duration::from_secs(1));
+        assert_eq!(s.state(), SatelliteState::Running);
+        let end = Instant::now() + Duration::from_secs(5);
+        while !private.join("xwls-1").exists() && Instant::now() < end {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(
+            private.join("xwls-1").exists(),
+            "the restarted satellite's socket"
+        );
+        s.shutdown(Duration::from_millis(500));
+        assert!(!private.exists(), "removed at shutdown");
         drop(s);
         fs::remove_dir_all(&root).unwrap();
     }
