@@ -1,6 +1,6 @@
 # INC-6 — ratification record, prepared (2026-10-16)
 
-Status: **PREPARED. INC-6 is NOT ratified.** This is the record the owner signs (or refuses).
+Status: **SUPERSEDED by [RATIFICATION_RECORD_2026-10-16.md](RATIFICATION_RECORD_2026-10-16.md) (INC-6 RATIFIED 2026-10-16 on `7aa2070`).** Kept as prepared. Original status: **PREPARED. INC-6 is NOT ratified.** This is the record the owner signs (or refuses).
 Nothing here takes effect until then.
 
 ## Proposed ratification

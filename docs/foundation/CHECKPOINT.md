@@ -1,8 +1,20 @@
 # Checkpoint
 
-CURRENT_PHASE: **PHASE F — INC-7 RATIFIED — INC-6 ACTIVE: AMENDMENTS C12.F11–C12.F13 ADOPTED 2026-10-16 ON A GOVERNANCE BRANCH; INC-6 NOT RATIFIED.** INC-0, INC-1, INC-2, INC-3, INC-4, INC-5 and INC-7 are RATIFIED (INC-7 without INC-6). The Core visibility remediation (`85a74cb`; scoped visibility pass, bounding-box cull, `Stage` lookup by binary search) is integrated on canonical main and FORMALLY RATIFIED. **INC-6 (scale policy): its amendment package was adopted 2026-10-16 (C12.F11, C12.F12, C12.F13; C12.F9 withdrawn; OB-28 split; OB-42 wording) on `governance/inc-6-exit-adoption-2026-10-16`, not on main; INC-6 is NOT ratified and nothing of it is integrated.** The runnable prototype runtime, with the runtime remediation integrated (one `Session`, on-demand frames, announced presentation clock), remains EXPERIMENTAL pending INC-13. **OB-42 (INV-ALLOC-1) and OB-44 (C14 baselines) remain OPEN.**
+CURRENT_PHASE: **PHASE F — INC-6 RATIFIED 2026-10-16 ON ITS GOVERNANCE BRANCH (`governance/inc-6-exit-adoption-2026-10-16`, ratified commit `7aa2070`); NOT YET INTEGRATED INTO `main`.** INC-0, INC-1, INC-2, INC-3, INC-4, INC-5 and INC-7 are RATIFIED and on `main`; INC-6 is RATIFIED (amendments C12.F11–C12.F13; OB-13, OB-28, OB-42 CLOSED) and awaits the owner's integration authorization. The Core visibility remediation (`85a74cb`) is integrated on canonical main and FORMALLY RATIFIED. The runnable prototype runtime remains EXPERIMENTAL pending INC-13. **OB-44 (C14 baselines), OB-52 (real renderer limit) and OB-53 (later scale stimuli) remain OPEN.**
 
 Date: 2026-10-16
+
+## PHASE F — INC-6 FORMAL RATIFICATION (scale policy; 2026-10-16; governance branch `governance/inc-6-exit-adoption-2026-10-16`; not merged, not pushed)
+- **Authority:** owner brief "INFYNITAE — Final Ratification Gates and Guided Runtime Readiness", §1 (2026-10-16): complete the formal ratification record on the designated governance branch if the branch is fully consistent with the adopted authority; do not merge or push.
+- **Ratified commit:** `7aa2070` (adoption `f2bf0da` + ratification review `7aa2070`, on candidate r4 `eebb5c3`, from canonical main `23752f1`).
+- **Ratification review:** adopted texts verified verbatim against package rev. 2; non-package wording found in `f2bf0da` and removed in `7aa2070` (the adoption record's "no other wording" corrected; remaining registry framing enumerated); P-3's scale-configuration clause verified in code (`eebb5c3`) and by two T0 tests and two seeded controls.
+- **Scope:** INV-SCALE-1…5 as amended by C12.F11–F13; F-SCALE-1…3; ladder, epochs, SC-E, P7, presentation holds; device limit through the renderer capability interface; hot-path allocation contract (steady state); H-9.
+- **Obligation dispositions (D7):** OB-13 CLOSED; OB-28 CLOSED; OB-42 CLOSED. OB-44, OB-52, OB-53 OPEN.
+- **Gates at `7aa2070`:** 444 tests, 344 seeded defects detected, architecture, docs + self-test, knowledge: all PASS; `verify-development-environment`: ALL CHECKS PASSED.
+- **Accepted residuals:** C12.F13 hold cost; geometric prediction (C12.F12); OB-13 residual (a side > `D_max` at scale 1); OB-42 steady-state scope.
+- **Record:** evidence/phase-f/INC-6/RATIFICATION_RECORD_2026-10-16.md.
+- **Declaration:** **INC-6 is RATIFIED.** It is **not integrated**: `main` and `origin/main` remain `23752f1` until the owner authorizes the fast-forward; push only with the owner's approval. INC-10's INC-6 entry condition is met once INC-6 is integrated; G-OB24 is still unresolved.
+
 
 ## PHASE F — INC-6 AMENDMENT PACKAGE ADOPTED 2026-10-16 (governance branch `governance/inc-6-exit-adoption-2026-10-16`; not merged, not pushed; INC-6 NOT RATIFIED)
 - **Authority:** owner approval 2026-10-16 of INC-6 adoption package revision 2 (brief "Ratification, Clipboard, Orderly Shutdown and First Nested Runtime", Phase 1), conditional on the live texts matching the reported package and on no material contradiction. Adoption check: texts verified line by line against the code; one clause (P-3, "a change of the scale configuration … P7 applies at once") was not met by the code and was met by a code correction (`eebb5c3`), not by changing the text. Record: evidence/phase-f/INC-6/ADOPTION_RECORD_2026-10-16.md.
