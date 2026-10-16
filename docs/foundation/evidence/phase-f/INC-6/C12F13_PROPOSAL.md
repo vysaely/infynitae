@@ -36,7 +36,9 @@ C14.4, after the list of non-client stimuli:
 > the change may raise its hint (as a non-client stimulus) but never lowers it: the element holds
 > its hint against decreases until a non-client stimulus that is not such a change **and that
 > touches the element** evaluates it (an output added, removed or reconfigured touches every
-> element; a camera action touches the elements that an output bound to the moved camera
+> element (a reported device limit or a configuration change touches none: P7 applies at once;
+> second correction of 2026-10-16, with a code fix); a camera action touches the elements that an
+> output bound to the moved camera
 > observed before it or observes after it; its own fullscreen enter/exit touches it), or until
 > an evaluation finds its
 > requirement back at or above its hint. A settlement does not lower a held element its

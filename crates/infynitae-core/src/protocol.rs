@@ -4363,6 +4363,60 @@ mod tests {
         assert_eq!(hints(&fx, x), vec![(120, 1)], "{fx:?}");
     }
 
+    /// C12.F13: a reported device limit applies P7 at once and touches no hold; nor does it leave
+    /// the next, unrelated stimulus releasing every hold. X is held at B's scale while W is
+    /// presented on B; a limit is reported; then a camera drag of A far from X (touching nothing
+    /// of X): the hold stays. (The sweep's "re-evaluate everything" flag of the report used to be
+    /// read as "touched everything" by the drag's evaluation.)
+    #[test]
+    fn a_device_limit_report_releases_no_hold_now_or_later() {
+        use crate::PhysicalEvent;
+        use crate::input::bindings::Modifiers;
+        let (mut c, mut i, _, mut t) = Core::new(cameras_at(&[("B", 0), ("D", 0)]));
+        let _a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let b = out(&mut c, &mut t, "B", (1920, 1080), 240);
+        let _d = out(&mut c, &mut t, "D", (1920, 1080), 120);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        let button = |pressed| PhysicalEvent::PointerButton {
+            button: 0x112,
+            pressed,
+            modifiers: Modifiers {
+                logo: true,
+                ..Modifiers::default()
+            },
+            time_us: 0,
+        };
+        let motion = |dx: f64| PhysicalEvent::PointerMotion {
+            delta: (dx, 0.0),
+            delta_unaccel: (dx, 0.0),
+            time_us: 0,
+        };
+        let drag = |c: &mut Core, i: &mut InputPort, dx: f64| {
+            c.physical_input_vec(i, button(true)).unwrap();
+            c.physical_input_vec(i, motion(dx)).unwrap();
+            c.physical_input_vec(i, button(false)).unwrap();
+        };
+        drag(&mut c, &mut i, -2500.0);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert!(c.scale_state(x).unwrap().presentation_hold, "held");
+        let held = c.preferred_scale_of(x);
+        let fx = c.set_renderer_device_max(16384).unwrap();
+        assert!(hints(&fx, x).is_empty(), "{fx:?}");
+        assert!(
+            c.scale_state(x).unwrap().presentation_hold,
+            "not released by the report"
+        );
+        drag(&mut c, &mut i, -500.0);
+        assert!(
+            c.scale_state(x).unwrap().presentation_hold,
+            "a drag elsewhere after the report does not release it"
+        );
+        assert_eq!(c.preferred_scale_of(x), held);
+    }
+
     /// C12.F13 (adversarial): a hold survives no change of identity. X is held while W is
     /// presented on B; X is destroyed; a new window Y mapped at the same place is not held and
     /// takes its requirement (A and B's, 2, once W's presentation ends).

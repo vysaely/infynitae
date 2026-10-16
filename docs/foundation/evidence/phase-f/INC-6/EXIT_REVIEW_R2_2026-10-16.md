@@ -132,3 +132,23 @@ hardware or runtime evidence.
    add the checker's `F_LAYERS` entries and fixtures, drop the "REHEARSAL / NEVER MERGE" labels
    in code comments and control names, re-run every gate.
 3. Owner: ratify INC-6 and fast-forward `main`. Not done here.
+
+## 8. Round r3 (2026-10-16, third brief): texts re-verified line by line
+
+- **Defect found and fixed (C12.F13).** `evaluate_scale_policy` took "every element is touched"
+  from the sweep's `all` flag. `all` is also set by `set_renderer_device_max` and
+  `set_scale_config`, which only ask for a full re-evaluation and run P7 themselves. The report
+  released no hold, but the *next* non-client stimulus — a camera drag on an output that never
+  saw the held element — released every hold. Reproduced by
+  `a_device_limit_report_releases_no_hold_now_or_later` (failed before the fix). Fix: a separate
+  `Sweep::system` flag, set only by the visibility pass of an output change. Seeded control "a
+  full re-evaluation (device limit, configuration) is read as touching every hold": DETECTED; the
+  older control "an output change does not touch every element" still detected.
+- **C12.F12 text** overstated the code ("exactly the presentations that observe the element at
+  its first map"); the package now states the geometric rule the code applies.
+- **C12.F11 text** now says which redraw spends the offer: a tree whose window-geometry size
+  differs from the one it replaces.
+- **OB-42:** `verify-architecture` gained `check_ob42_core_only` (the allocator test names no
+  crate but `std` and `infynitae_core`), with two seeded violations, both caught. The proposed
+  wording (package P-6) states that requirement instead of the location "in core".
+- **C12.F9:** re-checked; no new dependant.

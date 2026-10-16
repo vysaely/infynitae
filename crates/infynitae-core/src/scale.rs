@@ -539,6 +539,10 @@ pub(crate) struct Sweep {
     /// the pass runs: a camera action releases the hold of these only (C12.F13). Cleared, not
     /// freed.
     touched: Vec<ElementId>,
+    /// A system change (an output added, removed or reconfigured) in this batch touches every
+    /// element (C12.F13). Not the same as `all`, which only asks for a full re-evaluation (a
+    /// device limit or a scale configuration set since the last pass).
+    pub(crate) system: bool,
 }
 
 impl Default for Sweep {
@@ -550,6 +554,7 @@ impl Default for Sweep {
             stimulated: Vec::new(),
             presentation_change: false,
             touched: Vec::new(),
+            system: false,
         }
     }
 }
@@ -606,6 +611,7 @@ impl Sweep {
         self.stimulated.clear();
         self.presentation_change = false;
         self.touched.clear();
+        self.system = false;
     }
 }
 

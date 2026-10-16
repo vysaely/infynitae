@@ -612,6 +612,8 @@ impl Core {
         self.membership.diff(&new, &self.stage, &mut fx);
         self.membership = new;
         self.scale_sweep.all = true;
+        // an output change: a system change that touches every element (C12.F13)
+        self.scale_sweep.system = true;
         fx.extend(self.evaluate_scale_policy(is_client_response));
         fx
     }
@@ -938,9 +940,10 @@ impl Core {
                 .scale_sweep
                 .needs_full_pass(continuous_kind.is_some(), is_client_response);
         let mapped = |e| self.stage.state(e) == Some(stage::Lifecycle::Mapped);
-        // an output or configuration change touches every element; otherwise the marks say which
-        // elements this batch's stimulus touched (C12.F13)
-        let everything = self.scale_sweep.all;
+        // an output change touches every element; otherwise the marks say which elements this
+        // batch's stimulus touched (C12.F13). A full re-evaluation asked for by a device limit or
+        // a configuration (`all`) touches nothing by itself.
+        let everything = self.scale_sweep.system;
         let mut visit = self.scale_sweep.take_marked();
         self.scale_sweep.remember_touched(&visit);
         if full {
