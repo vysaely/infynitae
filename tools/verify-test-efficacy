@@ -1280,6 +1280,19 @@ CONTROLS = [
      "            let touched = everything || self.scale_sweep.is_touched(element);",
      "            let touched = self.scale_sweep.is_touched(element);",
      "infynitae-core", ["--lib"], "a_revealed_window_is_raised_after_a_system_change_lowered_it"),
+    # ---- INC-6 exit review r2 (2026-10-16): the restore offer's lifetime
+    ("C12.F11: a redraw at another size does not spend the offer", f"{CORE}/protocol.rs",
+     "                    self.restore_offers.retain(|(e, _)| *e != id);\n                }\n                self.stage.set_tree(id, Some(tree)).map_err(stale)?;\n",
+     "                }\n                self.stage.set_tree(id, Some(tree)).map_err(stale)?;\n",
+     "infynitae-core", ["--lib"], "a_spent_restore_offer_no_longer_bounds_the_hint"),
+    ("C12.F11: an unmap keeps the size on offer", f"{CORE}/protocol.rs",
+     "        self.restore_offers.retain(|(e, _)| *e != id);\n    }\n\n    /// Default windowed placement",
+     "    }\n\n    /// Default windowed placement",
+     "infynitae-core", ["--lib"], "an_unmap_spends_the_restore_offer"),
+    ("C12.F11: a re-grant saves the fullscreen geometry instead of the size on offer", f"{CORE}/protocol.rs",
+     "                                .map(|(_, size)| *size)\n",
+     "                                .map(|(_, size)| *size)\n                                .filter(|_| false)\n",
+     "infynitae-core", ["--lib"], "a_re_grant_before_the_redraw_offers_the_windowed_size_again"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

@@ -1,6 +1,6 @@
 # C12.F13 — the source of a presentation change in the scale policy — PROPOSAL
 
-Status: **PROPOSAL, NOT ADOPTED** (2026-10-15). Evidence, not authority; no living document is
+Status: **PROPOSAL, NOT ADOPTED** (2026-10-15; text corrected to the candidate's code 2026-10-16). Evidence, not authority; no living document is
 changed by it. Owner direction of 2026-10-15, item 1: "Client-requested fullscreen must not
 indiscriminately release unrelated clients' held scale hints. Separate the source of a request
 from the compositor's resulting authoritative state change. Preserve necessary scale reevaluation
@@ -34,9 +34,13 @@ C14.4, after the list of non-client stimuli:
 > (its subject); its open epoch settles (M9 "settlement"). For every other element whose observers
 > change only because a client's request, commit or destruction started or ended a presentation,
 > the change may raise its hint (as a non-client stimulus) but never lowers it: the element holds
-> its hint against decreases until a non-client stimulus that is not such a change (an output
-> change, a camera action, its own fullscreen enter/exit) evaluates it, or until an evaluation
-> finds its requirement back at or above its hint. P7 applies regardless.
+> its hint against decreases until a non-client stimulus that is not such a change **and that
+> touches the element** evaluates it (an output added, removed or reconfigured touches every
+> element; a camera action touches the elements that an output bound to the moved camera
+> observed before it or observes after it; its own fullscreen enter/exit touches it), or until
+> an evaluation finds its
+> requirement back at or above its hint. A settlement does not lower a held element its
+> stimulus never touched. P7 applies regardless.
 > A presentation the system ends or starts (output added, removed, reconfigured) is a non-client
 > stimulus for every element.
 
@@ -53,10 +57,18 @@ client's presentation) keeps a higher hint until its next non-client stimulus."
   under-resolved by another client's presentation (the regression of the first implementation).
 - Cost: an element hidden by another client's presentation may keep a higher buffer scale than its
   remaining observers need (memory, never sharpness) until its next non-client stimulus.
-- Any camera drag releases every hold: its first step is a full non-client pass and its release
-  settles, even on an output that never observed the held element (independent re-review). This
-  follows from "a camera action" above; the owner may prefer to limit release to stimuli that touch
-  the element.
+- Only a stimulus that touches the held element releases its hold. **Correction of 2026-10-16
+  (text brought to the code of `4c81a1c`, no behaviour change):** this bullet said "Any camera
+  drag releases every hold: its first step is a full non-client pass and its release settles,
+  even on an output that never observed the held element … the owner may prefer to limit release
+  to stimuli that touch the element". `4c81a1c` implemented that narrower option: a camera
+  action releases the holds of the elements on the moved output's membership rows only, and an
+  output change touches everything. Tests (T0, `infynitae-core`):
+  `a_camera_drag_releases_only_the_holds_it_touches`,
+  `a_revealed_window_is_raised_after_a_system_change_lowered_it`,
+  `an_output_connected_releases_every_hold`, `a_hold_dies_with_its_element`; seeded controls
+  "C12.F13: a camera action releases every hold, touched or not", "… an epoch's settlement
+  lowers a held element it never touched", "… an output change does not touch every element".
 
 ## What it does not change
 

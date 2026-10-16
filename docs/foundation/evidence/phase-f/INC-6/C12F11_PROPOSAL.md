@@ -1,6 +1,6 @@
 # C12.F11 — F-SCALE-2: the device bound counts a size Core configures — PROPOSAL
 
-Status: **PROPOSAL, NOT ADOPTED** (2026-10-15). Evidence, not authority; no living document is
+Status: **PROPOSAL, NOT ADOPTED** (2026-10-15; text corrected to the candidate's code 2026-10-16, see the end). Evidence, not authority; no living document is
 changed by it. Owner direction of 2026-10-15, item 2: "Device-bound scale decisions must account
 for pending compositor-selected configure dimensions when those dimensions determine the next
 client buffer." Implemented only on the rehearsal branch
@@ -27,9 +27,12 @@ criterion "no buffer exceeds the limit Core was given" fails for that frame.
 
 F-SCALE-2, the sentence defining `s_max(E)` becomes:
 
-> `s_max(E)` = the largest logical side over all surfaces of E's tree **and over the size of the
-> protocol-fullscreen configure Core has sent E while E is granted (C5.2: the output's logical
-> size)** (0 iff neither has a non-zero extent, e.g. every initial commit without a grant).
+> `s_max(E)` = the largest logical side over all surfaces of E's tree **and over every size
+> Core has asked E for while that request stands: the size of the protocol-fullscreen configure
+> while E is granted (C5.2: the output's logical size), and the saved size offered in the
+> configure that ended E's fullscreen (M9), until E commits a tree of another size, is unmapped
+> or is destroyed** (0 iff none has a non-zero extent, e.g. every initial commit without a
+> grant).
 
 Everything else of F-SCALE-2, INV-SCALE-2 and P7 is unchanged. M15's row "first buffer attached
 (`s_max` becomes > 0)" gains "or a grant's configure size".
@@ -37,9 +40,20 @@ Everything else of F-SCALE-2, INV-SCALE-2 and P7 is unchanged. M15's row "first 
 ## What it does not change
 
 The ladder, `H_cfg`, P7's trigger and effect, the integer emission rule, SC-E, the epochs. A
-client-chosen size (a windowed resize) still enters only with the buffer that has it. The saved
-size of an unset is the client's own earlier size and is not counted (the fullscreen tree, larger,
-still bounds the hint until the client redraws).
+client-chosen size (a windowed resize) still enters only with the buffer that has it.
+
+**Correction of 2026-10-16 (text brought to the code of `4c81a1c`, no behaviour change):** this
+section said "The saved size of an unset is the client's own earlier size and is not counted (the
+fullscreen tree, larger, still bounds the hint until the client redraws)". That holds only when
+the fullscreen tree is the larger. It is not when the window was larger than the output: a
+3000 px window presented on a 1920 px output reaches hint 2, and the unset then asks it for
+3000 px at hint 2 (6000 px, over `D_max` 4096). Since `4c81a1c` the offered size is counted, as
+the canonical text above now says, until E redraws at another size (then its own tree bounds
+it), is unmapped (C12.F10 drops the offer with the rest of the fullscreen state) or destroyed. A
+re-grant before the redraw saves the size still on offer, not the fullscreen geometry. Tests
+(T0, `infynitae-core`): `the_size_offered_at_fullscreen_exit_fits_the_device_limit`,
+`a_spent_restore_offer_no_longer_bounds_the_hint`, `an_unmap_spends_the_restore_offer`,
+`a_re_grant_before_the_redraw_offers_the_windowed_size_again`, each with a seeded control.
 
 ## Interaction
 

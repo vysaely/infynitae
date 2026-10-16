@@ -4225,6 +4225,165 @@ mod tests {
         assert_eq!(hints(&fx, x), vec![(120, 1)], "{fx:?}");
     }
 
+    /// The X of [`the_size_offered_at_fullscreen_exit_fits_the_device_limit`] up to the unset:
+    /// 3000 px wide, seen by A (scale 1) and B (scale 2), D_max 4096, presented on B, redrawn at
+    /// B's 1920 px, then unset (3000 px offered).
+    fn offered_after_unset(
+        c: &mut Core,
+        i: &mut InputPort,
+        t: &mut OutputLifecycleToken,
+    ) -> ElementId {
+        let (_a, b) = two_scales(c, t);
+        c.set_renderer_device_max(4096).unwrap();
+        let x = map_win(c, 9, 3000, 200);
+        focus(c, i, x);
+        c.toplevel_request(x, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        c.toplevel_committed(x, win(9, 1920, 1080, true)).unwrap();
+        focus(c, i, x);
+        c.toplevel_request(x, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        x
+    }
+
+    /// C12.F11 (adversarial, 2026-10-16): the offer bounds the hint only until the client redraws
+    /// at another size. X redraws at the offered 3000 px (its own tree bounds it now), then
+    /// shrinks to 300 px: nothing bounds it any more, and a later non-client stimulus finds the
+    /// requirement of A and B (2) — the offer did not leave a permanent cap.
+    #[test]
+    fn a_spent_restore_offer_no_longer_bounds_the_hint() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        let x = offered_after_unset(&mut c, &mut i, &mut t);
+        c.toplevel_committed(x, win(9, 3000, 200, true)).unwrap();
+        assert!(
+            c.restore_offers.is_empty(),
+            "redrawn at another size: spent"
+        );
+        c.toplevel_committed(x, win(9, 300, 200, true)).unwrap();
+        // A becomes scale 2 (a non-client stimulus): X's requirement is 2, and 300 x 2 fits
+        // 4096; a stale 3000 px offer would cap it at 1
+        let fx = rescale_a(&mut c, &mut t, 240);
+        assert_eq!(hints(&fx, x), vec![(240, 2)], "{fx:?}");
+    }
+
+    /// Output A reconfigured to `scale_120` with the same logical size (1920 x 1080), a
+    /// non-client stimulus for everything.
+    fn rescale_a(c: &mut Core, t: &mut OutputLifecycleToken, scale_120: u32) -> Vec<Effect> {
+        let a = c
+            .outputs()
+            .iter()
+            .find(|o| o.key == crate::output::tests::key("A"))
+            .unwrap()
+            .id;
+        c.output_reconfigured(
+            t,
+            a,
+            OutputDescriptor {
+                key: crate::output::tests::key("A"),
+                mode: (1920 * scale_120 / 120, 1080 * scale_120 / 120),
+                transform: Transform::Normal,
+                scale_120,
+                refresh_mhz: 60_000,
+            },
+        )
+        .unwrap()
+    }
+
+    /// C12.F11 (adversarial): a re-grant before the client redrew saves the size still on offer
+    /// (its last windowed size), not the fullscreen geometry it still has; the second unset offers
+    /// 3000 px again and the hint still fits it.
+    #[test]
+    fn a_re_grant_before_the_redraw_offers_the_windowed_size_again() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        let x = offered_after_unset(&mut c, &mut i, &mut t);
+        let b = c.outputs().iter().find(|o| o.scale == 2.0).unwrap().id;
+        focus(&mut c, &mut i, x);
+        c.toplevel_request(x, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        focus(&mut c, &mut i, x);
+        let (_, fx) = c
+            .toplevel_request(x, ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        assert!(
+            fx.iter().any(
+                |e| matches!(e, Effect::ToplevelConfigureSize { element, size }
+                if *element == x && (size.w, size.h) == (3000, 200))
+            ),
+            "{fx:?}"
+        );
+        let (s120, n) = c.preferred_scale_of(x).unwrap();
+        assert!(3000 * u64::from(n) <= 4096 && 3000 * u64::from(s120) <= 4096 * 120);
+    }
+
+    /// C12.F11 + C12.F10 (adversarial): an unmap spends the offer with the rest of the
+    /// fullscreen state; the re-shown window (300 px) is bounded by its own tree only.
+    #[test]
+    fn an_unmap_spends_the_restore_offer() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        let x = offered_after_unset(&mut c, &mut i, &mut t);
+        c.toplevel_committed(x, win(9, 0, 0, false)).unwrap();
+        c.toplevel_committed(x, win(9, 300, 200, false)).unwrap();
+        c.toplevel_committed(x, win(9, 300, 200, true)).unwrap();
+        assert!(c.restore_offers.is_empty());
+        let fx = rescale_a(&mut c, &mut t, 240);
+        assert_eq!(
+            hints(&fx, x),
+            vec![(240, 2)],
+            "bounded by its 300 px only: {fx:?}"
+        );
+    }
+
+    /// C12.F13 (adversarial): an output connected is a system change and touches every element:
+    /// a hold ends there even though the new output never observes the held element.
+    #[test]
+    fn an_output_connected_releases_every_hold() {
+        let (mut c, mut i, _, mut t) = Core::new(cameras_at(&[("B", 0), ("F", 100_000)]));
+        let a = out(&mut c, &mut t, "A", (1920, 1080), 120);
+        let b = out(&mut c, &mut t, "B", (1920, 1080), 240);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert!(c.scale_state(x).unwrap().presentation_hold, "held");
+        let (_, fx) = c
+            .output_connected(
+                &mut t,
+                OutputDescriptor {
+                    key: crate::output::tests::key("F"),
+                    mode: (1920, 1080),
+                    transform: Transform::Normal,
+                    scale_120: 120,
+                    refresh_mhz: 60_000,
+                },
+            )
+            .unwrap();
+        assert_eq!(c.membership().observers(x), vec![a], "F looks elsewhere");
+        assert!(!c.scale_state(x).unwrap().presentation_hold, "released");
+        assert_eq!(hints(&fx, x), vec![(120, 1)], "{fx:?}");
+    }
+
+    /// C12.F13 (adversarial): a hold survives no change of identity. X is held while W is
+    /// presented on B; X is destroyed; a new window Y mapped at the same place is not held and
+    /// takes its requirement (A and B's, 2, once W's presentation ends).
+    #[test]
+    fn a_hold_dies_with_its_element() {
+        let (mut c, mut i, _, mut t) = Core::new(camera_b(0, 1.0));
+        let (a, b) = two_scales(&mut c, &mut t);
+        let x = map_win(&mut c, 9, 300, 200);
+        let w = map_win(&mut c, 1, 400, 300);
+        focus(&mut c, &mut i, w);
+        c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(b) })
+            .unwrap();
+        assert!(c.scale_state(x).unwrap().presentation_hold);
+        c.toplevel_destroyed(x);
+        assert!(c.scale_state(x).is_none());
+        let y = map_win(&mut c, 10, 300, 200);
+        assert_eq!(c.membership().observers(y), vec![a], "hidden on B");
+        assert!(!c.scale_state(y).unwrap().presentation_hold);
+        assert_eq!(c.preferred_scale_of(y), Some((120, 1)));
+    }
+
     /// The end of a presentation, however its client ends it (unset, unmap, destroy), reveals
     /// the elements it hid. A revealed element whose requirement rises still gets the higher
     /// hint in that batch (a hold never leaves it under-resolved): X mapped while W was presented

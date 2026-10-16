@@ -37,7 +37,7 @@
 - Prevents memory fragmentation, heap lock contention, and garbage collection latency spikes during interactive panning.
 
 ## Limitations & Counterexamples
-- This is a ratchet, not yet the final contract (OB-42 remains open until all counts reach 0).
+- This was a ratchet, not yet the final contract. *2026-10-16 (INC-6 exit review r2, correction of interpretation):* since `09171b3` (final-resolution branch, carried by `candidate/inc-6-exit-2026-10-16` and its r2) the file is the contract itself: it asserts **0** allocations per event on all nine measured hot paths (Pan, PanCrossing, Route, Key, Commit, CommitOffView, RenderList, FrameTick, PresentedCommit) at 10, 100 and 1,000 windows. The bounds in fact 3 are history (`f1ef262`), not the current criterion. What it does not measure: frees (not counted by design), allocations on other threads (none: Core is single-threaded), and adapter or backend code outside Core's entries. OB-42's closure remains the owner's decision at the INC-6 exit.
 
 ## Reproduction Instructions
 Execute the counting-allocator ratchet test:
