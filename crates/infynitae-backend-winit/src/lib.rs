@@ -151,6 +151,7 @@ pub fn run_nested(
             d,
             satellite,
             session.socket_name(),
+            &event_loop.handle(),
         )?),
         _ => None,
     };

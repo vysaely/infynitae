@@ -54,8 +54,14 @@ no interference with KDE's Xwayland; no X11 path activated in the live session).
   sees it, the shell will render it); an unmapped element is ignored. The attention set loses an
   element when it gets focus or dies.
 
-**Not implemented:** M19's "first X11 connection" trigger (the satellite starts at startup);
-primary selection (OB-27, T3); override-redirect menus (OB-9, needs a GTK3/X11 run); any shell
+- **M19 "first X11 connection" (on demand):** the run loops arm the supervisor instead of
+  starting the satellite: a copy of each listening socket is watched until a client is waiting in
+  its backlog, then the watch ends and the next poll starts the satellite, which accepts that
+  client. A session in which nothing uses X11 runs neither satellite nor Xwayland and gets no
+  wake-up from it (INV-IDLE-1). After an exit the restart is eager (M19 backoff), on the same
+  display.
+
+**Not implemented:** primary selection (OB-27, T3); override-redirect menus (OB-9, needs a GTK3/X11 run); any shell
 rendering of attention (Level D). **Gap found, outside the sealed scope:** the compositor offers
 no `wl_data_device_manager`, so no client has a clipboard or drag-and-drop (satellite warns
 "Clipboard will not work"). No increment of the plan owns it; it needs an owner decision.
@@ -99,6 +105,7 @@ before and after every run.
 | `…::an_exited_satellite_restarts_on_the_same_display_until_it_exits_too_often` | T0 | Crashed → backoff → Running on the same display → Degraded | "an exited satellite is never started again", "repeated exits never end in Degraded" |
 | `…::exits_outside_the_window_do_not_count` | T0 | the window bounds the count | — |
 | `…::shutdown_ends_the_satellite_and_the_display_files_go` | T0 | SIGTERM/SIGKILL, reaped, files removed | — |
+| `…::the_first_x11_connection_starts_the_satellite` | T0 | armed: nothing runs; a connection starts it at the next poll, once | "M19: the first X11 connection does not start the satellite" |
 | `session::tests::a_client_command_sets_or_removes_display` | T0 | the session's `DISPLAY` or none, independent of the test's own environment | "INV-XWAYLAND-1: a session client inherits the compositor's own DISPLAY" |
 | `session::tests::a_session_client_gets_the_sessions_x_display_or_none` | T0 | the same through a real spawned client | — |
 | `protocol::tests::an_activation_grants_focus_and_moves_nothing_spatial` | T0 | a grant moves the focus (configures, `KeyboardFocus`) and no camera or anchor | "INV-INPUT-9: a valid activation never grants focus" |
@@ -107,7 +114,7 @@ before and after every run.
 | `t1_activation::a_token_from_the_focused_client_activates_a_window` | T1 | a token with the focused client's enter serial activates V; no camera moves; a token is used once | "B10.7: an activation token can be used again" |
 | `t1_activation::a_token_without_a_serial_activates_nothing` | T1 | W-SM-8 | "W-SM-8: a token without a serial is accepted" |
 | `t1_activation::a_token_with_a_serial_older_than_the_last_focus_change_activates_nothing` | T1 | W-SM-8 | "W-SM-8: a serial older than the last focus enter is accepted" |
-| `t1_xwayland_satellite::a_satellite_restarts_on_the_same_display_and_its_clients_die_with_it` | **T1, ignored by default** (needs the satellite binary, `unshare`, `mount`, `xmessage`) | real satellite + Xwayland + `xmessage` against the production session, Core, adapter and headless backend, isolated: the X window maps as an element with an anchor; SIGKILL of the satellite destroys it through client death and the X client exits non-zero; the restarted satellite serves the same `DISPLAY` and a new client maps | — |
+| `t1_xwayland_satellite::a_satellite_restarts_on_the_same_display_and_its_clients_die_with_it` | **T1, ignored by default** (needs the satellite binary, `unshare`, `mount`, `xmessage`) | real satellite + Xwayland + `xmessage` against the production session, Core, adapter and headless backend, isolated: no satellite runs before an X11 client connects; that connection starts it; the X window maps as an element with an anchor; SIGKILL of the satellite destroys it through client death and the X client exits non-zero; the restarted satellite serves the same `DISPLAY` and a new client maps | — |
 
 The T1 test fails on this branch at its first step (the satellite exits until Degraded: no
 `wp_viewporter`); it is run on the rehearsal merge with the INC-6 × INC-8 integration line (see

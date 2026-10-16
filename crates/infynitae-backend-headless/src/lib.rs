@@ -303,6 +303,7 @@ pub fn run_headless(
             d,
             satellite,
             session.socket_name(),
+            &event_loop.handle(),
         )?),
         _ => None,
     };

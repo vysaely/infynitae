@@ -905,6 +905,10 @@ CONTROLS = [
      "        self.attention.retain(|&e| e != dead);\n",
      "",
      "infynitae-core", ["--lib"], "an_activation_of_an_unmapped_or_destroyed_window_changes_nothing"),
+    ("M19: the first X11 connection does not start the satellite", f"{WAYLAND}/xwayland.rs",
+     "                    wanted.set(true);\n",
+     "                    let _ = &wanted;\n",
+     "infynitae-wayland", ["--lib"], "the_first_x11_connection_starts_the_satellite"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

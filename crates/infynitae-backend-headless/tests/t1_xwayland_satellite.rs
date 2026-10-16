@@ -127,6 +127,16 @@ impl Run {
     }
 }
 
+/// A condition that becomes true `ms` milliseconds after its first call.
+fn false_after(ms: u64) -> bool {
+    thread_local!(static START: std::cell::Cell<Option<Instant>> = const { std::cell::Cell::new(None) });
+    START.with(|s| {
+        let t0 = *s.get().get_or_insert(Instant::now());
+        s.set(Some(t0));
+        t0.elapsed() >= Duration::from_millis(ms)
+    })
+}
+
 #[test]
 #[ignore = "needs xwayland-satellite, unshare, mount and xmessage; see the module doc"]
 fn a_satellite_restarts_on_the_same_display_and_its_clients_die_with_it() {
@@ -175,12 +185,14 @@ fn a_satellite_restarts_on_the_same_display_and_its_clients_die_with_it() {
         backoff: Duration::from_millis(200),
         ..RestartPolicy::default()
     };
-    let x = XwaylandSupervisor::new(
+    let mut x = XwaylandSupervisor::new(
         x_display,
         vec![satellite.into_os_string()],
         session.socket_name(),
         policy,
     );
+    // M19 "first X11 connection": nothing runs until an X11 client connects
+    x.arm_on_demand(&event_loop.handle()).unwrap();
     let mut run = Run {
         state,
         session,
@@ -188,10 +200,14 @@ fn a_satellite_restarts_on_the_same_display_and_its_clients_die_with_it() {
         output,
         x,
     };
-    run.x.start().unwrap();
-    assert_eq!(run.x.state(), SatelliteState::Running);
+    run.until(Duration::from_secs(2), "an idle moment", |_| {
+        false_after(200)
+    });
+    assert_eq!(run.x.state(), SatelliteState::Disabled, "no X11 client yet");
+    assert_eq!((run.x.starts(), run.x.pid()), (0, None));
 
-    // an X11 client becomes an ordinary element, placed like any other (INV-XWAYLAND-1)
+    // an X11 client becomes an ordinary element, placed like any other (INV-XWAYLAND-1); its
+    // connection is what starts the satellite
     let mut first = run.x_client("X12FIRST");
     run.until(Duration::from_secs(20), "the X11 window maps", |r| {
         assert_ne!(
@@ -203,6 +219,7 @@ fn a_satellite_restarts_on_the_same_display_and_its_clients_die_with_it() {
         );
         r.mapped() == 1
     });
+    assert_eq!(run.x.starts(), 1, "started by the first connection");
     let element = run.state.core().stage().mapped_elements()[0];
     assert!(
         run.state.core().stage().anchor(element).is_some(),

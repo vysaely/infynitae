@@ -15,6 +15,7 @@
 //!
 //! In `-listenfd` mode xwayland-satellite logs to syslog when it can reach it.
 
+use std::cell::Cell;
 use std::collections::VecDeque;
 use std::ffi::OsString;
 use std::fs::{self, File, OpenOptions};
@@ -26,8 +27,11 @@ use std::os::unix::fs::{DirBuilderExt, FileTypeExt, OpenOptionsExt, PermissionsE
 use std::os::unix::net::{SocketAddr, UnixListener};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use smithay::reexports::calloop::generic::Generic;
+use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction};
 use smithay::reexports::rustix;
 
 /// An X display this process owns: the lock file `<root>/.X<n>-lock` with this process's pid,
@@ -174,11 +178,13 @@ pub fn reserve_for_session(satellite: Option<&Path>) -> io::Result<Option<XDispl
 }
 
 /// For a run loop: the supervisor of `satellite` on `display`, as a client of the session's
-/// socket `wayland_display`, started.
-pub fn start_for_session(
+/// socket `wayland_display`, armed to start at the first X11 connection (M19), so a session in
+/// which nothing uses X11 runs no X server.
+pub fn start_for_session<D: 'static>(
     display: XDisplay,
     satellite: &Path,
     wayland_display: &str,
+    handle: &LoopHandle<'_, D>,
 ) -> io::Result<XwaylandSupervisor> {
     let mut s = XwaylandSupervisor::new(
         display,
@@ -186,11 +192,10 @@ pub fn start_for_session(
         wayland_display,
         RestartPolicy::default(),
     );
-    s.start()?;
+    s.arm_on_demand(handle)?;
     println!(
-        "[infynitae] xwayland-satellite started on {} (pid {:?})",
-        s.display.name(),
-        s.pid()
+        "[infynitae] X11 display {} ready; xwayland-satellite starts at the first X11 connection",
+        s.display.name()
     );
     Ok(s)
 }
@@ -245,6 +250,9 @@ pub struct XwaylandSupervisor {
     restart_at: Option<Instant>,
     last_exit: Option<ExitStatus>,
     starts: u32,
+    /// Set when an X11 client connected while no satellite had started (M19 "first X11
+    /// connection"); the next `poll` starts it.
+    wanted: Rc<Cell<bool>>,
 }
 
 impl XwaylandSupervisor {
@@ -265,6 +273,7 @@ impl XwaylandSupervisor {
             restart_at: None,
             last_exit: None,
             starts: 0,
+            wanted: Rc::new(Cell::new(false)),
         }
     }
 
@@ -304,6 +313,28 @@ impl XwaylandSupervisor {
         self.spawn()
     }
 
+    /// M19 Disabled → Running at the first X11 connection: both listening sockets are watched
+    /// (a copy each) until one has a client waiting in its backlog, then the watch ends and the
+    /// next [`XwaylandSupervisor::poll`] starts the satellite, which accepts that client. Nothing
+    /// is accepted here and nothing wakes the loop while no X11 client connects.
+    pub fn arm_on_demand<D: 'static>(&mut self, handle: &LoopHandle<'_, D>) -> io::Result<()> {
+        for fd in self.display.inheritable()? {
+            // the copies are only watched, never inherited
+            rustix::io::fcntl_setfd(&fd, rustix::io::FdFlags::CLOEXEC)?;
+            let wanted = self.wanted.clone();
+            handle
+                .insert_source(
+                    Generic::new(fd, Interest::READ, Mode::Level),
+                    move |_, _, _| {
+                        wanted.set(true);
+                        Ok(PostAction::Remove)
+                    },
+                )
+                .map_err(|e| io::Error::other(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     fn spawn(&mut self) -> io::Result<()> {
         let Some((program, leading)) = self.command.split_first() else {
             return Err(io::Error::new(
@@ -338,6 +369,13 @@ impl XwaylandSupervisor {
     /// pending (an exit itself is noticed by the caller's wake-up on the child, or at its next
     /// call).
     pub fn poll(&mut self, now: Instant) -> Option<Duration> {
+        if self.state == SatelliteState::Disabled
+            && self.wanted.take()
+            && let Err(e) = self.spawn()
+        {
+            eprintln!("[infynitae] failed to start xwayland-satellite: {e}");
+            self.state = SatelliteState::Degraded;
+        }
         if self.state == SatelliteState::Running
             && let Some(child) = &mut self.child
             && let Ok(Some(status)) = child.try_wait()
@@ -577,6 +615,40 @@ mod tests {
         );
         drop(s);
         assert!(!lock.exists() && !socket.exists());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// M19 "first X11 connection": once armed, nothing runs until an X11 client connects; its
+    /// connection (waiting in the backlog) starts the satellite at the next poll; later
+    /// connections start nothing more.
+    #[test]
+    fn the_first_x11_connection_starts_the_satellite() {
+        use smithay::reexports::calloop::EventLoop;
+        let root = root("demand");
+        let d = XDisplay::reserve(&root, 0..=3).unwrap();
+        let path = d.socket_path().to_path_buf();
+        let mut s = XwaylandSupervisor::new(d, sh("exec sleep 30"), "wl-test", FAST);
+        let mut event_loop: EventLoop<()> = EventLoop::try_new().unwrap();
+        s.arm_on_demand(&event_loop.handle()).unwrap();
+        event_loop
+            .dispatch(Some(Duration::from_millis(30)), &mut ())
+            .unwrap();
+        assert_eq!(s.poll(Instant::now()), None);
+        assert_eq!((s.state(), s.starts()), (SatelliteState::Disabled, 0));
+        let _first = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        event_loop
+            .dispatch(Some(Duration::from_secs(5)), &mut ())
+            .unwrap();
+        s.poll(Instant::now());
+        assert_eq!((s.state(), s.starts()), (SatelliteState::Running, 1));
+        let _second = std::os::unix::net::UnixStream::connect(&path).unwrap();
+        event_loop
+            .dispatch(Some(Duration::from_millis(30)), &mut ())
+            .unwrap();
+        s.poll(Instant::now());
+        assert_eq!(s.starts(), 1, "started once");
+        s.shutdown(Duration::from_millis(500));
+        drop(s);
         fs::remove_dir_all(&root).unwrap();
     }
 }
