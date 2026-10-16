@@ -869,6 +869,9 @@ CONTROLS = [
     ("clipboard: a selection whose owner quit is not cleared", f"{WAYLAND}/handlers.rs",
      "            smithay::wayland::selection::data_device::clear_data_device_selection(\n                &self.dh, &self.seat,\n            );\n", "",
      "infynitae-backend-headless", ["--test", "t1_clipboard"], "a_quitting_owner_clears_the_selection"),
+    ("clipboard: a client's drag is not refused (Smithay's DnD grab takes the pointer)", f"{WAYLAND}/handlers.rs",
+     "        self.drag_started = true;\n", "",
+     "infynitae-backend-headless", ["--test", "t1_clipboard"], "a_drag_started_on_a_real_press_is_refused"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

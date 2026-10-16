@@ -588,7 +588,17 @@ impl DataDeviceHandler for WaylandState {
 
 // Drag and drop: Smithay's defaults (a drag starts only from a client's implicit pointer grab).
 // Not validated against Core's pointer ownership yet (clipboard slice; DnD needs its own review).
-impl ClientDndGrabHandler for WaylandState {}
+/// Drag-and-drop is not offered: a drag a client starts is refused (`refuse_client_drags`).
+impl ClientDndGrabHandler for WaylandState {
+    fn started(
+        &mut self,
+        _source: Option<smithay::reexports::wayland_server::protocol::wl_data_source::WlDataSource>,
+        _icon: Option<WlSurface>,
+        _seat: Seat<Self>,
+    ) {
+        self.drag_started = true;
+    }
+}
 impl ServerDndGrabHandler for WaylandState {}
 
 impl PrimarySelectionHandler for WaylandState {

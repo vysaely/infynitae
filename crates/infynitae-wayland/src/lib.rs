@@ -123,6 +123,8 @@ pub struct WaylandState {
     /// only from the keyboard-focused client). A selection whose owner's connection is gone is
     /// cleared, so other clients are told it is gone (Smithay does not do it by itself).
     selection_owners: [Option<ClientId>; 2],
+    /// A client started a drag (Smithay installed its DnD grab); `refuse_client_drags` ends it.
+    drag_started: bool,
     registry: SurfaceRegistry,
     elements: Vec<ElementHandle>,
     pub(crate) serial_outputs:
@@ -179,6 +181,7 @@ impl WaylandState {
             data_device: DataDeviceState::new::<Self>(display),
             primary_selection: PrimarySelectionState::new::<Self>(display),
             selection_owners: [None, None],
+            drag_started: false,
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),

@@ -1689,6 +1689,7 @@ impl Lockstep {
                 .expect("server dispatch");
             // as the session does after each dispatch
             self.state.clear_orphaned_selections();
+            self.state.refuse_client_drags();
             self.display.flush_clients().expect("server flush");
             self.conn.flush().expect("client flush");
             if let Some(guard) = self.conn.prepare_read() {

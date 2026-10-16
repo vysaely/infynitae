@@ -250,6 +250,7 @@ impl Session {
             }
         }
         state.clear_orphaned_selections();
+        state.refuse_client_drags();
         self.flush();
     }
 

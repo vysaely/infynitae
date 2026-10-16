@@ -73,6 +73,7 @@ impl Other {
                 .dispatch_clients(&mut ls.state)
                 .expect("dispatch");
             ls.state.clear_orphaned_selections();
+            ls.state.refuse_client_drags();
             ls.display.flush_clients().expect("flush");
             if handled == 0 && served == 0 {
                 idle += 1;
@@ -333,4 +334,70 @@ fn the_primary_selection_follows_the_keyboard_focus() {
     let mut out = Vec::new();
     reader.read_to_end(&mut out).unwrap();
     assert_eq!(out, b"middle click");
+}
+
+/// Drag-and-drop is not offered. A client that starts a drag on the implicit grab of a real
+/// button press (the only serial Smithay accepts) has it refused at once: its source is
+/// cancelled, no drag offer is made, and pointer delivery keeps following Core — the next motion
+/// enters the window again and the release reaches it.
+#[test]
+fn a_drag_started_on_a_real_press_is_refused() {
+    use common::input::{BTN_LEFT, Rig, none};
+    let mut r = Rig::x8();
+    let registry = r.ls.registry().clone();
+    let qh = r.ls.qh.clone();
+    r.ls.probe.bind_clipboard(&registry, &qh);
+    r.ls.pump();
+    r.button(BTN_LEFT, true, none());
+    assert_eq!(
+        r.ls.probe.ptr.last().map(String::as_str),
+        Some("frame"),
+        "{:?}",
+        r.ls.probe.ptr
+    );
+    assert!(r.ls.probe.ptr.iter().any(|l| l == "button 272 pressed"));
+    let serial = r.ls.probe.last_serial;
+    let source =
+        r.ls.probe
+            .data_device_manager
+            .as_ref()
+            .unwrap()
+            .create_data_source(&qh, ());
+    source.offer("text/plain".into());
+    let device = r.ls.probe.clipboard.device.clone().unwrap();
+    let origin = r.ls.probe.surfaces[0].wl.clone();
+    device.start_drag(Some(&source), &origin, None, serial);
+    r.ls.pump();
+    assert!(
+        r.ls.probe.clipboard.log.contains(&"cancelled".to_string()),
+        "the drag's source is cancelled: {:?}",
+        r.ls.probe.clipboard.log
+    );
+    assert!(
+        !r.ls
+            .probe
+            .clipboard
+            .log
+            .iter()
+            .any(|l| l.starts_with("enter")),
+        "no drag offer: {:?}",
+        r.ls.probe.clipboard.log
+    );
+    // Smithay's drag grab had cleared the pointer focus (one `leave`); the next routed motion
+    // enters the window again at the pointer's position, and the release is delivered
+    let n = r.ls.probe.ptr.len();
+    assert_eq!(r.ls.probe.ptr[n - 2..], ["leave W", "frame"]);
+    let m = r.mark();
+    r.motion((10.0, 0.0));
+    r.button(BTN_LEFT, false, none());
+    assert_eq!(
+        r.since(m),
+        vec![
+            "enter W 640,520",
+            "relative 10,0 unaccel 9,0",
+            "frame",
+            "button 272 released",
+            "frame"
+        ]
+    );
 }

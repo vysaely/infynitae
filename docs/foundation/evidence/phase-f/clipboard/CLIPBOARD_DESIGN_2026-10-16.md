@@ -8,7 +8,7 @@ No new dependency (Smithay 0.7.0's `wayland_frontend` already contains the proto
 
 | Global | Version | Notes |
 |---|---|---|
-| `wl_data_device_manager` | 3 (Smithay) | selection (clipboard); drag-and-drop requests are accepted by Smithay's defaults only with an implicit pointer grab — DnD is **not** validated against Core's pointer ownership and is not claimed |
+| `wl_data_device_manager` | 3 (Smithay) | selection (clipboard) only. **Drag-and-drop is not offered:** the protocol carries `start_drag`, and Smithay installs its DnD grab on a valid press serial before any handler can refuse it — that grab would take pointer delivery from Core. The adapter replaces it at once (`refuse_client_drags`, after every dispatch) by the pass-through grab used after a pan-dismissed popup grab: the drag is dropped, its source gets `cancelled`, no offer is made, and the next motion re-enters the window (T1 `a_drag_started_on_a_real_press_is_refused`) |
 | `zwp_primary_selection_device_manager_v1` | 1 | the middle-click selection, same focus rule |
 | `zwlr_data_control_manager_v1` / `ext_data_control_v1` | — | **not offered** (§4) |
 
