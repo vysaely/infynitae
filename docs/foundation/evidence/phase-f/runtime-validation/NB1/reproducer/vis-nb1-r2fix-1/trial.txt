@@ -1,0 +1,2 @@
+binary /home/vysaely/.cache/infynitae-integration/nb1/infynitae-nb1-r2fix bad4285146316007 minimise_ms=none start 2026-10-17T02:14:33+03:00 load 0.86
+verdict ok exit=0 exit_at=8.52s term_at=8.0s minimised=1 last_frame_done=23:14:41.058927 left=0

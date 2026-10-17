@@ -1305,6 +1305,10 @@ CONTROLS = [
      "        let everything = self.scale_sweep.system;\n",
      "        let everything = self.scale_sweep.system || self.scale_sweep.all;\n",
      "infynitae-core", ["--lib"], "a_device_limit_report_releases_no_hold_now_or_later"),
+    # ---- NB-1 (2026-10-17): the nested backend submits only when the host is ready for a frame
+    ("NB-1: a submit does not wait for the host's frame callback (the gate stays open)", "crates/infynitae-backend-winit/src/lib.rs",
+     "    fn submitted(&mut self) {\n        self.ready = false;\n    }", "    fn submitted(&mut self) {\n        let _ = self.ready;\n    }",
+     "infynitae-backend-winit", ["--lib"], "a_frame_is_submitted_only_when_the_host_is_ready"),
     # ---- C12.F14 (OB-24 D1): the representable zoom domain (F-VIEW-1)
     ("C12.F14: ZOOM_MIN widened beyond F-VIEW-1's exact range", "crates/infynitae-core/src/geom.rs",
      "pub const ZOOM_MIN: f64 = 1.0 / (1u64 << 20) as f64;",

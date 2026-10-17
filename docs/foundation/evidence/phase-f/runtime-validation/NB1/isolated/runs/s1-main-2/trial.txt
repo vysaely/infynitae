@@ -1,0 +1,2 @@
+test /home/vysaely/.cache/infynitae-integration/nb1h/infynitae-main 9cdeb30fef35ea82 hide=3 reveal=8 term=none duration=12 start 2026-10-17T04:46:57+03:00
+term_at=None verdict ok nested_exit=0 at 12.56s hide_at=3.01 reveal_at=8.02 commits_visible=176 commits_hidden=0 commits_after_reveal=223 total_commits=419 frame_dones=838

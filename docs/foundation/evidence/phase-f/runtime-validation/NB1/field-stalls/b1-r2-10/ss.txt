@@ -1,0 +1,8 @@
+Netid State Recv-Q Send-Q            Local Address:Port    Peer Address:Port   Process                    
+u_str ESTAB 3      0                             * 1365120            * 1365121 users:(("infynitae-nrt3",pid=1793047,fd=28),("infynitae-nrt3",pid=1793047,fd=26)) <->                
+u_str ESTAB 0      768                           * 1365119            * 1365118 users:(("infynitae-nrt3",pid=1793047,fd=24),("infynitae-nrt3",pid=1793047,fd=23)) <->                
+u_str ESTAB 0      2304                          * 1365121            * 1365120 users:(("infynitae-nrt3",pid=1793047,fd=27)) <->                
+u_str ESTAB 1      0                             * 1365118            * 1365119 users:(("infynitae-nrt3",pid=1793047,fd=25),("infynitae-nrt3",pid=1793047,fd=20)) <->                
+u_str ESTAB 0      0      /run/user/1000/wayland-0 1357637            * 1355615 <-> ino:91 dev:0/83
+u_str ESTAB 2028   0             /tmp/rt/wl-nested 1369171            * 0       users:(("infynitae-nrt3",pid=1793047,fd=33)) --- ino:8 dev:0/94 
+u_str ESTAB 0      0                             * 1355615            * 1357637 users:(("infynitae-nrt3",pid=1793047,fd=8)) <->                
