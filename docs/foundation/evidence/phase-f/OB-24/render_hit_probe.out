@@ -1,0 +1,3 @@
+RENDERHIT per-frame |v-R|<120: w 837: real Smithay rect != Core rect in 15/23659 (model 15); e.g. Some((60, 837, "0x3ff14fa01b1cd331", 60, (5, 910), (5, 911)))
+RENDERHIT kept +2^31: w 837: real Smithay rect != Core rect in 38/23659 (model 38); e.g. Some((2090211848, 837, "0x3ff0703afb7c4c41", 2147483647, (6, 866), (6, 865)))
+RENDERHIT kept -2^31: w 837: real Smithay rect != Core rect in 16/23659 (model 16); e.g. Some((-2118460730, 837, "0x3ff0381d7dbe2d55", -2147483647, (5, 853), (5, 854)))

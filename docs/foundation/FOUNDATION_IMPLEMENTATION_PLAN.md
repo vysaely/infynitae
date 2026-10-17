@@ -223,25 +223,26 @@ INC-15 (PHYSICAL T3)   INC-16 (PHYSICAL T4, Phase G DRM)   INC-17 (PHYSICAL T5) 
 ### GATE G-OB24 (architecture change control, not an increment)
 No PRODUCT increment may create a state where **persistent zoom ≠ 1 and camera pan coexist** until OB-24 is resolved through architecture change control: a C12.R3-style amendment with INC-9-class evidence.
 
-**Status 2026-10-17:** decided by the owner (D1–D6) and recorded as layer C12.F14 on the governance branch `governance/ob24-c12f14-2026-10-17`; G-OB24 is resolved when that layer is on `main` (owner integration authorization). INC-10 then implements the kept lattice reference (F-LATTICE-1) and must show 0 width/gap changes per zoomed pan on the production path (OB-24).
+**Status 2026-10-17 (as amended by C12.F14.5, Option A):** OB-24 is decided by the owner (D1–D6) and recorded as layer C12.F14 on the governance branch `governance/ob24-c12f14-2026-10-17`. C12.F14 amends this gate's interpretation: the gate requires the recorded architecture decision — C12.F14 on `main` (owner integration authorization) — not OB-24's closure. Once C12.F14 is on `main` the gate is **met** and INC-10 may begin (with its other entry conditions). **OB-24 stays OPEN** until INC-10's implementation and its exit evidence (below) are complete and accepted through architecture change control; it closes only then. Not met today: C12.F14 is not on `main`.
 
 **Conservative fallback** if OB-24 is unresolved when INC-10 is reached: navigation from a fitted view first restores the baseline zoom, so persistent zoom ≠ 1 never coexists with pan. The fit itself stays one-shot (INV-CAMERA-5). Discrete or continuous user zoom features stay out.
 
 ### INC-10 — Zoomed navigation (viewport-fit, zoomed pan, restore)
 - **Category:** PRODUCT
 - **Execution class:** HEADLESS
-- **Objective:** one-shot `FitViewport` and restore (F-FIT-1, OBJ-30); zoomed pan (F-PAN-1) **only under G-OB24 resolved, else the fallback**.
+- **Objective:** one-shot `FitViewport` and restore (F-FIT-1, OBJ-30); zoomed pan (F-PAN-1) **only under G-OB24 met (C12.F14.5), else the fallback**; the output's kept lattice reference (F-LATTICE-1 as amended by C12.F14).
 - **Crates/modules:** core `navigation::{fit, restore}`; shell and input bindings for fit.
 - **Authoritative state introduced:** OBJ-30.
 - **Seam touched:** none new (camera views).
 - **Invariants exercised:** INV-CAMERA-5, INV-COORD-3, INV-SCALE-1, INV-RENDER-1 at k ∉ n/120.
 - **Risks retired:** TC-1 (production), TC-3, TA-1 (production confirmation).
 - **Obligations:** OB-14 (zoom ≠ 1 part), OB-24 (consumes the decision; does not make it), OB-53 (its part).
-- **Exit tests:** TST-18 d5hit zoomed configurations; TST-23 R1 and TST-19 as T0 properties; the 200-commit "client resize never moves the camera" test on the production path.
+- **Exit tests:** TST-18 d5hit zoomed configurations; TST-23 R1 and TST-19 as T0 properties; the 200-commit "client resize never moves the camera" test on the production path. **OB-24 exit evidence (C12.F14):** 0 width/gap changes per zoomed pan on the production path with the kept reference; **render/hit agreement with the kept reference at k ∉ n/120** — Smithay's presented rects from `from_surface` equal Core's F-LATTICE-1 rects, including references near the bound `|v_O − R_O|·k_O ≤ 2³¹`, shown by Smithay-geometry tests targeted at rounding points (X-6 class, not random-only); Core projection tests do not count. The current F-RENDER-1 handoff fails this at rounding points (C12.F14.4 item 3, `evidence/phase-f/OB-24/render_hit_probe.out`), so it needs an architecture decision through change control before this exit. Also: the C_O conversion beyond `|v_O − R_O|` = 2³⁷ px handled or excluded (C12.F14.4 item 1).
+- **Fit domain (moved here from C12.F14, not yet normative):** F-FIT-1's `zoom = min(view_w / W.w, view_h / W.h)` leaves F-VIEW-1's domain only below 2⁻²⁰ (a W wider than 2²⁰ view widths; the upper end is unreachable). Intended behaviour: clamp the zoom to 2⁻²⁰ — the fit still performs its one camera mutation (INV-CAMERA-5) and centres W, which then does not fit entirely. Rationale: a fit is an authorized action on a legal element, so refusing it would fail the user's command for a geometry Core accepts, and the clamp keeps every camera inside the representable domain without a new error path. INC-10 records the rule in F-FIT-1 through change control and implements it with a T0 test at, just below and just above the bound, before the fit ships.
 - **Negative controls:** the sealed pan formula (content ≠ hand); a sticky-fit probe (E0277).
-- **Entry conditions:** INC-3, INC-6 exits **and** (G-OB24 resolved **or** the fallback active).
+- **Entry conditions:** INC-3, INC-6 exits **and** (G-OB24 met, as amended by C12.F14.5: C12.F14 on `main` **or** the fallback active).
 - **Stop / rollback:** any camera change from client geometry.
-- **Architecture decision required first:** **yes: OB-24** (or the fallback).
+- **Architecture decision required first:** **yes: OB-24's decision**, recorded by C12.F14 (G-OB24, C12.F14.5), or the fallback. OB-24 itself stays OPEN until this increment's exit evidence is accepted.
 - **Why here:** zoom is reachable only through fit in Foundation 01. It is valuable but not foundational, and it is gated.
 
 ### INC-11 — Shell IPC

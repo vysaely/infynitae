@@ -130,7 +130,8 @@ pub enum ShellCommand {}
 pub enum EntryError {
     /// The port or token was minted by another Core (C1.5, C12.R2.3).
     ForeignPort,
-    /// The output descriptor is empty or has a non-positive scale.
+    /// The output descriptor is outside the representable domain (F-VIEW-1, C12.F14): a mode
+    /// side of 0 or above 2¹⁵ px, or a scale outside 0.25 … 8; nothing was changed (M4).
     InvalidDescriptor,
     /// The `OutputId` is not connected (unknown, or already disconnected).
     UnknownOutput,

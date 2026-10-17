@@ -185,7 +185,12 @@ impl View {
 /// F-LATTICE-1: the camera on the physical grid, `C = round((v − R)·k + δ)`, and the snapped
 /// camera `c_eff = R + Q16(C / k)` (R5), for a view origin `v` (Q16) and a lattice reference `R`.
 fn camera_on_grid(v_q: i64, r: i64, k: f64) -> (i64, i64) {
-    // exact: |v − R| < 2³⁷ px in the representable domain, so the Q16 difference is below 2⁵³
+    // The Q16 difference converts to f64 exactly while |v − R| ≤ 2³⁷ px (2⁵³ Q16 units). A
+    // reference set from this view (F-LATTICE-1 on the base) gives |v − R| < 120 px. A kept
+    // reference (C12.F14, INC-10) can reach |v − R| ≈ 2³⁷ + 120 px: v and the origin R was set
+    // from share k and view_O, so they differ by at most the centre's span 2³⁷, plus R's < 120.
+    // Past 2³⁷ px the conversion may round by one Q16 unit (2⁻¹⁶ px) before the product;
+    // INC-10 must account for that or keep |v − R| within 2³⁷ px.
     let rel = (v_q - r * Q16_ONE) as f64 / Q16_ONE as f64;
     let c = (rel * k + DELTA).round() as i64;
     (c, r * Q16_ONE + q16(c as f64 / k))
@@ -1082,8 +1087,10 @@ pub(crate) mod tests {
 
     /// F-VIEW-1's representable domain (C12.F14): every corner of the accepted domain — zoom, scale, view
     /// size, camera centre and edge positions at their extremes — and 20,000 random states inside
-    /// it evaluate without overflow (a debug build panics on one; the release run of this test
-    /// is built with overflow checks on) and keep the projection's invariants: the view origin
+    /// it evaluate without overflow (`cargo test` builds with the test profile, which keeps
+    /// overflow checks on, so an overflow panics here; no release run of this test exists, and a
+    /// release build — checks off — is covered only because the same inputs never overflow)
+    /// and keep the projection's invariants: the view origin
     /// within F-VIEW-1's exact range |v| ≤ 2³⁷ px, monotone physical edges, the camera centre at
     /// the view centre, unproject ∘ project = identity up to the Q16 quantum. Every
     /// intermediate is monotone in each parameter, so the corners bound the domain.
@@ -1277,7 +1284,7 @@ pub(crate) mod tests {
             changed_sealed += usize::from(widths(&sealed) != base_sealed);
             let held = with_reference(sealed, kept);
             changed_kept += usize::from(widths(&held) != base_kept);
-            // the kept reference stays far inside the exactness bound here
+            // the kept reference stays far inside the reference bound here
             assert!(((held.v.x >> 16) - held.r.0).abs() as f64 * held.k <= (1u64 << 31) as f64);
         }
         assert_eq!(changed_kept, 0, "a kept reference changed a width or gap");
@@ -1287,13 +1294,15 @@ pub(crate) mod tests {
         );
     }
 
-    /// C12.F14 (D4): with a kept reference within the bound `|v_O − R_O|·k_O ≤ 2³¹`, every visible
-    /// physical edge equals the exact value of F-LATTICE-1 — f64 adds no rounding error that
-    /// moves an edge — across the whole representable domain (zoom 2⁻²⁰ … 2¹⁶, scale 0.25 … 8,
-    /// centres up to ±2³⁶ px), on both sides of the reference, at generic k and at k with exact
-    /// ties (k = 1.25·2ⁿ: (x − R)·k = n + ½, where δ decides).
+    /// C12.F14 (D4), a sample: with a kept reference within the bound `|v_O − R_O|·k_O ≤ 2³¹`,
+    /// sampled visible physical edges equal the exact value of F-LATTICE-1 across the
+    /// representable domain (zoom 2⁻²⁰ … 2¹⁶, scale 0.25 … 8, centres up to ±2³⁶ px), on both
+    /// sides of the reference, at generic k and at k with exact ties (k = 1.25·2ⁿ:
+    /// (x − R)·k = j + ½, where δ decides). A sample, not a guarantee: an edge whose sum lies
+    /// within 2⁻²¹ of a rounding point can differ from exact arithmetic, and random states
+    /// rarely land there (`kept_reference_rounding_steps_at_the_visible_edge_limit`).
     #[test]
-    fn a_kept_reference_within_the_bound_rounds_every_visible_edge_exactly() {
+    fn a_kept_reference_within_the_bound_matches_exact_edges_on_sampled_states() {
         use crate::geom::{CANVAS_LIMIT_PX, MODE_MAX, ZOOM_MAX, ZOOM_MIN};
         let bound = (1u64 << 31) as f64;
         let mut rng = Rng(0x0B24_C12F_1400_0001);
@@ -1375,5 +1384,136 @@ pub(crate) mod tests {
             }
         }
         assert!(wrong > 0, "f64 stayed exact at |v − R|·k ≈ 2³⁵");
+    }
+
+    /// C12.F14 (D4), the rounding-step argument for the bound `|v_O − R_O|·k_O ≤ 2³¹`, checked
+    /// deterministically at the visible-edge limit for every binary exponent e of k in the
+    /// domain (k = 2ᵉ·m, 2⁻²² ≤ k ≤ 2¹⁹). A visible edge has |(x − R)·k| ≤ 2³¹ + 2¹⁵ (+ k for
+    /// the edge just outside) < 2³², where one f64 rounding moves a value by at most half an
+    /// ulp, 2⁻²². Established, on both sides of R, at the largest |(x − R)·k| each e reaches:
+    /// an exact tie (x − R)·k = j + ½ rounds up, as exact F-LATTICE-1 does (δ is not absorbed);
+    /// an integral (x − R)·k is its own edge; and around the δ-shifted rounding boundary
+    /// (x − R)·k = h − δ, h a half-integer, the product's error is ≤ 2⁻²², the sum's ≤ 2⁻²¹ < δ,
+    /// and the sum stays above the exact product. Not established: that an edge equals its
+    /// exact-arithmetic value. A sum within 2⁻²¹ of h rounds either way; the sweep must meet
+    /// such edges, and two fixed ones are kept below, one inside the bound and one at the
+    /// magnitudes of the per-frame reference.
+    #[test]
+    fn kept_reference_rounding_steps_at_the_visible_edge_limit() {
+        use crate::geom::zoom_in_domain;
+        const S: i32 = 80; // fixed point 2⁻⁸⁰: every k, product and sum below is exact in it
+        let fixed = |v: f64| -> i128 {
+            let (b, m) = (v.to_bits(), v.abs());
+            if m == 0.0 {
+                return 0;
+            }
+            let mant = ((b & ((1 << 52) - 1)) | (1 << 52)) as i128;
+            let p = ((b >> 52) & 0x7ff) as i32 - 1075 + S;
+            assert!(p >= 0 && (b >> 52) & 0x7ff != 0, "{v} in 2⁻⁸⁰");
+            if v < 0.0 { -(mant << p) } else { mant << p }
+        };
+        let round_away = |n: i128| -> i64 {
+            let half = 1i128 << (S - 1);
+            (if n >= 0 {
+                (n + half) >> S
+            } else {
+                -((-n + half) >> S)
+            }) as i64
+        };
+        let (delta, step) = (1i128 << (S - 20), 1i128 << (S - 22)); // δ, one rounding step
+        let visible = ((1i64 << 31) + (1 << 15)) as f64;
+        // |x − R| for a Canvas edge x (|x| ≤ 2³⁶) and a reference kept from a view origin
+        // (|v| ≤ 2³⁷, R at most 120 below it)
+        let reach = ((1i64 << 36) + (1 << 37) + LATTICE) as f64;
+        // k = zoom · scale for a zoom in the domain at scale 0.25, 1 or 8 (exact quotients)
+        let in_domain = |k: f64| [0.25, 1.0, 8.0].iter().any(|&s| zoom_in_domain(k / s));
+        let (mut ties, mut boundary, mut disagree) = (0, 0, 0);
+        for e in -22..=19i32 {
+            let pow = f64::from(e).exp2();
+            let limit = visible.min(reach * pow); // the largest |(x − R)·k| this e reaches
+            // integral products: k = 2ᵉ, x − R a multiple of 2^max(0, −e)
+            let unit = 1i64 << (-e).max(0);
+            let d = (limit / pow) as i64 / unit * unit;
+            for d in [d, -d] {
+                assert!(in_domain(pow));
+                assert_eq!(edge(d, 0, 0, pow), (d as f64 * pow) as i64, "e {e} d {d}");
+            }
+            if e == 19 {
+                continue; // k = 2¹⁹ is the only k with this exponent
+            }
+            // exact ties: (x − R)·k = j + ½ must round up for x > R and x < R alike
+            let (k, d) = if e >= 0 {
+                let k = pow + 0.5; // odd x − R gives j + ½
+                (k, ((limit / k) as i64 - 1) | 1)
+            } else {
+                let o = ((limit / 1.5) as i64 - 1) | 1; // (o·2⁻ᵉ)·1.5·2ᵉ = 1.5·o
+                (1.5 * pow, o << -e)
+            };
+            assert!(in_domain(k), "e {e}");
+            for d in [d, -d] {
+                let twice = 2 * d as i128 * fixed(k); // 2·(x − R)·k, exact
+                assert_eq!(twice.rem_euclid(2 << S), 1 << S, "e {e} d {d}: a tie");
+                let up = ((twice >> S) + 1).div_euclid(2) as i64; // ⌈j + ½⌉
+                assert_eq!(edge(d, 0, 0, k), up, "e {e} d {d}: a tie rounds up");
+                ties += 1;
+            }
+            // the δ-shifted boundary at a generic k (full mantissa): k swept by single ulps
+            // around (h − δ)/d moves (x − R)·k across h − δ in steps of about 2⁻²¹
+            let generic = f64::from_bits((((e + 1023) as u64) << 52) | 0x5_5555_5555_5555);
+            let d0 = (limit / generic) as i64;
+            for d in [d0, -d0] {
+                let h = (d as f64 * generic).floor() + 0.5;
+                let k0 = (h - DELTA) / d as f64;
+                for i in -64i64..=64 {
+                    let k = f64::from_bits((k0.to_bits() as i64 + i) as u64);
+                    let exponent = ((k.to_bits() >> 52) & 0x7ff) as i32 - 1023;
+                    assert!(in_domain(k) && exponent == e, "e {e} k {k:e}");
+                    let exact = d as i128 * fixed(k); // (x − R)·k, exact
+                    let product = d as f64 * k;
+                    let sum = product + DELTA;
+                    assert!(
+                        (fixed(product) - exact).abs() <= step,
+                        "e {e} d {d} k {k:e}"
+                    );
+                    assert!(
+                        (fixed(sum) - exact - delta).abs() <= 2 * step,
+                        "e {e} d {d} k {k:e}"
+                    );
+                    assert!(fixed(sum) > exact, "e {e} d {d} k {k:e}: δ absorbed");
+                    let want = round_away(exact + delta);
+                    if edge(d, 0, 0, k) != want {
+                        // only within 2⁻²¹ of the half-integer the exact sum rounds at
+                        let to_h = (exact + delta - fixed(h)).abs();
+                        assert!(
+                            to_h <= 2 * step,
+                            "e {e} d {d} k {k:e}: off by more than 2⁻²¹"
+                        );
+                        disagree += 1;
+                    }
+                    boundary += 1;
+                }
+            }
+        }
+        assert_eq!(ties, 2 * 41);
+        assert!(boundary >= 2 * 41 * 129, "{boundary}");
+        assert!(
+            disagree > 0,
+            "the sweep never met an edge that f64 rounds the other way"
+        );
+        // not established, fixed cases: f64 and exact arithmetic disagree inside the bound
+        // ((x − R)·k ≈ 2³¹ − 5) and at the per-frame reference's magnitudes ((x − R)·k ≈ 37.5)
+        for (d, bits, want) in [
+            (2_147_483_643i64, 0x3FF0_0000_000F_FFFEu64, 2_147_483_643i64),
+            (37, 0x3FF0_3759_EB3E_4530, 37),
+        ] {
+            let k = f64::from_bits(bits);
+            assert!(in_domain(k));
+            assert_eq!(
+                round_away(d as i128 * fixed(k) + delta),
+                want,
+                "exact edge, d {d}"
+            );
+            assert_eq!(edge(d, 0, 0, k), want + 1, "f64 edge, d {d}");
+        }
     }
 }

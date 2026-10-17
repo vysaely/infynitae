@@ -278,7 +278,7 @@ Count: **57** effective invariants: 36 from C12, 6 from C12.R1, 2 from C12.R2, 4
 - **Layers:** C12 → C12.F14
 - **Trigger:** owner amendment 2026-10-17 (C12.F14, OB-24)
 - **Evidence:** B1.5, X-6, ED-1; evidence/phase-f/OB-24
-- **Tests (historical column):** T1 X-6 port; T0 properties (kept reference, exactness bound)
+- **Tests (historical column):** T1 X-6 port; T0 properties (kept reference, reference bound)
 - **Obligations:** OB-24
 - **Formulas:** F-LATTICE-1, F-RENDER-1
 - **ADR:** ADR-02

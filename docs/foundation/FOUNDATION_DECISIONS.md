@@ -85,6 +85,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **C12.F14 amendment (owner decision 2026-10-17, OB-24):**
   - The reference is the output's lattice reference, kept while panning and set again when the output's view is (re)defined or `|v_O − R_O|·k_O` would exceed 2³¹; never persisted (F-LATTICE-1).
   - Camera zoom is bounded to the representable domain 2⁻²⁰ … 2¹⁶ (F-VIEW-1), which keeps the Q16 view origin exact.
+  - Corrected 2026-10-17 (C12.F14.4): the 2³¹ bound is a conservative choice under a rounding-step argument, not a guarantee that f64 edges equal exact arithmetic. The 1R statement above that render/hit agreement holds at k ∉ n/120 (ED-1) rests on sampled runs: Smithay geometry swept at rounding points shows 1 physical px right-edge differences between the presented rect and Core's F-LATTICE-1 rect at k ∉ n/120 (`evidence/phase-f/OB-24/render_hit_probe.out`). Agreement there, with the kept reference, is an INC-10 exit requirement.
 
 ## ADR-03: window-geometry anchor and exact physical-pixel hit-testing
 

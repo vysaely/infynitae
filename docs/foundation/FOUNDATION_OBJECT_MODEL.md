@@ -123,16 +123,16 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Invariants:** INV-COORD-4
 
 ### OBJ-12 — View(O) (`v_O`, R, C, `c_eff`)
-- **Class:** D
-- **Owner:** core (pure)
-- **Writers (authority per cited invariants):** recomputed on camera/output change (F-VIEW-1, F-LATTICE-1)
+- **Class:** D for `v_O`, C and `c_eff`; the lattice reference `R_O` is A — per-output state that depends on history (C12.F14)
+- **Owner:** core: pure functions for `v_O`, C, `c_eff`; `R_O` held in O's projection state (not in the camera)
+- **Writers (authority per cited invariants):** `v_O`, C, `c_eff` recomputed on camera/output change (F-VIEW-1, F-LATTICE-1); `R_O` written only on F-LATTICE-1's transitions — O's connect, a camera (re-)binding, a change of `k_O` or `view_O`, `|v_O − R_O|·k_O` beyond 2³¹ — reached through the output-lifecycle and navigation entries
 - **Readers:** render, hit, unproject
-- **Lifetime / invalidation:** per change
-- **Reconstruction:** recompute
-- **Forbidden writers:** everything (never written back, INV-STAGE-6)
-- **Invariants:** INV-CAMERA-3, INV-COORD-2
+- **Lifetime / invalidation:** `v_O`, C, `c_eff`: per change; `R_O`: the output's (dropped on disconnect), kept across pans
+- **Reconstruction:** `v_O`, C, `c_eff`: recompute from the camera, the output and `R_O`. `R_O`: none — not persisted, not restorable; at the next connect a new reference is set from that view (an initialisation, not a restoration; widths and gaps may differ by ±1 physical px from the previous session, once, D5)
+- **Forbidden writers:** everything else (nothing is written back, INV-STAGE-6); no client, protocol event or persistence writes `R_O`
+- **Invariants:** INV-CAMERA-3, INV-COORD-2, INV-RENDER-1
 - **E1R (unsealed):** derived from `view_O` (F-VIEW-1); rebuilt on `output_reconfigured`.
-- **C12.F14:** R is the output's lattice reference: held per output, not derived from each view origin; set at O's connect, a camera (re-)binding, a change of `k_O` or `view_O`, and when `|v_O − R_O|·k_O` would exceed 2³¹; kept while panning; dropped with O; never persisted (reconstruction after a restart: set at connect, ±1 px once). v, C and `c_eff` stay derived.
+- **C12.F14:** R is the output's lattice reference: held per output, not derived from each view origin; set at O's connect, a camera (re-)binding, a change of `k_O` or `view_O`, and when `|v_O − R_O|·k_O` would exceed 2³¹; kept while panning; dropped with O; never persisted. Because the kept reference depends on the view origins that came before, it is history-dependent state, not derived geometry: the fields above say so (corrected 2026-10-17; the earlier "Class D, core (pure), Reconstruction: recompute" is recorded in FOUNDATION_ARCHITECTURE §C12.F14.6). `v_O`, C and `c_eff` stay derived. Until INC-10 the code still sets R from every view origin (no kept reference exists).
 
 ### OBJ-13 — MembershipTable
 - **Class:** D

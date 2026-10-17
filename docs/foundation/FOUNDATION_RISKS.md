@@ -504,7 +504,7 @@ Count: 66 risks.
 - **Origin:** Phase B §11 @ 4a0807e
 - **Risk:** Zoom anti-jitter
 - **Disposition:** OBLIGATION
-- **Mitigation / evidence:** zoom anti-jitter: render/hit agreement intact (ED-1); ±1 px shape variation open
+- **Mitigation / evidence:** zoom anti-jitter: render/hit agreement intact (ED-1); ±1 px shape variation open. C12.F14 (2026-10-17): decided — the output's lattice reference is kept while panning (F-LATTICE-1), not yet implemented (INC-10); the ED-1 agreement was sampled, and at rounding points Smithay's presented right edge can differ from Core's rect by 1 physical px at k ∉ n/120 (C12.F14.4 item 3), so agreement with the kept reference is an INC-10 exit requirement
 - **Obligations:** OB-24
 - **Invariants:** INV-RENDER-1, INV-COORD-3
 
