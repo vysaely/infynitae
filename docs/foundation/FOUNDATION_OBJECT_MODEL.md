@@ -307,15 +307,16 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Invariants:** INV-RENDER-1, INV-SCALE-2
 - **E1R (unsealed, E-F2-01):** each damage tracker is `OutputDamageTracker::new(phys_O, Scale(k_O), transform_O)` (physical, untransformed size); render elements live in `view_O` space.
 
-### OBJ-30 — Navigation history (camera value before the last fit)
+### OBJ-30 — Navigation history (camera values before fits)
 - **Class:** A (data)
 - **Owner:** core `navigation`
-- **Writers (authority per cited invariants):** authorized fit records it (F-FIT-1)
+- **Writers (authority per cited invariants):** an authorized fit adds the camera value immediately before it (F-FIT-1); an authorized restore removes the most recent entry (M8)
 - **Readers:** authorized restore
-- **Lifetime / invalidation:** until the next fit
-- **Reconstruction:** none
-- **Forbidden writers:** protocol handlers
+- **Lifetime / invalidation:** with its camera; an entry remains until a restore removes it
+- **Reconstruction:** none (not persisted)
+- **Forbidden writers:** protocol handlers, clients, persistence
 - **Invariants:** INV-CAMERA-5
+- **C12.F15:** one entry per successful fit (owner decision 2026-10-17: one restore reverses the most recent fit; repeated restores unwind earlier fits). Previously "camera value before the last fit", lifetime "until the next fit". A bound on the depth is not decided (C12.F15.9). Implemented by INC-10.
 
 ### OBJ-31 — Shell connection and subscription generation
 - **Class:** PO

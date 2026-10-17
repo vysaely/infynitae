@@ -1,0 +1,8 @@
+REAL per-frame, scale 1: 14520 rects (model==Smithay x: 14520); mismatched edges x0 0 y0 0 x1 13 y1 0; A|B seams 13; pointer columns wrong 9/9693; e.g. Some((101, 1.8327787005762488, (911, 1096), (911, 1097)))
+REAL per-frame, scale 1.5: 14520 rects (model==Smithay x: 14520); mismatched edges x0 0 y0 0 x1 6 y1 0; A|B seams 6; pointer columns wrong 2/9686; e.g. Some((101, 5.408587254975971, (832, 1378), (832, 1379)))
+REAL kept |v-R|k~2^20 (R left): 14520 rects (model==Smithay x: 14520); mismatched edges x0 0 y0 0 x1 29 y1 0; A|B seams 29; pointer columns wrong 29/9709; e.g. Some((101, 0.7196175335839454, (905, 978), (905, 977)))
+REAL kept |v-R|k~2^31 (R left): 14520 rects (model==Smithay x: 14520); mismatched edges x0 0 y0 0 x1 24 y1 0; A|B seams 24; pointer columns wrong 24/9704; e.g. Some((101, 3.1314696052743827, (625, 942), (625, 941)))
+REAL kept |v-R|k~2^31 (R right): 14520 rects (model==Smithay x: 14520); mismatched edges x0 25 y0 0 x1 11 y1 0; A|B seams 14; pointer columns wrong 25/9691; e.g. Some((77, 2.067161929613727, (1161, 1321), (1162, 1321)))
+RATE generic k, per-frame: x0 0/20000000, x1 0/20000000
+RATE generic k, kept to 2^31: x0 1/20000000, x1 2/20000000
+EXHAUSTIVE k = n/120 (30..960), per-frame and kept ±2^31 bases: 0/58653000 rects differ

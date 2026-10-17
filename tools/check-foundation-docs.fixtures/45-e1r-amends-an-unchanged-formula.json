@@ -1,0 +1,7 @@
+{
+ "name": "C12.E1R amends a formula it lists unchanged (the narrowed check still catches it)",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "### F-HIT-1 (E1R-N1)\n",
+ "replace": "### F-ORIGIN-1 (fixture)\n- **Previous (c0a1cee):** a seeded previous text.\n- **Reason:** a seeded reason.\n\n### F-HIT-1 (E1R-N1)\n",
+ "expect": "formula-provenance"
+}

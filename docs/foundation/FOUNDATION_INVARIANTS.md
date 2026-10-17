@@ -1,8 +1,8 @@
 # Infynitae Native — Foundation Invariants (effective registry)
 
-Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1, C12.F2, C12.F3, C12.F4, C12.F5, C12.F6, C12.F7, C12.F8, C12.F10, C12.F11, C12.F12, C12.F13 and C12.F14 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
+Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1, C12.F2, C12.F3, C12.F4, C12.F5, C12.F6, C12.F7, C12.F8, C12.F10, C12.F11, C12.F12, C12.F13, C12.F14 and C12.F15 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
 
-This registry is the **effective projection** of seventeen layers. The layers themselves stay where they are and are not edited:
+This registry is the **effective projection** of eighteen layers. The layers themselves stay where they are and are not edited:
 - **C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a**: FOUNDATION_ARCHITECTURE §C12 (sealed Phase C registry, 54 rows);
 - **C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f**: FOUNDATION_ARCHITECTURE §C12.R1 (Phase D 1R amendments, 16 rows);
 - **C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be**: FOUNDATION_ARCHITECTURE §C12.R2 (Phase D 2R amendments, 6 rows);
@@ -19,7 +19,8 @@ This registry is the **effective projection** of seventeen layers. The layers th
 - **C12.F11 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)**: FOUNDATION_ARCHITECTURE §C12.F11 (Phase F amendment: the device bound counts a size Core asks for, OB-13, 1 row);
 - **C12.F12 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)**: FOUNDATION_ARCHITECTURE §C12.F12 (Phase F amendment: the initial hint of a pre-map fullscreen grant, 1 row);
 - **C12.F13 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)**: FOUNDATION_ARCHITECTURE §C12.F13 (Phase F amendment: whose stimulus a presentation change is, 1 row);
-- **C12.F14 @ ADOPTED 2026-10-17 (owner approval; base ca2e468)**: FOUNDATION_ARCHITECTURE §C12.F14 (Phase F amendment: the representable zoom domain and the output's lattice reference, OB-24, 1 row).
+- **C12.F14 @ ADOPTED 2026-10-17 (owner approval; base ca2e468)**: FOUNDATION_ARCHITECTURE §C12.F14 (Phase F amendment: the representable zoom domain and the output's lattice reference, OB-24, 1 row);
+- **C12.F15 @ ADOPTED 2026-10-17 (owner approval; base dda4d87)**: FOUNDATION_ARCHITECTURE §C12.F15 (Phase F amendment: one canonical rectangle for rendering and hit testing, option B; F-FIT-1's units and clamp, 1 row).
 
 Rules:
 - Each entry's **wording** is the statement of its latest layer, verbatim, except that complete formula text is replaced by an `[F-…]` reference.
@@ -27,7 +28,7 @@ Rules:
 - **Consequence of violation** is the C12 "Violation means" column. For the three invariants first introduced in 1R/2R it is a D7-authored description, marked as such (D-F0). E1R adds no invariant.
 - **ADR** links are derived from FOUNDATION_DECISIONS.md. **Obligations** are cited by ID; their records live in FOUNDATION_TEST_PLAN.md.
 
-Count: **57** effective invariants: 36 from C12, 6 from C12.R1, 2 from C12.R2, 4 from C12.E1R, 0 from C12.F1 (its row is superseded by C12.F5), 0 from C12.F2 (superseded by C12.F11), 1 from C12.F3, 1 from C12.F4, 1 from C12.F5, 0 from C12.F6 (superseded by C12.F10), 1 from C12.F7, 1 from C12.F8, 1 from C12.F10, 1 from C12.F11, 0 from C12.F12 (superseded by C12.F13), 1 from C12.F13, 1 from C12.F14. (Corrected with C12.F14: the line had not been updated for C12.F11–F13.)
+Count: **57** effective invariants: 36 from C12, 6 from C12.R1, 2 from C12.R2, 4 from C12.E1R, 0 from C12.F1 (its row is superseded by C12.F5), 0 from C12.F2 (superseded by C12.F11), 1 from C12.F3, 1 from C12.F4, 1 from C12.F5, 0 from C12.F6 (superseded by C12.F10), 1 from C12.F7, 1 from C12.F8, 1 from C12.F10, 1 from C12.F11, 0 from C12.F12 (superseded by C12.F13), 1 from C12.F13, 0 from C12.F14 (superseded by C12.F15), 1 from C12.F15. (Corrected with C12.F14: the line had not been updated for C12.F11–F13.)
 
 <!-- living:INV -->
 
@@ -270,15 +271,15 @@ Count: **57** effective invariants: 36 from C12, 6 from C12.R1, 2 from C12.R2, 4
 - **ADR:** ADR-03
 
 ### INV-RENDER-1
-- **Wording:** Physical edges: [F-LATTICE-1]; surfaces are built with `from_surface` at f64 location [F-RENDER-1]
-- **Owner:** core (numbers) / adapter (Smithay call)
+- **Wording:** Physical edges: [F-LATTICE-1]; each surface is presented in exactly its canonical rect `[edge(x₀), edge(x₁)) × [edge(y₀), edge(y₁))`, the rect that membership and hit testing use: the Smithay element is built with `from_surface` at f64 location [F-RENDER-1] and wrapped so that its geometry and its draw destination are that rect
+- **Owner:** core (numbers, canonical rect) / adapter (wrapper)
 - **Class:** E
 - **Violation:** gaps, jitter, scale-dependent seams
-- **Origin:** C12.F14 @ ADOPTED 2026-10-17 (owner approval; base ca2e468)
-- **Layers:** C12 → C12.F14
-- **Trigger:** owner amendment 2026-10-17 (C12.F14, OB-24)
-- **Evidence:** B1.5, X-6, ED-1; evidence/phase-f/OB-24
-- **Tests (historical column):** T1 X-6 port; T0 properties (kept reference, reference bound)
+- **Origin:** C12.F15 @ ADOPTED 2026-10-17 (owner approval; base dda4d87)
+- **Layers:** C12 → C12.F14 → C12.F15
+- **Trigger:** owner amendment 2026-10-17 (C12.F15, option B)
+- **Evidence:** B1.5, X-6, ED-1; evidence/phase-f/OB-24; evidence/phase-f/C12-F15
+- **Tests (historical column):** T1 X-6 port; T0 properties (kept reference, reference bound); T1 canonical-rect agreement (INC-10)
 - **Obligations:** OB-24
 - **Formulas:** F-LATTICE-1, F-RENDER-1
 - **ADR:** ADR-02

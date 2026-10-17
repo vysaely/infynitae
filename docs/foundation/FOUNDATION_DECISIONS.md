@@ -13,9 +13,9 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 | ADR | Title | Status |
 |---|---|---|
 | ADR-01 | Stage is the sole spatial authority; Smithay `Space` rejected | Accepted; PD-F2-13 → obligation OB-34 (1R) |
-| ADR-02 | Fixed-point Q16 Canvas with a reference-relative lattice | Accepted; **amended 1R** (R8; zoom-aware pan; OB-24 rescoped); **amended C12.F14** (zoom domain; the output's lattice reference, kept while panning) |
+| ADR-02 | Fixed-point Q16 Canvas with a reference-relative lattice | Accepted; **amended 1R** (R8; zoom-aware pan; OB-24 rescoped); **amended C12.F14** (zoom domain; the output's lattice reference, kept while panning); **amended C12.F15** (one canonical rect for render and hit) |
 | ADR-03 | Window-geometry anchor and exact physical-pixel hit-testing | Accepted |
-| ADR-04 | Independent centre-anchored cameras | Accepted; **amended 1R** (one-shot fit; direct-manipulation pan); **amended 2R** (output-lifecycle authority) |
+| ADR-04 | Independent centre-anchored cameras | Accepted; **amended 1R** (one-shot fit; direct-manipulation pan); **amended 2R** (output-lifecycle authority); **amended C12.F15** (fit units and clamp; restore history) |
 | ADR-05 | Unified effective scale: MaxGesture, bounded ladder hint, settlement | Accepted; **amended 1R** (ScaleInteractionEpoch; device-bound ladder; initial hint); **amended 2R** (epochs for all spatial interactions); **amended F2** (device bound on the 1/120 lattice) |
 | ADR-06 | Off-screen withholding with kick/fallback; suspension separated from visibility | Accepted; **amended 1R** (`OutputsOff`) |
 | ADR-07 | Pre-client input ownership, gesture isolation, modifier observation | Accepted; **amended 1R** (split pointer/constraint state; reconciliation; confinement) |
@@ -86,6 +86,9 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - The reference is the output's lattice reference, kept while panning and set again when the output's view is (re)defined or `|v_O − R_O|·k_O` would exceed 2³¹; never persisted (F-LATTICE-1).
   - Camera zoom is bounded to the representable domain 2⁻²⁰ … 2¹⁶ (F-VIEW-1), which keeps the Q16 view origin exact.
   - Corrected 2026-10-17 (C12.F14.4): the 2³¹ bound is a conservative choice under a rounding-step argument, not a guarantee that f64 edges equal exact arithmetic. The 1R statement above that render/hit agreement holds at k ∉ n/120 (ED-1) rests on sampled runs: Smithay geometry swept at rounding points shows 1 physical px right-edge differences between the presented rect and Core's F-LATTICE-1 rect at k ∉ n/120 (`evidence/phase-f/OB-24/render_hit_probe.out`). Agreement there, with the kept reference, is an INC-10 exit requirement.
+- **C12.F15 amendment (owner decision 2026-10-17, option B):**
+  - Core's F-LATTICE-1 integer rect is the one canonical rect of a surface: the adapter wraps Smithay's element so that its geometry and draw destination are that rect (INV-RENDER-1, F-RENDER-1). Damage and opaque regions are remapped conservatively; rects beyond Smithay's i32 range are cropped, not rejected.
+  - Rejected: renderer-authoritative geometry (Core adopting Smithay's rect: its right edge and the next surface's left edge come from different formulas, so seams return) and snapping k to a coarse lattice (changes the fit, needs a proof per reachable case, blocks D6).
 
 ## ADR-03: window-geometry anchor and exact physical-pixel hit-testing
 
@@ -158,6 +161,9 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - Foundation 01 binds cameras **1:1** to outputs. "N outputs may share one camera" is withdrawn; shared cameras (mirroring) are deferred behind gate G-MIRROR (FOUNDATION_IMPLEMENTATION_PLAN).
   - The view uses the transformed `view_O`; Smithay's damage tracker uses the physical `phys_O` (F-VIEW-1, F-RENDER-1).
   - Output reconfiguration is a third lifecycle entry, `output_reconfigured`; it never mints camera authority (INV-OUTPUT-2).
+- **C12.F15 amendment (owner decision 2026-10-17):**
+  - F-FIT-1's zoom is `min(view_w,O / g.w, view_h,O / g.h) / scale_O`, clamped into F-VIEW-1's domain; a degenerate or unmapped W is refused.
+  - Each successful fit records the camera value before it; one restore reverses the most recent fit, repeated restores unwind earlier ones (OBJ-30).
   - `OutputKey` is a persistence identity, not a physical-monitor identity; collisions are resolved deterministically (INV-CAMERA-3). Persisting cameras across sessions is gated by G-OB48.
 
 ## ADR-05: unified effective scale (MaxGesture, bounded ladder hint, settlement)

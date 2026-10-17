@@ -2364,6 +2364,115 @@ Made in place because the layer is not on `main` and the owner had not yet revie
 | M4 | the accepting `output_connected` row had no guard; the accepting `output_reconfigured` row's guard was "[known id ∧ same `OutputKey`]" | M4 |
 | `projection.rs` | `camera_on_grid`: "exact: \|v − R\| < 2³⁷ px in the representable domain, so the Q16 difference is below 2⁵³"; `the_accepted_domain_never_overflows`: "the release run of this test is built with overflow checks on" (no release run exists; no Cargo profile changes overflow checks); the sampled test's name and its "every visible physical edge equals the exact value of F-LATTICE-1 — f64 adds no rounding error that moves an edge" | code comments; test renamed |
 
+# §C12.F15 — Canonical registry amendment (Phase F: one canonical rectangle for rendering and hit testing; the fit's units and clamp, OB-24 / INC-10)
+
+**Status: ADOPTED 2026-10-17 by owner decision** (brief "Ratify C12.F15 and Record C12.F14 Integration", decisions 2–5: option B, the INV-RENDER-1 and F-RENDER-1 amendment, the corrected F-FIT-1 unit rule and clamp, single-step restore). Written on local `main` at base `dda4d87` (C12.F14 integrated, CHECKPOINT "LAYER C12.F14 INTEGRATED"); not pushed. Governance and documentation only: the adapter wrapper, the tracker invalidation, the crop and the fit are **not implemented** — they are INC-10's work, and INC-10 is NOT started. One invariant changes (INV-RENDER-1); two formulas change (F-RENDER-1, F-FIT-1) and F-VIEW-1's cross-reference to the fit is updated; no invariant is added or removed (57). C12.F14 is unchanged; its errata are recorded here (C12.F15.6).
+
+**Inputs:** INV-RENDER-1 and F-RENDER-1 as effective after C12.F14; F-LATTICE-1, F-HIT-1, F-MEMBER-1, F-VIEW-1, INV-HIT-1, INV-CAMERA-5, INV-COORD-1; F-FIT-1 (C5.1, C12.R1); OBJ-30; M8, M10; C12.F14.4 item 3; OB-24.
+
+**Provenance:** `evidence/phase-f/C12-F15/DECISION_RECORD_2026-10-17.md` and `PROVENANCE.md` (prototype in a scratch export of `270128f`, its sweeps, pixel run and suite run); `evidence/phase-f/OB-24/render_hit_probe.rs`, `.out`.
+
+**Decisions:** B1 one canonical rectangle per surface — Core's F-LATTICE-1 integer rect — for rendering, membership, hit testing and pointer targeting (option B); B2 INV-RENDER-1 and F-RENDER-1 say how the Smithay 0.7.0 adapter presents it; B3 F-FIT-1's unit rule, clamp and refusal; B4 single-step restore: each successful fit records the camera value immediately before it, one restore reverses the most recent fit, repeated restores unwind earlier ones (OBJ-30).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12.F14. Every other row is unchanged.**
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-RENDER-1** | Physical edges: `edge(x) = round((x − R)·k + δ) − C_O` with R output O's lattice reference, δ = 2⁻²⁰, k = zoom·scale; each surface is presented in exactly its canonical rect `[edge(x₀), edge(x₁)) × [edge(y₀), edge(y₁))`, the rect that membership and hit testing use: the Smithay element is built with `from_surface` at f64 location `(x − R)·k + δ − C_O` and wrapped so that its geometry and its draw destination are that rect | core (numbers, canonical rect) / adapter (wrapper) | E | B1.5, X-6, ED-1; evidence/phase-f/OB-24; evidence/phase-f/C12-F15 | T1 X-6 port; T0 properties (kept reference, reference bound); T1 canonical-rect agreement (INC-10) | owner amendment 2026-10-17 (C12.F15, option B) |
+
+## C12.F15.1 Text superseded (must not be cited as normative)
+
+| Superseded | Replaced by |
+|---|---|
+| INV-RENDER-1 (C12.F14) "surfaces are built with `from_surface` at f64 location `(x − R)·k + δ − C_O`", which left the presented rect to Smithay's own rounding | INV-RENDER-1 (C12.F15) |
+| F-RENDER-1 (C12.F14): Smithay's rect `[round(L), round(fl(dst·k_O) + L))` as the presented rect | F-RENDER-1 (C12.F15) |
+| F-FIT-1 (C5.1, C12.R1): `zoom = min(view_w,O / W.w, view_h,O / W.h)` with `view_O` in physical px, which is k, not a zoom, at `scale_O ≠ 1` | F-FIT-1 (C12.F15) |
+| OBJ-30 "camera value before the last fit", lifetime "until the next fit" | OBJ-30 (C12.F15) |
+| FOUNDATION_IMPLEMENTATION_PLAN INC-10 "Fit domain (moved here from C12.F14, not yet normative)" | F-FIT-1 (C12.F15); INC-10 |
+| F-VIEW-1 (C12.F14) "how the fit does so is specified and tested by INC-10 (intended: clamp to 2⁻²⁰), not by this layer" | F-VIEW-1 and F-FIT-1 (C12.F15) |
+
+## C12.F15.2 Formula amendments (living §F carries the corrected text; the previous text is recorded here verbatim)
+
+### F-RENDER-1 (option B)
+- **Previous (dda4d87):** `L(x) = (x − R_O)·k_O + δ − C_O` (f64) for each surface origin x (and y); the adapter builds `WaylandSurfaceRenderElement::from_surface(.., Point<f64, Physical>(L), ..)`; Smithay presents `[round(L), round(fl(dst·k_O) + L))`. That equals F-LATTICE-1's rect where measured — k ∈ n/120 with the per-frame reference (X-6) — but at k ∉ n/120 the right edge can differ by 1 physical px near a rounding point (C12.F14.4 item 3); agreement there, and with a kept reference, is an INC-10 exit requirement. [C12.F14]
+- **Previous (dda4d87):** The output's damage tracker is built with `OutputDamageTracker::new(phys_O, Scale(k_O), transform_O)` — the **untransformed** physical mode — and rebuilt when k_O or the descriptor changes; Smithay derives the element space `transform_size(phys_O) = view_O` itself and GLES sets the viewport to `phys_O`. `OutputDamageTracker::from_output` (output scale only) is not used, because it ignores zoom. [PD-F1-03; E-F2-01]
+- **Reason:** two independent evaluations of one rectangle disagree near rounding points at k ∉ n/120 (C12.F14.4 item 3; C12.F15.6), leaving a 1 px seam and a pointer column hit as one surface and drawn as another; and the tracker was rebuilt only on `OutputChanged` (C12.F15.4). The location formula L is unchanged.
+
+### F-FIT-1 (units, clamp, refusal, restore)
+- **Previous (dda4d87):** For output O and element W (geometry snapshot at the instant of the authorized action): `centre = centre(W.geometry)`; `zoom = min(view_w,O / W.w, view_h,O / W.h)`; one camera mutation; the previous camera value is recorded for an optional authorized restore.
+- **Reason:** since E1R `view_O` is in physical px (E-F2-01) and C12.E1R listed F-FIT-1 unchanged "already in view terms"; F-VIEW-1 gives the view's Canvas extent as `view_O / k_O`, so the quotient is the fitting k and the zoom is that k over `scale_O`. The literal text zoomed by an extra factor `scale_O`. The clamp, the refusal of a degenerate W and the restore history are owner decisions 4–5.
+
+### F-VIEW-1 (cross-reference to F-FIT-1)
+- **Previous (dda4d87):** Representable domain: output mode sides 1 … 2¹⁵ physical px, output scale 0.25 … 8 (30 … 960 in 1/120 units), camera zoom 2⁻²⁰ … 2¹⁶, camera centre within INV-COORD-1. A value outside it is refused where it enters Core — an output descriptor at `output_connected` or `output_reconfigured` (M4), a persisted camera table, whole (M20). A zoom Core computes itself (the fit, F-FIT-1, INC-10) must also stay inside it; how the fit does so is specified and tested by INC-10 (intended: clamp to 2⁻²⁰), not by this layer. [C12.F14]
+- **Reason:** F-FIT-1 (C12.F15) now defines how the fit stays in the domain, at both ends; the deferred "intended: clamp to 2⁻²⁰" is superseded. The domain itself is unchanged.
+
+## C12.F15.3 The rendering contract through the wrapper (option B)
+
+Verified against Smithay 0.7.0 as vendored (`vendor/smithay-0.7.0`), on a prototype in a scratch export of `270128f` (`evidence/phase-f/C12-F15/prototype_*.diff`); not implemented in the repository.
+1. **Placement and drawing.** `OutputDamageTracker::render_output` computes each element's `element_geometry = element.geometry(output_scale)` and draws it with `element.draw(frame, element.src(), element_geometry, damage, opaque)` (`backend/renderer/damage/mod.rs:381,429`); `WaylandSurfaceRenderElement::draw` renders its texture into the `dst` it is given (`element/surface.rs:383-401`). A wrapper whose `geometry()` is the canonical rect and whose `draw` passes `dst` to the wrapped element unchanged therefore places **and** draws the surface there. Pixel evidence (software renderer Pixman, nearest filtering; `option_b_pixels.out`): at k = 0.7248438577698304 the current handoff draws A over x ∈ [923, 996) where Core's rect is [923, 997) — column 996 shows the parent through a seam between adjacent subsurfaces and the hit test selects A; with the wrapper 0 wrong pixels and 0 pointer columns over 157 columns.
+2. **Pass-through.** `id`, `current_commit`, `transform`, `alpha` and `kind` are the wrapped element's; `src` is the wrapped element's unless the rect is cropped (C12.F15.5). Element order is Core's render order, one wrapper per entry (INV-RENDER-2): subsurfaces and popups are separate entries and are wrapped individually.
+3. **Remapping.** The wrapper compares the canonical rect with the wrapped element's own geometry at the frame's `k_O`. Equal and not cropped: damage, opaque regions and underlying storage pass through. Otherwise (remapped): damage since any older commit is the whole rect, opaque regions are empty (conservative: never claims a pixel it may not cover), and no underlying storage is offered (no direct scanout). Geometry changes between frames are damaged by the tracker itself, which compares `geometry()` per element id (pixel evidence: a repaint at age 1 damaged exactly the 74 px canonical rect).
+4. **Allocation.** The wrapper is stored by value in the existing per-frame element vector; full damage is one inline `DamageSet` entry (SmallVec). No per-frame heap allocation is added (INV-ALLOC-1).
+5. **Unchanged.** Hit testing and membership already read Core's rects (F-HIT-1, F-MEMBER-1); the input-region test stays in Canvas space (INV-HIT-1). The location L handed to `from_surface` stays F-RENDER-1's, which keeps the wrapped element's own geometry equal to the canonical rect in all but rounding-point cases, so remapping is rare.
+6. **Prototype suite.** The whole workspace suite on the prototype: 457 passed, 1 failed, 1 ignored (`prototype_suite.out`); the failure is TST-04's negative control "the i32 root location must mismatch", whose premise — the location given to `from_surface` decides the presented rect — option B removes on purpose (C12.F15.8).
+7. **Not established here:** GLES or any GPU path, dmabuf import, direct scanout and hardware planes; Pixman cannot draw magnifications beyond about 2¹⁵ (its 16.16 transform returns `Unsupported`), so extreme-zoom drawing is verified through the recording ProbeRenderer (`dst`/`src`), not pixels.
+
+## C12.F15.4 Damage-tracker invalidation when k changes
+
+`k_O = zoom_C · scale_O` changes on a camera zoom change (fit, restore) as well as on an output reconfiguration. The tracker's `Scale(k_O)` is what the wrapped elements' damage and opaque regions are computed with; a stale scale makes them wrong. Requirement: the output's damage tracker is rebuilt (or replaced) whenever the effective `k_O` or the descriptor changes, before the next frame is rendered. Code at `dda4d87`: rebuilt only on `Effect::OutputChanged` (`infynitae-wayland/src/outputs.rs:306`), which only `output_reconfigured` emits — sufficient on the base, where zoom is 1, not after INC-10. **Regression test (INC-10):** a fit to zoom ≠ 1 followed by a client repaint at age 1 must damage and repaint exactly the surface's canonical rect at the new k; with the rebuild removed it must fail (seeded control, C12.F15.8).
+
+## C12.F15.5 Smithay's i32 geometry limit: crop, never reject
+
+Smithay's element geometry is `i32`, converted with saturating `as` casts. A surface whose canonical rect passes ±2³¹ physical px is presented wrongly today: an edge at −2⁴⁰ yields geometry x −2147483648, width 2147483647, so the visible part [0, 997) vanishes (`option_b_pixels.out`). Reachable only at the extremes of the domain (w·k > 2³¹: a 4,096 px surface at k = 2¹⁹, or a 65,536 px surface at a fit's k ≤ 2¹⁵).
+- **Policy:** the canonical rect is cropped in i64 to `[−2³⁰, 2³⁰]` per axis before the i32 conversion, and `src` is cropped with the same proportion, computed in f64 on the uncropped rect with the formula of Smithay's `CropRenderElement` (buffer transform included). A visible surface is never rejected.
+- **Compatibility:** every view lies inside the box (`view_O` ≤ 2¹⁵), so no visible pixel is cropped and every visible edge is the canonical one (prototype: edges 923 and 997 kept; `src` equal to the proportional value); Core still culls and tests on i64 rects before any i32 conversion (PD-F1-01); no rounding is added to the rect (F6).
+- **Not proven:** the `src` crop was verified only for buffers without a buffer transform. Rotated and flipped buffer transforms are an explicit INC-10 implementation and exit requirement (C12.F15.11); if the crop cannot be made consistent for a transform, that case is reported to change control — this layer does not claim it.
+
+## C12.F15.6 Errata to C12.F14 (C12.F14's text is kept as written)
+
+1. **Left edges too.** C12.F14.4 item 3 says "the presented right edge differs from Core's". Left edges differ as well when a kept reference lies to the right of the visible edges: there `fl((x − R)·k + δ)` can be an exact negative half-integer while `L = fl(…) − C` is positive; Core rounds before subtracting C and Smithay after, and round-half-away-from-zero is not translation-invariant (every one of 2,223 left-edge cases found in a model sweep has this form; with real Smithay geometry 25 left-edge mismatches in 14,520 rects with R right of the view at `|v − R|·k ≈ 2³¹`, `render_hit_sweep_current_handoff.out`). Widths, gaps (seams) and pointer targeting are affected, on both axes (the arithmetic is per axis; the sweep targeted x).
+2. **The fit reaches the upper bound.** C12.F14.3 says "no fit reaches the upper end (view_O ≤ 2¹⁵ px, W ≥ 1 px)", and the INC-10 note it moved to says "the upper end is unreachable". Both read F-FIT-1 literally. With the corrected units (C12.F15.2) `z_raw = 2¹⁵ / 1 / 0.25 = 2¹⁷ > 2¹⁶` for a 1 px W at scale 0.25, so the clamp is needed at both ends.
+
+## C12.F15.7 Q16 precision budget of C_O (checked against `camera_on_grid` at `dda4d87`)
+
+`C_O = round(fl(fl(rel · k) + δ))` with `rel = (v_q − R·2¹⁶) as f64 / 2¹⁶` (`projection.rs` `camera_on_grid`).
+- **Conversion.** `v − R = (v − v₀) + (v₀ − R)`, where v₀ is the origin R was set from: same `k_O` and `view_O` (a change of either sets R again), so `|v − v₀|` ≤ the centre's span 2³⁷ px plus one Q16 quantum, and `0 ≤ v₀ − R < 120`. Hence `|v − R| < 2³⁷ + 120 px` and the Q16 difference is below 2⁵⁴: its `i64 → f64` conversion is exact up to 2⁵³ and otherwise rounds by at most one unit, 2⁻¹⁶ px. The division by 2¹⁶ is exact.
+- **Where it can round.** Only beyond `|v − R|` = 2³⁷ px, where the reference bound `|v − R|·k ≤ 2³¹` forces `k < 2⁻⁶`; the conversion then moves `rel · k` by at most `2⁻¹⁶ · 2⁻⁶ = 2⁻²²`.
+- **Total.** `|rel · k| ≤ 2³¹ < 2³²`, so the product and the sum `+ δ` each round by at most half an ulp, 2⁻²². The f64 value whose rounding gives C_O is within **3·2⁻²² < δ = 2⁻²⁰** of the exact `(v − R)·k + δ`. So an exact tie still rounds up, C_O can differ from exact arithmetic only near a rounding point (by 1), and render, membership, hit test and `c_eff` read the same C_O; C_O cancels in widths and gaps. A harmless precision limitation: no bound or representation change.
+- **Assumptions:** binary64, round-to-nearest-even, no fused multiply-add; `i64 → f64` rounds to nearest; the centre within INV-COORD-1; R set by F-LATTICE-1's transitions.
+- **Deterministic test (INC-10, T0):** a view at k = 2⁻²² (zoom 2⁻²⁰, scale 0.25) with a kept reference at `|v − R|` = 2³⁷ + 119 px, on both sides of R, with `v_q` odd so the conversion rounds; assert the computed pre-rounding value is within 3·2⁻²² of the exact rational value, and an exact-tie case rounds up.
+
+## C12.F15.8 Seeded negative controls (required with the implementation, INC-10)
+
+Each must be DETECTED by the named production-path test (`tools/verify-test-efficacy`); none is deleted because the architecture changed.
+1. The wrapper returns the wrapped element's geometry → the rounding-point render/hit sweep (TST-04 redesigned) fails.
+2. `draw` ignores or alters `dst` (destination remapping broken) → the Pixman pixel check fails.
+3. Damage passed through after a remap → the age-1 repaint check fails (a column stays stale).
+4. Opaque regions passed through after a remap → an opaque-region case (an opaque surface over another, 1 px apart) fails.
+5. Crop disabled, or `src` cropped inconsistently with `dst` → the ProbeRenderer crop checks fail (edges, `src` proportion, buffer transforms).
+6. The tracker not rebuilt on a zoom change → the C12.F15.4 regression test fails.
+
+**TST-04 redesign.** The old control (an i32-rounded root location must mismatch) assumed the location handed to `from_surface` decides the presented rect. Under option B it keeps that premise for the wrapped element: the control asserts that the **unwrapped** element, at rounding-point k, mismatches Core's rect (the defect option B fixes), and control 1 asserts the wrapper is what removes it. TST-04 stays in force unchanged until the wrapper lands.
+
+## C12.F15.9 F-FIT-1 and restore (decisions 4–5)
+
+- **Clamp versus reject.** External and persisted values are untrusted and stay rejected outside the domain where they enter Core (M4, M20). The fit's zoom is computed by Core from trusted, legal state; its clamp makes that computation total (the nearest representable view) instead of failing an authorized command for a geometry Core accepts. A degenerate W has no meaningful result and is refused. Inputs are finite: `view_O` ≥ 1, `g` integral and positive, `scale_O` ∈ [0.25, 8].
+- **Restore.** OBJ-30 becomes a history: each successful fit pushes the exact camera value immediately before it; one restore applies and removes the most recent entry; an empty history refuses the restore (no mutation). Compatible with INV-CAMERA-5 ("restore … using the camera value recorded at fit time"; one shot, no stored target). Cameras are bound 1:1 (E1R), so the history of O's camera is the history of O.
+- **Pointer.** "Reconcile once by the same rule as other camera writes" is M10's view-change row: one batch-end reconciliation with at most one true-position event — exactly one when the pointer is on O and no interaction owns it (`entry.rs` true-position guard), none otherwise.
+- **Open (not decided by this layer):** a bound on the history's depth. Each fit adds an entry, and a shell can issue fits (INC-11); whether and where to bound it is an owner decision before INC-10 ships restore.
+
+## C12.F15.10 Checker change
+
+`tools/check-foundation-docs`: `F_LAYERS` gains C12.F15. The check on C12.E1R's line "Formulas reviewed and **unchanged**" now compares against C12.E1R's own amendment records: that line states what E1R left unchanged, and it had rejected any later layer amending a listed formula (F-FIT-1). Fixtures: 44 (INV-RENDER-1 drifts back to the C12.F14 handoff → `inv-wording-mismatch`), 45 (C12.E1R itself amends a formula it lists unchanged → `formula-provenance`, so the narrowed check still catches the case it exists for). Fixture 16 (an amended formula silently reverted to its previous text) is re-anchored on F-RENDER-1's new tracker sentence: its old anchor now occurs only in C12.F15.2's verbatim record, where the seed would no longer revert the living formula; the seeded revert is the same.
+
+## C12.F15.11 INC-10 contract
+
+The entry prerequisites and exit evidence are recorded in FOUNDATION_IMPLEMENTATION_PLAN INC-10 (canonical). OB-24 stays OPEN until architecture change control accepts INC-10's exit evidence.
+
+## C12.F15.12 What this layer does not change
+
+F-LATTICE-1 (R4 rounding, δ, the edge, C, `c_eff`, the kept reference and its bound), F-VIEW-1's domain, F-HIT-1, F-MEMBER-1, INV-HIT-1, INV-CAMERA-5's wording, M4 and M20 rejection, the 200-commit "client resize never moves the camera" requirement, and C12.F14's text.
+
 ---
 
 # Phase D package (D7): living regions of this document
@@ -2417,12 +2526,12 @@ Each normative formula or coordinate algorithm is defined once here. Its text is
 ### F-VIEW-1 — Per-output view origin
 - **Definition:** `v_O = Q16(centre − view_O / (2·k_O))`, with `k_O = zoom_C · scale_O` (camera C bound to output O).
 - **Definition:** `phys_O` is the output's physical mode (framebuffer size, `wl_output.mode`) **before** the output transform; `view_O = transform_size_O(phys_O)` is the view extent in physical px (90°/270° classes exchange width and height exactly once). `phys_O` is used only for the damage tracker and the framebuffer (F-RENDER-1); every view, cull, membership, hit and fit computation uses `view_O`. [E-F2-01; supersedes PD-F1-04]
-- **Definition:** Representable domain: output mode sides 1 … 2¹⁵ physical px, output scale 0.25 … 8 (30 … 960 in 1/120 units), camera zoom 2⁻²⁰ … 2¹⁶, camera centre within INV-COORD-1. A value outside it is refused where it enters Core — an output descriptor at `output_connected` or `output_reconfigured` (M4), a persisted camera table, whole (M20). A zoom Core computes itself (the fit, F-FIT-1, INC-10) must also stay inside it; how the fit does so is specified and tested by INC-10 (intended: clamp to 2⁻²⁰), not by this layer. [C12.F14]
+- **Definition:** Representable domain: output mode sides 1 … 2¹⁵ physical px, output scale 0.25 … 8 (30 … 960 in 1/120 units), camera zoom 2⁻²⁰ … 2¹⁶, camera centre within INV-COORD-1. A value outside it is refused where it enters Core — an output descriptor at `output_connected` or `output_reconfigured` (M4), a persisted camera table, whole (M20). A camera value Core computes itself stays inside it by construction: the fit clamps its zoom to 2⁻²⁰ … 2¹⁶ and its centre into INV-COORD-1 (F-FIT-1). [C12.F14; C12.F15]
 - **Definition:** Derived range: stored Canvas values obey |v| ≤ 2³⁶ (INV-COORD-1); inside the domain a derived view origin reaches at most |v_O| ≤ 2³⁶ + view_O/(2k_O) ≤ 2³⁶ + 2¹⁵/(2 · 2⁻²⁰ · 0.25) = 2³⁷, so its Q16 value stays within f64's exact integers (2⁵³). [PD-F1-02; C12.F14]
 - **Definition:** Quantisation: rounding point R7 (round-ties-even to Q16).
 - **Extracted invariant text:** INV-CAMERA-3 ⟦`v_O = centre − view_O/(2k)`⟧
 - **Historical sources:** C3.2 [1]; B7.1 D-B7-CENTER; C12 INV-CAMERA-3
-- **Amended:** C12.E1R (E-F2-01); C12.F14 (OB-24 D1); previous definitions recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2 and §C12.F14.2
+- **Amended:** C12.E1R (E-F2-01); C12.F14 (OB-24 D1); C12.F15 (the fit's clamp); previous definitions recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2, §C12.F14.2 and §C12.F15.2
 
 ### F-LATTICE-1 — Reference-relative lattice and physical edges
 - **Definition:** `R_O` is output O's *lattice reference* (not an element's anchor): an integral Canvas value, a multiple of 120 per axis, held in O's projection state, not in the camera. It is set to `floor(v_O / 120) · 120` when O's view is (re)defined — O connected; a camera bound or re-bound to O; `k_O` changed; `view_O` changed — and whenever keeping it would make `|v_O − R_O|·k_O` exceed 2³¹ (a conservative bound: C12.F14.4 item 1); otherwise it is kept, also while the camera pans. It is dropped with O and never persisted. `δ = 2⁻²⁰`; `k_O = zoom_C · scale_O`. [C12.F14]
@@ -2435,11 +2544,12 @@ Each normative formula or coordinate algorithm is defined once here. Its text is
 - **Amended:** C12.E1R (E-F2-01); C12.F14 (OB-24 D3/D4/D5); previous definitions recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2 and §C12.F14.2
 
 ### F-RENDER-1 — Render location handed to Smithay
-- **Definition:** `L(x) = (x − R_O)·k_O + δ − C_O` (f64) for each surface origin x (and y); the adapter builds `WaylandSurfaceRenderElement::from_surface(.., Point<f64, Physical>(L), ..)`; Smithay presents `[round(L), round(fl(dst·k_O) + L))`. That equals F-LATTICE-1's rect where measured — k ∈ n/120 with the per-frame reference (X-6) — but at k ∉ n/120 the right edge can differ by 1 physical px near a rounding point (C12.F14.4 item 3); agreement there, and with a kept reference, is an INC-10 exit requirement. [C12.F14]
-- **Definition:** The output's damage tracker is built with `OutputDamageTracker::new(phys_O, Scale(k_O), transform_O)` — the **untransformed** physical mode — and rebuilt when k_O or the descriptor changes; Smithay derives the element space `transform_size(phys_O) = view_O` itself and GLES sets the viewport to `phys_O`. `OutputDamageTracker::from_output` (output scale only) is not used, because it ignores zoom. [PD-F1-03; E-F2-01]
+- **Definition:** `L(x) = (x − R_O)·k_O + δ − C_O` (f64) for each surface origin x (and y); the adapter builds `WaylandSurfaceRenderElement::from_surface(.., Point<f64, Physical>(L), ..)` and wraps it in an element whose `geometry()` is the surface's canonical rect — its F-LATTICE-1 rect, the one membership and hit testing use — and whose `draw` passes the destination it is given (that rect, `OutputDamageTracker::render_output`) to the wrapped element unchanged. Smithay's own rect `[round(L), round(fl(dst·k_O) + L))` is not presented; it only decides whether the wrapper remaps damage and opaque regions (C12.F15.3). Implemented by INC-10; until then the base presents Smithay's rect, which equals the canonical rect at every reachable view (zoom 1, k ∈ n/120). [C12.F15]
+- **Definition:** The output's damage tracker is built with `OutputDamageTracker::new(phys_O, Scale(k_O), transform_O)` — the **untransformed** physical mode — and rebuilt (or replaced) whenever the effective k_O or the descriptor changes, a camera zoom change included, before the next frame (C12.F15.4); Smithay derives the element space `transform_size(phys_O) = view_O` itself and GLES sets the viewport to `phys_O`. `OutputDamageTracker::from_output` (output scale only) is not used, because it ignores zoom. [PD-F1-03; E-F2-01; C12.F15]
+- **Definition:** A canonical rect is cropped in i64 to `[−2³⁰, 2³⁰]` per axis before Smithay's i32 geometry, with `src` cropped in the same proportion (Smithay's `CropRenderElement` formula, buffer transform included); a visible surface is never rejected. Buffer transforms other than Normal are unverified (C12.F15.5). [C12.F15]
 - **Extracted invariant text:** INV-RENDER-1 ⟦`(x − R)·k + δ − C_O`⟧
 - **Historical sources:** B1.5; C3.2 [4],[5]; C3.6; ED-4
-- **Amended:** C12.E1R (E-F2-01); C12.F14 (render/hit agreement claim); previous definitions recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2 and §C12.F14.2
+- **Amended:** C12.E1R (E-F2-01); C12.F14 (render/hit agreement claim); C12.F15 (canonical rect, option B); previous definitions recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2, §C12.F14.2 and §C12.F15.2
 
 ### F-MEMBER-1 — Output membership
 - **Definition:** Surface S is on output O iff its F-LATTICE-1 physical rect intersects `[0, view_O)`; element E is observed by O iff any surface of E is on O. Membership is per surface (popups included) and applied with `Output::enter/leave`.
@@ -2525,8 +2635,12 @@ Each normative formula or coordinate algorithm is defined once here. Its text is
 - **Amended:** C12.E1R (E1R-N3); C12.F12 (pre-map grant); previous definitions recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2 and §C12.F12.2
 
 ### F-FIT-1 — Viewport-fit (one-shot)
-- **Definition:** For output O and element W (geometry snapshot at the instant of the authorized action): `centre = centre(W.geometry)`; `zoom = min(view_w,O / W.w, view_h,O / W.h)`; one camera mutation; the previous camera value is recorded for an optional authorized restore.
+- **Definition:** For output O and mapped element W, with g = W's window geometry in Canvas px at the instant of the authorized action, `view_w,O` and `view_h,O` the view extent in physical px (F-VIEW-1) and `scale_O` the output scale: if O is not connected, W is not mapped, or `g.w ≤ 0` or `g.h ≤ 0`, the action is refused — no camera mutation, nothing recorded. [C12.F15]
+- **Definition:** Otherwise `z_raw = min(view_w,O / g.w, view_h,O / g.h) / scale_O` (the view's Canvas extent is `view_O / k_O`, so `scale_O` is divided out exactly once) and `zoom = clamp(z_raw, 2⁻²⁰, 2¹⁶)` (F-VIEW-1's domain); `centre` = the centre of g in Q16 (exact: g is integral), each component clamped into INV-COORD-1 (`|c| ≤ 2³⁶` px). [C12.F15]
+- **Definition:** One mutation of O's camera to that centre and zoom. Immediately before it, the camera's exact value is recorded as a new entry of its navigation history (OBJ-30); one authorized restore applies and removes the most recent entry, so repeated restores unwind earlier fits (M8). No target is stored and no client change re-fits (INV-CAMERA-5). [C12.F15]
+- **Definition:** The clamp belongs to this computation: zoom values from outside Core stay rejected outside the domain where they enter (M4, M20). After the mutation the pointer is reconciled once by M10's view-change rule — at most one true-position event, exactly one when the pointer is on O and no interaction owns it. [C12.F15]
 - **Historical sources:** C5.1; C12.R1 INV-CAMERA-5
+- **Amended:** C12.F15 (units, clamp, refusal, restore history); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.F15.2
 
 ### F-PRESENT-1 — Protocol-fullscreen presentation view
 - **Definition:** A per-output view with zoom 1: `v_P = anchor(W) − max(0, (view_O/scale_O − size(W)) / 2)` (componentwise), then F-VIEW-1's R7 quantisation and F-LATTICE-1 with k = scale_O; a surface larger than the output is origin-aligned and cropped. [PD-F1-09; E-F2-01 symbol]

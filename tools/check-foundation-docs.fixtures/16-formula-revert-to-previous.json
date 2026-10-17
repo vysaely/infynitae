@@ -1,7 +1,7 @@
 {
  "name": "amended formula silently reverted to its previous text",
  "file": "FOUNDATION_ARCHITECTURE.md",
- "find": "`OutputDamageTracker::new(phys_O, Scale(k_O), transform_O)` — the **untransformed** physical mode — and rebuilt when k_O or the descriptor changes; Smithay derives the element space `transform_size(phys_O) = view_O` itself and GLES sets the viewport to `phys_O`. `OutputDamageTracker::from_output` (output scale only) is not used, because it ignores zoom. [PD-F1-03; E-F2-01]",
+ "find": "`OutputDamageTracker::new(phys_O, Scale(k_O), transform_O)` — the **untransformed** physical mode — and rebuilt (or replaced) whenever the effective k_O or the descriptor changes, a camera zoom change included, before the next frame (C12.F15.4); Smithay derives the element space `transform_size(phys_O) = view_O` itself and GLES sets the viewport to `phys_O`. `OutputDamageTracker::from_output` (output scale only) is not used, because it ignores zoom. [PD-F1-03; E-F2-01; C12.F15]",
  "replace": "`OutputDamageTracker::new(mode_O, Scale(k_O), transform_O)` and rebuilt when k_O changes; `OutputDamageTracker::from_output` (output scale only) is not used, because it ignores zoom. [PD-F1-03]",
  "expect": "formula-provenance"
 }

@@ -1,0 +1,10 @@
+PIXELS k = 0.7248438577698304 A: Core x [923, 997)
+PIXELS current handoff: Smithay A geometry x [923, 996)
+  current: col 996: drawn 0xffffffff, Core rect says 0xffff0000
+PIXELS current handoff: wrong pixels 1, pointer != drawn 1 over 157 columns
+PIXELS option B frame 1: wrong pixels 0, pointer != drawn 0
+PIXELS option B frame 2 (unchanged): damage None
+PIXELS option B frame 3 (A repainted, age 1): damage Some([Rectangle<smithay::utils::geometry::Physical> { x: 923, y: 521, width: 74, height: 38 }]); A columns blue 74/74
+PIXELS crop x [923, 1099511627776): geometry x 923 w 1073740901; src x 0.000000000 w 9.863272780e-2 (proportional: x 0.000000000 w 9.863272780e-2); blue columns in view 0
+PIXELS crop x [-1099511627776, 997): geometry x -1073741824 w 1073742821; src x 100.901367096 w 9.863290399e-2 (proportional: x 100.901367096 w 9.863290399e-2); blue columns in view 0
+PIXELS current handoff far-left (w·k ≈ 2^40 + 997): Ok(Rectangle<smithay::utils::geometry::Physical> { x: -2147483648, y: 521, width: 2147483647, height: 2147483126 })

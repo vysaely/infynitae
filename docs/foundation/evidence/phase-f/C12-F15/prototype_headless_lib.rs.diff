@@ -1,0 +1,22 @@
+--- a/crates/infynitae-backend-headless/src/lib.rs
++++ b/crates/infynitae-backend-headless/src/lib.rs
+@@ -273,14 +273,11 @@
+     state: &mut WaylandState,
+     renderer: &mut DummyRenderer,
+     output: OutputId,
+-) -> Result<Vec<(FrameEntry, WaylandSurfaceRenderElement<DummyRenderer>)>, RenderError> {
+-    let entries = state
+-        .core_mut()
+-        .render_list(output)
+-        .map_err(RenderError::Frame)?
+-        .entries
+-        .clone();
+-    convert::render_elements(renderer, state.registry(), &entries).map_err(RenderError::Renderer)
++) -> Result<Vec<(FrameEntry, convert::CanonicalRect<WaylandSurfaceRenderElement<DummyRenderer>>)>, RenderError> {
++    let frame = state.core_mut().render_list(output).map_err(RenderError::Frame)?;
++    let k = frame.view.k;
++    let entries = frame.entries.clone();
++    convert::render_elements_k(renderer, state.registry(), &entries, k).map_err(RenderError::Renderer)
+ }
+ 
+ /// Options for configuring headless compositor execution.

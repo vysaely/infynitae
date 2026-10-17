@@ -1,0 +1,3 @@
+passed 457 failed 1 ignored 1
+test tst04_x6_render_edges_equal_lattice_edges ... FAILED
+thread 'tst04_x6_render_edges_equal_lattice_edges' (3197052) panicked at crates/infynitae-backend-headless/tests/t1_parity.rs:298:5:

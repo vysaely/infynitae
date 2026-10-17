@@ -1,0 +1,7 @@
+{
+ "name": "C12.F15: INV-RENDER-1 drifts back to C12.F14's handoff (Smithay's own rect presented)",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "each surface is presented in exactly its canonical rect `[edge(x₀), edge(x₁)) × [edge(y₀), edge(y₁))`, the rect that membership and hit testing use: the Smithay element is built with `from_surface` at f64 location `(x − R)·k + δ − C_O` and wrapped so that its geometry and its draw destination are that rect |",
+ "replace": "surfaces are built with `from_surface` at f64 location `(x − R)·k + δ − C_O` |",
+ "expect": "inv-wording-mismatch"
+}

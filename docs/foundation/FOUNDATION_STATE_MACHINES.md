@@ -113,8 +113,10 @@ Object: OBJ-07, OBJ-30. Implements INV-CAMERA-5, INV-CAMERA-1.
 
 | From | Trigger | To | Effects | Cites |
 |---|---|---|---|---|
-| — | `FitViewport(O, W)` via input or shell | — | snapshot W now; F-FIT-1; one mutation; record the previous value (OBJ-30); atomic epoch; the resulting zoom stays in F-VIEW-1's domain — the rule is INC-10's (intended: clamp to 2⁻²⁰; FOUNDATION_IMPLEMENTATION_PLAN INC-10), not yet normative | INV-CAMERA-5 |
-| — | `ViewportRestore(O)` via input or shell | — | one mutation to the recorded value | INV-CAMERA-5 |
+| — | `FitViewport(O, W)` via input or shell [O connected ∧ W mapped ∧ g.w > 0 ∧ g.h > 0] | — | snapshot W now; F-FIT-1: zoom clamped into F-VIEW-1's domain, centre into INV-COORD-1; the previous value added to the history (OBJ-30); one mutation; atomic epoch; one pointer reconciliation (M10) | INV-CAMERA-5 |
+| — | `FitViewport(O, W)` [otherwise] | — | refused: no mutation, nothing recorded (C12.F15) | INV-CAMERA-5 |
+| — | `ViewportRestore(O)` via input or shell [history non-empty] | — | one mutation to the most recent recorded value, which is removed (OBJ-30) | INV-CAMERA-5 |
+| — | `ViewportRestore(O)` [history empty] | — | refused: no mutation (C12.F15) | INV-CAMERA-5 |
 | — | W resizes / commits / unmaps | — | nothing (no mode exists) | INV-CAMERA-1 |
 
 ## M9 — Protocol fullscreen

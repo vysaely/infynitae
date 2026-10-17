@@ -1,0 +1,156 @@
+--- a/crates/infynitae-wayland/src/convert.rs
++++ b/crates/infynitae-wayland/src/convert.rs
+@@ -8,10 +8,11 @@
+ use infynitae_core::render::FrameEntry;
+ use smithay::backend::renderer::Color32F;
+ use smithay::backend::renderer::damage::OutputDamageTracker;
+-use smithay::backend::renderer::element::Kind;
++use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
++use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
+ use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
+ use smithay::backend::renderer::{ImportAll, Renderer};
+-use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
++use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size, Transform as STransform};
+ use smithay::wayland::compositor::with_states;
+ 
+ use crate::WaylandState;
+@@ -93,13 +94,109 @@
+     Point::from((l.x, l.y))
+ }
+ 
++/// C12.F15 PROTOTYPE (evidence only; the production wrapper is INC-10's): an element whose geometry is
++/// Core's F-LATTICE-1 rect, drawn by delegating to the wrapped element with that destination.
++pub struct CanonicalRect<E> {
++    inner: E,
++    rect: Rectangle<i32, Physical>,
++    src: Rectangle<f64, Buffer>,
++    /// the rect differs from the inner element's own geometry (or was cropped): its damage and
++    /// opaque regions are not in this rect's coordinates
++    remapped: bool,
++}
++
++/// Beyond every view (view_O ≤ 2¹⁵): a rect is cropped to this box before the i32 conversion.
++const RENDER_LIMIT: i64 = 1 << 30;
++
++impl<E: Element> CanonicalRect<E> {
++    pub fn new(inner: E, r: infynitae_core::geom::PhysicalRect, k: f64) -> Self {
++        let own = k.is_finite().then(|| inner.geometry(Scale::from(k)));
++        let c = (r.x0.max(-RENDER_LIMIT), r.y0.max(-RENDER_LIMIT), r.x1.min(RENDER_LIMIT), r.y1.min(RENDER_LIMIT));
++        let cropped = c != (r.x0, r.y0, r.x1, r.y1);
++        let mut src = inner.src();
++        if cropped && r.x1 > r.x0 && r.y1 > r.y0 {
++            // CropRenderElement's src computation, in f64 on the uncropped i64 rect
++            let full = Size::<f64, Physical>::from(((r.x1 - r.x0) as f64, (r.y1 - r.y0) as f64));
++            let t = inner.transform();
++            let to_buf = inner.src().size / t.invert().transform_size(full);
++            let rel = Rectangle::<f64, Physical>::new(
++                ((c.0 - r.x0) as f64, (c.1 - r.y0) as f64).into(),
++                ((c.2 - c.0) as f64, (c.3 - c.1) as f64).into(),
++            );
++            let mut s2 = rel.to_logical(1.0).to_buffer(to_buf, t, &full.to_logical(1.0));
++            s2.loc += inner.src().loc;
++            src = s2;
++        }
++        let rect = Rectangle::new((c.0 as i32, c.1 as i32).into(), ((c.2 - c.0).max(0) as i32, (c.3 - c.1).max(0) as i32).into());
++        let remapped = cropped || own != Some(rect);
++        CanonicalRect { inner, rect, src, remapped }
++    }
++    pub fn inner(&self) -> &E {
++        &self.inner
++    }
++    pub fn inner_geometry(&self, k: f64) -> Rectangle<i32, Physical> {
++        self.inner.geometry(Scale::from(k))
++    }
++}
++
++impl<E: Element> Element for CanonicalRect<E> {
++    fn id(&self) -> &Id { self.inner.id() }
++    fn current_commit(&self) -> CommitCounter { self.inner.current_commit() }
++    fn src(&self) -> Rectangle<f64, Buffer> { self.src }
++    fn transform(&self) -> STransform { self.inner.transform() }
++    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> { self.rect }
++    fn damage_since(&self, scale: Scale<f64>, commit: Option<CommitCounter>) -> DamageSet<i32, Physical> {
++        let d = self.inner.damage_since(scale, commit);
++        if !self.remapped || d.is_empty() {
++            d
++        } else {
++            DamageSet::from_slice(&[Rectangle::from_size(self.rect.size)])
++        }
++    }
++    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
++        if self.remapped { OpaqueRegions::default() } else { self.inner.opaque_regions(scale) }
++    }
++    fn alpha(&self) -> f32 { self.inner.alpha() }
++    fn kind(&self) -> Kind { self.inner.kind() }
++}
++
++impl<R: Renderer, E: RenderElement<R>> RenderElement<R> for CanonicalRect<E> {
++    fn draw(
++        &self,
++        frame: &mut R::Frame<'_, '_>,
++        src: Rectangle<f64, Buffer>,
++        dst: Rectangle<i32, Physical>,
++        damage: &[Rectangle<i32, Physical>],
++        opaque_regions: &[Rectangle<i32, Physical>],
++    ) -> Result<(), R::Error> {
++        self.inner.draw(frame, src, dst, damage, opaque_regions)
++    }
++    fn underlying_storage(&self, renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
++        if self.remapped { None } else { self.inner.underlying_storage(renderer) }
++    }
++}
++
+ /// Render elements for a frame, front to back, one per entry. An entry whose surface is no longer
+-/// registered or has no renderable state is skipped.
++/// registered or has no renderable state is skipped. PROTOTYPE: each is wrapped in
++/// [`CanonicalRect`] at Core's rect; `k` is the frame's view.k.
+ pub fn render_elements<R>(
+     renderer: &mut R,
+     registry: &SurfaceRegistry,
+     entries: &[FrameEntry],
+-) -> Result<Vec<(FrameEntry, WaylandSurfaceRenderElement<R>)>, R::Error>
++) -> Result<Vec<(FrameEntry, CanonicalRect<WaylandSurfaceRenderElement<R>>)>, R::Error>
++where
++    R: Renderer + ImportAll,
++    R::TextureId: Clone + 'static,
++{
++    render_elements_k(renderer, registry, entries, f64::NAN)
++}
++
++pub fn render_elements_k<R>(
++    renderer: &mut R,
++    registry: &SurfaceRegistry,
++    entries: &[FrameEntry],
++    k: f64,
++) -> Result<Vec<(FrameEntry, CanonicalRect<WaylandSurfaceRenderElement<R>>)>, R::Error>
+ where
+     R: Renderer + ImportAll,
+     R::TextureId: Clone + 'static,
+@@ -120,7 +217,7 @@
+             )
+         })?;
+         if let Some(el) = element {
+-            out.push((e.clone(), el));
++            out.push((e.clone(), CanonicalRect::new(el, e.rect, k)));
+         }
+     }
+     Ok(out)
+@@ -194,13 +291,13 @@
+     R: Renderer + ImportAll,
+     R::TextureId: Clone + 'static,
+ {
+-    let entries = state
++    let frame = state
+         .core
+         .render_list(output)
+-        .map_err(|_| RenderOutputError::NoFrame)?
+-        .entries
+-        .clone();
+-    let elements: Vec<_> = render_elements(renderer, &state.registry, &entries)
++        .map_err(|_| RenderOutputError::NoFrame)?;
++    let k = frame.view.k;
++    let entries = frame.entries.clone();
++    let elements: Vec<_> = render_elements_k(renderer, &state.registry, &entries, k)
+         .map_err(RenderOutputError::Renderer)?
+         .into_iter()
+         .map(|(_, e)| e)

@@ -1,0 +1,5 @@
+REAL per-frame, scale 1: 14520 rects (model==Smithay x: 14507); mismatched edges x0 0 y0 0 x1 0 y1 0; A|B seams 0; pointer columns wrong 0/9680; e.g. None
+REAL per-frame, scale 1.5: 14520 rects (model==Smithay x: 14514); mismatched edges x0 0 y0 0 x1 0 y1 0; A|B seams 0; pointer columns wrong 0/9680; e.g. None
+REAL kept |v-R|k~2^20 (R left): 14520 rects (model==Smithay x: 14491); mismatched edges x0 0 y0 0 x1 0 y1 0; A|B seams 0; pointer columns wrong 0/9680; e.g. None
+REAL kept |v-R|k~2^31 (R left): 14520 rects (model==Smithay x: 14496); mismatched edges x0 0 y0 0 x1 0 y1 0; A|B seams 0; pointer columns wrong 0/9680; e.g. None
+REAL kept |v-R|k~2^31 (R right): 14520 rects (model==Smithay x: 14484); mismatched edges x0 0 y0 0 x1 0 y1 0; A|B seams 0; pointer columns wrong 0/9680; e.g. None
