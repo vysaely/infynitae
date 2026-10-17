@@ -47,7 +47,7 @@ CONTROLS = [
      "(px * Q16_ONE as f64).round_ties_even() as i64", "(px * Q16_ONE as f64).round() as i64",
      "infynitae-core", ["--lib"], "view_origin_is_centre_minus_half_view_ties_even"),
     ("F-LATTICE-1: lattice reference truncates instead of flooring", f"{CORE}/projection.rs",
-     "let r = v_q.div_euclid(LATTICE * Q16_ONE) * LATTICE;", "let r = v_q / (LATTICE * Q16_ONE) * LATTICE;",
+     "|v_q: i64| v_q.div_euclid(LATTICE * Q16_ONE) * LATTICE;", "|v_q: i64| v_q / (LATTICE * Q16_ONE) * LATTICE;",
      "infynitae-core", ["--lib"], "lattice_reference_floors_negative_origins"),
     ("F-ORIGIN-1: popup geometry offset added instead of subtracted", f"{CORE}/snapshot.rs",
      "                            x: root.x + tree.geometry.loc.x as i64 + position.x as i64\n                                - geometry_loc.x as i64,",
