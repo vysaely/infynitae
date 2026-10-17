@@ -1,0 +1,14 @@
+S1 main #3: term_at=None verdict ok nested_exit=0 at 12.58s hide_at=3.01 reveal_at=8.03 commits_visible=173 commits_hidden=0 commits_after_reveal=223 total_commits=417 frame_dones=834
+S2 hide3-noreveal-dur8 main #1: term_at=None verdict STALL nested_exit=none (killed) hide_at=3.01 reveal_at=None commits_visible=175 commits_hidden=0 commits_after_reveal=- total_commits=181 frame_dones=363
+S2 hide3-noreveal-dur8 fix #1: term_at=None verdict ok nested_exit=0 at 8.56s hide_at=3.01 reveal_at=None commits_visible=175 commits_hidden=0 commits_after_reveal=- total_commits=181 frame_dones=363
+S2 hide3-noreveal-dur8 main #2: term_at=None verdict STALL nested_exit=none (killed) hide_at=3.01 reveal_at=None commits_visible=175 commits_hidden=0 commits_after_reveal=- total_commits=181 frame_dones=363
+S2 hide3-noreveal-dur8 fix #2: term_at=None verdict ok nested_exit=0 at 8.56s hide_at=3.01 reveal_at=None commits_visible=175 commits_hidden=0 commits_after_reveal=- total_commits=180 frame_dones=361
+S2 hide3-noreveal-dur8 main #3: term_at=None verdict STALL nested_exit=none (killed) hide_at=3.01 reveal_at=None commits_visible=175 commits_hidden=0 commits_after_reveal=- total_commits=180 frame_dones=361
+S2 hide3-noreveal-dur8 fix #3: term_at=None verdict ok nested_exit=0 at 8.56s hide_at=3.01 reveal_at=None commits_visible=175 commits_hidden=0 commits_after_reveal=- total_commits=180 frame_dones=361
+S3 hide3-term6-noreveal r2 #1: term_at=6.03 verdict STALL nested_exit=none (killed) hide_at=3.01 reveal_at=None commits_visible=175 commits_hidden=0 commits_after_reveal=- total_commits=180 frame_dones=361
+S3 hide3-term6-noreveal r2fix #1: term_at=6.03 verdict ok nested_exit=0 at 6.55s hide_at=3.01 reveal_at=None commits_visible=175 commits_hidden=0 commits_after_reveal=- total_commits=180 frame_dones=361
+S3 hide3-term6-noreveal r2 #2: term_at=6.03 verdict STALL nested_exit=none (killed) hide_at=3.01 reveal_at=None commits_visible=175 commits_hidden=0 commits_after_reveal=- total_commits=181 frame_dones=363
+S3 hide3-term6-noreveal r2fix #2: term_at=6.03 verdict ok nested_exit=0 at 6.55s hide_at=3.01 reveal_at=None commits_visible=175 commits_hidden=0 commits_after_reveal=- total_commits=180 frame_dones=361
+S3 hide3-term6-noreveal r2 #3: term_at=6.03 verdict STALL nested_exit=none (killed) hide_at=3.01 reveal_at=None commits_visible=171 commits_hidden=0 commits_after_reveal=- total_commits=176 frame_dones=353
+S3 hide3-term6-noreveal r2fix #3: term_at=6.03 verdict ok nested_exit=0 at 6.56s hide_at=3.01 reveal_at=None commits_visible=175 commits_hidden=0 commits_after_reveal=- total_commits=181 frame_dones=363
+DONE

@@ -109,3 +109,43 @@ DETECTED by the T0 test. Removing the gate's call from the render path is not ca
 - A test-probe race (the GTK4 paste probe exits after the primary-selection answer before the
   clipboard answer is printed) cost one result in 2 of ~37 runs, with and without the fix; it is
   the probe, not the compositor.
+
+## 7. Review and isolated reproduction (overnight session, 2026-10-17)
+
+**Code review of the fix against winit 0.30.13.** Every `RedrawRequested` on Wayland — from
+`request_redraw`, a configure or a decoration refresh — passes one check that returns nothing
+while the window's frame callback is `Requested` (`event_loop/mod.rs:486`); that callback is
+requested by `pre_present_notify`, which Smithay's `submit` calls on the same commit as Mesa's own
+throttle callback. So `Redraw` cannot reopen the gate while the host withholds callbacks, and when
+it arrives Mesa's callback for the same commit has been delivered too. A due frame that waits does
+not re-arm the frame timer (no busy loop); `Redraw` reaches the loop as a winit event, which
+requests the frame. Swap interval, renderer and damage are untouched.
+
+**Isolated reproducer (`isolated/`, no desktop).** The compositor under test runs nested in a
+headless Infynitae host inside `unshare -Urnmpf` (private `/tmp`, masked `/dev/dri`); a second
+host client (`mpv --fs`) hides the nested window — on `main` the host then sends it no frame
+callbacks (INC-7 residual R-10), like a desktop for a minimised window — and is killed to reveal
+it. Watchdog outside the sandbox; gdb backtrace before the kill.
+
+| Scenario | Unfixed | Fixed |
+|---|---|---|
+| S1 hidden 3–8 s, revealed; limit 12 s (restore, starvation) | 3/3 exit 0 at 12.56–12.58 s (blocked while hidden, released by the reveal) | 3/3 exit 0 at 12.55–12.56 s; 222–223 frames after the reveal (no starvation) |
+| S2 hidden from 3 s, never revealed; limit 8 s (`main` vs fix) | **3/3 still running at 30 s** (watchdog) | **3/3 exit 0 at 8.56 s** |
+| S3 hidden from 3 s, SIGTERM at 6.03 s (r2 base, which has signal handling) | **3/3 still running at 30 s** | **3/3 exit 0 at 6.55–6.56 s** |
+| Visible phase (0–3 s), all runs | 171–176 frames | 175–176 frames |
+
+All six stalls: main thread in `eglSwapBuffersWithDamageKHR → … → ppoll` (`isolated/runs/*/gdb.txt`).
+
+**Regression test in the repository.** `crates/infynitae/tests/nested_hidden_window.rs`
+(`#[ignore]`, run with `cargo test -p infynitae --test nested_hidden_window -- --ignored`;
+needs `unshare`, `mpv`, Mesa software EGL; skips with a message if `unshare`/`mpv` are missing):
+S2 inside the test itself, re-run in private namespaces with `--kill-child`; every child it starts
+is killed and reaped on any outcome. **Fails on unfixed `main`** ("NB-1: the nested compositor,
+hidden since 3 s, was still running at 20 s (run limit 8 s)", branch
+`experiment/nb1-regression-on-main-2026-10-17`) and **passes on the fix** (exit 0 at 8.56 s);
+no process left in either case. It is ignored in the default gates because it needs `mpv` and a
+software EGL; it is the check to run before merging any change to the nested backend.
+
+**Limits.** Restoring a *KDE*-minimised window cannot be driven from a client (xdg-shell has no
+un-minimise request); restoration is covered by the isolated host (S1). Samples are small (3 per
+cell); no frame-pacing or latency claim.
