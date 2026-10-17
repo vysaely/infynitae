@@ -1,0 +1,15 @@
+config | mode | width/gap reversals | flickers | pairs | max zoom step/frame | max edge jump beyond ideal (px) | distinct k
+k 1.0->2.0 in 60 frames x5 seeds | Z1 | 13820 | 16831 | 107640 | 1.16% | 1.91 | 61
+k 1.0->2.0 in 60 frames x5 seeds | Z2 | 13790 | 16567 | 107640 | 1.65% | 1.92 | 61
+k 2.0->1.0 in 60 frames x5 seeds | Z1 | 13820 | 16831 | 107640 | 1.15% | 1.91 | 61
+k 2.0->1.0 in 60 frames x5 seeds | Z2 | 13790 | 16567 | 107640 | 1.63% | 1.92 | 61
+k 1.0->1.1 in 30 frames x5 seeds | Z1 | 6513 | 6862 | 53820 | 0.32% | 1.83 | 31
+k 1.0->1.1 in 30 frames x5 seeds | Z2 | 2380 | 0 | 53820 | 0.83% | 1.89 | 13
+k 0.25->0.5 in 60 frames x5 seeds | Z1 | 15603 | 18287 | 116160 | 1.16% | 1.89 | 61
+k 0.25->0.5 in 60 frames x5 seeds | Z2 | 6294 | 1376 | 116160 | 3.33% | 1.80 | 31
+k 0.05->0.1 in 60 frames x5 seeds | Z1 | 15879 | 18553 | 119040 | 1.16% | 1.95 | 61
+k 0.05->0.1 in 60 frames x5 seeds | Z2 | 477 | 0 | 119040 | 16.67% | 1.71 | 7
+k 0.01->0.02 in 60 frames x5 seeds | Z1 | 15926 | 18677 | 119520 | 1.16% | 1.91 | 61
+k 0.01->0.02 in 60 frames x5 seeds | Z2 | 23 | 0 | 119520 | 100.00% | 1.28 | 2
+k 4.0->8.0 in 60 frames x5 seeds | Z1 | 9781 | 12673 | 82260 | 1.16% | 1.86 | 61
+k 4.0->8.0 in 60 frames x5 seeds | Z2 | 9383 | 12066 | 82260 | 1.33% | 1.91 | 61

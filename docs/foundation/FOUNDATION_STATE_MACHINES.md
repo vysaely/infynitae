@@ -59,10 +59,12 @@ Object: OBJ-10, OBJ-07, OBJ-08, OBJ-20. Implements INV-OUTPUT-1, INV-OUTPUT-2, I
 
 | From | Trigger [guard] | To | Effects | Cites |
 |---|---|---|---|---|
-| Absent | `output_connected(&mut OutputLifecycleToken, descriptor)` (startup and hotplug alike) | Enabled | global created; camera bound by precedence remembered-and-unbound → persisted (no collision) → default (M5); Views (`view_O`), damage tracker (`phys_O`), membership, ladder; epoch settlement; if the seat is `NoOutput`: zero-output grab removed, pointer placed at the centre of the new output (startup rule), one routed motion, reconciliation (M13) | INV-OUTPUT-2, INV-CAMERA-3, INV-SCALE-3, INV-OUTPUT-1 |
-| Enabled | `output_reconfigured(&mut OutputLifecycleToken, id, descriptor)` [known id ∧ same `OutputKey`]: mode, transform, scale or refresh change | Enabled (same `OutputId`) | View (`view_O`), ProjectionFrame and damage tracker (`phys_O`) rebuilt (F-VIEW-1, F-RENDER-1); membership; pointer clamp (F-RECONF-1); `wl_output`/`xdg_output` events; one configure only for an element in protocol fullscreen on this output; epoch settlement; reconciliation trigger (M13); no camera value change; no new `OutputId` | INV-OUTPUT-2, INV-INPUT-5, INV-SCALE-3 |
+| Absent | `output_connected(&mut OutputLifecycleToken, descriptor)` (startup and hotplug alike) | Enabled | global created; camera bound by precedence remembered-and-unbound → persisted (no collision) → default (M5); Views (`view_O`), lattice reference set (F-LATTICE-1), damage tracker (`phys_O`), membership, ladder; epoch settlement; if the seat is `NoOutput`: zero-output grab removed, pointer placed at the centre of the new output (startup rule), one routed motion, reconciliation (M13) | INV-OUTPUT-2, INV-CAMERA-3, INV-SCALE-3, INV-OUTPUT-1 |
+| Absent | `output_connected` [descriptor outside the representable domain (F-VIEW-1: mode sides 1 … 2¹⁵, scale 0.25 … 8)] | Absent | rejected, nothing mutated (C12.F14) | INV-OUTPUT-2 |
+| Enabled | `output_reconfigured(&mut OutputLifecycleToken, id, descriptor)` [known id ∧ same `OutputKey`]: mode, transform, scale or refresh change | Enabled (same `OutputId`) | View (`view_O`), ProjectionFrame and damage tracker (`phys_O`) rebuilt (F-VIEW-1, F-RENDER-1); lattice reference set again if `k_O` or `view_O` changed (F-LATTICE-1); membership; pointer clamp (F-RECONF-1); `wl_output`/`xdg_output` events; one configure only for an element in protocol fullscreen on this output; epoch settlement; reconciliation trigger (M13); no camera value change; no new `OutputId` | INV-OUTPUT-2, INV-INPUT-5, INV-SCALE-3 |
 | Enabled | `output_reconfigured` [unknown id ∨ changed `OutputKey`] | unchanged | rejected, nothing mutated (an identity change is a disconnect plus a connect) | INV-OUTPUT-2 |
-| Enabled | `output_disconnected(&mut OutputLifecycleToken, id)` [another output survives] | Removed | leave before the global is destroyed; camera unbound and kept; fullscreen dropped with its configure; interactions orphaned without camera mutation; pointer relocated (F-RELOCATE-1); constraints reconciled (deferred under a client grab); settlement | INV-OUTPUT-1 |
+| Enabled | `output_reconfigured` [descriptor outside the representable domain (F-VIEW-1)] | unchanged | rejected, nothing mutated (C12.F14) | INV-OUTPUT-2 |
+| Enabled | `output_disconnected(&mut OutputLifecycleToken, id)` [another output survives] | Removed | leave before the global is destroyed; camera unbound and kept; lattice reference dropped (F-LATTICE-1); fullscreen dropped with its configure; interactions orphaned without camera mutation; pointer relocated (F-RELOCATE-1); constraints reconciled (deferred under a client grab); settlement | INV-OUTPUT-1 |
 | Enabled | `output_disconnected(&mut OutputLifecycleToken, id)` [last output] | Removed; seat `NoOutput` | as above, but no relocation: zero-output grab installed with `Focus::Clear` (client: `wl_pointer.leave`; active constraints end once), one `motion(None)` delivered to no one; physical pointer input consumed until the next connect | INV-OUTPUT-1, INV-INPUT-5 |
 | any | protocol event or caller-supplied coordinates or zoom | — | impossible: no such entry, field or parameter | INV-OUTPUT-2 |
 
@@ -72,7 +74,7 @@ Object: OBJ-07, OBJ-09, OBJ-30. Implements INV-CAMERA-1, INV-CAMERA-3, INV-CAMER
 | From | Trigger | To | Effects | Cites |
 |---|---|---|---|---|
 | — | `output_connected`, no **unbound** remembered camera for the key | Bound | new camera seeded from the persisted lookup (only if no camera with that key exists this session) or the internal default; one proof | INV-CAMERA-3, INV-OUTPUT-2 |
-| Unbound | `output_connected`, same `OutputKey` [lowest unbound camera with that key] | Bound | re-bound, value unchanged | INV-CAMERA-3 |
+| Unbound | `output_connected`, same `OutputKey` [lowest unbound camera with that key] | Bound | re-bound, value unchanged; the output's lattice reference is set from the re-bound camera's view (F-LATTICE-1) | INV-CAMERA-3 |
 | Bound | `output_connected`, same `OutputKey` (concurrent key collision) | Bound (unchanged) | never re-bound: binding is 1:1; the new output gets its own camera (row 1) | INV-CAMERA-3 |
 | Bound | `output_reconfigured` of its output | Bound | nothing (no proof minted) | INV-OUTPUT-2 |
 | Bound | its output disconnected | Unbound | value kept | INV-OUTPUT-1 |
@@ -90,7 +92,7 @@ Object: OBJ-26, OBJ-07. Implements INV-INPUT-1/2/3/4, INV-COORD-3, INV-CAMERA-4.
 | Panning | initiator release | Idle | epoch settles; batch-end reconciliation | INV-INPUT-5, INV-SCALE-3 |
 | Panning | the pan's output removed | Orphaned | motion consumed and discarded | INV-OUTPUT-1 |
 | Orphaned | initiator release | Idle | reconciliation on the relocated output | INV-INPUT-5 |
-| any | **persistent zoom ≠ 1** | — | **gated by decision OB-24** (fallback: fit-exit restores baseline zoom) | INV-COORD-3 |
+| any | **persistent zoom ≠ 1** | — | **decided by C12.F14** (OB-24 D3/D4: the output's lattice reference is kept while panning, F-LATTICE-1); the code refuses a pan at zoom ≠ 1 until INC-10 implements it | INV-COORD-3 |
 
 ## M7 — ScaleInteractionEpoch
 Object: OBJ-16. Implements INV-SCALE-3, INV-SCALE-4, INV-IDLE-1. Kinds: CameraPan, CameraZoom, WindowMove, WindowResize, ShellStream.
@@ -235,7 +237,7 @@ Object: OBJ-32. Implements INV-XWAYLAND-1. ADR-10.
 | Crashed | repeated crashes | Degraded | X11 disabled; logged | INV-FAIL-1 |
 
 ## M20 — Persistence restore
-Object: OBJ-33, OBJ-09. Implements INV-OUTPUT-2, INV-FAIL-1. The file is validated all-or-nothing at startup and given to `Core::new` as a passive lookup. Cameras are applied only inside `output_connected` (M4/M5). Anchors are restored only through placement at initial commit (M1). There is no restore API. `OutputKey` is a persistence identity (INV-OUTPUT-2); on a concurrent key collision the persisted entry stays with the first holder and the duplicate gets a default camera (INV-CAMERA-3). Shipping persisted camera state across sessions is gated by G-OB48 (OB-48).
+Object: OBJ-33, OBJ-09. Implements INV-OUTPUT-2, INV-FAIL-1. The file is validated all-or-nothing at startup and given to `Core::new` as a passive lookup; a zoom outside the representable domain (F-VIEW-1) is an invalid entry, and a rejected file yields the empty/default state (C12.F14, D2). Cameras are applied only inside `output_connected` (M4/M5). Anchors are restored only through placement at initial commit (M1). There is no restore API. `OutputKey` is a persistence identity (INV-OUTPUT-2); on a concurrent key collision the persisted entry stays with the first holder and the duplicate gets a default camera (INV-CAMERA-3). Shipping persisted camera state across sessions is gated by G-OB48 (OB-48).
 
 ## M21 — Backend and renderer recovery
 Object: OBJ-29. Implements INV-FAIL-1, INV-SCALE-2.

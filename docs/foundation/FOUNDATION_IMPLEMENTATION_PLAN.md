@@ -223,6 +223,8 @@ INC-15 (PHYSICAL T3)   INC-16 (PHYSICAL T4, Phase G DRM)   INC-17 (PHYSICAL T5) 
 ### GATE G-OB24 (architecture change control, not an increment)
 No PRODUCT increment may create a state where **persistent zoom ≠ 1 and camera pan coexist** until OB-24 is resolved through architecture change control: a C12.R3-style amendment with INC-9-class evidence.
 
+**Status 2026-10-17:** decided by the owner (D1–D6) and recorded as layer C12.F14 on the governance branch `governance/ob24-c12f14-2026-10-17`; G-OB24 is resolved when that layer is on `main` (owner integration authorization). INC-10 then implements the kept lattice reference (F-LATTICE-1) and must show 0 width/gap changes per zoomed pan on the production path (OB-24).
+
 **Conservative fallback** if OB-24 is unresolved when INC-10 is reached: navigation from a fitted view first restores the baseline zoom, so persistent zoom ≠ 1 never coexists with pan. The fit itself stays one-shot (INV-CAMERA-5). Discrete or continuous user zoom features stay out.
 
 ### INC-10 — Zoomed navigation (viewport-fit, zoomed pan, restore)

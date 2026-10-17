@@ -101,9 +101,15 @@ impl OutputModel {
     }
 }
 
-/// A descriptor Core accepts: non-empty mode, positive scale.
+/// A descriptor Core accepts: a mode of 1 … [`MODE_MAX`] px per side and a scale of 0.25 … 8
+/// (the representable projection domain, F-VIEW-1 as amended by C12.F14).
+///
+/// [`MODE_MAX`]: crate::geom::MODE_MAX
 pub(crate) fn valid(d: &OutputDescriptor) -> bool {
-    d.mode.0 > 0 && d.mode.1 > 0 && d.scale_120 > 0
+    use crate::geom::{MODE_MAX, SCALE_120_MAX, SCALE_120_MIN};
+    (1..=MODE_MAX).contains(&d.mode.0)
+        && (1..=MODE_MAX).contains(&d.mode.1)
+        && (SCALE_120_MIN..=SCALE_120_MAX).contains(&d.scale_120)
 }
 
 #[cfg(test)]

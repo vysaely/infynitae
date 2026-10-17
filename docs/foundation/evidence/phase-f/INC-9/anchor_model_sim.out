@@ -1,0 +1,26 @@
+T1 multi-output pans (frames with a width/gap change per 240-frame pan, 4 seeds per output)
+  zoom 1.0 scale 1.0 k=1.0000 (k in n/120): SEALED 0  KEPT 0
+  zoom 1.0 scale 1.25 k=1.2500 (k in n/120): SEALED 0  KEPT 0
+  zoom 1.2345 scale 1.0 k=1.2345 (k not in n/120): SEALED 58  KEPT 0
+  zoom 0.9137 scale 1.25 k=1.1421 (k not in n/120): SEALED 58  KEPT 0
+  zoom 1.2345 scale 1.5 k=1.8518 (k not in n/120): SEALED 55  KEPT 0
+  zoom 0.7071 scale 2.0 k=1.4142 (k not in n/120): SEALED 59  KEPT 0
+  zoom 1.4142 scale 1.75 k=2.4748 (k not in n/120): SEALED 50  KEPT 0
+T2 scale change during a pan (KEPT re-anchors at the event frame 120)
+  zoom 1.2345 scale 1.0->1.25: change frames [120]; outside the event: 0
+  zoom 0.9137 scale 1.25->1.5: change frames [120]; outside the event: 0
+  zoom 1.4142 scale 1.5->1.0: change frames [120]; outside the event: 0
+T3 kept reference far from the view: f64 edges vs exact (300 edges per row)
+  k=478413  |v-R|*k ~ 2^40  (|v-R| = 2.3e+06 px): 0 wrong edges
+  k=478413  |v-R|*k ~ 2^46  (|v-R| = 1.47e+08 px): 0 wrong edges
+  k=478413  |v-R|*k ~ 2^50  (|v-R| = 2.35e+09 px): 0 wrong edges
+  k=478413  |v-R|*k ~ 2^52  (|v-R| = 9.41e+09 px): 64 wrong edges
+  k=478413  |v-R|*k ~ 2^53  (|v-R| = 1.88e+10 px): 173 wrong edges
+  k=478413  |v-R|*k ~ 2^55  (|v-R| = 7.53e+10 px): 234 wrong edges
+  k=36864  |v-R|*k ~ 2^40  (|v-R| = 2.98e+07 px): 0 wrong edges
+  k=36864  |v-R|*k ~ 2^46  (|v-R| = 1.91e+09 px): 0 wrong edges
+  k=36864  |v-R|*k ~ 2^50  (|v-R| = 3.05e+10 px): 0 wrong edges
+  k=36864  |v-R|*k ~ 2^52  (|v-R| = 1.22e+11 px): 0 wrong edges
+  k=5734.4  |v-R|*k ~ 2^40  (|v-R| = 1.92e+08 px): 0 wrong edges
+  k=5734.4  |v-R|*k ~ 2^46  (|v-R| = 1.23e+10 px): 0 wrong edges
+  k=225  |v-R|*k ~ 2^40  (|v-R| = 4.89e+09 px): 0 wrong edges

@@ -13,7 +13,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 | ADR | Title | Status |
 |---|---|---|
 | ADR-01 | Stage is the sole spatial authority; Smithay `Space` rejected | Accepted; PD-F2-13 → obligation OB-34 (1R) |
-| ADR-02 | Fixed-point Q16 Canvas with a reference-relative lattice | Accepted; **amended 1R** (R8; zoom-aware pan; OB-24 rescoped) |
+| ADR-02 | Fixed-point Q16 Canvas with a reference-relative lattice | Accepted; **amended 1R** (R8; zoom-aware pan; OB-24 rescoped); **amended C12.F14** (zoom domain; the output's lattice reference, kept while panning) |
 | ADR-03 | Window-geometry anchor and exact physical-pixel hit-testing | Accepted |
 | ADR-04 | Independent centre-anchored cameras | Accepted; **amended 1R** (one-shot fit; direct-manipulation pan); **amended 2R** (output-lifecycle authority) |
 | ADR-05 | Unified effective scale: MaxGesture, bounded ladder hint, settlement | Accepted; **amended 1R** (ScaleInteractionEpoch; device-bound ladder; initial hint); **amended 2R** (epochs for all spatial interactions); **amended F2** (device bound on the 1/120 lattice) |
@@ -82,6 +82,9 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - R8 (inward rounding of popup constraint targets) is added to the rounding set (PD-F2-12).
   - Gesture totals are zoom-aware (INV-COORD-3, PD-F2-06).
   - The lattice is kept: render/hit agreement holds at k ∉ n/120 (ED-1). The ±1 px shape change at reference switches during zoomed panning is a stated residual, OB-24 rescoped (candidate: gesture-pinned reference).
+- **C12.F14 amendment (owner decision 2026-10-17, OB-24):**
+  - The reference is the output's lattice reference, kept while panning and set again when the output's view is (re)defined or `|v_O − R_O|·k_O` would exceed 2³¹; never persisted (F-LATTICE-1).
+  - Camera zoom is bounded to the representable domain 2⁻²⁰ … 2¹⁶ (F-VIEW-1), which keeps the Q16 view origin exact.
 
 ## ADR-03: window-geometry anchor and exact physical-pixel hit-testing
 

@@ -29,7 +29,7 @@ pub struct PersistedCameras {
 /// A persisted entry Core refuses (the file is validated all-or-nothing, INV-FAIL-1).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PersistedError {
-    /// Zoom not finite and positive.
+    /// Zoom outside the representable domain ([`crate::geom::zoom_in_domain`]).
     Zoom { entry: usize },
     /// Centre outside ±2³⁶ px (INV-COORD-1).
     Centre { entry: usize },
@@ -42,7 +42,7 @@ impl PersistedCameras {
     /// entry rejects the whole table.
     pub fn from_entries(entries: Vec<(OutputKey, CanvasPos, f64)>) -> Result<Self, PersistedError> {
         for (i, (key, centre, zoom)) in entries.iter().enumerate() {
-            if !(zoom.is_finite() && *zoom > 0.0) {
+            if !crate::geom::zoom_in_domain(*zoom) {
                 return Err(PersistedError::Zoom { entry: i });
             }
             if CanvasPoint::new(centre.x >> 16, centre.y >> 16).is_none() {
@@ -135,6 +135,12 @@ impl CameraSet {
             persisted.lookup(key)
         };
         let (center, zoom) = seeded.unwrap_or((CanvasPos { x: 0, y: 0 }, 1.0));
+        // every camera zoom is in the representable domain: a persisted one was validated, the
+        // default is 1 (F-VIEW-1, C12.F14). A future zoom writer must validate too.
+        debug_assert!(
+            crate::geom::zoom_in_domain(zoom),
+            "zoom {zoom} outside the domain"
+        );
         self.cameras.push(Camera {
             center,
             zoom,

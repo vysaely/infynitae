@@ -1,0 +1,11 @@
+wrong f64 edges / edges checked, by |x - R|*k ~ 2^e
+2^26: generic 0/16800  n/120 0/18400  tie-dyadic 0/18800
+2^31: generic 0/15200  n/120 0/18400  tie-dyadic 0/14400
+2^32: generic 0/12400  n/120 0/14800  tie-dyadic 0/14800
+2^33: generic 0/14000  n/120 108/12800  tie-dyadic 463/15200
+2^34: generic 0/13600  n/120 54/12800  tie-dyadic 288/13600
+2^35: generic 0/12000  n/120 20/15200  tie-dyadic 384/11200
+2^36: generic 0/12400  n/120 10/16000  tie-dyadic 222/10000
+2^40: generic 0/10800  n/120 0/9600  tie-dyadic 0/10000
+2^46: generic 13/5200  n/120 0/9200  tie-dyadic 0/4000
+2^50: generic 380/3200  n/120 166/4400  tie-dyadic 0/2000

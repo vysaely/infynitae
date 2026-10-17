@@ -26,7 +26,7 @@ pub struct ViewParams {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ProjectionError {
-    /// zoom or scale not finite and positive, or an empty view.
+    /// zoom, scale or view size outside the representable domain (F-VIEW-1, C12.F14).
     InvalidParams,
 }
 
@@ -54,8 +54,18 @@ pub struct View {
 
 impl View {
     pub fn new(p: ViewParams) -> Result<View, ProjectionError> {
-        let ok = |x: f64| x.is_finite() && x > 0.0;
-        if !ok(p.zoom) || !ok(p.scale) || p.view_size.0 == 0 || p.view_size.1 == 0 {
+        // Only the representable domain is accepted (F-VIEW-1, C12.F14): Core's entry
+        // points never produce anything else, so this refuses only a caller that bypassed them.
+        let scale_ok = p.scale.is_finite()
+            && (f64::from(crate::geom::SCALE_120_MIN) / 120.0
+                ..=f64::from(crate::geom::SCALE_120_MAX) / 120.0)
+                .contains(&p.scale);
+        let side_ok = |s: u32| (1..=crate::geom::MODE_MAX).contains(&s);
+        if !crate::geom::zoom_in_domain(p.zoom)
+            || !scale_ok
+            || !side_ok(p.view_size.0)
+            || !side_ok(p.view_size.1)
+        {
             return Err(ProjectionError::InvalidParams);
         }
         let k = p.zoom * p.scale;
@@ -68,16 +78,11 @@ impl View {
             x: v_axis(p.centre.x, p.view_size.0),
             y: v_axis(p.centre.y, p.view_size.1),
         };
-        // F-LATTICE-1: R = floor(v / 120)·120; C = round((v − R)·k + δ); c_eff = R + Q16(C / k)
-        let lattice = |v_q: i64| {
-            let r = v_q.div_euclid(LATTICE * Q16_ONE) * LATTICE;
-            let rel = (v_q - r * Q16_ONE) as f64 / Q16_ONE as f64; // exact: 0 ≤ rel < 120
-            let c = (rel * k + DELTA).round() as i64;
-            let c_eff = r * Q16_ONE + q16(c as f64 / k);
-            (r, c, c_eff)
-        };
-        let (rx, cx, ex) = lattice(v.x);
-        let (ry, cy, ey) = lattice(v.y);
+        // F-LATTICE-1: R = floor(v / 120)·120
+        let reference = |v_q: i64| v_q.div_euclid(LATTICE * Q16_ONE) * LATTICE;
+        let (rx, ry) = (reference(v.x), reference(v.y));
+        let (cx, ex) = camera_on_grid(v.x, rx, k);
+        let (cy, ey) = camera_on_grid(v.y, ry, k);
         Ok(View {
             v,
             zoom: p.zoom,
@@ -175,6 +180,15 @@ impl View {
             (p.y * self.scale).floor() as i64,
         )
     }
+}
+
+/// F-LATTICE-1: the camera on the physical grid, `C = round((v − R)·k + δ)`, and the snapped
+/// camera `c_eff = R + Q16(C / k)` (R5), for a view origin `v` (Q16) and a lattice reference `R`.
+fn camera_on_grid(v_q: i64, r: i64, k: f64) -> (i64, i64) {
+    // exact: |v − R| < 2³⁷ px in the representable domain, so the Q16 difference is below 2⁵³
+    let rel = (v_q - r * Q16_ONE) as f64 / Q16_ONE as f64;
+    let c = (rel * k + DELTA).round() as i64;
+    (c, r * Q16_ONE + q16(c as f64 / k))
 }
 
 fn edge(x: i64, r: i64, c: i64, k: f64) -> i64 {
@@ -297,11 +311,21 @@ pub(crate) mod tests {
                 );
             }
         }
-        for zoom in [1e-6, 1e-3, 1e3, 1e6] {
+        // C12.F14 (D1): the representable domain ends at zoom 2^16 (1e6 is refused by
+        // View::new); its extremes of k are 2^16 · 8 = 2^19 and 2^-20 · 0.25 = 2^-22
+        use crate::geom::{ZOOM_MAX, ZOOM_MIN};
+        for (zoom, scale) in [
+            (1e-6, 1.0),
+            (1e-3, 1.0),
+            (1e3, 1.0),
+            (ZOOM_MAX, 1.0),
+            (ZOOM_MAX, 8.0),
+            (ZOOM_MIN, 0.25),
+        ] {
             let v = View::new(ViewParams {
                 centre: CanvasPos { x: 0, y: 0 },
                 zoom,
-                scale: 1.0,
+                scale,
                 view_size: (1920, 1080),
             })
             .unwrap();
@@ -315,7 +339,7 @@ pub(crate) mod tests {
                 assert_eq!(
                     cull.admits(x0, y0, x1, y1),
                     v.may_show(x0, y0, x1, y1),
-                    "zoom {zoom}"
+                    "zoom {zoom} scale {scale}"
                 );
             }
         }
@@ -383,12 +407,13 @@ pub(crate) mod tests {
                 y: -540 * Q16_ONE
             }
         );
-        // an exact tie: centre 0, extent 1, k = 2¹⁶ → v = −2⁻¹⁷ px = −0.5 Q16 units; ties-even
+        // an exact tie: centre 0, extent 1, k = 2¹⁶ (zoom 2¹⁶, the domain's maximum, at scale 1)
+        // → v = −2⁻¹⁷ px = −0.5 Q16 units; ties-even
         // gives 0 where round-half-away would give −1
         let t = View::new(ViewParams {
             centre: CanvasPos { x: 0, y: 0 },
-            zoom: 1.0,
-            scale: 65536.0,
+            zoom: 65536.0,
+            scale: 1.0,
             view_size: (1, 1),
         })
         .unwrap();
@@ -1053,5 +1078,302 @@ pub(crate) mod tests {
         let v = view(0.0, 0.0, 1.0, (100, 100));
         let r = v.physical_rect(CanvasPoint { x: 0, y: 0 }, LocalSize { w: 0, h: 10 });
         assert!(!v.intersects_view(&r));
+    }
+
+    /// F-VIEW-1's representable domain (C12.F14): every corner of the accepted domain — zoom, scale, view
+    /// size, camera centre and edge positions at their extremes — and 20,000 random states inside
+    /// it evaluate without overflow (a debug build panics on one; the release run of this test
+    /// is built with overflow checks on) and keep the projection's invariants: the view origin
+    /// within F-VIEW-1's exact range |v| ≤ 2³⁷ px, monotone physical edges, the camera centre at
+    /// the view centre, unproject ∘ project = identity up to the Q16 quantum. Every
+    /// intermediate is monotone in each parameter, so the corners bound the domain.
+    #[test]
+    fn the_accepted_domain_never_overflows() {
+        use crate::geom::{MODE_MAX, ZOOM_MAX, ZOOM_MIN};
+        let lim = CANVAS_LIMIT_PX;
+        let span = 1i64 << 31;
+        let check = |zoom: f64, scale: f64, size: (u32, u32), cx: i64, cy: i64| {
+            let p = ViewParams {
+                centre: CanvasPos { x: cx, y: cy },
+                zoom,
+                scale,
+                view_size: size,
+            };
+            let v = View::new(p).unwrap_or_else(|e| panic!("{p:?}: {e:?}"));
+            let bound = (1i64 << 37) * Q16_ONE;
+            assert!(
+                v.v.x.abs() <= bound && v.v.y.abs() <= bound,
+                "{p:?}: v {:?}",
+                v.v
+            );
+            let xs = [-(lim + span), -lim, -1, 0, 1, lim, lim + span];
+            let ex: Vec<i64> = xs.iter().map(|&x| v.edge_x(x)).collect();
+            let ey: Vec<i64> = xs.iter().map(|&y| v.edge_y(y)).collect();
+            assert!(ex.windows(2).all(|w| w[0] <= w[1]), "{p:?}: {ex:?}");
+            assert!(ey.windows(2).all(|w| w[0] <= w[1]), "{p:?}: {ey:?}");
+            for &x in &[-lim, 0, lim] {
+                let l = v.render_location(CanvasPoint { x, y: -x });
+                assert!(l.x.is_finite() && l.y.is_finite(), "{p:?}");
+            }
+            let half = (size.0 as f64 / scale / 2.0, size.1 as f64 / scale / 2.0);
+            let quantum = zoom / Q16_ONE as f64;
+            // the view origin snaps to the physical grid (F-LATTICE-1): the camera error is at
+            // most half a physical px, 1/(2·scale) logical px, plus two Q16 roundings (v_O and
+            // c_eff), each at most one quantum
+            let c = v.project(p.centre);
+            let tol = 0.5 / scale + 2.0 * quantum + 1e-6;
+            assert!(
+                (c.x - half.0).abs() <= tol && (c.y - half.1).abs() <= tol,
+                "{p:?}: centre at {c:?}"
+            );
+            for corner in [(0.0, 0.0), (2.0 * half.0, 2.0 * half.1)] {
+                let q = OutputLogicalPoint {
+                    x: corner.0,
+                    y: corner.1,
+                };
+                let back = v.project(v.unproject(q));
+                assert!(
+                    (back.x - q.x).abs() <= quantum + 1e-6
+                        && (back.y - q.y).abs() <= quantum + 1e-6,
+                    "{p:?}: {q:?} -> {back:?}"
+                );
+                let _ = v.pixel(q);
+            }
+        };
+        let zooms = [ZOOM_MIN, 1.0, ZOOM_MAX];
+        let scales = [0.25, 1.0, 8.0];
+        let sizes = [(1, 1), (MODE_MAX, MODE_MAX), (MODE_MAX, 1), (1920, 1080)];
+        let centres = [
+            -lim * Q16_ONE,
+            -lim * Q16_ONE + 1,
+            0,
+            lim * Q16_ONE - 1,
+            lim * Q16_ONE,
+        ];
+        for &zoom in &zooms {
+            for &scale in &scales {
+                for &size in &sizes {
+                    for &cx in &centres {
+                        for &cy in &centres {
+                            check(zoom, scale, size, cx, cy);
+                        }
+                    }
+                }
+            }
+        }
+        let mut rng = Rng(0x5EED_0FD0_4A11);
+        for _ in 0..20_000 {
+            let zoom = (rng.range(-20_000, 16_000) as f64 / 1000.0).exp2();
+            let scale = rng.range(30, 960) as f64 / 120.0;
+            let size = (
+                rng.range(1, MODE_MAX as i64) as u32,
+                rng.range(1, MODE_MAX as i64) as u32,
+            );
+            let c = |rng: &mut Rng| rng.range(-lim * Q16_ONE, lim * Q16_ONE);
+            let (cx, cy) = (c(&mut rng), c(&mut rng));
+            check(zoom.clamp(ZOOM_MIN, ZOOM_MAX), scale, size, cx, cy);
+        }
+    }
+
+    /// F-VIEW-1's representable domain (C12.F14): a view outside the domain is refused, not computed (no
+    /// saturation, no silent wrap): zoom, scale and view size each just outside a bound.
+    #[test]
+    fn a_view_outside_the_domain_is_refused() {
+        use crate::geom::{MODE_MAX, ZOOM_MAX, ZOOM_MIN};
+        let p = |zoom, scale, size| ViewParams {
+            centre: CanvasPos { x: 0, y: 0 },
+            zoom,
+            scale,
+            view_size: size,
+        };
+        for bad in [
+            p(ZOOM_MIN / 2.0, 1.0, (1920, 1080)),
+            p(ZOOM_MAX * 2.0, 1.0, (1920, 1080)),
+            p(f64::INFINITY, 1.0, (1920, 1080)),
+            p(f64::NAN, 1.0, (1920, 1080)),
+            p(1.0, 0.24, (1920, 1080)),
+            p(1.0, 8.01, (1920, 1080)),
+            p(1.0, 1.0, (MODE_MAX + 1, 1080)),
+            p(1.0, 1.0, (1920, 0)),
+        ] {
+            assert_eq!(
+                View::new(bad),
+                Err(ProjectionError::InvalidParams),
+                "{bad:?}"
+            );
+        }
+        for good in [
+            p(ZOOM_MIN, 0.25, (MODE_MAX, MODE_MAX)),
+            p(ZOOM_MAX, 8.0, (1, 1)),
+        ] {
+            assert!(View::new(good).is_ok(), "{good:?}");
+        }
+    }
+
+    // ---- C12.F14 (OB-24 D3/D4): the output's lattice reference, kept while panning
+
+    /// `view` with its lattice reference replaced by `r` (a reference kept from an earlier
+    /// frame, F-LATTICE-1 as amended by C12.F14); C and c_eff follow from it.
+    fn with_reference(mut view: View, r: (i64, i64)) -> View {
+        let (cx, ex) = camera_on_grid(view.v.x, r.0, view.k);
+        let (cy, ey) = camera_on_grid(view.v.y, r.1, view.k);
+        view.r = r;
+        view.c = (cx, cy);
+        view.c_eff = CanvasPos { x: ex, y: ey };
+        view
+    }
+
+    /// The exact value of `round(a · 2^-shift · k + δ)` (round half away from zero, as
+    /// `f64::round`), for the f64 value k itself: no product or sum is rounded.
+    fn exact_round(a: i128, shift: i32, k: f64) -> i64 {
+        let bits = k.to_bits();
+        assert!(k.is_finite() && k > 0.0 && (bits >> 52) != 0, "normal k");
+        let mant = ((bits & ((1 << 52) - 1)) | (1 << 52)) as i128;
+        let p = ((bits >> 52) & 0x7ff) as i32 - 1075 - shift; // a·k = a·mant·2^p
+        let s = (-p).max(20);
+        let num = a * mant * (1i128 << (p + s)) + (1i128 << (s - 20)); // (a·k + δ)·2^s
+        let half = 1i128 << (s - 1);
+        let r = if num >= 0 {
+            (num + half) >> s
+        } else {
+            -((-num + half) >> s)
+        };
+        r as i64
+    }
+
+    /// The physical edge of Canvas x, evaluated exactly (F-LATTICE-1 with R kept).
+    fn exact_edge(view: &View, x: i64) -> i64 {
+        let c = exact_round((view.v.x - view.r.0 * Q16_ONE) as i128, 16, view.k);
+        exact_round((x - view.r.0) as i128, 0, view.k) - c
+    }
+
+    /// C12.F14 (D3/D4): at k ∉ n/120 a reference kept across a pan changes no width and no gap,
+    /// in any frame; the sealed per-frame reference (the negative control, ED-1) does.
+    #[test]
+    fn a_kept_lattice_reference_keeps_widths_and_gaps_during_a_zoomed_pan() {
+        let (zoom, scale) = (1.2345, 1.25); // k = 1.543125 ∉ n/120
+        let params = |cx: f64| ViewParams {
+            centre: CanvasPos { x: q16(cx), y: 0 },
+            zoom,
+            scale,
+            view_size: (1920, 1080),
+        };
+        // window edges inside and around the view: widths 1…300, gaps 7
+        let mut xs = vec![-700i64];
+        for w in [1, 2, 3, 17, 119, 120, 121, 240, 300, 77, 5, 64] {
+            let last = *xs.last().unwrap();
+            xs.extend([last + w, last + w + 7]);
+        }
+        let widths = |v: &View| -> Vec<i64> {
+            let e: Vec<i64> = xs.iter().map(|&x| v.edge_x(x)).collect();
+            e.windows(2).map(|w| w[1] - w[0]).collect()
+        };
+        let first = View::new(params(0.0)).unwrap();
+        let kept = first.r;
+        let (base_kept, base_sealed) = (widths(&first), widths(&first));
+        let (mut changed_kept, mut changed_sealed) = (0, 0);
+        for frame in 1..=240 {
+            let sealed = View::new(params(frame as f64 * 37.3)).unwrap();
+            changed_sealed += usize::from(widths(&sealed) != base_sealed);
+            let held = with_reference(sealed, kept);
+            changed_kept += usize::from(widths(&held) != base_kept);
+            // the kept reference stays far inside the exactness bound here
+            assert!(((held.v.x >> 16) - held.r.0).abs() as f64 * held.k <= (1u64 << 31) as f64);
+        }
+        assert_eq!(changed_kept, 0, "a kept reference changed a width or gap");
+        assert!(
+            changed_sealed > 0,
+            "control: the sealed per-frame reference should change a width at k ∉ n/120"
+        );
+    }
+
+    /// C12.F14 (D4): with a kept reference within the bound `|v_O − R_O|·k_O ≤ 2³¹`, every visible
+    /// physical edge equals the exact value of F-LATTICE-1 — f64 adds no rounding error that
+    /// moves an edge — across the whole representable domain (zoom 2⁻²⁰ … 2¹⁶, scale 0.25 … 8,
+    /// centres up to ±2³⁶ px), on both sides of the reference, at generic k and at k with exact
+    /// ties (k = 1.25·2ⁿ: (x − R)·k = n + ½, where δ decides).
+    #[test]
+    fn a_kept_reference_within_the_bound_rounds_every_visible_edge_exactly() {
+        use crate::geom::{CANVAS_LIMIT_PX, MODE_MAX, ZOOM_MAX, ZOOM_MIN};
+        let bound = (1u64 << 31) as f64;
+        let mut rng = Rng(0x0B24_C12F_1400_0001);
+        let mut checked = 0u64;
+        for case in 0..4000 {
+            let (zoom, scale) = if case % 2 == 0 {
+                (
+                    (rng.range(-20_000, 16_000) as f64 / 1000.0).exp2(),
+                    rng.range(30, 960) as f64 / 120.0,
+                )
+            } else {
+                (
+                    (rng.range(-20, 16) as f64).exp2(),
+                    [1.25, 1.5, 0.75, 2.5][rng.range(0, 3) as usize],
+                )
+            };
+            let zoom = zoom.clamp(ZOOM_MIN, ZOOM_MAX);
+            let size = (rng.range(1, MODE_MAX as i64) as u32, 1);
+            let lim = CANVAS_LIMIT_PX * Q16_ONE;
+            let centre = CanvasPos {
+                x: rng.range(-lim, lim),
+                y: 0,
+            };
+            let sealed = View::new(ViewParams {
+                centre,
+                zoom,
+                scale,
+                view_size: size,
+            })
+            .unwrap();
+            let k = sealed.k;
+            // a reference kept from an earlier frame: up to the bound away, on either side,
+            // and within the Canvas range a view origin can have (|v| ≤ 2³⁷)
+            let v_px = sealed.v.x >> 16;
+            let reach = ((bound / k) as i64).min(1 << 37) / LATTICE;
+            let r = sealed.r.0 + LATTICE * rng.range(-reach, reach);
+            if r.abs() > 1 << 37 || ((v_px - r).abs() + 1) as f64 * k > bound {
+                continue;
+            }
+            let held = with_reference(sealed, (r, sealed.r.1));
+            // the visible Canvas span [v, v + view/k], sampled, with its first and last edges
+            let span = ((size.0 as f64 / k) as i64).max(1);
+            let step = (span / 64).max(1);
+            let mut x = v_px - 1;
+            while x <= v_px + span + 1 {
+                assert_eq!(
+                    held.edge_x(x),
+                    exact_edge(&held, x),
+                    "zoom {zoom} scale {scale} v {v_px} R {r} x {x}"
+                );
+                checked += 1;
+                x += step;
+            }
+        }
+        assert!(checked > 100_000, "{checked} edges checked");
+    }
+
+    /// C12.F14 (D4), why the bound is 2³¹ and not the decision package's 2⁵⁰: beyond about
+    /// 2³³ the f64 sum `(x − R)·k + δ` loses δ, and at an exact tie (k = 1.25·2ⁿ, x < R) the
+    /// edge then rounds away from where F-LATTICE-1 puts it.
+    #[test]
+    fn beyond_the_bound_a_kept_reference_loses_exact_edges() {
+        let mut wrong = 0;
+        for n in [-4, 0, 6, 12] {
+            let zoom = f64::from(n).exp2();
+            let sealed = View::new(ViewParams {
+                centre: CanvasPos { x: 0, y: 0 },
+                zoom,
+                scale: 1.25,
+                view_size: (1920, 1),
+            })
+            .unwrap();
+            let k = sealed.k;
+            // |v − R|·k ≈ 2³⁵, the reference far to the right of the view (x − R < 0)
+            let r = sealed.r.0 + LATTICE * (((1u64 << 35) as f64 / k) as i64 / LATTICE);
+            let held = with_reference(sealed, (r, sealed.r.1));
+            for x in (sealed.v.x >> 16)..(sealed.v.x >> 16) + 400 {
+                wrong += usize::from(held.edge_x(x) != exact_edge(&held, x));
+            }
+        }
+        assert!(wrong > 0, "f64 stayed exact at |v − R|·k ≈ 2³⁵");
     }
 }

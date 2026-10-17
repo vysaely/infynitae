@@ -4,6 +4,14 @@ CURRENT_PHASE: **PHASE F — INC-6 RATIFIED 2026-10-16 ON ITS GOVERNANCE BRANCH 
 
 Date: 2026-10-16
 
+## PHASE F — OB-24 DECIDED; LAYER C12.F14 ADOPTED 2026-10-17 (governance branch `governance/ob24-c12f14-2026-10-17`, base `ca2e468`; not on `main`, not pushed)
+- **Authority:** owner brief "Integrate NB-1 Fix and Finalize OB-24 Decisions" (2026-10-17): record decisions D1–D6 and prepare the amendments. Record: evidence/phase-f/OB-24/DECISION_RECORD_2026-10-17.md.
+- **Layer C12.F14:** P1 amended (camera zoom bounded to the representable domain 2⁻²⁰ … 2¹⁶); F-VIEW-1 (domain: mode sides 1 … 2¹⁵, scale 0.25 … 8, zoom 2⁻²⁰ … 2¹⁶; derived range ≤ 2³⁷); F-LATTICE-1 and INV-RENDER-1 (the output's lattice reference: set on connect, (re-)binding, a change of `k_O` or `view_O`, or beyond `|v_O − R_O|·k_O` = 2³¹; kept while panning; never persisted); M4, M5, M6, M20; OBJ-12; ADR-02. No invariant added or removed (57).
+- **Corrections to the decision package:** the exactness bound is 2³¹, not 2⁵⁰ (the package's model used k with small denominators); M4 had no phrase "validates the hardware facts" — rejection rows added instead.
+- **Code:** the domain (from `a156e93` / `58e1b40`) enforced where values enter Core; the kept reference is not implemented (INC-10). The ratified INC-6 test's 10⁶ zoom moved to 2¹⁶, with cases added at the domain's extremes of k.
+- **Obligations:** OB-24 stays OPEN (Smithay-geometry evidence of the decided rule is INC-10's exit); OB-43 unchanged (OPEN, Level D). D6 (animated zoom) recorded as a future direction only.
+- **Declaration:** G-OB24 is decided and is resolved when C12.F14 is on `main` (owner integration authorization). INC-10 is NOT started.
+
 ## PHASE F — INC-6 FORMAL RATIFICATION (scale policy; 2026-10-16; governance branch `governance/inc-6-exit-adoption-2026-10-16`; not merged, not pushed)
 - **Authority:** owner brief "INFYNITAE — Final Ratification Gates and Guided Runtime Readiness", §1 (2026-10-16): complete the formal ratification record on the designated governance branch if the branch is fully consistent with the adopted authority; do not merge or push.
 - **Ratified commit:** `7aa2070` (adoption `f2bf0da` + ratification review `7aa2070`, on candidate r4 `eebb5c3`, from canonical main `23752f1`).

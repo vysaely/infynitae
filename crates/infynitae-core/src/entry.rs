@@ -708,6 +708,42 @@ mod tests {
         assert_eq!(c.cameras().center(0), Some(pos(-25, 40)));
     }
 
+    /// M20 / OB-24 D2 (C12.F14): the persisted table is accepted or rejected whole. A valid
+    /// table seeds its cameras; an empty one and a rejected one — corrupt (a non-finite zoom) or
+    /// partially valid (one entry outside the representable domain) — leave every output with
+    /// the default camera: none of the table's valid entries is applied.
+    #[test]
+    fn a_rejected_persisted_table_applies_none_of_its_entries() {
+        use crate::geom::ZOOM_MAX;
+        let valid = (key("A"), pos(300, -200), 2.0);
+        let tables = [
+            (vec![valid.clone(), (key("B"), pos(9, 9), 1.5)], true),
+            (vec![], true),
+            (vec![valid.clone(), (key("B"), pos(9, 9), f64::NAN)], false),
+            (
+                vec![valid.clone(), (key("B"), pos(9, 9), ZOOM_MAX * 2.0)],
+                false,
+            ),
+            (vec![(key("B"), pos(9, 9), 0.0), valid.clone()], false),
+        ];
+        for (entries, accepted) in tables {
+            let applies_a = accepted && !entries.is_empty();
+            let table = PersistedCameras::from_entries(entries);
+            assert_eq!(table.is_ok(), accepted);
+            // a rejected table is replaced by the empty/default state (M20)
+            let (mut c, _i, _s, mut t) = Core::new(table.unwrap_or_default());
+            let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+            let cam = camera_of(&c, a);
+            if applies_a {
+                assert_eq!(c.cameras().center(cam), Some(pos(300, -200)));
+                assert_eq!(c.cameras().zoom(cam), Some(2.0));
+            } else {
+                assert_eq!(c.cameras().center(cam), Some(pos(0, 0)));
+                assert_eq!(c.cameras().zoom(cam), Some(1.0));
+            }
+        }
+    }
+
     /// INV-CAMERA-3 rule order: a camera remembered this session wins over the persisted entry.
     #[test]
     fn remembered_camera_wins_over_the_persisted_entry() {

@@ -132,6 +132,7 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Forbidden writers:** everything (never written back, INV-STAGE-6)
 - **Invariants:** INV-CAMERA-3, INV-COORD-2
 - **E1R (unsealed):** derived from `view_O` (F-VIEW-1); rebuilt on `output_reconfigured`.
+- **C12.F14:** R is the output's lattice reference: held per output, not derived from each view origin; set at O's connect, a camera (re-)binding, a change of `k_O` or `view_O`, and when `|v_O − R_O|·k_O` would exceed 2³¹; kept while panning; dropped with O; never persisted (reconstruction after a restart: set at connect, ±1 px once). v, C and `c_eff` stay derived.
 
 ### OBJ-13 — MembershipTable
 - **Class:** D

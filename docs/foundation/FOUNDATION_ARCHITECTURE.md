@@ -2281,6 +2281,55 @@ SC-E for a client's own geometry; P7; system changes; the order of hints before 
 
 ---
 
+# §C12.F14 — Canonical registry amendment (Phase F: the representable zoom domain and the output's lattice reference, OB-24)
+
+**Status: ADOPTED 2026-10-17 by owner decision** (G-OB24 decisions D1–D6, brief "Integrate NB-1 Fix and Finalize OB-24 Decisions"). The wording was prepared from the decision package and corrected where the package was wrong (C12.F14.4); it is on the governance branch `governance/ob24-c12f14-2026-10-17` and reaches `main` only with the owner's integration authorization. Two formulas change (F-VIEW-1, F-LATTICE-1) and one frozen property (P1); INV-RENDER-1 names the reference; no invariant is added or removed (57). Base: `ca2e468`.
+
+**Inputs:** CP3A-1 P1 (frozen); F-VIEW-1, F-LATTICE-1 and INV-RENDER-1 as effective at the base; M4, M5, M20; OB-24, OB-43; GATE G-OB24.
+
+**Provenance:** `evidence/phase-f/OB-24/DECISION_RECORD_2026-10-17.md`; `evidence/phase-f/INC-9/OB24_DECISION_PACKAGE_2026-10-17.md`, `ZOOM_CONTRACT.md`, `anchor_model_sim.py`.
+
+**Decisions:** D1 the representable zoom domain 2⁻²⁰ … 2¹⁶; D2 a persisted camera table is rejected whole if any entry violates the contract (M20, unchanged); D3 the lattice reference is per output, distinct from an element's anchor; D4 it is kept while the camera pans and set again on the transitions below; D5 it is never persisted; D6 animated zoom is a future design direction only (C12.F14.3).
+
+**CP3A-1 frozen property P1, as amended:** **P1 Bounded hint.** h ≤ H_max(E) for any camera zoom. Camera zoom is bounded only by the representable domain 2⁻²⁰ … 2¹⁶ (F-VIEW-1); the hint is bounded by H_max(E). Grounded in the device limit (EC-16) and buffer cost (EC-18).
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12. Every other row is unchanged.**
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-RENDER-1** | Physical edges: `edge(x) = round((x − R)·k + δ) − C_O` with R output O's lattice reference, δ = 2⁻²⁰, k = zoom·scale; surfaces are built with `from_surface` at f64 location `(x − R)·k + δ − C_O` | core (numbers) / adapter (Smithay call) | E | B1.5, X-6, ED-1; evidence/phase-f/OB-24 | T1 X-6 port; T0 properties (kept reference, exactness bound) | owner amendment 2026-10-17 (C12.F14, OB-24) |
+
+## C12.F14.1 Sealed text superseded (must not be cited as normative)
+
+| Superseded | Replaced by |
+|---|---|
+| CP3A-1 P1 "Camera zoom is unbounded; the hint is not." | P1 as amended above |
+| INV-RENDER-1 (C12) "with R a 120-lattice reference" | INV-RENDER-1 (C12.F14) |
+| F-VIEW-1 derived range "(≈ 2³⁶ + 2³⁰ for a fit of a 2³¹-wide window); it stays exact in f64 because \|v_O\| < 2³⁷", which held only with a lower bound on k that nothing stated | F-VIEW-1 (C12.F14) |
+| F-LATTICE-1 `R_O = floor(v_O / 120) · 120` as a value recomputed from every view origin, and its known residual | F-LATTICE-1 (C12.F14) |
+
+## C12.F14.2 Formula amendments (living §F carries the corrected text; the previous text is recorded here verbatim)
+
+### F-VIEW-1 (OB-24 D1)
+- **Previous (ca2e468):** Derived range: stored Canvas values obey |v| ≤ 2³⁶ (INV-COORD-1), but a derived view origin may reach |v_O| ≤ 2³⁶ + view_O/(2k_O) (≈ 2³⁶ + 2³⁰ for a fit of a 2³¹-wide window); it stays exact in f64 because |v_O| < 2³⁷. [PD-F1-02]
+- **Reason:** without a lower bound on k_O the derived origin is unbounded (view_O/(2k_O) grows without limit as k → 0): on the base a zoom below ≈ 1.4·10⁻¹¹ overflows the Q16 origin and one above ≈ 10⁷ the edge arithmetic (`evidence/phase-f/INC-9/ZOOM_CONTRACT.md`). D1 bounds the domain so that the stated range holds.
+
+### F-LATTICE-1 (OB-24 D3/D4/D5)
+- **Previous (ca2e468):** `R_O = floor(v_O / 120) · 120` (integral Canvas lattice reference); `δ = 2⁻²⁰`; `k_O = zoom_C · scale_O`.
+- **Previous (ca2e468):** Known residual: at k ∉ n/120 a lattice-reference switch can change a width or gap by ±1 physical px during camera motion (ED-1, ED-2 F1); render/hit agreement is unaffected. Open decision OB-24.
+- **Reason:** OB-24. A reference recomputed from every view origin switches every 120 Canvas px of a pan; at k ∉ n/120 each switch re-rounds widths and gaps (ED-1; INC-9 harness: 3–11 changes per pan; `anchor_model_sim.py` T1: 50–59 changed frames per output over four pans, 0 with the reference kept). A reference kept per output changes nothing between its (re)definitions (T2).
+
+## C12.F14.3 What this layer does not change
+
+F-LATTICE-1's C, `c_eff`, edge, evaluation order and δ; F-RENDER-1, F-HIT-1, F-MEMBER-1 (they read the reference the frame was built with, so render and hit agree on every frame, INV-HIT-1); the pan (F-PAN-1); F-FIT-1's text (C12.E1R lists it unchanged, and the checker keeps it so): its zoom is a camera zoom, so F-VIEW-1's domain clamps it — only a W wider than 2²⁰ view widths reaches the lower end, and no fit reaches the upper one (view_O ≤ 2¹⁵ px, W ≥ 1 px); M20's all-or-nothing validation (D2: an out-of-domain zoom is one more invalid entry, and a rejected table yields the empty/default state, OB-43). At k ∈ n/120 — every view reachable on the base, which refuses a pan at zoom ≠ 1 — a reference switch changes no width or gap, so the kept reference is implemented with zoomed pan by INC-10. **D5:** the reference is not persisted; after a restart it is set when the output connects, so a width or gap may differ by ±1 physical px from the previous session, once — an accepted trade-off. **D6 (record only, no normative text):** animated zoom is not part of Foundation 01 (INV-CAMERA-5: a fit performs one camera mutation; G-OB24: discrete or continuous user zoom features stay out; INC-10 is a one-shot fit). The direction recorded for a later scope: continuous zoom without snapping to n/120, the lattice reference set at every frame (k changes), accepting ±1 physical px relative rasterization differences during the motion (`anim_zoom_sim.py`); it needs its own approved scope and a T3/T4 visual verdict under OB-24's criterion before it ships, and no visual quality is claimed here. Tests (T0, `infynitae-core`): `a_kept_lattice_reference_keeps_widths_and_gaps_during_a_zoomed_pan`, `a_kept_reference_within_the_bound_rounds_every_visible_edge_exactly`, `beyond_the_bound_a_kept_reference_loses_exact_edges`, `the_accepted_domain_never_overflows`, `a_view_outside_the_domain_is_refused`, `the_domain_is_enforced_where_zooms_and_outputs_enter_core`, `core_runs_at_the_extremes_of_the_domain`, `a_rejected_persisted_table_applies_none_of_its_entries`, `persisted_table_is_validated_all_or_nothing`, `cull_thresholds_at_extreme_scale_factors` (its 10⁶ zoom moved to the domain's maximum 2¹⁶; cases added at k = 2¹⁹ and 2⁻²²); seeded controls "C12.F14: …".
+
+## C12.F14.4 Corrections to the decision package
+
+1. **Exactness bound.** The package (A2) set the reference again when `|v_O − R_O|·k_O` would exceed 2⁵⁰. That bound is wrong: its evidence (`anchor_model_sim.py` T3) used k values with small denominators (73/10·2¹⁶, 225), whose products have few fractional bits. In `evidence/phase-f/OB-24/exactness_bound_model.py`, f64 edges differ from the exact formula at a generic k from 2⁴⁶ (380 of 3,200 sampled edges at 2⁵⁰), and at k = n/120 and at exact ties (k = 1.25·2ⁿ, x < R) from 2³³, where the f64 sum loses δ (108 of 12,800 and 463 of 15,200 edges); none up to 2³². This layer uses 2³¹: every visible edge then stays below 2³², where the f64 error of `(x − R)·k + δ` is below δ (T0 `a_kept_reference_within_the_bound_rounds_every_visible_edge_exactly`, 4,000 states over the whole domain; `beyond_the_bound_a_kept_reference_loses_exact_edges` shows the loss at 2³⁵). The bound is in physical px (`|v − R|·k`), not the disproven fixed Canvas distance (2³⁷ px). At k = 1 it is reached after 2³¹ Canvas px of panning; at the top of the domain (k = 2¹⁹) after 4,096.
+2. **M4.** The package amended an M4 phrase "validates the hardware facts" that M4 does not contain. This layer adds M4's rejection rows instead (an out-of-domain descriptor is rejected, nothing mutated), which the base code already implements for an empty mode or a non-positive scale.
+
+---
+
 # Phase D package (D7): living regions of this document
 
 Everything above this line is historical:
@@ -2332,21 +2381,22 @@ Each normative formula or coordinate algorithm is defined once here. Its text is
 ### F-VIEW-1 — Per-output view origin
 - **Definition:** `v_O = Q16(centre − view_O / (2·k_O))`, with `k_O = zoom_C · scale_O` (camera C bound to output O).
 - **Definition:** `phys_O` is the output's physical mode (framebuffer size, `wl_output.mode`) **before** the output transform; `view_O = transform_size_O(phys_O)` is the view extent in physical px (90°/270° classes exchange width and height exactly once). `phys_O` is used only for the damage tracker and the framebuffer (F-RENDER-1); every view, cull, membership, hit and fit computation uses `view_O`. [E-F2-01; supersedes PD-F1-04]
-- **Definition:** Derived range: stored Canvas values obey |v| ≤ 2³⁶ (INV-COORD-1), but a derived view origin may reach |v_O| ≤ 2³⁶ + view_O/(2k_O) (≈ 2³⁶ + 2³⁰ for a fit of a 2³¹-wide window); it stays exact in f64 because |v_O| < 2³⁷. [PD-F1-02]
+- **Definition:** Representable domain: output mode sides 1 … 2¹⁵ physical px, output scale 0.25 … 8 (30 … 960 in 1/120 units), camera zoom 2⁻²⁰ … 2¹⁶, camera centre within INV-COORD-1. A value outside it is refused where it enters Core — an output descriptor at `output_connected` or `output_reconfigured` (M4), a persisted camera table, whole (M20) — and a zoom writer (the fit, F-FIT-1) clamps into it. [C12.F14]
+- **Definition:** Derived range: stored Canvas values obey |v| ≤ 2³⁶ (INV-COORD-1); inside the domain a derived view origin reaches at most |v_O| ≤ 2³⁶ + view_O/(2k_O) ≤ 2³⁶ + 2¹⁵/(2 · 2⁻²⁰ · 0.25) = 2³⁷, so its Q16 value stays within f64's exact integers (2⁵³). [PD-F1-02; C12.F14]
 - **Definition:** Quantisation: rounding point R7 (round-ties-even to Q16).
 - **Extracted invariant text:** INV-CAMERA-3 ⟦`v_O = centre − view_O/(2k)`⟧
 - **Historical sources:** C3.2 [1]; B7.1 D-B7-CENTER; C12 INV-CAMERA-3
-- **Amended:** C12.E1R (E-F2-01); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
+- **Amended:** C12.E1R (E-F2-01); C12.F14 (OB-24 D1); previous definitions recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2 and §C12.F14.2
 
 ### F-LATTICE-1 — Reference-relative lattice and physical edges
-- **Definition:** `R_O = floor(v_O / 120) · 120` (integral Canvas lattice reference); `δ = 2⁻²⁰`; `k_O = zoom_C · scale_O`.
+- **Definition:** `R_O` is output O's *lattice reference* (not an element's anchor): an integral Canvas value, a multiple of 120 per axis, held in O's projection state, not in the camera. It is set to `floor(v_O / 120) · 120` when O's view is (re)defined — O connected; a camera bound or re-bound to O; `k_O` changed; `view_O` changed — and whenever keeping it would make `|v_O − R_O|·k_O` exceed 2³¹; otherwise it is kept, also while the camera pans. It is dropped with O and never persisted. `δ = 2⁻²⁰`; `k_O = zoom_C · scale_O`. [C12.F14]
 - **Definition:** `C_O = round((v_O − R_O)·k_O + δ)` (integer: the camera on O's physical grid); `c_eff,O = R_O + Q16(C_O / k_O)` (snapped camera, rounding R5).
 - **Definition:** `edge(x) = round((x − R_O)·k_O + δ) − C_O` for an integral Canvas edge x (rounding R4); a surface's physical rect is `[edge(x₀), edge(x₁)) × [edge(y₀), edge(y₁))`; origin and size are never rounded separately (F6).
 - **Definition:** Evaluation order: compute `(x − R_O)·k_O` in f64 and cull against `[0, view_O)` **before** any i32 conversion; far elements reach |x − R|·k ≈ 2³⁷·k, beyond `i32::MAX`. [PD-F1-01; E-F2-01 symbol]
-- **Definition:** Known residual: at k ∉ n/120 a lattice-reference switch can change a width or gap by ±1 physical px during camera motion (ED-1, ED-2 F1); render/hit agreement is unaffected. Open decision OB-24.
-- **Extracted invariant text:** INV-RENDER-1 ⟦`edge(x) = round((x − R)·k + δ) − C_O` with R a 120-lattice reference, δ = 2⁻²⁰, k = zoom·scale⟧
+- **Definition:** Known residual: with the reference kept, widths and gaps do not change while the camera pans at a fixed `k_O`; each (re)definition above re-rounds them once (±1 physical px at k ∉ n/120, ED-1), and so does a restart (the reference is not persisted). Render/hit agreement is unaffected (render, membership and hit test read the reference of the frame). [C12.F14]
+- **Extracted invariant text:** INV-RENDER-1 ⟦`edge(x) = round((x − R)·k + δ) − C_O` with R output O's lattice reference, δ = 2⁻²⁰, k = zoom·scale⟧
 - **Historical sources:** B1.5; C3.2 [1],[3]; C12 INV-RENDER-1
-- **Amended:** C12.E1R (E-F2-01); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2
+- **Amended:** C12.E1R (E-F2-01); C12.F14 (OB-24 D3/D4/D5); previous definitions recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2 and §C12.F14.2
 
 ### F-RENDER-1 — Render location handed to Smithay
 - **Definition:** `L(x) = (x − R_O)·k_O + δ − C_O` (f64) for each surface origin x (and y); the adapter builds `WaylandSurfaceRenderElement::from_surface(.., Point<f64, Physical>(L), ..)`; Smithay rounds `round(L)` and `round(L + dst·k_O)`, which equals F-LATTICE-1 (X-6, ED-1).

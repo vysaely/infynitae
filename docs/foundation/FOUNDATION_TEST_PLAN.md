@@ -350,7 +350,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-9 (HARNESS evidence run)
 - **Blocks:** INC-10: no PRODUCT increment may let persistent zoom ≠ 1 coexist with pan until resolved or the conservative fallback (fit-exit restores the baseline zoom) is active
 - **Origin:** CP3A-4; rescoped C12.R1 (CORRECTIONS_1R)
-- **History:** Sealed premise "static fit only" falsified (PD-F2-06); now a pre-implementation decision gate.
+- **History:** Sealed premise "static fit only" falsified (PD-F2-06); now a pre-implementation decision gate. **Decision recorded 2026-10-17 (owner, D1–D6; layer C12.F14, governance branch `governance/ob24-c12f14-2026-10-17`, not on `main`):** zoom domain 2⁻²⁰ … 2¹⁶ (F-VIEW-1); whole-table rejection of persisted cameras (M20, unchanged); the output's lattice reference, kept while panning and set again on the output's (re)definition or beyond `|v_O − R_O|·k_O` = 2³¹ (F-LATTICE-1); not persisted (±1 px once after a restart, accepted); animated zoom recorded as a future direction only (C12.F14.3). Evidence now: model (`evidence/phase-f/INC-9/anchor_model_sim.py` T1/T2: 0 width changes with the reference kept; `evidence/phase-f/OB-24/exactness_bound_model.py`) and T0 tests on the projection. **Stays OPEN:** the pass criterion also asks for evidence equivalent to X-6/ED-1 Smithay geometry runs of the decided rule, which exist only once INC-10 implements it (INC-10 exit: 0 width/gap changes per zoomed pan on the production path); the destination DECISION is the decision part, recorded by C12.F14 once on `main`.
 
 ### OB-25
 - **Status:** OPEN

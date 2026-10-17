@@ -4941,4 +4941,108 @@ mod tests {
             .unwrap();
         assert_eq!(c.preferred_scale_of(w), Some((240, 2)));
     }
+    /// F-VIEW-1's representable domain (C12.F14) at Core's entry points: a persisted zoom and an output's mode
+    /// or scale outside the representable domain are refused where they enter (the persisted
+    /// table is rejected whole, as for any invalid entry; the output is not connected or not
+    /// reconfigured), never kept and saturated later.
+    #[test]
+    fn the_domain_is_enforced_where_zooms_and_outputs_enter_core() {
+        use crate::EntryError;
+        use crate::geom::{MODE_MAX, SCALE_120_MAX, SCALE_120_MIN, ZOOM_MAX, ZOOM_MIN};
+        use crate::navigation::PersistedError;
+        let table = |z: f64| {
+            PersistedCameras::from_entries(vec![(
+                crate::output::tests::key("A"),
+                crate::geom::CanvasPos { x: 0, y: 0 },
+                z,
+            )])
+        };
+        for z in [
+            ZOOM_MIN / 2.0,
+            ZOOM_MAX * 2.0,
+            0.0,
+            -1.0,
+            f64::NAN,
+            f64::INFINITY,
+            1e-15,
+            1e15,
+        ] {
+            assert_eq!(
+                table(z).unwrap_err(),
+                PersistedError::Zoom { entry: 0 },
+                "{z}"
+            );
+        }
+        assert!(table(ZOOM_MIN).is_ok() && table(ZOOM_MAX).is_ok());
+        let desc = |mode, scale_120| OutputDescriptor {
+            key: crate::output::tests::key("A"),
+            mode,
+            transform: Transform::Normal,
+            scale_120,
+            refresh_mhz: 60_000,
+        };
+        let (mut c, _i, _, mut t) = Core::new(PersistedCameras::default());
+        for (mode, scale_120) in [
+            ((MODE_MAX + 1, 1080), 120),
+            ((1920, 0), 120),
+            ((1920, 1080), SCALE_120_MIN - 1),
+            ((1920, 1080), SCALE_120_MAX + 1),
+        ] {
+            assert_eq!(
+                c.output_connected(&mut t, desc(mode, scale_120))
+                    .map(|_| ()),
+                Err(EntryError::InvalidDescriptor),
+                "{mode:?} {scale_120}"
+            );
+        }
+        let (a, _) = c.output_connected(&mut t, desc((1920, 1080), 120)).unwrap();
+        assert_eq!(
+            c.output_reconfigured(&mut t, a, desc((1920, 1080), SCALE_120_MAX + 1))
+                .map(|_| ()),
+            Err(EntryError::InvalidDescriptor)
+        );
+    }
+
+    /// F-VIEW-1's representable domain (C12.F14): Core runs at the extremes of the domain — a persisted zoom of
+    /// ZOOM_MIN on a MODE_MAX × MODE_MAX output at scale 0.25, and ZOOM_MAX on a 1 × 1 output at
+    /// scale 8 — through map, render list, hit test and pointer routing, without overflow.
+    #[test]
+    fn core_runs_at_the_extremes_of_the_domain() {
+        use crate::PhysicalEvent;
+        use crate::geom::{MODE_MAX, SCALE_120_MAX, SCALE_120_MIN, ZOOM_MAX, ZOOM_MIN};
+        for (zoom, mode, scale_120) in [
+            (ZOOM_MIN, (MODE_MAX, MODE_MAX), SCALE_120_MIN),
+            (ZOOM_MAX, (1, 1), SCALE_120_MAX),
+            (ZOOM_MAX, (MODE_MAX, MODE_MAX), SCALE_120_MIN),
+            (ZOOM_MIN, (1, 1), SCALE_120_MAX),
+        ] {
+            let persisted = PersistedCameras::from_entries(vec![(
+                crate::output::tests::key("A"),
+                crate::geom::CanvasPos {
+                    x: crate::geom::CANVAS_LIMIT_PX << 16,
+                    y: -(crate::geom::CANVAS_LIMIT_PX << 16),
+                },
+                zoom,
+            )])
+            .unwrap();
+            let (mut c, mut i, _, mut t) = Core::new(persisted);
+            let a = out(&mut c, &mut t, "A", mode, scale_120);
+            let w = map_win(&mut c, 1, 400, 300);
+            assert!(c.render_list(a).is_ok(), "{zoom} {mode:?} {scale_120}");
+            let _ = c.hit_test(a, crate::geom::OutputLogicalPoint { x: 0.5, y: 0.5 });
+            for d in [(1.0, 1.0), (-1e6, 1e6)] {
+                c.physical_input_vec(
+                    &mut i,
+                    PhysicalEvent::PointerMotion {
+                        delta: d,
+                        delta_unaccel: d,
+                        time_us: 0,
+                    },
+                )
+                .unwrap();
+            }
+            assert_eq!(c.cameras().zoom(0), Some(zoom));
+            let _ = w;
+        }
+    }
 }
