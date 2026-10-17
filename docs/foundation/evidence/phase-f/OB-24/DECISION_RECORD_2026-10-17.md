@@ -166,3 +166,10 @@ verbatim (§4 item 1, from "With the bound 2³¹"):
 > `beyond_the_bound_a_kept_reference_loses_exact_edges` (loss at 2³⁵).
 
 and §6: "**G-OB24:** decided; resolved when C12.F14 is on `main`."
+
+## 9. Status update: integration (2026-10-17)
+
+Appended; §1–§8 are unchanged. Local `main` was fast-forwarded to `270128f` (owner authorization,
+brief "Integrate C12.F14, Then Prepare C12.F15"; record: CHECKPOINT "LAYER C12.F14 INTEGRATED").
+§6's "Not met today" described the state before integration: G-OB24 is now met. OB-24 stays OPEN
+until INC-10's exit evidence is accepted through architecture change control. Not pushed.
