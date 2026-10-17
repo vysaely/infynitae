@@ -1,0 +1,362 @@
+[New LWP 1728633 (id 2)]
+[New LWP 1727688 (id 3)]
+[New LWP 1727678 (id 4)]
+[New LWP 1727677 (id 5)]
+[New LWP 1727676 (id 6)]
+[New LWP 1727675 (id 7)]
+[New LWP 1727674 (id 8)]
+[New LWP 1727673 (id 9)]
+[New LWP 1727672 (id 10)]
+[New LWP 1727671 (id 11)]
+[New LWP 1727670 (id 12)]
+[New LWP 1727669 (id 13)]
+[New LWP 1727668 (id 14)]
+[New LWP 1727667 (id 15)]
+[New LWP 1727666 (id 16)]
+[New LWP 1727665 (id 17)]
+[New LWP 1727664 (id 18)]
+[New LWP 1727663 (id 19)]
+[New LWP 1727662 (id 20)]
+[New LWP 1727661 (id 21)]
+[New LWP 1727660 (id 22)]
+[New LWP 1727659 (id 23)]
+[New LWP 1727658 (id 24)]
+[New LWP 1727657 (id 25)]
+[New LWP 1727656 (id 26)]
+[New LWP 1727655 (id 27)]
+[New LWP 1727654 (id 28)]
+
+This GDB supports auto-downloading debuginfo from the following URLs:
+  <https://debuginfod.archlinux.org>
+  <https://debuginfod.cachyos.org>
+Enable debuginfod for this session? (y or [n]) [answered N; input not from terminal]
+Debuginfod has been disabled.
+To make this setting permanent, add 'set debuginfod enabled off' to .gdbinit.
+
+warning: Target and debugger are in different PID namespaces; thread lists and other data are likely unreliable.  Connect to gdbserver inside the container.
+[Thread debugging using libthread_db enabled]
+Using host libthread_db library "/usr/lib/libthread_db.so.1".
+[Switching to thread 1 (Thread 0x7fb9226c0580 (LWP 1727651))]
+0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+
+Thread 28 (Thread 0x7fb9123ff6c0 (LWP 1727654) "llvmpipe-0"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f586df0 in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 27 (Thread 0x7fb911bfe6c0 (LWP 1727655) "llvmpipe-1"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f586df0 in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 26 (Thread 0x7fb9113fd6c0 (LWP 1727656) "llvmpipe-2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f586df0 in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 25 (Thread 0x7fb910bfc6c0 (LWP 1727657) "llvmpipe-3"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f586df0 in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 24 (Thread 0x7fb903fff6c0 (LWP 1727658) "llvmpipe-4"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f586df0 in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 23 (Thread 0x7fb9037fe6c0 (LWP 1727659) "llvmpipe-5"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f586df0 in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 22 (Thread 0x7fb902ffd6c0 (LWP 1727660) "llvmpipe-6"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f586df0 in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 21 (Thread 0x7fb9027fc6c0 (LWP 1727661) "llvmpipe-7"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f586df0 in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 20 (Thread 0x7fb901ffb6c0 (LWP 1727662) "llvmpipe-8"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f586df0 in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 19 (Thread 0x7fb9017fa6c0 (LWP 1727663) "llvmpipe-9"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f586df0 in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 18 (Thread 0x7fb900ff96c0 (LWP 1727664) "llvmpipe-10"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f586df0 in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 17 (Thread 0x7fb8e3fff6c0 (LWP 1727665) "llvmpipe-11"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f586df0 in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 16 (Thread 0x7fb8e37fe6c0 (LWP 1727666) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f57e6ed in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 15 (Thread 0x7fb8e2ffd6c0 (LWP 1727667) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f57e6ed in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 14 (Thread 0x7fb8e27fc6c0 (LWP 1727668) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f57e6ed in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 13 (Thread 0x7fb8e1ffb6c0 (LWP 1727669) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f57e6ed in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 12 (Thread 0x7fb8e17fa6c0 (LWP 1727670) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f57e6ed in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 11 (Thread 0x7fb8e0ff96c0 (LWP 1727671) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f57e6ed in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 10 (Thread 0x7fb8dbfff6c0 (LWP 1727672) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f57e6ed in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 9 (Thread 0x7fb8db7fe6c0 (LWP 1727673) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f57e6ed in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 8 (Thread 0x7fb8daffd6c0 (LWP 1727674) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f57e6ed in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 7 (Thread 0x7fb8da7fc6c0 (LWP 1727675) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f57e6ed in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 6 (Thread 0x7fb8d9ffb6c0 (LWP 1727676) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f57e6ed in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 5 (Thread 0x7fb8d97fa6c0 (LWP 1727677) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f57e6ed in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 4 (Thread 0x7fb8d8ff96c0 (LWP 1727678) "infynit:disk$0"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb9224a94e8 in ?? () from target:/usr/lib/libc.so.6
+#2  0x00007fb9224ac1e0 in pthread_cond_wait () from target:/usr/lib/libc.so.6
+#3  0x00007fb91f23742e in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#4  0x00007fb91f1eb35d in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#5  0x00007fb91f23736c in ?? () from target:/usr/lib/libgallium-26.2.4-arch3.1.so
+#6  0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 3 (Thread 0x7fb91032d6c0 (LWP 1727688) "pump_events mon"):
+#0  0x000055a5eacc78fe in rustix::backend::arch::asm::syscall3 (nr=..., a0=..., a1=..., a2=...) at /home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/backend/linux_raw/arch/x86_64.rs:111
+#1  0x000055a5ead3a400 in rustix::backend::event::syscalls::poll (fds=..., timeout=-1) at /home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/backend/linux_raw/arch/mod.rs:96
+#2  0x000055a5ead6fa4f in rustix::event::poll::poll (fds=..., timeout=-1) at /home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/event/poll.rs:36
+#3  0x000055a5eacee429 in winit::platform_impl::linux::wayland::event_loop::{impl#5}::spawn::{closure#0} () at src/platform_impl/linux/wayland/event_loop/mod.rs:785
+#4  0x000055a5eacbb456 in std::sys::backtrace::__rust_begin_short_backtrace<winit::platform_impl::linux::wayland::event_loop::{impl#5}::spawn::{closure_env#0}, ()> (f=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sys/backtrace.rs:166
+#5  0x000055a5ead4c522 in std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure#0}<winit::platform_impl::linux::wayland::event_loop::{impl#5}::spawn::{closure_env#0}, ()> () at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/lifecycle.rs:70
+#6  0x000055a5eac4e6b1 in core::panic::unwind_safe::{impl#23}::call_once<(), std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<winit::platform_impl::linux::wayland::event_loop::{impl#5}::spawn::{closure_env#0}, ()>> (self=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/panic/unwind_safe.rs:275
+#7  0x000055a5ead2e4c6 in std::panicking::catch_unwind::do_call<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<winit::platform_impl::linux::wayland::event_loop::{impl#5}::spawn::{closure_env#0}, ()>>, ()> (data=0x7fb91032cb90) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/panicking.rs:576
+#8  0x000055a5ead5bd9b in __rust_try ()
+#9  0x000055a5ead4bcd4 in std::panicking::catch_unwind<(), core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<winit::platform_impl::linux::wayland::event_loop::{impl#5}::spawn::{closure_env#0}, ()>>> (f=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/panicking.rs:544
+#10 std::panic::catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<winit::platform_impl::linux::wayland::event_loop::{impl#5}::spawn::{closure_env#0}, ()>>, ()> (f=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/panic.rs:359
+#11 std::thread::lifecycle::spawn_unchecked::{closure#1}<winit::platform_impl::linux::wayland::event_loop::{impl#5}::spawn::{closure_env#0}, ()> () at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/lifecycle.rs:68
+#12 0x000055a5eac5dc1f in core::ops::function::FnOnce::call_once<std::thread::lifecycle::spawn_unchecked::{closure_env#1}<winit::platform_impl::linux::wayland::event_loop::{impl#5}::spawn::{closure_env#0}, ()>, ()> () at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/ops/function.rs:250
+#13 0x000055a5eb0b8139 in alloc::boxed::{impl#31}::call_once<(), (dyn core::ops::function::FnOnce<(), Output=()> + core::marker::Send), alloc::alloc::Global> () at library/alloc/src/boxed.rs:2320
+#14 std::sys::thread::unix::{impl#2}::new::thread_start () at library/std/src/sys/thread/unix.rs:123
+#15 0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#16 0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 2 (Thread 0x7fb8e03ff6c0 (LWP 1728633) "Shm dropping th"):
+#0  0x00007fb92254932d in syscall () from target:/usr/lib/libc.so.6
+#1  0x000055a5eb0a35f6 in std::sys::sync::futex::unix::futex_wait () at library/std/src/sys/sync/futex/unix.rs:63
+#2  std::sys::sync::thread_parking::futex::Parker::park () at library/std/src/sys/sync/thread_parking/futex.rs:55
+#3  std::thread::thread::Thread::park () at library/std/src/thread/thread.rs:121
+#4  0x000055a5eab61934 in std::sync::mpmc::context::Context::wait_until (self=0x7fb8e03fe550, deadline=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sync/mpmc/context.rs:143
+#5  0x000055a5eaa7f40b in std::sync::mpmc::list::{impl#3}::recv::{closure#1}<smithay::wayland::shm::pool::InnerPool> (cx=0x7fb8e03fe550) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sync/mpmc/list.rs:453
+#6  0x000055a5eaa8638b in std::sync::mpmc::context::{impl#0}::with::{closure#0}<std::sync::mpmc::list::{impl#3}::recv::{closure_env#1}<smithay::wayland::shm::pool::InnerPool>, ()> (cx=0x7fb8e03fe550) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sync/mpmc/context.rs:49
+#7  std::sync::mpmc::context::{impl#0}::with::{closure#1}<std::sync::mpmc::list::{impl#3}::recv::{closure_env#1}<smithay::wayland::shm::pool::InnerPool>, ()> (cell=0x7fb8e03ff6a0) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sync/mpmc/context.rs:57
+#8  0x000055a5eab0d4a8 in std::thread::local::LocalKey<core::cell::Cell<core::option::Option<std::sync::mpmc::context::Context>>>::try_with<core::cell::Cell<core::option::Option<std::sync::mpmc::context::Context>>, std::sync::mpmc::context::{impl#0}::with::{closure_env#1}<std::sync::mpmc::list::{impl#3}::recv::{closure_env#1}<smithay::wayland::shm::pool::InnerPool>, ()>, ()> (self=0x55a5eb0f7958, f=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/local.rs:463
+#9  0x000055a5eaa858fa in std::sync::mpmc::context::Context::with<std::sync::mpmc::list::{impl#3}::recv::{closure_env#1}<smithay::wayland::shm::pool::InnerPool>, ()> (f=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sync/mpmc/context.rs:53
+#10 0x000055a5eaa82bbe in std::sync::mpmc::list::Channel<smithay::wayland::shm::pool::InnerPool>::recv<smithay::wayland::shm::pool::InnerPool> (self=0x55a5f398ff00, deadline=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sync/mpmc/list.rs:442
+#11 0x000055a5eab111ff in std::sync::mpmc::Receiver<smithay::wayland::shm::pool::InnerPool>::recv<smithay::wayland::shm::pool::InnerPool> (self=0x7fb8e03fe938) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sync/mpmc/mod.rs:1025
+#12 0x000055a5eab0fc17 in std::sync::mpsc::Receiver<smithay::wayland::shm::pool::InnerPool>::recv<smithay::wayland::shm::pool::InnerPool> (self=0x7fb8e03fe938) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sync/mpsc.rs:890
+#13 0x000055a5eab1c584 in smithay::wayland::shm::pool::DROP_THIS::{closure#0}::{closure#0} () at vendor/smithay-0.7.0/src/wayland/shm/pool.rs:35
+#14 0x000055a5eaa39d83 in std::sys::backtrace::__rust_begin_short_backtrace<smithay::wayland::shm::pool::DROP_THIS::{closure#0}::{closure_env#0}, ()> (f=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sys/backtrace.rs:166
+#15 0x000055a5eabca5e3 in std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure#0}<smithay::wayland::shm::pool::DROP_THIS::{closure#0}::{closure_env#0}, ()> () at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/lifecycle.rs:70
+#16 0x000055a5eab52521 in core::panic::unwind_safe::{impl#23}::call_once<(), std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<smithay::wayland::shm::pool::DROP_THIS::{closure#0}::{closure_env#0}, ()>> (self=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/panic/unwind_safe.rs:275
+#17 0x000055a5eaa373c6 in std::panicking::catch_unwind::do_call<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<smithay::wayland::shm::pool::DROP_THIS::{closure#0}::{closure_env#0}, ()>>, ()> (data=0x7fb8e03febd0) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/panicking.rs:576
+#18 0x000055a5eabca66b in __rust_try ()
+#19 0x000055a5eabca2b6 in std::panicking::catch_unwind<(), core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<smithay::wayland::shm::pool::DROP_THIS::{closure#0}::{closure_env#0}, ()>>> (f=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/panicking.rs:544
+#20 std::panic::catch_unwind<core::panic::unwind_safe::AssertUnwindSafe<std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure_env#0}<smithay::wayland::shm::pool::DROP_THIS::{closure#0}::{closure_env#0}, ()>>, ()> (f=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/panic.rs:359
+#21 std::thread::lifecycle::spawn_unchecked::{closure#1}<smithay::wayland::shm::pool::DROP_THIS::{closure#0}::{closure_env#0}, ()> () at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/lifecycle.rs:68
+#22 0x000055a5eaaa6e5f in core::ops::function::FnOnce::call_once<std::thread::lifecycle::spawn_unchecked::{closure_env#1}<smithay::wayland::shm::pool::DROP_THIS::{closure#0}::{closure_env#0}, ()>, ()> () at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/core/src/ops/function.rs:250
+#23 0x000055a5eb0b8139 in alloc::boxed::{impl#31}::call_once<(), (dyn core::ops::function::FnOnce<(), Output=()> + core::marker::Send), alloc::alloc::Global> () at library/alloc/src/boxed.rs:2320
+#24 std::sys::thread::unix::{impl#2}::new::thread_start () at library/std/src/sys/thread/unix.rs:123
+#25 0x00007fb9224acef1 in ?? () from target:/usr/lib/libc.so.6
+#26 0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
+
+Thread 1 (Thread 0x7fb9226c0580 (LWP 1727651) "infynitae-nrt2"):
+#0  0x00007fb9224b6132 in ?? () from target:/usr/lib/libc.so.6
+#1  0x00007fb92253c8f2 in ppoll () from target:/usr/lib/libc.so.6
+#2  0x00007fb9226aaa9f in ?? () from target:/usr/lib/libwayland-client.so.0
+#3  0x00007fb9226b19fe in wl_display_dispatch_queue_timeout () from target:/usr/lib/libwayland-client.so.0
+#4  0x00007fb9226b1b20 in wl_display_dispatch_queue () from target:/usr/lib/libwayland-client.so.0
+#5  0x00007fb92234da89 in ?? () from target:/usr/lib/libEGL_mesa.so.0
+#6  0x00007fb9223468ae in ?? () from target:/usr/lib/libEGL_mesa.so.0
+#7  0x00007fb922346a88 in ?? () from target:/usr/lib/libEGL_mesa.so.0
+#8  0x00007fb92233d26d in ?? () from target:/usr/lib/libEGL_mesa.so.0
+#9  0x00007fb92232d1a2 in ?? () from target:/usr/lib/libEGL_mesa.so.0
+#10 0x000055a5ea7b53ae in smithay::backend::egl::ffi::egl::SwapBuffersWithDamageKHR (dpy=0x55a5f1187240, surface=0x55a5f2ce16c0, rects=0x55a5f39663f0, n_rects=1) at /home/vysaely/.cache/infynitae-integration/nrt-target/debug/build/smithay-f2f0e6f7cb8aa325/out/egl_bindings.rs:494
+#11 0x000055a5ea801038 in smithay::backend::egl::native::EGLNativeSurface::swap_buffers::{closure#0}<wayland_egl::WlEglSurface> () at vendor/smithay-0.7.0/src/backend/egl/native.rs:336
+#12 0x000055a5ea86aa3c in smithay::backend::egl::error::wrap_egl_call<u32, smithay::backend::egl::native::EGLNativeSurface::swap_buffers::{closure_env#0}<wayland_egl::WlEglSurface>> (call=..., err=0) at vendor/smithay-0.7.0/src/backend/egl/error.rs:164
+#13 0x000055a5ea86acc3 in smithay::backend::egl::error::wrap_egl_call_bool<smithay::backend::egl::native::EGLNativeSurface::swap_buffers::{closure_env#0}<wayland_egl::WlEglSurface>> (call=...) at vendor/smithay-0.7.0/src/backend/egl/error.rs:196
+#14 0x000055a5ea7cd8d1 in smithay::backend::egl::native::EGLNativeSurface::swap_buffers<wayland_egl::WlEglSurface> (self=0x55a5f2ce1b50, display=0x7ffd041ab8d8, surface=0x55a5f2ce16c0, damage=..., damage_impl=smithay::backend::egl::display::DamageSupport::KHR) at vendor/smithay-0.7.0/src/backend/egl/native.rs:333
+#15 0x000055a5eab5d75d in smithay::backend::egl::surface::{impl#2}::swap_buffers::{closure#0} () at vendor/smithay-0.7.0/src/backend/egl/surface.rs:170
+#16 0x000055a5eabe7467 in smithay::backend::egl::surface::EGLSurface::swap_buffers (self=0x7ffd041ab8b0, damage=...) at vendor/smithay-0.7.0/src/backend/egl/surface.rs:160
+#17 0x000055a5ea7ca430 in smithay::backend::winit::WinitGraphicsBackend<smithay::backend::renderer::gles::GlesRenderer>::submit<smithay::backend::renderer::gles::GlesRenderer> (self=0x7ffd041a9fc0, damage=...) at vendor/smithay-0.7.0/src/backend/winit/mod.rs:351
+#18 0x000055a5ea788162 in infynitae_backend_winit::render_and_present (data=0x7ffd041a9720) at crates/infynitae-backend-winit/src/lib.rs:456
+#19 0x000055a5ea786b9e in infynitae_backend_winit::run_nested (core=..., input_port=..., output_token=..., options=...) at crates/infynitae-backend-winit/src/lib.rs:245
+#20 0x000055a5ea781826 in infynitae::main () at crates/infynitae/src/main.rs:233
+[Inferior 1 (process 1727651) detached]

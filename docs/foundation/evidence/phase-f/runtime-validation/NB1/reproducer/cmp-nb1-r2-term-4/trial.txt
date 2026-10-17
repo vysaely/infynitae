@@ -1,0 +1,2 @@
+binary /home/vysaely/.cache/infynitae-integration/nb1/infynitae-nb1-r2 36c167052685ad53 minimise_ms=3000 start 2026-10-17T02:08:34+03:00 load 1.17
+verdict STALL  exit_at=-1792192114.98s term_at=8.0s minimised=2 last_frame_done=23:08:38.016449 left=0

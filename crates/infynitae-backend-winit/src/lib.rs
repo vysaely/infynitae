@@ -77,6 +77,42 @@ struct LoopData {
     /// The host asked to close the window.
     closed: bool,
     options: WinitCompositorOptions,
+    /// Whether the host is ready for the next frame (NB-1).
+    host: HostFrameGate,
+}
+
+/// NB-1 (2026-10-17): a submit swaps with the EGL default swap interval, so it waits for the host
+/// compositor's frame callback of the previous one. A host that stops presenting the window
+/// (minimised, hidden) stops sending frame callbacks, and a submit then blocks the whole loop —
+/// clients, the run limit and SIGTERM — for as long as the window stays hidden. So a frame is
+/// submitted only when the host is ready for it: initially, and after winit reports that the
+/// host's frame callback for the previous submit arrived (`WinitEvent::Redraw`, which winit
+/// delivers on that callback once a redraw is requested). While the host is not ready a due
+/// frame waits; the loop sleeps on its event sources. The swap interval is not changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct HostFrameGate {
+    ready: bool,
+}
+
+impl HostFrameGate {
+    fn new() -> HostFrameGate {
+        HostFrameGate { ready: true }
+    }
+
+    /// Whether a frame may be submitted now.
+    fn may_submit(&self) -> bool {
+        self.ready
+    }
+
+    /// A frame was submitted: the next one waits for the host.
+    fn submitted(&mut self) {
+        self.ready = false;
+    }
+
+    /// The host's frame callback arrived (`WinitEvent::Redraw`).
+    fn host_ready(&mut self) {
+        self.ready = true;
+    }
 }
 
 /// The nested backend's answer to "what is the device limit": **not a query**. The GLES
@@ -171,6 +207,7 @@ pub fn run_nested(
         scale_120: 120,
         closed: false,
         options,
+        host: HostFrameGate::new(),
     };
 
     // every host event (input, resize, redraw request) may change what is shown
@@ -217,7 +254,12 @@ pub fn run_nested(
         }
 
         if data.session.frame_due() {
-            render_and_present(&mut data);
+            if data.host.may_submit() {
+                render_and_present(&mut data);
+            } else {
+                // the frame waits for the host (NB-1); its Redraw requests it again
+                data.backend.window().request_redraw();
+            }
         }
     }
 
@@ -272,8 +314,9 @@ fn handle_winit_event(data: &mut LoopData, event: WinitEvent) {
         WinitEvent::Input(input_event) => {
             handle_input_event(data, input_event);
         }
-        // the frame is requested by the caller, like for every other host event
-        WinitEvent::Redraw => {}
+        // the host's frame callback arrived: it is ready for the next frame (NB-1); the frame
+        // itself is requested by the caller, like for every other host event
+        WinitEvent::Redraw => data.host.host_ready(),
     }
 }
 
@@ -425,6 +468,10 @@ fn render_and_present(data: &mut LoopData) {
             data.session.request_frame();
             return;
         }
+        // the next submit waits for this one's frame callback (NB-1); winit reports it as a
+        // Redraw once a redraw is requested
+        data.host.submitted();
+        data.backend.window().request_redraw();
         data.session.count_frame();
     }
 
@@ -459,6 +506,26 @@ pub fn normalize_rel_motion(delta: (f64, f64), scale_120: u32) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// NB-1: after a submit no further submit happens until the host's frame callback (Redraw);
+    /// then exactly one. A host that never answers (a hidden window) leaves frames waiting,
+    /// never a blocking submit.
+    #[test]
+    fn a_frame_is_submitted_only_when_the_host_is_ready() {
+        let mut gate = HostFrameGate::new();
+        assert!(gate.may_submit(), "the first frame");
+        gate.submitted();
+        for _ in 0..1000 {
+            assert!(
+                !gate.may_submit(),
+                "no submit while the host has not answered"
+            );
+        }
+        gate.host_ready();
+        assert!(gate.may_submit());
+        gate.submitted();
+        assert!(!gate.may_submit());
+    }
 
     #[test]
     fn test_pointer_relative_normalization_across_scales() {
