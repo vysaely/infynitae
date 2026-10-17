@@ -1,7 +1,7 @@
 # NB-1 — nested-session stall: investigation, root cause, fix (2026-10-17)
 
-Status: **ROOT CAUSE ESTABLISHED; FIX PROPOSED** on `fix/nested-host-frame-gating-2026-10-17`
-(from `main` `ca2e468`), not merged. Brief "INC-6 Integration and NB-1 Hang Investigation",
+Status: **ROOT CAUSE ESTABLISHED; FIX INTEGRATED** into local `main` (merge `1f2b246`, 2026-10-17,
+owner authorization; not pushed) from `fix/nested-host-frame-gating-2026-10-17` (from `main` `ca2e468`). Brief "INC-6 Integration and NB-1 Hang Investigation",
 Gate 2. No GPU, latency or frame-pacing claim is made: software rendering (`/dev/dri` masked).
 
 ## 1. Builds compared
