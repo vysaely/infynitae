@@ -1458,6 +1458,10 @@ CONTROLS = [
      "            x: self.c_eff.x + q16(p.x / self.zoom),",
      "            x: self.c_eff.x + q16(p.x),",
      "infynitae-backend-headless", ["--test", "t1_d5hit_zoomed"], "tst18_d5hit_zoomed_configurations"),
+    ("OB-53 INC-10 part / SC-E: a client response may reverse the hint under a fit (feedback storm)", f"{CORE}/scale.rs",
+     "                    if self.last_stimulus_direction != 0 && d != self.last_stimulus_direction {",
+     "                    if false && self.last_stimulus_direction != 0 && d != self.last_stimulus_direction {",
+     "infynitae-backend-headless", ["--test", "t1_fit_scale_adversary"], "an_adversarial_client_under_a_fit_changes_the_hint_at_most_once_more_and_never_moves_the_camera"),
     # --- INC-10 exit review (M1, L4, L5, E1, E3; clarifications proposed for C12.F17, not adopted)
     ("INC-10 review M1: a kept confinement suppresses the true-position event after a fit or restore", f"{CORE}/entry.rs",
      "                .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock);", "                .is_some();",
