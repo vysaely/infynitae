@@ -430,10 +430,10 @@ where
         .into_iter()
         .map(|(_, e)| e)
         .collect();
+    // borrowed, not cloned: the model's key owns strings, and it is read only for a rebuild
     let model = state
         .core
         .output(output)
-        .cloned()
         .ok_or(RenderOutputError::NoFrame)?;
     let handle = state
         .outputs
@@ -443,7 +443,7 @@ where
     // C12.F15.4: the tracker computes damage and opaque regions at its Scale(k); a frame at
     // another k (a fit, a restore, a presentation) rebuilds it before rendering
     if handle.tracker_k != view.k {
-        handle.tracker = damage_tracker(&model, &view);
+        handle.tracker = damage_tracker(model, &view);
         handle.tracker_k = view.k;
     }
     let result = handle

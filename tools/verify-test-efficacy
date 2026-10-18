@@ -1531,6 +1531,8 @@ DEPS = {
 def rebuilt_clean(entry, package, target):
     """Whether a build of `package`'s `target` necessarily recompiled `entry`'s unit from its clean source."""
     rel, unit = entry
+    if "--features" in target:
+        return False  # a featured build compiles other artifacts: the unfeatured units stay stale
     parts = rel.split("/")
     if len(parts) < 4 or parts[0] != "crates" or parts[2] != "src":
         return False  # a test file or anything else: kept stale (a rebuild of its target, never wrong)
