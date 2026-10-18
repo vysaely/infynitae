@@ -1052,7 +1052,7 @@ CONTROLS = [
      "        self.invalidate_frame(output);\n        let on_it",
      "infynitae-core", ["--lib"], "a_fit_and_a_restore_update_membership"),
     ("INC-10 bindings: fit and restore resolve during an interaction", f"{CORE}/input/keys.rs",
-     "    if key == KEY_F && mods.logo && !interaction_active {", "    if key == KEY_F && mods.logo {",
+     "    if key == KEY_F && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {", "    if key == KEY_F && mods.logo && !mods.ctrl && !mods.alt {",
      "infynitae-core", ["--lib"], "no_fit_or_restore_during_an_interaction"),
     ("INC-10 C12.F15.8 (5): src not cropped (the uncropped src with a cropped dst)", f"{WAYLAND}/convert.rs",
      "        let src = if cropped && w > 0 && h > 0 {", "        let src = if false && w > 0 && h > 0 {",
@@ -1460,6 +1460,18 @@ CONTROLS = [
     ("INC-10 review M1 / INV-INPUT-5: absolute motion reaches a kept lock after a fit or restore", f"{CORE}/entry.rs",
      "                .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock);", "                .is_some_and(|_| false);",
      "infynitae-backend-headless", ["--test", "t1_fit_constraints"], "fit_and_restore_reconcile_the_pointer_under_each_constraint"),
+    ("INC-10 review L5 bindings: Logo+Ctrl+F and Logo+Alt+F also fit or restore (modifiers not matched exactly)", f"{CORE}/input/keys.rs",
+     "    if key == KEY_F && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {",
+     "    if key == KEY_F && mods.logo && !interaction_active {",
+     "infynitae-backend-headless", ["--test", "t1_fit_bindings"], "extra_ctrl_or_alt_modifiers_trigger_neither_binding"),
+    ("INC-10 review L5 bindings: a fit with no element under the pointer fits another element", f"{CORE}/entry.rs",
+     "        let Some(hit) = self.hit_test(output, pt) else {\n            return;\n        };\n        let element = hit.element;",
+     "        let element = match self.hit_test(output, pt) {\n            Some(hit) => hit.element,\n            None => match self.stage.mapped_elements().first() {\n                Some(&e) => e,\n                None => return,\n            },\n        };",
+     "infynitae-backend-headless", ["--test", "t1_fit_bindings"], "logo_f_with_no_element_under_the_pointer_is_a_no_op"),
+    ("INC-10 review L5 / C5: a fit during a presentation is refused (diverges from the ratified C5 rule)", f"{CORE}/entry.rs",
+     "        let Some(hit) = self.hit_test(output, pt) else {\n            return;\n        };\n        let element = hit.element;",
+     "        if self.presentation(output).is_some() {\n            return;\n        }\n        let Some(hit) = self.hit_test(output, pt) else {\n            return;\n        };\n        let element = hit.element;",
+     "infynitae-backend-headless", ["--test", "t1_fit_bindings"], "a_fit_during_a_presentation_changes_the_hidden_camera_as_ratified"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

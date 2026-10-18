@@ -45,10 +45,12 @@ pub const CANONICAL_BINDINGS: [KeyBinding; 1] = [KeyBinding {
 /// Pure binding filter: resolves an evdev keycode and modifier snapshot against bindings.
 /// Plain Escape only cancels when an interaction is actively in progress (F04, K6).
 ///
-/// INC-10 navigation bindings (Level D defaults; the owner has not chosen them — INC-10 brief §11's
-/// recommendation): Logo+F fits, Logo+Shift+F restores. Fit requires Shift absent, so Logo+Shift+F
-/// never also fits. Neither resolves while an interaction owns the camera or the pointer: a pan
-/// computes the camera from its own start, so a fit inside it would be overwritten.
+/// INC-10 navigation bindings (owner decision 4 of the INC-10 exit review; exact matching per the
+/// M1 brief; proposed for C12.F17, not adopted): Logo+F fits, Logo+Shift+F restores. The modifiers
+/// match exactly: Ctrl or Alt held as well resolves neither,
+/// and fit requires Shift absent, so Logo+Shift+F never also fits. Neither resolves while an
+/// interaction owns the camera or the pointer: a pan computes the camera from its own start, so a
+/// fit inside it would be overwritten.
 pub fn resolve_key_binding(
     key: u32,
     mods: Modifiers,
@@ -61,7 +63,7 @@ pub fn resolve_key_binding(
             None
         };
     }
-    if key == KEY_F && mods.logo && !interaction_active {
+    if key == KEY_F && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(if mods.shift {
             KeyAction::ViewportRestore
         } else {
@@ -140,5 +142,29 @@ mod tests {
         assert_eq!(resolve_key_binding(KEY_F, shift, false), None);
         assert_eq!(resolve_key_binding(KEY_F, logo, true), None);
         assert_eq!(resolve_key_binding(KEY_F, logo_shift, true), None);
+    }
+
+    /// INC-10 review L5: the navigation bindings match their modifiers exactly — Logo+Ctrl+F, Logo+Alt+F and
+    /// their Shift forms resolve to nothing (the key is then the client's, M12).
+    #[test]
+    fn navigation_bindings_reject_extra_modifiers() {
+        for ctrl in [false, true] {
+            for alt in [false, true] {
+                for shift in [false, true] {
+                    let mods = Modifiers {
+                        logo: true,
+                        ctrl,
+                        alt,
+                        shift,
+                    };
+                    let want = match (ctrl || alt, shift) {
+                        (true, _) => None,
+                        (false, false) => Some(KeyAction::FitViewport),
+                        (false, true) => Some(KeyAction::ViewportRestore),
+                    };
+                    assert_eq!(resolve_key_binding(KEY_F, mods, false), want, "{mods:?}");
+                }
+            }
+        }
     }
 }
