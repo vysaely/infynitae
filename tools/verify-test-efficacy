@@ -1453,6 +1453,11 @@ CONTROLS = [
      "            if !crate::geom::zoom_in_domain(*zoom) {\n                return Err(PersistedError::Zoom { entry: i });\n            }\n",
      "            if !crate::geom::zoom_in_domain(*zoom) {\n                return Ok(PersistedCameras { entries: entries[..i].to_vec() });\n            }\n",
      "infynitae-core", ["--lib"], "a_rejected_persisted_table_applies_none_of_its_entries"),
+    # --- 2026-10-18 INC-10 exit readiness: TST-18 zoomed configurations (OB-14 zoom != 1 part)
+    ("TST-18 zoomed / OB-14: F-UNPROJECT-1 drops the zoom on x (hit tested at the wrong Canvas point)", f"{CORE}/projection.rs",
+     "            x: self.c_eff.x + q16(p.x / self.zoom),",
+     "            x: self.c_eff.x + q16(p.x),",
+     "infynitae-backend-headless", ["--test", "t1_d5hit_zoomed"], "tst18_d5hit_zoomed_configurations"),
     # --- INC-10 exit review (M1, L4, L5, E1, E3; clarifications proposed for C12.F17, not adopted)
     ("INC-10 review M1: a kept confinement suppresses the true-position event after a fit or restore", f"{CORE}/entry.rs",
      "                .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock);", "                .is_some();",
