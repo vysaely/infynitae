@@ -167,21 +167,36 @@ T1: `t1_fit_constraints` (3), `t1_fit_bindings` (4), `t1_canonical_rect` (`pixel
 
 ## 7. Open questions for change control
 
-- **Q1 — fit/restore during a protocol-fullscreen presentation (conflict; decision required).**
-  §C5's accepted row (quoted in §6) says a fit applied while O presents a fullscreen element
-  "changes camera A's state, which is shown when the presentation ends". The implementation does
-  exactly that and a T1 test pins it (`a_fit_during_a_presentation_changes_the_hidden_camera_as_ratified`):
-  Logo+F hits the presented element on the presentation frame and fits camera A to it, the
-  presented frame does not change, history +1; a restore likewise changes camera A unseen. The
-  brief asks that a presentation never let an operation silently modify a camera that is not
-  presented. That would supersede §C5's row, so it is not done here. Options:
-  **(A)** keep §C5 (no change; the test stays); **(B)** fit and restore are a no-op on O while O
-  presents an element — no camera or history change, no pointer event, the key consumed (M12) —
-  superseding §C5's row and adding a guard to M8's binding rows and to F-FIT-1's refusal list
-  (O presenting). (B) is a two-line guard in `entry::fit_viewport` / `viewport_restore`; its test
-  is the present one inverted, and the seeded control "a fit refused during a presentation" (now
-  DETECTED as a divergence from §C5) becomes the regression to keep. Either way: does the rule
-  also cover shell-issued fits (INC-11)?
+- **Q1 — fit/restore during a protocol-fullscreen presentation (decision required; framing
+  corrected 2026-10-18).** What governs it today, by §P0 (FOUNDATION_ARCHITECTURE line 2569,
+  "A definition counts only inside a `living:` region of the home document"; line 2563,
+  "Everything above this line is historical"):
+  - **Living, normative:** M8's guards (FOUNDATION_STATE_MACHINES lines 116 and 118:
+    `FitViewport(O, W)` [O connected ∧ W mapped ∧ g.w > 0 ∧ g.h > 0], `ViewportRestore(O)`
+    [O connected ∧ O's history non-empty]), F-FIT-1's refusal list (FOUNDATION_ARCHITECTURE §F,
+    line 2720: O not connected, W not mapped, `g.w ≤ 0` or `g.h ≤ 0`) and INV-PRES-1
+    (FOUNDATION_INVARIANTS line 625: "Fullscreen never touches cameras or anchors"). None names
+    a presentation, so a fit or restore during one is permitted **by omission**: the current
+    contract is Option A.
+  - **Historical, consistent with it:** §C5's "fullscreen + viewport-fit on the same output" row
+    (FOUNDATION_ARCHITECTURE line 626, Phase C checkpoint 2, quoted in §6) and the 1R
+    contradiction audit's row 6 (`audit/1R/CONTRADICTION_AUDIT_1R.md`). They record the same
+    behaviour but are provenance, not the normative home; an earlier version of this question
+    called §C5 the "accepted" rule, which overstated its status.
+  The implementation follows the living contract, and a T1 test pins it
+  (`a_fit_during_a_presentation_changes_the_hidden_camera_as_ratified`): Logo+F hits the
+  presented element on the presentation frame and fits camera A to it, the presented frame does
+  not change, history +1; a restore likewise changes camera A unseen. The brief asks that a
+  presentation never let an operation silently modify a camera that is not presented. Options:
+  **(A)** confirm the living contract (documentation only; the test stays); **(B)** fit and
+  restore are refused on O while O presents an element — no camera or history change, no pointer
+  event, the key consumed (M12) — by amending the living M8 guards (or the M8 binding rows of
+  C12.F17.7) and F-FIT-1's refusal list; §C5's row is then listed in C12.F17.1 as superseded
+  provenance. (B) is a two-line guard in `entry::fit_viewport` / `viewport_restore`; its test is
+  the present one inverted, and the seeded control "a fit refused during a presentation" (now
+  DETECTED as a divergence from the living contract) becomes the regression to keep. Either way:
+  does the rule also cover shell-issued fits (INC-11)? Exact decision texts and edits: §8.
+  Evidence for a client that resizes to the fullscreen size before the fit: §8.1.
 - **Q2 — lock rule beyond camera actions.** INV-INPUT-5 states "no absolute motion reaches a
   locked surface" only while reconciliation is deferred; C12.F17 adds camera actions. The protocol
   forbids `wl_pointer.motion` whenever a lock is active, and `output_reconfigured` currently sends
@@ -193,3 +208,121 @@ T1: `t1_fit_constraints` (3), `t1_fit_bindings` (4), `t1_canonical_rect` (`pixel
   by "unavailable during an active pan". Confirm forwarding rather than consuming.
 - **Q5 — GPU tolerance.** The pass criterion for fractional crop cuts on a GPU (OB-57) needs a
   tolerance only change control can set.
+
+## 8. Decision texts and ready-to-apply edits (prepared 2026-10-18; nothing here is adopted)
+
+Each entry is the text an owner decision would record, followed by the package edits it implies.
+Line numbers refer to this file as revised on branch `prep/inc10-exit-readiness-2026-10-18`.
+Every decision is the owner's; this section prepares them and decides none.
+
+### 8.1 Q1 — fit/restore during a protocol-fullscreen presentation
+
+> **Q1 (C12.F17) — owner decision, dated ____.**
+> ☐ **A — living contract confirmed.** While output O presents a protocol-fullscreen element
+> (INV-PRES-1; `Core::presentation(O)` is some element), `FitViewport(O, W)` and
+> `ViewportRestore(O)` keep M8's guards unchanged and change O's camera and navigation history
+> (OBJ-30) as at any other time; the presentation keeps rendering precedence, and O shows the
+> changed camera when the presentation ends. §C5's historical row stays as provenance.
+> ☐ **B — refused during a presentation.** While O presents a protocol-fullscreen element (from
+> the presentation's start to its exit decision, INV-PRES-1; a grant still waiting for its
+> element's map is not a presentation) the operations in scope are refused: no camera mutation;
+> no history entry recorded, evicted or removed; no lattice, frame, membership or epoch change; no
+> pointer reconciliation or pointer event.
+> **Scope:** ☐ 1. the input bindings only — Logo+F and Logo+Shift+F still resolve and are consumed
+> (M12, the F key is not forwarded); shell-issued fit/restore keep the living M8 rule until INC-11
+> amends it. ☐ 2. the bindings and the shell-issued `FitViewport` (and a shell restore, if INC-11
+> has one) — under B refused with the same state effects; how a refusal is reported to the shell
+> is INC-11's ShellPort contract; no keyboard event is involved.
+
+**Edits under A:** C12.F17.7, the sentence "**During a protocol-fullscreen presentation:** as
+decided under Q1 (§7); until then §C5's row applies unchanged." becomes "**During a
+protocol-fullscreen presentation** (Q1, owner decision <date>): the rows above and M8's guards
+apply unchanged; W is the element hit under the pointer on the presentation frame; fit and restore
+change O's camera and history, the presentation keeps rendering precedence, and the changed camera
+is shown when it ends. Test: `a_fit_during_a_presentation_changes_the_hidden_camera_as_ratified`
+(T1)." (with scope 2: "The same holds for shell-issued fit and restore (INC-11)."). C12.F17.10:
+"§C5 (Q1 open)" becomes "the presentation rule of M8 and F-FIT-1 (confirmed by Q1, <date>; §C5's
+historical row unchanged)". §2 K5 "Needs": "adoption; **Q1** for presentations" becomes
+"adoption". §7 Q1: append the decision. No code, test, control or checker change.
+
+**Edits under B:** C12.F17.1 gains "§C5 'fullscreen + viewport-fit on the same output' (historical
+provenance) — for the input bindings [scope 1] / entirely [scope 2] | C12.F17.7; M8 (C12.F17)",
+and under scope 2 also "F-FIT-1 definition 1 (C12.F15) refusal list | F-FIT-1 (C12.F17)" and
+"C12.F16.3 items 3–4 refusal lists | F-FIT-1, M8 (C12.F17)". C12.F17.2 (scope 2) gains an F-FIT-1
+block: previous (C12.F15), verbatim "if O is not connected, W is not mapped, or `g.w ≤ 0` or
+`g.h ≤ 0`, the action is refused — no camera mutation, nothing recorded."; new "if O is not
+connected, O presents a protocol-fullscreen element (INV-PRES-1), W is not mapped, or `g.w ≤ 0`
+or `g.h ≤ 0`, the action is refused — no camera mutation, nothing recorded or evicted, no pointer
+reconciliation; a restore is refused likewise while O presents". C12.F17.7: scope 1 adds to both
+binding rows' trigger "∧ O presents no protocol-fullscreen element" and a third row "F with Logo
+(± Shift), Ctrl and Alt released, no interaction, O presenting → the binding is consumed (M12);
+nothing else"; scope 2 leaves the rows and points to the amended M8 guards. The living M8 rows
+(§4) gain the presentation condition on `FitViewport` and `ViewportRestore` (scope 2) or on the
+binding rows (scope 1). C12.F17.9 gains fixture 48: F-FIT-1 definition 1 reverted to its C12.F15
+text → `formula-provenance` (scope 2; under scope 1 the T1 test and its control carry the rule).
+C12.F17.10: remove "§C5 (Q1 open)", add "INV-PRES-1 and ADR-09 unchanged (the refusal is a
+camera-side guard); 1R contradiction audit row 6 stays historical evidence", and under scope 2
+replace "F-FIT-1's guard, zoom, clamp" by "F-FIT-1's zoom, clamp". Header Status: "M8 gains two
+binding rows, which refuse while O presents …" (scope 1) or "… two formulas change (F-RENDER-1,
+F-FIT-1, whose refusal list gains a presentation); M8 gains two binding rows and its fit and
+restore guards gain a presentation condition" (scope 2). INV-CAMERA-5 ("refused … when the
+history is empty") is not exhaustive; amending it for clarity is a reviewer choice that changes
+the invariant count stated in the header. Implementation (separate commits): the guard at the
+`KeyAction::FitViewport` / `ViewportRestore` arms (scope 1) or at the top of `fit_viewport` /
+`viewport_restore` (scope 2; identical today, `ShellCommand` has no variants); the T1 test
+inverted; the control re-seeded as "presentation guard removed"; full gates.
+
+**Evidence (collected 2026-10-18, branch `prep/inc10-exit-readiness-2026-10-18`):**
+`t1_fit_bindings::a_fit_during_the_presentation_of_a_resized_client_frames_its_fullscreen_extent`.
+A client that obeys the fullscreen configure (1920 × 1080) before Logo+F is fitted at that
+geometry: zoom 1, centred on the fullscreen extent (anchor + (960, 540)); after
+`unset_fullscreen` it redraws at its saved 800 × 600, nothing re-fits (INV-CAMERA-5), and camera A
+shows the window at the view's top-left (canonical rect (0, 0, 800, 600)) instead of framing it;
+Logo+Shift+F returns to the camera before the fit. This is the behaviour the living contract
+(option A) produces; under B the fit would be refused and the camera unchanged. The test shows the
+picture the owner is deciding about; it decides nothing. (The earlier test's client kept its
+800 × 600 buffer and was fitted at zoom 1.8.)
+
+### 8.2 Q2 — the lock rule beyond camera actions (OB-55)
+
+> **Q2 — owner decision, dated ____.** ☐ **Widen:** INV-INPUT-5 states that no absolute motion
+> reaches a surface whose lock is active, on every path. ☐ **Keep scoped:** C12.F17's clause
+> covers camera actions only; the other paths follow the protocol without an invariant clause.
+
+The protocol forbids `wl_pointer.motion` while a lock is active either way (zwp_pointer_constraints_v1
+`lock_pointer`). Prepared, not merged: `prep/ob55-q2-gated-2026-10-18` (`output_reconfigured`
+reconciles first and sends no true-position event to a kept lock; T1 `t1_reconfigure_lock` fails
+on `619187f` with "motion 310,340"; seeded control). **If widened:** the C12.F17 INV-INPUT-5 row's
+camera-action sentence becomes "No absolute motion reaches a surface whose lock is active: after a
+camera action — a fit or a restore (F-FIT-1, M8) — or an output reconfiguration on the pointer's
+output, with no compositor interaction owning the pointer, the batch's one true-position event is
+sent unless the reconciliation leaves a lock active; …", fixture 47 is re-anchored on it, and
+OB-55's fix is merged before adoption. **If kept scoped:** the fix is still recommended as a
+protocol-compliance fix under OB-55, outside C12.F17.
+
+### 8.3 Q3 — pan release (and output relocation) under a kept confinement (OB-56)
+
+> **Q3 — owner decision, dated ____.** ☐ **Exactly one:** the end of an interaction and an output
+> relocation send the one true-position event to a kept confinement, as a fit or restore does
+> (C12.F17 K4). ☐ **Keep "≤ 1":** M10's rows stay as they are.
+
+`end_interaction` (fix branch) and `output_disconnected` both send the event only when no
+constraint remains (`if self.constraint.is_none()`), so a kept confinement gets none. Under
+"exactly one" both become `!locked` as in `camera_written`, M10's "interaction ends" row gains
+"exactly one unless a lock is kept", and T1 tests are needed (pan release under a kept confinement;
+disconnect relocating onto a surface whose confinement is kept). OB-56's second part (a persistent
+lock re-activating in the batch whose lock point is unobservable) stays a separate decision.
+
+### 8.4 Q4 — F during a pan
+
+> **Q4 — owner decision, dated ____.** ☐ **Forward** (as implemented: no binding during an
+> interaction; F follows M12's client path). ☐ **Consume** (a change to `resolve_key_binding` and
+> its tests).
+
+### 8.5 Q5 — GPU tolerance for fractional crop cuts (OB-57)
+
+> **Q5 — owner decision, dated ____.** ☐ **Set now:** the pass criterion for fractional-pixel crop
+> cuts on a GPU is ____ (e.g. "≤ 1 physical px of sampling offset at any cut, no pixel outside the
+> canonical rect"). ☐ **Defer** to OB-57's T2 work; no GPU claim is made for zoom ≠ 1 until then.
+
+Q5 does not block the software-only INC-10 exit (OB-57 "Blocks: any GPU-rendering claim").
