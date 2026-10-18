@@ -1,0 +1,8 @@
+test a_hidden_nested_window_does_not_block_the_loop ... nested compositor exited exit status: 0 after 8.737208542s (run limit 8 s, hidden at 3 s)
+ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.76s
+
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.82s
+

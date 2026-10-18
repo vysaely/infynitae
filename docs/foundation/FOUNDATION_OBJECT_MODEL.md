@@ -132,7 +132,7 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Forbidden writers:** everything else (nothing is written back, INV-STAGE-6); no client, protocol event or persistence writes `R_O`
 - **Invariants:** INV-CAMERA-3, INV-COORD-2, INV-RENDER-1
 - **E1R (unsealed):** derived from `view_O` (F-VIEW-1); rebuilt on `output_reconfigured`.
-- **C12.F14:** R is the output's lattice reference: held per output, not derived from each view origin; set at O's connect, a camera (re-)binding, a change of `k_O` or `view_O`, and when `|v_O − R_O|·k_O` would exceed 2³¹; kept while panning; dropped with O; never persisted. Because the kept reference depends on the view origins that came before, it is history-dependent state, not derived geometry: the fields above say so (corrected 2026-10-17; the earlier "Class D, core (pure), Reconstruction: recompute" is recorded in FOUNDATION_ARCHITECTURE §C12.F14.6). `v_O`, C and `c_eff` stay derived. Until INC-10 the code still sets R from every view origin (no kept reference exists).
+- **C12.F14:** R is the output's lattice reference: held per output, not derived from each view origin; set at O's connect, a camera (re-)binding, a change of `k_O` or `view_O`, and when `|v_O − R_O|·k_O` would exceed 2³¹; kept while panning; dropped with O; never persisted. Because the kept reference depends on the view origins that came before, it is history-dependent state, not derived geometry: the fields above say so (corrected 2026-10-17; the earlier "Class D, core (pure), Reconstruction: recompute" is recorded in FOUNDATION_ARCHITECTURE §C12.F14.6). `v_O`, C and `c_eff` stay derived. Implemented by INC-10 (`b46021f`, 2026-10-18): Core's per-output lattice slot, read by every camera view (until then the code set R from every view origin).
 
 ### OBJ-13 — MembershipTable
 - **Class:** D
@@ -317,7 +317,7 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 - **Forbidden writers:** protocol handlers, clients, persistence
 - **Invariants:** INV-CAMERA-5
 - **C12.F15:** one entry per successful fit (owner decision 2026-10-17: one restore reverses the most recent fit; repeated restores unwind earlier fits). Previously "camera value before the last fit", lifetime "until the next fit". The depth bound C12.F15.9 left open is decided by C12.F16. Implemented by INC-10.
-- **C12.F16:** a bounded stack (owner decision 2026-10-18): at most 256 entries per output, the oldest evicted when a successful fit finds it full (lost permanently); each entry is the exact prior camera value (Q16 `CanvasPos` and `f64` zoom, copied, restored verbatim); a refused fit or restore changes nothing; fixed storage of 256 entries per bound camera, none for an unbound one (C12.F16.3). Previously lifetime "with its camera; an entry remains until a restore removes it", no bound.
+- **C12.F16:** a bounded stack (owner decision 2026-10-18): at most 256 entries per output, the oldest evicted when a successful fit finds it full (lost permanently); each entry is the exact prior camera value (Q16 `CanvasPos` and `f64` zoom, copied, restored verbatim); a refused fit or restore changes nothing; fixed storage of 256 entries per bound camera, none for an unbound one (C12.F16.3). Previously lifetime "with its camera; an entry remains until a restore removes it", no bound. Implemented by INC-10 (`cdf3a09`, 2026-10-18: `navigation::NavigationHistory`).
 
 ### OBJ-31 — Shell connection and subscription generation
 - **Class:** PO

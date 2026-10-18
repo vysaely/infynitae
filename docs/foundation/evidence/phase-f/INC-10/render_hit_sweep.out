@@ -1,0 +1,15 @@
+.....Smithay CropRenderElement misdraws under [_90, _270, Flipped90, Flipped270]
+..per-frame, scale 1, x: Stats { rects: 11616, wrapped_mismatch: 0, inner_mismatch: 16, remapped: 16, remapped_without_mismatch: 0, seams: 0, pointer_checked: 52272, pointer_wrong: 0 }
+...per-frame, scale 1.5, x: Stats { rects: 11616, wrapped_mismatch: 0, inner_mismatch: 16, remapped: 16, remapped_without_mismatch: 0, seams: 0, pointer_checked: 52272, pointer_wrong: 0 }
+per-frame, scale 1, y: Stats { rects: 11616, wrapped_mismatch: 0, inner_mismatch: 16, remapped: 16, remapped_without_mismatch: 0, seams: 0, pointer_checked: 52272, pointer_wrong: 0 }
+per-frame, scale 1.5, y, negative origin: Stats { rects: 11616, wrapped_mismatch: 0, inner_mismatch: 14, remapped: 14, remapped_without_mismatch: 0, seams: 0, pointer_checked: 52272, pointer_wrong: 0 }
+per-frame, scale 1, x, origin near 2^36: Stats { rects: 11616, wrapped_mismatch: 0, inner_mismatch: 14, remapped: 14, remapped_without_mismatch: 0, seams: 0, pointer_checked: 52272, pointer_wrong: 0 }
+kept 2^20, R left, x: Stats { rects: 11616, wrapped_mismatch: 0, inner_mismatch: 46, remapped: 46, remapped_without_mismatch: 0, seams: 0, pointer_checked: 52272, pointer_wrong: 0 }
+kept 2^20, R right, x: Stats { rects: 11616, wrapped_mismatch: 0, inner_mismatch: 39, remapped: 39, remapped_without_mismatch: 0, seams: 0, pointer_checked: 52272, pointer_wrong: 0 }
+kept 2^31, R left, x: Stats { rects: 11616, wrapped_mismatch: 0, inner_mismatch: 16, remapped: 16, remapped_without_mismatch: 0, seams: 0, pointer_checked: 52272, pointer_wrong: 0 }
+kept 2^31, R right, x: Stats { rects: 11616, wrapped_mismatch: 0, inner_mismatch: 40, remapped: 40, remapped_without_mismatch: 0, seams: 0, pointer_checked: 52272, pointer_wrong: 0 }
+kept 2^20, R above, y: Stats { rects: 11616, wrapped_mismatch: 0, inner_mismatch: 28, remapped: 28, remapped_without_mismatch: 0, seams: 0, pointer_checked: 52272, pointer_wrong: 0 }
+kept 2^31, R above, y: Stats { rects: 11616, wrapped_mismatch: 0, inner_mismatch: 18, remapped: 18, remapped_without_mismatch: 0, seams: 0, pointer_checked: 52272, pointer_wrong: 0 }
+kept 2^31, R below, y: Stats { rects: 11616, wrapped_mismatch: 0, inner_mismatch: 38, remapped: 38, remapped_without_mismatch: 0, seams: 0, pointer_checked: 52272, pointer_wrong: 0 }
+TOTAL: 139392 rects, 301 unwrapped mismatches removed, 627264 pointer pixels
+test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.65s

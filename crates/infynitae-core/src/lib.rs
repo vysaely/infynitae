@@ -1757,6 +1757,35 @@ mod tests {
         assert!(on(&n, w) && on(&n, u), "the restore: U back on A");
     }
 
+    /// During an interaction the bindings do not resolve (INC-10 exit item 4, "none during one"): with
+    /// a pan held, Logo+F and Logo+Shift+F neither fit nor record nor restore, and send no
+    /// true-position event; the pan alone moves the camera.
+    #[test]
+    fn no_fit_or_restore_during_an_interaction() {
+        let (mut n, a, _) = Nav::new();
+        n.fit();
+        assert_eq!(n.history(a).len(), 1);
+        let logo = input::bindings::Modifiers {
+            logo: true,
+            ..Default::default()
+        };
+        n.t += 1000;
+        n.ev(PhysicalEvent::PointerButton {
+            button: input::bindings::BTN_MIDDLE,
+            pressed: true,
+            modifiers: logo,
+            time_us: n.t,
+        });
+        n.motion((5.0, 0.0));
+        let during = n.camera(a);
+        for shift in [false, true] {
+            let fx = n.key(shift);
+            assert!(same(n.camera(a), during), "a camera action inside the pan");
+            assert_eq!(n.history(a).len(), 1);
+            assert_eq!(motions(&fx), 0);
+        }
+    }
+
     /// An empty history refuses a restore without mutating the camera or the history (C12.F16.3
     /// item 4); a following fit and restore still work.
     #[test]

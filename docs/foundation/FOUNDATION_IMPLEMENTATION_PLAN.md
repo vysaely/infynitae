@@ -254,6 +254,7 @@ No PRODUCT increment may create a state where **persistent zoom ≠ 1 and camera
 - **Stop / rollback:** any camera change from client geometry; any presented rect that differs from Core's canonical rect.
 - **Architecture decision required first:** **yes: OB-24's decision**, recorded by C12.F14 (G-OB24, C12.F14.5), and the render handoff and fit rule, recorded by C12.F15. OB-24 itself stays OPEN until this increment's exit evidence is accepted through architecture change control.
 - **Why here:** zoom is reachable only through fit in Foundation 01. It is valuable but not foundational, and it is gated.
+- **Implementation status (2026-10-18):** implemented on local `main` (`b46021f`, `2884287`, `cdf3a09`, `73c0aca` and the evidence commit), not pushed. Exit evidence for items 1–11 is produced (evidence/phase-f/INC-10/IMPLEMENTATION_RECORD_2026-10-18.md) and **not accepted**: it waits for independent review and architecture change control, with four findings for change control (the C12.F15.5 crop formula, the crop box's i32 span, "exactly" in C12.F15.4, the Level D bindings). OB-24 stays OPEN.
 
 ### INC-11 — Shell IPC
 - **Category:** PRODUCT

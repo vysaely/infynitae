@@ -1051,6 +1051,9 @@ CONTROLS = [
      "        self.invalidate_frame(output);\n        self.visibility_pass_camera(camera, out);\n        let on_it",
      "        self.invalidate_frame(output);\n        let on_it",
      "infynitae-core", ["--lib"], "a_fit_and_a_restore_update_membership"),
+    ("INC-10 bindings: fit and restore resolve during an interaction", f"{CORE}/input/keys.rs",
+     "    if key == KEY_F && mods.logo && !interaction_active {", "    if key == KEY_F && mods.logo {",
+     "infynitae-core", ["--lib"], "no_fit_or_restore_during_an_interaction"),
     ("INC-10 C12.F15.8 (5): src not cropped (the uncropped src with a cropped dst)", f"{WAYLAND}/convert.rs",
      "        let src = if cropped && w > 0 && h > 0 {", "        let src = if false && w > 0 && h > 0 {",
      "infynitae-backend-headless", ["--test", "t1_canonical_rect"], "a_cropped_surface_draws_exactly_its_visible_part_for_every_buffer_transform"),
@@ -1475,12 +1478,48 @@ def digest():
     return h.hexdigest()
 
 
+# Every control builds in one shared target directory, from a fresh copy whose files keep the
+# canonical tree's modification times. Cargo decides freshness by modification time, and its
+# artifacts do not depend on the copy's path, so a crate a control seeded stays built from the
+# seeded source in later copies, which carry older times: a later control would then test a tree
+# with two defects (found 2026-10-18, INC-10: a render-location seed in Core made the tracker
+# control pass). STALE holds the (file, unit) pairs whose last build may have been seeded — unit
+# "lib" is the crate's library as a dependency, "test" its own test build; each copy gives those
+# files a fresh time, so cargo rebuilds them from the clean source, and a pair is dropped once a
+# control's build has certainly recompiled that unit from clean source.
+STALE = set()
+DEPS = {
+    "infynitae-core": set(),
+    "infynitae-ipc": {"infynitae-core"},
+    "infynitae-wayland": {"infynitae-core"},
+    "infynitae-backend-headless": {"infynitae-core", "infynitae-wayland"},
+    "infynitae-backend-winit": {"infynitae-core", "infynitae-wayland"},
+    "infynitae": {"infynitae-core", "infynitae-wayland", "infynitae-backend-headless", "infynitae-backend-winit",
+                  "infynitae-ipc"},
+}
+
+
+def rebuilt_clean(entry, package, target):
+    """Whether a build of `package`'s `target` necessarily recompiled `entry`'s unit from its clean source."""
+    rel, unit = entry
+    parts = rel.split("/")
+    if len(parts) < 4 or parts[0] != "crates" or parts[2] != "src":
+        return False  # a test file or anything else: kept stale (a rebuild of its target, never wrong)
+    crate = parts[1]
+    if unit == "lib":
+        return crate in DEPS.get(package, set()) or (crate == package and target[:1] == ["--test"])
+    return crate == package and target == ["--lib"]
+
+
 def run_control(prop, rel, old, new, package, target, name, target_dir):
     tmp = tempfile.mkdtemp(prefix="verify-test-efficacy-")
     try:
         for item in COPY_ITEMS:
             src, dst = os.path.join(ROOT, item), os.path.join(tmp, item)
             (shutil.copytree if os.path.isdir(src) else shutil.copy2)(src, dst)
+        for stale_rel in {r for r, _ in STALE}:
+            if os.path.exists(os.path.join(tmp, stale_rel)):
+                os.utime(os.path.join(tmp, stale_rel))
         path = os.path.join(tmp, rel)
         with open(path) as f:
             text = f.read()
@@ -1493,7 +1532,10 @@ def run_control(prop, rel, old, new, package, target, name, target_dir):
                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         out = p.stdout
         if "error[E" in out or "could not compile" in out:
+            STALE.update({(rel, "lib"), (rel, "test")})
             return "BROKEN", "the seeded tree does not compile"
+        STALE.difference_update({e for e in STALE if e[0] != rel and rebuilt_clean(e, package, target)})
+        STALE.update({(rel, "lib"), (rel, "test")})
         failed = [l for l in out.splitlines() if l.startswith("test ") and l.endswith("FAILED") and name in l]
         if p.returncode != 0 and failed:
             return "DETECTED", failed[0]

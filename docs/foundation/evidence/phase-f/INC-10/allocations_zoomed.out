@@ -1,0 +1,6 @@
+pan: max 0 over 60 events
+pan across windows: max 0 over 60 events
+route + render list: max 0 over 60 events
+fit: max 0 over 300 events
+restore: max 0 over 256 events
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.80s

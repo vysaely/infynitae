@@ -92,7 +92,7 @@ Object: OBJ-26, OBJ-07. Implements INV-INPUT-1/2/3/4, INV-COORD-3, INV-CAMERA-4.
 | Panning | initiator release | Idle | epoch settles; batch-end reconciliation | INV-INPUT-5, INV-SCALE-3 |
 | Panning | the pan's output removed | Orphaned | motion consumed and discarded | INV-OUTPUT-1 |
 | Orphaned | initiator release | Idle | reconciliation on the relocated output | INV-INPUT-5 |
-| any | **persistent zoom ≠ 1** | — | **decided by C12.F14** (OB-24 D3/D4: the output's lattice reference is kept while panning, F-LATTICE-1); the code refuses a pan at zoom ≠ 1 until INC-10 implements it | INV-COORD-3 |
+| any | **persistent zoom ≠ 1** | — | **decided by C12.F14** (OB-24 D3/D4: the output's lattice reference is kept while panning, F-LATTICE-1); implemented by INC-10 (`b46021f`, 2026-10-18): a pan at any zoom keeps the reference | INV-COORD-3 |
 
 ## M7 — ScaleInteractionEpoch
 Object: OBJ-16. Implements INV-SCALE-3, INV-SCALE-4, INV-IDLE-1. Kinds: CameraPan, CameraZoom, WindowMove, WindowResize, ShellStream.
