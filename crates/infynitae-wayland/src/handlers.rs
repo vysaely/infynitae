@@ -44,14 +44,14 @@ impl WaylandState {
         }
     }
 
-    fn element_index_by_root(&self, root: &WlSurface) -> Option<usize> {
+    pub(crate) fn element_index_by_root(&self, root: &WlSurface) -> Option<usize> {
         self.elements
             .iter()
             .position(|e| e.window.toplevel().is_some_and(|t| t.wl_surface() == root))
     }
 
     /// The toplevel root surface of any surface in an element's trees.
-    fn toplevel_root(&self, surface: &WlSurface) -> Option<WlSurface> {
+    pub(crate) fn toplevel_root(&self, surface: &WlSurface) -> Option<WlSurface> {
         let mut root = surface.clone();
         while let Some(p) = get_parent(&root) {
             root = p;

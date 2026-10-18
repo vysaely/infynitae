@@ -261,6 +261,13 @@ pub fn run_nested(
                 data.backend.window().request_redraw();
             }
         }
+
+        // M16: withheld callbacks of unobserved elements, on a timer armed only while one is
+        // pending (INV-IDLE-1)
+        let now = infynitae_wayland::presentation_clock_now();
+        let deadline = data.state.frame_fallback(now);
+        data.session.set_fallback_deadline(deadline, now);
+        data.session.flush();
     }
 
     println!("[infynitae] Shutting down compositor...");

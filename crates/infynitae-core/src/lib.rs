@@ -15,6 +15,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod frames;
 pub mod geom;
 pub mod input;
 pub mod navigation;
@@ -29,7 +30,9 @@ pub mod stage;
 pub mod visibility;
 
 mod entry;
+
 pub use entry::authority;
+use std::time::Duration;
 
 #[cfg(any(
     feature = "probe_protocol_moves_camera",
@@ -267,6 +270,9 @@ pub struct Core {
     /// default placement is resolved at their first windowed presentation: the first commit
     /// after the client acknowledged a configure without the fullscreen state (P9b).
     windowed_placement_pending: Vec<stage::ElementId>,
+    /// OBJ-17: frame liveness of every element (M16). Written by the commit entry points,
+    /// `frame_tick`, `frame_kick` and `frame_fallback` only.
+    frame_liveness: frames::FrameLiveness,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
     /// protocol state fail its `Send` assertion (built through infynitae-wayland's probe feature).
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -317,6 +323,7 @@ impl Core {
                 premap_fullscreen: Vec::new(),
                 restore_offers: Vec::new(),
                 windowed_placement_pending: Vec::new(),
+                frame_liveness: frames::FrameLiveness::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
             },
@@ -555,24 +562,157 @@ impl Core {
 
     /// A vblank of `output` (the backend's frame tick): the observed elements clocked by it, whose
     /// requested callbacks complete once and whose feedback is presented with `sync_output` =
-    /// `output` (INV-FRAME-1, INV-FRAME-2, M16). Unobserved elements are not completed here
-    /// (kick and fallback are INC-8). Allocating; adapters use [`Core::frame_tick_into`] (a
-    /// source rule forbids this form outside Core).
-    pub fn frame_tick_vec(&self, output: output::OutputId) -> Vec<stage::ElementId> {
+    /// `output` (INV-FRAME-1, INV-FRAME-2, M16). Their callbacks are recorded as completed
+    /// (OBJ-17). Unobserved elements are not completed here: see [`Core::frame_kick`] and
+    /// [`Core::frame_fallback`]. Allocating; adapters use [`Core::frame_tick_into`] (a source
+    /// rule forbids this form outside Core).
+    pub fn frame_tick_vec(&mut self, output: output::OutputId) -> Vec<stage::ElementId> {
         let mut out = Vec::new();
         self.frame_tick_into(output, &mut out);
         out
     }
 
     /// [`Core::frame_tick_vec`] into the caller's reusable buffer: the clocked elements are appended
-    /// to `out` (the caller clears it); allocation only when `out` must grow (INV-ALLOC-1).
-    pub fn frame_tick_into(&self, output: output::OutputId, out: &mut Vec<stage::ElementId>) {
+    /// to `out` (the caller clears it) and recorded as completed (OBJ-17); allocation only when
+    /// `out` must grow (INV-ALLOC-1).
+    pub fn frame_tick_into(&mut self, output: output::OutputId, out: &mut Vec<stage::ElementId>) {
+        let start = out.len();
         // only an observed element has a clock, so the membership rows are the candidates
         out.extend(
             self.membership
                 .observed()
                 .filter(|&e| self.clock_output_of(e) == Some(output)),
         );
+        for &e in &out[start..] {
+            self.frame_liveness.completed(e);
+        }
+    }
+
+    /// The kick (INV-FRAME-3 (a), M16): the adapter asks before it applies each effect. The
+    /// elements returned are unobserved, have a pending callback, and are about to receive a
+    /// non-initial configure, a `popup_done` or an input event (including focus `enter`/`leave`)
+    /// through `effect`; their withheld callbacks must complete before the effect is applied,
+    /// and are recorded as completed. Initial configures and `wl_surface` enter/leave do not
+    /// kick. A `DismissPopupGrab` reaches the element whose popup holds the active grab, which
+    /// the adapter owns and passes as `popup_grab_owner` (`None`: no grab, no `popup_done`, no
+    /// kick); it is ignored for every other effect.
+    pub fn frame_kick(
+        &mut self,
+        effect: &protocol::Effect,
+        popup_grab_owner: Option<stage::ElementId>,
+    ) -> [Option<stage::ElementId>; 2] {
+        use protocol::Effect as E;
+        let mut recipients = [None, None];
+        match *effect {
+            E::ToplevelConfigure(e) | E::ToplevelConfigureSize { element: e, .. } => {
+                recipients[0] = Some(e)
+            }
+            E::DismissPopupGrab(_) => recipients[0] = popup_grab_owner,
+            E::KeyboardFocus(new) => {
+                let old = std::mem::replace(&mut self.frame_liveness.keyboard_recipient, new);
+                recipients = [old, new.filter(|n| Some(*n) != old)];
+            }
+            E::KeyboardForward { .. } => recipients[0] = self.frame_liveness.keyboard_recipient,
+            E::PointerMotion { target, .. } => {
+                let new = target.map(|t| t.surface);
+                let old = std::mem::replace(&mut self.frame_liveness.pointer_surface, new);
+                // a pointer that leaves a surface sends it `leave`
+                let old = old.filter(|o| Some(*o) != new);
+                recipients = [
+                    old.and_then(|s| self.frame_kick_surface(s)),
+                    new.and_then(|s| self.frame_kick_surface(s)),
+                ];
+                if recipients[0] == recipients[1] {
+                    recipients[1] = None;
+                }
+            }
+            E::PointerRelative { target, .. } => {
+                recipients[0] = target.and_then(|t| self.frame_kick_surface(t.surface));
+            }
+            E::PointerButton { .. } | E::PointerAxis { .. } => {
+                recipients[0] = self
+                    .frame_liveness
+                    .pointer_surface
+                    .and_then(|s| self.frame_kick_surface(s));
+            }
+            E::ConstraintActivate { surface, .. } | E::ConstraintDeactivate { surface, .. } => {
+                recipients[0] = self.frame_kick_surface(surface);
+            }
+            E::InitialConfigure(_)
+            | E::OutputAdded(_)
+            | E::OutputChanged(_)
+            | E::OutputRemoved(_)
+            | E::Enter { .. }
+            | E::Leave { .. }
+            | E::PointerFrame
+            | E::PointerZeroOutputBegin
+            | E::PointerZeroOutputEnd
+            | E::KeyboardIntercept { .. }
+            // a scale hint is not in INV-FRAME-3's kick list (ARCHITECTURE scenario 11); an
+            // unobserved element's hint is held, except that P7 still lowers it, and that hint
+            // unblocks no frame (t1_inc6_inc8_combined)
+            | E::PreferredScale { .. } => {}
+        }
+        recipients.map(|r| {
+            r.filter(|&e| {
+                let observed = self.membership.is_observed(e);
+                self.frame_liveness.kick(e, observed)
+            })
+        })
+    }
+
+    /// The pending, unobserved element whose surface tree holds `surface`. Only elements with a
+    /// pending callback are examined: the kick concerns no other element, and an input event on
+    /// an observed or idle surface costs no search.
+    fn frame_kick_surface(&self, surface: snapshot::SurfaceKey) -> Option<stage::ElementId> {
+        self.frame_liveness.pending_where(
+            |e| self.membership.is_observed(e),
+            |e| {
+                self.stage
+                    .tree(e)
+                    .is_some_and(|t| t.surfaces.iter().any(|s| s.key == surface))
+            },
+        )
+    }
+
+    /// The fallback (INV-FRAME-3 (b), M16) at `now` on the presentation clock: the unobserved
+    /// elements whose callbacks have been pending for at least the period P since their last
+    /// completion; the adapter completes them. Completions decided since the last call (vblank,
+    /// kick) are stamped with `now`. The backend calls this once per loop iteration, after
+    /// applying that iteration's effects, and arms its timer from
+    /// [`Core::frame_fallback_deadline`].
+    pub fn frame_fallback(&mut self, now: Duration) -> Vec<stage::ElementId> {
+        let mut due = Vec::new();
+        let membership = &self.membership;
+        self.frame_liveness
+            .evaluate(now, |e| membership.is_observed(e), &mut due);
+        due
+    }
+
+    /// When the fallback timer must next fire, on the clock of [`Core::frame_fallback`]; `None`
+    /// when no unobserved element has a pending callback, and then no timer is armed
+    /// (INV-IDLE-1).
+    pub fn frame_fallback_deadline(&self) -> Option<Duration> {
+        self.frame_liveness
+            .deadline(|e| self.membership.is_observed(e))
+    }
+
+    /// Sets the off-screen fallback period P (PROV-4; finite and > 0).
+    pub fn set_frame_fallback_period(
+        &mut self,
+        period: Duration,
+    ) -> Result<(), frames::InvalidFallbackPeriod> {
+        self.frame_liveness.set_period(period)
+    }
+
+    /// The off-screen fallback period P.
+    pub fn frame_fallback_period(&self) -> Duration {
+        self.frame_liveness.period()
+    }
+
+    /// Whether `element` has a callback that has not completed (OBJ-17).
+    pub fn frame_pending(&self, element: stage::ElementId) -> bool {
+        self.frame_liveness.requested(element)
     }
 
     pub(crate) fn views(&self) -> Vec<(output::OutputId, projection::View)> {
@@ -1254,6 +1394,7 @@ mod tests {
             size: LocalSize { w, h },
             mapped: true,
             input: InputRegion::Infinite,
+            frame_requested: false,
         };
         let mut surfaces = Vec::new();
         if let Some(k) = sub {
@@ -1379,6 +1520,7 @@ mod tests {
                 size: LocalSize { w: 20, h: 20 },
                 mapped,
                 input: InputRegion::Infinite,
+                frame_requested: false,
             })
             .collect();
         surfaces.push(SnapshotSurface {
@@ -1387,6 +1529,7 @@ mod tests {
             size: LocalSize { w: 200, h: 100 },
             mapped: true,
             input: InputRegion::Infinite,
+            frame_requested: false,
         });
         SurfaceTree {
             geometry: LocalRect {

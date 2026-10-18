@@ -4,6 +4,29 @@ CURRENT_PHASE: **PHASE F — INC-6 RATIFIED AND INTEGRATED INTO LOCAL `main` (`c
 
 Date: 2026-10-18
 
+## REHEARSAL ONLY — INC-8 (ratified T1 scope, `c003657`) MERGED ONTO LOCAL `main` `619187f` (2026-10-18; branch `rehearsal/inc8-clipboard-shutdown-on-619187f`; NOT `main`, not pushed)
+- **Authority:** owner session brief of 2026-10-18, Phase 5 (rehearse integrations in isolated worktrees). This section exists only on the rehearsal branch; `main`'s CHECKPOINT is unchanged.
+- **Resolution:** INC-8's frame-liveness hooks re-expressed on `main`'s caller-owned-buffer API (C14.3, OB-42): `Core::frame_tick_into` records completions (now `&mut self`), the commit hook sits in `toplevel_committed_acked_into` (success only); kick, fallback and their timer unchanged; the session sleeps until the earliest of the frame, the run limit, Core's settlement deadline and the fallback. Results: the session report.
+- **Declaration:** INC-8's ratification (T1 scope, 2026-10-16) is recorded below as it stands on its governance branch; integrating it into `main` needs owner authorization. OB-16 stays OPEN.
+
+## PHASE F — INC-8 RATIFIED, T1 SCOPE (2026-10-16; governance branch `governance/inc-8-ratification-2026-10-16`; not merged, not pushed)
+- **Authority:** owner decision 2026-10-16 (brief "Ratification, Clipboard, Orderly Shutdown and First Nested Runtime", Phase 2): "Ratify only within the defined T1 scope and record its remaining limitations. Keep OB-16 open until the required real-application evidence is collected."
+- **Ratified commit:** `375b44f` (`experimental/inc-8-offscreen-frames`): implementation `60c05a1` … `a45b0f0`, review fix `bdeb219` (a popup-grab dismissal kicks the grab's owner or no one), review test `b110398`, ratification review `375b44f`.
+- **Scope (T1, headless):** M16 — withholding for unobserved elements, the kick before input, non-initial configures, keyboard and pointer `leave` and `popup_done`, the fallback timer armed only with `frame_requested` (PROV-4 P = 1 s, provisional), re-entry at the first vblank; OBJ-17 FrameLiveness; INV-FRAME-1…5 and INV-IDLE-1 as exercised. INV-FRAME-6: no suspension reason is producible (vacuous, as planned).
+- **Independent verification before recording (2026-10-16):** exit tests TST-03 SC3 and TST-06 x9 (`t1_frames`, `t1_outputs`), TST-11 T1 real-time harness (`t1_frames_realtime`), hidden-by-presentation re-entry (`t1_inc7_adversarial`), Core frames unit tests: all PASS on `375b44f`; negative controls "pure starve" and "no kick before input": DETECTED; gates at `375b44f`: 374 tests, 251 seeded defects detected, all PASS. Combined behaviour with INC-6 checked on the integration line (`a_hidden_windows_lowered_hint_releases_no_withheld_callback`).
+- **Obligation dispositions:** OB-16 **T1 part met** (first client response within one frame of the input: 86 µs median, 131 µs max over 50 runs, headless real time); OB-16 stays **OPEN** (T3: real applications). OB-5 OPEN (T5).
+- **Limitations recorded (not part of the ratified scope):** no T3 or hardware evidence; no T4 idle or CPU measurement (OB-44); residuals F-1 (Smithay's own outside-click `popup_done` bypasses the kick), F-2 (completion stamped at the next evaluation), F-3 (`frame_kick` cost not measured), F-4 (PROV-4 provisional). Record: evidence/phase-f/INC-8/RATIFICATION_REVIEW_2026-10-16.md.
+- **Integration:** not done. INC-8 is independent of INC-6 by plan; whichever lands first, the other rebases (resolutions in `rehearsal/inc-8-on-inc-6-candidate-2026-10-16` and the integration line). `main` changes only on the owner's approval.
+
+
+## PHASE F — INC-8 OFF-SCREEN FRAME POLICY — EXPERIMENTAL, superseded by the ratification entry above (record: evidence/phase-f/INC-8/)
+- **Branch:** `experimental/inc-8-offscreen-frames` from canonical main `23752f1`; not merged, not pushed. Implemented 2026-10-16 under the owner's continuation brief (autonomous local work on branches). INC-8 depends on INC-2 only; no INC-6 material is on this branch.
+- **Scope:** M16 — withhold, kick (non-initial configure, `popup_done`, input incl. focus enter/leave; OB-16 CR-7), fallback once per P (PROV-4 candidate 1 s) on a timer armed only while an unobserved element has a pending callback (INV-IDLE-1), re-entry at the first vblank (INV-FRAME-4); OBJ-17 in Core; OBJ-05 `frame_requested`. M17 suspension: no reason producible, nothing implemented.
+- **Residual R-10 (INC-7):** the placeholder test is replaced by its INC-8 acceptance test (a window hidden by a presentation gets the fallback).
+- **Tests:** 7 Core, 13 T1 (`t1_frames`), 1 real-time T1 harness (`t1_frames_realtime`, TST-11 T1 part: a FIFO-blocked off-screen client answers a key in 86 µs median, max 131 µs over 50 runs; kick disabled ≈ 700 ms), 1 replaced T1, 1 session; 15 seeded controls.
+- **Not met / not claimed:** OB-16 stays OPEN (T3 part; review); OB-5 (T5); any nested, GPU or real-application result; independent review.
+- **Declaration:** INC-8 is EXPERIMENTAL and NOT ratified; INC-8 exit is NOT authorized. INC-6 is unchanged (NOT ratified, exit NOT authorized). OB-13, OB-16, OB-22, OB-42, OB-44 and OB-52 are OPEN.
+
 ## PHASE F — INC-10 EXIT-REVIEW M1 FIXED; C12.F17 PACKAGE PREPARED (2026-10-18; local `main`, base `c4a7263`; not pushed)
 - **Authority:** owner brief "INC-10 M1 Resolution and C12.F17 Change Control" (2026-10-18), after the independent read-only exit review of `c4a7263` (READY AFTER SPECIFIED GOVERNANCE CLARIFICATIONS; M1 medium; L1, L2, L4, L5, L6). Record: evidence/phase-f/INC-10/M1_RESOLUTION_RECORD_2026-10-18.md.
 - **M1 fixed:** after a fit or restore the true-position event is suppressed only by a lock the reconciliation keeps (INV-INPUT-5; no motion to a locked surface); a kept confinement gets exactly one event, as F-FIT-1 requires. T1 `t1_fit_constraints` (none / confined / locked / confinement ended / pan-owned) with two seeded controls.

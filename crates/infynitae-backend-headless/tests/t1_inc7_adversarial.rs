@@ -1071,36 +1071,61 @@ fn a_pre_map_grant_that_never_draws_ends_nothing() {
     assert_layers(&t.frame(), &[W_FULL], "W still presented");
 }
 
-/// INC-8 is not implemented (M16 withhold, kick, fallback): an element that no output observes
-/// gets no frame callback. A presentation makes every other element on its output unobserved,
-/// so a client under a fullscreen window that draws from frame callbacks stops until the
-/// presentation ends. This test records the dependency; INC-8 owns the remedy, and this test is
-/// to be replaced by INC-8's acceptance test for a presentation-hidden element.
+/// INC-8 (M16, residual R-10, audit finding A-7): a presentation makes every other element on
+/// its output unobserved. A client under a fullscreen window that draws from frame callbacks is
+/// withheld, not starved: its callback completes once per fallback period P from when it became
+/// pending, and at the first vblank once the presentation ends. (Replaces the INC-7 test that
+/// recorded the dependency, `until_inc_8_a_window_hidden_by_a_presentation_gets_no_frame_callback`.)
 #[test]
-fn until_inc_8_a_window_hidden_by_a_presentation_gets_no_frame_callback() {
-    let (mut t, w, _, _) = T::scene();
+fn a_window_hidden_by_a_presentation_gets_the_fallback_and_re_entry() {
+    let (mut t, w, _, other) = T::scene();
     let o = t.ls.probe.by_label("O").wl.clone();
     let o = t.ls.probe.surfaces.iter().position(|s| s.wl == o).unwrap();
-    let frames = |t: &T| t.ls.probe.frames.iter().filter(|(_, l)| *l == "O").count();
+    let frames = |t: &T| -> Vec<Duration> {
+        t.ls.probe
+            .frames
+            .iter()
+            .filter(|(_, l)| *l == "O")
+            .map(|(at, _)| *at)
+            .collect()
+    };
     let qh = t.ls.qh.clone();
     // observed: the callback completes at the next vblank
     t.ls.probe.frame_and_draw(&qh, o);
     t.adv();
     t.adv();
-    assert_eq!(frames(&t), 1, "an observed element is clocked");
+    assert_eq!(frames(&t).len(), 1, "an observed element is clocked");
     t.ask(w, |tl| tl.set_fullscreen(None));
+    assert!(
+        !t.ls.state.core().membership().is_observed(other),
+        "hidden by the presentation"
+    );
     t.ls.probe.frame_and_draw(&qh, o);
+    t.ls.pump();
+    // the period runs from O's last completion, the vblank before the presentation
+    let last = frames(&t)[0];
+    let period = t.ls.state.core().frame_fallback_period();
     for _ in 0..30 {
         t.adv();
     }
-    assert_eq!(frames(&t), 1, "INC-8 landed? replace this test");
+    assert_eq!(
+        frames(&t).len(),
+        1,
+        "withheld, not completed by vblanks (INV-FRAME-3)"
+    );
+    t.ls.run_until(last + period - Duration::from_millis(1));
+    assert_eq!(frames(&t).len(), 1, "not before P");
+    t.ls.run_until(last + period);
+    assert_eq!(frames(&t)[1..], [last + period], "the fallback, once per P");
+    t.ls.probe.frame_and_draw(&qh, o);
+    t.adv();
     t.ask(w, |tl| tl.unset_fullscreen());
     t.adv();
     t.adv();
     assert_eq!(
-        frames(&t),
-        2,
-        "the callback completes once O is observed again"
+        frames(&t).len(),
+        3,
+        "the callback completes once O is observed again (INV-FRAME-4)"
     );
 }
 

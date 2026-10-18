@@ -116,6 +116,7 @@ fn tree(key: u64, mapped: bool) -> SurfaceTree {
             size: LocalSize { w: 50, h: 50 },
             mapped,
             input: InputRegion::Infinite,
+            frame_requested: false,
         });
     }
     surfaces.push(SnapshotSurface {
@@ -147,6 +148,7 @@ fn tree(key: u64, mapped: bool) -> SurfaceTree {
         } else {
             InputRegion::Infinite
         },
+        frame_requested: false,
     });
     SurfaceTree {
         geometry: LocalRect {

@@ -33,6 +33,7 @@ struct Raw {
     size: LocalSize,
     mapped: bool,
     input: InputRegion,
+    frame_requested: bool,
 }
 
 fn tree(root: &WlSurface, popup: Option<(LocalPoint, LocalPoint)>, out: &mut Vec<Raw>) {
@@ -48,13 +49,11 @@ fn tree(root: &WlSurface, popup: Option<(LocalPoint, LocalPoint)>, out: &mut Vec
                     (d.view(), d.buffer().is_some())
                 })
                 .unwrap_or((None, false));
-            let input = match states
-                .cached_state
-                .get::<SurfaceAttributes>()
-                .current()
-                .input_region
-                .as_ref()
-            {
+            let mut attributes = states.cached_state.get::<SurfaceAttributes>();
+            let attributes = attributes.current();
+            // committed callbacks accumulate in current state until completed
+            let frame_requested = !attributes.frame_callbacks.is_empty();
+            let input = match attributes.input_region.as_ref() {
                 None => InputRegion::Infinite,
                 Some(r) => InputRegion::Ops(
                     r.rects
@@ -77,6 +76,7 @@ fn tree(root: &WlSurface, popup: Option<(LocalPoint, LocalPoint)>, out: &mut Vec
                 size: view.map(|v| convert::local_size(v.dst)).unwrap_or_default(),
                 mapped,
                 input,
+                frame_requested,
             });
         },
         |_, _, _| true,
@@ -143,6 +143,7 @@ pub(crate) fn extract(window: &Window, registry: &mut SurfaceRegistry) -> Option
             size: r.size,
             mapped: r.mapped,
             input: r.input.clone(),
+            frame_requested: r.frame_requested,
         });
     }
     Some(SurfaceTree {
