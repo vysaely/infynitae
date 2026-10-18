@@ -17,7 +17,6 @@ use infynitae_core::render::FrameEntry;
 use infynitae_core::stage::ElementId;
 use infynitae_core::{EntryError, FrameError, InputPort, OutputLifecycleToken, PhysicalEvent};
 use infynitae_wayland::{WaylandState, convert};
-use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::test::DummyRenderer;
 
 /// A virtual output: hardware facts only.
@@ -268,19 +267,18 @@ pub enum RenderError {
 }
 
 /// Core's render list for an output (recorded as its ProjectionFrame) turned into Smithay render
-/// elements with the test renderer, front to back.
+/// elements with the test renderer, front to back, each at its canonical rect (INV-RENDER-1).
 pub fn render_frame(
     state: &mut WaylandState,
     renderer: &mut DummyRenderer,
     output: OutputId,
-) -> Result<Vec<(FrameEntry, WaylandSurfaceRenderElement<DummyRenderer>)>, RenderError> {
-    let entries = state
+) -> Result<Vec<(FrameEntry, convert::SurfaceElement<DummyRenderer>)>, RenderError> {
+    let frame = state
         .core_mut()
         .render_list(output)
-        .map_err(RenderError::Frame)?
-        .entries
-        .clone();
-    convert::render_elements(renderer, state.registry(), &entries).map_err(RenderError::Renderer)
+        .map_err(RenderError::Frame)?;
+    let (k, entries) = (frame.view.k, frame.entries.clone());
+    convert::render_elements(renderer, state.registry(), &entries, k).map_err(RenderError::Renderer)
 }
 
 /// Options for configuring headless compositor execution.

@@ -27,6 +27,8 @@ pub(crate) struct OutputHandle {
     pub(crate) output: Output,
     global: GlobalId,
     pub(crate) tracker: OutputDamageTracker,
+    /// The `k_O` the tracker was built with: a frame at another k rebuilds it (C12.F15.4).
+    pub(crate) tracker_k: f64,
 }
 
 impl WaylandState {
@@ -284,6 +286,7 @@ impl WaylandState {
             output,
             global,
             tracker: convert::damage_tracker(&model, &view),
+            tracker_k: view.k,
         });
     }
 
@@ -304,6 +307,7 @@ impl WaylandState {
         h.output.set_preferred(mode);
         // F-RENDER-1: the tracker is rebuilt when the descriptor or k changes
         h.tracker = convert::damage_tracker(&model, &view);
+        h.tracker_k = view.k;
     }
 
     fn output_removed(&mut self, id: OutputId) {

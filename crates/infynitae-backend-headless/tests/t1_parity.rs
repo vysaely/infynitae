@@ -220,9 +220,14 @@ fn tst09_xsnap_x15_and_surface_under_control() {
     );
 }
 
-/// TST-04 (x6): Smithay's render edges for the production `from_surface` location equal core's
-/// edge(x) for a root and an odd-offset subsurface, over every scale n/120 (120..=360) and three
-/// Canvas magnitudes up to 2³⁶. Negative control: an i32 root location (W-SM-5 style) mismatches.
+/// TST-04 (x6), redesigned for option B (C12.F15.8): the presented rect — the wrapper's geometry,
+/// what `OutputDamageTracker::render_output` draws at — equals core's edge(x) for a root and an
+/// odd-offset subsurface, over every scale n/120 (120..=360) and three Canvas magnitudes up to
+/// 2³⁶; and the Smithay element inside the wrapper, built at the production F-RENDER-1 location, has that
+/// geometry itself, so at k ∈ n/120 nothing is remapped. Negative control (unchanged premise, now
+/// on the element inside the wrapper): an i32 root location (W-SM-5 style) makes Smithay's own geometry
+/// mismatch. The k ∉ n/120 counterpart, where the unwrapped element mismatches and the wrapper
+/// is what removes it, is `t1_canonical_rect::the_wrapper_removes_the_unwrapped_mismatch`.
 #[test]
 fn tst04_x6_render_edges_equal_lattice_edges() {
     let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
@@ -252,11 +257,15 @@ fn tst04_x6_render_edges_equal_lattice_edges() {
                 ));
                 let entries = entries_for(&view, id, anchor, &tree);
                 let elements =
-                    convert::render_elements(&mut renderer, ls.state.registry(), &entries).unwrap();
+                    convert::render_elements(&mut renderer, ls.state.registry(), &entries, k)
+                        .unwrap();
                 assert_eq!(elements.len(), entries.len());
                 for (e, el) in &elements {
                     checked += 1;
-                    if edges(e) != presented(el, k) {
+                    if edges(e) != presented(el, k)
+                        || edges(e) != presented(el.inner(), k)
+                        || el.is_remapped()
+                    {
                         bad += 1;
                     }
                 }
@@ -276,10 +285,10 @@ fn tst04_x6_render_edges_equal_lattice_edges() {
                         })
                         .collect();
                     for (e, el) in
-                        convert::render_elements(&mut renderer, ls.state.registry(), &shifted)
+                        convert::render_elements(&mut renderer, ls.state.registry(), &shifted, k)
                             .unwrap()
                     {
-                        if edges(&e) != presented(&el, k) {
+                        if edges(&e) != presented(el.inner(), k) {
                             bad_i32 += 1;
                         }
                     }
@@ -319,7 +328,8 @@ fn hit_parity(
     let id = element(ls);
     let tree = ls.state.core().stage().tree(id).unwrap();
     let entries = entries_for(&view, id, anchor, tree);
-    let elements = convert::render_elements(renderer, ls.state.registry(), &entries).unwrap();
+    let elements =
+        convert::render_elements(renderer, ls.state.registry(), &entries, view.k).unwrap();
     assert_eq!(elements.len(), entries.len());
     let frame = ProjectionFrame { view, entries };
     let (mut x0, mut y0, mut x1, mut y1) = (i64::MAX, i64::MAX, i64::MIN, i64::MIN);
