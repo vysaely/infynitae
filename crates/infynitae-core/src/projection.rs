@@ -52,8 +52,26 @@ pub struct View {
     pub only: Option<crate::stage::ElementId>,
 }
 
+/// The kept-reference bound of F-LATTICE-1 (C12.F14): a reference is kept only while
+/// `|v_O − R_O|·k_O ≤ 2³¹` on its axis.
+pub const KEPT_REFERENCE_BOUND: f64 = (1u64 << 31) as f64;
+
 impl View {
+    /// The view with its lattice reference set from its own origin, `R = floor(v / 120)·120`
+    /// (F-LATTICE-1: O's view (re)defined).
     pub fn new(p: ViewParams) -> Result<View, ProjectionError> {
+        View::with_kept_reference(p, None)
+    }
+
+    /// The view with the output's kept lattice reference `kept` (F-LATTICE-1 as amended by
+    /// C12.F14): on each axis it is kept while `|v − R|·k ≤ 2³¹`, else set from the view origin
+    /// again. `None` sets it from the origin on both axes. The caller decides whether the view
+    /// was (re)defined (a connect, a (re-)binding, a change of `k_O` or `view_O`); this decides
+    /// only the bound. The axes are independent: the arithmetic is per axis.
+    pub fn with_kept_reference(
+        p: ViewParams,
+        kept: Option<(i64, i64)>,
+    ) -> Result<View, ProjectionError> {
         // Only the representable domain is accepted (F-VIEW-1, C12.F14): Core's entry
         // points never produce anything else, so this refuses only a caller that bypassed them.
         let scale_ok = p.scale.is_finite()
@@ -78,9 +96,15 @@ impl View {
             x: v_axis(p.centre.x, p.view_size.0),
             y: v_axis(p.centre.y, p.view_size.1),
         };
-        // F-LATTICE-1: R = floor(v / 120)·120
-        let reference = |v_q: i64| v_q.div_euclid(LATTICE * Q16_ONE) * LATTICE;
-        let (rx, ry) = (reference(v.x), reference(v.y));
+        // F-LATTICE-1: R = floor(v / 120)·120, unless a kept reference is within the bound
+        let reference = |v_q: i64, kept: Option<i64>| match kept {
+            Some(r) if keeps(v_q, r, k) => r,
+            _ => v_q.div_euclid(LATTICE * Q16_ONE) * LATTICE,
+        };
+        let (rx, ry) = (
+            reference(v.x, kept.map(|r| r.0)),
+            reference(v.y, kept.map(|r| r.1)),
+        );
         let (cx, ex) = camera_on_grid(v.x, rx, k);
         let (cy, ey) = camera_on_grid(v.y, ry, k);
         Ok(View {
@@ -182,17 +206,28 @@ impl View {
     }
 }
 
+/// Whether a reference `r` may be kept for view origin `v_q` (Q16) at `k`: `|v − R|·k ≤ 2³¹`.
+fn keeps(v_q: i64, r: i64, k: f64) -> bool {
+    (grid_value(v_q, r, k) - DELTA).abs() <= KEPT_REFERENCE_BOUND
+}
+
+/// The f64 value `fl(fl(rel · k) + δ)` whose rounding is C (F-LATTICE-1), `rel = (v − R)` in px.
+fn grid_value(v_q: i64, r: i64, k: f64) -> f64 {
+    // The Q16 difference converts to f64 exactly while |v − R| ≤ 2³⁷ px (2⁵³ Q16 units). A
+    // reference set from this view gives |v − R| < 120 px. A kept reference can reach
+    // |v − R| < 2³⁷ + 120 px: v and the origin R was set from share k and view_O, so they differ
+    // by at most the centre's span 2³⁷, plus R's < 120. Past 2³⁷ px the conversion rounds by at
+    // most one Q16 unit, and only where the kept-reference bound forces k < 2⁻⁶, which moves the
+    // value by at most 2⁻²²; with the product's and the sum's half-ulps the value is within
+    // 3·2⁻²² < δ of the exact one (C12.F15.7; `grid_value_precision_at_the_conversion_limit`).
+    let rel = (v_q - r * Q16_ONE) as f64 / Q16_ONE as f64;
+    rel * k + DELTA
+}
+
 /// F-LATTICE-1: the camera on the physical grid, `C = round((v − R)·k + δ)`, and the snapped
 /// camera `c_eff = R + Q16(C / k)` (R5), for a view origin `v` (Q16) and a lattice reference `R`.
 fn camera_on_grid(v_q: i64, r: i64, k: f64) -> (i64, i64) {
-    // The Q16 difference converts to f64 exactly while |v − R| ≤ 2³⁷ px (2⁵³ Q16 units). A
-    // reference set from this view (F-LATTICE-1 on the base) gives |v − R| < 120 px. A kept
-    // reference (C12.F14, INC-10) can reach |v − R| ≈ 2³⁷ + 120 px: v and the origin R was set
-    // from share k and view_O, so they differ by at most the centre's span 2³⁷, plus R's < 120.
-    // Past 2³⁷ px the conversion may round by one Q16 unit (2⁻¹⁶ px) before the product;
-    // INC-10 must account for that or keep |v − R| within 2³⁷ px.
-    let rel = (v_q - r * Q16_ONE) as f64 / Q16_ONE as f64;
-    let c = (rel * k + DELTA).round() as i64;
+    let c = grid_value(v_q, r, k).round() as i64;
     (c, r * Q16_ONE + q16(c as f64 / k))
 }
 
@@ -1515,5 +1550,44 @@ pub(crate) mod tests {
             );
             assert_eq!(edge(d, 0, 0, k), want + 1, "f64 edge, d {d}");
         }
+    }
+
+    /// C12.F15.7, the Q16 precision budget of C_O at the conversion limit, on the production
+    /// `grid_value` / `camera_on_grid`: at k = 2⁻²² (zoom 2⁻²⁰, scale 0.25) and a kept reference
+    /// with `|v − R|` just above 2³⁷ px on both sides of R, the Q16 difference is odd and above
+    /// 2⁵³, so its conversion to f64 rounds; the value whose rounding gives C is still within
+    /// 3·2⁻²² of the exact `(v − R)·k + δ`. An exact tie `(v − R)·k = j + ½` rounds up on both
+    /// sides of R (δ). Assumptions: binary64, round-to-nearest-even, no FMA.
+    #[test]
+    fn grid_value_precision_at_the_conversion_limit() {
+        let k = (-22f64).exp2();
+        assert!(crate::geom::zoom_in_domain(k / 0.25));
+        let q53 = 1i64 << 53;
+        // (v_q, R): |v| < 2³⁷ px, R a multiple of 120 on the other side, |v − R| ≈ 2³⁷ + 120 px
+        for (v_q, r) in [(q53 - 1, -120i64), (-(q53 - 1), 120)] {
+            let d_q = v_q - r * Q16_ONE; // (v − R) in Q16, exact in i64
+            assert!(d_q.unsigned_abs() > 1 << 53 && d_q % 2 != 0);
+            assert_ne!((d_q as f64) as i64, d_q, "the conversion must round here");
+            assert!((grid_value(v_q, r, k) - DELTA).abs() <= KEPT_REFERENCE_BOUND);
+            // exact (v − R)·k + δ in units of 2⁻³⁸: d_q·2⁻¹⁶·2⁻²² + 2⁻²⁰ = (d_q + 2¹⁸)·2⁻³⁸
+            let exact = d_q as i128 + (1i128 << 18);
+            let g = grid_value(v_q, r, k);
+            let scaled = g * (38f64).exp2();
+            assert_eq!(scaled.fract(), 0.0, "g·2³⁸ is an integer (ulp(2¹⁵) = 2⁻³⁷)");
+            let err = (scaled as i128 - exact).abs();
+            assert!(err <= 3 << 16, "v_q {v_q}: error {err}·2⁻³⁸ > 3·2⁻²²");
+            assert!(
+                err > 0,
+                "v_q {v_q}: the conversion rounded, so the value is not exact"
+            );
+        }
+        // exact ties: (v − R) = ±(2¹⁵ − ½)·2²² px, so (v − R)·k = ±(2¹⁵ − ½)
+        let tie = q53 - (1i64 << 37);
+        assert_eq!(camera_on_grid(tie, 0, k).0, 1 << 15, "+(j + ½) rounds up");
+        assert_eq!(
+            camera_on_grid(-tie, 0, k).0,
+            -(1 << 15) + 1,
+            "−(j + ½) rounds up"
+        );
     }
 }

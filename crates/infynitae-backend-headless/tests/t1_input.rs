@@ -298,11 +298,15 @@ fn pan_membership_changes_without_configures() {
     assert_eq!(r.since(m0), vec!["motion 630,520", "frame"]);
 }
 
-/// OB-24 gate: a camera with persistent zoom ≠ 1 is never panned; the binding press follows the
-/// client path.
+/// INC-10 (G-OB24 met, C12.F14.5; replaces the INC-3 gate test `no_pan_at_persistent_zoom`, whose
+/// refusal C12.F14 lifted): a pan at a persistent zoom ≠ 1, at k ∉ n/120, moves the camera by
+/// F-PAN-1 — `C = start − Q16(Σ dp / z)` at scale 1 — and keeps the output's lattice reference,
+/// so no surface's physical width or height changes in any frame (F-LATTICE-1). The per-frame
+/// reference of the base changes them (ED-1; seeded control in tools/verify-test-efficacy).
 #[test]
-fn no_pan_at_persistent_zoom() {
-    let entries = vec![(VirtualOutput::key("A"), pos(0, 0), 1.5)];
+fn zoomed_pan_moves_by_f_pan_1_and_keeps_widths() {
+    let zoom = 0.73; // k ∉ n/120 at scale 1 (120·k = 87.6: each lattice cell shifts the fractions)
+    let entries = vec![(VirtualOutput::key("A"), pos(0, 0), zoom)];
     let ls = Lockstep::with(
         PersistedCameras::from_entries(entries).unwrap(),
         &[a_1080()],
@@ -310,15 +314,45 @@ fn no_pan_at_persistent_zoom() {
     let mut r = Rig::new(ls);
     r.map_w();
     r.motion((3.0, 0.0));
+    let o = r.ls.output();
+    let sizes = |r: &mut Rig| -> Vec<(i64, i64)> {
+        let frame = r.ls.state.core_mut().render_list(o).expect("frame");
+        frame
+            .entries
+            .iter()
+            .map(|e| (e.rect.x1 - e.rect.x0, e.rect.y1 - e.rect.y0))
+            .collect()
+    };
+    let before = sizes(&mut r);
+    assert!(!before.is_empty());
     let m0 = r.mark();
     r.button(BTN_MIDDLE, true, logo());
-    r.motion((50.0, 0.0));
+    assert!(matches!(
+        r.ls.state.core().interaction(),
+        Interaction::CameraPan { .. }
+    ));
+    let mut sum = (0.0f64, 0.0f64);
+    let mut cells = std::collections::BTreeSet::new();
+    for i in 0..240 {
+        let d = (3.1 + (i % 7) as f64 * 0.37, -1.3 + (i % 5) as f64 * 0.29);
+        sum = (sum.0 + d.0, sum.1 + d.1);
+        r.motion(d);
+        let v = r.ls.state.core().view(o).expect("view").v;
+        cells.insert(((v.x >> 16).div_euclid(120), (v.y >> 16).div_euclid(120)));
+        assert_eq!(sizes(&mut r), before, "a width changed at pan step {i}");
+    }
     r.button(BTN_MIDDLE, false, logo());
-    assert_eq!(r.ls.state.core().interaction(), Interaction::Idle);
-    assert_eq!(r.camera(), pos(0, 0), "camera moved at zoom 1.5");
-    let lines = r.since(m0);
-    assert_eq!(lines[0], "button 274 pressed", "{lines:?}");
-    assert!(lines.contains(&"button 274 released"));
+    assert_nothing_delivered(&r.since(m0)[..r.since(m0).len() - 2], "zoomed pan");
+    // the view origin crossed 120 px lattice cells: a per-frame reference would have moved
+    assert!(cells.len() > 5, "{}", cells.len());
+    // F-PAN-1, independent oracle: the exact Σ / z, within one Q16 unit (the f64 sum's rounding)
+    let want = |s: f64| -(s / zoom * 65536.0);
+    let c = r.camera();
+    assert!(
+        (c.x as f64 - want(sum.0)).abs() <= 1.0 && (c.y as f64 - want(sum.1)).abs() <= 1.0,
+        "camera {c:?} vs Σ/z {:?}",
+        (want(sum.0), want(sum.1))
+    );
 }
 
 /// M10 / EE-3 (OB-50 pointer part): the last output removed under a focused pointer with a

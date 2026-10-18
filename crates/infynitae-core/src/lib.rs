@@ -187,6 +187,17 @@ struct FrameSlot {
     current: bool,
 }
 
+/// O's lattice reference `R_O` (OBJ-12, F-LATTICE-1 as amended by C12.F14) and the `k_O` and
+/// `view_O` it was set at: a change of either (re)defines the view, and the reference is set
+/// from the view origin again. History-dependent per-output state; dropped with the output.
+#[derive(Clone, Copy, Debug)]
+struct LatticeSlot {
+    output: output::OutputId,
+    r: (i64, i64),
+    k: f64,
+    view_size: (u32, u32),
+}
+
 pub struct Core {
     id: u64,
     stage: stage::Stage,
@@ -196,6 +207,9 @@ pub struct Core {
     /// ProjectionFrame per output (OBJ-15): the last list produced for that output, and whether
     /// it is still current. A stale frame keeps its storage for the next list (C14.3).
     frames: Vec<FrameSlot>,
+    /// `R_O` per output (OBJ-12): written only by [`Core::update_lattice`], on F-LATTICE-1's
+    /// transitions; read by every camera view, so render, membership and hit test share it.
+    lattice: Vec<LatticeSlot>,
     /// OBJ-13, rewritten by every visibility pass.
     membership: visibility::MembershipTable,
     /// The storage of the next membership table of a scoped pass; swapped with `membership`
@@ -276,6 +290,7 @@ impl Core {
                 outputs: Vec::new(),
                 output_ids: output::OutputIds::default(),
                 frames: Vec::new(),
+                lattice: Vec::new(),
                 membership: visibility::MembershipTable::default(),
                 membership_next: visibility::MembershipTable::default(),
                 views_buf: Vec::new(),
@@ -1075,17 +1090,52 @@ impl Core {
         self.camera_view(output)
     }
 
-    /// The view of the camera bound to `output`, whether or not a presentation replaces it.
+    /// The view of the camera bound to `output`, whether or not a presentation replaces it,
+    /// with the output's kept lattice reference (F-LATTICE-1): the reference is kept while `k_O`
+    /// and `view_O` are those it was set at and the bound holds, else set from the view origin.
     fn camera_view(&self, output: output::OutputId) -> Option<projection::View> {
         let model = self.outputs.iter().find(|o| o.id == output)?;
         let camera = self.cameras.camera_for_output(output)?;
-        projection::View::new(projection::ViewParams {
+        let params = projection::ViewParams {
             centre: self.cameras.center(camera)?,
             zoom: self.cameras.zoom(camera)?,
             scale: model.scale,
             view_size: model.view_size(),
-        })
-        .ok()
+        };
+        let k = params.zoom * params.scale;
+        let kept = self
+            .lattice
+            .iter()
+            .find(|l| l.output == output && l.k == k && l.view_size == params.view_size)
+            .map(|l| l.r);
+        projection::View::with_kept_reference(params, kept).ok()
+    }
+
+    /// F-LATTICE-1's transitions for `output`: records the reference its camera view now uses,
+    /// with the `k_O` and `view_O` it was set at. Called after every change of what that view is
+    /// computed from — a connect or (re-)binding (no reference yet: set from the origin), a
+    /// reconfiguration, and every camera write (a pan keeps the reference unless the bound is
+    /// exceeded; a zoom change sets it again). Allocation-free once the output has a slot.
+    pub(crate) fn update_lattice(&mut self, output: output::OutputId) {
+        let Some(view) = self.camera_view(output) else {
+            self.lattice.retain(|l| l.output != output);
+            return;
+        };
+        let slot = LatticeSlot {
+            output,
+            r: view.r,
+            k: view.k,
+            view_size: view.size,
+        };
+        match self.lattice.iter_mut().find(|l| l.output == output) {
+            Some(l) => *l = slot,
+            None => self.lattice.push(slot),
+        }
+    }
+
+    /// The output is gone: its reference goes with it (never persisted, OBJ-12).
+    pub(crate) fn remove_lattice(&mut self, output: output::OutputId) {
+        self.lattice.retain(|l| l.output != output);
     }
 
     /// Produces the render list of an output and records it as that output's ProjectionFrame.

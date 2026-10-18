@@ -252,6 +252,8 @@ impl Core {
                     return;
                 };
                 self.cameras.pan(proof, camera, start, sum);
+                // F-LATTICE-1: the reference is kept while panning, unless the bound is exceeded
+                self.update_lattice(output);
                 self.invalidate_frame(output);
                 self.visibility_pass_camera(camera, out);
                 #[cfg(feature = "probe_pan_motion_bypass")]
@@ -331,11 +333,10 @@ impl Core {
             return Vec::new();
         }
         let camera = self.cameras.camera_for_output(output);
+        // G-OB24 is met (C12.F14.5): a pan at any zoom keeps the output's lattice reference
         let acquire = bindings::is_pan_binding(button, mods)
             // INV-INPUT-2: never while the client owns a button
-            && !self.input.ownership.client_owns_any()
-            // OB-24 gate: no pan coexists with a persistent zoom ≠ 1
-            && camera.and_then(|c| self.cameras.zoom(c)) == Some(1.0);
+            && !self.input.ownership.client_owns_any();
         if let (true, Some(camera), Some(start)) =
             (acquire, camera, camera.and_then(|c| self.cameras.center(c)))
         {
@@ -452,6 +453,8 @@ impl Core {
             self.pointer = pointer::startup(&model);
         }
         self.outputs.push(model);
+        // F-LATTICE-1: O connected and a camera bound — the reference is set from the view
+        self.update_lattice(id);
         let mut fx = vec![Effect::OutputAdded(id)];
         fx.extend(self.visibility_pass());
         if was_zero {
@@ -492,6 +495,8 @@ impl Core {
         }
         *slot = OutputModel::from_descriptor(output, &desc, slot.arrangement);
         let model = slot.clone();
+        // F-LATTICE-1: a new k_O or view_O sets the reference again; otherwise it is kept
+        self.update_lattice(output);
         self.invalidate_frame(output);
         self.pointer = pointer::reconfigured(self.pointer, &model);
         let mut fx = vec![Effect::OutputChanged(output)];
@@ -526,6 +531,7 @@ impl Core {
             .ok_or(EntryError::UnknownOutput)?;
         let lost = self.outputs.remove(index);
         self.remove_frame(output);
+        self.remove_lattice(output);
         self.cameras
             .unbind_on_disconnect(authority::Authorized::mint(), output);
         // C4.6: a pan on the removed output keeps its ownership and consumes motion until release
@@ -1167,5 +1173,139 @@ mod tests {
             OutputId::for_test(1),
             "the rejected connect allocated an id"
         );
+    }
+
+    // ---- INC-10: the output's lattice reference R_O (F-LATTICE-1 as amended by C12.F14)
+
+    fn pan(c: &mut Core, port: &mut crate::InputPort, d: (f64, f64)) {
+        use crate::PhysicalEvent;
+        use crate::input::bindings::{BTN_MIDDLE, Modifiers};
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let button = |pressed| PhysicalEvent::PointerButton {
+            button: BTN_MIDDLE,
+            pressed,
+            modifiers: logo,
+            time_us: 1,
+        };
+        c.physical_input_vec(port, button(true)).unwrap();
+        let motion = PhysicalEvent::PointerMotion {
+            delta: d,
+            delta_unaccel: d,
+            time_us: 2,
+        };
+        c.physical_input_vec(port, motion).unwrap();
+        c.physical_input_vec(port, button(false)).unwrap();
+    }
+
+    /// `floor(v / 120)·120` per axis: the reference a (re)defined view takes.
+    fn floor_reference(v: CanvasPos) -> (i64, i64) {
+        (
+            (v.x >> 16).div_euclid(120) * 120,
+            (v.y >> 16).div_euclid(120) * 120,
+        )
+    }
+
+    /// F-LATTICE-1's transitions on the production path: set at connect, kept across a zoomed pan
+    /// that moves the view origin many lattice cells, kept by a reconfiguration that changes
+    /// neither `k_O` nor `view_O`, set again when `k_O` or `view_O` changes, and dropped with the
+    /// output. Render, membership and hit test read `Core::view`, so they share it.
+    #[test]
+    fn the_lattice_reference_follows_f_lattice_1_transitions() {
+        let persisted = PersistedCameras::from_entries(vec![(key("A"), pos(0, 0), 0.73)]).unwrap();
+        let (mut c, mut i, _s, mut t) = Core::new(persisted);
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let v0 = c.view(a).unwrap();
+        assert_eq!(
+            v0.r,
+            floor_reference(v0.v),
+            "connect: set from the view origin"
+        );
+        pan(&mut c, &mut i, (1000.0, -700.0));
+        let v1 = c.view(a).unwrap();
+        assert_ne!(floor_reference(v1.v), v0.r, "the pan crossed lattice cells");
+        assert_eq!(v1.r, v0.r, "kept while panning");
+        // refresh only: k_O and view_O unchanged
+        let refresh = desc_k(key("A"), (1920, 1080), Transform::Normal, 120, 75_000);
+        c.output_reconfigured(&mut t, a, refresh).unwrap();
+        assert_eq!(
+            c.view(a).unwrap().r,
+            v0.r,
+            "kept: neither k_O nor view_O changed"
+        );
+        // a 180° transform keeps view_O
+        let flipped = desc_k(key("A"), (1920, 1080), Transform::R180, 120, 75_000);
+        c.output_reconfigured(&mut t, a, flipped).unwrap();
+        assert_eq!(c.view(a).unwrap().r, v0.r, "kept: view_O unchanged by R180");
+        // k_O changes: set again
+        let scaled = desc_k(key("A"), (1920, 1080), Transform::R180, 150, 75_000);
+        c.output_reconfigured(&mut t, a, scaled).unwrap();
+        let v2 = c.view(a).unwrap();
+        assert_eq!(
+            v2.r,
+            floor_reference(v2.v),
+            "k_O changed: set from the origin"
+        );
+        assert_ne!(v2.r, v0.r);
+        pan(&mut c, &mut i, (-900.0, 400.0));
+        let v3 = c.view(a).unwrap();
+        assert_eq!(v3.r, v2.r);
+        assert_ne!(floor_reference(v3.v), v2.r);
+        // view_O changes (90° exchanges the sides): set again
+        let rotated = desc_k(key("A"), (1920, 1080), Transform::R90, 150, 75_000);
+        c.output_reconfigured(&mut t, a, rotated).unwrap();
+        let v4 = c.view(a).unwrap();
+        assert_eq!(
+            v4.r,
+            floor_reference(v4.v),
+            "view_O changed: set from the origin"
+        );
+        assert!(c.lattice.iter().any(|l| l.output == a));
+        c.output_disconnected(&mut t, a).unwrap();
+        assert!(
+            c.lattice.iter().all(|l| l.output != a),
+            "dropped with the output"
+        );
+        // the remembered camera is re-bound to a new OutputId: a new reference from its view
+        let (b, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let v5 = c.view(b).unwrap();
+        assert_eq!(
+            v5.r,
+            floor_reference(v5.v),
+            "(re-)binding: set from the origin"
+        );
+    }
+
+    /// The kept-reference bound (F-LATTICE-1, C12.F14.4 item 1): at k = 2¹⁹ (zoom 2¹⁶, scale 8)
+    /// a pan within `|v − R|·k ≤ 2³¹` keeps the reference; one beyond it sets it again on that
+    /// axis only (the arithmetic is per axis).
+    #[test]
+    fn a_pan_beyond_the_reference_bound_sets_it_again_on_that_axis() {
+        let zoom = 65536.0;
+        let persisted = PersistedCameras::from_entries(vec![(key("A"), pos(0, 0), zoom)]).unwrap();
+        let (mut c, mut i, _s, mut t) = Core::new(persisted);
+        let big = desc_k(key("A"), (1920, 1080), Transform::Normal, 960, 60_000);
+        let (a, _) = c.output_connected(&mut t, big).unwrap();
+        let v0 = c.view(a).unwrap();
+        assert_eq!(v0.k, (1u64 << 19) as f64);
+        // 2000 Canvas px on x: |v − R|·k ≈ 2000·2¹⁹ < 2³¹ = 4096·2¹⁹; a logical px is 2⁻¹⁶ Canvas px
+        pan(&mut c, &mut i, (-2000.0 * zoom, 0.0));
+        let v1 = c.view(a).unwrap();
+        assert_ne!(floor_reference(v1.v).0, v0.r.0);
+        assert_eq!(v1.r, v0.r, "within the bound: kept");
+        // 3000 more on x (5000 > 4096 from R) and 10 on y: x is set again, y is kept
+        pan(&mut c, &mut i, (-3000.0 * zoom, -10.0 * zoom));
+        let v2 = c.view(a).unwrap();
+        assert_eq!(
+            v2.r.0,
+            floor_reference(v2.v).0,
+            "beyond the bound: set again"
+        );
+        assert_eq!(v2.r.1, v0.r.1, "the other axis keeps its reference");
+        // and the new reference is kept from then on
+        pan(&mut c, &mut i, (-50.0 * zoom, 0.0));
+        assert_eq!(c.view(a).unwrap().r, v2.r);
     }
 }
