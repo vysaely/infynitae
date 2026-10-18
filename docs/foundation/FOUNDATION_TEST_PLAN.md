@@ -715,6 +715,66 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Origin:** OB-28 split (owner decision 2026-10-16, INC-6 adoption package D5); the requirement: CP3A-4; C12.R1.3
 - **History:** Created by the split of OB-28.
 
+### OB-54
+- **Status:** OPEN
+- **Item:** Pointer-constraint lifetime at the adapter seam. `PointerConstraintsHandler::new_constraint` (`infynitae-wayland/src/handlers.rs`) reports every lock and confinement to Core as `ConstraintLifetime::Persistent`, whatever the client requested; Smithay 0.7.0's `PointerConstraint::lifetime()` is private. A oneshot constraint that Smithay ends is then still pending in Core, which re-activates it (INV-INPUT-5: "core and Smithay keep the same constraint state")
+- **Owner:** adapter (pointer constraints) + core `pointer`
+- **Evidence available:** INC-10 exit-review follow-up run, 2026-10-18 (evidence/phase-f/INC-10/M1_RESOLUTION_RECORD_2026-10-18.md §5): a client's oneshot lock is held by Core as `Persistent`; when a fit moves its lock point off the output the client receives `unlocked` and no true-position event in that batch
+- **Pass criterion:** Core's `ConstraintState::lifetime` equals the requested protocol lifetime for locks and confinements; a T1 test ends a oneshot lock and a oneshot confinement by a view change (a fit) and asserts exactly one end event, no re-activation, Core and Smithay both inactive, and exactly one true-position event; a seeded control (lifetime forced to persistent) is DETECTED. The fix uses a public route (tracking the lifetime from the request) or a patch adopted under the patch policy (INV-ARCH-3)
+- **Destination:** T1
+- **May be closed by:** T1 production tests plus architecture change control
+- **Dependencies:** INC-5 (seam), INC-10 (fit as the trigger)
+- **Blocks:** none assigned (pre-existing since INC-5; proposed for change control in the C12.F17 package)
+- **Origin:** INC-10 independent exit review follow-up (2026-10-18)
+
+### OB-55
+- **Status:** OPEN
+- **Item:** `output_reconfigured` sends one absolute true-position motion even while a pointer lock is kept (`infynitae-core/src/entry.rs`, M10 reconfiguration row: the true-position event is emitted before and regardless of the constraint reconciliation). zwp_pointer_constraints_v1 forbids `wl_pointer.motion` while a lock is active, and INV-INPUT-5 forbids absolute motion to a locked surface while reconciliation is deferred; fit and restore already suppress it (INC-10 review M1)
+- **Owner:** core output manager + core `pointer`
+- **Evidence available:** INC-10 exit-review follow-up run, 2026-10-18 (M1_RESOLUTION_RECORD_2026-10-18.md §5): a kept persistent lock, `output_reconfigured` to scale 1.25 → the locked client receives `motion` and `frame`; Core keeps the lock
+- **Pass criterion:** after `output_reconfigured` with a lock kept, no `wl_pointer.motion` reaches the locked surface and the physical pointer follows the derived lock point; a confinement or no constraint still receives at most one true-position event (M10); T1 tests for all three; a seeded control (the motion emitted under a kept lock) is DETECTED
+- **Destination:** T1
+- **May be closed by:** T1 production tests plus architecture change control
+- **Dependencies:** INC-2 (reconfiguration), INC-5 (constraints)
+- **Blocks:** none assigned (pre-existing; proposed for change control in the C12.F17 package)
+- **Origin:** INC-10 independent exit review follow-up (2026-10-18)
+
+### OB-56
+- **Status:** OPEN
+- **Item:** Pointer reconciliation when a camera pan ends under a kept confinement. `button_release` sends the true-position event only when no constraint remains, so a confined client's surface-local pointer position is stale after a pan until the next physical motion. M10 ("interaction ends … ≤ 1 true-position event") permits this; fit and restore send one (INC-10 review M1). Also: a persistent lock that a view change ends because its lock point left the output is re-activated in the same reconciliation, with the point still unobservable (INV-INPUT-5's activation guard does not test observability)
+- **Owner:** architecture (M10, INV-INPUT-5) via change control, then core
+- **Evidence available:** INC-10 exit-review follow-up run, 2026-10-18 (M1_RESOLUTION_RECORD_2026-10-18.md §5): pan release while confined → nothing on the wire, confinement kept; unconstrained → one motion. Persistent lock with its point pushed off the output by a fit → `unlocked` then `locked` in one batch
+- **Pass criterion:** an architecture decision on both questions (exactly one true-position event at pan release under a kept confinement or not; whether activation requires an observable lock point), and T1 tests plus seeded controls for the decided behaviour
+- **Destination:** DECISION
+- **May be closed by:** architecture change control
+- **Dependencies:** OB-54 (lifetime) for the lock case
+- **Blocks:** none assigned
+- **Origin:** INC-10 independent exit review follow-up (2026-10-18)
+
+### OB-57
+- **Status:** OPEN
+- **Item:** INC-10's render evidence on a real GPU: the `CanonicalRect` wrapper, its remapped damage and opaque regions, the crop's `src` sampling for all eight buffer transforms, viewport sources and buffer scale — including cuts at fractional buffer pixels, which Pixman cannot draw (it rounds `src` to integers) — and the f32 texture-matrix precision at extreme magnification, on Smithay's GLES renderer; dmabuf import, direct scanout (refused for remapped surfaces) and display pacing
+- **Owner:** backend renderer (GLES) + adapter
+- **Evidence available:** Pixman pixels and the GLES `build_texture_mat` algebra only (`t1_canonical_rect`; INC-10 records). No GPU run
+- **Pass criterion:** the `t1_canonical_rect` pixel properties reproduced with Smithay's GLES renderer on a real GPU in a nested run (exact pixels at whole-pixel cuts; at fractional cuts, a stated tolerance agreed by change control); no direct-scanout use of a remapped surface; frame pacing measured against vblank
+- **Destination:** T2
+- **May be closed by:** T2 nested run on a real GPU in INC-13 (separately authorized); not by any headless or fixture test
+- **Dependencies:** INC-13, INC-10
+- **Blocks:** any GPU-rendering claim for zoom ≠ 1; INC-10's software-only exit is not blocked
+- **Origin:** INC-10 independent exit review (2026-10-18), §7 limitations
+
+### OB-58
+- **Status:** OPEN
+- **Item:** INC-10 performance evidence quality (review L6) and the adapter's per-frame allocations. Frame-time tails were measured without CPU isolation or vblank pacing and doubled under concurrent load in the review's run; the zero-allocation fit evidence covers repeated identical fits only; `convert::render_output` still allocates per frame outside Core (5 allocations per static frame on the x8 scene after the review-L1 fix, from 9: the render-list entry copy, the element vectors and Smithay's tracker), which INV-ALLOC-1 does not cover
+- **Owner:** adapter + benchmark harness
+- **Evidence available:** `perf_inc10` (release, 600 frames, two runs; evidence/phase-f/INC-10/perf_frame_times_run{1,2}.out); the review's loaded rerun; the L1 measurement (M1_RESOLUTION_RECORD_2026-10-18.md §4)
+- **Pass criterion:** frame times on an isolated CPU (pinned, quiescent; stated method) with repeated runs and dispersion reported, and paced by vblank in a nested GPU run; fit/restore allocation counts over varied targets, zooms and outputs; an architecture decision whether adapter per-frame allocations get a bound, and if so a counting test for it
+- **Destination:** TUNE
+- **May be closed by:** architecture change control with T2 measurements (INC-13)
+- **Dependencies:** INC-13
+- **Blocks:** none assigned (performance claims for zoom ≠ 1 stay software-only and unpaced until then)
+- **Origin:** INC-10 independent exit review (2026-10-18), L1 and L6
+
 <!-- /living -->
 
 ## 3. Test inventory (canonical `TST-*`)
