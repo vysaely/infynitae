@@ -9,6 +9,7 @@ use crate::input::bindings::Modifiers;
 
 pub const KEY_ESC: u32 = 1;
 pub const KEY_ENTER: u32 = 28;
+pub const KEY_F: u32 = 33;
 pub const KEY_A: u32 = 30;
 pub const KEY_LEFTSHIFT: u32 = 42;
 pub const KEY_B: u32 = 48;
@@ -19,6 +20,10 @@ pub const KEY_LEFTMETA: u32 = 125;
 pub enum KeyAction {
     FocusNext,
     Cancel,
+    /// F-FIT-1 on the pointer's output, for the element under the pointer (INC-10).
+    FitViewport,
+    /// Restore (M8, OBJ-30) on the pointer's output (INC-10).
+    ViewportRestore,
     Noop,
 }
 
@@ -39,6 +44,11 @@ pub const CANONICAL_BINDINGS: [KeyBinding; 1] = [KeyBinding {
 
 /// Pure binding filter: resolves an evdev keycode and modifier snapshot against bindings.
 /// Plain Escape only cancels when an interaction is actively in progress (F04, K6).
+///
+/// INC-10 navigation bindings (Level D defaults; the owner has not chosen them — INC-10 brief §11's
+/// recommendation): Logo+F fits, Logo+Shift+F restores. Fit requires Shift absent, so Logo+Shift+F
+/// never also fits. Neither resolves while an interaction owns the camera or the pointer: a pan
+/// computes the camera from its own start, so a fit inside it would be overwritten.
 pub fn resolve_key_binding(
     key: u32,
     mods: Modifiers,
@@ -50,6 +60,13 @@ pub fn resolve_key_binding(
         } else {
             None
         };
+    }
+    if key == KEY_F && mods.logo && !interaction_active {
+        return Some(if mods.shift {
+            KeyAction::ViewportRestore
+        } else {
+            KeyAction::FitViewport
+        });
     }
     for b in &CANONICAL_BINDINGS {
         if b.evdev == key && (!b.needs_logo || mods.logo) {
@@ -90,5 +107,38 @@ mod tests {
         );
         assert_eq!(resolve_key_binding(KEY_LEFTSHIFT, none, false), None);
         assert_eq!(resolve_key_binding(KEY_A, logo, false), None);
+    }
+
+    /// INC-10: Logo+F fits, Logo+Shift+F restores (fit requires Shift absent); plain F and any F
+    /// during an interaction are not compositor bindings.
+    #[test]
+    fn navigation_bindings_resolve_fit_and_restore() {
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let logo_shift = Modifiers {
+            shift: true,
+            ..logo
+        };
+        let shift = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            resolve_key_binding(KEY_F, logo, false),
+            Some(KeyAction::FitViewport)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_F, logo_shift, false),
+            Some(KeyAction::ViewportRestore)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_F, Modifiers::default(), false),
+            None
+        );
+        assert_eq!(resolve_key_binding(KEY_F, shift, false), None);
+        assert_eq!(resolve_key_binding(KEY_F, logo, true), None);
+        assert_eq!(resolve_key_binding(KEY_F, logo_shift, true), None);
     }
 }

@@ -1525,4 +1525,481 @@ mod tests {
             Core::new(crate::navigation::PersistedCameras::default());
         assert_eq!(core.cameras().center(0), None);
     }
+
+    // ---- INC-10: fit and the bounded restore history (F-FIT-1, OBJ-30, M8; C12.F15, C12.F16)
+    //
+    // Every test drives the production entries: key presses through `physical_input` (Logo+F fit,
+    // Logo+Shift+F restore), pans through it, outputs through the lifecycle entries. Camera values
+    // are compared exactly (Q16 centre, zoom bits).
+
+    use crate::navigation::{CameraValue, HISTORY_CAPACITY};
+
+    struct Nav {
+        core: Core,
+        port: InputPort,
+        token: OutputLifecycleToken,
+        t: u64,
+    }
+
+    fn desc_a(connector: &str, scale_120: u32) -> OutputDescriptor {
+        OutputDescriptor {
+            key: crate::output::tests::key(connector),
+            mode: (1920, 1080),
+            transform: Transform::Normal,
+            scale_120,
+            refresh_mhz: 60_000,
+        }
+    }
+
+    impl Nav {
+        /// Output A (1920 × 1080, scale 1), W (200 × 100) mapped and centred and a frame shown, the
+        /// pointer at the view centre (startup rule), over W.
+        fn new() -> (Nav, output::OutputId, stage::ElementId) {
+            let (core, port, _s, token) = Core::new(crate::navigation::PersistedCameras::default());
+            let mut n = Nav {
+                core,
+                port,
+                token,
+                t: 0,
+            };
+            let o = n.connect("A");
+            let w = mapped(&mut n.core, tree(1, None));
+            // the frame shown after the map: hit testing reads what was shown (INV-HIT-1)
+            n.core.render_list(o).unwrap();
+            (n, o, w)
+        }
+
+        fn connect(&mut self, connector: &str) -> output::OutputId {
+            self.core
+                .output_connected(&mut self.token, desc_a(connector, 120))
+                .unwrap()
+                .0
+        }
+
+        fn ev(&mut self, ev: PhysicalEvent) -> Vec<protocol::Effect> {
+            self.core.physical_input_vec(&mut self.port, ev).unwrap()
+        }
+
+        fn key(&mut self, shift: bool) -> Vec<protocol::Effect> {
+            self.t += 1000;
+            let modifiers = input::bindings::Modifiers {
+                logo: true,
+                shift,
+                ..Default::default()
+            };
+            let mut fx = self.ev(PhysicalEvent::KeyboardKey {
+                key: input::keys::KEY_F,
+                pressed: true,
+                modifiers,
+                mods_changed: false,
+                time_us: self.t,
+            });
+            self.t += 1000;
+            fx.extend(self.ev(PhysicalEvent::KeyboardKey {
+                key: input::keys::KEY_F,
+                pressed: false,
+                modifiers,
+                mods_changed: false,
+                time_us: self.t,
+            }));
+            fx
+        }
+
+        fn fit(&mut self) -> Vec<protocol::Effect> {
+            self.key(false)
+        }
+
+        fn restore(&mut self) -> Vec<protocol::Effect> {
+            self.key(true)
+        }
+
+        fn motion(&mut self, d: (f64, f64)) {
+            self.t += 1000;
+            self.ev(PhysicalEvent::PointerMotion {
+                delta: d,
+                delta_unaccel: d,
+                time_us: self.t,
+            });
+        }
+
+        /// A camera pan by `d` logical px (Logo + middle button), which moves the camera only.
+        fn pan(&mut self, d: (f64, f64)) {
+            let logo = input::bindings::Modifiers {
+                logo: true,
+                ..Default::default()
+            };
+            for pressed in [true, false] {
+                self.t += 1000;
+                self.ev(PhysicalEvent::PointerButton {
+                    button: input::bindings::BTN_MIDDLE,
+                    pressed,
+                    modifiers: logo,
+                    time_us: self.t,
+                });
+                if pressed {
+                    self.motion(d);
+                }
+            }
+        }
+
+        fn camera(&self, o: output::OutputId) -> CameraValue {
+            let c = self.core.cameras().camera_for_output(o).unwrap();
+            CameraValue {
+                center: self.core.cameras().center(c).unwrap(),
+                zoom: self.core.cameras().zoom(c).unwrap(),
+            }
+        }
+
+        fn history(&self, o: output::OutputId) -> Vec<CameraValue> {
+            let c = self.core.cameras().camera_for_output(o).unwrap();
+            self.core.cameras().history(c).unwrap().values().collect()
+        }
+    }
+
+    /// Exact camera-value equality: the Q16 centre and the zoom's bits.
+    fn same(a: CameraValue, b: CameraValue) -> bool {
+        a.center == b.center && a.zoom.to_bits() == b.zoom.to_bits()
+    }
+
+    fn motions(fx: &[protocol::Effect]) -> usize {
+        fx.iter()
+            .filter(|e| matches!(e, protocol::Effect::PointerMotion { .. }))
+            .count()
+    }
+
+    /// F-FIT-1 on the production path: W's window geometry (−100, −50, 200, 100) on a 1920 × 1080
+    /// view at scale 1 gives zoom min(9.6, 10.8) = 9.6 and centre (0, 0); one mutation; the prior
+    /// value is the history's only entry; W's anchor and size are unchanged (INV-CAMERA-5); the
+    /// camera is accepted by `View::new`; and exactly one true-position event follows (M10: the
+    /// pointer is on A, no interaction).
+    #[test]
+    fn a_fit_records_the_prior_value_and_restore_returns_it_exactly() {
+        let (mut n, a, w) = Nav::new();
+        n.pan((37.3, -11.9)); // a prior value that is not the default
+        let before = n.camera(a);
+        let (anchor, size) = (
+            n.core.stage().anchor(w),
+            n.core.stage().tree(w).unwrap().geometry,
+        );
+        let fx = n.fit();
+        assert_eq!(n.camera(a).zoom, 9.6);
+        assert_eq!(n.camera(a).center, geom::CanvasPos { x: 0, y: 0 });
+        assert!(n.history(a).len() == 1 && same(n.history(a)[0], before));
+        assert_eq!(motions(&fx), 1, "M10: one true-position event after a fit");
+        assert_eq!(n.core.stage().anchor(w), anchor);
+        assert_eq!(n.core.stage().tree(w).unwrap().geometry, size);
+        assert!(
+            n.core.view(a).is_some(),
+            "View::new accepts the fitted camera"
+        );
+        let fx = n.restore();
+        assert!(same(n.camera(a), before), "restore is exact");
+        assert!(n.history(a).is_empty(), "a restore records nothing");
+        assert_eq!(
+            motions(&fx),
+            1,
+            "M10: one true-position event after a restore"
+        );
+        assert!(n.core.view(a).is_some());
+        // empty: refused, nothing changes
+        let fx = n.restore();
+        assert!(same(n.camera(a), before) && n.history(a).is_empty());
+        assert_eq!(motions(&fx), 0, "a refused restore writes nothing");
+    }
+
+    /// Restore applies the stored zoom verbatim (C12.F16.3 item 7): at scale 1.25 the fit's zoom is
+    /// 9.6 / 1.25 = 7.68, not a multiple of 1/120; after a second fit from it, the restore returns it
+    /// bit for bit (no re-quantisation, no clamp, no recomputation).
+    #[test]
+    fn restore_is_exact_for_a_zoom_off_the_lattice() {
+        let (mut n, a, _) = Nav::new();
+        n.core
+            .output_reconfigured(&mut n.token, a, desc_a("A", 150))
+            .unwrap();
+        n.core.render_list(a).unwrap();
+        // the view centre is now logical (768, 432): move the pointer there, onto W
+        n.motion((768.0 - 960.0, 432.0 - 540.0));
+        n.fit();
+        let first = n.camera(a);
+        assert_eq!(first.zoom, 9.6 / 1.25);
+        assert_ne!((first.zoom * 120.0).fract(), 0.0, "off the 1/120 lattice");
+        n.pan((3.3, 1.7));
+        let prior = n.camera(a);
+        n.fit();
+        n.restore();
+        assert!(same(n.camera(a), prior), "{:?} vs {prior:?}", n.camera(a));
+        n.restore();
+        assert!(same(
+            n.camera(a),
+            CameraValue {
+                center: geom::CanvasPos { x: 0, y: 0 },
+                zoom: 1.0
+            }
+        ));
+    }
+
+    /// An empty history refuses a restore without mutating the camera or the history (C12.F16.3
+    /// item 4); a following fit and restore still work.
+    #[test]
+    fn restore_with_an_empty_history_is_refused() {
+        let (mut n, a, _) = Nav::new();
+        let v0 = n.camera(a);
+        assert!(n.history(a).is_empty());
+        let fx = n.restore();
+        assert!(same(n.camera(a), v0) && n.history(a).is_empty() && motions(&fx) == 0);
+        n.fit();
+        n.restore();
+        assert!(same(n.camera(a), v0));
+    }
+
+    /// Records `count` fits, each from a distinct prior value (a pan before every fit); returns the
+    /// prior values in order.
+    fn fits(n: &mut Nav, a: output::OutputId, count: usize) -> Vec<CameraValue> {
+        let mut priors = Vec::new();
+        for i in 0..count {
+            n.pan(((i % 7) as f64 * 0.37 + 0.11, ((i % 5) as f64 - 2.0) * 0.23));
+            priors.push(n.camera(a));
+            let before = n.history(a).len();
+            n.fit();
+            assert_eq!(
+                n.history(a).len(),
+                (before + 1).min(HISTORY_CAPACITY),
+                "fit {i} was refused"
+            );
+        }
+        priors
+    }
+
+    /// Repeated restores unwind in reverse chronological order (M8, C12.F16.6 item 3).
+    #[test]
+    fn restores_unwind_consecutive_fits_newest_first() {
+        let (mut n, a, _) = Nav::new();
+        let priors = fits(&mut n, a, 5);
+        for i in 1..5 {
+            assert!(!same(priors[i], priors[i - 1]), "distinct prior values");
+        }
+        for want in priors.iter().rev() {
+            n.restore();
+            assert!(same(n.camera(a), *want));
+        }
+        let last = n.camera(a);
+        n.restore();
+        assert!(
+            same(n.camera(a), last) && n.history(a).is_empty(),
+            "a sixth is refused"
+        );
+    }
+
+    /// Exactly 256 retained entries; 256 restores return them newest first; the 257th is refused
+    /// (C12.F16.6 item 4).
+    #[test]
+    fn the_history_holds_exactly_256_entries() {
+        let (mut n, a, _) = Nav::new();
+        let priors = fits(&mut n, a, HISTORY_CAPACITY);
+        let held = n.history(a);
+        assert_eq!(held.len(), 256);
+        assert!(held.iter().zip(&priors).all(|(h, p)| same(*h, *p)));
+        for want in priors.iter().rev() {
+            n.restore();
+            assert!(same(n.camera(a), *want));
+        }
+        let at = n.camera(a);
+        assert_eq!(motions(&n.restore()), 0);
+        assert!(same(n.camera(a), at) && n.history(a).is_empty());
+    }
+
+    /// The 257th successful fit evicts only the oldest entry; restores then return the values before
+    /// fits 257 … 2 and refuse: the value before fit 1 is lost, as C12.F16 decides (item 5).
+    #[test]
+    fn the_257th_fit_evicts_only_the_oldest_entry() {
+        let (mut n, a, _) = Nav::new();
+        let priors = fits(&mut n, a, HISTORY_CAPACITY + 1);
+        let held = n.history(a);
+        assert_eq!(held.len(), 256);
+        assert!(
+            held.iter().zip(&priors[1..]).all(|(h, p)| same(*h, *p)),
+            "the history is the priors of fits 2 … 257, oldest first"
+        );
+        for want in priors[1..].iter().rev() {
+            n.restore();
+            assert!(same(n.camera(a), *want));
+        }
+        assert!(same(n.camera(a), priors[1]));
+        n.restore();
+        assert!(
+            same(n.camera(a), priors[1]) && !same(n.camera(a), priors[0]),
+            "the oldest value is unrecoverable"
+        );
+    }
+
+    /// Refused fits — no output under the pointer, no element under it, a degenerate window
+    /// geometry — change neither the camera nor the history, at 0, 1 and 256 entries; nothing is
+    /// evicted at capacity (C12.F16.6 item 6).
+    #[test]
+    fn refused_fits_change_neither_camera_nor_history() {
+        for prefill in [0usize, 1, HISTORY_CAPACITY] {
+            let (mut n, a, _) = Nav::new();
+            fits(&mut n, a, prefill);
+            let (cam, held) = (n.camera(a), n.history(a));
+            let unchanged = |n: &Nav, what: &str| {
+                assert!(same(n.camera(a), cam), "{prefill}/{what}: camera changed");
+                let now = n.history(a);
+                assert!(
+                    now.len() == held.len() && now.iter().zip(&held).all(|(x, y)| same(*x, *y)),
+                    "{prefill}/{what}: history changed"
+                );
+            };
+            // no element under the pointer: move to the view's top-left corner, off W at any of
+            // these cameras (W is centred and at most 1920 × 960 px)
+            let p = match n.core.pointer() {
+                pointer::PointerState::Located { p, .. } => p,
+                _ => unreachable!(),
+            };
+            n.motion((-p.0, -p.1));
+            assert!(
+                n.core
+                    .hit_test(a, OutputLogicalPoint { x: 0.5, y: 0.5 })
+                    .is_none()
+            );
+            assert_eq!(motions(&n.fit()), 0);
+            unchanged(&n, "no element");
+            n.motion((p.0, p.1));
+            // a degenerate window geometry (the same surfaces, geometry 0 × 100)
+            let w = n.core.stage().z_order()[0];
+            let mut t = n.core.stage().tree(w).unwrap().clone();
+            let keep = t.clone();
+            t.geometry.size.w = 0;
+            n.core.toplevel_committed(w, t).unwrap();
+            n.fit();
+            unchanged(&n, "zero width");
+            n.core.toplevel_committed(w, keep).unwrap();
+        }
+        // no output: the pointer is on none
+        let (mut n, a, _) = Nav::new();
+        fits(&mut n, a, 3);
+        n.core.output_disconnected(&mut n.token, a).unwrap();
+        assert_eq!(n.core.pointer(), pointer::PointerState::NoOutput);
+        let cams = n.core.cameras();
+        let values: Vec<_> = (0..cams.len())
+            .map(|c| (cams.center(c), cams.zoom(c).map(f64::to_bits)))
+            .collect();
+        let fx = n.fit();
+        assert_eq!(motions(&fx), 0);
+        let cams = n.core.cameras();
+        for (c, v) in values.iter().enumerate() {
+            assert_eq!(
+                (cams.center(c), cams.zoom(c).map(f64::to_bits)),
+                *v,
+                "no output: refused"
+            );
+            assert!(cams.history(c).unwrap().is_empty());
+        }
+    }
+
+    /// Two outputs, each its own camera and history: interleaved fits restore only their own
+    /// output's values; exhausting one leaves the other intact (C12.F16.6 item 8).
+    #[test]
+    fn two_outputs_keep_separate_histories() {
+        let (mut n, a, _) = Nav::new();
+        let b = n.connect("B");
+        // B's camera starts at the default, so W is under the pointer at B's centre too
+        let to_b = |n: &mut Nav, on_b: bool| {
+            let p = match n.core.pointer() {
+                pointer::PointerState::Located { p, output } => (p, output),
+                _ => unreachable!(),
+            };
+            let target = if on_b { 1920.0 + 960.0 } else { 960.0 };
+            let now = if p.1 == a { p.0.0 } else { 1920.0 + p.0.0 };
+            n.motion((target - now, 540.0 - p.0.1));
+        };
+        let mut pa = Vec::new();
+        let mut pb = Vec::new();
+        for i in 0..4 {
+            to_b(&mut n, false);
+            n.pan((1.0 + i as f64, 0.5));
+            pa.push(n.camera(a));
+            n.fit();
+            to_b(&mut n, true);
+            n.pan((-2.0 - i as f64, 0.25));
+            pb.push(n.camera(b));
+            n.fit();
+        }
+        assert_eq!((n.history(a).len(), n.history(b).len()), (4, 4));
+        for want in pb.iter().rev() {
+            n.restore();
+            assert!(same(n.camera(b), *want));
+        }
+        n.restore(); // refused on B
+        assert!(same(n.camera(b), pb[0]));
+        assert!(
+            n.history(a).iter().zip(&pa).all(|(h, p)| same(*h, *p)) && n.history(a).len() == 4,
+            "A's history untouched by B's restores"
+        );
+        to_b(&mut n, false);
+        for want in pa.iter().rev() {
+            n.restore();
+            assert!(same(n.camera(a), *want));
+        }
+    }
+
+    /// Output lifecycle (C12.F16.3 items 5–6, C12.F16.6 item 9): a reconfiguration keeps the
+    /// history and a restore after it is exact; a disconnect empties it with the unbinding (the
+    /// camera's value kept); the reconnected output — a new `OutputId`, the same remembered camera —
+    /// starts empty, so no entry of the earlier connection is ever applied.
+    #[test]
+    fn disconnect_empties_the_history_and_reconfiguration_keeps_it() {
+        let (mut n, a, _) = Nav::new();
+        let priors = fits(&mut n, a, 3);
+        n.core
+            .output_reconfigured(&mut n.token, a, desc_a("A", 150))
+            .unwrap();
+        assert_eq!(n.history(a).len(), 3, "reconfiguration keeps the history");
+        n.restore();
+        assert!(
+            same(n.camera(a), priors[2]),
+            "restore after a reconfiguration is exact"
+        );
+        assert!(n.core.view(a).is_some());
+        let camera = n.core.cameras().camera_for_output(a).unwrap();
+        let kept = n.camera(a);
+        n.core.output_disconnected(&mut n.token, a).unwrap();
+        let h = n.core.cameras().history(camera).unwrap();
+        assert!(
+            h.is_empty() && h.reserved() == 0,
+            "emptied, storage released"
+        );
+        let a2 = n.connect("A");
+        assert_ne!(a2, a);
+        assert_eq!(
+            n.core.cameras().camera_for_output(a2),
+            Some(camera),
+            "re-bound"
+        );
+        assert!(same(n.camera(a2), kept), "the camera keeps its value");
+        assert!(n.history(a2).is_empty());
+        let fx = n.restore();
+        assert!(
+            same(n.camera(a2), kept) && motions(&fx) == 0,
+            "refused: nothing to apply"
+        );
+    }
+
+    /// Bounded storage (C12.F16.6 item 10): 100,000 fits (restores interleaved) never hold more than
+    /// 256 entries, and the storage, reserved at the binding's first fit, never changes.
+    #[test]
+    fn a_hundred_thousand_fits_keep_the_history_bounded() {
+        let (mut n, a, _) = Nav::new();
+        let c = n.core.cameras().camera_for_output(a).unwrap();
+        assert_eq!(n.core.cameras().history(c).unwrap().reserved(), 0);
+        for i in 0..100_000u32 {
+            n.fit();
+            if i % 97 == 0 {
+                n.restore();
+            }
+            let h = n.core.cameras().history(c).unwrap();
+            assert!(h.len() <= HISTORY_CAPACITY);
+            assert_eq!(h.reserved(), HISTORY_CAPACITY);
+        }
+        assert_eq!(n.history(a).len(), HISTORY_CAPACITY);
+    }
 }
