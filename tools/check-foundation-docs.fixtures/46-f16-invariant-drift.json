@@ -1,0 +1,7 @@
+{
+ "name": "C12.F16: INV-CAMERA-5 loses the history's capacity and eviction",
+ "file": "FOUNDATION_ARCHITECTURE.md",
+ "find": "which holds at most 256 entries — at capacity the oldest entry is evicted first;",
+ "replace": "which grows with every fit;",
+ "expect": "inv-wording-mismatch"
+}

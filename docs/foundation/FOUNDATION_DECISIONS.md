@@ -15,7 +15,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 | ADR-01 | Stage is the sole spatial authority; Smithay `Space` rejected | Accepted; PD-F2-13 → obligation OB-34 (1R) |
 | ADR-02 | Fixed-point Q16 Canvas with a reference-relative lattice | Accepted; **amended 1R** (R8; zoom-aware pan; OB-24 rescoped); **amended C12.F14** (zoom domain; the output's lattice reference, kept while panning); **amended C12.F15** (one canonical rect for render and hit) |
 | ADR-03 | Window-geometry anchor and exact physical-pixel hit-testing | Accepted |
-| ADR-04 | Independent centre-anchored cameras | Accepted; **amended 1R** (one-shot fit; direct-manipulation pan); **amended 2R** (output-lifecycle authority); **amended C12.F15** (fit units and clamp; restore history) |
+| ADR-04 | Independent centre-anchored cameras | Accepted; **amended 1R** (one-shot fit; direct-manipulation pan); **amended 2R** (output-lifecycle authority); **amended C12.F15** (fit units and clamp; restore history); **amended C12.F16** (history bound 256, emptied at unbinding) |
 | ADR-05 | Unified effective scale: MaxGesture, bounded ladder hint, settlement | Accepted; **amended 1R** (ScaleInteractionEpoch; device-bound ladder; initial hint); **amended 2R** (epochs for all spatial interactions); **amended F2** (device bound on the 1/120 lattice) |
 | ADR-06 | Off-screen withholding with kick/fallback; suspension separated from visibility | Accepted; **amended 1R** (`OutputsOff`) |
 | ADR-07 | Pre-client input ownership, gesture isolation, modifier observation | Accepted; **amended 1R** (split pointer/constraint state; reconciliation; confinement) |
@@ -165,6 +165,9 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
   - F-FIT-1's zoom is `min(view_w,O / g.w, view_h,O / g.h) / scale_O`, clamped into F-VIEW-1's domain; a degenerate or unmapped W is refused.
   - Each successful fit records the camera value before it; one restore reverses the most recent fit, repeated restores unwind earlier ones (OBJ-30).
   - `OutputKey` is a persistence identity, not a physical-monitor identity; collisions are resolved deterministically (INV-CAMERA-3). Persisting cameras across sessions is gated by G-OB48.
+- **C12.F16 amendment (owner decision 2026-10-18):**
+  - The history holds at most 256 entries per output; a successful fit at capacity evicts the oldest, which is lost permanently; a refused fit or restore changes nothing.
+  - The history is part of a camera's binding to one `OutputId`: emptied when the camera is unbound, kept across `output_reconfigured`; it is never applied to another output or a later connection (INV-CAMERA-5).
 
 ## ADR-05: unified effective scale (MaxGesture, bounded ladder hint, settlement)
 

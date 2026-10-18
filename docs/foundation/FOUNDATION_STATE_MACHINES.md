@@ -74,10 +74,10 @@ Object: OBJ-07, OBJ-09, OBJ-30. Implements INV-CAMERA-1, INV-CAMERA-3, INV-CAMER
 | From | Trigger | To | Effects | Cites |
 |---|---|---|---|---|
 | — | `output_connected`, no **unbound** remembered camera for the key | Bound | new camera seeded from the persisted lookup (only if no camera with that key exists this session) or the internal default; one proof | INV-CAMERA-3, INV-OUTPUT-2 |
-| Unbound | `output_connected`, same `OutputKey` [lowest unbound camera with that key] | Bound | re-bound, value unchanged; the output's lattice reference is set from the re-bound camera's view (F-LATTICE-1) | INV-CAMERA-3 |
+| Unbound | `output_connected`, same `OutputKey` [lowest unbound camera with that key] | Bound | re-bound under the new `OutputId`, value unchanged, navigation history empty (C12.F16); the output's lattice reference is set from the re-bound camera's view (F-LATTICE-1) | INV-CAMERA-3 |
 | Bound | `output_connected`, same `OutputKey` (concurrent key collision) | Bound (unchanged) | never re-bound: binding is 1:1; the new output gets its own camera (row 1) | INV-CAMERA-3 |
-| Bound | `output_reconfigured` of its output | Bound | nothing (no proof minted) | INV-OUTPUT-2 |
-| Bound | its output disconnected | Unbound | value kept | INV-OUTPUT-1 |
+| Bound | `output_reconfigured` of its output | Bound | nothing (no proof minted); the navigation history is kept (same `OutputId`) | INV-OUTPUT-2, INV-CAMERA-5 |
+| Bound | its output disconnected | Unbound | value kept; navigation history emptied with the unbinding's proof (OBJ-30, C12.F16) | INV-OUTPUT-1, INV-CAMERA-5 |
 | Bound | navigation via `InputPort`/`ShellPort` (pan, jump, fit, restore) | Bound | one mutation per minted proof | INV-CAMERA-1 |
 | any | protocol event, client commit, timer | unchanged | — | INV-CAMERA-1 |
 
@@ -113,10 +113,10 @@ Object: OBJ-07, OBJ-30. Implements INV-CAMERA-5, INV-CAMERA-1.
 
 | From | Trigger | To | Effects | Cites |
 |---|---|---|---|---|
-| — | `FitViewport(O, W)` via input or shell [O connected ∧ W mapped ∧ g.w > 0 ∧ g.h > 0] | — | snapshot W now; F-FIT-1: zoom clamped into F-VIEW-1's domain, centre into INV-COORD-1; the previous value added to the history (OBJ-30); one mutation; atomic epoch; one pointer reconciliation (M10) | INV-CAMERA-5 |
-| — | `FitViewport(O, W)` [otherwise] | — | refused: no mutation, nothing recorded (C12.F15) | INV-CAMERA-5 |
-| — | `ViewportRestore(O)` via input or shell [history non-empty] | — | one mutation to the most recent recorded value, which is removed (OBJ-30) | INV-CAMERA-5 |
-| — | `ViewportRestore(O)` [history empty] | — | refused: no mutation (C12.F15) | INV-CAMERA-5 |
+| — | `FitViewport(O, W)` via input or shell [O connected ∧ W mapped ∧ g.w > 0 ∧ g.h > 0] | — | snapshot W now; F-FIT-1: zoom clamped into F-VIEW-1's domain, centre into INV-COORD-1; the previous value added as the newest history entry, the oldest evicted first if 256 are held (OBJ-30, C12.F16); one mutation; atomic epoch; one pointer reconciliation (M10) | INV-CAMERA-5 |
+| — | `FitViewport(O, W)` [otherwise] | — | refused: no mutation, nothing recorded or evicted (C12.F15, C12.F16) | INV-CAMERA-5 |
+| — | `ViewportRestore(O)` via input or shell [O connected ∧ O's history non-empty] | — | one mutation to the newest entry's exact value, which is removed (OBJ-30); one pointer reconciliation (M10) | INV-CAMERA-5 |
+| — | `ViewportRestore(O)` [O not connected ∨ O's history empty] | — | refused: no mutation, history unchanged (C12.F15, C12.F16) | INV-CAMERA-5 |
 | — | W resizes / commits / unmaps | — | nothing (no mode exists) | INV-CAMERA-1 |
 
 ## M9 — Protocol fullscreen

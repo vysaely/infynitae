@@ -2473,6 +2473,89 @@ The entry prerequisites and exit evidence are recorded in FOUNDATION_IMPLEMENTAT
 
 F-LATTICE-1 (R4 rounding, δ, the edge, C, `c_eff`, the kept reference and its bound), F-VIEW-1's domain, F-HIT-1, F-MEMBER-1, INV-HIT-1, INV-CAMERA-5's wording, M4 and M20 rejection, the 200-commit "client resize never moves the camera" requirement, and C12.F14's text.
 
+# §C12.F16 — Canonical registry amendment (Phase F: the bounded fit/restore history, OBJ-30 / INC-10)
+
+**Status: ADOPTED 2026-10-18 by owner decision** (brief "Ratify Bounded Fit/Restore History": at most 256 successful fit operations per output; oldest evicted; exact prior values; empty-history restore refused; per-output isolation; bounded storage). Written on local `main` at base `da538d6` (C12.F15 adopted); not pushed. Governance and documentation only: fit, restore and the history are **not implemented** — they are INC-10's work, and INC-10 is NOT started. It decides the depth bound C12.F15.9 left open. One invariant changes (INV-CAMERA-5: it now states the history's capacity, eviction and lifetime); one formula changes (F-FIT-1); no invariant is added or removed (57). C12.F15 is unchanged.
+
+**Inputs:** INV-CAMERA-5 (C12.R1); INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-OUTPUT-2, INV-ALLOC-1; F-FIT-1 (C12.F15); OBJ-07, OBJ-10, OBJ-30; M5, M8; C12.F15.9.
+
+**Provenance:** `evidence/phase-f/C12-F16/DECISION_RECORD_2026-10-18.md` (the owner decision and the code facts checked at `da538d6`).
+
+**Decisions:** H1 the history of an output holds at most **256** entries, one per successful fit not yet undone by a restore; H2 a successful fit at capacity evicts the oldest entry, then records its own; H3 entries are exact prior camera values, restored verbatim, newest first; H4 an empty history refuses a restore without mutating anything; H5 the history belongs to one camera's binding to one `OutputId` and is emptied when that binding ends, so no entry is applied to another output or to a later connection of the same monitor; H6 storage is fixed and bounded.
+
+**Where an `INV-*` appears below, this wording is canonical and supersedes C12.R1. Every other row is unchanged.**
+
+| ID | Statement (canonical) | Owner | Class | Evidence | Tests (tier) | Trigger |
+|---|---|---|---|---|---|---|
+| **INV-CAMERA-5** | Viewport-fit is a one-shot authorized navigation action. It snapshots the element geometry at that instant, computes centre and zoom for the invoking output, performs one camera mutation, and terminates. It is not a mode, stores no target, and is never re-fitted by client changes. Restore is a separate authorized action using the camera value recorded at fit time: each successful fit records the camera's exact value immediately before it as the newest entry of that output's navigation history, which holds at most 256 entries — at capacity the oldest entry is evicted first; a restore applies and removes the newest entry, and is refused with no change when the history is empty; a refused fit records nothing. The history belongs to the binding of one camera to one `OutputId` and is emptied when that camera is unbound, so no entry is ever applied to another output or to a later connection. There is no isolation filter in Foundation 01. A fit never changes an element's size or anchor. | core `navigation` | E+D | ER-4, ER-5 R3; evidence/phase-f/C12-F16 | T0 (spike tests), T1; T0/T1 history bound and lifetime (INC-10, C12.F16.6) | owner amendment 2026-10-18 (C12.F16, bounded history) |
+
+## C12.F16.1 Text superseded (must not be cited as normative)
+
+| Superseded | Replaced by |
+|---|---|
+| INV-CAMERA-5 (C12.R1), which named one recorded value and no capacity or lifetime | INV-CAMERA-5 (C12.F16) |
+| F-FIT-1 (C12.F15) "recorded as a new entry of its navigation history (OBJ-30); one authorized restore applies and removes the most recent entry, so repeated restores unwind earlier fits", with no bound | F-FIT-1 (C12.F16) |
+| C12.F15.9 "Open (not decided by this layer): a bound on the history's depth" | C12.F16.3 |
+| OBJ-30 (C12.F15) lifetime "with its camera; an entry remains until a restore removes it" | OBJ-30 (C12.F16) |
+
+## C12.F16.2 Formula amendments (living §F carries the corrected text; the previous text is recorded here verbatim)
+
+### F-FIT-1 (history capacity and lifetime)
+- **Previous (da538d6):** One mutation of O's camera to that centre and zoom. Immediately before it, the camera's exact value is recorded as a new entry of its navigation history (OBJ-30); one authorized restore applies and removes the most recent entry, so repeated restores unwind earlier fits (M8). No target is stored and no client change re-fits (INV-CAMERA-5). [C12.F15]
+- **Reason:** the history had no depth bound, so repeated fits (from input or, after INC-11, a shell) grew it without limit (C12.F15.9). Owner decision 2026-10-18: at most 256 entries per output, oldest evicted; the history ends with the camera's binding to that output (C12.F16.4).
+
+## C12.F16.3 The history contract
+
+1. **What counts.** One entry per **successful** fit: a `FitViewport(O, W)` that passes F-FIT-1's guard and performs its camera mutation — also when the fitted value equals the current one. A refused fit, a restore (successful or refused), a pan, any other camera write and every output-lifecycle entry add none. A successful restore removes one. The history's length is therefore the number of successful fits on O not yet undone by a restore and not evicted, and never exceeds **256**.
+2. **When full.** A successful fit that finds 256 entries first evicts the **oldest** one, then records its prior value as the newest; the length stays 256. Only the oldest entry is lost, and it is lost permanently: after more than 256 successful fits without enough restores, the camera values before the earliest fits are unavailable, and no number of restores recovers them. Restores unwind at most the 256 retained fits, newest first, and then refuse.
+3. **A refused fit** (O not connected, W not mapped, `g.w ≤ 0` or `g.h ≤ 0`) changes neither the camera nor the history (F-FIT-1). The guard is evaluated before anything is recorded or evicted, so a refused fit at capacity evicts nothing.
+4. **A refused restore** (O not connected, or O's history empty) changes neither the camera nor the history. A restore is never partially applied: the newest entry is removed exactly when its value is applied.
+5. **Disconnect and recreation.** `output_disconnected(O)` unbinds O's camera with the proof it mints (M5) and, in the same step, empties the camera's history; the camera's value is kept (INV-OUTPUT-1, INV-CAMERA-3). A later `output_connected` allocates a new `OutputId` (never reused) and binds a camera — possibly the same remembered camera — whose history is empty. `output_reconfigured` keeps the `OutputId` and the binding and mints no proof, so it neither empties nor changes the history (INV-OUTPUT-2): an entry recorded before a reconfiguration may be restored after it; it is a Canvas-space camera value, valid for any descriptor (F-VIEW-1's zoom domain and INV-COORD-1 do not depend on the output), and the new k sets the lattice reference as any camera change does (F-LATTICE-1).
+6. **No cross-output or cross-generation use.** The history is part of one camera's binding to one `OutputId` and is reachable only through that output's restore. Binding is 1:1 (INV-CAMERA-3), so two connected outputs never share a history; emptying it at unbinding means no entry survives into another binding, whether of another output or of a new `OutputId` for the same monitor or `OutputKey`. A restore addressed to an `OutputId` that is not connected is refused (item 4); since an `OutputId` is never reused, it cannot reach a newer output.
+7. **Representation.** An entry is the camera's stored value, copied: the centre as its Q16 `CanvasPos` (two `i64`) and the zoom as the `f64` itself — no recomputation, re-quantisation, conversion or clamp, at recording or at restore. Restore writes both verbatim, so the restored camera equals the prior one exactly (`centre ==`, `zoom.to_bits() ==`). Every recorded value was a camera value and so lies inside F-VIEW-1's domain and INV-COORD-1; a restore therefore never needs clamping or rejection.
+8. **Bounded memory.** The history is a fixed-capacity ring of 256 entries (24 bytes each, 6,144 bytes), reserved at most once per binding and never grown; at capacity a fit overwrites the oldest slot in place. An unbound camera holds no history storage. Retained entries are at most 256 per connected output, whatever the number of fits, restores or reconnects; after a binding's first fit, fits and restores allocate nothing (INV-ALLOC-1's discipline, although fit and restore are not among its hot paths).
+
+## C12.F16.4 Output identity and lifetime (checked against the code at `da538d6`)
+
+- `OutputId` is allocated by Core and never reused (`infynitae-core/src/output.rs`: `OutputIds::next`, a monotonic `u64`).
+- A camera stores its value (`center: CanvasPos`, `zoom: f64`), its `OutputKey` and `bound: Option<OutputId>` (`navigation.rs` `Camera`); cameras survive outputs and are re-bound by key (INV-CAMERA-3).
+- `output_connected` mints a proof for `bind_on_connect`; `output_disconnected` mints one for `unbind_on_disconnect`; `output_reconfigured` mints none (`entry.rs`).
+- Hence the rule of C12.F16.3 items 5–6 needs no new identity mechanism: the history is held with the camera and emptied by `unbind_on_disconnect`, under the proof that already authorizes the unbinding. Keeping it per camera instead (across bindings) would hand a reconnected output — a new `OutputId` — the entries of its previous connection, which this decision forbids.
+
+## C12.F16.5 Compatibility
+
+- **INV-CAMERA-5:** extended, not contradicted: restore still uses a value recorded at fit time, is a separate authorized action, and stores no target; the history is data that a later restore must again be authorized to use, not a mode or a retained proof (INV-CAMERA-1).
+- **INV-CAMERA-1:** history writes happen only in `navigation` and each consumes the proof of the action it belongs to — the fit's, the restore's, or the unbinding's. The lifecycle entries still never change a camera's value.
+- **INV-CAMERA-3 / INV-OUTPUT-1:** "camera unbound and kept (value unchanged)" holds; the history is not the camera's value.
+- **F-FIT-1:** amended (C12.F16.2); its guard, zoom, clamp and centre are unchanged.
+- **OBJ-30:** capacity, eviction and lifetime recorded in the living model.
+- **INV-ALLOC-1:** C12.F16.3 item 8.
+
+## C12.F16.6 Required tests (INC-10)
+
+Each runs against the production history in `core::navigation` through Core's entries (`shell_command` / `physical_input` for fit and restore, the output-lifecycle entries for connect, reconfigure and disconnect) — no test-only model of the history. Camera values are compared exactly (`CanvasPos ==`, `f64::to_bits ==`).
+1. **Empty.** A fresh output: restore is refused; camera and history unchanged.
+2. **One fit.** Fit then restore: the camera equals the value before the fit exactly; a second restore is refused.
+3. **Order.** Fits from distinct values v₀ … v₄ (different W and zoom), then five restores: v₄ … v₀ in that order; a sixth is refused.
+4. **Capacity.** 256 successful fits: exactly 256 entries; 256 restores return the 256 prior values newest first; the 257th restore is refused.
+5. **Eviction.** 257 successful fits from distinct values: only the oldest prior value (the one before the first fit) is gone; 256 restores return the values before fits 257 … 2 newest first, ending at the value before fit 2; the next restore is refused and the camera keeps that value — the documented loss of the oldest entry.
+6. **Refused fits.** At 0, at 1 and at 256 entries: a fit with O not connected, W unmapped, and a zero-width and zero-height W; history (length and every value) and camera unchanged, nothing evicted.
+7. **Refused restores.** A restore on an empty history and to a disconnected `OutputId` changes no history and no camera; a following fit and restore still behave as items 2–3.
+8. **Isolation.** Two connected outputs, fits on both interleaved: each restore returns only its own output's values; exhausting one leaves the other's history intact.
+9. **Lifecycle.** Fits on O, `output_disconnected(O)`, `output_connected` with the same `OutputKey` (re-binding the same remembered camera under a new `OutputId`): the history is empty, restore is refused and the camera keeps its value; `output_reconfigured(O)` (a new scale) between a fit and a restore keeps the entry, and the restore applies it exactly.
+10. **Bounded storage.** 100,000 successful fits on one output (alternating two elements, with restores interleaved): the history's length never exceeds 256 and its reserved capacity never changes after the binding's first fit (a crate-internal accessor in a Core T0 test); with the counting allocator of `t0_hot_path_allocations.rs`, a fit at capacity allocates no more than a fit below it (eviction allocates nothing).
+11. **Compatibility.** Every restored camera is accepted by `View::new` (F-VIEW-1); after a restore, at most one true-position event as for any camera write (M10); a fit never changes the element's size or anchor (INV-CAMERA-5).
+
+**Seeded negative controls** (`tools/verify-test-efficacy`), each DETECTED by the named test: capacity 255 or 257 → 4/5; newest evicted instead of the oldest → 5; a refused fit records or evicts → 6; a refused restore pops → 7; the history kept across `unbind_on_disconnect` → 9; the history emptied on `output_reconfigured` → 9; the zoom re-quantised or clamped on restore → 2; an unbounded `Vec` push → 10.
+
+## C12.F16.7 Checker change
+
+`tools/check-foundation-docs`: `F_LAYERS` gains C12.F16. Fixture 46: INV-CAMERA-5's capacity clause drifts → `inv-wording-mismatch`.
+
+## C12.F16.8 What this layer does not change
+
+F-FIT-1's guard, zoom, clamp and centre; INV-CAMERA-1, INV-CAMERA-3, INV-OUTPUT-1, INV-OUTPUT-2 and INV-ALLOC-1's wording; M10; the binding precedence of M5; C12.F15's text (its .9 "Open" item is superseded by C12.F16.1, not edited).
+
 ---
 
 # Phase D package (D7): living regions of this document
@@ -2637,10 +2720,10 @@ Each normative formula or coordinate algorithm is defined once here. Its text is
 ### F-FIT-1 — Viewport-fit (one-shot)
 - **Definition:** For output O and mapped element W, with g = W's window geometry in Canvas px at the instant of the authorized action, `view_w,O` and `view_h,O` the view extent in physical px (F-VIEW-1) and `scale_O` the output scale: if O is not connected, W is not mapped, or `g.w ≤ 0` or `g.h ≤ 0`, the action is refused — no camera mutation, nothing recorded. [C12.F15]
 - **Definition:** Otherwise `z_raw = min(view_w,O / g.w, view_h,O / g.h) / scale_O` (the view's Canvas extent is `view_O / k_O`, so `scale_O` is divided out exactly once) and `zoom = clamp(z_raw, 2⁻²⁰, 2¹⁶)` (F-VIEW-1's domain); `centre` = the centre of g in Q16 (exact: g is integral), each component clamped into INV-COORD-1 (`|c| ≤ 2³⁶` px). [C12.F15]
-- **Definition:** One mutation of O's camera to that centre and zoom. Immediately before it, the camera's exact value is recorded as a new entry of its navigation history (OBJ-30); one authorized restore applies and removes the most recent entry, so repeated restores unwind earlier fits (M8). No target is stored and no client change re-fits (INV-CAMERA-5). [C12.F15]
+- **Definition:** One mutation of O's camera to that centre and zoom. Immediately before it, the camera's exact value is recorded as the newest entry of O's navigation history (OBJ-30), which holds at most 256 entries: when it already holds 256, the oldest entry is evicted first. One authorized restore applies and removes the newest entry, so repeated restores unwind the retained fits newest first; an evicted entry is not recoverable. The history is emptied when O's camera is unbound (M5), so it is never applied to another output or to a later connection (M8). No target is stored and no client change re-fits (INV-CAMERA-5). [C12.F16]
 - **Definition:** The clamp belongs to this computation: zoom values from outside Core stay rejected outside the domain where they enter (M4, M20). After the mutation the pointer is reconciled once by M10's view-change rule — at most one true-position event, exactly one when the pointer is on O and no interaction owns it. [C12.F15]
 - **Historical sources:** C5.1; C12.R1 INV-CAMERA-5
-- **Amended:** C12.F15 (units, clamp, refusal, restore history); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.F15.2
+- **Amended:** C12.F15 (units, clamp, refusal, restore history); C12.F16 (history capacity and lifetime); previous definitions recorded verbatim in FOUNDATION_ARCHITECTURE §C12.F15.2 and §C12.F16.2
 
 ### F-PRESENT-1 — Protocol-fullscreen presentation view
 - **Definition:** A per-output view with zoom 1: `v_P = anchor(W) − max(0, (view_O/scale_O − size(W)) / 2)` (componentwise), then F-VIEW-1's R7 quantisation and F-LATTICE-1 with k = scale_O; a surface larger than the output is origin-aligned and cropped. [PD-F1-09; E-F2-01 symbol]

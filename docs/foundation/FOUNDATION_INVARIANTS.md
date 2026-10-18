@@ -1,8 +1,8 @@
 # Infynitae Native — Foundation Invariants (effective registry)
 
-Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1, C12.F2, C12.F3, C12.F4, C12.F5, C12.F6, C12.F7, C12.F8, C12.F10, C12.F11, C12.F12, C12.F13, C12.F14 and C12.F15 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
+Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1, C12.F2, C12.F3, C12.F4, C12.F5, C12.F6, C12.F7, C12.F8, C12.F10, C12.F11, C12.F12, C12.F13, C12.F14, C12.F15 and C12.F16 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
 
-This registry is the **effective projection** of eighteen layers. The layers themselves stay where they are and are not edited:
+This registry is the **effective projection** of nineteen layers. The layers themselves stay where they are and are not edited:
 - **C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a**: FOUNDATION_ARCHITECTURE §C12 (sealed Phase C registry, 54 rows);
 - **C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f**: FOUNDATION_ARCHITECTURE §C12.R1 (Phase D 1R amendments, 16 rows);
 - **C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be**: FOUNDATION_ARCHITECTURE §C12.R2 (Phase D 2R amendments, 6 rows);
@@ -20,7 +20,8 @@ This registry is the **effective projection** of eighteen layers. The layers the
 - **C12.F12 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)**: FOUNDATION_ARCHITECTURE §C12.F12 (Phase F amendment: the initial hint of a pre-map fullscreen grant, 1 row);
 - **C12.F13 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)**: FOUNDATION_ARCHITECTURE §C12.F13 (Phase F amendment: whose stimulus a presentation change is, 1 row);
 - **C12.F14 @ ADOPTED 2026-10-17 (owner approval; base ca2e468)**: FOUNDATION_ARCHITECTURE §C12.F14 (Phase F amendment: the representable zoom domain and the output's lattice reference, OB-24, 1 row);
-- **C12.F15 @ ADOPTED 2026-10-17 (owner approval; base dda4d87)**: FOUNDATION_ARCHITECTURE §C12.F15 (Phase F amendment: one canonical rectangle for rendering and hit testing, option B; F-FIT-1's units and clamp, 1 row).
+- **C12.F15 @ ADOPTED 2026-10-17 (owner approval; base dda4d87)**: FOUNDATION_ARCHITECTURE §C12.F15 (Phase F amendment: one canonical rectangle for rendering and hit testing, option B; F-FIT-1's units and clamp, 1 row);
+- **C12.F16 @ ADOPTED 2026-10-18 (owner approval; base da538d6)**: FOUNDATION_ARCHITECTURE §C12.F16 (Phase F amendment: the bounded fit/restore history, 256 entries per output, emptied at unbinding, 1 row).
 
 Rules:
 - Each entry's **wording** is the statement of its latest layer, verbatim, except that complete formula text is replaced by an `[F-…]` reference.
@@ -28,7 +29,7 @@ Rules:
 - **Consequence of violation** is the C12 "Violation means" column. For the three invariants first introduced in 1R/2R it is a D7-authored description, marked as such (D-F0). E1R adds no invariant.
 - **ADR** links are derived from FOUNDATION_DECISIONS.md. **Obligations** are cited by ID; their records live in FOUNDATION_TEST_PLAN.md.
 
-Count: **57** effective invariants: 36 from C12, 6 from C12.R1, 2 from C12.R2, 4 from C12.E1R, 0 from C12.F1 (its row is superseded by C12.F5), 0 from C12.F2 (superseded by C12.F11), 1 from C12.F3, 1 from C12.F4, 1 from C12.F5, 0 from C12.F6 (superseded by C12.F10), 1 from C12.F7, 1 from C12.F8, 1 from C12.F10, 1 from C12.F11, 0 from C12.F12 (superseded by C12.F13), 1 from C12.F13, 0 from C12.F14 (superseded by C12.F15), 1 from C12.F15. (Corrected with C12.F14: the line had not been updated for C12.F11–F13.)
+Count: **57** effective invariants: 36 from C12, 5 from C12.R1 (INV-CAMERA-5 superseded by C12.F16), 2 from C12.R2, 4 from C12.E1R, 0 from C12.F1 (its row is superseded by C12.F5), 0 from C12.F2 (superseded by C12.F11), 1 from C12.F3, 1 from C12.F4, 1 from C12.F5, 0 from C12.F6 (superseded by C12.F10), 1 from C12.F7, 1 from C12.F8, 1 from C12.F10, 1 from C12.F11, 0 from C12.F12 (superseded by C12.F13), 1 from C12.F13, 0 from C12.F14 (superseded by C12.F15), 1 from C12.F15, 1 from C12.F16. (Corrected with C12.F14: the line had not been updated for C12.F11–F13.)
 
 <!-- living:INV -->
 
@@ -173,15 +174,15 @@ Count: **57** effective invariants: 36 from C12, 6 from C12.R1, 2 from C12.R2, 4
 - **ADR:** ADR-06, ADR-07
 
 ### INV-CAMERA-5
-- **Wording:** Viewport-fit is a one-shot authorized navigation action. It snapshots the element geometry at that instant, computes centre and zoom for the invoking output, performs one camera mutation, and terminates. It is not a mode, stores no target, and is never re-fitted by client changes. Restore is a separate authorized action using the camera value recorded at fit time. There is no isolation filter in Foundation 01. A fit never changes an element's size or anchor.
+- **Wording:** Viewport-fit is a one-shot authorized navigation action. It snapshots the element geometry at that instant, computes centre and zoom for the invoking output, performs one camera mutation, and terminates. It is not a mode, stores no target, and is never re-fitted by client changes. Restore is a separate authorized action using the camera value recorded at fit time: each successful fit records the camera's exact value immediately before it as the newest entry of that output's navigation history, which holds at most 256 entries — at capacity the oldest entry is evicted first; a restore applies and removes the newest entry, and is refused with no change when the history is empty; a refused fit records nothing. The history belongs to the binding of one camera to one `OutputId` and is emptied when that camera is unbound, so no entry is ever applied to another output or to a later connection. There is no isolation filter in Foundation 01. A fit never changes an element's size or anchor.
 - **Owner:** core `navigation`
 - **Class:** E+D
 - **Violation:** fit rewrites geometry
-- **Origin:** C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f
-- **Layers:** C12 → C12.R1
-- **Trigger:** PD-F2-01/-11
-- **Evidence:** ER-4, ER-5 R3
-- **Tests (historical column):** T0 (spike tests), T1
+- **Origin:** C12.F16 @ ADOPTED 2026-10-18 (owner approval; base da538d6)
+- **Layers:** C12 → C12.R1 → C12.F16
+- **Trigger:** owner amendment 2026-10-18 (C12.F16, bounded history)
+- **Evidence:** ER-4, ER-5 R3; evidence/phase-f/C12-F16
+- **Tests (historical column):** T0 (spike tests), T1; T0/T1 history bound and lifetime (INC-10, C12.F16.6)
 - **Obligations:** —
 - **Formulas:** F-FIT-1
 - **ADR:** ADR-04, ADR-09

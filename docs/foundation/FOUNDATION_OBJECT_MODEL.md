@@ -310,13 +310,14 @@ Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived 
 ### OBJ-30 — Navigation history (camera values before fits)
 - **Class:** A (data)
 - **Owner:** core `navigation`
-- **Writers (authority per cited invariants):** an authorized fit adds the camera value immediately before it (F-FIT-1); an authorized restore removes the most recent entry (M8)
+- **Writers (authority per cited invariants):** an authorized fit adds the camera value immediately before it, evicting the oldest entry first when 256 are held (F-FIT-1); an authorized restore removes the newest entry (M8); `output_disconnected`'s unbinding empties the history (M5)
 - **Readers:** authorized restore
-- **Lifetime / invalidation:** with its camera; an entry remains until a restore removes it
+- **Lifetime / invalidation:** the binding of its camera to one `OutputId`: emptied when the camera is unbound; kept across `output_reconfigured`; an entry remains until a restore removes it, it is evicted as the oldest of 256, or the binding ends
 - **Reconstruction:** none (not persisted)
 - **Forbidden writers:** protocol handlers, clients, persistence
 - **Invariants:** INV-CAMERA-5
-- **C12.F15:** one entry per successful fit (owner decision 2026-10-17: one restore reverses the most recent fit; repeated restores unwind earlier fits). Previously "camera value before the last fit", lifetime "until the next fit". A bound on the depth is not decided (C12.F15.9). Implemented by INC-10.
+- **C12.F15:** one entry per successful fit (owner decision 2026-10-17: one restore reverses the most recent fit; repeated restores unwind earlier fits). Previously "camera value before the last fit", lifetime "until the next fit". The depth bound C12.F15.9 left open is decided by C12.F16. Implemented by INC-10.
+- **C12.F16:** a bounded stack (owner decision 2026-10-18): at most 256 entries per output, the oldest evicted when a successful fit finds it full (lost permanently); each entry is the exact prior camera value (Q16 `CanvasPos` and `f64` zoom, copied, restored verbatim); a refused fit or restore changes nothing; fixed storage of 256 entries per bound camera, none for an unbound one (C12.F16.3). Previously lifetime "with its camera; an entry remains until a restore removes it", no bound.
 
 ### OBJ-31 — Shell connection and subscription generation
 - **Class:** PO

@@ -230,9 +230,9 @@ No PRODUCT increment may create a state where **persistent zoom ≠ 1 and camera
 ### INC-10 — Zoomed navigation (viewport-fit, zoomed pan, restore)
 - **Category:** PRODUCT
 - **Execution class:** HEADLESS
-- **Objective:** one-shot `FitViewport` and restore (F-FIT-1 and OBJ-30 as amended by C12.F15); zoomed pan (F-PAN-1) under G-OB24 (met, C12.F14.5); the output's kept lattice reference (F-LATTICE-1 as amended by C12.F14); the canonical-rect render wrapper and the damage-tracker invalidation (INV-RENDER-1, F-RENDER-1 as amended by C12.F15).
+- **Objective:** one-shot `FitViewport` and restore (F-FIT-1 and OBJ-30 as amended by C12.F15 and C12.F16: a bounded history of 256 entries per output, emptied at unbinding); zoomed pan (F-PAN-1) under G-OB24 (met, C12.F14.5); the output's kept lattice reference (F-LATTICE-1 as amended by C12.F14); the canonical-rect render wrapper and the damage-tracker invalidation (INV-RENDER-1, F-RENDER-1 as amended by C12.F15).
 - **Crates/modules:** core `navigation::{fit, restore}`, core projection (kept reference); `infynitae-wayland` `convert` (canonical-rect wrapper, crop) and `outputs` (tracker rebuild on a k change); shell and input bindings for fit.
-- **Authoritative state introduced:** OBJ-30 (navigation history); `R_O` (OBJ-12, C12.F14).
+- **Authoritative state introduced:** OBJ-30 (navigation history, fixed capacity 256 per bound camera, C12.F16); `R_O` (OBJ-12, C12.F14).
 - **Seam touched:** the adapter's Smithay render handoff (C12.F15), inside `convert`.
 - **Invariants exercised:** INV-CAMERA-5, INV-COORD-3, INV-SCALE-1, INV-RENDER-1 at k ∉ n/120, INV-HIT-1, INV-ALLOC-1.
 - **Risks retired:** TC-1 (production), TC-3, TA-1 (production confirmation).
@@ -241,15 +241,16 @@ No PRODUCT increment may create a state where **persistent zoom ≠ 1 and camera
   1. 0 width/gap changes per zoomed pan with the kept reference.
   2. Render/hit agreement on real Smithay geometry through the wrapper: generic k swept by single ulps around rounding points; kept references at ±2²⁰ and ±2³¹ physical px, on both sides of R, on both axes; adjacent surfaces seam-free in Pixman pixel checks where Pixman can represent the magnification; column-by-column pointer targeting; ProbeRenderer `dst`/`src` checks beyond Pixman's range (C12.F15.3).
   3. The deterministic rounding-step test (`kept_reference_rounding_steps_at_the_visible_edge_limit`) and the Q16 test at `|v − R|` = 2³⁷ + 119 px, k = 2⁻²² (C12.F15.7).
-  4. F-FIT-1 (C12.F15): fit dimensions below, at and above the lower clamp boundary; a 1 px W at scale 0.25 reaching the upper clamp; scale 2 with a W that exactly fits the view, within ±1 px; zero-size and unmapped W — no mutation, no history entry; centre clamping at +2³⁶ and −2³⁶; every resulting camera accepted by `View::new`; restore returns the exact previous value, also after consecutive fits, and an empty history refuses; exactly one true-position event after a fit with the pointer on O and no interaction (none during one).
+  4. F-FIT-1 (C12.F15): fit dimensions below, at and above the lower clamp boundary; a 1 px W at scale 0.25 reaching the upper clamp; scale 2 with a W that exactly fits the view, within ±1 px; zero-size and unmapped W — no mutation, no history entry; centre clamping at +2³⁶ and −2³⁶; every resulting camera accepted by `View::new`; restore returns the exact previous value (the history tests are item 11); exactly one true-position event after a fit with the pointer on O and no interaction (none during one).
   5. Damage invalidation on a zoom change (C12.F15.4 regression test).
   6. i32 cropping beyond the representable range, including rotated and flipped buffer transforms (C12.F15.5); a transform the crop cannot serve is reported to change control.
   7. Map, unmap and destroy during a zoomed pan.
   8. Performance at zoom ≠ 1 compared with zoom 1: p50, p99 and maximum frame time, and INV-ALLOC-1; measured, not estimated.
   9. The seeded controls of C12.F15.8, each DETECTED; TST-04's control redesigned, not deleted.
   10. All repository gates on the exact final implementation commit.
-- **Negative controls:** the sealed pan formula (content ≠ hand); a sticky-fit probe (E0277); C12.F15.8.
-- **Entry conditions:** INC-3 and INC-6 exits (RATIFIED, CHECKPOINT); C12.F14 on `main` (`270128f`, G-OB24 met); C12.F15 adopted and committed; the integration record in CHECKPOINT ("LAYER C12.F14 INTEGRATED"); and an owner decision on OBJ-30's history depth (C12.F15.9) before restore ships. Or the conservative fallback.
+  11. The bounded history (C12.F16.6, items 1–11, on the production history through Core's entries): empty refusal; exact single and ordered restores; exactly 256 retained; the 257th fit evicting only the oldest and the documented loss after overflow; refused fits and restores changing nothing; isolation of two outputs; disconnect and reconnect (new `OutputId`, same remembered camera) with an empty history, and reconfiguration keeping it; length ≤ 256 and a fixed capacity over 100,000 fits, eviction allocating nothing; and C12.F16.6's seeded controls, each DETECTED.
+- **Negative controls:** the sealed pan formula (content ≠ hand); a sticky-fit probe (E0277); C12.F15.8; C12.F16.6.
+- **Entry conditions:** INC-3 and INC-6 exits (RATIFIED, CHECKPOINT); C12.F14 on `main` (`270128f`, G-OB24 met); C12.F15 adopted and committed; the integration record in CHECKPOINT ("LAYER C12.F14 INTEGRATED"); and the owner decision on OBJ-30's history depth (C12.F15.9), recorded by C12.F16 (adopted 2026-10-18: 256 entries per output). Or the conservative fallback.
 - **Stop / rollback:** any camera change from client geometry; any presented rect that differs from Core's canonical rect.
 - **Architecture decision required first:** **yes: OB-24's decision**, recorded by C12.F14 (G-OB24, C12.F14.5), and the render handoff and fit rule, recorded by C12.F15. OB-24 itself stays OPEN until this increment's exit evidence is accepted through architecture change control.
 - **Why here:** zoom is reachable only through fit in Foundation 01. It is valuable but not foundational, and it is gated.
