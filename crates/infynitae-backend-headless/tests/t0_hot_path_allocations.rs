@@ -165,6 +165,16 @@ fn motion(dx: f64, dy: f64) -> PhysicalEvent {
     }
 }
 
+/// `BTN_LEFT` with no modifier: a client-owned button.
+fn click(pressed: bool) -> PhysicalEvent {
+    PhysicalEvent::PointerButton {
+        button: 0x110,
+        pressed,
+        modifiers: Modifiers::default(),
+        time_us: 0,
+    }
+}
+
 fn pan_button(pressed: bool) -> PhysicalEvent {
     PhysicalEvent::PointerButton {
         button: 0x112,
@@ -253,9 +263,12 @@ enum Path {
     /// A commit of the focused window while it is presented fullscreen on the output (INC-7;
     /// measured last: the presentation hides every other window).
     PresentedCommit,
+    /// A client button pressed and released over the focused window (input intake, INV-ALLOC-1;
+    /// audit Q-P1): ownership, click-to-focus on the same element, routing.
+    Click,
 }
 
-const PATHS: [Path; 9] = [
+const PATHS: [Path; 10] = [
     Path::Pan,
     Path::PanCrossing,
     Path::Route,
@@ -264,6 +277,7 @@ const PATHS: [Path; 9] = [
     Path::CommitOffView,
     Path::RenderList,
     Path::FrameTick,
+    Path::Click,
     Path::PresentedCommit,
 ];
 
@@ -333,6 +347,13 @@ fn measure(n: usize) -> Vec<(Path, Vec<u64>)> {
                 Path::RenderList => count(|| {
                     core.render_list(o).unwrap();
                 }),
+                Path::Click => count(|| {
+                    for pressed in [true, false] {
+                        fx.clear();
+                        core.physical_input(&mut port, click(pressed), &mut fx)
+                            .unwrap();
+                    }
+                }),
                 Path::FrameTick => count(|| {
                     ticked.clear();
                     core.frame_tick_into(o, &mut ticked);
@@ -375,7 +396,7 @@ fn measure(n: usize) -> Vec<(Path, Vec<u64>)> {
 /// All set to 0 on `integration/inc-6-final-resolution-2026-10-15` (2026-10-15): C14.3's
 /// caller-owned effect buffers, per-element tree layouts, reused membership, frame and scratch
 /// storage, and shared input regions.
-const RATCHET: [(Path, u64); 9] = [
+const RATCHET: [(Path, u64); 10] = [
     (Path::Pan, 0),
     (Path::PanCrossing, 0),
     (Path::Route, 0),
@@ -384,6 +405,7 @@ const RATCHET: [(Path, u64); 9] = [
     (Path::CommitOffView, 0),
     (Path::RenderList, 0),
     (Path::FrameTick, 0),
+    (Path::Click, 0),
     (Path::PresentedCommit, 0),
 ];
 
