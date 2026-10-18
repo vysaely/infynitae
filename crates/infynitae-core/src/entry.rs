@@ -622,12 +622,17 @@ impl Core {
         let mut fx = vec![Effect::OutputChanged(output)];
         fx.extend(self.fullscreen_output_reconfigured(output));
         fx.extend(self.visibility_pass());
-        // M10: at most one true-position event, none while an interaction owns the pointer
+        // M10: at most one true-position event, none while an interaction owns the pointer, and
+        // none to a lock the reconciliation keeps (zwp_pointer_constraints_v1: no motion while
+        // locked; OB-55)
+        fx.extend(self.reconcile_constraints());
         let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
-        if on_it && !self.input.interaction.active() {
+        let locked = self
+            .constraint
+            .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock);
+        if on_it && !self.input.interaction.active() && !locked {
             fx.extend(self.true_position());
         }
-        fx.extend(self.reconcile_constraints());
         fx.extend(self.settle_all_epochs());
         // a presented element is told its new size: the hint for it goes first (as at entry)
         Self::hints_before_configures(&mut fx);
