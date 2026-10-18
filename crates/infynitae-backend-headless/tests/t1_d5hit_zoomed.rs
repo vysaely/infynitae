@@ -2,8 +2,8 @@
 //! ("INC-1 (zoom-1 configurations), INC-10 (zoomed configurations)") and part of OB-14's
 //! zoom ≠ 1 hit-test coverage ("0 mismatches vs presented").
 //!
-//! The D5 tree (root + nested subsurface + below-subsurface reached through an input-region hole
-//! + popup + popup subsurface; `build_xhit_tree`) at its D5 anchor (1100, 420) on output B
+//! The D5 tree (root, nested subsurface, below-subsurface reached through an input-region hole,
+//! popup and popup subsurface; `build_xhit_tree`) at its D5 anchor (1100, 420) on output B
 //! (3840 × 2160, scale 1.5), under cameras at zoom ≠ 1, k = zoom · 1.5 ∉ n/120, including ED-1's
 //! k = 1080/651. For every pixel over the tree:
 //! - render: each surface's presented rect (the adapter's `CanonicalRect` geometry, what the
