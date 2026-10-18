@@ -311,7 +311,7 @@ CONTROLS = [
      "infynitae-backend-headless", ["--test", "t1_input"], "zero_output_transition_free_pointer"),
     ("INC-3 zero outputs: a client release is dropped (stuck implicit grab after reconnect)", f"{CORE}/entry.rs",
      "            // In NoOutput the zero-output grab receives it and delivers nothing, keeping\n            // Smithay's pressed-button set truthful (no stuck implicit grab after reconnect).\n            Some(Owner::Client) => {",
-     "            Some(Owner::Client) if self.pointer == PointerState::NoOutput => return Vec::new(),\n            Some(Owner::Client) => {",
+     "            Some(Owner::Client) if self.pointer == PointerState::NoOutput => {}\n            Some(Owner::Client) => {",
      "infynitae-backend-headless", ["--test", "t1_input"], "zero_output_transition_with_a_held_button"),
     ("INC-3 output removal: relocated pointer not re-routed (stale focus)", f"{CORE}/entry.rs",
      "                    pointer_fx.extend(self.true_position());", "                    // pointer_fx.extend(self.true_position());",

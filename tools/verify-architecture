@@ -719,7 +719,7 @@ WAYLAND_LIB = "crates/infynitae-wayland/src/lib.rs"
 WAYLAND_OUTPUTS = "crates/infynitae-wayland/src/outputs.rs"
 HEADLESS_LIB = "crates/infynitae-backend-headless/src/lib.rs"
 # a line inside Core::button_press only (INC-3 mint-location seed)
-PRESS_ANCHOR = "            return Vec::new(); // a repeated press keeps its first owner\n"
+PRESS_ANCHOR = "            return; // a repeated press keeps its first owner\n"
 
 SOURCE_SEEDS = [
     ("INC-1: adapter imports Smithay Space (W-SM-1)", "smithay-rejected-apis",
