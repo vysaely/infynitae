@@ -187,7 +187,12 @@ fn key(pressed: bool) -> PhysicalEvent {
 /// `n` windows on a 700 px grid, 40 per row, the output's camera on the first one; the first
 /// window has keyboard focus and the pointer is over it.
 fn canvas(n: usize) -> (Core, InputPort, OutputId, Vec<ElementId>) {
-    let (mut core, mut port, _shell, mut token) = Core::new(PersistedCameras::default());
+    canvas_at(n, PersistedCameras::default())
+}
+
+/// [`canvas`] with the output's camera seeded from `persisted` (a zoom other than 1).
+fn canvas_at(n: usize, persisted: PersistedCameras) -> (Core, InputPort, OutputId, Vec<ElementId>) {
+    let (mut core, mut port, _shell, mut token) = Core::new(persisted);
     let (o, _) = core.output_connected(&mut token, desc("A")).unwrap();
     let mut ids = Vec::new();
     for i in 0..n {
@@ -208,11 +213,13 @@ fn canvas(n: usize) -> (Core, InputPort, OutputId, Vec<ElementId>) {
     }
     let camera = core.cameras().camera_for_output(o).unwrap();
     let c = core.cameras().center(camera).unwrap();
+    // a pan moves the camera by the motion over the zoom (F-PAN-1)
+    let z = core.cameras().zoom(camera).unwrap();
     core.physical_input_vec(&mut port, pan_button(true))
         .unwrap();
     core.physical_input_vec(
         &mut port,
-        motion(c.x as f64 / 65536.0, c.y as f64 / 65536.0),
+        motion(c.x as f64 / 65536.0 * z, c.y as f64 / 65536.0 * z),
     )
     .unwrap();
     core.physical_input_vec(&mut port, pan_button(false))
@@ -411,5 +418,121 @@ fn hot_path_allocations_do_not_grow() {
                 sizes[0]
             );
         }
+    }
+}
+
+fn nav_key(pressed: bool, shift: bool) -> PhysicalEvent {
+    PhysicalEvent::KeyboardKey {
+        key: 33, // KEY_F: Logo+F fits, Logo+Shift+F restores (INC-10)
+        pressed,
+        modifiers: Modifiers { shift, ..LOGO },
+        mods_changed: false,
+        time_us: 0,
+    }
+}
+
+/// INC-10 (INV-ALLOC-1 at zoom ≠ 1; C12.F16.3 item 8): on a Canvas of 100 windows with the camera at
+/// zoom 0.73 (k ∉ n/120, the output's lattice reference kept while panning), a pan step, a pan
+/// step across windows, a routed motion and the render list allocate nothing after warm-up; and
+/// fits and restores — below the history's capacity, at it (each fit evicting the oldest entry)
+/// and unwinding it — allocate nothing once the binding's ring is reserved (its first fit).
+#[test]
+fn zoomed_hot_paths_and_fit_restore_allocate_nothing() {
+    let persisted = PersistedCameras::from_entries(vec![(
+        desc("A").key,
+        infynitae_core::geom::CanvasPos { x: 0, y: 0 },
+        0.73,
+    )])
+    .unwrap();
+    let (mut core, mut port, o, _ids) = canvas_at(100, persisted);
+    assert!(
+        (core.view(o).unwrap().k * 120.0).fract() != 0.0,
+        "k ∉ n/120"
+    );
+    let mut fx = EffectBuf::new();
+    let mut results = Vec::new();
+    core.physical_input_vec(&mut port, pan_button(true))
+        .unwrap();
+    core.physical_input_vec(&mut port, motion(1.0, 0.0))
+        .unwrap();
+    core.physical_input_vec(&mut port, motion(-1.0, 0.0))
+        .unwrap();
+    for (name, step) in [("pan", 3.0), ("pan across windows", 700.0)] {
+        let mut counts = Vec::new();
+        for round in 0..WARM_UP + ROUNDS {
+            let sign = if round % 2 == 0 { 1.0 } else { -1.0 };
+            let c = count(|| {
+                fx.clear();
+                core.physical_input(&mut port, motion(step * sign, 0.0), &mut fx)
+                    .unwrap();
+            });
+            if round >= WARM_UP {
+                counts.push(c);
+            }
+        }
+        results.push((name, counts));
+    }
+    core.physical_input_vec(&mut port, pan_button(false))
+        .unwrap();
+    let mut counts = Vec::new();
+    for round in 0..WARM_UP + ROUNDS {
+        let sign = if round % 2 == 0 { 1.0 } else { -1.0 };
+        let c = count(|| {
+            fx.clear();
+            core.physical_input(&mut port, motion(sign, 0.0), &mut fx)
+                .unwrap();
+        });
+        let r = count(|| {
+            core.render_list(o).unwrap();
+        });
+        if round >= WARM_UP {
+            counts.push(c + r);
+        }
+    }
+    results.push(("route + render list", counts));
+    // fit and restore: the first fit reserves the ring (outside the count), then 300 fits take the
+    // history to capacity and past it, then 256 restores unwind it
+    let camera = core.cameras().camera_for_output(o).unwrap();
+    let mut press = |core: &mut Core, port: &mut InputPort, shift: bool| {
+        count(|| {
+            for pressed in [true, false] {
+                fx.clear();
+                core.physical_input(port, nav_key(pressed, shift), &mut fx)
+                    .unwrap();
+            }
+        })
+    };
+    press(&mut core, &mut port, false);
+    assert_eq!(
+        core.cameras().history(camera).unwrap().len(),
+        1,
+        "the fit was refused"
+    );
+    core.render_list(o).unwrap();
+    let fits: Vec<u64> = (0..300)
+        .map(|_| {
+            let c = press(&mut core, &mut port, false);
+            core.render_list(o).unwrap();
+            c
+        })
+        .collect();
+    assert_eq!(core.cameras().history(camera).unwrap().len(), 256);
+    let restores: Vec<u64> = (0..256)
+        .map(|_| {
+            let c = press(&mut core, &mut port, true);
+            core.render_list(o).unwrap();
+            c
+        })
+        .collect();
+    assert!(core.cameras().history(camera).unwrap().is_empty());
+    results.push(("fit", fits));
+    results.push(("restore", restores));
+    for (name, counts) in &results {
+        println!(
+            "{name}: max {} over {} events",
+            counts.iter().max().unwrap(),
+            counts.len()
+        );
+        assert!(counts.iter().all(|&c| c == 0), "{name}: {counts:?}");
     }
 }

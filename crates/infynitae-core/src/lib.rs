@@ -1738,6 +1738,25 @@ mod tests {
         ));
     }
 
+    /// A fit and a restore are camera writes: membership follows them (F-MEMBER-1). U, 700 px right of
+    /// W, is on A at zoom 1; the fit to W (zoom 9.6, a 200 px wide Canvas view) leaves it off A, and
+    /// the restore brings it back; W stays on A throughout.
+    #[test]
+    fn a_fit_and_a_restore_update_membership() {
+        let (mut n, a, w) = Nav::new();
+        n.pan((-700.0, 0.0)); // C = start − Σ: the camera moves to x = +700
+        let u = mapped(&mut n.core, tree(9, None)); // placed at the view centre
+        n.pan((700.0, 0.0)); // back on W
+        n.core.render_list(a).unwrap();
+        let on = |n: &Nav, e| n.core.membership().observers(e).contains(&a);
+        assert!(on(&n, w) && on(&n, u), "both on A at zoom 1");
+        n.fit();
+        assert_eq!(n.camera(a).zoom, 9.6);
+        assert!(on(&n, w) && !on(&n, u), "the fit: U left A");
+        n.restore();
+        assert!(on(&n, w) && on(&n, u), "the restore: U back on A");
+    }
+
     /// An empty history refuses a restore without mutating the camera or the history (C12.F16.3
     /// item 4); a following fit and restore still work.
     #[test]

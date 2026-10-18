@@ -176,7 +176,7 @@ impl Core {
         if mods_changed {
             self.input.key_ownership.press(key, Owner::Client);
             if let Some(action) = matched {
-                out.extend(self.apply_key_action(action, navigation));
+                self.apply_key_action(action, navigation, out);
             }
             out.push(Effect::KeyboardForward {
                 key,
@@ -187,7 +187,7 @@ impl Core {
         } else if let Some(action) = matched {
             // K1: compositor-owned press is consumed
             self.input.key_ownership.press(key, Owner::Compositor);
-            out.extend(self.apply_key_action(action, navigation));
+            self.apply_key_action(action, navigation, out);
             out.push(Effect::KeyboardIntercept { key });
         } else {
             // Client-owned press: forwarded
@@ -223,12 +223,14 @@ impl Core {
     }
 
     /// `proof`: minted by `physical_input` for a press bound to fit or restore (INV-CAMERA-1).
+    /// The effects are appended to `out` (the caller's reusable buffer, C14.3).
     fn apply_key_action(
         &mut self,
         action: KeyAction,
         proof: Option<authority::Authorized>,
-    ) -> Vec<Effect> {
-        match action {
+        out: &mut Vec<Effect>,
+    ) {
+        let fx = match action {
             crate::input::keys::KeyAction::FocusNext => self.focus_next(),
             crate::input::keys::KeyAction::Cancel => {
                 if self.input.interaction.active() {
@@ -236,10 +238,21 @@ impl Core {
                 }
                 Vec::new()
             }
-            KeyAction::FitViewport => proof.map_or_else(Vec::new, |p| self.fit_viewport(p)),
-            KeyAction::ViewportRestore => proof.map_or_else(Vec::new, |p| self.viewport_restore(p)),
+            KeyAction::FitViewport => {
+                if let Some(p) = proof {
+                    self.fit_viewport(p, out);
+                }
+                return;
+            }
+            KeyAction::ViewportRestore => {
+                if let Some(p) = proof {
+                    self.viewport_restore(p, out);
+                }
+                return;
+            }
             crate::input::keys::KeyAction::Noop => Vec::new(),
-        }
+        };
+        out.extend(fx);
     }
 
     /// M8 `FitViewport(O, W)` from the input binding: O is the pointer's output, W the element
@@ -247,21 +260,21 @@ impl Core {
     /// nothing recorded or evicted — when no output holds the pointer, no mapped element is under
     /// it, or its geometry is degenerate (F-FIT-1). Otherwise one proof, one mutation (the prior
     /// value retained, OBJ-30), and the camera-write consequences.
-    fn fit_viewport(&mut self, proof: authority::Authorized) -> Vec<Effect> {
+    fn fit_viewport(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
         let PointerState::Located { output, p } = self.pointer else {
-            return Vec::new();
+            return;
         };
         let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
         let Some(hit) = self.hit_test(output, pt) else {
-            return Vec::new();
+            return;
         };
         let element = hit.element;
         if self.stage.mapped(element).is_none() {
-            return Vec::new();
+            return;
         }
         let (Some(anchor), Some(tree)) = (self.stage.anchor(element), self.stage.tree(element))
         else {
-            return Vec::new();
+            return;
         };
         let g = (
             anchor.x,
@@ -269,36 +282,37 @@ impl Core {
             tree.geometry.size.w as i64,
             tree.geometry.size.h as i64,
         );
-        let (Some(model), Some(camera)) = (
-            self.output(output).cloned(),
+        // the two facts F-FIT-1 reads, not a clone of the model (its key owns strings)
+        let (Some((view_size, scale)), Some(camera)) = (
+            self.output(output).map(|m| (m.view_size(), m.scale)),
             self.cameras.camera_for_output(output),
         ) else {
-            return Vec::new();
+            return;
         };
-        let Some(target) = crate::navigation::fit_target(model.view_size(), model.scale, g) else {
-            return Vec::new();
+        let Some(target) = crate::navigation::fit_target(view_size, scale, g) else {
+            return;
         };
         self.cameras.fit(proof, camera, target);
-        self.camera_written(output, camera)
+        self.camera_written(output, camera, out);
     }
 
     /// M8 `ViewportRestore(O)` from the input binding, O the pointer's output: the newest entry of
     /// O's history is applied and removed; refused with nothing changed when O holds no pointer or
     /// its history is empty.
-    fn viewport_restore(&mut self, proof: authority::Authorized) -> Vec<Effect> {
+    fn viewport_restore(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
         let PointerState::Located { output, .. } = self.pointer else {
-            return Vec::new();
+            return;
         };
         let Some(camera) = self.cameras.camera_for_output(output) else {
-            return Vec::new();
+            return;
         };
         if self.cameras.history(camera).is_none_or(|h| h.is_empty()) {
-            return Vec::new();
+            return;
         }
         if !self.cameras.restore(proof, camera) {
-            return Vec::new();
+            return;
         }
-        self.camera_written(output, camera)
+        self.camera_written(output, camera, out);
     }
 
     /// After a fit or restore of `camera` on `output`: the lattice reference follows (a zoom change
@@ -306,19 +320,17 @@ impl Core {
     /// evaluated once for the camera (an atomic camera action: a one-step epoch, INV-SCALE-3), and
     /// the pointer is reconciled by M10's view-change rule — one true-position event when it is on
     /// O and no interaction owns it (the bindings never resolve during one), none otherwise.
-    fn camera_written(&mut self, output: OutputId, camera: usize) -> Vec<Effect> {
+    fn camera_written(&mut self, output: OutputId, camera: usize, out: &mut Vec<Effect>) {
         self.update_lattice(output);
         self.invalidate_frame(output);
-        let mut fx = Vec::new();
-        self.visibility_pass_camera(camera, &mut fx);
+        self.visibility_pass_camera(camera, out);
         let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
         if on_it && !self.input.interaction.active() {
-            fx.extend(self.reconcile_constraints());
+            out.extend(self.reconcile_constraints());
             if self.constraint.is_none() {
-                fx.extend(self.true_position());
+                self.true_position_into(out);
             }
         }
-        fx
     }
 
     /// Motion follows the interaction (INV-INPUT-1): a pan moves the camera and nothing reaches a
