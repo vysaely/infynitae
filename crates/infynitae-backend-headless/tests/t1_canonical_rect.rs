@@ -1351,3 +1351,319 @@ fn the_tracker_draws_the_wrapped_element_at_the_canonical_rect() {
         );
     }
 }
+
+/// Pixels for every configuration of the render/hit sweep above (INC-10 exit review, finding L4):
+/// on each frame where the wrapper remaps a surface — Smithay's own geometry differs from Core's,
+/// the case option B exists for — the production `render_elements` output is drawn by Smithay's
+/// `OutputDamageTracker` with Pixman into a 1920 × 1080 image, and every pixel must be the colour of
+/// the front-most surface whose canonical rect covers it (the painter's oracle on Core's entries,
+/// not on the presented geometry). Both axes, scales 1 and 1.5, the per-frame reference and kept
+/// references at ≈ 2²⁰ and ≈ 2³¹ on both sides, negative and 2³⁶-scale origins. Pixman only (integer
+/// cuts, nearest filtering); no GLES or GPU claim.
+#[test]
+fn pixels_follow_the_canonical_rect_in_every_sweep_configuration() {
+    let sc = Scene::new(Lockstep::new(Some(output((1920, 1080), 120))));
+    let near = CanvasPoint { x: 1000, y: 500 };
+    let negative = CanvasPoint {
+        x: -1_000_003,
+        y: -777_777,
+    };
+    let far = CanvasPoint {
+        x: (1 << 36) - 77_777,
+        y: -(1 << 36) + 99_999,
+    };
+    let edge31 = 0.999 * (1u64 << 31) as f64;
+    let configs = [
+        ("per-frame, scale 1, x", 1.0, None, Axis::X, near),
+        ("per-frame, scale 1.5, x", 1.5, None, Axis::X, near),
+        ("per-frame, scale 1, y", 1.0, None, Axis::Y, near),
+        (
+            "per-frame, scale 1.5, y, negative origin",
+            1.5,
+            None,
+            Axis::Y,
+            negative,
+        ),
+        (
+            "per-frame, scale 1, x, origin near 2^36",
+            1.0,
+            None,
+            Axis::X,
+            far,
+        ),
+        (
+            "kept 2^20, R left, x",
+            1.0,
+            Some((1u64 << 20) as f64),
+            Axis::X,
+            near,
+        ),
+        (
+            "kept 2^20, R right, x",
+            1.0,
+            Some(-((1u64 << 20) as f64)),
+            Axis::X,
+            near,
+        ),
+        ("kept 2^31, R left, x", 1.0, Some(edge31), Axis::X, near),
+        ("kept 2^31, R right, x", 1.0, Some(-edge31), Axis::X, near),
+        (
+            "kept 2^20, R above, y",
+            1.5,
+            Some((1u64 << 20) as f64),
+            Axis::Y,
+            near,
+        ),
+        (
+            "kept 2^31, R above, y",
+            1.0,
+            Some(edge31),
+            Axis::Y,
+            negative,
+        ),
+        ("kept 2^31, R below, y", 1.0, Some(-edge31), Axis::Y, near),
+    ];
+    let mut rng = Rng(0x1234_5678_9ABC_DEF1);
+    let mut screen = Screen::new((1920, 1080));
+    let a_key = sc.key_of(1);
+    let mut frames = 0;
+    for (label, scale, kept, axis, anchor) in configs {
+        let cfg = Config {
+            label,
+            scale,
+            kept,
+            axis,
+            anchor,
+        };
+        let mut cfg_frames = 0;
+        for _ in 0..24 {
+            let zoom0 = 0.3 + 3.5 * rng.unit();
+            let centre = CanvasPos {
+                x: (cfg.anchor.x + 150 + rng.range(-60, 60)) * Q16_ONE + rng.range(0, Q16_ONE - 1),
+                y: (cfg.anchor.y + 126 + rng.range(-40, 40)) * Q16_ONE + rng.range(0, Q16_ONE - 1),
+            };
+            let v0 = make_view(&cfg, centre, zoom0);
+            let e0 = entries_for(&v0, sc.id, cfg.anchor, &sc.tree);
+            let Some(a) = e0.iter().find(|e| e.surface == a_key) else {
+                continue;
+            };
+            // A's right (x) or bottom (y) edge: the zoom at which it rounds, swept by single ulps
+            let d = match cfg.axis {
+                Axis::X => a.origin.x + 101 - v0.r.0,
+                Axis::Y => a.origin.y + 53 - v0.r.1,
+            };
+            let h = (d as f64 * v0.k).floor() + 0.5;
+            let target = (h - DELTA) / d as f64 / cfg.scale;
+            for i in -60..=60 {
+                let view = make_view(&cfg, centre, ulps(target, i));
+                let entries = entries_for(&view, sc.id, cfg.anchor, &sc.tree);
+                let els = convert::render_elements(
+                    &mut screen.renderer,
+                    sc.ls.state.registry(),
+                    &entries,
+                    view.k,
+                )
+                .unwrap();
+                if !els.iter().any(|(_, el)| el.is_remapped()) {
+                    continue;
+                }
+                let mut tracker =
+                    OutputDamageTracker::new((1920, 1080), Scale::from(view.k), Transform::Normal);
+                let els: Vec<_> = els.into_iter().map(|(_, e)| e).collect();
+                let px = screen.draw(&mut tracker, &els);
+                let colour = |e: &FrameEntry| match (e.size.w, e.size.h) {
+                    (803, 601) => W_RGB,
+                    (101, 53) => A_RGB,
+                    (77, 53) => B_RGB,
+                    _ => C_RGB,
+                };
+                let wrong = wrong_pixels(&entries, colour, &px, (1920, 1080));
+                assert!(
+                    wrong.is_empty(),
+                    "{label} zoom {}: {} wrong pixels, e.g. {:?}",
+                    view.zoom,
+                    wrong.len(),
+                    &wrong[..wrong.len().min(3)]
+                );
+                cfg_frames += 1;
+            }
+        }
+        println!("{label}: {cfg_frames} remapped frames drawn, 0 wrong pixels");
+        assert!(
+            cfg_frames >= 3,
+            "{label}: too few remapped frames ({cfg_frames})"
+        );
+        frames += cfg_frames;
+    }
+    println!("TOTAL: {frames} remapped frames × 1920 × 1080, 0 wrong pixels");
+}
+
+/// A `wp_viewport`: the source rect in buffer-local logical px (x, y, w, h) and the destination size.
+type Viewport = ((f64, f64, f64, f64), (i32, i32));
+
+/// A toplevel with a pattern buffer of `buf` px under `t` at buffer scale `bs`, optionally with a
+/// viewport; returns the stack, the element and its tree.
+fn transformed_src(
+    t: wl_output::Transform,
+    buf: (i32, i32),
+    bs: i32,
+    viewport: Option<Viewport>,
+) -> (Lockstep, ElementId, SurfaceTree) {
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    let qh = ls.qh.clone();
+    let rotated = matches!(
+        t,
+        wl_output::Transform::_90
+            | wl_output::Transform::_270
+            | wl_output::Transform::Flipped90
+            | wl_output::Transform::Flipped270
+    );
+    let logical = if rotated {
+        (buf.1 / bs, buf.0 / bs)
+    } else {
+        (buf.0 / bs, buf.1 / bs)
+    };
+    let size = viewport.map_or(logical, |(_, d)| d);
+    let w = ls.probe.toplevel(&qh, "T", size, 0);
+    ls.pump();
+    if let Some(((x, y, sw, sh), (dw, dh))) = viewport {
+        let vp = ls.probe.get_viewport(&qh, w).expect("viewporter");
+        vp.set_source(x, y, sw, sh);
+        vp.set_destination(dw, dh);
+    }
+    ls.probe.surfaces[w].wl.set_buffer_scale(bs);
+    attach(&mut ls, w, buf, t, pattern);
+    let id = ls.state.elements().next().expect("element");
+    let tree = ls.state.core().stage().tree(id).expect("tree").clone();
+    assert_eq!(
+        (tree.surfaces[0].size.w, tree.surfaces[0].size.h),
+        size,
+        "{t:?}: the surface's logical size"
+    );
+    (ls, id, tree)
+}
+
+/// The crop's source-sampling requirement with a non-trivial `src` (INC-10 exit review E1,
+/// proposed C12.F17): a viewport source offset, buffer scale 2, and both together, for all eight buffer
+/// transforms. A surface cut by a crop box and drawn by Pixman through Smithay's damage tracker
+/// is, pixel for pixel, the uncropped surface inside the box and nothing outside it. Cuts lie on
+/// whole buffer pixels (8 physical px = 1 logical px at zoom 8): Pixman rounds `src` to integers,
+/// so fractional cuts are not drawn here; no GLES or GPU claim.
+#[test]
+fn a_cropped_surface_keeps_its_sampling_with_a_viewport_source_and_buffer_scale() {
+    let size = (400, 400);
+    let mut cases = 0;
+    for (wl_t, t) in TRANSFORMS {
+        for (label, buf, bs, vp) in [
+            (
+                "viewport src (4, 8, 24, 24)",
+                (64, 40),
+                1,
+                Some(((4.0, 8.0, 24.0, 24.0), (24, 24))),
+            ),
+            ("buffer scale 2", (128, 80), 2, None),
+            (
+                "viewport src (2, 4, 24, 16), buffer scale 2",
+                (128, 80),
+                2,
+                Some(((2.0, 4.0, 24.0, 16.0), (24, 16))),
+            ),
+        ] {
+            let (ls, id, tree) = transformed_src(wl_t, buf, bs, vp);
+            let zoom = 8.0;
+            let e = entry_at(&ls, id, &tree, zoom, (40, 32));
+            assert_eq!((e.rect.x0, e.rect.y0), (40, 32), "{t:?} {label}");
+            let mut screen = Screen::new(size);
+            let mut pixels = |box_limit: i64| {
+                let inner = convert::surface_element(&mut screen.renderer, ls.state.registry(), &e)
+                    .unwrap()
+                    .expect("element");
+                assert_eq!(inner.transform(), t);
+                let el = CanonicalRect::with_crop_box(inner, e.rect, zoom, box_limit);
+                let mut tracker =
+                    OutputDamageTracker::new(size, Scale::from(zoom), Transform::Normal);
+                screen.draw(&mut tracker, &[el])
+            };
+            let full = pixels(RENDER_LIMIT);
+            // a cut one logical px (a whole buffer px at both scales) past the rect's middle
+            let limit = (e.rect.x0 + e.rect.x1) / 2 / 8 * 8 + 8;
+            assert!(
+                limit < e.rect.x1 && limit < e.rect.y1,
+                "{t:?} {label}: no cut"
+            );
+            let cut = pixels(limit);
+            let mut drawn = 0;
+            for y in 0..size.1 as i64 {
+                for x in 0..size.0 as i64 {
+                    let i = (y * size.0 as i64 + x) as usize;
+                    if x < limit && y < limit {
+                        assert_eq!(
+                            cut[i], full[i],
+                            "{t:?} {label} limit {limit}: pixel ({x},{y}) inside the box"
+                        );
+                        drawn += u32::from(full[i] != 0);
+                    } else {
+                        assert_eq!(
+                            cut[i], 0,
+                            "{t:?} {label} limit {limit}: pixel ({x},{y}) outside the box drawn"
+                        );
+                    }
+                }
+            }
+            assert!(drawn > 100, "{t:?} {label}: {drawn} drawn pixels inside");
+            cases += 1;
+        }
+    }
+    assert_eq!(cases, 24);
+}
+
+/// The production crop box's boundaries (INC-10 exit review E3, proposed C12.F17): each edge is clamped to
+/// `[−2³⁰, 2³⁰]`, so the presented pixels lie in the half-open `[−2³⁰, 2³⁰)`; Smithay's i32 size
+/// holds at most `i32::MAX = 2³¹ − 1`, so a rect covering the whole box is presented as
+/// `[−2³⁰, 2³⁰ − 1)`, one pixel short at the far edge (outside every view, `view_O ≤ 2¹⁵`); any
+/// other rect keeps its edges inside the box; a rect wholly outside it is presented empty.
+#[test]
+fn the_crop_box_is_half_open_with_the_width_capped_at_i32_max() {
+    let (ls, id, tree) = transformed(wl_output::Transform::Normal);
+    let e = entry_at(&ls, id, &tree, 1.0, (10, 20));
+    let mut r = DummyRenderer;
+    let l = RENDER_LIMIT;
+    let x = |x0: i64, x1: i64| PhysicalRect {
+        x0,
+        y0: 0,
+        x1,
+        y1: 10,
+    };
+    for (name, rect, want) in [
+        ("the box exactly", x(-l, l), (-l, l - 1)),
+        (
+            "beyond the box on both sides",
+            x(-l - 5, l + 5),
+            (-l, l - 1),
+        ),
+        ("[0, 2³⁰)", x(0, l), (0, l)),
+        ("[−2³⁰, 0)", x(-l, 0), (-l, 0)),
+        ("[−2³⁰ + 1, 2³⁰)", x(-l + 1, l), (-l + 1, l)),
+        ("[−2³⁰, 2³⁰ − 1)", x(-l, l - 1), (-l, l - 1)),
+        ("[−2⁴⁰, 2³⁰ − 7)", x(-(1 << 40), l - 7), (-l, l - 7)),
+    ] {
+        let inner = convert::surface_element(&mut r, ls.state.registry(), &e)
+            .unwrap()
+            .expect("element");
+        let el = CanonicalRect::new(inner, rect, 1.0);
+        let g = el.geometry(Scale::from(1.0));
+        let got = (g.loc.x as i64, g.loc.x as i64 + g.size.w as i64);
+        assert_eq!(got, want, "{name}");
+        assert_eq!((g.loc.y, g.size.h), (0, 10), "{name}: y");
+    }
+    for (name, rect) in [
+        ("[2³⁰, 2³⁰ + 9)", x(l, l + 9)),
+        ("[−2⁴⁰, −2³⁰ − 1)", x(-(1 << 40), -l - 1)),
+    ] {
+        let inner = convert::surface_element(&mut r, ls.state.registry(), &e)
+            .unwrap()
+            .expect("element");
+        let el = CanonicalRect::new(inner, rect, 1.0);
+        assert_eq!(el.geometry(Scale::from(1.0)).size.w, 0, "{name}: not empty");
+    }
+}

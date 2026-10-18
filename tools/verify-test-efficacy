@@ -1460,6 +1460,10 @@ CONTROLS = [
     ("INC-10 review M1 / INV-INPUT-5: absolute motion reaches a kept lock after a fit or restore", f"{CORE}/entry.rs",
      "                .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock);", "                .is_some_and(|_| false);",
      "infynitae-backend-headless", ["--test", "t1_fit_constraints"], "fit_and_restore_reconcile_the_pointer_under_each_constraint"),
+    ("INC-10 review L4 / C12.F15.8 (1): the wrapper presents the wrapped element's geometry (pixel sweep)", f"{WAYLAND}/convert.rs",
+     "    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {\n        self.rect\n    }",
+     "    fn geometry(&self, _scale: Scale<f64>) -> Rectangle<i32, Physical> {\n        self.inner.geometry(_scale)\n    }",
+     "infynitae-backend-headless", ["--test", "t1_canonical_rect"], "pixels_follow_the_canonical_rect_in_every_sweep_configuration"),
     ("INC-10 review L5 bindings: Logo+Ctrl+F and Logo+Alt+F also fit or restore (modifiers not matched exactly)", f"{CORE}/input/keys.rs",
      "    if key == KEY_F && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {",
      "    if key == KEY_F && mods.logo && !interaction_active {",
@@ -1472,6 +1476,12 @@ CONTROLS = [
      "        let Some(hit) = self.hit_test(output, pt) else {\n            return;\n        };\n        let element = hit.element;",
      "        if self.presentation(output).is_some() {\n            return;\n        }\n        let Some(hit) = self.hit_test(output, pt) else {\n            return;\n        };\n        let element = hit.element;",
      "infynitae-backend-headless", ["--test", "t1_fit_bindings"], "a_fit_during_a_presentation_changes_the_hidden_camera_as_ratified"),
+    ("INC-10 review E1: src not cropped (viewport source and buffer scale)", f"{WAYLAND}/convert.rs",
+     "        let src = if cropped && w > 0 && h > 0 {", "        let src = if false && w > 0 && h > 0 {",
+     "infynitae-backend-headless", ["--test", "t1_canonical_rect"], "a_cropped_surface_keeps_its_sampling_with_a_viewport_source_and_buffer_scale"),
+    ("INC-10 review E3: the crop's i32::MAX width cap removed", f"{WAYLAND}/convert.rs",
+     "            c.2.min(c.0 + i32::MAX as i64),\n            c.3.min(c.1 + i32::MAX as i64),", "            c.2,\n            c.3,",
+     "infynitae-backend-headless", ["--test", "t1_canonical_rect"], "the_crop_box_is_half_open_with_the_width_capped_at_i32_max"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.
