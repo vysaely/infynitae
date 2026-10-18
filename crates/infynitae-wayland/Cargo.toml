@@ -11,10 +11,11 @@ infynitae-core = { path = "../infynitae-core" }
 # INV-ARCH-3 / ADR-13: exact pin, published crate only (no git source, no [patch]; P1 stays in
 # experiments/e1r-smithay-p1 until OB-11 is decided). Features per C1.3.
 smithay = { version = "=0.7.0", default-features = false, features = ["wayland_frontend", "desktop"] }
-# PROPOSAL (not approved): SIGTERM/SIGINT end a session through a self-pipe that the event loop
-# watches. Safe API (this crate denies `unsafe`); unlike calloop's signalfd source it blocks no
-# signal, so the session's children inherit no blocked mask.
-signal-hook = { version = "=0.3.18", default-features = false }
+# Owner decision 2026-10-19: SIGTERM/SIGINT/SIGCHLD reach the event loop through a self-pipe
+# (`signals`, its `unsafe` listed in UNSAFE_INVENTORY U-005/U-006); signal-hook rejected, libc used
+# instead (already in the locked graph through Smithay's dependencies: no new crate). Unlike
+# calloop's signalfd source it blocks no signal, so the session's children inherit no blocked mask.
+libc = { version = "=0.2.190", default-features = false }
 
 # Negative probes (OB-19); see tools/verify-architecture. Never enabled by default.
 [features]

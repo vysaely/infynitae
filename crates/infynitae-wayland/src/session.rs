@@ -16,8 +16,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use signal_hook::SigId;
-use signal_hook::consts::{SIGCHLD, SIGINT, SIGTERM};
+use crate::signals::{self, Registration, SIGCHLD, SIGINT, SIGTERM};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction};
 use smithay::reexports::rustix::io::Errno;
@@ -125,7 +124,7 @@ pub struct Session {
     /// SIGTERM or SIGINT arrived.
     terminated: Rc<Cell<bool>>,
     /// The handlers writing to the self-pipe; removed (the signals then ignored) on drop.
-    signal_ids: Vec<SigId>,
+    signal_ids: Vec<Registration>,
 }
 
 impl Session {
@@ -149,8 +148,8 @@ impl Session {
         let (mut wake, notify) = UnixStream::pair()?;
         wake.set_nonblocking(true)?;
         let mut signal_ids = vec![
-            signal_hook::low_level::pipe::register(SIGTERM, notify.try_clone()?)?,
-            signal_hook::low_level::pipe::register(SIGINT, notify)?,
+            signals::register(SIGTERM, notify.try_clone()?)?,
+            signals::register(SIGINT, notify)?,
         ];
         let wake_fd = wake.try_clone()?;
         handle
@@ -178,10 +177,7 @@ impl Session {
         if starts_processes {
             let (mut child_wake, child_notify) = UnixStream::pair()?;
             child_wake.set_nonblocking(true)?;
-            signal_ids.push(signal_hook::low_level::pipe::register(
-                SIGCHLD,
-                child_notify,
-            )?);
+            signal_ids.push(signals::register(SIGCHLD, child_notify)?);
             let child_fd = child_wake.try_clone()?;
             handle
                 .insert_source(
@@ -377,9 +373,8 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
-        for id in self.signal_ids.drain(..) {
-            signal_hook::low_level::unregister(id);
-        }
+        // the notifications end; the handlers stay and do nothing (signals module doc)
+        self.signal_ids.clear();
     }
 }
 

@@ -23,6 +23,7 @@ pub mod ownership;
 mod pointer;
 pub mod registry;
 pub mod session;
+mod signals;
 mod snapshot;
 
 pub use keyboard::PreemptionStrategy;

@@ -29,7 +29,11 @@ struct Run {
 /// Starts the compositor with a session command written as `body` (a shell script; `$PIDF` is
 /// where it writes its pid).
 fn start(name: &str, body: &str) -> Run {
-    let dir = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join(format!("shutdown-{name}"));
+    // A short private runtime directory: the socket path must fit `sun_path` (107 bytes + NUL).
+    // Under CARGO_TARGET_TMPDIR it did not from a worktree at a long path (or from the efficacy
+    // tool's temporary target): the bind failed, every test failed whatever the code, and their
+    // seeded controls could not fail for the reason they name.
+    let dir = std::env::temp_dir().join(format!("ifn-{}-{name}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("private runtime dir");
     let script = dir.join("child.sh");
@@ -42,6 +46,13 @@ fn start(name: &str, body: &str) -> Run {
     )
     .expect("script");
     let socket_name = format!("shutdown-{name}");
+    let socket_path = dir.join(&socket_name);
+    assert!(
+        socket_path.as_os_str().len() <= 107,
+        "socket path {} is {} bytes, more than sun_path holds",
+        socket_path.display(),
+        socket_path.as_os_str().len()
+    );
     let compositor = Command::new(env!("CARGO_BIN_EXE_infynitae"))
         .args(["--headless", "--socket", &socket_name, "--exec"])
         .arg(format!("sh {}", script.display()))
@@ -119,6 +130,7 @@ impl Drop for Run {
             let _ = self.compositor.kill();
             let _ = self.compositor.wait();
         }
+        let _ = std::fs::remove_dir_all(&self.dir);
     }
 }
 
