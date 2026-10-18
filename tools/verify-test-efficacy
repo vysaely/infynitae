@@ -1462,6 +1462,11 @@ CONTROLS = [
      "                if self.input.interaction.active() {\n                    self.end_interaction()\n",
      "                if self.input.interaction.active() {\n                    self.input.interaction = Interaction::Idle;\n                    Vec::new()\n",
      "infynitae-backend-headless", ["--test", "t1_interaction_cancel"], "an_escape_cancel_runs_the_reconciliation_the_pan_deferred"),
+    # --- 2026-10-18 audit Q-B3 / OB-54: a oneshot constraint Smithay ended stays ended in Core
+    ("Q-B3 OB-54 / INV-INPUT-5: Core re-activates a oneshot lock that Smithay ended and destroyed", f"{WAYLAND}/outputs.rs",
+     "        self.drop_constraints_smithay_destroyed();\n    }",
+     "    }",
+     "infynitae-backend-headless", ["--test", "t1_constraint_lifetime"], "an_ended_oneshot_lock_is_never_activated_again"),
     # --- INC-10 exit review (M1, L4, L5, E1, E3; clarifications proposed for C12.F17, not adopted)
     ("INC-10 review M1: a kept confinement suppresses the true-position event after a fit or restore", f"{CORE}/entry.rs",
      "                .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock);", "                .is_some();",
