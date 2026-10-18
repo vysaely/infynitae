@@ -232,11 +232,14 @@ impl Core {
     ) {
         let fx = match action {
             crate::input::keys::KeyAction::FocusNext => self.focus_next(),
+            // M22 cancel: no revert, owned buttons stay owned; the interaction terminates as at
+            // its initiator's release (INV-SCALE-3, INV-INPUT-5, M10)
             crate::input::keys::KeyAction::Cancel => {
                 if self.input.interaction.active() {
-                    self.input.interaction = Interaction::Idle;
+                    self.end_interaction()
+                } else {
+                    Vec::new()
                 }
-                Vec::new()
             }
             KeyAction::FitViewport => {
                 if let Some(p) = proof {
@@ -485,6 +488,19 @@ impl Core {
         fx
     }
 
+    /// The end of a compositor interaction, by its initiator's release or by a cancel (M22):
+    /// batch-end reconciliation (INV-INPUT-5), one true-position event (M10), and the CameraPan
+    /// epoch settles (INV-SCALE-3: it ends at interaction termination).
+    fn end_interaction(&mut self) -> Vec<Effect> {
+        self.input.interaction = Interaction::Idle;
+        let mut fx = self.reconcile_constraints();
+        if self.constraint.is_none() {
+            fx.extend(self.true_position());
+        }
+        fx.extend(self.settle_interaction(crate::scale::InteractionKind::CameraPan));
+        fx
+    }
+
     /// A release follows the press owner (INV-INPUT-1). The initiator's release ends the
     /// interaction with batch-end reconciliation: one true-position event (M10).
     fn button_release(&mut self, button: u32, time_ms: u32) -> Vec<Effect> {
@@ -494,13 +510,7 @@ impl Core {
                 if self.input.interaction.initiator() != Some(button) {
                     return Vec::new();
                 }
-                self.input.interaction = Interaction::Idle;
-                let mut fx = self.reconcile_constraints();
-                if self.constraint.is_none() {
-                    fx.extend(self.true_position());
-                }
-                fx.extend(self.settle_interaction(crate::scale::InteractionKind::CameraPan));
-                fx
+                self.end_interaction()
             }
             // In NoOutput the zero-output grab receives it and delivers nothing, keeping
             // Smithay's pressed-button set truthful (no stuck implicit grab after reconnect).
