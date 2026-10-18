@@ -319,7 +319,10 @@ impl Core {
     /// sets it again, F-LATTICE-1), the frame is stale, membership and the scale policy are
     /// evaluated once for the camera (an atomic camera action: a one-step epoch, INV-SCALE-3), and
     /// the pointer is reconciled by M10's view-change rule — one true-position event when it is on
-    /// O and no interaction owns it (the bindings never resolve during one), none otherwise.
+    /// O and no interaction owns it (the bindings never resolve during one), none otherwise. A lock
+    /// kept by the reconciliation gets none (no absolute motion reaches a locked surface,
+    /// INV-INPUT-5); a kept confinement gets the event like no constraint, so the confined client
+    /// sees where the moved surface now lies under the pointer.
     fn camera_written(&mut self, output: OutputId, camera: usize, out: &mut Vec<Effect>) {
         self.update_lattice(output);
         self.invalidate_frame(output);
@@ -327,7 +330,10 @@ impl Core {
         let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
         if on_it && !self.input.interaction.active() {
             out.extend(self.reconcile_constraints());
-            if self.constraint.is_none() {
+            let locked = self
+                .constraint
+                .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock);
+            if !locked {
                 self.true_position_into(out);
             }
         }
