@@ -551,6 +551,7 @@ name = "infynitae-wayland"
 version = "0.0.0"
 dependencies = [
  "infynitae-core",
+ "libc",
  "smithay",
 ]
 

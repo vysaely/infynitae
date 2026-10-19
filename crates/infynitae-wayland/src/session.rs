@@ -9,11 +9,14 @@
 
 use std::cell::Cell;
 use std::error::Error;
+use std::io::Read;
+use std::os::unix::net::UnixStream;
 use std::process::{Child, Command};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::signals::{self, Registration, SIGCHLD, SIGINT, SIGTERM};
 use infynitae_core::scale::SessionTime;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction};
@@ -125,6 +128,10 @@ pub struct Session {
     /// When the off-screen fallback timer fires (M16); `None` while no unobserved element has a
     /// pending callback, and then it is not armed (INV-IDLE-1).
     fallback: Option<Instant>,
+    /// SIGTERM or SIGINT arrived.
+    terminated: Rc<Cell<bool>>,
+    /// The handlers writing to the self-pipe; removed (the signals then ignored) on drop.
+    signal_ids: Vec<Registration>,
 }
 
 impl Session {
@@ -136,6 +143,61 @@ impl Session {
         handle: &LoopHandle<'_, D>,
         options: &SessionOptions,
     ) -> Result<Session, Box<dyn Error>> {
+        // SIGTERM and SIGINT, first: from here on they only end the loop (the caller then shuts
+        // down as for a run limit), so no signal can leave a socket behind half-way through
+        // start-up. A handler writes a byte to a self-pipe the loop watches; no signal is
+        // blocked, so the session's children inherit no blocked mask and the SIGTERM sent to
+        // them at shutdown reaches them (`session_children_do_not_inherit_blocked_signals`).
+        // Further signals only write again; once the session is dropped they are ignored, so a
+        // second signal never interrupts the teardown (`repeated_signals_shut_down_once`).
+        let terminated = Rc::new(Cell::new(false));
+        let flag = terminated.clone();
+        let (mut wake, notify) = UnixStream::pair()?;
+        wake.set_nonblocking(true)?;
+        let mut signal_ids = vec![
+            signals::register(SIGTERM, notify.try_clone()?)?,
+            signals::register(SIGINT, notify)?,
+        ];
+        let wake_fd = wake.try_clone()?;
+        handle
+            .insert_source(
+                Generic::new(wake_fd, Interest::READ, Mode::Level),
+                move |_, _, _| {
+                    let mut drain = [0u8; 64];
+                    while matches!(wake.read(&mut drain), Ok(n) if n > 0) {}
+                    flag.set(true);
+                    Ok(PostAction::Continue)
+                },
+            )
+            .map_err(|e| format!("Failed to register signal source: {e}"))?;
+        // Every process the session starts, and everything those start, belongs to the session
+        // and ends with it (`ownership`): orphaned descendants are re-parented to the compositor,
+        // which reaps them when SIGCHLD says one exited.
+        if let Err(e) = crate::ownership::become_subreaper() {
+            eprintln!(
+                "[infynitae] Not a child subreaper ({e}): orphans of session processes escape the session"
+            );
+        }
+        // Only a session that starts processes listens for SIGCHLD: an idle session that started
+        // nothing has nothing to wake for (INV-IDLE-1), whatever else exits in this process.
+        let starts_processes = options.exec.is_some();
+        if starts_processes {
+            let (mut child_wake, child_notify) = UnixStream::pair()?;
+            child_wake.set_nonblocking(true)?;
+            signal_ids.push(signals::register(SIGCHLD, child_notify)?);
+            let child_fd = child_wake.try_clone()?;
+            handle
+                .insert_source(
+                    Generic::new(child_fd, Interest::READ, Mode::Level),
+                    move |_, _, _| {
+                        let mut drain = [0u8; 64];
+                        while matches!(child_wake.read(&mut drain), Ok(n) if n > 0) {}
+                        crate::ownership::reap_adopted();
+                        Ok(PostAction::Continue)
+                    },
+                )
+                .map_err(|e| format!("Failed to register child-exit source: {e}"))?;
+        }
         let socket = match options.socket_name.as_deref() {
             Some(name) => ListeningSocketSource::with_name(name)?,
             None => ListeningSocketSource::new_auto()?,
@@ -177,6 +239,8 @@ impl Session {
             display_ready,
             wake: None,
             fallback: None,
+            terminated,
+            signal_ids,
         };
         if let Some(cmd) = &options.exec {
             session.spawn(handle, cmd);
@@ -200,7 +264,7 @@ impl Session {
         command
             .args(parts)
             .env("WAYLAND_DISPLAY", &self.socket_name);
-        match command.spawn() {
+        match crate::ownership::spawn_owned(&mut command) {
             Ok(child) => {
                 println!("[infynitae] Client spawned with PID {}", child.id());
                 let exited = Pid::from_raw(child.id() as i32)
@@ -271,11 +335,13 @@ impl Session {
                     "[infynitae] Child process {} exited with status {status}",
                     child.id()
                 );
+                crate::ownership::forget_spawned(child.id());
                 false
             }
             Ok(None) => true,
             Err(e) => {
                 eprintln!("[infynitae] Failed to wait on child {}: {e}", child.id());
+                crate::ownership::forget_spawned(child.id());
                 false
             }
         });
@@ -320,16 +386,36 @@ impl Session {
         let _ = self.display.flush_clients();
     }
 
-    /// Whether a run limit has been reached.
+    /// Whether a run limit has been reached or a termination signal arrived.
     pub fn finished(&self) -> bool {
-        self.duration.is_some_and(|d| self.started.elapsed() >= d)
+        self.terminated.get()
+            || self.duration.is_some_and(|d| self.started.elapsed() >= d)
             || self.max_frames.is_some_and(|n| self.frames >= n)
     }
 
-    /// Ends the session's children: SIGTERM, a bounded wait, then SIGKILL; every one is reaped.
+    /// Ends the session's processes — its children and all their descendants, including
+    /// orphans it adopted (`ownership`): SIGTERM, a bounded wait, then SIGKILL; every one is
+    /// reaped. Nothing outside the compositor's own process subtree is signalled.
     pub fn shutdown(&mut self) {
-        terminate_children(&mut self.children, CHILD_GRACE);
+        let t = Instant::now();
+        let report = crate::ownership::end_session_tree(&mut self.children, CHILD_GRACE);
+        if report.terminated > 0 {
+            println!(
+                "[infynitae] Session processes ended in {:?}: {} terminated, {} killed, {} left",
+                t.elapsed(),
+                report.terminated,
+                report.killed,
+                report.survivors
+            );
+        }
         self.flush();
+    }
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        // the notifications end; the handlers stay and do nothing (signals module doc)
+        self.signal_ids.clear();
     }
 }
 
@@ -670,8 +756,10 @@ mod tests {
         assert_eq!(frames, 5);
     }
 
+    /// A child of this test, registered as owned (session process ownership): a session another
+    /// test shuts down in this process leaves it alone.
     fn spawn(cmd: &str, args: &[&str]) -> Child {
-        Command::new(cmd).args(args).spawn().unwrap()
+        crate::ownership::spawn_owned(Command::new(cmd).args(args)).unwrap()
     }
 
     /// Whether the process still exists in any state, a zombie included.

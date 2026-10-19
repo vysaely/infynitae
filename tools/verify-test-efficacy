@@ -1207,7 +1207,8 @@ CONTROLS = [
      "infynitae-wayland", ["--lib"], "a_frame_limit_is_reached_without_clients"),
     ("session: children are not terminated at shutdown",
      f"{WAYLAND}/session.rs",
-     "        terminate_children(&mut self.children, CHILD_GRACE);\n", "",
+     "        let report = crate::ownership::end_session_tree(&mut self.children, CHILD_GRACE);\n",
+     "        let report = crate::ownership::Teardown::default();\n",
      "infynitae-backend-headless", ["--test", "t1_tiny_compositor"], "the_session_command_does_not_outlive_the_session"),
     ("session: children are killed without the grace period",
      f"{WAYLAND}/session.rs",
@@ -1612,6 +1613,23 @@ CONTROLS = [
     ("clipboard: a client's drag is not refused (Smithay's DnD grab takes the pointer)", f"{WAYLAND}/handlers.rs",
      "        self.drag_started = true;\n", "",
      "infynitae-backend-headless", ["--test", "t1_clipboard"], "a_drag_started_on_a_real_press_is_refused"),
+    # ---- orderly shutdown (2026-10-16): SIGTERM/SIGINT end the loop; children see no blocked mask
+    ("shutdown: SIGINT is not handled (the default action kills the compositor)", f"{WAYLAND}/session.rs",
+     "            signals::register(SIGINT, notify)?,\n", "            signals::register(SIGTERM, notify)?,\n",
+     "infynitae", ["--test", "shutdown"], "sigint_shuts_down_cleanly"),
+    ("shutdown: a signal does not end the loop", f"{WAYLAND}/session.rs",
+     "                    flag.set(true);\n", "                    let _ = &flag;\n",
+     "infynitae", ["--test", "shutdown"], "sigterm_shuts_down_cleanly"),
+    # ---- session process ownership (2026-10-16): the compositor's process subtree ends with it
+    ("ownership: the compositor is not a subreaper (a double-forked daemon escapes to init)", f"{WAYLAND}/session.rs",
+     "        if let Err(e) = crate::ownership::become_subreaper() {", "        if let Err(e) = Ok::<(), std::io::Error>(()) {",
+     "infynitae", ["--test", "shutdown"], "descendants_and_daemons_end_with_the_session"),
+    ("ownership: only direct children are ended (grandchildren survive)", f"{WAYLAND}/ownership.rs",
+     "                out.push(Member { pid, fd });\n                parents.push(pid);", "                out.push(Member { pid, fd });",
+     "infynitae", ["--test", "shutdown"], "a_descendant_ignoring_sigterm_is_killed_after_the_grace_period"),
+    ("ownership: adopted orphans are not reaped while the session runs (zombies accumulate)", f"{WAYLAND}/session.rs",
+     "                        crate::ownership::reap_adopted();\n                        Ok(PostAction::Continue)", "                        Ok(PostAction::Continue)",
+     "infynitae", ["--test", "shutdown"], "an_adopted_orphan_is_reaped_while_the_session_runs"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

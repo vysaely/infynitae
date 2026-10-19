@@ -148,6 +148,20 @@ pub fn run_nested(
     let display: Display<WaylandState> = Display::new()?;
     let mut state = WaylandState::new(&display.handle(), core);
 
+    // Before the window: from here on SIGTERM/SIGINT end the loop instead of the process, so a
+    // signal during the rest of start-up still leaves no socket behind.
+    let session = Session::new(
+        display,
+        &event_loop.handle(),
+        &SessionOptions {
+            socket_name: options.socket_name.clone(),
+            exec: options.exec.clone(),
+            refresh_mhz: options.refresh_mhz,
+            duration: options.duration,
+            max_frames: options.max_frames,
+        },
+    )?;
+
     let window_attributes = WinitWindow::default_attributes()
         .with_inner_size(LogicalSize::new(
             options.width as f64,
@@ -182,18 +196,6 @@ pub fn run_nested(
     // This backend does not ask its GLES renderer yet (OB-52, INC-13): it reports an assumed
     // limit and says so.
     state.report_renderer_limits(&AssumedGlesLimits)?;
-
-    let session = Session::new(
-        display,
-        &event_loop.handle(),
-        &SessionOptions {
-            socket_name: options.socket_name.clone(),
-            exec: options.exec.clone(),
-            refresh_mhz: options.refresh_mhz,
-            duration: options.duration,
-            max_frames: options.max_frames,
-        },
-    )?;
 
     let mut data = LoopData {
         state,
