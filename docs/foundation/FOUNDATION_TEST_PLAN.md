@@ -249,6 +249,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-8
 - **Blocks:** INC-8 exit (T1 part)
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
+- **History:** INC-8 ratified for its T1 scope 2026-10-16 (`375b44f`): the T1 part is met (TST-11 T1 real-time harness on the production path: first response 86 µs median, 131 µs max over 50 runs; with the kick disabled about 700 ms). Status unchanged: OPEN until the T3 part (real toolkits) is met.
 
 ### OB-17
 - **Status:** OPEN

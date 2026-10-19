@@ -16,6 +16,7 @@
 #![deny(unsafe_code)]
 
 pub mod convert;
+mod frames;
 mod handlers;
 mod keyboard;
 pub mod limits;

@@ -1188,6 +1188,7 @@ mod tests {
                 size: crate::geom::LocalSize { w: 100, h: 100 },
                 mapped,
                 input: crate::snapshot::InputRegion::Infinite,
+                frame_requested: false,
             }],
         };
         c.toplevel_committed(id, tree(false)).unwrap();
@@ -1223,6 +1224,7 @@ mod tests {
                 size: crate::geom::LocalSize { w: 100, h: 100 },
                 mapped,
                 input: crate::snapshot::InputRegion::Infinite,
+                frame_requested: false,
             }],
         };
         c.toplevel_committed(id, tree(false)).unwrap();

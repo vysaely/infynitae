@@ -66,6 +66,7 @@ fn tree(mapped: bool) -> SurfaceTree {
             size: if mapped { size } else { LocalSize::default() },
             mapped,
             input: InputRegion::Infinite,
+            frame_requested: false,
         }],
     }
 }
