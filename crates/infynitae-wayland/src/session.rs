@@ -414,6 +414,12 @@ impl Session {
 
 impl Drop for Session {
     fn drop(&mut self) {
+        // A session dropped without `shutdown` (an error return after `Session::new`, e.g. the
+        // nested backend's window or renderer failing, or a panic) still ends the processes it
+        // started; after `shutdown` none is left and nothing happens here.
+        if !self.children.is_empty() {
+            let _ = crate::ownership::end_session_tree(&mut self.children, CHILD_GRACE);
+        }
         // the notifications end; the handlers stay and do nothing (signals module doc)
         self.signal_ids.clear();
     }
@@ -624,6 +630,35 @@ mod tests {
         assert_eq!(session.timeout(), Some(Duration::ZERO), "overdue");
         session.set_fallback_deadline(None, now);
         assert_eq!(session.timeout(), None, "disarmed");
+        drop(event_loop);
+    }
+
+    /// A session dropped without `shutdown` (an early error return in a backend after
+    /// `Session::new`) still ends the client it started: none outlives the session (independent
+    /// review 2026-10-20, finding 2).
+    #[test]
+    fn a_session_dropped_without_shutdown_ends_its_client() {
+        let display: Display<WaylandState> = Display::new().unwrap();
+        let event_loop: EventLoop<()> = EventLoop::try_new().unwrap();
+        let options = SessionOptions {
+            socket_name: Some(format!("infynitae-dropexec-test-{}", std::process::id())),
+            exec: Some("sleep 30".into()),
+            refresh_mhz: 60_000,
+            ..SessionOptions::default()
+        };
+        let session = Session::new(display, &event_loop.handle(), &options).unwrap();
+        let pids: Vec<u32> = session.children.iter().map(|c| c.id()).collect();
+        assert_eq!(pids.len(), 1, "the client was started");
+        let t = Instant::now();
+        drop(session);
+        for pid in pids {
+            let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok();
+            assert!(
+                state.is_none(),
+                "client {pid} outlived the session: {state:?}"
+            );
+        }
+        assert!(t.elapsed() < CHILD_GRACE + Duration::from_secs(1));
         drop(event_loop);
     }
 

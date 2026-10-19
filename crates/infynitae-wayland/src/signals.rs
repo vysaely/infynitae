@@ -9,13 +9,18 @@
 //!   a handled signal to its default action in them;
 //! - once every registration of a signal has ended, the handler stays installed and does
 //!   nothing: a later signal is ignored rather than taking its default action in the middle of
-//!   the teardown (`repeated_signals_shut_down_once`).
+//!   the teardown (`repeated_signals_shut_down_once`). Consequence for a process that hosts
+//!   several sessions (the test binaries): once a session has existed, SIGTERM and SIGINT are
+//!   ignored while no session is registered — Ctrl-C does not stop such a test binary between
+//!   sessions; the compositor binary hosts one session and exits after it.
 //!
 //! Several sessions may be registered at once (tests run sessions on parallel threads); each
 //! signal has [`SLOTS`] registration slots. A registration's write end is never closed: a handler
 //! that read a descriptor just before its registration ended can then never write into a
 //! descriptor number the process has since reused; `MSG_NOSIGNAL | MSG_DONTWAIT` keep the write
-//! from raising SIGPIPE or blocking once the loop's end is gone. The `unsafe` sites are listed in
+//! from raising SIGPIPE or blocking once the loop's end is gone. The cost is one descriptor per
+//! registration for the process's lifetime (two or three per session); [`SLOTS`] bounds only the
+//! live ones. The `unsafe` sites are listed in
 //! UNSAFE_INVENTORY (U-005, U-006).
 
 use std::io;
