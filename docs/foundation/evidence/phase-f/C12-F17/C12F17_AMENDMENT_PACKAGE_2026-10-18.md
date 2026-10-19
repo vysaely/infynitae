@@ -172,7 +172,7 @@ INV-RENDER-1's wording; F-RENDER-1's location formula L and its tracker definiti
   > - **Owner:** architecture (INV-INPUT-2, M22) via change control, then adapter (data device) + core input
   > - **Evidence available:** the clipboard integration (owner decision 2026-10-19: clipboard yes, drag-and-drop stays refused); T1 `t1_clipboard::a_drag_started_on_a_real_press_is_refused` (source cancelled, no offer, the next motion routed by Core)
   > - **Pass criterion:** an architecture decision on drag ownership under INV-INPUT-2; T1 production tests for a drag within one client, between two clients and across outputs, with seeded controls; until then the refusal test stays
-  > - **Destination:** DECISION, then T1
+  > - **Destination:** DECISION (then T1 production tests, pass criterion)
   > - **May be closed by:** architecture change control and T1 production tests
   > - **Dependencies:** clipboard integration
   > - **Blocks:** any drag-and-drop support claim
