@@ -188,6 +188,7 @@ impl WaylandState {
                 }
             }
         }
+        self.drop_constraints_smithay_destroyed();
     }
 
     /// The Smithay output of a connected output (for render oracles and backends).

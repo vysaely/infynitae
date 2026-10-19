@@ -87,11 +87,11 @@ impl Core {
                 time_us,
             } => {
                 self.input.clock.accepted(time_us);
-                out.extend(if pressed {
-                    self.button_press(button, modifiers, ms(time_us))
+                if pressed {
+                    self.button_press(button, modifiers, ms(time_us), out);
                 } else {
-                    self.button_release(button, ms(time_us))
-                });
+                    self.button_release(button, ms(time_us), out);
+                }
                 Ok(())
             }
             PhysicalEvent::PointerAxis { axis, time_us } => {
@@ -232,11 +232,14 @@ impl Core {
     ) {
         let fx = match action {
             crate::input::keys::KeyAction::FocusNext => self.focus_next(),
+            // M22 cancel: no revert, owned buttons stay owned; the interaction terminates as at
+            // its initiator's release (INV-SCALE-3, INV-INPUT-5, M10)
             crate::input::keys::KeyAction::Cancel => {
                 if self.input.interaction.active() {
-                    self.input.interaction = Interaction::Idle;
+                    self.end_interaction()
+                } else {
+                    Vec::new()
                 }
-                Vec::new()
             }
             KeyAction::FitViewport => {
                 if let Some(p) = proof {
@@ -426,23 +429,25 @@ impl Core {
     }
 
     /// Ownership is decided here, at press, before any client dispatch (INV-INPUT-1, C4.2 P2).
+    /// The effects are appended to `out` (the caller's reusable buffer, C14.3, INV-ALLOC-1).
     fn button_press(
         &mut self,
         button: u32,
         mods: bindings::Modifiers,
         time_ms: u32,
-    ) -> Vec<Effect> {
+        out: &mut Vec<Effect>,
+    ) {
         if self.input.ownership.owner(button).is_some() {
-            return Vec::new(); // a repeated press keeps its first owner
+            return; // a repeated press keeps its first owner
         }
         // M22: any press during an interaction is owned by it; M10: NoOutput consumes presses
         let PointerState::Located { output, p } = self.pointer else {
             self.input.ownership.press(button, Owner::Compositor);
-            return Vec::new();
+            return;
         };
         if self.input.interaction.active() {
             self.input.ownership.press(button, Owner::Compositor);
-            return Vec::new();
+            return;
         }
         let camera = self.cameras.camera_for_output(output);
         // G-OB24 is met (C12.F14.5): a pan at any zoom keeps the output's lattice reference
@@ -462,65 +467,68 @@ impl Core {
                 sum: (0.0, 0.0),
             };
             self.input.ownership.press(button, Owner::Compositor);
-            let mut fx = Vec::new();
             if let Some(target) = self.focus.target() {
-                fx.push(Effect::DismissPopupGrab(target));
+                out.push(Effect::DismissPopupGrab(target));
             }
-            return fx;
+            return;
         }
         self.input.ownership.press(button, Owner::Client);
-        let mut fx = Vec::new();
         // Click-to-focus (INV-INPUT-8, M11): an explicit user action.
         // If the click hits an element, that element gains ActiveElementFocus.
         let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
         if let Some(hit) = self.hit_test(output, pt) {
-            fx.extend(self.focus.set_focus(Some(hit.element)));
+            out.extend(self.focus.set_focus(Some(hit.element)));
         }
-        fx.push(Effect::PointerButton {
+        out.push(Effect::PointerButton {
             button,
             pressed: true,
             time_ms,
         });
-        fx.push(Effect::PointerFrame);
+        out.push(Effect::PointerFrame);
+    }
+
+    /// The end of a compositor interaction, by its initiator's release or by a cancel (M22):
+    /// batch-end reconciliation (INV-INPUT-5), one true-position event (M10), and the CameraPan
+    /// epoch settles (INV-SCALE-3: it ends at interaction termination).
+    fn end_interaction(&mut self) -> Vec<Effect> {
+        self.input.interaction = Interaction::Idle;
+        let mut fx = self.reconcile_constraints();
+        if self.constraint.is_none() {
+            fx.extend(self.true_position());
+        }
+        fx.extend(self.settle_interaction(crate::scale::InteractionKind::CameraPan));
         fx
     }
 
     /// A release follows the press owner (INV-INPUT-1). The initiator's release ends the
-    /// interaction with batch-end reconciliation: one true-position event (M10).
-    fn button_release(&mut self, button: u32, time_ms: u32) -> Vec<Effect> {
+    /// interaction with batch-end reconciliation: one true-position event (M10). The effects are
+    /// appended to `out` (the caller's reusable buffer, C14.3, INV-ALLOC-1).
+    fn button_release(&mut self, button: u32, time_ms: u32, out: &mut Vec<Effect>) {
         match self.input.ownership.release(button) {
-            None => Vec::new(),
+            None => {}
             Some(Owner::Compositor) => {
-                if self.input.interaction.initiator() != Some(button) {
-                    return Vec::new();
+                if self.input.interaction.initiator() == Some(button) {
+                    out.extend(self.end_interaction());
                 }
-                self.input.interaction = Interaction::Idle;
-                let mut fx = self.reconcile_constraints();
-                if self.constraint.is_none() {
-                    fx.extend(self.true_position());
-                }
-                fx.extend(self.settle_interaction(crate::scale::InteractionKind::CameraPan));
-                fx
             }
             // In NoOutput the zero-output grab receives it and delivers nothing, keeping
             // Smithay's pressed-button set truthful (no stuck implicit grab after reconnect).
             Some(Owner::Client) => {
-                let mut fx = vec![
+                out.extend([
                     Effect::PointerButton {
                         button,
                         pressed: false,
                         time_ms,
                     },
                     Effect::PointerFrame,
-                ];
+                ]);
                 if !self.input.ownership.client_owns_any() {
                     let had_constraint = self.constraint.is_some();
-                    fx.extend(self.reconcile_constraints());
+                    out.extend(self.reconcile_constraints());
                     if had_constraint && self.constraint.is_none() {
-                        fx.extend(self.true_position());
+                        self.true_position_into(out);
                     }
                 }
-                fx
             }
         }
     }

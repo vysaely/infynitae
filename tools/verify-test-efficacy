@@ -7,7 +7,9 @@ production code, and runs the named test. The control passes only if that test F
 never edited; its digest is compared before and after.
 
 Headless, deterministic, non-interactive. Exit status 0 only when every control detects its defect.
-Usage: tools/verify-test-efficacy
+Usage: tools/verify-test-efficacy [--check-seeds]
+  --check-seeds  every anchor occurs once and every seeded tree compiles its control's test target
+                 (no test is run); a built-in negative seed must be reported.
 """
 
 import hashlib
@@ -31,8 +33,8 @@ CONTROLS = [
      "        let time_ms = self.input.clock.wire_ms();", "        let time_ms = 0;",
      "infynitae-backend-headless", ["--test", "t1_inc7_adversarial"], "pointer_event_times_never_go_back_at_output_changes"),
     ("A-5: a button release is not read on the input clock (its true position is a step behind)", f"{CORE}/entry.rs",
-     "                self.input.clock.accepted(time_us);\n                out.extend(if pressed {",
-     "                if pressed {\n                    self.input.clock.accepted(time_us);\n                }\n                out.extend(if pressed {",
+     "                self.input.clock.accepted(time_us);\n                if pressed {\n                    self.button_press(",
+     "                if pressed {\n                    self.input.clock.accepted(time_us);\n                }\n                if pressed {\n                    self.button_press(",
      "infynitae-backend-headless", ["--test", "t1_inc7_adversarial"], "pointer_event_times_never_go_back_after_a_drag_and_under_a_grab"),
     ("A-5: the input clock goes back with an event stamped earlier", f"{CORE}/input/mod.rs",
      "        self.0 = Some(self.0.map_or(time_us, |t| t.max(time_us)));", "        self.0 = Some(time_us);",
@@ -260,8 +262,8 @@ CONTROLS = [
      "        self.input.interaction.orphan_if_on(output);\n", "        let _ = output;\n",
      "infynitae-backend-headless", ["--test", "t1_input"], "removing_the_pan_output_orphans_the_pan"),
     ("INC-3 M10 KeepFocus: no true-position event at the end of a pan", f"{CORE}/entry.rs",
-     "                if self.constraint.is_none() {\n                    fx.extend(self.true_position());\n",
-     "                if false {\n                    fx.extend(self.true_position());\n",
+     "        if self.constraint.is_none() {\n            fx.extend(self.true_position());\n",
+     "        if false {\n            fx.extend(self.true_position());\n",
      "infynitae-backend-headless", ["--test", "t1_input"], "x8_c1_keepfocus_pan_then_true_position"),
     ("INC-3 INV-INPUT-4: relative motion synthesised at reconciliation", f"{CORE}/lib.rs",
      "                    time_ms,\n                },\n                protocol::Effect::PointerFrame,\n            ]);",
@@ -271,7 +273,7 @@ CONTROLS = [
      "            && !self.input.ownership.client_owns_any();\n", "            && true;\n",
      "infynitae-backend-headless", ["--test", "t1_input"], "x8_c6_no_acquisition_while_the_client_owns_a_button"),
     ("INC-3 M22: a press during the pan is delivered to the client", f"{CORE}/entry.rs",
-     "        if self.input.interaction.active() {\n            self.input.ownership.press(button, Owner::Compositor);\n            return Vec::new();\n        }\n",
+     "        if self.input.interaction.active() {\n            self.input.ownership.press(button, Owner::Compositor);\n            return;\n        }\n",
      "",
      "infynitae-backend-headless", ["--test", "t1_input"], "x8_c7_presses_during_the_pan_stay_compositor_owned"),
     ("INC-3 binding: the modifier is not required", f"{CORE}/input/bindings.rs",
@@ -311,7 +313,7 @@ CONTROLS = [
      "infynitae-backend-headless", ["--test", "t1_input"], "zero_output_transition_free_pointer"),
     ("INC-3 zero outputs: a client release is dropped (stuck implicit grab after reconnect)", f"{CORE}/entry.rs",
      "            // In NoOutput the zero-output grab receives it and delivers nothing, keeping\n            // Smithay's pressed-button set truthful (no stuck implicit grab after reconnect).\n            Some(Owner::Client) => {",
-     "            Some(Owner::Client) if self.pointer == PointerState::NoOutput => return Vec::new(),\n            Some(Owner::Client) => {",
+     "            Some(Owner::Client) if self.pointer == PointerState::NoOutput => {}\n            Some(Owner::Client) => {",
      "infynitae-backend-headless", ["--test", "t1_input"], "zero_output_transition_with_a_held_button"),
     ("INC-3 output removal: relocated pointer not re-routed (stale focus)", f"{CORE}/entry.rs",
      "                    pointer_fx.extend(self.true_position());", "                    // pointer_fx.extend(self.true_position());",
@@ -334,12 +336,12 @@ CONTROLS = [
      "        match if key == crate::input::keys::KEY_B { Some(Owner::Compositor) } else { self.input.key_ownership.release(key) } {",
      "infynitae-backend-headless", ["--test", "t1_keyboard"], "release_follows_press_owner_after_modifier_change"),
     ("INC-4 OB-4: interaction acquisition does not dismiss popup grabs", f"{CORE}/entry.rs",
-     "            if let Some(target) = self.focus.target() {\n                fx.push(Effect::DismissPopupGrab(target));\n            }",
-     "            if false {\n                if let Some(target) = self.focus.target() {\n                    fx.push(Effect::DismissPopupGrab(target));\n                }\n            }",
+     "            if let Some(target) = self.focus.target() {\n                out.push(Effect::DismissPopupGrab(target));\n            }",
+     "            if false {\n                if let Some(target) = self.focus.target() {\n                    out.push(Effect::DismissPopupGrab(target));\n                }\n            }",
      "infynitae-backend-headless", ["--test", "t1_popup_focus"], "pf_ob4_interaction_acquisition_dismisses_popup_grab"),
     ("INC-4 U: click-to-focus removed", f"{CORE}/entry.rs",
-     "        if let Some(hit) = self.hit_test(output, pt) {\n            fx.extend(self.focus.set_focus(Some(hit.element)));\n        }",
-     "        if false {\n            if let Some(hit) = self.hit_test(output, pt) {\n                fx.extend(self.focus.set_focus(Some(hit.element)));\n            }\n        }",
+     "        if let Some(hit) = self.hit_test(output, pt) {\n            out.extend(self.focus.set_focus(Some(hit.element)));\n        }",
+     "        if false {\n            if let Some(hit) = self.hit_test(output, pt) {\n                out.extend(self.focus.set_focus(Some(hit.element)));\n            }\n        }",
      "infynitae-backend-headless", ["--test", "t1_popup_focus"], "click_to_focus_focuses_mapped_window"),
     ("INC-4 P: rule 1 visibility guard dropped (causing output used even if parent not visible on it)", f"{CORE}/protocol.rs",
      "            (None, Some(o)) if self.membership.observers(parent).contains(&o) => o,",
@@ -1453,6 +1455,25 @@ CONTROLS = [
      "            if !crate::geom::zoom_in_domain(*zoom) {\n                return Err(PersistedError::Zoom { entry: i });\n            }\n",
      "            if !crate::geom::zoom_in_domain(*zoom) {\n                return Ok(PersistedCameras { entries: entries[..i].to_vec() });\n            }\n",
      "infynitae-core", ["--lib"], "a_rejected_persisted_table_applies_none_of_its_entries"),
+    # --- 2026-10-18 audit Q-B1: Escape-cancel is an interaction termination (M22, INV-SCALE-3, INV-INPUT-5, M10)
+    ("Q-B1 INV-SCALE-3: an Escape cancel leaves the CameraPan epoch open", f"{CORE}/entry.rs",
+     "                if self.input.interaction.active() {\n                    self.end_interaction()\n",
+     "                if self.input.interaction.active() {\n                    self.input.interaction = Interaction::Idle;\n                    Vec::new()\n",
+     "infynitae-backend-headless", ["--test", "t1_interaction_cancel"], "an_escape_cancel_settles_the_pan_epoch_like_a_release"),
+    ("Q-B1 INV-INPUT-5: an Escape cancel skips the reconciliation the pan deferred", f"{CORE}/entry.rs",
+     "                if self.input.interaction.active() {\n                    self.end_interaction()\n",
+     "                if self.input.interaction.active() {\n                    self.input.interaction = Interaction::Idle;\n                    Vec::new()\n",
+     "infynitae-backend-headless", ["--test", "t1_interaction_cancel"], "an_escape_cancel_runs_the_reconciliation_the_pan_deferred"),
+    # --- 2026-10-18 audit Q-B3 / OB-54: a oneshot constraint Smithay ended stays ended in Core
+    ("Q-B3 OB-54 / INV-INPUT-5: Core re-activates a oneshot lock that Smithay ended and destroyed", f"{WAYLAND}/outputs.rs",
+     "        self.drop_constraints_smithay_destroyed();\n    }",
+     "    }",
+     "infynitae-backend-headless", ["--test", "t1_constraint_lifetime"], "an_ended_oneshot_lock_is_never_activated_again"),
+    # --- 2026-10-18 audit Q-P1: client button events allocate nothing (INV-ALLOC-1 input intake, OB-42)
+    ("Q-P1 INV-ALLOC-1: a client button release builds its effects in a new Vec", f"{CORE}/entry.rs",
+     "                out.extend([\n                    Effect::PointerButton {\n                        button,\n                        pressed: false,",
+     "                out.extend(vec![\n                    Effect::PointerButton {\n                        button,\n                        pressed: false,",
+     "infynitae-backend-headless", ["--test", "t0_hot_path_allocations"], "hot_path_allocations_do_not_grow"),
     # --- INC-10 exit review (M1, L4, L5, E1, E3; clarifications proposed for C12.F17, not adopted)
     ("INC-10 review M1: a kept confinement suppresses the true-position event after a fit or restore", f"{CORE}/entry.rs",
      "                .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock);", "                .is_some();",
@@ -1579,7 +1600,67 @@ def run_control(prop, rel, old, new, package, target, name, target_dir):
         shutil.rmtree(tmp)
 
 
+# --check-seeds: a control is only as good as its seed. The full run reports a seed that does not
+# compile as BROKEN, but only after the whole run; this mode proves, faster and up front, that every
+# anchor occurs exactly once in the canonical tree AND that every seeded tree compiles the control's
+# own test target (`cargo test --no-run`, the build a real run performs). A built-in negative seed
+# that cannot compile must be reported, or the check itself is broken.
+SEED_CHECK_NEGATIVE = (f"{CORE}/geom.rs", "pub const Q16_ONE: i64 = 1 << 16;",
+                       "pub const Q16_ONE: i64 = \"seed check: this must not compile\";",
+                       "infynitae-core", ["--lib"])
+
+
+def check_seeds():
+    tmp = tempfile.mkdtemp(prefix="verify-test-efficacy-seeds-")
+    os.makedirs(os.path.join(ROOT, "target"), exist_ok=True)
+    # the build goes to disk next to the canonical target (/tmp may be memory-backed)
+    target_dir = tempfile.mkdtemp(prefix=f"check-seeds-{os.getpid()}-", dir=os.path.join(ROOT, "target"))
+    try:
+        for item in COPY_ITEMS:
+            src, dst = os.path.join(ROOT, item), os.path.join(tmp, item)
+            (shutil.copytree if os.path.isdir(src) else shutil.copy2)(src, dst)
+        entries = [(prop, rel, old, new, package, target) for prop, rel, old, new, package, target, _ in CONTROLS]
+        entries += [(prop, rel, old, new, package, target) for prop, _, rel, old, new, package, target, _ in JUDGE]
+        entries.append(("seed check: the negative seed is reported", *SEED_CHECK_NEGATIVE))
+        bad = 0
+        for i, (prop, rel, old, new, package, target) in enumerate(entries):
+            negative = i == len(entries) - 1
+            path = os.path.join(tmp, rel)
+            with open(path) as f:
+                text = f.read()
+            if text.count(old) != 1:
+                bad += 1
+                print(f"  FAIL  ANCHOR    {prop}: found {text.count(old)} times in {rel}")
+                continue
+            with open(path, "w") as f:
+                f.write(text.replace(old, new, 1))
+            try:
+                cmd = ["cargo", "test", "--locked", "--no-run", "-p", package, *target]
+                p = subprocess.run(cmd, cwd=tmp, env={**os.environ, "CARGO_TARGET_DIR": target_dir},
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                compiles = p.returncode == 0 and "error[E" not in p.stdout and "could not compile" not in p.stdout
+            finally:
+                with open(path, "w") as f:
+                    f.write(text)
+            if negative:
+                ok = not compiles
+                print(f"  {'ok  ' if ok else 'FAIL'}  {'REPORTED' if ok else 'MISSED':<9} {prop}")
+            else:
+                ok = compiles
+                print(f"  {'ok  ' if ok else 'FAIL'}  {'COMPILES' if ok else 'BROKEN':<9} {prop}")
+            bad += not ok
+        print("=" * 72)
+        print(f"== verify-test-efficacy --check-seeds: {'PASS' if bad == 0 else f'FAIL ({bad})'} "
+              f"({len(entries) - 1} seeds)")
+        return 0 if bad == 0 else 1
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(target_dir, ignore_errors=True)
+
+
 def main():
+    if sys.argv[1:] == ["--check-seeds"]:
+        return check_seeds()
     if sys.argv[1:]:
         print(__doc__)
         return 2
