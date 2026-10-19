@@ -1,5 +1,16 @@
 # Orderly shutdown on SIGTERM / SIGINT — design and evidence (2026-10-16)
 
+**Owner decision 2026-10-19:** the orderly-shutdown and process-ownership design is APPROVED;
+`signal-hook` is REJECTED. The self-pipe is re-implemented on `libc` (already in the locked graph,
+no new crate): `crates/infynitae-wayland/src/signals.rs`, its `unsafe` listed as UNSAFE_INVENTORY
+U-005/U-006; `tools/verify-architecture` allows `libc` instead of `signal-hook`. The behaviour of
+§1 is unchanged; where the text below names signal-hook, read the `signals` module (a handler that
+writes one byte with `send(2)` to each registered stream; once the last registration ends it stays
+installed and does nothing, so later signals are ignored as before). The `shutdown` tests now use
+a short runtime directory under the system temp dir and assert the socket path fits `sun_path`
+(≤ 107 bytes), so their seeded controls can fail. Integrated on
+`integration/owner-decisions-2026-10-19`; the text below is the 2026-10-16 proposal, kept as is.
+
 Status: **PROPOSAL for the owner** (branch `feature/orderly-shutdown-2026-10-16`, from `main`
 23752f1). It adds one dependency to the adapter (`signal-hook =0.3.18`, default features off;
 `signal-hook-registry 1.4.5` comes with it, both depend only on `libc`) and the matching
