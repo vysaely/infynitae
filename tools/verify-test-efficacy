@@ -7,7 +7,9 @@ production code, and runs the named test. The control passes only if that test F
 never edited; its digest is compared before and after.
 
 Headless, deterministic, non-interactive. Exit status 0 only when every control detects its defect.
-Usage: tools/verify-test-efficacy
+Usage: tools/verify-test-efficacy [--check-seeds]
+  --check-seeds  every anchor occurs once and every seeded tree compiles its control's test target
+                 (no test is run); a built-in negative seed must be reported.
 """
 
 import hashlib
@@ -1598,7 +1600,67 @@ def run_control(prop, rel, old, new, package, target, name, target_dir):
         shutil.rmtree(tmp)
 
 
+# --check-seeds: a control is only as good as its seed. The full run reports a seed that does not
+# compile as BROKEN, but only after the whole run; this mode proves, faster and up front, that every
+# anchor occurs exactly once in the canonical tree AND that every seeded tree compiles the control's
+# own test target (`cargo test --no-run`, the build a real run performs). A built-in negative seed
+# that cannot compile must be reported, or the check itself is broken.
+SEED_CHECK_NEGATIVE = (f"{CORE}/geom.rs", "pub const Q16_ONE: i64 = 1 << 16;",
+                       "pub const Q16_ONE: i64 = \"seed check: this must not compile\";",
+                       "infynitae-core", ["--lib"])
+
+
+def check_seeds():
+    tmp = tempfile.mkdtemp(prefix="verify-test-efficacy-seeds-")
+    os.makedirs(os.path.join(ROOT, "target"), exist_ok=True)
+    # the build goes to disk next to the canonical target (/tmp may be memory-backed)
+    target_dir = tempfile.mkdtemp(prefix=f"check-seeds-{os.getpid()}-", dir=os.path.join(ROOT, "target"))
+    try:
+        for item in COPY_ITEMS:
+            src, dst = os.path.join(ROOT, item), os.path.join(tmp, item)
+            (shutil.copytree if os.path.isdir(src) else shutil.copy2)(src, dst)
+        entries = [(prop, rel, old, new, package, target) for prop, rel, old, new, package, target, _ in CONTROLS]
+        entries += [(prop, rel, old, new, package, target) for prop, _, rel, old, new, package, target, _ in JUDGE]
+        entries.append(("seed check: the negative seed is reported", *SEED_CHECK_NEGATIVE))
+        bad = 0
+        for i, (prop, rel, old, new, package, target) in enumerate(entries):
+            negative = i == len(entries) - 1
+            path = os.path.join(tmp, rel)
+            with open(path) as f:
+                text = f.read()
+            if text.count(old) != 1:
+                bad += 1
+                print(f"  FAIL  ANCHOR    {prop}: found {text.count(old)} times in {rel}")
+                continue
+            with open(path, "w") as f:
+                f.write(text.replace(old, new, 1))
+            try:
+                cmd = ["cargo", "test", "--locked", "--no-run", "-p", package, *target]
+                p = subprocess.run(cmd, cwd=tmp, env={**os.environ, "CARGO_TARGET_DIR": target_dir},
+                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+                compiles = p.returncode == 0 and "error[E" not in p.stdout and "could not compile" not in p.stdout
+            finally:
+                with open(path, "w") as f:
+                    f.write(text)
+            if negative:
+                ok = not compiles
+                print(f"  {'ok  ' if ok else 'FAIL'}  {'REPORTED' if ok else 'MISSED':<9} {prop}")
+            else:
+                ok = compiles
+                print(f"  {'ok  ' if ok else 'FAIL'}  {'COMPILES' if ok else 'BROKEN':<9} {prop}")
+            bad += not ok
+        print("=" * 72)
+        print(f"== verify-test-efficacy --check-seeds: {'PASS' if bad == 0 else f'FAIL ({bad})'} "
+              f"({len(entries) - 1} seeds)")
+        return 0 if bad == 0 else 1
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(target_dir, ignore_errors=True)
+
+
 def main():
+    if sys.argv[1:] == ["--check-seeds"]:
+        return check_seeds()
     if sys.argv[1:]:
         print(__doc__)
         return 2
