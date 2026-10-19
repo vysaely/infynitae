@@ -319,7 +319,7 @@ CONTROLS = [
      "                    pointer_fx.extend(self.true_position());", "                    // pointer_fx.extend(self.true_position());",
      "infynitae-backend-headless", ["--test", "t1_adversarial"], "f_output_removal_relocates_to_the_nearest_survivor"),
     ("INC-3 M10 reconfiguration: no true-position event (stale frame routing)", f"{CORE}/entry.rs",
-     "        if on_it && !self.input.interaction.active() {\n            fx.extend(self.true_position());", "        if false && on_it {\n            fx.extend(self.true_position());",
+     "        if on_it && !self.input.interaction.active() && !locked {\n            fx.extend(self.true_position());", "        if false && on_it {\n            fx.extend(self.true_position());",
      "infynitae-backend-headless", ["--test", "t1_adversarial"], "l_no_stale_frame_after_reconfiguration"),
 
     # ---- INC-4: keyboard ownership, ActiveElementFocus, popup routing (TST-07, TST-20, OB-15, OB-30, OB-4)
@@ -1474,6 +1474,11 @@ CONTROLS = [
      "                out.extend([\n                    Effect::PointerButton {\n                        button,\n                        pressed: false,",
      "                out.extend(vec![\n                    Effect::PointerButton {\n                        button,\n                        pressed: false,",
      "infynitae-backend-headless", ["--test", "t0_hot_path_allocations"], "hot_path_allocations_do_not_grow"),
+    # --- 2026-10-18 audit Q-B2 / OB-55 (gated on the owner's Q2; protocol: no motion while locked)
+    ("Q-B2 OB-55: output_reconfigured sends absolute motion to a kept lock", f"{CORE}/entry.rs",
+     "        if on_it && !self.input.interaction.active() && !locked {\n            fx.extend(self.true_position());",
+     "        if on_it && !self.input.interaction.active() {\n            fx.extend(self.true_position());",
+     "infynitae-backend-headless", ["--test", "t1_reconfigure_lock"], "a_reconfiguration_sends_no_motion_to_a_kept_lock"),
     # --- INC-10 exit review (M1, L4, L5, E1, E3; clarifications proposed for C12.F17, not adopted)
     ("INC-10 review M1: a kept confinement suppresses the true-position event after a fit or restore", f"{CORE}/entry.rs",
      "                .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock);", "                .is_some();",
