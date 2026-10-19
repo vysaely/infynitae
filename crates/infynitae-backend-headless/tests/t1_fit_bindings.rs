@@ -226,3 +226,101 @@ fn a_fit_during_a_presentation_changes_the_hidden_camera_as_ratified() {
         "camera A's fitted view is shown when the presentation ends"
     );
 }
+
+/// C12.F17 §8.1 evidence for Q1 (observation of the living contract, not a decision): a client
+/// that obeys the fullscreen configure — it redraws at the output's 1920 × 1080 before Logo+F — is
+/// fitted at that geometry (F-FIT-1 snapshots W "at the instant of the authorized action"): zoom 1,
+/// centred on its fullscreen extent. The presentation ends (`unset_fullscreen`), the client redraws
+/// at its saved 800 × 600 and nothing re-fits (INV-CAMERA-5), so camera A now shows W's window at
+/// the top-left of the view instead of framing it. Logo+Shift+F then returns to the camera before
+/// the fit. Under Q1 option B the fit would be refused and the camera unchanged.
+#[test]
+fn a_fit_during_the_presentation_of_a_resized_client_frames_its_fullscreen_extent() {
+    let mut r = Rig::new(Lockstep::new(Some(output((1920, 1080), 120))));
+    let qh = r.ls.qh.clone();
+    let idx = r.ls.probe.toplevel(&qh, "W", (800, 600), 0);
+    r.ls.pump();
+    r.frame();
+    r.motion((10.0, 0.0));
+    focus_w(&mut r);
+    let o = r.ls.output();
+    let w = r.ls.state.elements().next().unwrap();
+    let anchor = r.ls.state.core().stage().anchor(w).expect("placed");
+    let before = camera(&r);
+
+    r.ls.probe.surfaces[idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_fullscreen(None);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(r.ls.state.core().presentation(o), Some(w), "W presented");
+    let asked =
+        r.ls.probe
+            .toplevel_configures
+            .last()
+            .expect("a configure")
+            .1;
+    assert_eq!(
+        asked,
+        (1920, 1080),
+        "the fullscreen configure asks for the output's size"
+    );
+    r.ls.probe.surfaces[idx].size = (1920, 1080);
+    r.ls.probe.draw(&qh, idx);
+    r.ls.pump();
+    r.frame();
+    let g = r.ls.state.core().stage().tree(w).unwrap().geometry;
+    assert_eq!((g.size.w, g.size.h), (1920, 1080), "the client obeyed");
+    assert_eq!(
+        r.ls.state.core().stage().anchor(w),
+        Some(anchor),
+        "anchor untouched"
+    );
+
+    chord(&mut r, &[KEY_LEFTMETA]);
+    assert_eq!(
+        history_len(&r),
+        1,
+        "the fit happened during the presentation"
+    );
+    let fitted = camera(&r);
+    assert_eq!(fitted.zoom, 1.0, "fitted to the 1920 × 1080 geometry");
+    assert_eq!(
+        (fitted.center.x, fitted.center.y),
+        ((anchor.x + 960) * 65536, (anchor.y + 540) * 65536),
+        "centred on the fullscreen extent"
+    );
+
+    r.ls.probe.surfaces[idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .unset_fullscreen();
+    r.ls.pump();
+    r.frame();
+    r.ls.probe.surfaces[idx].size = (800, 600);
+    r.ls.probe.draw(&qh, idx);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(r.ls.state.core().presentation(o), None);
+    assert!(same(camera(&r), fitted), "nothing re-fits (INV-CAMERA-5)");
+    let list = r.ls.state.core_mut().render_list(o).unwrap().clone();
+    let root = list
+        .entries
+        .iter()
+        .find(|e| e.element == w)
+        .expect("W shown");
+    assert_eq!(
+        (root.rect.x0, root.rect.y0, root.rect.x1, root.rect.y1),
+        (0, 0, 800, 600),
+        "the restored window sits at the view's top-left, not framed"
+    );
+
+    chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT]);
+    assert!(
+        same(camera(&r), before),
+        "restore returns to the camera before the fit"
+    );
+}
