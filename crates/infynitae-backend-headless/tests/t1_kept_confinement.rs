@@ -11,7 +11,7 @@
 //! - Relocation: outputs A and B side by side; camera A is panned so W reaches A's right edge,
 //!   camera B (persisted) shows W from B-local x = 0. The pointer on B over W, W confined; B is
 //!   unplugged, the pointer is relocated onto A (F-RELOCATE-1) still over W, the confinement is
-//!   kept and receives exactly one `motion`.
+//!   kept and receives exactly one `motion`; a kept lock there receives none.
 
 mod common;
 
@@ -140,11 +140,12 @@ fn a_pan_release_sends_no_absolute_motion_to_a_kept_lock() {
     assert_eq!(count(&lines, "unlocked"), 0, "{lines:?}");
 }
 
-/// M10 + C12.F17 Q3: B unplugged under a confined pointer over W; the pointer is relocated onto A
-/// still over W, the confinement is kept (Core and Smithay, no `unconfined`) and receives exactly
-/// one true-position event at the relocated W-local position.
-#[test]
-fn a_relocation_onto_a_kept_confinement_sends_one_true_position_event() {
+/// B unplugged under a constrained pointer over W (`lock`, else a confinement to the whole
+/// surface); the pointer is relocated onto A still over W, where the constraint is kept in Core
+/// and Smithay (a lock's point is the pointer's position, Canvas (−350, 0), A-local (1270, 540):
+/// observable). Returns the client's lines from the unplug on and the relocated surface-local
+/// position.
+fn relocation_under(lock: bool) -> (Vec<String>, (f64, f64)) {
     let a = output_k("A", (1920, 1080), 120, 60_000);
     let b = output_k("B", (1920, 1080), 120, 60_000);
     // camera B centred at Canvas (560, 0): W's window geometry, Canvas x [−400, 400), starts at
@@ -184,10 +185,19 @@ fn a_relocation_onto_a_kept_confinement_sends_one_true_position_event() {
     assert_eq!((o, p.0), (ob, 50.0), "the pointer on B");
     focus_w(&mut r);
     let qh = r.ls.qh.clone();
-    r.ls.probe.confine_pointer(&qh, 0);
+    if lock {
+        r.ls.probe.lock_pointer(&qh, 0, false);
+    } else {
+        r.ls.probe.confine_pointer(&qh, 0);
+    }
     r.ls.pump();
     r.frame();
-    assert_eq!(kind(&r), Some(ConstraintKind::Confine), "confined on B");
+    let want = if lock {
+        ConstraintKind::Lock
+    } else {
+        ConstraintKind::Confine
+    };
+    assert_eq!(kind(&r), Some(want), "constrained on B");
     assert!(smithay_active(&r));
 
     let m = r.mark();
@@ -197,10 +207,32 @@ fn a_relocation_onto_a_kept_confinement_sends_one_true_position_event() {
     let (o, _) = located(&r);
     assert_eq!(o, oa, "relocated onto A");
     let local = surface_local(&mut r);
-    assert_eq!(kind(&r), Some(ConstraintKind::Confine), "confinement lost");
-    assert!(smithay_active(&r), "Smithay's confinement ended");
+    assert_eq!(kind(&r), Some(want), "constraint lost");
+    assert!(smithay_active(&r), "Smithay's constraint ended");
+    (lines.iter().map(|s| s.to_string()).collect(), local)
+}
+
+/// M10 + C12.F17 Q3: the confinement is kept, no `unconfined`, and it receives exactly one
+/// true-position event at the relocated W-local position.
+#[test]
+fn a_relocation_onto_a_kept_confinement_sends_one_true_position_event() {
+    let (lines, local) = relocation_under(false);
+    let lines: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
     assert_eq!(count(&lines, "unconfined"), 0, "{lines:?}");
     let delivered = motions(&lines);
     assert_eq!(delivered.len(), 1, "one true-position event: {lines:?}");
     near(delivered[0], local, "relocation");
+}
+
+/// INV-INPUT-5 (C12.F17 Q2, Q3): the lock is kept, no `unlocked`, and no absolute motion reaches
+/// it (independent review 2026-10-20, finding 3: this path had no test).
+#[test]
+fn a_relocation_onto_a_kept_lock_sends_no_absolute_motion() {
+    let (lines, _) = relocation_under(true);
+    let lines: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
+    assert_eq!(count(&lines, "unlocked"), 0, "{lines:?}");
+    assert!(
+        motions(&lines).is_empty(),
+        "absolute motion to a locked surface: {lines:?}"
+    );
 }

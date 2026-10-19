@@ -863,7 +863,7 @@ CONTROLS = [
      "            let margin = ((extent - f64::from(size)) / 2.0).max(0.0);", "            let margin = (extent - f64::from(size)) / 2.0;",
      "infynitae-backend-headless", ["--test", "t1_inc7_adversarial"], "an_oversized_buffer_is_origin_aligned_and_cropped"),
     ("INC-7 M10: no true position when a presentation starts (the pointer stays on a hidden window)", f"{CORE}/protocol.rs",
-     "        if on_one && !self.input.interaction.active() {", "        if on_one && !self.input.interaction.active() && false {",
+     "        if on_one && !self.input.interaction.active() && !self.locked() {", "        if on_one && !self.input.interaction.active() && false {",
      "infynitae-backend-headless", ["--test", "t1_inc7_adversarial"], "a_hidden_window_gets_no_pointer_input"),
     ("INC-7 C5.2: a camera drag moves what a fullscreen output shows (pixels)", f"{CORE}/protocol.rs",
      "                x: centre(anchor.x, extent.0, tree.geometry.size.w),", "                x: centre(anchor.x + self.cameras.center(0).map_or(0, |c| c.x >> 16), extent.0, tree.geometry.size.w),",
@@ -1524,6 +1524,14 @@ CONTROLS = [
      "    if key == KEY_F && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {",
      "    if key == KEY_F && interaction_active {\n        return Some(KeyAction::Noop);\n    }\n    if key == KEY_F && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {",
      "infynitae-backend-headless", ["--test", "t1_fit_bindings"], "fit_and_restore_are_inert_during_a_pan"),
+    ("C12.F17 Q2 / INV-INPUT-5: a presentation's start or end sends absolute motion to a kept lock", f"{CORE}/protocol.rs",
+     "        if on_one && !self.input.interaction.active() && !self.locked() {",
+     "        if on_one && !self.input.interaction.active() {",
+     "infynitae-backend-headless", ["--test", "t1_reconfigure_lock"], "a_presentation_start_and_end_send_no_motion_to_a_kept_lock"),
+    ("C12.F17 Q2/Q3 / INV-INPUT-5: an output relocation sends absolute motion to a kept lock", f"{CORE}/entry.rs",
+     "                if !self.input.interaction.active() && !self.locked() {",
+     "                if !self.input.interaction.active() {",
+     "infynitae-backend-headless", ["--test", "t1_kept_confinement"], "a_relocation_onto_a_kept_lock_sends_no_absolute_motion"),
     # --- C12.F17 Q3 (owner decision 2026-10-19, "exactly one"): a kept confinement receives the
     # one true-position event at the end of an interaction and at an output relocation
     ("C12.F17 Q3: a pan release sends no true-position event to a kept confinement", f"{CORE}/entry.rs",

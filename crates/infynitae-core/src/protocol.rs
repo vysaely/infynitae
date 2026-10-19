@@ -376,8 +376,10 @@ impl Core {
     /// the scale evaluation, which the caller runs once, after this (INV-SCALE-5): its
     /// ProjectionFrame is made stale, its membership recomputed (other elements leave or return)
     /// and every element it observed before or observes now marked for that evaluation (a
-    /// scoped pass during a camera drag visits only marked elements), the pointer gets one true
-    /// position if it is on that output and free (M10), and the constraints are reconciled (M13).
+    /// scoped pass during a camera drag visits only marked elements), the constraints are
+    /// reconciled (M13), and the pointer gets one true position if it is on that output, free and
+    /// not held by a kept lock (M10; no absolute motion to a locked surface, INV-INPUT-5 as
+    /// widened by C12.F17 Q2).
     fn presentation_membership(&mut self, outputs: &[OutputId], out: &mut Vec<Effect>) {
         // the next table is built in its reused storage (as in `visibility_pass_camera`)
         let mut next = std::mem::take(&mut self.membership_next);
@@ -413,10 +415,10 @@ impl Core {
         }
         self.membership_next = next;
         let on_one = matches!(self.pointer, crate::pointer::PointerState::Located { output, .. } if outputs.contains(&output));
-        if on_one && !self.input.interaction.active() {
+        out.extend(self.reconcile_constraints());
+        if on_one && !self.input.interaction.active() && !self.locked() {
             self.true_position_into(out);
         }
-        out.extend(self.reconcile_constraints());
     }
 
     /// What every output presents now, to tell afterwards which presentations a change touched.

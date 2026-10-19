@@ -348,7 +348,7 @@ impl Core {
 
     /// Whether the active constraint is a lock: no absolute motion reaches its surface
     /// (zwp_pointer_constraints_v1; INV-INPUT-5).
-    fn locked(&self) -> bool {
+    pub(crate) fn locked(&self) -> bool {
         self.constraint
             .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock)
     }
