@@ -433,7 +433,9 @@ A fresh-context review of the integrated branch (`85eac66`) and of this package 
    event under a kept lock), two T1 tests, a seeded control; this package's K8, C12.F17.6 and the
    INV-INPUT-5 row now name the path;
 2. low — the nested backend now starts `--exec` before its window, and an error return left the
-   client running: `Session`'s `Drop` ends a process tree `shutdown` did not (T0 test);
+   client running: `Session`'s `Drop` ends a process tree `shutdown` did not (T0 test; while a panic
+   unwinds it kills and reaps the direct children without the registry lock);
+   the review's re-check (2026-10-20) confirmed findings 1–6 fixed and found no new defect;
 3. low — relocation onto a kept lock had no test: added, with a seeded control;
 4. low — once a session existed, SIGTERM/SIGINT stay ignored between sessions of a process (by
    design, for teardown) and each registration leaks a descriptor: documented in `signals` and

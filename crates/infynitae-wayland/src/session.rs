@@ -418,7 +418,16 @@ impl Drop for Session {
         // nested backend's window or renderer failing, or a panic) still ends the processes it
         // started; after `shutdown` none is left and nothing happens here.
         if !self.children.is_empty() {
-            let _ = crate::ownership::end_session_tree(&mut self.children, CHILD_GRACE);
+            if std::thread::panicking() {
+                // already unwinding: no registry lock (a poisoned one would abort the process);
+                // the direct children are killed and reaped
+                for child in &mut self.children {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                }
+            } else {
+                let _ = crate::ownership::end_session_tree(&mut self.children, CHILD_GRACE);
+            }
         }
         // the notifications end; the handlers stay and do nothing (signals module doc)
         self.signal_ids.clear();
@@ -653,6 +662,12 @@ mod tests {
         drop(session);
         for pid in pids {
             let state = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok();
+            if state.is_some() {
+                // a failing run must not leave its client behind
+                if let Some(p) = Pid::from_raw(pid as i32) {
+                    let _ = kill_process(p, Signal::KILL);
+                }
+            }
             assert!(
                 state.is_none(),
                 "client {pid} outlived the session: {state:?}"
