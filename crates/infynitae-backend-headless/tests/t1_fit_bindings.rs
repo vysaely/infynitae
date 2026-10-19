@@ -6,12 +6,10 @@
 //!   compositor bindings, so F reaches the focused client (M12) and nothing changes.
 //! - No element under the pointer: Logo+F is a no-op — no camera or history change, no pointer
 //!   event — and F is still the compositor's (a resolved binding is consumed, M12).
-//! - During a protocol-fullscreen presentation on the pointer's output: FOUNDATION_ARCHITECTURE
-//!   §C5 ("fullscreen + viewport-fit on the same output", accepted at Phase C checkpoint 2) says
-//!   the presentation takes precedence for rendering and "a fit applied meanwhile changes camera
-//!   A's state, which is shown when the presentation ends". This test pins that ratified
-//!   behaviour: what the output shows does not change, camera A and its history do. Whether that
-//!   should instead be a no-op is an open owner decision (C12.F17 package, Q1); this test does not decide it.
+//! - During a protocol-fullscreen presentation on the pointer's output (C12.F17 Q1, owner decision
+//!   2026-10-19: B, scope 2): fit and restore are refused — no camera or history change, no
+//!   pointer event — and the binding is still consumed (M12, F is not forwarded). The camera is
+//!   the one from before the presentation when it ends.
 
 mod common;
 
@@ -172,12 +170,12 @@ fn fit_and_restore_are_inert_during_a_pan() {
     r.button(BTN_MIDDLE, false, logo());
 }
 
-/// The ratified §C5 behaviour during a presentation (see the module doc): Logo+F with the
-/// presented W under the pointer fits camera A to W — history +1 — while the output keeps showing
-/// the presentation view unchanged; Logo+Shift+F then restores camera A, again unseen; a second
-/// fit is shown only once the presentation ends.
+/// C12.F17 Q1 B: with a fit recorded before the presentation (so a stray restore would show),
+/// Logo+F and Logo+Shift+F while O presents W change neither camera A nor its history, deliver no
+/// pointer event and do not forward F; the presented frame is unchanged. Once the presentation
+/// ends, Logo+Shift+F restores as usual.
 #[test]
-fn a_fit_during_a_presentation_changes_the_hidden_camera_as_ratified() {
+fn fit_and_restore_are_refused_while_the_output_presents() {
     let mut r = Rig::new(Lockstep::new(Some(output((1920, 1080), 120))));
     r.map_w();
     r.motion((200.0, 200.0));
@@ -185,6 +183,12 @@ fn a_fit_during_a_presentation_changes_the_hidden_camera_as_ratified() {
     focus_w(&mut r);
     let o = r.ls.output();
     let w = r.ls.state.elements().next().unwrap();
+    let initial = camera(&r);
+    chord(&mut r, &[KEY_LEFTMETA]);
+    assert_eq!(history_len(&r), 1, "the fit before the presentation");
+    let fitted = camera(&r);
+    assert_eq!(fitted.zoom, 1.8);
+
     r.ls.probe.surfaces[0]
         .toplevel
         .as_ref()
@@ -194,23 +198,30 @@ fn a_fit_during_a_presentation_changes_the_hidden_camera_as_ratified() {
     r.frame();
     assert_eq!(r.ls.state.core().presentation(o), Some(w), "W presented");
     let shown = r.ls.state.core_mut().render_list(o).unwrap().clone();
-    let before = camera(&r);
+    let presses = f_presses(&r);
 
-    chord(&mut r, &[KEY_LEFTMETA]);
-    assert_eq!(history_len(&r), 1, "the fit is recorded");
-    assert_eq!(camera(&r).zoom, 1.8, "camera A is fitted to W");
-    let now = r.ls.state.core_mut().render_list(o).unwrap().clone();
-    assert_eq!(now.view.k, shown.view.k, "the presentation view changed");
-    assert_eq!(now.entries, shown.entries, "the presented frame changed");
+    for mods in [&[KEY_LEFTMETA][..], &[KEY_LEFTMETA, KEY_LEFTSHIFT]] {
+        let m = r.mark();
+        chord(&mut r, mods);
+        assert!(same(camera(&r), fitted), "{mods:?}: camera A changed");
+        assert_eq!(history_len(&r), 1, "{mods:?}: history changed");
+        assert_eq!(f_presses(&r), presses, "{mods:?}: F was forwarded");
+        let lines = r.since(m);
+        assert!(
+            lines.iter().all(|l| !l.starts_with("motion")),
+            "{mods:?}: a pointer event: {lines:?}"
+        );
+        let now = r.ls.state.core_mut().render_list(o).unwrap().clone();
+        assert_eq!(
+            now.view.k, shown.view.k,
+            "{mods:?}: the presentation view changed"
+        );
+        assert_eq!(
+            now.entries, shown.entries,
+            "{mods:?}: the presented frame changed"
+        );
+    }
 
-    chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT]);
-    assert!(same(camera(&r), before), "restore applies to camera A");
-    assert_eq!(history_len(&r), 0);
-    let now = r.ls.state.core_mut().render_list(o).unwrap().clone();
-    assert_eq!(now.entries, shown.entries, "the presented frame changed");
-
-    chord(&mut r, &[KEY_LEFTMETA]);
-    let fitted = camera(&r);
     r.ls.probe.surfaces[0]
         .toplevel
         .as_ref()
@@ -219,23 +230,25 @@ fn a_fit_during_a_presentation_changes_the_hidden_camera_as_ratified() {
     r.ls.pump();
     r.frame();
     assert_eq!(r.ls.state.core().presentation(o), None);
-    let after = r.ls.state.core_mut().render_list(o).unwrap().clone();
-    assert!(same(camera(&r), fitted));
-    assert_eq!(
-        after.view.k, 1.8,
-        "camera A's fitted view is shown when the presentation ends"
+    assert!(
+        same(camera(&r), fitted),
+        "the camera before the presentation is shown"
     );
+    chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT]);
+    assert!(
+        same(camera(&r), initial),
+        "the restore applies after the presentation"
+    );
+    assert_eq!(history_len(&r), 0);
 }
 
-/// C12.F17 §8.1 evidence for Q1 (observation of the living contract, not a decision): a client
-/// that obeys the fullscreen configure — it redraws at the output's 1920 × 1080 before Logo+F — is
-/// fitted at that geometry (F-FIT-1 snapshots W "at the instant of the authorized action"): zoom 1,
-/// centred on its fullscreen extent. The presentation ends (`unset_fullscreen`), the client redraws
-/// at its saved 800 × 600 and nothing re-fits (INV-CAMERA-5), so camera A now shows W's window at
-/// the top-left of the view instead of framing it. Logo+Shift+F then returns to the camera before
-/// the fit. Under Q1 option B the fit would be refused and the camera unchanged.
+/// C12.F17 Q1 B with the §8.1 evidence client: a client that obeys the fullscreen configure (it
+/// redraws at the output's 1920 × 1080) is not fitted — Logo+F during the presentation is refused,
+/// so after `unset_fullscreen` and the redraw at its saved 800 × 600 camera A is unchanged and W
+/// is shown where it was before the presentation (under option A it was framed at its fullscreen
+/// extent and then sat at the view's top-left).
 #[test]
-fn a_fit_during_the_presentation_of_a_resized_client_frames_its_fullscreen_extent() {
+fn a_fit_during_the_presentation_of_a_resized_client_is_refused() {
     let mut r = Rig::new(Lockstep::new(Some(output((1920, 1080), 120))));
     let qh = r.ls.qh.clone();
     let idx = r.ls.probe.toplevel(&qh, "W", (800, 600), 0);
@@ -245,8 +258,17 @@ fn a_fit_during_the_presentation_of_a_resized_client_frames_its_fullscreen_exten
     focus_w(&mut r);
     let o = r.ls.output();
     let w = r.ls.state.elements().next().unwrap();
-    let anchor = r.ls.state.core().stage().anchor(w).expect("placed");
     let before = camera(&r);
+    let rect = |r: &mut Rig| {
+        let list = r.ls.state.core_mut().render_list(o).unwrap().clone();
+        let e = list
+            .entries
+            .iter()
+            .find(|e| e.element == w)
+            .expect("W shown");
+        (e.rect.x0, e.rect.y0, e.rect.x1, e.rect.y1)
+    };
+    let placed = rect(&mut r);
 
     r.ls.probe.surfaces[idx]
         .toplevel
@@ -256,42 +278,16 @@ fn a_fit_during_the_presentation_of_a_resized_client_frames_its_fullscreen_exten
     r.ls.pump();
     r.frame();
     assert_eq!(r.ls.state.core().presentation(o), Some(w), "W presented");
-    let asked =
-        r.ls.probe
-            .toplevel_configures
-            .last()
-            .expect("a configure")
-            .1;
-    assert_eq!(
-        asked,
-        (1920, 1080),
-        "the fullscreen configure asks for the output's size"
-    );
     r.ls.probe.surfaces[idx].size = (1920, 1080);
     r.ls.probe.draw(&qh, idx);
     r.ls.pump();
     r.frame();
     let g = r.ls.state.core().stage().tree(w).unwrap().geometry;
     assert_eq!((g.size.w, g.size.h), (1920, 1080), "the client obeyed");
-    assert_eq!(
-        r.ls.state.core().stage().anchor(w),
-        Some(anchor),
-        "anchor untouched"
-    );
 
     chord(&mut r, &[KEY_LEFTMETA]);
-    assert_eq!(
-        history_len(&r),
-        1,
-        "the fit happened during the presentation"
-    );
-    let fitted = camera(&r);
-    assert_eq!(fitted.zoom, 1.0, "fitted to the 1920 × 1080 geometry");
-    assert_eq!(
-        (fitted.center.x, fitted.center.y),
-        ((anchor.x + 960) * 65536, (anchor.y + 540) * 65536),
-        "centred on the fullscreen extent"
-    );
+    assert_eq!(history_len(&r), 0, "the fit was refused");
+    assert!(same(camera(&r), before), "camera A unchanged");
 
     r.ls.probe.surfaces[idx]
         .toplevel
@@ -305,22 +301,10 @@ fn a_fit_during_the_presentation_of_a_resized_client_frames_its_fullscreen_exten
     r.ls.pump();
     r.frame();
     assert_eq!(r.ls.state.core().presentation(o), None);
-    assert!(same(camera(&r), fitted), "nothing re-fits (INV-CAMERA-5)");
-    let list = r.ls.state.core_mut().render_list(o).unwrap().clone();
-    let root = list
-        .entries
-        .iter()
-        .find(|e| e.element == w)
-        .expect("W shown");
+    assert!(same(camera(&r), before));
     assert_eq!(
-        (root.rect.x0, root.rect.y0, root.rect.x1, root.rect.y1),
-        (0, 0, 800, 600),
-        "the restored window sits at the view's top-left, not framed"
-    );
-
-    chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT]);
-    assert!(
-        same(camera(&r), before),
-        "restore returns to the camera before the fit"
+        rect(&mut r),
+        placed,
+        "W is shown where it was before the presentation"
     );
 }
