@@ -288,6 +288,8 @@ impl Session {
                 self.request_frame();
             }
         }
+        state.clear_orphaned_selections();
+        state.refuse_client_drags();
         self.flush();
     }
 

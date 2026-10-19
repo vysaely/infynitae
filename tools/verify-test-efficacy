@@ -1599,6 +1599,19 @@ CONTROLS = [
     ("M16: the adapter does not complete withheld callbacks", f"{WAYLAND}/frames.rs",
      "                callback.done(time_ms);", "                let _ = (callback, time_ms);",
      "infynitae-backend-headless", ["--test", "t1_frames"], "a_key_kicks_a_focused_unobserved_client_before_the_key_arrives"),
+    # ---- clipboard slice (2026-10-16): selections follow the keyboard focus; orphans are cleared
+    ("clipboard: the selection focus does not follow the keyboard focus", f"{WAYLAND}/handlers.rs",
+     "        set_data_device_focus(&self.dh, seat, client.clone());\n", "        let _ = &client;\n",
+     "infynitae-backend-headless", ["--test", "t1_clipboard"], "a_copy_in_one_client_pastes_in_another"),
+    ("clipboard: the primary selection focus does not follow the keyboard focus", f"{WAYLAND}/handlers.rs",
+     "        set_primary_focus(&self.dh, seat, client);\n", "        let _ = client;\n",
+     "infynitae-backend-headless", ["--test", "t1_clipboard"], "the_primary_selection_follows_the_keyboard_focus"),
+    ("clipboard: a selection whose owner quit is not cleared", f"{WAYLAND}/handlers.rs",
+     "            smithay::wayland::selection::data_device::clear_data_device_selection(\n                &self.dh, &self.seat,\n            );\n", "",
+     "infynitae-backend-headless", ["--test", "t1_clipboard"], "a_quitting_owner_clears_the_selection"),
+    ("clipboard: a client's drag is not refused (Smithay's DnD grab takes the pointer)", f"{WAYLAND}/handlers.rs",
+     "        self.drag_started = true;\n", "",
+     "infynitae-backend-headless", ["--test", "t1_clipboard"], "a_drag_started_on_a_real_press_is_refused"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

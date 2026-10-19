@@ -40,6 +40,8 @@ use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::pointer_constraints::PointerConstraintsState;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
+use smithay::wayland::selection::data_device::DataDeviceState;
+use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
 use smithay::wayland::viewporter::ViewporterState;
@@ -125,6 +127,18 @@ pub struct WaylandState {
         reason = "owns the wp_viewporter global for the state's lifetime"
     )]
     viewporter: ViewporterState,
+    /// `wl_data_device_manager`: clipboard selection and drag-and-drop offers (clipboard slice,
+    /// 2026-10-16). Selections are Smithay protocol objects; who sees and sets them follows Core's
+    /// keyboard focus (`SeatHandler::focus_changed`).
+    data_device: DataDeviceState,
+    /// `zwp_primary_selection_device_manager_v1`: the primary selection, same focus rule.
+    primary_selection: PrimarySelectionState,
+    /// The client that set the clipboard and the primary selection (Smithay accepts a selection
+    /// only from the keyboard-focused client). A selection whose owner's connection is gone is
+    /// cleared, so other clients are told it is gone (Smithay does not do it by itself).
+    selection_owners: [Option<ClientId>; 2],
+    /// A client started a drag (Smithay installed its DnD grab); `refuse_client_drags` ends it.
+    drag_started: bool,
     registry: SurfaceRegistry,
     elements: Vec<ElementHandle>,
     pub(crate) serial_outputs:
@@ -185,6 +199,10 @@ impl WaylandState {
             relative_pointer: RelativePointerManagerState::new::<Self>(display),
             fractional_scale_manager: FractionalScaleManagerState::new::<Self>(display),
             viewporter: ViewporterState::new::<Self>(display),
+            data_device: DataDeviceState::new::<Self>(display),
+            primary_selection: PrimarySelectionState::new::<Self>(display),
+            selection_owners: [None, None],
+            drag_started: false,
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),
