@@ -262,7 +262,8 @@ fn read_pid(dir: &Path, name: &str) -> u32 {
 }
 
 /// A grandchild, a daemon that double-forked away with `setsid` (its parent already gone), and
-/// optionally a grandchild that ignores SIGTERM.
+/// optionally a branch that ignores SIGTERM: `stubborn` (a grandchild) → `stubmid` → `stubchild`,
+/// all three with SIGTERM ignored (inherited).
 fn tree_script(stubborn: bool) -> String {
     let mut s = String::from(
         "D=$(dirname $PIDF)\n\
@@ -271,9 +272,13 @@ fn tree_script(stubborn: bool) -> String {
     );
     if stubborn {
         s.push_str(
-            // its child inherits the ignored SIGTERM and lives under a living parent until the
-            // SIGKILL phase: only a walk of the whole subtree reaches it
-            "sh -c 'trap \"\" TERM; sleep 30 & echo $! > '$D'/stubchild; echo $$ > '$D'/stubborn; while :; do sleep 0.05; done' </dev/null >/dev/null 2>&1 &\n",
+            // The branch lives under living parents until the SIGKILL phase. When the session
+            // command ends on SIGTERM the compositor (a subreaper) adopts `stubborn`, so
+            // `stubchild` is then three levels below the compositor: only a walk of the whole
+            // subtree, not just children and grandchildren, reaches it (the seeded control
+            // "only direct children are ended" truncates the walk).
+            r#"sh -c 'trap "" TERM; sh -c "sleep 30 & echo \$! > '$D'/stubchild; echo \$\$ > '$D'/stubmid; while :; do sleep 0.05; done" & echo $$ > '$D'/stubborn; while :; do sleep 0.05; done' </dev/null >/dev/null 2>&1 &
+"#,
         );
     }
     s.push_str("echo $$ > $PIDF\nwait\n");
@@ -291,6 +296,7 @@ fn shut_down_tree(name: &str, stubborn: bool) -> (Vec<u32>, Duration) {
     ];
     if stubborn {
         pids.push(read_pid(&r.dir, "stubborn"));
+        pids.push(read_pid(&r.dir, "stubmid"));
         pids.push(read_pid(&r.dir, "stubchild"));
     }
     let compositor = r.compositor.id();
@@ -312,15 +318,17 @@ fn shut_down_tree(name: &str, stubborn: bool) -> (Vec<u32>, Duration) {
     let (status, took) = r.exit(t);
     eprintln!("{name}: exited {status} after {took:?}");
     assert!(status.success(), "{status}");
-    for pid in &pids {
-        let left = running(*pid);
-        if left {
-            let _ = Command::new("kill")
-                .args(["-KILL", &pid.to_string()])
-                .status();
-        }
-        assert!(!left, "session process {pid} outlived the compositor");
+    // every survivor is killed before the assertion, so a failing run leaves nothing behind
+    let left: Vec<u32> = pids.iter().copied().filter(|pid| running(*pid)).collect();
+    for pid in &left {
+        let _ = Command::new("kill")
+            .args(["-KILL", &pid.to_string()])
+            .status();
     }
+    assert!(
+        left.is_empty(),
+        "session processes {left:?} outlived the compositor"
+    );
     r.assert_clean(None);
     assert!(running(outsider.id()), "the outsider was signalled");
     outsider.kill().unwrap();
@@ -336,8 +344,8 @@ fn descendants_and_daemons_end_with_the_session() {
     assert!(took < Duration::from_millis(400), "{took:?}");
 }
 
-/// A descendant that ignores SIGTERM, and its child (which inherits the ignored SIGTERM), get
-/// SIGKILL after the grace period; the rest of the tree ends on SIGTERM. Measured.
+/// A branch of descendants that ignore SIGTERM (inherited down three levels) gets SIGKILL after
+/// the grace period, its deepest member included; the rest of the tree ends on SIGTERM. Measured.
 #[test]
 fn a_descendant_ignoring_sigterm_is_killed_after_the_grace_period() {
     let (_, took) = shut_down_tree("tree-stubborn", true);
