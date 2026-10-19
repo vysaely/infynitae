@@ -152,7 +152,8 @@ fn logo_f_with_no_element_under_the_pointer_is_a_no_op() {
 }
 
 /// During a pan, Logo+F and Logo+Shift+F (Logo already held by the pan) resolve to nothing: the
-/// camera follows the pan alone and the history is untouched.
+/// camera follows the pan alone and the history is untouched, and F is forwarded to the focused
+/// client (M12; C12.F17 Q4, owner decision 2026-10-19: forward, not consume).
 #[test]
 fn fit_and_restore_are_inert_during_a_pan() {
     let mut r = Rig::x8();
@@ -163,9 +164,11 @@ fn fit_and_restore_are_inert_during_a_pan() {
     r.motion((5.0, 3.0));
     let panned = camera(&r);
     for mods in [&[][..], &[KEY_LEFTSHIFT]] {
+        let presses = f_presses(&r);
         chord(&mut r, mods);
         assert!(same(camera(&r), panned), "{mods:?}: the camera changed");
         assert_eq!(history_len(&r), 1, "{mods:?}: the history changed");
+        assert_eq!(f_presses(&r), presses + 1, "{mods:?}: F was not forwarded");
     }
     r.button(BTN_MIDDLE, false, logo());
 }

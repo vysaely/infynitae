@@ -1519,6 +1519,10 @@ CONTROLS = [
      "        if self.presentation(output).is_some() {\n            return;\n        }\n        let Some(camera) = ",
      "        let Some(camera) = ",
      "infynitae-backend-headless", ["--test", "t1_fit_bindings"], "fit_and_restore_are_refused_while_the_output_presents"),
+    ("C12.F17 Q4: F during a pan is consumed instead of forwarded to the focused client", f"{CORE}/input/keys.rs",
+     "    if key == KEY_F && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {",
+     "    if key == KEY_F && interaction_active {\n        return Some(KeyAction::Noop);\n    }\n    if key == KEY_F && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {",
+     "infynitae-backend-headless", ["--test", "t1_fit_bindings"], "fit_and_restore_are_inert_during_a_pan"),
     # --- C12.F17 Q3 (owner decision 2026-10-19, "exactly one"): a kept confinement receives the
     # one true-position event at the end of an interaction and at an output relocation
     ("C12.F17 Q3: a pan release sends no true-position event to a kept confinement", f"{CORE}/entry.rs",
