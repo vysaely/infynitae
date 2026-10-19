@@ -260,13 +260,17 @@ impl Core {
 
     /// M8 `FitViewport(O, W)` from the input binding: O is the pointer's output, W the element
     /// under the pointer (its window geometry snapshotted now). Refused — no camera mutation,
-    /// nothing recorded or evicted — when no output holds the pointer, no mapped element is under
-    /// it, or its geometry is degenerate (F-FIT-1). Otherwise one proof, one mutation (the prior
-    /// value retained, OBJ-30), and the camera-write consequences.
+    /// nothing recorded or evicted, no pointer reconciliation — when no output holds the pointer,
+    /// O presents a protocol-fullscreen element (C12.F17 Q1 B), no mapped element is under the
+    /// pointer, or its geometry is degenerate (F-FIT-1). Otherwise one proof, one mutation (the
+    /// prior value retained, OBJ-30), and the camera-write consequences.
     fn fit_viewport(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
         let PointerState::Located { output, p } = self.pointer else {
             return;
         };
+        if self.presentation(output).is_some() {
+            return;
+        }
         let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
         let Some(hit) = self.hit_test(output, pt) else {
             return;
@@ -300,12 +304,15 @@ impl Core {
     }
 
     /// M8 `ViewportRestore(O)` from the input binding, O the pointer's output: the newest entry of
-    /// O's history is applied and removed; refused with nothing changed when O holds no pointer or
-    /// its history is empty.
+    /// O's history is applied and removed; refused with nothing changed when O holds no pointer,
+    /// O presents a protocol-fullscreen element (C12.F17 Q1 B), or its history is empty.
     fn viewport_restore(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
         let PointerState::Located { output, .. } = self.pointer else {
             return;
         };
+        if self.presentation(output).is_some() {
+            return;
+        }
         let Some(camera) = self.cameras.camera_for_output(output) else {
             return;
         };
@@ -333,13 +340,17 @@ impl Core {
         let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
         if on_it && !self.input.interaction.active() {
             out.extend(self.reconcile_constraints());
-            let locked = self
-                .constraint
-                .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock);
-            if !locked {
+            if !self.locked() {
                 self.true_position_into(out);
             }
         }
+    }
+
+    /// Whether the active constraint is a lock: no absolute motion reaches its surface
+    /// (zwp_pointer_constraints_v1; INV-INPUT-5).
+    fn locked(&self) -> bool {
+        self.constraint
+            .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock)
     }
 
     /// Motion follows the interaction (INV-INPUT-1): a pan moves the camera and nothing reaches a
@@ -488,12 +499,13 @@ impl Core {
     }
 
     /// The end of a compositor interaction, by its initiator's release or by a cancel (M22):
-    /// batch-end reconciliation (INV-INPUT-5), one true-position event (M10), and the CameraPan
-    /// epoch settles (INV-SCALE-3: it ends at interaction termination).
+    /// batch-end reconciliation (INV-INPUT-5), exactly one true-position event unless the
+    /// reconciliation keeps a lock (M10, C12.F17 Q3: a kept confinement receives it), and the
+    /// CameraPan epoch settles (INV-SCALE-3: it ends at interaction termination).
     fn end_interaction(&mut self) -> Vec<Effect> {
         self.input.interaction = Interaction::Idle;
         let mut fx = self.reconcile_constraints();
-        if self.constraint.is_none() {
+        if !self.locked() {
             fx.extend(self.true_position());
         }
         fx.extend(self.settle_interaction(crate::scale::InteractionKind::CameraPan));
@@ -627,10 +639,7 @@ impl Core {
         // locked; OB-55)
         fx.extend(self.reconcile_constraints());
         let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
-        let locked = self
-            .constraint
-            .is_some_and(|c| c.kind == pointer::ConstraintKind::Lock);
-        if on_it && !self.input.interaction.active() && !locked {
+        if on_it && !self.input.interaction.active() && !self.locked() {
             fx.extend(self.true_position());
         }
         fx.extend(self.settle_all_epochs());
@@ -674,9 +683,11 @@ impl Core {
                 self.constraint = None;
                 pointer_fx.push(Effect::PointerZeroOutputBegin);
             } else {
+                // M10: exactly one true-position event unless an interaction owns the pointer
+                // or the reconciliation keeps a lock (C12.F17 Q3: a kept confinement receives it)
                 let recon_fx = self.reconcile_constraints();
                 pointer_fx.extend(recon_fx);
-                if !self.input.interaction.active() && self.constraint.is_none() {
+                if !self.input.interaction.active() && !self.locked() {
                     pointer_fx.extend(self.true_position());
                 }
             }
