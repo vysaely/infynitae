@@ -168,10 +168,10 @@ INV-RENDER-1's wording; F-RENDER-1's location formula L and its tracker definiti
 - **OB-59** (FOUNDATION_TEST_PLAN living OB, after OB-58):
   > ### OB-59
   > - **Status:** OPEN
-  > - **Item:** Drag-and-drop under INV-INPUT-2. The clipboard (data device and primary selection) is supported; drag-and-drop is refused (`start_drag` is not served), and INV-INPUT-2 names a drag as a protocol transfer. A decision and an implementation are needed for: which pointer interaction owns a drag, how ownership and the implicit grab interact with compositor interactions (M22) and pointer constraints (INV-INPUT-5), drag icons on a zoomed camera (INV-RENDER-1), and drops across outputs
+  > - **Item:** Drag-and-drop under INV-INPUT-2. The clipboard (data device and primary selection) is supported; drag-and-drop is refused — a client's `start_drag` is cancelled (its source receives `cancelled`, no drag offer is made) and pointer delivery keeps following Core — and INV-INPUT-2 names a drag as a protocol transfer. A decision and an implementation are needed for: which pointer interaction owns a drag, how ownership and the implicit grab interact with compositor interactions (M22) and pointer constraints (INV-INPUT-5), drag icons on a zoomed camera (INV-RENDER-1), and drops across outputs
   > - **Owner:** architecture (INV-INPUT-2, M22) via change control, then adapter (data device) + core input
-  > - **Evidence available:** the clipboard integration (owner decision 2026-10-19: clipboard yes, drag-and-drop stays refused); its T1 tests show `start_drag` refused
-  > - **Pass criterion:** an architecture decision on drag ownership under INV-INPUT-2; T1 production tests for a drag within one client, between two clients and across outputs, with seeded controls; until then a T1 test that a drag is refused without a stuck grab
+  > - **Evidence available:** the clipboard integration (owner decision 2026-10-19: clipboard yes, drag-and-drop stays refused); T1 `t1_clipboard::a_drag_started_on_a_real_press_is_refused` (source cancelled, no offer, the next motion routed by Core)
+  > - **Pass criterion:** an architecture decision on drag ownership under INV-INPUT-2; T1 production tests for a drag within one client, between two clients and across outputs, with seeded controls; until then the refusal test stays
   > - **Destination:** DECISION, then T1
   > - **May be closed by:** architecture change control and T1 production tests
   > - **Dependencies:** clipboard integration
