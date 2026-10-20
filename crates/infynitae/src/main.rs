@@ -10,6 +10,8 @@ use std::time::Duration;
 use infynitae_core::Core;
 use infynitae_core::navigation::PersistedCameras;
 
+mod shell;
+
 fn print_help() {
     println!(
         "\
@@ -32,6 +34,9 @@ OPTIONS:
     --activation-policy <strict|attention-only|permissive>
                              What xdg-activation requests may do (default strict: focus only
                              with a token from the focused client; otherwise attention)
+    --shell-socket <PATH>    The trusted shell's socket (default $XDG_RUNTIME_DIR/infynitae/shell.sock;
+                             JSON lines, FOUNDATION_ARCHITECTURE C7)
+    --no-shell               No shell socket
     --xwayland-satellite <PATH>
                              EXPERIMENTAL (INC-12): supervise this xwayland-satellite on an X
                              display the compositor owns; clients get it as DISPLAY. Off by
@@ -53,6 +58,7 @@ fn main() -> ExitCode {
     let mut max_frames: Option<u64> = None;
     let mut xwayland_satellite: Option<std::path::PathBuf> = None;
     let mut activation_policy = infynitae_core::input::focus::ActivationPolicy::Strict;
+    let mut shell_socket = shell::default_path();
 
     let mut i = 1;
     while i < args.len() {
@@ -176,6 +182,15 @@ fn main() -> ExitCode {
                     }
                 };
             }
+            "--shell-socket" => {
+                i += 1;
+                let Some(p) = args.get(i) else {
+                    eprintln!("Error: --shell-socket requires a path");
+                    return ExitCode::FAILURE;
+                };
+                shell_socket = Some(p.into());
+            }
+            "--no-shell" => shell_socket = None,
             "--xwayland-satellite" => {
                 i += 1;
                 if i >= args.len() {
@@ -194,8 +209,10 @@ fn main() -> ExitCode {
     }
 
     // Composition root: creates Core and authority ports (FOUNDATION_ARCHITECTURE C1.2, C1.5)
-    let (mut core, input_port, _shell_port, output_token) = Core::new(PersistedCameras::default());
+    let (mut core, input_port, shell_port, output_token) = Core::new(PersistedCameras::default());
     core.set_activation_policy(activation_policy);
+    // the ShellPort's only consumer is the shell server (C7.4); without a socket it is dropped
+    let extension = shell_socket.map(|path| shell::factory(shell_port, path));
 
     if headless {
         println!("[infynitae] Starting headless compositor...");
@@ -210,7 +227,13 @@ fn main() -> ExitCode {
             device_limit: infynitae_backend_headless::DeviceLimit::default(),
             xwayland_satellite: xwayland_satellite.clone(),
         };
-        match infynitae_backend_headless::run_headless(core, input_port, output_token, options) {
+        match infynitae_backend_headless::run_headless_with(
+            core,
+            input_port,
+            output_token,
+            options,
+            extension,
+        ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("[infynitae] Headless compositor error: {e}");
@@ -230,7 +253,13 @@ fn main() -> ExitCode {
             max_frames,
             xwayland_satellite,
         };
-        match infynitae_backend_winit::run_nested(core, input_port, output_token, options) {
+        match infynitae_backend_winit::run_nested_with(
+            core,
+            input_port,
+            output_token,
+            options,
+            extension,
+        ) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("[infynitae] Nested compositor error: {e}");

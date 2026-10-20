@@ -21,7 +21,7 @@ use infynitae_core::navigation::PersistedCameras;
 use infynitae_core::output::{OutputId, Transform};
 use infynitae_core::pointer::PointerState;
 use infynitae_core::stage::ElementId;
-use infynitae_core::{Core, InputPort, OutputLifecycleToken};
+use infynitae_core::{Core, InputPort, OutputLifecycleToken, ShellPort};
 use infynitae_wayland::{ClientState, WaylandState};
 use smithay::reexports::wayland_server::Display;
 use wayland_client::protocol::{
@@ -1712,6 +1712,8 @@ pub struct Lockstep {
     pub token: OutputLifecycleToken,
     /// The virtual input device's port (the test is the composition root).
     pub input: InputPort,
+    /// The shell's port (INC-11): a test drives `shell_command` as the shell server does.
+    pub shell: ShellPort,
     pub output: Option<OutputId>,
     pub conn: Connection,
     pub queue: EventQueue<Probe>,
@@ -1732,7 +1734,7 @@ impl Lockstep {
 
     /// A Core with a persisted camera table and the given outputs connected at startup.
     pub fn with(persisted: PersistedCameras, outputs: &[VirtualOutput]) -> Lockstep {
-        let (core, input, _shell, token) = Core::new(persisted);
+        let (core, input, shell, token) = Core::new(persisted);
         let display: Display<WaylandState> = Display::new().expect("display");
         let mut state = WaylandState::new(&display.handle(), core);
         // as the run loop does: the ceiling is what the renderer reports (OB-13)
@@ -1756,6 +1758,7 @@ impl Lockstep {
             state,
             token,
             input,
+            shell,
             output: None,
             conn,
             queue,

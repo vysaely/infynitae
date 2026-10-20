@@ -641,11 +641,8 @@ impl Core {
                     .and_then(|p| p.round_to_point())
                     .ok_or(ShellError::InvalidArgument)?;
                 self.shell_stream_step(stream);
-                self.stage
-                    .place(id, anchor)
+                self.place_by_shell(id, anchor, &mut out)
                     .map_err(|_| ShellError::StaleElement)?;
-                self.membership_pass_element(id, &mut out);
-                out.extend(self.evaluate_scale_policy(false));
                 // what lies under the pointer may have changed: M10, as after a camera write
                 if matches!(self.pointer, PointerState::Located { .. })
                     && !self.input.interaction.active()

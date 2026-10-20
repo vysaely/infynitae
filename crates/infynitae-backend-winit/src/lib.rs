@@ -143,8 +143,20 @@ impl infynitae_wayland::limits::RendererLimits for AssumedGlesLimits {
 pub fn run_nested(
     core: Core,
     input_port: InputPort,
+    output_token: OutputLifecycleToken,
+    options: WinitCompositorOptions,
+) -> Result<(), Box<dyn Error>> {
+    run_nested_with(core, input_port, output_token, options, None)
+}
+
+/// [`run_nested`] with a loop extension (the shell server, INC-11): it runs after every dispatch,
+/// before the clients are served, so its effects reach them with that dispatch's flush.
+pub fn run_nested_with(
+    core: Core,
+    input_port: InputPort,
     mut output_token: OutputLifecycleToken,
     options: WinitCompositorOptions,
+    extension: Option<infynitae_wayland::extension::ExtensionFactory>,
 ) -> Result<(), Box<dyn Error>> {
     let mut event_loop: EventLoop<LoopData> = EventLoop::try_new()?;
 
@@ -170,6 +182,9 @@ pub fn run_nested(
                 .and_then(|d| d.authority_path().map(|p| p.to_path_buf())),
         },
     )?;
+    // after Session::new: from here a SIGTERM or SIGINT ends the loop, so what the extension
+    // creates (the shell socket) is removed even when the signal comes during start-up
+    let mut extension = infynitae_wayland::extension::start(extension, &event_loop.handle());
     let mut xwayland = match (x_display, options.xwayland_satellite.as_deref()) {
         (Some(d), Some(satellite)) => Some(infynitae_wayland::xwayland::start_for_session(
             d,
@@ -253,6 +268,13 @@ pub fn run_nested(
             (a, b) => a.or(b),
         };
         event_loop.dispatch(timeout, &mut data)?;
+        if let Some(ext) = extension.as_mut() {
+            let (fx, changed) = ext.service(data.state.core_mut());
+            data.state.apply(&fx);
+            if changed {
+                data.session.request_frame();
+            }
+        }
         data.session.dispatch(&mut data.state);
 
         // Initial focus grant on topmost mapped element if seat is eligible (INV-INPUT-8)

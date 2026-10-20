@@ -118,6 +118,10 @@ impl Run {
         }
         assert!(!self.socket.exists(), "the socket was left behind");
         assert!(!self.lock.exists(), "the lock file was left behind");
+        assert!(
+            !self.dir.join("infynitae/shell.sock").exists(),
+            "the shell socket was left behind"
+        );
     }
 }
 

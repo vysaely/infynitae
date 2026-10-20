@@ -64,7 +64,7 @@ ALLOWED_EXTERNAL = {
     HEADLESS: {"smithay"},
     WINIT: {"smithay"},
     IPC: set(),
-    BIN: set(),
+    BIN: {"rustix"},  # SO_PEERCRED admission of the shell socket (C7.1; owner decision 2026-10-20, D1)
 }
 # Test-only external crates (dev-dependencies) a product crate may add on top of
 # ALLOWED_EXTERNAL. T1 is "production core + adapter + headless backend ... with recording probe

@@ -330,9 +330,21 @@ impl Default for HeadlessCompositorOptions {
 /// virtual vblank on the session's frame timer. Returns when a run limit is reached.
 pub fn run_headless(
     core: infynitae_core::Core,
+    input_port: infynitae_core::InputPort,
+    output_token: infynitae_core::OutputLifecycleToken,
+    options: HeadlessCompositorOptions,
+) -> Result<(), Box<dyn std::error::Error>> {
+    run_headless_with(core, input_port, output_token, options, None)
+}
+
+/// [`run_headless`] with a loop extension (the shell server, INC-11): it runs after every dispatch,
+/// before the clients are served, so its effects reach them with that dispatch's flush.
+pub fn run_headless_with(
+    core: infynitae_core::Core,
     mut input_port: infynitae_core::InputPort,
     mut output_token: infynitae_core::OutputLifecycleToken,
     options: HeadlessCompositorOptions,
+    extension: Option<infynitae_wayland::extension::ExtensionFactory>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use infynitae_wayland::session::{Session, SessionOptions};
     use smithay::reexports::calloop::EventLoop;
@@ -374,6 +386,9 @@ pub fn run_headless(
                 .and_then(|d| d.authority_path().map(|p| p.to_path_buf())),
         },
     )?;
+    // after Session::new: from here a SIGTERM or SIGINT ends the loop, so what the extension
+    // creates (the shell socket) is removed even when the signal comes during start-up
+    let mut extension = infynitae_wayland::extension::start(extension, &event_loop.handle());
     let mut xwayland = match (x_display, options.xwayland_satellite.as_deref()) {
         (Some(d), Some(satellite)) => Some(infynitae_wayland::xwayland::start_for_session(
             d,
@@ -398,6 +413,13 @@ pub fn run_headless(
             (a, b) => a.or(b),
         };
         event_loop.dispatch(timeout, &mut ())?;
+        if let Some(ext) = extension.as_mut() {
+            let (fx, changed) = ext.service(state.core_mut());
+            state.apply(&fx);
+            if changed {
+                session.request_frame();
+            }
+        }
         session.dispatch(&mut state);
 
         // Initial focus grant on topmost mapped element if seat is eligible (INV-INPUT-8)

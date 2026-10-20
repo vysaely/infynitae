@@ -621,6 +621,24 @@ impl Core {
             .collect()
     }
 
+    /// C7.2 `MoveElement` after its validation (`Core::shell_command`): the anchor is written here,
+    /// in the Stage's single writer (INV-STAGE-1), then the element's membership and the batch's
+    /// one scale evaluation follow, as for any change of one element.
+    pub(crate) fn place_by_shell(
+        &mut self,
+        id: ElementId,
+        anchor: CanvasPoint,
+        out: &mut Vec<Effect>,
+    ) -> Result<(), ProtocolError> {
+        self.stage
+            .place(id, anchor)
+            .map_err(|_| ProtocolError::StaleElement)?;
+        // (spelled as a reborrow: the commit path's call is a seeded-control anchor)
+        self.membership_pass_element(id, &mut *out);
+        out.extend(self.evaluate_scale_policy(false));
+        Ok(())
+    }
+
     /// `xdg_toplevel.set_title` / `set_app_id` (INC-11, owner decision 2026-10-20 D9): the
     /// toplevel's title and app_id, replaced wholesale, kept as display metadata for the shell.
     /// Each is cut to [`TOPLEVEL_META_MAX`] bytes at a character boundary, so a client cannot make

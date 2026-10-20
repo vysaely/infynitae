@@ -112,6 +112,13 @@ pub(crate) fn valid(d: &OutputDescriptor) -> bool {
         && (SCALE_120_MIN..=SCALE_120_MAX).contains(&d.scale_120)
 }
 
+impl OutputId {
+    /// The raw value, as the shell protocol carries it. An id is never reused (`OutputIds`).
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
 #[cfg(test)]
 impl OutputId {
     pub(crate) fn for_test(n: u64) -> Self {
