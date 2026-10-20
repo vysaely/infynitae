@@ -319,6 +319,14 @@ impl CompositorHandler for WaylandState {
         if is_sync_subsurface(surface) {
             return;
         }
+        // a layer surface (L1), or a surface of its tree
+        if let Some(i) = self.layer_index_by_root(surface).or_else(|| {
+            self.toplevel_root(surface)
+                .and_then(|root| self.layer_index_by_root(&root))
+        }) {
+            self.layer_committed(i);
+            return;
+        }
         // Only the root surface's own commit drives M1; a child commit (popup, desynchronised
         // subsurface) only changes the element's surface tree.
         if let Some(i) = self.element_index_by_root(surface) {

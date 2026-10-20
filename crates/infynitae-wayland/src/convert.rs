@@ -325,6 +325,41 @@ where
     Ok(out)
 }
 
+/// Render elements for layer-surface entries (L2), front to back, each at its physical rect in the
+/// output (a layer surface is never zoomed: its rect is its logical rect at the output scale). `k`
+/// is the frame's, as for the Canvas entries: the damage tracker draws the whole frame at it.
+pub fn layer_render_elements<R>(
+    renderer: &mut R,
+    registry: &SurfaceRegistry,
+    entries: &[infynitae_core::layer::LayerEntry],
+    k: f64,
+) -> Result<Vec<SurfaceElement<R>>, R::Error>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    let mut out = Vec::with_capacity(entries.len());
+    for e in entries {
+        let Some(surface) = registry.surface(e.surface) else {
+            continue;
+        };
+        let el = with_states(surface, |states| {
+            WaylandSurfaceRenderElement::from_surface(
+                renderer,
+                surface,
+                states,
+                projected_to_smithay_physical(e.location),
+                1.0,
+                Kind::Unspecified,
+            )
+        })?;
+        if let Some(el) = el {
+            out.push(CanonicalRect::new(el, e.rect, k));
+        }
+    }
+    Ok(out)
+}
+
 /// Smithay's element for one entry's surface at the F-RENDER-1 location, before it is wrapped;
 /// `None` when the surface is no longer registered or has no renderable state.
 pub fn surface_element<R>(
@@ -425,11 +460,20 @@ where
         .map_err(|_| RenderOutputError::NoFrame)?;
     let view = frame.view;
     let entries = frame.entries.clone();
-    let elements: Vec<_> = render_elements(renderer, &state.registry, &entries, view.k)
-        .map_err(RenderOutputError::Renderer)?
-        .into_iter()
-        .map(|(_, e)| e)
-        .collect();
+    // front to back: overlay and top layers, the Canvas, bottom and background layers (L2)
+    let layers = state.core.layer_frame(output);
+    let mut elements = layer_render_elements(renderer, &state.registry, &layers.above, view.k)
+        .map_err(RenderOutputError::Renderer)?;
+    elements.extend(
+        render_elements(renderer, &state.registry, &entries, view.k)
+            .map_err(RenderOutputError::Renderer)?
+            .into_iter()
+            .map(|(_, e)| e),
+    );
+    elements.extend(
+        layer_render_elements(renderer, &state.registry, &layers.below, view.k)
+            .map_err(RenderOutputError::Renderer)?,
+    );
     // borrowed, not cloned: the model's key owns strings, and it is read only for a rebuild
     let model = state
         .core

@@ -105,6 +105,39 @@ impl NavigationHistory {
 /// geometry `g = (x, y, w, h)` in Canvas px: `None` (refused) when `g.w ≤ 0` or `g.h ≤ 0`;
 /// otherwise the centre of g in Q16 (exact: g is integral), each component clamped into
 /// INV-COORD-1, and `zoom = clamp(min(view_w / g.w, view_h / g.h) / scale, 2⁻²⁰, 2¹⁶)`. Pure.
+/// F-FIT-1 within the output's usable area (L4, layer C12.F19 prepared): the window fits the
+/// usable area `(x, y, w, h)` (output-logical px; `extent` the output's logical size) and its
+/// centre is shown at the usable area's centre. With nothing reserved (`usable` = the whole
+/// extent) this is exactly [`fit_target`].
+pub fn fit_target_in(
+    view_size: (u32, u32),
+    extent: (f64, f64),
+    usable: (f64, f64, f64, f64),
+    scale: f64,
+    g: (i64, i64, i64, i64),
+) -> Option<CameraValue> {
+    if usable == (0.0, 0.0, extent.0, extent.1) {
+        return fit_target(view_size, scale, g);
+    }
+    // the usable area in physical px, as the view is
+    let size = (
+        (usable.2 * scale).round().max(1.0) as u32,
+        (usable.3 * scale).round().max(1.0) as u32,
+    );
+    let mut t = fit_target(size, scale, g)?;
+    // the usable centre's offset from the view centre, in Canvas px at the fitted zoom
+    let d = (
+        (usable.0 + usable.2 / 2.0 - extent.0 / 2.0) / t.zoom,
+        (usable.1 + usable.3 / 2.0 - extent.1 / 2.0) / t.zoom,
+    );
+    let limit = CANVAS_LIMIT_PX * Q16_ONE;
+    t.center = CanvasPos {
+        x: t.center.x.saturating_sub(q16(d.0)).clamp(-limit, limit),
+        y: t.center.y.saturating_sub(q16(d.1)).clamp(-limit, limit),
+    };
+    Some(t)
+}
+
 pub fn fit_target(
     view_size: (u32, u32),
     scale: f64,

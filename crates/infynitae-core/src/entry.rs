@@ -284,6 +284,10 @@ impl Core {
             return;
         }
         let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
+        // a panel or launcher above the Canvas covers what is under the pointer (L3)
+        if self.layer_hit(output, p, true).is_some() {
+            return;
+        }
         let Some(hit) = self.hit_test(output, pt) else {
             return;
         };
@@ -322,7 +326,14 @@ impl Core {
         ) else {
             return Err(crate::ShellError::UnknownOutput);
         };
-        let Some(target) = crate::navigation::fit_target(view_size, scale, g) else {
+        let (Some(extent), Some(usable)) = (
+            self.output(output).map(|m| m.logical_extent()),
+            self.usable_area(output),
+        ) else {
+            return Err(crate::ShellError::UnknownOutput);
+        };
+        let Some(target) = crate::navigation::fit_target_in(view_size, extent, usable, scale, g)
+        else {
             return Err(crate::ShellError::Refused);
         };
         self.cameras.fit(proof, camera, target);
@@ -512,10 +523,30 @@ impl Core {
         }
         self.input.ownership.press(button, Owner::Client);
         // Click-to-focus (INV-INPUT-8, M11): an explicit user action.
-        // If the click hits an element, that element gains ActiveElementFocus.
+        // If the click hits an element, that element gains ActiveElementFocus. A click on a layer
+        // surface above the Canvas reaches it instead, and focuses it when it is on-demand
+        // interactive (L3, L5); below the Canvas it is reached only where no element is.
         let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
-        if let Some(hit) = self.hit_test(output, pt) {
+        let on_layer = self.layer_hit(output, p, true);
+        let element = if on_layer.is_none() {
+            self.hit_test(output, pt)
+        } else {
+            None
+        };
+        let on_layer = on_layer.or_else(|| {
+            element
+                .is_none()
+                .then(|| self.layer_hit(output, p, false))
+                .flatten()
+        });
+        if let Some(hit) = element {
             out.extend(self.focus.set_focus(Some(hit.element)));
+        } else if let Some(h) = on_layer
+            && self
+                .layer(h.layer)
+                .is_some_and(|r| r.state.keyboard == crate::layer::KeyboardInteractivity::OnDemand)
+        {
+            out.extend(self.focus.layer_take(h.layer, false));
         }
         out.push(Effect::PointerButton {
             button,
@@ -837,6 +868,8 @@ impl Core {
         self.invalidate_frame(output);
         self.pointer = pointer::reconfigured(self.pointer, &model);
         let mut fx = vec![Effect::OutputChanged(output)];
+        // its layer surfaces are arranged in the new extent and told the new scale (L1)
+        fx.extend(self.layers_output_reconfigured(output));
         fx.extend(self.fullscreen_output_reconfigured(output));
         fx.extend(self.visibility_pass());
         // M10: at most one true-position event, none while an interaction owns the pointer, and
@@ -871,6 +904,9 @@ impl Core {
         let lost = self.outputs.remove(index);
         self.remove_frame(output);
         self.remove_lattice(output);
+        // its layer surfaces are closed before the pointer is relocated (they are not on any
+        // output any more) and before the global goes (their leaves first, INV-OUTPUT-1)
+        let closed = self.layers_output_removed(output);
         self.cameras
             .unbind_on_disconnect(authority::Authorized::mint(), output);
         // C4.6: a pan on the removed output keeps its ownership and consumes motion until release
@@ -899,7 +935,8 @@ impl Core {
         }
         // INV-OUTPUT-1: "fullscreen presentation dropped with the INV-PRES-1 configure"
         let restored = self.fullscreen_output_removed(output);
-        let mut fx = self.visibility_pass();
+        let mut fx = closed;
+        fx.extend(self.visibility_pass());
         fx.extend(restored);
         fx.extend(pointer_fx);
         fx.push(Effect::OutputRemoved(output));

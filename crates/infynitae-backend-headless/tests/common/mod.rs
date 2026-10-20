@@ -86,6 +86,10 @@ use wayland_protocols::xdg::xdg_output::zv1::client::{
     zxdg_output_manager_v1::ZxdgOutputManagerV1,
     zxdg_output_v1::{self, ZxdgOutputV1},
 };
+use wayland_protocols_wlr::layer_shell::v1::client::{
+    zwlr_layer_shell_v1::{self, ZwlrLayerShellV1},
+    zwlr_layer_surface_v1::{self, ZwlrLayerSurfaceV1},
+};
 
 /// One `wl_region` request: (add?, (x, y, w, h)).
 pub type RegionRequest = (bool, (i32, i32, i32, i32));
@@ -209,6 +213,12 @@ pub struct Probe {
     pub configures: Vec<&'static str>,
     pub kb: KbLogical,
     pub kb_log: Vec<String>,
+    /// `zwlr_layer_shell_v1` (L1–L8), its surfaces (index into `surfaces`), the configures they
+    /// received (index, size) and those closed.
+    pub layer_shell: Option<ZwlrLayerShellV1>,
+    pub layer_surfaces: Vec<(usize, ZwlrLayerSurfaceV1)>,
+    pub layer_configures: Vec<(usize, (u32, u32))>,
+    pub layer_closed: Vec<usize>,
     pub key_events: Vec<(u32, bool)>,
     pub repeat_info: Option<(i32, i32)>,
     pub destroyed_active: Vec<String>,
@@ -587,6 +597,63 @@ impl Probe {
         let idx = self.bare_surface(qh, label, size);
         self.make_subsurface(qh, idx, parent, offset, below);
         idx
+    }
+
+    /// A layer surface (L1): a role-less surface given the layer role on no particular output,
+    /// with its state, committed without a buffer (the compositor answers with a configure, which
+    /// the probe acknowledges; draw after it).
+    #[allow(clippy::too_many_arguments)]
+    pub fn layer_surface(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        label: &'static str,
+        layer: zwlr_layer_shell_v1::Layer,
+        anchor: zwlr_layer_surface_v1::Anchor,
+        size: (u32, u32),
+        exclusive_zone: i32,
+        keyboard: zwlr_layer_surface_v1::KeyboardInteractivity,
+    ) -> usize {
+        let idx = self.bare_surface(qh, label, (0, 0));
+        let wl = self.surfaces[idx].wl.clone();
+        let ls = self
+            .layer_shell
+            .as_ref()
+            .expect("zwlr_layer_shell_v1 bound")
+            .get_layer_surface(&wl, None, layer, "probe".into(), qh, idx);
+        ls.set_size(size.0, size.1);
+        ls.set_anchor(anchor);
+        ls.set_exclusive_zone(exclusive_zone);
+        ls.set_keyboard_interactivity(keyboard);
+        wl.commit();
+        self.layer_surfaces.push((idx, ls));
+        idx
+    }
+
+    /// Destroys a layer surface and its `wl_surface`, with the keyboard bookkeeping of
+    /// [`Probe::destroy_toplevel`] (a `leave` may still be in flight for the dead surface).
+    pub fn destroy_layer(&mut self, idx: usize) {
+        if let Some(i) = self.layer_surfaces.iter().position(|(s, _)| *s == idx) {
+            let (_, ls) = self.layer_surfaces.remove(i);
+            ls.destroy();
+        }
+        let s = &mut self.surfaces[idx];
+        s.wl.destroy();
+        let label = s.label;
+        if self.kb.active.as_deref() == Some(label) {
+            self.kb.active = None;
+            self.destroyed_active.push(label.to_string());
+        }
+        self.kb_log.push(format!("destroy_layer {label}"));
+    }
+
+    /// The layer role object of surface `idx`.
+    pub fn layer_of(&self, idx: usize) -> &ZwlrLayerSurfaceV1 {
+        &self
+            .layer_surfaces
+            .iter()
+            .find(|(i, _)| *i == idx)
+            .expect("a layer surface")
+            .1
     }
 
     /// A `wl_surface` with no role.
@@ -1481,6 +1548,44 @@ impl Dispatch<WlPointer, ()> for Probe {
     }
 }
 
+impl Dispatch<ZwlrLayerShellV1, ()> for Probe {
+    fn event(
+        _: &mut Self,
+        _: &ZwlrLayerShellV1,
+        _: zwlr_layer_shell_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ZwlrLayerSurfaceV1, usize> for Probe {
+    fn event(
+        st: &mut Self,
+        ls: &ZwlrLayerSurfaceV1,
+        ev: zwlr_layer_surface_v1::Event,
+        idx: &usize,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match ev {
+            zwlr_layer_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
+                ls.ack_configure(serial);
+                st.surfaces[*idx].size = (width as i32, height as i32);
+                st.surfaces[*idx].configured = true;
+                st.layer_configures.push((*idx, (width, height)));
+            }
+            zwlr_layer_surface_v1::Event::Closed => st.layer_closed.push(*idx),
+            _ => {}
+        }
+    }
+}
+
 impl Dispatch<WlKeyboard, ()> for Probe {
     fn event(
         st: &mut Self,
@@ -1898,6 +2003,19 @@ impl Lockstep {
     /// The client's single registry.
     pub fn registry(&self) -> &WlRegistry {
         &self.registry
+    }
+
+    /// Binds `zwlr_layer_shell_v1` (L1–L8).
+    pub fn bind_layer_shell(&mut self) {
+        let (n, v, _) = self
+            .probe
+            .globals
+            .iter()
+            .find(|(_, i, _)| i == "zwlr_layer_shell_v1")
+            .map(|(n, i, v)| (*n, *v, i.clone()))
+            .expect("zwlr_layer_shell_v1 is offered");
+        self.probe.layer_shell = Some(self.registry.bind(n, v.min(4), &self.qh, ()));
+        self.pump();
     }
 
     /// Binds `xdg_activation_v1` (INC-12).

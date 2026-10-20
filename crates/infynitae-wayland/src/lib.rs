@@ -20,6 +20,7 @@ pub mod extension;
 mod frames;
 mod handlers;
 mod keyboard;
+mod layers;
 pub mod limits;
 mod outputs;
 pub mod ownership;
@@ -47,6 +48,7 @@ use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::selection::data_device::DataDeviceState;
 use smithay::wayland::selection::primary_selection::PrimarySelectionState;
+use smithay::wayland::shell::wlr_layer::WlrLayerShellState;
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
 use smithay::wayland::viewporter::ViewporterState;
@@ -147,6 +149,9 @@ pub struct WaylandState {
     drag_started: bool,
     /// `xdg_activation_v1` (B10.7, INV-INPUT-9, W-SM-8; INC-12).
     activation: XdgActivationState,
+    /// `zwlr_layer_shell_v1` (L1–L8) and its surfaces, in creation order.
+    layer_shell: WlrLayerShellState,
+    layers: Vec<layers::LayerHandle>,
     registry: SurfaceRegistry,
     elements: Vec<ElementHandle>,
     pub(crate) serial_outputs:
@@ -212,6 +217,8 @@ impl WaylandState {
             selection_owners: [None, None],
             drag_started: false,
             activation: XdgActivationState::new::<Self>(display),
+            layer_shell: WlrLayerShellState::new::<Self>(display),
+            layers: Vec::new(),
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),
@@ -264,6 +271,7 @@ impl WaylandState {
         self.core.frame_tick_into(output, &mut ticked);
         self.complete_frames(output, &ticked, now);
         self.ticked = ticked;
+        self.complete_layer_frames(output, now);
     }
 
     pub fn registry(&self) -> &SurfaceRegistry {

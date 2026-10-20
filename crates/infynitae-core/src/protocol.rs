@@ -105,6 +105,22 @@ pub enum Effect {
         scale_120: u32,
         integer_scale: u32,
     },
+    /// Configure a layer surface with the size its arrangement gives it (L1, L4).
+    LayerConfigure {
+        layer: crate::layer::LayerId,
+        size: LocalSize,
+    },
+    /// `zwlr_layer_surface_v1.closed`: its output is gone; the surface is no longer Core's.
+    LayerClosed(crate::layer::LayerId),
+    /// The keyboard goes to a layer surface (L5); it comes back with `KeyboardFocus`.
+    LayerKeyboardFocus(crate::layer::LayerId),
+    /// The preferred scale of a layer surface's tree: its output's scale (a layer surface is never
+    /// zoomed by a camera).
+    LayerPreferredScale {
+        layer: crate::layer::LayerId,
+        scale_120: u32,
+        integer_scale: u32,
+    },
 }
 
 /// Caller-owned, reusable storage for the effects of one Core entry (C14.3 `EffectBuf`). An
@@ -1191,8 +1207,8 @@ impl Core {
     /// `anchor = c − u/2 + (u − s)/2 = c − s/2` when `s ≤ u`. A window larger than the region on
     /// an axis is aligned to the region's origin on that axis (`anchor = c − u/2`), so that its
     /// top-left corner — title bar, menus — is the part that stays reachable. The result is
-    /// rounded once by R3 ([`CanvasPos::round_to_point`]). The usable region is the whole
-    /// output view; nothing reserves part of it yet.
+    /// rounded once by R3 ([`CanvasPos::round_to_point`]). The usable region is the output view
+    /// less the exclusive zones of its layer surfaces (L4), centred at its own centre.
     ///
     /// `None` keeps the anchor of the initial commit: the legacy policy, no output, or a
     /// position outside the Canvas bound.
@@ -1205,15 +1221,38 @@ impl Core {
             .cameras
             .camera_for_output(output.id)
             .and_then(|c| self.cameras.center(c))?;
-        let usable = output.logical_extent();
+        // the usable region (L4): the output view less its layers' exclusive zones, centred at its
+        // own centre, which lies `d` from the view's (Canvas px at the camera's zoom)
+        let extent = output.logical_extent();
+        let (ux, uy, uw, uh) = self
+            .usable_area(output.id)
+            .unwrap_or((0.0, 0.0, extent.0, extent.1));
+        let zoom = self
+            .cameras
+            .camera_for_output(output.id)
+            .and_then(|c| self.cameras.zoom(c))
+            .unwrap_or(1.0);
+        let d = (
+            (ux + uw / 2.0 - extent.0 / 2.0) / zoom,
+            (uy + uh / 2.0 - extent.1 / 2.0) / zoom,
+        );
+        let usable = (uw, uh);
         let axis = |c: i64, usable: f64, outer: i32| {
             let half_outer = i64::from(outer.max(0)) * Q16_ONE / 2;
             let half_usable = geom::q16(usable / 2.0);
             c - half_outer.min(half_usable)
         };
         CanvasPos {
-            x: axis(centre.x, usable.0, tree.geometry.size.w),
-            y: axis(centre.y, usable.1, tree.geometry.size.h),
+            x: axis(
+                centre.x.saturating_add(geom::q16(d.0)),
+                usable.0,
+                tree.geometry.size.w,
+            ),
+            y: axis(
+                centre.y.saturating_add(geom::q16(d.1)),
+                usable.1,
+                tree.geometry.size.h,
+            ),
         }
         .round_to_point()
     }

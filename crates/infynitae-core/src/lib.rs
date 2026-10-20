@@ -18,6 +18,7 @@
 pub mod frames;
 pub mod geom;
 pub mod input;
+pub mod layer;
 pub mod navigation;
 pub mod output;
 pub mod pointer;
@@ -346,6 +347,12 @@ pub struct Core {
     /// changes: until then its geometry is still the fullscreen one, so a new grant saves this
     /// size and not that one. Written by `core::protocol` alone.
     restore_offers: Vec<(stage::ElementId, geom::LocalSize)>,
+    /// Layer surfaces (L1), in creation order; the store and its only writer is `core::layer`.
+    layers: Vec<layer::LayerRecord>,
+    next_layer: u64,
+    /// The usable area of each output after its layers' exclusive zones (L4); an output without
+    /// an entry uses its whole logical extent.
+    usable: Vec<(output::OutputId, layer::Area)>,
     /// A bounded shell stream is open (INV-SCALE-3 `ShellStream`): the scale policy treats its
     /// camera and Stage steps as one epoch until its explicit end (or a settlement event).
     shell_stream: bool,
@@ -418,6 +425,9 @@ impl Core {
                 premap_fullscreen: Vec::new(),
                 restore_offers: Vec::new(),
                 shell_stream: false,
+                layers: Vec::new(),
+                next_layer: 0,
+                usable: Vec::new(),
                 windowed_placement_pending: Vec::new(),
                 frame_liveness: frames::FrameLiveness::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -714,6 +724,10 @@ impl Core {
                 let old = std::mem::replace(&mut self.frame_liveness.keyboard_recipient, new);
                 recipients = [old, new.filter(|n| Some(*n) != old)];
             }
+            // the keyboard leaves the window for a layer surface: the window gets `leave`
+            E::LayerKeyboardFocus(_) => {
+                recipients[0] = self.frame_liveness.keyboard_recipient.take();
+            }
             E::KeyboardForward { .. } => recipients[0] = self.frame_liveness.keyboard_recipient,
             E::PointerMotion { target, .. } => {
                 let new = target.map(|t| t.surface);
@@ -741,6 +755,9 @@ impl Core {
                 recipients[0] = self.frame_kick_surface(surface);
             }
             E::InitialConfigure(_)
+            | E::LayerConfigure { .. }
+            | E::LayerClosed(_)
+            | E::LayerPreferredScale { .. }
             | E::OutputAdded(_)
             | E::OutputChanged(_)
             | E::OutputRemoved(_)
@@ -1442,8 +1459,31 @@ impl Core {
             return None;
         };
         let pt = geom::OutputLogicalPoint { x: p.0, y: p.1 };
+        // L3: overlay and top surfaces first, then the Canvas, then bottom and background. A layer
+        // surface's events are in its own surface-local frame: origin 0, the location the position
+        // in it, so no camera zoom ever scales them.
+        let layer_target = |h: layer::LayerHit| {
+            (
+                Some(protocol::PointerTarget {
+                    surface: h.surface,
+                    origin: geom::CanvasPoint { x: 0, y: 0 },
+                }),
+                geom::CanvasPos {
+                    x: h.local.x,
+                    y: h.local.y,
+                },
+            )
+        };
+        if let Some(h) = self.layer_hit(output, p, true) {
+            return Some(layer_target(h));
+        }
         let hit = self.hit_test(output, pt);
         let view = self.current_frame(output)?.view;
+        if hit.is_none()
+            && let Some(h) = self.layer_hit(output, p, false)
+        {
+            return Some(layer_target(h));
+        }
         Some(match hit {
             Some(h) => (
                 Some(protocol::PointerTarget {

@@ -30,3 +30,5 @@ probe_test_keyboard_grab = ["infynitae-wayland/probe_test_keyboard_grab"]
 smithay = { version = "=0.7.0", default-features = false, features = ["renderer_test", "renderer_pixman"] }
 wayland-client = "=0.31.15"
 wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }
+# the layer-shell probe client (L1–L8); already in the tree through Smithay and winit
+wayland-protocols-wlr = { version = "=0.3.12", features = ["client"] }

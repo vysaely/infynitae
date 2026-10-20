@@ -122,7 +122,40 @@ pub(crate) fn extract(window: &Window, registry: &mut SurfaceRegistry) -> Option
         );
     }
     tree(&root, None, &mut raw);
+    build(
+        raw,
+        LocalRect {
+            loc: convert::local_point(geometry.loc),
+            size: convert::local_size(geometry.size),
+        },
+        registry,
+    )
+}
 
+/// The snapshot of a layer surface's tree (its root and subsurfaces; L1): the window geometry is
+/// the root surface's own extent, at its origin.
+pub(crate) fn extract_layer(
+    root: &WlSurface,
+    registry: &mut SurfaceRegistry,
+) -> Option<SurfaceTree> {
+    let mut raw = Vec::new();
+    tree(root, None, &mut raw);
+    let size = raw.first().map(|r| r.size).unwrap_or_default();
+    build(
+        raw,
+        LocalRect {
+            loc: LocalPoint::default(),
+            size,
+        },
+        registry,
+    )
+}
+
+fn build(
+    raw: Vec<Raw>,
+    geometry: LocalRect,
+    registry: &mut SurfaceRegistry,
+) -> Option<SurfaceTree> {
     let index_of = |s: &WlSurface| raw.iter().position(|r| &r.surface == s);
     let mut surfaces = Vec::with_capacity(raw.len());
     for r in &raw {
@@ -146,11 +179,5 @@ pub(crate) fn extract(window: &Window, registry: &mut SurfaceRegistry) -> Option
             frame_requested: r.frame_requested,
         });
     }
-    Some(SurfaceTree {
-        geometry: LocalRect {
-            loc: convert::local_point(geometry.loc),
-            size: convert::local_size(geometry.size),
-        },
-        surfaces,
-    })
+    Some(SurfaceTree { geometry, surfaces })
 }

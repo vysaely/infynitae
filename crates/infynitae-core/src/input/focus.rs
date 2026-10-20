@@ -35,6 +35,9 @@ pub struct FocusModel {
     attention: Vec<ElementId>,
     /// What activation requests may do.
     activation_policy: ActivationPolicy,
+    /// A layer surface holds the keyboard (L5), and whether it holds it exclusively. The window
+    /// focus (`target`) is kept underneath and gets the keyboard back when the layer lets go.
+    layer: Option<(crate::layer::LayerId, bool)>,
 }
 
 impl Default for FocusModel {
@@ -45,6 +48,7 @@ impl Default for FocusModel {
             initial_eligible: true,
             attention: Vec::new(),
             activation_policy: ActivationPolicy::Strict,
+            layer: None,
         }
     }
 }
@@ -80,8 +84,14 @@ impl FocusModel {
         if next.is_some() {
             self.initial_eligible = false;
         }
-        if self.target == next {
+        // an on-demand layer holding the keyboard gives it up to an explicit window focus, even to
+        // the window that was focused before it (L5)
+        let from_layer = matches!(self.layer, Some((_, false)));
+        if self.target == next && !from_layer {
             return Vec::new();
+        }
+        if from_layer {
+            self.layer = None;
         }
         let prev = self.target;
         self.target = next;
@@ -95,10 +105,16 @@ impl FocusModel {
         if let Some(prev_id) = prev {
             effects.push(Effect::ToplevelConfigure(prev_id));
         }
-        if let Some(new_id) = next {
+        if let Some(new_id) = next
+            && Some(new_id) != prev
+        {
             effects.push(Effect::ToplevelConfigure(new_id));
         }
-        effects.push(Effect::KeyboardFocus(next));
+        // while an exclusive layer holds the keyboard, the window focus changes underneath it and
+        // the keyboard stays with the layer until it lets go (L5)
+        if !self.layer_exclusive() {
+            effects.push(Effect::KeyboardFocus(next));
+        }
         effects
     }
 
@@ -143,8 +159,49 @@ impl FocusModel {
         if let Some(next_id) = successor {
             effects.push(Effect::ToplevelConfigure(next_id));
         }
-        effects.push(Effect::KeyboardFocus(successor));
+        // a layer holding the keyboard keeps it; the successor gets it when the layer lets go
+        if self.layer.is_none() {
+            effects.push(Effect::KeyboardFocus(successor));
+        }
         effects
+    }
+
+    /// The layer surface holding the keyboard, if any (L5).
+    pub fn layer(&self) -> Option<crate::layer::LayerId> {
+        self.layer.map(|(l, _)| l)
+    }
+
+    fn layer_exclusive(&self) -> bool {
+        matches!(self.layer, Some((_, true)))
+    }
+
+    /// A layer surface takes the keyboard (L5): `exclusive` for a `top`/`overlay` surface asking
+    /// for it while mapped, otherwise a click on an on-demand surface. An exclusive holder is not
+    /// displaced by an on-demand one.
+    pub(crate) fn layer_take(
+        &mut self,
+        layer: crate::layer::LayerId,
+        exclusive: bool,
+    ) -> Vec<Effect> {
+        if self.layer_exclusive() && !exclusive && self.layer() != Some(layer) {
+            return Vec::new();
+        }
+        if self.layer == Some((layer, exclusive)) {
+            return Vec::new();
+        }
+        self.initial_eligible = false;
+        self.layer = Some((layer, exclusive));
+        vec![Effect::LayerKeyboardFocus(layer)]
+    }
+
+    /// The layer surface lets the keyboard go (unmapped, destroyed, no longer interactive): it
+    /// returns to the window focus.
+    pub(crate) fn layer_release(&mut self, layer: crate::layer::LayerId) -> Vec<Effect> {
+        if self.layer() != Some(layer) {
+            return Vec::new();
+        }
+        self.layer = None;
+        vec![Effect::KeyboardFocus(self.target)]
     }
 
     pub fn activation_policy(&self) -> ActivationPolicy {

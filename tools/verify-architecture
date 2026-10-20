@@ -73,7 +73,7 @@ ALLOWED_EXTERNAL = {
 ALLOWED_DEV_EXTERNAL = {
     CORE: set(),
     WAYLAND: set(),
-    HEADLESS: {"wayland-client", "wayland-protocols"},
+    HEADLESS: {"wayland-client", "wayland-protocols", "wayland-protocols-wlr"},
     WINIT: set(),
     IPC: set(),
     BIN: set(),

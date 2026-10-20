@@ -183,9 +183,9 @@ impl WaylandState {
                         h.output.leave(s);
                     }
                 }
-                ref pointer => {
-                    let applied = self.apply_pointer(pointer);
-                    debug_assert!(applied, "unhandled effect {pointer:?}");
+                ref other => {
+                    let applied = self.apply_layer(other) || self.apply_pointer(other);
+                    debug_assert!(applied, "unhandled effect {other:?}");
                 }
             }
         }
