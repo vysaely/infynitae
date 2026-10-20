@@ -1416,6 +1416,82 @@ mod tests {
         );
     }
 
+    /// TST-23 R1 (PD-F2-06, `experiments/phase-d/d5_model_1r.py`) as a T0 property on the
+    /// production path: over the model's grid — scale {1, 1.5} × zoom {0.5, 0.75, 1, 1080/651,
+    /// 2.5}, camera centre (5000.3, 3000.7) — one pan gesture of 200 events, each a hand
+    /// displacement of (+3.7, −1.3) physical px, moves the content's edge at Canvas (5100, 3050)
+    /// on screen by the accumulated hand displacement within the lattice rounding (≤ 1 px), after
+    /// every event, on both axes. The sealed formula (camera moved by the logical Σ, not Σ / zoom)
+    /// fails at every zoom ≠ 1 (seeded control).
+    #[test]
+    fn tst23_r1_content_follows_the_hand_at_every_zoom_and_scale() {
+        use crate::PhysicalEvent;
+        use crate::input::bindings::{BTN_MIDDLE, Modifiers};
+        let q16 = |v: f64| (v * 65536.0).round_ties_even() as i64;
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        for scale_120 in [120u32, 180] {
+            let s = scale_120 as f64 / 120.0;
+            for zoom in [0.5, 0.75, 1.0, 1080.0 / 651.0, 2.5] {
+                let centre = CanvasPos {
+                    x: q16(5000.3),
+                    y: q16(3000.7),
+                };
+                let persisted =
+                    PersistedCameras::from_entries(vec![(key("A"), centre, zoom)]).unwrap();
+                let (mut c, mut i, _s, mut t) = Core::new(persisted);
+                let d = desc_k(key("A"), (1920, 1080), Transform::Normal, scale_120, 60_000);
+                let (a, _) = c.output_connected(&mut t, d).unwrap();
+                let v0 = c.view(a).unwrap();
+                let e0 = (v0.edge_x(5100), v0.edge_y(3050));
+                let mut time = 1;
+                let mut ev = |c: &mut Core, e: PhysicalEvent| {
+                    c.physical_input_vec(&mut i, e).unwrap();
+                };
+                ev(
+                    &mut c,
+                    PhysicalEvent::PointerButton {
+                        button: BTN_MIDDLE,
+                        pressed: true,
+                        modifiers: logo,
+                        time_us: time,
+                    },
+                );
+                let (mut sx, mut sy) = (0.0f64, 0.0f64);
+                let mut worst = 0.0f64;
+                for _ in 0..200 {
+                    time += 1000;
+                    // the hand: (+3.7, −1.3) physical px = that over s in logical px
+                    let delta = (3.7 / s, -1.3 / s);
+                    ev(
+                        &mut c,
+                        PhysicalEvent::PointerMotion {
+                            delta,
+                            delta_unaccel: delta,
+                            time_us: time,
+                        },
+                    );
+                    sx += 3.7;
+                    sy -= 1.3;
+                    let v = c.view(a).unwrap();
+                    let content = (
+                        (v.edge_x(5100) - e0.0) as f64,
+                        (v.edge_y(3050) - e0.1) as f64,
+                    );
+                    worst = worst
+                        .max((content.0 - sx).abs())
+                        .max((content.1 - sy).abs());
+                }
+                assert!(
+                    worst <= 1.0,
+                    "scale {s}, zoom {zoom}: content strays {worst} px from the hand"
+                );
+            }
+        }
+    }
+
     /// The kept-reference bound (F-LATTICE-1, C12.F14.4 item 1): at k = 2¹⁹ (zoom 2¹⁶, scale 8)
     /// a pan within `|v − R|·k ≤ 2³¹` keeps the reference; one beyond it sets it again on that
     /// axis only (the arithmetic is per axis).

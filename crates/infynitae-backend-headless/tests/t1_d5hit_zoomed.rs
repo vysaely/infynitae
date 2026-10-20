@@ -13,7 +13,9 @@
 //!
 //! The oracle below is written from the living formula text (F-VIEW-1, F-LATTICE-1 with the
 //! per-frame reference of a freshly defined view, F-UNPROJECT-1, F-HIT-1) and calls no production
-//! projection, unprojection or region code. What it does not establish: GPU rendering; kept
+//! projection, unprojection or region code. TST-19's negative control is ported with it: at every
+//! zoom the superseded canvas-exact rule (D-B2-I9) selects another surface on some pixels. What it
+//! does not establish: GPU rendering; kept
 //! references (the canonical-rect sweep covers those); multi-output spanning.
 
 mod common;
@@ -87,6 +89,9 @@ struct Parity {
     hit_bad: u64,
     local_bad: u64,
     overrun: f64,
+    /// Pixels where the superseded canvas-exact rule (D-B2-I9) selects another surface than the
+    /// presented one: TST-19's negative control at zoom ≠ 1.
+    canvas_exact_differs: u64,
 }
 
 fn parity(ls: &Lockstep, centre: (f64, f64), zoom: f64) -> Parity {
@@ -130,6 +135,7 @@ fn parity(ls: &Lockstep, centre: (f64, f64), zoom: f64) -> Parity {
         (x0, y0, x1, y1) = (x0.min(a - 3), y0.min(b - 3), x1.max(c + 3), y1.max(d + 3));
     }
     let (mut n, mut hit_bad, mut local_bad, mut overrun) = (0, 0, 0, 0.0f64);
+    let mut canvas_exact_differs = 0;
     for j in y0.max(0)..y1.min(size.1 as i64) {
         for (i, f) in (x0.max(0)..x1.min(size.0 as i64)).flat_map(|i| [(i, 0.5), (i, FAR)]) {
             n += 1;
@@ -152,6 +158,22 @@ fn parity(ls: &Lockstep, centre: (f64, f64), zoom: f64) -> Parity {
             if got.map(|h| h.surface) != want {
                 hit_bad += 1;
             }
+            // the superseded rule: the first surface whose Canvas rect contains q exactly (no
+            // pixel coverage) and whose input region contains it
+            let canvas_exact = elements
+                .iter()
+                .find(|(e, _)| {
+                    let (lx, ly) = (q.0 - e.origin.x * Q16_ONE, q.1 - e.origin.y * Q16_ONE);
+                    lx >= 0
+                        && ly >= 0
+                        && lx < e.size.w as i64 * Q16_ONE
+                        && ly < e.size.h as i64 * Q16_ONE
+                        && eligible(e, q)
+                })
+                .map(|(e, _)| e.surface);
+            if canvas_exact != want {
+                canvas_exact_differs += 1;
+            }
             // OB-14 sub-pixel clamp: delivered = q − origin clamped into [0, w) × [0, h); the
             // unclamped point lies past the surface by less than half a physical pixel
             if let Some(h) = got
@@ -173,6 +195,7 @@ fn parity(ls: &Lockstep, centre: (f64, f64), zoom: f64) -> Parity {
         hit_bad,
         local_bad,
         overrun,
+        canvas_exact_differs,
     }
 }
 
@@ -199,7 +222,15 @@ fn tst18_d5hit_zoomed_configurations() {
             hit_bad,
             local_bad,
             overrun,
+            canvas_exact_differs,
         } = parity(&ls, centre, zoom);
+        // TST-19's negative control (d5_model: the canvas-exact rule disagrees along W's edges
+        // on A0 at ED-1's zoom): the superseded rule must disagree with the presented selection
+        // at every zoom, or the comparison above could not tell the rules apart
+        assert!(
+            canvas_exact_differs > 0,
+            "zoom {zoom}: the canvas-exact rule agrees everywhere"
+        );
         assert_eq!(
             local_bad, 0,
             "zoom {zoom}: delivered coordinates not q − origin, clamped"

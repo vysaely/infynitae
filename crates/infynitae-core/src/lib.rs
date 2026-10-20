@@ -2087,6 +2087,167 @@ mod tests {
         }
     }
 
+    /// A second element V (120 × 40, root surface `root`), mapped after W.
+    fn map_small(n: &mut Nav, root: u64) -> stage::ElementId {
+        let mut t = tree(root, None);
+        t.geometry.size = LocalSize { w: 120, h: 40 };
+        t.surfaces
+            .iter_mut()
+            .for_each(|s| s.size = LocalSize { w: 120, h: 40 });
+        mapped(&mut n.core, t)
+    }
+
+    /// Moves the pointer onto `e` on `o`, at the first point of a 4 px grid of the shown frame
+    /// where `e` is hit (the frame is produced first: hit testing reads what was shown).
+    fn point_at(n: &mut Nav, o: output::OutputId, e: stage::ElementId) {
+        n.core.render_list(o).unwrap();
+        let target = (0..270)
+            .flat_map(|j| (0..480).map(move |i| (i as f64 * 4.0 + 1.5, j as f64 * 4.0 + 1.5)))
+            .find(|&(x, y)| {
+                n.core
+                    .hit_test(o, OutputLogicalPoint { x, y })
+                    .is_some_and(|h| h.element == e)
+            })
+            .expect("the element is visible somewhere on the output");
+        let p = match n.core.pointer() {
+            pointer::PointerState::Located { p, .. } => p,
+            _ => unreachable!(),
+        };
+        n.motion((target.0 - p.0, target.1 - p.1));
+        n.core.render_list(o).unwrap();
+    }
+
+    /// C12.F16.6 item 3 as worded: fits from distinct values to two different elements at
+    /// different zooms (W 200 × 100 → 9.6, V 120 × 40 → 16), a pan before each, then five
+    /// restores return v₄ … v₀ in order and a sixth is refused.
+    #[test]
+    fn restores_unwind_fits_of_two_elements_at_different_zooms() {
+        let (mut n, a, w) = Nav::new();
+        let v = map_small(&mut n, 7);
+        let mut priors = Vec::new();
+        let mut zooms = Vec::new();
+        for i in 0..5 {
+            n.pan((0.5 + i as f64 * 0.3, -0.25 * i as f64));
+            let e = if i % 2 == 0 { v } else { w };
+            point_at(&mut n, a, e);
+            priors.push(n.camera(a));
+            n.fit();
+            assert_eq!(n.history(a).len(), i + 1, "fit {i} refused");
+            zooms.push(n.camera(a).zoom);
+        }
+        assert_eq!(
+            zooms,
+            vec![16.0, 9.6, 16.0, 9.6, 16.0],
+            "both elements fitted"
+        );
+        for i in 0..5 {
+            for j in 0..i {
+                assert!(!same(priors[i], priors[j]), "distinct prior values");
+            }
+        }
+        assert!(
+            priors.iter().any(|p| p.zoom != priors[0].zoom),
+            "different zooms"
+        );
+        for want in priors.iter().rev() {
+            n.restore();
+            assert!(same(n.camera(a), *want));
+        }
+        let last = n.camera(a);
+        assert_eq!(motions(&n.restore()), 0);
+        assert!(
+            same(n.camera(a), last) && n.history(a).is_empty(),
+            "a sixth is refused"
+        );
+    }
+
+    /// C12.F16.6 item 6, the cases `refused_fits_change_neither_camera_nor_history` does not take:
+    /// W unmapped while the shown frame still hits it, and a zero-height W, at 0, 1 and 256
+    /// entries; and O not connected at 0, 1 and 256 entries.
+    #[test]
+    fn refused_fits_of_an_unmapped_or_zero_height_window_and_without_an_output() {
+        for prefill in [0usize, 1, HISTORY_CAPACITY] {
+            let (mut n, a, w) = Nav::new();
+            fits(&mut n, a, prefill);
+            n.core.render_list(a).unwrap();
+            let (cam, held) = (n.camera(a), n.history(a));
+            let unchanged = |n: &Nav, what: &str| {
+                assert!(same(n.camera(a), cam), "{prefill}/{what}: camera changed");
+                let now = n.history(a);
+                assert!(
+                    now.len() == held.len() && now.iter().zip(&held).all(|(x, y)| same(*x, *y)),
+                    "{prefill}/{what}: history changed"
+                );
+            };
+            let keep = n.core.stage().tree(w).unwrap().clone();
+            // zero height (the same surfaces, geometry 200 × 0)
+            let mut t = keep.clone();
+            t.geometry.size.h = 0;
+            n.core.toplevel_committed(w, t).unwrap();
+            assert_eq!(motions(&n.fit()), 0);
+            unchanged(&n, "zero height");
+            n.core.toplevel_committed(w, keep.clone()).unwrap();
+            n.core.render_list(a).unwrap();
+            // unmapped, with no frame produced after the unmap
+            let mut gone = keep.clone();
+            gone.surfaces.iter_mut().for_each(|s| s.mapped = false);
+            n.core.toplevel_committed(w, gone).unwrap();
+            assert!(n.core.stage().mapped(w).is_none());
+            let p = match n.core.pointer() {
+                pointer::PointerState::Located { p, .. } => p,
+                _ => unreachable!(),
+            };
+            assert!(
+                n.core
+                    .hit_test(a, OutputLogicalPoint { x: p.0, y: p.1 })
+                    .is_none(),
+                "an unmapped W is not hit, even in the frame shown before the unmap"
+            );
+            assert_eq!(motions(&n.fit()), 0);
+            unchanged(&n, "unmapped");
+        }
+        for prefill in [0usize, 1, HISTORY_CAPACITY] {
+            let (mut n, a, _) = Nav::new();
+            fits(&mut n, a, prefill);
+            let c = n.core.cameras().camera_for_output(a).unwrap();
+            let cam = n.camera(a);
+            n.core.output_disconnected(&mut n.token, a).unwrap();
+            assert_eq!(n.core.pointer(), pointer::PointerState::NoOutput);
+            assert_eq!(motions(&n.fit()), 0);
+            let cams = n.core.cameras();
+            assert!(
+                cams.center(c) == Some(cam.center)
+                    && cams.zoom(c).map(f64::to_bits) == Some(cam.zoom.to_bits())
+                    && cams.history(c).unwrap().is_empty(),
+                "{prefill}/no output: refused"
+            );
+        }
+    }
+
+    /// C12.F16.6 item 7. No entry addresses a restore to an `OutputId` (`ShellCommand` has no
+    /// variant before INC-11); the binding restores on the pointer's output, so a restore after
+    /// O's disconnection reaches no output: nothing changes, and after O reconnects a fit and a
+    /// restore behave as items 2–3.
+    #[test]
+    fn a_restore_after_the_output_is_disconnected_changes_nothing() {
+        let (mut n, a, _) = Nav::new();
+        let priors = fits(&mut n, a, 2);
+        let c = n.core.cameras().camera_for_output(a).unwrap();
+        let cam = n.camera(a);
+        n.core.output_disconnected(&mut n.token, a).unwrap();
+        assert_eq!(motions(&n.restore()), 0);
+        let cams = n.core.cameras();
+        assert!(cams.center(c) == Some(cam.center) && cams.history(c).unwrap().is_empty());
+        assert!(!same(cam, priors[1]));
+        let a2 = n.connect("A");
+        n.core.render_list(a2).unwrap();
+        let v0 = n.camera(a2);
+        n.fit();
+        assert_eq!(n.history(a2).len(), 1);
+        n.restore();
+        assert!(same(n.camera(a2), v0) && n.history(a2).is_empty());
+    }
+
     /// Two outputs, each its own camera and history: interleaved fits restore only their own
     /// output's values; exhausting one leaves the other intact (C12.F16.6 item 8).
     #[test]
@@ -2175,15 +2336,48 @@ mod tests {
         );
     }
 
-    /// Bounded storage (C12.F16.6 item 10): 100,000 fits (restores interleaved) never hold more than
-    /// 256 entries, and the storage, reserved at the binding's first fit, never changes.
+    /// Bounded storage (C12.F16.6 item 10): 100,000 fits alternating two elements (restores
+    /// interleaved) never hold more than 256 entries, and the storage, reserved at the binding's
+    /// first fit, never changes.
     #[test]
     fn a_hundred_thousand_fits_keep_the_history_bounded() {
-        let (mut n, a, _) = Nav::new();
+        let (mut n, a, w) = Nav::new();
+        let v = map_small(&mut n, 7);
+        // a point on each element under each fitted camera: fitting W shows V too (both centred),
+        // and fitting V leaves W visible around it
+        point_at(&mut n, a, w);
         let c = n.core.cameras().camera_for_output(a).unwrap();
         assert_eq!(n.core.cameras().history(c).unwrap().reserved(), 0);
+        let mut spots = [None, None];
         for i in 0..100_000u32 {
+            let k = (i % 2) as usize;
+            let e = [w, v][k];
+            match spots[k] {
+                Some((x, y))
+                    if n.core
+                        .hit_test(a, OutputLogicalPoint { x, y })
+                        .is_some_and(|h| h.element == e) =>
+                {
+                    let p = match n.core.pointer() {
+                        pointer::PointerState::Located { p, .. } => p,
+                        _ => unreachable!(),
+                    };
+                    n.motion((x - p.0, y - p.1));
+                }
+                _ => {
+                    point_at(&mut n, a, e);
+                    spots[k] = match n.core.pointer() {
+                        pointer::PointerState::Located { p, .. } => Some(p),
+                        _ => None,
+                    };
+                }
+            }
             n.fit();
+            assert_eq!(
+                n.camera(a).zoom,
+                [9.6, 16.0][k],
+                "fit {i} fitted the other element"
+            );
             if i % 97 == 0 {
                 n.restore();
             }
