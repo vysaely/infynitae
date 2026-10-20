@@ -2,7 +2,12 @@
 
 CURRENT_PHASE: **PHASE F — INC-6 RATIFIED AND INTEGRATED INTO LOCAL `main` (`ca2e468`, fast-forward authorized 2026-10-17); NB-1 FIX INTEGRATED INTO LOCAL `main` (`1f2b246`, 2026-10-17); LAYER C12.F14 (OB-24 decision) INTEGRATED INTO LOCAL `main` (`270128f`, fast-forward authorized 2026-10-17); LAYER C12.F15 (canonical render/hit rect; F-FIT-1) ADOPTED ON LOCAL `main` 2026-10-17; LAYER C12.F16 (bounded fit/restore history, 256 per output) ADOPTED ON LOCAL `main` 2026-10-18; INC-10 IMPLEMENTED ON LOCAL `main` 2026-10-18 (exit evidence produced, not accepted); INC-10 EXIT-REVIEW FINDING M1 FIXED ON LOCAL `main` 2026-10-18; LAYER C12.F17 (INC-10 exit clarifications; owner decisions Q1–Q5) ADOPTED 2026-10-20 (base `16f13c9`); INC-10 (zoomed navigation) RATIFIED 2026-10-20 (ratified commit `faf6dda`). NOT PUSHED: `origin/main` is `23752f1`.** INC-0 … INC-7 are RATIFIED and on local `main`; INC-6 amendments C12.F11–C12.F13; OB-13, OB-28, OB-42 CLOSED. The Core visibility remediation (`85a74cb`) is integrated and FORMALLY RATIFIED. The runnable prototype runtime remains EXPERIMENTAL pending INC-13. **OB-24 is decided by the owner (2026-10-17), recorded as layer C12.F14, on local `main` since `270128f`: G-OB24 (as amended by C12.F14.5) is met. OB-24 (its closure awaits change control on the INC-10 change-control record's U-1 and U-8), OB-44 (C14 baselines), OB-52 (real renderer limit) and OB-53 (INC-10 part met; later scale stimuli) remain OPEN; OB-14 and OB-54 … OB-59 are OPEN. INC-10 is RATIFIED (2026-10-20).**
 
-Date: 2026-10-20
+Date: 2026-10-21
+
+## PHASE F — OWNER DECISIONS 2026-10-21; INC-11 AND INC-12 ON LOCAL `main` (`839f287`; not pushed)
+- **Integrated:** owner fast-forward of local `main` to `839f287`: INC-12 (EXPERIMENTAL, not ratified) and INC-11 (implemented, not accepted, not ratified).
+- **Decisions:** OB-40 Strict (OB-40 stays OPEN, U-8), decorations none (xdg-decoration to come), the shell is Quickshell-class (layer-shell next) — evidence/phase-f/OWNER_DECISIONS_2026-10-21.md.
+- **Fixes (flaw scan F5, F9):** one shell stream at a time; no panic in `confined_motion`.
 
 ## PHASE F — INC-11 IMPLEMENTED ON BRANCH `feature/inc11-shell-ipc-2026-10-20` (2026-10-20; from `integration/inc12-on-main-2026-10-20`; NOT RATIFIED; not `main`, not pushed)
 - **Authority:** owner decisions 2026-10-20 D1–D10 (evidence/phase-f/INC-11/DECISION_RECORD_2026-10-20.md).
