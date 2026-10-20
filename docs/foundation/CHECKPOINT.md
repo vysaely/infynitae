@@ -4,6 +4,11 @@ CURRENT_PHASE: **PHASE F — INC-6 RATIFIED AND INTEGRATED INTO LOCAL `main` (`c
 
 Date: 2026-10-20
 
+## PHASE F — INC-12 INTEGRATED ON BRANCH `integration/inc12-on-main-2026-10-20` (2026-10-20; from `main` `a058657`; EXPERIMENTAL, NOT RATIFIED; not `main`, not pushed)
+- **Integrated:** the xwayland-satellite supervisor and xdg-activation (`fix/inc-12-satellite-runtime-dir-2026-10-16`, merge `a7d9bd7`) and review finding R2-4 (`eaf1adb`: the satellite is an owned child).
+- **Gates on `eaf1adb`:** all PASS — tests 610/0/4, seeds 452, efficacy 450/450 DETECTED, envverify, NB-1.
+- **Exit criteria:** 1 and 4 met; OB-40 (activation policy), the real-satellite and operator runs, and the closure of OB-9/OB-27/OB-33 parts remain (evidence/phase-f/INC-12/INTEGRATION_ON_MAIN_2026-10-20.md).
+
 ## PHASE F — ERRATUM: COMMIT HASHES REWRITTEN FOR E-MAIL PRIVACY (2026-10-20; owner decision B; not pushed)
 - **Authority:** owner decision B, 2026-10-20: a personal e-mail address recorded as author and committer of local commits since 2026-10-16 is replaced by `vysaely <vysaely@users.noreply.github.com>` before the first push.
 - **Effect:** commit metadata only. 121 commit hashes changed (75 on `main`); every tree is byte-identical; `origin/main` `23752f1` and the historical seals are unchanged.
