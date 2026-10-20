@@ -63,7 +63,7 @@ Test files are under `crates/infynitae-backend-headless/tests/` unless a Core pa
 | 8 | Performance at zoom ≠ 1 vs zoom 1 (p50, p99, max) and INV-ALLOC-1, measured | INV-ALLOC-1: `t0_hot_path_allocations::zoomed_hot_paths_and_fit_restore_allocate_nothing` (asserts 0; every gate run). Frame times: `perf_inc10` re-run on `56b3f12` (release, two runs, `perf_frame_times_56b3f12_run{1,2}.out` in this directory): ⟨PERF⟩; earlier runs on `c4a7263`: `perf_frame_times_run{1,2}.out` | [F] measured, software renderers only, unpaced, no CPU isolation (OB-58, does not block) |
 | 9 | Seeded controls of C12.F15.8 each DETECTED; TST-04's control redesigned | §2 efficacy runs; TST-04 counterpart "INC-10 C12.F15.8 (1): the wrapper presents the wrapped element's geometry (TST-04 counterpart)", the old TST-04 controls kept | [F] met (⟨G56⟩) |
 | 10 | All gates on the exact final implementation commit | §2 | [F] ⟨G56⟩ |
-| 11 | Bounded history (C12.F16.6 items 1–11) and its controls | 1 `restore_with_an_empty_history_is_refused`; 2 `a_fit_records_the_prior_value_and_restore_returns_it_exactly`; 3 (new) `restores_unwind_fits_of_two_elements_at_different_zooms` (two elements, zooms 16 and 9.6, distinct values) and `restores_unwind_consecutive_fits_newest_first`; 4 `the_history_holds_exactly_256_entries`; 5 `the_257th_fit_evicts_only_the_oldest_entry`; 6 `refused_fits_change_neither_camera_nor_history` (no element, zero width, at 0/1/256) and (new) `refused_fits_of_an_unmapped_or_zero_height_window_and_without_an_output` (unmapped, zero height, no output, each at 0/1/256); 7 `restore_with_an_empty_history_is_refused` and (new) `a_restore_after_the_output_is_disconnected_changes_nothing`; 8 `two_outputs_keep_separate_histories`; 9 `disconnect_empties_the_history_and_reconfiguration_keeps_it`; 10 `a_hundred_thousand_fits_keep_the_history_bounded` (now alternating two elements, asserting the alternation) and `zoomed_hot_paths_and_fit_restore_allocate_nothing` (eviction allocates nothing); 11 `a_fit_records_the_prior_value_and_restore_returns_it_exactly` (`View::new`, one event, anchor and size kept), `navigation::tests::the_ring_keeps_the_newest_256_values`. Controls: capacity 255/257, newest evicted, a refused fit records, a refused restore pops another output's history, history kept across a disconnect, reconfiguration as reconnect, zoom re-quantised, no eviction, ring reserved again | [F] met, with two readings [I]: item 7's "a restore … to a disconnected `OutputId`" has no entry before INC-11 (`ShellCommand` has no variant; the binding restores on the pointer's output), so the test is its reachable form; the control "zoom … clamped on restore" is not seeded — the only zoom clamp is the domain `[2⁻²⁰, 2¹⁶]` and every history value lies in it, so a clamp on restore is the identity and any narrower clamp would be an arbitrary seed |
+| 11 | Bounded history (C12.F16.6 items 1–11) and its controls | 1 `restore_with_an_empty_history_is_refused`; 2 `a_fit_records_the_prior_value_and_restore_returns_it_exactly`; 3 (new) `restores_unwind_fits_of_two_elements_at_different_zooms` (two elements, zooms 16 and 9.6, distinct values) and `restores_unwind_consecutive_fits_newest_first`; 4 `the_history_holds_exactly_256_entries`; 5 `the_257th_fit_evicts_only_the_oldest_entry`; 6 `refused_fits_change_neither_camera_nor_history` (no element, zero width, at 0/1/256) and (new) `refused_fits_of_an_unmapped_or_zero_height_window_and_without_an_output` (unmapped, zero height, no output, each at 0/1/256); 7 `restore_with_an_empty_history_is_refused` and (new) `a_restore_after_the_output_is_disconnected_changes_nothing`; 8 `two_outputs_keep_separate_histories`; 9 `disconnect_empties_the_history_and_reconfiguration_keeps_it`; 10 `a_hundred_thousand_fits_keep_the_history_bounded` (now alternating two elements, asserting the alternation) and `zoomed_hot_paths_and_fit_restore_allocate_nothing` (eviction allocates nothing); 11 `a_fit_records_the_prior_value_and_restore_returns_it_exactly` (`View::new`, one event, anchor and size kept), `navigation::tests::the_ring_keeps_the_newest_256_values`. Controls: capacity 255/257, newest evicted, a refused fit records, a refused restore pops another output's history, history kept across a disconnect, reconfiguration as reconnect, zoom re-quantised, no eviction, ring reserved again | [F] met, with two readings [I]: item 7's "a restore … to a disconnected `OutputId`" has no entry before INC-11 (`ShellCommand` has no variant; the binding restores on the pointer's output), so the test is its reachable form; the control "zoom … clamped on restore" is not seeded — the only zoom clamp is the domain `[2⁻²⁰, 2¹⁶]` and every history value lies in it, so a clamp on restore is the identity and any narrower clamp would be an arbitrary seed; in item 6, "history unchanged" with O not connected is the empty history the unbinding leaves (C12.F16.3), so that case checks the camera's exact value and that no entry reappears; and "W unmapped" is refused by hit testing (an unmapped W is not hit, even in the frame shown before the unmap), so F-FIT-1's own "W not mapped" guard in `fit_viewport` is not reachable through any entry and has no control |
 
 **Negative controls named by the plan** [F]: the sealed pan formula (TST-23 R1 row); the sticky-fit
 probe (`tools/verify-architecture` probe `probe_sticky_fit`, which enables Core's
@@ -119,9 +119,13 @@ with OB-24 left OPEN until U-1 and U-8 are decided.
   the view near the bound, after which a short pan re-rounds edges by ±1 px. Options for change
   control: (a) a later layer's erratum adding the bound reset to F-LATTICE-1's accepted residual,
   with the T3/T4 visual-evidence clause explicitly waived or satisfied (owner only); (b) close OB-24
-  for Foundation 01's navigation (pan, fit, restore) only and open a forward obligation on INC-11's
-  `Navigate` (a jump near the bound); (c) leave OB-24 OPEN. The prepared closure commit assumes (a)
-  or (b) has been decided first; it is not to be applied otherwise.
+  for Foundation 01's navigation (pan, fit, restore) only and open a forward obligation on camera
+  jumps at constant k (INC-11's `Navigate`) — but the bound reset is reachable by a Foundation 01 pan
+  too (after 2³¹ px of travel), so (b) still does not meet OB-24's pass criterion as worded and needs
+  the owner's **explicit waiver** of the T3/T4 clause for that case, recorded in OB-24's History (or
+  a pass-criterion amendment by layer, as in (a)); (c) leave OB-24 OPEN. No closure commit is
+  generated before this decision: `prepare_ob24_closure.sh` takes the option and the decision text
+  as inputs (§8).
 - **U-2 [O] (TST-19 parity).** F4 (ladder change on hotplug) has no named production test; F7 (popup
   constraint target, R8) is tested at zoom 1 only (INC-1). F2 left with OB-53's CameraZoom part.
   Change control decides whether these are INC-10 exit gaps or OB-14/OB-53 scope.
@@ -134,7 +138,9 @@ with OB-24 left OPEN until U-1 and U-8 are decided.
 - **U-5 [I] (commit subject).** The adoption commit `56b3f12` is titled "[PREPARED FOR OWNER
   ADOPTION — not applied to main; not pushed]"; it was adopted by the owner's fast-forward. A commit
   message cannot be changed without rewriting `main`; the CHECKPOINT entry is the record. The
-  prepared commits below use subjects that stay true before and after they are applied.
+  prepared ratification commit's subject and body say it is prepared and takes effect only once the
+  owner, having authorized it, fast-forwards `main` to it; its record text ("RATIFIED <date>") takes
+  effect with that fast-forward, as the C12.F17 adoption commit's did.
 - **U-6 [O] (F-LATTICE-1 known residual).** Living F-LATTICE-1 says agreement of presented pixels
   with Core's rects at k ∉ n/120 "is not established (C12.F14.4 item 3, INC-10 exit)". Item 2 now
   establishes it on software renderers. Formula text changes only by a layer; the prepared commits
@@ -184,13 +190,28 @@ was done:
 | 12 | low | Risks paragraph inaccurate; TC-3 would cite a closed OB | corrected |
 | 13 | low | Stale OB-24 History "(items 1–10)", OB-53 Item / May-be-closed; no controls for two tests | U-9; stated in §4 |
 
-⟨RECHECK⟩
+**Re-check (2026-10-20, same reviewer, on `c3fa23b` and the scripts).** Findings 3–13 fixed, 1
+and 2 partly; the new tests do what the record claims and each new control is detected by its
+test (run individually). New findings and what was done:
+
+| # | Sev. | Finding | Resolution |
+|---|---|---|---|
+| A | high | The closure script committed a placeholder for the U-1 decision, could not carry out (a) (an erratum between ratification and closure failed its HEAD~1 check) or (b) (no forward obligation) | the closure is a separate script that takes the option and the decision text, refuses placeholders, checks ancestry, requires an ADOPTED layer for (a), opens OB-60 for (b); no closure commit is generated before U-1 is decided |
+| B | med. | The ratified commit's description omitted `632873c` | the scripts list every commit `56b3f12..<ratified>` |
+| C | med. | Option (b) still does not meet OB-24's pass criterion | U-1: (b) needs the owner's explicit waiver (or a layer) |
+| D | med. | Commit texts claimed authorization in advance | subjects and bodies state the commit is prepared and needs the owner's authorization; U-5 corrected |
+| E | low | The ratification texts glossed over open items | the ratification takes change control's decisions as input, copied verbatim into a "Decisions of change control" section; the overclaim removed |
+| F | low | Item 6 no-output and item 7 history checks vacuous; item 7 compared no zoom; the "W not mapped" guard unreachable | item 7 compares the zoom bits; the readings stated in item 11 [I] |
+| G | low | The checker's closure test matched the two phrases anywhere | one History sentence must hold both |
 
 ## 8. What change control is asked to decide [O]
 
 1. Accept INC-10's exit evidence (§4) on `56b3f12` + this branch, deciding U-2 (F4, F7) and noting
    U-6.
-2. Ratify INC-10 — independent of OB-24 (§5). Prepared, not applied: the first commit on
-   `prep/inc10-ratification-2026-10-20`.
-3. Decide U-1 ((a), (b) or (c)) and U-8 (the checker change). Only after (a) or (b) and U-8: close
-   OB-24 — the second commit on that branch, prepared, not applied.
+2. Ratify INC-10 — independent of OB-24 (§5). Prepared, not applied: the commit on
+   `prep/inc10-ratification-2026-10-20`, generated by
+   `~/.cache/infynitae-integration/session-2026-10-20b/prepare_inc10_ratification.sh` with a
+   decisions file on U-2, U-6 and U-9 (a proposed one is supplied; the owner confirms or replaces it
+   and regenerates).
+3. Decide U-1 ((a), (b) with a waiver, or (c)) and U-8 (the checker change). Only after (a) or (b)
+   and U-8: generate the closure with `prepare_ob24_closure.sh` on the applied ratification.

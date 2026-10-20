@@ -2237,7 +2237,13 @@ mod tests {
         n.core.output_disconnected(&mut n.token, a).unwrap();
         assert_eq!(motions(&n.restore()), 0);
         let cams = n.core.cameras();
-        assert!(cams.center(c) == Some(cam.center) && cams.history(c).unwrap().is_empty());
+        assert!(
+            cams.center(c) == Some(cam.center)
+                && cams.zoom(c).map(f64::to_bits) == Some(cam.zoom.to_bits()),
+            "the camera keeps its exact value"
+        );
+        // emptied by the unbinding itself (C12.F16.3), not by the refused restore
+        assert!(cams.history(c).unwrap().is_empty());
         assert!(!same(cam, priors[1]));
         let a2 = n.connect("A");
         n.core.render_list(a2).unwrap();
