@@ -26,7 +26,7 @@ production code changes after `56b3f12`.
 | Tree | Log | Result |
 |---|---|---|
 | `56b3f12` (worktree `main-gate-56b3f12`, own `CARGO_TARGET_DIR`) | `~/.cache/infynitae-integration/session-2026-10-20b/gates-main-56b3f12/` | **all PASS** (`FAILED_STEPS:` empty; tree `5f80065` unchanged before and after): docs + self-test, knowledge + self-test, architecture, fmt, check, build, tests **581 passed / 0 failed / 2 ignored**, clippy `-D warnings`, seeds **431/431 compile**, efficacy **429/429 controls DETECTED** (432 `ok` lines = 429 + 2 judge + tree check), `verify-development-environment` ALL CHECKS PASSED, NB-1 (nested compositor exits after 8.54 s) |
-| this branch's gated tip (every branch commit up to the one recording the 56b3f12 gates and perf; the only later commit records this row) | `…/session-2026-10-20b/gates-cc-tip/` | ⟨GTIP⟩ |
+| this branch's gated tip (every branch commit up to the one recording the 56b3f12 gates and perf; the only later commit records this row) | `…/session-2026-10-20b/gates-cc-tip/` | **all PASS** on `d678d32` (`FAILED_STEPS:` empty; tree `72978a7` unchanged before and after): docs + self-test, knowledge + self-test, architecture, fmt, check, build, tests **586 passed / 0 failed / 2 ignored** (+5: the tests of `632873c`), clippy, seeds **433/433**, efficacy **431/431 DETECTED** (+2: the controls of `632873c`), `verify-development-environment` ALL CHECKS PASSED, NB-1 (8.54 s) |
 
 Exit item 10 ("all repository gates on the exact final implementation commit") is met by the first
 row for the implementation and by the second for the commit a ratification would name [I: the tip
