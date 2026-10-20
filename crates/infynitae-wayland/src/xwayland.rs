@@ -526,7 +526,8 @@ impl XwaylandSupervisor {
                 .env("WAYLAND_DISPLAY", dir.join(&self.wayland_display));
             self.private_runtime = Some(private);
         }
-        let child = command.spawn();
+        // an owned child (R2-4): the session's orphan reaper leaves its exit status to `poll`
+        let child = crate::ownership::spawn_owned(&mut command);
         // the copies were for the child only
         drop(fds);
         let child = match child {
@@ -559,6 +560,7 @@ impl XwaylandSupervisor {
             && let Some(child) = &mut self.child
             && let Ok(Some(status)) = child.try_wait()
         {
+            crate::ownership::forget_spawned(child.id());
             self.child = None;
             self.release_runtime();
             self.last_exit = Some(status);
@@ -608,8 +610,10 @@ impl XwaylandSupervisor {
     /// Ends the running satellite (SIGTERM, a bounded wait, SIGKILL) and reaps it.
     pub fn shutdown(&mut self, grace: Duration) {
         if let Some(child) = self.child.take() {
+            let pid = child.id();
             let mut children = vec![child];
             crate::session::terminate_children(&mut children, grace);
+            crate::ownership::forget_spawned(pid);
         }
         self.release_runtime();
         self.restart_at = None;

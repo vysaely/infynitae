@@ -1716,6 +1716,12 @@ CONTROLS = [
      "                    wanted.set(true);\n",
      "                    let _ = &wanted;\n",
      "infynitae-wayland", ["--lib"], "the_first_x11_connection_starts_the_satellite"),
+    ("INC-12 R2-4: the satellite is not an owned child (the orphan reaper takes its exit status)",
+     f"{WAYLAND}/xwayland.rs",
+     "        let child = crate::ownership::spawn_owned(&mut command);\n",
+     "        let child = command.spawn();\n",
+     "infynitae-wayland", ["--test", "satellite_ownership"],
+     "the_orphan_reaper_leaves_the_satellite_to_its_supervisor"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.
