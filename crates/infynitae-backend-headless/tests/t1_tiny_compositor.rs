@@ -849,11 +849,40 @@ fn the_session_command_does_not_outlive_the_session() {
     }
     let pid = pid.expect("the session command started");
     let proc_dir = std::path::PathBuf::from(format!("/proc/{pid}"));
+    // a failing run (or a seeded defect) must not leave the command running or unreaped
+    let _guard = KillAndReap(pid);
     assert!(proc_dir.exists(), "the command runs while the session runs");
     compositor.join().expect("compositor thread");
+    // checked before the guard acts: a zombie left for the guard to reap fails this too
+    let outlived = proc_dir.exists();
+    let _ = std::fs::remove_dir_all(&dir);
     assert!(
-        !proc_dir.exists(),
+        !outlived,
         "process {pid} outlived the session (running or zombie)"
     );
-    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Kills and reaps the session command if it is still there when the test ends, however it ends.
+/// The command is this process's child (the compositor runs on a thread), registered as owned by
+/// the session; a session that failed to end it never reaps it, so the guard takes it over.
+struct KillAndReap(u32);
+
+impl Drop for KillAndReap {
+    fn drop(&mut self) {
+        let proc_dir = std::path::PathBuf::from(format!("/proc/{}", self.0));
+        if !proc_dir.exists() {
+            return;
+        }
+        let _ = std::process::Command::new("kill")
+            .args(["-KILL", &self.0.to_string()])
+            .status();
+        infynitae_wayland::ownership::forget_spawned(self.0);
+        for _ in 0..200 {
+            infynitae_wayland::ownership::reap_adopted();
+            if !proc_dir.exists() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(5));
+        }
+    }
 }
