@@ -4,6 +4,12 @@ CURRENT_PHASE: **PHASE F — INC-6 RATIFIED AND INTEGRATED INTO LOCAL `main` (`c
 
 Date: 2026-10-20
 
+## PHASE F — ERRATUM: COMMIT HASHES REWRITTEN FOR E-MAIL PRIVACY (2026-10-20; owner decision B; not pushed)
+- **Authority:** owner decision B, 2026-10-20: a personal e-mail address recorded as author and committer of local commits since 2026-10-16 is replaced by `vysaely <vysaely@users.noreply.github.com>` before the first push.
+- **Effect:** commit metadata only. 121 commit hashes changed (75 on `main`); every tree is byte-identical; `origin/main` `23752f1` and the historical seals are unchanged.
+- **Reading recorded hashes:** the hashes written in this file and in the other foundation documents, the evidence and `tools/check-foundation-docs` are the pre-rewrite names and are not edited; the map is evidence/REWRITE_HASH_MAP_2026-10-20.md (e.g. INC-10 ratified commit `faf6dda` → `4d5be84`; INC-6 ratified commit `ca2e468` → `da062bf`).
+- **Declaration:** no ratified, adopted or normative text changed.
+
 ## PHASE F — INC-10 FORMAL RATIFICATION (zoomed navigation; 2026-10-20; ratified commit `faf6dda`; not pushed)
 - **Authority:** owner authorization 2026-10-20: INC-10's exit evidence accepted through architecture change control, with the decisions in the record, and INC-10 ratified.
 - **Ratified commit:** `faf6dda` (local `main` `56b3f12` + `b594900` + `a56cc3c` + `632873c` + `c3fa23b` + `eca016b` + `d678d32` + `faf6dda`).
