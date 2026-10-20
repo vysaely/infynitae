@@ -271,6 +271,7 @@ No PRODUCT increment may create a state where **persistent zoom ≠ 1 and camera
 - **Entry conditions:** INC-6, INC-7 exits.
 - **Stop / rollback:** any shell path writing state outside the single-writer paths.
 - **Architecture decision required first:** no (shell UX PROV-10 stays provisional).
+- **Implementation status (2026-10-20):** implemented on branch `feature/inc11-shell-ipc-2026-10-20` (owner decisions 2026-10-20, evidence/phase-f/INC-11/DECISION_RECORD_2026-10-20.md); exit evidence in evidence/phase-f/INC-11/IMPLEMENTATION_RECORD_2026-10-20.md, **not accepted**; layer C12.F18 prepared, not adopted. Not `main`, not pushed.
 
 ### INC-12 — xwayland-satellite supervisor
 - **Category:** PRODUCT

@@ -4,6 +4,12 @@ CURRENT_PHASE: **PHASE F — INC-6 RATIFIED AND INTEGRATED INTO LOCAL `main` (`c
 
 Date: 2026-10-20
 
+## PHASE F — INC-11 IMPLEMENTED ON BRANCH `feature/inc11-shell-ipc-2026-10-20` (2026-10-20; from `integration/inc12-on-main-2026-10-20`; NOT RATIFIED; not `main`, not pushed)
+- **Authority:** owner decisions 2026-10-20 D1–D10 (evidence/phase-f/INC-11/DECISION_RECORD_2026-10-20.md).
+- **Implemented:** the shell commands in Core (`shell_command`, shell streams, the instance per run, toplevel metadata); `infynitae-ipc` (JSON lines, Snapshot/Subscribe, generations); the binary's shell socket with SO_PEERCRED admission; the loop extension.
+- **Evidence:** evidence/phase-f/INC-11/IMPLEMENTATION_RECORD_2026-10-20.md (exit tests, OB-35, OB-53's INC-11 part, 13 seeded controls). Not accepted.
+- **Prepared, not adopted:** layer C12.F18 (evidence/phase-f/INC-11/C12F18_PACKAGE_2026-10-20.md). **D4 / OB-24 U-1 (b): decided, not applied** (needs U-8's checker change).
+
 ## PHASE F — INC-12 INTEGRATED ON BRANCH `integration/inc12-on-main-2026-10-20` (2026-10-20; from `main` `a058657`; EXPERIMENTAL, NOT RATIFIED; not `main`, not pushed)
 - **Integrated:** the xwayland-satellite supervisor and xdg-activation (`fix/inc-12-satellite-runtime-dir-2026-10-16`, merge `a7d9bd7`) and review finding R2-4 (`eaf1adb`: the satellite is an owned child).
 - **Gates on `eaf1adb`:** all PASS — tests 610/0/4, seeds 452, efficacy 450/450 DETECTED, envverify, NB-1.
