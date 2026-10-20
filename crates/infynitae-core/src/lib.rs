@@ -30,6 +30,8 @@ pub mod stage;
 pub mod visibility;
 
 mod entry;
+#[cfg(test)]
+mod shell_tests;
 
 pub use entry::authority;
 use std::time::Duration;
@@ -125,8 +127,86 @@ pub enum PhysicalEvent {
     },
 }
 
-/// A semantic command from the trusted shell (C7.2). No variants until INC-11 (shell IPC).
-pub enum ShellCommand {}
+/// A semantic command from the trusted shell (C7.2, INV-SHELL-1): a value Core validates and then
+/// executes through the same single-writer paths user input uses. There is no raw state write, no
+/// size write and no mutable access to Core. The set is INC-11's (owner decision 2026-10-20, D3).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ShellCommand {
+    /// Centres the camera of `output` on a target at its current zoom (no zoom change, D5). Atomic
+    /// (ADR-11 as amended 1R: no animation in Foundation 01); refused while `output` presents a
+    /// protocol-fullscreen element or an interaction owns the pointer.
+    Navigate {
+        output: output::OutputId,
+        to: NavigateTo,
+        stream: ShellStream,
+    },
+    /// M8 `FitViewport(O, W)` named by the shell: F-FIT-1 on `element`'s window geometry now.
+    ViewportFit {
+        output: output::OutputId,
+        element: stage::ElementRef,
+    },
+    /// M8 `ViewportRestore(O)`: the newest entry of O's history (OBJ-30).
+    ViewportRestore { output: output::OutputId },
+    /// Keyboard focus to `element` by an explicit action (INV-INPUT-8; A-8 declines a hidden one).
+    Focus { element: stage::ElementRef },
+    /// Clears `element`'s attention mark (OBJ-04, INV-INPUT-9).
+    AcknowledgeAttention { element: stage::ElementRef },
+    /// Places `element`'s anchor at `to` (Canvas px) through `stage::place`: R3 rounding, ±2³⁶,
+    /// mapped and not fullscreen; rejected otherwise (C7.2). Never a size write.
+    MoveElement {
+        element: stage::ElementRef,
+        to: (f64, f64),
+        stream: ShellStream,
+    },
+}
+
+/// Where [`ShellCommand::Navigate`] centres the camera.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum NavigateTo {
+    /// The centre of the element's window geometry.
+    Element(stage::ElementRef),
+    /// A Canvas position in px (quantised once, Q16 ties-even).
+    Canvas(f64, f64),
+    /// The current centre moved by a Canvas-px delta.
+    Delta(f64, f64),
+}
+
+/// A command's place in a bounded shell stream (INV-SCALE-3 `ShellStream`; owner decision
+/// 2026-10-20, D8). Outside a stream a command is an atomic, one-step epoch.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ShellStream {
+    /// Not part of a stream (or, while one is open, a step of it).
+    #[default]
+    Atomic,
+    /// Opens the stream (a step if one is already open).
+    Begin,
+    /// A step of the open stream (opens it if none is).
+    Step,
+    /// The last step: the stream's epoch settles after it (explicit end-of-stream).
+    End,
+}
+
+/// Why Core refused a shell command. Nothing was changed (commands are atomic, C7.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShellError {
+    /// The port was minted by another Core.
+    ForeignPort,
+    /// The element reference resolves to no element of this instance (INV-STAGE-3).
+    StaleElement,
+    /// The output is not connected.
+    UnknownOutput,
+    /// A number is not finite or lies outside the Canvas (±2³⁶ px).
+    InvalidArgument,
+    /// The element is not mapped (or has no window geometry yet).
+    NotMapped,
+    /// The output presents a protocol-fullscreen element (C12.F17 Q1 B scope 2), or the element
+    /// is fullscreen (C7.2 `MoveElement`).
+    Presenting,
+    /// An interaction owns the pointer (the camera is being dragged).
+    Busy,
+    /// Nothing to do: an empty history, or a degenerate window geometry (F-FIT-1).
+    Refused,
+}
 
 /// Why an entry point refused a request.
 #[derive(Debug, PartialEq, Eq)]
@@ -266,6 +346,9 @@ pub struct Core {
     /// changes: until then its geometry is still the fullscreen one, so a new grant saves this
     /// size and not that one. Written by `core::protocol` alone.
     restore_offers: Vec<(stage::ElementId, geom::LocalSize)>,
+    /// A bounded shell stream is open (INV-SCALE-3 `ShellStream`): the scale policy treats its
+    /// camera and Stage steps as one epoch until its explicit end (or a settlement event).
+    shell_stream: bool,
     /// Elements that left protocol fullscreen before ever having been placed as a window. Their
     /// default placement is resolved at their first windowed presentation: the first commit
     /// after the client acknowledged a configure without the fullscreen state (P9b).
@@ -277,6 +360,18 @@ pub struct Core {
     /// protocol state fail its `Send` assertion (built through infynitae-wayland's probe feature).
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
     sticky_fit: Option<authority::Authorized>,
+}
+
+/// The instance named by external references (INV-STAGE-3: `(InstanceId, ElementId)`). Element ids
+/// restart at 1 in every compositor process and a shell outlives a restart, so the instance must
+/// differ between runs, not only between the Cores of one process: the wall-clock start time, the
+/// pid and the Core's id, mixed. Below 2⁵³ so a JSON number carries it exactly; never 0.
+fn instance_id(core_id: u64) -> stage::InstanceId {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_nanos() as u64);
+    let mixed = nanos ^ (u64::from(std::process::id()) << 21) ^ core_id.rotate_left(43);
+    stage::InstanceId((mixed & ((1 << 53) - 1)).max(1))
 }
 
 impl Core {
@@ -291,7 +386,7 @@ impl Core {
         (
             Core {
                 id,
-                stage: stage::Stage::new(stage::InstanceId(id)),
+                stage: stage::Stage::new(instance_id(id)),
                 cameras: navigation::CameraSet::empty(),
                 outputs: Vec::new(),
                 output_ids: output::OutputIds::default(),
@@ -322,6 +417,7 @@ impl Core {
                 fullscreen: Vec::new(),
                 premap_fullscreen: Vec::new(),
                 restore_offers: Vec::new(),
+                shell_stream: false,
                 windowed_placement_pending: Vec::new(),
                 frame_liveness: frames::FrameLiveness::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -1099,6 +1195,8 @@ impl Core {
             input::interaction::Interaction::CameraPan { .. } => {
                 Some(scale::InteractionKind::CameraPan)
             }
+            // a shell stream's steps form one epoch, ended by its explicit end-of-stream
+            _ if self.shell_stream => Some(scale::InteractionKind::ShellStream),
             _ => None,
         };
         #[cfg(not(test))]

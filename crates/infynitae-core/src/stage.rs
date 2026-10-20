@@ -25,11 +25,29 @@ impl ElementId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InstanceId(pub(crate) u64);
 
+impl InstanceId {
+    /// The raw value, as external references carry it.
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
 /// An element named from outside the process (IPC): resolves or fails with `StaleElement`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ElementRef {
     pub instance: InstanceId,
     pub element: ElementId,
+}
+
+impl ElementRef {
+    /// A reference as an external client spelled it. It names nothing until [`Stage::resolve`]
+    /// accepts it; `None` for element 0, which no element ever has.
+    pub fn from_raw(instance: u64, element: u64) -> Option<ElementRef> {
+        Some(ElementRef {
+            instance: InstanceId(instance),
+            element: ElementId(NonZeroU64::new(element)?),
+        })
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -73,6 +91,17 @@ struct Record {
     /// `set_default_placed`): at its first windowed presentation, which is its first map
     /// unless it was in protocol fullscreen then. From then on only a drag or the shell moves it.
     default_placed: bool,
+    /// The toplevel's title and app_id as the client last set them (INC-11, D9): display
+    /// metadata for the shell, never authority. Out of line, like `layout`; `None` until set.
+    meta: Option<Box<ToplevelMeta>>,
+}
+
+/// What a toplevel calls itself (`xdg_toplevel.set_title` / `set_app_id`): derived protocol
+/// metadata the shell reads (INC-11). Nothing in Core decides anything by it.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ToplevelMeta {
+    pub title: Option<String>,
+    pub app_id: Option<String>,
 }
 
 /// An element's bounding box in Canvas pixels: `[x0, x1) × [y0, y1)`.
@@ -129,6 +158,22 @@ impl Stage {
     /// Whether the element's default windowed placement has been resolved.
     pub fn default_placed(&self, id: ElementId) -> bool {
         self.record(id).is_some_and(|r| r.default_placed)
+    }
+
+    /// The toplevel's title and app_id (INC-11); `None` for an unknown element or before the client
+    /// set either.
+    pub fn meta(&self, id: ElementId) -> Option<&ToplevelMeta> {
+        self.record(id).and_then(|r| r.meta.as_deref())
+    }
+
+    /// Replaces the title and app_id wholesale (the adapter reads both from the toplevel's state).
+    pub(crate) fn set_meta(
+        &mut self,
+        id: ElementId,
+        meta: ToplevelMeta,
+    ) -> Result<(), StaleElement> {
+        self.record_mut(id).ok_or(StaleElement)?.meta = Some(Box::new(meta));
+        Ok(())
     }
 
     pub(crate) fn set_default_placed(&mut self, id: ElementId) -> Result<(), StaleElement> {
@@ -266,6 +311,7 @@ impl Stage {
             layout: Box::default(),
             mapped_once: false,
             default_placed: false,
+            meta: None,
         });
         id
     }

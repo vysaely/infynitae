@@ -31,6 +31,7 @@ use smithay::wayland::selection::primary_selection::{
 };
 use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+    XdgToplevelSurfaceData,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
 use smithay::wayland::xdg_activation::{
@@ -341,6 +342,34 @@ impl ShmHandler for WaylandState {
     }
 }
 
+impl WaylandState {
+    /// `xdg_toplevel.set_title` / `set_app_id` (INC-11): Core keeps both as the shell's display
+    /// metadata. Both are read from the toplevel's role state, which Smithay has just updated.
+    fn toplevel_metadata_changed(&mut self, surface: &ToplevelSurface) {
+        let Some(id) = self
+            .elements
+            .iter()
+            .find(|e| e.window.toplevel() == Some(surface))
+            .map(|e| e.id)
+        else {
+            return;
+        };
+        let (title, app_id) = with_states(surface.wl_surface(), |states| {
+            states
+                .data_map
+                .get::<XdgToplevelSurfaceData>()
+                .map(|d| {
+                    let d = d.lock().unwrap();
+                    (d.title.clone(), d.app_id.clone())
+                })
+                .unwrap_or_default()
+        });
+        let _ = self
+            .core
+            .toplevel_metadata(id, title.as_deref(), app_id.as_deref());
+    }
+}
+
 impl XdgShellHandler for WaylandState {
     fn xdg_shell_state(&mut self) -> &mut XdgShellState {
         &mut self.xdg_shell
@@ -352,6 +381,14 @@ impl XdgShellHandler for WaylandState {
             id,
             window: Window::new_wayland_window(surface),
         });
+    }
+
+    fn title_changed(&mut self, surface: ToplevelSurface) {
+        self.toplevel_metadata_changed(&surface);
+    }
+
+    fn app_id_changed(&mut self, surface: ToplevelSurface) {
+        self.toplevel_metadata_changed(&surface);
     }
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {

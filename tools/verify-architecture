@@ -174,11 +174,7 @@ PROBES_INVENTORY = [
 ]
 
 # Runtime validation that cannot exist before its increment (owner ruling, INC-0).
-DEFERRED = [
-    ("port bound to its Core for shell_command",
-     "the shell vocabulary has no variants yet, so the entry cannot be called",
-     "INC-11 (shell_command)"),
-]
+DEFERRED = []
 
 # Runtime 2i (OB-49, transferred from OB-19 by Decision D): the production 1:1 collision tests pass
 # with the real binding rule and fail with "1:1 violated" under the sealed 2R rule
@@ -208,9 +204,11 @@ POPUP_NEG = [
     "pf_grab_refused_when_keyboard_grabbed_by_another_sequence",
 ]
 
-# Runtime port binding (C1.5; was DEFERRED until INC-3): physical_input refuses a foreign InputPort.
+# Runtime port binding (C1.5): physical_input refuses a foreign InputPort (was DEFERRED until INC-3);
+# shell_command and end_shell_stream refuse a foreign ShellPort (was DEFERRED until INC-11).
 RUNTIME_PORTS = [
     ("T1 lockstep", ["-p", HEADLESS, "--test", "t1_input"], "intake_rejects_foreign_ports_and_non_finite_values"),
+    ("T0 core (shell)", ["-p", CORE, "--lib"], "shell_command_refuses_a_foreign_port"),
 ]
 
 
@@ -624,7 +622,7 @@ def check_runtime_input3(r):
         code, out, err = run(["cargo", "test", "--locked", *args, test], env=env)
         text = out + err
         passed = code == 0 and "test result: ok. 1 passed" in text
-        r.check(passed, f"{name}: {test} passes (physical_input port binding)",
+        r.check(passed, f"{name}: {test} passes (port binding)",
                 f"{name}: {test} did not pass:\n{text[-1500:]}")
 
 

@@ -179,6 +179,11 @@ impl FocusModel {
         Vec::new()
     }
 
+    /// The shell acknowledged `element`'s attention mark (OBJ-04): it is cleared. No focus change.
+    pub(crate) fn acknowledge_attention(&mut self, element: ElementId) {
+        self.attention.retain(|&e| e != element);
+    }
+
     /// The elements that asked for attention (INV-INPUT-9), oldest first.
     pub fn attention(&self) -> &[ElementId] {
         &self.attention

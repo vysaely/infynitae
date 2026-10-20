@@ -323,6 +323,12 @@ impl CameraSet {
         self.set_center(proof, camera, pan_target(start, sum));
     }
 
+    /// A shell `Navigate` (C7.2, INC-11): the camera's centre becomes `center`, its zoom unchanged;
+    /// no history entry (OBJ-30 records fits). Consumes a proof (INV-CAMERA-1).
+    pub(crate) fn navigate(&mut self, proof: Authorized, camera: usize, center: CanvasPos) {
+        self.set_center(proof, camera, center);
+    }
+
     /// Mutation is private to this module and consumes a proof.
     fn set_center(&mut self, _proof: Authorized, camera: usize, center: CanvasPos) {
         if let Some(c) = self.cameras.get_mut(camera) {

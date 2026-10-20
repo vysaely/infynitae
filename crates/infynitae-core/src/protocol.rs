@@ -252,6 +252,9 @@ pub struct FullscreenState {
     pub saved: Option<LocalSize>,
 }
 
+/// The longest title or app_id Core keeps, in bytes (INC-11).
+pub const TOPLEVEL_META_MAX: usize = 4096;
+
 /// What a configure of a toplevel carries besides `activated`, as Core holds it now. The adapter
 /// copies it into every configure it sends; it keeps no fullscreen state of its own.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -616,6 +619,34 @@ impl Core {
             .filter(|f| f.output == output)
             .map(|f| Effect::ToplevelConfigure(f.element))
             .collect()
+    }
+
+    /// `xdg_toplevel.set_title` / `set_app_id` (INC-11, owner decision 2026-10-20 D9): the
+    /// toplevel's title and app_id, replaced wholesale, kept as display metadata for the shell.
+    /// Each is cut to [`TOPLEVEL_META_MAX`] bytes at a character boundary, so a client cannot make
+    /// Core hold an unbounded string. Decides nothing, emits nothing.
+    pub fn toplevel_metadata(
+        &mut self,
+        id: ElementId,
+        title: Option<&str>,
+        app_id: Option<&str>,
+    ) -> Result<(), ProtocolError> {
+        let cut = |s: &str| {
+            let mut end = s.len().min(TOPLEVEL_META_MAX);
+            while !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            s[..end].to_owned()
+        };
+        self.stage
+            .set_meta(
+                id,
+                crate::stage::ToplevelMeta {
+                    title: title.map(cut),
+                    app_id: app_id.map(cut),
+                },
+            )
+            .map_err(|_| ProtocolError::StaleElement)
     }
 
     /// B10.7 / INV-INPUT-9: an `xdg_activation_v1` request for `id`. `validated`: its token

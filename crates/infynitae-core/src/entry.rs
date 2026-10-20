@@ -16,7 +16,8 @@ use crate::output::{self, OutputDescriptor, OutputId, OutputModel};
 use crate::pointer::{self, PointerState};
 use crate::protocol::Effect;
 use crate::{
-    Core, EntryError, InputPort, OutputLifecycleToken, PhysicalEvent, ShellCommand, ShellPort,
+    Core, EntryError, InputPort, NavigateTo, OutputLifecycleToken, PhysicalEvent, ShellCommand,
+    ShellError, ShellPort, ShellStream,
 };
 
 pub mod authority {
@@ -34,6 +35,17 @@ pub mod authority {
             }
         }
     }
+}
+
+/// A Canvas position in px from the shell, quantised once (Q16 ties-even); `None` when a value is
+/// not finite or lies beyond the stored Canvas (±2³⁶ px).
+fn shell_canvas_pos((x, y): (f64, f64)) -> Option<crate::geom::CanvasPos> {
+    let limit = crate::geom::CANVAS_LIMIT_PX as f64;
+    let ok = |v: f64| v.is_finite() && v.abs() <= limit;
+    (ok(x) && ok(y)).then(|| crate::geom::CanvasPos {
+        x: crate::geom::q16(x),
+        y: crate::geom::q16(y),
+    })
 }
 
 impl Core {
@@ -276,12 +288,26 @@ impl Core {
             return;
         };
         let element = hit.element;
+        let _ = self.fit_on(proof, output, element, out);
+    }
+
+    /// F-FIT-1 on `element` for `output`'s camera, shared by the binding and the shell: refused
+    /// (nothing changed) when the element is not mapped, has no window geometry, or the fit is
+    /// degenerate; otherwise one mutation (the prior value retained, OBJ-30) and the camera-write
+    /// consequences. The callers' guards (presentation, pointer) come first.
+    fn fit_on(
+        &mut self,
+        proof: authority::Authorized,
+        output: OutputId,
+        element: crate::stage::ElementId,
+        out: &mut Vec<Effect>,
+    ) -> Result<(), crate::ShellError> {
         if self.stage.mapped(element).is_none() {
-            return;
+            return Err(crate::ShellError::NotMapped);
         }
         let (Some(anchor), Some(tree)) = (self.stage.anchor(element), self.stage.tree(element))
         else {
-            return;
+            return Err(crate::ShellError::NotMapped);
         };
         let g = (
             anchor.x,
@@ -294,13 +320,14 @@ impl Core {
             self.output(output).map(|m| (m.view_size(), m.scale)),
             self.cameras.camera_for_output(output),
         ) else {
-            return;
+            return Err(crate::ShellError::UnknownOutput);
         };
         let Some(target) = crate::navigation::fit_target(view_size, scale, g) else {
-            return;
+            return Err(crate::ShellError::Refused);
         };
         self.cameras.fit(proof, camera, target);
         self.camera_written(output, camera, out);
+        Ok(())
     }
 
     /// M8 `ViewportRestore(O)` from the input binding, O the pointer's output: the newest entry of
@@ -545,13 +572,194 @@ impl Core {
         }
     }
 
+    /// C7.2 / INV-SHELL-1: one semantic command of the trusted shell, validated in full before
+    /// anything is written (C7.3: atomic; an error changes nothing) and executed through the same
+    /// single-writer paths user input uses. A command that moves a camera consumes a proof minted
+    /// here, per command (INV-CAMERA-1). Effects are returned for the adapter to apply.
     pub fn shell_command(
         &mut self,
         port: &mut ShellPort,
         cmd: ShellCommand,
-    ) -> Result<(), EntryError> {
-        self.check(port.core_id)?;
-        match cmd {}
+    ) -> Result<Vec<Effect>, ShellError> {
+        if port.core_id != self.id {
+            return Err(ShellError::ForeignPort);
+        }
+        let mut out = Vec::new();
+        match cmd {
+            ShellCommand::Navigate { output, to, stream } => {
+                let camera = self.shell_camera(output)?;
+                let center = self.navigate_center(camera, to)?;
+                self.shell_stream_step(stream);
+                self.cameras
+                    .navigate(authority::Authorized::mint(), camera, center);
+                self.camera_written(output, camera, &mut out);
+                self.shell_stream_end(stream, &mut out);
+            }
+            ShellCommand::ViewportFit { output, element } => {
+                let element = self
+                    .stage
+                    .resolve(element)
+                    .map_err(|_| ShellError::StaleElement)?;
+                self.shell_camera(output)?;
+                self.fit_on(authority::Authorized::mint(), output, element, &mut out)?;
+            }
+            ShellCommand::ViewportRestore { output } => {
+                let camera = self.shell_camera(output)?;
+                if self.cameras.history(camera).is_none_or(|h| h.is_empty()) {
+                    return Err(ShellError::Refused);
+                }
+                if self.cameras.restore(authority::Authorized::mint(), camera) {
+                    self.camera_written(output, camera, &mut out);
+                }
+            }
+            ShellCommand::Focus { element } => {
+                let id = self.shell_mapped(element)?;
+                // A-8: focus never moves to an element a presentation hides
+                if self.hidden_by_presentation(id) {
+                    return Err(ShellError::Presenting);
+                }
+                out.extend(self.focus.set_focus(Some(id)));
+                out.extend(self.reconcile_constraints());
+            }
+            ShellCommand::AcknowledgeAttention { element } => {
+                let id = self
+                    .stage
+                    .resolve(element)
+                    .map_err(|_| ShellError::StaleElement)?;
+                self.focus.acknowledge_attention(id);
+            }
+            ShellCommand::MoveElement {
+                element,
+                to,
+                stream,
+            } => {
+                let id = self.shell_mapped(element)?;
+                if self.fullscreen_of(id).is_some() {
+                    return Err(ShellError::Presenting);
+                }
+                let anchor = shell_canvas_pos(to)
+                    .and_then(|p| p.round_to_point())
+                    .ok_or(ShellError::InvalidArgument)?;
+                self.shell_stream_step(stream);
+                self.stage
+                    .place(id, anchor)
+                    .map_err(|_| ShellError::StaleElement)?;
+                self.membership_pass_element(id, &mut out);
+                out.extend(self.evaluate_scale_policy(false));
+                // what lies under the pointer may have changed: M10, as after a camera write
+                if matches!(self.pointer, PointerState::Located { .. })
+                    && !self.input.interaction.active()
+                {
+                    out.extend(self.reconcile_constraints());
+                    if !self.locked() {
+                        self.true_position_into(&mut out);
+                    }
+                }
+                self.shell_stream_end(stream, &mut out);
+            }
+        }
+        Ok(out)
+    }
+
+    /// Ends an open shell stream (its connection closed, C7.3): its epoch settles. No camera or
+    /// Stage write; nothing happens when no stream is open.
+    pub fn end_shell_stream(&mut self, port: &mut ShellPort) -> Result<Vec<Effect>, ShellError> {
+        if port.core_id != self.id {
+            return Err(ShellError::ForeignPort);
+        }
+        let mut out = Vec::new();
+        self.shell_stream_end(ShellStream::End, &mut out);
+        Ok(out)
+    }
+
+    /// The camera a shell command may write on `output`: the output is connected and has one, it
+    /// presents no protocol-fullscreen element (C12.F17 Q1 B scope 2), and no interaction owns
+    /// the pointer (a drag is moving a camera).
+    fn shell_camera(&self, output: OutputId) -> Result<usize, ShellError> {
+        let camera = self
+            .output(output)
+            .and_then(|_| self.cameras.camera_for_output(output))
+            .ok_or(ShellError::UnknownOutput)?;
+        if self.presentation(output).is_some() {
+            return Err(ShellError::Presenting);
+        }
+        if self.input.interaction.active() {
+            return Err(ShellError::Busy);
+        }
+        Ok(camera)
+    }
+
+    /// The element a reference names, mapped.
+    fn shell_mapped(
+        &self,
+        element: crate::stage::ElementRef,
+    ) -> Result<crate::stage::ElementId, ShellError> {
+        let id = self
+            .stage
+            .resolve(element)
+            .map_err(|_| ShellError::StaleElement)?;
+        self.stage
+            .mapped(id)
+            .map(|_| id)
+            .ok_or(ShellError::NotMapped)
+    }
+
+    /// Where a `Navigate` puts the camera's centre (its zoom stays): within the stored Canvas,
+    /// ±2³⁶ px, or the command is invalid.
+    fn navigate_center(
+        &self,
+        camera: usize,
+        to: NavigateTo,
+    ) -> Result<crate::geom::CanvasPos, ShellError> {
+        use crate::geom::{CANVAS_LIMIT_PX, CanvasPos, Q16_ONE};
+        let center = match to {
+            NavigateTo::Element(r) => {
+                let id = self.shell_mapped(r)?;
+                let (Some(a), Some(tree)) = (self.stage.anchor(id), self.stage.tree(id)) else {
+                    return Err(ShellError::NotMapped);
+                };
+                // the centre of the window geometry, exact in Q16 (Q16_ONE is even)
+                let size = tree.geometry.size;
+                CanvasPos {
+                    x: a.x * Q16_ONE + size.w as i64 * (Q16_ONE / 2),
+                    y: a.y * Q16_ONE + size.h as i64 * (Q16_ONE / 2),
+                }
+            }
+            NavigateTo::Canvas(x, y) => {
+                shell_canvas_pos((x, y)).ok_or(ShellError::InvalidArgument)?
+            }
+            NavigateTo::Delta(dx, dy) => {
+                let d = shell_canvas_pos((dx, dy)).ok_or(ShellError::InvalidArgument)?;
+                let c = self
+                    .cameras
+                    .center(camera)
+                    .ok_or(ShellError::UnknownOutput)?;
+                CanvasPos {
+                    x: c.x.saturating_add(d.x),
+                    y: c.y.saturating_add(d.y),
+                }
+            }
+        };
+        let limit = CANVAS_LIMIT_PX * Q16_ONE;
+        if center.x.abs() > limit || center.y.abs() > limit {
+            return Err(ShellError::InvalidArgument);
+        }
+        Ok(center)
+    }
+
+    /// A step of a shell stream opens it (INV-SCALE-3 `ShellStream`).
+    fn shell_stream_step(&mut self, stream: ShellStream) {
+        if stream != ShellStream::Atomic {
+            self.shell_stream = true;
+        }
+    }
+
+    /// The explicit end-of-stream: the stream's epoch settles (INV-SCALE-3).
+    fn shell_stream_end(&mut self, stream: ShellStream, out: &mut Vec<Effect>) {
+        if stream == ShellStream::End && self.shell_stream {
+            self.shell_stream = false;
+            out.extend(self.settle_interaction(crate::scale::InteractionKind::ShellStream));
+        }
     }
 
     /// M4 `Absent → Enabled` (startup and hotplug alike): validates the hardware facts, allocates
