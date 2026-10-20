@@ -1525,7 +1525,8 @@ impl Core {
         let rect = c.region.unwrap_or_else(|| {
             let size = self
                 .stage
-                .tree(self.stage.element_containing_surface(c.surface).unwrap())
+                .element_containing_surface(c.surface)
+                .and_then(|e| self.stage.tree(e))
                 .and_then(|t| t.surfaces.iter().find(|s| s.key == c.surface))
                 .map(|s| s.size)
                 .unwrap_or_default();

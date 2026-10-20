@@ -17,7 +17,7 @@ use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 
 use infynitae_core::protocol::Effect;
-use infynitae_core::{Core, ShellCommand, ShellPort, ShellStream};
+use infynitae_core::{Core, ShellCommand, ShellError, ShellPort, ShellStream};
 
 use crate::model::Model;
 use crate::protocol::{self, MAX_LINE, Request, RequestError};
@@ -181,6 +181,14 @@ impl ShellServer {
                     c.subscribed = false;
                 }
                 protocol::ok_reply(rid, self.generation, None)
+            }
+            // one shell stream at a time: Core has one ShellStream epoch, and a second shell's
+            // steps would join (and its end would settle) the first shell's stream
+            Ok(Request::Command(cmd))
+                if stream_of(&cmd) != ShellStream::Atomic
+                    && self.conns.iter().any(|c| c.id != id && c.streaming) =>
+            {
+                protocol::error_reply(rid, RequestError::Shell(ShellError::Busy))
             }
             Ok(Request::Command(cmd)) => match core.shell_command(&mut self.port, cmd) {
                 Ok(fx) => {

@@ -454,3 +454,45 @@ fn attention_marks_end_with_unmap_and_destroy_and_the_shell_is_told() {
         assert!(core.focus().attention().is_empty());
     }
 }
+
+/// One shell stream at a time: while one shell's stream is open, another shell's stream steps are
+/// refused with busy (its atomic commands still run); once the first ends, the second may stream.
+#[test]
+fn a_second_shell_cannot_join_an_open_stream() {
+    let (mut core, mut server, o) = setup();
+    let w = map_win(&mut core, 1, 400, 300);
+    let mut a = connect(&mut server);
+    let mut b = connect(&mut server);
+    let mv = |stream: &str| {
+        format!(
+            r#"{{"id":1,"cmd":"move_element","element":{},"to":[1,1],"stream":"{stream}"}}"#,
+            eref(&core, w)
+        )
+    };
+    let (begin, step, end) = (mv("begin"), mv("step"), mv("end"));
+    assert_eq!(
+        a.reply(&mut server, &mut core, &begin).get("ok"),
+        Some(&Value::Bool(true))
+    );
+    for line in [&begin, &step, &end] {
+        let r = b.reply(&mut server, &mut core, line);
+        assert_eq!(
+            r.get("error").and_then(Value::as_str),
+            Some("busy"),
+            "{line}"
+        );
+    }
+    let nav = format!(r#"{{"id":2,"cmd":"navigate","output":{o},"to":{{"canvas":[3,3]}}}}"#);
+    assert_eq!(
+        b.reply(&mut server, &mut core, &nav).get("ok"),
+        Some(&Value::Bool(true))
+    );
+    assert_eq!(
+        a.reply(&mut server, &mut core, &end).get("ok"),
+        Some(&Value::Bool(true))
+    );
+    assert_eq!(
+        b.reply(&mut server, &mut core, &begin).get("ok"),
+        Some(&Value::Bool(true))
+    );
+}
