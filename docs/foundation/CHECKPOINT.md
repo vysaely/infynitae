@@ -4,6 +4,10 @@ CURRENT_PHASE: **PHASE F — INC-6 RATIFIED AND INTEGRATED INTO LOCAL `main` (`c
 
 Date: 2026-10-21
 
+## PHASE F — LAYER SURFACES IMPLEMENTED ON BRANCH `feature/layer-shell-2026-10-21` (2026-10-21; owner decisions L1–L8; not `main`, not pushed)
+- **Implemented:** `zwlr_layer_shell_v1` — Core's layer surfaces (arrangement, exclusive zones and the usable area for placement and fit, hit order, keyboard interactivity, presentation hiding, output removal), the adapter's handler, drawing above/below the Canvas, frame callbacks.
+- **Evidence:** evidence/phase-f/LAYER/IMPLEMENTATION_RECORD_2026-10-21.md (7 T0, 5 T1 with a real layer-shell client, 9 seeded controls). Prepared, not adopted: C12.F19. Not done: layer popups, constraints on layer surfaces.
+
 ## PHASE F — OWNER DECISIONS 2026-10-21; INC-11 AND INC-12 ON LOCAL `main` (`839f287`; not pushed)
 - **Integrated:** owner fast-forward of local `main` to `839f287`: INC-12 (EXPERIMENTAL, not ratified) and INC-11 (implemented, not accepted, not ratified).
 - **Decisions:** OB-40 Strict (OB-40 stays OPEN, U-8), decorations none (xdg-decoration to come), the shell is Quickshell-class (layer-shell next) — evidence/phase-f/OWNER_DECISIONS_2026-10-21.md.
