@@ -1,7 +1,8 @@
 # C12.F17 — amendment package for architecture change control (2026-10-18)
 
-Status: **OWNER DECISIONS ON Q1–Q5 RECORDED 2026-10-19 (§8, §9); PREPARED FOR ADOPTION — NOT
-ADOPTED.** Nothing is ratified and no normative text is changed by this package: FOUNDATION_ARCHITECTURE,
+Status: **ADOPTED 2026-10-20 by the owner (layer §C12.F17 in FOUNDATION_ARCHITECTURE, base `16f13c9`);
+owner decisions on Q1–Q5 recorded 2026-10-19 (§8, §9).** The text below is the package as prepared;
+the adopted layer is the one in FOUNDATION_ARCHITECTURE. Nothing is ratified and no normative text is changed by this package: FOUNDATION_ARCHITECTURE,
 FOUNDATION_INVARIANTS, FOUNDATION_STATE_MACHINES and the C12.F14/F15/F16 layers are untouched
 here. The package gives the exact text of layer C12.F17 for the chosen options and of the
 living-registry replacements it makes; the owner adopts it by applying the prepared adoption

@@ -2091,6 +2091,12 @@ Original finding text: the sections above (PD-F2) and audit/README (PD-F1-01…0
 - **Evidence:** vendored `desktop/wayland/popup/manager.rs` (288, 347); T1 `a_newer_popup_is_stacked_above_every_older_one`, `ob1_nested_popup_chain_matches_what_is_presented`
 - **Obligations:** X-15 (C12.F8); OB-1
 
+
+### W-SM-21
+- **Quirk:** Smithay 0.7.0's `PointerConstraint` keeps the constraint's lifetime private (`lifetime` field, `wayland/pointer_constraints.rs` 179; no accessor), so a compositor cannot read whether a lock or confinement is `oneshot` or `persistent`. Smithay itself ends a oneshot constraint on deactivation and destroys it, without telling the compositor through `PointerConstraintsHandler`
+- **Infynitae response:** (OB-54; owner decision 2026-10-19: keep the adapter workaround, no Smithay patch now) the adapter reports every constraint to Core as `ConstraintLifetime::Persistent` and, at the end of each effect batch, drops from Core a constraint whose Smithay object has been destroyed (`WaylandState::drop_constraints_smithay_destroyed`), so Core never re-activates a oneshot constraint Smithay ended. A Smithay patch exposing the lifetime would need the patch policy (INV-ARCH-3)
+- **Evidence:** vendored `wayland/pointer_constraints.rs` (179); T1 `an_ended_oneshot_lock_is_never_activated_again` (`t1_constraint_lifetime`) with its seeded control
+- **Obligations:** OB-54
 <!-- /living -->
 
 ## D9 — Phase D final readiness judgment

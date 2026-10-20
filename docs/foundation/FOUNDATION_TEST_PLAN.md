@@ -221,9 +221,9 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Destination:** T0
 - **May be closed by:** T0 properties + T1 production hit tests (transforms, zoom ≠ 1, clamp, spanning, random trees)
 - **Dependencies:** INC-1, INC-10
-- **Blocks:** INC-10 exit (zoom ≠ 1 part)
+- **Blocks:** none for INC-10 (owner decision 2026-10-19: the zoom ≠ 1 mismatch and clamp parts are met); the remaining zoom ≠ 1 scope (random trees, rotated outputs, multi-output spanning) blocks nothing assigned
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
-- **History:** E1R (unsealed, E1R-N1, E-F3-02): non-Normal transforms are covered headlessly by EE-1 (harness, not production); F-HIT-1 corrected. The production transform part moves to OB-45.
+- **History:** E1R (unsealed, E1R-N1, E-F3-02): non-Normal transforms are covered headlessly by EE-1 (harness, not production); F-HIT-1 corrected. The production transform part moves to OB-45. C12.F17 (2026-10-20): owner decision 2026-10-19: the zoom ≠ 1 mismatch and sub-pixel clamp parts are met (`t1_d5hit_zoomed`, `t1_canonical_rect`; INC-10 EXIT_READINESS §2); random trees, rotated outputs and multi-output spanning at zoom ≠ 1 stay OB-14's open scope and do not block INC-10's exit.
 
 ### OB-15
 - **Status:** CLOSED
@@ -712,9 +712,9 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Destination:** T1
 - **May be closed by:** T1 production tests in INC-10, INC-14 and INC-11, each for its stimuli; closes when all three parts are met
 - **Dependencies:** INC-10, INC-11, INC-14, OB-28
-- **Blocks:** the exits of INC-10 (fit loop, CameraZoom), INC-14 (WindowMove/Resize), INC-11 (ShellStream), each for its part
+- **Blocks:** the exits of INC-10 (fit loop), INC-14 (WindowMove/Resize), INC-11 (ShellStream), and of the increment that introduces discrete zoom stimuli (CameraZoom; owner decision 2026-10-19), each for its part
 - **Origin:** OB-28 split (owner decision 2026-10-16, INC-6 adoption package D5); the requirement: CP3A-4; C12.R1.3
-- **History:** Created by the split of OB-28.
+- **History:** Created by the split of OB-28. C12.F17 (2026-10-20): owner decision 2026-10-19 (EXIT_READINESS §3 option 1): the CameraZoom part is re-scoped to the increment that introduces discrete zoom stimuli (zoom bindings or shell zoom, e.g. INC-11's `Navigate`); INC-10's part is the fit loop, evidenced by `t1_fit_scale_adversary`.
 
 ### OB-54
 - **Status:** OPEN
@@ -727,6 +727,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-5 (seam), INC-10 (fit as the trigger)
 - **Blocks:** none assigned (pre-existing since INC-5; proposed for change control in the C12.F17 package)
 - **Origin:** INC-10 independent exit review follow-up (2026-10-18)
+- **History:** C12.F17 (2026-10-20): owner decision 2026-10-19: keep the adapter workaround; W-SM-21 registered; no Smithay patch now. Stays OPEN (its pass criterion asks for the requested lifetime in Core).
 
 ### OB-55
 - **Status:** OPEN
@@ -739,6 +740,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-2 (reconfiguration), INC-5 (constraints)
 - **Blocks:** none assigned (pre-existing; proposed for change control in the C12.F17 package)
 - **Origin:** INC-10 independent exit review follow-up (2026-10-18)
+- **History:** C12.F17 (2026-10-20): owner decision 2026-10-19 (Q2 widen): fixed (`t1_reconfigure_lock`, seeded control); stays OPEN until change control accepts the evidence.
 
 ### OB-56
 - **Status:** OPEN
@@ -751,6 +753,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** OB-54 (lifetime) for the lock case
 - **Blocks:** none assigned
 - **Origin:** INC-10 independent exit review follow-up (2026-10-18)
+- **History:** C12.F17 (2026-10-20): owner decision 2026-10-19 (Q3 exactly one) decides its first part, implemented with `t1_kept_confinement`; its second part (activation of a lock whose point is unobservable) stays open.
 
 ### OB-57
 - **Status:** OPEN
@@ -763,6 +766,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-13, INC-10
 - **Blocks:** any GPU-rendering claim for zoom ≠ 1; INC-10's software-only exit is not blocked
 - **Origin:** INC-10 independent exit review (2026-10-18), §7 limitations
+- **History:** C12.F17 (2026-10-20): owner decision 2026-10-19 (Q5 defer): the GPU tolerance for fractional crop cuts is set with OB-57's T2 work; no GPU claim for zoom ≠ 1 until then.
 
 ### OB-58
 - **Status:** OPEN
@@ -776,6 +780,18 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Blocks:** none assigned (performance claims for zoom ≠ 1 stay software-only and unpaced until then)
 - **Origin:** INC-10 independent exit review (2026-10-18), L1 and L6
 
+
+### OB-59
+- **Status:** OPEN
+- **Item:** Drag-and-drop under INV-INPUT-2. The clipboard (data device and primary selection) is supported; drag-and-drop is refused — a client's `start_drag` is cancelled (its source receives `cancelled`, no drag offer is made) and pointer delivery keeps following Core — and INV-INPUT-2 names a drag as a protocol transfer. A decision and an implementation are needed for: which pointer interaction owns a drag, how ownership and the implicit grab interact with compositor interactions (M22) and pointer constraints (INV-INPUT-5), drag icons on a zoomed camera (INV-RENDER-1), and drops across outputs
+- **Owner:** architecture (INV-INPUT-2, M22) via change control, then adapter (data device) + core input
+- **Evidence available:** the clipboard integration (owner decision 2026-10-19: clipboard yes, drag-and-drop stays refused); T1 `t1_clipboard::a_drag_started_on_a_real_press_is_refused` (source cancelled, no offer, the next motion routed by Core)
+- **Pass criterion:** an architecture decision on drag ownership under INV-INPUT-2; T1 production tests for a drag within one client, between two clients and across outputs, with seeded controls; until then the refusal test stays
+- **Destination:** DECISION (then T1 production tests, pass criterion)
+- **May be closed by:** architecture change control and T1 production tests
+- **Dependencies:** clipboard integration
+- **Blocks:** any drag-and-drop support claim
+- **Origin:** owner decision 2026-10-19 (clipboard integration; C12.F17.11)
 <!-- /living -->
 
 ## 3. Test inventory (canonical `TST-*`)

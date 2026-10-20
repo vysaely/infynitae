@@ -73,7 +73,8 @@ F_LAYERS = [('C12.F1', 'C12.F1 @ ADOPTED 2026-10-13 (owner approval; base 2436dd
             ('C12.F13', 'C12.F13 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)'),
             ('C12.F14', 'C12.F14 @ ADOPTED 2026-10-17 (owner approval; base ca2e468)'),
             ('C12.F15', 'C12.F15 @ ADOPTED 2026-10-17 (owner approval; base dda4d87)'),
-            ('C12.F16', 'C12.F16 @ ADOPTED 2026-10-18 (owner approval; base da538d6)')]
+            ('C12.F16', 'C12.F16 @ ADOPTED 2026-10-18 (owner approval; base da538d6)'),
+            ('C12.F17', 'C12.F17 @ ADOPTED 2026-10-20 (owner approval; base 16f13c9)')]
 PACKAGE_START = '# Phase D package (D7)'
 OPEN_CLOSE = {'(': ')]', '[': ')]', '{': '}', '⟦': '⟧'}
 VERDICTS = ['READY FOR INDEPENDENT ADVERSARIAL REVIEW — PHASE E', 'NOT READY — ARCHITECTURE BLOCKERS REMAIN', 'NOT READY — PHASE D GATE INCOMPLETE']

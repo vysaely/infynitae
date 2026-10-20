@@ -15,10 +15,10 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 | ADR-01 | Stage is the sole spatial authority; Smithay `Space` rejected | Accepted; PD-F2-13 → obligation OB-34 (1R) |
 | ADR-02 | Fixed-point Q16 Canvas with a reference-relative lattice | Accepted; **amended 1R** (R8; zoom-aware pan; OB-24 rescoped); **amended C12.F14** (zoom domain; the output's lattice reference, kept while panning); **amended C12.F15** (one canonical rect for render and hit) |
 | ADR-03 | Window-geometry anchor and exact physical-pixel hit-testing | Accepted |
-| ADR-04 | Independent centre-anchored cameras | Accepted; **amended 1R** (one-shot fit; direct-manipulation pan); **amended 2R** (output-lifecycle authority); **amended C12.F15** (fit units and clamp; restore history); **amended C12.F16** (history bound 256, emptied at unbinding) |
+| ADR-04 | Independent centre-anchored cameras | Accepted; **amended 1R** (one-shot fit; direct-manipulation pan); **amended 2R** (output-lifecycle authority); **amended C12.F15** (fit units and clamp; restore history); **amended C12.F16** (history bound 256, emptied at unbinding); **amended C12.F17** (fit and restore refused during a presentation) |
 | ADR-05 | Unified effective scale: MaxGesture, bounded ladder hint, settlement | Accepted; **amended 1R** (ScaleInteractionEpoch; device-bound ladder; initial hint); **amended 2R** (epochs for all spatial interactions); **amended F2** (device bound on the 1/120 lattice) |
 | ADR-06 | Off-screen withholding with kick/fallback; suspension separated from visibility | Accepted; **amended 1R** (`OutputsOff`) |
-| ADR-07 | Pre-client input ownership, gesture isolation, modifier observation | Accepted; **amended 1R** (split pointer/constraint state; reconciliation; confinement) |
+| ADR-07 | Pre-client input ownership, gesture isolation, modifier observation | Accepted; **amended 1R** (split pointer/constraint state; reconciliation; confinement); **amended C12.F17** (no absolute motion to a locked surface; one true-position event at an interaction's end, a relocation, a reconfiguration and a presentation's start or end) |
 | ADR-08 | Compile-time camera-authority separation | Accepted; **amended 1R** (per-action `Authorized` proof; PD-F2-01 resolved) |
 | ADR-09 | Protocol fullscreen is output presentation; viewport-fit is a camera operation | Accepted; **amended 1R** (answer every request; maximize declined; one-shot fit) |
 | ADR-10 | X11 via xwayland-satellite only | Accepted; PD-F2-16 → OB-33 (`-listenfd` verified, ER-6) |
@@ -168,6 +168,8 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **C12.F16 amendment (owner decision 2026-10-18):**
   - The history holds at most 256 entries per output; a successful fit at capacity evicts the oldest, which is lost permanently; a refused fit or restore changes nothing.
   - The history is part of a camera's binding to one `OutputId`: emptied when the camera is unbound, kept across `output_reconfigured`; it is never applied to another output or a later connection (INV-CAMERA-5).
+- **C12.F17 amendment (owner decisions 2026-10-19, Q1 B scope 2):**
+  - Fit and restore, from input or shell, are refused while their output presents a protocol-fullscreen element: no camera, history or pointer change; the bindings still resolve and are consumed (M8, F-FIT-1).
 
 ## ADR-05: unified effective scale (MaxGesture, bounded ladder hint, settlement)
 
@@ -286,6 +288,9 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **E1R amendment (unsealed; E-F2-02, E-F2-05):**
   - A constraint deactivation event is sent only from the active state. This needs the dependency patch P1 (Smithay `leave()` deactivates only an active constraint) or an upstream fix, under ADR-13's patch policy (OB-11); no public-API alternative exists (W-SM-4c, EE-2).
   - Zero outputs: the seat enters `NoOutput` through a compositor zero-output grab installed with `Focus::Clear`, never through `unset_grab` (W-SM-16, EE-3).
+- **C12.F17 amendment (owner decisions 2026-10-19, Q2 widen, Q3 exactly one):**
+  - No absolute motion reaches a surface whose lock is active, on any path (camera actions, output reconfiguration, a presentation's start or end, an interaction's end, an output relocation).
+  - Those paths send exactly one true-position event, after the batch's reconciliation, with the pointer on an output and no interaction owning it, unless a lock is kept: a kept confinement receives it (INV-INPUT-5, M10).
 
 ## ADR-08: compile-time camera-authority separation
 

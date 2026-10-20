@@ -113,10 +113,12 @@ Object: OBJ-07, OBJ-30. Implements INV-CAMERA-5, INV-CAMERA-1.
 
 | From | Trigger | To | Effects | Cites |
 |---|---|---|---|---|
-| — | `FitViewport(O, W)` via input or shell [O connected ∧ W mapped ∧ g.w > 0 ∧ g.h > 0] | — | snapshot W now; F-FIT-1: zoom clamped into F-VIEW-1's domain, centre into INV-COORD-1; the previous value added as the newest history entry, the oldest evicted first if 256 are held (OBJ-30, C12.F16); one mutation; atomic epoch; one pointer reconciliation (M10) | INV-CAMERA-5 |
-| — | `FitViewport(O, W)` [otherwise] | — | refused: no mutation, nothing recorded or evicted (C12.F15, C12.F16) | INV-CAMERA-5 |
-| — | `ViewportRestore(O)` via input or shell [O connected ∧ O's history non-empty] | — | one mutation to the newest entry's exact value, which is removed (OBJ-30); one pointer reconciliation (M10) | INV-CAMERA-5 |
-| — | `ViewportRestore(O)` [O not connected ∨ O's history empty] | — | refused: no mutation, history unchanged (C12.F15, C12.F16) | INV-CAMERA-5 |
+| — | key F pressed with Logo held, Ctrl and Alt released, Shift released, no compositor interaction active, the pointer on O | — | the binding is consumed (M12); W = the mapped element hit under the pointer on O's current ProjectionFrame (F-HIT-1): `FitViewport(O, W)`; no element hit: nothing — no mutation, no history change, no pointer event | INV-CAMERA-5 |
+| — | key F pressed with Logo and Shift held, Ctrl and Alt released, no compositor interaction active, the pointer on O | — | the binding is consumed (M12): `ViewportRestore(O)` | INV-CAMERA-5 |
+| — | `FitViewport(O, W)` via input or shell [O connected ∧ O presents no protocol-fullscreen element ∧ W mapped ∧ g.w > 0 ∧ g.h > 0] | — | snapshot W now; F-FIT-1: zoom clamped into F-VIEW-1's domain, centre into INV-COORD-1; the previous value added as the newest history entry, the oldest evicted first if 256 are held (OBJ-30, C12.F16); one mutation; atomic epoch; one pointer reconciliation (M10) | INV-CAMERA-5 |
+| — | `FitViewport(O, W)` [otherwise] | — | refused: no mutation, nothing recorded or evicted, no pointer reconciliation (C12.F15, C12.F16, C12.F17) | INV-CAMERA-5 |
+| — | `ViewportRestore(O)` via input or shell [O connected ∧ O presents no protocol-fullscreen element ∧ O's history non-empty] | — | one mutation to the newest entry's exact value, which is removed (OBJ-30); one pointer reconciliation (M10) | INV-CAMERA-5 |
+| — | `ViewportRestore(O)` [O not connected ∨ O presents a protocol-fullscreen element ∨ O's history empty] | — | refused: no mutation, history unchanged, no pointer reconciliation (C12.F15, C12.F16, C12.F17) | INV-CAMERA-5 |
 | — | W resizes / commits / unmaps | — | nothing (no mode exists) | INV-CAMERA-1 |
 
 ## M9 — Protocol fullscreen
@@ -141,13 +143,14 @@ Object: OBJ-20, OBJ-24, OBJ-15. Implements INV-HIT-1, INV-INPUT-3, INV-INPUT-5, 
 |---|---|---|---|---|
 | any | client-routed motion | per F-HIT-1 | enter/leave/motion | INV-HIT-1 |
 | Focused | compositor interaction acquired | Kept | no events (KeepFocus) | INV-INPUT-3 |
-| Kept | interaction ends | per re-hit | ≤ 1 true-position event per batch | INV-INPUT-5, INV-CAMERA-4 |
+| Kept | interaction ends | per re-hit | exactly one true-position event, none while the reconciliation keeps a lock (C12.F17) | INV-INPUT-5, INV-CAMERA-4 |
 | Focused | client button press | ClientGrab | Smithay decides the delivered focus; core uses the delivered focus for protocol-order decisions | INV-INPUT-5 |
 | any | view change, geometry change, output change, ActiveElementFocus change | per batch-end reconciliation | at most one true-position event | INV-INPUT-5 |
 | any | last output removed | `NoOutput` (no focus) | zero-output grab with `Focus::Clear`: `wl_pointer.leave`, no motion to the old focus | INV-OUTPUT-1 |
 | `NoOutput` | physical motion, button, axis | `NoOutput` | consumed; delivered nowhere; no relative motion | INV-OUTPUT-1 |
 | `NoOutput` | first output connected | per F-HIT-1 | grab removed; startup placement; one routed motion (enter) | INV-OUTPUT-1 |
-| Focused | interaction output reconfigured | per batch-end reconciliation | pointer clamped (F-RECONF-1); at most one true-position event | INV-OUTPUT-2, INV-INPUT-5 |
+| Focused | interaction output reconfigured | per batch-end reconciliation | pointer clamped (F-RECONF-1); at most one true-position event, none to a kept lock (C12.F17) | INV-OUTPUT-2, INV-INPUT-5 |
+| Focused | output removed, pointer relocated to a surviving output (F-RELOCATE-1) | per batch-end reconciliation | exactly one true-position event unless an interaction owns the pointer or the reconciliation keeps a lock (C12.F17) | INV-OUTPUT-1, INV-INPUT-5 |
 
 ## M11 — ActiveElementFocus and ProtocolSurfaceRoute
 Object: OBJ-22, OBJ-23. Implements INV-INPUT-8, INV-INPUT-10, INV-PROTO-1. ADR-14.
