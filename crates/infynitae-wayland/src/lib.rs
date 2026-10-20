@@ -27,7 +27,9 @@ pub mod registry;
 pub mod session;
 mod signals;
 mod snapshot;
+pub mod xwayland;
 
+pub use handlers::ACTIVATION_TOKENS_KEPT;
 pub use keyboard::PreemptionStrategy;
 
 use infynitae_core::Core;
@@ -47,6 +49,7 @@ use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::shell::xdg::XdgShellState;
 use smithay::wayland::shm::ShmState;
 use smithay::wayland::viewporter::ViewporterState;
+use smithay::wayland::xdg_activation::XdgActivationState;
 
 /// `clk_id` announced by `wp_presentation`: CLOCK_MONOTONIC on Linux. Frame times handed to
 /// `complete_frames` are on this clock.
@@ -141,6 +144,8 @@ pub struct WaylandState {
     selection_owners: [Option<ClientId>; 2],
     /// A client started a drag (Smithay installed its DnD grab); `refuse_client_drags` ends it.
     drag_started: bool,
+    /// `xdg_activation_v1` (B10.7, INV-INPUT-9, W-SM-8; INC-12).
+    activation: XdgActivationState,
     registry: SurfaceRegistry,
     elements: Vec<ElementHandle>,
     pub(crate) serial_outputs:
@@ -205,6 +210,7 @@ impl WaylandState {
             primary_selection: PrimarySelectionState::new::<Self>(display),
             selection_owners: [None, None],
             drag_started: false,
+            activation: XdgActivationState::new::<Self>(display),
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),

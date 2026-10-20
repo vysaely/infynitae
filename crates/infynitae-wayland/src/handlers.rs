@@ -33,11 +33,14 @@ use smithay::wayland::shell::xdg::{
     PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
 };
 use smithay::wayland::shm::{ShmHandler, ShmState};
+use smithay::wayland::xdg_activation::{
+    XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
+};
 use smithay::{
     delegate_compositor, delegate_data_device, delegate_fractional_scale, delegate_output,
     delegate_pointer_constraints, delegate_presentation, delegate_primary_selection,
     delegate_relative_pointer, delegate_seat, delegate_shm, delegate_viewporter,
-    delegate_xdg_shell,
+    delegate_xdg_activation, delegate_xdg_shell,
 };
 
 use crate::{ClientState, ElementHandle, WaylandState, convert, snapshot};
@@ -642,6 +645,115 @@ delegate_seat!(WaylandState);
 delegate_shm!(WaylandState);
 delegate_viewporter!(WaylandState);
 delegate_xdg_shell!(WaylandState);
+delegate_xdg_activation!(WaylandState);
+
+/// W-SM-8: whether an activation token passed the provenance check when it was created.
+struct TokenProvenance {
+    validated: bool,
+}
+
+impl WaylandState {
+    fn token_validated(&self, data: &XdgActivationTokenData) -> bool {
+        use smithay::reexports::wayland_server::Resource;
+        let Some((serial, seat)) = &data.serial else {
+            return false;
+        };
+        let ours = smithay::input::Seat::<WaylandState>::from_resource(seat)
+            .is_some_and(|s| s == self.seat);
+        let keyboard = self.keyboard_handle();
+        let fresh = keyboard
+            .last_enter()
+            .is_some_and(|last| serial.is_no_older_than(&last));
+        let focused_client = keyboard
+            .current_focus()
+            .and_then(|surface| surface.client())
+            .map(|client| client.id());
+        ours && fresh && focused_client.is_some() && focused_client == data.client_id
+    }
+}
+
+/// How long an activation token validates a request after it was created (provisional; B10.7).
+const ACTIVATION_TOKEN_LIFETIME: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long an unused token is kept: a request with an expired token still asks for attention,
+/// so tokens outlive their validity; but not for ever (INC-12 review r2).
+const ACTIVATION_TOKEN_RETENTION: std::time::Duration = std::time::Duration::from_secs(300);
+/// At most this many unused tokens are kept (the oldest go first): a client may create tokens
+/// without end, and Smithay removes one only when it is used (INC-12 review r2).
+pub const ACTIVATION_TOKENS_KEPT: usize = 256;
+
+impl WaylandState {
+    /// Unused activation tokens kept (for tests).
+    pub fn activation_tokens_kept(&mut self) -> usize {
+        let mut n = 0;
+        self.activation.retain_tokens(|_, _| {
+            n += 1;
+            true
+        });
+        n
+    }
+
+    /// Bounds the tokens kept: older than the retention period, or beyond the newest
+    /// `ACTIVATION_TOKENS_KEPT - 1` (room for the one being created), they are dropped.
+    fn prune_activation_tokens(&mut self) {
+        let mut stamps = Vec::new();
+        self.activation.retain_tokens(|_, d| {
+            let keep = d.timestamp.elapsed() <= ACTIVATION_TOKEN_RETENTION;
+            if keep {
+                stamps.push(d.timestamp);
+            }
+            keep
+        });
+        if stamps.len() >= ACTIVATION_TOKENS_KEPT {
+            stamps.sort_unstable();
+            let cutoff = stamps[stamps.len() - (ACTIVATION_TOKENS_KEPT - 1)];
+            self.activation.retain_tokens(|_, d| d.timestamp >= cutoff);
+        }
+    }
+}
+
+impl XdgActivationHandler for WaylandState {
+    fn activation_state(&mut self) -> &mut XdgActivationState {
+        &mut self.activation
+    }
+
+    /// W-SM-8 (INV-INPUT-9): Smithay accepts every token by default. Here every token is kept
+    /// (an unvalidated request still asks for attention, `ActivationPolicy`), and its provenance
+    /// is recorded when it is created: it is **validated** only if the client that created it
+    /// holds the keyboard focus, and its serial is one of this seat's, no older than the
+    /// keyboard's last focus `enter`. A client the user merely points at receives fresh pointer
+    /// serials, but not the focus: its tokens are not validated (focus-stealing prevention).
+    fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
+        self.prune_activation_tokens();
+        let validated = self.token_validated(&data);
+        data.user_data
+            .insert_if_missing(|| TokenProvenance { validated });
+        true
+    }
+
+    /// B10.7: a validated, unexpired token activates the element whose toplevel `surface` is;
+    /// Core decides between focus and attention (INV-INPUT-9). A token is used once.
+    fn request_activation(
+        &mut self,
+        token: XdgActivationToken,
+        token_data: XdgActivationTokenData,
+        surface: WlSurface,
+    ) {
+        self.activation.remove_token(&token);
+        let Some(i) = self.element_index_by_root(&surface) else {
+            return;
+        };
+        let id = self.elements[i].id;
+        // an expired token validates nothing: the request only asks for attention
+        let validated = token_data.timestamp.elapsed() <= ACTIVATION_TOKEN_LIFETIME
+            && token_data
+                .user_data
+                .get::<TokenProvenance>()
+                .is_some_and(|p| p.validated);
+        if let Ok(effects) = self.core.activation_request(id, validated) {
+            self.apply(&effects);
+        }
+    }
+}
 
 /// Nothing to do at bind time: every surface of an element's tree already holds the element's
 /// hint (it was told when it joined, and with every change since), and Smithay sends the held

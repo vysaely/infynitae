@@ -306,6 +306,8 @@ pub struct HeadlessCompositorOptions {
     pub max_frames: Option<u64>,
     /// What the headless renderer reports as its device limit.
     pub device_limit: DeviceLimit,
+    /// xwayland-satellite to supervise (M19, INC-12, experimental); `None`: no X11.
+    pub xwayland_satellite: Option<std::path::PathBuf>,
 }
 
 impl Default for HeadlessCompositorOptions {
@@ -319,6 +321,7 @@ impl Default for HeadlessCompositorOptions {
             duration: None,
             max_frames: None,
             device_limit: DeviceLimit::default(),
+            xwayland_satellite: None,
         }
     }
 }
@@ -354,6 +357,8 @@ pub fn run_headless(
     state.report_renderer_limits(&renderer)?;
 
     let mut event_loop: EventLoop<()> = EventLoop::try_new()?;
+    let x_display =
+        infynitae_wayland::xwayland::reserve_for_session(options.xwayland_satellite.as_deref())?;
     let mut session = Session::new(
         display,
         &event_loop.handle(),
@@ -363,8 +368,21 @@ pub fn run_headless(
             refresh_mhz: options.refresh_mhz,
             duration: options.duration,
             max_frames: options.max_frames,
+            x_display: x_display.as_ref().map(|d| d.name()),
+            x_authority: x_display
+                .as_ref()
+                .and_then(|d| d.authority_path().map(|p| p.to_path_buf())),
         },
     )?;
+    let mut xwayland = match (x_display, options.xwayland_satellite.as_deref()) {
+        (Some(d), Some(satellite)) => Some(infynitae_wayland::xwayland::start_for_session(
+            d,
+            satellite,
+            session.socket_name(),
+            &event_loop.handle(),
+        )?),
+        _ => None,
+    };
 
     println!("[infynitae] Headless compositor running.");
     while !session.finished() {
@@ -372,7 +390,14 @@ pub fn run_headless(
         // sleeps until it even if no client and no frame is pending, and has nothing to wake
         // for when no epoch is open (INV-IDLE-1).
         session.wake_at(state.core().next_settlement_deadline());
-        event_loop.dispatch(session.timeout(), &mut ())?;
+        let restart = xwayland
+            .as_mut()
+            .and_then(|x| x.poll(std::time::Instant::now()));
+        let timeout = match (session.timeout(), restart) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        event_loop.dispatch(timeout, &mut ())?;
         session.dispatch(&mut state);
 
         // Initial focus grant on topmost mapped element if seat is eligible (INV-INPUT-8)
@@ -416,6 +441,8 @@ pub fn run_headless(
     }
 
     println!("[infynitae] Headless compositor shutting down...");
+    // the satellite first: it is a client of the session, and its display goes with it
+    drop(xwayland);
     session.shutdown();
     let _ = disconnect(&mut state, &mut output_token, output_id);
     session.flush();

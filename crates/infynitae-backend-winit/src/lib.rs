@@ -41,6 +41,8 @@ pub struct WinitCompositorOptions {
     pub duration: Option<Duration>,
     /// Optional maximum frame count before clean exit.
     pub max_frames: Option<u64>,
+    /// xwayland-satellite to supervise (M19, INC-12, experimental); `None`: no X11.
+    pub xwayland_satellite: Option<std::path::PathBuf>,
 }
 
 impl Default for WinitCompositorOptions {
@@ -54,6 +56,7 @@ impl Default for WinitCompositorOptions {
             refresh_mhz: 60_000,
             duration: None,
             max_frames: None,
+            xwayland_satellite: None,
         }
     }
 }
@@ -150,6 +153,8 @@ pub fn run_nested(
 
     // Before the window: from here on SIGTERM/SIGINT end the loop instead of the process, so a
     // signal during the rest of start-up still leaves no socket behind.
+    let x_display =
+        infynitae_wayland::xwayland::reserve_for_session(options.xwayland_satellite.as_deref())?;
     let session = Session::new(
         display,
         &event_loop.handle(),
@@ -159,8 +164,21 @@ pub fn run_nested(
             refresh_mhz: options.refresh_mhz,
             duration: options.duration,
             max_frames: options.max_frames,
+            x_display: x_display.as_ref().map(|d| d.name()),
+            x_authority: x_display
+                .as_ref()
+                .and_then(|d| d.authority_path().map(|p| p.to_path_buf())),
         },
     )?;
+    let mut xwayland = match (x_display, options.xwayland_satellite.as_deref()) {
+        (Some(d), Some(satellite)) => Some(infynitae_wayland::xwayland::start_for_session(
+            d,
+            satellite,
+            session.socket_name(),
+            &event_loop.handle(),
+        )?),
+        _ => None,
+    };
 
     let window_attributes = WinitWindow::default_attributes()
         .with_inner_size(LogicalSize::new(
@@ -227,7 +245,14 @@ pub fn run_nested(
         // armed while no epoch is open (INV-IDLE-1).
         data.session
             .wake_at(data.state.core().next_settlement_deadline());
-        event_loop.dispatch(data.session.timeout(), &mut data)?;
+        let restart = xwayland
+            .as_mut()
+            .and_then(|x| x.poll(std::time::Instant::now()));
+        let timeout = match (data.session.timeout(), restart) {
+            (Some(a), Some(b)) => Some(a.min(b)),
+            (a, b) => a.or(b),
+        };
+        event_loop.dispatch(timeout, &mut data)?;
         data.session.dispatch(&mut data.state);
 
         // Initial focus grant on topmost mapped element if seat is eligible (INV-INPUT-8)
@@ -273,6 +298,8 @@ pub fn run_nested(
     }
 
     println!("[infynitae] Shutting down compositor...");
+    // the satellite first: it is a client of the session, and its display goes with it
+    drop(xwayland);
     data.session.shutdown();
     if let Ok(effects) = data
         .state

@@ -29,4 +29,4 @@ probe_test_keyboard_grab = ["infynitae-wayland/probe_test_keyboard_grab"]
 # and read the framebuffer back. Test builds only.
 smithay = { version = "=0.7.0", default-features = false, features = ["renderer_test", "renderer_pixman"] }
 wayland-client = "=0.31.15"
-wayland-protocols = { version = "=0.32.13", features = ["client"] }
+wayland-protocols = { version = "=0.32.13", features = ["client", "staging"] }

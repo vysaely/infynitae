@@ -163,6 +163,7 @@ fn test_tiny_compositor_end_to_end_client_session() {
             duration: Some(Duration::from_secs(3)),
             max_frames: None,
             device_limit: Default::default(),
+            xwayland_satellite: None,
         };
         run_headless(core, input_port, output_token, options).expect("compositor exited cleanly");
     });
@@ -289,6 +290,7 @@ fn test_tiny_compositor_child_process_reaping() {
             duration: Some(Duration::from_millis(600)),
             max_frames: None,
             device_limit: Default::default(),
+            xwayland_satellite: None,
         };
         run_headless(core, input_port, output_token, options).expect("compositor exited cleanly");
     });
@@ -314,6 +316,7 @@ fn test_tiny_compositor_graceful_child_termination() {
             duration: Some(Duration::from_millis(150)),
             max_frames: None,
             device_limit: Default::default(),
+            xwayland_satellite: None,
         };
         run_headless(core, input_port, output_token, options).expect("compositor exited cleanly");
     });
@@ -345,6 +348,7 @@ fn test_tiny_compositor_client_event_loop_wakeup() {
             duration: Some(Duration::from_secs(3)),
             max_frames: None,
             device_limit: Default::default(),
+            xwayland_satellite: None,
         };
         run_headless(core, input_port, output_token, options).expect("compositor exited cleanly");
     });
@@ -423,6 +427,7 @@ fn test_tiny_compositor_initial_focus_and_activation() {
             duration: Some(Duration::from_secs(3)),
             max_frames: None,
             device_limit: Default::default(),
+            xwayland_satellite: None,
         };
         run_headless(core, input_port, output_token, options).expect("compositor exited cleanly");
     });
@@ -714,6 +719,7 @@ fn presentation_timestamps_are_on_the_announced_clock() {
         duration: Some(Duration::from_secs(3)),
         max_frames: None,
         device_limit: Default::default(),
+        xwayland_satellite: None,
     };
     let compositor = thread::spawn(move || {
         let (core, input_port, _shell_port, output_token) = Core::new(PersistedCameras::default());
@@ -832,6 +838,7 @@ fn the_session_command_does_not_outlive_the_session() {
         duration: Some(Duration::from_millis(700)),
         max_frames: None,
         device_limit: Default::default(),
+        xwayland_satellite: None,
     };
     let compositor = thread::spawn(move || {
         let (core, input_port, _shell_port, output_token) = Core::new(PersistedCameras::default());

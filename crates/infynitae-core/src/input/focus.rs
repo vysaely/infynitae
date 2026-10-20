@@ -8,6 +8,20 @@
 use crate::protocol::Effect;
 use crate::stage::ElementId;
 
+/// What an `xdg_activation_v1` request may do (INV-INPUT-9; PROV-10, provisional; OB-40 decides).
+/// The adapter tells Core whether the request's token passed the provenance check (W-SM-8).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum ActivationPolicy {
+    /// The default: a request with a validated token focuses its window (when the window may
+    /// take focus, INV-INPUT-8); any other request marks the window for attention.
+    #[default]
+    Strict,
+    /// Opt-in: no request ever moves the focus; every request marks attention.
+    AttentionOnly,
+    /// Opt-in: any request focuses its window, validated or not (no focus-stealing prevention).
+    Permissive,
+}
+
 /// Authoritative keyboard focus model for the seat.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FocusModel {
@@ -16,6 +30,11 @@ pub struct FocusModel {
     history: Vec<ElementId>,
     /// Whether the seat is eligible for initial automatic activation on first map.
     initial_eligible: bool,
+    /// Elements whose activation request was answered with attention instead of focus
+    /// (INV-INPUT-9, B10.7): state the shell may render; it never moves a camera. Oldest first.
+    attention: Vec<ElementId>,
+    /// What activation requests may do.
+    activation_policy: ActivationPolicy,
 }
 
 impl Default for FocusModel {
@@ -24,6 +43,8 @@ impl Default for FocusModel {
             target: None,
             history: Vec::new(),
             initial_eligible: true,
+            attention: Vec::new(),
+            activation_policy: ActivationPolicy::Strict,
         }
     }
 }
@@ -67,6 +88,8 @@ impl FocusModel {
         if let Some(id) = next {
             self.history.retain(|&e| e != id);
             self.history.insert(0, id);
+            // a focused element needs no attention
+            self.attention.retain(|&e| e != id);
         }
         let mut effects = Vec::new();
         if let Some(prev_id) = prev {
@@ -102,6 +125,7 @@ impl FocusModel {
         if live_elements.is_empty() {
             self.initial_eligible = true;
         }
+        self.attention.retain(|&e| e != dead);
         if self.target != Some(dead) {
             return Vec::new();
         }
@@ -121,6 +145,43 @@ impl FocusModel {
         }
         effects.push(Effect::KeyboardFocus(successor));
         effects
+    }
+
+    pub fn activation_policy(&self) -> ActivationPolicy {
+        self.activation_policy
+    }
+
+    pub(crate) fn set_activation_policy(&mut self, policy: ActivationPolicy) {
+        self.activation_policy = policy;
+    }
+
+    /// An activation request for `element` (INV-INPUT-9; outcome policy PROV-10, provisional):
+    /// focus when the policy lets this request focus (`validated`: its token passed the
+    /// provenance check) and the element may take focus (`eligible`), attention otherwise.
+    /// Never a camera change.
+    pub fn activation(
+        &mut self,
+        element: ElementId,
+        validated: bool,
+        eligible: bool,
+    ) -> Vec<Effect> {
+        let may_focus = match self.activation_policy {
+            ActivationPolicy::Strict => validated,
+            ActivationPolicy::AttentionOnly => false,
+            ActivationPolicy::Permissive => true,
+        };
+        if may_focus && eligible {
+            return self.set_focus(Some(element));
+        }
+        if self.target != Some(element) && !self.attention.contains(&element) {
+            self.attention.push(element);
+        }
+        Vec::new()
+    }
+
+    /// The elements that asked for attention (INV-INPUT-9), oldest first.
+    pub fn attention(&self) -> &[ElementId] {
+        &self.attention
     }
 
     /// Focus history (tests / audit).
