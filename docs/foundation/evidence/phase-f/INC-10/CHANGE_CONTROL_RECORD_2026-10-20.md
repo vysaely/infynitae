@@ -1,5 +1,8 @@
 # INC-10 — change-control record: exit criteria and blocking obligations mapped to evidence (2026-10-20)
 
+**ACCEPTED 2026-10-20** by architecture change control (owner authorization 2026-10-20), with the decisions recorded in
+evidence/phase-f/INC-10/RATIFICATION_RECORD_2026-10-20.md; INC-10 RATIFIED on `faf6dda`. The status below is the record as prepared and reviewed.
+
 Status: **PREPARED for architecture change control; not accepted. INC-10 is NOT ratified; OB-24
 and every other OB stay OPEN.** Branch `prep/inc10-change-control-2026-10-20` (from local `main`
 `56b3f12`); not `main`, not pushed (`origin/main` `23752f1`, re-fetched 2026-10-20).

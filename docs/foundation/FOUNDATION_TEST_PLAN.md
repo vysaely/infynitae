@@ -714,7 +714,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-10, INC-11, INC-14, OB-28
 - **Blocks:** the exits of INC-10 (fit loop), INC-14 (WindowMove/Resize), INC-11 (ShellStream), and of the increment that introduces discrete zoom stimuli (CameraZoom; owner decision 2026-10-19), each for its part
 - **Origin:** OB-28 split (owner decision 2026-10-16, INC-6 adoption package D5); the requirement: CP3A-4; C12.R1.3
-- **History:** Created by the split of OB-28. C12.F17 (2026-10-20): owner decision 2026-10-19 (EXIT_READINESS §3 option 1): the CameraZoom part is re-scoped to the increment that introduces discrete zoom stimuli (zoom bindings or shell zoom, e.g. INC-11's `Navigate`); INC-10's part is the fit loop, evidenced by `t1_fit_scale_adversary`.
+- **History:** Created by the split of OB-28. C12.F17 (2026-10-20): owner decision 2026-10-19 (EXIT_READINESS §3 option 1): the CameraZoom part is re-scoped to the increment that introduces discrete zoom stimuli (zoom bindings or shell zoom, e.g. INC-11's `Navigate`); INC-10's part is the fit loop, evidenced by `t1_fit_scale_adversary`. **INC-10 part (the fit loop) met at INC-10's ratification** (owner authorization 2026-10-20; ratified commit `faf6dda`; `t1_fit_scale_adversary`); OB-53 stays OPEN for the CameraZoom, INC-14 and INC-11 parts.
 
 ### OB-54
 - **Status:** OPEN
