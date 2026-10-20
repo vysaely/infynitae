@@ -426,7 +426,8 @@ impl Drop for Session {
                     let _ = child.wait();
                 }
             } else {
-                let _ = crate::ownership::end_session_tree(&mut self.children, CHILD_GRACE);
+                // the same teardown as a normal end (one code path, one seeded control)
+                self.shutdown();
             }
         }
         // the notifications end; the handlers stay and do nothing (signals module doc)
