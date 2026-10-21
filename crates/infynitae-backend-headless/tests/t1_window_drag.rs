@@ -163,3 +163,47 @@ fn a_window_destroyed_mid_drag_orphans_the_drag() {
         assert!(!r.ls.state.core().interaction().active());
     }
 }
+
+/// Super+middle while a Super+left move holds a window (owner request 2026-10-22): the camera
+/// pans, the pointer stays, and the window keeps its grabbed point under the pointer, so it
+/// travels across the Canvas by exactly the camera's motion. Releasing middle ends only the pan:
+/// the window is still held and follows the pointer again; releasing left ends the move.
+#[test]
+fn super_middle_during_a_move_pans_and_carries_the_window() {
+    let mut r = Rig::x8();
+    let w = element(&r);
+    let a0 = r.ls.state.core().stage().anchor(w).unwrap();
+    r.button(BTN_LEFT, true, LOGO);
+    r.button(BTN_MIDDLE, true, LOGO);
+    let c0 = r.camera();
+    r.ls.probe.ptr.clear();
+    r.motion((-300.0, 120.0));
+    r.motion((-50.0, 0.0));
+    let c1 = r.camera();
+    assert_ne!(c1, c0, "the camera panned");
+    let a1 = r.ls.state.core().stage().anchor(w).unwrap();
+    assert_eq!(
+        ((a1.x - a0.x) << 16, (a1.y - a0.y) << 16),
+        (c1.x - c0.x, c1.y - c0.y),
+        "the window moved with the camera: same place on screen"
+    );
+    assert!(
+        !r.ls.probe.ptr.iter().any(|l| l.starts_with("motion")),
+        "nothing reaches a client: {:?}",
+        r.ls.probe.ptr
+    );
+    // middle up: the pan ends, the move goes on
+    r.button(BTN_MIDDLE, false, LOGO);
+    assert!(r.ls.state.core().interaction().active());
+    r.motion((10.0, 5.0));
+    assert_eq!(r.camera(), c1, "no pan after middle is released");
+    let a2 = r.ls.state.core().stage().anchor(w).unwrap();
+    assert_eq!(
+        (a2.x - a1.x, a2.y - a1.y),
+        (10, 5),
+        "the window follows the pointer again"
+    );
+    r.button(BTN_LEFT, false, LOGO);
+    assert!(!r.ls.state.core().interaction().active());
+    assert_eq!(r.ls.state.core().stage().anchor(w), Some(a2));
+}

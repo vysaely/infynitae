@@ -243,20 +243,20 @@ CONTROLS = [
      "        sum.0 += term(delta.0);", "        sum.0 += (term(delta.0) * 65536.0).round_ties_even() / 65536.0;",
      "infynitae-core", ["--lib"], "pan_quantises_the_gesture_sum_once_per_update"),
     ("INC-3 INV-CAMERA-2: camera movement writes Stage anchors", f"{CORE}/entry.rs",
-     "                self.cameras.pan(proof, camera, start, sum);\n",
-     "                self.cameras.pan(proof, camera, start, sum);\n"
-     "                for id in self.stage.z_order().to_vec() {\n"
-     "                    if let Some(a) = self.stage.anchor(id) {\n"
-     "                        let _ = self.stage.place(id, crate::geom::CanvasPoint { x: a.x + 1, y: a.y });\n"
-     "                    }\n                }\n",
+     "        self.cameras.pan(proof, camera, start, sum);\n",
+     "        self.cameras.pan(proof, camera, start, sum);\n"
+     "        for id in self.stage.z_order().to_vec() {\n"
+     "            if let Some(a) = self.stage.anchor(id) {\n"
+     "                let _ = self.stage.place(id, crate::geom::CanvasPoint { x: a.x + 1, y: a.y });\n"
+     "            }\n        }\n",
      "infynitae-backend-headless", ["--test", "t1_adversarial"], "m_pan_never_writes_the_stage"),
     ("INC-3: a pan keeps the stale ProjectionFrame (T0)", f"{CORE}/entry.rs",
-     "                self.update_lattice(output);\n                self.invalidate_frame(output);\n",
-     "                self.update_lattice(output);\n",
+     "        self.update_lattice(output);\n        self.invalidate_frame(output);\n        self.visibility_pass_camera(camera, out);\n        true\n",
+     "        self.update_lattice(output);\n        self.visibility_pass_camera(camera, out);\n        true\n",
      "infynitae-core", ["--lib"], "a_pan_drops_the_output_frame"),
     ("INC-3: pan updates rendering but not hit-testing (release before the next frame)", f"{CORE}/entry.rs",
-     "                self.update_lattice(output);\n                self.invalidate_frame(output);\n",
-     "                self.update_lattice(output);\n",
+     "        self.update_lattice(output);\n        self.invalidate_frame(output);\n        self.visibility_pass_camera(camera, out);\n        true\n",
+     "        self.update_lattice(output);\n        self.visibility_pass_camera(camera, out);\n        true\n",
      "infynitae-backend-headless", ["--test", "t1_input"], "release_before_the_next_frame_uses_the_panned_camera"),
     ("INC-3 C4.6: the removed pan output stays the interaction output (no orphaning)", f"{CORE}/entry.rs",
      "        self.input.interaction.orphan_if_on(output);\n", "        let _ = output;\n",
@@ -486,8 +486,8 @@ CONTROLS = [
      "        r.extent = r.extent.or(tree.as_ref().and_then(|t| r.layout.extent(t)));",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("visibility: camera pan recomputes no membership", f"{CORE}/entry.rs",
-     "                self.visibility_pass_camera(camera, out);",
-     "                let _ = camera;",
+     "        self.visibility_pass_camera(camera, out);\n        true\n",
+     "        let _ = camera;\n        true\n",
      "infynitae-core", ["--lib"], "scoped_visibility_equals_the_full_reference"),
     ("visibility: camera pass keeps the rows of the moved output", f"{CORE}/visibility.rs",
      "        let mut kept = from.rows.iter().filter(|(_, _, o)| *o != output).peekable();",
@@ -1814,6 +1814,16 @@ CONTROLS = [
     ("drag: the xdg_toplevel resizing state is never sent", f"{WAYLAND}/outputs.rs",
      "            set(&mut s.states, xdg_toplevel::State::Resizing, state.resizing);\n", "",
      "infynitae-backend-headless", ["--test", "t1_window_drag"], "super_right_drag_resizes_from_the_nearest_corner"),
+    ("drag: Super+middle during a move does not pan (pressed into the move)", f"{CORE}/entry.rs",
+     "        ) && bindings::is_pan_binding(button, mods)", "        ) && false && bindings::is_pan_binding(button, mods)",
+     "infynitae-backend-headless", ["--test", "t1_window_drag"], "super_middle_during_a_move_pans_and_carries_the_window"),
+    ("drag: the window is left behind while the camera pans under it", f"{CORE}/entry.rs",
+     "                if self.pan_step(proof, p.output, p.camera, delta, out) {\n                    self.window_drag_motion((0.0, 0.0), out);\n                }",
+     "                let _ = self.pan_step(proof, p.output, p.camera, delta, out);",
+     "infynitae-backend-headless", ["--test", "t1_window_drag"], "super_middle_during_a_move_pans_and_carries_the_window"),
+    ("drag: releasing middle does not end the nested pan", f"{CORE}/entry.rs",
+     "                    *pan = None;\n                    out.extend(self.settle_interaction(", "                    out.extend(self.settle_interaction(",
+     "infynitae-backend-headless", ["--test", "t1_window_drag"], "super_middle_during_a_move_pans_and_carries_the_window"),
     # ---- Console backend (owner decisions T1–T9, 2026-10-22): the cursor and the console keys
     ("console: the compositor draws no cursor on the console target (T8)", f"{WAYLAND}/convert.rs",
      "    if state.target.draw_cursor {", "    if false {",

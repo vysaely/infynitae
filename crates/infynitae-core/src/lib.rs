@@ -1231,7 +1231,8 @@ impl Core {
         // such an epoch; a discrete step needs the time of the step and enters through
         // `start_scale_interaction`.
         let continuous_kind = match self.input.interaction {
-            input::interaction::Interaction::CameraPan { .. } => {
+            input::interaction::Interaction::CameraPan { .. }
+            | input::interaction::Interaction::ElementMove { pan: Some(_), .. } => {
                 Some(scale::InteractionKind::CameraPan)
             }
             // a shell stream's steps form one epoch, ended by its explicit end-of-stream

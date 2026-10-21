@@ -87,7 +87,11 @@ impl Core {
                 }
                 self.input.clock.accepted(time_us);
                 // a motion owned by a pan mutates a camera: its proof is minted here, per event
-                let proof = matches!(self.input.interaction, Interaction::CameraPan { .. })
+                let proof = self
+                    .input
+                    .interaction
+                    .panning()
+                    .is_some()
                     .then(authority::Authorized::mint);
                 self.pointer_motion(proof, delta, delta_unaccel, time_us, out);
                 Ok(())
@@ -537,30 +541,24 @@ impl Core {
     ) {
         match self.input.interaction {
             Interaction::CameraPan { output, camera, .. } => {
-                let (Some(scale), Some(zoom)) = (
-                    self.output(output).map(|o| o.scale),
-                    self.cameras.zoom(camera),
-                ) else {
-                    return;
-                };
-                let (Some(proof), Some((camera, start, sum))) =
-                    (proof, self.input.interaction.pan_motion(delta, scale, zoom))
-                else {
-                    return;
-                };
-                self.cameras.pan(proof, camera, start, sum);
-                // F-LATTICE-1: the reference is kept while panning, unless the bound is exceeded
-                self.update_lattice(output);
-                self.invalidate_frame(output);
-                self.visibility_pass_camera(camera, out);
-                #[cfg(feature = "probe_pan_motion_bypass")]
+                let _panned = self.pan_step(proof, output, camera, delta, out);
                 // NEGATIVE CONTROL (INV-INPUT-3 bypass switch, TST-05): pan motion also reaches
                 // the client. The x8 tests must fail under it.
-                self.routed_motion(delta, delta_unaccel, time_us, out);
+                #[cfg(feature = "probe_pan_motion_bypass")]
+                if _panned {
+                    self.routed_motion(delta, delta_unaccel, time_us, out);
+                }
             }
             Interaction::Orphaned { .. } => {}
             // Super+drag on a window: the pointer moves as usual, the window follows it, and
             // nothing reaches a client (KeepFocus, INV-INPUT-3)
+            // Super+middle during a move: the camera pans under the fixed pointer, and the window
+            // keeps its grabbed point under it, so it travels across the Canvas with the view
+            Interaction::ElementMove { pan: Some(p), .. } => {
+                if self.pan_step(proof, p.output, p.camera, delta, out) {
+                    self.window_drag_motion((0.0, 0.0), out);
+                }
+            }
             Interaction::ElementMove { .. } | Interaction::ElementResize { .. } => {
                 self.window_drag_motion(delta, out);
             }
@@ -585,6 +583,35 @@ impl Core {
                 self.routed_motion(delta, delta_unaccel, time_us, out);
             }
         }
+    }
+
+    /// One motion of a pan (F-PAN-1): the camera moves by the accumulated delta; the pointer stays.
+    /// Returns whether the camera was written.
+    fn pan_step(
+        &mut self,
+        proof: Option<authority::Authorized>,
+        output: crate::output::OutputId,
+        camera: usize,
+        delta: (f64, f64),
+        out: &mut Vec<Effect>,
+    ) -> bool {
+        let (Some(scale), Some(zoom)) = (
+            self.output(output).map(|o| o.scale),
+            self.cameras.zoom(camera),
+        ) else {
+            return false;
+        };
+        let (Some(proof), Some((camera, start, sum))) =
+            (proof, self.input.interaction.pan_motion(delta, scale, zoom))
+        else {
+            return false;
+        };
+        self.cameras.pan(proof, camera, start, sum);
+        // F-LATTICE-1: the reference is kept while panning, unless the bound is exceeded
+        self.update_lattice(output);
+        self.invalidate_frame(output);
+        self.visibility_pass_camera(camera, out);
+        true
     }
 
     /// One motion of a WindowMove or WindowResize (INC-14): the pointer moves in the Arrangement
@@ -696,6 +723,25 @@ impl Core {
             self.input.ownership.press(button, Owner::Compositor);
             return;
         };
+        // Super+middle while moving a window: a pan nested in the move (owner request 2026-10-22)
+        if matches!(
+            self.input.interaction,
+            Interaction::ElementMove { pan: None, .. }
+        ) && bindings::is_pan_binding(button, mods)
+            && let Some(camera) = self.cameras.camera_for_output(output)
+            && let Some(start) = self.cameras.center(camera)
+            && let Interaction::ElementMove { pan, .. } = &mut self.input.interaction
+        {
+            *pan = Some(crate::input::interaction::MovePan {
+                output,
+                camera,
+                button,
+                start,
+                sum: (0.0, 0.0),
+            });
+            self.input.ownership.press(button, Owner::Compositor);
+            return;
+        }
         if self.input.interaction.active() {
             self.input.ownership.press(button, Owner::Compositor);
             return;
@@ -736,6 +782,7 @@ impl Core {
                         x: press.x - anchor.x * crate::geom::Q16_ONE,
                         y: press.y - anchor.y * crate::geom::Q16_ONE,
                     },
+                    pan: None,
                 },
                 bindings::WindowDrag::Resize => {
                     // the corner nearest the pointer: its quadrant of the window geometry
@@ -843,6 +890,12 @@ impl Core {
             Some(Owner::Compositor) => {
                 if self.input.interaction.initiator() == Some(button) {
                     out.extend(self.end_interaction());
+                } else if let Interaction::ElementMove { pan, .. } = &mut self.input.interaction
+                    && pan.is_some_and(|p| p.button == button)
+                {
+                    // the nested pan ends; the window stays held; its pan epoch settles
+                    *pan = None;
+                    out.extend(self.settle_interaction(crate::scale::InteractionKind::CameraPan));
                 }
             }
             // In NoOutput the zero-output grab receives it and delivers nothing, keeping

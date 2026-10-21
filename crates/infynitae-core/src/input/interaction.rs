@@ -6,6 +6,19 @@ use crate::geom::CanvasPos;
 use crate::output::OutputId;
 use crate::stage::ElementId;
 
+/// A camera pan nested in a window move: what [`Interaction::CameraPan`] keeps, plus its button.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MovePan {
+    pub output: OutputId,
+    pub camera: usize,
+    /// The pan's own button; its release ends the pan, not the move.
+    pub button: u32,
+    /// `C_start` (F-PAN-1).
+    pub start: CanvasPos,
+    /// Σ dp_phys / (s_O · z_C) in Canvas px.
+    pub sum: (f64, f64),
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Interaction {
     /// No compositor interaction: the pointer is client-routed.
@@ -33,6 +46,9 @@ pub enum Interaction {
         initiator: u32,
         /// `q_press − anchor₀`.
         grab_offset: CanvasPos,
+        /// Super+middle pressed during the move (owner request 2026-10-22): the camera pans under
+        /// the fixed pointer and the window, still `q_now − grab_offset`, travels with it.
+        pan: Option<MovePan>,
     },
     /// Super+right drag: the window is resized from the corner nearest the pointer at the press
     /// (`left`, `top` say which); the opposite corner stays where it was.
@@ -73,16 +89,34 @@ impl Interaction {
         scale: f64,
         zoom: f64,
     ) -> Option<(usize, CanvasPos, (f64, f64))> {
-        let Interaction::CameraPan {
-            camera, start, sum, ..
-        } = self
-        else {
-            return None;
+        let (camera, start, sum) = match self {
+            Interaction::CameraPan {
+                camera, start, sum, ..
+            } => (camera, start, sum),
+            Interaction::ElementMove {
+                pan: Some(MovePan {
+                    camera, start, sum, ..
+                }),
+                ..
+            } => (camera, start, sum),
+            _ => return None,
         };
         let term = |d: f64| (d * scale) / (scale * zoom);
         sum.0 += term(delta.0);
         sum.1 += term(delta.1);
         Some((*camera, *start, *sum))
+    }
+
+    /// The output and camera a pan moves: a plain pan, or one nested in a window move.
+    pub fn panning(&self) -> Option<(OutputId, usize)> {
+        match *self {
+            Interaction::CameraPan { output, camera, .. }
+            | Interaction::ElementMove {
+                pan: Some(MovePan { output, camera, .. }),
+                ..
+            } => Some((output, camera)),
+            _ => None,
+        }
     }
 
     /// The window a move or resize acts on.
@@ -111,6 +145,12 @@ impl Interaction {
             && output == removed
         {
             *self = Interaction::Orphaned { initiator };
+        }
+        // a pan nested in a move ends with its output; the move goes on
+        if let Interaction::ElementMove { pan, .. } = self
+            && pan.is_some_and(|p| p.output == removed)
+        {
+            *pan = None;
         }
     }
 }
