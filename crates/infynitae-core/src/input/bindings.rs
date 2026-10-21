@@ -6,6 +6,28 @@
 
 /// `BTN_MIDDLE` (linux/input-event-codes.h).
 pub const BTN_MIDDLE: u32 = 0x112;
+/// `BTN_LEFT` and `BTN_RIGHT` (linux/input-event-codes.h).
+pub const BTN_LEFT: u32 = 0x110;
+pub const BTN_RIGHT: u32 = 0x111;
+
+/// What a Super+button press over a window starts (owner request 2026-10-22, "like Hyprland"):
+/// exactly Logo held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WindowDrag {
+    Move,
+    Resize,
+}
+
+pub fn window_drag_binding(button: u32, mods: Modifiers) -> Option<WindowDrag> {
+    if !mods.logo || mods.ctrl || mods.alt || mods.shift {
+        return None;
+    }
+    match button {
+        BTN_LEFT => Some(WindowDrag::Move),
+        BTN_RIGHT => Some(WindowDrag::Resize),
+        _ => None,
+    }
+}
 
 /// The modifier snapshot of one physical event.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

@@ -347,6 +347,9 @@ pub struct Core {
     /// changes: until then its geometry is still the fullscreen one, so a new grant saves this
     /// size and not that one. Written by `core::protocol` alone.
     restore_offers: Vec<(stage::ElementId, geom::LocalSize)>,
+    /// The window a Super+right drag resizes, until the client has drawn the last size asked of
+    /// it (`core::protocol` writes it).
+    resize: Option<protocol::ResizeTrack>,
     /// Layer surfaces (L1), in creation order; the store and its only writer is `core::layer`.
     layers: Vec<layer::LayerRecord>,
     next_layer: u64,
@@ -424,6 +427,7 @@ impl Core {
                 fullscreen: Vec::new(),
                 premap_fullscreen: Vec::new(),
                 restore_offers: Vec::new(),
+                resize: None,
                 shell_stream: false,
                 layers: Vec::new(),
                 next_layer: 0,

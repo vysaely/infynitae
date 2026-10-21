@@ -229,6 +229,24 @@ impl ToplevelRequest {
     ];
 }
 
+/// A Super+right drag's window (`Core::resize`): what was asked of the client and what it drew.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct ResizeTrack {
+    pub(crate) element: ElementId,
+    pub(crate) left: bool,
+    pub(crate) top: bool,
+    pub(crate) start_anchor: CanvasPoint,
+    pub(crate) start_size: (i32, i32),
+    /// The size the pointer asks for now.
+    pub(crate) target: (i32, i32),
+    /// The size last sent in a configure.
+    pub(crate) sent: (i32, i32),
+    /// A configure was sent and the client has not committed since.
+    pub(crate) awaiting: bool,
+    /// The drag ended; the track goes with the client's next commit.
+    pub(crate) released: bool,
+}
+
 /// What Core does with a [`ToplevelRequest`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToplevelDecision {
@@ -282,6 +300,8 @@ pub const TOPLEVEL_META_MAX: usize = 4096;
 pub struct ToplevelConfigureState {
     /// The output the element is fullscreen on.
     pub fullscreen: Option<OutputId>,
+    /// A Super+right drag is resizing it (`xdg_toplevel` state `resizing`).
+    pub resizing: bool,
     /// The size asked of the client: the fullscreen output's logical size, or none (0×0: the
     /// client chooses).
     pub size: Option<LocalSize>,
@@ -326,8 +346,12 @@ impl Core {
     /// logical size at zoom 1"). A fractional logical size is rounded down, so the client's
     /// surface is never larger than the output; F-PRESENT-1 centres the remainder.
     pub fn toplevel_configure_state(&self, id: ElementId) -> ToplevelConfigureState {
+        let resizing = self.resize.is_some_and(|r| r.element == id && !r.released);
         let Some(fs) = self.fullscreen_of(id) else {
-            return ToplevelConfigureState::default();
+            return ToplevelConfigureState {
+                resizing,
+                ..ToplevelConfigureState::default()
+            };
         };
         let size = self.outputs.iter().find(|o| o.id == fs.output).map(|o| {
             let (w, h) = o.logical_extent();
@@ -338,6 +362,7 @@ impl Core {
         });
         ToplevelConfigureState {
             fullscreen: Some(fs.output),
+            resizing,
             size,
         }
     }
@@ -658,6 +683,114 @@ impl Core {
         self.membership_pass_element(id, &mut *out);
         out.extend(self.evaluate_scale_policy(false));
         Ok(())
+    }
+
+    /// Super+left drag: the window's anchor follows the pointer, written here, in the Stage's single
+    /// writer (INV-STAGE-1), with the same consequences as a shell `MoveElement` (membership, one
+    /// scale evaluation).
+    pub(crate) fn place_by_user(
+        &mut self,
+        id: ElementId,
+        anchor: CanvasPoint,
+        out: &mut Vec<Effect>,
+    ) -> Result<(), ProtocolError> {
+        self.place_by_shell(id, anchor, out)
+    }
+
+    /// Super+right drag starts on `id`: the size and the anchor at the press are kept, so the
+    /// corner opposite the dragged one stays put whatever size the client draws.
+    pub(crate) fn begin_resize(
+        &mut self,
+        id: ElementId,
+        left: bool,
+        top: bool,
+    ) -> Option<(i32, i32)> {
+        let (anchor, tree) = (self.stage.anchor(id)?, self.stage.tree(id)?);
+        let size = (tree.geometry.size.w, tree.geometry.size.h);
+        self.resize = Some(ResizeTrack {
+            element: id,
+            left,
+            top,
+            start_anchor: anchor,
+            start_size: size,
+            target: size,
+            sent: size,
+            awaiting: false,
+            released: false,
+        });
+        Some(size)
+    }
+
+    /// One motion of the resize: the size the pointer asks for. At most one configure is
+    /// outstanding: a newer size waits for the client's commit of the last one.
+    pub(crate) fn resize_to(&mut self, size: (i32, i32), out: &mut Vec<Effect>) {
+        let Some(r) = self.resize.as_mut() else {
+            return;
+        };
+        r.target = size;
+        if !r.awaiting && r.sent != size {
+            r.sent = size;
+            r.awaiting = true;
+            out.push(Effect::ToplevelConfigureSize {
+                element: r.element,
+                size: LocalSize {
+                    w: size.0,
+                    h: size.1,
+                },
+            });
+        }
+    }
+
+    /// The drag ended: one last configure, without `resizing`, at the last size asked for. The
+    /// track stays until the client has drawn it (the anchor follows that commit).
+    pub(crate) fn end_resize(&mut self, out: &mut Vec<Effect>) {
+        let Some(r) = self.resize.as_mut() else {
+            return;
+        };
+        r.released = true;
+        r.sent = r.target;
+        r.awaiting = true;
+        out.push(Effect::ToplevelConfigureSize {
+            element: r.element,
+            size: LocalSize {
+                w: r.target.0,
+                h: r.target.1,
+            },
+        });
+    }
+
+    /// A commit of the resized window: the anchor moves so that the corner opposite the dragged
+    /// one stays where it was at the press; then the next size waits, if the pointer asked for
+    /// another one meanwhile. Returns the anchor to write.
+    fn resize_committed(
+        &mut self,
+        id: ElementId,
+        size: LocalSize,
+        out: &mut Vec<Effect>,
+    ) -> Option<CanvasPoint> {
+        let r = self.resize.as_mut().filter(|r| r.element == id)?;
+        let anchor = CanvasPoint {
+            x: r.start_anchor.x
+                + if r.left {
+                    i64::from(r.start_size.0 - size.w)
+                } else {
+                    0
+                },
+            y: r.start_anchor.y
+                + if r.top {
+                    i64::from(r.start_size.1 - size.h)
+                } else {
+                    0
+                },
+        };
+        r.awaiting = false;
+        if r.released {
+            self.resize = None;
+        } else if r.target != r.sent {
+            let target = r.target;
+            self.resize_to(target, out);
+        }
+        Some(anchor)
     }
 
     /// A user action on a window brings it to the top of the z-order: a click on it, or Super+Tab
@@ -989,6 +1122,10 @@ impl Core {
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
             }
             (Lifecycle::Mapped, true) => {
+                // a window being resized from its left or top keeps its opposite corner in place
+                if let Some(anchor) = self.resize_committed(id, tree.geometry.size, out) {
+                    self.stage.place(id, anchor).map_err(stale)?;
+                }
                 // An element that left fullscreen without ever having been a window is placed at
                 // its first windowed presentation (P9b): the first commit after it acknowledged a
                 // configure without the fullscreen state, whatever its size. Frames committed
@@ -1120,6 +1257,11 @@ impl Core {
     /// successor focus transition (K7, M11).
     pub fn toplevel_destroyed(&mut self, id: ElementId) -> Vec<Effect> {
         self.scales.remove(id);
+        // a drag on it ends with the release; nothing is sized or moved any more
+        self.input.interaction.orphan_element(id);
+        if self.resize.is_some_and(|r| r.element == id) {
+            self.resize = None;
+        }
         for slot in &mut self.frames {
             slot.frame.entries.retain(|e| e.element != id);
         }
@@ -2272,6 +2414,7 @@ mod tests {
             c.toplevel_configure_state(w1),
             ToplevelConfigureState {
                 fullscreen: Some(a),
+                resizing: false,
                 size: Some(LocalSize { w: 1920, h: 1080 })
             }
         );
@@ -2408,6 +2551,7 @@ mod tests {
             c.toplevel_configure_state(w),
             ToplevelConfigureState {
                 fullscreen: Some(a),
+                resizing: false,
                 size: Some(LocalSize { w: 1920, h: 1080 })
             }
         );

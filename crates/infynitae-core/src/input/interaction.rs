@@ -1,8 +1,10 @@
-//! OBJ-26: the interaction state machine (M22), CameraPan only (M6). Pure state and transitions;
-//! `entry::physical_input` applies the camera changes they decide.
+//! OBJ-26: the interaction state machine (M22): the camera pan (M6), and the user's window move
+//! and resize (Super+left / Super+right drag, owner request 2026-10-22, "like Hyprland"). Pure
+//! state and transitions; `entry::physical_input` applies the changes they decide.
 
 use crate::geom::CanvasPos;
 use crate::output::OutputId;
+use crate::stage::ElementId;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Interaction {
@@ -20,8 +22,30 @@ pub enum Interaction {
         /// Σ dp_phys / (s_O · z_C) in Canvas px, summed in f64 from the gesture origin.
         sum: (f64, f64),
     },
-    /// The pan's output was removed (C4.6): motion is consumed until the initiator is released.
+    /// The pan's output was removed (C4.6), or the moved or resized window was destroyed: motion
+    /// is consumed until the initiator is released.
     Orphaned { initiator: u32 },
+    /// WindowMove (INC-14; Super+left drag, or the client's `xdg_toplevel.move`): F-DRAG-1 as
+    /// decided for OB-34 (owner, 2026-10-22), `anchor = R3(q_now − grab_offset)` — the grabbed
+    /// point stays under the pointer, on whichever output it is.
+    ElementMove {
+        element: ElementId,
+        initiator: u32,
+        /// `q_press − anchor₀`.
+        grab_offset: CanvasPos,
+    },
+    /// Super+right drag: the window is resized from the corner nearest the pointer at the press
+    /// (`left`, `top` say which); the opposite corner stays where it was.
+    ElementResize {
+        element: ElementId,
+        initiator: u32,
+        left: bool,
+        top: bool,
+        /// The window geometry's size at the press.
+        start_size: (i32, i32),
+        /// The pointer's Canvas position at the press.
+        press: CanvasPos,
+    },
 }
 
 impl Interaction {
@@ -33,9 +57,10 @@ impl Interaction {
     pub fn initiator(&self) -> Option<u32> {
         match *self {
             Interaction::Idle => None,
-            Interaction::CameraPan { initiator, .. } | Interaction::Orphaned { initiator } => {
-                Some(initiator)
-            }
+            Interaction::CameraPan { initiator, .. }
+            | Interaction::Orphaned { initiator }
+            | Interaction::ElementMove { initiator, .. }
+            | Interaction::ElementResize { initiator, .. } => Some(initiator),
         }
     }
 
@@ -58,6 +83,24 @@ impl Interaction {
         sum.0 += term(delta.0);
         sum.1 += term(delta.1);
         Some((*camera, *start, *sum))
+    }
+
+    /// The window a move or resize acts on.
+    pub fn element(&self) -> Option<ElementId> {
+        match *self {
+            Interaction::ElementMove { element, .. }
+            | Interaction::ElementResize { element, .. } => Some(element),
+            _ => None,
+        }
+    }
+
+    /// The window being moved or resized was destroyed: the drag is orphaned.
+    pub(crate) fn orphan_element(&mut self, destroyed: ElementId) {
+        if self.element() == Some(destroyed)
+            && let Some(initiator) = self.initiator()
+        {
+            *self = Interaction::Orphaned { initiator };
+        }
     }
 
     /// C4.6: the pan's output was removed.

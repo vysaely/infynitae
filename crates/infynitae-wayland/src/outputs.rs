@@ -226,6 +226,7 @@ impl WaylandState {
                 xdg_toplevel::State::Fullscreen,
                 state.fullscreen.is_some(),
             );
+            set(&mut s.states, xdg_toplevel::State::Resizing, state.resizing);
             s.size = size.map(Into::into);
             s.fullscreen_output = None;
         });

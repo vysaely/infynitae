@@ -1,0 +1,165 @@
+//! Super+left drag moves a window, Super+right drag resizes it from the corner nearest the
+//! pointer (owner request after the first console run, 2026-10-22: "like Hyprland"). Both bring
+//! the window to the front and focus it; no pointer motion reaches a client during the drag.
+
+mod common;
+
+use common::Lockstep;
+use common::input::*;
+use infynitae_core::input::bindings::Modifiers;
+use infynitae_core::stage::ElementId;
+
+const LOGO: Modifiers = Modifiers {
+    logo: true,
+    ctrl: false,
+    alt: false,
+    shift: false,
+};
+
+/// xdg_toplevel state `resizing`.
+const RESIZING: u32 = 3;
+
+fn element(r: &Rig) -> ElementId {
+    *r.ls.state.core().stage().mapped_elements().last().unwrap()
+}
+
+#[test]
+fn super_left_drag_moves_the_window_with_the_pointer() {
+    let mut r = Rig::x8();
+    let w = element(&r);
+    let before = r.ls.state.core().stage().anchor(w).unwrap();
+    r.button(BTN_LEFT, true, LOGO);
+    r.ls.probe.ptr.clear();
+    r.motion((100.0, 50.0));
+    r.motion((20.0, -10.0));
+    assert!(
+        !r.ls.probe.ptr.iter().any(|l| l.starts_with("motion")),
+        "no motion reaches the client during the drag: {:?}",
+        r.ls.probe.ptr
+    );
+    let after = r.ls.state.core().stage().anchor(w).unwrap();
+    assert_eq!((after.x - before.x, after.y - before.y), (120, 40));
+    r.button(BTN_LEFT, false, LOGO);
+    assert!(!r.ls.state.core().interaction().active());
+    assert_eq!(r.ls.state.core().focus().target(), Some(w));
+    // a plain left click is the client's again
+    r.ls.probe.ptr.clear();
+    r.button(BTN_LEFT, true, Modifiers::default());
+    r.button(BTN_LEFT, false, Modifiers::default());
+    assert!(r.ls.probe.ptr.iter().any(|l| l.starts_with("button")));
+    assert_eq!(r.ls.state.core().stage().anchor(w), Some(after));
+}
+
+/// A 400 × 300 window without decorations, centred on the view (960, 540): geometry from
+/// (760, 390). The pointer goes to (860, 460), in its top-left quadrant, so the drag moves the
+/// left and top sides and the bottom-right corner stays. Dragging (−50, −30) asks for 450 × 330;
+/// when the client draws that size the anchor moves by (−50, −30).
+#[test]
+fn super_right_drag_resizes_from_the_nearest_corner() {
+    let mut r = Rig::new(Lockstep::new(Some(a_1080())));
+    let qh = r.ls.qh.clone();
+    let idx = r.ls.probe.toplevel(&qh, "R", (400, 300), 0);
+    r.ls.pump();
+    r.frame();
+    let w = element(&r);
+    let start = r.ls.state.core().stage().anchor(w).unwrap();
+    r.motion((-100.0, -80.0));
+    r.button(BTN_RIGHT, true, LOGO);
+    r.ls.probe.toplevel_configures.clear();
+    r.motion((-50.0, -30.0));
+    let asked =
+        r.ls.probe
+            .toplevel_configures
+            .last()
+            .cloned()
+            .expect("a configure with the new size");
+    assert_eq!(asked.1, (450, 330));
+    assert!(asked.2.contains(&RESIZING), "{:?}", asked.2);
+    // one configure at a time: a further motion before the client drew waits
+    let sent = r.ls.probe.toplevel_configures.len();
+    r.motion((-10.0, 0.0));
+    assert_eq!(
+        r.ls.probe.toplevel_configures.len(),
+        sent,
+        "no configure while one is unanswered"
+    );
+    // the client draws the size it was asked for
+    r.ls.probe.surfaces[idx].size = (450, 330);
+    r.ls.probe.draw(&qh, idx);
+    r.ls.pump();
+    r.frame();
+    let a = r.ls.state.core().stage().anchor(w).unwrap();
+    assert_eq!(
+        (a.x - start.x, a.y - start.y),
+        (-50, -30),
+        "the bottom-right corner stayed"
+    );
+    let next = r.ls.probe.toplevel_configures.last().cloned().unwrap();
+    assert_eq!(
+        next.1,
+        (460, 330),
+        "after the commit, the size asked for meanwhile"
+    );
+    r.button(BTN_RIGHT, false, LOGO);
+    let last = r.ls.probe.toplevel_configures.last().cloned().unwrap();
+    assert_eq!(last.1, (460, 330), "the last size, once more");
+    assert!(
+        !last.2.contains(&RESIZING),
+        "without resizing: {:?}",
+        last.2
+    );
+    assert!(!r.ls.state.core().interaction().active());
+}
+
+/// A drag on the empty Canvas, or with another modifier, is no window drag.
+#[test]
+fn super_drag_needs_a_window_and_exactly_super() {
+    let mut r = Rig::x8();
+    let w = element(&r);
+    let before = r.ls.state.core().stage().anchor(w);
+    // Shift held on the seat (Rig::button holds only Super itself)
+    let key = |r: &mut Rig, k, pressed| {
+        r.t += 1000;
+        infynitae_backend_headless::keyboard_key(&mut r.ls.state, &mut r.ls.input, k, pressed, r.t)
+            .expect("key");
+        r.ls.pump();
+    };
+    key(&mut r, infynitae_core::input::keys::KEY_LEFTSHIFT, true);
+    r.button(BTN_LEFT, true, LOGO);
+    r.motion((100.0, 0.0));
+    r.button(BTN_LEFT, false, LOGO);
+    key(&mut r, infynitae_core::input::keys::KEY_LEFTSHIFT, false);
+    assert_eq!(
+        r.ls.state.core().stage().anchor(w),
+        before,
+        "Super+Shift is not a move"
+    );
+    // off the window: the pointer far to the right
+    r.motion((600.0, 0.0));
+    r.button(BTN_LEFT, true, LOGO);
+    assert!(!r.ls.state.core().interaction().active());
+    r.button(BTN_LEFT, false, LOGO);
+}
+
+/// The window is destroyed mid-drag (move and resize alike): the drag is orphaned, motion is
+/// consumed until the initiator is released, then the pointer is the clients' again.
+#[test]
+fn a_window_destroyed_mid_drag_orphans_the_drag() {
+    for button in [BTN_LEFT, BTN_RIGHT] {
+        let mut r = Rig::x8();
+        r.button(button, true, LOGO);
+        r.motion((30.0, 20.0));
+        assert!(r.ls.state.core().interaction().active());
+        r.ls.probe.destroy_toplevel(0);
+        r.ls.pump();
+        r.frame();
+        assert!(r.ls.state.core().stage().mapped_elements().is_empty());
+        r.motion((40.0, 10.0));
+        assert!(
+            r.ls.state.core().interaction().active(),
+            "orphaned until the release"
+        );
+        r.button(button, false, LOGO);
+        assert!(!r.ls.state.core().interaction().active());
+    }
+}

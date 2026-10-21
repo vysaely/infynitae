@@ -559,6 +559,11 @@ impl Core {
                 self.routed_motion(delta, delta_unaccel, time_us, out);
             }
             Interaction::Orphaned { .. } => {}
+            // Super+drag on a window: the pointer moves as usual, the window follows it, and
+            // nothing reaches a client (KeepFocus, INV-INPUT-3)
+            Interaction::ElementMove { .. } | Interaction::ElementResize { .. } => {
+                self.window_drag_motion(delta, out);
+            }
             Interaction::Idle => {
                 let PointerState::Located { output, p } = self.pointer else {
                     return;
@@ -580,6 +585,70 @@ impl Core {
                 self.routed_motion(delta, delta_unaccel, time_us, out);
             }
         }
+    }
+
+    /// One motion of a WindowMove or WindowResize (INC-14): the pointer moves in the Arrangement
+    /// as usual; then, from its Canvas position `q_now` (R1, through the camera of the output it
+    /// is on), the moved window's anchor is `R3(q_now − grab_offset)` (F-DRAG-1, OB-34 decision:
+    /// the grabbed point stays under the pointer across outputs) and the resized window is asked
+    /// for `start_size ± (q_now − q_press)` (the dragged corner's sides; at least 32 px).
+    fn window_drag_motion(&mut self, delta: (f64, f64), out: &mut Vec<Effect>) {
+        let PointerState::Located { output, p } = self.pointer else {
+            return;
+        };
+        let (output, p) = match pointer::moved(&self.outputs, output, p, delta) {
+            Some(moved) => {
+                self.pointer = moved;
+                match moved {
+                    PointerState::Located { output, p } => (output, p),
+                    PointerState::NoOutput => return,
+                }
+            }
+            None => (output, p),
+        };
+        let Some(view) = self.view(output) else {
+            return;
+        };
+        let q_now = view.unproject(crate::geom::OutputLogicalPoint { x: p.0, y: p.1 });
+        match self.input.interaction {
+            Interaction::ElementMove {
+                element,
+                grab_offset,
+                ..
+            } => {
+                let target = crate::geom::CanvasPos {
+                    x: q_now.x - grab_offset.x,
+                    y: q_now.y - grab_offset.y,
+                };
+                if let Some(anchor) = target.round_to_point()
+                    && self.stage.anchor(element) != Some(anchor)
+                {
+                    let _ = self.place_by_user(element, anchor, out);
+                }
+            }
+            Interaction::ElementResize {
+                left,
+                top,
+                start_size,
+                press,
+                ..
+            } => {
+                let d = |now: i64, then: i64| (now - then) as f64 / crate::geom::Q16_ONE as f64;
+                let grow = |start: i32, d: f64, from_start: bool| {
+                    let d = if from_start { -d } else { d };
+                    (f64::from(start) + d)
+                        .round()
+                        .clamp(32.0, f64::from(i32::MAX)) as i32
+                };
+                let size = (
+                    grow(start_size.0, d(q_now.x, press.x), left),
+                    grow(start_size.1, d(q_now.y, press.y), top),
+                );
+                self.resize_to(size, out);
+            }
+            _ => {}
+        }
+        self.invalidate_frame(output);
     }
 
     /// The client path of one motion event: the true-position motion, the relative motion of the
@@ -636,6 +705,61 @@ impl Core {
         let acquire = bindings::is_pan_binding(button, mods)
             // INV-INPUT-2: never while the client owns a button
             && !self.input.ownership.client_owns_any();
+        // Super+left / Super+right on a window: move or resize it (owner request 2026-10-22, "like
+        // Hyprland"); not on a panel above it, not a fullscreen window, never while the client
+        // owns a button (INV-INPUT-2)
+        if let Some(drag) = bindings::window_drag_binding(button, mods)
+            && !self.input.ownership.client_owns_any()
+            && self.layer_hit(output, p, true).is_none()
+            && let Some(hit) =
+                self.hit_test(output, crate::geom::OutputLogicalPoint { x: p.0, y: p.1 })
+            && self.fullscreen_of(hit.element).is_none()
+            && let (Some(anchor), Some(size)) = (
+                self.stage.anchor(hit.element),
+                self.stage.tree(hit.element).map(|t| t.geometry.size),
+            )
+        {
+            let element = hit.element;
+            self.raise_by_user(element);
+            out.extend(self.focus.set_focus(Some(element)));
+            out.push(Effect::DismissPopupGrab(element));
+            // the pointer's Canvas position (R1): the hit's surface origin plus its local position
+            let press = crate::geom::CanvasPos {
+                x: hit.origin.x * crate::geom::Q16_ONE + hit.local.x,
+                y: hit.origin.y * crate::geom::Q16_ONE + hit.local.y,
+            };
+            self.input.interaction = match drag {
+                bindings::WindowDrag::Move => Interaction::ElementMove {
+                    element,
+                    initiator: button,
+                    grab_offset: crate::geom::CanvasPos {
+                        x: press.x - anchor.x * crate::geom::Q16_ONE,
+                        y: press.y - anchor.y * crate::geom::Q16_ONE,
+                    },
+                },
+                bindings::WindowDrag::Resize => {
+                    // the corner nearest the pointer: its quadrant of the window geometry
+                    let mid = |a: i64, s: i32| {
+                        a * crate::geom::Q16_ONE + i64::from(s) * (crate::geom::Q16_ONE / 2)
+                    };
+                    let left = press.x < mid(anchor.x, size.w);
+                    let top = press.y < mid(anchor.y, size.h);
+                    let start_size = self
+                        .begin_resize(element, left, top)
+                        .unwrap_or((size.w, size.h));
+                    Interaction::ElementResize {
+                        element,
+                        initiator: button,
+                        left,
+                        top,
+                        start_size,
+                        press,
+                    }
+                }
+            };
+            self.input.ownership.press(button, Owner::Compositor);
+            return;
+        }
         if let (true, Some(camera), Some(start)) =
             (acquire, camera, camera.and_then(|c| self.cameras.center(c)))
         {
@@ -696,8 +820,13 @@ impl Core {
     /// reconciliation keeps a lock (M10, C12.F17 Q3: a kept confinement receives it), and the
     /// CameraPan epoch settles (INV-SCALE-3: it ends at interaction termination).
     fn end_interaction(&mut self) -> Vec<Effect> {
+        let resized = matches!(self.input.interaction, Interaction::ElementResize { .. });
         self.input.interaction = Interaction::Idle;
-        let mut fx = self.reconcile_constraints();
+        let mut fx = Vec::new();
+        if resized {
+            self.end_resize(&mut fx);
+        }
+        fx.extend(self.reconcile_constraints());
         if !self.locked() {
             fx.extend(self.true_position());
         }
