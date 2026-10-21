@@ -598,6 +598,15 @@ impl Core {
         live
     }
 
+    /// The mapped elements in creation order (for Super+1..9 slot focus).
+    pub(crate) fn focusable_elements_in_creation_order(&self) -> Vec<stage::ElementId> {
+        let mut live = self.stage.mapped_in_creation_order();
+        if self.presenting() {
+            live.retain(|&e| !self.hidden_by_presentation(e));
+        }
+        live
+    }
+
     /// Whether any output presents an element (a mapped fullscreen element).
     fn presenting(&self) -> bool {
         self.fullscreen()

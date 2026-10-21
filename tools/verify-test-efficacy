@@ -1824,6 +1824,15 @@ CONTROLS = [
     ("drag: releasing middle does not end the nested pan", f"{CORE}/entry.rs",
      "                    *pan = None;\n                    out.extend(self.settle_interaction(", "                    out.extend(self.settle_interaction(",
      "infynitae-backend-headless", ["--test", "t1_window_drag"], "super_middle_during_a_move_pans_and_carries_the_window"),
+    # ---- Window slots (Super+1..9, Option A: focus + raise + recenter camera, owner request 2026-10-22)
+    ("slots: Super+1..9 binding never resolves", f"{CORE}/input/keys.rs",
+     "    if mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {\n        let slot = match key {",
+     "    if false && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {\n        let slot = match key {",
+     "infynitae-backend-headless", ["--test", "t1_window_slots"], "super_1_to_9_focuses_raises_and_recenters"),
+    ("slots: focus_slot focuses without raising", f"{CORE}/entry.rs",
+     "        let raised = self.raise_by_user(element);\n        out.extend(self.focus.set_focus(Some(element)));",
+     "        let raised = false;\n        out.extend(self.focus.set_focus(Some(element)));",
+     "infynitae-backend-headless", ["--test", "t1_window_slots"], "super_1_to_9_focuses_raises_and_recenters"),
     # ---- Console backend (owner decisions T1–T9, 2026-10-22): the cursor and the console keys
     ("console: the compositor draws no cursor on the console target (T8)", f"{WAYLAND}/convert.rs",
      "    if state.target.draw_cursor {", "    if false {",

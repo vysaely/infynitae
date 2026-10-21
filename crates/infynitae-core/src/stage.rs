@@ -199,6 +199,15 @@ impl Stage {
             .collect()
     }
 
+    /// Returns mapped elements in creation order (stable slot ordering for Super+1..9).
+    pub fn mapped_in_creation_order(&self) -> Vec<ElementId> {
+        self.records
+            .iter()
+            .filter(|r| r.state == Lifecycle::Mapped)
+            .map(|r| r.id)
+            .collect()
+    }
+
     /// Finds the mapped element that contains `surface` in its surface tree.
     pub fn element_containing_surface(
         &self,

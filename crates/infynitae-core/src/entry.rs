@@ -146,6 +146,7 @@ impl Core {
                                 | KeyAction::ViewportRestore
                                 | KeyAction::FitToggle
                                 | KeyAction::Recenter
+                                | KeyAction::FocusSlot(_)
                         )
                     )
                     .then(authority::Authorized::mint);
@@ -286,6 +287,10 @@ impl Core {
                 }
                 return;
             }
+            KeyAction::FocusSlot(slot) => {
+                self.focus_slot(slot, proof, out);
+                return;
+            }
             KeyAction::ToggleFullscreen => self.toggle_fullscreen(),
             KeyAction::ForceCloseFocused => self
                 .focus
@@ -401,6 +406,32 @@ impl Core {
         };
         self.cameras.navigate(proof, camera, center);
         self.camera_written(output, camera, out);
+    }
+
+    /// Super+1..9: focus, raise, and recenter camera on mapped window at slot `slot` (0-indexed creation order).
+    fn focus_slot(
+        &mut self,
+        slot: usize,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) {
+        let live = self.focusable_elements_in_creation_order();
+        let Some(&element) = live.get(slot) else {
+            return;
+        };
+        let raised = self.raise_by_user(element);
+        out.extend(self.focus.set_focus(Some(element)));
+        out.extend(self.reconcile_constraints());
+        if raised
+            && matches!(self.pointer, pointer::PointerState::Located { .. })
+            && !self.input.interaction.active()
+            && !self.locked()
+        {
+            self.true_position_into(out);
+        }
+        if let Some(p) = proof {
+            self.recenter(p, out);
+        }
     }
 
     /// Super+Shift+Enter: the focused window's fullscreen toggles on the pointer's output, as if it
