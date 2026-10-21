@@ -968,4 +968,295 @@ mod tests {
         assert!(leave < closed && closed < removed, "{fx:?}");
         assert!(c.layers().is_empty());
     }
+
+    fn margins(mut s: LayerState, m: (i32, i32, i32, i32)) -> LayerState {
+        s.margins = m;
+        s
+    }
+
+    /// Bottom and right anchors with margins: a bottom bar 40 high, 10 above the bottom edge and
+    /// 5 in from each side, reserves 40 + 10; a right dock is laid out in what is left.
+    #[test]
+    fn bottom_and_right_anchors_with_margins() {
+        let Fx { mut c, o, .. } = setup();
+        let bottom = margins(
+            state(Layer::Top, (false, true, true, true), (0, 40), 40),
+            (0, 5, 10, 5),
+        );
+        let (bar, _) = map(&mut c, o, 1, bottom);
+        assert_eq!(c.layer(bar).unwrap().geometry, rect(5, 1030, 1910, 40));
+        assert_eq!(c.usable_area(o), Some((0.0, 0.0, 1920.0, 1030.0)));
+        let (dock, _) = map(
+            &mut c,
+            o,
+            2,
+            state(Layer::Top, (true, true, false, true), (80, 0), 80),
+        );
+        assert_eq!(c.layer(dock).unwrap().geometry, rect(1840, 0, 80, 1030));
+        assert_eq!(c.usable_area(o), Some((0.0, 0.0, 1840.0, 1030.0)));
+    }
+
+    /// A zone is meaningful only on one edge (or an edge and both perpendicular ones): a surface in
+    /// a corner, or anchored to two parallel edges, reserves nothing.
+    #[test]
+    fn corner_and_parallel_anchors_reserve_nothing() {
+        let Fx { mut c, o, .. } = setup();
+        let (corner, _) = map(
+            &mut c,
+            o,
+            1,
+            state(Layer::Top, (true, false, true, false), (100, 100), 50),
+        );
+        assert_eq!(c.layer(corner).unwrap().geometry, rect(0, 0, 100, 100));
+        map(
+            &mut c,
+            o,
+            2,
+            state(Layer::Top, (true, true, false, false), (100, 0), 50),
+        );
+        assert_eq!(c.usable_area(o), Some((0.0, 0.0, 1920.0, 1080.0)));
+    }
+
+    /// Zone 0 keeps a surface out of the strips reserved before it; −1 ignores them.
+    #[test]
+    fn zone_zero_avoids_reserved_strips_and_minus_one_ignores_them() {
+        let Fx { mut c, o, .. } = setup();
+        map(
+            &mut c,
+            o,
+            1,
+            state(Layer::Top, (true, false, true, true), (0, 30), 30),
+        );
+        let (note, _) = map(
+            &mut c,
+            o,
+            2,
+            state(Layer::Overlay, (true, false, false, true), (300, 100), 0),
+        );
+        assert_eq!(c.layer(note).unwrap().geometry, rect(1620, 30, 300, 100));
+        let (osd, _) = map(
+            &mut c,
+            o,
+            3,
+            state(Layer::Overlay, (true, false, false, true), (300, 100), -1),
+        );
+        assert_eq!(c.layer(osd).unwrap().geometry, rect(1620, 0, 300, 100));
+    }
+
+    /// A new size or zone from the client: configured again, the usable area follows.
+    #[test]
+    fn a_new_size_is_configured_and_the_usable_area_follows() {
+        let Fx { mut c, o, .. } = setup();
+        let (bar, _) = map(
+            &mut c,
+            o,
+            1,
+            state(Layer::Top, (true, false, true, true), (0, 30), 30),
+        );
+        let fx = c
+            .layer_committed(
+                bar,
+                state(Layer::Top, (true, false, true, true), (0, 50), 50),
+                tree(1, 1920, 30, true),
+            )
+            .unwrap();
+        assert!(
+            fx.contains(&Effect::LayerConfigure {
+                layer: bar,
+                size: LocalSize { w: 1920, h: 50 }
+            }),
+            "{fx:?}"
+        );
+        assert_eq!(c.usable_area(o), Some((0.0, 50.0, 1920.0, 1030.0)));
+        // the same state again: nothing to configure
+        let fx = c
+            .layer_committed(
+                bar,
+                state(Layer::Top, (true, false, true, true), (0, 50), 50),
+                tree(1, 1920, 50, true),
+            )
+            .unwrap();
+        assert!(
+            !fx.iter()
+                .any(|e| matches!(e, Effect::LayerConfigure { .. })),
+            "{fx:?}"
+        );
+    }
+
+    /// An output reconfigured to 2560 × 1440 at scale 2 (logical 1280 × 720): its bar is arranged
+    /// in the new extent and told the new scale.
+    #[test]
+    fn an_output_reconfiguration_rearranges_and_rescales() {
+        let Fx {
+            mut c, mut t, o, ..
+        } = setup();
+        let (bar, _) = map(
+            &mut c,
+            o,
+            1,
+            state(Layer::Top, (true, false, true, true), (0, 30), 30),
+        );
+        let fx = c
+            .output_reconfigured(
+                &mut t,
+                o,
+                OutputDescriptor {
+                    key: crate::output::tests::key("A"),
+                    mode: (2560, 1440),
+                    transform: Transform::Normal,
+                    scale_120: 240,
+                    refresh_mhz: 60_000,
+                },
+            )
+            .unwrap();
+        assert!(
+            fx.contains(&Effect::LayerConfigure {
+                layer: bar,
+                size: LocalSize { w: 1280, h: 30 }
+            }),
+            "{fx:?}"
+        );
+        assert!(
+            fx.contains(&Effect::LayerPreferredScale {
+                layer: bar,
+                scale_120: 240,
+                integer_scale: 2
+            }),
+            "{fx:?}"
+        );
+        assert_eq!(c.usable_area(o), Some((0.0, 30.0, 1280.0, 690.0)));
+        // until the client answers, its old content is drawn as it is (1920 wide, at scale 2)
+        let e = &c.layer_frame(o).above[0];
+        assert_eq!(
+            (e.rect.x0, e.rect.y0, e.rect.x1, e.rect.y1),
+            (0, 0, 3840, 60)
+        );
+        // its answer at the configured size: its physical rect is its logical rect at scale 2
+        c.layer_committed(
+            bar,
+            state(Layer::Top, (true, false, true, true), (0, 30), 30),
+            tree(1, 1280, 30, true),
+        )
+        .unwrap();
+        let e = &c.layer_frame(o).above[0];
+        assert_eq!(
+            (e.rect.x0, e.rect.y0, e.rect.x1, e.rect.y1),
+            (0, 0, 2560, 60)
+        );
+    }
+
+    /// L1: no camera zoom ever scales a layer surface's events: after a fit (zoom 3.5) the bar
+    /// still gets the pointer's position in its own logical px.
+    #[test]
+    fn a_layer_surfaces_events_ignore_the_camera_zoom() {
+        let Fx {
+            mut c,
+            mut i,
+            o,
+            s: mut port,
+            ..
+        } = setup();
+        map(
+            &mut c,
+            o,
+            1,
+            state(Layer::Top, (true, false, true, true), (0, 30), 30),
+        );
+        let w = map_win(&mut c, 9, 400, 300);
+        c.shell_command(
+            &mut port,
+            crate::ShellCommand::ViewportFit {
+                output: o,
+                element: crate::stage::ElementRef {
+                    instance: c.stage().instance(),
+                    element: w,
+                },
+            },
+        )
+        .unwrap();
+        assert_eq!(c.cameras().zoom(0), Some(3.5));
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::PointerMotion {
+                delta: (0.0, -530.0),
+                delta_unaccel: (0.0, -530.0),
+                time_us: 1,
+            },
+        )
+        .unwrap();
+        let (target, loc) = c.route_pointer().unwrap();
+        assert_eq!(target.map(|t| t.surface), Some(key(1)));
+        assert_eq!(
+            loc,
+            CanvasPos {
+                x: 960 << 16,
+                y: 10 << 16
+            }
+        );
+    }
+
+    /// L7: Logo + middle button on a bar starts a camera pan, as over a window.
+    #[test]
+    fn a_pan_that_starts_on_a_bar_pans() {
+        let Fx {
+            mut c, mut i, o, ..
+        } = setup();
+        map(
+            &mut c,
+            o,
+            1,
+            state(Layer::Top, (true, false, true, true), (0, 30), 30),
+        );
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::PointerMotion {
+                delta: (0.0, -530.0),
+                delta_unaccel: (0.0, -530.0),
+                time_us: 1,
+            },
+        )
+        .unwrap();
+        let logo = crate::input::bindings::Modifiers {
+            logo: true,
+            ..Default::default()
+        };
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::PointerButton {
+                button: crate::input::bindings::BTN_MIDDLE,
+                pressed: true,
+                modifiers: logo,
+                time_us: 2,
+            },
+        )
+        .unwrap();
+        assert!(c.interaction().active(), "the press started a pan");
+        let before = c.cameras().center(0);
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::PointerMotion {
+                delta: (100.0, 0.0),
+                delta_unaccel: (100.0, 0.0),
+                time_us: 3,
+            },
+        )
+        .unwrap();
+        assert_ne!(c.cameras().center(0), before, "the camera moved");
+    }
+
+    /// Destroying the bar gives its strip back.
+    #[test]
+    fn destroying_a_bar_frees_its_strip() {
+        let Fx { mut c, o, .. } = setup();
+        let (bar, _) = map(
+            &mut c,
+            o,
+            1,
+            state(Layer::Top, (true, false, true, true), (0, 30), 30),
+        );
+        assert_eq!(c.usable_area(o), Some((0.0, 30.0, 1920.0, 1050.0)));
+        c.layer_destroyed(bar);
+        assert_eq!(c.usable_area(o), Some((0.0, 0.0, 1920.0, 1080.0)));
+        assert!(c.layer_frame(o).above.is_empty());
+    }
 }
