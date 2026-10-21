@@ -26,6 +26,7 @@ use std::process::Child;
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
+use smithay::reexports::rustix::event::{PollFd, PollFlags, poll};
 use smithay::reexports::rustix::process::{
     Pid, PidfdFlags, Signal, WaitId, WaitIdOptions, getpid, pidfd_open, pidfd_send_signal,
     set_child_subreaper, waitid,
@@ -204,6 +205,13 @@ pub fn end_session_tree(children: &mut Vec<Child>, grace: Duration) -> Teardown 
             .filter(|m| stat_of(m.pid).is_some_and(|(s, _)| s != 'Z'))
             .count()
     };
+    // A process signalled once is followed through its pidfd: it counts as alive until the kernel
+    // reports its exit. A scan of `/proc/*/children` alone can miss a process while the kernel
+    // re-parents it (its parent just exited; the list is not guaranteed complete), and the grace
+    // period then ended early — seen as "5 killed" 1 ms after SIGTERM.
+    let signalled_alive = |signalled: &BTreeMap<i32, OwnedFd>| {
+        signalled.values().filter(|fd| !exited(fd)).count()
+    };
     let roots = |children: &[Child]| children.iter().map(|c| c.id() as i32).collect::<Vec<_>>();
     let start = Instant::now();
     loop {
@@ -216,26 +224,30 @@ pub fn end_session_tree(children: &mut Vec<Child>, grace: Duration) -> Teardown 
                 slot.insert(m.fd);
             }
         }
-        if alive(&self::members(&roots(children))) == 0 || start.elapsed() >= grace {
+        if (alive(&self::members(&roots(children))) == 0 && signalled_alive(&signalled) == 0)
+            || start.elapsed() >= grace
+        {
             break;
         }
         std::thread::sleep(Duration::from_millis(5));
     }
-    let left = members(&roots(children));
-    for m in &left {
-        if stat_of(m.pid).is_some_and(|(s, _)| s != 'Z') {
+    // every live member found now, and every signalled one that has not exited (by its pidfd)
+    for m in members(&roots(children)) {
+        signalled.entry(m.pid).or_insert(m.fd);
+    }
+    for (pid, fd) in &signalled {
+        if !exited(fd) {
             eprintln!(
-                "[infynitae] Session process {} did not exit within the grace period, sending SIGKILL",
-                m.pid
+                "[infynitae] Session process {pid} did not exit within the grace period, sending SIGKILL"
             );
-            let _ = pidfd_send_signal(&m.fd, Signal::KILL);
+            let _ = pidfd_send_signal(fd, Signal::KILL);
             report.killed += 1;
         }
     }
     let end = Instant::now() + grace;
     loop {
         reap(children);
-        let live = alive(&members(&roots(children)));
+        let live = alive(&members(&roots(children))).max(signalled_alive(&signalled));
         if (live == 0 && children.is_empty()) || Instant::now() >= end {
             report.survivors = live;
             break;
@@ -243,6 +255,13 @@ pub fn end_session_tree(children: &mut Vec<Child>, grace: Duration) -> Teardown 
         std::thread::sleep(Duration::from_millis(5));
     }
     report
+}
+
+/// Whether the process behind `fd` has exited (its pidfd is readable once it has; a zombie counts
+/// as exited). Immune to pid reuse.
+fn exited(fd: &OwnedFd) -> bool {
+    let mut fds = [PollFd::new(fd, PollFlags::IN)];
+    matches!(poll(&mut fds, Some(&Default::default())), Ok(n) if n > 0)
 }
 
 /// Super+Shift+Delete (owner, 2026-10-21), first step: pins a client's process by a pidfd, while
