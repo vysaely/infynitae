@@ -16,6 +16,7 @@
 #![deny(unsafe_code)]
 
 pub mod convert;
+pub mod cursor;
 pub mod extension;
 mod frames;
 mod handlers;
@@ -105,6 +106,9 @@ pub struct WaylandState {
     outputs: Vec<outputs::OutputHandle>,
     /// What the backend's framebuffer is (`set_host_window_target`).
     pub(crate) target: convert::RenderTarget,
+    /// The cursor clients asked for, drawn when the target draws one (`cursor`).
+    cursor: smithay::input::pointer::CursorImageStatus,
+    arrow: cursor::Arrow,
     xdg_shell: XdgShellState,
     shm: ShmState,
     popups: PopupManager,
@@ -186,10 +190,26 @@ impl WaylandState {
     /// Canvas is cleared to an opaque colour (a transparent clear lets the host's desktop show
     /// through). The headless backend keeps the default: top-down rows, a transparent clear.
     pub fn set_host_window_target(&mut self) {
-        self.target = convert::RenderTarget {
+        self.set_target(convert::RenderTarget {
             flip_y: true,
             clear: convert::CANVAS_CLEAR,
-        };
+            draw_cursor: false,
+        });
+    }
+
+    /// The backend owns the display (the console backend): nobody else draws the pointer, so the
+    /// compositor does (T8); the Canvas is opaque. The framebuffer's rows run top-down (Smithay's
+    /// DRM compositor renders into its own swapchain the right way up).
+    pub fn set_console_target(&mut self) {
+        self.set_target(convert::RenderTarget {
+            flip_y: false,
+            clear: convert::CANVAS_CLEAR,
+            draw_cursor: true,
+        });
+    }
+
+    fn set_target(&mut self, target: convert::RenderTarget) {
+        self.target = target;
         for h in &mut self.outputs {
             if let (Some(model), Some(view)) = (self.core.output(h.id), self.core.view(h.id)) {
                 h.tracker = convert::damage_tracker(model, &view, self.target);
@@ -218,6 +238,8 @@ impl WaylandState {
             presentation: PresentationState::new::<Self>(display, CLOCK_MONOTONIC),
             outputs: Vec::new(),
             target: convert::RenderTarget::default(),
+            cursor: smithay::input::pointer::CursorImageStatus::default_named(),
+            arrow: cursor::Arrow::default(),
             // only what Core's toplevel-request policy can grant is announced (M2)
             xdg_shell: XdgShellState::new_with_capabilities::<Self>(display, capabilities),
             shm: ShmState::new::<Self>(display, []),
@@ -294,6 +316,16 @@ impl WaylandState {
         self.complete_frames(output, &ticked, now);
         self.ticked = ticked;
         self.complete_layer_frames(output, now);
+        if self.target.draw_cursor
+            && let Some(o) = self.smithay_output(output).cloned()
+        {
+            self.complete_cursor_frames(&o, now);
+        }
+    }
+
+    /// The colour the empty Canvas is cleared to on this backend's target.
+    pub fn clear_color(&self) -> smithay::backend::renderer::Color32F {
+        self.target.clear
     }
 
     pub fn registry(&self) -> &SurfaceRegistry {

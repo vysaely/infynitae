@@ -9,6 +9,7 @@ members = [
     "crates/infynitae-wayland",
     "crates/infynitae-backend-headless",
     "crates/infynitae-backend-winit",
+    "crates/infynitae-backend-drm",
     "crates/infynitae-ipc",
     "crates/infynitae",
     "enforcement/probes",

@@ -5,14 +5,20 @@ use infynitae_core::geom::{
     CanvasPoint, CanvasPos, LocalPoint, LocalRect, LocalSize, Q16_ONE, RenderLocation,
 };
 use infynitae_core::output::{OutputId, OutputModel, Transform};
+use infynitae_core::pointer::PointerState;
 use infynitae_core::projection::View;
 use infynitae_core::render::FrameEntry;
 use smithay::backend::renderer::Color32F;
 use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
-use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
+use smithay::backend::renderer::utils::{
+    CommitCounter, DamageSet, OpaqueRegions, RendererSurfaceStateUserData,
+};
 use smithay::backend::renderer::{ImportAll, Renderer};
+use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData};
+use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size};
 use smithay::wayland::compositor::with_states;
 
@@ -441,6 +447,8 @@ pub const CANVAS_CLEAR: Color32F = Color32F::new(0.11, 0.11, 0.13, 1.0);
 pub struct RenderTarget {
     pub flip_y: bool,
     pub clear: Color32F,
+    /// The compositor draws the pointer (`cursor`): a backend that owns the display.
+    pub draw_cursor: bool,
 }
 
 impl Default for RenderTarget {
@@ -448,6 +456,7 @@ impl Default for RenderTarget {
         RenderTarget {
             flip_y: false,
             clear: Color32F::TRANSPARENT,
+            draw_cursor: false,
         }
     }
 }
@@ -470,9 +479,64 @@ pub fn damage_tracker(
     )
 }
 
-/// One frame of an output through its damage tracker: Core's render list (recorded as the
-/// output's ProjectionFrame) → render elements → `OutputDamageTracker::render_output`. Returns
-/// the damage, or `None` when nothing changed.
+smithay::backend::renderer::element::render_elements! {
+    /// What an output's frame is made of: surfaces at their canonical rects, and the solid rects
+    /// of the built-in arrow (`cursor`).
+    pub OutputElement<R> where R: ImportAll;
+    Surface=SurfaceElement<R>,
+    Solid=SolidColorRenderElement,
+}
+
+/// An output's frame elements and the frame's `k`.
+pub type OutputFrame<R> = (Vec<OutputElement<R>>, f64);
+
+/// One frame's elements for `output`, front to back: the cursor (when the target draws it),
+/// overlay and top layers, the Canvas from Core's render list (recorded as the output's
+/// ProjectionFrame), bottom and background layers (L2); and the frame's `k`.
+pub fn output_elements<R>(
+    state: &mut WaylandState,
+    renderer: &mut R,
+    output: OutputId,
+) -> Result<OutputFrame<R>, RenderOutputError<R::Error>>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    let frame = state
+        .core
+        .render_list(output)
+        .map_err(|_| RenderOutputError::NoFrame)?;
+    let view = frame.view;
+    let entries = frame.entries.clone();
+    let layers = state.core.layer_frame(output);
+    let mut elements = Vec::new();
+    if state.target.draw_cursor {
+        cursor_elements(state, renderer, output, view.k, &mut elements)
+            .map_err(RenderOutputError::Renderer)?;
+    }
+    elements.extend(
+        layer_render_elements(renderer, &state.registry, &layers.above, view.k)
+            .map_err(RenderOutputError::Renderer)?
+            .into_iter()
+            .map(OutputElement::Surface),
+    );
+    elements.extend(
+        render_elements(renderer, &state.registry, &entries, view.k)
+            .map_err(RenderOutputError::Renderer)?
+            .into_iter()
+            .map(|(_, e)| OutputElement::Surface(e)),
+    );
+    elements.extend(
+        layer_render_elements(renderer, &state.registry, &layers.below, view.k)
+            .map_err(RenderOutputError::Renderer)?
+            .into_iter()
+            .map(OutputElement::Surface),
+    );
+    Ok((elements, view.k))
+}
+
+/// One frame of an output through its damage tracker: [`output_elements`] →
+/// `OutputDamageTracker::render_output`. Returns the damage, or `None` when nothing changed.
 pub fn render_output<R>(
     state: &mut WaylandState,
     renderer: &mut R,
@@ -484,26 +548,8 @@ where
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,
 {
-    let frame = state
-        .core
-        .render_list(output)
-        .map_err(|_| RenderOutputError::NoFrame)?;
-    let view = frame.view;
-    let entries = frame.entries.clone();
-    // front to back: overlay and top layers, the Canvas, bottom and background layers (L2)
-    let layers = state.core.layer_frame(output);
-    let mut elements = layer_render_elements(renderer, &state.registry, &layers.above, view.k)
-        .map_err(RenderOutputError::Renderer)?;
-    elements.extend(
-        render_elements(renderer, &state.registry, &entries, view.k)
-            .map_err(RenderOutputError::Renderer)?
-            .into_iter()
-            .map(|(_, e)| e),
-    );
-    elements.extend(
-        layer_render_elements(renderer, &state.registry, &layers.below, view.k)
-            .map_err(RenderOutputError::Renderer)?,
-    );
+    let (elements, k) = output_elements(state, renderer, output)?;
+    let view = state.core.view(output).ok_or(RenderOutputError::NoFrame)?;
     // borrowed, not cloned: the model's key owns strings, and it is read only for a rebuild
     let model = state
         .core
@@ -516,9 +562,9 @@ where
         .ok_or(RenderOutputError::NoFrame)?;
     // C12.F15.4: the tracker computes damage and opaque regions at its Scale(k); a frame at
     // another k (a fit, a restore, a presentation) rebuilds it before rendering
-    if handle.tracker_k != view.k {
+    if handle.tracker_k != k {
         handle.tracker = damage_tracker(model, &view, state.target);
-        handle.tracker_k = view.k;
+        handle.tracker_k = k;
     }
     let result = handle
         .tracker
@@ -532,6 +578,116 @@ where
             }
         })?;
     Ok(result.damage.cloned())
+}
+
+// ------------------------------------------------------------------ cursor (T8, 2026-10-22)
+
+/// The built-in arrow, one row per entry: the outline covers `[0, row + 1)`, the fill
+/// `[1, row)` — a right triangle, its tip the hotspot.
+/// (each row's fill in front of its outline). Pure geometry.
+pub fn arrow_rects(at: (i32, i32), unit: i32) -> Vec<(bool, Rectangle<i32, Physical>)> {
+    let mut out = Vec::with_capacity(2 * crate::cursor::ARROW_ROWS as usize);
+    for row in 0..crate::cursor::ARROW_ROWS {
+        let y = at.1 + row * unit;
+        if row >= 2 {
+            out.push((
+                true,
+                Rectangle::new((at.0 + unit, y).into(), ((row - 1) * unit, unit).into()),
+            ));
+        }
+        out.push((
+            false,
+            Rectangle::new((at.0, y).into(), ((row + 1) * unit, unit).into()),
+        ));
+    }
+    out
+}
+
+/// The cursor's elements on `output` (front-most first), when the pointer is on it.
+pub(crate) fn cursor_elements<R>(
+    state: &WaylandState,
+    renderer: &mut R,
+    output: OutputId,
+    k: f64,
+    out: &mut Vec<OutputElement<R>>,
+) -> Result<(), R::Error>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    let PointerState::Located { output: o, p } = state.core.pointer() else {
+        return Ok(());
+    };
+    if o != output {
+        return Ok(());
+    }
+    let Some(scale) = state.core.output(output).map(|m| m.scale) else {
+        return Ok(());
+    };
+    let px = |v: f64| (v * scale).round() as i32;
+    match &state.cursor {
+        CursorImageStatus::Hidden => {}
+        CursorImageStatus::Surface(surface) if surface.is_alive() => {
+            let (hotspot, size) = with_states(surface, |states| {
+                let hotspot = states
+                    .data_map
+                    .get::<CursorImageSurfaceData>()
+                    .map(|d| d.lock().unwrap_or_else(|e| e.into_inner()).hotspot)
+                    .unwrap_or_default();
+                let size = states
+                    .data_map
+                    .get::<RendererSurfaceStateUserData>()
+                    .and_then(|d| d.lock().unwrap_or_else(|e| e.into_inner()).view())
+                    .map(|v| v.dst)
+                    .unwrap_or_default();
+                (hotspot, size)
+            });
+            let x0 = px(p.0 - f64::from(hotspot.x));
+            let y0 = px(p.1 - f64::from(hotspot.y));
+            let rect = PhysicalRect {
+                x0: i64::from(x0),
+                y0: i64::from(y0),
+                x1: i64::from(x0 + px(f64::from(size.w))),
+                y1: i64::from(y0 + px(f64::from(size.h))),
+            };
+            let el = with_states(surface, |states| {
+                WaylandSurfaceRenderElement::from_surface(
+                    renderer,
+                    surface,
+                    states,
+                    Point::from((f64::from(x0), f64::from(y0))),
+                    1.0,
+                    Kind::Cursor,
+                )
+            })?;
+            if let Some(el) = el {
+                out.push(OutputElement::Surface(CanonicalRect::new(el, rect, k)));
+            }
+        }
+        // a named cursor, or a cursor surface that is gone: the built-in arrow (ordinary
+        // elements: 24 rects cannot share the one hardware cursor plane)
+        _ => {
+            let unit = scale.round().max(1.0) as i32;
+            let (mut fill, mut outline) = (state.arrow.fill.iter(), state.arrow.outline.iter());
+            for (is_fill, rect) in arrow_rects((px(p.0), px(p.1)), unit) {
+                let (id, color) = if is_fill {
+                    (fill.next(), Color32F::new(1.0, 1.0, 1.0, 1.0))
+                } else {
+                    (outline.next(), Color32F::new(0.0, 0.0, 0.0, 1.0))
+                };
+                if let Some(id) = id {
+                    out.push(OutputElement::Solid(SolidColorRenderElement::new(
+                        id.clone(),
+                        rect,
+                        CommitCounter::default(),
+                        color,
+                        Kind::Unspecified,
+                    )));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Damage of one frame, in the output's element (view) space.
@@ -624,4 +780,32 @@ fn send_preferred_scale(
         integer_scale as i32,
         smithay::utils::Transform::Normal,
     );
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::*;
+
+    /// The arrow's tip is the hotspot; its fill never covers the outline's left column or the
+    /// diagonal; 13 outline rows and 11 fill rows; scaled by whole units.
+    #[test]
+    fn the_arrow_has_its_tip_at_the_hotspot() {
+        let r = arrow_rects((100, 50), 1);
+        assert_eq!(r.iter().filter(|(f, _)| !f).count(), 13);
+        assert_eq!(r.iter().filter(|(f, _)| *f).count(), 11);
+        let tip = r.iter().find(|(f, _)| !f).unwrap().1;
+        assert_eq!(tip, Rectangle::new((100, 50).into(), (1, 1).into()));
+        for (fill, rect) in &r {
+            if *fill {
+                assert!(rect.loc.x > 100);
+                let row = rect.loc.y - 50;
+                assert!(rect.loc.x + rect.size.w < 100 + row + 1);
+            }
+        }
+        let big = arrow_rects((0, 0), 2);
+        assert_eq!(
+            big.last().unwrap().1,
+            Rectangle::new((0, 24).into(), (26, 2).into())
+        );
+    }
 }

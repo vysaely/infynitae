@@ -54,10 +54,11 @@ const ALLOCATING_WRAPPERS: [&str; 4] = [
     "frame_tick_vec",
 ];
 /// Product crates outside Core that call Core (the adapter, the backends, the binary).
-const CORE_CALLERS: [&str; 4] = [
+const CORE_CALLERS: [&str; 5] = [
     "infynitae-wayland",
     "infynitae-backend-headless",
     "infynitae-backend-winit",
+    "infynitae-backend-drm",
     "infynitae",
 ];
 /// Identifiers that would give `output_reconfigured` camera authority (E1R, verify.sh step 2h).
@@ -70,7 +71,7 @@ enum UnsafeLevel {
 }
 
 /// Every workspace crate, its root file and its required `unsafe_code` level (C9, INV-ARCH-2).
-const CRATES: [(&str, &str, UnsafeLevel); 8] = [
+const CRATES: [(&str, &str, UnsafeLevel); 9] = [
     (
         "infynitae-core",
         "crates/infynitae-core/src/lib.rs",
@@ -94,6 +95,11 @@ const CRATES: [(&str, &str, UnsafeLevel); 8] = [
     (
         "infynitae-backend-winit",
         "crates/infynitae-backend-winit/src/lib.rs",
+        UnsafeLevel::Deny,
+    ),
+    (
+        "infynitae-backend-drm",
+        "crates/infynitae-backend-drm/src/lib.rs",
         UnsafeLevel::Deny,
     ),
     (
@@ -126,8 +132,8 @@ const REJECTED_SMITHAY: [&str; 5] = [
 /// Smithay geometry types: constructed and named only in the adapter's `convert` module
 /// (INV-COORD-4, C3.6).
 const SMITHAY_GEOMETRY: [&str; 6] = ["Point", "Rectangle", "Size", "Scale", "Logical", "Physical"];
-/// Product crates (the first six of `CRATES`).
-const PRODUCT_CRATES: usize = 6;
+/// Product crates (the first seven of `CRATES`).
+const PRODUCT_CRATES: usize = 7;
 /// Stage writers (INV-STAGE-1): callable only from `core::protocol` (lifecycle and placement policy).
 const STAGE_WRITERS: [&str; 6] = [
     "create",

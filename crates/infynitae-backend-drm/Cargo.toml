@@ -1,0 +1,21 @@
+[package]
+name = "infynitae-backend-drm"
+description = "Console backend (DRM/KMS, GBM/EGL/GLES, libinput, libseat) of Infynitae Native (FOUNDATION_ARCHITECTURE C1.1; owner decisions T1–T9, 2026-10-22). EXPERIMENTAL."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+# C1.2: may depend on core, wayland and Smithay backend features; never on another backend.
+[dependencies]
+infynitae-core = { path = "../infynitae-core" }
+infynitae-wayland = { path = "../infynitae-wayland" }
+smithay = { version = "=0.7.0", default-features = false, features = [
+    "backend_drm",
+    "backend_gbm",
+    "backend_egl",
+    "backend_libinput",
+    "backend_udev",
+    "backend_session_libseat",
+    "renderer_gl",
+] }

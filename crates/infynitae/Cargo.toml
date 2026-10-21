@@ -11,6 +11,7 @@ infynitae-core = { path = "../infynitae-core" }
 infynitae-wayland = { path = "../infynitae-wayland" }
 infynitae-backend-headless = { path = "../infynitae-backend-headless" }
 infynitae-backend-winit = { path = "../infynitae-backend-winit" }
+infynitae-backend-drm = { path = "../infynitae-backend-drm" }
 infynitae-ipc = { path = "../infynitae-ipc" }
 # SO_PEERCRED for the shell socket's admission (C7.1; owner decision 2026-10-20, D1): already in
 # the tree through Smithay, with these features; safe API, no `unsafe` here.

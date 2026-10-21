@@ -401,3 +401,90 @@ fn a_host_window_target_is_drawn_flipped_on_an_opaque_canvas() {
         }
     }
 }
+
+/// One pointer motion of `delta` logical px.
+fn nudge(ls: &mut Lockstep, delta: (f64, f64)) {
+    inject(
+        &mut ls.state,
+        &mut ls.input,
+        PhysicalEvent::PointerMotion {
+            delta,
+            delta_unaccel: delta,
+            time_us: 0,
+        },
+    )
+    .unwrap();
+    ls.pump();
+}
+
+/// The console target (owner decision T8, 2026-10-22): nobody else draws the pointer, so the
+/// compositor draws the built-in arrow at it, its tip the pointer's pixel. The pointer starts at
+/// the view centre (320, 240) and is moved 10 px right, to (330, 240): the outline's row r covers
+/// x ∈ [330, 331 + r), the fill's row r (r ≥ 2) x ∈ [331, 330 + r).
+#[test]
+fn the_console_target_draws_the_arrow_at_the_pointer() {
+    let mut ls = Lockstep::new(Some(output((640, 480), 120)));
+    ls.state.set_console_target();
+    nudge(&mut ls, (10.0, 0.0));
+    let mut screen = Screen::new((640, 480));
+    let (_, pixels) = screen.frame(&mut ls, 0);
+    let at = |x: usize, y: usize| pixels[y * 640 + x];
+    let canvas = at(0, 0);
+    assert_eq!(canvas >> 24, 0xFF, "opaque Canvas");
+    const BLACK: u32 = 0xFF00_0000;
+    assert_eq!(at(330, 240), BLACK, "the tip, on the pointer's pixel");
+    assert_eq!(at(329, 240), canvas, "nothing left of the tip");
+    assert_eq!(at(330, 245), BLACK, "row 5's outline, left column");
+    assert_eq!(at(331, 245), WHITE, "row 5's fill");
+    assert_eq!(at(334, 245), WHITE, "row 5's fill ends at 330 + 5");
+    assert_eq!(at(335, 245), BLACK, "row 5's outline, the diagonal");
+    assert_eq!(at(336, 245), canvas, "nothing right of the diagonal");
+    // the nested and headless targets draw no pointer
+    let mut ls = Lockstep::new(Some(output((640, 480), 120)));
+    nudge(&mut ls, (10.0, 0.0));
+    let (_, pixels) = screen.frame(&mut ls, 0);
+    assert!(
+        pixels.iter().all(|&p| p == CLEAR),
+        "no cursor without the console target"
+    );
+}
+
+/// A client's cursor surface (`wl_pointer.set_cursor` with a hotspot) is drawn with its hotspot
+/// on the pointer; `set_cursor(None)` hides it. W (100 × 80, red) is centred, under the pointer
+/// at (320, 240); the cursor is an 8 × 8 green buffer with hotspot (2, 3), so it covers
+/// [318, 326) × [237, 245).
+#[test]
+fn the_console_target_draws_the_clients_cursor_at_its_hotspot() {
+    let mut r = common::input::Rig::new(Lockstep::new(Some(output((640, 480), 120))));
+    r.ls.state.set_console_target();
+    toplevel(&mut r.ls, "W", (100, 80), RED);
+    r.motion((1.0, 0.0));
+    r.motion((-1.0, 0.0));
+    let ls = &mut r.ls;
+    let serial = ls.probe.last_serial;
+    assert!(
+        ls.probe.ptr.iter().any(|l| l.starts_with("enter W")),
+        "precondition: the pointer entered W: {:?}",
+        ls.probe.ptr
+    );
+    let qh = ls.qh.clone();
+    let cursor = ls.probe.bare_surface(&qh, "cursor", (8, 8));
+    paint(ls, cursor, GREEN);
+    let wl = ls.probe.surfaces[cursor].wl.clone();
+    let pointer = ls.probe.pointer.clone().expect("wl_pointer");
+    pointer.set_cursor(serial, Some(&wl), 2, 3);
+    ls.pump();
+    let mut screen = Screen::new((640, 480));
+    let (_, pixels) = screen.frame(ls, 0);
+    let at = |x: usize, y: usize| pixels[y * 640 + x];
+    for (x, y) in [(318, 237), (325, 244), (320, 240)] {
+        assert_eq!(at(x, y), GREEN, "cursor pixel ({x},{y})");
+    }
+    for (x, y) in [(317, 240), (326, 240), (320, 236), (320, 245)] {
+        assert_eq!(at(x, y), RED, "window pixel ({x},{y}) around the cursor");
+    }
+    pointer.set_cursor(serial, None, 0, 0);
+    ls.pump();
+    let (_, pixels) = screen.frame(ls, 0);
+    assert_eq!(pixels[240 * 640 + 320], RED, "hidden: the window under it");
+}

@@ -631,6 +631,16 @@ impl SeatHandler for WaylandState {
     /// focused client is offered the clipboard and the primary selection, and only it may set
     /// them (Smithay refuses `set_selection` from a client without keyboard focus). No focus, no
     /// offers: an unfocused client never sees the contents.
+    /// A client set the cursor (`wl_pointer.set_cursor`), or Smithay reset it to the default
+    /// when the pointer left its surfaces: kept for a backend that draws it (`cursor`).
+    fn cursor_image(
+        &mut self,
+        _seat: &Seat<Self>,
+        image: smithay::input::pointer::CursorImageStatus,
+    ) {
+        self.set_cursor_status(image);
+    }
+
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         use smithay::reexports::wayland_server::Resource;
         let client = focused.and_then(|surface| surface.client());

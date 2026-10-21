@@ -29,6 +29,12 @@ OPTIONS:
     --height <PIXELS>        Window / output height (default: 800)
     --refresh <MHZ>          Output refresh rate in mHz (default: 60000 = 60 Hz)
     --headless               Run in headless mode with virtual output
+    --tty                    Run on the console: own the screens and input devices of the seat
+                             (EXPERIMENTAL). The default when started with neither WAYLAND_DISPLAY
+                             nor DISPLAY set, i.e. from a text console. Ctrl+Alt+Backspace quits;
+                             Ctrl+Alt+F1..F12 switch VT
+    --nested                 Run as a window of the running desktop even without WAYLAND_DISPLAY
+    --scale <FACTOR>         Console screens' scale (e.g. 1.5; default 1)
     --duration <SECONDS>     Exit after N seconds (useful for tests and automation)
     --max-frames <COUNT>     Exit after N frames (useful for benchmarks and tests)
     --activation-policy <strict|attention-only|permissive>
@@ -54,6 +60,8 @@ fn main() -> ExitCode {
     let mut height = 800u32;
     let mut refresh_mhz = 60_000u32;
     let mut headless = false;
+    let mut tty: Option<bool> = None;
+    let mut scale_120: Option<u32> = None;
     let mut duration: Option<Duration> = None;
     let mut max_frames: Option<u64> = None;
     let mut xwayland_satellite: Option<std::path::PathBuf> = None;
@@ -121,6 +129,19 @@ fn main() -> ExitCode {
             }
             "--headless" => {
                 headless = true;
+            }
+            "--tty" => tty = Some(true),
+            "--nested" => tty = Some(false),
+            "--scale" => {
+                i += 1;
+                let factor: Option<f64> = args.get(i).and_then(|a| a.parse().ok());
+                match factor.filter(|f| (0.25..=8.0).contains(f)) {
+                    Some(f) => scale_120 = Some((f * 120.0).round() as u32),
+                    None => {
+                        eprintln!("Error: --scale needs a factor from 0.25 to 8 (e.g. 1.5)");
+                        return ExitCode::FAILURE;
+                    }
+                }
             }
             "--refresh" => {
                 i += 1;
@@ -237,6 +258,31 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("[infynitae] Headless compositor error: {e}");
+                ExitCode::FAILURE
+            }
+        }
+    } else if tty.unwrap_or_else(|| {
+        std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none()
+    }) {
+        println!("[infynitae] Starting console compositor (DRM backend, EXPERIMENTAL)...");
+        let options = infynitae_backend_drm::ConsoleOptions {
+            socket_name,
+            exec: exec_cmd,
+            duration,
+            max_frames,
+            xwayland_satellite,
+            scale_120,
+        };
+        match infynitae_backend_drm::run_console_with(
+            core,
+            input_port,
+            output_token,
+            options,
+            extension,
+        ) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("[infynitae] Console compositor error: {e}");
                 ExitCode::FAILURE
             }
         }

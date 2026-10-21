@@ -40,11 +40,12 @@ CORE = "infynitae-core"
 WAYLAND = "infynitae-wayland"
 HEADLESS = "infynitae-backend-headless"
 WINIT = "infynitae-backend-winit"
+DRM = "infynitae-backend-drm"  # console backend (owner decisions T1–T9, 2026-10-22)
 IPC = "infynitae-ipc"
 BIN = "infynitae"
 PROBES = "infynitae-architecture-probes"
 RULES = "infynitae-source-rules"
-PRODUCT = [CORE, WAYLAND, HEADLESS, WINIT, IPC, BIN]
+PRODUCT = [CORE, WAYLAND, HEADLESS, WINIT, DRM, IPC, BIN]
 ENFORCEMENT = [PROBES, RULES]
 
 # Workspace edges each product crate may have (normal and build dependencies). C1.2, C1.3, C7.1.
@@ -53,8 +54,9 @@ ALLOWED_INTERNAL = {
     WAYLAND: {CORE},
     HEADLESS: {CORE, WAYLAND},
     WINIT: {CORE, WAYLAND},
+    DRM: {CORE, WAYLAND},
     IPC: {CORE},
-    BIN: {CORE, WAYLAND, HEADLESS, WINIT, IPC},
+    BIN: {CORE, WAYLAND, HEADLESS, WINIT, DRM, IPC},
 }
 # External crates a product crate may name directly. C1.2 (core: std only); C7.1 (ipc: core only,
 # plus a serialization crate once the protocol exists); smithay only in adapter and backends.
@@ -63,6 +65,7 @@ ALLOWED_EXTERNAL = {
     WAYLAND: {"smithay", "libc"},  # libc: the session's signal self-pipe (owner decision 2026-10-19; signal-hook rejected)
     HEADLESS: {"smithay"},
     WINIT: {"smithay"},
+    DRM: {"smithay"},  # T7: drm, gbm, input, libseat, udev arrive through Smithay's features only
     IPC: set(),
     BIN: {"rustix"},  # SO_PEERCRED admission of the shell socket (C7.1; owner decision 2026-10-20, D1)
 }
@@ -75,15 +78,17 @@ ALLOWED_DEV_EXTERNAL = {
     WAYLAND: set(),
     HEADLESS: {"wayland-client", "wayland-protocols", "wayland-protocols-wlr"},
     WINIT: set(),
+    DRM: set(),
     IPC: set(),
     BIN: set(),
 }
 # Crates whose transitive closure must never contain these (C1.2 forbidden deps, C7.4).
 FORBIDDEN_TRANSITIVE = {
-    IPC: {"smithay", WAYLAND, HEADLESS, WINIT, "calloop", "winit", "drm", "input"},
-    WAYLAND: {HEADLESS, WINIT, IPC},
-    HEADLESS: {WINIT, IPC},
-    WINIT: {HEADLESS, IPC},
+    IPC: {"smithay", WAYLAND, HEADLESS, WINIT, DRM, "calloop", "winit", "drm", "input"},
+    WAYLAND: {HEADLESS, WINIT, DRM, IPC},
+    HEADLESS: {WINIT, DRM, IPC},
+    WINIT: {HEADLESS, DRM, IPC},
+    DRM: {HEADLESS, WINIT, IPC},
 }
 
 # (id, family, package, feature, expected) — expected is ("code", code, required substring) or
