@@ -105,6 +105,8 @@ pub enum Effect {
         scale_120: u32,
         integer_scale: u32,
     },
+    /// `xdg_toplevel.close` to an element: the client is asked to close (Super+Delete).
+    CloseRequest(ElementId),
     /// Configure a layer surface with the size its arrangement gives it (L1, L4).
     LayerConfigure {
         layer: crate::layer::LayerId,

@@ -43,6 +43,11 @@ impl WaylandState {
                 Effect::ToplevelConfigureSize { element, size } => {
                     self.configure_toplevel(element, Some((size.w, size.h)));
                 }
+                Effect::CloseRequest(element) => {
+                    if let Some(t) = self.window(element).and_then(|w| w.toplevel()) {
+                        t.send_close();
+                    }
+                }
                 Effect::PreferredScale {
                     element,
                     scale_120,

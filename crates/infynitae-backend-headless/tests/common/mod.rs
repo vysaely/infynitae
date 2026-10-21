@@ -219,6 +219,8 @@ pub struct Probe {
     pub layer_surfaces: Vec<(usize, ZwlrLayerSurfaceV1)>,
     pub layer_configures: Vec<(usize, (u32, u32))>,
     pub layer_closed: Vec<usize>,
+    /// `xdg_toplevel.close` requests received (surface index).
+    pub close_requests: Vec<usize>,
     pub key_events: Vec<(u32, bool)>,
     pub repeat_info: Option<(i32, i32)>,
     pub destroyed_active: Vec<String>,
@@ -1191,6 +1193,10 @@ impl Dispatch<XdgToplevel, usize> for Probe {
                 .map(|c| u32::from_ne_bytes(*c))
                 .collect()
         };
+        if let xdg_toplevel::Event::Close = ev {
+            st.close_requests.push(*idx);
+            return;
+        }
         match ev {
             xdg_toplevel::Event::Configure {
                 width,

@@ -716,9 +716,9 @@ impl Core {
         use protocol::Effect as E;
         let mut recipients = [None, None];
         match *effect {
-            E::ToplevelConfigure(e) | E::ToplevelConfigureSize { element: e, .. } => {
-                recipients[0] = Some(e)
-            }
+            E::ToplevelConfigure(e)
+            | E::ToplevelConfigureSize { element: e, .. }
+            | E::CloseRequest(e) => recipients[0] = Some(e),
             E::DismissPopupGrab(_) => recipients[0] = popup_grab_owner,
             E::KeyboardFocus(new) => {
                 let old = std::mem::replace(&mut self.frame_liveness.keyboard_recipient, new);

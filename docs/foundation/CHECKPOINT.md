@@ -4,6 +4,10 @@ CURRENT_PHASE: **PHASE F — INC-6 RATIFIED AND INTEGRATED INTO LOCAL `main` (`c
 
 Date: 2026-10-21
 
+## PHASE F — SUPER+DELETE CLOSES THE FOCUSED WINDOW (branch `feature/close-binding-2026-10-21`; not pushed)
+- **Authority:** the owner's interaction intent of 2026-10-05, confirmed 2026-10-21 (evidence/phase-f/KEYBINDINGS_INTENT_2026-10-21.md, which also lists the intended bindings and their conflicts with the code: Super+Enter).
+- **Implemented:** `KeyAction::CloseFocused`, `Effect::CloseRequest` → `xdg_toplevel.close`; T0 `logo_delete_closes_with_exact_modifiers`, T1 `t1_close_binding`; 2 seeded controls.
+
 ## PHASE F — LAYER SURFACES IMPLEMENTED ON BRANCH `feature/layer-shell-2026-10-21` (2026-10-21; owner decisions L1–L8; not `main`, not pushed)
 - **Implemented:** `zwlr_layer_shell_v1` — Core's layer surfaces (arrangement, exclusive zones and the usable area for placement and fit, hit order, keyboard interactivity, presentation hiding, output removal), the adapter's handler, drawing above/below the Canvas, frame callbacks.
 - **Evidence:** evidence/phase-f/LAYER/IMPLEMENTATION_RECORD_2026-10-21.md (7 T0, 5 T1 with a real layer-shell client, 9 seeded controls). Prepared, not adopted: C12.F19. Not done: layer popups, constraints on layer surfaces.

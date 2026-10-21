@@ -265,6 +265,13 @@ impl Core {
                 }
                 return;
             }
+            // a request, not a destruction: the client closes (or asks the user first)
+            KeyAction::CloseFocused => self
+                .focus
+                .target()
+                .map(Effect::CloseRequest)
+                .into_iter()
+                .collect(),
             crate::input::keys::KeyAction::Noop => Vec::new(),
         };
         out.extend(fx);

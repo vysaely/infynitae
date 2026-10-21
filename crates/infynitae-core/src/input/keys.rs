@@ -13,6 +13,7 @@ pub const KEY_F: u32 = 33;
 pub const KEY_A: u32 = 30;
 pub const KEY_LEFTSHIFT: u32 = 42;
 pub const KEY_B: u32 = 48;
+pub const KEY_DELETE: u32 = 111;
 pub const KEY_LEFTMETA: u32 = 125;
 
 /// An action triggered by a matched compositor key binding.
@@ -24,6 +25,9 @@ pub enum KeyAction {
     FitViewport,
     /// Restore (M8, OBJ-30) on the pointer's output (INC-10).
     ViewportRestore,
+    /// Asks the focused window to close (`xdg_toplevel.close`); the client decides. The owner's
+    /// binding Super+Delete (interaction intent of 2026-10-05; decision record 2026-10-21).
+    CloseFocused,
     Noop,
 }
 
@@ -63,6 +67,16 @@ pub fn resolve_key_binding(
             None
         };
     }
+    // Logo+Delete closes the focused window; the modifiers match exactly, as for fit
+    if key == KEY_DELETE
+        && mods.logo
+        && !mods.ctrl
+        && !mods.alt
+        && !mods.shift
+        && !interaction_active
+    {
+        return Some(KeyAction::CloseFocused);
+    }
     if key == KEY_F && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(if mods.shift {
             KeyAction::ViewportRestore
@@ -81,6 +95,38 @@ pub fn resolve_key_binding(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The owner's Super+Delete: exactly Logo held, never during an interaction.
+    #[test]
+    fn logo_delete_closes_with_exact_modifiers() {
+        let m = |logo, ctrl, alt, shift| Modifiers {
+            logo,
+            ctrl,
+            alt,
+            shift,
+        };
+        assert_eq!(
+            resolve_key_binding(KEY_DELETE, m(true, false, false, false), false),
+            Some(KeyAction::CloseFocused)
+        );
+        for mods in [
+            m(false, false, false, false),
+            m(true, true, false, false),
+            m(true, false, true, false),
+            m(true, false, false, true),
+        ] {
+            assert_eq!(
+                resolve_key_binding(KEY_DELETE, mods, false),
+                None,
+                "{mods:?}"
+            );
+        }
+        assert_eq!(
+            resolve_key_binding(KEY_DELETE, m(true, false, false, false), true),
+            None,
+            "not while an interaction owns the pointer"
+        );
+    }
 
     #[test]
     fn binding_resolution_honours_logo_modifier() {

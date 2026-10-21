@@ -1718,6 +1718,13 @@ CONTROLS = [
      "                    wanted.set(true);\n",
      "                    let _ = &wanted;\n",
      "infynitae-wayland", ["--lib"], "the_first_x11_connection_starts_the_satellite"),
+    # ---- Super+Delete (owner interaction intent 2026-10-05; decision record 2026-10-21)
+    ("close binding: Super+Delete resolves nothing", f"{CORE}/input/keys.rs",
+     "        return Some(KeyAction::CloseFocused);", "        return None;",
+     "infynitae-backend-headless", ["--test", "t1_close_binding"], "super_delete_asks_the_focused_window_to_close"),
+    ("close binding: the close request is never sent", f"{WAYLAND}/outputs.rs",
+     "                        t.send_close();", "                        let _ = t;",
+     "infynitae-backend-headless", ["--test", "t1_close_binding"], "super_delete_asks_the_focused_window_to_close"),
     # ---- Layer surfaces (owner decisions 2026-10-21 L1–L8; C12.F19 prepared)
     ("L3: overlay and top surfaces are not hit before the Canvas", f"{CORE}/lib.rs",
      "        if let Some(h) = self.layer_hit(output, p, true) {\n            return Some(layer_target(h));",
