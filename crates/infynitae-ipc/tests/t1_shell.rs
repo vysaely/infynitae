@@ -496,3 +496,69 @@ fn a_second_shell_cannot_join_an_open_stream() {
         Some(&Value::Bool(true))
     );
 }
+
+/// Malformed requests are refused with the precise code and change nothing; string ids echo;
+/// titles with any Unicode survive the JSON round trip.
+#[test]
+fn malformed_requests_are_refused_precisely_and_unicode_survives() {
+    let (mut core, mut server, o) = setup();
+    let w = map_win(&mut core, 1, 400, 300);
+    core.toplevel_metadata(w, Some("日本語 \"quoted\" \\ tab\t😀"), Some("app"))
+        .unwrap();
+    let mut shell = connect(&mut server);
+    let i = core.stage().instance().get();
+    let before = core.cameras().center(0);
+    for (line, code) in [
+        (
+            format!(r#"{{"id":"x","cmd":"focus","element":[{i},0]}}"#),
+            "invalid_request",
+        ),
+        (
+            format!(r#"{{"id":"x","cmd":"focus","element":[{i},1.5]}}"#),
+            "invalid_request",
+        ),
+        (
+            format!(r#"{{"id":"x","cmd":"focus","element":[{i},-1]}}"#),
+            "invalid_request",
+        ),
+        (
+            format!(r#"{{"id":"x","cmd":"focus","element":[{i}]}}"#),
+            "invalid_request",
+        ),
+        (
+            format!(r#"{{"id":"x","cmd":"focus","element":"{i}:1"}}"#),
+            "invalid_request",
+        ),
+        (
+            format!(
+                r#"{{"id":"x","cmd":"move_element","element":[{i},{}],"to":[1,2],"stream":"later"}}"#,
+                w.get()
+            ),
+            "invalid_request",
+        ),
+        (
+            format!(
+                r#"{{"id":"x","cmd":"navigate","output":{o},"to":{{"canvas":[1,2],"delta":[1,2]}},"to":{{}}}}"#
+            ),
+            "parse_error",
+        ),
+        (r#"[1,2,3]"#.to_owned(), "parse_error"),
+        (r#"{"id":"x"}"#.to_owned(), "invalid_request"),
+    ] {
+        let r = shell.reply(&mut server, &mut core, &line);
+        assert_eq!(r.get("error").and_then(Value::as_str), Some(code), "{line}");
+        if code != "parse_error" {
+            assert_eq!(r.get("id").and_then(Value::as_str), Some("x"), "{line}");
+        }
+    }
+    assert_eq!(core.cameras().center(0), before);
+    let r = shell.reply(&mut server, &mut core, r#"{"id":"snap","cmd":"snapshot"}"#);
+    let title = r
+        .get("snapshot")
+        .and_then(|s| s.get("elements"))
+        .and_then(Value::as_array)
+        .and_then(|e| e[0].get("title"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    assert_eq!(title.as_deref(), Some("日本語 \"quoted\" \\ tab\t😀"));
+}
