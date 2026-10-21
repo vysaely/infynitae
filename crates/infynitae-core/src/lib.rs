@@ -1824,6 +1824,7 @@ mod tests {
     struct Nav {
         core: Core,
         port: InputPort,
+        shell: ShellPort,
         token: OutputLifecycleToken,
         t: u64,
     }
@@ -1842,10 +1843,12 @@ mod tests {
         /// Output A (1920 × 1080, scale 1), W (200 × 100) mapped and centred and a frame shown, the
         /// pointer at the view centre (startup rule), over W.
         fn new() -> (Nav, output::OutputId, stage::ElementId) {
-            let (core, port, _s, token) = Core::new(crate::navigation::PersistedCameras::default());
+            let (core, port, shell, token) =
+                Core::new(crate::navigation::PersistedCameras::default());
             let mut n = Nav {
                 core,
                 port,
+                shell,
                 token,
                 t: 0,
             };
@@ -1867,15 +1870,16 @@ mod tests {
             self.core.physical_input_vec(&mut self.port, ev).unwrap()
         }
 
-        fn key(&mut self, shift: bool) -> Vec<protocol::Effect> {
+        /// Super+Enter (the fit toggle; Super+F was removed by the owner, 2026-10-21): it fits,
+        /// and restores when the camera holds that fit.
+        fn key(&mut self) -> Vec<protocol::Effect> {
             self.t += 1000;
             let modifiers = input::bindings::Modifiers {
                 logo: true,
-                shift,
                 ..Default::default()
             };
             let mut fx = self.ev(PhysicalEvent::KeyboardKey {
-                key: input::keys::KEY_F,
+                key: input::keys::KEY_ENTER,
                 pressed: true,
                 modifiers,
                 mods_changed: false,
@@ -1883,7 +1887,7 @@ mod tests {
             });
             self.t += 1000;
             fx.extend(self.ev(PhysicalEvent::KeyboardKey {
-                key: input::keys::KEY_F,
+                key: input::keys::KEY_ENTER,
                 pressed: false,
                 modifiers,
                 mods_changed: false,
@@ -1892,12 +1896,38 @@ mod tests {
             fx
         }
 
+        /// M8 `FitViewport(O, W)` for the element under the pointer on the pointer's output, through
+        /// Core's shell entry (the same F-FIT-1 path as the key; the key itself, Super+Enter, is a
+        /// toggle and is tested by `key`). Nothing when no element is under the pointer or Core
+        /// refuses.
         fn fit(&mut self) -> Vec<protocol::Effect> {
-            self.key(false)
+            let pointer::PointerState::Located { output, p } = self.core.pointer() else {
+                return Vec::new();
+            };
+            let pt = geom::OutputLogicalPoint { x: p.0, y: p.1 };
+            let Some(element) = self.core.hit_test(output, pt).map(|h| h.element) else {
+                return Vec::new();
+            };
+            let element = stage::ElementRef {
+                instance: self.core.stage().instance(),
+                element,
+            };
+            self.core
+                .shell_command(
+                    &mut self.shell,
+                    ShellCommand::ViewportFit { output, element },
+                )
+                .unwrap_or_default()
         }
 
+        /// M8 `ViewportRestore(O)` on the pointer's output, through Core's shell entry.
         fn restore(&mut self) -> Vec<protocol::Effect> {
-            self.key(true)
+            let Some(output) = self.core.pointer_output() else {
+                return Vec::new();
+            };
+            self.core
+                .shell_command(&mut self.shell, ShellCommand::ViewportRestore { output })
+                .unwrap_or_default()
         }
 
         fn motion(&mut self, d: (f64, f64)) {
@@ -2065,8 +2095,8 @@ mod tests {
         });
         n.motion((5.0, 0.0));
         let during = n.camera(a);
-        for shift in [false, true] {
-            let fx = n.key(shift);
+        for _ in 0..2 {
+            let fx = n.key();
             assert!(same(n.camera(a), during), "a camera action inside the pan");
             assert_eq!(n.history(a).len(), 1);
             assert_eq!(motions(&fx), 0);

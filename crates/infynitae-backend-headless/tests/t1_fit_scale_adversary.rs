@@ -21,7 +21,7 @@ mod common;
 use common::Lockstep;
 use common::input::*;
 use infynitae_backend_headless::keyboard_key;
-use infynitae_core::input::keys::{KEY_F, KEY_LEFTMETA};
+use infynitae_core::input::keys::{KEY_ENTER, KEY_LEFTMETA};
 use infynitae_core::navigation::CameraValue;
 
 const D_MAX: u32 = 2000;
@@ -29,8 +29,8 @@ const D_MAX: u32 = 2000;
 fn logo_f(r: &mut Rig) {
     for (key, pressed) in [
         (KEY_LEFTMETA, true),
-        (KEY_F, true),
-        (KEY_F, false),
+        (KEY_ENTER, true),
+        (KEY_ENTER, false),
         (KEY_LEFTMETA, false),
     ] {
         r.t += 1000;

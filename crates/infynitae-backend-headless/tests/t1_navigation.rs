@@ -17,7 +17,7 @@ use common::input::*;
 use common::{Lockstep, output};
 use infynitae_backend_headless::keyboard_key;
 use infynitae_core::geom::CanvasPos;
-use infynitae_core::input::keys::{KEY_F, KEY_LEFTMETA, KEY_LEFTSHIFT};
+use infynitae_core::input::keys::{KEY_ENTER, KEY_LEFTMETA};
 use infynitae_core::navigation::CameraValue;
 use infynitae_core::render::FrameEntry;
 use infynitae_wayland::convert;
@@ -30,24 +30,18 @@ use wayland_client::protocol::wl_shm;
 
 /// Logo+F (`shift` false) or Logo+Shift+F on the virtual keyboard: modifiers pressed first, F
 /// pressed and released, modifiers released.
-fn combo(r: &mut Rig, shift: bool) {
-    let mut keys = vec![KEY_LEFTMETA];
-    if shift {
-        keys.push(KEY_LEFTSHIFT);
-    }
+/// Super+Enter. `_restore` names what the press is meant to do: Super+Shift+F is gone (owner
+/// decision 2026-10-21), and at the fit the same Super+Enter restores.
+fn combo(r: &mut Rig, _restore: bool) {
     let mut press = |key, pressed| {
         r.t += 1000;
         keyboard_key(&mut r.ls.state, &mut r.ls.input, key, pressed, r.t).expect("key");
         r.ls.pump();
     };
-    for &k in &keys {
-        press(k, true);
-    }
-    press(KEY_F, true);
-    press(KEY_F, false);
-    for &k in keys.iter().rev() {
-        press(k, false);
-    }
+    press(KEY_LEFTMETA, true);
+    press(KEY_ENTER, true);
+    press(KEY_ENTER, false);
+    press(KEY_LEFTMETA, false);
     r.frame();
 }
 
@@ -107,7 +101,7 @@ fn fit_and_restore_through_the_keyboard_bindings() {
     );
     assert_eq!(r.anchor(), anchor, "INV-CAMERA-2: W moved");
     assert!(
-        !r.ls.probe.key_events.contains(&(KEY_F, true)),
+        !r.ls.probe.key_events.contains(&(KEY_ENTER, true)),
         "the binding's F reached the client"
     );
     let m1 = r.mark();
@@ -120,8 +114,19 @@ fn fit_and_restore_through_the_keyboard_bindings() {
         1,
         "{lines:?}"
     );
+    // with the history empty a restore is refused and delivers nothing (the key is a toggle now —
+    // pressed here it would fit again — so the M8 restore is asked through Core's shell entry)
     let m2 = r.mark();
-    combo(&mut r, true);
+    let o = r.ls.output();
+    assert_eq!(
+        r.ls.state.core_mut().shell_command(
+            &mut r.ls.shell,
+            infynitae_core::ShellCommand::ViewportRestore { output: o }
+        ),
+        Err(infynitae_core::ShellError::Refused)
+    );
+    r.ls.pump();
+    r.frame();
     assert!(same(camera(&r), before));
     assert!(
         r.since(m2).is_empty(),

@@ -447,7 +447,7 @@ fn hot_path_allocations_do_not_grow() {
 
 fn nav_key(pressed: bool, shift: bool) -> PhysicalEvent {
     PhysicalEvent::KeyboardKey {
-        key: 33, // KEY_F: Logo+F fits, Logo+Shift+F restores (INC-10)
+        key: 28, // KEY_ENTER: Super+Enter fits, and restores at the fit (owner decision 2026-10-21)
         pressed,
         modifiers: Modifiers { shift, ..LOGO },
         mods_changed: false,
@@ -533,22 +533,43 @@ fn zoomed_hot_paths_and_fit_restore_allocate_nothing() {
         "the fit was refused"
     );
     core.render_list(o).unwrap();
-    let fits: Vec<u64> = (0..300)
-        .map(|_| {
-            let c = press(&mut core, &mut port, false);
-            core.render_list(o).unwrap();
-            c
-        })
-        .collect();
+    // Super+Enter is a toggle (owner decision 2026-10-21): pressed at the fit it restores. A
+    // one-pixel pan after each fit (not counted) makes the next press a fit again, so 300 fits take
+    // the history to capacity and past it; then, at capacity, each press at the fit restores and
+    // the next one fits again (evicting nothing: the restore made room)
+    // its own buffer (not counted): `press` holds the counted one
+    let mut nudge_fx = infynitae_core::protocol::EffectBuf::new();
+    let mut nudge = |core: &mut Core, port: &mut InputPort| {
+        for ev in [pan_button(true), motion(1.0, 0.0), pan_button(false)] {
+            nudge_fx.clear();
+            core.physical_input(port, ev, &mut nudge_fx).unwrap();
+        }
+        core.render_list(o).unwrap();
+    };
+    let mut fits = Vec::new();
+    for _ in 0..300 {
+        nudge(&mut core, &mut port);
+        fits.push(press(&mut core, &mut port, false));
+        core.render_list(o).unwrap();
+    }
     assert_eq!(core.cameras().history(camera).unwrap().len(), 256);
-    let restores: Vec<u64> = (0..256)
-        .map(|_| {
-            let c = press(&mut core, &mut port, true);
-            core.render_list(o).unwrap();
-            c
-        })
-        .collect();
-    assert!(core.cameras().history(camera).unwrap().is_empty());
+    let mut restores = Vec::new();
+    for _ in 0..256 {
+        restores.push(press(&mut core, &mut port, false));
+        core.render_list(o).unwrap();
+        assert_eq!(
+            core.cameras().history(camera).unwrap().len(),
+            255,
+            "a restore at the fit"
+        );
+        fits.push(press(&mut core, &mut port, false));
+        core.render_list(o).unwrap();
+        assert_eq!(
+            core.cameras().history(camera).unwrap().len(),
+            256,
+            "a fit again"
+        );
+    }
     results.push(("fit", fits));
     results.push(("restore", restores));
     for (name, counts) in &results {

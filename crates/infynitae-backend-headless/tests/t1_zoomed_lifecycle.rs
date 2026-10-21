@@ -14,7 +14,7 @@ use common::input::*;
 use common::{Lockstep, PopupSpec, output};
 use infynitae_backend_headless::{VirtualOutput, keyboard_key, render_frame};
 use infynitae_core::geom::{CanvasPos, OutputLogicalPoint};
-use infynitae_core::input::keys::{KEY_F, KEY_LEFTMETA};
+use infynitae_core::input::keys::{KEY_ENTER, KEY_LEFTMETA};
 use infynitae_core::navigation::{CameraValue, PersistedCameras};
 use infynitae_core::output::OutputId;
 use smithay::backend::renderer::element::Element;
@@ -43,8 +43,8 @@ fn fit_key(r: &mut Rig) {
         r.ls.pump();
     };
     press(KEY_LEFTMETA, true);
-    press(KEY_F, true);
-    press(KEY_F, false);
+    press(KEY_ENTER, true);
+    press(KEY_ENTER, false);
     press(KEY_LEFTMETA, false);
     r.frame();
 }

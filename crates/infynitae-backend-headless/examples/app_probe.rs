@@ -36,7 +36,7 @@ const SIZE: (i32, i32) = (1280, 800);
 const KEY_7: u32 = 8;
 const KEY_MINUS: u32 = 12;
 const KEY_2: u32 = 3;
-const KEY_N: u32 = 49;
+const KEY_ENTER: u32 = 28;
 const KEY_LEFTCTRL: u32 = 29;
 const KEY_Q: u32 = 16;
 const BTN_LEFT: u32 = 0x110;
@@ -122,7 +122,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             script.extend(tap(2200, KEY_MINUS));
             script.extend(tap(2400, KEY_2));
             script.push((3000, Step::Capture("02-typed-7-minus-2".into())));
-            script.extend(tap(3200, KEY_N));
+            script.extend(tap(3200, KEY_ENTER));
             script.push((4000, Step::Capture("03-after-enter".into())));
             script.push((5590, Step::ExpectExit));
             script.push((5600, Step::Key(KEY_LEFTCTRL, true)));

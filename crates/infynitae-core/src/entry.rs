@@ -318,29 +318,25 @@ impl Core {
     /// the previous camera is restored. The decision reads the camera and the fit it would make
     /// now; nothing is remembered between presses.
     fn fit_toggle(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
-        let PointerState::Located { output, p } = self.pointer else {
-            return;
+        // only the choice is made here; every refusal (no output, a presentation, a layer surface
+        // above, no element under the pointer, a degenerate fit, an empty history) is the M8
+        // action's own
+        let at_fit = match self.pointer {
+            PointerState::Located { output, p } => self
+                .hit_test(output, crate::geom::OutputLogicalPoint { x: p.0, y: p.1 })
+                .and_then(|h| self.fit_plan(output, h.element).ok())
+                .is_some_and(|(camera, target)| {
+                    self.cameras.center(camera) == Some(target.center)
+                        && self.cameras.zoom(camera).map(f64::to_bits)
+                            == Some(target.zoom.to_bits())
+                        && self.cameras.history(camera).is_some_and(|h| !h.is_empty())
+                }),
+            PointerState::NoOutput => false,
         };
-        if self.presentation(output).is_some() || self.layer_hit(output, p, true).is_some() {
-            return;
-        }
-        let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
-        let Some(element) = self.hit_test(output, pt).map(|h| h.element) else {
-            return;
-        };
-        let Ok((camera, target)) = self.fit_plan(output, element) else {
-            return;
-        };
-        let at_fit = self.cameras.center(camera) == Some(target.center)
-            && self.cameras.zoom(camera).map(f64::to_bits) == Some(target.zoom.to_bits());
-        let can_restore = self.cameras.history(camera).is_some_and(|h| !h.is_empty());
-        if at_fit && can_restore {
-            if self.cameras.restore(proof, camera) {
-                self.camera_written(output, camera, out);
-            }
-        } else if !at_fit {
-            self.cameras.fit(proof, camera, target);
-            self.camera_written(output, camera, out);
+        if at_fit {
+            self.viewport_restore(proof, out);
+        } else {
+            self.fit_viewport(proof, out);
         }
     }
 

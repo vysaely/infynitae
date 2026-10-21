@@ -27,29 +27,23 @@ mod common;
 
 use common::input::*;
 use infynitae_backend_headless::{keyboard_key, set_focus};
-use infynitae_core::input::keys::{KEY_F, KEY_LEFTMETA, KEY_LEFTSHIFT};
+use infynitae_core::input::keys::{KEY_ENTER, KEY_LEFTMETA, KEY_LEFTSHIFT};
 use infynitae_core::pointer::{ConstraintKind, PointerState};
 use smithay::wayland::pointer_constraints::with_pointer_constraint;
 
 /// Logo+F (`shift` false) or Logo+Shift+F on the virtual keyboard.
-fn combo(r: &mut Rig, shift: bool) {
-    let mut keys = vec![KEY_LEFTMETA];
-    if shift {
-        keys.push(KEY_LEFTSHIFT);
-    }
+/// Super+Enter. `_restore` names what the press is meant to do: Super+Shift+F is gone (owner
+/// decision 2026-10-21), and at the fit the same Super+Enter restores.
+fn combo(r: &mut Rig, _restore: bool) {
     let mut press = |key, pressed| {
         r.t += 1000;
         keyboard_key(&mut r.ls.state, &mut r.ls.input, key, pressed, r.t).expect("key");
         r.ls.pump();
     };
-    for &k in &keys {
-        press(k, true);
-    }
-    press(KEY_F, true);
-    press(KEY_F, false);
-    for &k in keys.iter().rev() {
-        press(k, false);
-    }
+    press(KEY_LEFTMETA, true);
+    press(KEY_ENTER, true);
+    press(KEY_ENTER, false);
+    press(KEY_LEFTMETA, false);
     r.frame();
 }
 
@@ -272,7 +266,7 @@ fn no_fit_reconciliation_while_a_pan_owns_the_pointer() {
     r.button(BTN_MIDDLE, true, logo());
     r.motion((3.0, 2.0));
     let m = r.mark();
-    for keys in [&[KEY_F][..], &[KEY_LEFTSHIFT, KEY_F]] {
+    for keys in [&[KEY_ENTER][..], &[KEY_LEFTSHIFT, KEY_ENTER]] {
         for &(key, pressed) in keys
             .iter()
             .map(|k| (k, true))

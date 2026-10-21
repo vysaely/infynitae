@@ -16,7 +16,7 @@ mod common;
 use common::input::*;
 use common::{Lockstep, output};
 use infynitae_backend_headless::{keyboard_key, set_focus};
-use infynitae_core::input::keys::{KEY_F, KEY_LEFTMETA, KEY_LEFTSHIFT};
+use infynitae_core::input::keys::{KEY_ENTER, KEY_LEFTMETA, KEY_LEFTSHIFT};
 use infynitae_core::navigation::CameraValue;
 
 const KEY_LEFTCTRL: u32 = 29;
@@ -32,8 +32,8 @@ fn chord(r: &mut Rig, mods: &[u32]) {
     for &k in mods {
         press(k, true);
     }
-    press(KEY_F, true);
-    press(KEY_F, false);
+    press(KEY_ENTER, true);
+    press(KEY_ENTER, false);
     for &k in mods.iter().rev() {
         press(k, false);
     }
@@ -60,8 +60,32 @@ fn f_presses(r: &Rig) -> usize {
     r.ls.probe
         .key_events
         .iter()
-        .filter(|e| **e == (KEY_F, true))
+        .filter(|e| **e == (KEY_ENTER, true))
         .count()
+}
+
+/// M8 fit (`true`) of W or restore on the pointer's output, through Core's shell entry.
+fn shell(r: &mut Rig, fit: bool) {
+    use infynitae_core::ShellCommand;
+    let o = r.ls.output();
+    let w = r.ls.state.elements().next().expect("W");
+    let element = infynitae_core::stage::ElementRef {
+        instance: r.ls.state.core().stage().instance(),
+        element: w,
+    };
+    let cmd = if fit {
+        ShellCommand::ViewportFit { output: o, element }
+    } else {
+        ShellCommand::ViewportRestore { output: o }
+    };
+    let fx =
+        r.ls.state
+            .core_mut()
+            .shell_command(&mut r.ls.shell, cmd)
+            .expect("the shell command runs");
+    r.ls.state.apply(&fx);
+    r.ls.pump();
+    r.frame();
 }
 
 fn focus_w(r: &mut Rig) {
@@ -106,8 +130,8 @@ fn extra_ctrl_or_alt_modifiers_trigger_neither_binding() {
         );
     }
     let f = f_presses(&r);
-    chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT]);
-    assert_eq!(history_len(&r), 0, "Logo+Shift+F restores");
+    chord(&mut r, &[KEY_LEFTMETA]);
+    assert_eq!(history_len(&r), 0, "Super+Enter at the fit restores");
     assert_eq!(f_presses(&r), f, "a binding's F reached the client");
 }
 
@@ -119,11 +143,13 @@ fn logo_f_with_no_element_under_the_pointer_is_a_no_op() {
     focus_w(&mut r);
     // fill the history to 0, 1 and 256 entries with fits on W, then move off W
     for fill in [0usize, 1, 256] {
+        // the history is filled through Core's shell entry: the key is a toggle (Super+F, which
+        // fitted again and again, was removed by the owner, 2026-10-21)
         while history_len(&r) < fill {
-            chord(&mut r, &[KEY_LEFTMETA]);
+            shell(&mut r, true);
         }
         while history_len(&r) > fill {
-            chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT]);
+            shell(&mut r, false);
         }
         let back = r.ls.state.core().pointer();
         // off W: x8's pointer is at (1170, 740); W spans at most the view, so the far corner of
@@ -203,7 +229,10 @@ fn fit_and_restore_are_refused_while_the_output_presents() {
     let shown = r.ls.state.core_mut().render_list(o).unwrap().clone();
     let presses = f_presses(&r);
 
-    for mods in [&[KEY_LEFTMETA][..], &[KEY_LEFTMETA, KEY_LEFTSHIFT]] {
+    // Super+Shift+Enter is the fullscreen toggle now (it would end this presentation): only the
+    // fit toggle is the camera action here
+    {
+        let mods = &[KEY_LEFTMETA][..];
         let m = r.mark();
         chord(&mut r, mods);
         assert!(same(camera(&r), fitted), "{mods:?}: camera A changed");
@@ -237,7 +266,7 @@ fn fit_and_restore_are_refused_while_the_output_presents() {
         same(camera(&r), fitted),
         "the camera before the presentation is shown"
     );
-    chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT]);
+    chord(&mut r, &[KEY_LEFTMETA]);
     assert!(
         same(camera(&r), initial),
         "the restore applies after the presentation"

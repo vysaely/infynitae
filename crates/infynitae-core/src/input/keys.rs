@@ -13,7 +13,7 @@ pub const KEY_F: u32 = 33;
 pub const KEY_A: u32 = 30;
 pub const KEY_LEFTSHIFT: u32 = 42;
 pub const KEY_B: u32 = 48;
-pub const KEY_N: u32 = 49;
+pub const KEY_TAB: u32 = 15;
 pub const KEY_DELETE: u32 = 111;
 pub const KEY_LEFTMETA: u32 = 125;
 
@@ -47,14 +47,11 @@ pub struct KeyBinding {
     pub action: KeyAction,
 }
 
-/// Canonical key bindings for Foundation 01. FocusNext moved from Logo+Enter (an x10 harness
-/// fixture, INC4-F04) to Logo+N when the owner gave Super+Enter to fit (decision 2026-10-21); Logo+N
-/// is not in the owner's list and is open to the owner's choice.
-pub const CANONICAL_BINDINGS: [KeyBinding; 1] = [KeyBinding {
-    evdev: KEY_N,
-    needs_logo: true,
-    action: KeyAction::FocusNext,
-}];
+/// Canonical key bindings for Foundation 01: none beyond the exact-modifier bindings resolved in
+/// [`resolve_key_binding`]. FocusNext (an x10 harness fixture on Logo+Enter, INC4-F04) moved to
+/// Super+Tab when the owner gave Super+Enter to fit; Super+Shift+Tab is reserved for the overview
+/// (owner decisions 2026-10-21).
+pub const CANONICAL_BINDINGS: [KeyBinding; 0] = [];
 
 /// Pure binding filter: resolves an evdev keycode and modifier snapshot against bindings.
 /// Plain Escape only cancels when an interaction is actively in progress (F04, K6).
@@ -85,6 +82,10 @@ pub fn resolve_key_binding(
             false => KeyAction::FitToggle,
         });
     }
+    // Super+Tab cycles the focus (Super+Shift+Tab is reserved for the owner's overview)
+    if key == KEY_TAB && mods.logo && !mods.shift && !mods.ctrl && !mods.alt {
+        return Some(KeyAction::FocusNext);
+    }
     // Logo+Delete closes the focused window; the modifiers match exactly, as for fit
     if key == KEY_DELETE
         && mods.logo
@@ -94,13 +95,6 @@ pub fn resolve_key_binding(
         && !interaction_active
     {
         return Some(KeyAction::CloseFocused);
-    }
-    if key == KEY_F && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
-        return Some(if mods.shift {
-            KeyAction::ViewportRestore
-        } else {
-            KeyAction::FitViewport
-        });
     }
     for b in &CANONICAL_BINDINGS {
         if b.evdev == key && (!b.needs_logo || mods.logo) {
@@ -154,11 +148,20 @@ mod tests {
         };
         let none = Modifiers::default();
 
+        let logo_shift = Modifiers {
+            shift: true,
+            ..logo
+        };
         assert_eq!(
-            resolve_key_binding(KEY_N, logo, false),
+            resolve_key_binding(KEY_TAB, logo, false),
             Some(KeyAction::FocusNext)
         );
-        assert_eq!(resolve_key_binding(KEY_N, none, false), None);
+        assert_eq!(
+            resolve_key_binding(KEY_TAB, logo_shift, false),
+            None,
+            "Super+Shift+Tab: the overview"
+        );
+        assert_eq!(resolve_key_binding(KEY_TAB, none, false), None);
         assert_eq!(resolve_key_binding(KEY_B, logo, false), None);
         assert_eq!(resolve_key_binding(KEY_B, none, false), None);
         assert_eq!(resolve_key_binding(KEY_ESC, none, false), None);
@@ -178,7 +181,7 @@ mod tests {
     /// INC-10: Logo+F fits, Logo+Shift+F restores (fit requires Shift absent); plain F and any F
     /// during an interaction are not compositor bindings.
     #[test]
-    fn navigation_bindings_resolve_fit_and_restore() {
+    fn enter_bindings_resolve_the_fit_toggle_and_fullscreen() {
         let logo = Modifiers {
             logo: true,
             ..Modifiers::default()
@@ -192,26 +195,27 @@ mod tests {
             ..Modifiers::default()
         };
         assert_eq!(
-            resolve_key_binding(KEY_F, logo, false),
-            Some(KeyAction::FitViewport)
+            resolve_key_binding(KEY_ENTER, logo, false),
+            Some(KeyAction::FitToggle)
         );
         assert_eq!(
-            resolve_key_binding(KEY_F, logo_shift, false),
-            Some(KeyAction::ViewportRestore)
+            resolve_key_binding(KEY_ENTER, logo_shift, false),
+            Some(KeyAction::ToggleFullscreen)
         );
         assert_eq!(
-            resolve_key_binding(KEY_F, Modifiers::default(), false),
+            resolve_key_binding(KEY_ENTER, Modifiers::default(), false),
             None
         );
-        assert_eq!(resolve_key_binding(KEY_F, shift, false), None);
-        assert_eq!(resolve_key_binding(KEY_F, logo, true), None);
-        assert_eq!(resolve_key_binding(KEY_F, logo_shift, true), None);
+        assert_eq!(resolve_key_binding(KEY_ENTER, shift, false), None);
+        assert_eq!(resolve_key_binding(KEY_ENTER, logo, true), None);
+        assert_eq!(resolve_key_binding(KEY_ENTER, logo_shift, true), None);
+        // Super+F was removed by the owner (2026-10-21): no duplicate of Super+Enter
+        assert_eq!(resolve_key_binding(KEY_F, logo, false), None);
+        assert_eq!(resolve_key_binding(KEY_F, logo_shift, false), None);
     }
 
-    /// INC-10 review L5: the navigation bindings match their modifiers exactly — Logo+Ctrl+F, Logo+Alt+F and
-    /// their Shift forms resolve to nothing (the key is then the client's, M12).
     #[test]
-    fn navigation_bindings_reject_extra_modifiers() {
+    fn enter_bindings_reject_extra_modifiers() {
         for ctrl in [false, true] {
             for alt in [false, true] {
                 for shift in [false, true] {
@@ -223,10 +227,14 @@ mod tests {
                     };
                     let want = match (ctrl || alt, shift) {
                         (true, _) => None,
-                        (false, false) => Some(KeyAction::FitViewport),
-                        (false, true) => Some(KeyAction::ViewportRestore),
+                        (false, false) => Some(KeyAction::FitToggle),
+                        (false, true) => Some(KeyAction::ToggleFullscreen),
                     };
-                    assert_eq!(resolve_key_binding(KEY_F, mods, false), want, "{mods:?}");
+                    assert_eq!(
+                        resolve_key_binding(KEY_ENTER, mods, false),
+                        want,
+                        "{mods:?}"
+                    );
                 }
             }
         }

@@ -4,6 +4,10 @@ CURRENT_PHASE: **PHASE F — INC-6 RATIFIED AND INTEGRATED INTO LOCAL `main` (`c
 
 Date: 2026-10-21
 
+## PHASE F — SUPER+F REMOVED; FOCUS CYCLING ON SUPER+TAB (branch `feature/enter-bindings-2026-10-21`; owner decisions 2026-10-21; not pushed)
+- **Owner decisions:** no duplicate of Super+Enter, so Super+F / Super+Shift+F are removed; focus cycling on Super+Tab, Super+Shift+Tab reserved for the overview. Supersedes "Logo+N" in the section below.
+- **Evidence:** the INC-10 binding tests now drive Super+Enter; the history tests (C12.F16.6) drive Core's M8 fit and restore through the shell entry (the key is a toggle); `t0_hot_path_allocations` measures zero allocation for fits and restores at capacity through the key; seeded controls re-anchored to the Enter branch with the same defects, plus one for focus cycling, each DETECTED.
+
 ## PHASE F — SUPER+ENTER FIT TOGGLE, SUPER+SHIFT+ENTER FULLSCREEN (branch `feature/enter-bindings-2026-10-21`; owner decision 2026-10-21; not pushed)
 - **Implemented:** `KeyAction::FitToggle` (fit, or restore when the camera holds exactly that fit; no fit mode) and `KeyAction::ToggleFullscreen` (the client-request path); FocusNext moved from Logo+Enter to Logo+N (open to the owner's choice). Evidence: T1 `t1_enter_bindings` (4), 3 seeded controls; the focus tests moved to Logo+N.
 

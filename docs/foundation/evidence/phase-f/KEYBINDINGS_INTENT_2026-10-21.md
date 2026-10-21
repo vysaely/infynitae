@@ -10,10 +10,11 @@ key bindings"). Not normative; each binding is implemented by the change that na
 |---|---|---|
 | Super + Middle Mouse | pan the canvas/camera | implemented (INC-3) |
 | Super + 1..9 | spatial/window slots | not implemented |
-| Super + Enter | viewport fit toggle | **implemented 2026-10-21** (owner decision 2026-10-21: "super enter fit"): fits the window under the pointer; pressed on exactly that fit, restores. Stateless (the camera is compared with the fit it would make). Logo+F / Logo+Shift+F (C12.F17) stay. FocusNext, which held Logo+Enter as a harness fixture, moved to **Logo+N** (not in the owner's list; open to the owner's choice) |
+| Super + Enter | viewport fit toggle | **implemented 2026-10-21** (owner decision 2026-10-21: "super enter fit"): fits the window under the pointer; pressed on exactly that fit, restores. Stateless (the camera is compared with the fit it would make; every refusal is the M8 action's own). **Super+F and Super+Shift+F removed** (owner, 2026-10-21: "i dont like duplicates so just remove the f"); deeper restores (several steps back through the 256-entry history) remain reachable through the shell's `viewport_restore` |
 | Super + Shift + Enter | native fullscreen | **implemented 2026-10-21** (owner decision 2026-10-21): the focused window's fullscreen toggles on the pointer's output, through the client-request path (M9) |
 | **Super + Delete** | **close** | **implemented 2026-10-21** (`xdg_toplevel.close` to the focused window; exact modifiers; not during an interaction) |
-| Super + Tab | overview | not implemented (shell) |
+| Super + Tab | focus the next window (cycle) | **implemented 2026-10-21** (owner, 2026-10-21: "lets try super tab for cycle and overiew super shift tab"): FocusNext, an x10 harness fixture formerly on Logo+Enter (INC4-F04) |
+| Super + Shift + Tab | overview | reserved (owner, 2026-10-21); not implemented (shell); not bound in Core |
 | Super + Space | recenter camera on the focused element | not implemented (`Navigate` to the element exists in INC-11) |
 | Super + Q | terminal | not implemented |
 | Super + W | launcher/panel | not implemented (shell) |
