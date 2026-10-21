@@ -13,6 +13,7 @@ pub const KEY_F: u32 = 33;
 pub const KEY_A: u32 = 30;
 pub const KEY_LEFTSHIFT: u32 = 42;
 pub const KEY_B: u32 = 48;
+pub const KEY_N: u32 = 49;
 pub const KEY_DELETE: u32 = 111;
 pub const KEY_LEFTMETA: u32 = 125;
 
@@ -25,6 +26,13 @@ pub enum KeyAction {
     FitViewport,
     /// Restore (M8, OBJ-30) on the pointer's output (INC-10).
     ViewportRestore,
+    /// Super+Enter (owner decision 2026-10-21): fit the element under the pointer, or, when the
+    /// camera already shows exactly that fit, restore the previous camera. Stateless: decided by
+    /// comparing the camera with the fit it would make now (no fit mode, INV-CAMERA-5).
+    FitToggle,
+    /// Super+Shift+Enter (owner decision 2026-10-21): the focused window enters or leaves native
+    /// fullscreen on the pointer's output, through the same path as its own request.
+    ToggleFullscreen,
     /// Asks the focused window to close (`xdg_toplevel.close`); the client decides. The owner's
     /// binding Super+Delete (interaction intent of 2026-10-05; decision record 2026-10-21).
     CloseFocused,
@@ -39,9 +47,11 @@ pub struct KeyBinding {
     pub action: KeyAction,
 }
 
-/// Canonical key bindings for Foundation 01.
+/// Canonical key bindings for Foundation 01. FocusNext moved from Logo+Enter (an x10 harness
+/// fixture, INC4-F04) to Logo+N when the owner gave Super+Enter to fit (decision 2026-10-21); Logo+N
+/// is not in the owner's list and is open to the owner's choice.
 pub const CANONICAL_BINDINGS: [KeyBinding; 1] = [KeyBinding {
-    evdev: KEY_ENTER,
+    evdev: KEY_N,
     needs_logo: true,
     action: KeyAction::FocusNext,
 }];
@@ -66,6 +76,14 @@ pub fn resolve_key_binding(
         } else {
             None
         };
+    }
+    // Logo+Enter fits or restores (a toggle), Logo+Shift+Enter toggles fullscreen; Ctrl or Alt held
+    // as well resolves neither; not during an interaction (the owner's bindings of 2026-10-21)
+    if key == KEY_ENTER && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(match mods.shift {
+            true => KeyAction::ToggleFullscreen,
+            false => KeyAction::FitToggle,
+        });
     }
     // Logo+Delete closes the focused window; the modifiers match exactly, as for fit
     if key == KEY_DELETE
@@ -137,10 +155,10 @@ mod tests {
         let none = Modifiers::default();
 
         assert_eq!(
-            resolve_key_binding(KEY_ENTER, logo, false),
+            resolve_key_binding(KEY_N, logo, false),
             Some(KeyAction::FocusNext)
         );
-        assert_eq!(resolve_key_binding(KEY_ENTER, none, false), None);
+        assert_eq!(resolve_key_binding(KEY_N, none, false), None);
         assert_eq!(resolve_key_binding(KEY_B, logo, false), None);
         assert_eq!(resolve_key_binding(KEY_B, none, false), None);
         assert_eq!(resolve_key_binding(KEY_ESC, none, false), None);

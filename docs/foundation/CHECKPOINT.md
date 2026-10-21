@@ -4,6 +4,9 @@ CURRENT_PHASE: **PHASE F — INC-6 RATIFIED AND INTEGRATED INTO LOCAL `main` (`c
 
 Date: 2026-10-21
 
+## PHASE F — SUPER+ENTER FIT TOGGLE, SUPER+SHIFT+ENTER FULLSCREEN (branch `feature/enter-bindings-2026-10-21`; owner decision 2026-10-21; not pushed)
+- **Implemented:** `KeyAction::FitToggle` (fit, or restore when the camera holds exactly that fit; no fit mode) and `KeyAction::ToggleFullscreen` (the client-request path); FocusNext moved from Logo+Enter to Logo+N (open to the owner's choice). Evidence: T1 `t1_enter_bindings` (4), 3 seeded controls; the focus tests moved to Logo+N.
+
 ## PHASE F — SUPER+DELETE CLOSES THE FOCUSED WINDOW (branch `feature/close-binding-2026-10-21`; not pushed)
 - **Authority:** the owner's interaction intent of 2026-10-05, confirmed 2026-10-21 (evidence/phase-f/KEYBINDINGS_INTENT_2026-10-21.md, which also lists the intended bindings and their conflicts with the code: Super+Enter).
 - **Implemented:** `KeyAction::CloseFocused`, `Effect::CloseRequest` → `xdg_toplevel.close`; T0 `logo_delete_closes_with_exact_modifiers`, T1 `t1_close_binding`; 2 seeded controls.

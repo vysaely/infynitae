@@ -20,7 +20,7 @@ use std::time::Duration;
 use common::input::{BTN_MIDDLE, logo, none};
 use common::{Lockstep, output};
 use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
-use infynitae_core::input::keys::{KEY_A, KEY_B, KEY_ENTER, KEY_ESC, KEY_LEFTMETA, KEY_LEFTSHIFT};
+use infynitae_core::input::keys::{KEY_A, KEY_B, KEY_ESC, KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_N};
 use infynitae_core::stage::ElementId;
 
 struct S {
@@ -77,7 +77,7 @@ impl S {
             self.held.insert(k);
             let super_down = self.held.contains(&KEY_LEFTMETA);
             let is_compositor =
-                already_compositor || (k == KEY_ESC && self.pan) || (super_down && k == KEY_ENTER);
+                already_compositor || (k == KEY_ESC && self.pan) || (super_down && k == KEY_N);
             if !is_compositor {
                 self.client_held.insert(k);
             }
@@ -202,31 +202,31 @@ fn k2_modifier_held_while_another_client_key_pressed() {
     s.assert_end();
 }
 
-/// K-3: Compositor binding (Super+Enter) while modifier held: consumed at press, release consumed.
+/// K-3: Compositor binding (Super+N) while modifier held: consumed at press, release consumed.
 #[test]
 fn k3_compositor_binding_super_enter_consumed() {
     let mut s = S::new(true);
     s.key(KEY_LEFTMETA, true);
     let events_before = s.ls.probe.key_events.len();
-    s.key(KEY_ENTER, true);
-    s.key(KEY_ENTER, false);
+    s.key(KEY_N, true);
+    s.key(KEY_N, false);
     // Client never received Enter press or release
     assert_eq!(s.ls.probe.key_events.len(), events_before);
     s.key(KEY_LEFTMETA, false);
     s.assert_end();
 }
 
-/// K-4: Focus transition (binding Super+Enter = FocusNext) while modifier held.
+/// K-4: Focus transition (binding Super+N = FocusNext) while modifier held.
 #[test]
 fn k4_focus_transition_binding_super_enter_while_modifier_held() {
     let mut s = S::new(true);
     assert_eq!(s.ls.probe.kb.active.as_deref(), Some("W1"));
     s.key(KEY_LEFTMETA, true);
-    // Super+Enter matches FocusNext binding
-    s.key(KEY_ENTER, true);
+    // Super+N matches FocusNext binding
+    s.key(KEY_N, true);
     // Focus automatically transitioned to W2 via apply_key_action(FocusNext)
     assert_eq!(s.ls.probe.kb.active.as_deref(), Some("W2"));
-    s.key(KEY_ENTER, false);
+    s.key(KEY_N, false);
     s.key(KEY_LEFTMETA, false);
     s.assert_end();
 }
@@ -282,9 +282,9 @@ fn k7_interaction_cancelled_while_compositor_keys_held() {
     let mut s = S::new(true);
     s.key(KEY_LEFTMETA, true);
     s.key(KEY_ESC, true); // compositor-owned (Cancel)
-    s.key(KEY_ENTER, true); // FocusNext
+    s.key(KEY_N, true); // FocusNext
     assert_eq!(s.ls.probe.kb.active.as_deref(), Some("W2"));
-    s.key(KEY_ENTER, false);
+    s.key(KEY_N, false);
     s.key(KEY_ESC, false);
     s.key(KEY_LEFTMETA, false);
     s.assert_end();
@@ -394,15 +394,15 @@ fn plain_escape_cancels_active_interaction() {
 fn repeat_press_of_compositor_owned_key_does_not_leak() {
     let mut s = S::new(true);
     s.key(KEY_LEFTMETA, true);
-    s.key(KEY_ENTER, true); // Super+Enter: compositor-owned
+    s.key(KEY_N, true); // Super+N: compositor-owned
     s.key(KEY_LEFTMETA, false);
-    s.key(KEY_ENTER, true); // repeat / second press
-    s.key(KEY_ENTER, false);
+    s.key(KEY_N, true); // repeat / second press
+    s.key(KEY_N, false);
     let enter_events: Vec<_> =
         s.ls.probe
             .key_events
             .iter()
-            .filter(|(k, _)| *k == KEY_ENTER)
+            .filter(|(k, _)| *k == KEY_N)
             .collect();
     assert!(
         enter_events.is_empty(),
@@ -456,8 +456,8 @@ fn focus_next_skips_unmapped_elements() {
     s.ls.probe.unmap(w2);
     s.advance();
     s.key(KEY_LEFTMETA, true);
-    s.key(KEY_ENTER, true);
-    s.key(KEY_ENTER, false);
+    s.key(KEY_N, true);
+    s.key(KEY_N, false);
     s.key(KEY_LEFTMETA, false);
     assert_ne!(
         s.ls.state.core().focus().target(),
@@ -1082,22 +1082,22 @@ fn t11_unconfigured_keys_are_never_swallowed() {
             .count();
         out.push((name, delivered));
     }
-    // configured action: Super+Enter is consumed (FocusNext)
+    // configured action: Super+N is consumed (FocusNext)
     let mut s = S::new(true);
     s.set_focus(Some(s.e1));
     s.key(KEY_LEFTMETA, true);
-    s.key(KEY_ENTER, true);
-    s.key(KEY_ENTER, false);
+    s.key(KEY_N, true);
+    s.key(KEY_N, false);
     s.key(KEY_LEFTMETA, false);
     let enter =
         s.ls.probe
             .key_events
             .iter()
-            .filter(|(k, _)| *k == KEY_ENTER)
+            .filter(|(k, _)| *k == KEY_N)
             .count();
     assert_eq!(
         enter, 0,
-        "configured Super+Enter must be swallowed by compositor"
+        "configured Super+N must be swallowed by compositor"
     );
     assert!(
         out.iter().all(|(_, d)| *d == 2),

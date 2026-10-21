@@ -137,7 +137,11 @@ impl Core {
                     // a press bound to fit or restore mutates a camera: its proof is minted here
                     let navigation = matches!(
                         self.resolve_key_binding(key, modifiers, self.input.interaction.active()),
-                        Some(KeyAction::FitViewport | KeyAction::ViewportRestore)
+                        Some(
+                            KeyAction::FitViewport
+                                | KeyAction::ViewportRestore
+                                | KeyAction::FitToggle
+                        )
                     )
                     .then(authority::Authorized::mint);
                     self.keyboard_press(key, modifiers, mods_changed, time_us, navigation, out);
@@ -265,6 +269,13 @@ impl Core {
                 }
                 return;
             }
+            KeyAction::FitToggle => {
+                if let Some(p) = proof {
+                    self.fit_toggle(p, out);
+                }
+                return;
+            }
+            KeyAction::ToggleFullscreen => self.toggle_fullscreen(),
             // a request, not a destruction: the client closes (or asks the user first)
             KeyAction::CloseFocused => self
                 .focus
@@ -302,6 +313,55 @@ impl Core {
         let _ = self.fit_on(proof, output, element, out);
     }
 
+    /// Super+Enter: with the same guards as the fit binding, the element under the pointer is fitted,
+    /// unless the camera already holds exactly that fit (and there is a value to go back to): then
+    /// the previous camera is restored. The decision reads the camera and the fit it would make
+    /// now; nothing is remembered between presses.
+    fn fit_toggle(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
+        let PointerState::Located { output, p } = self.pointer else {
+            return;
+        };
+        if self.presentation(output).is_some() || self.layer_hit(output, p, true).is_some() {
+            return;
+        }
+        let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
+        let Some(element) = self.hit_test(output, pt).map(|h| h.element) else {
+            return;
+        };
+        let Ok((camera, target)) = self.fit_plan(output, element) else {
+            return;
+        };
+        let at_fit = self.cameras.center(camera) == Some(target.center)
+            && self.cameras.zoom(camera).map(f64::to_bits) == Some(target.zoom.to_bits());
+        let can_restore = self.cameras.history(camera).is_some_and(|h| !h.is_empty());
+        if at_fit && can_restore {
+            if self.cameras.restore(proof, camera) {
+                self.camera_written(output, camera, out);
+            }
+        } else if !at_fit {
+            self.cameras.fit(proof, camera, target);
+            self.camera_written(output, camera, out);
+        }
+    }
+
+    /// Super+Shift+Enter: the focused window's fullscreen toggles on the pointer's output, as if it
+    /// had asked (`set_fullscreen` / `unset_fullscreen`: the same path, M9, INV-PRES-1).
+    fn toggle_fullscreen(&mut self) -> Vec<Effect> {
+        let Some(id) = self.focus.target() else {
+            return Vec::new();
+        };
+        let request = if self.fullscreen_of(id).is_some() {
+            crate::protocol::ToplevelRequest::UnsetFullscreen
+        } else {
+            crate::protocol::ToplevelRequest::SetFullscreen {
+                output: self.pointer_output(),
+            }
+        };
+        self.toplevel_request(id, request)
+            .map(|(_, fx)| fx)
+            .unwrap_or_default()
+    }
+
     /// F-FIT-1 on `element` for `output`'s camera, shared by the binding and the shell: refused
     /// (nothing changed) when the element is not mapped, has no window geometry, or the fit is
     /// degenerate; otherwise one mutation (the prior value retained, OBJ-30) and the camera-write
@@ -313,6 +373,19 @@ impl Core {
         element: crate::stage::ElementId,
         out: &mut Vec<Effect>,
     ) -> Result<(), crate::ShellError> {
+        let (camera, target) = self.fit_plan(output, element)?;
+        self.cameras.fit(proof, camera, target);
+        self.camera_written(output, camera, out);
+        Ok(())
+    }
+
+    /// The camera and the F-FIT-1 target a fit of `element` on `output` would write; nothing is
+    /// changed.
+    fn fit_plan(
+        &self,
+        output: OutputId,
+        element: crate::stage::ElementId,
+    ) -> Result<(usize, crate::navigation::CameraValue), crate::ShellError> {
         if self.stage.mapped(element).is_none() {
             return Err(crate::ShellError::NotMapped);
         }
@@ -343,9 +416,7 @@ impl Core {
         else {
             return Err(crate::ShellError::Refused);
         };
-        self.cameras.fit(proof, camera, target);
-        self.camera_written(output, camera, out);
-        Ok(())
+        Ok((camera, target))
     }
 
     /// M8 `ViewportRestore(O)` from the input binding, O the pointer's output: the newest entry of

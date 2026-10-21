@@ -21,7 +21,7 @@ use std::time::Duration;
 use common::input::{BTN_LEFT, BTN_MIDDLE, logo, none};
 use common::{Lockstep, PopupSpec, output};
 use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
-use infynitae_core::input::keys::{KEY_A, KEY_B, KEY_ENTER, KEY_LEFTMETA};
+use infynitae_core::input::keys::{KEY_A, KEY_B, KEY_LEFTMETA, KEY_N};
 use infynitae_core::stage::ElementId;
 #[cfg(feature = "probe_preemption_strategy")]
 use infynitae_wayland::PreemptionStrategy;
@@ -1143,8 +1143,8 @@ fn r17_long_lived_stress_bounded_state() {
         r.key(KEY_LEFTMETA, true); // repeat
         r.key(KEY_LEFTMETA, false);
         r.key(KEY_LEFTMETA, true);
-        r.key(KEY_ENTER, true); // focus_next
-        r.key(KEY_ENTER, false);
+        r.key(KEY_N, true); // focus_next
+        r.key(KEY_N, false);
         r.key(KEY_LEFTMETA, false);
         r.ls.disconnect(cur);
         r.adv();

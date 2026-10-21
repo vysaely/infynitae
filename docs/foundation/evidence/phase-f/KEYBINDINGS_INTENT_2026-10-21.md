@@ -10,8 +10,8 @@ key bindings"). Not normative; each binding is implemented by the change that na
 |---|---|---|
 | Super + Middle Mouse | pan the canvas/camera | implemented (INC-3) |
 | Super + 1..9 | spatial/window slots | not implemented |
-| Super + Enter | viewport fit toggle | **conflict**: code has Logo+Enter = FocusNext (an x10 harness fixture, INC4-F04) and fit on Logo+F / restore Logo+Shift+F (C12.F17, adopted) [O] |
-| Super + Shift + Enter | native fullscreen | not implemented |
+| Super + Enter | viewport fit toggle | **implemented 2026-10-21** (owner decision 2026-10-21: "super enter fit"): fits the window under the pointer; pressed on exactly that fit, restores. Stateless (the camera is compared with the fit it would make). Logo+F / Logo+Shift+F (C12.F17) stay. FocusNext, which held Logo+Enter as a harness fixture, moved to **Logo+N** (not in the owner's list; open to the owner's choice) |
+| Super + Shift + Enter | native fullscreen | **implemented 2026-10-21** (owner decision 2026-10-21): the focused window's fullscreen toggles on the pointer's output, through the client-request path (M9) |
 | **Super + Delete** | **close** | **implemented 2026-10-21** (`xdg_toplevel.close` to the focused window; exact modifiers; not during an interaction) |
 | Super + Tab | overview | not implemented (shell) |
 | Super + Space | recenter camera on the focused element | not implemented (`Navigate` to the element exists in INC-11) |

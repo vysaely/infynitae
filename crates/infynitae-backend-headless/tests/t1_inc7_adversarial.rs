@@ -18,7 +18,7 @@ use std::time::Duration;
 use common::input::{BTN_LEFT, BTN_MIDDLE, none};
 use common::{Lockstep, PopupSpec, output, output_k};
 use infynitae_backend_headless::{keyboard_key, pointer_button, pointer_motion, set_focus};
-use infynitae_core::input::keys::{KEY_A, KEY_ENTER, KEY_LEFTMETA};
+use infynitae_core::input::keys::{KEY_A, KEY_LEFTMETA, KEY_N};
 use infynitae_core::navigation::PersistedCameras;
 use infynitae_core::output::OutputId;
 use infynitae_core::stage::{ElementId, Lifecycle};
@@ -1014,7 +1014,7 @@ fn a_pre_map_grant_takes_the_output_only_when_its_window_maps() {
     assert_layers(&t.frame(), &[((0, 0, 640, 480), GREEN)], "X presented");
 }
 
-/// A-8: keyboard focus does not move to a window the presentation hides. Super+Enter
+/// A-8: keyboard focus does not move to a window the presentation hides. Super+N
 /// (FocusNext) and a focus request leave it on the presented window, which keeps `activated`
 /// and receives the keys; when the presentation ends, FocusNext reaches the other window again.
 #[test]
@@ -1024,8 +1024,8 @@ fn focus_does_not_move_to_a_window_the_presentation_hides() {
     t.resize(w, (640, 480), RED);
     let configures = t.configures(w).len();
     t.key(KEY_LEFTMETA, true);
-    t.key(KEY_ENTER, true);
-    t.key(KEY_ENTER, false);
+    t.key(KEY_N, true);
+    t.key(KEY_N, false);
     t.key(KEY_LEFTMETA, false);
     t.focus(other);
     assert_eq!(t.ls.state.core().focus().target(), Some(id));
@@ -1042,8 +1042,8 @@ fn focus_does_not_move_to_a_window_the_presentation_hides() {
     t.ask(w, |tl| tl.unset_fullscreen());
     t.resize(w, (200, 100), RED);
     t.key(KEY_LEFTMETA, true);
-    t.key(KEY_ENTER, true);
-    t.key(KEY_ENTER, false);
+    t.key(KEY_N, true);
+    t.key(KEY_N, false);
     t.key(KEY_LEFTMETA, false);
     assert_eq!(t.ls.state.core().focus().target(), Some(other));
     assert_eq!(t.ls.probe.kb.active.as_deref(), Some("O"));
