@@ -162,6 +162,7 @@ pub fn run_nested_with(
 
     let display: Display<WaylandState> = Display::new()?;
     let mut state = WaylandState::new(&display.handle(), core);
+    state.set_host_window_target();
 
     // Before the window: from here on SIGTERM/SIGINT end the loop instead of the process, so a
     // signal during the rest of start-up still leaves no socket behind.

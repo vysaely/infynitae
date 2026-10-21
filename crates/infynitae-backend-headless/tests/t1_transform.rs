@@ -155,7 +155,10 @@ fn ee1_tracker_matrix_on_the_production_adapter() {
             ls.state.core().view(o).unwrap(),
         );
         let v = expected_view(t);
-        let f = checks(&mut convert::damage_tracker(&model, &view), v);
+        let f = checks(
+            &mut convert::damage_tracker(&model, &view, Default::default()),
+            v,
+        );
         assert_eq!(
             f, 0,
             "production tracker fails {f} checks for {t:?} at {s}/120"
@@ -316,7 +319,10 @@ fn c5_measure(ls: &mut Lockstep, t: Transform, s: u32) -> C5 {
         .enumerate()
         .map(|(i, g)| solid(*g, 100 + i as u32))
         .collect();
-    let (scene, _, _) = frame(&mut convert::damage_tracker(&model, &view), &solids);
+    let (scene, _, _) = frame(
+        &mut convert::damage_tracker(&model, &view, Default::default()),
+        &solids,
+    );
     let (vw, vh) = (view.size.0 as f64, view.size.1 as f64);
     let (lw, lh) = (vw / k, vh / k);
     let mut pts = vec![
@@ -355,7 +361,7 @@ fn c5_measure(ls: &mut Lockstep, t: Transform, s: u32) -> C5 {
     // one cursor tracker: after the first full frame, buffer age 1 repaints only the old and new
     // cursor pixels
     let fbcell = Rc::new(RefCell::new(Fb::new(1920, 1080)));
-    let mut cursor_tracker = convert::damage_tracker(&model, &view);
+    let mut cursor_tracker = convert::damage_tracker(&model, &view, Default::default());
     for (n, &(px, py)) in pts.iter().enumerate() {
         let cur = Rectangle::new(
             ((px * k).floor() as i32, (py * k).floor() as i32).into(),

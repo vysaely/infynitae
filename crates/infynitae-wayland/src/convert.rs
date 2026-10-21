@@ -432,11 +432,41 @@ pub(crate) fn output_location(model: &OutputModel) -> Point<i32, Logical> {
 /// F-RENDER-1: `OutputDamageTracker::new(phys_O, Scale(k_O), transform_O)`, the **untransformed**
 /// physical mode; Smithay derives the element space `transform_size(phys_O) = view_O` itself.
 /// `OutputDamageTracker::from_output` is not used: it ignores zoom.
-pub fn damage_tracker(model: &OutputModel, view: &View) -> OutputDamageTracker {
+/// The opaque colour of the empty Canvas in a host window (a dark grey).
+pub const CANVAS_CLEAR: Color32F = Color32F::new(0.11, 0.11, 0.13, 1.0);
+
+/// What a backend's framebuffer is: whether its rows run bottom-up (GL) and what the empty
+/// Canvas is cleared to.
+#[derive(Clone, Copy, Debug)]
+pub struct RenderTarget {
+    pub flip_y: bool,
+    pub clear: Color32F,
+}
+
+impl Default for RenderTarget {
+    fn default() -> Self {
+        RenderTarget {
+            flip_y: false,
+            clear: Color32F::TRANSPARENT,
+        }
+    }
+}
+
+pub fn damage_tracker(
+    model: &OutputModel,
+    view: &View,
+    target: RenderTarget,
+) -> OutputDamageTracker {
+    let transform = match (target.flip_y, output_transform(model.transform)) {
+        // a vertical flip of the framebuffer; the nested output is never rotated, so only the
+        // normal transform needs composing
+        (true, smithay::utils::Transform::Normal) => smithay::utils::Transform::Flipped180,
+        (_, t) => t,
+    };
     OutputDamageTracker::new(
         (model.phys.0 as i32, model.phys.1 as i32),
         Scale::from(view.k),
-        output_transform(model.transform),
+        transform,
     )
 }
 
@@ -487,12 +517,12 @@ where
     // C12.F15.4: the tracker computes damage and opaque regions at its Scale(k); a frame at
     // another k (a fit, a restore, a presentation) rebuilds it before rendering
     if handle.tracker_k != view.k {
-        handle.tracker = damage_tracker(model, &view);
+        handle.tracker = damage_tracker(model, &view, state.target);
         handle.tracker_k = view.k;
     }
     let result = handle
         .tracker
-        .render_output(renderer, framebuffer, age, &elements, Color32F::TRANSPARENT)
+        .render_output(renderer, framebuffer, age, &elements, state.target.clear)
         .map_err(|e| match e {
             smithay::backend::renderer::damage::Error::Rendering(e) => {
                 RenderOutputError::Renderer(e)

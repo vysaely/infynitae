@@ -364,3 +364,40 @@ fn damage_follows_commits_and_nothing_else() {
     let (damage, _) = screen.frame(&mut ls, 1);
     assert_eq!(damage, None);
 }
+
+/// The nested backend's target (`set_host_window_target`): a GL framebuffer's rows run bottom-up,
+/// so the frame is drawn flipped — read back top-down it is the scene upside down — and the empty
+/// Canvas is opaque (a transparent clear let the host's desktop show through the window; found
+/// in the first live run, 2026-10-21). The window is panned off the vertical centre, so a missing
+/// flip cannot pass by symmetry.
+#[test]
+fn a_host_window_target_is_drawn_flipped_on_an_opaque_canvas() {
+    let mut ls = Lockstep::new(Some(output((640, 480), 120)));
+    ls.state.set_host_window_target();
+    toplevel(&mut ls, "W", (100, 80), RED);
+    pan(&mut ls, (0.0, 100.0));
+    let layers = layers_from_core(&mut ls, &[((100, 80), RED)]);
+    let (x0, y0, x1, y1) = layers[0].0;
+    assert_ne!(y0, 480 - y1, "precondition: off the vertical centre");
+    let mut screen = Screen::new((640, 480));
+    let (_, pixels) = screen.frame(&mut ls, 0);
+    let canvas = pixels[0];
+    assert_eq!(
+        canvas >> 24,
+        0xFF,
+        "the empty Canvas is opaque: {canvas:#010x}"
+    );
+    assert_ne!(canvas & 0x00FF_FFFF, 0, "and not black: {canvas:#010x}");
+    let flipped = (x0, 480 - y1, x1, 480 - y0);
+    for y in 0..480i64 {
+        for x in 0..640i64 {
+            let got = pixels[(y * 640 + x) as usize];
+            let inside = x >= flipped.0 && x < flipped.2 && y >= flipped.1 && y < flipped.3;
+            let want = if inside { RED } else { canvas };
+            assert_eq!(
+                got, want,
+                "pixel ({x},{y}) is {got:#010x}, expected {want:#010x}"
+            );
+        }
+    }
+}

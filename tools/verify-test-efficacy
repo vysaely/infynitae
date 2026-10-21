@@ -946,7 +946,7 @@ CONTROLS = [
      "infynitae-backend-headless", ["--test", "t1_pixels"], "subsurfaces_and_windows_stack_in_render_order"),
     ("pixels: output cleared to opaque black instead of transparent",
      f"{WAYLAND}/convert.rs",
-     "age, &elements, Color32F::TRANSPARENT)", "age, &elements, Color32F::BLACK)",
+     "            clear: Color32F::TRANSPARENT,", "            clear: Color32F::BLACK,",
      "infynitae-backend-headless", ["--test", "t1_pixels"], "a_solid_buffer_lands_on_exactly_its_pixels"),
     ("pixels: surfaces rendered at half alpha",
      f"{WAYLAND}/convert.rs",
@@ -1786,6 +1786,14 @@ CONTROLS = [
      "        self.complete_layer_frames(output, now);", "",
      "infynitae-backend-headless", ["--test", "t1_layer_shell"],
      "a_bar_reserves_its_strip_and_a_new_window_is_placed_below_it"),
+    # ---- Nested window target (first live run, 2026-10-21: the frame was upside down and see-through)
+    ("host window: the GL framebuffer is not flipped (the frame is upside down)", f"{WAYLAND}/convert.rs",
+     "        (true, smithay::utils::Transform::Normal) => smithay::utils::Transform::Flipped180,",
+     "        (true, smithay::utils::Transform::Normal) => smithay::utils::Transform::Normal,",
+     "infynitae-backend-headless", ["--test", "t1_pixels"], "a_host_window_target_is_drawn_flipped_on_an_opaque_canvas"),
+    ("host window: the empty Canvas is transparent (the host's desktop shows through)", f"{WAYLAND}/convert.rs",
+     "state.target.clear)", "Color32F::TRANSPARENT)",
+     "infynitae-backend-headless", ["--test", "t1_pixels"], "a_host_window_target_is_drawn_flipped_on_an_opaque_canvas"),
     # ---- Super+Space recenter (owner interaction intent 2026-10-05, restated 2026-10-21)
     ("recenter: Super+Space resolves nothing", f"{CORE}/input/keys.rs",
      "        return Some(KeyAction::Recenter);", "        return None;",

@@ -293,7 +293,7 @@ impl WaylandState {
             id,
             output,
             global,
-            tracker: convert::damage_tracker(&model, &view),
+            tracker: convert::damage_tracker(&model, &view, self.target),
             tracker_k: view.k,
         });
     }
@@ -314,7 +314,7 @@ impl WaylandState {
         );
         h.output.set_preferred(mode);
         // F-RENDER-1: the tracker is rebuilt when the descriptor or k changes
-        h.tracker = convert::damage_tracker(&model, &view);
+        h.tracker = convert::damage_tracker(&model, &view, self.target);
         h.tracker_k = view.k;
     }
 

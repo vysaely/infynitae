@@ -103,6 +103,8 @@ pub struct WaylandState {
     )]
     presentation: PresentationState,
     outputs: Vec<outputs::OutputHandle>,
+    /// What the backend's framebuffer is (`set_host_window_target`).
+    pub(crate) target: convert::RenderTarget,
     xdg_shell: XdgShellState,
     shm: ShmState,
     popups: PopupManager,
@@ -179,6 +181,25 @@ const _: fn() = || {
 };
 
 impl WaylandState {
+    /// The backend draws into a window of a host compositor through GL (the nested Winit
+    /// backend): its framebuffer's rows run bottom-up, so every output is drawn flipped, and the
+    /// Canvas is cleared to an opaque colour (a transparent clear lets the host's desktop show
+    /// through). The headless backend keeps the default: top-down rows, a transparent clear.
+    pub fn set_host_window_target(&mut self) {
+        self.target = convert::RenderTarget {
+            flip_y: true,
+            clear: convert::CANVAS_CLEAR,
+        };
+        for h in &mut self.outputs {
+            if let (Some(model), Some(view)) = (self.core.output(h.id), self.core.view(h.id)) {
+                h.tracker = convert::damage_tracker(model, &view, self.target);
+                h.tracker_k = view.k;
+            }
+        }
+    }
+}
+
+impl WaylandState {
     /// Creates the globals (`wl_compositor` v6 and `wl_subcompositor`, `wl_shm`, `xdg_wm_base`,
     /// `zxdg_output_manager_v1`, `wp_presentation`, `wl_seat` with pointer and keyboard,
     /// `zwp_relative_pointer_manager_v1`). Output globals follow Core's effects.
@@ -196,6 +217,7 @@ impl WaylandState {
             output_manager: OutputManagerState::new_with_xdg_output::<Self>(display),
             presentation: PresentationState::new::<Self>(display, CLOCK_MONOTONIC),
             outputs: Vec::new(),
+            target: convert::RenderTarget::default(),
             // only what Core's toplevel-request policy can grant is announced (M2)
             xdg_shell: XdgShellState::new_with_capabilities::<Self>(display, capabilities),
             shm: ShmState::new::<Self>(display, []),
