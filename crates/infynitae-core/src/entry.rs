@@ -141,6 +141,7 @@ impl Core {
                             KeyAction::FitViewport
                                 | KeyAction::ViewportRestore
                                 | KeyAction::FitToggle
+                                | KeyAction::Recenter
                         )
                     )
                     .then(authority::Authorized::mint);
@@ -275,6 +276,12 @@ impl Core {
                 }
                 return;
             }
+            KeyAction::Recenter => {
+                if let Some(p) = proof {
+                    self.recenter(p, out);
+                }
+                return;
+            }
             KeyAction::ToggleFullscreen => self.toggle_fullscreen(),
             KeyAction::ForceCloseFocused => self
                 .focus
@@ -344,6 +351,52 @@ impl Core {
         } else {
             self.fit_viewport(proof, out);
         }
+    }
+
+    /// Super+Space: the pointer's output's camera is centred on the focused window — the centre of
+    /// its window geometry at the centre of the usable area (L4) — with its zoom unchanged and no
+    /// history entry (as a shell `Navigate`). Refused, nothing changed, when no output holds the
+    /// pointer, that output presents a protocol-fullscreen element (C12.F17 Q1 B), nothing is
+    /// focused, or the focused window is not mapped or has a degenerate geometry. Then the
+    /// camera-write consequences, as after a fit.
+    fn recenter(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
+        let PointerState::Located { output, .. } = self.pointer else {
+            return;
+        };
+        if self.presentation(output).is_some() {
+            return;
+        }
+        let Some(element) = self.focus.target() else {
+            return;
+        };
+        if self.stage.mapped(element).is_none() {
+            return;
+        }
+        let (Some(anchor), Some(tree)) = (self.stage.anchor(element), self.stage.tree(element))
+        else {
+            return;
+        };
+        let g = (
+            anchor.x,
+            anchor.y,
+            tree.geometry.size.w as i64,
+            tree.geometry.size.h as i64,
+        );
+        let Some(camera) = self.cameras.camera_for_output(output) else {
+            return;
+        };
+        let (Some(extent), Some(usable), Some(zoom)) = (
+            self.output(output).map(|m| m.logical_extent()),
+            self.usable_area(output),
+            self.cameras.zoom(camera),
+        ) else {
+            return;
+        };
+        let Some(center) = crate::navigation::recenter_target(extent, usable, zoom, g) else {
+            return;
+        };
+        self.cameras.navigate(proof, camera, center);
+        self.camera_written(output, camera, out);
     }
 
     /// Super+Shift+Enter: the focused window's fullscreen toggles on the pointer's output, as if it

@@ -15,6 +15,7 @@ pub const KEY_LEFTSHIFT: u32 = 42;
 pub const KEY_B: u32 = 48;
 pub const KEY_TAB: u32 = 15;
 pub const KEY_DELETE: u32 = 111;
+pub const KEY_SPACE: u32 = 57;
 pub const KEY_LEFTMETA: u32 = 125;
 
 /// An action triggered by a matched compositor key binding.
@@ -40,6 +41,10 @@ pub enum KeyAction {
     /// Asks the focused window to close (`xdg_toplevel.close`); the client decides. The owner's
     /// binding Super+Delete (interaction intent of 2026-10-05; decision record 2026-10-21).
     CloseFocused,
+    /// Super+Space (owner interaction intent of 2026-10-05, restated 2026-10-21): the pointer's
+    /// output's camera is centred on the focused window, its zoom unchanged — "center it", not
+    /// fit it. No history entry, as a shell `Navigate`.
+    Recenter,
     Noop,
 }
 
@@ -98,6 +103,16 @@ pub fn resolve_key_binding(
         }
         return Some(KeyAction::CloseFocused);
     }
+    // Super+Space centres the focused window; exactly Logo, never during an interaction
+    if key == KEY_SPACE
+        && mods.logo
+        && !mods.shift
+        && !mods.ctrl
+        && !mods.alt
+        && !interaction_active
+    {
+        return Some(KeyAction::Recenter);
+    }
     for b in &CANONICAL_BINDINGS {
         if b.evdev == key && (!b.needs_logo || mods.logo) {
             return Some(b.action);
@@ -109,6 +124,38 @@ pub fn resolve_key_binding(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The owner's Super+Space: exactly Logo held, never during an interaction.
+    #[test]
+    fn logo_space_recenters_with_exact_modifiers() {
+        let m = |logo, ctrl, alt, shift| Modifiers {
+            logo,
+            ctrl,
+            alt,
+            shift,
+        };
+        assert_eq!(
+            resolve_key_binding(KEY_SPACE, m(true, false, false, false), false),
+            Some(KeyAction::Recenter)
+        );
+        for mods in [
+            m(false, false, false, false),
+            m(true, false, false, true),
+            m(true, true, false, false),
+            m(true, false, true, false),
+        ] {
+            assert_eq!(
+                resolve_key_binding(KEY_SPACE, mods, false),
+                None,
+                "{mods:?}"
+            );
+        }
+        assert_eq!(
+            resolve_key_binding(KEY_SPACE, m(true, false, false, false), true),
+            None,
+            "not during an interaction"
+        );
+    }
 
     /// The owner's Super+Delete: exactly Logo held, never during an interaction.
     #[test]

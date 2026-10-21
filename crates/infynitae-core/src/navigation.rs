@@ -138,6 +138,36 @@ pub fn fit_target_in(
     Some(t)
 }
 
+/// Super+Space: the camera centre that puts the centre of the window geometry `g` (Canvas px) at
+/// the centre of the usable area (output-logical, as `extent`) at `zoom`. `None` for a degenerate
+/// geometry. Saturated at the stored-Canvas bound (INV-COORD-1). Pure.
+pub fn recenter_target(
+    extent: (f64, f64),
+    usable: (f64, f64, f64, f64),
+    zoom: f64,
+    g: (i64, i64, i64, i64),
+) -> Option<CanvasPos> {
+    let (x, y, w, h) = g;
+    if w <= 0 || h <= 0 || zoom.is_nan() || zoom <= 0.0 {
+        return None;
+    }
+    let limit = CANVAS_LIMIT_PX * Q16_ONE;
+    // Q16 of o + extent/2 is (2o + extent)·2¹⁵, exactly (as `fit_target`)
+    let centre = |o: i64, extent: i64| {
+        ((2 * o as i128 + extent as i128) * (Q16_ONE as i128 / 2))
+            .clamp(-(limit as i128), limit as i128) as i64
+    };
+    // the usable centre's offset from the view centre, in Canvas px at this zoom
+    let d = (
+        (usable.0 + usable.2 / 2.0 - extent.0 / 2.0) / zoom,
+        (usable.1 + usable.3 / 2.0 - extent.1 / 2.0) / zoom,
+    );
+    Some(CanvasPos {
+        x: centre(x, w).saturating_sub(q16(d.0)).clamp(-limit, limit),
+        y: centre(y, h).saturating_sub(q16(d.1)).clamp(-limit, limit),
+    })
+}
+
 pub fn fit_target(
     view_size: (u32, u32),
     scale: f64,
@@ -587,5 +617,32 @@ mod tests {
         h.push(v(7));
         h.clear();
         assert_eq!((h.len(), h.reserved()), (0, 0));
+    }
+
+    /// Super+Space: the window-geometry centre, exactly; with a 30-px bar on top the usable centre
+    /// is 15 logical px below the view centre, 7.5 Canvas px at zoom 2; degenerate: none.
+    #[test]
+    fn recenter_puts_the_window_centre_at_the_usable_centre() {
+        let full = (0.0, 0.0, 1920.0, 1080.0);
+        let g = (100, 200, 400, 301);
+        let q = |v: f64| (v * Q16_ONE as f64) as i64;
+        assert_eq!(
+            recenter_target((1920.0, 1080.0), full, 2.0, g),
+            Some(CanvasPos {
+                x: q(300.0),
+                y: q(350.5)
+            })
+        );
+        assert_eq!(
+            recenter_target((1920.0, 1080.0), (0.0, 30.0, 1920.0, 1050.0), 2.0, g),
+            Some(CanvasPos {
+                x: q(300.0),
+                y: q(350.5 - 7.5)
+            })
+        );
+        assert_eq!(
+            recenter_target((1920.0, 1080.0), full, 2.0, (0, 0, 0, 10)),
+            None
+        );
     }
 }
