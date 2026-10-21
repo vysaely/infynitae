@@ -48,6 +48,7 @@ impl WaylandState {
                         t.send_close();
                     }
                 }
+                Effect::ForceClose(element) => self.force_close(element),
                 Effect::PreferredScale {
                     element,
                     scale_120,

@@ -46,13 +46,6 @@ fn super_delete_asks_the_focused_window_to_close() {
             .iter()
             .position(|s| s.label == "W")
             .unwrap();
-    chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT]);
-    assert!(
-        r.ls.probe.close_requests.is_empty(),
-        "Super+Shift+Delete is not bound"
-    );
-    // the unbound chord reached the client (Delete is an ordinary key there); the bound one
-    // must not
     let before = r.ls.probe.key_events.len();
     chord(&mut r, &[KEY_LEFTMETA]);
     assert_eq!(r.ls.probe.close_requests, [idx]);
@@ -65,5 +58,47 @@ fn super_delete_asks_the_focused_window_to_close() {
             .iter()
             .any(|(k, _)| *k == KEY_DELETE),
         "the bound key never reaches the client"
+    );
+}
+
+/// Super+Shift+Delete ends the focused window's client: its connection is cut and its window is
+/// destroyed, with no polite close first. The probe client lives in this process, which is never
+/// signalled (only processes other than the compositor's are killed; `ownership` tests the kill).
+#[test]
+fn super_shift_delete_ends_the_focused_windows_client() {
+    let mut r = Rig::x8();
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    let fx =
+        r.ls.state
+            .core_mut()
+            .set_focus(&mut r.ls.input, Some(w))
+            .unwrap();
+    r.ls.state.apply(&fx);
+    r.ls.pump();
+    for (key, pressed) in [
+        (KEY_LEFTMETA, true),
+        (KEY_LEFTSHIFT, true),
+        (KEY_DELETE, true),
+    ] {
+        r.t += 1000;
+        keyboard_key(&mut r.ls.state, &mut r.ls.input, key, pressed, r.t).expect("key");
+    }
+    // a killed connection is cleaned up by the server when the client's socket stirs: a real app's
+    // closes as its process dies; this in-process probe sends one more request instead
+    let idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
+    r.ls.probe.surfaces[idx].wl.commit();
+    let _ = r.ls.conn.flush();
+    r.ls.display
+        .dispatch_clients(&mut r.ls.state)
+        .expect("server dispatch");
+    assert!(r.ls.probe.close_requests.is_empty(), "not a polite close");
+    assert!(
+        r.ls.state.core().stage().state(w).is_none(),
+        "the window went with its client"
     );
 }

@@ -351,6 +351,33 @@ impl ShmHandler for WaylandState {
 }
 
 impl WaylandState {
+    /// Super+Shift+Delete: the window's client is ended — its process pinned, its connection cut,
+    /// then SIGKILL (`ownership::pin_client_process`, `kill_pinned`). An X11 window (whose client is
+    /// xwayland-satellite, shared by every X11 window) is asked to close instead.
+    pub(crate) fn force_close(&mut self, element: infynitae_core::stage::ElementId) {
+        use smithay::reexports::wayland_server::Resource;
+        use smithay::reexports::wayland_server::backend::DisconnectReason;
+        let Some(toplevel) = self.window(element).and_then(|w| w.toplevel()).cloned() else {
+            return;
+        };
+        let Some(client) = toplevel.wl_surface().client() else {
+            return;
+        };
+        let creds = client.get_credentials(&self.dh).ok();
+        if creds.is_some_and(|c| crate::ownership::is_xwayland_satellite(c.pid)) {
+            toplevel.send_close();
+            return;
+        }
+        // pinned while connected, then disconnected (nothing more is read from it), then killed
+        let pinned = creds.and_then(|c| crate::ownership::pin_client_process(c.pid, c.uid));
+        self.dh
+            .backend_handle()
+            .kill_client(client.id(), DisconnectReason::ConnectionClosed);
+        if let Some(fd) = pinned {
+            crate::ownership::kill_pinned(&fd);
+        }
+    }
+
     /// `xdg_toplevel.set_title` / `set_app_id` (INC-11): Core keeps both as the shell's display
     /// metadata. Both are read from the toplevel's role state, which Smithay has just updated.
     fn toplevel_metadata_changed(&mut self, surface: &ToplevelSurface) {

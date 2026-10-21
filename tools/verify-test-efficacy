@@ -1736,6 +1736,13 @@ CONTROLS = [
      "infynitae-backend-headless", ["--test", "t1_enter_bindings"],
      "super_shift_enter_toggles_the_focused_windows_fullscreen"),
     # ---- Super+Delete (owner interaction intent 2026-10-05; decision record 2026-10-21)
+    ("force close: Super+Shift+Delete does not cut the client's connection", f"{WAYLAND}/handlers.rs",
+     "            .kill_client(client.id(), DisconnectReason::ConnectionClosed);",
+     "            .get_client_data(client.id())\n            .ok();",
+     "infynitae-backend-headless", ["--test", "t1_close_binding"], "super_shift_delete_ends_the_focused_windows_client"),
+    ("force close: the pinned process is not killed", f"{WAYLAND}/ownership.rs",
+     "    pidfd_send_signal(fd, Signal::KILL).is_ok()", "    pidfd_send_signal(fd, Signal::CONT).is_ok()",
+     "infynitae-wayland", ["--lib"], "a_client_process_is_pinned_then_killed_and_this_process_never"),
     ("close binding: Super+Delete resolves nothing", f"{CORE}/input/keys.rs",
      "        return Some(KeyAction::CloseFocused);", "        return None;",
      "infynitae-backend-headless", ["--test", "t1_close_binding"], "super_delete_asks_the_focused_window_to_close"),

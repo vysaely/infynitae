@@ -4,6 +4,9 @@ CURRENT_PHASE: **PHASE F — INC-6 RATIFIED AND INTEGRATED INTO LOCAL `main` (`c
 
 Date: 2026-10-21
 
+## PHASE F — SUPER+SHIFT+DELETE FORCE-CLOSES THE FOCUSED APP (branch `feature/enter-bindings-2026-10-21`; owner 2026-10-21; not pushed)
+- **Implemented:** `KeyAction::ForceCloseFocused` / `Effect::ForceClose`: the client's process pinned (pidfd) while connected, the connection cut, then SIGKILL — only a process of this user and never the compositor's; X11 windows get a close request (one shared client). Evidence: T1 `super_shift_delete_ends_the_focused_windows_client`, T0 `a_client_process_is_pinned_then_killed_and_this_process_never`; 2 seeded controls.
+
 ## PHASE F — SUPER+F REMOVED; FOCUS CYCLING ON SUPER+TAB (branch `feature/enter-bindings-2026-10-21`; owner decisions 2026-10-21; not pushed)
 - **Owner decisions:** no duplicate of Super+Enter, so Super+F / Super+Shift+F are removed; focus cycling on Super+Tab, Super+Shift+Tab reserved for the overview. Supersedes "Logo+N" in the section below.
 - **Evidence:** the INC-10 binding tests now drive Super+Enter; the history tests (C12.F16.6) drive Core's M8 fit and restore through the shell entry (the key is a toggle); `t0_hot_path_allocations` measures zero allocation for fits and restores at capacity through the key; seeded controls re-anchored to the Enter branch with the same defects, plus one for focus cycling, each DETECTED.

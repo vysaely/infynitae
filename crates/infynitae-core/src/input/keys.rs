@@ -33,6 +33,10 @@ pub enum KeyAction {
     /// Super+Shift+Enter (owner decision 2026-10-21): the focused window enters or leaves native
     /// fullscreen on the pointer's output, through the same path as its own request.
     ToggleFullscreen,
+    /// Super+Shift+Delete (owner, 2026-10-21): the focused window's client is ended now — its
+    /// connection is cut and its process killed — for an app that does not answer a close. The
+    /// adapter falls back to a close request for an X11 window (all of them share one client).
+    ForceCloseFocused,
     /// Asks the focused window to close (`xdg_toplevel.close`); the client decides. The owner's
     /// binding Super+Delete (interaction intent of 2026-10-05; decision record 2026-10-21).
     CloseFocused,
@@ -86,14 +90,12 @@ pub fn resolve_key_binding(
     if key == KEY_TAB && mods.logo && !mods.shift && !mods.ctrl && !mods.alt {
         return Some(KeyAction::FocusNext);
     }
-    // Logo+Delete closes the focused window; the modifiers match exactly, as for fit
-    if key == KEY_DELETE
-        && mods.logo
-        && !mods.ctrl
-        && !mods.alt
-        && !mods.shift
-        && !interaction_active
-    {
+    // Logo+Delete closes the focused window, Logo+Shift+Delete ends its app; the modifiers match
+    // exactly, as for fit
+    if key == KEY_DELETE && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
+        if mods.shift {
+            return Some(KeyAction::ForceCloseFocused);
+        }
         return Some(KeyAction::CloseFocused);
     }
     for b in &CANONICAL_BINDINGS {
@@ -121,11 +123,16 @@ mod tests {
             resolve_key_binding(KEY_DELETE, m(true, false, false, false), false),
             Some(KeyAction::CloseFocused)
         );
+        assert_eq!(
+            resolve_key_binding(KEY_DELETE, m(true, false, false, true), false),
+            Some(KeyAction::ForceCloseFocused),
+            "Super+Shift+Delete ends the app"
+        );
         for mods in [
             m(false, false, false, false),
             m(true, true, false, false),
             m(true, false, true, false),
-            m(true, false, false, true),
+            m(true, true, false, true),
         ] {
             assert_eq!(
                 resolve_key_binding(KEY_DELETE, mods, false),

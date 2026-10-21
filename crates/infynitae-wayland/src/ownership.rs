@@ -245,8 +245,61 @@ pub fn end_session_tree(children: &mut Vec<Child>, grace: Duration) -> Teardown 
     report
 }
 
+/// Super+Shift+Delete (owner, 2026-10-21), first step: pins a client's process by a pidfd, while
+/// its connection still stands (so a pid reused after it died can never be signalled). Only a
+/// process running as this user and other than this one is pinned (a client in this process — a
+/// test's probe — is only disconnected).
+pub fn pin_client_process(pid: i32, uid: u32) -> Option<std::os::fd::OwnedFd> {
+    if pid <= 0 || pid as u32 == std::process::id() || uid != getuid_raw() {
+        return None;
+    }
+    pidfd_open(Pid::from_raw(pid)?, PidfdFlags::empty()).ok()
+}
+
+/// The last step: SIGKILL to the pinned process. Returns whether it was sent.
+pub fn kill_pinned(fd: &std::os::fd::OwnedFd) -> bool {
+    pidfd_send_signal(fd, Signal::KILL).is_ok()
+}
+
+fn getuid_raw() -> u32 {
+    smithay::reexports::rustix::process::getuid().as_raw()
+}
+
+/// Whether `pid` runs xwayland-satellite (its executable's name): the one client all X11 windows
+/// share, which a force-close of one window must not end.
+pub fn is_xwayland_satellite(pid: i32) -> bool {
+    std::fs::read_link(format!("/proc/{pid}/exe"))
+        .ok()
+        .and_then(|p| {
+            p.file_name()
+                .map(|n| n.to_string_lossy().starts_with("xwayland-satellite"))
+        })
+        .unwrap_or(false)
+}
+
 #[cfg(test)]
 mod tests {
+    /// Super+Shift+Delete's kill: a process of this user is pinned and killed; this process and a
+    /// process of another uid are never pinned (a client in this process is only disconnected).
+    #[test]
+    fn a_client_process_is_pinned_then_killed_and_this_process_never() {
+        use std::os::unix::process::ExitStatusExt;
+        assert!(pin_client_process(std::process::id() as i32, getuid_raw()).is_none());
+        assert!(pin_client_process(0, getuid_raw()).is_none());
+        // owned by this test: a session shut down by another test in this process leaves it alone
+        let mut child = spawn_owned(Command::new("sleep").arg("30")).unwrap();
+        let pid = child.id() as i32;
+        assert!(
+            pin_client_process(pid, getuid_raw().wrapping_add(1)).is_none(),
+            "another uid"
+        );
+        let fd = pin_client_process(pid, getuid_raw()).expect("pinned");
+        assert!(kill_pinned(&fd));
+        let status = child.wait().unwrap();
+        forget_spawned(pid as u32);
+        assert_eq!(status.signal(), Some(9), "{status:?}");
+    }
+
     use super::*;
     use std::process::Command;
 

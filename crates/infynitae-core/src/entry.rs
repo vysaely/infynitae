@@ -276,6 +276,12 @@ impl Core {
                 return;
             }
             KeyAction::ToggleFullscreen => self.toggle_fullscreen(),
+            KeyAction::ForceCloseFocused => self
+                .focus
+                .target()
+                .map(Effect::ForceClose)
+                .into_iter()
+                .collect(),
             // a request, not a destruction: the client closes (or asks the user first)
             KeyAction::CloseFocused => self
                 .focus
