@@ -209,9 +209,8 @@ pub fn end_session_tree(children: &mut Vec<Child>, grace: Duration) -> Teardown 
     // reports its exit. A scan of `/proc/*/children` alone can miss a process while the kernel
     // re-parents it (its parent just exited; the list is not guaranteed complete), and the grace
     // period then ended early — seen as "5 killed" 1 ms after SIGTERM.
-    let signalled_alive = |signalled: &BTreeMap<i32, OwnedFd>| {
-        signalled.values().filter(|fd| !exited(fd)).count()
-    };
+    let signalled_alive =
+        |signalled: &BTreeMap<i32, OwnedFd>| signalled.values().filter(|fd| !exited(fd)).count();
     let roots = |children: &[Child]| children.iter().map(|c| c.id() as i32).collect::<Vec<_>>();
     let start = Instant::now();
     loop {
