@@ -660,6 +660,22 @@ impl Core {
         Ok(())
     }
 
+    /// A user action on a window brings it to the top of the z-order: a click on it, or Super+Tab
+    /// to it (the C4 focus model: "click → raise + keyboard focus"; the focus model requests the
+    /// raise of the Stage, FOUNDATION_BLOCKERS z-order row). Written here, in the Stage's single
+    /// writer (INV-STAGE-1). Activation requests of clients never raise (ADR-01: z-order is not
+    /// coupled to activation). Nothing happens for an unmapped element or the top one; otherwise
+    /// every output's frame is stale. Returns whether the order changed.
+    pub(crate) fn raise_by_user(&mut self, id: ElementId) -> bool {
+        // allocation-free: the click path is a hot path (OB-42)
+        if self.stage.mapped(id).is_none() || self.stage.top_mapped() == Some(id) {
+            return false;
+        }
+        self.stage.raise(id);
+        self.invalidate_all_frames();
+        true
+    }
+
     /// `xdg_toplevel.set_title` / `set_app_id` (INC-11, owner decision 2026-10-20 D9): the
     /// toplevel's title and app_id, replaced wholesale, kept as display metadata for the shell.
     /// Each is cut to [`TOPLEVEL_META_MAX`] bytes at a character boundary, so a client cannot make

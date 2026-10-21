@@ -347,6 +347,15 @@ impl Stage {
         Ok(())
     }
 
+    /// The top-most mapped element. Allocates nothing.
+    pub fn top_mapped(&self) -> Option<ElementId> {
+        self.z
+            .iter()
+            .rev()
+            .copied()
+            .find(|&id| self.state(id) == Some(Lifecycle::Mapped))
+    }
+
     /// Puts the element on top of the z-order (map and remap, INV-STAGE-5).
     pub(crate) fn raise(&mut self, id: ElementId) {
         self.z.retain(|&e| e != id);

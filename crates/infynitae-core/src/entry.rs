@@ -673,6 +673,8 @@ impl Core {
                 .flatten()
         });
         if let Some(hit) = element {
+            // the clicked window is under the pointer: raising it changes no pointer target
+            self.raise_by_user(hit.element);
             out.extend(self.focus.set_focus(Some(hit.element)));
         } else if let Some(h) = on_layer
             && self

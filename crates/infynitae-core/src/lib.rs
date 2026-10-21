@@ -605,7 +605,17 @@ impl Core {
     pub(crate) fn focus_next(&mut self) -> Vec<protocol::Effect> {
         let live = self.focusable_elements();
         let mut fx = self.focus.focus_next(&live);
+        // Super+Tab brings the newly focused window to the front; what lies under the pointer may
+        // have changed, so it gets one true-position event (M10), as after a camera write
+        let raised = self.focus.target().is_some_and(|id| self.raise_by_user(id));
         fx.extend(self.reconcile_constraints());
+        if raised
+            && matches!(self.pointer, pointer::PointerState::Located { .. })
+            && !self.input.interaction.active()
+            && !self.locked()
+        {
+            self.true_position_into(&mut fx);
+        }
         fx
     }
 
@@ -852,6 +862,13 @@ impl Core {
     }
 
     /// The output's frame is stale (its view or what it shows changed); its storage is kept.
+    /// Every output's frame is stale (a z-order change shows wherever the element is).
+    pub(crate) fn invalidate_all_frames(&mut self) {
+        for slot in &mut self.frames {
+            slot.current = false;
+        }
+    }
+
     pub(crate) fn invalidate_frame(&mut self, output: output::OutputId) {
         for slot in self.frames.iter_mut().filter(|s| s.output == output) {
             slot.current = false;

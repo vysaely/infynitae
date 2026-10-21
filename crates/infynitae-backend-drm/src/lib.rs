@@ -103,6 +103,31 @@ pub fn refresh_mhz(clock_khz: u32, htotal: u16, vtotal: u16, vrefresh: u32) -> u
     (u64::from(clock_khz) * 1_000_000 / total).min(u64::from(u32::MAX)) as u32
 }
 
+/// One mode as the choice needs it: size, refresh (mHz), whether the monitor prefers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ModeInfo {
+    pub size: (u16, u16),
+    pub refresh_mhz: u32,
+    pub preferred: bool,
+}
+
+/// The mode to use (T5, refined after the first console run, 2026-10-22: a 165 Hz monitor
+/// prefers 1920×1080 at 60 Hz): the preferred mode's resolution (the first mode's without one),
+/// at the highest refresh the monitor offers for it. `None` without modes. Pure.
+pub fn choose_mode(modes: &[ModeInfo]) -> Option<usize> {
+    let size = modes
+        .iter()
+        .find(|m| m.preferred)
+        .or_else(|| modes.first())?
+        .size;
+    modes
+        .iter()
+        .enumerate()
+        .filter(|(_, m)| m.size == size)
+        .max_by_key(|(_, m)| m.refresh_mhz)
+        .map(|(i, _)| i)
+}
+
 type Compositor =
     DrmCompositor<GbmAllocator<DrmDeviceFd>, GbmFramebufferExporter<DrmDeviceFd>, (), DrmDeviceFd>;
 
@@ -218,12 +243,16 @@ pub fn run_console_with(
         if conn.state() != connector::State::Connected {
             continue;
         }
-        let Some(&mode) = conn
+        let infos: Vec<ModeInfo> = conn
             .modes()
             .iter()
-            .find(|m| m.mode_type().contains(ModeTypeFlags::PREFERRED))
-            .or_else(|| conn.modes().first())
-        else {
+            .map(|m| ModeInfo {
+                size: m.size(),
+                refresh_mhz: refresh_mhz(m.clock(), m.hsync().2, m.vsync().2, m.vrefresh()),
+                preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
+            })
+            .collect();
+        let Some(mode) = choose_mode(&infos).map(|i| conn.modes()[i]) else {
             continue;
         };
         let crtc = conn
@@ -673,6 +702,32 @@ mod tests {
             None,
             "Ctrl+Alt+A is the session's"
         );
+    }
+
+    /// A 165 Hz monitor that prefers 1920×1080 at 60 Hz runs at 165 Hz, at the preferred
+    /// resolution (not a larger mode's); without a preferred mode, the first mode's resolution.
+    #[test]
+    fn the_preferred_resolution_at_its_highest_refresh() {
+        let m = |w, h, hz: u32, preferred| ModeInfo {
+            size: (w, h),
+            refresh_mhz: hz * 1000,
+            preferred,
+        };
+        let modes = [
+            m(1920, 1080, 60, true),
+            m(2560, 1440, 144, false),
+            m(1920, 1080, 165, false),
+            m(1920, 1080, 144, false),
+            m(1280, 720, 240, false),
+        ];
+        assert_eq!(choose_mode(&modes), Some(2));
+        let unflagged = [
+            m(1920, 1080, 60, false),
+            m(1920, 1080, 120, false),
+            m(1280, 720, 240, false),
+        ];
+        assert_eq!(choose_mode(&unflagged), Some(1));
+        assert_eq!(choose_mode(&[]), None);
     }
 
     /// The refresh from the pixel clock: 1920×1080 CEA timing (2200 × 1125 at 148.5 MHz) is
