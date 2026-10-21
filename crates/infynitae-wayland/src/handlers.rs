@@ -80,12 +80,15 @@ impl WaylandState {
     /// or a new popup — is told the element's current hint, with the subsurfaces already below
     /// it. Later changes reach it with the rest of the tree (`Effect::PreferredScale`). The
     /// value is Core's (OBJ-16); only the routing is decided here.
-    fn send_current_preferred_scale(&self, surface: &WlSurface) {
-        if let Some((scale_120, integer_scale)) = self
-            .toplevel_root(surface)
-            .and_then(|root| self.element_index_by_root(&root))
-            .and_then(|i| self.core.preferred_scale_of(self.elements[i].id))
-        {
+    pub(crate) fn send_current_preferred_scale(&self, surface: &WlSurface) {
+        let root = self.toplevel_root(surface);
+        let hint = match root.as_ref().and_then(|r| self.layer_index_by_root(r)) {
+            Some(i) => self.core.layer_preferred_scale(self.layers[i].id),
+            None => root
+                .and_then(|root| self.element_index_by_root(&root))
+                .and_then(|i| self.core.preferred_scale_of(self.elements[i].id)),
+        };
+        if let Some((scale_120, integer_scale)) = hint {
             convert::send_preferred_scale_to_tree(surface, scale_120, integer_scale);
         }
     }
@@ -126,12 +129,16 @@ impl WaylandState {
             self.pointer_unset_grab(serial, 0);
         }
         self.popup_pointer_grab_serial = None;
-        let target = self
-            .core
-            .focus()
-            .target()
-            .and_then(|id| self.window(id))
-            .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
+        // a layer surface holding the keyboard (L5) has it before the focused window
+        let target = match self.core.focus().layer() {
+            Some(layer) => self.layer_surface(layer),
+            None => self
+                .core
+                .focus()
+                .target()
+                .and_then(|id| self.window(id))
+                .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone())),
+        };
         kb.set_focus(self, target, serial);
     }
 
@@ -210,8 +217,9 @@ impl WaylandState {
     }
 
     /// M3: popup position = `get_unconstrained_geometry(target)` against the anchor output's
-    /// viewport (R8), or the positioner's own geometry when Core has no target.
-    fn place_popup(
+    /// viewport (R8) — for a popup of a layer surface, against its whole output — or the
+    /// positioner's own geometry when Core has no target.
+    pub(crate) fn place_popup(
         &self,
         surface: &PopupSurface,
         positioner: PositionerState,
@@ -231,17 +239,20 @@ impl WaylandState {
             offset = (offset.0 + loc.0, offset.1 + loc.1);
             parent = p.get_parent_surface();
         }
-        let target = parent
-            .and_then(|root| self.element_index_by_root(&root))
-            .and_then(|i| {
-                self.core
-                    .popup_constraint_target(self.elements[i].id, causing_output)
-            })
-            .map(|mut t| {
-                t.loc.x -= offset.0;
-                t.loc.y -= offset.1;
-                t
-            });
+        let target = match parent.as_ref().and_then(|r| self.layer_index_by_root(r)) {
+            Some(i) => self.core.layer_popup_constraint_target(self.layers[i].id),
+            None => parent
+                .and_then(|root| self.element_index_by_root(&root))
+                .and_then(|i| {
+                    self.core
+                        .popup_constraint_target(self.elements[i].id, causing_output)
+                }),
+        }
+        .map(|mut t| {
+            t.loc.x -= offset.0;
+            t.loc.y -= offset.1;
+            t
+        });
         let geometry = match target {
             Some(t) => positioner.get_unconstrained_geometry(convert::parent_geometry_rect(t)),
             None => positioner.get_geometry(),
@@ -520,20 +531,24 @@ impl XdgShellHandler for WaylandState {
     }
 
     /// Popup grabs (INC-4, M3, INV-INPUT-10).
-    /// Precondition W-SM-7: root surface must exist and be an element root, else grab_popup asserts.
-    /// Focus precondition: root must match the element with ActiveElementFocus.
+    /// Precondition W-SM-7: root surface must exist and be an element or layer-surface root, else
+    /// grab_popup asserts.
+    /// Focus precondition: an element root must match the element with ActiveElementFocus; a
+    /// layer-surface root (a panel's menu) must be what the user is using — the pointer is on its
+    /// tree or it holds the keyboard.
     fn grab(&mut self, surface: PopupSurface, _seat: wl_seat::WlSeat, serial: Serial) {
         let kind = PopupKind::Xdg(surface.clone());
         let Ok(root) = find_popup_root_surface(&kind) else {
             surface.send_popup_done();
             return;
         };
-        let Some(elem_idx) = self.element_index_by_root(&root) else {
-            surface.send_popup_done();
-            return;
+        let allowed = match self.layer_index_by_root(&root) {
+            Some(i) => self.layer_in_use(self.layers[i].id, &root),
+            None => self
+                .element_index_by_root(&root)
+                .is_some_and(|i| self.core.focus().target() == Some(self.elements[i].id)),
         };
-        let elem_id = self.elements[elem_idx].id;
-        if self.core.focus().target() != Some(elem_id) {
+        if !allowed {
             surface.send_popup_done();
             return;
         }
@@ -583,6 +598,10 @@ impl XdgShellHandler for WaylandState {
         self.popups.cleanup();
         self.reconcile_popup_chain();
         self.restore_preempted_constraint();
+        if let Some(i) = root.as_ref().and_then(|r| self.layer_index_by_root(r)) {
+            self.layer_committed(i);
+            return;
+        }
         match root.and_then(|root| self.element_index_by_root(&root)) {
             Some(i) => self.element_tree_changed(i),
             // the root could not be resolved (already gone): refresh every mapped tree; the
@@ -590,6 +609,9 @@ impl XdgShellHandler for WaylandState {
             None => {
                 for i in 0..self.elements.len() {
                     self.element_tree_changed(i);
+                }
+                for i in 0..self.layers.len() {
+                    self.layer_committed(i);
                 }
             }
         }

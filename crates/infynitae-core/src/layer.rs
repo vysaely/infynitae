@@ -264,6 +264,17 @@ pub(crate) fn entries_of(r: &LayerRecord, scale: f64, out: &mut Vec<LayerEntry>)
     }
 }
 
+/// Whether two trees of a layer surface hold the same surfaces, where they are, how large and
+/// what they accept input on (a new frame request is not a change of shape).
+fn same_shape(a: &SurfaceTree, b: &SurfaceTree) -> bool {
+    a.geometry == b.geometry
+        && a.surfaces.len() == b.surfaces.len()
+        && a.surfaces.iter().zip(&b.surfaces).all(|(x, y)| {
+            (x.key, x.role, x.size, x.mapped, &x.input)
+                == (y.key, y.role, y.size, y.mapped, &y.input)
+        })
+}
+
 /// The front-most entry of `entries` with an input region containing the logical point `p`.
 pub(crate) fn select(entries: &[LayerEntry], p: (f64, f64)) -> Option<LayerHit> {
     for e in entries {
@@ -361,6 +372,34 @@ impl crate::Core {
         select(if above { &frame.above } else { &frame.below }, p)
     }
 
+    /// The constraint target for a popup of the layer surface `id` (xdg-positioner
+    /// `get_popup`): its whole output, in the surface's own coordinates — a layer surface does not
+    /// move with any camera, so the output is where its popups can be seen. Rounded inward at a
+    /// fractional scale (R8). `None` for a surface that is not Core's or not yet arranged.
+    pub fn layer_popup_constraint_target(&self, id: LayerId) -> Option<LocalRect> {
+        let r = self.layer(id)?;
+        r.configured?;
+        let (w, h) = self.output(r.output)?.logical_extent();
+        Some(LocalRect {
+            loc: crate::geom::LocalPoint {
+                x: -r.geometry.loc.x,
+                y: -r.geometry.loc.y,
+            },
+            size: LocalSize {
+                w: w.floor() as i32,
+                h: h.floor() as i32,
+            },
+        })
+    }
+
+    /// The preferred scale of the layer surface `id`'s trees (`(scale_120, integer_scale)`): its
+    /// output's. A surface that joins the tree later (a popup) is told it before its first
+    /// configure.
+    pub fn layer_preferred_scale(&self, id: LayerId) -> Option<(u32, u32)> {
+        let scale = self.output(self.layer(id)?.output)?.scale;
+        Some(((scale * 120.0).round() as u32, scale.ceil() as u32))
+    }
+
     /// `zwlr_layer_shell_v1.get_layer_surface` (L1, L8: any client): a new layer surface on
     /// `output`, or, when the client named none, on the output that holds the pointer (or the
     /// first one). `None` when no output is connected.
@@ -403,6 +442,8 @@ impl crate::Core {
         let r = &mut self.layers[i];
         let was_mapped = r.mapped();
         let before = (r.geometry, r.state);
+        // what is under the pointer can change without the root changing: a popup opens or closes
+        let reshaped = r.tree.as_ref().is_none_or(|old| !same_shape(old, &tree));
         if r.configured.is_none() && tree.root().is_some_and(|s| s.mapped) {
             // W-SM-6 for layer surfaces: a buffer before the initial configure
             return Err(ProtocolError::BufferBeforeConfigure);
@@ -413,7 +454,7 @@ impl crate::Core {
         let mut fx = self.relayout(output);
         let r = &self.layers[i];
         let mapped = r.mapped();
-        let changed = mapped != was_mapped || (r.geometry, r.state) != before;
+        let changed = mapped != was_mapped || (r.geometry, r.state) != before || reshaped;
         fx.extend(self.layer_membership(i));
         if mapped && !was_mapped {
             fx.extend(self.layer_scale(i));
@@ -539,14 +580,14 @@ impl crate::Core {
     }
 
     fn layer_scale(&self, i: usize) -> Vec<Effect> {
-        let r = &self.layers[i];
-        let Some(scale) = self.output(r.output).map(|m| m.scale) else {
+        let layer = self.layers[i].id;
+        let Some((scale_120, integer_scale)) = self.layer_preferred_scale(layer) else {
             return Vec::new();
         };
         vec![Effect::LayerPreferredScale {
-            layer: r.id,
-            scale_120: (scale * 120.0).round() as u32,
-            integer_scale: scale.ceil() as u32,
+            layer,
+            scale_120,
+            integer_scale,
         }]
     }
 
@@ -1258,5 +1299,85 @@ mod tests {
         c.layer_destroyed(bar);
         assert_eq!(c.usable_area(o), Some((0.0, 0.0, 1920.0, 1080.0)));
         assert!(c.layer_frame(o).above.is_empty());
+    }
+
+    /// A popup of a bar (`zwlr_layer_surface_v1.get_popup`) is part of the bar's tree: drawn with
+    /// it, in front of it, and hit-tested before the window under it, in its own surface-local
+    /// frame.
+    #[test]
+    fn a_bars_popup_is_drawn_and_hit_in_front_of_the_window_under_it() {
+        let Fx {
+            mut c, mut i, o, ..
+        } = setup();
+        let _w = map_win(&mut c, 9, 1920, 1080);
+        let s = state(Layer::Top, (true, false, true, true), (0, 30), 30);
+        let (bar, _) = map(&mut c, o, 1, s);
+        let mut t = tree(1, 1920, 30, true);
+        t.surfaces.insert(
+            0,
+            SnapshotSurface {
+                key: key(2),
+                role: SurfaceRole::Popup {
+                    position: LocalPoint { x: 100, y: 30 },
+                    geometry_loc: LocalPoint { x: 0, y: 0 },
+                },
+                size: LocalSize { w: 200, h: 300 },
+                mapped: true,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            },
+        );
+        c.layer_committed(bar, s, t).unwrap();
+        let frame = c.layer_frame(o);
+        assert_eq!(
+            frame
+                .above
+                .iter()
+                .map(|e| (e.surface, e.origin))
+                .collect::<Vec<_>>(),
+            [(key(2), (100, 30)), (key(1), (0, 0))],
+            "the popup in front of its bar"
+        );
+        // from the view centre (960, 540) to (150, 100): inside the popup, over the window
+        c.physical_input_vec(
+            &mut i,
+            PhysicalEvent::PointerMotion {
+                delta: (-810.0, -440.0),
+                delta_unaccel: (-810.0, -440.0),
+                time_us: 1,
+            },
+        )
+        .unwrap();
+        let (target, loc) = c.route_pointer().unwrap();
+        assert_eq!(target.map(|t| t.surface), Some(key(2)));
+        assert_eq!(
+            loc,
+            CanvasPos {
+                x: 50 << 16,
+                y: 70 << 16
+            }
+        );
+    }
+
+    /// A layer popup's constraint target is its whole output, in the surface's coordinates: for a
+    /// bar at the bottom, the output starts 1050 px above it. Before the surface is arranged there
+    /// is none.
+    #[test]
+    fn a_layer_popup_is_constrained_to_the_whole_output() {
+        let Fx { mut c, o, .. } = setup();
+        let pending = c.layer_created(Some(o)).unwrap();
+        assert_eq!(c.layer_popup_constraint_target(pending), None);
+        let (bar, _) = map(
+            &mut c,
+            o,
+            1,
+            state(Layer::Top, (false, true, true, true), (0, 30), 30),
+        );
+        assert_eq!(c.layer(bar).unwrap().geometry, rect(0, 1050, 1920, 30));
+        assert_eq!(
+            c.layer_popup_constraint_target(bar),
+            Some(rect(0, -1050, 1920, 1080))
+        );
+        assert_eq!(c.layer_preferred_scale(bar), Some((120, 1)));
     }
 }

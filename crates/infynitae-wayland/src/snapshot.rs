@@ -101,12 +101,10 @@ fn popup_created(surface: &WlSurface) -> u64 {
     })
 }
 
-/// The snapshot of a toplevel's whole surface tree, with every surface registered.
-pub(crate) fn extract(window: &Window, registry: &mut SurfaceRegistry) -> Option<SurfaceTree> {
-    let root = window.toplevel()?.wl_surface().clone();
-    let geometry = window.geometry();
-    let mut raw = Vec::new();
-    let mut popups: Vec<_> = PopupManager::popups_for_surface(&root)
+/// The trees of `root`'s popups, newest first, each with its position relative to `root`'s
+/// window-geometry origin.
+fn popup_trees(root: &WlSurface, raw: &mut Vec<Raw>) {
+    let mut popups: Vec<_> = PopupManager::popups_for_surface(root)
         .map(|(popup, position)| (popup_created(popup.wl_surface()), popup, position))
         .collect();
     popups.sort_by_key(|(created, _, _)| std::cmp::Reverse(*created));
@@ -118,9 +116,17 @@ pub(crate) fn extract(window: &Window, registry: &mut SurfaceRegistry) -> Option
                 convert::local_point(position),
                 convert::local_point(geometry_loc),
             )),
-            &mut raw,
+            raw,
         );
     }
+}
+
+/// The snapshot of a toplevel's whole surface tree, with every surface registered.
+pub(crate) fn extract(window: &Window, registry: &mut SurfaceRegistry) -> Option<SurfaceTree> {
+    let root = window.toplevel()?.wl_surface().clone();
+    let geometry = window.geometry();
+    let mut raw = Vec::new();
+    popup_trees(&root, &mut raw);
     tree(&root, None, &mut raw);
     build(
         raw,
@@ -132,15 +138,18 @@ pub(crate) fn extract(window: &Window, registry: &mut SurfaceRegistry) -> Option
     )
 }
 
-/// The snapshot of a layer surface's tree (its root and subsurfaces; L1): the window geometry is
-/// the root surface's own extent, at its origin.
+/// The snapshot of a layer surface's tree (its root, subsurfaces and popups; L1): the window
+/// geometry is the root surface's own extent, at its origin, which is also where its popups'
+/// positions are measured from.
 pub(crate) fn extract_layer(
     root: &WlSurface,
     registry: &mut SurfaceRegistry,
 ) -> Option<SurfaceTree> {
     let mut raw = Vec::new();
+    popup_trees(root, &mut raw);
+    let first = raw.len();
     tree(root, None, &mut raw);
-    let size = raw.first().map(|r| r.size).unwrap_or_default();
+    let size = raw.get(first).map(|r| r.size).unwrap_or_default();
     build(
         raw,
         LocalRect {

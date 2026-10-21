@@ -3,7 +3,9 @@
 //! this module turns their requests into Core's protocol entries and Core's effects into protocol
 //! events. Any client may create one (L8).
 
+use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
 use smithay::delegate_layer_shell;
+use smithay::desktop::PopupManager;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::compositor::with_states;
@@ -11,6 +13,7 @@ use smithay::wayland::shell::wlr_layer::{
     self, ExclusiveZone, LayerSurface, LayerSurfaceCachedState, WlrLayerShellHandler,
     WlrLayerShellState,
 };
+use smithay::wayland::shell::xdg::PopupSurface;
 
 use infynitae_core::layer::{Anchors, KeyboardInteractivity, Layer, LayerId, LayerState};
 
@@ -75,12 +78,43 @@ impl WaylandState {
             .map(|h| h.surface.wl_surface().clone())
     }
 
-    /// A commit of a layer surface's root, or of a surface in its tree: Core gets the committed
-    /// state and the tree. A buffer before the initial configure is the client's protocol error
-    /// (Smithay posts it), and is not passed on.
+    /// Whether the user is using the layer surface `id` (rooted at `root`): the pointer is on its
+    /// tree, or it holds the keyboard.
+    pub(crate) fn layer_in_use(&self, id: LayerId, root: &WlSurface) -> bool {
+        let pointer_on_it = self
+            .pointer_handle()
+            .current_focus()
+            .and_then(|s| self.toplevel_root(&s))
+            .is_some_and(|r| &r == root);
+        pointer_on_it || self.core.focus().layer() == Some(id)
+    }
+
+    /// A commit of a layer surface's root, or of a surface in its tree (a popup's too): Core gets
+    /// the committed state and the tree. A buffer before the initial configure is the client's
+    /// protocol error (Smithay posts it), and is not passed on. An unmapped surface's popups are
+    /// dismissed, as a toplevel's are.
     pub(crate) fn layer_committed(&mut self, index: usize) {
         let LayerHandle { id, surface } = self.layers[index].clone();
         let root = surface.wl_surface().clone();
+        let root_mapped = with_states(&root, |states| {
+            states
+                .data_map
+                .get::<RendererSurfaceStateUserData>()
+                .is_some_and(|d| {
+                    d.lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .buffer()
+                        .is_some()
+                })
+        });
+        if !root_mapped {
+            let popups: Vec<_> = PopupManager::popups_for_surface(&root)
+                .map(|(p, _)| p)
+                .collect();
+            for p in popups {
+                let _ = PopupManager::dismiss_popup(&root, &p);
+            }
+        }
         let state = with_states(&root, |states| {
             state_of(
                 states
@@ -189,6 +223,20 @@ impl WlrLayerShellHandler for WaylandState {
             // no output to put it on: closed at once, as the protocol allows
             None => surface.send_close(),
         }
+    }
+
+    /// `zwlr_layer_surface_v1.get_popup`: the popup (created by xdg-shell without a parent) now
+    /// has this surface as its parent. It is placed against the surface's output and told the
+    /// surface's scale before its initial configure; Smithay's popup tree takes it at its first
+    /// commit.
+    fn new_popup(&mut self, parent: LayerSurface, popup: PopupSurface) {
+        if self.layer_index_by_root(parent.wl_surface()).is_none() {
+            popup.send_popup_done();
+            return;
+        }
+        let positioner = popup.with_pending_state(|s| s.positioner);
+        self.place_popup(&popup, positioner, None);
+        self.send_current_preferred_scale(popup.wl_surface());
     }
 
     fn layer_destroyed(&mut self, surface: LayerSurface) {

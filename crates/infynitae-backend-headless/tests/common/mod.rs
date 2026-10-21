@@ -648,6 +648,51 @@ impl Probe {
         self.kb_log.push(format!("destroy_layer {label}"));
     }
 
+    /// A popup of the layer surface `parent` (`xdg_surface.get_popup` with no parent, then
+    /// `zwlr_layer_surface_v1.get_popup`), with `xdg_popup.grab` on `grab`'s serial, then its
+    /// initial commit. Placement as [`Probe::popup`].
+    pub fn layer_popup(
+        &mut self,
+        qh: &QueueHandle<Self>,
+        label: &'static str,
+        parent: usize,
+        spec: PopupSpec,
+        grab: Option<u32>,
+    ) -> usize {
+        let PopupSpec {
+            content,
+            anchor_rect,
+            slide,
+            ..
+        } = spec;
+        let idx = self.new_xdg_surface(qh, label, content);
+        let pos: XdgPositioner = self
+            .wm_base
+            .as_ref()
+            .expect("xdg_wm_base")
+            .create_positioner(qh, ());
+        pos.set_size(content.0, content.1);
+        pos.set_anchor_rect(anchor_rect.0, anchor_rect.1, anchor_rect.2, anchor_rect.3);
+        pos.set_anchor(xdg_positioner::Anchor::TopLeft);
+        pos.set_gravity(xdg_positioner::Gravity::BottomRight);
+        if slide {
+            pos.set_constraint_adjustment(
+                xdg_positioner::ConstraintAdjustment::SlideX
+                    | xdg_positioner::ConstraintAdjustment::SlideY,
+            );
+        }
+        let xdg = self.surfaces[idx].xdg.clone().expect("xdg");
+        let popup = xdg.get_popup(None, &pos, qh, idx);
+        pos.destroy();
+        self.layer_of(parent).get_popup(&popup);
+        if let Some(serial) = grab {
+            popup.grab(self.seat.as_ref().expect("seat"), serial);
+        }
+        self.surfaces[idx].popup = Some(popup);
+        self.surfaces[idx].wl.commit();
+        idx
+    }
+
     /// The layer role object of surface `idx`.
     pub fn layer_of(&self, idx: usize) -> &ZwlrLayerSurfaceV1 {
         &self
