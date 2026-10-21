@@ -340,3 +340,31 @@ fn a_fit_during_the_presentation_of_a_resized_client_is_refused() {
         "W is shown where it was before the presentation"
     );
 }
+
+/// C12.F17 Q1 B on the fit path of Super+Enter: with the camera away from the fit (so the toggle
+/// fits, not restores), Super+Enter while O presents W changes neither camera A nor its history.
+#[test]
+fn a_fit_from_away_is_refused_while_the_output_presents() {
+    let mut r = Rig::new(Lockstep::new(Some(output((1920, 1080), 120))));
+    r.map_w();
+    r.motion((200.0, 200.0));
+    r.motion((10.0, 0.0));
+    focus_w(&mut r);
+    let o = r.ls.output();
+    let w = r.ls.state.elements().next().unwrap();
+    let initial = camera(&r);
+    r.ls.probe.surfaces[0]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_fullscreen(None);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(r.ls.state.core().presentation(o), Some(w), "W presented");
+    chord(&mut r, &[KEY_LEFTMETA]);
+    assert!(
+        same(camera(&r), initial),
+        "camera A changed: a fit during the presentation"
+    );
+    assert_eq!(history_len(&r), 0, "the history changed");
+}
