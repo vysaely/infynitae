@@ -17,9 +17,9 @@ fi
 # Fallback defaults
 CURSOR_THEME="${CURSOR_THEME:-${XCURSOR_THEME:-Adwaita}}"
 CURSOR_SIZE="${CURSOR_SIZE:-${XCURSOR_SIZE:-24}}"
-FONT_NAME="${FONT_NAME:-JetBrains Mono}"
+FONT_NAME="${FONT_NAME:-monospace}"
 FONT_SIZE="${FONT_SIZE:-10}"
-ICON_THEME="${ICON_THEME:-Papirus-Dark}"
+ICON_THEME="${ICON_THEME:-Adwaita}"
 COLOR_SCHEME="${COLOR_SCHEME:-prefer-dark}"
 MOUSE_ACCEL_PROFILE="${MOUSE_ACCEL_PROFILE:-flat}"
 MOUSE_ACCEL_SPEED="${MOUSE_ACCEL_SPEED:-0.0}"
@@ -62,9 +62,10 @@ gtk-enable-animations=false
 EOF
     done
 
-    # 4. Synchronize Qt platform settings (~/.config/kdeglobals) without running KDE daemons
+    # 4. Synchronize Qt platform settings (~/.config/kdeglobals) without clobbering existing KDE configs
     mkdir -p "$HOME/.config"
-    cat << EOF > "$HOME/.config/kdeglobals"
+    if [ ! -f "$HOME/.config/kdeglobals" ]; then
+        cat << EOF > "$HOME/.config/kdeglobals"
 [Icons]
 Theme=$ICON_THEME
 
@@ -72,6 +73,7 @@ Theme=$ICON_THEME
 cursorTheme=$CURSOR_THEME
 cursorSize=$CURSOR_SIZE
 EOF
+    fi
 
     # 5. Synchronize GSettings / D-Bus if present (optional)
     if command -v gsettings >/dev/null 2>&1; then

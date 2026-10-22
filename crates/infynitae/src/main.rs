@@ -286,9 +286,18 @@ fn main() -> ExitCode {
         std::env::var_os("WAYLAND_DISPLAY").is_none() && std::env::var_os("DISPLAY").is_none()
     }) {
         println!("[infynitae] Starting console compositor (DRM backend, EXPERIMENTAL)...");
+        let exec = exec_cmd.or_else(|| {
+            let home = std::env::var("HOME").ok()?;
+            let session_script = format!("{home}/infynitae/live/session.sh");
+            if std::path::Path::new(&session_script).exists() {
+                Some(session_script)
+            } else {
+                None
+            }
+        });
         let options = infynitae_backend_drm::ConsoleOptions {
             socket_name,
-            exec: exec_cmd,
+            exec,
             duration,
             max_frames,
             xwayland_satellite,

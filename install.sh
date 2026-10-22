@@ -6,7 +6,7 @@
 set -e
 
 REPO_URL="https://github.com/vysaely/infynitae.git"
-INSTALL_DIR="$HOME/infynitae/infynitae-native"
+INSTALL_DIR="$HOME/infynitae"
 
 echo "=========================================================="
 echo "      INFYNITAE - PURE ARCH LINUX INSTALLER"
@@ -20,7 +20,7 @@ if [ ! -f "Cargo.toml" ] || [ ! -d "crates/infynitae" ]; then
         sudo pacman -S --needed --noconfirm git
     fi
     mkdir -p "$(dirname "$INSTALL_DIR")"
-    if [ ! -d "$INSTALL_DIR" ]; then
+    if [ ! -d "$INSTALL_DIR/.git" ]; then
         git clone "$REPO_URL" "$INSTALL_DIR"
     fi
     cd "$INSTALL_DIR"
@@ -56,18 +56,22 @@ if ! command -v kitty >/dev/null 2>&1 && ! command -v alacritty >/dev/null 2>&1 
 fi
 
 # 3. Setup Rust toolchain if rustup is used
-if command -v rustup >/dev/null 2>&1 && ! command -v cargo >/dev/null 2>&1; then
+if command -v rustup >/dev/null 2>&1 && ! rustup show active-toolchain >/dev/null 2>&1; then
     echo "==> Setting up default Rust toolchain..."
     rustup default stable
 fi
 
-# 4. Ensure seatd / libseat permission for console TTY
+# 4. Ensure seat permission for console TTY
+# On systemd (standard Arch), systemd-logind manages the seat natively with 0 extra daemons and no reboot needed.
+# Only start seatd.service if systemd-logind is not active.
 if command -v systemctl >/dev/null 2>&1; then
-    if ! systemctl is-active --quiet seatd 2>/dev/null; then
+    if ! systemctl is-active --quiet systemd-logind 2>/dev/null; then
         sudo systemctl enable --now seatd 2>/dev/null || true
     fi
-    # Add current user to input and seat groups
     sudo usermod -aG input,video,seat "$USER" 2>/dev/null || true
+    if [ -S /run/seatd.sock ] && command -v setfacl >/dev/null 2>&1; then
+        sudo setfacl -m "u:${USER}:rw" /run/seatd.sock 2>/dev/null || true
+    fi
 fi
 
 # 5. Build Infynitae in release mode
@@ -179,20 +183,16 @@ exit $STATUS
 EOF
 chmod +x "$HOME/.local/bin/infynitae-session"
 
-# 10. Ensure ~/.local/bin is in user PATH
-if ! echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
-    for prof in "$HOME/.bash_profile" "$HOME/.profile"; do
-        if [ -f "$prof" ]; then
-            if ! grep -q '\.local/bin' "$prof"; then
-                echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$prof"
-            fi
-            break
-        elif [ "$prof" = "$HOME/.bash_profile" ]; then
-            echo 'export PATH="$HOME/.local/bin:$PATH"' > "$prof"
-            break
-        fi
-    done
-fi
+# Also install into /usr/local/bin so commands work immediately in current shell and display managers
+sudo mkdir -p /usr/local/bin 2>/dev/null || true
+sudo cp -f "$HOME/.local/bin/infynitae" "$HOME/.local/bin/infynitae-session" "$HOME/.local/bin/infynitae-dev" "$HOME/.local/bin/infynitae-settings" /usr/local/bin/ 2>/dev/null || true
+
+# 10. Ensure ~/.local/bin is in user PATH across interactive and login shells
+for prof in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+    if [ -f "$prof" ] && ! grep -q '\.local/bin' "$prof"; then
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$prof"
+    fi
+done
 
 # 11. Create Wayland session desktop entry (selectable in login display manager)
 mkdir -p "$HOME/.local/share/wayland-sessions"

@@ -30,9 +30,31 @@ export CLUTTER_BACKEND="wayland"
 unset GTK_MODULES
 unset GTK_RC_FILES
 
-# 5. Clean, standalone universal settings (zero daemons, pure disk sync)
+# 5. Ensure XDG_RUNTIME_DIR is valid (required for Wayland sockets)
+if [ -z "$XDG_RUNTIME_DIR" ]; then
+    if [ -d "/run/user/$(id -u)" ] && [ -w "/run/user/$(id -u)" ]; then
+        export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+    else
+        export XDG_RUNTIME_DIR="/tmp/infynitae-runtime-$(id -u)"
+        mkdir -p -m 0700 "$XDG_RUNTIME_DIR"
+    fi
+fi
+
+# 6. Load user config and synchronize universal settings
+if [ -f "$HOME/.config/infynitae/config" ]; then
+    . "$HOME/.config/infynitae/config"
+fi
+export XCURSOR_THEME="${CURSOR_THEME:-${XCURSOR_THEME:-Adwaita}}"
+export XCURSOR_SIZE="${CURSOR_SIZE:-${XCURSOR_SIZE:-24}}"
+export XKB_DEFAULT_LAYOUT="${XKB_DEFAULT_LAYOUT:-us}"
+export XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-caps:escape}"
+export MOUSE_ACCEL_PROFILE="${MOUSE_ACCEL_PROFILE:-flat}"
+export MOUSE_ACCEL_SPEED="${MOUSE_ACCEL_SPEED:-0.0}"
+export KEYBOARD_REPEAT_DELAY="${KEYBOARD_REPEAT_DELAY:-200}"
+export KEYBOARD_REPEAT_RATE="${KEYBOARD_REPEAT_RATE:-35}"
+
 if [ -f "$HOME/infynitae/live/settings.sh" ]; then
-    . "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1 || true
+    sh "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1 || true
 fi
 
 # 6. Isolated D-Bus/dconf database profile (prevents inheriting host desktop defaults)

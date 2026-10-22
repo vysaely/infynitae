@@ -10,11 +10,18 @@ if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"
 fi
 
-BIN="$HOME/.cache/infynitae-integration/target-tty/release/infynitae"
+BIN="$HOME/.local/bin/infynitae"
+if [ ! -x "$BIN" ] && [ -x "$HOME/infynitae/target/release/infynitae" ]; then
+    BIN="$HOME/infynitae/target/release/infynitae"
+fi
+XWLS=""
+if command -v xwayland-satellite >/dev/null 2>&1; then
+    XWLS="--xwayland-satellite $(command -v xwayland-satellite)"
+fi
 mkdir -p "$HOME/infynitae/live/logs"
 LOG="$HOME/infynitae/live/logs/tty.log"
-echo "Infynitae on the console. Ctrl+Alt+Backspace quits, Ctrl+Alt+F1 = KDE. Log: $LOG"
-"$BIN" --tty --xwayland-satellite /usr/bin/xwayland-satellite \
+echo "Infynitae on the console. Ctrl+Alt+Backspace quits, Ctrl+Alt+F1..F12 switches VT. Log: $LOG"
+"$BIN" --tty $XWLS \
     --exec "$HOME/infynitae/live/session.sh" "$@" > "$LOG" 2>&1
 code=$?
 echo "Infynitae exited ($code). Last lines of the log:"

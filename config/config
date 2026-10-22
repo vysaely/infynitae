@@ -41,12 +41,12 @@ TOUCHPAD_NATURAL_SCROLL="false"  # Invert scroll direction
 CURSOR_THEME="Adwaita"
 CURSOR_SIZE="24"
 
-# Global UI Font:
-FONT_NAME="JetBrains Mono"
+# Global UI Font ("monospace" resolves universally to whatever monospace font is installed):
+FONT_NAME="monospace"
 FONT_SIZE="10"
 
 # Icon Theme (for file dialogs and portals):
-ICON_THEME="Papirus-Dark"
+ICON_THEME="Adwaita"
 
 # Color Scheme: "prefer-dark" or "prefer-light"
 COLOR_SCHEME="prefer-dark"

@@ -5,8 +5,17 @@ set -e
 umask 077
 
 ACTION="${1:-help}"
+if [ $# -gt 0 ]; then
+    shift
+fi
 STATE_DIR="$HOME/.local/state/infynitae"
 mkdir -p "$STATE_DIR"
+
+if [ -f "$HOME/infynitae/infynitae-native/Cargo.toml" ]; then
+    REPO_DIR="$HOME/infynitae/infynitae-native"
+else
+    REPO_DIR="$HOME/infynitae"
+fi
 
 case "$ACTION" in
     reload|r)
@@ -15,7 +24,7 @@ case "$ACTION" in
         echo "==> Quickshell supervisor will respawn immediately."
         ;;
     logs|log|l)
-        TARGET="${2:-all}"
+        TARGET="${1:-all}"
         case "$TARGET" in
             shell|qs)
                 tail -n 50 -f "$STATE_DIR/quickshell.log"
@@ -38,9 +47,14 @@ case "$ACTION" in
         esac
         ;;
     test|nested|t)
+        if [ -z "$WAYLAND_DISPLAY" ] && [ -z "$DISPLAY" ]; then
+            echo "Error: 'infynitae-dev test' runs a nested window inside an existing desktop (e.g. KDE)." >&2
+            echo "On a TTY console, run:  infynitae-session" >&2
+            exit 1
+        fi
         echo "==> Launching Infynitae in a safe nested window..."
         echo "==> You can test your compositor changes inside this window without touching your live desktop."
-        CARGO_BIN="$HOME/infynitae/infynitae-native/target/release/infynitae"
+        CARGO_BIN="$REPO_DIR/target/release/infynitae"
         if [ ! -f "$CARGO_BIN" ]; then
             CARGO_BIN="$HOME/.local/bin/infynitae"
         fi
@@ -48,14 +62,14 @@ case "$ACTION" in
         ;;
     build|b)
         echo "==> Compiling Infynitae compositor in release mode..."
-        cd "$HOME/infynitae/infynitae-native"
+        cd "$REPO_DIR"
         cargo build --release -p infynitae
         cp -f target/release/infynitae "$HOME/.local/bin/infynitae"
         echo "==> Successfully installed to ~/.local/bin/infynitae"
         ;;
     check|test-all)
         echo "==> Running architecture verification..."
-        cd "$HOME/infynitae/infynitae-native"
+        cd "$REPO_DIR"
         python3 tools/verify-architecture
         echo "==> Running core tests..."
         cargo test -p infynitae-backend-headless --test t1_window_slots
