@@ -1,6 +1,6 @@
 # Infynitae
 
-Infinite canvas Wayland compositor built in Rust for Arch Linux. Built for my own system and workflow.
+Infinite canvas Wayland compositor built in Rust for Arch Linux. Vibecoded for my own system and workflow.
 
 ## Keybindings
 
