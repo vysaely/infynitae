@@ -1,0 +1,9 @@
+# GitHub Linguist overrides
+# Treat development tools, math simulations, and shell scripts as non-code so the repo reflects pure Rust
+
+tools/** linguist-documentation
+docs/** linguist-documentation
+experiments/** linguist-documentation
+crates/**/tests/** linguist-documentation
+live/** linguist-vendored
+install.sh linguist-vendored
