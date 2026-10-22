@@ -84,15 +84,23 @@ cp -f live/settings.sh "$HOME/.local/bin/infynitae-settings"
 chmod +x "$HOME/.local/bin/infynitae-settings"
 echo "==> Installed binaries to ~/.local/bin/{infynitae, infynitae-dev, infynitae-settings}"
 
-# 7. Deploy live runtime scripts & Quickshell dynamic island
+# 7. Deploy live runtime scripts & companion helpers
 mkdir -p "$HOME/infynitae/live"
-cp -rf live/* "$HOME/infynitae/live/"
+SRC_LIVE="$(cd live 2>/dev/null && pwd -P || echo "")"
+DST_LIVE="$(cd "$HOME/infynitae/live" 2>/dev/null && pwd -P || echo "")"
+if [ -n "$SRC_LIVE" ] && [ "$SRC_LIVE" != "$DST_LIVE" ]; then
+    cp -rf live/* "$HOME/infynitae/live/"
+fi
 chmod +x "$HOME/infynitae/live"/*.sh "$HOME/infynitae/live"/*.py 2>/dev/null || true
 
 # 8. Deploy default configuration
 mkdir -p "$HOME/.config/infynitae"
 if [ -d "config" ]; then
-    cp -rf config/* "$HOME/.config/infynitae/" 2>/dev/null || true
+    SRC_CFG="$(cd config 2>/dev/null && pwd -P || echo "")"
+    DST_CFG="$(cd "$HOME/.config/infynitae" 2>/dev/null && pwd -P || echo "")"
+    if [ -n "$SRC_CFG" ] && [ "$SRC_CFG" != "$DST_CFG" ]; then
+        cp -rf config/* "$HOME/.config/infynitae/" 2>/dev/null || true
+    fi
 fi
 
 # 9. Create ~/.local/bin/infynitae-session
