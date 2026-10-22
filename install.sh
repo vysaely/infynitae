@@ -160,35 +160,7 @@ exit $STATUS
 EOF
 chmod +x "$HOME/.local/bin/infynitae-session"
 
-# 10. Configure auto-start on TTY1 for Fish shell
-if [ -f "$HOME/.config/fish/config.fish" ]; then
-    if ! grep -q "infynitae-session" "$HOME/.config/fish/config.fish"; then
-        cat << 'EOF' >> "$HOME/.config/fish/config.fish"
-
-# Auto-start Infynitae on TTY1 console login
-if status is-login
-    if test -z "$WAYLAND_DISPLAY" -a "$XDG_VTNR" = 1
-        exec infynitae-session
-    end
-end
-EOF
-        echo "==> Configured TTY1 auto-start in ~/.config/fish/config.fish"
-    fi
-fi
-
-# 11. Configure auto-start for Bash/Zsh login
-for profile in "$HOME/.bash_profile" "$HOME/.zprofile"; do
-    if [ -f "$profile" ] && ! grep -q "infynitae-session" "$profile"; then
-        cat << 'EOF' >> "$profile"
-
-# Auto-start Infynitae on TTY1 console login
-if [ -z "$WAYLAND_DISPLAY" ] && [ "$(tty)" = "/dev/tty1" ]; then
-    exec infynitae-session
-fi
-EOF
-        echo "==> Configured TTY1 auto-start in $profile"
-    fi
-done
+# 10. Wayland session desktop entry (selectable in login display manager)
 
 # 12. Create Wayland session desktop entry
 mkdir -p "$HOME/.local/share/wayland-sessions"
