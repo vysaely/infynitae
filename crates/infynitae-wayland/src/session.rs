@@ -452,7 +452,8 @@ impl Drop for Session {
 /// Wayland socket, and its X display and cookie or no `DISPLAY` / `XAUTHORITY` at all
 /// (INV-XWAYLAND-1: never the compositor's own). Nothing of the compositor's own launch that
 /// would misdirect the client is passed on: a `WAYLAND_SOCKET` fd, an activation token or
-/// startup id meant for the compositor itself. `None` for an empty command.
+/// startup id meant for the compositor itself, or host desktop session variables
+/// (`KDE_FULL_SESSION`, etc.). `None` for an empty command.
 fn client_command(
     cmd: &str,
     socket_name: &str,
@@ -466,7 +467,12 @@ fn client_command(
         .env("WAYLAND_DISPLAY", socket_name)
         .env_remove("WAYLAND_SOCKET")
         .env_remove("XDG_ACTIVATION_TOKEN")
-        .env_remove("DESKTOP_STARTUP_ID");
+        .env_remove("DESKTOP_STARTUP_ID")
+        .env_remove("KDE_FULL_SESSION")
+        .env_remove("KDE_SESSION_VERSION")
+        .env_remove("KDE_SESSION_UID")
+        .env_remove("KDE_APPLICATIONS_AS_SCOPE")
+        .env_remove("XDG_MENU_PREFIX");
     match x_display {
         Some(x) => command.env("DISPLAY", x),
         None => command.env_remove("DISPLAY"),
@@ -907,10 +913,15 @@ mod tests {
             [
                 removed("DESKTOP_STARTUP_ID"),
                 removed("DISPLAY"),
+                removed("KDE_APPLICATIONS_AS_SCOPE"),
+                removed("KDE_FULL_SESSION"),
+                removed("KDE_SESSION_UID"),
+                removed("KDE_SESSION_VERSION"),
                 ("WAYLAND_DISPLAY".into(), Some("wl-7".into())),
                 removed("WAYLAND_SOCKET"),
                 removed("XAUTHORITY"),
                 removed("XDG_ACTIVATION_TOKEN"),
+                removed("XDG_MENU_PREFIX"),
             ]
         );
         let (_, _, e) = env(Some(":3"), Some(std::path::Path::new("/run/x/cookie")));

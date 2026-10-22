@@ -211,7 +211,15 @@ impl WaylandState {
     fn spawn_action(&self, action: &str) {
         let home = std::env::var("HOME").unwrap_or_default();
         let script = format!("{home}/infynitae/live/launch.sh");
-        let _ = std::process::Command::new("sh").arg(script).arg(action).spawn();
+        let _ = std::process::Command::new("sh")
+            .arg(script)
+            .arg(action)
+            .env_remove("KDE_FULL_SESSION")
+            .env_remove("KDE_SESSION_VERSION")
+            .env_remove("KDE_SESSION_UID")
+            .env_remove("KDE_APPLICATIONS_AS_SCOPE")
+            .env_remove("XDG_MENU_PREFIX")
+            .spawn();
     }
 
     /// The Smithay output of a connected output (for render oracles and backends).
