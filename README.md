@@ -44,6 +44,10 @@ cd infynitae
 ./install.sh
 ```
 
+## Acknowledgements
+
+Inspired by [driftwm](https://github.com/malbiruk/driftwm) and [hyprland-infinitie-desktop-v2](https://github.com/sarodscommits/hyprland-infinitie-desktop-v2).
+
 ## License
 
 [MIT](LICENSE) © vysaely
