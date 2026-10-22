@@ -45,5 +45,5 @@ cargo test -p infynitae-backend-headless --test t1_inc7_adversarial pointer_even
 ```
 
 ## Links & Citations
-- Source Commit: [`e40eb70`](file:///home/vysaely/infynitae-native) (*"fix(input): a synthesised pointer event carries the input clock's time, never 0 (A-5)"*)
+- Source Commit: [`e40eb70`](file:///home/<user>/infynitae-native) (*"fix(input): a synthesised pointer event carries the input clock's time, never 0 (A-5)"*)
 - Related Pitfall: [KNOW-PITFALL-004: Mixed Timestamp Clock Domains](../pitfalls/KNOW-PITFALL-004-mixed-timestamp-clock-domains.md)

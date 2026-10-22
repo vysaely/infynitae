@@ -17,7 +17,7 @@
 ---
 
 ## Verified Facts
-1. Upstream DriftWM implements an unconditional 995ms frame callback heartbeat for all off-screen toplevels ([`src/render/lifecycle.rs:20`](file:///home/vysaely/.gemini/antigravity/scratch/driftwm/src/render/lifecycle.rs#L20)) to prevent EGL swapchain starvation.
+1. Upstream DriftWM implements an unconditional 995ms frame callback heartbeat for all off-screen toplevels ([`src/render/lifecycle.rs:20`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/src/render/lifecycle.rs#L20)) to prevent EGL swapchain starvation.
 2. In an infinite canvas compositor with 3,000 background windows, an ungated 995ms heartbeat causes ~3,000 clients to wake up, re-render, and issue `wl_surface.commit` every second.
 3. In Infynitae, each commit triggers damage re-evaluation, stage accounting, and scale passes, inducing high background CPU churn and frame-scheduling tail latency.
 

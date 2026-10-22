@@ -41,6 +41,6 @@ cargo test -p infynitae-backend-headless --test t0_hot_path_allocations
 ```
 
 ## Links & Citations
-- Source Commit: [`f1ef262`](file:///home/vysaely/infynitae-native)
+- Source Commit: [`f1ef262`](file:///home/<user>/infynitae-native)
 - Related Architecture: [KNOW-ARCH-004: Spatial Membership Culling](../architecture/KNOW-ARCH-004-spatial-membership-culling.md)
 - Related Experiment: [KNOW-EXP-002: OB-42 Global Counting-Allocator Ratchet](../experiments/KNOW-EXP-002-ob42-counting-allocator-ratchet.md)

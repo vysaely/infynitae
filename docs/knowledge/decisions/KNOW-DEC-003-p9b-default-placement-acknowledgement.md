@@ -42,5 +42,5 @@ cargo test -p infynitae-backend-headless --test t1_inc7_adversarial placement_af
 ```
 
 ## Links & Citations
-- Source Commit: [`df72202`](file:///home/vysaely/infynitae-native) (*"feat(inc-7): default placement after fullscreen at the first commit after the exit is acknowledged (P9b)"*)
+- Source Commit: [`df72202`](file:///home/<user>/infynitae-native) (*"feat(inc-7): default placement after fullscreen at the first commit after the exit is acknowledged (P9b)"*)
 - Related Decision: [KNOW-DEC-001: Pre-Map Fullscreen Ownership](KNOW-DEC-001-a3-premap-fullscreen-ownership.md)

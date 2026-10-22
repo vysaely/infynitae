@@ -18,7 +18,7 @@
 
 ## Verified Facts
 1. Upstream DriftWM claims in `dev/docs/caveats.md` line 95 that pulling pointer focus on every event-loop iteration costs $5.5\,\mu\text{s}$ over bare canvas, $2.9\,\mu\text{s}$ over a window, and $8.1\,\mu\text{s}$ for real motion.
-2. An independent adversarial execution of [`driftwm/src/tests/pull_cost.rs`](file:///home/vysaely/.gemini/antigravity/scratch/driftwm/src/tests/pull_cost.rs) on a 12-thread AMD host under Linux 7.2.9 revealed:
+2. An independent adversarial execution of [`driftwm/src/tests/pull_cost.rs`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/src/tests/pull_cost.rs) on a 12-thread AMD host under Linux 7.2.9 revealed:
    - Bare canvas pull: **$9.92\,\mu\text{s}$** (+80.4% slower than claimed).
    - Window pull: **$3.76\,\mu\text{s}$** (+29.5% slower than claimed).
    - Real absolute motion: **$15.80\,\mu\text{s}$** (+95.1% slower than claimed).

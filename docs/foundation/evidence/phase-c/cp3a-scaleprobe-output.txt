@@ -33,7 +33,7 @@ STORM start (scale changes every frame, 1.25 <-> 1.5)   for  1.00s: commits=90  
 STORM end (60 changes)                                  for  1.50s: commits=16   distinct buffer sizes (in order)=[(2400, 1350)] first commit after +Some(16671)us cpu=71.3%
 
 ########## firefox 157.0-1 (isolated HOME/profile, --no-remote, static page)
-# client ["firefox", "--no-remote", "--profile", "/tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/profile", "--new-instance", "about:blank"] pid 439095
+# client ["firefox", "--no-remote", "--profile", "/tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/profile", "--new-instance", "about:blank"] pid 439095
 mapped at Some(466.67) ms
 scale -> 1.00000 (120/120)                              for  1.50s: commits=19   distinct buffer sizes (in order)=[(1280, 972)] first commit after +Some(199998)us cpu=2.0%
 scale -> 1.00833 (121/120)                              for  1.50s: commits=22   distinct buffer sizes (in order)=[(1280, 972), (1291, 980)] first commit after +Some(0)us cpu=2.0%

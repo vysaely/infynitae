@@ -1,2 +1,2 @@
-binary /home/vysaely/.cache/infynitae-integration/nb1/infynitae-nb1-r2 36c167052685ad53 minimise_ms=3000 start 2026-10-17T02:06:13+03:00 load 1.63
+binary /home/<user>/.cache/infynitae-integration/nb1/infynitae-nb1-r2 36c167052685ad53 minimise_ms=3000 start 2026-10-17T02:06:13+03:00 load 1.63
 verdict STALL  exit_at=-1792191973.86s term_at=8.0s minimised=2 last_frame_done=23:06:16.900173 left=0

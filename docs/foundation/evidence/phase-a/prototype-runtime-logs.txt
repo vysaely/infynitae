@@ -1,5 +1,5 @@
 # Prototype 01 recorded runtime logs (from the agent session that built it)
-# source: /home/vysaely/.gemini/antigravity-cli/brain/0a6f9e0b-392d-4b84-b3f9-655367d15924/.system_generated/tasks/
+# source: /home/<user>/.gemini/antigravity-cli/brain/0a6f9e0b-392d-4b84-b3f9-655367d15924/.system_generated/tasks/
 === task-280.log
 
 =======================================================
@@ -103,5 +103,5 @@ Focus switched: 0
 
 === client launch commands found in session transcript
 DISPLAY=:25 GDK_BACKEND=x11 kitty -o linux_display_server=x11 --hold sh -c 
-WAYLAND_DISPLAY=wayland-2 /home/vysaely/.local/bin/xwayland-satellite :25 &
+WAYLAND_DISPLAY=wayland-2 /home/<user>/.local/bin/xwayland-satellite :25 &
 WAYLAND_DISPLAY=wayland-2 kitty --hold sh -c 

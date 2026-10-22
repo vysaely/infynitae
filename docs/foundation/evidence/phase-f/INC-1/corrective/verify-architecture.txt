@@ -1,7 +1,7 @@
 # commit: 1fa72af6ba8b24ab00f454701eb8b12650bdd8f2
 ========================================================================
 verify-architecture — Infynitae Native (OB-19)
-root: /home/vysaely/infynitae-native
+root: /home/<user>/infynitae-native
 ========================================================================
 
 [1] Pins (OB-19 item 3, INV-ARCH-3)

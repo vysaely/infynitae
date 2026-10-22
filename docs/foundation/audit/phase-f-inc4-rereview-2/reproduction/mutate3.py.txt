@@ -2,7 +2,7 @@
 """Third-review INC-4 mutations: each applied alone in a disposable worktree; detector = the shipped
 workspace suite at default features (what CI runs). DETECTED / MISSED / BROKEN."""
 import json, re, subprocess, sys, pathlib, os
-ROOT = pathlib.Path("/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/r3/mut")
+ROOT = pathlib.Path("/tmp/claude-1000/-home-user/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/r3/mut")
 W = "crates/infynitae-wayland/src"; C = "crates/infynitae-core/src"; H = "crates/infynitae-backend-headless/src"
 KBU = """                                if kb.has_grab(g.serial())
                                     || g.previous_serial().is_some_and(|ps| kb.has_grab(ps))

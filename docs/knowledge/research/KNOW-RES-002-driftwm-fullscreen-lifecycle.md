@@ -17,8 +17,8 @@
 ---
 
 ## Verified Facts
-1. **Saved Restore Size:** DriftWM maintains an independent `restore_size: Option<Size<i32, Logical>>` inside `Entry<W>` ([`src/stage/mod.rs:100`](file:///home/vysaely/.gemini/antigravity/scratch/driftwm/src/stage/mod.rs#L100)). It updates this value only during interactive pointer resizes, protecting against A-1 size loss when exiting fullscreen.
-2. **Pre-Map Queueing:** DriftWM queues pre-map fullscreen requests in `pending_fullscreen` ([`src/handlers/xdg_shell.rs:173`](file:///home/vysaely/.gemini/antigravity/scratch/driftwm/src/handlers/xdg_shell.rs#L173)), applying them only upon the first buffer commit.
+1. **Saved Restore Size:** DriftWM maintains an independent `restore_size: Option<Size<i32, Logical>>` inside `Entry<W>` ([`src/stage/mod.rs:100`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/src/stage/mod.rs#L100)). It updates this value only during interactive pointer resizes, protecting against A-1 size loss when exiting fullscreen.
+2. **Pre-Map Queueing:** DriftWM queues pre-map fullscreen requests in `pending_fullscreen` ([`src/handlers/xdg_shell.rs:173`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/src/handlers/xdg_shell.rs#L173)), applying them only upon the first buffer commit.
 3. **Physical Relocation Flaw:** When entering fullscreen, DriftWM teleports the window to `camera_i32` in canvas space and forces zoom to 1.0. This physical relocation requires complex recentering logic (`pending_recenter`) when exiting fullscreen.
 
 ## Unverified Hypotheses
@@ -26,7 +26,7 @@
 
 ## Performance & Correctness Implications
 - Infynitae's camera-independent projection view (`KNOW-ARCH-001`) completely avoids DriftWM's physical relocation vulnerabilities.
-- Infynitae implemented A-3 pre-map protection in Core commit [`07acfeb`](file:///home/vysaely/infynitae-native).
+- Infynitae implemented A-3 pre-map protection in Core commit [`07acfeb`](file:///home/<user>/infynitae-native).
 
 ## Limitations & Counterexamples
 - DriftWM does not check if an output is fullscreen when assigning keyboard focus (`src/state/keyboard_focus.rs:106`), permitting focus on invisible windows.
@@ -34,7 +34,7 @@
 ## Reproduction Instructions
 Inspect DriftWM fullscreen exit test:
 ```bash
-view_file /home/vysaely/.gemini/antigravity/scratch/driftwm/src/tests/configure_sequences.rs (lines 2773-2840)
+view_file /home/<user>/.gemini/antigravity/scratch/driftwm/src/tests/configure_sequences.rs (lines 2773-2840)
 ```
 
 ## Links & Citations

@@ -20,7 +20,7 @@
 1. AGY recommended that Infynitae's Wayland adapter query `smithay::utils::Clock::<Monotonic>::new().now()` to synthesize pointer timestamps during presentation switches.
 2. In reality, querying host wall-clock time in the adapter creates a dangerous race condition: if internal transitions run while real `evdev` kernel events are buffered in the socket queue, synthesized events receive time $T_{\text{now}}$ and queued events receive $T_{\text{kernel}}$ ($T_{\text{kernel}} < T_{\text{now}}$), causing backward timestamp jumps on the Wayland wire.
 3. Client toolkits (Qt, Chromium, GTK) assert that pointer timestamps never decrease, triggering crashes or desynchronization upon backward time jumps.
-4. Infynitae correctly rejected this approach and implemented `InputClock` in Core commit [`e40eb70`](file:///home/vysaely/infynitae-native).
+4. Infynitae correctly rejected this approach and implemented `InputClock` in Core commit [`e40eb70`](file:///home/<user>/infynitae-native).
 
 5. **Reconciliation 2026-10-14 (main `f323c2d`):** **Corrections (X-09).** Fact 2's backward jump is reasoned from event-loop ordering, not observed: `fs_client` evidence shows the A-5 fix (times 0 → input-clock times), not the wall-clock race. Fact 3 ("Qt, Chromium, GTK assert … triggering crashes") has no source; treat as unverified. The rejection of adapter wall-clock time stands on KNOW-ARCH-002 (one clock for wire times, deterministic tests).
 

@@ -49,7 +49,7 @@ Using host libthread_db library "/usr/lib/libthread_db.so.1".
 #7  0x00007f59a331da88 in ?? () from target:/usr/lib/libEGL_mesa.so.0
 #8  0x00007f59a331426d in ?? () from target:/usr/lib/libEGL_mesa.so.0
 #9  0x00007f59a33041a2 in ?? () from target:/usr/lib/libEGL_mesa.so.0
-#10 0x000055d5a32fd41e in smithay::backend::egl::ffi::egl::SwapBuffersWithDamageKHR (dpy=0x55d5ac4970f0, surface=0x55d5adfd85c0, rects=0x55d5aec97590, n_rects=1) at /home/vysaely/.cache/infynitae-integration/nb1-r2-target/debug/build/smithay-f2f0e6f7cb8aa325/out/egl_bindings.rs:494
+#10 0x000055d5a32fd41e in smithay::backend::egl::ffi::egl::SwapBuffersWithDamageKHR (dpy=0x55d5ac4970f0, surface=0x55d5adfd85c0, rects=0x55d5aec97590, n_rects=1) at /home/<user>/.cache/infynitae-integration/nb1-r2-target/debug/build/smithay-f2f0e6f7cb8aa325/out/egl_bindings.rs:494
 #11 0x000055d5a334a318 in smithay::backend::egl::native::EGLNativeSurface::swap_buffers::{closure#0}<wayland_egl::WlEglSurface> () at vendor/smithay-0.7.0/src/backend/egl/native.rs:336
 #12 0x000055d5a33b5f1c in smithay::backend::egl::error::wrap_egl_call<u32, smithay::backend::egl::native::EGLNativeSurface::swap_buffers::{closure_env#0}<wayland_egl::WlEglSurface>> (call=..., err=0) at vendor/smithay-0.7.0/src/backend/egl/error.rs:164
 #13 0x000055d5a33b61a3 in smithay::backend::egl::error::wrap_egl_call_bool<smithay::backend::egl::native::EGLNativeSurface::swap_buffers::{closure_env#0}<wayland_egl::WlEglSurface>> (call=...) at vendor/smithay-0.7.0/src/backend/egl/error.rs:196

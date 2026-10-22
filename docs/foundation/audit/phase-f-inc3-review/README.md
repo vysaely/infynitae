@@ -11,13 +11,13 @@
 
 ## Dossier Structure
 
-1. [`VERDICT.md`](file:///home/vysaely/infynitae-native/docs/foundation/audit/phase-f-inc3-review/VERDICT.md) — Definitive review verdict, executive summary, findings catalog, and exact recommended corrective/ratification actions.
-2. [`RECONSTRUCTION.md`](file:///home/vysaely/infynitae-native/docs/foundation/audit/phase-f-inc3-review/RECONSTRUCTION.md) — Independent canonical reconstruction of INC-3 scope, invariants, formulas, objects, state machines, and complete diff audit (`6470e1a..0c4e961`).
-3. [`INPUT_AUTHORITY.md`](file:///home/vysaely/infynitae-native/docs/foundation/audit/phase-f-inc3-review/INPUT_AUTHORITY.md) — Audit of input authority encapsulation, `InputPort` uncloneable token, `Authorized` proof passing, and architecture source-rule verifications.
-4. [`POINTER_AND_FOCUS.md`](file:///home/vysaely/infynitae-native/docs/foundation/audit/phase-f-inc3-review/POINTER_AND_FOCUS.md) — Audit of pointer coordinate pipeline (Physical -> Output -> Canvas), `ZeroOutputGrab` lifecycle, output crossing, and hit-testing against `ProjectionFrame`.
-5. [`CAMERA_PAN.md`](file:///home/vysaely/infynitae-native/docs/foundation/audit/phase-f-inc3-review/CAMERA_PAN.md) — Audit of `F-PAN-1` direct manipulation math, `M22` interaction state machine, button ownership table (`OBJ-25`), `KeepFocus` semantics, and Stage immutability.
-6. [`ADVERSARIAL_ATTACKS.md`](file:///home/vysaely/infynitae-native/docs/foundation/audit/phase-f-inc3-review/ADVERSARIAL_ATTACKS.md) — Execution and results of 20 independent adversarial scratch mutations (A through T), test oracle independence audit, and discovery of test-suite defect `INC3-F09`.
-7. [`OBLIGATION_REVIEW.md`](file:///home/vysaely/infynitae-native/docs/foundation/audit/phase-f-inc3-review/OBLIGATION_REVIEW.md) — Adjudication of architectural obligations `OB-45`, `OB-50`, `OB-3`, `OB-21`, `OB-4`, and tracking of all remaining open obligations.
+1. [`VERDICT.md`](file:///home/<user>/infynitae-native/docs/foundation/audit/phase-f-inc3-review/VERDICT.md) — Definitive review verdict, executive summary, findings catalog, and exact recommended corrective/ratification actions.
+2. [`RECONSTRUCTION.md`](file:///home/<user>/infynitae-native/docs/foundation/audit/phase-f-inc3-review/RECONSTRUCTION.md) — Independent canonical reconstruction of INC-3 scope, invariants, formulas, objects, state machines, and complete diff audit (`6470e1a..0c4e961`).
+3. [`INPUT_AUTHORITY.md`](file:///home/<user>/infynitae-native/docs/foundation/audit/phase-f-inc3-review/INPUT_AUTHORITY.md) — Audit of input authority encapsulation, `InputPort` uncloneable token, `Authorized` proof passing, and architecture source-rule verifications.
+4. [`POINTER_AND_FOCUS.md`](file:///home/<user>/infynitae-native/docs/foundation/audit/phase-f-inc3-review/POINTER_AND_FOCUS.md) — Audit of pointer coordinate pipeline (Physical -> Output -> Canvas), `ZeroOutputGrab` lifecycle, output crossing, and hit-testing against `ProjectionFrame`.
+5. [`CAMERA_PAN.md`](file:///home/<user>/infynitae-native/docs/foundation/audit/phase-f-inc3-review/CAMERA_PAN.md) — Audit of `F-PAN-1` direct manipulation math, `M22` interaction state machine, button ownership table (`OBJ-25`), `KeepFocus` semantics, and Stage immutability.
+6. [`ADVERSARIAL_ATTACKS.md`](file:///home/<user>/infynitae-native/docs/foundation/audit/phase-f-inc3-review/ADVERSARIAL_ATTACKS.md) — Execution and results of 20 independent adversarial scratch mutations (A through T), test oracle independence audit, and discovery of test-suite defect `INC3-F09`.
+7. [`OBLIGATION_REVIEW.md`](file:///home/<user>/infynitae-native/docs/foundation/audit/phase-f-inc3-review/OBLIGATION_REVIEW.md) — Adjudication of architectural obligations `OB-45`, `OB-50`, `OB-3`, `OB-21`, `OB-4`, and tracking of all remaining open obligations.
 
 ---
 

@@ -1,7 +1,7 @@
 # commit: 1fa72af6ba8b24ab00f454701eb8b12650bdd8f2
 ======================================================================
 Infynitae Native — Development Environment Verifier
-Repository root: /home/vysaely/infynitae-native
+Repository root: /home/<user>/infynitae-native
 ======================================================================
 
 [1] Git Repository State:

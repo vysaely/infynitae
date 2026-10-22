@@ -94,6 +94,7 @@ cleanup() {
     tput cnorm 2>/dev/null || true
 }
 trap cleanup EXIT INT TERM HUP
+umask 077
 
 if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"

@@ -30,7 +30,7 @@ Per contract Section 7, all claims distinguish:
 ## 2. Idle Resource Profiling
 
 ### Methodology
-The release binary `/home/vysaely/infynitae-native/target/release/infynitae` was executed in headless mode with virtual display for 5.11 seconds using dedicated python profiler script (`scratch/profile_idle.py`) sampling `/proc` / `psutil` CPU% and memory RSS every 200 ms.
+The release binary `/home/<user>/infynitae-native/target/release/infynitae` was executed in headless mode with virtual display for 5.11 seconds using dedicated python profiler script (`scratch/profile_idle.py`) sampling `/proc` / `psutil` CPU% and memory RSS every 200 ms.
 
 ### Results
 - **Process Lifetime:** 5.11 seconds

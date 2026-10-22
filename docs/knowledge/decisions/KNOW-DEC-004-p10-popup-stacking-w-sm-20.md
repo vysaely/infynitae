@@ -36,5 +36,5 @@ cargo test -p infynitae-backend-headless --test t1_inc7_adversarial a_newer_popu
 ```
 
 ## Links & Citations
-- Source Commit: [`3b0a3d7`](file:///home/vysaely/infynitae-native) (*"fix(adapter): popups of a toplevel are stacked newest in front, as xdg-shell requires (P10 #3)"*)
+- Source Commit: [`3b0a3d7`](file:///home/<user>/infynitae-native) (*"fix(adapter): popups of a toplevel are stacked newest in front, as xdg-shell requires (P10 #3)"*)
 - Related Research: [KNOW-RES-003: DriftWM Popups and Lock Reentrancy](../research/KNOW-RES-003-driftwm-popups-and-locks.md)

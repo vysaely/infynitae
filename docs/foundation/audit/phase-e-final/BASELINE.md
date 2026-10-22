@@ -29,7 +29,7 @@ The review was initiated with the strict requirement to verify that the reposito
 
 Direct command verification:
 ```bash
-git -C /home/vysaely/infynitae-native rev-parse HEAD HEAD~1 HEAD~2 HEAD~3 HEAD~4 HEAD~5 HEAD~6 HEAD~7 HEAD~8 HEAD~9 HEAD~10
+git -C /home/<user>/infynitae-native rev-parse HEAD HEAD~1 HEAD~2 HEAD~3 HEAD~4 HEAD~5 HEAD~6 HEAD~7 HEAD~8 HEAD~9 HEAD~10
 ```
 Returned:
 ```
@@ -58,7 +58,7 @@ The ancestry is completely linear, unbroken, and matches the historical lineage 
    nothing to commit, working tree clean
    ```
 2. **Directory Structure Audit:**
-   The repository root `/home/vysaely/infynitae-native/` contains only:
+   The repository root `/home/<user>/infynitae-native/` contains only:
    - `docs/`
    - `experiments/`
    - `tools/`

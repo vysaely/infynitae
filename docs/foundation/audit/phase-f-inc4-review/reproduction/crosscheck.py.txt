@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Re-run selected surviving mutations against the independent review tests (zz_review.rs)."""
 import importlib.util, subprocess, shutil, pathlib, re
-S = pathlib.Path("/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad")
+S = pathlib.Path("/tmp/claude-1000/-home-user/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad")
 src = (S / "mutate.py").read_text().split("def run_suite")[0]
 ns = {}
 exec(src, ns)

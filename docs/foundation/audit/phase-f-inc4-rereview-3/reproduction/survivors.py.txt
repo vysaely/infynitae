@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run survivors F10/F15/F16/F18/F20 against the reviewer suite (u4_attacks) in the probe worktree."""
 import re, subprocess, pathlib
-S = pathlib.Path("/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/r4")
+S = pathlib.Path("/tmp/claude-1000/-home-user/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/r4")
 ns = {}; exec((S / "mutate4.py").read_text().split("def run_suite")[0], ns)
 ROOT = S / "probe"; M = {m[0]: m for m in ns["M"]}
 def run():

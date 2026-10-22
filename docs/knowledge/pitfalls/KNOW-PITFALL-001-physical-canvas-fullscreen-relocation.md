@@ -33,7 +33,7 @@
 ## Reproduction Instructions
 Review DriftWM caveat documentation on `pending_recenter`:
 ```bash
-view_file /home/vysaely/.gemini/antigravity/scratch/driftwm/dev/docs/caveats.md (lines 110-120)
+view_file /home/<user>/.gemini/antigravity/scratch/driftwm/dev/docs/caveats.md (lines 110-120)
 ```
 
 ## Links & Citations

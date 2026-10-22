@@ -1,4 +1,4 @@
---- /home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/wayland/seat/pointer.rs	2006-07-24 04:21:28.000000000 +0300
+--- /home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/wayland/seat/pointer.rs	2006-07-24 04:21:28.000000000 +0300
 +++ vendor/smithay-0.7.0/src/wayland/seat/pointer.rs	2026-10-05 05:35:16.193370200 +0300
 @@ -250,7 +250,9 @@
  

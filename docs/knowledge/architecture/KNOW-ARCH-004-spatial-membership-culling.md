@@ -42,5 +42,5 @@ cargo test -p infynitae-backend-headless --test t0_hot_path_allocations   # from
 ```
 
 ## Links & Citations
-- Source Commit: [`85a74cb`](file:///home/vysaely/infynitae-native), [`f1ef262`](file:///home/vysaely/infynitae-native)
+- Source Commit: [`85a74cb`](file:///home/<user>/infynitae-native), [`f1ef262`](file:///home/<user>/infynitae-native)
 - Related Pitfall: [KNOW-PITFALL-005: Quadratic Scale-State Evaluation](../pitfalls/KNOW-PITFALL-005-quadratic-scale-state-evaluation.md)

@@ -2,6 +2,7 @@
 # Infynitae Universal Settings & Tooling Engine
 # Zero-bloat, daemonless settings synchronization across Wayland, GTK, Qt, and Xwayland.
 set -e
+umask 077
 
 CONFIG_FILE="$HOME/.config/infynitae/config"
 
@@ -103,11 +104,22 @@ cmd_set() {
         exit 1
     fi
 
+    # Security: restrict KEY strictly to alphanumeric and underscores
+    case "$KEY" in
+        *[!A-Za-z0-9_]*|"")
+            echo "Error: Invalid setting key '$KEY'. Keys may only contain letters, numbers, and underscores." >&2
+            exit 1
+            ;;
+    esac
+
+    # Security: escape double quotes and backslashes in VAL
+    VAL_CLEAN=$(printf '%s' "$VAL" | sed -e 's/[\\&]/\\&/g' -e 's/"/\\"/g')
+
     # Update or append in config file
     if grep -q "^${KEY}=" "$CONFIG_FILE" 2>/dev/null; then
-        sed -i "s|^${KEY}=.*|${KEY}=\"${VAL}\"|" "$CONFIG_FILE"
+        sed -i "s|^${KEY}=.*|${KEY}=\"${VAL_CLEAN}\"|" "$CONFIG_FILE"
     else
-        echo "${KEY}=\"${VAL}\"" >> "$CONFIG_FILE"
+        echo "${KEY}=\"${VAL_CLEAN}\"" >> "$CONFIG_FILE"
     fi
 
     echo "==> Updated $KEY=\"$VAL\" in $CONFIG_FILE"
@@ -122,7 +134,17 @@ cmd_get() {
         echo "Usage: infynitae-settings get <KEY>" >&2
         exit 1
     fi
-    eval echo "\$$KEY"
+
+    # Security: restrict KEY strictly to alphanumeric and underscores
+    case "$KEY" in
+        *[!A-Za-z0-9_]*|"")
+            echo "Error: Invalid setting key '$KEY'" >&2
+            exit 1
+            ;;
+    esac
+
+    # Safe retrieval without eval
+    grep "^${KEY}=" "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d'=' -f2- | sed -e 's/^"//' -e 's/"$//'
 }
 
 cmd_list() {

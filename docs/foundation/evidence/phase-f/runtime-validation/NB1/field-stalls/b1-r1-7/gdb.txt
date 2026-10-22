@@ -290,9 +290,9 @@ Thread 4 (Thread 0x7fb8d8ff96c0 (LWP 1727678) "infynit:disk$0"):
 #7  0x00007fb92254c05c in ?? () from target:/usr/lib/libc.so.6
 
 Thread 3 (Thread 0x7fb91032d6c0 (LWP 1727688) "pump_events mon"):
-#0  0x000055a5eacc78fe in rustix::backend::arch::asm::syscall3 (nr=..., a0=..., a1=..., a2=...) at /home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/backend/linux_raw/arch/x86_64.rs:111
-#1  0x000055a5ead3a400 in rustix::backend::event::syscalls::poll (fds=..., timeout=-1) at /home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/backend/linux_raw/arch/mod.rs:96
-#2  0x000055a5ead6fa4f in rustix::event::poll::poll (fds=..., timeout=-1) at /home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/event/poll.rs:36
+#0  0x000055a5eacc78fe in rustix::backend::arch::asm::syscall3 (nr=..., a0=..., a1=..., a2=...) at /home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/backend/linux_raw/arch/x86_64.rs:111
+#1  0x000055a5ead3a400 in rustix::backend::event::syscalls::poll (fds=..., timeout=-1) at /home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/backend/linux_raw/arch/mod.rs:96
+#2  0x000055a5ead6fa4f in rustix::event::poll::poll (fds=..., timeout=-1) at /home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/rustix-0.38.44/src/event/poll.rs:36
 #3  0x000055a5eacee429 in winit::platform_impl::linux::wayland::event_loop::{impl#5}::spawn::{closure#0} () at src/platform_impl/linux/wayland/event_loop/mod.rs:785
 #4  0x000055a5eacbb456 in std::sys::backtrace::__rust_begin_short_backtrace<winit::platform_impl::linux::wayland::event_loop::{impl#5}::spawn::{closure_env#0}, ()> (f=...) at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/sys/backtrace.rs:166
 #5  0x000055a5ead4c522 in std::thread::lifecycle::spawn_unchecked::{closure#1}::{closure#0}<winit::platform_impl::linux::wayland::event_loop::{impl#5}::spawn::{closure_env#0}, ()> () at /rustc/b940084d7eb6a299eb4bfeb8e34901bc051e7ac4/library/std/src/thread/lifecycle.rs:70
@@ -348,7 +348,7 @@ Thread 1 (Thread 0x7fb9226c0580 (LWP 1727651) "infynitae-nrt2"):
 #7  0x00007fb922346a88 in ?? () from target:/usr/lib/libEGL_mesa.so.0
 #8  0x00007fb92233d26d in ?? () from target:/usr/lib/libEGL_mesa.so.0
 #9  0x00007fb92232d1a2 in ?? () from target:/usr/lib/libEGL_mesa.so.0
-#10 0x000055a5ea7b53ae in smithay::backend::egl::ffi::egl::SwapBuffersWithDamageKHR (dpy=0x55a5f1187240, surface=0x55a5f2ce16c0, rects=0x55a5f39663f0, n_rects=1) at /home/vysaely/.cache/infynitae-integration/nrt-target/debug/build/smithay-f2f0e6f7cb8aa325/out/egl_bindings.rs:494
+#10 0x000055a5ea7b53ae in smithay::backend::egl::ffi::egl::SwapBuffersWithDamageKHR (dpy=0x55a5f1187240, surface=0x55a5f2ce16c0, rects=0x55a5f39663f0, n_rects=1) at /home/<user>/.cache/infynitae-integration/nrt-target/debug/build/smithay-f2f0e6f7cb8aa325/out/egl_bindings.rs:494
 #11 0x000055a5ea801038 in smithay::backend::egl::native::EGLNativeSurface::swap_buffers::{closure#0}<wayland_egl::WlEglSurface> () at vendor/smithay-0.7.0/src/backend/egl/native.rs:336
 #12 0x000055a5ea86aa3c in smithay::backend::egl::error::wrap_egl_call<u32, smithay::backend::egl::native::EGLNativeSurface::swap_buffers::{closure_env#0}<wayland_egl::WlEglSurface>> (call=..., err=0) at vendor/smithay-0.7.0/src/backend/egl/error.rs:164
 #13 0x000055a5ea86acc3 in smithay::backend::egl::error::wrap_egl_call_bool<smithay::backend::egl::native::EGLNativeSurface::swap_buffers::{closure_env#0}<wayland_egl::WlEglSurface>> (call=...) at vendor/smithay-0.7.0/src/backend/egl/error.rs:196

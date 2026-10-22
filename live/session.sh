@@ -1,5 +1,6 @@
 #!/bin/sh
 # Started by Infynitae's --exec inside the compositor (WAYLAND_DISPLAY already points at it).
+umask 077
 
 # Initialize decoupled standalone desktop environment
 if [ -f "$HOME/infynitae/live/env.sh" ]; then

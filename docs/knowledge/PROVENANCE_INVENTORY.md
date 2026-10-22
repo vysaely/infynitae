@@ -10,10 +10,10 @@ This document records the exact provenance, source revisions, laboratory logs, t
 - **Repository:** `https://github.com/malbiruk/driftwm`
 - **Author:** Klim Kostiuk
 - **License:** **GPL-3.0-or-later** (Strict restriction: zero source code copying permitted into Infynitae Native)
-- **Exact Upstream Commit Audited:** [`352333a8fa1b22171492d4b71a54102045c9a19d`](file:///home/vysaely/.gemini/antigravity/scratch/driftwm) (HEAD of `main`, version `0.19.0` + commits)
-- **Upstream Smithay Snapshot:** Git revision [`4cf0b62028039661477d482ec4758b687d8f4392`](file:///home/vysaely/.gemini/antigravity/scratch/driftwm/Cargo.toml#L9) (upstream `Smithay/smithay.git` master)
+- **Exact Upstream Commit Audited:** [`352333a8fa1b22171492d4b71a54102045c9a19d`](file:///home/<user>/.gemini/antigravity/scratch/driftwm) (HEAD of `main`, version `0.19.0` + commits)
+- **Upstream Smithay Snapshot:** Git revision [`4cf0b62028039661477d482ec4758b687d8f4392`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/Cargo.toml#L9) (upstream `Smithay/smithay.git` master)
 - **Rust Toolchain:** Edition 2024, `rust-version = "1.88"`
-- **Key Caveats Document:** [`dev/docs/caveats.md`](file:///home/vysaely/.gemini/antigravity/scratch/driftwm/dev/docs/caveats.md)
+- **Key Caveats Document:** [`dev/docs/caveats.md`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/dev/docs/caveats.md)
 
 ### 1.2 Microsoft Windows Graphics Internals Baseline
 - **Subject:** Desktop Window Manager (DWM), DirectX Graphics Infrastructure (DXGI), Windows Display Driver Model (WDDM 1.0–3.2)
@@ -48,11 +48,11 @@ This document records the exact provenance, source revisions, laboratory logs, t
 ## 3. Laboratory Artifacts & Reports
 
 1. **`driftwm_agy_audit.md`** (Session `c54deef2-d9ed-4960-94c0-add46699170d`, 37.5 KB): Initial comparative audit of DriftWM by AGY.
-2. **`INDEPENDENT_REVIEW.md`** (`/home/vysaely/.gemini/antigravity/scratch/INDEPENDENT_REVIEW.md`, 17.2 KB): Independent adversarial review evaluating AGY's findings, methodology, and empirical evidence.
-3. **`DISPUTED_FINDINGS.md`** (`/home/vysaely/.gemini/antigravity/scratch/DISPUTED_FINDINGS.md`, 16.7 KB): Detailed breakdown of contradicted, incorrect, and refuted claims with corrective experiments.
-4. **`VERIFIED_OPPORTUNITIES.md`** (`/home/vysaely/.gemini/antigravity/scratch/VERIFIED_OPPORTUNITIES.md`, 7.1 KB): Clean-room engineering opportunities and overlooked architectural discoveries.
-5. **`FINAL_RECOMMENDATION.md`** (`/home/vysaely/.gemini/antigravity/scratch/FINAL_RECOMMENDATION.md`, 7.8 KB): Ranked implementation roadmap and rejected optimization ledger.
-6. **`MICROSOFT_GRAPHICS_ARCHITECTURE_RESEARCH.md`** (`/home/vysaely/.gemini/antigravity/scratch/MICROSOFT_GRAPHICS_ARCHITECTURE_RESEARCH.md`, 41.2 KB): Deep-dive research into DWM, DXGI, WDDM, MPO, DirectFlip, and Linux DRM/KMS equivalents.
+2. **`INDEPENDENT_REVIEW.md`** (`/home/<user>/.gemini/antigravity/scratch/INDEPENDENT_REVIEW.md`, 17.2 KB): Independent adversarial review evaluating AGY's findings, methodology, and empirical evidence.
+3. **`DISPUTED_FINDINGS.md`** (`/home/<user>/.gemini/antigravity/scratch/DISPUTED_FINDINGS.md`, 16.7 KB): Detailed breakdown of contradicted, incorrect, and refuted claims with corrective experiments.
+4. **`VERIFIED_OPPORTUNITIES.md`** (`/home/<user>/.gemini/antigravity/scratch/VERIFIED_OPPORTUNITIES.md`, 7.1 KB): Clean-room engineering opportunities and overlooked architectural discoveries.
+5. **`FINAL_RECOMMENDATION.md`** (`/home/<user>/.gemini/antigravity/scratch/FINAL_RECOMMENDATION.md`, 7.8 KB): Ranked implementation roadmap and rejected optimization ledger.
+6. **`MICROSOFT_GRAPHICS_ARCHITECTURE_RESEARCH.md`** (`/home/<user>/.gemini/antigravity/scratch/MICROSOFT_GRAPHICS_ARCHITECTURE_RESEARCH.md`, 41.2 KB): Deep-dive research into DWM, DXGI, WDDM, MPO, DirectFlip, and Linux DRM/KMS equivalents.
 
 ---
 

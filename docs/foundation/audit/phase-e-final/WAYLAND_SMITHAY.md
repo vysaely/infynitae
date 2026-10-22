@@ -7,7 +7,7 @@
 
 ## 1. Pinned Smithay 0.7.0 Pointer Constraint Audit
 
-The pinned dependency under review is `smithay = "=0.7.0"` (specifically `/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0`).
+The pinned dependency under review is `smithay = "=0.7.0"` (specifically `/home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0`).
 
 ### 1.1 Source Code Mechanics in Stock Smithay
 

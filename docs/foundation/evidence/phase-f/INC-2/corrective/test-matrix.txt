@@ -1,10 +1,10 @@
-   Compiling infynitae-core v0.0.0 (/home/vysaely/infynitae-native/crates/infynitae-core)
-   Compiling infynitae-wayland v0.0.0 (/home/vysaely/infynitae-native/crates/infynitae-wayland)
-   Compiling infynitae-ipc v0.0.0 (/home/vysaely/infynitae-native/crates/infynitae-ipc)
-   Compiling infynitae-architecture-probes v0.0.0 (/home/vysaely/infynitae-native/enforcement/probes)
-   Compiling infynitae-backend-headless v0.0.0 (/home/vysaely/infynitae-native/crates/infynitae-backend-headless)
-   Compiling infynitae-backend-winit v0.0.0 (/home/vysaely/infynitae-native/crates/infynitae-backend-winit)
-   Compiling infynitae v0.0.0 (/home/vysaely/infynitae-native/crates/infynitae)
+   Compiling infynitae-core v0.0.0 (/home/<user>/infynitae-native/crates/infynitae-core)
+   Compiling infynitae-wayland v0.0.0 (/home/<user>/infynitae-native/crates/infynitae-wayland)
+   Compiling infynitae-ipc v0.0.0 (/home/<user>/infynitae-native/crates/infynitae-ipc)
+   Compiling infynitae-architecture-probes v0.0.0 (/home/<user>/infynitae-native/enforcement/probes)
+   Compiling infynitae-backend-headless v0.0.0 (/home/<user>/infynitae-native/crates/infynitae-backend-headless)
+   Compiling infynitae-backend-winit v0.0.0 (/home/<user>/infynitae-native/crates/infynitae-backend-winit)
+   Compiling infynitae v0.0.0 (/home/<user>/infynitae-native/crates/infynitae)
     Finished `test` profile [unoptimized + debuginfo] target(s) in 0.62s
      Running unittests src/main.rs (target/debug/deps/infynitae-8ead003d598a3a42)
 

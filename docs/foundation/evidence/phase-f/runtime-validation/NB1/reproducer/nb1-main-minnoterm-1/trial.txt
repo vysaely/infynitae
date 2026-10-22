@@ -1,2 +1,2 @@
-binary /home/vysaely/.cache/infynitae-integration/nb1/infynitae-nb1-main 38e14e9dae0ccd55 minimise_ms=3000 start 2026-10-17T02:04:06+03:00 load 1.67
+binary /home/<user>/.cache/infynitae-integration/nb1/infynitae-nb1-main 38e14e9dae0ccd55 minimise_ms=3000 start 2026-10-17T02:04:06+03:00 load 1.67
 verdict ok exit=0 exit_at=21.61s term_at=-1792191846.57s minimised=2 last_frame_done=23:04:27.626227 left=0

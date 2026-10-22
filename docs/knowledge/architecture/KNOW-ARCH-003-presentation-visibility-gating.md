@@ -17,7 +17,7 @@
 ---
 
 ## Verified Facts
-1. In traditional compositors (including DriftWM [`src/state/keyboard_focus.rs:106`](file:///home/vysaely/.gemini/antigravity/scratch/driftwm/src/state/keyboard_focus.rs#L106)), programmatic focus changes allow keyboard focus to be assigned to occluded windows hidden behind an active fullscreen presentation.
+1. In traditional compositors (including DriftWM [`src/state/keyboard_focus.rs:106`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/src/state/keyboard_focus.rs#L106)), programmatic focus changes allow keyboard focus to be assigned to occluded windows hidden behind an active fullscreen presentation.
 2. Infynitae introduced `hidden_by_presentation(&self, element: ElementId) -> bool`: an element is considered hidden if an output presents another element, the output camera would show the element, and no other active output observes it.
 3. In commit `489180e` (on main as `2aa8d65`, using `!observers(element).is_empty()` instead of INC-6's `observing_outputs`), `hidden_by_presentation` was optimized with `!self.presenting()` early-exit check, returning without visiting any element when no fullscreen presentation is active (it scans only the fullscreen grants).
 
@@ -38,5 +38,5 @@ cargo test -p infynitae-core --lib focus_does_not_move_to_an_element_a_presentat
 ```
 
 ## Links & Citations
-- Source Commits: [`0fe8f06`](file:///home/vysaely/infynitae-native), [`489180e`](file:///home/vysaely/infynitae-native)
+- Source Commits: [`0fe8f06`](file:///home/<user>/infynitae-native), [`489180e`](file:///home/<user>/infynitae-native)
 - Related Decision: [KNOW-DEC-002: Fullscreen Focus Eligibility](../decisions/KNOW-DEC-002-a8-fullscreen-focus-eligibility.md)

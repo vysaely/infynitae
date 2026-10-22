@@ -1,6 +1,6 @@
 ========================================================================
 verify-architecture — Infynitae Native (OB-19)
-root: /home/vysaely/infynitae-native
+root: /home/<user>/infynitae-native
 ========================================================================
 
 [1] Pins (OB-19 item 3, INV-ARCH-3)

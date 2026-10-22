@@ -1,4 +1,4 @@
-check-foundation-docs: /home/vysaely/infynitae-native/docs/foundation
+check-foundation-docs: /home/<user>/infynitae-native/docs/foundation
   ok   d9-verdict                   passed=1 failed=0
   ok   deferred-closed              passed=33 failed=0
   ok   formula-duplicate            passed=1 failed=0

@@ -17,7 +17,7 @@
 ---
 
 ## Verified Facts
-1. Upstream DriftWM intentionally installs popup grabs with unrecognized serials ([`src/tests/popups.rs:107`](file:///home/vysaely/.gemini/antigravity/scratch/driftwm/src/tests/popups.rs#L107)), choosing client compatibility over specification compliance.
+1. Upstream DriftWM intentionally installs popup grabs with unrecognized serials ([`src/tests/popups.rs:107`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/src/tests/popups.rs#L107)), choosing client compatibility over specification compliance.
 2. The XDG Shell specification explicitly requires that popup grabs match a valid user interaction serial.
 3. Permissive tolerance allows an unprivileged background client to monopolize seat pointer and keyboard input without user interaction, creating an input hijacking and denial-of-service vulnerability.
 
@@ -35,7 +35,7 @@
 ## Reproduction Instructions
 Inspect DriftWM's permissive popup grab test:
 ```bash
-view_file /home/vysaely/.gemini/antigravity/scratch/driftwm/src/tests/popups.rs (lines 107-142)
+view_file /home/<user>/.gemini/antigravity/scratch/driftwm/src/tests/popups.rs (lines 107-142)
 ```
 
 ## Links & Citations

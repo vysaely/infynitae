@@ -1,6 +1,6 @@
 ======================================================================
 Infynitae Native — Development Environment Verifier
-Repository root: /home/vysaely/infynitae-native
+Repository root: /home/<user>/infynitae-native
 ======================================================================
 
 [1] Git Repository State:

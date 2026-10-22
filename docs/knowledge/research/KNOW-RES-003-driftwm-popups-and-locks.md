@@ -17,10 +17,10 @@
 ---
 
 ## Verified Facts
-1. **Deferred Pointer Ungrab:** In DriftWM ([`src/state/keyboard_focus.rs:224-239`](file:///home/vysaely/.gemini/antigravity/scratch/driftwm/src/state/keyboard_focus.rs#L224-L239)), `tear_down_popup_grab` defers pointer ungrab to `loop_handle.insert_idle()`. This was necessitated because DriftWM's `PanGrab` (a custom Smithay `PointerGrab`) called focus teardown from within its own button handler while holding `PointerInner`'s non-reentrant mutex.
+1. **Deferred Pointer Ungrab:** In DriftWM ([`src/state/keyboard_focus.rs:224-239`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/src/state/keyboard_focus.rs#L224-L239)), `tear_down_popup_grab` defers pointer ungrab to `loop_handle.insert_idle()`. This was necessitated because DriftWM's `PanGrab` (a custom Smithay `PointerGrab`) called focus teardown from within its own button handler while holding `PointerInner`'s non-reentrant mutex.
 2. **Smithay Lock Reentrancy:** Calling any helper that queries surface state inside `compositor::with_states()` deadlocks silently because `UserDataMap`'s lock is non-reentrant.
 3. **Scrutinee Lock Retention:** Holding `output_state()` across a `match` or `if let` block keeps the mutex guard alive until the end of the block. DriftWM enforces protection via `clippy::significant_drop_in_scrutinee = "warn"`.
-4. **Permissive Serial Bug:** DriftWM deliberately ignores invalid grab serials ([`src/tests/popups.rs:107`](file:///home/vysaely/.gemini/antigravity/scratch/driftwm/src/tests/popups.rs#L107)), violating XDG Shell protocol security.
+4. **Permissive Serial Bug:** DriftWM deliberately ignores invalid grab serials ([`src/tests/popups.rs:107`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/src/tests/popups.rs#L107)), violating XDG Shell protocol security.
 
 ## Unverified Hypotheses
 - Hypothesized that Infynitae requires `insert_idle` ungrab; refuted by independent review (Infynitae does not use a Smithay `PointerGrab` for panning and ungrabs via `Inner` handle).
@@ -34,7 +34,7 @@
 ## Reproduction Instructions
 Inspect DriftWM caveats and grab tests:
 ```bash
-view_file /home/vysaely/.gemini/antigravity/scratch/driftwm/dev/docs/caveats.md (lines 15-40)
+view_file /home/<user>/.gemini/antigravity/scratch/driftwm/dev/docs/caveats.md (lines 15-40)
 ```
 
 ## Links & Citations

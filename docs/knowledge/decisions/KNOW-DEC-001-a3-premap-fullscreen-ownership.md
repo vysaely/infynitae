@@ -41,6 +41,6 @@ cargo test -p infynitae-backend-headless --test t1_inc7_adversarial a_pre_map_gr
 ```
 
 ## Links & Citations
-- Source Commit: [`07acfeb`](file:///home/vysaely/infynitae-native) (*"fix(inc-7): a grant made before the first map takes the output when the element maps (A-3)"*)
+- Source Commit: [`07acfeb`](file:///home/<user>/infynitae-native) (*"fix(inc-7): a grant made before the first map takes the output when the element maps (A-3)"*)
 - Related Architecture: [KNOW-ARCH-001: Camera-Independent Fullscreen Presentation Projection](../architecture/KNOW-ARCH-001-camera-projection-independence.md)
 - Related Pitfall: [KNOW-PITFALL-001: Physical Canvas Fullscreen Relocation](../pitfalls/KNOW-PITFALL-001-physical-canvas-fullscreen-relocation.md)

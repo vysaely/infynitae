@@ -325,15 +325,15 @@ pub fn default_primary_scanout_output_compare<'a>(
 }
 
 ## pointer grab API
-/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/grab.rs:37:pub trait PointerGrab<D: SeatHandler>: Send + Downcast {
-/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:168:    pub fn set_grab<G: PointerGrab<D> + 'static>(&self, data: &mut D, grab: G, serial: Serial, focus: Focus) {
-/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:178:    pub fn unset_grab(&self, data: &mut D, serial: Serial, time: u32) {
-/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:232:    pub fn motion(
-/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:252:    pub fn relative_motion(
-/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:518:    pub fn set_grab<G: PointerGrab<D> + 'static>(
-/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:534:    pub fn unset_grab(
-/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:576:    pub fn motion(
-/home/vysaely/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:590:    pub fn relative_motion(
+/home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/grab.rs:37:pub trait PointerGrab<D: SeatHandler>: Send + Downcast {
+/home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:168:    pub fn set_grab<G: PointerGrab<D> + 'static>(&self, data: &mut D, grab: G, serial: Serial, focus: Focus) {
+/home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:178:    pub fn unset_grab(&self, data: &mut D, serial: Serial, time: u32) {
+/home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:232:    pub fn motion(
+/home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:252:    pub fn relative_motion(
+/home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:518:    pub fn set_grab<G: PointerGrab<D> + 'static>(
+/home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:534:    pub fn unset_grab(
+/home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:576:    pub fn motion(
+/home/<user>/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0/src/input/pointer/mod.rs:590:    pub fn relative_motion(
 ## Window pub API
 109:    pub fn new(toplevel: ToplevelSurface) -> Window {
 114:    pub fn new_wayland_window(toplevel: ToplevelSurface) -> Window {

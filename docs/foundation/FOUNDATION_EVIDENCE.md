@@ -211,7 +211,7 @@ Backend boundary (B12) must be designed fresh.
 
 **EV-P18** · xwayland-satellite 0.8.3 started under the prototype, connected to Xwayland on `:25`, and an X11 kitty mapped as a Stage toplevel.
 VERIFIED FACT · PROTO-MEASURE · `task-316.log` lines "Connected to Xwayland on :25", "registered new toplevel window ElementId(0)" after `DISPLAY=:25 … kitty` · MEDIUM-HIGH (the log does not name the client per element) · n/a ·
-Satellite warned "Couldn't bind fractional scale manager" and "Could not bind xdg activation". It *uses* those protocols when offered, so they interact with the C6 XWayland boundary. Spawn path is hard-coded to `/home/vysaely/.local/bin`, display `:25` is fixed, and there is no supervision (`xwayland.rs:10-22`).
+Satellite warned "Couldn't bind fractional scale manager" and "Could not bind xdg activation". It *uses* those protocols when offered, so they interact with the C6 XWayland boundary. Spawn path is hard-coded to `/home/<user>/.local/bin`, display `:25` is fixed, and there is no supervision (`xwayland.rs:10-22`).
 
 **EV-P19** · Hardware GLES works nested: GLES 3.2, Mesa 26.2.3, AMD RX 9070 XT (radeonsi gfx1201), EGL Wayland platform.
 VERIFIED FACT · PROTO-MEASURE · `task-280.log` · HIGH · n/a · —

@@ -1,6 +1,6 @@
 [Desktop Entry]
 Name=Infynitae
 Comment=Infynitae Infinite Canvas Wayland Compositor
-Exec=/home/vysaely/.local/bin/infynitae-session
+Exec=infynitae-session
 Type=Application
 DesktopNames=infynitae;wlroots

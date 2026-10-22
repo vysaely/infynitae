@@ -1,7 +1,7 @@
 # C6 experiment: xwayland-satellite 0.8.3 under the b8-harness real-time server (private socket, X display :97). 2026-10-04T14:17:04+03:00
 # script: c6-sat.sh (same directory). Harness overrides Smithay's default maximize/fullscreen handlers (W-SM-13); see FOUNDATION_ARCHITECTURE C6.
 # An earlier run WITHOUT the override mapped the element with anchor=None: Smithay's default fullscreen_request sent the initial configure before placement.
-# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 434995: ["/tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/sat.sh"]; policy starve
+# socket /tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 434995: ["/tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/sat.sh"]; policy starve
 [script] X11 window id: 4194317
 [script] X11 geometry before move:
 Window 4194317
@@ -16,7 +16,7 @@ Window 4194317
 [script] killing xwayland-satellite (pid 434996) to simulate a crash
 XIO:  fatal IO error 0 (Success) on X server ":97"
       after 384 requests (384 known processed) with 0 events remaining.
-/tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/sat.sh: line 19: 434996 Killed                     xwayland-satellite :97 > "$XDG_RUNTIME_DIR/sat.log" 2>&1
+/tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/sat.sh: line 19: 434996 Killed                     xwayland-satellite :97 > "$XDG_RUNTIME_DIR/sat.log" 2>&1
 [script] X11 kitty alive after satellite crash: no
 [script] satellite log (filtered):
  2026-10-04T11:17:04.699Z INFO  xwayland_satellite > Starting xwayland-satellite version 0.8.3

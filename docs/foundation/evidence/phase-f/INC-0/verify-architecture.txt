@@ -2,7 +2,7 @@
 # rustc 1.99.0 (b940084d7 2026-09-28); cargo 1.99.0 (5f94df478 2026-08-27)
 ========================================================================
 verify-architecture — Infynitae Native (OB-19)
-root: /home/vysaely/infynitae-native
+root: /home/<user>/infynitae-native
 ========================================================================
 
 [1] Pins (OB-19 item 3, INV-ARCH-3)

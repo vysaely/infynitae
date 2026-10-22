@@ -4,7 +4,7 @@ the shipped workspace suite runs (ulimit -n 1024), the file is restored. Result 
 DETECTED (>=1 shipped test fails), MISSED (suite green), BROKEN (does not compile / not applied)."""
 import json, re, subprocess, sys, pathlib
 
-ROOT = pathlib.Path("/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/mut")
+ROOT = pathlib.Path("/tmp/claude-1000/-home-user/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/mut")
 W = "crates/infynitae-wayland/src"
 C = "crates/infynitae-core/src"
 H = "crates/infynitae-backend-headless/src"

@@ -2,7 +2,7 @@
 """N09 family: each variant against (a) shipped t1_popup_focus WITH probe features, (b) the
 reviewer's wire-level oracles (t3 t13 / t06a / t01*). Prints failing tests and T13 wire."""
 import re, subprocess, pathlib
-S = pathlib.Path("/tmp/claude-1000/-home-vysaely/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/r3")
+S = pathlib.Path("/tmp/claude-1000/-home-user/037483b9-ea3c-4f61-8b28-8bba89f9b12a/scratchpad/r3")
 ns = {}
 exec((S / "mutate3.py").read_text().split("def run_suite")[0], ns)
 ROOT = S / "probe"

@@ -33,7 +33,7 @@ This directory contains the complete adversarial review artifacts for Phase E of
 
 ## 3. Baseline Verification Summary
 
-- **Repository path:** `/home/vysaely/infynitae-native`
+- **Repository path:** `/home/<user>/infynitae-native`
 - **Initial HEAD:** `09075a2d07dbc0cba862baac62136f9f3ff9e7b5`
 - **Working tree:** Clean
 - **Ancestry chain:**

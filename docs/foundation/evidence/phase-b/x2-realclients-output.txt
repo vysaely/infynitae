@@ -2,7 +2,7 @@
 # vkcube 1.4.357.0-1 (radv, dmabuf accepted-not-imported); kitty 0.49.2-1 (Mesa 1:26.2.3-2 swrast via LIBGL_ALWAYS_SOFTWARE=1, wl_shm)
 
 ########## vkcube --wsi wayland | starve | visible 3s, off-screen 5s, returned 3s
-# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 411466: ["vkcube", "--wsi", "wayland"]; policy starve
+# socket /tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 411466: ["vkcube", "--wsi", "wayland"]; policy starve
 mapped: true; first commit at Some(12.129) ms
 phase          commits/s   client CPU %
 visible            165.0           1.0
@@ -16,7 +16,7 @@ pongs received after camera return (us after return): [3]
 client exited during run: None
 
 ########## kitty (animated: prints a timestamp every 16ms) | starve | visible 3s, off-screen 5s, returned 3s
-# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 411504: ["kitty", "--config", "NONE", "-o", "confirm_os_window_close=0", "-o", "sync_to_monitor=yes", "sh", "-c", "while :; do date +%s.%N; sleep 0.016; done"]; policy starve
+# socket /tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 411504: ["kitty", "--config", "NONE", "-o", "confirm_os_window_close=0", "-o", "sync_to_monitor=yes", "sh", "-c", "while :; do date +%s.%N; sleep 0.016; done"]; policy starve
 mapped: true; first commit at Some(139.399) ms
 phase          commits/s   client CPU %
 visible             90.5         451.3
@@ -30,7 +30,7 @@ pongs received after camera return (us after return): []
 client exited during run: None
 
 ########## vkcube --wsi wayland | throttle:1000 | visible 3s, off-screen 5s, returned 3s
-# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 412809: ["vkcube", "--wsi", "wayland"]; policy throttle:1000
+# socket /tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 412809: ["vkcube", "--wsi", "wayland"]; policy throttle:1000
 mapped: true; first commit at Some(12.127) ms
 phase          commits/s   client CPU %
 visible            165.0           1.0
@@ -44,7 +44,7 @@ pongs received after camera return (us after return): []
 client exited during run: None
 
 ########## kitty (animated: prints a timestamp every 16ms) | throttle:1000 | visible 3s, off-screen 5s, returned 3s
-# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 412843: ["kitty", "--config", "NONE", "-o", "confirm_os_window_close=0", "-o", "sync_to_monitor=yes", "sh", "-c", "while :; do date +%s.%N; sleep 0.016; done"]; policy throttle:1000
+# socket /tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 412843: ["kitty", "--config", "NONE", "-o", "confirm_os_window_close=0", "-o", "sync_to_monitor=yes", "sh", "-c", "while :; do date +%s.%N; sleep 0.016; done"]; policy throttle:1000
 mapped: true; first commit at Some(90.915) ms
 phase          commits/s   client CPU %
 visible             76.0         421.7
@@ -58,7 +58,7 @@ pongs received after camera return (us after return): []
 client exited during run: None
 
 ########## vkcube --wsi wayland | throttle:250 | visible 3s, off-screen 5s, returned 3s
-# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 414169: ["vkcube", "--wsi", "wayland"]; policy throttle:250
+# socket /tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 414169: ["vkcube", "--wsi", "wayland"]; policy throttle:250
 mapped: true; first commit at Some(12.126) ms
 phase          commits/s   client CPU %
 visible            165.0           1.3
@@ -72,7 +72,7 @@ pongs received after camera return (us after return): []
 client exited during run: None
 
 ########## kitty (animated: prints a timestamp every 16ms) | throttle:250 | visible 3s, off-screen 5s, returned 3s
-# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 414203: ["kitty", "--config", "NONE", "-o", "confirm_os_window_close=0", "-o", "sync_to_monitor=yes", "sh", "-c", "while :; do date +%s.%N; sleep 0.016; done"]; policy throttle:250
+# socket /tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 414203: ["kitty", "--config", "NONE", "-o", "confirm_os_window_close=0", "-o", "sync_to_monitor=yes", "sh", "-c", "while :; do date +%s.%N; sleep 0.016; done"]; policy throttle:250
 mapped: true; first commit at Some(97.501) ms
 phase          commits/s   client CPU %
 visible             89.0         461.7
@@ -86,7 +86,7 @@ pongs received after camera return (us after return): []
 client exited during run: None
 
 ########## vkcube --wsi wayland | starve+kick | visible 3s, off-screen 5s, returned 3s
-# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 415670: ["vkcube", "--wsi", "wayland"]; policy starve+kick
+# socket /tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 415670: ["vkcube", "--wsi", "wayland"]; policy starve+kick
 mapped: true; first commit at Some(12.126) ms
 phase          commits/s   client CPU %
 visible            165.0           1.3
@@ -100,7 +100,7 @@ pongs received after camera return (us after return): []
 client exited during run: None
 
 ########## vkcube --wsi wayland | throttle:1000+kick | visible 3s, off-screen 5s, returned 3s
-# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 415700: ["vkcube", "--wsi", "wayland"]; policy throttle:1000+kick
+# socket /tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 415700: ["vkcube", "--wsi", "wayland"]; policy throttle:1000+kick
 mapped: true; first commit at Some(12.125) ms
 phase          commits/s   client CPU %
 visible            165.0           1.0
@@ -116,7 +116,7 @@ client exited during run: None
 ########## (an earlier Firefox run counted only root-surface commits; Firefox draws into a subsurface, so those numbers were invalid and were removed. Harness fixed to count commits on any surface of the element tree; vkcube/kitty draw on the root surface and are unaffected.)
 
 ########## firefox 157.0-1 (isolated HOME/profile, --no-remote, rAF canvas page) | starve | visible 8s, off-screen 6s, returned 4s
-# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 417794: ["firefox", "--no-remote", "--profile", "/tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/profile", "--new-instance", "file:///tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/anim.html"]; policy starve
+# socket /tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 417794: ["firefox", "--no-remote", "--profile", "/tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/profile", "--new-instance", "file:///tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/anim.html"]; policy starve
 mapped: true; first commit at Some(527.276) ms
 phase          commits/s   client CPU %
 visible            325.7          28.5
@@ -130,7 +130,7 @@ pongs received after camera return (us after return): []
 client exited during run: None
 
 ########## firefox 157.0-1 (isolated HOME/profile, --no-remote, rAF canvas page) | throttle:1000 | visible 8s, off-screen 6s, returned 4s
-# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 418395: ["firefox", "--no-remote", "--profile", "/tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/profile", "--new-instance", "file:///tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/anim.html"]; policy throttle:1000
+# socket /tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 418395: ["firefox", "--no-remote", "--profile", "/tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/profile", "--new-instance", "file:///tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/anim.html"]; policy throttle:1000
 mapped: true; first commit at Some(527.277) ms
 phase          commits/s   client CPU %
 visible            323.7          29.4
@@ -144,7 +144,7 @@ pongs received after camera return (us after return): []
 client exited during run: None
 
 ########## firefox 157.0-1 (isolated HOME/profile, --no-remote, rAF canvas page) | starve+kick | visible 8s, off-screen 6s, returned 4s
-# socket /tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 418983: ["firefox", "--no-remote", "--profile", "/tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/profile", "--new-instance", "file:///tmp/claude-1000/-home-vysaely/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/anim.html"]; policy starve+kick
+# socket /tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/wayland-1; client pid 418983: ["firefox", "--no-remote", "--profile", "/tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/profile", "--new-instance", "file:///tmp/claude-1000/-home-user/ab39788d-8142-4d0f-ab01-01e218318c4d/scratchpad/rt/../ffhome/anim.html"]; policy starve+kick
 mapped: true; first commit at Some(527.276) ms
 phase          commits/s   client CPU %
 visible            325.7          29.6
