@@ -11,7 +11,7 @@ Infinite canvas Wayland compositor built in Rust for Arch Linux. Vibecoded for m
 | `Super + Space` | Recenter window |
 | `Super + Enter` | Fit window to screen |
 | `Super + Shift + Enter` | Fullscreen |
-| `Super + Q` | Terminal (`foot`) |
+| `Super + Q` | Terminal (auto: kitty, alacritty, foot) |
 | `Super + W` | Launcher (`fuzzel`) |
 | `Super + E` | Files (`yazi`) |
 | `Super + Shift + S` | Screenshot |
@@ -28,7 +28,7 @@ Single config file at `~/.config/infynitae/config`:
 - Mouse speed and acceleration (`flat` or `adaptive`)
 - Keyboard layout and repeat rate
 - Cursor theme, size, and font
-- Default apps (`foot`, `fuzzel`, `yazi`, `firefox`)
+- Default apps (`TERMINAL`, `LAUNCHER`, `FILE_MANAGER`)
 
 Apply:
 ```bash

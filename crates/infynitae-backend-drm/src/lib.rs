@@ -205,7 +205,12 @@ pub fn run_console_with(
     let seat_name = seat.seat();
     println!("[infynitae] Seat {seat_name}");
 
-    let gpu = smithay::backend::udev::primary_gpu(&seat_name)?
+    let gpu = std::env::var("INFYNITAE_DRM_DEVICE")
+        .or_else(|_| std::env::var("WLR_DRM_DEVICES"))
+        .or_else(|_| std::env::var("DRM_DEVICE"))
+        .ok()
+        .map(PathBuf::from)
+        .or_else(|| smithay::backend::udev::primary_gpu(&seat_name).ok().flatten())
         .or_else(|| {
             smithay::backend::udev::all_gpus(&seat_name)
                 .ok()

@@ -30,18 +30,29 @@ else
     INSTALL_DIR="$(pwd)"
 fi
 
-# 2. Check and install core system dependencies
+# 2. Check and install core system dependencies (universal build & graphics libraries)
 echo "==> Checking essential system packages..."
 PKGS=()
-for pkg in base-devel rustup foot fuzzel wl-clipboard grim mesa vulkan-radeon libinput seatd; do
+# Universal core: build tools, mesa (universal DRM/GBM/GLES for AMD/Intel/Nvidia), libinput, seatd
+for pkg in base-devel mesa libinput seatd; do
     if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
         PKGS+=("$pkg")
     fi
 done
 
+# Only install rustup if neither rust nor cargo is installed
+if ! command -v cargo >/dev/null 2>&1 && ! pacman -Qi rust >/dev/null 2>&1 && ! pacman -Qi rustup >/dev/null 2>&1; then
+    PKGS+=("rustup")
+fi
+
 if [ ${#PKGS[@]} -gt 0 ]; then
     echo "==> Installing missing packages via pacman: ${PKGS[*]}"
     sudo pacman -S --needed --noconfirm "${PKGS[@]}"
+fi
+
+# Inform user if no terminal emulator is present
+if ! command -v kitty >/dev/null 2>&1 && ! command -v alacritty >/dev/null 2>&1 && ! command -v foot >/dev/null 2>&1; then
+    echo "==> Note: No terminal found. Install whatever you prefer (e.g. sudo pacman -S kitty or alacritty)."
 fi
 
 # 3. Setup Rust toolchain if rustup is used

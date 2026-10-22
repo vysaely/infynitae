@@ -45,5 +45,24 @@ if [ "${ENABLE_QUICKSHELL:-true}" != "false" ]; then
     ) &
 fi
 
-# Launch default terminal
-exec "${TERMINAL:-foot}"
+# Universal terminal auto-detection (respects user config, or checks kitty, alacritty, foot, etc.)
+resolve_terminal() {
+    if [ -n "$TERMINAL" ] && [ "$TERMINAL" != "auto" ]; then
+        echo "$TERMINAL"
+        return
+    fi
+    for t in kitty alacritty foot wezterm ghostty konsole xfce4-terminal gnome-terminal urxvt xterm; do
+        if command -v "$t" >/dev/null 2>&1; then
+            echo "$t"
+            return
+        fi
+    done
+    echo ""
+}
+
+TERM_BIN=$(resolve_terminal)
+if [ -n "$TERM_BIN" ]; then
+    exec $TERM_BIN
+else
+    echo "[infynitae] Warning: No terminal emulator found (e.g. kitty, alacritty, foot)" >&2
+fi

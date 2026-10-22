@@ -76,8 +76,9 @@ IDLE_SLEEP_TIMEOUT_MIN="15"
 # 4. DEFAULT COMPANION TOOLS & SHORTCUTS (Any tools you like!)
 # ------------------------------------------------------------------------------
 # Terminal Emulator (Super+Q):
-#   Examples: foot, alacritty, kitty, wezterm, ghostty
-TERMINAL="foot"
+#   "auto" - checks for kitty -> alacritty -> foot -> wezterm -> ghostty -> konsole
+#   Or specify: "kitty", "alacritty", "foot", etc.
+TERMINAL="auto"
 
 # Application Launcher (Super+W):
 #   "auto"       - checks for fuzzel -> rofi -> tofi -> wofi -> quickshell

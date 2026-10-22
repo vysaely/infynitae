@@ -24,12 +24,31 @@ if [ -x "$USER_SCRIPT" ]; then
     exec "$USER_SCRIPT" "$ACTION"
 fi
 
-TERM_CMD="${TERMINAL:-foot}"
+# Universal terminal resolution (respects config if specified, or auto-detects kitty/alacritty/foot/etc.)
+resolve_terminal() {
+    if [ -n "$TERMINAL" ] && [ "$TERMINAL" != "auto" ]; then
+        echo "$TERMINAL"
+        return
+    fi
+    for t in kitty alacritty foot wezterm ghostty konsole xfce4-terminal gnome-terminal urxvt xterm; do
+        if command -v "$t" >/dev/null 2>&1; then
+            echo "$t"
+            return
+        fi
+    done
+    echo ""
+}
+
+TERM_CMD=$(resolve_terminal)
 
 case "$ACTION" in
     terminal)
-        # Super+Q: Terminal emulator (configurable via ~/.config/infynitae/config)
-        exec $TERM_CMD
+        # Super+Q: Terminal emulator (auto-detects kitty, alacritty, foot, or uses $TERMINAL)
+        if [ -n "$TERM_CMD" ]; then
+            exec $TERM_CMD
+        else
+            echo "[infynitae] Error: No terminal emulator found. Please install kitty, alacritty, or foot." >&2
+        fi
         ;;
     file-manager|files)
         # Super+E: File explorer (configurable via ~/.config/infynitae/config)
