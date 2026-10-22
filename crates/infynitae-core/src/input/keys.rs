@@ -30,6 +30,7 @@ pub const KEY_Q: u32 = 16;
 pub const KEY_W: u32 = 17;
 pub const KEY_E: u32 = 18;
 pub const KEY_S: u32 = 31;
+pub const KEY_R: u32 = 19;
 pub const KEY_SYSRQ: u32 = 99;
 
 /// An action triggered by a matched compositor key binding.
@@ -50,6 +51,8 @@ pub enum KeyAction {
     SpawnScreenshot,
     /// Super+Shift+Tab: toggles canvas overview radar
     ToggleOverview,
+    /// Super+Shift+R: reload shell UI and scripts
+    ReloadShell,
 
     Cancel,
     /// F-FIT-1 on the pointer's output, for the element under the pointer (INC-10).
@@ -199,6 +202,10 @@ pub fn resolve_key_binding(
     {
         return Some(KeyAction::SpawnScreenshot);
     }
+    // Super+Shift+R: reload shell UI and scripts; Logo+Shift, never during interaction
+    if key == KEY_R && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::ReloadShell);
+    }
 
     for b in &CANONICAL_BINDINGS {
         if b.evdev == key && (!b.needs_logo || mods.logo) {
@@ -304,6 +311,10 @@ mod tests {
         assert_eq!(
             resolve_key_binding(KEY_S, logo_shift, false),
             Some(KeyAction::SpawnScreenshot)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_R, logo_shift, false),
+            Some(KeyAction::ReloadShell)
         );
         assert_eq!(
             resolve_key_binding(KEY_SYSRQ, none, false),

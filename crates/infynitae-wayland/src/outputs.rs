@@ -204,6 +204,9 @@ impl WaylandState {
                 Effect::ToggleOverview => {
                     self.spawn_action("overview");
                 }
+                Effect::ReloadShell => {
+                    self.spawn_action("reload");
+                }
                 ref other => {
                     let applied = self.apply_layer(other) || self.apply_pointer(other);
                     debug_assert!(applied, "unhandled effect {other:?}");

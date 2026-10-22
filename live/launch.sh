@@ -75,6 +75,13 @@ case "$ACTION" in
         # Super+Shift+Tab: Quickshell Canvas Overview / Radar
         exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call overview toggle
         ;;
+    reload|reload-shell|restart-shell)
+        # Super+Shift+R: Reload Quickshell UI and live scripts
+        killall qs 2>/dev/null || true
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send -a Infynitae "Shell Reloaded" "Quickshell supervisor restarted UI" 2>/dev/null || true
+        fi
+        ;;
     screenshot)
         # Super+Shift+S / PrintScreen: Screenshot dispatcher
         SHOT_DIR="${SCREENSHOT_DIR:-$HOME/Pictures/Screenshots}"

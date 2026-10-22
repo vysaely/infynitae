@@ -271,6 +271,11 @@ fn super_shift_tab_toggles_overview() {
         Some(infynitae_core::input::keys::KeyAction::ToggleOverview),
         "Super+Shift+Tab resolves to ToggleOverview"
     );
+    assert_eq!(
+        infynitae_core::input::keys::resolve_key_binding(infynitae_core::input::keys::KEY_R, mods, false),
+        Some(infynitae_core::input::keys::KeyAction::ReloadShell),
+        "Super+Shift+R resolves to ReloadShell"
+    );
 }
 
 

@@ -315,6 +315,7 @@ impl Core {
             KeyAction::SpawnFileManager => vec![Effect::SpawnFileManager],
             KeyAction::SpawnScreenshot => vec![Effect::SpawnScreenshot],
             KeyAction::ToggleOverview => vec![Effect::ToggleOverview],
+            KeyAction::ReloadShell => vec![Effect::ReloadShell],
             crate::input::keys::KeyAction::Noop => Vec::new(),
         };
         out.extend(fx);

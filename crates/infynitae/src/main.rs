@@ -52,6 +52,27 @@ OPTIONS:
 }
 
 fn main() -> ExitCode {
+    // Install panic hook to capture crash backtrace into ~/.local/state/infynitae/crash.log
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let home = std::env::var("HOME").unwrap_or_default();
+        let crash_dir = format!("{home}/.local/state/infynitae");
+        let _ = std::fs::create_dir_all(&crash_dir);
+        let crash_file = format!("{crash_dir}/crash.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&crash_file) {
+            use std::io::Write;
+            let timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(f, "=== Infynitae Crash at Unix Timestamp {timestamp} ===");
+            let _ = writeln!(f, "{info}");
+            let _ = writeln!(f, "Backtrace:\n{:?}", std::backtrace::Backtrace::capture());
+            let _ = writeln!(f, "====================================================\n");
+        }
+        default_hook(info);
+    }));
+
     let args: Vec<String> = std::env::args().collect();
     let mut socket_name: Option<String> = None;
     let mut exec_cmd: Option<String> = None;

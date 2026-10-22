@@ -136,6 +136,8 @@ pub enum Effect {
     SpawnScreenshot,
     /// Super+Shift+Tab: toggles canvas overview radar
     ToggleOverview,
+    /// Super+Shift+R: reload shell UI and scripts
+    ReloadShell,
 }
 
 /// Caller-owned, reusable storage for the effects of one Core entry (C14.3 `EffectBuf`). An

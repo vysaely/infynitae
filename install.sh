@@ -67,7 +67,9 @@ cargo build --release -p infynitae
 mkdir -p "$HOME/.local/bin"
 cp -f target/release/infynitae "$HOME/.local/bin/infynitae"
 chmod +x "$HOME/.local/bin/infynitae"
-echo "==> Installed binary to ~/.local/bin/infynitae"
+cp -f live/dev.sh "$HOME/.local/bin/infynitae-dev"
+chmod +x "$HOME/.local/bin/infynitae-dev"
+echo "==> Installed binaries to ~/.local/bin/{infynitae, infynitae-dev}"
 
 # 7. Deploy live runtime scripts & Quickshell dynamic island
 mkdir -p "$HOME/infynitae/live"
@@ -83,10 +85,23 @@ fi
 # 9. Create ~/.local/bin/infynitae-session
 cat << 'EOF' > "$HOME/.local/bin/infynitae-session"
 #!/bin/sh
-# Infynitae Standalone Session Launcher
+# Infynitae Standalone Session Launcher with TTY restoration and crash guard
+
+cleanup() {
+    stty sane 2>/dev/null || true
+    tput cnorm 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM HUP
+
 if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"
 fi
+
+export RUST_BACKTRACE=1
+STATE_DIR="$HOME/.local/state/infynitae"
+mkdir -p "$STATE_DIR"
+CRASH_COUNT_FILE="$STATE_DIR/crash_count"
+SESSION_LOG="$STATE_DIR/session.log"
 
 BIN="$HOME/.local/bin/infynitae"
 SESSION_SCRIPT="$HOME/infynitae/live/session.sh"
@@ -96,7 +111,49 @@ if command -v xwayland-satellite >/dev/null 2>&1; then
     XWLS="--xwayland-satellite $(command -v xwayland-satellite)"
 fi
 
-exec "$BIN" --tty $XWLS --exec "$SESSION_SCRIPT" "$@"
+START_TIME=$(date +%s)
+echo "[infynitae-session] Starting Infynitae compositor..." >> "$SESSION_LOG"
+
+# Run compositor, logging output while displaying
+"$BIN" --tty $XWLS --exec "$SESSION_SCRIPT" "$@" 2>&1 | tee -a "$SESSION_LOG"
+STATUS=$?
+
+END_TIME=$(date +%s)
+DURATION=$((END_TIME - START_TIME))
+
+cleanup
+
+if [ $STATUS -ne 0 ] || [ $DURATION -lt 5 ]; then
+    COUNT=1
+    if [ -f "$CRASH_COUNT_FILE" ]; then
+        PREV_COUNT=$(cat "$CRASH_COUNT_FILE" 2>/dev/null || echo 0)
+        COUNT=$((PREV_COUNT + 1))
+    fi
+    echo "$COUNT" > "$CRASH_COUNT_FILE"
+
+    if [ "$COUNT" -ge 2 ]; then
+        echo ""
+        echo "=========================================================="
+        echo "  [infynitae] Rapid crash loop detected ($COUNT consecutive failures)."
+        echo "  Aborting auto-restart to prevent lockout."
+        echo "  Dropping to rescue shell with full TTY controls."
+        echo ""
+        if [ -f "$STATE_DIR/crash.log" ]; then
+            echo "--- Recent Crash Log ($STATE_DIR/crash.log) ---"
+            tail -n 20 "$STATE_DIR/crash.log"
+        elif [ -f "$SESSION_LOG" ]; then
+            echo "--- Recent Session Log ($SESSION_LOG) ---"
+            tail -n 20 "$SESSION_LOG"
+        fi
+        echo "=========================================================="
+        rm -f "$CRASH_COUNT_FILE"
+        exec "${SHELL:-/bin/sh}"
+    fi
+else
+    rm -f "$CRASH_COUNT_FILE"
+fi
+
+exit $STATUS
 EOF
 chmod +x "$HOME/.local/bin/infynitae-session"
 
@@ -158,4 +215,11 @@ echo "    Super + E            Files (yazi)"
 echo "    Super + W            Dynamic Island Launcher"
 echo "    Super + Shift + S    Screenshot"
 echo "    Super + Shift + Tab  Canvas Overview & Radar"
+echo "    Super + Shift + R    Hot-Reload Shell UI & Scripts"
+echo "=========================================================="
+echo "  Live Tweak Utilities:"
+echo "    infynitae-dev test   Run nested sandbox to test live changes"
+echo "    infynitae-dev logs   Stream live session, shell & crash logs"
+echo "    infynitae-dev build  Rebuild release and update binary"
+echo "    infynitae-dev check  Run test suite and architecture check"
 echo "=========================================================="

@@ -849,7 +849,8 @@ impl Core {
             | E::SpawnTerminal
             | E::SpawnFileManager
             | E::SpawnScreenshot
-            | E::ToggleOverview => {}
+            | E::ToggleOverview
+            | E::ReloadShell => {}
         }
         recipients.map(|r| {
             r.filter(|&e| {

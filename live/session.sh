@@ -22,8 +22,20 @@ for agent in \
     fi
 done
 
-# Start Quickshell Dynamic Island launcher in background
-(sleep 0.1 && qs -p "$HOME/infynitae/live/quickshell/shell.qml" > "$HOME/infynitae/live/quickshell.log" 2>&1) &
+# Supervised Quickshell Dynamic Island & Radar HUD
+# If quickshell exits (e.g. killed via Super+Shift+R or syntax error during live editing),
+# it respawns automatically without taking down the compositor or any client windows.
+LOG_DIR="$HOME/.local/state/infynitae"
+mkdir -p "$LOG_DIR"
+(
+    sleep 0.1
+    while true; do
+        if command -v qs >/dev/null 2>&1; then
+            qs -p "$HOME/infynitae/live/quickshell/shell.qml" >> "$LOG_DIR/quickshell.log" 2>&1
+        fi
+        sleep 1
+    done
+) &
 
 # Launch default terminal
 exec "${TERMINAL:-foot}"
