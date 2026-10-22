@@ -80,17 +80,17 @@ IDLE_SLEEP_TIMEOUT_MIN="15"
 TERMINAL="foot"
 
 # Application Launcher (Super+W):
-#   "auto"       - checks for quickshell -> fuzzel -> rofi -> tofi -> wofi
+#   "auto"       - checks for fuzzel -> rofi -> tofi -> wofi -> quickshell
+#   "fuzzel"     - pure C Wayland dmenu (instant, minimal)
 #   "quickshell" - dynamic island launcher
-#   "fuzzel"     - ultra-fast Wayland dmenu
 #   "rofi"       - rofi -show drun
 #   Or any custom command, e.g. "wofi --show drun"
 LAUNCHER="auto"
 
 # Quickshell Dynamic Island & Radar HUD:
-#   "true"  - launch supervised dynamic island HUD (if qs is installed)
-#   "false" - run zero Qt/Quickshell processes (100% minimalist pure compositor)
-ENABLE_QUICKSHELL="true"
+#   "false" - Pure minimalist: zero Qt/Quickshell daemons, sub-30MB idle RAM (Default)
+#   "true"  - Dynamic island HUD and canvas radar (requires quickshell)
+ENABLE_QUICKSHELL="false"
 
 # File Manager (Super+E):
 #   "auto" - checks for yazi -> lf -> thunar -> nemo -> dolphin

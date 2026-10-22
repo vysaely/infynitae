@@ -72,7 +72,7 @@ case "$ACTION" in
         L="${LAUNCHER:-auto}"
         case "$L" in
             auto|"")
-                if command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
+                if [ "${ENABLE_QUICKSHELL:-false}" = "true" ] && command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
                     exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
                 elif command -v fuzzel >/dev/null 2>&1; then
                     exec fuzzel
@@ -82,6 +82,8 @@ case "$ACTION" in
                     exec tofi-drun
                 elif command -v wofi >/dev/null 2>&1; then
                     exec wofi --show drun
+                elif command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
+                    exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
                 fi
                 ;;
             quickshell|qs)

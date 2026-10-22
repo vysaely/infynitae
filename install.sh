@@ -33,7 +33,7 @@ fi
 # 2. Check and install core system dependencies
 echo "==> Checking essential system packages..."
 PKGS=()
-for pkg in base-devel rustup foot wl-clipboard grim mesa vulkan-radeon libinput seatd; do
+for pkg in base-devel rustup foot fuzzel wl-clipboard grim mesa vulkan-radeon libinput seatd; do
     if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
         PKGS+=("$pkg")
     fi
