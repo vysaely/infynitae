@@ -1,0 +1,24 @@
+# Infynitae User Configuration
+# Location: ~/.config/infynitae/config
+
+# Preferred Terminal Emulator (Super+Q)
+# Examples: foot, alacritty, kitty
+TERMINAL="foot"
+
+# Preferred File Manager (Super+E)
+# Options:
+#   auto     - automatically detects any installed file manager (yazi, lf, thunar, nemo, dolphin)
+#   yazi     - opens yazi inside $TERMINAL
+#   lf       - opens lf inside $TERMINAL
+#   thunar   - GUI file manager
+#   nemo     - GUI file manager
+#   dolphin  - KDE file manager
+# Or enter any custom command: e.g. "foot -e yazi"
+FILE_MANAGER="auto"
+
+# Preferred Web Browser
+BROWSER="firefox"
+
+# Cursor Appearance
+XCURSOR_THEME="Adwaita"
+XCURSOR_SIZE="24"
