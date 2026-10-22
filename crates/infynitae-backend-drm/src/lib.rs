@@ -662,7 +662,52 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 .state
                 .with_effects(|core, fx| core.physical_input(port, phys, fx));
         }
+        InputEvent::DeviceAdded { mut device } => {
+            configure_input_device(&mut device);
+        }
         _ => {}
+    }
+}
+
+fn configure_input_device(device: &mut smithay::reexports::input::Device) {
+    use smithay::reexports::input::AccelProfile;
+
+    // 1. Mouse Acceleration Profile (flat = raw 1:1, adaptive = curve)
+    if let Ok(profile) = std::env::var("MOUSE_ACCEL_PROFILE") {
+        let desired = match profile.to_lowercase().as_str() {
+            "flat" => Some(AccelProfile::Flat),
+            "adaptive" => Some(AccelProfile::Adaptive),
+            _ => None,
+        };
+        if let Some(p) = desired {
+            if device.config_accel_profiles().contains(&p) {
+                let _ = device.config_accel_set_profile(p);
+            }
+        }
+    }
+
+    // 2. Pointer Speed / Sensitivity (-1.0 to 1.0, 0.0 is default)
+    if let Ok(speed_str) = std::env::var("MOUSE_ACCEL_SPEED") {
+        if let Ok(speed) = speed_str.parse::<f64>() {
+            let clamped = speed.clamp(-1.0, 1.0);
+            let _ = device.config_accel_set_speed(clamped);
+        }
+    }
+
+    // 3. Touchpad Tap-to-click
+    if let Ok(tap) = std::env::var("TOUCHPAD_TAP") {
+        let enable = matches!(tap.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+        if device.config_tap_finger_count() > 0 {
+            let _ = device.config_tap_set_enabled(enable);
+        }
+    }
+
+    // 4. Touchpad Natural Scrolling
+    if let Ok(nat) = std::env::var("TOUCHPAD_NATURAL_SCROLL") {
+        let enable = matches!(nat.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+        if device.config_scroll_has_natural_scroll() {
+            let _ = device.config_scroll_set_natural_scroll_enabled(enable);
+        }
     }
 }
 

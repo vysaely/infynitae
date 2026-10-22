@@ -69,7 +69,9 @@ cp -f target/release/infynitae "$HOME/.local/bin/infynitae"
 chmod +x "$HOME/.local/bin/infynitae"
 cp -f live/dev.sh "$HOME/.local/bin/infynitae-dev"
 chmod +x "$HOME/.local/bin/infynitae-dev"
-echo "==> Installed binaries to ~/.local/bin/{infynitae, infynitae-dev}"
+cp -f live/settings.sh "$HOME/.local/bin/infynitae-settings"
+chmod +x "$HOME/.local/bin/infynitae-settings"
+echo "==> Installed binaries to ~/.local/bin/{infynitae, infynitae-dev, infynitae-settings}"
 
 # 7. Deploy live runtime scripts & Quickshell dynamic island
 mkdir -p "$HOME/infynitae/live"

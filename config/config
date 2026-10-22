@@ -1,24 +1,88 @@
-# Infynitae User Configuration
+# ==============================================================================
+# INFYNITAE UNIVERSAL CONFIGURATION
 # Location: ~/.config/infynitae/config
+#
+# Single source of truth. Zero bloat, zero background daemons.
+# Edit anytime and press Super+Shift+R or run `infynitae-settings apply`.
+# ==============================================================================
 
-# Preferred Terminal Emulator (Super+Q)
-# Examples: foot, alacritty, kitty
+# ------------------------------------------------------------------------------
+# 1. INPUT & POINTER (Raw latency, snappy responsiveness)
+# ------------------------------------------------------------------------------
+# Mouse Acceleration Profile:
+#   "flat"     - True 1:1 raw mouse input (recommended for competitive gaming & snappiness)
+#   "adaptive" - Standard curved acceleration
+MOUSE_ACCEL_PROFILE="flat"
+
+# Pointer Sensitivity (-1.0 to 1.0, 0.0 is default native sensor speed)
+MOUSE_ACCEL_SPEED="0.0"
+
+# Keyboard Repeat:
+#   KEYBOARD_REPEAT_DELAY: Milliseconds before key repeat begins (default 200)
+#   KEYBOARD_REPEAT_RATE:  Keystrokes per second when held (default 35, snappy 50)
+KEYBOARD_REPEAT_DELAY="200"
+KEYBOARD_REPEAT_RATE="35"
+
+# Keyboard Layout & Switching (XKB):
+#   Examples: "us", "us,ru", "us,de"
+#   Toggle Options: "grp:alt_shift_toggle", "caps:escape", "caps:swapescape"
+XKB_DEFAULT_LAYOUT="us"
+XKB_DEFAULT_OPTIONS="caps:escape"
+
+# Touchpad:
+TOUCHPAD_TAP="true"             # Tap to click
+TOUCHPAD_NATURAL_SCROLL="false"  # Invert scroll direction
+
+# ------------------------------------------------------------------------------
+# 2. APPEARANCE & THEMES (Universal across Wayland, GTK, Qt, and Steam)
+# ------------------------------------------------------------------------------
+# Cursor Theme & Size (applied instantly to Compositor, GTK3/4, Qt, and Xwayland)
+# To see installed themes: infynitae-settings list cursors
+CURSOR_THEME="Adwaita"
+CURSOR_SIZE="24"
+
+# Global UI Font:
+FONT_NAME="JetBrains Mono"
+FONT_SIZE="10"
+
+# Icon Theme (for file dialogs and portals):
+ICON_THEME="Papirus-Dark"
+
+# Color Scheme: "prefer-dark" or "prefer-light"
+COLOR_SCHEME="prefer-dark"
+
+# ------------------------------------------------------------------------------
+# 3. DISPLAY & CANVAS
+# ------------------------------------------------------------------------------
+# Background canvas color (hex)
+CANVAS_COLOR="#0b0f14"
+
+# Display Scale (1.0 for 100%, 1.25, 1.5 for HiDPI)
+OUTPUT_SCALE="1.0"
+
+# Target Output Refresh Rate in Hz (0 = auto-select highest supported e.g. 144/165/240Hz)
+OUTPUT_REFRESH_HZ="0"
+
+# Variable Refresh Rate (VRR / Adaptive Sync / FreeSync): "auto", "on", "off"
+VRR_ENABLED="auto"
+
+# Async Pageflip Tearing (for ultra-low-latency esports games): "false" or "true"
+ALLOW_TEARING="false"
+
+# Idle Screen Sleep Timeout in minutes (0 to disable screen sleep)
+IDLE_SLEEP_TIMEOUT_MIN="15"
+
+# ------------------------------------------------------------------------------
+# 4. DEFAULT APPLICATIONS & SHORTCUTS
+# ------------------------------------------------------------------------------
+# Terminal Emulator (Super+Q): foot, alacritty, kitty
 TERMINAL="foot"
 
-# Preferred File Manager (Super+E)
-# Options:
-#   auto     - automatically detects any installed file manager (yazi, lf, thunar, nemo, dolphin)
-#   yazi     - opens yazi inside $TERMINAL
-#   lf       - opens lf inside $TERMINAL
-#   thunar   - GUI file manager
-#   nemo     - GUI file manager
-#   dolphin  - KDE file manager
-# Or enter any custom command: e.g. "foot -e yazi"
+# File Manager (Super+E): auto, yazi, lf, thunar, dolphin
 FILE_MANAGER="auto"
 
-# Preferred Web Browser
+# Web Browser: firefox, chromium, brave
 BROWSER="firefox"
 
-# Cursor Appearance
-XCURSOR_THEME="Adwaita"
-XCURSOR_SIZE="24"
+# Screenshot Output Directory (Super+Shift+S / PrintScreen)
+SCREENSHOT_DIR="$HOME/Pictures/Screenshots"

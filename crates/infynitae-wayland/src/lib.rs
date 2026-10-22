@@ -227,7 +227,15 @@ impl WaylandState {
         let mut seats = SeatState::new();
         let mut seat = seats.new_wl_seat(display, "seat0");
         seat.add_pointer();
-        seat.add_keyboard(Default::default(), 200, 25)
+        let repeat_delay = std::env::var("KEYBOARD_REPEAT_DELAY")
+            .ok()
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(200);
+        let repeat_rate = std::env::var("KEYBOARD_REPEAT_RATE")
+            .ok()
+            .and_then(|s| s.parse::<i32>().ok())
+            .unwrap_or(35);
+        seat.add_keyboard(Default::default(), repeat_delay, repeat_rate)
             .expect("the seat has a keyboard");
         let capabilities = convert::wm_capabilities(core.toplevel_capabilities());
         WaylandState {

@@ -30,24 +30,18 @@ export CLUTTER_BACKEND="wayland"
 unset GTK_MODULES
 unset GTK_RC_FILES
 
-# 5. Clean, standalone cursor theme and size (overridable by user)
-export XCURSOR_THEME="${XCURSOR_THEME:-Adwaita}"
-export XCURSOR_SIZE="${XCURSOR_SIZE:-24}"
+# 5. Clean, standalone universal settings (zero daemons, pure disk sync)
+if [ -f "$HOME/infynitae/live/settings.sh" ]; then
+    . "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1 || true
+fi
 
-# 6. Isolated D-Bus/dconf database profile (prevents inheriting KDE's CustomCursor/32px)
+# 6. Isolated D-Bus/dconf database profile (prevents inheriting host desktop defaults)
 INFYNITAE_CFG_DIR="$HOME/.config/infynitae"
 mkdir -p "$INFYNITAE_CFG_DIR"
 if [ ! -f "$INFYNITAE_CFG_DIR/dconf-profile" ]; then
     printf 'user-db:infynitae\n' > "$INFYNITAE_CFG_DIR/dconf-profile"
 fi
 export DCONF_PROFILE="$INFYNITAE_CFG_DIR/dconf-profile"
-
-# Initialize infynitae dconf keys if needed
-if command -v gsettings >/dev/null 2>&1; then
-    gsettings set org.gnome.desktop.interface cursor-theme "$XCURSOR_THEME" 2>/dev/null || true
-    gsettings set org.gnome.desktop.interface cursor-size "$XCURSOR_SIZE" 2>/dev/null || true
-    gsettings set org.gnome.desktop.interface color-scheme "prefer-dark" 2>/dev/null || true
-fi
 
 # 7. XDG Desktop Portal routing: use GTK portal instead of KDE Plasma portal
 PORTAL_CFG_DIR="$HOME/.config/xdg-desktop-portal"
