@@ -11,12 +11,11 @@ Infinite canvas Wayland compositor built in Rust for Arch Linux. Vibecoded for m
 | `Super + Space` | Recenter window |
 | `Super + Enter` | Fit window to screen |
 | `Super + Shift + Enter` | Fullscreen |
-| `Super + Shift + Tab` | Canvas radar HUD |
-| `Super + Shift + R` | Reload shell UI |
-| `Super + W` | App launcher |
 | `Super + Q` | Terminal (`foot`) |
-| `Super + E` | File manager (`yazi`) |
+| `Super + W` | Launcher (`fuzzel`) |
+| `Super + E` | Files (`yazi`) |
 | `Super + Shift + S` | Screenshot |
+| `Super + Shift + R` | Reload config |
 | `Super + Delete` | Close window |
 | `Super + Shift + Delete` | Kill process |
 | `Ctrl + Alt + Backspace` | Exit |
@@ -24,16 +23,16 @@ Infinite canvas Wayland compositor built in Rust for Arch Linux. Vibecoded for m
 
 ## Configuration
 
-Edit `~/.config/infynitae/config`:
+Single config file at `~/.config/infynitae/config`:
 
 - Mouse speed and acceleration (`flat` or `adaptive`)
 - Keyboard layout and repeat rate
-- Cursor theme and size
-- Default apps (`foot`, `yazi`, `firefox`)
+- Cursor theme, size, and font
+- Default apps (`foot`, `fuzzel`, `yazi`, `firefox`)
 
-Apply changes:
+Apply:
 ```bash
-infynitae-settings set CURSOR_THEME "Adwaita"
+infynitae-settings apply
 ```
 
 ## Install
