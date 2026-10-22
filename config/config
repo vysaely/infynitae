@@ -73,16 +73,41 @@ ALLOW_TEARING="false"
 IDLE_SLEEP_TIMEOUT_MIN="15"
 
 # ------------------------------------------------------------------------------
-# 4. DEFAULT APPLICATIONS & SHORTCUTS
+# 4. DEFAULT COMPANION TOOLS & SHORTCUTS (Any tools you like!)
 # ------------------------------------------------------------------------------
-# Terminal Emulator (Super+Q): foot, alacritty, kitty
+# Terminal Emulator (Super+Q):
+#   Examples: foot, alacritty, kitty, wezterm, ghostty
 TERMINAL="foot"
 
-# File Manager (Super+E): auto, yazi, lf, thunar, dolphin
+# Application Launcher (Super+W):
+#   "auto"       - checks for quickshell -> fuzzel -> rofi -> tofi -> wofi
+#   "quickshell" - dynamic island launcher
+#   "fuzzel"     - ultra-fast Wayland dmenu
+#   "rofi"       - rofi -show drun
+#   Or any custom command, e.g. "wofi --show drun"
+LAUNCHER="auto"
+
+# Quickshell Dynamic Island & Radar HUD:
+#   "true"  - launch supervised dynamic island HUD (if qs is installed)
+#   "false" - run zero Qt/Quickshell processes (100% minimalist pure compositor)
+ENABLE_QUICKSHELL="true"
+
+# File Manager (Super+E):
+#   "auto" - checks for yazi -> lf -> thunar -> nemo -> dolphin
+#   TUI file managers (yazi, lf, ranger) automatically open inside $TERMINAL
 FILE_MANAGER="auto"
 
-# Web Browser: firefox, chromium, brave
+# Web Browser:
 BROWSER="firefox"
 
-# Screenshot Output Directory (Super+Shift+S / PrintScreen)
+# Screenshot Tool (Super+Shift+S / PrintScreen):
+#   Empty string uses built-in grim/spectacle handler.
+#   Or set custom: e.g. "grim -g \"$(slurp)\""
+SCREENSHOT_CMD=""
 SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
+
+# Custom Autostart & Overrides:
+#   To autostart any companion tools (waybar, mako, swaybg, pipewire):
+#     Create ~/.config/infynitae/autostart.sh and chmod +x it.
+#   To completely override shortcut actions:
+#     Create ~/.config/infynitae/launch.sh and chmod +x it.

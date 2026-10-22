@@ -68,8 +68,41 @@ case "$ACTION" in
         esac
         ;;
     launcher|island)
-        # Super+W: Quickshell dynamic island start launcher
-        exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
+        # Super+W: Application launcher (configurable via ~/.config/infynitae/config)
+        L="${LAUNCHER:-auto}"
+        case "$L" in
+            auto|"")
+                if command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
+                    exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
+                elif command -v fuzzel >/dev/null 2>&1; then
+                    exec fuzzel
+                elif command -v rofi >/dev/null 2>&1; then
+                    exec rofi -show drun
+                elif command -v tofi-drun >/dev/null 2>&1; then
+                    exec tofi-drun
+                elif command -v wofi >/dev/null 2>&1; then
+                    exec wofi --show drun
+                fi
+                ;;
+            quickshell|qs)
+                exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
+                ;;
+            fuzzel)
+                exec fuzzel
+                ;;
+            rofi)
+                exec rofi -show drun
+                ;;
+            tofi)
+                exec tofi-drun
+                ;;
+            wofi)
+                exec wofi --show drun
+                ;;
+            *)
+                exec $L
+                ;;
+        esac
         ;;
     overview|radar)
         # Super+Shift+Tab: Quickshell Canvas Overview / Radar
