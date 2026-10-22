@@ -190,7 +190,13 @@ impl WaylandState {
                     }
                 }
                 Effect::ToggleLauncher => {
-                    self.toggle_launcher();
+                    self.spawn_action("launcher");
+                }
+                Effect::SpawnTerminal => {
+                    self.spawn_action("terminal");
+                }
+                Effect::SpawnFileManager => {
+                    self.spawn_action("file-manager");
                 }
                 ref other => {
                     let applied = self.apply_layer(other) || self.apply_pointer(other);
@@ -201,11 +207,11 @@ impl WaylandState {
         self.drop_constraints_smithay_destroyed();
     }
 
-    /// Super+W: toggles the Dynamic Island start launcher
-    fn toggle_launcher(&self) {
+    /// Spawns a desktop action via ~/infynitae/live/launch.sh <action>
+    fn spawn_action(&self, action: &str) {
         let home = std::env::var("HOME").unwrap_or_default();
-        let script = format!("{home}/infynitae/live/toggle-launcher.sh");
-        let _ = std::process::Command::new("sh").arg(script).spawn();
+        let script = format!("{home}/infynitae/live/launch.sh");
+        let _ = std::process::Command::new("sh").arg(script).arg(action).spawn();
     }
 
     /// The Smithay output of a connected output (for render oracles and backends).

@@ -793,9 +793,10 @@ impl Core {
             | E::KeyboardIntercept { .. }
             // a scale hint is not in INV-FRAME-3's kick list (ARCHITECTURE scenario 11); an
             // unobserved element's hint is held, except that P7 still lowers it, and that hint
-            // unblocks no frame (t1_inc6_inc8_combined)
             | E::PreferredScale { .. }
-            | E::ToggleLauncher => {}
+            | E::ToggleLauncher
+            | E::SpawnTerminal
+            | E::SpawnFileManager => {}
         }
         recipients.map(|r| {
             r.filter(|&e| {

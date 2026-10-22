@@ -306,6 +306,8 @@ impl Core {
                 .into_iter()
                 .collect(),
             KeyAction::ToggleLauncher => vec![Effect::ToggleLauncher],
+            KeyAction::SpawnTerminal => vec![Effect::SpawnTerminal],
+            KeyAction::SpawnFileManager => vec![Effect::SpawnFileManager],
             crate::input::keys::KeyAction::Noop => Vec::new(),
         };
         out.extend(fx);

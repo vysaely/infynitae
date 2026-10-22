@@ -26,7 +26,9 @@ pub const KEY_6: u32 = 7;
 pub const KEY_7: u32 = 8;
 pub const KEY_8: u32 = 9;
 pub const KEY_9: u32 = 10;
+pub const KEY_Q: u32 = 16;
 pub const KEY_W: u32 = 17;
+pub const KEY_E: u32 = 18;
 
 /// An action triggered by a matched compositor key binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,6 +38,10 @@ pub enum KeyAction {
     FocusSlot(usize),
     /// Super+W: toggles the Dynamic Island start launcher
     ToggleLauncher,
+    /// Super+Q: launches terminal
+    SpawnTerminal,
+    /// Super+E: launches file manager
+    SpawnFileManager,
 
     Cancel,
     /// F-FIT-1 on the pointer's output, for the element under the pointer (INC-10).
@@ -149,6 +155,14 @@ pub fn resolve_key_binding(
     // Super+W: toggles the Dynamic Island launcher; exactly Logo, never during interaction
     if key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ToggleLauncher);
+    }
+    // Super+Q: launches terminal; exactly Logo, never during interaction
+    if key == KEY_Q && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::SpawnTerminal);
+    }
+    // Super+E: launches file manager; exactly Logo, never during interaction
+    if key == KEY_E && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::SpawnFileManager);
     }
 
     for b in &CANONICAL_BINDINGS {
@@ -373,5 +387,31 @@ mod tests {
             // During interaction: None
             assert_eq!(resolve_key_binding(k, logo, true), None);
         }
+    }
+
+    #[test]
+    fn super_q_and_super_e_app_bindings() {
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            resolve_key_binding(KEY_Q, logo, false),
+            Some(KeyAction::SpawnTerminal)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_E, logo, false),
+            Some(KeyAction::SpawnFileManager)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_Q, Modifiers { shift: true, ..logo }, false),
+            None
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_E, Modifiers { ctrl: true, ..logo }, false),
+            None
+        );
+        assert_eq!(resolve_key_binding(KEY_Q, logo, true), None);
+        assert_eq!(resolve_key_binding(KEY_E, logo, true), None);
     }
 }

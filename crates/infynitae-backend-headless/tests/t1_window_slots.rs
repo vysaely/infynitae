@@ -6,7 +6,7 @@ mod common;
 
 use common::input::*;
 use infynitae_backend_headless::keyboard_key;
-use infynitae_core::input::keys::{KEY_1, KEY_2, KEY_3, KEY_9, KEY_LEFTMETA, KEY_W};
+use infynitae_core::input::keys::{KEY_1, KEY_2, KEY_3, KEY_9, KEY_E, KEY_LEFTMETA, KEY_Q, KEY_W};
 use infynitae_core::stage::ElementId;
 
 fn top(r: &Rig) -> Option<ElementId> {
@@ -125,6 +125,42 @@ fn super_w_toggles_launcher() {
     );
     assert_eq!(
         infynitae_core::input::keys::resolve_key_binding(KEY_W, mods, true),
+        None,
+        "not during interaction"
+    );
+}
+
+#[test]
+fn super_q_spawns_terminal() {
+    let mods = infynitae_core::input::bindings::Modifiers {
+        logo: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        infynitae_core::input::keys::resolve_key_binding(KEY_Q, mods, false),
+        Some(infynitae_core::input::keys::KeyAction::SpawnTerminal),
+        "Super+Q resolves to SpawnTerminal"
+    );
+    assert_eq!(
+        infynitae_core::input::keys::resolve_key_binding(KEY_Q, mods, true),
+        None,
+        "not during interaction"
+    );
+}
+
+#[test]
+fn super_e_spawns_file_manager() {
+    let mods = infynitae_core::input::bindings::Modifiers {
+        logo: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        infynitae_core::input::keys::resolve_key_binding(KEY_E, mods, false),
+        Some(infynitae_core::input::keys::KeyAction::SpawnFileManager),
+        "Super+E resolves to SpawnFileManager"
+    );
+    assert_eq!(
+        infynitae_core::input::keys::resolve_key_binding(KEY_E, mods, true),
         None,
         "not during interaction"
     );

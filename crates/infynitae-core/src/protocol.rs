@@ -128,6 +128,10 @@ pub enum Effect {
     },
     /// Super+W: toggles the Dynamic Island launcher
     ToggleLauncher,
+    /// Super+Q: launches terminal
+    SpawnTerminal,
+    /// Super+E: launches file manager
+    SpawnFileManager,
 }
 
 /// Caller-owned, reusable storage for the effects of one Core entry (C14.3 `EffectBuf`). An
