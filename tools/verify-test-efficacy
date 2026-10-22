@@ -1833,6 +1833,10 @@ CONTROLS = [
      "        let raised = self.raise_by_user(element);\n        out.extend(self.focus.set_focus(Some(element)));",
      "        let raised = false;\n        out.extend(self.focus.set_focus(Some(element)));",
      "infynitae-backend-headless", ["--test", "t1_window_slots"], "super_1_to_9_focuses_raises_and_recenters"),
+    ("launcher: Super+W binding never resolves", f"{CORE}/input/keys.rs",
+     "    if key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {",
+     "    if false && key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {",
+     "infynitae-backend-headless", ["--test", "t1_window_slots"], "super_w_toggles_launcher"),
     # ---- Console backend (owner decisions T1–T9, 2026-10-22): the cursor and the console keys
     ("console: the compositor draws no cursor on the console target (T8)", f"{WAYLAND}/convert.rs",
      "    if state.target.draw_cursor {", "    if false {",

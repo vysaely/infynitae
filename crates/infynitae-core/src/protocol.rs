@@ -126,6 +126,8 @@ pub enum Effect {
         scale_120: u32,
         integer_scale: u32,
     },
+    /// Super+W: toggles the Dynamic Island launcher
+    ToggleLauncher,
 }
 
 /// Caller-owned, reusable storage for the effects of one Core entry (C14.3 `EffectBuf`). An

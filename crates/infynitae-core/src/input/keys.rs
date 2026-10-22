@@ -26,6 +26,7 @@ pub const KEY_6: u32 = 7;
 pub const KEY_7: u32 = 8;
 pub const KEY_8: u32 = 9;
 pub const KEY_9: u32 = 10;
+pub const KEY_W: u32 = 17;
 
 /// An action triggered by a matched compositor key binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +34,8 @@ pub enum KeyAction {
     FocusNext,
     /// Super+1..9: focus, raise, and recenter camera on mapped window at slot 0..8 (creation order)
     FocusSlot(usize),
+    /// Super+W: toggles the Dynamic Island start launcher
+    ToggleLauncher,
 
     Cancel,
     /// F-FIT-1 on the pointer's output, for the element under the pointer (INC-10).
@@ -143,6 +146,11 @@ pub fn resolve_key_binding(
             return Some(KeyAction::FocusSlot(s));
         }
     }
+    // Super+W: toggles the Dynamic Island launcher; exactly Logo, never during interaction
+    if key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::ToggleLauncher);
+    }
+
     for b in &CANONICAL_BINDINGS {
         if b.evdev == key && (!b.needs_logo || mods.logo) {
             return Some(b.action);

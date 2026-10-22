@@ -305,6 +305,7 @@ impl Core {
                 .map(Effect::CloseRequest)
                 .into_iter()
                 .collect(),
+            KeyAction::ToggleLauncher => vec![Effect::ToggleLauncher],
             crate::input::keys::KeyAction::Noop => Vec::new(),
         };
         out.extend(fx);
