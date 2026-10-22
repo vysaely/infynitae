@@ -179,9 +179,22 @@ exit $STATUS
 EOF
 chmod +x "$HOME/.local/bin/infynitae-session"
 
-# 10. Wayland session desktop entry (selectable in login display manager)
+# 10. Ensure ~/.local/bin is in user PATH
+if ! echo "$PATH" | tr ':' '\n' | grep -qx "$HOME/.local/bin"; then
+    for prof in "$HOME/.bash_profile" "$HOME/.profile"; do
+        if [ -f "$prof" ]; then
+            if ! grep -q '\.local/bin' "$prof"; then
+                echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$prof"
+            fi
+            break
+        elif [ "$prof" = "$HOME/.bash_profile" ]; then
+            echo 'export PATH="$HOME/.local/bin:$PATH"' > "$prof"
+            break
+        fi
+    done
+fi
 
-# 12. Create Wayland session desktop entry
+# 11. Create Wayland session desktop entry (selectable in login display manager)
 mkdir -p "$HOME/.local/share/wayland-sessions"
 cat << 'EOF' > "$HOME/.local/share/wayland-sessions/infynitae.desktop"
 [Desktop Entry]
@@ -196,24 +209,22 @@ echo ""
 echo "=========================================================="
 echo "        INFYNITAE INSTALLATION COMPLETE!"
 echo "=========================================================="
-echo "  Run standalone anytime:  infynitae-session"
-echo "  Or simply log in on TTY1 console."
+echo "  Run anytime:  infynitae-session"
 echo ""
 echo "  Keybindings:"
 echo "    Super + 1..9         Focus Window Slot 1..9"
 echo "    Super + Shift + 1..9 Focus Cluster Slot 1..9"
 echo "    Super + Space        Recenter Active Window"
 echo "    Super + Enter        Fit Window to Screen"
-echo "    Super + Q            Terminal (foot)"
+echo "    Super + Shift + Enter Fullscreen"
+echo "    Super + Q            Terminal (auto: kitty, alacritty, foot)"
+echo "    Super + W            Launcher (fuzzel / dmenu)"
 echo "    Super + E            Files (yazi)"
-echo "    Super + W            Dynamic Island Launcher"
 echo "    Super + Shift + S    Screenshot"
-echo "    Super + Shift + Tab  Canvas Overview & Radar"
-echo "    Super + Shift + R    Hot-Reload Shell UI & Scripts"
+echo "    Super + Shift + R    Reload Config"
+echo "    Super + Delete       Close Window"
+echo "    Ctrl + Alt + Backspace Exit Compositor"
 echo "=========================================================="
-echo "  Live Tweak Utilities:"
-echo "    infynitae-dev test   Run nested sandbox to test live changes"
-echo "    infynitae-dev logs   Stream live session, shell & crash logs"
-echo "    infynitae-dev build  Rebuild release and update binary"
-echo "    infynitae-dev check  Run test suite and architecture check"
+echo "  NOTE: If this is a fresh install, please log out and back in"
+echo "        (or reboot) for seat/video permissions to take effect!"
 echo "=========================================================="
