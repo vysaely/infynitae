@@ -198,6 +198,12 @@ impl WaylandState {
                 Effect::SpawnFileManager => {
                     self.spawn_action("file-manager");
                 }
+                Effect::SpawnScreenshot => {
+                    self.spawn_action("screenshot");
+                }
+                Effect::ToggleOverview => {
+                    self.spawn_action("overview");
+                }
                 ref other => {
                     let applied = self.apply_layer(other) || self.apply_pointer(other);
                     debug_assert!(applied, "unhandled effect {other:?}");

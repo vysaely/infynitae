@@ -132,6 +132,10 @@ pub enum Effect {
     SpawnTerminal,
     /// Super+E: launches file manager
     SpawnFileManager,
+    /// Super+Shift+S or PrintScreen: capture screenshot
+    SpawnScreenshot,
+    /// Super+Shift+Tab: toggles canvas overview radar
+    ToggleOverview,
 }
 
 /// Caller-owned, reusable storage for the effects of one Core entry (C14.3 `EffectBuf`). An

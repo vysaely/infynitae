@@ -29,6 +29,8 @@ pub const KEY_9: u32 = 10;
 pub const KEY_Q: u32 = 16;
 pub const KEY_W: u32 = 17;
 pub const KEY_E: u32 = 18;
+pub const KEY_S: u32 = 31;
+pub const KEY_SYSRQ: u32 = 99;
 
 /// An action triggered by a matched compositor key binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -36,12 +38,18 @@ pub enum KeyAction {
     FocusNext,
     /// Super+1..9: focus, raise, and recenter camera on mapped window at slot 0..8 (creation order)
     FocusSlot(usize),
+    /// Super+Shift+1..9: focus, raise, and frame/recenter camera on cluster at slot 0..8 (creation order)
+    FocusClusterSlot(usize),
     /// Super+W: toggles the Dynamic Island start launcher
     ToggleLauncher,
     /// Super+Q: launches terminal
     SpawnTerminal,
     /// Super+E: launches file manager
     SpawnFileManager,
+    /// Super+Shift+S or PrintScreen: capture screenshot
+    SpawnScreenshot,
+    /// Super+Shift+Tab: toggles canvas overview radar
+    ToggleOverview,
 
     Cancel,
     /// F-FIT-1 on the pointer's output, for the element under the pointer (INC-10).
@@ -112,8 +120,11 @@ pub fn resolve_key_binding(
             false => KeyAction::FitToggle,
         });
     }
-    // Super+Tab cycles the focus (Super+Shift+Tab is reserved for the owner's overview)
-    if key == KEY_TAB && mods.logo && !mods.shift && !mods.ctrl && !mods.alt {
+    // Super+Tab cycles the focus; Super+Shift+Tab toggles canvas overview radar
+    if key == KEY_TAB && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
+        if mods.shift {
+            return Some(KeyAction::ToggleOverview);
+        }
         return Some(KeyAction::FocusNext);
     }
     // Logo+Delete closes the focused window, Logo+Shift+Delete ends its app; the modifiers match
@@ -152,6 +163,24 @@ pub fn resolve_key_binding(
             return Some(KeyAction::FocusSlot(s));
         }
     }
+    // Super+Shift+1..9 focuses, raises and frames/recenters cluster slot 1..9 (0-indexed); Logo+Shift, never during interaction
+    if mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        let slot = match key {
+            KEY_1 => Some(0),
+            KEY_2 => Some(1),
+            KEY_3 => Some(2),
+            KEY_4 => Some(3),
+            KEY_5 => Some(4),
+            KEY_6 => Some(5),
+            KEY_7 => Some(6),
+            KEY_8 => Some(7),
+            KEY_9 => Some(8),
+            _ => None,
+        };
+        if let Some(s) = slot {
+            return Some(KeyAction::FocusClusterSlot(s));
+        }
+    }
     // Super+W: toggles the Dynamic Island launcher; exactly Logo, never during interaction
     if key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ToggleLauncher);
@@ -163,6 +192,12 @@ pub fn resolve_key_binding(
     // Super+E: launches file manager; exactly Logo, never during interaction
     if key == KEY_E && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::SpawnFileManager);
+    }
+    // Super+Shift+S or PrintScreen (KEY_SYSRQ): screenshot capture; never during interaction
+    if (key == KEY_S && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active)
+        || (key == KEY_SYSRQ && !interaction_active)
+    {
+        return Some(KeyAction::SpawnScreenshot);
     }
 
     for b in &CANONICAL_BINDINGS {
@@ -264,8 +299,15 @@ mod tests {
         );
         assert_eq!(
             resolve_key_binding(KEY_TAB, logo_shift, false),
-            None,
-            "Super+Shift+Tab: the overview"
+            Some(KeyAction::ToggleOverview)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_S, logo_shift, false),
+            Some(KeyAction::SpawnScreenshot)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_SYSRQ, none, false),
+            Some(KeyAction::SpawnScreenshot)
         );
         assert_eq!(resolve_key_binding(KEY_TAB, none, false), None);
         assert_eq!(resolve_key_binding(KEY_B, logo, false), None);
@@ -368,7 +410,7 @@ mod tests {
                 resolve_key_binding(k, logo, false),
                 Some(KeyAction::FocusSlot(slot))
             );
-            // With Shift, Ctrl or Alt: None
+            // With Shift: FocusClusterSlot
             assert_eq!(
                 resolve_key_binding(
                     k,
@@ -378,14 +420,38 @@ mod tests {
                     },
                     false
                 ),
-                None
+                Some(KeyAction::FocusClusterSlot(slot))
             );
+            // With Ctrl or Alt: None
             assert_eq!(
                 resolve_key_binding(k, Modifiers { ctrl: true, ..logo }, false),
                 None
             );
+            assert_eq!(
+                resolve_key_binding(
+                    k,
+                    Modifiers {
+                        shift: true,
+                        ctrl: true,
+                        ..logo
+                    },
+                    false
+                ),
+                None
+            );
             // During interaction: None
             assert_eq!(resolve_key_binding(k, logo, true), None);
+            assert_eq!(
+                resolve_key_binding(
+                    k,
+                    Modifiers {
+                        shift: true,
+                        ..logo
+                    },
+                    true
+                ),
+                None
+            );
         }
     }
 

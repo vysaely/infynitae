@@ -6,7 +6,9 @@ mod common;
 
 use common::input::*;
 use infynitae_backend_headless::keyboard_key;
-use infynitae_core::input::keys::{KEY_1, KEY_2, KEY_3, KEY_9, KEY_E, KEY_LEFTMETA, KEY_Q, KEY_W};
+use infynitae_core::input::keys::{
+    KEY_1, KEY_2, KEY_3, KEY_9, KEY_E, KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_Q, KEY_S, KEY_SYSRQ, KEY_TAB, KEY_W,
+};
 use infynitae_core::stage::ElementId;
 
 fn top(r: &Rig) -> Option<ElementId> {
@@ -18,6 +20,22 @@ fn tap_slot(r: &mut Rig, key: u32) {
         (KEY_LEFTMETA, true),
         (key, true),
         (key, false),
+        (KEY_LEFTMETA, false),
+    ] {
+        r.t += 1000;
+        keyboard_key(&mut r.ls.state, &mut r.ls.input, k, pressed, r.t).expect("key");
+        r.ls.pump();
+    }
+    r.frame();
+}
+
+fn tap_cluster_slot(r: &mut Rig, key: u32) {
+    for (k, pressed) in [
+        (KEY_LEFTMETA, true),
+        (KEY_LEFTSHIFT, true),
+        (key, true),
+        (key, false),
+        (KEY_LEFTSHIFT, false),
         (KEY_LEFTMETA, false),
     ] {
         r.t += 1000;
@@ -165,4 +183,94 @@ fn super_e_spawns_file_manager() {
         "not during interaction"
     );
 }
+
+#[test]
+fn super_shift_s_spawns_screenshot() {
+    let mods = infynitae_core::input::bindings::Modifiers {
+        logo: true,
+        shift: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        infynitae_core::input::keys::resolve_key_binding(KEY_S, mods, false),
+        Some(infynitae_core::input::keys::KeyAction::SpawnScreenshot),
+        "Super+Shift+S resolves to SpawnScreenshot"
+    );
+    assert_eq!(
+        infynitae_core::input::keys::resolve_key_binding(KEY_S, mods, true),
+        None,
+        "not during interaction"
+    );
+}
+
+#[test]
+fn printscreen_spawns_screenshot() {
+    let mods = infynitae_core::input::bindings::Modifiers::default();
+    assert_eq!(
+        infynitae_core::input::keys::resolve_key_binding(KEY_SYSRQ, mods, false),
+        Some(infynitae_core::input::keys::KeyAction::SpawnScreenshot),
+        "PrintScreen resolves to SpawnScreenshot"
+    );
+}
+
+#[test]
+fn super_shift_1_to_9_resolves_cluster_slots() {
+    let mods = infynitae_core::input::bindings::Modifiers {
+        logo: true,
+        shift: true,
+        ..Default::default()
+    };
+    for slot in 0..9 {
+        let key = (slot as u32) + KEY_1;
+        assert_eq!(
+            infynitae_core::input::keys::resolve_key_binding(key, mods, false),
+            Some(infynitae_core::input::keys::KeyAction::FocusClusterSlot(slot)),
+            "Super+Shift+{key} resolves to FocusClusterSlot({slot})"
+        );
+        assert_eq!(
+            infynitae_core::input::keys::resolve_key_binding(key, mods, true),
+            None,
+            "not during interaction"
+        );
+    }
+}
+
+#[test]
+fn super_shift_1_to_9_focuses_and_frames_clusters() {
+    let mut r = Rig::x8();
+    let qh = r.ls.qh.clone();
+    let w1 = r.ls.state.core().stage().mapped_in_creation_order()[0];
+
+    // Map a second window W2
+    r.ls.probe.toplevel(&qh, "W2", (800, 600), 20);
+    r.ls.pump();
+    r.frame();
+
+    let mapped = r.ls.state.core().stage().mapped_in_creation_order();
+    assert_eq!(mapped.len(), 2);
+    let _w2 = mapped[1];
+
+    let clusters = r.ls.state.core().clusters();
+    assert_eq!(clusters.len(), 1, "both windows near each other form 1 cluster");
+    assert_eq!(clusters[0].len(), 2, "cluster 1 has 2 windows");
+
+    // Press Super+Shift+1 -> focuses Cluster 1 (W1 primary)
+    tap_cluster_slot(&mut r, KEY_1);
+    assert_eq!(r.ls.state.core().focus().target(), Some(w1), "Cluster 1 focuses W1");
+}
+
+#[test]
+fn super_shift_tab_toggles_overview() {
+    let mods = infynitae_core::input::bindings::Modifiers {
+        logo: true,
+        shift: true,
+        ..Default::default()
+    };
+    assert_eq!(
+        infynitae_core::input::keys::resolve_key_binding(KEY_TAB, mods, false),
+        Some(infynitae_core::input::keys::KeyAction::ToggleOverview),
+        "Super+Shift+Tab resolves to ToggleOverview"
+    );
+}
+
 

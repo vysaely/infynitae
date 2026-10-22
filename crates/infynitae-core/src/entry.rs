@@ -147,6 +147,7 @@ impl Core {
                                 | KeyAction::FitToggle
                                 | KeyAction::Recenter
                                 | KeyAction::FocusSlot(_)
+                                | KeyAction::FocusClusterSlot(_)
                         )
                     )
                     .then(authority::Authorized::mint);
@@ -291,6 +292,10 @@ impl Core {
                 self.focus_slot(slot, proof, out);
                 return;
             }
+            KeyAction::FocusClusterSlot(slot) => {
+                self.focus_cluster_slot(slot, proof, out);
+                return;
+            }
             KeyAction::ToggleFullscreen => self.toggle_fullscreen(),
             KeyAction::ForceCloseFocused => self
                 .focus
@@ -308,6 +313,8 @@ impl Core {
             KeyAction::ToggleLauncher => vec![Effect::ToggleLauncher],
             KeyAction::SpawnTerminal => vec![Effect::SpawnTerminal],
             KeyAction::SpawnFileManager => vec![Effect::SpawnFileManager],
+            KeyAction::SpawnScreenshot => vec![Effect::SpawnScreenshot],
+            KeyAction::ToggleOverview => vec![Effect::ToggleOverview],
             crate::input::keys::KeyAction::Noop => Vec::new(),
         };
         out.extend(fx);
@@ -434,6 +441,87 @@ impl Core {
         }
         if let Some(p) = proof {
             self.recenter(p, out);
+        }
+    }
+
+    /// Super+Shift+1..9: focus, raise primary window, and frame/recenter camera on cluster at slot `slot` (0-indexed creation order).
+    fn focus_cluster_slot(
+        &mut self,
+        slot: usize,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) {
+        let clusters = self.clusters();
+        let Some(cluster) = clusters.get(slot) else {
+            return;
+        };
+        let Some(&primary) = cluster.first() else {
+            return;
+        };
+        let raised = self.raise_by_user(primary);
+        out.extend(self.focus.set_focus(Some(primary)));
+        out.extend(self.reconcile_constraints());
+        if raised
+            && matches!(self.pointer, pointer::PointerState::Located { .. })
+            && !self.input.interaction.active()
+            && !self.locked()
+        {
+            self.true_position_into(out);
+        }
+        if let Some(p) = proof {
+            self.frame_cluster(p, cluster, out);
+        }
+    }
+
+    /// Fits or centers the camera on the cluster's bounding box.
+    fn frame_cluster(
+        &mut self,
+        proof: authority::Authorized,
+        cluster: &[crate::stage::ElementId],
+        out: &mut Vec<Effect>,
+    ) {
+        if cluster.is_empty() {
+            return;
+        }
+        let Some(output) = self.pointer_output().or_else(|| self.outputs().first().map(|o| o.id)) else {
+            return;
+        };
+        let Some(camera) = self.cameras.camera_for_output(output) else {
+            return;
+        };
+        let (Some((view_size, scale)), Some(extent), Some(usable)) = (
+            self.output(output).map(|m| (m.view_size(), m.scale)),
+            self.output(output).map(|m| m.logical_extent()),
+            self.usable_area(output),
+        ) else {
+            return;
+        };
+
+        let mut min_x = i64::MAX;
+        let mut min_y = i64::MAX;
+        let mut max_x = i64::MIN;
+        let mut max_y = i64::MIN;
+        for &e in cluster {
+            let a = self.stage.anchor(e).unwrap_or(crate::geom::CanvasPoint { x: 0, y: 0 });
+            let (w, h) = self
+                .stage
+                .tree(e)
+                .map(|t| (t.geometry.size.w as i64, t.geometry.size.h as i64))
+                .unwrap_or((0, 0));
+            min_x = min_x.min(a.x);
+            min_y = min_y.min(a.y);
+            max_x = max_x.max(a.x.saturating_add(w));
+            max_y = max_y.max(a.y.saturating_add(h));
+        }
+        if min_x > max_x || min_y > max_y {
+            return;
+        }
+        let g = (min_x, min_y, (max_x - min_x).max(1), (max_y - min_y).max(1));
+        if let Some(mut target) = crate::navigation::fit_target_in(view_size, extent, usable, scale, g) {
+            // Cap zoom at 1.0 (never magnify small clusters beyond 100% native scale)
+            target.zoom = target.zoom.min(1.0);
+            self.cameras.fit(proof, camera, target);
+            self.camera_written(output, camera, out);
         }
     }
 

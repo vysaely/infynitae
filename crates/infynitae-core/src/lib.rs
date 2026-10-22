@@ -607,6 +607,57 @@ impl Core {
         live
     }
 
+    /// Windows partitioned into connected spatial clusters (sorted by earliest creation order).
+    pub fn clusters(&self) -> Vec<Vec<stage::ElementId>> {
+        let live = self.focusable_elements_in_creation_order();
+        if live.is_empty() {
+            return Vec::new();
+        }
+        let rects: Vec<(i64, i64, i64, i64)> = live
+            .iter()
+            .map(|&e| {
+                let a = self.stage.anchor(e).unwrap_or(geom::CanvasPoint { x: 0, y: 0 });
+                let (w, h) = self
+                    .stage
+                    .tree(e)
+                    .map(|t| (t.geometry.size.w as i64, t.geometry.size.h as i64))
+                    .unwrap_or((0, 0));
+                (a.x, a.y, a.x.saturating_add(w), a.y.saturating_add(h))
+            })
+            .collect();
+
+        const CLUSTER_GAP: i64 = 300;
+        let n = live.len();
+        let mut visited = vec![false; n];
+        let mut clusters: Vec<Vec<stage::ElementId>> = Vec::new();
+
+        for i in 0..n {
+            if visited[i] {
+                continue;
+            }
+            visited[i] = true;
+            let mut cluster = vec![live[i]];
+            let mut queue = vec![i];
+            while let Some(curr) = queue.pop() {
+                let (ax0, ay0, ax1, ay1) = rects[curr];
+                for j in 0..n {
+                    if !visited[j] {
+                        let (bx0, by0, bx1, by1) = rects[j];
+                        let dx = (ax0 - bx1).max(bx0 - ax1).max(0);
+                        let dy = (ay0 - by1).max(by0 - ay1).max(0);
+                        if dx <= CLUSTER_GAP && dy <= CLUSTER_GAP {
+                            visited[j] = true;
+                            cluster.push(live[j]);
+                            queue.push(j);
+                        }
+                    }
+                }
+            }
+            clusters.push(cluster);
+        }
+        clusters
+    }
+
     /// Whether any output presents an element (a mapped fullscreen element).
     fn presenting(&self) -> bool {
         self.fullscreen()
@@ -796,7 +847,9 @@ impl Core {
             | E::PreferredScale { .. }
             | E::ToggleLauncher
             | E::SpawnTerminal
-            | E::SpawnFileManager => {}
+            | E::SpawnFileManager
+            | E::SpawnScreenshot
+            | E::ToggleOverview => {}
         }
         recipients.map(|r| {
             r.filter(|&e| {
