@@ -73,6 +73,10 @@ Run anytime from anywhere to pull latest changes, rebuild, and update without to
 infynitae-update
 ```
 
+## Documentation
+
+For a complete breakdown of every component, toolkit compatibility rule, dependency list, and instructions for customizing or building your own Wayland compositor and desktop environment, see the [Architecture & Standalone Desktop Blueprint](docs/COMPOSITOR_AND_DESKTOP_GUIDE.md).
+
 ## Acknowledgements
 
 Inspired by [driftwm](https://github.com/malbiruk/driftwm) and [hyprland-infinitie-desktop-v2](https://github.com/sarodscommits/hyprland-infinitie-desktop-v2).
