@@ -67,6 +67,24 @@ if command -v pacman >/dev/null 2>&1; then
     fi
 fi
 
+# Ensure zero-reboot udev device permissions
+if [ -d "/etc/udev/rules.d" ] && [ ! -f "/etc/udev/rules.d/71-infynitae-devices.rules" ]; then
+    if command -v sudo >/dev/null 2>&1; then
+        echo "==> Deploying zero-reboot hardware access rules (udev uaccess)..."
+        sudo tee /etc/udev/rules.d/71-infynitae-devices.rules >/dev/null << 'EOF'
+# Infynitae Compositor: grant the active local seat user direct access to input, uinput, and DRM nodes
+SUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess"
+SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
+SUBSYSTEM=="drm", KERNEL=="card*", TAG+="uaccess"
+SUBSYSTEM=="drm", KERNEL=="renderD*", TAG+="uaccess"
+EOF
+        sudo udevadm control --reload-rules 2>/dev/null || true
+        sudo udevadm trigger --subsystem-match=input 2>/dev/null || true
+        sudo udevadm trigger --subsystem-match=drm 2>/dev/null || true
+        sudo udevadm trigger --subsystem-match=misc 2>/dev/null || true
+    fi
+fi
+
 # 3. Build optimized release binary
 echo "==> Compiling latest Infynitae release binary..."
 cargo build --release -p infynitae

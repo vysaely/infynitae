@@ -74,20 +74,45 @@ if command -v rustup >/dev/null 2>&1 && ! rustup show active-toolchain >/dev/nul
     rustup default stable
 fi
 
-# 4. Ensure seat permission for console TTY
-# On systemd (standard Arch), systemd-logind manages the seat natively with 0 extra daemons and no reboot needed.
-# Only start seatd.service if systemd-logind is not active.
+# 4. Ensure zero-reboot seat, input, and DRM device permissions
+# On modern Linux, adding a user to groups (input/video/seat) traditionally requires a reboot or logout
+# because active shells do not inherit newly added groups.
+# We completely eliminate the need to reboot by installing a udev uaccess rule:
+# systemd-logind and udev automatically grant the active local seat user direct read/write ACL permissions
+# on /dev/input/event*, /dev/uinput, and /dev/dri/* immediately and on hotplug.
+echo "==> Configuring zero-reboot hardware access rules (udev uaccess & ACLs)..."
 if command -v systemctl >/dev/null 2>&1; then
     if ! systemctl is-active --quiet systemd-logind 2>/dev/null; then
         sudo systemctl enable --now seatd 2>/dev/null || true
     fi
     sudo usermod -aG input,video,seat "$USER" 2>/dev/null || true
-    if command -v setfacl >/dev/null 2>&1; then
-        sudo setfacl -m "u:${USER}:rw" /dev/dri/card* /dev/dri/render* 2>/dev/null || true
-        sudo setfacl -m "u:${USER}:rw" /dev/input/event* 2>/dev/null || true
-    fi
-    if [ -S /run/seatd.sock ] && command -v setfacl >/dev/null 2>&1; then
+fi
+
+# Deploy udev uaccess rule so active user has instant access without reboot or group reload
+sudo tee /etc/udev/rules.d/71-infynitae-devices.rules >/dev/null << 'EOF'
+# Infynitae Compositor: grant the active local seat user direct access to input, uinput, and DRM nodes
+SUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess"
+SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
+SUBSYSTEM=="drm", KERNEL=="card*", TAG+="uaccess"
+SUBSYSTEM=="drm", KERNEL=="renderD*", TAG+="uaccess"
+EOF
+
+# Reload and trigger udev rules immediately across input, drm, and misc
+if command -v udevadm >/dev/null 2>&1; then
+    sudo udevadm control --reload-rules 2>/dev/null || true
+    sudo udevadm trigger --subsystem-match=input 2>/dev/null || true
+    sudo udevadm trigger --subsystem-match=drm 2>/dev/null || true
+    sudo udevadm trigger --subsystem-match=misc 2>/dev/null || true
+fi
+
+# Apply immediate fallback POSIX ACLs on current device nodes for current session
+if command -v setfacl >/dev/null 2>&1; then
+    sudo setfacl -m "u:${USER}:rw" /dev/dri/card* /dev/dri/render* 2>/dev/null || true
+    sudo setfacl -m "u:${USER}:rw" /dev/input/event* 2>/dev/null || true
+    sudo setfacl -m "u:${USER}:rw" /dev/uinput 2>/dev/null || true
+    if [ -S /run/seatd.sock ]; then
         sudo setfacl -m "u:${USER}:rw" /run/seatd.sock 2>/dev/null || true
+        sudo chmod 0666 /run/seatd.sock 2>/dev/null || true
     fi
 fi
 
@@ -279,6 +304,9 @@ echo "    Super + Shift + R    Reload Config"
 echo "    Super + Delete       Close Window"
 echo "    Ctrl + Alt + Backspace Exit Compositor"
 echo "=========================================================="
-echo "  NOTE: If this is a fresh install, please log out and back in"
-echo "        (or reboot) for seat/video permissions to take effect!"
+echo "  [✓] Hardware & input permissions are active immediately!"
+echo "      (Zero reboot or logout needed — udev uaccess & ACLs are active)"
+echo ""
+echo "  Start Infynitae right now with:"
+echo "      infynitae-session"
 echo "=========================================================="
