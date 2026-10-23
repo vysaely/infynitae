@@ -58,6 +58,29 @@ if [ -f "$HOME/.config/infynitae/config" ]; then
 fi
 export XCURSOR_THEME="${CURSOR_THEME:-${XCURSOR_THEME:-Adwaita}}"
 export XCURSOR_SIZE="${CURSOR_SIZE:-${XCURSOR_SIZE:-24}}"
+
+# Autodetect system keyboard layout if not explicitly set in ~/.config/infynitae/config
+if [ -z "$XKB_DEFAULT_LAYOUT" ]; then
+    if command -v localectl >/dev/null 2>&1; then
+        _SYS_LAYOUT=$(localectl status 2>/dev/null | awk '/X11 Layout:/ {print $3}')
+        if [ -n "$_SYS_LAYOUT" ] && [ "$_SYS_LAYOUT" != "n/a" ]; then
+            export XKB_DEFAULT_LAYOUT="$_SYS_LAYOUT"
+        fi
+        _SYS_VARIANT=$(localectl status 2>/dev/null | awk '/X11 Variant:/ {print $3}')
+        if [ -n "$_SYS_VARIANT" ] && [ "$_SYS_VARIANT" != "n/a" ]; then
+            export XKB_DEFAULT_VARIANT="$_SYS_VARIANT"
+        fi
+        _SYS_OPTIONS=$(localectl status 2>/dev/null | awk -F': ' '/X11 Options:/ {print $2}')
+        if [ -n "$_SYS_OPTIONS" ] && [ "$_SYS_OPTIONS" != "n/a" ]; then
+            export XKB_DEFAULT_OPTIONS="$_SYS_OPTIONS"
+        fi
+    elif [ -f /etc/vconsole.conf ]; then
+        _SYS_LAYOUT=$(grep -E '^KEYMAP=' /etc/vconsole.conf 2>/dev/null | cut -d= -f2 | tr -d '"')
+        if [ -n "$_SYS_LAYOUT" ]; then
+            export XKB_DEFAULT_LAYOUT="$_SYS_LAYOUT"
+        fi
+    fi
+fi
 export XKB_DEFAULT_LAYOUT="${XKB_DEFAULT_LAYOUT:-us}"
 export XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-}"
 export FOCUS_FOLLOWS_MOUSE="${FOCUS_FOLLOWS_MOUSE:-1}"

@@ -82,6 +82,10 @@ if command -v systemctl >/dev/null 2>&1; then
         sudo systemctl enable --now seatd 2>/dev/null || true
     fi
     sudo usermod -aG input,video,seat "$USER" 2>/dev/null || true
+    if command -v setfacl >/dev/null 2>&1; then
+        sudo setfacl -m "u:${USER}:rw" /dev/dri/card* /dev/dri/render* 2>/dev/null || true
+        sudo setfacl -m "u:${USER}:rw" /dev/input/event* 2>/dev/null || true
+    fi
     if [ -S /run/seatd.sock ] && command -v setfacl >/dev/null 2>&1; then
         sudo setfacl -m "u:${USER}:rw" /run/seatd.sock 2>/dev/null || true
     fi

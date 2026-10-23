@@ -44,6 +44,9 @@ pub const KEY_NEXTSONG: u32 = 163;
 pub const KEY_PREVIOUSSONG: u32 = 165;
 pub const KEY_BRIGHTNESSDOWN: u32 = 224;
 pub const KEY_BRIGHTNESSUP: u32 = 225;
+pub const KEY_KPENTER: u32 = 96;
+pub const KEY_D: u32 = 32;
+pub const KEY_T: u32 = 20;
 
 /// An action triggered by a matched compositor key binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -149,7 +152,7 @@ pub fn resolve_key_binding(
     }
     // Logo+Enter fits or restores (a toggle), Logo+Shift+Enter toggles fullscreen; Ctrl or Alt held
     // as well resolves neither; not during an interaction (the owner's bindings of 2026-10-21)
-    if key == KEY_ENTER && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
+    if (key == KEY_ENTER || key == KEY_KPENTER) && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(match mods.shift {
             true => KeyAction::ToggleFullscreen,
             false => KeyAction::FitToggle,
@@ -216,12 +219,15 @@ pub fn resolve_key_binding(
             return Some(KeyAction::FocusClusterSlot(s));
         }
     }
-    // Super+W: toggles the Dynamic Island launcher; exactly Logo, never during interaction
-    if key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+    // Super+W or Super+D: toggles the Dynamic Island launcher; exactly Logo, never during interaction
+    if (key == KEY_W || key == KEY_D) && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ToggleLauncher);
     }
-    // Super+Q: launches terminal; exactly Logo, never during interaction
-    if key == KEY_Q && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+    // Super+Q or Super+T or Ctrl+Alt+T: launches terminal; never during interaction
+    if (key == KEY_Q || key == KEY_T) && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::SpawnTerminal);
+    }
+    if key == KEY_T && mods.ctrl && mods.alt && !mods.logo && !mods.shift && !interaction_active {
         return Some(KeyAction::SpawnTerminal);
     }
     // Super+E: launches file manager; exactly Logo, never during interaction

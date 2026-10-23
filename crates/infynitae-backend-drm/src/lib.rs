@@ -1004,7 +1004,13 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
         }
         InputEvent::DeviceAdded { mut device } => {
             configure_input_device(&mut device);
-            if device.has_capability(smithay::reexports::input::DeviceCapability::Keyboard) {
+            let is_kb = device.has_capability(smithay::reexports::input::DeviceCapability::Keyboard);
+            let is_ptr = device.has_capability(smithay::reexports::input::DeviceCapability::Pointer);
+            println!(
+                "[infynitae] Input device detected: {} (keyboard: {is_kb}, pointer: {is_ptr})",
+                device.name()
+            );
+            if is_kb {
                 let led_state = data.state.keyboard_led_state();
                 let mut leds = smithay::reexports::input::Led::empty();
                 if led_state.caps.unwrap_or(false) {

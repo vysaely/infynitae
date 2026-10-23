@@ -60,10 +60,7 @@ impl WaylandState {
                 }
                 Effect::KeyboardFocus(target) => {
                     let serial = SERIAL_COUNTER.next_serial();
-                    let target_surface = target.and_then(|id| {
-                        self.window(id)
-                            .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()))
-                    });
+                    let target_surface = target.and_then(|id| self.window_surface(id));
                     let kb = self.keyboard_handle();
                     self.popups.cleanup();
                     if let Some(mut g) = self.popup_grab.take()
@@ -138,9 +135,7 @@ impl WaylandState {
                     } else if self.is_pointer_grabbed() {
                         self.set_pan_dismissed_pointer_grab(serial);
                     }
-                    let target_surface = self
-                        .window(target)
-                        .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
+                    let target_surface = self.window_surface(target);
                     let kb = self.keyboard_handle();
                     kb.set_focus(self, target_surface, serial);
                 }

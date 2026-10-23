@@ -42,10 +42,7 @@ impl WaylandState {
     /// Completes the withheld callbacks of an unobserved element, at `now` on the presentation
     /// clock: its root tree and every popup tree, once.
     pub fn complete_withheld(&mut self, element: ElementId, now: Duration) {
-        let Some(root) = self
-            .window(element)
-            .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()))
-        else {
+        let Some(root) = self.window_surface(element) else {
             return;
         };
         let time_ms = now.as_millis() as u32;

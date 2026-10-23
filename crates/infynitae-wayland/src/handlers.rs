@@ -137,8 +137,7 @@ impl WaylandState {
                 .core
                 .focus()
                 .target()
-                .and_then(|id| self.window(id))
-                .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone())),
+                .and_then(|id| self.window_surface(id)),
         };
         kb.set_focus(self, target, serial);
     }
@@ -148,8 +147,7 @@ impl WaylandState {
             .core
             .focus()
             .target()
-            .and_then(|id| self.window(id))
-            .and_then(|w| w.toplevel().map(|t| t.wl_surface().clone()));
+            .and_then(|id| self.window_surface(id));
         if let Some(target) = &target {
             let target_key = self.registry.key(target);
             if self

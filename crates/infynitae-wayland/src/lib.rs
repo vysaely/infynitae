@@ -487,6 +487,16 @@ impl WaylandState {
         self.elements.iter().find(|e| e.id == id).map(|e| &e.window)
     }
 
+    /// The root `wl_surface` of a window, whether native Wayland (XDG) or XWayland (X11).
+    pub fn window_surface(
+        &self,
+        id: ElementId,
+    ) -> Option<smithay::reexports::wayland_server::protocol::wl_surface::WlSurface> {
+        use smithay::wayland::seat::WaylandFocus;
+        self.window(id)
+            .and_then(|w| w.wl_surface().map(|s| s.into_owned()))
+    }
+
     /// Elements in creation order.
     pub fn elements(&self) -> impl Iterator<Item = ElementId> + '_ {
         self.elements.iter().map(|e| e.id)
