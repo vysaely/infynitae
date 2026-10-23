@@ -117,7 +117,35 @@ fn super_drag_needs_a_window_and_exactly_super() {
     let mut r = Rig::x8();
     let w = element(&r);
     let before = r.ls.state.core().stage().anchor(w);
-    // Shift held on the seat (Rig::button holds only Super itself)
+    // Ctrl held on the seat (Rig::button holds only Super itself)
+    let key = |r: &mut Rig, k, pressed| {
+        r.t += 1000;
+        infynitae_backend_headless::keyboard_key(&mut r.ls.state, &mut r.ls.input, k, pressed, r.t)
+            .expect("key");
+        r.ls.pump();
+    };
+    key(&mut r, infynitae_core::input::keys::KEY_LEFTCTRL, true);
+    r.button(BTN_LEFT, true, LOGO);
+    r.motion((100.0, 0.0));
+    r.button(BTN_LEFT, false, LOGO);
+    key(&mut r, infynitae_core::input::keys::KEY_LEFTCTRL, false);
+    assert_eq!(
+        r.ls.state.core().stage().anchor(w),
+        before,
+        "Super+Ctrl is not a move"
+    );
+    // off the window: the pointer far to the right
+    r.motion((600.0, 0.0));
+    r.button(BTN_LEFT, true, LOGO);
+    assert!(!r.ls.state.core().interaction().active());
+    r.button(BTN_LEFT, false, LOGO);
+}
+
+#[test]
+fn super_shift_left_drag_moves_cluster() {
+    let mut r = Rig::x8();
+    let w = element(&r);
+    let before = r.ls.state.core().stage().anchor(w).unwrap();
     let key = |r: &mut Rig, k, pressed| {
         r.t += 1000;
         infynitae_backend_headless::keyboard_key(&mut r.ls.state, &mut r.ls.input, k, pressed, r.t)
@@ -125,20 +153,17 @@ fn super_drag_needs_a_window_and_exactly_super() {
         r.ls.pump();
     };
     key(&mut r, infynitae_core::input::keys::KEY_LEFTSHIFT, true);
-    r.button(BTN_LEFT, true, LOGO);
-    r.motion((100.0, 0.0));
-    r.button(BTN_LEFT, false, LOGO);
+    let shift_logo = Modifiers {
+        shift: true,
+        ..LOGO
+    };
+    r.button(BTN_LEFT, true, shift_logo);
+    r.motion((100.0, 50.0));
+    let after = r.ls.state.core().stage().anchor(w).unwrap();
+    assert_eq!((after.x - before.x, after.y - before.y), (100, 50));
+    r.button(BTN_LEFT, false, shift_logo);
     key(&mut r, infynitae_core::input::keys::KEY_LEFTSHIFT, false);
-    assert_eq!(
-        r.ls.state.core().stage().anchor(w),
-        before,
-        "Super+Shift is not a move"
-    );
-    // off the window: the pointer far to the right
-    r.motion((600.0, 0.0));
-    r.button(BTN_LEFT, true, LOGO);
     assert!(!r.ls.state.core().interaction().active());
-    r.button(BTN_LEFT, false, LOGO);
 }
 
 /// The window is destroyed mid-drag (move and resize alike): the drag is orphaned, motion is

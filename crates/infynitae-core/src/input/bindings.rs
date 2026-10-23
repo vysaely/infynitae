@@ -10,21 +10,25 @@ pub const BTN_MIDDLE: u32 = 0x112;
 pub const BTN_LEFT: u32 = 0x110;
 pub const BTN_RIGHT: u32 = 0x111;
 
-/// What a Super+button press over a window starts (owner request 2026-10-22, "like Hyprland"):
-/// exactly Logo held.
+/// What a Super+button press over a window starts:
+/// Super+Left/Right: single window move/resize; Super+Shift+Left/Right: cluster move/resize.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WindowDrag {
     Move,
     Resize,
+    ClusterMove,
+    ClusterResize,
 }
 
 pub fn window_drag_binding(button: u32, mods: Modifiers) -> Option<WindowDrag> {
-    if !mods.logo || mods.ctrl || mods.alt || mods.shift {
+    if !mods.logo || mods.ctrl || mods.alt {
         return None;
     }
-    match button {
-        BTN_LEFT => Some(WindowDrag::Move),
-        BTN_RIGHT => Some(WindowDrag::Resize),
+    match (button, mods.shift) {
+        (BTN_LEFT, false) => Some(WindowDrag::Move),
+        (BTN_RIGHT, false) => Some(WindowDrag::Resize),
+        (BTN_LEFT, true) => Some(WindowDrag::ClusterMove),
+        (BTN_RIGHT, true) => Some(WindowDrag::ClusterResize),
         _ => None,
     }
 }

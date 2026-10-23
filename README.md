@@ -11,11 +11,15 @@ Infinite canvas Wayland compositor built in Rust for Arch Linux. Vibecoded for m
 | `Super + Space` | Recenter window |
 | `Super + Enter` | Maximize / fit window to viewport (0% blur) |
 | `Super + Shift + Enter` | Borderless fullscreen (pan out anytime) |
+| `Super + Left Drag` | Move window |
+| `Super + Right Drag` | Resize window from nearest corner |
+| `Super + Shift + Left Drag` | Move entire window cluster |
+| `Super + Shift + Right Drag` | Resize entire window cluster |
 | `Super + Middle Drag` | Pan canvas (`free`, `grab`, or `rts` mode) |
 | `Super + Shift + Middle Click` | Reset zoom to 100% native scale |
 | `Super + Shift + Wheel` | Zoom canvas in / out |
 | `Super + Tab` / `Alt + Tab` | Cycle window focus (auto-centers camera) |
-| `Super + Shift + Tab` | Window switcher / overview (`fuzzel` / `rofi`) |
+| `Super + Shift + Tab` | Canvas overview toggle (fits all windows / restores view) |
 | `Super + Q` | Terminal (auto: kitty, alacritty, foot) |
 | `Super + W` | Launcher (`fuzzel`) |
 | `Super + E` | Files (`yazi`, `thunar`, `dolphin`) |

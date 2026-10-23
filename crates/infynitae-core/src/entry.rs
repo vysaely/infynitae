@@ -165,6 +165,7 @@ impl Core {
                                 | KeyAction::FocusSlot(_)
                                 | KeyAction::FocusClusterSlot(_)
                                 | KeyAction::FocusNext
+                                | KeyAction::ToggleOverview
                         )
                     )
                     .then(authority::Authorized::mint);
@@ -357,7 +358,14 @@ impl Core {
             KeyAction::SpawnFileManager => vec![Effect::SpawnFileManager],
             KeyAction::SpawnScreenshot => vec![Effect::SpawnScreenshot],
             KeyAction::SpawnRegionScreenshot => vec![Effect::SpawnRegionScreenshot],
-            KeyAction::ToggleOverview => vec![Effect::ToggleOverview],
+            KeyAction::ToggleOverview => {
+                if let Some(p) = proof {
+                    self.overview_toggle(p, out);
+                } else {
+                    out.push(Effect::ToggleOverview);
+                }
+                return;
+            }
             KeyAction::ReloadShell => vec![Effect::ReloadShell],
             KeyAction::SpawnLockScreen => vec![Effect::SpawnLockScreen],
             KeyAction::VolumeUp => vec![Effect::VolumeUp],
@@ -709,6 +717,80 @@ impl Core {
         }
     }
 
+    /// Super+Shift+Tab: scales the camera out to capture all mapped windows on the canvas.
+    /// If the camera is already framing the overview, restores the previous camera zoom and position.
+    pub(crate) fn overview_toggle(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
+        let Some(output) = self.pointer_output().or_else(|| self.outputs.first().map(|o| o.id)) else {
+            return;
+        };
+        let Some(camera) = self.cameras.camera_for_output(output) else {
+            return;
+        };
+        let (Some((view_size, scale)), Some(extent), Some(usable)) = (
+            self.output(output).map(|m| (m.view_size(), m.scale)),
+            self.output(output).map(|m| m.logical_extent()),
+            self.usable_area(output),
+        ) else {
+            return;
+        };
+
+        let mapped = self.stage.mapped_elements();
+        if mapped.is_empty() {
+            out.push(Effect::ToggleOverview);
+            return;
+        }
+
+        let mut min_x = i64::MAX;
+        let mut min_y = i64::MAX;
+        let mut max_x = i64::MIN;
+        let mut max_y = i64::MIN;
+        for &e in &mapped {
+            let a = self.stage.anchor(e).unwrap_or(crate::geom::CanvasPoint { x: 0, y: 0 });
+            let (w, h) = self
+                .stage
+                .tree(e)
+                .map(|t| (t.geometry.size.w as i64, t.geometry.size.h as i64))
+                .unwrap_or((0, 0));
+            min_x = min_x.min(a.x);
+            min_y = min_y.min(a.y);
+            max_x = max_x.max(a.x.saturating_add(w));
+            max_y = max_y.max(a.y.saturating_add(h));
+        }
+
+        if min_x > max_x || min_y > max_y {
+            return;
+        }
+
+        // Add 8% comfortable canvas margin (at least 60px)
+        let span_w = (max_x - min_x).max(1);
+        let span_h = (max_y - min_y).max(1);
+        let pad_x = (span_w / 12).max(60);
+        let pad_y = (span_h / 12).max(60);
+
+        let g = (
+            min_x - pad_x,
+            min_y - pad_y,
+            span_w + 2 * pad_x,
+            span_h + 2 * pad_y,
+        );
+
+        let Some(mut target) = crate::navigation::fit_target_in(view_size, extent, usable, scale, g) else {
+            return;
+        };
+        target.zoom = target.zoom.min(1.0);
+
+        let at_overview = self.cameras.center(camera) == Some(target.center)
+            && self.cameras.zoom(camera).map(f64::to_bits) == Some(target.zoom.to_bits())
+            && self.cameras.history(camera).is_some_and(|h| !h.is_empty());
+
+        if at_overview {
+            self.viewport_restore(proof, out);
+        } else {
+            self.cameras.fit(proof, camera, target);
+            self.camera_written(output, camera, out);
+        }
+    }
+
     /// Super+Shift+Enter: the focused window's fullscreen toggles on the pointer's output, as if it
     /// had asked (`set_fullscreen` / `unset_fullscreen`: the same path, M9, INV-PRES-1).
     /// Under smart cluster tiling, entering fullscreen pushes any overlapping windows away into
@@ -1053,6 +1135,7 @@ impl Core {
             Interaction::ElementMove {
                 element,
                 grab_offset,
+                is_cluster,
                 ..
             } => {
                 let target = crate::geom::CanvasPos {
@@ -1062,7 +1145,25 @@ impl Core {
                 if let Some(anchor) = target.round_to_point()
                     && self.stage.anchor(element) != Some(anchor)
                 {
-                    let _ = self.place_by_user(element, anchor, out);
+                    if is_cluster && !self.input.cluster_drag.is_empty() {
+                        let cluster_drag = self.input.cluster_drag.clone();
+                        let primary_initial = cluster_drag
+                            .iter()
+                            .find(|(e, _, _)| *e == element)
+                            .map(|(_, a, _)| *a)
+                            .unwrap_or(anchor);
+                        let dx = anchor.x - primary_initial.x;
+                        let dy = anchor.y - primary_initial.y;
+                        for (e, orig_a, _) in cluster_drag {
+                            let new_a = crate::geom::CanvasPoint {
+                                x: orig_a.x.saturating_add(dx),
+                                y: orig_a.y.saturating_add(dy),
+                            };
+                            let _ = self.place_by_user(e, new_a, out);
+                        }
+                    } else {
+                        let _ = self.place_by_user(element, anchor, out);
+                    }
                 }
             }
             Interaction::ElementResize {
@@ -1070,6 +1171,7 @@ impl Core {
                 top,
                 start_size,
                 press,
+                is_cluster,
                 ..
             } => {
                 let d = |now: i64, then: i64| (now - then) as f64 / crate::geom::Q16_ONE as f64;
@@ -1083,7 +1185,45 @@ impl Core {
                     grow(start_size.0, d(q_now.x, press.x), left),
                     grow(start_size.1, d(q_now.y, press.y), top),
                 );
-                self.resize_to(size, out);
+                if is_cluster && !self.input.cluster_drag.is_empty() {
+                    let cluster_drag = self.input.cluster_drag.clone();
+                    let mut min_x = i64::MAX;
+                    let mut min_y = i64::MAX;
+                    let mut max_x = i64::MIN;
+                    let mut max_y = i64::MIN;
+                    for &(_, a, s) in &cluster_drag {
+                        min_x = min_x.min(a.x);
+                        min_y = min_y.min(a.y);
+                        max_x = max_x.max(a.x.saturating_add(s.0 as i64));
+                        max_y = max_y.max(a.y.saturating_add(s.1 as i64));
+                    }
+                    let orig_w = (max_x - min_x).max(1) as f64;
+                    let orig_h = (max_y - min_y).max(1) as f64;
+                    let scale_x = (size.0 as f64 / orig_w).clamp(0.2, 5.0);
+                    let scale_y = (size.1 as f64 / orig_h).clamp(0.2, 5.0);
+
+                    let origin_x = if left { max_x as f64 } else { min_x as f64 };
+                    let origin_y = if top { max_y as f64 } else { min_y as f64 };
+
+                    for (e, orig_a, orig_s) in cluster_drag {
+                        let rel_x = orig_a.x as f64 - origin_x;
+                        let rel_y = orig_a.y as f64 - origin_y;
+                        let new_a = crate::geom::CanvasPoint {
+                            x: (origin_x + rel_x * scale_x).round() as i64,
+                            y: (origin_y + rel_y * scale_y).round() as i64,
+                        };
+                        let new_w = ((orig_s.0 as f64) * scale_x).round().clamp(64.0, 32768.0) as i32;
+                        let new_h = ((orig_s.1 as f64) * scale_y).round().clamp(64.0, 32768.0) as i32;
+
+                        let _ = self.place_by_user(e, new_a, out);
+                        out.push(Effect::ToplevelConfigureSize {
+                            element: e,
+                            size: crate::geom::LocalSize { w: new_w, h: new_h },
+                        });
+                    }
+                } else {
+                    self.resize_to(size, out);
+                }
             }
             _ => {}
         }
@@ -1312,33 +1452,83 @@ impl Core {
                 x: hit.origin.x * crate::geom::Q16_ONE + hit.local.x,
                 y: hit.origin.y * crate::geom::Q16_ONE + hit.local.y,
             };
+            let is_cluster = matches!(
+                drag,
+                bindings::WindowDrag::ClusterMove | bindings::WindowDrag::ClusterResize
+            );
+            if is_cluster {
+                let cluster = self.cluster_for_element(element);
+                self.input.cluster_drag = cluster
+                    .iter()
+                    .filter_map(|&e| {
+                        let a = self.stage.anchor(e)?;
+                        let s = self.stage.tree(e).map(|t| (t.geometry.size.w, t.geometry.size.h))?;
+                        Some((e, a, s))
+                    })
+                    .collect();
+            } else {
+                self.input.cluster_drag.clear();
+            }
+
             self.input.interaction = match drag {
-                bindings::WindowDrag::Move => Interaction::ElementMove {
-                    element,
-                    initiator: button,
-                    grab_offset: crate::geom::CanvasPos {
-                        x: press.x - anchor.x * crate::geom::Q16_ONE,
-                        y: press.y - anchor.y * crate::geom::Q16_ONE,
-                    },
-                    pan: None,
-                },
-                bindings::WindowDrag::Resize => {
-                    // the corner nearest the pointer: its quadrant of the window geometry
-                    let mid = |a: i64, s: i32| {
-                        a * crate::geom::Q16_ONE + i64::from(s) * (crate::geom::Q16_ONE / 2)
-                    };
-                    let left = press.x < mid(anchor.x, size.w);
-                    let top = press.y < mid(anchor.y, size.h);
-                    let start_size = self
-                        .begin_resize(element, left, top)
-                        .unwrap_or((size.w, size.h));
-                    Interaction::ElementResize {
+                bindings::WindowDrag::Move | bindings::WindowDrag::ClusterMove => {
+                    Interaction::ElementMove {
                         element,
                         initiator: button,
-                        left,
-                        top,
-                        start_size,
-                        press,
+                        grab_offset: crate::geom::CanvasPos {
+                            x: press.x - anchor.x * crate::geom::Q16_ONE,
+                            y: press.y - anchor.y * crate::geom::Q16_ONE,
+                        },
+                        pan: None,
+                        is_cluster,
+                    }
+                }
+                bindings::WindowDrag::Resize | bindings::WindowDrag::ClusterResize => {
+                    if is_cluster && !self.input.cluster_drag.is_empty() {
+                        let mut min_x = i64::MAX;
+                        let mut min_y = i64::MAX;
+                        let mut max_x = i64::MIN;
+                        let mut max_y = i64::MIN;
+                        for &(_, a, s) in &self.input.cluster_drag {
+                            min_x = min_x.min(a.x);
+                            min_y = min_y.min(a.y);
+                            max_x = max_x.max(a.x.saturating_add(s.0 as i64));
+                            max_y = max_y.max(a.y.saturating_add(s.1 as i64));
+                        }
+                        let span_w = (max_x - min_x).max(1);
+                        let span_h = (max_y - min_y).max(1);
+                        let mid_x = (min_x + span_w / 2) * crate::geom::Q16_ONE;
+                        let mid_y = (min_y + span_h / 2) * crate::geom::Q16_ONE;
+                        let left = press.x < mid_x;
+                        let top = press.y < mid_y;
+                        Interaction::ElementResize {
+                            element,
+                            initiator: button,
+                            left,
+                            top,
+                            start_size: (span_w as i32, span_h as i32),
+                            press,
+                            is_cluster: true,
+                        }
+                    } else {
+                        // the corner nearest the pointer: its quadrant of the window geometry
+                        let mid = |a: i64, s: i32| {
+                            a * crate::geom::Q16_ONE + i64::from(s) * (crate::geom::Q16_ONE / 2)
+                        };
+                        let left = press.x < mid(anchor.x, size.w);
+                        let top = press.y < mid(anchor.y, size.h);
+                        let start_size = self
+                            .begin_resize(element, left, top)
+                            .unwrap_or((size.w, size.h));
+                        Interaction::ElementResize {
+                            element,
+                            initiator: button,
+                            left,
+                            top,
+                            start_size,
+                            press,
+                            is_cluster: false,
+                        }
                     }
                 }
             };
@@ -1424,7 +1614,11 @@ impl Core {
     /// reconciliation keeps a lock (M10, C12.F17 Q3: a kept confinement receives it), and the
     /// CameraPan epoch settles (INV-SCALE-3: it ends at interaction termination).
     fn end_interaction(&mut self) -> Vec<Effect> {
-        let resized = matches!(self.input.interaction, Interaction::ElementResize { .. });
+        let resized = matches!(
+            self.input.interaction,
+            Interaction::ElementResize { is_cluster: false, .. }
+        );
+        self.input.cluster_drag.clear();
         self.input.interaction = Interaction::Idle;
         let mut fx = Vec::new();
         if resized {

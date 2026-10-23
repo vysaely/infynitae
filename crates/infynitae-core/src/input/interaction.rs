@@ -49,6 +49,8 @@ pub enum Interaction {
         /// Super+middle pressed during the move (owner request 2026-10-22): the camera pans under
         /// the fixed pointer and the window, still `q_now − grab_offset`, travels with it.
         pan: Option<MovePan>,
+        /// Whether the whole cluster moves together (Super+Shift+Left drag).
+        is_cluster: bool,
     },
     /// Super+right drag: the window is resized from the corner nearest the pointer at the press
     /// (`left`, `top` say which); the opposite corner stays where it was.
@@ -61,6 +63,8 @@ pub enum Interaction {
         start_size: (i32, i32),
         /// The pointer's Canvas position at the press.
         press: CanvasPos,
+        /// Whether the whole cluster resizes together (Super+Shift+Right drag).
+        is_cluster: bool,
     },
 }
 

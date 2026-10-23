@@ -803,6 +803,16 @@ impl Core {
         clusters
     }
 
+    /// Returns the cluster containing `element`, or a single-element list if none.
+    pub fn cluster_for_element(&self, element: stage::ElementId) -> Vec<stage::ElementId> {
+        for cluster in self.clusters() {
+            if cluster.contains(&element) {
+                return cluster;
+            }
+        }
+        vec![element]
+    }
+
     /// Whether any output presents an element (a mapped fullscreen element).
     fn presenting(&self) -> bool {
         self.fullscreen()
