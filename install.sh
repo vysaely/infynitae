@@ -74,46 +74,33 @@ if command -v rustup >/dev/null 2>&1 && ! rustup show active-toolchain >/dev/nul
     rustup default stable
 fi
 
-# 4. Ensure zero-reboot seat, input, and DRM device permissions
-# On modern Linux, adding a user to groups (input/video/seat) traditionally requires a reboot or logout
-# because active shells do not inherit newly added groups.
-# We completely eliminate the need to reboot by installing a udev uaccess rule:
-# systemd-logind and udev automatically grant the active local seat user direct read/write ACL permissions
-# on /dev/input/event*, /dev/uinput, and /dev/dri/* immediately and on hotplug.
-echo "==> Configuring zero-reboot hardware access rules (udev uaccess & ACLs)..."
+# 4. Ensure seat and hardware permissions (Standard Systemd Logind / Seatd architecture)
+# Wayland compositors (like Sway, GNOME, KDE, and Infynitae) open input devices and GPUs
+# via libseat and systemd-logind. This securely passes device file descriptors without requiring
+# the user to be in the raw 'input' group or granting arbitrary user-space processes access to keystrokes.
+echo "==> Configuring hardware access and libseat integration..."
 if command -v systemctl >/dev/null 2>&1; then
     if ! systemctl is-active --quiet systemd-logind 2>/dev/null; then
         sudo systemctl enable --now seatd 2>/dev/null || true
+        sudo usermod -aG seat "$USER" 2>/dev/null || true
     fi
-    sudo usermod -aG input,video,seat "$USER" 2>/dev/null || true
+    sudo usermod -aG video "$USER" 2>/dev/null || true
 fi
 
-# Deploy udev uaccess rule so active user has instant access without reboot or group reload
+# Deploy udev rules for DRM, virtual input (Steam / tablets / emulators), and gamepads
 sudo tee /etc/udev/rules.d/71-infynitae-devices.rules >/dev/null << 'EOF'
-# Infynitae Compositor: grant the active local seat user direct access to input, uinput, and DRM nodes
-SUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess"
-SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
+# Infynitae Compositor: grant active seat user access to GPU, uinput, and gamepads
 SUBSYSTEM=="drm", KERNEL=="card*", TAG+="uaccess"
 SUBSYSTEM=="drm", KERNEL=="renderD*", TAG+="uaccess"
+SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
+SUBSYSTEM=="input", ENV{ID_INPUT_JOYSTICK}=="?*", TAG+="uaccess"
 EOF
 
-# Reload and trigger udev rules immediately across input, drm, and misc
+# Reload and trigger udev rules
 if command -v udevadm >/dev/null 2>&1; then
     sudo udevadm control --reload-rules 2>/dev/null || true
-    sudo udevadm trigger --subsystem-match=input 2>/dev/null || true
     sudo udevadm trigger --subsystem-match=drm 2>/dev/null || true
     sudo udevadm trigger --subsystem-match=misc 2>/dev/null || true
-fi
-
-# Apply immediate fallback POSIX ACLs on current device nodes for current session
-if command -v setfacl >/dev/null 2>&1; then
-    sudo setfacl -m "u:${USER}:rw" /dev/dri/card* /dev/dri/render* 2>/dev/null || true
-    sudo setfacl -m "u:${USER}:rw" /dev/input/event* 2>/dev/null || true
-    sudo setfacl -m "u:${USER}:rw" /dev/uinput 2>/dev/null || true
-    if [ -S /run/seatd.sock ]; then
-        sudo setfacl -m "u:${USER}:rw" /run/seatd.sock 2>/dev/null || true
-        sudo chmod 0666 /run/seatd.sock 2>/dev/null || true
-    fi
 fi
 
 # 5. Build Infynitae in release mode
@@ -251,16 +238,13 @@ chmod +x "$HOME/.local/bin/infynitae-session"
 cp -f "$HOME/infynitae/live/xdg-open" "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 chmod +x "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 
-# Also install into /usr/local/bin and /usr/bin so commands work immediately in current shell and display managers
-sudo mkdir -p /usr/local/bin /usr/bin 2>/dev/null || true
+# Also install into /usr/local/bin so commands work immediately across all users and display managers
+sudo mkdir -p /usr/local/bin 2>/dev/null || true
 for b in infynitae infynitae-session infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
     if [ -f "$HOME/.local/bin/$b" ]; then
         sudo install -m 755 "$HOME/.local/bin/$b" "/usr/local/bin/$b" 2>/dev/null || true
     fi
 done
-# Ensure display managers (GDM, SDDM, Ly, LightDM) always resolve session binaries regardless of PATH
-sudo ln -sf /usr/local/bin/infynitae-session /usr/bin/infynitae-session 2>/dev/null || true
-sudo ln -sf /usr/local/bin/infynitae /usr/bin/infynitae 2>/dev/null || true
 
 # 10. Ensure ~/.local/bin is in user PATH across interactive and login shells
 for prof in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do

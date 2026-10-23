@@ -47,8 +47,21 @@ if [ -z "$XDG_RUNTIME_DIR" ]; then
     if [ -d "/run/user/$(id -u)" ] && [ -w "/run/user/$(id -u)" ]; then
         export XDG_RUNTIME_DIR="/run/user/$(id -u)"
     else
-        export XDG_RUNTIME_DIR="/tmp/infynitae-runtime-$(id -u)"
-        mkdir -p -m 0700 "$XDG_RUNTIME_DIR"
+        FALLBACK_DIR="/tmp/infynitae-runtime-$(id -u)"
+        if [ -d "$FALLBACK_DIR" ] && [ ! -O "$FALLBACK_DIR" ]; then
+            FALLBACK_DIR=$(mktemp -d -t "infynitae-runtime-$(id -u)-XXXXXX")
+        else
+            mkdir -p -m 0700 "$FALLBACK_DIR"
+        fi
+        chmod 0700 "$FALLBACK_DIR"
+        export XDG_RUNTIME_DIR="$FALLBACK_DIR"
+    fi
+fi
+
+# 5b. Route libseat to systemd-logind if systemd is active (avoids seatd conflicts and raw input hacks)
+if [ -z "$LIBSEAT_BACKEND" ]; then
+    if command -v systemctl >/dev/null 2>&1 && systemctl is-active --quiet systemd-logind 2>/dev/null; then
+        export LIBSEAT_BACKEND="logind"
     fi
 fi
 

@@ -67,19 +67,18 @@ if command -v pacman >/dev/null 2>&1; then
     fi
 fi
 
-# Ensure zero-reboot udev device permissions
+# Deploy standard udev hardware access rules (DRM, uinput, and gamepads)
 if [ -d "/etc/udev/rules.d" ] && [ ! -f "/etc/udev/rules.d/71-infynitae-devices.rules" ]; then
     if command -v sudo >/dev/null 2>&1; then
-        echo "==> Deploying zero-reboot hardware access rules (udev uaccess)..."
+        echo "==> Deploying hardware access rules (udev)..."
         sudo tee /etc/udev/rules.d/71-infynitae-devices.rules >/dev/null << 'EOF'
-# Infynitae Compositor: grant the active local seat user direct access to input, uinput, and DRM nodes
-SUBSYSTEM=="input", KERNEL=="event*", TAG+="uaccess"
-SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
+# Infynitae Compositor: grant active seat user access to GPU, uinput, and gamepads
 SUBSYSTEM=="drm", KERNEL=="card*", TAG+="uaccess"
 SUBSYSTEM=="drm", KERNEL=="renderD*", TAG+="uaccess"
+SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
+SUBSYSTEM=="input", ENV{ID_INPUT_JOYSTICK}=="?*", TAG+="uaccess"
 EOF
         sudo udevadm control --reload-rules 2>/dev/null || true
-        sudo udevadm trigger --subsystem-match=input 2>/dev/null || true
         sudo udevadm trigger --subsystem-match=drm 2>/dev/null || true
         sudo udevadm trigger --subsystem-match=misc 2>/dev/null || true
     fi
@@ -125,14 +124,12 @@ chmod +x "$HOME/infynitae/live"/*.sh "$HOME/infynitae/live"/*.py 2>/dev/null || 
 
 # 7. Update system-wide binaries if sudo permission is available
 if command -v sudo >/dev/null 2>&1; then
-    sudo mkdir -p /usr/local/bin /usr/bin 2>/dev/null || true
+    sudo mkdir -p /usr/local/bin 2>/dev/null || true
     for b in infynitae infynitae-session infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
         if [ -f "$HOME/.local/bin/$b" ]; then
             sudo install -m 755 "$HOME/.local/bin/$b" "/usr/local/bin/$b" 2>/dev/null || true
         fi
     done
-    sudo ln -sf /usr/local/bin/infynitae-session /usr/bin/infynitae-session 2>/dev/null || true
-    sudo ln -sf /usr/local/bin/infynitae /usr/bin/infynitae 2>/dev/null || true
 fi
 
 # 8. Safely synchronize configuration templates without overwriting user settings

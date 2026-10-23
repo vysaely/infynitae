@@ -17,8 +17,11 @@ if [ -z "$TARGET" ]; then
     exit 0
 fi
 
-# Expand tilde if present
-TARGET=$(eval echo "$TARGET")
+# Expand tilde safely without eval
+case "$TARGET" in
+    "~"/*) TARGET="$HOME/${TARGET#\~/}" ;;
+    "~")   TARGET="$HOME" ;;
+esac
 
 if [ ! -f "$TARGET" ]; then
     echo "[infynitae-wallpaper] Error: File not found: $TARGET" >&2
