@@ -41,6 +41,16 @@ XKB_DEFAULT_OPTIONS=""
 #   "click" (or 0): Traditional click-to-focus
 FOCUS_FOLLOWS_MOUSE="sloppy"
 
+# Mouse & Window Drag Gestures (Native, sub-millisecond latency):
+#   Super + Left Drag:              Move single active window
+#   Super + Right Drag:             Resize single active window from nearest corner
+#   Super + Shift + Left Drag:      Move entire window cluster together
+#   Super + Shift + Right Drag:     Resize entire window cluster proportionally
+#   Super + Middle Drag:            Pan canvas according to PAN_MODE
+#   Super + Shift + Middle Click:   Reset zoom to 100% native scale
+#   Super + Shift + Wheel:          Zoom canvas in / out around cursor
+#   Super + Shift + Tab:            Canvas Overview Toggle (scales to frame all windows)
+
 # Focus Cycling Navigation (Super+Tab):
 #   1 / true: Focus cycle automatically moves the camera to center the newly focused window
 #   0 / false: Focus cycle changes keyboard focus without moving the camera

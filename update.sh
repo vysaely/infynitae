@@ -51,7 +51,7 @@ fi
 # 2. Check and install any newly added essential packages
 if command -v pacman >/dev/null 2>&1; then
     NEW_PKGS=()
-    for pkg in base-devel libinput seatd xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber pipewire-pulse polkit fuzzel swaylock libnotify brightnessctl playerctl ttf-dejavu swaybg grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
+    for pkg in base-devel libinput seatd xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber pipewire-pulse polkit fuzzel swaylock libnotify brightnessctl playerctl ttf-dejavu wl-clip-persist qt5-wayland qt6-wayland swaybg grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
         if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
             NEW_PKGS+=("$pkg")
         fi
@@ -107,12 +107,14 @@ chmod +x "$HOME/infynitae/live"/*.sh "$HOME/infynitae/live"/*.py 2>/dev/null || 
 
 # 7. Update system-wide binaries if sudo permission is available
 if command -v sudo >/dev/null 2>&1; then
-    sudo mkdir -p /usr/local/bin 2>/dev/null || true
+    sudo mkdir -p /usr/local/bin /usr/bin 2>/dev/null || true
     for b in infynitae infynitae-session infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
         if [ -f "$HOME/.local/bin/$b" ]; then
             sudo install -m 755 "$HOME/.local/bin/$b" "/usr/local/bin/$b" 2>/dev/null || true
         fi
     done
+    sudo ln -sf /usr/local/bin/infynitae-session /usr/bin/infynitae-session 2>/dev/null || true
+    sudo ln -sf /usr/local/bin/infynitae /usr/bin/infynitae 2>/dev/null || true
 fi
 
 # 8. Safely synchronize configuration templates without overwriting user settings

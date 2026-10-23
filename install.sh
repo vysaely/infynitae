@@ -42,8 +42,9 @@ fi
 echo "==> Checking essential system packages..."
 PKGS=()
 # Universal core: build tools, libinput, seatd, portals (screenshare/dialogs), audio stack (PipeWire + PulseAudio emulation),
-# polkit, app launcher (fuzzel), screen locker (swaylock), OSD notifications, brightness/media controls, fonts, wallpaper, Xwayland/Steam
-for pkg in base-devel libinput seatd xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber pipewire-pulse polkit fuzzel swaylock libnotify brightnessctl playerctl ttf-dejavu swaybg grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
+# polkit, app launcher (fuzzel), screen locker (swaylock), OSD notifications, brightness/media controls, fonts, wallpaper,
+# clipboard persistence, Qt Wayland integration, Xwayland/Steam
+for pkg in base-devel libinput seatd xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber pipewire-pulse polkit fuzzel swaylock libnotify brightnessctl playerctl ttf-dejavu wl-clip-persist qt5-wayland qt6-wayland swaybg grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
     if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
         PKGS+=("$pkg")
     fi
@@ -221,13 +222,16 @@ chmod +x "$HOME/.local/bin/infynitae-session"
 cp -f "$HOME/infynitae/live/xdg-open" "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 chmod +x "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 
-# Also install into /usr/local/bin so commands work immediately in current shell and display managers
-sudo mkdir -p /usr/local/bin 2>/dev/null || true
+# Also install into /usr/local/bin and /usr/bin so commands work immediately in current shell and display managers
+sudo mkdir -p /usr/local/bin /usr/bin 2>/dev/null || true
 for b in infynitae infynitae-session infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
     if [ -f "$HOME/.local/bin/$b" ]; then
         sudo install -m 755 "$HOME/.local/bin/$b" "/usr/local/bin/$b" 2>/dev/null || true
     fi
 done
+# Ensure display managers (GDM, SDDM, Ly, LightDM) always resolve session binaries regardless of PATH
+sudo ln -sf /usr/local/bin/infynitae-session /usr/bin/infynitae-session 2>/dev/null || true
+sudo ln -sf /usr/local/bin/infynitae /usr/bin/infynitae 2>/dev/null || true
 
 # 10. Ensure ~/.local/bin is in user PATH across interactive and login shells
 for prof in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do

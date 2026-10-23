@@ -18,17 +18,26 @@ unset KDE_COLOR_SCHEME_PATH
 unset KDE_FORBIDDEN_FILESYSTEMS
 
 # 3. Decouple Qt from KDE platform theme daemon (kded6 / plasma-workspace)
-export QT_QPA_PLATFORM="wayland"
+export QT_QPA_PLATFORM="wayland;xcb"
 export QT_QPA_PLATFORMTHEME=""
 export QT_WAYLAND_DISABLE_WINDOWDECORATION="1"
+export QT_AUTO_SCREEN_SCALE_FACTOR="1"
 
 # 4. Standard toolkit Wayland backends (with X11 fallback for Xwayland)
 export GDK_BACKEND="wayland,x11,*"
 export MOZ_ENABLE_WAYLAND="1"
 export SDL_VIDEODRIVER="wayland,x11"
 export CLUTTER_BACKEND="wayland"
+export ELECTRON_OZONE_PLATFORM_HINT="auto"
+export _JAVA_AWT_WM_NONREPARENTING="1"
 unset GTK_MODULES
 unset GTK_RC_FILES
+
+# 4b. Hardware video acceleration & GPU vendor routing
+if [ -e "/dev/nvidia0" ] || [ -d "/sys/module/nvidia" ]; then
+    export LIBVA_DRIVER_NAME="nvidia"
+    export __GLX_VENDOR_LIBRARY_NAME="nvidia"
+fi
 
 # 4b. Ensure CLI URL openers (xdg-open generic fallback) dispatch asynchronously
 export BROWSER="gio open"
