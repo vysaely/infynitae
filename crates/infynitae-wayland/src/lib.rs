@@ -197,6 +197,8 @@ pub struct WaylandState {
     pub rendered_elements: Vec<infynitae_core::stage::ElementId>,
     pub input_config: InputDeviceConfig,
     pub direct_scanout: Option<bool>,
+    pub wallpaper: Option<String>,
+    pub wallpaper_mode: Option<String>,
     // probe builds only: the Send assertion must be the one and only error
     #[cfg(feature = "probe_store_port_in_state")]
     leaked_port: infynitae_core::InputPort,
@@ -354,6 +356,8 @@ impl WaylandState {
             rendered_elements: Vec::new(),
             input_config: InputDeviceConfig::default(),
             direct_scanout: None,
+            wallpaper: None,
+            wallpaper_mode: None,
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
             leaked_port: unreachable!(),
@@ -444,6 +448,8 @@ impl WaylandState {
         if let Ok(home) = std::env::var("HOME") {
             let config_path = format!("{home}/.config/infynitae/config");
             if let Ok(content) = std::fs::read_to_string(config_path) {
+                let mut new_wallpaper: Option<String> = None;
+                let mut new_wallpaper_mode: Option<String> = None;
                 for line in content.lines() {
                     let line_clean = line.split('#').next().unwrap_or("").trim();
                     if let Some((k, v)) = line_clean.split_once('=') {
@@ -553,9 +559,36 @@ impl WaylandState {
                             "DIRECT_SCANOUT" => {
                                 self.direct_scanout = Some(matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on"));
                             }
+                            "WALLPAPER" => {
+                                let trimmed = val.trim();
+                                if !trimmed.is_empty() {
+                                    new_wallpaper = Some(trimmed.to_string());
+                                }
+                            }
+                            "WALLPAPER_MODE" => {
+                                let trimmed = val.trim();
+                                if !trimmed.is_empty() {
+                                    new_wallpaper_mode = Some(trimmed.to_string());
+                                }
+                            }
                             _ => {}
                         }
                     }
+                }
+                if new_wallpaper != self.wallpaper || new_wallpaper_mode != self.wallpaper_mode {
+                    self.wallpaper = new_wallpaper;
+                    self.wallpaper_mode = new_wallpaper_mode;
+                    let home = std::env::var("HOME").unwrap_or_default();
+                    let script = format!("{home}/.local/bin/infynitae-wallpaper");
+                    let script_fallback = format!("{home}/infynitae/live/wallpaper/infynitae-wallpaper.sh");
+                    let target_bin = if std::path::Path::new(&script).exists() {
+                        script
+                    } else {
+                        script_fallback
+                    };
+                    let _ = std::process::Command::new("sh")
+                        .arg(target_bin)
+                        .spawn();
                 }
             }
         }

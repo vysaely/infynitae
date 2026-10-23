@@ -184,7 +184,14 @@ case "$ACTION" in
             makoctl reload 2>/dev/null || true
         fi
 
-        # 4. Notify user if notification service is present
+        # 4. Reload wallpaper if changed / configured
+        if [ -x "$HOME/infynitae/live/wallpaper/infynitae-wallpaper.sh" ]; then
+            "$HOME/infynitae/live/wallpaper/infynitae-wallpaper.sh" &
+        elif command -v infynitae-wallpaper >/dev/null 2>&1; then
+            infynitae-wallpaper &
+        fi
+
+        # 5. Notify user if notification service is present
         if command -v notify-send >/dev/null 2>&1; then
             notify-send -a Infynitae -u low "Infynitae Reloaded" "Configuration re-applied from ~/.config/infynitae/config" 2>/dev/null || true
         fi

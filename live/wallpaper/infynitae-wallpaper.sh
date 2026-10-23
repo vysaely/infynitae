@@ -13,6 +13,11 @@ if [ -z "$TARGET" ]; then
     TARGET="$WALLPAPER"
 fi
 
+# Terminate existing wallpaper instances first
+pkill -x swaybg 2>/dev/null || true
+pkill -x mpvpaper 2>/dev/null || true
+pkill -f "infynitae-live-wallpaper" 2>/dev/null || true
+
 if [ -z "$TARGET" ]; then
     exit 0
 fi
@@ -29,11 +34,6 @@ if [ ! -f "$TARGET" ]; then
 fi
 
 MODE="${WALLPAPER_MODE:-fill}"
-
-# Terminate existing wallpaper instances
-pkill -x swaybg 2>/dev/null || true
-pkill -x mpvpaper 2>/dev/null || true
-pkill -f "infynitae-live-wallpaper" 2>/dev/null || true
 
 # Check extension
 EXT="${TARGET##*.}"
