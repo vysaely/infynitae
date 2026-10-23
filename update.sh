@@ -113,6 +113,14 @@ if [ -f "$REPO_DIR/live/polkit/infynitae-polkit.c" ] && pkg-config --exists polk
     chmod +x "$HOME/.local/bin/infynitae-polkit" 2>/dev/null || true
 fi
 
+if [ -f "$REPO_DIR/live/lock/infynitae-lock.c" ] && pkg-config --exists wayland-client cairo pangocairo xkbcommon pam 2>/dev/null; then
+    echo "==> Compiling native screen locker & start screen (infynitae-lock)..."
+    gcc -O2 "$REPO_DIR/live/lock/infynitae-lock.c" "$REPO_DIR/live/lock/wlr-layer-shell-protocol.c" "$REPO_DIR/live/lock/xdg-shell-protocol.c" \
+        $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon pam) -lm -lpthread \
+        -o "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
+    chmod +x "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
+fi
+
 # 6. Deploy live companion scripts
 mkdir -p "$HOME/infynitae/live"
 SRC_LIVE="$(cd live 2>/dev/null && pwd -P || echo "")"
@@ -125,7 +133,7 @@ chmod +x "$HOME/infynitae/live"/*.sh "$HOME/infynitae/live"/*.py 2>/dev/null || 
 # 7. Update system-wide binaries if sudo permission is available
 if command -v sudo >/dev/null 2>&1; then
     sudo mkdir -p /usr/local/bin 2>/dev/null || true
-    for b in infynitae infynitae-session infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
+    for b in infynitae infynitae-session infynitae-lock infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
         if [ -f "$HOME/.local/bin/$b" ]; then
             sudo install -m 755 "$HOME/.local/bin/$b" "/usr/local/bin/$b" 2>/dev/null || true
         fi

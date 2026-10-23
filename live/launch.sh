@@ -328,11 +328,13 @@ case "$ACTION" in
         fi
         ;;
     lock-screen)
-        # Super+L: Lock screen (hyprlock, swaylock, gtklock, waylock)
+        # Super+L: Lock screen (native infynitae-lock, hyprlock, swaylock, gtklock, waylock)
         LOCKER="${SCREEN_LOCKER:-auto}"
         case "$LOCKER" in
             auto|"")
-                if command -v hyprlock >/dev/null 2>&1; then
+                if command -v infynitae-lock >/dev/null 2>&1; then
+                    exec infynitae-lock
+                elif command -v hyprlock >/dev/null 2>&1; then
                     exec hyprlock
                 elif command -v swaylock >/dev/null 2>&1; then
                     exec swaylock -f -c 000000

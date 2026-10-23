@@ -132,6 +132,15 @@ if [ -f "$HOME/infynitae/live/polkit/infynitae-polkit.c" ] && pkg-config --exist
     gcc -O2 "$HOME/infynitae/live/polkit/infynitae-polkit.c" $(pkg-config --cflags --libs polkit-agent-1 gtk+-3.0) -o "$HOME/.local/bin/infynitae-polkit" 2>/dev/null || true
     chmod +x "$HOME/.local/bin/infynitae-polkit" 2>/dev/null || true
 fi
+if [ -f "$HOME/infynitae/live/lock/infynitae-lock.c" ] && pkg-config --exists wayland-client cairo pangocairo xkbcommon pam 2>/dev/null; then
+    gcc -O2 "$HOME/infynitae/live/lock/infynitae-lock.c" "$HOME/infynitae/live/lock/wlr-layer-shell-protocol.c" "$HOME/infynitae/live/lock/xdg-shell-protocol.c" \
+        $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon pam) -lm -lpthread \
+        -o "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
+    chmod +x "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
+fi
+if command -v sudo >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/lock/infynitae.pam" ] && [ ! -f /etc/pam.d/infynitae ]; then
+    sudo cp -f "$HOME/infynitae/live/lock/infynitae.pam" /etc/pam.d/infynitae 2>/dev/null || true
+fi
 chmod +x "$HOME/infynitae/live"/*.sh "$HOME/infynitae/live"/*.py 2>/dev/null || true
 
 # Deploy XDG Desktop Portal GlobalShortcuts backend definition
@@ -240,7 +249,7 @@ chmod +x "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 
 # Also install into /usr/local/bin so commands work immediately across all users and display managers
 sudo mkdir -p /usr/local/bin 2>/dev/null || true
-for b in infynitae infynitae-session infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
+for b in infynitae infynitae-session infynitae-lock infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
     if [ -f "$HOME/.local/bin/$b" ]; then
         sudo install -m 755 "$HOME/.local/bin/$b" "/usr/local/bin/$b" 2>/dev/null || true
     fi

@@ -67,7 +67,7 @@ FOCUS_ON_OPEN="1"
 TELEPORT_ON_OPEN="1"
 
 # Screen Locker (Super+L):
-#   "auto" (tries hyprlock, swaylock, gtklock, waylock), or custom command
+#   "auto" (uses native infynitae-lock, fallback hyprlock, swaylock, gtklock, waylock), or custom command
 SCREEN_LOCKER="auto"
 
 # Touchpad:
