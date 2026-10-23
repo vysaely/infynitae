@@ -5,6 +5,7 @@
 
 use std::collections::HashSet;
 use std::error::Error;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
@@ -92,6 +93,9 @@ struct LoopData {
     host: HostFrameGate,
     /// Set of known mapped element IDs for detecting newly mapped windows.
     known_mapped: HashSet<infynitae_core::stage::ElementId>,
+    config_path: Option<PathBuf>,
+    last_config_check: std::time::Instant,
+    last_config_mtime: Option<std::time::SystemTime>,
 }
 
 /// NB-1 (2026-10-17): a submit swaps with the EGL default swap interval, so it waits for the host
@@ -253,6 +257,9 @@ pub fn run_nested_with(
     // limit and says so.
     state.report_renderer_limits(&AssumedGlesLimits)?;
 
+    let cfg_path = std::env::var("HOME").ok().map(|h| PathBuf::from(format!("{h}/.config/infynitae/config")));
+    let initial_mtime = cfg_path.as_ref().and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok());
+
     let mut data = LoopData {
         state,
         session,
@@ -267,7 +274,12 @@ pub fn run_nested_with(
         options,
         host: HostFrameGate::new(),
         known_mapped: HashSet::new(),
+        config_path: cfg_path,
+        last_config_check: std::time::Instant::now(),
+        last_config_mtime: initial_mtime,
     };
+
+    data.state.reload_config();
 
     // every host event (input, resize, redraw request) may change what is shown
     event_loop
@@ -292,6 +304,24 @@ pub fn run_nested_with(
             (a, b) => a.or(b),
         };
         event_loop.dispatch(timeout, &mut data)?;
+        // Hyprland-style Live Config Watcher: auto-reloads and applies changes instantly in real time
+        if data.last_config_check.elapsed() >= Duration::from_millis(250) {
+            data.last_config_check = std::time::Instant::now();
+            if let Some(path) = &data.config_path {
+                if let Ok(meta) = std::fs::metadata(path) {
+                    if let Ok(mtime) = meta.modified() {
+                        if data.last_config_mtime.is_some() && data.last_config_mtime != Some(mtime) {
+                            data.last_config_mtime = Some(mtime);
+                            println!("[infynitae] Config change detected (~/.config/infynitae/config). Live reloading...");
+                            data.state.reload_config();
+                            data.session.request_frame();
+                        } else if data.last_config_mtime.is_none() {
+                            data.last_config_mtime = Some(mtime);
+                        }
+                    }
+                }
+            }
+        }
         if let Some(ext) = extension.as_mut() {
             let (fx, changed) = ext.service(data.state.core_mut());
             data.state.apply(&fx);

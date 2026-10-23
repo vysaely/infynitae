@@ -90,6 +90,15 @@ struct ElementHandle {
     window: Window,
 }
 
+/// Configuration for input devices (pointers, mice, touchpads) loaded from ~/.config/infynitae/config.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InputDeviceConfig {
+    pub mouse_accel_profile: Option<String>,
+    pub mouse_accel_speed: Option<f64>,
+    pub touchpad_tap: Option<bool>,
+    pub touchpad_natural_scroll: Option<bool>,
+}
+
 /// Protocol state handed to every Smithay handler.
 pub struct WaylandState {
     core: Core,
@@ -186,6 +195,8 @@ pub struct WaylandState {
     pub border_inactive: smithay::backend::renderer::Color32F,
     pub border_ids: std::collections::HashMap<infynitae_core::stage::ElementId, [smithay::backend::renderer::element::Id; 4]>,
     pub rendered_elements: Vec<infynitae_core::stage::ElementId>,
+    pub input_config: InputDeviceConfig,
+    pub direct_scanout: Option<bool>,
     // probe builds only: the Send assertion must be the one and only error
     #[cfg(feature = "probe_store_port_in_state")]
     leaked_port: infynitae_core::InputPort,
@@ -253,63 +264,6 @@ impl WaylandState {
         seat.add_keyboard(Default::default(), repeat_delay, repeat_rate)
             .expect("the seat has a keyboard");
         let capabilities = convert::wm_capabilities(core.toplevel_capabilities());
-
-        let mut border_width = 1;
-        let mut border_ignore_csd = true;
-        let mut border_active = smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0);
-        let mut border_inactive = smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 0.8);
-
-        if let Ok(w) = std::env::var("BORDER_WIDTH") {
-            if let Ok(w) = w.parse::<i32>() {
-                border_width = w.max(0);
-            }
-        }
-        if let Ok(b) = std::env::var("BORDER_IGNORE_CSD") {
-            border_ignore_csd = !matches!(b.to_lowercase().as_str(), "0" | "false" | "off" | "no");
-        }
-        if let Ok(c) = std::env::var("BORDER_ACTIVE") {
-            if let Some(c) = parse_color_hex(&c) {
-                border_active = c;
-            }
-        }
-        if let Ok(c) = std::env::var("BORDER_INACTIVE") {
-            if let Some(c) = parse_color_hex(&c) {
-                border_inactive = c;
-            }
-        }
-        if let Ok(home) = std::env::var("HOME") {
-            let config_path = format!("{home}/.config/infynitae/config");
-            if let Ok(content) = std::fs::read_to_string(config_path) {
-                for line in content.lines() {
-                    let line_clean = line.split('#').next().unwrap_or("").trim();
-                    if let Some((k, v)) = line_clean.split_once('=') {
-                        let key = k.trim();
-                        let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
-                        match key {
-                            "BORDER_WIDTH" => {
-                                if let Ok(w) = val.parse::<i32>() {
-                                    border_width = w.max(0);
-                                }
-                            }
-                            "BORDER_IGNORE_CSD" => {
-                                border_ignore_csd = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
-                            }
-                            "BORDER_ACTIVE" => {
-                                if let Some(c) = parse_color_hex(val) {
-                                    border_active = c;
-                                }
-                            }
-                            "BORDER_INACTIVE" => {
-                                if let Some(c) = parse_color_hex(val) {
-                                    border_inactive = c;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
 
         WaylandState {
             core,
@@ -392,12 +346,14 @@ impl WaylandState {
             effects: infynitae_core::protocol::EffectBuf::new(),
             ticked: Vec::new(),
             xdg_decoration: smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(display),
-            border_width,
-            border_ignore_csd,
-            border_active,
-            border_inactive,
+            border_width: 1,
+            border_ignore_csd: true,
+            border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
+            border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 0.8),
             border_ids: std::collections::HashMap::new(),
             rendered_elements: Vec::new(),
+            input_config: InputDeviceConfig::default(),
+            direct_scanout: None,
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
             leaked_port: unreachable!(),
@@ -476,6 +432,138 @@ impl WaylandState {
     /// The colour the empty Canvas is cleared to on this backend's target.
     pub fn clear_color(&self) -> smithay::backend::renderer::Color32F {
         self.target.clear
+    }
+
+    /// Sets the colour the empty Canvas is cleared to on this backend's target.
+    pub fn set_clear_color(&mut self, clear: smithay::backend::renderer::Color32F) {
+        self.target.clear = clear;
+    }
+
+    /// Live reload configuration from ~/.config/infynitae/config into Core and compositor state in real time.
+    pub fn reload_config(&mut self) {
+        if let Ok(home) = std::env::var("HOME") {
+            let config_path = format!("{home}/.config/infynitae/config");
+            if let Ok(content) = std::fs::read_to_string(config_path) {
+                for line in content.lines() {
+                    let line_clean = line.split('#').next().unwrap_or("").trim();
+                    if let Some((k, v)) = line_clean.split_once('=') {
+                        let key = k.trim();
+                        let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                        match key {
+                            "PAN_MODE" => {
+                                match val.to_lowercase().as_str() {
+                                    "rts" => self.core.set_pan_mode(infynitae_core::navigation::PanMode::Rts),
+                                    "free" => self.core.set_pan_mode(infynitae_core::navigation::PanMode::Free),
+                                    _ => self.core.set_pan_mode(infynitae_core::navigation::PanMode::Grab),
+                                }
+                            }
+                            "SCREENCOPY_CURSOR" => {
+                                let hide = matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                self.screencopy.set_hide_cursor(hide);
+                            }
+                            "FOCUS_FOLLOWS_MOUSE" => {
+                                match val.to_lowercase().as_str() {
+                                    "strict" => {
+                                        self.core.set_focus_follows_mouse(true);
+                                        self.core.set_focus_follows_mouse_strict(true);
+                                    }
+                                    "0" | "false" | "off" | "no" | "click" => {
+                                        self.core.set_focus_follows_mouse(false);
+                                        self.core.set_focus_follows_mouse_strict(false);
+                                    }
+                                    _ => {
+                                        self.core.set_focus_follows_mouse(true);
+                                        self.core.set_focus_follows_mouse_strict(false);
+                                    }
+                                }
+                            }
+                            "FOCUS_CYCLE_NAVIGATE" => {
+                                let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                self.core.set_focus_cycle_navigate(enabled);
+                            }
+                            "FOCUS_ON_OPEN" => {
+                                let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                self.core.set_focus_on_open(enabled);
+                            }
+                            "TELEPORT_ON_OPEN" => {
+                                let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                self.core.set_teleport_on_open(enabled);
+                            }
+                            "SUPER_ENTER_ACTION" => {
+                                if val.eq_ignore_ascii_case("fit") {
+                                    self.core.set_enter_mode(infynitae_core::EnterMode::Fit);
+                                } else {
+                                    self.core.set_enter_mode(infynitae_core::EnterMode::Maximize);
+                                }
+                            }
+                            "FULLSCREEN_PAN" => {
+                                let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no" | "exclusive");
+                                self.core.set_fullscreen_pan(enabled);
+                            }
+                            "PLACEMENT_POLICY" => {
+                                match val.to_lowercase().as_str() {
+                                    "center" | "centred" | "centered" => {
+                                        self.core.set_placement_policy(infynitae_core::PlacementPolicy::CentredInView);
+                                    }
+                                    "origin" => {
+                                        self.core.set_placement_policy(infynitae_core::PlacementPolicy::OriginAtCameraCentre);
+                                    }
+                                    _ => {
+                                        self.core.set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+                                    }
+                                }
+                            }
+                            "CANVAS_COLOR" => {
+                                if let Some(c) = crate::parse_color_hex(val) {
+                                    self.set_clear_color(c);
+                                }
+                            }
+                            "BORDER_WIDTH" => {
+                                if let Ok(w) = val.parse::<i32>() {
+                                    self.border_width = w.max(0);
+                                }
+                            }
+                            "BORDER_IGNORE_CSD" => {
+                                self.border_ignore_csd = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                            }
+                            "BORDER_ACTIVE" => {
+                                if let Some(c) = crate::parse_color_hex(val) {
+                                    self.border_active = c;
+                                }
+                            }
+                            "BORDER_INACTIVE" => {
+                                if let Some(c) = crate::parse_color_hex(val) {
+                                    self.border_inactive = c;
+                                }
+                            }
+                            "MOUSE_ACCEL_PROFILE" => {
+                                self.input_config.mouse_accel_profile = Some(val.to_string());
+                            }
+                            "MOUSE_ACCEL_SPEED" => {
+                                if let Ok(s) = val.parse::<f64>() {
+                                    self.input_config.mouse_accel_speed = Some(s.clamp(-1.0, 1.0));
+                                }
+                            }
+                            "TOUCHPAD_TAP" => {
+                                self.input_config.touchpad_tap = Some(matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on"));
+                            }
+                            "TOUCHPAD_NATURAL_SCROLL" => {
+                                self.input_config.touchpad_natural_scroll = Some(matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on"));
+                            }
+                            "DIRECT_SCANOUT" => {
+                                self.direct_scanout = Some(matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on"));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Current input device configuration.
+    pub fn input_config(&self) -> &InputDeviceConfig {
+        &self.input_config
     }
 
     pub fn registry(&self) -> &SurfaceRegistry {

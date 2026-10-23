@@ -175,12 +175,17 @@ struct LoopData {
     taken: Vec<u32>,
     /// Active keyboard devices for hardware LED synchronization (Caps Lock, Num Lock).
     keyboards: Vec<smithay::reexports::input::Device>,
+    /// All active input devices (keyboards, mice, touchpads) for live config updates.
+    input_devices: Vec<smithay::reexports::input::Device>,
     /// Last absolute pointer logical position, used to compute delta for absolute devices (e.g. RustDesk, tablets).
     last_abs_pointer: Option<(f64, f64)>,
     /// Set of known mapped element IDs for detecting newly mapped windows.
     known_mapped: HashSet<infynitae_core::stage::ElementId>,
     /// Direct scanout enabled for zero-copy primary/overlay plane scanout.
     direct_scanout: bool,
+    config_path: Option<PathBuf>,
+    last_config_check: std::time::Instant,
+    last_config_mtime: Option<std::time::SystemTime>,
 }
 
 /// The device limit Core is told: assumed, not queried, as in the nested backend (OB-52, INC-13).
@@ -468,6 +473,9 @@ pub fn run_console_with(
         )
         .map_err(|e| format!("input events: {e}"))?;
 
+    let cfg_path = std::env::var("HOME").ok().map(|h| PathBuf::from(format!("{h}/.config/infynitae/config")));
+    let initial_mtime = cfg_path.as_ref().and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok());
+
     let mut data = LoopData {
         state,
         session,
@@ -483,10 +491,19 @@ pub fn run_console_with(
         quit: false,
         taken: Vec::new(),
         keyboards: Vec::new(),
+        input_devices: Vec::new(),
         last_abs_pointer: None,
         known_mapped: HashSet::new(),
         direct_scanout: options.direct_scanout.unwrap_or(true),
+        config_path: cfg_path,
+        last_config_check: std::time::Instant::now(),
+        last_config_mtime: initial_mtime,
     };
+
+    data.state.reload_config();
+    if let Some(ds) = data.state.direct_scanout {
+        data.direct_scanout = ds;
+    }
 
     println!("[infynitae] Compositor running. Ctrl+Alt+Backspace quits.");
     while !data.quit && !data.session.finished() {
@@ -504,6 +521,31 @@ pub fn run_console_with(
             (a, b) => a.or(b),
         };
         event_loop.dispatch(timeout, &mut data)?;
+        // Hyprland-style Live Config Watcher: auto-reloads and applies changes instantly in real time
+        if data.last_config_check.elapsed() >= Duration::from_millis(250) {
+            data.last_config_check = std::time::Instant::now();
+            if let Some(path) = &data.config_path {
+                if let Ok(meta) = std::fs::metadata(path) {
+                    if let Ok(mtime) = meta.modified() {
+                        if data.last_config_mtime.is_some() && data.last_config_mtime != Some(mtime) {
+                            data.last_config_mtime = Some(mtime);
+                            println!("[infynitae] Config change detected (~/.config/infynitae/config). Live reloading...");
+                            data.state.reload_config();
+                            if let Some(ds) = data.state.direct_scanout {
+                                data.direct_scanout = ds;
+                            }
+                            let input_cfg = data.state.input_config().clone();
+                            for dev in &mut data.input_devices {
+                                configure_input_device(dev, &input_cfg);
+                            }
+                            data.session.request_frame();
+                        } else if data.last_config_mtime.is_none() {
+                            data.last_config_mtime = Some(mtime);
+                        }
+                    }
+                }
+            }
+        }
         if let Some(ext) = extension.as_mut() {
             let (fx, changed) = ext.service(data.state.core_mut());
             data.state.apply(&fx);
@@ -1026,7 +1068,7 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 .with_effects(|core, fx| core.physical_input(port, phys, fx));
         }
         InputEvent::DeviceAdded { mut device } => {
-            configure_input_device(&mut device);
+            configure_input_device(&mut device, data.state.input_config());
             let is_kb = device.has_capability(smithay::reexports::input::DeviceCapability::Keyboard);
             let is_ptr = device.has_capability(smithay::reexports::input::DeviceCapability::Pointer);
             println!(
@@ -1046,11 +1088,13 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                     leds |= smithay::reexports::input::Led::SCROLLLOCK;
                 }
                 device.led_update(leds);
-                data.keyboards.push(device);
+                data.keyboards.push(device.clone());
             }
+            data.input_devices.push(device);
         }
         InputEvent::DeviceRemoved { device } => {
             data.keyboards.retain(|k| k.sysname() != device.sysname());
+            data.input_devices.retain(|d| d.sysname() != device.sysname());
             data.last_abs_pointer = None;
         }
         _ => {}
@@ -1092,12 +1136,20 @@ pub fn calculate_abs_pointer_delta(
     (target_logical.0 - current_p.0, target_logical.1 - current_p.1)
 }
 
-fn configure_input_device(device: &mut smithay::reexports::input::Device) {
+fn configure_input_device(
+    device: &mut smithay::reexports::input::Device,
+    config: &infynitae_wayland::InputDeviceConfig,
+) {
     use smithay::reexports::input::AccelProfile;
 
     // 1. Mouse Acceleration Profile (flat = raw 1:1, adaptive = curve)
-    if let Ok(profile) = std::env::var("MOUSE_ACCEL_PROFILE") {
-        let desired = match profile.to_lowercase().as_str() {
+    let env_profile = std::env::var("MOUSE_ACCEL_PROFILE").ok();
+    let profile = config
+        .mouse_accel_profile
+        .as_deref()
+        .or(env_profile.as_deref());
+    if let Some(profile_str) = profile {
+        let desired = match profile_str.to_lowercase().as_str() {
             "flat" => Some(AccelProfile::Flat),
             "adaptive" => Some(AccelProfile::Adaptive),
             _ => None,
@@ -1110,24 +1162,35 @@ fn configure_input_device(device: &mut smithay::reexports::input::Device) {
     }
 
     // 2. Pointer Speed / Sensitivity (-1.0 to 1.0, 0.0 is default)
-    if let Ok(speed_str) = std::env::var("MOUSE_ACCEL_SPEED")
-        && let Ok(speed) = speed_str.parse::<f64>()
-    {
+    let speed = config.mouse_accel_speed.or_else(|| {
+        std::env::var("MOUSE_ACCEL_SPEED")
+            .ok()
+            .and_then(|s| s.parse::<f64>().ok())
+    });
+    if let Some(speed) = speed {
         let clamped = speed.clamp(-1.0, 1.0);
         let _ = device.config_accel_set_speed(clamped);
     }
 
     // 3. Touchpad Tap-to-click
-    if let Ok(tap) = std::env::var("TOUCHPAD_TAP") {
-        let enable = matches!(tap.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+    let tap = config.touchpad_tap.or_else(|| {
+        std::env::var("TOUCHPAD_TAP")
+            .ok()
+            .map(|t| matches!(t.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+    });
+    if let Some(enable) = tap {
         if device.config_tap_finger_count() > 0 {
             let _ = device.config_tap_set_enabled(enable);
         }
     }
 
     // 4. Touchpad Natural Scrolling
-    if let Ok(nat) = std::env::var("TOUCHPAD_NATURAL_SCROLL") {
-        let enable = matches!(nat.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+    let nat = config.touchpad_natural_scroll.or_else(|| {
+        std::env::var("TOUCHPAD_NATURAL_SCROLL")
+            .ok()
+            .map(|t| matches!(t.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+    });
+    if let Some(enable) = nat {
         if device.config_scroll_has_natural_scroll() {
             let _ = device.config_scroll_set_natural_scroll_enabled(enable);
         }
