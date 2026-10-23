@@ -79,6 +79,10 @@ pub struct ConsoleOptions {
     pub scale_120: Option<u32>,
     /// Scaling texture filter ("nearest" for 0% blur, "linear" for smooth).
     pub scaling_filter: Option<String>,
+    /// Direct scanout for fullscreen apps and games (zero-copy 0-latency bypass).
+    pub direct_scanout: Option<bool>,
+    /// Variable Refresh Rate (VRR / Adaptive Sync).
+    pub vrr: Option<bool>,
 }
 
 /// What the console takes before Core sees a key (T6), given the evdev code and whether Ctrl and
@@ -175,6 +179,8 @@ struct LoopData {
     last_abs_pointer: Option<(f64, f64)>,
     /// Set of known mapped element IDs for detecting newly mapped windows.
     known_mapped: HashSet<infynitae_core::stage::ElementId>,
+    /// Direct scanout enabled for zero-copy primary/overlay plane scanout.
+    direct_scanout: bool,
 }
 
 /// The device limit Core is told: assumed, not queried, as in the nested backend (OB-52, INC-13).
@@ -332,7 +338,7 @@ pub fn run_console_with(
         state.apply(&fx);
         let k = state.core().view(id).map_or(1.0, |v| v.k);
         let size = (i32::from(w), i32::from(h));
-        let compositor = Compositor::new(
+        let mut compositor = Compositor::new(
             OutputModeSource::Static {
                 size: size.into(),
                 scale: smithay::utils::Scale::from(k),
@@ -348,6 +354,17 @@ pub fn run_console_with(
             Some(gbm.clone()),
         )
         .map_err(|e| format!("screen {name}: {e:?}"))?;
+
+        let enable_vrr = options.vrr.unwrap_or(false);
+        if enable_vrr {
+            if let Ok(support) = compositor.vrr_supported(handle) {
+                if !matches!(support, smithay::backend::drm::VrrSupport::NotSupported) {
+                    if let Ok(()) = compositor.use_vrr(true) {
+                        println!("[infynitae] Screen {name}: VRR (Adaptive Sync / FreeSync) enabled");
+                    }
+                }
+            }
+        }
         screens.push(Screen {
             id,
             crtc,
@@ -468,6 +485,7 @@ pub fn run_console_with(
         keyboards: Vec::new(),
         last_abs_pointer: None,
         known_mapped: HashSet::new(),
+        direct_scanout: options.direct_scanout.unwrap_or(true),
     };
 
     println!("[infynitae] Compositor running. Ctrl+Alt+Backspace quits.");
@@ -622,11 +640,16 @@ fn render(data: &mut LoopData) {
                 });
             s.k = k;
         }
+        let frame_flags = if data.direct_scanout {
+            FrameFlags::DEFAULT
+        } else {
+            FrameFlags::empty()
+        };
         let queued = match s.compositor.render_frame(
             &mut data.renderer,
             &elements,
             clear,
-            FrameFlags::empty(),
+            frame_flags,
         ) {
             Ok(result) if !result.is_empty => match s.compositor.queue_frame(()) {
                 Ok(()) => true,

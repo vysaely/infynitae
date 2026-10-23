@@ -322,6 +322,9 @@ fn main() -> ExitCode {
     core.set_focus_on_open(true);
     core.set_teleport_on_open(true);
 
+    let mut direct_scanout: Option<bool> = None;
+    let mut vrr: Option<bool> = None;
+
     if let Ok(fp) = std::env::var("FULLSCREEN_PAN") {
         core.set_fullscreen_pan(!matches!(fp.to_lowercase().as_str(), "0" | "false" | "off" | "no" | "exclusive"));
     }
@@ -439,9 +442,40 @@ fn main() -> ExitCode {
                                 scaling_filter = Some(val.to_lowercase());
                             }
                         }
+                        "DIRECT_SCANOUT" => {
+                            if direct_scanout.is_none() {
+                                direct_scanout = Some(!matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no"));
+                            }
+                        }
+                        "VRR_ENABLED" | "VRR" | "ADAPTIVE_SYNC" => {
+                            if vrr.is_none() {
+                                match val.to_lowercase().as_str() {
+                                    "on" | "true" | "1" | "yes" | "auto" => vrr = Some(true),
+                                    "off" | "false" | "0" | "no" => vrr = Some(false),
+                                    _ => {}
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }
+            }
+        }
+    }
+    if direct_scanout.is_none() {
+        if let Ok(val) = std::env::var("DIRECT_SCANOUT") {
+            direct_scanout = Some(!matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no"));
+        }
+    }
+    if vrr.is_none() {
+        if let Ok(val) = std::env::var("VRR_ENABLED")
+            .or_else(|_| std::env::var("VRR"))
+            .or_else(|_| std::env::var("ADAPTIVE_SYNC"))
+        {
+            match val.to_lowercase().as_str() {
+                "on" | "true" | "1" | "yes" | "auto" => vrr = Some(true),
+                "off" | "false" | "0" | "no" => vrr = Some(false),
+                _ => {}
             }
         }
     }
@@ -509,6 +543,8 @@ fn main() -> ExitCode {
             xwayland_satellite,
             scale_120,
             scaling_filter: scaling_filter.clone(),
+            direct_scanout,
+            vrr,
         };
         match infynitae_backend_drm::run_console_with(
             core,

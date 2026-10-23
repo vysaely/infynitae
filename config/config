@@ -142,6 +142,11 @@ OUTPUT_REFRESH_HZ="0"
 # Variable Refresh Rate (VRR / Adaptive Sync / FreeSync): "auto", "on", "off"
 VRR_ENABLED="auto"
 
+# Direct Scanout (Zero-copy bypass for fullscreen games & media):
+#   "true"  - Directly scans out client DMA-BUFs to display hardware (lowest latency, 0 GPU copies)
+#   "false" - Always composites through GLES shader passes
+DIRECT_SCANOUT="true"
+
 # Async Pageflip Tearing (for ultra-low-latency esports games): "false" or "true"
 ALLOW_TEARING="false"
 

@@ -70,7 +70,7 @@ fi
 # it respawns automatically without taking down the compositor or any client windows.
 LOG_DIR="$HOME/.local/state/infynitae"
 mkdir -p "$LOG_DIR"
-if [ "${ENABLE_QUICKSHELL:-true}" != "false" ]; then
+if [ "${ENABLE_QUICKSHELL:-false}" = "true" ] || [ "${SHELL_UI:-none}" = "quickshell" ]; then
     (
         sleep 0.1
         while true; do
