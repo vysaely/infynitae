@@ -274,6 +274,17 @@ impl Core {
             crate::input::keys::KeyAction::FocusNext => {
                 let fx = self.focus_next();
                 out.extend(fx);
+                if let PointerState::Located { output, .. } = self.pointer {
+                    if let Some(pres) = self.presentation(output) {
+                        if let Some(target) = self.focus.target() {
+                            if pres == target {
+                                self.unsuppress_presentation(output);
+                            } else {
+                                self.suppress_presentation(output);
+                            }
+                        }
+                    }
+                }
                 if self.focus_cycle_navigate {
                     if let Some(p) = proof {
                         self.recenter(p, out);

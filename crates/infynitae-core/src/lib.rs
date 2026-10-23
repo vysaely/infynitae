@@ -701,7 +701,7 @@ impl Core {
     /// presentation that is every mapped element, at no extra cost.
     pub(crate) fn focusable_elements(&self) -> Vec<stage::ElementId> {
         let mut live = self.stage.mapped_elements();
-        if self.presenting() {
+        if self.presenting() && !self.fullscreen_pan {
             live.retain(|&e| !self.hidden_by_presentation(e));
         }
         live
