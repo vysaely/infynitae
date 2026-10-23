@@ -51,11 +51,16 @@ fi
 # 2. Check and install any newly added essential packages
 if command -v pacman >/dev/null 2>&1; then
     NEW_PKGS=()
-    for pkg in base-devel libinput seatd xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber polkit swaybg grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
+    for pkg in base-devel libinput seatd xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber pipewire-pulse polkit fuzzel swaylock libnotify brightnessctl playerctl ttf-dejavu swaybg grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
         if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
             NEW_PKGS+=("$pkg")
         fi
     done
+    if ! command -v kitty >/dev/null 2>&1 && ! command -v alacritty >/dev/null 2>&1 && ! command -v foot >/dev/null 2>&1; then
+        if ! pacman -Qi alacritty >/dev/null 2>&1; then
+            NEW_PKGS+=("alacritty")
+        fi
+    fi
     if [ ${#NEW_PKGS[@]} -gt 0 ]; then
         echo "==> Installing missing packages: ${NEW_PKGS[*]}"
         sudo pacman -S --needed --noconfirm "${NEW_PKGS[@]}"
@@ -68,26 +73,15 @@ cargo build --release -p infynitae
 
 # 4. Install binaries to ~/.local/bin and /usr/local/bin
 mkdir -p "$HOME/.local/bin"
-cp -f target/release/infynitae "$HOME/.local/bin/infynitae"
-chmod +x "$HOME/.local/bin/infynitae"
-
-cp -f live/dev.sh "$HOME/.local/bin/infynitae-dev"
-chmod +x "$HOME/.local/bin/infynitae-dev"
-
-cp -f live/settings.sh "$HOME/.local/bin/infynitae-settings"
-chmod +x "$HOME/.local/bin/infynitae-settings"
-
-cp -f live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
-chmod +x "$HOME/.local/bin/infynitae-drivers"
-
-cp -f update.sh "$HOME/.local/bin/infynitae-update"
-chmod +x "$HOME/.local/bin/infynitae-update"
-
-cp -f live/wallpaper/infynitae-wallpaper.sh "$HOME/.local/bin/infynitae-wallpaper"
-chmod +x "$HOME/.local/bin/infynitae-wallpaper"
-
-cp -f live/xdg-open "$HOME/.local/bin/xdg-open" 2>/dev/null || true
-chmod +x "$HOME/.local/bin/xdg-open" 2>/dev/null || true
+install -m 755 target/release/infynitae "$HOME/.local/bin/infynitae"
+install -m 755 live/dev.sh "$HOME/.local/bin/infynitae-dev"
+install -m 755 live/settings.sh "$HOME/.local/bin/infynitae-settings"
+install -m 755 live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
+install -m 755 update.sh "$HOME/.local/bin/infynitae-update"
+install -m 755 live/wallpaper/infynitae-wallpaper.sh "$HOME/.local/bin/infynitae-wallpaper"
+if [ -f "live/xdg-open" ]; then
+    install -m 755 live/xdg-open "$HOME/.local/bin/xdg-open" 2>/dev/null || true
+fi
 
 # 5. Compile companion helpers (polkit & portal)
 if [ -f "$REPO_DIR/live/portal/infynitae-portal.c" ] && pkg-config --exists gio-2.0 2>/dev/null; then
@@ -116,7 +110,7 @@ if command -v sudo >/dev/null 2>&1; then
     sudo mkdir -p /usr/local/bin 2>/dev/null || true
     for b in infynitae infynitae-session infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
         if [ -f "$HOME/.local/bin/$b" ]; then
-            sudo cp -f "$HOME/.local/bin/$b" /usr/local/bin/ 2>/dev/null || true
+            sudo install -m 755 "$HOME/.local/bin/$b" "/usr/local/bin/$b" 2>/dev/null || true
         fi
     done
 fi

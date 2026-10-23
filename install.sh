@@ -41,12 +41,21 @@ fi
 
 echo "==> Checking essential system packages..."
 PKGS=()
-# Universal core: build tools, libinput, seatd, portals (screenshare/dialogs), pipewire, polkit, screenshots, wallpaper, Xwayland/Steam support
-for pkg in base-devel libinput seatd xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber polkit swaybg grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
+# Universal core: build tools, libinput, seatd, portals (screenshare/dialogs), audio stack (PipeWire + PulseAudio emulation),
+# polkit, app launcher (fuzzel), screen locker (swaylock), OSD notifications, brightness/media controls, fonts, wallpaper, Xwayland/Steam
+for pkg in base-devel libinput seatd xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber pipewire-pulse polkit fuzzel swaylock libnotify brightnessctl playerctl ttf-dejavu swaybg grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
     if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
         PKGS+=("$pkg")
     fi
 done
+
+# Ensure at least one fast Wayland terminal is installed for an out-of-the-box experience
+if ! command -v kitty >/dev/null 2>&1 && ! command -v alacritty >/dev/null 2>&1 && ! command -v foot >/dev/null 2>&1; then
+    echo "==> No terminal emulator detected. Adding alacritty for out-of-the-box terminal support..."
+    if ! pacman -Qi alacritty >/dev/null 2>&1; then
+        PKGS+=("alacritty")
+    fi
+fi
 
 # Only install rustup if neither rust nor cargo is installed
 if ! command -v cargo >/dev/null 2>&1 && ! pacman -Qi rust >/dev/null 2>&1 && ! pacman -Qi rustup >/dev/null 2>&1; then
@@ -56,11 +65,6 @@ fi
 if [ ${#PKGS[@]} -gt 0 ]; then
     echo "==> Installing missing packages via pacman: ${PKGS[*]}"
     sudo pacman -S --needed --noconfirm "${PKGS[@]}"
-fi
-
-# Inform user if no terminal emulator is present
-if ! command -v kitty >/dev/null 2>&1 && ! command -v alacritty >/dev/null 2>&1 && ! command -v foot >/dev/null 2>&1; then
-    echo "==> Note: No terminal found. Install whatever you prefer (e.g. sudo pacman -S kitty or alacritty)."
 fi
 
 # 3. Setup Rust toolchain if rustup is used
@@ -88,18 +92,12 @@ cargo build --release -p infynitae
 
 # 6. Install release binary
 mkdir -p "$HOME/.local/bin"
-cp -f target/release/infynitae "$HOME/.local/bin/infynitae"
-chmod +x "$HOME/.local/bin/infynitae"
-cp -f live/dev.sh "$HOME/.local/bin/infynitae-dev"
-chmod +x "$HOME/.local/bin/infynitae-dev"
-cp -f live/settings.sh "$HOME/.local/bin/infynitae-settings"
-chmod +x "$HOME/.local/bin/infynitae-settings"
-cp -f live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
-chmod +x "$HOME/.local/bin/infynitae-drivers"
-cp -f update.sh "$HOME/.local/bin/infynitae-update"
-chmod +x "$HOME/.local/bin/infynitae-update"
-cp -f live/wallpaper/infynitae-wallpaper.sh "$HOME/.local/bin/infynitae-wallpaper"
-chmod +x "$HOME/.local/bin/infynitae-wallpaper"
+install -m 755 target/release/infynitae "$HOME/.local/bin/infynitae"
+install -m 755 live/dev.sh "$HOME/.local/bin/infynitae-dev"
+install -m 755 live/settings.sh "$HOME/.local/bin/infynitae-settings"
+install -m 755 live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
+install -m 755 update.sh "$HOME/.local/bin/infynitae-update"
+install -m 755 live/wallpaper/infynitae-wallpaper.sh "$HOME/.local/bin/infynitae-wallpaper"
 echo "==> Installed binaries to ~/.local/bin/{infynitae, infynitae-dev, infynitae-settings, infynitae-drivers, infynitae-update, infynitae-wallpaper}"
 
 # 7. Deploy live runtime scripts & companion helpers
@@ -170,11 +168,16 @@ if command -v xwayland-satellite >/dev/null 2>&1; then
     XWLS="--xwayland-satellite $(command -v xwayland-satellite)"
 fi
 
+TTY_MODE=""
+if [ -z "$WAYLAND_DISPLAY" ] && [ -z "$DISPLAY" ]; then
+    TTY_MODE="--tty"
+fi
+
 START_TIME=$(date +%s)
 echo "[infynitae-session] Starting Infynitae compositor..." >> "$SESSION_LOG"
 
 # Run compositor, logging output while displaying
-"$BIN" --tty $XWLS --exec "$SESSION_SCRIPT" "$@" 2>&1 | tee -a "$SESSION_LOG"
+"$BIN" $TTY_MODE $XWLS --exec "$SESSION_SCRIPT" "$@" 2>&1 | tee -a "$SESSION_LOG"
 STATUS=$?
 
 END_TIME=$(date +%s)
@@ -222,7 +225,7 @@ chmod +x "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 sudo mkdir -p /usr/local/bin 2>/dev/null || true
 for b in infynitae infynitae-session infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
     if [ -f "$HOME/.local/bin/$b" ]; then
-        sudo cp -f "$HOME/.local/bin/$b" /usr/local/bin/ 2>/dev/null || true
+        sudo install -m 755 "$HOME/.local/bin/$b" "/usr/local/bin/$b" 2>/dev/null || true
     fi
 done
 
