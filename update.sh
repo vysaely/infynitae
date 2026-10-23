@@ -51,7 +51,7 @@ fi
 # 2. Check and install any newly added essential packages
 if command -v pacman >/dev/null 2>&1; then
     NEW_PKGS=()
-    for pkg in base-devel libinput seatd xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber pipewire-pulse polkit fuzzel swaylock libnotify brightnessctl playerctl ttf-dejavu wl-clip-persist qt5-wayland qt6-wayland swaybg grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
+    for pkg in base-devel libinput xdg-desktop-portal xdg-desktop-portal-wlr pipewire wireplumber pipewire-pulse polkit fuzzel ttf-dejavu grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
         if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
             NEW_PKGS+=("$pkg")
         fi

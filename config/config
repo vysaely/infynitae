@@ -193,7 +193,7 @@ FILE_MANAGER="auto"
 POLKIT_AGENT="auto"
 
 # Web Browser:
-BROWSER="firefox"
+BROWSER="auto"
 
 # Screenshot Tool (Super+Shift+S / PrintScreen):
 #   Empty string uses built-in grim/spectacle handler.
@@ -215,8 +215,8 @@ WALLPAPER_MODE="fill" # "fill", "fit", "stretch", "center", "tile"
 # ------------------------------------------------------------------------------
 # Global Audio / Discord Shortcuts:
 #   "true"  - Right Shift triggers Discord mute; Right Ctrl triggers Discord deafen
-#   "false" - Disables global mute/deafen bindings
-DISCORD_HOTKEYS="true"
+#   "false" - Disables global mute/deafen bindings (recommended for clean typing & gaming)
+DISCORD_HOTKEYS="false"
 
 # Custom Autostart & Overrides:
 #   To autostart any companion tools (waybar, mako, swaybg, pipewire):

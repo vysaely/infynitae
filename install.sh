@@ -41,10 +41,9 @@ fi
 
 echo "==> Checking essential system packages..."
 PKGS=()
-# Universal core: build tools, libinput, seatd, portals (screenshare/dialogs), audio stack (PipeWire + PulseAudio emulation),
-# polkit, app launcher (fuzzel), screen locker (swaylock), OSD notifications, brightness/media controls, fonts, wallpaper,
-# clipboard persistence, Qt Wayland integration, Xwayland/Steam
-for pkg in base-devel libinput seatd xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber pipewire-pulse polkit fuzzel swaylock libnotify brightnessctl playerctl ttf-dejavu wl-clip-persist qt5-wayland qt6-wayland swaybg grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
+# Barebones essentials: build tools, libinput, portals (screenshare/dialogs), audio stack (PipeWire),
+# polkit, fast app launcher (fuzzel), fonts, clipboard & screenshots, and Xwayland for Steam/games
+for pkg in base-devel libinput xdg-desktop-portal xdg-desktop-portal-wlr pipewire wireplumber pipewire-pulse polkit fuzzel ttf-dejavu grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
     if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
         PKGS+=("$pkg")
     fi
