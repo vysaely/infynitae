@@ -46,6 +46,16 @@ FOCUS_FOLLOWS_MOUSE="sloppy"
 #   0 / false: Focus cycle changes keyboard focus without moving the camera
 FOCUS_CYCLE_NAVIGATE="1"
 
+# Auto-Focus on Window Open:
+#   1 / true: Automatically focus newly opened applications
+#   0 / false: Do not automatically change focus when new windows open
+FOCUS_ON_OPEN="1"
+
+# Teleport Camera on Window Open:
+#   1 / true: Automatically center / teleport camera onto newly opened applications
+#   0 / false: Keep current camera position when new applications open
+TELEPORT_ON_OPEN="1"
+
 # Screen Locker (Super+L):
 #   "auto" (tries hyprlock, swaylock, gtklock, waylock), or custom command
 SCREEN_LOCKER="auto"

@@ -35,6 +35,7 @@ Single config file at `~/.config/infynitae/config`:
 
 - Scaling filter (`nearest` for razor-sharp 0% blur, `linear` for smooth) and `OUTPUT_SCALE`
 - Cluster tiling and smart adjacent window placement (`PLACEMENT_POLICY="cluster"`)
+- Auto-focus (`FOCUS_ON_OPEN="1"`) and camera teleportation (`TELEPORT_ON_OPEN="1"`) for new windows
 - Mouse speed, acceleration profile (`flat` or `adaptive`), and pan mode (`free`, `grab`, `rts`)
 - Window focus model (`sloppy`, `strict`, or `click`)
 - Screen sharing & remote desktop cursor suppression (`SCREENCOPY_CURSOR="false"`)

@@ -3,6 +3,7 @@
 
 #![deny(unsafe_code)]
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::time::Duration;
 
@@ -89,6 +90,8 @@ struct LoopData {
     options: WinitCompositorOptions,
     /// Whether the host is ready for the next frame (NB-1).
     host: HostFrameGate,
+    /// Set of known mapped element IDs for detecting newly mapped windows.
+    known_mapped: HashSet<infynitae_core::stage::ElementId>,
 }
 
 /// NB-1 (2026-10-17): a submit swaps with the EGL default swap interval, so it waits for the host
@@ -263,6 +266,7 @@ pub fn run_nested_with(
         closed: false,
         options,
         host: HostFrameGate::new(),
+        known_mapped: HashSet::new(),
     };
 
     // every host event (input, resize, redraw request) may change what is shown
@@ -297,16 +301,48 @@ pub fn run_nested_with(
         }
         data.session.dispatch(&mut data.state);
 
-        // Initial focus grant on topmost mapped element if seat is eligible (INV-INPUT-8)
-        if data.state.core().focus().is_initial_eligible()
-            && let Some(&topmost) = data.state.core().stage().mapped_elements().last()
-            && let Ok(effects) = data
-                .state
-                .core_mut()
-                .grant_initial_focus(&mut data.input_port, topmost)
-        {
-            data.state.apply(&effects);
-            data.session.flush();
+        let current_mapped = data.state.core().stage().mapped_elements();
+        let new_mapped: Vec<_> = current_mapped
+            .iter()
+            .copied()
+            .filter(|id| !data.known_mapped.contains(id))
+            .collect();
+
+        data.known_mapped.clear();
+        data.known_mapped.extend(current_mapped);
+
+        if data.state.core().focus().is_initial_eligible() {
+            if let Some(&topmost) = data.state.core().stage().mapped_elements().last()
+                && let Ok(effects) = data
+                    .state
+                    .core_mut()
+                    .grant_initial_focus(&mut data.input_port, topmost)
+            {
+                data.state.apply(&effects);
+                data.session.flush();
+            }
+        } else if data.state.core().focus_on_open() {
+            for &new_id in &new_mapped {
+                if let Ok(effects) = data
+                    .state
+                    .core_mut()
+                    .set_focus(&mut data.input_port, Some(new_id))
+                {
+                    data.state.apply(&effects);
+                    data.session.flush();
+                }
+            }
+        }
+
+        if data.state.core().teleport_on_open() {
+            for &new_id in &new_mapped {
+                let port = &mut data.input_port;
+                let _ = data.state.with_effects(|core, fx| {
+                    core.recenter_element(port, new_id, fx)
+                });
+                data.session.request_frame();
+                data.session.flush();
+            }
         }
 
         // Settle the scale epochs whose deadline has passed, on the session clock.

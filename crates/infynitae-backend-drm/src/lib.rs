@@ -17,6 +17,7 @@
 
 #![deny(unsafe_code)]
 
+use std::collections::HashSet;
 use std::error::Error;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -172,6 +173,8 @@ struct LoopData {
     keyboards: Vec<smithay::reexports::input::Device>,
     /// Last absolute pointer logical position, used to compute delta for absolute devices (e.g. RustDesk, tablets).
     last_abs_pointer: Option<(f64, f64)>,
+    /// Set of known mapped element IDs for detecting newly mapped windows.
+    known_mapped: HashSet<infynitae_core::stage::ElementId>,
 }
 
 /// The device limit Core is told: assumed, not queried, as in the nested backend (OB-52, INC-13).
@@ -464,6 +467,7 @@ pub fn run_console_with(
         taken: Vec::new(),
         keyboards: Vec::new(),
         last_abs_pointer: None,
+        known_mapped: HashSet::new(),
     };
 
     println!("[infynitae] Compositor running. Ctrl+Alt+Backspace quits.");
@@ -491,15 +495,48 @@ pub fn run_console_with(
         }
         data.session.dispatch(&mut data.state);
 
-        if data.state.core().focus().is_initial_eligible()
-            && let Some(&topmost) = data.state.core().stage().mapped_elements().last()
-            && let Ok(effects) = data
-                .state
-                .core_mut()
-                .grant_initial_focus(&mut data.input_port, topmost)
-        {
-            data.state.apply(&effects);
-            data.session.flush();
+        let current_mapped = data.state.core().stage().mapped_elements();
+        let new_mapped: Vec<_> = current_mapped
+            .iter()
+            .copied()
+            .filter(|id| !data.known_mapped.contains(id))
+            .collect();
+
+        data.known_mapped.clear();
+        data.known_mapped.extend(current_mapped);
+
+        if data.state.core().focus().is_initial_eligible() {
+            if let Some(&topmost) = data.state.core().stage().mapped_elements().last()
+                && let Ok(effects) = data
+                    .state
+                    .core_mut()
+                    .grant_initial_focus(&mut data.input_port, topmost)
+            {
+                data.state.apply(&effects);
+                data.session.flush();
+            }
+        } else if data.state.core().focus_on_open() {
+            for &new_id in &new_mapped {
+                if let Ok(effects) = data
+                    .state
+                    .core_mut()
+                    .set_focus(&mut data.input_port, Some(new_id))
+                {
+                    data.state.apply(&effects);
+                    data.session.flush();
+                }
+            }
+        }
+
+        if data.state.core().teleport_on_open() {
+            for &new_id in &new_mapped {
+                let port = &mut data.input_port;
+                let _ = data.state.with_effects(|core, fx| {
+                    core.recenter_element(port, new_id, fx)
+                });
+                data.session.request_frame();
+                data.session.flush();
+            }
         }
 
         let now = data.session.now();

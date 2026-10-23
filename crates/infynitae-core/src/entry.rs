@@ -174,6 +174,11 @@ impl Core {
                 }
                 Ok(())
             }
+            PhysicalEvent::RecenterElement { element } => {
+                let proof = authority::Authorized::mint();
+                self.recenter_on_element(proof, element, out);
+                Ok(())
+            }
         }
     }
 
@@ -523,16 +528,22 @@ impl Core {
     /// pointer, that output presents a protocol-fullscreen element (C12.F17 Q1 B), nothing is
     /// focused, or the focused window is not mapped or has a degenerate geometry. Then the
     /// camera-write consequences, as after a fit.
-    fn recenter(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
-        let PointerState::Located { output, .. } = self.pointer else {
+    pub(crate) fn recenter_on_element(
+        &mut self,
+        proof: authority::Authorized,
+        element: crate::stage::ElementId,
+        out: &mut Vec<Effect>,
+    ) {
+        let output = match self.pointer {
+            PointerState::Located { output, .. } => Some(output),
+            PointerState::NoOutput => self.outputs.first().map(|o| o.id),
+        };
+        let Some(output) = output else {
             return;
         };
         if self.presentation(output).is_some() && !self.is_presentation_suppressed(output) {
             return;
         }
-        let Some(element) = self.focus.target() else {
-            return;
-        };
         if self.presentation(output) == Some(element) && self.is_presentation_suppressed(output) {
             self.unsuppress_presentation(output);
             return;
@@ -565,6 +576,12 @@ impl Core {
         };
         self.cameras.navigate(proof, camera, center);
         self.camera_written(output, camera, out);
+    }
+
+    fn recenter(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
+        if let Some(element) = self.focus.target() {
+            self.recenter_on_element(proof, element, out);
+        }
     }
 
     /// Super+1..9: focus, raise, and recenter camera on mapped window at slot `slot` (0-indexed creation order).
@@ -3299,5 +3316,50 @@ mod tests {
         ).unwrap();
 
         assert_eq!(c.view(a).unwrap().only, Some(w1), "Super+1 restores exclusive fullscreen presentation");
+    }
+
+    #[test]
+    fn recenter_element_centers_camera_on_target_window() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        use std::num::NonZeroU64;
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+
+        let w1 = c.toplevel_created();
+        let win = |mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w: 800, h: 600 },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(NonZeroU64::new(1).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped { LocalSize { w: 800, h: 600 } } else { LocalSize::default() },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        c.toplevel_committed(w1, win(false)).unwrap();
+        c.toplevel_committed(w1, win(true)).unwrap();
+
+        // Place w1 at an offset anchor
+        let anchor = crate::geom::CanvasPoint { x: 5000, y: 3000 };
+        let mut fx = Vec::new();
+        c.place_by_shell(w1, anchor, &mut fx).unwrap();
+
+        // Recenter element w1
+        let mut buf = crate::protocol::EffectBuf::new();
+        c.recenter_element(&mut i, w1, &mut buf).unwrap();
+
+        // Camera must now be centered on w1's window center
+        let camera = c.cameras.camera_for_output(a).unwrap();
+        let center = c.cameras.center(camera).unwrap();
+        let cx = center.x / crate::geom::Q16_ONE;
+        let cy = center.y / crate::geom::Q16_ONE;
+        assert_eq!(cx, 5400);
+        assert_eq!(cy, 3300);
     }
 }

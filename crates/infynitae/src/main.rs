@@ -319,6 +319,8 @@ fn main() -> ExitCode {
     core.set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
     core.set_enter_mode(infynitae_core::EnterMode::Maximize);
     core.set_fullscreen_pan(true);
+    core.set_focus_on_open(true);
+    core.set_teleport_on_open(true);
 
     if let Ok(fp) = std::env::var("FULLSCREEN_PAN") {
         core.set_fullscreen_pan(!matches!(fp.to_lowercase().as_str(), "0" | "false" | "off" | "no" | "exclusive"));
@@ -350,6 +352,12 @@ fn main() -> ExitCode {
     }
     if let Ok(fcn) = std::env::var("FOCUS_CYCLE_NAVIGATE") {
         core.set_focus_cycle_navigate(!matches!(fcn.to_lowercase().as_str(), "0" | "false" | "off" | "no"));
+    }
+    if let Ok(foo) = std::env::var("FOCUS_ON_OPEN") {
+        core.set_focus_on_open(!matches!(foo.to_lowercase().as_str(), "0" | "false" | "off" | "no"));
+    }
+    if let Ok(too) = std::env::var("TELEPORT_ON_OPEN") {
+        core.set_teleport_on_open(!matches!(too.to_lowercase().as_str(), "0" | "false" | "off" | "no"));
     }
     if let Ok(home) = std::env::var("HOME") {
         let config_path = format!("{home}/.config/infynitae/config");
@@ -386,6 +394,14 @@ fn main() -> ExitCode {
                         "FOCUS_CYCLE_NAVIGATE" => {
                             let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
                             core.set_focus_cycle_navigate(enabled);
+                        }
+                        "FOCUS_ON_OPEN" => {
+                            let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                            core.set_focus_on_open(enabled);
+                        }
+                        "TELEPORT_ON_OPEN" => {
+                            let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                            core.set_teleport_on_open(enabled);
                         }
                         "PLACEMENT_POLICY" => {
                             match val.to_lowercase().as_str() {

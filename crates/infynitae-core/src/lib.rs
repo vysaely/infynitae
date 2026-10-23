@@ -126,6 +126,10 @@ pub enum PhysicalEvent {
         mods_changed: bool,
         time_us: u64,
     },
+    /// Centers the camera of the active output on an element.
+    RecenterElement {
+        element: stage::ElementId,
+    },
 }
 
 /// A semantic command from the trusted shell (C7.2, INV-SHELL-1): a value Core validates and then
@@ -392,6 +396,10 @@ pub struct Core {
     pub(crate) presentation_suppressed: Vec<output::OutputId>,
     /// Whether Super+Middle pan or camera navigation moves out of fullscreen presentation.
     pub fullscreen_pan: bool,
+    /// Whether newly opened windows are automatically focused.
+    pub focus_on_open: bool,
+    /// Whether camera teleports/recenters to newly opened windows.
+    pub teleport_on_open: bool,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
     /// protocol state fail its `Send` assertion (built through infynitae-wayland's probe feature).
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -466,6 +474,8 @@ impl Core {
                 enter_mode: EnterMode::default(),
                 presentation_suppressed: Vec::new(),
                 fullscreen_pan: false,
+                focus_on_open: false,
+                teleport_on_open: false,
                 frame_liveness: frames::FrameLiveness::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
@@ -613,6 +623,36 @@ impl Core {
     /// Read access to whether fullscreen pan is enabled.
     pub fn fullscreen_pan(&self) -> bool {
         self.fullscreen_pan
+    }
+
+    /// Sets whether newly opened windows are automatically focused.
+    pub fn set_focus_on_open(&mut self, enabled: bool) {
+        self.focus_on_open = enabled;
+    }
+
+    /// Read access to whether focus on open is enabled.
+    pub fn focus_on_open(&self) -> bool {
+        self.focus_on_open
+    }
+
+    /// Sets whether camera teleports to newly opened windows.
+    pub fn set_teleport_on_open(&mut self, enabled: bool) {
+        self.teleport_on_open = enabled;
+    }
+
+    /// Read access to whether teleport on open is enabled.
+    pub fn teleport_on_open(&self) -> bool {
+        self.teleport_on_open
+    }
+
+    /// Centers the active output's camera on `element`.
+    pub fn recenter_element(
+        &mut self,
+        port: &mut InputPort,
+        element: stage::ElementId,
+        buf: &mut protocol::EffectBuf,
+    ) -> Result<(), EntryError> {
+        self.physical_input(port, PhysicalEvent::RecenterElement { element }, buf)
     }
 
     /// Read access to the authoritative active pointer constraint (OBJ-21).

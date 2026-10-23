@@ -400,6 +400,7 @@ pub fn run_headless_with(
     };
 
     println!("[infynitae] Headless compositor running.");
+    let mut known_mapped = std::collections::HashSet::new();
     while !session.finished() {
         // An open scale-settlement deadline (INV-SCALE-3) is a wake-up of its own: the loop
         // sleeps until it even if no client and no frame is pending, and has nothing to wake
@@ -422,15 +423,46 @@ pub fn run_headless_with(
         }
         session.dispatch(&mut state);
 
-        // Initial focus grant on topmost mapped element if seat is eligible (INV-INPUT-8)
-        if state.core().focus().is_initial_eligible()
-            && let Some(&topmost) = state.core().stage().mapped_elements().last()
-            && let Ok(effects) = state
-                .core_mut()
-                .grant_initial_focus(&mut input_port, topmost)
-        {
-            state.apply(&effects);
-            session.flush();
+        let current_mapped = state.core().stage().mapped_elements();
+        let new_mapped: Vec<_> = current_mapped
+            .iter()
+            .copied()
+            .filter(|id| !known_mapped.contains(id))
+            .collect();
+
+        known_mapped.clear();
+        known_mapped.extend(current_mapped);
+
+        if state.core().focus().is_initial_eligible() {
+            if let Some(&topmost) = state.core().stage().mapped_elements().last()
+                && let Ok(effects) = state
+                    .core_mut()
+                    .grant_initial_focus(&mut input_port, topmost)
+            {
+                state.apply(&effects);
+                session.flush();
+            }
+        } else if state.core().focus_on_open() {
+            for &new_id in &new_mapped {
+                if let Ok(effects) = state
+                    .core_mut()
+                    .set_focus(&mut input_port, Some(new_id))
+                {
+                    state.apply(&effects);
+                    session.flush();
+                }
+            }
+        }
+
+        if state.core().teleport_on_open() {
+            for &new_id in &new_mapped {
+                let port = &mut input_port;
+                let _ = state.with_effects(|core, fx| {
+                    core.recenter_element(port, new_id, fx)
+                });
+                session.request_frame();
+                session.flush();
+            }
         }
 
         // Settle the scale epochs whose deadline has passed, on the session clock.
