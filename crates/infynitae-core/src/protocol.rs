@@ -132,12 +132,32 @@ pub enum Effect {
     SpawnTerminal,
     /// Super+E: launches file manager
     SpawnFileManager,
-    /// Super+Shift+S or PrintScreen: capture screenshot
+    /// Super+Shift+S or PrintScreen: capture fullscreen screenshot
     SpawnScreenshot,
+    /// Super+Shift+R: capture region screenshot
+    SpawnRegionScreenshot,
     /// Super+Shift+Tab: toggles canvas overview radar
     ToggleOverview,
-    /// Super+Shift+R: reload shell UI and scripts
+    /// Super+Shift+BackSpace: reload shell UI and scripts
     ReloadShell,
+    /// Super+L: lock screen
+    SpawnLockScreen,
+    /// Hardware Volume Up
+    VolumeUp,
+    /// Hardware Volume Down
+    VolumeDown,
+    /// Hardware Volume Mute
+    VolumeMute,
+    /// Hardware Brightness Up
+    BrightnessUp,
+    /// Hardware Brightness Down
+    BrightnessDown,
+    /// Hardware Media Play / Pause
+    MediaPlayPause,
+    /// Hardware Media Next Song
+    MediaNext,
+    /// Hardware Media Previous Song
+    MediaPrev,
 }
 
 /// Caller-owned, reusable storage for the effects of one Core entry (C14.3 `EffectBuf`). An
@@ -201,11 +221,14 @@ pub enum PlacementPolicy {
     /// The window-geometry origin at the placement output's camera centre, decided at the
     /// initial commit and never revised: the rule of INC-1…INC-5. Kept as an explicit policy.
     OriginAtCameraCentre,
-    /// F-PLACE-1, the default: the window geometry centred in the placement output's usable
+    /// F-PLACE-1: the window geometry centred in the placement output's usable
     /// region, resolved once at the first map; an oversized window aligned to the region's
     /// origin.
     #[default]
     CentredInView,
+    /// Proximity Cluster Tiling: places window at the nearest free spot in the cluster
+    /// (closest to the viewport center), or center if empty.
+    ClusterTiling,
 }
 
 /// A request a client makes on its `xdg_toplevel` (M2). The adapter forwards every one of them
@@ -593,6 +616,7 @@ impl Core {
             return Vec::new();
         };
         let output = self.fullscreen[mine].output;
+        self.unsuppress_presentation(output);
         let (ended, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.fullscreen)
             .into_iter()
             .enumerate()
@@ -691,6 +715,7 @@ impl Core {
         self.stage
             .place(id, anchor)
             .map_err(|_| ProtocolError::StaleElement)?;
+        self.invalidate_all_frames();
         // (spelled as a reborrow: the commit path's call is a seeded-control anchor)
         self.membership_pass_element(id, &mut *out);
         out.extend(self.evaluate_scale_policy(false));
@@ -707,6 +732,75 @@ impl Core {
         out: &mut Vec<Effect>,
     ) -> Result<(), ProtocolError> {
         self.place_by_shell(id, anchor, out)
+    }
+
+    /// When `target_elem` expands or moves to `target_rect` `(x0, y0, x1, y1)`, displace any other
+    /// mapped windows that intersect `target_rect` so they are pushed to the adjacent cluster slot
+    /// with the uniform 12px gap. Neither window ever covers or stomps on another window.
+    pub(crate) fn push_overlapping_cluster(
+        &mut self,
+        target_elem: ElementId,
+        target_rect: (i64, i64, i64, i64),
+        out: &mut Vec<Effect>,
+    ) {
+        const GAP: i64 = 12;
+        let mapped = self.stage.mapped_elements();
+        let mut overlapping = Vec::new();
+
+        for other in mapped {
+            if other == target_elem {
+                continue;
+            }
+            if let Some(a) = self.stage.anchor(other)
+                && let Some(t) = self.stage.tree(other)
+            {
+                let w = t.geometry.size.w as i64;
+                let h = t.geometry.size.h as i64;
+                if w <= 0 || h <= 0 {
+                    continue;
+                }
+                let gx0 = a.x + t.geometry.loc.x as i64;
+                let gy0 = a.y + t.geometry.loc.y as i64;
+                let gx1 = gx0.saturating_add(w);
+                let gy1 = gy0.saturating_add(h);
+
+                // Check collision/intersection
+                let intersects = !(gx1 <= target_rect.0 || gx0 >= target_rect.2 || gy1 <= target_rect.1 || gy0 >= target_rect.3);
+                if intersects {
+                    overlapping.push((other, gx0, gy0, w, h, t.geometry.loc.x as i64, t.geometry.loc.y as i64));
+                }
+            }
+        }
+
+        if overlapping.is_empty() {
+            return;
+        }
+
+        // Sort overlapping windows from left to right
+        overlapping.sort_by_key(|&(_, gx0, ..)| gx0);
+
+        let target_mid_x = (target_rect.0 + target_rect.2) / 2;
+        let mut right_cursor = target_rect.2 + GAP;
+        let mut left_cursor = target_rect.0 - GAP;
+
+        for (other, gx0, gy0, w, _, loc_x, loc_y) in overlapping {
+            let other_mid_x = gx0 + w / 2;
+            let new_gx0 = if other_mid_x >= target_mid_x {
+                let chosen = right_cursor;
+                right_cursor = chosen + w + GAP;
+                chosen
+            } else {
+                let chosen = left_cursor - w;
+                left_cursor = chosen - GAP;
+                chosen
+            };
+
+            let new_anchor = CanvasPoint {
+                x: new_gx0 - loc_x,
+                y: gy0 - loc_y,
+            };
+            let _ = self.place_by_shell(other, new_anchor, out);
+        }
     }
 
     /// Super+right drag starts on `id`: the size and the anchor at the press are kept, so the
@@ -1147,14 +1241,21 @@ impl Core {
                     self.place_by_default(id, &tree)?;
                 }
                 // the client redrew at another size: a size still on offer is spent
-                if self
-                    .stage
-                    .tree(id)
-                    .is_some_and(|old| old.geometry.size != tree.geometry.size)
+                if self.stage.tree(id).is_some_and(|old| old.geometry.size != tree.geometry.size)
                 {
                     self.restore_offers.retain(|(e, _)| *e != id);
                 }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
+                if self.placement == PlacementPolicy::ClusterTiling && self.fullscreen_of(id).is_some() {
+                    if let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id)) {
+                        let w = t.geometry.size.w as i64;
+                        let h = t.geometry.size.h as i64;
+                        if w > 0 && h > 0 {
+                            let target_rect = (a.x, a.y, a.x + w, a.y + h);
+                            self.push_overlapping_cluster(id, target_rect, out);
+                        }
+                    }
+                }
             }
             (Lifecycle::AwaitingFirstBuffer, true) => {
                 // The size is known now, so the placement policy can use it: default placement
@@ -1169,6 +1270,16 @@ impl Core {
                 self.stage.raise(id);
                 // a grant made before this map takes its output now (A-3)
                 out.extend(self.take_output(id));
+                if self.placement == PlacementPolicy::ClusterTiling && self.fullscreen_of(id).is_some() {
+                    if let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id)) {
+                        let w = t.geometry.size.w as i64;
+                        let h = t.geometry.size.h as i64;
+                        if w > 0 && h > 0 {
+                            let target_rect = (a.x, a.y, a.x + w, a.y + h);
+                            self.push_overlapping_cluster(id, target_rect, out);
+                        }
+                    }
+                }
             }
             (Lifecycle::Mapped, false) => {
                 // null-buffer commit: unmap; identity and anchor kept, snapshot dropped
@@ -1388,7 +1499,7 @@ impl Core {
     /// `None` keeps the anchor of the initial commit: the legacy policy, no output, or a
     /// position outside the Canvas bound.
     fn first_map_anchor(&self, tree: &SurfaceTree) -> Option<CanvasPoint> {
-        if self.placement != PlacementPolicy::CentredInView {
+        if self.placement == PlacementPolicy::OriginAtCameraCentre {
             return None;
         }
         let output = self.outputs.first()?;
@@ -1417,7 +1528,7 @@ impl Core {
             let half_usable = geom::q16(usable / 2.0);
             c - half_outer.min(half_usable)
         };
-        CanvasPos {
+        let center_anchor = CanvasPos {
             x: axis(
                 centre.x.saturating_add(geom::q16(d.0)),
                 usable.0,
@@ -1429,7 +1540,100 @@ impl Core {
                 tree.geometry.size.h,
             ),
         }
-        .round_to_point()
+        .round_to_point()?;
+
+        if self.placement == PlacementPolicy::CentredInView {
+            return Some(center_anchor);
+        }
+
+        // PlacementPolicy::ClusterTiling
+        let new_w = tree.geometry.size.w as i64;
+        let new_h = tree.geometry.size.h as i64;
+        let new_loc_x = tree.geometry.loc.x as i64;
+        let new_loc_y = tree.geometry.loc.y as i64;
+        if new_w <= 0 || new_h <= 0 {
+            return Some(center_anchor);
+        }
+
+        // Visual geometry bounds of all currently mapped windows
+        let mut existing: Vec<(i64, i64, i64, i64)> = Vec::new();
+        for elem in self.stage.mapped_elements() {
+            if let Some(a) = self.stage.anchor(elem)
+                && let Some(t) = self.stage.tree(elem)
+            {
+                let ew = t.geometry.size.w as i64;
+                let eh = t.geometry.size.h as i64;
+                if ew > 0 && eh > 0 {
+                    let gx0 = a.x + t.geometry.loc.x as i64;
+                    let gy0 = a.y + t.geometry.loc.y as i64;
+                    existing.push((gx0, gy0, gx0.saturating_add(ew), gy0.saturating_add(eh)));
+                }
+            }
+        }
+
+        let center_gx = center_anchor.x;
+        let center_gy = center_anchor.y;
+
+        if existing.is_empty() {
+            return Some(CanvasPoint {
+                x: center_gx - new_loc_x,
+                y: center_gy - new_loc_y,
+            });
+        }
+
+        const GAP: i64 = 12;
+        let overlaps = |gx: i64, gy: i64| -> bool {
+            let gx1 = gx.saturating_add(new_w);
+            let gy1 = gy.saturating_add(new_h);
+            existing.iter().any(|&(ex0, ey0, ex1, ey1)| {
+                !(gx1 + GAP <= ex0 || gx >= ex1 + GAP || gy1 + GAP <= ey0 || gy >= ey1 + GAP)
+            })
+        };
+
+        if !overlaps(center_gx, center_gy) {
+            return Some(CanvasPoint {
+                x: center_gx - new_loc_x,
+                y: center_gy - new_loc_y,
+            });
+        }
+
+        // Generate grid-aligned candidate positions flush with existing window edges
+        let mut candidates = Vec::new();
+        for &w1 in &existing {
+            // Adjacent flush placements relative to w1
+            candidates.push((w1.2 + GAP, w1.1));                 // Right, top-aligned
+            candidates.push((w1.2 + GAP, w1.3 - new_h));         // Right, bottom-aligned
+            candidates.push((w1.0 - new_w - GAP, w1.1));         // Left, top-aligned
+            candidates.push((w1.0 - new_w - GAP, w1.3 - new_h)); // Left, bottom-aligned
+            candidates.push((w1.0, w1.3 + GAP));                 // Below, left-aligned
+            candidates.push((w1.2 - new_w, w1.3 + GAP));         // Below, right-aligned
+            candidates.push((w1.0, w1.1 - new_h - GAP));         // Above, left-aligned
+            candidates.push((w1.2 - new_w, w1.1 - new_h - GAP)); // Above, right-aligned
+
+            // Grid intersections with other windows
+            for &w2 in &existing {
+                candidates.push((w1.2 + GAP, w2.1));
+                candidates.push((w1.0, w2.3 + GAP));
+                candidates.push((w1.0 - new_w - GAP, w2.1));
+                candidates.push((w1.0, w2.1 - new_h - GAP));
+                candidates.push((w1.2 + GAP, w2.3 + GAP));
+            }
+        }
+
+        let best = candidates
+            .into_iter()
+            .filter(|&(gx, gy)| !overlaps(gx, gy))
+            .min_by_key(|&(gx, gy)| {
+                let dx = (gx - center_gx) as i128;
+                let dy = (gy - center_gy) as i128;
+                dx * dx + dy * dy
+            });
+
+        let (chosen_gx, chosen_gy) = best.unwrap_or((center_gx, center_gy));
+        Some(CanvasPoint {
+            x: chosen_gx - new_loc_x,
+            y: chosen_gy - new_loc_y,
+        })
     }
 
     /// The placement policy for elements mapped from now on. It never moves an element that is

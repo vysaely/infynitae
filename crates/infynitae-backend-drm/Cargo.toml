@@ -18,4 +18,5 @@ smithay = { version = "=0.7.0", default-features = false, features = [
     "backend_udev",
     "backend_session_libseat",
     "renderer_gl",
+    "wayland_frontend",
 ] }

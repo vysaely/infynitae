@@ -490,13 +490,12 @@ smithay::backend::renderer::element::render_elements! {
 /// An output's frame elements and the frame's `k`.
 pub type OutputFrame<R> = (Vec<OutputElement<R>>, f64);
 
-/// One frame's elements for `output`, front to back: the cursor (when the target draws it),
-/// overlay and top layers, the Canvas from Core's render list (recorded as the output's
-/// ProjectionFrame), bottom and background layers (L2); and the frame's `k`.
-pub fn output_elements<R>(
+/// What an output's frame is made of, optionally including cursor elements.
+pub fn output_elements_opt<R>(
     state: &mut WaylandState,
     renderer: &mut R,
     output: OutputId,
+    include_cursor: bool,
 ) -> Result<OutputFrame<R>, RenderOutputError<R::Error>>
 where
     R: Renderer + ImportAll,
@@ -510,7 +509,7 @@ where
     let entries = frame.entries.clone();
     let layers = state.core.layer_frame(output);
     let mut elements = Vec::new();
-    if state.target.draw_cursor {
+    if include_cursor {
         cursor_elements(state, renderer, output, view.k, &mut elements)
             .map_err(RenderOutputError::Renderer)?;
     }
@@ -533,6 +532,21 @@ where
             .map(OutputElement::Surface),
     );
     Ok((elements, view.k))
+}
+
+/// One frame's elements for `output`, front to back: the cursor (when the target draws it),
+/// overlay and top layers, the Canvas from Core's render list (recorded as the output's
+/// ProjectionFrame), bottom and background layers (L2); and the frame's `k`.
+pub fn output_elements<R>(
+    state: &mut WaylandState,
+    renderer: &mut R,
+    output: OutputId,
+) -> Result<OutputFrame<R>, RenderOutputError<R::Error>>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    output_elements_opt(state, renderer, output, state.target.draw_cursor)
 }
 
 /// One frame of an output through its damage tracker: [`output_elements`] →
@@ -627,6 +641,7 @@ where
     let px = |v: f64| (v * scale).round() as i32;
     match &state.cursor {
         CursorImageStatus::Hidden => {}
+        CursorImageStatus::Named(icon) if icon.name() == "none" => {}
         CursorImageStatus::Surface(surface) if surface.is_alive() => {
             let (hotspot, size) = with_states(surface, |states| {
                 let hotspot = states

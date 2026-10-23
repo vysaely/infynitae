@@ -153,6 +153,8 @@ impl WaylandState {
                     use smithay::backend::input::KeyState;
                     use smithay::input::keyboard::Keycode;
 
+                    notify_portal_key(key, pressed);
+
                     let kb = self.keyboard_handle();
                     let code = Keycode::new(key + 8);
                     let state = if pressed {
@@ -201,11 +203,130 @@ impl WaylandState {
                 Effect::SpawnScreenshot => {
                     self.spawn_action("screenshot");
                 }
+                Effect::SpawnRegionScreenshot => {
+                    self.spawn_action("region-screenshot");
+                }
                 Effect::ToggleOverview => {
                     self.spawn_action("overview");
                 }
                 Effect::ReloadShell => {
+                    // Dynamically sync config into Core from ~/.config/infynitae/config
+                    if let Ok(home) = std::env::var("HOME") {
+                        let config_path = format!("{home}/.config/infynitae/config");
+                        if let Ok(content) = std::fs::read_to_string(config_path) {
+                            for line in content.lines() {
+                                let line_clean = line.split('#').next().unwrap_or("").trim();
+                                if let Some((k, v)) = line_clean.split_once('=') {
+                                    let key = k.trim();
+                                    let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                                    match key {
+                                        "PAN_MODE" => {
+                                            match val.to_lowercase().as_str() {
+                                                "rts" => self.core.set_pan_mode(infynitae_core::navigation::PanMode::Rts),
+                                                "free" => self.core.set_pan_mode(infynitae_core::navigation::PanMode::Free),
+                                                _ => self.core.set_pan_mode(infynitae_core::navigation::PanMode::Grab),
+                                            }
+                                        }
+                                        "SCREENCOPY_CURSOR" => {
+                                            let hide = matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                            self.screencopy.set_hide_cursor(hide);
+                                        }
+                                        "FOCUS_FOLLOWS_MOUSE" => {
+                                            match val.to_lowercase().as_str() {
+                                                "strict" => {
+                                                    self.core.set_focus_follows_mouse(true);
+                                                    self.core.set_focus_follows_mouse_strict(true);
+                                                }
+                                                "0" | "false" | "off" | "no" | "click" => {
+                                                    self.core.set_focus_follows_mouse(false);
+                                                    self.core.set_focus_follows_mouse_strict(false);
+                                                }
+                                                _ => {
+                                                    self.core.set_focus_follows_mouse(true);
+                                                    self.core.set_focus_follows_mouse_strict(false);
+                                                }
+                                            }
+                                        }
+                                        "FOCUS_CYCLE_NAVIGATE" => {
+                                            let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                            self.core.set_focus_cycle_navigate(enabled);
+                                        }
+                                        "SUPER_ENTER_ACTION" => {
+                                            if val.eq_ignore_ascii_case("fit") {
+                                                self.core.set_enter_mode(infynitae_core::EnterMode::Fit);
+                                            } else {
+                                                self.core.set_enter_mode(infynitae_core::EnterMode::Maximize);
+                                            }
+                                        }
+                                        "FULLSCREEN_PAN" => {
+                                            let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no" | "exclusive");
+                                            self.core.set_fullscreen_pan(enabled);
+                                        }
+                                        "PLACEMENT_POLICY" => {
+                                            match val.to_lowercase().as_str() {
+                                                "center" | "centred" | "centered" => {
+                                                    self.core.set_placement_policy(infynitae_core::PlacementPolicy::CentredInView);
+                                                }
+                                                "origin" => {
+                                                    self.core.set_placement_policy(infynitae_core::PlacementPolicy::OriginAtCameraCentre);
+                                                }
+                                                _ => {
+                                                    self.core.set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+                                                }
+                                            }
+                                        }
+                                        "BORDER_WIDTH" => {
+                                            if let Ok(w) = val.parse::<i32>() {
+                                                self.border_width = w.max(0);
+                                            }
+                                        }
+                                        "BORDER_IGNORE_CSD" => {
+                                            self.border_ignore_csd = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                        }
+                                        "BORDER_ACTIVE" => {
+                                            if let Some(c) = crate::parse_color_hex(val) {
+                                                self.border_active = c;
+                                            }
+                                        }
+                                        "BORDER_INACTIVE" => {
+                                            if let Some(c) = crate::parse_color_hex(val) {
+                                                self.border_inactive = c;
+                                            }
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                        }
+                    }
                     self.spawn_action("reload");
+                }
+                Effect::SpawnLockScreen => {
+                    self.spawn_action("lock-screen");
+                }
+                Effect::VolumeUp => {
+                    self.spawn_action("volume-up");
+                }
+                Effect::VolumeDown => {
+                    self.spawn_action("volume-down");
+                }
+                Effect::VolumeMute => {
+                    self.spawn_action("volume-mute");
+                }
+                Effect::BrightnessUp => {
+                    self.spawn_action("brightness-up");
+                }
+                Effect::BrightnessDown => {
+                    self.spawn_action("brightness-down");
+                }
+                Effect::MediaPlayPause => {
+                    self.spawn_action("media-play-pause");
+                }
+                Effect::MediaNext => {
+                    self.spawn_action("media-next");
+                }
+                Effect::MediaPrev => {
+                    self.spawn_action("media-prev");
                 }
                 ref other => {
                     let applied = self.apply_layer(other) || self.apply_pointer(other);
@@ -220,9 +341,15 @@ impl WaylandState {
     fn spawn_action(&self, action: &str) {
         let home = std::env::var("HOME").unwrap_or_default();
         let script = format!("{home}/infynitae/live/launch.sh");
-        let _ = std::process::Command::new("sh")
-            .arg(script)
-            .arg(action)
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg(script).arg(action);
+        if let Ok(d) = std::env::var("DISPLAY") {
+            cmd.env("DISPLAY", d);
+        }
+        if let Ok(a) = std::env::var("XAUTHORITY") {
+            cmd.env("XAUTHORITY", a);
+        }
+        let _ = cmd
             .env_remove("KDE_FULL_SESSION")
             .env_remove("KDE_SESSION_VERSION")
             .env_remove("KDE_SESSION_UID")
@@ -390,5 +517,81 @@ impl WaylandState {
             );
             window.send_frame(&o, now, None, |_, _| Some(o.clone()));
         }
+    }
+
+    pub fn output_id_from_wl(
+        &self,
+        wl: &smithay::reexports::wayland_server::protocol::wl_output::WlOutput,
+    ) -> Option<OutputId> {
+        self.outputs.iter().find(|h| h.output.owns(wl)).map(|h| h.id)
+    }
+
+    pub fn output_mode_size(&self, id: OutputId) -> Option<(i32, i32)> {
+        self.core.output(id).map(|m| (m.phys.0 as i32, m.phys.1 as i32))
+    }
+}
+
+/// Notifies the GlobalShortcuts portal backend if the key is bound by an application (Discord, etc.)
+pub(crate) fn notify_portal_key(key: u32, pressed: bool) {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::sync::Mutex;
+
+    // Cache of bound keys: checked in memory, refreshed at most once per second if file exists
+    static LAST_CHECK: AtomicU64 = AtomicU64::new(0);
+    static BOUND_KEYS: Mutex<Option<std::collections::HashSet<u32>>> = Mutex::new(None);
+
+    let runtime = std::env::var("XDG_RUNTIME_DIR").unwrap_or_else(|_| "/tmp".into());
+    let bound_keys_path = format!("{runtime}/infynitae/bound_keys");
+
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let last = LAST_CHECK.load(Ordering::Relaxed);
+
+    if now != last {
+        LAST_CHECK.store(now, Ordering::Relaxed);
+        if let Ok(content) = std::fs::read_to_string(&bound_keys_path) {
+            let mut set = std::collections::HashSet::new();
+            for line in content.lines() {
+                if let Ok(k) = line.trim().parse::<u32>() {
+                    set.insert(k);
+                }
+            }
+            if let Ok(mut lock) = BOUND_KEYS.lock() {
+                *lock = Some(set);
+            }
+        }
+    }
+
+    let is_bound = BOUND_KEYS
+        .lock()
+        .ok()
+        .and_then(|g| g.as_ref().map(|s| s.contains(&key)))
+        .unwrap_or(false);
+
+    if is_bound {
+        static SENDER: std::sync::OnceLock<std::sync::mpsc::SyncSender<(u32, bool, String)>> =
+            std::sync::OnceLock::new();
+        let sender = SENDER.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::sync_channel::<(u32, bool, String)>(128);
+            std::thread::Builder::new()
+                .name("portal-notify".into())
+                .spawn(move || {
+                    use std::io::Write;
+                    use std::os::unix::net::UnixStream;
+                    while let Ok((k, p, sock_path)) = rx.recv() {
+                        if let Ok(mut stream) = UnixStream::connect(&sock_path) {
+                            let _ = stream.set_nonblocking(true);
+                            let msg = format!("key:{k}:{}\n", if p { 1 } else { 0 });
+                            let _ = stream.write_all(msg.as_bytes());
+                        }
+                    }
+                })
+                .expect("spawn portal notifier thread");
+            tx
+        });
+        let sock_path = format!("{runtime}/infynitae/shortcuts.sock");
+        let _ = sender.try_send((key, pressed, sock_path));
     }
 }

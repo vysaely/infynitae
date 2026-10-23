@@ -22,13 +22,16 @@ export QT_QPA_PLATFORM="wayland"
 export QT_QPA_PLATFORMTHEME=""
 export QT_WAYLAND_DISABLE_WINDOWDECORATION="1"
 
-# 4. Standard toolkit Wayland backends
-export GDK_BACKEND="wayland"
+# 4. Standard toolkit Wayland backends (with X11 fallback for Xwayland)
+export GDK_BACKEND="wayland,x11,*"
 export MOZ_ENABLE_WAYLAND="1"
-export SDL_VIDEODRIVER="wayland"
+export SDL_VIDEODRIVER="wayland,x11"
 export CLUTTER_BACKEND="wayland"
 unset GTK_MODULES
 unset GTK_RC_FILES
+
+# 4b. Ensure CLI URL openers (xdg-open generic fallback) dispatch asynchronously
+export BROWSER="gio open"
 
 # 5. Ensure XDG_RUNTIME_DIR is valid (required for Wayland sockets)
 if [ -z "$XDG_RUNTIME_DIR" ]; then
@@ -47,13 +50,19 @@ fi
 export XCURSOR_THEME="${CURSOR_THEME:-${XCURSOR_THEME:-Adwaita}}"
 export XCURSOR_SIZE="${CURSOR_SIZE:-${XCURSOR_SIZE:-24}}"
 export XKB_DEFAULT_LAYOUT="${XKB_DEFAULT_LAYOUT:-us}"
-export XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-caps:escape}"
+export XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-}"
+export FOCUS_FOLLOWS_MOUSE="${FOCUS_FOLLOWS_MOUSE:-1}"
 export MOUSE_ACCEL_PROFILE="${MOUSE_ACCEL_PROFILE:-flat}"
 export MOUSE_ACCEL_SPEED="${MOUSE_ACCEL_SPEED:-0.0}"
 export KEYBOARD_REPEAT_DELAY="${KEYBOARD_REPEAT_DELAY:-200}"
 export KEYBOARD_REPEAT_RATE="${KEYBOARD_REPEAT_RATE:-35}"
+export PAN_MODE="${PAN_MODE:-free}"
+export SCREENCOPY_CURSOR="${SCREENCOPY_CURSOR:-false}"
+export SCALING_FILTER="${SCALING_FILTER:-nearest}"
+export OUTPUT_SCALE="${OUTPUT_SCALE:-1.0}"
 
-if [ -f "$HOME/infynitae/live/settings.sh" ]; then
+if [ "${INFYNITAE_SETTINGS_APPLIED:-0}" != "1" ] && [ -f "$HOME/infynitae/live/settings.sh" ]; then
+    export INFYNITAE_SETTINGS_APPLIED="1"
     sh "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1 || true
 fi
 
@@ -65,26 +74,97 @@ if [ ! -f "$INFYNITAE_CFG_DIR/dconf-profile" ]; then
 fi
 export DCONF_PROFILE="$INFYNITAE_CFG_DIR/dconf-profile"
 
-# 7. XDG Desktop Portal routing: use GTK portal instead of KDE Plasma portal
+# 7. XDG Desktop Portal routing & Global Shortcuts backend
+PORTAL_DATA_DIR="$HOME/.local/share/xdg-desktop-portal/portals"
+mkdir -p "$PORTAL_DATA_DIR"
+cat << 'EOF' > "$PORTAL_DATA_DIR/infynitae.portal"
+[portal]
+DBusName=org.freedesktop.impl.portal.desktop.infynitae
+Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;
+UseIn=infynitae;wlroots;
+EOF
+
 PORTAL_CFG_DIR="$HOME/.config/xdg-desktop-portal"
 mkdir -p "$PORTAL_CFG_DIR"
 cat << 'EOF' > "$PORTAL_CFG_DIR/infynitae-portals.conf"
 [preferred]
-default=gtk
+default=gtk;wlr
+org.freedesktop.impl.portal.GlobalShortcuts=infynitae
+org.freedesktop.impl.portal.ScreenCast=wlr
+org.freedesktop.impl.portal.Screenshot=wlr
 org.freedesktop.impl.portal.Settings=gtk
 org.freedesktop.impl.portal.FileChooser=gtk
 org.freedesktop.impl.portal.AppChooser=gtk
 org.freedesktop.impl.portal.Notification=gtk
 EOF
 
-# 8. Notify D-Bus / systemd activation environment if available
+# Ensure infynitae-portal is running
+PORTAL_LOG="$HOME/.local/state/infynitae/portal.log"
+mkdir -p "$HOME/.local/state/infynitae"
+if [ -x "$HOME/infynitae/live/infynitae-portal" ] && ! pgrep -f "live/infynitae-portal" >/dev/null 2>&1; then
+    "$HOME/infynitae/live/infynitae-portal" >> "$PORTAL_LOG" 2>&1 &
+fi
+
+# 8. Resolve WAYLAND_DISPLAY, DISPLAY, and XAUTHORITY if present
+if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
+    for wsock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
+        if [ -S "$wsock" ]; then
+            export WAYLAND_DISPLAY="${wsock##*/}"
+            break
+        fi
+    done
+fi
+if [ -n "$WAYLAND_DISPLAY" ] && [ "$WAYLAND_DISPLAY" != "wayland-0" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
+    if [ ! -e "$XDG_RUNTIME_DIR/wayland-0" ] && [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
+        ln -sf "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" "$XDG_RUNTIME_DIR/wayland-0" 2>/dev/null || true
+        ln -sf "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY.lock" "$XDG_RUNTIME_DIR/wayland-0.lock" 2>/dev/null || true
+    fi
+fi
+if [ -z "$DISPLAY" ]; then
+    for xsock in /tmp/.X11-unix/X*; do
+        if [ -S "$xsock" ]; then
+            num="${xsock##*/X}"
+            export DISPLAY=":$num"
+            break
+        fi
+    done
+fi
+if [ -z "$XAUTHORITY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
+    AUTH_FILE=$(ls -t "$XDG_RUNTIME_DIR"/infynitae-xauth-* 2>/dev/null | head -1)
+    if [ -f "$AUTH_FILE" ]; then
+        export XAUTHORITY="$AUTH_FILE"
+    fi
+fi
+if [ -n "$XAUTHORITY" ] && [ -f "$XAUTHORITY" ]; then
+    ln -sf "$XAUTHORITY" "$HOME/.Xauthority" 2>/dev/null || true
+fi
+
+# 9. Notify D-Bus / systemd activation environment if available
 if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment --systemd \
+        WAYLAND_DISPLAY \
+        DISPLAY \
+        XAUTHORITY \
         XDG_CURRENT_DESKTOP \
         XDG_SESSION_DESKTOP \
         DESKTOP_SESSION \
         XDG_SESSION_TYPE \
         XCURSOR_THEME \
         XCURSOR_SIZE \
-        DCONF_PROFILE 2>/dev/null || true
+        DCONF_PROFILE \
+        BROWSER 2>/dev/null || true
+fi
+if command -v systemctl >/dev/null 2>&1; then
+    systemctl --user import-environment \
+        WAYLAND_DISPLAY \
+        DISPLAY \
+        XAUTHORITY \
+        XDG_CURRENT_DESKTOP \
+        XDG_SESSION_DESKTOP \
+        DESKTOP_SESSION \
+        XDG_SESSION_TYPE \
+        XCURSOR_THEME \
+        XCURSOR_SIZE \
+        DCONF_PROFILE \
+        BROWSER 2>/dev/null || true
 fi

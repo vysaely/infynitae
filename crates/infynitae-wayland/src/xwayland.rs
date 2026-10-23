@@ -83,6 +83,13 @@ impl XAuthority {
         field(&mut entry, number.to_string().as_bytes());
         field(&mut entry, b"MIT-MAGIC-COOKIE-1");
         field(&mut entry, &cookie);
+        if number != 0 {
+            entry.extend_from_slice(&0xffffu16.to_be_bytes());
+            field(&mut entry, b"");
+            field(&mut entry, b"0");
+            field(&mut entry, b"MIT-MAGIC-COOKIE-1");
+            field(&mut entry, &cookie);
+        }
         let written = file.write_all(&entry).and_then(|()| file.flush());
         let auth = XAuthority { path };
         written.map(|()| auth)

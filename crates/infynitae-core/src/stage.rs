@@ -94,6 +94,7 @@ struct Record {
     /// The toplevel's title and app_id as the client last set them (INC-11, D9): display
     /// metadata for the shell, never authority. Out of line, like `layout`; `None` until set.
     meta: Option<Box<ToplevelMeta>>,
+    saved_floating: Option<(CanvasPoint, crate::geom::LocalSize)>,
 }
 
 /// What a toplevel calls itself (`xdg_toplevel.set_title` / `set_app_id`): derived protocol
@@ -321,8 +322,25 @@ impl Stage {
             mapped_once: false,
             default_placed: false,
             meta: None,
+            saved_floating: None,
         });
         id
+    }
+
+    /// Read access to the element's saved floating geometry (if currently maximized/filling viewport).
+    pub fn saved_floating(&self, id: ElementId) -> Option<(CanvasPoint, crate::geom::LocalSize)> {
+        self.record(id).and_then(|r| r.saved_floating)
+    }
+
+    /// Updates or clears the element's saved floating geometry.
+    pub(crate) fn set_saved_floating(
+        &mut self,
+        id: ElementId,
+        val: Option<(CanvasPoint, crate::geom::LocalSize)>,
+    ) {
+        if let Some(r) = self.record_mut(id) {
+            r.saved_floating = val;
+        }
     }
 
     /// `stage::place`: the single writer of anchors (INV-STAGE-1). The point is already integral

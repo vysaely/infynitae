@@ -374,22 +374,40 @@ impl CameraSet {
         true
     }
 
-    /// F-PAN-1 update of a pan gesture: the camera becomes `start − Q16(sum)`, quantised once from
-    /// the f64 sum of the whole gesture (R2, INV-COORD-3). Consumes a proof (INV-CAMERA-1).
+    /// F-PAN-1 update of a pan gesture: the camera becomes `start − Q16(sum)` (Grab) or
+    /// `start + Q16(sum)` (Rts), quantised once from the f64 sum of the whole gesture (R2,
+    /// INV-COORD-3). Consumes a proof (INV-CAMERA-1).
     pub(crate) fn pan(
         &mut self,
         proof: Authorized,
         camera: usize,
         start: CanvasPos,
         sum: (f64, f64),
+        mode: PanMode,
     ) {
-        self.set_center(proof, camera, pan_target(start, sum));
+        self.set_center(proof, camera, pan_target_mode(start, sum, mode));
     }
 
     /// A shell `Navigate` (C7.2, INC-11): the camera's centre becomes `center`, its zoom unchanged;
     /// no history entry (OBJ-30 records fits). Consumes a proof (INV-CAMERA-1).
     pub(crate) fn navigate(&mut self, proof: Authorized, camera: usize, center: CanvasPos) {
         self.set_center(proof, camera, center);
+    }
+
+    /// Zoom adjustment (Super+Shift+Scroll / zoom reset): adjusts camera zoom and center without
+    /// pushing to history. Consumes a proof (INV-CAMERA-1).
+    pub(crate) fn set_zoom_and_center(
+        &mut self,
+        _proof: Authorized,
+        camera: usize,
+        zoom: f64,
+        center: CanvasPos,
+    ) {
+        if let Some(c) = self.cameras.get_mut(camera) {
+            debug_assert!(crate::geom::zoom_in_domain(zoom));
+            c.zoom = zoom;
+            c.center = center;
+        }
     }
 
     /// Mutation is private to this module and consumes a proof.
@@ -400,11 +418,31 @@ impl CameraSet {
     }
 }
 
+/// Canvas pan interaction style: Grab (dragging canvas), Rts (camera scroll), or Free (canvas follows pointer, pointer moves with mouse).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum PanMode {
+    /// Grab: dragging pulls the canvas under the pointer (standard infinite canvas / paper drag).
+    #[default]
+    Grab,
+    /// RTS: moving the mouse pushes the camera in that direction (RTS camera scroll style).
+    Rts,
+    /// Free: dragging pulls canvas and pointer moves naturally with the mouse (Hyprland / smooth remote desktop style).
+    Free,
+}
+
 /// F-PAN-1: `C = C_start − Q16(Σ)`, Q16 ties-even, saturated at the stored-Canvas bound ±2³⁶ px
 /// (INV-COORD-1). Pure.
 pub fn pan_target(start: CanvasPos, sum: (f64, f64)) -> CanvasPos {
+    pan_target_mode(start, sum, PanMode::Grab)
+}
+
+/// Pan target calculation with customizable interaction mode.
+pub fn pan_target_mode(start: CanvasPos, sum: (f64, f64), mode: PanMode) -> CanvasPos {
     let limit = CANVAS_LIMIT_PX * Q16_ONE;
-    let axis = |c: i64, s: f64| c.saturating_sub(q16(s)).clamp(-limit, limit);
+    let axis = |c: i64, s: f64| match mode {
+        PanMode::Grab | PanMode::Free => c.saturating_sub(q16(s)).clamp(-limit, limit),
+        PanMode::Rts => c.saturating_add(q16(s)).clamp(-limit, limit),
+    };
     CanvasPos {
         x: axis(start.x, sum.0),
         y: axis(start.y, sum.1),

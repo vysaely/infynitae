@@ -16,6 +16,7 @@ use smithay::backend::input::{
     PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::{Renderer, TextureFilter};
 use smithay::backend::winit::{self, WinitEvent, WinitGraphicsBackend};
 use smithay::reexports::calloop::EventLoop;
 use smithay::reexports::wayland_server::Display;
@@ -43,6 +44,10 @@ pub struct WinitCompositorOptions {
     pub max_frames: Option<u64>,
     /// xwayland-satellite to supervise (M19, INC-12, experimental); `None`: no X11.
     pub xwayland_satellite: Option<std::path::PathBuf>,
+    /// Output scale ×120 for every screen (`None`: auto/120, i.e. 1.0).
+    pub scale_120: Option<u32>,
+    /// Scaling texture filter ("nearest" for 0% blur, "linear" for smooth).
+    pub scaling_filter: Option<String>,
 }
 
 impl Default for WinitCompositorOptions {
@@ -57,6 +62,8 @@ impl Default for WinitCompositorOptions {
             duration: None,
             max_frames: None,
             xwayland_satellite: None,
+            scale_120: None,
+            scaling_filter: None,
         }
     }
 }
@@ -203,8 +210,19 @@ pub fn run_nested_with(
         ))
         .with_title(&options.title)
         .with_visible(true);
-    let (backend, winit_event_loop) =
+    let (mut backend, winit_event_loop) =
         winit::init_from_attributes::<GlesRenderer>(window_attributes)?;
+
+    // Zero-blur scaling: use Nearest-neighbor filtering on upscaled surfaces by default
+    let use_nearest = match options.scaling_filter.as_deref() {
+        Some("linear") => false,
+        _ => true,
+    };
+    if use_nearest {
+        if let Err(e) = backend.renderer().upscale_filter(TextureFilter::Nearest) {
+            eprintln!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
+        }
+    }
 
     let output_key = OutputKey {
         device: "winit".into(),
@@ -213,11 +231,12 @@ pub fn run_nested_with(
         model: "Nested".into(),
         serial: None,
     };
+    let scale_120 = options.scale_120.unwrap_or(120);
     let descriptor = OutputDescriptor {
         key: output_key.clone(),
         mode: (options.width, options.height),
         transform: Transform::Normal,
-        scale_120: 120, // 1.0x scale
+        scale_120,
         refresh_mhz: options.refresh_mhz,
     };
     let (output_id, effects) = state

@@ -273,8 +273,13 @@ fn super_shift_tab_toggles_overview() {
     );
     assert_eq!(
         infynitae_core::input::keys::resolve_key_binding(infynitae_core::input::keys::KEY_R, mods, false),
+        Some(infynitae_core::input::keys::KeyAction::SpawnRegionScreenshot),
+        "Super+Shift+R resolves to SpawnRegionScreenshot"
+    );
+    assert_eq!(
+        infynitae_core::input::keys::resolve_key_binding(infynitae_core::input::keys::KEY_BACKSPACE, mods, false),
         Some(infynitae_core::input::keys::KeyAction::ReloadShell),
-        "Super+Shift+R resolves to ReloadShell"
+        "Super+Shift+BackSpace resolves to ReloadShell"
     );
 }
 

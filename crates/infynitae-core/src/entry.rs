@@ -103,8 +103,17 @@ impl Core {
                 time_us,
             } => {
                 self.input.clock.accepted(time_us);
+                self.input.modifiers = modifiers;
+                let pan = pressed && bindings::is_pan_binding(button, modifiers);
+                let reset_zoom = pressed
+                    && button == crate::input::bindings::BTN_MIDDLE
+                    && modifiers.logo
+                    && modifiers.shift
+                    && !modifiers.ctrl
+                    && !modifiers.alt;
+                let proof = (reset_zoom || pan).then(authority::Authorized::mint);
                 if pressed {
-                    self.button_press(button, modifiers, ms(time_us), out);
+                    self.button_press(button, modifiers, ms(time_us), proof, out);
                 } else {
                     self.button_release(button, ms(time_us), out);
                 }
@@ -116,6 +125,12 @@ impl Core {
                     return Err(EntryError::InvalidEvent);
                 }
                 self.input.clock.accepted(time_us);
+                let mods = self.input.modifiers;
+                if mods.logo && mods.shift && !mods.ctrl && !mods.alt {
+                    let proof = authority::Authorized::mint();
+                    self.zoom_axis(proof, axis, out);
+                    return Ok(());
+                }
                 // consumed during an interaction and in NoOutput (M10, M22)
                 if self.input.interaction.active() || self.pointer == PointerState::NoOutput {
                     return Ok(());
@@ -137,6 +152,7 @@ impl Core {
                 time_us,
             } => {
                 self.input.clock.accepted(time_us);
+                self.input.modifiers = modifiers;
                 if pressed {
                     // a press bound to fit or restore mutates a camera: its proof is minted here
                     let navigation = matches!(
@@ -148,6 +164,7 @@ impl Core {
                                 | KeyAction::Recenter
                                 | KeyAction::FocusSlot(_)
                                 | KeyAction::FocusClusterSlot(_)
+                                | KeyAction::FocusNext
                         )
                     )
                     .then(authority::Authorized::mint);
@@ -254,7 +271,16 @@ impl Core {
         out: &mut Vec<Effect>,
     ) {
         let fx = match action {
-            crate::input::keys::KeyAction::FocusNext => self.focus_next(),
+            crate::input::keys::KeyAction::FocusNext => {
+                let fx = self.focus_next();
+                out.extend(fx);
+                if self.focus_cycle_navigate {
+                    if let Some(p) = proof {
+                        self.recenter(p, out);
+                    }
+                }
+                return;
+            }
             // M22 cancel: no revert, owned buttons stay owned; the interaction terminates as at
             // its initiator's release (INV-SCALE-3, INV-INPUT-5, M10)
             crate::input::keys::KeyAction::Cancel => {
@@ -314,8 +340,18 @@ impl Core {
             KeyAction::SpawnTerminal => vec![Effect::SpawnTerminal],
             KeyAction::SpawnFileManager => vec![Effect::SpawnFileManager],
             KeyAction::SpawnScreenshot => vec![Effect::SpawnScreenshot],
+            KeyAction::SpawnRegionScreenshot => vec![Effect::SpawnRegionScreenshot],
             KeyAction::ToggleOverview => vec![Effect::ToggleOverview],
             KeyAction::ReloadShell => vec![Effect::ReloadShell],
+            KeyAction::SpawnLockScreen => vec![Effect::SpawnLockScreen],
+            KeyAction::VolumeUp => vec![Effect::VolumeUp],
+            KeyAction::VolumeDown => vec![Effect::VolumeDown],
+            KeyAction::VolumeMute => vec![Effect::VolumeMute],
+            KeyAction::BrightnessUp => vec![Effect::BrightnessUp],
+            KeyAction::BrightnessDown => vec![Effect::BrightnessDown],
+            KeyAction::MediaPlayPause => vec![Effect::MediaPlayPause],
+            KeyAction::MediaNext => vec![Effect::MediaNext],
+            KeyAction::MediaPrev => vec![Effect::MediaPrev],
             crate::input::keys::KeyAction::Noop => Vec::new(),
         };
         out.extend(fx);
@@ -331,7 +367,7 @@ impl Core {
         let PointerState::Located { output, p } = self.pointer else {
             return;
         };
-        if self.presentation(output).is_some() {
+        if self.presentation(output).is_some() && !self.is_presentation_suppressed(output) {
             return;
         }
         let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
@@ -348,28 +384,125 @@ impl Core {
 
     /// Super+Enter: with the same guards as the fit binding, the element under the pointer is fitted,
     /// unless the camera already holds exactly that fit (and there is a value to go back to): then
-    /// the previous camera is restored. The decision reads the camera and the fit it would make
-    /// now; nothing is remembered between presses.
+    /// the previous camera is restored. When enter_mode is Maximize, it maximizes the window to
+    /// natively fill the usable viewport at 100% sharp scale (toggleable).
     fn fit_toggle(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
-        // only the choice is made here; every refusal (no output, a presentation, a layer surface
-        // above, no element under the pointer, a degenerate fit, an empty history) is the M8
-        // action's own
-        let at_fit = match self.pointer {
-            PointerState::Located { output, p } => self
-                .hit_test(output, crate::geom::OutputLogicalPoint { x: p.0, y: p.1 })
-                .and_then(|h| self.fit_plan(output, h.element).ok())
-                .is_some_and(|(camera, target)| {
-                    self.cameras.center(camera) == Some(target.center)
-                        && self.cameras.zoom(camera).map(f64::to_bits)
-                            == Some(target.zoom.to_bits())
-                        && self.cameras.history(camera).is_some_and(|h| !h.is_empty())
-                }),
-            PointerState::NoOutput => false,
+        let PointerState::Located { output, p } = self.pointer else {
+            return;
         };
+        if self.presentation(output).is_some() && !self.is_presentation_suppressed(output) {
+            return;
+        }
+        let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
+        if self.layer_hit(output, p, true).is_some() {
+            return;
+        }
+        if self.enter_mode == crate::EnterMode::Maximize {
+            let hit = self.hit_test(output, pt);
+            let element = match hit.map(|h| h.element).or_else(|| self.focus.target()) {
+                Some(e) => e,
+                None => return,
+            };
+            self.maximize_toggle(proof, output, element, out);
+            return;
+        }
+        let Some(hit) = self.hit_test(output, pt) else {
+            return;
+        };
+        let element = hit.element;
+        let at_fit = self
+            .fit_plan(output, element)
+            .ok()
+            .is_some_and(|(camera, target)| {
+                self.cameras.center(camera) == Some(target.center)
+                    && self.cameras.zoom(camera).map(f64::to_bits)
+                        == Some(target.zoom.to_bits())
+                    && self.cameras.history(camera).is_some_and(|h| !h.is_empty())
+            });
         if at_fit {
             self.viewport_restore(proof, out);
         } else {
-            self.fit_viewport(proof, out);
+            let _ = self.fit_on(proof, output, element, out);
+        }
+    }
+
+    /// Native viewport fill toggle (EnterMode::Maximize): maximizes the window to fill
+    /// the usable screen area at 100% sharp 1:1 scale without digital blur, or restores it.
+    fn maximize_toggle(
+        &mut self,
+        proof: authority::Authorized,
+        output: OutputId,
+        element: crate::stage::ElementId,
+        out: &mut Vec<Effect>,
+    ) {
+        if self.stage.mapped(element).is_none() {
+            return;
+        }
+        if let Some((orig_anchor, orig_size)) = self.stage.saved_floating(element) {
+            let _ = self.stage.set_saved_floating(element, None);
+            let _ = self.place_by_shell(element, orig_anchor, out);
+            out.push(Effect::ToplevelConfigureSize {
+                element,
+                size: orig_size,
+            });
+            self.invalidate_frame(output);
+            out.extend(self.visibility_pass());
+        } else {
+            let Some(usable) = self.usable_area(output) else {
+                return;
+            };
+            let (Some(orig_size), Some(anchor)) = (
+                self.stage.tree(element).map(|t| t.geometry.size),
+                self.stage.anchor(element),
+            ) else {
+                return;
+            };
+
+            // If camera zoom is not 1.0, reset camera zoom to 1.0 for sharp 1:1 view
+            if let Some(camera) = self.cameras.camera_for_output(output) {
+                let zoom = self.cameras.zoom(camera).unwrap_or(1.0);
+                if (zoom - 1.0).abs() > 0.001 {
+                    if let Some(center) = self.cameras.center(camera) {
+                        self.cameras.set_zoom_and_center(proof, camera, 1.0, center);
+                        self.camera_written(output, camera, out);
+                    }
+                }
+            }
+
+            if self.current_frame(output).is_none() {
+                let _ = self.render_list(output);
+            }
+            let Some(frame) = self.current_frame(output) else {
+                return;
+            };
+            let view = frame.view;
+
+            let top_left_logical = crate::geom::OutputLogicalPoint {
+                x: usable.0,
+                y: usable.1,
+            };
+            let Some(tl) = view.unproject(top_left_logical).round_to_point() else {
+                return;
+            };
+
+            let canvas_w = usable.2.round().max(1.0) as i32;
+            let canvas_h = usable.3.round().max(1.0) as i32;
+
+            let _ = self
+                .stage
+                .set_saved_floating(element, Some((anchor, orig_size)));
+            let _ = self.place_by_shell(element, tl, out);
+            let target_rect = (tl.x, tl.y, tl.x + canvas_w as i64, tl.y + canvas_h as i64);
+            self.push_overlapping_cluster(element, target_rect, out);
+            out.push(Effect::ToplevelConfigureSize {
+                element,
+                size: crate::geom::LocalSize {
+                    w: canvas_w,
+                    h: canvas_h,
+                },
+            });
+            self.invalidate_frame(output);
+            out.extend(self.visibility_pass());
         }
     }
 
@@ -383,12 +516,16 @@ impl Core {
         let PointerState::Located { output, .. } = self.pointer else {
             return;
         };
-        if self.presentation(output).is_some() {
+        if self.presentation(output).is_some() && !self.is_presentation_suppressed(output) {
             return;
         }
         let Some(element) = self.focus.target() else {
             return;
         };
+        if self.presentation(output) == Some(element) && self.is_presentation_suppressed(output) {
+            self.unsuppress_presentation(output);
+            return;
+        }
         if self.stage.mapped(element).is_none() {
             return;
         }
@@ -430,6 +567,15 @@ impl Core {
         let Some(&element) = live.get(slot) else {
             return;
         };
+        if let PointerState::Located { output, .. } = self.pointer {
+            if let Some(pres) = self.presentation(output) {
+                if pres == element {
+                    self.unsuppress_presentation(output);
+                } else {
+                    self.suppress_presentation(output);
+                }
+            }
+        }
         let raised = self.raise_by_user(element);
         out.extend(self.focus.set_focus(Some(element)));
         out.extend(self.reconcile_constraints());
@@ -459,6 +605,15 @@ impl Core {
         let Some(&primary) = cluster.first() else {
             return;
         };
+        if let PointerState::Located { output, .. } = self.pointer {
+            if let Some(pres) = self.presentation(output) {
+                if pres == primary {
+                    self.unsuppress_presentation(output);
+                } else {
+                    self.suppress_presentation(output);
+                }
+            }
+        }
         let raised = self.raise_by_user(primary);
         out.extend(self.focus.set_focus(Some(primary)));
         out.extend(self.reconcile_constraints());
@@ -528,20 +683,79 @@ impl Core {
 
     /// Super+Shift+Enter: the focused window's fullscreen toggles on the pointer's output, as if it
     /// had asked (`set_fullscreen` / `unset_fullscreen`: the same path, M9, INV-PRES-1).
+    /// Under smart cluster tiling, entering fullscreen pushes any overlapping windows away into
+    /// adjacent cluster slots (12px gap) so no window is ever occluded or covered. Exiting fullscreen
+    /// restores original saved floating geometry.
     fn toggle_fullscreen(&mut self) -> Vec<Effect> {
         let Some(id) = self.focus.target() else {
             return Vec::new();
         };
-        let request = if self.fullscreen_of(id).is_some() {
-            crate::protocol::ToplevelRequest::UnsetFullscreen
-        } else {
-            crate::protocol::ToplevelRequest::SetFullscreen {
-                output: self.pointer_output(),
+        let mut fx = Vec::new();
+        let was_fullscreen = self.fullscreen_of(id).is_some();
+        if was_fullscreen {
+            let request = crate::protocol::ToplevelRequest::UnsetFullscreen;
+            if let Ok((_, t_fx)) = self.toplevel_request(id, request) {
+                fx.extend(t_fx);
             }
-        };
-        self.toplevel_request(id, request)
-            .map(|(_, fx)| fx)
-            .unwrap_or_default()
+            if let Some((orig_anchor, orig_size)) = self.stage.saved_floating(id) {
+                let _ = self.stage.set_saved_floating(id, None);
+                let _ = self.place_by_shell(id, orig_anchor, &mut fx);
+                fx.push(Effect::ToplevelConfigureSize {
+                    element: id,
+                    size: orig_size,
+                });
+            }
+            if let Some(o) = self.pointer_output() {
+                self.invalidate_frame(o);
+            }
+            fx.extend(self.visibility_pass());
+            fx
+        } else {
+            let output = self.pointer_output().or_else(|| self.outputs.first().map(|o| o.id));
+            let orig_anchor = self.stage.anchor(id);
+            let orig_size = self.stage.tree(id).map(|t| t.geometry.size);
+
+            if let Some(out_id) = output
+                && let Some(out_model) = self.outputs.iter().find(|o| o.id == out_id)
+            {
+                let (out_w, out_h) = out_model.logical_extent();
+                let canvas_w = out_w.round().max(1.0) as i32;
+                let canvas_h = out_h.round().max(1.0) as i32;
+
+                if self.current_frame(out_id).is_none() {
+                    let _ = self.render_list(out_id);
+                }
+                let tl = if let Some(frame) = self.current_frame(out_id)
+                    && let Some(p) = frame.view.unproject(crate::geom::OutputLogicalPoint { x: 0.0, y: 0.0 }).round_to_point()
+                {
+                    p
+                } else if let Some(a) = orig_anchor {
+                    a
+                } else {
+                    crate::geom::CanvasPoint { x: 0, y: 0 }
+                };
+
+                if self.stage.saved_floating(id).is_none() {
+                    if let (Some(a), Some(s)) = (orig_anchor, orig_size) {
+                        let _ = self.stage.set_saved_floating(id, Some((a, s)));
+                    }
+                }
+
+                let _ = self.place_by_shell(id, tl, &mut fx);
+                let target_rect = (tl.x, tl.y, tl.x + canvas_w as i64, tl.y + canvas_h as i64);
+                self.push_overlapping_cluster(id, target_rect, &mut fx);
+            }
+
+            let request = crate::protocol::ToplevelRequest::SetFullscreen { output };
+            if let Ok((_, t_fx)) = self.toplevel_request(id, request) {
+                fx.extend(t_fx);
+            }
+            if let Some(o) = output {
+                self.invalidate_frame(o);
+            }
+            fx.extend(self.visibility_pass());
+            fx
+        }
     }
 
     /// F-FIT-1 on `element` for `output`'s camera, shared by the binding and the shell: refused
@@ -608,7 +822,7 @@ impl Core {
         let PointerState::Located { output, .. } = self.pointer else {
             return;
         };
-        if self.presentation(output).is_some() {
+        if self.presentation(output).is_some() && !self.is_presentation_suppressed(output) {
             return;
         }
         let Some(camera) = self.cameras.camera_for_output(output) else {
@@ -703,6 +917,23 @@ impl Core {
                 if let Some(moved) = pointer::moved(&self.outputs, output, p, delta) {
                     self.pointer = moved;
                 }
+                if self.focus_follows_mouse {
+                    if let PointerState::Located { output: cur_o, p: cur_p } = self.pointer {
+                        if self.layer_hit(cur_o, cur_p, true).is_none() {
+                            let pt = crate::geom::OutputLogicalPoint {
+                                x: cur_p.0,
+                                y: cur_p.1,
+                            };
+                            if let Some(hit) = self.hit_test(cur_o, pt) {
+                                if self.focus.target() != Some(hit.element) {
+                                    out.extend(self.focus.set_focus(Some(hit.element)));
+                                }
+                            } else if self.focus_follows_mouse_strict && self.focus.target().is_some() {
+                                out.extend(self.focus.set_focus(None));
+                            }
+                        }
+                    }
+                }
                 self.routed_motion(delta, delta_unaccel, time_us, out);
             }
         }
@@ -729,11 +960,41 @@ impl Core {
         else {
             return false;
         };
-        self.cameras.pan(proof, camera, start, sum);
+        self.cameras.pan(proof, camera, start, sum, self.pan_mode);
+        if self.fullscreen_pan && self.presentation(output).is_some() && !self.is_presentation_suppressed(output) {
+            self.suppress_presentation(output);
+        }
+        if (self.pan_mode == crate::navigation::PanMode::Free || self.pan_mode == crate::navigation::PanMode::Rts)
+            && let PointerState::Located { output: p_out, p } = self.pointer
+            && p_out == output
+        {
+            let extent = self
+                .output(output)
+                .map(|o| o.logical_extent())
+                .unwrap_or((1920.0, 1080.0));
+            let new_p = match self.pan_mode {
+                crate::navigation::PanMode::Free => (
+                    (p.0 + delta.0).clamp(0.0, extent.0 - 1.0),
+                    (p.1 + delta.1).clamp(0.0, extent.1 - 1.0),
+                ),
+                crate::navigation::PanMode::Rts => (
+                    (p.0 - delta.0).clamp(0.0, extent.0 - 1.0),
+                    (p.1 - delta.1).clamp(0.0, extent.1 - 1.0),
+                ),
+                _ => unreachable!(),
+            };
+            self.pointer = PointerState::Located {
+                output,
+                p: new_p,
+            };
+        }
         // F-LATTICE-1: the reference is kept while panning, unless the bound is exceeded
         self.update_lattice(output);
         self.invalidate_frame(output);
         self.visibility_pass_camera(camera, out);
+        if self.pan_mode == crate::navigation::PanMode::Free || self.pan_mode == crate::navigation::PanMode::Rts {
+            self.true_position_into(out);
+        }
         true
     }
 
@@ -829,6 +1090,119 @@ impl Core {
         ]);
     }
 
+    /// Super+Shift+Scroll: zoom camera in/out centered around the pointer.
+    fn zoom_axis(
+        &mut self,
+        proof: authority::Authorized,
+        axis: crate::input::Axis,
+        out: &mut Vec<Effect>,
+    ) {
+        let PointerState::Located { output, p } = self.pointer else {
+            return;
+        };
+        if let Some(pres) = self.presentation(output) {
+            if !self.is_presentation_suppressed(output) {
+                if self.fullscreen_pan {
+                    if let Some(camera) = self.cameras.camera_for_output(output) {
+                        if let Some((anchor, tree, _)) = self.stage.mapped(pres) {
+                            let extent = self.output(output).map(|m| m.logical_extent()).unwrap_or((1920.0, 1080.0));
+                            let margin_x = ((extent.0 - f64::from(tree.geometry.size.w)) / 2.0).max(0.0);
+                            let margin_y = ((extent.1 - f64::from(tree.geometry.size.h)) / 2.0).max(0.0);
+                            let pres_center = crate::geom::CanvasPos {
+                                x: crate::geom::q16(anchor.x as f64 - margin_x + extent.0 / 2.0),
+                                y: crate::geom::q16(anchor.y as f64 - margin_y + extent.1 / 2.0),
+                            };
+                            self.cameras.set_zoom_and_center(proof, camera, 1.0, pres_center);
+                            self.camera_written(output, camera, out);
+                        }
+                    }
+                    self.suppress_presentation(output);
+                    return;
+                } else {
+                    return;
+                }
+            }
+        }
+        let Some(camera) = self.cameras.camera_for_output(output) else {
+            return;
+        };
+        let (Some(old_zoom), Some(old_center), Some(extent)) = (
+            self.cameras.zoom(camera),
+            self.cameras.center(camera),
+            self.output(output).map(|m| m.logical_extent()),
+        ) else {
+            return;
+        };
+
+        // Scroll amount: negative is scroll up (away from user, zoom in)
+        // positive is scroll down (towards user, zoom out)
+        let delta = if axis.v120.1 != 0 {
+            axis.v120.1 as f64 / 120.0
+        } else if axis.amount.1.abs() > 0.001 {
+            axis.amount.1 / 15.0
+        } else {
+            0.0
+        };
+        if delta == 0.0 {
+            return;
+        }
+
+        // Each full scroll detent changes zoom by ~15%
+        let factor = 1.15_f64.powf(-delta);
+        let new_zoom = (old_zoom * factor).clamp(crate::geom::ZOOM_MIN, crate::geom::ZOOM_MAX);
+        if (new_zoom - old_zoom).abs() < 1e-9 {
+            return;
+        }
+
+        // Keep the canvas point under the cursor fixed:
+        // C_new = C_old + (p - extent / 2) * (1 / old_zoom - 1 / new_zoom)
+        let dx = (p.0 - extent.0 / 2.0) * (1.0 / old_zoom - 1.0 / new_zoom);
+        let dy = (p.1 - extent.1 / 2.0) * (1.0 / old_zoom - 1.0 / new_zoom);
+        let limit = crate::geom::CANVAS_LIMIT_PX * crate::geom::Q16_ONE;
+        let new_center = crate::geom::CanvasPos {
+            x: old_center.x.saturating_add(crate::geom::q16(dx)).clamp(-limit, limit),
+            y: old_center.y.saturating_add(crate::geom::q16(dy)).clamp(-limit, limit),
+        };
+
+        self.cameras.set_zoom_and_center(proof, camera, new_zoom, new_center);
+        self.camera_written(output, camera, out);
+    }
+
+    /// Super+Shift+Middle Click: reset camera zoom to 1.0 centered around pointer.
+    fn zoom_reset(
+        &mut self,
+        proof: authority::Authorized,
+        output: OutputId,
+        camera: usize,
+        out: &mut Vec<Effect>,
+    ) {
+        if self.presentation(output).is_some() && !self.is_presentation_suppressed(output) {
+            return;
+        }
+        let (Some(old_zoom), Some(old_center), Some(extent)) = (
+            self.cameras.zoom(camera),
+            self.cameras.center(camera),
+            self.output(output).map(|m| m.logical_extent()),
+        ) else {
+            return;
+        };
+        let p = match self.pointer {
+            PointerState::Located { p, .. } => p,
+            PointerState::NoOutput => (extent.0 / 2.0, extent.1 / 2.0),
+        };
+        let new_zoom = 1.0;
+        let dx = (p.0 - extent.0 / 2.0) * (1.0 / old_zoom - 1.0 / new_zoom);
+        let dy = (p.1 - extent.1 / 2.0) * (1.0 / old_zoom - 1.0 / new_zoom);
+        let limit = crate::geom::CANVAS_LIMIT_PX * crate::geom::Q16_ONE;
+        let new_center = crate::geom::CanvasPos {
+            x: old_center.x.saturating_add(crate::geom::q16(dx)).clamp(-limit, limit),
+            y: old_center.y.saturating_add(crate::geom::q16(dy)).clamp(-limit, limit),
+        };
+
+        self.cameras.set_zoom_and_center(proof, camera, new_zoom, new_center);
+        self.camera_written(output, camera, out);
+    }
+
     /// Ownership is decided here, at press, before any client dispatch (INV-INPUT-1, C4.2 P2).
     /// The effects are appended to `out` (the caller's reusable buffer, C14.3, INV-ALLOC-1).
     fn button_press(
@@ -836,10 +1210,23 @@ impl Core {
         button: u32,
         mods: bindings::Modifiers,
         time_ms: u32,
+        proof: Option<authority::Authorized>,
         out: &mut Vec<Effect>,
     ) {
         if self.input.ownership.owner(button).is_some() {
             return; // a repeated press keeps its first owner
+        }
+        // Super+Shift+Middle Click: reset camera zoom to default 1.0
+        if mods.logo && mods.shift && !mods.ctrl && !mods.alt && button == crate::input::bindings::BTN_MIDDLE {
+            if let Some(p) = proof {
+                if let PointerState::Located { output, .. } = self.pointer
+                    && let Some(camera) = self.cameras.camera_for_output(output)
+                {
+                    self.zoom_reset(p, output, camera, out);
+                }
+            }
+            self.input.ownership.press(button, Owner::Compositor);
+            return;
         }
         // M22: any press during an interaction is owned by it; M10: NoOutput consumes presses
         let PointerState::Located { output, p } = self.pointer else {
@@ -933,6 +1320,25 @@ impl Core {
         if let (true, Some(camera), Some(start)) =
             (acquire, camera, camera.and_then(|c| self.cameras.center(c)))
         {
+            let mut start = start;
+            if self.fullscreen_pan && let Some(pres) = self.presentation(output) {
+                if !self.is_presentation_suppressed(output) {
+                    if let Some((anchor, tree, _)) = self.stage.mapped(pres) {
+                        let extent = self.output(output).map(|m| m.logical_extent()).unwrap_or((1920.0, 1080.0));
+                        let margin_x = ((extent.0 - f64::from(tree.geometry.size.w)) / 2.0).max(0.0);
+                        let margin_y = ((extent.1 - f64::from(tree.geometry.size.h)) / 2.0).max(0.0);
+                        let pres_center = crate::geom::CanvasPos {
+                            x: crate::geom::q16(anchor.x as f64 - margin_x + extent.0 / 2.0),
+                            y: crate::geom::q16(anchor.y as f64 - margin_y + extent.1 / 2.0),
+                        };
+                        if let Some(p) = proof {
+                            self.cameras.set_zoom_and_center(p, camera, 1.0, pres_center);
+                        }
+                        start = pres_center;
+                    }
+                    self.suppress_presentation(output);
+                }
+            }
             // M6 Idle → Panning: the press is consumed; KeepFocus (no event).
             // OB-4: Dismiss active popup grabs before the camera change.
             self.input.interaction = Interaction::CameraPan {
@@ -1148,8 +1554,10 @@ impl Core {
             .output(output)
             .and_then(|_| self.cameras.camera_for_output(output))
             .ok_or(ShellError::UnknownOutput)?;
-        if self.presentation(output).is_some() {
-            return Err(ShellError::Presenting);
+        if let Some(pres) = self.presentation(output) {
+            if self.focus.target() == Some(pres) {
+                return Err(ShellError::Presenting);
+            }
         }
         if self.input.interaction.active() {
             return Err(ShellError::Busy);
@@ -1399,6 +1807,7 @@ mod tests {
     use crate::navigation::PersistedCameras;
     use crate::output::tests::key;
     use crate::output::{OutputDescriptor, OutputId, OutputKey, Transform};
+    use crate::input::bindings::{BTN_MIDDLE, Modifiers};
     use crate::pointer::PointerState;
     use crate::protocol::Effect;
     use crate::{Core, EntryError};
@@ -2203,5 +2612,681 @@ mod tests {
         // and the new reference is kept from then on
         pan(&mut c, &mut i, (-50.0 * zoom, 0.0));
         assert_eq!(c.view(a).unwrap().r, v2.r);
+    }
+
+    #[test]
+    fn super_shift_scroll_and_middle_click_zoom_controls() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let cam = camera_of(&c, a);
+        assert_eq!(c.cameras().zoom(cam), Some(1.0));
+
+        let logo_shift = Modifiers {
+            logo: true,
+            shift: true,
+            ctrl: false,
+            alt: false,
+        };
+
+        // 1. Super+Shift key press updates seat modifiers
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key: crate::input::keys::KEY_LEFTMETA,
+                    pressed: true,
+                    modifiers: logo_shift,
+                    mods_changed: true,
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+
+        // 2. Super+Shift+Scroll up (v120: negative) zooms in
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::PointerAxis {
+                    axis: crate::input::Axis {
+                        source: crate::input::AxisSource::Wheel,
+                        amount: (0.0, -15.0),
+                        v120: (0, -120),
+                    },
+                    time_us: 2000,
+                },
+            )
+            .unwrap();
+        let zoomed = c.cameras().zoom(cam).unwrap();
+        assert!(zoomed > 1.0, "zoom {zoomed} should be > 1.0 after scroll up");
+
+        // 3. Super+Shift+Middle Click resets zoom to 1.0
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::PointerButton {
+                    button: BTN_MIDDLE,
+                    pressed: true,
+                    modifiers: logo_shift,
+                    time_us: 3000,
+                },
+            )
+            .unwrap();
+        let reset = c.cameras().zoom(cam).unwrap();
+        assert_eq!(reset, 1.0, "zoom reset should return to 1.0");
+    }
+
+    #[test]
+    fn rts_pan_mode_updates_pointer_to_track_canvas() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (_a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_pan_mode(crate::navigation::PanMode::Rts);
+
+        let PointerState::Located { p: p0, .. } = c.pointer else {
+            panic!("pointer not located");
+        };
+
+        // Middle button press with Logo initiates pan
+        let logo = Modifiers {
+            logo: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+        };
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::PointerButton {
+                    button: BTN_MIDDLE,
+                    pressed: true,
+                    modifiers: logo,
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+
+        // Pointer motion during RTS pan: delta (20.0, 10.0)
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::PointerMotion {
+                    delta: (20.0, 10.0),
+                    delta_unaccel: (20.0, 10.0),
+                    time_us: 2000,
+                },
+            )
+            .unwrap();
+
+        let PointerState::Located { p: p1, .. } = c.pointer else {
+            panic!("pointer not located");
+        };
+        assert_eq!(
+            p1.0,
+            p0.0 - 20.0,
+            "pointer should shift opposite delta to track canvas"
+        );
+        assert_eq!(
+            p1.1,
+            p0.1 - 10.0,
+            "pointer should shift opposite delta to track canvas"
+        );
+    }
+
+    #[test]
+    fn focus_follows_mouse_hover_focuses_window() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        use std::num::NonZeroU64;
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+
+        let w = c.toplevel_created();
+        let win = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(NonZeroU64::new(k).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        c.toplevel_committed(w, win(1, 400, 300, false)).unwrap();
+        c.toplevel_committed(w, win(1, 400, 300, true)).unwrap();
+        c.render_list(a).unwrap();
+
+        assert_eq!(c.focus().target(), None);
+
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::PointerMotion {
+                    delta: (1.0, 1.0),
+                    delta_unaccel: (1.0, 1.0),
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            c.focus().target(),
+            Some(w),
+            "focus follows mouse should focus hovered window"
+        );
+    }
+
+    #[test]
+    fn focus_follows_mouse_strict_clears_focus_on_empty_canvas() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        use std::num::NonZeroU64;
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+        c.set_focus_follows_mouse_strict(true);
+
+        let w = c.toplevel_created();
+        let win = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(NonZeroU64::new(k).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        c.toplevel_committed(w, win(1, 400, 300, false)).unwrap();
+        c.toplevel_committed(w, win(1, 400, 300, true)).unwrap();
+        c.render_list(a).unwrap();
+
+        // 1. Move over the window at center (961, 541)
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::PointerMotion {
+                    delta: (1.0, 1.0),
+                    delta_unaccel: (1.0, 1.0),
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+        assert_eq!(c.focus().target(), Some(w));
+
+        // 2. Move away into empty canvas corner (delta: -900, -500 -> logical (61, 41))
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::PointerMotion {
+                    delta: (-900.0, -500.0),
+                    delta_unaccel: (-900.0, -500.0),
+                    time_us: 2000,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            c.focus().target(),
+            None,
+            "strict focus-follows-mouse must clear focus over empty canvas"
+        );
+    }
+
+    #[test]
+    fn focus_cycle_navigate_recenters_camera() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        use std::num::NonZeroU64;
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_cycle_navigate(true);
+
+        let w1 = c.toplevel_created();
+        let w2 = c.toplevel_created();
+        let win = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(NonZeroU64::new(k).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        c.toplevel_committed(w1, win(1, 400, 300, false)).unwrap();
+        c.toplevel_committed(w1, win(1, 400, 300, true)).unwrap();
+        c.toplevel_committed(w2, win(2, 400, 300, false)).unwrap();
+        c.toplevel_committed(w2, win(2, 400, 300, true)).unwrap();
+        c.render_list(a).unwrap();
+
+        c.set_focus(&mut i, Some(w1)).unwrap();
+        assert_eq!(c.focus().target(), Some(w1));
+
+        let logo = Modifiers {
+            logo: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+        };
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key: crate::input::keys::KEY_TAB,
+                    pressed: true,
+                    modifiers: logo,
+                    mods_changed: false,
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(c.focus().target(), Some(w2), "focus should cycle to w2");
+    }
+
+    #[test]
+    fn fullscreen_allows_instant_super_slot_switching_without_modal_lock() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        use std::num::NonZeroU64;
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+
+        let w1 = c.toplevel_created();
+        let w2 = c.toplevel_created();
+        let win = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(NonZeroU64::new(k).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        c.toplevel_committed(w1, win(1, 400, 300, false)).unwrap();
+        c.toplevel_committed(w1, win(1, 400, 300, true)).unwrap();
+        c.toplevel_committed(w2, win(2, 400, 300, false)).unwrap();
+        c.toplevel_committed(w2, win(2, 400, 300, true)).unwrap();
+        c.render_list(a).unwrap();
+
+        // Focus w1 and enter fullscreen
+        c.set_focus(&mut i, Some(w1)).unwrap();
+        c.toplevel_request(w1, crate::protocol::ToplevelRequest::SetFullscreen { output: Some(a) }).unwrap();
+        c.toplevel_committed(w1, win(1, 1920, 1080, true)).unwrap();
+        assert_eq!(c.presentation(a), Some(w1));
+        assert_eq!(c.view(a).unwrap().only, Some(w1), "w1 is presented fullscreen");
+
+        let logo = Modifiers {
+            logo: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+        };
+
+        // Press Super+2 to switch to slot 1 (w2)
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key: crate::input::keys::KEY_2,
+                    pressed: true,
+                    modifiers: logo,
+                    mods_changed: false,
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(c.focus().target(), Some(w2), "focus moves to w2 without modal lock");
+        assert!(c.view(a).unwrap().only.is_none(), "view is now normal camera view showing w2");
+
+        // Press Super+1 to switch back to slot 0 (w1, the fullscreen app)
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key: crate::input::keys::KEY_1,
+                    pressed: true,
+                    modifiers: logo,
+                    mods_changed: false,
+                    time_us: 2000,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(c.focus().target(), Some(w1), "focus returns to w1");
+        assert_eq!(c.view(a).unwrap().only, Some(w1), "w1 is presented fullscreen again");
+    }
+
+    #[test]
+    fn maximize_pushes_overlapping_windows_into_cluster_slot() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        use std::num::NonZeroU64;
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+
+        let w1 = c.toplevel_created();
+        let w2 = c.toplevel_created();
+        let win = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(NonZeroU64::new(k).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        // Initial windowed mapping: w1 and w2 side-by-side
+        c.toplevel_committed(w1, win(1, 800, 600, false)).unwrap();
+        c.toplevel_committed(w1, win(1, 800, 600, true)).unwrap();
+        c.toplevel_committed(w2, win(2, 800, 600, false)).unwrap();
+        c.toplevel_committed(w2, win(2, 800, 600, true)).unwrap();
+        c.render_list(a).unwrap();
+
+        // Place w1 at (0, 0) and w2 at (812, 0)
+        let mut out = Vec::new();
+        c.place_by_shell(w1, crate::geom::CanvasPoint { x: 0, y: 0 }, &mut out).unwrap();
+        c.place_by_shell(w2, crate::geom::CanvasPoint { x: 812, y: 0 }, &mut out).unwrap();
+
+        // Focus w1
+        c.set_focus(&mut i, Some(w1)).unwrap();
+        c.set_enter_mode(crate::EnterMode::Maximize);
+
+        // Move pointer to (10, 10) on output A
+        let _ = c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerMotion {
+                delta: (10.0, 10.0),
+                delta_unaccel: (10.0, 10.0),
+                time_us: 1000,
+            },
+        ).unwrap();
+
+        let logo = Modifiers {
+            logo: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+        };
+
+        // Press Super+Enter on w1
+        let _ = c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::KeyboardKey {
+                key: crate::input::keys::KEY_ENTER,
+                pressed: true,
+                modifiers: logo,
+                mods_changed: false,
+                time_us: 2000,
+            },
+        ).unwrap();
+
+        // w1 expands to fill viewport (-960..960, -540..540)
+        // w2 was at (812, 0) which would be covered by w1's right edge at x=960!
+        // push_overlapping_cluster should displace w2 to (960 + 12 = 972, 0)
+        let anchor_w1 = c.stage().anchor(w1).unwrap();
+        let anchor_w2 = c.stage().anchor(w2).unwrap();
+        println!("anchor_w1: {anchor_w1:?}, anchor_w2: {anchor_w2:?}");
+        assert_eq!(anchor_w1.x, -960);
+        assert_eq!(anchor_w1.y, -540);
+        assert_eq!(anchor_w2.x, 972, "w2 should be displaced to x=972 flush with 12px gap from w1's right edge (+960)");
+        assert_eq!(anchor_w2.y, 0);
+    }
+
+    #[test]
+    fn fullscreen_pushes_overlapping_windows_into_cluster_slot() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        use std::num::NonZeroU64;
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+
+        let w1 = c.toplevel_created();
+        let w2 = c.toplevel_created();
+        let win = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(NonZeroU64::new(k).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+
+        c.set_placement_policy(crate::PlacementPolicy::ClusterTiling);
+
+        // Initial windowed mapping: w1 and w2 side-by-side
+        c.toplevel_committed(w1, win(1, 800, 600, false)).unwrap();
+        c.toplevel_committed(w1, win(1, 800, 600, true)).unwrap();
+        c.toplevel_committed(w2, win(2, 800, 600, false)).unwrap();
+        c.toplevel_committed(w2, win(2, 800, 600, true)).unwrap();
+        c.render_list(a).unwrap();
+
+        // Place w1 at (0, 0) and w2 at (812, 0)
+        let mut out = Vec::new();
+        c.place_by_shell(w1, crate::geom::CanvasPoint { x: 0, y: 0 }, &mut out).unwrap();
+        c.place_by_shell(w2, crate::geom::CanvasPoint { x: 812, y: 0 }, &mut out).unwrap();
+
+        // Focus w1
+        c.set_focus(&mut i, Some(w1)).unwrap();
+
+        // Move pointer to (10, 10) on output A
+        let _ = c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerMotion {
+                delta: (10.0, 10.0),
+                delta_unaccel: (10.0, 10.0),
+                time_us: 1000,
+            },
+        ).unwrap();
+
+        let logo_shift = Modifiers {
+            logo: true,
+            shift: true,
+            ctrl: false,
+            alt: false,
+        };
+
+        // Press Super+Shift+Enter on w1 to toggle fullscreen
+        let _ = c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::KeyboardKey {
+                key: crate::input::keys::KEY_ENTER,
+                pressed: true,
+                modifiers: logo_shift,
+                mods_changed: false,
+                time_us: 2000,
+            },
+        ).unwrap();
+
+        // w1 expands to fill viewport (-960..960, -540..540)
+        // w2 was at (812, 0), so smart cluster tiling pushes w2 to (960 + 12 = 972, 0)
+        let anchor_w1 = c.stage().anchor(w1).unwrap();
+        let anchor_w2 = c.stage().anchor(w2).unwrap();
+        assert_eq!(anchor_w1.x, -960);
+        assert_eq!(anchor_w1.y, -540);
+        assert_eq!(anchor_w2.x, 972, "w2 must be displaced to x=972 to avoid being covered by fullscreen w1");
+        assert_eq!(anchor_w2.y, 0);
+
+        // Release Enter key
+        let _ = c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::KeyboardKey {
+                key: crate::input::keys::KEY_ENTER,
+                pressed: false,
+                modifiers: logo_shift,
+                mods_changed: false,
+                time_us: 2500,
+            },
+        ).unwrap();
+
+        // Toggle fullscreen off (Super+Shift+Enter again)
+        let _ = c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::KeyboardKey {
+                key: crate::input::keys::KEY_ENTER,
+                pressed: true,
+                modifiers: logo_shift,
+                mods_changed: false,
+                time_us: 3000,
+            },
+        ).unwrap();
+
+        // w1 restores to original floating anchor (0, 0)
+        let restored_w1 = c.stage().anchor(w1).unwrap();
+        assert_eq!(restored_w1.x, 0);
+        assert_eq!(restored_w1.y, 0);
+        // w2 remains at (972, 0)
+        assert_eq!(c.stage().anchor(w2).unwrap().x, 972);
+    }
+
+    #[test]
+    fn super_middle_mouse_pans_out_of_fullscreen_presentation() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        use std::num::NonZeroU64;
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        c.set_fullscreen_pan(true);
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+
+        let w1 = c.toplevel_created();
+        let win = |mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w: 1920, h: 1080 },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(NonZeroU64::new(1).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped { LocalSize { w: 1920, h: 1080 } } else { LocalSize::default() },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        c.toplevel_committed(w1, win(false)).unwrap();
+        c.toplevel_committed(w1, win(true)).unwrap();
+        c.set_focus(&mut i, Some(w1)).unwrap();
+        c.toplevel_request(w1, crate::protocol::ToplevelRequest::SetFullscreen { output: Some(a) }).unwrap();
+        c.toplevel_committed(w1, win(true)).unwrap();
+
+        assert_eq!(c.presentation(a), Some(w1));
+        assert_eq!(c.view(a).unwrap().only, Some(w1), "initially presenting fullscreen");
+
+        let logo = Modifiers {
+            logo: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+        };
+
+        // Press Super + BTN_MIDDLE
+        let _ = c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerButton {
+                button: crate::input::bindings::BTN_MIDDLE,
+                pressed: true,
+                modifiers: logo,
+                time_us: 1000,
+            },
+        ).unwrap();
+
+        // Drag mouse by delta (200.0, 100.0)
+        let _ = c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerMotion {
+                delta: (200.0, 100.0),
+                delta_unaccel: (200.0, 100.0),
+                time_us: 2000,
+            },
+        ).unwrap();
+
+        // View has switched out of exclusive presentation to camera view!
+        assert!(c.view(a).unwrap().only.is_none(), "view transitioned to camera view allowing user to pan out of fullscreen");
+
+        // Release BTN_MIDDLE
+        let _ = c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerButton {
+                button: crate::input::bindings::BTN_MIDDLE,
+                pressed: false,
+                modifiers: logo,
+                time_us: 3000,
+            },
+        ).unwrap();
+
+        assert!(c.view(a).unwrap().only.is_none(), "still in camera view after pan completes");
+
+        // Pressing Super+1 focuses w1 and returns to fullscreen presentation
+        let _ = c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::KeyboardKey {
+                key: crate::input::keys::KEY_1,
+                pressed: true,
+                modifiers: logo,
+                mods_changed: false,
+                time_us: 4000,
+            },
+        ).unwrap();
+
+        assert_eq!(c.view(a).unwrap().only, Some(w1), "Super+1 restores exclusive fullscreen presentation");
     }
 }

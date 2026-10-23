@@ -17,6 +17,7 @@ pub(crate) struct InputState {
     pub(crate) key_ownership: ownership::Ownership,
     pub(crate) interaction: interaction::Interaction,
     pub(crate) clock: InputClock,
+    pub(crate) modifiers: bindings::Modifiers,
 }
 
 /// The input-event clock as Core has seen it: the latest time a device stamped on a physical

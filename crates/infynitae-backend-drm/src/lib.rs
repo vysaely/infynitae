@@ -33,11 +33,14 @@ use smithay::backend::drm::exporter::gbm::GbmFramebufferExporter;
 use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::input::{
-    Axis, AxisSource, ButtonState, Event, InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent,
-    PointerButtonEvent, PointerMotionEvent,
+    AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyState,
+    KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
-use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+use smithay::backend::renderer::{Renderer, TextureFilter};
+use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Texture};
+use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SeatEvent, Session as _};
 use smithay::output::OutputModeSource;
@@ -46,7 +49,10 @@ use smithay::reexports::drm::control::{Device as _, ModeTypeFlags, connector, cr
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_server::Display;
-use smithay::utils::DeviceFd;
+use smithay::reexports::wayland_server::Resource;
+use smithay::utils::{DeviceFd, Rectangle};
+use smithay::wayland::shm::with_buffer_contents_mut;
+use infynitae_wayland::screencopy::Flags;
 
 /// Evdev codes of the keys the backend takes for itself (T6).
 const KEY_BACKSPACE: u32 = 14;
@@ -70,6 +76,8 @@ pub struct ConsoleOptions {
     pub xwayland_satellite: Option<PathBuf>,
     /// Output scale ×120 for every screen (`None`: 120, i.e. 1.0).
     pub scale_120: Option<u32>,
+    /// Scaling texture filter ("nearest" for 0% blur, "linear" for smooth).
+    pub scaling_filter: Option<String>,
 }
 
 /// What the console takes before Core sees a key (T6), given the evdev code and whether Ctrl and
@@ -141,6 +149,7 @@ struct Screen {
     k: f64,
     /// A frame is queued and its vblank has not come yet.
     pending: bool,
+    screencopy_texture: Option<GlesTexture>,
 }
 
 struct LoopData {
@@ -159,6 +168,10 @@ struct LoopData {
     quit: bool,
     /// Keys taken by the console (T6): their releases are not passed on either.
     taken: Vec<u32>,
+    /// Active keyboard devices for hardware LED synchronization (Caps Lock, Num Lock).
+    keyboards: Vec<smithay::reexports::input::Device>,
+    /// Last absolute pointer logical position, used to compute delta for absolute devices (e.g. RustDesk, tablets).
+    last_abs_pointer: Option<(f64, f64)>,
 }
 
 /// The device limit Core is told: assumed, not queried, as in the nested backend (OB-52, INC-13).
@@ -225,7 +238,18 @@ pub fn run_console_with(
     let fd = DrmDeviceFd::new(DeviceFd::from(fd));
     let (mut drm, drm_notifier) = DrmDevice::new(fd.clone(), true)?;
     let gbm = GbmDevice::new(fd.clone())?;
-    let renderer = gles_renderer(&gbm)?;
+    let mut renderer = gles_renderer(&gbm)?;
+
+    // Zero-blur scaling: use Nearest-neighbor filtering on upscaled surfaces by default
+    let use_nearest = match options.scaling_filter.as_deref() {
+        Some("linear") => false,
+        _ => true,
+    };
+    if use_nearest {
+        if let Err(e) = renderer.upscale_filter(TextureFilter::Nearest) {
+            eprintln!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
+        }
+    }
     let allocator = GbmAllocator::new(
         gbm.clone(),
         GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
@@ -328,6 +352,7 @@ pub fn run_console_with(
             compositor,
             k,
             pending: false,
+            screencopy_texture: None,
         });
     }
     if screens.is_empty() {
@@ -437,6 +462,8 @@ pub fn run_console_with(
         active: true,
         quit: false,
         taken: Vec::new(),
+        keyboards: Vec::new(),
+        last_abs_pointer: None,
     };
 
     println!("[infynitae] Compositor running. Ctrl+Alt+Backspace quits.");
@@ -446,6 +473,10 @@ pub fn run_console_with(
         let restart = xwayland
             .as_mut()
             .and_then(|x| x.poll(std::time::Instant::now()));
+        let has_screencopy = data.screens.iter().any(|s| data.state.screencopy.has_pending(s.id));
+        if has_screencopy {
+            data.session.request_frame();
+        }
         let timeout = match (data.session.timeout(), restart) {
             (Some(a), Some(b)) => Some(a.min(b)),
             (a, b) => a.or(b),
@@ -483,7 +514,8 @@ pub fn run_console_with(
             data.session.flush();
         }
 
-        if data.session.frame_due() && data.active {
+        let has_screencopy = data.screens.iter().any(|s| data.state.screencopy.has_pending(s.id));
+        if (data.session.frame_due() || has_screencopy) && data.active {
             render(&mut data);
         }
 
@@ -515,10 +547,26 @@ pub fn run_console_with(
 fn render(data: &mut LoopData) {
     let clear = data.state.clear_color();
     for i in 0..data.screens.len() {
+        let id = data.screens[i].id;
+        let size = data.screens[i].size;
+
+        // Screencopy frame capture if requested (Discord, OBS, WebRTC, RustDesk).
+        // Screencopy renders to an offscreen buffer and does not depend on DRM page flip / vblank.
+        // Handling this first ensures pending screencopy requests are consumed immediately,
+        // preventing the event loop from busy-spinning while DRM page flip is pending.
+        handle_screencopy(
+            &mut data.state,
+            &mut data.renderer,
+            &mut data.screens[i].screencopy_texture,
+            id,
+            size,
+            clear,
+        );
+
         if data.screens[i].pending {
             continue;
         }
-        let id = data.screens[i].id;
+
         let (elements, k) = match convert::output_elements(&mut data.state, &mut data.renderer, id)
         {
             Ok(r) => r,
@@ -541,7 +589,7 @@ fn render(data: &mut LoopData) {
             &mut data.renderer,
             &elements,
             clear,
-            FrameFlags::DEFAULT,
+            FrameFlags::empty(),
         ) {
             Ok(result) if !result.is_empty => match s.compositor.queue_frame(()) {
                 Ok(()) => true,
@@ -565,6 +613,215 @@ fn render(data: &mut LoopData) {
         }
     }
     data.session.flush();
+}
+
+#[allow(unsafe_code)]
+fn handle_screencopy(
+    state: &mut WaylandState,
+    renderer: &mut GlesRenderer,
+    screencopy_texture: &mut Option<GlesTexture>,
+    output_id: OutputId,
+    size: (i32, i32),
+    clear: smithay::backend::renderer::Color32F,
+) {
+    if !state.screencopy.has_pending(output_id) {
+        return;
+    }
+    let pending = state.screencopy.take_pending(output_id);
+    if pending.is_empty() {
+        return;
+    }
+
+    let needs_cursor = !state.screencopy.hide_cursor() && pending.iter().any(|p| p.overlay_cursor);
+    let (elements, k) = match convert::output_elements_opt(state, renderer, output_id, needs_cursor) {
+        Ok(res) => res,
+        Err(e) => {
+            eprintln!("[screencopy] Failed to get elements: {e:?}");
+            for p in pending {
+                p.frame.failed();
+            }
+            return;
+        }
+    };
+
+    if screencopy_texture.as_ref().is_none_or(|t| t.width() != size.0 as u32 || t.height() != size.1 as u32) {
+        match Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Argb8888, size.into()) {
+            Ok(b) => *screencopy_texture = Some(b),
+            Err(e) => {
+                eprintln!("[screencopy] Failed to create offscreen buffer: {e:?}");
+                for p in pending {
+                    p.frame.failed();
+                }
+                return;
+            }
+        }
+    }
+
+    let offscreen = screencopy_texture.as_mut().unwrap();
+    let mut framebuffer = match renderer.bind(offscreen) {
+        Ok(fb) => fb,
+        Err(e) => {
+            eprintln!("[screencopy] Failed to bind offscreen buffer: {e:?}");
+            for p in pending {
+                p.frame.failed();
+            }
+            return;
+        }
+    };
+
+    let mut damage_tracker = OutputDamageTracker::new(size, smithay::utils::Scale::from(k), smithay::utils::Transform::Normal);
+    if let Err(e) = damage_tracker.render_output(renderer, &mut framebuffer, 0, &elements, clear) {
+        eprintln!("[screencopy] Failed to render output: {e:?}");
+        for p in pending {
+            p.frame.failed();
+        }
+        return;
+    }
+
+    let mapping = match ExportMem::copy_framebuffer(renderer, &framebuffer, Rectangle::from_size(size.into()), Fourcc::Argb8888) {
+        Ok(m) => m,
+        Err(e) => {
+            eprintln!("[screencopy] Failed to copy framebuffer: {e:?}");
+            for p in pending {
+                p.frame.failed();
+            }
+            return;
+        }
+    };
+
+    let slice = match ExportMem::map_texture(renderer, &mapping) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("[screencopy] Failed to map texture: {e:?}");
+            for p in pending {
+                p.frame.failed();
+            }
+            return;
+        }
+    };
+
+    let now = infynitae_wayland::presentation_clock_now();
+    let tv_sec_hi = (now.as_secs() >> 32) as u32;
+    let tv_sec_lo = (now.as_secs() & 0xFFFFFFFF) as u32;
+    let tv_nsec = now.subsec_nanos();
+
+    let src_stride = (size.0 * 4) as usize;
+
+    for req in pending {
+        let (rx, ry) = req
+            .region
+            .map(|(x, y, _, _)| (x.max(0) as usize, y.max(0) as usize))
+            .unwrap_or((0, 0));
+
+        let copy_result = with_buffer_contents_mut(&req.buffer, |ptr, len, buffer_data| {
+            if buffer_data.format != smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888
+                && buffer_data.format != smithay::reexports::wayland_server::protocol::wl_shm::Format::Xrgb8888
+            {
+                return false;
+            }
+            let h = (buffer_data.height.max(0) as usize).min(size.1 as usize);
+            let w_bytes = (buffer_data.width.max(0) as usize).min(size.0 as usize) * 4;
+            let dest_stride = buffer_data.stride.max(0) as usize;
+            let offset = buffer_data.offset.max(0) as usize;
+
+            if dest_stride < w_bytes {
+                return false;
+            }
+            let total_required = match dest_stride
+                .checked_mul(h.saturating_sub(1))
+                .and_then(|v| v.checked_add(w_bytes))
+                .and_then(|v| v.checked_add(offset))
+            {
+                Some(bytes) => bytes,
+                None => return false,
+            };
+            if total_required > len {
+                return false;
+            }
+
+            // SAFETY: bounds verified: `dest_stride >= w_bytes`, `total_required <= len`,
+            // and `src_offset + w_bytes <= slice.len()`.
+            unsafe {
+                let dest_base = ptr.add(offset);
+                for row in 0..h {
+                    let src_row_idx = (ry + row).min(size.1.max(0) as usize);
+                    let src_offset = src_row_idx * src_stride + rx * 4;
+                    if src_offset + w_bytes <= slice.len() {
+                        let src_row = &slice[src_offset..(src_offset + w_bytes)];
+                        let dest_row = dest_base.add(row * dest_stride);
+                        std::ptr::copy_nonoverlapping(src_row.as_ptr(), dest_row, w_bytes);
+                    }
+                }
+            }
+            true
+        });
+
+        let mut copied = matches!(copy_result, Ok(true));
+        if !copied {
+            // If not wl_shm, try linux-dmabuf buffer (used by xdg-desktop-portal-wlr with PipeWire)
+            if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&req.buffer) {
+                use smithay::backend::renderer::ImportDma;
+                if let Ok(mut dmabuf_tex) = renderer.import_dmabuf(dmabuf, None) {
+                    if let Ok(mut dmabuf_fb) = renderer.bind(&mut dmabuf_tex) {
+                        let mut damage_tracker = OutputDamageTracker::new(size, 1.0, smithay::utils::Transform::Normal);
+                        if damage_tracker.render_output(renderer, &mut dmabuf_fb, 0, &elements, clear).is_ok() {
+                            copied = true;
+                        }
+                    }
+                }
+
+                if !copied {
+                    use smithay::backend::allocator::Buffer;
+                    use smithay::backend::allocator::dmabuf::{DmabufMappingMode, DmabufSyncFlags};
+
+                    if let Ok(mapping) = dmabuf.map_plane(0, DmabufMappingMode::WRITE) {
+                        let _ = dmabuf.sync_plane(0, DmabufSyncFlags::WRITE | DmabufSyncFlags::START);
+                        let ptr = mapping.ptr() as *mut u8;
+                        let len = mapping.length();
+                        let dest_stride = dmabuf.strides().next().unwrap_or((size.0 * 4) as u32) as usize;
+                        let offset = dmabuf.offsets().next().unwrap_or(0) as usize;
+                        let h = (dmabuf.size().h.max(0) as usize).min(size.1 as usize);
+                        let w_bytes = (dmabuf.size().w.max(0) as usize).min(size.0 as usize) * 4;
+
+                        if dest_stride >= w_bytes {
+                            let total_required = dest_stride
+                                .checked_mul(h.saturating_sub(1))
+                                .and_then(|v| v.checked_add(w_bytes))
+                                .and_then(|v| v.checked_add(offset));
+                            if let Some(total) = total_required
+                                && total <= len
+                            {
+                                unsafe {
+                                    let dest_base = ptr.add(offset);
+                                    for row in 0..h {
+                                        let src_row_idx = (ry + row).min(size.1.max(0) as usize);
+                                        let src_offset = src_row_idx * src_stride + rx * 4;
+                                        if src_offset + w_bytes <= slice.len() {
+                                            let src_row = &slice[src_offset..(src_offset + w_bytes)];
+                                            let dest_row = dest_base.add(row * dest_stride);
+                                            std::ptr::copy_nonoverlapping(src_row.as_ptr(), dest_row, w_bytes);
+                                        }
+                                    }
+                                }
+                                let _ = dmabuf.sync_plane(0, DmabufSyncFlags::WRITE | DmabufSyncFlags::END);
+                                copied = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if copied {
+            if req.with_damage && req.frame.version() >= 2 {
+                req.frame.damage(0, 0, size.0 as u32, size.1 as u32);
+            }
+            req.frame.flags(Flags::empty());
+            req.frame.ready(tv_sec_hi, tv_sec_lo, tv_nsec);
+        } else {
+            req.frame.failed();
+        }
+    }
 }
 
 fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
@@ -596,12 +853,14 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 return;
             }
             let time_us = Event::time(&event);
+            let mut dev = Event::device(&event);
             if let Ok(token) = data
                 .state
                 .core()
                 .verify_input_port(&data.input_port, key, pressed)
             {
                 let (modifiers, mods_changed) = data.state.sync_seat_key(token);
+                update_keyboard_leds(&data.state, &mut data.keyboards, &mut dev);
                 let phys = PhysicalEvent::KeyboardKey {
                     key,
                     pressed,
@@ -616,6 +875,7 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             }
         }
         InputEvent::PointerMotion { event } => {
+            data.last_abs_pointer = None;
             let scale = (f64::from(data.scale_120) / 120.0).max(0.001);
             let delta = (event.delta_x() / scale, event.delta_y() / scale);
             let delta_unaccel = (
@@ -633,10 +893,48 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 .state
                 .with_effects(|core, fx| core.physical_input(port, phys, fx));
         }
+        InputEvent::PointerMotionAbsolute { event } => {
+            let current_ptr = data.state.core().pointer();
+            let (current_output, current_p) = match current_ptr {
+                infynitae_core::pointer::PointerState::Located { output, p } => (Some(output), p),
+                infynitae_core::pointer::PointerState::NoOutput => (None, (0.0, 0.0)),
+            };
+            let screen = current_output
+                .and_then(|out_id| data.screens.iter().find(|s| s.id == out_id))
+                .or_else(|| data.screens.first());
+            let (target_phys_x, target_phys_y) = match screen {
+                Some(s) => (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
+                None => (event.x(), event.y()),
+            };
+            let delta = calculate_abs_pointer_delta(
+                (target_phys_x, target_phys_y),
+                current_p,
+                data.scale_120,
+            );
+            let scale = (f64::from(data.scale_120) / 120.0).max(0.001);
+            data.last_abs_pointer = Some((target_phys_x / scale, target_phys_y / scale));
+
+            if delta.0.abs() > 0.0001 || delta.1.abs() > 0.0001 {
+                let time_us = Event::time(&event);
+                let phys = PhysicalEvent::PointerMotion {
+                    delta,
+                    delta_unaccel: delta,
+                    time_us,
+                };
+                let port = &mut data.input_port;
+                let _ = data
+                    .state
+                    .with_effects(|core, fx| core.physical_input(port, phys, fx));
+            }
+        }
         InputEvent::PointerButton { event } => {
+            let pressed = matches!(event.state(), ButtonState::Pressed);
+            if !pressed {
+                data.last_abs_pointer = None;
+            }
             let phys = PhysicalEvent::PointerButton {
                 button: event.button_code(),
-                pressed: matches!(event.state(), ButtonState::Pressed),
+                pressed,
                 modifiers: data.state.seat_modifiers(),
                 time_us: Event::time(&event),
             };
@@ -669,9 +967,63 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
         }
         InputEvent::DeviceAdded { mut device } => {
             configure_input_device(&mut device);
+            if device.has_capability(smithay::reexports::input::DeviceCapability::Keyboard) {
+                let led_state = data.state.keyboard_led_state();
+                let mut leds = smithay::reexports::input::Led::empty();
+                if led_state.caps.unwrap_or(false) {
+                    leds |= smithay::reexports::input::Led::CAPSLOCK;
+                }
+                if led_state.num.unwrap_or(false) {
+                    leds |= smithay::reexports::input::Led::NUMLOCK;
+                }
+                if led_state.scroll.unwrap_or(false) {
+                    leds |= smithay::reexports::input::Led::SCROLLLOCK;
+                }
+                device.led_update(leds);
+                data.keyboards.push(device);
+            }
+        }
+        InputEvent::DeviceRemoved { device } => {
+            data.keyboards.retain(|k| k.sysname() != device.sysname());
+            data.last_abs_pointer = None;
         }
         _ => {}
     }
+}
+
+fn update_keyboard_leds(
+    state: &WaylandState,
+    keyboards: &mut [smithay::reexports::input::Device],
+    current: &mut smithay::reexports::input::Device,
+) {
+    use smithay::reexports::input::Led;
+    let led_state = state.keyboard_led_state();
+    let mut leds = Led::empty();
+    if led_state.caps.unwrap_or(false) {
+        leds |= Led::CAPSLOCK;
+    }
+    if led_state.num.unwrap_or(false) {
+        leds |= Led::NUMLOCK;
+    }
+    if led_state.scroll.unwrap_or(false) {
+        leds |= Led::SCROLLLOCK;
+    }
+    current.led_update(leds);
+    for kb in keyboards.iter_mut() {
+        kb.led_update(leds);
+    }
+}
+
+/// Calculates the logical pointer delta needed to move from `current_p` to an absolute position
+/// `(abs_x, abs_y)` transformed to screen pixels and normalized by `scale_120`.
+pub fn calculate_abs_pointer_delta(
+    abs_px: (f64, f64),
+    current_p: (f64, f64),
+    scale_120: u32,
+) -> (f64, f64) {
+    let scale = (f64::from(scale_120) / 120.0).max(0.001);
+    let target_logical = (abs_px.0 / scale, abs_px.1 / scale);
+    (target_logical.0 - current_p.0, target_logical.1 - current_p.1)
 }
 
 fn configure_input_device(device: &mut smithay::reexports::input::Device) {
@@ -684,19 +1036,19 @@ fn configure_input_device(device: &mut smithay::reexports::input::Device) {
             "adaptive" => Some(AccelProfile::Adaptive),
             _ => None,
         };
-        if let Some(p) = desired {
-            if device.config_accel_profiles().contains(&p) {
-                let _ = device.config_accel_set_profile(p);
-            }
+        if let Some(p) = desired
+            && device.config_accel_profiles().contains(&p)
+        {
+            let _ = device.config_accel_set_profile(p);
         }
     }
 
     // 2. Pointer Speed / Sensitivity (-1.0 to 1.0, 0.0 is default)
-    if let Ok(speed_str) = std::env::var("MOUSE_ACCEL_SPEED") {
-        if let Ok(speed) = speed_str.parse::<f64>() {
-            let clamped = speed.clamp(-1.0, 1.0);
-            let _ = device.config_accel_set_speed(clamped);
-        }
+    if let Ok(speed_str) = std::env::var("MOUSE_ACCEL_SPEED")
+        && let Ok(speed) = speed_str.parse::<f64>()
+    {
+        let clamped = speed.clamp(-1.0, 1.0);
+        let _ = device.config_accel_set_speed(clamped);
     }
 
     // 3. Touchpad Tap-to-click
@@ -788,5 +1140,17 @@ mod tests {
         assert_eq!(refresh_mhz(148_500, 2200, 1125, 60), 60_000);
         assert_eq!(refresh_mhz(148_352, 2200, 1125, 60), 59_940);
         assert_eq!(refresh_mhz(0, 0, 0, 75), 75_000);
+    }
+
+    #[test]
+    fn pointer_motion_absolute_delta_maps_to_target() {
+        // 1.0x scale (120/120)
+        let delta = calculate_abs_pointer_delta((100.0, 200.0), (960.0, 540.0), 120);
+        assert_eq!(delta, (-860.0, -340.0));
+        assert_eq!((960.0 + delta.0, 540.0 + delta.1), (100.0, 200.0));
+
+        // 2.0x scale (240/120)
+        let delta = calculate_abs_pointer_delta((1000.0, 800.0), (0.0, 0.0), 240);
+        assert_eq!(delta, (500.0, 400.0));
     }
 }

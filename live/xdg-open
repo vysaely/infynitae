@@ -1,0 +1,11 @@
+#!/bin/sh
+# Infynitae non-blocking URL and file opener wrapper
+# Ensures CLI tools, OAuth handlers, and scripts do not hang on synchronous browser launch
+if command -v gio >/dev/null 2>&1; then
+    exec gio open "$@"
+elif [ -x /usr/bin/xdg-open ]; then
+    exec /usr/bin/xdg-open "$@"
+else
+    echo "No suitable opener found (gio or /usr/bin/xdg-open)" >&2
+    exit 1
+fi

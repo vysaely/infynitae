@@ -226,7 +226,19 @@ pub enum EntryError {
     InvalidEvent,
 }
 
+pub use protocol::PlacementPolicy;
+
 /// Why no frame could be produced for an output.
+/// Behavior of Super+Enter: Maximize (True native viewport fill, 100% crisp) or Fit (camera zoom).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum EnterMode {
+    /// Super+Enter fits the camera to the window (legacy camera zoom).
+    #[default]
+    Fit,
+    /// Super+Enter maximizes the window to fill the usable viewport at 100% native resolution (no blur).
+    Maximize,
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum FrameError {
     /// The output is not connected.
@@ -366,6 +378,20 @@ pub struct Core {
     /// OBJ-17: frame liveness of every element (M16). Written by the commit entry points,
     /// `frame_tick`, `frame_kick` and `frame_fallback` only.
     frame_liveness: frames::FrameLiveness,
+    /// Canvas pan interaction style (Grab vs Rts).
+    pub pan_mode: navigation::PanMode,
+    /// Whether keyboard focus follows pointer hover (Focus Follows Mouse).
+    pub focus_follows_mouse: bool,
+    /// Whether focus is cleared when pointer hovers over empty canvas (Strict vs Sloppy).
+    pub focus_follows_mouse_strict: bool,
+    /// Whether focus cycling (Super+Tab) moves the camera to the focused window.
+    pub focus_cycle_navigate: bool,
+    /// Super+Enter action mode: Maximize (True native viewport fill) vs Fit (camera zoom).
+    pub enter_mode: EnterMode,
+    /// Outputs on which fullscreen presentation is temporarily suppressed (e.g. user navigated to another window).
+    pub(crate) presentation_suppressed: Vec<output::OutputId>,
+    /// Whether Super+Middle pan or camera navigation moves out of fullscreen presentation.
+    pub fullscreen_pan: bool,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
     /// protocol state fail its `Send` assertion (built through infynitae-wayland's probe feature).
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -433,6 +459,13 @@ impl Core {
                 next_layer: 0,
                 usable: Vec::new(),
                 windowed_placement_pending: Vec::new(),
+                pan_mode: navigation::PanMode::default(),
+                focus_follows_mouse: false,
+                focus_follows_mouse_strict: false,
+                focus_cycle_navigate: false,
+                enter_mode: EnterMode::default(),
+                presentation_suppressed: Vec::new(),
+                fullscreen_pan: false,
                 frame_liveness: frames::FrameLiveness::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
@@ -504,6 +537,82 @@ impl Core {
     /// `Strict`). Moves no focus by itself.
     pub fn set_activation_policy(&mut self, policy: input::focus::ActivationPolicy) {
         self.focus.set_activation_policy(policy);
+    }
+
+    /// Sets the canvas pan mode (`Grab` for paper dragging or `Rts` for camera scrolling).
+    pub fn set_pan_mode(&mut self, mode: navigation::PanMode) {
+        self.pan_mode = mode;
+    }
+
+    /// Sets the action of Super+Enter (`Fit` for camera zoom or `Maximize` for native 100% crisp viewport fill).
+    pub fn set_enter_mode(&mut self, mode: EnterMode) {
+        self.enter_mode = mode;
+    }
+
+    /// Read access to the Super+Enter mode.
+    pub fn enter_mode(&self) -> EnterMode {
+        self.enter_mode
+    }
+
+    /// Sets whether keyboard focus follows mouse pointer motion (hover-to-focus).
+    pub fn set_focus_follows_mouse(&mut self, enabled: bool) {
+        self.focus_follows_mouse = enabled;
+    }
+
+    /// Read access to whether focus follows mouse motion.
+    pub fn focus_follows_mouse(&self) -> bool {
+        self.focus_follows_mouse
+    }
+
+    /// Sets whether focus follows mouse in strict mode (clears focus when hovering canvas).
+    pub fn set_focus_follows_mouse_strict(&mut self, strict: bool) {
+        self.focus_follows_mouse_strict = strict;
+    }
+
+    /// Read access to whether focus follows mouse is in strict mode.
+    pub fn focus_follows_mouse_strict(&self) -> bool {
+        self.focus_follows_mouse_strict
+    }
+
+    /// Sets whether Super+Tab focus cycling automatically moves camera to the focused window.
+    pub fn set_focus_cycle_navigate(&mut self, enabled: bool) {
+        self.focus_cycle_navigate = enabled;
+    }
+
+    /// Read access to whether focus cycling navigates the camera.
+    pub fn focus_cycle_navigate(&self) -> bool {
+        self.focus_cycle_navigate
+    }
+
+    /// Whether fullscreen presentation is temporarily suppressed on `output`.
+    pub fn is_presentation_suppressed(&self, output: output::OutputId) -> bool {
+        self.presentation_suppressed.contains(&output)
+    }
+
+    /// Temporarily suppresses fullscreen presentation on `output` (e.g. to reveal canvas or other windows).
+    pub fn suppress_presentation(&mut self, output: output::OutputId) {
+        if !self.presentation_suppressed.contains(&output) {
+            self.presentation_suppressed.push(output);
+            self.invalidate_frame(output);
+        }
+    }
+
+    /// Unsuppresses fullscreen presentation on `output` (returning to exclusive fullscreen presentation).
+    pub fn unsuppress_presentation(&mut self, output: output::OutputId) {
+        if let Some(pos) = self.presentation_suppressed.iter().position(|&o| o == output) {
+            self.presentation_suppressed.swap_remove(pos);
+            self.invalidate_frame(output);
+        }
+    }
+
+    /// Sets whether Super+Middle pan or camera navigation moves out of fullscreen presentation.
+    pub fn set_fullscreen_pan(&mut self, enabled: bool) {
+        self.fullscreen_pan = enabled;
+    }
+
+    /// Read access to whether fullscreen pan is enabled.
+    pub fn fullscreen_pan(&self) -> bool {
+        self.fullscreen_pan
     }
 
     /// Read access to the authoritative active pointer constraint (OBJ-21).
@@ -600,11 +709,7 @@ impl Core {
 
     /// The mapped elements in creation order (for Super+1..9 slot focus).
     pub(crate) fn focusable_elements_in_creation_order(&self) -> Vec<stage::ElementId> {
-        let mut live = self.stage.mapped_in_creation_order();
-        if self.presenting() {
-            live.retain(|&e| !self.hidden_by_presentation(e));
-        }
-        live
+        self.stage.mapped_in_creation_order()
     }
 
     /// Windows partitioned into connected spatial clusters (sorted by earliest creation order).
@@ -850,7 +955,17 @@ impl Core {
             | E::SpawnFileManager
             | E::SpawnScreenshot
             | E::ToggleOverview
-            | E::ReloadShell => {}
+            | E::SpawnRegionScreenshot
+            | E::ReloadShell
+            | E::SpawnLockScreen
+            | E::VolumeUp
+            | E::VolumeDown
+            | E::VolumeMute
+            | E::BrightnessUp
+            | E::BrightnessDown
+            | E::MediaPlayPause
+            | E::MediaNext
+            | E::MediaPrev => {}
         }
         recipients.map(|r| {
             r.filter(|&e| {
@@ -1433,8 +1548,10 @@ impl Core {
     /// camera is not consulted, read or changed while a presentation view replaces it.
     pub fn view(&self, output: output::OutputId) -> Option<projection::View> {
         let model = self.outputs.iter().find(|o| o.id == output)?;
-        if let Some(view) = self.presentation_view(model) {
-            return Some(view);
+        if self.presentation(output).is_some() && !self.is_presentation_suppressed(output) {
+            if let Some(view) = self.presentation_view(model) {
+                return Some(view);
+            }
         }
         self.camera_view(output)
     }

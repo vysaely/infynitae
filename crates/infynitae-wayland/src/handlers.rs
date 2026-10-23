@@ -38,11 +38,12 @@ use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_fractional_scale, delegate_output,
+    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale, delegate_output,
     delegate_pointer_constraints, delegate_presentation, delegate_primary_selection,
     delegate_relative_pointer, delegate_seat, delegate_shm, delegate_viewporter,
-    delegate_xdg_activation, delegate_xdg_shell,
+    delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
 };
+use smithay::wayland::dmabuf::{DmabufHandler, DmabufState};
 
 use crate::{ClientState, ElementHandle, WaylandState, convert, snapshot};
 
@@ -355,6 +356,23 @@ impl BufferHandler for WaylandState {
     fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
 }
 
+impl DmabufHandler for WaylandState {
+    fn dmabuf_state(&mut self) -> &mut DmabufState {
+        &mut self.dmabuf
+    }
+
+    fn dmabuf_imported(
+        &mut self,
+        _global: &smithay::wayland::dmabuf::DmabufGlobal,
+        _dmabuf: smithay::backend::allocator::dmabuf::Dmabuf,
+        notifier: smithay::wayland::dmabuf::ImportNotifier,
+    ) {
+        let _ = notifier.successful::<WaylandState>();
+    }
+}
+
+delegate_dmabuf!(WaylandState);
+
 impl ShmHandler for WaylandState {
     fn shm_state(&self) -> &ShmState {
         &self.shm
@@ -454,6 +472,7 @@ impl XdgShellHandler for WaylandState {
         self.elements
             .retain(|e| e.window.toplevel() != Some(&surface));
         for id in gone {
+            self.border_ids.remove(&id);
             let effects = self.core.toplevel_destroyed(id);
             self.apply(&effects);
         }
@@ -739,6 +758,33 @@ delegate_primary_selection!(WaylandState);
 /// Smithay sends the current state and enters for already-entered surfaces on bind.
 impl OutputHandler for WaylandState {}
 
+impl smithay::wayland::shell::xdg::decoration::XdgDecorationHandler for WaylandState {
+    fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode::ServerSide);
+        });
+        toplevel.send_configure();
+    }
+
+    fn request_mode(
+        &mut self,
+        toplevel: ToplevelSurface,
+        mode: smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode,
+    ) {
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(mode);
+        });
+        toplevel.send_configure();
+    }
+
+    fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode::ServerSide);
+        });
+        toplevel.send_configure();
+    }
+}
+
 delegate_compositor!(WaylandState);
 delegate_fractional_scale!(WaylandState);
 delegate_output!(WaylandState);
@@ -750,6 +796,7 @@ delegate_shm!(WaylandState);
 delegate_viewporter!(WaylandState);
 delegate_xdg_shell!(WaylandState);
 delegate_xdg_activation!(WaylandState);
+delegate_xdg_decoration!(WaylandState);
 
 /// W-SM-8: whether an activation token passed the provenance check when it was created.
 struct TokenProvenance {

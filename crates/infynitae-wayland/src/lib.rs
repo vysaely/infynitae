@@ -27,6 +27,7 @@ mod outputs;
 pub mod ownership;
 mod pointer;
 pub mod registry;
+pub mod screencopy;
 pub mod session;
 mod signals;
 mod snapshot;
@@ -42,6 +43,7 @@ use smithay::input::{Seat, SeatState};
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
+use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufState};
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::output::OutputManagerState;
 use smithay::wayland::pointer_constraints::PointerConstraintsState;
@@ -162,6 +164,8 @@ pub struct WaylandState {
     elements: Vec<ElementHandle>,
     pub(crate) serial_outputs:
         std::collections::VecDeque<(smithay::utils::Serial, infynitae_core::output::OutputId)>,
+    pub screencopy: screencopy::ScreencopyState,
+    pub dmabuf: DmabufState,
     pub(crate) popup_pointer_grab_serial: Option<smithay::utils::Serial>,
     /// Install serial of the popup keyboard grab (the latest level of the chain), the identity by
     /// which teardown releases exactly that grab (A1).
@@ -171,6 +175,17 @@ pub struct WaylandState {
     effects: infynitae_core::protocol::EffectBuf,
     /// Reused storage: the elements one frame tick completes.
     ticked: Vec<infynitae_core::stage::ElementId>,
+    #[expect(
+        dead_code,
+        reason = "owns the zxdg_decoration_manager_v1 global for the state's lifetime"
+    )]
+    xdg_decoration: smithay::wayland::shell::xdg::decoration::XdgDecorationState,
+    pub border_width: i32,
+    pub border_ignore_csd: bool,
+    pub border_active: smithay::backend::renderer::Color32F,
+    pub border_inactive: smithay::backend::renderer::Color32F,
+    pub border_ids: std::collections::HashMap<infynitae_core::stage::ElementId, [smithay::backend::renderer::element::Id; 4]>,
+    pub rendered_elements: Vec<infynitae_core::stage::ElementId>,
     // probe builds only: the Send assertion must be the one and only error
     #[cfg(feature = "probe_store_port_in_state")]
     leaked_port: infynitae_core::InputPort,
@@ -234,10 +249,68 @@ impl WaylandState {
         let repeat_rate = std::env::var("KEYBOARD_REPEAT_RATE")
             .ok()
             .and_then(|s| s.parse::<i32>().ok())
-            .unwrap_or(35);
+            .unwrap_or(25);
         seat.add_keyboard(Default::default(), repeat_delay, repeat_rate)
             .expect("the seat has a keyboard");
         let capabilities = convert::wm_capabilities(core.toplevel_capabilities());
+
+        let mut border_width = 1;
+        let mut border_ignore_csd = true;
+        let mut border_active = smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0);
+        let mut border_inactive = smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 0.8);
+
+        if let Ok(w) = std::env::var("BORDER_WIDTH") {
+            if let Ok(w) = w.parse::<i32>() {
+                border_width = w.max(0);
+            }
+        }
+        if let Ok(b) = std::env::var("BORDER_IGNORE_CSD") {
+            border_ignore_csd = !matches!(b.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+        }
+        if let Ok(c) = std::env::var("BORDER_ACTIVE") {
+            if let Some(c) = parse_color_hex(&c) {
+                border_active = c;
+            }
+        }
+        if let Ok(c) = std::env::var("BORDER_INACTIVE") {
+            if let Some(c) = parse_color_hex(&c) {
+                border_inactive = c;
+            }
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            let config_path = format!("{home}/.config/infynitae/config");
+            if let Ok(content) = std::fs::read_to_string(config_path) {
+                for line in content.lines() {
+                    let line_clean = line.split('#').next().unwrap_or("").trim();
+                    if let Some((k, v)) = line_clean.split_once('=') {
+                        let key = k.trim();
+                        let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                        match key {
+                            "BORDER_WIDTH" => {
+                                if let Ok(w) = val.parse::<i32>() {
+                                    border_width = w.max(0);
+                                }
+                            }
+                            "BORDER_IGNORE_CSD" => {
+                                border_ignore_csd = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                            }
+                            "BORDER_ACTIVE" => {
+                                if let Some(c) = parse_color_hex(val) {
+                                    border_active = c;
+                                }
+                            }
+                            "BORDER_INACTIVE" => {
+                                if let Some(c) = parse_color_hex(val) {
+                                    border_inactive = c;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
         WaylandState {
             core,
             dh: display.clone(),
@@ -274,14 +347,83 @@ impl WaylandState {
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),
+            screencopy: screencopy::ScreencopyState::new(display),
+            dmabuf: {
+                use std::os::unix::fs::MetadataExt;
+                let mut d = DmabufState::new();
+                let formats = [
+                    smithay::backend::allocator::Format {
+                        code: smithay::backend::allocator::Fourcc::Argb8888,
+                        modifier: smithay::backend::allocator::Modifier::Linear,
+                    },
+                    smithay::backend::allocator::Format {
+                        code: smithay::backend::allocator::Fourcc::Xrgb8888,
+                        modifier: smithay::backend::allocator::Modifier::Linear,
+                    },
+                ];
+                let dev = [
+                    "/dev/dri/renderD128",
+                    "/dev/dri/renderD129",
+                    "/dev/dri/card0",
+                    "/dev/dri/card1",
+                    "/dev/dri/card2",
+                ]
+                .iter()
+                .find_map(|p| std::fs::metadata(p).ok().map(|m| m.rdev()))
+                .or_else(|| {
+                    std::fs::read_dir("/dev/dri").ok()?.filter_map(|e| e.ok()).find_map(|e| {
+                        let name = e.file_name();
+                        let name_str = name.to_string_lossy();
+                        if name_str.starts_with("renderD") || name_str.starts_with("card") {
+                            e.metadata().ok().map(|m| m.rdev())
+                        } else {
+                            None
+                        }
+                    })
+                })
+                .unwrap_or(0) as libc::dev_t;
+                if let Ok(feedback) = DmabufFeedbackBuilder::new(dev, formats).build() {
+                    let _ = d.create_global_with_default_feedback::<Self>(display, &feedback);
+                } else {
+                    let _ = d.create_global::<Self>(display, formats);
+                }
+                d
+            },
             effects: infynitae_core::protocol::EffectBuf::new(),
             ticked: Vec::new(),
+            xdg_decoration: smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(display),
+            border_width,
+            border_ignore_csd,
+            border_active,
+            border_inactive,
+            border_ids: std::collections::HashMap::new(),
+            rendered_elements: Vec::new(),
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
             leaked_port: unreachable!(),
             #[cfg(feature = "probe_store_output_token_in_state")]
             leaked_token: unreachable!(),
         }
+    }
+
+    pub fn set_border_config(
+        &mut self,
+        width: i32,
+        active: smithay::backend::renderer::Color32F,
+        inactive: smithay::backend::renderer::Color32F,
+    ) {
+        self.border_width = width.max(0);
+        self.border_active = active;
+        self.border_inactive = inactive;
+    }
+
+    /// Whether an element's toplevel negotiated Client-Side Decorations (CSD).
+    pub fn is_csd_element(&self, element: infynitae_core::stage::ElementId) -> bool {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+        self.window(element)
+            .and_then(|w| w.toplevel())
+            .map(|t| t.current_state().decoration_mode == Some(Mode::ClientSide))
+            .unwrap_or(false)
     }
 
     pub fn core(&self) -> &Core {
@@ -409,6 +551,11 @@ impl WaylandState {
         (modifiers, mods_changed)
     }
 
+    /// Returns the seat keyboard's active LED indicator state (Caps Lock, Num Lock, Scroll Lock).
+    pub fn keyboard_led_state(&self) -> smithay::input::keyboard::LedState {
+        self.keyboard_handle().led_state()
+    }
+
     /// Returns the number of interaction serials currently held in the provenance ring buffer.
     pub fn serial_outputs_len(&self) -> usize {
         self.serial_outputs.len()
@@ -436,6 +583,25 @@ impl WaylandState {
             .rev()
             .find(|(s, _)| *s == serial)
             .map(|(_, o)| *o)
+    }
+}
+
+/// Parses a hex color `#RRGGBB` or `#RRGGBBAA` into a `Color32F`.
+pub fn parse_color_hex(hex: &str) -> Option<smithay::backend::renderer::Color32F> {
+    let s = hex.trim().trim_matches(|c| c == '"' || c == '\'').trim_start_matches('#');
+    if s.len() == 6 {
+        let r = u8::from_str_radix(&s[0..2], 16).ok()? as f32 / 255.0;
+        let g = u8::from_str_radix(&s[2..4], 16).ok()? as f32 / 255.0;
+        let b = u8::from_str_radix(&s[4..6], 16).ok()? as f32 / 255.0;
+        Some(smithay::backend::renderer::Color32F::new(r, g, b, 1.0))
+    } else if s.len() == 8 {
+        let r = u8::from_str_radix(&s[0..2], 16).ok()? as f32 / 255.0;
+        let g = u8::from_str_radix(&s[2..4], 16).ok()? as f32 / 255.0;
+        let b = u8::from_str_radix(&s[4..6], 16).ok()? as f32 / 255.0;
+        let a = u8::from_str_radix(&s[6..8], 16).ok()? as f32 / 255.0;
+        Some(smithay::backend::renderer::Color32F::new(r, g, b, a))
+    } else {
+        None
     }
 }
 

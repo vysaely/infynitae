@@ -31,7 +31,17 @@ pub const KEY_W: u32 = 17;
 pub const KEY_E: u32 = 18;
 pub const KEY_S: u32 = 31;
 pub const KEY_R: u32 = 19;
+pub const KEY_BACKSPACE: u32 = 14;
 pub const KEY_SYSRQ: u32 = 99;
+pub const KEY_L: u32 = 38;
+pub const KEY_MUTE: u32 = 113;
+pub const KEY_VOLUMEDOWN: u32 = 114;
+pub const KEY_VOLUMEUP: u32 = 115;
+pub const KEY_PLAYPAUSE: u32 = 164;
+pub const KEY_NEXTSONG: u32 = 163;
+pub const KEY_PREVIOUSSONG: u32 = 165;
+pub const KEY_BRIGHTNESSDOWN: u32 = 224;
+pub const KEY_BRIGHTNESSUP: u32 = 225;
 
 /// An action triggered by a matched compositor key binding.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,12 +57,32 @@ pub enum KeyAction {
     SpawnTerminal,
     /// Super+E: launches file manager
     SpawnFileManager,
-    /// Super+Shift+S or PrintScreen: capture screenshot
+    /// Super+Shift+S or PrintScreen: capture fullscreen screenshot
     SpawnScreenshot,
+    /// Super+Shift+R: capture region screenshot
+    SpawnRegionScreenshot,
     /// Super+Shift+Tab: toggles canvas overview radar
     ToggleOverview,
-    /// Super+Shift+R: reload shell UI and scripts
+    /// Super+Shift+BackSpace: reload shell UI and scripts
     ReloadShell,
+    /// Super+L: lock screen
+    SpawnLockScreen,
+    /// Hardware Volume Up
+    VolumeUp,
+    /// Hardware Volume Down
+    VolumeDown,
+    /// Hardware Volume Mute
+    VolumeMute,
+    /// Hardware Brightness Up
+    BrightnessUp,
+    /// Hardware Brightness Down
+    BrightnessDown,
+    /// Hardware Media Play / Pause
+    MediaPlayPause,
+    /// Hardware Media Next Song
+    MediaNext,
+    /// Hardware Media Previous Song
+    MediaPrev,
 
     Cancel,
     /// F-FIT-1 on the pointer's output, for the element under the pointer (INC-10).
@@ -202,9 +232,31 @@ pub fn resolve_key_binding(
     {
         return Some(KeyAction::SpawnScreenshot);
     }
-    // Super+Shift+R: reload shell UI and scripts; Logo+Shift, never during interaction
+    // Super+Shift+R: region screenshot; Logo+Shift, never during interaction
     if key == KEY_R && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::SpawnRegionScreenshot);
+    }
+    // Super+Shift+BackSpace: reload shell UI and scripts; Logo+Shift, never during interaction
+    if key == KEY_BACKSPACE && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ReloadShell);
+    }
+    // Super+L: lock screen; Logo, never during interaction
+    if key == KEY_L && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::SpawnLockScreen);
+    }
+    // Hardware media and volume keys: triggered directly on keypress, never during interaction
+    if !interaction_active {
+        match key {
+            KEY_VOLUMEUP => return Some(KeyAction::VolumeUp),
+            KEY_VOLUMEDOWN => return Some(KeyAction::VolumeDown),
+            KEY_MUTE => return Some(KeyAction::VolumeMute),
+            KEY_BRIGHTNESSUP => return Some(KeyAction::BrightnessUp),
+            KEY_BRIGHTNESSDOWN => return Some(KeyAction::BrightnessDown),
+            KEY_PLAYPAUSE => return Some(KeyAction::MediaPlayPause),
+            KEY_NEXTSONG => return Some(KeyAction::MediaNext),
+            KEY_PREVIOUSSONG => return Some(KeyAction::MediaPrev),
+            _ => {}
+        }
     }
 
     for b in &CANONICAL_BINDINGS {
@@ -314,6 +366,10 @@ mod tests {
         );
         assert_eq!(
             resolve_key_binding(KEY_R, logo_shift, false),
+            Some(KeyAction::SpawnRegionScreenshot)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_BACKSPACE, logo_shift, false),
             Some(KeyAction::ReloadShell)
         );
         assert_eq!(
@@ -490,5 +546,53 @@ mod tests {
         );
         assert_eq!(resolve_key_binding(KEY_Q, logo, true), None);
         assert_eq!(resolve_key_binding(KEY_E, logo, true), None);
+    }
+
+    #[test]
+    fn media_keys_and_lock_screen_bindings() {
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let none = Modifiers::default();
+        assert_eq!(
+            resolve_key_binding(KEY_L, logo, false),
+            Some(KeyAction::SpawnLockScreen)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_VOLUMEUP, none, false),
+            Some(KeyAction::VolumeUp)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_VOLUMEDOWN, none, false),
+            Some(KeyAction::VolumeDown)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_MUTE, none, false),
+            Some(KeyAction::VolumeMute)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_BRIGHTNESSUP, none, false),
+            Some(KeyAction::BrightnessUp)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_BRIGHTNESSDOWN, none, false),
+            Some(KeyAction::BrightnessDown)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_PLAYPAUSE, none, false),
+            Some(KeyAction::MediaPlayPause)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_NEXTSONG, none, false),
+            Some(KeyAction::MediaNext)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_PREVIOUSSONG, none, false),
+            Some(KeyAction::MediaPrev)
+        );
+        // During interaction: None
+        assert_eq!(resolve_key_binding(KEY_VOLUMEUP, none, true), None);
+        assert_eq!(resolve_key_binding(KEY_L, logo, true), None);
     }
 }

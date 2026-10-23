@@ -30,11 +30,19 @@ else
     INSTALL_DIR="$(pwd)"
 fi
 
-# 2. Check and install core system dependencies (universal build & graphics libraries)
+# 2. Run universal hardware detection & graphics driver setup (Vulkan, 32-bit, Xwayland)
+if [ -f "live/setup-drivers.sh" ]; then
+    chmod +x live/setup-drivers.sh
+    ./live/setup-drivers.sh
+elif [ -f "$INSTALL_DIR/live/setup-drivers.sh" ]; then
+    chmod +x "$INSTALL_DIR/live/setup-drivers.sh"
+    "$INSTALL_DIR/live/setup-drivers.sh"
+fi
+
 echo "==> Checking essential system packages..."
 PKGS=()
-# Universal core: build tools, mesa (universal DRM/GBM/GLES for AMD/Intel/Nvidia), libinput, seatd
-for pkg in base-devel mesa libinput seatd; do
+# Universal core: build tools, libinput, seatd, portals (screenshare/dialogs), pipewire, polkit, screenshots, wallpaper, Xwayland/Steam support
+for pkg in base-devel libinput seatd xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber polkit swaybg grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
     if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
         PKGS+=("$pkg")
     fi
@@ -86,7 +94,13 @@ cp -f live/dev.sh "$HOME/.local/bin/infynitae-dev"
 chmod +x "$HOME/.local/bin/infynitae-dev"
 cp -f live/settings.sh "$HOME/.local/bin/infynitae-settings"
 chmod +x "$HOME/.local/bin/infynitae-settings"
-echo "==> Installed binaries to ~/.local/bin/{infynitae, infynitae-dev, infynitae-settings}"
+cp -f live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
+chmod +x "$HOME/.local/bin/infynitae-drivers"
+cp -f update.sh "$HOME/.local/bin/infynitae-update"
+chmod +x "$HOME/.local/bin/infynitae-update"
+cp -f live/wallpaper/infynitae-wallpaper.sh "$HOME/.local/bin/infynitae-wallpaper"
+chmod +x "$HOME/.local/bin/infynitae-wallpaper"
+echo "==> Installed binaries to ~/.local/bin/{infynitae, infynitae-dev, infynitae-settings, infynitae-drivers, infynitae-update, infynitae-wallpaper}"
 
 # 7. Deploy live runtime scripts & companion helpers
 mkdir -p "$HOME/infynitae/live"
@@ -95,15 +109,34 @@ DST_LIVE="$(cd "$HOME/infynitae/live" 2>/dev/null && pwd -P || echo "")"
 if [ -n "$SRC_LIVE" ] && [ "$SRC_LIVE" != "$DST_LIVE" ]; then
     cp -rf live/* "$HOME/infynitae/live/"
 fi
+if [ -f "$HOME/infynitae/live/portal/infynitae-portal.c" ] && pkg-config --exists gio-2.0 2>/dev/null; then
+    gcc -O2 "$HOME/infynitae/live/portal/infynitae-portal.c" $(pkg-config --cflags --libs gio-2.0) -o "$HOME/.local/bin/infynitae-portal" 2>/dev/null || true
+    chmod +x "$HOME/.local/bin/infynitae-portal" 2>/dev/null || true
+fi
+if [ -f "$HOME/infynitae/live/polkit/infynitae-polkit.c" ] && pkg-config --exists polkit-agent-1 gtk+-3.0 2>/dev/null; then
+    gcc -O2 "$HOME/infynitae/live/polkit/infynitae-polkit.c" $(pkg-config --cflags --libs polkit-agent-1 gtk+-3.0) -o "$HOME/.local/bin/infynitae-polkit" 2>/dev/null || true
+    chmod +x "$HOME/.local/bin/infynitae-polkit" 2>/dev/null || true
+fi
 chmod +x "$HOME/infynitae/live"/*.sh "$HOME/infynitae/live"/*.py 2>/dev/null || true
 
-# 8. Deploy default configuration
+# Deploy XDG Desktop Portal GlobalShortcuts backend definition
+mkdir -p "$HOME/.local/share/xdg-desktop-portal/portals"
+cat << 'EOF' > "$HOME/.local/share/xdg-desktop-portal/portals/infynitae.portal"
+[portal]
+DBusName=org.freedesktop.impl.portal.desktop.infynitae
+Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;
+UseIn=infynitae;wlroots;
+EOF
+
+# 8. Deploy default configuration safely (preserving user changes)
 mkdir -p "$HOME/.config/infynitae"
-if [ -d "config" ]; then
-    SRC_CFG="$(cd config 2>/dev/null && pwd -P || echo "")"
-    DST_CFG="$(cd "$HOME/.config/infynitae" 2>/dev/null && pwd -P || echo "")"
-    if [ -n "$SRC_CFG" ] && [ "$SRC_CFG" != "$DST_CFG" ]; then
-        cp -rf config/* "$HOME/.config/infynitae/" 2>/dev/null || true
+if [ -f "config/config" ]; then
+    if [ ! -f "$HOME/.config/infynitae/config" ]; then
+        cp -f "config/config" "$HOME/.config/infynitae/config"
+        echo "==> Created default configuration at ~/.config/infynitae/config"
+    else
+        cp -f "config/config" "$HOME/.config/infynitae/config.template"
+        echo "==> User config preserved at ~/.config/infynitae/config (template saved to config.template)"
     fi
 fi
 
@@ -182,10 +215,16 @@ fi
 exit $STATUS
 EOF
 chmod +x "$HOME/.local/bin/infynitae-session"
+cp -f "$HOME/infynitae/live/xdg-open" "$HOME/.local/bin/xdg-open" 2>/dev/null || true
+chmod +x "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 
 # Also install into /usr/local/bin so commands work immediately in current shell and display managers
 sudo mkdir -p /usr/local/bin 2>/dev/null || true
-sudo cp -f "$HOME/.local/bin/infynitae" "$HOME/.local/bin/infynitae-session" "$HOME/.local/bin/infynitae-dev" "$HOME/.local/bin/infynitae-settings" /usr/local/bin/ 2>/dev/null || true
+for b in infynitae infynitae-session infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
+    if [ -f "$HOME/.local/bin/$b" ]; then
+        sudo cp -f "$HOME/.local/bin/$b" /usr/local/bin/ 2>/dev/null || true
+    fi
+done
 
 # 10. Ensure ~/.local/bin is in user PATH across interactive and login shells
 for prof in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
@@ -204,6 +243,10 @@ Exec=infynitae-session
 Type=Application
 DesktopNames=infynitae;wlroots
 EOF
+
+# Also make available system-wide for display managers (GDM, SDDM, LightDM)
+sudo mkdir -p /usr/share/wayland-sessions 2>/dev/null || true
+sudo cp -f "$HOME/.local/share/wayland-sessions/infynitae.desktop" /usr/share/wayland-sessions/ 2>/dev/null || true
 
 echo ""
 echo "=========================================================="

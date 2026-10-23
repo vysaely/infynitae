@@ -39,9 +39,15 @@ def send_request(req_obj):
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
+def get_primary_output():
+    snap = send_request({"id": 1, "cmd": "snapshot"})
+    if snap.get("ok") and snap.get("snapshot", {}).get("outputs"):
+        return snap["snapshot"]["outputs"][0]["id"]
+    return 1
+
 def main():
     if len(sys.argv) < 2:
-        print("Usage: infynitae-ipc.py [snapshot|focus <inst> <elem>|navigate <x> <y>]", file=sys.stderr)
+        print("Usage: infynitae-ipc.py [snapshot|focus <inst> <elem>|navigate <x> <y>|restore [output_id]]", file=sys.stderr)
         sys.exit(1)
         
     cmd = sys.argv[1]
@@ -53,10 +59,27 @@ def main():
         elem = int(sys.argv[3])
         res = send_request({"id": 1, "cmd": "focus", "element": [inst, elem]})
         print(json.dumps(res))
-    elif cmd == "navigate" and len(sys.argv) >= 4:
-        x = float(sys.argv[2])
-        y = float(sys.argv[3])
-        res = send_request({"id": 1, "cmd": "navigate", "center": [x, y]})
+    elif cmd == "navigate":
+        out_id = get_primary_output()
+        if len(sys.argv) >= 4 and sys.argv[2] == "element":
+            inst = int(sys.argv[3])
+            elem = int(sys.argv[4])
+            res = send_request({"id": 1, "cmd": "navigate", "output": out_id, "to": {"element": [inst, elem]}})
+            print(json.dumps(res))
+        elif len(sys.argv) >= 4:
+            x = float(sys.argv[2])
+            y = float(sys.argv[3])
+            res = send_request({"id": 1, "cmd": "navigate", "output": out_id, "to": {"canvas": [x, y]}})
+            print(json.dumps(res))
+        else:
+            print("Usage: navigate <x> <y> | navigate element <inst> <elem>", file=sys.stderr)
+            sys.exit(1)
+    elif cmd in ("restore", "viewport_restore"):
+        if len(sys.argv) >= 3:
+            out_id = int(sys.argv[2])
+        else:
+            out_id = get_primary_output()
+        res = send_request({"id": 1, "cmd": "viewport_restore", "output": out_id})
         print(json.dumps(res))
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)

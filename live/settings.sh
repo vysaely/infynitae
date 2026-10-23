@@ -25,8 +25,11 @@ MOUSE_ACCEL_PROFILE="${MOUSE_ACCEL_PROFILE:-flat}"
 MOUSE_ACCEL_SPEED="${MOUSE_ACCEL_SPEED:-0.0}"
 KEYBOARD_REPEAT_DELAY="${KEYBOARD_REPEAT_DELAY:-200}"
 KEYBOARD_REPEAT_RATE="${KEYBOARD_REPEAT_RATE:-35}"
+PAN_MODE="${PAN_MODE:-grab}"
+SCALING_FILTER="${SCALING_FILTER:-nearest}"
+OUTPUT_SCALE="${OUTPUT_SCALE:-1.0}"
 XKB_DEFAULT_LAYOUT="${XKB_DEFAULT_LAYOUT:-us}"
-XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-caps:escape}"
+XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-}"
 
 apply_settings() {
     # 1. Export standard environment variables
@@ -38,6 +41,9 @@ apply_settings() {
     export MOUSE_ACCEL_SPEED="$MOUSE_ACCEL_SPEED"
     export KEYBOARD_REPEAT_DELAY="$KEYBOARD_REPEAT_DELAY"
     export KEYBOARD_REPEAT_RATE="$KEYBOARD_REPEAT_RATE"
+    export PAN_MODE="$PAN_MODE"
+    export SCALING_FILTER="$SCALING_FILTER"
+    export OUTPUT_SCALE="$OUTPUT_SCALE"
 
     # 2. Synchronize Xwayland & Legacy X11 fallback cursor (~/.icons/default/index.theme)
     mkdir -p "$HOME/.icons/default"
@@ -94,7 +100,8 @@ EOF
             MOUSE_ACCEL_PROFILE \
             MOUSE_ACCEL_SPEED \
             KEYBOARD_REPEAT_DELAY \
-            KEYBOARD_REPEAT_RATE 2>/dev/null || true
+            KEYBOARD_REPEAT_RATE \
+            PAN_MODE 2>/dev/null || true
     fi
 }
 
@@ -114,8 +121,8 @@ cmd_set() {
             ;;
     esac
 
-    # Security: escape double quotes and backslashes in VAL
-    VAL_CLEAN=$(printf '%s' "$VAL" | sed -e 's/[\\&]/\\&/g' -e 's/"/\\"/g')
+    # Security: escape delimiter pipes, double quotes and backslashes in VAL
+    VAL_CLEAN=$(printf '%s' "$VAL" | sed -e 's/[\\&|]/\\&/g' -e 's/"/\\"/g')
 
     # Update or append in config file
     if grep -q "^${KEY}=" "$CONFIG_FILE" 2>/dev/null; then
@@ -204,12 +211,25 @@ case "$1" in
         killall qs 2>/dev/null || true
         echo "==> Quickshell UI reloaded."
         ;;
+    restore|reset-zoom)
+        python3 "$HOME/infynitae/live/infynitae-ipc.py" restore
+        echo "==> Canvas viewport restored to default 100% scale (zoom 1.0)."
+        ;;
+    update)
+        if command -v infynitae-update >/dev/null 2>&1; then
+            exec infynitae-update "$@"
+        elif [ -x "$HOME/infynitae/update.sh" ]; then
+            exec "$HOME/infynitae/update.sh" "$@"
+        fi
+        ;;
     *)
         echo "Infynitae Universal Settings Engine (Zero-Bloat)"
         echo "Usage: infynitae-settings <command>"
         echo ""
         echo "Commands:"
         echo "  apply                Sync current ~/.config/infynitae/config across all toolkits"
+        echo "  update               Pull latest changes and recompile release binary"
+        echo "  restore              Reset canvas zoom/viewport back to default 100% native scale"
         echo "  set <KEY> <VALUE>    Update setting and sync immediately (e.g. set CURSOR_THEME Bibata-Modern-Classic)"
         echo "  get <KEY>            Print current setting value"
         echo "  list cursors         List all installed cursor themes"

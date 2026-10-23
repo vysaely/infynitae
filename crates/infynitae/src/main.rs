@@ -12,6 +12,33 @@ use infynitae_core::navigation::PersistedCameras;
 
 mod shell;
 
+fn find_xwayland_satellite() -> Option<std::path::PathBuf> {
+    if let Ok(path) = std::env::var("INFYNITAE_XWAYLAND_SATELLITE") {
+        let p = std::path::PathBuf::from(path);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(paths) = std::env::var_os("PATH") {
+        for dir in std::env::split_paths(&paths) {
+            let candidate = dir.join("xwayland-satellite");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    for standard in [
+        "/usr/local/bin/xwayland-satellite",
+        "/usr/bin/xwayland-satellite",
+    ] {
+        let p = std::path::PathBuf::from(standard);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 fn print_help() {
     println!(
         "\
@@ -35,6 +62,7 @@ OPTIONS:
                              Ctrl+Alt+F1..F12 switch VT
     --nested                 Run as a window of the running desktop even without WAYLAND_DISPLAY
     --scale <FACTOR>         Console screens' scale (e.g. 1.5; default 1)
+    --filter <nearest|linear> Texture scaling filter (default nearest for 0% blur)
     --duration <SECONDS>     Exit after N seconds (useful for tests and automation)
     --max-frames <COUNT>     Exit after N frames (useful for benchmarks and tests)
     --activation-policy <strict|attention-only|permissive>
@@ -43,10 +71,10 @@ OPTIONS:
     --shell-socket <PATH>    The trusted shell's socket (default $XDG_RUNTIME_DIR/infynitae/shell.sock;
                              JSON lines, FOUNDATION_ARCHITECTURE C7)
     --no-shell               No shell socket
+    --no-xwayland            Disable X11 / Xwayland support even if xwayland-satellite is found
     --xwayland-satellite <PATH>
-                             EXPERIMENTAL (INC-12): supervise this xwayland-satellite on an X
-                             display the compositor owns; clients get it as DISPLAY. Off by
-                             default; without it clients get no DISPLAY
+                             Supervise this xwayland-satellite binary on an X display.
+                             Auto-detected from PATH or system locations by default if installed
 "
     );
 }
@@ -83,9 +111,11 @@ fn main() -> ExitCode {
     let mut headless = false;
     let mut tty: Option<bool> = None;
     let mut scale_120: Option<u32> = None;
+    let mut scaling_filter: Option<String> = None;
     let mut duration: Option<Duration> = None;
     let mut max_frames: Option<u64> = None;
     let mut xwayland_satellite: Option<std::path::PathBuf> = None;
+    let mut no_xwayland = false;
     let mut activation_policy = infynitae_core::input::focus::ActivationPolicy::Strict;
     let mut shell_socket = shell::default_path();
 
@@ -164,6 +194,14 @@ fn main() -> ExitCode {
                     }
                 }
             }
+            "--filter" | "--scaling-filter" => {
+                i += 1;
+                if i >= args.len() {
+                    eprintln!("Error: --filter requires an argument (nearest or linear)");
+                    return ExitCode::FAILURE;
+                }
+                scaling_filter = Some(args[i].to_lowercase());
+            }
             "--refresh" => {
                 i += 1;
                 if i >= args.len() {
@@ -233,6 +271,10 @@ fn main() -> ExitCode {
                 shell_socket = Some(p.into());
             }
             "--no-shell" => shell_socket = None,
+            "--no-xwayland" => {
+                no_xwayland = true;
+                xwayland_satellite = None;
+            }
             "--xwayland-satellite" => {
                 i += 1;
                 if i >= args.len() {
@@ -250,9 +292,157 @@ fn main() -> ExitCode {
         i += 1;
     }
 
+    if let Ok(xw) = std::env::var("XWAYLAND") {
+        if matches!(xw.to_lowercase().as_str(), "0" | "false" | "off" | "no") {
+            no_xwayland = true;
+            xwayland_satellite = None;
+        }
+    }
+
+    if !no_xwayland && xwayland_satellite.is_none() {
+        xwayland_satellite = find_xwayland_satellite();
+    }
+
     // Composition root: creates Core and authority ports (FOUNDATION_ARCHITECTURE C1.2, C1.5)
     let (mut core, input_port, shell_port, output_token) = Core::new(PersistedCameras::default());
     core.set_activation_policy(activation_policy);
+    if let Ok(mode) = std::env::var("PAN_MODE") {
+        match mode.to_lowercase().as_str() {
+            "rts" => core.set_pan_mode(infynitae_core::navigation::PanMode::Rts),
+            "free" => core.set_pan_mode(infynitae_core::navigation::PanMode::Free),
+            _ => core.set_pan_mode(infynitae_core::navigation::PanMode::Grab),
+        }
+    }
+    core.set_focus_follows_mouse(true);
+    core.set_focus_follows_mouse_strict(false);
+    core.set_focus_cycle_navigate(true);
+    core.set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+    core.set_enter_mode(infynitae_core::EnterMode::Maximize);
+    core.set_fullscreen_pan(true);
+
+    if let Ok(fp) = std::env::var("FULLSCREEN_PAN") {
+        core.set_fullscreen_pan(!matches!(fp.to_lowercase().as_str(), "0" | "false" | "off" | "no" | "exclusive"));
+    }
+
+    if let Ok(sea) = std::env::var("SUPER_ENTER_ACTION") {
+        if sea.eq_ignore_ascii_case("fit") {
+            core.set_enter_mode(infynitae_core::EnterMode::Fit);
+        } else {
+            core.set_enter_mode(infynitae_core::EnterMode::Maximize);
+        }
+    }
+
+    if let Ok(ffm) = std::env::var("FOCUS_FOLLOWS_MOUSE") {
+        match ffm.to_lowercase().as_str() {
+            "strict" => {
+                core.set_focus_follows_mouse(true);
+                core.set_focus_follows_mouse_strict(true);
+            }
+            "0" | "false" | "off" | "no" | "click" => {
+                core.set_focus_follows_mouse(false);
+                core.set_focus_follows_mouse_strict(false);
+            }
+            _ => {
+                core.set_focus_follows_mouse(true);
+                core.set_focus_follows_mouse_strict(false);
+            }
+        }
+    }
+    if let Ok(fcn) = std::env::var("FOCUS_CYCLE_NAVIGATE") {
+        core.set_focus_cycle_navigate(!matches!(fcn.to_lowercase().as_str(), "0" | "false" | "off" | "no"));
+    }
+    if let Ok(home) = std::env::var("HOME") {
+        let config_path = format!("{home}/.config/infynitae/config");
+        if let Ok(content) = std::fs::read_to_string(config_path) {
+            for line in content.lines() {
+                let line_clean = line.split('#').next().unwrap_or("").trim();
+                if let Some((k, v)) = line_clean.split_once('=') {
+                    let key = k.trim();
+                    let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                    match key {
+                        "PAN_MODE" => {
+                            match val.to_lowercase().as_str() {
+                                "rts" => core.set_pan_mode(infynitae_core::navigation::PanMode::Rts),
+                                "free" => core.set_pan_mode(infynitae_core::navigation::PanMode::Free),
+                                _ => core.set_pan_mode(infynitae_core::navigation::PanMode::Grab),
+                            }
+                        }
+                        "FOCUS_FOLLOWS_MOUSE" => {
+                            match val.to_lowercase().as_str() {
+                                "strict" => {
+                                    core.set_focus_follows_mouse(true);
+                                    core.set_focus_follows_mouse_strict(true);
+                                }
+                                "0" | "false" | "off" | "no" | "click" => {
+                                    core.set_focus_follows_mouse(false);
+                                    core.set_focus_follows_mouse_strict(false);
+                                }
+                                _ => {
+                                    core.set_focus_follows_mouse(true);
+                                    core.set_focus_follows_mouse_strict(false);
+                                }
+                            }
+                        }
+                        "FOCUS_CYCLE_NAVIGATE" => {
+                            let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                            core.set_focus_cycle_navigate(enabled);
+                        }
+                        "PLACEMENT_POLICY" => {
+                            match val.to_lowercase().as_str() {
+                                "center" | "centred" | "centered" => {
+                                    core.set_placement_policy(infynitae_core::PlacementPolicy::CentredInView)
+                                }
+                                "origin" => {
+                                    core.set_placement_policy(infynitae_core::PlacementPolicy::OriginAtCameraCentre)
+                                }
+                                _ => core.set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling),
+                            }
+                        }
+                        "SUPER_ENTER_ACTION" => {
+                            if val.eq_ignore_ascii_case("fit") {
+                                core.set_enter_mode(infynitae_core::EnterMode::Fit);
+                            } else {
+                                core.set_enter_mode(infynitae_core::EnterMode::Maximize);
+                            }
+                        }
+                        "FULLSCREEN_PAN" => {
+                            let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no" | "exclusive");
+                            core.set_fullscreen_pan(enabled);
+                        }
+                        "OUTPUT_SCALE" => {
+                            if scale_120.is_none() {
+                                if let Ok(f) = val.parse::<f64>() {
+                                    if (0.25..=8.0).contains(&f) {
+                                        scale_120 = Some((f * 120.0).round().max(1.0) as u32);
+                                    }
+                                }
+                            }
+                        }
+                        "SCALING_FILTER" => {
+                            if scaling_filter.is_none() {
+                                scaling_filter = Some(val.to_lowercase());
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    if scale_120.is_none() {
+        if let Ok(val) = std::env::var("OUTPUT_SCALE") {
+            if let Ok(f) = val.parse::<f64>() {
+                if (0.25..=8.0).contains(&f) {
+                    scale_120 = Some((f * 120.0).round().max(1.0) as u32);
+                }
+            }
+        }
+    }
+    if scaling_filter.is_none() {
+        if let Ok(val) = std::env::var("SCALING_FILTER") {
+            scaling_filter = Some(val.to_lowercase());
+        }
+    }
     // the ShellPort's only consumer is the shell server (C7.4); without a socket it is dropped
     let extension = shell_socket.map(|path| shell::factory(shell_port, path));
 
@@ -302,6 +492,7 @@ fn main() -> ExitCode {
             max_frames,
             xwayland_satellite,
             scale_120,
+            scaling_filter: scaling_filter.clone(),
         };
         match infynitae_backend_drm::run_console_with(
             core,
@@ -328,6 +519,8 @@ fn main() -> ExitCode {
             duration,
             max_frames,
             xwayland_satellite,
+            scale_120,
+            scaling_filter,
         };
         match infynitae_backend_winit::run_nested_with(
             core,

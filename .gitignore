@@ -21,3 +21,5 @@ __pycache__/
 *.log
 !docs/foundation/audit/**/*.log
 *.tmp
+live/infynitae-portal
+live/infynitae-polkit

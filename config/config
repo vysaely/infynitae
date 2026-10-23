@@ -3,7 +3,7 @@
 # Location: ~/.config/infynitae/config
 #
 # Single source of truth. Zero bloat, zero background daemons.
-# Edit anytime and press Super+Shift+R or run `infynitae-settings apply`.
+# Edit anytime and press Super+Shift+BackSpace or run `infynitae-settings apply`.
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -17,6 +17,12 @@ MOUSE_ACCEL_PROFILE="flat"
 # Pointer Sensitivity (-1.0 to 1.0, 0.0 is default native sensor speed)
 MOUSE_ACCEL_SPEED="0.0"
 
+# Canvas Pan Mode (Super + Middle Drag or Canvas Drag):
+#   "free" - Free pointer pan: canvas moves in drag direction and cursor moves naturally with mouse (recommended for Remote Desktop / RustDesk)
+#   "grab" - Viewport-anchored pan: dragging pulls canvas under pointer, cursor stays at fixed screen position (Photoshop/Blender)
+#   "rts"  - World-anchored camera grip: camera moves in drag direction, cursor tracks canvas coordinates (Dota 2 Camera Grip)
+PAN_MODE="free"
+
 # Keyboard Repeat:
 #   KEYBOARD_REPEAT_DELAY: Milliseconds before key repeat begins (default 200)
 #   KEYBOARD_REPEAT_RATE:  Keystrokes per second when held (default 35, snappy 50)
@@ -25,9 +31,24 @@ KEYBOARD_REPEAT_RATE="35"
 
 # Keyboard Layout & Switching (XKB):
 #   Examples: "us", "us,ru", "us,de"
-#   Toggle Options: "grp:alt_shift_toggle", "caps:escape", "caps:swapescape"
+#   Toggle Options: "grp:alt_shift_toggle", "caps:swapescape", or "" for standard
 XKB_DEFAULT_LAYOUT="us"
-XKB_DEFAULT_OPTIONS="caps:escape"
+XKB_DEFAULT_OPTIONS=""
+
+# Window Focus Model:
+#   "sloppy" (or 1): Focus follows mouse, stays focused when cursor moves over empty canvas
+#   "strict": Focus strictly follows mouse, clears focus when cursor moves over empty canvas
+#   "click" (or 0): Traditional click-to-focus
+FOCUS_FOLLOWS_MOUSE="sloppy"
+
+# Focus Cycling Navigation (Super+Tab):
+#   1 / true: Focus cycle automatically moves the camera to center the newly focused window
+#   0 / false: Focus cycle changes keyboard focus without moving the camera
+FOCUS_CYCLE_NAVIGATE="1"
+
+# Screen Locker (Super+L):
+#   "auto" (tries hyprlock, swaylock, gtklock, waylock), or custom command
+SCREEN_LOCKER="auto"
 
 # Touchpad:
 TOUCHPAD_TAP="true"             # Tap to click
@@ -51,14 +72,49 @@ ICON_THEME="Adwaita"
 # Color Scheme: "prefer-dark" or "prefer-light"
 COLOR_SCHEME="prefer-dark"
 
+# Window Borders (Crisp 1-2px modular border respecting set_window_geometry):
+#   BORDER_WIDTH: Border thickness in pixels (0 to disable, 1 or 2 recommended)
+#   BORDER_IGNORE_CSD: Do not draw square borders around apps that already have rounded CSD borders (Antigravity, Firefox, Chrome)
+#   BORDER_ACTIVE: Hex color for focused window
+#   BORDER_INACTIVE: Hex color for unfocused windows
+BORDER_WIDTH="1"
+BORDER_IGNORE_CSD="true"
+BORDER_ACTIVE="#7aa2f7"
+BORDER_INACTIVE="#333b54"
+
 # ------------------------------------------------------------------------------
 # 3. DISPLAY & CANVAS
 # ------------------------------------------------------------------------------
+# Window Placement Policy:
+#   "cluster" - Cluster Tiling: places new windows at the nearest adjacent free slot closest to center, expanding naturally without overlapping
+#   "center"  - Centered in current view
+#   "origin"  - Placed at camera origin
+PLACEMENT_POLICY="cluster"
+
+# Super+Enter Action:
+#   "maximize" - Viewport Fill: natively configures window to fill usable viewport at 100% sharp scale (pixel-perfect, 0% blur)
+#   "fit"      - Camera Zoom: digitally magnifies camera onto window (legacy)
+SUPER_ENTER_ACTION="maximize"
+
+# Seamless Fullscreen Navigation:
+#   "true"  - Borderless canvas fullscreen: Super+Middle drag pans smoothly out of fullscreen, Super+1..9 switches instantly
+#   "false" - Traditional modal fullscreen lock: locks screen and camera to fullscreen window
+FULLSCREEN_PAN="true"
 # Background canvas color (hex)
 CANVAS_COLOR="#0b0f14"
 
-# Display Scale (1.0 for 100%, 1.25, 1.5 for HiDPI)
+# Screencopy Cursor (Screen sharing & Remote desktop like RustDesk / OBS):
+#   "false" - Exclude compositor cursor from screencopy capture (eliminates double cursors in RustDesk / remote desktop)
+#   "true"  - Include compositor cursor in screencopy capture (default for OBS screen recordings)
+SCREENCOPY_CURSOR="false"
+
+# Display Scale (1.0 for 100%, 1.25, 1.5 for HiDPI):
 OUTPUT_SCALE="1.0"
+
+# Scaling & Magnification Filter (Canvas Zoom & Scaling Texture Filtering):
+#   "nearest" - Pixel-perfect, razor sharp scaling with 0% blur (default, recommended)
+#   "linear"  - Smooth bilinear interpolation (traditional fuzzy/smoothed scaling)
+SCALING_FILTER="nearest"
 
 # Target Output Refresh Rate in Hz (0 = auto-select highest supported e.g. 144/165/240Hz)
 OUTPUT_REFRESH_HZ="0"
@@ -73,7 +129,15 @@ ALLOW_TEARING="false"
 IDLE_SLEEP_TIMEOUT_MIN="15"
 
 # ------------------------------------------------------------------------------
-# 4. DEFAULT COMPANION TOOLS & SHORTCUTS (Any tools you like!)
+# 4. X11 & XWAYLAND COMPATIBILITY (Steam, games, legacy tools)
+# ------------------------------------------------------------------------------
+# Enable X11 / Xwayland compatibility layer:
+#   "true"  - Supervise xwayland-satellite on X display (:0 or :1) with on-demand zero idle RAM
+#   "false" - Pure Wayland only (no X11)
+XWAYLAND="true"
+
+# ------------------------------------------------------------------------------
+# 5. DEFAULT COMPANION TOOLS & SHORTCUTS (Any tools you like!)
 # ------------------------------------------------------------------------------
 # Terminal Emulator (Super+Q):
 #   "auto" - checks for kitty -> alacritty -> foot -> wezterm -> ghostty -> konsole
@@ -98,6 +162,11 @@ ENABLE_QUICKSHELL="false"
 #   TUI file managers (yazi, lf, ranger) automatically open inside $TERMINAL
 FILE_MANAGER="auto"
 
+# Polkit Authentication Agent:
+#   "auto" - detects infynitae-shell -> hyprpolkitagent -> polkit-gnome -> polkit-kde
+#   Or path: "/usr/lib/hyprpolkitagent", "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1"
+POLKIT_AGENT="auto"
+
 # Web Browser:
 BROWSER="firefox"
 
@@ -106,6 +175,23 @@ BROWSER="firefox"
 #   Or set custom: e.g. "grim -g \"$(slurp)\""
 SCREENSHOT_CMD=""
 SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
+
+# ------------------------------------------------------------------------------
+# 6. WALLPAPER & LIVE BACKGROUND (Static or Animated Video)
+# ------------------------------------------------------------------------------
+# Wallpaper Path (supports PNG, JPG, WebP, GIF, MP4, WebM, MKV):
+#   Static image: uses lightweight swaybg or layer-shell (<8MB RAM)
+#   Animated video: uses hardware-accelerated mpv/mpvpaper (Wallpaper Engine style)
+WALLPAPER=""
+WALLPAPER_MODE="fill" # "fill", "fit", "stretch", "center", "tile"
+
+# ------------------------------------------------------------------------------
+# 7. AUDIO & DISCORD HOTKEYS (Wayland GlobalShortcuts Portal)
+# ------------------------------------------------------------------------------
+# Global Audio / Discord Shortcuts:
+#   "true"  - Right Shift triggers Discord mute; Right Ctrl triggers Discord deafen
+#   "false" - Disables global mute/deafen bindings
+DISCORD_HOTKEYS="true"
 
 # Custom Autostart & Overrides:
 #   To autostart any companion tools (waybar, mako, swaybg, pipewire):
