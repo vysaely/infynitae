@@ -2,6 +2,13 @@
 # Infynitae Standalone Desktop Environment Setup
 # Decouples Wayland clients from host desktop environments (e.g. KDE Plasma, GNOME)
 
+# 0. Infynitae's own programs live in ~/.local/bin. The session may start with a minimal PATH
+# (systemd-run, a display manager), and every Super+key action runs from it; added once.
+case ":$PATH:" in
+    *":$HOME/.local/bin:"*) ;;
+    *) export PATH="$HOME/.local/bin:$PATH" ;;
+esac
+
 # 1. Desktop Identity
 export XDG_CURRENT_DESKTOP="infynitae:wlroots"
 export XDG_SESSION_DESKTOP="infynitae"
