@@ -450,7 +450,8 @@ fn main() -> ExitCode {
                         "VRR_ENABLED" | "VRR" | "ADAPTIVE_SYNC" => {
                             if vrr.is_none() {
                                 match val.to_lowercase().as_str() {
-                                    "on" | "true" | "1" | "yes" | "auto" => vrr = Some(true),
+                                    // auto (None): only while a window is fullscreen
+                                    "on" | "true" | "1" | "yes" => vrr = Some(true),
                                     "off" | "false" | "0" | "no" => vrr = Some(false),
                                     _ => {}
                                 }
@@ -473,7 +474,7 @@ fn main() -> ExitCode {
             .or_else(|_| std::env::var("ADAPTIVE_SYNC"))
         {
             match val.to_lowercase().as_str() {
-                "on" | "true" | "1" | "yes" | "auto" => vrr = Some(true),
+                "on" | "true" | "1" | "yes" => vrr = Some(true),
                 "off" | "false" | "0" | "no" => vrr = Some(false),
                 _ => {}
             }

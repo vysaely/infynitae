@@ -175,7 +175,10 @@ SCALING_FILTER="nearest"
 # Target Output Refresh Rate in Hz (0 = auto-select highest supported e.g. 144/165/240Hz)
 OUTPUT_REFRESH_HZ="0"
 
-# Variable Refresh Rate (VRR / Adaptive Sync / FreeSync): "auto", "on", "off"
+# Variable Refresh Rate (VRR / Adaptive Sync / FreeSync):
+#   "auto" - on while a window is fullscreen (games, fullscreen video), off on the desktop
+#   "on"   - always (desktop video and the cursor can pace unevenly; some monitors flicker)
+#   "off"  - never
 VRR_ENABLED="auto"
 
 # Direct Scanout (Zero-copy bypass for fullscreen games & media):

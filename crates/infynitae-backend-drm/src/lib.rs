@@ -79,7 +79,9 @@ pub struct ConsoleOptions {
     pub scaling_filter: Option<String>,
     /// Direct scanout for fullscreen apps and games (zero-copy 0-latency bypass).
     pub direct_scanout: Option<bool>,
-    /// Variable Refresh Rate (VRR / Adaptive Sync).
+    /// Variable Refresh Rate (VRR / Adaptive Sync): always on, off, or `None` (auto) only while
+    /// the screen shows a fullscreen window (games, fullscreen video). Always-on VRR on the
+    /// desktop makes video and cursor pacing uneven and flickers on some monitors.
     pub vrr: Option<bool>,
 }
 
@@ -175,6 +177,10 @@ struct Screen {
     /// A frame is queued and its vblank has not come yet.
     pending: bool,
     screencopy_texture: Option<GlesTexture>,
+    /// The monitor and driver support VRR on this connector.
+    vrr_supported: bool,
+    /// VRR is on now.
+    vrr_on: bool,
 }
 
 struct LoopData {
@@ -211,6 +217,8 @@ struct LoopData {
     idle_sleep_timeout_min: u32,
     idle_auto_lock: bool,
     lock_process: Option<std::process::Child>,
+    /// The VRR setting (`ConsoleOptions::vrr`).
+    vrr_mode: Option<bool>,
 }
 
 /// The device limit Core is told: assumed, not queried, as in the nested backend (OB-52, INC-13).
@@ -475,15 +483,18 @@ pub fn run_console_with(
         )
         .map_err(|e| format!("screen {name}: {e:?}"))?;
 
-        let enable_vrr = options.vrr.unwrap_or(false);
-        if enable_vrr {
-            if let Ok(support) = compositor.vrr_supported(handle) {
-                if !matches!(support, smithay::backend::drm::VrrSupport::NotSupported) {
-                    if let Ok(()) = compositor.use_vrr(true) {
-                        println!("[infynitae] Screen {name}: VRR (Adaptive Sync / FreeSync) enabled");
-                    }
-                }
+        let vrr_supported = compositor
+            .vrr_supported(handle)
+            .is_ok_and(|s| !matches!(s, smithay::backend::drm::VrrSupport::NotSupported));
+        let mut vrr_on = false;
+        match (vrr_supported, options.vrr) {
+            (false, _) => {}
+            (true, Some(true)) => {
+                vrr_on = compositor.use_vrr(true).is_ok();
+                println!("[infynitae] Screen {name}: VRR always on");
             }
+            (true, Some(false)) => println!("[infynitae] Screen {name}: VRR off"),
+            (true, None) => println!("[infynitae] Screen {name}: VRR while a window is fullscreen"),
         }
         screens.push(Screen {
             id,
@@ -493,6 +504,8 @@ pub fn run_console_with(
             k,
             pending: false,
             screencopy_texture: None,
+            vrr_supported,
+            vrr_on,
         });
     }
     if screens.is_empty() {
@@ -618,6 +631,7 @@ pub fn run_console_with(
         idle_sleep_timeout_min: idle_timeout_min,
         idle_auto_lock: idle_auto_lock,
         lock_process: None,
+        vrr_mode: options.vrr,
     };
 
     data.state.reload_config();
@@ -865,7 +879,14 @@ fn render(data: &mut LoopData) {
                 continue;
             }
         };
+        // VRR auto: on while this screen shows a fullscreen window
+        let want_vrr = data
+            .vrr_mode
+            .unwrap_or_else(|| data.state.core().presentation(id).is_some());
         let s = &mut data.screens[i];
+        if s.vrr_supported && s.vrr_on != want_vrr && s.compositor.use_vrr(want_vrr).is_ok() {
+            s.vrr_on = want_vrr;
+        }
         if s.k != k {
             s.compositor
                 .set_output_mode_source(OutputModeSource::Static {
