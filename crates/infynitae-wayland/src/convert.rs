@@ -288,17 +288,10 @@ impl<E: Element> Element for CanonicalRect<E> {
     }
 
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        if self.force_transparent {
+        if self.remapped || self.force_transparent {
             OpaqueRegions::default()
-        } else if !self.remapped {
-            self.inner.opaque_regions(scale)
         } else {
-            let inner_opaque = self.inner.opaque_regions(scale);
-            if inner_opaque.is_empty() {
-                OpaqueRegions::default()
-            } else {
-                OpaqueRegions::from_slice(&[Rectangle::from_size(self.rect.size)])
-            }
+            self.inner.opaque_regions(scale)
         }
     }
 
@@ -561,7 +554,7 @@ where
             .map_err(RenderOutputError::Renderer)?;
     }
     elements.extend(
-        layer_render_elements(renderer, &state.registry, &layers.above, 1.0)
+        layer_render_elements(renderer, &state.registry, &layers.above, view.k)
             .map_err(RenderOutputError::Renderer)?
             .into_iter()
             .map(OutputElement::Surface),
@@ -574,7 +567,7 @@ where
             .map(|(_, e)| OutputElement::Surface(e)),
     );
     elements.extend(
-        layer_render_elements(renderer, &state.registry, &layers.below, 1.0)
+        layer_render_elements(renderer, &state.registry, &layers.below, view.k)
             .map_err(RenderOutputError::Renderer)?
             .into_iter()
             .map(OutputElement::Surface),
@@ -611,7 +604,7 @@ where
             .map_err(RenderOutputError::Renderer)?;
     }
     elements.extend(
-        layer_render_elements(renderer, &state.registry, &layers.above, 1.0)
+        layer_render_elements(renderer, &state.registry, &layers.above, view.k)
             .map_err(RenderOutputError::Renderer)?
             .into_iter()
             .map(OutputElement::Surface),
@@ -624,7 +617,7 @@ where
             .map(|(_, e)| OutputElement::Surface(e)),
     );
     elements.extend(
-        layer_render_elements(renderer, &state.registry, &layers.below, 1.0)
+        layer_render_elements(renderer, &state.registry, &layers.below, view.k)
             .map_err(RenderOutputError::Renderer)?
             .into_iter()
             .map(OutputElement::Surface),

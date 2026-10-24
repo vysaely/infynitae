@@ -829,6 +829,12 @@ fn render(data: &mut LoopData) {
         };
         let s = &mut data.screens[i];
         if s.k != k {
+            s.compositor
+                .set_output_mode_source(OutputModeSource::Static {
+                    size: s.size.into(),
+                    scale: smithay::utils::Scale::from(k),
+                    transform: smithay::utils::Transform::Normal,
+                });
             s.k = k;
         }
         let frame_flags = if data.direct_scanout {
@@ -873,7 +879,7 @@ fn handle_screencopy(
     screencopy_texture: &mut Option<GlesTexture>,
     output_id: OutputId,
     size: (i32, i32),
-    _clear: smithay::backend::renderer::Color32F,
+    clear: smithay::backend::renderer::Color32F,
 ) {
     if !state.screencopy.has_pending(output_id) {
         return;
@@ -884,7 +890,7 @@ fn handle_screencopy(
     }
 
     let needs_cursor = !state.screencopy.hide_cursor() && pending.iter().any(|p| p.overlay_cursor);
-    let (elements, _k) = match convert::output_elements_screencopy(state, renderer, output_id, needs_cursor) {
+    let (elements, k) = match convert::output_elements_screencopy(state, renderer, output_id, needs_cursor) {
         Ok(res) => res,
         Err(e) => {
             eprintln!("[screencopy] Failed to get elements: {e:?}");
@@ -917,11 +923,10 @@ fn handle_screencopy(
                     let target_size = req.region.map(|(_, _, w, h)| (w, h)).unwrap_or(size);
                     let mut damage_tracker = OutputDamageTracker::new(
                         target_size,
-                        smithay::utils::Scale::from(1.0),
+                        smithay::utils::Scale::from(k),
                         smithay::utils::Transform::Normal,
                     );
-                    let capture_clear = smithay::backend::renderer::Color32F::new(0.0, 0.0, 0.0, 1.0);
-                    if damage_tracker.render_output(renderer, &mut dmabuf_fb, 0, &elements, capture_clear).is_ok() {
+                    if damage_tracker.render_output(renderer, &mut dmabuf_fb, 0, &elements, clear).is_ok() {
                         dmabuf_rendered = true;
                         if req.with_damage && req.frame.version() >= 2 {
                             req.frame.damage(0, 0, target_size.0 as u32, target_size.1 as u32);
@@ -972,9 +977,8 @@ fn handle_screencopy(
         }
     };
 
-    let mut damage_tracker = OutputDamageTracker::new(size, smithay::utils::Scale::from(1.0), smithay::utils::Transform::Normal);
-    let capture_clear = smithay::backend::renderer::Color32F::new(0.0, 0.0, 0.0, 1.0);
-    if let Err(e) = damage_tracker.render_output(renderer, &mut framebuffer, 0, &elements, capture_clear) {
+    let mut damage_tracker = OutputDamageTracker::new(size, smithay::utils::Scale::from(k), smithay::utils::Transform::Normal);
+    if let Err(e) = damage_tracker.render_output(renderer, &mut framebuffer, 0, &elements, clear) {
         eprintln!("[screencopy] Failed to render output: {e:?}");
         for p in remaining {
             p.frame.failed();
