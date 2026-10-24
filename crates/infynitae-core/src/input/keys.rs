@@ -116,9 +116,10 @@ pub enum KeyAction {
     /// Asks the focused window to close (`xdg_toplevel.close`); the client decides. The owner's
     /// binding Super+Delete (interaction intent of 2026-10-05; decision record 2026-10-21).
     CloseFocused,
-    /// Super+Space (owner interaction intent of 2026-10-05, restated 2026-10-21): the pointer's
-    /// output's camera is centred on the focused window, its zoom unchanged — "center it", not
-    /// fit it. No history entry, as a shell `Navigate`.
+    /// Super+Space or Super+Shift+Space (owner interaction intent of 2026-10-05, restated 2026-10-24):
+    /// the pointer's output's camera is centred on the focused window and zoom is reverted to
+    /// default 1.0 scale (or, if no window is focused, camera zoom is reset to 1.0).
+    /// No history entry, as a shell `Navigate`.
     Recenter,
     Noop,
 }
@@ -181,10 +182,10 @@ pub fn resolve_key_binding(
         }
         return Some(KeyAction::CloseFocused);
     }
-    // Super+Space centres the focused window; exactly Logo, never during an interaction
+    // Super+Space or Super+Shift+Space: centres the focused window and reverts zoom to default 1.0;
+    // never during an interaction
     if key == KEY_SPACE
         && mods.logo
-        && !mods.shift
         && !mods.ctrl
         && !mods.alt
         && !interaction_active
@@ -302,20 +303,24 @@ mod tests {
 
     /// The owner's Super+Space: exactly Logo held, never during an interaction.
     #[test]
-    fn logo_space_recenters_with_exact_modifiers() {
+    fn logo_space_recenters_and_reverts_scale() {
         let m = |logo, ctrl, alt, shift| Modifiers {
             logo,
             ctrl,
             alt,
             shift,
         };
+        // Both Super+Space and Super+Shift+Space recenter and revert scale
         assert_eq!(
             resolve_key_binding(KEY_SPACE, m(true, false, false, false), false),
             Some(KeyAction::Recenter)
         );
+        assert_eq!(
+            resolve_key_binding(KEY_SPACE, m(true, false, false, true), false),
+            Some(KeyAction::Recenter)
+        );
         for mods in [
             m(false, false, false, false),
-            m(true, false, false, true),
             m(true, true, false, false),
             m(true, false, true, false),
         ] {
@@ -327,6 +332,11 @@ mod tests {
         }
         assert_eq!(
             resolve_key_binding(KEY_SPACE, m(true, false, false, false), true),
+            None,
+            "not during an interaction"
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_SPACE, m(true, false, false, true), true),
             None,
             "not during an interaction"
         );

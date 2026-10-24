@@ -576,23 +576,33 @@ impl Core {
         let Some(camera) = self.cameras.camera_for_output(output) else {
             return;
         };
-        let (Some(extent), Some(usable), Some(zoom)) = (
+        let (Some(extent), Some(usable)) = (
             self.output(output).map(|m| m.logical_extent()),
             self.usable_area(output),
-            self.cameras.zoom(camera),
         ) else {
             return;
         };
-        let Some(center) = crate::navigation::recenter_target(extent, usable, zoom, g) else {
+        let target_zoom = 1.0;
+        let Some(center) = crate::navigation::recenter_target(extent, usable, target_zoom, g) else {
             return;
         };
-        self.cameras.navigate(proof, camera, center);
+        self.cameras.set_zoom_and_center(proof, camera, target_zoom, center);
         self.camera_written(output, camera, out);
     }
 
     fn recenter(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
         if let Some(element) = self.focus.target() {
             self.recenter_on_element(proof, element, out);
+        } else {
+            let output = match self.pointer {
+                PointerState::Located { output, .. } => Some(output),
+                PointerState::NoOutput => self.outputs.first().map(|o| o.id),
+            };
+            if let Some(output) = output
+                && let Some(camera) = self.cameras.camera_for_output(output)
+            {
+                self.zoom_reset(proof, output, camera, out);
+            }
         }
     }
 
