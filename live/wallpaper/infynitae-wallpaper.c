@@ -449,7 +449,16 @@ static void load_config_defaults(char *target, size_t target_sz, char *mode, siz
         while (v_end > val && (*v_end == ' ' || *v_end == '\t' || *v_end == '\n' || *v_end == '\r' || *v_end == '"' || *v_end == '\'')) *v_end-- = '\0';
 
         if (strcmp(key, "WALLPAPER") == 0 && target[0] == '\0') {
-            snprintf(target, target_sz, "%s", val);
+            // the config is a shell file: "$HOME/..." and "~/..." mean the home directory
+            if (strncmp(val, "$HOME/", 6) == 0) {
+                snprintf(target, target_sz, "%s/%s", home, val + 6);
+            } else if (strncmp(val, "${HOME}/", 8) == 0) {
+                snprintf(target, target_sz, "%s/%s", home, val + 8);
+            } else if (strncmp(val, "~/", 2) == 0) {
+                snprintf(target, target_sz, "%s/%s", home, val + 2);
+            } else {
+                snprintf(target, target_sz, "%s", val);
+            }
         } else if (strcmp(key, "WALLPAPER_MODE") == 0 && mode[0] == '\0') {
             snprintf(mode, mode_sz, "%s", val);
         }
@@ -461,34 +470,11 @@ static void autodetect_wallpaper(char *target, size_t target_sz) {
     const char *home = getenv("HOME");
     if (!home) return;
 
-    // 1. Check user custom wallpaper
-    char candidate[1024];
-    snprintf(candidate, sizeof(candidate), "%s/Custom/1059121.png", home);
-    if (access(candidate, R_OK) == 0) {
-        snprintf(target, target_sz, "%s", candidate);
-        return;
-    }
+    DIR *d;
 
-    // 2. Search ~/Custom directory for any image
-    char custom_dir[512];
-    snprintf(custom_dir, sizeof(custom_dir), "%s/Custom", home);
-    DIR *d = opendir(custom_dir);
-    if (d) {
-        struct dirent *ent;
-        while ((ent = readdir(d)) != NULL) {
-            const char *dot = strrchr(ent->d_name, '.');
-            if (dot && (strcasecmp(dot, ".png") == 0 || strcasecmp(dot, ".jpg") == 0 ||
-                        strcasecmp(dot, ".jpeg") == 0 || strcasecmp(dot, ".webp") == 0)) {
-                snprintf(target, target_sz, "%s/%s", custom_dir, ent->d_name);
-                closedir(d);
-                return;
-            }
-        }
-        closedir(d);
-    }
-
-    // 3. Search standard wallpaper directories
-    const char *subdirs[] = {"Pictures/Wallpapers", "Pictures", ".local/share/wallpapers", NULL};
+    // Only folders meant for wallpapers: never a random picture from ~/Pictures
+    // Standard wallpaper directories
+    const char *subdirs[] = {"Pictures/Wallpapers", ".local/share/wallpapers", NULL};
     for (int i = 0; subdirs[i]; i++) {
         char dir_path[512];
         snprintf(dir_path, sizeof(dir_path), "%s/%s", home, subdirs[i]);

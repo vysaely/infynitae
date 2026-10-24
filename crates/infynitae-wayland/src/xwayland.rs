@@ -339,18 +339,26 @@ pub fn reserve_for_session(satellite: Option<&Path>) -> io::Result<Option<XDispl
         let _ = fs::remove_file(&stable_symlink);
         let _ = std::os::unix::fs::symlink(auth_path, &stable_symlink);
 
-        // Maintain user's ~/.Xauthority symlink for standard X11 tool compatibility (Steam, Wine)
+        // ~/.Xauthority for X11 tools that ignore XAUTHORITY: linked only when absent or already a
+        // symlink (ours); a real file belongs to another desktop and is never replaced
         if let Ok(home) = std::env::var("HOME") {
             let xauth_home = PathBuf::from(home).join(".Xauthority");
-            let _ = fs::remove_file(&xauth_home);
-            let _ = std::os::unix::fs::symlink(auth_path, &xauth_home);
+            let replaceable = fs::symlink_metadata(&xauth_home)
+                .map_or(true, |m| m.file_type().is_symlink());
+            if replaceable {
+                let _ = fs::remove_file(&xauth_home);
+                let _ = std::os::unix::fs::symlink(auth_path, &xauth_home);
+            }
         }
     }
 
-    // Ensure /tmp/.X11-unix/X0 symlink points to this display if X0 is not already taken
+    // :0 is the host's: earlier builds pointed an X0 symlink at their display; one left behind
+    // (a crash skips Drop) would block a real X server, so it goes
     let socket_0 = Path::new("/tmp/.X11-unix/X0");
-    if !socket_0.exists() {
-        let _ = std::os::unix::fs::symlink(display.socket_path(), socket_0);
+    if socket_0.is_symlink()
+        && fs::read_link(socket_0).is_ok_and(|dest| dest.starts_with("/tmp/.X11-unix/X"))
+    {
+        let _ = fs::remove_file(socket_0);
     }
 
     Ok(Some(display))

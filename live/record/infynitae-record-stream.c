@@ -1,7 +1,6 @@
 /*
  * Infynitae Screen Capture & Rolling Replay Engine
- * Pure C + Wayland screencopy + VA-API AMD Hardware Encoder
- * Zero bloat (< 5MB RAM, 0% CPU on AMD RX 9070 VCN).
+ * Pure C + Wayland screencopy: raw frames to stdout for the recorder's ffmpeg encoder.
  */
 
 #define _GNU_SOURCE

@@ -34,10 +34,6 @@ if [ -z "$DISPLAY" ] || [ ! -S "/tmp/.X11-unix/X${DISPLAY#*:}" ]; then
     done
 fi
 
-# Ensure /tmp/.X11-unix/X0 symlink exists if X1 is active
-if [ ! -e "/tmp/.X11-unix/X0" ] && [ -S "/tmp/.X11-unix/X1" ]; then
-    ln -sf "/tmp/.X11-unix/X1" "/tmp/.X11-unix/X0" 2>/dev/null || true
-fi
 
 LATEST_XAUTH=""
 if [ -n "$XDG_RUNTIME_DIR" ]; then
@@ -62,7 +58,8 @@ if [ -n "$XAUTHORITY" ] && [ -f "$XAUTHORITY" ]; then
     if [ -n "$XDG_RUNTIME_DIR" ] && [ "$XAUTHORITY" != "$XDG_RUNTIME_DIR/infynitae-xauth" ]; then
         ln -sf "$XAUTHORITY" "$XDG_RUNTIME_DIR/infynitae-xauth" 2>/dev/null || true
     fi
-    if [ "$XAUTHORITY" != "$HOME/.Xauthority" ]; then
+    # never replace a real ~/.Xauthority (another desktop's); only ours, a symlink
+    if [ "$XAUTHORITY" != "$HOME/.Xauthority" ] && { [ -L "$HOME/.Xauthority" ] || [ ! -e "$HOME/.Xauthority" ]; }; then
         ln -sf "$XAUTHORITY" "$HOME/.Xauthority" 2>/dev/null || true
     fi
 fi

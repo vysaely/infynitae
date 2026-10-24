@@ -239,7 +239,9 @@ SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
 # Wallpaper Path (supports PNG, JPG, WebP, GIF, MP4, WebM, MKV):
 #   Static image: uses lightweight swaybg or layer-shell (<8MB RAM)
 #   Animated video: uses hardware-accelerated mpv/mpvpaper (Wallpaper Engine style)
-WALLPAPER="$HOME/Custom/1059121.png"
+#   Empty: the first image in ~/Pictures/Wallpapers or ~/.local/share/wallpapers, else the
+#   canvas colour. "$HOME/..." and "~/..." paths work.
+WALLPAPER=""
 WALLPAPER_MODE="fill" # "fill", "fit", "stretch", "center", "tile"
 
 # ------------------------------------------------------------------------------
@@ -251,13 +253,15 @@ WALLPAPER_MODE="fill" # "fill", "fit", "stretch", "center", "tile"
 DISCORD_HOTKEYS="false"
 
 # ------------------------------------------------------------------------------
-# 8. HARDWARE SCREEN RECORDER & REPLAY BUFFER (AMD Radeon RX 9070 VCN Acceleration)
+# 8. SCREEN RECORDER & REPLAY BUFFER (hardware encoder when available: VAAPI, NVENC, QSV)
 # ------------------------------------------------------------------------------
-# Native, zero-bloat background recording & rolling clipping engine (< 5MB RAM, 0% CPU).
-# Direct Wayland zwlr_screencopy integration: completely immune to portal selection popups.
+# Background recording into a rolling buffer kept in RAM (REPLAY_DIR, /dev/shm by default):
+# about 110 MB per minute at the default bitrate, so 20 minutes is up to ~2 GB of RAM, and
+# frames are copied through the CPU (a steady share of one core). Off by default.
+# Records the screen through zwlr_screencopy; audio is desktop sound, never the microphone.
 # Super + Alt + C: Save rolling 20-minute replay clip to ~/Videos/Clips/
 # Super + Alt + R: Toggle continuous recording to ~/Videos/Recordings/
-ENABLE_REPLAY_BUFFER="true"
+ENABLE_REPLAY_BUFFER="false"
 REPLAY_BUFFER_MINUTES="20"
 REPLAY_DIR="/dev/shm/infynitae-replay"
 CLIPS_DIR="$HOME/Videos/Clips"

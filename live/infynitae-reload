@@ -106,7 +106,7 @@ reload_recorder() {
     stop_helper infynitae-record-stream
     # its ffmpeg encoder can outlive both; it is the one writing into the replay dir
     pkill -f "^ffmpeg .*/dev/shm/infynitae-replay/chunk" 2>/dev/null || true
-    if [ -n "$r" ] && is_true "${ENABLE_REPLAY_BUFFER:-true}"; then
+    if [ -n "$r" ] && is_true "${ENABLE_REPLAY_BUFFER:-false}"; then
         spawn "$r" supervisor
         echo "recorder: restarted"
     else

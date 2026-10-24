@@ -82,7 +82,8 @@ detect_screen_geometry() {
         fi
         sleep 0.3
     done
-    echo "1920x1080"
+    # no guess: ffmpeg reads raw frames of exactly this size, a wrong one records garbage
+    return 1
 }
 
 # ------------------------------------------------------------------------------
@@ -165,7 +166,10 @@ start_replay_engine() {
     mkdir -p "$REPLAY_DIR"
     rm -f "$REPLAY_DIR"/chunk*.mkv "$REPLAY_DIR"/concat*.txt 2>/dev/null || true
 
-    GEOM=$(detect_screen_geometry)
+    if ! GEOM=$(detect_screen_geometry); then
+        echo "[infynitae-recorder] Could not read the screen size from the compositor; not recording" >&2
+        return 1
+    fi
     V_PIPELINE=$(detect_encoder_pipeline)
     A_ARGS=$(detect_audio_args)
 
@@ -267,7 +271,10 @@ start_recording() {
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     OUT_FILE="$RECORDINGS_DIR/recording-${TIMESTAMP}.mp4"
 
-    GEOM=$(detect_screen_geometry)
+    if ! GEOM=$(detect_screen_geometry); then
+        echo "[infynitae-recorder] Could not read the screen size from the compositor; not recording" >&2
+        return 1
+    fi
     V_PIPELINE=$(detect_encoder_pipeline)
     A_ARGS=$(detect_audio_args)
 

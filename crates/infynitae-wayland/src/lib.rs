@@ -176,6 +176,8 @@ pub struct WaylandState {
         std::collections::VecDeque<(smithay::utils::Serial, infynitae_core::output::OutputId)>,
     pub screencopy: screencopy::ScreencopyState,
     pub dmabuf: DmabufState,
+    /// The linux-dmabuf global, replaced when the backend names its GPU (`set_dmabuf_main_device`).
+    dmabuf_global: Option<smithay::wayland::dmabuf::DmabufGlobal>,
     pub(crate) popup_pointer_grab_serial: Option<smithay::utils::Serial>,
     /// Install serial of the popup keyboard grab (the latest level of the chain), the identity by
     /// which teardown releases exactly that grab (A1).
@@ -314,7 +316,7 @@ impl WaylandState {
             .expect("the seat has a keyboard");
         let capabilities = convert::wm_capabilities(core.toplevel_capabilities());
 
-        WaylandState {
+        let mut state = WaylandState {
             core,
             dh: display.clone(),
             compositor: CompositorState::new_v6::<Self>(display),
@@ -351,47 +353,8 @@ impl WaylandState {
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),
             screencopy: screencopy::ScreencopyState::new(display),
-            dmabuf: {
-                use std::os::unix::fs::MetadataExt;
-                let mut d = DmabufState::new();
-                let formats = [
-                    smithay::backend::allocator::Format {
-                        code: smithay::backend::allocator::Fourcc::Argb8888,
-                        modifier: smithay::backend::allocator::Modifier::Linear,
-                    },
-                    smithay::backend::allocator::Format {
-                        code: smithay::backend::allocator::Fourcc::Xrgb8888,
-                        modifier: smithay::backend::allocator::Modifier::Linear,
-                    },
-                ];
-                let dev = [
-                    "/dev/dri/renderD128",
-                    "/dev/dri/renderD129",
-                    "/dev/dri/card0",
-                    "/dev/dri/card1",
-                    "/dev/dri/card2",
-                ]
-                .iter()
-                .find_map(|p| std::fs::metadata(p).ok().map(|m| m.rdev()))
-                .or_else(|| {
-                    std::fs::read_dir("/dev/dri").ok()?.filter_map(|e| e.ok()).find_map(|e| {
-                        let name = e.file_name();
-                        let name_str = name.to_string_lossy();
-                        if name_str.starts_with("renderD") || name_str.starts_with("card") {
-                            e.metadata().ok().map(|m| m.rdev())
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .unwrap_or(0) as libc::dev_t;
-                if let Ok(feedback) = DmabufFeedbackBuilder::new(dev, formats).build() {
-                    let _ = d.create_global_with_default_feedback::<Self>(display, &feedback);
-                } else {
-                    let _ = d.create_global::<Self>(display, formats);
-                }
-                d
-            },
+            dmabuf: DmabufState::new(),
+            dmabuf_global: None,
             effects: infynitae_core::protocol::EffectBuf::new(),
             ticked: Vec::new(),
             xdg_decoration: smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(display),
@@ -419,6 +382,26 @@ impl WaylandState {
             leaked_port: unreachable!(),
             #[cfg(feature = "probe_store_output_token_in_state")]
             leaked_token: unreachable!(),
+        };
+        // a guess until the backend names its GPU (the console does)
+        if let Some(dev) = guess_dmabuf_device() {
+            state.set_dmabuf_main_device(dev);
+        }
+        state
+    }
+
+    /// The GPU clients should allocate their buffers on (linux-dmabuf feedback main device): the
+    /// render node the backend draws with. Replaces the global made with the previous device.
+    pub fn set_dmabuf_main_device(&mut self, dev: libc::dev_t) {
+        let formats = DMABUF_FORMATS;
+        let global = match DmabufFeedbackBuilder::new(dev, formats).build() {
+            Ok(feedback) => self
+                .dmabuf
+                .create_global_with_default_feedback::<Self>(&self.dh, &feedback),
+            Err(_) => self.dmabuf.create_global::<Self>(&self.dh, formats),
+        };
+        if let Some(old) = self.dmabuf_global.replace(global) {
+            self.dmabuf.destroy_global::<Self>(&self.dh, old);
         }
     }
 
@@ -889,6 +872,40 @@ impl WaylandState {
             .find(|(s, _)| *s == serial)
             .map(|(_, o)| *o)
     }
+}
+
+/// The dmabuf formats offered to clients: linear only, which any GPU can import and scan out.
+const DMABUF_FORMATS: [smithay::backend::allocator::Format; 2] = [
+    smithay::backend::allocator::Format {
+        code: smithay::backend::allocator::Fourcc::Argb8888,
+        modifier: smithay::backend::allocator::Modifier::Linear,
+    },
+    smithay::backend::allocator::Format {
+        code: smithay::backend::allocator::Fourcc::Xrgb8888,
+        modifier: smithay::backend::allocator::Modifier::Linear,
+    },
+];
+
+/// A DRM device for backends that do not name theirs: the first render node, else the first
+/// card node.
+fn guess_dmabuf_device() -> Option<libc::dev_t> {
+    use std::os::unix::fs::MetadataExt;
+    let mut nodes: Vec<std::path::PathBuf> = std::fs::read_dir("/dev/dri")
+        .ok()?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .collect();
+    nodes.sort();
+    let pick = |prefix: &str| {
+        nodes.iter().find_map(|p| {
+            let name = p.file_name()?.to_string_lossy().into_owned();
+            if name.starts_with(prefix) {
+                std::fs::metadata(p).ok().map(|m| m.rdev() as libc::dev_t)
+            } else {
+                None
+            }
+        })
+    };
+    pick("renderD").or_else(|| pick("card"))
 }
 
 /// Parses a hex color `#RRGGBB` or `#RRGGBBAA` into a `Color32F`.

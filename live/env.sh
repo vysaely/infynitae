@@ -158,18 +158,19 @@ if [ -x "$HOME/infynitae/live/infynitae-portal" ] && ! pgrep -f "live/infynitae-
 fi
 
 # 8. Resolve WAYLAND_DISPLAY, DISPLAY, and XAUTHORITY with auto-healing
+# WAYLAND_DISPLAY when unset: the socket the newest compositor start announced, else the first
+# real socket (not a symlink some other tool left).
 if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
-    for wsock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
-        if [ -S "$wsock" ]; then
-            export WAYLAND_DISPLAY="${wsock##*/}"
-            break
-        fi
-    done
-fi
-if [ -n "$WAYLAND_DISPLAY" ] && [ "$WAYLAND_DISPLAY" != "wayland-0" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
-    if [ ! -e "$XDG_RUNTIME_DIR/wayland-0" ] && [ -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
-        ln -sf "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" "$XDG_RUNTIME_DIR/wayland-0" 2>/dev/null || true
-        ln -sf "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY.lock" "$XDG_RUNTIME_DIR/wayland-0.lock" 2>/dev/null || true
+    sock=$(grep -o 'Listening on Wayland socket: [^ ]*' "$HOME/.local/state/infynitae/session.log" 2>/dev/null | tail -1 | cut -d' ' -f5)
+    if [ -n "$sock" ] && [ -S "$XDG_RUNTIME_DIR/$sock" ]; then
+        export WAYLAND_DISPLAY="$sock"
+    else
+        for wsock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
+            if [ -S "$wsock" ] && [ ! -L "$wsock" ]; then
+                export WAYLAND_DISPLAY="${wsock##*/}"
+                break
+            fi
+        done
     fi
 fi
 
@@ -184,10 +185,6 @@ if [ -z "$DISPLAY" ] || [ ! -S "/tmp/.X11-unix/X${DISPLAY#*:}" ]; then
     done
 fi
 
-# Ensure /tmp/.X11-unix/X0 symlink exists if X1 is our display (for legacy X11 apps defaulting to :0)
-if [ ! -e "/tmp/.X11-unix/X0" ] && [ -S "/tmp/.X11-unix/X1" ]; then
-    ln -sf "/tmp/.X11-unix/X1" "/tmp/.X11-unix/X0" 2>/dev/null || true
-fi
 
 # Auto-heal XAUTHORITY:
 # If XAUTHORITY is unset, points to a dead file, or points to an older session file when a newer one exists:
@@ -216,7 +213,8 @@ if [ -n "$XAUTHORITY" ] && [ -f "$XAUTHORITY" ]; then
     if [ -n "$XDG_RUNTIME_DIR" ] && [ "$XAUTHORITY" != "$XDG_RUNTIME_DIR/infynitae-xauth" ]; then
         ln -sf "$XAUTHORITY" "$XDG_RUNTIME_DIR/infynitae-xauth" 2>/dev/null || true
     fi
-    if [ "$XAUTHORITY" != "$HOME/.Xauthority" ]; then
+    # never replace a real ~/.Xauthority (another desktop's); only ours, a symlink
+    if [ "$XAUTHORITY" != "$HOME/.Xauthority" ] && { [ -L "$HOME/.Xauthority" ] || [ ! -e "$HOME/.Xauthority" ]; }; then
         ln -sf "$XAUTHORITY" "$HOME/.Xauthority" 2>/dev/null || true
     fi
 fi

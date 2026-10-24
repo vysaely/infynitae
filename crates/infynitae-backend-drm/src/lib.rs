@@ -282,6 +282,15 @@ pub fn run_console_with(
     let (mut drm, drm_notifier) = DrmDevice::new(fd.clone(), true)?;
     let gbm = GbmDevice::new(fd.clone())?;
     let mut renderer = gles_renderer(&gbm)?;
+    // clients allocate on the GPU this compositor draws with (its render node), not a guess
+    if let Ok(node) = smithay::backend::drm::DrmNode::from_path(&gpu) {
+        let node = node
+            .node_with_type(smithay::backend::drm::NodeType::Render)
+            .and_then(Result::ok)
+            .unwrap_or(node);
+        println!("[infynitae] Client buffers on GPU node {node}");
+        state.set_dmabuf_main_device(node.dev_id());
+    }
 
     // Zero-blur scaling: use Nearest-neighbor filtering on upscaled surfaces by default
     let use_nearest = match options.scaling_filter.as_deref() {

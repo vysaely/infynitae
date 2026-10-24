@@ -53,7 +53,7 @@ if [ "$START_LOCKED" = "1" ] || [ "$START_LOCKED" = "true" ] || [ "$1" = "--lock
 fi
 
 # 6. Native Screen Recorder & 20-minute Replay Buffer (Invincible background watchdog)
-if [ "${ENABLE_REPLAY_BUFFER:-true}" = "true" ] || [ "${ENABLE_REPLAY_BUFFER:-true}" = "1" ]; then
+if [ "${ENABLE_REPLAY_BUFFER:-false}" = "true" ] || [ "${ENABLE_REPLAY_BUFFER:-false}" = "1" ]; then
     if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
         "$HOME/.local/bin/infynitae-recorder" supervisor >/dev/null 2>&1 &
     elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
