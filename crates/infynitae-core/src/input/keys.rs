@@ -121,6 +121,9 @@ pub enum KeyAction {
     /// default 1.0 scale (or, if no window is focused, camera zoom is reset to 1.0).
     /// No history entry, as a shell `Navigate`.
     Recenter,
+    /// Super+Shift+Space (owner, 2026-10-24): centre the camera on the focused window and keep
+    /// the zoom.
+    RecenterKeepZoom,
     /// A user command from the config (`EXEC_<NAME>="CHORD:command"`), by its index in the
     /// adapter's command list.
     Exec(u16),
@@ -201,6 +204,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("CLOSE", KeyAction::CloseFocused),
     ("FORCE_CLOSE", KeyAction::ForceCloseFocused),
     ("RECENTER", KeyAction::Recenter),
+    ("RECENTER_KEEP_ZOOM", KeyAction::RecenterKeepZoom),
 ];
 
 /// [`resolve_key_binding`] with the user's bindings first: a chord of theirs wins (also over a
@@ -283,15 +287,18 @@ pub fn resolve_key_binding(
         }
         return Some(KeyAction::CloseFocused);
     }
-    // Super+Space or Super+Shift+Space: centres the focused window and reverts zoom to default 1.0;
-    // never during an interaction
+    // Super+Space centres the focused window and reverts zoom to 1.0; Super+Shift+Space centres
+    // it and keeps the zoom; never during an interaction
     if key == KEY_SPACE
         && mods.logo
         && !mods.ctrl
         && !mods.alt
         && !interaction_active
     {
-        return Some(KeyAction::Recenter);
+        return Some(match mods.shift {
+            true => KeyAction::RecenterKeepZoom,
+            false => KeyAction::Recenter,
+        });
     }
     // Super+1..9 focuses, raises and recenters window slot 1..9 (0-indexed); exactly Logo, never during interaction
     if mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
@@ -486,14 +493,14 @@ mod tests {
             alt,
             shift,
         };
-        // Both Super+Space and Super+Shift+Space recenter and revert scale
+        // Super+Space recenters and reverts the scale; Super+Shift+Space recenters, zoom kept
         assert_eq!(
             resolve_key_binding(KEY_SPACE, m(true, false, false, false), false),
             Some(KeyAction::Recenter)
         );
         assert_eq!(
             resolve_key_binding(KEY_SPACE, m(true, false, false, true), false),
-            Some(KeyAction::Recenter)
+            Some(KeyAction::RecenterKeepZoom)
         );
         for mods in [
             m(false, false, false, false),

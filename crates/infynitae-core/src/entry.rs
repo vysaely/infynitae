@@ -162,6 +162,7 @@ impl Core {
                                 | KeyAction::ViewportRestore
                                 | KeyAction::FitToggle
                                 | KeyAction::Recenter
+                                | KeyAction::RecenterKeepZoom
                                 | KeyAction::FocusSlot(_)
                                 | KeyAction::FocusClusterSlot(_)
                                 | KeyAction::FocusNext
@@ -177,7 +178,7 @@ impl Core {
             }
             PhysicalEvent::RecenterElement { element } => {
                 let proof = authority::Authorized::mint();
-                self.recenter_on_element(proof, element, out);
+                self.recenter_on_element(proof, element, false, out);
                 Ok(())
             }
         }
@@ -293,7 +294,7 @@ impl Core {
                 }
                 if self.focus_cycle_navigate {
                     if let Some(p) = proof {
-                        self.recenter(p, out);
+                        self.recenter(p, false, out);
                     }
                 }
                 return;
@@ -327,7 +328,13 @@ impl Core {
             }
             KeyAction::Recenter => {
                 if let Some(p) = proof {
-                    self.recenter(p, out);
+                    self.recenter(p, false, out);
+                }
+                return;
+            }
+            KeyAction::RecenterKeepZoom => {
+                if let Some(p) = proof {
+                    self.recenter(p, true, out);
                 }
                 return;
             }
@@ -545,6 +552,7 @@ impl Core {
         &mut self,
         proof: authority::Authorized,
         element: crate::stage::ElementId,
+        keep_zoom: bool,
         out: &mut Vec<Effect>,
     ) {
         let output = match self.pointer {
@@ -583,7 +591,12 @@ impl Core {
         ) else {
             return;
         };
-        let target_zoom = 1.0;
+        // Super+Space resets the zoom to 1.0; Super+Shift+Space keeps it
+        let target_zoom = if keep_zoom {
+            self.cameras.zoom(camera).unwrap_or(1.0)
+        } else {
+            1.0
+        };
         let Some(center) = crate::navigation::recenter_target(extent, usable, target_zoom, g) else {
             return;
         };
@@ -591,10 +604,10 @@ impl Core {
         self.camera_written(output, camera, out);
     }
 
-    fn recenter(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
+    fn recenter(&mut self, proof: authority::Authorized, keep_zoom: bool, out: &mut Vec<Effect>) {
         if let Some(element) = self.focus.target() {
-            self.recenter_on_element(proof, element, out);
-        } else {
+            self.recenter_on_element(proof, element, keep_zoom, out);
+        } else if !keep_zoom {
             let output = match self.pointer {
                 PointerState::Located { output, .. } => Some(output),
                 PointerState::NoOutput => self.outputs.first().map(|o| o.id),
@@ -638,7 +651,7 @@ impl Core {
             self.true_position_into(out);
         }
         if let Some(p) = proof {
-            self.recenter(p, out);
+            self.recenter(p, false, out);
         }
     }
 
@@ -1398,18 +1411,6 @@ impl Core {
     ) {
         if self.input.ownership.owner(button).is_some() {
             return; // a repeated press keeps its first owner
-        }
-        // Super+Shift+Middle Click: reset camera zoom to default 1.0
-        if mods.logo && mods.shift && !mods.ctrl && !mods.alt && button == crate::input::bindings::BTN_MIDDLE {
-            if let Some(p) = proof {
-                if let PointerState::Located { output, .. } = self.pointer
-                    && let Some(camera) = self.cameras.camera_for_output(output)
-                {
-                    self.zoom_reset(p, output, camera, out);
-                }
-            }
-            self.input.ownership.press(button, Owner::Compositor);
-            return;
         }
         // M22: any press during an interaction is owned by it; M10: NoOutput consumes presses
         let PointerState::Located { output, p } = self.pointer else {
@@ -2896,7 +2897,7 @@ mod tests {
         let zoomed = c.cameras().zoom(cam).unwrap();
         assert!(zoomed > 1.0, "zoom {zoomed} should be > 1.0 after scroll up");
 
-        // 3. Super+Shift+Middle Click resets zoom to 1.0
+        // 3. Super+Shift+Middle Click no longer resets the zoom (owner, 2026-10-24)
         let _ = c
             .physical_input_vec(
                 &mut i,
@@ -2908,8 +2909,8 @@ mod tests {
                 },
             )
             .unwrap();
-        let reset = c.cameras().zoom(cam).unwrap();
-        assert_eq!(reset, 1.0, "zoom reset should return to 1.0");
+        let after = c.cameras().zoom(cam).unwrap();
+        assert_eq!(after, zoomed, "Super+Shift+Middle click leaves the zoom alone");
     }
 
     #[test]

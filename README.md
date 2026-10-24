@@ -8,7 +8,8 @@ Infinite canvas Wayland compositor built in Rust for Arch Linux. Vibecoded for m
 | :--- | :--- |
 | `Super + 1..9` | Focus window slot 1..9 |
 | `Super + Shift + 1..9` | Focus cluster slot 1..9 |
-| `Super + Space` | Recenter window |
+| `Super + Space` | Center the focused window, zoom back to 100% |
+| `Super + Shift + Space` | Center the focused window, keep the zoom |
 | `Super + Enter` | Maximize / fit window to viewport (0% blur) |
 | `Super + Shift + Enter` | Borderless fullscreen (pan out anytime) |
 | `Super + Left Drag` | Move window |
@@ -16,7 +17,6 @@ Infinite canvas Wayland compositor built in Rust for Arch Linux. Vibecoded for m
 | `Super + Shift + Left Drag` | Move entire window cluster |
 | `Super + Shift + Right Drag` | Resize entire window cluster |
 | `Super + Middle Drag` | Pan canvas (`free`, `grab`, or `rts` mode) |
-| `Super + Shift + Middle Click` | Reset zoom to 100% native scale |
 | `Super + Shift + Wheel` | Zoom canvas in / out |
 | `Super + Tab` / `Alt + Tab` | Cycle window focus (auto-centers camera) |
 | `Super + Shift + Tab` | Canvas overview toggle (fits all windows / restores view) |

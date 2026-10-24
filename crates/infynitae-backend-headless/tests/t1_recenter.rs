@@ -1,6 +1,7 @@
-//! The owner's Super+Space and Super+Shift+Space (owner request 2026-10-24): the pointer's
-//! output's camera is centred on the focused window and zoom is reverted to default 1.0 scale
-//! (or, if no window is focused, camera zoom is reset to 1.0). No history entry.
+//! The owner's Super+Space and Super+Shift+Space (owner requests 2026-10-24): the pointer's
+//! output's camera is centred on the focused window; Super+Space also reverts the zoom to 1.0
+//! (or, with no window focused, only resets the zoom), Super+Shift+Space keeps the zoom (and does
+//! nothing with no window focused). No history entry.
 
 mod common;
 
@@ -127,6 +128,41 @@ fn super_space_reverts_overview_zoom_to_default_scale() {
     let c = r.ls.state.core().cameras();
     assert_eq!(c.center(0), Some(centre), "window centred");
     assert_eq!(c.zoom(0), Some(1.0), "zoom reverted to default 1.0 scale");
+}
+
+/// Zoomed away from 1.0 (Super+Shift+wheel), Super+Shift+Space centres the window and keeps the
+/// zoom.
+#[test]
+fn super_shift_space_keeps_a_zoom_other_than_one() {
+    let (mut r, centre) = away(true);
+    for (key, pressed) in [(KEY_LEFTMETA, true), (KEY_LEFTSHIFT, true)] {
+        r.t += 1000;
+        keyboard_key(&mut r.ls.state, &mut r.ls.input, key, pressed, r.t).expect("key");
+    }
+    r.t += 1000;
+    infynitae_backend_headless::pointer_axis(
+        &mut r.ls.state,
+        &mut r.ls.input,
+        infynitae_core::input::Axis {
+            source: infynitae_core::input::AxisSource::Wheel,
+            amount: (0.0, -15.0),
+            v120: (0, -120),
+        },
+        r.t,
+    )
+    .expect("wheel");
+    for (key, pressed) in [(KEY_LEFTSHIFT, false), (KEY_LEFTMETA, false)] {
+        r.t += 1000;
+        keyboard_key(&mut r.ls.state, &mut r.ls.input, key, pressed, r.t).expect("key");
+    }
+    r.ls.pump();
+    r.frame();
+    let zoom = r.ls.state.core().cameras().zoom(0).unwrap();
+    assert_ne!(zoom, 1.0, "precondition: zoomed");
+    chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT]);
+    let c = r.ls.state.core().cameras();
+    assert_eq!(c.center(0), Some(centre), "window centred");
+    assert_eq!(c.zoom(0).unwrap().to_bits(), zoom.to_bits(), "zoom kept");
 }
 
 #[test]
