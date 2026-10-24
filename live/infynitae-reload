@@ -1,0 +1,162 @@
+#!/bin/sh
+# Restart Infynitae's helper programs in place, without restarting the compositor (your windows
+# stay open). Only the compositor binary itself needs Ctrl+Alt+Backspace.
+#
+#   infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|status] ...
+#
+# Run it from any terminal inside the session, or let infynitae-update call it.
+
+STATE_DIR="$HOME/.local/state/infynitae"
+LOG="$STATE_DIR/helpers.log"
+BIN_DIR="$HOME/.local/bin"
+LIVE="$HOME/infynitae/live"
+mkdir -p "$STATE_DIR"
+
+[ -f "$LIVE/env.sh" ] && . "$LIVE/env.sh" >/dev/null 2>&1
+[ -f "$HOME/.config/infynitae/config" ] && . "$HOME/.config/infynitae/config"
+
+# The compositor's socket: the one this shell already uses if it is live, else the one the
+# newest session.log start announced (a stale wayland-0 from another desktop must not win).
+if [ -z "$WAYLAND_DISPLAY" ] || [ ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ]; then
+    sock=$(grep -o 'Listening on Wayland socket: [^ ]*' "$STATE_DIR/session.log" 2>/dev/null | tail -1 | cut -d' ' -f5)
+    [ -n "$sock" ] && export WAYLAND_DISPLAY="$sock"
+fi
+if [ -z "$WAYLAND_DISPLAY" ] || ! pgrep -x infynitae >/dev/null 2>&1; then
+    echo "infynitae-reload: no running Infynitae session found" >&2
+    exit 1
+fi
+
+# The first existing path, or nothing.
+first() {
+    for p in "$@"; do
+        [ -x "$p" ] && { echo "$p"; return; }
+    done
+}
+
+# Start a helper detached from this terminal, logging to helpers.log.
+spawn() {
+    echo "[$(date '+%F %T')] start: $*" >> "$LOG"
+    setsid -f "$@" >> "$LOG" 2>&1 < /dev/null
+}
+
+# PIDs of a helper: processes whose program (argv[0]), or whose script when the program is a shell
+# or interpreter (argv[1]), is named $1. Kernel process names are cut at 15 characters, so
+# "infynitae-wallpaper" can never be found by name; matching the whole command line would also
+# hit e.g. "less infynitae-recorder".
+pids_of() {
+    found=1
+    for d in /proc/[0-9]*; do
+        [ "${d#/proc/}" = "$$" ] && continue
+        set -- "$1" $( { tr '\0' ' ' < "$d/cmdline"; } 2>/dev/null)
+        [ $# -ge 2 ] || continue
+        prog=${2##*/}
+        case "$prog" in
+            sh|bash|dash|python3|python) [ $# -ge 3 ] && prog=${3##*/} ;;
+        esac
+        if [ "$prog" = "$1" ]; then
+            echo "${d#/proc/}"
+            found=0
+        fi
+    done
+    return $found
+}
+
+# Stop every running copy of helper $1, then wait up to 2 s for it to go.
+stop_helper() {
+    pids=$(pids_of "$1") || return 0
+    kill -TERM $pids 2>/dev/null || true
+    i=0
+    while pids_of "$1" >/dev/null && [ $i -lt 20 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    pids=$(pids_of "$1") && kill -KILL $pids 2>/dev/null || true
+}
+
+is_true() {
+    case "$1" in 1|true|yes|on|TRUE|True) return 0 ;; *) return 1 ;; esac
+}
+
+reload_settings() {
+    s=$(first "$LIVE/settings.sh" "$BIN_DIR/infynitae-settings")
+    [ -n "$s" ] && sh "$s" apply >> "$LOG" 2>&1
+    echo "settings: re-applied"
+}
+
+reload_wallpaper() {
+    w=$(first "$BIN_DIR/infynitae-wallpaper" "$LIVE/wallpaper/infynitae-wallpaper")
+    if [ -z "$WALLPAPER" ] || [ -z "$w" ]; then
+        echo "wallpaper: not configured"
+        return
+    fi
+    # a new instance replaces the old one itself; the config's WALLPAPER may hold an unexpanded
+    # $HOME for the program, so pass the path this shell expanded
+    spawn "$w" "$WALLPAPER" "${WALLPAPER_MODE:-fill}"
+    echo "wallpaper: restarted"
+}
+
+reload_recorder() {
+    r=$(first "$BIN_DIR/infynitae-recorder" "$LIVE/record/infynitae-recorder")
+    sup="/tmp/infynitae-recorder-supervisor.pid"
+    if [ -f "$sup" ]; then
+        # the supervisor's TERM trap also stops its encoder
+        kill -TERM "$(cat "$sup")" 2>/dev/null || true
+        sleep 0.5
+    fi
+    stop_helper infynitae-record-stream
+    if [ -n "$r" ] && is_true "${ENABLE_REPLAY_BUFFER:-true}"; then
+        spawn "$r" supervisor
+        echo "recorder: restarted"
+    else
+        echo "recorder: stopped (ENABLE_REPLAY_BUFFER is off)"
+    fi
+}
+
+reload_portal() {
+    p=$(first "$LIVE/infynitae-portal" "$BIN_DIR/infynitae-portal")
+    stop_helper infynitae-portal
+    if [ -n "$p" ]; then
+        spawn "$p"
+        echo "portal: restarted"
+    fi
+}
+
+reload_polkit() {
+    p=$(first "$BIN_DIR/infynitae-polkit")
+    stop_helper infynitae-polkit
+    if [ -n "$p" ]; then
+        spawn "$p"
+        echo "polkit: restarted"
+    fi
+}
+
+status() {
+    printf '%-26s %s\n' infynitae "$(pgrep -x infynitae | tr '\n' ' ')"
+    for n in infynitae-wallpaper infynitae-recorder infynitae-record-stream infynitae-portal infynitae-polkit infynitae-lock; do
+        pids=$(pids_of "$n" | tr '\n' ' ')
+        printf '%-26s %s\n' "$n" "${pids:-not running}"
+    done
+    # the compositor's file on disk was replaced since it started: a restart picks up the update
+    exe=$(readlink "/proc/$(pgrep -x infynitae | head -1)/exe" 2>/dev/null)
+    case "$exe" in
+        *" (deleted)") echo "compositor: an updated binary is installed; Ctrl+Alt+Backspace loads it" ;;
+        *) echo "compositor: running the installed binary" ;;
+    esac
+}
+
+[ $# -eq 0 ] && set -- all
+for what in "$@"; do
+    case "$what" in
+        all) reload_settings; reload_wallpaper; reload_recorder; reload_portal; reload_polkit ;;
+        settings) reload_settings ;;
+        wallpaper) reload_wallpaper ;;
+        recorder) reload_recorder ;;
+        portal) reload_portal ;;
+        polkit) reload_polkit ;;
+        status) status ;;
+        *)
+            echo "usage: infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|status] ..." >&2
+            exit 2
+            ;;
+    esac
+done

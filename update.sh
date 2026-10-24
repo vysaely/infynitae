@@ -76,7 +76,10 @@ cargo build --release -p infynitae
 
 # 4. Install binaries to ~/.local/bin and /usr/local/bin
 mkdir -p "$HOME/.local/bin"
-install -m 755 target/release/infynitae "$HOME/.local/bin/infynitae"
+# replace by rename: the running compositor keeps its old file until the next restart
+install -m 755 target/release/infynitae "$HOME/.local/bin/infynitae.new"
+mv -f "$HOME/.local/bin/infynitae.new" "$HOME/.local/bin/infynitae"
+install -m 755 live/infynitae-reload "$HOME/.local/bin/infynitae-reload"
 install -m 755 live/dev.sh "$HOME/.local/bin/infynitae-dev"
 install -m 755 live/settings.sh "$HOME/.local/bin/infynitae-settings"
 install -m 755 live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
@@ -116,6 +119,18 @@ if [ -f "$REPO_DIR/live/wallpaper/infynitae-wallpaper.c" ] && pkg-config --exist
         $(pkg-config --cflags --libs wayland-client cairo gdk-pixbuf-2.0) -lm \
         -o "$HOME/.local/bin/infynitae-wallpaper" 2>/dev/null || true
     chmod +x "$HOME/.local/bin/infynitae-wallpaper" 2>/dev/null || true
+fi
+
+if [ -f "$REPO_DIR/live/record/Makefile" ] && pkg-config --exists wayland-client 2>/dev/null; then
+    echo "==> Compiling screen recorder stream (infynitae-record-stream)..."
+    if make -s -C "$REPO_DIR/live/record"; then
+        install -m 755 "$REPO_DIR/live/record/infynitae-record-stream" "$HOME/.local/bin/infynitae-record-stream.new"
+        mv -f "$HOME/.local/bin/infynitae-record-stream.new" "$HOME/.local/bin/infynitae-record-stream"
+        install -m 755 "$REPO_DIR/live/record/infynitae-recorder" "$HOME/.local/bin/infynitae-recorder.new"
+        mv -f "$HOME/.local/bin/infynitae-recorder.new" "$HOME/.local/bin/infynitae-recorder"
+    else
+        echo "[infynitae-update] Warning: recorder build failed; keeping the installed one"
+    fi
 fi
 
 # 6. Deploy live companion scripts
@@ -164,14 +179,12 @@ if command -v sudo >/dev/null 2>&1; then
     sudo cp -f "$HOME/.local/share/wayland-sessions/infynitae.desktop" /usr/share/wayland-sessions/ 2>/dev/null || true
 fi
 
-# 10. Notify user if desktop is currently running
-if [ -n "$WAYLAND_DISPLAY" ]; then
-    if [ -x "$HOME/.local/bin/infynitae-settings" ]; then
-        "$HOME/.local/bin/infynitae-settings" apply >/dev/null 2>&1 || true
-    fi
-    if command -v notify-send >/dev/null 2>&1; then
-        notify-send -a Infynitae -u normal "Infynitae Updated" "Compositor and tools updated to latest version." 2>/dev/null || true
-    fi
+# 10. Live session: restart the helpers in place (windows stay open)
+if pgrep -x infynitae >/dev/null 2>&1; then
+    echo "==> Restarting helpers in the running session (windows stay open)..."
+    "$HOME/.local/bin/infynitae-reload" settings wallpaper portal polkit || true
+    echo "    (the replay recorder keeps running; 'infynitae-reload recorder' restarts it and clears its buffer)"
+    "$HOME/.local/bin/infynitae-reload" status | tail -1
 fi
 
 echo ""

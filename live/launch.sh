@@ -186,12 +186,8 @@ case "$ACTION" in
         ;;
     reload|reload-shell|restart-shell)
         # Super+Shift+BackSpace: Live reload settings, shell UI, and desktop environment
-        # 1. Apply all settings from ~/.config/infynitae/config to GTK, Qt, cursors, environment
-        if [ -x "$HOME/infynitae/live/settings.sh" ]; then
-            "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1 || true
-        elif command -v infynitae-settings >/dev/null 2>&1; then
-            infynitae-settings apply >/dev/null 2>&1 || true
-        fi
+        # 1. Re-apply settings and restart the wallpaper (infynitae-reload; windows stay open)
+        "$HOME/infynitae/live/infynitae-reload" settings wallpaper >/dev/null 2>&1 || true
 
         # 2. Restart Quickshell Island / HUD if running
         if pidof qs >/dev/null 2>&1; then
@@ -204,13 +200,6 @@ case "$ACTION" in
         fi
         if pidof mako >/dev/null 2>&1; then
             makoctl reload 2>/dev/null || true
-        fi
-
-        # 4. Reload wallpaper if changed / configured
-        if [ -x "$HOME/.local/bin/infynitae-wallpaper" ]; then
-            "$HOME/.local/bin/infynitae-wallpaper"
-        elif [ -x "$HOME/infynitae/live/wallpaper/infynitae-wallpaper" ]; then
-            "$HOME/infynitae/live/wallpaper/infynitae-wallpaper"
         fi
 
         # 5. Notify user if notification service is present
