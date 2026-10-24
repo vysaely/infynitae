@@ -15,9 +15,10 @@ if [ -f "$HOME/.config/infynitae/config" ]; then
     . "$HOME/.config/infynitae/config"
 fi
 
-STREAM_BIN="$HOME/infynitae/live/record/infynitae-record-stream"
+# the installed build (infynitae-update builds it); a copy built in the repo is a fallback
+STREAM_BIN="$HOME/.local/bin/infynitae-record-stream"
 if [ ! -x "$STREAM_BIN" ]; then
-    STREAM_BIN="$HOME/.local/bin/infynitae-record-stream"
+    STREAM_BIN="$HOME/infynitae/live/record/infynitae-record-stream"
 fi
 
 REPLAY_DIR="${REPLAY_DIR:-/dev/shm/infynitae-replay}"
