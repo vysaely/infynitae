@@ -239,7 +239,7 @@ SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
 # Wallpaper Path (supports PNG, JPG, WebP, GIF, MP4, WebM, MKV):
 #   Static image: uses lightweight swaybg or layer-shell (<8MB RAM)
 #   Animated video: uses hardware-accelerated mpv/mpvpaper (Wallpaper Engine style)
-WALLPAPER=""
+WALLPAPER="$HOME/Custom/1059121.png"
 WALLPAPER_MODE="fill" # "fill", "fit", "stretch", "center", "tile"
 
 # ------------------------------------------------------------------------------

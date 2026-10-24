@@ -304,6 +304,12 @@ impl Drop for XDisplay {
         if ours {
             let _ = fs::remove_file(&self.lock_path);
         }
+        let socket_0 = Path::new("/tmp/.X11-unix/X0");
+        if socket_0.is_symlink()
+            && fs::read_link(socket_0).is_ok_and(|dest| dest == self.socket_path)
+        {
+            let _ = fs::remove_file(socket_0);
+        }
     }
 }
 
@@ -322,10 +328,32 @@ pub fn reserve_for_session(satellite: Option<&Path>) -> io::Result<Option<XDispl
             "XDG_RUNTIME_DIR is not set: no private place for the X cookie",
         )
     })?;
-    reclaim_stale_session_files(Path::new(&runtime));
-    XDisplay::reserve(Path::new("/tmp"), SESSION_DISPLAY_NUMBERS)?
-        .with_authority(Path::new(&runtime))
-        .map(Some)
+    let runtime_path = Path::new(&runtime);
+    reclaim_stale_session_files(runtime_path);
+    let display = XDisplay::reserve(Path::new("/tmp"), SESSION_DISPLAY_NUMBERS)?
+        .with_authority(runtime_path)?;
+
+    // Maintain stable symlinks so any tool or launcher resolves active credentials
+    if let Some(auth_path) = display.authority_path() {
+        let stable_symlink = runtime_path.join("infynitae-xauth");
+        let _ = fs::remove_file(&stable_symlink);
+        let _ = std::os::unix::fs::symlink(auth_path, &stable_symlink);
+
+        // Maintain user's ~/.Xauthority symlink for standard X11 tool compatibility (Steam, Wine)
+        if let Ok(home) = std::env::var("HOME") {
+            let xauth_home = PathBuf::from(home).join(".Xauthority");
+            let _ = fs::remove_file(&xauth_home);
+            let _ = std::os::unix::fs::symlink(auth_path, &xauth_home);
+        }
+    }
+
+    // Ensure /tmp/.X11-unix/X0 symlink points to this display if X0 is not already taken
+    let socket_0 = Path::new("/tmp/.X11-unix/X0");
+    if !socket_0.exists() {
+        let _ = std::os::unix::fs::symlink(display.socket_path(), socket_0);
+    }
+
+    Ok(Some(display))
 }
 
 /// For a run loop: the supervisor of `satellite` on `display`, as a client of the session's

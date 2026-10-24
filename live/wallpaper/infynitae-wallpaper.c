@@ -257,6 +257,12 @@ static void setup_layer_surface(struct wallpaper_output *out) {
     );
     zwlr_layer_surface_v1_set_exclusive_zone(out->layer_surface, -1);
     zwlr_layer_surface_v1_add_listener(out->layer_surface, &layer_surface_listener, out);
+
+    /* Empty input region ensures wallpaper never intercepts mouse input or pointer events */
+    struct wl_region *empty_region = wl_compositor_create_region(out->app->compositor);
+    wl_surface_set_input_region(out->surface, empty_region);
+    wl_region_destroy(empty_region);
+
     wl_surface_commit(out->surface);
 }
 
@@ -451,6 +457,77 @@ static void load_config_defaults(char *target, size_t target_sz, char *mode, siz
     fclose(f);
 }
 
+static void autodetect_wallpaper(char *target, size_t target_sz) {
+    const char *home = getenv("HOME");
+    if (!home) return;
+
+    // 1. Check user custom wallpaper
+    char candidate[1024];
+    snprintf(candidate, sizeof(candidate), "%s/Custom/1059121.png", home);
+    if (access(candidate, R_OK) == 0) {
+        snprintf(target, target_sz, "%s", candidate);
+        return;
+    }
+
+    // 2. Search ~/Custom directory for any image
+    char custom_dir[512];
+    snprintf(custom_dir, sizeof(custom_dir), "%s/Custom", home);
+    DIR *d = opendir(custom_dir);
+    if (d) {
+        struct dirent *ent;
+        while ((ent = readdir(d)) != NULL) {
+            const char *dot = strrchr(ent->d_name, '.');
+            if (dot && (strcasecmp(dot, ".png") == 0 || strcasecmp(dot, ".jpg") == 0 ||
+                        strcasecmp(dot, ".jpeg") == 0 || strcasecmp(dot, ".webp") == 0)) {
+                snprintf(target, target_sz, "%s/%s", custom_dir, ent->d_name);
+                closedir(d);
+                return;
+            }
+        }
+        closedir(d);
+    }
+
+    // 3. Search standard wallpaper directories
+    const char *subdirs[] = {"Pictures/Wallpapers", "Pictures", ".local/share/wallpapers", NULL};
+    for (int i = 0; subdirs[i]; i++) {
+        char dir_path[512];
+        snprintf(dir_path, sizeof(dir_path), "%s/%s", home, subdirs[i]);
+        d = opendir(dir_path);
+        if (d) {
+            struct dirent *ent;
+            while ((ent = readdir(d)) != NULL) {
+                const char *dot = strrchr(ent->d_name, '.');
+                if (dot && (strcasecmp(dot, ".png") == 0 || strcasecmp(dot, ".jpg") == 0 ||
+                            strcasecmp(dot, ".jpeg") == 0 || strcasecmp(dot, ".webp") == 0)) {
+                    snprintf(target, target_sz, "%s/%s", dir_path, ent->d_name);
+                    closedir(d);
+                    return;
+                }
+            }
+            closedir(d);
+        }
+    }
+
+    // 4. System wallpapers
+    const char *sys_dirs[] = {"/usr/share/backgrounds", "/usr/share/wallpapers", NULL};
+    for (int i = 0; sys_dirs[i]; i++) {
+        d = opendir(sys_dirs[i]);
+        if (d) {
+            struct dirent *ent;
+            while ((ent = readdir(d)) != NULL) {
+                const char *dot = strrchr(ent->d_name, '.');
+                if (dot && (strcasecmp(dot, ".png") == 0 || strcasecmp(dot, ".jpg") == 0 ||
+                            strcasecmp(dot, ".jpeg") == 0 || strcasecmp(dot, ".webp") == 0)) {
+                    snprintf(target, target_sz, "%s/%s", sys_dirs[i], ent->d_name);
+                    closedir(d);
+                    return;
+                }
+            }
+            closedir(d);
+        }
+    }
+}
+
 static int is_video_file(const char *path) {
     const char *dot = strrchr(path, '.');
     if (!dot) return 0;
@@ -490,6 +567,10 @@ int main(int argc, char *argv[]) {
 
     if (target[0] == '\0') {
         load_config_defaults(target, sizeof(target), mode, sizeof(mode));
+    }
+
+    if (target[0] == '\0') {
+        autodetect_wallpaper(target, sizeof(target));
     }
 
     if (target[0] == '\0') {

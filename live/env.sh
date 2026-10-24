@@ -150,7 +150,7 @@ if [ -x "$HOME/infynitae/live/infynitae-portal" ] && ! pgrep -f "live/infynitae-
     "$HOME/infynitae/live/infynitae-portal" >> "$PORTAL_LOG" 2>&1 &
 fi
 
-# 8. Resolve WAYLAND_DISPLAY, DISPLAY, and XAUTHORITY if present
+# 8. Resolve WAYLAND_DISPLAY, DISPLAY, and XAUTHORITY with auto-healing
 if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
     for wsock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
         if [ -S "$wsock" ]; then
@@ -165,7 +165,9 @@ if [ -n "$WAYLAND_DISPLAY" ] && [ "$WAYLAND_DISPLAY" != "wayland-0" ] && [ -n "$
         ln -sf "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY.lock" "$XDG_RUNTIME_DIR/wayland-0.lock" 2>/dev/null || true
     fi
 fi
-if [ -z "$DISPLAY" ]; then
+
+# Resolve DISPLAY: prioritize active unix socket
+if [ -z "$DISPLAY" ] || [ ! -S "/tmp/.X11-unix/X${DISPLAY#*:}" ]; then
     for xsock in /tmp/.X11-unix/X*; do
         if [ -S "$xsock" ]; then
             num="${xsock##*/X}"
@@ -174,14 +176,42 @@ if [ -z "$DISPLAY" ]; then
         fi
     done
 fi
-if [ -z "$XAUTHORITY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
-    AUTH_FILE=$(ls -t "$XDG_RUNTIME_DIR"/infynitae-xauth-* 2>/dev/null | head -1)
-    if [ -f "$AUTH_FILE" ]; then
-        export XAUTHORITY="$AUTH_FILE"
+
+# Ensure /tmp/.X11-unix/X0 symlink exists if X1 is our display (for legacy X11 apps defaulting to :0)
+if [ ! -e "/tmp/.X11-unix/X0" ] && [ -S "/tmp/.X11-unix/X1" ]; then
+    ln -sf "/tmp/.X11-unix/X1" "/tmp/.X11-unix/X0" 2>/dev/null || true
+fi
+
+# Auto-heal XAUTHORITY:
+# If XAUTHORITY is unset, points to a dead file, or points to an older session file when a newer one exists:
+LATEST_XAUTH=""
+if [ -n "$XDG_RUNTIME_DIR" ]; then
+    if [ -f "$XDG_RUNTIME_DIR/infynitae-xauth" ]; then
+        LATEST_XAUTH="$XDG_RUNTIME_DIR/infynitae-xauth"
+    else
+        LATEST_XAUTH=$(ls -t "$XDG_RUNTIME_DIR"/infynitae-xauth-* 2>/dev/null | head -1)
     fi
 fi
+
+if [ -z "$XAUTHORITY" ] || [ ! -f "$XAUTHORITY" ]; then
+    if [ -n "$LATEST_XAUTH" ] && [ -f "$LATEST_XAUTH" ]; then
+        export XAUTHORITY="$LATEST_XAUTH"
+    elif [ -f "$HOME/.Xauthority" ]; then
+        export XAUTHORITY="$HOME/.Xauthority"
+    fi
+elif [ -n "$LATEST_XAUTH" ] && [ -f "$LATEST_XAUTH" ] && [ "$XAUTHORITY" != "$LATEST_XAUTH" ]; then
+    # Active session created a newer auth file than inherited environment variable
+    export XAUTHORITY="$LATEST_XAUTH"
+fi
+
+# Maintain persistent stable symlinks for all X11 clients (Steam, Wine, Games)
 if [ -n "$XAUTHORITY" ] && [ -f "$XAUTHORITY" ]; then
-    ln -sf "$XAUTHORITY" "$HOME/.Xauthority" 2>/dev/null || true
+    if [ -n "$XDG_RUNTIME_DIR" ] && [ "$XAUTHORITY" != "$XDG_RUNTIME_DIR/infynitae-xauth" ]; then
+        ln -sf "$XAUTHORITY" "$XDG_RUNTIME_DIR/infynitae-xauth" 2>/dev/null || true
+    fi
+    if [ "$XAUTHORITY" != "$HOME/.Xauthority" ]; then
+        ln -sf "$XAUTHORITY" "$HOME/.Xauthority" 2>/dev/null || true
+    fi
 fi
 
 # 9. Notify D-Bus / systemd activation environment if available

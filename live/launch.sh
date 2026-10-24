@@ -23,8 +23,8 @@ if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
     done
 fi
 
-# Automatically resolve X11 DISPLAY and XAUTHORITY if not already set
-if [ -z "$DISPLAY" ]; then
+# Automatically resolve X11 DISPLAY and XAUTHORITY with auto-healing
+if [ -z "$DISPLAY" ] || [ ! -S "/tmp/.X11-unix/X${DISPLAY#*:}" ]; then
     for xsock in /tmp/.X11-unix/X*; do
         if [ -S "$xsock" ]; then
             num="${xsock##*/X}"
@@ -33,15 +33,37 @@ if [ -z "$DISPLAY" ]; then
         fi
     done
 fi
-if [ -z "$XAUTHORITY" ]; then
-    if [ -n "$XDG_RUNTIME_DIR" ]; then
-        AUTH_FILE=$(ls -t "$XDG_RUNTIME_DIR"/infynitae-xauth-* 2>/dev/null | head -1)
-        if [ -f "$AUTH_FILE" ]; then
-            export XAUTHORITY="$AUTH_FILE"
-        fi
+
+# Ensure /tmp/.X11-unix/X0 symlink exists if X1 is active
+if [ ! -e "/tmp/.X11-unix/X0" ] && [ -S "/tmp/.X11-unix/X1" ]; then
+    ln -sf "/tmp/.X11-unix/X1" "/tmp/.X11-unix/X0" 2>/dev/null || true
+fi
+
+LATEST_XAUTH=""
+if [ -n "$XDG_RUNTIME_DIR" ]; then
+    if [ -f "$XDG_RUNTIME_DIR/infynitae-xauth" ]; then
+        LATEST_XAUTH="$XDG_RUNTIME_DIR/infynitae-xauth"
+    else
+        LATEST_XAUTH=$(ls -t "$XDG_RUNTIME_DIR"/infynitae-xauth-* 2>/dev/null | head -1)
     fi
-    if [ -z "$XAUTHORITY" ] && [ -f "$HOME/.Xauthority" ]; then
+fi
+
+if [ -z "$XAUTHORITY" ] || [ ! -f "$XAUTHORITY" ]; then
+    if [ -n "$LATEST_XAUTH" ] && [ -f "$LATEST_XAUTH" ]; then
+        export XAUTHORITY="$LATEST_XAUTH"
+    elif [ -f "$HOME/.Xauthority" ]; then
         export XAUTHORITY="$HOME/.Xauthority"
+    fi
+elif [ -n "$LATEST_XAUTH" ] && [ -f "$LATEST_XAUTH" ] && [ "$XAUTHORITY" != "$LATEST_XAUTH" ]; then
+    export XAUTHORITY="$LATEST_XAUTH"
+fi
+
+if [ -n "$XAUTHORITY" ] && [ -f "$XAUTHORITY" ]; then
+    if [ -n "$XDG_RUNTIME_DIR" ] && [ "$XAUTHORITY" != "$XDG_RUNTIME_DIR/infynitae-xauth" ]; then
+        ln -sf "$XAUTHORITY" "$XDG_RUNTIME_DIR/infynitae-xauth" 2>/dev/null || true
+    fi
+    if [ "$XAUTHORITY" != "$HOME/.Xauthority" ]; then
+        ln -sf "$XAUTHORITY" "$HOME/.Xauthority" 2>/dev/null || true
     fi
 fi
 

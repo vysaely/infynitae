@@ -174,9 +174,9 @@ pub fn resolve_key_binding(
         }
         return Some(KeyAction::FocusNext);
     }
-    // Logo+Delete or Logo+C closes the focused window, Logo+Shift+Delete or Logo+Shift+C ends its app; the modifiers match
+    // Logo+Delete closes the focused window, Logo+Shift+Delete ends its app; the modifiers match
     // exactly, as for fit
-    if (key == KEY_DELETE || key == KEY_C) && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
+    if key == KEY_DELETE && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
         if mods.shift {
             return Some(KeyAction::ForceCloseFocused);
         }
@@ -362,12 +362,13 @@ mod tests {
         );
         assert_eq!(
             resolve_key_binding(KEY_C, m(true, false, false, false), false),
-            Some(KeyAction::CloseFocused)
+            None,
+            "Super+C does not close window"
         );
         assert_eq!(
             resolve_key_binding(KEY_C, m(true, false, false, true), false),
-            Some(KeyAction::ForceCloseFocused),
-            "Super+Shift+C ends the app"
+            None,
+            "Super+Shift+C does not end app"
         );
         for mods in [
             m(false, false, false, false),

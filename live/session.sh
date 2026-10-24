@@ -23,14 +23,21 @@ elif [ -n "$POLKIT_AGENT" ] && [ -x "$POLKIT_AGENT" ]; then
     "$POLKIT_AGENT" >/dev/null 2>&1 &
 fi
 
-# 4. Wallpaper if explicitly configured in ~/.config/infynitae/config
-if [ -n "$WALLPAPER" ]; then
-    if [ -x "$HOME/.local/bin/infynitae-wallpaper" ]; then
-        "$HOME/.local/bin/infynitae-wallpaper"
-    elif [ -x "$HOME/infynitae/live/wallpaper/infynitae-wallpaper" ]; then
-        "$HOME/infynitae/live/wallpaper/infynitae-wallpaper"
-    elif command -v infynitae-wallpaper >/dev/null 2>&1; then
-        infynitae-wallpaper
+# 4. Wallpaper & Canvas Background (Configured or Auto-Detected)
+WP_BIN=""
+if [ -x "$HOME/.local/bin/infynitae-wallpaper" ]; then
+    WP_BIN="$HOME/.local/bin/infynitae-wallpaper"
+elif [ -x "$HOME/infynitae/live/wallpaper/infynitae-wallpaper" ]; then
+    WP_BIN="$HOME/infynitae/live/wallpaper/infynitae-wallpaper"
+elif command -v infynitae-wallpaper >/dev/null 2>&1; then
+    WP_BIN="infynitae-wallpaper"
+fi
+
+if [ -n "$WP_BIN" ]; then
+    if [ -n "$WALLPAPER" ]; then
+        "$WP_BIN" "$WALLPAPER" "${WALLPAPER_MODE:-fill}" &
+    else
+        "$WP_BIN" &
     fi
 fi
 

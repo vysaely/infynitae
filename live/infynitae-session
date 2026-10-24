@@ -1,0 +1,77 @@
+#!/bin/sh
+# Infynitae Standalone Session Launcher with TTY restoration and auto-respawn guard
+
+cleanup() {
+    stty sane 2>/dev/null || true
+    tput cnorm 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM HUP
+umask 077
+
+if [ -f "$HOME/infynitae/live/env.sh" ]; then
+    . "$HOME/infynitae/live/env.sh"
+fi
+
+export RUST_BACKTRACE=1
+STATE_DIR="$HOME/.local/state/infynitae"
+mkdir -p "$STATE_DIR"
+CRASH_COUNT_FILE="$STATE_DIR/crash_count"
+SESSION_LOG="$STATE_DIR/session.log"
+
+BIN="$HOME/.local/bin/infynitae"
+SESSION_SCRIPT="$HOME/infynitae/live/session.sh"
+
+XWLS=""
+if command -v xwayland-satellite >/dev/null 2>&1; then
+    XWLS="--xwayland-satellite $(command -v xwayland-satellite)"
+fi
+
+TTY_MODE=""
+if [ -z "$WAYLAND_DISPLAY" ] && [ -z "$DISPLAY" ]; then
+    TTY_MODE="--tty"
+fi
+
+while true; do
+    START_TIME=$(date +%s)
+    echo "[infynitae-session] Starting Infynitae compositor..." >> "$SESSION_LOG"
+
+    # Refresh environment and drop stale auth before launch
+    if [ -f "$HOME/infynitae/live/env.sh" ]; then
+        . "$HOME/infynitae/live/env.sh"
+    fi
+    if [ -n "$XAUTHORITY" ] && [ ! -f "$XAUTHORITY" ]; then
+        unset XAUTHORITY
+    fi
+
+    # Run compositor, logging output while displaying
+    "$BIN" $TTY_MODE $XWLS --exec "$SESSION_SCRIPT" "$@" 2>&1 | tee -a "$SESSION_LOG"
+    STATUS=$?
+
+    END_TIME=$(date +%s)
+    DURATION=$((END_TIME - START_TIME))
+
+    cleanup
+
+    if [ $STATUS -ne 0 ] && [ $DURATION -lt 3 ]; then
+        COUNT=1
+        if [ -f "$CRASH_COUNT_FILE" ]; then
+            PREV_COUNT=$(cat "$CRASH_COUNT_FILE" 2>/dev/null || echo 0)
+            COUNT=$((PREV_COUNT + 1))
+        fi
+        echo "$COUNT" > "$CRASH_COUNT_FILE"
+
+        if [ "$COUNT" -ge 3 ]; then
+            echo "=========================================================="
+            echo "  [infynitae] Rapid crash loop detected ($COUNT consecutive failures)."
+            echo "  Aborting auto-restart to prevent lockout."
+            echo "  Dropping to rescue shell with full TTY controls."
+            echo "=========================================================="
+            rm -f "$CRASH_COUNT_FILE"
+            exec "${SHELL:-/bin/sh}"
+        fi
+        sleep 1
+    else
+        rm -f "$CRASH_COUNT_FILE"
+        sleep 0.5
+    fi
+done
