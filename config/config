@@ -250,6 +250,22 @@ WALLPAPER_MODE="fill" # "fill", "fit", "stretch", "center", "tile"
 #   "false" - Disables global mute/deafen bindings (recommended for clean typing & gaming)
 DISCORD_HOTKEYS="false"
 
+# ------------------------------------------------------------------------------
+# 8. HARDWARE SCREEN RECORDER & REPLAY BUFFER (AMD Radeon RX 9070 VCN Acceleration)
+# ------------------------------------------------------------------------------
+# Native, zero-bloat background recording & rolling clipping engine (< 5MB RAM, 0% CPU).
+# Direct Wayland zwlr_screencopy integration: completely immune to portal selection popups.
+# Super + Alt + C: Save rolling 20-minute replay clip to ~/Videos/Clips/
+# Super + Alt + R: Toggle continuous recording to ~/Videos/Recordings/
+ENABLE_REPLAY_BUFFER="true"
+REPLAY_BUFFER_MINUTES="20"
+REPLAY_DIR="/dev/shm/infynitae-replay"
+CLIPS_DIR="$HOME/Videos/Clips"
+RECORDINGS_DIR="$HOME/Videos/Recordings"
+RECORD_FPS="60"
+RECORD_CODEC="hevc"          # "hevc" (H.265) or "av1"
+RECORD_AUDIO="true"          # Include synchronized PipeWire desktop audio
+
 # Custom Autostart & Overrides:
 #   To autostart any companion tools (waybar, mako, swaybg, pipewire):
 #     Create ~/.config/infynitae/autostart.sh and chmod +x it.

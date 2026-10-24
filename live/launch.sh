@@ -404,6 +404,50 @@ case "$ACTION" in
             python3 -c "import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect('$XDG_RUNTIME_DIR/infynitae/shortcuts.sock'); s.sendall(b'privacy'); s.close()" 2>/dev/null || true
         fi
         ;;
+    save-replay|clip-save|clip)
+        # Super+Alt+C: Save rolling 20-minute hardware replay clip (zero game FPS hit)
+        if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
+            exec "$HOME/.local/bin/infynitae-recorder" save-replay
+        elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
+            exec "$HOME/infynitae/live/record/infynitae-recorder" save-replay
+        fi
+        ;;
+    record-toggle|toggle-record)
+        # Super+Alt+R: Toggle continuous screen recording
+        if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
+            exec "$HOME/.local/bin/infynitae-recorder" record-toggle
+        elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
+            exec "$HOME/infynitae/live/record/infynitae-recorder" record-toggle
+        fi
+        ;;
+    record-start)
+        if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
+            exec "$HOME/.local/bin/infynitae-recorder" record-start
+        elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
+            exec "$HOME/infynitae/live/record/infynitae-recorder" record-start
+        fi
+        ;;
+    record-stop)
+        if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
+            exec "$HOME/.local/bin/infynitae-recorder" record-stop
+        elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
+            exec "$HOME/infynitae/live/record/infynitae-recorder" record-stop
+        fi
+        ;;
+    replay-start)
+        if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
+            exec "$HOME/.local/bin/infynitae-recorder" replay-start
+        elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
+            exec "$HOME/infynitae/live/record/infynitae-recorder" replay-start
+        fi
+        ;;
+    replay-supervisor|record-supervisor)
+        if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
+            exec "$HOME/.local/bin/infynitae-recorder" supervisor
+        elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
+            exec "$HOME/infynitae/live/record/infynitae-recorder" supervisor
+        fi
+        ;;
     *)
         echo "Unknown action: $ACTION" >&2
         exit 1

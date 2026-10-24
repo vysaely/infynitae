@@ -217,6 +217,12 @@ impl WaylandState {
                 Effect::ToggleIdleInhibit => {
                     self.toggle_idle_inhibit();
                 }
+                Effect::SaveReplay => {
+                    self.spawn_action("save-replay");
+                }
+                Effect::ToggleRecording => {
+                    self.spawn_action("record-toggle");
+                }
                 Effect::VolumeUp => {
                     self.spawn_action("volume-up");
                 }

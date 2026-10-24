@@ -146,6 +146,10 @@ pub enum Effect {
     TogglePrivacy,
     /// Super+Shift+I: toggle idle sleep inhibition (stay awake mode)
     ToggleIdleInhibit,
+    /// Super+Alt+C: save instant 20-minute replay clip
+    SaveReplay,
+    /// Super+Alt+R: toggle continuous screen recording
+    ToggleRecording,
     /// Hardware Volume Up
     VolumeUp,
     /// Hardware Volume Down

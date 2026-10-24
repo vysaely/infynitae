@@ -1010,6 +1010,8 @@ impl Core {
             | E::SpawnLockScreen
             | E::TogglePrivacy
             | E::ToggleIdleInhibit
+            | E::SaveReplay
+            | E::ToggleRecording
             | E::VolumeUp
             | E::VolumeDown
             | E::VolumeMute

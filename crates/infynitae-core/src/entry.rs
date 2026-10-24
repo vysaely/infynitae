@@ -370,6 +370,8 @@ impl Core {
             KeyAction::SpawnLockScreen => vec![Effect::SpawnLockScreen],
             KeyAction::TogglePrivacy => vec![Effect::TogglePrivacy],
             KeyAction::ToggleIdleInhibit => vec![Effect::ToggleIdleInhibit],
+            KeyAction::SaveReplay => vec![Effect::SaveReplay],
+            KeyAction::ToggleRecording => vec![Effect::ToggleRecording],
             KeyAction::VolumeUp => vec![Effect::VolumeUp],
             KeyAction::VolumeDown => vec![Effect::VolumeDown],
             KeyAction::VolumeMute => vec![Effect::VolumeMute],

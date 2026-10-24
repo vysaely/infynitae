@@ -76,6 +76,10 @@ pub enum KeyAction {
     TogglePrivacy,
     /// Super+Shift+I: toggle idle sleep inhibition (stay awake mode: prevents DPMS screen sleep and auto-lock)
     ToggleIdleInhibit,
+    /// Super+Alt+C: save instant 20-minute replay clip
+    SaveReplay,
+    /// Super+Alt+R: toggle continuous screen recording
+    ToggleRecording,
     /// Hardware Volume Up
     VolumeUp,
     /// Hardware Volume Down
@@ -260,6 +264,14 @@ pub fn resolve_key_binding(
     // Super+Shift+I: toggle idle sleep inhibition (stay awake mode); Logo+Shift, never during interaction
     if key == KEY_I && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ToggleIdleInhibit);
+    }
+    // Super+Alt+C: save instant 20-minute replay clip; Logo+Alt, never during interaction
+    if key == KEY_C && mods.logo && mods.alt && !mods.ctrl && !mods.shift && !interaction_active {
+        return Some(KeyAction::SaveReplay);
+    }
+    // Super+Alt+R: toggle continuous screen recording; Logo+Alt, never during interaction
+    if key == KEY_R && mods.logo && mods.alt && !mods.ctrl && !mods.shift && !interaction_active {
+        return Some(KeyAction::ToggleRecording);
     }
     // Hardware media and volume keys: triggered directly on keypress, never during interaction
     if !interaction_active {
@@ -626,8 +638,24 @@ mod tests {
             resolve_key_binding(KEY_PREVIOUSSONG, none, false),
             Some(KeyAction::MediaPrev)
         );
+        let logo_alt = Modifiers {
+            logo: true,
+            ctrl: false,
+            alt: true,
+            shift: false,
+        };
+        assert_eq!(
+            resolve_key_binding(KEY_C, logo_alt, false),
+            Some(KeyAction::SaveReplay)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_R, logo_alt, false),
+            Some(KeyAction::ToggleRecording)
+        );
         // During interaction: None
         assert_eq!(resolve_key_binding(KEY_VOLUMEUP, none, true), None);
         assert_eq!(resolve_key_binding(KEY_L, logo, true), None);
+        assert_eq!(resolve_key_binding(KEY_C, logo_alt, true), None);
+        assert_eq!(resolve_key_binding(KEY_R, logo_alt, true), None);
     }
 }

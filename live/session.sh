@@ -45,12 +45,21 @@ if [ "$START_LOCKED" = "1" ] || [ "$START_LOCKED" = "true" ] || [ "$1" = "--lock
     fi
 fi
 
-# 6. User autostart script (blank canvas for user's future ricing)
+# 6. Native Screen Recorder & 20-minute Replay Buffer (Invincible background watchdog)
+if [ "${ENABLE_REPLAY_BUFFER:-true}" = "true" ] || [ "${ENABLE_REPLAY_BUFFER:-true}" = "1" ]; then
+    if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
+        "$HOME/.local/bin/infynitae-recorder" supervisor >/dev/null 2>&1 &
+    elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then
+        "$HOME/infynitae/live/record/infynitae-recorder" supervisor >/dev/null 2>&1 &
+    fi
+fi
+
+# 7. User autostart script (blank canvas for user's future ricing)
 if [ -x "$HOME/.config/infynitae/autostart.sh" ]; then
     "$HOME/.config/infynitae/autostart.sh" &
 fi
 
-# 7. Launch default terminal on the infinite canvas
+# 8. Launch default terminal on the infinite canvas
 resolve_terminal() {
     if [ -n "$TERMINAL" ] && [ "$TERMINAL" != "auto" ]; then
         echo "$TERMINAL"
