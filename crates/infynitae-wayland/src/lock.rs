@@ -230,8 +230,8 @@ impl SessionLockHandler for WaylandState {
         {
             g.ungrab(PopupUngrabStrategy::All);
         }
+        self.keyboard_unset_grab();
         let kb = self.keyboard_handle();
-        kb.unset_grab(self);
         kb.set_focus(self, None, SERIAL_COUNTER.next_serial());
         // Smithay tells a newly focused surface which forwarded keys are down; keys held now
         // are released while locked without being forwarded, so forget them (nothing is sent:
