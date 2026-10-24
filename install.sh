@@ -86,21 +86,8 @@ if command -v systemctl >/dev/null 2>&1; then
     sudo usermod -aG video "$USER" 2>/dev/null || true
 fi
 
-# Deploy udev rules for DRM, virtual input (Steam / tablets / emulators), and gamepads
-sudo tee /etc/udev/rules.d/71-infynitae-devices.rules >/dev/null << 'EOF'
-# Infynitae Compositor: grant active seat user access to GPU, uinput, and gamepads
-SUBSYSTEM=="drm", KERNEL=="card*", TAG+="uaccess"
-SUBSYSTEM=="drm", KERNEL=="renderD*", TAG+="uaccess"
-SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
-SUBSYSTEM=="input", ENV{ID_INPUT_JOYSTICK}=="?*", TAG+="uaccess"
-EOF
-
-# Reload and trigger udev rules
-if command -v udevadm >/dev/null 2>&1; then
-    sudo udevadm control --reload-rules 2>/dev/null || true
-    sudo udevadm trigger --subsystem-match=drm 2>/dev/null || true
-    sudo udevadm trigger --subsystem-match=misc 2>/dev/null || true
-fi
+# GPU, joystick and uinput access come from systemd (70-uaccess) and the steam package
+# (60-steam-input); Infynitae needs no udev rules of its own.
 
 # 5. Build Infynitae in release mode
 echo "==> Building Infynitae compositor in release mode..."
@@ -171,85 +158,8 @@ if [ -f "config/config" ]; then
     fi
 fi
 
-# 9. Create ~/.local/bin/infynitae-session
-cat << 'EOF' > "$HOME/.local/bin/infynitae-session"
-#!/bin/sh
-# Infynitae Standalone Session Launcher with TTY restoration and crash guard
-
-cleanup() {
-    stty sane 2>/dev/null || true
-    tput cnorm 2>/dev/null || true
-}
-trap cleanup EXIT INT TERM HUP
-umask 077
-
-if [ -f "$HOME/infynitae/live/env.sh" ]; then
-    . "$HOME/infynitae/live/env.sh"
-fi
-
-export RUST_BACKTRACE=1
-STATE_DIR="$HOME/.local/state/infynitae"
-mkdir -p "$STATE_DIR"
-CRASH_COUNT_FILE="$STATE_DIR/crash_count"
-SESSION_LOG="$STATE_DIR/session.log"
-
-BIN="$HOME/.local/bin/infynitae"
-SESSION_SCRIPT="$HOME/infynitae/live/session.sh"
-
-XWLS=""
-if command -v xwayland-satellite >/dev/null 2>&1; then
-    XWLS="--xwayland-satellite $(command -v xwayland-satellite)"
-fi
-
-TTY_MODE=""
-if [ -z "$WAYLAND_DISPLAY" ] && [ -z "$DISPLAY" ]; then
-    TTY_MODE="--tty"
-fi
-
-START_TIME=$(date +%s)
-echo "[infynitae-session] Starting Infynitae compositor..." >> "$SESSION_LOG"
-
-# Run compositor, logging output while displaying
-"$BIN" $TTY_MODE $XWLS --exec "$SESSION_SCRIPT" "$@" 2>&1 | tee -a "$SESSION_LOG"
-STATUS=$?
-
-END_TIME=$(date +%s)
-DURATION=$((END_TIME - START_TIME))
-
-cleanup
-
-if [ $STATUS -ne 0 ] || [ $DURATION -lt 5 ]; then
-    COUNT=1
-    if [ -f "$CRASH_COUNT_FILE" ]; then
-        PREV_COUNT=$(cat "$CRASH_COUNT_FILE" 2>/dev/null || echo 0)
-        COUNT=$((PREV_COUNT + 1))
-    fi
-    echo "$COUNT" > "$CRASH_COUNT_FILE"
-
-    if [ "$COUNT" -ge 2 ]; then
-        echo ""
-        echo "=========================================================="
-        echo "  [infynitae] Rapid crash loop detected ($COUNT consecutive failures)."
-        echo "  Aborting auto-restart to prevent lockout."
-        echo "  Dropping to rescue shell with full TTY controls."
-        echo ""
-        if [ -f "$STATE_DIR/crash.log" ]; then
-            echo "--- Recent Crash Log ($STATE_DIR/crash.log) ---"
-            tail -n 20 "$STATE_DIR/crash.log"
-        elif [ -f "$SESSION_LOG" ]; then
-            echo "--- Recent Session Log ($SESSION_LOG) ---"
-            tail -n 20 "$SESSION_LOG"
-        fi
-        echo "=========================================================="
-        rm -f "$CRASH_COUNT_FILE"
-        exec "${SHELL:-/bin/sh}"
-    fi
-else
-    rm -f "$CRASH_COUNT_FILE"
-fi
-
-exit $STATUS
-EOF
+# 9. Install ~/.local/bin/infynitae-session (single source: live/infynitae-session)
+cp -f "$HOME/infynitae/live/infynitae-session" "$HOME/.local/bin/infynitae-session"
 chmod +x "$HOME/.local/bin/infynitae-session"
 cp -f "$HOME/infynitae/live/xdg-open" "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 chmod +x "$HOME/.local/bin/xdg-open" 2>/dev/null || true

@@ -67,22 +67,8 @@ if command -v pacman >/dev/null 2>&1; then
     fi
 fi
 
-# Deploy standard udev hardware access rules (DRM, uinput, and gamepads)
-if [ -d "/etc/udev/rules.d" ] && [ ! -f "/etc/udev/rules.d/71-infynitae-devices.rules" ]; then
-    if command -v sudo >/dev/null 2>&1; then
-        echo "==> Deploying hardware access rules (udev)..."
-        sudo tee /etc/udev/rules.d/71-infynitae-devices.rules >/dev/null << 'EOF'
-# Infynitae Compositor: grant active seat user access to GPU, uinput, and gamepads
-SUBSYSTEM=="drm", KERNEL=="card*", TAG+="uaccess"
-SUBSYSTEM=="drm", KERNEL=="renderD*", TAG+="uaccess"
-SUBSYSTEM=="misc", KERNEL=="uinput", TAG+="uaccess", OPTIONS+="static_node=uinput"
-SUBSYSTEM=="input", ENV{ID_INPUT_JOYSTICK}=="?*", TAG+="uaccess"
-EOF
-        sudo udevadm control --reload-rules 2>/dev/null || true
-        sudo udevadm trigger --subsystem-match=drm 2>/dev/null || true
-        sudo udevadm trigger --subsystem-match=misc 2>/dev/null || true
-    fi
-fi
+# GPU, joystick and uinput access come from systemd (70-uaccess) and the steam package
+# (60-steam-input); Infynitae needs no udev rules of its own.
 
 # 3. Build optimized release binary
 echo "==> Compiling latest Infynitae release binary..."
@@ -95,6 +81,7 @@ install -m 755 live/dev.sh "$HOME/.local/bin/infynitae-dev"
 install -m 755 live/settings.sh "$HOME/.local/bin/infynitae-settings"
 install -m 755 live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
 install -m 755 update.sh "$HOME/.local/bin/infynitae-update"
+install -m 755 live/infynitae-session "$HOME/.local/bin/infynitae-session.new" && mv -f "$HOME/.local/bin/infynitae-session.new" "$HOME/.local/bin/infynitae-session"
 if [ -f "live/wallpaper/infynitae-wallpaper" ]; then
     install -m 755 live/wallpaper/infynitae-wallpaper "$HOME/.local/bin/infynitae-wallpaper"
 fi

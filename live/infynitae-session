@@ -1,5 +1,19 @@
 #!/bin/sh
-# Infynitae Standalone Session Launcher with TTY restoration and auto-respawn guard
+# Infynitae session launcher: restarts the compositor after a clean quit (Ctrl+Alt+Backspace =
+# reload), stops after a crash loop, and logs to ~/.local/state/infynitae/session.log.
+#
+#   infynitae-session          run the session
+#   infynitae-session stop     end the session for real (no restart)
+
+STATE_DIR="$HOME/.local/state/infynitae"
+STOP_FILE="$STATE_DIR/stop"
+mkdir -p "$STATE_DIR"
+
+if [ "$1" = "stop" ]; then
+    : > "$STOP_FILE"
+    pkill -TERM -x infynitae 2>/dev/null || true
+    exit 0
+fi
 
 cleanup() {
     stty sane 2>/dev/null || true
@@ -13,10 +27,10 @@ if [ -f "$HOME/infynitae/live/env.sh" ]; then
 fi
 
 export RUST_BACKTRACE=1
-STATE_DIR="$HOME/.local/state/infynitae"
-mkdir -p "$STATE_DIR"
-CRASH_COUNT_FILE="$STATE_DIR/crash_count"
 SESSION_LOG="$STATE_DIR/session.log"
+LOG_MAX_BYTES=20000000
+FAST_FAIL_SECS=5
+MAX_FAST_FAILS=3
 
 BIN="$HOME/.local/bin/infynitae"
 SESSION_SCRIPT="$HOME/infynitae/live/session.sh"
@@ -31,9 +45,17 @@ if [ -z "$WAYLAND_DISPLAY" ] && [ -z "$DISPLAY" ]; then
     TTY_MODE="--tty"
 fi
 
+rm -f "$STOP_FILE"
+FAILS=0
+
 while true; do
+    # keep one old log; the current one restarts past LOG_MAX_BYTES
+    if [ -f "$SESSION_LOG" ] && [ "$(wc -c < "$SESSION_LOG")" -gt "$LOG_MAX_BYTES" ]; then
+        mv -f "$SESSION_LOG" "$SESSION_LOG.old"
+    fi
+
     START_TIME=$(date +%s)
-    echo "[infynitae-session] Starting Infynitae compositor..." >> "$SESSION_LOG"
+    echo "[infynitae-session] $(date '+%F %T') Starting Infynitae compositor..." >> "$SESSION_LOG"
 
     # Refresh environment and drop stale auth before launch
     if [ -f "$HOME/infynitae/live/env.sh" ]; then
@@ -43,35 +65,34 @@ while true; do
         unset XAUTHORITY
     fi
 
-    # Run compositor, logging output while displaying
-    "$BIN" $TTY_MODE $XWLS --exec "$SESSION_SCRIPT" "$@" 2>&1 | tee -a "$SESSION_LOG"
+    # No pipe: $? must be the compositor's own exit status
+    "$BIN" $TTY_MODE $XWLS --exec "$SESSION_SCRIPT" "$@" >> "$SESSION_LOG" 2>&1
     STATUS=$?
-
-    END_TIME=$(date +%s)
-    DURATION=$((END_TIME - START_TIME))
-
+    DURATION=$(( $(date +%s) - START_TIME ))
     cleanup
+    echo "[infynitae-session] $(date '+%F %T') Compositor exited with status $STATUS after ${DURATION}s" >> "$SESSION_LOG"
 
-    if [ $STATUS -ne 0 ] && [ $DURATION -lt 3 ]; then
-        COUNT=1
-        if [ -f "$CRASH_COUNT_FILE" ]; then
-            PREV_COUNT=$(cat "$CRASH_COUNT_FILE" 2>/dev/null || echo 0)
-            COUNT=$((PREV_COUNT + 1))
-        fi
-        echo "$COUNT" > "$CRASH_COUNT_FILE"
+    if [ -f "$STOP_FILE" ]; then
+        rm -f "$STOP_FILE"
+        echo "[infynitae-session] Stop requested; ending session." >> "$SESSION_LOG"
+        exit 0
+    fi
 
-        if [ "$COUNT" -ge 3 ]; then
-            echo "=========================================================="
-            echo "  [infynitae] Rapid crash loop detected ($COUNT consecutive failures)."
-            echo "  Aborting auto-restart to prevent lockout."
-            echo "  Dropping to rescue shell with full TTY controls."
-            echo "=========================================================="
-            rm -f "$CRASH_COUNT_FILE"
-            exec "${SHELL:-/bin/sh}"
+    if [ "$STATUS" -ne 0 ] && [ "$DURATION" -lt "$FAST_FAIL_SECS" ]; then
+        FAILS=$((FAILS + 1))
+        if [ "$FAILS" -ge "$MAX_FAST_FAILS" ]; then
+            MSG="[infynitae-session] Crash loop: $FAILS failures in a row (last status $STATUS). Not restarting; see $SESSION_LOG"
+            echo "$MSG" >> "$SESSION_LOG"
+            echo "$MSG" >&2
+            # a rescue shell only makes sense on a real terminal
+            if [ -t 0 ]; then
+                exec "${SHELL:-/bin/sh}"
+            fi
+            exit 1
         fi
         sleep 1
     else
-        rm -f "$CRASH_COUNT_FILE"
+        FAILS=0
         sleep 0.5
     fi
 done
