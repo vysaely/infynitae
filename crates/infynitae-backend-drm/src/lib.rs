@@ -901,12 +901,63 @@ fn handle_screencopy(
         }
     };
 
+    let now = infynitae_wayland::presentation_clock_now();
+    let tv_sec_hi = (now.as_secs() >> 32) as u32;
+    let tv_sec_lo = (now.as_secs() & 0xFFFFFFFF) as u32;
+    let tv_nsec = now.subsec_nanos();
+
+    // -------------------------------------------------------------------------
+    // 1. FAST-PATH: Direct Zero-Copy DMA-BUF GPU Render
+    // If client supplied a linux_dmabuf (PipeWire, OBS, gpu-screen-recorder),
+    // we import it directly as a GPU texture and render the composite scene straight
+    // onto it. This eliminates CPU memory copies, glReadPixels stalls, and host RAM allocations!
+    // -------------------------------------------------------------------------
+    let mut remaining = Vec::new();
+
+    for req in pending {
+        let mut dmabuf_rendered = false;
+        if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&req.buffer) {
+            use smithay::backend::renderer::ImportDma;
+            if let Ok(mut dmabuf_tex) = renderer.import_dmabuf(dmabuf, None) {
+                if let Ok(mut dmabuf_fb) = renderer.bind(&mut dmabuf_tex) {
+                    let target_size = req.region.map(|(_, _, w, h)| (w, h)).unwrap_or(size);
+                    let mut damage_tracker = OutputDamageTracker::new(
+                        target_size,
+                        smithay::utils::Scale::from(k),
+                        smithay::utils::Transform::Normal,
+                    );
+                    if damage_tracker.render_output(renderer, &mut dmabuf_fb, 0, &elements, clear).is_ok() {
+                        dmabuf_rendered = true;
+                        if req.with_damage && req.frame.version() >= 2 {
+                            req.frame.damage(0, 0, target_size.0 as u32, target_size.1 as u32);
+                        }
+                        req.frame.flags(Flags::empty());
+                        req.frame.ready(tv_sec_hi, tv_sec_lo, tv_nsec);
+                    }
+                }
+            }
+        }
+
+        if !dmabuf_rendered {
+            remaining.push(req);
+        }
+    }
+
+    if remaining.is_empty() {
+        // All requests were fulfilled via direct zero-copy GPU DMA-BUF scanout!
+        return;
+    }
+
+    // -------------------------------------------------------------------------
+    // 2. SLOW-PATH: wl_shm or CPU memory mapping fallback
+    // Executed ONLY when there is at least one client requesting a CPU/shm buffer.
+    // -------------------------------------------------------------------------
     if screencopy_texture.as_ref().is_none_or(|t| t.width() != size.0 as u32 || t.height() != size.1 as u32) {
         match Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Argb8888, size.into()) {
             Ok(b) => *screencopy_texture = Some(b),
             Err(e) => {
                 eprintln!("[screencopy] Failed to create offscreen buffer: {e:?}");
-                for p in pending {
+                for p in remaining {
                     p.frame.failed();
                 }
                 return;
@@ -919,7 +970,7 @@ fn handle_screencopy(
         Ok(fb) => fb,
         Err(e) => {
             eprintln!("[screencopy] Failed to bind offscreen buffer: {e:?}");
-            for p in pending {
+            for p in remaining {
                 p.frame.failed();
             }
             return;
@@ -929,7 +980,7 @@ fn handle_screencopy(
     let mut damage_tracker = OutputDamageTracker::new(size, smithay::utils::Scale::from(k), smithay::utils::Transform::Normal);
     if let Err(e) = damage_tracker.render_output(renderer, &mut framebuffer, 0, &elements, clear) {
         eprintln!("[screencopy] Failed to render output: {e:?}");
-        for p in pending {
+        for p in remaining {
             p.frame.failed();
         }
         return;
@@ -939,7 +990,7 @@ fn handle_screencopy(
         Ok(m) => m,
         Err(e) => {
             eprintln!("[screencopy] Failed to copy framebuffer: {e:?}");
-            for p in pending {
+            for p in remaining {
                 p.frame.failed();
             }
             return;
@@ -950,21 +1001,16 @@ fn handle_screencopy(
         Ok(s) => s,
         Err(e) => {
             eprintln!("[screencopy] Failed to map texture: {e:?}");
-            for p in pending {
+            for p in remaining {
                 p.frame.failed();
             }
             return;
         }
     };
 
-    let now = infynitae_wayland::presentation_clock_now();
-    let tv_sec_hi = (now.as_secs() >> 32) as u32;
-    let tv_sec_lo = (now.as_secs() & 0xFFFFFFFF) as u32;
-    let tv_nsec = now.subsec_nanos();
-
     let src_stride = (size.0 * 4) as usize;
 
-    for req in pending {
+    for req in remaining {
         let (rx, ry) = req
             .region
             .map(|(x, y, _, _)| (x.max(0) as usize, y.max(0) as usize))
@@ -1015,54 +1061,42 @@ fn handle_screencopy(
 
         let mut copied = matches!(copy_result, Ok(true));
         if !copied {
-            // If not wl_shm, try linux-dmabuf buffer (used by xdg-desktop-portal-wlr with PipeWire)
+            // If wl_shm failed or wasn't shm, try mapping DMA-BUF planes via CPU
             if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&req.buffer) {
-                use smithay::backend::renderer::ImportDma;
-                if let Ok(mut dmabuf_tex) = renderer.import_dmabuf(dmabuf, None) {
-                    if let Ok(mut dmabuf_fb) = renderer.bind(&mut dmabuf_tex) {
-                        let mut damage_tracker = OutputDamageTracker::new(size, 1.0, smithay::utils::Transform::Normal);
-                        if damage_tracker.render_output(renderer, &mut dmabuf_fb, 0, &elements, clear).is_ok() {
-                            copied = true;
-                        }
-                    }
-                }
+                use smithay::backend::allocator::Buffer;
+                use smithay::backend::allocator::dmabuf::{DmabufMappingMode, DmabufSyncFlags};
 
-                if !copied {
-                    use smithay::backend::allocator::Buffer;
-                    use smithay::backend::allocator::dmabuf::{DmabufMappingMode, DmabufSyncFlags};
+                if let Ok(mapping) = dmabuf.map_plane(0, DmabufMappingMode::WRITE) {
+                    let _ = dmabuf.sync_plane(0, DmabufSyncFlags::WRITE | DmabufSyncFlags::START);
+                    let ptr = mapping.ptr() as *mut u8;
+                    let len = mapping.length();
+                    let dest_stride = dmabuf.strides().next().unwrap_or((size.0 * 4) as u32) as usize;
+                    let offset = dmabuf.offsets().next().unwrap_or(0) as usize;
+                    let h = (dmabuf.size().h.max(0) as usize).min(size.1 as usize);
+                    let w_bytes = (dmabuf.size().w.max(0) as usize).min(size.0 as usize) * 4;
 
-                    if let Ok(mapping) = dmabuf.map_plane(0, DmabufMappingMode::WRITE) {
-                        let _ = dmabuf.sync_plane(0, DmabufSyncFlags::WRITE | DmabufSyncFlags::START);
-                        let ptr = mapping.ptr() as *mut u8;
-                        let len = mapping.length();
-                        let dest_stride = dmabuf.strides().next().unwrap_or((size.0 * 4) as u32) as usize;
-                        let offset = dmabuf.offsets().next().unwrap_or(0) as usize;
-                        let h = (dmabuf.size().h.max(0) as usize).min(size.1 as usize);
-                        let w_bytes = (dmabuf.size().w.max(0) as usize).min(size.0 as usize) * 4;
-
-                        if dest_stride >= w_bytes {
-                            let total_required = dest_stride
-                                .checked_mul(h.saturating_sub(1))
-                                .and_then(|v| v.checked_add(w_bytes))
-                                .and_then(|v| v.checked_add(offset));
-                            if let Some(total) = total_required
-                                && total <= len
-                            {
-                                unsafe {
-                                    let dest_base = ptr.add(offset);
-                                    for row in 0..h {
-                                        let src_row_idx = (ry + row).min(size.1.max(0) as usize);
-                                        let src_offset = src_row_idx * src_stride + rx * 4;
-                                        if src_offset + w_bytes <= slice.len() {
-                                            let src_row = &slice[src_offset..(src_offset + w_bytes)];
-                                            let dest_row = dest_base.add(row * dest_stride);
-                                            std::ptr::copy_nonoverlapping(src_row.as_ptr(), dest_row, w_bytes);
-                                        }
+                    if dest_stride >= w_bytes {
+                        let total_required = dest_stride
+                            .checked_mul(h.saturating_sub(1))
+                            .and_then(|v| v.checked_add(w_bytes))
+                            .and_then(|v| v.checked_add(offset));
+                        if let Some(total) = total_required
+                            && total <= len
+                        {
+                            unsafe {
+                                let dest_base = ptr.add(offset);
+                                for row in 0..h {
+                                    let src_row_idx = (ry + row).min(size.1.max(0) as usize);
+                                    let src_offset = src_row_idx * src_stride + rx * 4;
+                                    if src_offset + w_bytes <= slice.len() {
+                                        let src_row = &slice[src_offset..(src_offset + w_bytes)];
+                                        let dest_row = dest_base.add(row * dest_stride);
+                                        std::ptr::copy_nonoverlapping(src_row.as_ptr(), dest_row, w_bytes);
                                     }
                                 }
-                                let _ = dmabuf.sync_plane(0, DmabufSyncFlags::WRITE | DmabufSyncFlags::END);
-                                copied = true;
                             }
+                            let _ = dmabuf.sync_plane(0, DmabufSyncFlags::WRITE | DmabufSyncFlags::END);
+                            copied = true;
                         }
                     }
                 }
