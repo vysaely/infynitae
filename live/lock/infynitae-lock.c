@@ -65,11 +65,11 @@ typedef struct {
     char password[PASSWORD_MAX_LEN];
     size_t password_len;
 
-    AuthState auth_state;
+    _Atomic AuthState auth_state;
     pthread_t pam_thread;
-    bool pam_thread_active;
+    _Atomic bool pam_thread_active;
 
-    int shake_frame;
+    _Atomic int shake_frame;
     double pulse_phase;
 
     bool greeter_mode;
@@ -213,12 +213,12 @@ static void *pam_worker_thread(void *arg) {
         .appdata_ptr = data->password
     };
 
+    // pam_start() succeeds even when /etc/pam.d/<service> is missing: PAM then silently uses
+    // /etc/pam.d/other, which denies everything on Arch. So pick the service by whether its
+    // file exists, and use "login" (the user's console password) when ours is not installed.
+    const char *service = access("/etc/pam.d/infynitae", R_OK) == 0 ? "infynitae" : "login";
     pam_handle_t *pamh = NULL;
-    int rc = pam_start("infynitae", data->username, &conv, &pamh);
-    if (rc != PAM_SUCCESS) {
-        // Fallback to login or system-auth
-        rc = pam_start("login", data->username, &conv, &pamh);
-    }
+    int rc = pam_start(service, data->username, &conv, &pamh);
 
     if (rc == PAM_SUCCESS) {
         rc = pam_authenticate(pamh, 0);
