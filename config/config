@@ -182,6 +182,9 @@ VRR_ENABLED="auto"
 #   "true"  - Directly scans out client DMA-BUFs to display hardware (lowest latency, 0 GPU copies)
 #   "false" - Always composites through GLES shader passes
 DIRECT_SCANOUT="true"
+# Overlay planes: also put windows' own buffers on hardware overlay planes. Off by default:
+# on amdgpu it made page flips fail (dropped frames) whenever Electron apps (Discord) drew.
+OVERLAY_PLANES="false"
 
 # Async Pageflip Tearing (for ultra-low-latency esports games): "false" or "true"
 ALLOW_TEARING="false"

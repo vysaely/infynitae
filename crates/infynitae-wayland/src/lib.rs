@@ -209,6 +209,9 @@ pub struct WaylandState {
     pub rendered_elements: Vec<infynitae_core::stage::ElementId>,
     pub input_config: InputDeviceConfig,
     pub direct_scanout: Option<bool>,
+    /// Client buffers may also go on overlay planes (`OVERLAY_PLANES`, off by default: amdgpu
+    /// refused page flips for Electron's viewport-scaled subsurfaces there).
+    pub overlay_planes: bool,
     pub wallpaper: Option<String>,
     pub wallpaper_mode: Option<String>,
     pub keyboard_repeat_delay: i32,
@@ -377,6 +380,7 @@ impl WaylandState {
             rendered_elements: Vec::new(),
             input_config: InputDeviceConfig::default(),
             direct_scanout: None,
+            overlay_planes: false,
             wallpaper: None,
             wallpaper_mode: None,
             keyboard_repeat_delay: repeat_delay,
@@ -404,8 +408,23 @@ impl WaylandState {
     /// The GPU clients should allocate their buffers on (linux-dmabuf feedback main device): the
     /// render node the backend draws with. Replaces the global made with the previous device.
     pub fn set_dmabuf_main_device(&mut self, dev: libc::dev_t) {
-        let formats = DMABUF_FORMATS;
-        let global = match DmabufFeedbackBuilder::new(dev, formats).build() {
+        self.set_dmabuf_device_formats(dev, DMABUF_FORMATS.to_vec());
+    }
+
+    /// [`set_dmabuf_main_device`](Self::set_dmabuf_main_device) with the formats and modifiers
+    /// the backend's renderer imports (tiled and compressed layouts render far faster than
+    /// linear ones); an empty list keeps the linear formats.
+    pub fn set_dmabuf_device_formats(
+        &mut self,
+        dev: libc::dev_t,
+        formats: Vec<smithay::backend::allocator::Format>,
+    ) {
+        let formats = if formats.is_empty() {
+            DMABUF_FORMATS.to_vec()
+        } else {
+            formats
+        };
+        let global = match DmabufFeedbackBuilder::new(dev, formats.iter().copied()).build() {
             Ok(feedback) => self
                 .dmabuf
                 .create_global_with_default_feedback::<Self>(&self.dh, &feedback),
@@ -610,6 +629,9 @@ impl WaylandState {
                             }
                             "DIRECT_SCANOUT" => {
                                 self.direct_scanout = Some(matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on"));
+                            }
+                            "OVERLAY_PLANES" => {
+                                self.overlay_planes = matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
                             }
                             "WALLPAPER" => {
                                 let trimmed = val.trim();
@@ -886,7 +908,8 @@ impl WaylandState {
     }
 }
 
-/// The dmabuf formats offered to clients: linear only, which any GPU can import and scan out.
+/// The dmabuf formats offered when the backend names none: linear only, which any GPU can
+/// import and scan out.
 const DMABUF_FORMATS: [smithay::backend::allocator::Format; 2] = [
     smithay::backend::allocator::Format {
         code: smithay::backend::allocator::Fourcc::Argb8888,

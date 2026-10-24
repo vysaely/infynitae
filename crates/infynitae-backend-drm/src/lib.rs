@@ -286,8 +286,16 @@ pub fn run_console_with(
             .node_with_type(smithay::backend::drm::NodeType::Render)
             .and_then(Result::ok)
             .unwrap_or(node);
-        println!("[infynitae] Client buffers on GPU node {node}");
-        state.set_dmabuf_main_device(node.dev_id());
+        // every format and modifier the renderer imports, not only linear
+        let formats: Vec<_> = smithay::backend::renderer::ImportDma::dmabuf_formats(&renderer)
+            .iter()
+            .copied()
+            .collect();
+        println!(
+            "[infynitae] Client buffers on GPU node {node} ({} formats/modifiers)",
+            formats.len()
+        );
+        state.set_dmabuf_device_formats(node.dev_id(), formats);
     }
 
     // Zero-blur scaling: use Nearest-neighbor filtering on upscaled surfaces by default
@@ -867,10 +875,16 @@ fn render(data: &mut LoopData) {
                 });
             s.k = k;
         }
-        let frame_flags = if data.direct_scanout {
-            FrameFlags::DEFAULT
-        } else {
-            FrameFlags::empty()
+        // Direct scanout: a fullscreen client's buffer on the primary plane (games). Overlay
+        // planes only on request: amdgpu refused page flips (EINVAL, hundreds per Electron
+        // start) for viewport-scaled subsurfaces there, although Smithay's test commit passed.
+        // The cursor is drawn by the compositor, never on the cursor plane.
+        let frame_flags = match (data.direct_scanout, data.state.overlay_planes) {
+            (false, _) => FrameFlags::empty(),
+            (true, false) => FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT,
+            (true, true) => {
+                FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT | FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT
+            }
         };
         let queued = match s.compositor.render_frame(
             &mut data.renderer,
