@@ -70,6 +70,31 @@ TELEPORT_ON_OPEN="1"
 #   "auto" (uses native infynitae-lock, fallback hyprlock, swaylock, gtklock, waylock), or custom command
 SCREEN_LOCKER="auto"
 
+# Boot / Start Screen (Replace TTY with pretty Lock Screen):
+#   "true"  - Auto-spawns infynitae-lock on startup as greeter start screen before session unlocks
+#   "false" - Boots straight into active canvas & terminal
+START_LOCKED="false"
+
+# Idle Screen Sleep & Auto-Lock:
+#   IDLE_SLEEP_TIMEOUT_MIN: Inactivity minutes before DPMS monitor sleep / screen blanking (0 to disable)
+#   IDLE_AUTO_LOCK: Auto-lock session with infynitae-lock when entering idle sleep
+IDLE_SLEEP_TIMEOUT_MIN="15"
+IDLE_AUTO_LOCK="true"
+
+# Window Privacy & Screen Capture Exemption (Super+Shift+P to toggle on focused window):
+#   Hides designated windows from screenshots, screenshares, RustDesk, OBS, Discord, and screencopy.
+#   Private windows appear transparent / reveal wallpaper in capture, while remaining fully visible to you.
+#   PRIVACY_APPS: Comma-separated list of app_id or class substrings (e.g. "bitwarden,keepassxc,discord")
+#   PRIVACY_TITLES: Comma-separated list of window title substrings (e.g. "Password,Secret")
+PRIVACY_APPS=""
+PRIVACY_TITLES=""
+
+# Wine & Layered Window Transparency Fix:
+#   "true"  - Eliminates black background boxes on Wine/Proton/X11 apps requesting transparent/layered windows
+#   FORCE_TRANSPARENT_APPS: Comma-separated extra apps to force alpha blending for (e.g. "wine,steam_app")
+WINE_TRANSPARENCY="true"
+FORCE_TRANSPARENT_APPS=""
+
 # Touchpad:
 TOUCHPAD_TAP="true"             # Tap to click
 TOUCHPAD_NATURAL_SCROLL="false"  # Invert scroll direction
@@ -150,8 +175,14 @@ DIRECT_SCANOUT="true"
 # Async Pageflip Tearing (for ultra-low-latency esports games): "false" or "true"
 ALLOW_TEARING="false"
 
-# Idle Screen Sleep Timeout in minutes (0 to disable screen sleep)
-IDLE_SLEEP_TIMEOUT_MIN="15"
+# Multi-Monitor Arrangement & Per-Output Configuration:
+#   OUTPUT_ORDER: Priority / sequence of connectors e.g. "DP-1,HDMI-A-1" (left-to-right)
+#   OUTPUT_LAYOUT: "left-to-right" (default) or "right-to-left"
+#   Per-output resolution override: OUTPUT_<CONNECTOR>_MODE="2560x1440"
+#   Per-output refresh rate override: OUTPUT_<CONNECTOR>_RATE="144"
+#   Per-output scale override: OUTPUT_<CONNECTOR>_SCALE="1.25"
+OUTPUT_ORDER=""
+OUTPUT_LAYOUT="left-to-right"
 
 # ------------------------------------------------------------------------------
 # 4. X11 & XWAYLAND COMPATIBILITY (Steam, games, legacy tools)

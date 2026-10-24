@@ -120,19 +120,37 @@ pub struct CanonicalRect<E> {
     rect: Rectangle<i32, Physical>,
     src: Rectangle<f64, Buffer>,
     remapped: bool,
+    force_transparent: bool,
 }
 
 impl<E: Element> CanonicalRect<E> {
     /// Wraps `inner` at the canonical rect `rect` (view-space physical px, i64) for a frame at `k`,
     /// cropped to [`RENDER_LIMIT`].
     pub fn new(inner: E, rect: PhysicalRect, k: f64) -> Self {
-        Self::with_crop_box(inner, rect, k, RENDER_LIMIT)
+        Self::with_crop_box_transparent(inner, rect, k, RENDER_LIMIT, false)
+    }
+
+    /// Wraps `inner` with optional forced transparency blending (Wine / layered windows).
+    pub fn new_opt(inner: E, rect: PhysicalRect, k: f64, force_transparent: bool) -> Self {
+        Self::with_crop_box_transparent(inner, rect, k, RENDER_LIMIT, force_transparent)
     }
 
     /// [`CanonicalRect::new`] with the crop box `[−limit, limit]` per axis. Production uses
     /// [`RENDER_LIMIT`]; a smaller box lets tests draw a cropped surface with a software renderer.
     #[doc(hidden)]
     pub fn with_crop_box(inner: E, rect: PhysicalRect, k: f64, limit: i64) -> Self {
+        Self::with_crop_box_transparent(inner, rect, k, limit, false)
+    }
+
+    /// [`CanonicalRect::new`] with crop box and forced transparency option.
+    #[doc(hidden)]
+    pub fn with_crop_box_transparent(
+        inner: E,
+        rect: PhysicalRect,
+        k: f64,
+        limit: i64,
+        force_transparent: bool,
+    ) -> Self {
         let r = rect;
         let c = (
             r.x0.clamp(-limit, limit),
@@ -168,6 +186,7 @@ impl<E: Element> CanonicalRect<E> {
             rect,
             src,
             remapped,
+            force_transparent,
         }
     }
 
@@ -269,7 +288,7 @@ impl<E: Element> Element for CanonicalRect<E> {
     }
 
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        if self.remapped {
+        if self.remapped || self.force_transparent {
             OpaqueRegions::default()
         } else {
             self.inner.opaque_regions(scale)
@@ -277,7 +296,11 @@ impl<E: Element> Element for CanonicalRect<E> {
     }
 
     fn alpha(&self) -> f32 {
-        self.inner.alpha()
+        if self.force_transparent && self.inner.alpha() >= 1.0 {
+            0.9999
+        } else {
+            self.inner.alpha()
+        }
     }
 
     fn kind(&self) -> Kind {
@@ -298,7 +321,7 @@ impl<R: Renderer, E: RenderElement<R>> RenderElement<R> for CanonicalRect<E> {
     }
 
     fn underlying_storage(&self, renderer: &mut R) -> Option<UnderlyingStorage<'_>> {
-        if self.remapped {
+        if self.remapped || self.force_transparent {
             None
         } else {
             self.inner.underlying_storage(renderer)
@@ -322,10 +345,27 @@ where
     R: Renderer + ImportAll,
     R::TextureId: Clone + 'static,
 {
+    render_elements_opt(renderer, registry, entries, k, |_| false)
+}
+
+/// Render elements with optional forced transparency predicate per element.
+pub fn render_elements_opt<R, F>(
+    renderer: &mut R,
+    registry: &SurfaceRegistry,
+    entries: &[FrameEntry],
+    k: f64,
+    force_transparent: F,
+) -> Result<Vec<(FrameEntry, SurfaceElement<R>)>, R::Error>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+    F: Fn(infynitae_core::stage::ElementId) -> bool,
+{
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
         if let Some(el) = surface_element(renderer, registry, e)? {
-            out.push((e.clone(), CanonicalRect::new(el, e.rect, k)));
+            let ft = force_transparent(e.element);
+            out.push((e.clone(), CanonicalRect::new_opt(el, e.rect, k, ft)));
         }
     }
     Ok(out)
@@ -519,8 +559,59 @@ where
             .into_iter()
             .map(OutputElement::Surface),
     );
+    let force_transparent = |elem| state.is_element_transparent(elem);
     elements.extend(
-        render_elements(renderer, &state.registry, &entries, view.k)
+        render_elements_opt(renderer, &state.registry, &entries, view.k, force_transparent)
+            .map_err(RenderOutputError::Renderer)?
+            .into_iter()
+            .map(|(_, e)| OutputElement::Surface(e)),
+    );
+    elements.extend(
+        layer_render_elements(renderer, &state.registry, &layers.below, view.k)
+            .map_err(RenderOutputError::Renderer)?
+            .into_iter()
+            .map(OutputElement::Surface),
+    );
+    Ok((elements, view.k))
+}
+
+/// One frame's elements for screencopy, excluding any private window (hidden from screenshots/screenshares).
+pub fn output_elements_screencopy<R>(
+    state: &mut WaylandState,
+    renderer: &mut R,
+    output: OutputId,
+    include_cursor: bool,
+) -> Result<OutputFrame<R>, RenderOutputError<R::Error>>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    let (view, raw_entries) = {
+        let frame = state
+            .core
+            .render_list(output)
+            .map_err(|_| RenderOutputError::NoFrame)?;
+        (frame.view, frame.entries.clone())
+    };
+    let entries: Vec<FrameEntry> = raw_entries
+        .into_iter()
+        .filter(|e| !state.is_element_private(e.element))
+        .collect();
+    let layers = state.core.layer_frame(output);
+    let mut elements = Vec::new();
+    if include_cursor {
+        cursor_elements(state, renderer, output, view.k, &mut elements)
+            .map_err(RenderOutputError::Renderer)?;
+    }
+    elements.extend(
+        layer_render_elements(renderer, &state.registry, &layers.above, view.k)
+            .map_err(RenderOutputError::Renderer)?
+            .into_iter()
+            .map(OutputElement::Surface),
+    );
+    let force_transparent = |elem| state.is_element_transparent(elem);
+    elements.extend(
+        render_elements_opt(renderer, &state.registry, &entries, view.k, force_transparent)
             .map_err(RenderOutputError::Renderer)?
             .into_iter()
             .map(|(_, e)| OutputElement::Surface(e)),

@@ -211,6 +211,9 @@ impl WaylandState {
                 Effect::SpawnLockScreen => {
                     self.spawn_action("lock-screen");
                 }
+                Effect::TogglePrivacy => {
+                    self.toggle_privacy_focused();
+                }
                 Effect::VolumeUp => {
                     self.spawn_action("volume-up");
                 }

@@ -368,6 +368,7 @@ impl Core {
             }
             KeyAction::ReloadShell => vec![Effect::ReloadShell],
             KeyAction::SpawnLockScreen => vec![Effect::SpawnLockScreen],
+            KeyAction::TogglePrivacy => vec![Effect::TogglePrivacy],
             KeyAction::VolumeUp => vec![Effect::VolumeUp],
             KeyAction::VolumeDown => vec![Effect::VolumeDown],
             KeyAction::VolumeMute => vec![Effect::VolumeMute],

@@ -17,7 +17,7 @@
 
 #![deny(unsafe_code)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -124,19 +124,41 @@ pub struct ModeInfo {
     pub preferred: bool,
 }
 
-/// The mode to use (T5, refined after the first console run, 2026-10-22: a 165 Hz monitor
-/// prefers 1920×1080 at 60 Hz): the preferred mode's resolution (the first mode's without one),
-/// at the highest refresh the monitor offers for it. `None` without modes. Pure.
+/// The mode to use: preferred mode's resolution at highest refresh (or custom mode/rate if configured).
 pub fn choose_mode(modes: &[ModeInfo]) -> Option<usize> {
-    let size = modes
-        .iter()
-        .find(|m| m.preferred)
-        .or_else(|| modes.first())?
-        .size;
-    modes
+    choose_mode_custom(modes, None, None)
+}
+
+/// The mode to use with optional custom target resolution and refresh rate.
+pub fn choose_mode_custom(
+    modes: &[ModeInfo],
+    target_size: Option<(u16, u16)>,
+    target_rate: Option<u32>,
+) -> Option<usize> {
+    let size = target_size.or_else(|| {
+        modes
+            .iter()
+            .find(|m| m.preferred)
+            .or_else(|| modes.first())
+            .map(|m| m.size)
+    })?;
+    let matching_size: Vec<(usize, &ModeInfo)> = modes
         .iter()
         .enumerate()
         .filter(|(_, m)| m.size == size)
+        .collect();
+
+    if let Some(rate) = target_rate {
+        if let Some(&(idx, _)) = matching_size
+            .iter()
+            .min_by_key(|(_, m)| (m.refresh_mhz as i64 - rate as i64).abs())
+        {
+            return Some(idx);
+        }
+    }
+
+    matching_size
+        .into_iter()
         .max_by_key(|(_, m)| m.refresh_mhz)
         .map(|(i, _)| i)
 }
@@ -186,6 +208,11 @@ struct LoopData {
     config_path: Option<PathBuf>,
     last_config_check: std::time::Instant,
     last_config_mtime: Option<std::time::SystemTime>,
+    last_user_activity: std::time::Instant,
+    dpms_active: bool,
+    idle_sleep_timeout_min: u32,
+    idle_auto_lock: bool,
+    lock_process: Option<std::process::Child>,
 }
 
 /// The device limit Core is told: assumed, not queried, as in the nested backend (OB-52, INC-13).
@@ -277,15 +304,86 @@ pub fn run_console_with(
         .collect::<Vec<_>>();
     let scale_120 = options.scale_120.unwrap_or(120);
 
+    // Read display arrangement and per-monitor configs from ~/.config/infynitae/config
+    let mut output_order: Vec<String> = Vec::new();
+    let mut output_layout_reverse = false;
+    let mut custom_scales: HashMap<String, u32> = HashMap::new();
+    let mut custom_modes: HashMap<String, (u16, u16)> = HashMap::new();
+    let mut custom_rates: HashMap<String, u32> = HashMap::new();
+    let mut idle_timeout_min = 15u32;
+    let mut idle_auto_lock = true;
+
+    if let Ok(home) = std::env::var("HOME") {
+        let config_path = format!("{home}/.config/infynitae/config");
+        if let Ok(content) = std::fs::read_to_string(&config_path) {
+            for line in content.lines() {
+                let line_clean = line.split('#').next().unwrap_or("").trim();
+                if let Some((k, v)) = line_clean.split_once('=') {
+                    let key = k.trim();
+                    let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                    if key == "OUTPUT_ORDER" {
+                        output_order = val.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
+                    } else if key == "OUTPUT_LAYOUT" && val.eq_ignore_ascii_case("right-to-left") {
+                        output_layout_reverse = true;
+                    } else if key == "IDLE_SLEEP_TIMEOUT_MIN" {
+                        if let Ok(m) = val.parse::<u32>() {
+                            idle_timeout_min = m;
+                        }
+                    } else if key == "IDLE_AUTO_LOCK" {
+                        idle_auto_lock = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                    } else if key.starts_with("OUTPUT_") && key.ends_with("_SCALE") {
+                        let conn_name = key.trim_start_matches("OUTPUT_").trim_end_matches("_SCALE").replace('_', "-");
+                        if let Ok(s) = val.parse::<f64>() {
+                            custom_scales.insert(conn_name.to_lowercase(), (s * 120.0).round() as u32);
+                        }
+                    } else if key.starts_with("OUTPUT_") && key.ends_with("_RATE") {
+                        let conn_name = key.trim_start_matches("OUTPUT_").trim_end_matches("_RATE").replace('_', "-");
+                        if let Ok(r) = val.parse::<f64>() {
+                            custom_rates.insert(conn_name.to_lowercase(), (r * 1000.0).round() as u32);
+                        }
+                    } else if key.starts_with("OUTPUT_") && key.ends_with("_MODE") {
+                        let conn_name = key.trim_start_matches("OUTPUT_").trim_end_matches("_MODE").replace('_', "-");
+                        if let Some((w_s, h_s)) = val.split_once('x') {
+                            if let (Ok(w), Ok(h)) = (w_s.trim().parse::<u16>(), h_s.trim().parse::<u16>()) {
+                                custom_modes.insert(conn_name.to_lowercase(), (w, h));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // every connected connector at its preferred mode, each on a CRTC of its own (T5)
     let resources = drm.resource_handles()?;
     let mut used: Vec<crtc::Handle> = Vec::new();
     let mut screens = Vec::new();
+
+    let mut connected_connectors = Vec::new();
     for &handle in resources.connectors() {
-        let conn = drm.get_connector(handle, true)?;
-        if conn.state() != connector::State::Connected {
-            continue;
+        if let Ok(conn) = drm.get_connector(handle, true) {
+            if conn.state() == connector::State::Connected {
+                let name = format!("{:?}-{}", conn.interface(), conn.interface_id());
+                connected_connectors.push((handle, conn, name));
+            }
         }
+    }
+
+    if !output_order.is_empty() {
+        connected_connectors.sort_by_key(|(_, _, name)| {
+            let n_lower = name.to_lowercase();
+            output_order.iter().position(|o| n_lower.contains(o) || o.contains(&n_lower)).unwrap_or(usize::MAX)
+        });
+    } else if output_layout_reverse {
+        connected_connectors.reverse();
+    }
+
+    for (handle, conn, name) in connected_connectors {
+        let n_lower = name.to_lowercase();
+        let target_size = custom_modes.get(&n_lower).copied();
+        let target_rate = custom_rates.get(&n_lower).copied();
+        let conn_scale = custom_scales.get(&n_lower).copied().unwrap_or(scale_120);
+
         let infos: Vec<ModeInfo> = conn
             .modes()
             .iter()
@@ -295,7 +393,7 @@ pub fn run_console_with(
                 preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
             })
             .collect();
-        let Some(mode) = choose_mode(&infos).map(|i| conn.modes()[i]) else {
+        let Some(mode) = choose_mode_custom(&infos, target_size, target_rate).map(|i| conn.modes()[i]) else {
             continue;
         };
         let crtc = conn
@@ -309,7 +407,6 @@ pub fn run_console_with(
             continue;
         };
         used.push(crtc);
-        let name = format!("{:?}-{}", conn.interface(), conn.interface_id());
         let (w, h) = mode.size();
         let refresh = refresh_mhz(
             mode.clock(),
@@ -318,9 +415,10 @@ pub fn run_console_with(
             mode.vrefresh(),
         );
         println!(
-            "[infynitae] Screen {name}: {w}x{h} @ {}.{:03} Hz",
+            "[infynitae] Screen {name}: {w}x{h} @ {}.{:03} Hz (scale: {:.2}x)",
             refresh / 1000,
-            refresh % 1000
+            refresh % 1000,
+            conn_scale as f64 / 120.0
         );
         let surface = drm.create_surface(crtc, mode, &[handle])?;
         let descriptor = OutputDescriptor {
@@ -333,7 +431,7 @@ pub fn run_console_with(
             },
             mode: (u32::from(w), u32::from(h)),
             transform: Transform::Normal,
-            scale_120,
+            scale_120: conn_scale,
             refresh_mhz: refresh,
         };
         let (id, fx) = state
@@ -498,6 +596,11 @@ pub fn run_console_with(
         config_path: cfg_path,
         last_config_check: std::time::Instant::now(),
         last_config_mtime: initial_mtime,
+        last_user_activity: std::time::Instant::now(),
+        dpms_active: false,
+        idle_sleep_timeout_min: idle_timeout_min,
+        idle_auto_lock: idle_auto_lock,
+        lock_process: None,
     };
 
     data.state.reload_config();
@@ -534,6 +637,22 @@ pub fn run_console_with(
                             if let Some(ds) = data.state.direct_scanout {
                                 data.direct_scanout = ds;
                             }
+                            if let Ok(content) = std::fs::read_to_string(path) {
+                                for line in content.lines() {
+                                    let line_clean = line.split('#').next().unwrap_or("").trim();
+                                    if let Some((k, v)) = line_clean.split_once('=') {
+                                        let key = k.trim();
+                                        let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                                        if key == "IDLE_SLEEP_TIMEOUT_MIN" {
+                                            if let Ok(m) = val.parse::<u32>() {
+                                                data.idle_sleep_timeout_min = m;
+                                            }
+                                        } else if key == "IDLE_AUTO_LOCK" {
+                                            data.idle_auto_lock = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                        }
+                                    }
+                                }
+                            }
                             let input_cfg = data.state.input_config().clone();
                             for dev in &mut data.input_devices {
                                 configure_input_device(dev, &input_cfg);
@@ -541,6 +660,41 @@ pub fn run_console_with(
                             data.session.request_frame();
                         } else if data.last_config_mtime.is_none() {
                             data.last_config_mtime = Some(mtime);
+                        }
+                    }
+                }
+            }
+
+            // Idle screen sleep & auto-lock check
+            if !data.dpms_active
+                && data.idle_sleep_timeout_min > 0
+                && data.last_user_activity.elapsed() >= Duration::from_secs((data.idle_sleep_timeout_min as u64) * 60)
+            {
+                println!(
+                    "[infynitae] Inactivity timeout reached ({} min). Entering DPMS sleep / screen blanking...",
+                    data.idle_sleep_timeout_min
+                );
+                data.dpms_active = true;
+                for s in &mut data.screens {
+                    let _ = s.compositor.clear();
+                }
+                if data.idle_auto_lock {
+                    let is_running = data
+                        .lock_process
+                        .as_mut()
+                        .is_some_and(|p| p.try_wait().ok().flatten().is_none());
+                    if !is_running {
+                        println!("[infynitae] Auto-locking session with infynitae-lock...");
+                        let child = std::process::Command::new("infynitae-lock").spawn()
+                            .or_else(|_| {
+                                if let Ok(home) = std::env::var("HOME") {
+                                    std::process::Command::new(format!("{home}/.local/bin/infynitae-lock")).spawn()
+                                } else {
+                                    Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found"))
+                                }
+                            });
+                        if let Ok(c) = child {
+                            data.lock_process = Some(c);
                         }
                     }
                 }
@@ -735,7 +889,7 @@ fn handle_screencopy(
     }
 
     let needs_cursor = !state.screencopy.hide_cursor() && pending.iter().any(|p| p.overlay_cursor);
-    let (elements, k) = match convert::output_elements_opt(state, renderer, output_id, needs_cursor) {
+    let (elements, k) = match convert::output_elements_screencopy(state, renderer, output_id, needs_cursor) {
         Ok(res) => res,
         Err(e) => {
             eprintln!("[screencopy] Failed to get elements: {e:?}");
@@ -927,6 +1081,16 @@ fn handle_screencopy(
 }
 
 fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
+    data.last_user_activity = std::time::Instant::now();
+    if data.dpms_active {
+        println!("[infynitae] User input detected: waking up screens from DPMS sleep");
+        data.dpms_active = false;
+        for s in &mut data.screens {
+            let _ = s.compositor.reset_state();
+            s.pending = false;
+        }
+        data.session.request_frame();
+    }
     match event {
         InputEvent::Keyboard { event } => {
             let key = event.key_code().raw().saturating_sub(8);

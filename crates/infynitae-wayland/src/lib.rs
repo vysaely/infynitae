@@ -201,6 +201,11 @@ pub struct WaylandState {
     pub wallpaper_mode: Option<String>,
     pub keyboard_repeat_delay: i32,
     pub keyboard_repeat_rate: i32,
+    pub private_elements: std::collections::HashSet<infynitae_core::stage::ElementId>,
+    pub privacy_apps: Vec<String>,
+    pub privacy_titles: Vec<String>,
+    pub wine_transparency: bool,
+    pub force_transparent_apps: Vec<String>,
     // probe builds only: the Send assertion must be the one and only error
     #[cfg(feature = "probe_store_port_in_state")]
     leaked_port: infynitae_core::InputPort,
@@ -398,6 +403,11 @@ impl WaylandState {
             wallpaper_mode: None,
             keyboard_repeat_delay: repeat_delay,
             keyboard_repeat_rate: repeat_rate,
+            private_elements: std::collections::HashSet::new(),
+            privacy_apps: Vec::new(),
+            privacy_titles: Vec::new(),
+            wine_transparency: true,
+            force_transparent_apps: Vec::new(),
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
             leaked_port: unreachable!(),
@@ -627,6 +637,30 @@ impl WaylandState {
                                     }
                                 }
                             }
+                            "PRIVACY_APPS" => {
+                                self.privacy_apps = val
+                                    .split(',')
+                                    .map(|s| s.trim().to_lowercase())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                            }
+                            "PRIVACY_TITLES" => {
+                                self.privacy_titles = val
+                                    .split(',')
+                                    .map(|s| s.trim().to_lowercase())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                            }
+                            "WINE_TRANSPARENCY" => {
+                                self.wine_transparency = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                            }
+                            "FORCE_TRANSPARENT_APPS" => {
+                                self.force_transparent_apps = val
+                                    .split(',')
+                                    .map(|s| s.trim().to_lowercase())
+                                    .filter(|s| !s.is_empty())
+                                    .collect();
+                            }
                             _ => {}
                         }
                     }
@@ -675,6 +709,66 @@ impl WaylandState {
     /// Elements in creation order.
     pub fn elements(&self) -> impl Iterator<Item = ElementId> + '_ {
         self.elements.iter().map(|e| e.id)
+    }
+
+    /// Whether an element is marked private (omitted/transparent during screencopy, screenshare, RustDesk).
+    pub fn is_element_private(&self, element: infynitae_core::stage::ElementId) -> bool {
+        if self.private_elements.contains(&element) {
+            return true;
+        }
+        if let Some(meta) = self.core.stage().meta(element) {
+            if let Some(app_id) = &meta.app_id {
+                let id_l = app_id.to_lowercase();
+                if self.privacy_apps.iter().any(|p| id_l.contains(p)) {
+                    return true;
+                }
+            }
+            if let Some(title) = &meta.title {
+                let t_l = title.to_lowercase();
+                if self.privacy_titles.iter().any(|t| t_l.contains(t)) {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    /// Toggles the privacy capture exemption on the currently focused window.
+    pub fn toggle_privacy_focused(&mut self) {
+        if let Some(focused) = self.core.focus().target() {
+            if self.private_elements.contains(&focused) {
+                self.private_elements.remove(&focused);
+                println!("[infynitae] Privacy capture exemption DISABLED for window {focused:?}");
+            } else {
+                self.private_elements.insert(focused);
+                println!("[infynitae] Privacy capture exemption ENABLED for window {focused:?} (hidden from screenshots and screenshare)");
+            }
+        }
+    }
+
+    /// Whether an element should force transparent blending (Wine layered windows, colorkeys).
+    pub fn is_element_transparent(&self, element: infynitae_core::stage::ElementId) -> bool {
+        if !self.wine_transparency {
+            return false;
+        }
+        if let Some(meta) = self.core.stage().meta(element) {
+            if let Some(app_id) = &meta.app_id {
+                let id_l = app_id.to_lowercase();
+                if id_l.contains("wine")
+                    || id_l.ends_with(".exe")
+                    || self.force_transparent_apps.iter().any(|a| id_l.contains(a))
+                {
+                    return true;
+                }
+            }
+            if let Some(title) = &meta.title {
+                let t_l = title.to_lowercase();
+                if self.force_transparent_apps.iter().any(|a| t_l.contains(a)) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Returns the current modifier state from Smithay's XKB seat state (OBJ-27).

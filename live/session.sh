@@ -34,12 +34,23 @@ if [ -n "$WALLPAPER" ]; then
     fi
 fi
 
-# 5. User autostart script (blank canvas for user's future ricing)
+# 5. Boot / Start Screen (Replacing TTY prompt with Lock Screen)
+if [ "$START_LOCKED" = "1" ] || [ "$START_LOCKED" = "true" ] || [ "$1" = "--lock" ]; then
+    if [ -x "$HOME/.local/bin/infynitae-lock" ]; then
+        "$HOME/.local/bin/infynitae-lock" &
+    elif [ -x "$HOME/infynitae/live/lock/infynitae-lock" ]; then
+        "$HOME/infynitae/live/lock/infynitae-lock" &
+    elif command -v infynitae-lock >/dev/null 2>&1; then
+        infynitae-lock &
+    fi
+fi
+
+# 6. User autostart script (blank canvas for user's future ricing)
 if [ -x "$HOME/.config/infynitae/autostart.sh" ]; then
     "$HOME/.config/infynitae/autostart.sh" &
 fi
 
-# 6. Launch default terminal on the infinite canvas
+# 7. Launch default terminal on the infinite canvas
 resolve_terminal() {
     if [ -n "$TERMINAL" ] && [ "$TERMINAL" != "auto" ]; then
         echo "$TERMINAL"

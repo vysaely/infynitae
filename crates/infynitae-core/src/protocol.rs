@@ -142,6 +142,8 @@ pub enum Effect {
     ReloadShell,
     /// Super+L: lock screen
     SpawnLockScreen,
+    /// Super+Shift+P: toggle privacy mode on focused window
+    TogglePrivacy,
     /// Hardware Volume Up
     VolumeUp,
     /// Hardware Volume Down

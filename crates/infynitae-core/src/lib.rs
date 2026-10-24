@@ -1008,6 +1008,7 @@ impl Core {
             | E::SpawnRegionScreenshot
             | E::ReloadShell
             | E::SpawnLockScreen
+            | E::TogglePrivacy
             | E::VolumeUp
             | E::VolumeDown
             | E::VolumeMute

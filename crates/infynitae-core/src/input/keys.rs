@@ -31,6 +31,7 @@ pub const KEY_9: u32 = 10;
 pub const KEY_Q: u32 = 16;
 pub const KEY_W: u32 = 17;
 pub const KEY_E: u32 = 18;
+pub const KEY_P: u32 = 25;
 pub const KEY_C: u32 = 46;
 pub const KEY_S: u32 = 31;
 pub const KEY_R: u32 = 19;
@@ -70,6 +71,8 @@ pub enum KeyAction {
     ReloadShell,
     /// Super+L: lock screen
     SpawnLockScreen,
+    /// Super+Shift+P: toggle privacy mode on focused window (hidden/transparent from screenshots & screenshare)
+    TogglePrivacy,
     /// Hardware Volume Up
     VolumeUp,
     /// Hardware Volume Down
@@ -246,6 +249,10 @@ pub fn resolve_key_binding(
     // Super+L: lock screen; Logo, never during interaction
     if key == KEY_L && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::SpawnLockScreen);
+    }
+    // Super+Shift+P: toggle privacy mode; Logo+Shift, never during interaction
+    if key == KEY_P && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::TogglePrivacy);
     }
     // Hardware media and volume keys: triggered directly on keypress, never during interaction
     if !interaction_active {
@@ -570,6 +577,15 @@ mod tests {
         assert_eq!(
             resolve_key_binding(KEY_L, logo, false),
             Some(KeyAction::SpawnLockScreen)
+        );
+        let logo_shift = Modifiers {
+            logo: true,
+            shift: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            resolve_key_binding(KEY_P, logo_shift, false),
+            Some(KeyAction::TogglePrivacy)
         );
         assert_eq!(
             resolve_key_binding(KEY_VOLUMEUP, none, false),
