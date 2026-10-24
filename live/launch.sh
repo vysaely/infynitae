@@ -184,7 +184,7 @@ case "$ACTION" in
     reload|reload-shell|restart-shell)
         # Super+Shift+BackSpace: Live reload settings, shell UI, and desktop environment
         # 1. Re-apply settings and restart the wallpaper (infynitae-reload; windows stay open)
-        "$HOME/infynitae/live/infynitae-reload" settings wallpaper >/dev/null 2>&1 || true
+        "$HOME/infynitae/live/infynitae-reload" settings wallpaper screenshare >/dev/null 2>&1 || true
 
         # 2. Restart Quickshell Island / HUD if running
         if pidof qs >/dev/null 2>&1; then

@@ -20,6 +20,7 @@ pub mod cursor;
 pub mod extension;
 mod frames;
 mod handlers;
+mod image_copy;
 mod keyboard;
 mod layers;
 pub mod limits;
@@ -175,9 +176,17 @@ pub struct WaylandState {
     pub(crate) serial_outputs:
         std::collections::VecDeque<(smithay::utils::Serial, infynitae_core::output::OutputId)>,
     pub screencopy: screencopy::ScreencopyState,
+    /// `ext-image-copy-capture-v1` output capture (`image_copy`); frames join `screencopy`'s queue.
+    #[expect(
+        dead_code,
+        reason = "owns the ext-image-copy-capture globals for the state's lifetime"
+    )]
+    image_copy: image_copy::ImageCopyState,
     pub dmabuf: DmabufState,
     /// The linux-dmabuf global, replaced when the backend names its GPU (`set_dmabuf_main_device`).
     dmabuf_global: Option<smithay::wayland::dmabuf::DmabufGlobal>,
+    /// The GPU clients allocate on (`set_dmabuf_main_device`), also offered to capture sessions.
+    pub(crate) dmabuf_main_dev: Option<libc::dev_t>,
     pub(crate) popup_pointer_grab_serial: Option<smithay::utils::Serial>,
     /// Install serial of the popup keyboard grab (the latest level of the chain), the identity by
     /// which teardown releases exactly that grab (A1).
@@ -353,8 +362,10 @@ impl WaylandState {
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),
             screencopy: screencopy::ScreencopyState::new(display),
+            image_copy: image_copy::ImageCopyState::new(display),
             dmabuf: DmabufState::new(),
             dmabuf_global: None,
+            dmabuf_main_dev: None,
             effects: infynitae_core::protocol::EffectBuf::new(),
             ticked: Vec::new(),
             xdg_decoration: smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(display),
@@ -403,6 +414,7 @@ impl WaylandState {
         if let Some(old) = self.dmabuf_global.replace(global) {
             self.dmabuf.destroy_global::<Self>(&self.dh, old);
         }
+        self.dmabuf_main_dev = Some(dev);
     }
 
     pub fn set_border_config(

@@ -149,6 +149,16 @@ FULLSCREEN_PAN="true"
 # Background canvas color (hex)
 CANVAS_COLOR="#0b0f14"
 
+# Screen sharing (Discord, browsers, OBS through the screen-sharing portal):
+#   "false" - an app's Share button shares your screen at once (the first screen in
+#             OUTPUT_ORDER when there are several), like Windows
+#   "true"  - after an app asks, click the screen to share (a confirmation step)
+#   Privacy: with "false" any app that asks the portal gets the screen without a prompt. Apps on
+#   the desktop can also capture the screen directly (wlr-screencopy, which recorders and
+#   screenshot tools use), so the prompt guards the portal path only.
+#   Applies at once with Super+Shift+Backspace.
+SCREENSHARE_ASK="false"
+
 # Screencopy Cursor (Screen sharing & Remote desktop like RustDesk / OBS):
 #   "false" - Exclude compositor cursor from screencopy capture (eliminates double cursors in RustDesk / remote desktop)
 #   "true"  - Include compositor cursor in screencopy capture (default for OBS screen recordings)

@@ -15,15 +15,68 @@ use smithay::reexports::wayland_server::{
 
 use crate::WaylandState;
 
-/// Pending screencopy capture request awaiting the next rendered frame.
+/// The protocol object a capture answers: `zwlr_screencopy_frame_v1`, or
+/// `ext_image_copy_capture_frame_v1` (`image_copy`).
+#[derive(Debug, Clone)]
+pub enum CaptureFrame {
+    Wlr(ZwlrScreencopyFrameV1),
+    Ext(crate::image_copy::ExtImageCopyCaptureFrameV1),
+}
+
+/// Pending capture request (either protocol) awaiting the next rendered frame.
 #[derive(Debug)]
 pub struct PendingFrame {
-    pub frame: ZwlrScreencopyFrameV1,
+    pub frame: CaptureFrame,
     pub output_id: OutputId,
     pub buffer: WlBuffer,
     pub overlay_cursor: bool,
     pub with_damage: bool,
     pub region: Option<(i32, i32, i32, i32)>,
+}
+
+impl PendingFrame {
+    /// The capture could not be made.
+    pub fn fail(&self) {
+        match &self.frame {
+            CaptureFrame::Wlr(f) => f.failed(),
+            CaptureFrame::Ext(f) => {
+                f.failed(crate::image_copy::FailureReason::Unknown);
+            }
+        }
+    }
+
+    /// The buffer holds the frame: its `size` (all of it damaged), presented at `time`
+    /// (CLOCK_MONOTONIC).
+    pub fn ready(&self, size: (u32, u32), time: std::time::Duration) {
+        let (hi, lo, ns) = (
+            (time.as_secs() >> 32) as u32,
+            (time.as_secs() & 0xFFFF_FFFF) as u32,
+            time.subsec_nanos(),
+        );
+        match &self.frame {
+            CaptureFrame::Wlr(f) => {
+                if self.with_damage && f.version() >= 2 {
+                    f.damage(0, 0, size.0, size.1);
+                }
+                f.flags(Flags::empty());
+                f.ready(hi, lo, ns);
+            }
+            CaptureFrame::Ext(f) => {
+                f.transform(smithay::reexports::wayland_server::protocol::wl_output::Transform::Normal);
+                f.damage(0, 0, size.0 as i32, size.1 as i32);
+                f.presentation_time(hi, lo, ns);
+                f.ready();
+            }
+        }
+    }
+
+    /// The protocol object's id (to drop a destroyed frame from the queue).
+    pub fn id(&self) -> smithay::reexports::wayland_server::backend::ObjectId {
+        match &self.frame {
+            CaptureFrame::Wlr(f) => f.id(),
+            CaptureFrame::Ext(f) => f.id(),
+        }
+    }
 }
 
 /// Metadata stored on each `ZwlrScreencopyFrameV1` resource.
@@ -255,7 +308,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
         match request {
             zwlr_screencopy_frame_v1::Request::Copy { buffer } => {
                 state.screencopy.pending.lock().unwrap().push(PendingFrame {
-                    frame: frame.clone(),
+                    frame: CaptureFrame::Wlr(frame.clone()),
                     output_id,
                     buffer,
                     overlay_cursor: data.overlay_cursor,
@@ -265,7 +318,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
             }
             zwlr_screencopy_frame_v1::Request::CopyWithDamage { buffer } => {
                 state.screencopy.pending.lock().unwrap().push(PendingFrame {
-                    frame: frame.clone(),
+                    frame: CaptureFrame::Wlr(frame.clone()),
                     output_id,
                     buffer,
                     overlay_cursor: data.overlay_cursor,
@@ -280,7 +333,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
                     .pending
                     .lock()
                     .unwrap()
-                    .retain(|p| p.frame.id() != id);
+                    .retain(|p| p.id() != id);
             }
             _ => {}
         }

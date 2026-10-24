@@ -50,10 +50,8 @@ use smithay::reexports::drm::control::{Device as _, ModeTypeFlags, connector, cr
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_server::Display;
-use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{DeviceFd, Rectangle};
 use smithay::wayland::shm::with_buffer_contents_mut;
-use infynitae_wayland::screencopy::Flags;
 
 /// Evdev codes of the keys the backend takes for itself (T6).
 const KEY_BACKSPACE: u32 = 14;
@@ -944,16 +942,13 @@ fn handle_screencopy(
         Err(e) => {
             eprintln!("[screencopy] Failed to get elements: {e}");
             for p in pending {
-                p.frame.failed();
+                p.fail();
             }
             return;
         }
     };
 
     let now = infynitae_wayland::presentation_clock_now();
-    let tv_sec_hi = (now.as_secs() >> 32) as u32;
-    let tv_sec_lo = (now.as_secs() & 0xFFFFFFFF) as u32;
-    let tv_nsec = now.subsec_nanos();
 
     // -------------------------------------------------------------------------
     // 1. FAST-PATH: Direct Zero-Copy DMA-BUF GPU Render
@@ -977,11 +972,7 @@ fn handle_screencopy(
                     );
                     if damage_tracker.render_output(renderer, &mut dmabuf_fb, 0, &elements, clear).is_ok() {
                         dmabuf_rendered = true;
-                        if req.with_damage && req.frame.version() >= 2 {
-                            req.frame.damage(0, 0, target_size.0 as u32, target_size.1 as u32);
-                        }
-                        req.frame.flags(Flags::empty());
-                        req.frame.ready(tv_sec_hi, tv_sec_lo, tv_nsec);
+                        req.ready((target_size.0 as u32, target_size.1 as u32), now);
                     }
                 }
             }
@@ -1007,7 +998,7 @@ fn handle_screencopy(
             Err(e) => {
                 eprintln!("[screencopy] Failed to create offscreen buffer: {e:?}");
                 for p in remaining {
-                    p.frame.failed();
+                    p.fail();
                 }
                 return;
             }
@@ -1020,7 +1011,7 @@ fn handle_screencopy(
         Err(e) => {
             eprintln!("[screencopy] Failed to bind offscreen buffer: {e:?}");
             for p in remaining {
-                p.frame.failed();
+                p.fail();
             }
             return;
         }
@@ -1030,7 +1021,7 @@ fn handle_screencopy(
     if let Err(e) = damage_tracker.render_output(renderer, &mut framebuffer, 0, &elements, clear) {
         eprintln!("[screencopy] Failed to render output: {e:?}");
         for p in remaining {
-            p.frame.failed();
+            p.fail();
         }
         return;
     }
@@ -1040,7 +1031,7 @@ fn handle_screencopy(
         Err(e) => {
             eprintln!("[screencopy] Failed to copy framebuffer: {e:?}");
             for p in remaining {
-                p.frame.failed();
+                p.fail();
             }
             return;
         }
@@ -1051,7 +1042,7 @@ fn handle_screencopy(
         Err(e) => {
             eprintln!("[screencopy] Failed to map texture: {e:?}");
             for p in remaining {
-                p.frame.failed();
+                p.fail();
             }
             return;
         }
@@ -1153,13 +1144,9 @@ fn handle_screencopy(
         }
 
         if copied {
-            if req.with_damage && req.frame.version() >= 2 {
-                req.frame.damage(0, 0, size.0 as u32, size.1 as u32);
-            }
-            req.frame.flags(Flags::empty());
-            req.frame.ready(tv_sec_hi, tv_sec_lo, tv_nsec);
+            req.ready((size.0 as u32, size.1 as u32), now);
         } else {
-            req.frame.failed();
+            req.fail();
         }
     }
 }

@@ -16,28 +16,13 @@ if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY XAUTHORITY 2>/dev/null || true
 fi
 
-# 2b. Screen sharing (xdg-desktop-portal-wlr): which screen a share shows. A config written here
-# carries a marker and is rewritten each session for the screens present (one screen: shared
-# without asking; several: click one); a config without the marker is the user's own.
-XDPW_CFG="$HOME/.config/xdg-desktop-portal-wlr/config"
-if [ ! -f "$XDPW_CFG" ] || grep -q '^# managed by infynitae' "$XDPW_CFG"; then
-    SCREENS=$(awk '/Starting Infynitae compositor/ { n = "" }
-        /^\[infynitae\] Screen [^ ]+:/ { s = $3; sub(/:$/, "", s); n = n " " s }
-        END { print n }' "$HOME/.local/state/infynitae/session.log" 2>/dev/null)
-    mkdir -p "${XDPW_CFG%/*}"
-    {
-        echo "# managed by infynitae: rewritten each session; delete this line to keep your own"
-        echo "[screencast]"
-        echo "force_mod_linear=1"
-        if [ "$(echo $SCREENS | wc -w)" -eq 1 ]; then
-            echo "chooser_type=none"
-            echo "output_name=$(echo $SCREENS)"
-        else
-            echo "chooser_type=simple"
-            echo "chooser_cmd=slurp -f %o -or"
-        fi
-    } > "$XDPW_CFG"
-fi
+# 2b. Screen sharing: the portal's config for the screens present (infynitae-reload screenshare)
+for r in "$HOME/.local/bin/infynitae-reload" "$HOME/infynitae/live/infynitae-reload"; do
+    if [ -x "$r" ]; then
+        "$r" screenshare >/dev/null 2>&1 || true
+        break
+    fi
+done
 
 # 3. Native Polkit authentication agent (for sudo / system prompts in GUI)
 if [ -x "$HOME/.local/bin/infynitae-polkit" ]; then

@@ -2,7 +2,7 @@
 # Restart Infynitae's helper programs in place, without restarting the compositor (your windows
 # stay open). Only the compositor binary itself needs Ctrl+Alt+Backspace.
 #
-#   infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|status] ...
+#   infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|screenshare|status] ...
 #
 # Run it from any terminal inside the session, or let infynitae-update call it.
 
@@ -132,6 +132,42 @@ reload_polkit() {
     fi
 }
 
+# Screen sharing (xdg-desktop-portal-wlr): which screen a share shows. SCREENSHARE_ASK=false
+# (default) shares the first screen as soon as an app asks; true lets you click the screen to
+# share. Written only when absent or marked as ours (a hand-written config is the user's); the
+# portal reads it when it next starts, so a running one is stopped (it restarts on demand).
+reload_screenshare() {
+    cfg="$HOME/.config/xdg-desktop-portal-wlr/config"
+    if [ -f "$cfg" ] && ! grep -q '^# managed by infynitae' "$cfg"; then
+        echo "screenshare: $cfg is your own (no '# managed by infynitae' line); left alone"
+        return
+    fi
+    screens=$(awk '/Starting Infynitae compositor/ { n = "" }
+        /^\[infynitae\] Screen [^ ]+:/ { s = $3; sub(/:$/, "", s); n = n " " s }
+        END { print n }' "$STATE_DIR/session.log" 2>/dev/null)
+    first=$(echo $screens | cut -d' ' -f1)
+    mkdir -p "${cfg%/*}"
+    {
+        echo "# managed by infynitae: written from SCREENSHARE_ASK in ~/.config/infynitae/config;"
+        echo "# delete this line to keep your own settings"
+        echo "[screencast]"
+        echo "force_mod_linear=1"
+        if is_true "${SCREENSHARE_ASK:-false}" || [ -z "$first" ]; then
+            echo "chooser_type=simple"
+            echo "chooser_cmd=slurp -f %o -or"
+        else
+            echo "chooser_type=none"
+            echo "output_name=$first"
+        fi
+    } > "$cfg.new" && mv -f "$cfg.new" "$cfg"
+    systemctl --user stop xdg-desktop-portal-wlr.service 2>/dev/null || true
+    if is_true "${SCREENSHARE_ASK:-false}"; then
+        echo "screenshare: click the screen to share when an app asks"
+    else
+        echo "screenshare: ${first:-?} is shared as soon as an app asks"
+    fi
+}
+
 status() {
     printf '%-26s %s\n' infynitae "$(pgrep -x infynitae | tr '\n' ' ')"
     for n in infynitae-wallpaper infynitae-recorder infynitae-record-stream infynitae-portal infynitae-polkit infynitae-lock; do
@@ -149,15 +185,16 @@ status() {
 [ $# -eq 0 ] && set -- all
 for what in "$@"; do
     case "$what" in
-        all) reload_settings; reload_wallpaper; reload_recorder; reload_portal; reload_polkit ;;
+        all) reload_settings; reload_wallpaper; reload_recorder; reload_portal; reload_polkit; reload_screenshare ;;
         settings) reload_settings ;;
         wallpaper) reload_wallpaper ;;
         recorder) reload_recorder ;;
         portal) reload_portal ;;
         polkit) reload_polkit ;;
+        screenshare) reload_screenshare ;;
         status) status ;;
         *)
-            echo "usage: infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|status] ..." >&2
+            echo "usage: infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|screenshare|status] ..." >&2
             exit 2
             ;;
     esac
