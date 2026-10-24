@@ -144,6 +144,8 @@ pub enum Effect {
     SpawnLockScreen,
     /// Super+Shift+P: toggle privacy mode on focused window
     TogglePrivacy,
+    /// Super+Shift+I: toggle idle sleep inhibition (stay awake mode)
+    ToggleIdleInhibit,
     /// Hardware Volume Up
     VolumeUp,
     /// Hardware Volume Down

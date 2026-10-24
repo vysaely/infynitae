@@ -214,6 +214,9 @@ impl WaylandState {
                 Effect::TogglePrivacy => {
                     self.toggle_privacy_focused();
                 }
+                Effect::ToggleIdleInhibit => {
+                    self.toggle_idle_inhibit();
+                }
                 Effect::VolumeUp => {
                     self.spawn_action("volume-up");
                 }
@@ -248,7 +251,7 @@ impl WaylandState {
     }
 
     /// Spawns a desktop action via ~/infynitae/live/launch.sh <action>
-    fn spawn_action(&self, action: &str) {
+    pub(crate) fn spawn_action(&self, action: &str) {
         let home = std::env::var("HOME").unwrap_or_default();
         let script = format!("{home}/infynitae/live/launch.sh");
         let mut cmd = std::process::Command::new("sh");

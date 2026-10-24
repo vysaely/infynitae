@@ -31,6 +31,7 @@ pub const KEY_9: u32 = 10;
 pub const KEY_Q: u32 = 16;
 pub const KEY_W: u32 = 17;
 pub const KEY_E: u32 = 18;
+pub const KEY_I: u32 = 23;
 pub const KEY_P: u32 = 25;
 pub const KEY_C: u32 = 46;
 pub const KEY_S: u32 = 31;
@@ -73,6 +74,8 @@ pub enum KeyAction {
     SpawnLockScreen,
     /// Super+Shift+P: toggle privacy mode on focused window (hidden/transparent from screenshots & screenshare)
     TogglePrivacy,
+    /// Super+Shift+I: toggle idle sleep inhibition (stay awake mode: prevents DPMS screen sleep and auto-lock)
+    ToggleIdleInhibit,
     /// Hardware Volume Up
     VolumeUp,
     /// Hardware Volume Down
@@ -253,6 +256,10 @@ pub fn resolve_key_binding(
     // Super+Shift+P: toggle privacy mode; Logo+Shift, never during interaction
     if key == KEY_P && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::TogglePrivacy);
+    }
+    // Super+Shift+I: toggle idle sleep inhibition (stay awake mode); Logo+Shift, never during interaction
+    if key == KEY_I && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::ToggleIdleInhibit);
     }
     // Hardware media and volume keys: triggered directly on keypress, never during interaction
     if !interaction_active {

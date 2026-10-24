@@ -1009,6 +1009,7 @@ impl Core {
             | E::ReloadShell
             | E::SpawnLockScreen
             | E::TogglePrivacy
+            | E::ToggleIdleInhibit
             | E::VolumeUp
             | E::VolumeDown
             | E::VolumeMute

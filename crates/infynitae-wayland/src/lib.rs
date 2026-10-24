@@ -206,6 +206,7 @@ pub struct WaylandState {
     pub privacy_titles: Vec<String>,
     pub wine_transparency: bool,
     pub force_transparent_apps: Vec<String>,
+    pub manual_idle_inhibit: bool,
     // probe builds only: the Send assertion must be the one and only error
     #[cfg(feature = "probe_store_port_in_state")]
     leaked_port: infynitae_core::InputPort,
@@ -408,6 +409,7 @@ impl WaylandState {
             privacy_titles: Vec::new(),
             wine_transparency: true,
             force_transparent_apps: Vec::new(),
+            manual_idle_inhibit: false,
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
             leaked_port: unreachable!(),
@@ -739,11 +741,30 @@ impl WaylandState {
             if self.private_elements.contains(&focused) {
                 self.private_elements.remove(&focused);
                 println!("[infynitae] Privacy capture exemption DISABLED for window {focused:?}");
+                self.spawn_action("notify-privacy-off");
             } else {
                 self.private_elements.insert(focused);
                 println!("[infynitae] Privacy capture exemption ENABLED for window {focused:?} (hidden from screenshots and screenshare)");
+                self.spawn_action("notify-privacy-on");
             }
         }
+    }
+
+    /// Toggles stay-awake idle sleep inhibition (blocks DPMS monitor sleep and auto-lock).
+    pub fn toggle_idle_inhibit(&mut self) {
+        self.manual_idle_inhibit = !self.manual_idle_inhibit;
+        if self.manual_idle_inhibit {
+            println!("[infynitae] Idle sleep & auto-lock INHIBITED (Stay Awake mode)");
+            self.spawn_action("notify-idle-inhibit-on");
+        } else {
+            println!("[infynitae] Idle sleep & auto-lock RESTORED to normal timeout");
+            self.spawn_action("notify-idle-inhibit-off");
+        }
+    }
+
+    /// Whether idle sleep & screen auto-locking should be inhibited.
+    pub fn is_idle_inhibited(&self) -> bool {
+        self.manual_idle_inhibit
     }
 
     /// Whether an element should force transparent blending (Wine layered windows, colorkeys).

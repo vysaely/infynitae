@@ -665,9 +665,10 @@ pub fn run_console_with(
                 }
             }
 
-            // Idle screen sleep & auto-lock check
+            // Idle screen sleep & auto-lock check (skipped when idle is inhibited)
             if !data.dpms_active
                 && data.idle_sleep_timeout_min > 0
+                && !data.state.is_idle_inhibited()
                 && data.last_user_activity.elapsed() >= Duration::from_secs((data.idle_sleep_timeout_min as u64) * 60)
             {
                 println!(

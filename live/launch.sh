@@ -368,6 +368,42 @@ case "$ACTION" in
             python3 -c "import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect('$XDG_RUNTIME_DIR/infynitae/shortcuts.sock'); s.sendall(b'deafen'); s.close()" 2>/dev/null || true
         fi
         ;;
+    notify-privacy-on)
+        # OSD Toast: Privacy Mode Enabled
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send -a "Infynitae" -i security-high -h string:x-canonical-private-synchronous:privacy -t 1500 "Privacy Mode: ON" "Window hidden from screen share & capture" 2>/dev/null || true
+        fi
+        ;;
+    notify-privacy-off)
+        # OSD Toast: Privacy Mode Disabled
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send -a "Infynitae" -i security-low -h string:x-canonical-private-synchronous:privacy -t 1500 "Privacy Mode: OFF" "Window visible to screen capture" 2>/dev/null || true
+        fi
+        ;;
+    notify-idle-inhibit-on)
+        # OSD Toast: Idle Sleep Inhibited
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send -a "Infynitae" -i display -h string:x-canonical-private-synchronous:idle -t 1500 "Idle Inhibit: ON" "Stay Awake enabled (display sleep suppressed)" 2>/dev/null || true
+        fi
+        ;;
+    notify-idle-inhibit-off)
+        # OSD Toast: Idle Sleep Normal
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send -a "Infynitae" -i display -h string:x-canonical-private-synchronous:idle -t 1500 "Idle Inhibit: OFF" "Display sleep restored (normal timeout)" 2>/dev/null || true
+        fi
+        ;;
+    toggle-idle-inhibit|inhibit-idle)
+        # Send keypress or signal to compositor to toggle idle inhibit
+        if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
+            python3 -c "import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect('$XDG_RUNTIME_DIR/infynitae/shortcuts.sock'); s.sendall(b'idle_inhibit'); s.close()" 2>/dev/null || true
+        fi
+        ;;
+    toggle-privacy|privacy)
+        # Send keypress or signal to compositor to toggle privacy
+        if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
+            python3 -c "import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect('$XDG_RUNTIME_DIR/infynitae/shortcuts.sock'); s.sendall(b'privacy'); s.close()" 2>/dev/null || true
+        fi
+        ;;
     *)
         echo "Unknown action: $ACTION" >&2
         exit 1

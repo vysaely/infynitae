@@ -75,9 +75,10 @@ SCREEN_LOCKER="auto"
 #   "false" - Boots straight into active canvas & terminal
 START_LOCKED="false"
 
-# Idle Screen Sleep & Auto-Lock:
+# Idle Screen Sleep & Auto-Lock (Super+Shift+I to toggle Stay Awake mode):
 #   IDLE_SLEEP_TIMEOUT_MIN: Inactivity minutes before DPMS monitor sleep / screen blanking (0 to disable)
 #   IDLE_AUTO_LOCK: Auto-lock session with infynitae-lock when entering idle sleep
+#   Super+Shift+I: Toggles Stay Awake mode (suppresses idle sleep & lock temporarily e.g. for movies/gaming)
 IDLE_SLEEP_TIMEOUT_MIN="15"
 IDLE_AUTO_LOCK="true"
 
