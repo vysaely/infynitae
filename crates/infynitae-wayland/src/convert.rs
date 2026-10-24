@@ -640,6 +640,51 @@ where
     output_elements_opt(state, renderer, output, state.target.draw_cursor)
 }
 
+/// While the session is locked (`lock`): the output's frame is only its lock surface, over the
+/// whole output, or nothing (drawn over [`LOCKED_CLEAR`]). `None` when not locked.
+pub fn lock_elements<R>(
+    state: &WaylandState,
+    renderer: &mut R,
+    output: OutputId,
+) -> Result<Option<OutputFrame<R>>, R::Error>
+where
+    R: Renderer + ImportAll,
+    R::TextureId: Clone + 'static,
+{
+    if !state.is_locked() {
+        return Ok(None);
+    }
+    let k = state.core.view(output).map_or(1.0, |v| v.k);
+    let mut elements = Vec::new();
+    if let (Some(surface), Some((w, h))) = (state.lock_surface(output), state.output_mode_size(output))
+    {
+        let el = with_states(&surface, |states| {
+            WaylandSurfaceRenderElement::from_surface(
+                renderer,
+                &surface,
+                states,
+                smithay::utils::Point::<f64, Physical>::from((0.0, 0.0)),
+                1.0,
+                Kind::Unspecified,
+            )
+        })?;
+        if let Some(el) = el {
+            let rect = PhysicalRect {
+                x0: 0,
+                y0: 0,
+                x1: i64::from(w),
+                y1: i64::from(h),
+            };
+            elements.push(OutputElement::Surface(CanonicalRect::new(el, rect, k)));
+        }
+    }
+    Ok(Some((elements, k)))
+}
+
+/// What a locked output is cleared to: no window may show through.
+pub const LOCKED_CLEAR: smithay::backend::renderer::Color32F =
+    smithay::backend::renderer::Color32F::new(0.0, 0.0, 0.0, 1.0);
+
 /// One frame of an output through its damage tracker: [`output_elements`] →
 /// `OutputDamageTracker::render_output`. Returns the damage, or `None` when nothing changed.
 pub fn render_output<R>(

@@ -121,7 +121,7 @@ if [ -f "$HOME/infynitae/live/polkit/infynitae-polkit.c" ] && pkg-config --exist
     chmod +x "$HOME/.local/bin/infynitae-polkit" 2>/dev/null || true
 fi
 if [ -f "$HOME/infynitae/live/lock/infynitae-lock.c" ] && pkg-config --exists wayland-client cairo pangocairo xkbcommon pam 2>/dev/null; then
-    gcc -O2 "$HOME/infynitae/live/lock/infynitae-lock.c" "$HOME/infynitae/live/lock/wlr-layer-shell-protocol.c" "$HOME/infynitae/live/lock/xdg-shell-protocol.c" \
+    gcc -O2 "$HOME/infynitae/live/lock/infynitae-lock.c" "$HOME/infynitae/live/lock/ext-session-lock-v1-protocol.c" \
         $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon pam) -lm -lpthread \
         -o "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
     chmod +x "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true

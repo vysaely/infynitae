@@ -7,7 +7,7 @@ DEP_CFLAGS = $(shell $(PKG_CONFIG) --cflags $(DEPS))
 DEP_LIBS = $(shell $(PKG_CONFIG) --libs $(DEPS)) -lm -lpthread
 
 TARGET = infynitae-lock
-SOURCES = infynitae-lock.c wlr-layer-shell-protocol.c xdg-shell-protocol.c
+SOURCES = infynitae-lock.c ext-session-lock-v1-protocol.c
 
 all: $(TARGET)
 

@@ -23,6 +23,7 @@ mod handlers;
 mod keyboard;
 mod layers;
 pub mod limits;
+mod lock;
 mod outputs;
 pub mod ownership;
 mod pointer;
@@ -207,6 +208,8 @@ pub struct WaylandState {
     pub wine_transparency: bool,
     pub force_transparent_apps: Vec<String>,
     pub manual_idle_inhibit: bool,
+    /// `ext-session-lock-v1`, when the backend enforces it (`enable_session_lock`).
+    session_lock: Option<lock::SessionLock>,
     // probe builds only: the Send assertion must be the one and only error
     #[cfg(feature = "probe_store_port_in_state")]
     leaked_port: infynitae_core::InputPort,
@@ -410,6 +413,7 @@ impl WaylandState {
             wine_transparency: true,
             force_transparent_apps: Vec::new(),
             manual_idle_inhibit: false,
+            session_lock: None,
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
             leaked_port: unreachable!(),
@@ -478,6 +482,7 @@ impl WaylandState {
         self.complete_frames(output, &ticked, now);
         self.ticked = ticked;
         self.complete_layer_frames(output, now);
+        self.complete_lock_frames(output, now);
         if self.target.draw_cursor
             && let Some(o) = self.smithay_output(output).cloned()
         {

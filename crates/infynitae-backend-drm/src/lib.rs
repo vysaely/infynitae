@@ -252,6 +252,8 @@ pub fn run_console_with(
     let display: Display<WaylandState> = Display::new()?;
     let mut state = WaylandState::new(&display.handle(), core);
     state.set_console_target();
+    // ext-session-lock: the console draws locked frames and routes keys through lock_key
+    state.enable_session_lock();
 
     // the seat first: without it nothing can be opened
     let (mut seat, seat_notifier) = LibSeatSession::new()
@@ -709,6 +711,13 @@ pub fn run_console_with(
             }
         }
         data.session.dispatch(&mut data.state);
+        if let Some(keys) = data.state.take_unlock_releases() {
+            let now_us = infynitae_wayland::presentation_clock_now().as_micros() as u64;
+            for key in keys {
+                core_key(&mut data, key, false, now_us);
+            }
+            data.state.finish_unlock();
+        }
 
         let current_mapped = data.state.core().stage().mapped_elements();
         let new_mapped: Vec<_> = current_mapped
@@ -797,7 +806,13 @@ pub fn run_console_with(
 /// One frame on every screen that is not waiting for its vblank. A screen whose frame changed
 /// nothing completes its frame callbacks now; a queued one at its vblank.
 fn render(data: &mut LoopData) {
-    let clear = data.state.clear_color();
+    let locked = data.state.is_locked();
+    let clear = if locked {
+        convert::LOCKED_CLEAR
+    } else {
+        data.state.clear_color()
+    };
+    let mut all_drawn = true;
     for i in 0..data.screens.len() {
         let id = data.screens[i].id;
         let size = data.screens[i].size;
@@ -816,14 +831,22 @@ fn render(data: &mut LoopData) {
         );
 
         if data.screens[i].pending {
+            all_drawn = false;
             continue;
         }
 
-        let (elements, k) = match convert::output_elements(&mut data.state, &mut data.renderer, id)
-        {
+        // locked: only the lock surface (lock.rs); never a window
+        let frame = match convert::lock_elements(&data.state, &mut data.renderer, id) {
+            Ok(Some(f)) => Ok(f),
+            Ok(None) => convert::output_elements(&mut data.state, &mut data.renderer, id)
+                .map_err(|e| format!("{e:?}")),
+            Err(e) => Err(format!("{e:?}")),
+        };
+        let (elements, k) = match frame {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("[infynitae] Frame elements: {e:?}");
+                eprintln!("[infynitae] Frame elements: {e}");
+                all_drawn = false;
                 continue;
             }
         };
@@ -858,6 +881,7 @@ fn render(data: &mut LoopData) {
             Ok(_) => false,
             Err(e) => {
                 eprintln!("[infynitae] Render: {e:?}");
+                all_drawn = false;
                 false
             }
         };
@@ -868,6 +892,10 @@ fn render(data: &mut LoopData) {
             let now = infynitae_wayland::presentation_clock_now();
             data.state.frame_tick(id, now);
         }
+    }
+    if locked && all_drawn {
+        // no window is on any screen any more: the lock client may be told it holds the lock
+        data.state.lock_frame_drawn();
     }
     data.session.flush();
 }
@@ -890,10 +918,22 @@ fn handle_screencopy(
     }
 
     let needs_cursor = !state.screencopy.hide_cursor() && pending.iter().any(|p| p.overlay_cursor);
-    let (elements, k) = match convert::output_elements_screencopy(state, renderer, output_id, needs_cursor) {
+    // locked: a capture shows the lock screen, never a window
+    let clear = if state.is_locked() {
+        convert::LOCKED_CLEAR
+    } else {
+        clear
+    };
+    let frame = match convert::lock_elements(state, renderer, output_id) {
+        Ok(Some(f)) => Ok(f),
+        Ok(None) => convert::output_elements_screencopy(state, renderer, output_id, needs_cursor)
+            .map_err(|e| format!("{e:?}")),
+        Err(e) => Err(format!("{e:?}")),
+    };
+    let (elements, k) = match frame {
         Ok(res) => res,
         Err(e) => {
-            eprintln!("[screencopy] Failed to get elements: {e:?}");
+            eprintln!("[screencopy] Failed to get elements: {e}");
             for p in pending {
                 p.frame.failed();
             }
@@ -1126,6 +1166,15 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
         }
         data.session.request_frame();
     }
+    // locked: pointer and touch go nowhere (keys go to the lock surface, below)
+    if data.state.is_locked()
+        && !matches!(
+            event,
+            InputEvent::Keyboard { .. } | InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. }
+        )
+    {
+        return;
+    }
     match event {
         InputEvent::Keyboard { event } => {
             let key = event.key_code().raw().saturating_sub(8);
@@ -1134,6 +1183,12 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             if pressed {
                 let m = data.state.seat_modifiers();
                 match console_key(key, m.ctrl, m.alt) {
+                    Some(ConsoleKey::Quit) if data.state.is_locked() => {
+                        // quitting would restart the session unlocked: not while locked
+                        println!("[infynitae] Ctrl+Alt+Backspace ignored: the session is locked");
+                        data.taken.push(key);
+                        return;
+                    }
                     Some(ConsoleKey::Quit) => {
                         println!("[infynitae] Ctrl+Alt+Backspace: quitting");
                         data.quit = true;
@@ -1155,25 +1210,11 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             }
             let time_us = Event::time(&event);
             let mut dev = Event::device(&event);
-            if let Ok(token) = data
-                .state
-                .core()
-                .verify_input_port(&data.input_port, key, pressed)
-            {
-                let (modifiers, mods_changed) = data.state.sync_seat_key(token);
-                update_keyboard_leds(&data.state, &mut data.keyboards, &mut dev);
-                let phys = PhysicalEvent::KeyboardKey {
-                    key,
-                    pressed,
-                    modifiers,
-                    mods_changed,
-                    time_us,
-                };
-                let port = &mut data.input_port;
-                let _ = data
-                    .state
-                    .with_effects(|core, fx| core.physical_input(port, phys, fx));
+            // the session lock takes keys before Core (lock.rs)
+            if !data.state.lock_key(key, pressed, time_us) {
+                core_key(data, key, pressed, time_us);
             }
+            update_keyboard_leds(&data.state, &mut data.keyboards, &mut dev);
         }
         InputEvent::PointerMotion { event } => {
             data.last_abs_pointer = None;
@@ -1399,6 +1440,28 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             data.last_abs_pointer = None;
         }
         _ => {}
+    }
+}
+
+/// A key for Core: the seat's XKB state first (through the input token), then Core's intake.
+fn core_key(data: &mut LoopData, key: u32, pressed: bool, time_us: u64) {
+    if let Ok(token) = data
+        .state
+        .core()
+        .verify_input_port(&data.input_port, key, pressed)
+    {
+        let (modifiers, mods_changed) = data.state.sync_seat_key(token);
+        let phys = PhysicalEvent::KeyboardKey {
+            key,
+            pressed,
+            modifiers,
+            mods_changed,
+            time_us,
+        };
+        let port = &mut data.input_port;
+        let _ = data
+            .state
+            .with_effects(|core, fx| core.physical_input(port, phys, fx));
     }
 }
 

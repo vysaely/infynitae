@@ -1,0 +1,279 @@
+//! Session lock, `ext-session-lock-v1` (2026-10-24). While the session is locked, each output
+//! shows only its lock surface (over black), and every key goes to the lock surface: the backend
+//! hands keys to [`WaylandState::lock_key`] before Core, and pointer and touch input to nothing,
+//! so no binding, window or other client sees input. Core is not told about the lock.
+//!
+//! Core keeps its own record of held keys. A key Core holds when the lock starts (Super of
+//! Super+L) is released while Core does not listen: its release only updates the seat's XKB
+//! state (the lock surface never saw it pressed), and after the unlock the backend passes Core
+//! those releases ([`WaylandState::take_unlock_releases`]) while no surface has the keyboard,
+//! then gives the keyboard back ([`WaylandState::finish_unlock`]). A key pressed while locked
+//! and released after the unlock only updates XKB too, so no modifier sticks and no client is
+//! told of a release it never saw pressed.
+//!
+//! A lock outlives its client (the protocol's rule): when the lock client dies, the screen stays
+//! black and locked, and a new lock client may take the lock over. Only backends that draw it
+//! offer the global ([`WaylandState::enable_session_lock`]).
+
+use std::collections::HashSet;
+
+use smithay::backend::input::KeyState;
+use smithay::delegate_session_lock;
+use smithay::desktop::PopupUngrabStrategy;
+use smithay::input::keyboard::{FilterResult, Keycode};
+use smithay::reexports::wayland_protocols::ext::session_lock::v1::server::ext_session_lock_v1::ExtSessionLockV1;
+use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
+use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
+use smithay::utils::SERIAL_COUNTER;
+use smithay::wayland::session_lock::{
+    LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
+};
+
+use infynitae_core::output::OutputId;
+
+use crate::WaylandState;
+
+/// Evdev codes are below this (KEY_MAX + 1).
+const KEY_COUNT: u32 = 0x300;
+
+pub(crate) struct SessionLock {
+    manager: SessionLockManagerState,
+    locked: bool,
+    /// The lock object of the client holding the lock: another lock is refused while it lives.
+    holder: Option<ExtSessionLockV1>,
+    /// A lock request confirmed once a locked frame has been drawn.
+    pending: Option<SessionLocker>,
+    surfaces: Vec<(OutputId, LockSurface)>,
+    /// Keys whose press went to the lock surface.
+    lock_keys: HashSet<u32>,
+    /// Keys physically down (every key passes `lock_key`).
+    phys_down: HashSet<u32>,
+    /// Unlocked: Core's releases and the keyboard's return are still to come.
+    just_unlocked: bool,
+}
+
+impl WaylandState {
+    /// Offers `ext_session_lock_manager_v1`. Only for a backend that draws locked frames and
+    /// routes its keys through [`WaylandState::lock_key`].
+    pub fn enable_session_lock(&mut self) {
+        if self.session_lock.is_none() {
+            self.session_lock = Some(SessionLock {
+                manager: SessionLockManagerState::new::<Self, _>(&self.dh, |_| true),
+                locked: false,
+                holder: None,
+                pending: None,
+                surfaces: Vec::new(),
+                lock_keys: HashSet::new(),
+                phys_down: HashSet::new(),
+                just_unlocked: false,
+            });
+        }
+    }
+
+    /// The session is locked: only lock surfaces are drawn and given input.
+    pub fn is_locked(&self) -> bool {
+        self.session_lock.as_ref().is_some_and(|l| l.locked)
+    }
+
+    /// A physical key, before Core. Returns `true` when the lock took it (Core must not see it).
+    pub fn lock_key(&mut self, key: u32, pressed: bool, time_us: u64) -> bool {
+        let Some(l) = self.session_lock.as_mut() else {
+            return false;
+        };
+        if pressed {
+            l.phys_down.insert(key);
+        } else {
+            l.phys_down.remove(&key);
+        }
+        let code = Keycode::new(key + 8);
+        let state = if pressed {
+            KeyState::Pressed
+        } else {
+            KeyState::Released
+        };
+        if l.locked {
+            if pressed {
+                l.lock_keys.insert(key);
+            } else if !l.lock_keys.remove(&key) {
+                // down since before the lock: the lock surface never saw it pressed
+                let kb = self.keyboard_handle();
+                kb.input_intercept(self, code, state, |_, _, _| None::<()>);
+                return true;
+            }
+            let target = l
+                .surfaces
+                .iter()
+                .find(|(_, s)| s.alive())
+                .map(|(_, s)| s.wl_surface().clone());
+            let kb = self.keyboard_handle();
+            if kb.current_focus() != target {
+                kb.set_focus(self, target, SERIAL_COUNTER.next_serial());
+            }
+            kb.input::<(), _>(
+                self,
+                code,
+                state,
+                SERIAL_COUNTER.next_serial(),
+                (time_us / 1000) as u32,
+                |_, _, _| FilterResult::Forward,
+            );
+            return true;
+        }
+        if !pressed && l.lock_keys.remove(&key) {
+            // pressed for the lock surface: XKB saw the press, so it must see the release
+            let kb = self.keyboard_handle();
+            kb.input_intercept(self, code, state, |_, _, _| None::<()>);
+            return true;
+        }
+        false
+    }
+
+    /// After an unlock, once: the keys Core holds that are no longer down. The backend passes
+    /// Core their releases (no surface has the keyboard yet), then calls `finish_unlock`.
+    pub fn take_unlock_releases(&mut self) -> Option<Vec<u32>> {
+        let l = self.session_lock.as_mut()?;
+        if !std::mem::take(&mut l.just_unlocked) {
+            return None;
+        }
+        let phys_down = l.phys_down.clone();
+        Some(
+            (0..KEY_COUNT)
+                .filter(|k| self.core.is_key_down(*k) && !phys_down.contains(k))
+                .collect(),
+        )
+    }
+
+    /// The end of an unlock: the keyboard returns to the window Core has focused.
+    pub fn finish_unlock(&mut self) {
+        if self.is_locked() {
+            return;
+        }
+        let target = self
+            .core
+            .focus()
+            .target()
+            .and_then(|id| self.window_surface(id));
+        let kb = self.keyboard_handle();
+        kb.set_focus(self, target, SERIAL_COUNTER.next_serial());
+    }
+
+    /// The backend drew a locked frame on every output: a waiting lock is confirmed now, when no
+    /// window is on screen any more.
+    pub fn lock_frame_drawn(&mut self) {
+        if let Some(locker) = self.session_lock.as_mut().and_then(|l| l.pending.take()) {
+            locker.lock();
+        }
+    }
+
+    /// The live lock surface of `output`, if its lock client made one.
+    pub fn lock_surface(&self, output: OutputId) -> Option<WlSurface> {
+        self.session_lock.as_ref()?.surfaces.iter().find_map(|(o, s)| {
+            (*o == output && s.alive()).then(|| s.wl_surface().clone())
+        })
+    }
+
+    /// A vblank of `output`: its lock surface's frame callbacks complete.
+    pub(crate) fn complete_lock_frames(&mut self, output: OutputId, now: std::time::Duration) {
+        if !self.is_locked() {
+            return;
+        }
+        let (Some(surface), Some(o)) = (self.lock_surface(output), self.smithay_output(output).cloned())
+        else {
+            return;
+        };
+        smithay::desktop::utils::send_frames_surface_tree(&surface, &o, now, None, |_, _| {
+            Some(o.clone())
+        });
+    }
+
+    /// The lock surface's size for `output`: the output's logical size.
+    fn lock_surface_size(&self, output: OutputId) -> Option<(u32, u32)> {
+        let o = self.smithay_output(output)?;
+        let mode = o.current_mode()?;
+        let scale = o.current_scale().fractional_scale().max(0.001);
+        Some((
+            (f64::from(mode.size.w) / scale).round().max(1.0) as u32,
+            (f64::from(mode.size.h) / scale).round().max(1.0) as u32,
+        ))
+    }
+}
+
+impl SessionLockHandler for WaylandState {
+    fn lock_state(&mut self) -> &mut SessionLockManagerState {
+        &mut self
+            .session_lock
+            .as_mut()
+            .expect("the lock global exists only with the lock state")
+            .manager
+    }
+
+    fn lock(&mut self, confirmation: SessionLocker) {
+        let Some(l) = self.session_lock.as_mut() else {
+            return; // dropping the locker tells the client the lock failed
+        };
+        if l.holder.as_ref().is_some_and(|h| h.is_alive()) {
+            return; // a live lock client holds the lock already
+        }
+        l.holder = Some(confirmation.ext_session_lock().clone());
+        l.surfaces.clear();
+        if l.locked {
+            // taking over from a lock client that died: the session never stopped being locked
+            confirmation.lock();
+            return;
+        }
+        l.locked = true;
+        l.pending = Some(confirmation);
+        // no window keeps the keyboard, and no popup grab may route keys past the lock
+        if let Some(mut g) = self.popup_grab.take()
+            && !g.has_ended()
+        {
+            g.ungrab(PopupUngrabStrategy::All);
+        }
+        let kb = self.keyboard_handle();
+        kb.unset_grab(self);
+        kb.set_focus(self, None, SERIAL_COUNTER.next_serial());
+        // Smithay tells a newly focused surface which forwarded keys are down; keys held now
+        // are released while locked without being forwarded, so forget them (nothing is sent:
+        // no surface has the keyboard)
+        for code in kb.pressed_keys() {
+            kb.input_forward(
+                self,
+                code,
+                KeyState::Released,
+                SERIAL_COUNTER.next_serial(),
+                0,
+                false,
+            );
+        }
+    }
+
+    fn unlock(&mut self) {
+        let Some(l) = self.session_lock.as_mut() else {
+            return;
+        };
+        l.locked = false;
+        l.holder = None;
+        l.pending = None;
+        l.surfaces.clear();
+        l.just_unlocked = true;
+        // nobody has the keyboard until Core has its releases (`finish_unlock`)
+        let kb = self.keyboard_handle();
+        kb.set_focus(self, None, SERIAL_COUNTER.next_serial());
+    }
+
+    fn new_surface(&mut self, surface: LockSurface, output: WlOutput) {
+        let Some(id) = self.output_id_of(&output) else {
+            return;
+        };
+        if let Some((w, h)) = self.lock_surface_size(id) {
+            surface.with_pending_state(|s| s.size = Some((w, h).into()));
+        }
+        if let Some(l) = self.session_lock.as_mut() {
+            l.surfaces.retain(|(o, s)| *o != id && s.alive());
+            l.surfaces.push((id, surface));
+        }
+    }
+}
+
+delegate_session_lock!(WaylandState);

@@ -3,7 +3,8 @@
  * 
  * Part of the Infynitae Compositor ecosystem.
  * Philosophy: Zero bloat, instant startup, deep obsidian canvas aesthetics,
- * standard Linux PAM authentication, pure Wayland layer-shell overlay.
+ * standard Linux PAM authentication, ext-session-lock-v1: the compositor shows only this
+ * client's surfaces and gives them every key until it unlocks, even if this client dies.
  */
 
 #define _GNU_SOURCE
@@ -29,7 +30,7 @@
 
 #include <security/pam_appl.h>
 
-#include "wlr-layer-shell-protocol.h"
+#include "ext-session-lock-v1-protocol.h"
 
 #define PASSWORD_MAX_LEN 256
 #define SHAKE_DURATION_FRAMES 18
@@ -50,7 +51,10 @@ typedef struct {
     struct wl_compositor *compositor;
     struct wl_shm *shm;
     struct wl_seat *seat;
-    struct zwlr_layer_shell_v1 *layer_shell;
+    struct ext_session_lock_manager_v1 *lock_manager;
+    struct ext_session_lock_v1 *lock;
+    bool locked;
+    bool lock_refused;
 
     struct wl_keyboard *keyboard;
     struct xkb_context *xkb_ctx;
@@ -82,7 +86,7 @@ typedef struct LockOutput {
     uint32_t registry_name;
 
     struct wl_surface *surface;
-    struct zwlr_layer_surface_v1 *layer_surface;
+    struct ext_session_lock_surface_v1 *lock_surface;
     struct wl_callback *frame_cb;
 
     int32_t width;
@@ -542,7 +546,8 @@ static const struct wl_callback_listener frame_listener = {
 };
 
 static void request_frame(LockOutput *output) {
-    if (output->frame_cb != NULL) return;
+    // a lock surface must not commit before its first configure (protocol error)
+    if (output->frame_cb != NULL || !output->configured) return;
     output->frame_cb = wl_surface_frame(output->surface);
     wl_callback_add_listener(output->frame_cb, &frame_listener, output);
     wl_surface_commit(output->surface);
@@ -558,55 +563,47 @@ static void damage_all_outputs(LockApp *app) {
 }
 
 /* ========================================================================== */
-/* Wayland Layer Surface Listeners                                            */
+/* Session Lock (ext-session-lock-v1)                                         */
 /* ========================================================================== */
-static void layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *layer_surface,
-                                    uint32_t serial, uint32_t width, uint32_t height) {
+static void lock_surface_configure(void *data, struct ext_session_lock_surface_v1 *lock_surface,
+                                   uint32_t serial, uint32_t width, uint32_t height) {
     LockOutput *output = (LockOutput *)data;
     output->width = (int32_t)width;
     output->height = (int32_t)height;
     output->configured = true;
 
-    zwlr_layer_surface_v1_ack_configure(layer_surface, serial);
+    ext_session_lock_surface_v1_ack_configure(lock_surface, serial);
     render_output(output);
 }
 
-static void layer_surface_closed(void *data, struct zwlr_layer_surface_v1 *layer_surface) {
-    (void)layer_surface;
-    LockOutput *output = (LockOutput *)data;
-    output->configured = false;
-}
-
-static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
-    .configure = layer_surface_configure,
-    .closed = layer_surface_closed,
+static const struct ext_session_lock_surface_v1_listener lock_surface_listener = {
+    .configure = lock_surface_configure,
 };
 
-static void setup_layer_surface(LockOutput *output) {
+static void setup_lock_surface(LockOutput *output) {
     LockApp *app = output->app;
+    if (!app->lock || output->lock_surface) return;
     output->surface = wl_compositor_create_surface(app->compositor);
-    output->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
-        app->layer_shell,
-        output->surface,
-        output->wl_output,
-        ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY,
-        "infynitae-lock"
-    );
-
-    zwlr_layer_surface_v1_set_size(output->layer_surface, 0, 0);
-    zwlr_layer_surface_v1_set_anchor(output->layer_surface,
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_TOP |
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_BOTTOM |
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_LEFT |
-        ZWLR_LAYER_SURFACE_V1_ANCHOR_RIGHT);
-    zwlr_layer_surface_v1_set_exclusive_zone(output->layer_surface, -1);
-    zwlr_layer_surface_v1_set_keyboard_interactivity(
-        output->layer_surface,
-        ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
-
-    zwlr_layer_surface_v1_add_listener(output->layer_surface, &layer_surface_listener, output);
-    wl_surface_commit(output->surface);
+    output->lock_surface = ext_session_lock_v1_get_lock_surface(app->lock, output->surface, output->wl_output);
+    ext_session_lock_surface_v1_add_listener(output->lock_surface, &lock_surface_listener, output);
+    // no commit here: the first commit waits for the configure
 }
+
+static void lock_locked(void *data, struct ext_session_lock_v1 *lock) {
+    (void)lock;
+    ((LockApp *)data)->locked = true;
+}
+
+static void lock_finished(void *data, struct ext_session_lock_v1 *lock) {
+    (void)lock;
+    // the compositor refused the lock (another locker holds it) or ended it
+    ((LockApp *)data)->lock_refused = true;
+}
+
+static const struct ext_session_lock_v1_listener lock_listener = {
+    .locked = lock_locked,
+    .finished = lock_finished,
+};
 
 /* ========================================================================== */
 /* Keyboard Input (XKB)                                                       */
@@ -767,8 +764,8 @@ static void registry_global(void *data, struct wl_registry *registry,
         app->compositor = wl_registry_bind(registry, name, &wl_compositor_interface, 4);
     } else if (strcmp(interface, wl_shm_interface.name) == 0) {
         app->shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
-    } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
-        app->layer_shell = wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, 1);
+    } else if (strcmp(interface, ext_session_lock_manager_v1_interface.name) == 0) {
+        app->lock_manager = wl_registry_bind(registry, name, &ext_session_lock_manager_v1_interface, 1);
     } else if (strcmp(interface, wl_seat_interface.name) == 0) {
         app->seat = wl_registry_bind(registry, name, &wl_seat_interface, 5);
         wl_seat_add_listener(app->seat, &seat_listener, app);
@@ -780,6 +777,8 @@ static void registry_global(void *data, struct wl_registry *registry,
         output->scale = 1;
         output->next = app->outputs;
         app->outputs = output;
+        // a screen connected while locked needs its own lock surface
+        setup_lock_surface(output);
     }
 }
 
@@ -792,7 +791,7 @@ static void registry_global_remove(void *data, struct wl_registry *registry, uin
             LockOutput *to_remove = *curr;
             *curr = to_remove->next;
             if (to_remove->frame_cb) wl_callback_destroy(to_remove->frame_cb);
-            if (to_remove->layer_surface) zwlr_layer_surface_v1_destroy(to_remove->layer_surface);
+            if (to_remove->lock_surface) ext_session_lock_surface_v1_destroy(to_remove->lock_surface);
             if (to_remove->surface) wl_surface_destroy(to_remove->surface);
             free_output_buffer(to_remove);
             if (to_remove->wl_output) wl_output_destroy(to_remove->wl_output);
@@ -860,16 +859,23 @@ int main(int argc, char **argv) {
     wl_registry_add_listener(app.registry, &registry_listener, &app);
     wl_display_roundtrip(app.display);
 
-    if (!app.compositor || !app.shm || !app.layer_shell) {
-        fprintf(stderr, "[infynitae-lock] Error: Wayland compositor missing required protocols (shm, layer-shell)\n");
+    if (!app.compositor || !app.shm || !app.lock_manager) {
+        fprintf(stderr, "[infynitae-lock] Error: Wayland compositor missing required protocols (shm, ext-session-lock-v1)\n");
         return 1;
     }
 
-    // Create layer surfaces for all outputs
+    // Lock the session, then give every output its lock surface
+    app.lock = ext_session_lock_manager_v1_lock(app.lock_manager);
+    ext_session_lock_v1_add_listener(app.lock, &lock_listener, &app);
     for (LockOutput *o = app.outputs; o != NULL; o = o->next) {
-        setup_layer_surface(o);
+        setup_lock_surface(o);
     }
     wl_display_roundtrip(app.display);
+    wl_display_roundtrip(app.display);
+    if (app.lock_refused) {
+        fprintf(stderr, "[infynitae-lock] Error: the compositor refused the lock (is another lock screen running?)\n");
+        return 1;
+    }
 
     printf("[infynitae-lock] Screen locked for user '%s'. Enter password to unlock.\n", app.username);
 
@@ -904,6 +910,10 @@ int main(int argc, char **argv) {
             app.running = false;
             break;
         }
+        if (app.lock_refused) {
+            fprintf(stderr, "[infynitae-lock] Error: the compositor ended the lock\n");
+            return 1;
+        }
 
         // Update clock every minute
         time_t cur = time(NULL);
@@ -913,12 +923,17 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Destroy outputs and layer surfaces
+    // Unlock (only after authentication), then destroy the lock surfaces
+    if (app.lock && app.auth_state == AUTH_STATE_SUCCESS) {
+        ext_session_lock_v1_unlock_and_destroy(app.lock);
+        app.lock = NULL;
+        wl_display_roundtrip(app.display);
+    }
     LockOutput *curr = app.outputs;
     while (curr) {
         LockOutput *next = curr->next;
         if (curr->frame_cb) wl_callback_destroy(curr->frame_cb);
-        if (curr->layer_surface) zwlr_layer_surface_v1_destroy(curr->layer_surface);
+        if (curr->lock_surface) ext_session_lock_surface_v1_destroy(curr->lock_surface);
         if (curr->surface) wl_surface_destroy(curr->surface);
         free_output_buffer(curr);
         if (curr->wl_output) wl_output_destroy(curr->wl_output);
@@ -928,7 +943,7 @@ int main(int argc, char **argv) {
 
     if (app.keyboard) wl_keyboard_destroy(app.keyboard);
     if (app.seat) wl_seat_destroy(app.seat);
-    if (app.layer_shell) zwlr_layer_shell_v1_destroy(app.layer_shell);
+    if (app.lock_manager) ext_session_lock_manager_v1_destroy(app.lock_manager);
     if (app.shm) wl_shm_destroy(app.shm);
     if (app.compositor) wl_compositor_destroy(app.compositor);
     if (app.registry) wl_registry_destroy(app.registry);

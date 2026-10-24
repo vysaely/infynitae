@@ -150,7 +150,7 @@ pub struct Clipboard {
 
 #[derive(Default)]
 pub struct Probe {
-    globals: Vec<(u32, String, u32)>,
+    pub globals: Vec<(u32, String, u32)>,
     pub clipboard: Clipboard,
     pub data_device_manager: Option<WlDataDeviceManager>,
     /// The primary selection: (manager, device, current offer with its MIME types, bytes a
@@ -248,7 +248,7 @@ pub struct Probe {
 static SHM_FILES: AtomicU64 = AtomicU64::new(0);
 
 impl Probe {
-    fn buffer(&mut self, qh: &QueueHandle<Self>, w: i32, h: i32) -> WlBuffer {
+    pub fn buffer(&mut self, qh: &QueueHandle<Self>, w: i32, h: i32) -> WlBuffer {
         let stride = w * 4;
         let len = (stride * h).max(4) as usize;
         let pool = match &mut self.shm_pool {

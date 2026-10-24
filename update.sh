@@ -107,7 +107,7 @@ fi
 
 if [ -f "$REPO_DIR/live/lock/infynitae-lock.c" ] && pkg-config --exists wayland-client cairo pangocairo xkbcommon pam 2>/dev/null; then
     echo "==> Compiling native screen locker & start screen (infynitae-lock)..."
-    gcc -O2 "$REPO_DIR/live/lock/infynitae-lock.c" "$REPO_DIR/live/lock/wlr-layer-shell-protocol.c" "$REPO_DIR/live/lock/xdg-shell-protocol.c" \
+    gcc -O2 "$REPO_DIR/live/lock/infynitae-lock.c" "$REPO_DIR/live/lock/ext-session-lock-v1-protocol.c" \
         $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon pam) -lm -lpthread \
         -o "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
     chmod +x "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
