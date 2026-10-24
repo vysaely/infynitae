@@ -185,10 +185,10 @@ case "$ACTION" in
         fi
 
         # 4. Reload wallpaper if changed / configured
-        if [ -x "$HOME/infynitae/live/wallpaper/infynitae-wallpaper.sh" ]; then
-            "$HOME/infynitae/live/wallpaper/infynitae-wallpaper.sh" &
-        elif command -v infynitae-wallpaper >/dev/null 2>&1; then
-            infynitae-wallpaper &
+        if [ -x "$HOME/.local/bin/infynitae-wallpaper" ]; then
+            "$HOME/.local/bin/infynitae-wallpaper"
+        elif [ -x "$HOME/infynitae/live/wallpaper/infynitae-wallpaper" ]; then
+            "$HOME/infynitae/live/wallpaper/infynitae-wallpaper"
         fi
 
         # 5. Notify user if notification service is present

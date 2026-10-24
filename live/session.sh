@@ -25,10 +25,12 @@ fi
 
 # 4. Wallpaper if explicitly configured in ~/.config/infynitae/config
 if [ -n "$WALLPAPER" ]; then
-    if [ -x "$HOME/infynitae/live/wallpaper/infynitae-wallpaper.sh" ]; then
-        "$HOME/infynitae/live/wallpaper/infynitae-wallpaper.sh" &
+    if [ -x "$HOME/.local/bin/infynitae-wallpaper" ]; then
+        "$HOME/.local/bin/infynitae-wallpaper"
+    elif [ -x "$HOME/infynitae/live/wallpaper/infynitae-wallpaper" ]; then
+        "$HOME/infynitae/live/wallpaper/infynitae-wallpaper"
     elif command -v infynitae-wallpaper >/dev/null 2>&1; then
-        infynitae-wallpaper &
+        infynitae-wallpaper
     fi
 fi
 

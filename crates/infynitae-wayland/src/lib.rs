@@ -579,16 +579,14 @@ impl WaylandState {
                     self.wallpaper = new_wallpaper;
                     self.wallpaper_mode = new_wallpaper_mode;
                     let home = std::env::var("HOME").unwrap_or_default();
-                    let script = format!("{home}/.local/bin/infynitae-wallpaper");
-                    let script_fallback = format!("{home}/infynitae/live/wallpaper/infynitae-wallpaper.sh");
-                    let target_bin = if std::path::Path::new(&script).exists() {
-                        script
+                    let bin = format!("{home}/.local/bin/infynitae-wallpaper");
+                    let bin_fallback = format!("{home}/infynitae/live/wallpaper/infynitae-wallpaper");
+                    let target_bin = if std::path::Path::new(&bin).exists() {
+                        bin
                     } else {
-                        script_fallback
+                        bin_fallback
                     };
-                    let _ = std::process::Command::new("sh")
-                        .arg(target_bin)
-                        .spawn();
+                    let _ = std::process::Command::new(target_bin).spawn();
                 }
             }
         }

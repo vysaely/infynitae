@@ -113,7 +113,9 @@ install -m 755 live/dev.sh "$HOME/.local/bin/infynitae-dev"
 install -m 755 live/settings.sh "$HOME/.local/bin/infynitae-settings"
 install -m 755 live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
 install -m 755 update.sh "$HOME/.local/bin/infynitae-update"
-install -m 755 live/wallpaper/infynitae-wallpaper.sh "$HOME/.local/bin/infynitae-wallpaper"
+if [ -f "live/wallpaper/infynitae-wallpaper" ]; then
+    install -m 755 live/wallpaper/infynitae-wallpaper "$HOME/.local/bin/infynitae-wallpaper"
+fi
 echo "==> Installed binaries to ~/.local/bin/{infynitae, infynitae-dev, infynitae-settings, infynitae-drivers, infynitae-update, infynitae-wallpaper}"
 
 # 7. Deploy live runtime scripts & companion helpers
@@ -136,6 +138,12 @@ if [ -f "$HOME/infynitae/live/lock/infynitae-lock.c" ] && pkg-config --exists wa
         $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon pam) -lm -lpthread \
         -o "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
     chmod +x "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
+fi
+if [ -f "$HOME/infynitae/live/wallpaper/infynitae-wallpaper.c" ] && pkg-config --exists wayland-client cairo gdk-pixbuf-2.0 2>/dev/null; then
+    gcc -O2 "$HOME/infynitae/live/wallpaper/infynitae-wallpaper.c" "$HOME/infynitae/live/wallpaper/wlr-layer-shell-protocol.c" "$HOME/infynitae/live/wallpaper/xdg-shell-protocol.c" \
+        $(pkg-config --cflags --libs wayland-client cairo gdk-pixbuf-2.0) -lm \
+        -o "$HOME/.local/bin/infynitae-wallpaper" 2>/dev/null || true
+    chmod +x "$HOME/.local/bin/infynitae-wallpaper" 2>/dev/null || true
 fi
 if command -v sudo >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/lock/infynitae.pam" ] && [ ! -f /etc/pam.d/infynitae ]; then
     sudo cp -f "$HOME/infynitae/live/lock/infynitae.pam" /etc/pam.d/infynitae 2>/dev/null || true

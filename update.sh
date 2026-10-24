@@ -95,7 +95,9 @@ install -m 755 live/dev.sh "$HOME/.local/bin/infynitae-dev"
 install -m 755 live/settings.sh "$HOME/.local/bin/infynitae-settings"
 install -m 755 live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
 install -m 755 update.sh "$HOME/.local/bin/infynitae-update"
-install -m 755 live/wallpaper/infynitae-wallpaper.sh "$HOME/.local/bin/infynitae-wallpaper"
+if [ -f "live/wallpaper/infynitae-wallpaper" ]; then
+    install -m 755 live/wallpaper/infynitae-wallpaper "$HOME/.local/bin/infynitae-wallpaper"
+fi
 if [ -f "live/xdg-open" ]; then
     install -m 755 live/xdg-open "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 fi
@@ -119,6 +121,14 @@ if [ -f "$REPO_DIR/live/lock/infynitae-lock.c" ] && pkg-config --exists wayland-
         $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon pam) -lm -lpthread \
         -o "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
     chmod +x "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
+fi
+
+if [ -f "$REPO_DIR/live/wallpaper/infynitae-wallpaper.c" ] && pkg-config --exists wayland-client cairo gdk-pixbuf-2.0 2>/dev/null; then
+    echo "==> Compiling native wallpaper renderer (infynitae-wallpaper)..."
+    gcc -O2 "$REPO_DIR/live/wallpaper/infynitae-wallpaper.c" "$REPO_DIR/live/wallpaper/wlr-layer-shell-protocol.c" "$REPO_DIR/live/wallpaper/xdg-shell-protocol.c" \
+        $(pkg-config --cflags --libs wayland-client cairo gdk-pixbuf-2.0) -lm \
+        -o "$HOME/.local/bin/infynitae-wallpaper" 2>/dev/null || true
+    chmod +x "$HOME/.local/bin/infynitae-wallpaper" 2>/dev/null || true
 fi
 
 # 6. Deploy live companion scripts
