@@ -380,6 +380,7 @@ impl Core {
             KeyAction::MediaPlayPause => vec![Effect::MediaPlayPause],
             KeyAction::MediaNext => vec![Effect::MediaNext],
             KeyAction::MediaPrev => vec![Effect::MediaPrev],
+            KeyAction::Exec(i) => vec![Effect::Exec(i)],
             crate::input::keys::KeyAction::Noop => Vec::new(),
         };
         out.extend(fx);

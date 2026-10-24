@@ -398,6 +398,8 @@ pub struct Core {
     pub fullscreen_pan: bool,
     /// Whether newly opened windows are automatically focused.
     pub focus_on_open: bool,
+    /// The user's key bindings (`set_key_bindings`).
+    key_bindings: input::keys::UserBindings,
     /// Whether camera teleports/recenters to newly opened windows.
     pub teleport_on_open: bool,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
@@ -475,6 +477,7 @@ impl Core {
                 presentation_suppressed: Vec::new(),
                 fullscreen_pan: false,
                 focus_on_open: false,
+                key_bindings: input::keys::UserBindings::default(),
                 teleport_on_open: false,
                 frame_liveness: frames::FrameLiveness::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -845,7 +848,12 @@ impl Core {
         mods: input::bindings::Modifiers,
         interaction_active: bool,
     ) -> Option<input::keys::KeyAction> {
-        input::keys::resolve_key_binding(key, mods, interaction_active)
+        input::keys::resolve_key_binding_with(&self.key_bindings, key, mods, interaction_active)
+    }
+
+    /// The user's key bindings from the config (live reload), checked before the built-in ones.
+    pub fn set_key_bindings(&mut self, bindings: input::keys::UserBindings) {
+        self.key_bindings = bindings;
     }
 
     /// The output the pointer is currently located on, if any.
@@ -1019,7 +1027,8 @@ impl Core {
             | E::BrightnessDown
             | E::MediaPlayPause
             | E::MediaNext
-            | E::MediaPrev => {}
+            | E::MediaPrev
+            | E::Exec(_) => {}
         }
         recipients.map(|r| {
             r.filter(|&e| {

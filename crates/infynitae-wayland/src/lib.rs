@@ -222,6 +222,8 @@ pub struct WaylandState {
     pub wine_transparency: bool,
     pub force_transparent_apps: Vec<String>,
     pub manual_idle_inhibit: bool,
+    /// The config's `EXEC_*` commands, by the index Core's `Effect::Exec` names.
+    pub(crate) exec_commands: Vec<String>,
     /// `ext-session-lock-v1`, when the backend enforces it (`enable_session_lock`).
     session_lock: Option<lock::SessionLock>,
     // probe builds only: the Send assertion must be the one and only error
@@ -391,6 +393,7 @@ impl WaylandState {
             wine_transparency: true,
             force_transparent_apps: Vec::new(),
             manual_idle_inhibit: false,
+            exec_commands: Vec::new(),
             session_lock: None,
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
@@ -521,11 +524,21 @@ impl WaylandState {
             if let Ok(content) = std::fs::read_to_string(config_path) {
                 let mut new_wallpaper: Option<String> = None;
                 let mut new_wallpaper_mode: Option<String> = None;
+                let mut bind_lines: Vec<(String, String)> = Vec::new();
+                let mut exec_lines: Vec<(String, String)> = Vec::new();
                 for line in content.lines() {
                     let line_clean = line.split('#').next().unwrap_or("").trim();
                     if let Some((k, v)) = line_clean.split_once('=') {
                         let key = k.trim();
                         let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                        if let Some(name) = key.strip_prefix("BIND_") {
+                            bind_lines.push((name.to_ascii_uppercase(), val.to_string()));
+                            continue;
+                        }
+                        if key.starts_with("EXEC_") {
+                            exec_lines.push((key.to_string(), val.to_string()));
+                            continue;
+                        }
                         match key {
                             "PAN_MODE" => {
                                 match val.to_lowercase().as_str() {
@@ -689,6 +702,12 @@ impl WaylandState {
                         }
                     }
                 }
+                let (bindings, commands, problems) = user_key_bindings(&bind_lines, &exec_lines);
+                for p in problems {
+                    eprintln!("[infynitae] Config key binding ignored: {p}");
+                }
+                self.core.set_key_bindings(bindings);
+                self.exec_commands = commands;
                 if new_wallpaper != self.wallpaper || new_wallpaper_mode != self.wallpaper_mode {
                     self.wallpaper = new_wallpaper;
                     self.wallpaper_mode = new_wallpaper_mode;
@@ -905,6 +924,100 @@ impl WaylandState {
             .rev()
             .find(|(s, _)| *s == serial)
             .map(|(_, o)| *o)
+    }
+}
+
+/// The user's key bindings from config lines: `BIND_<ACTION>="CHORD[,CHORD]"` gives an action
+/// its own chords (its built-in chord is freed), `BIND_<ACTION>="none"` frees it without a new
+/// one; `EXEC_<NAME>="CHORD:command"` runs a command. Returns the bindings, the commands (by
+/// `Exec` index) and a description of each line that was not understood. Pure.
+pub fn user_key_bindings(
+    binds: &[(String, String)],
+    execs: &[(String, String)],
+) -> (infynitae_core::input::keys::UserBindings, Vec<String>, Vec<String>) {
+    use infynitae_core::input::keys::{ACTION_NAMES, KeyAction, UserBindings, parse_chord};
+    let mut out = UserBindings::default();
+    let mut commands = Vec::new();
+    let mut problems = Vec::new();
+    for (name, value) in binds {
+        let Some(&(_, action)) = ACTION_NAMES.iter().find(|(n, _)| n == name) else {
+            problems.push(format!("BIND_{name}: no such action"));
+            continue;
+        };
+        out.moved.push(action);
+        if value.eq_ignore_ascii_case("none") || value.is_empty() {
+            continue;
+        }
+        for chord_text in value.split(',') {
+            match parse_chord(chord_text) {
+                Some(chord) => out.chords.push((chord, Some(action))),
+                None => problems.push(format!("BIND_{name}: \"{chord_text}\" is not a key chord")),
+            }
+        }
+    }
+    for (name, value) in execs {
+        let Some((chord_text, command)) = value.split_once(':') else {
+            problems.push(format!("{name}: expected \"CHORD:command\""));
+            continue;
+        };
+        let (Some(chord), command) = (parse_chord(chord_text), command.trim()) else {
+            problems.push(format!("{name}: \"{chord_text}\" is not a key chord"));
+            continue;
+        };
+        if command.is_empty() || commands.len() >= usize::from(u16::MAX) {
+            problems.push(format!("{name}: no command"));
+            continue;
+        }
+        out.chords
+            .push((chord, Some(KeyAction::Exec(commands.len() as u16))));
+        commands.push(command.to_string());
+    }
+    (out, commands, problems)
+}
+
+#[cfg(test)]
+mod key_binding_config_tests {
+    use super::user_key_bindings;
+    use infynitae_core::input::keys::{KeyAction, parse_chord};
+
+    fn kv(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+    }
+
+    /// BIND_ moves actions (several chords allowed) or frees them with "none"; EXEC_ adds
+    /// commands in order; lines that cannot be understood are reported, not applied.
+    #[test]
+    fn config_lines_become_bindings_and_commands() {
+        let (b, cmds, problems) = user_key_bindings(
+            &kv(&[
+                ("TERMINAL", "SUPER+RETURN,SUPER+T"),
+                ("LAUNCHER", "none"),
+                ("TELEPORT", "SUPER+X"),
+                ("LOCK", "SUPER+NOPE"),
+            ]),
+            &kv(&[
+                ("EXEC_BROWSER", "SUPER+B: firefox --new-window"),
+                ("EXEC_BAD", "firefox"),
+            ]),
+        );
+        assert_eq!(
+            b.chords,
+            vec![
+                (parse_chord("SUPER+RETURN").unwrap(), Some(KeyAction::SpawnTerminal)),
+                (parse_chord("SUPER+T").unwrap(), Some(KeyAction::SpawnTerminal)),
+                (parse_chord("SUPER+B").unwrap(), Some(KeyAction::Exec(0))),
+            ]
+        );
+        assert_eq!(
+            b.moved,
+            vec![
+                KeyAction::SpawnTerminal,
+                KeyAction::ToggleLauncher,
+                KeyAction::SpawnLockScreen
+            ]
+        );
+        assert_eq!(cmds, vec!["firefox --new-window".to_string()]);
+        assert_eq!(problems.len(), 3, "{problems:?}");
     }
 }
 

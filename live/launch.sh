@@ -408,6 +408,10 @@ case "$ACTION" in
             playerctl previous
         fi
         ;;
+    exec)
+        # a user command from the config (EXEC_<NAME>="CHORD:command"), with the session's env
+        [ -n "$2" ] && exec sh -c "$2"
+        ;;
     lock-screen)
         # Super+L: Lock screen (native infynitae-lock, hyprlock, swaylock, gtklock, waylock)
         LOCKER="${SCREEN_LOCKER:-auto}"

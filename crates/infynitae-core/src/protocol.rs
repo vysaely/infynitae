@@ -166,6 +166,8 @@ pub enum Effect {
     MediaNext,
     /// Hardware Media Previous Song
     MediaPrev,
+    /// A user command from the config, by its index in the adapter's command list.
+    Exec(u16),
 }
 
 /// Caller-owned, reusable storage for the effects of one Core entry (C14.3 `EffectBuf`). An

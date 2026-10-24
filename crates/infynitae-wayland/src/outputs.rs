@@ -211,6 +211,11 @@ impl WaylandState {
                 Effect::SpawnLockScreen => {
                     self.spawn_action("lock-screen");
                 }
+                Effect::Exec(i) => {
+                    if let Some(command) = self.exec_commands.get(usize::from(i)).cloned() {
+                        self.spawn_action_with("exec", &command);
+                    }
+                }
                 Effect::TogglePrivacy => {
                     self.toggle_privacy_focused();
                 }
@@ -258,10 +263,18 @@ impl WaylandState {
 
     /// Spawns a desktop action via ~/infynitae/live/launch.sh <action>
     pub(crate) fn spawn_action(&self, action: &str) {
+        self.spawn_action_with(action, "");
+    }
+
+    /// [`spawn_action`](Self::spawn_action) with an argument (`exec`: the command to run).
+    pub(crate) fn spawn_action_with(&self, action: &str, arg: &str) {
         let home = std::env::var("HOME").unwrap_or_default();
         let script = format!("{home}/infynitae/live/launch.sh");
         let mut cmd = std::process::Command::new("sh");
         cmd.arg(script).arg(action);
+        if !arg.is_empty() {
+            cmd.arg(arg);
+        }
         if let Ok(d) = std::env::var("DISPLAY") {
             cmd.env("DISPLAY", d);
         }

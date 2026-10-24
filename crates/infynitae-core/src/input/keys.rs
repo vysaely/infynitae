@@ -121,7 +121,108 @@ pub enum KeyAction {
     /// default 1.0 scale (or, if no window is focused, camera zoom is reset to 1.0).
     /// No history entry, as a shell `Navigate`.
     Recenter,
+    /// A user command from the config (`EXEC_<NAME>="CHORD:command"`), by its index in the
+    /// adapter's command list.
+    Exec(u16),
     Noop,
+}
+
+/// A key chord from the config: an evdev key with exactly these modifiers held.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Chord {
+    pub key: u32,
+    pub mods: Modifiers,
+}
+
+/// The user's bindings from the config, checked before the built-in ones: chords and what they
+/// do (`None`: nothing, a built-in chord freed), and the actions given a chord of their own,
+/// whose built-in chords no longer trigger them.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UserBindings {
+    pub chords: Vec<(Chord, Option<KeyAction>)>,
+    pub moved: Vec<KeyAction>,
+}
+
+/// Evdev codes by key name, for config chords.
+const KEY_NAMES: &[(&str, u32)] = &[
+    ("ESC", 1), ("ESCAPE", 1), ("1", 2), ("2", 3), ("3", 4), ("4", 5), ("5", 6), ("6", 7),
+    ("7", 8), ("8", 9), ("9", 10), ("0", 11), ("MINUS", 12), ("EQUAL", 13), ("BACKSPACE", 14),
+    ("TAB", 15), ("Q", 16), ("W", 17), ("E", 18), ("R", 19), ("T", 20), ("Y", 21), ("U", 22),
+    ("I", 23), ("O", 24), ("P", 25), ("BRACKETLEFT", 26), ("BRACKETRIGHT", 27), ("RETURN", 28),
+    ("ENTER", 28), ("A", 30), ("S", 31), ("D", 32), ("F", 33), ("G", 34), ("H", 35), ("J", 36),
+    ("K", 37), ("L", 38), ("SEMICOLON", 39), ("APOSTROPHE", 40), ("GRAVE", 41),
+    ("BACKSLASH", 43), ("Z", 44), ("X", 45), ("C", 46), ("V", 47), ("B", 48), ("N", 49),
+    ("M", 50), ("COMMA", 51), ("PERIOD", 52), ("DOT", 52), ("SLASH", 53), ("SPACE", 57),
+    ("F1", 59), ("F2", 60), ("F3", 61), ("F4", 62), ("F5", 63), ("F6", 64), ("F7", 65),
+    ("F8", 66), ("F9", 67), ("F10", 68), ("F11", 87), ("F12", 88), ("PRINT", 99),
+    ("HOME", 102), ("UP", 103), ("PAGEUP", 104), ("LEFT", 105), ("RIGHT", 106), ("END", 107),
+    ("DOWN", 108), ("PAGEDOWN", 109), ("INSERT", 110), ("DELETE", 111),
+];
+
+/// Parses a config chord such as `SUPER+SHIFT+Q` (modifiers SUPER/LOGO/WIN, CTRL/CONTROL, ALT,
+/// SHIFT; any case; the key last). `None` for an unknown key or modifier, or no key. Pure.
+pub fn parse_chord(text: &str) -> Option<Chord> {
+    let mut mods = Modifiers::default();
+    let mut key = None;
+    for part in text.split('+').map(|p| p.trim().to_ascii_uppercase()) {
+        match part.as_str() {
+            "SUPER" | "LOGO" | "WIN" | "MOD4" => mods.logo = true,
+            "CTRL" | "CONTROL" => mods.ctrl = true,
+            "ALT" => mods.alt = true,
+            "SHIFT" => mods.shift = true,
+            name => {
+                if key.is_some() {
+                    return None;
+                }
+                key = Some(KEY_NAMES.iter().find(|(n, _)| *n == name)?.1);
+            }
+        }
+    }
+    Some(Chord { key: key?, mods })
+}
+
+/// The actions a config can bind, by the name after `BIND_` (`BIND_TERMINAL="SUPER+RETURN"`).
+pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
+    ("FOCUS_NEXT", KeyAction::FocusNext),
+    ("OVERVIEW", KeyAction::ToggleOverview),
+    ("LAUNCHER", KeyAction::ToggleLauncher),
+    ("TERMINAL", KeyAction::SpawnTerminal),
+    ("FILE_MANAGER", KeyAction::SpawnFileManager),
+    ("SCREENSHOT", KeyAction::SpawnScreenshot),
+    ("REGION_SCREENSHOT", KeyAction::SpawnRegionScreenshot),
+    ("RELOAD", KeyAction::ReloadShell),
+    ("LOCK", KeyAction::SpawnLockScreen),
+    ("PRIVACY", KeyAction::TogglePrivacy),
+    ("IDLE_INHIBIT", KeyAction::ToggleIdleInhibit),
+    ("SAVE_REPLAY", KeyAction::SaveReplay),
+    ("RECORD", KeyAction::ToggleRecording),
+    ("FIT", KeyAction::FitToggle),
+    ("FULLSCREEN", KeyAction::ToggleFullscreen),
+    ("CLOSE", KeyAction::CloseFocused),
+    ("FORCE_CLOSE", KeyAction::ForceCloseFocused),
+    ("RECENTER", KeyAction::Recenter),
+];
+
+/// [`resolve_key_binding`] with the user's bindings first: a chord of theirs wins (also over a
+/// built-in one), and an action they moved no longer answers its built-in chord. Escape's cancel
+/// is never rebound, and no user binding resolves while an interaction is active. Pure; nothing
+/// allocated.
+pub fn resolve_key_binding_with(
+    user: &UserBindings,
+    key: u32,
+    mods: Modifiers,
+    interaction_active: bool,
+) -> Option<KeyAction> {
+    if key != KEY_ESC && !interaction_active {
+        if let Some((_, action)) = user
+            .chords
+            .iter()
+            .find(|(c, _)| c.key == key && c.mods == mods)
+        {
+            return *action;
+        }
+    }
+    resolve_key_binding(key, mods, interaction_active).filter(|a| !user.moved.contains(a))
 }
 
 /// A compositor key binding specification.
@@ -300,6 +401,81 @@ pub fn resolve_key_binding(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn mods(logo: bool, ctrl: bool, alt: bool, shift: bool) -> Modifiers {
+        Modifiers {
+            logo,
+            ctrl,
+            alt,
+            shift,
+        }
+    }
+
+    /// Config chords: modifiers in any order and case, the key last; unknown names and two keys
+    /// are refused.
+    #[test]
+    fn chords_parse_from_the_config() {
+        assert_eq!(
+            parse_chord("SUPER+SHIFT+Q"),
+            Some(Chord {
+                key: KEY_Q,
+                mods: mods(true, false, false, true)
+            })
+        );
+        assert_eq!(
+            parse_chord("shift + super + return"),
+            Some(Chord {
+                key: KEY_ENTER,
+                mods: mods(true, false, false, true)
+            })
+        );
+        assert_eq!(
+            parse_chord("F5"),
+            Some(Chord {
+                key: 63,
+                mods: Modifiers::default()
+            })
+        );
+        assert_eq!(parse_chord("SUPER+HYPER+Q"), None);
+        assert_eq!(parse_chord("SUPER+Q+W"), None);
+        assert_eq!(parse_chord("SUPER+SHIFT"), None);
+    }
+
+    /// A user chord wins over a built-in one; a moved action stops answering its built-in
+    /// chord; Escape's cancel and interactions are untouched; other bindings stay.
+    #[test]
+    fn user_bindings_come_first_and_free_moved_defaults() {
+        let logo = mods(true, false, false, false);
+        let user = UserBindings {
+            chords: vec![
+                (
+                    Chord {
+                        key: KEY_ENTER,
+                        mods: mods(true, false, false, true),
+                    },
+                    Some(KeyAction::SpawnTerminal),
+                ),
+                (Chord { key: KEY_W, mods: logo }, None),
+                (Chord { key: KEY_B, mods: logo }, Some(KeyAction::Exec(0))),
+            ],
+            moved: vec![KeyAction::SpawnTerminal],
+        };
+        let r = |key, m, active| resolve_key_binding_with(&user, key, m, active);
+        // Super+Shift+Enter was fullscreen; the user gave it to the terminal
+        assert_eq!(r(KEY_ENTER, mods(true, false, false, true), false), Some(KeyAction::SpawnTerminal));
+        // the terminal's built-in Super+Q is free now
+        assert_eq!(r(KEY_Q, logo, false), None);
+        // Super+W freed; Super+B runs command 0
+        assert_eq!(r(KEY_W, logo, false), None);
+        assert_eq!(r(KEY_B, logo, false), Some(KeyAction::Exec(0)));
+        // exact modifiers: Super+Ctrl+B is not Super+B
+        assert_eq!(r(KEY_B, mods(true, true, false, false), false), None);
+        // untouched bindings and Escape's cancel
+        assert_eq!(r(KEY_L, logo, false), Some(KeyAction::SpawnLockScreen));
+        assert_eq!(r(KEY_ESC, Modifiers::default(), true), Some(KeyAction::Cancel));
+        // no user binding during an interaction
+        assert_eq!(r(KEY_B, logo, true), None);
+    }
 
     /// The owner's Super+Space: exactly Logo held, never during an interaction.
     #[test]

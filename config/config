@@ -288,3 +288,19 @@ RECORD_AUDIO="true"          # Include synchronized PipeWire desktop audio
 #     Create ~/.config/infynitae/autostart.sh and chmod +x it.
 #   To completely override shortcut actions:
 #     Create ~/.config/infynitae/launch.sh and chmod +x it.
+
+# ------------------------------------------------------------------------------
+# 9. KEY BINDINGS (applied when you save this file: no restart)
+# ------------------------------------------------------------------------------
+# Move an action to other keys (its built-in keys are freed), or free it with "none":
+#   BIND_<ACTION>="CHORD[,CHORD]"     e.g. BIND_TERMINAL="SUPER+RETURN"
+#   Actions: FOCUS_NEXT OVERVIEW LAUNCHER TERMINAL FILE_MANAGER SCREENSHOT REGION_SCREENSHOT
+#            RELOAD LOCK PRIVACY IDLE_INHIBIT SAVE_REPLAY RECORD FIT FULLSCREEN CLOSE
+#            FORCE_CLOSE RECENTER
+# Run any command:
+#   EXEC_<NAME>="CHORD:command"       e.g. EXEC_BROWSER="SUPER+B:firefox"
+# Chords: modifiers SUPER CTRL ALT SHIFT, then one key: A-Z 0-9 F1-F12 RETURN SPACE TAB
+#   ESC BACKSPACE DELETE INSERT HOME END PAGEUP PAGEDOWN LEFT RIGHT UP DOWN PRINT MINUS EQUAL
+#   COMMA PERIOD SLASH SEMICOLON APOSTROPHE GRAVE BACKSLASH BRACKETLEFT BRACKETRIGHT.
+#   Modifiers must match exactly (SUPER+B is not SUPER+SHIFT+B). A '#' ends the line.
+#   A line that is not understood is skipped and noted in ~/.local/state/infynitae/session.log.
