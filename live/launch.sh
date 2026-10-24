@@ -9,8 +9,8 @@ if [ -f "$HOME/infynitae/live/env.sh" ]; then
 fi
 
 # Load user configuration if present
-if [ -f "$HOME/.config/infynitae/config" ]; then
-    . "$HOME/.config/infynitae/config"
+if [ -f "$HOME/infynitae/live/config.sh" ]; then
+    . "$HOME/infynitae/live/config.sh"
 fi
 
 # Automatically resolve the current Infynitae Wayland display if not already set
@@ -251,7 +251,10 @@ case "$ACTION" in
         ;;
     browser)
         # Web browser
-        exec "${BROWSER:-firefox}"
+        if [ "$BROWSER" = "gio open" ]; then
+            exec gtk-launch "$(xdg-settings get default-web-browser 2>/dev/null || echo firefox.desktop)"
+        fi
+        exec sh -c "$BROWSER"
         ;;
     volume-up)
         # Volume Up: PipeWire wpctl / PulseAudio pactl / amixer + synchronous OSD

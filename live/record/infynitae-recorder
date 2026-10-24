@@ -11,8 +11,8 @@ set -e
 if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"
 fi
-if [ -f "$HOME/.config/infynitae/config" ]; then
-    . "$HOME/.config/infynitae/config"
+if [ -f "$HOME/infynitae/live/config.sh" ]; then
+    . "$HOME/infynitae/live/config.sh"
 fi
 
 # the installed build (infynitae-update builds it); a copy built in the repo is a fallback

@@ -73,8 +73,8 @@ if [ -z "$LIBSEAT_BACKEND" ]; then
 fi
 
 # 6. Load user config and synchronize universal settings
-if [ -f "$HOME/.config/infynitae/config" ]; then
-    . "$HOME/.config/infynitae/config"
+if [ -f "$HOME/infynitae/live/config.sh" ]; then
+    . "$HOME/infynitae/live/config.sh"
 fi
 export XCURSOR_THEME="${CURSOR_THEME:-${XCURSOR_THEME:-Adwaita}}"
 export XCURSOR_SIZE="${CURSOR_SIZE:-${XCURSOR_SIZE:-24}}"

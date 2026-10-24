@@ -7,8 +7,8 @@ umask 077
 if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"
 fi
-if [ -f "$HOME/.config/infynitae/config" ]; then
-    . "$HOME/.config/infynitae/config"
+if [ -f "$HOME/infynitae/live/config.sh" ]; then
+    . "$HOME/infynitae/live/config.sh"
 fi
 
 # 2. Synchronize Wayland & D-Bus environment for Portals, PipeWire, and screensharing

@@ -25,17 +25,8 @@ if [ -f "$CONFIG_FILE" ]; then
         echo 'START_LOCKED="true"' >> "$CONFIG_FILE"
     fi
 else
-    cat <<EOF > "$CONFIG_FILE"
-# Infynitae Compositor Configuration
-PAN_MODE="free"
-FOCUS_FOLLOWS_MOUSE="hover"
-START_LOCKED="true"
-IDLE_SLEEP_TIMEOUT_MIN="15"
-IDLE_AUTO_LOCK="true"
-WINE_TRANSPARENCY="true"
-PRIVACY_APPS=""
-PRIVACY_TITLES=""
-EOF
+    # a new config is the shipped template, started locked
+    sed 's/^START_LOCKED=.*/START_LOCKED="true"/' "$USER_HOME/infynitae/config/config" > "$CONFIG_FILE"
     chown -R "$USER_NAME:$USER_NAME" "$CONFIG_DIR"
 fi
 

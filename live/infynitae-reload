@@ -13,7 +13,7 @@ LIVE="$HOME/infynitae/live"
 mkdir -p "$STATE_DIR"
 
 [ -f "$LIVE/env.sh" ] && . "$LIVE/env.sh" >/dev/null 2>&1
-[ -f "$HOME/.config/infynitae/config" ] && . "$HOME/.config/infynitae/config"
+[ -f "$LIVE/config.sh" ] && . "$LIVE/config.sh"
 
 # The compositor's socket: the one this shell already uses if it is live, else the one the
 # newest session.log start announced (a stale wayland-0 from another desktop must not win).

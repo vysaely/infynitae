@@ -1,309 +1,120 @@
-# ==============================================================================
-# INFYNITAE UNIVERSAL CONFIGURATION
-# Location: ~/.config/infynitae/config
+# Infynitae — ~/.config/infynitae/config
 #
-# Single source of truth. Zero bloat, zero background daemons.
-# Edit anytime and press Super+Shift+BackSpace or run `infynitae-settings apply`.
-# ==============================================================================
+# A shell file: KEY="value", '#' starts a comment. Each section says when its changes apply:
+#   [save]    the moment you save this file
+#   [reload]  on Super+Shift+Backspace (or `infynitae-reload`)
+#   [use]     the next time the thing is used
+#   [restart] on the next compositor start (Ctrl+Alt+Backspace; closes windows)
+# A setting left out uses its default (the value shown here).
 
-# ------------------------------------------------------------------------------
-# 1. INPUT & POINTER (Raw latency, snappy responsiveness)
-# ------------------------------------------------------------------------------
-# Mouse Acceleration Profile:
-#   "flat"     - True 1:1 raw mouse input (recommended for competitive gaming & snappiness)
-#   "adaptive" - Standard curved acceleration
-MOUSE_ACCEL_PROFILE="flat"
+# ── Keyboard & mouse ──────────────────────────────────────────────────── [save] ──
+XKB_DEFAULT_LAYOUT=""             # [restart] "us", "us,de"… — empty: the system's layout
+XKB_DEFAULT_OPTIONS=""            # [restart] e.g. "grp:alt_shift_toggle,caps:swapescape"
+KEYBOARD_REPEAT_DELAY="200"       # ms before a held key repeats
+KEYBOARD_REPEAT_RATE="35"         # repeats per second
+MOUSE_ACCEL_PROFILE="flat"        # flat (1:1, best for games) | adaptive
+MOUSE_ACCEL_SPEED="0.0"           # -1.0 … 1.0
+TOUCHPAD_TAP="true"               # tap to click
+TOUCHPAD_NATURAL_SCROLL="false"   # content follows the fingers
 
-# Pointer Sensitivity (-1.0 to 1.0, 0.0 is default native sensor speed)
-MOUSE_ACCEL_SPEED="0.0"
-
-# Canvas Pan Mode (Super + Middle Drag or Canvas Drag):
-#   "free" - Free pointer pan: canvas moves in drag direction and cursor moves naturally with mouse (recommended for Remote Desktop / RustDesk)
-#   "grab" - Viewport-anchored pan: dragging pulls canvas under pointer, cursor stays at fixed screen position (Photoshop/Blender)
-#   "rts"  - World-anchored camera grip: camera moves in drag direction, cursor tracks canvas coordinates (Dota 2 Camera Grip)
-PAN_MODE="free"
-
-# Keyboard Repeat:
-#   KEYBOARD_REPEAT_DELAY: Milliseconds before key repeat begins (default 200)
-#   KEYBOARD_REPEAT_RATE:  Keystrokes per second when held (default 35, snappy 50)
-KEYBOARD_REPEAT_DELAY="200"
-KEYBOARD_REPEAT_RATE="35"
-
-# Keyboard Layout & Switching (XKB):
-#   Examples: "us", "us,ru", "us,de"
-#   Toggle Options: "grp:alt_shift_toggle", "caps:swapescape", or "" for standard
-XKB_DEFAULT_LAYOUT="us"
-XKB_DEFAULT_OPTIONS=""
-
-# Window Focus Model:
-#   "sloppy" (or 1): Focus follows mouse, stays focused when cursor moves over empty canvas
-#   "strict": Focus strictly follows mouse, clears focus when cursor moves over empty canvas
-#   "click" (or 0): Traditional click-to-focus
-FOCUS_FOLLOWS_MOUSE="sloppy"
-
-# Mouse & Window Drag Gestures (Native, sub-millisecond latency):
-#   Super + Left Drag:              Move single active window
-#   Super + Right Drag:             Resize single active window from nearest corner
-#   Super + Shift + Left Drag:      Move entire window cluster together
-#   Super + Shift + Right Drag:     Resize entire window cluster proportionally
-#   Super + Middle Drag:            Pan canvas according to PAN_MODE
-#   Super + Shift + Middle Click:   Reset zoom to 100% native scale
-#   Super + Shift + Wheel:          Zoom canvas in / out around cursor
-#   Super + Shift + Tab:            Canvas Overview Toggle (scales to frame all windows)
-
-# Focus Cycling Navigation (Super+Tab):
-#   1 / true: Focus cycle automatically moves the camera to center the newly focused window
-#   0 / false: Focus cycle changes keyboard focus without moving the camera
-FOCUS_CYCLE_NAVIGATE="1"
-
-# Auto-Focus on Window Open:
-#   1 / true: Automatically focus newly opened applications
-#   0 / false: Do not automatically change focus when new windows open
-FOCUS_ON_OPEN="1"
-
-# Teleport Camera on Window Open:
-#   1 / true: Automatically center / teleport camera onto newly opened applications
-#   0 / false: Keep current camera position when new applications open
-TELEPORT_ON_OPEN="1"
-
-# Screen Locker (Super+L):
-#   "auto" (uses native infynitae-lock, fallback hyprlock, swaylock, gtklock, waylock), or custom command
-SCREEN_LOCKER="auto"
-
-# Boot / Start Screen (Replace TTY with pretty Lock Screen):
-#   "true"  - Auto-spawns infynitae-lock on startup as greeter start screen before session unlocks
-#   "false" - Boots straight into active canvas & terminal
-START_LOCKED="false"
-
-# Idle Screen Sleep & Auto-Lock (Super+Shift+I to toggle Stay Awake mode):
-#   IDLE_SLEEP_TIMEOUT_MIN: Inactivity minutes before DPMS monitor sleep / screen blanking (0 to disable)
-#   IDLE_AUTO_LOCK: Auto-lock session with infynitae-lock when entering idle sleep
-#   Super+Shift+I: Toggles Stay Awake mode (suppresses idle sleep & lock temporarily e.g. for movies/gaming)
-IDLE_SLEEP_TIMEOUT_MIN="15"
-IDLE_AUTO_LOCK="true"
-
-# Window Privacy & Screen Capture Exemption (Super+Shift+P to toggle on focused window):
-#   Hides designated windows from screenshots, screenshares, RustDesk, OBS, Discord, and screencopy.
-#   Private windows appear transparent / reveal wallpaper in capture, while remaining fully visible to you.
-#   PRIVACY_APPS: Comma-separated list of app_id or class substrings (e.g. "bitwarden,keepassxc,discord")
-#   PRIVACY_TITLES: Comma-separated list of window title substrings (e.g. "Password,Secret")
-PRIVACY_APPS=""
-PRIVACY_TITLES=""
-
-# Wine & Layered Window Transparency Fix:
-#   "true"  - Eliminates black background boxes on Wine/Proton/X11 apps requesting transparent/layered windows
-#   FORCE_TRANSPARENT_APPS: Comma-separated extra apps to force alpha blending for (e.g. "wine,steam_app")
-WINE_TRANSPARENCY="true"
-FORCE_TRANSPARENT_APPS=""
-
-# Touchpad:
-TOUCHPAD_TAP="true"             # Tap to click
-TOUCHPAD_NATURAL_SCROLL="false"  # Invert scroll direction
-
-# ------------------------------------------------------------------------------
-# 2. APPEARANCE & THEMES (Universal across Wayland, GTK, Qt, and Steam)
-# ------------------------------------------------------------------------------
-# Cursor Theme & Size (applied instantly to Compositor, GTK3/4, Qt, and Xwayland)
-# To see installed themes: infynitae-settings list cursors
-CURSOR_THEME="Adwaita"
-CURSOR_SIZE="24"
-
-# Global UI Font ("monospace" resolves universally to whatever monospace font is installed):
-FONT_NAME="monospace"
-FONT_SIZE="10"
-
-# Icon Theme (for file dialogs and portals):
-ICON_THEME="Adwaita"
-
-# Color Scheme: "prefer-dark" or "prefer-light"
-COLOR_SCHEME="prefer-dark"
-
-# Window Borders (Crisp 1-2px modular border respecting set_window_geometry):
-#   BORDER_WIDTH: Border thickness in pixels (0 to disable, 1 or 2 recommended)
-#   BORDER_IGNORE_CSD: Do not draw square borders around apps that already have rounded CSD borders (Antigravity, Firefox, Chrome)
-#   BORDER_ACTIVE: Hex color for focused window
-#   BORDER_INACTIVE: Hex color for unfocused windows
-BORDER_WIDTH="1"
-BORDER_IGNORE_CSD="true"
+# ── Windows & canvas ──────────────────────────────────────────────────── [save] ──
+FOCUS_FOLLOWS_MOUSE="sloppy"      # sloppy: hover focuses, kept over empty canvas
+                                  # strict: hover focuses, empty canvas unfocuses | click
+FOCUS_ON_OPEN="1"                 # a new window takes the focus
+TELEPORT_ON_OPEN="1"              # the camera moves to a new window
+FOCUS_CYCLE_NAVIGATE="1"          # Super+Tab also centres the camera on the window
+PLACEMENT_POLICY="cluster"        # cluster: next free spot beside the others | center | origin
+SUPER_ENTER_ACTION="maximize"     # maximize: the window fills the view at 100% | fit: zoom to it
+FULLSCREEN_PAN="true"             # Super+Middle drag and Super+1…9 work out of fullscreen
+PAN_MODE="free"                   # Super+Middle drag — free: cursor moves with the canvas
+                                  # grab: canvas under a fixed cursor | rts: camera grip
+CANVAS_COLOR="#0b0f14"
+BORDER_WIDTH="1"                  # px, 0 = none
 BORDER_ACTIVE="#7aa2f7"
 BORDER_INACTIVE="#333b54"
+BORDER_IGNORE_CSD="true"          # no border around apps that draw their own (Firefox…)
+WINE_TRANSPARENCY="true"          # no black boxes behind Wine/Proton/X11 layered windows
+FORCE_TRANSPARENT_APPS=""         # more apps to blend that way, e.g. "steam_app"
 
-# ------------------------------------------------------------------------------
-# 3. DISPLAY & CANVAS
-# ------------------------------------------------------------------------------
-# Window Placement Policy:
-#   "cluster" - Cluster Tiling: places new windows at the nearest adjacent free slot closest to center, expanding naturally without overlapping
-#   "center"  - Centered in current view
-#   "origin"  - Placed at camera origin
-PLACEMENT_POLICY="cluster"
+# ── Look ──────────────────────────────────────────────────────────────── [reload] ──
+CURSOR_THEME="Adwaita"            # installed themes: infynitae-settings list cursors
+CURSOR_SIZE="24"
+FONT_NAME="monospace"
+FONT_SIZE="10"
+ICON_THEME="Adwaita"
+COLOR_SCHEME="prefer-dark"        # prefer-dark | prefer-light
+WALLPAPER=""                      # [save] an image (PNG, JPG, WebP); "$HOME/…" works. Empty: the
+                                  # first in ~/Pictures/Wallpapers or ~/.local/share/wallpapers
+WALLPAPER_MODE="fill"             # [save] fill | fit | stretch | center | tile
 
-# Super+Enter Action:
-#   "maximize" - Viewport Fill: natively configures window to fill usable viewport at 100% sharp scale (pixel-perfect, 0% blur)
-#   "fit"      - Camera Zoom: digitally magnifies camera onto window (legacy)
-SUPER_ENTER_ACTION="maximize"
+# ── Displays ──────────────────────────────────────────────────────────── [restart] ──
+OUTPUT_SCALE="1.0"                # 1.0, 1.25, 1.5, 2.0 …
+SCALING_FILTER="nearest"          # zoomed windows — nearest: sharp pixels | linear: smooth
+VRR_ENABLED="auto"                # auto: FreeSync while a window is fullscreen | on | off
+DIRECT_SCANOUT="true"             # [save] a fullscreen game's frames go straight to the screen
+OVERLAY_PLANES="false"            # [save] also windows' buffers on overlay planes (on AMD this
+                                  # dropped frames whenever Electron apps like Discord drew)
+OUTPUT_ORDER=""                   # left to right, e.g. "DisplayPort-1,HDMI-A-1" (the names
+                                  # are the "Screen …" lines in ~/.local/state/infynitae/session.log)
+OUTPUT_LAYOUT="left-to-right"     # or right-to-left
+# Per screen (its name, '-' written as '_'), e.g. for DisplayPort-1:
+#   OUTPUT_DISPLAYPORT_1_MODE="2560x1440"  OUTPUT_DISPLAYPORT_1_RATE="144"  OUTPUT_DISPLAYPORT_1_SCALE="1.25"
 
-# Seamless Fullscreen Navigation:
-#   "true"  - Borderless canvas fullscreen: Super+Middle drag pans smoothly out of fullscreen, Super+1..9 switches instantly
-#   "false" - Traditional modal fullscreen lock: locks screen and camera to fullscreen window
-FULLSCREEN_PAN="true"
-# Background canvas color (hex)
-CANVAS_COLOR="#0b0f14"
-
-# Screen sharing (Discord, browsers, OBS through the screen-sharing portal):
-#   "false" - an app's Share button shares your screen at once (the first screen in
-#             OUTPUT_ORDER when there are several), like Windows
-#   "true"  - after an app asks, click the screen to share (a confirmation step)
-#   Privacy: with "false" any app that asks the portal gets the screen without a prompt. Apps on
-#   the desktop can also capture the screen directly (wlr-screencopy, which recorders and
-#   screenshot tools use), so the prompt guards the portal path only.
-#   Applies at once with Super+Shift+Backspace.
-SCREENSHARE_ASK="false"
-
-# Screencopy Cursor (Screen sharing & Remote desktop like RustDesk / OBS):
-#   "false" - Exclude compositor cursor from screencopy capture (eliminates double cursors in RustDesk / remote desktop)
-#   "true"  - Include compositor cursor in screencopy capture (default for OBS screen recordings)
-SCREENCOPY_CURSOR="false"
-
-# Display Scale (1.0 for 100%, 1.25, 1.5 for HiDPI):
-OUTPUT_SCALE="1.0"
-
-# Scaling & Magnification Filter (Canvas Zoom & Scaling Texture Filtering):
-#   "nearest" - Pixel-perfect, razor sharp scaling with 0% blur (default, recommended)
-#   "linear"  - Smooth bilinear interpolation (traditional fuzzy/smoothed scaling)
-SCALING_FILTER="nearest"
-
-# Target Output Refresh Rate in Hz (0 = auto-select highest supported e.g. 144/165/240Hz)
-OUTPUT_REFRESH_HZ="0"
-
-# Variable Refresh Rate (VRR / Adaptive Sync / FreeSync):
-#   "auto" - on while a window is fullscreen (games, fullscreen video), off on the desktop
-#   "on"   - always (desktop video and the cursor can pace unevenly; some monitors flicker)
-#   "off"  - never
-VRR_ENABLED="auto"
-
-# Direct Scanout (Zero-copy bypass for fullscreen games & media):
-#   "true"  - Directly scans out client DMA-BUFs to display hardware (lowest latency, 0 GPU copies)
-#   "false" - Always composites through GLES shader passes
-DIRECT_SCANOUT="true"
-# Overlay planes: also put windows' own buffers on hardware overlay planes. Off by default:
-# on amdgpu it made page flips fail (dropped frames) whenever Electron apps (Discord) drew.
-OVERLAY_PLANES="false"
-
-# Async Pageflip Tearing (for ultra-low-latency esports games): "false" or "true"
-ALLOW_TEARING="false"
-
-# Multi-Monitor Arrangement & Per-Output Configuration:
-#   OUTPUT_ORDER: Priority / sequence of connectors e.g. "DP-1,HDMI-A-1" (left-to-right)
-#   OUTPUT_LAYOUT: "left-to-right" (default) or "right-to-left"
-#   Per-output resolution override: OUTPUT_<CONNECTOR>_MODE="2560x1440"
-#   Per-output refresh rate override: OUTPUT_<CONNECTOR>_RATE="144"
-#   Per-output scale override: OUTPUT_<CONNECTOR>_SCALE="1.25"
-OUTPUT_ORDER=""
-OUTPUT_LAYOUT="left-to-right"
-
-# ------------------------------------------------------------------------------
-# 4. X11 & XWAYLAND COMPATIBILITY (Steam, games, legacy tools)
-# ------------------------------------------------------------------------------
-# Enable X11 / Xwayland compatibility layer:
-#   "true"  - Supervise xwayland-satellite on X display (:0 or :1) with on-demand zero idle RAM
-#   "false" - Pure Wayland only (no X11)
-XWAYLAND="true"
-
-# ------------------------------------------------------------------------------
-# 5. DEFAULT COMPANION TOOLS & SHORTCUTS (Any tools you like!)
-# ------------------------------------------------------------------------------
-# Terminal Emulator (Super+Q):
-#   "auto" - checks for kitty -> alacritty -> foot -> wezterm -> ghostty -> konsole
-#   Or specify: "kitty", "alacritty", "foot", etc.
-TERMINAL="auto"
-
-# Application Launcher (Super+W):
-#   "auto"       - checks for fuzzel -> rofi -> tofi -> wofi -> quickshell
-#   "fuzzel"     - pure C Wayland dmenu (instant, minimal)
-#   "quickshell" - dynamic island launcher
-#   "rofi"       - rofi -show drun
-#   Or any custom command, e.g. "wofi --show drun"
-LAUNCHER="auto"
-
-# Quickshell Dynamic Island & Radar HUD:
-#   "false" - Pure minimalist: zero Qt/Quickshell daemons, sub-30MB idle RAM (Default)
-#   "true"  - Dynamic island HUD and canvas radar (requires quickshell)
-ENABLE_QUICKSHELL="false"
-
-# File Manager (Super+E):
-#   "auto" - checks for yazi -> lf -> thunar -> nemo -> dolphin
-#   TUI file managers (yazi, lf, ranger) automatically open inside $TERMINAL
-FILE_MANAGER="auto"
-
-# Polkit Authentication Agent:
-#   "auto" - detects infynitae-shell -> hyprpolkitagent -> polkit-gnome -> polkit-kde
-#   Or path: "/usr/lib/hyprpolkitagent", "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1"
-POLKIT_AGENT="auto"
-
-# Web Browser:
-BROWSER="auto"
-
-# Screenshot Tool (Super+Shift+S / PrintScreen):
-#   Empty string uses built-in grim/spectacle handler.
-#   Or set custom: e.g. "grim -g \"$(slurp)\""
-SCREENSHOT_CMD=""
+# ── Apps ──────────────────────────────────────────────────────────────── [use] ──
+# "auto": the first one installed (terminal: kitty, alacritty, foot, …), or any command.
+TERMINAL="auto"                   # Super+Q
+LAUNCHER="auto"                   # Super+W — fuzzel, rofi, tofi, wofi, or e.g. "wofi --show drun"
+ENABLE_QUICKSHELL="false"         # the Quickshell island/radar instead (needs quickshell)
+FILE_MANAGER="auto"               # Super+E — terminal ones (yazi, lf) open in TERMINAL
+BROWSER="auto"                    # auto: the system default; programs open links with it
+POLKIT_AGENT="auto"               # [restart] password prompts — auto: infynitae-polkit, or a path
 SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
+SCREENSHOT_CMD=""                 # Super+Shift+S — empty: grim; a command gets the file path
+XWAYLAND="true"                   # [restart] X11 apps and games (xwayland-satellite, on demand)
 
-# ------------------------------------------------------------------------------
-# 6. WALLPAPER & LIVE BACKGROUND (Static or Animated Video)
-# ------------------------------------------------------------------------------
-# Wallpaper Path (supports PNG, JPG, WebP, GIF, MP4, WebM, MKV):
-#   Static image: uses lightweight swaybg or layer-shell (<8MB RAM)
-#   Animated video: uses hardware-accelerated mpv/mpvpaper (Wallpaper Engine style)
-#   Empty: the first image in ~/Pictures/Wallpapers or ~/.local/share/wallpapers, else the
-#   canvas colour. "$HOME/..." and "~/..." paths work.
-WALLPAPER=""
-WALLPAPER_MODE="fill" # "fill", "fit", "stretch", "center", "tile"
+# ── Lock & idle ───────────────────────────────────────────────────────── [save] ──
+IDLE_SLEEP_TIMEOUT_MIN="15"       # screens off after this many idle minutes, 0 = never
+IDLE_AUTO_LOCK="true"             # lock when the screens go off (Super+Shift+I: stay awake)
+SCREEN_LOCKER="auto"              # [use] Super+L — auto: infynitae-lock, or a command
+START_LOCKED="false"              # [restart] start the session at the lock screen
 
-# ------------------------------------------------------------------------------
-# 7. AUDIO & DISCORD HOTKEYS (Wayland GlobalShortcuts Portal)
-# ------------------------------------------------------------------------------
-# Global Audio / Discord Shortcuts:
-#   "true"  - Right Shift triggers Discord mute; Right Ctrl triggers Discord deafen
-#   "false" - Disables global mute/deafen bindings (recommended for clean typing & gaming)
-DISCORD_HOTKEYS="false"
+# ── Privacy & screen capture ──────────────────────────────────────────── [save] ──
+SCREENSHARE_ASK="false"           # [reload] false: an app's Share button shares the (first)
+                                  # screen at once | true: click the screen to share.
+                                  # Note: desktop apps can also capture directly (wlr-screencopy,
+                                  # used by recorders and screenshots); the prompt guards the
+                                  # screen-sharing portal only.
+SCREENCOPY_CURSOR="false"         # draw the cursor into captures (true: OBS; false: no double
+                                  # cursor in RustDesk)
+PRIVACY_APPS=""                   # hidden from captures, e.g. "bitwarden,keepassxc"
+PRIVACY_TITLES=""                 # by title, e.g. "Password"; Super+Shift+P toggles a window
 
-# ------------------------------------------------------------------------------
-# 8. SCREEN RECORDER & REPLAY BUFFER (hardware encoder when available: VAAPI, NVENC, QSV)
-# ------------------------------------------------------------------------------
-# Background recording into a rolling buffer kept in RAM (REPLAY_DIR, /dev/shm by default):
-# about 110 MB per minute at the default bitrate, so 20 minutes is up to ~2 GB of RAM, and
-# frames are copied through the CPU (a steady share of one core). Off by default.
-# Records the screen through zwlr_screencopy; audio is desktop sound, never the microphone.
-# Super + Alt + C: Save rolling 20-minute replay clip to ~/Videos/Clips/
-# Super + Alt + R: Toggle continuous recording to ~/Videos/Recordings/
+# ── Screen recorder & replay buffer ───────────────────────────────────── [use] ──
+# A rolling buffer in RAM: about 110 MB per minute, frames copied through the CPU. Audio is
+# desktop sound, never the microphone. Super+Alt+C saves a clip, Super+Alt+R records.
+# Changes apply when the recorder restarts: infynitae-reload recorder.
 ENABLE_REPLAY_BUFFER="false"
 REPLAY_BUFFER_MINUTES="20"
 REPLAY_DIR="/dev/shm/infynitae-replay"
 CLIPS_DIR="$HOME/Videos/Clips"
 RECORDINGS_DIR="$HOME/Videos/Recordings"
 RECORD_FPS="60"
-RECORD_CODEC="hevc"          # "hevc" (H.265) or "av1"
-RECORD_AUDIO="true"          # Include synchronized PipeWire desktop audio
+RECORD_CODEC="hevc"               # auto | hevc | av1 | h264
+RECORD_AUDIO="true"
 
-# Custom Autostart & Overrides:
-#   To autostart any companion tools (waybar, mako, swaybg, pipewire):
-#     Create ~/.config/infynitae/autostart.sh and chmod +x it.
-#   To completely override shortcut actions:
-#     Create ~/.config/infynitae/launch.sh and chmod +x it.
+# ── Key bindings ──────────────────────────────────────────────────────── [save] ──
+# Give an action other keys (its own are freed), or free them with "none":
+#   BIND_<ACTION>="CHORD[,CHORD]"       e.g. BIND_TERMINAL="SUPER+RETURN"
+#   FOCUS_NEXT OVERVIEW LAUNCHER TERMINAL FILE_MANAGER SCREENSHOT REGION_SCREENSHOT RELOAD LOCK
+#   PRIVACY IDLE_INHIBIT SAVE_REPLAY RECORD FIT FULLSCREEN CLOSE FORCE_CLOSE RECENTER
+# Run a command:
+#   EXEC_<NAME>="CHORD:command"         e.g. EXEC_BROWSER="SUPER+B:firefox"
+# Chord: SUPER CTRL ALT SHIFT (exactly those held) + one key: A-Z 0-9 F1-F12 RETURN SPACE TAB
+# ESC BACKSPACE DELETE INSERT HOME END PAGEUP PAGEDOWN LEFT RIGHT UP DOWN PRINT MINUS EQUAL
+# COMMA PERIOD SLASH SEMICOLON APOSTROPHE GRAVE BACKSLASH BRACKETLEFT BRACKETRIGHT.
+# A line that is not understood is skipped and noted in ~/.local/state/infynitae/session.log.
+# Built-in keys and mouse gestures: see the README.
 
-# ------------------------------------------------------------------------------
-# 9. KEY BINDINGS (applied when you save this file: no restart)
-# ------------------------------------------------------------------------------
-# Move an action to other keys (its built-in keys are freed), or free it with "none":
-#   BIND_<ACTION>="CHORD[,CHORD]"     e.g. BIND_TERMINAL="SUPER+RETURN"
-#   Actions: FOCUS_NEXT OVERVIEW LAUNCHER TERMINAL FILE_MANAGER SCREENSHOT REGION_SCREENSHOT
-#            RELOAD LOCK PRIVACY IDLE_INHIBIT SAVE_REPLAY RECORD FIT FULLSCREEN CLOSE
-#            FORCE_CLOSE RECENTER
-# Run any command:
-#   EXEC_<NAME>="CHORD:command"       e.g. EXEC_BROWSER="SUPER+B:firefox"
-# Chords: modifiers SUPER CTRL ALT SHIFT, then one key: A-Z 0-9 F1-F12 RETURN SPACE TAB
-#   ESC BACKSPACE DELETE INSERT HOME END PAGEUP PAGEDOWN LEFT RIGHT UP DOWN PRINT MINUS EQUAL
-#   COMMA PERIOD SLASH SEMICOLON APOSTROPHE GRAVE BACKSLASH BRACKETLEFT BRACKETRIGHT.
-#   Modifiers must match exactly (SUPER+B is not SUPER+SHIFT+B). A '#' ends the line.
-#   A line that is not understood is skipped and noted in ~/.local/state/infynitae/session.log.
+# ── Your own scripts ──
+# ~/.config/infynitae/autostart.sh   run at session start (bars, notifications…)
+# ~/.config/infynitae/launch.sh      handles every shortcut action instead of the built-in one
