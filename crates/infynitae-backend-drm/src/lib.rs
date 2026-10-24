@@ -1266,6 +1266,104 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 .state
                 .with_effects(|core, fx| core.physical_input(port, phys, fx));
         }
+        InputEvent::TouchDown { event } => {
+            let current_ptr = data.state.core().pointer();
+            let (current_output, current_p) = match current_ptr {
+                infynitae_core::pointer::PointerState::Located { output, p } => (Some(output), p),
+                infynitae_core::pointer::PointerState::NoOutput => (None, (0.0, 0.0)),
+            };
+            let screen = current_output
+                .and_then(|out_id| data.screens.iter().find(|s| s.id == out_id))
+                .or_else(|| data.screens.first());
+            let (target_phys_x, target_phys_y) = match screen {
+                Some(s) => (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
+                None => (event.x(), event.y()),
+            };
+            let delta = calculate_abs_pointer_delta(
+                (target_phys_x, target_phys_y),
+                current_p,
+                data.scale_120,
+            );
+            let time_us = Event::time(&event);
+            if delta.0.abs() > 0.0001 || delta.1.abs() > 0.0001 {
+                let phys = PhysicalEvent::PointerMotion {
+                    delta,
+                    delta_unaccel: delta,
+                    time_us,
+                };
+                let port = &mut data.input_port;
+                let _ = data
+                    .state
+                    .with_effects(|core, fx| core.physical_input(port, phys, fx));
+            }
+            let btn_phys = PhysicalEvent::PointerButton {
+                button: 272, // BTN_LEFT
+                pressed: true,
+                modifiers: data.state.seat_modifiers(),
+                time_us,
+            };
+            let port = &mut data.input_port;
+            let _ = data
+                .state
+                .with_effects(|core, fx| core.physical_input(port, btn_phys, fx));
+        }
+        InputEvent::TouchMotion { event } => {
+            let current_ptr = data.state.core().pointer();
+            let (current_output, current_p) = match current_ptr {
+                infynitae_core::pointer::PointerState::Located { output, p } => (Some(output), p),
+                infynitae_core::pointer::PointerState::NoOutput => (None, (0.0, 0.0)),
+            };
+            let screen = current_output
+                .and_then(|out_id| data.screens.iter().find(|s| s.id == out_id))
+                .or_else(|| data.screens.first());
+            let (target_phys_x, target_phys_y) = match screen {
+                Some(s) => (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
+                None => (event.x(), event.y()),
+            };
+            let delta = calculate_abs_pointer_delta(
+                (target_phys_x, target_phys_y),
+                current_p,
+                data.scale_120,
+            );
+            let time_us = Event::time(&event);
+            if delta.0.abs() > 0.0001 || delta.1.abs() > 0.0001 {
+                let phys = PhysicalEvent::PointerMotion {
+                    delta,
+                    delta_unaccel: delta,
+                    time_us,
+                };
+                let port = &mut data.input_port;
+                let _ = data
+                    .state
+                    .with_effects(|core, fx| core.physical_input(port, phys, fx));
+            }
+        }
+        InputEvent::TouchUp { event } => {
+            let time_us = Event::time(&event);
+            let btn_phys = PhysicalEvent::PointerButton {
+                button: 272, // BTN_LEFT
+                pressed: false,
+                modifiers: data.state.seat_modifiers(),
+                time_us,
+            };
+            let port = &mut data.input_port;
+            let _ = data
+                .state
+                .with_effects(|core, fx| core.physical_input(port, btn_phys, fx));
+        }
+        InputEvent::TouchCancel { event } => {
+            let time_us = Event::time(&event);
+            let btn_phys = PhysicalEvent::PointerButton {
+                button: 272, // BTN_LEFT
+                pressed: false,
+                modifiers: data.state.seat_modifiers(),
+                time_us,
+            };
+            let port = &mut data.input_port;
+            let _ = data
+                .state
+                .with_effects(|core, fx| core.physical_input(port, btn_phys, fx));
+        }
         InputEvent::DeviceAdded { mut device } => {
             configure_input_device(&mut device, data.state.input_config());
             let is_kb = device.has_capability(smithay::reexports::input::DeviceCapability::Keyboard);

@@ -56,6 +56,7 @@ typedef struct {
 } RecorderState;
 
 static RecorderState state;
+static bool info_only = false;
 
 static int create_shm_buffer(RecorderState *s, int idx, size_t size) {
     if (s->wl_buffer[idx]) {
@@ -111,6 +112,12 @@ static void frame_buffer(void *data, struct zwlr_screencopy_frame_v1 *frame,
     s->width = width;
     s->height = height;
     s->stride = stride;
+
+    if (info_only) {
+        printf("WIDTH=%u\nHEIGHT=%u\nSTRIDE=%u\nFORMAT=%u\n", width, height, stride, format);
+        fflush(stdout);
+        exit(0);
+    }
 
     size_t size = (size_t)stride * height;
     if (s->shm_size[s->current_buf] != size) {
@@ -242,6 +249,17 @@ int main(int argc, char **argv) {
     state.pipe_fd = STDOUT_FILENO;
     state.target_fps = DEFAULT_FPS;
     state.running = true;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--info") == 0) {
+            info_only = true;
+        } else if (strcmp(argv[i], "--fps") == 0 && i + 1 < argc) {
+            int fps = atoi(argv[++i]);
+            if (fps > 0 && fps <= 360) {
+                state.target_fps = fps;
+            }
+        }
+    }
 
     state.display = wl_display_connect(NULL);
     if (!state.display) {

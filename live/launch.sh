@@ -246,10 +246,16 @@ case "$ACTION" in
         exec "${BROWSER:-firefox}"
         ;;
     volume-up)
-        # Volume Up: PipeWire wpctl / amixer + synchronous OSD
+        # Volume Up: PipeWire wpctl / PulseAudio pactl / amixer + synchronous OSD
         if command -v wpctl >/dev/null 2>&1; then
             wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%+
             VOL=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | awk '{print int($2 * 100)}')
+            if [ -n "$VOL" ] && command -v notify-send >/dev/null 2>&1; then
+                notify-send -a "Audio" -h string:x-canonical-private-synchronous:volume -h "int:value:$VOL" -t 1200 "Volume: ${VOL}%"
+            fi
+        elif command -v pactl >/dev/null 2>&1; then
+            pactl set-sink-volume @DEFAULT_SINK@ +5% >/dev/null 2>&1
+            VOL=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -Po '[0-9]+(?=%)' | head -1)
             if [ -n "$VOL" ] && command -v notify-send >/dev/null 2>&1; then
                 notify-send -a "Audio" -h string:x-canonical-private-synchronous:volume -h "int:value:$VOL" -t 1200 "Volume: ${VOL}%"
             fi
@@ -258,10 +264,16 @@ case "$ACTION" in
         fi
         ;;
     volume-down)
-        # Volume Down: PipeWire wpctl / amixer + synchronous OSD
+        # Volume Down: PipeWire wpctl / PulseAudio pactl / amixer + synchronous OSD
         if command -v wpctl >/dev/null 2>&1; then
             wpctl set-volume -l 1.5 @DEFAULT_AUDIO_SINK@ 5%-
             VOL=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | awk '{print int($2 * 100)}')
+            if [ -n "$VOL" ] && command -v notify-send >/dev/null 2>&1; then
+                notify-send -a "Audio" -h string:x-canonical-private-synchronous:volume -h "int:value:$VOL" -t 1200 "Volume: ${VOL}%"
+            fi
+        elif command -v pactl >/dev/null 2>&1; then
+            pactl set-sink-volume @DEFAULT_SINK@ -5% >/dev/null 2>&1
+            VOL=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -Po '[0-9]+(?=%)' | head -1)
             if [ -n "$VOL" ] && command -v notify-send >/dev/null 2>&1; then
                 notify-send -a "Audio" -h string:x-canonical-private-synchronous:volume -h "int:value:$VOL" -t 1200 "Volume: ${VOL}%"
             fi
@@ -270,7 +282,7 @@ case "$ACTION" in
         fi
         ;;
     volume-mute)
-        # Volume Mute: PipeWire wpctl / amixer + synchronous OSD
+        # Volume Mute: PipeWire wpctl / PulseAudio pactl / amixer + synchronous OSD
         if command -v wpctl >/dev/null 2>&1; then
             wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle
             MUTED=$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | grep -i MUTED)
@@ -283,12 +295,24 @@ case "$ACTION" in
             if command -v notify-send >/dev/null 2>&1; then
                 notify-send -a "Audio" -h string:x-canonical-private-synchronous:volume -t 1200 "$MSG"
             fi
+        elif command -v pactl >/dev/null 2>&1; then
+            pactl set-sink-mute @DEFAULT_SINK@ toggle >/dev/null 2>&1
+            MUTED=$(pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | grep -i yes)
+            if [ -n "$MUTED" ]; then
+                MSG="Muted"
+            else
+                VOL=$(pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -Po '[0-9]+(?=%)' | head -1)
+                MSG="Unmuted (${VOL}%)"
+            fi
+            if command -v notify-send >/dev/null 2>&1; then
+                notify-send -a "Audio" -h string:x-canonical-private-synchronous:volume -t 1200 "$MSG"
+            fi
         elif command -v amixer >/dev/null 2>&1; then
             amixer set Master toggle >/dev/null 2>&1
         fi
         ;;
     brightness-up)
-        # Brightness Up: brightnessctl / light + synchronous OSD
+        # Brightness Up: brightnessctl / light / sysfs kernel fallback (Steam Deck, Handhelds, Laptops)
         if command -v brightnessctl >/dev/null 2>&1; then
             brightnessctl set +5% >/dev/null 2>&1
             CUR=$(brightnessctl get 2>/dev/null)
@@ -301,10 +325,31 @@ case "$ACTION" in
             fi
         elif command -v light >/dev/null 2>&1; then
             light -A 5
+            PCT=$(light -G 2>/dev/null | awk '{print int($1)}')
+            if [ -n "$PCT" ] && command -v notify-send >/dev/null 2>&1; then
+                notify-send -a "Display" -h string:x-canonical-private-synchronous:brightness -h "int:value:$PCT" -t 1200 "Brightness: ${PCT}%"
+            fi
+        else
+            for b in /sys/class/backlight/*; do
+                if [ -w "$b/brightness" ] && [ -f "$b/max_brightness" ]; then
+                    CUR=$(cat "$b/brightness" 2>/dev/null || echo 0)
+                    MAX=$(cat "$b/max_brightness" 2>/dev/null || echo 0)
+                    STEP=$((MAX / 20))
+                    [ "$STEP" -lt 1 ] && STEP=1
+                    NEW=$((CUR + STEP))
+                    [ "$NEW" -gt "$MAX" ] && NEW=$MAX
+                    echo "$NEW" > "$b/brightness" 2>/dev/null || true
+                    PCT=$((NEW * 100 / MAX))
+                    if command -v notify-send >/dev/null 2>&1; then
+                        notify-send -a "Display" -h string:x-canonical-private-synchronous:brightness -h "int:value:$PCT" -t 1200 "Brightness: ${PCT}%"
+                    fi
+                    break
+                fi
+            done
         fi
         ;;
     brightness-down)
-        # Brightness Down: brightnessctl / light + synchronous OSD
+        # Brightness Down: brightnessctl / light / sysfs kernel fallback (Steam Deck, Handhelds, Laptops)
         if command -v brightnessctl >/dev/null 2>&1; then
             brightnessctl set 5%- >/dev/null 2>&1
             CUR=$(brightnessctl get 2>/dev/null)
@@ -317,6 +362,27 @@ case "$ACTION" in
             fi
         elif command -v light >/dev/null 2>&1; then
             light -U 5
+            PCT=$(light -G 2>/dev/null | awk '{print int($1)}')
+            if [ -n "$PCT" ] && command -v notify-send >/dev/null 2>&1; then
+                notify-send -a "Display" -h string:x-canonical-private-synchronous:brightness -h "int:value:$PCT" -t 1200 "Brightness: ${PCT}%"
+            fi
+        else
+            for b in /sys/class/backlight/*; do
+                if [ -w "$b/brightness" ] && [ -f "$b/max_brightness" ]; then
+                    CUR=$(cat "$b/brightness" 2>/dev/null || echo 0)
+                    MAX=$(cat "$b/max_brightness" 2>/dev/null || echo 0)
+                    STEP=$((MAX / 20))
+                    [ "$STEP" -lt 1 ] && STEP=1
+                    NEW=$((CUR - STEP))
+                    [ "$NEW" -lt 1 ] && NEW=1
+                    echo "$NEW" > "$b/brightness" 2>/dev/null || true
+                    PCT=$((NEW * 100 / MAX))
+                    if command -v notify-send >/dev/null 2>&1; then
+                        notify-send -a "Display" -h string:x-canonical-private-synchronous:brightness -h "int:value:$PCT" -t 1200 "Brightness: ${PCT}%"
+                    fi
+                    break
+                fi
+            done
         fi
         ;;
     media-play-pause)

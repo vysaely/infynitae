@@ -1,13 +1,13 @@
 #!/bin/sh
 # ==============================================================================
-# Infynitae Native Screen Recorder & 20-Minute Replay Buffer
-# Pure C screencopy + AMD Radeon VCN VA-API hardware acceleration
-# Ultra-lean: < 5MB RAM, 0% CPU, zero background popups, zero lost clips.
+# Infynitae Universal Screen Recorder & 20-Minute Replay Buffer
+# Auto-detects and runs on ANY device: AMD, Intel, NVIDIA, Handhelds, Laptops, VMs
+# Zero bloat (< 5MB RAM), hardware accelerated, zero popups, zero lost clips.
 # ==============================================================================
 
 set -e
 
-# Load user configuration
+# 1. Load user configuration
 if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"
 fi
@@ -25,9 +25,12 @@ CLIPS_DIR="${CLIPS_DIR:-$HOME/Videos/Clips}"
 RECORDINGS_DIR="${RECORDINGS_DIR:-$HOME/Videos/Recordings}"
 REPLAY_MINUTES="${REPLAY_BUFFER_MINUTES:-20}"
 RECORD_FPS="${RECORD_FPS:-60}"
-RECORD_CODEC="${RECORD_CODEC:-hevc}" # hevc or av1
+RECORD_CODEC="${RECORD_CODEC:-auto}" # auto, hevc, av1, h264
 RECORD_AUDIO="${RECORD_AUDIO:-true}"
-DRI_DEVICE="${DRI_DEVICE:-/dev/dri/renderD128}"
+
+PID_FILE="/tmp/infynitae-recording.pid"
+REPLAY_PID_FILE="/tmp/infynitae-replay.pid"
+SUPERVISOR_PID_FILE="/tmp/infynitae-recorder-supervisor.pid"
 
 # Calculate segment counts for circular buffer
 SEGMENT_SECS=10
@@ -37,9 +40,17 @@ if [ "$SEGMENT_WRAP" -lt 6 ]; then
     SEGMENT_WRAP=6
 fi
 
-PID_FILE="/tmp/infynitae-recording.pid"
-REPLAY_PID_FILE="/tmp/infynitae-replay.pid"
-SUPERVISOR_PID_FILE="/tmp/infynitae-recorder-supervisor.pid"
+# Ensure Wayland display is resolved
+resolve_wayland_display() {
+    if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
+        for wsock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
+            if [ -S "$wsock" ]; then
+                export WAYLAND_DISPLAY="${wsock##*/}"
+                break
+            fi
+        done
+    fi
+}
 
 notify_toast() {
     title="$1"
@@ -49,44 +60,122 @@ notify_toast() {
     fi
 }
 
-start_replay_engine() {
-    mkdir -p "$REPLAY_DIR"
-    rm -f "$REPLAY_DIR"/chunk*.mkv "$REPLAY_DIR"/concat*.txt 2>/dev/null || true
+# ------------------------------------------------------------------------------
+# Universal Display Geometry Auto-Detection
+# Queries Wayland compositor for real output width & height (works on any screen)
+# ------------------------------------------------------------------------------
+detect_screen_geometry() {
+    resolve_wayland_display
+    GEOM_INFO=""
+    if [ -x "$STREAM_BIN" ] && [ -n "$WAYLAND_DISPLAY" ]; then
+        GEOM_INFO=$("$STREAM_BIN" --info 2>/dev/null || true)
+    fi
 
-    # Choose hardware encoder
-    if [ "$RECORD_CODEC" = "av1" ]; then
-        V_ENCODER="av1_vaapi"
+    W=$(echo "$GEOM_INFO" | awk -F= '/WIDTH=/ {print $2}' | head -1)
+    H=$(echo "$GEOM_INFO" | awk -F= '/HEIGHT=/ {print $2}' | head -1)
+
+    if [ -n "$W" ] && [ -n "$H" ] && [ "$W" -gt 0 ] && [ "$H" -gt 0 ]; then
+        echo "${W}x${H}"
     else
-        V_ENCODER="hevc_vaapi"
+        # Fallback if compositor info is momentarily unreachable
+        echo "1920x1080"
     fi
+}
 
-    # Audio inputs
-    AUDIO_ARGS=""
-    if [ "$RECORD_AUDIO" = "true" ] && command -v pactl >/dev/null 2>&1 || command -v wpctl >/dev/null 2>&1; then
-        AUDIO_ARGS="-f pulse -i default -c:a aac -b:a 192k"
-    fi
-
-    # Automatically resolve current Wayland display
-    if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
-        for wsock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
-            if [ -S "$wsock" ]; then
-                export WAYLAND_DISPLAY="${wsock##*/}"
+# ------------------------------------------------------------------------------
+# Universal Hardware Video Encoder Auto-Detection
+# Scans AMD, Intel, NVIDIA, and software CPU fallbacks for any device
+# ------------------------------------------------------------------------------
+detect_encoder_pipeline() {
+    # 1. Try VA-API (AMD Radeon, Intel Graphics, or Nouveau)
+    TARGET_DRI="${DRI_DEVICE:-}"
+    if [ -z "$TARGET_DRI" ]; then
+        for dev in /dev/dri/renderD* /dev/dri/card*; do
+            if [ -c "$dev" ]; then
+                TARGET_DRI="$dev"
                 break
             fi
         done
     fi
 
-    echo "[infynitae-recorder] Starting $REPLAY_MINUTES-min rolling replay buffer ($V_ENCODER, ${RECORD_FPS}fps)..."
+    if [ -n "$TARGET_DRI" ] && [ -c "$TARGET_DRI" ]; then
+        if [ "$RECORD_CODEC" = "av1" ] && ffmpeg -loglevel error -init_hw_device vaapi=va:"$TARGET_DRI" -f lavfi -i testsrc=duration=0.05:size=640x360 -vf 'format=nv12,hwupload' -c:v av1_vaapi -f null - >/dev/null 2>&1; then
+            echo "-init_hw_device vaapi=va:$TARGET_DRI -vf format=nv12,hwupload -c:v av1_vaapi -b:v 14M -maxrate 18M"
+            return
+        elif [ "$RECORD_CODEC" != "h264" ] && ffmpeg -loglevel error -init_hw_device vaapi=va:"$TARGET_DRI" -f lavfi -i testsrc=duration=0.05:size=640x360 -vf 'format=nv12,hwupload' -c:v hevc_vaapi -f null - >/dev/null 2>&1; then
+            echo "-init_hw_device vaapi=va:$TARGET_DRI -vf format=nv12,hwupload -c:v hevc_vaapi -b:v 14M -maxrate 18M"
+            return
+        elif ffmpeg -loglevel error -init_hw_device vaapi=va:"$TARGET_DRI" -f lavfi -i testsrc=duration=0.05:size=640x360 -vf 'format=nv12,hwupload' -c:v h264_vaapi -f null - >/dev/null 2>&1; then
+            echo "-init_hw_device vaapi=va:$TARGET_DRI -vf format=nv12,hwupload -c:v h264_vaapi -b:v 16M -maxrate 20M"
+            return
+        fi
+    fi
+
+    # 2. Try NVIDIA NVENC (NVIDIA GPUs with proprietary driver)
+    if [ "$RECORD_CODEC" != "h264" ] && ffmpeg -loglevel error -f lavfi -i testsrc=duration=0.05:size=640x360 -c:v hevc_nvenc -f null - >/dev/null 2>&1; then
+        echo "-c:v hevc_nvenc -preset p1 -tune ll -b:v 14M -maxrate 18M"
+        return
+    elif ffmpeg -loglevel error -f lavfi -i testsrc=duration=0.05:size=640x360 -c:v h264_nvenc -f null - >/dev/null 2>&1; then
+        echo "-c:v h264_nvenc -preset p1 -tune ll -b:v 16M -maxrate 20M"
+        return
+    fi
+
+    # 3. Try Intel QuickSync (QSV)
+    if [ "$RECORD_CODEC" != "h264" ] && ffmpeg -loglevel error -f lavfi -i testsrc=duration=0.05:size=640x360 -c:v hevc_qsv -f null - >/dev/null 2>&1; then
+        echo "-c:v hevc_qsv -b:v 14M -maxrate 18M"
+        return
+    elif ffmpeg -loglevel error -f lavfi -i testsrc=duration=0.05:size=640x360 -c:v h264_qsv -f null - >/dev/null 2>&1; then
+        echo "-c:v h264_qsv -b:v 16M -maxrate 20M"
+        return
+    fi
+
+    # 4. Universal Software CPU Fallback (VMs, QEMU, old CPUs, llvmpipe)
+    echo "-c:v libx264 -preset ultrafast -tune zerolatency -crf 22"
+}
+
+# ------------------------------------------------------------------------------
+# Universal Audio Input Auto-Detection
+# Scans PipeWire, PulseAudio, and ALSA; gracefully falls back if soundcard absent
+# ------------------------------------------------------------------------------
+detect_audio_args() {
+    if [ "$RECORD_AUDIO" != "true" ] && [ "$RECORD_AUDIO" != "1" ]; then
+        echo ""
+        return
+    fi
+
+    # 1. PipeWire / PulseAudio default monitor
+    if ffmpeg -loglevel error -f pulse -i default -t 0.05 -f null - >/dev/null 2>&1; then
+        echo "-f pulse -i default -c:a aac -b:a 192k"
+        return
+    fi
+
+    # 2. ALSA default
+    if ffmpeg -loglevel error -f alsa -i default -t 0.05 -f null - >/dev/null 2>&1; then
+        echo "-f alsa -i default -c:a aac -b:a 192k"
+        return
+    fi
+
+    # 3. No audio hardware present (e.g. minimal VM)
+    echo ""
+}
+
+start_replay_engine() {
+    resolve_wayland_display
+    mkdir -p "$REPLAY_DIR"
+    rm -f "$REPLAY_DIR"/chunk*.mkv "$REPLAY_DIR"/concat*.txt 2>/dev/null || true
+
+    GEOM=$(detect_screen_geometry)
+    V_PIPELINE=$(detect_encoder_pipeline)
+    A_ARGS=$(detect_audio_args)
+
+    echo "[infynitae-recorder] Replay buffer: geometry ${GEOM}, ${RECORD_FPS}fps, encoder [${V_PIPELINE}]"
 
     # Screen streamer -> FFmpeg hardware encoder -> circular segment ring buffer
-    # Uses nice -n 10 so foreground games always get 100% priority
-    exec nice -n 10 "$STREAM_BIN" | nice -n 10 ffmpeg -loglevel error -y \
-        -init_hw_device vaapi=va:"$DRI_DEVICE" \
-        -f rawvideo -pix_fmt bgr0 -s:v 1920x1080 -r "$RECORD_FPS" -i - \
-        $AUDIO_ARGS \
-        -vf 'format=nv12,hwupload' \
-        -c:v "$V_ENCODER" \
-        -b:v 14M -maxrate 18M \
+    # Uses nice -n 10 so foreground games/apps always get 100% priority
+    exec nice -n 10 "$STREAM_BIN" --fps "$RECORD_FPS" | nice -n 10 ffmpeg -loglevel error -y \
+        -f rawvideo -pix_fmt bgr0 -s:v "$GEOM" -r "$RECORD_FPS" -i - \
+        $A_ARGS \
+        $V_PIPELINE \
         -f segment \
         -segment_time "$SEGMENT_SECS" \
         -segment_wrap "$SEGMENT_WRAP" \
@@ -96,7 +185,7 @@ start_replay_engine() {
 
 supervisor_loop() {
     echo $$ > "$SUPERVISOR_PID_FILE"
-    echo "[infynitae-recorder] Invincible replay supervisor started (PID $$)"
+    echo "[infynitae-recorder] Invincible universal replay supervisor started (PID $$)"
 
     # Trap clean session termination
     trap 'kill $(cat "$REPLAY_PID_FILE" 2>/dev/null) 2>/dev/null || true; pkill -P $$ 2>/dev/null || true; rm -f "$SUPERVISOR_PID_FILE" "$REPLAY_PID_FILE"; exit 0' TERM INT HUP
@@ -139,7 +228,6 @@ save_replay_clip() {
     # Build concat playlist
     rm -f "$CONCAT_LIST"
     for c in $CHUNKS; do
-        # Verify file is readable and non-empty
         if [ -s "$c" ]; then
             echo "file '$c'" >> "$CONCAT_LIST"
         fi
@@ -172,38 +260,22 @@ start_recording() {
         return 0
     fi
 
+    resolve_wayland_display
     mkdir -p "$RECORDINGS_DIR"
     TIMESTAMP=$(date +%Y%m%d-%H%M%S)
     OUT_FILE="$RECORDINGS_DIR/recording-${TIMESTAMP}.mp4"
 
-    if [ "$RECORD_CODEC" = "av1" ]; then
-        V_ENCODER="av1_vaapi"
-    else
-        V_ENCODER="hevc_vaapi"
-    fi
+    GEOM=$(detect_screen_geometry)
+    V_PIPELINE=$(detect_encoder_pipeline)
+    A_ARGS=$(detect_audio_args)
 
-    AUDIO_ARGS=""
-    if [ "$RECORD_AUDIO" = "true" ] && command -v pactl >/dev/null 2>&1 || command -v wpctl >/dev/null 2>&1; then
-        AUDIO_ARGS="-f pulse -i default -c:a aac -b:a 192k"
-    fi
-
-    if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
-        for wsock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
-            if [ -S "$wsock" ]; then
-                export WAYLAND_DISPLAY="${wsock##*/}"
-                break
-            fi
-        done
-    fi
+    echo "[infynitae-recorder] Starting continuous recording: geometry ${GEOM}, ${RECORD_FPS}fps..."
 
     # Run in background
-    nice -n 10 "$STREAM_BIN" | nice -n 10 ffmpeg -loglevel error -y \
-        -init_hw_device vaapi=va:"$DRI_DEVICE" \
-        -f rawvideo -pix_fmt bgr0 -s:v 1920x1080 -r "$RECORD_FPS" -i - \
-        $AUDIO_ARGS \
-        -vf 'format=nv12,hwupload' \
-        -c:v "$V_ENCODER" \
-        -b:v 16M -maxrate 20M \
+    nice -n 10 "$STREAM_BIN" --fps "$RECORD_FPS" | nice -n 10 ffmpeg -loglevel error -y \
+        -f rawvideo -pix_fmt bgr0 -s:v "$GEOM" -r "$RECORD_FPS" -i - \
+        $A_ARGS \
+        $V_PIPELINE \
         "$OUT_FILE" >/dev/null 2>&1 &
 
     REC_PID=$!
@@ -218,7 +290,6 @@ stop_recording() {
         if kill -0 "$REC_PID" 2>/dev/null; then
             # Send SIGINT to allow clean MP4 header finalization
             kill -INT "$REC_PID" 2>/dev/null || true
-            # Also terminate stream bin if orphaned
             pkill -P "$REC_PID" 2>/dev/null || true
             pkill -f "$STREAM_BIN" 2>/dev/null || true
             sleep 1
@@ -260,6 +331,9 @@ case "$1" in
         ;;
     status)
         echo "=== Infynitae Recorder Status ==="
+        echo "Detected Screen Geometry: $(detect_screen_geometry)"
+        echo "Hardware Encoder Pipeline: $(detect_encoder_pipeline)"
+        echo "Audio Capture Pipeline: $(detect_audio_args)"
         if [ -f "$SUPERVISOR_PID_FILE" ] && kill -0 $(cat "$SUPERVISOR_PID_FILE") 2>/dev/null; then
             echo "Supervisor: ACTIVE (PID $(cat "$SUPERVISOR_PID_FILE"))"
         else
