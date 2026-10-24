@@ -42,8 +42,10 @@ fi
 echo "==> Checking essential system packages..."
 PKGS=()
 # Barebones essentials: build tools, libinput, portals (screenshare/dialogs), audio stack (PipeWire),
-# polkit, fast app launcher (fuzzel), fonts, clipboard & screenshots, and Xwayland for Steam/games
-for pkg in base-devel libinput xdg-desktop-portal xdg-desktop-portal-wlr pipewire wireplumber pipewire-pulse polkit fuzzel ttf-dejavu grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
+# polkit, fast app launcher (fuzzel), fonts, clipboard & screenshots, and Xwayland for Steam/games.
+# Build and runtime libraries: seatd provides libseat (linked by the compositor, the daemon is not
+# enabled), mesa (GBM/EGL), and the helpers' cairo/pango/gdk-pixbuf2/gtk3; ffmpeg for the recorder.
+for pkg in $(cat "$INSTALL_DIR/live/packages.txt" 2>/dev/null || cat live/packages.txt); do
     if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
         PKGS+=("$pkg")
     fi
@@ -100,10 +102,9 @@ install -m 755 live/dev.sh "$HOME/.local/bin/infynitae-dev"
 install -m 755 live/settings.sh "$HOME/.local/bin/infynitae-settings"
 install -m 755 live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
 install -m 755 update.sh "$HOME/.local/bin/infynitae-update"
-if [ -f "live/wallpaper/infynitae-wallpaper" ]; then
-    install -m 755 live/wallpaper/infynitae-wallpaper "$HOME/.local/bin/infynitae-wallpaper"
-fi
-echo "==> Installed binaries to ~/.local/bin/{infynitae, infynitae-dev, infynitae-settings, infynitae-drivers, infynitae-update, infynitae-wallpaper}"
+install -m 755 live/infynitae-reload "$HOME/.local/bin/infynitae-reload"
+install -m 755 live/record/infynitae-recorder "$HOME/.local/bin/infynitae-recorder"
+echo "==> Installed binaries to ~/.local/bin"
 
 # 7. Deploy live runtime scripts & companion helpers
 mkdir -p "$HOME/infynitae/live"
@@ -112,26 +113,10 @@ DST_LIVE="$(cd "$HOME/infynitae/live" 2>/dev/null && pwd -P || echo "")"
 if [ -n "$SRC_LIVE" ] && [ "$SRC_LIVE" != "$DST_LIVE" ]; then
     cp -rf live/* "$HOME/infynitae/live/"
 fi
-if [ -f "$HOME/infynitae/live/portal/infynitae-portal.c" ] && pkg-config --exists gio-2.0 2>/dev/null; then
-    gcc -O2 "$HOME/infynitae/live/portal/infynitae-portal.c" $(pkg-config --cflags --libs gio-2.0) -o "$HOME/.local/bin/infynitae-portal" 2>/dev/null || true
-    chmod +x "$HOME/.local/bin/infynitae-portal" 2>/dev/null || true
-fi
-if [ -f "$HOME/infynitae/live/polkit/infynitae-polkit.c" ] && pkg-config --exists polkit-agent-1 gtk+-3.0 2>/dev/null; then
-    gcc -O2 "$HOME/infynitae/live/polkit/infynitae-polkit.c" $(pkg-config --cflags --libs polkit-agent-1 gtk+-3.0) -o "$HOME/.local/bin/infynitae-polkit" 2>/dev/null || true
-    chmod +x "$HOME/.local/bin/infynitae-polkit" 2>/dev/null || true
-fi
-if [ -f "$HOME/infynitae/live/lock/infynitae-lock.c" ] && pkg-config --exists wayland-client cairo pangocairo xkbcommon pam 2>/dev/null; then
-    gcc -O2 "$HOME/infynitae/live/lock/infynitae-lock.c" "$HOME/infynitae/live/lock/ext-session-lock-v1-protocol.c" \
-        $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon pam) -lm -lpthread \
-        -o "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
-    chmod +x "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
-fi
-if [ -f "$HOME/infynitae/live/wallpaper/infynitae-wallpaper.c" ] && pkg-config --exists wayland-client cairo gdk-pixbuf-2.0 2>/dev/null; then
-    gcc -O2 "$HOME/infynitae/live/wallpaper/infynitae-wallpaper.c" "$HOME/infynitae/live/wallpaper/wlr-layer-shell-protocol.c" "$HOME/infynitae/live/wallpaper/xdg-shell-protocol.c" \
-        $(pkg-config --cflags --libs wayland-client cairo gdk-pixbuf-2.0) -lm \
-        -o "$HOME/.local/bin/infynitae-wallpaper" 2>/dev/null || true
-    chmod +x "$HOME/.local/bin/infynitae-wallpaper" 2>/dev/null || true
-fi
+# The C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream): one recipe
+# shared with infynitae-update; a failure is reported, never hidden.
+sh "$HOME/infynitae/live/build-helpers.sh" "$HOME/infynitae" "$HOME/.local/bin" \
+    || echo "==> Some helpers were not built (see above); Infynitae runs without them"
 if command -v sudo >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/lock/infynitae.pam" ] && [ ! -f /etc/pam.d/infynitae ]; then
     sudo cp -f "$HOME/infynitae/live/lock/infynitae.pam" /etc/pam.d/infynitae 2>/dev/null || true
 fi
@@ -164,13 +149,9 @@ chmod +x "$HOME/.local/bin/infynitae-session"
 cp -f "$HOME/infynitae/live/xdg-open" "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 chmod +x "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 
-# Also install into /usr/local/bin so commands work immediately across all users and display managers
-sudo mkdir -p /usr/local/bin 2>/dev/null || true
-for b in infynitae infynitae-session infynitae-lock infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
-    if [ -f "$HOME/.local/bin/$b" ]; then
-        sudo install -m 755 "$HOME/.local/bin/$b" "/usr/local/bin/$b" 2>/dev/null || true
-    fi
-done
+# Display managers start sessions without ~/.local/bin on PATH: /usr/local/bin gets a tiny
+# launcher that runs the user's own copy (copies of the binaries there would go stale)
+sudo install -D -m 755 "$HOME/infynitae/live/infynitae-session-shim" /usr/local/bin/infynitae-session
 
 # 10. Ensure ~/.local/bin is in user PATH across interactive and login shells
 for prof in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
@@ -208,15 +189,15 @@ echo "    Super + Enter        Fit Window to Screen"
 echo "    Super + Shift + Enter Fullscreen"
 echo "    Super + Q            Terminal (auto: kitty, alacritty, foot)"
 echo "    Super + W            Launcher (fuzzel / dmenu)"
-echo "    Super + E            Files (yazi)"
+echo "    Super + E            Files"
+echo "    Super + L            Lock Screen"
 echo "    Super + Shift + S    Screenshot"
-echo "    Super + Shift + R    Reload Config"
+echo "    Super + Shift + R    Region Screenshot"
+echo "    Super + Shift + Backspace  Reload Config & Helpers"
 echo "    Super + Delete       Close Window"
-echo "    Ctrl + Alt + Backspace Exit Compositor"
+echo "    Ctrl + Alt + Backspace Restart Compositor (infynitae-session stop: quit)"
 echo "=========================================================="
-echo "  [✓] Hardware & input permissions are active immediately!"
-echo "      (Zero reboot or logout needed — udev uaccess & ACLs are active)"
-echo ""
-echo "  Start Infynitae right now with:"
+echo "  Start Infynitae from a text console (Ctrl+Alt+F2, log in) with:"
 echo "      infynitae-session"
+echo "  or pick \"Infynitae\" in your display manager."
 echo "=========================================================="

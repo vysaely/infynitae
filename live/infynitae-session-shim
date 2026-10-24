@@ -1,0 +1,4 @@
+#!/bin/sh
+# /usr/local/bin/infynitae-session: display managers start sessions without ~/.local/bin on PATH.
+# Runs the user's own, always current infynitae-session.
+exec "$HOME/.local/bin/infynitae-session" "$@"

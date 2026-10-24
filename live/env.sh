@@ -153,8 +153,12 @@ EOF
 # Ensure infynitae-portal is running
 PORTAL_LOG="$HOME/.local/state/infynitae/portal.log"
 mkdir -p "$HOME/.local/state/infynitae"
-if [ -x "$HOME/infynitae/live/infynitae-portal" ] && ! pgrep -f "live/infynitae-portal" >/dev/null 2>&1; then
-    "$HOME/infynitae/live/infynitae-portal" >> "$PORTAL_LOG" 2>&1 &
+for PORTAL_BIN in "$HOME/.local/bin/infynitae-portal" "$HOME/infynitae/live/infynitae-portal"; do
+    [ -x "$PORTAL_BIN" ] && break
+done
+# one instance: matched by its program path (kernel process names stop at 15 characters)
+if [ -x "$PORTAL_BIN" ] && ! pgrep -f '(^|/)infynitae-portal( |$)' >/dev/null 2>&1; then
+    "$PORTAL_BIN" >> "$PORTAL_LOG" 2>&1 &
 fi
 
 # 8. Resolve WAYLAND_DISPLAY, DISPLAY, and XAUTHORITY with auto-healing

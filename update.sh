@@ -51,7 +51,7 @@ fi
 # 2. Check and install any newly added essential packages
 if command -v pacman >/dev/null 2>&1; then
     NEW_PKGS=()
-    for pkg in base-devel libinput xdg-desktop-portal xdg-desktop-portal-wlr pipewire wireplumber pipewire-pulse polkit fuzzel ttf-dejavu grim slurp wl-clipboard xorg-xwayland xwayland-satellite; do
+    for pkg in $(cat live/packages.txt); do
         if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
             NEW_PKGS+=("$pkg")
         fi
@@ -74,7 +74,7 @@ fi
 echo "==> Compiling latest Infynitae release binary..."
 cargo build --release -p infynitae
 
-# 4. Install binaries to ~/.local/bin and /usr/local/bin
+# 4. Install binaries to ~/.local/bin
 mkdir -p "$HOME/.local/bin"
 # replace by rename: the running compositor keeps its old file until the next restart
 install -m 755 target/release/infynitae "$HOME/.local/bin/infynitae.new"
@@ -85,53 +85,15 @@ install -m 755 live/settings.sh "$HOME/.local/bin/infynitae-settings"
 install -m 755 live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
 install -m 755 update.sh "$HOME/.local/bin/infynitae-update"
 install -m 755 live/infynitae-session "$HOME/.local/bin/infynitae-session.new" && mv -f "$HOME/.local/bin/infynitae-session.new" "$HOME/.local/bin/infynitae-session"
-if [ -f "live/wallpaper/infynitae-wallpaper" ]; then
-    install -m 755 live/wallpaper/infynitae-wallpaper "$HOME/.local/bin/infynitae-wallpaper"
-fi
 if [ -f "live/xdg-open" ]; then
     install -m 755 live/xdg-open "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 fi
 
-# 5. Compile companion helpers (polkit & portal)
-if [ -f "$REPO_DIR/live/portal/infynitae-portal.c" ] && pkg-config --exists gio-2.0 2>/dev/null; then
-    echo "==> Compiling native desktop portal backend..."
-    gcc -O2 "$REPO_DIR/live/portal/infynitae-portal.c" $(pkg-config --cflags --libs gio-2.0) -o "$HOME/.local/bin/infynitae-portal" 2>/dev/null || true
-    chmod +x "$HOME/.local/bin/infynitae-portal" 2>/dev/null || true
-fi
-
-if [ -f "$REPO_DIR/live/polkit/infynitae-polkit.c" ] && pkg-config --exists polkit-agent-1 gtk+-3.0 2>/dev/null; then
-    echo "==> Compiling native Polkit authentication agent..."
-    gcc -O2 "$REPO_DIR/live/polkit/infynitae-polkit.c" $(pkg-config --cflags --libs polkit-agent-1 gtk+-3.0) -o "$HOME/.local/bin/infynitae-polkit" 2>/dev/null || true
-    chmod +x "$HOME/.local/bin/infynitae-polkit" 2>/dev/null || true
-fi
-
-if [ -f "$REPO_DIR/live/lock/infynitae-lock.c" ] && pkg-config --exists wayland-client cairo pangocairo xkbcommon pam 2>/dev/null; then
-    echo "==> Compiling native screen locker & start screen (infynitae-lock)..."
-    gcc -O2 "$REPO_DIR/live/lock/infynitae-lock.c" "$REPO_DIR/live/lock/ext-session-lock-v1-protocol.c" \
-        $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon pam) -lm -lpthread \
-        -o "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
-    chmod +x "$HOME/.local/bin/infynitae-lock" 2>/dev/null || true
-fi
-
-if [ -f "$REPO_DIR/live/wallpaper/infynitae-wallpaper.c" ] && pkg-config --exists wayland-client cairo gdk-pixbuf-2.0 2>/dev/null; then
-    echo "==> Compiling native wallpaper renderer (infynitae-wallpaper)..."
-    gcc -O2 "$REPO_DIR/live/wallpaper/infynitae-wallpaper.c" "$REPO_DIR/live/wallpaper/wlr-layer-shell-protocol.c" "$REPO_DIR/live/wallpaper/xdg-shell-protocol.c" \
-        $(pkg-config --cflags --libs wayland-client cairo gdk-pixbuf-2.0) -lm \
-        -o "$HOME/.local/bin/infynitae-wallpaper" 2>/dev/null || true
-    chmod +x "$HOME/.local/bin/infynitae-wallpaper" 2>/dev/null || true
-fi
-
-if [ -f "$REPO_DIR/live/record/Makefile" ] && pkg-config --exists wayland-client 2>/dev/null; then
-    echo "==> Compiling screen recorder stream (infynitae-record-stream)..."
-    if make -s -C "$REPO_DIR/live/record"; then
-        install -m 755 "$REPO_DIR/live/record/infynitae-record-stream" "$HOME/.local/bin/infynitae-record-stream.new"
-        mv -f "$HOME/.local/bin/infynitae-record-stream.new" "$HOME/.local/bin/infynitae-record-stream"
-        install -m 755 "$REPO_DIR/live/record/infynitae-recorder" "$HOME/.local/bin/infynitae-recorder.new"
-        mv -f "$HOME/.local/bin/infynitae-recorder.new" "$HOME/.local/bin/infynitae-recorder"
-    else
-        echo "[infynitae-update] Warning: recorder build failed; keeping the installed one"
-    fi
-fi
+# 5. Compile the C helpers (portal, polkit, lock, wallpaper, recorder stream)
+sh "$REPO_DIR/live/build-helpers.sh" "$REPO_DIR" "$HOME/.local/bin" \
+    || echo "[infynitae-update] Warning: some helpers were not built (see above)"
+install -m 755 "$REPO_DIR/live/record/infynitae-recorder" "$HOME/.local/bin/infynitae-recorder.new"
+mv -f "$HOME/.local/bin/infynitae-recorder.new" "$HOME/.local/bin/infynitae-recorder"
 
 # 6. Deploy live companion scripts
 mkdir -p "$HOME/infynitae/live"
@@ -142,14 +104,9 @@ if [ -n "$SRC_LIVE" ] && [ "$SRC_LIVE" != "$DST_LIVE" ]; then
 fi
 chmod +x "$HOME/infynitae/live"/*.sh "$HOME/infynitae/live"/*.py 2>/dev/null || true
 
-# 7. Update system-wide binaries if sudo permission is available
-if command -v sudo >/dev/null 2>&1; then
-    sudo mkdir -p /usr/local/bin 2>/dev/null || true
-    for b in infynitae infynitae-session infynitae-lock infynitae-dev infynitae-settings infynitae-drivers infynitae-update infynitae-wallpaper infynitae-portal infynitae-polkit xdg-open; do
-        if [ -f "$HOME/.local/bin/$b" ]; then
-            sudo install -m 755 "$HOME/.local/bin/$b" "/usr/local/bin/$b" 2>/dev/null || true
-        fi
-    done
+# 7. Display managers: /usr/local/bin/infynitae-session is a launcher for the user's own copy
+if ! cmp -s live/infynitae-session-shim /usr/local/bin/infynitae-session && command -v sudo >/dev/null 2>&1; then
+    sudo install -D -m 755 live/infynitae-session-shim /usr/local/bin/infynitae-session || true
 fi
 
 # 8. Safely synchronize configuration templates without overwriting user settings
