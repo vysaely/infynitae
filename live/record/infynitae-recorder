@@ -146,16 +146,14 @@ detect_audio_args() {
         return
     fi
 
-    # 1. PipeWire / PulseAudio default monitor
-    if ffmpeg -loglevel error -f pulse -i default -t 0.05 -f null - >/dev/null 2>&1; then
-        echo "-f pulse -i default -c:a aac -b:a 192k"
-        return
-    fi
-
-    # 2. ALSA default
-    if ffmpeg -loglevel error -f alsa -i default -t 0.05 -f null - >/dev/null 2>&1; then
-        echo "-f alsa -i default -c:a aac -b:a 192k"
-        return
+    # Desktop audio = the monitor of the default output. Pulse's "default" is the default *input*
+    # (the microphone), which must never be recorded without asking.
+    if command -v pactl >/dev/null 2>&1; then
+        SINK=$(pactl get-default-sink 2>/dev/null)
+        if [ -n "$SINK" ] && ffmpeg -loglevel error -f pulse -i "$SINK.monitor" -t 0.05 -f null - >/dev/null 2>&1; then
+            echo "-f pulse -i $SINK.monitor -c:a aac -b:a 192k"
+            return
+        fi
     fi
 
     # 3. No audio hardware present (e.g. minimal VM)
@@ -191,7 +189,8 @@ supervisor_loop() {
     echo "[infynitae-recorder] Invincible universal replay supervisor started (PID $$)"
 
     # Trap clean session termination
-    trap 'kill $(cat "$REPLAY_PID_FILE" 2>/dev/null) 2>/dev/null || true; pkill -P $$ 2>/dev/null || true; pkill -f "$STREAM_BIN" 2>/dev/null || true; rm -f "$SUPERVISOR_PID_FILE" "$REPLAY_PID_FILE"; exit 0' TERM INT HUP
+    # the encoder at the end of the engine's pipeline outlives the engine: stop it by its output dir
+    trap 'kill $(cat "$REPLAY_PID_FILE" 2>/dev/null) 2>/dev/null || true; pkill -P $$ 2>/dev/null || true; pkill -f "$STREAM_BIN" 2>/dev/null || true; pkill -f "^ffmpeg .*$REPLAY_DIR/chunk" 2>/dev/null || true; rm -f "$SUPERVISOR_PID_FILE" "$REPLAY_PID_FILE"; exit 0' TERM INT HUP
 
     while true; do
         # Start replay engine in background with isolated descriptors
