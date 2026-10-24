@@ -31,6 +31,7 @@ pub const KEY_9: u32 = 10;
 pub const KEY_Q: u32 = 16;
 pub const KEY_W: u32 = 17;
 pub const KEY_E: u32 = 18;
+pub const KEY_C: u32 = 46;
 pub const KEY_S: u32 = 31;
 pub const KEY_R: u32 = 19;
 pub const KEY_BACKSPACE: u32 = 14;
@@ -162,9 +163,9 @@ pub fn resolve_key_binding(
         }
         return Some(KeyAction::FocusNext);
     }
-    // Logo+Delete closes the focused window, Logo+Shift+Delete ends its app; the modifiers match
+    // Logo+Delete or Logo+C closes the focused window, Logo+Shift+Delete or Logo+Shift+C ends its app; the modifiers match
     // exactly, as for fit
-    if key == KEY_DELETE && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
+    if (key == KEY_DELETE || key == KEY_C) && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
         if mods.shift {
             return Some(KeyAction::ForceCloseFocused);
         }
@@ -322,6 +323,15 @@ mod tests {
             resolve_key_binding(KEY_DELETE, m(true, false, false, true), false),
             Some(KeyAction::ForceCloseFocused),
             "Super+Shift+Delete ends the app"
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_C, m(true, false, false, false), false),
+            Some(KeyAction::CloseFocused)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_C, m(true, false, false, true), false),
+            Some(KeyAction::ForceCloseFocused),
+            "Super+Shift+C ends the app"
         );
         for mods in [
             m(false, false, false, false),

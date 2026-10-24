@@ -199,6 +199,8 @@ pub struct WaylandState {
     pub direct_scanout: Option<bool>,
     pub wallpaper: Option<String>,
     pub wallpaper_mode: Option<String>,
+    pub keyboard_repeat_delay: i32,
+    pub keyboard_repeat_rate: i32,
     // probe builds only: the Send assertion must be the one and only error
     #[cfg(feature = "probe_store_port_in_state")]
     leaked_port: infynitae_core::InputPort,
@@ -255,15 +257,51 @@ impl WaylandState {
         let mut seats = SeatState::new();
         let mut seat = seats.new_wl_seat(display, "seat0");
         seat.add_pointer();
-        let repeat_delay = std::env::var("KEYBOARD_REPEAT_DELAY")
+        let mut repeat_delay = std::env::var("KEYBOARD_REPEAT_DELAY")
             .ok()
             .and_then(|s| s.parse::<i32>().ok())
             .unwrap_or(200);
-        let repeat_rate = std::env::var("KEYBOARD_REPEAT_RATE")
+        let mut repeat_rate = std::env::var("KEYBOARD_REPEAT_RATE")
             .ok()
             .and_then(|s| s.parse::<i32>().ok())
-            .unwrap_or(25);
-        seat.add_keyboard(Default::default(), repeat_delay, repeat_rate)
+            .unwrap_or(35);
+        let mut xkb_layout = std::env::var("XKB_DEFAULT_LAYOUT").unwrap_or_default();
+        let mut xkb_options = std::env::var("XKB_DEFAULT_OPTIONS").unwrap_or_default();
+
+        if let Ok(home) = std::env::var("HOME") {
+            let config_path = format!("{home}/.config/infynitae/config");
+            if let Ok(content) = std::fs::read_to_string(config_path) {
+                for line in content.lines() {
+                    let line_clean = line.split('#').next().unwrap_or("").trim();
+                    if let Some((k, v)) = line_clean.split_once('=') {
+                        let key = k.trim();
+                        let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                        match key {
+                            "KEYBOARD_REPEAT_DELAY" => {
+                                if let Ok(d) = val.parse::<i32>() { repeat_delay = d; }
+                            }
+                            "KEYBOARD_REPEAT_RATE" => {
+                                if let Ok(r) = val.parse::<i32>() { repeat_rate = r; }
+                            }
+                            "XKB_DEFAULT_LAYOUT" => {
+                                if !val.is_empty() { xkb_layout = val.to_string(); }
+                            }
+                            "XKB_DEFAULT_OPTIONS" => {
+                                if !val.is_empty() { xkb_options = val.to_string(); }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+
+        let xkb_config = smithay::input::keyboard::XkbConfig {
+            layout: &xkb_layout,
+            options: if xkb_options.is_empty() { None } else { Some(xkb_options) },
+            ..Default::default()
+        };
+        seat.add_keyboard(xkb_config, repeat_delay, repeat_rate)
             .expect("the seat has a keyboard");
         let capabilities = convert::wm_capabilities(core.toplevel_capabilities());
 
@@ -358,6 +396,8 @@ impl WaylandState {
             direct_scanout: None,
             wallpaper: None,
             wallpaper_mode: None,
+            keyboard_repeat_delay: repeat_delay,
+            keyboard_repeat_rate: repeat_rate,
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
             leaked_port: unreachable!(),
@@ -569,6 +609,22 @@ impl WaylandState {
                                 let trimmed = val.trim();
                                 if !trimmed.is_empty() {
                                     new_wallpaper_mode = Some(trimmed.to_string());
+                                }
+                            }
+                            "KEYBOARD_REPEAT_DELAY" => {
+                                if let Ok(d) = val.parse::<i32>() {
+                                    self.keyboard_repeat_delay = d;
+                                    if let Some(kb) = self.seat.get_keyboard() {
+                                        kb.change_repeat_info(self.keyboard_repeat_rate, d);
+                                    }
+                                }
+                            }
+                            "KEYBOARD_REPEAT_RATE" => {
+                                if let Ok(r) = val.parse::<i32>() {
+                                    self.keyboard_repeat_rate = r;
+                                    if let Some(kb) = self.seat.get_keyboard() {
+                                        kb.change_repeat_info(r, self.keyboard_repeat_delay);
+                                    }
                                 }
                             }
                             _ => {}
