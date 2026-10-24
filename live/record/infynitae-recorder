@@ -27,6 +27,7 @@ REPLAY_MINUTES="${REPLAY_BUFFER_MINUTES:-20}"
 RECORD_FPS="${RECORD_FPS:-60}"
 RECORD_CODEC="${RECORD_CODEC:-auto}" # auto, hevc, av1, h264
 RECORD_AUDIO="${RECORD_AUDIO:-true}"
+RECORD_NOTIFY="${RECORD_NOTIFY:-true}"
 
 PID_FILE="/tmp/infynitae-recording.pid"
 REPLAY_PID_FILE="/tmp/infynitae-replay.pid"
@@ -53,6 +54,9 @@ resolve_wayland_display() {
 }
 
 notify_toast() {
+    if [ "$RECORD_NOTIFY" != "true" ] && [ "$RECORD_NOTIFY" != "1" ]; then
+        return 0
+    fi
     title="$1"
     msg="$2"
     if command -v notify-send >/dev/null 2>&1; then
@@ -66,20 +70,19 @@ notify_toast() {
 # ------------------------------------------------------------------------------
 detect_screen_geometry() {
     resolve_wayland_display
-    GEOM_INFO=""
-    if [ -x "$STREAM_BIN" ] && [ -n "$WAYLAND_DISPLAY" ]; then
-        GEOM_INFO=$("$STREAM_BIN" --info 2>/dev/null || true)
-    fi
-
-    W=$(echo "$GEOM_INFO" | awk -F= '/WIDTH=/ {print $2}' | head -1)
-    H=$(echo "$GEOM_INFO" | awk -F= '/HEIGHT=/ {print $2}' | head -1)
-
-    if [ -n "$W" ] && [ -n "$H" ] && [ "$W" -gt 0 ] && [ "$H" -gt 0 ]; then
-        echo "${W}x${H}"
-    else
-        # Fallback if compositor info is momentarily unreachable
-        echo "1920x1080"
-    fi
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+        if [ -x "$STREAM_BIN" ] && [ -n "$WAYLAND_DISPLAY" ]; then
+            GEOM_INFO=$("$STREAM_BIN" --info 2>/dev/null || true)
+            W=$(echo "$GEOM_INFO" | awk -F= '/WIDTH=/ {print $2}' | head -1)
+            H=$(echo "$GEOM_INFO" | awk -F= '/HEIGHT=/ {print $2}' | head -1)
+            if [ -n "$W" ] && [ -n "$H" ] && [ "$W" -gt 0 ] && [ "$H" -gt 0 ]; then
+                echo "${W}x${H}"
+                return 0
+            fi
+        fi
+        sleep 0.3
+    done
+    echo "1920x1080"
 }
 
 # ------------------------------------------------------------------------------
@@ -188,7 +191,7 @@ supervisor_loop() {
     echo "[infynitae-recorder] Invincible universal replay supervisor started (PID $$)"
 
     # Trap clean session termination
-    trap 'kill $(cat "$REPLAY_PID_FILE" 2>/dev/null) 2>/dev/null || true; pkill -P $$ 2>/dev/null || true; rm -f "$SUPERVISOR_PID_FILE" "$REPLAY_PID_FILE"; exit 0' TERM INT HUP
+    trap 'kill $(cat "$REPLAY_PID_FILE" 2>/dev/null) 2>/dev/null || true; pkill -P $$ 2>/dev/null || true; pkill -f "$STREAM_BIN" 2>/dev/null || true; rm -f "$SUPERVISOR_PID_FILE" "$REPLAY_PID_FILE"; exit 0' TERM INT HUP
 
     while true; do
         # Start replay engine in background with isolated descriptors
@@ -218,7 +221,7 @@ save_replay_clip() {
     CONCAT_LIST="$REPLAY_DIR/concat-${TIMESTAMP}.txt"
 
     # Find chunks sorted chronologically by modification time
-    CHUNKS=$(ls -tr "$REPLAY_DIR"/chunk*.mkv 2>/dev/null || true)
+    CHUNKS=$(command ls -tr "$REPLAY_DIR"/chunk*.mkv 2>/dev/null || true)
     if [ -z "$CHUNKS" ]; then
         notify_toast "Replay Buffer Empty" "Still buffering first segment, try again in a few seconds."
         echo "Error: No chunks found in $REPLAY_DIR" >&2
@@ -340,7 +343,7 @@ case "$1" in
             echo "Supervisor: INACTIVE"
         fi
         if [ -f "$REPLAY_PID_FILE" ] && kill -0 $(cat "$REPLAY_PID_FILE") 2>/dev/null; then
-            COUNT=$(ls "$REPLAY_DIR"/chunk*.mkv 2>/dev/null | wc -l)
+            COUNT=$(command ls "$REPLAY_DIR"/chunk*.mkv 2>/dev/null | wc -l)
             BUFFERED_MIN=$((COUNT * SEGMENT_SECS / 60))
             echo "Replay Buffer: ACTIVE (Buffered ~${BUFFERED_MIN} min, $COUNT chunks in $REPLAY_DIR)"
         else

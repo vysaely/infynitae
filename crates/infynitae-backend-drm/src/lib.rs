@@ -1284,6 +1284,8 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 current_p,
                 data.scale_120,
             );
+            let scale = (f64::from(data.scale_120) / 120.0).max(0.001);
+            data.last_abs_pointer = Some((target_phys_x / scale, target_phys_y / scale));
             let time_us = Event::time(&event);
             if delta.0.abs() > 0.0001 || delta.1.abs() > 0.0001 {
                 let phys = PhysicalEvent::PointerMotion {
@@ -1325,6 +1327,8 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 current_p,
                 data.scale_120,
             );
+            let scale = (f64::from(data.scale_120) / 120.0).max(0.001);
+            data.last_abs_pointer = Some((target_phys_x / scale, target_phys_y / scale));
             let time_us = Event::time(&event);
             if delta.0.abs() > 0.0001 || delta.1.abs() > 0.0001 {
                 let phys = PhysicalEvent::PointerMotion {

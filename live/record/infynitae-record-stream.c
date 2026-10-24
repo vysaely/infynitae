@@ -40,6 +40,12 @@ typedef struct {
     int stride;
     uint32_t format;
 
+    int initial_width;
+    int initial_height;
+
+    int target_output_idx;
+    int current_output_idx;
+
     int shm_fd[2];
     void *shm_data[2];
     size_t shm_size[2];
@@ -108,16 +114,29 @@ static void request_frame(RecorderState *s);
 static void frame_buffer(void *data, struct zwlr_screencopy_frame_v1 *frame,
                          uint32_t format, uint32_t width, uint32_t height, uint32_t stride) {
     RecorderState *s = (RecorderState *)data;
-    s->format = format;
-    s->width = width;
-    s->height = height;
-    s->stride = stride;
 
     if (info_only) {
         printf("WIDTH=%u\nHEIGHT=%u\nSTRIDE=%u\nFORMAT=%u\n", width, height, stride, format);
         fflush(stdout);
         exit(0);
     }
+
+    // Dynamic resolution change detection (e.g. handheld docking, game resolution switch)
+    if (s->initial_width == 0) {
+        s->initial_width = (int)width;
+        s->initial_height = (int)height;
+    } else if ((int)width != s->initial_width || (int)height != s->initial_height) {
+        fprintf(stderr, "[infynitae-record] Output geometry changed (%dx%d -> %ux%u). Exiting to allow supervisor restart.\n",
+                s->initial_width, s->initial_height, width, height);
+        s->running = false;
+        zwlr_screencopy_frame_v1_destroy(frame);
+        return;
+    }
+
+    s->format = format;
+    s->width = (int)width;
+    s->height = (int)height;
+    s->stride = (int)stride;
 
     size_t size = (size_t)stride * height;
     if (s->shm_size[s->current_buf] != size) {
@@ -137,33 +156,66 @@ static void frame_ready(void *data, struct zwlr_screencopy_frame_v1 *frame,
     (void)tv_sec_hi; (void)tv_sec_lo; (void)tv_nsec;
     RecorderState *s = (RecorderState *)data;
 
-    // Rate pacing: throttle to target_fps (default 60 fps)
-    struct timespec now;
-    clock_gettime(CLOCK_MONOTONIC, &now);
-    long elapsed_ns = (now.tv_sec - s->last_frame_time.tv_sec) * 1000000000L + (now.tv_nsec - s->last_frame_time.tv_nsec);
-    long min_interval_ns = 1000000000L / s->target_fps;
-
-    if (elapsed_ns >= min_interval_ns || s->last_frame_time.tv_sec == 0) {
-        s->last_frame_time = now;
-        if (s->pipe_fd >= 0 && s->shm_data[s->current_buf]) {
-            size_t bytes_to_write = (size_t)s->stride * s->height;
+    // 1. Output the current buffer to stdout/pipe
+    if (s->pipe_fd >= 0 && s->shm_data[s->current_buf]) {
+        size_t row_bytes = (size_t)s->width * 4;
+        if ((size_t)s->stride == row_bytes) {
+            // Fast-path: stride matches row width exactly (no padding bytes)
+            size_t bytes_to_write = row_bytes * (size_t)s->height;
             ssize_t written = 0;
             char *buf = (char *)s->shm_data[s->current_buf];
             while (written < (ssize_t)bytes_to_write) {
                 ssize_t n = write(s->pipe_fd, buf + written, bytes_to_write - written);
                 if (n <= 0) {
                     if (errno == EINTR) continue;
-                    // Pipe broken / ffmpeg closed
                     s->running = false;
                     break;
                 }
                 written += n;
+            }
+        } else {
+            // Stride has driver padding (common on laptops 1366x768, Steam Deck, custom ultrawide):
+            // Write row-by-row stripping padding so FFmpeg receives clean unskewed rawvideo
+            for (int y = 0; y < s->height && s->running; y++) {
+                char *row = (char *)s->shm_data[s->current_buf] + (size_t)y * s->stride;
+                ssize_t written = 0;
+                while (written < (ssize_t)row_bytes) {
+                    ssize_t n = write(s->pipe_fd, row + written, row_bytes - written);
+                    if (n <= 0) {
+                        if (errno == EINTR) continue;
+                        s->running = false;
+                        break;
+                    }
+                    written += n;
+                }
             }
         }
     }
 
     zwlr_screencopy_frame_v1_destroy(frame);
     s->current_buf = 1 - s->current_buf;
+
+    if (!s->running) return;
+
+    // 2. Rate pacing: Calculate time until next frame deadline
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    long min_interval_ns = 1000000000L / s->target_fps;
+
+    if (s->last_frame_time.tv_sec != 0) {
+        long elapsed_ns = (now.tv_sec - s->last_frame_time.tv_sec) * 1000000000L + (now.tv_nsec - s->last_frame_time.tv_nsec);
+        // Leave 2ms headroom so the compositor has the capture request queued before vsync
+        long sleep_ns = min_interval_ns - elapsed_ns - 2000000L;
+        if (sleep_ns > 0) {
+            struct timespec ts = {
+                .tv_sec = sleep_ns / 1000000000L,
+                .tv_nsec = sleep_ns % 1000000000L
+            };
+            nanosleep(&ts, NULL);
+        }
+    }
+
+    clock_gettime(CLOCK_MONOTONIC, &s->last_frame_time);
 
     if (s->running) {
         request_frame(s);
@@ -217,8 +269,11 @@ static void registry_global(void *data, struct wl_registry *registry,
     RecorderState *s = (RecorderState *)data;
     if (strcmp(interface, wl_shm_interface.name) == 0) {
         s->shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
-    } else if (strcmp(interface, wl_output_interface.name) == 0 && !s->output) {
-        s->output = wl_registry_bind(registry, name, &wl_output_interface, 1);
+    } else if (strcmp(interface, wl_output_interface.name) == 0) {
+        if (s->current_output_idx == s->target_output_idx && !s->output) {
+            s->output = wl_registry_bind(registry, name, &wl_output_interface, 1);
+        }
+        s->current_output_idx++;
     } else if (strcmp(interface, zwlr_screencopy_manager_v1_interface.name) == 0) {
         s->manager = wl_registry_bind(registry, name, &zwlr_screencopy_manager_v1_interface, version < 3 ? version : 3);
     }
@@ -258,6 +313,9 @@ int main(int argc, char **argv) {
             if (fps > 0 && fps <= 360) {
                 state.target_fps = fps;
             }
+        } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
+            state.target_output_idx = atoi(argv[++i]);
+            if (state.target_output_idx < 0) state.target_output_idx = 0;
         }
     }
 

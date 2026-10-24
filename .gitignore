@@ -25,3 +25,5 @@ live/infynitae-portal
 live/infynitae-polkit
 live/lock/infynitae-lock
 live/wallpaper/infynitae-wallpaper
+live/record/infynitae-record-stream
+*.o
