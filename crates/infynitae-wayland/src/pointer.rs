@@ -375,7 +375,9 @@ impl WaylandState {
                 ptr.motion(self, None, &event);
                 ptr.frame(self);
                 self.pointer_sent = Sent::default();
-                if let Some(target) = popup_target {
+                if let Some(target) = popup_target
+                    && !self.is_locked()
+                {
                     let kb = self.keyboard_handle();
                     kb.set_focus(self, Some(target), SERIAL_COUNTER.next_serial());
                 }

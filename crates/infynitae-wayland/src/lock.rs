@@ -14,6 +14,10 @@
 //! A lock outlives its client (the protocol's rule): when the lock client dies, the screen stays
 //! black and locked, and a new lock client may take the lock over. Only backends that draw it
 //! offer the global ([`WaylandState::enable_session_lock`]).
+//!
+//! Core's focus changes while locked move no keyboard focus, and no popup may take a grab: the
+//! keyboard returns to Core's focus at [`WaylandState::finish_unlock`]. A pointer button Core
+//! holds and that is released while locked gets its release after the unlock (the backend).
 
 use std::collections::HashSet;
 
@@ -149,11 +153,16 @@ impl WaylandState {
         if self.is_locked() {
             return;
         }
-        let target = self
-            .core
-            .focus()
-            .target()
-            .and_then(|id| self.window_surface(id));
+        // focus changes while locked were held back: a layer surface holding the keyboard (L5)
+        // has it before the focused window
+        let target = match self.core.focus().layer() {
+            Some(layer) => self.layer_surface(layer),
+            None => self
+                .core
+                .focus()
+                .target()
+                .and_then(|id| self.window_surface(id)),
+        };
         let kb = self.keyboard_handle();
         kb.set_focus(self, target, SERIAL_COUNTER.next_serial());
     }

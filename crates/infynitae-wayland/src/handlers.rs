@@ -112,7 +112,7 @@ impl WaylandState {
         let kb = self.keyboard_handle();
         if !g.has_ended() {
             let top = g.current_grab();
-            if top.is_some() && kb.current_focus() != top {
+            if top.is_some() && kb.current_focus() != top && !self.is_locked() {
                 kb.set_focus(self, top, serial);
             }
             return;
@@ -139,7 +139,9 @@ impl WaylandState {
                 .target()
                 .and_then(|id| self.window_surface(id)),
         };
-        kb.set_focus(self, target, serial);
+        if !self.is_locked() {
+            kb.set_focus(self, target, serial);
+        }
     }
 
     fn restore_preempted_constraint(&mut self) {
@@ -561,6 +563,11 @@ impl XdgShellHandler for WaylandState {
     /// layer-surface root (a panel's menu) must be what the user is using — the pointer is on its
     /// tree or it holds the keyboard.
     fn grab(&mut self, surface: PopupSurface, _seat: wl_seat::WlSeat, serial: Serial) {
+        if self.is_locked() {
+            // no grab may route keys past the lock surface
+            surface.send_popup_done();
+            return;
+        }
         let kind = PopupKind::Xdg(surface.clone());
         let Ok(root) = find_popup_root_surface(&kind) else {
             surface.send_popup_done();

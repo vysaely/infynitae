@@ -153,7 +153,9 @@ impl WaylandState {
                 }
             }
             Effect::LayerKeyboardFocus(layer) => {
-                if let Some(surface) = self.layer_surface(layer) {
+                if let Some(surface) = self.layer_surface(layer)
+                    && !self.is_locked()
+                {
                     let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                     let kb = self.keyboard_handle();
                     kb.set_focus(self, Some(surface), serial);

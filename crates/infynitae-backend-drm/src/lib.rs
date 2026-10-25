@@ -175,6 +175,11 @@ struct Screen {
     k: f64,
     /// A frame is queued and its vblank has not come yet.
     pending: bool,
+    /// The queued frame was drawn while locked (no window in it).
+    queued_locked: bool,
+    /// What the screen shows now has no window: a locked frame reached its vblank, or the
+    /// screen is blank.
+    shows_locked: bool,
     screencopy_texture: Option<GlesTexture>,
     /// Page flips refused in a row (logged at the first and every 100th).
     flip_failures: u32,
@@ -203,6 +208,8 @@ struct LoopData {
     quit: bool,
     /// Keys taken by the console (T6): their releases are not passed on either.
     taken: Vec<u32>,
+    /// Pointer buttons physically down (every button event, locked or not).
+    buttons_down: Vec<u32>,
     /// Active keyboard devices for hardware LED synchronization (Caps Lock, Num Lock).
     keyboards: Vec<smithay::reexports::input::Device>,
     /// All active input devices (keyboards, mice, touchpads) for live config updates.
@@ -530,6 +537,8 @@ pub fn run_console_with(
             compositor,
             k,
             pending: false,
+            queued_locked: false,
+            shows_locked: false,
             screencopy_texture: None,
             flip_failures: 0,
             no_scanout_until: None,
@@ -599,6 +608,7 @@ pub fn run_console_with(
                 for s in &mut data.screens {
                     let _ = s.compositor.reset_state();
                     s.pending = false;
+                    s.shows_locked = false;
                 }
                 data.active = true;
                 data.session.request_frame();
@@ -611,9 +621,11 @@ pub fn run_console_with(
                 if let Some(s) = data.screens.iter_mut().find(|s| s.crtc == crtc) {
                     let _ = s.compositor.frame_submitted();
                     s.pending = false;
+                    s.shows_locked = s.queued_locked;
                     let id = s.id;
                     let now = infynitae_wayland::presentation_clock_now();
                     data.state.frame_tick(id, now);
+                    confirm_lock(data);
                     data.session.request_frame();
                 }
             }
@@ -652,6 +664,7 @@ pub fn run_console_with(
         active: true,
         quit: false,
         taken: Vec::new(),
+        buttons_down: Vec::new(),
         keyboards: Vec::new(),
         input_devices: Vec::new(),
         last_abs_pointer: None,
@@ -752,6 +765,7 @@ pub fn run_console_with(
                 data.dpms_active = true;
                 for s in &mut data.screens {
                     let _ = s.compositor.clear();
+                    s.shows_locked = true;
                 }
                 if data.idle_auto_lock {
                     let is_running = data
@@ -794,6 +808,28 @@ pub fn run_console_with(
             let now_us = infynitae_wayland::presentation_clock_now().as_micros() as u64;
             for key in keys {
                 core_key(&mut data, key, false, now_us);
+            }
+            // buttons Core holds that were released while locked: Core sees their release
+            let released: Vec<u32> = data
+                .state
+                .core()
+                .buttons()
+                .pressed()
+                .iter()
+                .map(|(b, _)| *b)
+                .filter(|b| !data.buttons_down.contains(b))
+                .collect();
+            for button in released {
+                let phys = PhysicalEvent::PointerButton {
+                    button,
+                    pressed: false,
+                    modifiers: data.state.seat_modifiers(),
+                    time_us: now_us,
+                };
+                let port = &mut data.input_port;
+                let _ = data
+                    .state
+                    .with_effects(|core, fx| core.physical_input(port, phys, fx));
             }
             data.state.finish_unlock();
         }
@@ -912,7 +948,6 @@ fn render(data: &mut LoopData) {
     } else {
         data.state.clear_color()
     };
-    let mut all_drawn = true;
     for i in 0..data.screens.len() {
         let id = data.screens[i].id;
         let size = data.screens[i].size;
@@ -931,7 +966,6 @@ fn render(data: &mut LoopData) {
         );
 
         if data.screens[i].pending {
-            all_drawn = false;
             continue;
         }
 
@@ -946,7 +980,6 @@ fn render(data: &mut LoopData) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("[infynitae] Frame elements: {e}");
-                all_drawn = false;
                 continue;
             }
         };
@@ -1000,6 +1033,7 @@ fn render(data: &mut LoopData) {
                 match s.compositor.queue_frame(()) {
                     Ok(()) => {
                         s.flip_failures = 0;
+                        s.queued_locked = locked;
                         true
                     }
                     Err(e) => {
@@ -1051,10 +1085,15 @@ fn render(data: &mut LoopData) {
                     }
                 }
             }
-            Ok(_) => false,
+            Ok(_) => {
+                // nothing changed: the screen already shows these elements
+                if locked {
+                    s.shows_locked = true;
+                }
+                false
+            }
             Err(e) => {
                 eprintln!("[infynitae] Render: {e:?}");
-                all_drawn = false;
                 false
             }
         };
@@ -1073,11 +1112,16 @@ fn render(data: &mut LoopData) {
             data.state.frame_tick(id, now);
         }
     }
-    if locked && all_drawn {
-        // no window is on any screen any more: the lock client may be told it holds the lock
+    confirm_lock(data);
+    data.session.flush();
+}
+
+/// Locked, and no screen shows a window any more: the lock client is told it holds the lock.
+/// A frame counts once its vblank has come (a queued or refused one is not on screen).
+fn confirm_lock(data: &mut LoopData) {
+    if data.state.is_locked() && data.screens.iter().all(|s| s.shows_locked) {
         data.state.lock_frame_drawn();
     }
-    data.session.flush();
 }
 
 #[allow(unsafe_code)]
@@ -1355,10 +1399,19 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
         for s in &mut data.screens {
             let _ = s.compositor.reset_state();
             s.pending = false;
+            s.shows_locked = false;
         }
         data.session.request_frame();
     }
-    // locked: pointer and touch go nowhere (keys go to the lock surface, below)
+    if let InputEvent::PointerButton { event } = &event {
+        let button = event.button_code();
+        data.buttons_down.retain(|b| *b != button);
+        if matches!(event.state(), ButtonState::Pressed) {
+            data.buttons_down.push(button);
+        }
+    }
+    // locked: pointer and touch go nowhere (keys go to the lock surface, below); a button
+    // Core holds and that is released meanwhile gets its release after the unlock
     if data.state.is_locked()
         && !matches!(
             event,

@@ -112,7 +112,10 @@ impl WaylandState {
                             }
                         }
                     }
-                    kb.set_focus(self, target_surface, serial);
+                    // locked: the keyboard stays with the lock surface (finish_unlock restores)
+                    if !self.is_locked() {
+                        kb.set_focus(self, target_surface, serial);
+                    }
                 }
                 Effect::DismissPopupGrab(target) => {
                     let serial = SERIAL_COUNTER.next_serial();
@@ -137,7 +140,9 @@ impl WaylandState {
                     }
                     let target_surface = self.window_surface(target);
                     let kb = self.keyboard_handle();
-                    kb.set_focus(self, target_surface, serial);
+                    if !self.is_locked() {
+                        kb.set_focus(self, target_surface, serial);
+                    }
                 }
                 Effect::KeyboardForward {
                     key,
