@@ -713,8 +713,7 @@ mod tests {
     }
 
     /// A session dropped without `shutdown` (an early error return in a backend after
-    /// `Session::new`) still ends the client it started: none outlives the session (independent
-    /// review 2026-10-20, finding 2).
+    /// `Session::new`) still ends the client it started: none outlives the session (2026-10-20).
     #[test]
     fn a_session_dropped_without_shutdown_ends_its_client() {
         let display: Display<WaylandState> = Display::new().unwrap();
@@ -854,7 +853,7 @@ mod tests {
         assert_eq!(session.timeout(), None, "idle again afterwards");
     }
 
-    /// INV-XWAYLAND-1 (INC-12): a client the session starts gets the session's X display, or no
+    /// INV-XWAYLAND-1: a client the session starts gets the session's X display, or no
     /// `DISPLAY` at all, never the one the compositor itself was started with (this test's own
     /// environment may well have one).
     #[test]
