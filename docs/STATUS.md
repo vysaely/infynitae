@@ -83,7 +83,6 @@ PAM setup includes `pam_gnome_keyring`.
 
 Also missing:
 
-- Animated cursors show their first frame only.
 - HDR, tablet and pen support, touch gestures, accessibility and screen readers.
 - Packaging and installs other than Arch Linux; the install assumes one user and `~/infynitae`.
 - Crash reporting beyond the logs.
