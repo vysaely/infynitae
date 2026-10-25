@@ -164,7 +164,7 @@ pub(crate) fn arrange<'a>(
                 h: h.round() as i32,
             },
         };
-        if s.exclusive_zone > 0 {
+        if r.mapped() && s.exclusive_zone > 0 {
             let z = f64::from(s.exclusive_zone);
             // the edge a zone reserves: anchored to it, and not to its opposite unless it is
             // anchored to both perpendicular edges too (a full-width bar anchored on three sides)
@@ -1300,6 +1300,36 @@ mod tests {
         c.layer_destroyed(bar);
         assert_eq!(c.usable_area(o), Some((0.0, 0.0, 1920.0, 1080.0)));
         assert!(c.layer_frame(o).above.is_empty());
+    }
+
+    #[test]
+    fn unmapped_layer_surface_does_not_reserve_exclusive_zone() {
+        let Fx { mut c, o, .. } = setup();
+        let s = state(Layer::Top, (true, false, true, true), (0, 30), 30);
+        let id = c.layer_created(Some(o)).unwrap();
+        let fx = c.layer_committed(id, s, tree(1, 0, 0, false)).unwrap();
+        // Before mapping (configured but root mapped=false), exclusive zone is not reserved.
+        assert_eq!(c.usable_area(o), Some((0.0, 0.0, 1920.0, 1080.0)));
+
+        // After mapping with a buffer, exclusive zone is reserved.
+        let size = fx
+            .iter()
+            .find_map(|e| match e {
+                Effect::LayerConfigure { layer, size } if *layer == id => Some(*size),
+                _ => None,
+            })
+            .expect("configure");
+        c.layer_committed(id, s, tree(1, size.w, size.h, true))
+            .unwrap();
+        assert_eq!(c.usable_area(o), Some((0.0, 30.0, 1920.0, 1050.0)));
+
+        // Unmapping (null buffer: root mapped=false) releases the exclusive zone.
+        c.layer_committed(id, s, tree(1, 0, 0, false)).unwrap();
+        assert_eq!(
+            c.usable_area(o),
+            Some((0.0, 0.0, 1920.0, 1080.0)),
+            "unmapped layer surface releases its exclusive zone"
+        );
     }
 
     /// A popup of a bar (`zwlr_layer_surface_v1.get_popup`) is part of the bar's tree: drawn with
