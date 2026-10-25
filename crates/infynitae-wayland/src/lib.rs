@@ -329,10 +329,8 @@ impl WaylandState {
                                     xkb_layout = val.to_string();
                                 }
                             }
-                            "XKB_DEFAULT_OPTIONS" => {
-                                if !val.is_empty() {
-                                    xkb_options = val.to_string();
-                                }
+                            "XKB_DEFAULT_OPTIONS" if !val.is_empty() => {
+                                xkb_options = val.to_string();
                             }
                             _ => {}
                         }
@@ -1073,61 +1071,6 @@ pub fn user_key_bindings(
     (out, commands, problems)
 }
 
-#[cfg(test)]
-mod key_binding_config_tests {
-    use super::user_key_bindings;
-    use infynitae_core::input::keys::{KeyAction, parse_chord};
-
-    fn kv(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs
-            .iter()
-            .map(|(k, v)| (k.to_string(), v.to_string()))
-            .collect()
-    }
-
-    /// BIND_ moves actions (several chords allowed) or frees them with "none"; EXEC_ adds
-    /// commands in order; lines that cannot be understood are reported, not applied.
-    #[test]
-    fn config_lines_become_bindings_and_commands() {
-        let (b, cmds, problems) = user_key_bindings(
-            &kv(&[
-                ("TERMINAL", "SUPER+RETURN,SUPER+T"),
-                ("LAUNCHER", "none"),
-                ("TELEPORT", "SUPER+X"),
-                ("LOCK", "SUPER+NOPE"),
-            ]),
-            &kv(&[
-                ("EXEC_BROWSER", "SUPER+B: firefox --new-window"),
-                ("EXEC_BAD", "firefox"),
-            ]),
-        );
-        assert_eq!(
-            b.chords,
-            vec![
-                (
-                    parse_chord("SUPER+RETURN").unwrap(),
-                    Some(KeyAction::SpawnTerminal)
-                ),
-                (
-                    parse_chord("SUPER+T").unwrap(),
-                    Some(KeyAction::SpawnTerminal)
-                ),
-                (parse_chord("SUPER+B").unwrap(), Some(KeyAction::Exec(0))),
-            ]
-        );
-        assert_eq!(
-            b.moved,
-            vec![
-                KeyAction::SpawnTerminal,
-                KeyAction::ToggleLauncher,
-                KeyAction::SpawnLockScreen
-            ]
-        );
-        assert_eq!(cmds, vec!["firefox --new-window".to_string()]);
-        assert_eq!(problems.len(), 3, "{problems:?}");
-    }
-}
-
 /// The dmabuf formats offered when the backend names none: linear only, which any GPU can
 /// import and scan out.
 const DMABUF_FORMATS: [smithay::backend::allocator::Format; 2] = [
@@ -1189,4 +1132,59 @@ pub fn parse_color_hex(hex: &str) -> Option<smithay::backend::renderer::Color32F
 #[cfg(feature = "probe_unsafe_block")]
 pub fn probe_unsafe_block() {
     unsafe {}
+}
+
+#[cfg(test)]
+mod key_binding_config_tests {
+    use super::user_key_bindings;
+    use infynitae_core::input::keys::{KeyAction, parse_chord};
+
+    fn kv(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// BIND_ moves actions (several chords allowed) or frees them with "none"; EXEC_ adds
+    /// commands in order; lines that cannot be understood are reported, not applied.
+    #[test]
+    fn config_lines_become_bindings_and_commands() {
+        let (b, cmds, problems) = user_key_bindings(
+            &kv(&[
+                ("TERMINAL", "SUPER+RETURN,SUPER+T"),
+                ("LAUNCHER", "none"),
+                ("TELEPORT", "SUPER+X"),
+                ("LOCK", "SUPER+NOPE"),
+            ]),
+            &kv(&[
+                ("EXEC_BROWSER", "SUPER+B: firefox --new-window"),
+                ("EXEC_BAD", "firefox"),
+            ]),
+        );
+        assert_eq!(
+            b.chords,
+            vec![
+                (
+                    parse_chord("SUPER+RETURN").unwrap(),
+                    Some(KeyAction::SpawnTerminal)
+                ),
+                (
+                    parse_chord("SUPER+T").unwrap(),
+                    Some(KeyAction::SpawnTerminal)
+                ),
+                (parse_chord("SUPER+B").unwrap(), Some(KeyAction::Exec(0))),
+            ]
+        );
+        assert_eq!(
+            b.moved,
+            vec![
+                KeyAction::SpawnTerminal,
+                KeyAction::ToggleLauncher,
+                KeyAction::SpawnLockScreen
+            ]
+        );
+        assert_eq!(cmds, vec!["firefox --new-window".to_string()]);
+        assert_eq!(problems.len(), 3, "{problems:?}");
+    }
 }

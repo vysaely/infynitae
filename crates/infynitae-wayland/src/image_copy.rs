@@ -90,7 +90,7 @@ impl WaylandState {
         session.shm_format(wl_shm::Format::Xrgb8888);
         session.shm_format(wl_shm::Format::Argb8888);
         if let Some(dev) = self.dmabuf_main_dev {
-            session.dmabuf_device((dev as u64).to_ne_bytes().to_vec());
+            session.dmabuf_device(dev.to_ne_bytes().to_vec());
             for format in [DRM_XRGB8888, DRM_ARGB8888] {
                 session.dmabuf_format(format, MOD_LINEAR.to_ne_bytes().to_vec());
             }

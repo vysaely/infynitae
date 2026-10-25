@@ -106,14 +106,11 @@ impl ScreencopyState {
             if let Ok(content) = std::fs::read_to_string(config_path) {
                 for line in content.lines() {
                     let line_clean = line.split('#').next().unwrap_or("").trim();
-                    if let Some((k, v)) = line_clean.split_once('=') {
-                        if k.trim() == "SCREENCOPY_CURSOR" {
-                            let mode = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
-                            hide = matches!(
-                                mode.to_lowercase().as_str(),
-                                "0" | "false" | "off" | "no"
-                            );
-                        }
+                    if let Some((k, v)) = line_clean.split_once('=')
+                        && k.trim() == "SCREENCOPY_CURSOR"
+                    {
+                        let mode = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                        hide = matches!(mode.to_lowercase().as_str(), "0" | "false" | "off" | "no");
                     }
                 }
             }
