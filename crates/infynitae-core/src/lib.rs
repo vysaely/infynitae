@@ -1764,6 +1764,41 @@ impl Core {
         self.lattice.retain(|l| l.output != output);
     }
 
+    /// One window alone, for capturing it (sharing a window): its shown surfaces under a view
+    /// whose origin is the corner of its window geometry, at zoom 1 and output scale `scale`, the
+    /// size of the window geometry. Nothing else is in it: no other window, no layer surface,
+    /// no cursor. `None` for a window that is not mapped or has no size.
+    pub fn window_frame(
+        &self,
+        element: stage::ElementId,
+        scale: f64,
+    ) -> Option<render::ProjectionFrame> {
+        self.stage.mapped(element)?;
+        let anchor = self.stage.anchor(element)?;
+        let tree = self.stage.tree(element)?;
+        let size = tree.geometry.size;
+        if size.w <= 0 || size.h <= 0 {
+            return None;
+        }
+        let view_size = (
+            (f64::from(size.w) * scale).round() as u32,
+            (f64::from(size.h) * scale).round() as u32,
+        );
+        let centre = geom::CanvasPos {
+            x: anchor.x * geom::Q16_ONE + i64::from(size.w) * geom::Q16_ONE / 2,
+            y: anchor.y * geom::Q16_ONE + i64::from(size.h) * geom::Q16_ONE / 2,
+        };
+        let view = projection::View::new(projection::ViewParams {
+            centre,
+            zoom: 1.0,
+            scale,
+            view_size,
+        })
+        .ok()?;
+        let entries = render::entries_for(&view, element, anchor, tree);
+        Some(render::ProjectionFrame { view, entries })
+    }
+
     /// Produces the render list of an output and records it as that output's ProjectionFrame.
     pub fn render_list(
         &mut self,

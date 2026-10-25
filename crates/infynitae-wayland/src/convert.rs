@@ -615,6 +615,35 @@ where
     elements.retain(|e| !e.geometry(Scale::from(k)).is_empty());
 }
 
+/// A window alone for a capture of it (window sharing): its surfaces at zoom 1 and the capture
+/// scale, the frame's `k` and its size in px (`Core::window_frame`). `None` when the window
+/// cannot be captured now: unmapped, no size, private, or the session locked (checked again
+/// here, when it is drawn: a capture queued just before the lock is not drawn).
+#[allow(clippy::type_complexity)]
+pub fn window_capture_elements<R>(
+    state: &WaylandState,
+    renderer: &mut R,
+    window: infynitae_core::stage::ElementId,
+) -> Result<Option<(Vec<SurfaceElement<R>>, f64, (i32, i32))>, R::Error>
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+{
+    let Some(frame) = state
+        .core
+        .window_frame(window, state.window_capture_scale())
+    else {
+        return Ok(None);
+    };
+    let k = frame.view.k;
+    let size = (frame.view.size.0 as i32, frame.view.size.1 as i32);
+    let elements = render_elements(renderer, &state.registry, &frame.entries, k)?
+        .into_iter()
+        .map(|(_, e)| e)
+        .collect();
+    Ok(Some((elements, k, size)))
+}
+
 /// One frame's elements for screencopy, excluding any private window (hidden from screenshots/screenshares).
 pub fn output_elements_screencopy<R>(
     state: &mut WaylandState,

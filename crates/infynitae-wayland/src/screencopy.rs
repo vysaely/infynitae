@@ -32,6 +32,9 @@ pub struct PendingFrame {
     pub overlay_cursor: bool,
     pub with_damage: bool,
     pub region: Option<(i32, i32, i32, i32)>,
+    /// A window captured alone (window sharing) instead of the output: drawn from
+    /// `Core::window_frame`, the output only says which screen's loop draws it.
+    pub window: Option<infynitae_core::stage::ElementId>,
 }
 
 impl PendingFrame {
@@ -391,6 +394,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
                     overlay_cursor: data.overlay_cursor,
                     with_damage: false,
                     region: data.region,
+                    window: None,
                 });
             }
             zwlr_screencopy_frame_v1::Request::CopyWithDamage { buffer } => {
@@ -414,6 +418,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
                     overlay_cursor: data.overlay_cursor,
                     with_damage: true,
                     region: data.region,
+                    window: None,
                 });
             }
             zwlr_screencopy_frame_v1::Request::Destroy => {

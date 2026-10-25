@@ -7,13 +7,22 @@
 //! A captured frame joins the wlr-screencopy queue (`screencopy::PendingFrame`): the backend
 //! draws both the same way. A session announces the output's size, shm formats and the GPU and
 //! linear dmabuf formats; when the size changes, the next capture fails with
-//! `buffer_constraints` and the new constraints follow (the protocol's resize path). Window
-//! capture (foreign toplevel sources) and cursor sessions are not offered: a cursor session's
-//! capture session is stopped at once.
+//! `buffer_constraints` and the new constraints follow (the protocol's resize path).
+//!
+//! A window alone can be captured too (`ext-foreign-toplevel-image-capture-source-v1`, a window
+//! of `ext_foreign_toplevel_list_v1`): sharing one window. It is drawn by itself at zoom 1 and
+//! the first screen's scale (`Core::window_frame`), the size of its window geometry, wherever it
+//! is on the canvas and whether or not it is in view. Never while the session is locked, never
+//! a private window (`PRIVACY_APPS`, `PRIVACY_TITLES`): such a capture fails. Cursor sessions
+//! are not offered: a cursor session's capture session is stopped at once.
 
 use std::sync::Mutex;
 
 use infynitae_core::output::OutputId;
+use infynitae_core::stage::ElementId;
+use smithay::reexports::wayland_protocols::ext::image_capture_source::v1::server::ext_foreign_toplevel_image_capture_source_manager_v1::{
+    self, ExtForeignToplevelImageCaptureSourceManagerV1,
+};
 use smithay::reexports::wayland_protocols::ext::image_capture_source::v1::server::{
     ext_image_capture_source_v1::{self, ExtImageCaptureSourceV1},
     ext_output_image_capture_source_manager_v1::{self, ExtOutputImageCaptureSourceManagerV1},
@@ -45,6 +54,7 @@ const MOD_LINEAR: u64 = 0;
 /// The two globals, alive for the state's lifetime.
 pub struct ImageCopyState {
     _sources: GlobalId,
+    _window_sources: GlobalId,
     _manager: GlobalId,
 }
 
@@ -53,20 +63,32 @@ impl ImageCopyState {
         Self {
             _sources: dh
                 .create_global::<WaylandState, ExtOutputImageCaptureSourceManagerV1, ()>(1, ()),
+            _window_sources: dh
+                .create_global::<WaylandState, ExtForeignToplevelImageCaptureSourceManagerV1, ()>(
+                    1,
+                    (),
+                ),
             _manager: dh.create_global::<WaylandState, ExtImageCopyCaptureManagerV1, ()>(1, ()),
         }
     }
 }
 
-/// An output capture source: the output it was made for (`None` when unknown).
-pub struct SourceData {
-    output: Option<OutputId>,
+/// What a capture source shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    Output(OutputId),
+    Window(ElementId),
 }
 
-/// A capture session: its output, whether cursors are painted, and the buffer size it last
+/// A capture source: what it was made for (`None` when unknown).
+pub struct SourceData {
+    target: Option<Target>,
+}
+
+/// A capture session: its target, whether cursors are painted, and the buffer size it last
 /// announced.
 pub struct SessionData {
-    output: Option<OutputId>,
+    target: Option<Target>,
     paint_cursors: bool,
     size: Mutex<Option<(i32, i32)>>,
 }
@@ -79,10 +101,27 @@ pub struct FrameData {
 }
 
 impl WaylandState {
-    /// Tells `session` what to capture into for `output` now, or that it stopped (the output
-    /// is gone).
+    /// The scale a window is captured at: the first screen's.
+    pub(crate) fn window_capture_scale(&self) -> f64 {
+        self.core.outputs().first().map_or(1.0, |o| o.scale)
+    }
+
+    /// The size of a capture of `target` now; `None` when it cannot be captured (the output is
+    /// gone, the window unmapped).
+    fn capture_size(&self, target: Target) -> Option<(i32, i32)> {
+        match target {
+            Target::Output(o) => self.output_mode_size(o),
+            Target::Window(e) => self
+                .core
+                .window_frame(e, self.window_capture_scale())
+                .map(|f| (f.view.size.0 as i32, f.view.size.1 as i32)),
+        }
+    }
+
+    /// Tells `session` what to capture into for its target now, or that it stopped (the
+    /// target is gone).
     fn send_capture_constraints(&self, session: &ExtImageCopyCaptureSessionV1, data: &SessionData) {
-        let Some(size) = data.output.and_then(|o| self.output_mode_size(o)) else {
+        let Some(size) = data.target.and_then(|t| self.capture_size(t)) else {
             session.stopped();
             return;
         };
@@ -128,8 +167,42 @@ impl Dispatch<ExtOutputImageCaptureSourceManagerV1, ()> for WaylandState {
             output,
         } = request
         {
-            let output = state.output_id_from_wl(&output);
-            data_init.init(source, SourceData { output });
+            let target = state.output_id_from_wl(&output).map(Target::Output);
+            data_init.init(source, SourceData { target });
+        }
+    }
+}
+
+impl GlobalDispatch<ExtForeignToplevelImageCaptureSourceManagerV1, ()> for WaylandState {
+    fn bind(
+        _state: &mut Self,
+        _dh: &DisplayHandle,
+        _client: &Client,
+        resource: New<ExtForeignToplevelImageCaptureSourceManagerV1>,
+        _global_data: &(),
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        data_init.init(resource, ());
+    }
+}
+
+impl Dispatch<ExtForeignToplevelImageCaptureSourceManagerV1, ()> for WaylandState {
+    fn request(
+        state: &mut Self,
+        _client: &Client,
+        _resource: &ExtForeignToplevelImageCaptureSourceManagerV1,
+        request: ext_foreign_toplevel_image_capture_source_manager_v1::Request,
+        _data: &(),
+        _dh: &DisplayHandle,
+        data_init: &mut DataInit<'_, Self>,
+    ) {
+        if let ext_foreign_toplevel_image_capture_source_manager_v1::Request::CreateSource {
+            source,
+            toplevel_handle,
+        } = request
+        {
+            let target = state.listed_toplevel(&toplevel_handle).map(Target::Window);
+            data_init.init(source, SourceData { target });
         }
     }
 }
@@ -177,7 +250,7 @@ impl Dispatch<ExtImageCopyCaptureManagerV1, ()> for WaylandState {
                 options,
             } => {
                 let data = SessionData {
-                    output: source.data::<SourceData>().and_then(|d| d.output),
+                    target: source.data::<SourceData>().and_then(|d| d.target),
                     paint_cursors: options
                         .into_result()
                         .is_ok_and(|o| o.contains(Options::PaintCursors)),
@@ -216,7 +289,7 @@ impl Dispatch<ExtImageCopyCaptureCursorSessionV1, ()> for WaylandState {
             let session = data_init.init(
                 session,
                 SessionData {
-                    output: None,
+                    target: None,
                     paint_cursors: false,
                     size: Mutex::new(None),
                 },
@@ -286,25 +359,44 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, FrameData> for WaylandState {
                     frame.failed(FailureReason::Unknown);
                     return;
                 };
-                let current = session.output.and_then(|o| state.output_mode_size(o));
-                let Some(output_id) = session.output.filter(|_| current.is_some()) else {
+                let current = session.target.and_then(|t| state.capture_size(t));
+                let Some(target) = session.target.filter(|_| current.is_some()) else {
                     frame.failed(FailureReason::Stopped);
                     data.session.stopped();
                     return;
                 };
+                if let Target::Window(e) = target
+                    && (state.is_locked() || state.is_element_private(e))
+                {
+                    // locked, or a window kept out of captures: nothing of it is shared
+                    frame.failed(FailureReason::Unknown);
+                    return;
+                }
                 if *session.size.lock().unwrap() != current {
-                    // the output changed size: the client reallocates for the new constraints
+                    // the target changed size: the client reallocates for the new constraints
                     frame.failed(FailureReason::BufferConstraints);
                     state.send_capture_constraints(&data.session, session);
                     return;
                 }
+                // a window is drawn by the first screen's loop
+                let (output_id, window) = match target {
+                    Target::Output(o) => (o, None),
+                    Target::Window(e) => match state.core.outputs().first() {
+                        Some(o) => (o.id, Some(e)),
+                        None => {
+                            frame.failed(FailureReason::Unknown);
+                            return;
+                        }
+                    },
+                };
                 state.screencopy.pending.lock().unwrap().push(PendingFrame {
                     frame: CaptureFrame::Ext(frame.clone()),
                     output_id,
                     buffer,
-                    overlay_cursor: session.paint_cursors,
+                    overlay_cursor: session.paint_cursors && window.is_none(),
                     with_damage: true,
                     region: None,
+                    window,
                 });
             }
             ext_image_copy_capture_frame_v1::Request::Destroy => {

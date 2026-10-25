@@ -170,9 +170,9 @@ reload_polkit() {
     fi
 }
 
-# Screen sharing (xdg-desktop-portal-wlr): which screen a share shows. SCREENSHARE_ASK=false
-# (default) shares the first screen as soon as an app asks; true lets you click the screen to
-# share. Written only when absent or marked as ours (a hand-written config is the user's); the
+# Screen sharing (xdg-desktop-portal-wlr): what a share shows. SCREENSHARE_ASK=false (default)
+# shares the first screen as soon as an app asks; true asks, in a menu of the screens and the
+# windows (MENU_PICKER, fuzzel by default; without one, click the screen with slurp). Written only when absent or marked as ours (a hand-written config is the user's); the
 # portal reads it when it next starts, so a running one is stopped (it restarts on demand).
 reload_screenshare() {
     cfg="$HOME/.config/xdg-desktop-portal-wlr/config"
@@ -190,7 +190,12 @@ reload_screenshare() {
         echo "# delete this line to keep your own settings"
         echo "[screencast]"
         echo "force_mod_linear=1"
-        if is_true "${SCREENSHARE_ASK:-false}" || [ -z "$first" ]; then
+        picker="${MENU_PICKER:-fuzzel --dmenu}"
+        if is_true "${SCREENSHARE_ASK:-false}" && command -v "${picker%% *}" >/dev/null 2>&1; then
+            # "Monitor: DP-1" and "Window: title (app)" lines, one picked
+            echo "chooser_type=dmenu"
+            echo "chooser_cmd=$picker"
+        elif is_true "${SCREENSHARE_ASK:-false}" || [ -z "$first" ]; then
             echo "chooser_type=simple"
             echo "chooser_cmd=slurp -f %o -or"
         else
@@ -200,7 +205,7 @@ reload_screenshare() {
     } > "$cfg.new" && mv -f "$cfg.new" "$cfg"
     systemctl --user stop xdg-desktop-portal-wlr.service 2>/dev/null || true
     if is_true "${SCREENSHARE_ASK:-false}"; then
-        echo "screenshare: click the screen to share when an app asks"
+        echo "screenshare: pick a screen or a window when an app asks"
     else
         echo "screenshare: ${first:-?} is shared as soon as an app asks"
     fi

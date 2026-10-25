@@ -1294,7 +1294,7 @@ fn render(data: &mut LoopData) {
         // Screencopy renders to an offscreen buffer and does not depend on DRM page flip / vblank.
         // Handling this first ensures pending screencopy requests are consumed immediately,
         // preventing the event loop from busy-spinning while DRM page flip is pending.
-        handle_screencopy(
+        serve_captures(
             &mut data.state,
             &mut data.renderer,
             &mut data.screens[i].screencopy_texture,
@@ -1484,8 +1484,9 @@ fn confirm_lock(data: &mut LoopData) {
     }
 }
 
-#[allow(unsafe_code)]
-fn handle_screencopy(
+/// Serves the captures waiting for `output_id`: the screen's (its frame, as shown), and the
+/// windows captured alone (each drawn by itself, `convert::window_capture_elements`).
+fn serve_captures(
     state: &mut WaylandState,
     renderer: &mut GlesRenderer,
     screencopy_texture: &mut Option<GlesTexture>,
@@ -1496,7 +1497,30 @@ fn handle_screencopy(
     if !state.screencopy.has_pending(output_id) {
         return;
     }
-    let pending = state.screencopy.take_pending(output_id);
+    let (windows, pending): (Vec<_>, Vec<_>) = state
+        .screencopy
+        .take_pending(output_id)
+        .into_iter()
+        .partition(|p| p.window.is_some());
+    for req in windows {
+        let Some(window) = req.window else { continue };
+        match convert::window_capture_elements(state, renderer, window) {
+            Ok(Some((elements, k, size))) => {
+                // a window's own transparency is kept
+                let mut texture = None;
+                handle_screencopy(
+                    renderer,
+                    &mut texture,
+                    vec![req],
+                    &elements,
+                    size,
+                    k,
+                    smithay::backend::renderer::Color32F::TRANSPARENT,
+                );
+            }
+            _ => req.fail(),
+        }
+    }
     if pending.is_empty() {
         return;
     }
@@ -1524,7 +1548,31 @@ fn handle_screencopy(
             return;
         }
     };
+    handle_screencopy(
+        renderer,
+        screencopy_texture,
+        pending,
+        &elements,
+        size,
+        k,
+        clear,
+    );
+}
 
+/// Renders `elements` (`size` px at `k`) into each waiting capture's buffer: a dmabuf on the GPU,
+/// a shm buffer through a copy (U-008).
+#[allow(unsafe_code)]
+fn handle_screencopy<E>(
+    renderer: &mut GlesRenderer,
+    screencopy_texture: &mut Option<GlesTexture>,
+    pending: Vec<infynitae_wayland::screencopy::PendingFrame>,
+    elements: &[E],
+    size: (i32, i32),
+    k: f64,
+    clear: smithay::backend::renderer::Color32F,
+) where
+    E: smithay::backend::renderer::element::RenderElement<GlesRenderer>,
+{
     let now = infynitae_wayland::presentation_clock_now();
 
     // -------------------------------------------------------------------------
@@ -1561,7 +1609,7 @@ fn handle_screencopy(
                         .collect();
                     damage_tracker.render_output(renderer, &mut dmabuf_fb, 0, &relocated, clear)
                 } else {
-                    damage_tracker.render_output(renderer, &mut dmabuf_fb, 0, &elements, clear)
+                    damage_tracker.render_output(renderer, &mut dmabuf_fb, 0, elements, clear)
                 };
                 if render_res.is_ok() {
                     dmabuf_rendered = true;
@@ -1619,7 +1667,7 @@ fn handle_screencopy(
         smithay::utils::Scale::from(k),
         smithay::utils::Transform::Normal,
     );
-    if let Err(e) = damage_tracker.render_output(renderer, &mut framebuffer, 0, &elements, clear) {
+    if let Err(e) = damage_tracker.render_output(renderer, &mut framebuffer, 0, elements, clear) {
         eprintln!("[screencopy] Failed to render output: {e:?}");
         for p in remaining {
             p.fail();

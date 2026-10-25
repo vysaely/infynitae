@@ -44,6 +44,11 @@ and start it from `autostart.sh`, e.g. `fcitx5 -d`). An input method gets nothin
 screen is locked. Night light and screen power have only run in the test suite, not on
 a real screen yet.
 
+Screen sharing can share one window instead of a screen: with `SCREENSHARE_ASK="true"` a menu
+lists the screens and the windows. A shared window is drawn by itself, wherever it is on the
+canvas; a private window (`PRIVACY_APPS`, `PRIVACY_TITLES`) is never shared, and nothing is
+while the screen is locked. Only tested in the test suite so far.
+
 Display settings tools (wlr-randr, wdisplays, kanshi) can change a screen's mode, scale and
 position while you work (`wlr-output-management`). They cannot yet turn a screen off, rotate it
 or switch VRR; mode changes have only run in the test suite, not on a real screen.

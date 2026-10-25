@@ -73,6 +73,9 @@ these by date, e.g. "(owner, 2026-10-24)".
   orderly: signals reach the event loop through a self-pipe (2026-10-19).
 - **The lock screen fails closed** (2026-10-25): with `START_LOCKED`, the session ends if the lock
   cannot be engaged, and only the client holding the lock can unlock or draw the lock surface.
+- **One window can be shared** (2026-10-25): drawn by itself at zoom 1, the size of its window
+  geometry (its shadow left out), wherever it is on the canvas and whether or not it is in view.
+  The first screen's scale. Never a private window, never anything while locked.
 - **Input methods get nothing while locked** (2026-10-25): the keys go to the lock screen past
   an input method's keyboard grab, a virtual keyboard types nothing, and no text input is enabled,
   so no text (the password field included) reaches an input method or comes from one.

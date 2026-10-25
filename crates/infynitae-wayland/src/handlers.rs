@@ -211,6 +211,20 @@ impl WaylandState {
         self.list_toplevel(id, mapped);
     }
 
+    /// The window an `ext_foreign_toplevel_handle_v1` stands for, while it is listed.
+    pub(crate) fn listed_toplevel(
+        &self,
+        handle: &smithay::reexports::wayland_protocols::ext::foreign_toplevel_list::v1::server::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
+    ) -> Option<infynitae_core::stage::ElementId> {
+        let h =
+            smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle::from_resource(handle)?;
+        let identifier = h.identifier();
+        self.foreign_toplevels
+            .iter()
+            .find(|(_, t)| t.identifier() == identifier)
+            .map(|(id, _)| *id)
+    }
+
     /// Lists the element in `ext_foreign_toplevel_list_v1` while it is mapped, and closes its
     /// handle when it unmaps.
     fn list_toplevel(&mut self, id: infynitae_core::stage::ElementId, mapped: bool) {
