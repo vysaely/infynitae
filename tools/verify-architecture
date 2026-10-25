@@ -33,6 +33,7 @@ SMITHAY_REQ = "=0.7.0"
 SMITHAY_VERSION = "0.7.0"
 CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
 AUTHORIZED_SMITHAY_PATCH_REL = "vendor/smithay-0.7.0"
+AUTHORIZED_SMITHAY_MANIFEST_REL = "enforcement/smithay-0.7.0.sha256"
 AUTHORIZED_POINTER_SHA256 = "9c120d4101d7b2d3907d018a400dcd52e32e3be6b6cf6b64c80d0b421bbcb512"
 
 
@@ -312,13 +313,36 @@ def check_authorized_p1_patch(root, r):
         h = hashlib.sha256(f.read()).hexdigest()
     if h != AUTHORIZED_POINTER_SHA256:
         return r.check(False, "", f"pointer.rs sha256 mismatch (expected authorized P1 {AUTHORIZED_POINTER_SHA256}, got {h})")
-    import glob
-    reg_matches = glob.glob(os.path.expanduser("~/.cargo/registry/src/*/smithay-0.7.0"))
-    if reg_matches and os.path.isdir(reg_matches[0]):
-        code, out, _ = run(["diff", "-rq", os.path.join(reg_matches[0], "src"), os.path.join(patch_dir, "src")])
-        diff_lines = [l.strip() for l in out.splitlines() if l.strip()]
-        if len(diff_lines) != 1 or not diff_lines[0].endswith("pointer.rs differ"):
-            return r.check(False, "", f"vendor smithay has unauthorized local modifications beyond P1: {diff_lines}")
+    manifest_path = os.path.join(root, AUTHORIZED_SMITHAY_MANIFEST_REL)
+    if not os.path.isfile(manifest_path):
+        return r.check(False, "", f"vendor smithay manifest {manifest_path} missing")
+    expected = {}
+    with open(manifest_path, "r") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split(None, 1)
+            if len(parts) == 2:
+                expected[parts[1]] = parts[0]
+    actual_files = set()
+    mismatches = []
+    for dirpath, _, filenames in os.walk(patch_dir):
+        for fname in filenames:
+            full = os.path.join(dirpath, fname)
+            rel = os.path.relpath(full, patch_dir)
+            actual_files.add(rel)
+            with open(full, "rb") as fh:
+                actual_h = hashlib.sha256(fh.read()).hexdigest()
+            if rel not in expected:
+                mismatches.append(f"unexpected file: {rel}")
+            elif expected[rel] != actual_h:
+                mismatches.append(f"checksum mismatch: {rel}")
+    missing = set(expected.keys()) - actual_files
+    for rel in sorted(missing):
+        mismatches.append(f"missing file: {rel}")
+    if mismatches:
+        return r.check(False, "", f"vendor smithay has unauthorized local modifications beyond P1: {mismatches[:5]}")
     r.ok(f"vendor smithay source matches authorized minimal P1 patch (zero unauthorized modifications)")
     return True
 
@@ -972,6 +996,7 @@ GRAPH_SEEDS = [
     ("unpinned Smithay sources", "Cargo.toml", None, "patch-unpinned"),
     ("different Smithay revisions", "Cargo.toml", None, "patch-revision"),
     ("additional local Smithay modifications", f"{AUTHORIZED_SMITHAY_PATCH_REL}/src/wayland/seat/pointer.rs", None, "patch-modification"),
+    ("unauthorized modification of another vendored Smithay file", f"{AUTHORIZED_SMITHAY_PATCH_REL}/Cargo.toml", None, "patch-modification"),
     ("dependency upgrades", "crates/infynitae-wayland/Cargo.toml", None, "dep-upgrade"),
 ]
 
