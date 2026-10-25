@@ -60,6 +60,8 @@ OPTIONS:
                              (EXPERIMENTAL). The default when started with neither WAYLAND_DISPLAY
                              nor DISPLAY set, i.e. from a text console. Ctrl+Alt+Backspace quits;
                              Ctrl+Alt+F1..F12 switch VT
+    --locked                 (console) Start locked: black and locked until a lock screen
+                             (ext-session-lock) takes the lock and unlocks; nothing runs unlocked
     --nested                 Run as a window of the running desktop even without WAYLAND_DISPLAY
     --scale <FACTOR>         Console screens' scale (e.g. 1.5; default 1)
     --filter <nearest|linear> Texture scaling filter (default nearest for 0% blur)
@@ -120,6 +122,7 @@ fn main() -> ExitCode {
     let mut max_frames: Option<u64> = None;
     let mut xwayland_satellite: Option<std::path::PathBuf> = None;
     let mut no_xwayland = false;
+    let mut locked = false;
     let mut activation_policy = infynitae_core::input::focus::ActivationPolicy::Strict;
     let mut shell_socket = shell::default_path();
 
@@ -274,6 +277,7 @@ fn main() -> ExitCode {
                 shell_socket = Some(p.into());
             }
             "--no-shell" => shell_socket = None,
+            "--locked" => locked = true,
             "--no-xwayland" => {
                 no_xwayland = true;
                 xwayland_satellite = None;
@@ -569,6 +573,7 @@ fn main() -> ExitCode {
             scaling_filter: scaling_filter.clone(),
             direct_scanout,
             vrr,
+            locked,
         };
         match infynitae_backend_drm::run_console_with(
             core,

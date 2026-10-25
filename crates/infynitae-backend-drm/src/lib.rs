@@ -84,6 +84,8 @@ pub struct ConsoleOptions {
     /// the screen shows a fullscreen window (games, fullscreen video). Always-on VRR on the
     /// desktop makes video and cursor pacing uneven and flickers on some monitors.
     pub vrr: Option<bool>,
+    /// Start locked (`--locked`): locked before any client runs, until a lock client unlocks.
+    pub locked: bool,
 }
 
 /// What the console takes before Core sees a key (T6), given the evdev code and whether Ctrl and
@@ -462,6 +464,10 @@ pub fn run_console_with(
     state.set_console_target();
     // ext-session-lock: the console draws locked frames and routes keys through lock_key
     state.enable_session_lock();
+    if options.locked {
+        state.start_locked();
+        println!("[infynitae] Started locked: waiting for the lock screen");
+    }
 
     // the seat first: without it nothing can be opened
     let (mut seat, seat_notifier) = LibSeatSession::new()

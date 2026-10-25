@@ -363,3 +363,63 @@ fn another_client_cannot_replace_the_lock_surface() {
         "the lock surface was replaced"
     );
 }
+
+/// `--locked`: the session is locked before any lock client exists. No binding fires and no
+/// window gets a key; the lock screen, when it comes, takes the lock at once and is the only one
+/// that can unlock.
+#[test]
+fn a_session_started_locked_stays_locked_until_a_lock_client_unlocks() {
+    let mut r = Rig::x8();
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    let fx =
+        r.ls.state
+            .core_mut()
+            .set_focus(&mut r.ls.input, Some(w))
+            .unwrap();
+    r.ls.state.apply(&fx);
+    r.ls.pump();
+    let idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
+    r.ls.state.start_locked();
+    r.ls.pump();
+    assert!(r.ls.state.is_locked());
+
+    let before = r.ls.probe.key_events.len();
+    super_delete(&mut r);
+    assert!(
+        r.ls.probe.close_requests.is_empty(),
+        "no binding fires before the lock screen"
+    );
+    assert_eq!(
+        r.ls.probe.key_events.len(),
+        before,
+        "no window gets a key: {:?}",
+        &r.ls.probe.key_events[before..]
+    );
+    assert_ne!(r.ls.probe.kb.active.as_deref(), Some("W"));
+
+    let (lock, _surface) = lock(&mut r, 1);
+    assert!(
+        r.ls.probe.log.contains(&"lock 1 locked".to_string()),
+        "the lock screen takes the lock: {:?}",
+        r.ls.probe.log
+    );
+    key(&mut r, KEY_C, true);
+    key(&mut r, KEY_C, false);
+    let active = r.ls.probe.kb.active.clone().unwrap_or_default();
+    assert!(
+        active.starts_with('#'),
+        "the lock surface has the keyboard, not {active}"
+    );
+
+    lock.unlock_and_destroy();
+    r.ls.pump();
+    unlock_releases(&mut r);
+    assert!(!r.ls.state.is_locked(), "unlocked by the lock screen");
+    super_delete(&mut r);
+    assert_eq!(r.ls.probe.close_requests, [idx], "bindings work again");
+}

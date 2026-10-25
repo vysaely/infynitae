@@ -74,9 +74,22 @@ while true; do
         unset XAUTHORITY
     fi
 
+    # START_LOCKED, and every restart: the compositor itself starts locked (--locked), so nothing
+    # runs unlocked before the lock screen (session.sh starts it) takes the lock
+    LOCKED_ARG=""
+    if [ -n "$TTY_MODE" ]; then
+        case "${START_LOCKED:-false}" in
+            1|true|yes|on|TRUE|True) LOCKED_ARG="--locked" ;;
+        esac
+        [ "${INFYNITAE_RESTART_LOCKED:-}" = "1" ] && LOCKED_ARG="--locked"
+    fi
+
     # No pipe: $? must be the compositor's own exit status
-    "$BIN" $TTY_MODE $XWLS --exec "$SESSION_SCRIPT" "$@" >> "$SESSION_LOG" 2>&1
+    "$BIN" $TTY_MODE $LOCKED_ARG $XWLS --exec "$SESSION_SCRIPT" "$@" >> "$SESSION_LOG" 2>&1
     STATUS=$?
+    # every later start is locked (session.sh): a compositor that crashed, or was quit, while
+    # the screen was locked must not come back unlocked, whatever START_LOCKED says
+    export INFYNITAE_RESTART_LOCKED=1
     DURATION=$(( $(date +%s) - START_TIME ))
     cleanup
     echo "[infynitae-session] $(date '+%F %T') Compositor exited with status $STATUS after ${DURATION}s" >> "$SESSION_LOG"
@@ -93,9 +106,11 @@ while true; do
             MSG="[infynitae-session] Crash loop: $FAILS failures in a row (last status $STATUS). Not restarting; see $SESSION_LOG"
             echo "$MSG" >> "$SESSION_LOG"
             echo "$MSG" >&2
-            # a rescue shell only makes sense on a real terminal
+            # a rescue shell only makes sense on a real terminal, and only after your password:
+            # with tty1 autologin nobody typed one, and the shell would be anyone's at the
+            # keyboard. su to yourself asks for it; a wrong one ends the login.
             if [ -t 0 ]; then
-                exec "${SHELL:-/bin/sh}"
+                exec su -l "$(id -un)"
             fi
             exit 1
         fi

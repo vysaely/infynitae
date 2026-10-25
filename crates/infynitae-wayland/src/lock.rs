@@ -18,7 +18,8 @@
 //! its own confirmed lock). A lock surface is taken only from the holder's client.
 //!
 //! A lock outlives its client (the protocol's rule): when the lock client dies, the screen stays
-//! black and locked, and a new lock client may take the lock over. Only backends that draw it
+//! black and locked, and a new lock client may take the lock over. A session started locked
+//! ([`WaylandState::start_locked`]) begins in that state: locked, with no lock client yet. Only backends that draw it
 //! offer the global ([`WaylandState::enable_session_lock`]).
 //!
 //! Core's focus changes while locked move no keyboard focus, and no popup may take a grab: the
@@ -86,6 +87,18 @@ impl WaylandState {
                 just_unlocked: false,
             });
         }
+    }
+
+    /// Starts the session locked, before any client connects (`--locked`): black and locked as
+    /// after a lock client's death, until a lock client takes the lock and unlocks it. No window,
+    /// binding or command runs unlocked between the start and the lock screen's arrival.
+    pub fn start_locked(&mut self) {
+        self.enable_session_lock();
+        if let Some(l) = self.session_lock.as_mut() {
+            l.locked = true;
+        }
+        let kb = self.keyboard_handle();
+        kb.set_focus(self, None, SERIAL_COUNTER.next_serial());
     }
 
     /// The session is locked: only lock surfaces are drawn and given input.

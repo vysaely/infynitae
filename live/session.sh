@@ -14,7 +14,8 @@ fi
 # 1b. Start Screen (replacing the TTY prompt with the lock screen). First, before any window can
 # open: nothing else starts until the compositor has confirmed the lock. If it cannot be engaged
 # (no locker installed, the locker failed), the session ends rather than stay unlocked.
-if [ "$START_LOCKED" = "1" ] || [ "$START_LOCKED" = "true" ] || [ "$1" = "--lock" ]; then
+if [ "$START_LOCKED" = "1" ] || [ "$START_LOCKED" = "true" ] || [ "$1" = "--lock" ] \
+    || [ "${INFYNITAE_RESTART_LOCKED:-}" = "1" ]; then
     LOCK_BIN=""
     if [ -x "$HOME/.local/bin/infynitae-lock" ]; then
         LOCK_BIN="$HOME/.local/bin/infynitae-lock"
