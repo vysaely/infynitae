@@ -247,13 +247,13 @@ def main():
     print("\n" + "=" * 70)
     if all_passed:
         print("VERIFICATION RESULT: ALL CHECKS PASSED")
-        print("Environment and repository are ready for authorized development handoff.")
+        print("Environment and repository are ready for development.")
         try:
-            with open(os.path.join(repo_root, "docs", "foundation", "CHECKPOINT.md")) as f:
-                phase = next((l.strip() for l in f if l.startswith("CURRENT_PHASE:")), "unknown")
+            with open(os.path.join(repo_root, "docs", "STATUS.md")) as f:
+                updated = next((l.strip() for l in f if l.startswith("Updated ")), "date unknown")
         except OSError:
-            phase = "CHECKPOINT.md unreadable"
-        print(f"Current gate (docs/archive/CHECKPOINT.md): {phase}")
+            updated = "docs/STATUS.md unreadable"
+        print(f"Project status (docs/STATUS.md): {updated}")
         print("=" * 70)
         return 0
     else:

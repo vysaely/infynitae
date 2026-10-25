@@ -1,6 +1,19 @@
 # Infynitae
 
-Infinite canvas Wayland compositor built in Rust for Arch Linux. Vibecoded for my own system and workflow.
+An infinite-canvas Wayland compositor for Arch Linux, written in Rust. Windows live on one
+endless canvas; each screen is a camera you pan and zoom over it. Built for my own desktop and
+workflow, with AI agents doing a lot of the typing.
+
+**Ready out of the box, every piece your choice.** A fresh install is a complete desktop:
+terminal, launcher, lock screen, wallpaper, screenshots, screen sharing, clipboard history,
+session restore. Nothing of it is fixed. Each app is a setting (`TERMINAL`, `LAUNCHER`,
+`FILE_MANAGER`, …, or any command), every key can be rebound, the optional helpers (clipboard
+history, session restore, the replay buffer, the island) are switches, and the whole
+configuration is one commented file. No settings daemons: what the toolkits need is written to
+their files once.
+
+Status: my daily desktop, tested on my own hardware only. See [docs/STATUS.md](docs/STATUS.md)
+for what is solid, what is untested and what is missing.
 
 ## Keybindings
 
@@ -85,7 +98,13 @@ infynitae-update
 
 ## Documentation
 
-For a complete breakdown of every component, toolkit compatibility rule, dependency list, and instructions for customizing or building your own Wayland compositor and desktop environment, see the [Architecture & Standalone Desktop Blueprint](docs/COMPOSITOR_AND_DESKTOP_GUIDE.md).
+| | |
+| :--- | :--- |
+| [docs/GUIDE.md](docs/GUIDE.md) | Using it: install, starting a session, the helpers, choosing your own apps, themes and cursors, troubleshooting |
+| [docs/STATUS.md](docs/STATUS.md) | What works, what is untested, what is missing |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Working on it: layout, building, the test suite and the checks, the design docs |
+| [docs/DECISIONS.md](docs/DECISIONS.md) | The choices behind how it behaves, and why |
+| [docs/foundation/](docs/foundation) | The design specification: invariants (`INV-*`), state machines (`M*`), formulas (`F-*`) |
 
 ## Acknowledgements
 

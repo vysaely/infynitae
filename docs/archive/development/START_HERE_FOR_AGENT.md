@@ -37,7 +37,7 @@ You are continuing **Infynitae Native**, a Rust/Smithay spatial Wayland composit
 When resuming on another OS or new installation (e.g. Arch Linux / CachyOS):
 
 1. **Clone repository**: `git clone https://github.com/vysaely/infynitae.git` (or extract `Infynitae-Portable.tar.zst`).
-2. **Read `START_HERE_FOR_AGENT.md`**: review this document and `docs/development/RESTORE_ON_ARCH_LINUX.md` for environment prerequisites.
+2. **Read `START_HERE_FOR_AGENT.md`**: review this document and `docs/archive/development/RESTORE_ON_ARCH_LINUX.md` for environment prerequisites.
 3. **Verify repository and environment**:
    ```sh
    tools/verify-development-environment
@@ -58,7 +58,7 @@ go through a new amendment layer; never edit sealed text.
 ## Read, in this order
 
 1. `docs/archive/CHECKPOINT.md`
-2. `docs/development/PROJECT_HANDOFF.md` (navigation aid only)
+2. `docs/archive/development/PROJECT_HANDOFF.md` (navigation aid only)
 3. `docs/foundation/FOUNDATION_IMPLEMENTATION_PLAN.md` — INC-0, INC-1, gates
 4. `docs/foundation/FOUNDATION_TEST_PLAN.md` — OB-19, OB-36
 5. `docs/foundation/FOUNDATION_INVARIANTS.md`; `FOUNDATION_ARCHITECTURE.md` §C1 (crates/DAG), §P0 (namespace map), §F (formulas)

@@ -134,7 +134,7 @@ Only the `<!-- living:… -->` regions are current; text outside them is histori
 
 ## 32. Before touching code, read
 
-1. `docs/development/START_HERE_FOR_AGENT.md`
+1. `docs/archive/development/START_HERE_FOR_AGENT.md`
 2. `docs/archive/CHECKPOINT.md`
 3. FOUNDATION_IMPLEMENTATION_PLAN.md (INC-0, INC-1, gates)
 4. FOUNDATION_TEST_PLAN.md (OB-19, OB-36)

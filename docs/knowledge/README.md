@@ -10,28 +10,24 @@ The **Permanent Engineering Knowledge System** (`docs/knowledge/`) is a structur
 
 ---
 
-## Authority & Separation of Concerns
+## Where it sits
+
+`docs/knowledge/` is the project's engineering memory: research, measurements, decisions and,
+above all, approaches that were tried and rejected (`pitfalls/`), so they are not proposed again.
+It explains; it does not set rules. The rules are the design spec in `docs/foundation/`
+(invariants, state machines, formulas) and the behaviour choices in `docs/DECISIONS.md`; where a
+record and those disagree, they win and the record should be corrected or marked `SUPERSEDED`.
 
 ```
-docs/
-├── foundation/           <-- AUTHORITATIVE & SEALED GOVERNANCE
-│   ├── CHECKPOINT.md     (Current ratified increment gate)
-│   ├── FOUNDATION_INVARIANTS.md (Mathematical & architectural invariants)
-│   ├── FOUNDATION_ARCHITECTURE.md (Crate topology, DAG, namespace maps)
-│   └── PROTOTYPE_DECISION_LEDGER.md (Ratified project decisions)
-│
-└── knowledge/            <-- NON-AUTHORITATIVE ENGINEERING MEMORY
-    ├── INDEX.md          (Master taxonomy & record directory)
-    ├── architecture/     (Core architectural invariants & proofs)
-    ├── research/         (External systems research & audits)
-    ├── decisions/        (Engineering resolutions & bug postmortems)
-    ├── experiments/      (Empirical benchmarks & mutation test harnesses)
-    ├── pitfalls/         (Negative knowledge & rejected anti-patterns)
-    └── roadmap/          (Future milestone blueprints)
+knowledge/
+├── INDEX.md          every record, by subsystem and by upcoming work
+├── architecture/     how Core's model works, and why
+├── research/         other compositors and graphics stacks (driftwm, DWM/DXGI)
+├── decisions/        engineering resolutions and bug postmortems
+├── experiments/      benchmarks and mutation-test records
+├── pitfalls/         rejected approaches and the evidence against them
+└── roadmap/          plans for later work
 ```
-
-> [!IMPORTANT]
-> **Authority Invariant:** Files in `docs/knowledge/` are strictly non-authoritative. They may document, explain, and cross-reference sealed foundation requirements, but they **cannot modify, supersede, or override** any document in `docs/foundation/`.
 
 ---
 
@@ -58,7 +54,7 @@ Every individual record in `docs/knowledge/` follows a standard schema validated
 - `adoption_status`: Allowed enum:
   - `RESEARCH`: Candidate for investigation.
   - `PROPOSED`: Proposed for implementation.
-  - `APPROVED`: Ratified by governance.
+  - `APPROVED`: Decided, not yet built.
   - `IMPLEMENTED`: Landed in codebase.
   - `VALIDATED`: Verified via automated mutation tests.
   - `REJECTED`: Formally discarded.
@@ -83,8 +79,10 @@ The integrity of the knowledge system is enforced automatically by:
 ```bash
 tools/verify-knowledge
 ```
-The script validates record ID uniqueness, metadata completeness, link integrity, and ensures zero accidental modifications to `docs/foundation/`.
+It checks unique record IDs, the metadata fields, the six sections, working relative links,
+supersession links, that every record is listed in `INDEX.md`, and (outside CI) that no record
+present on `main` was deleted: mark it `SUPERSEDED` instead. It needs only Python 3 and git.
 
-Since 2026-10-14 it also: compares `docs/foundation/` with the merge base of `HEAD` and `main` (so main advancing is not reported as an edit); fails if a record present at that merge base was removed (mark it `SUPERSEDED` instead); fails if a record is not linked from `INDEX.md`; and checks relative links in the meta documents. It needs no network, service or dependency beyond Python 3 and git.
-
-CI (`.github/workflows/ci.yml`, job `foundation-docs`) runs `tools/verify-knowledge --content-only` and `tools/verify-knowledge --self-test` on every push and pull request. `--content-only` skips the two merge-base checks: CI's shallow checkout has no `main`, and governance branches change `docs/foundation/` legitimately (guarded there by `tools/check-foundation-docs`). A deleted indexed record still fails through `INDEX.md`'s broken link. `--self-test` seeds nine defects one at a time into a temporary copy and requires each to be detected. Run the plain command locally before committing knowledge changes.
+CI runs `tools/verify-knowledge --content-only` (no git checks: CI's shallow checkout has no
+`main`) and `--self-test`, which seeds nine defects one at a time and requires each to be caught.
+Run the plain command locally before committing knowledge changes.

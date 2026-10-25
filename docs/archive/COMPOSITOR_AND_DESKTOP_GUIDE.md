@@ -118,7 +118,7 @@ To run a fully functional, out-of-the-box Wayland desktop environment without in
 
 ## 4. Toolkit Compatibility Matrix
 
-To prevent crashes, fuzzy fonts, and scaling artifacts, [`live/env.sh`](../live/env.sh) configures every major toolkit as follows:
+To prevent crashes, fuzzy fonts, and scaling artifacts, [`live/env.sh`](../../live/env.sh) configures every major toolkit as follows:
 
 | Toolkit / Runtime | Environment Configuration | Why It Is Necessary |
 | :--- | :--- | :--- |

@@ -100,7 +100,7 @@ agy --dangerously-skip-permissions
 ```
 
 Direct the agent to:
-1. Read `docs/development/START_HERE_FOR_AGENT.md`.
+1. Read `docs/archive/development/START_HERE_FOR_AGENT.md`.
 2. Inspect `docs/archive/CHECKPOINT.md` to confirm the active gate.
 3. Confirm that the current gate is:
    - **Phase E: PASSED** (`audit/phase-e-final/VERDICT.md`).

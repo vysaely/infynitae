@@ -1,12 +1,12 @@
 # Agent Integration Proposal: Directing Autonomous Coding Agents
 
 **Document:** Proposed Agent Integration Directives (`AGENTS.md` / `CLAUDE.md`)  
-**Status:** PROPOSED — PENDING OWNER APPROVAL. Reconciliation 2026-10-14: a one-item pointer (item 7, "Read, in this order") was added to `docs/development/START_HERE_FOR_AGENT.md` on `knowledge/integration-2026-10-14` in its own commit, so it can be dropped on its own; the longer text below stays a proposal.  
+**Status:** PROPOSED — PENDING OWNER APPROVAL. Reconciliation 2026-10-14: a one-item pointer (item 7, "Read, in this order") was added to `docs/archive/development/START_HERE_FOR_AGENT.md` on `knowledge/integration-2026-10-14` in its own commit, so it can be dropped on its own; the longer text below stays a proposal.  
 **Context:** Guidelines for AGY, Claude Code, Codex, and human developers to consult and maintain the Knowledge System.
 
 ---
 
-## 1. Minimal Proposed Additions to `docs/development/START_HERE_FOR_AGENT.md`
+## 1. Minimal Proposed Additions to `docs/archive/development/START_HERE_FOR_AGENT.md`
 
 Add the following section under *"Read, in this order"*:
 
