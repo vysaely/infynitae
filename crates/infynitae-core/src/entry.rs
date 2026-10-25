@@ -2086,6 +2086,40 @@ impl Core {
         Ok(fx)
     }
 
+    /// Changes the arrangement position of a connected output. Not a camera authority: no proof
+    /// is minted and no camera item is called. The view, ProjectionFrame and membership are rebuilt;
+    /// the pointer is clamped. Effects: `OutputChanged`, then leaves and enters.
+    pub fn output_arranged(
+        &mut self,
+        token: &mut OutputLifecycleToken,
+        output: OutputId,
+        position: (i32, i32),
+    ) -> Result<Vec<Effect>, EntryError> {
+        self.check(token.core_id)?;
+        let slot = self
+            .outputs
+            .iter_mut()
+            .find(|o| o.id == output)
+            .ok_or(EntryError::UnknownOutput)?;
+        slot.arrangement = (position.0 as f64, position.1 as f64);
+        let model = slot.clone();
+        self.update_lattice(output);
+        self.invalidate_frame(output);
+        self.pointer = pointer::reconfigured(self.pointer, &model);
+        let mut fx = vec![Effect::OutputChanged(output)];
+        fx.extend(self.layers_output_reconfigured(output));
+        fx.extend(self.fullscreen_output_reconfigured(output));
+        fx.extend(self.visibility_pass());
+        fx.extend(self.reconcile_constraints());
+        let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
+        if on_it && !self.input.interaction.active() && !self.locked() {
+            fx.extend(self.true_position());
+        }
+        fx.extend(self.settle_all_epochs());
+        Self::hints_before_configures(&mut fx);
+        Ok(fx)
+    }
+
     /// M4 `Enabled → Removed` (INV-OUTPUT-1): the camera is unbound and kept (one proof); the
     /// output's ProjectionFrame is dropped; the pointer is relocated to a surviving output
     /// (F-RELOCATE-1) or, when none survives, enters `NoOutput`. Effects: every leave for the
@@ -2531,6 +2565,35 @@ mod tests {
             want,
             "a pointer inside the new extent is unchanged"
         );
+    }
+
+    #[test]
+    fn output_arranged_moves_output_and_emits_output_changed() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        let (o, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        assert_eq!(c.output(o).unwrap().arrangement, (0.0, 0.0));
+
+        let fx = c.output_arranged(&mut t, o, (500, 300)).unwrap();
+        assert_eq!(fx[0], Effect::OutputChanged(o));
+        assert_eq!(c.output(o).unwrap().arrangement, (500.0, 300.0));
+    }
+
+    #[test]
+    fn output_arranged_rejections_mutate_nothing() {
+        let (mut c, _, _, mut t) = Core::new(PersistedCameras::default());
+        let (o, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let (_other, _, _, mut foreign) = Core::new(PersistedCameras::default());
+
+        assert_eq!(
+            c.output_arranged(&mut foreign, o, (100, 200)).err(),
+            Some(EntryError::ForeignPort)
+        );
+        assert_eq!(
+            c.output_arranged(&mut t, OutputId::for_test(99), (100, 200))
+                .err(),
+            Some(EntryError::UnknownOutput)
+        );
+        assert_eq!(c.output(o).unwrap().arrangement, (0.0, 0.0));
     }
 
     /// INV-OUTPUT-1 zero outputs: before any connect and after the last disconnect the pointer is
