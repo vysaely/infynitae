@@ -1,12 +1,13 @@
 //! Port-carrying entry points (C1.5, INV-CAMERA-1, INV-OUTPUT-2). The only module in which an
 //! `Authorized` proof can be minted.
 //!
-//! Each entry point first checks that its port or token belongs to this Core. INC-3 state:
+//! Each entry point first checks that its port or token belongs to this Core:
 //! * the three output-lifecycle entries implement M4/M5 for any number of outputs (startup and
 //!   hotplug alike, reconfiguration, disconnection, the zero-output state) and the pointer's M10
 //!   transitions;
-//! * physical pointer input (C4.2: ownership, M22 CameraPan, routing, KeepFocus);
-//! * the shell vocabulary has no variants yet (INC-11).
+//! * physical input intake handles pointer motion, buttons, axis scrolling, and keyboard events
+//!   (C4.2: ownership, M22 CameraPan, routing, KeepFocus);
+//! * shell command execution validates and executes semantic commands (C7.2, INV-SHELL-1).
 
 use crate::input::bindings;
 use crate::input::interaction::Interaction;
@@ -422,7 +423,7 @@ impl Core {
     /// Super+Enter: with the same guards as the fit binding, the element under the pointer is fitted,
     /// unless the camera already holds exactly that fit (and there is a value to go back to): then
     /// the previous camera is restored. When enter_mode is Maximize, it maximizes the window to
-    /// natively fill the usable viewport at 100% sharp scale (toggleable).
+    /// natively fill the usable viewport (toggleable).
     fn fit_toggle(&mut self, proof: authority::Authorized, out: &mut Vec<Effect>) {
         let PointerState::Located { output, p } = self.pointer else {
             return;
@@ -462,8 +463,8 @@ impl Core {
         }
     }
 
-    /// Native viewport fill toggle (EnterMode::Maximize): maximizes the window to fill
-    /// the usable screen area at 100% sharp 1:1 scale without digital blur, or restores it.
+    /// Viewport fill toggle (EnterMode::Maximize): maximizes the window to fill
+    /// the usable screen area, or restores it.
     fn maximize_toggle(
         &mut self,
         proof: authority::Authorized,
@@ -494,7 +495,7 @@ impl Core {
                 return;
             };
 
-            // If camera zoom is not 1.0, reset camera zoom to 1.0 for sharp 1:1 view
+            // If camera zoom is not 1.0, reset camera zoom to 1.0
             if let Some(camera) = self.cameras.camera_for_output(output) {
                 let zoom = self.cameras.zoom(camera).unwrap_or(1.0);
                 if (zoom - 1.0).abs() > 0.001
@@ -749,7 +750,7 @@ impl Core {
         if let Some(mut target) =
             crate::navigation::fit_target_in(view_size, extent, usable, scale, g)
         {
-            // Cap zoom at 1.0 (never magnify small clusters beyond 100% native scale)
+            // Cap zoom at 1.0 (clusters are not magnified beyond scale 1.0)
             target.zoom = target.zoom.min(1.0);
             self.cameras.fit(proof, camera, target);
             self.camera_written(output, camera, out);
@@ -806,7 +807,7 @@ impl Core {
             return;
         }
 
-        // Add 8% comfortable canvas margin (at least 60px)
+        // Add canvas margin (at least 60px)
         let span_w = (max_x - min_x).max(1);
         let span_h = (max_y - min_y).max(1);
         let pad_x = (span_w / 12).max(60);
@@ -838,11 +839,6 @@ impl Core {
         }
     }
 
-    /// Super+Shift+Enter: the focused window's fullscreen toggles on the pointer's output, as if it
-    /// had asked (`set_fullscreen` / `unset_fullscreen`: the same path, M9, INV-PRES-1).
-    /// Under smart cluster tiling, entering fullscreen pushes any overlapping windows away into
-    /// adjacent cluster slots (12px gap) so no window is ever occluded or covered. Exiting fullscreen
-    /// restores original saved floating geometry.
     /// `id` leaves fullscreen: back to its size before it (when known), at its position before
     /// it, or at `anchor` (a Super+drag out of fullscreen).
     fn leave_fullscreen(
@@ -865,6 +861,11 @@ impl Core {
         fx
     }
 
+    /// Super+Shift+Enter: the focused window's fullscreen toggles on the pointer's output, as if it
+    /// had asked (`set_fullscreen` / `unset_fullscreen`: the same path, M9, INV-PRES-1).
+    /// Under cluster tiling, entering fullscreen pushes any overlapping windows away into
+    /// adjacent cluster slots (12px gap) so no window is occluded or covered. Exiting fullscreen
+    /// restores original saved floating geometry.
     fn toggle_fullscreen(&mut self) -> Vec<Effect> {
         let Some(id) = self.focus.target() else {
             return Vec::new();
@@ -1178,7 +1179,7 @@ impl Core {
         true
     }
 
-    /// One motion of a WindowMove or WindowResize (INC-14): the pointer moves in the Arrangement
+    /// One motion of a WindowMove or WindowResize: the pointer moves in the Arrangement
     /// as usual; then, from its Canvas position `q_now` (R1, through the camera of the output it
     /// is on), the moved window's anchor is `R3(q_now − grab_offset)` (F-DRAG-1, OB-34 decision:
     /// the grabbed point stays under the pointer across outputs) and the resized window is asked
@@ -1418,7 +1419,7 @@ impl Core {
         self.camera_written(output, camera, out);
     }
 
-    /// Super+Shift+Middle Click: reset camera zoom to 1.0 centered around pointer.
+    /// Resets camera zoom to 1.0 centered around pointer.
     fn zoom_reset(
         &mut self,
         proof: authority::Authorized,
@@ -2144,8 +2145,8 @@ fn ms(time_us: u64) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    //! The 2R / E1R output-lifecycle tests (spike EE-4 / ER2-1) ported to the production core.
-    //! Expected values are hand-derived literals, not values computed by the code under test.
+    //! E1R output-lifecycle tests. Expected values are hand-derived literals, not values computed by
+    //! the code under test.
 
     use crate::geom::CanvasPos;
     use crate::input::bindings::{BTN_MIDDLE, Modifiers};
@@ -2418,7 +2419,7 @@ mod tests {
         assert_eq!(c.cameras().len(), 2);
     }
 
-    /// E1R (EE-4): mode, scale, transform and refresh changes keep the OutputId, the camera
+    /// E1R: mode, scale, transform and refresh changes keep the OutputId, the camera
     /// identity and value, and allocate nothing.
     #[test]
     fn reconfiguration_keeps_identity_and_camera() {
@@ -2650,8 +2651,8 @@ mod tests {
         );
     }
 
-    /// INC2-F07: A ProjectionFrame belongs strictly to the output/view configuration from which it
-    /// was built and must not survive output_reconfigured. Before reconfiguration, p_before hits
+    /// A ProjectionFrame belongs strictly to the output/view configuration from which it
+    /// was built and must not survive output_reconfigured (INC2-F07). Before reconfiguration, p_before hits
     /// the frame; reconfiguring mode, transform or scale invalidates the frame so that the stale
     /// frame is not used by a subsequent hit-test.
     #[test]
@@ -2748,7 +2749,7 @@ mod tests {
         );
     }
 
-    // ---- INC-10: the output's lattice reference R_O (F-LATTICE-1 as amended by C12.F14)
+    // ---- The output's lattice reference R_O (F-LATTICE-1 as amended by C12.F14)
 
     fn pan(c: &mut Core, port: &mut crate::InputPort, d: (f64, f64)) {
         use crate::PhysicalEvent;
@@ -2851,7 +2852,7 @@ mod tests {
         );
     }
 
-    /// TST-23 R1 (PD-F2-06, `experiments/phase-d/d5_model_1r.py`) as a T0 property on the
+    /// TST-23 R1 (PD-F2-06) as a T0 property on the
     /// production path: over the model's grid — scale {1, 1.5} × zoom {0.5, 0.75, 1, 1080/651,
     /// 2.5}, camera centre (5000.3, 3000.7) — one pan gesture of 200 events, each a hand
     /// displacement of (+3.7, −1.3) physical px, moves the content's edge at Canvas (5100, 3050)
@@ -3623,7 +3624,7 @@ mod tests {
             .unwrap();
 
         // w1 expands to fill viewport (-960..960, -540..540)
-        // w2 was at (812, 0), so smart cluster tiling pushes w2 to (960 + 12 = 972, 0)
+        // w2 was at (812, 0), so cluster tiling pushes w2 to (960 + 12 = 972, 0)
         let anchor_w1 = c.stage().anchor(w1).unwrap();
         let anchor_w2 = c.stage().anchor(w2).unwrap();
         assert_eq!(anchor_w1.x, -960);
