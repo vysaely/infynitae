@@ -578,10 +578,8 @@ impl WaylandState {
                 let mut bind_lines: Vec<(String, String)> = Vec::new();
                 let mut exec_lines: Vec<(String, String)> = Vec::new();
                 for line in content.lines() {
-                    let line_clean = line.split('#').next().unwrap_or("").trim();
-                    if let Some((k, v)) = line_clean.split_once('=') {
-                        let key = k.trim();
-                        let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                    if let Some((key, val)) = config_line(line) {
+                        let (key, val) = (key.as_str(), val.as_str());
                         if let Some(name) = key.strip_prefix("BIND_") {
                             bind_lines.push((name.to_ascii_uppercase(), val.to_string()));
                             continue;
@@ -1041,10 +1039,51 @@ impl WaylandState {
     }
 }
 
+/// One `KEY=value` line of the config, which the session scripts source as shell: the value is
+/// read as one shell word (`"…"` with `\"` escapes, `'…'`, or bare up to a blank), so a `#` or a
+/// quote inside it is kept, and a ` # comment` after it is not. `None` for a comment or a line
+/// without `=`. Pure.
+pub fn config_line(line: &str) -> Option<(String, String)> {
+    let line = line.trim_start();
+    if line.starts_with('#') {
+        return None;
+    }
+    let line = line.strip_prefix("export ").unwrap_or(line);
+    let (key, value) = line.split_once('=')?;
+    let mut out = String::new();
+    let mut chars = value.trim_start().chars();
+    while let Some(c) = chars.next() {
+        match c {
+            c if c.is_whitespace() => break,
+            '\'' => out.extend(chars.by_ref().take_while(|c| *c != '\'')),
+            '"' => {
+                while let Some(c) = chars.next() {
+                    match c {
+                        '"' => break,
+                        '\\' => match chars.next() {
+                            Some(e @ ('"' | '\\' | '$' | '`')) => out.push(e),
+                            Some(e) => {
+                                out.push('\\');
+                                out.push(e);
+                            }
+                            None => out.push('\\'),
+                        },
+                        c => out.push(c),
+                    }
+                }
+            }
+            '\\' => out.extend(chars.next()),
+            c => out.push(c),
+        }
+    }
+    Some((key.trim().to_string(), out.trim().to_string()))
+}
+
 /// The user's key bindings from config lines: `BIND_<ACTION>="CHORD[,CHORD]"` gives an action
 /// its own chords (its built-in chord is freed), `BIND_<ACTION>="none"` frees it without a new
 /// one; `EXEC_<NAME>="CHORD:command"` runs a command. Returns the bindings, the commands (by
-/// `Exec` index) and a description of each line that was not understood. Pure.
+/// `Exec` index) and a description of each line that was not understood, or that names a chord
+/// an earlier line already bound (the earlier line keeps it). Pure.
 pub fn user_key_bindings(
     binds: &[(String, String)],
     execs: &[(String, String)],
@@ -1057,6 +1096,16 @@ pub fn user_key_bindings(
     let mut out = UserBindings::default();
     let mut commands = Vec::new();
     let mut problems = Vec::new();
+    // who bound each chord, for the duplicate report
+    let mut bound_by: Vec<(infynitae_core::input::keys::Chord, String)> = Vec::new();
+    let mut taken = |chord, line: String, problems: &mut Vec<String>, text: &str| {
+        if let Some((_, first)) = bound_by.iter().find(|(c, _)| *c == chord) {
+            problems.push(format!("{line}: \"{text}\" is already bound by {first}"));
+            return true;
+        }
+        bound_by.push((chord, line));
+        false
+    };
     for (name, value) in binds {
         let Some(&(_, action)) = ACTION_NAMES.iter().find(|(n, _)| n == name) else {
             problems.push(format!("BIND_{name}: no such action"));
@@ -1068,7 +1117,16 @@ pub fn user_key_bindings(
         }
         for chord_text in value.split(',') {
             match parse_chord(chord_text) {
-                Some(chord) => out.chords.push((chord, Some(action))),
+                Some(chord) => {
+                    if !taken(
+                        chord,
+                        format!("BIND_{name}"),
+                        &mut problems,
+                        chord_text.trim(),
+                    ) {
+                        out.chords.push((chord, Some(action)));
+                    }
+                }
                 None => problems.push(format!("BIND_{name}: \"{chord_text}\" is not a key chord")),
             }
         }
@@ -1082,8 +1140,15 @@ pub fn user_key_bindings(
             problems.push(format!("{name}: \"{chord_text}\" is not a key chord"));
             continue;
         };
-        if command.is_empty() || commands.len() >= usize::from(u16::MAX) {
+        if command.is_empty() {
             problems.push(format!("{name}: no command"));
+            continue;
+        }
+        if commands.len() >= usize::from(u16::MAX) {
+            problems.push(format!("{name}: too many EXEC_ commands"));
+            continue;
+        }
+        if taken(chord, name.clone(), &mut problems, chord_text.trim()) {
             continue;
         }
         out.chords
@@ -1208,5 +1273,49 @@ mod key_binding_config_tests {
         );
         assert_eq!(cmds, vec!["firefox --new-window".to_string()]);
         assert_eq!(problems.len(), 3, "{problems:?}");
+    }
+
+    /// A chord bound by two lines stays with the first, and the second is reported.
+    #[test]
+    fn a_chord_bound_twice_is_reported() {
+        let (b, cmds, problems) = user_key_bindings(
+            &kv(&[("CLOSE", "SUPER+Q")]),
+            &kv(&[("EXEC_X", "SUPER+Q:foo"), ("EXEC_Y", "SUPER+Y:bar")]),
+        );
+        assert_eq!(
+            b.chords
+                .iter()
+                .filter(|(c, _)| *c == parse_chord("SUPER+Q").unwrap())
+                .count(),
+            1
+        );
+        assert_eq!(cmds, vec!["bar".to_string()]);
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert!(problems[0].contains("EXEC_X") && problems[0].contains("BIND_CLOSE"));
+    }
+
+    /// Config lines are read as the shell reads them: quotes and `#` inside a value are kept,
+    /// a trailing comment is not.
+    #[test]
+    fn config_values_are_read_as_shell_words() {
+        use super::config_line;
+        let v = |l: &str| config_line(l).map(|(_, v)| v);
+        assert_eq!(
+            v(r#"EXEC_NOTE="SUPER+N:sh -c 'notify-send hi'""#).as_deref(),
+            Some("SUPER+N:sh -c 'notify-send hi'")
+        );
+        assert_eq!(
+            v(r#"EXEC_WEB="SUPER+B:firefox https://x.org/#top"  # docs"#).as_deref(),
+            Some("SUPER+B:firefox https://x.org/#top")
+        );
+        assert_eq!(v("PAN_MODE=rts # comment").as_deref(), Some("rts"));
+        assert_eq!(v("BG='#1e1e2e'").as_deref(), Some("#1e1e2e"));
+        assert_eq!(v(r#"X="a \"b\" c""#).as_deref(), Some(r#"a "b" c"#));
+        assert_eq!(
+            config_line("export KEY=1"),
+            Some(("KEY".to_string(), "1".to_string()))
+        );
+        assert_eq!(config_line("# EXEC_X=\"SUPER+X:foo\""), None);
+        assert_eq!(config_line("no equals"), None);
     }
 }
