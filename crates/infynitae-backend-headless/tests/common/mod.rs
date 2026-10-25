@@ -2112,6 +2112,10 @@ impl Lockstep {
                 .dispatch_clients(&mut self.state)
                 .expect("server dispatch");
             // as the session does after each dispatch
+            infynitae_backend_headless::apply_output_configurations(
+                &mut self.state,
+                &mut self.token,
+            );
             self.state.settle_unlock();
             self.state.clear_orphaned_selections();
             self.state.refuse_client_drags();

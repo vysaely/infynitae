@@ -44,9 +44,14 @@ and start it from `autostart.sh`, e.g. `fcitx5 -d`). An input method gets nothin
 screen is locked. Night light and screen power have only run in the test suite, not on
 a real screen yet.
 
+Display settings tools (wlr-randr, wdisplays, kanshi) can change a screen's mode, scale and
+position while you work (`wlr-output-management`). They cannot yet turn a screen off, rotate it
+or switch VRR; mode changes have only run in the test suite, not on a real screen.
+
 Still missing, because the compositor has to speak the protocol first:
 
-- display settings without editing the config (`wlr-output-management`, for wdisplays or kanshi);
+- connecting to this PC with a remote desktop app (RustDesk, AnyDesk): the `RemoteDesktop`
+  portal;
 - per-app volume in the menu (the apps themselves do it; pavucontrol works).
 
 The keyring asks for its password once per session when you log in without one (autologin);

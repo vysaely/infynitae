@@ -430,6 +430,7 @@ impl WaylandState {
             tracker: convert::damage_tracker(&model, &view, self.target),
             tracker_k: view.k,
         });
+        self.output_heads_changed(id);
     }
 
     fn output_changed(&mut self, id: OutputId) {
@@ -450,6 +451,7 @@ impl WaylandState {
         // F-RENDER-1: the tracker is rebuilt when the descriptor or k changes
         h.tracker = convert::damage_tracker(&model, &view, self.target);
         h.tracker_k = view.k;
+        self.output_heads_changed(id);
     }
 
     fn output_removed(&mut self, id: OutputId) {
@@ -460,6 +462,8 @@ impl WaylandState {
             self.disabled_outputs
                 .push((h.global, std::time::Instant::now() + Duration::from_secs(5)));
         }
+        self.output_management.info.remove(&id);
+        self.output_heads_changed(id);
     }
 
     /// A vblank of `output` at `now`: the requested frame callbacks of each element complete

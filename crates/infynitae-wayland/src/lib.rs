@@ -26,6 +26,7 @@ mod launch;
 mod layers;
 pub mod limits;
 mod lock;
+pub mod output_management;
 pub mod output_power;
 mod outputs;
 pub mod ownership;
@@ -197,6 +198,8 @@ pub struct WaylandState {
     >,
     /// Input methods, text input and virtual keyboards (`input_method`).
     pub(crate) input_method: input_method::InputMethodState,
+    /// `zwlr_output_manager_v1`: display settings tools (`output_management`).
+    pub(crate) output_management: output_management::OutputManagementState,
     /// `zwlr_foreign_toplevel_manager_v1`: task bars (`wlr_toplevels`).
     wlr_toplevels: wlr_toplevels::WlrToplevelsState,
     /// `zwp_keyboard_shortcuts_inhibit_manager_v1` (`shortcuts_inhibit`).
@@ -518,6 +521,7 @@ impl WaylandState {
             foreign_toplevels: std::collections::HashMap::new(),
             shortcuts_inhibit: shortcuts_inhibit::ShortcutsInhibitState::new(display),
             wlr_toplevels: wlr_toplevels::WlrToplevelsState::new(display),
+            output_management: output_management::OutputManagementState::new(display),
             input_method: input_method::InputMethodState::new(display),
             content_type: smithay::wayland::content_type::ContentTypeState::new::<Self>(display),
             alpha_modifier: smithay::wayland::alpha_modifier::AlphaModifierState::new::<Self>(

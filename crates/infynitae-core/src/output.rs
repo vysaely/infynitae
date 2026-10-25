@@ -105,7 +105,7 @@ impl OutputModel {
 /// (the representable projection domain, F-VIEW-1 as amended by C12.F14).
 ///
 /// [`MODE_MAX`]: crate::geom::MODE_MAX
-pub(crate) fn valid(d: &OutputDescriptor) -> bool {
+pub fn valid(d: &OutputDescriptor) -> bool {
     use crate::geom::{MODE_MAX, SCALE_120_MAX, SCALE_120_MIN};
     (1..=MODE_MAX).contains(&d.mode.0)
         && (1..=MODE_MAX).contains(&d.mode.1)

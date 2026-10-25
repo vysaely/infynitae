@@ -327,6 +327,32 @@ impl Default for HeadlessCompositorOptions {
 
 /// Runs a headless compositor session: a virtual output, a listening Wayland socket, and a
 /// virtual vblank on the session's frame timer. Returns when a run limit is reached.
+/// The display settings clients applied (`wlr-output-management`): a headless output has no
+/// hardware to set, Core takes the new modes, scales and positions (each screen's new
+/// descriptor, then its position).
+pub fn apply_output_configurations(state: &mut WaylandState, token: &mut OutputLifecycleToken) {
+    for c in state.take_output_configurations() {
+        let ok = state.output_change_plan(&c.changes).is_some_and(|plan| {
+            plan.into_iter().all(|p| {
+                if let Some(desc) = p.descriptor {
+                    match state.core_mut().output_reconfigured(token, p.output, desc) {
+                        Ok(fx) => state.apply(&fx),
+                        Err(_) => return false,
+                    }
+                }
+                if let Some(pos) = p.position {
+                    match state.core_mut().output_arranged(token, p.output, pos) {
+                        Ok(fx) => state.apply(&fx),
+                        Err(_) => return false,
+                    }
+                }
+                true
+            })
+        });
+        state.finish_output_configuration(c, ok);
+    }
+}
+
 pub fn run_headless(
     core: infynitae_core::Core,
     input_port: infynitae_core::InputPort,
@@ -421,6 +447,7 @@ pub fn run_headless_with(
             }
         }
         session.dispatch(&mut state);
+        apply_output_configurations(&mut state, &mut output_token);
 
         let current_mapped = state.core().stage().mapped_elements();
         let new_mapped: Vec<_> = current_mapped

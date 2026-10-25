@@ -24,6 +24,7 @@ use std::time::Duration;
 
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
 use infynitae_core::{Core, InputPort, OutputLifecycleToken, PhysicalEvent};
+use infynitae_wayland::output_management::{HeadChange, HeadInfo, HeadMode};
 use infynitae_wayland::session::{Session, SessionOptions};
 use infynitae_wayland::{WaylandState, convert};
 
@@ -231,6 +232,8 @@ struct Screen {
     vrr_on: bool,
     /// Screen power mode turned off by output power management.
     power_off: bool,
+    /// The connector's modes, as display settings tools see them and as DRM sets them.
+    modes: Vec<(HeadMode, smithay::reexports::drm::control::Mode)>,
 }
 
 /// DRM per-screen gamma ramp state.
@@ -294,6 +297,86 @@ impl infynitae_wayland::output_power::OutputPowerHandler for DrmOutputPowerHandl
     ) {
         self.pending.lock().unwrap().push((output, mode));
     }
+}
+
+/// Carries out a display configuration (`wlr-output-management`): the new modes on the
+/// hardware first, then Core's descriptors and positions. Everything or nothing: a mode the
+/// hardware refuses, or a configuration Core refuses, sets every changed screen back.
+fn apply_output_configuration(data: &mut LoopData, changes: &[HeadChange]) -> bool {
+    let mut changed: Vec<(usize, smithay::reexports::drm::control::Mode)> = Vec::new();
+    let revert = |data: &mut LoopData,
+                  changed: &[(usize, smithay::reexports::drm::control::Mode)]| {
+        for &(i, old) in changed {
+            let s = &mut data.screens[i];
+            let _ = s.compositor.use_mode(old);
+            s.size = (i32::from(old.size().0), i32::from(old.size().1));
+            s.compositor
+                .set_output_mode_source(OutputModeSource::Static {
+                    size: s.size.into(),
+                    scale: smithay::utils::Scale::from(s.k),
+                    transform: smithay::utils::Transform::Normal,
+                });
+        }
+    };
+    for c in changes {
+        let Some(m) = c.mode else { continue };
+        let Some(i) = data.screens.iter().position(|s| s.id == c.output) else {
+            revert(data, &changed);
+            return false;
+        };
+        let s = &mut data.screens[i];
+        let Some(&(_, mode)) = s.modes.iter().find(|(h, _)| *h == m) else {
+            revert(data, &changed);
+            return false;
+        };
+        let old = s.compositor.pending_mode();
+        if s.compositor.use_mode(mode).is_err() {
+            revert(data, &changed);
+            return false;
+        }
+        changed.push((i, old));
+        s.size = (i32::from(mode.size().0), i32::from(mode.size().1));
+        s.compositor
+            .set_output_mode_source(OutputModeSource::Static {
+                size: s.size.into(),
+                scale: smithay::utils::Scale::from(s.k),
+                transform: smithay::utils::Transform::Normal,
+            });
+    }
+    let Some(plan) = data.state.output_change_plan(changes) else {
+        revert(data, &changed);
+        return false;
+    };
+    for p in plan {
+        if let Some(desc) = p.descriptor {
+            match data
+                .state
+                .core_mut()
+                .output_reconfigured(&mut data.output_token, p.output, desc)
+            {
+                Ok(fx) => data.state.apply(&fx),
+                Err(_) => {
+                    revert(data, &changed);
+                    return false;
+                }
+            }
+        }
+        if let Some(pos) = p.position {
+            match data
+                .state
+                .core_mut()
+                .output_arranged(&mut data.output_token, p.output, pos)
+            {
+                Ok(fx) => data.state.apply(&fx),
+                Err(_) => {
+                    revert(data, &changed);
+                    return false;
+                }
+            }
+        }
+    }
+    data.session.request_frame();
+    true
 }
 
 struct LoopData {
@@ -682,7 +765,31 @@ pub fn run_console_with(
             vrr_supported,
             vrr_on,
             power_off: false,
+            modes: conn
+                .modes()
+                .iter()
+                .map(|m| {
+                    let refresh = refresh_mhz(m.clock(), m.hsync().2, m.vsync().2, m.vrefresh());
+                    let head = HeadMode {
+                        size: (i32::from(m.size().0), i32::from(m.size().1)),
+                        refresh_mhz: refresh as i32,
+                        preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
+                    };
+                    (head, *m)
+                })
+                .collect(),
         });
+        // VRR is not reported: it follows fullscreen windows (or the config), not the tools
+        let (mm_w, mm_h) = conn.size().unwrap_or((0, 0));
+        let screen = screens.last().expect("just pushed");
+        state.set_output_head_info(
+            id,
+            HeadInfo {
+                modes: screen.modes.iter().map(|(h, _)| *h).collect(),
+                physical_size: Some((mm_w as i32, mm_h as i32)),
+                adaptive_sync: None,
+            },
+        );
 
         // Initialize DRM gamma LUT for this screen
         if let Ok(crtc_info) = drm.get_crtc(crtc) {
@@ -1001,6 +1108,10 @@ pub fn run_console_with(
             }
         }
         data.session.dispatch(&mut data.state);
+        for c in data.state.take_output_configurations() {
+            let ok = apply_output_configuration(&mut data, &c.changes);
+            data.state.finish_output_configuration(c, ok);
+        }
         // Process client requests to change screen power save modes
         let pending_power: Vec<_> = data.pending_power.lock().unwrap().drain(..).collect();
         for (output_id, mode) in pending_power {
