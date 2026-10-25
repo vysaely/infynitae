@@ -35,6 +35,7 @@ pub mod session;
 mod shortcuts_inhibit;
 mod signals;
 mod snapshot;
+mod wlr_toplevels;
 pub mod xwayland;
 
 pub use handlers::ACTIVATION_TOKENS_KEPT;
@@ -193,6 +194,8 @@ pub struct WaylandState {
         ElementId,
         smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle,
     >,
+    /// `zwlr_foreign_toplevel_manager_v1`: task bars (`wlr_toplevels`).
+    wlr_toplevels: wlr_toplevels::WlrToplevelsState,
     /// `zwp_keyboard_shortcuts_inhibit_manager_v1` (`shortcuts_inhibit`).
     shortcuts_inhibit: shortcuts_inhibit::ShortcutsInhibitState,
     /// `wp_content_type_v1`: a surface says it shows a photo, a video or a game (`content_type`).
@@ -511,6 +514,7 @@ impl WaylandState {
                 ),
             foreign_toplevels: std::collections::HashMap::new(),
             shortcuts_inhibit: shortcuts_inhibit::ShortcutsInhibitState::new(display),
+            wlr_toplevels: wlr_toplevels::WlrToplevelsState::new(display),
             content_type: smithay::wayland::content_type::ContentTypeState::new::<Self>(display),
             alpha_modifier: smithay::wayland::alpha_modifier::AlphaModifierState::new::<Self>(
                 display,

@@ -48,6 +48,9 @@ these by date, e.g. "(owner, 2026-10-24)".
 - **Only windows you opened take focus and move the camera** (2026-10-24, `FOCUS_ON_OPEN` /
   `TELEPORT_ON_OPEN="user"`): windows from your shortcuts, your launcher or a command in the
   focused terminal; a popup an app opens by itself appears quietly.
+- **A task bar's click focuses a window like your own click** (2026-10-25,
+  `wlr-foreign-toplevel-management`): only from the bar you are using (it has your pointer or
+  keyboard); a program in the background can only ask for attention, like any app.
 - **A dialog opens over its parent** whatever the placement policy (2026-10-24).
 - **An app's next window takes the place of the one that just closed** (2026-10-25: Steam's
   login window becoming the main window), if that place is still in view.

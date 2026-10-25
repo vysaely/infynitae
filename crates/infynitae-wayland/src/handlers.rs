@@ -50,7 +50,7 @@ use crate::{ClientState, ElementHandle, WaylandState, convert, snapshot};
 impl WaylandState {
     /// Hands a client's xdg_toplevel request to Core and applies what Core decided. A request on
     /// a toplevel that is not an element is dropped.
-    fn toplevel_request(&mut self, surface: &ToplevelSurface, request: ToplevelRequest) {
+    pub(crate) fn toplevel_request(&mut self, surface: &ToplevelSurface, request: ToplevelRequest) {
         let Some(i) = self.element_index_by_root(surface.wl_surface()) else {
             return;
         };
@@ -226,6 +226,7 @@ impl WaylandState {
         } else if let Some(handle) = self.foreign_toplevels.remove(&id) {
             self.foreign_toplevel_list.remove_toplevel(&handle);
         }
+        self.sync_wlr_toplevels();
     }
 
     /// The title and app id of the element's toplevel, empty when unset.
@@ -482,6 +483,7 @@ impl WaylandState {
             handle.send_app_id(app_id.as_deref().unwrap_or_default());
             handle.send_done();
         }
+        self.sync_wlr_toplevels();
     }
 }
 

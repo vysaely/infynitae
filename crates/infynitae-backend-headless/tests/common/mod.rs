@@ -221,6 +221,10 @@ pub struct Probe {
     pub layer_closed: Vec<usize>,
     /// `xdg_toplevel.close` requests received (surface index).
     pub close_requests: Vec<usize>,
+    /// `zwlr_foreign_toplevel_handle_v1`s announced to this client, in order.
+    pub wlr_handles: Vec<
+        wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1,
+    >,
     pub key_events: Vec<(u32, bool)>,
     pub repeat_info: Option<(i32, i32)>,
     pub destroyed_active: Vec<String>,

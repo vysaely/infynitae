@@ -46,9 +46,10 @@ compositor work in this repository, then the tool just works:
 | :--- | :--- | :--- |
 | Display settings app | wdisplays, nwg-displays, kanshi (profiles), wlr-randr | `wlr-output-management` |
 | Input methods (Japanese, Chinese, Korean) | fcitx5, ibus | `input-method-v2`, `text-input-v3` |
-| Task bars that focus or close windows | waybar's taskbar, rofi window mode | `wlr-foreign-toplevel-management` |
 
 Already spoken, so these just work: night light (wlsunset, gammastep: `wlr-gamma-control`),
 screen power (wlopm: `wlr-output-power-management`), external idle tools (swayidle, hypridle:
-`ext-idle-notify`; idle and auto-lock are built in already), read-only window lists
-(`ext-foreign-toplevel-list`), apps naming their cursor (`cursor-shape-v1`).
+`ext-idle-notify`; idle and auto-lock are built in already), task bars and window switchers
+(waybar's taskbar, rofi's window mode: `wlr-foreign-toplevel-management`,
+`ext-foreign-toplevel-list`), apps naming their cursor (`cursor-shape-v1`), apps taking the
+shortcuts while focused (`keyboard-shortcuts-inhibit`).
