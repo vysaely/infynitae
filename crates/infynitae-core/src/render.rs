@@ -420,7 +420,7 @@ mod tests {
         bits
     }
 
-    /// OB-2 (T0): multi-rect, interleaved add/subtract, random; equals the reference evaluator.
+    /// OB-2: multi-rect, interleaved add/subtract, random; equals the reference evaluator.
     #[test]
     fn ob2_region_equals_reference_evaluator() {
         let mut rng = Rng(0xD1B5_4A32_D192_ED03);
