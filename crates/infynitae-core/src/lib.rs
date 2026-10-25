@@ -1042,6 +1042,7 @@ impl Core {
             | E::SpawnRegionScreenshot
             | E::ReloadShell
             | E::SpawnLockScreen
+            | E::SpawnClipboardHistory
             | E::TogglePrivacy
             | E::ToggleIdleInhibit
             | E::SaveReplay

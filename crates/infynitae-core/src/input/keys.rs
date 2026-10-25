@@ -39,6 +39,7 @@ pub const KEY_R: u32 = 19;
 pub const KEY_BACKSPACE: u32 = 14;
 pub const KEY_SYSRQ: u32 = 99;
 pub const KEY_L: u32 = 38;
+pub const KEY_V: u32 = 47;
 pub const KEY_MUTE: u32 = 113;
 pub const KEY_VOLUMEDOWN: u32 = 114;
 pub const KEY_VOLUMEUP: u32 = 115;
@@ -72,6 +73,8 @@ pub enum KeyAction {
     ReloadShell,
     /// Super+L: lock screen
     SpawnLockScreen,
+    /// Super+V: clipboard history
+    ClipboardHistory,
     /// Super+Shift+P: toggle privacy mode on focused window (hidden/transparent from screenshots & screenshare)
     TogglePrivacy,
     /// Super+Shift+I: toggle idle sleep inhibition (stay awake mode: prevents DPMS screen sleep and auto-lock)
@@ -261,6 +264,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("REGION_SCREENSHOT", KeyAction::SpawnRegionScreenshot),
     ("RELOAD", KeyAction::ReloadShell),
     ("LOCK", KeyAction::SpawnLockScreen),
+    ("CLIPBOARD", KeyAction::ClipboardHistory),
     ("PRIVACY", KeyAction::TogglePrivacy),
     ("IDLE_INHIBIT", KeyAction::ToggleIdleInhibit),
     ("SAVE_REPLAY", KeyAction::SaveReplay),
@@ -432,6 +436,10 @@ pub fn resolve_key_binding(
     // Super+L: lock screen; Logo, never during interaction
     if key == KEY_L && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::SpawnLockScreen);
+    }
+    // Super+V: clipboard history; Logo, never during interaction
+    if key == KEY_V && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::ClipboardHistory);
     }
     // Super+Shift+P: toggle privacy mode; Logo+Shift, never during interaction
     if key == KEY_P && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
@@ -943,5 +951,61 @@ mod tests {
         assert_eq!(resolve_key_binding(KEY_L, logo, true), None);
         assert_eq!(resolve_key_binding(KEY_C, logo_alt, true), None);
         assert_eq!(resolve_key_binding(KEY_R, logo_alt, true), None);
+    }
+
+    #[test]
+    fn super_v_clipboard_history_binding() {
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            resolve_key_binding(KEY_V, logo, false),
+            Some(KeyAction::ClipboardHistory)
+        );
+        // Super+Shift+V does not resolve to it
+        assert_eq!(
+            resolve_key_binding(
+                KEY_V,
+                Modifiers {
+                    shift: true,
+                    ..logo
+                },
+                false
+            ),
+            None
+        );
+        // Ctrl+V does not resolve to it
+        assert_eq!(
+            resolve_key_binding(
+                KEY_V,
+                Modifiers {
+                    ctrl: true,
+                    ..Modifiers::default()
+                },
+                false
+            ),
+            None
+        );
+        // Alt+V does not resolve to it
+        assert_eq!(
+            resolve_key_binding(
+                KEY_V,
+                Modifiers {
+                    alt: true,
+                    ..Modifiers::default()
+                },
+                false
+            ),
+            None
+        );
+        // Plain V does not resolve to it
+        assert_eq!(
+            resolve_key_binding(KEY_V, Modifiers::default(), false),
+            None
+        );
+        // During interaction: None
+        assert_eq!(resolve_key_binding(KEY_V, logo, true), None);
+        assert!(ACTION_NAMES.contains(&("CLIPBOARD", KeyAction::ClipboardHistory)));
     }
 }

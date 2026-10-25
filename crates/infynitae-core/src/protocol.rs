@@ -142,6 +142,8 @@ pub enum Effect {
     ReloadShell,
     /// Super+L: lock screen
     SpawnLockScreen,
+    /// Super+V: clipboard history
+    SpawnClipboardHistory,
     /// Super+Shift+P: toggle privacy mode on focused window
     TogglePrivacy,
     /// Super+Shift+I: toggle idle sleep inhibition (stay awake mode)
