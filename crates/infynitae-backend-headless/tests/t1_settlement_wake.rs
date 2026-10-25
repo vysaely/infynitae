@@ -8,11 +8,9 @@
 //! part of this file (TST-24 in `t1_scale` covers it with a client and a hand-driven clock).
 //!
 //! What opens the epochs:
-//! - the continuous one by real input, a logo+middle drag (the only interaction Core has today);
-//! - the discrete one by `Core::start_scale_interaction`, a test entry. No production event
-//!   opens a discrete epoch yet (discrete pan and zoom steps, shell streams and interactive
-//!   resize belong to INC-10, INC-11 and INC-14), so that step is a stand-in, not production
-//!   evidence.
+//! - continuous: input drag (Super+middle drag);
+//! - discrete: `Core::start_scale_interaction` test entry (discrete pan and zoom steps, shell streams,
+//!   and interactive resize).
 
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
@@ -384,9 +382,8 @@ fn the_wake_up_follows_the_deadline_and_is_cancelled_with_the_epoch() {
     assert_eq!(l.sleep(), None, "the wake-up is cancelled with it");
 }
 
-/// The interaction real input can start today, a camera drag, is a continuous epoch: it has no
-/// deadline, so the session does not wake for it, however long the button is held; its release
-/// settles it. No real event gives the running compositor a settlement deadline.
+/// Camera drag is a continuous epoch: it has no deadline, so the session does not wake for it
+/// while the button is held; releasing the drag settles the epoch.
 #[test]
 fn a_real_camera_drag_opens_an_epoch_without_a_deadline() {
     let mut l = on_b("drag");

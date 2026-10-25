@@ -1,5 +1,5 @@
-//! INC-10 T1 (exit item 7, checkpoint E): surface and output lifecycle while the camera is zoomed
-//! (k ∉ n/120) and while it pans, on the production path with a real client.
+//! Surface and output lifecycle while the camera is zoomed (k ∉ n/120) and while it pans,
+//! on the production path with a real client.
 //!
 //! After every step — a second window mapped, unmapped and destroyed, a popup opened and closed, a
 //! subsurface added, during a zoomed pan; a fit; an output reconfiguration; a disconnect and a

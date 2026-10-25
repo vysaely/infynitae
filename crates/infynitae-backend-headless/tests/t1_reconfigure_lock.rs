@@ -1,15 +1,15 @@
-//! No absolute motion to a locked surface on paths other than a camera action (C12.F17 Q2, owner
-//! decision 2026-10-19: INV-INPUT-5 widened). zwp_pointer_constraints_v1, `lock_pointer`: "While
-//! the lock of this object is active, the wl_pointer objects of the associated seat will not emit
-//! any wl_pointer.motion events."
+//! No absolute motion to a locked surface on paths other than a camera action (C12.F17 Q2,
+//! INV-INPUT-5; owner, 2026-10-19). zwp_pointer_constraints_v1, `lock_pointer`: "While the lock
+//! of this object is active, the wl_pointer objects of the associated seat will not emit any
+//! wl_pointer.motion events."
 //!
-//! - OB-55 (audit Q-B2): `output_reconfigured`. x8, W focused and locked at W-local (630, 520);
-//!   output A reconfigured from 1920 × 1080 to 2560 × 1440 at scale 1 (the lock point stays
-//!   observable, so the lock is kept): no motion, the physical pointer at the derived lock point;
-//!   under a kept confinement and without a constraint the one true-position event.
-//! - A presentation's start and end (`presentation_membership`, found by the independent review
-//!   of 2026-10-20): W, locked, enters protocol fullscreen on A and leaves it; the lock is kept
-//!   throughout and no motion reaches W; without a lock each change sends the one event (M10).
+//! - OB-55: `output_reconfigured`. x8, W focused and locked at W-local (630, 520); output A
+//!   reconfigured from 1920 × 1080 to 2560 × 1440 at scale 1 (the lock point stays observable,
+//!   so the lock is kept): no motion, the physical pointer at the derived lock point; under a
+//!   kept confinement and without a constraint the one true-position event.
+//! - A presentation's start and end (`presentation_membership`; 2026-10-20): W, locked, enters
+//!   protocol fullscreen on A and leaves it; the lock is kept throughout and no motion reaches
+//!   W; without a lock each change sends the one event (M10).
 
 mod common;
 
@@ -71,7 +71,7 @@ fn a_reconfiguration_sends_no_motion_to_a_kept_lock() {
             !wire.iter().any(|l| l.starts_with("motion ")),
             "oneshot {oneshot}: wl_pointer.motion reached a locked surface: {wire:?}"
         );
-        // F-LOCK-1 (OB-55's pass criterion): the physical pointer follows the derived lock point,
+        // F-LOCK-1 (OB-55): the physical pointer follows the derived lock point,
         // W-local (630, 520) under the new view: the camera keeps centre (0, 0) at zoom 1, so the
         // root surface origin (−420, −320) is at (1280 − 420, 720 − 320) on the 2560 × 1440 view
         let (p, want) = (pointer(&r), (1280.0 + 210.0, 720.0 + 200.0));

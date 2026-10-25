@@ -1,7 +1,7 @@
-//! The owner's Super+Space and Super+Shift+Space (owner requests 2026-10-24): the pointer's
-//! output's camera is centred on the focused window; Super+Space also reverts the zoom to 1.0
-//! (or, with no window focused, only resets the zoom), Super+Shift+Space keeps the zoom (and does
-//! nothing with no window focused). No history entry.
+//! Super+Space and Super+Shift+Space bindings (owner, 2026-10-24): the pointer output's camera
+//! centres on the focused window. Super+Space also reverts zoom to 1.0 (or resets zoom when
+//! no window is focused); Super+Shift+Space preserves the current zoom (and does nothing if
+//! no window is focused). Neither adds a history entry.
 
 mod common;
 
@@ -127,7 +127,7 @@ fn super_space_reverts_overview_zoom_to_default_scale() {
     press(KEY_LEFTMETA, false);
     r.frame();
 
-    // Now pressing Super+Space must recenter on focused window AND revert zoom to 1.0!
+    // Super+Space recentres on the focused window and resets zoom to 1.0.
     chord(&mut r, &[KEY_LEFTMETA]);
     let c = r.ls.state.core().cameras();
     assert_eq!(c.center(0), Some(centre), "window centred");
