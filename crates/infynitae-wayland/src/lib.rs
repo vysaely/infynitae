@@ -171,6 +171,9 @@ pub struct WaylandState {
         reason = "owns the wp_cursor_shape_manager_v1 global for the state's lifetime"
     )]
     cursor_shape: smithay::wayland::cursor_shape::CursorShapeManagerState,
+    /// `zxdg_exporter_v2` / `zxdg_importer_v2`: a portal dialog (file chooser, screen-share
+    /// picker) takes another client's window as its parent, as `xdg_toplevel.set_parent` does.
+    xdg_foreign: smithay::wayland::xdg_foreign::XdgForeignState,
     /// `wl_data_device_manager`: clipboard selection and drag-and-drop offers (2026-10-16).
     /// Selections are Smithay protocol objects; who sees and sets them follows Core's
     /// keyboard focus (`SeatHandler::focus_changed`).
@@ -452,6 +455,7 @@ impl WaylandState {
             cursor_shape: smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(
                 display,
             ),
+            xdg_foreign: smithay::wayland::xdg_foreign::XdgForeignState::new::<Self>(display),
             data_device: DataDeviceState::new::<Self>(display),
             primary_selection,
             wlr_data_control,

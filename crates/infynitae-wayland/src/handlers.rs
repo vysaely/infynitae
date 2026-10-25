@@ -959,6 +959,15 @@ delegate_seat!(WaylandState);
 delegate_shm!(WaylandState);
 delegate_viewporter!(WaylandState);
 smithay::delegate_cursor_shape!(WaylandState);
+smithay::delegate_xdg_foreign!(WaylandState);
+
+/// An imported parent is the toplevel's parent like `set_parent`: the commit path reads it
+/// (`toplevel_committed`), so a portal dialog opens over the app that asked for it.
+impl smithay::wayland::xdg_foreign::XdgForeignHandler for WaylandState {
+    fn xdg_foreign_state(&mut self) -> &mut smithay::wayland::xdg_foreign::XdgForeignState {
+        &mut self.xdg_foreign
+    }
+}
 
 /// Tablet tools are not offered yet; cursor-shape asks for this handler, and its default
 /// (a tool's cursor image is ignored) is what applies.
