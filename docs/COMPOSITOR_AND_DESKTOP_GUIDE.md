@@ -31,7 +31,7 @@ Infynitae is designed around a three-tier architecture:
                                   │ Linux Subsystems
 ┌─────────────────────────────────▼──────────────────────────────────────┐
 │                  3. COMPANION RUNTIME STACK (live/)                    │
-│  • Session Supervisor (infynitae-session): TTY lock, crash recovery    │
+│  • Session Supervisor (infynitae-session): restart, crash-loop guard   │
 │  • Environment (env.sh): Decoupling, GPU routing, toolkit hints        │
 │  • Universal Action Dispatcher (launch.sh): App shortcuts & OSDs       │
 │  • Daemonless Settings Engine (settings.sh): GTK/Qt/Cursor sync        │
@@ -53,7 +53,7 @@ Every component in Infynitae has a single, strictly separated responsibility:
 | `crates/infynitae-backend-drm` | Rust | Direct console hardware backend (DRM/KMS, GBM, EGL, Libinput, Libseat). |
 | `crates/infynitae-backend-winit` | Rust | Nested window development backend for instant testing inside an existing desktop. |
 | `crates/infynitae-backend-headless` | Rust | Virtual offscreen backend used for automated pixel and architecture regression testing. |
-| `crates/infynitae-ipc` | Rust | Trusted Unix socket IPC server providing remote command execution and state queries. |
+| `crates/infynitae-ipc` | Rust | Local Unix socket (`$XDG_RUNTIME_DIR/infynitae/shell.sock`, JSON lines): state snapshots, events, and camera/focus/window commands for shell tools. |
 | `crates/infynitae` | Rust | Composition root: parses CLI flags, initializes ports and selected backend. |
 | `live/session.sh` | Shell | Main session startup script: restores display, synchronizes PipeWire/portals, and starts user daemons. |
 | `live/env.sh` | Shell | Environment isolation: decouples from GNOME/KDE, sets toolkit hints (Qt, GTK, Electron, Java), and configures GPU drivers. |
@@ -61,9 +61,14 @@ Every component in Infynitae has a single, strictly separated responsibility:
 | `live/settings.sh` | Shell | Zero-daemon settings engine: writes GTK3/4 `settings.ini`, Qt `kdeglobals`, and cursor themes instantly to disk. |
 | `live/setup-drivers.sh` | Bash | Hardware detector: scans PCI/DRM bus, enables `[multilib]`, and installs 32-bit & 64-bit Vulkan/Mesa drivers. |
 | `live/portal/infynitae-portal.c` | C / GIO | Standalone XDG Desktop Portal backend implementing `org.freedesktop.impl.portal.GlobalShortcuts`. |
+| `live/lock/` | C / GTK3 | `infynitae-lock`: the lock screen (ext-session-lock-v1, PAM). |
+| `live/wallpaper/` | C / GTK3 | `infynitae-wallpaper`: layer-shell wallpaper (images; videos through `mpvpaper`). |
+| `live/record/` | C / Shell | Replay buffer and recorder (`infynitae-recorder`, `infynitae-record-stream`). |
+| `live/infynitae-reload` | Shell | Restarts helpers (wallpaper, portal, polkit, recorder, clipboard, screen-share config) without closing windows. |
+| `live/infynitae-restore` | Python | Session restore: saves the open apps and their places, reopens them on the next start. |
 | `live/polkit/infynitae-polkit.c` | C / GTK3 | Minimal native Polkit authentication dialog for administrative prompts. |
 | `install.sh` | Bash | Zero-touch automated installer for Arch Linux. |
-| `update.sh` | Bash | Live update script using atomic inode installation (`install -m 755`) without process interruptions. |
+| `update.sh` | Bash | Live update: rebuilds and replaces the installed binaries atomically (`install` to `*.new`, then `mv`), so running programs are not interrupted. |
 
 ---
 
@@ -99,14 +104,13 @@ To run a fully functional, out-of-the-box Wayland desktop environment without in
 
 ### Desktop Utilities & Typography
 * `alacritty` / `kitty` / `foot`: GPU-accelerated Wayland terminal.
-* `fuzzel`: Minimal, instant C-based Wayland application launcher.
-* `swaylock`: Screen locker.
+* `fuzzel`: Minimal, instant C-based Wayland application launcher (also the Super+V clipboard picker).
 * `libnotify`: Sends desktop notifications (`notify-send`) for volume and brightness OSDs.
 * `brightnessctl`: Laptop screen brightness adjustments.
-* `swaybg`: High-performance, low-memory static wallpaper daemon.
 * `grim` & `slurp`: Screen and interactive region capture tools.
 * `wl-clipboard`: Wayland clipboard utilities (`wl-copy`, `wl-paste`).
 * `wl-clip-persist`: Keeps clipboard buffers alive when parent applications exit.
+* `cliphist`: Clipboard history (Super+V).
 * `ttf-dejavu`: Universal clean monospace and sans-serif fonts to prevent missing glyphs.
 * `qt5-wayland` & `qt6-wayland`: Wayland platform plugins for Qt applications.
 
@@ -114,7 +118,7 @@ To run a fully functional, out-of-the-box Wayland desktop environment without in
 
 ## 4. Toolkit Compatibility Matrix
 
-To prevent crashes, fuzzy fonts, and scaling artifacts, [`live/env.sh`](file:///home/vysaely/infynitae/live/env.sh) configures every major toolkit as follows:
+To prevent crashes, fuzzy fonts, and scaling artifacts, [`live/env.sh`](../live/env.sh) configures every major toolkit as follows:
 
 | Toolkit / Runtime | Environment Configuration | Why It Is Necessary |
 | :--- | :--- | :--- |
@@ -141,7 +145,7 @@ In `crates/infynitae-core`, maintain a clear separation between:
 ### Step 2: Implement the Session Supervisor
 Never run a compositor directly from a TTY without a supervisor. In `live/session.sh` and `infynitae-session`:
 * Trap signals (`EXIT`, `INT`, `TERM`, `HUP`) to run `stty sane` and `tput cnorm`.
-* Monitor process exit times: if the compositor crashes within 3 seconds multiple times in a row, break the loop and drop to a rescue shell rather than locking the user out.
+* Monitor process exit times: if the compositor fails within 5 seconds 3 times in a row, stop restarting and return to the console rather than locking the user out.
 
 ### Step 3: Integrate with Display Managers & Login
 * Create `/usr/share/wayland-sessions/<your-compositor>.desktop`:
@@ -153,7 +157,7 @@ Never run a compositor directly from a TTY without a supervisor. In `live/sessio
   Type=Application
   DesktopNames=mycompositor;wlroots
   ```
-* Symlink your session binary into both `/usr/local/bin` and `/usr/bin` so display managers like GDM, SDDM, Ly, and greetd find it regardless of how their systemd PATH is restricted.
+* Display managers start sessions with a minimal PATH: install a tiny launcher in `/usr/local/bin` that runs the user's own copy (Infynitae's is `live/infynitae-session-shim`), rather than copies of the binaries that go stale.
 
 ### Step 4: Zero-Daemon Settings Management
 Avoid running heavy background configuration daemons (like `xfconfd` or `dconf-service`):
@@ -168,8 +172,8 @@ Avoid running heavy background configuration daemons (like `xfconfd` or `dconf-s
 
 ### Step 5: Implement Safe Live Updating
 When compiling and installing binaries on a running desktop:
-* Never use `cp -f target/release/binary /destination`: Linux returns `ETXTBUSY` ("Text file busy") when truncating an open binary file descriptor.
-* Always use `install -m 755 target/release/binary /destination`: `install` unlinks the destination inode first, allowing running processes to maintain their existing file handle while new executions immediately use the updated binary.
+* Never use `cp -f target/release/binary /destination`: Linux returns `ETXTBSY` ("Text file busy") when truncating a running binary.
+* Install to a temporary name next to it and rename it over the old one (`install -m 755 target/release/binary /destination.new && mv -f /destination.new /destination`): running processes keep the old inode, new ones start the update, and nothing ever sees a half-written file.
 
 ---
 

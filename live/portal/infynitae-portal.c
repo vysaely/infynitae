@@ -550,11 +550,8 @@ static gboolean on_socket_incoming(GSocketService *service,
 }
 
 static void setup_socket_listener(void) {
-    const char *runtime_dir = g_get_user_runtime_dir();
-    char sock_dir[256];
-    char sock_path[256];
-    snprintf(sock_dir, sizeof(sock_dir), "%s/infynitae", runtime_dir);
-    snprintf(sock_path, sizeof(sock_path), "%s/shortcuts.sock", sock_dir);
+    gchar *sock_dir = g_build_filename(g_get_user_runtime_dir(), "infynitae", NULL);
+    gchar *sock_path = g_build_filename(sock_dir, "shortcuts.sock", NULL);
 
     mkdir(sock_dir, 0700);
     unlink(sock_path);
@@ -580,6 +577,8 @@ static void setup_socket_listener(void) {
         fflush(stdout);
     }
     g_object_unref(addr);
+    g_free(sock_path);
+    g_free(sock_dir);
 }
 
 int main(int argc, char *argv[]) {

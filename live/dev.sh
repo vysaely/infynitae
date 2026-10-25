@@ -54,7 +54,7 @@ case "$ACTION" in
         fi
         echo "==> Launching Infynitae in a safe nested window..."
         echo "==> You can test your compositor changes inside this window without touching your live desktop."
-        CARGO_BIN="$REPO_DIR/target/release/infynitae"
+        CARGO_BIN="${CARGO_TARGET_DIR:-$REPO_DIR/target}/release/infynitae"
         if [ ! -f "$CARGO_BIN" ]; then
             CARGO_BIN="$HOME/.local/bin/infynitae"
         fi
@@ -64,7 +64,7 @@ case "$ACTION" in
         echo "==> Compiling Infynitae compositor in release mode..."
         cd "$REPO_DIR"
         cargo build --release -p infynitae
-        cp -f target/release/infynitae "$HOME/.local/bin/infynitae"
+        cp -f "${CARGO_TARGET_DIR:-target}/release/infynitae" "$HOME/.local/bin/infynitae"
         echo "==> Successfully installed to ~/.local/bin/infynitae"
         ;;
     check|test-all)

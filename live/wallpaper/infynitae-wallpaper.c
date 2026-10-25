@@ -579,9 +579,11 @@ int main(int argc, char *argv[]) {
     if (is_video_file(target)) {
         kill_other_wallpapers();
         if (system("command -v mpvpaper >/dev/null 2>&1") == 0) {
-            char cmd[2048];
-            snprintf(cmd, sizeof(cmd), "exec mpvpaper -o '--loop-file=inf --hwdec=auto --no-audio --vo=gpu' '*' '%s'", target);
-            return system(cmd);
+            // the path goes to mpvpaper as one argument: no shell, so any file name works
+            execlp("mpvpaper", "mpvpaper", "-o", "--loop-file=inf --hwdec=auto --no-audio --vo=gpu",
+                   "*", target, (char *)NULL);
+            perror("[infynitae-wallpaper] mpvpaper");
+            return 1;
         } else {
             fprintf(stderr, "[infynitae-wallpaper] For animated video wallpapers, please install mpvpaper: sudo pacman -S mpvpaper\n");
             return 1;

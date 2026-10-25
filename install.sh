@@ -85,7 +85,6 @@ if command -v systemctl >/dev/null 2>&1; then
         sudo systemctl enable --now seatd 2>/dev/null || true
         sudo usermod -aG seat "$USER" 2>/dev/null || true
     fi
-    sudo usermod -aG video "$USER" 2>/dev/null || true
 fi
 
 # GPU, joystick and uinput access come from systemd (70-uaccess) and the steam package
@@ -97,7 +96,7 @@ cargo build --release -p infynitae
 
 # 6. Install release binary
 mkdir -p "$HOME/.local/bin"
-install -m 755 target/release/infynitae "$HOME/.local/bin/infynitae"
+install -m 755 "${CARGO_TARGET_DIR:-target}/release/infynitae" "$HOME/.local/bin/infynitae"
 install -m 755 live/dev.sh "$HOME/.local/bin/infynitae-dev"
 install -m 755 live/settings.sh "$HOME/.local/bin/infynitae-settings"
 install -m 755 live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
@@ -185,17 +184,20 @@ echo ""
 echo "  Keybindings:"
 echo "    Super + 1..9         Focus Window Slot 1..9"
 echo "    Super + Shift + 1..9 Focus Cluster Slot 1..9"
-echo "    Super + Space        Recenter Active Window"
+echo "    Super + Space        Recenter Active Window (Shift: keep zoom)"
+echo "    Super + Tab          Next Window (Shift: overview)"
 echo "    Super + Enter        Fit Window to Screen"
 echo "    Super + Shift + Enter Fullscreen"
 echo "    Super + Q            Terminal (auto: kitty, alacritty, foot)"
-echo "    Super + W            Launcher (fuzzel / dmenu)"
+echo "    Super + W            Launcher (auto: fuzzel, rofi, …)"
 echo "    Super + E            Files"
 echo "    Super + L            Lock Screen"
+echo "    Super + V            Clipboard History"
 echo "    Super + Shift + S    Screenshot"
 echo "    Super + Shift + R    Region Screenshot"
 echo "    Super + Shift + Backspace  Reload Config & Helpers"
-echo "    Super + Delete       Close Window"
+echo "    Super + Delete       Close Window (Shift: force)"
+echo "    Super + Middle drag  Pan the canvas"
 echo "    Ctrl + Alt + Backspace Restart Compositor (infynitae-session stop: quit)"
 echo "=========================================================="
 echo "  Start Infynitae from a text console (Ctrl+Alt+F2, log in) with:"

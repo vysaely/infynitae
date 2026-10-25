@@ -979,9 +979,13 @@ mod tests {
     #[test]
     fn a_stale_lock_of_ours_is_reclaimed() {
         let root = root("stale");
-        let mut child = Command::new("true").spawn().unwrap();
-        let dead = child.id();
-        child.wait().unwrap();
+        // no process ever has pid_max (pids are below it); a spawned-and-reaped child would race
+        // this binary's tests that reap every child
+        let dead: u32 = fs::read_to_string("/proc/sys/kernel/pid_max")
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
         fs::create_dir_all(root.join(".X11-unix")).unwrap();
         fs::write(root.join(".X0-lock"), format!("{dead:>10}\n")).unwrap();
         let stale_socket = UnixListener::bind(root.join(".X11-unix/X0")).unwrap();

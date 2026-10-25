@@ -52,8 +52,6 @@ if ! grep -q "$AUTORUN_MARKER" "$PROFILE_TARGET"; then
 if [ -z "$WAYLAND_DISPLAY" ] && [ "$XDG_VTNR" = 1 ]; then
     if [ -x "$HOME/.local/bin/infynitae-session" ]; then
         exec "$HOME/.local/bin/infynitae-session"
-    elif [ -x "$HOME/infynitae/live/launch.sh" ]; then
-        exec "$HOME/infynitae/live/launch.sh"
     fi
 fi
 EOF

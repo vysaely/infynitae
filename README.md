@@ -18,40 +18,49 @@ Infinite canvas Wayland compositor built in Rust for Arch Linux. Vibecoded for m
 | `Super + Shift + Right Drag` | Resize entire window cluster |
 | `Super + Middle Drag` | Pan canvas (`free`, `grab`, or `rts` mode) |
 | `Super + Shift + Wheel` | Zoom canvas in / out |
-| `Super + Tab` / `Alt + Tab` | Cycle window focus (auto-centers camera) |
+| `Super + Tab` | Cycle window focus (auto-centers camera) |
 | `Super + Shift + Tab` | Canvas overview toggle (fits all windows / restores view) |
 | `Super + Q` | Terminal (auto: kitty, alacritty, foot) |
-| `Super + W` | Launcher (`fuzzel`) |
+| `Super + W` | Launcher (auto: `fuzzel`, `rofi`, `tofi`, `wofi`) |
 | `Super + E` | Files (`yazi`, `thunar`, `dolphin`) |
-| `Super + Shift + S` | Screenshot full screen |
+| `Super + Shift + S` / `Print` | Screenshot full screen |
 | `Super + Shift + R` | Region screenshot (`slurp` + `grim`) |
 | `Super + Shift + Backspace` | Reload config & desktop environment |
 | `Super + L` | Lock screen (native `infynitae-lock`) |
 | `Super + V` | Clipboard history (`cliphist`) |
-| `Super + C` / `Super + Delete` | Close focused window |
-| `Super + Shift + C` / `Super + Shift + Delete` | Force kill window process |
-| `Ctrl + Alt + Backspace` | Exit |
+| `Super + Delete` | Close focused window |
+| `Super + Shift + Delete` | Force kill window process |
+| `Super + Shift + P` | Hide the focused window from screen captures |
+| `Super + Shift + I` | Stay awake (no idle screen-off / auto-lock) |
+| `Super + Alt + C` | Save a replay clip (`ENABLE_REPLAY_BUFFER`) |
+| `Super + Alt + R` | Start / stop recording |
+| `Super` (held) | Frees a cursor a game captured (`SUPER_FREES_CURSOR`) |
+| `Ctrl + Alt + Backspace` | Restart the compositor (`infynitae-session stop` quits) |
 | `Ctrl + Alt + F1..F12` | Switch VT |
 | `XF86Audio*` / `XF86MonBrightness*` | Volume & brightness control |
 
+Any action can be rebound, and any command bound, in the config (`BIND_<ACTION>`, `EXEC_<NAME>`).
+
 ## Configuration
 
-Single config file at `~/.config/infynitae/config`:
+Single config file at `~/.config/infynitae/config` (the install writes the commented template;
+each section says when its changes apply, most of them the moment you save):
 
 - Scaling filter (`nearest` for razor-sharp 0% blur, `linear` for smooth) and `OUTPUT_SCALE`
 - Cluster tiling and smart adjacent window placement (`PLACEMENT_POLICY="cluster"`)
-- Auto-focus (`FOCUS_ON_OPEN="1"`) and camera teleportation (`TELEPORT_ON_OPEN="1"`) for new windows
+- Focus and camera for new windows (`FOCUS_ON_OPEN`, `TELEPORT_ON_OPEN`: by default only windows you opened)
 - Mouse speed, acceleration profile (`flat` or `adaptive`), and pan mode (`free`, `grab`, `rts`)
 - Window focus model (`sloppy`, `strict`, or `click`)
 - Screen sharing & remote desktop cursor suppression (`SCREENCOPY_CURSOR="false"`)
-- Wallpaper and live animated background (`WALLPAPER`)
+- Wallpaper (`WALLPAPER`; a video plays through `mpvpaper` when installed)
 - Keyboard layout, repeat delay, and repeat rate
 - Cursor theme, size, and fonts
-- Default apps (`TERMINAL`, `LAUNCHER`, `FILE_MANAGER`, `SCREEN_LOCKER`)
+- Default apps (`TERMINAL`, `LAUNCHER`, `FILE_MANAGER`, `BROWSER`, `SCREEN_LOCKER`)
+- Session restore, clipboard history, screen sharing prompt, replay buffer and recorder
 
-Apply changes:
+Restart the helpers (wallpaper, portal, recorder, clipboard…) without closing windows:
 ```bash
-infynitae-settings apply
+infynitae-reload          # or Super + Shift + Backspace
 ```
 
 Reset canvas zoom to 100%:

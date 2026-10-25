@@ -77,7 +77,7 @@ cargo build --release -p infynitae
 # 4. Install binaries to ~/.local/bin
 mkdir -p "$HOME/.local/bin"
 # replace by rename: the running compositor keeps its old file until the next restart
-install -m 755 target/release/infynitae "$HOME/.local/bin/infynitae.new"
+install -m 755 "${CARGO_TARGET_DIR:-target}/release/infynitae" "$HOME/.local/bin/infynitae.new"
 mv -f "$HOME/.local/bin/infynitae.new" "$HOME/.local/bin/infynitae"
 install -m 755 live/infynitae-reload "$HOME/.local/bin/infynitae-reload"
 install -m 755 live/infynitae-restore "$HOME/.local/bin/infynitae-restore"
