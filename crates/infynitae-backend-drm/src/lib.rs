@@ -1533,12 +1533,11 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 Some(s) => (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
                 None => (event.x(), event.y()),
             };
-            let delta = calculate_abs_pointer_delta(
-                (target_phys_x, target_phys_y),
-                current_p,
-                data.scale_120,
-            );
-            let scale = (f64::from(data.scale_120) / 120.0).max(0.001);
+            let scale = screen
+                .and_then(|s| data.state.core().output(s.id).map(|o| o.scale))
+                .unwrap_or_else(|| (f64::from(data.scale_120) / 120.0).max(0.001));
+            let delta =
+                calculate_abs_pointer_delta_scale((target_phys_x, target_phys_y), current_p, scale);
             data.last_abs_pointer = Some((target_phys_x / scale, target_phys_y / scale));
 
             if delta.0.abs() > 0.0001 || delta.1.abs() > 0.0001 {
@@ -1605,12 +1604,11 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 Some(s) => (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
                 None => (event.x(), event.y()),
             };
-            let delta = calculate_abs_pointer_delta(
-                (target_phys_x, target_phys_y),
-                current_p,
-                data.scale_120,
-            );
-            let scale = (f64::from(data.scale_120) / 120.0).max(0.001);
+            let scale = screen
+                .and_then(|s| data.state.core().output(s.id).map(|o| o.scale))
+                .unwrap_or_else(|| (f64::from(data.scale_120) / 120.0).max(0.001));
+            let delta =
+                calculate_abs_pointer_delta_scale((target_phys_x, target_phys_y), current_p, scale);
             data.last_abs_pointer = Some((target_phys_x / scale, target_phys_y / scale));
             let time_us = Event::time(&event);
             if delta.0.abs() > 0.0001 || delta.1.abs() > 0.0001 {
@@ -1648,12 +1646,11 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 Some(s) => (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
                 None => (event.x(), event.y()),
             };
-            let delta = calculate_abs_pointer_delta(
-                (target_phys_x, target_phys_y),
-                current_p,
-                data.scale_120,
-            );
-            let scale = (f64::from(data.scale_120) / 120.0).max(0.001);
+            let scale = screen
+                .and_then(|s| data.state.core().output(s.id).map(|o| o.scale))
+                .unwrap_or_else(|| (f64::from(data.scale_120) / 120.0).max(0.001));
+            let delta =
+                calculate_abs_pointer_delta_scale((target_phys_x, target_phys_y), current_p, scale);
             data.last_abs_pointer = Some((target_phys_x / scale, target_phys_y / scale));
             let time_us = Event::time(&event);
             if delta.0.abs() > 0.0001 || delta.1.abs() > 0.0001 {
@@ -1777,6 +1774,21 @@ fn update_keyboard_leds(
 }
 
 /// Calculates the logical pointer delta needed to move from `current_p` to an absolute position
+/// `(abs_x, abs_y)` transformed to screen pixels and normalized by `scale`.
+pub fn calculate_abs_pointer_delta_scale(
+    abs_px: (f64, f64),
+    current_p: (f64, f64),
+    scale: f64,
+) -> (f64, f64) {
+    let scale = scale.max(0.001);
+    let target_logical = (abs_px.0 / scale, abs_px.1 / scale);
+    (
+        target_logical.0 - current_p.0,
+        target_logical.1 - current_p.1,
+    )
+}
+
+/// Calculates the logical pointer delta needed to move from `current_p` to an absolute position
 /// `(abs_x, abs_y)` transformed to screen pixels and normalized by `scale_120`.
 pub fn calculate_abs_pointer_delta(
     abs_px: (f64, f64),
@@ -1784,11 +1796,7 @@ pub fn calculate_abs_pointer_delta(
     scale_120: u32,
 ) -> (f64, f64) {
     let scale = (f64::from(scale_120) / 120.0).max(0.001);
-    let target_logical = (abs_px.0 / scale, abs_px.1 / scale);
-    (
-        target_logical.0 - current_p.0,
-        target_logical.1 - current_p.1,
-    )
+    calculate_abs_pointer_delta_scale(abs_px, current_p, scale)
 }
 
 fn configure_input_device(
@@ -1936,6 +1944,17 @@ mod tests {
         // 2.0x scale (240/120)
         let delta = calculate_abs_pointer_delta((1000.0, 800.0), (0.0, 0.0), 240);
         assert_eq!(delta, (500.0, 400.0));
+    }
+
+    #[test]
+    fn pointer_motion_absolute_delta_maps_to_target_with_output_scale() {
+        // 1.5x scale
+        let delta = calculate_abs_pointer_delta_scale((1500.0, 900.0), (0.0, 0.0), 1.5);
+        assert_eq!(delta, (1000.0, 600.0));
+
+        // 2.0x scale
+        let delta = calculate_abs_pointer_delta_scale((1920.0, 1080.0), (500.0, 300.0), 2.0);
+        assert_eq!(delta, (460.0, 240.0));
     }
 
     #[test]
