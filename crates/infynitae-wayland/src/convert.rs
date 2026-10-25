@@ -280,7 +280,11 @@ impl<E: Element> Element for CanonicalRect<E> {
         scale: Scale<f64>,
         commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
-        let damage = self.inner.damage_since(scale, commit);
+        let mut damage = self.inner.damage_since(scale, commit);
+        if damage.iter().any(|d| d.is_empty()) {
+            // an empty rectangle would reach the kernel as a damage clip it refuses (`drop_empty`)
+            damage = damage.into_iter().filter(|d| !d.is_empty()).collect();
+        }
         if !self.remapped || damage.is_empty() {
             damage
         } else {
@@ -580,7 +584,21 @@ where
             .into_iter()
             .map(OutputElement::Surface),
     );
+    drop_empty(&mut elements, view.k);
     Ok((elements, view.k))
+}
+
+/// Leaves out elements that cover no pixel (a 1-pixel subsurface zoomed out rounds to 0 wide).
+/// They draw nothing, but the damage tracker counts a 0-wide rectangle as on screen, and its
+/// damage became a 0-wide damage clip for which the kernel refused the page flip (owner,
+/// 2026-10-25: "invalid damage clip 1126 720 1126 747", the screen frozen while Discord's
+/// updater showed).
+fn drop_empty<R>(elements: &mut Vec<OutputElement<R>>, k: f64)
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+{
+    elements.retain(|e| !e.geometry(Scale::from(k)).is_empty());
 }
 
 /// One frame's elements for screencopy, excluding any private window (hidden from screenshots/screenshares).
@@ -636,6 +654,7 @@ where
             .into_iter()
             .map(OutputElement::Surface),
     );
+    drop_empty(&mut elements, view.k);
     Ok((elements, view.k))
 }
 

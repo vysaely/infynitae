@@ -1286,6 +1286,18 @@ fn render(data: &mut LoopData) {
                                 },
                                 elements.len()
                             );
+                            // which element the kernel refused, if the refusal names a
+                            // rectangle (`journalctl -k` with drm.debug)
+                            let geometries: Vec<_> = elements
+                                .iter()
+                                .map(|e| {
+                                    smithay::backend::renderer::element::Element::geometry(
+                                        e,
+                                        smithay::utils::Scale::from(k),
+                                    )
+                                })
+                                .collect();
+                            eprintln!("[infynitae] Refused frame's elements: {geometries:?}");
                         }
                         if scanout {
                             // the client's buffer may be what the kernel refuses: compose for a while
