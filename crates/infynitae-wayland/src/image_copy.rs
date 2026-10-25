@@ -271,6 +271,10 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, FrameData> for WaylandState {
                     );
                     return;
                 }
+                if !state.screencopy.serves_capture() {
+                    frame.failed(FailureReason::Unknown);
+                    return;
+                }
                 let Some(buffer) = data.buffer.lock().unwrap().clone() else {
                     frame.post_error(
                         ext_image_copy_capture_frame_v1::Error::NoBuffer,

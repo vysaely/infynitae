@@ -123,6 +123,7 @@ where
 
 /// A session on the output: (session, its log lines).
 fn session(r: &mut Rig) -> ExtImageCopyCaptureSessionV1 {
+    r.ls.state.screencopy.enable_capture();
     let sources: ExtOutputImageCaptureSourceManagerV1 =
         bind(r, "ext_output_image_capture_source_manager_v1");
     let manager: ExtImageCopyCaptureManagerV1 = bind(r, "ext_image_copy_capture_manager_v1");
@@ -202,4 +203,64 @@ fn a_resized_output_fails_the_capture_with_new_constraints() {
         r.ls.probe.log.last().map(String::as_str),
         Some("frame ready")
     );
+}
+
+#[test]
+fn removing_output_fails_pending_frames() {
+    let mut r = Rig::new(common::Lockstep::new(Some(a_1080())));
+    let s = session(&mut r);
+    let qh = r.ls.qh.clone();
+    let frame = s.create_frame(&qh, ());
+    let buffer = r.ls.probe.buffer(&qh, 1920, 1080);
+    frame.attach_buffer(&buffer);
+    frame.damage_buffer(0, 0, 1920, 1080);
+    frame.capture();
+    r.ls.pump();
+    let id = r.ls.output();
+    r.ls.disconnect(id);
+    r.ls.pump();
+    let log = r.ls.probe.log.join("\n");
+    assert!(log.contains("frame failed Stopped"), "{log}");
+    frame.destroy();
+}
+
+#[test]
+fn capture_fails_on_unsupported_backend() {
+    let mut r = Rig::new(common::Lockstep::new(Some(a_1080())));
+    // Without enable_capture (simulate headless/winit which never serve it)
+    let sources: ExtOutputImageCaptureSourceManagerV1 =
+        bind(&mut r, "ext_output_image_capture_source_manager_v1");
+    let manager: ExtImageCopyCaptureManagerV1 = bind(&mut r, "ext_image_copy_capture_manager_v1");
+    let qh = r.ls.qh.clone();
+    let output = r.ls.probe.outputs[0].1.clone();
+    let source = sources.create_source(&output, &qh, ());
+    let s = manager.create_session(&source, Options::PaintCursors, &qh, ());
+    r.ls.pump();
+
+    let frame = s.create_frame(&qh, ());
+    let buffer = r.ls.probe.buffer(&qh, 1920, 1080);
+    frame.attach_buffer(&buffer);
+    frame.damage_buffer(0, 0, 1920, 1080);
+    frame.capture();
+    r.ls.pump();
+    let log = r.ls.probe.log.join("\n");
+    assert!(log.contains("frame failed Unknown"), "{log}");
+    frame.destroy();
+}
+
+#[test]
+fn double_capture_triggers_protocol_error() {
+    let mut r = Rig::new(common::Lockstep::new(Some(a_1080())));
+    let s = session(&mut r);
+    let qh = r.ls.qh.clone();
+    let frame = s.create_frame(&qh, ());
+    let buffer = r.ls.probe.buffer(&qh, 1920, 1080);
+    frame.attach_buffer(&buffer);
+    frame.damage_buffer(0, 0, 1920, 1080);
+    frame.capture();
+    frame.capture();
+    let res = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        r.ls.pump();
+    }));
+    assert!(res.is_err());
 }

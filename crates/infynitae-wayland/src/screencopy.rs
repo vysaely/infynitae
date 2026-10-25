@@ -45,6 +45,16 @@ impl PendingFrame {
         }
     }
 
+    /// The output was removed / stopped.
+    pub fn fail_stopped(&self) {
+        match &self.frame {
+            CaptureFrame::Wlr(f) => f.failed(),
+            CaptureFrame::Ext(f) => {
+                f.failed(crate::image_copy::FailureReason::Stopped);
+            }
+        }
+    }
+
     /// The buffer holds the frame: its `size` (all of it damaged), presented at `time`
     /// (CLOCK_MONOTONIC).
     pub fn ready(&self, size: (u32, u32), time: std::time::Duration) {
@@ -86,6 +96,7 @@ pub struct FrameUserData {
     pub output_id: Option<OutputId>,
     pub overlay_cursor: bool,
     pub region: Option<(i32, i32, i32, i32)>,
+    pub used: std::sync::atomic::AtomicBool,
 }
 
 /// Global Screencopy state held by `WaylandState`.
@@ -93,6 +104,7 @@ pub struct ScreencopyState {
     pub global: GlobalId,
     pub pending: Arc<Mutex<Vec<PendingFrame>>>,
     pub hide_cursor: std::sync::atomic::AtomicBool,
+    pub serves_capture: std::sync::atomic::AtomicBool,
 }
 
 impl ScreencopyState {
@@ -119,7 +131,18 @@ impl ScreencopyState {
             global,
             pending: Arc::new(Mutex::new(Vec::new())),
             hide_cursor: std::sync::atomic::AtomicBool::new(hide),
+            serves_capture: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    pub fn serves_capture(&self) -> bool {
+        self.serves_capture
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    pub fn enable_capture(&self) {
+        self.serves_capture
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn hide_cursor(&self) -> bool {
@@ -144,6 +167,20 @@ impl ScreencopyState {
             }
         }
         taken
+    }
+
+    /// Fails and removes all pending capture requests for a specific output when it disappears.
+    pub fn fail_pending_output(&self, output_id: OutputId) {
+        let mut list = self.pending.lock().unwrap();
+        let mut i = 0;
+        while i < list.len() {
+            if list[i].output_id == output_id {
+                let frame = list.swap_remove(i);
+                frame.fail_stopped();
+            } else {
+                i += 1;
+            }
+        }
     }
 
     /// Whether any capture requests are waiting for `output_id`.
@@ -196,6 +233,7 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
                             output_id: None,
                             overlay_cursor: overlay_cursor != 0,
                             region: None,
+                            used: std::sync::atomic::AtomicBool::new(false),
                         },
                     );
                     frame.failed();
@@ -209,6 +247,7 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
                             output_id: Some(output_id),
                             overlay_cursor: overlay_cursor != 0,
                             region: None,
+                            used: std::sync::atomic::AtomicBool::new(false),
                         },
                     );
                     frame.failed();
@@ -221,6 +260,7 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
                         output_id: Some(output_id),
                         overlay_cursor: overlay_cursor != 0,
                         region: None,
+                        used: std::sync::atomic::AtomicBool::new(false),
                     },
                 );
 
@@ -261,6 +301,7 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
                             output_id: None,
                             overlay_cursor: overlay_cursor != 0,
                             region: None,
+                            used: std::sync::atomic::AtomicBool::new(false),
                         },
                     );
                     frame.failed();
@@ -274,6 +315,7 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
                             output_id: Some(output_id),
                             overlay_cursor: overlay_cursor != 0,
                             region: None,
+                            used: std::sync::atomic::AtomicBool::new(false),
                         },
                     );
                     frame.failed();
@@ -289,6 +331,7 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
                         output_id: Some(output_id),
                         overlay_cursor: overlay_cursor != 0,
                         region: Some((x, y, w, h)),
+                        used: std::sync::atomic::AtomicBool::new(false),
                     },
                 );
 
@@ -328,6 +371,19 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
         };
         match request {
             zwlr_screencopy_frame_v1::Request::Copy { buffer } => {
+                if data.used.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    frame.post_error(
+                        zwlr_screencopy_frame_v1::Error::AlreadyUsed,
+                        "the frame has already been used to copy a wl_buffer",
+                    );
+                    return;
+                }
+                if !state.screencopy.serves_capture()
+                    || !state.outputs.iter().any(|o| o.id == output_id)
+                {
+                    frame.failed();
+                    return;
+                }
                 state.screencopy.pending.lock().unwrap().push(PendingFrame {
                     frame: CaptureFrame::Wlr(frame.clone()),
                     output_id,
@@ -338,6 +394,19 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
                 });
             }
             zwlr_screencopy_frame_v1::Request::CopyWithDamage { buffer } => {
+                if data.used.swap(true, std::sync::atomic::Ordering::SeqCst) {
+                    frame.post_error(
+                        zwlr_screencopy_frame_v1::Error::AlreadyUsed,
+                        "the frame has already been used to copy a wl_buffer",
+                    );
+                    return;
+                }
+                if !state.screencopy.serves_capture()
+                    || !state.outputs.iter().any(|o| o.id == output_id)
+                {
+                    frame.failed();
+                    return;
+                }
                 state.screencopy.pending.lock().unwrap().push(PendingFrame {
                     frame: CaptureFrame::Wlr(frame.clone()),
                     output_id,
@@ -358,5 +427,27 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use smithay::reexports::wayland_server::Display;
+
+    #[test]
+    fn serves_capture_defaults_to_false_and_enables() {
+        let display: Display<WaylandState> = Display::new().unwrap();
+        let state = ScreencopyState::new(&display.handle());
+        assert!(!state.serves_capture());
+        state.enable_capture();
+        assert!(state.serves_capture());
+    }
+
+    #[test]
+    fn frame_used_atomic_rejects_second_use() {
+        let used = std::sync::atomic::AtomicBool::new(false);
+        assert!(!used.swap(true, std::sync::atomic::Ordering::SeqCst));
+        assert!(used.swap(true, std::sync::atomic::Ordering::SeqCst));
     }
 }

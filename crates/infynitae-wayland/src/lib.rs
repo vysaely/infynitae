@@ -286,6 +286,7 @@ impl WaylandState {
     /// compositor does (T8); the Canvas is opaque. The framebuffer's rows run top-down (Smithay's
     /// DRM compositor renders into its own swapchain the right way up).
     pub fn set_console_target(&mut self) {
+        self.screencopy.enable_capture();
         self.set_target(convert::RenderTarget {
             flip_y: false,
             clear: convert::CANVAS_CLEAR,

@@ -448,6 +448,7 @@ impl WaylandState {
     fn output_removed(&mut self, id: OutputId) {
         if let Some(i) = self.outputs.iter().position(|h| h.id == id) {
             let h = self.outputs.remove(i);
+            self.screencopy.fail_pending_output(id);
             self.dh.disable_global::<WaylandState>(h.global.clone());
             self.disabled_outputs
                 .push((h.global, std::time::Instant::now() + Duration::from_secs(5)));
