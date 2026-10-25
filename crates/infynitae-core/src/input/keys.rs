@@ -101,9 +101,9 @@ pub enum KeyAction {
     MediaPrev,
 
     Cancel,
-    /// F-FIT-1 on the pointer's output, for the element under the pointer (INC-10).
+    /// F-FIT-1 on the pointer's output, for the element under the pointer.
     FitViewport,
-    /// Restore (M8, OBJ-30) on the pointer's output (INC-10).
+    /// Restore (M8, OBJ-30) on the pointer's output.
     ViewportRestore,
     /// Super+Enter (owner decision 2026-10-21): fit the element under the pointer, or, when the
     /// camera already shows exactly that fit, restore the previous camera. Stateless: decided by
@@ -309,21 +309,17 @@ pub struct KeyBinding {
     pub action: KeyAction,
 }
 
-/// Canonical key bindings for Foundation 01: none beyond the exact-modifier bindings resolved in
-/// [`resolve_key_binding`]. FocusNext (an x10 harness fixture on Logo+Enter, INC4-F04) moved to
-/// Super+Tab when the owner gave Super+Enter to fit; Super+Shift+Tab is reserved for the overview
+/// Canonical key bindings: none beyond the exact-modifier bindings resolved in
+/// [`resolve_key_binding`]. FocusNext is on Super+Tab; Super+Shift+Tab is reserved for the overview
 /// (owner decisions 2026-10-21).
 pub const CANONICAL_BINDINGS: [KeyBinding; 0] = [];
 
 /// Pure binding filter: resolves an evdev keycode and modifier snapshot against bindings.
 /// Plain Escape only cancels when an interaction is actively in progress (F04, K6).
 ///
-/// INC-10 navigation bindings (owner decision 4 of the INC-10 exit review; exact matching per the
-/// M1 brief; proposed for C12.F17, not adopted): Logo+F fits, Logo+Shift+F restores. The modifiers
-/// match exactly: Ctrl or Alt held as well resolves neither,
-/// and fit requires Shift absent, so Logo+Shift+F never also fits. Neither resolves while an
-/// interaction owns the camera or the pointer: a pan computes the camera from its own start, so a
-/// fit inside it would be overwritten.
+/// Modifiers must match exactly: extra modifiers like Ctrl or Alt prevent matching.
+/// Bindings do not resolve while an interaction owns the camera or pointer (except Escape),
+/// preventing interference with active gestures.
 pub fn resolve_key_binding(
     key: u32,
     mods: Modifiers,
@@ -719,8 +715,8 @@ mod tests {
         assert_eq!(resolve_key_binding(KEY_A, logo, false), None);
     }
 
-    /// INC-10: Logo+F fits, Logo+Shift+F restores (fit requires Shift absent); plain F and any F
-    /// during an interaction are not compositor bindings.
+    /// Logo+Enter fits or restores (FitToggle), Logo+Shift+Enter toggles fullscreen;
+    /// plain Enter or keys during an interaction are not compositor bindings.
     #[test]
     fn enter_bindings_resolve_the_fit_toggle_and_fullscreen() {
         let logo = Modifiers {
