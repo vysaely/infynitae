@@ -1,10 +1,9 @@
-//! Infynitae Native headless backend: virtual outputs, virtual vblank and the test renderer, so
-//! tests exercise the production core and adapter (FOUNDATION_ARCHITECTURE C1.1, NB-12).
+//! Infynitae Native headless backend: virtual outputs, virtual input injection, virtual vblank, and
+//! the test renderer, so tests exercise the production core and adapter (FOUNDATION_ARCHITECTURE C1.1, NB-12).
 //!
-//! INC-2 state: any number of virtual outputs connected, reconfigured and disconnected through
-//! the output-lifecycle token (startup and hotplug alike); virtual vblank per output driving
-//! Core's frame clock; frame production through the adapter's damage trackers. No input
-//! injection yet (INC-3).
+//! Virtual outputs are connected, reconfigured and disconnected through [`OutputLifecycleToken`].
+//! Virtual input events are injected through [`InputPort`]. A virtual vblank per output drives Core's
+//! frame clock and frame production through the adapter's damage trackers.
 
 #![deny(unsafe_code)]
 
@@ -306,7 +305,7 @@ pub struct HeadlessCompositorOptions {
     pub max_frames: Option<u64>,
     /// What the headless renderer reports as its device limit.
     pub device_limit: DeviceLimit,
-    /// xwayland-satellite to supervise (M19, INC-12, experimental); `None`: no X11.
+    /// Path to xwayland-satellite to supervise (M19); `None`: no X11.
     pub xwayland_satellite: Option<std::path::PathBuf>,
 }
 
@@ -337,7 +336,7 @@ pub fn run_headless(
     run_headless_with(core, input_port, output_token, options, None)
 }
 
-/// [`run_headless`] with a loop extension (the shell server, INC-11): it runs after every dispatch,
+/// [`run_headless`] with a loop extension (such as the shell server): it runs after every dispatch,
 /// before the clients are served, so its effects reach them with that dispatch's flush.
 pub fn run_headless_with(
     core: infynitae_core::Core,
