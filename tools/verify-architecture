@@ -63,7 +63,9 @@ ALLOWED_INTERNAL = {
 # plus a serialization crate once the protocol exists); smithay only in adapter and backends.
 ALLOWED_EXTERNAL = {
     CORE: set(),
-    WAYLAND: {"smithay", "libc"},  # libc: the session's signal self-pipe (owner decision 2026-10-19; signal-hook rejected)
+    # libc: the session's signal self-pipe (owner decision 2026-10-19; signal-hook rejected);
+    # xcursor: the compositor draws the user's cursor theme (owner decision 2026-10-25; already locked)
+    WAYLAND: {"smithay", "libc", "xcursor"},
     HEADLESS: {"smithay"},
     WINIT: {"smithay"},
     DRM: {"smithay"},  # T7: drm, gbm, input, libseat, udev arrive through Smithay's features only

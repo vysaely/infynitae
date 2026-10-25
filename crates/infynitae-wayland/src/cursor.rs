@@ -170,8 +170,21 @@ pub fn theme_search_paths() -> Vec<PathBuf> {
     theme_search_paths_with(home.as_deref(), None)
 }
 
-/// Parse `Inherits=` from an `index.theme` file if present.
-fn theme_inherits(theme_dir: &Path) -> Option<String> {
+/// The themes an `index.theme` inherits from (`Inherits=a,b` or `a;b`), in order.
+fn theme_inherits(theme_dir: &Path) -> Vec<String> {
+    theme_inherits_line(theme_dir)
+        .map(|v| {
+            v.split([',', ';'])
+                .map(str::trim)
+                .filter(|t| !t.is_empty())
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The raw `Inherits=` value of an `index.theme`, if present.
+fn theme_inherits_line(theme_dir: &Path) -> Option<String> {
     let index_file = theme_dir.join("index.theme");
     let content = std::fs::read_to_string(index_file).ok()?;
     for line in content.lines() {
@@ -299,7 +312,7 @@ impl CursorThemeManager {
             return None;
         }
 
-        let mut inherits = None;
+        let mut inherits: Vec<String> = Vec::new();
         for search_dir in &self.search_paths {
             let theme_dir = search_dir.join(theme);
             if theme_dir.is_dir() {
@@ -307,15 +320,17 @@ impl CursorThemeManager {
                 if icon_path.is_file() {
                     return Some(icon_path);
                 }
-                if inherits.is_none() {
+                if inherits.is_empty() {
                     inherits = theme_inherits(&theme_dir);
                 }
             }
         }
 
-        if let Some(parent) = inherits {
-            if let Some(path) = self.find_icon_in_theme(&parent, icon_name, visited) {
-                return Some(path);
+        if !inherits.is_empty() {
+            for parent in &inherits {
+                if let Some(path) = self.find_icon_in_theme(parent, icon_name, visited) {
+                    return Some(path);
+                }
             }
         } else if theme != "default"
             && let Some(path) = self.find_icon_in_theme("default", icon_name, visited)
@@ -641,6 +656,33 @@ mod tests {
         assert_eq!(loaded.width, 24);
         assert_eq!(loaded.xhot, 3);
         assert_eq!(loaded.yhot, 4);
+    }
+
+    /// `Inherits=` may list several themes: a missing first one does not stop the search.
+    #[test]
+    fn theme_inherits_a_list() {
+        let tmp = TestTempDir::new("inherits_list");
+        let parent = tmp.path().join("second");
+        std::fs::create_dir_all(parent.join("cursors")).expect("mkdir");
+        let pix = vec![0xCC; 24 * 24 * 4];
+        std::fs::write(
+            parent.join("cursors").join("left_ptr"),
+            make_xcursor_file(&[(24, 24, 24, (5, 6), &pix)]),
+        )
+        .expect("write left_ptr");
+        let child = tmp.path().join("child");
+        std::fs::create_dir_all(child.join("cursors")).expect("mkdir");
+        std::fs::write(
+            child.join("index.theme"),
+            "[Icon Theme]\nInherits=missing, second\n",
+        )
+        .expect("write");
+        let mut mgr =
+            CursorThemeManager::with_search_paths("child", 24, vec![tmp.path().to_path_buf()]);
+        let loaded = mgr
+            .get_or_load("default", 24)
+            .expect("found in the second inherited theme");
+        assert_eq!((loaded.xhot, loaded.yhot), (5, 6));
     }
 
     #[test]
