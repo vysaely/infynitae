@@ -874,28 +874,37 @@ pub fn hint_to_local_point(location: GlobalPoint) -> LocalPoint {
 pub(crate) fn convert_region(
     attrs: &smithay::wayland::compositor::RegionAttributes,
 ) -> Option<LocalRect> {
-    let mut min_x = i32::MAX;
-    let mut min_y = i32::MAX;
-    let mut max_x = i32::MIN;
-    let mut max_y = i32::MIN;
+    let mut min_x = i64::MAX;
+    let mut min_y = i64::MAX;
+    let mut max_x = i64::MIN;
+    let mut max_y = i64::MIN;
     let mut any = false;
     for (kind, r) in &attrs.rects {
         if matches!(kind, smithay::wayland::compositor::RectangleKind::Add) {
             any = true;
-            min_x = min_x.min(r.loc.x);
-            min_y = min_y.min(r.loc.y);
-            max_x = max_x.max(r.loc.x + r.size.w);
-            max_y = max_y.max(r.loc.y + r.size.h);
+            let rx = r.loc.x as i64;
+            let ry = r.loc.y as i64;
+            let rw = r.size.w as i64;
+            let rh = r.size.h as i64;
+            min_x = min_x.min(rx);
+            min_y = min_y.min(ry);
+            max_x = max_x.max(rx.saturating_add(rw));
+            max_y = max_y.max(ry.saturating_add(rh));
         }
     }
     if any && max_x > min_x && max_y > min_y {
-        Some(LocalRect {
-            loc: LocalPoint { x: min_x, y: min_y },
-            size: LocalSize {
-                w: max_x - min_x,
-                h: max_y - min_y,
-            },
-        })
+        let x = min_x.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        let y = min_y.clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        let w = (max_x - min_x).clamp(0, i32::MAX as i64) as i32;
+        let h = (max_y - min_y).clamp(0, i32::MAX as i64) as i32;
+        if w > 0 && h > 0 {
+            Some(LocalRect {
+                loc: LocalPoint { x, y },
+                size: LocalSize { w, h },
+            })
+        } else {
+            None
+        }
     } else {
         None
     }
@@ -971,5 +980,40 @@ mod cursor_tests {
             big.last().unwrap().1,
             Rectangle::new((0, 24).into(), (26, 2).into())
         );
+    }
+
+    #[test]
+    fn convert_region_handles_overflow_and_clamps() {
+        use smithay::wayland::compositor::{RectangleKind, RegionAttributes};
+        let mut attrs = RegionAttributes::default();
+        attrs.rects.push((
+            RectangleKind::Add,
+            Rectangle::new((i32::MAX - 10, 10).into(), (100, 50).into()),
+        ));
+        let rect = convert_region(&attrs).expect("region should be valid");
+        assert_eq!(rect.loc.x, i32::MAX - 10);
+        assert_eq!(rect.loc.y, 10);
+        assert!(rect.size.w > 0);
+        assert_eq!(rect.size.h, 50);
+
+        let mut attrs2 = RegionAttributes::default();
+        attrs2.rects.push((
+            RectangleKind::Add,
+            Rectangle::new((10, i32::MAX - 20).into(), (50, 100).into()),
+        ));
+        let rect2 = convert_region(&attrs2).expect("region should be valid");
+        assert_eq!(rect2.loc.y, i32::MAX - 20);
+        assert!(rect2.size.h > 0);
+
+        let mut attrs3 = RegionAttributes::default();
+        attrs3.rects.push((
+            RectangleKind::Add,
+            Rectangle::new((i32::MIN, i32::MIN).into(), (i32::MAX, i32::MAX).into()),
+        ));
+        let rect3 = convert_region(&attrs3).expect("region should be valid");
+        assert_eq!(rect3.loc.x, i32::MIN);
+        assert_eq!(rect3.loc.y, i32::MIN);
+        assert_eq!(rect3.size.w, i32::MAX);
+        assert_eq!(rect3.size.h, i32::MAX);
     }
 }
