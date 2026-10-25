@@ -30,11 +30,16 @@ if [ -d ".git" ]; then
     echo "==> Fetching latest changes from remote repository..."
     CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "main")
     # Stash uncommitted changes safely if any
-    HAS_DIFF=false
+    PUSHED_STASH=false
     if ! git diff-index --quiet HEAD -- 2>/dev/null; then
         echo "==> Stashing local working tree changes..."
-        git stash push -m "infynitae-auto-update-$(date +%s)" >/dev/null 2>&1 || true
-        HAS_DIFF=true
+        STASH_BEFORE=$(git rev-parse -q --verify refs/stash 2>/dev/null || true)
+        if git stash push -m "infynitae-auto-update-$(date +%s)" >/dev/null 2>&1; then
+            STASH_AFTER=$(git rev-parse -q --verify refs/stash 2>/dev/null || true)
+            if [ -n "$STASH_AFTER" ] && [ "$STASH_AFTER" != "$STASH_BEFORE" ]; then
+                PUSHED_STASH=true
+            fi
+        fi
     fi
 
     echo "==> Pulling branch: $CURRENT_BRANCH..."
@@ -42,9 +47,13 @@ if [ -d ".git" ]; then
         echo "[infynitae-update] Warning: git pull failed (offline or remote mismatch). Continuing build..."
     }
 
-    if [ "$HAS_DIFF" = true ]; then
+    if [ "$PUSHED_STASH" = true ]; then
         echo "==> Re-applying local changes..."
-        git stash pop >/dev/null 2>&1 || true
+        if ! git stash pop; then
+            echo "[infynitae-update] Error: Conflict while restoring stashed changes." >&2
+            echo "[infynitae-update] Stopping before building or installing. Your changes remain in git stash." >&2
+            exit 1
+        fi
     fi
 fi
 
