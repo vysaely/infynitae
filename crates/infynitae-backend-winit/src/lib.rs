@@ -44,11 +44,11 @@ pub struct WinitCompositorOptions {
     pub duration: Option<Duration>,
     /// Optional maximum frame count before clean exit.
     pub max_frames: Option<u64>,
-    /// xwayland-satellite to supervise (M19, INC-12, experimental); `None`: no X11.
+    /// Path to xwayland-satellite to supervise (M19); `None`: no X11.
     pub xwayland_satellite: Option<std::path::PathBuf>,
     /// Output scale ×120 for every screen (`None`: auto/120, i.e. 1.0).
     pub scale_120: Option<u32>,
-    /// Scaling texture filter ("nearest" for 0% blur, "linear" for smooth).
+    /// Scaling texture filter ("nearest" for sharp pixels, "linear" for smooth).
     pub scaling_filter: Option<String>,
 }
 
@@ -132,11 +132,9 @@ impl HostFrameGate {
     }
 }
 
-/// The nested backend's answer to "what is the device limit": **not a query**. The GLES
-/// renderer is not asked (`GL_MAX_TEXTURE_SIZE`; OB-52, INC-13). The value is the limit
-/// recorded for the reference device (EC-16) and the host GPU's real limit may be lower, in
-/// which case a buffer Core allowed can fail to import. Provisional with the rest of this
-/// experimental backend.
+/// The nested backend reports an assumed device limit rather than querying the GLES renderer
+/// (`GL_MAX_TEXTURE_SIZE`; OB-52). The value is the limit recorded for the reference device
+/// (EC-16). If the host GPU has a lower limit, importing a buffer Core allowed may fail.
 struct AssumedGlesLimits;
 
 impl infynitae_wayland::limits::RendererLimits for AssumedGlesLimits {
@@ -163,7 +161,7 @@ pub fn run_nested(
     run_nested_with(core, input_port, output_token, options, None)
 }
 
-/// [`run_nested`] with a loop extension (the shell server, INC-11): it runs after every dispatch,
+/// [`run_nested`] with a loop extension (such as the shell server): it runs after every dispatch,
 /// before the clients are served, so its effects reach them with that dispatch's flush.
 pub fn run_nested_with(
     core: Core,
@@ -220,7 +218,7 @@ pub fn run_nested_with(
     let (mut backend, winit_event_loop) =
         winit::init_from_attributes::<GlesRenderer>(window_attributes)?;
 
-    // Zero-blur scaling: use Nearest-neighbor filtering on upscaled surfaces by default
+    // Scaling filter: nearest-neighbor filtering on upscaled surfaces by default
     let use_nearest = !matches!(options.scaling_filter.as_deref(), Some("linear"));
     if use_nearest && let Err(e) = backend.renderer().upscale_filter(TextureFilter::Nearest) {
         eprintln!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
@@ -248,8 +246,7 @@ pub fn run_nested_with(
     state.apply(&effects);
 
     // Device ceiling D_max (OB-13, F-SCALE-2, OBJ-29), through the renderer-limit interface.
-    // This backend does not ask its GLES renderer yet (OB-52, INC-13): it reports an assumed
-    // limit and says so.
+    // This backend reports an assumed limit without querying the GLES renderer (OB-52).
     state.report_renderer_limits(&AssumedGlesLimits)?;
 
     let cfg_path = std::env::var("HOME")
@@ -304,7 +301,7 @@ pub fn run_nested_with(
             (a, b) => a.or(b),
         };
         event_loop.dispatch(timeout, &mut data)?;
-        // Hyprland-style Live Config Watcher: auto-reloads and applies changes instantly in real time
+        // Watches ~/.config/infynitae/config for changes and reloads settings
         if data.last_config_check.elapsed() >= Duration::from_millis(250) {
             data.last_config_check = std::time::Instant::now();
             if let Some(path) = &data.config_path
@@ -627,7 +624,7 @@ fn render_and_present(data: &mut LoopData) {
 }
 
 /// Calculates logical pointer motion delta from an absolute physical position sample,
-/// establishing a baseline on entry/re-entry without warping (Defect B).
+/// establishing a baseline on entry or re-entry without warping.
 pub fn normalize_abs_motion(
     last_abs_pos: &mut Option<(f64, f64)>,
     pos: (f64, f64),
@@ -642,7 +639,7 @@ pub fn normalize_abs_motion(
     delta
 }
 
-/// Normalizes relative physical motion delta by scale factor (Defect B).
+/// Normalizes relative physical motion delta by scale factor.
 pub fn normalize_rel_motion(delta: (f64, f64), scale_120: u32) -> (f64, f64) {
     let scale = (scale_120 as f64 / 120.0).max(0.001);
     (delta.0 / scale, delta.1 / scale)
@@ -718,7 +715,7 @@ mod tests {
         // Host window focus loss or pointer leave: reset baseline
         last_abs = None;
 
-        // Re-entry from completely different position: baseline established, no multi-hundred-pixel warp!
+        // Re-entry from completely different position: baseline established, no multi-hundred-pixel warp
         let delta = normalize_abs_motion(&mut last_abs, (100.0, 50.0), 120);
         assert_eq!(
             delta,
