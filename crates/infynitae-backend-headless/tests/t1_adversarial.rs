@@ -207,7 +207,8 @@ fn f_output_removal_relocates_to_the_nearest_survivor() {
         output_k("C", (1920, 1080), 120, 60_000),
     ];
     for (to_b, want) in [
-        (1960.0, vec!["enter W 460,320", "motion 460,320"]),
+        // the enter carries the position: a motion repeating it is not sent
+        (1960.0, vec!["enter W 460,320"]),
         (2879.5, vec!["enter W 460,320"]),
     ] {
         let mut r = Rig::new(Lockstep::with(persisted(&[("C", 1000, 0)]), &outs));

@@ -122,6 +122,9 @@ pub struct WaylandState {
     pub(crate) target: convert::RenderTarget,
     /// The cursor clients asked for, drawn when the target draws one (`cursor`).
     cursor: smithay::input::pointer::CursorImageStatus,
+    /// The focus (surface and origin) and position of the last `wl_pointer.motion` delivered,
+    /// and whether pointer events wait for their `wl_pointer.frame` (`pointer`).
+    pointer_sent: pointer::Sent,
     arrow: cursor::Arrow,
     xdg_shell: XdgShellState,
     shm: ShmState,
@@ -377,6 +380,7 @@ impl WaylandState {
             outputs: Vec::new(),
             target: convert::RenderTarget::default(),
             cursor: smithay::input::pointer::CursorImageStatus::default_named(),
+            pointer_sent: pointer::Sent::default(),
             arrow: cursor::Arrow::default(),
             // only what Core's toplevel-request policy can grant is announced (M2)
             xdg_shell: XdgShellState::new_with_capabilities::<Self>(display, capabilities),

@@ -799,3 +799,57 @@ fn a_popup_chain_on_a_fullscreen_window_is_dismissed_by_a_camera_drag() {
         "keyboard back on the window"
     );
 }
+
+/// A fullscreen window's commits under a still pointer send it no pointer motion (owner,
+/// 2026-10-25: the cursor never hid over a fullscreen video). Core re-sends the true position
+/// after each commit of a presented window, whose geometry may have changed; when focus, origin
+/// and position are unchanged the client is told nothing, or a player that hides the cursor
+/// after a still moment takes the commits for movement. A real motion is still delivered.
+#[test]
+fn a_fullscreen_windows_frames_under_a_still_pointer_send_no_motion() {
+    use infynitae_backend_headless::pointer_motion;
+    let mut t = T::new();
+    let (w, id) = t.map("W", (200, 100), RED);
+    t.focus(id);
+    t.ask(w, |tl| tl.set_fullscreen(None));
+    t.resize(w, (640, 480), RED);
+    pointer_motion(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        (5.0, 5.0),
+        (5.0, 5.0),
+        1000,
+    )
+    .unwrap();
+    t.adv();
+    assert!(
+        t.ls.probe.ptr.iter().any(|l| l.starts_with("enter W")),
+        "the pointer is not on W: {:?}",
+        t.ls.probe.ptr
+    );
+    let before = t.ls.probe.ptr.len();
+    for _ in 0..10 {
+        t.paint(w, RED);
+    }
+    assert_eq!(
+        t.ls.probe.ptr[before..].to_vec(),
+        Vec::<String>::new(),
+        "pointer events from frames alone"
+    );
+    pointer_motion(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        (3.0, 0.0),
+        (3.0, 0.0),
+        2000,
+    )
+    .unwrap();
+    t.adv();
+    assert!(
+        t.ls.probe.ptr[before..]
+            .iter()
+            .any(|l| l.starts_with("motion")),
+        "a real motion was not delivered: {:?}",
+        &t.ls.probe.ptr[before..]
+    );
+}

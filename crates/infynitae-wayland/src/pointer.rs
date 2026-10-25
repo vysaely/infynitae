@@ -28,6 +28,18 @@ type Focus = Option<(
 )>;
 type Inner<'a> = PointerInnerHandle<'a, WaylandState>;
 
+/// What the focused client last received. Core sends the true position again after changes that
+/// may move what lies under the pointer (M10), among them every commit of a fullscreen window;
+/// when focus, origin and position are all unchanged the motion would tell the client nothing,
+/// and a player that hides the cursor after a still moment (a fullscreen video) would take it
+/// for movement 60 times a second. Such a motion, and a frame with no event before it, are not
+/// sent.
+#[derive(Default)]
+pub(crate) struct Sent {
+    motion: Option<(Focus, convert::GlobalPoint)>,
+    frame_pending: bool,
+}
+
 /// The adapter's form of `PointerState::NoOutput` at the seat (EE-3, E1R): a compositor grab that
 /// delivers nothing. Installed with `Focus::Clear` (one `wl_pointer.leave` through Smithay's
 /// internal path, no client motion); removed before the first placement after a connect.
@@ -267,11 +279,24 @@ impl WaylandState {
                 time_ms,
             } => {
                 let focus = self.focus(target);
+                let location = convert::canvas_to_global(location);
+                // a grab may deliver the motion elsewhere or not at all: always passed on, and
+                // what the client got is then unknown
+                let grabbed = ptr.is_grabbed();
+                let unchanged = !grabbed
+                    && ptr.current_location() == location
+                    && ptr.current_focus() == focus.as_ref().map(|(s, _)| s.clone())
+                    && self.pointer_sent.motion.as_ref() == Some(&(focus.clone(), location));
+                if unchanged {
+                    return true;
+                }
                 let event = MotionEvent {
-                    location: convert::canvas_to_global(location),
+                    location,
                     serial: SERIAL_COUNTER.next_serial(),
                     time: time_ms,
                 };
+                self.pointer_sent.motion = (!grabbed).then(|| (focus.clone(), location));
+                self.pointer_sent.frame_pending = true;
                 ptr.motion(self, focus, &event);
             }
             Effect::PointerRelative {
@@ -286,6 +311,7 @@ impl WaylandState {
                     delta_unaccel: convert::global_delta(delta_unaccel),
                     utime: time_us,
                 };
+                self.pointer_sent.frame_pending = true;
                 ptr.relative_motion(self, focus, &event);
             }
             Effect::PointerButton {
@@ -308,10 +334,18 @@ impl WaylandState {
                     button,
                     state,
                 };
+                self.pointer_sent.frame_pending = true;
                 ptr.button(self, &event);
             }
-            Effect::PointerAxis { axis, time_ms } => ptr.axis(self, axis_frame(axis, time_ms)),
-            Effect::PointerFrame => ptr.frame(self),
+            Effect::PointerAxis { axis, time_ms } => {
+                self.pointer_sent.frame_pending = true;
+                ptr.axis(self, axis_frame(axis, time_ms));
+            }
+            Effect::PointerFrame => {
+                if std::mem::take(&mut self.pointer_sent.frame_pending) {
+                    ptr.frame(self);
+                }
+            }
             Effect::PointerZeroOutputBegin => {
                 let popup_target = self.popup_grab.as_ref().and_then(|g| {
                     if !g.has_ended() {
@@ -340,6 +374,7 @@ impl WaylandState {
                 };
                 ptr.motion(self, None, &event);
                 ptr.frame(self);
+                self.pointer_sent = Sent::default();
                 if let Some(target) = popup_target {
                     let kb = self.keyboard_handle();
                     kb.set_focus(self, Some(target), SERIAL_COUNTER.next_serial());
@@ -347,6 +382,7 @@ impl WaylandState {
             }
             Effect::PointerZeroOutputEnd => {
                 ptr.unset_grab(self, SERIAL_COUNTER.next_serial(), 0);
+                self.pointer_sent = Sent::default();
                 self.popups.cleanup();
                 let grab_opt = self.popup_grab.clone();
                 let is_alive = grab_opt.as_ref().is_some_and(|g| {
@@ -506,6 +542,7 @@ impl WaylandState {
         self.popup_pointer_grab_serial = None;
         let ptr = self.pointer_handle();
         ptr.unset_grab(self, serial, time);
+        self.pointer_sent = Sent::default();
     }
 
     pub(crate) fn keyboard_unset_grab(&mut self) {

@@ -295,7 +295,9 @@ fn pan_membership_changes_without_configures() {
         configures,
         "configure during pan"
     );
-    assert_eq!(r.since(m0), vec!["motion 630,520", "frame"]);
+    // the camera is back where it started, so the release's true position is where the client
+    // already has the pointer: nothing to tell it (the adapter drops a motion that repeats the last)
+    assert_eq!(r.since(m0), Vec::<String>::new());
 }
 
 /// INC-10 (G-OB24 met, C12.F14.5; replaces the INC-3 gate test `no_pan_at_persistent_zoom`, whose

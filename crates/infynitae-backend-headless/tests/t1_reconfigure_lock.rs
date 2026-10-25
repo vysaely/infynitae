@@ -202,8 +202,11 @@ fn a_presentation_start_and_end_still_reconcile_an_unconstrained_pointer() {
     set_focus(&mut r.ls.state, &mut r.ls.input, Some(w)).unwrap();
     r.ls.pump();
     r.frame();
+    // the client keeps its size here, so what lies under the pointer is unchanged and the true
+    // position repeats what the client has: not sent (one that changes it reaches the client,
+    // t1_inc7_adversarial `pointer_event_times_never_go_back_when_a_presentation_starts_or_ends`)
     for on in [true, false] {
         let wire = fullscreen(&mut r, on);
-        assert_eq!(motions(&wire), 1, "presentation {on}: {wire:?}");
+        assert_eq!(motions(&wire), 0, "presentation {on}: {wire:?}");
     }
 }
