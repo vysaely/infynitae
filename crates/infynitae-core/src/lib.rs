@@ -643,6 +643,19 @@ impl Core {
         }
     }
 
+    /// Ends a suppression without reconciling: for a caller that recomputes presentation
+    /// membership and scale itself right after (a grant taking the output, `take_output`).
+    pub(crate) fn clear_presentation_suppression(&mut self, output: output::OutputId) {
+        if let Some(pos) = self
+            .presentation_suppressed
+            .iter()
+            .position(|&o| o == output)
+        {
+            self.presentation_suppressed.swap_remove(pos);
+            self.invalidate_frame(output);
+        }
+    }
+
     /// Reconciles view switch on `output` (visibility pass, scale evaluation, pointer true position per M10).
     fn reconcile_presentation_change(
         &mut self,

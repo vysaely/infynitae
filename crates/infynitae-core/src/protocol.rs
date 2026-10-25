@@ -628,7 +628,9 @@ impl Core {
             return Vec::new();
         };
         let output = self.fullscreen[mine].output;
-        self.unsuppress_presentation(output, &mut Vec::new());
+        // the grant's commit recomputes membership and scale for the output: reconciling here,
+        // with the old grant still listed, would emit effects nobody delivers
+        self.clear_presentation_suppression(output);
         let (ended, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.fullscreen)
             .into_iter()
             .enumerate()
