@@ -736,9 +736,14 @@ pub fn predict_rho(
     predict_rho_observed(anchor, geometry, outputs, views).unwrap_or_else(|| {
         // Fallback: max connected output scale (INV-SCALE-5).
         outputs
-            .iter()
-            .map(|o| o.scale)
-            .fold(1.0f64, |acc, s| acc.max(s))
+            .first()
+            .map(|first| {
+                outputs[1..]
+                    .iter()
+                    .map(|o| o.scale)
+                    .fold(first.scale, |acc, s| acc.max(s))
+            })
+            .unwrap_or(1.0)
     })
 }
 
@@ -1435,5 +1440,41 @@ mod tests {
                 side * corrected_b
             );
         }
+    }
+
+    /// INV-SCALE-5: the fallback of predict_rho is the max connected output scale, folding from
+    /// the first output (not clamped to a minimum of 1.0).
+    #[test]
+    fn predict_rho_fallback_with_half_scale_output() {
+        use crate::geom::{CanvasPoint, LocalPoint, LocalRect, LocalSize};
+        use crate::output::{OutputDescriptor, OutputIds, Transform};
+
+        let mut ids = OutputIds::default();
+        let desc = OutputDescriptor {
+            key: crate::output::tests::key("A"),
+            mode: (1920, 1080),
+            transform: Transform::Normal,
+            scale_120: 60, // scale 0.5
+            refresh_mhz: 60_000,
+        };
+        let outputs = vec![OutputModel::from_descriptor(ids.next(), &desc, (0.0, 0.0))];
+        assert_eq!(outputs[0].scale, 0.5);
+
+        let anchor = CanvasPoint { x: 0, y: 0 };
+        let geometry = LocalRect {
+            loc: LocalPoint::default(),
+            size: LocalSize { w: 100, h: 100 },
+        };
+
+        // When no views intersect (e.g. empty views), predict_rho falls back to max output scale.
+        let rho = predict_rho(anchor, geometry, &outputs, &[]);
+        assert_eq!(
+            rho, 0.5,
+            "fallback scale should be 0.5 (max connected output scale), not 1.0"
+        );
+
+        // When there are no outputs, fallback returns 1.0.
+        let rho_empty = predict_rho(anchor, geometry, &[], &[]);
+        assert_eq!(rho_empty, 1.0, "sane fallback with no outputs is 1.0");
     }
 }
