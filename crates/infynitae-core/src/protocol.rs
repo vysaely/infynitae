@@ -814,8 +814,8 @@ impl Core {
                 if w <= 0 || h <= 0 {
                     continue;
                 }
-                let gx0 = a.x + t.geometry.loc.x as i64;
-                let gy0 = a.y + t.geometry.loc.y as i64;
+                let gx0 = a.x;
+                let gy0 = a.y;
                 let gx1 = gx0.saturating_add(w);
                 let gy1 = gy0.saturating_add(h);
 
@@ -825,15 +825,7 @@ impl Core {
                     || gy1 <= target_rect.1
                     || gy0 >= target_rect.3);
                 if intersects {
-                    overlapping.push((
-                        other,
-                        gx0,
-                        gy0,
-                        w,
-                        h,
-                        t.geometry.loc.x as i64,
-                        t.geometry.loc.y as i64,
-                    ));
+                    overlapping.push((other, gx0, gy0, w, h));
                 }
             }
         }
@@ -849,7 +841,7 @@ impl Core {
         let mut right_cursor = target_rect.2 + GAP;
         let mut left_cursor = target_rect.0 - GAP;
 
-        for (other, gx0, gy0, w, _, loc_x, loc_y) in overlapping {
+        for (other, gx0, gy0, w, _) in overlapping {
             let other_mid_x = gx0 + w / 2;
             let new_gx0 = if other_mid_x >= target_mid_x {
                 let chosen = right_cursor;
@@ -862,8 +854,8 @@ impl Core {
             };
 
             let new_anchor = CanvasPoint {
-                x: new_gx0 - loc_x,
-                y: gy0 - loc_y,
+                x: new_gx0,
+                y: gy0,
             };
             let _ = self.place_by_shell(other, new_anchor, out);
         }
@@ -1651,8 +1643,6 @@ impl Core {
         // PlacementPolicy::ClusterTiling
         let new_w = tree.geometry.size.w as i64;
         let new_h = tree.geometry.size.h as i64;
-        let new_loc_x = tree.geometry.loc.x as i64;
-        let new_loc_y = tree.geometry.loc.y as i64;
         if new_w <= 0 || new_h <= 0 {
             return Some(center_anchor);
         }
@@ -1666,8 +1656,8 @@ impl Core {
                 let ew = t.geometry.size.w as i64;
                 let eh = t.geometry.size.h as i64;
                 if ew > 0 && eh > 0 {
-                    let gx0 = a.x + t.geometry.loc.x as i64;
-                    let gy0 = a.y + t.geometry.loc.y as i64;
+                    let gx0 = a.x;
+                    let gy0 = a.y;
                     existing.push((gx0, gy0, gx0.saturating_add(ew), gy0.saturating_add(eh)));
                 }
             }
@@ -1677,10 +1667,7 @@ impl Core {
         let center_gy = center_anchor.y;
 
         if existing.is_empty() {
-            return Some(CanvasPoint {
-                x: center_gx - new_loc_x,
-                y: center_gy - new_loc_y,
-            });
+            return Some(center_anchor);
         }
 
         const GAP: i64 = 12;
@@ -1693,10 +1680,7 @@ impl Core {
         };
 
         if !overlaps(center_gx, center_gy) {
-            return Some(CanvasPoint {
-                x: center_gx - new_loc_x,
-                y: center_gy - new_loc_y,
-            });
+            return Some(center_anchor);
         }
 
         // Generate grid-aligned candidate positions flush with existing window edges
@@ -1733,8 +1717,8 @@ impl Core {
 
         let (chosen_gx, chosen_gy) = best.unwrap_or((center_gx, center_gy));
         Some(CanvasPoint {
-            x: chosen_gx - new_loc_x,
-            y: chosen_gy - new_loc_y,
+            x: chosen_gx,
+            y: chosen_gy,
         })
     }
 
@@ -5971,6 +5955,92 @@ mod tests {
             c.stage().anchor(id),
             Some(moved_anchor),
             "anchor must not snap back to stale resize start_anchor"
+        );
+    }
+
+    /// INV-STAGE-2: an element's anchor is the Canvas position of its window-geometry origin.
+    /// Cluster tiling and push_overlapping_cluster use the same convention as CentredInView
+    /// and stage.rs even when geometry.loc != 0 (CSD window with client margins/shadows).
+    #[test]
+    fn cluster_placement_and_push_with_csd_window_respects_stage_anchor_convention() {
+        let csd = |k: u64, w: i32, h: i32, lx: i32, ly: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint { x: lx, y: ly },
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: key(k),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize {
+                        w: w + lx,
+                        h: h + ly,
+                    }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+
+        // 1. CentredInView reference
+        let mut ref_c = centred((1280, 800), 120, None);
+        let ref_id = ref_c.toplevel_created();
+        ref_c
+            .toplevel_committed(ref_id, csd(1, 400, 300, 20, 30, false))
+            .unwrap();
+        ref_c
+            .toplevel_committed(ref_id, csd(1, 400, 300, 20, 30, true))
+            .unwrap();
+        let expected_center_anchor = ref_c.stage().anchor(ref_id).unwrap();
+
+        // 2. ClusterTiling initial window placement
+        let mut c = centred((1280, 800), 120, None);
+        c.set_placement_policy(PlacementPolicy::ClusterTiling);
+
+        let w1 = c.toplevel_created();
+        c.toplevel_committed(w1, csd(1, 400, 300, 20, 30, false))
+            .unwrap();
+        c.toplevel_committed(w1, csd(1, 400, 300, 20, 30, true))
+            .unwrap();
+        let a1 = c.stage().anchor(w1).unwrap();
+        assert_eq!(
+            a1, expected_center_anchor,
+            "first cluster window anchor must match CentredInView anchor"
+        );
+
+        // 3. Second CSD window placed adjacent (below is closer to center than right since h < w)
+        let w2 = c.toplevel_created();
+        c.toplevel_committed(w2, csd(2, 400, 300, 20, 30, false))
+            .unwrap();
+        c.toplevel_committed(w2, csd(2, 400, 300, 20, 30, true))
+            .unwrap();
+        let a2 = c.stage().anchor(w2).unwrap();
+        assert_eq!(
+            a2,
+            CanvasPoint {
+                x: a1.x,
+                y: a1.y + 312,
+            },
+            "second window placed flush below with 12px gap based on window geometry"
+        );
+
+        // 4. push_overlapping_cluster with target_rect overlapping w1
+        let mut fx = Vec::new();
+        let target_rect = (a1.x - 50, a1.y - 50, a1.x + 500, a1.y + 200);
+        c.push_overlapping_cluster(w2, target_rect, &mut fx);
+        let pushed_a1 = c.stage().anchor(w1).unwrap();
+        // target_rect.0 is a1.x - 50 = -250. Pushed left: -250 - 12 (GAP) - 400 (w) = -662.
+        // y must remain exactly a1.y (-150) without subtracting loc_y (30).
+        assert_eq!(
+            pushed_a1,
+            CanvasPoint {
+                x: -662,
+                y: a1.y,
+            },
+            "pushed window anchor must equal new window geometry origin without subtracting loc"
         );
     }
 }
