@@ -148,6 +148,16 @@ if command -v xdg-user-dirs-update >/dev/null 2>&1; then
     xdg-user-dirs-update >/dev/null 2>&1 || true
 fi
 
+# 6f. RustDesk's service decides X11 or Wayland once per login, while this session is still a
+# text console, and then guesses X11: no Wayland display for its windows (the "someone is
+# connected" window never opens). Restarted now that the session is Wayland, it looks again.
+# Needs live/remote/50-infynitae-rustdesk.rules installed; without it nothing happens.
+if systemctl is-active --quiet rustdesk.service 2>/dev/null; then
+    if systemctl restart --no-ask-password rustdesk.service 2>>"${XDG_STATE_HOME:-$HOME/.local/state}/infynitae/rustdesk.log"; then
+        echo "$(date '+%F %T') restarted rustdesk.service for this Wayland session" >>"${XDG_STATE_HOME:-$HOME/.local/state}/infynitae/rustdesk.log"
+    fi
+fi
+
 # 7. User autostart script (blank canvas for user's future ricing)
 if [ -x "$HOME/.config/infynitae/autostart.sh" ]; then
     "$HOME/.config/infynitae/autostart.sh" &

@@ -44,7 +44,7 @@ compositor work in this repository, then the tool just works:
 
 | Piece | Tools that would work | Protocol to add |
 | :--- | :--- | :--- |
-| Remote desktop host (connecting to this PC) | RustDesk, AnyDesk, GNOME's remote-desktop clients | the `RemoteDesktop` portal (with our own ScreenCast) |
+| Remote desktop host for apps that need the portal for input | AnyDesk, GNOME's remote-desktop clients (RustDesk works already) | the `RemoteDesktop` portal (with our own ScreenCast) |
 
 Already spoken, so these just work: display settings (wdisplays, nwg-displays, kanshi, wlr-randr:
 `wlr-output-management`; mode, scale and position, not yet turning a screen off, rotating it or

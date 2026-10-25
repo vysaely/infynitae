@@ -55,14 +55,21 @@ once; with `SCREENSHARE_ASK="true"` every share asks, in a menu of the screens a
 canvas; a private window (`PRIVACY_APPS`, `PRIVACY_TITLES`) is never shared, and nothing is
 while the screen is locked. Only tested in the test suite so far.
 
+RustDesk works as a host (seen on this machine, 2026-10-25): the picture through the
+screen-sharing portal, the keyboard and mouse through the virtual devices its root service
+makes. Its service decides X11 or Wayland once per login, while the session is still a text
+console, so the session restarts it once the compositor runs; that needs the polkit rule in
+`live/remote/` installed once (root). Without it the connections still work, but RustDesk's own
+"someone is connected" window cannot open; the capture indicator shows them either way.
+
 Display settings tools (wlr-randr, wdisplays, kanshi) can change a screen's mode, scale and
 position while you work (`wlr-output-management`). They cannot yet turn a screen off, rotate it
 or switch VRR; mode changes have only run in the test suite, not on a real screen.
 
 Still missing, because the compositor has to speak the protocol first:
 
-- connecting to this PC with a remote desktop app (RustDesk, AnyDesk): the `RemoteDesktop`
-  portal;
+- remote desktop apps that need the `RemoteDesktop` portal for their input (AnyDesk, GNOME's
+  clients);
 - per-app volume in the menu (the apps themselves do it; pavucontrol works).
 
 The keyring asks for its password once per session when you log in without one (autologin);

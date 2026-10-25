@@ -1,0 +1,12 @@
+// Lets the person at the machine restart RustDesk's service, and nothing else: the session
+// restarts it once the compositor runs (live/session.sh), because the service decides X11 or
+// Wayland once per login, while the session is still a text console, and then guesses X11.
+// Install (root): install -m 644 live/remote/50-infynitae-rustdesk.rules /etc/polkit-1/rules.d/
+polkit.addRule(function (action, subject) {
+    if (action.id == "org.freedesktop.systemd1.manage-units" &&
+        action.lookup("unit") == "rustdesk.service" &&
+        action.lookup("verb") == "restart" &&
+        subject.local && subject.active) {
+        return polkit.Result.YES;
+    }
+});
