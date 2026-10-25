@@ -16,11 +16,18 @@
 #define OBJECT_PATH "/org/freedesktop/portal/desktop"
 #define INTERFACE_NAME "org.freedesktop.impl.portal.GlobalShortcuts"
 
+#define PORTAL_MOD_SHIFT (1 << 0)
+#define PORTAL_MOD_CTRL  (1 << 1)
+#define PORTAL_MOD_ALT   (1 << 2)
+#define PORTAL_MOD_LOGO  (1 << 3)
+
 typedef struct {
     char *id;
     char *description;
     char *trigger;
     uint32_t evdev_key;
+    uint32_t modifiers;
+    gboolean active;
 } ShortcutEntry;
 
 typedef struct {
@@ -174,6 +181,33 @@ static uint32_t trigger_to_evdev(const char *trigger) {
     return 0;
 }
 
+static uint32_t trigger_to_modifiers(const char *trigger) {
+    if (!trigger || !*trigger) return 0;
+    if (!strchr(trigger, '+')) return 0;
+
+    uint32_t mods = 0;
+    gchar **tokens = g_strsplit(trigger, "+", -1);
+    if (!tokens) return 0;
+
+    int count = g_strv_length(tokens);
+    for (int i = 0; i < count - 1; i++) {
+        gchar *tok = g_strstrip(tokens[i]);
+        if (g_ascii_strcasecmp(tok, "ctrl") == 0 || g_ascii_strcasecmp(tok, "control") == 0) {
+            mods |= PORTAL_MOD_CTRL;
+        } else if (g_ascii_strcasecmp(tok, "shift") == 0) {
+            mods |= PORTAL_MOD_SHIFT;
+        } else if (g_ascii_strcasecmp(tok, "alt") == 0 || g_ascii_strcasecmp(tok, "mod1") == 0) {
+            mods |= PORTAL_MOD_ALT;
+        } else if (g_ascii_strcasecmp(tok, "super") == 0 || g_ascii_strcasecmp(tok, "meta") == 0 ||
+                   g_ascii_strcasecmp(tok, "logo") == 0 || g_ascii_strcasecmp(tok, "mod4") == 0 ||
+                   g_ascii_strcasecmp(tok, "win") == 0) {
+            mods |= PORTAL_MOD_LOGO;
+        }
+    }
+    g_strfreev(tokens);
+    return mods;
+}
+
 static void sync_bound_keys_file(void) {
     const char *runtime_dir = g_get_user_runtime_dir();
     char path[256];
@@ -231,17 +265,32 @@ static void dispatch_action(const char *action) {
     act[sizeof(act) - 1] = '\0';
     g_strstrip(act);
 
-    // Format 1: "key:<evdev_code>:<pressed: 1 or 0>"
+    // Format 1: "key:<evdev_code>:<pressed: 1 or 0>[:<modifiers>]"
     if (strncmp(act, "key:", 4) == 0) {
         uint32_t key_code = 0;
         int pressed = 1;
-        if (sscanf(act + 4, "%u:%d", &key_code, &pressed) >= 1) {
+        uint32_t key_mods = 0;
+        int parsed = sscanf(act + 4, "%u:%d:%u", &key_code, &pressed, &key_mods);
+        if (parsed >= 1) {
             for (GList *sl = sessions; sl != NULL; sl = sl->next) {
                 SessionEntry *sess = (SessionEntry *)sl->data;
                 for (GList *k = sess->shortcuts; k != NULL; k = k->next) {
                     ShortcutEntry *sc = (ShortcutEntry *)k->data;
                     if (sc->evdev_key == key_code) {
-                        emit_portal_signal(sess->session_handle, sc->id, pressed ? "Activated" : "Deactivated");
+                        if (pressed) {
+                            if (parsed >= 3 && sc->modifiers != key_mods) {
+                                continue;
+                            }
+                            sc->active = TRUE;
+                            emit_portal_signal(sess->session_handle, sc->id, "Activated");
+                        } else {
+                            if (sc->active) {
+                                sc->active = FALSE;
+                                emit_portal_signal(sess->session_handle, sc->id, "Deactivated");
+                            } else if (parsed < 3 || sc->modifiers == key_mods) {
+                                emit_portal_signal(sess->session_handle, sc->id, "Deactivated");
+                            }
+                        }
                     }
                 }
             }
@@ -401,6 +450,8 @@ static void handle_method_call(GDBusConnection *connection,
                 sc->description = g_strdup(desc);
                 sc->trigger = g_strdup(pref_trigger);
                 sc->evdev_key = trigger_to_evdev(pref_trigger);
+                sc->modifiers = trigger_to_modifiers(pref_trigger);
+                sc->active = FALSE;
                 sess->shortcuts = g_list_append(sess->shortcuts, sc);
 
                 // Build returned shortcut with trigger_description

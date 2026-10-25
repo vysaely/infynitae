@@ -153,7 +153,8 @@ impl WaylandState {
                     use smithay::backend::input::KeyState;
                     use smithay::input::keyboard::Keycode;
 
-                    notify_portal_key(key, pressed);
+                    let mods = self.seat_modifiers();
+                    notify_portal_key(key, pressed, mods);
 
                     let kb = self.keyboard_handle();
                     let code = Keycode::new(key + 8);
@@ -501,7 +502,11 @@ impl WaylandState {
 }
 
 /// Notifies the GlobalShortcuts portal backend if the key is bound by an application (Discord, etc.)
-pub(crate) fn notify_portal_key(key: u32, pressed: bool) {
+pub(crate) fn notify_portal_key(
+    key: u32,
+    pressed: bool,
+    mods: infynitae_core::input::bindings::Modifiers,
+) {
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -540,19 +545,19 @@ pub(crate) fn notify_portal_key(key: u32, pressed: bool) {
         .unwrap_or(false);
 
     if is_bound {
-        static SENDER: std::sync::OnceLock<std::sync::mpsc::SyncSender<(u32, bool, String)>> =
+        static SENDER: std::sync::OnceLock<std::sync::mpsc::SyncSender<(u32, bool, u32, String)>> =
             std::sync::OnceLock::new();
         let sender = SENDER.get_or_init(|| {
-            let (tx, rx) = std::sync::mpsc::sync_channel::<(u32, bool, String)>(128);
+            let (tx, rx) = std::sync::mpsc::sync_channel::<(u32, bool, u32, String)>(128);
             std::thread::Builder::new()
                 .name("portal-notify".into())
                 .spawn(move || {
                     use std::io::Write;
                     use std::os::unix::net::UnixStream;
-                    while let Ok((k, p, sock_path)) = rx.recv() {
+                    while let Ok((k, p, m, sock_path)) = rx.recv() {
                         if let Ok(mut stream) = UnixStream::connect(&sock_path) {
                             let _ = stream.set_nonblocking(true);
-                            let msg = format!("key:{k}:{}\n", if p { 1 } else { 0 });
+                            let msg = format!("key:{k}:{}:{m}\n", if p { 1 } else { 0 });
                             let _ = stream.write_all(msg.as_bytes());
                         }
                     }
@@ -560,7 +565,20 @@ pub(crate) fn notify_portal_key(key: u32, pressed: bool) {
                 .expect("spawn portal notifier thread");
             tx
         });
+        let mut mods_mask: u32 = 0;
+        if mods.shift {
+            mods_mask |= 1 << 0;
+        }
+        if mods.ctrl {
+            mods_mask |= 1 << 1;
+        }
+        if mods.alt {
+            mods_mask |= 1 << 2;
+        }
+        if mods.logo {
+            mods_mask |= 1 << 3;
+        }
         let sock_path = format!("{runtime}/infynitae/shortcuts.sock");
-        let _ = sender.try_send((key, pressed, sock_path));
+        let _ = sender.try_send((key, pressed, mods_mask, sock_path));
     }
 }
