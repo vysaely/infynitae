@@ -8,7 +8,7 @@
 //!
 //! Which renderers really ask a device is a separate matter. The headless renderer is a
 //! fixture that reports a documented, configurable limit. Asking a real GPU, and asking again
-//! when the renderer is recreated, is OB-52 (INC-13) and is not done by anything here.
+//! when the renderer is recreated, is OB-52 and is not done here.
 
 use infynitae_core::scale::ScaleConfigError;
 

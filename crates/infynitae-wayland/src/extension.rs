@@ -1,5 +1,5 @@
 //! A loop extension: work the composition root plugs into a backend's event loop that the adapter
-//! itself knows nothing about (the trusted shell's server, INC-11). The adapter and the backends see
+//! itself knows nothing about (the trusted shell server). The adapter and the backends see
 //! only this trait and a wake-up; what runs inside, and with which authority, is the composition
 //! root's (C7.4: the adapter never holds or names the shell's authority).
 

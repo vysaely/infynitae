@@ -5,7 +5,7 @@
 //! The adapter executes protocol effects only.
 //!
 //! Ordered preemption (INV-INPUT-10, M3, M11):
-//! ActiveElementFocus transitions cleanly tear down popup grabs in one atomic batch:
+//! ActiveElementFocus transitions tear down popup grabs in one atomic batch:
 //! 1. ungrab(All) -> popup_done topmost first;
 //! 2. keyboard.unset_grab;
 //! 3. pointer.unset_grab;
