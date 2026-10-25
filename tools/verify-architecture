@@ -1019,6 +1019,8 @@ def check_mutations(binary, r):
             code, out = source_rules(binary, tmp)
             hit = code != 0 and any(l.startswith(f"FAIL {rule}:") for l in out.splitlines())
             r.check(hit, f"detected: {desc} ({rule})", f"NOT DETECTED: {desc} (expected {rule})\n{out}")
+        except Exception as e:  # a seed the checks never saw is a broken control, not a detection
+            r.fail(f"CONTROL BROKEN: {desc}: {e}")
         finally:
             shutil.rmtree(tmp)
     for desc, want, edits in INVENTORY_SEEDS:
@@ -1033,6 +1035,8 @@ def check_mutations(binary, r):
             hit = failed if want == "FAIL" else (passed and not failed)
             r.check(hit, f"unsafe inventory: {desc} ({want})",
                     f"unsafe inventory: {desc}: expected {want}\n{out}")
+        except Exception as e:  # a seed the checks never saw is a broken control, not a detection
+            r.fail(f"CONTROL BROKEN: {desc}: {e}")
         finally:
             shutil.rmtree(tmp)
     for desc, rel, line, kind in GRAPH_SEEDS:
