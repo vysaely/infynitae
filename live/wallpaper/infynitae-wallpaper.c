@@ -77,14 +77,38 @@ static int create_shm_file(off_t size) {
 static void draw_pixbuf_to_cairo(cairo_t *cr, GdkPixbuf *pb, int dx, int dy) {
     int w = gdk_pixbuf_get_width(pb);
     int h = gdk_pixbuf_get_height(pb);
+    if (w <= 0 || h <= 0) return;
+
+    if (w > 32767 || h > 32767) {
+        double factor = 32767.0 / (w > h ? w : h);
+        int nw = (int)(w * factor);
+        int nh = (int)(h * factor);
+        if (nw < 1) nw = 1;
+        if (nh < 1) nh = 1;
+        GdkPixbuf *downscaled = gdk_pixbuf_scale_simple(pb, nw, nh, GDK_INTERP_BILINEAR);
+        if (downscaled) {
+            draw_pixbuf_to_cairo(cr, downscaled, dx, dy);
+            g_object_unref(downscaled);
+        }
+        return;
+    }
+
     int rowstride = gdk_pixbuf_get_rowstride(pb);
     int n_channels = gdk_pixbuf_get_n_channels(pb);
     const guchar *src_pixels = gdk_pixbuf_read_pixels(pb);
 
     cairo_surface_t *surf = cairo_image_surface_create(
         n_channels == 4 ? CAIRO_FORMAT_ARGB32 : CAIRO_FORMAT_RGB24, w, h);
+    if (!surf || cairo_surface_status(surf) != CAIRO_STATUS_SUCCESS) {
+        if (surf) cairo_surface_destroy(surf);
+        return;
+    }
     int cairo_stride = cairo_image_surface_get_stride(surf);
     uint32_t *dst = (uint32_t *)cairo_image_surface_get_data(surf);
+    if (!dst) {
+        cairo_surface_destroy(surf);
+        return;
+    }
 
     cairo_surface_flush(surf);
     for (int y = 0; y < h; y++) {
@@ -152,7 +176,16 @@ static void render_output(struct wallpaper_output *out) {
 
     cairo_surface_t *cairo_surf = cairo_image_surface_create_for_data(
         (unsigned char *)data, CAIRO_FORMAT_ARGB32, w, h, stride);
+    if (!cairo_surf || cairo_surface_status(cairo_surf) != CAIRO_STATUS_SUCCESS) {
+        if (cairo_surf) cairo_surface_destroy(cairo_surf);
+        return;
+    }
     cairo_t *cr = cairo_create(cairo_surf);
+    if (!cr || cairo_status(cr) != CAIRO_STATUS_SUCCESS) {
+        if (cr) cairo_destroy(cr);
+        cairo_surface_destroy(cairo_surf);
+        return;
+    }
 
     // Deep black base canvas
     cairo_set_source_rgb(cr, 0.0, 0.0, 0.0);
@@ -197,6 +230,11 @@ static void render_output(struct wallpaper_output *out) {
         double s = (scale_w > scale_h) ? scale_w : scale_h;
         int target_w = (int)(img_w * s);
         int target_h = (int)(img_h * s);
+        if (target_w > 32767 || target_h > 32767) {
+            double factor = 32767.0 / (target_w > target_h ? target_w : target_h);
+            target_w = (int)(target_w * factor);
+            target_h = (int)(target_h * factor);
+        }
         int dx = (w - target_w) / 2;
         int dy = (h - target_h) / 2;
         GdkPixbuf *scaled = gdk_pixbuf_scale_simple(out->app->pixbuf, target_w > 0 ? target_w : 1,
@@ -628,6 +666,21 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "[infynitae-wallpaper] Failed to load image '%s': %s\n", target, err ? err->message : "unknown error");
         if (err) g_error_free(err);
         return 1;
+    }
+
+    int raw_w = gdk_pixbuf_get_width(pixbuf);
+    int raw_h = gdk_pixbuf_get_height(pixbuf);
+    if (raw_w > 32767 || raw_h > 32767) {
+        double factor = 32767.0 / (raw_w > raw_h ? raw_w : raw_h);
+        int nw = (int)(raw_w * factor);
+        int nh = (int)(raw_h * factor);
+        if (nw < 1) nw = 1;
+        if (nh < 1) nh = 1;
+        GdkPixbuf *downscaled = gdk_pixbuf_scale_simple(pixbuf, nw, nh, GDK_INTERP_BILINEAR);
+        if (downscaled) {
+            g_object_unref(pixbuf);
+            pixbuf = downscaled;
+        }
     }
 
     kill_other_wallpapers();
