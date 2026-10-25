@@ -616,22 +616,52 @@ impl Core {
     }
 
     /// Temporarily suppresses fullscreen presentation on `output` (e.g. to reveal canvas or other windows).
-    pub fn suppress_presentation(&mut self, output: output::OutputId) {
+    pub fn suppress_presentation(
+        &mut self,
+        output: output::OutputId,
+        out: &mut Vec<protocol::Effect>,
+    ) {
         if !self.presentation_suppressed.contains(&output) {
             self.presentation_suppressed.push(output);
-            self.invalidate_frame(output);
+            self.reconcile_presentation_change(output, out);
         }
     }
 
     /// Unsuppresses fullscreen presentation on `output` (returning to exclusive fullscreen presentation).
-    pub fn unsuppress_presentation(&mut self, output: output::OutputId) {
+    pub fn unsuppress_presentation(
+        &mut self,
+        output: output::OutputId,
+        out: &mut Vec<protocol::Effect>,
+    ) {
         if let Some(pos) = self
             .presentation_suppressed
             .iter()
             .position(|&o| o == output)
         {
             self.presentation_suppressed.swap_remove(pos);
+            self.reconcile_presentation_change(output, out);
+        }
+    }
+
+    /// Reconciles view switch on `output` (visibility pass, scale evaluation, pointer true position per M10).
+    fn reconcile_presentation_change(
+        &mut self,
+        output: output::OutputId,
+        out: &mut Vec<protocol::Effect>,
+    ) {
+        if let Some(camera) = self.cameras.camera_for_output(output) {
+            self.camera_written(output, camera, out);
+        } else {
+            self.update_lattice(output);
             self.invalidate_frame(output);
+            out.extend(self.visibility_pass());
+            let on_it = matches!(self.pointer, pointer::PointerState::Located { output: o, .. } if o == output);
+            if on_it && !self.input.interaction.active() {
+                out.extend(self.reconcile_constraints());
+                if !self.locked() {
+                    self.true_position_into(out);
+                }
+            }
         }
     }
 

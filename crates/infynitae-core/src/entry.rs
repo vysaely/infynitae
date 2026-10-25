@@ -287,9 +287,9 @@ impl Core {
                     && let Some(target) = self.focus.target()
                 {
                     if pres == target {
-                        self.unsuppress_presentation(output);
+                        self.unsuppress_presentation(output, out);
                     } else {
-                        self.suppress_presentation(output);
+                        self.suppress_presentation(output, out);
                     }
                 }
                 if self.focus_cycle_navigate
@@ -567,7 +567,7 @@ impl Core {
             return;
         }
         if self.presentation(output) == Some(element) && self.is_presentation_suppressed(output) {
-            self.unsuppress_presentation(output);
+            self.unsuppress_presentation(output, out);
             return;
         }
         if self.stage.mapped(element).is_none() {
@@ -638,9 +638,9 @@ impl Core {
             && let Some(pres) = self.presentation(output)
         {
             if pres == element {
-                self.unsuppress_presentation(output);
+                self.unsuppress_presentation(output, out);
             } else {
-                self.suppress_presentation(output);
+                self.suppress_presentation(output, out);
             }
         }
         let raised = self.raise_by_user(element);
@@ -676,9 +676,9 @@ impl Core {
             && let Some(pres) = self.presentation(output)
         {
             if pres == primary {
-                self.unsuppress_presentation(output);
+                self.unsuppress_presentation(output, out);
             } else {
-                self.suppress_presentation(output);
+                self.suppress_presentation(output, out);
             }
         }
         let raised = self.raise_by_user(primary);
@@ -1023,7 +1023,12 @@ impl Core {
     /// kept by the reconciliation gets none (no absolute motion reaches a locked surface,
     /// INV-INPUT-5); a kept confinement gets the event like no constraint, so the confined client
     /// sees where the moved surface now lies under the pointer.
-    fn camera_written(&mut self, output: OutputId, camera: usize, out: &mut Vec<Effect>) {
+    pub(crate) fn camera_written(
+        &mut self,
+        output: OutputId,
+        camera: usize,
+        out: &mut Vec<Effect>,
+    ) {
         self.update_lattice(output);
         self.invalidate_frame(output);
         self.visibility_pass_camera(camera, out);
@@ -1145,7 +1150,7 @@ impl Core {
             && self.presentation(output).is_some()
             && !self.is_presentation_suppressed(output)
         {
-            self.suppress_presentation(output);
+            self.suppress_presentation(output, out);
         }
         if (self.pan_mode == crate::navigation::PanMode::Free
             || self.pan_mode == crate::navigation::PanMode::Rts)
@@ -1362,9 +1367,8 @@ impl Core {
                     };
                     self.cameras
                         .set_zoom_and_center(proof, camera, 1.0, pres_center);
-                    self.camera_written(output, camera, out);
                 }
-                self.suppress_presentation(output);
+                self.suppress_presentation(output, out);
                 return;
             } else {
                 return;
@@ -1656,25 +1660,23 @@ impl Core {
             if self.fullscreen_pan
                 && let Some(pres) = self.presentation(output)
                 && !self.is_presentation_suppressed(output)
+                && let Some((anchor, tree, _)) = self.stage.mapped(pres)
             {
-                if let Some((anchor, tree, _)) = self.stage.mapped(pres) {
-                    let extent = self
-                        .output(output)
-                        .map(|m| m.logical_extent())
-                        .unwrap_or((1920.0, 1080.0));
-                    let margin_x = ((extent.0 - f64::from(tree.geometry.size.w)) / 2.0).max(0.0);
-                    let margin_y = ((extent.1 - f64::from(tree.geometry.size.h)) / 2.0).max(0.0);
-                    let pres_center = crate::geom::CanvasPos {
-                        x: crate::geom::q16(anchor.x as f64 - margin_x + extent.0 / 2.0),
-                        y: crate::geom::q16(anchor.y as f64 - margin_y + extent.1 / 2.0),
-                    };
-                    if let Some(p) = proof {
-                        self.cameras
-                            .set_zoom_and_center(p, camera, 1.0, pres_center);
-                    }
-                    start = pres_center;
+                let extent = self
+                    .output(output)
+                    .map(|m| m.logical_extent())
+                    .unwrap_or((1920.0, 1080.0));
+                let margin_x = ((extent.0 - f64::from(tree.geometry.size.w)) / 2.0).max(0.0);
+                let margin_y = ((extent.1 - f64::from(tree.geometry.size.h)) / 2.0).max(0.0);
+                let pres_center = crate::geom::CanvasPos {
+                    x: crate::geom::q16(anchor.x as f64 - margin_x + extent.0 / 2.0),
+                    y: crate::geom::q16(anchor.y as f64 - margin_y + extent.1 / 2.0),
+                };
+                if let Some(p) = proof {
+                    self.cameras
+                        .set_zoom_and_center(p, camera, 1.0, pres_center);
                 }
-                self.suppress_presentation(output);
+                start = pres_center;
             }
             // M6 Idle → Panning: the press is consumed; KeepFocus (no event).
             // OB-4: Dismiss active popup grabs before the camera change.
@@ -1685,6 +1687,12 @@ impl Core {
                 start,
                 sum: (0.0, 0.0),
             };
+            if self.fullscreen_pan
+                && self.presentation(output).is_some()
+                && !self.is_presentation_suppressed(output)
+            {
+                self.suppress_presentation(output, out);
+            }
             self.input.ownership.press(button, Owner::Compositor);
             if let Some(target) = self.focus.target() {
                 out.push(Effect::DismissPopupGrab(target));

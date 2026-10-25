@@ -853,3 +853,65 @@ fn a_fullscreen_windows_frames_under_a_still_pointer_send_no_motion() {
         &t.ls.probe.ptr[before..]
     );
 }
+
+/// Review finding 1: suppressing a presentation reconciles visibility and membership (INV-RENDER-3).
+/// Fullscreen W on O, a window X in O's camera view; Super+Tab to X makes X entered on O;
+/// the reverse (unsuppress) leaves X.
+#[test]
+fn focus_cycle_suppress_and_unsuppress_recomputes_visibility() {
+    use infynitae_backend_headless::keyboard_key;
+    use infynitae_core::input::keys::{KEY_LEFTMETA, KEY_TAB};
+
+    let mut t = T::new();
+    t.ls.state.core_mut().set_fullscreen_pan(true);
+    let (w, id_w) = t.map("W", (200, 100), RED);
+    let (_x, _id_x) = t.map("X", (120, 80), BLUE);
+    t.focus(id_w);
+    let n = t.output_name();
+
+    // 1. Fullscreen W on output O
+    let log = t.ls.probe.log.len();
+    let got = t.ask(w, |tl| tl.set_fullscreen(None));
+    assert_eq!(got, vec![((640, 480), vec![FULLSCREEN, ACTIVATED])]);
+    assert_eq!(
+        t.log_since(log),
+        vec![format!("leave X {n}")],
+        "X leaves output O when W enters fullscreen presentation"
+    );
+    assert_eq!(t.ls.state.core().presentation(t.ls.output()), Some(id_w));
+    assert!(!t.ls.state.core().is_presentation_suppressed(t.ls.output()));
+
+    // 2. Super+Tab cycles focus to X.
+    // This suppresses fullscreen presentation on O: view switches to camera view (where X is located).
+    // X must receive wl_surface.enter on output O!
+    let log = t.ls.probe.log.len();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_LEFTMETA, true, 1000).unwrap();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_TAB, true, 2000).unwrap();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_TAB, false, 2500).unwrap();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_LEFTMETA, false, 3000).unwrap();
+    t.adv();
+
+    assert!(t.ls.state.core().is_presentation_suppressed(t.ls.output()));
+    let entered = t.log_since(log);
+    assert!(
+        entered.contains(&format!("enter X {n}")),
+        "Super+Tab to X makes X entered on O; got: {entered:?}"
+    );
+
+    // 3. Super+Tab again cycles focus back to W.
+    // This unsuppresses fullscreen presentation on O: exclusive presentation returns.
+    // X must receive wl_surface.leave on output O!
+    let log = t.ls.probe.log.len();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_LEFTMETA, true, 4000).unwrap();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_TAB, true, 5000).unwrap();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_TAB, false, 5500).unwrap();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_LEFTMETA, false, 6000).unwrap();
+    t.adv();
+
+    assert!(!t.ls.state.core().is_presentation_suppressed(t.ls.output()));
+    let left = t.log_since(log);
+    assert!(
+        left.contains(&format!("leave X {n}")),
+        "the reverse (unsuppress) leaves X; got: {left:?}"
+    );
+}

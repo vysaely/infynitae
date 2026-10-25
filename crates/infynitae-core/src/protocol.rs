@@ -628,7 +628,7 @@ impl Core {
             return Vec::new();
         };
         let output = self.fullscreen[mine].output;
-        self.unsuppress_presentation(output);
+        self.unsuppress_presentation(output, &mut Vec::new());
         let (ended, kept): (Vec<_>, Vec<_>) = std::mem::take(&mut self.fullscreen)
             .into_iter()
             .enumerate()
