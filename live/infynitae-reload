@@ -133,7 +133,8 @@ reload_wallpaper() {
 
 reload_recorder() {
     r=$(first "$BIN_DIR/infynitae-recorder" "$LIVE/record/infynitae-recorder")
-    sup="/tmp/infynitae-recorder-supervisor.pid"
+    RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/infynitae-runtime-$(id -u)}"
+    sup="$RUNTIME_DIR/infynitae-recorder-supervisor.pid"
     if [ -f "$sup" ]; then
         # the supervisor's TERM trap also stops its encoder
         kill -TERM "$(cat "$sup")" 2>/dev/null || true
@@ -141,6 +142,7 @@ reload_recorder() {
     fi
     stop_helper infynitae-record-stream
     # its ffmpeg encoder can outlive both; it is the one writing into the replay dir
+    pkill -f "^ffmpeg .*${RUNTIME_DIR}/infynitae-replay/chunk" 2>/dev/null || true
     pkill -f "^ffmpeg .*/dev/shm/infynitae-replay/chunk" 2>/dev/null || true
     if [ -n "$r" ] && is_true "${ENABLE_REPLAY_BUFFER:-false}"; then
         spawn "$r" supervisor

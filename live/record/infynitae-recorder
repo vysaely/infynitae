@@ -21,7 +21,15 @@ if [ ! -x "$STREAM_BIN" ]; then
     STREAM_BIN="$HOME/infynitae/live/record/infynitae-record-stream"
 fi
 
-REPLAY_DIR="${REPLAY_DIR:-/dev/shm/infynitae-replay}"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/infynitae-runtime-$(id -u)}"
+if [ ! -d "$RUNTIME_DIR" ]; then
+    mkdir -p "$RUNTIME_DIR"
+    chmod 700 "$RUNTIME_DIR" 2>/dev/null || true
+fi
+
+if [ -z "$REPLAY_DIR" ] || [ "$REPLAY_DIR" = "/dev/shm/infynitae-replay" ]; then
+    REPLAY_DIR="$RUNTIME_DIR/infynitae-replay"
+fi
 CLIPS_DIR="${CLIPS_DIR:-$HOME/Videos/Clips}"
 RECORDINGS_DIR="${RECORDINGS_DIR:-$HOME/Videos/Recordings}"
 REPLAY_MINUTES="${REPLAY_BUFFER_MINUTES:-20}"
@@ -30,9 +38,9 @@ RECORD_CODEC="${RECORD_CODEC:-auto}" # auto, hevc, av1, h264
 RECORD_AUDIO="${RECORD_AUDIO:-desktop}"
 RECORD_NOTIFY="${RECORD_NOTIFY:-true}"
 
-PID_FILE="/tmp/infynitae-recording.pid"
-REPLAY_PID_FILE="/tmp/infynitae-replay.pid"
-SUPERVISOR_PID_FILE="/tmp/infynitae-recorder-supervisor.pid"
+PID_FILE="$RUNTIME_DIR/infynitae-recording.pid"
+REPLAY_PID_FILE="$RUNTIME_DIR/infynitae-replay.pid"
+SUPERVISOR_PID_FILE="$RUNTIME_DIR/infynitae-recorder-supervisor.pid"
 
 # Calculate segment counts for circular buffer
 SEGMENT_SECS=10
@@ -176,6 +184,7 @@ detect_audio_args() {
 start_replay_engine() {
     resolve_wayland_display
     mkdir -p "$REPLAY_DIR"
+    chmod 700 "$REPLAY_DIR" 2>/dev/null || true
     rm -f "$REPLAY_DIR"/chunk*.mkv "$REPLAY_DIR"/concat*.txt 2>/dev/null || true
 
     if ! GEOM=$(detect_screen_geometry); then

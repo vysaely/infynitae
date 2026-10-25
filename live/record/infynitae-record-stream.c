@@ -25,7 +25,6 @@
 #define DEFAULT_FPS 60
 #define DEFAULT_REPLAY_SECONDS 1200 // 20 minutes
 #define SEGMENT_DURATION 10         // 10s per segment
-#define REPLAY_DIR "/dev/shm/infynitae-replay"
 
 typedef struct {
     struct wl_display *display;
