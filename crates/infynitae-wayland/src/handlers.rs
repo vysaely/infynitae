@@ -992,7 +992,7 @@ impl WaylandState {
 /// How long an activation token validates a request after it was created (B10.7).
 const ACTIVATION_TOKEN_LIFETIME: std::time::Duration = std::time::Duration::from_secs(10);
 /// How long an unused token is kept: a request with an expired token still asks for attention,
-/// so tokens outlive their validity.
+/// so tokens outlive their validity; but not for ever.
 const ACTIVATION_TOKEN_RETENTION: std::time::Duration = std::time::Duration::from_secs(300);
 /// At most this many unused tokens are kept (the oldest go first): a client may create tokens
 /// without end, and Smithay removes one only when it is used.

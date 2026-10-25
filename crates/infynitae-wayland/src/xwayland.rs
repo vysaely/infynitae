@@ -399,6 +399,7 @@ pub enum SatelliteState {
 }
 
 /// When an exited satellite is restarted (M19): backoff duration, maximum exits, and window.
+/// Provisional values, not budgets: no measurement chose them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RestartPolicy {
     /// Time from an exit to the next start.
