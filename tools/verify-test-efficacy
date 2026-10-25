@@ -31,7 +31,7 @@ CONTROLS = [
     # ---- audit finding A-5: a synthesised pointer event carries the input clock's time
     ("A-5: a synthesised pointer event carries time 0 again", f"{CORE}/lib.rs",
      "        let time_ms = self.input.clock.wire_ms();", "        let time_ms = 0;",
-     "infynitae-backend-headless", ["--test", "t1_inc7_adversarial"], "pointer_event_times_never_go_back_when_a_presentation_starts_or_ends"),
+     "infynitae-backend-headless", ["--test", "t1_inc7_adversarial"], "pointer_event_times_never_go_back_at_output_changes"),
     ("A-5: a button release is not read on the input clock (its true position is a step behind)", f"{CORE}/entry.rs",
      "                self.input.clock.accepted(time_us);\n                if pressed {\n                    self.button_press(",
      "                if pressed {\n                    self.input.clock.accepted(time_us);\n                }\n                if pressed {\n                    self.button_press(",

@@ -173,9 +173,20 @@ impl WaylandState {
                     );
                 }
                 Effect::KeyboardIntercept { .. } => {}
-                Effect::OutputAdded(id) => self.output_added(id),
-                Effect::OutputChanged(id) => self.output_changed(id),
-                Effect::OutputRemoved(id) => self.output_removed(id),
+                // an output change is news to the focused client: Core's true position after it
+                // (M10) is sent even where it repeats the last motion (pointer.rs `Sent`)
+                Effect::OutputAdded(id) => {
+                    self.pointer_sent = Default::default();
+                    self.output_added(id);
+                }
+                Effect::OutputChanged(id) => {
+                    self.pointer_sent = Default::default();
+                    self.output_changed(id);
+                }
+                Effect::OutputRemoved(id) => {
+                    self.pointer_sent = Default::default();
+                    self.output_removed(id);
+                }
                 Effect::Enter { output, surface } => {
                     if let (Some(h), Some(s)) =
                         (self.handle(output), self.registry.surface(surface))

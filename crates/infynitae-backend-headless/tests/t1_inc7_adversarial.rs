@@ -781,15 +781,10 @@ fn pointer_event_times_never_go_back_at_output_changes() {
     step(&mut t, "an output again", &mut |t| {
         t.ls.connect(&output_k("C", (640, 480), 120, 60_000));
     });
-    // The reconfiguration keeps the pointer on the same point of W, so its true position repeats
-    // what the client has and is not sent; relocation and reconnection move the pointer off W
-    // here and reach the client as leave and enter, which carry no time. So no timed event is
-    // synthesised in this scene (every one checked above would carry the latest input time; the
-    // presentation and drag tests here synthesise some).
-    assert_eq!(
-        synthesised, 0,
-        "a change synthesised a repeated pointer event"
-    );
+    // the reconfiguration happens under the pointer, over W: one timed motion (an output change
+    // is sent even where the position repeats). Relocation and reconnection move the pointer off
+    // W here, so they reach the client as leave and enter.
+    assert!(synthesised >= 1, "no change synthesised a pointer event");
 }
 
 /// A-5 at the end of a camera drag (the true position carries the release's time) and under a
