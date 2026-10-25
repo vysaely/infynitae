@@ -1,4 +1,4 @@
-//! T1 pixels: the production render path (`Core::render_list` → `convert::render_elements` →
+//! Production path tests for pixels (`Core::render_list` → `convert::render_elements` →
 //! the output's damage tracker, i.e. `convert::render_output`, the function the nested backend
 //! calls each frame) composited by Smithay's software renderer into an image that is read back.
 //!

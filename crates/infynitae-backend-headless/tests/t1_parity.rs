@@ -1,9 +1,8 @@
-//! INC-1 T1 parity (FOUNDATION_TEST_PLAN §4): the Phase B/C/D harness tests ported to the
-//! production snapshot extraction, core projection/render/hit and adapter `convert`, each with its
+//! Parity tests (FOUNDATION_TEST_PLAN §4): harness tests ported to the
+//! production snapshot extraction, core projection/render/hit, and adapter `convert`, each with its
 //! negative control.
 //!
-//! Camera state other than the default cannot be reached before INC-3 (navigation). The
-//! fractional-camera and large-magnitude configurations therefore feed explicit view parameters
+//! Fractional-camera and large-magnitude configurations feed explicit view parameters
 //! and anchors into the production pure functions (`View::new`, `render::entries_for`,
 //! `ProjectionFrame::select`, `convert::render_elements`); nothing is written to Core.
 
@@ -481,7 +480,7 @@ fn popup_is_configured_inside_the_output_target() {
     assert_eq!(ls.probe.surfaces[q].popup_configure.map(|c| c.0), Some(390));
 }
 
-/// OB-1 (multi-level popups), INC-7: a chain three popups deep, with a sibling popup on the root
+/// OB-1 (multi-level popups): a chain three popups deep, with a sibling popup on the root
 /// and a subsurface inside the middle popup. At scale 1 and at a fractional scale:
 ///
 /// 1. the production snapshot equals the client's ground truth, hand-derived in root-surface

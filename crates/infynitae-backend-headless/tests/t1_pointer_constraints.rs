@@ -1,5 +1,5 @@
-//! INC-5 T1 integration tests: Pointer constraints, batch reconciliation, confinement,
-//! zero-output transitions, and output removal under interaction (FOUNDATION_TEST_PLAN INC-5).
+//! Production path integration tests: Pointer constraints, batch reconciliation, confinement,
+//! zero-output transitions, and output removal under interaction.
 //!
 //! Covers obligations:
 //! - OB-31: xlock_grab port (TST-21) — persistent and oneshot locks with DEFER strategy;
