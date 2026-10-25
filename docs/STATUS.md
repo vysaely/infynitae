@@ -43,7 +43,8 @@ history, the lock screen, volume and brightness keys.
 
 Also missing:
 
-- The cursor theme for the compositor's own pointer (in progress), and `cursor-shape-v1`.
+- `cursor-shape-v1` (apps naming a cursor shape for the compositor to draw); animated cursors
+  show their first frame only.
 - HDR, tablet and pen support, touch gestures, accessibility and screen readers.
 - Packaging and installs other than Arch Linux; the install assumes one user and `~/infynitae`.
 - Crash reporting beyond the logs.

@@ -52,7 +52,9 @@ these by date, e.g. "(owner, 2026-10-24)".
 ## Screen and session
 
 - **The compositor draws the pointer on the console** (T8, 2026-10-22): nothing else does there.
-  Your cursor theme is used for it (2026-10-25, in progress).
+  It uses your cursor theme (`CURSOR_THEME`, `CURSOR_SIZE`, sharp at the screen's scale), and a
+  built-in arrow only if the theme cannot be found (2026-10-25; `xcursor` reads the theme, a crate
+  that was already in the build).
 - **The session owns its processes** (2026-10-16): everything the compositor starts, and
   everything those start, ends with the session, and nothing outside it is touched. Shutdown is
   orderly: signals reach the event loop through a self-pipe (2026-10-19).
