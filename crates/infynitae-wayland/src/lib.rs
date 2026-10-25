@@ -1199,6 +1199,9 @@ pub fn parse_color_hex(hex: &str) -> Option<smithay::backend::renderer::Color32F
         .trim()
         .trim_matches(|c| c == '"' || c == '\'')
         .trim_start_matches('#');
+    if !s.is_ascii() {
+        return None;
+    }
     if s.len() == 6 {
         let r = u8::from_str_radix(&s[0..2], 16).ok()? as f32 / 255.0;
         let g = u8::from_str_radix(&s[2..4], 16).ok()? as f32 / 255.0;
@@ -1317,5 +1320,22 @@ mod key_binding_config_tests {
         );
         assert_eq!(config_line("# EXEC_X=\"SUPER+X:foo\""), None);
         assert_eq!(config_line("no equals"), None);
+    }
+
+    #[test]
+    fn parse_color_hex_handles_non_ascii_and_malformed() {
+        use super::parse_color_hex;
+        assert!(parse_color_hex("aé123").is_none());
+        assert!(parse_color_hex("#aé1234").is_none());
+        assert!(parse_color_hex("#12345é").is_none());
+        assert!(parse_color_hex("").is_none());
+        assert!(parse_color_hex("invalid").is_none());
+
+        let c = parse_color_hex("#ff0000").unwrap();
+        assert_eq!((c.r(), c.g(), c.b(), c.a()), (1.0, 0.0, 0.0, 1.0));
+
+        let c2 = parse_color_hex("#00ff0080").unwrap();
+        assert_eq!((c2.r(), c2.g(), c2.b()), (0.0, 1.0, 0.0));
+        assert!((c2.a() - 128.0 / 255.0).abs() < 1e-4);
     }
 }
