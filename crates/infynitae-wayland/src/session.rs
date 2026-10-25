@@ -27,8 +27,10 @@ use smithay::wayland::socket::ListeningSocketSource;
 
 use crate::{ClientState, WaylandState};
 
-/// How long a child gets between SIGTERM and SIGKILL at shutdown.
-const CHILD_GRACE: Duration = Duration::from_millis(500);
+/// How long a child gets between SIGTERM and SIGKILL at shutdown. A browser saves its session
+/// and its databases on SIGTERM; 500 ms cut Firefox off mid-write (owner, 2026-10-25: its
+/// cookies were lost). The wait ends as soon as everything has exited.
+const CHILD_GRACE: Duration = Duration::from_secs(5);
 
 /// Frame pacing for a backend whose frames are not driven by a display: ticks fall on a fixed
 /// cadence, and only while something asked for one.
@@ -431,7 +433,26 @@ impl Session {
     /// reaped. Nothing outside the compositor's own process subtree is signalled.
     pub fn shutdown(&mut self) {
         let t = Instant::now();
-        let report = crate::ownership::end_session_tree(&mut self.children, CHILD_GRACE);
+        let report =
+            crate::ownership::end_session_tree(&mut self.children, CHILD_GRACE, &mut || {});
+        self.report_teardown(t, &report);
+    }
+
+    /// [`Session::shutdown`] that keeps dispatching the clients while they quit: an app that
+    /// waits for the compositor's reply as it closes would otherwise sit out the whole grace
+    /// period and be killed.
+    pub fn shutdown_with(&mut self, state: &mut WaylandState) {
+        let display = &mut self.display;
+        let mut tick = || {
+            let _ = display.dispatch_clients(state);
+            let _ = display.flush_clients();
+        };
+        let t = Instant::now();
+        let report = crate::ownership::end_session_tree(&mut self.children, CHILD_GRACE, &mut tick);
+        self.report_teardown(t, &report);
+    }
+
+    fn report_teardown(&mut self, t: Instant, report: &crate::ownership::Teardown) {
         if report.terminated > 0 {
             println!(
                 "[infynitae] Session processes ended in {:?}: {} terminated, {} killed, {} left",

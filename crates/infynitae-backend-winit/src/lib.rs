@@ -406,7 +406,7 @@ pub fn run_nested_with(
     println!("[infynitae] Shutting down compositor...");
     // the satellite first: it is a client of the session, and its display goes with it
     drop(xwayland);
-    data.session.shutdown();
+    data.session.shutdown_with(&mut data.state);
     if let Ok(effects) = data
         .state
         .core_mut()

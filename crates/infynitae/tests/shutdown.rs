@@ -202,6 +202,51 @@ fn session_children_do_not_inherit_blocked_signals() {
     r.assert_clean(Some(child));
 }
 
+/// A client that needs the compositor's reply while it quits (a browser saving its session) gets
+/// it: the clients are still dispatched during the grace period, so it exits on its own instead
+/// of waiting for a reply until it is killed (owner, 2026-10-25: Firefox lost its cookies).
+#[test]
+fn a_client_quitting_is_still_answered() {
+    // on SIGTERM: wl_display.sync (object 1, opcode 0, new id 2), then wait for wl_callback.done
+    let client = r#"import os, signal, socket, struct, sys
+s = socket.socket(socket.AF_UNIX)
+s.connect(os.path.join(os.environ['XDG_RUNTIME_DIR'], os.environ['WAYLAND_DISPLAY']))
+def quit(*_):
+    s.sendall(struct.pack('<III', 1, 12 << 16, 2))
+    while True:
+        obj, op = struct.unpack('<II', s.recv(8, socket.MSG_WAITALL))
+        s.recv((op >> 16) - 8, socket.MSG_WAITALL)
+        if obj == 2:
+            open(sys.argv[1], 'w').write('answered')
+            os._exit(0)
+signal.signal(signal.SIGTERM, quit)
+open(sys.argv[2], 'w').write(str(os.getpid()) + '\n')
+while True:
+    signal.pause()
+"#;
+    let mut r = start(
+        "answered",
+        &format!(
+            "exec python3 -c \"{}\" \"$PIDF.answer\" \"$PIDF\"",
+            client.replace('"', "\\\"")
+        ),
+    );
+    let child = r.child_pid();
+    wait_for("the socket", Duration::from_secs(5), || r.socket.exists());
+    let t = Instant::now();
+    r.signal("TERM");
+    let (status, took) = r.exit(t);
+    eprintln!("quitting client: exited {status} after {took:?}");
+    assert!(status.success(), "{status}");
+    let answer = std::fs::read_to_string(r.dir.join("child.pid.answer")).unwrap_or_default();
+    r.assert_clean(Some(child));
+    assert_eq!(
+        answer, "answered",
+        "the client was killed waiting for its reply"
+    );
+    assert!(took < Duration::from_secs(3), "{took:?}");
+}
+
 /// A session command that ignores SIGTERM is killed after the bounded grace period: the
 /// compositor still exits with success, the command does not survive, and the wait is bounded.
 #[test]
@@ -219,10 +264,10 @@ fn a_child_ignoring_sigterm_is_killed_after_the_grace_period() {
     assert!(status.success(), "{status}");
     r.assert_clean(Some(child));
     assert!(
-        took >= Duration::from_millis(450),
+        took >= Duration::from_millis(4900),
         "the grace period was given: {took:?}"
     );
-    assert!(took < Duration::from_secs(3), "{took:?}");
+    assert!(took < Duration::from_secs(8), "{took:?}");
 }
 
 /// Partial initialization: a SIGTERM at any moment of start-up — before the signal source exists
@@ -353,8 +398,8 @@ fn descendants_and_daemons_end_with_the_session() {
 #[test]
 fn a_descendant_ignoring_sigterm_is_killed_after_the_grace_period() {
     let (_, took) = shut_down_tree("tree-stubborn", true);
-    assert!(took >= Duration::from_millis(450), "{took:?}");
-    assert!(took < Duration::from_secs(3), "{took:?}");
+    assert!(took >= Duration::from_millis(4900), "{took:?}");
+    assert!(took < Duration::from_secs(8), "{took:?}");
 }
 
 /// Repeated signals while the tree is being ended change nothing.

@@ -206,9 +206,15 @@ pub struct Teardown {
 
 /// Ends the session's processes (`members`): SIGTERM to every member (members appearing during the
 /// grace period get it too), up to `grace` for all of them to exit, then SIGKILL to those left,
-/// then a bounded wait (`grace` again at most). `children` (the owner's `Child` handles) are
-/// reaped through their handles, adopted orphans here. Nothing outside the subtree is touched.
-pub fn end_session_tree(children: &mut Vec<Child>, grace: Duration) -> Teardown {
+/// then a bounded wait (`grace` again at most). `tick` runs on every pass of the waits, so the
+/// owner can keep answering its clients while they quit. `children` (the owner's `Child`
+/// handles) are reaped through their handles, adopted orphans here. Nothing outside the subtree
+/// is touched.
+pub fn end_session_tree(
+    children: &mut Vec<Child>,
+    grace: Duration,
+    tick: &mut dyn FnMut(),
+) -> Teardown {
     let mut report = Teardown::default();
     let mut signalled: BTreeMap<i32, OwnedFd> = BTreeMap::new();
     let reap = |children: &mut Vec<Child>| {
@@ -250,6 +256,7 @@ pub fn end_session_tree(children: &mut Vec<Child>, grace: Duration) -> Teardown 
         {
             break;
         }
+        tick();
         std::thread::sleep(Duration::from_millis(5));
     }
     // every live member found now, and every signalled one that has not exited (by its pidfd)
@@ -273,6 +280,7 @@ pub fn end_session_tree(children: &mut Vec<Child>, grace: Duration) -> Teardown 
             report.survivors = live;
             break;
         }
+        tick();
         std::thread::sleep(Duration::from_millis(5));
     }
     report

@@ -491,7 +491,7 @@ pub fn run_headless_with(
     println!("[infynitae] Headless compositor shutting down...");
     // the satellite first: it is a client of the session, and its display goes with it
     drop(xwayland);
-    session.shutdown();
+    session.shutdown_with(&mut state);
     let _ = disconnect(&mut state, &mut output_token, output_id);
     session.flush();
     println!("[infynitae] Headless compositor exited cleanly.");

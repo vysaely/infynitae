@@ -998,7 +998,7 @@ pub fn run_console_with(
 
     println!("[infynitae] Shutting down compositor...");
     drop(xwayland);
-    data.session.shutdown();
+    data.session.shutdown_with(&mut data.state);
     for s in std::mem::take(&mut data.screens) {
         if let Ok(fx) = data
             .state
