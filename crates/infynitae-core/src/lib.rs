@@ -406,6 +406,9 @@ pub struct Core {
     key_bindings: input::keys::UserBindings,
     /// `xdg_toplevel` parents, (child, parent), from the adapter (`set_toplevel_parent`).
     toplevel_parents: Vec<(stage::ElementId, stage::ElementId)>,
+    /// The centre of each app's last destroyed window (app_id lowercase), newest last, at most
+    /// 32: its next window takes that place (`successor_anchor`).
+    closed_windows: Vec<(String, geom::CanvasPoint)>,
     /// Whether camera teleports/recenters to newly opened windows.
     pub teleport_on_open: bool,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
@@ -487,6 +490,7 @@ impl Core {
                 focus_on_open: false,
                 key_bindings: input::keys::UserBindings::default(),
                 toplevel_parents: Vec::new(),
+                closed_windows: Vec::new(),
                 teleport_on_open: false,
                 frame_liveness: frames::FrameLiveness::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]

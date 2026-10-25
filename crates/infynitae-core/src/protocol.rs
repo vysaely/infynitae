@@ -1405,6 +1405,7 @@ impl Core {
     /// dead client gets no leave: its membership rows are dropped silently. Target loss triggers
     /// successor focus transition (K7, M11).
     pub fn toplevel_destroyed(&mut self, id: ElementId) -> Vec<Effect> {
+        self.remember_closed(id);
         self.scales.remove(id);
         // a drag on it ends with the release; nothing is sized or moved any more
         self.input.interaction.orphan_element(id);
@@ -1542,6 +1543,12 @@ impl Core {
         }
         if self.placement == PlacementPolicy::OriginAtCameraCentre {
             return None;
+        }
+        // the next window of an app whose window just closed takes its place (Steam: updater,
+        // then login, then the main window), when no other window of the app is open and the
+        // place is still in view (owner, 2026-10-25)
+        if let Some(at) = self.successor_anchor(id, tree) {
+            return Some(at);
         }
         let output = self.outputs.first()?;
         let centre = self
@@ -1681,6 +1688,73 @@ impl Core {
     /// already placed.
     pub fn set_placement_policy(&mut self, policy: PlacementPolicy) {
         self.placement = policy;
+    }
+
+    /// A mapped window being destroyed: its app's last window centre, for its successor.
+    fn remember_closed(&mut self, id: ElementId) {
+        let (Some(app), Some((anchor, tree, _))) = (
+            self.stage
+                .meta(id)
+                .and_then(|m| m.app_id.as_deref())
+                .map(str::to_ascii_lowercase),
+            self.stage.mapped(id),
+        ) else {
+            return;
+        };
+        let g = tree.geometry;
+        let centre = CanvasPoint {
+            x: anchor.x + i64::from(g.loc.x) + i64::from(g.size.w) / 2,
+            y: anchor.y + i64::from(g.loc.y) + i64::from(g.size.h) / 2,
+        };
+        self.closed_windows.retain(|(a, _)| *a != app);
+        if self.closed_windows.len() >= 32 {
+            self.closed_windows.remove(0);
+        }
+        self.closed_windows.push((app, centre));
+    }
+
+    /// Where a new window takes its app's closed window's place: centred there, when no other
+    /// window of the app is mapped and that centre lies in the first output's current view.
+    fn successor_anchor(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
+        let app = self.stage.meta(id)?.app_id.as_deref()?.to_ascii_lowercase();
+        let same_app = |e: ElementId| {
+            self.stage
+                .meta(e)
+                .and_then(|m| m.app_id.as_deref())
+                .is_some_and(|a| a.eq_ignore_ascii_case(&app))
+        };
+        if self
+            .stage
+            .mapped_elements()
+            .into_iter()
+            .any(|e| e != id && same_app(e))
+        {
+            return None;
+        }
+        let centre = self
+            .closed_windows
+            .iter()
+            .rev()
+            .find(|(a, _)| *a == app)
+            .map(|(_, c)| *c)?;
+        let output = self.outputs.first()?;
+        let camera = self.cameras.camera_for_output(output.id)?;
+        let (view_c, zoom) = (self.cameras.center(camera)?, self.cameras.zoom(camera)?);
+        let extent = output.logical_extent();
+        let (cx, cy) = (
+            view_c.x as f64 / Q16_ONE as f64,
+            view_c.y as f64 / Q16_ONE as f64,
+        );
+        let in_view = (centre.x as f64 - cx).abs() <= extent.0 / 2.0 / zoom
+            && (centre.y as f64 - cy).abs() <= extent.1 / 2.0 / zoom;
+        if !in_view {
+            return None;
+        }
+        let g = tree.geometry;
+        Some(CanvasPoint {
+            x: centre.x - i64::from(g.size.w) / 2 - i64::from(g.loc.x),
+            y: centre.y - i64::from(g.size.h) / 2 - i64::from(g.loc.y),
+        })
     }
 
     /// The adapter's report of an element's `xdg_toplevel` parent (`None`: none), before each
