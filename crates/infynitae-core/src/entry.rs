@@ -223,7 +223,9 @@ impl Core {
         }
 
         let interaction_active = self.input.interaction.active();
-        let matched = self.resolve_key_binding(key, modifiers, interaction_active);
+        let matched = self
+            .resolve_key_binding(key, modifiers, interaction_active)
+            .filter(|a| !self.shortcuts_inhibited || *a == KeyAction::SpawnLockScreen);
 
         // K3: keys that change XKB modifier or lock state are never compositor-owned (observe mode)
         if mods_changed {
@@ -2962,6 +2964,81 @@ mod tests {
         // and the new reference is kept from then on
         pan(&mut c, &mut i, (-50.0 * zoom, 0.0));
         assert_eq!(c.view(a).unwrap().r, v2.r);
+    }
+
+    /// While the focused window holds a shortcuts inhibitor, a bound chord goes to it as a key;
+    /// Super+L still locks; given back, the chord is the compositor's again.
+    #[test]
+    fn inhibited_shortcuts_go_to_the_window_except_lock() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let _ = c.output_connected(&mut t, desc("A")).unwrap();
+        let logo = Modifiers {
+            logo: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+        };
+        let mut time = 1000;
+        let mut press = |c: &mut Core, key, mods_changed| {
+            time += 1000;
+            let fx = c
+                .physical_input_vec(
+                    &mut i,
+                    crate::PhysicalEvent::KeyboardKey {
+                        key,
+                        pressed: true,
+                        modifiers: logo,
+                        mods_changed,
+                        time_us: time,
+                    },
+                )
+                .unwrap();
+            time += 1000;
+            let _ = c.physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key,
+                    pressed: false,
+                    modifiers: logo,
+                    mods_changed: false,
+                    time_us: time,
+                },
+            );
+            fx
+        };
+        use crate::input::keys::{KEY_L, KEY_LEFTMETA, KEY_Q};
+        let _ = press(&mut c, KEY_LEFTMETA, true);
+        let forwarded = |fx: &[Effect], key| {
+            fx.iter().any(
+                |e| matches!(e, Effect::KeyboardForward { key: k, pressed: true, .. } if *k == key),
+            )
+        };
+
+        assert!(
+            !forwarded(&press(&mut c, KEY_Q, false), KEY_Q),
+            "Super+Q is a shortcut"
+        );
+        c.set_shortcuts_inhibited(true);
+        let fx = press(&mut c, KEY_Q, false);
+        assert!(
+            forwarded(&fx, KEY_Q),
+            "inhibited: Super+Q reaches the window: {fx:?}"
+        );
+        assert!(
+            !fx.contains(&Effect::SpawnTerminal),
+            "and starts nothing: {fx:?}"
+        );
+        let fx = press(&mut c, KEY_L, false);
+        assert!(
+            fx.contains(&Effect::SpawnLockScreen),
+            "Super+L still locks: {fx:?}"
+        );
+        assert!(!forwarded(&fx, KEY_L), "and the window does not get it");
+        c.set_shortcuts_inhibited(false);
+        assert!(
+            !forwarded(&press(&mut c, KEY_Q, false), KEY_Q),
+            "given back"
+        );
     }
 
     #[test]

@@ -722,6 +722,7 @@ impl SeatHandler for WaylandState {
         let client = focused.and_then(|surface| surface.client());
         set_data_device_focus(&self.dh, seat, client.clone());
         set_primary_focus(&self.dh, seat, client);
+        self.update_shortcuts_inhibit(focused);
     }
 }
 

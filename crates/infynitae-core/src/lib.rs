@@ -337,6 +337,9 @@ pub struct Core {
     /// Whether a held Super suspends constraints (`set_free_cursor_on_super`; off in Core: the
     /// specified behaviour keeps a lock through a Super+middle pan).
     free_cursor_on_super: bool,
+    /// The focused window holds a keyboard-shortcuts inhibitor (`set_shortcuts_inhibited`):
+    /// its keys go to it, except Super+L.
+    shortcuts_inhibited: bool,
     /// OBJ-09: read only by `output_connected`.
     persisted: navigation::PersistedCameras,
     /// Authoritative scale policy configuration (PROV-1..3, PROV-5).
@@ -462,6 +465,7 @@ impl Core {
                 pending_constraints: Vec::new(),
                 constraints_suspended: false,
                 free_cursor_on_super: false,
+                shortcuts_inhibited: false,
                 persisted,
                 scale_config: scale::ScalePolicyConfig::default(),
                 scales: scale::ScaleStates::default(),
@@ -931,6 +935,14 @@ impl Core {
     /// is let go.
     pub fn set_free_cursor_on_super(&mut self, enabled: bool) {
         self.free_cursor_on_super = enabled;
+    }
+
+    /// The focused window took over the compositor's shortcuts (`keyboard-shortcuts-inhibit`), or
+    /// gave them back. While it holds them, every key goes to it except Super+L, so an app can
+    /// never keep you from locking (owner, 2026-10-25). Quitting the session and switching
+    /// terminals are the console backend's and never reach Core.
+    pub fn set_shortcuts_inhibited(&mut self, inhibited: bool) {
+        self.shortcuts_inhibited = inhibited;
     }
 
     /// The user's key bindings from the config (live reload), checked before the built-in ones.
