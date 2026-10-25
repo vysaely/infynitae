@@ -148,13 +148,12 @@ pub fn choose_mode_custom(
         .filter(|(_, m)| m.size == size)
         .collect();
 
-    if let Some(rate) = target_rate {
-        if let Some(&(idx, _)) = matching_size
+    if let Some(rate) = target_rate
+        && let Some(&(idx, _)) = matching_size
             .iter()
             .min_by_key(|(_, m)| (m.refresh_mhz as i64 - rate as i64).abs())
-        {
-            return Some(idx);
-        }
+    {
+        return Some(idx);
     }
 
     matching_size
@@ -318,14 +317,9 @@ pub fn run_console_with(
     }
 
     // Zero-blur scaling: use Nearest-neighbor filtering on upscaled surfaces by default
-    let use_nearest = match options.scaling_filter.as_deref() {
-        Some("linear") => false,
-        _ => true,
-    };
-    if use_nearest {
-        if let Err(e) = renderer.upscale_filter(TextureFilter::Nearest) {
-            eprintln!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
-        }
+    let use_nearest = !matches!(options.scaling_filter.as_deref(), Some("linear"));
+    if use_nearest && let Err(e) = renderer.upscale_filter(TextureFilter::Nearest) {
+        eprintln!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
     }
     let allocator = GbmAllocator::new(
         gbm.clone(),
@@ -395,12 +389,11 @@ pub fn run_console_with(
                             .trim_start_matches("OUTPUT_")
                             .trim_end_matches("_MODE")
                             .replace('_', "-");
-                        if let Some((w_s, h_s)) = val.split_once('x') {
-                            if let (Ok(w), Ok(h)) =
+                        if let Some((w_s, h_s)) = val.split_once('x')
+                            && let (Ok(w), Ok(h)) =
                                 (w_s.trim().parse::<u16>(), h_s.trim().parse::<u16>())
-                            {
-                                custom_modes.insert(conn_name.to_lowercase(), (w, h));
-                            }
+                        {
+                            custom_modes.insert(conn_name.to_lowercase(), (w, h));
                         }
                     }
                 }
@@ -415,11 +408,11 @@ pub fn run_console_with(
 
     let mut connected_connectors = Vec::new();
     for &handle in resources.connectors() {
-        if let Ok(conn) = drm.get_connector(handle, true) {
-            if conn.state() == connector::State::Connected {
-                let name = format!("{:?}-{}", conn.interface(), conn.interface_id());
-                connected_connectors.push((handle, conn, name));
-            }
+        if let Ok(conn) = drm.get_connector(handle, true)
+            && conn.state() == connector::State::Connected
+        {
+            let name = format!("{:?}-{}", conn.interface(), conn.interface_id());
+            connected_connectors.push((handle, conn, name));
         }
     }
 
@@ -670,7 +663,7 @@ pub fn run_console_with(
         last_user_activity: std::time::Instant::now(),
         dpms_active: false,
         idle_sleep_timeout_min: idle_timeout_min,
-        idle_auto_lock: idle_auto_lock,
+        idle_auto_lock,
         lock_process: None,
         vrr_mode: options.vrr,
         loop_handle: handle.clone(),
@@ -703,48 +696,45 @@ pub fn run_console_with(
         // Hyprland-style Live Config Watcher: auto-reloads and applies changes instantly in real time
         if data.last_config_check.elapsed() >= Duration::from_millis(250) {
             data.last_config_check = std::time::Instant::now();
-            if let Some(path) = &data.config_path {
-                if let Ok(meta) = std::fs::metadata(path) {
-                    if let Ok(mtime) = meta.modified() {
-                        if data.last_config_mtime.is_some() && data.last_config_mtime != Some(mtime)
-                        {
-                            data.last_config_mtime = Some(mtime);
-                            println!(
-                                "[infynitae] Config change detected (~/.config/infynitae/config). Live reloading..."
-                            );
-                            data.state.reload_config();
-                            if let Some(ds) = data.state.direct_scanout {
-                                data.direct_scanout = ds;
-                            }
-                            if let Ok(content) = std::fs::read_to_string(path) {
-                                for line in content.lines() {
-                                    let line_clean = line.split('#').next().unwrap_or("").trim();
-                                    if let Some((k, v)) = line_clean.split_once('=') {
-                                        let key = k.trim();
-                                        let val =
-                                            v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
-                                        if key == "IDLE_SLEEP_TIMEOUT_MIN" {
-                                            if let Ok(m) = val.parse::<u32>() {
-                                                data.idle_sleep_timeout_min = m;
-                                            }
-                                        } else if key == "IDLE_AUTO_LOCK" {
-                                            data.idle_auto_lock = !matches!(
-                                                val.to_lowercase().as_str(),
-                                                "0" | "false" | "off" | "no"
-                                            );
-                                        }
+            if let Some(path) = &data.config_path
+                && let Ok(meta) = std::fs::metadata(path)
+                && let Ok(mtime) = meta.modified()
+            {
+                if data.last_config_mtime.is_some() && data.last_config_mtime != Some(mtime) {
+                    data.last_config_mtime = Some(mtime);
+                    println!(
+                        "[infynitae] Config change detected (~/.config/infynitae/config). Live reloading..."
+                    );
+                    data.state.reload_config();
+                    if let Some(ds) = data.state.direct_scanout {
+                        data.direct_scanout = ds;
+                    }
+                    if let Ok(content) = std::fs::read_to_string(path) {
+                        for line in content.lines() {
+                            let line_clean = line.split('#').next().unwrap_or("").trim();
+                            if let Some((k, v)) = line_clean.split_once('=') {
+                                let key = k.trim();
+                                let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                                if key == "IDLE_SLEEP_TIMEOUT_MIN" {
+                                    if let Ok(m) = val.parse::<u32>() {
+                                        data.idle_sleep_timeout_min = m;
                                     }
+                                } else if key == "IDLE_AUTO_LOCK" {
+                                    data.idle_auto_lock = !matches!(
+                                        val.to_lowercase().as_str(),
+                                        "0" | "false" | "off" | "no"
+                                    );
                                 }
                             }
-                            let input_cfg = data.state.input_config().clone();
-                            for dev in &mut data.input_devices {
-                                configure_input_device(dev, &input_cfg);
-                            }
-                            data.session.request_frame();
-                        } else if data.last_config_mtime.is_none() {
-                            data.last_config_mtime = Some(mtime);
                         }
                     }
+                    let input_cfg = data.state.input_config().clone();
+                    for dev in &mut data.input_devices {
+                        configure_input_device(dev, &input_cfg);
+                    }
+                    data.session.request_frame();
+                } else if data.last_config_mtime.is_none() {
+                    data.last_config_mtime = Some(mtime);
                 }
             }
 
@@ -1031,7 +1021,7 @@ fn render(data: &mut LoopData) {
                             s.no_scanout_until =
                                 Some(std::time::Instant::now() + Duration::from_secs(5));
                         }
-                        if s.flip_failures % 3 == 0 {
+                        if s.flip_failures.is_multiple_of(3) {
                             let _ = s.compositor.reset_state();
                         }
                         // retry after a refresh period, not at once (a busy loop that stalled
@@ -1145,21 +1135,21 @@ fn handle_screencopy(
         let mut dmabuf_rendered = false;
         if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&req.buffer) {
             use smithay::backend::renderer::ImportDma;
-            if let Ok(mut dmabuf_tex) = renderer.import_dmabuf(dmabuf, None) {
-                if let Ok(mut dmabuf_fb) = renderer.bind(&mut dmabuf_tex) {
-                    let target_size = req.region.map(|(_, _, w, h)| (w, h)).unwrap_or(size);
-                    let mut damage_tracker = OutputDamageTracker::new(
-                        target_size,
-                        smithay::utils::Scale::from(k),
-                        smithay::utils::Transform::Normal,
-                    );
-                    if damage_tracker
-                        .render_output(renderer, &mut dmabuf_fb, 0, &elements, clear)
-                        .is_ok()
-                    {
-                        dmabuf_rendered = true;
-                        req.ready((target_size.0 as u32, target_size.1 as u32), now);
-                    }
+            if let Ok(mut dmabuf_tex) = renderer.import_dmabuf(dmabuf, None)
+                && let Ok(mut dmabuf_fb) = renderer.bind(&mut dmabuf_tex)
+            {
+                let target_size = req.region.map(|(_, _, w, h)| (w, h)).unwrap_or(size);
+                let mut damage_tracker = OutputDamageTracker::new(
+                    target_size,
+                    smithay::utils::Scale::from(k),
+                    smithay::utils::Transform::Normal,
+                );
+                if damage_tracker
+                    .render_output(renderer, &mut dmabuf_fb, 0, &elements, clear)
+                    .is_ok()
+                {
+                    dmabuf_rendered = true;
+                    req.ready((target_size.0 as u32, target_size.1 as u32), now);
                 }
             }
         }
@@ -1752,10 +1742,10 @@ fn configure_input_device(
             .ok()
             .map(|t| matches!(t.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
     });
-    if let Some(enable) = tap {
-        if device.config_tap_finger_count() > 0 {
-            let _ = device.config_tap_set_enabled(enable);
-        }
+    if let Some(enable) = tap
+        && device.config_tap_finger_count() > 0
+    {
+        let _ = device.config_tap_set_enabled(enable);
     }
 
     // 4. Touchpad Natural Scrolling
@@ -1764,10 +1754,10 @@ fn configure_input_device(
             .ok()
             .map(|t| matches!(t.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
     });
-    if let Some(enable) = nat {
-        if device.config_scroll_has_natural_scroll() {
-            let _ = device.config_scroll_set_natural_scroll_enabled(enable);
-        }
+    if let Some(enable) = nat
+        && device.config_scroll_has_natural_scroll()
+    {
+        let _ = device.config_scroll_set_natural_scroll_enabled(enable);
     }
 }
 
