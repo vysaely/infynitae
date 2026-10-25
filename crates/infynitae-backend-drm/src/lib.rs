@@ -177,6 +177,11 @@ struct Screen {
     /// A frame is queued and its vblank has not come yet.
     pending: bool,
     screencopy_texture: Option<GlesTexture>,
+    /// Page flips refused in a row (logged at the first and every 100th).
+    flip_failures: u32,
+    /// Direct scanout is off for this screen until then: a frame scanning out a client's
+    /// buffer was refused.
+    no_scanout_until: Option<std::time::Instant>,
     /// The monitor and driver support VRR on this connector.
     vrr_supported: bool,
     /// VRR is on now.
@@ -219,6 +224,8 @@ struct LoopData {
     lock_process: Option<std::process::Child>,
     /// The VRR setting (`ConsoleOptions::vrr`).
     vrr_mode: Option<bool>,
+    /// For timers set from the render path (a refused page flip's retry).
+    loop_handle: smithay::reexports::calloop::LoopHandle<'static, LoopData>,
 }
 
 /// The device limit Core is told: assumed, not queried, as in the nested backend (OB-52, INC-13).
@@ -504,6 +511,8 @@ pub fn run_console_with(
             k,
             pending: false,
             screencopy_texture: None,
+            flip_failures: 0,
+            no_scanout_until: None,
             vrr_supported,
             vrr_on,
         });
@@ -632,6 +641,7 @@ pub fn run_console_with(
         idle_auto_lock: idle_auto_lock,
         lock_process: None,
         vrr_mode: options.vrr,
+        loop_handle: handle.clone(),
     };
 
     data.state.reload_config();
@@ -916,7 +926,10 @@ fn render(data: &mut LoopData) {
         // planes only on request: amdgpu refused page flips (EINVAL, hundreds per Electron
         // start) for viewport-scaled subsurfaces there, although Smithay's test commit passed.
         // The cursor is drawn by the compositor, never on the cursor plane.
-        let frame_flags = match (data.direct_scanout, data.state.overlay_planes) {
+        let scanout_banned = s
+            .no_scanout_until
+            .is_some_and(|t| std::time::Instant::now() < t);
+        let frame_flags = match (data.direct_scanout && !scanout_banned, data.state.overlay_planes) {
             (false, _) => FrameFlags::empty(),
             (true, false) => FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT,
             (true, true) => {
@@ -929,13 +942,61 @@ fn render(data: &mut LoopData) {
             clear,
             frame_flags,
         ) {
-            Ok(result) if !result.is_empty => match s.compositor.queue_frame(()) {
-                Ok(()) => true,
-                Err(e) => {
-                    eprintln!("[infynitae] Queue frame: {e:?}");
-                    false
+            Ok(result) if !result.is_empty => {
+                use smithay::backend::drm::compositor::PrimaryPlaneElement;
+                let scanout = matches!(result.primary_element, PrimaryPlaneElement::Element(_));
+                let (overlays, cursor) =
+                    (result.overlay_elements.len(), result.cursor_element.is_some());
+                match s.compositor.queue_frame(()) {
+                    Ok(()) => {
+                        s.flip_failures = 0;
+                        true
+                    }
+                    Err(e) => {
+                        s.flip_failures += 1;
+                        if s.flip_failures % 100 == 1 {
+                            eprintln!(
+                                "[infynitae] Page flip refused ({} in a row): primary={} overlays={overlays} cursor={cursor} elements={}: {e:?}",
+                                s.flip_failures,
+                                if scanout { "client buffer" } else { "composited" },
+                                elements.len()
+                            );
+                        }
+                        if scanout {
+                            // the client's buffer may be what the kernel refuses: compose for a while
+                            s.no_scanout_until =
+                                Some(std::time::Instant::now() + Duration::from_secs(5));
+                        }
+                        if s.flip_failures % 3 == 0 {
+                            let _ = s.compositor.reset_state();
+                        }
+                        // retry after a refresh period, not at once (a busy loop that stalled
+                        // the whole machine while Discord's updater drew)
+                        let crtc = s.crtc;
+                        let period = data
+                            .state
+                            .core()
+                            .output(id)
+                            .map(|m| m.refresh_mhz)
+                            .filter(|r| *r > 0)
+                            .map_or(Duration::from_millis(16), |r| {
+                                Duration::from_nanos(1_000_000_000_000 / u64::from(r))
+                            });
+                        s.pending = true;
+                        let _ = data.loop_handle.insert_source(
+                            smithay::reexports::calloop::timer::Timer::from_duration(period),
+                            move |_, _, data| {
+                                if let Some(s) = data.screens.iter_mut().find(|s| s.crtc == crtc) {
+                                    s.pending = false;
+                                }
+                                data.session.request_frame();
+                                smithay::reexports::calloop::timer::TimeoutAction::Drop
+                            },
+                        );
+                        false
+                    }
                 }
-            },
+            }
             Ok(_) => false,
             Err(e) => {
                 eprintln!("[infynitae] Render: {e:?}");
@@ -943,6 +1004,13 @@ fn render(data: &mut LoopData) {
                 false
             }
         };
+        let s = &mut data.screens[i];
+        if s.flip_failures > 0 && !queued {
+            // waiting for the retry timer (above); its frame callbacks complete as usual
+            let now = infynitae_wayland::presentation_clock_now();
+            data.state.frame_tick(id, now);
+            continue;
+        }
         s.pending = queued;
         if queued {
             data.session.count_frame();
