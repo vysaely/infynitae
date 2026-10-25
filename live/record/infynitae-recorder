@@ -223,8 +223,9 @@ supervisor_loop() {
     trap 'kill $(cat "$REPLAY_PID_FILE" 2>/dev/null) 2>/dev/null || true; pkill -P $$ 2>/dev/null || true; pkill -f "$STREAM_BIN" 2>/dev/null || true; pkill -f "^ffmpeg .*$REPLAY_DIR/chunk" 2>/dev/null || true; rm -f "$SUPERVISOR_PID_FILE" "$REPLAY_PID_FILE"; exit 0' TERM INT HUP
 
     while true; do
-        # Start replay engine in background with isolated descriptors
-        start_replay_engine >/dev/null 2>&1 &
+        # Start replay engine in background; its errors stay visible (helpers.log): a failure
+        # hidden here kept the buffer empty for hours, restarted every second (2026-10-25)
+        start_replay_engine >/dev/null &
         ENGINE_PID=$!
         echo $ENGINE_PID > "$REPLAY_PID_FILE"
 

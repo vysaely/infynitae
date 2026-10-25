@@ -52,6 +52,11 @@ typedef struct {
 
     bool ready;
     bool running;
+    /* the bound zwlr_screencopy_manager_v1 version (buffer_done is v3) */
+    uint32_t manager_version;
+    /* this frame's buffer is chosen: the compositor sends one `buffer` event per format it
+       offers, and a frame may be copied only once (the protocol's already_used error) */
+    bool have_buffer;
     int target_fps;
     struct timespec last_frame_time;
 
@@ -119,6 +124,12 @@ static void frame_buffer(void *data, struct zwlr_screencopy_frame_v1 *frame,
         exit(0);
     }
 
+    /* the first format offered is used; the others of the same frame are ignored */
+    if (s->have_buffer) {
+        return;
+    }
+    s->have_buffer = true;
+
     // Dynamic resolution change detection (e.g. handheld docking, game resolution switch)
     if (s->initial_width == 0) {
         s->initial_width = (int)width;
@@ -142,7 +153,10 @@ static void frame_buffer(void *data, struct zwlr_screencopy_frame_v1 *frame,
         create_shm_buffer(s, 1, size);
     }
 
-    zwlr_screencopy_frame_v1_copy(frame, s->wl_buffer[s->current_buf]);
+    /* from v3 the copy waits for buffer_done, the end of the list of formats */
+    if (s->manager_version < 3) {
+        zwlr_screencopy_frame_v1_copy(frame, s->wl_buffer[s->current_buf]);
+    }
 }
 
 static void frame_flags(void *data, struct zwlr_screencopy_frame_v1 *frame, uint32_t flags) {
@@ -240,7 +254,11 @@ static void frame_linux_dmabuf(void *data, struct zwlr_screencopy_frame_v1 *fram
 }
 
 static void frame_buffer_done(void *data, struct zwlr_screencopy_frame_v1 *frame) {
-    (void)data; (void)frame;
+    RecorderState *s = (RecorderState *)data;
+    /* every format is offered: copy once into the buffer made for the first */
+    if (s->have_buffer && s->running && s->wl_buffer[s->current_buf]) {
+        zwlr_screencopy_frame_v1_copy(frame, s->wl_buffer[s->current_buf]);
+    }
 }
 
 static const struct zwlr_screencopy_frame_v1_listener frame_listener = {
@@ -255,6 +273,7 @@ static const struct zwlr_screencopy_frame_v1_listener frame_listener = {
 
 static void request_frame(RecorderState *s) {
     if (!s->manager || !s->output) return;
+    s->have_buffer = false;
     struct zwlr_screencopy_frame_v1 *frame = zwlr_screencopy_manager_v1_capture_output(
         s->manager, 1 /* cursor */, s->output
     );
@@ -273,7 +292,8 @@ static void registry_global(void *data, struct wl_registry *registry,
         }
         s->current_output_idx++;
     } else if (strcmp(interface, zwlr_screencopy_manager_v1_interface.name) == 0) {
-        s->manager = wl_registry_bind(registry, name, &zwlr_screencopy_manager_v1_interface, version < 3 ? version : 3);
+        s->manager_version = version < 3 ? version : 3;
+        s->manager = wl_registry_bind(registry, name, &zwlr_screencopy_manager_v1_interface, s->manager_version);
     }
 }
 
