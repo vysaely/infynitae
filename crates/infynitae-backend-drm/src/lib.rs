@@ -106,6 +106,22 @@ pub fn console_key(key: u32, ctrl: bool, alt: bool) -> Option<ConsoleKey> {
     }
 }
 
+/// Validates an output scale factor, returning its 1/120 representation if within 0.25..=8.0. Pure.
+pub fn validate_scale(scale: f64) -> Option<u32> {
+    if (0.25..=8.0).contains(&scale) {
+        Some((scale * 120.0).round().max(1.0) as u32)
+    } else {
+        None
+    }
+}
+
+/// Returns whether a configured name matches a connector's kernel name or legacy debug name.
+/// The comparison is exact and case-insensitive. Pure.
+pub fn matches_connector_name(configured: &str, kernel_name: &str, debug_name: &str) -> bool {
+    let conf = configured.trim();
+    conf.eq_ignore_ascii_case(kernel_name) || conf.eq_ignore_ascii_case(debug_name)
+}
+
 /// Calculates the origin offset required to render a requested screencopy region into a buffer.
 pub fn screencopy_region_offset(region: Option<(i32, i32, i32, i32)>) -> (i32, i32) {
     region.map(|(x, y, _, _)| (x, y)).unwrap_or((0, 0))
@@ -402,8 +418,14 @@ pub fn run_console_with(
                             .trim_end_matches("_SCALE")
                             .replace('_', "-");
                         if let Ok(s) = val.parse::<f64>() {
-                            custom_scales
-                                .insert(conn_name.to_lowercase(), (s * 120.0).round() as u32);
+                            if let Some(s_120) = validate_scale(s) {
+                                custom_scales.insert(conn_name.to_lowercase(), s_120);
+                            } else {
+                                eprintln!(
+                                    "[infynitae] OUTPUT_{}_SCALE={s} outside accepted range (0.25..8.0), ignoring",
+                                    conn_name
+                                );
+                            }
                         }
                     } else if key.starts_with("OUTPUT_") && key.ends_with("_RATE") {
                         let conn_name = key
@@ -441,28 +463,39 @@ pub fn run_console_with(
         if let Ok(conn) = drm.get_connector(handle, true)
             && conn.state() == connector::State::Connected
         {
-            let name = format!("{:?}-{}", conn.interface(), conn.interface_id());
-            connected_connectors.push((handle, conn, name));
+            let name = format!("{}-{}", conn.interface().as_str(), conn.interface_id());
+            let debug_name = format!("{:?}-{}", conn.interface(), conn.interface_id());
+            connected_connectors.push((handle, conn, name, debug_name));
         }
     }
 
     if !output_order.is_empty() {
-        connected_connectors.sort_by_key(|(_, _, name)| {
-            let n_lower = name.to_lowercase();
+        connected_connectors.sort_by_key(|(_, _, name, debug_name)| {
             output_order
                 .iter()
-                .position(|o| n_lower.contains(o) || o.contains(&n_lower))
+                .position(|o| matches_connector_name(o, name, debug_name))
                 .unwrap_or(usize::MAX)
         });
     } else if output_layout_reverse {
         connected_connectors.reverse();
     }
 
-    for (handle, conn, name) in connected_connectors {
+    for (handle, conn, name, debug_name) in connected_connectors {
         let n_lower = name.to_lowercase();
-        let target_size = custom_modes.get(&n_lower).copied();
-        let target_rate = custom_rates.get(&n_lower).copied();
-        let conn_scale = custom_scales.get(&n_lower).copied().unwrap_or(scale_120);
+        let dbg_lower = debug_name.to_lowercase();
+        let target_size = custom_modes
+            .get(&n_lower)
+            .or_else(|| custom_modes.get(&dbg_lower))
+            .copied();
+        let target_rate = custom_rates
+            .get(&n_lower)
+            .or_else(|| custom_rates.get(&dbg_lower))
+            .copied();
+        let conn_scale = custom_scales
+            .get(&n_lower)
+            .or_else(|| custom_scales.get(&dbg_lower))
+            .copied()
+            .unwrap_or(scale_120);
 
         let infos: Vec<ModeInfo> = conn
             .modes()
@@ -473,9 +506,18 @@ pub fn run_console_with(
                 preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
             })
             .collect();
-        let Some(mode) =
-            choose_mode_custom(&infos, target_size, target_rate).map(|i| conn.modes()[i])
-        else {
+        let mode_idx = choose_mode_custom(&infos, target_size, target_rate).or_else(|| {
+            if target_size.is_some() || target_rate.is_some() {
+                eprintln!(
+                    "[infynitae] Screen {name}: requested custom mode {:?} @ {:?} not found, falling back to preferred mode",
+                    target_size, target_rate
+                );
+                choose_mode(&infos)
+            } else {
+                None
+            }
+        });
+        let Some(mode) = mode_idx.map(|i| conn.modes()[i]) else {
             continue;
         };
         let crtc = conn
@@ -1964,5 +2006,81 @@ mod tests {
         );
         assert_eq!(screencopy_region_offset(None), (0, 0));
         assert_eq!(screencopy_region_offset(Some((0, 0, 1920, 1080))), (0, 0));
+    }
+
+    #[test]
+    fn connector_name_matching_accepts_kernel_and_debug_names_exact_only() {
+        // Kernel name match
+        assert!(matches_connector_name("DP-1", "DP-1", "DisplayPort-1"));
+        assert!(matches_connector_name("dp-1", "DP-1", "DisplayPort-1"));
+        assert!(matches_connector_name("HDMI-A-1", "HDMI-A-1", "HDMIA-1"));
+        assert!(matches_connector_name("hdmi-a-1", "HDMI-A-1", "HDMIA-1"));
+
+        // Legacy debug name match
+        assert!(matches_connector_name(
+            "DisplayPort-1",
+            "DP-1",
+            "DisplayPort-1"
+        ));
+        assert!(matches_connector_name(
+            "displayport-1",
+            "DP-1",
+            "DisplayPort-1"
+        ));
+        assert!(matches_connector_name("HDMIA-1", "HDMI-A-1", "HDMIA-1"));
+        assert!(matches_connector_name("hdmia-1", "HDMI-A-1", "HDMIA-1"));
+
+        // No substring false positives ("displayport-1" must not match "displayport-10")
+        assert!(!matches_connector_name(
+            "displayport-1",
+            "DP-10",
+            "DisplayPort-10"
+        ));
+        assert!(!matches_connector_name("dp-1", "DP-10", "DisplayPort-10"));
+        assert!(!matches_connector_name(
+            "DisplayPort-10",
+            "DP-1",
+            "DisplayPort-1"
+        ));
+
+        // Mismatched connectors
+        assert!(!matches_connector_name("HDMI-A-1", "DP-1", "DisplayPort-1"));
+    }
+
+    #[test]
+    fn scale_validation_accepts_range_and_rejects_outside() {
+        assert_eq!(validate_scale(1.0), Some(120));
+        assert_eq!(validate_scale(0.25), Some(30));
+        assert_eq!(validate_scale(8.0), Some(960));
+        assert_eq!(validate_scale(1.5), Some(180));
+
+        // Outside range (0.25..=8.0)
+        assert_eq!(validate_scale(0.24), None);
+        assert_eq!(validate_scale(0.0), None);
+        assert_eq!(validate_scale(-1.0), None);
+        assert_eq!(validate_scale(8.01), None);
+        assert_eq!(validate_scale(10.0), None);
+        assert_eq!(validate_scale(f64::NAN), None);
+        assert_eq!(validate_scale(f64::INFINITY), None);
+    }
+
+    #[test]
+    fn unrecognised_custom_mode_falls_back_to_preferred() {
+        let m = |w, h, hz: u32, preferred| ModeInfo {
+            size: (w, h),
+            refresh_mhz: hz * 1000,
+            preferred,
+        };
+        let modes = [
+            m(1920, 1080, 60, true),
+            m(1920, 1080, 144, false),
+            m(1280, 720, 60, false),
+        ];
+        // Custom 4K mode that is not supported returns None
+        assert_eq!(choose_mode_custom(&modes, Some((3840, 2160)), None), None);
+        // Fallback to choose_mode succeeds and picks preferred resolution at highest refresh
+        let fallback =
+            choose_mode_custom(&modes, Some((3840, 2160)), None).or_else(|| choose_mode(&modes));
+        assert_eq!(fallback, Some(1));
     }
 }

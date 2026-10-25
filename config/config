@@ -60,11 +60,11 @@ VRR_ENABLED="auto"                # auto: FreeSync while a window is fullscreen 
 DIRECT_SCANOUT="true"             # [save] a fullscreen game's frames go straight to the screen
 OVERLAY_PLANES="false"            # [save] also windows' buffers on overlay planes (on AMD this
                                   # dropped frames whenever Electron apps like Discord drew)
-OUTPUT_ORDER=""                   # left to right, e.g. "DisplayPort-1,HDMI-A-1" (the names
+OUTPUT_ORDER=""                   # left to right, e.g. "DP-1,HDMI-A-1" (the names
                                   # are the "Screen …" lines in ~/.local/state/infynitae/session.log)
 OUTPUT_LAYOUT="left-to-right"     # or right-to-left
-# Per screen (its name, '-' written as '_'), e.g. for DisplayPort-1:
-#   OUTPUT_DISPLAYPORT_1_MODE="2560x1440"  OUTPUT_DISPLAYPORT_1_RATE="144"  OUTPUT_DISPLAYPORT_1_SCALE="1.25"
+# Per screen (its name, '-' written as '_'), e.g. for DP-1:
+#   OUTPUT_DP_1_MODE="2560x1440"  OUTPUT_DP_1_RATE="144"  OUTPUT_DP_1_SCALE="1.25"
 
 # ── Apps ──────────────────────────────────────────────────────────────── [use] ──
 # "auto": the first one installed (terminal: kitty, alacritty, foot, …), or any command.
