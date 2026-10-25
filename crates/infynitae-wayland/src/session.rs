@@ -187,26 +187,24 @@ impl Session {
                 "[infynitae] Not a child subreaper ({e}): orphans of session processes escape the session"
             );
         }
-        // Only a session that starts processes listens for SIGCHLD: an idle session that started
-        // nothing has nothing to wake for (INV-IDLE-1), whatever else exits in this process.
-        let starts_processes = options.exec.is_some();
-        if starts_processes {
-            let (mut child_wake, child_notify) = UnixStream::pair()?;
-            child_wake.set_nonblocking(true)?;
-            signal_ids.push(signals::register(SIGCHLD, child_notify)?);
-            let child_fd = child_wake.try_clone()?;
-            handle
-                .insert_source(
-                    Generic::new(child_fd, Interest::READ, Mode::Level),
-                    move |_, _, _| {
-                        let mut drain = [0u8; 64];
-                        while matches!(child_wake.read(&mut drain), Ok(n) if n > 0) {}
-                        crate::ownership::reap_adopted();
-                        Ok(PostAction::Continue)
-                    },
-                )
-                .map_err(|e| format!("Failed to register child-exit source: {e}"))?;
-        }
+        // Reaping adopted orphans via SIGCHLD: SIGCHLD only arrives when a child exits, so
+        // registering it does not cause idle wakeups by itself (INV-IDLE-1). The compositor
+        // spawns children from shortcuts and launches in every mode, not only with options.exec.
+        let (mut child_wake, child_notify) = UnixStream::pair()?;
+        child_wake.set_nonblocking(true)?;
+        signal_ids.push(signals::register(SIGCHLD, child_notify)?);
+        let child_fd = child_wake.try_clone()?;
+        handle
+            .insert_source(
+                Generic::new(child_fd, Interest::READ, Mode::Level),
+                move |_, _, _| {
+                    let mut drain = [0u8; 64];
+                    while matches!(child_wake.read(&mut drain), Ok(n) if n > 0) {}
+                    crate::ownership::reap_adopted();
+                    Ok(PostAction::Continue)
+                },
+            )
+            .map_err(|e| format!("Failed to register child-exit source: {e}"))?;
         let socket = match options.socket_name.as_deref() {
             Some(name) => ListeningSocketSource::with_name(name)?,
             None => ListeningSocketSource::new_auto()?,
@@ -977,6 +975,29 @@ mod tests {
         terminate_children(&mut children, Duration::from_millis(500));
         assert!(children.is_empty());
         assert!(!exists(pid), "left as a zombie");
+    }
+
+    #[test]
+    fn an_adopted_orphan_is_reaped_without_exec_command() {
+        let (mut session, mut state, mut event_loop) = session("orphan", None);
+        let mut child = Command::new("sh")
+            .arg("-c")
+            .arg("sh -c 'sleep 0.1 & echo $!'")
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut out = String::new();
+        std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut out).unwrap();
+        child.wait().unwrap();
+        let orphan_pid: u32 = out.trim().parse().unwrap();
+        assert!(exists(orphan_pid));
+
+        let start = Instant::now();
+        while exists(orphan_pid) && start.elapsed() < Duration::from_secs(5) {
+            turn(&mut session, &mut state, &mut event_loop);
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!exists(orphan_pid), "orphan {orphan_pid} remained a zombie");
     }
 
     #[test]
