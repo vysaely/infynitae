@@ -53,7 +53,7 @@ impl ElementRef {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StaleElement;
 
-/// M1 states.
+/// Element lifecycle states (M1).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lifecycle {
     AwaitingInitialCommit,
@@ -91,14 +91,14 @@ struct Record {
     /// `set_default_placed`): at its first windowed presentation, which is its first map
     /// unless it was in protocol fullscreen then. From then on only a drag or the shell moves it.
     default_placed: bool,
-    /// The toplevel's title and app_id as the client last set them (INC-11, D9): display
+    /// The toplevel's title and app_id as the client last set them (D9): display
     /// metadata for the shell, never authority. Out of line, like `layout`; `None` until set.
     meta: Option<Box<ToplevelMeta>>,
     saved_floating: Option<(CanvasPoint, crate::geom::LocalSize)>,
 }
 
 /// What a toplevel calls itself (`xdg_toplevel.set_title` / `set_app_id`): derived protocol
-/// metadata the shell reads (INC-11). Nothing in Core decides anything by it.
+/// metadata the shell reads. Nothing in Core decides anything by it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ToplevelMeta {
     pub title: Option<String>,
@@ -161,7 +161,7 @@ impl Stage {
         self.record(id).is_some_and(|r| r.default_placed)
     }
 
-    /// The toplevel's title and app_id (INC-11); `None` for an unknown element or before the client
+    /// The toplevel's title and app_id; `None` for an unknown element or before the client
     /// set either.
     pub fn meta(&self, id: ElementId) -> Option<&ToplevelMeta> {
         self.record(id).and_then(|r| r.meta.as_deref())
