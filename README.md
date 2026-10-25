@@ -96,11 +96,16 @@ Run anytime from anywhere to pull latest changes, rebuild, and update without to
 infynitae-update
 ```
 
+## When something goes wrong
+
+`~/.local/state/infynitae/session.log` has what the compositor saw: the screens it found, config
+lines it skipped, errors. `Ctrl+Alt+Backspace` restarts the compositor, `infynitae-session stop`
+ends the session, and after three quick crashes the session stops by itself.
+
 ## Documentation
 
 | | |
 | :--- | :--- |
-| [docs/GUIDE.md](docs/GUIDE.md) | Using it: install, starting a session, the helpers, choosing your own apps, themes and cursors, troubleshooting |
 | [docs/STATUS.md](docs/STATUS.md) | What works, what is untested, what is missing |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Working on it: layout, building, the test suite and the checks, the design docs |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | The choices behind how it behaves, and why |
