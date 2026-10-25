@@ -1,4 +1,4 @@
-//! Camera mutation and navigation policies (INV-CAMERA-1, C1.5).
+//! The only module that may mutate cameras (INV-CAMERA-1, C1.5).
 //!
 //! Cameras are created, bound, and unbound through the output-lifecycle entries (M5).
 //! Binding precedence follows remembered-and-unbound → persisted (no collision) → default, 1:1
