@@ -36,6 +36,24 @@ use smithay::reexports::rustix::process::{
 /// an adopted orphan, reaped here.
 static OWNED: Mutex<BTreeSet<i32>> = Mutex::new(BTreeSet::new());
 
+/// Recent reaps by [`reap_adopted`]: which pid, when. A child reaped here that someone still
+/// holds a `Child` for (a launch, `launch.rs`) gets `ECHILD` from `try_wait`; this says when it
+/// exited.
+static REAPED: Mutex<Vec<(i32, Instant)>> = Mutex::new(Vec::new());
+/// How long a reap is remembered.
+const REAPED_KEPT: Duration = Duration::from_secs(60);
+
+/// When [`reap_adopted`] reaped `pid`, if it did in the last minute.
+pub(crate) fn reaped_at(pid: u32) -> Option<Instant> {
+    REAPED
+        .lock()
+        .unwrap()
+        .iter()
+        .rev()
+        .find(|(p, _)| *p == pid as i32)
+        .map(|(_, t)| *t)
+}
+
 /// A child was spawned by an owner that reaps it (`Session::spawn`, the satellite supervisor).
 /// Prefer [`spawn_owned`]: registering after `spawn` leaves a window in which a child that exits
 /// at once can be reaped by a reaper on another thread.
@@ -165,6 +183,10 @@ pub fn reap_adopted() -> usize {
             .is_ok()
         {
             reaped += 1;
+            let now = Instant::now();
+            let mut log = REAPED.lock().unwrap();
+            log.retain(|(_, t)| now.duration_since(*t) < REAPED_KEPT);
+            log.push((pid, now));
         }
     }
     reaped

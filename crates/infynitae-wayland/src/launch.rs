@@ -40,13 +40,31 @@ struct Launch {
 }
 
 impl Launch {
+    /// Notes the end of the launch's process once it exited. `now` stands for the exit time:
+    /// [`Launches::poll`] runs at every dispatch, so it is at most one loop iteration late. A
+    /// process the orphan reaper took first (`ECHILD`) ended when it was reaped.
+    fn poll(&mut self, now: Instant) {
+        if self.ended.is_some() {
+            return;
+        }
+        match self.child.try_wait() {
+            Ok(None) => {}
+            Ok(Some(_)) => self.ended = Some(now),
+            Err(_) => {
+                self.ended = Some(
+                    crate::ownership::reaped_at(self.child.id())
+                        .unwrap_or(now)
+                        .min(now),
+                );
+            }
+        }
+    }
+
     /// The launch's latest moment: its start, or its end once its process exited (a launcher
     /// exits as it starts the app). Not "now while running": a terminal started from Super+Q
     /// runs for hours, and everything run in it would count as just launched.
     fn moment(&mut self, now: Instant) -> Instant {
-        if self.ended.is_none() && !matches!(self.child.try_wait(), Ok(None)) {
-            self.ended = Some(now);
-        }
+        self.poll(now);
         self.ended.unwrap_or(self.started).max(self.started)
     }
 }
@@ -70,6 +88,16 @@ impl Launches {
             ended: None,
         });
         Ok(())
+    }
+
+    /// Notes the launches whose process exited since the last call (every dispatch), so an
+    /// end is dated when it happened, not when a window next asks.
+    pub(crate) fn poll(&mut self) {
+        let now = Instant::now();
+        for l in &mut self.list {
+            l.poll(now);
+        }
+        self.prune(now);
     }
 
     /// Ended launches older than any rule are forgotten.

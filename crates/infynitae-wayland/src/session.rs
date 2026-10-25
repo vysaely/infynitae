@@ -358,6 +358,7 @@ impl Session {
                 false
             }
         });
+        state.launches.poll();
         let ready = self.display_ready.take();
         match self.display.dispatch_clients(state) {
             Ok(0) if !ready => {}
