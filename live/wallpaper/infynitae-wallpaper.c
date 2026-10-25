@@ -513,10 +513,17 @@ static void load_config_defaults(char *target, size_t target_sz, char *mode, siz
         char *k_end = key + strlen(key) - 1;
         while (k_end > key && (*k_end == ' ' || *k_end == '\t')) *k_end-- = '\0';
 
-        // trim val
-        while (*val == ' ' || *val == '\t' || *val == '"' || *val == '\'') val++;
-        char *v_end = val + strlen(val) - 1;
-        while (v_end > val && (*v_end == ' ' || *v_end == '\t' || *v_end == '\n' || *v_end == '\r' || *v_end == '"' || *v_end == '\'')) *v_end-- = '\0';
+        // the value as the shell reads it: a quoted string, or a word that ends at a space; a
+        // comment after it is not part of it (owner, 2026-10-25: `WALLPAPER="…" # …`)
+        while (*val == ' ' || *val == '\t') val++;
+        if (*val == '"' || *val == '\'') {
+            char quote = *val++;
+            char *close = strchr(val, quote);
+            if (close) *close = '\0';
+        } else {
+            val[strcspn(val, " \t\r\n#")] = '\0';
+        }
+        val[strcspn(val, "\r\n")] = '\0';
 
         if (strcmp(key, "WALLPAPER") == 0 && target[0] == '\0') {
             // the config is a shell file: "$HOME/..." and "~/..." mean the home directory
