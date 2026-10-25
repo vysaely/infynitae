@@ -1,6 +1,6 @@
-//! INC-10 T1: the one-shot viewport fit and restore on the production path (core + adapter +
-//! headless backend + a real client over a socketpair), driven by the virtual keyboard (Logo+F,
-//! Logo+Shift+F; Level D default bindings). The oracle is the client's own wire log and
+//! Production path tests for the one-shot viewport fit and restore (core + adapter +
+//! headless backend + a real client over a socketpair), driven by the virtual keyboard (Super+Enter;
+//! Level D default bindings). The oracle is the client's own wire log and
 //! hand-derived values.
 //!
 //! What it establishes: F-FIT-1's mutation and M10's single true-position event on the wire; no
@@ -28,9 +28,7 @@ use smithay::reexports::pixman::Image;
 use smithay::utils::{Physical, Rectangle};
 use wayland_client::protocol::wl_shm;
 
-/// Logo+F (`shift` false) or Logo+Shift+F on the virtual keyboard: modifiers pressed first, F
-/// pressed and released, modifiers released.
-/// Super+Enter. `_restore` names what the press is meant to do: Super+Shift+F is gone (owner
+/// Super+Enter on the virtual keyboard. `_restore` names what the press is meant to do: Super+Shift+F is gone (owner
 /// decision 2026-10-21), and at the fit the same Super+Enter restores.
 fn combo(r: &mut Rig, _restore: bool) {
     let mut press = |key, pressed| {
@@ -61,12 +59,12 @@ fn same(a: CameraValue, b: CameraValue) -> bool {
     a.center == b.center && a.zoom.to_bits() == b.zoom.to_bits()
 }
 
-/// Logo+F on the x8 setup (W: 800 × 600 content with a 20 px shadow, centred; the pointer on W):
+/// Super+Enter on the x8 setup (W: 800 × 600 content with a 20 px shadow, centred; the pointer on W):
 /// the camera becomes W's window-geometry centre (0, 0) at zoom min(1920/800, 1080/600) = 1.8; the
 /// client receives exactly one pointer motion and its frame (M10: the true position under the new
-/// view) and no configure, and W keeps its anchor; F itself never reaches the client (a
-/// compositor binding). Logo+Shift+F restores the exact prior camera with one motion again; a
-/// second restore is refused and delivers nothing.
+/// view) and no configure, and W keeps its anchor; Enter itself never reaches the client (a
+/// compositor binding). A second Super+Enter restores the exact prior camera with one motion again; a
+/// third restore is refused and delivers nothing.
 #[test]
 fn fit_and_restore_through_the_keyboard_bindings() {
     let mut r = Rig::x8();
@@ -135,9 +133,9 @@ fn fit_and_restore_through_the_keyboard_bindings() {
     );
 }
 
-/// ER-5 R3 on the production path (INC-10 exit: "client resize never moves the camera", 200
-/// commits): after a fit, W resizes itself 200 times — window geometry and buffer — and the camera
-/// stays exactly the fitted value; nothing re-fits and the history keeps its one entry.
+/// Client resize never moves the camera (ER-5 R3, 200 commits): after a fit, W resizes itself 200 times
+/// — window geometry and buffer — and the camera stays exactly the fitted value; nothing re-fits
+/// and the history keeps its one entry.
 #[test]
 fn client_resizes_never_move_a_fitted_camera() {
     let mut r = Rig::x8();

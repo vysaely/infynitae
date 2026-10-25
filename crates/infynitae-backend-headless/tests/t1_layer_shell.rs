@@ -1,6 +1,6 @@
-//! Layer surfaces on the production path (owner decisions 2026-10-21 L1–L8): production Core,
-//! adapter and headless lockstep with a real `zwlr_layer_shell_v1` client. Expected values are
-//! hand-derived: one 1920 × 1080 output at scale 1; a bar anchored top, left and right, 30 px high
+//! Production path tests for layer surfaces (owner decisions 2026-10-21, L1–L8): production Core,
+//! adapter, and headless lockstep with a real `zwlr_layer_shell_v1` client. Expected values are
+//! hand-derived: one 1920 × 1080 output at scale 1; a bar anchored top, left, and right, 30 px high
 //! with a 30-px exclusive zone, so the usable area is (0, 30, 1920, 1050).
 
 mod common;

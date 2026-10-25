@@ -1,5 +1,5 @@
-//! INC-2 T1: multi-output lifecycle, membership, frame clock and presentation on the production
-//! path (core + adapter + headless backend + a real probe client over a socketpair).
+//! Production path tests for multi-output lifecycle, membership, frame clock, and presentation
+//! (core + adapter + headless backend + a real probe client over a socketpair).
 //!
 //! Oracle: the client's ordered wire log and hand-derived expectations from the canonical rules
 //! (M4, M5, INV-OUTPUT-1, F-MEMBER-1, INV-FRAME-2, INV-FRAME-5). No expected value is computed by
@@ -350,7 +350,7 @@ fn clock_does_not_depend_on_visible_area() {
 }
 
 /// SC1/SC3 starve and re-entry, and SC3(e) handover: an unobserved element's callback is withheld
-/// (no completion while off-screen, INV-FRAME-3 kick/fallback are INC-8); when it becomes observed
+/// (no completion while off-screen, INV-FRAME-3 kick/fallback); when it becomes observed
 /// again it completes at the first vblank of the new clock output; a callback pending at handover
 /// completes at the next vblank of the surviving clock.
 #[test]
