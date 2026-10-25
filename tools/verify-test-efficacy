@@ -2058,6 +2058,9 @@ def rebuilt_clean(entry, package, target):
     return crate == package and target == ["--lib"]
 
 
+CLEAN_TEST_CACHE = {}
+
+
 def run_control(prop, rel, old, new, package, target, name, target_dir):
     tmp = tempfile.mkdtemp(prefix="verify-test-efficacy-")
     try:
@@ -2072,6 +2075,35 @@ def run_control(prop, rel, old, new, package, target, name, target_dir):
             text = f.read()
         if text.count(old) != 1:
             return "BROKEN", f"seed anchor found {text.count(old)} times in {rel}"
+
+        test_key = (package, tuple(target), name)
+        if test_key not in CLEAN_TEST_CACHE:
+            cmd = ["cargo", "test", "--locked", "-p", package, *target, name, "--", "--test-threads=1"]
+            try:
+                p_clean = subprocess.run(cmd, cwd=tmp, env={**os.environ, "CARGO_TARGET_DIR": target_dir},
+                                         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                         timeout=DEFAULT_TIMEOUT)
+                out_clean = p_clean.stdout
+                if "error[E" in out_clean or "could not compile" in out_clean:
+                    CLEAN_TEST_CACHE[test_key] = (False, "clean tree does not compile")
+                elif p_clean.returncode != 0:
+                    failed = [l for l in out_clean.splitlines() if l.startswith("test ") and l.endswith("FAILED") and name in l]
+                    reason = failed[0] if failed else f"clean test failed (exit {p_clean.returncode})"
+                    CLEAN_TEST_CACHE[test_key] = (False, f"test fails on clean tree ({reason})")
+                else:
+                    ran = sum(int(m) for m in re.findall(r"test result: \w+\. (\d+) passed; (?:\d+) failed", out_clean))
+                    ran += sum(int(m) for m in re.findall(r"test result: \w+\. \d+ passed; (\d+) failed", out_clean))
+                    if ran == 0:
+                        CLEAN_TEST_CACHE[test_key] = (False, f"no test matched {name!r} on clean tree")
+                    else:
+                        CLEAN_TEST_CACHE[test_key] = (True, "clean test passed")
+            except subprocess.TimeoutExpired:
+                CLEAN_TEST_CACHE[test_key] = (False, f"clean test timed out after {DEFAULT_TIMEOUT}s")
+
+        clean_ok, clean_reason = CLEAN_TEST_CACHE[test_key]
+        if not clean_ok:
+            return "BROKEN", clean_reason
+
         with open(path, "w") as f:
             f.write(text.replace(old, new, 1))
         cmd = ["cargo", "test", "--locked", "-p", package, *target, name, "--", "--test-threads=1"]
