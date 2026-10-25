@@ -1,6 +1,5 @@
-//! INC-12 T1 (TST-14 c6-sat on the production path; OB-33; INV-XWAYLAND-1; M19), EXPERIMENTAL:
-//! the real xwayland-satellite supervised by the production session code, against the production
-//! Core, adapter and headless backend.
+//! Production tests for xwayland-satellite supervised by session code (TST-14 c6-sat, OB-33,
+//! INV-XWAYLAND-1, M19), against Core, adapter, and headless backend.
 //!
 //! Isolation: the test re-runs itself under `unshare -Urnm` with a private tmpfs on `/tmp` and on
 //! the journal's socket directory, and refuses to run unless `/tmp` is that private tmpfs. The X
@@ -10,9 +9,7 @@
 //! Xwayland finds no GPU render node and renders in software: the test touches no GPU device.
 //!
 //! Ignored by default. Needs `INFYNITAE_XWAYLAND_SATELLITE` (the satellite binary), `unshare`,
-//! `mount` and `xmessage`; run with `--ignored`. The satellite (0.8.3) needs `wp_viewporter`
-//! from the compositor, which only the INC-6 line offers: before INC-6 the satellite exits at
-//! start and the test fails at its first step.
+//! `mount` and `xmessage`; run with `--ignored`. The satellite (0.8.3) requires `wp_viewporter`.
 
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -421,7 +418,7 @@ fn lines(child: &mut Child) -> std::sync::mpsc::Receiver<String> {
     rx
 }
 
-/// OB-9 (T1 part), INC-12: a GTK3 menu of an X11 client, an override-redirect window, reaches
+/// OB-9: a GTK3 menu of an X11 client (an override-redirect window) reaches
 /// Infynitae through xwayland-satellite as an `xdg_popup` of the client's window, at the place
 /// the client asked for (the button's bottom centre: (150, 200) of the 300×200 window); it
 /// receives input (a click on its first item activates it); and it is dismissed correctly (a
