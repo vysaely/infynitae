@@ -528,7 +528,9 @@ impl Core {
                 .set_saved_floating(element, Some((anchor, orig_size)));
             let _ = self.place_by_shell(element, tl, out);
             let target_rect = (tl.x, tl.y, tl.x + canvas_w as i64, tl.y + canvas_h as i64);
-            self.push_overlapping_cluster(element, target_rect, out);
+            if self.placement == crate::protocol::PlacementPolicy::ClusterTiling {
+                self.push_overlapping_cluster(element, target_rect, out);
+            }
             out.push(Effect::ToplevelConfigureSize {
                 element,
                 size: crate::geom::LocalSize {
@@ -917,7 +919,9 @@ impl Core {
 
                 let _ = self.place_by_shell(id, tl, &mut fx);
                 let target_rect = (tl.x, tl.y, tl.x + canvas_w as i64, tl.y + canvas_h as i64);
-                self.push_overlapping_cluster(id, target_rect, &mut fx);
+                if self.placement == crate::protocol::PlacementPolicy::ClusterTiling {
+                    self.push_overlapping_cluster(id, target_rect, &mut fx);
+                }
             }
 
             let request = crate::protocol::ToplevelRequest::SetFullscreen { output };
@@ -3485,6 +3489,7 @@ mod tests {
 
         // Focus w1
         c.set_focus(&mut i, Some(w1)).unwrap();
+        c.set_placement_policy(crate::PlacementPolicy::ClusterTiling);
         c.set_enter_mode(crate::EnterMode::Maximize);
 
         // Move pointer to (10, 10) on output A
@@ -3663,6 +3668,98 @@ mod tests {
         assert_eq!(restored_w1.y, 0);
         // w2 remains at (972, 0)
         assert_eq!(c.stage().anchor(w2).unwrap().x, 972);
+    }
+
+    #[test]
+    fn toggle_fullscreen_under_centred_in_view_does_not_push_overlapping_windows() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        use std::num::NonZeroU64;
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+
+        let w1 = c.toplevel_created();
+        let w2 = c.toplevel_created();
+
+        let win = |key: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(NonZeroU64::new(key).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+
+        // Default placement is CentredInView
+        assert_eq!(c.placement, crate::PlacementPolicy::CentredInView);
+
+        c.toplevel_committed(w1, win(1, 800, 600, false)).unwrap();
+        c.toplevel_committed(w1, win(1, 800, 600, true)).unwrap();
+        c.toplevel_committed(w2, win(2, 800, 600, false)).unwrap();
+        c.toplevel_committed(w2, win(2, 800, 600, true)).unwrap();
+        c.render_list(a).unwrap();
+
+        // Place w1 at (0, 0) and overlapping w2 at (400, 300)
+        let mut out = Vec::new();
+        c.place_by_shell(w1, crate::geom::CanvasPoint { x: 0, y: 0 }, &mut out)
+            .unwrap();
+        c.place_by_shell(w2, crate::geom::CanvasPoint { x: 400, y: 300 }, &mut out)
+            .unwrap();
+
+        // Focus w1
+        c.set_focus(&mut i, Some(w1)).unwrap();
+
+        // Move pointer to output A
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::PointerMotion {
+                    delta: (10.0, 10.0),
+                    delta_unaccel: (10.0, 10.0),
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+
+        let logo_shift = Modifiers {
+            logo: true,
+            shift: true,
+            ctrl: false,
+            alt: false,
+        };
+
+        // Press Super+Shift+Enter on w1 to toggle fullscreen
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key: crate::input::keys::KEY_ENTER,
+                    pressed: true,
+                    modifiers: logo_shift,
+                    mods_changed: false,
+                    time_us: 2000,
+                },
+            )
+            .unwrap();
+
+        // w2 must remain at (400, 300) because placement policy is CentredInView (not ClusterTiling)
+        let anchor_w2 = c.stage().anchor(w2).unwrap();
+        assert_eq!(
+            anchor_w2.x, 400,
+            "w2 must not be pushed under CentredInView placement policy"
+        );
+        assert_eq!(anchor_w2.y, 300);
     }
 
     #[test]
