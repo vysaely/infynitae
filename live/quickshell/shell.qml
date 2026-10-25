@@ -475,7 +475,7 @@ ShellRoot {
                             anchors.fill: parent
                             cursorShape: Qt.PointingHandCursor
                             onClicked: {
-                                Quickshell.execDetached(["sh", "-c", "killall infynitae"]);
+                                Quickshell.execDetached(["sh", "-c", "if command -v infynitae-session >/dev/null 2>&1; then infynitae-session stop; elif [ -x \"$HOME/.local/bin/infynitae-session\" ]; then \"$HOME/.local/bin/infynitae-session\" stop; elif [ -x \"$HOME/infynitae/live/infynitae-session\" ]; then \"$HOME/infynitae/live/infynitae-session\" stop; else killall infynitae; fi"]);
                             }
                         }
                     }
