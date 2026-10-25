@@ -44,6 +44,11 @@ and start it from `autostart.sh`, e.g. `fcitx5 -d`). An input method gets nothin
 screen is locked. Night light and screen power have only run in the test suite, not on
 a real screen yet.
 
+While any app captures the screen or a window (screen sharing, a remote desktop such as
+RustDesk, a screenshot), a red dot shows in the top right corner of every screen, and for 3 s
+after the last frame; it is never in what is captured. The replay buffer does not show it
+(`CAPTURE_INDICATOR`). Only tested in the test suite so far.
+
 Screen sharing can share one window instead of a screen: an app asking for a window (Discord's
 window tab) gets a menu of the windows, an app asking for a screen still gets the first one at
 once; with `SCREENSHARE_ASK="true"` every share asks, in a menu of the screens and the windows. A shared window is drawn by itself, wherever it is on the

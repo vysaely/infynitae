@@ -361,7 +361,7 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
 impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
     fn request(
         state: &mut Self,
-        _client: &Client,
+        client: &Client,
         frame: &ZwlrScreencopyFrameV1,
         request: zwlr_screencopy_frame_v1::Request,
         data: &FrameUserData,
@@ -387,6 +387,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
                     frame.failed();
                     return;
                 }
+                state.note_capture(client);
                 state.screencopy.pending.lock().unwrap().push(PendingFrame {
                     frame: CaptureFrame::Wlr(frame.clone()),
                     output_id,
@@ -411,6 +412,7 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
                     frame.failed();
                     return;
                 }
+                state.note_capture(client);
                 state.screencopy.pending.lock().unwrap().push(PendingFrame {
                     frame: CaptureFrame::Wlr(frame.clone()),
                     output_id,

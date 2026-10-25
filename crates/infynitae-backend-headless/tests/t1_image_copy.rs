@@ -264,3 +264,61 @@ fn double_capture_triggers_protocol_error() {
     }));
     assert!(res.is_err());
 }
+
+/// The solid rects of an output's frame, live (`output_elements`) or for a capture.
+fn solid_rects(r: &mut Rig, for_capture: bool) -> Vec<(i32, i32, i32, i32)> {
+    use infynitae_wayland::convert::{self, OutputElement};
+    use smithay::backend::renderer::element::Element;
+    let mut renderer = smithay::backend::renderer::pixman::PixmanRenderer::new().expect("pixman");
+    let output = r.ls.output();
+    let (elements, k) = if for_capture {
+        convert::output_elements_screencopy(&mut r.ls.state, &mut renderer, output, false)
+    } else {
+        convert::output_elements_opt(&mut r.ls.state, &mut renderer, output, false)
+    }
+    .unwrap_or_else(|_| panic!("a frame"));
+    elements
+        .iter()
+        .filter(|e| matches!(e, OutputElement::Solid(_)))
+        .map(|e| {
+            let g = e.geometry(smithay::utils::Scale::from(k));
+            (g.loc.x, g.loc.y, g.size.w, g.size.h)
+        })
+        .collect()
+}
+
+/// The capture indicator: a capture shows the red mark in the screen's top right corner, on the
+/// screen only (never in what is captured), until `HOLD` after the last frame.
+#[test]
+fn a_capture_shows_the_mark_on_the_screen_and_not_in_the_capture() {
+    use infynitae_wayland::capture_indicator::HOLD;
+    let mut r = Rig::new(common::Lockstep::new(Some(a_1080())));
+    let s = session(&mut r);
+    assert!(solid_rects(&mut r, false).is_empty(), "no capture, no mark");
+
+    capture(&mut r, &s, (1920, 1080));
+    let now = std::time::Instant::now();
+    assert!(r.ls.state.capture_indicator().update(now), "it came");
+    let mark: Vec<_> = infynitae_wayland::convert::capture_mark_rects((1920, 1080), 1.0)
+        .iter()
+        .map(|(g, _)| (g.loc.x, g.loc.y, g.size.w, g.size.h))
+        .collect();
+    assert_eq!(
+        mark[1],
+        (1898, 10, 12, 12),
+        "the ring, 10 px from the corner"
+    );
+    assert_eq!(solid_rects(&mut r, false), mark, "drawn on the screen");
+    assert!(solid_rects(&mut r, true).is_empty(), "not in the capture");
+    assert!(
+        r.ls.state
+            .capture_indicator()
+            .due(now)
+            .is_some_and(|d| d <= HOLD)
+    );
+
+    let later = now + HOLD;
+    assert!(r.ls.state.capture_indicator().update(later), "it went");
+    assert!(!r.ls.state.capture_indicator().active(later));
+    assert_eq!(r.ls.state.capture_indicator().due(later), None);
+}

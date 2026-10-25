@@ -1001,11 +1001,23 @@ pub fn run_console_with(
             data.last_user_activity,
             std::time::Instant::now(),
         );
-        let timeout = [data.session.timeout(), restart, idle_timeout]
+        let capture_mark = data
+            .state
+            .capture_indicator()
+            .due(std::time::Instant::now());
+        let timeout = [data.session.timeout(), restart, idle_timeout, capture_mark]
             .into_iter()
             .flatten()
             .min();
         event_loop.dispatch(timeout, &mut data)?;
+        // the capture indicator came or went: every screen draws it, or no longer
+        if data
+            .state
+            .capture_indicator()
+            .update(std::time::Instant::now())
+        {
+            data.session.request_frame();
+        }
         // Watches ~/.config/infynitae/config for changes and reloads settings
         if data.last_config_check.elapsed() >= Duration::from_millis(250) {
             data.last_config_check = std::time::Instant::now();

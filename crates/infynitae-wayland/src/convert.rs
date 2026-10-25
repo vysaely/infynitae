@@ -571,6 +571,22 @@ where
         cursor_elements(state, renderer, output, view.k, &mut elements)
             .map_err(RenderOutputError::Renderer)?;
     }
+    if state.capture_indicator.active(std::time::Instant::now()) {
+        elements.extend(
+            capture_mark_rects(view.size, view.scale)
+                .into_iter()
+                .zip(&state.capture_indicator.ids)
+                .map(|((rect, color), id)| {
+                    OutputElement::Solid(SolidColorRenderElement::new(
+                        id.clone(),
+                        rect,
+                        CommitCounter::default(),
+                        color,
+                        Kind::Unspecified,
+                    ))
+                }),
+        );
+    }
     input_method_popups(state, renderer, &entries, view.k, &mut elements)
         .map_err(RenderOutputError::Renderer)?;
     elements.extend(
@@ -600,6 +616,29 @@ where
     );
     drop_empty(&mut elements, view.k);
     Ok((elements, view.k))
+}
+
+/// The capture indicator (`capture_indicator`) on a view of `size` physical px at `scale`: a
+/// white ring and, on it, a red dot, front to back, in the top right corner (12 and 8 logical px,
+/// 10 px from the edges).
+pub fn capture_mark_rects(
+    size: (u32, u32),
+    scale: f64,
+) -> [(Rectangle<i32, Physical>, Color32F); 2] {
+    let px = |v: f64| (v * scale).round().max(1.0) as i32;
+    let (ring, dot, margin) = (px(12.0), px(8.0), px(10.0));
+    let (x, y) = (size.0 as i32 - margin - ring, margin);
+    let inset = (ring - dot) / 2;
+    [
+        (
+            Rectangle::new((x + inset, y + inset).into(), (dot, dot).into()),
+            Color32F::new(0.9, 0.1, 0.1, 1.0),
+        ),
+        (
+            Rectangle::new((x, y).into(), (ring, ring).into()),
+            Color32F::new(1.0, 1.0, 1.0, 1.0),
+        ),
+    ]
 }
 
 /// Leaves out elements that cover no pixel (a 1-pixel subsurface zoomed out rounds to 0 wide).

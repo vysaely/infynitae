@@ -339,7 +339,7 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, SessionData> for WaylandState {
 impl Dispatch<ExtImageCopyCaptureFrameV1, FrameData> for WaylandState {
     fn request(
         state: &mut Self,
-        _client: &Client,
+        client: &Client,
         frame: &ExtImageCopyCaptureFrameV1,
         request: ext_image_copy_capture_frame_v1::Request,
         data: &FrameData,
@@ -403,6 +403,7 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, FrameData> for WaylandState {
                         }
                     },
                 };
+                state.note_capture(client);
                 state.screencopy.pending.lock().unwrap().push(PendingFrame {
                     frame: CaptureFrame::Ext(frame.clone()),
                     output_id,

@@ -80,6 +80,13 @@ these by date, e.g. "(owner, 2026-10-24)".
 - **One window can be shared** (2026-10-25): drawn by itself at zoom 1, the size of its window
   geometry (its shadow left out), wherever it is on the canvas and whether or not it is in view.
   The first screen's scale. Never a private window, never anything while locked.
+- **A capture is never silent** (2026-10-25): while any client captures (the screen, a window, a
+  screenshot), every screen shows a red dot, drawn by the compositor and never into a capture, so
+  a remote desktop or a share cannot run unseen even when the app shows nothing itself (RustDesk's
+  window could not open in this session and its connections ran without any sign). Only the
+  replay buffer's helper is left out, known by its executable's name: a same-user program could
+  take that name, but one that can do that can also turn the dot off in the config; the dot
+  guards against apps behaving as designed, not against malware.
 - **Input methods get nothing while locked** (2026-10-25): the keys go to the lock screen past
   an input method's keyboard grab, a virtual keyboard types nothing, and no text input is enabled,
   so no text (the password field included) reaches an input method or comes from one.

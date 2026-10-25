@@ -105,6 +105,9 @@ SCREENSHARE_ASK="false"           # [reload] false: an app's Share button shares
                                   # screen-sharing portal only.
 SCREENCOPY_CURSOR="false"         # draw the cursor into captures (true: OBS; false: no double
                                   # cursor in RustDesk)
+CAPTURE_INDICATOR="true"          # a red dot in the top right corner of the screen while any
+                                  # app captures it (sharing, remote desktop, screenshots);
+                                  # the replay buffer does not show it. Never in the capture.
 PRIVACY_APPS=""                   # hidden from captures, e.g. "bitwarden,keepassxc"
 PRIVACY_TITLES=""                 # by title, e.g. "Password"; Super+Shift+P toggles a window
 

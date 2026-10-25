@@ -12,6 +12,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod capture_indicator;
 pub mod convert;
 pub mod cursor;
 pub mod extension;
@@ -137,6 +138,7 @@ pub struct WaylandState {
     /// and whether pointer events wait for their `wl_pointer.frame` (`pointer`).
     pointer_sent: pointer::Sent,
     arrow: cursor::Arrow,
+    capture_indicator: capture_indicator::CaptureIndicator,
     pub(crate) cursor_theme: std::sync::Mutex<Option<cursor::CursorThemeManager>>,
     pub(crate) config_home: Option<std::path::PathBuf>,
     pub(crate) xcursor_path: Option<String>,
@@ -488,6 +490,7 @@ impl WaylandState {
             cursor: smithay::input::pointer::CursorImageStatus::default_named(),
             pointer_sent: pointer::Sent::default(),
             arrow: cursor::Arrow::default(),
+            capture_indicator: capture_indicator::CaptureIndicator::default(),
             cursor_theme: std::sync::Mutex::new(None),
             config_home: None,
             xcursor_path: None,
@@ -769,6 +772,12 @@ impl WaylandState {
                                     "0" | "false" | "off" | "no"
                                 );
                                 self.screencopy.set_hide_cursor(hide);
+                            }
+                            "CAPTURE_INDICATOR" => {
+                                self.capture_indicator.enabled = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                             }
                             "FOCUS_FOLLOWS_MOUSE" => match val.to_lowercase().as_str() {
                                 "strict" => {
