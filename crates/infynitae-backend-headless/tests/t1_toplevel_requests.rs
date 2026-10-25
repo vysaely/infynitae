@@ -1,5 +1,4 @@
-//! INC-7 (experimental), M2 on the production path: what a real client gets back for each
-//! `xdg_toplevel` request, and what the compositor tells it it can do.
+//! Production path tests for `xdg_toplevel` requests and compositor capabilities (M2).
 //!
 //! TST-22 (xmaximize) ported: `set_maximized`, `unset_maximized`, `set_fullscreen` and
 //! `unset_fullscreen` are each answered by exactly one configure; `set_minimized`, `move`,

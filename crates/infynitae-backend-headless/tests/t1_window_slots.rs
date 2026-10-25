@@ -1,6 +1,5 @@
-//! Super+1..9 jumps to window slot 1..9 (creation order):
-//! focuses the window, brings it to the front, and centers the camera on it.
-//! (owner request 2026-10-22, "like on a kde or windows 11", Option A).
+//! Super+1..9 jumps to window slot 1..9 in creation order (owner, 2026-10-22):
+//! focuses the window, brings it to the front, and centres the camera on it.
 
 mod common;
 

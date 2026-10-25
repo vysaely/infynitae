@@ -1,6 +1,6 @@
-//! Super+left drag moves a window, Super+right drag resizes it from the corner nearest the
-//! pointer (owner request after the first console run, 2026-10-22: "like Hyprland"). Both bring
-//! the window to the front and focus it; no pointer motion reaches a client during the drag.
+//! Super+left drag moves a window; Super+right drag resizes it from the nearest corner
+//! (owner, 2026-10-22). Both bring the window to the front and focus it; no pointer motion reaches
+//! a client during the drag.
 
 mod common;
 
@@ -189,10 +189,9 @@ fn a_window_destroyed_mid_drag_orphans_the_drag() {
     }
 }
 
-/// Super+middle while a Super+left move holds a window (owner request 2026-10-22): the camera
-/// pans, the pointer stays, and the window keeps its grabbed point under the pointer, so it
-/// travels across the Canvas by exactly the camera's motion. Releasing middle ends only the pan:
-/// the window is still held and follows the pointer again; releasing left ends the move.
+/// Super+middle during a Super+left window move (owner, 2026-10-22): the camera pans, the pointer
+/// stays, and the window keeps its grabbed point under the pointer, traveling across the canvas
+/// by the camera delta. Releasing middle ends the pan while the window remains held.
 #[test]
 fn super_middle_during_a_move_pans_and_carries_the_window() {
     let mut r = Rig::x8();
