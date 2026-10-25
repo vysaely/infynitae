@@ -161,6 +161,12 @@ pub struct WaylandState {
     data_device: DataDeviceState,
     /// `zwp_primary_selection_device_manager_v1`: the primary selection, same focus rule.
     primary_selection: PrimarySelectionState,
+    /// `zwlr_data_control_manager_v1` and `ext_data_control_manager_v1` (2026-10-25): clipboard
+    /// tools (wl-copy, clipboard managers) set and read selections without a window of their own.
+    /// Without them wl-copy mapped a window on every copy, which the open-focus rule could take
+    /// for one the user opened (the camera jumped to it on every text selection).
+    pub(crate) wlr_data_control: smithay::wayland::selection::wlr_data_control::DataControlState,
+    pub(crate) ext_data_control: smithay::wayland::selection::ext_data_control::DataControlState,
     /// The client that set the clipboard and the primary selection (Smithay accepts a selection
     /// only from the keyboard-focused client). A selection whose owner's connection is gone is
     /// cleared, so other clients are told it is gone (Smithay does not do it by itself).
@@ -352,6 +358,16 @@ impl WaylandState {
             .expect("the seat has a keyboard");
         let capabilities = convert::wm_capabilities(core.toplevel_capabilities());
 
+        // the primary selection exists before the data-control globals that also serve it
+        let primary_selection = PrimarySelectionState::new::<Self>(display);
+        let wlr_data_control = smithay::wayland::selection::wlr_data_control::DataControlState::new::<
+            Self,
+            _,
+        >(display, Some(&primary_selection), |_| true);
+        let ext_data_control = smithay::wayland::selection::ext_data_control::DataControlState::new::<
+            Self,
+            _,
+        >(display, Some(&primary_selection), |_| true);
         let mut state = WaylandState {
             core,
             dh: display.clone(),
@@ -379,7 +395,9 @@ impl WaylandState {
             fractional_scale_manager: FractionalScaleManagerState::new::<Self>(display),
             viewporter: ViewporterState::new::<Self>(display),
             data_device: DataDeviceState::new::<Self>(display),
-            primary_selection: PrimarySelectionState::new::<Self>(display),
+            primary_selection,
+            wlr_data_control,
+            ext_data_control,
             selection_owners: [None, None],
             drag_started: false,
             activation: XdgActivationState::new::<Self>(display),

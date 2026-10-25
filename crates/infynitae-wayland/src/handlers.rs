@@ -757,6 +757,24 @@ impl PrimarySelectionHandler for WaylandState {
     }
 }
 
+impl smithay::wayland::selection::wlr_data_control::DataControlHandler for WaylandState {
+    fn data_control_state(
+        &self,
+    ) -> &smithay::wayland::selection::wlr_data_control::DataControlState {
+        &self.wlr_data_control
+    }
+}
+
+impl smithay::wayland::selection::ext_data_control::DataControlHandler for WaylandState {
+    fn data_control_state(
+        &self,
+    ) -> &smithay::wayland::selection::ext_data_control::DataControlState {
+        &self.ext_data_control
+    }
+}
+
+smithay::delegate_data_control!(WaylandState);
+smithay::delegate_ext_data_control!(WaylandState);
 delegate_data_device!(WaylandState);
 delegate_primary_selection!(WaylandState);
 

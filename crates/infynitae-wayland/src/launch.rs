@@ -40,12 +40,14 @@ struct Launch {
 }
 
 impl Launch {
-    /// The launch's latest moment: now while its process runs, else its end.
+    /// The launch's latest moment: its start, or its end once its process exited (a launcher
+    /// exits as it starts the app). Not "now while running": a terminal started from Super+Q
+    /// runs for hours, and everything run in it would count as just launched.
     fn moment(&mut self, now: Instant) -> Instant {
         if self.ended.is_none() && !matches!(self.child.try_wait(), Ok(None)) {
             self.ended = Some(now);
         }
-        self.ended.unwrap_or(now).max(self.started)
+        self.ended.unwrap_or(self.started).max(self.started)
     }
 }
 
@@ -200,6 +202,11 @@ mod tests {
         assert!(descends_from(me, parent));
         assert!(descends_from(me, me));
         assert!(!descends_from(parent, me));
-        assert_eq!(tag_of(me), None, "this process was not launched");
+        // the tag of this process is whatever its environment says (a test run from a terminal
+        // started by a shortcut inherits one)
+        let expected = std::env::var("INFYNITAE_LAUNCH")
+            .ok()
+            .and_then(|v| v.parse().ok());
+        assert_eq!(tag_of(me), expected);
     }
 }
