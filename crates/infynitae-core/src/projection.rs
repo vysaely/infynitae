@@ -1122,10 +1122,7 @@ pub(crate) mod tests {
 
     /// F-VIEW-1's representable domain (C12.F14): every corner of the accepted domain — zoom, scale, view
     /// size, camera centre and edge positions at their extremes — and 20,000 random states inside
-    /// it evaluate without overflow (`cargo test` builds with the test profile, which keeps
-    /// overflow checks on, so an overflow panics here; no release run of this test exists, and a
-    /// release build — checks off — is covered only because the same inputs never overflow)
-    /// and keep the projection's invariants: the view origin
+    /// it evaluate without overflow and keep the projection's invariants: the view origin
     /// within F-VIEW-1's exact range |v| ≤ 2³⁷ px, monotone physical edges, the camera centre at
     /// the view centre, unproject ∘ project = identity up to the Q16 quantum. Every
     /// intermediate is monotone in each parameter, so the corners bound the domain.
@@ -1395,7 +1392,7 @@ pub(crate) mod tests {
         assert!(checked > 100_000, "{checked} edges checked");
     }
 
-    /// C12.F14 (D4), why the bound is 2³¹ and not the decision package's 2⁵⁰: beyond about
+    /// C12.F14 (D4): why the bound is 2³¹ and not 2⁵⁰: beyond about
     /// 2³³ the f64 sum `(x − R)·k + δ` loses δ, and at an exact tie (k = 1.25·2ⁿ, x < R) the
     /// edge then rounds away from where F-LATTICE-1 puts it.
     #[test]
