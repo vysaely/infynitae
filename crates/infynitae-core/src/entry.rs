@@ -855,15 +855,7 @@ impl Core {
         if let Ok((_, t_fx)) = self.toplevel_request(id, request) {
             fx.extend(t_fx);
         }
-        let saved = self.stage.saved_floating(id);
-        if let Some((_, orig_size)) = saved {
-            self.stage.set_saved_floating(id, None);
-            fx.push(Effect::ToplevelConfigureSize {
-                element: id,
-                size: orig_size,
-            });
-        }
-        if let Some(a) = anchor.or(saved.map(|(a, _)| a)) {
+        if let Some(a) = anchor {
             let _ = self.place_by_shell(id, a, &mut fx);
         }
         if let Some(o) = self.pointer_output() {
@@ -3940,5 +3932,145 @@ mod tests {
         let cy = center.y / crate::geom::Q16_ONE;
         assert_eq!(cx, 5400);
         assert_eq!(cy, 3300);
+    }
+
+    #[test]
+    fn client_side_unset_fullscreen_restores_saved_floating_and_allows_subsequent_maximize() {
+        use crate::geom::{CanvasPoint, LocalPoint, LocalRect, LocalSize};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        use std::num::NonZeroU64;
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+
+        let w = c.toplevel_created();
+        let win = |key: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(NonZeroU64::new(key).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+
+        c.toplevel_committed(w, win(1, 400, 300, false)).unwrap();
+        c.toplevel_committed(w, win(1, 400, 300, true)).unwrap();
+        c.render_list(a).unwrap();
+
+        let orig_anchor = CanvasPoint { x: 120, y: 150 };
+        let mut out = Vec::new();
+        c.place_by_shell(w, orig_anchor, &mut out).unwrap();
+        c.set_focus(&mut i, Some(w)).unwrap();
+        c.set_enter_mode(crate::EnterMode::Maximize);
+
+        // Move pointer onto output A
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::PointerMotion {
+                    delta: (10.0, 10.0),
+                    delta_unaccel: (10.0, 10.0),
+                    time_us: 500,
+                },
+            )
+            .unwrap();
+
+        // Super+Shift+Enter toggles fullscreen
+        let logo_shift = Modifiers {
+            logo: true,
+            shift: true,
+            ctrl: false,
+            alt: false,
+        };
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key: crate::input::keys::KEY_ENTER,
+                    pressed: true,
+                    modifiers: logo_shift,
+                    mods_changed: false,
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key: crate::input::keys::KEY_ENTER,
+                    pressed: false,
+                    modifiers: logo_shift,
+                    mods_changed: false,
+                    time_us: 1500,
+                },
+            )
+            .unwrap();
+
+        assert!(c.fullscreen_of(w).is_some(), "window is fullscreen");
+        assert_eq!(
+            c.stage().saved_floating(w),
+            Some((orig_anchor, LocalSize { w: 400, h: 300 })),
+            "saved_floating recorded"
+        );
+        assert_ne!(
+            c.stage().anchor(w),
+            Some(orig_anchor),
+            "anchor moved for fullscreen"
+        );
+
+        // Client itself unsets fullscreen via toplevel_request
+        let _ = c
+            .toplevel_request(w, crate::protocol::ToplevelRequest::UnsetFullscreen)
+            .unwrap();
+        assert!(c.fullscreen_of(w).is_none(), "no longer fullscreen");
+
+        // Window must be back at its old anchor, and saved_floating cleared
+        assert_eq!(
+            c.stage().anchor(w),
+            Some(orig_anchor),
+            "window anchor restored to orig_anchor"
+        );
+        assert_eq!(
+            c.stage().saved_floating(w),
+            None,
+            "saved_floating cleared after client unsets fullscreen"
+        );
+
+        // A following Super+Enter must maximize, NOT restore
+        let logo_only = Modifiers {
+            logo: true,
+            shift: false,
+            ctrl: false,
+            alt: false,
+        };
+        let _ = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key: crate::input::keys::KEY_ENTER,
+                    pressed: true,
+                    modifiers: logo_only,
+                    mods_changed: false,
+                    time_us: 2000,
+                },
+            )
+            .unwrap();
+
+        // If it maximized, saved_floating is now set (saving orig_anchor before maximize)
+        assert!(
+            c.stage().saved_floating(w).is_some(),
+            "Super+Enter maximized and saved floating geometry"
+        );
     }
 }

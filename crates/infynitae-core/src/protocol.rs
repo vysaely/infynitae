@@ -692,6 +692,47 @@ impl Core {
         Self::restore_effect(old)
     }
 
+    /// Restores floating geometry saved when entering fullscreen (or maximizing) and clears
+    /// `saved_floating`. If `anchor` is specified, it takes precedence.
+    pub(crate) fn restore_saved_floating(
+        &mut self,
+        id: ElementId,
+        anchor: Option<CanvasPoint>,
+        out: &mut Vec<Effect>,
+    ) {
+        let saved = self.stage.saved_floating(id);
+        if let Some((_, orig_size)) = saved {
+            self.stage.set_saved_floating(id, None);
+            let mut configured = false;
+            for e in out.iter_mut() {
+                if let Effect::ToplevelConfigure(elem) = e
+                    && *elem == id
+                {
+                    *e = Effect::ToplevelConfigureSize {
+                        element: id,
+                        size: orig_size,
+                    };
+                    configured = true;
+                    break;
+                } else if let Effect::ToplevelConfigureSize { element, .. } = e
+                    && *element == id
+                {
+                    configured = true;
+                    break;
+                }
+            }
+            if !configured {
+                out.push(Effect::ToplevelConfigureSize {
+                    element: id,
+                    size: orig_size,
+                });
+            }
+        }
+        if let Some(a) = anchor.or(saved.map(|(a, _)| a)) {
+            let _ = self.place_by_shell(id, a, out);
+        }
+    }
+
     /// INV-OUTPUT-1 / M9 `Fullscreen{O} | O disconnected → Windowed`: the states on a removed
     /// output are dropped, each with its configure.
     pub(crate) fn fullscreen_output_removed(&mut self, output: OutputId) -> Vec<Effect> {
@@ -1073,6 +1114,7 @@ impl Core {
                             let old = self.fullscreen.remove(i);
                             let mut fx = vec![self.fullscreen_ended(old)];
                             fx.extend(self.presentation_changed_since(&before));
+                            self.restore_saved_floating(id, None, &mut fx);
                             Self::hints_before_configures(&mut fx);
                             (Released, fx)
                         }
