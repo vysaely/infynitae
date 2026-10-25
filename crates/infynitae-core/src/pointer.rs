@@ -347,7 +347,10 @@ mod tests {
                 assert_eq!(core.constraint(), None);
                 assert!(core.pending_constraint().is_some(), "kept to come back");
             } else {
-                assert!(core.constraint().is_some(), "setting off: Super leaves the lock");
+                assert!(
+                    core.constraint().is_some(),
+                    "setting off: Super leaves the lock"
+                );
             }
             let fx = key(&mut core, &mut port, false, 2000);
             if free {

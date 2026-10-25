@@ -72,7 +72,8 @@ impl Launches {
 
     /// Ended launches older than any rule are forgotten.
     fn prune(&mut self, now: Instant) {
-        self.list.retain_mut(|l| now.duration_since(l.moment(now)) < TAGGED);
+        self.list
+            .retain_mut(|l| now.duration_since(l.moment(now)) < TAGGED);
     }
 }
 
@@ -92,7 +93,12 @@ fn tag_in(env: &[u8]) -> Option<u64> {
 fn parent_of(pid: u32) -> Option<u32> {
     let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
     // pid (comm) state ppid …: comm may hold spaces and parentheses
-    stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
+    stat.rsplit_once(')')?
+        .1
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
 }
 
 /// `pid` is `ancestor` or one of its descendants.
@@ -172,7 +178,11 @@ mod tests {
     #[test]
     fn the_tag_is_read_and_descent_is_followed() {
         assert_eq!(tag_in(b"A=1\0INFYNITAE_LAUNCH=7\0B=2\0"), Some(7));
-        assert_eq!(tag_in(b"INFYNITAE_LAUNCHER=7\0"), None, "a longer name is another variable");
+        assert_eq!(
+            tag_in(b"INFYNITAE_LAUNCHER=7\0"),
+            None,
+            "a longer name is another variable"
+        );
         assert_eq!(tag_in(b"INFYNITAE_LAUNCH=x\0"), None);
         let me = std::process::id();
         let parent = parent_of(me).expect("the test has a parent");

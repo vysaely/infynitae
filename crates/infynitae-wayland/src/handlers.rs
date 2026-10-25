@@ -19,6 +19,7 @@ use smithay::wayland::compositor::{
     CompositorClientState, CompositorHandler, CompositorState, add_destruction_hook, get_parent,
     is_sync_subsurface, with_states,
 };
+use smithay::wayland::dmabuf::{DmabufHandler, DmabufState};
 use smithay::wayland::output::OutputHandler;
 use smithay::wayland::pointer_constraints::{PointerConstraintsHandler, with_pointer_constraint};
 use smithay::wayland::selection::SelectionHandler;
@@ -38,12 +39,11 @@ use smithay::wayland::xdg_activation::{
     XdgActivationHandler, XdgActivationState, XdgActivationToken, XdgActivationTokenData,
 };
 use smithay::{
-    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale, delegate_output,
-    delegate_pointer_constraints, delegate_presentation, delegate_primary_selection,
-    delegate_relative_pointer, delegate_seat, delegate_shm, delegate_viewporter,
-    delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
+    delegate_compositor, delegate_data_device, delegate_dmabuf, delegate_fractional_scale,
+    delegate_output, delegate_pointer_constraints, delegate_presentation,
+    delegate_primary_selection, delegate_relative_pointer, delegate_seat, delegate_shm,
+    delegate_viewporter, delegate_xdg_activation, delegate_xdg_decoration, delegate_xdg_shell,
 };
-use smithay::wayland::dmabuf::{DmabufHandler, DmabufState};
 
 use crate::{ClientState, ElementHandle, WaylandState, convert, snapshot};
 

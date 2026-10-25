@@ -101,7 +101,11 @@ fn super_shift_space_also_centres_the_focused_window() {
     let history = r.ls.state.core().cameras().history(0).unwrap().len();
     chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT]);
     let c = r.ls.state.core().cameras();
-    assert_eq!(c.center(0), Some(centre), "Super+Shift+Space centres the window");
+    assert_eq!(
+        c.center(0),
+        Some(centre),
+        "Super+Shift+Space centres the window"
+    );
     assert_eq!(c.zoom(0).unwrap().to_bits(), zoom.to_bits());
     assert_eq!(c.history(0).unwrap().len(), history, "no history entry");
 }

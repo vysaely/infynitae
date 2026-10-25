@@ -561,10 +561,16 @@ where
     );
     let force_transparent = |elem| state.is_element_transparent(elem);
     elements.extend(
-        render_elements_opt(renderer, &state.registry, &entries, view.k, force_transparent)
-            .map_err(RenderOutputError::Renderer)?
-            .into_iter()
-            .map(|(_, e)| OutputElement::Surface(e)),
+        render_elements_opt(
+            renderer,
+            &state.registry,
+            &entries,
+            view.k,
+            force_transparent,
+        )
+        .map_err(RenderOutputError::Renderer)?
+        .into_iter()
+        .map(|(_, e)| OutputElement::Surface(e)),
     );
     elements.extend(
         layer_render_elements(renderer, &state.registry, &layers.below, view.k)
@@ -611,10 +617,16 @@ where
     );
     let force_transparent = |elem| state.is_element_transparent(elem);
     elements.extend(
-        render_elements_opt(renderer, &state.registry, &entries, view.k, force_transparent)
-            .map_err(RenderOutputError::Renderer)?
-            .into_iter()
-            .map(|(_, e)| OutputElement::Surface(e)),
+        render_elements_opt(
+            renderer,
+            &state.registry,
+            &entries,
+            view.k,
+            force_transparent,
+        )
+        .map_err(RenderOutputError::Renderer)?
+        .into_iter()
+        .map(|(_, e)| OutputElement::Surface(e)),
     );
     elements.extend(
         layer_render_elements(renderer, &state.registry, &layers.below, view.k)
@@ -656,7 +668,8 @@ where
     }
     let k = state.core.view(output).map_or(1.0, |v| v.k);
     let mut elements = Vec::new();
-    if let (Some(surface), Some((w, h))) = (state.lock_surface(output), state.output_mode_size(output))
+    if let (Some(surface), Some((w, h))) =
+        (state.lock_surface(output), state.output_mode_size(output))
     {
         let el = with_states(&surface, |states| {
             WaylandSurfaceRenderElement::from_surface(

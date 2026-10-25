@@ -39,14 +39,27 @@ fn open(r: &mut Rig, label: &'static str, parent: Option<usize>) -> ElementId {
 fn a_child_window_opens_centred_over_its_parent() {
     let mut r = Rig::x8();
     let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
-    let w_idx = r.ls.probe.surfaces.iter().position(|s| s.label == "W").unwrap();
+    let w_idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
 
     let d = open(&mut r, "D", Some(w_idx));
     assert_eq!(r.ls.state.core().toplevel_parent(d), Some(w));
-    assert_eq!(centre(&r, d), centre(&r, w), "the dialog is centred over its parent");
+    assert_eq!(
+        centre(&r, d),
+        centre(&r, w),
+        "the dialog is centred over its parent"
+    );
 
     // control: without a parent, cluster tiling puts it beside the others
     let x = open(&mut r, "X", None);
     assert_eq!(r.ls.state.core().toplevel_parent(x), None);
-    assert_ne!(centre(&r, x), centre(&r, w), "a window without a parent is placed by the policy");
+    assert_ne!(
+        centre(&r, x),
+        centre(&r, w),
+        "a window without a parent is placed by the policy"
+    );
 }

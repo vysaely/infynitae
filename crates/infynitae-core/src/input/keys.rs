@@ -148,18 +148,84 @@ pub struct UserBindings {
 
 /// Evdev codes by key name, for config chords.
 const KEY_NAMES: &[(&str, u32)] = &[
-    ("ESC", 1), ("ESCAPE", 1), ("1", 2), ("2", 3), ("3", 4), ("4", 5), ("5", 6), ("6", 7),
-    ("7", 8), ("8", 9), ("9", 10), ("0", 11), ("MINUS", 12), ("EQUAL", 13), ("BACKSPACE", 14),
-    ("TAB", 15), ("Q", 16), ("W", 17), ("E", 18), ("R", 19), ("T", 20), ("Y", 21), ("U", 22),
-    ("I", 23), ("O", 24), ("P", 25), ("BRACKETLEFT", 26), ("BRACKETRIGHT", 27), ("RETURN", 28),
-    ("ENTER", 28), ("A", 30), ("S", 31), ("D", 32), ("F", 33), ("G", 34), ("H", 35), ("J", 36),
-    ("K", 37), ("L", 38), ("SEMICOLON", 39), ("APOSTROPHE", 40), ("GRAVE", 41),
-    ("BACKSLASH", 43), ("Z", 44), ("X", 45), ("C", 46), ("V", 47), ("B", 48), ("N", 49),
-    ("M", 50), ("COMMA", 51), ("PERIOD", 52), ("DOT", 52), ("SLASH", 53), ("SPACE", 57),
-    ("F1", 59), ("F2", 60), ("F3", 61), ("F4", 62), ("F5", 63), ("F6", 64), ("F7", 65),
-    ("F8", 66), ("F9", 67), ("F10", 68), ("F11", 87), ("F12", 88), ("PRINT", 99),
-    ("HOME", 102), ("UP", 103), ("PAGEUP", 104), ("LEFT", 105), ("RIGHT", 106), ("END", 107),
-    ("DOWN", 108), ("PAGEDOWN", 109), ("INSERT", 110), ("DELETE", 111),
+    ("ESC", 1),
+    ("ESCAPE", 1),
+    ("1", 2),
+    ("2", 3),
+    ("3", 4),
+    ("4", 5),
+    ("5", 6),
+    ("6", 7),
+    ("7", 8),
+    ("8", 9),
+    ("9", 10),
+    ("0", 11),
+    ("MINUS", 12),
+    ("EQUAL", 13),
+    ("BACKSPACE", 14),
+    ("TAB", 15),
+    ("Q", 16),
+    ("W", 17),
+    ("E", 18),
+    ("R", 19),
+    ("T", 20),
+    ("Y", 21),
+    ("U", 22),
+    ("I", 23),
+    ("O", 24),
+    ("P", 25),
+    ("BRACKETLEFT", 26),
+    ("BRACKETRIGHT", 27),
+    ("RETURN", 28),
+    ("ENTER", 28),
+    ("A", 30),
+    ("S", 31),
+    ("D", 32),
+    ("F", 33),
+    ("G", 34),
+    ("H", 35),
+    ("J", 36),
+    ("K", 37),
+    ("L", 38),
+    ("SEMICOLON", 39),
+    ("APOSTROPHE", 40),
+    ("GRAVE", 41),
+    ("BACKSLASH", 43),
+    ("Z", 44),
+    ("X", 45),
+    ("C", 46),
+    ("V", 47),
+    ("B", 48),
+    ("N", 49),
+    ("M", 50),
+    ("COMMA", 51),
+    ("PERIOD", 52),
+    ("DOT", 52),
+    ("SLASH", 53),
+    ("SPACE", 57),
+    ("F1", 59),
+    ("F2", 60),
+    ("F3", 61),
+    ("F4", 62),
+    ("F5", 63),
+    ("F6", 64),
+    ("F7", 65),
+    ("F8", 66),
+    ("F9", 67),
+    ("F10", 68),
+    ("F11", 87),
+    ("F12", 88),
+    ("PRINT", 99),
+    ("HOME", 102),
+    ("UP", 103),
+    ("PAGEUP", 104),
+    ("LEFT", 105),
+    ("RIGHT", 106),
+    ("END", 107),
+    ("DOWN", 108),
+    ("PAGEDOWN", 109),
+    ("INSERT", 110),
+    ("DELETE", 111),
 ];
 
 /// Parses a config chord such as `SUPER+SHIFT+Q` (modifiers SUPER/LOGO/WIN, CTRL/CONTROL, ALT,
@@ -289,12 +355,7 @@ pub fn resolve_key_binding(
     }
     // Super+Space centres the focused window and reverts zoom to 1.0; Super+Shift+Space centres
     // it and keeps the zoom; never during an interaction
-    if key == KEY_SPACE
-        && mods.logo
-        && !mods.ctrl
-        && !mods.alt
-        && !interaction_active
-    {
+    if key == KEY_SPACE && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(match mods.shift {
             true => KeyAction::RecenterKeepZoom,
             false => KeyAction::Recenter,
@@ -359,7 +420,13 @@ pub fn resolve_key_binding(
         return Some(KeyAction::SpawnRegionScreenshot);
     }
     // Super+Shift+BackSpace: reload shell UI and scripts; Logo+Shift, never during interaction
-    if key == KEY_BACKSPACE && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+    if key == KEY_BACKSPACE
+        && mods.logo
+        && mods.shift
+        && !mods.ctrl
+        && !mods.alt
+        && !interaction_active
+    {
         return Some(KeyAction::ReloadShell);
     }
     // Super+L: lock screen; Logo, never during interaction
@@ -462,14 +529,29 @@ mod tests {
                     },
                     Some(KeyAction::SpawnTerminal),
                 ),
-                (Chord { key: KEY_W, mods: logo }, None),
-                (Chord { key: KEY_B, mods: logo }, Some(KeyAction::Exec(0))),
+                (
+                    Chord {
+                        key: KEY_W,
+                        mods: logo,
+                    },
+                    None,
+                ),
+                (
+                    Chord {
+                        key: KEY_B,
+                        mods: logo,
+                    },
+                    Some(KeyAction::Exec(0)),
+                ),
             ],
             moved: vec![KeyAction::SpawnTerminal],
         };
         let r = |key, m, active| resolve_key_binding_with(&user, key, m, active);
         // Super+Shift+Enter was fullscreen; the user gave it to the terminal
-        assert_eq!(r(KEY_ENTER, mods(true, false, false, true), false), Some(KeyAction::SpawnTerminal));
+        assert_eq!(
+            r(KEY_ENTER, mods(true, false, false, true), false),
+            Some(KeyAction::SpawnTerminal)
+        );
         // the terminal's built-in Super+Q is free now
         assert_eq!(r(KEY_Q, logo, false), None);
         // Super+W freed; Super+B runs command 0
@@ -479,7 +561,10 @@ mod tests {
         assert_eq!(r(KEY_B, mods(true, true, false, false), false), None);
         // untouched bindings and Escape's cancel
         assert_eq!(r(KEY_L, logo, false), Some(KeyAction::SpawnLockScreen));
-        assert_eq!(r(KEY_ESC, Modifiers::default(), true), Some(KeyAction::Cancel));
+        assert_eq!(
+            r(KEY_ESC, Modifiers::default(), true),
+            Some(KeyAction::Cancel)
+        );
         // no user binding during an interaction
         assert_eq!(r(KEY_B, logo, true), None);
     }
@@ -769,7 +854,14 @@ mod tests {
             Some(KeyAction::SpawnFileManager)
         );
         assert_eq!(
-            resolve_key_binding(KEY_Q, Modifiers { shift: true, ..logo }, false),
+            resolve_key_binding(
+                KEY_Q,
+                Modifiers {
+                    shift: true,
+                    ..logo
+                },
+                false
+            ),
             None
         );
         assert_eq!(

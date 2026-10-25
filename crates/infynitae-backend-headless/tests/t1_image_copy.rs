@@ -65,7 +65,9 @@ impl Dispatch<ExtImageCopyCaptureSessionV1, ()> for Probe {
     ) {
         use ext_image_copy_capture_session_v1::Event as E;
         match ev {
-            E::BufferSize { width, height } => st.log.push(format!("session size {width}x{height}")),
+            E::BufferSize { width, height } => {
+                st.log.push(format!("session size {width}x{height}"))
+            }
             E::ShmFormat { format } => st.log.push(format!("session shm {format:?}")),
             E::DmabufDevice { .. } => st.log.push("session dmabuf device".into()),
             E::DmabufFormat { format, .. } => st.log.push(format!("session dmabuf {format:#x}")),
@@ -87,7 +89,9 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, ()> for Probe {
     ) {
         use ext_image_copy_capture_frame_v1::Event as E;
         match ev {
-            E::Damage { width, height, .. } => st.log.push(format!("frame damage {width}x{height}")),
+            E::Damage { width, height, .. } => {
+                st.log.push(format!("frame damage {width}x{height}"))
+            }
             E::PresentationTime { .. } => st.log.push("frame time".into()),
             E::Ready => st.log.push("frame ready".into()),
             E::Failed { reason } => st.log.push(format!(
@@ -106,14 +110,13 @@ fn bind<I: wayland_client::Proxy + 'static>(r: &mut Rig, interface: &str) -> I
 where
     Probe: Dispatch<I, ()>,
 {
-    let (name, _, _) = r
-        .ls
-        .probe
-        .globals
-        .iter()
-        .find(|(_, i, _)| i == interface)
-        .cloned()
-        .unwrap_or_else(|| panic!("{interface} is offered"));
+    let (name, _, _) =
+        r.ls.probe
+            .globals
+            .iter()
+            .find(|(_, i, _)| i == interface)
+            .cloned()
+            .unwrap_or_else(|| panic!("{interface} is offered"));
     let qh = r.ls.qh.clone();
     r.ls.registry().bind(name, 1, &qh, ())
 }
@@ -143,7 +146,10 @@ fn capture(r: &mut Rig, session: &ExtImageCopyCaptureSessionV1, size: (i32, i32)
     r.ls.pump();
     let output = r.ls.output();
     for p in r.ls.state.screencopy.take_pending(output) {
-        p.ready((size.0 as u32, size.1 as u32), std::time::Duration::from_millis(5));
+        p.ready(
+            (size.0 as u32, size.1 as u32),
+            std::time::Duration::from_millis(5),
+        );
     }
     r.ls.pump();
     frame.destroy();
@@ -163,9 +169,18 @@ fn a_session_announces_the_output_and_captures_frame_after_frame() {
     for _ in 0..5 {
         capture(&mut r, &s, (1920, 1080));
     }
-    let ready = r.ls.probe.log.iter().filter(|l| *l == "frame ready").count();
+    let ready =
+        r.ls.probe
+            .log
+            .iter()
+            .filter(|l| *l == "frame ready")
+            .count();
     assert_eq!(ready, 5, "{:?}", r.ls.probe.log);
-    assert!(r.ls.probe.log.contains(&"frame damage 1920x1080".to_string()));
+    assert!(
+        r.ls.probe
+            .log
+            .contains(&"frame damage 1920x1080".to_string())
+    );
     assert!(r.ls.probe.log.contains(&"frame time".to_string()));
 }
 
@@ -183,5 +198,8 @@ fn a_resized_output_fails_the_capture_with_new_constraints() {
     assert!(after.contains("session size 2560x1440"), "{after}");
     // a buffer of the new size captures
     capture(&mut r, &s, (2560, 1440));
-    assert_eq!(r.ls.probe.log.last().map(String::as_str), Some("frame ready"));
+    assert_eq!(
+        r.ls.probe.log.last().map(String::as_str),
+        Some("frame ready")
+    );
 }

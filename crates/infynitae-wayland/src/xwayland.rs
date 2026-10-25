@@ -343,8 +343,8 @@ pub fn reserve_for_session(satellite: Option<&Path>) -> io::Result<Option<XDispl
         // symlink (ours); a real file belongs to another desktop and is never replaced
         if let Ok(home) = std::env::var("HOME") {
             let xauth_home = PathBuf::from(home).join(".Xauthority");
-            let replaceable = fs::symlink_metadata(&xauth_home)
-                .map_or(true, |m| m.file_type().is_symlink());
+            let replaceable =
+                fs::symlink_metadata(&xauth_home).map_or(true, |m| m.file_type().is_symlink());
             if replaceable {
                 let _ = fs::remove_file(&xauth_home);
                 let _ = std::os::unix::fs::symlink(auth_path, &xauth_home);

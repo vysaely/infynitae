@@ -578,7 +578,10 @@ fn k9_ob15_key_repeat_probe() {
         .ok()
         .and_then(|s| s.parse::<i32>().ok())
         .unwrap_or(200);
-    assert_eq!(s.ls.probe.repeat_info, Some((expected_rate, expected_delay)));
+    assert_eq!(
+        s.ls.probe.repeat_info,
+        Some((expected_rate, expected_delay))
+    );
 
     let keys_before = s.ls.probe.key_events.len();
     s.key(KEY_A, true);

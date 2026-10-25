@@ -257,8 +257,13 @@ pub fn run_nested_with(
     // limit and says so.
     state.report_renderer_limits(&AssumedGlesLimits)?;
 
-    let cfg_path = std::env::var("HOME").ok().map(|h| PathBuf::from(format!("{h}/.config/infynitae/config")));
-    let initial_mtime = cfg_path.as_ref().and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok());
+    let cfg_path = std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(format!("{h}/.config/infynitae/config")));
+    let initial_mtime = cfg_path
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok());
 
     let mut data = LoopData {
         state,
@@ -310,9 +315,12 @@ pub fn run_nested_with(
             if let Some(path) = &data.config_path {
                 if let Ok(meta) = std::fs::metadata(path) {
                     if let Ok(mtime) = meta.modified() {
-                        if data.last_config_mtime.is_some() && data.last_config_mtime != Some(mtime) {
+                        if data.last_config_mtime.is_some() && data.last_config_mtime != Some(mtime)
+                        {
                             data.last_config_mtime = Some(mtime);
-                            println!("[infynitae] Config change detected (~/.config/infynitae/config). Live reloading...");
+                            println!(
+                                "[infynitae] Config change detected (~/.config/infynitae/config). Live reloading..."
+                            );
                             data.state.reload_config();
                             data.session.request_frame();
                         } else if data.last_config_mtime.is_none() {
@@ -367,9 +375,9 @@ pub fn run_nested_with(
         if data.state.core().teleport_on_open() {
             for &new_id in &new_mapped {
                 let port = &mut data.input_port;
-                let _ = data.state.with_effects(|core, fx| {
-                    core.recenter_element(port, new_id, fx)
-                });
+                let _ = data
+                    .state
+                    .with_effects(|core, fx| core.recenter_element(port, new_id, fx));
                 data.session.request_frame();
                 data.session.flush();
             }

@@ -287,7 +287,10 @@ impl WaylandState {
             .env_remove("KDE_APPLICATIONS_AS_SCOPE")
             .env_remove("XDG_MENU_PREFIX");
         // the shortcuts that open apps are launches (`launch`): their windows are the user's
-        if matches!(action, "terminal" | "launcher" | "file-manager" | "exec" | "browser" | "overview") {
+        if matches!(
+            action,
+            "terminal" | "launcher" | "file-manager" | "exec" | "browser" | "overview"
+        ) {
             let _ = self.launches.spawn(&mut cmd);
         } else {
             let _ = cmd.spawn();
@@ -459,18 +462,23 @@ impl WaylandState {
         &self,
         wl: &smithay::reexports::wayland_server::protocol::wl_output::WlOutput,
     ) -> Option<OutputId> {
-        self.outputs.iter().find(|h| h.output.owns(wl)).map(|h| h.id)
+        self.outputs
+            .iter()
+            .find(|h| h.output.owns(wl))
+            .map(|h| h.id)
     }
 
     pub fn output_mode_size(&self, id: OutputId) -> Option<(i32, i32)> {
-        self.core.output(id).map(|m| (m.phys.0 as i32, m.phys.1 as i32))
+        self.core
+            .output(id)
+            .map(|m| (m.phys.0 as i32, m.phys.1 as i32))
     }
 }
 
 /// Notifies the GlobalShortcuts portal backend if the key is bound by an application (Discord, etc.)
 pub(crate) fn notify_portal_key(key: u32, pressed: bool) {
-    use std::sync::atomic::{AtomicU64, Ordering};
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicU64, Ordering};
 
     // Cache of bound keys: checked in memory, refreshed at most once per second if file exists
     static LAST_CHECK: AtomicU64 = AtomicU64::new(0);

@@ -19,7 +19,11 @@ pub(crate) struct InputState {
     pub(crate) clock: InputClock,
     pub(crate) modifiers: bindings::Modifiers,
     /// Saved cluster elements and their initial anchors/sizes at drag start.
-    pub(crate) cluster_drag: Vec<(crate::stage::ElementId, crate::geom::CanvasPoint, (i32, i32))>,
+    pub(crate) cluster_drag: Vec<(
+        crate::stage::ElementId,
+        crate::geom::CanvasPoint,
+        (i32, i32),
+    )>,
 }
 
 /// The input-event clock as Core has seen it: the latest time a device stamped on a physical

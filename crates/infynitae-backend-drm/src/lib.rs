@@ -38,10 +38,10 @@ use smithay::backend::input::{
     KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
-use smithay::backend::renderer::{Renderer, TextureFilter};
-use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Texture};
 use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Texture};
+use smithay::backend::renderer::{Renderer, TextureFilter};
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SeatEvent, Session as _};
 use smithay::output::OutputModeSource;
@@ -279,7 +279,11 @@ pub fn run_console_with(
         .or_else(|_| std::env::var("DRM_DEVICE"))
         .ok()
         .map(PathBuf::from)
-        .or_else(|| smithay::backend::udev::primary_gpu(&seat_name).ok().flatten())
+        .or_else(|| {
+            smithay::backend::udev::primary_gpu(&seat_name)
+                .ok()
+                .flatten()
+        })
         .or_else(|| {
             smithay::backend::udev::all_gpus(&seat_name)
                 .ok()
@@ -354,7 +358,11 @@ pub fn run_console_with(
                     let key = k.trim();
                     let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
                     if key == "OUTPUT_ORDER" {
-                        output_order = val.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()).collect();
+                        output_order = val
+                            .split(',')
+                            .map(|s| s.trim().to_lowercase())
+                            .filter(|s| !s.is_empty())
+                            .collect();
                     } else if key == "OUTPUT_LAYOUT" && val.eq_ignore_ascii_case("right-to-left") {
                         output_layout_reverse = true;
                     } else if key == "IDLE_SLEEP_TIMEOUT_MIN" {
@@ -362,21 +370,35 @@ pub fn run_console_with(
                             idle_timeout_min = m;
                         }
                     } else if key == "IDLE_AUTO_LOCK" {
-                        idle_auto_lock = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                        idle_auto_lock =
+                            !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
                     } else if key.starts_with("OUTPUT_") && key.ends_with("_SCALE") {
-                        let conn_name = key.trim_start_matches("OUTPUT_").trim_end_matches("_SCALE").replace('_', "-");
+                        let conn_name = key
+                            .trim_start_matches("OUTPUT_")
+                            .trim_end_matches("_SCALE")
+                            .replace('_', "-");
                         if let Ok(s) = val.parse::<f64>() {
-                            custom_scales.insert(conn_name.to_lowercase(), (s * 120.0).round() as u32);
+                            custom_scales
+                                .insert(conn_name.to_lowercase(), (s * 120.0).round() as u32);
                         }
                     } else if key.starts_with("OUTPUT_") && key.ends_with("_RATE") {
-                        let conn_name = key.trim_start_matches("OUTPUT_").trim_end_matches("_RATE").replace('_', "-");
+                        let conn_name = key
+                            .trim_start_matches("OUTPUT_")
+                            .trim_end_matches("_RATE")
+                            .replace('_', "-");
                         if let Ok(r) = val.parse::<f64>() {
-                            custom_rates.insert(conn_name.to_lowercase(), (r * 1000.0).round() as u32);
+                            custom_rates
+                                .insert(conn_name.to_lowercase(), (r * 1000.0).round() as u32);
                         }
                     } else if key.starts_with("OUTPUT_") && key.ends_with("_MODE") {
-                        let conn_name = key.trim_start_matches("OUTPUT_").trim_end_matches("_MODE").replace('_', "-");
+                        let conn_name = key
+                            .trim_start_matches("OUTPUT_")
+                            .trim_end_matches("_MODE")
+                            .replace('_', "-");
                         if let Some((w_s, h_s)) = val.split_once('x') {
-                            if let (Ok(w), Ok(h)) = (w_s.trim().parse::<u16>(), h_s.trim().parse::<u16>()) {
+                            if let (Ok(w), Ok(h)) =
+                                (w_s.trim().parse::<u16>(), h_s.trim().parse::<u16>())
+                            {
                                 custom_modes.insert(conn_name.to_lowercase(), (w, h));
                             }
                         }
@@ -404,7 +426,10 @@ pub fn run_console_with(
     if !output_order.is_empty() {
         connected_connectors.sort_by_key(|(_, _, name)| {
             let n_lower = name.to_lowercase();
-            output_order.iter().position(|o| n_lower.contains(o) || o.contains(&n_lower)).unwrap_or(usize::MAX)
+            output_order
+                .iter()
+                .position(|o| n_lower.contains(o) || o.contains(&n_lower))
+                .unwrap_or(usize::MAX)
         });
     } else if output_layout_reverse {
         connected_connectors.reverse();
@@ -425,7 +450,9 @@ pub fn run_console_with(
                 preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
             })
             .collect();
-        let Some(mode) = choose_mode_custom(&infos, target_size, target_rate).map(|i| conn.modes()[i]) else {
+        let Some(mode) =
+            choose_mode_custom(&infos, target_size, target_rate).map(|i| conn.modes()[i])
+        else {
             continue;
         };
         let crtc = conn
@@ -610,8 +637,13 @@ pub fn run_console_with(
         )
         .map_err(|e| format!("input events: {e}"))?;
 
-    let cfg_path = std::env::var("HOME").ok().map(|h| PathBuf::from(format!("{h}/.config/infynitae/config")));
-    let initial_mtime = cfg_path.as_ref().and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok());
+    let cfg_path = std::env::var("HOME")
+        .ok()
+        .map(|h| PathBuf::from(format!("{h}/.config/infynitae/config")));
+    let initial_mtime = cfg_path
+        .as_ref()
+        .and_then(|p| std::fs::metadata(p).ok())
+        .and_then(|m| m.modified().ok());
 
     let mut data = LoopData {
         state,
@@ -656,7 +688,10 @@ pub fn run_console_with(
         let restart = xwayland
             .as_mut()
             .and_then(|x| x.poll(std::time::Instant::now()));
-        let has_screencopy = data.screens.iter().any(|s| data.state.screencopy.has_pending(s.id));
+        let has_screencopy = data
+            .screens
+            .iter()
+            .any(|s| data.state.screencopy.has_pending(s.id));
         if has_screencopy {
             data.session.request_frame();
         }
@@ -671,9 +706,12 @@ pub fn run_console_with(
             if let Some(path) = &data.config_path {
                 if let Ok(meta) = std::fs::metadata(path) {
                     if let Ok(mtime) = meta.modified() {
-                        if data.last_config_mtime.is_some() && data.last_config_mtime != Some(mtime) {
+                        if data.last_config_mtime.is_some() && data.last_config_mtime != Some(mtime)
+                        {
                             data.last_config_mtime = Some(mtime);
-                            println!("[infynitae] Config change detected (~/.config/infynitae/config). Live reloading...");
+                            println!(
+                                "[infynitae] Config change detected (~/.config/infynitae/config). Live reloading..."
+                            );
                             data.state.reload_config();
                             if let Some(ds) = data.state.direct_scanout {
                                 data.direct_scanout = ds;
@@ -683,13 +721,17 @@ pub fn run_console_with(
                                     let line_clean = line.split('#').next().unwrap_or("").trim();
                                     if let Some((k, v)) = line_clean.split_once('=') {
                                         let key = k.trim();
-                                        let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                                        let val =
+                                            v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
                                         if key == "IDLE_SLEEP_TIMEOUT_MIN" {
                                             if let Ok(m) = val.parse::<u32>() {
                                                 data.idle_sleep_timeout_min = m;
                                             }
                                         } else if key == "IDLE_AUTO_LOCK" {
-                                            data.idle_auto_lock = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                            data.idle_auto_lock = !matches!(
+                                                val.to_lowercase().as_str(),
+                                                "0" | "false" | "off" | "no"
+                                            );
                                         }
                                     }
                                 }
@@ -710,7 +752,8 @@ pub fn run_console_with(
             if !data.dpms_active
                 && data.idle_sleep_timeout_min > 0
                 && !data.state.is_idle_inhibited()
-                && data.last_user_activity.elapsed() >= Duration::from_secs((data.idle_sleep_timeout_min as u64) * 60)
+                && data.last_user_activity.elapsed()
+                    >= Duration::from_secs((data.idle_sleep_timeout_min as u64) * 60)
             {
                 println!(
                     "[infynitae] Inactivity timeout reached ({} min). Entering DPMS sleep / screen blanking...",
@@ -727,12 +770,19 @@ pub fn run_console_with(
                         .is_some_and(|p| p.try_wait().ok().flatten().is_none());
                     if !is_running {
                         println!("[infynitae] Auto-locking session with infynitae-lock...");
-                        let child = std::process::Command::new("infynitae-lock").spawn()
+                        let child = std::process::Command::new("infynitae-lock")
+                            .spawn()
                             .or_else(|_| {
                                 if let Ok(home) = std::env::var("HOME") {
-                                    std::process::Command::new(format!("{home}/.local/bin/infynitae-lock")).spawn()
+                                    std::process::Command::new(format!(
+                                        "{home}/.local/bin/infynitae-lock"
+                                    ))
+                                    .spawn()
                                 } else {
-                                    Err(std::io::Error::new(std::io::ErrorKind::NotFound, "not found"))
+                                    Err(std::io::Error::new(
+                                        std::io::ErrorKind::NotFound,
+                                        "not found",
+                                    ))
                                 }
                             });
                         if let Ok(c) = child {
@@ -806,13 +856,15 @@ pub fn run_console_with(
         if data.state.core().teleport_on_open() {
             for (&new_id, &user) in new_mapped.iter().zip(&by_user) {
                 // a child window opens over its parent, already in view: the camera stays
-                if (teleport_user_only && !user) || data.state.core().toplevel_parent(new_id).is_some() {
+                if (teleport_user_only && !user)
+                    || data.state.core().toplevel_parent(new_id).is_some()
+                {
                     continue;
                 }
                 let port = &mut data.input_port;
-                let _ = data.state.with_effects(|core, fx| {
-                    core.recenter_element(port, new_id, fx)
-                });
+                let _ = data
+                    .state
+                    .with_effects(|core, fx| core.recenter_element(port, new_id, fx));
                 data.session.request_frame();
                 data.session.flush();
             }
@@ -830,7 +882,10 @@ pub fn run_console_with(
             data.session.flush();
         }
 
-        let has_screencopy = data.screens.iter().any(|s| data.state.screencopy.has_pending(s.id));
+        let has_screencopy = data
+            .screens
+            .iter()
+            .any(|s| data.state.screencopy.has_pending(s.id));
         if (data.session.frame_due() || has_screencopy) && data.active {
             render(&mut data);
         }
@@ -929,7 +984,10 @@ fn render(data: &mut LoopData) {
         let scanout_banned = s
             .no_scanout_until
             .is_some_and(|t| std::time::Instant::now() < t);
-        let frame_flags = match (data.direct_scanout && !scanout_banned, data.state.overlay_planes) {
+        let frame_flags = match (
+            data.direct_scanout && !scanout_banned,
+            data.state.overlay_planes,
+        ) {
             (false, _) => FrameFlags::empty(),
             (true, false) => FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT,
             (true, true) => {
@@ -945,8 +1003,10 @@ fn render(data: &mut LoopData) {
             Ok(result) if !result.is_empty => {
                 use smithay::backend::drm::compositor::PrimaryPlaneElement;
                 let scanout = matches!(result.primary_element, PrimaryPlaneElement::Element(_));
-                let (overlays, cursor) =
-                    (result.overlay_elements.len(), result.cursor_element.is_some());
+                let (overlays, cursor) = (
+                    result.overlay_elements.len(),
+                    result.cursor_element.is_some(),
+                );
                 match s.compositor.queue_frame(()) {
                     Ok(()) => {
                         s.flip_failures = 0;
@@ -958,7 +1018,11 @@ fn render(data: &mut LoopData) {
                             eprintln!(
                                 "[infynitae] Page flip refused ({} in a row): primary={} overlays={overlays} cursor={cursor} elements={}: {e:?}",
                                 s.flip_failures,
-                                if scanout { "client buffer" } else { "composited" },
+                                if scanout {
+                                    "client buffer"
+                                } else {
+                                    "composited"
+                                },
                                 elements.len()
                             );
                         }
@@ -1089,7 +1153,10 @@ fn handle_screencopy(
                         smithay::utils::Scale::from(k),
                         smithay::utils::Transform::Normal,
                     );
-                    if damage_tracker.render_output(renderer, &mut dmabuf_fb, 0, &elements, clear).is_ok() {
+                    if damage_tracker
+                        .render_output(renderer, &mut dmabuf_fb, 0, &elements, clear)
+                        .is_ok()
+                    {
                         dmabuf_rendered = true;
                         req.ready((target_size.0 as u32, target_size.1 as u32), now);
                     }
@@ -1111,7 +1178,10 @@ fn handle_screencopy(
     // 2. SLOW-PATH: wl_shm or CPU memory mapping fallback
     // Executed ONLY when there is at least one client requesting a CPU/shm buffer.
     // -------------------------------------------------------------------------
-    if screencopy_texture.as_ref().is_none_or(|t| t.width() != size.0 as u32 || t.height() != size.1 as u32) {
+    if screencopy_texture
+        .as_ref()
+        .is_none_or(|t| t.width() != size.0 as u32 || t.height() != size.1 as u32)
+    {
         match Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Argb8888, size.into()) {
             Ok(b) => *screencopy_texture = Some(b),
             Err(e) => {
@@ -1136,7 +1206,11 @@ fn handle_screencopy(
         }
     };
 
-    let mut damage_tracker = OutputDamageTracker::new(size, smithay::utils::Scale::from(k), smithay::utils::Transform::Normal);
+    let mut damage_tracker = OutputDamageTracker::new(
+        size,
+        smithay::utils::Scale::from(k),
+        smithay::utils::Transform::Normal,
+    );
     if let Err(e) = damage_tracker.render_output(renderer, &mut framebuffer, 0, &elements, clear) {
         eprintln!("[screencopy] Failed to render output: {e:?}");
         for p in remaining {
@@ -1145,7 +1219,12 @@ fn handle_screencopy(
         return;
     }
 
-    let mapping = match ExportMem::copy_framebuffer(renderer, &framebuffer, Rectangle::from_size(size.into()), Fourcc::Argb8888) {
+    let mapping = match ExportMem::copy_framebuffer(
+        renderer,
+        &framebuffer,
+        Rectangle::from_size(size.into()),
+        Fourcc::Argb8888,
+    ) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("[screencopy] Failed to copy framebuffer: {e:?}");
@@ -1176,8 +1255,10 @@ fn handle_screencopy(
             .unwrap_or((0, 0));
 
         let copy_result = with_buffer_contents_mut(&req.buffer, |ptr, len, buffer_data| {
-            if buffer_data.format != smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888
-                && buffer_data.format != smithay::reexports::wayland_server::protocol::wl_shm::Format::Xrgb8888
+            if buffer_data.format
+                != smithay::reexports::wayland_server::protocol::wl_shm::Format::Argb8888
+                && buffer_data.format
+                    != smithay::reexports::wayland_server::protocol::wl_shm::Format::Xrgb8888
             {
                 return false;
             }
@@ -1229,7 +1310,8 @@ fn handle_screencopy(
                     let _ = dmabuf.sync_plane(0, DmabufSyncFlags::WRITE | DmabufSyncFlags::START);
                     let ptr = mapping.ptr() as *mut u8;
                     let len = mapping.length();
-                    let dest_stride = dmabuf.strides().next().unwrap_or((size.0 * 4) as u32) as usize;
+                    let dest_stride =
+                        dmabuf.strides().next().unwrap_or((size.0 * 4) as u32) as usize;
                     let offset = dmabuf.offsets().next().unwrap_or(0) as usize;
                     let h = (dmabuf.size().h.max(0) as usize).min(size.1 as usize);
                     let w_bytes = (dmabuf.size().w.max(0) as usize).min(size.0 as usize) * 4;
@@ -1250,11 +1332,16 @@ fn handle_screencopy(
                                     if src_offset + w_bytes <= slice.len() {
                                         let src_row = &slice[src_offset..(src_offset + w_bytes)];
                                         let dest_row = dest_base.add(row * dest_stride);
-                                        std::ptr::copy_nonoverlapping(src_row.as_ptr(), dest_row, w_bytes);
+                                        std::ptr::copy_nonoverlapping(
+                                            src_row.as_ptr(),
+                                            dest_row,
+                                            w_bytes,
+                                        );
                                     }
                                 }
                             }
-                            let _ = dmabuf.sync_plane(0, DmabufSyncFlags::WRITE | DmabufSyncFlags::END);
+                            let _ =
+                                dmabuf.sync_plane(0, DmabufSyncFlags::WRITE | DmabufSyncFlags::END);
                             copied = true;
                         }
                     }
@@ -1285,7 +1372,9 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
     if data.state.is_locked()
         && !matches!(
             event,
-            InputEvent::Keyboard { .. } | InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. }
+            InputEvent::Keyboard { .. }
+                | InputEvent::DeviceAdded { .. }
+                | InputEvent::DeviceRemoved { .. }
         )
     {
         return;
@@ -1526,8 +1615,10 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
         }
         InputEvent::DeviceAdded { mut device } => {
             configure_input_device(&mut device, data.state.input_config());
-            let is_kb = device.has_capability(smithay::reexports::input::DeviceCapability::Keyboard);
-            let is_ptr = device.has_capability(smithay::reexports::input::DeviceCapability::Pointer);
+            let is_kb =
+                device.has_capability(smithay::reexports::input::DeviceCapability::Keyboard);
+            let is_ptr =
+                device.has_capability(smithay::reexports::input::DeviceCapability::Pointer);
             println!(
                 "[infynitae] Input device detected: {} (keyboard: {is_kb}, pointer: {is_ptr})",
                 device.name()
@@ -1551,7 +1642,8 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
         }
         InputEvent::DeviceRemoved { device } => {
             data.keyboards.retain(|k| k.sysname() != device.sysname());
-            data.input_devices.retain(|d| d.sysname() != device.sysname());
+            data.input_devices
+                .retain(|d| d.sysname() != device.sysname());
             data.last_abs_pointer = None;
         }
         _ => {}
@@ -1612,7 +1704,10 @@ pub fn calculate_abs_pointer_delta(
 ) -> (f64, f64) {
     let scale = (f64::from(scale_120) / 120.0).max(0.001);
     let target_logical = (abs_px.0 / scale, abs_px.1 / scale);
-    (target_logical.0 - current_p.0, target_logical.1 - current_p.1)
+    (
+        target_logical.0 - current_p.0,
+        target_logical.1 - current_p.1,
+    )
 }
 
 fn configure_input_device(

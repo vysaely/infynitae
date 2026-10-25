@@ -1,17 +1,17 @@
 //! `zwlr_screencopy_v1` protocol implementation for screen capture.
 //! Allows xdg-desktop-portal-wlr to capture output frames for Discord, OBS, WebRTC.
 
-use std::sync::{Arc, Mutex};
 use infynitae_core::output::OutputId;
 pub use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::{
     zwlr_screencopy_frame_v1::{self, Flags, ZwlrScreencopyFrameV1},
     zwlr_screencopy_manager_v1::{self, ZwlrScreencopyManagerV1},
 };
 use smithay::reexports::wayland_server::{
+    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
     backend::GlobalId,
     protocol::{wl_buffer::WlBuffer, wl_shm},
-    Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
 };
+use std::sync::{Arc, Mutex};
 
 use crate::WaylandState;
 
@@ -62,7 +62,9 @@ impl PendingFrame {
                 f.ready(hi, lo, ns);
             }
             CaptureFrame::Ext(f) => {
-                f.transform(smithay::reexports::wayland_server::protocol::wl_output::Transform::Normal);
+                f.transform(
+                    smithay::reexports::wayland_server::protocol::wl_output::Transform::Normal,
+                );
                 f.damage(0, 0, size.0 as i32, size.1 as i32);
                 f.presentation_time(hi, lo, ns);
                 f.ready();
@@ -107,7 +109,10 @@ impl ScreencopyState {
                     if let Some((k, v)) = line_clean.split_once('=') {
                         if k.trim() == "SCREENCOPY_CURSOR" {
                             let mode = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
-                            hide = matches!(mode.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                            hide = matches!(
+                                mode.to_lowercase().as_str(),
+                                "0" | "false" | "off" | "no"
+                            );
                         }
                     }
                 }
@@ -125,7 +130,8 @@ impl ScreencopyState {
     }
 
     pub fn set_hide_cursor(&self, hide: bool) {
-        self.hide_cursor.store(hide, std::sync::atomic::Ordering::Relaxed);
+        self.hide_cursor
+            .store(hide, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Takes all pending requests for a specific output to fulfill during rendering.
@@ -187,30 +193,39 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
                 output,
             } => {
                 let Some(output_id) = state.output_id_from_wl(&output) else {
-                    let frame = data_init.init(frame, FrameUserData {
-                        output_id: None,
-                        overlay_cursor: overlay_cursor != 0,
-                        region: None,
-                    });
+                    let frame = data_init.init(
+                        frame,
+                        FrameUserData {
+                            output_id: None,
+                            overlay_cursor: overlay_cursor != 0,
+                            region: None,
+                        },
+                    );
                     frame.failed();
                     return;
                 };
 
                 let Some(size) = state.output_mode_size(output_id) else {
-                    let frame = data_init.init(frame, FrameUserData {
-                        output_id: Some(output_id),
-                        overlay_cursor: overlay_cursor != 0,
-                        region: None,
-                    });
+                    let frame = data_init.init(
+                        frame,
+                        FrameUserData {
+                            output_id: Some(output_id),
+                            overlay_cursor: overlay_cursor != 0,
+                            region: None,
+                        },
+                    );
                     frame.failed();
                     return;
                 };
 
-                let frame = data_init.init(frame, FrameUserData {
-                    output_id: Some(output_id),
-                    overlay_cursor: overlay_cursor != 0,
-                    region: None,
-                });
+                let frame = data_init.init(
+                    frame,
+                    FrameUserData {
+                        output_id: Some(output_id),
+                        overlay_cursor: overlay_cursor != 0,
+                        region: None,
+                    },
+                );
 
                 // Advertise standard ARGB8888 and XRGB8888 formats
                 if frame.version() >= 3 {
@@ -243,21 +258,27 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
                 height,
             } => {
                 let Some(output_id) = state.output_id_from_wl(&output) else {
-                    let frame = data_init.init(frame, FrameUserData {
-                        output_id: None,
-                        overlay_cursor: overlay_cursor != 0,
-                        region: None,
-                    });
+                    let frame = data_init.init(
+                        frame,
+                        FrameUserData {
+                            output_id: None,
+                            overlay_cursor: overlay_cursor != 0,
+                            region: None,
+                        },
+                    );
                     frame.failed();
                     return;
                 };
 
                 let Some(size) = state.output_mode_size(output_id) else {
-                    let frame = data_init.init(frame, FrameUserData {
-                        output_id: Some(output_id),
-                        overlay_cursor: overlay_cursor != 0,
-                        region: None,
-                    });
+                    let frame = data_init.init(
+                        frame,
+                        FrameUserData {
+                            output_id: Some(output_id),
+                            overlay_cursor: overlay_cursor != 0,
+                            region: None,
+                        },
+                    );
                     frame.failed();
                     return;
                 };
@@ -265,11 +286,14 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
                 let w = width.clamp(1, size.0);
                 let h = height.clamp(1, size.1);
 
-                let frame = data_init.init(frame, FrameUserData {
-                    output_id: Some(output_id),
-                    overlay_cursor: overlay_cursor != 0,
-                    region: Some((x, y, w, h)),
-                });
+                let frame = data_init.init(
+                    frame,
+                    FrameUserData {
+                        output_id: Some(output_id),
+                        overlay_cursor: overlay_cursor != 0,
+                        region: Some((x, y, w, h)),
+                    },
+                );
 
                 if frame.version() >= 3 {
                     frame.linux_dmabuf(875713112, w as u32, h as u32);

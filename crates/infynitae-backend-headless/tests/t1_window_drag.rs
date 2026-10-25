@@ -241,7 +241,11 @@ fn super_left_drag_takes_a_fullscreen_window_out_and_moves_it() {
     use infynitae_core::input::keys::{KEY_ENTER, KEY_LEFTMETA, KEY_LEFTSHIFT};
     let mut r = Rig::x8();
     let w = element(&r);
-    let fx = r.ls.state.core_mut().set_focus(&mut r.ls.input, Some(w)).unwrap();
+    let fx =
+        r.ls.state
+            .core_mut()
+            .set_focus(&mut r.ls.input, Some(w))
+            .unwrap();
     r.ls.state.apply(&fx);
     r.ls.pump();
     for (key, pressed) in [
@@ -257,10 +261,16 @@ fn super_left_drag_takes_a_fullscreen_window_out_and_moves_it() {
         r.ls.pump();
     }
     r.frame();
-    assert!(r.ls.state.core().fullscreen_of(w).is_some(), "precondition: fullscreen");
+    assert!(
+        r.ls.state.core().fullscreen_of(w).is_some(),
+        "precondition: fullscreen"
+    );
 
     r.button(BTN_LEFT, true, LOGO);
-    assert!(r.ls.state.core().fullscreen_of(w).is_none(), "out of fullscreen");
+    assert!(
+        r.ls.state.core().fullscreen_of(w).is_none(),
+        "out of fullscreen"
+    );
     assert!(r.ls.state.core().interaction().active(), "and moving");
     // the window's windowed position applies with the drag's first motion; from then on it
     // follows the pointer exactly
@@ -271,5 +281,8 @@ fn super_left_drag_takes_a_fullscreen_window_out_and_moves_it() {
     assert_eq!((after.x - before.x, after.y - before.y), (100, 50));
     r.button(BTN_LEFT, false, LOGO);
     assert!(!r.ls.state.core().interaction().active());
-    assert!(r.ls.state.core().fullscreen_of(w).is_none(), "it stays a window");
+    assert!(
+        r.ls.state.core().fullscreen_of(w).is_none(),
+        "it stays a window"
+    );
 }

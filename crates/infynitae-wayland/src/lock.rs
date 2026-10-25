@@ -168,9 +168,11 @@ impl WaylandState {
 
     /// The live lock surface of `output`, if its lock client made one.
     pub fn lock_surface(&self, output: OutputId) -> Option<WlSurface> {
-        self.session_lock.as_ref()?.surfaces.iter().find_map(|(o, s)| {
-            (*o == output && s.alive()).then(|| s.wl_surface().clone())
-        })
+        self.session_lock
+            .as_ref()?
+            .surfaces
+            .iter()
+            .find_map(|(o, s)| (*o == output && s.alive()).then(|| s.wl_surface().clone()))
     }
 
     /// A vblank of `output`: its lock surface's frame callbacks complete.
@@ -178,8 +180,10 @@ impl WaylandState {
         if !self.is_locked() {
             return;
         }
-        let (Some(surface), Some(o)) = (self.lock_surface(output), self.smithay_output(output).cloned())
-        else {
+        let (Some(surface), Some(o)) = (
+            self.lock_surface(output),
+            self.smithay_output(output).cloned(),
+        ) else {
             return;
         };
         smithay::desktop::utils::send_frames_surface_tree(&surface, &o, now, None, |_, _| {

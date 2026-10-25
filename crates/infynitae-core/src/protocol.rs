@@ -775,9 +775,20 @@ impl Core {
                 let gy1 = gy0.saturating_add(h);
 
                 // Check collision/intersection
-                let intersects = !(gx1 <= target_rect.0 || gx0 >= target_rect.2 || gy1 <= target_rect.1 || gy0 >= target_rect.3);
+                let intersects = !(gx1 <= target_rect.0
+                    || gx0 >= target_rect.2
+                    || gy1 <= target_rect.1
+                    || gy0 >= target_rect.3);
                 if intersects {
-                    overlapping.push((other, gx0, gy0, w, h, t.geometry.loc.x as i64, t.geometry.loc.y as i64));
+                    overlapping.push((
+                        other,
+                        gx0,
+                        gy0,
+                        w,
+                        h,
+                        t.geometry.loc.x as i64,
+                        t.geometry.loc.y as i64,
+                    ));
                 }
             }
         }
@@ -1251,12 +1262,17 @@ impl Core {
                     self.place_by_default(id, &tree)?;
                 }
                 // the client redrew at another size: a size still on offer is spent
-                if self.stage.tree(id).is_some_and(|old| old.geometry.size != tree.geometry.size)
+                if self
+                    .stage
+                    .tree(id)
+                    .is_some_and(|old| old.geometry.size != tree.geometry.size)
                 {
                     self.restore_offers.retain(|(e, _)| *e != id);
                 }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
-                if self.placement == PlacementPolicy::ClusterTiling && self.fullscreen_of(id).is_some() {
+                if self.placement == PlacementPolicy::ClusterTiling
+                    && self.fullscreen_of(id).is_some()
+                {
                     if let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id)) {
                         let w = t.geometry.size.w as i64;
                         let h = t.geometry.size.h as i64;
@@ -1280,7 +1296,9 @@ impl Core {
                 self.stage.raise(id);
                 // a grant made before this map takes its output now (A-3)
                 out.extend(self.take_output(id));
-                if self.placement == PlacementPolicy::ClusterTiling && self.fullscreen_of(id).is_some() {
+                if self.placement == PlacementPolicy::ClusterTiling
+                    && self.fullscreen_of(id).is_some()
+                {
                     if let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id)) {
                         let w = t.geometry.size.w as i64;
                         let h = t.geometry.size.h as i64;
@@ -1626,13 +1644,13 @@ impl Core {
         let mut candidates = Vec::new();
         for &w1 in &existing {
             // Adjacent flush placements relative to w1
-            candidates.push((w1.2 + GAP, w1.1));                 // Right, top-aligned
-            candidates.push((w1.2 + GAP, w1.3 - new_h));         // Right, bottom-aligned
-            candidates.push((w1.0 - new_w - GAP, w1.1));         // Left, top-aligned
+            candidates.push((w1.2 + GAP, w1.1)); // Right, top-aligned
+            candidates.push((w1.2 + GAP, w1.3 - new_h)); // Right, bottom-aligned
+            candidates.push((w1.0 - new_w - GAP, w1.1)); // Left, top-aligned
             candidates.push((w1.0 - new_w - GAP, w1.3 - new_h)); // Left, bottom-aligned
-            candidates.push((w1.0, w1.3 + GAP));                 // Below, left-aligned
-            candidates.push((w1.2 - new_w, w1.3 + GAP));         // Below, right-aligned
-            candidates.push((w1.0, w1.1 - new_h - GAP));         // Above, left-aligned
+            candidates.push((w1.0, w1.3 + GAP)); // Below, left-aligned
+            candidates.push((w1.2 - new_w, w1.3 + GAP)); // Below, right-aligned
+            candidates.push((w1.0, w1.1 - new_h - GAP)); // Above, left-aligned
             candidates.push((w1.2 - new_w, w1.1 - new_h - GAP)); // Above, right-aligned
 
             // Grid intersections with other windows

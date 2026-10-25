@@ -87,7 +87,11 @@ fn main() -> ExitCode {
         let crash_dir = format!("{home}/.local/state/infynitae");
         let _ = std::fs::create_dir_all(&crash_dir);
         let crash_file = format!("{crash_dir}/crash.log");
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&crash_file) {
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&crash_file)
+        {
             use std::io::Write;
             let timestamp = std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
@@ -326,7 +330,10 @@ fn main() -> ExitCode {
     let mut vrr: Option<bool> = None;
 
     if let Ok(fp) = std::env::var("FULLSCREEN_PAN") {
-        core.set_fullscreen_pan(!matches!(fp.to_lowercase().as_str(), "0" | "false" | "off" | "no" | "exclusive"));
+        core.set_fullscreen_pan(!matches!(
+            fp.to_lowercase().as_str(),
+            "0" | "false" | "off" | "no" | "exclusive"
+        ));
     }
 
     if let Ok(sea) = std::env::var("SUPER_ENTER_ACTION") {
@@ -354,13 +361,22 @@ fn main() -> ExitCode {
         }
     }
     if let Ok(fcn) = std::env::var("FOCUS_CYCLE_NAVIGATE") {
-        core.set_focus_cycle_navigate(!matches!(fcn.to_lowercase().as_str(), "0" | "false" | "off" | "no"));
+        core.set_focus_cycle_navigate(!matches!(
+            fcn.to_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        ));
     }
     if let Ok(foo) = std::env::var("FOCUS_ON_OPEN") {
-        core.set_focus_on_open(!matches!(foo.to_lowercase().as_str(), "0" | "false" | "off" | "no"));
+        core.set_focus_on_open(!matches!(
+            foo.to_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        ));
     }
     if let Ok(too) = std::env::var("TELEPORT_ON_OPEN") {
-        core.set_teleport_on_open(!matches!(too.to_lowercase().as_str(), "0" | "false" | "off" | "no"));
+        core.set_teleport_on_open(!matches!(
+            too.to_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        ));
     }
     if let Ok(home) = std::env::var("HOME") {
         let config_path = format!("{home}/.config/infynitae/config");
@@ -371,52 +387,57 @@ fn main() -> ExitCode {
                     let key = k.trim();
                     let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
                     match key {
-                        "PAN_MODE" => {
-                            match val.to_lowercase().as_str() {
-                                "rts" => core.set_pan_mode(infynitae_core::navigation::PanMode::Rts),
-                                "free" => core.set_pan_mode(infynitae_core::navigation::PanMode::Free),
-                                _ => core.set_pan_mode(infynitae_core::navigation::PanMode::Grab),
+                        "PAN_MODE" => match val.to_lowercase().as_str() {
+                            "rts" => core.set_pan_mode(infynitae_core::navigation::PanMode::Rts),
+                            "free" => core.set_pan_mode(infynitae_core::navigation::PanMode::Free),
+                            _ => core.set_pan_mode(infynitae_core::navigation::PanMode::Grab),
+                        },
+                        "FOCUS_FOLLOWS_MOUSE" => match val.to_lowercase().as_str() {
+                            "strict" => {
+                                core.set_focus_follows_mouse(true);
+                                core.set_focus_follows_mouse_strict(true);
                             }
-                        }
-                        "FOCUS_FOLLOWS_MOUSE" => {
-                            match val.to_lowercase().as_str() {
-                                "strict" => {
-                                    core.set_focus_follows_mouse(true);
-                                    core.set_focus_follows_mouse_strict(true);
-                                }
-                                "0" | "false" | "off" | "no" | "click" => {
-                                    core.set_focus_follows_mouse(false);
-                                    core.set_focus_follows_mouse_strict(false);
-                                }
-                                _ => {
-                                    core.set_focus_follows_mouse(true);
-                                    core.set_focus_follows_mouse_strict(false);
-                                }
+                            "0" | "false" | "off" | "no" | "click" => {
+                                core.set_focus_follows_mouse(false);
+                                core.set_focus_follows_mouse_strict(false);
                             }
-                        }
+                            _ => {
+                                core.set_focus_follows_mouse(true);
+                                core.set_focus_follows_mouse_strict(false);
+                            }
+                        },
                         "FOCUS_CYCLE_NAVIGATE" => {
-                            let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                            let enabled = !matches!(
+                                val.to_lowercase().as_str(),
+                                "0" | "false" | "off" | "no"
+                            );
                             core.set_focus_cycle_navigate(enabled);
                         }
                         "FOCUS_ON_OPEN" => {
-                            let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                            let enabled = !matches!(
+                                val.to_lowercase().as_str(),
+                                "0" | "false" | "off" | "no"
+                            );
                             core.set_focus_on_open(enabled);
                         }
                         "TELEPORT_ON_OPEN" => {
-                            let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                            let enabled = !matches!(
+                                val.to_lowercase().as_str(),
+                                "0" | "false" | "off" | "no"
+                            );
                             core.set_teleport_on_open(enabled);
                         }
-                        "PLACEMENT_POLICY" => {
-                            match val.to_lowercase().as_str() {
-                                "center" | "centred" | "centered" => {
-                                    core.set_placement_policy(infynitae_core::PlacementPolicy::CentredInView)
-                                }
-                                "origin" => {
-                                    core.set_placement_policy(infynitae_core::PlacementPolicy::OriginAtCameraCentre)
-                                }
-                                _ => core.set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling),
-                            }
-                        }
+                        "PLACEMENT_POLICY" => match val.to_lowercase().as_str() {
+                            "center" | "centred" | "centered" => core.set_placement_policy(
+                                infynitae_core::PlacementPolicy::CentredInView,
+                            ),
+                            "origin" => core.set_placement_policy(
+                                infynitae_core::PlacementPolicy::OriginAtCameraCentre,
+                            ),
+                            _ => core.set_placement_policy(
+                                infynitae_core::PlacementPolicy::ClusterTiling,
+                            ),
+                        },
                         "SUPER_ENTER_ACTION" => {
                             if val.eq_ignore_ascii_case("fit") {
                                 core.set_enter_mode(infynitae_core::EnterMode::Fit);
@@ -425,7 +446,10 @@ fn main() -> ExitCode {
                             }
                         }
                         "FULLSCREEN_PAN" => {
-                            let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no" | "exclusive");
+                            let enabled = !matches!(
+                                val.to_lowercase().as_str(),
+                                "0" | "false" | "off" | "no" | "exclusive"
+                            );
                             core.set_fullscreen_pan(enabled);
                         }
                         "OUTPUT_SCALE" => {
@@ -444,7 +468,10 @@ fn main() -> ExitCode {
                         }
                         "DIRECT_SCANOUT" => {
                             if direct_scanout.is_none() {
-                                direct_scanout = Some(!matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no"));
+                                direct_scanout = Some(!matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                ));
                             }
                         }
                         "VRR_ENABLED" | "VRR" | "ADAPTIVE_SYNC" => {
@@ -465,7 +492,10 @@ fn main() -> ExitCode {
     }
     if direct_scanout.is_none() {
         if let Ok(val) = std::env::var("DIRECT_SCANOUT") {
-            direct_scanout = Some(!matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no"));
+            direct_scanout = Some(!matches!(
+                val.to_lowercase().as_str(),
+                "0" | "false" | "off" | "no"
+            ));
         }
     }
     if vrr.is_none() {

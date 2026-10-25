@@ -338,7 +338,8 @@ impl crate::Core {
         let Some(model) = self.output(output) else {
             return frame;
         };
-        let presenting = self.presentation(output).is_some() && !self.is_presentation_suppressed(output);
+        let presenting =
+            self.presentation(output).is_some() && !self.is_presentation_suppressed(output);
         for layer in [Layer::Overlay, Layer::Top, Layer::Bottom, Layer::Background] {
             if presenting && layer != Layer::Overlay {
                 continue;

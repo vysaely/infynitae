@@ -206,7 +206,10 @@ pub struct WaylandState {
     pub border_ignore_csd: bool,
     pub border_active: smithay::backend::renderer::Color32F,
     pub border_inactive: smithay::backend::renderer::Color32F,
-    pub border_ids: std::collections::HashMap<infynitae_core::stage::ElementId, [smithay::backend::renderer::element::Id; 4]>,
+    pub border_ids: std::collections::HashMap<
+        infynitae_core::stage::ElementId,
+        [smithay::backend::renderer::element::Id; 4],
+    >,
     pub rendered_elements: Vec<infynitae_core::stage::ElementId>,
     pub input_config: InputDeviceConfig,
     pub direct_scanout: Option<bool>,
@@ -312,16 +315,24 @@ impl WaylandState {
                         let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
                         match key {
                             "KEYBOARD_REPEAT_DELAY" => {
-                                if let Ok(d) = val.parse::<i32>() { repeat_delay = d; }
+                                if let Ok(d) = val.parse::<i32>() {
+                                    repeat_delay = d;
+                                }
                             }
                             "KEYBOARD_REPEAT_RATE" => {
-                                if let Ok(r) = val.parse::<i32>() { repeat_rate = r; }
+                                if let Ok(r) = val.parse::<i32>() {
+                                    repeat_rate = r;
+                                }
                             }
                             "XKB_DEFAULT_LAYOUT" => {
-                                if !val.is_empty() { xkb_layout = val.to_string(); }
+                                if !val.is_empty() {
+                                    xkb_layout = val.to_string();
+                                }
                             }
                             "XKB_DEFAULT_OPTIONS" => {
-                                if !val.is_empty() { xkb_options = val.to_string(); }
+                                if !val.is_empty() {
+                                    xkb_options = val.to_string();
+                                }
                             }
                             _ => {}
                         }
@@ -332,7 +343,11 @@ impl WaylandState {
 
         let xkb_config = smithay::input::keyboard::XkbConfig {
             layout: &xkb_layout,
-            options: if xkb_options.is_empty() { None } else { Some(xkb_options) },
+            options: if xkb_options.is_empty() {
+                None
+            } else {
+                Some(xkb_options)
+            },
             ..Default::default()
         };
         seat.add_keyboard(xkb_config, repeat_delay, repeat_rate)
@@ -382,7 +397,9 @@ impl WaylandState {
             dmabuf_main_dev: None,
             effects: infynitae_core::protocol::EffectBuf::new(),
             ticked: Vec::new(),
-            xdg_decoration: smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(display),
+            xdg_decoration: smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(
+                display,
+            ),
             border_width: 1,
             border_ignore_csd: true,
             border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
@@ -554,44 +571,58 @@ impl WaylandState {
                             continue;
                         }
                         match key {
-                            "PAN_MODE" => {
-                                match val.to_lowercase().as_str() {
-                                    "rts" => self.core.set_pan_mode(infynitae_core::navigation::PanMode::Rts),
-                                    "free" => self.core.set_pan_mode(infynitae_core::navigation::PanMode::Free),
-                                    _ => self.core.set_pan_mode(infynitae_core::navigation::PanMode::Grab),
-                                }
-                            }
+                            "PAN_MODE" => match val.to_lowercase().as_str() {
+                                "rts" => self
+                                    .core
+                                    .set_pan_mode(infynitae_core::navigation::PanMode::Rts),
+                                "free" => self
+                                    .core
+                                    .set_pan_mode(infynitae_core::navigation::PanMode::Free),
+                                _ => self
+                                    .core
+                                    .set_pan_mode(infynitae_core::navigation::PanMode::Grab),
+                            },
                             "SCREENCOPY_CURSOR" => {
-                                let hide = matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                let hide = matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                                 self.screencopy.set_hide_cursor(hide);
                             }
-                            "FOCUS_FOLLOWS_MOUSE" => {
-                                match val.to_lowercase().as_str() {
-                                    "strict" => {
-                                        self.core.set_focus_follows_mouse(true);
-                                        self.core.set_focus_follows_mouse_strict(true);
-                                    }
-                                    "0" | "false" | "off" | "no" | "click" => {
-                                        self.core.set_focus_follows_mouse(false);
-                                        self.core.set_focus_follows_mouse_strict(false);
-                                    }
-                                    _ => {
-                                        self.core.set_focus_follows_mouse(true);
-                                        self.core.set_focus_follows_mouse_strict(false);
-                                    }
+                            "FOCUS_FOLLOWS_MOUSE" => match val.to_lowercase().as_str() {
+                                "strict" => {
+                                    self.core.set_focus_follows_mouse(true);
+                                    self.core.set_focus_follows_mouse_strict(true);
                                 }
-                            }
+                                "0" | "false" | "off" | "no" | "click" => {
+                                    self.core.set_focus_follows_mouse(false);
+                                    self.core.set_focus_follows_mouse_strict(false);
+                                }
+                                _ => {
+                                    self.core.set_focus_follows_mouse(true);
+                                    self.core.set_focus_follows_mouse_strict(false);
+                                }
+                            },
                             "FOCUS_CYCLE_NAVIGATE" => {
-                                let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                let enabled = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                                 self.core.set_focus_cycle_navigate(enabled);
                             }
                             "FOCUS_ON_OPEN" => {
-                                let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                let enabled = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                                 self.core.set_focus_on_open(enabled);
                                 self.focus_open_user_only = val.eq_ignore_ascii_case("user");
                             }
                             "TELEPORT_ON_OPEN" => {
-                                let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                let enabled = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                                 self.core.set_teleport_on_open(enabled);
                                 self.teleport_open_user_only = val.eq_ignore_ascii_case("user");
                             }
@@ -599,26 +630,34 @@ impl WaylandState {
                                 if val.eq_ignore_ascii_case("fit") {
                                     self.core.set_enter_mode(infynitae_core::EnterMode::Fit);
                                 } else {
-                                    self.core.set_enter_mode(infynitae_core::EnterMode::Maximize);
+                                    self.core
+                                        .set_enter_mode(infynitae_core::EnterMode::Maximize);
                                 }
                             }
                             "FULLSCREEN_PAN" => {
-                                let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no" | "exclusive");
+                                let enabled = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no" | "exclusive"
+                                );
                                 self.core.set_fullscreen_pan(enabled);
                             }
-                            "PLACEMENT_POLICY" => {
-                                match val.to_lowercase().as_str() {
-                                    "center" | "centred" | "centered" => {
-                                        self.core.set_placement_policy(infynitae_core::PlacementPolicy::CentredInView);
-                                    }
-                                    "origin" => {
-                                        self.core.set_placement_policy(infynitae_core::PlacementPolicy::OriginAtCameraCentre);
-                                    }
-                                    _ => {
-                                        self.core.set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
-                                    }
+                            "PLACEMENT_POLICY" => match val.to_lowercase().as_str() {
+                                "center" | "centred" | "centered" => {
+                                    self.core.set_placement_policy(
+                                        infynitae_core::PlacementPolicy::CentredInView,
+                                    );
                                 }
-                            }
+                                "origin" => {
+                                    self.core.set_placement_policy(
+                                        infynitae_core::PlacementPolicy::OriginAtCameraCentre,
+                                    );
+                                }
+                                _ => {
+                                    self.core.set_placement_policy(
+                                        infynitae_core::PlacementPolicy::ClusterTiling,
+                                    );
+                                }
+                            },
                             "CANVAS_COLOR" => {
                                 if let Some(c) = crate::parse_color_hex(val) {
                                     self.set_clear_color(c);
@@ -630,7 +669,10 @@ impl WaylandState {
                                 }
                             }
                             "BORDER_IGNORE_CSD" => {
-                                self.border_ignore_csd = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                self.border_ignore_csd = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                             }
                             "BORDER_ACTIVE" => {
                                 if let Some(c) = crate::parse_color_hex(val) {
@@ -651,28 +693,45 @@ impl WaylandState {
                                 }
                             }
                             "TOUCHPAD_TAP" => {
-                                self.input_config.touchpad_tap = Some(matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on"));
+                                self.input_config.touchpad_tap = Some(matches!(
+                                    val.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                ));
                             }
                             "TOUCHPAD_NATURAL_SCROLL" => {
-                                self.input_config.touchpad_natural_scroll = Some(matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on"));
+                                self.input_config.touchpad_natural_scroll = Some(matches!(
+                                    val.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                ));
                             }
                             "DIRECT_SCANOUT" => {
-                                self.direct_scanout = Some(matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on"));
+                                self.direct_scanout = Some(matches!(
+                                    val.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                ));
                             }
                             "FOCUS_ON_ACTIVATE" => {
                                 use infynitae_core::input::focus::ActivationPolicy;
                                 let v = val.to_lowercase();
                                 self.activate_user_only = v == "user";
                                 self.core.set_activation_policy(match v.as_str() {
-                                    "never" | "0" | "false" | "off" => ActivationPolicy::AttentionOnly,
+                                    "never" | "0" | "false" | "off" => {
+                                        ActivationPolicy::AttentionOnly
+                                    }
                                     _ => ActivationPolicy::Strict,
                                 });
                             }
                             "SUPER_FREES_CURSOR" => {
-                                free_cursor_on_super = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                free_cursor_on_super = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                             }
                             "OVERLAY_PLANES" => {
-                                self.overlay_planes = matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
+                                self.overlay_planes = matches!(
+                                    val.to_lowercase().as_str(),
+                                    "1" | "true" | "yes" | "on"
+                                );
                             }
                             "WALLPAPER" => {
                                 let trimmed = val.trim();
@@ -717,7 +776,10 @@ impl WaylandState {
                                     .collect();
                             }
                             "WINE_TRANSPARENCY" => {
-                                self.wine_transparency = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                                self.wine_transparency = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                             }
                             "FORCE_TRANSPARENT_APPS" => {
                                 self.force_transparent_apps = val
@@ -742,7 +804,8 @@ impl WaylandState {
                     self.wallpaper_mode = new_wallpaper_mode;
                     let home = std::env::var("HOME").unwrap_or_default();
                     let bin = format!("{home}/.local/bin/infynitae-wallpaper");
-                    let bin_fallback = format!("{home}/infynitae/live/wallpaper/infynitae-wallpaper");
+                    let bin_fallback =
+                        format!("{home}/infynitae/live/wallpaper/infynitae-wallpaper");
                     let target_bin = if std::path::Path::new(&bin).exists() {
                         bin
                     } else {
@@ -814,7 +877,9 @@ impl WaylandState {
                 self.spawn_action("notify-privacy-off");
             } else {
                 self.private_elements.insert(focused);
-                println!("[infynitae] Privacy capture exemption ENABLED for window {focused:?} (hidden from screenshots and screenshare)");
+                println!(
+                    "[infynitae] Privacy capture exemption ENABLED for window {focused:?} (hidden from screenshots and screenshare)"
+                );
                 self.spawn_action("notify-privacy-on");
             }
         }
@@ -963,7 +1028,11 @@ impl WaylandState {
 pub fn user_key_bindings(
     binds: &[(String, String)],
     execs: &[(String, String)],
-) -> (infynitae_core::input::keys::UserBindings, Vec<String>, Vec<String>) {
+) -> (
+    infynitae_core::input::keys::UserBindings,
+    Vec<String>,
+    Vec<String>,
+) {
     use infynitae_core::input::keys::{ACTION_NAMES, KeyAction, UserBindings, parse_chord};
     let mut out = UserBindings::default();
     let mut commands = Vec::new();
@@ -1010,7 +1079,10 @@ mod key_binding_config_tests {
     use infynitae_core::input::keys::{KeyAction, parse_chord};
 
     fn kv(pairs: &[(&str, &str)]) -> Vec<(String, String)> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
     }
 
     /// BIND_ moves actions (several chords allowed) or frees them with "none"; EXEC_ adds
@@ -1032,8 +1104,14 @@ mod key_binding_config_tests {
         assert_eq!(
             b.chords,
             vec![
-                (parse_chord("SUPER+RETURN").unwrap(), Some(KeyAction::SpawnTerminal)),
-                (parse_chord("SUPER+T").unwrap(), Some(KeyAction::SpawnTerminal)),
+                (
+                    parse_chord("SUPER+RETURN").unwrap(),
+                    Some(KeyAction::SpawnTerminal)
+                ),
+                (
+                    parse_chord("SUPER+T").unwrap(),
+                    Some(KeyAction::SpawnTerminal)
+                ),
                 (parse_chord("SUPER+B").unwrap(), Some(KeyAction::Exec(0))),
             ]
         );
@@ -1087,7 +1165,10 @@ fn guess_dmabuf_device() -> Option<libc::dev_t> {
 
 /// Parses a hex color `#RRGGBB` or `#RRGGBBAA` into a `Color32F`.
 pub fn parse_color_hex(hex: &str) -> Option<smithay::backend::renderer::Color32F> {
-    let s = hex.trim().trim_matches(|c| c == '"' || c == '\'').trim_start_matches('#');
+    let s = hex
+        .trim()
+        .trim_matches(|c| c == '"' || c == '\'')
+        .trim_start_matches('#');
     if s.len() == 6 {
         let r = u8::from_str_radix(&s[0..2], 16).ok()? as f32 / 255.0;
         let g = u8::from_str_radix(&s[2..4], 16).ok()? as f32 / 255.0;

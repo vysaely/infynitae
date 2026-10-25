@@ -7,7 +7,8 @@ mod common;
 use common::input::*;
 use infynitae_backend_headless::keyboard_key;
 use infynitae_core::input::keys::{
-    KEY_1, KEY_2, KEY_3, KEY_9, KEY_E, KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_Q, KEY_S, KEY_SYSRQ, KEY_TAB, KEY_W,
+    KEY_1, KEY_2, KEY_3, KEY_9, KEY_E, KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_Q, KEY_S, KEY_SYSRQ,
+    KEY_TAB, KEY_W,
 };
 use infynitae_core::stage::ElementId;
 
@@ -224,7 +225,9 @@ fn super_shift_1_to_9_resolves_cluster_slots() {
         let key = (slot as u32) + KEY_1;
         assert_eq!(
             infynitae_core::input::keys::resolve_key_binding(key, mods, false),
-            Some(infynitae_core::input::keys::KeyAction::FocusClusterSlot(slot)),
+            Some(infynitae_core::input::keys::KeyAction::FocusClusterSlot(
+                slot
+            )),
             "Super+Shift+{key} resolves to FocusClusterSlot({slot})"
         );
         assert_eq!(
@@ -251,12 +254,20 @@ fn super_shift_1_to_9_focuses_and_frames_clusters() {
     let _w2 = mapped[1];
 
     let clusters = r.ls.state.core().clusters();
-    assert_eq!(clusters.len(), 1, "both windows near each other form 1 cluster");
+    assert_eq!(
+        clusters.len(),
+        1,
+        "both windows near each other form 1 cluster"
+    );
     assert_eq!(clusters[0].len(), 2, "cluster 1 has 2 windows");
 
     // Press Super+Shift+1 -> focuses Cluster 1 (W1 primary)
     tap_cluster_slot(&mut r, KEY_1);
-    assert_eq!(r.ls.state.core().focus().target(), Some(w1), "Cluster 1 focuses W1");
+    assert_eq!(
+        r.ls.state.core().focus().target(),
+        Some(w1),
+        "Cluster 1 focuses W1"
+    );
 }
 
 #[test]
@@ -272,15 +283,21 @@ fn super_shift_tab_toggles_overview() {
         "Super+Shift+Tab resolves to ToggleOverview"
     );
     assert_eq!(
-        infynitae_core::input::keys::resolve_key_binding(infynitae_core::input::keys::KEY_R, mods, false),
+        infynitae_core::input::keys::resolve_key_binding(
+            infynitae_core::input::keys::KEY_R,
+            mods,
+            false
+        ),
         Some(infynitae_core::input::keys::KeyAction::SpawnRegionScreenshot),
         "Super+Shift+R resolves to SpawnRegionScreenshot"
     );
     assert_eq!(
-        infynitae_core::input::keys::resolve_key_binding(infynitae_core::input::keys::KEY_BACKSPACE, mods, false),
+        infynitae_core::input::keys::resolve_key_binding(
+            infynitae_core::input::keys::KEY_BACKSPACE,
+            mods,
+            false
+        ),
         Some(infynitae_core::input::keys::KeyAction::ReloadShell),
         "Super+Shift+BackSpace resolves to ReloadShell"
     );
 }
-
-

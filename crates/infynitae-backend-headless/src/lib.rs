@@ -444,10 +444,7 @@ pub fn run_headless_with(
             }
         } else if state.core().focus_on_open() {
             for &new_id in &new_mapped {
-                if let Ok(effects) = state
-                    .core_mut()
-                    .set_focus(&mut input_port, Some(new_id))
-                {
+                if let Ok(effects) = state.core_mut().set_focus(&mut input_port, Some(new_id)) {
                     state.apply(&effects);
                     session.flush();
                 }
@@ -457,9 +454,7 @@ pub fn run_headless_with(
         if state.core().teleport_on_open() {
             for &new_id in &new_mapped {
                 let port = &mut input_port;
-                let _ = state.with_effects(|core, fx| {
-                    core.recenter_element(port, new_id, fx)
-                });
+                let _ = state.with_effects(|core, fx| core.recenter_element(port, new_id, fx));
                 session.request_frame();
                 session.flush();
             }

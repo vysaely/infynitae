@@ -127,9 +127,7 @@ pub enum PhysicalEvent {
         time_us: u64,
     },
     /// Centers the camera of the active output on an element.
-    RecenterElement {
-        element: stage::ElementId,
-    },
+    RecenterElement { element: stage::ElementId },
 }
 
 /// A semantic command from the trusted shell (C7.2, INV-SHELL-1): a value Core validates and then
@@ -623,7 +621,11 @@ impl Core {
 
     /// Unsuppresses fullscreen presentation on `output` (returning to exclusive fullscreen presentation).
     pub fn unsuppress_presentation(&mut self, output: output::OutputId) {
-        if let Some(pos) = self.presentation_suppressed.iter().position(|&o| o == output) {
+        if let Some(pos) = self
+            .presentation_suppressed
+            .iter()
+            .position(|&o| o == output)
+        {
             self.presentation_suppressed.swap_remove(pos);
             self.invalidate_frame(output);
         }
@@ -775,7 +777,10 @@ impl Core {
         let rects: Vec<(i64, i64, i64, i64)> = live
             .iter()
             .map(|&e| {
-                let a = self.stage.anchor(e).unwrap_or(geom::CanvasPoint { x: 0, y: 0 });
+                let a = self
+                    .stage
+                    .anchor(e)
+                    .unwrap_or(geom::CanvasPoint { x: 0, y: 0 });
                 let (w, h) = self
                     .stage
                     .tree(e)

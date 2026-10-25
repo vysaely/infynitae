@@ -51,7 +51,8 @@ pub struct ImageCopyState {
 impl ImageCopyState {
     pub fn new(dh: &DisplayHandle) -> Self {
         Self {
-            _sources: dh.create_global::<WaylandState, ExtOutputImageCaptureSourceManagerV1, ()>(1, ()),
+            _sources: dh
+                .create_global::<WaylandState, ExtOutputImageCaptureSourceManagerV1, ()>(1, ()),
             _manager: dh.create_global::<WaylandState, ExtImageCopyCaptureManagerV1, ()>(1, ()),
         }
     }
@@ -122,8 +123,10 @@ impl Dispatch<ExtOutputImageCaptureSourceManagerV1, ()> for WaylandState {
         _dh: &DisplayHandle,
         data_init: &mut DataInit<'_, Self>,
     ) {
-        if let ext_output_image_capture_source_manager_v1::Request::CreateSource { source, output } =
-            request
+        if let ext_output_image_capture_source_manager_v1::Request::CreateSource {
+            source,
+            output,
+        } = request
         {
             let output = state.output_id_from_wl(&output);
             data_init.init(source, SourceData { output });
@@ -186,7 +189,8 @@ impl Dispatch<ExtImageCopyCaptureManagerV1, ()> for WaylandState {
                 }
             }
             ext_image_copy_capture_manager_v1::Request::CreatePointerCursorSession {
-                session, ..
+                session,
+                ..
             } => {
                 data_init.init(session, ());
             }
@@ -301,7 +305,12 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, FrameData> for WaylandState {
             }
             ext_image_copy_capture_frame_v1::Request::Destroy => {
                 let id = frame.id();
-                state.screencopy.pending.lock().unwrap().retain(|p| p.id() != id);
+                state
+                    .screencopy
+                    .pending
+                    .lock()
+                    .unwrap()
+                    .retain(|p| p.id() != id);
             }
             _ => {}
         }
