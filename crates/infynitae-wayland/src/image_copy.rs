@@ -1,7 +1,8 @@
 //! `ext-image-copy-capture-v1` with `ext-output-image-capture-source-v1` (2026-10-24): output
 //! capture through the newer capture protocol. xdg-desktop-portal-wlr uses it when offered;
-//! older portal releases stall on wlr-screencopy because the PipeWire stream driver expects
-//! ext-image-copy, so screen sharing with distribution portals needs this protocol.
+//! up to 0.8.4 its wlr-screencopy path delivers one frame and then stalls (its PipeWire stream
+//! is driven by ext-image-copy; fixed upstream after 0.8.4), so screen sharing with a
+//! distribution's portal needs this protocol.
 //!
 //! A captured frame joins the wlr-screencopy queue (`screencopy::PendingFrame`): the backend
 //! draws both the same way. A session announces the output's size, shm formats and the GPU and
