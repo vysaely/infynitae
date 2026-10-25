@@ -113,7 +113,7 @@ fn the_console_target_draws_the_theme_cursor_at_the_pointer() {
         &icons_dir,
         "test_theme",
         "default",
-        &[(24, 4, 4, (1, 1), &magenta_pixels)],
+        &[(24, 4, 4, (1, 1), 0, &magenta_pixels)],
     );
     write_config(temp.path(), "test_theme", 24);
 
@@ -150,7 +150,7 @@ fn theme_change_applies_on_config_reload() {
         &icons_dir,
         "theme_magenta",
         "default",
-        &[(24, 4, 4, (1, 1), &magenta_pixels)],
+        &[(24, 4, 4, (1, 1), 0, &magenta_pixels)],
     );
 
     let cyan_pixels = [0xFF, 0xFF, 0x00, 0xFF].repeat(4 * 4);
@@ -158,7 +158,7 @@ fn theme_change_applies_on_config_reload() {
         &icons_dir,
         "theme_cyan",
         "default",
-        &[(24, 4, 4, (1, 1), &cyan_pixels)],
+        &[(24, 4, 4, (1, 1), 0, &cyan_pixels)],
     );
 
     write_config(temp.path(), "theme_magenta", 24);
@@ -227,8 +227,8 @@ fn scale_2x_output_picks_sharp_cursor_size() {
         "scale_theme",
         "default",
         &[
-            (24, 24, 24, (0, 0), &red_pixels),
-            (48, 48, 48, (0, 0), &blue_pixels),
+            (24, 24, 24, (0, 0), 0, &red_pixels),
+            (48, 48, 48, (0, 0), 0, &blue_pixels),
         ],
     );
 
@@ -250,4 +250,80 @@ fn scale_2x_output_picks_sharp_cursor_size() {
 
     // At 2x scale, target size is 24 * 2 = 48, so the 48x48 blue image is chosen
     assert_eq!(at(330, 240), BLUE, "2x scale picked the 48px blue image");
+}
+
+#[test]
+fn animated_theme_cursor_changes_pixels_between_two_times() {
+    let temp = TestTempDir::new("t1_cursor_animated");
+    let icons_dir = temp.path().join("icons");
+
+    // Frame 0 (delay 100ms): 4x4 magenta square
+    let magenta_pixels = [0xFF, 0x00, 0xFF, 0xFF].repeat(4 * 4);
+    // Frame 1 (delay 100ms): 4x4 cyan square
+    let cyan_pixels = [0xFF, 0xFF, 0x00, 0xFF].repeat(4 * 4);
+
+    let cursors_dir = icons_dir.join("anim_theme").join("cursors");
+    std::fs::create_dir_all(&cursors_dir).expect("create cursors dir");
+    let data = make_xcursor_file(&[
+        (24, 4, 4, (1, 1), 100u32, magenta_pixels.as_slice()),
+        (24, 4, 4, (1, 1), 100u32, cyan_pixels.as_slice()),
+    ]);
+    std::fs::write(cursors_dir.join("default"), data).expect("write cursor file");
+
+    write_config(temp.path(), "anim_theme", 24);
+
+    let mut ls = Lockstep::new(Some(output((640, 480), 120)));
+    ls.state.set_console_target();
+    ls.state.set_config_home(temp.path().to_path_buf());
+    ls.state
+        .set_xcursor_path(icons_dir.to_string_lossy().into_owned());
+    ls.state.reload_config();
+
+    // Set virtual time at t = 0 ms and render
+    ls.state
+        .set_current_time(std::time::Duration::from_millis(0));
+    nudge(&mut ls, (10.0, 0.0));
+    let mut screen = Screen::new((640, 480));
+    let (_, pixels) = screen.frame(&mut ls, 0);
+    assert_eq!(pixels[240 * 640 + 330], MAGENTA, "initial frame is magenta");
+
+    // At t = 50 ms (still in frame 0): unmoved, unchanged frame produces no damage
+    ls.state
+        .set_current_time(std::time::Duration::from_millis(50));
+    let (damage, _) = screen.frame(&mut ls, 1);
+    assert_eq!(damage, None, "unmoved unchanged frame produces no damage");
+
+    // Advance virtual time to t = 150 ms (into frame 1)
+    ls.state
+        .set_current_time(std::time::Duration::from_millis(150));
+    let (damage, pixels) = screen.frame(&mut ls, 1);
+    assert!(
+        damage.is_some_and(|d| !d.is_empty()),
+        "frame change produces damage"
+    );
+    assert_eq!(
+        pixels[240 * 640 + 330],
+        CYAN,
+        "advances to cyan frame at t = 150ms"
+    );
+
+    // At t = 180 ms (still in frame 1): unmoved, unchanged frame produces no damage
+    ls.state
+        .set_current_time(std::time::Duration::from_millis(180));
+    let (damage, _) = screen.frame(&mut ls, 1);
+    assert_eq!(damage, None, "unmoved unchanged frame 1 produces no damage");
+
+    // Wraparound at t = 200 ms (back to frame 0)
+    ls.state
+        .set_current_time(std::time::Duration::from_millis(200));
+    let (damage, pixels) = screen.frame(&mut ls, 1);
+    assert!(
+        damage.is_some_and(|d| !d.is_empty()),
+        "wraparound produces damage"
+    );
+    assert_eq!(
+        pixels[240 * 640 + 330],
+        MAGENTA,
+        "wraparound back to magenta frame at t = 200ms"
+    );
 }
