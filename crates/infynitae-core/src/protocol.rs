@@ -105,10 +105,10 @@ pub enum Effect {
         scale_120: u32,
         integer_scale: u32,
     },
-    /// `xdg_toplevel.close` to an element: the client is asked to close (Super+C).
+    /// Ask the client to close (by default Super+C, xdg_toplevel.close).
     CloseRequest(ElementId),
-    /// The element's client is ended (Super+Shift+C): its connection cut and its process
-    /// killed; the adapter decides how for a client it cannot end alone (X11).
+    /// Terminate the element's client (by default Super+Shift+C): cuts its connection and ends its process;
+    /// the adapter decides how for a client it cannot end alone (X11).
     ForceClose(ElementId),
     /// Configure a layer surface with the size its arrangement gives it (L1, L4).
     LayerConfigure {
@@ -126,47 +126,47 @@ pub enum Effect {
         scale_120: u32,
         integer_scale: u32,
     },
-    /// Super+W: toggles the Dynamic Island launcher
+    /// Toggle the launcher (by default Super+W).
     ToggleLauncher,
-    /// Super+Q: launches terminal
+    /// Launch the terminal (by default Super+Q).
     SpawnTerminal,
-    /// Super+E: launches file manager
+    /// Launch the file manager (by default Super+E).
     SpawnFileManager,
-    /// Super+Shift+S or PrintScreen: capture fullscreen screenshot
+    /// Capture a fullscreen screenshot (by default Super+Shift+S or PrintScreen).
     SpawnScreenshot,
-    /// Super+Shift+R: capture region screenshot
+    /// Capture a region screenshot (by default Super+Shift+R).
     SpawnRegionScreenshot,
-    /// Super+Shift+Tab: toggles canvas overview radar
+    /// Toggle the canvas overview radar (by default Super+Shift+Tab).
     ToggleOverview,
-    /// Super+Shift+BackSpace: reload shell UI and scripts
+    /// Reload shell UI and scripts (by default Super+Shift+Backspace).
     ReloadShell,
-    /// Super+L: lock screen
+    /// Lock the screen (by default Super+L).
     SpawnLockScreen,
-    /// Super+V: clipboard history
+    /// Open clipboard history (by default Super+V).
     SpawnClipboardHistory,
-    /// Super+Shift+P: toggle privacy mode on focused window
+    /// Toggle privacy mode on the focused window (by default Super+Shift+P).
     TogglePrivacy,
-    /// Super+Shift+I: toggle idle sleep inhibition (stay awake mode)
+    /// Toggle idle sleep inhibition (stay-awake mode, by default Super+Shift+I).
     ToggleIdleInhibit,
-    /// Super+Alt+C: save instant 20-minute replay clip
+    /// Save an instant replay clip (by default Super+Alt+C).
     SaveReplay,
-    /// Super+Alt+R: toggle continuous screen recording
+    /// Toggle continuous screen recording (by default Super+Alt+R).
     ToggleRecording,
-    /// Hardware Volume Up
+    /// Hardware volume up.
     VolumeUp,
-    /// Hardware Volume Down
+    /// Hardware volume down.
     VolumeDown,
-    /// Hardware Volume Mute
+    /// Hardware volume mute.
     VolumeMute,
-    /// Hardware Brightness Up
+    /// Hardware brightness up.
     BrightnessUp,
-    /// Hardware Brightness Down
+    /// Hardware brightness down.
     BrightnessDown,
-    /// Hardware Media Play / Pause
+    /// Hardware media play/pause.
     MediaPlayPause,
-    /// Hardware Media Next Song
+    /// Hardware media next track.
     MediaNext,
-    /// Hardware Media Previous Song
+    /// Hardware media previous track.
     MediaPrev,
     /// A user command from the config, by its index in the adapter's command list.
     Exec(u16),
@@ -231,15 +231,15 @@ pub enum ProtocolError {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PlacementPolicy {
     /// The window-geometry origin at the placement output's camera centre, decided at the
-    /// initial commit and never revised: the rule of INC-1…INC-5. Kept as an explicit policy.
+    /// initial commit and never revised: the legacy policy. Kept as an explicit policy.
     OriginAtCameraCentre,
     /// F-PLACE-1: the window geometry centred in the placement output's usable
     /// region, resolved once at the first map; an oversized window aligned to the region's
     /// origin.
     #[default]
     CentredInView,
-    /// Proximity Cluster Tiling: places window at the nearest free spot in the cluster
-    /// (closest to the viewport center), or center if empty.
+    /// Proximity cluster tiling: places the window at the nearest free spot in the cluster
+    /// (closest to the viewport centre), or centres it if empty.
     ClusterTiling,
 }
 
@@ -256,9 +256,9 @@ pub enum ToplevelRequest {
     },
     UnsetFullscreen,
     SetMinimized,
-    /// `xdg_toplevel.move`: an interactive move. Owned by INC-14.
+    /// `xdg_toplevel.move`: an interactive move.
     Move,
-    /// `xdg_toplevel.resize`: an interactive resize. Owned by INC-14.
+    /// `xdg_toplevel.resize`: an interactive resize.
     Resize,
     ShowWindowMenu,
 }
@@ -342,7 +342,7 @@ pub struct FullscreenState {
     pub saved: Option<LocalSize>,
 }
 
-/// The longest title or app_id Core keeps, in bytes (INC-11).
+/// The longest title or app_id Core keeps, in bytes.
 pub const TOPLEVEL_META_MAX: usize = 4096;
 
 /// What a configure of a toplevel carries besides `activated`, as Core holds it now. The adapter
@@ -775,7 +775,7 @@ impl Core {
             .place(id, anchor)
             .map_err(|_| ProtocolError::StaleElement)?;
         self.invalidate_all_frames();
-        // (spelled as a reborrow: the commit path's call is a seeded-control anchor)
+        // Reborrow passes a mutable slice reference.
         self.membership_pass_element(id, &mut *out);
         out.extend(self.evaluate_scale_policy(false));
         Ok(())
@@ -823,7 +823,6 @@ impl Core {
                 let gx1 = gx0.saturating_add(w);
                 let gy1 = gy0.saturating_add(h);
 
-                // Check collision/intersection
                 let intersects = !(gx1 <= target_rect.0
                     || gx0 >= target_rect.2
                     || gy1 <= target_rect.1
@@ -838,7 +837,6 @@ impl Core {
             return;
         }
 
-        // Sort overlapping windows from left to right
         overlapping.sort_by_key(|&(_, gx0, ..)| gx0);
 
         let target_mid_x = (target_rect.0 + target_rect.2) / 2;
@@ -979,7 +977,7 @@ impl Core {
         true
     }
 
-    /// `xdg_toplevel.set_title` / `set_app_id` (INC-11, owner decision 2026-10-20 D9): the
+    /// `xdg_toplevel.set_title` / `set_app_id` (owner decision 2026-10-20 D9): the
     /// toplevel's title and app_id, replaced wholesale, kept as display metadata for the shell.
     /// Each is cut to [`TOPLEVEL_META_MAX`] bytes at a character boundary, so a client cannot make
     /// Core hold an unbounded string. Decides nothing, emits nothing.
@@ -1010,7 +1008,7 @@ impl Core {
     /// B10.7 / INV-INPUT-9: an `xdg_activation_v1` request for `id`. `validated`: its token
     /// passed the adapter's provenance check (W-SM-8: created by the client that held the
     /// keyboard focus, with a serial of this seat no older than the last focus change, unused,
-    /// unexpired). Outcome (`ActivationPolicy`; PROV-10, provisional; OB-40): under the default
+    /// unexpired). Outcome (`ActivationPolicy`; PROV-10, OB-40): under the default
     /// `Strict` policy a validated request for an element that may take keyboard focus — mapped
     /// and not hidden by a presentation (INV-INPUT-8) — focuses it, an activation grant; every
     /// other request for a mapped element marks it for attention, which only the shell renders;
@@ -1044,7 +1042,7 @@ impl Core {
     /// - `unset_fullscreen`: ends fullscreen with one configure offering the saved size; when
     ///   not fullscreen, one configure.
     /// - `set_minimized`: ignored (INV-PROTO-1). `show_window_menu`: ignored, there is none.
-    /// - `move`, `resize`: ignored; interactive move and resize are INC-14.
+    /// - `move`, `resize`: ignored; interactive move and resize are handled by the compositor.
     ///
     /// Nothing is answered while the toplevel is unmapped. No request moves an anchor, a camera
     /// or the focus.
@@ -1566,18 +1564,23 @@ impl Core {
 
     /// Default placement at first map, when the window-geometry size is known (F-PLACE-1).
     ///
-    /// [`PlacementPolicy::CentredInView`]: the window geometry is centred in the usable region of
-    /// the placement output (the first connected output, as for [`Core::initial_anchor`]), in
-    /// Canvas coordinates through that output's camera: per axis, with `c` the camera centre,
-    /// `u` the usable logical extent and `s` the outer size,
-    /// `anchor = c − u/2 + (u − s)/2 = c − s/2` when `s ≤ u`. A window larger than the region on
-    /// an axis is aligned to the region's origin on that axis (`anchor = c − u/2`), so that its
-    /// top-left corner — title bar, menus — is the part that stays reachable. The result is
-    /// rounded once by R3 ([`CanvasPos::round_to_point`]). The usable region is the output view
-    /// less the exclusive zones of its layer surfaces (L4), centred at its own centre.
+    /// A child window opens centred over its mapped parent's geometry (owner, 2026-10-24).
+    /// A window replacing a closed window of the same app reuses that spot if still in view
+    /// (owner, 2026-10-25).
     ///
-    /// `None` keeps the anchor of the initial commit: the legacy policy, no output, or a
-    /// position outside the Canvas bound.
+    /// Under [`PlacementPolicy::CentredInView`], the window geometry is centred in the usable
+    /// region of the placement output (first connected output), in Canvas coordinates through its
+    /// camera: per axis, with `c` the camera centre, `u` the usable logical extent and `s` the outer
+    /// size, `anchor = c − u/2 + (u − s)/2 = c − s/2` when `s ≤ u`. An oversized window aligns to the
+    /// region's origin (`anchor = c − u/2`) so the top-left corner stays reachable. Rounded by R3
+    /// ([`CanvasPos::round_to_point`]). The usable region is the output view less layer surfaces'
+    /// exclusive zones (L4).
+    ///
+    /// Under [`PlacementPolicy::ClusterTiling`], the window is placed at the nearest free slot
+    /// in the cluster (or centred if empty).
+    ///
+    /// `None` keeps the anchor of the initial commit: under [`PlacementPolicy::OriginAtCameraCentre`],
+    /// without an output, or when out of Canvas bounds.
     fn first_map_anchor(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
         // a child window (xdg_toplevel.set_parent: dialogs, an app's second window) opens centred
         // over its mapped parent's window geometry, whatever the policy (owner, 2026-10-24)
@@ -2425,8 +2428,7 @@ mod tests {
 
     /// M3 / R8 / D-B6-BOUNDARY: the target is the anchor output's viewport (here the parent's
     /// clock output), inward-rounded, relative to the parent's geometry origin (the anchor).
-    /// Expected values are hand-derived with exact rational arithmetic
-    /// (evidence/phase-f/INC-1/corrective/unproject_reference.py), not with production code.
+    /// Expected values are hand-derived with exact rational arithmetic, not with production code.
     #[test]
     fn popup_target_is_the_viewport_inward_rounded() {
         // k = 1, camera centre (0,0), 1920x1080 → viewport [−960,960) × [−540,540). The target is
@@ -2530,7 +2532,7 @@ mod tests {
         core.toplevel_committed(id, tree(true)).unwrap();
 
         // If parent is visible on both o1 and o2:
-        // Rule 1: causing_output = o1 selects o1, even though o2 has higher refresh!
+        // Rule 1: causing_output = o1 selects o1, even though o2 has higher refresh.
         if core.membership().observers(id).contains(&o1)
             && core.membership().observers(id).contains(&o2)
         {
@@ -2546,8 +2548,8 @@ mod tests {
             assert_eq!(t_default.size, LocalSize { w: 800, h: 600 });
         }
 
-        // Rule 1 visibility guard (ATK-12 / Mutation P): o3 does not observe parent id.
-        // Therefore passing Some(o3) must NOT select o3 (640x480), but fall back to Rule 2 (o2, 800x600)!
+        // Rule 1 visibility guard (ATK-12): o3 does not observe parent id.
+        // Passing Some(o3) does not select o3 (640x480), but falls back to Rule 2 (o2, 800x600).
         assert!(!core.membership().observers(id).contains(&o3));
         let t_unobserved = core.popup_constraint_target(id, Some(o3)).unwrap();
         assert_eq!(t_unobserved.size, LocalSize { w: 800, h: 600 });
@@ -4628,7 +4630,7 @@ mod tests {
         c.physical_input_vec(&mut i, button(false)).unwrap();
     }
 
-    /// C12.F13. Cross-client churn (independent review, 2026-10-15): a client that never holds focus
+    /// C12.F13: cross-client churn (2026-10-15). A client that never holds focus
     /// cycles create, pre-map grant, map and destroy; another client focused toggles fullscreen.
     /// X, seen by A and B, never changes its hint; the presenting clients' own windows may.
     #[test]
@@ -4666,7 +4668,7 @@ mod tests {
         assert_eq!(c.preferred_scale_of(x), held);
     }
 
-    /// C12.F13, review probe A: X, seen by A (scale 1) and B (scale 2), commits
+    /// C12.F13 probe A: X, seen by A (scale 1) and B (scale 2), commits
     /// between another client's fullscreen toggles on B. Hidden, X is held; its own commits do
     /// not lower it (the hold lasts until a non-client stimulus): no change at all.
     #[test]
@@ -4693,7 +4695,7 @@ mod tests {
         assert_eq!(c.preferred_scale_of(x), Some((240, 2)));
     }
 
-    /// C12.F13, review probe C: X never commits; W1 toggles fullscreen on B while a
+    /// C12.F13 probe C: X never commits; W1 toggles fullscreen on B while a
     /// second client cycles create / pre-map grant on C / map / destroy. No change of X's hint.
     #[test]
     fn a_passive_window_under_two_presentations_keeps_its_hint() {
@@ -4729,7 +4731,7 @@ mod tests {
         assert_eq!(changes, 0);
     }
 
-    /// C12.F13, review probe B: X is held at B's scale while W is presented on B; a
+    /// C12.F13 probe B: X is held at B's scale while W is presented on B; a
     /// system change (A reconfigured) is a non-client stimulus and lowers X; when W's client ends
     /// the presentation (unset, unmap, destroy), X is revealed on B and is raised again (a rise
     /// is never refused).
@@ -4778,7 +4780,7 @@ mod tests {
         }
     }
 
-    /// C12.F13, review probe F: a hold ends when it is no longer needed. X reaches
+    /// C12.F13 probe F: a hold ends when it is no longer needed. X reaches
     /// into B (scale 2) by its own size; another client toggles fullscreen on B (set, unset);
     /// then X shrinks itself off B: its own geometry lowers its hint, as without the toggle.
     #[test]
@@ -5540,7 +5542,7 @@ mod tests {
     /// A commit of a presented element that starts or ends no presentation is a client response
     /// (SC-E): it must not release the hint SC-E holds for another element. X's hint was lowered
     /// by a non-client stimulus (A's scale falls to 1) and then held at 1 although X grew onto B
-    /// (rho 2); W, presented on C, commits. Found by the independent review: evaluated as a
+    /// (rho 2); W, presented on C, commits. Evaluated as a
     /// non-client stimulus, every frame of a fullscreen client would release every such hold.
     #[test]
     fn a_commit_of_the_presented_element_releases_no_held_hint() {
@@ -5791,7 +5793,7 @@ mod tests {
         format!("{cams:?} {anchors:?}")
     }
 
-    /// INC-12 / INV-INPUT-9 (PROV-10, provisional): a validated activation of a window that may
+    /// INV-INPUT-9 (PROV-10): a validated activation of a window that may
     /// take focus is a focus grant: the focus moves, with its configures, and no camera or
     /// anchor changes.
     #[test]
@@ -5817,7 +5819,7 @@ mod tests {
         );
     }
 
-    /// INC-12 / INV-INPUT-8 + INV-INPUT-9: a window hidden by a presentation may not take focus
+    /// INV-INPUT-8 + INV-INPUT-9: a window hidden by a presentation may not take focus
     /// (A-8), so its activation asks for attention instead; focus stays; the attention ends when
     /// the window gets focus by an explicit action.
     #[test]
@@ -5844,7 +5846,7 @@ mod tests {
         assert!(c.focus().attention().is_empty(), "focused: no attention");
     }
 
-    /// INC-12: an activation of an element that is not mapped is ignored; of a destroyed one,
+    /// An activation of an element that is not mapped is ignored; of a destroyed one,
     /// refused as stale; an element that asked for attention and is destroyed leaves no trace.
     #[test]
     fn an_activation_of_an_unmapped_or_destroyed_window_changes_nothing() {
@@ -5874,7 +5876,7 @@ mod tests {
         );
     }
 
-    /// INC-12 review (activation policy): under the default `Strict` policy only a validated
+    /// Activation policy: under the default `Strict` policy only a validated
     /// request focuses; an unvalidated one (no token from the focused client) only asks for
     /// attention. `AttentionOnly` never focuses; `Permissive` focuses whatever the token. No
     /// policy moves a camera or an anchor.
@@ -5989,19 +5991,17 @@ mod tests {
         c.place_by_shell(id, moved_anchor, &mut fx).unwrap();
         assert_eq!(c.stage().anchor(id), Some(moved_anchor));
 
-        // Unmap via null buffer commit
         c.toplevel_committed(id, sized(600, 400, false)).unwrap();
         assert!(
             !c.toplevel_configure_state(id).resizing,
             "resizing cleared on unmap"
         );
 
-        // Remap the element
         c.toplevel_committed(id, sized(600, 400, false)).unwrap(); // awaiting first buffer
         c.toplevel_committed(id, sized(600, 400, true)).unwrap(); // mapped
         assert_eq!(c.stage().anchor(id), Some(moved_anchor));
 
-        // Further commit should NOT snap anchor back to start_anchor
+        // A further commit does not snap the anchor back to start_anchor.
         c.toplevel_committed(id, sized(800, 600, true)).unwrap();
         assert_eq!(
             c.stage().anchor(id),
