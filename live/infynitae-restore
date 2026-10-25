@@ -258,14 +258,14 @@ def default_launch_app(app_id, cmd_args, log_file=None):
         log_file = os.path.expanduser("~/.local/state/infynitae/restore.log")
     try:
         os.makedirs(os.path.dirname(log_file), exist_ok=True)
-        with open(log_file, "a", encoding="utf-8") as f:
-            subprocess.Popen(
-                cmd_args,
-                stdout=f,
-                stderr=f,
-                stdin=subprocess.DEVNULL,
-                start_new_session=True,
-            )
+        # the app's own output is not the restore's: it would flood restore.log
+        subprocess.Popen(
+            cmd_args,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
     except Exception as e:
         log_restore(f"Error launching {app_id} ({cmd_args}): {e}", log_file=log_file)
 
@@ -336,7 +336,13 @@ def cmd_restore(
         launch_fn(app_id, cmd_args, log_file=log_file)
 
     # 2. Poll snapshots for up to 60 s and place matching windows
-    pending_saved = [w for w in saved_windows if w.get("app_id") and w.get("anchor") is not None]
+    # only windows of apps that were launched can come back: waiting for the others would hold
+    # the camera's return until the timeout
+    pending_saved = [
+        w
+        for w in saved_windows
+        if w.get("app_id") and w.get("anchor") is not None and w["app_id"].lower() in apps
+    ]
     placed_element_ids = set()
 
     start_time = time.time()
