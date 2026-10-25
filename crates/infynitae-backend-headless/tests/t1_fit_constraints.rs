@@ -1,6 +1,6 @@
-//! INC-10 T1 (independent exit review, finding M1): pointer reconciliation after a viewport fit
-//! and a restore under each pointer-constraint state, on the production path (core + adapter +
-//! headless backend + a real client), driven by the virtual keyboard (Logo+F, Logo+Shift+F).
+//! Pointer reconciliation under finding M1: pointer reconciliation after a viewport fit and a
+//! restore under each pointer-constraint state on the production path (core + adapter + headless
+//! backend + a real client), driven by the virtual keyboard (Super+Enter).
 //!
 //! The camera action moves W under a pointer that stays where it is on the output. M10's
 //! view-change rule then sends exactly one true-position event when the pointer is on O and no
@@ -15,7 +15,7 @@
 //!
 //! The oracle is hand-derived from the x8 setup (W: 800 × 600 content, 20 px shadow, window
 //! geometry centred at Canvas (0, 0), so its root surface origin is (−420, −320); the pointer at
-//! W-local (630, 520), output A 1920 × 1080 at scale 1): Logo+F sets the camera to centre (0, 0)
+//! W-local (630, 520), output A 1920 × 1080 at scale 1): Super+Enter sets the camera to centre (0, 0)
 //! at zoom 1.8, so the pointer's surface-local position becomes ((p − 960) / 1.8 + 420,
 //! (p − 540) / 1.8 + 320); the restore brings back zoom 1 and (630, 520).
 //!
@@ -31,9 +31,8 @@ use infynitae_core::input::keys::{KEY_ENTER, KEY_LEFTMETA, KEY_LEFTSHIFT};
 use infynitae_core::pointer::{ConstraintKind, PointerState};
 use smithay::wayland::pointer_constraints::with_pointer_constraint;
 
-/// Logo+F (`shift` false) or Logo+Shift+F on the virtual keyboard.
-/// Super+Enter. `_restore` names what the press is meant to do: Super+Shift+F is gone (owner
-/// decision 2026-10-21), and at the fit the same Super+Enter restores.
+/// Super+Enter on the virtual keyboard. `_restore` names what the press is meant to do: Super+Shift+F
+/// was replaced by the owner (2026-10-21), and at the fit the same Super+Enter restores.
 fn combo(r: &mut Rig, _restore: bool) {
     let mut press = |key, pressed| {
         r.t += 1000;
@@ -228,7 +227,7 @@ fn fit_and_restore_reconcile_the_pointer_under_each_constraint() {
     }
 }
 
-/// The constraint transition the M1 fix touches: a confinement whose region no longer holds the
+/// The constraint transition under finding M1: a confinement whose region no longer holds the
 /// pointer after the fit ends with exactly one `unconfined` (INV-INPUT-5: "a pointer outside the
 /// region after a view change ends it"; no warp), then exactly one true-position event at the new
 /// position; the physical pointer does not move.
@@ -256,7 +255,7 @@ fn a_fit_that_ends_the_confinement_ends_it_once_then_reconciles_the_pointer() {
 }
 
 /// While a pan owns the pointer the bindings do not resolve: under a confinement, with one fit
-/// already recorded (so a stray restore would show), Logo+F and Logo+Shift+F during the pan change
+/// already recorded (so a stray restore would show), Super+Enter and Super+Shift+Enter during the pan change
 /// neither the zoom nor the history and deliver no pointer event; the confinement stays.
 #[test]
 fn no_fit_reconciliation_while_a_pan_owns_the_pointer() {

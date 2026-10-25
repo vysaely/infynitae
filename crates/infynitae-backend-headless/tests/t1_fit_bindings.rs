@@ -1,14 +1,15 @@
-//! INC-10 T1 (independent exit review, finding L5; proposed C12.F17): which key presses fit or restore, and
-//! on which camera, on the production path with a real client and the virtual keyboard.
+//! Production path tests for fit and restore key presses (L5, C12.F17), and
+//! on which camera, with a real client and the virtual keyboard.
 //!
-//! - Logo+F fits the mapped element under the pointer; Logo+Shift+F restores the newest entry.
-//! - The modifiers match exactly: Logo+Ctrl+F, Logo+Alt+F (and their Shift forms) are not
-//!   compositor bindings, so F reaches the focused client (M12) and nothing changes.
-//! - No element under the pointer: Logo+F is a no-op — no camera or history change, no pointer
-//!   event — and F is still the compositor's (a resolved binding is consumed, M12).
+//! - Super+Enter fits the mapped element under the pointer; pressed again on that fit, it restores
+//!   the camera before it (a stateless toggle: no fit mode, INV-CAMERA-5).
+//! - The modifiers match exactly: Super+Ctrl+Enter, Super+Alt+Enter (and their Shift forms) are not
+//!   compositor bindings, so Enter reaches the focused client (M12) and nothing changes.
+//! - No element under the pointer: Super+Enter is a no-op — no camera or history change, no pointer
+//!   event — and Enter is still the compositor's (a resolved binding is consumed, M12).
 //! - During a protocol-fullscreen presentation on the pointer's output (C12.F17 Q1, owner decision
 //!   2026-10-19: B, scope 2): fit and restore are refused — no camera or history change, no
-//!   pointer event — and the binding is still consumed (M12, F is not forwarded). The camera is
+//!   pointer event — and the binding is still consumed (M12, Enter is not forwarded). The camera is
 //!   the one from before the presentation when it ends.
 
 mod common;
@@ -22,7 +23,7 @@ use infynitae_core::navigation::CameraValue;
 const KEY_LEFTCTRL: u32 = 29;
 const KEY_LEFTALT: u32 = 56;
 
-/// Holds `mods` (in order), taps F, releases `mods` (in reverse).
+/// Holds `mods` (in order), taps Enter, releases `mods` (in reverse).
 fn chord(r: &mut Rig, mods: &[u32]) {
     let mut press = |key, pressed| {
         r.t += 1000;
@@ -95,10 +96,9 @@ fn focus_w(r: &mut Rig) {
     r.frame();
 }
 
-/// Logo+Ctrl+F, Logo+Alt+F, Logo+Ctrl+Shift+F and Logo+Alt+Shift+F resolve to no binding: F is
-/// forwarded to the focused client, and camera, history and the pointer are untouched — also with
-/// a history entry present, so a stray restore would show. Plain Logo+F and Logo+Shift+F still
-/// work afterwards.
+/// Super+Ctrl+Enter, Super+Alt+Enter, Super+Ctrl+Shift+Enter and Super+Alt+Shift+Enter resolve to no
+/// binding: Enter is forwarded to the focused client, and camera, history and the pointer are untouched —
+/// also with a history entry present, so a stray restore would show. Plain Super+Enter still works afterwards.
 #[test]
 fn extra_ctrl_or_alt_modifiers_trigger_neither_binding() {
     let mut r = Rig::x8();
@@ -135,8 +135,8 @@ fn extra_ctrl_or_alt_modifiers_trigger_neither_binding() {
     assert_eq!(f_presses(&r), f, "a binding's F reached the client");
 }
 
-/// With no element under the pointer, Logo+F changes nothing (camera, history, wire) at an empty
-/// history, with an entry, and at capacity; F is consumed as a resolved binding.
+/// With no element under the pointer, Super+Enter changes nothing (camera, history, wire) at an empty
+/// history, with an entry, and at capacity; Enter is consumed as a resolved binding.
 #[test]
 fn logo_f_with_no_element_under_the_pointer_is_a_no_op() {
     let mut r = Rig::x8();
@@ -177,8 +177,8 @@ fn logo_f_with_no_element_under_the_pointer_is_a_no_op() {
     }
 }
 
-/// During a pan, Logo+F and Logo+Shift+F (Logo already held by the pan) resolve to nothing: the
-/// camera follows the pan alone and the history is untouched, and F is forwarded to the focused
+/// During a pan, Super+Enter (Super already held by the pan) resolves to nothing: the camera
+/// follows the pan alone and the history is untouched, and Enter is forwarded to the focused
 /// client (M12; C12.F17 Q4, owner decision 2026-10-19: forward, not consume).
 #[test]
 fn fit_and_restore_are_inert_during_a_pan() {
@@ -200,9 +200,9 @@ fn fit_and_restore_are_inert_during_a_pan() {
 }
 
 /// C12.F17 Q1 B: with a fit recorded before the presentation (so a stray restore would show),
-/// Logo+F and Logo+Shift+F while O presents W change neither camera A nor its history, deliver no
-/// pointer event and do not forward F; the presented frame is unchanged. Once the presentation
-/// ends, Logo+Shift+F restores as usual.
+/// Super+Enter while O presents W changes neither camera A nor its history, delivers no pointer
+/// event and does not forward Enter; the presented frame is unchanged. Once the presentation ends,
+/// Super+Enter restores as usual.
 #[test]
 fn fit_and_restore_are_refused_while_the_output_presents() {
     let mut r = Rig::new(Lockstep::new(Some(output((1920, 1080), 120))));
@@ -275,7 +275,7 @@ fn fit_and_restore_are_refused_while_the_output_presents() {
 }
 
 /// C12.F17 Q1 B with the §8.1 evidence client: a client that obeys the fullscreen configure (it
-/// redraws at the output's 1920 × 1080) is not fitted — Logo+F during the presentation is refused,
+/// redraws at the output's 1920 × 1080) is not fitted — Super+Enter during the presentation is refused,
 /// so after `unset_fullscreen` and the redraw at its saved 800 × 600 camera A is unchanged and W
 /// is shown where it was before the presentation (under option A it was framed at its fullscreen
 /// extent and then sat at the view's top-left).

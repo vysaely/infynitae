@@ -1,10 +1,9 @@
-//! OB-53, INC-10 part ("the viewport-fit feedback loop of EC-22 (INV-CAMERA-5)"): an adversarial
-//! T1 client under a viewport fit. Pass criterion of OB-53: "hint changes ≤ (rungs crossed + 1 +
-//! one P7 per non-client stimulus) per epoch; the run ends quiescent; no camera mutation from
-//! client geometry (INV-CAMERA-1); re-fit rate ≤ commit rate (EC-22)".
+//! OB-53: an adversarial client under a viewport fit (EC-22, INV-CAMERA-5). Pass criterion of OB-53:
+//! "hint changes ≤ (rungs crossed + 1 + one P7 per non-client stimulus) per epoch; the run ends quiescent;
+//! no camera mutation from client geometry (INV-CAMERA-1); re-fit rate ≤ commit rate (EC-22)".
 //!
 //! Setup: one 1920 × 1080 output at scale 1, device bound D_max = 2000 px; W (800 × 600, with a
-//! fractional-scale object and a viewport) under the pointer. Logo+F fits W: zoom 1.8, so W's
+//! fractional-scale object and a viewport) under the pointer. Super+Enter fits W: zoom 1.8, so W's
 //! requirement ρ rises to 1.8 and its hint follows once (an atomic camera action is a one-step
 //! epoch, INV-SCALE-3). The adversary then answers every hint: at a hint ≥ 1.66 it grows to
 //! 1300 px wide (1300 · h > D_max: P7 must lower the hint at once), at a lower hint it shrinks
