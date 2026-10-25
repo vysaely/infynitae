@@ -1,5 +1,5 @@
-//! INC-8 T1: the off-screen frame policy (M16; INV-FRAME-1, INV-FRAME-3, INV-FRAME-4,
-//! INV-IDLE-1; OB-16; TST-03 SC3 and TST-06 on the production path).
+//! Production path tests for the off-screen frame policy (M16; INV-FRAME-1, INV-FRAME-3,
+//! INV-FRAME-4, INV-IDLE-1; OB-16; TST-03 SC3 and TST-06).
 //!
 //! The production Core, adapter and headless backend with a recording client. Time is virtual:
 //! the lockstep runs vblanks and the fallback timer in time order and ends every pump with the
@@ -169,7 +169,7 @@ fn an_observed_client_is_clocked_by_vblank_and_arms_no_timer() {
     assert_eq!(f.deadline(), None);
 }
 
-/// OB-16 (CR-7), INV-FRAME-3 (a): input delivered to a focused, unobserved client with a
+/// OB-16, INV-FRAME-3 (a): input delivered to a focused, unobserved client with a
 /// pending callback completes it first — in the same dispatch, before the key event, and once.
 #[test]
 fn a_key_kicks_a_focused_unobserved_client_before_the_key_arrives() {
@@ -221,7 +221,7 @@ fn a_configure_kicks_before_it_is_sent() {
     );
 }
 
-/// AUD-24: the fallback period is measured from the last completion, kick included, so a
+/// The fallback period (AUD-24) is measured from the last completion, kick included, so a
 /// fallback never follows a kick within P.
 #[test]
 fn a_kick_restarts_the_fallback_period() {
@@ -339,7 +339,7 @@ fn a_window_that_stopped_drawing_arms_no_timer_when_it_leaves() {
     assert_eq!(f.deadline(), None, "no pending callback: no timer");
 }
 
-/// INV-FRAME-5, TST-06 (INC-8 part): the presentation feedback of an unobserved commit stays
+/// INV-FRAME-5, TST-06: the presentation feedback of an unobserved commit stays
 /// pending through the kick and the fallback; a newer commit discards it; the latest is
 /// `presented` once W is shown again, synchronised to its clock output.
 #[test]
@@ -424,7 +424,7 @@ fn a_pointer_leave_kicks_a_window_hidden_after_the_pointer_entered_it() {
     );
 }
 
-/// INC-8 review r2. A camera-pan press dismisses popup grabs (OB-4); with no popup grab no
+/// A camera-pan press dismisses popup grabs (OB-4); with no popup grab no
 /// `popup_done` is sent, so nothing reaches W and nothing may complete its withheld callback
 /// before the fallback (INV-FRAME-1: a kick only precedes an event that reaches the client).
 /// Super is pressed first (it reaches W, K3, and kicks it), then W asks for a frame, then the
@@ -445,7 +445,7 @@ fn a_pan_press_without_a_popup_grab_kicks_nothing() {
     f.r.button(BTN_MIDDLE, false, logo());
 }
 
-/// INV-FRAME-3 (a), review r2: `popup_done` is preceded by the withheld callback of the client
+/// INV-FRAME-3 (a): `popup_done` is preceded by the withheld callback of the client
 /// that receives it. W, off A and focused, takes a popup grab (with the serial of a key it was
 /// sent); with Super already held, a pan press dismisses the grab: W's callback completes, then
 /// `popup_done` arrives.
@@ -494,8 +494,8 @@ fn a_popup_done_kicks_before_it_is_sent() {
     f.r.button(BTN_MIDDLE, false, logo());
 }
 
-/// Surface destruction, review r2: a destroyed window with a withheld callback disarms the
-/// fallback timer (INV-IDLE-1) and nothing is completed for it afterwards.
+/// Surface destruction (INV-IDLE-1): a destroyed window with a withheld callback disarms the
+/// fallback timer and nothing is completed for it afterwards.
 #[test]
 fn a_destroyed_window_disarms_the_fallback_timer() {
     let mut f = F::off_screen();
@@ -512,7 +512,7 @@ fn a_destroyed_window_disarms_the_fallback_timer() {
     assert_eq!(f.frames_w().len(), n);
 }
 
-/// Repeated visibility transitions, review r2: W leaves and re-enters A again and again while
+/// Repeated visibility transitions: W leaves and re-enters A again and again while
 /// it keeps asking for frames. Every request completes exactly once (INV-FRAME-1) and none
 /// waits longer than P plus one vblank (no starvation, INV-FRAME-3/4).
 #[test]
@@ -550,7 +550,7 @@ fn repeated_visibility_transitions_neither_starve_nor_duplicate() {
     }
 }
 
-/// Multiple outputs (INC-8 ratification review): another output's vblanks never complete a
+/// Multiple outputs: another output's vblanks never complete a
 /// window that output does not observe. W is observed by A only (B, 144 Hz, looks far away);
 /// A is disconnected: W is unobserved while B keeps ticking; W's callback is withheld through
 /// B's vblanks and completes once, by the fallback, P after its last completion.

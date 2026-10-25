@@ -121,7 +121,7 @@ where
     r.ls.registry().bind(name, 1, &qh, ())
 }
 
-/// A session on the output: (session, its log lines).
+/// Creates an image copy capture session on the first output.
 fn session(r: &mut Rig) -> ExtImageCopyCaptureSessionV1 {
     r.ls.state.screencopy.enable_capture();
     let sources: ExtOutputImageCaptureSourceManagerV1 =
@@ -227,7 +227,7 @@ fn removing_output_fails_pending_frames() {
 #[test]
 fn capture_fails_on_unsupported_backend() {
     let mut r = Rig::new(common::Lockstep::new(Some(a_1080())));
-    // Without enable_capture (simulate headless/winit which never serve it)
+    // Without enable_capture, simulating headless/winit which never serve it.
     let sources: ExtOutputImageCaptureSourceManagerV1 =
         bind(&mut r, "ext_output_image_capture_source_manager_v1");
     let manager: ExtImageCopyCaptureManagerV1 = bind(&mut r, "ext_image_copy_capture_manager_v1");

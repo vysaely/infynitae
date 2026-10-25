@@ -1,5 +1,5 @@
-//! INC-7 slice 2 (experimental), M9 on the production path: protocol fullscreen as a real client
-//! sees it and as the output shows it.
+//! Production path tests for protocol fullscreen (M9): as a real client sees it and as the
+//! output shows it.
 //!
 //! Each test drives a Wayland client over the protocol and checks three things together: the
 //! configures the client received (`probe.toplevel_configures`), the enter/leave it saw
@@ -854,7 +854,7 @@ fn a_fullscreen_windows_frames_under_a_still_pointer_send_no_motion() {
     );
 }
 
-/// Review finding 1: suppressing a presentation reconciles visibility and membership (INV-RENDER-3).
+/// Suppressing a presentation reconciles visibility and membership (INV-RENDER-3).
 /// Fullscreen W on O, a window X in O's camera view; Super+Tab to X makes X entered on O;
 /// the reverse (unsuppress) leaves X.
 #[test]
