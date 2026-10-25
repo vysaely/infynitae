@@ -513,6 +513,8 @@ pub fn run_headless_with(
         let now = infynitae_wayland::presentation_clock_now();
         session.set_fallback_deadline(state.frame_fallback(now), now);
         session.set_idle_deadline(state.idle_notify_check(now), now);
+        let anim_due = state.cursor_animation_due(now);
+        session.set_cursor_animation_due(anim_due);
         session.flush();
     }
 

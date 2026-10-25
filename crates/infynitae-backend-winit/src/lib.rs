@@ -402,6 +402,8 @@ pub fn run_nested_with(
         data.session.set_fallback_deadline(deadline, now);
         let idle_deadline = data.state.idle_notify_check(now);
         data.session.set_idle_deadline(idle_deadline, now);
+        let anim_due = data.state.cursor_animation_due(now);
+        data.session.set_cursor_animation_due(anim_due);
         data.session.flush();
     }
 
