@@ -916,7 +916,9 @@ impl Core {
         };
         r.awaiting = false;
         if r.released {
-            self.resize = None;
+            if (size.w, size.h) == r.sent {
+                self.resize = None;
+            }
         } else if r.target != r.sent {
             let target = r.target;
             self.resize_to(target, out);
@@ -5843,5 +5845,49 @@ mod tests {
         assert_eq!(c.focus().target(), Some(w), "any request under Permissive");
         assert!(c.focus().attention().is_empty());
         assert_eq!(spatial_state(&c), before);
+    }
+
+    /// Super+right drag: release while an in-flight configure is awaited keeps the track until
+    /// the commit that answers the last configure sent, so intermediate commits do not drop the
+    /// track and move the fixed corner.
+    #[test]
+    fn resize_track_kept_until_commit_answering_last_configure() {
+        let mut c = centred((1280, 800), 120, None);
+        let (id, start_a) = placed(&mut c, 600, 400);
+        let mut fx = Vec::new();
+
+        c.begin_resize(id, true, true);
+        c.resize_to((800, 600), &mut fx);
+        assert_eq!(
+            fx,
+            vec![Effect::ToplevelConfigureSize {
+                element: id,
+                size: LocalSize { w: 800, h: 600 },
+            }]
+        );
+        fx.clear();
+
+        c.resize_to((700, 500), &mut fx);
+        assert!(fx.is_empty(), "motion while awaiting configure is queued");
+
+        c.end_resize(&mut fx);
+        assert_eq!(
+            fx,
+            vec![Effect::ToplevelConfigureSize {
+                element: id,
+                size: LocalSize { w: 700, h: 500 },
+            }]
+        );
+        fx.clear();
+
+        c.toplevel_committed(id, sized(800, 600, true)).unwrap();
+        let a800 = c.stage().anchor(id).unwrap();
+        assert_eq!(a800.x + 800, start_a.x + 600);
+        assert_eq!(a800.y + 600, start_a.y + 400);
+
+        c.toplevel_committed(id, sized(700, 500, true)).unwrap();
+        let a700 = c.stage().anchor(id).unwrap();
+        assert_eq!(a700.x + 700, start_a.x + 600);
+        assert_eq!(a700.y + 500, start_a.y + 400);
     }
 }
