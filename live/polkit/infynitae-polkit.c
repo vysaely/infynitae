@@ -26,6 +26,9 @@ typedef struct {
     InfynitaeAgentListener *listener;
     GTask *task;
     PolkitAgentSession *session;
+    /* kept for a new session after a failed attempt (a completed session is finished) */
+    PolkitIdentity *identity;
+    gchar *cookie;
     GCancellable *cancellable;
     gulong cancellable_handler_id;
 
@@ -49,9 +52,12 @@ static void free_auth_dialog(AuthDialogData *data) {
         data->window = NULL;
     }
     if (data->session) {
+        g_signal_handlers_disconnect_by_data(data->session, data);
         g_object_unref(data->session);
         data->session = NULL;
     }
+    g_clear_object(&data->identity);
+    g_clear_pointer(&data->cookie, g_free);
     if (data->task) {
         g_object_unref(data->task);
         data->task = NULL;
@@ -133,6 +139,24 @@ static void on_session_show_info(PolkitAgentSession *session,
 
 static void on_session_completed(PolkitAgentSession *session,
                                  gboolean gained_authorization,
+                                 gpointer user_data);
+
+/* A new polkit session for the identity: one per attempt. Its "request" re-enables the entry. */
+static void start_session(AuthDialogData *data) {
+    if (data->session) {
+        g_signal_handlers_disconnect_by_data(data->session, data);
+        g_object_unref(data->session);
+    }
+    data->session = polkit_agent_session_new(data->identity, data->cookie);
+    g_signal_connect(data->session, "request", G_CALLBACK(on_session_request), data);
+    g_signal_connect(data->session, "show-error", G_CALLBACK(on_session_show_error), data);
+    g_signal_connect(data->session, "show-info", G_CALLBACK(on_session_show_info), data);
+    g_signal_connect(data->session, "completed", G_CALLBACK(on_session_completed), data);
+    polkit_agent_session_initiate(data->session);
+}
+
+static void on_session_completed(PolkitAgentSession *session,
+                                 gboolean gained_authorization,
                                  gpointer user_data) {
     (void)session;
     AuthDialogData *data = (AuthDialogData *)user_data;
@@ -150,16 +174,19 @@ static void on_session_completed(PolkitAgentSession *session,
         }
         if (data->entry) {
             gtk_entry_set_text(GTK_ENTRY(data->entry), "");
-            gtk_widget_set_sensitive(data->entry, TRUE);
-            gtk_widget_set_sensitive(data->btn_auth, TRUE);
-            gtk_widget_grab_focus(data->entry);
         }
+        /* the finished session takes no more responses: a new one asks again ("request") */
+        start_session(data);
     }
 }
 
 static void on_cancellable_cancelled(GCancellable *cancellable, gpointer user_data) {
     (void)cancellable;
-    on_cancel_clicked(NULL, user_data);
+    AuthDialogData *data = (AuthDialogData *)user_data;
+    /* g_cancellable_disconnect from inside this handler deadlocks (GLib docs); a cancellable
+     * is cancelled once, so the handler is left connected */
+    data->cancellable_handler_id = 0;
+    on_cancel_clicked(NULL, data);
 }
 
 static void apply_css(void) {
@@ -258,12 +285,15 @@ static void infynitae_agent_listener_initiate_authentication(
         return;
     }
 
-    data->session = polkit_agent_session_new(identity, cookie);
-    g_signal_connect(data->session, "request", G_CALLBACK(on_session_request), data);
-    g_signal_connect(data->session, "show-error", G_CALLBACK(on_session_show_error), data);
-    g_signal_connect(data->session, "show-info", G_CALLBACK(on_session_show_info), data);
-    g_signal_connect(data->session, "completed", G_CALLBACK(on_session_completed), data);
+    data->identity = g_object_ref(identity);
+    data->cookie = g_strdup(cookie);
 
+    if (cancellable && g_cancellable_is_cancelled(cancellable)) {
+        /* g_cancellable_connect would run the handler now, freeing data under us */
+        g_task_return_new_error(data->task, POLKIT_ERROR, POLKIT_ERROR_CANCELLED, "Authentication cancelled");
+        free_auth_dialog(data);
+        return;
+    }
     if (cancellable) {
         data->cancellable_handler_id = g_cancellable_connect(
             cancellable,
@@ -337,7 +367,7 @@ static void infynitae_agent_listener_initiate_authentication(
     gtk_box_pack_start(GTK_BOX(btn_box), data->btn_auth, FALSE, FALSE, 0);
 
     gtk_widget_show_all(data->window);
-    polkit_agent_session_initiate(data->session);
+    start_session(data);
 }
 
 static gboolean infynitae_agent_listener_initiate_authentication_finish(
