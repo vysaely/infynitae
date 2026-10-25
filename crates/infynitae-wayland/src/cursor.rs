@@ -41,11 +41,102 @@ impl Default for Arrow {
 /// An image decoded from an Xcursor file, cached as a Smithay memory render buffer.
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedImage {
+    #[allow(dead_code)]
+    pub(crate) id: Id,
     pub(crate) buffer: MemoryRenderBuffer,
     pub(crate) width: i32,
     pub(crate) height: i32,
     pub(crate) xhot: i32,
     pub(crate) yhot: i32,
+}
+
+/// A single frame of an Xcursor cursor.
+#[derive(Debug, Clone)]
+pub(crate) struct CursorFrame {
+    pub(crate) image: LoadedImage,
+    pub(crate) delay_ms: u32,
+}
+
+/// A loaded cursor containing one or more frames (animated if > 1 frame).
+#[derive(Debug, Clone)]
+pub(crate) struct LoadedCursor {
+    pub(crate) frames: Vec<CursorFrame>,
+}
+
+impl std::ops::Deref for LoadedCursor {
+    type Target = LoadedImage;
+
+    fn deref(&self) -> &Self::Target {
+        &self.frames[0].image
+    }
+}
+
+impl LoadedCursor {
+    pub(crate) fn new(frames: Vec<CursorFrame>) -> Self {
+        assert!(
+            !frames.is_empty(),
+            "LoadedCursor must have at least one frame"
+        );
+        LoadedCursor { frames }
+    }
+
+    pub(crate) fn is_animated(&self) -> bool {
+        self.frames.len() > 1
+    }
+
+    pub(crate) fn total_delay_ms(&self) -> u64 {
+        self.frames.iter().map(|f| f.delay_ms as u64).sum()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn frames(&self) -> &[CursorFrame] {
+        &self.frames
+    }
+
+    pub(crate) fn frame_at(&self, elapsed: std::time::Duration) -> Option<&LoadedImage> {
+        if self.frames.is_empty() {
+            return None;
+        }
+        if !self.is_animated() {
+            return Some(&self.frames[0].image);
+        }
+        let total = self.total_delay_ms();
+        if total == 0 {
+            return Some(&self.frames[0].image);
+        }
+        let t = (elapsed.as_millis() as u64) % total;
+        let mut accumulated = 0u64;
+        for frame in &self.frames {
+            accumulated += frame.delay_ms as u64;
+            if t < accumulated {
+                return Some(&frame.image);
+            }
+        }
+        Some(&self.frames.last().unwrap().image)
+    }
+
+    pub(crate) fn animation_due(
+        &self,
+        elapsed: std::time::Duration,
+    ) -> Option<std::time::Duration> {
+        if !self.is_animated() {
+            return None;
+        }
+        let total = self.total_delay_ms();
+        if total == 0 {
+            return None;
+        }
+        let t = (elapsed.as_millis() as u64) % total;
+        let mut accumulated = 0u64;
+        for frame in &self.frames {
+            accumulated += frame.delay_ms as u64;
+            if t < accumulated {
+                let remaining_ms = accumulated - t;
+                return Some(std::time::Duration::from_millis(remaining_ms));
+            }
+        }
+        None
+    }
 }
 
 /// Selects the image closest to `target_size` in nominal or actual size.
@@ -219,7 +310,7 @@ pub(crate) struct CursorThemeManager {
     theme_name: String,
     size: u32,
     search_paths: Vec<PathBuf>,
-    cache: HashMap<(String, u32), Option<LoadedImage>>,
+    cache: HashMap<(String, u32), Option<LoadedCursor>>,
 }
 
 impl CursorThemeManager {
@@ -244,7 +335,7 @@ impl CursorThemeManager {
         &self.theme_name
     }
 
-    pub(crate) fn get_or_load(&mut self, name: &str, target_size: u32) -> Option<LoadedImage> {
+    pub(crate) fn get_or_load(&mut self, name: &str, target_size: u32) -> Option<LoadedCursor> {
         let key = (name.to_string(), target_size);
         if let Some(cached) = self.cache.get(&key) {
             return cached.clone();
@@ -255,48 +346,48 @@ impl CursorThemeManager {
         loaded
     }
 
-    fn load_uncached(&self, name: &str, target_size: u32) -> Option<LoadedImage> {
+    fn load_uncached(&self, name: &str, target_size: u32) -> Option<LoadedCursor> {
         // 1. Try requested name
-        if let Some(img) = self.try_load_name(name, target_size) {
-            return Some(img);
+        if let Some(cur) = self.try_load_name(name, target_size) {
+            return Some(cur);
         }
 
         // 2. Try aliases for requested name
         for &alias in cursor_aliases(name) {
-            if let Some(img) = self.try_load_name(alias, target_size) {
-                return Some(img);
+            if let Some(cur) = self.try_load_name(alias, target_size) {
+                return Some(cur);
             }
         }
 
         // 3. Fall back to "default", then "left_ptr"
         if name != "default" && name != "left_ptr" {
-            if let Some(img) = self.try_load_name("default", target_size) {
-                return Some(img);
+            if let Some(cur) = self.try_load_name("default", target_size) {
+                return Some(cur);
             }
-            if let Some(img) = self.try_load_name("left_ptr", target_size) {
-                return Some(img);
+            if let Some(cur) = self.try_load_name("left_ptr", target_size) {
+                return Some(cur);
             }
         }
 
         None
     }
 
-    fn try_load_name(&self, icon_name: &str, target_size: u32) -> Option<LoadedImage> {
+    fn try_load_name(&self, icon_name: &str, target_size: u32) -> Option<LoadedCursor> {
         let mut visited = HashSet::new();
 
         // 1. Check in our search paths for theme_name
         if let Some(path) = self.find_icon_in_theme(&self.theme_name, icon_name, &mut visited)
-            && let Some(img) = Self::load_file(&path, target_size)
+            && let Some(cur) = Self::load_file(&path, target_size)
         {
-            return Some(img);
+            return Some(cur);
         }
 
         // 2. Try default theme fallback if primary is different
         if self.theme_name != "default"
             && let Some(path) = self.find_icon_in_theme("default", icon_name, &mut visited)
-            && let Some(img) = Self::load_file(&path, target_size)
+            && let Some(cur) = Self::load_file(&path, target_size)
         {
-            return Some(img);
+            return Some(cur);
         }
 
         None
@@ -341,32 +432,75 @@ impl CursorThemeManager {
         None
     }
 
-    fn load_file(path: &Path, target_size: u32) -> Option<LoadedImage> {
+    fn load_file(path: &Path, target_size: u32) -> Option<LoadedCursor> {
         let data = std::fs::read(path).ok()?;
         let images = xcursor::parser::parse_xcursor(&data)?;
-        let best = best_cursor_image(&images, target_size)?;
+        Self::load_from_parsed_images(&images, target_size)
+    }
 
-        Some(LoadedImage {
-            buffer: MemoryRenderBuffer::from_slice(
-                &best.pixels_rgba,
-                Fourcc::Argb8888,
-                (best.width as i32, best.height as i32),
-                1,
-                Transform::Normal,
-                None,
-            ),
-            width: best.width as i32,
-            height: best.height as i32,
-            xhot: best.xhot as i32,
-            yhot: best.yhot as i32,
-        })
+    pub(crate) fn load_from_parsed_images(
+        images: &[xcursor::parser::Image],
+        target_size: u32,
+    ) -> Option<LoadedCursor> {
+        let best = best_cursor_image(images, target_size)?;
+        let nominal_size = best.size;
+        let frames: Vec<CursorFrame> = images
+            .iter()
+            .filter(|img| {
+                if nominal_size > 0 {
+                    img.size == nominal_size
+                } else {
+                    img.size == 0 && img.width == best.width
+                }
+            })
+            .map(|img| {
+                let delay_ms = if img.delay == 0 { 50 } else { img.delay };
+                CursorFrame {
+                    image: LoadedImage {
+                        id: Id::new(),
+                        buffer: MemoryRenderBuffer::from_slice(
+                            &img.pixels_rgba,
+                            Fourcc::Argb8888,
+                            (img.width as i32, img.height as i32),
+                            1,
+                            Transform::Normal,
+                            None,
+                        ),
+                        width: img.width as i32,
+                        height: img.height as i32,
+                        xhot: img.xhot as i32,
+                        yhot: img.yhot as i32,
+                    },
+                    delay_ms,
+                }
+            })
+            .collect();
+
+        if frames.is_empty() {
+            None
+        } else {
+            Some(LoadedCursor::new(frames))
+        }
     }
 }
 
 impl WaylandState {
     /// The client asked for a cursor (`SeatHandler::cursor_image`).
     pub(crate) fn set_cursor_status(&mut self, status: CursorImageStatus) {
-        self.cursor = status;
+        if self.cursor != status {
+            self.cursor = status;
+            self.cursor_epoch = self
+                .current_time
+                .unwrap_or_else(crate::presentation_clock_now);
+        }
+    }
+
+    pub fn set_cursor_epoch(&mut self, epoch: std::time::Duration) {
+        self.cursor_epoch = epoch;
+    }
+
+    pub fn cursor_epoch(&self) -> std::time::Duration {
+        self.cursor_epoch
     }
 
     /// The cursor the focused client asked for: its surface, a named shape, or hidden.
@@ -406,6 +540,9 @@ impl WaylandState {
         cursor_size: u32,
         search_paths: Vec<PathBuf>,
     ) {
+        self.cursor_epoch = self
+            .current_time
+            .unwrap_or_else(crate::presentation_clock_now);
         let mut guard = self.cursor_theme.lock().unwrap_or_else(|e| e.into_inner());
         let exists = theme_exists_in(theme_name, &search_paths);
         let default_exists = theme_exists_in("default", &search_paths);
@@ -447,11 +584,49 @@ impl WaylandState {
     }
 
     pub(crate) fn cursor_image(&self, name: &str, target_size: u32) -> Option<LoadedImage> {
-        self.cursor_theme
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .as_mut()
-            .and_then(|m| m.get_or_load(name, target_size))
+        let now = self
+            .current_time
+            .unwrap_or_else(crate::presentation_clock_now);
+        self.cursor_image_at(name, target_size, now)
+    }
+
+    pub(crate) fn cursor_image_at(
+        &self,
+        name: &str,
+        target_size: u32,
+        now: std::time::Duration,
+    ) -> Option<LoadedImage> {
+        let mut guard = self.cursor_theme.lock().unwrap_or_else(|e| e.into_inner());
+        let cursor = guard.as_mut()?.get_or_load(name, target_size)?;
+        let elapsed = now.saturating_sub(self.cursor_epoch);
+        cursor.frame_at(elapsed).cloned()
+    }
+
+    /// Time until the next animation frame change for the current named cursor, or `None`
+    /// when the current cursor is not animated, hidden, or a client surface.
+    pub fn cursor_animation_due(&self, now: std::time::Duration) -> Option<std::time::Duration> {
+        match &self.cursor {
+            CursorImageStatus::Hidden => return None,
+            CursorImageStatus::Named(icon) if icon.name() == "none" => return None,
+            CursorImageStatus::Surface(_) => return None,
+            _ => {}
+        }
+        let icon_name = match &self.cursor {
+            CursorImageStatus::Named(icon) => icon.name(),
+            _ => "default",
+        };
+        let scale = match self.core.pointer() {
+            infynitae_core::pointer::PointerState::Located { output, .. } => {
+                self.core.output(output).map(|m| m.scale).unwrap_or(1.0)
+            }
+            _ => 1.0,
+        };
+        let target_size = (f64::from(self.cursor_size()) * scale).round().max(1.0) as u32;
+        let mut guard = self.cursor_theme.lock().unwrap_or_else(|e| e.into_inner());
+        let mgr = guard.as_mut()?;
+        let cursor = mgr.get_or_load(icon_name, target_size)?;
+        let elapsed = now.saturating_sub(self.cursor_epoch);
+        cursor.animation_due(elapsed)
     }
 
     /// The frame callbacks of the cursor surface complete with the output's frame (an animated
@@ -476,7 +651,7 @@ impl WaylandState {
 }
 
 #[doc(hidden)]
-pub type TestCursorImageDesc<'a> = (u32, u32, u32, (u32, u32), &'a [u8]);
+pub type TestCursorImageDesc<'a> = (u32, u32, u32, (u32, u32), u32, &'a [u8]);
 
 #[doc(hidden)]
 pub fn make_xcursor_file(images: &[TestCursorImageDesc<'_>]) -> Vec<u8> {
@@ -514,8 +689,8 @@ pub fn make_xcursor_file(images: &[TestCursorImageDesc<'_>]) -> Vec<u8> {
         out.extend_from_slice(&img.2.to_le_bytes());
         out.extend_from_slice(&img.3.0.to_le_bytes());
         out.extend_from_slice(&img.3.1.to_le_bytes());
-        out.extend_from_slice(&0u32.to_le_bytes());
-        out.extend_from_slice(img.4);
+        out.extend_from_slice(&img.4.to_le_bytes());
+        out.extend_from_slice(img.5);
     }
 
     out
@@ -558,8 +733,8 @@ mod tests {
         let img24_pix = vec![0x11; 24 * 24 * 4];
         let img48_pix = vec![0x22; 48 * 48 * 4];
         let data = make_xcursor_file(&[
-            (24, 24, 24, (2, 3), &img24_pix),
-            (48, 48, 48, (4, 6), &img48_pix),
+            (24, 24, 24, (2, 3), 0, &img24_pix),
+            (48, 48, 48, (4, 6), 0, &img48_pix),
         ]);
         let parsed = xcursor::parser::parse_xcursor(&data).expect("valid xcursor");
         assert_eq!(parsed.len(), 2);
@@ -598,7 +773,7 @@ mod tests {
 
         // Provide "left_ptr" in the theme
         let pix = vec![0xAA; 16 * 16 * 4];
-        let cur_bytes = make_xcursor_file(&[(16, 16, 16, (1, 1), &pix)]);
+        let cur_bytes = make_xcursor_file(&[(16, 16, 16, (1, 1), 0, &pix)]);
         std::fs::write(cursors_dir.join("left_ptr"), cur_bytes).expect("write left_ptr");
 
         let search_paths = vec![tmp.path().to_path_buf()];
@@ -641,7 +816,7 @@ mod tests {
         let pix = vec![0xBB; 24 * 24 * 4];
         std::fs::write(
             parent_cursors.join("hand2"),
-            make_xcursor_file(&[(24, 24, 24, (3, 4), &pix)]),
+            make_xcursor_file(&[(24, 24, 24, (3, 4), 0, &pix)]),
         )
         .expect("write hand2");
 
@@ -672,7 +847,7 @@ mod tests {
         let pix = vec![0xCC; 24 * 24 * 4];
         std::fs::write(
             parent.join("cursors").join("left_ptr"),
-            make_xcursor_file(&[(24, 24, 24, (5, 6), &pix)]),
+            make_xcursor_file(&[(24, 24, 24, (5, 6), 0, &pix)]),
         )
         .expect("write left_ptr");
         let child = tmp.path().join("child");
@@ -698,5 +873,286 @@ mod tests {
         assert!(!theme_exists_in("nonexistent", &search_paths));
         let mut mgr = CursorThemeManager::with_search_paths("nonexistent", 24, search_paths);
         assert!(mgr.get_or_load("default", 24).is_none());
+    }
+
+    #[test]
+    fn animated_cursor_frames_kept_in_order_and_wraparound() {
+        let pix0 = vec![0x11; 24 * 24 * 4];
+        let pix1 = vec![0x22; 24 * 24 * 4];
+        let pix2 = vec![0x33; 24 * 24 * 4];
+        // 3 frames with different delays: 100ms, 200ms, 300ms
+        let data = make_xcursor_file(&[
+            (24, 24, 24, (1, 1), 100u32, pix0.as_slice()),
+            (24, 24, 24, (2, 2), 200u32, pix1.as_slice()),
+            (24, 24, 24, (3, 3), 300u32, pix2.as_slice()),
+        ]);
+        let parsed = xcursor::parser::parse_xcursor(&data).expect("valid xcursor");
+        assert_eq!(parsed.len(), 3);
+
+        let cur = CursorThemeManager::load_from_parsed_images(&parsed, 24).expect("loaded cursor");
+        assert!(cur.is_animated());
+        assert_eq!(cur.frames().len(), 3);
+        assert_eq!(cur.total_delay_ms(), 600);
+
+        // Verify frames are kept in file order with image, hotspot and delay
+        assert_eq!(cur.frames()[0].delay_ms, 100);
+        assert_eq!(
+            (cur.frames()[0].image.xhot, cur.frames()[0].image.yhot),
+            (1, 1)
+        );
+        assert_eq!(cur.frames()[1].delay_ms, 200);
+        assert_eq!(
+            (cur.frames()[1].image.xhot, cur.frames()[1].image.yhot),
+            (2, 2)
+        );
+        assert_eq!(cur.frames()[2].delay_ms, 300);
+        assert_eq!(
+            (cur.frames()[2].image.xhot, cur.frames()[2].image.yhot),
+            (3, 3)
+        );
+
+        use std::time::Duration;
+
+        // t = 0: frame 0
+        let f0 = cur.frame_at(Duration::from_millis(0)).expect("frame 0");
+        assert_eq!((f0.xhot, f0.yhot), (1, 1));
+        assert_eq!(
+            cur.animation_due(Duration::from_millis(0)),
+            Some(Duration::from_millis(100))
+        );
+
+        // t = 50: frame 0
+        let f50 = cur
+            .frame_at(Duration::from_millis(50))
+            .expect("frame 0 at 50ms");
+        assert_eq!((f50.xhot, f50.yhot), (1, 1));
+        assert_eq!(
+            cur.animation_due(Duration::from_millis(50)),
+            Some(Duration::from_millis(50))
+        );
+
+        // t = 99: still frame 0
+        let f99 = cur
+            .frame_at(Duration::from_millis(99))
+            .expect("frame 0 at 99ms");
+        assert_eq!((f99.xhot, f99.yhot), (1, 1));
+        assert_eq!(
+            cur.animation_due(Duration::from_millis(99)),
+            Some(Duration::from_millis(1))
+        );
+
+        // t = 100: advances to frame 1
+        let f100 = cur
+            .frame_at(Duration::from_millis(100))
+            .expect("frame 1 at 100ms");
+        assert_eq!((f100.xhot, f100.yhot), (2, 2));
+        assert_eq!(
+            cur.animation_due(Duration::from_millis(100)),
+            Some(Duration::from_millis(200))
+        );
+
+        // t = 299: frame 1 (100 + 200 = 300)
+        let f299 = cur
+            .frame_at(Duration::from_millis(299))
+            .expect("frame 1 at 299ms");
+        assert_eq!((f299.xhot, f299.yhot), (2, 2));
+        assert_eq!(
+            cur.animation_due(Duration::from_millis(299)),
+            Some(Duration::from_millis(1))
+        );
+
+        // t = 300: advances to frame 2
+        let f300 = cur
+            .frame_at(Duration::from_millis(300))
+            .expect("frame 2 at 300ms");
+        assert_eq!((f300.xhot, f300.yhot), (3, 3));
+        assert_eq!(
+            cur.animation_due(Duration::from_millis(300)),
+            Some(Duration::from_millis(300))
+        );
+
+        // t = 599: frame 2
+        let f599 = cur
+            .frame_at(Duration::from_millis(599))
+            .expect("frame 2 at 599ms");
+        assert_eq!((f599.xhot, f599.yhot), (3, 3));
+        assert_eq!(
+            cur.animation_due(Duration::from_millis(599)),
+            Some(Duration::from_millis(1))
+        );
+
+        // t = 600: wraparound to frame 0
+        let f600 = cur
+            .frame_at(Duration::from_millis(600))
+            .expect("frame 0 wraparound");
+        assert_eq!((f600.xhot, f600.yhot), (1, 1));
+        assert_eq!(
+            cur.animation_due(Duration::from_millis(600)),
+            Some(Duration::from_millis(100))
+        );
+
+        // t = 750 (600 + 150): wraparound into frame 1
+        let f750 = cur
+            .frame_at(Duration::from_millis(750))
+            .expect("frame 1 wraparound");
+        assert_eq!((f750.xhot, f750.yhot), (2, 2));
+        assert_eq!(
+            cur.animation_due(Duration::from_millis(750)),
+            Some(Duration::from_millis(150))
+        );
+    }
+
+    #[test]
+    fn animated_cursor_zero_delay_handled() {
+        let pix0 = vec![0x11; 24 * 24 * 4];
+        let pix1 = vec![0x22; 24 * 24 * 4];
+        let data = make_xcursor_file(&[
+            (24, 24, 24, (1, 1), 0u32, pix0.as_slice()),
+            (24, 24, 24, (2, 2), 0u32, pix1.as_slice()),
+        ]);
+        let parsed = xcursor::parser::parse_xcursor(&data).expect("valid xcursor");
+        let cur = CursorThemeManager::load_from_parsed_images(&parsed, 24).expect("loaded");
+        assert!(cur.is_animated());
+        assert_eq!(cur.frames().len(), 2);
+        // Delay 0 counts as 50ms so nothing spins
+        assert_eq!(cur.frames()[0].delay_ms, 50);
+        assert_eq!(cur.frames()[1].delay_ms, 50);
+        assert_eq!(cur.total_delay_ms(), 100);
+
+        use std::time::Duration;
+        assert_eq!((cur.frame_at(Duration::from_millis(0)).unwrap().xhot), 1);
+        assert_eq!(
+            cur.animation_due(Duration::from_millis(0)),
+            Some(Duration::from_millis(50))
+        );
+        assert_eq!((cur.frame_at(Duration::from_millis(50)).unwrap().xhot), 2);
+        assert_eq!(
+            cur.animation_due(Duration::from_millis(50)),
+            Some(Duration::from_millis(50))
+        );
+        assert_eq!((cur.frame_at(Duration::from_millis(100)).unwrap().xhot), 1);
+    }
+
+    #[test]
+    fn single_image_is_not_animated_due_is_none() {
+        let pix = vec![0x11; 24 * 24 * 4];
+        let data = make_xcursor_file(&[(24, 24, 24, (2, 3), 100u32, pix.as_slice())]);
+        let parsed = xcursor::parser::parse_xcursor(&data).expect("valid xcursor");
+        let cur = CursorThemeManager::load_from_parsed_images(&parsed, 24).expect("loaded");
+        assert!(!cur.is_animated());
+
+        use std::time::Duration;
+        assert_eq!(cur.animation_due(Duration::from_millis(0)), None);
+        assert_eq!(cur.animation_due(Duration::from_millis(500)), None);
+
+        let img0 = cur.frame_at(Duration::from_millis(0)).expect("frame at 0");
+        let img500 = cur
+            .frame_at(Duration::from_millis(500))
+            .expect("frame at 500");
+        assert_eq!(img0.xhot, 2);
+        assert_eq!(img500.xhot, 2);
+    }
+
+    #[test]
+    fn stable_element_id_across_unmoved_frames_and_change_across_frames() {
+        let pix0 = vec![0x11; 24 * 24 * 4];
+        let pix1 = vec![0x22; 24 * 24 * 4];
+        let data = make_xcursor_file(&[
+            (24, 24, 24, (1, 1), 100u32, pix0.as_slice()),
+            (24, 24, 24, (2, 2), 100u32, pix1.as_slice()),
+        ]);
+        let parsed = xcursor::parser::parse_xcursor(&data).expect("valid xcursor");
+        let cur = CursorThemeManager::load_from_parsed_images(&parsed, 24).expect("loaded");
+
+        use std::time::Duration;
+        let img_at_0 = cur.frame_at(Duration::from_millis(0)).unwrap();
+        let img_at_50 = cur.frame_at(Duration::from_millis(50)).unwrap();
+        let img_at_100 = cur.frame_at(Duration::from_millis(100)).unwrap();
+
+        // Frame at 0ms and 50ms are both frame 0: must have the same stable element id
+        let id0 = img_at_0.id.clone();
+        let id50 = img_at_50.id.clone();
+        let id100 = img_at_100.id.clone();
+
+        assert_eq!(id0, id50, "same frame has identical stable element id");
+        assert_ne!(
+            id0, id100,
+            "different frame has different element id for damage"
+        );
+    }
+
+    #[test]
+    fn wayland_state_cursor_animation_due_status_handling() {
+        let tmp = TestTempDir::new("anim_due_state");
+        let theme_dir = tmp.path().join("my_theme");
+        let cursors_dir = theme_dir.join("cursors");
+        std::fs::create_dir_all(&cursors_dir).expect("mkdir");
+        std::fs::write(
+            theme_dir.join("index.theme"),
+            "[Icon Theme]\nName=my_theme\n",
+        )
+        .expect("write");
+
+        // Write static "default" cursor
+        let pix_default = vec![0x11; 24 * 24 * 4];
+        std::fs::write(
+            cursors_dir.join("default"),
+            make_xcursor_file(&[(24, 24, 24, (1, 1), 0, &pix_default)]),
+        )
+        .expect("write default");
+
+        // Write animated "wait" cursor (2 frames: 100ms each)
+        let pix_w0 = vec![0x22; 24 * 24 * 4];
+        let pix_w1 = vec![0x33; 24 * 24 * 4];
+        std::fs::write(
+            cursors_dir.join("wait"),
+            make_xcursor_file(&[
+                (24, 24, 24, (2, 2), 100u32, pix_w0.as_slice()),
+                (24, 24, 24, (3, 3), 100u32, pix_w1.as_slice()),
+            ]),
+        )
+        .expect("write wait");
+
+        let (core, _input, _shell, _outputs) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: smithay::reexports::wayland_server::Display<WaylandState> =
+            smithay::reexports::wayland_server::Display::new().unwrap();
+        let mut state = WaylandState::new(&display.handle(), core);
+        state.set_cursor_theme_with_search_paths("my_theme", 24, vec![tmp.path().to_path_buf()]);
+
+        use std::time::Duration;
+        let now = Duration::from_millis(500);
+
+        // 1. Static cursor "default": due is None
+        state.set_cursor_status(smithay::input::pointer::CursorImageStatus::default_named());
+        assert_eq!(
+            state.cursor_animation_due(now),
+            None,
+            "static default cursor is not animated"
+        );
+
+        // 2. Animated cursor "wait": due is Some(100ms)
+        state.set_cursor_status(smithay::input::pointer::CursorImageStatus::Named(
+            smithay::input::pointer::CursorIcon::Wait,
+        ));
+        state.set_cursor_epoch(Duration::from_millis(500));
+        assert_eq!(
+            state.cursor_animation_due(now),
+            Some(Duration::from_millis(100)),
+            "wait cursor is animated"
+        );
+        assert_eq!(
+            state.cursor_animation_due(now + Duration::from_millis(30)),
+            Some(Duration::from_millis(70)),
+            "30ms elapsed leaves 70ms"
+        );
+
+        // 3. Hidden cursor: due is None
+        state.set_cursor_status(smithay::input::pointer::CursorImageStatus::Hidden);
+        assert_eq!(
+            state.cursor_animation_due(now),
+            None,
+            "hidden cursor has no animation due"
+        );
     }
 }

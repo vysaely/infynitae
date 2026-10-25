@@ -134,6 +134,8 @@ pub struct WaylandState {
     pub(crate) target: convert::RenderTarget,
     /// The cursor clients asked for, drawn when the target draws one (`cursor`).
     cursor: smithay::input::pointer::CursorImageStatus,
+    /// When the current cursor shape was set (for animated cursor pacing).
+    cursor_epoch: std::time::Duration,
     /// The focus (surface and origin) and position of the last `wl_pointer.motion` delivered,
     /// and whether pointer events wait for their `wl_pointer.frame` (`pointer`).
     pointer_sent: pointer::Sent,
@@ -488,6 +490,7 @@ impl WaylandState {
             spawned_children: false,
             target: convert::RenderTarget::default(),
             cursor: smithay::input::pointer::CursorImageStatus::default_named(),
+            cursor_epoch: std::time::Duration::ZERO,
             pointer_sent: pointer::Sent::default(),
             arrow: cursor::Arrow::default(),
             capture_indicator: capture_indicator::CaptureIndicator::default(),
