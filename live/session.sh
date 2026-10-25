@@ -108,10 +108,14 @@ RESTORE_SESSION=false
 case "${SESSION_RESTORE:-true}" in
     1|true|yes|on|TRUE|True)
         if [ -n "$RESTORE_BIN" ]; then
-            "$RESTORE_BIN" watch >/dev/null 2>&1 &
+            # check: a saved window whose app can be launched (else the terminal below starts).
+            # The watcher starts once the restore is done: a snapshot taken while windows are
+            # still coming back would overwrite session.json with half the session.
             if "$RESTORE_BIN" check >/dev/null 2>&1; then
                 RESTORE_SESSION=true
-                "$RESTORE_BIN" restore >/dev/null 2>&1 &
+                { "$RESTORE_BIN" restore; exec "$RESTORE_BIN" watch; } >/dev/null 2>&1 &
+            else
+                "$RESTORE_BIN" watch >/dev/null 2>&1 &
             fi
         fi
         ;;

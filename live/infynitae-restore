@@ -5,13 +5,15 @@ Manages saving and restoring canvas sessions across compositor restarts:
   watch:    Periodically snapshots mapped windows and camera centres to session.json.
   restore:  Relaunches saved apps and places windows at their saved canvas positions.
   selftest: Self-contained test suite verifying desktop lookup and session restore matching.
-  check:    Exits 0 if session.json exists with at least one window, 1 otherwise.
+  check:    Exits 0 if session.json has at least one window whose app can be launched (a desktop
+            file whose command is installed), 1 otherwise.
 """
 
 import json
 import os
 import re
 import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -422,7 +424,10 @@ def cmd_restore(
             })
 
 
-def check_saved_session(session_path=None):
+def check_saved_session(session_path=None, apps_dirs=None, launchable=False):
+    """The saved session has a window; with `launchable`, one whose app restore can start (a
+    desktop file whose command is installed). The session script starts its default terminal
+    unless a restore would bring something back."""
     if session_path is None:
         session_path = os.path.expanduser("~/.local/state/infynitae/session.json")
     if not os.path.isfile(session_path):
@@ -431,9 +436,17 @@ def check_saved_session(session_path=None):
         with open(session_path, "r", encoding="utf-8") as f:
             data = json.load(f)
         windows = data.get("windows")
-        return isinstance(windows, list) and len(windows) > 0
+        if not isinstance(windows, list) or not windows:
+            return False
     except Exception:
         return False
+    if not launchable:
+        return True
+    for app_id in {w.get("app_id") for w in windows if isinstance(w, dict) and w.get("app_id")}:
+        cmd = resolve_app_command(app_id, apps_dirs=apps_dirs)
+        if cmd and shutil.which(cmd[0]):
+            return True
+    return False
 
 
 def cmd_selftest():
@@ -528,6 +541,17 @@ def cmd_selftest():
         )
         assert save_ok, "take_and_save_snapshot should return True on success"
         assert check_saved_session(session_file), "check_saved_session should return True"
+        # demo-app has no desktop file: nothing a restore could launch
+        assert not check_saved_session(session_file, apps_dirs=[apps_dir], launchable=True), (
+            "a session with no launchable app counted as restorable"
+        )
+        other_apps = os.path.join(tmp_dir, "other-applications")
+        os.makedirs(other_apps, exist_ok=True)
+        with open(os.path.join(other_apps, "demo-app.desktop"), "w") as f:
+            f.write("[Desktop Entry]\nType=Application\nName=Demo\nExec=sh -c true\n")
+        assert check_saved_session(session_file, apps_dirs=[other_apps], launchable=True), (
+            "a session with an installed app did not count as restorable"
+        )
 
         with open(session_file, "r") as f:
             saved_data = json.load(f)
@@ -718,7 +742,7 @@ def main():
         cmd_selftest()
     elif cmd == "check":
         path = sys.argv[2] if len(sys.argv) > 2 else None
-        sys.exit(0 if check_saved_session(path) else 1)
+        sys.exit(0 if check_saved_session(path, launchable=True) else 1)
     elif cmd in ("-h", "--help"):
         print("Usage: infynitae-restore [watch|restore|selftest|check]")
         sys.exit(0)
