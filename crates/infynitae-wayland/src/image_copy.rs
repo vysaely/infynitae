@@ -101,6 +101,20 @@ pub struct FrameData {
 }
 
 impl WaylandState {
+    /// A capture of `window` alone was drawn on `output`'s loop at `now`: the window's frame
+    /// callbacks complete, so a shared window draws at the rate the share takes frames even off
+    /// screen (`Core::frame_captured`).
+    pub fn window_captured(
+        &mut self,
+        window: ElementId,
+        output: OutputId,
+        now: std::time::Duration,
+    ) {
+        if self.core.frame_captured(window) {
+            self.complete_frames(output, &[window], now);
+        }
+    }
+
     /// The scale a window is captured at: the first screen's.
     pub(crate) fn window_capture_scale(&self) -> f64 {
         self.core.outputs().first().map_or(1.0, |o| o.scale)

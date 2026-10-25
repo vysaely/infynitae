@@ -1517,6 +1517,9 @@ fn serve_captures(
                     k,
                     smithay::backend::renderer::Color32F::TRANSPARENT,
                 );
+                // the window draws its next frame for the next capture, on screen or not
+                let now = infynitae_wayland::presentation_clock_now();
+                state.window_captured(window, output_id, now);
             }
             _ => req.fail(),
         }

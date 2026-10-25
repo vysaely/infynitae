@@ -8,6 +8,7 @@ mod common;
 
 use common::Probe;
 use common::input::*;
+use infynitae_core::{NavigateTo, ShellCommand, ShellStream};
 use infynitae_wayland::convert;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::pixman::PixmanRenderer;
@@ -357,4 +358,75 @@ fn nothing_is_captured_while_locked() {
     let (log, window) = capture(&mut r, &session, (800, 600));
     assert_eq!(window, None, "nothing queued");
     assert!(log.contains(&"frame failed Unknown".to_string()), "{log:?}");
+}
+
+/// A shared window out of view still draws at the rate the share takes frames: each capture of
+/// it completes its frame callbacks (off screen they would otherwise wait for the 1 s fallback).
+#[test]
+fn a_shared_window_out_of_view_is_paced_by_the_captures() {
+    let (mut r, session) = setup();
+    let o = r.ls.output();
+    let fx =
+        r.ls.state
+            .core_mut()
+            .shell_command(
+                &mut r.ls.shell,
+                ShellCommand::Navigate {
+                    output: o,
+                    to: NavigateTo::Delta(5000.0, 0.0),
+                    stream: ShellStream::Atomic,
+                },
+            )
+            .unwrap();
+    r.ls.state.apply(&fx);
+    r.ls.pump();
+    r.frame();
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    assert!(
+        r.ls.state
+            .core_mut()
+            .render_list(o)
+            .unwrap()
+            .entries
+            .iter()
+            .all(|e| e.element != w),
+        "precondition: W is out of view"
+    );
+
+    let w_idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
+    let qh = r.ls.qh.clone();
+    let wl = r.ls.probe.surfaces[w_idx].wl.clone();
+    wl.frame(&qh, w_idx);
+    wl.commit();
+    r.ls.pump();
+    r.ls.probe.log.clear();
+    r.frame();
+    assert!(
+        !r.ls.probe.log.contains(&"frame W".to_string()),
+        "out of view, no callback at a screen's frame: {:?}",
+        r.ls.probe.log
+    );
+
+    // the backend draws the capture, then tells the window
+    let frame = session.create_frame(&qh, ());
+    let buffer = r.ls.probe.buffer(&qh, 800, 600);
+    frame.attach_buffer(&buffer);
+    frame.capture();
+    r.ls.pump();
+    for p in r.ls.state.screencopy.take_pending(o) {
+        let window = p.window.expect("W's capture");
+        p.ready((800, 600), std::time::Duration::from_millis(5));
+        r.ls.state.window_captured(window, o, r.ls.now);
+    }
+    r.ls.pump();
+    assert!(
+        r.ls.probe.log.contains(&"frame W".to_string()),
+        "the capture completes W's callback: {:?}",
+        r.ls.probe.log
+    );
 }

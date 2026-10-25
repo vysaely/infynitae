@@ -9,6 +9,9 @@
 //! - the **fallback**: at most one completion per period P, measured from the element's last
 //!   completion, on a compositor timer that is armed only while an unobserved element has a
 //!   pending callback (`Core::frame_fallback`, `Core::frame_fallback_deadline`).
+//! - the **capture**: a capture of the window alone (sharing one window) completes its callbacks
+//!   when it is drawn (`Core::frame_captured`), so a shared window off screen draws at the rate
+//!   the share takes frames, not at the fallback's (owner, 2026-10-25: "like 2 fps").
 //!
 //! Core reads no clock. A completion Core decides without being handed the time (a vblank, a
 //! kick) is stamped with the time of the next `frame_fallback` evaluation, which is never earlier
@@ -104,7 +107,7 @@ impl FrameLiveness {
             .is_ok_and(|i| self.entries[i].1.requested)
     }
 
-    /// Core decided a completion of `element`'s callbacks (vblank or kick): nothing is pending
+    /// Core decided a completion of `element`'s callbacks (vblank, kick or capture): nothing is pending
     /// and the period restarts at the next evaluation. A vblank of an element with nothing
     /// pending completes nothing and leaves the last completion where it was.
     pub(crate) fn completed(&mut self, element: ElementId) {

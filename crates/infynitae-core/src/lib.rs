@@ -1162,6 +1162,15 @@ impl Core {
         due
     }
 
+    /// A capture of `element` alone was drawn (sharing one window, M16's capture rule): its
+    /// pending callbacks complete, whether or not it is on a screen. Whether there were any: the
+    /// adapter then completes them (`WaylandState::window_captured`).
+    pub fn frame_captured(&mut self, element: stage::ElementId) -> bool {
+        let pending = self.frame_liveness.requested(element);
+        self.frame_liveness.completed(element);
+        pending
+    }
+
     /// When the fallback timer must next fire, on the clock of [`Core::frame_fallback`]; `None`
     /// when no unobserved element has a pending callback, and then no timer is armed
     /// (INV-IDLE-1).
