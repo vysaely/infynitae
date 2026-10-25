@@ -63,8 +63,8 @@ pub struct OutputModel {
     pub transform: Transform,
     pub scale: f64,
     pub refresh_mhz: u32,
-    /// Arrangement origin (OutputLogical units), fixed at connect. The configured Arrangement is
-    /// Level D; Foundation 01 places each new output to the right of those present.
+    /// Arrangement origin (OutputLogical units), fixed at connect. Places each new output
+    /// to the right of existing outputs by default.
     pub arrangement: (f64, f64),
 }
 

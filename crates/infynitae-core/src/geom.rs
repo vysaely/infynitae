@@ -7,9 +7,8 @@ pub const Q16_ONE: i64 = 1 << 16;
 /// Bound on stored Canvas values in px (INV-COORD-1).
 pub const CANVAS_LIMIT_PX: i64 = 1 << 36;
 
-// ---- The representable projection domain (F-VIEW-1 as amended by C12.F14, OB-24 D1). Every
-// state Core accepts lies inside it, and for every such state the projection's intermediates are
-// bounded (see evidence/phase-f/INC-9/ZOOM_CONTRACT.md for the derivation):
+// Representable projection domain (F-VIEW-1 as amended by C12.F14, OB-24 D1). Every
+// state Core accepts lies inside it, and projection intermediates are bounded:
 //   |v_O| ≤ 2³⁷ px (F-VIEW-1's exact range), |R·2¹⁶| ≤ 2⁵³, |(x − R)·k| ≤ 2⁵⁷, C ≤ 2²⁷,
 //   unprojected positions ≤ 2⁵⁴ Q16 units; nothing reaches i64's 2⁶³.
 

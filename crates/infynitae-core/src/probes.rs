@@ -1,7 +1,6 @@
-//! Core-internal negative probes (OB-19). Each item is compiled only under its feature and
-//! stands for policy code in a core module other than `navigation` and `entry` (for example the
-//! future protocol-event policy). tools/verify-architecture requires each build to fail with the
-//! asserted diagnostic and no other error.
+//! Core-internal negative architecture probes (OB-19). Each item compiles only under its feature
+//! and simulates forbidden access outside `navigation` and `entry`.
+//! tools/verify-architecture requires each build to fail with the asserted diagnostic.
 
 #![allow(dead_code)]
 
