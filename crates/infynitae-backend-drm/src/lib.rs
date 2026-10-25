@@ -16,6 +16,8 @@
 
 #![deny(unsafe_code)]
 
+mod edid;
+
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::PathBuf;
@@ -47,7 +49,7 @@ use smithay::backend::session::libseat::LibSeatSession;
 use smithay::backend::session::{Event as SeatEvent, Session as _};
 use smithay::output::OutputModeSource;
 use smithay::reexports::calloop::EventLoop;
-use smithay::reexports::drm::control::{Device as _, ModeTypeFlags, connector, crtc};
+use smithay::reexports::drm::control::{Device, ModeTypeFlags, connector, crtc, property};
 use smithay::reexports::input::Libinput;
 use smithay::reexports::rustix::fs::OFlags;
 use smithay::reexports::wayland_server::Display;
@@ -449,6 +451,31 @@ fn gles_renderer(gbm: &GbmDevice<DrmDeviceFd>) -> Result<GlesRenderer, Box<dyn E
     Ok(renderer)
 }
 
+/// Reads and parses the EDID of a connector, if present and valid.
+fn read_connector_edid(drm: &impl Device, handle: connector::Handle) -> Option<edid::Edid> {
+    let props = drm.get_properties(handle).ok()?;
+    let (prop_ids, prop_vals) = props.as_props_and_values();
+    for (&prop_id, &val) in prop_ids.iter().zip(prop_vals) {
+        let Ok(info) = drm.get_property(prop_id) else {
+            continue;
+        };
+        if info.name().to_bytes() == b"EDID" {
+            let blob_id = match info.value_type().convert_value(val) {
+                property::Value::Blob(id) => id,
+                _ => continue,
+            };
+            if blob_id == 0 {
+                return None;
+            }
+            let Ok(blob_data) = drm.get_property_blob(blob_id) else {
+                return None;
+            };
+            return edid::parse(&blob_data);
+        }
+    }
+    None
+}
+
 /// Runs the compositor on the console, with an optional loop extension (the shell server). Blocks
 /// until Ctrl+Alt+Backspace, a signal or a run limit.
 pub fn run_console_with(
@@ -706,13 +733,17 @@ pub fn run_console_with(
             conn_scale as f64 / 120.0
         );
         let surface = drm.create_surface(crtc, mode, &[handle])?;
+        let (make, model, serial) = match read_connector_edid(&drm, handle) {
+            Some(e) => (e.make, e.model, e.serial),
+            None => ("Unknown".into(), "Unknown".into(), None),
+        };
         let descriptor = OutputDescriptor {
             key: OutputKey {
                 device: gpu.display().to_string(),
                 connector: name.clone(),
-                make: "Unknown".into(),
-                model: "Unknown".into(),
-                serial: None,
+                make,
+                model,
+                serial,
             },
             mode: (u32::from(w), u32::from(h)),
             transform: Transform::Normal,
