@@ -961,6 +961,37 @@ delegate_viewporter!(WaylandState);
 smithay::delegate_cursor_shape!(WaylandState);
 smithay::delegate_xdg_foreign!(WaylandState);
 smithay::delegate_single_pixel_buffer!(WaylandState);
+smithay::delegate_content_type!(WaylandState);
+smithay::delegate_alpha_modifier!(WaylandState);
+smithay::delegate_xdg_system_bell!(WaylandState);
+
+/// The bell is accepted and ignored: no sound or flash is configured yet.
+impl smithay::wayland::xdg_system_bell::XdgSystemBellHandler for WaylandState {
+    fn ring(&mut self, _surface: Option<WlSurface>) {}
+}
+
+impl WaylandState {
+    /// What an element's window says it shows (`wp_content_type_v1`): none, photo, video or
+    /// game. Read by nothing yet; a backend may use it (VRR, scanout).
+    pub fn content_type(
+        &self,
+        element: infynitae_core::stage::ElementId,
+    ) -> smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type
+    {
+        use smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type;
+        self.window_surface(element)
+            .map(|s| {
+                with_states(&s, |states| {
+                    *states
+                        .cached_state
+                        .get::<smithay::wayland::content_type::ContentTypeSurfaceCachedState>()
+                        .current()
+                        .content_type()
+                })
+            })
+            .unwrap_or(Type::None)
+    }
+}
 
 /// An imported parent is the toplevel's parent like `set_parent`: the commit path reads it
 /// (`toplevel_committed`), so a portal dialog opens over the app that asked for it.

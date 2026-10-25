@@ -181,6 +181,25 @@ pub struct WaylandState {
         reason = "owns the wp_single_pixel_buffer_manager_v1 global for the state's lifetime"
     )]
     single_pixel_buffer: smithay::wayland::single_pixel_buffer::SinglePixelBufferState,
+    /// `wp_content_type_v1`: a surface says it shows a photo, a video or a game (`content_type`).
+    #[expect(
+        dead_code,
+        reason = "owns the wp_content_type_manager_v1 global for the state's lifetime"
+    )]
+    content_type: smithay::wayland::content_type::ContentTypeState,
+    /// `wp_alpha_modifier_v1`: a surface's opacity multiplier, applied where its render element
+    /// is built (Smithay's surface element reads it).
+    #[expect(
+        dead_code,
+        reason = "owns the wp_alpha_modifier_v1 global for the state's lifetime"
+    )]
+    alpha_modifier: smithay::wayland::alpha_modifier::AlphaModifierState,
+    /// `xdg_system_bell_v1`: an app rings the bell; accepted and ignored (no sound or flash yet).
+    #[expect(
+        dead_code,
+        reason = "owns the xdg_system_bell_v1 global for the state's lifetime"
+    )]
+    system_bell: smithay::wayland::xdg_system_bell::XdgSystemBellState,
     /// `wl_data_device_manager`: clipboard selection and drag-and-drop offers (2026-10-16).
     /// Selections are Smithay protocol objects; who sees and sets them follows Core's
     /// keyboard focus (`SeatHandler::focus_changed`).
@@ -466,6 +485,13 @@ impl WaylandState {
             single_pixel_buffer: smithay::wayland::single_pixel_buffer::SinglePixelBufferState::new::<
                 Self,
             >(display),
+            content_type: smithay::wayland::content_type::ContentTypeState::new::<Self>(display),
+            alpha_modifier: smithay::wayland::alpha_modifier::AlphaModifierState::new::<Self>(
+                display,
+            ),
+            system_bell: smithay::wayland::xdg_system_bell::XdgSystemBellState::new::<Self>(
+                display,
+            ),
             data_device: DataDeviceState::new::<Self>(display),
             primary_selection,
             wlr_data_control,

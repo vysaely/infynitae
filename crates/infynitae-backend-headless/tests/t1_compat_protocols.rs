@@ -1,5 +1,5 @@
 //! Small protocols apps expect, on the production path with a real client: cursor-shape-v1,
-//! xdg-foreign-v2, single-pixel-buffer-v1.
+//! xdg-foreign-v2, single-pixel-buffer-v1, alpha-modifier-v1, content-type-v1, xdg-system-bell-v1.
 
 mod common;
 
@@ -12,6 +12,10 @@ use smithay::backend::renderer::{Bind, ExportMem, Offscreen};
 use smithay::input::pointer::{CursorIcon, CursorImageStatus};
 use smithay::reexports::pixman::Image;
 use smithay::utils::Rectangle;
+use wayland_protocols::wp::alpha_modifier::v1::client::wp_alpha_modifier_surface_v1::WpAlphaModifierSurfaceV1;
+use wayland_protocols::wp::alpha_modifier::v1::client::wp_alpha_modifier_v1::WpAlphaModifierV1;
+use wayland_protocols::wp::content_type::v1::client::wp_content_type_manager_v1::WpContentTypeManagerV1;
+use wayland_protocols::wp::content_type::v1::client::wp_content_type_v1::{self, WpContentTypeV1};
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::{
     Shape, WpCursorShapeDeviceV1,
 };
@@ -21,6 +25,7 @@ use wayland_protocols::xdg::foreign::zv2::client::zxdg_exported_v2::{self, ZxdgE
 use wayland_protocols::xdg::foreign::zv2::client::zxdg_exporter_v2::ZxdgExporterV2;
 use wayland_protocols::xdg::foreign::zv2::client::zxdg_imported_v2::ZxdgImportedV2;
 use wayland_protocols::xdg::foreign::zv2::client::zxdg_importer_v2::ZxdgImporterV2;
+use wayland_protocols::xdg::system_bell::v1::client::xdg_system_bell_v1::XdgSystemBellV1;
 
 wayland_client::delegate_noop!(Probe: ignore WpCursorShapeManagerV1);
 wayland_client::delegate_noop!(Probe: ignore WpCursorShapeDeviceV1);
@@ -28,6 +33,11 @@ wayland_client::delegate_noop!(Probe: ignore ZxdgExporterV2);
 wayland_client::delegate_noop!(Probe: ignore ZxdgImporterV2);
 wayland_client::delegate_noop!(Probe: ignore ZxdgImportedV2);
 wayland_client::delegate_noop!(Probe: ignore WpSinglePixelBufferManagerV1);
+wayland_client::delegate_noop!(Probe: ignore WpAlphaModifierV1);
+wayland_client::delegate_noop!(Probe: ignore WpAlphaModifierSurfaceV1);
+wayland_client::delegate_noop!(Probe: ignore WpContentTypeManagerV1);
+wayland_client::delegate_noop!(Probe: ignore WpContentTypeV1);
+wayland_client::delegate_noop!(Probe: ignore XdgSystemBellV1);
 
 /// The handle of an exported toplevel goes to the probe's log as `exported <handle>`.
 impl wayland_client::Dispatch<ZxdgExportedV2, ()> for Probe {
@@ -152,11 +162,12 @@ fn render(r: &mut Rig) -> Vec<u32> {
         .collect()
 }
 
-/// A one-pixel buffer stretched by a viewport draws its colour over the whole destination: a
-/// 50 x 50 subsurface of one opaque colour no other surface here uses.
-#[test]
-fn a_single_pixel_buffer_draws_its_colour() {
-    let mut r = Rig::x8();
+/// The opaque colour of the test square, as rendered ARGB; no other surface here uses it.
+const SQUARE: u32 = 0xFF12_AB34;
+
+/// A 50 x 50 subsurface of W at (10, 10): one pixel of [`SQUARE`] stretched by a viewport. Its
+/// surface is returned uncommitted with the buffer attached, so a test can add state first.
+fn square(r: &mut Rig) -> (usize, wayland_client::protocol::wl_surface::WlSurface) {
     let w_idx =
         r.ls.probe
             .surfaces
@@ -164,11 +175,11 @@ fn a_single_pixel_buffer_draws_its_colour() {
             .position(|s| s.label == "W")
             .unwrap();
     let qh = r.ls.qh.clone();
-    let manager: WpSinglePixelBufferManagerV1 = bind(&r, "wp_single_pixel_buffer_manager_v1", 1);
+    let manager: WpSinglePixelBufferManagerV1 = bind(r, "wp_single_pixel_buffer_manager_v1", 1);
     let s_idx =
         r.ls.probe
             .subsurface_uncommitted(&qh, "S", w_idx, (10, 10), (50, 50), false);
-    // 0x12, 0xAB, 0x34, opaque: each channel scaled to the full u32 range
+    // each channel scaled to the full u32 range
     let ch = |v: u32| v * 0x0101_0101;
     let buffer = manager.create_u32_rgba_buffer(ch(0x12), ch(0xAB), ch(0x34), u32::MAX, &qh, ());
     let s = r.ls.probe.surfaces[s_idx].wl.clone();
@@ -181,11 +192,96 @@ fn a_single_pixel_buffer_draws_its_colour() {
     viewport.set_destination(50, 50);
     s.attach(Some(&buffer), 0, 0);
     s.damage_buffer(0, 0, 1, 1);
+    (w_idx, s)
+}
+
+/// Commits the square and its parent W, and renders.
+fn show(
+    r: &mut Rig,
+    w_idx: usize,
+    s: &wayland_client::protocol::wl_surface::WlSurface,
+) -> Vec<u32> {
     s.commit();
     r.ls.probe.surfaces[w_idx].wl.commit();
     r.ls.pump();
     r.frame();
-    let colour = 0xFF12_AB34u32;
-    let count = render(&mut r).iter().filter(|p| **p == colour).count();
-    assert_eq!(count, 50 * 50, "pixels of the single-pixel colour");
+    render(r)
+}
+
+/// A one-pixel buffer stretched by a viewport draws its colour over the whole destination.
+#[test]
+fn a_single_pixel_buffer_draws_its_colour() {
+    let mut r = Rig::x8();
+    let (w_idx, s) = square(&mut r);
+    let px = show(&mut r, w_idx, &s);
+    assert_eq!(px.iter().filter(|p| **p == SQUARE).count(), 50 * 50);
+}
+
+/// An alpha multiplier of 0 makes the square invisible; 1 draws it as before.
+#[test]
+fn the_alpha_modifier_applies_to_the_surface() {
+    let mut r = Rig::x8();
+    let (w_idx, s) = square(&mut r);
+    let qh = r.ls.qh.clone();
+    let modifier: WpAlphaModifierV1 = bind(&r, "wp_alpha_modifier_v1", 1);
+    let alpha = modifier.get_surface(&s, &qh, ());
+    alpha.set_multiplier(0);
+    let px = show(&mut r, w_idx, &s);
+    assert_eq!(
+        px.iter().filter(|p| **p == SQUARE).count(),
+        0,
+        "invisible at 0"
+    );
+    alpha.set_multiplier(u32::MAX);
+    let px = show(&mut r, w_idx, &s);
+    assert_eq!(
+        px.iter().filter(|p| **p == SQUARE).count(),
+        50 * 50,
+        "opaque at 1"
+    );
+}
+
+/// A window's content type is what its client said.
+#[test]
+fn the_content_type_is_kept() {
+    use smithay::reexports::wayland_protocols::wp::content_type::v1::server::wp_content_type_v1::Type;
+    let mut r = Rig::x8();
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    let w_idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
+    assert_eq!(r.ls.state.content_type(w), Type::None);
+    let qh = r.ls.qh.clone();
+    let manager: WpContentTypeManagerV1 = bind(&r, "wp_content_type_manager_v1", 1);
+    let surface = r.ls.probe.surfaces[w_idx].wl.clone();
+    let ct = manager.get_surface_content_type(&surface, &qh, ());
+    ct.set_content_type(wp_content_type_v1::Type::Game);
+    surface.commit();
+    r.ls.pump();
+    assert_eq!(r.ls.state.content_type(w), Type::Game);
+}
+
+/// Ringing the bell is accepted: the client stays connected and keeps working.
+#[test]
+fn the_bell_rings_quietly() {
+    let mut r = Rig::x8();
+    let w_idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
+    let bell: XdgSystemBellV1 = bind(&r, "xdg_system_bell_v1", 1);
+    let surface = r.ls.probe.surfaces[w_idx].wl.clone();
+    bell.ring(Some(&surface));
+    bell.ring(None);
+    r.ls.pump();
+    // still served: a new surface after the bell is drawn
+    let (w_idx2, s) = square(&mut r);
+    assert_eq!(w_idx2, w_idx);
+    let px = show(&mut r, w_idx, &s);
+    assert_eq!(px.iter().filter(|p| **p == SQUARE).count(), 50 * 50);
 }
