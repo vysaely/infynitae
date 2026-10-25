@@ -296,11 +296,11 @@ fn main() -> ExitCode {
         i += 1;
     }
 
-    if let Ok(xw) = std::env::var("XWAYLAND") {
-        if matches!(xw.to_lowercase().as_str(), "0" | "false" | "off" | "no") {
-            no_xwayland = true;
-            xwayland_satellite = None;
-        }
+    if let Ok(xw) = std::env::var("XWAYLAND")
+        && matches!(xw.to_lowercase().as_str(), "0" | "false" | "off" | "no")
+    {
+        no_xwayland = true;
+        xwayland_satellite = None;
     }
 
     if !no_xwayland && xwayland_satellite.is_none() {
@@ -366,9 +366,9 @@ fn main() -> ExitCode {
             "0" | "false" | "off" | "no"
         ));
     }
-    if let Ok(foo) = std::env::var("FOCUS_ON_OPEN") {
+    if let Ok(val) = std::env::var("FOCUS_ON_OPEN") {
         core.set_focus_on_open(!matches!(
-            foo.to_lowercase().as_str(),
+            val.to_lowercase().as_str(),
             "0" | "false" | "off" | "no"
         ));
     }
@@ -453,12 +453,11 @@ fn main() -> ExitCode {
                             core.set_fullscreen_pan(enabled);
                         }
                         "OUTPUT_SCALE" => {
-                            if scale_120.is_none() {
-                                if let Ok(f) = val.parse::<f64>() {
-                                    if (0.25..=8.0).contains(&f) {
-                                        scale_120 = Some((f * 120.0).round().max(1.0) as u32);
-                                    }
-                                }
+                            if scale_120.is_none()
+                                && let Ok(f) = val.parse::<f64>()
+                                && (0.25..=8.0).contains(&f)
+                            {
+                                scale_120 = Some((f * 120.0).round().max(1.0) as u32);
                             }
                         }
                         "SCALING_FILTER" => {
@@ -474,14 +473,12 @@ fn main() -> ExitCode {
                                 ));
                             }
                         }
-                        "VRR_ENABLED" | "VRR" | "ADAPTIVE_SYNC" => {
-                            if vrr.is_none() {
-                                match val.to_lowercase().as_str() {
-                                    // auto (None): only while a window is fullscreen
-                                    "on" | "true" | "1" | "yes" => vrr = Some(true),
-                                    "off" | "false" | "0" | "no" => vrr = Some(false),
-                                    _ => {}
-                                }
+                        "VRR_ENABLED" | "VRR" | "ADAPTIVE_SYNC" if vrr.is_none() => {
+                            match val.to_lowercase().as_str() {
+                                // auto (None): only while a window is fullscreen
+                                "on" | "true" | "1" | "yes" => vrr = Some(true),
+                                "off" | "false" | "0" | "no" => vrr = Some(false),
+                                _ => {}
                             }
                         }
                         _ => {}
@@ -490,39 +487,36 @@ fn main() -> ExitCode {
             }
         }
     }
-    if direct_scanout.is_none() {
-        if let Ok(val) = std::env::var("DIRECT_SCANOUT") {
-            direct_scanout = Some(!matches!(
-                val.to_lowercase().as_str(),
-                "0" | "false" | "off" | "no"
-            ));
-        }
+    if direct_scanout.is_none()
+        && let Ok(val) = std::env::var("DIRECT_SCANOUT")
+    {
+        direct_scanout = Some(!matches!(
+            val.to_lowercase().as_str(),
+            "0" | "false" | "off" | "no"
+        ));
     }
-    if vrr.is_none() {
-        if let Ok(val) = std::env::var("VRR_ENABLED")
+    if vrr.is_none()
+        && let Ok(val) = std::env::var("VRR_ENABLED")
             .or_else(|_| std::env::var("VRR"))
             .or_else(|_| std::env::var("ADAPTIVE_SYNC"))
-        {
-            match val.to_lowercase().as_str() {
-                "on" | "true" | "1" | "yes" => vrr = Some(true),
-                "off" | "false" | "0" | "no" => vrr = Some(false),
-                _ => {}
-            }
+    {
+        match val.to_lowercase().as_str() {
+            "on" | "true" | "1" | "yes" => vrr = Some(true),
+            "off" | "false" | "0" | "no" => vrr = Some(false),
+            _ => {}
         }
     }
-    if scale_120.is_none() {
-        if let Ok(val) = std::env::var("OUTPUT_SCALE") {
-            if let Ok(f) = val.parse::<f64>() {
-                if (0.25..=8.0).contains(&f) {
-                    scale_120 = Some((f * 120.0).round().max(1.0) as u32);
-                }
-            }
-        }
+    if scale_120.is_none()
+        && let Ok(val) = std::env::var("OUTPUT_SCALE")
+        && let Ok(f) = val.parse::<f64>()
+        && (0.25..=8.0).contains(&f)
+    {
+        scale_120 = Some((f * 120.0).round().max(1.0) as u32);
     }
-    if scaling_filter.is_none() {
-        if let Ok(val) = std::env::var("SCALING_FILTER") {
-            scaling_filter = Some(val.to_lowercase());
-        }
+    if scaling_filter.is_none()
+        && let Ok(val) = std::env::var("SCALING_FILTER")
+    {
+        scaling_filter = Some(val.to_lowercase());
     }
     // the ShellPort's only consumer is the shell server (C7.4); without a socket it is dropped
     let extension = shell_socket.map(|path| shell::factory(shell_port, path));
