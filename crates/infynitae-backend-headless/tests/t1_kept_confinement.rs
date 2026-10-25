@@ -1,8 +1,7 @@
-//! C12.F17 Q3 (owner decision 2026-10-19, "exactly one") T1, on the production path (core +
-//! adapter + headless backend + a real client): the end of a compositor interaction and an output
-//! relocation send the batch's one true-position event to a kept confinement, as a fit or restore
-//! does (C12.F17 K4, `t1_fit_constraints`); a kept lock still receives no absolute motion
-//! (INV-INPUT-5, zwp_pointer_constraints_v1).
+//! Production path tests for C12.F17 Q3 (owner decision 2026-10-19, "exactly one"): the end of a
+//! compositor interaction and an output relocation send the batch's one true-position event to a
+//! kept confinement, as a fit or restore does (C12.F17 K4, `t1_fit_constraints`); a kept lock still
+//! receives no absolute motion (INV-INPUT-5, zwp_pointer_constraints_v1).
 //!
 //! - Pan release: W focused and constrained (x8 setup), a Logo+middle pan moves the camera under a
 //!   pointer that stays where it is on the output; at the release the reconciliation keeps the
@@ -225,7 +224,7 @@ fn a_relocation_onto_a_kept_confinement_sends_one_true_position_event() {
 }
 
 /// INV-INPUT-5 (C12.F17 Q2, Q3): the lock is kept, no `unlocked`, and no absolute motion reaches
-/// it (independent review 2026-10-20, finding 3: this path had no test).
+/// it.
 #[test]
 fn a_relocation_onto_a_kept_lock_sends_no_absolute_motion() {
     let (lines, _) = relocation_under(true);

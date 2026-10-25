@@ -1,4 +1,4 @@
-//! INC-4 T1: Keyboard ownership (K1–K9), ActiveElementFocus, and key bindings on the production path
+//! Production path tests for keyboard ownership (K1–K9), ActiveElementFocus, and key bindings
 //! (TST-07 / x10, OB-15).
 //!
 //! Evaluates the production Core, Wayland adapter, and headless backend with a recording client probe.

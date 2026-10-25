@@ -1,5 +1,5 @@
-//! Q-B1 (2026-10-18 repository audit): Escape cancels a camera pan (M22 "interaction | cancel |
-//! Normal | no revert; owned buttons stay owned"). A cancel is an interaction termination, so it
+//! Production path tests for cancelling a camera pan with Escape (2026-10-18; M22: interaction |
+//! cancel | Normal | no revert; owned buttons stay owned). A cancel is an interaction termination, so it
 //! has the consequences of the initiator's release, on the production path with a real client:
 //! - INV-SCALE-3: "The epoch ends at interaction termination": W's CameraPan epoch settles;
 //! - INV-INPUT-5: reconciliation runs at the end of a compositor interaction: a lock the client

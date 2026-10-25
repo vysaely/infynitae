@@ -1,8 +1,8 @@
-//! INC-3 T1: pointer intake, ownership, CameraPan, routing and the zero-output transition on the
-//! production path (core + adapter + headless backend + a real client over a socketpair).
+//! Production path tests for pointer intake, ownership, CameraPan, routing, and the zero-output
+//! transition (core + adapter + headless backend + a real client over a socketpair).
 //!
 //! TST-05 (x8) is ported for the non-constraint cases (C1, C6, C7, C8, C9; C3–C5 are locks and
-//! confinement, INC-5; C2 is the rejected LeaveFocus mode, not a production path). The oracle is
+//! confinement; C2 is the rejected LeaveFocus mode, not a production path). The oracle is
 //! the client's own wire log (`probe.ptr`, wl_fixed values as received) and hand-derived literals:
 //!
 //! Output A 1920x1080 at scale 1, camera centre (0,0): v = (−960, −540) lies on the 120 lattice,
@@ -300,8 +300,7 @@ fn pan_membership_changes_without_configures() {
     assert_eq!(r.since(m0), Vec::<String>::new());
 }
 
-/// INC-10 (G-OB24 met, C12.F14.5; replaces the INC-3 gate test `no_pan_at_persistent_zoom`, whose
-/// refusal C12.F14 lifted): a pan at a persistent zoom ≠ 1, at k ∉ n/120, moves the camera by
+/// A pan at a persistent zoom ≠ 1, at k ∉ n/120 (G-OB24 met, C12.F14.5), moves the camera by
 /// F-PAN-1 — `C = start − Q16(Σ dp / z)` at scale 1 — and keeps the output's lattice reference,
 /// so no surface's physical width or height changes in any frame (F-LATTICE-1). The per-frame
 /// reference of the base changes them (ED-1; seeded control in tools/verify-test-efficacy).
