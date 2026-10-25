@@ -1315,6 +1315,10 @@ impl Core {
             }
             (Lifecycle::Mapped, false) => {
                 // null-buffer commit: unmap; identity and anchor kept, snapshot dropped
+                self.input.interaction.orphan_element(id);
+                if self.resize.is_some_and(|r| r.element == id) {
+                    self.resize = None;
+                }
                 self.stage.set_tree(id, None).map_err(stale)?;
                 self.stage
                     .set_state(id, Lifecycle::Unmapped)
@@ -5889,5 +5893,42 @@ mod tests {
         let a700 = c.stage().anchor(id).unwrap();
         assert_eq!(a700.x + 700, start_a.x + 600);
         assert_eq!(a700.y + 500, start_a.y + 400);
+    }
+
+    /// Resize track is cleared when its element unmaps or is destroyed, and does not snap
+    /// the anchor on a subsequent remap.
+    #[test]
+    fn resize_track_cleared_on_unmap() {
+        let mut c = centred((1280, 800), 120, None);
+        let (id, _start_a) = placed(&mut c, 600, 400);
+
+        c.begin_resize(id, true, true);
+        assert!(c.toplevel_configure_state(id).resizing);
+
+        // Window moves to a different location
+        let mut fx = Vec::new();
+        let moved_anchor = CanvasPoint { x: 500, y: 500 };
+        c.place_by_shell(id, moved_anchor, &mut fx).unwrap();
+        assert_eq!(c.stage().anchor(id), Some(moved_anchor));
+
+        // Unmap via null buffer commit
+        c.toplevel_committed(id, sized(600, 400, false)).unwrap();
+        assert!(
+            !c.toplevel_configure_state(id).resizing,
+            "resizing cleared on unmap"
+        );
+
+        // Remap the element
+        c.toplevel_committed(id, sized(600, 400, false)).unwrap(); // awaiting first buffer
+        c.toplevel_committed(id, sized(600, 400, true)).unwrap(); // mapped
+        assert_eq!(c.stage().anchor(id), Some(moved_anchor));
+
+        // Further commit should NOT snap anchor back to start_anchor
+        c.toplevel_committed(id, sized(800, 600, true)).unwrap();
+        assert_eq!(
+            c.stage().anchor(id),
+            Some(moved_anchor),
+            "anchor must not snap back to stale resize start_anchor"
+        );
     }
 }
