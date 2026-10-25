@@ -228,14 +228,13 @@ fn main() -> ExitCode {
                     eprintln!("Error: --duration requires an argument in seconds");
                     return ExitCode::FAILURE;
                 }
-                let secs: f64 = match args[i].parse() {
-                    Ok(s) => s,
+                match parse_duration(&args[i]) {
+                    Ok(d) => duration = Some(d),
                     Err(_) => {
                         eprintln!("Error: invalid duration '{}'", args[i]);
                         return ExitCode::FAILURE;
                     }
-                };
-                duration = Some(Duration::from_secs_f64(secs));
+                }
             }
             "--max-frames" => {
                 i += 1;
@@ -612,5 +611,61 @@ fn main() -> ExitCode {
                 ExitCode::FAILURE
             }
         }
+    }
+}
+
+/// Maximum accepted run duration (365 days in seconds).
+const MAX_DURATION_SECS: f64 = 365.0 * 24.0 * 3600.0;
+
+/// Parses a duration argument in seconds.
+///
+/// Accepts non-negative finite floating-point values up to [`MAX_DURATION_SECS`].
+fn parse_duration(s: &str) -> Result<Duration, &'static str> {
+    let secs: f64 = s.parse().map_err(|_| "not a number")?;
+    if !secs.is_finite() || secs < 0.0 {
+        return Err("duration must be finite and non-negative");
+    }
+    if secs > MAX_DURATION_SECS {
+        return Err("duration exceeds maximum allowed");
+    }
+    Duration::try_from_secs_f64(secs).map_err(|_| "duration overflow")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_duration_valid() {
+        assert_eq!(parse_duration("0").unwrap(), Duration::from_secs(0));
+        assert_eq!(parse_duration("0.0").unwrap(), Duration::from_secs(0));
+        assert_eq!(parse_duration("1.5").unwrap(), Duration::from_millis(1500));
+        assert_eq!(parse_duration("60").unwrap(), Duration::from_secs(60));
+        assert_eq!(
+            parse_duration("31536000").unwrap(),
+            Duration::from_secs(31536000)
+        );
+    }
+
+    #[test]
+    fn test_parse_duration_rejects_invalid() {
+        // Negative
+        assert!(parse_duration("-1").is_err());
+        assert!(parse_duration("-0.001").is_err());
+
+        // Non-finite
+        assert!(parse_duration("nan").is_err());
+        assert!(parse_duration("NaN").is_err());
+        assert!(parse_duration("inf").is_err());
+        assert!(parse_duration("+inf").is_err());
+        assert!(parse_duration("-inf").is_err());
+
+        // Above upper bound
+        assert!(parse_duration("31536001").is_err());
+        assert!(parse_duration("1e30").is_err());
+
+        // Not a number
+        assert!(parse_duration("abc").is_err());
+        assert!(parse_duration("").is_err());
     }
 }
