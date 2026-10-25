@@ -269,7 +269,7 @@ pub fn run_nested_with(
         output_key,
         backend,
         last_abs_pos: None,
-        scale_120: 120,
+        scale_120,
         closed: false,
         options,
         host: HostFrameGate::new(),
@@ -430,7 +430,7 @@ fn handle_winit_event(data: &mut LoopData, event: WinitEvent) {
             let height = size.h.max(1) as u32;
             data.options.width = width;
             data.options.height = height;
-            let scale_120 = (scale_factor * 120.0).round().max(1.0) as u32;
+            let scale_120 = resolve_scale_120(data.options.scale_120, scale_factor);
             data.scale_120 = scale_120;
             data.last_abs_pos = None; // Reset baseline on resize (Defect B)
             let descriptor = OutputDescriptor {
@@ -648,6 +648,19 @@ pub fn normalize_rel_motion(delta: (f64, f64), scale_120: u32) -> (f64, f64) {
     (delta.0 / scale, delta.1 / scale)
 }
 
+/// Output scale factor (in units of 1/120) to use for a window of the given host scale factor.
+///
+/// Keeps the user's explicit scale when one was given; only follows the host scale when none was.
+pub fn resolve_scale_120(requested: Option<u32>, host_scale_factor: f64) -> u32 {
+    requested.unwrap_or_else(|| {
+        if host_scale_factor.is_finite() && host_scale_factor > 0.0 {
+            (host_scale_factor * 120.0).round().max(1.0) as u32
+        } else {
+            120
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -753,5 +766,30 @@ mod tests {
         // 240 Hz (240,000 mHz): ~4.166 ms
         let p240 = vblank_period(240_000);
         assert_eq!(p240.as_micros(), 4_166);
+    }
+
+    #[test]
+    fn test_resolve_scale_120_honours_requested_scale() {
+        // User requested scale 2.0 (240/120); host is scale 1.0
+        assert_eq!(resolve_scale_120(Some(240), 1.0), 240);
+        // User requested scale 2.0 (240/120); host is scale 1.5
+        assert_eq!(resolve_scale_120(Some(240), 1.5), 240);
+        // User requested scale 1.5 (180/120); host is scale 2.0
+        assert_eq!(resolve_scale_120(Some(180), 2.0), 180);
+    }
+
+    #[test]
+    fn test_resolve_scale_120_follows_host_scale_when_none_requested() {
+        // No requested scale; host scale 1.0 -> 120
+        assert_eq!(resolve_scale_120(None, 1.0), 120);
+        // No requested scale; host scale 1.25 -> 150
+        assert_eq!(resolve_scale_120(None, 1.25), 150);
+        // No requested scale; host scale 1.5 -> 180
+        assert_eq!(resolve_scale_120(None, 1.5), 180);
+        // No requested scale; host scale 2.0 -> 240
+        assert_eq!(resolve_scale_120(None, 2.0), 240);
+        // Non-positive or non-finite host scale falls back safely
+        assert_eq!(resolve_scale_120(None, 0.0), 120);
+        assert_eq!(resolve_scale_120(None, f64::NAN), 120);
     }
 }
