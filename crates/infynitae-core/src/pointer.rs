@@ -439,7 +439,7 @@ mod tests {
         assert_eq!(core.constraint(), None);
         assert!(core.pending_constraint().is_some());
 
-        // 2. Grant ActiveElementFocus: reconciliation at batch end activates pending constraint!
+        // 2. Grant ActiveElementFocus: reconciliation at batch end activates pending constraint.
         let fx = core.set_focus(&mut input_port, Some(elem)).unwrap();
         assert!(
             fx.contains(&Effect::ConstraintActivate {
@@ -653,7 +653,7 @@ mod tests {
         assert!(core.buttons().client_owns_any());
 
         // ActiveElementFocus moves to None while button is held:
-        // Because client grab is active, reconciliation is DEFERRED!
+        // because client grab is active, reconciliation is deferred.
         let fx = core.set_focus(&mut input_port, None).unwrap();
         assert!(
             !fx.iter()
@@ -664,7 +664,7 @@ mod tests {
             "constraint must stay active while deferred"
         );
 
-        // Client releases button: grab sequence ends -> reconciliation runs!
+        // Client releases button: grab sequence ends -> reconciliation runs.
         let btn_up = PhysicalEvent::PointerButton {
             button: 0x110,
             pressed: false,
