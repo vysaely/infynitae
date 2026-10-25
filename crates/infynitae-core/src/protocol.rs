@@ -1409,6 +1409,8 @@ impl Core {
     pub fn toplevel_destroyed(&mut self, id: ElementId) -> Vec<Effect> {
         self.remember_closed(id);
         self.scales.remove(id);
+        // its own parent link, and its children's (they have no parent any more)
+        self.toplevel_parents.retain(|(c, p)| *c != id && *p != id);
         // a drag on it ends with the release; nothing is sized or moved any more
         self.input.interaction.orphan_element(id);
         if self.resize.is_some_and(|r| r.element == id) {
