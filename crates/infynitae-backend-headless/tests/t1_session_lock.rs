@@ -252,3 +252,114 @@ fn a_second_lock_is_refused_while_the_first_lives() {
     r.ls.pump();
     assert!(!r.ls.state.is_locked());
 }
+
+/// A second client, not the lock holder: it binds by the probe's global names and ignores events.
+struct Intruder {
+    conn: Connection,
+    queue: wayland_client::EventQueue<Nobody>,
+    registry: wayland_client::protocol::wl_registry::WlRegistry,
+}
+
+/// The intruder's event handler: every event is ignored.
+struct Nobody;
+
+wayland_client::delegate_noop!(Nobody: ignore wayland_client::protocol::wl_registry::WlRegistry);
+wayland_client::delegate_noop!(Nobody: ignore ExtSessionLockManagerV1);
+wayland_client::delegate_noop!(Nobody: ignore ExtSessionLockV1);
+wayland_client::delegate_noop!(Nobody: ignore ExtSessionLockSurfaceV1);
+wayland_client::delegate_noop!(Nobody: ignore wayland_client::protocol::wl_compositor::WlCompositor);
+wayland_client::delegate_noop!(Nobody: ignore WlSurface);
+wayland_client::delegate_noop!(Nobody: ignore wayland_client::protocol::wl_output::WlOutput);
+
+impl Intruder {
+    fn connect(r: &mut Rig) -> Intruder {
+        let (server_end, client_end) = std::os::unix::net::UnixStream::pair().unwrap();
+        client_end.set_nonblocking(true).unwrap();
+        r.ls.display
+            .handle()
+            .insert_client(
+                server_end,
+                std::sync::Arc::new(infynitae_wayland::ClientState::default()),
+            )
+            .unwrap();
+        let conn = Connection::from_socket(client_end).unwrap();
+        let queue = conn.new_event_queue();
+        let registry = conn.display().get_registry(&queue.handle(), ());
+        Intruder {
+            conn,
+            queue,
+            registry,
+        }
+    }
+
+    fn bind<I: wayland_client::Proxy + 'static>(&self, r: &Rig, interface: &str, version: u32) -> I
+    where
+        Nobody: Dispatch<I, ()>,
+    {
+        let (name, _, _) =
+            r.ls.probe
+                .globals
+                .iter()
+                .find(|(_, i, _)| i == interface)
+                .cloned()
+                .unwrap();
+        self.registry.bind(name, version, &self.queue.handle(), ())
+    }
+
+    /// Sends what it asked for and lets the server handle it.
+    fn send(&mut self, r: &mut Rig) {
+        let _ = self.conn.flush();
+        r.ls.pump();
+        if let Some(guard) = self.conn.prepare_read() {
+            let _ = guard.read();
+        }
+        let _ = self.queue.dispatch_pending(&mut Nobody);
+    }
+}
+
+#[test]
+fn another_client_cannot_unlock_through_a_refused_lock() {
+    let (mut r, _) = focused_w();
+    let (first, _s1) = lock(&mut r, 1);
+    let mut x = Intruder::connect(&mut r);
+    let manager: ExtSessionLockManagerV1 = x.bind(&r, "ext_session_lock_manager_v1", 1);
+    let refused = manager.lock(&x.queue.handle(), ());
+    x.send(&mut r);
+    // Smithay posts invalid_unlock on the refused lock but still calls the handler's unlock
+    refused.unlock_and_destroy();
+    x.send(&mut r);
+    assert!(
+        r.ls.state.is_locked(),
+        "a refused lock unlocked the session"
+    );
+    assert!(r.ls.state.take_unlock_releases().is_none());
+    // the holder still unlocks
+    first.unlock_and_destroy();
+    r.ls.pump();
+    assert!(!r.ls.state.is_locked());
+}
+
+#[test]
+fn another_client_cannot_replace_the_lock_surface() {
+    let (mut r, _) = focused_w();
+    let (_first, _s1) = lock(&mut r, 1);
+    let output_id = r.ls.output();
+    let holder_surface =
+        r.ls.state
+            .lock_surface(output_id)
+            .expect("the holder's lock surface");
+    let mut x = Intruder::connect(&mut r);
+    let manager: ExtSessionLockManagerV1 = x.bind(&r, "ext_session_lock_manager_v1", 1);
+    let compositor: wayland_client::protocol::wl_compositor::WlCompositor =
+        x.bind(&r, "wl_compositor", 4);
+    let output: wayland_client::protocol::wl_output::WlOutput = x.bind(&r, "wl_output", 4);
+    let refused = manager.lock(&x.queue.handle(), ());
+    let surface = compositor.create_surface(&x.queue.handle(), ());
+    refused.get_lock_surface(&surface, &output, &x.queue.handle(), ());
+    x.send(&mut r);
+    assert_eq!(
+        r.ls.state.lock_surface(output_id),
+        Some(holder_surface),
+        "the lock surface was replaced"
+    );
+}

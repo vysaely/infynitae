@@ -11,6 +11,12 @@
 //! and released after the unlock only updates XKB too, so no modifier sticks and no client is
 //! told of a release it never saw pressed.
 //!
+//! Only the lock holder unlocks. Smithay 0.7 calls `unlock` for an `unlock_and_destroy` on any
+//! lock object, a refused one too (it posts `invalid_unlock` and goes on), so `unlock` only
+//! notes the request; after the dispatch, [`WaylandState::settle_unlock`] ends the lock if the
+//! holder's lock object is gone while its client is still connected (a client that destroyed
+//! its own confirmed lock). A lock surface is taken only from the holder's client.
+//!
 //! A lock outlives its client (the protocol's rule): when the lock client dies, the screen stays
 //! black and locked, and a new lock client may take the lock over. Only backends that draw it
 //! offer the global ([`WaylandState::enable_session_lock`]).
@@ -27,6 +33,7 @@ use smithay::desktop::PopupUngrabStrategy;
 use smithay::input::keyboard::{FilterResult, Keycode};
 use smithay::reexports::wayland_protocols::ext::session_lock::v1::server::ext_session_lock_v1::ExtSessionLockV1;
 use smithay::reexports::wayland_server::Resource;
+use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::SERIAL_COUNTER;
@@ -46,6 +53,10 @@ pub(crate) struct SessionLock {
     locked: bool,
     /// The lock object of the client holding the lock: another lock is refused while it lives.
     holder: Option<ExtSessionLockV1>,
+    /// The holder's client.
+    holder_client: Option<ClientId>,
+    /// `unlock` was called during the last dispatch: [`WaylandState::settle_unlock`] decides.
+    unlock_requested: bool,
     /// A lock request confirmed once a locked frame has been drawn.
     pending: Option<SessionLocker>,
     surfaces: Vec<(OutputId, LockSurface)>,
@@ -66,6 +77,8 @@ impl WaylandState {
                 manager: SessionLockManagerState::new::<Self, _>(&self.dh, |_| true),
                 locked: false,
                 holder: None,
+                holder_client: None,
+                unlock_requested: false,
                 pending: None,
                 surfaces: Vec::new(),
                 lock_keys: HashSet::new(),
@@ -175,6 +188,42 @@ impl WaylandState {
         }
     }
 
+    /// After each client dispatch: an unlock asked for during it ends the lock only if the holder
+    /// destroyed its confirmed lock (its lock object is gone, its client still connected). An
+    /// `unlock_and_destroy` on a refused lock, or the holder's death, leaves the session locked.
+    pub fn settle_unlock(&mut self) {
+        let Some(l) = self.session_lock.as_mut() else {
+            return;
+        };
+        if !std::mem::take(&mut l.unlock_requested) || !l.locked {
+            return;
+        }
+        let holder_destroyed = l.holder.as_ref().is_some_and(|h| !h.is_alive());
+        let confirmed = l.pending.is_none();
+        let mut connected = false;
+        if let Some(id) = l.holder_client.clone() {
+            self.dh
+                .backend_handle()
+                .with_all_clients(|c| connected |= c == id);
+        }
+        if !(holder_destroyed && confirmed && connected) {
+            eprintln!("[infynitae] Session lock: unlock refused (not the lock holder's)");
+            return;
+        }
+        let Some(l) = self.session_lock.as_mut() else {
+            return;
+        };
+        l.locked = false;
+        l.holder = None;
+        l.holder_client = None;
+        l.pending = None;
+        l.surfaces.clear();
+        l.just_unlocked = true;
+        // nobody has the keyboard until Core has its releases (`finish_unlock`)
+        let kb = self.keyboard_handle();
+        kb.set_focus(self, None, SERIAL_COUNTER.next_serial());
+    }
+
     /// The live lock surface of `output`, if its lock client made one.
     pub fn lock_surface(&self, output: OutputId) -> Option<WlSurface> {
         self.session_lock
@@ -229,6 +278,8 @@ impl SessionLockHandler for WaylandState {
             return; // a live lock client holds the lock already
         }
         l.holder = Some(confirmation.ext_session_lock().clone());
+        l.holder_client = confirmation.ext_session_lock().client().map(|c| c.id());
+        l.unlock_requested = false;
         l.surfaces.clear();
         if l.locked {
             // taking over from a lock client that died: the session never stopped being locked
@@ -262,23 +313,27 @@ impl SessionLockHandler for WaylandState {
     }
 
     fn unlock(&mut self) {
-        let Some(l) = self.session_lock.as_mut() else {
-            return;
-        };
-        l.locked = false;
-        l.holder = None;
-        l.pending = None;
-        l.surfaces.clear();
-        l.just_unlocked = true;
-        // nobody has the keyboard until Core has its releases (`finish_unlock`)
-        let kb = self.keyboard_handle();
-        kb.set_focus(self, None, SERIAL_COUNTER.next_serial());
+        // whose request this was is not known here: decided after the dispatch (module docs)
+        if let Some(l) = self.session_lock.as_mut() {
+            l.unlock_requested = true;
+        }
     }
 
     fn new_surface(&mut self, surface: LockSurface, output: WlOutput) {
         let Some(id) = self.output_id_of(&output) else {
             return;
         };
+        // a refused lock's surface would replace the holder's (and get the typed password)
+        let holder_client = self.session_lock.as_ref().and_then(|l| {
+            l.holder
+                .as_ref()
+                .filter(|h| h.is_alive())
+                .and(l.holder_client.clone())
+        });
+        let from = surface.wl_surface().client().map(|c| c.id());
+        if holder_client.is_none() || from != holder_client {
+            return;
+        }
         if let Some((w, h)) = self.lock_surface_size(id) {
             surface.with_pending_state(|s| s.size = Some((w, h).into()));
         }

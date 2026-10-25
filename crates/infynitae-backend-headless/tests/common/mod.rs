@@ -2091,6 +2091,7 @@ impl Lockstep {
                 .dispatch_clients(&mut self.state)
                 .expect("server dispatch");
             // as the session does after each dispatch
+            self.state.settle_unlock();
             self.state.clear_orphaned_selections();
             self.state.refuse_client_drags();
             frame_fallback(&mut self.state, self.now);
