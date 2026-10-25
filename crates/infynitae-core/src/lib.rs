@@ -1,9 +1,8 @@
 //! Infynitae Native core: the spatial and policy authority (FOUNDATION_ARCHITECTURE C1.2).
 //!
-//! INC-0 state: authority **shape** only. The types and entry points below exist so that the
-//! architecture probes in `enforcement/probes` and `tools/verify-architecture` compile against the
-//! real production boundary (OB-19). No camera, output or input behaviour exists yet; later
-//! increments populate these boundaries (FOUNDATION_IMPLEMENTATION_PLAN INC-1 onwards).
+//! Core coordinates the infinite canvas stage, per-output cameras and projection views, output
+//! lifecycle and arrangement, pointer and keyboard input routing, focus, layer surfaces, window
+//! clustering, scale policy, and frame scheduling.
 //!
 //! Authority model (INV-CAMERA-1, INV-OUTPUT-2, C1.5):
 //! * camera state is mutable only inside [`navigation`], and every mutation consumes a fresh
@@ -132,12 +131,12 @@ pub enum PhysicalEvent {
 
 /// A semantic command from the trusted shell (C7.2, INV-SHELL-1): a value Core validates and then
 /// executes through the same single-writer paths user input uses. There is no raw state write, no
-/// size write and no mutable access to Core. The set is INC-11's (owner decision 2026-10-20, D3).
+/// size write and no mutable access to Core (owner decision 2026-10-20, D3).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ShellCommand {
     /// Centres the camera of `output` on a target at its current zoom (no zoom change, D5). Atomic
-    /// (ADR-11 as amended 1R: no animation in Foundation 01); refused while `output` presents a
-    /// protocol-fullscreen element or an interaction owns the pointer.
+    /// (ADR-11: no animation); refused while `output` presents a protocol-fullscreen element or
+    /// an interaction owns the pointer.
     Navigate {
         output: output::OutputId,
         to: NavigateTo,
@@ -230,17 +229,18 @@ pub enum EntryError {
 
 pub use protocol::PlacementPolicy;
 
-/// Why no frame could be produced for an output.
-/// Behavior of Super+Enter: Maximize (True native viewport fill, 100% crisp) or Fit (camera zoom).
+/// Action taken on Super+Enter: toggle fitting the camera to the window (`Fit`), or toggle
+/// maximizing the window to fill the usable viewport (`Maximize`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum EnterMode {
-    /// Super+Enter fits the camera to the window (legacy camera zoom).
+    /// Super+Enter fits the camera to the window.
     #[default]
     Fit,
-    /// Super+Enter maximizes the window to fill the usable viewport at 100% native resolution (no blur).
+    /// Super+Enter maximizes the window to fill the usable viewport.
     Maximize,
 }
 
+/// Why no frame could be produced for an output.
 #[derive(Debug, PartialEq, Eq)]
 pub enum FrameError {
     /// The output is not connected.
@@ -394,7 +394,7 @@ pub struct Core {
     pub focus_follows_mouse_strict: bool,
     /// Whether focus cycling (Super+Tab) moves the camera to the focused window.
     pub focus_cycle_navigate: bool,
-    /// Super+Enter action mode: Maximize (True native viewport fill) vs Fit (camera zoom).
+    /// Super+Enter action mode: Maximize (fill usable viewport) vs Fit (camera zoom).
     pub enter_mode: EnterMode,
     /// Outputs on which fullscreen presentation is temporarily suppressed (e.g. user navigated to another window).
     pub(crate) presentation_suppressed: Vec<output::OutputId>,
@@ -570,7 +570,7 @@ impl Core {
         self.pan_mode = mode;
     }
 
-    /// Sets the action of Super+Enter (`Fit` for camera zoom or `Maximize` for native 100% crisp viewport fill).
+    /// Sets the action of Super+Enter (`Fit` for camera zoom or `Maximize` to fill usable viewport).
     pub fn set_enter_mode(&mut self, mode: EnterMode) {
         self.enter_mode = mode;
     }
@@ -784,7 +784,7 @@ impl Core {
         Ok(fx)
     }
 
-    /// Audit finding A-8: `element` is hidden by a presentation — an output presents another
+    /// A-8: `element` is hidden by a presentation — an output presents another
     /// element, the camera bound to that output would show `element` were the presentation not
     /// replacing its view, and no output observes it. Keyboard focus is not moved to such an
     /// element (`set_focus`, the initial grant, FocusNext, the successor of a lost target). An
@@ -891,7 +891,7 @@ impl Core {
             .any(|f| self.stage.mapped(f.element).is_some())
     }
 
-    /// FocusNext binding (Super+Enter): cycles focus to next live mapped element in stage order.
+    /// FocusNext binding (Super+Tab): cycles focus to next live mapped element in stage order.
     pub(crate) fn focus_next(&mut self) -> Vec<protocol::Effect> {
         let live = self.focusable_elements();
         let mut fx = self.focus.focus_next(&live);
@@ -1080,7 +1080,7 @@ impl Core {
             | E::PointerZeroOutputEnd
             | E::KeyboardIntercept { .. }
             // a scale hint is not in INV-FRAME-3's kick list (ARCHITECTURE scenario 11); an
-            // unobserved element's hint is held, except that P7 still lowers it, and that hint
+            // unobserved element's hint is held, except that P7 still lowers it
             | E::PreferredScale { .. }
             | E::ToggleLauncher
             | E::SpawnTerminal
@@ -1183,7 +1183,6 @@ impl Core {
         );
     }
 
-    /// The output's frame is stale (its view or what it shows changed); its storage is kept.
     /// Every output's frame is stale (a z-order change shows wherever the element is).
     pub(crate) fn invalidate_all_frames(&mut self) {
         for slot in &mut self.frames {
@@ -1191,6 +1190,7 @@ impl Core {
         }
     }
 
+    /// The output's frame is stale (its view or what it shows changed); its storage is kept.
     pub(crate) fn invalidate_frame(&mut self, output: output::OutputId) {
         for slot in self.frames.iter_mut().filter(|s| s.output == output) {
             slot.current = false;
@@ -2047,7 +2047,7 @@ mod tests {
         }
     }
 
-    /// INC1-F07: shown root + unshown subsurface. The unshown key is absent from
+    /// Shown root + unshown subsurface (INC1-F07). The unshown key is absent from
     /// `ProjectionFrame::entries` and cannot be hit; the root below it is.
     #[test]
     fn unshown_subsurface_is_not_in_the_frame() {
@@ -2062,7 +2062,7 @@ mod tests {
         );
     }
 
-    /// INC1-F07: shown root + shown sibling + unshown sibling.
+    /// Shown root + shown sibling + unshown sibling (INC1-F07).
     #[test]
     fn unshown_sibling_is_not_in_the_frame() {
         let (mut core, o) = connected();
@@ -2083,7 +2083,7 @@ mod tests {
         );
     }
 
-    /// INC1-F07: nested subsurfaces. A mapped child of an unmapped parent is not shown (Smithay
+    /// Nested subsurfaces (INC1-F07). A mapped child of an unmapped parent is not shown (Smithay
     /// skips the children of a surface without a view); an unmapped child of a mapped parent is
     /// not shown while its parent is.
     #[test]
@@ -2104,7 +2104,7 @@ mod tests {
         assert_eq!(frame_keys(&mut core, o), vec![2, 1]);
     }
 
-    /// INC1-F07: a subsurface leaves the frame when it is unmapped and returns when remapped.
+    /// A subsurface leaves the frame when it is unmapped and returns when remapped (INC1-F07).
     #[test]
     fn subsurface_unmap_and_remap_change_the_frame() {
         let (mut core, o) = connected();
@@ -2157,10 +2157,10 @@ mod tests {
         assert_eq!(core.cameras().center(0), None);
     }
 
-    // ---- INC-10: fit and the bounded restore history (F-FIT-1, OBJ-30, M8; C12.F15, C12.F16)
+    // ---- Fit and bounded restore history (F-FIT-1, OBJ-30, M8; C12.F15, C12.F16)
     //
-    // Every test drives the production entries: key presses through `physical_input` (Logo+F fit,
-    // Logo+Shift+F restore), pans through it, outputs through the lifecycle entries. Camera values
+    // Every test drives the production entries: key presses through `physical_input` (Super+Enter
+    // fit toggle), pans through it, outputs through the lifecycle entries. Camera values
     // are compared exactly (Q16 centre, zoom bits).
 
     use crate::navigation::{CameraValue, HISTORY_CAPACITY};
@@ -2418,9 +2418,9 @@ mod tests {
         assert!(on(&n, w) && on(&n, u), "the restore: U back on A");
     }
 
-    /// During an interaction the bindings do not resolve (INC-10 exit item 4, "none during one"): with
-    /// a pan held, Logo+F and Logo+Shift+F neither fit nor record nor restore, and send no
-    /// true-position event; the pan alone moves the camera.
+    /// During an interaction the bindings do not resolve: with a pan held, Super+Enter neither
+    /// fits nor records nor restores, and sends no true-position event; the pan alone moves
+    /// the camera.
     #[test]
     fn no_fit_or_restore_during_an_interaction() {
         let (mut n, a, _) = Nav::new();
@@ -2742,8 +2742,7 @@ mod tests {
         }
     }
 
-    /// C12.F16.6 item 7. No entry addresses a restore to an `OutputId` (`ShellCommand` has no
-    /// variant before INC-11); the binding restores on the pointer's output, so a restore after
+    /// C12.F16.6 item 7: the binding restores on the pointer's output, so a restore after
     /// O's disconnection reaches no output: nothing changes, and after O reconnects a fit and a
     /// restore behave as items 2–3.
     #[test]
