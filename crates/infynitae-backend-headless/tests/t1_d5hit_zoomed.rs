@@ -1,6 +1,5 @@
-//! TST-18 (d5hit), zoomed configurations — the INC-10 production parity TST-18 names
-//! ("INC-1 (zoom-1 configurations), INC-10 (zoomed configurations)") and part of OB-14's
-//! zoom ≠ 1 hit-test coverage ("0 mismatches vs presented").
+//! TST-18 (d5hit), zoomed configurations: production parity tests and OB-14 zoom ≠ 1 hit-test
+//! coverage (zero mismatches against presented).
 //!
 //! The D5 tree (root, nested subsurface, below-subsurface reached through an input-region hole,
 //! popup and popup subsurface; `build_xhit_tree`) at its D5 anchor (1100, 420) on output B
@@ -204,7 +203,7 @@ fn tst18_d5hit_zoomed_configurations() {
     let mut ls = Lockstep::new(Some(output((3840, 2160), 180)));
     build_xhit_tree(&mut ls, (800, 600), true);
     // the D5 camera's fractional centre over the tree, and zooms whose k = 1.5·zoom is not on
-    // the 1/120 lattice: ED-1's k = 1080/651, the INC-10 fit and perf zooms, a deep zoom-out and
+    // the 1/120 lattice: ED-1's k = 1080/651, fit and performance zooms, a deep zoom-out and
     // a magnification that crops the tree at the view's edges
     let centre = (1500.45, 720.15);
     let zooms = [1080.0 / 651.0 / 1.5, 0.73, 1.797, 2.391, 0.2537, 3.713];
