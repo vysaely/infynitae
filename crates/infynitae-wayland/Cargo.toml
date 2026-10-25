@@ -20,6 +20,10 @@ libc = { version = "=0.2.190", default-features = false }
 # cursors and the empty canvas; xcursor used to parse cursor themes and Xcursor images (already
 # in the locked graph through Smithay's dependencies: no new crate).
 xcursor = { version = "=0.3.11", default-features = false }
+# Server-side bindings for wlr-gamma-control-unstable-v1 and wlr-output-power-management-unstable-v1
+# (already in the locked graph through Smithay and winit: no new crate).
+wayland-protocols-wlr = { version = "=0.3.12", default-features = false, features = ["server"] }
+
 
 # Negative probes (OB-19); see tools/verify-architecture. Never enabled by default.
 [features]

@@ -19,6 +19,7 @@
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, Transform};
@@ -230,6 +231,54 @@ struct Screen {
     vrr_on: bool,
 }
 
+/// DRM per-screen gamma ramp state.
+struct DrmScreenGamma {
+    crtc: crtc::Handle,
+    gamma_size: u32,
+    original_gamma: (Vec<u16>, Vec<u16>, Vec<u16>),
+    current_gamma: Option<(Vec<u16>, Vec<u16>, Vec<u16>)>,
+}
+
+/// DRM backend implementation of `infynitae_wayland::gamma::GammaHandler`.
+struct DrmGammaHandler {
+    drm_fd: DrmDeviceFd,
+    screens: Arc<Mutex<HashMap<OutputId, DrmScreenGamma>>>,
+}
+
+impl infynitae_wayland::gamma::GammaHandler for DrmGammaHandler {
+    fn gamma_size(&self, output: OutputId) -> Option<u32> {
+        let map = self.screens.lock().unwrap();
+        map.get(&output).map(|s| s.gamma_size).filter(|&s| s > 0)
+    }
+
+    fn set_gamma(
+        &mut self,
+        output: OutputId,
+        red: &[u16],
+        green: &[u16],
+        blue: &[u16],
+    ) -> Result<(), infynitae_wayland::gamma::GammaSetError> {
+        let mut map = self.screens.lock().unwrap();
+        let Some(screen) = map.get_mut(&output) else {
+            return Err(infynitae_wayland::gamma::GammaSetError);
+        };
+        self.drm_fd
+            .set_gamma(screen.crtc, red, green, blue)
+            .map_err(|_| infynitae_wayland::gamma::GammaSetError)?;
+        screen.current_gamma = Some((red.to_vec(), green.to_vec(), blue.to_vec()));
+        Ok(())
+    }
+
+    fn reset_gamma(&mut self, output: OutputId) {
+        let mut map = self.screens.lock().unwrap();
+        if let Some(screen) = map.get_mut(&output) {
+            screen.current_gamma = None;
+            let (r, g, b) = &screen.original_gamma;
+            let _ = self.drm_fd.set_gamma(screen.crtc, r, g, b);
+        }
+    }
+}
+
 struct LoopData {
     state: WaylandState,
     session: Session,
@@ -239,6 +288,7 @@ struct LoopData {
     drm: DrmDevice,
     renderer: GlesRenderer,
     screens: Vec<Screen>,
+    gamma_screens: Arc<Mutex<HashMap<OutputId, DrmScreenGamma>>>,
     libinput: Libinput,
     scale_120: u32,
     /// The session is active (not switched away).
@@ -456,6 +506,8 @@ pub fn run_console_with(
     let resources = drm.resource_handles()?;
     let mut used: Vec<crtc::Handle> = Vec::new();
     let mut screens = Vec::new();
+    let gamma_screens: Arc<Mutex<HashMap<OutputId, DrmScreenGamma>>> =
+        Arc::new(Mutex::new(HashMap::new()));
 
     let mut connected_connectors = Vec::new();
     for &handle in resources.connectors() {
@@ -609,10 +661,42 @@ pub fn run_console_with(
             vrr_supported,
             vrr_on,
         });
+
+        // Initialize DRM gamma LUT for this screen
+        if let Ok(crtc_info) = drm.get_crtc(crtc) {
+            let gamma_len = crtc_info.gamma_length();
+            if gamma_len > 0 {
+                let sz = gamma_len as usize;
+                let mut r = vec![0u16; sz];
+                let mut g = vec![0u16; sz];
+                let mut b = vec![0u16; sz];
+                if drm.get_gamma(crtc, &mut r, &mut g, &mut b).is_err() {
+                    for i in 0..sz {
+                        let val = (i as u32 * 65535 / (sz - 1).max(1) as u32) as u16;
+                        r[i] = val;
+                        g[i] = val;
+                        b[i] = val;
+                    }
+                }
+                gamma_screens.lock().unwrap().insert(
+                    id,
+                    DrmScreenGamma {
+                        crtc,
+                        gamma_size: gamma_len,
+                        original_gamma: (r, g, b),
+                        current_gamma: None,
+                    },
+                );
+            }
+        }
     }
     if screens.is_empty() {
         return Err("no connected screen".into());
     }
+    state.set_gamma_handler(Arc::new(Mutex::new(DrmGammaHandler {
+        drm_fd: drm.device_fd().clone(),
+        screens: gamma_screens.clone(),
+    })));
     state.report_renderer_limits(&AssumedGlesLimits)?;
 
     let mut libinput = Libinput::new_with_udev(LibinputSessionInterface::from(seat.clone()));
@@ -674,6 +758,15 @@ pub fn run_console_with(
                     s.pending = false;
                     s.shows_locked = false;
                 }
+                // Re-apply client's gamma ramp after VT switch
+                {
+                    let gamma_map = data.gamma_screens.lock().unwrap();
+                    for screen in gamma_map.values() {
+                        if let Some((r, g, b)) = &screen.current_gamma {
+                            let _ = data.drm.device_fd().set_gamma(screen.crtc, r, g, b);
+                        }
+                    }
+                }
                 data.active = true;
                 data.session.request_frame();
             }
@@ -725,6 +818,7 @@ pub fn run_console_with(
         drm,
         renderer,
         screens,
+        gamma_screens: gamma_screens.clone(),
         libinput,
         scale_120,
         active: true,
@@ -1449,6 +1543,15 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             let _ = s.compositor.reset_state();
             s.pending = false;
             s.shows_locked = false;
+        }
+        // Re-apply client's gamma ramp after DPMS wake
+        {
+            let gamma_map = data.gamma_screens.lock().unwrap();
+            for screen in gamma_map.values() {
+                if let Some((r, g, b)) = &screen.current_gamma {
+                    let _ = data.drm.device_fd().set_gamma(screen.crtc, r, g, b);
+                }
+            }
         }
         data.session.request_frame();
     }

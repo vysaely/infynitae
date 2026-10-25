@@ -64,8 +64,9 @@ ALLOWED_INTERNAL = {
 ALLOWED_EXTERNAL = {
     CORE: set(),
     # libc: the session's signal self-pipe (owner decision 2026-10-19; signal-hook rejected);
-    # xcursor: the compositor draws the user's cursor theme (owner decision 2026-10-25; already locked)
-    WAYLAND: {"smithay", "libc", "xcursor"},
+    # xcursor: the compositor draws the user's cursor theme (owner decision 2026-10-25; already locked);
+    # wayland-protocols-wlr: bindings for wlr-gamma-control and wlr-output-power-management (already locked)
+    WAYLAND: {"smithay", "libc", "xcursor", "wayland-protocols-wlr"},
     HEADLESS: {"smithay"},
     WINIT: {"smithay"},
     DRM: {"smithay"},  # T7: drm, gbm, input, libseat, udev arrive through Smithay's features only

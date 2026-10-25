@@ -16,6 +16,7 @@ pub mod convert;
 pub mod cursor;
 pub mod extension;
 mod frames;
+pub mod gamma;
 mod handlers;
 mod image_copy;
 mod keyboard;
@@ -234,6 +235,7 @@ pub struct WaylandState {
     pub(crate) serial_outputs:
         std::collections::VecDeque<(smithay::utils::Serial, infynitae_core::output::OutputId)>,
     pub screencopy: screencopy::ScreencopyState,
+    pub gamma: gamma::GammaState,
     /// `ext-image-copy-capture-v1` output capture (`image_copy`); frames join `screencopy`'s queue.
     #[expect(
         dead_code,
@@ -507,6 +509,7 @@ impl WaylandState {
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),
             screencopy: screencopy::ScreencopyState::new(display),
+            gamma: gamma::GammaState::new(display),
             image_copy: image_copy::ImageCopyState::new(display),
             dmabuf: DmabufState::new(),
             dmabuf_global: None,
@@ -1188,6 +1191,14 @@ impl WaylandState {
             .rev()
             .find(|(s, _)| *s == serial)
             .map(|(_, o)| *o)
+    }
+
+    /// Registers the backend gamma handler for querying and setting output gamma ramps.
+    pub fn set_gamma_handler(
+        &mut self,
+        handler: std::sync::Arc<std::sync::Mutex<dyn gamma::GammaHandler>>,
+    ) {
+        self.gamma.set_handler(handler);
     }
 }
 
