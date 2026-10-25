@@ -45,6 +45,10 @@ these by date, e.g. "(owner, 2026-10-24)".
 
 ## Windows and focus
 
+- **Focus follows the pointer, and empty canvas unfocuses** (2026-10-25, `FOCUS_FOLLOWS_MOUSE=
+  "strict"`, the owner's choice: "strict is really nice"): leaving a game for the canvas lets go
+  of its keyboard and cursor at once. `sloppy` keeps the focus over empty canvas, `click` only
+  changes it on a click.
 - **Only windows you opened take focus and move the camera** (2026-10-24, `FOCUS_ON_OPEN` /
   `TELEPORT_ON_OPEN="user"`): windows from your shortcuts, your launcher or a command in the
   focused terminal; a popup an app opens by itself appears quietly.

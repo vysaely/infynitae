@@ -19,7 +19,7 @@ TOUCHPAD_NATURAL_SCROLL="false"   # content follows the fingers
 SUPER_FREES_CURSOR="true"         # holding Super frees a cursor a game captured (Dota…)
 
 # ── Windows & canvas ──────────────────────────────────────────────────── [save] ──
-FOCUS_FOLLOWS_MOUSE="sloppy"      # sloppy: hover focuses, kept over empty canvas
+FOCUS_FOLLOWS_MOUSE="strict"      # sloppy: hover focuses, kept over empty canvas
                                   # strict: hover focuses, empty canvas unfocuses | click
 FOCUS_ON_OPEN="user"              # a new window takes the focus — user: only windows you opened
                                   # (shortcuts, launcher, a command in the focused terminal), not
