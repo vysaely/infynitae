@@ -9,8 +9,8 @@
 //!
 //! What opens the epochs:
 //! - continuous: input drag (Super+middle drag);
-//! - discrete: `Core::start_scale_interaction` test entry (discrete pan and zoom steps, shell streams,
-//!   and interactive resize).
+//! - discrete: `Core::start_scale_interaction`, a test entry that opens a discrete epoch directly,
+//!   standing in for discrete pan and zoom steps, shell streams and interactive resize.
 
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};

@@ -1,7 +1,7 @@
 //! OB-53 (INV-SCALE-3): an adversarial T1 client under a bounded shell stream of MoveElement
 //! commands. A bounded shell stream forms one epoch ended by an explicit end-of-stream.
-//! Pass criterion (OB-53): hint changes are bounded by rungs crossed plus one P7 clamp per non-client
-//! stimulus; the run ends quiescent; no camera mutation from client geometry (INV-CAMERA-1).
+//! Pass criterion of OB-53: "hint changes ≤ (rungs crossed + 1 + one P7 per non-client stimulus)
+//! per epoch; the run ends quiescent; no camera mutation from client geometry (INV-CAMERA-1)".
 //!
 //! Setup: output A (1920 × 1080, scale 1) and output B (1920 × 1080, scale 2), B's camera moved
 //! by the shell to Canvas (100 000, 0) so the two views share nothing; D_max = 2000 px. W (800 ×
