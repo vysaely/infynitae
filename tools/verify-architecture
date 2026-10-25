@@ -80,7 +80,8 @@ ALLOWED_EXTERNAL = {
 ALLOWED_DEV_EXTERNAL = {
     CORE: set(),
     WAYLAND: set(),
-    HEADLESS: {"wayland-client", "wayland-protocols", "wayland-protocols-wlr"},
+    # wayland-protocols-misc: the input-method and virtual-keyboard probe clients (already locked)
+    HEADLESS: {"wayland-client", "wayland-protocols", "wayland-protocols-wlr", "wayland-protocols-misc"},
     WINIT: set(),
     DRM: set(),
     IPC: set(),

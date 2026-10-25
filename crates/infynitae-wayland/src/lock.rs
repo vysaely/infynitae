@@ -127,6 +127,11 @@ impl WaylandState {
             if kb.current_focus() != target {
                 kb.set_focus(self, target, SERIAL_COUNTER.next_serial());
             }
+            // a grab (an input method's, taken during the lock) would get the key instead: the
+            // password goes to the lock surface only (`input_method`)
+            if kb.is_grabbed() {
+                self.keyboard_unset_grab();
+            }
             kb.input::<(), _>(
                 self,
                 code,

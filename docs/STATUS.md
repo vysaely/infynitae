@@ -10,7 +10,7 @@ edges on other hardware.
 - **The spatial model**: the endless canvas, a camera per screen (pan, zoom, fit, overview),
   clusters, window slots, fullscreen you can pan out of. Core is a pure state machine with no
   Wayland code in it, tested exactly.
-- **The test suite**: about 820 tests, most of them driving real Wayland clients against a
+- **The test suite**: about 830 tests, most of them driving real Wayland clients against a
   headless compositor, plus checks that seed bugs on purpose to prove the tests catch them
   (`tools/verify-test-efficacy`) and that the architecture holds (`tools/verify-architecture`).
 - **The desktop around it**: lock screen, wallpaper, screen sharing (portal + screencopy),
@@ -38,14 +38,15 @@ your browser, screen sharing is one click.
 The compositor now also speaks the protocols these tools need: night light (wlsunset,
 gammastep), screens turned off and on by a tool (wlopm), external idle tools (swayidle,
 hypridle), task bars and window switchers (waybar's taskbar, rofi's window mode: both window-list
-protocols), apps that take the shortcuts while focused (VMs, remote desktops), and apps naming
-their cursor shape. Night light and screen power have only run in the test suite, not on
+protocols), apps that take the shortcuts while focused (VMs, remote desktops), apps naming
+their cursor shape, and input methods for Japanese, Chinese or Korean (fcitx5, ibus: install one
+and start it from `autostart.sh`, e.g. `fcitx5 -d`). An input method gets nothing while the
+screen is locked. Night light and screen power have only run in the test suite, not on
 a real screen yet.
 
 Still missing, because the compositor has to speak the protocol first:
 
 - display settings without editing the config (`wlr-output-management`, for wdisplays or kanshi);
-- input methods for Japanese, Chinese, Korean (`input-method-v2` and `text-input-v3`, for fcitx5);
 - per-app volume in the menu (the apps themselves do it; pavucontrol works).
 
 The keyring asks for its password once per session when you log in without one (autologin);

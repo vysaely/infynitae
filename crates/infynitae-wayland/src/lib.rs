@@ -20,6 +20,7 @@ pub mod gamma;
 mod handlers;
 pub mod idle_notify;
 mod image_copy;
+mod input_method;
 mod keyboard;
 mod launch;
 mod layers;
@@ -194,6 +195,8 @@ pub struct WaylandState {
         ElementId,
         smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle,
     >,
+    /// Input methods, text input and virtual keyboards (`input_method`).
+    pub(crate) input_method: input_method::InputMethodState,
     /// `zwlr_foreign_toplevel_manager_v1`: task bars (`wlr_toplevels`).
     wlr_toplevels: wlr_toplevels::WlrToplevelsState,
     /// `zwp_keyboard_shortcuts_inhibit_manager_v1` (`shortcuts_inhibit`).
@@ -515,6 +518,7 @@ impl WaylandState {
             foreign_toplevels: std::collections::HashMap::new(),
             shortcuts_inhibit: shortcuts_inhibit::ShortcutsInhibitState::new(display),
             wlr_toplevels: wlr_toplevels::WlrToplevelsState::new(display),
+            input_method: input_method::InputMethodState::new(display),
             content_type: smithay::wayland::content_type::ContentTypeState::new::<Self>(display),
             alpha_modifier: smithay::wayland::alpha_modifier::AlphaModifierState::new::<Self>(
                 display,
@@ -688,6 +692,9 @@ impl WaylandState {
             && let Some(o) = self.smithay_output(output).cloned()
         {
             self.complete_cursor_frames(&o, now);
+        }
+        if let Some(o) = self.smithay_output(output).cloned() {
+            self.complete_input_method_frames(&o, now);
         }
     }
 

@@ -55,6 +55,10 @@ pub type GlobalPoint = Point<f64, Logical>;
 /// the request is ignored and the value never read.
 pub type WindowMenuLocation = Point<i32, Logical>;
 
+/// The geometry Smithay asks for an input method popup's parent (`input_method`); unused there,
+/// the popup is placed when it is drawn ([`input_method_popups`]).
+pub type InputPopupParentGeometry = Rectangle<i32, Logical>;
+
 /// Core's toplevel capabilities as the `xdg_toplevel.wm_capabilities` set Smithay announces.
 pub fn wm_capabilities(
     c: infynitae_core::protocol::ToplevelCapabilities,
@@ -567,6 +571,8 @@ where
         cursor_elements(state, renderer, output, view.k, &mut elements)
             .map_err(RenderOutputError::Renderer)?;
     }
+    input_method_popups(state, renderer, &entries, view.k, &mut elements)
+        .map_err(RenderOutputError::Renderer)?;
     elements.extend(
         layer_render_elements(renderer, &state.registry, &layers.above, view.k)
             .map_err(RenderOutputError::Renderer)?
@@ -793,6 +799,75 @@ pub fn arrow_rects(at: (i32, i32), unit: i32) -> Vec<(bool, Rectangle<i32, Physi
         ));
     }
     out
+}
+
+/// The input method's popups (the candidate list), each under the text cursor of the window it
+/// types into, scaled like that window: the cursor rectangle and the popup's size are in the
+/// window's surface coordinates, which its entry maps to the frame (`entries`, this frame's).
+/// A popup whose window is not in the frame is not drawn.
+pub(crate) fn input_method_popups<R>(
+    state: &WaylandState,
+    renderer: &mut R,
+    entries: &[FrameEntry],
+    k: f64,
+    out: &mut Vec<OutputElement<R>>,
+) -> Result<(), R::Error>
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+{
+    for popup in &state.input_method.popups {
+        let surface = popup.wl_surface();
+        if !surface.is_alive() {
+            continue;
+        }
+        let Some(parent) = popup.get_parent() else {
+            continue;
+        };
+        let Some(key) = state.registry.key(&parent.surface) else {
+            continue;
+        };
+        let Some(e) = entries.iter().find(|e| e.surface == key) else {
+            continue;
+        };
+        let (pw, ph) = (f64::from(e.size.w), f64::from(e.size.h));
+        if pw <= 0.0 || ph <= 0.0 {
+            continue;
+        }
+        let sx = (e.rect.x1 - e.rect.x0) as f64 / pw;
+        let sy = (e.rect.y1 - e.rect.y0) as f64 / ph;
+        let size = with_states(surface, |states| {
+            states
+                .data_map
+                .get::<RendererSurfaceStateUserData>()
+                .and_then(|d| d.lock().unwrap_or_else(|e| e.into_inner()).view())
+                .map(|v| v.dst)
+                .unwrap_or_default()
+        });
+        let cursor = popup.text_input_rectangle();
+        let x0 = e.rect.x0 + (f64::from(cursor.loc.x) * sx).round() as i64;
+        let y0 = e.rect.y0 + (f64::from(cursor.loc.y + cursor.size.h) * sy).round() as i64;
+        let rect = PhysicalRect {
+            x0,
+            y0,
+            x1: x0 + (f64::from(size.w) * sx).round() as i64,
+            y1: y0 + (f64::from(size.h) * sy).round() as i64,
+        };
+        let el = with_states(surface, |states| {
+            WaylandSurfaceRenderElement::from_surface(
+                renderer,
+                surface,
+                states,
+                Point::from((x0 as f64, y0 as f64)),
+                1.0,
+                Kind::Unspecified,
+            )
+        })?;
+        if let Some(el) = el {
+            out.push(OutputElement::Surface(CanonicalRect::new(el, rect, k)));
+        }
+    }
+    Ok(())
 }
 
 /// The cursor's elements on `output` (front-most first), when the pointer is on it.

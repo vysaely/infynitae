@@ -45,11 +45,12 @@ compositor work in this repository, then the tool just works:
 | Piece | Tools that would work | Protocol to add |
 | :--- | :--- | :--- |
 | Display settings app | wdisplays, nwg-displays, kanshi (profiles), wlr-randr | `wlr-output-management` |
-| Input methods (Japanese, Chinese, Korean) | fcitx5, ibus | `input-method-v2`, `text-input-v3` |
+| Remote desktop host (connecting to this PC) | RustDesk, AnyDesk, GNOME's remote-desktop clients | the `RemoteDesktop` portal (with our own ScreenCast) |
 
 Already spoken, so these just work: night light (wlsunset, gammastep: `wlr-gamma-control`),
 screen power (wlopm: `wlr-output-power-management`), external idle tools (swayidle, hypridle:
 `ext-idle-notify`; idle and auto-lock are built in already), task bars and window switchers
 (waybar's taskbar, rofi's window mode: `wlr-foreign-toplevel-management`,
 `ext-foreign-toplevel-list`), apps naming their cursor (`cursor-shape-v1`), apps taking the
-shortcuts while focused (`keyboard-shortcuts-inhibit`).
+shortcuts while focused (`keyboard-shortcuts-inhibit`), input methods (fcitx5, ibus:
+`input-method-v2`, `text-input-v3`, `virtual-keyboard`; none is installed or started for you).
