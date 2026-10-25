@@ -439,7 +439,7 @@ pub fn s_max_for_tree(tree: Option<&SurfaceTree>) -> u32 {
     s_max
 }
 
-/// F-SCALE-2 as proposed by the H-1 amendment (formulation B; EXPERIMENTAL, not adopted):
+/// F-SCALE-2 as proposed by the H-1 amendment (formulation B):
 /// the device bound is the largest multiple of 1/120 that does not exceed `D_max / s_max(E)`,
 /// `H_dev(E) = ⌊120 · D_max / s_max(E)⌋ / 120`, and `+∞` when `s_max(E) = 0` (E-F2-06).
 ///
@@ -956,7 +956,7 @@ mod tests {
         }
         assert!((st_e.h - 3.0).abs() < 1e-9, "Hint saturated at H_cfg 3.0");
 
-        // Reverse to 4.0 during gesture: decreases suppressed!
+        // Reverse to 4.0 during gesture: decreases are suppressed.
         for i in 1..=120 {
             let z = 8.0 * (4.0 / 8.0f64).powf(i as f64 / 120.0);
             let rho = (1.0 * z).max(1.5);
@@ -1237,7 +1237,7 @@ mod tests {
         }
     }
 
-    /// C1 (INC-6 hardening): `preferred_scale = round(h · 120)` over the whole domain of h
+    /// C1: `preferred_scale = round(h · 120)` over the whole domain of h
     /// (F-SCALE-3). h < 1 is legitimate: an output scale below 1 is a rung (F-SCALE-2), and
     /// `H_max(E) < 1` when a logical side exceeds `D_max` (the EE-5 case `(20000, 0.8192)`).
     #[test]
