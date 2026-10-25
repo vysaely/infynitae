@@ -414,7 +414,7 @@ impl WaylandState {
         }
     }
 
-    /// `xdg_toplevel.set_title` / `set_app_id` (INC-11): Core keeps both as the shell's display
+    /// `xdg_toplevel.set_title` / `set_app_id`: Core keeps both as the shell's display
     /// metadata. Both are read from the toplevel's role state, which Smithay has just updated.
     fn toplevel_metadata_changed(&mut self, surface: &ToplevelSurface) {
         let Some(id) = self
@@ -556,7 +556,7 @@ impl XdgShellHandler for WaylandState {
         surface.send_repositioned(token);
     }
 
-    /// Popup grabs (INC-4, M3, INV-INPUT-10).
+    /// Popup grabs (M3, INV-INPUT-10).
     /// Precondition W-SM-7: root surface must exist and be an element or layer-surface root, else
     /// grab_popup asserts.
     /// Focus precondition: an element root must match the element with ActiveElementFocus; a
@@ -658,10 +658,6 @@ impl SeatHandler for WaylandState {
         &mut self.seats
     }
 
-    /// The keyboard focus moved (it follows Core's ActiveElementFocus, INV-INPUT-8): only the
-    /// focused client is offered the clipboard and the primary selection, and only it may set
-    /// them (Smithay refuses `set_selection` from a client without keyboard focus). No focus, no
-    /// offers: an unfocused client never sees the contents.
     /// A client set the cursor (`wl_pointer.set_cursor`), or Smithay reset it to the default
     /// when the pointer left its surfaces: kept for a backend that draws it (`cursor`).
     fn cursor_image(
@@ -672,6 +668,10 @@ impl SeatHandler for WaylandState {
         self.set_cursor_status(image);
     }
 
+    /// The keyboard focus moved (it follows Core's ActiveElementFocus, INV-INPUT-8): only the
+    /// focused client is offered the clipboard and the primary selection, and only it may set
+    /// them (Smithay refuses `set_selection` from a client without keyboard focus). No focus, no
+    /// offers: an unfocused client never sees the contents.
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&WlSurface>) {
         use smithay::reexports::wayland_server::Resource;
         let client = focused.and_then(|surface| surface.client());
@@ -764,8 +764,6 @@ impl DataDeviceHandler for WaylandState {
     }
 }
 
-// Drag and drop: Smithay's defaults (a drag starts only from a client's implicit pointer grab).
-// Not validated against Core's pointer ownership yet (clipboard slice; DnD needs its own review).
 /// Drag-and-drop is not offered: a drag a client starts is refused (`refuse_client_drags`).
 impl ClientDndGrabHandler for WaylandState {
     fn started(
@@ -991,13 +989,13 @@ impl WaylandState {
     }
 }
 
-/// How long an activation token validates a request after it was created (provisional; B10.7).
+/// How long an activation token validates a request after it was created (B10.7).
 const ACTIVATION_TOKEN_LIFETIME: std::time::Duration = std::time::Duration::from_secs(10);
 /// How long an unused token is kept: a request with an expired token still asks for attention,
-/// so tokens outlive their validity; but not for ever (INC-12 review r2).
+/// so tokens outlive their validity.
 const ACTIVATION_TOKEN_RETENTION: std::time::Duration = std::time::Duration::from_secs(300);
 /// At most this many unused tokens are kept (the oldest go first): a client may create tokens
-/// without end, and Smithay removes one only when it is used (INC-12 review r2).
+/// without end, and Smithay removes one only when it is used.
 pub const ACTIVATION_TOKENS_KEPT: usize = 256;
 
 impl WaylandState {
