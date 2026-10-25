@@ -1,6 +1,5 @@
-//! A user action on a window brings it to the front (the C4 focus model: "click → raise +
-//! keyboard focus"; found missing in the owner's first console run, 2026-10-22: Super+Tab
-//! focused a window behind another and left it there).
+//! A user action on a window brings it to the front (C4 focus model: click raises and gives
+//! keyboard focus; owner, 2026-10-22).
 
 mod common;
 

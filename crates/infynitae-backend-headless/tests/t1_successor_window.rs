@@ -39,7 +39,7 @@ fn open(r: &mut Rig, label: &'static str, app: &str, size: (i32, i32)) -> (usize
 #[test]
 fn an_apps_next_window_takes_the_place_of_the_one_that_closed() {
     let mut r = Rig::x8();
-    // the owner's policy: cluster tiling, so a window without a remembered place goes beside
+    // Cluster tiling: a window without a remembered position is placed beside existing windows.
     r.ls.state
         .core_mut()
         .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);

@@ -1,4 +1,4 @@
-//! INC-7 slice 3 (experimental): popup robustness on the production path (OB-18, W-SM-6).
+//! Popup robustness on the production path (OB-18, W-SM-6).
 //!
 //! A client that attaches a buffer to a popup before the popup was configured, or before it
 //! acknowledged its configure, violates xdg-shell. The compositor answers with the protocol
