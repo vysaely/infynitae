@@ -22,6 +22,7 @@ mod frames;
 mod handlers;
 mod image_copy;
 mod keyboard;
+mod launch;
 mod layers;
 pub mod limits;
 mod lock;
@@ -224,6 +225,11 @@ pub struct WaylandState {
     pub manual_idle_inhibit: bool,
     /// The config's `EXEC_*` commands, by the index Core's `Effect::Exec` names.
     pub(crate) exec_commands: Vec<String>,
+    /// Processes started from shortcuts, to tell the windows the user opened (`launch`).
+    pub(crate) launches: launch::Launches,
+    /// FOCUS_ON_OPEN / TELEPORT_ON_OPEN = "user" (the default): only windows the user opened.
+    pub(crate) focus_open_user_only: bool,
+    pub(crate) teleport_open_user_only: bool,
     /// `ext-session-lock-v1`, when the backend enforces it (`enable_session_lock`).
     session_lock: Option<lock::SessionLock>,
     // probe builds only: the Send assertion must be the one and only error
@@ -394,6 +400,9 @@ impl WaylandState {
             force_transparent_apps: Vec::new(),
             manual_idle_inhibit: false,
             exec_commands: Vec::new(),
+            launches: launch::Launches::default(),
+            focus_open_user_only: true,
+            teleport_open_user_only: true,
             session_lock: None,
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
@@ -574,10 +583,12 @@ impl WaylandState {
                             "FOCUS_ON_OPEN" => {
                                 let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
                                 self.core.set_focus_on_open(enabled);
+                                self.focus_open_user_only = val.eq_ignore_ascii_case("user");
                             }
                             "TELEPORT_ON_OPEN" => {
                                 let enabled = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
                                 self.core.set_teleport_on_open(enabled);
+                                self.teleport_open_user_only = val.eq_ignore_ascii_case("user");
                             }
                             "SUPER_ENTER_ACTION" => {
                                 if val.eq_ignore_ascii_case("fit") {

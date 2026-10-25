@@ -400,6 +400,8 @@ pub struct Core {
     pub focus_on_open: bool,
     /// The user's key bindings (`set_key_bindings`).
     key_bindings: input::keys::UserBindings,
+    /// `xdg_toplevel` parents, (child, parent), from the adapter (`set_toplevel_parent`).
+    toplevel_parents: Vec<(stage::ElementId, stage::ElementId)>,
     /// Whether camera teleports/recenters to newly opened windows.
     pub teleport_on_open: bool,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
@@ -478,6 +480,7 @@ impl Core {
                 fullscreen_pan: false,
                 focus_on_open: false,
                 key_bindings: input::keys::UserBindings::default(),
+                toplevel_parents: Vec::new(),
                 teleport_on_open: false,
                 frame_liveness: frames::FrameLiveness::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]

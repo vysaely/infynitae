@@ -20,8 +20,10 @@ TOUCHPAD_NATURAL_SCROLL="false"   # content follows the fingers
 # ── Windows & canvas ──────────────────────────────────────────────────── [save] ──
 FOCUS_FOLLOWS_MOUSE="sloppy"      # sloppy: hover focuses, kept over empty canvas
                                   # strict: hover focuses, empty canvas unfocuses | click
-FOCUS_ON_OPEN="1"                 # a new window takes the focus
-TELEPORT_ON_OPEN="1"              # the camera moves to a new window
+FOCUS_ON_OPEN="user"              # a new window takes the focus — user: only windows you opened
+                                  # (shortcuts, launcher, a command in the focused terminal), not
+                                  # ones an app opens by itself | 1: every window | 0: never
+TELEPORT_ON_OPEN="user"           # the camera moves to a new window — same values
 FOCUS_CYCLE_NAVIGATE="1"          # Super+Tab also centres the camera on the window
 PLACEMENT_POLICY="cluster"        # cluster: next free spot beside the others | center | origin
 SUPER_ENTER_ACTION="maximize"     # maximize: the window fills the view at 100% | fit: zoom to it

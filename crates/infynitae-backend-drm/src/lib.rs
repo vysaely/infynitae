@@ -757,6 +757,15 @@ pub fn run_console_with(
 
         data.known_mapped.clear();
         data.known_mapped.extend(current_mapped);
+        // which new windows the user opened, decided before any of them takes the focus
+        let (focus_user_only, teleport_user_only) = data.state.open_policy_user_only();
+        let by_user: Vec<bool> = new_mapped
+            .iter()
+            .map(|&id| {
+                (focus_user_only || teleport_user_only)
+                    && data.state.opened_by_user(id, data.last_user_activity)
+            })
+            .collect();
 
         if data.state.core().focus().is_initial_eligible() {
             if let Some(&topmost) = data.state.core().stage().mapped_elements().last()
@@ -769,7 +778,10 @@ pub fn run_console_with(
                 data.session.flush();
             }
         } else if data.state.core().focus_on_open() {
-            for &new_id in &new_mapped {
+            for (&new_id, &user) in new_mapped.iter().zip(&by_user) {
+                if focus_user_only && !user {
+                    continue;
+                }
                 if let Ok(effects) = data
                     .state
                     .core_mut()
@@ -782,7 +794,11 @@ pub fn run_console_with(
         }
 
         if data.state.core().teleport_on_open() {
-            for &new_id in &new_mapped {
+            for (&new_id, &user) in new_mapped.iter().zip(&by_user) {
+                // a child window opens over its parent, already in view: the camera stays
+                if (teleport_user_only && !user) || data.state.core().toplevel_parent(new_id).is_some() {
+                    continue;
+                }
                 let port = &mut data.input_port;
                 let _ = data.state.with_effects(|core, fx| {
                     core.recenter_element(port, new_id, fx)

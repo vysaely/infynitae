@@ -262,12 +262,12 @@ impl WaylandState {
     }
 
     /// Spawns a desktop action via ~/infynitae/live/launch.sh <action>
-    pub(crate) fn spawn_action(&self, action: &str) {
+    pub(crate) fn spawn_action(&mut self, action: &str) {
         self.spawn_action_with(action, "");
     }
 
     /// [`spawn_action`](Self::spawn_action) with an argument (`exec`: the command to run).
-    pub(crate) fn spawn_action_with(&self, action: &str, arg: &str) {
+    pub(crate) fn spawn_action_with(&mut self, action: &str, arg: &str) {
         let home = std::env::var("HOME").unwrap_or_default();
         let script = format!("{home}/infynitae/live/launch.sh");
         let mut cmd = std::process::Command::new("sh");
@@ -281,13 +281,17 @@ impl WaylandState {
         if let Ok(a) = std::env::var("XAUTHORITY") {
             cmd.env("XAUTHORITY", a);
         }
-        let _ = cmd
-            .env_remove("KDE_FULL_SESSION")
+        cmd.env_remove("KDE_FULL_SESSION")
             .env_remove("KDE_SESSION_VERSION")
             .env_remove("KDE_SESSION_UID")
             .env_remove("KDE_APPLICATIONS_AS_SCOPE")
-            .env_remove("XDG_MENU_PREFIX")
-            .spawn();
+            .env_remove("XDG_MENU_PREFIX");
+        // the shortcuts that open apps are launches (`launch`): their windows are the user's
+        if matches!(action, "terminal" | "launcher" | "file-manager" | "exec" | "browser" | "overview") {
+            let _ = self.launches.spawn(&mut cmd);
+        } else {
+            let _ = cmd.spawn();
+        }
     }
 
     /// The Smithay output of a connected output (for render oracles and backends).

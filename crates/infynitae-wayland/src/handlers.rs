@@ -195,6 +195,13 @@ impl WaylandState {
                 .states
                 .contains(xdg_toplevel::State::Fullscreen)
         });
+        // xdg_toplevel.set_parent: a dialog or child window opens over its parent
+        let parent = window
+            .toplevel()
+            .and_then(|t| t.parent())
+            .and_then(|p| self.element_index_by_root(&p))
+            .map(|i| self.elements[i].id);
+        self.core.set_toplevel_parent(id, parent);
         let _ = self.with_effects(|core, fx| {
             core.toplevel_committed_acked_into(id, tree, acked_fullscreen, fx)
         });

@@ -661,7 +661,7 @@ impl Core {
             return Ok(());
         }
         let stale = |_| ProtocolError::StaleElement;
-        if let Some(anchor) = self.first_map_anchor(tree) {
+        if let Some(anchor) = self.first_map_anchor(id, tree) {
             self.stage.place(id, anchor).map_err(stale)?;
         }
         self.stage.set_default_placed(id).map_err(stale)
@@ -1508,7 +1508,22 @@ impl Core {
     ///
     /// `None` keeps the anchor of the initial commit: the legacy policy, no output, or a
     /// position outside the Canvas bound.
-    fn first_map_anchor(&self, tree: &SurfaceTree) -> Option<CanvasPoint> {
+    fn first_map_anchor(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
+        // a child window (xdg_toplevel.set_parent: dialogs, an app's second window) opens centred
+        // over its mapped parent's window geometry, whatever the policy (owner, 2026-10-24)
+        if let Some(parent) = self.toplevel_parent(id)
+            && self.stage.mapped(parent).is_some()
+            && let (Some(a), Some(pt)) = (self.stage.anchor(parent), self.stage.tree(parent))
+        {
+            let g = tree.geometry;
+            let pg = pt.geometry;
+            let centre_x = a.x + i64::from(pg.loc.x) + i64::from(pg.size.w) / 2;
+            let centre_y = a.y + i64::from(pg.loc.y) + i64::from(pg.size.h) / 2;
+            return Some(CanvasPoint {
+                x: centre_x - i64::from(g.size.w) / 2 - i64::from(g.loc.x),
+                y: centre_y - i64::from(g.size.h) / 2 - i64::from(g.loc.y),
+            });
+        }
         if self.placement == PlacementPolicy::OriginAtCameraCentre {
             return None;
         }
@@ -1650,6 +1665,23 @@ impl Core {
     /// already placed.
     pub fn set_placement_policy(&mut self, policy: PlacementPolicy) {
         self.placement = policy;
+    }
+
+    /// The adapter's report of an element's `xdg_toplevel` parent (`None`: none), before each
+    /// commit of its root.
+    pub fn set_toplevel_parent(&mut self, child: ElementId, parent: Option<ElementId>) {
+        self.toplevel_parents.retain(|(c, _)| *c != child);
+        if let Some(p) = parent.filter(|p| *p != child) {
+            self.toplevel_parents.push((child, p));
+        }
+    }
+
+    /// An element's `xdg_toplevel` parent, if it has one.
+    pub fn toplevel_parent(&self, child: ElementId) -> Option<ElementId> {
+        self.toplevel_parents
+            .iter()
+            .find(|(c, _)| *c == child)
+            .map(|(_, p)| *p)
     }
 
     pub fn placement_policy(&self) -> PlacementPolicy {
