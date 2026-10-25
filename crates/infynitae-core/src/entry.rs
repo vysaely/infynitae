@@ -2852,7 +2852,7 @@ mod tests {
         );
     }
 
-    /// TST-23 R1 (PD-F2-06) as a T0 property on the
+    /// TST-23 R1 (PD-F2-06, `experiments/phase-d/d5_model_1r.py`) as a T0 property on the
     /// production path: over the model's grid — scale {1, 1.5} × zoom {0.5, 0.75, 1, 1080/651,
     /// 2.5}, camera centre (5000.3, 3000.7) — one pan gesture of 200 events, each a hand
     /// displacement of (+3.7, −1.3) physical px, moves the content's edge at Canvas (5100, 3050)
