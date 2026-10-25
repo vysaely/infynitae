@@ -112,12 +112,14 @@ pub enum KeyAction {
     /// Super+Shift+Enter (owner decision 2026-10-21): the focused window enters or leaves native
     /// fullscreen on the pointer's output, through the same path as its own request.
     ToggleFullscreen,
-    /// Super+Shift+Delete (owner, 2026-10-21): the focused window's client is ended now — its
-    /// connection is cut and its process killed — for an app that does not answer a close. The
-    /// adapter falls back to a close request for an X11 window (all of them share one client).
+    /// Super+Shift+C (owner, 2026-10-21; Shift+Delete until 2026-10-25): the focused window's
+    /// client is ended now — its connection is cut and its process killed — for an app that does
+    /// not answer a close. The adapter falls back to a close request for an X11 window (all of
+    /// them share one client).
     ForceCloseFocused,
     /// Asks the focused window to close (`xdg_toplevel.close`); the client decides. The owner's
-    /// binding Super+Delete (interaction intent of 2026-10-05; decision record 2026-10-21).
+    /// binding Super+C (Super+Delete until 2026-10-25; interaction intent of 2026-10-05; decision
+    /// record 2026-10-21).
     CloseFocused,
     /// Super+Space or Super+Shift+Space (owner interaction intent of 2026-10-05, restated 2026-10-24):
     /// the pointer's output's camera is centred on the focused window and zoom is reverted to
@@ -349,9 +351,10 @@ pub fn resolve_key_binding(
         }
         return Some(KeyAction::FocusNext);
     }
-    // Logo+Delete closes the focused window, Logo+Shift+Delete ends its app; the modifiers match
+    // Logo+C closes the focused window, Logo+Shift+C ends its app (owner, 2026-10-25: Delete
+    // took the hand off the mouse); the modifiers match
     // exactly, as for fit
-    if key == KEY_DELETE && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
+    if key == KEY_C && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
         if mods.shift {
             return Some(KeyAction::ForceCloseFocused);
         }
@@ -618,9 +621,10 @@ mod tests {
         );
     }
 
-    /// The owner's Super+Delete: exactly Logo held, never during an interaction.
+    /// The owner's Super+C: exactly Logo held, never during an interaction; Super+Alt+C stays the
+    /// replay clip, and Delete closes nothing.
     #[test]
-    fn logo_delete_closes_with_exact_modifiers() {
+    fn logo_c_closes_with_exact_modifiers() {
         let m = |logo, ctrl, alt, shift| Modifiers {
             logo,
             ctrl,
@@ -628,38 +632,35 @@ mod tests {
             shift,
         };
         assert_eq!(
-            resolve_key_binding(KEY_DELETE, m(true, false, false, false), false),
+            resolve_key_binding(KEY_C, m(true, false, false, false), false),
             Some(KeyAction::CloseFocused)
         );
         assert_eq!(
-            resolve_key_binding(KEY_DELETE, m(true, false, false, true), false),
-            Some(KeyAction::ForceCloseFocused),
-            "Super+Shift+Delete ends the app"
-        );
-        assert_eq!(
-            resolve_key_binding(KEY_C, m(true, false, false, false), false),
-            None,
-            "Super+C does not close window"
-        );
-        assert_eq!(
             resolve_key_binding(KEY_C, m(true, false, false, true), false),
-            None,
-            "Super+Shift+C does not end app"
+            Some(KeyAction::ForceCloseFocused),
+            "Super+Shift+C ends the app"
         );
-        for mods in [
-            m(false, false, false, false),
-            m(true, true, false, false),
-            m(true, false, true, false),
-            m(true, true, false, true),
-        ] {
+        assert_eq!(
+            resolve_key_binding(KEY_C, m(true, false, true, false), false),
+            Some(KeyAction::SaveReplay),
+            "Super+Alt+C saves a clip"
+        );
+        for mods in [m(true, false, false, false), m(true, false, false, true)] {
             assert_eq!(
                 resolve_key_binding(KEY_DELETE, mods, false),
                 None,
-                "{mods:?}"
+                "Delete is free: {mods:?}"
             );
         }
+        for mods in [
+            m(false, false, false, false),
+            m(true, true, false, false),
+            m(true, true, false, true),
+        ] {
+            assert_eq!(resolve_key_binding(KEY_C, mods, false), None, "{mods:?}");
+        }
         assert_eq!(
-            resolve_key_binding(KEY_DELETE, m(true, false, false, false), true),
+            resolve_key_binding(KEY_C, m(true, false, false, false), true),
             None,
             "not while an interaction owns the pointer"
         );

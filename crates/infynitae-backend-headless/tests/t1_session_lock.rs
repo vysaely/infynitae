@@ -9,7 +9,7 @@ mod common;
 use common::Probe;
 use common::input::*;
 use infynitae_backend_headless::keyboard_key;
-use infynitae_core::input::keys::{KEY_DELETE, KEY_LEFTMETA};
+use infynitae_core::input::keys::{KEY_C, KEY_LEFTMETA};
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_client::{Connection, Dispatch, QueueHandle};
 use wayland_protocols::ext::session_lock::v1::client::ext_session_lock_manager_v1::ExtSessionLockManagerV1;
@@ -80,11 +80,11 @@ fn key(r: &mut Rig, key: u32, pressed: bool) {
     r.ls.pump();
 }
 
-/// Super+Delete: asks the focused window to close when unlocked.
+/// Super+C: asks the focused window to close when unlocked.
 fn super_delete(r: &mut Rig) {
     key(r, KEY_LEFTMETA, true);
-    key(r, KEY_DELETE, true);
-    key(r, KEY_DELETE, false);
+    key(r, KEY_C, true);
+    key(r, KEY_C, false);
     key(r, KEY_LEFTMETA, false);
 }
 
@@ -198,7 +198,7 @@ fn while_locked_keys_reach_only_the_lock_surface_and_no_binding_fires() {
         "the lock surface has the keyboard, not {active}"
     );
     assert!(
-        r.ls.probe.key_events[before..].contains(&(KEY_DELETE, true)),
+        r.ls.probe.key_events[before..].contains(&(KEY_C, true)),
         "the lock surface gets the keys"
     );
 
@@ -216,7 +216,7 @@ fn while_locked_keys_reach_only_the_lock_surface_and_no_binding_fires() {
         "Super is not stuck in Core"
     );
 
-    // bindings work again: Super+Delete asks W to close
+    // bindings work again: Super+C asks W to close
     super_delete(&mut r);
     assert_eq!(r.ls.probe.close_requests, [idx]);
     assert!(

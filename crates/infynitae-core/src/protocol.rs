@@ -105,9 +105,9 @@ pub enum Effect {
         scale_120: u32,
         integer_scale: u32,
     },
-    /// `xdg_toplevel.close` to an element: the client is asked to close (Super+Delete).
+    /// `xdg_toplevel.close` to an element: the client is asked to close (Super+C).
     CloseRequest(ElementId),
-    /// The element's client is ended (Super+Shift+Delete): its connection cut and its process
+    /// The element's client is ended (Super+Shift+C): its connection cut and its process
     /// killed; the adapter decides how for a client it cannot end alone (X11).
     ForceClose(ElementId),
     /// Configure a layer surface with the size its arrangement gives it (L1, L4).
