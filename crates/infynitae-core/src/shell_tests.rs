@@ -1,4 +1,4 @@
-//! INC-11 T0: `Core::shell_command` (C7.2, INV-SHELL-1, INV-STAGE-3, INV-CAMERA-1). Expected values
+//! Tests for `Core::shell_command` (C7.2, INV-SHELL-1, INV-STAGE-3, INV-CAMERA-1). Expected values
 //! are hand-derived literals, not values computed by the code under test.
 
 use crate::geom::{CanvasPoint, CanvasPos, LocalPoint, LocalRect, LocalSize};
@@ -306,7 +306,7 @@ fn shell_commands_are_refused_while_the_output_presents() {
         },
     )
     .unwrap();
-    // only the focused element's fullscreen request is granted (INC-7)
+    // only the focused element's fullscreen request is granted
     f.c.shell_command(
         &mut f.s,
         ShellCommand::Focus {
