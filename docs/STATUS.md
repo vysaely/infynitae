@@ -44,8 +44,9 @@ and start it from `autostart.sh`, e.g. `fcitx5 -d`). An input method gets nothin
 screen is locked. Night light and screen power have only run in the test suite, not on
 a real screen yet.
 
-Screen sharing can share one window instead of a screen: with `SCREENSHARE_ASK="true"` a menu
-lists the screens and the windows. A shared window is drawn by itself, wherever it is on the
+Screen sharing can share one window instead of a screen: an app asking for a window (Discord's
+window tab) gets a menu of the windows, an app asking for a screen still gets the first one at
+once; with `SCREENSHARE_ASK="true"` every share asks, in a menu of the screens and the windows. A shared window is drawn by itself, wherever it is on the
 canvas; a private window (`PRIVACY_APPS`, `PRIVACY_TITLES`) is never shared, and nothing is
 while the screen is locked. Only tested in the test suite so far.
 

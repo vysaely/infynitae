@@ -98,8 +98,8 @@ START_LOCKED="false"              # [restart] start the session at the lock scre
 
 # ── Privacy & screen capture ──────────────────────────────────────────── [save] ──
 SCREENSHARE_ASK="false"           # [reload] false: an app's Share button shares the (first)
-                                  # screen at once | true: pick a screen or one window from a
-                                  # menu (MENU_PICKER).
+                                  # screen at once, a window tab gets a menu of the windows |
+                                  # true: always pick a screen or a window from a menu.
                                   # Note: desktop apps can also capture directly (wlr-screencopy,
                                   # used by recorders and screenshots); the prompt guards the
                                   # screen-sharing portal only.

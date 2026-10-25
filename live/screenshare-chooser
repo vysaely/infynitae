@@ -1,0 +1,31 @@
+#!/bin/sh
+# The screen-sharing portal's chooser (xdg-desktop-portal-wlr, chooser_type=dmenu): it gets one
+# "Monitor: DP-1" or "Window: title (app)" line per source the app asked for and prints the one
+# to share. Written into the portal's config by infynitae-reload from SCREENSHARE_ASK.
+#
+#   screenshare-chooser first PICKER   an app sharing a screen gets the first one at once; an app
+#                                      asking for a window (Discord's window tab) gets the menu
+#   screenshare-chooser ask PICKER     always the menu
+#
+# PICKER is a dmenu-style command (MENU_PICKER, fuzzel --dmenu by default). Nothing printed:
+# the share is cancelled.
+
+mode="$1"
+picker="${2:-fuzzel --dmenu}"
+sources=$(cat)
+log="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae/screenshare.log"
+note() { { printf '%s %s\n' "$(date '+%F %T')" "$1" >> "$log"; } 2>/dev/null; }
+note "offered: $(printf '%s' "$sources" | tr '\n' '|')"
+
+if [ "$mode" = "first" ]; then
+    monitor=$(printf '%s\n' "$sources" | grep -m1 '^Monitor: ')
+    if [ -n "$monitor" ]; then
+        note "shared at once: $monitor"
+        printf '%s\n' "$monitor"
+        exit 0
+    fi
+fi
+
+choice=$(printf '%s\n' "$sources" | $picker)
+note "picked: ${choice:-nothing (cancelled)}"
+[ -n "$choice" ] && printf '%s\n' "$choice"
