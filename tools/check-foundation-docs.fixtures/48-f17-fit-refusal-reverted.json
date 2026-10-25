@@ -1,7 +1,0 @@
-{
- "name": "C12.F17: F-FIT-1 definition 1 reverted to C12.F15 (no refusal during a presentation)",
- "file": "FOUNDATION_ARCHITECTURE.md",
- "find": "- **Definition:** For output O and mapped element W, with g = W's window geometry in Canvas px at the instant of the authorized action, `view_w,O` and `view_h,O` the view extent in physical px (F-VIEW-1) and `scale_O` the output scale: if O is not connected, O presents a protocol-fullscreen element (INV-PRES-1), W is not mapped, or `g.w ≤ 0` or `g.h ≤ 0`, the action is refused — no camera mutation, nothing recorded or evicted, no pointer reconciliation; a restore is refused likewise while O presents. [C12.F15; C12.F17]\n",
- "replace": "- **Definition:** For output O and mapped element W, with g = W's window geometry in Canvas px at the instant of the authorized action, `view_w,O` and `view_h,O` the view extent in physical px (F-VIEW-1) and `scale_O` the output scale: if O is not connected, W is not mapped, or `g.w ≤ 0` or `g.h ≤ 0`, the action is refused — no camera mutation, nothing recorded. [C12.F15]\n",
- "expect": "formula-provenance"
-}

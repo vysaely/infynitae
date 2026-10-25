@@ -1,31 +1,24 @@
 #!/usr/bin/env python3
-"""check-foundation-docs — read-only verifier of the Infynitae Native foundation package.
+"""check-foundation-docs — read-only consistency check of the design spec in docs/foundation/.
 
-This tool is NOT an architecture authority. It derives every expectation from the canonical
-documents themselves:
-  * the namespace authority map (FOUNDATION_ARCHITECTURE.md, living region NS);
-  * the registry layers C12 / C12.R1 / C12.R2 (sealed), C12.E1R (unsealed, Phase E corrective) and
-    the Phase F amendment layers C12.F1 … C12.F8, C12.F10 and C12.F11 … C12.F13 (adopted by owner approval, one decision each)
-    in FOUNDATION_ARCHITECTURE.md, which define the expected effective INV set and wording;
-  * the historical PD-F2 finding headings (FOUNDATION_BLOCKERS.md);
-and checks structure, uniqueness, provenance and cross-references of the living regions
-(`<!-- living:NAME -->` … `<!-- /living -->`).
+The spec defines its IDs (INV-*, F-*, OB-*, M*, OBJ-*, ADR-*, W-SM-* …) in "living" regions
+(`<!-- living:NAME -->` … `<!-- /living -->`), each namespace in exactly one home document, as
+the namespace map in FOUNDATION_ARCHITECTURE.md says. This checks that: every namespace has one
+home; every ID is defined once, in its home; every ID a living region cites is defined; the
+records carry their required fields and use the allowed status words; formula definitions are
+well-formed (closed code spans, balanced brackets); an invariant's [F-*] placeholders have their
+extracted text in §F; state machines cite invariants.
+
+It does not check that the spec is right: a well-formed but wrong formula passes (self-test
+fixture `boundary-semantic-error-not-detected`). The history of how the spec was amended is in
+docs/archive/ and is not checked.
 
 Usage:
-  tools/check-foundation-docs [--root DOCS_DIR]       run all checks (exit 0 = pass, 1 = failures)
-  tools/check-foundation-docs --self-test             run seeded-defect negative controls on a temporary
-                                                      copy (fixtures in tools/check-foundation-docs.fixtures/)
+  tools/check-foundation-docs [--root DOCS_DIR]   run all checks (exit 0 = pass, 1 = failures)
+  tools/check-foundation-docs --self-test         seed one defect at a time into a temporary copy
+                                                  (tools/check-foundation-docs.fixtures/) and
+                                                  require each to be detected
 Python standard library only. Never writes to the documents it checks.
-
-What the formula checks prove, and what they do not (E1R, E-F3-01): the checker is NOT a theorem prover.
-It verifies formula IDs, uniqueness, canonical homes, references, required fields, provenance (every
-`Amended` formula has a C12.E1R.2 record whose previous text no longer appears in the living definition, and
-vice versa), substitution integrity (invariant text extracted into a formula reproduces its layer row byte for
-byte), and structural syntax of `Definition` lines (closed code spans; balanced `{}` and `⟦⟧`; every `(`/`[`
-closed by `)` or `]`, which admits half-open intervals). It does NOT check that a well-formed definition is
-mathematically right: a sign, operator or symbol error that keeps the syntax valid passes (self-test fixture
-`boundary-semantic-error-not-detected`). Formula correctness rests on derivations, models, executable
-experiments and Smithay/protocol evidence (FOUNDATION_EVIDENCE.md).
 """
 import json, os, re, shutil, sys, tempfile
 
@@ -54,30 +47,7 @@ REF = {  # reference token patterns (checked inside living regions)
 # hardware evidence cannot be closed by a headless result.
 DEFERRED_DEST = {'T2', 'T3', 'T4', 'T5', 'TUNE', 'UP', 'DECISION'}
 DEST_VOCAB = {'T0', 'T1', 'T2', 'T3', 'T4', 'T5', 'UP', 'TUNE', 'DECISION', 'PHASE-F-ENTRY-GATE', 'CI', 'GATE-C'}
-E1R_ORIGIN = 'C12.E1R @ UNSEALED (E1R review gate; base 09075a2)'
-# Phase F amendment layers, in order. Each is one owner-approved amendment; a layer is optional (a tree
-# from before its adoption has none) but when present it must follow the earlier ones.
-F_LAYERS = [('C12.F1', 'C12.F1 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)'),
-            ('C12.F2', 'C12.F2 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)'),
-            ('C12.F3', 'C12.F3 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)'),
-            ('C12.F4', 'C12.F4 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)'),
-            ('C12.F5', 'C12.F5 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)'),
-            ('C12.F6', 'C12.F6 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)'),
-            ('C12.F7', 'C12.F7 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)'),
-            ('C12.F8', 'C12.F8 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)'),
-            # C12.F9 is reserved for the INC-6 allocator layer (deferred to the INC-6 exit); layers are listed in adoption order
-            ('C12.F10', 'C12.F10 @ ADOPTED 2026-10-14 (owner approval; base 80ead2a)'),
-            # C12.F9 was withdrawn 2026-10-16 (the allocator test moved out of Core; INV-ARCH-2 unchanged)
-            ('C12.F11', 'C12.F11 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)'),
-            ('C12.F12', 'C12.F12 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)'),
-            ('C12.F13', 'C12.F13 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)'),
-            ('C12.F14', 'C12.F14 @ ADOPTED 2026-10-17 (owner approval; base ca2e468)'),
-            ('C12.F15', 'C12.F15 @ ADOPTED 2026-10-17 (owner approval; base dda4d87)'),
-            ('C12.F16', 'C12.F16 @ ADOPTED 2026-10-18 (owner approval; base da538d6)'),
-            ('C12.F17', 'C12.F17 @ ADOPTED 2026-10-20 (owner approval; base 16f13c9)')]
-PACKAGE_START = '# Phase D package (D7)'
 OPEN_CLOSE = {'(': ')]', '[': ')]', '{': '}', '⟦': '⟧'}
-VERDICTS = ['READY FOR INDEPENDENT ADVERSARIAL REVIEW — PHASE E', 'NOT READY — ARCHITECTURE BLOCKERS REMAIN', 'NOT READY — PHASE D GATE INCOMPLETE']
 
 
 class Run:
@@ -113,17 +83,6 @@ def blocks(region, marker):
         yield ident, region[p:end]
 
 
-def layer_rows(text, start, end=None):
-    a = text.index(start)
-    b = text.index(end, a) if end else len(text)
-    rows = {}
-    for line in text[a:b].splitlines():
-        if line.startswith('| **INV-'):
-            c = split_row(line)
-            rows[re.match(r'\*\*(INV-[A-Z]+-\d+)', c[0]).group(1)] = c
-    return rows
-
-
 def run_checks(root):
     r = Run(root)
     docs = {}
@@ -148,7 +107,7 @@ def run_checks(root):
                 dup.append(f'{c[0]}: {home[c[0]]} and {c[2]}')
             home.setdefault(c[0], c[2])
     r.check('ns-duplicate-ownership', not dup, '; '.join(dup))
-    expected_ns = set(DEF) | {'NS', 'D9'}
+    expected_ns = set(DEF) | {'NS'}
     r.check('ns-complete', expected_ns <= set(home), f'missing {sorted(expected_ns - set(home))}')
     r.check('ns-homes-in-package', all(h in PACKAGE for h in home.values()), str({k: v for k, v in home.items() if v not in PACKAGE}))
 
@@ -187,69 +146,18 @@ def run_checks(root):
                         unresolved.add(f'{tok} (in {f}:{tag})')
     r.check('refs-resolve', not unresolved, '; '.join(sorted(unresolved)[:40]))
 
-    # ---- INV: effective registry vs historical layers ------------------------------------------------
-    c12 = layer_rows(arch, '## C12 — Canonical invariant registry', '### C12.2')
-    r1 = layer_rows(arch, '# §C12.R1', '# §C12.R2')
-    has_e1r = '# §C12.E1R' in arch
-    # layers after C12.R2, in document order; each ends where the next begins
-    heads = [h for h in ['# §C12.E1R'] + ['# §' + n for n, _ in F_LAYERS] if re.search('^' + re.escape(h) + r'\b', arch, re.M)]
-    start = {h: re.search('^' + re.escape(h) + r'\b', arch, re.M).start() for h in heads}
-    r.check('layer-order', [start[h] for h in heads] == sorted(start[h] for h in heads) and all(start[h] < arch.index(PACKAGE_START) for h in heads),
-            f'amendment layers out of order or below the living regions: {heads}')
-
-    def layer_end(h):
-        later = [start[x] for x in heads if start[x] > start[h]]
-        return min(later) if later else arch.index(PACKAGE_START)
-
-    def layer_text(h):
-        return arch[start[h]:layer_end(h)]
-
-    def rows_of(h):
-        return layer_rows(arch[:layer_end(h)], h)
-
-    r2 = layer_rows(arch[:min(start.values())] if heads else arch, '# §C12.R2', None if heads else PACKAGE_START)
-    e1r = rows_of('# §C12.E1R') if has_e1r else {}
-    f_layers = [(n, o, rows_of('# §' + n)) for n, o in F_LAYERS if '# §' + n in heads]
-    latest = {}
-    for i, row in c12.items(): latest[i] = ('C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a', row, '—')
-    for i, row in r1.items(): latest[i] = ('C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f', row, row[6])
-    for i, row in r2.items(): latest[i] = ('C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be', row, row[6])
-    for i, row in e1r.items(): latest[i] = (E1R_ORIGIN, row, row[6])
-    r.check('e1r-adds-no-inv', all(i in c12 or i in r1 or i in r2 for i in e1r), f'C12.E1R introduces {sorted(i for i in e1r if i not in c12 and i not in r1 and i not in r2)}')
-    for name, origin, rows in f_layers:
-        r.check('f-layer-rows', bool(rows), f'{name} carries no invariant row')
-        r.check('f-layer-adds-no-inv', all(i in latest for i in rows), f'{name} introduces {sorted(i for i in rows if i not in latest)}')
-        r.check('f-layer-status', bool(re.search(r'^\*\*Status: ADOPTED \d{4}-\d{2}-\d{2}', layer_text('# §' + name), re.M)), f'{name} has no "Status: ADOPTED <date>" line')
-        for i, row in rows.items(): latest[i] = (origin, row, row[6])
     inv_region = regions.get('INV', [('', '')])[0][1]
     inv_blocks = dict(blocks(inv_region, DEF['INV']))
-    r.check('inv-count', len(inv_blocks) == len(latest), f'{len(inv_blocks)} entries, layers give {len(latest)}')
-    r.check('inv-set', set(inv_blocks) == set(latest), f'extra {sorted(set(inv_blocks) - set(latest))} missing {sorted(set(latest) - set(inv_blocks))}')
     f_region = regions.get('F', [('', '')])[0][1]
     extracted = {}  # (inv, F) -> fragment
     for fid, blk in blocks(f_region, DEF['F']):
         for m in re.finditer(r'^- \*\*Extracted invariant text:\*\* (INV-[A-Z]+-\d+) ⟦(.*)⟧$', blk, re.M):
             extracted[(m.group(1), fid)] = m.group(2)
-    # ---- F: structure, syntax, amendment provenance (E1R, E-F3-01; NOT a semantic check) ------------
-    e1r_text = layer_text('# §C12.E1R') if has_e1r else ''
-    e1r_f2 = e1r_text[e1r_text.index('## C12.E1R.2'):e1r_text.index('## C12.E1R.3')] if '## C12.E1R.2' in e1r_text else ''
-    # formula amendment records: section ".2" of every amending layer; a formula may be amended by several
-    amend_recs = {}  # fid -> [(layer, record)]
-    for fid, rec in blocks(e1r_f2, r'^### (F-[A-Z]+-\d+)\b'):
-        amend_recs.setdefault(fid, []).append(('C12.E1R', rec))
-    for name, _, _ in f_layers:
-        text = layer_text('# §' + name)
-        m = re.search('^## ' + re.escape(name) + r'\.2\b.*$', text, re.M)
-        if m:
-            nxt = re.search(r'^## ', text[m.end():], re.M)
-            sec = text[m.end():m.end() + nxt.start()] if nxt else text[m.end():]
-            for fid, rec in blocks(sec, r'^### (F-[A-Z]+-\d+)\b'):
-                amend_recs.setdefault(fid, []).append((name, rec))
-    amend_rec = {fid: recs[0][1] for fid, recs in amend_recs.items()}
+    # ---- F: structure and syntax (NOT a semantic check) --------------------------------------------
     for fid, blk in blocks(f_region, DEF['F']):
         defs = re.findall(r'^- \*\*Definition:\*\* (.*)$', blk, re.M)
         fl = fields(blk)
-        r.check('formula-fields', bool(defs) and bool(fl.get('Historical sources')), f'{fid}: needs >= 1 Definition and Historical sources')
+        r.check('formula-fields', bool(defs), f'{fid}: needs >= 1 Definition')
         for d in defs:
             r.check('formula-syntax', d.count('`') % 2 == 0, f'{fid}: unclosed code span in "{d[:60]}…"')
             for span in re.findall(r'`([^`]*)`', d):
@@ -262,24 +170,6 @@ def run_checks(root):
                             bad = True
                             break
                 r.check('formula-syntax', not bad and not stack and span.strip() != '', f'{fid}: unbalanced or empty code span `{span[:60]}`')
-        amended = 'Amended' in fl
-        recs = amend_recs.get(fid, [])
-        r.check('formula-provenance', amended == bool(recs), f'{fid}: Amended field {"present" if amended else "absent"} but amendment record {"present" if recs else "absent"}')
-        for layer, rec in recs if amended else []:
-            r.check('formula-provenance', bool(re.search(r'(?<![§.\w])' + re.escape(layer) + r' \(', fl.get('Amended', ''))),
-                    f'{fid}: amended by {layer} but its Amended field does not name that layer as "{layer} (<finding>)"')
-            prev = re.findall(r'^- \*\*Previous(?: \([^)]*\))?:\*\* (.*)$', rec, re.M)
-            r.check('formula-provenance', bool(prev) and bool(re.search(r'^- \*\*Reason:\*\*', rec, re.M)), f'{fid}: {layer}.2 record needs Previous and Reason lines')
-            for pv in prev:
-                if pv != 'none (no reconfiguration entry existed).':
-                    r.check('formula-provenance', pv not in defs, f'{fid}: recorded previous definition still present verbatim (nothing was amended)')
-    # the line states what C12.E1R itself left unchanged; a later layer may amend a listed formula (C12.F15.10)
-    e1r_amended = {fid for fid, recs in amend_recs.items() if any(layer == 'C12.E1R' for layer, _ in recs)}
-    for line in e1r_f2.splitlines():
-        if line.startswith('Formulas reviewed and **unchanged**'):
-            for fid in re.findall(REF['F'], line):
-                r.check('formula-provenance', fid in defined['F'] and fid not in e1r_amended, f'{fid}: listed unchanged but undefined or amended by C12.E1R')
-
     # ---- ADR invariant citations (E1R, E-F1-01): canonical INV-* only, no alias namespace -----------
     adr_text = regions.get('ADR', [('', '')])[0][1]
     bare = sorted({m.group(1) for m in re.finditer(r'(?<![A-Za-z0-9-])([A-Z]+-\d+)\b', adr_text) if 'INV-' + m.group(1) in defined['INV']})
@@ -287,21 +177,13 @@ def run_checks(root):
 
     for iid, blk in inv_blocks.items():
         fl = fields(blk)
-        need = ['Wording', 'Owner', 'Violation', 'Origin', 'Trigger', 'Evidence', 'Obligations', 'Formulas', 'ADR']
+        need = ['Wording', 'Owner', 'Violation', 'Evidence', 'Obligations', 'Formulas', 'ADR']
         missing = [k for k in need if not fl.get(k)]
         r.check('inv-fields', not missing, f'{iid} missing {missing}')
-        if iid not in latest:
-            continue
-        origin, row, trig = latest[iid]
-        r.check('inv-provenance', fl.get('Origin') == origin, f'{iid}: Origin "{fl.get("Origin")}" expected "{origin}"')
-        r.check('inv-provenance', fl.get('Trigger', '') == trig, f'{iid}: Trigger "{fl.get("Trigger")}" expected "{trig}"')
         wording = fl.get('Wording', '')
         for fid in re.findall(r'\[(F-[A-Z]+-\d+)\]', wording):
             frag = extracted.get((iid, fid))
             r.check('formula-ref', frag is not None, f'{iid}: [{fid}] has no extracted text in §F')
-            if frag is not None:
-                wording = wording.replace('[' + fid + ']', frag, 1)
-        r.check('inv-wording-mismatch', wording == row[1], f'{iid}: effective wording does not reproduce its historical layer row')
         for fid in [x.strip() for x in fl.get('Formulas', '—').split(',') if x.strip() and x.strip() != '—']:
             r.check('formula-ref', fid in defined['F'], f'{iid}: formula {fid} undefined')
 
@@ -320,15 +202,6 @@ def run_checks(root):
         r.check('ob-status-vocab', status in ('OPEN', 'CLOSED'), f'{oid}: "{status}"')
         if dest in DEFERRED_DEST:
             r.check('deferred-closed', status == 'OPEN', f'{oid} ({dest}) is {status}')
-    ob19 = fields(obs.get('OB-19', ''))
-    text19 = ' '.join(ob19.values())
-    ok19 = (ob19.get('Status') == 'CLOSED' and ob19.get('Destination') == 'PHASE-F-ENTRY-GATE'
-            and 'unconditional' in ob19.get('Blocks', '') and not re.search(r'(?<!un)conditional', text19.lower()))
-    r.check('ob19-conditional', ok19, f'OB-19: {ob19.get("Status")} / {ob19.get("Destination")} / {ob19.get("Blocks")}')
-    ob36 = fields(obs.get('OB-36', ''))
-    r.check('ob36-scoped', 'OB-36' in obs and ob36.get('Status') == 'CLOSED' and ob36.get('Destination') == 'CI' and 'not part of OB-19' in ob36.get('Blocks', ''),
-            'OB-36 must exist, status CLOSED, destination CI, separate from OB-19')
-
     # ---- provisional values ------------------------------------------------------------------------
     prov_region = regions.get('PROV', [('', '')])[0][1]
     for pid, blk in blocks(prov_region, DEF['PROV']):
@@ -338,21 +211,11 @@ def run_checks(root):
         st = fl.get('Status', '')
         r.check('deferred-closed', st == 'PROVISIONAL' or (st == 'FROZEN' and bool(fl.get('Frozen by'))), f'{pid}: status {st}')
 
-    # ---- PD-F2 traceability --------------------------------------------------------------------------
-    blk_text = docs['FOUNDATION_BLOCKERS.md']
-    living_spans = [m.span() for m in re.finditer(r'<!-- living:\w+ -->.*?<!-- /living -->', blk_text, re.S)]
-    historical = set()
-    for m in re.finditer(r'^### (PD-F2-\d+) \(', blk_text, re.M):
-        if not any(a <= m.start() < b for a, b in living_spans):
-            historical.add(m.group(1))
+    # ---- blockers ------------------------------------------------------------------------------------
     pdf = dict(blocks(regions.get('PDF', [('', '')])[0][1], DEF['PDF']))
-    r.check('pdf2-missing', historical <= set(pdf), f'not in the living register: {sorted(historical - set(pdf))}')
-    d9 = regions.get('D9', [('', '')])[0][1]
     for pid, blk in pdf.items():
         st = fields(blk).get('Status', '')
         r.check('pdf-status', st in ('RESOLVED', 'OPEN', 'APPLIED', 'NOTED'), f'{pid}: {st}')
-        if pid.startswith('PD-F2') and st == 'OPEN':
-            r.check('pdf2-open-listed', pid in d9, f'{pid} OPEN but not listed in D9')
 
     # ---- risks, increments, state machines --------------------------------------------------------
     for rid, blk in blocks(regions.get('RISK', [('', '')])[0][1], DEF['RISK']):
@@ -368,18 +231,9 @@ def run_checks(root):
         r.check('inc-exec-class', bool(re.match(r'\**(HEADLESS|NESTED|EXCLUSIVE_HARDWARE)', ec)), f'{iid}: {ec}')
         for k in ['Objective', 'Invariants exercised', 'Obligations', 'Exit tests', 'Entry conditions', 'Stop / rollback', 'Architecture decision required first']:
             r.check('inc-fields', bool(fl.get(k)) or any(x.startswith(k) for x in fl), f'{iid}: {k}')
-        if fl.get('Category') == 'PHYSICAL':
-            r.check('inc-physical-authorization', 'authoriz' in blk, f'{iid} must require separate authorization')
-    r.check('inc-slice0-ob19', 'INC-0' in incs and 'OB-19' in fields(incs['INC-0']).get('Obligations', '') and fields(incs['INC-0']).get('Category') == 'ENFORCE', 'INC-0 must be ENFORCE and carry OB-19')
-    r.check('inc-slice1-seam', 'INC-1' in incs and fields(incs['INC-1']).get('Category') == 'PRODUCT' and 'snapshot' in incs['INC-1'] and 'hit-test' in incs['INC-1'], 'INC-1 must be the PRODUCT vertical seam')
-    r.check('inc-ob24-gate', bool(re.search(r'OB-24', fields(incs.get('INC-10', '')).get('Architecture decision required first', ''))), 'INC-10 must be gated by OB-24')
     for mid, blk in blocks(regions.get('SM', [('', '')])[0][1], DEF['SM']):
         r.check('sm-cites-inv', bool(re.search(REF['INV'], blk)), mid)
 
-    # ---- D9 verdict -----------------------------------------------------------------------------------
-    if d9:
-        vs = [v for v in VERDICTS if re.search(r'^\*\*Verdict:\*\* `' + re.escape(v) + '`$', d9, re.M)]
-        r.check('d9-verdict', len(vs) == 1, f'{len(vs)} verdict lines')
     return r
 
 

@@ -1,7 +1,0 @@
-{
- "name": "effective wording drifts from its historical layer",
- "file": "FOUNDATION_INVARIANTS.md",
- "find": "Stage is the **only** store",
- "replace": "Stage is the store",
- "expect": "inv-wording-mismatch"
-}

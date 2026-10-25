@@ -1,7 +1,0 @@
-{
- "name": "C12.F3: a non-zero bound slips back into INV-PROTO-1",
- "file": "FOUNDATION_INVARIANTS.md",
- "find": "A non-zero bound is never sent.",
- "replace": "A bound may be sent.",
- "expect": "inv-wording-mismatch"
-}

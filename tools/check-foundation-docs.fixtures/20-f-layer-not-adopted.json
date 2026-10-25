@@ -1,7 +1,0 @@
-{
- "name": "amendment layer present without an adoption status",
- "file": "FOUNDATION_ARCHITECTURE.md",
- "find": "**Status: ADOPTED 2026-10-13 by owner approval.** Approved semantics, verbatim: \"Default placement",
- "replace": "**Status: PROPOSED.** Approved semantics, verbatim: \"Default placement",
- "expect": "f-layer-status"
-}

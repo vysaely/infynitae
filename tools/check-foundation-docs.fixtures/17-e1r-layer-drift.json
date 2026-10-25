@@ -1,7 +1,0 @@
-{
- "name": "E1R layer row edited without regenerating the registry",
- "file": "FOUNDATION_ARCHITECTURE.md",
- "find": "**Binding is 1:1 in Foundation 01:**",
- "replace": "**Binding is 1:N in Foundation 01:**",
- "expect": "inv-wording-mismatch"
-}

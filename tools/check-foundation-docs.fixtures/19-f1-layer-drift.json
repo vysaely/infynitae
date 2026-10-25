@@ -1,7 +1,0 @@
-{
- "name": "INV-STAGE-1's latest layer row (C12.F5) edited without regenerating the registry",
- "file": "FOUNDATION_ARCHITECTURE.md",
- "find": "the default placement resolved **once, at the element's first windowed presentation**, when its windowed window-geometry size is authoritative:",
- "replace": "the default placement resolved at every map, when its windowed window-geometry size is authoritative:",
- "expect": "inv-wording-mismatch"
-}

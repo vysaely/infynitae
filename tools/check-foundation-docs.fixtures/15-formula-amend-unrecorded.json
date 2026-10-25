@@ -1,7 +1,0 @@
-{
- "name": "amended formula loses its provenance marker",
- "file": "FOUNDATION_ARCHITECTURE.md",
- "find": "- **Amended:** C12.E1R (E1R-N1); previous definition recorded verbatim in FOUNDATION_ARCHITECTURE §C12.E1R.2\n",
- "replace": "",
- "expect": "formula-provenance"
-}

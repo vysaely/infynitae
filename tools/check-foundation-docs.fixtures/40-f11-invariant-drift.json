@@ -1,7 +1,0 @@
-{
- "name": "C12.F11: the requested sizes dropped from INV-SCALE-2's s_max",
- "file": "FOUNDATION_INVARIANTS.md",
- "find": " and over every size Core has asked E for while that request stands: the size of the protocol-fullscreen configure while E is granted (C5.2: the output's logical size; at the initial commit, of the grant made in the initial configure), and the saved size offered in the configure that ended E's fullscreen (M9), until E commits a tree whose window-geometry size differs from the one it replaces, is unmapped, or is destroyed (0 iff none has a non-zero extent, e.g. every initial commit without a grant).",
- "replace": " (0 iff no surface has a non-zero extent, e.g. every initial commit).",
- "expect": "inv-wording-mismatch"
-}

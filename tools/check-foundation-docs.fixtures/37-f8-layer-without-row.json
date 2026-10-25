@@ -1,7 +1,0 @@
-{
- "name": "C12.F8 layer present without its invariant row",
- "file": "FOUNDATION_ARCHITECTURE.md",
- "find": "| **INV-RENDER-2** | Render order front-to-back: reverse Stage z-order; within an element each popup tree — ",
- "replace": "| INV-RENDER-2 (row removed) | Render order front-to-back: reverse Stage z-order; within an element each popup tree — ",
- "expect": "f-layer-rows"
-}

@@ -1,7 +1,0 @@
-{
- "name": "C12.F17: INV-INPUT-5 loses the widened lock rule (Q2)",
- "file": "FOUNDATION_ARCHITECTURE.md",
- "find": "no replayed or synthetic motion. No absolute motion reaches a surface whose lock is active. After a camera action",
- "replace": "no replayed or synthetic motion. After a camera action",
- "expect": "inv-wording-mismatch"
-}

@@ -1,7 +1,0 @@
-{
- "name": "INV-PRES-1 still claims an earlier layer (C12.F6) as its origin",
- "file": "FOUNDATION_INVARIANTS.md",
- "find": "- **Origin:** C12.F10 @ ADOPTED 2026-10-14 (owner approval; base 80ead2a)",
- "replace": "- **Origin:** C12.F6 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)",
- "expect": "inv-provenance"
-}

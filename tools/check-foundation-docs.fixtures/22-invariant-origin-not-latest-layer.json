@@ -1,7 +1,0 @@
-{
- "name": "an amended invariant still claims an earlier layer as its origin",
- "file": "FOUNDATION_INVARIANTS.md",
- "find": "- **Origin:** C12.F5 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)\n- **Layers:** C12 → C12.F1 → C12.F5",
- "replace": "- **Origin:** C12.F1 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)\n- **Layers:** C12 → C12.F1 → C12.F5",
- "expect": "inv-provenance"
-}

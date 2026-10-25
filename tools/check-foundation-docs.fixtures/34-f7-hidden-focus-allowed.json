@@ -1,7 +1,0 @@
-{
- "name": "C12.F7: focus may move to a hidden element again",
- "file": "FOUNDATION_INVARIANTS.md",
- "find": "or target loss, and never to an element **hidden by a presentation** —",
- "replace": "or target loss, also to an element **hidden by a presentation** —",
- "expect": "inv-wording-mismatch"
-}

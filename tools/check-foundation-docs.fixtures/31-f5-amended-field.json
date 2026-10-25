@@ -1,7 +1,0 @@
-{
- "name": "formula amended by C12.F5 without naming the layer",
- "file": "FOUNDATION_ARCHITECTURE.md",
- "find": "- **Amended:** C12.F5 (P9b); previous definition recorded verbatim",
- "replace": "- **Amended:** P9b; previous definition recorded verbatim",
- "expect": "formula-provenance"
-}

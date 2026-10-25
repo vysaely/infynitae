@@ -1,7 +1,0 @@
-{
- "name": "C12.F14: INV-RENDER-1 reverts to a reference recomputed from every view origin",
- "file": "FOUNDATION_ARCHITECTURE.md",
- "find": "⟦`edge(x) = round((x − R)·k + δ) − C_O` with R output O's lattice reference, δ = 2⁻²⁰, k = zoom·scale⟧",
- "replace": "⟦`edge(x) = round((x − R)·k + δ) − C_O` with R a 120-lattice reference, δ = 2⁻²⁰, k = zoom·scale⟧",
- "expect": "inv-wording-mismatch"
-}

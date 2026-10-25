@@ -1,7 +1,0 @@
-{
- "name": "C12.F4: the clock clause dropped from INV-SCALE-3",
- "file": "FOUNDATION_INVARIANTS.md",
- "find": " **Clock:** the settlement timeout is measured on the session's monotonic clock, from the time the last step of the interaction entered Core. A deadline is written only by a step of the interaction, never by a client response or any other evaluation, and it never moves earlier. Input-event timestamps and presentation timestamps are separate clocks and take no part.",
- "replace": "",
- "expect": "inv-wording-mismatch"
-}
