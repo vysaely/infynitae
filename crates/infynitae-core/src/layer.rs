@@ -1,6 +1,5 @@
 //! Layer surfaces (panels, bars, launchers, wallpapers; `zwlr_layer_shell_v1`): owner decisions
-//! 2026-10-21 L1–L8 (`evidence/phase-f/LAYER/DECISION_RECORD_2026-10-21.md`; layer C12.F19
-//! prepared, not adopted).
+//! 2026-10-21 L1–L8 (C12.F19).
 //!
 //! A layer surface is not an element (L1): it has no anchor, no Stage entry and no camera. It
 //! belongs to one output and lives in that output's logical coordinates; no camera ever moves it
