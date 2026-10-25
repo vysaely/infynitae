@@ -230,6 +230,9 @@ pub struct WaylandState {
     /// FOCUS_ON_OPEN / TELEPORT_ON_OPEN = "user" (the default): only windows the user opened.
     pub(crate) focus_open_user_only: bool,
     pub(crate) teleport_open_user_only: bool,
+    /// FOCUS_ON_ACTIVATE = "user" (the default): only tokens from the user's launches or the app
+    /// itself move the focus (`request_activation`).
+    pub(crate) activate_user_only: bool,
     /// `ext-session-lock-v1`, when the backend enforces it (`enable_session_lock`).
     session_lock: Option<lock::SessionLock>,
     // probe builds only: the Send assertion must be the one and only error
@@ -403,6 +406,7 @@ impl WaylandState {
             launches: launch::Launches::default(),
             focus_open_user_only: true,
             teleport_open_user_only: true,
+            activate_user_only: true,
             session_lock: None,
             // probe builds only: the Send assertion must be the one and only error
             #[cfg(feature = "probe_store_port_in_state")]
@@ -654,6 +658,15 @@ impl WaylandState {
                             }
                             "DIRECT_SCANOUT" => {
                                 self.direct_scanout = Some(matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on"));
+                            }
+                            "FOCUS_ON_ACTIVATE" => {
+                                use infynitae_core::input::focus::ActivationPolicy;
+                                let v = val.to_lowercase();
+                                self.activate_user_only = v == "user";
+                                self.core.set_activation_policy(match v.as_str() {
+                                    "never" | "0" | "false" | "off" => ActivationPolicy::AttentionOnly,
+                                    _ => ActivationPolicy::Strict,
+                                });
                             }
                             "SUPER_FREES_CURSOR" => {
                                 free_cursor_on_super = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");

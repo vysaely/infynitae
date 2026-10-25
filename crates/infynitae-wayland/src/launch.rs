@@ -111,7 +111,7 @@ fn descends_from(mut pid: u32, ancestor: u32) -> bool {
 
 impl WaylandState {
     /// The process of the client that shows `element`.
-    fn client_pid(&self, element: ElementId) -> Option<u32> {
+    pub(crate) fn client_pid(&self, element: ElementId) -> Option<u32> {
         let surface = self.window_surface(element)?;
         let creds = surface.client()?.get_credentials(&self.dh).ok()?;
         u32::try_from(creds.pid).ok()
@@ -142,6 +142,19 @@ impl WaylandState {
             && focused
                 .and_then(|f| self.client_pid(f))
                 .is_some_and(|focused| focused != pid && descends_from(pid, focused))
+    }
+
+    /// `pid` belongs to a launch from a shortcut (rule 1): a launcher started from Super+W, or
+    /// what it started.
+    pub(crate) fn is_launch_process(&mut self, pid: u32) -> bool {
+        let now = Instant::now();
+        let Some(tag) = tag_of(pid) else {
+            return false;
+        };
+        self.launches
+            .list
+            .iter_mut()
+            .any(|l| l.id == tag && now.duration_since(l.moment(now)) < TAGGED)
     }
 
     /// FOCUS_ON_OPEN / TELEPORT_ON_OPEN = "user": only windows the user opened.

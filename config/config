@@ -25,6 +25,9 @@ FOCUS_ON_OPEN="user"              # a new window takes the focus — user: only 
                                   # (shortcuts, launcher, a command in the focused terminal), not
                                   # ones an app opens by itself | 1: every window | 0: never
 TELEPORT_ON_OPEN="user"           # the camera moves to a new window — same values
+FOCUS_ON_ACTIVATE="user"          # an app asks to be focused — user: only from your launcher or
+                                  # itself; one app handing focus to another (a link from Discord
+                                  # in the browser) only marks it | always | never
 FOCUS_CYCLE_NAVIGATE="1"          # Super+Tab also centres the camera on the window
 PLACEMENT_POLICY="cluster"        # cluster: next free spot beside the others | center | origin
 SUPER_ENTER_ACTION="maximize"     # maximize: the window fills the view at 100% | fit: zoom to it

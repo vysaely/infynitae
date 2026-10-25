@@ -806,6 +806,8 @@ delegate_xdg_decoration!(WaylandState);
 /// W-SM-8: whether an activation token passed the provenance check when it was created.
 struct TokenProvenance {
     validated: bool,
+    /// The process of the client that asked for the token.
+    creator_pid: Option<u32>,
 }
 
 impl WaylandState {
@@ -881,8 +883,15 @@ impl XdgActivationHandler for WaylandState {
     fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
         self.prune_activation_tokens();
         let validated = self.token_validated(&data);
-        data.user_data
-            .insert_if_missing(|| TokenProvenance { validated });
+        let creator_pid = data
+            .client_id
+            .clone()
+            .and_then(|c| self.dh.backend_handle().get_client_credentials(c).ok())
+            .and_then(|c| u32::try_from(c.pid).ok());
+        data.user_data.insert_if_missing(|| TokenProvenance {
+            validated,
+            creator_pid,
+        });
         true
     }
 
@@ -900,11 +909,17 @@ impl XdgActivationHandler for WaylandState {
         };
         let id = self.elements[i].id;
         // an expired token validates nothing: the request only asks for attention
-        let validated = token_data.timestamp.elapsed() <= ACTIVATION_TOKEN_LIFETIME
-            && token_data
-                .user_data
-                .get::<TokenProvenance>()
-                .is_some_and(|p| p.validated);
+        let provenance = token_data.user_data.get::<TokenProvenance>();
+        let mut validated = token_data.timestamp.elapsed() <= ACTIVATION_TOKEN_LIFETIME
+            && provenance.is_some_and(|p| p.validated);
+        // FOCUS_ON_ACTIVATE=user: one app handing the focus to another (a link from Discord
+        // opening in the browser) only asks for attention; a token from the user's launcher or
+        // shortcuts, or the app's own, may focus
+        if validated && self.activate_user_only {
+            let creator = provenance.and_then(|p| p.creator_pid);
+            let target = self.client_pid(id);
+            validated = creator.is_some_and(|c| Some(c) == target || self.is_launch_process(c));
+        }
         if let Ok(effects) = self.core.activation_request(id, validated) {
             self.apply(&effects);
         }
