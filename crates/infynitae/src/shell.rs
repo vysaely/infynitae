@@ -1,4 +1,4 @@
-//! The trusted shell's channel (C7.1; INC-11): the socket `$XDG_RUNTIME_DIR/infynitae/shell.sock`
+//! The trusted shell's channel (C7.1): the socket `$XDG_RUNTIME_DIR/infynitae/shell.sock`
 //! (directory 0700, socket 0600), admission by `SO_PEERCRED` (the peer's uid must be this
 //! process's; owner decision 2026-10-20, D1: checked here, with rustix, so `infynitae-ipc` keeps
 //! Core as its only dependency), and the server plugged into the backend's loop.
