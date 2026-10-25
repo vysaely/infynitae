@@ -1,4 +1,4 @@
-//! Infynitae Native trusted shell IPC (FOUNDATION_ARCHITECTURE C7; INC-11).
+//! Infynitae Native trusted shell IPC (FOUNDATION_ARCHITECTURE C7).
 //!
 //! The only holder of `ShellPort` (C7.1, C7.4). Depends on Core alone: the JSON-lines protocol is
 //! written here (owner decision 2026-10-20, D2), and the socket, its admission check and the loop
