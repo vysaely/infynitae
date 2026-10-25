@@ -182,10 +182,14 @@ case "${SESSION_RESTORE:-true}" in
         ;;
 esac
 
-# 8. Launch default terminal on the infinite canvas
+# 8. Launch default terminal on the infinite canvas, unless the session came back or
+# START_TERMINAL is off
 if [ "$RESTORE_SESSION" = "true" ]; then
     exit 0
 fi
+case "${START_TERMINAL:-true}" in
+    0|false|no|off|FALSE|False) exit 0 ;;
+esac
 
 resolve_terminal() {
     if [ -n "$TERMINAL" ] && [ "$TERMINAL" != "auto" ]; then

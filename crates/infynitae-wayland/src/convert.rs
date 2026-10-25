@@ -296,7 +296,15 @@ impl<E: Element> Element for CanonicalRect<E> {
         if self.remapped || self.force_transparent {
             OpaqueRegions::default()
         } else {
-            self.inner.opaque_regions(scale)
+            // a client's opaque region reaching past the surface is clipped to a 0-wide or
+            // 0-high rectangle at its edge; the damage tracker turns one into an empty damage
+            // clip when the region changes (`drop_empty`)
+            let opaque = self.inner.opaque_regions(scale);
+            if opaque.iter().any(|o| o.is_empty()) {
+                opaque.into_iter().filter(|o| !o.is_empty()).collect()
+            } else {
+                opaque
+            }
         }
     }
 

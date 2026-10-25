@@ -78,6 +78,7 @@ SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
 SCREENSHOT_CMD=""                 # Super+Shift+S — empty: grim; a command gets the file path
 XWAYLAND="true"                   # [restart] X11 apps and games (xwayland-satellite, on demand)
 SESSION_RESTORE="true"            # [restart] reopen the apps that were open, where they were
+START_TERMINAL="true"             # [restart] open a terminal at login when nothing was restored
 CLIPBOARD_PERSIST="true"          # [reload] keep clipboard after source closes (needs wl-clip-persist)
 CLIPBOARD_HISTORY="true"          # [reload] Super+V clipboard history (needs cliphist and wl-paste)
 CLIPBOARD_PICKER=""               # Super+V picker — empty: MENU_PICKER
