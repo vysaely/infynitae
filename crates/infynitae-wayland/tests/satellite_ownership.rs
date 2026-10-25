@@ -1,6 +1,5 @@
-//! INC-12 review finding R2-4 (evidence/phase-f/INC-12/REVIEW_R2_2026-10-16.md): with session
-//! process ownership the compositor reaps the orphans it adopted (`ownership::reap_adopted`, run
-//! by the session's SIGCHLD handler). The satellite is an owned child, so that reaper leaves its
+//! Session process ownership: the compositor reaps the orphans it adopted (`ownership::reap_adopted`,
+//! run by the session's SIGCHLD handler). The satellite is an owned child, so that reaper leaves its
 //! exit status to the supervisor, which notices the exit and restarts it.
 //!
 //! Its own test binary: `reap_adopted` reaps every unregistered zombie child of the process, so
