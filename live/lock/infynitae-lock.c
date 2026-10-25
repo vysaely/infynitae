@@ -883,8 +883,17 @@ int main(int argc, char **argv) {
     time_t last_clock_tick = time(NULL);
 
     while (app.running) {
+        // a lost connection: exit (the compositor keeps the session locked without its client)
+        bool lost = false;
         while (wl_display_prepare_read(app.display) != 0) {
-            wl_display_dispatch_pending(app.display);
+            if (wl_display_dispatch_pending(app.display) < 0) {
+                lost = true;
+                break;
+            }
+        }
+        if (lost || wl_display_get_error(app.display) != 0) {
+            fprintf(stderr, "[infynitae-lock] Error: lost the compositor connection\n");
+            return 1;
         }
         wl_display_flush(app.display);
 
@@ -899,10 +908,17 @@ int main(int argc, char **argv) {
         int ret = poll(&pfd, 1, poll_timeout);
 
         if (ret > 0 && (pfd.revents & POLLIN)) {
-            wl_display_read_events(app.display);
-            wl_display_dispatch_pending(app.display);
+            if (wl_display_read_events(app.display) < 0 ||
+                wl_display_dispatch_pending(app.display) < 0) {
+                fprintf(stderr, "[infynitae-lock] Error: lost the compositor connection\n");
+                return 1;
+            }
         } else {
             wl_display_cancel_read(app.display);
+            if (ret > 0 && (pfd.revents & (POLLHUP | POLLERR))) {
+                fprintf(stderr, "[infynitae-lock] Error: lost the compositor connection\n");
+                return 1;
+            }
         }
 
         // Check auth status
