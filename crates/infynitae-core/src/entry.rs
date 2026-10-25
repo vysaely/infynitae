@@ -95,6 +95,7 @@ impl Core {
                     .is_some()
                     .then(authority::Authorized::mint);
                 self.pointer_motion(proof, delta, delta_unaccel, time_us, out);
+                self.physical_input_activity = true;
                 Ok(())
             }
             PhysicalEvent::PointerButton {
@@ -118,6 +119,7 @@ impl Core {
                 } else {
                     self.button_release(button, ms(time_us), out);
                 }
+                self.physical_input_activity = true;
                 Ok(())
             }
             PhysicalEvent::PointerAxis { axis, time_us } => {
@@ -126,6 +128,7 @@ impl Core {
                     return Err(EntryError::InvalidEvent);
                 }
                 self.input.clock.accepted(time_us);
+                self.physical_input_activity = true;
                 // consumed during an interaction and in NoOutput (M10, M22)
                 if self.input.interaction.active() || self.pointer == PointerState::NoOutput {
                     return Ok(());
@@ -176,6 +179,7 @@ impl Core {
                 } else {
                     self.keyboard_release(key, mods_changed, time_us, out);
                 }
+                self.physical_input_activity = true;
                 Ok(())
             }
             PhysicalEvent::RecenterElement { element } => {

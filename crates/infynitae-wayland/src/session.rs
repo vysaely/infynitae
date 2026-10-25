@@ -137,6 +137,8 @@ pub struct Session {
     /// When the off-screen fallback timer fires (M16); `None` while no unobserved element has a
     /// pending callback, and then it is not armed (INV-IDLE-1).
     fallback: Option<Instant>,
+    /// When an idle notification timer fires; `None` while no notification is pending (INV-IDLE-1).
+    idle: Option<Instant>,
     /// SIGTERM or SIGINT arrived.
     terminated: Rc<Cell<bool>>,
     /// The handlers writing to the self-pipe; removed (the signals then ignored) on drop.
@@ -256,6 +258,7 @@ impl Session {
             display_ready,
             wake: None,
             fallback: None,
+            idle: None,
             terminated,
             signal_ids,
             child_notify,
@@ -334,7 +337,8 @@ impl Session {
             .map(|d| (self.started + d).saturating_duration_since(now));
         let wake = self.wake.map(|at| at.saturating_duration_since(now));
         let fallback = self.fallback.map(|t| t.saturating_duration_since(now));
-        [self.timer.until_due(now), limit, wake, fallback]
+        let idle = self.idle.map(|t| t.saturating_duration_since(now));
+        [self.timer.until_due(now), limit, wake, fallback, idle]
             .into_iter()
             .flatten()
             .min()
@@ -344,6 +348,12 @@ impl Session {
     /// current time is `now` (Core's [`crate::WaylandState::frame_fallback`]), or disarms it.
     pub fn set_fallback_deadline(&mut self, deadline: Option<Duration>, now: Duration) {
         self.fallback = deadline.map(|d| Instant::now() + d.saturating_sub(now));
+    }
+
+    /// Arms the idle notification timer for `deadline`, given on the presentation clock whose
+    /// current time is `now` ([`crate::WaylandState::idle_notify_check`]), or disarms it.
+    pub fn set_idle_deadline(&mut self, deadline: Option<Duration>, now: Duration) {
+        self.idle = deadline.map(|d| Instant::now() + d.saturating_sub(now));
     }
 
     /// After the loop woke: reaps exited children, dispatches the clients' requests and flushes

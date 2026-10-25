@@ -485,6 +485,7 @@ pub fn run_headless_with(
         // pending (INV-IDLE-1)
         let now = infynitae_wayland::presentation_clock_now();
         session.set_fallback_deadline(state.frame_fallback(now), now);
+        session.set_idle_deadline(state.idle_notify_check(now), now);
         session.flush();
     }
 

@@ -400,6 +400,8 @@ pub fn run_nested_with(
         let now = infynitae_wayland::presentation_clock_now();
         let deadline = data.state.frame_fallback(now);
         data.session.set_fallback_deadline(deadline, now);
+        let idle_deadline = data.state.idle_notify_check(now);
+        data.session.set_idle_deadline(idle_deadline, now);
         data.session.flush();
     }
 

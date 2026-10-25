@@ -18,6 +18,7 @@ pub mod extension;
 mod frames;
 pub mod gamma;
 mod handlers;
+pub mod idle_notify;
 mod image_copy;
 mod keyboard;
 mod launch;
@@ -42,10 +43,10 @@ use infynitae_core::Core;
 use infynitae_core::stage::ElementId;
 use smithay::desktop::{PopupManager, Window};
 use smithay::input::{Seat, SeatState};
-use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::backend::{
     ClientData, ClientId, DisconnectReason, GlobalId, ObjectId,
 };
+use smithay::reexports::wayland_server::{DisplayHandle, Resource};
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
 use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufState};
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
@@ -75,6 +76,7 @@ pub fn presentation_clock_now() -> std::time::Duration {
         .into()
 }
 
+pub use idle_notify::IdleNotifyState;
 pub use registry::SurfaceRegistry;
 
 /// Per-client data the composition root attaches when inserting a client.
@@ -287,6 +289,10 @@ pub struct WaylandState {
     pub wine_transparency: bool,
     pub force_transparent_apps: Vec<String>,
     pub manual_idle_inhibit: bool,
+    /// `ext_idle_notifier_v1`: user idle notifications for external idle listeners (swayidle).
+    pub idle_notify: IdleNotifyState,
+    /// Current virtual time for test harnesses driving the adapter in virtual time.
+    pub(crate) current_time: Option<std::time::Duration>,
     /// The config's `EXEC_*` commands, by the index Core's `Effect::Exec` names.
     pub(crate) exec_commands: Vec<String>,
     /// Processes started from shortcuts, to tell the windows the user opened (`launch`).
@@ -541,6 +547,8 @@ impl WaylandState {
             wine_transparency: true,
             force_transparent_apps: Vec::new(),
             manual_idle_inhibit: false,
+            idle_notify: IdleNotifyState::new(display),
+            current_time: None,
             exec_commands: Vec::new(),
             launches: launch::Launches::default(),
             focus_open_user_only: true,
@@ -633,6 +641,10 @@ impl WaylandState {
         let result = f(&mut self.core, &mut fx);
         if result.is_ok() {
             self.apply(&fx);
+            if self.core.take_physical_input_activity() {
+                let now = self.current_time.unwrap_or_else(presentation_clock_now);
+                self.notify_activity(now);
+            }
         }
         self.effects = fx;
         result
@@ -1076,6 +1088,61 @@ impl WaylandState {
     /// Whether idle sleep & screen auto-locking should be inhibited.
     pub fn is_idle_inhibited(&self) -> bool {
         self.manual_idle_inhibit
+    }
+
+    /// Sets the current virtual time for test harnesses driving the adapter in virtual time.
+    pub fn set_current_time(&mut self, now: std::time::Duration) {
+        self.current_time = Some(now);
+    }
+
+    /// Earliest deadline among active, pending idle notifications (INV-IDLE-1).
+    pub fn idle_notify_deadline(&self) -> Option<std::time::Duration> {
+        let inhibited = self.is_idle_inhibited();
+        self.idle_notify
+            .notifications
+            .iter()
+            .filter(|n| n.resource.is_alive())
+            .filter(|n| !n.is_idled && (n.ignore_inhibitor || !inhibited))
+            .map(|n| self.idle_notify.last_activity + n.timeout)
+            .min()
+    }
+
+    /// Evaluates idle notifications against `now`: sends `idled` once when timeout has passed,
+    /// sends `resumed` if an idled notification became inhibited. Returns the next pending deadline.
+    pub fn idle_notify_check(&mut self, now: std::time::Duration) -> Option<std::time::Duration> {
+        self.idle_notify
+            .notifications
+            .retain(|n| n.resource.is_alive());
+        let inhibited = self.is_idle_inhibited();
+        for n in &mut self.idle_notify.notifications {
+            if !n.ignore_inhibitor && inhibited {
+                if n.is_idled {
+                    n.resource.resumed();
+                    n.is_idled = false;
+                }
+            } else {
+                let deadline = self.idle_notify.last_activity + n.timeout;
+                if now >= deadline && !n.is_idled {
+                    n.resource.idled();
+                    n.is_idled = true;
+                }
+            }
+        }
+        self.idle_notify_deadline()
+    }
+
+    /// Physical input occurred: resets the timer to `now` and sends `resumed` to all idled notifications.
+    pub fn notify_activity(&mut self, now: std::time::Duration) {
+        self.idle_notify.last_activity = now;
+        self.idle_notify
+            .notifications
+            .retain(|n| n.resource.is_alive());
+        for n in &mut self.idle_notify.notifications {
+            if n.is_idled {
+                n.resource.resumed();
+                n.is_idled = false;
+            }
+        }
     }
 
     /// Whether an element should force transparent blending (Wine layered windows, colorkeys).

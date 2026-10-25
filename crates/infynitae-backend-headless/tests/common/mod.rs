@@ -242,6 +242,8 @@ pub struct Probe {
     pub hold_acks: bool,
     /// (surface, serial) of every configure received while `hold_acks` was set, in order.
     pub held_acks: Vec<(usize, u32)>,
+    /// `ext-idle-notify-v1` events received in order ("idled", "resumed").
+    pub idle_events: Vec<&'static str>,
 }
 
 /// Unique shm file names across the tests of this process.
@@ -1925,6 +1927,8 @@ impl Lockstep {
             registry,
             client,
         };
+        ls.state.set_current_time(Duration::ZERO);
+        ls.state.idle_notify.last_activity = Duration::ZERO;
         // bind the managers first so wl_output globals get their xdg_output at announcement
         ls.pump();
         ls.bind();
@@ -1973,8 +1977,21 @@ impl Lockstep {
                 .core()
                 .frame_fallback_deadline()
                 .map(|d| d.max(self.now))
-                .filter(|d| *d <= t && next.is_none_or(|(_, at)| *d < at));
-            if let Some(at) = fallback {
+                .filter(|d| *d <= t);
+            let idle = self
+                .state
+                .idle_notify_deadline()
+                .map(|d| d.max(self.now))
+                .filter(|d| *d <= t);
+            let earliest_timer = match (fallback, idle) {
+                (Some(f), Some(i)) => Some(f.min(i)),
+                (Some(f), None) => Some(f),
+                (None, Some(i)) => Some(i),
+                (None, None) => None,
+            };
+            if let Some(at) = earliest_timer
+                && next.is_none_or(|(_, v_at)| at < v_at)
+            {
                 self.now = at;
                 self.pump();
                 continue;
@@ -2095,6 +2112,8 @@ impl Lockstep {
             self.state.clear_orphaned_selections();
             self.state.refuse_client_drags();
             frame_fallback(&mut self.state, self.now);
+            self.state.set_current_time(self.now);
+            self.state.idle_notify_check(self.now);
             self.display.flush_clients().expect("server flush");
             self.conn.flush().expect("client flush");
             if let Some(guard) = self.conn.prepare_read() {

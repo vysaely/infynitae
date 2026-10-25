@@ -411,6 +411,8 @@ pub struct Core {
     closed_windows: Vec<(String, geom::CanvasPoint)>,
     /// Whether camera teleports/recenters to newly opened windows.
     pub teleport_on_open: bool,
+    /// Whether physical input occurred since the last query (INV-IDLE-1).
+    pub(crate) physical_input_activity: bool,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
     /// protocol state fail its `Send` assertion (built through infynitae-wayland's probe feature).
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -492,6 +494,7 @@ impl Core {
                 toplevel_parents: Vec::new(),
                 closed_windows: Vec::new(),
                 teleport_on_open: false,
+                physical_input_activity: false,
                 frame_liveness: frames::FrameLiveness::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
@@ -608,6 +611,11 @@ impl Core {
     /// Read access to whether focus cycling navigates the camera.
     pub fn focus_cycle_navigate(&self) -> bool {
         self.focus_cycle_navigate
+    }
+
+    /// Whether physical input occurred since the last call. Cleared on read (INV-IDLE-1).
+    pub fn take_physical_input_activity(&mut self) -> bool {
+        std::mem::take(&mut self.physical_input_activity)
     }
 
     /// Whether fullscreen presentation is temporarily suppressed on `output`.
