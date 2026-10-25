@@ -1,12 +1,11 @@
 //! Infynitae Native console backend: the compositor owns the display and the input devices of a
 //! seat, started from a text console (FOUNDATION_ARCHITECTURE C1.1; owner decisions T1–T9 of
-//! 2026-10-22, `~/infynitae/TTY_BACKEND_DECISIONS_PROPOSAL_2026-10-21.md`). EXPERIMENTAL, like the
-//! rest of the runtime until INC-13.
+//! 2026-10-22, `~/infynitae/TTY_BACKEND_DECISIONS_PROPOSAL_2026-10-21.md`).
 //!
 //! - **Session (T2):** libseat opens the GPU and the input devices without root; a VT switch pauses
 //!   the session (input suspended, DRM master dropped) and resumes it.
 //! - **Rendering (T3):** GLES on GBM/EGL through Smithay's `DrmCompositor`, page-flipped on vblank.
-//!   Clients' dmabufs are not imported yet (INC-13): shm clients only.
+//!   Client dmabufs and shm buffers are imported on the GPU render node.
 //! - **Screens (T5):** every connector connected at start, at its preferred mode, on the primary
 //!   GPU. Hotplug is not handled yet.
 //! - **Input (T4):** libinput on the seat; the keyboard layout from `XKB_DEFAULT_*` (xkbcommon's
@@ -71,13 +70,13 @@ pub struct ConsoleOptions {
     pub duration: Option<Duration>,
     /// Exit after this many frames.
     pub max_frames: Option<u64>,
-    /// xwayland-satellite to supervise (INC-12, experimental); `None`: no X11.
+    /// Path to xwayland-satellite to supervise; `None`: no X11.
     pub xwayland_satellite: Option<PathBuf>,
     /// Output scale ×120 for every screen (`None`: 120, i.e. 1.0).
     pub scale_120: Option<u32>,
     /// Scaling texture filter ("nearest" for 0% blur, "linear" for smooth).
     pub scaling_filter: Option<String>,
-    /// Direct scanout for fullscreen apps and games (zero-copy 0-latency bypass).
+    /// Direct scanout for fullscreen apps and games.
     pub direct_scanout: Option<bool>,
     /// Variable Refresh Rate (VRR / Adaptive Sync): always on, off, or `None` (auto) only while
     /// the screen shows a fullscreen window (games, fullscreen video). Always-on VRR on the
@@ -257,7 +256,7 @@ struct LoopData {
     last_abs_pointer: Option<(f64, f64)>,
     /// Set of known mapped element IDs for detecting newly mapped windows.
     known_mapped: HashSet<infynitae_core::stage::ElementId>,
-    /// Direct scanout enabled for zero-copy primary/overlay plane scanout.
+    /// Direct scanout for primary and overlay planes.
     direct_scanout: bool,
     config_path: Option<PathBuf>,
     last_config_check: std::time::Instant,
@@ -273,7 +272,7 @@ struct LoopData {
     loop_handle: smithay::reexports::calloop::LoopHandle<'static, LoopData>,
 }
 
-/// The device limit Core is told: assumed, not queried, as in the nested backend (OB-52, INC-13).
+/// The device limit Core is told: assumed, not queried, as in the nested backend (OB-52).
 struct AssumedGlesLimits;
 
 impl infynitae_wayland::limits::RendererLimits for AssumedGlesLimits {
@@ -362,7 +361,7 @@ pub fn run_console_with(
         state.set_dmabuf_device_formats(node.dev_id(), formats);
     }
 
-    // Zero-blur scaling: use Nearest-neighbor filtering on upscaled surfaces by default
+    // Scaling filter: nearest-neighbor filtering on upscaled surfaces by default
     let use_nearest = !matches!(options.scaling_filter.as_deref(), Some("linear"));
     if use_nearest && let Err(e) = renderer.upscale_filter(TextureFilter::Nearest) {
         eprintln!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
@@ -780,7 +779,7 @@ pub fn run_console_with(
             .flatten()
             .min();
         event_loop.dispatch(timeout, &mut data)?;
-        // Hyprland-style Live Config Watcher: auto-reloads and applies changes instantly in real time
+        // Watches ~/.config/infynitae/config for changes and reloads settings
         if data.last_config_check.elapsed() >= Duration::from_millis(250) {
             data.last_config_check = std::time::Instant::now();
             if let Some(path) = &data.config_path
@@ -825,7 +824,7 @@ pub fn run_console_with(
                 }
             }
 
-            // Idle screen sleep & auto-lock check (skipped when idle is inhibited)
+            // Idle sleep and auto-lock check (skipped when idle is inhibited)
             if !data.dpms_active
                 && data.idle_sleep_timeout_min > 0
                 && !data.state.is_idle_inhibited()
@@ -1253,10 +1252,9 @@ fn handle_screencopy(
     let now = infynitae_wayland::presentation_clock_now();
 
     // -------------------------------------------------------------------------
-    // 1. FAST-PATH: Direct Zero-Copy DMA-BUF GPU Render
-    // If client supplied a linux_dmabuf (PipeWire, OBS, gpu-screen-recorder),
-    // we import it directly as a GPU texture and render the composite scene straight
-    // onto it. This eliminates CPU memory copies, glReadPixels stalls, and host RAM allocations!
+    // 1. Direct DMA-BUF GPU Render
+    // If the client supplied a linux_dmabuf (PipeWire, OBS, gpu-screen-recorder),
+    // import it as a GPU texture and render the composite scene directly onto it.
     // -------------------------------------------------------------------------
     let mut remaining = Vec::new();
 
@@ -1304,13 +1302,13 @@ fn handle_screencopy(
     }
 
     if remaining.is_empty() {
-        // All requests were fulfilled via direct zero-copy GPU DMA-BUF scanout!
+        // All requests were fulfilled via direct GPU DMA-BUF rendering.
         return;
     }
 
     // -------------------------------------------------------------------------
-    // 2. SLOW-PATH: wl_shm or CPU memory mapping fallback
-    // Executed ONLY when there is at least one client requesting a CPU/shm buffer.
+    // 2. Fallback for wl_shm or CPU memory buffers
+    // Executed when at least one client requested a CPU or shm buffer.
     // -------------------------------------------------------------------------
     if screencopy_texture
         .as_ref()
