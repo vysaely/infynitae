@@ -106,6 +106,24 @@ pub fn console_key(key: u32, ctrl: bool, alt: bool) -> Option<ConsoleKey> {
     }
 }
 
+/// Time remaining until the inactivity timeout expires. None when idle blanking is disabled,
+/// already active, or inhibited. Pure.
+pub fn idle_timeout_remaining(
+    idle_sleep_timeout_min: u32,
+    dpms_active: bool,
+    idle_inhibited: bool,
+    last_user_activity: std::time::Instant,
+    now: std::time::Instant,
+) -> Option<Duration> {
+    if !dpms_active && idle_sleep_timeout_min > 0 && !idle_inhibited {
+        let total = Duration::from_secs(u64::from(idle_sleep_timeout_min) * 60);
+        let elapsed = now.saturating_duration_since(last_user_activity);
+        Some(total.saturating_sub(elapsed))
+    } else {
+        None
+    }
+}
+
 /// A mode's refresh in mHz, from its pixel clock (kHz) and totals; the rounded `vrefresh` when the
 /// totals are unknown. Pure.
 pub fn refresh_mhz(clock_khz: u32, htotal: u16, vtotal: u16, vrefresh: u32) -> u32 {
@@ -703,10 +721,17 @@ pub fn run_console_with(
         if has_screencopy {
             data.session.request_frame();
         }
-        let timeout = match (data.session.timeout(), restart) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
+        let idle_timeout = idle_timeout_remaining(
+            data.idle_sleep_timeout_min,
+            data.dpms_active,
+            data.state.is_idle_inhibited(),
+            data.last_user_activity,
+            std::time::Instant::now(),
+        );
+        let timeout = [data.session.timeout(), restart, idle_timeout]
+            .into_iter()
+            .flatten()
+            .min();
         event_loop.dispatch(timeout, &mut data)?;
         // Hyprland-style Live Config Watcher: auto-reloads and applies changes instantly in real time
         if data.last_config_check.elapsed() >= Duration::from_millis(250) {
@@ -1911,5 +1936,33 @@ mod tests {
         // 2.0x scale (240/120)
         let delta = calculate_abs_pointer_delta((1000.0, 800.0), (0.0, 0.0), 240);
         assert_eq!(delta, (500.0, 400.0));
+    }
+
+    #[test]
+    fn idle_timeout_remaining_calculates_sleep_and_honors_inhibitions() {
+        let start = std::time::Instant::now();
+        // 10 minutes timeout, 3 minutes elapsed -> 7 minutes remaining
+        let remaining =
+            idle_timeout_remaining(10, false, false, start, start + Duration::from_secs(3 * 60));
+        assert_eq!(remaining, Some(Duration::from_secs(7 * 60)));
+
+        // 10 minutes timeout, 12 minutes elapsed -> 0 remaining (saturating)
+        let remaining = idle_timeout_remaining(
+            10,
+            false,
+            false,
+            start,
+            start + Duration::from_secs(12 * 60),
+        );
+        assert_eq!(remaining, Some(Duration::ZERO));
+
+        // When DPMS is already active -> None (no wakeups while idle)
+        assert_eq!(idle_timeout_remaining(10, true, false, start, start), None);
+
+        // When idle is inhibited -> None
+        assert_eq!(idle_timeout_remaining(10, false, true, start, start), None);
+
+        // When timeout is 0 (disabled) -> None
+        assert_eq!(idle_timeout_remaining(0, false, false, start, start), None);
     }
 }
