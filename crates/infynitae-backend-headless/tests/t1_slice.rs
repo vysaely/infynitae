@@ -1,7 +1,7 @@
-//! INC-1 T1: the vertical slice on the production path. A real client maps one element (root,
-//! subsurfaces, one popup); the adapter extracts the snapshot; Core places it and builds the
-//! render list; the adapter's `convert` builds Smithay render elements with `DummyRenderer`; Core
-//! hit-tests in physical pixels. Exit tests TST-04 (x6), TST-09 (xsnap + X-15), TST-10 (xhit),
+//! Vertical slice on the production path. A client maps one element (root, subsurfaces,
+//! one popup); the adapter extracts the snapshot; Core places it and builds the render list;
+//! the adapter's `convert` builds Smithay render elements with `DummyRenderer`; Core hit-tests in
+//! physical pixels. Exit tests TST-04 (x6), TST-09 (xsnap + X-15), TST-10 (xhit),
 //! TST-18 (d5hit, zoom-1 configurations).
 
 mod common;
@@ -136,9 +136,9 @@ fn destroyed_element_leaves_the_render_list() {
     );
 }
 
-/// INC1-F07 on the production path: a real client unmaps subsurface S1 (null buffer). S1 and its
-/// nested subsurface S1a leave the frame (Smithay presents neither: it skips the children of a
-/// surface without a view), the pixel under S1 hits the root, and remapping S1 restores both.
+/// Subsurface unmap on the production path (INC1-F07): a real client unmaps subsurface S1 (null buffer).
+/// S1 and its nested subsurface S1a leave the frame (Smithay presents neither, skipping children
+/// of a surface without a view), the pixel under S1 hits the root, and remapping S1 restores both.
 #[test]
 fn unmapped_subsurface_leaves_the_frame_and_returns() {
     let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));

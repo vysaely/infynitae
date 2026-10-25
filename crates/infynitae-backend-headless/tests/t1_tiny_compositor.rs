@@ -336,7 +336,7 @@ fn test_tiny_compositor_client_event_loop_wakeup() {
     let socket_name = format!("infynitae-wakeup-test-{}", std::process::id());
     let socket_name_clone = socket_name.clone();
 
-    // Run compositor with very low refresh rate: 1 Hz (1000ms frame interval!)
+    // Run compositor with very low refresh rate: 1 Hz (1000ms frame interval)
     let compositor_handle = thread::spawn(move || {
         let (core, input_port, _shell_port, output_token) = Core::new(PersistedCameras::default());
         let options = HeadlessCompositorOptions {
@@ -397,7 +397,7 @@ fn test_tiny_compositor_client_event_loop_wakeup() {
 
     assert!(app.configured);
     // Because display_fd is registered with Calloop, the client commit woke the compositor
-    // immediately without waiting for the 1000ms vblank period!
+    // immediately without waiting for the 1000ms vblank period.
     assert!(
         elapsed < Duration::from_millis(350),
         "Client commit must wake event loop immediately (took {:?}), not wait for 1000ms timer",
