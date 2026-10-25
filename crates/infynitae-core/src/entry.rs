@@ -125,14 +125,14 @@ impl Core {
                     return Err(EntryError::InvalidEvent);
                 }
                 self.input.clock.accepted(time_us);
+                // consumed during an interaction and in NoOutput (M10, M22)
+                if self.input.interaction.active() || self.pointer == PointerState::NoOutput {
+                    return Ok(());
+                }
                 let mods = self.input.modifiers;
                 if mods.logo && mods.shift && !mods.ctrl && !mods.alt {
                     let proof = authority::Authorized::mint();
                     self.zoom_axis(proof, axis, out);
-                    return Ok(());
-                }
-                // consumed during an interaction and in NoOutput (M10, M22)
-                if self.input.interaction.active() || self.pointer == PointerState::NoOutput {
                     return Ok(());
                 }
                 out.extend([
@@ -3019,6 +3019,87 @@ mod tests {
             after, zoomed,
             "Super+Shift+Middle click leaves the zoom alone"
         );
+    }
+
+    #[test]
+    fn axis_events_are_consumed_during_an_interaction_before_zoom() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let cam = camera_of(&c, a);
+        assert_eq!(c.cameras().zoom(cam), Some(1.0));
+
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        let logo_shift = Modifiers {
+            logo: true,
+            shift: true,
+            ..Modifiers::default()
+        };
+
+        // 1. Super+Middle press starts a CameraPan interaction (M22)
+        c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerButton {
+                button: BTN_MIDDLE,
+                pressed: true,
+                modifiers: logo,
+                time_us: 1000,
+            },
+        )
+        .unwrap();
+        assert!(c.input.interaction.active(), "interaction should be active");
+
+        // 2. While interaction is active, Shift is pressed
+        c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::KeyboardKey {
+                key: crate::input::keys::KEY_LEFTSHIFT,
+                pressed: true,
+                modifiers: logo_shift,
+                mods_changed: true,
+                time_us: 1100,
+            },
+        )
+        .unwrap();
+
+        // 3. Super+Shift+Scroll during the pan must be consumed (M22) without changing zoom
+        let fx = c
+            .physical_input_vec(
+                &mut i,
+                crate::PhysicalEvent::PointerAxis {
+                    axis: crate::input::Axis {
+                        source: crate::input::AxisSource::Wheel,
+                        amount: (0.0, -15.0),
+                        v120: (0, -120),
+                    },
+                    time_us: 1200,
+                },
+            )
+            .unwrap();
+        assert!(
+            fx.is_empty(),
+            "axis event during pan should produce no effects"
+        );
+        assert_eq!(
+            c.cameras().zoom(cam),
+            Some(1.0),
+            "zoom must be untouched during an interaction"
+        );
+
+        // 4. Release ends the interaction
+        c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerButton {
+                button: BTN_MIDDLE,
+                pressed: false,
+                modifiers: logo_shift,
+                time_us: 1300,
+            },
+        )
+        .unwrap();
+        assert!(!c.input.interaction.active());
     }
 
     #[test]
