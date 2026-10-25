@@ -121,6 +121,9 @@ pub struct WaylandState {
     presentation: PresentationState,
     outputs: Vec<outputs::OutputHandle>,
     pub(crate) disabled_outputs: Vec<(GlobalId, std::time::Instant)>,
+    /// The compositor started a process of its own (a shortcut, a launch, the wallpaper): the
+    /// session reaps exits from then on (SIGCHLD), also without an `-e` command.
+    pub(crate) spawned_children: bool,
     /// What the backend's framebuffer is (`set_host_window_target`).
     pub(crate) target: convert::RenderTarget,
     /// The cursor clients asked for, drawn when the target draws one (`cursor`).
@@ -415,6 +418,7 @@ impl WaylandState {
             presentation: PresentationState::new::<Self>(display, CLOCK_MONOTONIC),
             outputs: Vec::new(),
             disabled_outputs: Vec::new(),
+            spawned_children: false,
             target: convert::RenderTarget::default(),
             cursor: smithay::input::pointer::CursorImageStatus::default_named(),
             pointer_sent: pointer::Sent::default(),
@@ -869,6 +873,7 @@ impl WaylandState {
                         bin_fallback
                     };
                     let _ = std::process::Command::new(target_bin).spawn();
+                    self.spawned_children = true;
                 }
             }
         }

@@ -139,6 +139,8 @@ pub struct Session {
     terminated: Rc<Cell<bool>>,
     /// The handlers writing to the self-pipe; removed (the signals then ignored) on drop.
     signal_ids: Vec<Registration>,
+    /// SIGCHLD's write end until the session starts listening for it (`dispatch`).
+    child_notify: Option<UnixStream>,
     x_display: Option<String>,
     x_authority: Option<std::path::PathBuf>,
 }
@@ -187,12 +189,12 @@ impl Session {
                 "[infynitae] Not a child subreaper ({e}): orphans of session processes escape the session"
             );
         }
-        // Reaping adopted orphans via SIGCHLD: SIGCHLD only arrives when a child exits, so
-        // registering it does not cause idle wakeups by itself (INV-IDLE-1). The compositor
-        // spawns children from shortcuts and launches in every mode, not only with options.exec.
+        // SIGCHLD reaps the session's exits and the orphans it adopted. Only a session that starts
+        // processes listens for it: an idle session that started nothing has nothing to wake for
+        // (INV-IDLE-1), whatever else exits in this process. With an -e command that is now; else
+        // from the first process the compositor starts itself (a shortcut), at a dispatch.
         let (mut child_wake, child_notify) = UnixStream::pair()?;
         child_wake.set_nonblocking(true)?;
-        signal_ids.push(signals::register(SIGCHLD, child_notify)?);
         let child_fd = child_wake.try_clone()?;
         handle
             .insert_source(
@@ -205,6 +207,12 @@ impl Session {
                 },
             )
             .map_err(|e| format!("Failed to register child-exit source: {e}"))?;
+        let mut child_notify = Some(child_notify);
+        if options.exec.is_some()
+            && let Some(notify) = child_notify.take()
+        {
+            signal_ids.push(signals::register(SIGCHLD, notify)?);
+        }
         let socket = match options.socket_name.as_deref() {
             Some(name) => ListeningSocketSource::with_name(name)?,
             None => ListeningSocketSource::new_auto()?,
@@ -248,6 +256,7 @@ impl Session {
             fallback: None,
             terminated,
             signal_ids,
+            child_notify,
             x_display: options.x_display.clone(),
             x_authority: options.x_authority.clone(),
         };
@@ -357,6 +366,16 @@ impl Session {
             }
         });
         state.launches.poll();
+        if state.spawned_children
+            && let Some(notify) = self.child_notify.take()
+        {
+            match signals::register(SIGCHLD, notify) {
+                Ok(r) => self.signal_ids.push(r),
+                Err(e) => eprintln!("[infynitae] Not reaping child processes: {e}"),
+            }
+            // anything that exited before
+            crate::ownership::reap_adopted();
+        }
         let ready = self.display_ready.take();
         match self.display.dispatch_clients(state) {
             Ok(0) if !ready => {}
@@ -981,15 +1000,19 @@ mod tests {
     #[test]
     fn an_adopted_orphan_is_reaped_without_exec_command() {
         let (mut session, mut state, mut event_loop) = session("orphan", None);
-        let mut child = Command::new("sh")
-            .arg("-c")
-            .arg("sh -c 'sleep 0.1 & echo $!'")
-            .stdout(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
+        // as a shortcut does: the compositor started a process of its own
+        state.spawned_children = true;
+        let mut child = crate::ownership::spawn_owned(
+            Command::new("sh")
+                .arg("-c")
+                .arg("sh -c 'sleep 0.1 & echo $!'")
+                .stdout(std::process::Stdio::piped()),
+        )
+        .unwrap();
         let mut out = String::new();
         std::io::Read::read_to_string(&mut child.stdout.take().unwrap(), &mut out).unwrap();
         child.wait().unwrap();
+        crate::ownership::forget_spawned(child.id());
         let orphan_pid: u32 = out.trim().parse().unwrap();
         assert!(exists(orphan_pid));
 

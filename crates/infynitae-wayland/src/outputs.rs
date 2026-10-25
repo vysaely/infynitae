@@ -322,6 +322,8 @@ impl WaylandState {
         } else {
             let _ = cmd.spawn();
         }
+        // their exits (and their orphans') are reaped from now on (`Session::dispatch`)
+        self.spawned_children = true;
     }
 
     /// The Smithay output of a connected output (for render oracles and backends).
