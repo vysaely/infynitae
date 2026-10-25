@@ -1638,7 +1638,7 @@ CONTROLS = [
      "                out.push(Member { pid, fd });\n                parents.push(pid);", "                out.push(Member { pid, fd });",
      "infynitae", ["--test", "shutdown"], "a_descendant_ignoring_sigterm_is_killed_after_the_grace_period"),
     ("ownership: adopted orphans are not reaped while the session runs (zombies accumulate)", f"{WAYLAND}/session.rs",
-     "                        crate::ownership::reap_adopted();\n                        Ok(PostAction::Continue)", "                        Ok(PostAction::Continue)",
+     "                    crate::ownership::reap_adopted();\n                    Ok(PostAction::Continue)", "                    Ok(PostAction::Continue)",
      "infynitae", ["--test", "shutdown"], "an_adopted_orphan_is_reaped_while_the_session_runs"),
     # ---- INC-12 (experimental): the xwayland-satellite supervisor (M19, OB-33, INV-XWAYLAND-1)
     ("INC-12 r2: unused activation tokens are kept without bound", f"{WAYLAND}/handlers.rs",
