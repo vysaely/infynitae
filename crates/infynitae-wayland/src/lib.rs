@@ -1,12 +1,9 @@
 //! Infynitae Native Smithay adapter (FOUNDATION_ARCHITECTURE C1.2).
 //!
-//! INC-2 state: compositor, subcompositor, shm, xdg-shell, `wl_output` + xdg-output and
-//! presentation-time globals; the commit hook extracts the surface-tree snapshot and hands it to
-//! Core; Core's effects (initial configures, output globals, enter/leave) are applied in order;
-//! render elements are built from Core's render list and drawn through per-output damage trackers
-//! sized `phys_O` (`convert`); observed frames complete on Core's frame clock. INC-3: one seat
-//! (`seat0`) with a pointer and the relative-pointer manager; Core's pointer effects are applied in
-//! order (`pointer`). No keyboard (INC-4), constraints (INC-5) or scale policy (INC-6) yet.
+//! Bridges Wayland protocols (compositor, xdg-shell, layer-shell, outputs, seat, presentation-time,
+//! fractional scale, activation, and data control) to Core. Surface commits extract snapshots for
+//! Core, Core effects drive protocol responses in order, and render elements from Core render lists
+//! are presented through damage trackers.
 //!
 //! Every Smithay handler receives `&mut` protocol state. That state holds the Core but never an
 //! authority port or the output-lifecycle token: those types are `!Send` and the state is asserted
@@ -142,7 +139,7 @@ pub struct WaylandState {
     /// popups of its toplevel in the snapshot (xdg-shell stacking; see `snapshot`).
     popups_created: u64,
     seats: SeatState<WaylandState>,
-    /// The single seat, with pointer and keyboard (INC-4).
+    /// The single seat, with pointer and keyboard.
     seat: Seat<WaylandState>,
     pub(crate) popup_grab: Option<smithay::desktop::PopupGrab<WaylandState>>,
     pub(crate) nested_grab_keep_pointer: bool,
@@ -167,8 +164,8 @@ pub struct WaylandState {
         reason = "owns the wp_viewporter global for the state's lifetime"
     )]
     viewporter: ViewporterState,
-    /// `wl_data_device_manager`: clipboard selection and drag-and-drop offers (clipboard slice,
-    /// 2026-10-16). Selections are Smithay protocol objects; who sees and sets them follows Core's
+    /// `wl_data_device_manager`: clipboard selection and drag-and-drop offers (2026-10-16).
+    /// Selections are Smithay protocol objects; who sees and sets them follows Core's
     /// keyboard focus (`SeatHandler::focus_changed`).
     data_device: DataDeviceState,
     /// `zwp_primary_selection_device_manager_v1`: the primary selection, same focus rule.
@@ -191,7 +188,7 @@ pub struct WaylandState {
     )>,
     /// A client started a drag (Smithay installed its DnD grab); `refuse_client_drags` ends it.
     drag_started: bool,
-    /// `xdg_activation_v1` (B10.7, INV-INPUT-9, W-SM-8; INC-12).
+    /// `xdg_activation_v1` (B10.7, INV-INPUT-9, W-SM-8).
     activation: XdgActivationState,
     /// `zwlr_layer_shell_v1` (L1–L8) and its surfaces, in creation order.
     layer_shell: WlrLayerShellState,
@@ -616,7 +613,7 @@ impl WaylandState {
         self.target.clear = clear;
     }
 
-    /// Live reload configuration from ~/.config/infynitae/config into Core and compositor state in real time.
+    /// Reloads configuration from ~/.config/infynitae/config into Core and compositor state.
     pub fn reload_config(&mut self) {
         let mut new_cursor_theme: Option<String> = None;
         let mut new_cursor_size: Option<u32> = None;
