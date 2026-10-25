@@ -1,5 +1,4 @@
-//! INC-12 T1 (EXPERIMENTAL): `xdg_activation_v1` on the production path (B10.7; INV-INPUT-9;
-//! W-SM-8; outcome policy PROV-10, provisional).
+//! Production path tests for `xdg_activation_v1` (B10.7, INV-INPUT-9, W-SM-8, PROV-10).
 //!
 //! The probe client maps W and V; W has the keyboard focus. A token is valid only if the client
 //! created it with a serial of the seat no older than the keyboard's last focus `enter` (W-SM-8:
@@ -193,11 +192,10 @@ impl Other {
     }
 }
 
-/// Focus-stealing prevention (W-SM-8, INC-12 review): a client the user merely points at gets
+/// Focus-stealing prevention (W-SM-8): a client the user merely points at gets
 /// fresh pointer serials, newer than the last focus change, but not the keyboard focus. A token
 /// it creates with such a serial is not validated: activating its own window asks for attention
-/// and leaves the focus where it was. (The first rule, "a serial no older than the last focus
-/// enter", accepted it and let the hovered client take the focus.)
+/// and leaves the focus where it was.
 #[test]
 fn a_hovered_client_cannot_take_the_focus() {
     let mut s = scene();
@@ -250,8 +248,8 @@ fn a_hovered_client_cannot_take_the_focus() {
     );
 }
 
-/// Review r2: unused tokens are not kept without bound. A client that creates far more tokens
-/// than the limit leaves at most `ACTIVATION_TOKENS_KEPT` behind, and the newest still works.
+/// Unused tokens are bounded: a client creating more tokens than the limit leaves at most
+/// `ACTIVATION_TOKENS_KEPT` behind, and the newest still works.
 #[test]
 fn unused_tokens_are_bounded() {
     let mut s = scene();

@@ -1,5 +1,5 @@
-//! INC-3 adversarial attacks A–N on the production pointer path (attack O, wrong coordinate
-//! domains, is enforced at compile time: probes p18/p19 in tools/verify-architecture).
+//! Adversarial attacks A–N on the production pointer path (attack O, wrong coordinate
+//! domains, is enforced at compile time via probes p18/p19 in tools/verify-architecture).
 //!
 //! Every expected value is hand-derived from the canonical formulas in the test's comment, and
 //! observed on the client's wire (`probe.ptr`): nothing is computed with the production

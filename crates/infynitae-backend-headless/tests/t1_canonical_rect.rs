@@ -1,5 +1,5 @@
-//! INC-10 T1: one canonical rectangle per surface (INV-RENDER-1, F-RENDER-1 as amended by C12.F15,
-//! option B) on the production path — Core's views and render lists (`View`, `entries_for`,
+//! Production path tests for one canonical rectangle per surface (INV-RENDER-1, F-RENDER-1 as amended
+//! by C12.F15, option B) — Core's views and render lists (`View`, `entries_for`,
 //! `Core::render_list`, `ProjectionFrame::select`), the adapter's `convert::render_elements` /
 //! `convert::render_output` with its `CanonicalRect` wrapper, real `wl_shm` buffers committed by a
 //! real client, Smithay 0.7.0's `OutputDamageTracker` and its software renderer (Pixman).
@@ -346,7 +346,7 @@ fn sweep(sc: &Scene, renderer: &mut DummyRenderer, cfg: &Config, rng: &mut Rng) 
     st
 }
 
-/// Render/hit agreement through the wrapper (INC-10 exit item 2, C12.F15.8 control 1): k swept by
+/// Render/hit agreement through the wrapper (C12.F15.8 control 1): k swept by
 /// single ulps around rounding points of A's right edge (x) and bottom edge (y); the per-frame
 /// reference at scales 1 and 1.5; kept references at |v − R|·k ≈ 2²⁰ and ≈ 2³¹ (just inside the
 /// bound) on both sides of R, on both axes; negative and 2³⁶-scale origins. Every presented rect is
@@ -675,8 +675,8 @@ fn colour_of(sc: &Scene) -> impl Fn(&FrameEntry) -> u32 + '_ {
 }
 
 /// Pixels through `convert::render_output` at a camera zoom where the unwrapped element presents A
-/// one pixel narrower than Core's rect (A|B seam, the C12.F15.3 case), INC-10 exit item 2 and
-/// C12.F15.8 controls 2–3: every pixel is the front-most canonical rect's colour; the pointer hits,
+/// one pixel narrower than Core's rect (A|B seam, the C12.F15.3 case; C12.F15.8 controls 2–3):
+/// every pixel is the front-most canonical rect's colour; the pointer hits,
 /// column by column, the surface whose colour is drawn; an unchanged frame produces no damage; a
 /// repaint of A at age 1 damages exactly A's canonical rect and leaves no stale column.
 #[test]
@@ -912,7 +912,7 @@ fn entry_at(
         .expect("in view")
 }
 
-/// The crop, drawn (C12.F15.5, INC-10 exit item 6), for every buffer transform: a surface cut by a
+/// The crop, drawn (C12.F15.5), for every buffer transform: a surface cut by a
 /// crop box drawn by Pixman through Smithay's damage tracker is, pixel for pixel, the uncropped
 /// surface inside the box and nothing outside it — the `src` crop maps exactly the visible part.
 /// The production box `[−2³⁰, 2³⁰]` cannot cut a drawable surface (Pixman stops near 2¹⁵), so the
@@ -1262,7 +1262,7 @@ fn rects_beyond_the_i32_range_are_cropped_with_a_proportional_src() {
     }
 }
 
-/// What `draw` receives (C12.F15.3 item 1, INC-10 exit item 6): Smithay's damage tracker draws the
+/// What `draw` receives (C12.F15.3 item 1): Smithay's damage tracker draws the
 /// wrapper at its geometry with its `src`, and the wrapper hands both to the wrapped element
 /// unchanged — also for a cropped rect at k = 2¹⁹.
 #[test]
@@ -1352,7 +1352,7 @@ fn the_tracker_draws_the_wrapped_element_at_the_canonical_rect() {
     }
 }
 
-/// Pixels for every configuration of the render/hit sweep above (INC-10 exit review, finding L4):
+/// Pixels for every configuration of the render/hit sweep above (finding L4):
 /// on each frame where the wrapper remaps a surface — Smithay's own geometry differs from Core's,
 /// the case option B exists for — the production `render_elements` output is drawn by Smithay's
 /// `OutputDamageTracker` with Pixman into a 1920 × 1080 image, and every pixel must be the colour of
@@ -1543,8 +1543,8 @@ fn transformed_src(
     (ls, id, tree)
 }
 
-/// The crop's source-sampling requirement with a non-trivial `src` (INC-10 exit review E1,
-/// proposed C12.F17): a viewport source offset, buffer scale 2, and both together, for all eight buffer
+/// The crop's source-sampling requirement with a non-trivial `src` (E1,
+/// C12.F17): a viewport source offset, buffer scale 2, and both together, for all eight buffer
 /// transforms. A surface cut by a crop box and drawn by Pixman through Smithay's damage tracker
 /// is, pixel for pixel, the uncropped surface inside the box and nothing outside it. Cuts lie on
 /// whole buffer pixels (8 physical px = 1 logical px at zoom 8): Pixman rounds `src` to integers,
@@ -1617,7 +1617,7 @@ fn a_cropped_surface_keeps_its_sampling_with_a_viewport_source_and_buffer_scale(
     assert_eq!(cases, 24);
 }
 
-/// The production crop box's boundaries (INC-10 exit review E3, proposed C12.F17): each edge is clamped to
+/// The production crop box's boundaries (E3, C12.F17): each edge is clamped to
 /// `[−2³⁰, 2³⁰]`, so the presented pixels lie in the half-open `[−2³⁰, 2³⁰)`; Smithay's i32 size
 /// holds at most `i32::MAX = 2³¹ − 1`, so a rect covering the whole box is presented as
 /// `[−2³⁰, 2³⁰ − 1)`, one pixel short at the far edge (outside every view, `view_O ≤ 2¹⁵`); any
