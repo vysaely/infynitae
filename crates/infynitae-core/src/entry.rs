@@ -282,21 +282,20 @@ impl Core {
             crate::input::keys::KeyAction::FocusNext => {
                 let fx = self.focus_next();
                 out.extend(fx);
-                if let PointerState::Located { output, .. } = self.pointer {
-                    if let Some(pres) = self.presentation(output) {
-                        if let Some(target) = self.focus.target() {
-                            if pres == target {
-                                self.unsuppress_presentation(output);
-                            } else {
-                                self.suppress_presentation(output);
-                            }
-                        }
+                if let PointerState::Located { output, .. } = self.pointer
+                    && let Some(pres) = self.presentation(output)
+                    && let Some(target) = self.focus.target()
+                {
+                    if pres == target {
+                        self.unsuppress_presentation(output);
+                    } else {
+                        self.suppress_presentation(output);
                     }
                 }
-                if self.focus_cycle_navigate {
-                    if let Some(p) = proof {
-                        self.recenter(p, false, out);
-                    }
+                if self.focus_cycle_navigate
+                    && let Some(p) = proof
+                {
+                    self.recenter(p, false, out);
                 }
                 return;
             }
@@ -475,7 +474,7 @@ impl Core {
             return;
         }
         if let Some((orig_anchor, orig_size)) = self.stage.saved_floating(element) {
-            let _ = self.stage.set_saved_floating(element, None);
+            self.stage.set_saved_floating(element, None);
             let _ = self.place_by_shell(element, orig_anchor, out);
             out.push(Effect::ToplevelConfigureSize {
                 element,
@@ -497,11 +496,11 @@ impl Core {
             // If camera zoom is not 1.0, reset camera zoom to 1.0 for sharp 1:1 view
             if let Some(camera) = self.cameras.camera_for_output(output) {
                 let zoom = self.cameras.zoom(camera).unwrap_or(1.0);
-                if (zoom - 1.0).abs() > 0.001 {
-                    if let Some(center) = self.cameras.center(camera) {
-                        self.cameras.set_zoom_and_center(proof, camera, 1.0, center);
-                        self.camera_written(output, camera, out);
-                    }
+                if (zoom - 1.0).abs() > 0.001
+                    && let Some(center) = self.cameras.center(camera)
+                {
+                    self.cameras.set_zoom_and_center(proof, camera, 1.0, center);
+                    self.camera_written(output, camera, out);
                 }
             }
 
@@ -524,8 +523,7 @@ impl Core {
             let canvas_w = usable.2.round().max(1.0) as i32;
             let canvas_h = usable.3.round().max(1.0) as i32;
 
-            let _ = self
-                .stage
+            self.stage
                 .set_saved_floating(element, Some((anchor, orig_size)));
             let _ = self.place_by_shell(element, tl, out);
             let target_rect = (tl.x, tl.y, tl.x + canvas_w as i64, tl.y + canvas_h as i64);
@@ -633,13 +631,13 @@ impl Core {
         let Some(&element) = live.get(slot) else {
             return;
         };
-        if let PointerState::Located { output, .. } = self.pointer {
-            if let Some(pres) = self.presentation(output) {
-                if pres == element {
-                    self.unsuppress_presentation(output);
-                } else {
-                    self.suppress_presentation(output);
-                }
+        if let PointerState::Located { output, .. } = self.pointer
+            && let Some(pres) = self.presentation(output)
+        {
+            if pres == element {
+                self.unsuppress_presentation(output);
+            } else {
+                self.suppress_presentation(output);
             }
         }
         let raised = self.raise_by_user(element);
@@ -671,13 +669,13 @@ impl Core {
         let Some(&primary) = cluster.first() else {
             return;
         };
-        if let PointerState::Located { output, .. } = self.pointer {
-            if let Some(pres) = self.presentation(output) {
-                if pres == primary {
-                    self.unsuppress_presentation(output);
-                } else {
-                    self.suppress_presentation(output);
-                }
+        if let PointerState::Located { output, .. } = self.pointer
+            && let Some(pres) = self.presentation(output)
+        {
+            if pres == primary {
+                self.unsuppress_presentation(output);
+            } else {
+                self.suppress_presentation(output);
             }
         }
         let raised = self.raise_by_user(primary);
@@ -856,7 +854,7 @@ impl Core {
         }
         let saved = self.stage.saved_floating(id);
         if let Some((_, orig_size)) = saved {
-            let _ = self.stage.set_saved_floating(id, None);
+            self.stage.set_saved_floating(id, None);
             fx.push(Effect::ToplevelConfigureSize {
                 element: id,
                 size: orig_size,
@@ -910,10 +908,10 @@ impl Core {
                     crate::geom::CanvasPoint { x: 0, y: 0 }
                 };
 
-                if self.stage.saved_floating(id).is_none() {
-                    if let (Some(a), Some(s)) = (orig_anchor, orig_size) {
-                        let _ = self.stage.set_saved_floating(id, Some((a, s)));
-                    }
+                if self.stage.saved_floating(id).is_none()
+                    && let (Some(a), Some(s)) = (orig_anchor, orig_size)
+                {
+                    self.stage.set_saved_floating(id, Some((a, s)));
                 }
 
                 let _ = self.place_by_shell(id, tl, &mut fx);
@@ -1092,27 +1090,23 @@ impl Core {
                 if let Some(moved) = pointer::moved(&self.outputs, output, p, delta) {
                     self.pointer = moved;
                 }
-                if self.focus_follows_mouse {
-                    if let PointerState::Located {
+                if self.focus_follows_mouse
+                    && let PointerState::Located {
                         output: cur_o,
                         p: cur_p,
                     } = self.pointer
-                    {
-                        if self.layer_hit(cur_o, cur_p, true).is_none() {
-                            let pt = crate::geom::OutputLogicalPoint {
-                                x: cur_p.0,
-                                y: cur_p.1,
-                            };
-                            if let Some(hit) = self.hit_test(cur_o, pt) {
-                                if self.focus.target() != Some(hit.element) {
-                                    out.extend(self.focus.set_focus(Some(hit.element)));
-                                }
-                            } else if self.focus_follows_mouse_strict
-                                && self.focus.target().is_some()
-                            {
-                                out.extend(self.focus.set_focus(None));
-                            }
+                    && self.layer_hit(cur_o, cur_p, true).is_none()
+                {
+                    let pt = crate::geom::OutputLogicalPoint {
+                        x: cur_p.0,
+                        y: cur_p.1,
+                    };
+                    if let Some(hit) = self.hit_test(cur_o, pt) {
+                        if self.focus.target() != Some(hit.element) {
+                            out.extend(self.focus.set_focus(Some(hit.element)));
                         }
+                    } else if self.focus_follows_mouse_strict && self.focus.target().is_some() {
+                        out.extend(self.focus.set_focus(None));
                     }
                 }
                 self.routed_motion(delta, delta_unaccel, time_us, out);
@@ -1344,33 +1338,31 @@ impl Core {
         let PointerState::Located { output, p } = self.pointer else {
             return;
         };
-        if let Some(pres) = self.presentation(output) {
-            if !self.is_presentation_suppressed(output) {
-                if self.fullscreen_pan {
-                    if let Some(camera) = self.cameras.camera_for_output(output) {
-                        if let Some((anchor, tree, _)) = self.stage.mapped(pres) {
-                            let extent = self
-                                .output(output)
-                                .map(|m| m.logical_extent())
-                                .unwrap_or((1920.0, 1080.0));
-                            let margin_x =
-                                ((extent.0 - f64::from(tree.geometry.size.w)) / 2.0).max(0.0);
-                            let margin_y =
-                                ((extent.1 - f64::from(tree.geometry.size.h)) / 2.0).max(0.0);
-                            let pres_center = crate::geom::CanvasPos {
-                                x: crate::geom::q16(anchor.x as f64 - margin_x + extent.0 / 2.0),
-                                y: crate::geom::q16(anchor.y as f64 - margin_y + extent.1 / 2.0),
-                            };
-                            self.cameras
-                                .set_zoom_and_center(proof, camera, 1.0, pres_center);
-                            self.camera_written(output, camera, out);
-                        }
-                    }
-                    self.suppress_presentation(output);
-                    return;
-                } else {
-                    return;
+        if let Some(pres) = self.presentation(output)
+            && !self.is_presentation_suppressed(output)
+        {
+            if self.fullscreen_pan {
+                if let Some(camera) = self.cameras.camera_for_output(output)
+                    && let Some((anchor, tree, _)) = self.stage.mapped(pres)
+                {
+                    let extent = self
+                        .output(output)
+                        .map(|m| m.logical_extent())
+                        .unwrap_or((1920.0, 1080.0));
+                    let margin_x = ((extent.0 - f64::from(tree.geometry.size.w)) / 2.0).max(0.0);
+                    let margin_y = ((extent.1 - f64::from(tree.geometry.size.h)) / 2.0).max(0.0);
+                    let pres_center = crate::geom::CanvasPos {
+                        x: crate::geom::q16(anchor.x as f64 - margin_x + extent.0 / 2.0),
+                        y: crate::geom::q16(anchor.y as f64 - margin_y + extent.1 / 2.0),
+                    };
+                    self.cameras
+                        .set_zoom_and_center(proof, camera, 1.0, pres_center);
+                    self.camera_written(output, camera, out);
                 }
+                self.suppress_presentation(output);
+                return;
+            } else {
+                return;
             }
         }
         let Some(camera) = self.cameras.camera_for_output(output) else {
@@ -1658,29 +1650,26 @@ impl Core {
             let mut start = start;
             if self.fullscreen_pan
                 && let Some(pres) = self.presentation(output)
+                && !self.is_presentation_suppressed(output)
             {
-                if !self.is_presentation_suppressed(output) {
-                    if let Some((anchor, tree, _)) = self.stage.mapped(pres) {
-                        let extent = self
-                            .output(output)
-                            .map(|m| m.logical_extent())
-                            .unwrap_or((1920.0, 1080.0));
-                        let margin_x =
-                            ((extent.0 - f64::from(tree.geometry.size.w)) / 2.0).max(0.0);
-                        let margin_y =
-                            ((extent.1 - f64::from(tree.geometry.size.h)) / 2.0).max(0.0);
-                        let pres_center = crate::geom::CanvasPos {
-                            x: crate::geom::q16(anchor.x as f64 - margin_x + extent.0 / 2.0),
-                            y: crate::geom::q16(anchor.y as f64 - margin_y + extent.1 / 2.0),
-                        };
-                        if let Some(p) = proof {
-                            self.cameras
-                                .set_zoom_and_center(p, camera, 1.0, pres_center);
-                        }
-                        start = pres_center;
+                if let Some((anchor, tree, _)) = self.stage.mapped(pres) {
+                    let extent = self
+                        .output(output)
+                        .map(|m| m.logical_extent())
+                        .unwrap_or((1920.0, 1080.0));
+                    let margin_x = ((extent.0 - f64::from(tree.geometry.size.w)) / 2.0).max(0.0);
+                    let margin_y = ((extent.1 - f64::from(tree.geometry.size.h)) / 2.0).max(0.0);
+                    let pres_center = crate::geom::CanvasPos {
+                        x: crate::geom::q16(anchor.x as f64 - margin_x + extent.0 / 2.0),
+                        y: crate::geom::q16(anchor.y as f64 - margin_y + extent.1 / 2.0),
+                    };
+                    if let Some(p) = proof {
+                        self.cameras
+                            .set_zoom_and_center(p, camera, 1.0, pres_center);
                     }
-                    self.suppress_presentation(output);
+                    start = pres_center;
                 }
+                self.suppress_presentation(output);
             }
             // M6 Idle → Panning: the press is consumed; KeepFocus (no event).
             // OB-4: Dismiss active popup grabs before the camera change.
@@ -1904,10 +1893,10 @@ impl Core {
             .output(output)
             .and_then(|_| self.cameras.camera_for_output(output))
             .ok_or(ShellError::UnknownOutput)?;
-        if let Some(pres) = self.presentation(output) {
-            if self.focus.target() == Some(pres) {
-                return Err(ShellError::Presenting);
-            }
+        if let Some(pres) = self.presentation(output)
+            && self.focus.target() == Some(pres)
+        {
+            return Err(ShellError::Presenting);
         }
         if self.input.interaction.active() {
             return Err(ShellError::Busy);

@@ -1633,10 +1633,11 @@ impl Core {
     /// camera is not consulted, read or changed while a presentation view replaces it.
     pub fn view(&self, output: output::OutputId) -> Option<projection::View> {
         let model = self.outputs.iter().find(|o| o.id == output)?;
-        if self.presentation(output).is_some() && !self.is_presentation_suppressed(output) {
-            if let Some(view) = self.presentation_view(model) {
-                return Some(view);
-            }
+        if self.presentation(output).is_some()
+            && !self.is_presentation_suppressed(output)
+            && let Some(view) = self.presentation_view(model)
+        {
+            return Some(view);
         }
         self.camera_view(output)
     }

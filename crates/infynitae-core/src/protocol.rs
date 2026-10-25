@@ -1272,14 +1272,13 @@ impl Core {
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
                 if self.placement == PlacementPolicy::ClusterTiling
                     && self.fullscreen_of(id).is_some()
+                    && let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id))
                 {
-                    if let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id)) {
-                        let w = t.geometry.size.w as i64;
-                        let h = t.geometry.size.h as i64;
-                        if w > 0 && h > 0 {
-                            let target_rect = (a.x, a.y, a.x + w, a.y + h);
-                            self.push_overlapping_cluster(id, target_rect, out);
-                        }
+                    let w = t.geometry.size.w as i64;
+                    let h = t.geometry.size.h as i64;
+                    if w > 0 && h > 0 {
+                        let target_rect = (a.x, a.y, a.x + w, a.y + h);
+                        self.push_overlapping_cluster(id, target_rect, out);
                     }
                 }
             }
@@ -1298,14 +1297,13 @@ impl Core {
                 out.extend(self.take_output(id));
                 if self.placement == PlacementPolicy::ClusterTiling
                     && self.fullscreen_of(id).is_some()
+                    && let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id))
                 {
-                    if let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id)) {
-                        let w = t.geometry.size.w as i64;
-                        let h = t.geometry.size.h as i64;
-                        if w > 0 && h > 0 {
-                            let target_rect = (a.x, a.y, a.x + w, a.y + h);
-                            self.push_overlapping_cluster(id, target_rect, out);
-                        }
+                    let w = t.geometry.size.w as i64;
+                    let h = t.geometry.size.h as i64;
+                    if w > 0 && h > 0 {
+                        let target_rect = (a.x, a.y, a.x + w, a.y + h);
+                        self.push_overlapping_cluster(id, target_rect, out);
                     }
                 }
             }

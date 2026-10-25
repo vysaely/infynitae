@@ -283,14 +283,14 @@ pub fn resolve_key_binding_with(
     mods: Modifiers,
     interaction_active: bool,
 ) -> Option<KeyAction> {
-    if key != KEY_ESC && !interaction_active {
-        if let Some((_, action)) = user
+    if key != KEY_ESC
+        && !interaction_active
+        && let Some((_, action)) = user
             .chords
             .iter()
             .find(|(c, _)| c.key == key && c.mods == mods)
-        {
-            return *action;
-        }
+    {
+        return *action;
     }
     resolve_key_binding(key, mods, interaction_active).filter(|a| !user.moved.contains(a))
 }
