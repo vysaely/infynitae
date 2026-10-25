@@ -24,6 +24,7 @@ mod launch;
 mod layers;
 pub mod limits;
 mod lock;
+pub mod output_power;
 mod outputs;
 pub mod ownership;
 mod pointer;
@@ -236,6 +237,7 @@ pub struct WaylandState {
         std::collections::VecDeque<(smithay::utils::Serial, infynitae_core::output::OutputId)>,
     pub screencopy: screencopy::ScreencopyState,
     pub gamma: gamma::GammaState,
+    pub output_power: output_power::OutputPowerState,
     /// `ext-image-copy-capture-v1` output capture (`image_copy`); frames join `screencopy`'s queue.
     #[expect(
         dead_code,
@@ -510,6 +512,7 @@ impl WaylandState {
             serial_outputs: std::collections::VecDeque::new(),
             screencopy: screencopy::ScreencopyState::new(display),
             gamma: gamma::GammaState::new(display),
+            output_power: output_power::OutputPowerState::new(display),
             image_copy: image_copy::ImageCopyState::new(display),
             dmabuf: DmabufState::new(),
             dmabuf_global: None,
@@ -1199,6 +1202,40 @@ impl WaylandState {
         handler: std::sync::Arc<std::sync::Mutex<dyn gamma::GammaHandler>>,
     ) {
         self.gamma.set_handler(handler);
+    }
+
+    /// Registers the backend output power handler for blanking / waking displays.
+    pub fn set_output_power_handler(
+        &mut self,
+        handler: std::sync::Arc<std::sync::Mutex<dyn output_power::OutputPowerHandler>>,
+    ) {
+        self.output_power.set_handler(handler);
+    }
+
+    /// Returns the current power mode of an output (defaults to `Mode::On`).
+    pub fn output_power_mode(
+        &self,
+        output: infynitae_core::output::OutputId,
+    ) -> output_power::OutputPowerMode {
+        self.output_power.mode(output)
+    }
+
+    /// Sets the power mode for a specific output and notifies listeners and backend.
+    pub fn set_output_power_mode(
+        &mut self,
+        output: infynitae_core::output::OutputId,
+        mode: output_power::OutputPowerMode,
+    ) {
+        self.output_power.set_mode(output, mode);
+    }
+
+    /// Sets the power mode for all known outputs (e.g. idle sleep / wake on input).
+    pub fn set_all_outputs_power_mode(&mut self, mode: output_power::OutputPowerMode) {
+        let ids: Vec<infynitae_core::output::OutputId> =
+            self.outputs.iter().map(|h| h.id).collect();
+        for id in ids {
+            self.output_power.set_mode(id, mode);
+        }
     }
 }
 

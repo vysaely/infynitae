@@ -229,6 +229,8 @@ struct Screen {
     vrr_supported: bool,
     /// VRR is on now.
     vrr_on: bool,
+    /// Screen power mode turned off by output power management.
+    power_off: bool,
 }
 
 /// DRM per-screen gamma ramp state.
@@ -279,6 +281,21 @@ impl infynitae_wayland::gamma::GammaHandler for DrmGammaHandler {
     }
 }
 
+/// DRM backend implementation of `infynitae_wayland::output_power::OutputPowerHandler`.
+struct DrmOutputPowerHandler {
+    pending: Arc<Mutex<Vec<(OutputId, infynitae_wayland::output_power::OutputPowerMode)>>>,
+}
+
+impl infynitae_wayland::output_power::OutputPowerHandler for DrmOutputPowerHandler {
+    fn set_mode(
+        &mut self,
+        output: OutputId,
+        mode: infynitae_wayland::output_power::OutputPowerMode,
+    ) {
+        self.pending.lock().unwrap().push((output, mode));
+    }
+}
+
 struct LoopData {
     state: WaylandState,
     session: Session,
@@ -289,6 +306,7 @@ struct LoopData {
     renderer: GlesRenderer,
     screens: Vec<Screen>,
     gamma_screens: Arc<Mutex<HashMap<OutputId, DrmScreenGamma>>>,
+    pending_power: Arc<Mutex<Vec<(OutputId, infynitae_wayland::output_power::OutputPowerMode)>>>,
     libinput: Libinput,
     scale_120: u32,
     /// The session is active (not switched away).
@@ -508,6 +526,9 @@ pub fn run_console_with(
     let mut screens = Vec::new();
     let gamma_screens: Arc<Mutex<HashMap<OutputId, DrmScreenGamma>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    let pending_power: Arc<
+        Mutex<Vec<(OutputId, infynitae_wayland::output_power::OutputPowerMode)>>,
+    > = Arc::new(Mutex::new(Vec::new()));
 
     let mut connected_connectors = Vec::new();
     for &handle in resources.connectors() {
@@ -660,6 +681,7 @@ pub fn run_console_with(
             no_scanout_until: None,
             vrr_supported,
             vrr_on,
+            power_off: false,
         });
 
         // Initialize DRM gamma LUT for this screen
@@ -696,6 +718,9 @@ pub fn run_console_with(
     state.set_gamma_handler(Arc::new(Mutex::new(DrmGammaHandler {
         drm_fd: drm.device_fd().clone(),
         screens: gamma_screens.clone(),
+    })));
+    state.set_output_power_handler(Arc::new(Mutex::new(DrmOutputPowerHandler {
+        pending: pending_power.clone(),
     })));
     state.report_renderer_limits(&AssumedGlesLimits)?;
 
@@ -819,6 +844,7 @@ pub fn run_console_with(
         renderer,
         screens,
         gamma_screens: gamma_screens.clone(),
+        pending_power: pending_power.clone(),
         libinput,
         scale_120,
         active: true,
@@ -935,6 +961,9 @@ pub fn run_console_with(
                     s.pending = false;
                     s.shows_locked = true;
                 }
+                data.state.set_all_outputs_power_mode(
+                    infynitae_wayland::output_power::OutputPowerMode::Off,
+                );
                 if data.idle_auto_lock {
                     let is_running = data
                         .lock_process
@@ -972,6 +1001,34 @@ pub fn run_console_with(
             }
         }
         data.session.dispatch(&mut data.state);
+        // Process client requests to change screen power save modes
+        let pending_power: Vec<_> = data.pending_power.lock().unwrap().drain(..).collect();
+        for (output_id, mode) in pending_power {
+            if let Some(s) = data.screens.iter_mut().find(|s| s.id == output_id) {
+                match mode {
+                    infynitae_wayland::output_power::OutputPowerMode::Off if !s.power_off => {
+                        s.power_off = true;
+                        let _ = s.compositor.clear();
+                        s.pending = false;
+                        s.shows_locked = true;
+                    }
+                    infynitae_wayland::output_power::OutputPowerMode::On if s.power_off => {
+                        s.power_off = false;
+                        let _ = s.compositor.reset_state();
+                        s.pending = false;
+                        s.shows_locked = false;
+                        let gamma_map = data.gamma_screens.lock().unwrap();
+                        if let Some(screen) = gamma_map.get(&output_id)
+                            && let Some((r, g, b)) = &screen.current_gamma
+                        {
+                            let _ = data.drm.device_fd().set_gamma(screen.crtc, r, g, b);
+                        }
+                        data.session.request_frame();
+                    }
+                    _ => {}
+                }
+            }
+        }
         if let Some(keys) = data.state.take_unlock_releases() {
             let now_us = infynitae_wayland::presentation_clock_now().as_micros() as u64;
             for key in keys {
@@ -1137,8 +1194,8 @@ fn render(data: &mut LoopData) {
             continue;
         }
 
-        if data.dpms_active {
-            // While DPMS is active, do not render or queue frames to the screen.
+        if data.dpms_active || data.screens[i].power_off {
+            // While DPMS or power-off is active, do not render or queue frames to the screen.
             // Blanked screens count as showing no window.
             let s = &mut data.screens[i];
             s.shows_locked = true;
@@ -1553,6 +1610,8 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 }
             }
         }
+        data.state
+            .set_all_outputs_power_mode(infynitae_wayland::output_power::OutputPowerMode::On);
         data.session.request_frame();
     }
     if let InputEvent::PointerButton { event } = &event {
