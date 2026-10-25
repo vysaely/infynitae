@@ -290,8 +290,12 @@ pub(crate) struct ResizeTrack {
     pub(crate) sent: (i32, i32),
     /// A configure was sent and the client has not committed since.
     pub(crate) awaiting: bool,
-    /// The drag ended; the track goes with the client's next commit.
+    /// The drag ended; the track goes once the client answered the configures still
+    /// outstanding then (`unanswered`), or sooner with a commit of the last size sent.
     pub(crate) released: bool,
+    /// After the release: configures the client has not answered yet (the one awaited at the
+    /// release, if any, and the last one). A client may answer one with another size.
+    pub(crate) unanswered: u8,
 }
 
 /// What Core does with a [`ToplevelRequest`].
@@ -878,6 +882,7 @@ impl Core {
             sent: size,
             awaiting: false,
             released: false,
+            unanswered: 0,
         });
         Some(size)
     }
@@ -909,6 +914,7 @@ impl Core {
             return;
         };
         r.released = true;
+        r.unanswered = if r.awaiting { 2 } else { 1 };
         r.sent = r.target;
         r.awaiting = true;
         out.push(Effect::ToplevelConfigureSize {
@@ -946,7 +952,8 @@ impl Core {
         };
         r.awaiting = false;
         if r.released {
-            if (size.w, size.h) == r.sent {
+            r.unanswered = r.unanswered.saturating_sub(1);
+            if (size.w, size.h) == r.sent || r.unanswered == 0 {
                 self.resize = None;
             }
         } else if r.target != r.sent {
@@ -1455,11 +1462,9 @@ impl Core {
         if self.resize.is_some_and(|r| r.element == id) {
             self.resize = None;
         }
-        self.pending_constraints.retain(|c| {
-            self.stage
-                .element_containing_surface(c.surface)
-                .is_some_and(|e| e != id)
-        });
+        // only the destroyed element's own constraints: another surface's persist (its object lives)
+        self.pending_constraints
+            .retain(|c| self.stage.element_containing_surface(c.surface) != Some(id));
         for slot in &mut self.frames {
             slot.frame.entries.retain(|e| e.element != id);
         }
@@ -5944,6 +5949,28 @@ mod tests {
         let a700 = c.stage().anchor(id).unwrap();
         assert_eq!(a700.x + 700, start_a.x + 600);
         assert_eq!(a700.y + 500, start_a.y + 400);
+    }
+
+    /// A client may answer the last configure with another size (a terminal's cell grid): the
+    /// track still ends with that answer, and a later resize of the client's own moves nothing.
+    #[test]
+    fn resize_track_ends_when_the_last_configure_is_answered_with_another_size() {
+        let mut c = centred((1280, 800), 120, None);
+        let (id, start_a) = placed(&mut c, 600, 400);
+        let mut fx = Vec::new();
+        c.begin_resize(id, true, true);
+        c.resize_to((800, 600), &mut fx);
+        c.resize_to((700, 500), &mut fx);
+        c.end_resize(&mut fx);
+        // answers to the 800 and the 700 configure, the second snapped to 696x496
+        c.toplevel_committed(id, sized(800, 600, true)).unwrap();
+        c.toplevel_committed(id, sized(696, 496, true)).unwrap();
+        let a = c.stage().anchor(id).unwrap();
+        assert_eq!((a.x + 696, a.y + 496), (start_a.x + 600, start_a.y + 400));
+        assert!(c.resize.is_none(), "the track outlived the answers");
+        // the client grows by itself: its anchor stays
+        c.toplevel_committed(id, sized(900, 700, true)).unwrap();
+        assert_eq!(c.stage().anchor(id), Some(a));
     }
 
     /// Resize track is cleared when its element unmaps or is destroyed, and does not snap
