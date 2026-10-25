@@ -150,7 +150,11 @@ impl ShellServer {
                     streaming: false,
                 }),
                 Inbound::Closed(id) => self.close(id, core, &mut done),
-                Inbound::Line(id, line) => self.request(id, &line, core, &mut done),
+                Inbound::Line(id, line) => {
+                    if self.conns.iter().any(|c| c.id == id) {
+                        self.request(id, &line, core, &mut done);
+                    }
+                }
             }
         }
         if self.conns.iter().any(|c| c.subscribed) {
@@ -160,6 +164,9 @@ impl ShellServer {
     }
 
     fn request(&mut self, id: u64, line: &str, core: &mut Core, done: &mut Serviced) {
+        if !self.conns.iter().any(|c| c.id == id) {
+            return;
+        }
         let (rid, req) = protocol::parse_request(line, core);
         let reply = match req {
             Err(e) => protocol::error_reply(rid, e),
@@ -189,6 +196,13 @@ impl ShellServer {
                     && self.conns.iter().any(|c| c.id != id && c.streaming) =>
             {
                 protocol::error_reply(rid, RequestError::Shell(ShellError::Busy))
+            }
+            // a stream can only be stepped or ended by the live connection that began it
+            Ok(Request::Command(cmd))
+                if matches!(stream_of(&cmd), ShellStream::Step | ShellStream::End)
+                    && !self.conns.iter().any(|c| c.id == id && c.streaming) =>
+            {
+                protocol::error_reply(rid, RequestError::Shell(ShellError::Refused))
             }
             Ok(Request::Command(cmd)) => match core.shell_command(&mut self.port, cmd) {
                 Ok(fx) => {

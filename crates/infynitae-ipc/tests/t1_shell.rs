@@ -497,6 +497,121 @@ fn a_second_shell_cannot_join_an_open_stream() {
     );
 }
 
+/// A subscribed slow reader whose outbox fills while it is streaming is disconnected;
+/// its open stream settles, remaining queued stream steps are dropped, and they do not
+/// reopen or orphan Core's shell stream.
+#[test]
+fn a_subscribed_slow_reader_whose_outbox_fills_while_streaming_is_disconnected_and_stream_settles()
+{
+    let (mut core, mut server, o) = setup();
+    let w = map_win(&mut core, 1, 400, 300);
+    let open = |core: &Core| {
+        core.scale_state(w)
+            .is_some_and(|s| s.epoch.open && s.epoch.kind == Some(InteractionKind::ShellStream))
+    };
+
+    let mut streamer = connect(&mut server);
+    // Subscribe so that state updates produce events in streamer's outbox
+    streamer.send(r#"{"id":1,"cmd":"subscribe"}"#);
+    let _ = streamer.read_until(&mut server, &mut core, |g| !g.is_empty());
+
+    // Begin a stream
+    let begin = format!(
+        r#"{{"id":2,"cmd":"move_element","element":{},"to":[1,1],"stream":"begin"}}"#,
+        eref(&core, w)
+    );
+    assert_eq!(
+        streamer.reply(&mut server, &mut core, &begin).get("ok"),
+        Some(&Value::Bool(true))
+    );
+    assert!(open(&core), "stream should be open");
+
+    // Queue stream steps from streamer, but streamer stops reading socket replies/events
+    for step_id in 3..=20 {
+        let step = format!(
+            r#"{{"id":{step_id},"cmd":"move_element","element":{},"to":[{step_id},{step_id}],"stream":"step"}}"#,
+            eref(&core, w)
+        );
+        streamer.send(&step);
+    }
+
+    // Let the reader thread populate server.rx with the queued steps
+    std::thread::sleep(Duration::from_millis(50));
+
+    // Flood events to fill streamer's outbox (1024) and socket buffer
+    let mut cmd = connect(&mut server);
+    let _ = cmd.reply(&mut server, &mut core, r#"{"id":0,"cmd":"snapshot"}"#);
+    let mut n = 0;
+    let end = Instant::now() + Duration::from_secs(20);
+    while server.connections() == 2 && Instant::now() < end {
+        n += 1;
+        cmd.send(&format!(
+            r#"{{"id":{n},"cmd":"navigate","output":{o},"to":{{"canvas":[{n},0]}}}}"#
+        ));
+        server.service(&mut core);
+        if n % 64 == 0 {
+            let _ = cmd.read_until(&mut server, &mut core, |g| g.len() >= 64);
+        }
+    }
+
+    assert_eq!(
+        server.connections(),
+        1,
+        "streamer should have been disconnected"
+    );
+    assert!(
+        !open(&core),
+        "stream epoch must be settled, not left open by queued steps"
+    );
+
+    // Drain remaining navigate replies from cmd
+    let _ = cmd.read_until(&mut server, &mut core, |g| {
+        g.iter().any(|v| v.get("id") == Some(&Value::Num(n as f64)))
+    });
+
+    // A new stream can be begun by the surviving connection without being blocked as busy
+    let begin_new = format!(
+        r#"{{"id":100000,"cmd":"move_element","element":{},"to":[50,50],"stream":"begin"}}"#,
+        eref(&core, w)
+    );
+    let r = cmd.reply(&mut server, &mut core, &begin_new);
+    assert_eq!(
+        r.get("ok"),
+        Some(&Value::Bool(true)),
+        "new connection must be able to stream"
+    );
+    assert!(open(&core));
+}
+
+/// A stream can only be stepped or ended by the live connection that began it; an idle connection
+/// cannot step or end a stream that was never begun.
+#[test]
+fn a_stream_cannot_be_stepped_without_being_begun() {
+    let (mut core, mut server, _o) = setup();
+    let w = map_win(&mut core, 1, 400, 300);
+    let mut shell = connect(&mut server);
+    let step = format!(
+        r#"{{"id":1,"cmd":"move_element","element":{},"to":[1,1],"stream":"step"}}"#,
+        eref(&core, w)
+    );
+    let r = shell.reply(&mut server, &mut core, &step);
+    assert_eq!(
+        r.get("error").and_then(Value::as_str),
+        Some("refused"),
+        "step without begin must be refused"
+    );
+    let end = format!(
+        r#"{{"id":2,"cmd":"move_element","element":{},"to":[1,1],"stream":"end"}}"#,
+        eref(&core, w)
+    );
+    let r = shell.reply(&mut server, &mut core, &end);
+    assert_eq!(
+        r.get("error").and_then(Value::as_str),
+        Some("refused"),
+        "end without begin must be refused"
+    );
+}
+
 /// Malformed requests are refused with the precise code and change nothing; string ids echo;
 /// titles with any Unicode survive the JSON round trip.
 #[test]
