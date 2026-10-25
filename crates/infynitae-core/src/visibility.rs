@@ -7,7 +7,7 @@
 //!
 //! A row (E, s, O) depends on E's anchor and snapshot and on O's view, and on nothing else. So a
 //! change of one element rewrites that element's rows ([`MembershipTable::replace_element`]), a
-//! change of one view rewrites that output's rows ([`MembershipTable::with_output`]), and only
+//! change of one view rewrites that output's rows ([`MembershipTable::assign_with_output`]), and only
 //! output lifecycle recomputes the table ([`MembershipTable::compute`]). The scoped passes write
 //! into storage their caller reuses (C14.3: membership diffs into a reused buffer) and sort
 //! without allocating: rows are unique after `dedup`, so an unstable sort orders them the same.
@@ -379,7 +379,7 @@ mod tests {
 
     /// INV-FRAME-2: the clock is the highest-refresh observer; equal refresh → lowest OutputId;
     /// `frame_tick` returns the element only for its clock output; an unobserved element is never
-    /// returned (withheld; INC-8 owns kick and fallback).
+    /// returned (withheld: unobserved elements do not tick; fallback handles them).
     #[test]
     fn clock_selection_and_frame_tick() {
         let (mut c, _, _, mut t) = Core::new(persisted(true));
@@ -443,10 +443,8 @@ mod tests {
     /// The six calls: Y is mapped on a 2.0x output (hint 240/120); it grows to the device bound
     /// (P7 lowers the hint to 120/120, direction down); it shrinks again, and SC-E holds the
     /// client-caused increase; then an element that was never mapped is created and destroyed.
-    /// While a destroy was evaluated as a non-client stimulus, Y's held increase was applied in
-    /// its pass, and the old assertion panicked on exactly that effect. A destroy is now
-    /// evaluated as client-caused (see `destroying_an_element_is_not_a_scale_stimulus`), so in
-    /// these six calls the hint stays held; the shape asserted below holds either way.
+    /// A destroy is evaluated as client-caused (see `destroying_an_element_is_not_a_scale_stimulus`),
+    /// so in these six calls the hint stays held; the shape asserted below holds either way.
     #[test]
     fn destroying_an_element_may_change_the_scale_hint_of_another() {
         let wide = |w: i32, mapped: bool| SurfaceTree {
@@ -568,7 +566,7 @@ mod tests {
         assert_eq!(c.preferred_scale_of(y), Some((240, 2)));
     }
 
-    // ------------------------------------------------ H-1, formulation B (EXPERIMENTAL)
+    // ------------------------------------------------ H-1, formulation B
     //
     // The device bound as the largest multiple of 1/120 not above `D_max / s_max(E)`. These
     // tests go through Core's entry points and read what Core would put on the wire. Their
@@ -742,7 +740,7 @@ mod tests {
     /// A client alone cannot move the hint by resizing between two device-bound sizes: after
     /// the one P7 decrease the hint is held, 50 cycles produce no further change, and the value
     /// on the wire stays the one for the larger size. (Bounding the emission instead of the
-    /// bound, draft A1, gives 99 changes on this sequence.) A non-client stimulus releases it,
+    /// bound gives 99 changes on this sequence.) A non-client stimulus releases it,
     /// once, to the bound of the size then in force.
     #[test]
     fn h1_client_resizes_do_not_oscillate_the_hint() {
@@ -945,8 +943,7 @@ mod tests {
     /// epoch's deadline. Core's batch-end evaluation is not a step and has no clock. Client
     /// commits, another element's lifecycle and a camera drag (a continuous interaction, with
     /// real input) all leave an open discrete epoch discrete, with the deadline its step set.
-    /// The defect this pins evaluated every batch as a step at time 0, which put the deadline at
-    /// `T_settle` after the session's start: already past for any session older than that.
+    /// An evaluation must not set the deadline relative to session start or treat batch evaluation as an interaction step.
     #[test]
     fn an_evaluation_does_not_move_an_open_epochs_deadline() {
         use crate::PhysicalEvent;
@@ -1701,8 +1698,7 @@ mod tests {
                     (86..=91, _) => fx = c.scale_tick(SessionTime::from_millis(now)),
                     (92..=94, _) => fx = c.set_scale_config(config).unwrap(),
                     (95..=97, _) => fx = c.set_renderer_device_max(d_max).unwrap(),
-                    // a camera batch that is not part of a drag (none exists yet: the case a
-                    // future camera move outside a continuous interaction would hit)
+                    // a camera batch that is not part of a drag
                     (98..=99, _) if output.is_some() && !pressed => {
                         if let Some(camera) = c.cameras().camera_for_output(output.unwrap()) {
                             fx = Vec::new();
