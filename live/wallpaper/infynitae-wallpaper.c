@@ -368,8 +368,38 @@ static char *get_pid_file_path(void) {
     return path;
 }
 
+static int proc_matches_wayland_display(int pid, const char *target_display) {
+    if (!target_display || !*target_display) return 0;
+    char env_path[256];
+    snprintf(env_path, sizeof(env_path), "/proc/%d/environ", pid);
+    int fd = open(env_path, O_RDONLY);
+    if (fd < 0) return 0;
+
+    char buf[8192];
+    ssize_t n = read(fd, buf, sizeof(buf) - 1);
+    close(fd);
+    if (n <= 0) return 0;
+    buf[n] = '\0';
+
+    const char *p = buf;
+    const char *end = buf + n;
+    const size_t prefix_len = strlen("WAYLAND_DISPLAY=");
+
+    while (p < end) {
+        if (strncmp(p, "WAYLAND_DISPLAY=", prefix_len) == 0) {
+            return (strcmp(p + prefix_len, target_display) == 0);
+        }
+        p += strlen(p) + 1;
+    }
+    return 0;
+}
+
 static void kill_other_wallpapers(void) {
     pid_t my_pid = getpid();
+    const char *my_display = getenv("WAYLAND_DISPLAY");
+    if (!my_display || !*my_display) {
+        my_display = "wayland-0";
+    }
     DIR *dir = opendir("/proc");
     if (!dir) return;
     struct dirent *ent;
@@ -388,7 +418,9 @@ static void kill_other_wallpapers(void) {
                         strcmp(comm, "infynitae-wallpaper") == 0 ||
                         strcmp(comm, "swaybg") == 0 ||
                         strcmp(comm, "mpvpaper") == 0) {
-                        kill(pid, SIGTERM);
+                        if (proc_matches_wayland_display(pid, my_display)) {
+                            kill(pid, SIGTERM);
+                        }
                     }
                 }
                 fclose(f);
