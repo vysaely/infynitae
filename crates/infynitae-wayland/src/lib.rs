@@ -132,6 +132,9 @@ pub struct WaylandState {
     /// and whether pointer events wait for their `wl_pointer.frame` (`pointer`).
     pointer_sent: pointer::Sent,
     arrow: cursor::Arrow,
+    pub(crate) cursor_theme: std::sync::Mutex<Option<cursor::CursorThemeManager>>,
+    pub(crate) config_home: Option<std::path::PathBuf>,
+    pub(crate) xcursor_path: Option<String>,
     xdg_shell: XdgShellState,
     shm: ShmState,
     popups: PopupManager,
@@ -423,6 +426,9 @@ impl WaylandState {
             cursor: smithay::input::pointer::CursorImageStatus::default_named(),
             pointer_sent: pointer::Sent::default(),
             arrow: cursor::Arrow::default(),
+            cursor_theme: std::sync::Mutex::new(None),
+            config_home: None,
+            xcursor_path: None,
             // only what Core's toplevel-request policy can grant is announced (M2)
             xdg_shell: XdgShellState::new_with_capabilities::<Self>(display, capabilities),
             shm: ShmState::new::<Self>(display, []),
@@ -612,7 +618,14 @@ impl WaylandState {
 
     /// Live reload configuration from ~/.config/infynitae/config into Core and compositor state in real time.
     pub fn reload_config(&mut self) {
-        if let Ok(home) = std::env::var("HOME") {
+        let mut new_cursor_theme: Option<String> = None;
+        let mut new_cursor_size: Option<u32> = None;
+        let home = self
+            .config_home
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .or_else(|| std::env::var("HOME").ok());
+        if let Some(ref home) = home {
             let config_path = format!("{home}/.config/infynitae/config");
             if let Ok(content) = std::fs::read_to_string(config_path) {
                 let mut new_wallpaper: Option<String> = None;
@@ -632,6 +645,17 @@ impl WaylandState {
                             continue;
                         }
                         match key {
+                            "CURSOR_THEME" => {
+                                let trimmed = val.trim();
+                                if !trimmed.is_empty() {
+                                    new_cursor_theme = Some(trimmed.to_string());
+                                }
+                            }
+                            "CURSOR_SIZE" => {
+                                if let Ok(sz) = val.parse::<u32>() {
+                                    new_cursor_size = Some(sz);
+                                }
+                            }
                             "PAN_MODE" => match val.to_lowercase().as_str() {
                                 "rts" => self
                                     .core
@@ -876,6 +900,43 @@ impl WaylandState {
                     self.spawned_children = true;
                 }
             }
+        }
+        let theme_name = new_cursor_theme
+            .or_else(|| std::env::var("CURSOR_THEME").ok())
+            .or_else(|| std::env::var("XCURSOR_THEME").ok())
+            .unwrap_or_else(|| "default".to_string());
+        let cursor_size = new_cursor_size
+            .or_else(|| {
+                std::env::var("CURSOR_SIZE")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+            })
+            .or_else(|| {
+                std::env::var("XCURSOR_SIZE")
+                    .ok()
+                    .and_then(|s| s.parse().ok())
+            })
+            .unwrap_or(24);
+        let changed = match self.cursor_theme.lock() {
+            Ok(guard) => match guard.as_ref() {
+                Some(mgr) => mgr.theme_name() != theme_name || mgr.size() != cursor_size,
+                None => true,
+            },
+            Err(_) => true,
+        };
+        if changed {
+            let home_path = self
+                .config_home
+                .as_ref()
+                .map(|p| p.to_path_buf())
+                .or_else(|| std::env::var("HOME").ok().map(std::path::PathBuf::from));
+            let xcursor_path = self
+                .xcursor_path
+                .clone()
+                .or_else(|| std::env::var("XCURSOR_PATH").ok());
+            let paths =
+                cursor::theme_search_paths_with(home_path.as_deref(), xcursor_path.as_deref());
+            self.set_cursor_theme_with_search_paths(&theme_name, cursor_size, paths);
         }
     }
 

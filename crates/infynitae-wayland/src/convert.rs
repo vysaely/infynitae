@@ -10,13 +10,14 @@ use infynitae_core::projection::View;
 use infynitae_core::render::FrameEntry;
 use smithay::backend::renderer::Color32F;
 use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
 use smithay::backend::renderer::element::solid::SolidColorRenderElement;
 use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::utils::{
     CommitCounter, DamageSet, OpaqueRegions, RendererSurfaceStateUserData,
 };
-use smithay::backend::renderer::{ImportAll, Renderer};
+use smithay::backend::renderer::{ImportAll, ImportMem, Renderer};
 use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData};
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Scale, Size};
@@ -342,8 +343,8 @@ pub fn render_elements<R>(
     k: f64,
 ) -> Result<Vec<(FrameEntry, SurfaceElement<R>)>, R::Error>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
 {
     render_elements_opt(renderer, registry, entries, k, |_| false)
 }
@@ -357,8 +358,8 @@ pub fn render_elements_opt<R, F>(
     force_transparent: F,
 ) -> Result<Vec<(FrameEntry, SurfaceElement<R>)>, R::Error>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
     F: Fn(infynitae_core::stage::ElementId) -> bool,
 {
     let mut out = Vec::with_capacity(entries.len());
@@ -381,8 +382,8 @@ pub fn layer_render_elements<R>(
     k: f64,
 ) -> Result<Vec<SurfaceElement<R>>, R::Error>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
 {
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
@@ -414,8 +415,8 @@ pub fn surface_element<R>(
     e: &FrameEntry,
 ) -> Result<Option<WaylandSurfaceRenderElement<R>>, R::Error>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
 {
     let Some(surface) = registry.surface(e.surface) else {
         return Ok(None);
@@ -522,9 +523,10 @@ pub fn damage_tracker(
 smithay::backend::renderer::element::render_elements! {
     /// What an output's frame is made of: surfaces at their canonical rects, and the solid rects
     /// of the built-in arrow (`cursor`).
-    pub OutputElement<R> where R: ImportAll;
+    pub OutputElement<R> where R: ImportAll + ImportMem, R::TextureId: Send;
     Surface=SurfaceElement<R>,
     Solid=SolidColorRenderElement,
+    NamedCursor=CanonicalRect<MemoryRenderBufferRenderElement<R>>,
 }
 
 /// An output's frame elements and the frame's `k`.
@@ -538,8 +540,8 @@ pub fn output_elements_opt<R>(
     include_cursor: bool,
 ) -> Result<OutputFrame<R>, RenderOutputError<R::Error>>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
 {
     let frame = state
         .core
@@ -589,8 +591,8 @@ pub fn output_elements_screencopy<R>(
     include_cursor: bool,
 ) -> Result<OutputFrame<R>, RenderOutputError<R::Error>>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
 {
     let (view, raw_entries) = {
         let frame = state
@@ -646,8 +648,8 @@ pub fn output_elements<R>(
     output: OutputId,
 ) -> Result<OutputFrame<R>, RenderOutputError<R::Error>>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
 {
     output_elements_opt(state, renderer, output, state.target.draw_cursor)
 }
@@ -660,8 +662,8 @@ pub fn lock_elements<R>(
     output: OutputId,
 ) -> Result<Option<OutputFrame<R>>, R::Error>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
 {
     if !state.is_locked() {
         return Ok(None);
@@ -708,8 +710,8 @@ pub fn render_output<R>(
     age: usize,
 ) -> Result<Option<Damage>, RenderOutputError<R::Error>>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
 {
     let (elements, k) = output_elements(state, renderer, output)?;
     let view = state.core.view(output).ok_or(RenderOutputError::NoFrame)?;
@@ -775,8 +777,8 @@ pub(crate) fn cursor_elements<R>(
     out: &mut Vec<OutputElement<R>>,
 ) -> Result<(), R::Error>
 where
-    R: Renderer + ImportAll,
-    R::TextureId: Clone + 'static,
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
 {
     let PointerState::Located { output: o, p } = state.core.pointer() else {
         return Ok(());
@@ -828,25 +830,51 @@ where
                 out.push(OutputElement::Surface(CanonicalRect::new(el, rect, k)));
             }
         }
-        // a named cursor, or a cursor surface that is gone: the built-in arrow (ordinary
-        // elements: 24 rects cannot share the one hardware cursor plane)
+        // a named cursor, or a cursor surface that is gone: the theme's image, or fallback arrow
         _ => {
-            let unit = scale.round().max(1.0) as i32;
-            let (mut fill, mut outline) = (state.arrow.fill.iter(), state.arrow.outline.iter());
-            for (is_fill, rect) in arrow_rects((px(p.0), px(p.1)), unit) {
-                let (id, color) = if is_fill {
-                    (fill.next(), Color32F::new(1.0, 1.0, 1.0, 1.0))
-                } else {
-                    (outline.next(), Color32F::new(0.0, 0.0, 0.0, 1.0))
+            let icon_name = match &state.cursor {
+                CursorImageStatus::Named(icon) => icon.name(),
+                _ => "default",
+            };
+            let target_size = (f64::from(state.cursor_size()) * scale).round().max(1.0) as u32;
+            let loaded = state.cursor_image(icon_name, target_size);
+            if let Some(img) = loaded {
+                let x0 = px(p.0) - img.xhot;
+                let y0 = px(p.1) - img.yhot;
+                let rect = PhysicalRect {
+                    x0: i64::from(x0),
+                    y0: i64::from(y0),
+                    x1: i64::from(x0 + img.width),
+                    y1: i64::from(y0 + img.height),
                 };
-                if let Some(id) = id {
-                    out.push(OutputElement::Solid(SolidColorRenderElement::new(
-                        id.clone(),
-                        rect,
-                        CommitCounter::default(),
-                        color,
-                        Kind::Unspecified,
-                    )));
+                let el = MemoryRenderBufferRenderElement::from_buffer(
+                    renderer,
+                    Point::from((f64::from(x0), f64::from(y0))),
+                    &img.buffer,
+                    None,
+                    None,
+                    None,
+                    Kind::Cursor,
+                )?;
+                out.push(OutputElement::NamedCursor(CanonicalRect::new(el, rect, k)));
+            } else {
+                let unit = scale.round().max(1.0) as i32;
+                let (mut fill, mut outline) = (state.arrow.fill.iter(), state.arrow.outline.iter());
+                for (is_fill, rect) in arrow_rects((px(p.0), px(p.1)), unit) {
+                    let (id, color) = if is_fill {
+                        (fill.next(), Color32F::new(1.0, 1.0, 1.0, 1.0))
+                    } else {
+                        (outline.next(), Color32F::new(0.0, 0.0, 0.0, 1.0))
+                    };
+                    if let Some(id) = id {
+                        out.push(OutputElement::Solid(SolidColorRenderElement::new(
+                            id.clone(),
+                            rect,
+                            CommitCounter::default(),
+                            color,
+                            Kind::Unspecified,
+                        )));
+                    }
                 }
             }
         }
