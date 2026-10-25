@@ -45,7 +45,7 @@ use smithay::desktop::{PopupManager, Window};
 use smithay::input::{Seat, SeatState};
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::reexports::wayland_server::backend::{
-    ClientData, ClientId, DisconnectReason, GlobalId,
+    ClientData, ClientId, DisconnectReason, GlobalId, ObjectId,
 };
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
 use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufState};
@@ -177,6 +177,12 @@ pub struct WaylandState {
     /// only from the keyboard-focused client). A selection whose owner's connection is gone is
     /// cleared, so other clients are told it is gone (Smithay does not do it by itself).
     selection_owners: [Option<ClientId>; 2],
+    selection_sources: [Option<ObjectId>; 2],
+    pub(crate) data_control_owner: Option<(
+        smithay::wayland::selection::SelectionTarget,
+        Option<ClientId>,
+        Option<ObjectId>,
+    )>,
     /// A client started a drag (Smithay installed its DnD grab); `refuse_client_drags` ends it.
     drag_started: bool,
     /// `xdg_activation_v1` (B10.7, INV-INPUT-9, W-SM-8; INC-12).
@@ -433,6 +439,8 @@ impl WaylandState {
             wlr_data_control,
             ext_data_control,
             selection_owners: [None, None],
+            selection_sources: [None, None],
+            data_control_owner: None,
             drag_started: false,
             activation: XdgActivationState::new::<Self>(display),
             layer_shell: WlrLayerShellState::new::<Self>(display),

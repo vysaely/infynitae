@@ -693,17 +693,28 @@ impl SelectionHandler for WaylandState {
         _seat: Seat<Self>,
     ) {
         use smithay::reexports::wayland_server::Resource;
-        let owner = source.and_then(|_| {
-            self.keyboard_handle()
-                .current_focus()
-                .and_then(|surface| surface.client())
-                .map(|client| client.id())
-        });
         let slot = match ty {
             smithay::wayland::selection::SelectionTarget::Clipboard => 0,
             smithay::wayland::selection::SelectionTarget::Primary => 1,
         };
+        let (owner, source_obj) =
+            if let Some((target, owner, source_obj)) = self.data_control_owner.take() {
+                if target == ty {
+                    (owner, source_obj)
+                } else {
+                    (None, None)
+                }
+            } else {
+                let owner = source.and_then(|_| {
+                    self.keyboard_handle()
+                        .current_focus()
+                        .and_then(|surface| surface.client())
+                        .map(|client| client.id())
+                });
+                (owner, None)
+            };
         self.selection_owners[slot] = owner;
+        self.selection_sources[slot] = source_obj;
     }
 }
 
@@ -712,25 +723,34 @@ impl WaylandState {
     /// no offer). Called after each client dispatch.
     pub fn clear_orphaned_selections(&mut self) {
         self.prune_disabled_outputs();
-        let gone =
-            |state: &Self,
-             owner: &Option<smithay::reexports::wayland_server::backend::ClientId>| {
-                owner.as_ref().is_some_and(|id| {
-                    state
-                        .dh
-                        .backend_handle()
-                        .get_client_data(id.clone())
-                        .is_err()
-                })
-            };
-        if gone(self, &self.selection_owners[0]) {
+        let gone = |state: &Self, slot: usize| {
+            if let Some(ref source_id) = state.selection_sources[slot]
+                && state
+                    .dh
+                    .backend_handle()
+                    .get_object_data_any(source_id.clone())
+                    .is_err()
+            {
+                return true;
+            }
+            state.selection_owners[slot].as_ref().is_some_and(|id| {
+                state
+                    .dh
+                    .backend_handle()
+                    .get_client_data(id.clone())
+                    .is_err()
+            })
+        };
+        if gone(self, 0) {
             self.selection_owners[0] = None;
+            self.selection_sources[0] = None;
             smithay::wayland::selection::data_device::clear_data_device_selection(
                 &self.dh, &self.seat,
             );
         }
-        if gone(self, &self.selection_owners[1]) {
+        if gone(self, 1) {
             self.selection_owners[1] = None;
+            self.selection_sources[1] = None;
             smithay::wayland::selection::primary_selection::clear_primary_selection(
                 &self.dh, &self.seat,
             );
@@ -781,8 +801,119 @@ impl smithay::wayland::selection::ext_data_control::DataControlHandler for Wayla
     }
 }
 
-smithay::delegate_data_control!(WaylandState);
-smithay::delegate_ext_data_control!(WaylandState);
+smithay::reexports::wayland_server::delegate_global_dispatch!(WaylandState: [
+    smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1: smithay::wayland::selection::wlr_data_control::DataControlManagerGlobalData
+] => smithay::wayland::selection::wlr_data_control::DataControlState);
+smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
+    smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_manager_v1::ZwlrDataControlManagerV1: smithay::wayland::selection::wlr_data_control::DataControlManagerUserData
+] => smithay::wayland::selection::wlr_data_control::DataControlState);
+smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
+    smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_source_v1::ZwlrDataControlSourceV1: smithay::wayland::selection::wlr_data_control::DataControlSourceUserData
+] => smithay::wayland::selection::wlr_data_control::DataControlState);
+
+impl
+    smithay::reexports::wayland_server::Dispatch<
+        smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_device_v1::ZwlrDataControlDeviceV1,
+        smithay::wayland::selection::wlr_data_control::DataControlDeviceUserData,
+        WaylandState,
+    > for WaylandState
+{
+    fn request(
+        state: &mut Self,
+        client: &smithay::reexports::wayland_server::Client,
+        resource: &smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_device_v1::ZwlrDataControlDeviceV1,
+        request: smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_device_v1::Request,
+        data: &smithay::wayland::selection::wlr_data_control::DataControlDeviceUserData,
+        dh: &smithay::reexports::wayland_server::DisplayHandle,
+        data_init: &mut smithay::reexports::wayland_server::DataInit<'_, Self>,
+    ) {
+        use smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_device_v1::Request;
+        use smithay::reexports::wayland_server::Resource;
+        match &request {
+            Request::SetSelection { source } => {
+                let owner = source.as_ref().and_then(|s| s.client().map(|c| c.id()));
+                let source_obj = source.as_ref().map(|s| s.id());
+                state.data_control_owner = Some((
+                    smithay::wayland::selection::SelectionTarget::Clipboard,
+                    owner,
+                    source_obj,
+                ));
+            }
+            Request::SetPrimarySelection { source } => {
+                let owner = source.as_ref().and_then(|s| s.client().map(|c| c.id()));
+                let source_obj = source.as_ref().map(|s| s.id());
+                state.data_control_owner = Some((
+                    smithay::wayland::selection::SelectionTarget::Primary,
+                    owner,
+                    source_obj,
+                ));
+            }
+            _ => {}
+        }
+        <smithay::wayland::selection::wlr_data_control::DataControlState as smithay::reexports::wayland_server::Dispatch<
+            smithay::reexports::wayland_protocols_wlr::data_control::v1::server::zwlr_data_control_device_v1::ZwlrDataControlDeviceV1,
+            smithay::wayland::selection::wlr_data_control::DataControlDeviceUserData,
+            Self,
+        >>::request(state, client, resource, request, data, dh, data_init);
+    }
+}
+
+smithay::reexports::wayland_server::delegate_global_dispatch!(WaylandState: [
+    smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_manager_v1::ExtDataControlManagerV1: smithay::wayland::selection::ext_data_control::ExtDataControlManagerGlobalData
+] => smithay::wayland::selection::ext_data_control::DataControlState);
+smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
+    smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_manager_v1::ExtDataControlManagerV1: smithay::wayland::selection::ext_data_control::ExtDataControlManagerUserData
+] => smithay::wayland::selection::ext_data_control::DataControlState);
+smithay::reexports::wayland_server::delegate_dispatch!(WaylandState: [
+    smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_source_v1::ExtDataControlSourceV1: smithay::wayland::selection::ext_data_control::ExtDataControlSourceUserData
+] => smithay::wayland::selection::ext_data_control::DataControlState);
+
+impl
+    smithay::reexports::wayland_server::Dispatch<
+        smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_device_v1::ExtDataControlDeviceV1,
+        smithay::wayland::selection::ext_data_control::ExtDataControlDeviceUserData,
+        WaylandState,
+    > for WaylandState
+{
+    fn request(
+        state: &mut Self,
+        client: &smithay::reexports::wayland_server::Client,
+        resource: &smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_device_v1::ExtDataControlDeviceV1,
+        request: smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_device_v1::Request,
+        data: &smithay::wayland::selection::ext_data_control::ExtDataControlDeviceUserData,
+        dh: &smithay::reexports::wayland_server::DisplayHandle,
+        data_init: &mut smithay::reexports::wayland_server::DataInit<'_, Self>,
+    ) {
+        use smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_device_v1::Request;
+        use smithay::reexports::wayland_server::Resource;
+        match &request {
+            Request::SetSelection { source } => {
+                let owner = source.as_ref().and_then(|s| s.client().map(|c| c.id()));
+                let source_obj = source.as_ref().map(|s| s.id());
+                state.data_control_owner = Some((
+                    smithay::wayland::selection::SelectionTarget::Clipboard,
+                    owner,
+                    source_obj,
+                ));
+            }
+            Request::SetPrimarySelection { source } => {
+                let owner = source.as_ref().and_then(|s| s.client().map(|c| c.id()));
+                let source_obj = source.as_ref().map(|s| s.id());
+                state.data_control_owner = Some((
+                    smithay::wayland::selection::SelectionTarget::Primary,
+                    owner,
+                    source_obj,
+                ));
+            }
+            _ => {}
+        }
+        <smithay::wayland::selection::ext_data_control::DataControlState as smithay::reexports::wayland_server::Dispatch<
+            smithay::reexports::wayland_protocols::ext::data_control::v1::server::ext_data_control_device_v1::ExtDataControlDeviceV1,
+            smithay::wayland::selection::ext_data_control::ExtDataControlDeviceUserData,
+            Self,
+        >>::request(state, client, resource, request, data, dh, data_init);
+    }
+}
 delegate_data_device!(WaylandState);
 delegate_primary_selection!(WaylandState);
 
@@ -1013,5 +1144,59 @@ impl PointerConstraintsHandler for WaylandState {
             let fx = self.core.reconcile_constraints();
             self.apply(&fx);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use smithay::reexports::wayland_server::Display;
+    use smithay::wayland::selection::SelectionTarget;
+
+    #[test]
+    fn data_control_selection_owner_and_cleanup() {
+        let (core, _input, _shell, _token) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let mut display: Display<WaylandState> = Display::new().unwrap();
+        let mut state = WaylandState::new(&display.handle(), core);
+
+        // When data_control sets selection, state records data_control_owner
+        let (server_sock, client_sock) = std::os::unix::net::UnixStream::pair().unwrap();
+        let client = display
+            .handle()
+            .insert_client(
+                server_sock,
+                std::sync::Arc::new(crate::ClientState::default()),
+            )
+            .unwrap();
+        let client_id = client.id();
+
+        state.data_control_owner =
+            Some((SelectionTarget::Clipboard, Some(client_id.clone()), None));
+        state.new_selection(SelectionTarget::Clipboard, None, state.seat.clone());
+
+        assert_eq!(state.selection_owners[0], Some(client_id.clone()));
+
+        // Focus client dying doesn't clear data-control selection because owner is client_id
+        state.clear_orphaned_selections();
+        assert_eq!(state.selection_owners[0], Some(client_id.clone()));
+
+        // When data-control client disconnects, clear_orphaned_selections clears it
+        drop(client_sock);
+        display.handle().backend_handle().kill_client(
+            client.id(),
+            smithay::reexports::wayland_server::backend::DisconnectReason::ConnectionClosed,
+        );
+        let _ = display.dispatch_clients(&mut state);
+        state.clear_orphaned_selections();
+        assert_eq!(state.selection_owners[0], None);
+
+        // When a data-control source object is destroyed / invalid, it is also cleared
+        state.selection_owners[0] = Some(client.id());
+        state.selection_sources[0] =
+            Some(smithay::reexports::wayland_server::backend::ObjectId::null());
+        state.clear_orphaned_selections();
+        assert_eq!(state.selection_owners[0], None);
+        assert_eq!(state.selection_sources[0], None);
     }
 }
