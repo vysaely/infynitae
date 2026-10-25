@@ -1,10 +1,9 @@
-//! The only module that may mutate cameras (INV-CAMERA-1, C1.5).
+//! Camera mutation and navigation policies (INV-CAMERA-1, C1.5).
 //!
-//! INC-2: cameras are created, bound and unbound only through the output-lifecycle entries
-//! (M5): binding precedence remembered-and-unbound → persisted (no collision) → default, 1:1
-//! (INV-CAMERA-3). INC-3: direct-manipulation pan (F-PAN-1) from physical input. INC-10: the
-//! one-shot viewport fit (F-FIT-1) and restore, with the bounded navigation history (OBJ-30,
-//! INV-CAMERA-5 as amended by C12.F16). Jump arrives later.
+//! Cameras are created, bound, and unbound through the output-lifecycle entries (M5).
+//! Binding precedence follows remembered-and-unbound → persisted (no collision) → default, 1:1
+//! (INV-CAMERA-3). Supports direct-manipulation pan (F-PAN-1), one-shot viewport fit (F-FIT-1),
+//! and restore with a bounded navigation history (OBJ-30, INV-CAMERA-5 as amended by C12.F16).
 
 use crate::authority::Authorized;
 use crate::geom::{CANVAS_LIMIT_PX, CanvasPoint, CanvasPos, Q16_ONE, q16};
@@ -282,7 +281,7 @@ impl CameraSet {
     /// M5 on `output_connected`: re-binds the lowest-indexed **unbound** camera remembered for the
     /// key (value unchanged); otherwise creates a camera seeded from the persisted lookup unless a
     /// camera with that key already exists this session (a concurrent key collision), else at the
-    /// internal default placement (Canvas origin, zoom 1; Level D). Returns the camera index.
+    /// internal default placement (Canvas origin, zoom 1). Returns the camera index.
     pub(crate) fn bind_on_connect(
         &mut self,
         _proof: Authorized,
@@ -388,7 +387,7 @@ impl CameraSet {
         self.set_center(proof, camera, pan_target_mode(start, sum, mode));
     }
 
-    /// A shell `Navigate` (C7.2, INC-11): the camera's centre becomes `center`, its zoom unchanged;
+    /// A shell `Navigate` (C7.2): the camera's centre becomes `center`, its zoom unchanged;
     /// no history entry (OBJ-30 records fits). Consumes a proof (INV-CAMERA-1).
     pub(crate) fn navigate(&mut self, proof: Authorized, camera: usize, center: CanvasPos) {
         self.set_center(proof, camera, center);
@@ -512,8 +511,8 @@ mod tests {
         );
     }
 
-    // ---- INC-10: F-FIT-1 (C12.F15), the pure computation; the history on the production path is
-    // tested through Core's entries (lib.rs tests)
+    // F-FIT-1 (C12.F15): pure computation. History on the production path is
+    // tested through Core's entries (lib.rs tests).
 
     /// The lower clamp: at scale 1 on a 1920 × 1080 view, a window 1920·2²⁰ px wide fits at exactly
     /// 2⁻²⁰; one pixel wider is clamped to it; one narrower is not clamped.
