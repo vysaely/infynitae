@@ -1,6 +1,6 @@
-//! Protocol-side negative compile probes (OB-19), ported from experiments/c1-authority-spike and
-//! written against the production crates. A Smithay handler holds `&mut Core` through the protocol
-//! state but no authority port; each probe is a function with exactly that access.
+//! Protocol-side negative compile probes against production crates (OB-19). A Smithay handler
+//! holds `&mut Core` through the protocol state but no authority port; each probe is a function
+//! with exactly that access.
 //!
 //! The expected diagnostic of every probe is asserted by tools/verify-architecture.
 
@@ -128,14 +128,14 @@ pub fn handler() {
     require_clone::<infynitae_core::authority::Authorized>();
 }
 
-/// p18 (INC-3, attack O): hit-test with a Canvas position where an OutputLogical point is required.
+/// p18: hit-test with a Canvas position where an OutputLogical point is required.
 /// Expected E0308 (coordinate domains are distinct types, INV-COORD-4).
 #[cfg(feature = "p18_hit_test_with_canvas_position")]
 pub fn handler(core: &mut Core, o: OutputId) {
     let _ = core.hit_test(o, CanvasPos { x: 0, y: 0 });
 }
 
-/// p19 (INC-3, attack O): a Canvas value submitted as a device delta. Expected E0308.
+/// p19: a Canvas value submitted as a device delta. Expected E0308.
 #[cfg(feature = "p19_canvas_value_as_device_delta")]
 pub fn handler(core: &mut Core, port: &mut InputPort) {
     let _ = core.physical_input(
@@ -149,7 +149,7 @@ pub fn handler(core: &mut Core, port: &mut InputPort) {
     );
 }
 
-/// p20 (INC-3): pan a camera from outside core. Expected E0624 (`pan` is crate-private and
+/// p20: pan a camera from outside core. Expected E0624 (`pan` is crate-private and
 /// consumes a proof only `entry` can mint).
 #[cfg(feature = "p20_pan_from_outside_core")]
 pub fn handler(core: &mut Core, proof: infynitae_core::authority::Authorized) {
@@ -157,69 +157,69 @@ pub fn handler(core: &mut Core, proof: infynitae_core::authority::Authorized) {
         .pan(proof, 0, CanvasPos { x: 0, y: 0 }, (1.0, 0.0));
 }
 
-/// p21 (INC-3): place the pointer from outside core (a second pointer writer). Expected E0603
+/// p21: place the pointer from outside core (a second pointer writer). Expected E0603
 /// (`locate` is crate-private; OBJ-20 has one writer).
 #[cfg(feature = "p21_place_pointer_from_outside_core")]
 pub fn handler(_core: &mut Core) {
     let _ = infynitae_core::pointer::locate;
 }
 
-/// p22 (INC-4, F01): mutate key ownership from outside core. Expected E0599 (no such method).
+/// p22 (F01): mutate key ownership from outside core. Expected E0599 (no such method).
 #[cfg(feature = "p22_mutate_key_ownership")]
 pub fn handler(core: &mut Core) {
     core.key_ownership_mut();
 }
 
-/// p23 (INC-4, F01): forge ElementId from outside core. Expected E0624 (`new` is crate-private).
+/// p23 (F01): forge ElementId from outside core. Expected E0624 (`new` is crate-private).
 #[cfg(feature = "p23_forge_element_id")]
 pub fn handler() -> infynitae_core::stage::ElementId {
     infynitae_core::stage::ElementId::new(std::num::NonZeroU64::new(1).unwrap())
 }
 
-/// p24 (INC-4, F01): set keyboard focus without an InputPort. Expected E0061 (missing argument).
+/// p24 (F01): set keyboard focus without an InputPort. Expected E0061 (missing argument).
 #[cfg(feature = "p24_set_focus_without_port")]
 pub fn handler(core: &mut Core) {
     let _ = core.set_focus(None);
 }
 
-/// p25 (INC4R-03): call set_preemption_strategy in production. Expected E0599.
+/// p25: call set_preemption_strategy in production. Expected E0599.
 #[cfg(feature = "p25_set_preemption_strategy_in_production")]
 pub fn handler(state: &mut infynitae_wayland::WaylandState) {
     state.set_preemption_strategy(());
 }
 
-/// p26 (INC4R-03): call set_nested_grab_keep_pointer in production. Expected E0599.
+/// p26: call set_nested_grab_keep_pointer in production. Expected E0599.
 #[cfg(feature = "p26_set_nested_grab_keep_pointer_in_production")]
 pub fn handler(state: &mut infynitae_wayland::WaylandState) {
     state.set_nested_grab_keep_pointer(false);
 }
 
-/// p27 (INC4R-03): call test_set_keyboard_grab in production. Expected E0599.
+/// p27: call test_set_keyboard_grab in production. Expected E0599.
 #[cfg(feature = "p27_test_set_keyboard_grab_in_production")]
 pub fn handler(state: &mut infynitae_wayland::WaylandState) {
     state.test_set_keyboard_grab(0);
 }
 
-/// p28 (INC4R-02): call sync_seat_key without an auth token. Expected E0061.
+/// p28: call sync_seat_key without an auth token. Expected E0061.
 #[cfg(feature = "p28_portless_sync_seat_key")]
 pub fn handler(state: &mut infynitae_wayland::WaylandState) {
     state.sync_seat_key(30, true);
 }
 
-/// p29 (INC4R-03 / R2-03): call keyboard_handle outside adapter. Expected E0624.
+/// p29: call keyboard_handle outside adapter. Expected E0624.
 #[cfg(feature = "p29_keyboard_handle_outside_adapter")]
 pub fn handler(state: &infynitae_wayland::WaylandState) {
     let _ = state.keyboard_handle();
 }
 
-/// p30 (INC4R-02 / R2-02): InputAuthToken must not be Send. Expected E0277.
+/// p30: InputAuthToken must not be Send. Expected E0277.
 #[cfg(feature = "p30_input_auth_token_send")]
 pub fn handler() {
     fn assert_send<T: Send>() {}
     assert_send::<infynitae_core::InputAuthToken>();
 }
 
-/// p31 (INC-4 Round 4, C3): an InputAuthToken authorizes exactly one seat update — it is consumed.
+/// p31 (C3): an InputAuthToken authorizes exactly one seat update — it is consumed.
 /// Expected E0382 (use of moved value).
 #[cfg(feature = "p31_input_auth_token_reuse")]
 pub fn handler(state: &mut infynitae_wayland::WaylandState, port: &infynitae_core::InputPort) {

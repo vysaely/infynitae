@@ -144,7 +144,7 @@ const STAGE_WRITERS: [&str; 6] = [
     "destroy",
 ];
 
-/// Smithay pointer delivery (INC-3, C4.2): called only by the adapter's `pointer` module, which
+/// Smithay pointer delivery (C4.2): called only by the adapter's `pointer` module, which
 /// applies Core's pointer effects. Anything else calling them would route input around Core
 /// (INV-INPUT-1/3/4).
 const POINTER_DELIVERY: [&str; 8] = [
@@ -157,7 +157,7 @@ const POINTER_DELIVERY: [&str; 8] = [
     "unset_grab",
     "get_pointer",
 ];
-/// Smithay keyboard delivery and acquisition (INC-4, R2-03): callable only within `infynitae-wayland`.
+/// Smithay keyboard delivery and acquisition: callable only within `infynitae-wayland`.
 const KEYBOARD_DELIVERY: [&str; 3] = ["input_forward", "input_intercept", "get_keyboard"];
 
 const UNSAFE_INVENTORY: &str = "docs/foundation/UNSAFE_INVENTORY.md";
@@ -1030,7 +1030,7 @@ fn check_rejected_apis(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report)
 }
 
 /// Core's `Effect` values are decisions: product crates other than core may match them but never
-/// construct them (INC-3: a fabricated pointer effect would deliver input Core did not route).
+/// construct them: a fabricated pointer effect would deliver input Core did not route.
 /// Renaming or glob/variant imports of `Effect` are refused (fail closed); macro bodies are
 /// scanned for `Effect ::`.
 fn check_effects_only_from_core(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report) {
@@ -1121,7 +1121,7 @@ fn check_effects_only_from_core(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mu
     }
 }
 
-/// Smithay pointer delivery only in `infynitae-wayland`'s `pointer` module (INC-3). Method calls,
+/// Smithay pointer delivery only in `infynitae-wayland`'s `pointer` module. Method calls,
 /// qualified calls and macro tokens are all checked.
 fn check_pointer_delivery(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report) {
     const R: &str = "smithay-pointer-only-in-adapter-pointer";
@@ -1250,7 +1250,7 @@ fn check_device_limit(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report) 
     }
 }
 
-/// Smithay keyboard input only in `infynitae-wayland` (INC-4, R2-03). Method calls, qualified calls and
+/// Smithay keyboard input only in `infynitae-wayland`. Method calls, qualified calls and
 /// macro tokens are checked across all other product crates.
 fn check_keyboard_delivery(crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut Report) {
     const R: &str = "smithay-keyboard-only-in-adapter";
