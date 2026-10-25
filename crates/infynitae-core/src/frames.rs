@@ -24,7 +24,7 @@ use std::time::Duration;
 use crate::snapshot::SurfaceKey;
 use crate::stage::ElementId;
 
-/// PROV-4: the candidate off-screen fallback period P (provisional; finite and > 0).
+/// Default off-screen fallback period P: finite and > 0 (INV-FRAME-3, PROV-4).
 pub const DEFAULT_FALLBACK_PERIOD: Duration = Duration::from_secs(1);
 
 /// The fallback period must be finite and greater than zero (INV-FRAME-3, PROV-4).
