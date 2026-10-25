@@ -103,6 +103,7 @@ install -m 755 live/settings.sh "$HOME/.local/bin/infynitae-settings"
 install -m 755 live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
 install -m 755 update.sh "$HOME/.local/bin/infynitae-update"
 install -m 755 live/infynitae-reload "$HOME/.local/bin/infynitae-reload"
+install -m 755 live/infynitae-restore "$HOME/.local/bin/infynitae-restore"
 install -m 755 live/record/infynitae-recorder "$HOME/.local/bin/infynitae-recorder"
 echo "==> Installed binaries to ~/.local/bin"
 

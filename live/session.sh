@@ -74,7 +74,36 @@ if [ -x "$HOME/.config/infynitae/autostart.sh" ]; then
     "$HOME/.config/infynitae/autostart.sh" &
 fi
 
+# 7b. Session restore & watcher
+RESTORE_BIN=""
+if [ -x "$HOME/.local/bin/infynitae-restore" ]; then
+    RESTORE_BIN="$HOME/.local/bin/infynitae-restore"
+elif [ -x "$HOME/infynitae/live/infynitae-restore" ]; then
+    RESTORE_BIN="$HOME/infynitae/live/infynitae-restore"
+elif [ -x "$(dirname "$0")/infynitae-restore" ]; then
+    RESTORE_BIN="$(dirname "$0")/infynitae-restore"
+elif command -v infynitae-restore >/dev/null 2>&1; then
+    RESTORE_BIN="infynitae-restore"
+fi
+
+RESTORE_SESSION=false
+case "${SESSION_RESTORE:-true}" in
+    1|true|yes|on|TRUE|True)
+        if [ -n "$RESTORE_BIN" ]; then
+            "$RESTORE_BIN" watch >/dev/null 2>&1 &
+            if "$RESTORE_BIN" check >/dev/null 2>&1; then
+                RESTORE_SESSION=true
+                "$RESTORE_BIN" restore >/dev/null 2>&1 &
+            fi
+        fi
+        ;;
+esac
+
 # 8. Launch default terminal on the infinite canvas
+if [ "$RESTORE_SESSION" = "true" ]; then
+    exit 0
+fi
+
 resolve_terminal() {
     if [ -n "$TERMINAL" ] && [ "$TERMINAL" != "auto" ]; then
         echo "$TERMINAL"
