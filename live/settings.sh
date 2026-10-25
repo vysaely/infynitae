@@ -4,10 +4,10 @@
 set -e
 umask 077
 
-CONFIG_FILE="$HOME/.config/infynitae/config"
+CONFIG_FILE="${CONFIG_FILE:-$HOME/.config/infynitae/config}"
 
 # Ensure config directory exists
-mkdir -p "$HOME/.config/infynitae"
+mkdir -p "$(dirname "$CONFIG_FILE")"
 
 # Load current config if present
 if [ -f "$CONFIG_FILE" ]; then
@@ -121,17 +121,32 @@ cmd_set() {
             ;;
     esac
 
-    # Security: escape delimiter pipes, double quotes and backslashes in VAL
-    VAL_CLEAN=$(printf '%s' "$VAL" | sed -e 's/[\\&|]/\\&/g' -e 's/"/\\"/g')
+    # Escape embedded single quotes as '\'' for shell-safe single-quoted value
+    VAL_ESCAPED=$(printf '%s\n' "$VAL" | sed "s/'/'\\\\''/g")
+    VAL_QUOTED="'${VAL_ESCAPED}'"
 
-    # Update or append in config file
-    if grep -q "^${KEY}=" "$CONFIG_FILE" 2>/dev/null; then
-        sed -i "s|^${KEY}=.*|${KEY}=\"${VAL_CLEAN}\"|" "$CONFIG_FILE"
-    else
-        echo "${KEY}=\"${VAL_CLEAN}\"" >> "$CONFIG_FILE"
-    fi
+    # Update or append in config file without sed injection
+    export KEY VAL_QUOTED
+    awk '
+    BEGIN {
+        key = ENVIRON["KEY"]
+        val = ENVIRON["VAL_QUOTED"]
+        found = 0
+    }
+    substr($0, 1, length(key) + 1) == key "=" {
+        print key "=" val
+        found = 1
+        next
+    }
+    { print }
+    END {
+        if (!found) {
+            print key "=" val
+        }
+    }
+    ' "$CONFIG_FILE" > "$CONFIG_FILE.tmp.$$" && mv -f "$CONFIG_FILE.tmp.$$" "$CONFIG_FILE"
 
-    echo "==> Updated $KEY=\"$VAL\" in $CONFIG_FILE"
+    echo "==> Updated $KEY in $CONFIG_FILE"
     . "$CONFIG_FILE"
     apply_settings
     echo "==> Settings synchronized successfully across all toolkits."
@@ -153,7 +168,22 @@ cmd_get() {
     esac
 
     # Safe retrieval without eval
-    grep "^${KEY}=" "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d'=' -f2- | sed -e 's/^"//' -e 's/"$//'
+    RAW=$(grep "^${KEY}=" "$CONFIG_FILE" 2>/dev/null | head -1 | cut -d'=' -f2-)
+    case "$RAW" in
+        \'*\')
+            RAW="${RAW#\'}"
+            RAW="${RAW%\'}"
+            printf '%s\n' "$RAW" | sed "s/'\\\\''/'/g"
+            ;;
+        \"*\")
+            RAW="${RAW#\"}"
+            RAW="${RAW%\"}"
+            printf '%s\n' "$RAW"
+            ;;
+        *)
+            printf '%s\n' "$RAW"
+            ;;
+    esac
 }
 
 cmd_list() {
