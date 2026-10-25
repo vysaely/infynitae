@@ -164,6 +164,13 @@ pub struct WaylandState {
         reason = "owns the wp_viewporter global for the state's lifetime"
     )]
     viewporter: ViewporterState,
+    /// `wp_cursor_shape_v1`: a client names a cursor shape; the compositor draws it from the
+    /// user's cursor theme (`cursor`), the same as a named cursor.
+    #[expect(
+        dead_code,
+        reason = "owns the wp_cursor_shape_manager_v1 global for the state's lifetime"
+    )]
+    cursor_shape: smithay::wayland::cursor_shape::CursorShapeManagerState,
     /// `wl_data_device_manager`: clipboard selection and drag-and-drop offers (2026-10-16).
     /// Selections are Smithay protocol objects; who sees and sets them follows Core's
     /// keyboard focus (`SeatHandler::focus_changed`).
@@ -442,6 +449,9 @@ impl WaylandState {
             relative_pointer: RelativePointerManagerState::new::<Self>(display),
             fractional_scale_manager: FractionalScaleManagerState::new::<Self>(display),
             viewporter: ViewporterState::new::<Self>(display),
+            cursor_shape: smithay::wayland::cursor_shape::CursorShapeManagerState::new::<Self>(
+                display,
+            ),
             data_device: DataDeviceState::new::<Self>(display),
             primary_selection,
             wlr_data_control,

@@ -958,6 +958,11 @@ delegate_relative_pointer!(WaylandState);
 delegate_seat!(WaylandState);
 delegate_shm!(WaylandState);
 delegate_viewporter!(WaylandState);
+smithay::delegate_cursor_shape!(WaylandState);
+
+/// Tablet tools are not offered yet; cursor-shape asks for this handler, and its default
+/// (a tool's cursor image is ignored) is what applies.
+impl smithay::wayland::tablet_manager::TabletSeatHandler for WaylandState {}
 delegate_xdg_shell!(WaylandState);
 delegate_xdg_activation!(WaylandState);
 delegate_xdg_decoration!(WaylandState);

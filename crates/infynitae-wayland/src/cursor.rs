@@ -369,6 +369,11 @@ impl WaylandState {
         self.cursor = status;
     }
 
+    /// The cursor the focused client asked for: its surface, a named shape, or hidden.
+    pub fn cursor_status(&self) -> &CursorImageStatus {
+        &self.cursor
+    }
+
     /// Sets a custom HOME directory path for reading config files and themes.
     pub fn set_config_home(&mut self, home: PathBuf) {
         self.config_home = Some(home);
