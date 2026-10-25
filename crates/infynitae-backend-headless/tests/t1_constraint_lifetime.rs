@@ -123,3 +123,88 @@ fn an_ended_persistent_lock_activates_again() {
     );
     assert!(smithay_has_constraint(&r));
 }
+
+#[test]
+fn persistent_locks_on_multiple_surfaces_persist_and_activate_on_focus() {
+    let mut r = Rig::x8();
+    let qh = r.ls.qh.clone();
+    let w1 = r.ls.state.elements().next().expect("W1");
+
+    // Establish persistent lock on W1
+    set_focus(&mut r.ls.state, &mut r.ls.input, Some(w1)).unwrap();
+    r.ls.pump();
+    r.frame();
+    r.ls.probe.lock_pointer(&qh, 0, false);
+    r.ls.pump();
+    r.frame();
+
+    let s1 =
+        r.ls.state
+            .core()
+            .constraint()
+            .expect("W1 lock active")
+            .surface;
+
+    // Map W2 on top of W1
+    let idx2 = r.ls.probe.toplevel(&qh, "W2", (800, 600), 20);
+    r.ls.pump();
+    r.frame();
+    let w2 = r.ls.state.elements().find(|&e| e != w1).expect("W2");
+
+    let tap_super_tab = |r: &mut Rig| {
+        for (key, pressed) in [
+            (infynitae_core::input::keys::KEY_LEFTMETA, true),
+            (infynitae_core::input::keys::KEY_TAB, true),
+            (infynitae_core::input::keys::KEY_TAB, false),
+            (infynitae_core::input::keys::KEY_LEFTMETA, false),
+        ] {
+            r.t += 1000;
+            infynitae_backend_headless::keyboard_key(
+                &mut r.ls.state,
+                &mut r.ls.input,
+                key,
+                pressed,
+                r.t,
+            )
+            .expect("key");
+            r.ls.pump();
+        }
+        r.frame();
+    };
+
+    // Cycle focus to W2 and lock pointer
+    tap_super_tab(&mut r);
+    assert_eq!(r.ls.state.core().focus().target(), Some(w2));
+    r.ls.probe.lock_pointer(&qh, idx2, false);
+    r.ls.pump();
+    r.frame();
+
+    let s2 =
+        r.ls.state
+            .core()
+            .constraint()
+            .expect("W2 lock active")
+            .surface;
+    assert_ne!(s1, s2, "two distinct surfaces");
+
+    // Both persistent constraints must be preserved in Core
+    assert_eq!(r.ls.state.core().pending_constraints().len(), 2);
+
+    // Switch focus back to W1: W1's persistent lock must activate again!
+    tap_super_tab(&mut r);
+    assert_eq!(r.ls.state.core().focus().target(), Some(w1));
+    assert_eq!(
+        r.ls.state.core().constraint().map(|c| c.surface),
+        Some(s1),
+        "W1 persistent lock activates again on focus"
+    );
+
+    // Switch focus back to W2: W2's persistent lock must activate again!
+    tap_super_tab(&mut r);
+    assert_eq!(r.ls.state.core().focus().target(), Some(w2));
+    assert_eq!(
+        r.ls.state.core().constraint().map(|c| c.surface),
+        Some(s2),
+        "W2 persistent lock activates again on focus"
+    );
+}

@@ -853,10 +853,7 @@ impl Core {
                 chosen
             };
 
-            let new_anchor = CanvasPoint {
-                x: new_gx0,
-                y: gy0,
-            };
+            let new_anchor = CanvasPoint { x: new_gx0, y: gy0 };
             let _ = self.place_by_shell(other, new_anchor, out);
         }
     }
@@ -1458,6 +1455,11 @@ impl Core {
         if self.resize.is_some_and(|r| r.element == id) {
             self.resize = None;
         }
+        self.pending_constraints.retain(|c| {
+            self.stage
+                .element_containing_surface(c.surface)
+                .is_some_and(|e| e != id)
+        });
         for slot in &mut self.frames {
             slot.frame.entries.retain(|e| e.element != id);
         }
@@ -1851,7 +1853,8 @@ impl Core {
             region,
         };
 
-        self.pending_constraint = Some(candidate);
+        self.pending_constraints.retain(|c| c.surface != surface);
+        self.pending_constraints.push(candidate);
 
         if self.can_activate_constraint(&candidate) {
             let mut fx = Vec::new();
@@ -1865,7 +1868,7 @@ impl Core {
             }
             self.constraint = Some(candidate);
             if candidate.lifetime == crate::pointer::ConstraintLifetime::Oneshot {
-                self.pending_constraint = None;
+                self.pending_constraints.retain(|c| c.surface != surface);
             }
             fx.push(Effect::ConstraintActivate { surface, kind });
             fx
@@ -1882,11 +1885,10 @@ impl Core {
         {
             c.lock_point = hint;
         }
-        if let Some(c) = &mut self.pending_constraint
-            && c.surface == surface
-            && c.kind == crate::pointer::ConstraintKind::Lock
-        {
-            c.lock_point = hint;
+        for c in &mut self.pending_constraints {
+            if c.surface == surface && c.kind == crate::pointer::ConstraintKind::Lock {
+                c.lock_point = hint;
+            }
         }
     }
 
@@ -1909,11 +1911,7 @@ impl Core {
                 });
             }
         }
-        if let Some(c) = self.pending_constraint
-            && c.surface == surface
-        {
-            self.pending_constraint = None;
-        }
+        self.pending_constraints.retain(|c| c.surface != surface);
         fx
     }
 
@@ -1935,9 +1933,15 @@ impl Core {
                 self.constraint = None;
                 if self.constraints_suspended {
                     // released for Super only: it comes back when Super is let go
-                    self.pending_constraint = Some(c);
+                    if !self
+                        .pending_constraints
+                        .iter()
+                        .any(|p| p.surface == c.surface)
+                    {
+                        self.pending_constraints.push(c);
+                    }
                 } else if c.lifetime == crate::pointer::ConstraintLifetime::Oneshot {
-                    self.pending_constraint = None;
+                    self.pending_constraints.retain(|p| p.surface != c.surface);
                 }
 
                 // W-SM-4a: explicit deactivate ONLY if delivered focus does not change in this batch;
@@ -1966,18 +1970,39 @@ impl Core {
         }
 
         // 2. If no constraint is active, check if pending constraint can activate
-        if self.constraint.is_none()
-            && let Some(pending) = self.pending_constraint
-            && self.can_activate_constraint(&pending)
-        {
-            self.constraint = Some(pending);
-            if pending.lifetime == crate::pointer::ConstraintLifetime::Oneshot {
-                self.pending_constraint = None;
+        if self.constraint.is_none() {
+            let focused_surface = self
+                .route_pointer()
+                .and_then(|(tgt, _)| tgt)
+                .map(|t| t.surface);
+
+            let pending = self.pending_constraints.clone();
+            let candidate = if let Some(surf) = focused_surface {
+                pending
+                    .iter()
+                    .find(|p| p.surface == surf && self.can_activate_constraint(p))
+                    .copied()
+            } else {
+                None
             }
-            fx.push(Effect::ConstraintActivate {
-                surface: pending.surface,
-                kind: pending.kind,
+            .or_else(|| {
+                pending
+                    .iter()
+                    .find(|p| self.can_activate_constraint(p))
+                    .copied()
             });
+
+            if let Some(candidate) = candidate {
+                self.constraint = Some(candidate);
+                if candidate.lifetime == crate::pointer::ConstraintLifetime::Oneshot {
+                    self.pending_constraints
+                        .retain(|c| c.surface != candidate.surface);
+                }
+                fx.push(Effect::ConstraintActivate {
+                    surface: candidate.surface,
+                    kind: candidate.kind,
+                });
+            }
         }
 
         fx
@@ -6036,10 +6061,7 @@ mod tests {
         // y must remain exactly a1.y (-150) without subtracting loc_y (30).
         assert_eq!(
             pushed_a1,
-            CanvasPoint {
-                x: -662,
-                y: a1.y,
-            },
+            CanvasPoint { x: -662, y: a1.y },
             "pushed window anchor must equal new window geometry origin without subtracting loc"
         );
     }

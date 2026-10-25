@@ -448,20 +448,26 @@ impl WaylandState {
     /// Smithay keep the same constraint state (INV-INPUT-5). Nothing reaches the client: the
     /// constraint no longer exists, and Core's deactivate effect for it is discarded.
     pub(crate) fn drop_constraints_smithay_destroyed(&mut self) {
-        let core = &self.core;
-        let Some(surface) = core
-            .constraint()
-            .or(core.pending_constraint())
-            .map(|c| c.surface)
-        else {
+        let mut surfaces = Vec::new();
+        if let Some(c) = self.core.constraint() {
+            surfaces.push(c.surface);
+        }
+        for c in self.core.pending_constraints() {
+            if !surfaces.contains(&c.surface) {
+                surfaces.push(c.surface);
+            }
+        }
+        if surfaces.is_empty() {
             return;
-        };
-        let Some(s) = self.registry.surface(surface) else {
-            return;
-        };
+        }
         let ptr = self.pointer_handle();
-        if !with_pointer_constraint(s, &ptr, |c| c.is_some()) {
-            let _ = self.core.destroy_pointer_constraint(surface);
+        for surface in surfaces {
+            let Some(s) = self.registry.surface(surface) else {
+                continue;
+            };
+            if !with_pointer_constraint(s, &ptr, |c| c.is_some()) {
+                let _ = self.core.destroy_pointer_constraint(surface);
+            }
         }
     }
 

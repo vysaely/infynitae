@@ -329,8 +329,8 @@ pub struct Core {
     focus: input::focus::FocusModel,
     /// OBJ-21: authoritative active pointer constraint.
     constraint: Option<pointer::ConstraintState>,
-    /// OBJ-21: authoritative pending pointer constraint.
-    pending_constraint: Option<pointer::ConstraintState>,
+    /// Authoritative pending pointer constraints per surface.
+    pending_constraints: Vec<pointer::ConstraintState>,
     /// Super is held: pointer constraints (a game's locked or confined cursor) are released and
     /// stay pending until it is let go (owner, 2026-10-25: "feel free in my desktop").
     constraints_suspended: bool,
@@ -457,7 +457,7 @@ impl Core {
                 input: input::InputState::default(),
                 focus: input::focus::FocusModel::default(),
                 constraint: None,
-                pending_constraint: None,
+                pending_constraints: Vec::new(),
                 constraints_suspended: false,
                 free_cursor_on_super: false,
                 persisted,
@@ -725,7 +725,12 @@ impl Core {
 
     /// Read access to the authoritative pending pointer constraint (OBJ-21).
     pub fn pending_constraint(&self) -> Option<pointer::ConstraintState> {
-        self.pending_constraint
+        self.pending_constraints.last().copied()
+    }
+
+    /// Read access to all authoritative pending pointer constraints.
+    pub fn pending_constraints(&self) -> &[pointer::ConstraintState] {
+        &self.pending_constraints
     }
 
     /// Canvas origin of a surface from the single origin function (F-ORIGIN-1).
