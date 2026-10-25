@@ -1,5 +1,5 @@
-//! INC-4 Round 4 T1: popup LIFETIME versus input routing (A1) and versus the parent's lifecycle
-//! (B1), on the production path with a recording client.
+//! Production path tests for popup lifetime versus input routing (A1) and versus the parent's
+//! lifecycle (B1), with a recording client.
 //!
 //! A popup's death has three separate consequences: (1) lifetime — the client's popup is gone;
 //! (2) input — the popup grab chain must be reconciled with Core's ActiveElementFocus

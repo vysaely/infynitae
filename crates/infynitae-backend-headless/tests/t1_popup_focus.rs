@@ -1,4 +1,5 @@
-//! INC-4 T1: ActiveElementFocus vs popup grab protocol routing (TST-20 / xpopup_focus, OB-30, OB-4).
+//! Production path tests for ActiveElementFocus vs popup grab protocol routing
+//! (TST-20 / xpopup_focus, OB-30, OB-4).
 //!
 //! Evaluates the production Core, Wayland adapter, and headless backend with a recording client probe.
 //! Invariants verified after every focus transition:
@@ -535,7 +536,7 @@ fn atk11_refused_grab_dismisses_the_popup() {
     );
 }
 
-/// ATK-12 (INC-3 zero-output state × INV-INPUT-10, F09): preemption must not tear down zero-output grab.
+/// ATK-12 (zero-output state × INV-INPUT-10, F09): preemption must not tear down zero-output grab.
 #[test]
 fn atk12_preemption_keeps_the_zero_output_grab() {
     let mut h = PopupHarness::new();
@@ -740,7 +741,7 @@ fn pf_grab_refused_when_keyboard_grabbed_by_another_sequence() {
     );
 }
 
-// ---------------------------------------------------------------- R-series review reproductions
+// ---------------------------------------------------------------- R-series scenario reproductions
 
 struct R {
     ls: Lockstep,
@@ -990,8 +991,8 @@ fn r10_pan_with_popup_no_synthetic_events_and_clean_return() {
     );
 }
 
-/// R11: the failed-review ATK-12 sequence exactly (WITH the focus change), plus nested popups,
-/// then reconnect: the INC-3 zero-output grab survives and the first output removes it.
+/// R11: the ATK-12 sequence with focus change, plus nested popups,
+/// then reconnect: the zero-output grab survives and the first output removes it.
 #[test]
 fn r11_zero_output_grab_survives_preemption_and_reconnect() {
     let mut r = R::new(2);
