@@ -1,5 +1,4 @@
-//! M19 — the xwayland-satellite supervisor (OBJ-32; INV-XWAYLAND-1; ADR-10; OB-33). INC-12,
-//! EXPERIMENTAL.
+//! M19 — the xwayland-satellite supervisor (OBJ-32, INV-XWAYLAND-1, ADR-10, OB-33).
 //!
 //! X11 support is xwayland-satellite running as an ordinary Wayland client of the session. The
 //! compositor owns the X display: [`XDisplay`] reserves a display number, holds its lock file and
@@ -122,7 +121,7 @@ fn stale_and_ours(lock_path: &Path) -> bool {
 /// Removes what a session of ours that died without cleaning up (SIGKILL, a crash) left in the
 /// runtime directory `dir`: its X cookies `infynitae-xauth-<pid>-<n>` and its satellites'
 /// runtime directories `infynitae-satellite-<pid>-<n>`. Only entries owned by our uid whose pid
-/// names no running process, and only these two name patterns (INC-12 review r2).
+/// names no running process, and only these two name patterns.
 pub fn reclaim_stale_session_files(dir: &Path) {
     use std::os::unix::fs::MetadataExt;
     let Ok(entries) = fs::read_dir(dir) else {
@@ -387,7 +386,7 @@ pub fn start_for_session<D: 'static>(
     Ok(s)
 }
 
-/// M19's states.
+/// Satellite lifecycle states (M19).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SatelliteState {
     /// No satellite has been started.
@@ -399,8 +398,7 @@ pub enum SatelliteState {
     Degraded,
 }
 
-/// When an exited satellite is started again (M19 "backoff elapsed", "repeated crashes").
-/// Provisional values, not budgets: no measurement chose them.
+/// When an exited satellite is restarted (M19): backoff duration, maximum exits, and window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RestartPolicy {
     /// Time from an exit to the next start.
@@ -830,7 +828,7 @@ mod tests {
         fs::remove_dir_all(&root).unwrap();
     }
 
-    /// Review r2: a dead session's cookie and satellite directory are reclaimed; a live
+    /// A dead session's cookie and satellite directory are reclaimed; a live
     /// process's entries, other names, and malformed names are left alone.
     #[test]
     fn stale_session_files_of_dead_processes_are_reclaimed() {
