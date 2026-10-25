@@ -16,6 +16,10 @@ smithay = { version = "=0.7.0", default-features = false, features = ["wayland_f
 # instead (already in the locked graph through Smithay's dependencies: no new crate). Unlike
 # calloop's signalfd source it blocks no signal, so the session's children inherit no blocked mask.
 libc = { version = "=0.2.190", default-features = false }
+# Owner decision 2026-10-25: the compositor loads and draws the user's Xcursor theme for named
+# cursors and the empty canvas; xcursor used to parse cursor themes and Xcursor images (already
+# in the locked graph through Smithay's dependencies: no new crate).
+xcursor = { version = "=0.3.11", default-features = false }
 
 # Negative probes (OB-19); see tools/verify-architecture. Never enabled by default.
 [features]
