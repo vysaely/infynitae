@@ -437,6 +437,16 @@ case "$ACTION" in
                 ;;
         esac
         ;;
+    clipboard-history)
+        # Super+V: Clipboard history picker (cliphist + fuzzel or $CLIPBOARD_PICKER)
+        if command -v cliphist >/dev/null 2>&1; then
+            PICKER="${CLIPBOARD_PICKER:-fuzzel --dmenu}"
+            cliphist list | $PICKER | cliphist decode | wl-copy
+        elif command -v notify-send >/dev/null 2>&1; then
+            notify-send "Clipboard history needs cliphist: sudo pacman -S cliphist"
+            exit 0
+        fi
+        ;;
     mute|toggle-mute)
         # Trigger Discord / App Global Shortcuts portal (in-app mute only, zero OS hardware muting)
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
