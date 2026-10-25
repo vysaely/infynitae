@@ -1,7 +1,7 @@
-//! T1 cursor theme tests: verify that configured Xcursor themes are loaded and drawn
+//! Production path tests for Xcursor themes: configured themes are loaded and drawn
 //! as the compositor's own pointer for named cursors and the empty canvas, sharp at
-//! output scale, with fallback to the built-in triangle, and that theme changes apply
-//! on config reload.
+//! output scale, with fallback to the built-in triangle, and theme changes apply
+//! on configuration reload.
 
 mod common;
 

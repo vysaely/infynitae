@@ -1,4 +1,4 @@
-//! OB-13 (INC-6 half, experimental): the device ceiling Core enforces is the one the backend's
+//! OB-13: the device ceiling Core enforces is the one the backend's
 //! renderer reports, through the renderer-limit interface and by no other route.
 //!
 //! The renderer here is the headless fixture: it has no device and reports the limit it was

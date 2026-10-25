@@ -1,4 +1,4 @@
-//! INC-8 exit test TST-11 (T1 part), OB-16 (CR-7): a real-time headless harness with a
+//! TST-11 and OB-16 (CR-7): a real-time headless harness with a
 //! callback-blocked client.
 //!
 //! The production Core, adapter and headless backend run on the test thread in real time: a
