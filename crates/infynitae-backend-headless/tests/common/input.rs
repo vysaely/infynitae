@@ -1,5 +1,5 @@
-//! The virtual-mouse rig for INC-3 T1 tests: the production stack (Lockstep) driven through the
-//! headless backend's input injection, with the client's pointer wire log as the oracle.
+//! Virtual-mouse rig: the production stack ([`Lockstep`]) driven through the headless backend's
+//! input injection, with the client's pointer wire log as the oracle.
 
 use super::{Lockstep, output_k};
 use infynitae_backend_headless::{VirtualOutput, pointer_button, pointer_motion};
@@ -71,7 +71,7 @@ impl Rig {
         self.ls.run_until(t);
     }
 
-    /// A relative motion with unaccelerated delta 0.9 × accelerated (x8).
+    /// Relative motion with unaccelerated delta 0.9 × accelerated.
     pub fn motion(&mut self, d: (f64, f64)) {
         self.t += 1000;
         pointer_motion(

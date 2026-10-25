@@ -1868,7 +1868,7 @@ pub struct Lockstep {
     pub token: OutputLifecycleToken,
     /// The virtual input device's port (the test is the composition root).
     pub input: InputPort,
-    /// The shell's port (INC-11): a test drives `shell_command` as the shell server does.
+    /// The shell's port: a test drives `shell_command` as the shell server does.
     pub shell: ShellPort,
     pub output: Option<OutputId>,
     pub conn: Connection,
@@ -2069,7 +2069,7 @@ impl Lockstep {
         self.pump();
     }
 
-    /// Binds `xdg_activation_v1` (INC-12).
+    /// Binds `xdg_activation_v1`.
     pub fn activation(&mut self) -> XdgActivationV1 {
         let (n, _, _) = self
             .probe

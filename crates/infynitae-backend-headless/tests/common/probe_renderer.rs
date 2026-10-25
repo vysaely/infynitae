@@ -1,9 +1,8 @@
-//! Recording renderer for the EE-1 transform matrix (test fixture), ported from the E1R harness
-//! (experiments/b8-harness/src/bin/xtransform.rs, evidence EE-1): a CPU rasteriser of the true
-//! panel size with the GLES2 renderer's viewport/scissor semantics (smithay-0.7.0
-//! src/backend/renderer/gles/mod.rs:2044-2090). `render(output_size, dst_transform)` records the
-//! viewport; element coordinates live in `transform_size(output_size)` space and are mapped into
-//! the viewport by `dst_transform`. Handedness is not claimed. Not production code.
+//! Recording renderer for the EE-1 transform matrix (test fixture), ported from the E1R harness:
+//! a CPU rasteriser of the true panel size with the GLES2 renderer's viewport/scissor semantics
+//! (smithay-0.7.0 src/backend/renderer/gles/mod.rs:2044-2090). `render(output_size, dst_transform)`
+//! records the viewport; element coordinates live in `transform_size(output_size)` space and are
+//! mapped into the viewport by `dst_transform`. Handedness is not claimed. Not production code.
 
 #![allow(dead_code)]
 

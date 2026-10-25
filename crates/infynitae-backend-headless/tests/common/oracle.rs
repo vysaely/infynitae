@@ -1,4 +1,4 @@
-//! Independent test oracle (INC1-F06). Written from the canonical formula text
+//! Independent test oracle. Written from the canonical formula text
 //! (F-VIEW-1, F-LATTICE-1, F-UNPROJECT-1, input-region semantics) in exact integer arithmetic.
 //! It calls no production projection, unprojection or region code: a defect there cannot also
 //! move the expected value.
@@ -7,7 +7,7 @@ use infynitae_core::snapshot::InputRegion;
 
 const Q: i128 = 1 << 16;
 
-/// The parameters a view is computed from, at zoom 1 (INC-1).
+/// Parameters a view is computed from, at zoom 1.
 #[derive(Clone, Copy, Debug)]
 pub struct Camera {
     /// Camera centre, Q16.
