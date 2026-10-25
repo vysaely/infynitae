@@ -139,6 +139,8 @@ pub struct Session {
     fallback: Option<Instant>,
     /// When an idle notification timer fires; `None` while no notification is pending (INV-IDLE-1).
     idle: Option<Instant>,
+    /// When the cursor animation redraw timer fires; `None` while no animation frame change is pending.
+    cursor_anim: Option<Instant>,
     /// SIGTERM or SIGINT arrived.
     terminated: Rc<Cell<bool>>,
     /// The handlers writing to the self-pipe; removed (the signals then ignored) on drop.
@@ -259,6 +261,7 @@ impl Session {
             wake: None,
             fallback: None,
             idle: None,
+            cursor_anim: None,
             terminated,
             signal_ids,
             child_notify,
@@ -338,10 +341,18 @@ impl Session {
         let wake = self.wake.map(|at| at.saturating_duration_since(now));
         let fallback = self.fallback.map(|t| t.saturating_duration_since(now));
         let idle = self.idle.map(|t| t.saturating_duration_since(now));
-        [self.timer.until_due(now), limit, wake, fallback, idle]
-            .into_iter()
-            .flatten()
-            .min()
+        let cursor_anim = self.cursor_anim.map(|t| t.saturating_duration_since(now));
+        [
+            self.timer.until_due(now),
+            limit,
+            wake,
+            fallback,
+            idle,
+            cursor_anim,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     /// Arms the off-screen fallback timer for `deadline`, given on the presentation clock whose
@@ -354,6 +365,12 @@ impl Session {
     /// current time is `now` ([`crate::WaylandState::idle_notify_check`]), or disarms it.
     pub fn set_idle_deadline(&mut self, deadline: Option<Duration>, now: Duration) {
         self.idle = deadline.map(|d| Instant::now() + d.saturating_sub(now));
+    }
+
+    /// Arms the cursor animation redraw timer for `due`, given as duration until next frame change
+    /// ([`crate::WaylandState::cursor_animation_due`]), or disarms it.
+    pub fn set_cursor_animation_due(&mut self, due: Option<Duration>) {
+        self.cursor_anim = due.map(|d| Instant::now() + d);
     }
 
     /// After the loop woke: reaps exited children, dispatches the clients' requests and flushes
@@ -378,6 +395,10 @@ impl Session {
             }
         });
         state.launches.poll();
+        if self.cursor_anim.is_some_and(|t| Instant::now() >= t) {
+            self.cursor_anim = None;
+            self.request_frame();
+        }
         if state.spawned_children
             && let Some(notify) = self.child_notify.take()
         {
@@ -415,6 +436,10 @@ impl Session {
     /// a client is active.
     pub fn frame_due(&mut self) -> bool {
         let now = Instant::now();
+        if self.cursor_anim.is_some_and(|t| now >= t) {
+            self.cursor_anim = None;
+            self.timer.request(now);
+        }
         let due = self.timer.take_due(now);
         if due && self.max_frames.is_some() {
             self.timer.request(now);
@@ -740,6 +765,44 @@ mod tests {
         assert_eq!(session.timeout(), Some(Duration::ZERO), "overdue");
         session.set_fallback_deadline(None, now);
         assert_eq!(session.timeout(), None, "disarmed");
+        drop(event_loop);
+    }
+
+    #[test]
+    fn the_cursor_animation_due_bounds_the_sleep_and_requests_a_frame() {
+        let (core, _input, _shell, _outputs) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<WaylandState> = Display::new().unwrap();
+        let mut state = WaylandState::new(&display.handle(), core);
+        let mut event_loop: EventLoop<()> = EventLoop::try_new().unwrap();
+        let options = SessionOptions {
+            socket_name: Some(format!("infynitae-anim-test-{}", std::process::id())),
+            refresh_mhz: 60_000,
+            ..SessionOptions::default()
+        };
+        let mut session = Session::new(display, &event_loop.handle(), &options).unwrap();
+        event_loop.dispatch(Some(Duration::ZERO), &mut ()).unwrap();
+        session.dispatch(&mut state);
+        assert!(session.frame_due());
+        assert_eq!(session.timeout(), None, "idle");
+
+        // Arm cursor animation in 100ms
+        session.set_cursor_animation_due(Some(100 * MS));
+        let t = session.timeout().expect("armed cursor anim");
+        assert!(t <= 100 * MS && t > 50 * MS, "{t:?}");
+
+        // Disarm
+        session.set_cursor_animation_due(None);
+        assert_eq!(session.timeout(), None, "disarmed cursor anim");
+
+        // Overdue cursor animation requests a frame
+        session.set_cursor_animation_due(Some(Duration::ZERO));
+        assert_eq!(session.timeout(), Some(Duration::ZERO));
+        event_loop.dispatch(session.timeout(), &mut ()).unwrap();
+        session.dispatch(&mut state);
+        std::thread::sleep(Duration::from_millis(20));
+        assert!(session.frame_due(), "overdue animation triggers frame_due");
+
         drop(event_loop);
     }
 
