@@ -221,14 +221,9 @@ pub fn run_nested_with(
         winit::init_from_attributes::<GlesRenderer>(window_attributes)?;
 
     // Zero-blur scaling: use Nearest-neighbor filtering on upscaled surfaces by default
-    let use_nearest = match options.scaling_filter.as_deref() {
-        Some("linear") => false,
-        _ => true,
-    };
-    if use_nearest {
-        if let Err(e) = backend.renderer().upscale_filter(TextureFilter::Nearest) {
-            eprintln!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
-        }
+    let use_nearest = !matches!(options.scaling_filter.as_deref(), Some("linear"));
+    if use_nearest && let Err(e) = backend.renderer().upscale_filter(TextureFilter::Nearest) {
+        eprintln!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
     }
 
     let output_key = OutputKey {
@@ -312,21 +307,19 @@ pub fn run_nested_with(
         // Hyprland-style Live Config Watcher: auto-reloads and applies changes instantly in real time
         if data.last_config_check.elapsed() >= Duration::from_millis(250) {
             data.last_config_check = std::time::Instant::now();
-            if let Some(path) = &data.config_path {
-                if let Ok(meta) = std::fs::metadata(path) {
-                    if let Ok(mtime) = meta.modified() {
-                        if data.last_config_mtime.is_some() && data.last_config_mtime != Some(mtime)
-                        {
-                            data.last_config_mtime = Some(mtime);
-                            println!(
-                                "[infynitae] Config change detected (~/.config/infynitae/config). Live reloading..."
-                            );
-                            data.state.reload_config();
-                            data.session.request_frame();
-                        } else if data.last_config_mtime.is_none() {
-                            data.last_config_mtime = Some(mtime);
-                        }
-                    }
+            if let Some(path) = &data.config_path
+                && let Ok(meta) = std::fs::metadata(path)
+                && let Ok(mtime) = meta.modified()
+            {
+                if data.last_config_mtime.is_some() && data.last_config_mtime != Some(mtime) {
+                    data.last_config_mtime = Some(mtime);
+                    println!(
+                        "[infynitae] Config change detected (~/.config/infynitae/config). Live reloading..."
+                    );
+                    data.state.reload_config();
+                    data.session.request_frame();
+                } else if data.last_config_mtime.is_none() {
+                    data.last_config_mtime = Some(mtime);
                 }
             }
         }
