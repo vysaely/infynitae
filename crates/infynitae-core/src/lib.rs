@@ -333,6 +333,12 @@ pub struct Core {
     constraint: Option<pointer::ConstraintState>,
     /// OBJ-21: authoritative pending pointer constraint.
     pending_constraint: Option<pointer::ConstraintState>,
+    /// Super is held: pointer constraints (a game's locked or confined cursor) are released and
+    /// stay pending until it is let go (owner, 2026-10-25: "feel free in my desktop").
+    constraints_suspended: bool,
+    /// Whether a held Super suspends constraints (`set_free_cursor_on_super`; off in Core: the
+    /// specified behaviour keeps a lock through a Super+middle pan).
+    free_cursor_on_super: bool,
     /// OBJ-09: read only by `output_connected`.
     persisted: navigation::PersistedCameras,
     /// Authoritative scale policy configuration (PROV-1..3, PROV-5).
@@ -451,6 +457,8 @@ impl Core {
                 focus: input::focus::FocusModel::default(),
                 constraint: None,
                 pending_constraint: None,
+                constraints_suspended: false,
+                free_cursor_on_super: false,
                 persisted,
                 scale_config: scale::ScalePolicyConfig::default(),
                 scales: scale::ScaleStates::default(),
@@ -852,6 +860,12 @@ impl Core {
         interaction_active: bool,
     ) -> Option<input::keys::KeyAction> {
         input::keys::resolve_key_binding_with(&self.key_bindings, key, mods, interaction_active)
+    }
+
+    /// SUPER_FREES_CURSOR: holding Super releases a game's locked or confined pointer until it
+    /// is let go.
+    pub fn set_free_cursor_on_super(&mut self, enabled: bool) {
+        self.free_cursor_on_super = enabled;
     }
 
     /// The user's key bindings from the config (live reload), checked before the built-in ones.

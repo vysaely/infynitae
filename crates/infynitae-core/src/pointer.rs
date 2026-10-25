@@ -262,6 +262,107 @@ mod tests {
         assert_eq!(c.region, None);
     }
 
+    /// SUPER_FREES_CURSOR (owner, 2026-10-25): holding Super releases a lock, letting it go
+    /// takes it back; with the setting off (Core's default, the specified behaviour), Super
+    /// leaves the lock alone.
+    #[test]
+    fn super_frees_the_cursor_and_letting_go_rearms_the_lock() {
+        use crate::geom::{LocalRect, LocalSize};
+        use crate::input::bindings::Modifiers;
+        use crate::navigation::PersistedCameras;
+        use crate::output::Transform;
+        use crate::protocol::Effect;
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceRole, SurfaceTree};
+        use crate::{Core, PhysicalEvent};
+
+        for free in [true, false] {
+            let desc = OutputDescriptor {
+                key: crate::output::tests::key("O1"),
+                mode: (800, 600),
+                transform: Transform::Normal,
+                scale_120: 120,
+                refresh_mhz: 60_000,
+            };
+            let (mut core, mut port, _, mut token) = Core::new(PersistedCameras::default());
+            let (output_id, _) = core.output_connected(&mut token, desc).unwrap();
+            core.set_free_cursor_on_super(free);
+            let elem = core.toplevel_created();
+            let skey = crate::snapshot::tests::key(1);
+            let tree = SurfaceTree {
+                geometry: LocalRect {
+                    loc: LocalPoint { x: 0, y: 0 },
+                    size: LocalSize { w: 400, h: 300 },
+                },
+                surfaces: vec![SnapshotSurface {
+                    key: skey,
+                    role: SurfaceRole::Root,
+                    size: LocalSize { w: 400, h: 300 },
+                    input: InputRegion::Infinite,
+                    mapped: true,
+                    frame_requested: false,
+                }],
+            };
+            let mut unmapped = tree.clone();
+            unmapped.surfaces[0].mapped = false;
+            unmapped.surfaces[0].size = LocalSize::default();
+            let _ = core.toplevel_committed(elem, unmapped).unwrap();
+            let _ = core.toplevel_committed(elem, tree).unwrap();
+            core.render_list(output_id).unwrap();
+            let _ = core.set_focus(&mut port, Some(elem)).unwrap();
+            let _ = core.request_pointer_constraint(
+                skey,
+                ConstraintKind::Lock,
+                ConstraintLifetime::Persistent,
+                None,
+                None,
+            );
+            assert!(core.constraint().is_some(), "precondition: locked");
+
+            let key = |core: &mut Core, port: &mut crate::InputPort, pressed: bool, t: u64| {
+                let modifiers = Modifiers {
+                    logo: pressed,
+                    ..Modifiers::default()
+                };
+                core.physical_input_vec(
+                    port,
+                    PhysicalEvent::KeyboardKey {
+                        key: crate::input::keys::KEY_LEFTMETA,
+                        pressed,
+                        modifiers,
+                        mods_changed: true,
+                        time_us: t,
+                    },
+                )
+                .unwrap()
+            };
+            let fx = key(&mut core, &mut port, true, 1000);
+            if free {
+                assert!(
+                    fx.contains(&Effect::ConstraintDeactivate {
+                        surface: skey,
+                        kind: ConstraintKind::Lock
+                    }),
+                    "Super releases the lock: {fx:?}"
+                );
+                assert_eq!(core.constraint(), None);
+                assert!(core.pending_constraint().is_some(), "kept to come back");
+            } else {
+                assert!(core.constraint().is_some(), "setting off: Super leaves the lock");
+            }
+            let fx = key(&mut core, &mut port, false, 2000);
+            if free {
+                assert!(
+                    fx.contains(&Effect::ConstraintActivate {
+                        surface: skey,
+                        kind: ConstraintKind::Lock
+                    }),
+                    "letting go of Super takes the lock back: {fx:?}"
+                );
+            }
+            assert!(core.constraint().is_some());
+        }
+    }
+
     /// M13 activation preconditions, lock motion isolation, and batch-end deactivation.
     #[test]
     fn m13_activation_and_reconciliation_policy() {

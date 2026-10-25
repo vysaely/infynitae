@@ -533,6 +533,7 @@ impl WaylandState {
             if let Ok(content) = std::fs::read_to_string(config_path) {
                 let mut new_wallpaper: Option<String> = None;
                 let mut new_wallpaper_mode: Option<String> = None;
+                let mut free_cursor_on_super = true;
                 let mut bind_lines: Vec<(String, String)> = Vec::new();
                 let mut exec_lines: Vec<(String, String)> = Vec::new();
                 for line in content.lines() {
@@ -654,6 +655,9 @@ impl WaylandState {
                             "DIRECT_SCANOUT" => {
                                 self.direct_scanout = Some(matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on"));
                             }
+                            "SUPER_FREES_CURSOR" => {
+                                free_cursor_on_super = !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                            }
                             "OVERLAY_PLANES" => {
                                 self.overlay_planes = matches!(val.to_lowercase().as_str(), "1" | "true" | "yes" | "on");
                             }
@@ -718,6 +722,7 @@ impl WaylandState {
                     eprintln!("[infynitae] Config key binding ignored: {p}");
                 }
                 self.core.set_key_bindings(bindings);
+                self.core.set_free_cursor_on_super(free_cursor_on_super);
                 self.exec_commands = commands;
                 if new_wallpaper != self.wallpaper || new_wallpaper_mode != self.wallpaper_mode {
                     self.wallpaper = new_wallpaper;

@@ -16,6 +16,7 @@ MOUSE_ACCEL_PROFILE="flat"        # flat (1:1, best for games) | adaptive
 MOUSE_ACCEL_SPEED="0.0"           # -1.0 … 1.0
 TOUCHPAD_TAP="true"               # tap to click
 TOUCHPAD_NATURAL_SCROLL="false"   # content follows the fingers
+SUPER_FREES_CURSOR="true"         # holding Super frees a cursor a game captured (Dota…)
 
 # ── Windows & canvas ──────────────────────────────────────────────────── [save] ──
 FOCUS_FOLLOWS_MOUSE="sloppy"      # sloppy: hover focuses, kept over empty canvas

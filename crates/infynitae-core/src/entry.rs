@@ -153,6 +153,7 @@ impl Core {
             } => {
                 self.input.clock.accepted(time_us);
                 self.input.modifiers = modifiers;
+                out.extend(self.suspend_constraints(modifiers.logo && self.free_cursor_on_super));
                 if pressed {
                     // a press bound to fit or restore mutates a camera: its proof is minted here
                     let navigation = matches!(
@@ -824,31 +825,45 @@ impl Core {
     /// Under smart cluster tiling, entering fullscreen pushes any overlapping windows away into
     /// adjacent cluster slots (12px gap) so no window is ever occluded or covered. Exiting fullscreen
     /// restores original saved floating geometry.
+    /// `id` leaves fullscreen: back to its size before it (when known), at its position before
+    /// it, or at `anchor` (a Super+drag out of fullscreen).
+    fn leave_fullscreen(
+        &mut self,
+        id: crate::stage::ElementId,
+        anchor: Option<crate::geom::CanvasPoint>,
+    ) -> Vec<Effect> {
+        let mut fx = Vec::new();
+        let request = crate::protocol::ToplevelRequest::UnsetFullscreen;
+        if let Ok((_, t_fx)) = self.toplevel_request(id, request) {
+            fx.extend(t_fx);
+        }
+        let saved = self.stage.saved_floating(id);
+        if let Some((_, orig_size)) = saved {
+            let _ = self.stage.set_saved_floating(id, None);
+            fx.push(Effect::ToplevelConfigureSize {
+                element: id,
+                size: orig_size,
+            });
+        }
+        if let Some(a) = anchor.or(saved.map(|(a, _)| a)) {
+            let _ = self.place_by_shell(id, a, &mut fx);
+        }
+        if let Some(o) = self.pointer_output() {
+            self.invalidate_frame(o);
+        }
+        fx.extend(self.visibility_pass());
+        fx
+    }
+
     fn toggle_fullscreen(&mut self) -> Vec<Effect> {
         let Some(id) = self.focus.target() else {
             return Vec::new();
         };
-        let mut fx = Vec::new();
         let was_fullscreen = self.fullscreen_of(id).is_some();
         if was_fullscreen {
-            let request = crate::protocol::ToplevelRequest::UnsetFullscreen;
-            if let Ok((_, t_fx)) = self.toplevel_request(id, request) {
-                fx.extend(t_fx);
-            }
-            if let Some((orig_anchor, orig_size)) = self.stage.saved_floating(id) {
-                let _ = self.stage.set_saved_floating(id, None);
-                let _ = self.place_by_shell(id, orig_anchor, &mut fx);
-                fx.push(Effect::ToplevelConfigureSize {
-                    element: id,
-                    size: orig_size,
-                });
-            }
-            if let Some(o) = self.pointer_output() {
-                self.invalidate_frame(o);
-            }
-            fx.extend(self.visibility_pass());
-            fx
+            self.leave_fullscreen(id, None)
         } else {
+            let mut fx = Vec::new();
             let output = self.pointer_output().or_else(|| self.outputs.first().map(|o| o.id));
             let orig_anchor = self.stage.anchor(id);
             let orig_size = self.stage.tree(id).map(|t| t.geometry.size);
@@ -1446,14 +1461,16 @@ impl Core {
             // INV-INPUT-2: never while the client owns a button
             && !self.input.ownership.client_owns_any();
         // Super+left / Super+right on a window: move or resize it (owner request 2026-10-22, "like
-        // Hyprland"); not on a panel above it, not a fullscreen window, never while the client
-        // owns a button (INV-INPUT-2)
+        // Hyprland"); not on a panel above it, never while the client owns a button
+        // (INV-INPUT-2). A fullscreen window can only be moved: Super+left takes it out of
+        // fullscreen and drags it (owner, 2026-10-25).
         if let Some(drag) = bindings::window_drag_binding(button, mods)
             && !self.input.ownership.client_owns_any()
             && self.layer_hit(output, p, true).is_none()
             && let Some(hit) =
                 self.hit_test(output, crate::geom::OutputLogicalPoint { x: p.0, y: p.1 })
-            && self.fullscreen_of(hit.element).is_none()
+            && (self.fullscreen_of(hit.element).is_none()
+                || matches!(drag, bindings::WindowDrag::Move))
             && let (Some(anchor), Some(size)) = (
                 self.stage.anchor(hit.element),
                 self.stage.tree(hit.element).map(|t| t.geometry.size),
@@ -1467,6 +1484,31 @@ impl Core {
             let press = crate::geom::CanvasPos {
                 x: hit.origin.x * crate::geom::Q16_ONE + hit.local.x,
                 y: hit.origin.y * crate::geom::Q16_ONE + hit.local.y,
+            };
+            // out of fullscreen: the same relative point of the window, at its size before
+            // fullscreen (half the screen when unknown), stays under the pointer
+            let (anchor, size) = if self.fullscreen_of(element).is_some() {
+                let rel = |q: i64, a: i64, w: i32| {
+                    let local = q as f64 / crate::geom::Q16_ONE as f64 - a as f64;
+                    (local / f64::from(w.max(1))).clamp(0.0, 1.0)
+                };
+                let (rx, ry) = (rel(press.x, anchor.x, size.w), rel(press.y, anchor.y, size.h));
+                let windowed = self
+                    .stage
+                    .saved_floating(element)
+                    .map(|(_, s)| s)
+                    .unwrap_or(crate::geom::LocalSize {
+                        w: size.w / 2,
+                        h: size.h / 2,
+                    });
+                let at = crate::geom::CanvasPoint {
+                    x: (press.x / crate::geom::Q16_ONE) - (rx * f64::from(windowed.w)) as i64,
+                    y: (press.y / crate::geom::Q16_ONE) - (ry * f64::from(windowed.h)) as i64,
+                };
+                out.extend(self.leave_fullscreen(element, Some(at)));
+                (at, windowed)
+            } else {
+                (anchor, size)
             };
             let is_cluster = matches!(
                 drag,

@@ -1688,6 +1688,16 @@ impl Core {
         self.placement
     }
 
+    /// Super held or let go (every key event): a held Super releases the pointer constraint,
+    /// letting it go re-arms it (at the batch-end reconciliation, under the usual conditions).
+    pub(crate) fn suspend_constraints(&mut self, suspended: bool) -> Vec<Effect> {
+        if self.constraints_suspended == suspended {
+            return Vec::new();
+        }
+        self.constraints_suspended = suspended;
+        self.reconcile_constraints()
+    }
+
     /// Requests a pointer constraint from client protocol (M13, OBJ-21).
     /// If preconditions are met, activates immediately; otherwise recorded as pending.
     pub fn request_pointer_constraint(
@@ -1795,7 +1805,10 @@ impl Core {
             let still_valid = self.is_constraint_still_valid(&c);
             if !still_valid {
                 self.constraint = None;
-                if c.lifetime == crate::pointer::ConstraintLifetime::Oneshot {
+                if self.constraints_suspended {
+                    // released for Super only: it comes back when Super is let go
+                    self.pending_constraint = Some(c);
+                } else if c.lifetime == crate::pointer::ConstraintLifetime::Oneshot {
                     self.pending_constraint = None;
                 }
 
@@ -1862,6 +1875,10 @@ impl Core {
     /// M13 activation precondition guard:
     /// [ActiveElementFocus = element(S) ∧ pointer focus S ∧ inside region ∧ no acquisition]
     fn can_activate_constraint(&mut self, c: &crate::pointer::ConstraintState) -> bool {
+        // 0. not while Super is held (the user takes the cursor back)
+        if self.constraints_suspended {
+            return false;
+        }
         // 1. no compositor pointer interaction or client-owned grab being acquired
         if self.input.interaction.active() || self.input.ownership.client_owns_any() {
             return false;
@@ -1892,6 +1909,9 @@ impl Core {
 
     /// Checks if an active constraint remains valid at batch end.
     fn is_constraint_still_valid(&mut self, c: &crate::pointer::ConstraintState) -> bool {
+        if self.constraints_suspended {
+            return false;
+        }
         let Some(elem) = self.stage.element_containing_surface(c.surface) else {
             return false;
         };
