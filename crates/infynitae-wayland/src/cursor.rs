@@ -41,8 +41,6 @@ impl Default for Arrow {
 /// An image decoded from an Xcursor file, cached as a Smithay memory render buffer.
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedImage {
-    #[allow(dead_code)]
-    pub(crate) id: Id,
     pub(crate) buffer: MemoryRenderBuffer,
     pub(crate) width: i32,
     pub(crate) height: i32,
@@ -61,14 +59,6 @@ pub(crate) struct CursorFrame {
 #[derive(Debug, Clone)]
 pub(crate) struct LoadedCursor {
     pub(crate) frames: Vec<CursorFrame>,
-}
-
-impl std::ops::Deref for LoadedCursor {
-    type Target = LoadedImage;
-
-    fn deref(&self) -> &Self::Target {
-        &self.frames[0].image
-    }
 }
 
 impl LoadedCursor {
@@ -457,7 +447,6 @@ impl CursorThemeManager {
                 let delay_ms = if img.delay == 0 { 50 } else { img.delay };
                 CursorFrame {
                     image: LoadedImage {
-                        id: Id::new(),
                         buffer: MemoryRenderBuffer::from_slice(
                             &img.pixels_rgba,
                             Fourcc::Argb8888,
@@ -603,8 +592,18 @@ impl WaylandState {
     }
 
     /// Time until the next animation frame change for the current named cursor, or `None`
-    /// when the current cursor is not animated, hidden, or a client surface.
+    /// when the current cursor is not animated, hidden, a client surface, or not drawn (locked,
+    /// or the pointer on no screen).
     pub fn cursor_animation_due(&self, now: std::time::Duration) -> Option<std::time::Duration> {
+        // nothing draws it: locked, or the pointer on no screen
+        if self.is_locked()
+            || !matches!(
+                self.core.pointer(),
+                infynitae_core::pointer::PointerState::Located { .. }
+            )
+        {
+            return None;
+        }
         match &self.cursor {
             CursorImageStatus::Hidden => return None,
             CursorImageStatus::Named(icon) if icon.name() == "none" => return None,
@@ -1051,34 +1050,6 @@ mod tests {
             .expect("frame at 500");
         assert_eq!(img0.xhot, 2);
         assert_eq!(img500.xhot, 2);
-    }
-
-    #[test]
-    fn stable_element_id_across_unmoved_frames_and_change_across_frames() {
-        let pix0 = vec![0x11; 24 * 24 * 4];
-        let pix1 = vec![0x22; 24 * 24 * 4];
-        let data = make_xcursor_file(&[
-            (24, 24, 24, (1, 1), 100u32, pix0.as_slice()),
-            (24, 24, 24, (2, 2), 100u32, pix1.as_slice()),
-        ]);
-        let parsed = xcursor::parser::parse_xcursor(&data).expect("valid xcursor");
-        let cur = CursorThemeManager::load_from_parsed_images(&parsed, 24).expect("loaded");
-
-        use std::time::Duration;
-        let img_at_0 = cur.frame_at(Duration::from_millis(0)).unwrap();
-        let img_at_50 = cur.frame_at(Duration::from_millis(50)).unwrap();
-        let img_at_100 = cur.frame_at(Duration::from_millis(100)).unwrap();
-
-        // Frame at 0ms and 50ms are both frame 0: must have the same stable element id
-        let id0 = img_at_0.id.clone();
-        let id50 = img_at_50.id.clone();
-        let id100 = img_at_100.id.clone();
-
-        assert_eq!(id0, id50, "same frame has identical stable element id");
-        assert_ne!(
-            id0, id100,
-            "different frame has different element id for damage"
-        );
     }
 
     #[test]
