@@ -194,7 +194,11 @@ def parse_desktop_file(path):
 
 def clean_exec(exec_str):
     """Removes field codes %u, %U, %f, %F, %i, %c, %k and returns command argument list."""
-    tokens = shlex.split(exec_str)
+    try:
+        tokens = shlex.split(exec_str)
+    except ValueError as e:
+        log_restore(f"Invalid Exec line '{exec_str}': {e}")
+        return []
     codes = {"%u", "%U", "%f", "%F", "%i", "%c", "%k"}
     res = []
     for t in tokens:
@@ -489,6 +493,18 @@ def cmd_selftest():
 
         # 1c. App with no desktop file
         assert resolve_app_command("nonexistent-app", apps_dirs=[apps_dir]) is None
+
+        # 1d. App with unbalanced quote in Exec line
+        bad_desktop = os.path.join(apps_dir, "bad-quote.desktop")
+        with open(bad_desktop, "w") as f:
+            f.write(
+                "[Desktop Entry]\n"
+                "Type=Application\n"
+                "Name=Bad Quote App\n"
+                "Exec=bad-app \"unclosed quote %u\n"
+            )
+        assert resolve_app_command("bad-quote", apps_dirs=[apps_dir]) is None
+        assert clean_exec('bad-app "unclosed quote') == []
 
         # 2. Test snapshot saving (mapped windows with app_id and camera centres)
         fake_snapshot_payload = {
