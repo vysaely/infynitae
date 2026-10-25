@@ -11,7 +11,7 @@
 //!   F-4 exactly one keyboard transition into the target (no transient focus on another surface)
 //!   F-5 every grabbing popup received popup_done; no panic (W-SM-7 / Smithay asserts)
 //!   F-6 no stuck key: client keys == physically held client-owned keys
-//! Output: docs/foundation/evidence/phase-d/xpopup-focus-output.txt
+//! Output: docs/archive/evidence/phase-d/xpopup-focus-output.txt
 use b8_harness::{keys::KeyIntake, lockstep::Lockstep, server::*};
 use smithay::{desktop::PopupUngrabStrategy, reexports::wayland_server::protocol::wl_surface::WlSurface, utils::SERIAL_COUNTER};
 

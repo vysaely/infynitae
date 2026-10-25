@@ -1,5 +1,5 @@
 //! X-9: presentation feedback for commits made while unobserved (B9.4), observed at the client.
-//! Output: docs/foundation/evidence/phase-b/x9-presentation-output.txt
+//! Output: docs/archive/evidence/phase-b/x9-presentation-output.txt
 use b8_harness::{lockstep::Lockstep, server::*};
 
 fn main() {

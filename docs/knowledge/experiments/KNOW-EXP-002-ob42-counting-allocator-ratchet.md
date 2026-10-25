@@ -48,5 +48,5 @@ cargo test -p infynitae-backend-headless --test t0_hot_path_allocations   # from
 
 ## Links & Citations
 - Source Test: `crates/infynitae-core/tests/t0_hot_path_allocations.rs` (*2026-10-15:* `crates/infynitae-backend-headless/tests/t0_hot_path_allocations.rs` on the INC-6 final-resolution branch)
-- Governance Evidence: `docs/foundation/evidence/phase-f/INC-6/PERFORMANCE_P1_REPAIR.md`
+- Governance Evidence: `docs/archive/evidence/phase-f/INC-6/PERFORMANCE_P1_REPAIR.md`
 - Related Pitfall: [KNOW-PITFALL-005: Quadratic Scale-State Evaluation](../pitfalls/KNOW-PITFALL-005-quadratic-scale-state-evaluation.md)

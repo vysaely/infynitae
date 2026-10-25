@@ -5,9 +5,9 @@ You are continuing **Infynitae Native**, a Rust/Smithay spatial Wayland composit
 ## Current state
 
 > **Updated 2026-10-16.** The INC-0…INC-3 history that this section used to describe is kept in
-> `git log` and `docs/foundation/CHECKPOINT.md`; it is no longer the current state.
+> `git log` and `docs/archive/CHECKPOINT.md`; it is no longer the current state.
 
-- `docs/foundation/CHECKPOINT.md` is the source of the current gate; `git log` gives HEAD.
+- `docs/archive/CHECKPOINT.md` is the source of the current gate; `git log` gives HEAD.
 - **Ratified:** INC-0 … INC-5, INC-7 (without INC-6), the Core visibility remediation.
   Published `main` = `origin/main`.
 - **INC-6 (scale policy): experimental, exit NOT authorized.** Newest line:
@@ -16,7 +16,7 @@ You are continuing **Infynitae Native**, a Rust/Smithay spatial Wayland composit
   ADOPTION"). Every other `*inc-6*` branch is an ancestor or a superseded rehearsal of it.
 - **INC-8 (off-screen frame policy): experimental, not ratified** on
   `experimental/inc-8-offscreen-frames` (from `main`; independent of INC-6). Record:
-  `docs/foundation/evidence/phase-f/INC-8/README.md`.
+  `docs/archive/evidence/phase-f/INC-8/README.md`.
 - **Runtime:** experimental pending INC-13; headless and nested (winit) prototypes only. Not a
   usable desktop yet.
 - **Open obligations that block exits:** OB-13, OB-42, OB-44 (INC-6); OB-16 real-time harness
@@ -46,18 +46,18 @@ When resuming on another OS or new installation (e.g. Arch Linux / CachyOS):
    experiments/c1-authority-spike/verify.sh
    ```
 4. **Launch agent (Claude / AGY)**: navigate to repository root and start the assistant.
-5. **Continue from the recorded project gate**: check `docs/foundation/CHECKPOINT.md` and the current state above.
+5. **Continue from the recorded project gate**: check `docs/archive/CHECKPOINT.md` and the current state above.
 
 ## Implementation gate
 
 Each increment (FOUNDATION_IMPLEMENTATION_PLAN.md) is implemented on its own branch, gated
-(`tools/verify-development-environment`), recorded under `docs/foundation/evidence/phase-f/`,
+(`tools/verify-development-environment`), recorded under `docs/archive/evidence/phase-f/`,
 independently reviewed and ratified by the owner before it reaches `main`. Architecture changes
 go through a new amendment layer; never edit sealed text.
 
 ## Read, in this order
 
-1. `docs/foundation/CHECKPOINT.md`
+1. `docs/archive/CHECKPOINT.md`
 2. `docs/development/PROJECT_HANDOFF.md` (navigation aid only)
 3. `docs/foundation/FOUNDATION_IMPLEMENTATION_PLAN.md` — INC-0, INC-1, gates
 4. `docs/foundation/FOUNDATION_TEST_PLAN.md` — OB-19, OB-36
@@ -83,7 +83,7 @@ cargo fmt --all -- --check && cargo clippy --workspace --all-targets --locked --
 - **Authority:** cameras change only through `InputPort`, `ShellPort` or `OutputLifecycleToken` entry points, each minting a fresh `Authorized` proof (INV-CAMERA-1, INV-OUTPUT-2). Protocol code never moves, creates or binds cameras.
 - **Canonical sources:** the living regions (`<!-- living:… -->`) of `docs/foundation/FOUNDATION_*.md` are normative. Each namespace has exactly one home (§P0).
 - **Do not invent missing architecture.** If something needed is not specified, stop and ask; architecture changes go through change control (a new amendment layer with provenance), never silent edits.
-- **Historical evidence is not current authority:** `docs/foundation/audit/**`, `docs/foundation/evidence/**` and `experiments/**` record what was tested and decided; do not reinterpret them as live rules.
+- **Historical evidence is not current authority:** `docs/archive/audit/**`, `docs/archive/evidence/**` and `experiments/**` record what was tested and decided; do not reinterpret them as live rules.
 - **Do not casually modify architecture documents.** Never edit sealed history or audit records.
 - **Smithay** is pinned exactly at `=0.7.0`, vendored in `vendor/smithay-0.7.0` with patch P1 (adopted for INC-5 under D-B12-PIN, OB-11 Option B).
 - **Live system:** do not start the compositor on the live session, touch the user's desktop session (KDE Plasma / KWin on 2026-10-16), run test clients under `dbus-run-session`, access DRM/KMS, switch VTs, install packages or change the toolchain unless a later, explicitly authorized test requires it. Default execution class is HEADLESS.

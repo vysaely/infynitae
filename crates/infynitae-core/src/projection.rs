@@ -463,7 +463,7 @@ pub(crate) mod tests {
     /// (case, camera centre Q16, scale_120, view size, output-logical p, expected c_eff Q16,
     /// expected q Q16). The expected values are hand-derived from the canonical formula text with
     /// exact rational arithmetic (round-half-even Q16, round-half-away C), outside this crate; see
-    /// docs/foundation/evidence/phase-f/INC-1/corrective/unproject_reference.py (INC1-F06).
+    /// docs/archive/evidence/phase-f/INC-1/corrective/unproject_reference.py (INC1-F06).
     #[allow(clippy::type_complexity)]
     const UNPROJECT_REFERENCE: &[(
         &str,

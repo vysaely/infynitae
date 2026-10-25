@@ -253,7 +253,7 @@ def main():
                 phase = next((l.strip() for l in f if l.startswith("CURRENT_PHASE:")), "unknown")
         except OSError:
             phase = "CHECKPOINT.md unreadable"
-        print(f"Current gate (docs/foundation/CHECKPOINT.md): {phase}")
+        print(f"Current gate (docs/archive/CHECKPOINT.md): {phase}")
         print("=" * 70)
         return 0
     else:

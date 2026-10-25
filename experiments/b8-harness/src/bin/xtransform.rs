@@ -18,7 +18,7 @@
 //!                 E1R      = physical (untransformed) mode
 //!   hit pixel     SEALED   = F-HIT-1 `u = transform_O(p·scale_O)` (both readings: t and t⁻¹)
 //!                 E1R      = `u = p·scale_O` (view/element space, the space of F-LATTICE-1 rects)
-//! Output: docs/foundation/evidence/E1R/xtransform-output.txt
+//! Output: docs/archive/evidence/E1R/xtransform-output.txt
 use std::{cell::RefCell, rc::Rc};
 
 use smithay::{

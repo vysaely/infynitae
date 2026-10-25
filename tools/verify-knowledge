@@ -10,19 +10,17 @@ Enforces:
 4. Format consistency and required content sections.
 5. Resolution of internal relative markdown links.
 6. Explicit supersession links for SUPERSEDED records.
-7. Zero modification of sealed foundation governance files by this branch
-   (diffed against the merge base with main, so main advancing is not a failure).
-8. No record present at that merge base has been removed (no silent loss).
+7. (retired) docs/foundation used to be sealed against edits; it is edited like any other doc
+   now, and tools/check-foundation-docs keeps it consistent.
+8. No record present at the merge base with main has been removed (no silent loss).
 9. Every record is listed in INDEX.md (discoverability).
 
 Usage:
   tools/verify-knowledge                 all checks (local use, on a branch or main)
-  tools/verify-knowledge --content-only  checks 1-6 and 9 only; skips the git checks 7-8,
-                                         which compare with the merge base of `main`. CI runs
-                                         this: its checkout is shallow and has no `main`, and
-                                         governance branches change docs/foundation legitimately
-                                         (tools/check-foundation-docs guards those). A deleted
-                                         record is still caught by INDEX.md's broken link.
+  tools/verify-knowledge --content-only  checks 1-6 and 9 only; skips the git check 8, which
+                                         compares with the merge base of `main`. CI runs this: its
+                                         checkout is shallow and has no `main`. A deleted record is
+                                         still caught by INDEX.md's broken link.
   tools/verify-knowledge --self-test     seeds one defect at a time into a temporary copy of
                                          docs/knowledge and requires each to be detected.
 """
@@ -137,25 +135,6 @@ def merge_base():
     return res.stdout.strip() if res.returncode == 0 and res.stdout.strip() else None
 
 
-def check_sealed_files(base):
-    """Verify that this branch (committed or not) modifies no file under docs/foundation/."""
-    if base is None:
-        return ["Could not find the merge base with main; sealed-file check not run"]
-    try:
-        diff_res = subprocess.run(
-            ["git", "diff", "--name-only", base, "--", "docs/foundation"],
-            cwd=REPO_ROOT,
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if diff_res.returncode == 0 and diff_res.stdout.strip():
-            return [f"Sealed foundation file modified: {f}" for f in diff_res.stdout.splitlines()]
-    except Exception as e:
-        return [f"Could not execute git diff: {e}"]
-    return []
-
-
 def main(content_only=False):
     errors = []
     warnings = []
@@ -165,11 +144,7 @@ def main(content_only=False):
         print(f"Error: Knowledge directory {KNOWLEDGE_DIR} does not exist.")
         sys.exit(1)
 
-    # 1. Sealed files check
     base = None if content_only else merge_base()
-    foundation_errors = [] if content_only else check_sealed_files(base)
-    if foundation_errors:
-        errors.extend(foundation_errors)
 
     record_files = []
     for root, _, files in os.walk(KNOWLEDGE_DIR):
@@ -301,10 +276,6 @@ def main(content_only=False):
     else:
         print(f"All {len(record_files)} knowledge records validated successfully.")
         print(f"Unique IDs: {len(seen_ids)}")
-        if content_only:
-            print("Sealed governance integrity: not checked (--content-only)")
-        else:
-            print(f"Sealed governance integrity: UNTOUCHED (against merge base {base[:7] if base else '?'})")
         print("RESULT: PASS")
         sys.exit(0)
 

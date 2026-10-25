@@ -16,7 +16,7 @@
 //!   - experiments/b8-harness            : smithay =0.7.0 as published (sealed dependency)
 //!   - experiments/e1r-smithay-p1        : smithay =0.7.0 + one-line `[patch]` (leave() deactivates only
 //!                                         an ACTIVE constraint), the OB-11 candidate
-//! Output: docs/foundation/evidence/E1R/xlock-batch-{stock,p1}-output.txt
+//! Output: docs/archive/evidence/E1R/xlock-batch-{stock,p1}-output.txt
 use b8_harness::{
     input::{Intake, PanBinding, PanFocusMode},
     lockstep::Lockstep,

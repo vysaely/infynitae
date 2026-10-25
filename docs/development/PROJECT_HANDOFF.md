@@ -2,7 +2,7 @@
 
 **This is a navigation aid, not an authority.** Every statement here summarises a canonical document in `docs/foundation/`. Where this file and a canonical document disagree, the canonical document wins, and this file should be corrected. Do not cite this file as normative.
 
-State: Phase E **passed**; Phase F under way. INC-0, INC-1 and INC-2 ratified; INC-3 implemented and pending independent review; INC-4 has not begun. See `docs/foundation/CHECKPOINT.md`.
+State: Phase E **passed**; Phase F under way. INC-0, INC-1 and INC-2 ratified; INC-3 implemented and pending independent review; INC-4 has not begun. See `docs/archive/CHECKPOINT.md`.
 
 ---
 
@@ -128,14 +128,14 @@ Only the `<!-- living:… -->` regions are current; text outside them is histori
 
 ## 31. Historical evidence (not current authority)
 
-- `docs/foundation/audit/` — D1–D5, 1R, 2R, `phase-e/` (failed review), `E1R/`, `phase-e-e1r-review/`, `phase-e-final/`
-- `docs/foundation/evidence/` — raw outputs per phase
+- `docs/archive/audit/` — D1–D5, 1R, 2R, `phase-e/` (failed review), `E1R/`, `phase-e-e1r-review/`, `phase-e-final/`
+- `docs/archive/evidence/` — raw outputs per phase
 - `experiments/` — harnesses, spikes and models (never product code)
 
 ## 32. Before touching code, read
 
 1. `docs/development/START_HERE_FOR_AGENT.md`
-2. `docs/foundation/CHECKPOINT.md`
+2. `docs/archive/CHECKPOINT.md`
 3. FOUNDATION_IMPLEMENTATION_PLAN.md (INC-0, INC-1, gates)
 4. FOUNDATION_TEST_PLAN.md (OB-19, OB-36)
 5. FOUNDATION_INVARIANTS.md and FOUNDATION_ARCHITECTURE §C1, §P0, §F

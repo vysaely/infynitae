@@ -4,7 +4,7 @@
 **Purpose:** Permanent, evidence-driven engineering memory preserving architectural discoveries, experiments, benchmark results, external research, and negative knowledge across development sessions.  
 **Authority:** Non-authoritative engineering memory. Sealed governance lives exclusively in `docs/foundation/` (`CHECKPOINT.md`, `FOUNDATION_INVARIANTS.md`, `FOUNDATION_ARCHITECTURE.md`).
 
-**State of the code these records describe:** main = origin/main = `f323c2d`. INC-0…INC-5 and INC-7 are RATIFIED; INC-6 is experimental and unratified; INC-8 and INC-14 have not begun (`docs/foundation/CHECKPOINT.md`). Records name the branch each fact holds on; a commit not on main is provenance, not current behaviour (see CONTRADICTIONS_AND_SUPERSEDED X-06).
+**State of the code these records describe:** main = origin/main = `f323c2d`. INC-0…INC-5 and INC-7 are RATIFIED; INC-6 is experimental and unratified; INC-8 and INC-14 have not begun (`docs/archive/CHECKPOINT.md`). Records name the branch each fact holds on; a commit not on main is provenance, not current behaviour (see CONTRADICTIONS_AND_SUPERSEDED X-06).
 
 **How to use this index:** read the task list in section 0, open only the records it names, then check `CHECKPOINT.md` and `FOUNDATION_INVARIANTS.md` for what is sealed. Kinds of knowledge are kept apart: `research/` (external systems), `decisions/` (what Infynitae decided and ratified), `architecture/` (implemented principles), `experiments/` (measurements), `pitfalls/` (rejected approaches), `roadmap/` (future work and residuals). Inside each record, "Unverified Hypotheses" holds what is not measured; the ledger holds every correction.
 

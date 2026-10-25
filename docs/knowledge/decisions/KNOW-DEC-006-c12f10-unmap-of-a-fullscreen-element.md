@@ -37,7 +37,7 @@
 cargo test -p infynitae-core --lib fullscreen_ends_cleanly_on_unmap_destroy_and_output_changes
 cargo test -p infynitae-backend-headless --test t1_fullscreen unmap_remap_and_destruction_leave_no_fullscreen_state
 ```
-Record: `docs/foundation/evidence/phase-f/fullscreen-unmap-rc1/AMENDMENT_RECORD.md`; probe log `~/Infynitae-INC7-EXIT-PREPARATION-2026-10-14/evidence/rc1-probe.log`.
+Record: `docs/archive/evidence/phase-f/fullscreen-unmap-rc1/AMENDMENT_RECORD.md`; probe log `~/Infynitae-INC7-EXIT-PREPARATION-2026-10-14/evidence/rc1-probe.log`.
 
 ## Links & Citations
 - Related: [KNOW-DEC-001](KNOW-DEC-001-a3-premap-fullscreen-ownership.md), [KNOW-ROAD-005](../roadmap/KNOW-ROAD-005-inc7-follow-up-work.md)

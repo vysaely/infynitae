@@ -2,7 +2,7 @@
 //!
 //! Uses a dummy `SpaceElement` (no Wayland client needed) so `Space`'s own
 //! bookkeeping can be observed directly. Output recorded under
-//! docs/foundation/evidence/phase-b/b2-space-output.txt.
+//! docs/archive/evidence/phase-b/b2-space-output.txt.
 
 use std::sync::{Arc, Mutex};
 

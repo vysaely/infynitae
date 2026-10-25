@@ -1,6 +1,6 @@
 //! X-10: keyboard / modifier ownership across bindings, focus transitions, destruction and
 //! cancellation, observed at the client with a wl_keyboard protocol checker.
-//! Output: docs/foundation/evidence/phase-c/x10-keyboard-output.txt
+//! Output: docs/archive/evidence/phase-c/x10-keyboard-output.txt
 //!
 //! Invariants checked after EVERY step:
 //!  KV-1 no wl_keyboard protocol violation (enter/leave/key/modifiers MUST / MUST NOT rules)

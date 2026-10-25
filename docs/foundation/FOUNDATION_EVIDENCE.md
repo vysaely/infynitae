@@ -5,8 +5,8 @@ an architecture decision. Decisions belong to Phase B (`FOUNDATION_BLOCKERS.md`)
 
 Companion documents:
 - [PROTOTYPE_DECISION_LEDGER.md](PROTOTYPE_DECISION_LEDGER.md): per-mechanism REUSE/ADAPT/… classification of Prototype 01 (A2).
-- [CHECKPOINT.md](CHECKPOINT.md): current phase, next action.
-- Raw evidence: [`evidence/phase-a/`](evidence/phase-a/).
+- [CHECKPOINT.md](../archive/CHECKPOINT.md): current phase, next action.
+- Raw evidence: [`evidence/phase-a/`](../archive/evidence/phase-a).
 
 ---
 
@@ -33,10 +33,10 @@ window or socket.
 | Source | Identity | Notes |
 |---|---|---|
 | Hyprland Infynitae | `~/infynitae`, branch `dev/infynitae-shell`, HEAD `125f8de` | `src/infynitae.cpp` (5,889 LOC), `docs/ARCHITECTURE.md`, `docs/history/research/*.md`, `docs/history/2026-10-integration-audit/ARCHITECTURE_OPTIONS.md`, `HOOK_RISK_REGISTER.md` (skimmed) |
-| Prototype 01 | `~/infynitae-native-prototype`, **no commits** (all files untracked) | All 1,303 LOC read in full. SHA-256 of every file inspected: [`evidence/phase-a/prototype-source-hashes.txt`](evidence/phase-a/prototype-source-hashes.txt) |
-| Prototype 01 run logs | `~/.gemini/antigravity-cli/brain/0a6f9e0b-…/.system_generated/tasks/task-{280,316}.log` and session transcript | Logs from the agent session that built the prototype. Excerpts: [`evidence/phase-a/prototype-runtime-logs.txt`](evidence/phase-a/prototype-runtime-logs.txt) |
-| Smithay | crates.io `smithay 0.7.0`, checksum `740cea69…af98`, local source `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0` | [`evidence/phase-a/smithay-pin.txt`](evidence/phase-a/smithay-pin.txt), [`smithay-0.7.0-excerpts.txt`](evidence/phase-a/smithay-0.7.0-excerpts.txt) |
-| Wayland protocols | `wayland 1.26.0`, `wayland-protocols 1.49` (system XML under `/usr/share`) | Verbatim excerpts: [`evidence/phase-a/wayland-protocol-excerpts.txt`](evidence/phase-a/wayland-protocol-excerpts.txt) |
+| Prototype 01 | `~/infynitae-native-prototype`, **no commits** (all files untracked) | All 1,303 LOC read in full. SHA-256 of every file inspected: [`evidence/phase-a/prototype-source-hashes.txt`](../archive/evidence/phase-a/prototype-source-hashes.txt) |
+| Prototype 01 run logs | `~/.gemini/antigravity-cli/brain/0a6f9e0b-…/.system_generated/tasks/task-{280,316}.log` and session transcript | Logs from the agent session that built the prototype. Excerpts: [`evidence/phase-a/prototype-runtime-logs.txt`](../archive/evidence/phase-a/prototype-runtime-logs.txt) |
+| Smithay | crates.io `smithay 0.7.0`, checksum `740cea69…af98`, local source `~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/smithay-0.7.0` | [`evidence/phase-a/smithay-pin.txt`](../archive/evidence/phase-a/smithay-pin.txt), [`smithay-0.7.0-excerpts.txt`](../archive/evidence/phase-a/smithay-0.7.0-excerpts.txt) |
+| Wayland protocols | `wayland 1.26.0`, `wayland-protocols 1.49` (system XML under `/usr/share`) | Verbatim excerpts: [`evidence/phase-a/wayland-protocol-excerpts.txt`](../archive/evidence/phase-a/wayland-protocol-excerpts.txt) |
 | Toolchain | rustc 1.99.0, cargo 1.99.0 | |
 
 ---
@@ -295,7 +295,7 @@ OPEN HYPOTHESIS · SMITHAY · `space/mod.rs:347-349` vs `space/wayland/window.rs
 
 ### 5.4 Wayland protocol (EV-W)
 
-Verbatim text: [`evidence/phase-a/wayland-protocol-excerpts.txt`](evidence/phase-a/wayland-protocol-excerpts.txt).
+Verbatim text: [`evidence/phase-a/wayland-protocol-excerpts.txt`](../archive/evidence/phase-a/wayland-protocol-excerpts.txt).
 
 **EV-W01** · `xdg_toplevel.configure` carries only size and states. A toplevel has no client-visible position.
 VERIFIED FACT · SPEC (xdg-shell `xdg_toplevel.configure`) · HIGH · — ·

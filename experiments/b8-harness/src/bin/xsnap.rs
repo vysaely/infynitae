@@ -1,6 +1,6 @@
 //! Surface-tree snapshot verification (Phase C checkpoint 2, item 2) + X-15 (render order) + an
 //! X-13 slice (single origin function agrees with Smithay hit-testing).
-//! Output: docs/foundation/evidence/phase-c/xsnap-x15-output.txt
+//! Output: docs/archive/evidence/phase-c/xsnap-x15-output.txt
 use b8_harness::{lockstep::Lockstep, server::*, snapshot};
 use wayland_client::Proxy;
 use smithay::{

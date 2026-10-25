@@ -22,7 +22,7 @@ tree, which do not change s_max.
 
 Negative control: the sealed formula (as implemented by cp3a-scale-model/model.py `ladder`) raises
 ZeroDivisionError on s_max = 0.
-Output: docs/foundation/evidence/E1R/e1r-hmax-output.txt
+Output: docs/archive/evidence/E1R/e1r-hmax-output.txt
 """
 import contextlib, io, math, importlib.util, os
 

@@ -1,6 +1,6 @@
 //! X-6: Smithay's real render-element edges vs the B1.5 lattice rule, for a root surface and an
 //! odd-offset subsurface, across all fractional scales n/120 (n = 120..=360) and camera magnitudes.
-//! Output: docs/foundation/evidence/phase-b/x6-edges-output.txt
+//! Output: docs/archive/evidence/phase-b/x6-edges-output.txt
 
 use b8_harness::{lockstep::Lockstep, server::*};
 use smithay::{

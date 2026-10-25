@@ -25,7 +25,7 @@ Before designing, proposing, or refactoring compositor architecture:
 
 1. **Read `docs/knowledge/INDEX.md` First:** When assigned an architectural, performance, or protocol task, start by reading the knowledge index.
 2. **Check Relevant Existing Knowledge:** Do not write fresh design plans from scratch without cross-referencing existing records in `architecture/`, `research/`, or `decisions/`.
-3. **Check Sealed Governance Separately:** Always consult `docs/foundation/CHECKPOINT.md` and `FOUNDATION_INVARIANTS.md` for current ratified gates. Knowledge records are descriptive, not legislative.
+3. **Check Sealed Governance Separately:** Always consult `docs/archive/CHECKPOINT.md` and `FOUNDATION_INVARIANTS.md` for current ratified gates. Knowledge records are descriptive, not legislative.
 4. **Verify Current Branch Applicability:** Before citing a past audit finding, inspect `git log` and `git status` on the active working tree to ensure the finding applies to the current commit.
 5. **Consult Rejected and Superseded Approaches:** Do not re-propose discarded patterns (such as unconditional focus pulls or bogus grab serial acceptance) without providing new empirical counter-evidence.
 6. **Update Knowledge When Evidence Changes:** When a new benchmark or experiment invalidates an existing record, update the record's `evidence_class` and status, or create a superseding record.

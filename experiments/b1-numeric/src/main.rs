@@ -2,7 +2,7 @@
 //!
 //! Pure arithmetic. No compositor, no Wayland, no Smithay. Deterministic
 //! (fixed-seed LCG). Output is recorded verbatim under
-//! docs/foundation/evidence/phase-b/b1-numeric-output.txt.
+//! docs/archive/evidence/phase-b/b1-numeric-output.txt.
 //!
 //! Candidate representations compared:
 //!   F64      : Canvas/camera as f64 logical pixels

@@ -21,7 +21,7 @@
 //! The harness cannot destroy a wl_output global; the seat-visible part of the transition (the only
 //! part that reaches wl_pointer / constraints) is executed exactly as core prescribes. wl_surface.leave
 //! for the removed output is covered by the membership rule (F-MEMBER-1), not by this binary.
-//! Output: docs/foundation/evidence/E1R/xzero-{stock,p1}-output.txt
+//! Output: docs/archive/evidence/E1R/xzero-{stock,p1}-output.txt
 use b8_harness::{
     input::{Intake, PanBinding, PanFocusMode},
     lockstep::Lockstep,

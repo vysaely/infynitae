@@ -1,7 +1,7 @@
 //! CP3A hit-testing: "the surface selected by hit-testing is the surface presented at that location,
 //! subject to Wayland input-region semantics" — at fractional output scales and fractional camera
 //! positions, against Smithay's real render-element geometry.
-//! Output: docs/foundation/evidence/phase-c/cp3a-xhit-output.txt
+//! Output: docs/archive/evidence/phase-c/cp3a-xhit-output.txt
 use b8_harness::{lockstep::Lockstep, server::*, snapshot};
 use wayland_client::Proxy;
 use smithay::{

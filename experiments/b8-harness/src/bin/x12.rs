@@ -3,7 +3,7 @@
 //! receives `unlocked` and is destroyed when the pointer merely leaves its surface.
 //! Spec (zwp_locked_pointer_v1.unlocked): "Notification that the pointer lock of the seat's pointer is
 //! no longer active. If this is a oneshot pointer lock ... this object is now defunct".
-//! Output: docs/foundation/evidence/phase-b/x12-oneshot-lock-defect-output.txt
+//! Output: docs/archive/evidence/phase-b/x12-oneshot-lock-defect-output.txt
 use b8_harness::{
     input::{Intake, PanBinding, PanFocusMode},
     lockstep::Lockstep,

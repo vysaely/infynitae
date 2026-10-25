@@ -1,5 +1,5 @@
 //! Phase B checkpoint 2 protocol scenarios (lockstep, deterministic, virtual time).
-//! Output: docs/foundation/evidence/phase-b/b8-scenarios-output.txt
+//! Output: docs/archive/evidence/phase-b/b8-scenarios-output.txt
 
 use std::time::Duration;
 

@@ -4,7 +4,7 @@
 //! unset_maximized with exactly one configure that does not carry `maximized`; never move a camera;
 //! never change Stage geometry.
 //! NEG: the record-only W-SM-13 override (no answer) — the client waits for a configure that never comes.
-//! Output: docs/foundation/evidence/phase-d/xmaximize-output.txt
+//! Output: docs/archive/evidence/phase-d/xmaximize-output.txt
 use b8_harness::{lockstep::Lockstep, server::*};
 
 fn run(policy: bool) -> bool {

@@ -14,7 +14,7 @@ New evidence in this checkpoint:
 
 | ID | What | Where |
 |---|---|---|
-| EC-1 | Authority spike: two-crate workspace (domain stand-in with **zero dependencies**, protocol-adapter stand-in). 3 behaviour tests; 4 negative build probes, each **asserted to fail with its expected error code** (E0624, E0451, E0061, E0603); positive control; dependency check. **PASS** | `experiments/c1-authority-spike/` (`verify.sh`); [`evidence/phase-c/c1-authority-spike-verify.txt`](evidence/phase-c/c1-authority-spike-verify.txt) |
+| EC-1 | Authority spike: two-crate workspace (domain stand-in with **zero dependencies**, protocol-adapter stand-in). 3 behaviour tests; 4 negative build probes, each **asserted to fail with its expected error code** (E0624, E0451, E0061, E0603); positive control; dependency check. **PASS** | `experiments/c1-authority-spike/` (`verify.sh`); [`evidence/phase-c/c1-authority-spike-verify.txt`](../archive/evidence/phase-c/c1-authority-spike-verify.txt) |
 | EC-2 | Stable rustdoc does **not** check `compile_fail` error codes (a doctest marked `compile_fail,E0999` passed). `compile_fail` doctests alone cannot prove *why* a path is forbidden, so the probes in EC-1 replace them as the enforcement mechanism. | spike (transient edit, reverted) |
 | EC-3 | SMITHAY: one XKB state per seat, updated for **every** key including intercepted ones; `pressed_keys` vs `forwarded_pressed_keys`; `set_focus` sends `enter(forwarded_pressed_keys)` + `modifiers(seat mods)`; a forwarded key carries `modifiers` only if that key changed them; two-phase `input_intercept` / `input_forward` API | `input/keyboard/mod.rs:209-297, 940-1050, 1315-1365` |
 | EC-4 | PROTOCOL (wayland 1.26): `wl_keyboard.leave` "resets all values to their defaults"; `enter` sets the keys logically down; `key`: "must not send … released … [if] the key was not logically down"; `modifiers` may be sent at any time to reset | `wayland.xml` |
@@ -463,16 +463,16 @@ Execution order as mandated: X-10 → snapshot boundary → C5 → C6 → C7 →
 
 | ID | What | Where |
 |---|---|---|
-| EC-6 | **X-10** keyboard/modifier ownership on Smithay 0.7.0's real seat keyboard, with a client-side `wl_keyboard` protocol checker. 9 scenarios **PASS**; negative control (K3 disabled) **FAILS as predicted** (client left with `depressed=0x1` after the physical release) | `experiments/b8-harness/src/{keys.rs,bin/x10.rs}`; [`evidence/phase-c/x10-keyboard-output.txt`](evidence/phase-c/x10-keyboard-output.txt) |
+| EC-6 | **X-10** keyboard/modifier ownership on Smithay 0.7.0's real seat keyboard, with a client-side `wl_keyboard` protocol checker. 9 scenarios **PASS**; negative control (K3 disabled) **FAILS as predicted** (client left with `depressed=0x1` after the physical release) | `experiments/b8-harness/src/{keys.rs,bin/x10.rs}`; [`evidence/phase-c/x10-keyboard-output.txt`](../archive/evidence/phase-c/x10-keyboard-output.txt) |
 | EC-7 | wayland-backend 0.3.17 does not send an event whose object argument is a destroyed object (`get_object(..)?` → `InvalidId`, `rs/server_impl/client.rs:189-196`). Therefore no `wl_keyboard.leave` can name a surface the client destroyed. The spec (wayland 1.26) does not define the logical active surface after client-side destruction. | source + X-10 K-6 |
-| EC-8 | **Surface-tree snapshot via public API only** (external crate compiles): root, subsurfaces (incl. negative-offset, placed *below*), input regions, window geometry, popup with its own subsurface. Equals client ground truth; **extracted inside `CompositorHandler::commit` without deadlock** | `src/snapshot.rs`, `bin/xsnap.rs`; [`evidence/phase-c/xsnap-x15-output.txt`](evidence/phase-c/xsnap-x15-output.txt) |
+| EC-8 | **Surface-tree snapshot via public API only** (external crate compiles): root, subsurfaces (incl. negative-offset, placed *below*), input regions, window geometry, popup with its own subsurface. Equals client ground truth; **extracted inside `CompositorHandler::commit` without deadlock** | `src/snapshot.rs`, `bin/xsnap.rs`; [`evidence/phase-c/xsnap-x15-output.txt`](../archive/evidence/phase-c/xsnap-x15-output.txt) |
 | EC-9 | **X-15 PASS**: snapshot front-to-back order **and** positions equal Smithay's `Window::render_elements` exactly | same |
 | EC-10 | **W-SM-11 (new)**: Smithay tests input regions with `point.to_i32_round()` (round-to-nearest) but surface bounds with exact containment, shifting every input region by −½ px (`desktop/wayland/utils.rs:25-50`) | source + xsnap (1,448 grid mismatches, all explained) |
 | EC-11 | **W-SM-12 (new)**: `under_from_surface_tree` overwrites its result for every match and early-stops only after a node's whole subtree (`desktop/wayland/utils.rs:94-150`). A subsurface placed **below** its parent wins hit-tests over the parent, contradicting the stacking Smithay itself renders (EC-9). 928/928 residual mismatches match this pattern; 0 unexplained. | source + xsnap |
-| EC-12 | **C6**: xwayland-satellite 0.8.3 against the harness: X11 window → ordinary `xdg_toplevel` (title from X11, `app_id` = WM_CLASS); an X11 move request (`xdotool windowmove 777 333`) leaves X11 position 0,0 and reaches nothing; satellite `kill -9` → Xwayland and X11 client die, element removed via the ordinary `toplevel_destroyed` path; satellite warns about missing `xdg_activation_v1` and primary selection | `realclient` + [`evidence/phase-c/c6-sat.sh`](evidence/phase-c/c6-sat.sh); [`evidence/phase-c/c6-xwayland-satellite-output.txt`](evidence/phase-c/c6-xwayland-satellite-output.txt) |
+| EC-12 | **C6**: xwayland-satellite 0.8.3 against the harness: X11 window → ordinary `xdg_toplevel` (title from X11, `app_id` = WM_CLASS); an X11 move request (`xdotool windowmove 777 333`) leaves X11 position 0,0 and reaches nothing; satellite `kill -9` → Xwayland and X11 client die, element removed via the ordinary `toplevel_destroyed` path; satellite warns about missing `xdg_activation_v1` and primary selection | `realclient` + [`evidence/phase-c/c6-sat.sh`](../archive/evidence/phase-c/c6-sat.sh); [`evidence/phase-c/c6-xwayland-satellite-output.txt`](../archive/evidence/phase-c/c6-xwayland-satellite-output.txt) |
 | EC-13 | **W-SM-13 (new)**: Smithay's *default* `XdgShellHandler::{maximize_request, fullscreen_request}` call `send_configure()` (`shell/xdg/mod.rs:1143-1153`). xwayland-satellite sends `fullscreen_request` **before the first commit** for a screen-sized X11 window. With the defaults, the initial configure went out before Infynitae's placement ran (element mapped with no anchor). With overrides, placement ran normally. | source + C6 run (with and without override) |
 | EC-14 | PROTOCOL: `set_fullscreen` / `unset_fullscreen` / state `fullscreen` text (subject to compositor policy; centre + border fill; "other screen content not part of the same surface tree" must not be visible below) | `xdg-shell.xml` |
-| EC-15 | Authority-spike hardening: ports are `!Send`; protocol state is statically asserted `Send`. Storing a port in protocol state fails with **E0277**. All probes asserted on their exact diagnostic. **PASS**. **Real Smithay 0.7.0 protocol state is `Send`** (harness `Server` compiles under `assert_send`). | `experiments/c1-authority-spike/verify.sh`; `b8-harness/src/bin/sendcheck.rs`; [`evidence/phase-c/c1-authority-spike-verify.txt`](evidence/phase-c/c1-authority-spike-verify.txt) |
+| EC-15 | Authority-spike hardening: ports are `!Send`; protocol state is statically asserted `Send`. Storing a port in protocol state fails with **E0277**. All probes asserted on their exact diagnostic. **PASS**. **Real Smithay 0.7.0 protocol state is `Send`** (harness `Server` compiles under `assert_send`). | `experiments/c1-authority-spike/verify.sh`; `b8-harness/src/bin/sendcheck.rs`; [`evidence/phase-c/c1-authority-spike-verify.txt`](../archive/evidence/phase-c/c1-authority-spike-verify.txt) |
 
 All harness suites re-run after the CP2 harness changes: X-6, X-8, X-9, X-10, X-12 and xsnap pass; the Phase B scenario output is identical apart from the enriched log line.
 
@@ -840,11 +840,11 @@ Checkpoint 2 accepted: `fc2dd68f843b1eb05828f4116f94e8bab4f478da`.
 | ID | What | Where |
 |---|---|---|
 | EC-16 | Device limits (vulkaninfo, RX 9070 XT / RADV): `maxImageDimension2D = 32768`, **`maxFramebufferWidth = 16384`**. A client cannot render a buffer wider than 16384 px, so for a window of logical width W the client scale is physically bounded by 16384/W. `wp_fractional_scale_v1` itself states **no** bound. | `vulkaninfo`; `fractional-scale-v1.xml` |
-| EC-17 | **scaleprobe**: GTK 4.22.5, kitty 0.49.2 (swrast), Firefox 157. **All three honour a 1/120 change with a full re-render and a new buffer** (628→633, 1920→1936, 1280→1291 px). Client CPU grows with scale² for software rendering (kitty 20.7% @1.0 → 218% @3.0). **A per-frame scale storm (60 changes/s)** costs one reallocation per change: GTK4 30% CPU, kitty 477%, Firefox 105% (vs a few % steady). | `b8-harness/src/bin/scaleprobe.rs`; [`evidence/phase-c/cp3a-scaleprobe-output.txt`](evidence/phase-c/cp3a-scaleprobe-output.txt) |
-| EC-18 | Buffer-cost table (computed) for candidate ceilings, double/triple buffering, plus a compositor copy for shm | [`evidence/phase-c/cp3a-buffer-cost.txt`](evidence/phase-c/cp3a-buffer-cost.txt) |
-| EC-19 | Executable **MODEL** of the unified scale policy (not an experiment): walkthroughs A–E with the candidate constants | `experiments/cp3a-scale-model/model.py`; [`evidence/phase-c/cp3a-scale-model-output.txt`](evidence/phase-c/cp3a-scale-model-output.txt) |
-| EC-20 | **xhit**: hit-testing at k ∈ {1.0, 1.25, 1.5, 1.75} × 4 fractional camera positions, every pixel over a tree with a nested subsurface, a below-parent subsurface reached through an **input-region hole**, and a popup + popup subsurface. **Physical-pixel selection vs the surface Smithay actually presents: 0 mismatches** (16 configurations, 159,506–482,002 pixels each). The Phase B canvas-exact rule would mismatch on 399–617 pixels per configuration at fractional k. 12 hand-derived semantic cases PASS. One hand oracle was itself wrong (point inside S1); it was corrected and the record is kept in the source. | `bin/xhit.rs`; [`evidence/phase-c/cp3a-xhit-output.txt`](evidence/phase-c/cp3a-xhit-output.txt) |
-| EC-21 | **RC-1 with a real toolkit (GTK 4.22.5)**: the client destroys its keyboard-focused window while Shift+A are held. Observed: no `leave` (undeliverable, EC-7); `enter(W1, keys=[A,Shift])` + `modifiers(shift)`; GTK activates W1 **without** emulating presses; delivers the A and Shift releases with correct state; a following `b` arrives with **no modifier**; 0 GTK warnings/criticals | `bin/rc1.rs`, `cp3a-rc1-gtk4.py`; [`evidence/phase-c/cp3a-rc1-gtk4-output.txt`](evidence/phase-c/cp3a-rc1-gtk4-output.txt) |
+| EC-17 | **scaleprobe**: GTK 4.22.5, kitty 0.49.2 (swrast), Firefox 157. **All three honour a 1/120 change with a full re-render and a new buffer** (628→633, 1920→1936, 1280→1291 px). Client CPU grows with scale² for software rendering (kitty 20.7% @1.0 → 218% @3.0). **A per-frame scale storm (60 changes/s)** costs one reallocation per change: GTK4 30% CPU, kitty 477%, Firefox 105% (vs a few % steady). | `b8-harness/src/bin/scaleprobe.rs`; [`evidence/phase-c/cp3a-scaleprobe-output.txt`](../archive/evidence/phase-c/cp3a-scaleprobe-output.txt) |
+| EC-18 | Buffer-cost table (computed) for candidate ceilings, double/triple buffering, plus a compositor copy for shm | [`evidence/phase-c/cp3a-buffer-cost.txt`](../archive/evidence/phase-c/cp3a-buffer-cost.txt) |
+| EC-19 | Executable **MODEL** of the unified scale policy (not an experiment): walkthroughs A–E with the candidate constants | `experiments/cp3a-scale-model/model.py`; [`evidence/phase-c/cp3a-scale-model-output.txt`](../archive/evidence/phase-c/cp3a-scale-model-output.txt) |
+| EC-20 | **xhit**: hit-testing at k ∈ {1.0, 1.25, 1.5, 1.75} × 4 fractional camera positions, every pixel over a tree with a nested subsurface, a below-parent subsurface reached through an **input-region hole**, and a popup + popup subsurface. **Physical-pixel selection vs the surface Smithay actually presents: 0 mismatches** (16 configurations, 159,506–482,002 pixels each). The Phase B canvas-exact rule would mismatch on 399–617 pixels per configuration at fractional k. 12 hand-derived semantic cases PASS. One hand oracle was itself wrong (point inside S1); it was corrected and the record is kept in the source. | `bin/xhit.rs`; [`evidence/phase-c/cp3a-xhit-output.txt`](../archive/evidence/phase-c/cp3a-xhit-output.txt) |
+| EC-21 | **RC-1 with a real toolkit (GTK 4.22.5)**: the client destroys its keyboard-focused window while Shift+A are held. Observed: no `leave` (undeliverable, EC-7); `enter(W1, keys=[A,Shift])` + `modifiers(shift)`; GTK activates W1 **without** emulating presses; delivers the A and Shift releases with correct state; a following `b` arrives with **no modifier**; 0 GTK warnings/criticals | `bin/rc1.rs`, `cp3a-rc1-gtk4.py`; [`evidence/phase-c/cp3a-rc1-gtk4-output.txt`](../archive/evidence/phase-c/cp3a-rc1-gtk4-output.txt) |
 
 ---
 
@@ -1140,7 +1140,7 @@ Checkpoint 3A accepted: `795800937a1e50e56587cd4080a73ce27d8a8b01`.
 
 | ID | What | Where |
 |---|---|---|
-| EC-22 | **Feedback MODEL** (not an experiment): client-geometry/scale loops under viewport-fit, five client behaviours; boundary wiggle. Benign clients converge under any policy (1–4 hint changes). **An adversarial client that inverts every move oscillates forever under naive settle-every-time (60 changes in 60 rounds); under epoch monotonicity (SC-E): 1 change.** Wheel wiggle across a rung boundary: naive 40 changes / 40 ticks; discrete-zoom interaction (SC-D): 2. | `experiments/cp3a-scale-model/feedback.py`; [`evidence/phase-c/cp3b-feedback-model-output.txt`](evidence/phase-c/cp3b-feedback-model-output.txt) |
+| EC-22 | **Feedback MODEL** (not an experiment): client-geometry/scale loops under viewport-fit, five client behaviours; boundary wiggle. Benign clients converge under any policy (1–4 hint changes). **An adversarial client that inverts every move oscillates forever under naive settle-every-time (60 changes in 60 rounds); under epoch monotonicity (SC-E): 1 change.** Wheel wiggle across a rung boundary: naive 40 changes / 40 ticks; discrete-zoom interaction (SC-D): 2. | `experiments/cp3a-scale-model/feedback.py`; [`evidence/phase-c/cp3b-feedback-model-output.txt`](../archive/evidence/phase-c/cp3b-feedback-model-output.txt) |
 | EC-23 | Target hardware for budgets: AMD Ryzen 5 7600X3D, 30 GiB RAM, AMD Radeon RX 9070 XT (RADV GFX1201), Mesa 26.2.3, Linux 7.2.8 | `/proc/cpuinfo`, `free`, vulkaninfo, EB-9 |
 
 ---
@@ -1642,7 +1642,7 @@ Inputs:
 - the sealed registry C12 (`615b0ed`);
 - the Phase D falsification baseline `e8ec03a` (findings PD-F2-01…17, preserved in FOUNDATION_BLOCKERS.md).
 
-Provenance for every row (previous wording, trigger, reason, evidence, ADR, tests): [audit/1R/INVARIANT_DIFF_1R.md](audit/1R/INVARIANT_DIFF_1R.md). Corrections and dispositions: [audit/1R/CORRECTIONS_1R.md](audit/1R/CORRECTIONS_1R.md).
+Provenance for every row (previous wording, trigger, reason, evidence, ADR, tests): [audit/1R/INVARIANT_DIFF_1R.md](../archive/audit/1R/INVARIANT_DIFF_1R.md). Corrections and dispositions: [audit/1R/CORRECTIONS_1R.md](../archive/audit/1R/CORRECTIONS_1R.md).
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12. Every other C12 row is unchanged.** Registry size after 1R: 56.
 
@@ -1706,7 +1706,7 @@ Details: audit/1R/CORRECTIONS_1R.md § Obligation changes. OB-19 remains the unc
 - C12 (`615b0ed`) and C12.R1 (`84ce620`);
 - findings PD-F2-18 and PD-F2-19 (FOUNDATION_BLOCKERS.md § Phase D Checkpoint 2).
 
-**Provenance:** [audit/2R/INVARIANT_DIFF_2R.md](audit/2R/INVARIANT_DIFF_2R.md).
+**Provenance:** [audit/2R/INVARIANT_DIFF_2R.md](../archive/audit/2R/INVARIANT_DIFF_2R.md).
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12 and C12.R1. Every other row is unchanged.** Registry size after 2R: 57.
 
@@ -1771,9 +1771,9 @@ These restate properties that INV-CAMERA-1, INV-OUTPUT-2 and INV-SCALE-3 above a
 - three findings discovered while reproducing them (§C12.E1R.5: E1R-N1, E1R-N2, E1R-N3).
 
 **Provenance:**
-- per-invariant records: [audit/E1R/INVARIANT_DIFF_E1R.md](audit/E1R/INVARIANT_DIFF_E1R.md);
-- dispositions: [audit/E1R/DISPOSITIONS_E1R.md](audit/E1R/DISPOSITIONS_E1R.md);
-- reproductions and evidence: [audit/E1R/REPRODUCTION_E1R.md](audit/E1R/REPRODUCTION_E1R.md), `evidence/E1R/`.
+- per-invariant records: [audit/E1R/INVARIANT_DIFF_E1R.md](../archive/audit/E1R/INVARIANT_DIFF_E1R.md);
+- dispositions: [audit/E1R/DISPOSITIONS_E1R.md](../archive/audit/E1R/DISPOSITIONS_E1R.md);
+- reproductions and evidence: [audit/E1R/REPRODUCTION_E1R.md](../archive/audit/E1R/REPRODUCTION_E1R.md), `evidence/E1R/`.
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12, C12.R1 and C12.R2. Every other row is unchanged.** Registry size after E1R: 57 (no invariant added or removed).
 
@@ -1892,7 +1892,7 @@ No obligation is closed by E1R.
 - C12 (`615b0ed`), C12.R1 (`84ce620`), C12.R2 (`5827926`) and C12.E1R (unsealed), as effective at `2436dd4`;
 - the Level D placement decision of the owner (2026-10-13): ordinary new toplevels centred in the usable output region; oversized windows aligned top-left; explicit and restored placement take precedence; placement performed once; camera movement never repositions a window; a remap keeps its placement; output changes follow the existing output lifecycle policy.
 
-**Provenance:** [evidence/phase-f/placement-amendment/AMENDMENT_RECORD.md](evidence/phase-f/placement-amendment/AMENDMENT_RECORD.md) (verification against the approved semantics, the independently derived coordinate examples, the re-derivation of every affected test expectation).
+**Provenance:** [evidence/phase-f/placement-amendment/AMENDMENT_RECORD.md](../archive/evidence/phase-f/placement-amendment/AMENDMENT_RECORD.md) (verification against the approved semantics, the independently derived coordinate examples, the re-derivation of every affected test expectation).
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12. Every other row is unchanged.**
 
@@ -1931,7 +1931,7 @@ New formula **F-PLACE-1** (living §F). It amends no existing formula: F-ROUND-1
 - C12.E1R INV-SCALE-2 and F-SCALE-2 as effective at `2436dd4`;
 - finding H-1 of the INC-6 hardening review: the sealed bound `D_max / s_max(E)` is put on the wire as `round(120 · D_max / s_max(E))` (F-SCALE-3), which exceeds the bound whenever the rounding goes up, so a fractional-scale client is asked for a buffer larger than the device accepts.
 
-**Provenance:** [evidence/phase-f/h1-amendment/AMENDMENT_RECORD.md](evidence/phase-f/h1-amendment/AMENDMENT_RECORD.md) (independent verification of the formula and rounding direction; the Core proof and regression suite; the re-derived expectations).
+**Provenance:** [evidence/phase-f/h1-amendment/AMENDMENT_RECORD.md](../archive/evidence/phase-f/h1-amendment/AMENDMENT_RECORD.md) (independent verification of the formula and rounding direction; the Core proof and regression suite; the re-derived expectations).
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12, C12.R1 and C12.E1R. Every other row is unchanged.**
 
@@ -1972,7 +1972,7 @@ F-SCALE-3 (target, emission `round(h·120)`, integer hint, initial hint), the la
 - xdg-shell, `xdg_toplevel.configure_bounds` (since version 4): "If width and height are 0, it means bounds is unknown and equivalent to as if no configure_bounds event was ever sent for this surface";
 - Smithay 0.7.0 (pinned): the event is sent with a toplevel's first configure, and whenever the bounds change, to a client that bound `xdg_wm_base` ≥ 4; with no bounds set the value is `(0, 0)`. No API omits it, and capping the protocol version would also remove `wm_capabilities` (version 5).
 
-**Provenance:** [evidence/phase-f/configure-bounds-amendment/AMENDMENT_RECORD.md](evidence/phase-f/configure-bounds-amendment/AMENDMENT_RECORD.md).
+**Provenance:** [evidence/phase-f/configure-bounds-amendment/AMENDMENT_RECORD.md](../archive/evidence/phase-f/configure-bounds-amendment/AMENDMENT_RECORD.md).
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12.R1. Every other row is unchanged.**
 
@@ -2000,7 +2000,7 @@ No bounds policy exists and none is introduced: `ToplevelState.bounds` is never 
 - C12.R2 INV-SCALE-3 and STATE_MACHINES M7 as effective at `d6714f6`;
 - finding H-2 of the INC-6 hardening review: M7 says `deadline = now + T_settle` without saying which clock `now` is, and a compositor has three (the session's monotonic clock, the time an input device stamps on an event, the presentation clock).
 
-**Provenance:** [evidence/phase-f/epoch-time-authority/AMENDMENT_RECORD.md](evidence/phase-f/epoch-time-authority/AMENDMENT_RECORD.md).
+**Provenance:** [evidence/phase-f/epoch-time-authority/AMENDMENT_RECORD.md](../archive/evidence/phase-f/epoch-time-authority/AMENDMENT_RECORD.md).
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12.R2. Every other row is unchanged.**
 
@@ -2029,7 +2029,7 @@ The existence and value of the settlement timeout (PROV-5, OB-23), what ends an 
 - INC-7 finding P9b: an element first mapped in protocol fullscreen has the fullscreen size at its first map. Placing it then centres the fullscreen size, not the windowed one, so the window is off-centre when it leaves fullscreen;
 - the implementation on `93c2605` (`334b9b3`): Core places an element that was never placed at the first commit carrying an acknowledged windowed state while the element is not in protocol fullscreen.
 
-**Provenance:** [evidence/phase-f/placement-windowed-presentation/AMENDMENT_RECORD.md](evidence/phase-f/placement-windowed-presentation/AMENDMENT_RECORD.md).
+**Provenance:** [evidence/phase-f/placement-windowed-presentation/AMENDMENT_RECORD.md](../archive/evidence/phase-f/placement-windowed-presentation/AMENDMENT_RECORD.md).
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12 and C12.F1. Every other row is unchanged.**
 
@@ -2071,7 +2071,7 @@ The existence and value of the settlement timeout (PROV-5, OB-23), what ends an 
 - INC-7 audit finding A-3: a grant made before an element's first map replaced the presented element at once, so a client that never draws could end another element's presentation;
 - the implementation on `93c2605` (`b1aa758`): `store_fullscreen` replaces nothing for an element that is not mapped; `take_output`, at the grant of a mapped element or at the first map of a waiting one, ends the grants on the output that are older than the element's; `restore_effect` offers the saved size when one was saved.
 
-**Provenance:** [evidence/phase-f/deferred-takeover/AMENDMENT_RECORD.md](evidence/phase-f/deferred-takeover/AMENDMENT_RECORD.md).
+**Provenance:** [evidence/phase-f/deferred-takeover/AMENDMENT_RECORD.md](../archive/evidence/phase-f/deferred-takeover/AMENDMENT_RECORD.md).
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12 and C12.R1. Every other row is unchanged.**
 
@@ -2103,7 +2103,7 @@ The first two paragraphs of INV-PRES-1 (exactly one configure per request; a gra
 - INC-7 audit finding A-8: an explicit focus action, the initial activation grant, FocusNext or the successor of a lost target could give the keyboard focus to a window that a presentation hides, so typing went to a window the user cannot see;
 - the implementation on `93c2605` (`0f45cfd`, `2aa8d65`): `Core::hidden_by_presentation`; `set_focus` and `grant_initial_focus` decline a hidden target; FocusNext and the successor of a lost target choose among `focusable_elements()`; no fullscreen request changes the focus.
 
-**Provenance:** [evidence/phase-f/focus-eligibility/AMENDMENT_RECORD.md](evidence/phase-f/focus-eligibility/AMENDMENT_RECORD.md).
+**Provenance:** [evidence/phase-f/focus-eligibility/AMENDMENT_RECORD.md](../archive/evidence/phase-f/focus-eligibility/AMENDMENT_RECORD.md).
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12 and C12.R1. Every other row is unchanged.**
 
@@ -2135,7 +2135,7 @@ The single writer (FocusModel), the explicit actions themselves, target loss and
 - Smithay 0.7.0 (W-SM-20): `PopupManager::popups_for_surface` lists a popup's children oldest first and the root popups in creation order, so an older sibling, or an older popup's subtree, is in front of a newer popup;
 - the implementation on `93c2605` (`23860b3`, `d350ed2`): the adapter numbers each `xdg_popup` at creation and the snapshot orders a toplevel's popups by that number, newest first (a stable sort); Core concatenates the order the adapter supplies.
 
-**Provenance:** [evidence/phase-f/popup-stacking/AMENDMENT_RECORD.md](evidence/phase-f/popup-stacking/AMENDMENT_RECORD.md).
+**Provenance:** [evidence/phase-f/popup-stacking/AMENDMENT_RECORD.md](../archive/evidence/phase-f/popup-stacking/AMENDMENT_RECORD.md).
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12. Every other row is unchanged.**
 
@@ -2168,7 +2168,7 @@ Reverse Stage z-order between elements; the root tree after the popups; the down
 - xdg-shell: after a null-buffer commit the toplevel must repeat the initial commit-configure sequence (Smithay 0.7.0 resets `initial_configure_sent`);
 - the implementation at `80ead2a` (unchanged since `93c2605`): on a null-buffer commit Core drops the element's fullscreen state, any recorded pre-map request, any size on offer and any postponed placement (`drop_fullscreen`) and emits no fullscreen configure; the re-show's initial configure is not fullscreen.
 
-**Provenance:** [evidence/phase-f/fullscreen-unmap-rc1/AMENDMENT_RECORD.md](evidence/phase-f/fullscreen-unmap-rc1/AMENDMENT_RECORD.md).
+**Provenance:** [evidence/phase-f/fullscreen-unmap-rc1/AMENDMENT_RECORD.md](../archive/evidence/phase-f/fullscreen-unmap-rc1/AMENDMENT_RECORD.md).
 
 **Where an `INV-*` appears below, this wording is canonical and supersedes C12, C12.R1 and C12.F6. Every other row is unchanged.**
 

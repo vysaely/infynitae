@@ -11,7 +11,7 @@ Checkpoints:
 Evidence baseline: Phase A artifacts at commit
 **`2c8c163784e260af4aaa8c1dc05c6281b0476120`** (`~/infynitae-native`, branch `main`).
 Every `EV-*` reference resolves against that commit's `FOUNDATION_EVIDENCE.md`.
-New Phase B evidence uses `EB-*` IDs and lives in [`evidence/phase-b/`](evidence/phase-b/).
+New Phase B evidence uses `EB-*` IDs and lives in [`evidence/phase-b/`](../archive/evidence/phase-b).
 
 **Conclusion classes** (per the Phase B authorization):
 `PROTOCOL` (protocol-guaranteed), `SMITHAY` (Smithay-0.7.0-source-verified), `EXPERIMENT`
@@ -25,8 +25,8 @@ New Phase B evidence uses `EB-*` IDs and lives in [`evidence/phase-b/`](evidence
 
 | ID | What | Where |
 |---|---|---|
-| EB-1 | Numeric experiment (E1–E9): precision, accumulation, path dependence, jitter, adjacency, large-coordinate edges, round trip, equality | `experiments/b1-numeric/`, output [`evidence/phase-b/b1-numeric-output.txt`](evidence/phase-b/b1-numeric-output.txt) |
-| EB-2 | `Space` experiment (S1–S7) with a dummy `SpaceElement` against real Smithay 0.7.0 | `experiments/b2-space/`, output [`evidence/phase-b/b2-space-output.txt`](evidence/phase-b/b2-space-output.txt) |
+| EB-1 | Numeric experiment (E1–E9): precision, accumulation, path dependence, jitter, adjacency, large-coordinate edges, round trip, equality | `experiments/b1-numeric/`, output [`evidence/phase-b/b1-numeric-output.txt`](../archive/evidence/phase-b/b1-numeric-output.txt) |
+| EB-2 | `Space` experiment (S1–S7) with a dummy `SpaceElement` against real Smithay 0.7.0 | `experiments/b2-space/`, output [`evidence/phase-b/b2-space-output.txt`](../archive/evidence/phase-b/b2-space-output.txt) |
 | EB-3 | Smithay source: render-element rounding (`backend/renderer/element/surface.rs:93-139, 186-232, 263, 294`); `from_surface` takes `Point<f64, Physical>` and is public; `render_elements_from_surface_tree` takes `Point<i32, Physical>` | source |
 | EB-4 | Smithay source: `Space` internals (`desktop/space/mod.rs:38-56, 185-200, 258-365, 494-512`) | source |
 | EB-5 | Smithay/wayland-backend source: role destruction and client-kill paths (`shell/xdg/handlers/surface/toplevel.rs:156-188`, `popup.rs:69-95`; wayland-backend 0.3.17 `rs/server_impl/client.rs:749-760`, `handle.rs:45-58`); `InnerObjectId {id, serial, client_id, …}` | source |
@@ -529,8 +529,8 @@ This changes no B1/B2 result. Those formulas only ever consumed the per-output o
 
 | ID | Evidence | Where |
 |---|---|---|
-| EB-8 | Minimal lockstep harness. A Smithay 0.7.0 server (`wl_compositor` v6, xdg-shell, shm, fractional-scale, viewporter, two `wl_output` globals) plus a recording `wayland-client` probe over a socketpair, on a virtual vblank clock. Real: protocol objects, Smithay enter/leave and frame/scale mechanisms, every client-observed event. Modelled (the policies under test): integer cameras, zoom 1, the visibility rule, the clock. | `experiments/b8-harness/` (`server.rs`, `client.rs`, `lockstep.rs`, `bin/scenarios.rs`); output [`evidence/phase-b/b8-scenarios-output.txt`](evidence/phase-b/b8-scenarios-output.txt) |
-| EB-9 | Real clients (vkcube/radv, kitty/swrast, Firefox 157) against the harness in real time on a private socket, no host compositor. They were shown on screen, moved off-screen under Starve / Throttle / kick, pinged while off-screen, then shown again. | `experiments/b8-harness/src/bin/realclient.rs`; output [`evidence/phase-b/x2-realclients-output.txt`](evidence/phase-b/x2-realclients-output.txt) |
+| EB-8 | Minimal lockstep harness. A Smithay 0.7.0 server (`wl_compositor` v6, xdg-shell, shm, fractional-scale, viewporter, two `wl_output` globals) plus a recording `wayland-client` probe over a socketpair, on a virtual vblank clock. Real: protocol objects, Smithay enter/leave and frame/scale mechanisms, every client-observed event. Modelled (the policies under test): integer cameras, zoom 1, the visibility rule, the clock. | `experiments/b8-harness/` (`server.rs`, `client.rs`, `lockstep.rs`, `bin/scenarios.rs`); output [`evidence/phase-b/b8-scenarios-output.txt`](../archive/evidence/phase-b/b8-scenarios-output.txt) |
+| EB-9 | Real clients (vkcube/radv, kitty/swrast, Firefox 157) against the harness in real time on a private socket, no host compositor. They were shown on screen, moved off-screen under Starve / Throttle / kick, pinged while off-screen, then shown again. | `experiments/b8-harness/src/bin/realclient.rs`; output [`evidence/phase-b/x2-realclients-output.txt`](../archive/evidence/phase-b/x2-realclients-output.txt) |
 | EB-10 | SMITHAY: `CompositorState::new` advertises `wl_compositor` **v5**. v6 (`preferred_buffer_scale`) needs `new_v6` (`wayland/compositor/mod.rs:680-706`). Prototype 01 used v5. | source + harness (v6 bind fails against `new`) |
 | EB-11 | SMITHAY: pending frame callbacks accumulate across commits (`frame_callbacks.extend`, `wayland/compositor/handlers.rs:146`). A withheld callback is never dropped by a later commit. | source; confirmed by SC3 |
 | EB-12 | SMITHAY: `send_surface_state` sends an integer preferred scale; `FractionalScaleState::set_preferred_scale` sends `round(scale·120)`; both send only on change (EV-S07). | source; confirmed by SC1 |
@@ -772,9 +772,9 @@ Permanent regression test: client-observed `configure` count during pan = 0 (C12
 
 | ID | Evidence | Where |
 |---|---|---|
-| EB-13 | **X-8**: the pan-ownership model under test (`experiments/b8-harness/src/input.rs`) driven by injected physical events. Real Smithay seat, `wp_relative_pointer`, `wp_pointer_constraints`. The probe client records every pointer, relative, lock and confine event. 9 cases, **48 programmatic checks, all PASS**. | `src/bin/x8.rs`; [`evidence/phase-b/x8-pan-input-output.txt`](evidence/phase-b/x8-pan-input-output.txt) |
-| EB-14 | **X-6**: Smithay's real `WaylandSurfaceRenderElement` geometry (via `renderer_test`'s `DummyRenderer`) for a root surface plus an odd-offset subsurface. **134,478** rects over 241 scales × 3 magnitudes (up to 2³⁶). The f64-root B1.5 rule had **0** edge mismatches; the i32-root alternative had 72,242. | `src/bin/x6.rs`; [`evidence/phase-b/x6-edges-output.txt`](evidence/phase-b/x6-edges-output.txt) |
-| EB-15 | **X-9**: presentation feedback while unobserved. A superseded commit's feedback is `discarded` at supersede time and never presented; the latest unobserved commit stays pending and is `presented` 1.2 ms after re-entry. | `src/bin/x9.rs`; [`evidence/phase-b/x9-presentation-output.txt`](evidence/phase-b/x9-presentation-output.txt) |
+| EB-13 | **X-8**: the pan-ownership model under test (`experiments/b8-harness/src/input.rs`) driven by injected physical events. Real Smithay seat, `wp_relative_pointer`, `wp_pointer_constraints`. The probe client records every pointer, relative, lock and confine event. 9 cases, **48 programmatic checks, all PASS**. | `src/bin/x8.rs`; [`evidence/phase-b/x8-pan-input-output.txt`](../archive/evidence/phase-b/x8-pan-input-output.txt) |
+| EB-14 | **X-6**: Smithay's real `WaylandSurfaceRenderElement` geometry (via `renderer_test`'s `DummyRenderer`) for a root surface plus an odd-offset subsurface. **134,478** rects over 241 scales × 3 magnitudes (up to 2³⁶). The f64-root B1.5 rule had **0** edge mismatches; the i32-root alternative had 72,242. | `src/bin/x6.rs`; [`evidence/phase-b/x6-edges-output.txt`](../archive/evidence/phase-b/x6-edges-output.txt) |
+| EB-15 | **X-9**: presentation feedback while unobserved. A superseded commit's feedback is `discarded` at supersede time and never presented; the latest unobserved commit stays pending and is `presented` 1.2 ms after re-entry. | `src/bin/x9.rs`; [`evidence/phase-b/x9-presentation-output.txt`](../archive/evidence/phase-b/x9-presentation-output.txt) |
 | EB-16 | SMITHAY: `pointer_constraints` `activate()` is never automatic (compositor policy); `deactivate()` destroys oneshot constraints (`wayland/pointer_constraints.rs:120-160`). The seat's `WlSurface` pointer-target `leave()` calls `deactivate()` **unconditionally** (`wayland/seat/pointer.rs:246-256`). X-8 C4 observed a duplicated `locked_pointer.unlocked`. | source + X-8 |
 | EB-17 | SMITHAY: `PresentationFeedbackCachedState::merge_into` discards superseded feedback; `Drop` discards on destruction (`wayland/presentation/mod.rs:315-345`) | source + X-9 |
 | EB-18 | SMITHAY: `RendererSurfaceState::surface_view` is private; the public accessor is `view()` (`backend/renderer/utils/wayland.rs:344`). `SubsurfaceCachedState.location` is public. | source + X-6 (compile error, then `view()`) |
@@ -1064,7 +1064,7 @@ No warping of the client-visible pointer to viewport edges, no synthetic relativ
 | X-9 | Presentation feedback while unobserved | **RUN, PASS** | EB-15 |
 | X-10 (new) | Keyboard-binding key ownership (no stuck keys); input-delivery kick for a blocked unobserved client | **PENDING → T1** (harness has no keyboard path; mechanism is symmetric to the verified button rule) | — |
 | X-11 (new) | Output removal during an interaction; popup-grab dismissal on pan acquisition | **PENDING → T1** (harness cannot remove outputs; no grab test) | — |
-| X-12 (new) | W-SM-4b: oneshot lock never activated, then pointer leaves | **RUN: defect REPRODUCED at the client** (`unlocked` without `locked`; the lock can never activate afterwards). No intervention made (sealing rule). | `bin/x12.rs`; [`evidence/phase-b/x12-oneshot-lock-defect-output.txt`](evidence/phase-b/x12-oneshot-lock-defect-output.txt) |
+| X-12 (new) | W-SM-4b: oneshot lock never activated, then pointer leaves | **RUN: defect REPRODUCED at the client** (`unlocked` without `locked`; the lock can never activate afterwards). No intervention made (sealing rule). | `bin/x12.rs`; [`evidence/phase-b/x12-oneshot-lock-defect-output.txt`](../archive/evidence/phase-b/x12-oneshot-lock-defect-output.txt) |
 | X-13 (new) | Single surface-origin function: render, membership, hit test (incl. `Window::surface_under` popups) and input agree on every surface's Canvas origin (property test) | **PENDING → T0/T1** | — |
 | X-14 (new) | Activation/camera authority is unrepresentable for protocol code (compile-fail test) | **PENDING → T0** (needs the crate layout from C1) | — |
 
@@ -1276,7 +1276,7 @@ Every CONDITIONALLY RESOLVED item has:
 
 ## Phase D Architectural Findings
 
-> **Change-control record (Phase D checkpoint 1).** This section lists every finding classified **D-F2** (architecture correction) during Phase D checkpoint 1. Input baseline: the Phase C seal `615b0ed2f3631b698b0c54783c28f696ef4ff34a`. **Nothing here amends the sealed architecture.** The canonical registry (FOUNDATION_ARCHITECTURE §C12) and every sealed rule quoted below stay normative until the user disposes of the finding. Each "minimal correction" is a **proposal**. D-F1/D-F0 findings and the full analysis are in [`audit/`](audit/README.md).
+> **Change-control record (Phase D checkpoint 1).** This section lists every finding classified **D-F2** (architecture correction) during Phase D checkpoint 1. Input baseline: the Phase C seal `615b0ed2f3631b698b0c54783c28f696ef4ff34a`. **Nothing here amends the sealed architecture.** The canonical registry (FOUNDATION_ARCHITECTURE §C12) and every sealed rule quoted below stay normative until the user disposes of the finding. Each "minimal correction" is a **proposal**. D-F1/D-F0 findings and the full analysis are in [`audit/`](../archive/audit/README.md).
 >
 > Levels follow the master program: **A** = authority or architecture-breaking (stops advancement), **B** = correctness of a Foundation behaviour, **C** = specification gap with a local fix.
 
@@ -1576,9 +1576,9 @@ Every CONDITIONALLY RESOLVED item has:
 
 - **Falsification baseline (immutable):** `e8ec03a2ab36f315ae025723ec666b9ad278ac83`. The findings above are preserved unchanged.
 - **Status:** 1R corrections applied **uncommitted, for review**.
-- **Full chains** (sealed rule → counterexample → finding → replacement rule → INV → ADR → evidence): [audit/1R/CORRECTIONS_1R.md](audit/1R/CORRECTIONS_1R.md).
+- **Full chains** (sealed rule → counterexample → finding → replacement rule → INV → ADR → evidence): [audit/1R/CORRECTIONS_1R.md](../archive/audit/1R/CORRECTIONS_1R.md).
 - **Canonical wording:** FOUNDATION_ARCHITECTURE §C12.R1.
-- **Diff with provenance:** [audit/1R/INVARIANT_DIFF_1R.md](audit/1R/INVARIANT_DIFF_1R.md).
+- **Diff with provenance:** [audit/1R/INVARIANT_DIFF_1R.md](../archive/audit/1R/INVARIANT_DIFF_1R.md).
 
 | Finding | Level: baseline → 1R re-evaluation | Disposition | Replacement / destination | Evidence | Status |
 |---|---|---|---|---|---|
@@ -1680,7 +1680,7 @@ Two empirical refinements were needed to make the decisions hold. Both are recor
 
 - **Scope:** PD-F2-18 and PD-F2-19 only.
 - **Canonical wording:** FOUNDATION_ARCHITECTURE §C12.R2.
-- **Provenance:** [audit/2R/INVARIANT_DIFF_2R.md](audit/2R/INVARIANT_DIFF_2R.md).
+- **Provenance:** [audit/2R/INVARIANT_DIFF_2R.md](../archive/audit/2R/INVARIANT_DIFF_2R.md).
 - The findings above are preserved unchanged.
 
 | Finding | Level | Replacement | Evidence | Status |
@@ -2103,7 +2103,7 @@ Original finding text: the sections above (PD-F2) and audit/README (PD-F1-01…0
 
 **Method:** a fixed PASS/FAIL checklist. The verdict is computed from it: READY only if every mandatory item passes.
 
-**Mechanical items** are verified by `tools/check-foundation-docs` (exit 0) and `tools/check-foundation-docs --self-test` (every seeded defect detected). Run commands and outputs: `docs/foundation/evidence/phase-d/d7-checker-output.txt` and `d7-checker-selftest-output.txt`.
+**Mechanical items** are verified by `tools/check-foundation-docs` (exit 0) and `tools/check-foundation-docs --self-test` (every seeded defect detected). Run commands and outputs: `docs/archive/evidence/phase-d/d7-checker-output.txt` and `d7-checker-selftest-output.txt`.
 
 <!-- living:D9 -->
 | # | Gate item | Result | Evidence / reference | If FAIL |

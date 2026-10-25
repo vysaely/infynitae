@@ -2,7 +2,7 @@
 
 Status: **Phase A classification** (master prompt A2). Revisited in Phase D (D7). Evidence IDs refer to
 [FOUNDATION_EVIDENCE.md](FOUNDATION_EVIDENCE.md). Source identity: the hashes in
-[`evidence/phase-a/prototype-source-hashes.txt`](evidence/phase-a/prototype-source-hashes.txt).
+[`evidence/phase-a/prototype-source-hashes.txt`](../archive/evidence/phase-a/prototype-source-hashes.txt).
 The prototype repository has no commits.
 
 Legend: **REUSE** (take as-is) · **ADAPT** (keep idea, change form) · **REIMPLEMENT** (requirement

@@ -1,5 +1,5 @@
 //! X-8: camera-pan input ownership, observed at the client.
-//! Output: docs/foundation/evidence/phase-b/x8-pan-input-output.txt
+//! Output: docs/archive/evidence/phase-b/x8-pan-input-output.txt
 //!
 //! Each case checks invariants against the probe client's own event log:
 //!  INV-1  while CameraPan owns the pointer: 0 wl_pointer.motion, 0 relative_motion, 0 wl_pointer.button

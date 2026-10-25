@@ -4,7 +4,7 @@ import sys; sys.dont_write_bytecode = True  # keep the repository free of __pyca
 protocol-fullscreen element observed from another output? (Phase E claim: rho = 4.0 -> preferred_scale
 4.0 -> 7680x4320 buffer.) Uses the historical model's own ladder()/target() (F-SCALE-2/-3).
 Separates (1) semantic correctness, (2) resource cost, (3) device-limit safety.
-Output: docs/foundation/evidence/E1R/e1r-fullscreen-output.txt
+Output: docs/archive/evidence/E1R/e1r-fullscreen-output.txt
 """
 import contextlib, io, importlib.util, math, os
 HERE = os.path.dirname(os.path.abspath(__file__))

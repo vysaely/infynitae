@@ -12,7 +12,7 @@
 //!            core only; at the end of the client sequence the reconciliation runs once
 //! Checked at every step: core constraint state == Smithay `is_active()`; `unlocked` count over the run
 //! is exactly 1; no wl_pointer.motion while locked; no relative motion (no physical delta injected).
-//! Output: docs/foundation/evidence/phase-d/xlock-grab-output.txt
+//! Output: docs/archive/evidence/phase-d/xlock-grab-output.txt
 use b8_harness::{
     input::{Intake, PanBinding, PanFocusMode},
     lockstep::Lockstep,

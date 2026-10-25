@@ -2,7 +2,7 @@
 
 Phase D checkpoint 1 (D6). Baseline: Phase C seal `615b0ed2f3631b698b0c54783c28f696ef4ff34a`.
 
-These records explain **why** each foundational decision was made. **What** the rules are is normative in [FOUNDATION_ARCHITECTURE.md](FOUNDATION_ARCHITECTURE.md) (canonical registry §C12) and [FOUNDATION_BLOCKERS.md](FOUNDATION_BLOCKERS.md). Phase D findings are cited by ID ([audit/README.md](audit/README.md)).
+These records explain **why** each foundational decision was made. **What** the rules are is normative in [FOUNDATION_ARCHITECTURE.md](FOUNDATION_ARCHITECTURE.md) (canonical registry §C12) and [FOUNDATION_BLOCKERS.md](FOUNDATION_BLOCKERS.md). Phase D findings are cited by ID ([audit/README.md](../archive/audit/README.md)).
 
 An ADR whose decision is touched by an open D-F2 finding has the status **"Accepted; under Phase D review"**. The decision stands until the user disposes of the finding.
 

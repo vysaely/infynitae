@@ -2,7 +2,7 @@
 //! ordinary steps, a per-frame renegotiation storm). Real time, private socket, no host compositor.
 //!
 //! usage: scaleprobe <runtime_dir> -- <client cmd...>
-//! Output recorded under docs/foundation/evidence/phase-c/cp3a-scaleprobe-output.txt
+//! Output recorded under docs/archive/evidence/phase-c/cp3a-scaleprobe-output.txt
 
 use std::{
     process::Command,

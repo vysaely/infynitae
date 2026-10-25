@@ -1,7 +1,7 @@
 //! Phase D (D5, epoch 1): the four-epoch audit tree under the D5 cameras, against Smithay's real
 //! render-element geometry. Extends xhit (EC-20) to an effective scale k that is NOT of the form n/120
 //! (camera zoom from a viewport-fit, k_A = 1080/651) and to the exact D5 cameras/anchor.
-//! Output: docs/foundation/evidence/phase-d/d5hit-output.txt
+//! Output: docs/archive/evidence/phase-d/d5hit-output.txt
 use b8_harness::{lockstep::Lockstep, server::*, snapshot};
 use smithay::{
     backend::renderer::{

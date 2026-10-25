@@ -19,7 +19,7 @@ __pycache__/
 
 # Temporary and local test files
 *.log
-!docs/foundation/audit/**/*.log
+!docs/archive/audit/**/*.log
 *.tmp
 live/infynitae-portal
 live/infynitae-polkit
