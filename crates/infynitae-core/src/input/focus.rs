@@ -8,7 +8,7 @@
 use crate::protocol::Effect;
 use crate::stage::ElementId;
 
-/// What an `xdg_activation_v1` request may do (INV-INPUT-9; PROV-10, provisional; OB-40 decides).
+/// What an `xdg_activation_v1` request may do (INV-INPUT-9, PROV-10, OB-40).
 /// The adapter tells Core whether the request's token passed the provenance check (W-SM-8).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ActivationPolicy {
@@ -212,10 +212,9 @@ impl FocusModel {
         self.activation_policy = policy;
     }
 
-    /// An activation request for `element` (INV-INPUT-9; outcome policy PROV-10, provisional):
-    /// focus when the policy lets this request focus (`validated`: its token passed the
-    /// provenance check) and the element may take focus (`eligible`), attention otherwise.
-    /// Never a camera change.
+    /// An activation request for `element` (INV-INPUT-9, PROV-10): focus when the policy lets
+    /// this request focus (`validated`: its token passed the provenance check) and the element
+    /// may take focus (`eligible`), attention otherwise. Never a camera change.
     pub fn activation(
         &mut self,
         element: ElementId,
