@@ -11,6 +11,47 @@ if [ -f "$HOME/infynitae/live/config.sh" ]; then
     . "$HOME/infynitae/live/config.sh"
 fi
 
+# 1b. Start Screen (replacing the TTY prompt with the lock screen). First, before any window can
+# open: nothing else starts until the compositor has confirmed the lock. If it cannot be engaged
+# (no locker installed, the locker failed), the session ends rather than stay unlocked.
+if [ "$START_LOCKED" = "1" ] || [ "$START_LOCKED" = "true" ] || [ "$1" = "--lock" ]; then
+    LOCK_BIN=""
+    if [ -x "$HOME/.local/bin/infynitae-lock" ]; then
+        LOCK_BIN="$HOME/.local/bin/infynitae-lock"
+    elif [ -x "$HOME/infynitae/live/lock/infynitae-lock" ]; then
+        LOCK_BIN="$HOME/infynitae/live/lock/infynitae-lock"
+    elif command -v infynitae-lock >/dev/null 2>&1; then
+        LOCK_BIN="infynitae-lock"
+    fi
+    LOCK_LOG="$HOME/.local/state/infynitae/lock.log"
+    mkdir -p "$HOME/.local/state/infynitae"
+    LOCKED=false
+    if [ -n "$LOCK_BIN" ]; then
+        "$LOCK_BIN" > "$LOCK_LOG" 2>&1 &
+        LOCK_PID=$!
+        # the locker prints this line once the compositor confirmed the lock (up to 15 s)
+        i=0
+        while [ "$i" -lt 150 ]; do
+            if grep -q "Screen locked" "$LOCK_LOG" 2>/dev/null; then
+                LOCKED=true
+                break
+            fi
+            kill -0 "$LOCK_PID" 2>/dev/null || break
+            sleep 0.1
+            i=$((i + 1))
+        done
+    fi
+    if [ "$LOCKED" != "true" ]; then
+        echo "[infynitae] START_LOCKED: the lock screen could not be engaged (${LOCK_BIN:-infynitae-lock not installed}); ending the session" >&2
+        # the compositor is this script's parent; on the console its supervisor must not restart it
+        if ! tr '\0' ' ' < "/proc/$PPID/cmdline" 2>/dev/null | grep -q -- "--nested"; then
+            : > "$HOME/.local/state/infynitae/stop"
+        fi
+        kill -TERM "$PPID" 2>/dev/null
+        exit 1
+    fi
+fi
+
 # 2. Synchronize Wayland & D-Bus environment for Portals, PipeWire, and screensharing
 if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY XAUTHORITY 2>/dev/null || true
@@ -49,16 +90,6 @@ if [ -n "$WP_BIN" ]; then
     fi
 fi
 
-# 5. Boot / Start Screen (Replacing TTY prompt with Lock Screen)
-if [ "$START_LOCKED" = "1" ] || [ "$START_LOCKED" = "true" ] || [ "$1" = "--lock" ]; then
-    if [ -x "$HOME/.local/bin/infynitae-lock" ]; then
-        "$HOME/.local/bin/infynitae-lock" &
-    elif [ -x "$HOME/infynitae/live/lock/infynitae-lock" ]; then
-        "$HOME/infynitae/live/lock/infynitae-lock" &
-    elif command -v infynitae-lock >/dev/null 2>&1; then
-        infynitae-lock &
-    fi
-fi
 
 # 6. Native Screen Recorder & 20-minute Replay Buffer (Invincible background watchdog)
 if [ "${ENABLE_REPLAY_BUFFER:-false}" = "true" ] || [ "${ENABLE_REPLAY_BUFFER:-false}" = "1" ]; then

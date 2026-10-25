@@ -872,12 +872,21 @@ int main(int argc, char **argv) {
     }
     wl_display_roundtrip(app.display);
     wl_display_roundtrip(app.display);
+    // the compositor confirms the lock once a locked frame is on screen (after a vblank)
+    while (!app.locked && !app.lock_refused) {
+        if (wl_display_dispatch(app.display) < 0) {
+            fprintf(stderr, "[infynitae-lock] Error: lost the compositor connection\n");
+            return 1;
+        }
+    }
     if (app.lock_refused) {
         fprintf(stderr, "[infynitae-lock] Error: the compositor refused the lock (is another lock screen running?)\n");
         return 1;
     }
 
+    // session.sh waits for this line (START_LOCKED): printed only once the lock is confirmed
     printf("[infynitae-lock] Screen locked for user '%s'. Enter password to unlock.\n", app.username);
+    fflush(stdout);
 
     // Event poll loop
     time_t last_clock_tick = time(NULL);
