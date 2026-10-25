@@ -174,6 +174,13 @@ pub struct WaylandState {
     /// `zxdg_exporter_v2` / `zxdg_importer_v2`: a portal dialog (file chooser, screen-share
     /// picker) takes another client's window as its parent, as `xdg_toplevel.set_parent` does.
     xdg_foreign: smithay::wayland::xdg_foreign::XdgForeignState,
+    /// `wp_single_pixel_buffer_manager_v1`: one-colour buffers (scaled by a viewport), drawn as
+    /// solid colour by every renderer here.
+    #[expect(
+        dead_code,
+        reason = "owns the wp_single_pixel_buffer_manager_v1 global for the state's lifetime"
+    )]
+    single_pixel_buffer: smithay::wayland::single_pixel_buffer::SinglePixelBufferState,
     /// `wl_data_device_manager`: clipboard selection and drag-and-drop offers (2026-10-16).
     /// Selections are Smithay protocol objects; who sees and sets them follows Core's
     /// keyboard focus (`SeatHandler::focus_changed`).
@@ -456,6 +463,9 @@ impl WaylandState {
                 display,
             ),
             xdg_foreign: smithay::wayland::xdg_foreign::XdgForeignState::new::<Self>(display),
+            single_pixel_buffer: smithay::wayland::single_pixel_buffer::SinglePixelBufferState::new::<
+                Self,
+            >(display),
             data_device: DataDeviceState::new::<Self>(display),
             primary_selection,
             wlr_data_control,
