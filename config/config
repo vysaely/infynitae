@@ -96,8 +96,8 @@ PRIVACY_APPS=""                   # hidden from captures, e.g. "bitwarden,keepas
 PRIVACY_TITLES=""                 # by title, e.g. "Password"; Super+Shift+P toggles a window
 
 # ── Screen recorder & replay buffer ───────────────────────────────────── [use] ──
-# A rolling buffer in RAM: about 110 MB per minute, frames copied through the CPU. Audio is
-# desktop sound, never the microphone. Super+Alt+C saves a clip, Super+Alt+R records.
+# A rolling buffer in RAM: about 110 MB per minute, frames copied through the CPU. Audio: see
+# RECORD_AUDIO (the microphone only when you choose mic or both). Super+Alt+C saves a clip, Super+Alt+R records.
 # Changes apply when the recorder restarts: infynitae-reload recorder.
 ENABLE_REPLAY_BUFFER="false"
 REPLAY_BUFFER_MINUTES="20"
@@ -106,7 +106,7 @@ CLIPS_DIR="$HOME/Videos/Clips"
 RECORDINGS_DIR="$HOME/Videos/Recordings"
 RECORD_FPS="60"
 RECORD_CODEC="hevc"               # auto | hevc | av1 | h264
-RECORD_AUDIO="true"
+RECORD_AUDIO="desktop"            # desktop | mic | both | none — the system's default devices
 
 # ── Key bindings ──────────────────────────────────────────────────────── [save] ──
 # Give an action other keys (its own are freed), or free them with "none":

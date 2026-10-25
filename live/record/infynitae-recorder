@@ -27,7 +27,7 @@ RECORDINGS_DIR="${RECORDINGS_DIR:-$HOME/Videos/Recordings}"
 REPLAY_MINUTES="${REPLAY_BUFFER_MINUTES:-20}"
 RECORD_FPS="${RECORD_FPS:-60}"
 RECORD_CODEC="${RECORD_CODEC:-auto}" # auto, hevc, av1, h264
-RECORD_AUDIO="${RECORD_AUDIO:-true}"
+RECORD_AUDIO="${RECORD_AUDIO:-desktop}"
 RECORD_NOTIFY="${RECORD_NOTIFY:-true}"
 
 PID_FILE="/tmp/infynitae-recording.pid"
@@ -142,24 +142,35 @@ detect_encoder_pipeline() {
 # Universal Audio Input Auto-Detection
 # Scans PipeWire, PulseAudio, and ALSA; gracefully falls back if soundcard absent
 # ------------------------------------------------------------------------------
+# RECORD_AUDIO: desktop (the default output's sound) | mic (the default input) | both (mixed) |
+# none. The devices are the system's defaults when recording starts. "true"/"false" are the old
+# spellings of desktop/none. The microphone is only ever recorded when asked for.
 detect_audio_args() {
-    if [ "$RECORD_AUDIO" != "true" ] && [ "$RECORD_AUDIO" != "1" ]; then
-        echo ""
-        return
-    fi
-
-    # Desktop audio = the monitor of the default output. Pulse's "default" is the default *input*
-    # (the microphone), which must never be recorded without asking.
-    if command -v pactl >/dev/null 2>&1; then
+    case "$(echo "${RECORD_AUDIO:-desktop}" | tr 'A-Z' 'a-z')" in
+        desktop|true|1|yes|on) want_desktop=1; want_mic=0 ;;
+        mic|microphone) want_desktop=0; want_mic=1 ;;
+        both|all) want_desktop=1; want_mic=1 ;;
+        *) echo ""; return ;;
+    esac
+    command -v pactl >/dev/null 2>&1 || { echo ""; return; }
+    works() { ffmpeg -loglevel error -f pulse -i "$1" -t 0.05 -f null - >/dev/null 2>&1; }
+    desk=""; mic=""
+    if [ "$want_desktop" = 1 ]; then
         SINK=$(pactl get-default-sink 2>/dev/null)
-        if [ -n "$SINK" ] && ffmpeg -loglevel error -f pulse -i "$SINK.monitor" -t 0.05 -f null - >/dev/null 2>&1; then
-            echo "-f pulse -i $SINK.monitor -c:a aac -b:a 192k"
-            return
-        fi
+        [ -n "$SINK" ] && works "$SINK.monitor" && desk="$SINK.monitor"
     fi
-
-    # 3. No audio hardware present (e.g. minimal VM)
-    echo ""
+    if [ "$want_mic" = 1 ]; then
+        SOURCE=$(pactl get-default-source 2>/dev/null)
+        [ -n "$SOURCE" ] && works "$SOURCE" && mic="$SOURCE"
+    fi
+    if [ -n "$desk" ] && [ -n "$mic" ]; then
+        # input 0 is the video; 1 and 2 are mixed into one track
+        echo "-f pulse -i $desk -f pulse -i $mic -filter_complex [1:a][2:a]amix=inputs=2:duration=longest[a] -map 0:v -map [a] -c:a aac -b:a 192k"
+    elif [ -n "$desk$mic" ]; then
+        echo "-f pulse -i $desk$mic -c:a aac -b:a 192k"
+    else
+        echo ""
+    fi
 }
 
 start_replay_engine() {
@@ -178,6 +189,7 @@ start_replay_engine() {
 
     # Screen streamer -> FFmpeg hardware encoder -> circular segment ring buffer
     # Uses nice -n 10 so foreground games/apps always get 100% priority
+    set -f  # $A_ARGS holds ffmpeg filter text with brackets: no filename expansion
     exec nice -n 10 "$STREAM_BIN" --fps "$RECORD_FPS" | nice -n 10 ffmpeg -loglevel error -y \
         -f rawvideo -pix_fmt bgr0 -s:v "$GEOM" -r "$RECORD_FPS" -i - \
         $A_ARGS \
@@ -282,11 +294,13 @@ start_recording() {
     echo "[infynitae-recorder] Starting continuous recording: geometry ${GEOM}, ${RECORD_FPS}fps..."
 
     # Run in background
+    set -f  # $A_ARGS holds ffmpeg filter text with brackets: no filename expansion
     nice -n 10 "$STREAM_BIN" --fps "$RECORD_FPS" | nice -n 10 ffmpeg -loglevel error -y \
         -f rawvideo -pix_fmt bgr0 -s:v "$GEOM" -r "$RECORD_FPS" -i - \
         $A_ARGS \
         $V_PIPELINE \
         "$OUT_FILE" >/dev/null 2>&1 &
+    set +f
 
     REC_PID=$!
     echo $REC_PID > "$PID_FILE"
