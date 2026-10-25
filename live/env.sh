@@ -162,31 +162,43 @@ if [ -x "$PORTAL_BIN" ] && ! pgrep -f '(^|/)infynitae-portal( |$)' >/dev/null 2>
 fi
 
 # 8. Resolve WAYLAND_DISPLAY, DISPLAY, and XAUTHORITY with auto-healing
-# WAYLAND_DISPLAY when unset: the socket the newest compositor start announced, else the first
-# real socket (not a symlink some other tool left).
-if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
-    sock=$(grep -o 'Listening on Wayland socket: [^ ]*' "$HOME/.local/state/infynitae/session.log" 2>/dev/null | tail -1 | cut -d' ' -f5)
-    if [ -n "$sock" ] && [ -S "$XDG_RUNTIME_DIR/$sock" ]; then
-        export WAYLAND_DISPLAY="$sock"
-    else
-        for wsock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
-            if [ -S "$wsock" ] && [ ! -L "$wsock" ]; then
-                export WAYLAND_DISPLAY="${wsock##*/}"
+# In the console case, do not export a display merely found on disk.
+is_console=0
+if [ "$XDG_SESSION_TYPE" = "tty" ]; then
+    is_console=1
+else
+    case "$(tty 2>/dev/null)" in
+        /dev/tty[0-9]*|/dev/vc/*) is_console=1 ;;
+    esac
+fi
+
+if [ "$is_console" -eq 0 ]; then
+    # WAYLAND_DISPLAY when unset: the socket the newest compositor start announced, else the first
+    # real socket (not a symlink some other tool left).
+    if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
+        sock=$(grep -o 'Listening on Wayland socket: [^ ]*' "$HOME/.local/state/infynitae/session.log" 2>/dev/null | tail -1 | cut -d' ' -f5)
+        if [ -n "$sock" ] && [ -S "$XDG_RUNTIME_DIR/$sock" ]; then
+            export WAYLAND_DISPLAY="$sock"
+        else
+            for wsock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
+                if [ -S "$wsock" ] && [ ! -L "$wsock" ]; then
+                    export WAYLAND_DISPLAY="${wsock##*/}"
+                    break
+                fi
+            done
+        fi
+    fi
+
+    # Resolve DISPLAY: prioritize active unix socket
+    if [ -z "$DISPLAY" ] || [ ! -S "/tmp/.X11-unix/X${DISPLAY#*:}" ]; then
+        for xsock in /tmp/.X11-unix/X*; do
+            if [ -S "$xsock" ]; then
+                num="${xsock##*/X}"
+                export DISPLAY=":$num"
                 break
             fi
         done
     fi
-fi
-
-# Resolve DISPLAY: prioritize active unix socket
-if [ -z "$DISPLAY" ] || [ ! -S "/tmp/.X11-unix/X${DISPLAY#*:}" ]; then
-    for xsock in /tmp/.X11-unix/X*; do
-        if [ -S "$xsock" ]; then
-            num="${xsock##*/X}"
-            export DISPLAY=":$num"
-            break
-        fi
-    done
 fi
 
 

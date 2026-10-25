@@ -22,8 +22,19 @@ cleanup() {
 trap cleanup EXIT INT TERM HUP
 umask 077
 
+# Decide console vs nested from environment before sourcing env.sh
+TTY_MODE=""
+if [ "$XDG_SESSION_TYPE" = "tty" ] || { [ -z "$WAYLAND_DISPLAY" ] && [ -z "$DISPLAY" ]; }; then
+    TTY_MODE="--tty"
+fi
+
 if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"
+fi
+
+# In console mode, do not inherit any stale display env.sh might have found on disk
+if [ -n "$TTY_MODE" ]; then
+    unset WAYLAND_DISPLAY DISPLAY
 fi
 
 export RUST_BACKTRACE=1
@@ -38,11 +49,6 @@ SESSION_SCRIPT="$HOME/infynitae/live/session.sh"
 XWLS=""
 if command -v xwayland-satellite >/dev/null 2>&1; then
     XWLS="--xwayland-satellite $(command -v xwayland-satellite)"
-fi
-
-TTY_MODE=""
-if [ -z "$WAYLAND_DISPLAY" ] && [ -z "$DISPLAY" ]; then
-    TTY_MODE="--tty"
 fi
 
 rm -f "$STOP_FILE"
@@ -60,6 +66,9 @@ while true; do
     # Refresh environment and drop stale auth before launch
     if [ -f "$HOME/infynitae/live/env.sh" ]; then
         . "$HOME/infynitae/live/env.sh"
+    fi
+    if [ -n "$TTY_MODE" ]; then
+        unset WAYLAND_DISPLAY DISPLAY
     fi
     if [ -n "$XAUTHORITY" ] && [ ! -f "$XAUTHORITY" ]; then
         unset XAUTHORITY
