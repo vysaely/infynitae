@@ -23,8 +23,12 @@ fi
 
 RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp/infynitae-runtime-$(id -u)}"
 if [ ! -d "$RUNTIME_DIR" ]; then
-    mkdir -p "$RUNTIME_DIR"
-    chmod 700 "$RUNTIME_DIR" 2>/dev/null || true
+    mkdir -m 700 -p "$RUNTIME_DIR"
+fi
+# a fallback dir in /tmp someone else made first would let them steer our PID files
+if [ ! -O "$RUNTIME_DIR" ]; then
+    echo "[infynitae-recorder] Error: $RUNTIME_DIR is not owned by $(id -un)" >&2
+    exit 1
 fi
 
 if [ -z "$REPLAY_DIR" ] || [ "$REPLAY_DIR" = "/dev/shm/infynitae-replay" ]; then

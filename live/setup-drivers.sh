@@ -18,7 +18,7 @@ fi
 if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
     echo "==> Enabling [multilib] repository in /etc/pacman.conf..."
     sudo sed -i '/\[multilib\]/,/Include/ s/^#//' /etc/pacman.conf
-    sudo pacman -Syu --needed --noconfirm
+    sudo pacman -Syu --needed
 fi
 
 # 3. Detect graphics hardware
