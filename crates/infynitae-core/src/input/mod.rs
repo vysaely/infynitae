@@ -1,5 +1,5 @@
 //! Physical input intake (C4.1, C4.2): the button ownership table (OBJ-25), the interaction state
-//! machine (OBJ-26, M22, CameraPan only in INC-3) and binding resolution.
+//! machine (OBJ-26, M22) and binding resolution.
 //!
 //! This module decides; it does not mutate cameras or the Stage. It cannot mint a proof and has no
 //! mutable access to either: `entry::physical_input` applies its decisions (INV-CAMERA-1).
@@ -393,9 +393,8 @@ mod tests {
         assert!(matches!(c.pointer(), PointerState::Located { output, .. } if output == b));
     }
 
-    /// INC2-F07 rule extended to camera changes: a pan makes the output's ProjectionFrame stale
-    /// (its storage is kept for the next list, C14.3), so the next hit test never reads a frame
-    /// from a camera that no longer exists.
+    /// A pan makes the output's ProjectionFrame stale (its storage is kept for the next list,
+    /// C14.3), so the next hit test never reads a frame from a camera that no longer exists.
     #[test]
     fn a_pan_drops_the_output_frame() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
