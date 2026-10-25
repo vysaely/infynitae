@@ -1,10 +1,8 @@
-# Infynitae Native — Foundation Test Plan
+# Test plan
 
-Status: **Phase D checkpoint 2 (D7) living document.** Canonical living home of `OB-*` (complete obligation registry), the verification tiers `T0–T5` and the test inventory `TST-*` (FOUNDATION_ARCHITECTURE §P0).
-
-Historical obligation records stay unchanged as provenance: ARCHITECTURE CP3A-4, C11.2, the OB-19 section, C12.R1.3, C12.R2.2, and audit/1R CORRECTIONS_1R.
-
-Every other living document cites `OB-*` by ID only.
+The verification tiers (`T0`…`T5`: from pure Core tests to real hardware and games), the
+obligations (`OB-*`: what must be verified, how, and where), and the test inventory (`TST-*`).
+Other documents cite obligations by ID only.
 
 ## 1. Verification tiers
 

@@ -1,10 +1,7 @@
-# Infynitae Native — Foundation Object Model
+# Object model
 
-Status: **Phase D checkpoint 2 (D7) living document.** Canonical living home of `OBJ-*` (FOUNDATION_ARCHITECTURE §P0).
-
-This is a **readable projection**. Where an invariant defines authority or writers, the entry cites it and does not restate a competing rule. The invariant (FOUNDATION_INVARIANTS.md) is the authority.
-
-Historical matrices remain as provenance: ARCHITECTURE C2.1/C2.2/C-AUTH; audit D3; 1R and 2R matrix deltas.
+Core's objects (`OBJ-*`): what each holds, who may write it, and how long it lives. Where an
+invariant defines the authority or the writers, the entry cites it; the invariant is the rule.
 
 Classes: **A** authoritative · **P** protocol (Smithay-owned) · **D** derived · **C** cache · **PO** presentation-only.
 

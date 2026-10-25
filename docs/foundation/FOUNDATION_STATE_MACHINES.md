@@ -1,10 +1,10 @@
-# Infynitae Native — Foundation State Machines (effective)
+# State machines
 
-Status: **Phase D checkpoint 2 (D7) living document.** Canonical living home of the state-machine namespace `M*` (FOUNDATION_ARCHITECTURE §P0).
-
-These are the **effective** machines after the 1R and 2R corrections and the unsealed Phase E corrective checkpoint E1R (FOUNDATION_ARCHITECTURE §C12.E1R). Every transition cites the invariant (FOUNDATION_INVARIANTS.md) or ADR (FOUNDATION_DECISIONS.md) it implements. Objects are named by `OBJ-*` (FOUNDATION_OBJECT_MODEL.md) and formulas by `F-*` (FOUNDATION_ARCHITECTURE §F).
-
-Historical tables are provenance only and are not edited: BLOCKERS B5.3, B9.6, B10.4 and B11 (Phase B); audit/D2 (e8ec03a); audit/1R/STATE_MACHINES_1R (84ce620); audit/2R/MATRICES_2R (5827926). E1R changes: audit/E1R/INVARIANT_DIFF_E1R.md.
+The lifecycles Core runs (`M*`): toplevels, outputs, pointer, focus, fullscreen, interactions and
+more. Every transition cites the invariant ([FOUNDATION_INVARIANTS.md](FOUNDATION_INVARIANTS.md))
+or ADR ([FOUNDATION_DECISIONS.md](FOUNDATION_DECISIONS.md)) it implements; objects are `OBJ-*`
+([FOUNDATION_OBJECT_MODEL.md](FOUNDATION_OBJECT_MODEL.md)), formulas `F-*`
+([FOUNDATION_ARCHITECTURE.md](FOUNDATION_ARCHITECTURE.md) §F).
 
 One core batch performs, in order:
 1. state updates;

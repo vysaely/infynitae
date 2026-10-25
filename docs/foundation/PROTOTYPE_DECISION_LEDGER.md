@@ -1,9 +1,8 @@
-# Prototype 01 Decision Ledger
+# Prototype decision ledger
 
-Status: **Phase A classification** (master prompt A2). Revisited in Phase D (D7). Evidence IDs refer to
-[FOUNDATION_EVIDENCE.md](FOUNDATION_EVIDENCE.md). Source identity: the hashes in
-[`evidence/phase-a/prototype-source-hashes.txt`](../archive/evidence/phase-a/prototype-source-hashes.txt).
-The prototype repository has no commits.
+What the first prototype taught (`PL-*`): for each of its parts, whether the idea was kept,
+changed, reimplemented or dropped, and why. Evidence IDs are in
+[FOUNDATION_EVIDENCE.md](FOUNDATION_EVIDENCE.md).
 
 Legend: **REUSE** (take as-is) · **ADAPT** (keep idea, change form) · **REIMPLEMENT** (requirement
 stands, prototype code unsuitable) · **DISCARD** (remove) · **DEFER** (not Foundation 01).

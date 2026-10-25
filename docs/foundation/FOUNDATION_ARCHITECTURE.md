@@ -118,7 +118,6 @@ A definition counts only inside a `living:` region of the home document, using t
 | OBJ | `OBJ-[0-9]+` | FOUNDATION_OBJECT_MODEL.md | heading `### OBJ-…` | ARCHITECTURE C2.1/C2.2/C-AUTH; audit D3, 1R, 2R | reference only |
 | PL | `PL-[0-9]+` | PROTOTYPE_DECISION_LEDGER.md | heading `### PL-…` | Phase A ledger table (same document) | reference only |
 | INC | `INC-[0-9]+` | FOUNDATION_IMPLEMENTATION_PLAN.md | heading `### INC-…` | — | reference only |
-| D9 | `D9` (gate checklist, verdict, Phase E handoff) | FOUNDATION_BLOCKERS.md | heading `## D9` | — | reference only |
 <!-- /living -->
 
 Nothing in `docs/archive/` is a canonical home.

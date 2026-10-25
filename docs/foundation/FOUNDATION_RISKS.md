@@ -1,11 +1,7 @@
-# Infynitae Native — Foundation Risks (effective register)
+# Risks
 
-Status: **Phase D checkpoint 2 (D7) living document.** Canonical living home of the RISK namespace (FOUNDATION_ARCHITECTURE §P0).
-
-Existing identifiers are preserved. Their historical records remain at the named origin:
-- `RB-*`, `A-B1-1`, `NB-*`: BLOCKERS;
-- `RC-*`, `A-C1`, `C-NB-2`: ARCHITECTURE;
-- `T[ATCPRF]-*`: audit/D1, the falsification baseline.
+What could go wrong with the design, and what is done about each (`RB-*`, `RC-*`, `T?-*`, `NB-*`,
+…). Risk IDs keep their original names.
 
 Disposition vocabulary:
 - `MITIGATED`: the architecture handles it; verification obligations may remain;

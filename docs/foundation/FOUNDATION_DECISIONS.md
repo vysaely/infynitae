@@ -1,12 +1,11 @@
-# Infynitae Native — Foundation Decisions (ADRs)
+# Architecture decisions
 
-Phase D checkpoint 1 (D6). Baseline: Phase C seal `615b0ed2f3631b698b0c54783c28f696ef4ff34a`.
-
-These records explain **why** each foundational decision was made. **What** the rules are is normative in [FOUNDATION_ARCHITECTURE.md](FOUNDATION_ARCHITECTURE.md) (canonical registry §C12) and [FOUNDATION_BLOCKERS.md](FOUNDATION_BLOCKERS.md). Phase D findings are cited by ID ([audit/README.md](../archive/audit/README.md)).
-
-An ADR whose decision is touched by an open D-F2 finding has the status **"Accepted; under Phase D review"**. The decision stands until the user disposes of the finding.
-
-**Phase D 1R:** the corrections are recorded as "1R amendment" notes inside the affected ADRs. The canonical rules are FOUNDATION_ARCHITECTURE §C12.R1; provenance is in audit/1R/.
+Why the architecture is the way it is (`ADR-*`). The rules themselves are the invariants
+([FOUNDATION_INVARIANTS.md](FOUNDATION_INVARIANTS.md)), formulas and provisional values
+([FOUNDATION_ARCHITECTURE.md](FOUNDATION_ARCHITECTURE.md)) and obligations
+([FOUNDATION_TEST_PLAN.md](FOUNDATION_TEST_PLAN.md)); an ADR explains them and cites their IDs.
+"Amended" notes in the table say which later change touched a decision. Behaviour choices (keys,
+focus, defaults) are in [../DECISIONS.md](../DECISIONS.md).
 
 Evidence class: P protocol · S Smithay source · M math/model · H harness experiment (T1-style) · R real client · D design policy · V provisional · X deferred physical validation.
 
@@ -30,7 +29,6 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 ---
 
 
-> **D7:** this document is the canonical living home of `ADR-*` (FOUNDATION_ARCHITECTURE §P0). Normative rules live in FOUNDATION_INVARIANTS.md (`INV-*`), FOUNDATION_ARCHITECTURE.md (`F-*`, `PROV-*`) and FOUNDATION_TEST_PLAN.md (`OB-*`); ADRs explain why and cite those IDs.
 
 <!-- living:ADR -->
 ## ADR-01: Stage is the sole spatial authority; Smithay `Space` rejected

@@ -1,36 +1,13 @@
-# Infynitae Native — Foundation Invariants (effective registry)
+# Invariants
 
-Status: **Phase D checkpoint 2 (D7) living document, amended by the UNSEALED Phase E corrective checkpoint E1R and by the Phase F amendment layers C12.F1, C12.F2, C12.F3, C12.F4, C12.F5, C12.F6, C12.F7, C12.F8, C12.F10, C12.F11, C12.F12, C12.F13, C12.F14, C12.F15, C12.F16 and C12.F17 (adopted by owner approval).** Canonical living home of the `INV-*` namespace (FOUNDATION_ARCHITECTURE §P0).
+What must always hold, by ID (`INV-*`). Code comments and tests cite these; a change to one is a
+design change (see [../DECISIONS.md](../DECISIONS.md)).
 
-This registry is the **effective projection** of twenty layers. The layers themselves stay where they are and are not edited:
-- **C12 @ 615b0ed2f3631b698b0c54783c28f696ef4ff34a**: FOUNDATION_ARCHITECTURE §C12 (sealed Phase C registry, 54 rows);
-- **C12.R1 @ 84ce620898445aaadb72f386ec3954e5bbfe2c2f**: FOUNDATION_ARCHITECTURE §C12.R1 (Phase D 1R amendments, 16 rows);
-- **C12.R2 @ 5827926782089dc8c6a1c203f844fbc879fce9be**: FOUNDATION_ARCHITECTURE §C12.R2 (Phase D 2R amendments, 6 rows);
-- **C12.E1R @ UNSEALED (E1R review gate; base 09075a2)**: FOUNDATION_ARCHITECTURE §C12.E1R (Phase E corrective amendments, 6 rows; not sealed);
-- **C12.F1 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)**: FOUNDATION_ARCHITECTURE §C12.F1 (Phase F amendment: default placement at first map, 1 row);
-- **C12.F2 @ ADOPTED 2026-10-13 (owner approval; base 2436dd4)**: FOUNDATION_ARCHITECTURE §C12.F2 (Phase F amendment: device bound on the 1/120 lattice, 1 row);
-- **C12.F3 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)**: FOUNDATION_ARCHITECTURE §C12.F3 (Phase F amendment: `configure_bounds(0, 0)`, 1 row);
-- **C12.F4 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)**: FOUNDATION_ARCHITECTURE §C12.F4 (Phase F amendment: epoch time authority, 1 row);
-- **C12.F5 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F5 (Phase F amendment: default placement at the first windowed presentation, 1 row);
-- **C12.F6 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F6 (Phase F amendment: a pre-map grant takes the output when its element maps, 1 row);
-- **C12.F7 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F7 (Phase F amendment: focus eligibility and retention under a presentation, 1 row);
-- **C12.F8 @ ADOPTED 2026-10-14 (owner approval; base 93c2605)**: FOUNDATION_ARCHITECTURE §C12.F8 (Phase F amendment: popup stacking follows xdg-shell, 1 row);
-- **C12.F10 @ ADOPTED 2026-10-14 (owner approval; base 80ead2a)**: FOUNDATION_ARCHITECTURE §C12.F10 (Phase F amendment: unmap of a fullscreen element, RC-1, 1 row; C12.F9 is reserved for the INC-6 exit — withdrawn 2026-10-16; the number stays unused);
-- **C12.F11 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)**: FOUNDATION_ARCHITECTURE §C12.F11 (Phase F amendment: the device bound counts a size Core asks for, OB-13, 1 row);
-- **C12.F12 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)**: FOUNDATION_ARCHITECTURE §C12.F12 (Phase F amendment: the initial hint of a pre-map fullscreen grant, 1 row);
-- **C12.F13 @ ADOPTED 2026-10-16 (owner approval; base eebb5c3)**: FOUNDATION_ARCHITECTURE §C12.F13 (Phase F amendment: whose stimulus a presentation change is, 1 row);
-- **C12.F14 @ ADOPTED 2026-10-17 (owner approval; base ca2e468)**: FOUNDATION_ARCHITECTURE §C12.F14 (Phase F amendment: the representable zoom domain and the output's lattice reference, OB-24, 1 row);
-- **C12.F15 @ ADOPTED 2026-10-17 (owner approval; base dda4d87)**: FOUNDATION_ARCHITECTURE §C12.F15 (Phase F amendment: one canonical rectangle for rendering and hit testing, option B; F-FIT-1's units and clamp, 1 row);
-- **C12.F16 @ ADOPTED 2026-10-18 (owner approval; base da538d6)**: FOUNDATION_ARCHITECTURE §C12.F16 (Phase F amendment: the bounded fit/restore history, 256 entries per output, emptied at unbinding, 1 row);
-- **C12.F17 @ ADOPTED 2026-10-20 (owner approval; base 16f13c9)**: FOUNDATION_ARCHITECTURE §C12.F17 (Phase F amendment: INC-10 exit clarifications — crop, damage, pointer reconciliation, fit/restore bindings and their refusal during a presentation; owner decisions Q1–Q5 of 2026-10-19, 1 row).
-
-Rules:
-- Each entry's **wording** is the statement of its latest layer, verbatim, except that complete formula text is replaced by an `[F-…]` reference.
-- The replaced text is recorded in that formula's block in FOUNDATION_ARCHITECTURE §F (the only canonical home of `F-*`). `tools/check-foundation-docs` reverses every substitution and verifies the result equals the historical layer row byte for byte.
-- **Consequence of violation** is the C12 "Violation means" column. For the three invariants first introduced in 1R/2R it is a D7-authored description, marked as such (D-F0). E1R adds no invariant.
-- **ADR** links are derived from FOUNDATION_DECISIONS.md. **Obligations** are cited by ID; their records live in FOUNDATION_TEST_PLAN.md.
-
-Count: **57** effective invariants: 36 from C12, 5 from C12.R1 (INV-CAMERA-5 superseded by C12.F16), 2 from C12.R2, 3 from C12.E1R (INV-INPUT-5 superseded by C12.F17), 0 from C12.F1 (its row is superseded by C12.F5), 0 from C12.F2 (superseded by C12.F11), 1 from C12.F3, 1 from C12.F4, 1 from C12.F5, 0 from C12.F6 (superseded by C12.F10), 1 from C12.F7, 1 from C12.F8, 1 from C12.F10, 1 from C12.F11, 0 from C12.F12 (superseded by C12.F13), 1 from C12.F13, 0 from C12.F14 (superseded by C12.F15), 1 from C12.F15, 1 from C12.F16, 1 from C12.F17. (Corrected with C12.F14: the line had not been updated for C12.F11–F13.)
+Each entry gives its wording, who owns it, what a violation means, the evidence, the obligations
+that verify it, the formulas it uses and the ADRs that explain it. Where the wording writes
+`[F-…]`, the full formula is in [FOUNDATION_ARCHITECTURE.md](FOUNDATION_ARCHITECTURE.md) §F.
+`Origin` and `Trigger` say where an invariant came from (the layers are in
+[../archive/FOUNDATION_ARCHITECTURE_HISTORY.md](../archive/FOUNDATION_ARCHITECTURE_HISTORY.md)).
 
 <!-- living:INV -->
 

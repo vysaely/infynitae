@@ -9,13 +9,6 @@ on a row of the wrong class. A `test` row never authorises `production` code.
 `infynitae-core` and `infynitae-ipc` forbid `unsafe` everywhere — library, integration tests,
 examples, benches and build script (INV-ARCH-2 as written); no row can change that.
 
-History: the OB-42 counting allocator was first placed in a Core integration test with an
-exception for Core's integration tests (owner decision of 2026-10-14). On 2026-10-15, by owner
-direction, it moved unchanged to the headless backend's tests (a `deny` crate, where a listed
-`test` site is permitted) and the exception was removed; layer C12.F9, drafted to legitimise the
-exception, is not adopted. The 2026-10-14 decision was corrected by the owner on 2026-10-16 (C12.F9
-withdrawn; `evidence/phase-f/INC-6/ADOPTION_RECORD_2026-10-16.md`).
-
 Production sites: **four items, 9 sites** — the session's signal self-pipe (`crates/infynitae-wayland/src/signals.rs`, U-005 and U-006; owner decision 2026-10-19: the orderly-shutdown design approved, `signal-hook` rejected, the self-pipe re-implemented on `libc`, already in the locked graph, no new crate), the console backend's GLES renderer (`crates/infynitae-backend-drm/src/lib.rs`, U-007; owner decision T3 of 2026-10-22: GLES on GBM/EGL, whose Smithay constructors are `unsafe`), and the console backend's screencopy frame capture (`crates/infynitae-backend-drm/src/lib.rs`, U-008). Each is a function under `#[allow(unsafe_code)]` in a `deny` crate.
 
 | id | file | item | sites | class | purpose | safety preconditions | ownership assumptions | cleanup guarantees | verification |

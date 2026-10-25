@@ -1,6 +1,9 @@
-# Infynitae Native — Foundation Implementation Plan (D8)
+# Implementation plan
 
-Status: **Phase D checkpoint 2 (D8) living document; a plan only.** Re-audited in the unsealed Phase E corrective checkpoint E1R (audit/E1R/D8_REAUDIT_E1R.md). Canonical living home of `INC-*` (FOUNDATION_ARCHITECTURE §P0). Nothing here creates a crate, manifest, workspace or source file. Planning an increment does not authorize running it.
+How the compositor was built, increment by increment (`INC-*`): each one's objective, the
+invariants and obligations it exercised, its exit tests and its entry conditions. Kept because code
+comments and tests name the increment that introduced them; new work is not planned here (see
+[../STATUS.md](../STATUS.md)).
 
 **Ordering rule.** Retire the highest architectural, authority and integration uncertainty as early and cheaply as possible, while respecting real dependencies.
 
