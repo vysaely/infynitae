@@ -437,10 +437,21 @@ case "$ACTION" in
                 ;;
         esac
         ;;
+    control-menu)
+        # Super+A: the control menu (Wi-Fi, Bluetooth, sound output, power), or CONTROL_MENU
+        case "${CONTROL_MENU:-auto}" in
+            auto|"")
+                for m in "$HOME/.local/bin/infynitae-control-menu" "$HOME/infynitae/live/control-menu"; do
+                    if [ -x "$m" ]; then exec "$m"; fi
+                done
+                ;;
+            *) exec sh -c "$CONTROL_MENU" ;;
+        esac
+        ;;
     clipboard-history)
-        # Super+V: Clipboard history picker (cliphist + fuzzel or $CLIPBOARD_PICKER)
+        # Super+V: Clipboard history picker (cliphist + CLIPBOARD_PICKER, MENU_PICKER or fuzzel)
         if command -v cliphist >/dev/null 2>&1; then
-            PICKER="${CLIPBOARD_PICKER:-fuzzel --dmenu}"
+            PICKER="${CLIPBOARD_PICKER:-${MENU_PICKER:-fuzzel --dmenu}}"
             # Escape in the picker selects nothing: the clipboard is left as it was
             PICK=$(cliphist list | $PICKER)
             [ -n "$PICK" ] && printf '%s\n' "$PICK" | cliphist decode | wl-copy

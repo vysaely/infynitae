@@ -54,6 +54,7 @@ Update any time with `infynitae-update` (your config is never overwritten).
 | `Super + Shift + Backspace` | Reload the config and restart the helpers (windows stay) |
 | `Super + L` | Lock the screen |
 | `Super + V` | Clipboard history (`cliphist`) |
+| `Super + A` | Control menu: Wi-Fi, Bluetooth, sound output, power mode, do not disturb |
 | `Super + C` | Close focused window |
 | `Super + Shift + C` | Force close (ends the app) |
 | `Super + Shift + P` | Hide the focused window from screen captures |
@@ -88,6 +89,7 @@ crashes it stops by itself.
 | | |
 | :--- | :--- |
 | [docs/STATUS.md](docs/STATUS.md) | What works, what is untested, what is missing |
+| [docs/COMPONENTS.md](docs/COMPONENTS.md) | Every piece of the desktop, what to install instead, and which ones to build ourselves |
 | [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Working on it: layout, building, the test suite and the checks, the design docs |
 | [docs/DECISIONS.md](docs/DECISIONS.md) | The choices behind how it behaves, and why |
 | [docs/foundation/](docs/foundation) | The design specification: invariants (`INV-*`), state machines (`M*`), formulas (`F-*`) |

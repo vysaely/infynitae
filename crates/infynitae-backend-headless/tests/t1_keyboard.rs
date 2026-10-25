@@ -197,8 +197,9 @@ fn k1_ordinary_client_owned_press_release() {
 fn k2_modifier_held_while_another_client_key_pressed() {
     let mut s = S::new(true);
     s.key(KEY_LEFTMETA, true);
-    s.key(KEY_A, true);
-    s.key(KEY_A, false);
+    // Super+B: no binding (Super+A is the control menu), so B is the client's
+    s.key(KEY_B, true);
+    s.key(KEY_B, false);
     s.key(KEY_LEFTMETA, false);
     s.assert_end();
 }

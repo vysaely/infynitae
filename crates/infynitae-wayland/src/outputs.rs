@@ -232,6 +232,9 @@ impl WaylandState {
                 Effect::SpawnClipboardHistory => {
                     self.spawn_action("clipboard-history");
                 }
+                Effect::SpawnControlMenu => {
+                    self.spawn_action("control-menu");
+                }
                 Effect::Exec(i) => {
                     if let Some(command) = self.exec_commands.get(usize::from(i)).cloned() {
                         self.spawn_action_with("exec", &command);
@@ -317,6 +320,7 @@ impl WaylandState {
                 | "browser"
                 | "overview"
                 | "clipboard-history"
+                | "control-menu"
         ) {
             let _ = self.launches.spawn(&mut cmd);
         } else {

@@ -29,17 +29,22 @@ edges on other hardware.
 
 ## Missing
 
-Everyday basics a desktop like Windows has built in, with no default here yet (each would be a
-lightweight default you can swap or turn off, like `TERMINAL`):
+Everyday basics now in place, each a setting you can swap or turn off: notifications (mako),
+a keyring (gnome-keyring, started on first use), USB drives that mount by themselves (udiskie),
+the user folders (~/Downloads, ~/Pictures…), emoji and wider font coverage (Noto), and the
+control menu on Super+A for Wi-Fi, Bluetooth, the sound output and power modes. Links open in
+your browser, screen sharing is one click.
 
-- a notification daemon (until then `notify-send` shows nothing unless you run one);
-- a keyring, so the browser, Discord and editors stay logged in;
-- pickers for Wi-Fi, Bluetooth and the sound output, per-app volume;
-- USB drives that mount by themselves; battery and power modes; night light;
-- display settings outside the config file; input methods (Japanese, Chinese…).
+Still missing, because the compositor has to speak the protocol first:
 
-Already there: links open in your browser, one-click screen sharing, screenshots, clipboard
-history, the lock screen, volume and brightness keys.
+- night light and colour temperature (`wlr-gamma-control`, for wlsunset or gammastep);
+- display settings without editing the config (`wlr-output-management`, for wdisplays or kanshi);
+- input methods for Japanese, Chinese, Korean (`input-method-v2` and `text-input-v3`, for fcitx5);
+- per-app volume in the menu (the apps themselves do it; pavucontrol works).
+
+The keyring asks for its password once per session when you log in without one (autologin);
+logging in through a display manager with a password unlocks it only if that display manager's
+PAM setup includes `pam_gnome_keyring`.
 
 Also missing:
 

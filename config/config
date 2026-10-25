@@ -80,7 +80,14 @@ XWAYLAND="true"                   # [restart] X11 apps and games (xwayland-satel
 SESSION_RESTORE="true"            # [restart] reopen the apps that were open, where they were
 CLIPBOARD_PERSIST="true"          # [reload] keep clipboard after source closes (needs wl-clip-persist)
 CLIPBOARD_HISTORY="true"          # [reload] Super+V clipboard history (needs cliphist and wl-paste)
-CLIPBOARD_PICKER=""               # Super+V picker — empty: fuzzel
+CLIPBOARD_PICKER=""               # Super+V picker — empty: MENU_PICKER
+MENU_PICKER=""                    # menus (control menu, clipboard) — empty: fuzzel --dmenu; any
+                                  # dmenu-style command, e.g. "rofi -dmenu"
+CONTROL_MENU="auto"               # Super+A — Wi-Fi, Bluetooth, sound output, power mode,
+                                  # do not disturb (the parts whose tools are installed), or a command
+NOTIFICATIONS="auto"              # [restart] notification daemon — auto: mako, swaync, dunst, fnott
+                                  # (first installed) | none | a command
+AUTOMOUNT="true"                  # [restart] USB drives and SD cards mount when plugged in (udiskie)
 
 # ── Lock & idle ───────────────────────────────────────────────────────── [save] ──
 IDLE_SLEEP_TIMEOUT_MIN="15"       # screens off after this many idle minutes, 0 = never
@@ -116,7 +123,7 @@ RECORD_AUDIO="desktop"            # desktop | mic | both | none — the system's
 # Give an action other keys (its own are freed), or free them with "none":
 #   BIND_<ACTION>="CHORD[,CHORD]"       e.g. BIND_TERMINAL="SUPER+RETURN"
 #   FOCUS_NEXT OVERVIEW LAUNCHER TERMINAL FILE_MANAGER SCREENSHOT REGION_SCREENSHOT RELOAD LOCK
-#   CLIPBOARD PRIVACY IDLE_INHIBIT SAVE_REPLAY RECORD FIT FULLSCREEN CLOSE FORCE_CLOSE RECENTER
+#   CLIPBOARD CONTROL PRIVACY IDLE_INHIBIT SAVE_REPLAY RECORD FIT FULLSCREEN CLOSE FORCE_CLOSE RECENTER
 #   RECENTER_KEEP_ZOOM
 # Run a command:
 #   EXEC_<NAME>="CHORD:command"         e.g. EXEC_BROWSER="SUPER+B:firefox"

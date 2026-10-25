@@ -75,6 +75,8 @@ pub enum KeyAction {
     SpawnLockScreen,
     /// Super+V: clipboard history
     ClipboardHistory,
+    /// Super+A: the control menu (Wi-Fi, Bluetooth, sound output, power, notifications)
+    ControlMenu,
     /// Super+Shift+P: toggle privacy mode on focused window (hidden/transparent from screenshots & screenshare)
     TogglePrivacy,
     /// Super+Shift+I: toggle idle sleep inhibition (stay awake mode: prevents DPMS screen sleep and auto-lock)
@@ -267,6 +269,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("RELOAD", KeyAction::ReloadShell),
     ("LOCK", KeyAction::SpawnLockScreen),
     ("CLIPBOARD", KeyAction::ClipboardHistory),
+    ("CONTROL", KeyAction::ControlMenu),
     ("PRIVACY", KeyAction::TogglePrivacy),
     ("IDLE_INHIBIT", KeyAction::ToggleIdleInhibit),
     ("SAVE_REPLAY", KeyAction::SaveReplay),
@@ -439,6 +442,10 @@ pub fn resolve_key_binding(
     // Super+V: clipboard history; Logo, never during interaction
     if key == KEY_V && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ClipboardHistory);
+    }
+    // Super+A: the control menu; Logo, never during interaction
+    if key == KEY_A && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::ControlMenu);
     }
     // Super+Shift+P: toggle privacy mode; Logo+Shift, never during interaction
     if key == KEY_P && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
@@ -712,7 +719,30 @@ mod tests {
             Some(KeyAction::Cancel)
         );
         assert_eq!(resolve_key_binding(KEY_LEFTSHIFT, none, false), None);
-        assert_eq!(resolve_key_binding(KEY_A, logo, false), None);
+        assert_eq!(resolve_key_binding(KEY_B, logo, false), None);
+    }
+
+    #[test]
+    fn super_a_control_menu_binding() {
+        let logo = Modifiers {
+            logo: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            resolve_key_binding(KEY_A, logo, false),
+            Some(KeyAction::ControlMenu)
+        );
+        let logo_shift = Modifiers {
+            shift: true,
+            ..logo
+        };
+        assert_eq!(resolve_key_binding(KEY_A, logo_shift, false), None);
+        assert_eq!(
+            resolve_key_binding(KEY_A, logo, true),
+            None,
+            "not during an interaction"
+        );
+        assert!(ACTION_NAMES.contains(&("CONTROL", KeyAction::ControlMenu)));
     }
 
     /// Logo+Enter fits or restores (FitToggle), Logo+Shift+Enter toggles fullscreen;

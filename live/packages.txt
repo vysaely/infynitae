@@ -26,3 +26,13 @@ wl-clip-persist
 cliphist
 xorg-xwayland
 xwayland-satellite
+mako
+libnotify
+gnome-keyring
+libsecret
+udisks2
+udiskie
+gvfs
+xdg-user-dirs
+noto-fonts
+noto-fonts-emoji

@@ -377,6 +377,7 @@ impl Core {
             KeyAction::ReloadShell => vec![Effect::ReloadShell],
             KeyAction::SpawnLockScreen => vec![Effect::SpawnLockScreen],
             KeyAction::ClipboardHistory => vec![Effect::SpawnClipboardHistory],
+            KeyAction::ControlMenu => vec![Effect::SpawnControlMenu],
             KeyAction::TogglePrivacy => vec![Effect::TogglePrivacy],
             KeyAction::ToggleIdleInhibit => vec![Effect::ToggleIdleInhibit],
             KeyAction::SaveReplay => vec![Effect::SaveReplay],

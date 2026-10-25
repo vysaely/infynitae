@@ -51,6 +51,12 @@ these by date, e.g. "(owner, 2026-10-24)".
 
 ## Screen and session
 
+- **Everyday basics work out of the box, each one a switch** (2026-10-25): a notification daemon
+  (`NOTIFICATIONS`, mako by default), a keyring (gnome-keyring, started by D-Bus on first use),
+  automount (`AUTOMOUNT`, udiskie), the user folders, Noto fonts with emoji, and the control menu
+  (`CONTROL_MENU`, Super+A) whose parts appear only when their tool is installed. NetworkManager is
+  not installed for you: a machine on iwd or systemd-networkd keeps its networking.
+
 - **The compositor draws the pointer on the console** (T8, 2026-10-22): nothing else does there.
   It uses your cursor theme (`CURSOR_THEME`, `CURSOR_SIZE`, sharp at the screen's scale), and a
   built-in arrow only if the theme cannot be found (2026-10-25; `xcursor` reads the theme, a crate

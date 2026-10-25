@@ -144,6 +144,8 @@ pub enum Effect {
     SpawnLockScreen,
     /// Open clipboard history (by default Super+V).
     SpawnClipboardHistory,
+    /// Open the control menu (by default Super+A).
+    SpawnControlMenu,
     /// Toggle privacy mode on the focused window (by default Super+Shift+P).
     TogglePrivacy,
     /// Toggle idle sleep inhibition (stay-awake mode, by default Super+Shift+I).

@@ -59,6 +59,20 @@ if ! command -v kitty >/dev/null 2>&1 && ! command -v alacritty >/dev/null 2>&1 
     fi
 fi
 
+# Hardware the control menu (Super+A) can drive, only where it exists. NetworkManager is not added:
+# a machine on iwd or systemd-networkd keeps its own networking, and the menu uses what is there.
+if [ -n "$(ls /sys/class/bluetooth 2>/dev/null)" ]; then
+    for pkg in bluez bluez-utils; do
+        pacman -Qi "$pkg" >/dev/null 2>&1 || PKGS+=("$pkg")
+    done
+    ENABLE_BLUETOOTH=true
+fi
+if ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1 && ! pacman -Qi tlp >/dev/null 2>&1; then
+    # power modes on a laptop; tlp, when installed, manages power instead
+    pacman -Qi power-profiles-daemon >/dev/null 2>&1 || PKGS+=("power-profiles-daemon")
+    ENABLE_POWER_PROFILES=true
+fi
+
 # Only install rustup if neither rust nor cargo is installed
 if ! command -v cargo >/dev/null 2>&1 && ! pacman -Qi rust >/dev/null 2>&1 && ! pacman -Qi rustup >/dev/null 2>&1; then
     PKGS+=("rustup")
@@ -67,6 +81,14 @@ fi
 if [ ${#PKGS[@]} -gt 0 ]; then
     echo "==> Installing missing packages via pacman: ${PKGS[*]}"
     sudo pacman -S --needed --noconfirm "${PKGS[@]}"
+fi
+if [ "${ENABLE_BLUETOOTH:-false}" = true ] && ! systemctl is-enabled --quiet bluetooth.service 2>/dev/null; then
+    echo "==> Enabling Bluetooth"
+    sudo systemctl enable --now bluetooth.service || echo "==> Could not enable bluetooth.service"
+fi
+if [ "${ENABLE_POWER_PROFILES:-false}" = true ] && ! systemctl is-enabled --quiet power-profiles-daemon.service 2>/dev/null; then
+    echo "==> Enabling power modes"
+    sudo systemctl enable --now power-profiles-daemon.service || echo "==> Could not enable power-profiles-daemon.service"
 fi
 
 # 3. Setup Rust toolchain if rustup is used

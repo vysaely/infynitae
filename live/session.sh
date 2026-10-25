@@ -118,6 +118,36 @@ case "${CLIPBOARD_HISTORY:-true}" in
         ;;
 esac
 
+# 6c. Notifications: NOTIFICATIONS picks the daemon ("auto": mako, swaync, dunst, fnott, the first
+# installed; "none": none; or a command). Started here so the choice wins over D-Bus activation.
+NOTIFY_CMD=""
+case "${NOTIFICATIONS:-auto}" in
+    none|off|false) ;;
+    auto)
+        for d in mako swaync dunst fnott; do
+            if command -v "$d" >/dev/null 2>&1; then NOTIFY_CMD="$d"; break; fi
+        done
+        ;;
+    *) NOTIFY_CMD="$NOTIFICATIONS" ;;
+esac
+if [ -n "$NOTIFY_CMD" ]; then
+    $NOTIFY_CMD >/dev/null 2>&1 &
+fi
+
+# 6d. USB drives and SD cards mount when plugged in (udiskie, through udisks2): AUTOMOUNT
+case "${AUTOMOUNT:-true}" in
+    1|true|yes|on|TRUE|True)
+        if command -v udiskie >/dev/null 2>&1; then
+            udiskie --no-tray --notify >/dev/null 2>&1 &
+        fi
+        ;;
+esac
+
+# 6e. ~/Documents, ~/Downloads, ~/Pictures … exist and apps know them (xdg-user-dirs)
+if command -v xdg-user-dirs-update >/dev/null 2>&1; then
+    xdg-user-dirs-update >/dev/null 2>&1 || true
+fi
+
 # 7. User autostart script (blank canvas for user's future ricing)
 if [ -x "$HOME/.config/infynitae/autostart.sh" ]; then
     "$HOME/.config/infynitae/autostart.sh" &

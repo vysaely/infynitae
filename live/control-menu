@@ -1,0 +1,150 @@
+#!/bin/sh
+# Super+A: the control menu. Wi-Fi, Bluetooth, sound output, power mode and notifications, each
+# shown only when its tool is installed: nmcli (NetworkManager) or iwctl (iwd), bluetoothctl
+# (bluez-utils), pactl (pipewire-pulse), powerprofilesctl (power-profiles-daemon), makoctl or
+# swaync-client. The picker is MENU_PICKER (empty: fuzzel --dmenu); any dmenu-style command works.
+# CONTROL_MENU in the config replaces this whole menu with your own command.
+
+PICKER="${MENU_PICKER:-fuzzel --dmenu}"
+TERM_BIN="${TERMINAL:-auto}"
+[ "$TERM_BIN" = "auto" ] && for t in kitty alacritty foot wezterm ghostty konsole xterm; do
+    command -v "$t" >/dev/null 2>&1 && TERM_BIN="$t" && break
+done
+
+have() { command -v "$1" >/dev/null 2>&1; }
+pick() { printf '%s\n' "$@" | $PICKER; }
+note() { have notify-send && notify-send -a Infynitae "$1" "${2:-}"; }
+in_terminal() { [ "$TERM_BIN" != "auto" ] && exec $TERM_BIN -e "$@"; note "No terminal found" "Set TERMINAL in the config"; }
+
+# ── Wi-Fi ──────────────────────────────────────────────────────────────────────────────────────
+wifi_menu() {
+    if have nmcli; then
+        state=$(nmcli radio wifi 2>/dev/null)
+        if [ "$state" != "enabled" ]; then
+            [ "$(pick 'Turn Wi-Fi on')" = "Turn Wi-Fi on" ] && nmcli radio wifi on
+            return
+        fi
+        # IN-USE, SIGNAL, SECURITY, SSID; ':' inside an SSID is escaped by nmcli as '\:'
+        list=$(nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan auto 2>/dev/null \
+            | sed 's/\\:/\x1f/g' \
+            | awk -F: '$4 != "" { mark = ($1 == "*") ? "● " : "  "; lock = ($3 == "" || $3 == "--") ? "" : " [secured]";
+                         gsub("\x1f", ":", $4); printf "%s%s  %s%%%s\n", mark, $4, $2, lock }' | awk '!seen[$0]++')
+        choice=$(printf 'Turn Wi-Fi off\n%s\n' "$list" | $PICKER)
+        [ -z "$choice" ] && return
+        if [ "$choice" = "Turn Wi-Fi off" ]; then nmcli radio wifi off; return; fi
+        ssid=$(printf '%s' "$choice" | sed 's/^\(● \|  \)//; s/  [0-9]*%\( \[secured\]\)\{0,1\}$//')
+        # a known network connects as it is; a new secured one asks for its password
+        if nmcli -t -f NAME connection show | grep -qxF "$ssid"; then
+            nmcli connection up id "$ssid" >/dev/null 2>&1 && note "Connected" "$ssid" || note "Could not connect" "$ssid"
+        elif printf '%s' "$choice" | grep -q '\[secured\]$'; then
+            case "$PICKER" in
+                fuzzel*) pass=$(printf '' | fuzzel --dmenu --password --prompt "Password for $ssid: ") ;;
+                *) in_terminal nmcli --ask dev wifi connect "$ssid" ;;
+            esac
+            [ -z "$pass" ] && return
+            nmcli dev wifi connect "$ssid" password "$pass" >/dev/null 2>&1 \
+                && note "Connected" "$ssid" || note "Could not connect" "$ssid"
+        else
+            nmcli dev wifi connect "$ssid" >/dev/null 2>&1 && note "Connected" "$ssid" || note "Could not connect" "$ssid"
+        fi
+    elif have iwctl; then
+        in_terminal iwctl
+    fi
+}
+
+# ── Bluetooth ──────────────────────────────────────────────────────────────────────────────────
+bt_menu() {
+    if ! bluetoothctl show 2>/dev/null | grep -q "Powered: yes"; then
+        [ "$(pick 'Turn Bluetooth on')" = "Turn Bluetooth on" ] && bluetoothctl power on >/dev/null
+        return
+    fi
+    devices=$(bluetoothctl devices Paired 2>/dev/null | while read -r _ mac name; do
+        if bluetoothctl info "$mac" 2>/dev/null | grep -q "Connected: yes"; then
+            printf '● %s\t%s\n' "$name" "$mac"
+        else
+            printf '  %s\t%s\n' "$name" "$mac"
+        fi
+    done)
+    choice=$(printf 'Pair a new device…\nTurn Bluetooth off\n%s\n' "$devices" | $PICKER)
+    case "$choice" in
+        "") return ;;
+        "Turn Bluetooth off") bluetoothctl power off >/dev/null ;;
+        "Pair a new device…") in_terminal bluetoothctl ;;
+        *)
+            mac=$(printf '%s' "$choice" | awk -F'\t' '{print $2}')
+            name=$(printf '%s' "$choice" | awk -F'\t' '{print $1}' | sed 's/^\(● \|  \)//')
+            if printf '%s' "$choice" | grep -q '^●'; then
+                bluetoothctl disconnect "$mac" >/dev/null && note "Disconnected" "$name"
+            else
+                bluetoothctl connect "$mac" >/dev/null && note "Connected" "$name" || note "Could not connect" "$name"
+            fi
+            ;;
+    esac
+}
+
+# ── Sound output ───────────────────────────────────────────────────────────────────────────────
+sound_menu() {
+    default=$(pactl get-default-sink 2>/dev/null)
+    # "name<TAB>description" for every sink
+    sinks=$(pactl list sinks 2>/dev/null | awk -F': ' '/^\s*Name:/ {n=$2} /^\s*Description:/ {print n "\t" $2}')
+    choice=$(printf '%s\n' "$sinks" | while IFS="$(printf '\t')" read -r name desc; do
+        [ -z "$name" ] && continue
+        if [ "$name" = "$default" ]; then printf '● %s\n' "$desc"; else printf '  %s\n' "$desc"; fi
+    done | $PICKER)
+    [ -z "$choice" ] && return
+    desc=$(printf '%s' "$choice" | sed 's/^\(● \|  \)//')
+    name=$(printf '%s\n' "$sinks" | awk -F'\t' -v d="$desc" '$2 == d {print $1; exit}')
+    [ -n "$name" ] && pactl set-default-sink "$name" && note "Sound output" "$desc"
+}
+
+# ── Power mode ─────────────────────────────────────────────────────────────────────────────────
+power_menu() {
+    current=$(powerprofilesctl get 2>/dev/null)
+    choice=$(powerprofilesctl list 2>/dev/null | sed -n 's/^[ *]*\([a-z-]*\):$/\1/p' | while read -r p; do
+        if [ "$p" = "$current" ]; then printf '● %s\n' "$p"; else printf '  %s\n' "$p"; fi
+    done | $PICKER)
+    [ -n "$choice" ] && powerprofilesctl set "$(printf '%s' "$choice" | sed 's/^\(● \|  \)//')"
+}
+
+# ── Notifications ──────────────────────────────────────────────────────────────────────────────
+dnd_toggle() {
+    if have makoctl; then
+        if makoctl mode | grep -qx do-not-disturb; then makoctl mode -r do-not-disturb >/dev/null; note "Notifications on"
+        else makoctl mode -a do-not-disturb >/dev/null; fi
+    elif have swaync-client; then
+        swaync-client -d >/dev/null
+    fi
+}
+
+# ── The menu ───────────────────────────────────────────────────────────────────────────────────
+battery=""
+for b in /sys/class/power_supply/BAT*; do
+    [ -r "$b/capacity" ] && battery="Battery $(cat "$b/capacity")% ($(cat "$b/status" 2>/dev/null))" && break
+done
+
+entries=""
+add() { entries="${entries}${1}
+"; }
+{ have nmcli || have iwctl; } && add "Wi-Fi"
+have bluetoothctl && [ -n "$(ls /sys/class/bluetooth 2>/dev/null)" ] && add "Bluetooth"
+have pactl && add "Sound output"
+have powerprofilesctl && add "Power mode"
+if have makoctl; then
+    if makoctl mode 2>/dev/null | grep -qx do-not-disturb; then add "Notifications: off (turn on)"; else add "Do not disturb"; fi
+elif have swaync-client; then
+    add "Do not disturb (toggle)"
+fi
+[ -n "$battery" ] && add "$battery"
+
+if [ -z "$entries" ]; then
+    note "Nothing to control" "Install NetworkManager, bluez-utils, pipewire-pulse or power-profiles-daemon"
+    exit 0
+fi
+
+case "$(printf '%s' "$entries" | $PICKER)" in
+    "Wi-Fi") wifi_menu ;;
+    "Bluetooth") bt_menu ;;
+    "Sound output") sound_menu ;;
+    "Power mode") power_menu ;;
+    "Do not disturb"|"Notifications: off (turn on)"|"Do not disturb (toggle)") dnd_toggle ;;
+esac
