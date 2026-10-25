@@ -48,7 +48,7 @@ pub(crate) struct LoadedImage {
     pub(crate) yhot: i32,
 }
 
-/// Select the image closest to `target_size` in nominal or actual size.
+/// Selects the image closest to `target_size` in nominal or actual size.
 ///
 /// Ties take the first matching frame in file order (frame 0).
 pub(crate) fn best_cursor_image(
@@ -379,7 +379,7 @@ impl WaylandState {
         self.xcursor_path = Some(path);
     }
 
-    /// Update or reload the cursor theme.
+    /// Updates or reloads the cursor theme.
     pub fn set_cursor_theme(&mut self, theme_name: &str, cursor_size: u32) {
         let home = self
             .config_home
@@ -394,7 +394,7 @@ impl WaylandState {
         self.set_cursor_theme_with_search_paths(theme_name, cursor_size, paths);
     }
 
-    /// Update cursor theme using custom search paths (for tests or custom loaders).
+    /// Updates the cursor theme using custom search paths (for tests or custom loaders).
     pub fn set_cursor_theme_with_search_paths(
         &mut self,
         theme_name: &str,

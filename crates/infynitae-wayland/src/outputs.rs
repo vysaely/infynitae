@@ -1,4 +1,4 @@
-//! Output globals, membership application, damage trackers and frame completion (INC-2).
+//! Output globals, membership application, damage trackers and frame completion.
 //!
 //! Smithay `Output` state is written from Core's OutputModel, one way (C2.1); it is never read
 //! back as policy input. Enter/leave are applied only from Core's membership effects
@@ -326,7 +326,6 @@ impl WaylandState {
         self.spawned_children = true;
     }
 
-    /// The Smithay output of a connected output (for render oracles and backends).
     /// Sends one `xdg_toplevel.configure` whose states and size are Core's at this moment:
     /// `activated` from the focus (INV-PROTO-1), `fullscreen` and the fullscreen size from
     /// OBJ-19 (INV-PRES-1). `offered` is a one-time size offer for a toplevel that is not
@@ -373,6 +372,7 @@ impl WaylandState {
             .map(|h| h.id)
     }
 
+    /// The Smithay output of a connected output (for render oracles and backends).
     pub fn smithay_output(&self, id: OutputId) -> Option<&Output> {
         self.handle(id).map(|h| &h.output)
     }

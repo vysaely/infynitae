@@ -1,4 +1,4 @@
-//! The seat pointer (INC-3): Core's pointer effects applied to Smithay's `PointerHandle`, in order.
+//! The seat pointer: Core's pointer effects applied to Smithay's `PointerHandle`, in order.
 //!
 //! This is the only module that drives Smithay pointer delivery (source rule
 //! `smithay-pointer-only-in-adapter-pointer`). The adapter decides nothing here: routing, ownership,
@@ -471,7 +471,7 @@ impl WaylandState {
         }
     }
 
-    /// Drag-and-drop is not offered (clipboard slice, 2026-10-16). Smithay accepts a client's
+    /// Drag-and-drop is not offered (2026-10-16). Smithay accepts a client's
     /// `start_drag` on the implicit grab of a pressed button and installs its DnD grab before any
     /// handler can refuse it; that grab would take pointer delivery away from Core's routing. It
     /// is replaced at once by the grab that ends at the next pointer event and forwards it (as
