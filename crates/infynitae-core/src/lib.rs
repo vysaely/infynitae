@@ -1482,7 +1482,7 @@ impl Core {
         let observers = self.membership.observing_outputs(element);
         // an output presenting an element observes through the F-PRESENT-1 view, at zoom 1
         scale::compute_rho(observers, &self.outputs, &self.cameras, |o| {
-            self.presentation(o).is_some()
+            self.presentation(o).is_some() && !self.is_presentation_suppressed(o)
         })
     }
 
@@ -2862,5 +2862,58 @@ mod tests {
             assert_eq!(h.reserved(), HISTORY_CAPACITY);
         }
         assert_eq!(n.history(a).len(), HISTORY_CAPACITY);
+    }
+
+    /// INV-SCALE-1 / F-SCALE-1: compute_rho respects presentation suppression. When presentation
+    /// is suppressed, the output observes through its camera view at its real zoom, not zoom 1.
+    #[test]
+    fn compute_rho_and_scale_policy_respect_presentation_suppression() {
+        use crate::navigation::PersistedCameras;
+        use crate::protocol::ToplevelRequest;
+
+        let persisted = PersistedCameras::from_entries(vec![(
+            crate::output::tests::key("A"),
+            crate::geom::CanvasPos { x: 0, y: 0 },
+            2.0, // camera zoom 2
+        )])
+        .unwrap();
+
+        let (mut core, mut i, _s, mut token) = Core::new(persisted);
+        let o = core
+            .output_connected(
+                &mut token,
+                OutputDescriptor {
+                    key: crate::output::tests::key("A"),
+                    mode: (1920, 1080),
+                    transform: Transform::Normal,
+                    scale_120: 120, // scale 1.0
+                    refresh_mhz: 60_000,
+                },
+            )
+            .unwrap()
+            .0;
+
+        let w = mapped(&mut core, tree(1, None));
+        core.set_focus(&mut i, Some(w)).unwrap();
+
+        // Grant fullscreen on output O
+        core.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(o) })
+            .unwrap();
+        assert_eq!(core.presentation(o), Some(w));
+
+        // When presenting and NOT suppressed, compute_rho sees zoom 1 -> rho = 1.0
+        assert_eq!(core.compute_rho(w), Some(1.0));
+        assert_eq!(core.preferred_scale_of(w), Some((120, 1)));
+
+        // Suppress presentation: output observes through camera view (zoom 2, scale 1 -> rho = 2.0)
+        core.presentation_suppressed.push(o);
+        assert_eq!(core.compute_rho(w), Some(2.0));
+
+        let _ = core.evaluate_scale_policy(false);
+        assert_eq!(
+            core.preferred_scale_of(w),
+            Some((240, 2)),
+            "observed window gets preferred scale 2 at camera zoom 2 when suppressed"
+        );
     }
 }
