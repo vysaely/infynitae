@@ -1,5 +1,5 @@
-//! INC-6 T1: authoritative scale policy, device ceiling, ScaleInteractionEpoch,
-//! and Wayland fractional scale / preferred buffer scale boundary on the production path.
+//! Production tests for authoritative scale policy, device ceiling, ScaleInteractionEpoch,
+//! and Wayland fractional scale / preferred buffer scale boundary.
 //!
 //! Verifies:
 //! - OBJ-16, F-SCALE-1, F-SCALE-2, F-SCALE-3, INV-SCALE-3
@@ -170,12 +170,12 @@ fn tst16_case_e_camera_pan_interaction_damping() {
 
     let count_before = r.ls.probe.preferred_scales.len();
 
-    // Pan camera B away by 5000 px: W (centred on the Canvas origin) leaves output B's view!
+    // Pan camera B away by 5000 px: W (centred on the Canvas origin) leaves output B's view.
     // rho drops from 1.5 to 1.0, but CameraPan is still active.
     r.motion((5000.0, 0.0));
     r.ls.pump();
 
-    // INV-SCALE-3: Decrease is suppressed during continuous interaction!
+    // INV-SCALE-3: Decrease is suppressed during continuous interaction.
     assert_eq!(
         r.ls.probe.preferred_scales.last().map(|(_, s)| *s),
         Some(180),
@@ -401,7 +401,7 @@ fn adversarial_client_churn_bounds_sc_e() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// INC-6 hardening (independent audit findings C1, C2; device ceiling at several D_max)
+// Scale hardening (findings C1, C2; device ceiling at several D_max)
 // ---------------------------------------------------------------------------------------------
 
 fn output_scaled(key: &str, scale_120: u32) -> VirtualOutput {

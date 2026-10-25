@@ -1,5 +1,5 @@
-//! INC-2 T1: the E1R EE-1 transform matrix on the production adapter (OB-45, tracker / membership
-//! / damage part; the hit-test part is INC-3).
+//! The E1R EE-1 transform matrix on the production adapter (OB-45, tracker / membership
+//! / damage part).
 //!
 //! The production tracker is `infynitae_wayland::convert::damage_tracker` built from a real
 //! connected output's model and view. It drives Smithay's real `OutputDamageTracker::render_output`
@@ -481,9 +481,8 @@ fn n_pan_moves_render_and_hit_together() {
     }
 }
 
-/// INC3-F09 regression: verify bounded descriptor usage across repeated Lockstep
-/// construction/destruction cycles. Without the fix (shared shm pool and Lockstep Drop client
-/// cleanup), each cycle leaked 193 file descriptors, exhausting standard ulimit (1024) in 5 cycles.
+/// Bounded descriptor usage across repeated Lockstep construction/destruction cycles (INC3-F09).
+/// Shared shm pool and Lockstep Drop client cleanup ensure file descriptors are not leaked.
 #[test]
 fn inc3_f09_bounded_resource_cycles() {
     #[cfg(target_os = "linux")]
