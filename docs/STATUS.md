@@ -25,6 +25,11 @@ edges on other hardware.
 - **Recent display and lock fixes on a real screen**: the lock being confirmed only once it is
   on screen, idle screen-off staying off, per-screen scale for touch and tablets, region
   screencopy over dmabuf (2026-10-25).
+- **Monitor hotplug** (2026-10-25): a screen plugged in, unplugged or woken is found about
+  1.5 s after the last change, and the session can start with no screen and wait for one (a
+  monitor off at boot). A screen asleep (idle screen-off, or turned off by a tool) is never
+  removed while asleep, only 3 s after it wakes if it is really gone. Not yet tried by
+  plugging a real monitor.
 - **The session scripts and the C helpers** have the least test coverage of anything here.
 
 ## Missing
@@ -82,6 +87,10 @@ Also missing:
 - HDR, tablet and pen support, touch gestures, accessibility and screen readers.
 - Packaging and installs other than Arch Linux; the install assumes one user and `~/infynitae`.
 - Crash reporting beyond the logs.
+
+Not handled yet on laptops and other hardware: closing the lid, rotating a screen (portrait
+monitors, convertibles), touch as real touch (it acts as a mouse), pens, a second GPU, and
+NVIDIA's explicit sync.
 
 ## Known limits
 

@@ -6,8 +6,9 @@
 //!   the session (input suspended, DRM master dropped) and resumes it.
 //! - **Rendering (T3):** GLES on GBM/EGL through Smithay's `DrmCompositor`, page-flipped on vblank.
 //!   Client dmabufs and shm buffers are imported on the GPU render node.
-//! - **Screens (T5):** every connector connected at start, at its preferred mode, on the primary
-//!   GPU. Hotplug is not handled yet.
+//! - **Screens (T5):** every connected connector, at its preferred mode, on the primary GPU.
+//!   Hotplug: a screen plugged in, unplugged or woken is found once the GPU's udev changes have
+//!   been quiet for a moment (`rescan_screens`); starting with no screen waits for one.
 //! - **Input (T4):** libinput on the seat; the keyboard layout from `XKB_DEFAULT_*` (xkbcommon's
 //!   defaults otherwise).
 //! - **Safety (T6):** Ctrl+Alt+Backspace quits; Ctrl+Alt+F1…F12 switch VT. Both are taken before
@@ -212,6 +213,8 @@ type Compositor =
 /// One screen: its Core output, its CRTC and its compositor.
 struct Screen {
     id: OutputId,
+    /// The connector it is shown on (hotplug finds it by this).
+    connector: connector::Handle,
     crtc: crtc::Handle,
     size: (i32, i32),
     compositor: Compositor,
@@ -425,6 +428,10 @@ struct LoopData {
     vrr_mode: Option<bool>,
     /// For timers set from the render path (a refused page flip's retry).
     loop_handle: smithay::reexports::calloop::LoopHandle<'static, LoopData>,
+    /// Sets up screens connected later.
+    factory: ScreenFactory,
+    /// The connectors are compared with the screens then (a display change settled; hotplug).
+    rescan_at: Option<std::time::Instant>,
 }
 
 /// The device limit Core is told: assumed, not queried, as in the nested backend (OB-52).
@@ -474,6 +481,310 @@ fn read_connector_edid(drm: &impl Device, handle: connector::Handle) -> Option<e
         }
     }
     None
+}
+
+/// How long a display change must be quiet before the connectors are compared with the screens:
+/// a monitor waking or a cable being seated reports several changes, and a monitor that drops
+/// its connection for a moment in deep sleep must not lose its screen.
+const HOTPLUG_SETTLE: Duration = Duration::from_millis(1500);
+
+/// The screens to remove: those whose connector is not among `connected`. A screen turned off
+/// (`power_off`, or all of them `asleep`: idle sleep) can read as disconnected and is kept; it is
+/// checked again once woken. Pure.
+fn screens_gone<I: Copy, C: PartialEq>(
+    screens: impl Iterator<Item = (I, C, bool)>,
+    connected: &[C],
+    asleep: bool,
+) -> Vec<I> {
+    if asleep {
+        return Vec::new();
+    }
+    screens
+        .filter(|(_, c, power_off)| !power_off && !connected.contains(c))
+        .map(|(id, _, _)| id)
+        .collect()
+}
+
+/// Hotplug: a screen whose connector is no longer connected is removed (Core disconnects its
+/// output: its camera is kept for its return, its windows stay on the canvas), and a newly
+/// connected connector becomes a screen.
+fn rescan_screens(data: &mut LoopData) {
+    let Ok(resources) = data.drm.resource_handles() else {
+        return;
+    };
+    let connected: Vec<(connector::Handle, connector::Info)> = resources
+        .connectors()
+        .iter()
+        .filter_map(|&h| data.drm.get_connector(h, true).ok().map(|c| (h, c)))
+        .filter(|(_, c)| c.state() == connector::State::Connected)
+        .collect();
+    let handles: Vec<connector::Handle> = connected.iter().map(|(h, _)| *h).collect();
+    let gone = screens_gone(
+        data.screens
+            .iter()
+            .map(|s| (s.id, s.connector, s.power_off)),
+        &handles,
+        data.dpms_active,
+    );
+    for id in gone {
+        data.screens.retain(|s| s.id != id);
+        data.gamma_screens.lock().unwrap().remove(&id);
+        match data
+            .state
+            .core_mut()
+            .output_disconnected(&mut data.output_token, id)
+        {
+            Ok(fx) => data.state.apply(&fx),
+            Err(e) => eprintln!("[infynitae] Screen {id:?} could not be disconnected: {e:?}"),
+        }
+        println!("[infynitae] Screen {id:?} disconnected");
+    }
+    for (handle, conn) in connected {
+        if data.screens.iter().any(|s| s.connector == handle) {
+            continue;
+        }
+        match connect_screen(
+            &data.factory,
+            &mut data.drm,
+            &mut data.state,
+            &mut data.output_token,
+            &data.gamma_screens,
+            &data.screens,
+            handle,
+            &conn,
+        ) {
+            Ok(Some(screen)) => {
+                println!("[infynitae] Screen {:?} connected", screen.id);
+                data.screens.push(screen);
+            }
+            Ok(None) => {}
+            Err(e) => eprintln!("[infynitae] A connected screen could not be set up: {e}"),
+        }
+    }
+}
+
+/// What setting up a screen needs, kept for screens connected later (hotplug).
+struct ScreenFactory {
+    gpu: PathBuf,
+    gbm: GbmDevice<DrmDeviceFd>,
+    allocator: GbmAllocator<DrmDeviceFd>,
+    exporter: GbmFramebufferExporter<DrmDeviceFd>,
+    render_formats: Vec<smithay::backend::allocator::Format>,
+    /// `OUTPUT_<NAME>_MODE`, `_RATE` and `_SCALE`, by lowercased connector name.
+    custom_modes: HashMap<String, (u16, u16)>,
+    custom_rates: HashMap<String, u32>,
+    custom_scales: HashMap<String, u32>,
+    scale_120: u32,
+    vrr: Option<bool>,
+}
+
+/// Sets up the connected connector `handle` as a screen: its mode (the config's, else the
+/// preferred one), a CRTC no screen of `screens` uses, its Core output, compositor, modes for
+/// display settings tools and gamma ramp. `None` when it has no usable mode or no free CRTC.
+#[allow(clippy::too_many_arguments)]
+fn connect_screen(
+    f: &ScreenFactory,
+    drm: &mut DrmDevice,
+    state: &mut WaylandState,
+    token: &mut OutputLifecycleToken,
+    gamma_screens: &Mutex<HashMap<OutputId, DrmScreenGamma>>,
+    screens: &[Screen],
+    handle: connector::Handle,
+    conn: &connector::Info,
+) -> Result<Option<Screen>, Box<dyn Error>> {
+    let resources = drm.resource_handles()?;
+    let used: Vec<crtc::Handle> = screens.iter().map(|s| s.crtc).collect();
+    let name = format!("{}-{}", conn.interface().as_str(), conn.interface_id());
+    let debug_name = format!("{:?}-{}", conn.interface(), conn.interface_id());
+    let n_lower = name.to_lowercase();
+    let dbg_lower = debug_name.to_lowercase();
+    let target_size = f
+        .custom_modes
+        .get(&n_lower)
+        .or_else(|| f.custom_modes.get(&dbg_lower))
+        .copied();
+    let target_rate = f
+        .custom_rates
+        .get(&n_lower)
+        .or_else(|| f.custom_rates.get(&dbg_lower))
+        .copied();
+    let conn_scale = f
+        .custom_scales
+        .get(&n_lower)
+        .or_else(|| f.custom_scales.get(&dbg_lower))
+        .copied()
+        .unwrap_or(f.scale_120);
+
+    let infos: Vec<ModeInfo> = conn
+        .modes()
+        .iter()
+        .map(|m| ModeInfo {
+            size: m.size(),
+            refresh_mhz: refresh_mhz(m.clock(), m.hsync().2, m.vsync().2, m.vrefresh()),
+            preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
+        })
+        .collect();
+    let mode_idx = choose_mode_custom(&infos, target_size, target_rate).or_else(|| {
+        if target_size.is_some() || target_rate.is_some() {
+            eprintln!(
+                "[infynitae] Screen {name}: requested custom mode {:?} @ {:?} not found, falling back to preferred mode",
+                target_size, target_rate
+            );
+            choose_mode(&infos)
+        } else {
+            None
+        }
+    });
+    let Some(mode) = mode_idx.map(|i| conn.modes()[i]) else {
+        return Ok(None);
+    };
+    let crtc = conn
+        .encoders()
+        .iter()
+        .filter_map(|e| drm.get_encoder(*e).ok())
+        .flat_map(|e| resources.filter_crtcs(e.possible_crtcs()))
+        .find(|c| !used.contains(c));
+    let Some(crtc) = crtc else {
+        println!("[infynitae] No free CRTC for {:?}", conn.interface());
+        return Ok(None);
+    };
+    let (w, h) = mode.size();
+    let refresh = refresh_mhz(
+        mode.clock(),
+        mode.hsync().2,
+        mode.vsync().2,
+        mode.vrefresh(),
+    );
+    println!(
+        "[infynitae] Screen {name}: {w}x{h} @ {}.{:03} Hz (scale: {:.2}x)",
+        refresh / 1000,
+        refresh % 1000,
+        conn_scale as f64 / 120.0
+    );
+    let surface = drm.create_surface(crtc, mode, &[handle])?;
+    let (make, model, serial) = match read_connector_edid(&*drm, handle) {
+        Some(e) => (e.make, e.model, e.serial),
+        None => ("Unknown".into(), "Unknown".into(), None),
+    };
+    let descriptor = OutputDescriptor {
+        key: OutputKey {
+            device: f.gpu.display().to_string(),
+            connector: name.clone(),
+            make,
+            model,
+            serial,
+        },
+        mode: (u32::from(w), u32::from(h)),
+        transform: Transform::Normal,
+        scale_120: conn_scale,
+        refresh_mhz: refresh,
+    };
+    let (id, fx) = state
+        .core_mut()
+        .output_connected(token, descriptor)
+        .map_err(|e| format!("output {name}: {e:?}"))?;
+    state.apply(&fx);
+    let k = state.core().view(id).map_or(1.0, |v| v.k);
+    let size = (i32::from(w), i32::from(h));
+    let mut compositor = Compositor::new(
+        OutputModeSource::Static {
+            size: size.into(),
+            scale: smithay::utils::Scale::from(k),
+            transform: smithay::utils::Transform::Normal,
+        },
+        surface,
+        None,
+        f.allocator.clone(),
+        f.exporter.clone(),
+        [Fourcc::Xrgb8888, Fourcc::Argb8888],
+        f.render_formats.iter().copied(),
+        drm.cursor_size(),
+        Some(f.gbm.clone()),
+    )
+    .map_err(|e| format!("screen {name}: {e:?}"))?;
+
+    let vrr_supported = compositor
+        .vrr_supported(handle)
+        .is_ok_and(|s| !matches!(s, smithay::backend::drm::VrrSupport::NotSupported));
+    let mut vrr_on = false;
+    match (vrr_supported, f.vrr) {
+        (false, _) => {}
+        (true, Some(true)) => {
+            vrr_on = compositor.use_vrr(true).is_ok();
+            println!("[infynitae] Screen {name}: VRR always on");
+        }
+        (true, Some(false)) => println!("[infynitae] Screen {name}: VRR off"),
+        (true, None) => println!("[infynitae] Screen {name}: VRR while a window is fullscreen"),
+    }
+    let screen = Screen {
+        id,
+        connector: handle,
+        crtc,
+        size,
+        compositor,
+        k,
+        pending: false,
+        queued_locked: false,
+        shows_locked: false,
+        screencopy_texture: None,
+        flip_failures: 0,
+        no_scanout_until: None,
+        vrr_supported,
+        vrr_on,
+        power_off: false,
+        modes: conn
+            .modes()
+            .iter()
+            .map(|m| {
+                let refresh = refresh_mhz(m.clock(), m.hsync().2, m.vsync().2, m.vrefresh());
+                let head = HeadMode {
+                    size: (i32::from(m.size().0), i32::from(m.size().1)),
+                    refresh_mhz: refresh as i32,
+                    preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
+                };
+                (head, *m)
+            })
+            .collect(),
+    };
+    // VRR is not reported: it follows fullscreen windows (or the config), not the tools
+    let (mm_w, mm_h) = conn.size().unwrap_or((0, 0));
+    state.set_output_head_info(
+        id,
+        HeadInfo {
+            modes: screen.modes.iter().map(|(h, _)| *h).collect(),
+            physical_size: Some((mm_w as i32, mm_h as i32)),
+            adaptive_sync: None,
+        },
+    );
+
+    // Initialize DRM gamma LUT for this screen
+    if let Ok(crtc_info) = drm.get_crtc(crtc) {
+        let gamma_len = crtc_info.gamma_length();
+        if gamma_len > 0 {
+            let sz = gamma_len as usize;
+            let mut r = vec![0u16; sz];
+            let mut g = vec![0u16; sz];
+            let mut b = vec![0u16; sz];
+            if drm.get_gamma(crtc, &mut r, &mut g, &mut b).is_err() {
+                for i in 0..sz {
+                    let val = (i as u32 * 65535 / (sz - 1).max(1) as u32) as u16;
+                    r[i] = val;
+                    g[i] = val;
+                    b[i] = val;
+                }
+            }
+            gamma_screens.lock().unwrap().insert(
+                id,
+                DrmScreenGamma {
+                    crtc,
+                    gamma_size: gamma_len,
+                    original_gamma: (r, g, b),
+                    current_gamma: None,
+                },
+            );
+        }
+    }
+    Ok(Some(screen))
 }
 
 /// Runs the compositor on the console, with an optional loop extension (the shell server). Blocks
@@ -638,7 +949,6 @@ pub fn run_console_with(
 
     // every connected connector at its preferred mode, each on a CRTC of its own (T5)
     let resources = drm.resource_handles()?;
-    let mut used: Vec<crtc::Handle> = Vec::new();
     let mut screens = Vec::new();
     let gamma_screens: Arc<Mutex<HashMap<OutputId, DrmScreenGamma>>> =
         Arc::new(Mutex::new(HashMap::new()));
@@ -668,196 +978,35 @@ pub fn run_console_with(
         connected_connectors.reverse();
     }
 
-    for (handle, conn, name, debug_name) in connected_connectors {
-        let n_lower = name.to_lowercase();
-        let dbg_lower = debug_name.to_lowercase();
-        let target_size = custom_modes
-            .get(&n_lower)
-            .or_else(|| custom_modes.get(&dbg_lower))
-            .copied();
-        let target_rate = custom_rates
-            .get(&n_lower)
-            .or_else(|| custom_rates.get(&dbg_lower))
-            .copied();
-        let conn_scale = custom_scales
-            .get(&n_lower)
-            .or_else(|| custom_scales.get(&dbg_lower))
-            .copied()
-            .unwrap_or(scale_120);
-
-        let infos: Vec<ModeInfo> = conn
-            .modes()
-            .iter()
-            .map(|m| ModeInfo {
-                size: m.size(),
-                refresh_mhz: refresh_mhz(m.clock(), m.hsync().2, m.vsync().2, m.vrefresh()),
-                preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
-            })
-            .collect();
-        let mode_idx = choose_mode_custom(&infos, target_size, target_rate).or_else(|| {
-            if target_size.is_some() || target_rate.is_some() {
-                eprintln!(
-                    "[infynitae] Screen {name}: requested custom mode {:?} @ {:?} not found, falling back to preferred mode",
-                    target_size, target_rate
-                );
-                choose_mode(&infos)
-            } else {
-                None
-            }
-        });
-        let Some(mode) = mode_idx.map(|i| conn.modes()[i]) else {
-            continue;
-        };
-        let crtc = conn
-            .encoders()
-            .iter()
-            .filter_map(|e| drm.get_encoder(*e).ok())
-            .flat_map(|e| resources.filter_crtcs(e.possible_crtcs()))
-            .find(|c| !used.contains(c));
-        let Some(crtc) = crtc else {
-            println!("[infynitae] No free CRTC for {:?}", conn.interface());
-            continue;
-        };
-        used.push(crtc);
-        let (w, h) = mode.size();
-        let refresh = refresh_mhz(
-            mode.clock(),
-            mode.hsync().2,
-            mode.vsync().2,
-            mode.vrefresh(),
-        );
-        println!(
-            "[infynitae] Screen {name}: {w}x{h} @ {}.{:03} Hz (scale: {:.2}x)",
-            refresh / 1000,
-            refresh % 1000,
-            conn_scale as f64 / 120.0
-        );
-        let surface = drm.create_surface(crtc, mode, &[handle])?;
-        let (make, model, serial) = match read_connector_edid(&drm, handle) {
-            Some(e) => (e.make, e.model, e.serial),
-            None => ("Unknown".into(), "Unknown".into(), None),
-        };
-        let descriptor = OutputDescriptor {
-            key: OutputKey {
-                device: gpu.display().to_string(),
-                connector: name.clone(),
-                make,
-                model,
-                serial,
-            },
-            mode: (u32::from(w), u32::from(h)),
-            transform: Transform::Normal,
-            scale_120: conn_scale,
-            refresh_mhz: refresh,
-        };
-        let (id, fx) = state
-            .core_mut()
-            .output_connected(&mut output_token, descriptor)
-            .map_err(|e| format!("output {name}: {e:?}"))?;
-        state.apply(&fx);
-        let k = state.core().view(id).map_or(1.0, |v| v.k);
-        let size = (i32::from(w), i32::from(h));
-        let mut compositor = Compositor::new(
-            OutputModeSource::Static {
-                size: size.into(),
-                scale: smithay::utils::Scale::from(k),
-                transform: smithay::utils::Transform::Normal,
-            },
-            surface,
-            None,
-            allocator.clone(),
-            exporter.clone(),
-            [Fourcc::Xrgb8888, Fourcc::Argb8888],
-            render_formats.iter().copied(),
-            drm.cursor_size(),
-            Some(gbm.clone()),
-        )
-        .map_err(|e| format!("screen {name}: {e:?}"))?;
-
-        let vrr_supported = compositor
-            .vrr_supported(handle)
-            .is_ok_and(|s| !matches!(s, smithay::backend::drm::VrrSupport::NotSupported));
-        let mut vrr_on = false;
-        match (vrr_supported, options.vrr) {
-            (false, _) => {}
-            (true, Some(true)) => {
-                vrr_on = compositor.use_vrr(true).is_ok();
-                println!("[infynitae] Screen {name}: VRR always on");
-            }
-            (true, Some(false)) => println!("[infynitae] Screen {name}: VRR off"),
-            (true, None) => println!("[infynitae] Screen {name}: VRR while a window is fullscreen"),
-        }
-        screens.push(Screen {
-            id,
-            crtc,
-            size,
-            compositor,
-            k,
-            pending: false,
-            queued_locked: false,
-            shows_locked: false,
-            screencopy_texture: None,
-            flip_failures: 0,
-            no_scanout_until: None,
-            vrr_supported,
-            vrr_on,
-            power_off: false,
-            modes: conn
-                .modes()
-                .iter()
-                .map(|m| {
-                    let refresh = refresh_mhz(m.clock(), m.hsync().2, m.vsync().2, m.vrefresh());
-                    let head = HeadMode {
-                        size: (i32::from(m.size().0), i32::from(m.size().1)),
-                        refresh_mhz: refresh as i32,
-                        preferred: m.mode_type().contains(ModeTypeFlags::PREFERRED),
-                    };
-                    (head, *m)
-                })
-                .collect(),
-        });
-        // VRR is not reported: it follows fullscreen windows (or the config), not the tools
-        let (mm_w, mm_h) = conn.size().unwrap_or((0, 0));
-        let screen = screens.last().expect("just pushed");
-        state.set_output_head_info(
-            id,
-            HeadInfo {
-                modes: screen.modes.iter().map(|(h, _)| *h).collect(),
-                physical_size: Some((mm_w as i32, mm_h as i32)),
-                adaptive_sync: None,
-            },
-        );
-
-        // Initialize DRM gamma LUT for this screen
-        if let Ok(crtc_info) = drm.get_crtc(crtc) {
-            let gamma_len = crtc_info.gamma_length();
-            if gamma_len > 0 {
-                let sz = gamma_len as usize;
-                let mut r = vec![0u16; sz];
-                let mut g = vec![0u16; sz];
-                let mut b = vec![0u16; sz];
-                if drm.get_gamma(crtc, &mut r, &mut g, &mut b).is_err() {
-                    for i in 0..sz {
-                        let val = (i as u32 * 65535 / (sz - 1).max(1) as u32) as u16;
-                        r[i] = val;
-                        g[i] = val;
-                        b[i] = val;
-                    }
-                }
-                gamma_screens.lock().unwrap().insert(
-                    id,
-                    DrmScreenGamma {
-                        crtc,
-                        gamma_size: gamma_len,
-                        original_gamma: (r, g, b),
-                        current_gamma: None,
-                    },
-                );
-            }
+    let factory = ScreenFactory {
+        gpu: gpu.clone(),
+        gbm: gbm.clone(),
+        allocator,
+        exporter,
+        render_formats,
+        custom_modes,
+        custom_rates,
+        custom_scales,
+        scale_120,
+        vrr: options.vrr,
+    };
+    for (handle, conn, _, _) in connected_connectors {
+        if let Some(screen) = connect_screen(
+            &factory,
+            &mut drm,
+            &mut state,
+            &mut output_token,
+            &gamma_screens,
+            &screens,
+            handle,
+            &conn,
+        )? {
+            screens.push(screen);
         }
     }
     if screens.is_empty() {
-        return Err("no connected screen".into());
+        // a monitor that is off or asleep at boot can report no connection: wait for it (hotplug)
+        println!("[infynitae] No connected screen yet: waiting for one");
     }
     state.set_gamma_handler(Arc::new(Mutex::new(DrmGammaHandler {
         drm_fd: drm.device_fd().clone(),
@@ -937,6 +1086,8 @@ pub fn run_console_with(
                     }
                 }
                 data.active = true;
+                // screens may have come or gone while away
+                data.rescan_at = Some(std::time::Instant::now());
                 data.session.request_frame();
             }
         })
@@ -969,6 +1120,22 @@ pub fn run_console_with(
             },
         )
         .map_err(|e| format!("input events: {e}"))?;
+    // hotplug: the GPU's udev "change" events (a monitor plugged, unplugged, woken)
+    let gpu_dev = drm.device_id();
+    match smithay::backend::udev::UdevBackend::new(&seat_name) {
+        Ok(udev) => {
+            handle
+                .insert_source(udev, move |event, _, data| {
+                    if let smithay::backend::udev::UdevEvent::Changed { device_id } = event
+                        && device_id == gpu_dev
+                    {
+                        data.rescan_at = Some(std::time::Instant::now() + HOTPLUG_SETTLE);
+                    }
+                })
+                .map_err(|e| format!("udev events: {e}"))?;
+        }
+        Err(e) => eprintln!("[infynitae] No udev monitor, screens are not hotplugged: {e}"),
+    }
 
     let cfg_path = std::env::var("HOME")
         .ok()
@@ -1010,6 +1177,8 @@ pub fn run_console_with(
         lock_process: None,
         vrr_mode: options.vrr,
         loop_handle: handle.clone(),
+        factory,
+        rescan_at: None,
     };
 
     data.state.reload_config();
@@ -1042,11 +1211,29 @@ pub fn run_console_with(
             .state
             .capture_indicator()
             .due(std::time::Instant::now());
-        let timeout = [data.session.timeout(), restart, idle_timeout, capture_mark]
-            .into_iter()
-            .flatten()
-            .min();
+        let rescan = data
+            .rescan_at
+            .map(|t| t.saturating_duration_since(std::time::Instant::now()));
+        let timeout = [
+            data.session.timeout(),
+            restart,
+            idle_timeout,
+            capture_mark,
+            rescan,
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         event_loop.dispatch(timeout, &mut data)?;
+        if data.active
+            && data
+                .rescan_at
+                .is_some_and(|t| t <= std::time::Instant::now())
+        {
+            data.rescan_at = None;
+            rescan_screens(&mut data);
+            data.session.request_frame();
+        }
         // the capture indicator came or went: every screen draws it, or no longer
         if data
             .state
@@ -1821,6 +2008,8 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
     if data.dpms_active {
         println!("[infynitae] User input detected: waking up screens from DPMS sleep");
         data.dpms_active = false;
+        // a screen that read as disconnected while asleep and did not come back is removed then
+        data.rescan_at = Some(std::time::Instant::now() + Duration::from_secs(3));
         for s in &mut data.screens {
             let _ = s.compositor.reset_state();
             s.pending = false;
@@ -2264,6 +2453,21 @@ mod tests {
 
     /// T6: Ctrl+Alt+Backspace quits and Ctrl+Alt+F1…F12 switch VT, with both modifiers held; any
     /// other key, or a missing modifier, is the session's.
+    #[test]
+    fn a_screen_is_gone_only_when_awake_and_disconnected() {
+        let screens = [(1, 'a', false), (2, 'b', false), (3, 'c', true)];
+        assert_eq!(
+            screens_gone(screens.into_iter(), &['a'], false),
+            [2],
+            "b is unplugged; c is off, so it may only read as disconnected"
+        );
+        assert!(
+            screens_gone(screens.into_iter(), &[], true).is_empty(),
+            "asleep: nothing is removed"
+        );
+        assert!(screens_gone(screens.into_iter(), &['a', 'b', 'c'], false).is_empty());
+    }
+
     #[test]
     fn the_console_keys_need_ctrl_and_alt() {
         assert_eq!(
