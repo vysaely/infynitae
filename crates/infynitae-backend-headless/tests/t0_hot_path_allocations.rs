@@ -265,8 +265,8 @@ enum Path {
     /// A commit of the focused window while it is presented fullscreen on the output (measured
     /// last: the presentation hides every other window).
     PresentedCommit,
-    /// A client button pressed and released over the focused window (input intake, INV-ALLOC-1;
-    /// audit Q-P1): ownership, click-to-focus on the same element, routing.
+    /// A client button pressed and released over the focused window (input intake, INV-ALLOC-1):
+    /// ownership, click-to-focus on the same element, routing.
     Click,
 }
 

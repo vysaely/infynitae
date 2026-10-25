@@ -189,7 +189,7 @@ fn persistent_locks_on_multiple_surfaces_persist_and_activate_on_focus() {
     // Both persistent constraints must be preserved in Core
     assert_eq!(r.ls.state.core().pending_constraints().len(), 2);
 
-    // Switch focus back to W1: W1's persistent lock must activate again!
+    // Switch focus back to W1: W1's persistent lock activates again.
     tap_super_tab(&mut r);
     assert_eq!(r.ls.state.core().focus().target(), Some(w1));
     assert_eq!(
@@ -198,7 +198,7 @@ fn persistent_locks_on_multiple_surfaces_persist_and_activate_on_focus() {
         "W1 persistent lock activates again on focus"
     );
 
-    // Switch focus back to W2: W2's persistent lock must activate again!
+    // Switch focus back to W2: W2's persistent lock activates again.
     tap_super_tab(&mut r);
     assert_eq!(r.ls.state.core().focus().target(), Some(w2));
     assert_eq!(
