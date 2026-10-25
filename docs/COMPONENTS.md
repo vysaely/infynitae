@@ -44,9 +44,11 @@ compositor work in this repository, then the tool just works:
 
 | Piece | Tools that would work | Protocol to add |
 | :--- | :--- | :--- |
-| Night light | wlsunset, gammastep | `wlr-gamma-control` |
 | Display settings app | wdisplays, nwg-displays, kanshi (profiles), wlr-randr | `wlr-output-management` |
 | Input methods (Japanese, Chinese, Korean) | fcitx5, ibus | `input-method-v2`, `text-input-v3` |
-| External idle tools | swayidle, hypridle | `ext-idle-notify` (idle and auto-lock are built in already) |
-| Window lists in bars, task switchers | waybar's taskbar, rofi window mode | `ext-foreign-toplevel-list`, `wlr-foreign-toplevel-management` |
-| Apps naming their cursor | (apps do it themselves) | `cursor-shape-v1` |
+| Task bars that focus or close windows | waybar's taskbar, rofi window mode | `wlr-foreign-toplevel-management` |
+
+Already spoken, so these just work: night light (wlsunset, gammastep: `wlr-gamma-control`),
+screen power (wlopm: `wlr-output-power-management`), external idle tools (swayidle, hypridle:
+`ext-idle-notify`; idle and auto-lock are built in already), read-only window lists
+(`ext-foreign-toplevel-list`), apps naming their cursor (`cursor-shape-v1`).

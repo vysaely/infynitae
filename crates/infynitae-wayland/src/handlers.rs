@@ -204,9 +204,48 @@ impl WaylandState {
             .and_then(|p| self.element_index_by_root(&p))
             .map(|i| self.elements[i].id);
         self.core.set_toplevel_parent(id, parent);
+        let mapped = tree.root().is_some_and(|r| r.mapped);
         let _ = self.with_effects(|core, fx| {
             core.toplevel_committed_acked_into(id, tree, acked_fullscreen, fx)
         });
+        self.list_toplevel(id, mapped);
+    }
+
+    /// Lists the element in `ext_foreign_toplevel_list_v1` while it is mapped, and closes its
+    /// handle when it unmaps.
+    fn list_toplevel(&mut self, id: infynitae_core::stage::ElementId, mapped: bool) {
+        if mapped == self.foreign_toplevels.contains_key(&id) {
+            return;
+        }
+        if mapped {
+            let (title, app_id) = self.toplevel_title_app_id(id);
+            let handle = self
+                .foreign_toplevel_list
+                .new_toplevel::<Self>(title, app_id);
+            self.foreign_toplevels.insert(id, handle);
+        } else if let Some(handle) = self.foreign_toplevels.remove(&id) {
+            self.foreign_toplevel_list.remove_toplevel(&handle);
+        }
+    }
+
+    /// The title and app id of the element's toplevel, empty when unset.
+    fn toplevel_title_app_id(&self, id: infynitae_core::stage::ElementId) -> (String, String) {
+        let Some(surface) = self.window_surface(id) else {
+            return Default::default();
+        };
+        with_states(&surface, |states| {
+            states
+                .data_map
+                .get::<XdgToplevelSurfaceData>()
+                .map(|d| {
+                    let d = d.lock().unwrap();
+                    (
+                        d.title.clone().unwrap_or_default(),
+                        d.app_id.clone().unwrap_or_default(),
+                    )
+                })
+                .unwrap_or_default()
+        })
     }
 
     /// The element's surface tree changed without a commit of its root (a child surface
@@ -438,6 +477,11 @@ impl WaylandState {
         let _ = self
             .core
             .toplevel_metadata(id, title.as_deref(), app_id.as_deref());
+        if let Some(handle) = self.foreign_toplevels.get(&id) {
+            handle.send_title(title.as_deref().unwrap_or_default());
+            handle.send_app_id(app_id.as_deref().unwrap_or_default());
+            handle.send_done();
+        }
     }
 }
 
@@ -480,6 +524,7 @@ impl XdgShellHandler for WaylandState {
             .retain(|e| e.window.toplevel() != Some(&surface));
         for id in gone {
             self.border_ids.remove(&id);
+            self.list_toplevel(id, false);
             let effects = self.core.toplevel_destroyed(id);
             self.apply(&effects);
         }
@@ -961,6 +1006,15 @@ delegate_viewporter!(WaylandState);
 smithay::delegate_cursor_shape!(WaylandState);
 smithay::delegate_xdg_foreign!(WaylandState);
 smithay::delegate_single_pixel_buffer!(WaylandState);
+smithay::delegate_foreign_toplevel_list!(WaylandState);
+
+impl smithay::wayland::foreign_toplevel_list::ForeignToplevelListHandler for WaylandState {
+    fn foreign_toplevel_list_state(
+        &mut self,
+    ) -> &mut smithay::wayland::foreign_toplevel_list::ForeignToplevelListState {
+        &mut self.foreign_toplevel_list
+    }
+}
 smithay::delegate_content_type!(WaylandState);
 smithay::delegate_alpha_modifier!(WaylandState);
 smithay::delegate_xdg_system_bell!(WaylandState);

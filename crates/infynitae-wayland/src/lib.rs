@@ -185,6 +185,13 @@ pub struct WaylandState {
         reason = "owns the wp_single_pixel_buffer_manager_v1 global for the state's lifetime"
     )]
     single_pixel_buffer: smithay::wayland::single_pixel_buffer::SinglePixelBufferState,
+    /// `ext_foreign_toplevel_list_v1`: the window list for bars and task switchers. A window is
+    /// listed while it is mapped; Smithay keeps only weak handles, so the strong ones are here.
+    foreign_toplevel_list: smithay::wayland::foreign_toplevel_list::ForeignToplevelListState,
+    foreign_toplevels: std::collections::HashMap<
+        ElementId,
+        smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle,
+    >,
     /// `wp_content_type_v1`: a surface says it shows a photo, a video or a game (`content_type`).
     #[expect(
         dead_code,
@@ -495,6 +502,11 @@ impl WaylandState {
             single_pixel_buffer: smithay::wayland::single_pixel_buffer::SinglePixelBufferState::new::<
                 Self,
             >(display),
+            foreign_toplevel_list:
+                smithay::wayland::foreign_toplevel_list::ForeignToplevelListState::new::<Self>(
+                    display,
+                ),
+            foreign_toplevels: std::collections::HashMap::new(),
             content_type: smithay::wayland::content_type::ContentTypeState::new::<Self>(display),
             alpha_modifier: smithay::wayland::alpha_modifier::AlphaModifierState::new::<Self>(
                 display,

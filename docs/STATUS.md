@@ -10,7 +10,7 @@ edges on other hardware.
 - **The spatial model**: the endless canvas, a camera per screen (pan, zoom, fit, overview),
   clusters, window slots, fullscreen you can pan out of. Core is a pure state machine with no
   Wayland code in it, tested exactly.
-- **The test suite**: about 780 tests, most of them driving real Wayland clients against a
+- **The test suite**: about 810 tests, most of them driving real Wayland clients against a
   headless compositor, plus checks that seed bugs on purpose to prove the tests catch them
   (`tools/verify-test-efficacy`) and that the architecture holds (`tools/verify-architecture`).
 - **The desktop around it**: lock screen, wallpaper, screen sharing (portal + screencopy),
@@ -35,11 +35,18 @@ the user folders (~/Downloads, ~/Pictures…), emoji and wider font coverage (No
 control menu on Super+A for Wi-Fi, Bluetooth, the sound output and power modes. Links open in
 your browser, screen sharing is one click.
 
+The compositor now also speaks the protocols these tools need: night light (wlsunset,
+gammastep), screens turned off and on by a tool (wlopm), external idle tools (swayidle,
+hypridle), window lists for bars and switchers that read `ext-foreign-toplevel-list`, and apps
+naming their cursor shape. Night light and screen power have only run in the test suite, not on
+a real screen yet.
+
 Still missing, because the compositor has to speak the protocol first:
 
-- night light and colour temperature (`wlr-gamma-control`, for wlsunset or gammastep);
 - display settings without editing the config (`wlr-output-management`, for wdisplays or kanshi);
 - input methods for Japanese, Chinese, Korean (`input-method-v2` and `text-input-v3`, for fcitx5);
+- task bars that also focus or close windows (`wlr-foreign-toplevel-management`, waybar's
+  taskbar);
 - per-app volume in the menu (the apps themselves do it; pavucontrol works).
 
 The keyring asks for its password once per session when you log in without one (autologin);
@@ -48,8 +55,7 @@ PAM setup includes `pam_gnome_keyring`.
 
 Also missing:
 
-- `cursor-shape-v1` (apps naming a cursor shape for the compositor to draw); animated cursors
-  show their first frame only.
+- Animated cursors show their first frame only.
 - HDR, tablet and pen support, touch gestures, accessibility and screen readers.
 - Packaging and installs other than Arch Linux; the install assumes one user and `~/infynitae`.
 - Crash reporting beyond the logs.

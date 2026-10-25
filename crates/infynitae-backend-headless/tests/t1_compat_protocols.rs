@@ -1,5 +1,6 @@
 //! Small protocols apps expect, on the production path with a real client: cursor-shape-v1,
-//! xdg-foreign-v2, single-pixel-buffer-v1, alpha-modifier-v1, content-type-v1, xdg-system-bell-v1.
+//! xdg-foreign-v2, single-pixel-buffer-v1, alpha-modifier-v1, content-type-v1, xdg-system-bell-v1,
+//! ext-foreign-toplevel-list-v1.
 
 mod common;
 
@@ -12,6 +13,12 @@ use smithay::backend::renderer::{Bind, ExportMem, Offscreen};
 use smithay::input::pointer::{CursorIcon, CursorImageStatus};
 use smithay::reexports::pixman::Image;
 use smithay::utils::Rectangle;
+use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_handle_v1::{
+    self, ExtForeignToplevelHandleV1,
+};
+use wayland_protocols::ext::foreign_toplevel_list::v1::client::ext_foreign_toplevel_list_v1::{
+    self, ExtForeignToplevelListV1,
+};
 use wayland_protocols::wp::alpha_modifier::v1::client::wp_alpha_modifier_surface_v1::WpAlphaModifierSurfaceV1;
 use wayland_protocols::wp::alpha_modifier::v1::client::wp_alpha_modifier_v1::WpAlphaModifierV1;
 use wayland_protocols::wp::content_type::v1::client::wp_content_type_manager_v1::WpContentTypeManagerV1;
@@ -52,6 +59,46 @@ impl wayland_client::Dispatch<ZxdgExportedV2, ()> for Probe {
         if let zxdg_exported_v2::Event::Handle { handle } = ev {
             st.log.push(format!("exported {handle}"));
         }
+    }
+}
+
+/// The window list goes to the probe's log: `listed`, `title <t>`, `app_id <a>`, `done`, `closed`.
+impl wayland_client::Dispatch<ExtForeignToplevelListV1, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &ExtForeignToplevelListV1,
+        ev: ext_foreign_toplevel_list_v1::Event,
+        _: &(),
+        _: &wayland_client::Connection,
+        _: &wayland_client::QueueHandle<Self>,
+    ) {
+        if let ext_foreign_toplevel_list_v1::Event::Toplevel { .. } = ev {
+            st.log.push("listed".into());
+        }
+    }
+
+    wayland_client::event_created_child!(Probe, ExtForeignToplevelListV1, [
+        ext_foreign_toplevel_list_v1::EVT_TOPLEVEL_OPCODE => (ExtForeignToplevelHandleV1, ()),
+    ]);
+}
+
+impl wayland_client::Dispatch<ExtForeignToplevelHandleV1, ()> for Probe {
+    fn event(
+        st: &mut Self,
+        _: &ExtForeignToplevelHandleV1,
+        ev: ext_foreign_toplevel_handle_v1::Event,
+        _: &(),
+        _: &wayland_client::Connection,
+        _: &wayland_client::QueueHandle<Self>,
+    ) {
+        use ext_foreign_toplevel_handle_v1::Event;
+        st.log.push(match ev {
+            Event::Title { title } => format!("title {title}"),
+            Event::AppId { app_id } => format!("app_id {app_id}"),
+            Event::Done => "done".into(),
+            Event::Closed => "closed".into(),
+            _ => return,
+        });
     }
 }
 
@@ -284,4 +331,39 @@ fn the_bell_rings_quietly() {
     assert_eq!(w_idx2, w_idx);
     let px = show(&mut r, w_idx, &s);
     assert_eq!(px.iter().filter(|p| **p == SQUARE).count(), 50 * 50);
+}
+
+/// A bar sees the open window with its title and app id, follows a title change, and sees the
+/// window close.
+#[test]
+fn the_window_list_follows_the_windows() {
+    let mut r = Rig::x8();
+    let w_idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
+    let toplevel = r.ls.probe.surfaces[w_idx].toplevel.clone().unwrap();
+    toplevel.set_app_id("org.example.W".into());
+    toplevel.set_title("first".into());
+    r.ls.pump();
+    r.ls.probe.log.clear();
+    let _list: ExtForeignToplevelListV1 = bind(&r, "ext_foreign_toplevel_list_v1", 1);
+    r.ls.pump();
+    let log = std::mem::take(&mut r.ls.probe.log);
+    assert!(log.contains(&"listed".to_string()), "{log:?}");
+    assert!(log.contains(&"title first".to_string()), "{log:?}");
+    assert!(log.contains(&"app_id org.example.W".to_string()), "{log:?}");
+    assert_eq!(log.last().map(String::as_str), Some("done"), "{log:?}");
+
+    toplevel.set_title("second".into());
+    r.ls.pump();
+    let log = std::mem::take(&mut r.ls.probe.log);
+    assert_eq!(log, ["title second", "done"], "a title change");
+
+    toplevel.destroy();
+    r.ls.pump();
+    let log = std::mem::take(&mut r.ls.probe.log);
+    assert_eq!(log, ["closed"], "the window closed");
 }
