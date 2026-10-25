@@ -855,6 +855,8 @@ impl
             smithay::wayland::selection::wlr_data_control::DataControlDeviceUserData,
             Self,
         >>::request(state, client, resource, request, data, dh, data_init);
+        // consumed by new_selection; one Smithay refused must not be credited to the next copy
+        state.data_control_owner = None;
     }
 }
 
@@ -912,6 +914,8 @@ impl
             smithay::wayland::selection::ext_data_control::ExtDataControlDeviceUserData,
             Self,
         >>::request(state, client, resource, request, data, dh, data_init);
+        // consumed by new_selection; one Smithay refused must not be credited to the next copy
+        state.data_control_owner = None;
     }
 }
 delegate_data_device!(WaylandState);
