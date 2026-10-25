@@ -1109,7 +1109,7 @@ OB42_TEST = "crates/infynitae-backend-headless/tests/t0_hot_path_allocations.rs"
 OB42_ALLOWED_ROOTS = {"std", "core", "alloc", "infynitae_core", "crate", "self", "super"}
 
 
-def ob42_foreign_paths(text):
+def ob42_foreign_paths(text, meta=None):
     """The crate roots other than std and Core that the OB-42 allocator test names: in `use`
     items, `extern crate`, and any `root::path` expression (comments and strings ignored)."""
     code = re.sub(r"//[^\n]*", "", text)
@@ -1117,13 +1117,30 @@ def ob42_foreign_paths(text):
     roots = set(re.findall(r"\buse\s+(?:::)?([A-Za-z_][A-Za-z0-9_]*)", code))
     roots |= set(re.findall(r"\bextern\s+crate\s+([A-Za-z_][A-Za-z0-9_]*)", code))
     roots |= set(re.findall(r"(?<![A-Za-z0-9_:])([a-z_][a-z0-9_]*)::", code))
-    known_crates = {"smithay", "calloop", "wayland_server", "wayland_client", "wayland_protocols",
-                    "infynitae_wayland", "infynitae_backend_headless", "infynitae_backend_winit",
-                    "infynitae_ipc", "rustix", "libc", "nix"}
-    return sorted(r for r in roots if r not in OB42_ALLOWED_ROOTS and (r in known_crates or r.startswith("infynitae")))
+    if meta is None:
+        meta = metadata(ROOT)
+    by_id = {p["id"]: p for p in meta["packages"]}
+    nodes = {n["id"]: n for n in meta["resolve"]["nodes"]}
+    headless_pkg = next(p for p in meta["packages"] if p["name"] == HEADLESS)
+    visited = set()
+    queue = [headless_pkg["id"]]
+    while queue:
+        curr = queue.pop(0)
+        if curr in visited:
+            continue
+        visited.add(curr)
+        if curr in nodes:
+            for d in nodes[curr]["deps"]:
+                queue.append(d["pkg"])
+    forbidden = {by_id[pid]["name"].replace("-", "_") for pid in visited}
+    for d in headless_pkg["dependencies"]:
+        forbidden.add((d.get("rename") or d["name"]).replace("-", "_"))
+    forbidden |= {p.replace("-", "_") for p in PRODUCT}
+    forbidden -= OB42_ALLOWED_ROOTS
+    return sorted(r for r in roots if r not in OB42_ALLOWED_ROOTS and (r in forbidden or r.startswith("infynitae")))
 
 
-def check_ob42_core_only(root, r):
+def check_ob42_core_only(root, r, meta=None):
     """OB-42's evidence (INC-6 exit r2): the counted region of the allocator test exercises only
     Core. The test binary lives outside Core (INV-ARCH-2), so this is checked: the file names no
     crate but std and infynitae_core. A seeded foreign import must be caught."""
@@ -1133,10 +1150,14 @@ def check_ob42_core_only(root, r):
             text = f.read()
     except OSError as e:
         return r.check(False, "", f"OB-42 allocator test unreadable: {e}")
-    ok = r.check(not ob42_foreign_paths(text), f"OB-42: {OB42_TEST} names only std and infynitae_core",
-                 f"OB-42: {OB42_TEST} names other crates: {ob42_foreign_paths(text)}")
-    for seed in ("use smithay::utils::Serial;\n", "fn x() { let _ = infynitae_wayland::session::FrameTimer::new(1); }\n"):
-        ok &= r.check(bool(ob42_foreign_paths(text + seed)), f"OB-42 negative control caught: {seed.strip()}",
+    ok = r.check(not ob42_foreign_paths(text, meta), f"OB-42: {OB42_TEST} names only std and infynitae_core",
+                 f"OB-42: {OB42_TEST} names other crates: {ob42_foreign_paths(text, meta)}")
+    for seed in (
+        "use smithay::utils::Serial;\n",
+        "fn x() { let _ = infynitae_wayland::session::FrameTimer::new(1); }\n",
+        "use wayland_protocols_wlr::screencopy::v1::server::zwlr_screencopy_manager_v1;\n",
+    ):
+        ok &= r.check(bool(ob42_foreign_paths(text + seed, meta)), f"OB-42 negative control caught: {seed.strip()}",
                       f"OB-42 negative control MISSED: {seed.strip()}")
     return ok
 
@@ -1161,7 +1182,7 @@ def main():
         check_runtime_2i(r)
         check_runtime_input3(r)
         check_popup_negative_controls(r)
-        check_ob42_core_only(ROOT, r)
+        check_ob42_core_only(ROOT, r, meta=meta)
         if skip_mutations:
             r.fail("seeded negative controls skipped (--skip-mutations): not a passing run")
         else:
