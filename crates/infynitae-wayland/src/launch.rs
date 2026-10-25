@@ -77,6 +77,12 @@ impl Launches {
     }
 }
 
+/// A process's environment holds exactly this `KEY=value` entry.
+fn env_has(pid: u32, entry: &[u8]) -> bool {
+    std::fs::read(format!("/proc/{pid}/environ"))
+        .is_ok_and(|env| env.split(|b| *b == 0).any(|kv| kv == entry))
+}
+
 /// The `INFYNITAE_LAUNCH` tag in a process's environment.
 fn tag_of(pid: u32) -> Option<u64> {
     tag_in(&std::fs::read(format!("/proc/{pid}/environ")).ok()?)
@@ -137,6 +143,11 @@ impl WaylandState {
         let Some(pid) = self.client_pid(element) else {
             return false;
         };
+        // a program that asks never to take the focus (agy-task's watch window, other background
+        // tools started from the focused terminal)
+        if env_has(pid, b"INFYNITAE_NO_FOCUS=1") {
+            return false;
+        }
         let tag = tag_of(pid);
         for l in &mut self.launches.list {
             let age = now.duration_since(l.moment(now));
