@@ -146,6 +146,25 @@ fn lifecycle_on_the_wire() {
     );
 }
 
+#[test]
+fn output_removed_disables_before_removal() {
+    let mut ls = Lockstep::new(Some(output_k("A", (1920, 1080), 120, 60_000)));
+    let a = ls.output();
+
+    // Disconnecting the output disables it and queues removal with a 5-second delay
+    ls.disconnect(a);
+    assert_eq!(ls.state.disabled_outputs_count(), 1);
+
+    // Pruning before deadline keeps it queued
+    ls.state.prune_disabled_outputs();
+    assert_eq!(ls.state.disabled_outputs_count(), 1);
+
+    // Advancing deadline to past allows prune_disabled_outputs to remove it
+    ls.state.expire_disabled_outputs();
+    ls.state.prune_disabled_outputs();
+    assert_eq!(ls.state.disabled_outputs_count(), 0);
+}
+
 /// M4 reconfiguration on the wire: wl_output/xdg_output state follows the new facts with the same
 /// OutputId and camera; membership is recomputed (enter on growth, leave on shrink).
 #[test]

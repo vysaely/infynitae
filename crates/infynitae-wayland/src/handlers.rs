@@ -711,6 +711,7 @@ impl WaylandState {
     /// Clears a selection whose owner disconnected, telling the focused client (`selection` with
     /// no offer). Called after each client dispatch.
     pub fn clear_orphaned_selections(&mut self) {
+        self.prune_disabled_outputs();
         let gone =
             |state: &Self,
              owner: &Option<smithay::reexports::wayland_server::backend::ClientId>| {

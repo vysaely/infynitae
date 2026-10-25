@@ -34,6 +34,7 @@ pub(crate) struct OutputHandle {
 impl WaylandState {
     /// Applies Core's effects in order (C1.2 `WaylandState::apply`).
     pub fn apply(&mut self, effects: &[Effect]) {
+        self.prune_disabled_outputs();
         for effect in effects {
             self.kick_before(effect);
             match *effect {
@@ -447,7 +448,9 @@ impl WaylandState {
     fn output_removed(&mut self, id: OutputId) {
         if let Some(i) = self.outputs.iter().position(|h| h.id == id) {
             let h = self.outputs.remove(i);
-            self.dh.remove_global::<WaylandState>(h.global);
+            self.dh.disable_global::<WaylandState>(h.global.clone());
+            self.disabled_outputs
+                .push((h.global, std::time::Instant::now() + Duration::from_secs(5)));
         }
     }
 

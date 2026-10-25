@@ -369,6 +369,7 @@ impl Session {
         state.settle_unlock();
         state.clear_orphaned_selections();
         state.refuse_client_drags();
+        state.prune_disabled_outputs();
         self.flush();
     }
 

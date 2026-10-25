@@ -44,7 +44,9 @@ use infynitae_core::stage::ElementId;
 use smithay::desktop::{PopupManager, Window};
 use smithay::input::{Seat, SeatState};
 use smithay::reexports::wayland_server::DisplayHandle;
-use smithay::reexports::wayland_server::backend::{ClientData, ClientId, DisconnectReason};
+use smithay::reexports::wayland_server::backend::{
+    ClientData, ClientId, DisconnectReason, GlobalId,
+};
 use smithay::wayland::compositor::{CompositorClientState, CompositorState};
 use smithay::wayland::dmabuf::{DmabufFeedbackBuilder, DmabufState};
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
@@ -118,6 +120,7 @@ pub struct WaylandState {
     )]
     presentation: PresentationState,
     outputs: Vec<outputs::OutputHandle>,
+    pub(crate) disabled_outputs: Vec<(GlobalId, std::time::Instant)>,
     /// What the backend's framebuffer is (`set_host_window_target`).
     pub(crate) target: convert::RenderTarget,
     /// The cursor clients asked for, drawn when the target draws one (`cursor`).
@@ -293,6 +296,32 @@ impl WaylandState {
             }
         }
     }
+
+    /// Removes disabled output globals whose delay has elapsed.
+    pub fn prune_disabled_outputs(&mut self) {
+        let now = std::time::Instant::now();
+        self.disabled_outputs.retain(|(global, deadline)| {
+            if *deadline <= now {
+                self.dh.remove_global::<WaylandState>(global.clone());
+                false
+            } else {
+                true
+            }
+        });
+    }
+
+    /// Number of disabled output globals awaiting removal (for tests).
+    pub fn disabled_outputs_count(&self) -> usize {
+        self.disabled_outputs.len()
+    }
+
+    /// Forces expiration of disabled outputs' removal delays (for tests).
+    pub fn expire_disabled_outputs(&mut self) {
+        let past = std::time::Instant::now() - std::time::Duration::from_secs(1);
+        for (_, deadline) in &mut self.disabled_outputs {
+            *deadline = past;
+        }
+    }
 }
 
 impl WaylandState {
@@ -378,6 +407,7 @@ impl WaylandState {
             output_manager: OutputManagerState::new_with_xdg_output::<Self>(display),
             presentation: PresentationState::new::<Self>(display, CLOCK_MONOTONIC),
             outputs: Vec::new(),
+            disabled_outputs: Vec::new(),
             target: convert::RenderTarget::default(),
             cursor: smithay::input::pointer::CursorImageStatus::default_named(),
             pointer_sent: pointer::Sent::default(),
