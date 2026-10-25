@@ -46,8 +46,10 @@ if [ -e "/dev/nvidia0" ] || [ -d "/sys/module/nvidia" ]; then
     export __GLX_VENDOR_LIBRARY_NAME="nvidia"
 fi
 
-# 4b. Ensure CLI URL openers (xdg-open generic fallback) dispatch asynchronously
-export BROWSER="gio open"
+# 4b. Programs that open links run $BROWSER as one program name (Claude Code, gh, git, Python's
+# webbrowser): it must not contain a space. xdg-open is Infynitae's non-blocking opener
+# (live/xdg-open, installed to ~/.local/bin), which hands the link to the default browser.
+export BROWSER="xdg-open"
 
 # 5. Ensure XDG_RUNTIME_DIR is valid (required for Wayland sockets)
 if [ -z "$XDG_RUNTIME_DIR" ]; then

@@ -5,7 +5,8 @@
 [ -f "$HOME/.config/infynitae/config" ] && . "$HOME/.config/infynitae/config"
 
 # BROWSER is also the variable command-line programs (git, gh, Python's webbrowser, sign-in
-# flows) run to open a link: "auto" means the desktop's default opener, never a program "auto".
+# flows) run to open a link, as one program name: "auto" means the desktop's default opener
+# (xdg-open), never a program "auto", and never a command with a space in it.
 case "${BROWSER:-auto}" in
-    auto) export BROWSER="gio open" ;;
+    auto) export BROWSER="xdg-open" ;;
 esac

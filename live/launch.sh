@@ -251,7 +251,7 @@ case "$ACTION" in
         ;;
     browser)
         # Web browser
-        if [ "$BROWSER" = "gio open" ]; then
+        if [ "$BROWSER" = "xdg-open" ] || [ "$BROWSER" = "gio open" ]; then
             exec gtk-launch "$(xdg-settings get default-web-browser 2>/dev/null || echo firefox.desktop)"
         fi
         exec sh -c "$BROWSER"
