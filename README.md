@@ -15,7 +15,20 @@ their files once.
 Status: my daily desktop, tested on my own hardware only. See [docs/STATUS.md](docs/STATUS.md)
 for what is solid, what is untested and what is missing.
 
-## Keybindings
+## Install
+
+Arch Linux:
+
+```bash
+git clone https://github.com/vysaely/infynitae.git ~/infynitae
+cd ~/infynitae
+./install.sh
+```
+
+Then pick **Infynitae** on your login screen, or log in on a console and run `infynitae-session`.
+Update any time with `infynitae-update` (your config is never overwritten).
+
+## Shortcuts
 
 | Key | Action |
 | :--- | :--- |
@@ -23,8 +36,8 @@ for what is solid, what is untested and what is missing.
 | `Super + Shift + 1..9` | Focus cluster slot 1..9 |
 | `Super + Space` | Center the focused window, zoom back to 100% |
 | `Super + Shift + Space` | Center the focused window, keep the zoom |
-| `Super + Enter` | Maximize / fit window to viewport (0% blur) |
-| `Super + Shift + Enter` | Borderless fullscreen (pan out anytime) |
+| `Super + Enter` | Maximize the window, or fit the view to it (`SUPER_ENTER_ACTION`) |
+| `Super + Shift + Enter` | Fullscreen (you can still pan out of it) |
 | `Super + Left Drag` | Move window |
 | `Super + Right Drag` | Resize window from nearest corner |
 | `Super + Shift + Left Drag` | Move entire window cluster |
@@ -33,74 +46,42 @@ for what is solid, what is untested and what is missing.
 | `Super + Shift + Wheel` | Zoom canvas in / out |
 | `Super + Tab` | Cycle window focus (auto-centers camera) |
 | `Super + Shift + Tab` | Canvas overview toggle (fits all windows / restores view) |
-| `Super + Q` | Terminal (auto: kitty, alacritty, foot) |
-| `Super + W` | Launcher (auto: `fuzzel`, `rofi`, `tofi`, `wofi`) |
-| `Super + E` | Files (`yazi`, `thunar`, `dolphin`) |
+| `Super + Q` | Terminal (`TERMINAL`) |
+| `Super + W` | Launcher (`LAUNCHER`) |
+| `Super + E` | Files (`FILE_MANAGER`) |
 | `Super + Shift + S` / `Print` | Screenshot full screen |
 | `Super + Shift + R` | Region screenshot (`slurp` + `grim`) |
-| `Super + Shift + Backspace` | Reload config & desktop environment |
-| `Super + L` | Lock screen (native `infynitae-lock`) |
+| `Super + Shift + Backspace` | Reload the config and restart the helpers (windows stay) |
+| `Super + L` | Lock the screen |
 | `Super + V` | Clipboard history (`cliphist`) |
 | `Super + C` | Close focused window |
-| `Super + Shift + C` | Force kill window process |
+| `Super + Shift + C` | Force close (ends the app) |
 | `Super + Shift + P` | Hide the focused window from screen captures |
 | `Super + Shift + I` | Stay awake (no idle screen-off / auto-lock) |
 | `Super + Alt + C` | Save a replay clip (`ENABLE_REPLAY_BUFFER`) |
 | `Super + Alt + R` | Start / stop recording |
 | `Super` (held) | Frees a cursor a game captured (`SUPER_FREES_CURSOR`) |
-| `Ctrl + Alt + Backspace` | Restart the compositor (`infynitae-session stop` quits) |
+| `Ctrl + Alt + Backspace` | Restart the compositor (windows close) |
 | `Ctrl + Alt + F1..F12` | Switch VT |
 | `XF86Audio*` / `XF86MonBrightness*` | Volume & brightness control |
 
-Any action can be rebound, and any command bound, in the config (`BIND_<ACTION>`, `EXEC_<NAME>`).
+## Changing things
 
-## Configuration
+Everything is in one file: **`~/.config/infynitae/config`**. Every option is explained in it with
+its default, and each section says when a change applies (most of them as soon as you save).
 
-Single config file at `~/.config/infynitae/config` (the install writes the commented template;
-each section says when its changes apply, most of them the moment you save):
+- Apps: `TERMINAL`, `LAUNCHER`, `FILE_MANAGER`, `BROWSER`: `"auto"` or any command.
+- Keys: `BIND_TERMINAL="SUPER+RETURN"` moves a shortcut, `BIND_LAUNCHER="none"` frees one,
+  `EXEC_BROWSER="SUPER+B:firefox"` adds your own.
+- Look: `CURSOR_THEME`, `ICON_THEME`, `FONT_NAME`, `WALLPAPER`, `OUTPUT_SCALE`.
 
-- Scaling filter (`nearest` for razor-sharp 0% blur, `linear` for smooth) and `OUTPUT_SCALE`
-- Cluster tiling and smart adjacent window placement (`PLACEMENT_POLICY="cluster"`)
-- Focus and camera for new windows (`FOCUS_ON_OPEN`, `TELEPORT_ON_OPEN`: by default only windows you opened)
-- Mouse speed, acceleration profile (`flat` or `adaptive`), and pan mode (`free`, `grab`, `rts`)
-- Window focus model (`sloppy`, `strict`, or `click`)
-- Screen sharing & remote desktop cursor suppression (`SCREENCOPY_CURSOR="false"`)
-- Wallpaper (`WALLPAPER`; a video plays through `mpvpaper` when installed)
-- Keyboard layout, repeat delay, and repeat rate
-- Cursor theme, size, and fonts
-- Default apps (`TERMINAL`, `LAUNCHER`, `FILE_MANAGER`, `BROWSER`, `SCREEN_LOCKER`)
-- Session restore, clipboard history, screen sharing prompt, replay buffer and recorder
-
-Restart the helpers (wallpaper, portal, recorder, clipboard…) without closing windows:
-```bash
-infynitae-reload          # or Super + Shift + Backspace
-```
-
-Reset canvas zoom to 100%:
-```bash
-infynitae-settings restore
-```
-
-## Install
-
-```bash
-git clone https://github.com/vysaely/infynitae.git
-cd infynitae
-./install.sh
-```
-
-## Update
-
-Run anytime from anywhere to pull latest changes, rebuild, and update without touching your custom configs:
-```bash
-infynitae-update
-```
+`Super + Shift + Backspace` reloads it.
 
 ## When something goes wrong
 
-`~/.local/state/infynitae/session.log` has what the compositor saw: the screens it found, config
-lines it skipped, errors. `Ctrl+Alt+Backspace` restarts the compositor, `infynitae-session stop`
-ends the session, and after three quick crashes the session stops by itself.
+`~/.local/state/infynitae/session.log` says what the compositor saw: the screens it found,
+config lines it skipped, errors. `infynitae-session stop` ends the session; after three quick
+crashes it stops by itself.
 
 ## Documentation
 
