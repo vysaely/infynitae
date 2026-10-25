@@ -211,6 +211,9 @@ impl WaylandState {
                 Effect::SpawnLockScreen => {
                     self.spawn_action("lock-screen");
                 }
+                Effect::SpawnClipboardHistory => {
+                    self.spawn_action("clipboard-history");
+                }
                 Effect::Exec(i) => {
                     if let Some(command) = self.exec_commands.get(usize::from(i)).cloned() {
                         self.spawn_action_with("exec", &command);
@@ -289,7 +292,13 @@ impl WaylandState {
         // the shortcuts that open apps are launches (`launch`): their windows are the user's
         if matches!(
             action,
-            "terminal" | "launcher" | "file-manager" | "exec" | "browser" | "overview"
+            "terminal"
+                | "launcher"
+                | "file-manager"
+                | "exec"
+                | "browser"
+                | "overview"
+                | "clipboard-history"
         ) {
             let _ = self.launches.spawn(&mut cmd);
         } else {
