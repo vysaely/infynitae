@@ -162,8 +162,8 @@ def cmd_watch(session_path=None, ipc_fn=send_request, interval=15.0):
         if not stop_requested:
             take_and_save_snapshot(session_path=session_path, ipc_fn=ipc_fn)
 
-    # One final snapshot on SIGTERM or SIGINT; writes nothing if snapshot fails
-    take_and_save_snapshot(session_path=session_path, ipc_fn=ipc_fn)
+    # No snapshot on SIGTERM: the session is ending and its windows are already closing, so it
+    # would overwrite the last good file with a partial one.
 
 
 def parse_desktop_file(path):
@@ -278,6 +278,7 @@ def cmd_restore(
     log_file=None,
     poll_timeout=60.0,
     poll_interval=0.2,
+    relaunch_after=8.0,
 ):
     if session_path is None:
         session_path = os.path.expanduser("~/.local/state/infynitae/session.json")
@@ -314,22 +315,23 @@ def cmd_restore(
                 })
         return
 
-    # 1. Launch each distinct app_id once
-    launched_apps = set()
+    # 1. Launch each distinct app_id once. An app that opens one window per launch (a terminal)
+    # is launched again in the poll loop while it still has windows to place; one that reopens
+    # its own windows (a browser) brings them all within RELAUNCH_AFTER and is not.
+    apps = {}  # app_id.lower() -> {"cmd", "saved", "launches", "last"}
     for win in saved_windows:
         app_id = win.get("app_id")
         if not app_id:
             continue
         key = app_id.lower()
-        if key in launched_apps:
+        if key in apps:
+            apps[key]["saved"] += 1
             continue
-        launched_apps.add(key)
-
         cmd_args = resolve_app_command(app_id, apps_dirs=apps_dirs)
         if not cmd_args:
             log_restore(f"Skip {app_id}: no desktop file found", log_file=log_file)
             continue
-
+        apps[key] = {"cmd": cmd_args, "saved": 1, "launches": 1, "last": time.time()}
         log_restore(f"Launch {app_id}: {cmd_args}", log_file=log_file)
         launch_fn(app_id, cmd_args, log_file=log_file)
 
@@ -373,6 +375,8 @@ def cmd_restore(
 
                 if target_idx is not None:
                     target_win = pending_saved.pop(target_idx)
+                    if app_id.lower() in apps:
+                        apps[app_id.lower()]["last"] = time.time()
                     anchor = target_win.get("anchor")
                     if anchor is not None:
                         log_restore(
@@ -385,6 +389,16 @@ def cmd_restore(
                             "element": elem_id_raw,
                             "to": anchor,
                         })
+
+        # an app with windows still to place and no news for RELAUNCH_AFTER: launch it again
+        now = time.time()
+        for key, app in apps.items():
+            waiting = sum(1 for w in pending_saved if w.get("app_id", "").lower() == key)
+            if waiting and app["launches"] < app["saved"] and now - app["last"] >= relaunch_after:
+                app["launches"] += 1
+                app["last"] = now
+                log_restore(f"Launch {key} again ({waiting} window(s) to place)", log_file=log_file)
+                launch_fn(key, app["cmd"], log_file=log_file)
 
         time.sleep(poll_interval)
 
@@ -650,6 +664,35 @@ def cmd_selftest():
         watch_sub.terminate()
         watch_ret = watch_sub.wait(timeout=2.0)
         assert watch_ret == 0, f"Expected watch return code 0 on SIGTERM, got {watch_ret}"
+
+    # A terminal opens one window per launch: two saved windows need a second launch; an app
+    # that reopens its own windows (two at once) is launched once.
+    with tempfile.TemporaryDirectory() as tmp:
+        apps_dir = os.path.join(tmp, "apps")
+        os.makedirs(apps_dir)
+        for name in ("term", "browser"):
+            with open(os.path.join(apps_dir, f"{name}.desktop"), "w") as f:
+                f.write(f"[Desktop Entry]\nType=Application\nName={name}\nExec={name}-bin\n")
+        session_file = os.path.join(tmp, "session.json")
+        with open(session_file, "w") as f:
+            json.dump({"windows": [
+                {"app_id": "term", "anchor": [0, 0]}, {"app_id": "term", "anchor": [10, 0]},
+                {"app_id": "browser", "anchor": [0, 50]}, {"app_id": "browser", "anchor": [10, 50]},
+            ], "outputs": []}, f)
+        windows, launches, next_id = [], [], [200]
+        def launch(app_id, cmd_args, log_file=None):
+            launches.append(app_id)
+            for _ in range(1 if app_id == "term" else 2):
+                next_id[0] += 1
+                windows.append({"id": [1, next_id[0]], "state": "mapped", "app_id": app_id})
+        def ipc(req):
+            if req.get("cmd") == "snapshot":
+                return {"ok": True, "snapshot": {"elements": list(windows), "outputs": []}}
+            return {"ok": True}
+        cmd_restore(session_path=session_file, apps_dirs=[apps_dir], ipc_fn=ipc,
+                    launch_fn=launch, log_file=os.path.join(tmp, "log"),
+                    poll_timeout=1.0, poll_interval=0.01, relaunch_after=0.1)
+        assert sorted(launches) == ["browser", "term", "term"], launches
 
     print("ok")
     sys.exit(0)
