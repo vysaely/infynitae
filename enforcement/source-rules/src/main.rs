@@ -197,7 +197,7 @@ fn main() -> ExitCode {
     let mut report = Report::default();
     let mut crates = BTreeMap::new();
     for (name, root_file, _) in CRATES {
-        match load_crate(&root.join(root_file)) {
+        match load_crate(name, &root.join(root_file)) {
             Ok(files) => {
                 crates.insert(name, files);
             }
@@ -241,19 +241,29 @@ fn main() -> ExitCode {
 
 // ---------------------------------------------------------------- loading
 
-fn parse(path: &Path) -> Result<syn::File, String> {
+const PROBE_CRATES: [&str; 4] = [
+    "infynitae-core",
+    "infynitae-wayland",
+    "infynitae-backend-headless",
+    "infynitae-ipc",
+];
+
+fn parse(path: &Path, crate_name: &str) -> Result<syn::File, String> {
     let text = std::fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut ast = syn::parse_file(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    StripProbes.visit_file_mut(&mut ast);
+    if PROBE_CRATES.contains(&crate_name) {
+        let mut stripper = StripProbes { path };
+        stripper.visit_file_mut(&mut ast);
+    }
     Ok(ast)
 }
 
 /// Loads a crate by following non-inline `mod` declarations from its root file.
-fn load_crate(root_file: &Path) -> Result<Vec<SourceFile>, String> {
+fn load_crate(crate_name: &str, root_file: &Path) -> Result<Vec<SourceFile>, String> {
     let mut out = Vec::new();
-    let ast = parse(root_file)?;
+    let ast = parse(root_file, crate_name)?;
     let dir = root_file.parent().unwrap_or(Path::new(".")).to_path_buf();
-    collect_mods(&ast.items, &[], &dir, &mut out)?;
+    collect_mods(crate_name, &ast.items, &[], &dir, &mut out)?;
     out.insert(
         0,
         SourceFile {
@@ -266,6 +276,7 @@ fn load_crate(root_file: &Path) -> Result<Vec<SourceFile>, String> {
 }
 
 fn collect_mods(
+    crate_name: &str,
     items: &[syn::Item],
     module: &[String],
     dir: &Path,
@@ -283,13 +294,13 @@ fn collect_mods(
         let mut sub = module.to_vec();
         sub.push(name.clone());
         match &m.content {
-            Some((_, inner)) => collect_mods(inner, &sub, &dir.join(&name), out)?,
+            Some((_, inner)) => collect_mods(crate_name, inner, &sub, &dir.join(&name), out)?,
             None => {
                 let flat = dir.join(format!("{name}.rs"));
                 let nested = dir.join(&name).join("mod.rs");
                 let path = if flat.exists() { flat } else { nested };
-                let ast = parse(&path)?;
-                collect_mods(&ast.items, &sub, &dir.join(&name), out)?;
+                let ast = parse(&path, crate_name)?;
+                collect_mods(crate_name, &ast.items, &sub, &dir.join(&name), out)?;
                 out.push(SourceFile {
                     path,
                     module: sub,
@@ -375,26 +386,77 @@ fn retain<T, P: Default>(p: &mut Punctuated<T, P>, keep: impl Fn(&T) -> bool) {
     *p = std::mem::take(p).into_iter().filter(|t| keep(t)).collect();
 }
 
-/// Removes every syntax node gated on a probe feature.
-struct StripProbes;
+fn is_authorized_probe_unsafe(path: &Path, item: &syn::Item) -> bool {
+    let path_str = path.to_string_lossy().replace('\\', "/");
+    if path_str.ends_with("crates/infynitae-core/src/probes.rs") {
+        return true;
+    }
+    if let syn::Item::Fn(f) = item
+        && f.sig.ident == "probe_unsafe_block"
+        && (path_str.ends_with("crates/infynitae-ipc/src/lib.rs")
+            || path_str.ends_with("crates/infynitae-wayland/src/lib.rs"))
+    {
+        return true;
+    }
+    false
+}
 
-impl VisitMut for StripProbes {
+/// Removes syntax nodes gated on a probe feature in crates that legitimately declare probe features,
+/// except for probe-gated items that contain unsafe code (which remain subject to the unsafe policy
+/// unless they are authorized compile-probe stubs).
+struct StripProbes<'a> {
+    path: &'a Path,
+}
+
+impl StripProbes<'_> {
+    fn should_strip_item(&self, item: &syn::Item) -> bool {
+        if !probe_gated(item_attrs(item)) {
+            return false;
+        }
+        let mut tokens = Vec::new();
+        relax_and_unsafe(item.to_token_stream(), &mut tokens);
+        if tokens.is_empty() {
+            return true;
+        }
+        is_authorized_probe_unsafe(self.path, item)
+    }
+
+    fn should_strip_impl_item(&self, item: &syn::ImplItem) -> bool {
+        if !probe_gated(impl_item_attrs(item)) {
+            return false;
+        }
+        let mut tokens = Vec::new();
+        relax_and_unsafe(item.to_token_stream(), &mut tokens);
+        tokens.is_empty()
+    }
+
+    fn should_strip_stmt(&self, stmt: &syn::Stmt) -> bool {
+        if !stmt_gated(stmt) {
+            return false;
+        }
+        let mut tokens = Vec::new();
+        relax_and_unsafe(stmt.to_token_stream(), &mut tokens);
+        tokens.is_empty()
+    }
+}
+
+impl VisitMut for StripProbes<'_> {
     fn visit_file_mut(&mut self, f: &mut syn::File) {
-        f.items.retain(|i| !probe_gated(item_attrs(i)));
+        f.items.retain(|i| !self.should_strip_item(i));
         syn::visit_mut::visit_file_mut(self, f);
     }
     fn visit_item_mod_mut(&mut self, m: &mut syn::ItemMod) {
         if let Some((_, items)) = &mut m.content {
-            items.retain(|i| !probe_gated(item_attrs(i)));
+            items.retain(|i| !self.should_strip_item(i));
         }
         syn::visit_mut::visit_item_mod_mut(self, m);
     }
     fn visit_item_impl_mut(&mut self, i: &mut syn::ItemImpl) {
-        i.items.retain(|it| !probe_gated(impl_item_attrs(it)));
+        i.items.retain(|it| !self.should_strip_impl_item(it));
         syn::visit_mut::visit_item_impl_mut(self, i);
     }
     fn visit_block_mut(&mut self, b: &mut syn::Block) {
-        b.stmts.retain(|s| !stmt_gated(s));
+        b.stmts.retain(|s| !self.should_strip_stmt(s));
         syn::visit_mut::visit_block_mut(self, b);
     }
     fn visit_fields_named_mut(&mut self, f: &mut syn::FieldsNamed) {
@@ -1366,7 +1428,7 @@ fn check_unsafe(root: &Path, crates: &BTreeMap<&str, Vec<SourceFile>>, r: &mut R
         }
         let mut extra_files = Vec::new();
         for path in extra {
-            match parse(&path) {
+            match parse(&path, name) {
                 Ok(ast) => extra_files.push(SourceFile {
                     path,
                     module: vec![],

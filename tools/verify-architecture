@@ -859,6 +859,8 @@ SOURCE_SEEDS = [
      "crates/infynitae-ipc/src/lib.rs", replace("#![forbid(unsafe_code)]", "#![deny(unsafe_code)]")),
     ("unsafe block in a backend", "unsafe-policy",
      "crates/infynitae-backend-headless/src/lib.rs", append("\npub fn f() {\n    unsafe {}\n}\n")),
+    ("probe-gated unsafe in a product crate", "unsafe-policy",
+     "crates/infynitae-backend-headless/src/lib.rs", append('\n#[cfg(feature = "probe_test_keyboard_grab")]\npub fn rogue() {\n    unsafe {}\n}\n')),
     ("allow(unsafe_code) in wayland without an inventory", "unsafe-policy",
      "crates/infynitae-wayland/src/lib.rs", append("\n#[allow(unsafe_code)]\npub fn g() {}\n")),
 ]
