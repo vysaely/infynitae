@@ -1,9 +1,9 @@
-//! INC-6 × INC-8 integration (2026-10-16, INTEGRATION CANDIDATE, NOT RATIFIED): the scale policy
-//! and the off-screen frame policy acting on the same window, on the production path.
+//! Production path tests for the scale policy and off-screen frame policy acting on the same
+//! window (2026-10-16).
 //!
 //! X is a window on a 2x output; W, another client's window, is focused and goes fullscreen on
-//! that output, which hides X: X is unobserved (INC-8 withholds its callbacks) and its hint is
-//! held (C12.F13, rehearsal). A device-limit change is a correctness rule (P7) that lowers X's
+//! that output, which hides X: X is unobserved (its callbacks are withheld) and its hint is
+//! held (C12.F13). A device-limit change is a correctness rule (P7) that lowers X's
 //! hint while X is hidden. A scale hint is not an event that unblocks a client waiting for its
 //! frame (ARCHITECTURE scenario 11: `preferred_scale` does not kick), so X's withheld callback
 //! must not complete with it; it completes on the fallback timer or when X is shown again.

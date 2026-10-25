@@ -1,6 +1,6 @@
-//! INC-7 (experimental) adversarial coverage of protocol fullscreen and of popups under it, on the
-//! production path: a real client over the protocol, the output's pixels composited by the
-//! production render path with the software renderer.
+//! Production path adversarial coverage of protocol fullscreen and popups under it: a real
+//! client over the protocol, the output's pixels composited by the production render path with
+//! the software renderer.
 //!
 //! Every test names the invariant it exercises. The clients here misbehave in ways the protocol
 //! allows: they answer late or never, go away in the middle of a transition, toggle faster than
@@ -699,7 +699,7 @@ fn a_newer_popup_is_stacked_above_every_older_one() {
     assert_eq!(at(&mut t, 252.5, 310.5), in_a1);
 }
 
-/// Audit finding A-5. `wl_pointer` event times are milliseconds on one clock, so a client sees
+/// `wl_pointer` event times are milliseconds on one clock, so a client sees
 /// them non-decreasing (toolkits measure double clicks and pointer velocity with them). A pointer
 /// event Core synthesises into the stream (M10's one true position, after a presentation, output
 /// or interaction change) carries the input clock's time: that of the latest physical event Core
@@ -973,7 +973,7 @@ fn fullscreen_on_outputs_of_different_scales() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Audit finding A-3: a grant made before the first map takes the output at that map
+// A grant made before the first map takes the output at that map (A-3)
 // ---------------------------------------------------------------------------------------------
 
 /// A-3: a toplevel that asks for fullscreen before its first map is granted, but takes the
@@ -1073,11 +1073,10 @@ fn a_pre_map_grant_that_never_draws_ends_nothing() {
     assert_layers(&t.frame(), &[W_FULL], "W still presented");
 }
 
-/// INC-8 (M16, residual R-10, audit finding A-7): a presentation makes every other element on
-/// its output unobserved. A client under a fullscreen window that draws from frame callbacks is
-/// withheld, not starved: its callback completes once per fallback period P from when it became
-/// pending, and at the first vblank once the presentation ends. (Replaces the INC-7 test that
-/// recorded the dependency, `until_inc_8_a_window_hidden_by_a_presentation_gets_no_frame_callback`.)
+/// A presentation makes every other element on its output unobserved (M16, residual R-10, A-7).
+/// A client under a fullscreen window that draws from frame callbacks is withheld, not starved:
+/// its callback completes once per fallback period P from when it became pending, and at the
+/// first vblank once the presentation ends.
 #[test]
 fn a_window_hidden_by_a_presentation_gets_the_fallback_and_re_entry() {
     let (mut t, w, _, other) = T::scene();

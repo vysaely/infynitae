@@ -1,4 +1,4 @@
-//! INC-7 (experimental), OB-18: misbehaving clients on the production path. Pass criterion of the
+//! Production path tests for misbehaving clients (OB-18). Pass criterion of the
 //! obligation: "protocol error to the client; compositor survives".
 //!
 //! Each test makes one request the protocol forbids, checks that the client is disconnected with
