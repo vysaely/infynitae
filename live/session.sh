@@ -69,6 +69,24 @@ if [ "${ENABLE_REPLAY_BUFFER:-false}" = "true" ] || [ "${ENABLE_REPLAY_BUFFER:-f
     fi
 fi
 
+# 6b. Clipboard persistence and history
+case "${CLIPBOARD_PERSIST:-true}" in
+    1|true|yes|on|TRUE|True)
+        if command -v wl-clip-persist >/dev/null 2>&1; then
+            wl-clip-persist --clipboard regular >/dev/null 2>&1 &
+        fi
+        ;;
+esac
+
+case "${CLIPBOARD_HISTORY:-true}" in
+    1|true|yes|on|TRUE|True)
+        if command -v cliphist >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
+            wl-paste --type text --watch cliphist store >/dev/null 2>&1 &
+            wl-paste --type image --watch cliphist store >/dev/null 2>&1 &
+        fi
+        ;;
+esac
+
 # 7. User autostart script (blank canvas for user's future ricing)
 if [ -x "$HOME/.config/infynitae/autostart.sh" ]; then
     "$HOME/.config/infynitae/autostart.sh" &
