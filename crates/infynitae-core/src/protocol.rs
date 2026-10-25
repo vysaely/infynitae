@@ -775,7 +775,7 @@ impl Core {
             .place(id, anchor)
             .map_err(|_| ProtocolError::StaleElement)?;
         self.invalidate_all_frames();
-        // Reborrow passes a mutable slice reference.
+        // (spelled as a reborrow: the commit path's call is a seeded-control anchor)
         self.membership_pass_element(id, &mut *out);
         out.extend(self.evaluate_scale_policy(false));
         Ok(())
@@ -1042,7 +1042,7 @@ impl Core {
     /// - `unset_fullscreen`: ends fullscreen with one configure offering the saved size; when
     ///   not fullscreen, one configure.
     /// - `set_minimized`: ignored (INV-PROTO-1). `show_window_menu`: ignored, there is none.
-    /// - `move`, `resize`: ignored; interactive move and resize are handled by the compositor.
+    /// - `move`, `resize`: ignored: windows are moved and resized by the compositor (Super+drag), not on a client's request.
     ///
     /// Nothing is answered while the toplevel is unmapped. No request moves an anchor, a camera
     /// or the focus.
@@ -2428,7 +2428,8 @@ mod tests {
 
     /// M3 / R8 / D-B6-BOUNDARY: the target is the anchor output's viewport (here the parent's
     /// clock output), inward-rounded, relative to the parent's geometry origin (the anchor).
-    /// Expected values are hand-derived with exact rational arithmetic, not with production code.
+    /// Expected values are hand-derived with exact rational arithmetic, not with production code
+    /// (docs/archive/evidence/phase-f/INC-1/corrective/unproject_reference.py).
     #[test]
     fn popup_target_is_the_viewport_inward_rounded() {
         // k = 1, camera centre (0,0), 1920x1080 → viewport [−960,960) × [−540,540). The target is
