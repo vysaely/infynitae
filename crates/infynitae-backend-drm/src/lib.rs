@@ -621,7 +621,9 @@ pub fn run_console_with(
                 if let Some(s) = data.screens.iter_mut().find(|s| s.crtc == crtc) {
                     let _ = s.compositor.frame_submitted();
                     s.pending = false;
-                    s.shows_locked = s.queued_locked;
+                    if !data.dpms_active {
+                        s.shows_locked = s.queued_locked;
+                    }
                     let id = s.id;
                     let now = infynitae_wayland::presentation_clock_now();
                     data.state.frame_tick(id, now);
@@ -765,6 +767,7 @@ pub fn run_console_with(
                 data.dpms_active = true;
                 for s in &mut data.screens {
                     let _ = s.compositor.clear();
+                    s.pending = false;
                     s.shows_locked = true;
                 }
                 if data.idle_auto_lock {
@@ -966,6 +969,16 @@ fn render(data: &mut LoopData) {
         );
 
         if data.screens[i].pending {
+            continue;
+        }
+
+        if data.dpms_active {
+            // While DPMS is active, do not render or queue frames to the screen.
+            // Blanked screens count as showing no window.
+            let s = &mut data.screens[i];
+            s.shows_locked = true;
+            let now = infynitae_wayland::presentation_clock_now();
+            data.state.frame_tick(id, now);
             continue;
         }
 
