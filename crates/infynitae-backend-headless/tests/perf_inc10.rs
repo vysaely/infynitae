@@ -1,4 +1,4 @@
-//! INC-10 exit item 8: frame time of the production render path at zoom 1 and at zooms ≠ 1.
+//! Frame time of the production render path at zoom 1 and at zooms ≠ 1.
 //! Measurement, not a gate: `#[ignore]`, run explicitly in release:
 //!
 //! `cargo test --release -p infynitae-backend-headless --test perf_inc10 -- --ignored --nocapture`

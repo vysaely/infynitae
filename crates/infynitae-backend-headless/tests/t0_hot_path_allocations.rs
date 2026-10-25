@@ -262,8 +262,8 @@ enum Path {
     RenderList,
     /// The frame tick of the output.
     FrameTick,
-    /// A commit of the focused window while it is presented fullscreen on the output (INC-7;
-    /// measured last: the presentation hides every other window).
+    /// A commit of the focused window while it is presented fullscreen on the output (measured
+    /// last: the presentation hides every other window).
     PresentedCommit,
     /// A client button pressed and released over the focused window (input intake, INV-ALLOC-1;
     /// audit Q-P1): ownership, click-to-focus on the same element, routing.
@@ -381,23 +381,11 @@ fn measure(n: usize) -> Vec<(Path, Vec<u64>)> {
     out
 }
 
-/// The most each path may allocate per event: 0 (OB-42). History, kept: the counts were first a
-/// ratchet (debug build, the Canvas above), measured on
-/// `main` at `ccb82c5` and on this branch with this file: the counts are equal, so the INC-6
-/// scale policy adds no allocation to these paths. (`40ddd7d`, before P-1 was repaired, allocated
-/// 5,028 per pan step and 5,022 per commit at 1,000 windows.) Lower a count when a change removes
-/// allocations; raising one needs a recorded reason. The contract (OB-42) is 0 for every path.
+/// Maximum allocations permitted per hot-path event: 0 (OB-42).
 ///
-/// Raised on the integration with INC-7 (main `23752f1`): Commit 9 → 10 and CommitOffView 4 → 5.
-/// Ratified INC-7 snapshots each output's presentation at every root commit
-/// (`Core::presentations`, from `f98309b`), one `Vec` per commit whatever the number of windows.
-/// This file run on `23752f1` alone gives the same 10 and 5; INC-6 adds nothing.
-/// PresentedCommit (added on `integration/inc-6-exit-hardening-2026-10-15`): a commit of a
-/// window INC-7 presents fullscreen re-derives that output's presentation view and membership
-/// (`presentation_membership`); 24 per commit whatever the number of windows, as on `23752f1`.
-/// All set to 0 on `integration/inc-6-final-resolution-2026-10-15` (2026-10-15): C14.3's
-/// caller-owned effect buffers, per-element tree layouts, reused membership, frame and scratch
-/// storage, and shared input regions.
+/// The contract is zero allocations across all paths via caller-owned effect buffers,
+/// per-element tree layouts, reused membership, frame and scratch storage, and shared
+/// input regions (C14.3).
 const RATCHET: [(Path, u64); 10] = [
     (Path::Pan, 0),
     (Path::PanCrossing, 0),
@@ -455,7 +443,7 @@ fn nav_key(pressed: bool, shift: bool) -> PhysicalEvent {
     }
 }
 
-/// INC-10 (INV-ALLOC-1 at zoom ≠ 1; C12.F16.3 item 8): on a Canvas of 100 windows with the camera at
+/// INV-ALLOC-1 at zoom ≠ 1 (C12.F16.3 item 8): on a Canvas of 100 windows with the camera at
 /// zoom 0.73 (k ∉ n/120, the output's lattice reference kept while panning), a pan step, a pan
 /// step across windows, a routed motion and the render list allocate nothing after warm-up; and
 /// fits and restores — below the history's capacity, at it (each fit evicting the oldest entry)
