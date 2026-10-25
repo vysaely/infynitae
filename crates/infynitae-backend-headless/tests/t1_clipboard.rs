@@ -1,5 +1,4 @@
-//! Clipboard slice (2026-10-16), T1 on the production path: `wl_data_device_manager` and the
-//! primary selection, with two clients.
+//! Production path tests for `wl_data_device_manager` and the primary selection with two clients (2026-10-16).
 //!
 //! Policy under test: the clipboard is offered only to the client that holds the keyboard focus
 //! (which follows Core's ActiveElementFocus), and only that client may set it (Smithay refuses

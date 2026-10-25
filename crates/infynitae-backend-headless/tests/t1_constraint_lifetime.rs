@@ -1,7 +1,6 @@
-//! OB-54 (audit Q-B3): a oneshot pointer lock that ends must stay ended
-//! (zwp_pointer_constraints_v1: "the constraint is destroyed" after a oneshot deactivation), and
-//! Core's constraint state must agree with Smithay's (INV-INPUT-5: "core and Smithay keep the same
-//! constraint state").
+//! OB-54 (INV-INPUT-5): a oneshot pointer lock that ends must stay ended
+//! (`zwp_pointer_constraints_v1`: the constraint is destroyed after a oneshot deactivation), and
+//! Core's constraint state must agree with Smithay's.
 //!
 //! Smithay 0.7.0 keeps a constraint's lifetime private (`PointerConstraint::lifetime` is not
 //! `pub`), so the adapter cannot report it and reports every constraint as persistent. A oneshot

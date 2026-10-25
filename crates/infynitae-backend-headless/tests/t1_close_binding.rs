@@ -8,7 +8,7 @@ use common::input::*;
 use infynitae_backend_headless::keyboard_key;
 use infynitae_core::input::keys::{KEY_C, KEY_LEFTMETA, KEY_LEFTSHIFT};
 
-/// Holds `mods`, taps Delete, releases `mods`.
+/// Holds `mods`, taps C, and releases `mods`.
 fn chord(r: &mut Rig, mods: &[u32]) {
     let mut press = |key, pressed| {
         r.t += 1000;
