@@ -27,6 +27,7 @@ Infinite canvas Wayland compositor built in Rust for Arch Linux. Vibecoded for m
 | `Super + Shift + R` | Region screenshot (`slurp` + `grim`) |
 | `Super + Shift + Backspace` | Reload config & desktop environment |
 | `Super + L` | Lock screen (native `infynitae-lock`) |
+| `Super + V` | Clipboard history (`cliphist`) |
 | `Super + C` / `Super + Delete` | Close focused window |
 | `Super + Shift + C` / `Super + Shift + Delete` | Force kill window process |
 | `Ctrl + Alt + Backspace` | Exit |
