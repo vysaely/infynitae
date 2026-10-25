@@ -1219,9 +1219,9 @@ fn handle_screencopy(
     let mut remaining = Vec::new();
 
     for req in pending {
-        let mut dmabuf_rendered = false;
         if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&req.buffer) {
             use smithay::backend::renderer::ImportDma;
+            let mut dmabuf_rendered = false;
             if let Ok(mut dmabuf_tex) = renderer.import_dmabuf(dmabuf, None)
                 && let Ok(mut dmabuf_fb) = renderer.bind(&mut dmabuf_tex)
             {
@@ -1252,9 +1252,11 @@ fn handle_screencopy(
                     req.ready((target_size.0 as u32, target_size.1 as u32), now);
                 }
             }
-        }
-
-        if !dmabuf_rendered {
+            if !dmabuf_rendered {
+                // Non-GPU-importable dmabufs fail: CPU fallback into client mmaps risks SIGBUS
+                req.fail();
+            }
+        } else {
             remaining.push(req);
         }
     }
@@ -1389,58 +1391,9 @@ fn handle_screencopy(
             true
         });
 
-        let mut copied = matches!(copy_result, Ok(true));
-        if !copied {
-            // If wl_shm failed or wasn't shm, try mapping DMA-BUF planes via CPU
-            if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&req.buffer) {
-                use smithay::backend::allocator::Buffer;
-                use smithay::backend::allocator::dmabuf::{DmabufMappingMode, DmabufSyncFlags};
-
-                if let Ok(mapping) = dmabuf.map_plane(0, DmabufMappingMode::WRITE) {
-                    let _ = dmabuf.sync_plane(0, DmabufSyncFlags::WRITE | DmabufSyncFlags::START);
-                    let ptr = mapping.ptr() as *mut u8;
-                    let len = mapping.length();
-                    let dest_stride =
-                        dmabuf.strides().next().unwrap_or((size.0 * 4) as u32) as usize;
-                    let offset = dmabuf.offsets().next().unwrap_or(0) as usize;
-                    let h = (dmabuf.size().h.max(0) as usize).min(size.1 as usize);
-                    let w_bytes = (dmabuf.size().w.max(0) as usize).min(size.0 as usize) * 4;
-
-                    if dest_stride >= w_bytes {
-                        let total_required = dest_stride
-                            .checked_mul(h.saturating_sub(1))
-                            .and_then(|v| v.checked_add(w_bytes))
-                            .and_then(|v| v.checked_add(offset));
-                        if let Some(total) = total_required
-                            && total <= len
-                        {
-                            unsafe {
-                                let dest_base = ptr.add(offset);
-                                for row in 0..h {
-                                    let src_row_idx = (ry + row).min(size.1.max(0) as usize);
-                                    let src_offset = src_row_idx * src_stride + rx * 4;
-                                    if src_offset + w_bytes <= slice.len() {
-                                        let src_row = &slice[src_offset..(src_offset + w_bytes)];
-                                        let dest_row = dest_base.add(row * dest_stride);
-                                        std::ptr::copy_nonoverlapping(
-                                            src_row.as_ptr(),
-                                            dest_row,
-                                            w_bytes,
-                                        );
-                                    }
-                                }
-                            }
-                            let _ =
-                                dmabuf.sync_plane(0, DmabufSyncFlags::WRITE | DmabufSyncFlags::END);
-                            copied = true;
-                        }
-                    }
-                }
-            }
-        }
-
-        if copied {
-            req.ready((size.0 as u32, size.1 as u32), now);
+        if matches!(copy_result, Ok(true)) {
+            let target_size = req.region.map(|(_, _, w, h)| (w, h)).unwrap_or(size);
+            req.ready((target_size.0 as u32, target_size.1 as u32), now);
         } else {
             req.fail();
         }
