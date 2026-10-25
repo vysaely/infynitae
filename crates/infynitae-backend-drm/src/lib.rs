@@ -106,6 +106,11 @@ pub fn console_key(key: u32, ctrl: bool, alt: bool) -> Option<ConsoleKey> {
     }
 }
 
+/// Calculates the origin offset required to render a requested screencopy region into a buffer.
+pub fn screencopy_region_offset(region: Option<(i32, i32, i32, i32)>) -> (i32, i32) {
+    region.map(|(x, y, _, _)| (x, y)).unwrap_or((0, 0))
+}
+
 /// Time remaining until the inactivity timeout expires. None when idle blanking is disabled,
 /// already active, or inhibited. Pure.
 pub fn idle_timeout_remaining(
@@ -1221,15 +1226,28 @@ fn handle_screencopy(
                 && let Ok(mut dmabuf_fb) = renderer.bind(&mut dmabuf_tex)
             {
                 let target_size = req.region.map(|(_, _, w, h)| (w, h)).unwrap_or(size);
+                let (rx, ry) = screencopy_region_offset(req.region);
                 let mut damage_tracker = OutputDamageTracker::new(
                     target_size,
                     smithay::utils::Scale::from(k),
                     smithay::utils::Transform::Normal,
                 );
-                if damage_tracker
-                    .render_output(renderer, &mut dmabuf_fb, 0, &elements, clear)
-                    .is_ok()
-                {
+                let render_res = if rx != 0 || ry != 0 {
+                    let relocated: Vec<_> = elements
+                        .iter()
+                        .map(|e| {
+                            smithay::backend::renderer::element::utils::RelocateRenderElement::from_element(
+                                e,
+                                smithay::utils::Point::from((-rx, -ry)),
+                                smithay::backend::renderer::element::utils::Relocate::Relative,
+                            )
+                        })
+                        .collect();
+                    damage_tracker.render_output(renderer, &mut dmabuf_fb, 0, &relocated, clear)
+                } else {
+                    damage_tracker.render_output(renderer, &mut dmabuf_fb, 0, &elements, clear)
+                };
+                if render_res.is_ok() {
                     dmabuf_rendered = true;
                     req.ready((target_size.0 as u32, target_size.1 as u32), now);
                 }
@@ -1983,5 +2001,15 @@ mod tests {
 
         // When timeout is 0 (disabled) -> None
         assert_eq!(idle_timeout_remaining(0, false, false, start, start), None);
+    }
+
+    #[test]
+    fn screencopy_region_origin_offset() {
+        assert_eq!(
+            screencopy_region_offset(Some((100, 200, 800, 600))),
+            (100, 200)
+        );
+        assert_eq!(screencopy_region_offset(None), (0, 0));
+        assert_eq!(screencopy_region_offset(Some((0, 0, 1920, 1080))), (0, 0));
     }
 }
