@@ -2,7 +2,7 @@
 //! button and the modifier snapshot carried by the event. Pure: no state.
 //!
 //! Core keeps no XKB copy (C4.4). The modifier state is a per-event snapshot the backend supplies
-//! (from INC-4 the adapter reads it from Smithay's `KeyboardHandle`).
+//! (the adapter reads it from Smithay's `KeyboardHandle`).
 
 /// `BTN_MIDDLE` (linux/input-event-codes.h).
 pub const BTN_MIDDLE: u32 = 0x112;
@@ -42,8 +42,7 @@ pub struct Modifiers {
     pub shift: bool,
 }
 
-/// The camera-pan binding (x8, EB-13): the middle button with Logo held. Not configurable in
-/// INC-3.
+/// The camera-pan binding (x8, EB-13): middle button with Logo held.
 pub const PAN_BINDING: (u32, Modifiers) = (
     BTN_MIDDLE,
     Modifiers {
