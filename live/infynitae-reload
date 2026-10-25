@@ -2,7 +2,7 @@
 # Restart Infynitae's helper programs in place, without restarting the compositor (your windows
 # stay open). Only the compositor binary itself needs Ctrl+Alt+Backspace.
 #
-#   infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|screenshare|status] ...
+#   infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|screenshare|clipboard|status] ...
 #
 # Run it from any terminal inside the session, or let infynitae-update call it.
 
@@ -71,6 +71,42 @@ stop_helper() {
         i=$((i + 1))
     done
     pids=$(pids_of "$1") && kill -KILL $pids 2>/dev/null || true
+}
+
+# PIDs of a helper matching program $1 and arguments matching $2.
+pids_matching() {
+    found=1
+    for d in /proc/[0-9]*; do
+        [ "${d#/proc/}" = "$$" ] && continue
+        set -- "$1" "$2" $( { tr '\0' ' ' < "$d/cmdline"; } 2>/dev/null)
+        [ $# -ge 3 ] || continue
+        prog=${3##*/}
+        case "$prog" in
+            sh|bash|dash|python3|python) [ $# -ge 4 ] && prog=${4##*/} ;;
+        esac
+        if [ "$prog" = "$1" ]; then
+            shift 3
+            case " $* " in
+                *" $2 "*)
+                    echo "${d#/proc/}"
+                    found=0
+                    ;;
+            esac
+        fi
+    done
+    return $found
+}
+
+# Stop every running copy of helper $1 matching arguments $2, then wait up to 2 s for it to go.
+stop_matching() {
+    pids=$(pids_matching "$1" "$2") || return 0
+    kill -TERM $pids 2>/dev/null || true
+    i=0
+    while pids_matching "$1" "$2" >/dev/null && [ $i -lt 20 ]; do
+        sleep 0.1
+        i=$((i + 1))
+    done
+    pids=$(pids_matching "$1" "$2") && kill -KILL $pids 2>/dev/null || true
 }
 
 is_true() {
@@ -168,6 +204,26 @@ reload_screenshare() {
     fi
 }
 
+reload_clipboard() {
+    stop_matching wl-clip-persist "--clipboard regular"
+    stop_matching wl-paste "cliphist store"
+    restarted=0
+    if is_true "${CLIPBOARD_PERSIST:-true}" && command -v wl-clip-persist >/dev/null 2>&1; then
+        spawn wl-clip-persist --clipboard regular
+        restarted=1
+    fi
+    if is_true "${CLIPBOARD_HISTORY:-true}" && command -v cliphist >/dev/null 2>&1 && command -v wl-paste >/dev/null 2>&1; then
+        spawn wl-paste --type text --watch cliphist store
+        spawn wl-paste --type image --watch cliphist store
+        restarted=1
+    fi
+    if [ $restarted -eq 1 ]; then
+        echo "clipboard: restarted"
+    else
+        echo "clipboard: stopped"
+    fi
+}
+
 status() {
     printf '%-26s %s\n' infynitae "$(pgrep -x infynitae | tr '\n' ' ')"
     for n in infynitae-wallpaper infynitae-recorder infynitae-record-stream infynitae-portal infynitae-polkit infynitae-lock; do
@@ -185,16 +241,17 @@ status() {
 [ $# -eq 0 ] && set -- all
 for what in "$@"; do
     case "$what" in
-        all) reload_settings; reload_wallpaper; reload_recorder; reload_portal; reload_polkit; reload_screenshare ;;
+        all) reload_settings; reload_wallpaper; reload_recorder; reload_portal; reload_polkit; reload_screenshare; reload_clipboard ;;
         settings) reload_settings ;;
         wallpaper) reload_wallpaper ;;
         recorder) reload_recorder ;;
         portal) reload_portal ;;
         polkit) reload_polkit ;;
         screenshare) reload_screenshare ;;
+        clipboard) reload_clipboard ;;
         status) status ;;
         *)
-            echo "usage: infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|screenshare|status] ..." >&2
+            echo "usage: infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|screenshare|clipboard|status] ..." >&2
             exit 2
             ;;
     esac
