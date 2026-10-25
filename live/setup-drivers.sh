@@ -18,7 +18,7 @@ fi
 if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
     echo "==> Enabling [multilib] repository in /etc/pacman.conf..."
     sudo sed -i '/\[multilib\]/,/Include/ s/^#//' /etc/pacman.conf
-    sudo pacman -Sy
+    sudo pacman -Syu --needed --noconfirm
 fi
 
 # 3. Detect graphics hardware
@@ -40,20 +40,20 @@ DETECTED_INTEL=false
 DETECTED_NVIDIA=false
 DETECTED_VM=false
 
-if echo "$GPU_OUTPUT" | grep -iqE 'amd|ati|radeon|1002:' || echo "$SYS_DRM_VENDORS" | grep -iq '0x1002'; then
+if echo "$GPU_OUTPUT" | grep -iqE '\b(amd|ati|radeon)\b|\[1002:' || echo "$SYS_DRM_VENDORS" | grep -iqE '\b0x1002\b'; then
     DETECTED_AMD=true
 fi
 
-if echo "$GPU_OUTPUT" | grep -iqE 'intel|8086:' || echo "$SYS_DRM_VENDORS" | grep -iq '0x8086'; then
+if echo "$GPU_OUTPUT" | grep -iqE '\bintel\b|\[8086:' || echo "$SYS_DRM_VENDORS" | grep -iqE '\b0x8086\b'; then
     DETECTED_INTEL=true
 fi
 
-if echo "$GPU_OUTPUT" | grep -iqE 'nvidia|10de:' || echo "$SYS_DRM_VENDORS" | grep -iq '0x10de'; then
+if echo "$GPU_OUTPUT" | grep -iqE '\bnvidia\b|\[10de:' || echo "$SYS_DRM_VENDORS" | grep -iqE '\b0x10de\b'; then
     DETECTED_NVIDIA=true
 fi
 
-if echo "$GPU_OUTPUT" | grep -iqE 'virtio|vmware|virtualbox|qemu|1af4:|15ad:|80ee:|1b36:' || \
-   echo "$SYS_DRM_VENDORS" | grep -iqE '0x1af4|0x15ad|0x80ee|0x1b36'; then
+if echo "$GPU_OUTPUT" | grep -iqE '\b(virtio|vmware|virtualbox|qemu)\b|\[(1af4|15ad|80ee|1b36):' || \
+   echo "$SYS_DRM_VENDORS" | grep -iqE '\b(0x1af4|0x15ad|0x80ee|0x1b36)\b'; then
     DETECTED_VM=true
 fi
 
