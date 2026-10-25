@@ -38,7 +38,7 @@ pub enum Interaction {
     /// The pan's output was removed (C4.6), or the moved or resized window was destroyed: motion
     /// is consumed until the initiator is released.
     Orphaned { initiator: u32 },
-    /// WindowMove (INC-14; Super+left drag, or the client's `xdg_toplevel.move`): F-DRAG-1 as
+    /// WindowMove (Super+left drag, or the client's `xdg_toplevel.move`): F-DRAG-1 as
     /// decided for OB-34 (owner, 2026-10-22), `anchor = R3(q_now − grab_offset)` — the grabbed
     /// point stays under the pointer, on whichever output it is.
     ElementMove {
