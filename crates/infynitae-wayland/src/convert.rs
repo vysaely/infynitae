@@ -1,4 +1,5 @@
-//! The only conversions between Infynitae values and Smithay geometry types (C3.6, INV-COORD-4).
+//! Conversions between Infynitae values and Smithay geometry types, render elements, and output
+//! models (C3.6, INV-COORD-4).
 
 use infynitae_core::geom::PhysicalRect;
 use infynitae_core::geom::{
@@ -46,7 +47,6 @@ pub(crate) fn parent_geometry_rect(r: LocalRect) -> Rectangle<i32, Logical> {
     Rectangle::new((r.loc.x, r.loc.y).into(), (r.size.w, r.size.h).into())
 }
 
-/// F-RENDER-1: the f64 render location, unchanged.
 /// A point in Smithay's global pointer space, which is Canvas (D-B2-PTR-SPACE, INV-COORD-5).
 pub type GlobalPoint = Point<f64, Logical>;
 
@@ -98,6 +98,7 @@ pub fn modifiers_from_smithay(
     }
 }
 
+/// F-RENDER-1: the f64 render location, unchanged.
 pub fn projected_to_smithay_physical(l: RenderLocation) -> Point<f64, Physical> {
     Point::from((l.x, l.y))
 }
@@ -106,7 +107,7 @@ pub fn projected_to_smithay_physical(l: RenderLocation) -> Point<f64, Physical> 
 /// Smithay's i32 geometry. Every view lies inside it (`view_O` ≤ 2¹⁵), so no visible pixel is cut.
 pub const RENDER_LIMIT: i64 = 1 << 30;
 
-/// INV-RENDER-1, F-RENDER-1 as amended by C12.F15 (option B): a surface's render element whose
+/// INV-RENDER-1, F-RENDER-1 as amended by C12.F15: a surface's render element whose
 /// geometry is the surface's canonical rect — Core's F-LATTICE-1 rect, the one membership and hit
 /// testing use — and whose `draw` hands the destination `OutputDamageTracker::render_output` gives
 /// it (that rect) to the wrapped element unchanged, so the surface is placed **and** drawn there.
@@ -210,8 +211,7 @@ impl<E: Element> CanonicalRect<E> {
 /// Not Smithay's `CropRenderElement::from_element` formula, which C12.F15.5 names: that maps the
 /// visible part through `Rectangle::to_buffer(.., transform, ..)`, the inverse of the rotation the
 /// renderers apply, and so selects the wrong part of a buffer under the four rotating transforms
-/// (90°, 270°, flipped 90°, flipped 270°; shown in Pixman pixels by `t1_canonical_rect`, reported to
-/// change control in the INC-10 evidence).
+/// (90°, 270°, flipped 90°, flipped 270°; shown in Pixman pixels by `t1_canonical_rect`).
 fn crop_src(
     src: Rectangle<f64, Buffer>,
     transform: smithay::utils::Transform,
@@ -433,7 +433,7 @@ where
     })
 }
 
-// ------------------------------------------------------------------ outputs (INC-2)
+// ------------------------------------------------------------------ outputs
 
 /// `wl_output.geometry` physical size: not a hardware fact Core carries; reported as unknown.
 pub(crate) fn unknown_physical_size() -> Size<i32, smithay::utils::Raw> {
@@ -476,9 +476,6 @@ pub(crate) fn output_location(model: &OutputModel) -> Point<i32, Logical> {
         .into()
 }
 
-/// F-RENDER-1: `OutputDamageTracker::new(phys_O, Scale(k_O), transform_O)`, the **untransformed**
-/// physical mode; Smithay derives the element space `transform_size(phys_O) = view_O` itself.
-/// `OutputDamageTracker::from_output` is not used: it ignores zoom.
 /// The opaque colour of the empty Canvas in a host window (a dark grey).
 pub const CANVAS_CLEAR: Color32F = Color32F::new(0.11, 0.11, 0.13, 1.0);
 
@@ -502,6 +499,9 @@ impl Default for RenderTarget {
     }
 }
 
+/// F-RENDER-1: `OutputDamageTracker::new(phys_O, Scale(k_O), transform_O)`, the **untransformed**
+/// physical mode; Smithay derives the element space `transform_size(phys_O) = view_O` itself.
+/// `OutputDamageTracker::from_output` is not used because it ignores zoom.
 pub fn damage_tracker(
     model: &OutputModel,
     view: &View,
@@ -521,8 +521,8 @@ pub fn damage_tracker(
 }
 
 smithay::backend::renderer::element::render_elements! {
-    /// What an output's frame is made of: surfaces at their canonical rects, and the solid rects
-    /// of the built-in arrow (`cursor`).
+    /// What an output's frame is made of: surfaces at their canonical rects, the solid rects
+    /// of the built-in arrow, and theme-rendered cursors (`cursor`).
     pub OutputElement<R> where R: ImportAll + ImportMem, R::TextureId: Send;
     Surface=SurfaceElement<R>,
     Solid=SolidColorRenderElement,
@@ -748,8 +748,8 @@ where
 // ------------------------------------------------------------------ cursor (T8, 2026-10-22)
 
 /// The built-in arrow, one row per entry: the outline covers `[0, row + 1)`, the fill
-/// `[1, row)` — a right triangle, its tip the hotspot.
-/// (each row's fill in front of its outline). Pure geometry.
+/// `[1, row)` — a right triangle with its tip at the hotspot, each row's fill in front of
+/// its outline.
 pub fn arrow_rects(at: (i32, i32), unit: i32) -> Vec<(bool, Rectangle<i32, Physical>)> {
     let mut out = Vec::with_capacity(2 * crate::cursor::ARROW_ROWS as usize);
     for row in 0..crate::cursor::ARROW_ROWS {
