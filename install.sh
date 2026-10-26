@@ -84,6 +84,18 @@ getent ahosts archlinux.org >/dev/null 2>&1 || getent ahosts github.com >/dev/nu
 free_gb() { df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print int($4 / 1048576) }'; }
 [ "$(free_gb "$HOME")" -ge 4 ] || fail "Not enough free space in $HOME: 4 GB are needed for the build."
 [ "$(free_gb /var/cache/pacman)" -ge 2 ] || fail "Not enough free space for packages: 2 GB are needed in /var."
+# what the build and the install write must be this user's: a folder left from a run with sudo
+# (a clone, the compiler, the build) fails the build with "Permission denied (os error 13)"
+not_mine=""
+for p in "$HOME/.rustup" "$HOME/.cargo" "$INSTALL_DIR" "$INSTALL_DIR/target" "$HOME/.local/bin" \
+    "$HOME/.local/state/infynitae" "$HOME/.config/infynitae"; do
+    [ -e "$p" ] || continue
+    if [ -n "$(find -H "$p" -maxdepth 3 ! -user "$(id -u)" -print -quit 2>/dev/null)" ] || [ ! -w "$p" ]; then
+        not_mine="$not_mine $p"
+    fi
+done
+[ -z "$not_mine" ] || fail "These belong to another user (probably root, from a run with sudo):$not_mine
+    Give them back, then run this again:  sudo chown -R $USER: $not_mine"
 
 # ---- the source: ~/infynitae (the session scripts run from there) ----------------------------
 if [ -f "Cargo.toml" ] && [ -d "crates/infynitae" ]; then
@@ -204,7 +216,8 @@ fi
 
 # ---- 6. build ----------------------------------------------------------------------------------------
 echo "==> Getting the Rust toolchain..."
-rustup toolchain install 2>/dev/null || rustup show >/dev/null
+rustup toolchain install || rustup show >/dev/null \
+    || fail "The Rust toolchain could not be installed (see the error above)."
 # linking needs ~1.5 GB per job: fewer jobs on a machine with little memory
 MEM_GB=$(awk '/MemTotal/ { print int($2 / 1048576) }' /proc/meminfo)
 JOBS=$(nproc)

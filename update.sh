@@ -78,7 +78,7 @@ if command -v pacman >/dev/null 2>&1; then
             exit 1
         }
     fi
-    rustup toolchain install 2>/dev/null || rustup show >/dev/null
+    rustup toolchain install || rustup show >/dev/null || { echo "==> The Rust toolchain could not be installed (see the error above; a folder from a run with sudo: sudo chown -R $USER: ~/.rustup ~/.cargo)" >&2; exit 1; }
 fi
 
 # GPU, joystick and uinput access come from systemd (70-uaccess) and the steam package
