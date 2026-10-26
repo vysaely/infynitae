@@ -4,6 +4,10 @@
 #   git clone https://github.com/vysaely/infynitae.git ~/infynitae && ~/infynitae/install.sh
 # Options (through curl: ... | bash -s -- --no-keyring): ./install.sh --help
 set -eE
+# files it creates are readable by everyone, like any installed file: the session's private
+# umask (077) would make /etc/pam.d/infynitae unreadable to the lock screen, and the session
+# entry unreadable to a display manager
+umask 022
 
 REPO_URL="https://github.com/vysaely/infynitae.git"
 INSTALL_DIR="$HOME/infynitae"

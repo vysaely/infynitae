@@ -13,6 +13,10 @@
 # start ends the session instead of leaving it open.
 
 set -e
+# files it creates are readable by everyone, like any installed file: the session's private
+# umask (077) would make /etc/pam.d/infynitae unreadable to the lock screen, and the session
+# entry unreadable to a display manager
+umask 022
 
 MODE="${1:-autologin}"
 case "$MODE" in
@@ -119,12 +123,15 @@ echo "  -> The session starts at the lock screen (START_LOCKED in $CONFIG_FILE)"
 
 # 3. tty1 logs in by itself
 mkdir -p "$(dirname "$GETTY_CONF")"
+# an older run under a private umask left these unreadable to anyone but root
+chmod 755 "$(dirname "$GETTY_CONF")"
 cat <<EOF > "$GETTY_CONF"
 [Service]
 ExecStart=
 ExecStart=-/usr/bin/agetty -o '-p -f -- \\\\u' --noclear --autologin $USER_NAME %I \$TERM
 Type=idle
 EOF
+chmod 644 "$GETTY_CONF"
 systemctl daemon-reload
 echo "  -> tty1 logs $USER_NAME in by itself"
 echo ""

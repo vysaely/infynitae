@@ -6,6 +6,10 @@
 # syncs runtime companion scripts, and preserves all user configurations.
 # ==============================================================================
 set -e
+# files it creates are readable by everyone, like any installed file: the session's private
+# umask (077) would make /etc/pam.d/infynitae unreadable to the lock screen, and the session
+# entry unreadable to a display manager
+umask 022
 
 # Detect Infynitae repository location
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"
@@ -165,7 +169,8 @@ DesktopNames=infynitae;wlroots
 EOF
 if command -v sudo >/dev/null 2>&1; then
     sudo mkdir -p /usr/share/wayland-sessions 2>/dev/null || true
-    sudo cp -f "$HOME/.local/share/wayland-sessions/infynitae.desktop" /usr/share/wayland-sessions/ 2>/dev/null || true
+    sudo install -D -m 644 "$HOME/.local/share/wayland-sessions/infynitae.desktop" \
+        /usr/share/wayland-sessions/infynitae.desktop || true
 fi
 
 # 10. Live session: restart the helpers in place (windows stay open)

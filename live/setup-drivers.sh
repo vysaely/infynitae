@@ -3,6 +3,10 @@
 # Detects AMD, Intel, NVIDIA, and Virtualized GPUs, and installs the required
 # Vulkan, 32-bit (multilib), and Xwayland drivers.
 set -e
+# files it creates are readable by everyone, like any installed file: the session's private
+# umask (077) would make /etc/pam.d/infynitae unreadable to the lock screen, and the session
+# entry unreadable to a display manager
+umask 022
 
 DRY_RUN=false
 [ "${1:-}" = "--dry-run" ] && DRY_RUN=true
