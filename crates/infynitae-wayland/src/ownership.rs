@@ -84,7 +84,7 @@ pub fn become_subreaper() -> std::io::Result<()> {
 
 /// The direct children of `pid`, over all its threads (a re-parented orphan is the child of
 /// one of the reaper's threads).
-fn children_of(pid: i32) -> Vec<i32> {
+pub(crate) fn children_of(pid: i32) -> Vec<i32> {
     let mut out = Vec::new();
     let Ok(tasks) = std::fs::read_dir(format!("/proc/{pid}/task")) else {
         return out;

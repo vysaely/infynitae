@@ -10,3 +10,4 @@ recorder ffmpeg
 files thunar tumbler ffmpegthumbnailer poppler-glib thunar-archive-plugin xarchiver gvfs-mtp
 autorotate iio-sensor-proxy wlr-randr
 osk squeekboard
+gamemode gamemode

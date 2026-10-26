@@ -32,6 +32,7 @@ Leave out a part:
   --no-power-profiles  power modes on a laptop (power-profiles-daemon)
   --no-autorotate      screen rotation on convertibles (iio-sensor-proxy)
   --no-osk             an on-screen keyboard in tablet mode on convertibles (squeekboard)
+  --no-gamemode        the CPU at full speed while a fullscreen game runs (gamemode)
   --minimal            all of the above
 
 Turn on:
@@ -53,13 +54,13 @@ POWER_PROFILES=true
 SKIP=""
 for arg in "$@"; do
     case "$arg" in
-        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate | --no-files | --no-osk)
+        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate | --no-files | --no-osk | --no-gamemode)
             SKIP="$SKIP ${arg#--no-}" ;;
         --no-terminal) TERMINAL_PKG=false ;;
         --no-bluetooth) BLUETOOTH=false ;;
         --no-power-profiles) POWER_PROFILES=false ;;
         --minimal)
-            SKIP="notifications keyring automount clipboard fonts recorder autorotate files osk"
+            SKIP="notifications keyring automount clipboard fonts recorder autorotate files osk gamemode"
             TERMINAL_PKG=false BLUETOOTH=false POWER_PROFILES=false ;;
         --no-autologin) AUTOLOGIN=false ;;
         --replay-buffer) REPLAY_BUFFER=true ;;
@@ -233,6 +234,15 @@ sh live/build-helpers.sh "$INSTALL_DIR" "$HOME/.local/bin" \
 # the lock screen's password check (PAM): kept current
 if ! cmp -s live/lock/infynitae.pam /etc/pam.d/infynitae; then
     sudo install -m 644 live/lock/infynitae.pam /etc/pam.d/infynitae
+fi
+# apps out of sight run at a lower priority (BACKGROUND_PRIORITY): a limit that lets them come
+# back to normal (nice 0) and never above it, from the next login
+if ! cmp -s live/90-infynitae-nice.conf /etc/security/limits.d/90-infynitae-nice.conf; then
+    sudo install -D -m 644 live/90-infynitae-nice.conf /etc/security/limits.d/90-infynitae-nice.conf
+fi
+# gamemode (game mode for fullscreen games): its CPU settings need the gamemode group
+if getent group gamemode >/dev/null && ! id -nG "$USER" | grep -qw gamemode; then
+    sudo usermod -aG gamemode "$USER"
 fi
 echo "==> Installed to ~/.local/bin"
 

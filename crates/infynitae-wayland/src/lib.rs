@@ -12,6 +12,7 @@
 
 #![deny(unsafe_code)]
 
+pub mod background;
 pub mod capture_indicator;
 pub mod convert;
 pub mod cursor;
@@ -143,6 +144,8 @@ pub struct WaylandState {
     pointer_sent: pointer::Sent,
     arrow: cursor::Arrow,
     capture_indicator: capture_indicator::CaptureIndicator,
+    /// Apps out of sight yield the CPU; the game gets game mode (`background`).
+    background: background::Background,
     pub(crate) cursor_theme: std::sync::Mutex<Option<cursor::CursorThemeManager>>,
     pub(crate) config_home: Option<std::path::PathBuf>,
     pub(crate) xcursor_path: Option<String>,
@@ -509,6 +512,7 @@ impl WaylandState {
             pointer_sent: pointer::Sent::default(),
             arrow: cursor::Arrow::default(),
             capture_indicator: capture_indicator::CaptureIndicator::default(),
+            background: background::Background::default(),
             cursor_theme: std::sync::Mutex::new(None),
             config_home: None,
             xcursor_path: None,
@@ -781,6 +785,7 @@ impl WaylandState {
                 let mut bind_lines: Vec<(String, String)> = Vec::new();
                 let mut exec_lines: Vec<(String, String)> = Vec::new();
                 let mut max_app_scale: Option<f64> = None;
+                let (mut background_priority, mut game_mode) = (true, true);
                 for line in content.lines() {
                     if let Some((key, val)) = config_line(line) {
                         let (key, val) = (key.as_str(), val.as_str());
@@ -824,6 +829,18 @@ impl WaylandState {
                             }
                             "MAX_APP_SCALE" => {
                                 max_app_scale = val.parse::<f64>().ok();
+                            }
+                            "BACKGROUND_PRIORITY" => {
+                                background_priority = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
+                            }
+                            "GAME_MODE" => {
+                                game_mode = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                             }
                             "CAPTURE_INDICATOR" => {
                                 self.capture_indicator.enabled = !matches!(
@@ -1042,6 +1059,11 @@ impl WaylandState {
                 self.core.set_free_cursor_on_super(free_cursor_on_super);
                 self.exec_commands = commands;
                 self.set_max_app_scale(max_app_scale);
+                self.background.game_mode = game_mode;
+                self.background.enabled = background_priority;
+                if !background_priority {
+                    self.background_restore_all();
+                }
                 let first_load = !std::mem::replace(&mut self.wallpaper_loaded, true);
                 if new_wallpaper != self.wallpaper || new_wallpaper_mode != self.wallpaper_mode {
                     self.wallpaper = new_wallpaper;

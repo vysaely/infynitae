@@ -124,6 +124,15 @@ fi
 if ! cmp -s live/lock/infynitae.pam /etc/pam.d/infynitae; then
     sudo install -m 644 live/lock/infynitae.pam /etc/pam.d/infynitae || true
 fi
+# apps out of sight run at a lower priority (BACKGROUND_PRIORITY): a limit that lets them come
+# back to normal (nice 0) and never above it, from the next login
+if ! cmp -s live/90-infynitae-nice.conf /etc/security/limits.d/90-infynitae-nice.conf; then
+    sudo install -D -m 644 live/90-infynitae-nice.conf /etc/security/limits.d/90-infynitae-nice.conf || true
+fi
+# gamemode (game mode for fullscreen games): its CPU settings need the gamemode group
+if getent group gamemode >/dev/null && ! id -nG "$USER" | grep -qw gamemode; then
+    sudo usermod -aG gamemode "$USER" || true
+fi
 
 # 7. Display managers: /usr/local/bin/infynitae-session is a launcher for the user's own copy
 if ! cmp -s live/infynitae-session-shim /usr/local/bin/infynitae-session && command -v sudo >/dev/null 2>&1; then

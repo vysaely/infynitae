@@ -110,6 +110,16 @@ case "$ACTION" in
                 ;;
         esac
         ;;
+    game-mode)
+        # a fullscreen game shown directly started ("on <pid>") or ended ("off <pid>"): Feral's
+        # gamemode, when installed, runs the CPU at full speed while it lasts. An X11 game's
+        # process is xwayland-satellite's, which is enough for the CPU mode
+        set -- $2
+        [ "$1" = on ] && call=RegisterGame || call=UnregisterGame
+        gdbus call --session --dest com.feralinteractive.GameMode \
+            --object-path /com/feralinteractive/GameMode \
+            --method "com.feralinteractive.GameMode.$call" "$2" >/dev/null 2>&1
+        ;;
     file-manager|files)
         # Super+E: File explorer (configurable via ~/.config/infynitae/config)
         FM="${FILE_MANAGER:-auto}"

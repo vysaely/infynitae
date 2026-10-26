@@ -110,6 +110,7 @@ impl WaylandState {
         output: OutputId,
         now: std::time::Duration,
     ) {
+        self.note_window_capture(window);
         if self.core.frame_captured(window) {
             self.complete_frames(output, &[window], now);
         }

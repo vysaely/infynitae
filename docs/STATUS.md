@@ -67,6 +67,14 @@ These pass the test suite but have not run on a real screen or device yet:
   at the first tap, and while locked a finger reaches only the lock surface, so the password
   never leaves the lock screen. Tested off-screen and in the test suite; not yet on a
   touchscreen.
+- **Game mode** (`GAME_MODE`, `--no-gamemode`): a fullscreen window the GPU shows directly is
+  a game, registered with Feral's gamemode (full CPU speed) until it leaves fullscreen. A
+  fullscreen video shown directly counts too.
+- **Apps out of sight yield the CPU** (`BACKGROUND_PRIORITY`): an app none of whose windows has
+  been on a screen for 15 seconds runs at nice 10, with the processes it started, and returns at
+  once when one is seen. A shared window, the game and X11 apps are never lowered. It needs the
+  installer's limit (`/etc/security/limits.d/90-infynitae-nice.conf`) and a new login; before
+  that nothing is lowered.
 - **Laptop lid:** closing it with another screen connected moves everything to that screen
   until the lid opens. With no other screen, logind suspends as usual.
 - **Night light, screen power,** the capture dot, single-window sharing.

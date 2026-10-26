@@ -11,6 +11,10 @@ What comes next, roughly in order. [STATUS.md](STATUS.md) says where things stan
 - **Screens turned off from display tools** (`wlr-randr --off`, kanshi profiles): the screen
   leaves the layout and comes back where it was.
 - **Pens and drawing tablets** (`tablet-v2`).
+- **Tearing for games** (`tearing-control-v1`, a key such as Super+Shift+T): a frame shown at
+  once instead of at the next refresh, about 3 to 7 ms less latency at 144 Hz. Smithay 0.7 has
+  neither the protocol nor tearing page flips, so it needs a second Smithay patch, a decision
+  under the patch policy.
 
 ## Later: desktops on the canvas
 

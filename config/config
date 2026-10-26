@@ -66,6 +66,11 @@ VIRTUAL_SCREEN="auto"             # [restart] with no screen connected (monitor 
                                   # virtual 1920x1080 one stands in, so remote desktop still works
                                   # | off
 DIRECT_SCANOUT="true"             # [save] a fullscreen game's frames go straight to the screen
+GAME_MODE="true"                  # [save] while a game is fullscreen (shown directly), gamemode
+                                  # runs the CPU at full speed (when installed)
+BACKGROUND_PRIORITY="true"        # [save] an app whose windows have all been out of sight for 15
+                                  # seconds runs at a lower CPU priority, back when you see one
+                                  # (never a shared window, the game, or X11 apps)
 OVERLAY_PLANES="false"            # [save] also windows' buffers on overlay planes (on AMD this
                                   # dropped frames whenever Electron apps like Discord drew)
 OSK="auto"                        # [restart] on-screen keyboard (squeekboard) for text fields —

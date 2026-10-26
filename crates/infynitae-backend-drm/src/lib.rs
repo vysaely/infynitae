@@ -1438,12 +1438,14 @@ pub fn run_console_with(
         let rescan = data
             .rescan_at
             .map(|t| t.saturating_duration_since(std::time::Instant::now()));
+        let background = data.state.background().due(std::time::Instant::now());
         let timeout = [
             data.session.timeout(),
             restart,
             idle_timeout,
             capture_mark,
             rescan,
+            background,
         ]
         .into_iter()
         .flatten()
@@ -1458,6 +1460,8 @@ pub fn run_console_with(
             rescan_screens(&mut data);
             data.session.request_frame();
         }
+        // apps out of sight yield the CPU; game mode ends with the game's fullscreen
+        data.state.background_update(std::time::Instant::now());
         // the capture indicator came or went: every screen draws it, or no longer
         if data
             .state
@@ -1727,6 +1731,7 @@ pub fn run_console_with(
     }
 
     println!("[infynitae] Shutting down compositor...");
+    data.state.background_restore_all();
     drop(xwayland);
     data.session.shutdown_with(&mut data.state);
     for s in std::mem::take(&mut data.screens) {
@@ -1845,6 +1850,7 @@ fn render(data: &mut LoopData) {
             Ok(result) if !result.is_empty => {
                 use smithay::backend::drm::compositor::PrimaryPlaneElement;
                 let scanout = matches!(result.primary_element, PrimaryPlaneElement::Element(_));
+                data.state.frame_scanned_out(id, scanout);
                 let (overlays, cursor) = (
                     result.overlay_elements.len(),
                     result.cursor_element.is_some(),
