@@ -39,6 +39,7 @@ pub mod session;
 mod shortcuts_inhibit;
 mod signals;
 mod snapshot;
+pub mod virtual_input;
 mod wlr_toplevels;
 pub mod xwayland;
 
@@ -268,6 +269,8 @@ pub struct WaylandState {
     pub screencopy: screencopy::ScreencopyState,
     pub gamma: gamma::GammaState,
     pub output_power: output_power::OutputPowerState,
+    /// Virtual pointers and seat-keymap virtual keyboards, as real input (`virtual_input`).
+    pub(crate) virtual_input: virtual_input::VirtualInputState,
     /// `ext-image-copy-capture-v1` output capture (`image_copy`); frames join `screencopy`'s queue.
     #[expect(
         dead_code,
@@ -461,6 +464,10 @@ impl WaylandState {
             }
         }
 
+        let seat_keymap = virtual_input::keymap_text(
+            &xkb_layout,
+            (!xkb_options.is_empty()).then(|| xkb_options.clone()),
+        );
         let xkb_config = smithay::input::keyboard::XkbConfig {
             layout: &xkb_layout,
             options: if xkb_options.is_empty() {
@@ -560,6 +567,7 @@ impl WaylandState {
             screencopy: screencopy::ScreencopyState::new(display),
             gamma: gamma::GammaState::new(display),
             output_power: output_power::OutputPowerState::new(display),
+            virtual_input: virtual_input::VirtualInputState::new(display, seat_keymap),
             image_copy: image_copy::ImageCopyState::new(display),
             dmabuf: DmabufState::new(),
             dmabuf_global: None,

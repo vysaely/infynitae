@@ -1469,6 +1469,7 @@ pub fn run_console_with(
             let ok = apply_output_configuration(&mut data, &c.changes);
             data.state.finish_output_configuration(c, ok);
         }
+        apply_virtual_input(&mut data);
         // Process client requests to change screen power save modes
         let pending_power: Vec<_> = data.pending_power.lock().unwrap().drain(..).collect();
         for (output_id, mode) in pending_power {
@@ -2137,7 +2138,36 @@ fn handle_screencopy<E>(
     }
 }
 
-fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
+/// The virtual devices' input (`zwlr_virtual_pointer_v1`, seat-keymap virtual keyboards: a remote
+/// desktop) to Core like a mouse and a keyboard plugged in: it is activity (the screens wake),
+/// the keys go through the seat's key path but not the console's own (no VT switch from afar).
+fn apply_virtual_input(data: &mut LoopData) {
+    let events = data.state.take_virtual_input();
+    if events.is_empty() {
+        return;
+    }
+    user_activity(data);
+    for ev in events {
+        let time_us = infynitae_wayland::presentation_clock_now().as_micros() as u64;
+        match ev {
+            infynitae_wayland::virtual_input::VirtualInput::Key { key, pressed } => {
+                core_key(data, key, pressed, time_us);
+            }
+            ev => {
+                if let Some(phys) = data.state.virtual_pointer_event(ev, time_us) {
+                    let port = &mut data.input_port;
+                    let _ = data
+                        .state
+                        .with_effects(|core, fx| core.physical_input(port, phys, fx));
+                }
+            }
+        }
+    }
+    data.session.request_frame();
+}
+
+/// Input was seen: the idle timer starts again, and screens asleep wake.
+fn user_activity(data: &mut LoopData) {
     data.last_user_activity = std::time::Instant::now();
     if data.dpms_active {
         println!("[infynitae] User input detected: waking up screens from DPMS sleep");
@@ -2162,6 +2192,10 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             .set_all_outputs_power_mode(infynitae_wayland::output_power::OutputPowerMode::On);
         data.session.request_frame();
     }
+}
+
+fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
+    user_activity(data);
     if let InputEvent::PointerButton { event } = &event {
         let button = event.button_code();
         data.buttons_down.retain(|b| *b != button);

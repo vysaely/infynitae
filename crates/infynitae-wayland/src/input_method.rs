@@ -3,6 +3,10 @@
 //! serves the three protocols; the requests that can type or read text pass through the gates
 //! here first.
 //!
+//! A virtual keyboard that uploads the seat's own keymap (the remote desktop portal) is a real
+//! keyboard: its keys go to Core, so the shortcuts work (`virtual_input`). Others type through
+//! smithay into the focused window.
+//!
 //! While the session is locked nothing reaches the lock screen except your own keys (owner,
 //! 2026-10-25): an input method can neither commit, preedit nor delete text, a virtual keyboard
 //! types nothing, and no text input is enabled, so no app's text, the password field included,
@@ -23,7 +27,7 @@ use smithay::reexports::wayland_protocols_misc::zwp_virtual_keyboard_v1::server:
 };
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle};
+use smithay::reexports::wayland_server::{Client, DataInit, Dispatch, DisplayHandle, Resource};
 use smithay::wayland::input_method::{
     InputMethodHandler, InputMethodManagerState, InputMethodUserData, PopupSurface,
 };
@@ -211,7 +215,8 @@ impl Dispatch<ZwpTextInputV3, TextInputUserData> for WaylandState {
     }
 }
 
-/// A virtual keyboard: while locked it types nothing (it would type into the lock screen).
+/// A virtual keyboard: while locked it types nothing (it would type into the lock screen). One
+/// with the seat's keymap types through Core.
 impl Dispatch<ZwpVirtualKeyboardV1, VirtualKeyboardUserData<WaylandState>> for WaylandState {
     fn request(
         state: &mut Self,
@@ -223,7 +228,40 @@ impl Dispatch<ZwpVirtualKeyboardV1, VirtualKeyboardUserData<WaylandState>> for W
         data_init: &mut DataInit<'_, Self>,
     ) {
         use zwp_virtual_keyboard_v1::Request;
-        if state.is_locked() && matches!(request, Request::Key { .. } | Request::Modifiers { .. }) {
+        let locked = state.is_locked();
+        match &request {
+            Request::Keymap { fd, size, .. } => {
+                // read from a copy: smithay maps the keymap from the fd itself
+                let text = fd.try_clone().ok().and_then(|fd| {
+                    use std::os::unix::fs::FileExt;
+                    let mut buf = vec![0; (*size as usize).min(4 << 20)];
+                    std::fs::File::from(fd).read_exact_at(&mut buf, 0).ok()?;
+                    Some(buf)
+                });
+                state
+                    .virtual_input
+                    .keyboard_keymap(resource.id(), text.as_deref().unwrap_or_default());
+            }
+            Request::Key {
+                key,
+                state: key_state,
+                ..
+            } => {
+                // wl_keyboard.key_state: 1 pressed, 0 released
+                let pressed = *key_state == 1;
+                if state
+                    .virtual_input
+                    .keyboard_key(&resource.id(), *key, pressed, locked)
+                {
+                    return;
+                }
+            }
+            Request::Modifiers { .. } if state.virtual_input.is_seat_keyboard(&resource.id()) => {
+                return;
+            }
+            _ => {}
+        }
+        if locked && matches!(request, Request::Key { .. } | Request::Modifiers { .. }) {
             return;
         }
         <VirtualKeyboardManagerState as Dispatch<
@@ -239,6 +277,7 @@ impl Dispatch<ZwpVirtualKeyboardV1, VirtualKeyboardUserData<WaylandState>> for W
         resource: &ZwpVirtualKeyboardV1,
         data: &VirtualKeyboardUserData<WaylandState>,
     ) {
+        state.virtual_input.release_keyboard(&resource.id());
         <VirtualKeyboardManagerState as Dispatch<
             ZwpVirtualKeyboardV1,
             VirtualKeyboardUserData<WaylandState>,

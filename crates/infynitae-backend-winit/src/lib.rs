@@ -145,6 +145,42 @@ impl infynitae_wayland::limits::RendererLimits for AssumedGlesLimits {
 
 /// Runs the nested compositor with Winit backend.
 ///
+/// The virtual devices' input (`zwlr_virtual_pointer_v1`, seat-keymap virtual keyboards) to Core
+/// through the input port, like a mouse and a keyboard plugged in: the keys through the seat's
+/// key path, so the shortcuts see them.
+fn apply_virtual_input(data: &mut LoopData) {
+    for ev in data.state.take_virtual_input() {
+        let time_us = infynitae_wayland::presentation_clock_now().as_micros() as u64;
+        let phys = match ev {
+            infynitae_wayland::virtual_input::VirtualInput::Key { key, pressed } => {
+                let Ok(token) = data
+                    .state
+                    .core()
+                    .verify_input_port(&data.input_port, key, pressed)
+                else {
+                    continue;
+                };
+                let (modifiers, mods_changed) = data.state.sync_seat_key(token);
+                PhysicalEvent::KeyboardKey {
+                    key,
+                    pressed,
+                    modifiers,
+                    mods_changed,
+                    time_us,
+                }
+            }
+            ev => match data.state.virtual_pointer_event(ev, time_us) {
+                Some(phys) => phys,
+                None => continue,
+            },
+        };
+        let port = &mut data.input_port;
+        let _ = data
+            .state
+            .with_effects(|core, fx| core.physical_input(port, phys, fx));
+    }
+}
+
 /// Takes ownership of `Core` and the composition root's authority ports (`InputPort`,
 /// `OutputLifecycleToken`), wires the nested window, the session, the renderer and the event
 /// loop, and blocks until the window is closed or a run limit is reached.
@@ -328,6 +364,7 @@ pub fn run_nested_with(
             }
         }
         data.session.dispatch(&mut data.state);
+        apply_virtual_input(&mut data);
 
         let current_mapped = data.state.core().stage().mapped_elements();
         let new_mapped: Vec<_> = current_mapped

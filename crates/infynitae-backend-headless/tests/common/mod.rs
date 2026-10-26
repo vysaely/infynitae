@@ -226,6 +226,8 @@ pub struct Probe {
         wayland_protocols_wlr::foreign_toplevel::v1::client::zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1,
     >,
     pub key_events: Vec<(u32, bool)>,
+    /// The seat's keymap as `wl_keyboard.keymap` sent it (what a remote desktop portal uploads).
+    pub keymap: Option<Vec<u8>>,
     pub repeat_info: Option<(i32, i32)>,
     pub destroyed_active: Vec<String>,
     pub auto_destroy_popups: bool,
@@ -1653,9 +1655,12 @@ impl Dispatch<WlKeyboard, ()> for Probe {
         _: &QueueHandle<Self>,
     ) {
         match ev {
-            wl_keyboard::Event::Keymap { fd, .. } => {
-                // fd is an OwnedFd. Dropping it closes the shm file descriptor immediately.
-                drop(fd);
+            wl_keyboard::Event::Keymap { fd, size, .. } => {
+                use std::os::unix::fs::FileExt;
+                let mut buf = vec![0; size as usize];
+                if std::fs::File::from(fd).read_exact_at(&mut buf, 0).is_ok() {
+                    st.keymap = Some(buf);
+                }
             }
             wl_keyboard::Event::Enter {
                 serial,
@@ -2116,6 +2121,7 @@ impl Lockstep {
                 &mut self.state,
                 &mut self.token,
             );
+            infynitae_backend_headless::apply_virtual_input(&mut self.state, &mut self.input);
             self.state.settle_unlock();
             self.state.clear_orphaned_selections();
             self.state.refuse_client_drags();

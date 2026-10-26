@@ -353,6 +353,35 @@ pub fn apply_output_configurations(state: &mut WaylandState, token: &mut OutputL
     }
 }
 
+/// The virtual devices' input (`zwlr_virtual_pointer_v1`, seat-keymap virtual keyboards) to Core
+/// through the input port, like a mouse and a keyboard plugged in: the keys through the seat's
+/// key path, so the shortcuts see them.
+pub fn apply_virtual_input(state: &mut WaylandState, port: &mut infynitae_core::InputPort) {
+    for ev in state.take_virtual_input() {
+        let time_us = infynitae_wayland::presentation_clock_now().as_micros() as u64;
+        let phys = match ev {
+            infynitae_wayland::virtual_input::VirtualInput::Key { key, pressed } => {
+                let Ok(token) = state.core().verify_input_port(port, key, pressed) else {
+                    continue;
+                };
+                let (modifiers, mods_changed) = state.sync_seat_key(token);
+                infynitae_core::PhysicalEvent::KeyboardKey {
+                    key,
+                    pressed,
+                    modifiers,
+                    mods_changed,
+                    time_us,
+                }
+            }
+            ev => match state.virtual_pointer_event(ev, time_us) {
+                Some(phys) => phys,
+                None => continue,
+            },
+        };
+        let _ = state.with_effects(|core, fx| core.physical_input(port, phys, fx));
+    }
+}
+
 pub fn run_headless(
     core: infynitae_core::Core,
     input_port: infynitae_core::InputPort,
@@ -448,6 +477,7 @@ pub fn run_headless_with(
         }
         session.dispatch(&mut state);
         apply_output_configurations(&mut state, &mut output_token);
+        apply_virtual_input(&mut state, &mut input_port);
 
         let current_mapped = state.core().stage().mapped_elements();
         let new_mapped: Vec<_> = current_mapped
