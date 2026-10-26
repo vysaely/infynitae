@@ -1,0 +1,203 @@
+#!/bin/sh
+# Auto-rotate the built-in screen of a convertible laptop from its accelerometer.
+# Watches orientation changes from iio-sensor-proxy via monitor-sensor and sets
+# the display transform using wlr-randr.
+
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
+LOG="$STATE_DIR/autorotate.log"
+mkdir -p "$STATE_DIR" 2>/dev/null || true
+
+log() {
+    printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG" 2>/dev/null || true
+}
+
+# Orientation to transform mapping (wl_output transforms are counter-clockwise).
+# Some convertible devices have their accelerometer inverted; AUTO_ROTATE_INVERT=true swaps 90 and 270.
+orientation_to_transform() {
+    case "$1" in
+        normal)
+            printf 'normal\n'
+            ;;
+        bottom-up)
+            printf '180\n'
+            ;;
+        right-up)
+            case "${AUTO_ROTATE_INVERT:-false}" in
+                1|true|yes|on|TRUE|True) printf '270\n' ;;
+                *) printf '90\n' ;;
+            esac
+            ;;
+        left-up)
+            case "${AUTO_ROTATE_INVERT:-false}" in
+                1|true|yes|on|TRUE|True) printf '90\n' ;;
+                *) printf '270\n' ;;
+            esac
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+    return 0
+}
+
+# Subcommands for direct helper invocation and testing
+case "${1:-}" in
+    --transform|orientation_to_transform)
+        orientation_to_transform "$2"
+        exit $?
+        ;;
+esac
+
+# 1. Prerequisite checks: exit 0 quietly if any required tool or hardware is missing
+command -v monitor-sensor >/dev/null 2>&1 || exit 0
+command -v wlr-randr >/dev/null 2>&1 || exit 0
+
+has_accelerometer() {
+    [ -n "${AUTO_ROTATE_OUTPUT:-}" ] && return 0
+    for dev in /sys/bus/iio/devices/iio:device*; do
+        [ -d "$dev" ] || continue
+        for f in "$dev"/in_accel*_raw "$dev"/in_accel_raw; do
+            [ -e "$f" ] && return 0
+        done
+        if [ -f "$dev/name" ]; then
+            case "$(cat "$dev/name" 2>/dev/null)" in
+                *accel*|*ACCEL*|*accelerometer*|*Accelerometer*) return 0 ;;
+            esac
+        fi
+    done
+    return 1
+}
+
+has_accelerometer || exit 0
+
+find_builtin_output() {
+    if [ -n "${AUTO_ROTATE_OUTPUT:-}" ]; then
+        printf '%s\n' "$AUTO_ROTATE_OUTPUT"
+        return 0
+    fi
+    for s in /sys/class/drm/card*-*/status; do
+        [ -f "$s" ] || continue
+        conn="${s%/status}"
+        conn="${conn##*/}"
+        case "$conn" in
+            card[0-9]*-eDP-*|card[0-9]*-LVDS-*|card[0-9]*-DSI-*)
+                if [ "$(cat "$s" 2>/dev/null)" = "connected" ]; then
+                    printf '%s\n' "${conn#card*-}"
+                    return 0
+                fi
+                ;;
+        esac
+    done
+    return 1
+}
+
+OUT="$(find_builtin_output)" || exit 0
+[ -z "$OUT" ] && exit 0
+
+parse_orientation() {
+    line="$1"
+    case "$line" in
+        *"orientation:"*)
+            ori="${line#*orientation:}"
+            ori="${ori#"${ori%%[! ]*}"}"
+            ori="${ori%%\)*}"
+            ori="${ori%%[[:space:]]*}"
+            printf '%s\n' "$ori"
+            ;;
+        *"Accelerometer orientation changed:"*)
+            ori="${line#*Accelerometer orientation changed:}"
+            ori="${ori#"${ori%%[! ]*}"}"
+            ori="${ori%%[[:space:]]*}"
+            printf '%s\n' "$ori"
+            ;;
+        *)
+            ;;
+    esac
+}
+
+STATUS_FILE="$STATE_DIR/autorotate-status-$$"
+ORI_FILE="$STATE_DIR/autorotate-current-orientation-$$"
+NO_SENSOR_FILE="$STATE_DIR/autorotate-nosensor-$$"
+
+cleanup() {
+    rm -f "$STATUS_FILE" "$ORI_FILE" "$NO_SENSOR_FILE" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM HUP
+
+process_stream() {
+    current_orientation=""
+    [ -f "$ORI_FILE" ] && current_orientation=$(cat "$ORI_FILE" 2>/dev/null || true)
+
+    while IFS= read -r line; do
+        case "$line" in
+            *"No accelerometer"*|*"no accelerometer"*)
+                log "no accelerometer reported by monitor-sensor"
+                : > "$NO_SENSOR_FILE"
+                return 0
+                ;;
+        esac
+
+        ori=$(parse_orientation "$line")
+        [ -z "$ori" ] && continue
+        [ "$ori" = "undefined" ] && continue
+        [ "$ori" = "$current_orientation" ] && continue
+
+        transform=$(orientation_to_transform "$ori") || continue
+
+        if wlr-randr --output "$OUT" --transform "$transform" 2>>"$LOG"; then
+            log "rotated $OUT to $transform ($ori)"
+        else
+            log "error: wlr-randr --output $OUT --transform $transform failed"
+        fi
+        current_orientation="$ori"
+        printf '%s\n' "$current_orientation" > "$ORI_FILE"
+    done
+}
+
+case "${1:-}" in
+    --process|process_stream)
+        process_stream
+        exit $?
+        ;;
+esac
+
+RETRY_DELAY="${AUTO_ROTATE_RETRY_DELAY:-5}"
+MAX_RESTARTS="${AUTO_ROTATE_MAX_RESTARTS:-5}"
+restarts=0
+use_accel=true
+
+while [ "$restarts" -le "$MAX_RESTARTS" ]; do
+    start_time=$(date +%s)
+    if [ "$use_accel" = true ]; then
+        ( monitor-sensor --accel 2>>"$LOG"; echo $? > "$STATUS_FILE" ) | process_stream
+    else
+        ( monitor-sensor 2>>"$LOG"; echo $? > "$STATUS_FILE" ) | process_stream
+    fi
+    rc=$(cat "$STATUS_FILE" 2>/dev/null || echo 1)
+    end_time=$(date +%s)
+    duration=$((end_time - start_time))
+
+    [ -f "$NO_SENSOR_FILE" ] && exit 0
+
+    # If --accel failed immediately with an error, fall back to plain monitor-sensor
+    if [ "$use_accel" = true ] && [ "$rc" -ne 0 ] && [ "$duration" -le 1 ]; then
+        use_accel=false
+        log "monitor-sensor --accel failed (exit $rc); falling back to plain monitor-sensor"
+        continue
+    fi
+
+    # When running once (e.g. tests or single pass)
+    if [ "${AUTO_ROTATE_ONCE:-false}" = "true" ] || [ "${AUTO_ROTATE_ONCE:-false}" = "1" ]; then
+        exit 0
+    fi
+
+    # monitor-sensor died: restart up to 5 times
+    restarts=$((restarts + 1))
+    if [ "$restarts" -gt "$MAX_RESTARTS" ]; then
+        log "monitor-sensor died $MAX_RESTARTS times; giving up"
+        exit 0
+    fi
+
+    log "monitor-sensor died (exit $rc); waiting ${RETRY_DELAY}s before restart ($restarts of $MAX_RESTARTS)..."
+    sleep "$RETRY_DELAY"
+done
