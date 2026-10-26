@@ -1,11 +1,13 @@
 /*
  * Infynitae GlobalShortcuts XDG Desktop Portal Implementation
  * Pure C + GIO. Zero bloat (<2MB RAM, 0% CPU idle).
- * Implements org.freedesktop.impl.portal.GlobalShortcuts for Discord, OBS, WebRTC.
+ * Implements org.freedesktop.impl.portal.GlobalShortcuts for Discord, OBS, WebRTC, and
+ * org.freedesktop.ScreenSaver (apps keeping the screens on while they play video).
  */
 
 #include <gio/gio.h>
 #include <gio/gunixsocketaddress.h>
+#include <gio/gunixfdlist.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -632,6 +634,165 @@ static void setup_socket_listener(void) {
     g_free(sock_dir);
 }
 
+/* ========================================================================== */
+/* org.freedesktop.ScreenSaver: apps that keep the screens on over D-Bus      */
+/* ========================================================================== */
+/*
+ * X11 apps through Xwayland, VLC, Steam and some Electron apps call Inhibit while they play
+ * video, and UnInhibit after. Each Inhibit takes a logind idle inhibitor ("idle", "block") and
+ * holds its fd: the compositor asks logind at the idle timeout and keeps the screens on while
+ * one is held. An inhibitor ends with UnInhibit, or when the app that asked leaves the bus
+ * (quits or crashes), so none is left behind. Wayland apps use the compositor's own
+ * idle-inhibit protocol instead.
+ */
+#define SS_BUS_NAME "org.freedesktop.ScreenSaver"
+
+typedef struct {
+    guint32 cookie;
+    char *sender;
+    int fd;
+    guint watch_id;
+} SsInhibitor;
+
+static GList *ss_inhibitors = NULL; /* SsInhibitor* */
+static guint32 ss_next_cookie = 1;
+static GDBusNodeInfo *ss_node_info = NULL;
+
+static const gchar ss_introspection_xml[] =
+  "<node>"
+  "  <interface name='org.freedesktop.ScreenSaver'>"
+  "    <method name='Inhibit'>"
+  "      <arg type='s' name='application_name' direction='in'/>"
+  "      <arg type='s' name='reason_for_inhibit' direction='in'/>"
+  "      <arg type='u' name='cookie' direction='out'/>"
+  "    </method>"
+  "    <method name='UnInhibit'>"
+  "      <arg type='u' name='cookie' direction='in'/>"
+  "    </method>"
+  "    <method name='GetActive'>"
+  "      <arg type='b' name='active' direction='out'/>"
+  "    </method>"
+  "  </interface>"
+  "</node>";
+
+static void ss_release(SsInhibitor *in) {
+    ss_inhibitors = g_list_remove(ss_inhibitors, in);
+    if (in->watch_id) g_bus_unwatch_name(in->watch_id);
+    if (in->fd >= 0) close(in->fd);
+    g_free(in->sender);
+    g_free(in);
+}
+
+/* the app that asked left the bus: its inhibitors end with it */
+static void ss_sender_vanished(GDBusConnection *connection, const gchar *name, gpointer user_data) {
+    (void)connection;
+    (void)user_data;
+    GList *l = ss_inhibitors;
+    while (l) {
+        GList *next = l->next;
+        SsInhibitor *in = l->data;
+        if (g_strcmp0(in->sender, name) == 0) ss_release(in);
+        l = next;
+    }
+}
+
+/* a logind idle inhibitor: its fd, -1 when logind refused */
+static int ss_logind_inhibit(const char *who, const char *why) {
+    GError *err = NULL;
+    GDBusConnection *system = g_bus_get_sync(G_BUS_TYPE_SYSTEM, NULL, &err);
+    if (!system) {
+        g_printerr("[infynitae-portal] ScreenSaver: no system bus: %s\n", err ? err->message : "?");
+        g_clear_error(&err);
+        return -1;
+    }
+    GUnixFDList *fds = NULL;
+    GVariant *reply = g_dbus_connection_call_with_unix_fd_list_sync(
+        system, "org.freedesktop.login1", "/org/freedesktop/login1",
+        "org.freedesktop.login1.Manager", "Inhibit",
+        g_variant_new("(ssss)", "idle", who, why, "block"), G_VARIANT_TYPE("(h)"),
+        G_DBUS_CALL_FLAGS_NONE, 5000, NULL, &fds, NULL, &err);
+    g_object_unref(system);
+    if (!reply) {
+        g_printerr("[infynitae-portal] ScreenSaver: logind refused: %s\n", err ? err->message : "?");
+        g_clear_error(&err);
+        return -1;
+    }
+    gint32 index = -1;
+    g_variant_get(reply, "(h)", &index);
+    g_variant_unref(reply);
+    int fd = (fds && index >= 0) ? g_unix_fd_list_get(fds, index, NULL) : -1;
+    if (fds) g_object_unref(fds);
+    return fd;
+}
+
+static void ss_method_call(GDBusConnection *connection, const gchar *sender,
+                           const gchar *object_path, const gchar *interface_name,
+                           const gchar *method_name, GVariant *parameters,
+                           GDBusMethodInvocation *invocation, gpointer user_data) {
+    (void)object_path;
+    (void)interface_name;
+    (void)user_data;
+    if (g_strcmp0(method_name, "Inhibit") == 0) {
+        const char *app = NULL, *reason = NULL;
+        g_variant_get(parameters, "(&s&s)", &app, &reason);
+        char *who = g_strdup_printf("%s (ScreenSaver)", (app && *app) ? app : sender);
+        int fd = ss_logind_inhibit(who, (reason && *reason) ? reason : "Playing media");
+        g_free(who);
+        if (fd < 0) {
+            g_dbus_method_invocation_return_error(invocation, G_DBUS_ERROR, G_DBUS_ERROR_FAILED,
+                                                  "logind did not take the idle inhibitor");
+            return;
+        }
+        SsInhibitor *in = g_new0(SsInhibitor, 1);
+        in->cookie = ss_next_cookie++;
+        if (ss_next_cookie == 0) ss_next_cookie = 1;
+        in->sender = g_strdup(sender);
+        in->fd = fd;
+        in->watch_id = g_bus_watch_name_on_connection(connection, sender,
+                                                       G_BUS_NAME_WATCHER_FLAGS_NONE, NULL,
+                                                       ss_sender_vanished, NULL, NULL);
+        ss_inhibitors = g_list_prepend(ss_inhibitors, in);
+        g_print("[infynitae-portal] ScreenSaver: %s keeps the screens on (cookie %u)\n", app, in->cookie);
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(u)", in->cookie));
+    } else if (g_strcmp0(method_name, "UnInhibit") == 0) {
+        guint32 cookie = 0;
+        g_variant_get(parameters, "(u)", &cookie);
+        for (GList *l = ss_inhibitors; l; l = l->next) {
+            SsInhibitor *in = l->data;
+            /* only the app that took it ends it */
+            if (in->cookie == cookie && g_strcmp0(in->sender, sender) == 0) {
+                ss_release(in);
+                break;
+            }
+        }
+        g_dbus_method_invocation_return_value(invocation, NULL);
+    } else if (g_strcmp0(method_name, "GetActive") == 0) {
+        g_dbus_method_invocation_return_value(invocation, g_variant_new("(b)", FALSE));
+    } else {
+        g_dbus_method_invocation_return_error(invocation, G_DBUS_ERROR, G_DBUS_ERROR_UNKNOWN_METHOD,
+                                              "unknown method %s", method_name);
+    }
+}
+
+static const GDBusInterfaceVTable ss_vtable = { ss_method_call, NULL, NULL, { 0 } };
+
+static void ss_on_bus_acquired(GDBusConnection *connection, const gchar *name, gpointer user_data) {
+    (void)name;
+    (void)user_data;
+    ss_node_info = g_dbus_node_info_new_for_xml(ss_introspection_xml, NULL);
+    /* apps use either path */
+    const char *paths[] = { "/org/freedesktop/ScreenSaver", "/ScreenSaver" };
+    for (size_t i = 0; i < 2; i++) {
+        GError *err = NULL;
+        if (!g_dbus_connection_register_object(connection, paths[i], ss_node_info->interfaces[0],
+                                               &ss_vtable, NULL, NULL, &err)) {
+            g_printerr("[infynitae-portal] ScreenSaver: %s not registered: %s\n", paths[i],
+                       err ? err->message : "?");
+            g_clear_error(&err);
+        }
+    }
+}
+
 int main(int argc, char *argv[]) {
     setup_socket_listener();
 
@@ -644,9 +805,14 @@ int main(int argc, char *argv[]) {
                                     NULL,
                                     NULL);
 
+    /* not when another desktop's screensaver service already answers in this session */
+    guint ss_owner_id = g_bus_own_name(G_BUS_TYPE_SESSION, SS_BUS_NAME, G_BUS_NAME_OWNER_FLAGS_NONE,
+                                       ss_on_bus_acquired, NULL, NULL, NULL, NULL);
+
     GMainLoop *loop = g_main_loop_new(NULL, FALSE);
     g_main_loop_run(loop);
 
+    g_bus_unown_name(ss_owner_id);
     g_bus_unown_name(owner_id);
     g_main_loop_unref(loop);
     return 0;

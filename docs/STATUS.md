@@ -90,6 +90,12 @@ Also missing:
 - Packaging and installs other than Arch Linux; the install assumes one user and `~/infynitae`.
 - Crash reporting beyond the logs.
 
+Apps keep the screens on and the session unlocked while they play video or a game: Wayland
+apps through the idle-inhibit protocol (while their window is open), others over D-Bus
+(`org.freedesktop.ScreenSaver`, answered by infynitae-portal with a logind idle inhibitor that
+ends with the app). `systemd-inhibit --what=idle <command>` does the same by hand; Super+Shift+I
+stays as the switch. Locking still turns the screens off on time, whatever an app asks.
+
 Closing a laptop's lid with another screen connected leaves the laptop's panel out (windows and
 the pointer stay on the other screen) until the lid opens; with no other screen, logind suspends
 the machine as it does by default. Not yet tried on a laptop.

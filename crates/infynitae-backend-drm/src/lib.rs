@@ -516,6 +516,21 @@ fn read_connector_edid(drm: &impl Device, handle: connector::Handle) -> Option<e
     None
 }
 
+/// At the idle timeout: whether logind holds an idle inhibitor (an app over D-Bus, through
+/// infynitae-portal's org.freedesktop.ScreenSaver, or `systemd-inhibit --what=idle`). If so,
+/// the timeout is asked again in a minute, not at every loop.
+fn logind_inhibits_idle_now(data: &mut LoopData) -> bool {
+    if !infynitae_wayland::idle_inhibit::logind_idle_inhibited() {
+        return false;
+    }
+    let timeout = Duration::from_secs(u64::from(data.idle_sleep_timeout_min) * 60);
+    let recheck = timeout.saturating_sub(Duration::from_secs(60));
+    data.last_user_activity = std::time::Instant::now()
+        .checked_sub(recheck)
+        .unwrap_or_else(std::time::Instant::now);
+    true
+}
+
 /// How long a display change must be quiet before the connectors are compared with the screens:
 /// a monitor waking or a cable being seated reports several changes, and a monitor that drops
 /// its connection for a moment in deep sleep must not lose its screen.
@@ -1382,6 +1397,7 @@ pub fn run_console_with(
                 && !data.state.is_idle_inhibited()
                 && data.last_user_activity.elapsed()
                     >= Duration::from_secs((data.idle_sleep_timeout_min as u64) * 60)
+                && !logind_inhibits_idle_now(&mut data)
             {
                 println!(
                     "[infynitae] Inactivity timeout reached ({} min). Entering DPMS sleep / screen blanking...",

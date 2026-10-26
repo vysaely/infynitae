@@ -19,6 +19,7 @@ pub mod extension;
 mod frames;
 pub mod gamma;
 mod handlers;
+pub mod idle_inhibit;
 pub mod idle_notify;
 mod image_copy;
 mod input_method;
@@ -196,6 +197,8 @@ pub struct WaylandState {
     /// `ext_foreign_toplevel_list_v1`: the window list for bars and task switchers. A window is
     /// listed while it is mapped; Smithay keeps only weak handles, so the strong ones are here.
     foreign_toplevel_list: smithay::wayland::foreign_toplevel_list::ForeignToplevelListState,
+    /// Apps keeping the screens on (`idle_inhibit`).
+    idle_inhibit: idle_inhibit::IdleInhibit,
     foreign_toplevels: std::collections::HashMap<
         ElementId,
         smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle,
@@ -524,6 +527,7 @@ impl WaylandState {
                 smithay::wayland::foreign_toplevel_list::ForeignToplevelListState::new::<Self>(
                     display,
                 ),
+            idle_inhibit: idle_inhibit::IdleInhibit::new(display),
             foreign_toplevels: std::collections::HashMap::new(),
             shortcuts_inhibit: shortcuts_inhibit::ShortcutsInhibitState::new(display),
             wlr_toplevels: wlr_toplevels::WlrToplevelsState::new(display),
@@ -1128,9 +1132,10 @@ impl WaylandState {
         }
     }
 
-    /// Whether idle sleep & screen auto-locking should be inhibited.
+    /// Whether idle sleep & screen auto-locking should be inhibited: stay-awake mode
+    /// (Super+Shift+I), or an app showing a video or a game (`idle_inhibit`).
     pub fn is_idle_inhibited(&self) -> bool {
-        self.manual_idle_inhibit
+        self.manual_idle_inhibit || self.app_inhibits_idle()
     }
 
     /// Sets the current virtual time for test harnesses driving the adapter in virtual time.
