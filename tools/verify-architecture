@@ -35,6 +35,14 @@ CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
 AUTHORIZED_SMITHAY_PATCH_REL = "vendor/smithay-0.7.0"
 AUTHORIZED_SMITHAY_MANIFEST_REL = "enforcement/smithay-0.7.0.sha256"
 AUTHORIZED_POINTER_SHA256 = "9c120d4101d7b2d3907d018a400dcd52e32e3be6b6cf6b64c80d0b421bbcb512"
+# P2 (owner decision 2026-10-26: tearing for games): async page flips in the DRM surfaces and
+# DrmCompositor (patches/0002-drm-async-page-flip.patch)
+AUTHORIZED_P2_SHA256 = {
+    "src/backend/drm/surface/atomic.rs": "a1b5233a114976d192508fb2fd1c50618360d55aef8d8dc1fd3b5342e0d2cf68",
+    "src/backend/drm/surface/legacy.rs": "e437ae93290cef7c2c01f3698bfa38a6c06aa88d28aa354a9bc0efa5837fd7c7",
+    "src/backend/drm/surface/mod.rs": "b6f4b5dd7b61c6c281051d645d881af4b9c1249255016ce63b47c20639acbd40",
+    "src/backend/drm/compositor/mod.rs": "ddca98ca5e6ad057cfb1c1b989c080aa4751a789e8be7ee2e51112d272c6933d",
+}
 
 
 CORE = "infynitae-core"
@@ -317,6 +325,10 @@ def check_authorized_p1_patch(root, r):
         h = hashlib.sha256(f.read()).hexdigest()
     if h != AUTHORIZED_POINTER_SHA256:
         return r.check(False, "", f"pointer.rs sha256 mismatch (expected authorized P1 {AUTHORIZED_POINTER_SHA256}, got {h})")
+    for rel, want in AUTHORIZED_P2_SHA256.items():
+        with open(os.path.join(patch_dir, rel), "rb") as f:
+            if hashlib.sha256(f.read()).hexdigest() != want:
+                return r.check(False, "", f"{rel} sha256 mismatch (expected authorized P2)")
     manifest_path = os.path.join(root, AUTHORIZED_SMITHAY_MANIFEST_REL)
     if not os.path.isfile(manifest_path):
         return r.check(False, "", f"vendor smithay manifest {manifest_path} missing")
@@ -346,8 +358,8 @@ def check_authorized_p1_patch(root, r):
     for rel in sorted(missing):
         mismatches.append(f"missing file: {rel}")
     if mismatches:
-        return r.check(False, "", f"vendor smithay has unauthorized local modifications beyond P1: {mismatches[:5]}")
-    r.ok(f"vendor smithay source matches authorized minimal P1 patch (zero unauthorized modifications)")
+        return r.check(False, "", f"vendor smithay has unauthorized local modifications beyond P1 and P2: {mismatches[:5]}")
+    r.ok(f"vendor smithay source matches the authorized patches P1 and P2 (zero unauthorized modifications)")
     return True
 
 

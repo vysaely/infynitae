@@ -439,6 +439,24 @@ impl DrmSurface {
         }
     }
 
+    /// [`page_flip`](Self::page_flip) without waiting for the vblank: the new frame shows at once
+    /// and may tear (`DRM_MODE_PAGE_FLIP_ASYNC`). The kernel refuses it for anything but a change
+    /// of the primary plane's buffer, and on drivers without support.
+    #[profiling::function]
+    pub fn page_flip_async<'a>(
+        &self,
+        planes: impl IntoIterator<Item = PlaneState<'a>>,
+        event: bool,
+    ) -> Result<(), Error> {
+        match &*self.internal {
+            DrmSurfaceInternal::Atomic(surf) => surf.page_flip_async(planes, event),
+            DrmSurfaceInternal::Legacy(surf) => {
+                let fb = ensure_legacy_planes(self, planes)?;
+                surf.page_flip_async(fb, event)
+            }
+        }
+    }
+
     /// Returns a set of available planes for this surface
     pub fn planes(&self) -> &Planes {
         &self.planes

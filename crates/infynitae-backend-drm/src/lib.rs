@@ -256,6 +256,8 @@ struct Screen {
     /// Direct scanout is off for this screen until then: a frame scanning out a client's
     /// buffer was refused.
     no_scanout_until: Option<std::time::Instant>,
+    /// The kernel refused an async page flip here: no tearing until the window stops tearing.
+    tearing_refused: bool,
     /// The monitor and driver support VRR on this connector.
     vrr_supported: bool,
     /// VRR is on now.
@@ -922,6 +924,7 @@ fn connect_screen(
         screencopy_texture: None,
         flip_failures: 0,
         no_scanout_until: None,
+        tearing_refused: false,
         vrr_supported,
         vrr_on,
         vrr_mode: f.vrr,
@@ -1855,7 +1858,27 @@ fn render(data: &mut LoopData) {
                     result.overlay_elements.len(),
                     result.cursor_element.is_some(),
                 );
-                match s.compositor.queue_frame(()) {
+                // tearing: a scanned-out frame of a window that tears flips at once (async)
+                let wants_tearing = scanout && data.state.tears(id);
+                if !wants_tearing {
+                    s.tearing_refused = false;
+                }
+                let tear = wants_tearing && !s.tearing_refused;
+                if tear != s.compositor.async_flip() {
+                    println!(
+                        "[infynitae] Tearing {} on screen {id:?}",
+                        if tear { "on" } else { "off" }
+                    );
+                    s.compositor.set_async_flip(tear);
+                }
+                let queued = s.compositor.queue_frame(());
+                if tear && !s.compositor.async_flip() {
+                    eprintln!(
+                        "[infynitae] The driver refused tearing on screen {id:?}: frames wait for the refresh"
+                    );
+                    s.tearing_refused = true;
+                }
+                match queued {
                     Ok(()) => {
                         s.flip_failures = 0;
                         s.queued_locked = locked;

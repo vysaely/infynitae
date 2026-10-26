@@ -67,6 +67,11 @@ These pass the test suite but have not run on a real screen or device yet:
   at the first tap, and while locked a finger reaches only the lock surface, so the password
   never leaves the lock screen. Tested off-screen and in the test suite; not yet on a
   touchscreen.
+- **Tearing for games** (`TEARING`, Super+Shift+T): a fullscreen window shown directly flips
+  each frame at once (an async page flip) when its app asks (`tearing-control-v1`, a Vulkan or
+  OpenGL game with vsync off) or after Super+Shift+T on it (X11 games, which cannot ask). A
+  driver that refuses gets the usual flip. In the test suite; this GPU (amdgpu) reports support,
+  not yet seen in a game.
 - **Game mode** (`GAME_MODE`, `--no-gamemode`): a fullscreen window the GPU shows directly is
   a game, registered with Feral's gamemode (full CPU speed) until it leaves fullscreen. A
   fullscreen video shown directly counts too.

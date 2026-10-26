@@ -246,6 +246,9 @@ impl WaylandState {
                 Effect::ToggleIdleInhibit => {
                     self.toggle_idle_inhibit();
                 }
+                Effect::ToggleTearing => {
+                    self.toggle_tearing_focused();
+                }
                 Effect::SaveReplay => {
                     self.spawn_action("save-replay");
                 }

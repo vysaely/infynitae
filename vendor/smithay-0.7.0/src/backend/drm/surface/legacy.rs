@@ -334,6 +334,15 @@ impl LegacyDrmSurface {
     #[instrument(level = "trace", parent = &self.span, skip(self))]
     #[profiling::function]
     pub fn page_flip(&self, framebuffer: framebuffer::Handle, event: bool) -> Result<(), Error> {
+        self.page_flip_with(framebuffer, event, false)
+    }
+
+    /// [`page_flip`](Self::page_flip) without waiting for the vblank (`DRM_MODE_PAGE_FLIP_ASYNC`).
+    pub fn page_flip_async(&self, framebuffer: framebuffer::Handle, event: bool) -> Result<(), Error> {
+        self.page_flip_with(framebuffer, event, true)
+    }
+
+    fn page_flip_with(&self, framebuffer: framebuffer::Handle, event: bool, async_flip: bool) -> Result<(), Error> {
         trace!("Queueing Page flip");
 
         if !self.active.load(Ordering::SeqCst) {
@@ -353,6 +362,10 @@ impl LegacyDrmSurface {
             framebuffer,
             if event {
                 PageFlipFlags::EVENT
+            } else {
+                PageFlipFlags::empty()
+            } | if async_flip {
+                PageFlipFlags::ASYNC
             } else {
                 PageFlipFlags::empty()
             },

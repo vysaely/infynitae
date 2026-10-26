@@ -72,6 +72,7 @@ Your config is never overwritten, and parts left out at install stay out.
 | `Super + C` | Close the window (`Shift`: force) |
 | `Super + Shift + P` | Hide the window from screenshots and sharing |
 | `Super + Shift + I` | Stay awake |
+| `Super + Shift + T` | Tearing for the window while fullscreen: lowest latency for games |
 | `Super + Alt + R` | Start / stop recording |
 | `Super + Alt + C` | Save a replay clip |
 | `Super` (held) | Free a cursor a game captured |

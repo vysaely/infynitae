@@ -33,6 +33,7 @@ pub const KEY_W: u32 = 17;
 pub const KEY_E: u32 = 18;
 pub const KEY_I: u32 = 23;
 pub const KEY_P: u32 = 25;
+pub const KEY_T: u32 = 20;
 pub const KEY_C: u32 = 46;
 pub const KEY_S: u32 = 31;
 pub const KEY_R: u32 = 19;
@@ -81,6 +82,8 @@ pub enum KeyAction {
     TogglePrivacy,
     /// Super+Shift+I: toggle idle sleep inhibition (stay awake mode: prevents DPMS screen sleep and auto-lock)
     ToggleIdleInhibit,
+    /// Super+Shift+T: the focused window tears while fullscreen (its frames shown at once), or no longer
+    ToggleTearing,
     /// Super+Alt+C: save instant 20-minute replay clip
     SaveReplay,
     /// Super+Alt+R: toggle continuous screen recording
@@ -272,6 +275,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("CONTROL", KeyAction::ControlMenu),
     ("PRIVACY", KeyAction::TogglePrivacy),
     ("IDLE_INHIBIT", KeyAction::ToggleIdleInhibit),
+    ("TEARING", KeyAction::ToggleTearing),
     ("SAVE_REPLAY", KeyAction::SaveReplay),
     ("RECORD", KeyAction::ToggleRecording),
     ("FIT", KeyAction::FitToggle),
@@ -454,6 +458,10 @@ pub fn resolve_key_binding(
     // Super+Shift+I: toggle idle sleep inhibition (stay awake mode); Logo+Shift, never during interaction
     if key == KEY_I && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ToggleIdleInhibit);
+    }
+    // Super+Shift+T: the focused window tears while fullscreen; Logo+Shift, never during interaction
+    if key == KEY_T && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::ToggleTearing);
     }
     // Super+Alt+C: save instant 20-minute replay clip; Logo+Alt, never during interaction
     if key == KEY_C && mods.logo && mods.alt && !mods.ctrl && !mods.shift && !interaction_active {
@@ -926,6 +934,10 @@ mod tests {
         assert_eq!(
             resolve_key_binding(KEY_P, logo_shift, false),
             Some(KeyAction::TogglePrivacy)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_T, logo_shift, false),
+            Some(KeyAction::ToggleTearing)
         );
         assert_eq!(
             resolve_key_binding(KEY_VOLUMEUP, none, false),

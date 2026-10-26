@@ -508,6 +508,17 @@ case "$ACTION" in
             notify-send -a "Infynitae" -i security-low -h string:x-canonical-private-synchronous:privacy -t 1500 "Privacy Mode: OFF" "Window visible to screen capture" 2>/dev/null || true
         fi
         ;;
+    notify-tearing-on)
+        # Super+Shift+T: the focused window tears while fullscreen
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send -a "Infynitae" -i video-display -h string:x-canonical-private-synchronous:tearing -t 1500 "Tearing: ON" "Fullscreen frames show at once: lowest latency" 2>/dev/null || true
+        fi
+        ;;
+    notify-tearing-off)
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send -a "Infynitae" -i video-display -h string:x-canonical-private-synchronous:tearing -t 1500 "Tearing: OFF" "Frames wait for the screen's refresh" 2>/dev/null || true
+        fi
+        ;;
     notify-idle-inhibit-on)
         # OSD Toast: Idle Sleep Inhibited
         if command -v notify-send >/dev/null 2>&1; then

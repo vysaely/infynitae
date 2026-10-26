@@ -616,6 +616,7 @@ impl Core {
             KeyAction::ControlMenu => vec![Effect::SpawnControlMenu],
             KeyAction::TogglePrivacy => vec![Effect::TogglePrivacy],
             KeyAction::ToggleIdleInhibit => vec![Effect::ToggleIdleInhibit],
+            KeyAction::ToggleTearing => vec![Effect::ToggleTearing],
             KeyAction::SaveReplay => vec![Effect::SaveReplay],
             KeyAction::ToggleRecording => vec![Effect::ToggleRecording],
             KeyAction::VolumeUp => vec![Effect::VolumeUp],

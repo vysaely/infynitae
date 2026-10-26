@@ -107,5 +107,6 @@ these by date, e.g. "(owner, 2026-10-24)".
   checks pass; this file records the choices.
 - **AI agents do a lot of the work, and nothing lands unreviewed.** Every agent change is read in
   full and must pass the whole test suite and the checks before it is merged.
-- **One Smithay patch, by decision** (D-B12-PIN): Smithay 0.7.0 is vendored with one authorized
-  fix (P1, pointer constraints). Anything else is worked around in the adapter.
+- **Two Smithay patches, by decision** (D-B12-PIN): Smithay 0.7.0 is vendored with two
+  authorized changes: P1, pointer constraints; P2 (2026-10-26), async page flips for tearing in
+  games, which Smithay 0.7 cannot do. Anything else is worked around in the adapter.

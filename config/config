@@ -66,6 +66,9 @@ VIRTUAL_SCREEN="auto"             # [restart] with no screen connected (monitor 
                                   # virtual 1920x1080 one stands in, so remote desktop still works
                                   # | off
 DIRECT_SCANOUT="true"             # [save] a fullscreen game's frames go straight to the screen
+TEARING="true"                    # [save] a fullscreen game shows each frame at once (lowest
+                                  # latency, a visible tear line) when it asks (vsync off) or
+                                  # after Super+Shift+T on its window | false: never
 GAME_MODE="true"                  # [save] while a game is fullscreen (shown directly), gamemode
                                   # runs the CPU at full speed (when installed)
 BACKGROUND_PRIORITY="true"        # [save] an app whose windows have all been out of sight for 15

@@ -170,6 +170,8 @@ pub enum Effect {
     TogglePrivacy,
     /// Toggle idle sleep inhibition (stay-awake mode, by default Super+Shift+I).
     ToggleIdleInhibit,
+    /// Toggle tearing for the focused window while it is fullscreen (by default Super+Shift+T).
+    ToggleTearing,
     /// Save an instant replay clip (by default Super+Alt+C).
     SaveReplay,
     /// Toggle continuous screen recording (by default Super+Alt+R).

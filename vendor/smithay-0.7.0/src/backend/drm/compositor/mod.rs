@@ -748,12 +748,15 @@ impl<B: Buffer, F: Framebuffer> FrameState<B, F> {
         supports_fencing: bool,
         allow_partial_update: bool,
         event: bool,
+        async_flip: bool,
     ) -> Result<(), crate::backend::drm::error::Error> {
         debug_assert!(!self.planes.iter().any(|(_, state)| state.needs_test));
-        surface.page_flip(
-            self.build_planes(surface, supports_fencing, allow_partial_update),
-            event,
-        )
+        let planes = self.build_planes(surface, supports_fencing, allow_partial_update);
+        if async_flip {
+            surface.page_flip_async(planes, event)
+        } else {
+            surface.page_flip(planes, event)
+        }
     }
 
     #[profiling::function]
@@ -1060,6 +1063,7 @@ where
     primary_plane_damage_bag: DamageBag<i32, BufferCoords>,
     supports_fencing: bool,
     reset_pending: bool,
+    async_flip: bool,
     signaled_fence: Option<Arc<OwnedFd>>,
 
     framebuffer_exporter: F,
@@ -1246,6 +1250,7 @@ where
                         primary_plane_damage_bag: DamageBag::new(4),
                         primary_is_opaque: is_opaque,
                         reset_pending: true,
+            async_flip: false,
                         signaled_fence,
                         current_frame,
                         pending_frame: None,
@@ -1428,6 +1433,7 @@ where
             primary_plane_damage_bag: DamageBag::new(4),
             primary_is_opaque: is_opaque,
             reset_pending: true,
+            async_flip: false,
             signaled_fence,
             current_frame,
             pending_frame: None,
@@ -2511,6 +2517,17 @@ where
         self.handle_flip(prepared_frame, None, flip)
     }
 
+    /// Whether the next frames flip without waiting for the vblank: they show at once and may
+    /// tear. A flip the kernel refuses that way is made as usual, and turns this off.
+    pub fn set_async_flip(&mut self, async_flip: bool) {
+        self.async_flip = async_flip;
+    }
+
+    /// Whether frames flip without waiting for the vblank ([`set_async_flip`](Self::set_async_flip)).
+    pub fn async_flip(&self) -> bool {
+        self.async_flip
+    }
+
     /// Re-evaluates the current state of the crtc and forces calls to [`render_frame`](DrmCompositor::render_frame)
     /// to return `false` for [`RenderFrameResult::is_empty`] until a frame is queued with [`queue_frame`](DrmCompositor::queue_frame).
     ///
@@ -2538,10 +2555,27 @@ where
             prepared_frame
                 .frame
                 .commit(&self.surface, self.supports_fencing, allow_partial_update, true)
+        } else if self.async_flip {
+            let flip = prepared_frame.frame.page_flip(
+                &self.surface,
+                self.supports_fencing,
+                allow_partial_update,
+                true,
+                true,
+            );
+            if let Err(err) = &flip {
+                warn!("Async page flip refused, flipping on the vblank: {}", err);
+                self.async_flip = false;
+                prepared_frame
+                    .frame
+                    .page_flip(&self.surface, self.supports_fencing, allow_partial_update, true, false)
+            } else {
+                flip
+            }
         } else {
             prepared_frame
                 .frame
-                .page_flip(&self.surface, self.supports_fencing, allow_partial_update, true)
+                .page_flip(&self.surface, self.supports_fencing, allow_partial_update, true, false)
         };
 
         self.handle_flip(prepared_frame, Some(user_data), flip)

@@ -1149,6 +1149,7 @@ impl Core {
             | E::SpawnControlMenu
             | E::TogglePrivacy
             | E::ToggleIdleInhibit
+            | E::ToggleTearing
             | E::SaveReplay
             | E::ToggleRecording
             | E::VolumeUp

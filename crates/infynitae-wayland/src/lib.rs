@@ -40,6 +40,7 @@ pub mod session;
 mod shortcuts_inhibit;
 mod signals;
 mod snapshot;
+pub mod tearing;
 pub mod virtual_input;
 mod wlr_toplevels;
 pub mod xwayland;
@@ -203,6 +204,8 @@ pub struct WaylandState {
     foreign_toplevel_list: smithay::wayland::foreign_toplevel_list::ForeignToplevelListState,
     /// Apps keeping the screens on (`idle_inhibit`).
     idle_inhibit: idle_inhibit::IdleInhibit,
+    /// Fullscreen games' frames shown at once (`tearing`).
+    tearing: tearing::Tearing,
     /// Each finger's last location sent (`touch`: a cancel needs it).
     touch_last: Vec<(u32, infynitae_core::geom::CanvasPos)>,
     foreign_toplevels: std::collections::HashMap<
@@ -544,6 +547,7 @@ impl WaylandState {
                     display,
                 ),
             idle_inhibit: idle_inhibit::IdleInhibit::new(display),
+            tearing: tearing::Tearing::new(display),
             touch_last: Vec::new(),
             foreign_toplevels: std::collections::HashMap::new(),
             shortcuts_inhibit: shortcuts_inhibit::ShortcutsInhibitState::new(display),
@@ -786,6 +790,7 @@ impl WaylandState {
                 let mut exec_lines: Vec<(String, String)> = Vec::new();
                 let mut max_app_scale: Option<f64> = None;
                 let (mut background_priority, mut game_mode) = (true, true);
+                let mut tearing = true;
                 for line in content.lines() {
                     if let Some((key, val)) = config_line(line) {
                         let (key, val) = (key.as_str(), val.as_str());
@@ -832,6 +837,12 @@ impl WaylandState {
                             }
                             "BACKGROUND_PRIORITY" => {
                                 background_priority = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
+                            }
+                            "TEARING" => {
+                                tearing = !matches!(
                                     val.to_lowercase().as_str(),
                                     "0" | "false" | "off" | "no"
                                 );
@@ -1060,6 +1071,7 @@ impl WaylandState {
                 self.exec_commands = commands;
                 self.set_max_app_scale(max_app_scale);
                 self.background.game_mode = game_mode;
+                self.set_tearing_enabled(tearing);
                 self.background.enabled = background_priority;
                 if !background_priority {
                     self.background_restore_all();
