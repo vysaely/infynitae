@@ -72,6 +72,9 @@ EOF
     mkdir -p "$HOME/.config"
     if [ ! -f "$HOME/.config/kdeglobals" ]; then
         cat << EOF > "$HOME/.config/kdeglobals"
+[General]
+TerminalApplication=$HOME/.local/bin/xdg-terminal-exec
+
 [Icons]
 Theme=$ICON_THEME
 
@@ -79,6 +82,29 @@ Theme=$ICON_THEME
 cursorTheme=$CURSOR_THEME
 cursorSize=$CURSOR_SIZE
 EOF
+    fi
+
+    # 4b. "Open Terminal Here" in file managers: xdg-terminal-exec (Infynitae's, in
+    # ~/.local/bin), which runs TERMINAL. Each pointer is set only where there is none of the
+    # user's own. Thunar's stock action goes through exo-open, which needs xfce4-settings.
+    term_exec="$HOME/.local/bin/xdg-terminal-exec"
+    uca="$HOME/.config/Thunar/uca.xml"
+    if [ ! -f "$uca" ] && [ -f /etc/xdg/Thunar/uca.xml ]; then
+        mkdir -p "$HOME/.config/Thunar"
+        cp /etc/xdg/Thunar/uca.xml "$uca"
+    fi
+    if [ -f "$uca" ]; then
+        sed -i "s|<command>exo-open --working-directory %f --launch TerminalEmulator</command>|<command>$term_exec --dir=%f</command>|" "$uca"
+    fi
+    # Dolphin (KDE): its terminal, unless kdeglobals names one
+    if [ -f "$HOME/.config/kdeglobals" ] && ! grep -q '^TerminalApplication=' "$HOME/.config/kdeglobals"; then
+        printf '\n[General]\nTerminalApplication=%s\n' "$term_exec" >> "$HOME/.config/kdeglobals"
+    fi
+    # Nemo (Cinnamon): its terminal, while it is the stock one
+    if command -v gsettings >/dev/null 2>&1 \
+        && gsettings get org.cinnamon.desktop.default-applications.terminal exec 2>/dev/null \
+            | grep -qx "'x-terminal-emulator'\|'gnome-terminal'"; then
+        gsettings set org.cinnamon.desktop.default-applications.terminal exec "$term_exec" 2>/dev/null || true
     fi
 
     # 5. Synchronize GSettings / D-Bus if present (optional)

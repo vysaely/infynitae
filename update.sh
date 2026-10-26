@@ -102,6 +102,7 @@ install -m 755 update.sh "$HOME/.local/bin/infynitae-update"
 install -m 755 live/infynitae-session "$HOME/.local/bin/infynitae-session.new" && mv -f "$HOME/.local/bin/infynitae-session.new" "$HOME/.local/bin/infynitae-session"
 if [ -f "live/xdg-open" ]; then
     install -m 755 live/xdg-open "$HOME/.local/bin/xdg-open" 2>/dev/null || true
+    install -m 755 live/xdg-terminal-exec "$HOME/.local/bin/xdg-terminal-exec" 2>/dev/null || true
 fi
 
 # 5. the C helpers (portal, polkit, lock, wallpaper, recorder stream)

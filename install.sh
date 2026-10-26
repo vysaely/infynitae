@@ -25,7 +25,8 @@ Leave out a part:
   --no-clipboard       clipboard history, Super+V (cliphist)
   --no-fonts           fonts for other languages and emoji (Noto)
   --no-recorder        screen recording and replay clips (ffmpeg)
-  --no-files           a file manager with previews (thunar, tumbler), unless one is in use
+  --no-files           a file manager (thunar) with previews, archives and phones, unless one
+                       is in use
   --no-terminal        a terminal when none is installed (alacritty)
   --no-bluetooth       Bluetooth, even with an adapter
   --no-power-profiles  power modes on a laptop (power-profiles-daemon)
@@ -222,6 +223,7 @@ install -m 755 live/infynitae-restore "$HOME/.local/bin/infynitae-restore"
 install -m 755 live/record/infynitae-recorder "$HOME/.local/bin/infynitae-recorder"
 install -m 755 live/infynitae-session "$HOME/.local/bin/infynitae-session"
 install -m 755 live/xdg-open "$HOME/.local/bin/xdg-open"
+install -m 755 live/xdg-terminal-exec "$HOME/.local/bin/xdg-terminal-exec"
 # the C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream): one recipe
 # shared with infynitae-update; a failure is reported, never hidden
 sh live/build-helpers.sh "$INSTALL_DIR" "$HOME/.local/bin" \

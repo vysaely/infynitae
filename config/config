@@ -81,7 +81,7 @@ OUTPUT_LAYOUT="left-to-right"     # or right-to-left
 
 # ── Apps ──────────────────────────────────────────────────────────────── [use] ──
 # "auto": the first one installed (terminal: kitty, alacritty, foot, …), or any command.
-TERMINAL="auto"                   # Super+Q
+TERMINAL="auto"                   # Super+Q, and file managers' "Open Terminal Here"
 LAUNCHER="auto"                   # Super+W — fuzzel, rofi, tofi, wofi, or e.g. "wofi --show drun"
 ENABLE_QUICKSHELL="false"         # the Quickshell island/radar instead (needs quickshell)
 FILE_MANAGER="auto"               # Super+E — terminal ones (yazi, lf) open in TERMINAL

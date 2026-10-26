@@ -1,0 +1,13 @@
+#!/bin/sh
+# xdg-terminal-exec: your terminal (TERMINAL in the Infynitae config), in the current folder or
+# --dir=PATH; with a command, that command in it. File managers' "Open Terminal Here" and GLib
+# (apps that run in a terminal) call this name. Other --option=value flags are ignored.
+while :; do
+    case "$1" in
+        --dir=*) cd "${1#--dir=}" || exit 1; shift ;;
+        --*=*) shift ;;
+        --) shift; break ;;
+        *) break ;;
+    esac
+done
+exec sh "$HOME/infynitae/live/launch.sh" terminal "$@"

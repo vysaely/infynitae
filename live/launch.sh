@@ -89,8 +89,12 @@ TERM_CMD=$(resolve_terminal)
 
 case "$ACTION" in
     terminal)
-        # Super+Q: Terminal emulator (auto-detects kitty, alacritty, foot, or uses $TERMINAL)
-        if [ -n "$TERM_CMD" ]; then
+        # Super+Q: Terminal emulator (auto-detects kitty, alacritty, foot, or uses $TERMINAL);
+        # with a command and its arguments (xdg-terminal-exec): that command in it
+        if [ -n "$TERM_CMD" ] && [ $# -gt 1 ]; then
+            shift
+            exec $TERM_CMD -e "$@"
+        elif [ -n "$TERM_CMD" ]; then
             exec $TERM_CMD
         else
             echo "[infynitae] Error: No terminal emulator found. Please install kitty, alacritty, or foot." >&2
