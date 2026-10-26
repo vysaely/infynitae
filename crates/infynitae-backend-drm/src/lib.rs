@@ -1847,14 +1847,30 @@ fn render(data: &mut LoopData) {
             data.state.overlay_planes,
         ) {
             (false, _) => FrameFlags::empty(),
-            (true, false) => FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT,
+            // any format: a game's 10-bit buffer is scanned out too (test-committed first)
+            (true, false) => {
+                FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT
+                    | FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT_ANY
+            }
             (true, true) => {
-                FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT | FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT
+                FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT
+                    | FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT_ANY
+                    | FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT
             }
         };
         if data.state.hardware_cursor {
             frame_flags |= FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT;
         }
+        // behind a fullscreen window the screen is black: Smithay scans out a window that does
+        // not say it is opaque (most games and players) only over a black background
+        let core = data.state.core();
+        let presenting =
+            core.presentation(id).is_some() && !core.is_presentation_suppressed(id) && !locked;
+        let clear = if presenting {
+            smithay::backend::renderer::Color32F::BLACK
+        } else {
+            clear
+        };
         let queued = match s.compositor.render_frame(
             &mut data.renderer,
             &elements,
