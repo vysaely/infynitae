@@ -76,6 +76,7 @@ if command -v pacman >/dev/null 2>&1; then
     mapfile -t -O "${#NEW_PKGS[@]}" NEW_PKGS < <(missing_pkgs $(cat live/packages.txt))
     for group in $(optional_groups); do
         is_skipped "$group" && continue
+        group_applies "$group" || continue
         mapfile -t -O "${#NEW_PKGS[@]}" NEW_PKGS < <(missing_pkgs $(optional_pkgs "$group"))
     done
     pacman -Qi rustup >/dev/null 2>&1 || NEW_PKGS+=(rustup)

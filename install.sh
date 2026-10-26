@@ -27,6 +27,7 @@ Leave out an optional part (the session starts each one only when it is installe
   --no-terminal        no terminal added when none is installed (alacritty)
   --no-bluetooth       Bluetooth is not set up, even with an adapter
   --no-power-profiles  no power modes on a laptop (power-profiles-daemon)
+  --no-autorotate      no screen auto-rotation on convertibles (iio-sensor-proxy)
   --minimal            all of the above
 
 Turn on:
@@ -48,13 +49,13 @@ POWER_PROFILES=true
 SKIP=""
 for arg in "$@"; do
     case "$arg" in
-        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder)
+        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate)
             SKIP="$SKIP ${arg#--no-}" ;;
         --no-terminal) TERMINAL_PKG=false ;;
         --no-bluetooth) BLUETOOTH=false ;;
         --no-power-profiles) POWER_PROFILES=false ;;
         --minimal)
-            SKIP="notifications keyring automount clipboard fonts recorder"
+            SKIP="notifications keyring automount clipboard fonts recorder autorotate"
             TERMINAL_PKG=false BLUETOOTH=false POWER_PROFILES=false ;;
         --no-autologin) AUTOLOGIN=false ;;
         --replay-buffer) REPLAY_BUFFER=true ;;
@@ -154,6 +155,7 @@ PKGS=()
 mapfile -t -O "${#PKGS[@]}" PKGS < <(missing_pkgs $(cat "$INSTALL_DIR/live/packages.txt"))
 for group in $(optional_groups); do
     is_skipped "$group" && continue
+    group_applies "$group" || continue
     mapfile -t -O "${#PKGS[@]}" PKGS < <(missing_pkgs $(optional_pkgs "$group"))
 done
 # a terminal for Super+Q, when there is none
@@ -252,6 +254,7 @@ if [ ! -f "$HOME/.config/infynitae/config" ]; then
         sed -i 's/^CLIPBOARD_HISTORY="[^"]*"/CLIPBOARD_HISTORY="false"/; s/^CLIPBOARD_PERSIST="[^"]*"/CLIPBOARD_PERSIST="false"/' \
             "$HOME/.config/infynitae/config"
     fi
+    is_skipped autorotate && sed -i 's/^AUTO_ROTATE="[^"]*"/AUTO_ROTATE="false"/' "$HOME/.config/infynitae/config"
     [ "$REPLAY_BUFFER" = true ] && sed -i 's/^ENABLE_REPLAY_BUFFER="[^"]*"/ENABLE_REPLAY_BUFFER="true"/' "$HOME/.config/infynitae/config"
     echo "==> Created your configuration: ~/.config/infynitae/config"
 else

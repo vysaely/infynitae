@@ -51,6 +51,27 @@ optional_pkgs() {
     grep -v '^[[:space:]]*\(#\|$\)' "$INFY_LIVE/packages-optional.txt" \
         | awk -v g="$1" '$1 == g { for (i = 2; i <= NF; i++) print $i }'
 }
+has_accelerometer() {
+    local dev f
+    for dev in /sys/bus/iio/devices/iio:device*; do
+        [ -d "$dev" ] || continue
+        for f in "$dev"/in_accel*_raw "$dev"/in_accel_raw; do
+            [ -e "$f" ] && return 0
+        done
+        if [ -f "$dev/name" ]; then
+            case "$(cat "$dev/name" 2>/dev/null)" in
+                *accel*|*ACCEL*|*accelerometer*|*Accelerometer*) return 0 ;;
+            esac
+        fi
+    done
+    return 1
+}
+group_applies() {
+    case "$1" in
+        autorotate) has_accelerometer ;;
+        *) return 0 ;;
+    esac
+}
 is_skipped() {
     case " ${SKIP:-} " in *" $1 "*) return 0 ;; esac
     return 1
