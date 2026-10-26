@@ -35,7 +35,7 @@ For the text login instead, install with `./install.sh --no-autologin`, or later
 
 Every optional part can be left out: `--no-notifications`, `--no-keyring`, `--no-automount`,
 `--no-clipboard`, `--no-fonts`, `--no-recorder`, `--no-terminal`, `--no-bluetooth`,
-`--no-power-profiles`, or `--minimal` for all of them (`./install.sh --help`). `--replay-buffer`
+`--no-power-profiles`, `--no-autorotate`, or `--minimal` for all of them (`./install.sh --help`). `--replay-buffer`
 turns on the replay buffer (the last minutes of the screen, saved with Super+Alt+C).
 `infynitae-update` keeps them out.
 
