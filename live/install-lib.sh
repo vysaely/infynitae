@@ -66,9 +66,19 @@ has_accelerometer() {
     done
     return 1
 }
+# a file manager other than Thunar is in use: Thunar is not added beside it
+other_file_manager() {
+    local fm
+    for fm in dolphin nautilus nemo pcmanfm pcmanfm-qt caja yazi lf; do
+        command -v "$fm" >/dev/null 2>&1 && return 0
+    done
+    return 1
+}
 group_applies() {
     case "$1" in
         autorotate) has_accelerometer ;;
+        # Thunar with its previews (tumbler) when it is there or nothing else is
+        files) command -v thunar >/dev/null 2>&1 || ! other_file_manager ;;
         *) return 0 ;;
     esac
 }

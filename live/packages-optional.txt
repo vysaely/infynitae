@@ -7,4 +7,5 @@ automount udisks2 udiskie gvfs
 clipboard wl-clip-persist cliphist
 fonts noto-fonts noto-fonts-emoji
 recorder ffmpeg
+files thunar tumbler ffmpegthumbnailer
 autorotate iio-sensor-proxy wlr-randr

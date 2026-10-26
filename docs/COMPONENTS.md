@@ -11,7 +11,7 @@ this repository already.
 | Terminal | first installed: kitty, alacritty, foot… | wezterm, ghostty, konsole, any | `TERMINAL` | No: huge, and good ones exist |
 | Launcher | fuzzel | rofi, tofi, wofi, walker, anyrun | `LAUNCHER` | **Yes, a good fit**: a launcher that knows the canvas (open here, jump to a window). The Quickshell island is a start |
 | Menus (control menu, clipboard) | `fuzzel --dmenu` | `rofi -dmenu`, tofi, bemenu, `wofi --dmenu` | `MENU_PICKER` | Comes with our launcher |
-| File manager | yazi, lf (in the terminal), thunar, nemo, dolphin | nautilus, pcmanfm, any | `FILE_MANAGER` | No |
+| File manager | thunar with tumbler's previews (installed unless another is in use); yazi, lf (in the terminal), nemo, dolphin when installed | nautilus, pcmanfm, any | `FILE_MANAGER` | No |
 | Browser | the system default | any | `BROWSER` | No |
 
 ## Desktop services

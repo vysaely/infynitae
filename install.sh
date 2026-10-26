@@ -25,6 +25,7 @@ Leave out a part:
   --no-clipboard       clipboard history, Super+V (cliphist)
   --no-fonts           fonts for other languages and emoji (Noto)
   --no-recorder        screen recording and replay clips (ffmpeg)
+  --no-files           a file manager with previews (thunar, tumbler), unless one is in use
   --no-terminal        a terminal when none is installed (alacritty)
   --no-bluetooth       Bluetooth, even with an adapter
   --no-power-profiles  power modes on a laptop (power-profiles-daemon)
@@ -50,13 +51,13 @@ POWER_PROFILES=true
 SKIP=""
 for arg in "$@"; do
     case "$arg" in
-        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate)
+        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate | --no-files)
             SKIP="$SKIP ${arg#--no-}" ;;
         --no-terminal) TERMINAL_PKG=false ;;
         --no-bluetooth) BLUETOOTH=false ;;
         --no-power-profiles) POWER_PROFILES=false ;;
         --minimal)
-            SKIP="notifications keyring automount clipboard fonts recorder autorotate"
+            SKIP="notifications keyring automount clipboard fonts recorder autorotate files"
             TERMINAL_PKG=false BLUETOOTH=false POWER_PROFILES=false ;;
         --no-autologin) AUTOLOGIN=false ;;
         --replay-buffer) REPLAY_BUFFER=true ;;
