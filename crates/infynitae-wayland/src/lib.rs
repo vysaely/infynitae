@@ -312,6 +312,9 @@ pub struct WaylandState {
     pub overlay_planes: bool,
     pub wallpaper: Option<String>,
     pub wallpaper_mode: Option<String>,
+    /// The config was read once: a wallpaper change after it restarts the wallpaper (the
+    /// session script starts the first one).
+    wallpaper_loaded: bool,
     pub keyboard_repeat_delay: i32,
     pub keyboard_repeat_rate: i32,
     pub private_elements: std::collections::HashSet<infynitae_core::stage::ElementId>,
@@ -588,6 +591,7 @@ impl WaylandState {
             overlay_planes: false,
             wallpaper: None,
             wallpaper_mode: None,
+            wallpaper_loaded: false,
             keyboard_repeat_delay: repeat_delay,
             keyboard_repeat_rate: repeat_rate,
             private_elements: std::collections::HashSet::new(),
@@ -1038,20 +1042,27 @@ impl WaylandState {
                 self.core.set_free_cursor_on_super(free_cursor_on_super);
                 self.exec_commands = commands;
                 self.set_max_app_scale(max_app_scale);
+                let first_load = !std::mem::replace(&mut self.wallpaper_loaded, true);
                 if new_wallpaper != self.wallpaper || new_wallpaper_mode != self.wallpaper_mode {
                     self.wallpaper = new_wallpaper;
                     self.wallpaper_mode = new_wallpaper_mode;
-                    let home = std::env::var("HOME").unwrap_or_default();
-                    let bin = format!("{home}/.local/bin/infynitae-wallpaper");
-                    let bin_fallback =
-                        format!("{home}/infynitae/live/wallpaper/infynitae-wallpaper");
-                    let target_bin = if std::path::Path::new(&bin).exists() {
-                        bin
-                    } else {
-                        bin_fallback
-                    };
-                    let _ = std::process::Command::new(target_bin).spawn();
-                    self.spawned_children = true;
+                    // infynitae-reload finds this session's socket (the compositor itself has no
+                    // WAYLAND_DISPLAY on the console) and expands the path; at the first load the
+                    // session script starts the wallpaper
+                    if !first_load {
+                        let home = std::env::var("HOME").unwrap_or_default();
+                        let bin = format!("{home}/.local/bin/infynitae-reload");
+                        let reload = if std::path::Path::new(&bin).exists() {
+                            bin
+                        } else {
+                            format!("{home}/infynitae/live/infynitae-reload")
+                        };
+                        let _ = std::process::Command::new(reload)
+                            .arg("wallpaper")
+                            .stdout(std::process::Stdio::null())
+                            .spawn();
+                        self.spawned_children = true;
+                    }
                 }
             }
         }
