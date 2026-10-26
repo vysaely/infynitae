@@ -105,6 +105,7 @@ within seconds it stops restarting. `infynitae-session stop` ends the session.
 | | |
 | :--- | :--- |
 | [STATUS](docs/STATUS.md) | What works, what is untested, what is missing |
+| [ROADMAP](docs/ROADMAP.md) | What comes next, and ideas such as desktops on the canvas |
 | [COMPONENTS](docs/COMPONENTS.md) | Every piece of the desktop and what to use instead |
 | [DEVELOPMENT](docs/DEVELOPMENT.md) | Layout, building, the test suite and the checks |
 | [DECISIONS](docs/DECISIONS.md) | The choices behind how it behaves, and why |
