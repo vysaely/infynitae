@@ -8,6 +8,16 @@ set -e
 REPO_URL="https://github.com/vysaely/infynitae.git"
 INSTALL_DIR="$HOME/infynitae"
 
+# --autologin: the machine boots straight to the Infynitae lock screen (tty1 autologin with
+# START_LOCKED; live/setup-autologin.sh). Through curl: ... | bash -s -- --autologin
+AUTOLOGIN=false
+for arg in "$@"; do
+    case "$arg" in
+        --autologin) AUTOLOGIN=true ;;
+        *) echo "unknown option: $arg (known: --autologin)" >&2; exit 2 ;;
+    esac
+done
+
 echo "=========================================================="
 echo "      INFYNITAE - PURE ARCH LINUX INSTALLER"
 echo "=========================================================="
@@ -197,11 +207,32 @@ EOF
 sudo mkdir -p /usr/share/wayland-sessions 2>/dev/null || true
 sudo cp -f "$HOME/.local/share/wayland-sessions/infynitae.desktop" /usr/share/wayland-sessions/ 2>/dev/null || true
 
+# 12. RustDesk, when installed: the session restarts its service once the compositor runs, so it
+#     sees a Wayland session (live/session.sh); this rule allows that one restart, nothing else
+if systemctl cat rustdesk.service >/dev/null 2>&1; then
+    sudo install -D -m 644 "$HOME/infynitae/live/remote/50-infynitae-rustdesk.rules" \
+        /etc/polkit-1/rules.d/50-infynitae-rustdesk.rules
+    echo "==> RustDesk: allowed the session to restart its service"
+fi
+
+# 13. How Infynitae starts after a reboot: a display manager's session list, else logging in on
+#     tty1 (or, with --autologin, tty1 logging in by itself to the lock screen)
+if systemctl is-enabled --quiet display-manager.service 2>/dev/null; then
+    START_HOW="pick \"Infynitae\" at your display manager's login"
+elif [ "$AUTOLOGIN" = true ]; then
+    sudo sh "$HOME/infynitae/live/setup-autologin.sh"
+    START_HOW="reboot: the machine starts at the Infynitae lock screen"
+else
+    sh "$HOME/infynitae/live/setup-autologin.sh" --autostart
+    START_HOW="reboot (or log out) and log in on tty1: Infynitae starts"
+fi
+
 echo ""
 echo "=========================================================="
 echo "        INFYNITAE INSTALLATION COMPLETE!"
 echo "=========================================================="
-echo "  Run anytime:  infynitae-session"
+echo "  Start: $START_HOW"
+echo "  Boot straight to the lock screen instead: sudo ~/infynitae/live/setup-autologin.sh"
 echo ""
 echo "  Keybindings:"
 echo "    Super + 1..9         Focus Window Slot 1..9"
@@ -215,14 +246,13 @@ echo "    Super + W            Launcher (auto: fuzzel, rofi, …)"
 echo "    Super + E            Files"
 echo "    Super + L            Lock Screen"
 echo "    Super + V            Clipboard History"
+echo "    Super + A            Control Menu (Wi-Fi, Bluetooth, sound, power)"
+echo "    Super + Shift + P    Hide Window from Screenshots & Sharing"
+echo "    Super + Alt + C      Save Replay Clip"
 echo "    Super + Shift + S    Screenshot"
 echo "    Super + Shift + R    Region Screenshot"
 echo "    Super + Shift + Backspace  Reload Config & Helpers"
 echo "    Super + C            Close Window (Shift: force)"
 echo "    Super + Middle drag  Pan the canvas"
 echo "    Ctrl + Alt + Backspace Restart Compositor (infynitae-session stop: quit)"
-echo "=========================================================="
-echo "  Start Infynitae from a text console (Ctrl+Alt+F2, log in) with:"
-echo "      infynitae-session"
-echo "  or pick \"Infynitae\" in your display manager."
 echo "=========================================================="

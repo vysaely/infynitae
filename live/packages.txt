@@ -36,3 +36,4 @@ gvfs
 xdg-user-dirs
 noto-fonts
 noto-fonts-emoji
+python

@@ -119,6 +119,14 @@ if ! cmp -s live/infynitae-session-shim /usr/local/bin/infynitae-session && comm
     sudo install -D -m 755 live/infynitae-session-shim /usr/local/bin/infynitae-session || true
 fi
 
+# 7b. RustDesk, when installed: the rule that lets the session restart its service (install.sh)
+if systemctl cat rustdesk.service >/dev/null 2>&1 \
+    && ! cmp -s live/remote/50-infynitae-rustdesk.rules /etc/polkit-1/rules.d/50-infynitae-rustdesk.rules \
+    && command -v sudo >/dev/null 2>&1; then
+    sudo install -D -m 644 live/remote/50-infynitae-rustdesk.rules \
+        /etc/polkit-1/rules.d/50-infynitae-rustdesk.rules || true
+fi
+
 # 8. Safely synchronize configuration templates without overwriting user settings
 mkdir -p "$HOME/.config/infynitae"
 if [ -f "config/config" ]; then
