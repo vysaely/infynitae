@@ -1,0 +1,59 @@
+#!/bin/sh
+# infynitae-open-with FILE|URL: pick the app to open it with, in MENU_PICKER (empty: fuzzel
+# --dmenu), from the apps that say they handle its type; the default is marked. "Set the
+# default" saves the pick in ~/.config/mimeapps.list, which GTK, KDE and xdg-open all read.
+# xdg-open shows this when a type has no app yet.
+[ -f "$HOME/infynitae/live/config.sh" ] && . "$HOME/infynitae/live/config.sh"
+PICKER="${MENU_PICKER:-fuzzel --dmenu}"
+target="$1"
+[ -n "$target" ] || { echo "usage: infynitae-open-with FILE|URL" >&2; exit 2; }
+note() { command -v notify-send >/dev/null 2>&1 && notify-send -a Infynitae "$1" "${2:-}"; }
+
+# the type: a URL's scheme handler, or the file's content type
+case "$target" in
+    *://*) type="x-scheme-handler/${target%%://*}" ;;
+    *) type=$(LC_ALL=C gio info -a standard::content-type "$target" 2>/dev/null \
+        | sed -n 's/^ *standard::content-type: //p') ;;
+esac
+[ -n "$type" ] || { note "Cannot open" "$target"; exit 1; }
+
+# "desktop-id<TAB>Name" for every app registered for the type, the default first
+apps=$(LC_ALL=C gio mime "$type" 2>/dev/null | awk '
+    /^Default application/ { sub(/.*: /, ""); def = $0; next }
+    /^Registered applications/ { reg = 1; next }
+    /^[^\t]/ { reg = 0 }
+    reg && /^\t/ { sub(/^\t/, ""); ids[++n] = $0 }
+    END { if (def != "") print def; for (i = 1; i <= n; i++) if (ids[i] != def) print ids[i] }' \
+    | while IFS= read -r id; do
+        for dir in "${XDG_DATA_HOME:-$HOME/.local/share}" $(echo "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}" | tr ':' ' '); do
+            f="$dir/applications/$id"
+            [ -f "$f" ] || continue
+            name=$(sed -n 's/^Name=//p' "$f" | head -n 1)
+            printf '%s\t%s\n' "$id" "${name:-$id}"
+            break
+        done
+    done)
+if [ -z "$apps" ]; then
+    note "No app opens $type" "Install one, or open it from a terminal"
+    exit 1
+fi
+default=$(LC_ALL=C gio mime "$type" 2>/dev/null | sed -n 's/^Default application.*: //p')
+label() { awk -F'\t' -v d="$default" '{ print $2 ($1 == d ? "  (default)" : "") }'; }
+set_label="Set the default for $type…"
+
+choice=$( { printf '%s\n' "$apps" | label; echo "$set_label"; } | $PICKER)
+[ -n "$choice" ] || exit 0
+if [ "$choice" = "$set_label" ]; then
+    choice=$(printf '%s\n' "$apps" | label | $PICKER)
+    [ -n "$choice" ] || exit 0
+    save=1
+fi
+id=$(printf '%s\n' "$apps" | awk -F'\t' -v d="$default" -v c="$choice" \
+    '{ if ($2 ($1 == d ? "  (default)" : "") == c) { print $1; exit } }')
+[ -n "$id" ] || exit 1
+if [ -n "${save:-}" ]; then
+    gio mime "$type" "$id" >/dev/null 2>&1 && note "Default for $type" "$(printf '%s' "$choice" | sed 's/  (default)$//')"
+fi
+exec gio launch "$(for dir in "${XDG_DATA_HOME:-$HOME/.local/share}" $(echo "${XDG_DATA_DIRS:-/usr/local/share:/usr/share}" | tr ':' ' '); do
+    [ -f "$dir/applications/$id" ] && echo "$dir/applications/$id" && break
+done)" "$target"

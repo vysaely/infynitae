@@ -58,6 +58,10 @@ These pass the test suite but have not run on a real screen or device yet:
 - **Zoomed-out windows averaged** (`SCALING_FILTER`, `fast` turns it off): text and thin lines
   stay legible below 100% instead of shimmering; checked on this GPU off-screen. `MAX_APP_SCALE`
   sets how far apps redraw sharper as you zoom in (default 3).
+- **Open with, everywhere:** `infynitae-open-with FILE` picks an app for a file (the default
+  marked) and can save it as the default in `mimeapps.list`, which GTK, KDE and `xdg-open` share;
+  `xdg-open` says so when no app opens a type. KDE apps (Dolphin) get the menu file their "Open
+  With" needs. File managers' "Open Terminal Here" runs `TERMINAL` (`xdg-terminal-exec`).
 - **Laptop lid:** closing it with another screen connected moves everything to that screen
   until the lid opens. With no other screen, logind suspends as usual.
 - **Night light, screen power,** the capture dot, single-window sharing.

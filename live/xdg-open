@@ -2,7 +2,12 @@
 # Infynitae non-blocking URL and file opener wrapper
 # Ensures CLI tools, OAuth handlers, and scripts do not hang on synchronous browser launch
 if command -v gio >/dev/null 2>&1; then
-    exec gio open "$@"
+    gio open "$@" && exit 0
+    # no app for its type: say so, or let you pick (infynitae-open-with)
+    for o in "$HOME/.local/bin/infynitae-open-with" "$HOME/infynitae/live/infynitae-open-with"; do
+        [ -x "$o" ] && exec "$o" "$1"
+    done
+    exit 1
 elif [ -x /usr/bin/xdg-open ]; then
     exec /usr/bin/xdg-open "$@"
 else

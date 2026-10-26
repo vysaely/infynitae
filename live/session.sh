@@ -158,6 +158,14 @@ case "${AUTOMOUNT:-true}" in
         ;;
 esac
 
+# 6d2. KDE apps' list of apps (Open With), from the menu file settings.sh provides
+for b in kbuildsycoca6 kbuildsycoca5; do
+    if command -v "$b" >/dev/null 2>&1; then
+        "$b" >/dev/null 2>&1 &
+        break
+    fi
+done
+
 # 6e. ~/Documents, ~/Downloads, ~/Pictures … exist and apps know them (xdg-user-dirs)
 if command -v xdg-user-dirs-update >/dev/null 2>&1; then
     xdg-user-dirs-update >/dev/null 2>&1 || true

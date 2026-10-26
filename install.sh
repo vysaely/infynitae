@@ -224,6 +224,7 @@ install -m 755 live/record/infynitae-recorder "$HOME/.local/bin/infynitae-record
 install -m 755 live/infynitae-session "$HOME/.local/bin/infynitae-session"
 install -m 755 live/xdg-open "$HOME/.local/bin/xdg-open"
 install -m 755 live/xdg-terminal-exec "$HOME/.local/bin/xdg-terminal-exec"
+install -m 755 live/infynitae-open-with "$HOME/.local/bin/infynitae-open-with"
 # the C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream): one recipe
 # shared with infynitae-update; a failure is reported, never hidden
 sh live/build-helpers.sh "$INSTALL_DIR" "$HOME/.local/bin" \

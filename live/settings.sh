@@ -107,6 +107,22 @@ EOF
         gsettings set org.cinnamon.desktop.default-applications.terminal exec "$term_exec" 2>/dev/null || true
     fi
 
+    # 4c. KDE apps (Dolphin's "Open With", file associations) list apps through a menu file only
+    # KDE Plasma installs: the standard one that includes every app, unless there is one
+    if [ ! -f "$HOME/.config/menus/applications.menu" ] && [ ! -f /etc/xdg/menus/applications.menu ]; then
+        mkdir -p "$HOME/.config/menus"
+        cat << 'EOF' > "$HOME/.config/menus/applications.menu"
+<!DOCTYPE Menu PUBLIC "-//freedesktop//DTD Menu 1.0//EN"
+ "http://www.freedesktop.org/standards/menu-spec/1.0/menu.dtd">
+<Menu>
+  <Name>Applications</Name>
+  <DefaultAppDirs/>
+  <DefaultDirectoryDirs/>
+  <Include><All/></Include>
+</Menu>
+EOF
+    fi
+
     # 5. Synchronize GSettings / D-Bus if present (optional)
     if command -v gsettings >/dev/null 2>&1; then
         gsettings set org.gnome.desktop.interface cursor-theme "$CURSOR_THEME" 2>/dev/null || true
