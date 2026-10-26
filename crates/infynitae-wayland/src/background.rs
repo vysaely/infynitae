@@ -149,7 +149,16 @@ impl WaylandState {
         };
         println!("[infynitae] Game mode on for process {pid}");
         self.background.game = Some((window, pid));
-        self.spawn_action_with("game-mode", &format!("on {pid}"));
+        self.gamemode(true, pid);
+    }
+
+    /// Registers the game with gamemode or ends it (`launch.sh game-mode`); never for this
+    /// process (a client in the compositor's own process, as in the test suite).
+    fn gamemode(&mut self, on: bool, pid: u32) {
+        if pid != std::process::id() {
+            let state = if on { "on" } else { "off" };
+            self.spawn_action_with("game-mode", &format!("{state} {pid}"));
+        }
     }
 
     /// The game, if game mode is on: its window and app.
@@ -175,7 +184,7 @@ impl WaylandState {
             if !still {
                 println!("[infynitae] Game mode off for process {pid}");
                 self.background.game = None;
-                self.spawn_action_with("game-mode", &format!("off {pid}"));
+                self.gamemode(false, pid);
             }
         }
         let bg = &self.background;

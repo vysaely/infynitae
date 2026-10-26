@@ -318,3 +318,39 @@ fn a_capture_shows_the_mark_on_the_screen_and_not_in_the_capture() {
     assert!(!r.ls.state.capture_indicator().active(later));
     assert_eq!(r.ls.state.capture_indicator().due(later), None);
 }
+
+/// Over a fullscreen window the mark steps aside (a game goes to the screen directly), and the
+/// capture is announced once by a notification instead; out of fullscreen the mark is back.
+#[test]
+fn over_a_fullscreen_window_the_mark_steps_aside_and_the_capture_is_announced_once() {
+    let mut r = Rig::x8();
+    let o = r.ls.output();
+    let w = r.ls.state.elements().last().expect("W");
+    infynitae_backend_headless::set_focus(&mut r.ls.state, &mut r.ls.input, Some(w))
+        .expect("focus");
+    let s = session(&mut r);
+    capture(&mut r, &s, (1920, 1080));
+    let now = std::time::Instant::now();
+    r.ls.state.capture_indicator().update(now);
+    assert!(!solid_rects(&mut r, false).is_empty(), "the mark");
+    assert!(!r.ls.state.capture_notice(now), "shown: no notice");
+
+    let tl = r.ls.probe.surfaces[0].toplevel.clone().expect("toplevel");
+    tl.set_fullscreen(None);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(r.ls.state.core().presentation(o), Some(w), "W presented");
+    assert!(r.ls.state.capture_mark_hidden(o));
+    assert!(
+        solid_rects(&mut r, false).is_empty(),
+        "the mark steps aside"
+    );
+    assert!(r.ls.state.capture_notice(now), "announced");
+    assert!(!r.ls.state.capture_notice(now), "once");
+
+    tl.unset_fullscreen();
+    r.ls.pump();
+    r.frame();
+    assert!(!r.ls.state.capture_mark_hidden(o));
+    assert!(!solid_rects(&mut r, false).is_empty(), "the mark is back");
+}

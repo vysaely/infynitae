@@ -624,7 +624,9 @@ where
         cursor_elements(state, renderer, output, view.k, &mut elements)
             .map_err(RenderOutputError::Renderer)?;
     }
-    if state.capture_indicator.active(std::time::Instant::now()) {
+    if state.capture_indicator.active(std::time::Instant::now())
+        && !state.capture_mark_hidden(output)
+    {
         elements.extend(
             capture_mark_rects(view.size, view.scale)
                 .into_iter()

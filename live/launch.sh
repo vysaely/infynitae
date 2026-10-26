@@ -508,6 +508,12 @@ case "$ACTION" in
             notify-send -a "Infynitae" -i security-low -h string:x-canonical-private-synchronous:privacy -t 1500 "Privacy Mode: OFF" "Window visible to screen capture" 2>/dev/null || true
         fi
         ;;
+    notify-capture-hidden)
+        # the capture dot steps aside over a fullscreen window: a capture is still never silent
+        if command -v notify-send >/dev/null 2>&1; then
+            notify-send -a "Infynitae" -i camera-web -h string:x-canonical-private-synchronous:capture -t 4000 "Screen is being captured" "The red dot is hidden while a window is fullscreen" 2>/dev/null || true
+        fi
+        ;;
     notify-tearing-on)
         # Super+Shift+T: the focused window tears while fullscreen
         if command -v notify-send >/dev/null 2>&1; then

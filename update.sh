@@ -85,6 +85,11 @@ fi
 # (60-steam-input); Infynitae needs no udev rules of its own.
 
 # 3. build
+# a build folder linked to another drive that is not mounted: build here instead
+if [ -L target ] && [ ! -d target/ ]; then
+    echo "==> The build folder's drive is not mounted ($(readlink target)): building in ./target"
+    rm target && mkdir target
+fi
 echo "==> Building..."
 cargo build --release -p infynitae
 

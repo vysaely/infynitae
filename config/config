@@ -134,6 +134,7 @@ SCREENCOPY_CURSOR="false"         # draw the cursor into captures (true: OBS; fa
 CAPTURE_INDICATOR="true"          # [save] a small red dot in the top right corner while any app
                                   # captures the screen (sharing, remote desktop, screenshots);
                                   # the replay buffer does not show it, captures never show it.
+                                  # Over a fullscreen window a notification says it instead
                                   # false: no dot
 PRIVACY_APPS=""                   # hidden from captures, e.g. "bitwarden,keepassxc"
 PRIVACY_TITLES=""                 # by title, e.g. "Password"; Super+Shift+P toggles a window

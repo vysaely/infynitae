@@ -210,6 +210,11 @@ MEM_GB=$(awk '/MemTotal/ { print int($2 / 1048576) }' /proc/meminfo)
 JOBS=$(nproc)
 [ $((MEM_GB * 2 / 3)) -lt "$JOBS" ] && JOBS=$((MEM_GB * 2 / 3))
 [ "$JOBS" -ge 1 ] || JOBS=1
+# a build folder linked to another drive that is not mounted: build here instead
+if [ -L target ] && [ ! -d target/ ]; then
+    echo "==> The build folder's drive is not mounted ($(readlink target)): building in ./target"
+    rm target && mkdir target
+fi
 echo "==> Building ($JOBS jobs, a few minutes)..."
 cargo build --release -p infynitae -j "$JOBS"
 

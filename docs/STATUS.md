@@ -22,7 +22,9 @@ edges on other hardware.
 - **Screen sharing:** a screen or a single window, through the portal or screencopy. A
   private window (`PRIVACY_APPS`, `PRIVACY_TITLES`, Super+Shift+P) is never shared, and nothing
   is while the screen is locked. A small red dot shows on every screen while anything captures
-  it, and is never in the capture itself (`CAPTURE_INDICATOR`).
+  it, and is never in the capture itself (`CAPTURE_INDICATOR`). Over a fullscreen window it
+  steps aside, so a game still goes to the screen directly, and a notification says the screen
+  is being captured instead.
 - **RustDesk as a host** (seen working on this machine): the picture through the portal, input
   through its own virtual devices. The session restarts RustDesk's service once the compositor
   runs, which needs the polkit rule in `live/remote/` (the installer adds it).

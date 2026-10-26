@@ -1474,6 +1474,10 @@ pub fn run_console_with(
         {
             data.session.request_frame();
         }
+        // hidden by a fullscreen window, a capture is announced instead
+        if data.state.capture_notice(std::time::Instant::now()) {
+            data.state.announce_hidden_capture();
+        }
         // Watches ~/.config/infynitae/config for changes and reloads settings
         if data.last_config_check.elapsed() >= Duration::from_millis(250) {
             data.last_config_check = std::time::Instant::now();

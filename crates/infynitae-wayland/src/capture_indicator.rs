@@ -6,6 +6,10 @@
 //! out: the mark would never go away. It is known by its executable's name, read when a client
 //! starts capturing.
 //! The mark is drawn on the screen only, never into a capture (`output_elements_screencopy`).
+//!
+//! On a screen showing a fullscreen window the mark steps aside (owner decision 2026-10-26):
+//! anything over the window would keep a game from going to the screen directly (tearing, game
+//! mode). A notification says the screen is being captured instead, once per capture.
 
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -28,6 +32,8 @@ pub struct CaptureIndicator {
     seen: Seen<ClientId>,
     /// The dot's stable element id (an unchanged mark is no damage).
     pub(crate) ids: [Id; 1],
+    /// This capture was announced by a notification (the mark was hidden by a fullscreen window).
+    noticed: bool,
 }
 
 impl Default for CaptureIndicator {
@@ -36,6 +42,7 @@ impl Default for CaptureIndicator {
             enabled: true,
             seen: Seen::default(),
             ids: [Id::new()],
+            noticed: false,
         }
     }
 }
@@ -135,6 +142,39 @@ impl WaylandState {
     /// The capture indicator (the backends ask it when to draw and when to wake).
     pub fn capture_indicator(&mut self) -> &mut CaptureIndicator {
         &mut self.capture_indicator
+    }
+
+    /// Whether the mark steps aside on `output`: it shows a fullscreen window (unlocked).
+    pub fn capture_mark_hidden(&self, output: infynitae_core::output::OutputId) -> bool {
+        !self.is_locked()
+            && self.core.presentation(output).is_some()
+            && !self.core.is_presentation_suppressed(output)
+    }
+
+    /// Whether a capture whose mark a fullscreen window hides is to be announced now: once per
+    /// capture ([`announce_hidden_capture`](Self::announce_hidden_capture) does it).
+    pub fn capture_notice(&mut self, now: Instant) -> bool {
+        if !self.capture_indicator.active(now) {
+            self.capture_indicator.noticed = false;
+            return false;
+        }
+        let hidden = self
+            .core
+            .outputs()
+            .iter()
+            .any(|o| self.capture_mark_hidden(o.id));
+        if !hidden || self.capture_indicator.noticed {
+            return false;
+        }
+        self.capture_indicator.noticed = true;
+        true
+    }
+
+    /// The notification that the screen is being captured, its mark hidden by a fullscreen
+    /// window (`launch.sh notify-capture-hidden`).
+    pub fn announce_hidden_capture(&mut self) {
+        println!("[infynitae] A capture runs under a fullscreen window: announced");
+        self.spawn_action("notify-capture-hidden");
     }
 }
 
