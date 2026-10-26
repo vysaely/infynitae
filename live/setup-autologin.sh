@@ -36,6 +36,15 @@ USER_HOME=$(getent passwd "$USER_NAME" | cut -d: -f6)
 USER_SHELL=$(getent passwd "$USER_NAME" | cut -d: -f7)
 GETTY_CONF=/etc/systemd/system/getty@tty1.service.d/autologin.conf
 
+# autologin only onto a working lock screen: without one the session ends at once (it never
+# starts unlocked), tty1 logs in again, and the machine loops
+if [ "$MODE" = autologin ] \
+    && { [ ! -x "$USER_HOME/.local/bin/infynitae-lock" ] || [ ! -f /etc/pam.d/infynitae ]; }; then
+    echo "The lock screen is not installed (~/.local/bin/infynitae-lock, /etc/pam.d/infynitae):" >&2
+    echo "autologin not enabled. Run the installer (or infynitae-update) first." >&2
+    exit 1
+fi
+
 if [ "$MODE" = off ]; then
     rm -f "$GETTY_CONF"
     systemctl daemon-reload
@@ -64,17 +73,22 @@ if [ ! -f "$PROFILE_TARGET" ]; then
     esac
     chown "$USER_NAME:" "$PROFILE_TARGET"
 fi
-AUTORUN_MARKER="# Infynitae tty1 autostart"
+AUTORUN_MARKER="# Infynitae tty1 autostart v2"
 if ! grep -q "$AUTORUN_MARKER" "$PROFILE_TARGET"; then
+    # an older block (it ended the login with the session) is replaced
+    sed -i '/^# Infynitae tty1 autostart$/,/^fi$/d' "$PROFILE_TARGET"
     cat <<'EOF' >> "$PROFILE_TARGET"
 
-# Infynitae tty1 autostart
-if [ -z "$WAYLAND_DISPLAY" ] && [ "$XDG_VTNR" = 1 ]; then
-    if [ -x "$HOME/.local/bin/infynitae-session" ]; then
-        exec "$HOME/.local/bin/infynitae-session"
-    fi
+# Infynitae tty1 autostart v2
+if [ -z "$WAYLAND_DISPLAY" ] && [ "$XDG_VTNR" = 1 ] && [ -x "$HOME/.local/bin/infynitae-session" ]; then
+    "$HOME/.local/bin/infynitae-session"
+    # the session ended (stopped, or its lock screen could not start): a shell on this console
+    # only after your password, since with autologin nobody typed one. A wrong one logs out and
+    # tty1 starts the session again, locked.
+    exec su -l "$(id -un)"
 fi
 EOF
+    chown "$USER_NAME:" "$PROFILE_TARGET"
     echo "  -> Logging in on tty1 starts Infynitae ($PROFILE_TARGET)"
 else
     echo "  -> tty1 already starts Infynitae ($PROFILE_TARGET)"

@@ -8,15 +8,29 @@ set -e
 REPO_URL="https://github.com/vysaely/infynitae.git"
 INSTALL_DIR="$HOME/infynitae"
 
-# --autologin: the machine boots straight to the Infynitae lock screen (tty1 autologin with
-# START_LOCKED; live/setup-autologin.sh). Through curl: ... | bash -s -- --autologin
-AUTOLOGIN=false
+# Without a display manager the machine boots straight to the Infynitae lock screen (tty1
+# autologin, the session started locked; live/setup-autologin.sh). --no-autologin keeps the text
+# login instead (log in on tty1 and Infynitae starts). Through curl: ... | bash -s -- --no-autologin
+AUTOLOGIN=true
 for arg in "$@"; do
     case "$arg" in
-        --autologin) AUTOLOGIN=true ;;
-        *) echo "unknown option: $arg (known: --autologin)" >&2; exit 2 ;;
+        --no-autologin) AUTOLOGIN=false ;;
+        *) echo "unknown option: $arg (known: --no-autologin)" >&2; exit 2 ;;
     esac
 done
+
+if [ "$(id -u)" -eq 0 ]; then
+    echo "Run the installer as your own user, not root: it asks for your password itself." >&2
+    exit 1
+fi
+
+# One password, at the start: everything after it runs unattended. sudo's permission is kept
+# fresh in the background while the installer runs (the build takes minutes) and no longer.
+echo "==> Infynitae needs your password once (packages, drivers, the login setup)."
+sudo -v
+( while kill -0 "$$" 2>/dev/null; do sudo -n true; sleep 50; done ) >/dev/null 2>&1 &
+SUDO_KEEPER=$!
+trap 'kill "$SUDO_KEEPER" 2>/dev/null' EXIT
 
 echo "=========================================================="
 echo "      INFYNITAE - PURE ARCH LINUX INSTALLER"
@@ -215,12 +229,12 @@ if systemctl cat rustdesk.service >/dev/null 2>&1; then
     echo "==> RustDesk: allowed the session to restart its service"
 fi
 
-# 13. How Infynitae starts after a reboot: a display manager's session list, else logging in on
-#     tty1 (or, with --autologin, tty1 logging in by itself to the lock screen)
+# 13. How Infynitae starts after a reboot: a display manager's session list; else tty1 logs in by
+#     itself to the Infynitae lock screen (or, with --no-autologin, or when the lock screen could
+#     not be installed, logging in on tty1 starts Infynitae)
 if systemctl is-enabled --quiet display-manager.service 2>/dev/null; then
     START_HOW="pick \"Infynitae\" at your display manager's login"
-elif [ "$AUTOLOGIN" = true ]; then
-    sudo sh "$HOME/infynitae/live/setup-autologin.sh"
+elif [ "$AUTOLOGIN" = true ] && sudo sh "$HOME/infynitae/live/setup-autologin.sh"; then
     START_HOW="reboot: the machine starts at the Infynitae lock screen"
 else
     sh "$HOME/infynitae/live/setup-autologin.sh" --autostart
@@ -232,7 +246,7 @@ echo "=========================================================="
 echo "        INFYNITAE INSTALLATION COMPLETE!"
 echo "=========================================================="
 echo "  Start: $START_HOW"
-echo "  Boot straight to the lock screen instead: sudo ~/infynitae/live/setup-autologin.sh"
+echo "  Text login instead of the lock screen: sudo ~/infynitae/live/setup-autologin.sh --off"
 echo ""
 echo "  Keybindings:"
 echo "    Super + 1..9         Focus Window Slot 1..9"

@@ -25,13 +25,13 @@ cd ~/infynitae
 ./install.sh
 ```
 
-Then reboot. With a display manager (GDM, SDDM…), pick **Infynitae** at its login; without one,
-log in on the text console (tty1) and Infynitae starts.
+It asks for your password once at the start and then runs by itself. Then reboot: without a
+display manager the machine starts at the Infynitae lock screen (the session starts locked,
+nothing runs before you unlock; it is also what RustDesk reaches after a reboot). With a display
+manager (GDM, SDDM…), pick **Infynitae** at its login.
 
-To boot straight to the Infynitae lock screen instead (no text login; handy for reaching the
-machine with RustDesk after a reboot), install with `./install.sh --autologin`, or later run
-`sudo ~/infynitae/live/setup-autologin.sh` (`--off` undoes it). The session always starts locked
-then: nothing runs before you unlock.
+For the text login instead, install with `./install.sh --no-autologin`, or later run
+`sudo ~/infynitae/live/setup-autologin.sh --off`: logging in on tty1 then starts Infynitae.
 
 Update any time with `infynitae-update` (your config is never overwritten).
 
