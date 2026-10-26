@@ -26,8 +26,8 @@ pub struct CaptureIndicator {
     /// Whether the mark is drawn at all (`CAPTURE_INDICATOR`, on by default).
     pub(crate) enabled: bool,
     seen: Seen<ClientId>,
-    /// Stable element ids of the ring and the dot (an unchanged mark is no damage).
-    pub(crate) ids: [Id; 2],
+    /// The dot's stable element id (an unchanged mark is no damage).
+    pub(crate) ids: [Id; 1],
 }
 
 impl Default for CaptureIndicator {
@@ -35,7 +35,7 @@ impl Default for CaptureIndicator {
         Self {
             enabled: true,
             seen: Seen::default(),
-            ids: [Id::new(), Id::new()],
+            ids: [Id::new()],
         }
     }
 }

@@ -116,6 +116,24 @@ dnd_toggle() {
     fi
 }
 
+# ── Replay buffer ──────────────────────────────────────────────────────────────────────────────
+# on or off: ENABLE_REPLAY_BUFFER in the config (read from the file: the session's copy is from
+# its start), then the recorder restarted for it
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/infynitae/config"
+replay_on() { grep -qE '^ENABLE_REPLAY_BUFFER="?(true|1|yes|on)"?' "$CONFIG" 2>/dev/null; }
+replay_toggle() {
+    if replay_on; then to=false; else to=true; fi
+    if grep -q '^ENABLE_REPLAY_BUFFER=' "$CONFIG"; then
+        sed -i "s/^ENABLE_REPLAY_BUFFER=\"[^\"]*\"/ENABLE_REPLAY_BUFFER=\"$to\"/; s/^ENABLE_REPLAY_BUFFER=[^\" ]*\$/ENABLE_REPLAY_BUFFER=\"$to\"/" "$CONFIG"
+    else
+        echo "ENABLE_REPLAY_BUFFER=\"$to\"" >> "$CONFIG"
+    fi
+    reload="$HOME/.local/bin/infynitae-reload"
+    [ -x "$reload" ] || reload="$HOME/infynitae/live/infynitae-reload"
+    "$reload" recorder >/dev/null 2>&1
+    if [ "$to" = true ]; then note "Replay buffer on" "Super+Alt+C saves a clip"; else note "Replay buffer off"; fi
+}
+
 # ── The menu ───────────────────────────────────────────────────────────────────────────────────
 battery=""
 for b in /sys/class/power_supply/BAT*; do
@@ -134,6 +152,9 @@ if have makoctl; then
 elif have swaync-client; then
     add "Do not disturb (toggle)"
 fi
+if have ffmpeg && { have infynitae-recorder || [ -x "$HOME/.local/bin/infynitae-recorder" ]; }; then
+    if replay_on; then add "Replay buffer: on (turn off)"; else add "Replay buffer: off (turn on)"; fi
+fi
 [ -n "$battery" ] && add "$battery"
 
 if [ -z "$entries" ]; then
@@ -147,4 +168,5 @@ case "$(printf '%s' "$entries" | $PICKER)" in
     "Sound output") sound_menu ;;
     "Power mode") power_menu ;;
     "Do not disturb"|"Notifications: off (turn on)"|"Do not disturb (toggle)") dnd_toggle ;;
+    "Replay buffer: on (turn off)"|"Replay buffer: off (turn on)") replay_toggle ;;
 esac

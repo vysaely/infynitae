@@ -50,7 +50,7 @@ screen is locked. Night light and screen power have only run in the test suite, 
 a real screen yet.
 
 While any app captures the screen or a window (screen sharing, a remote desktop such as
-RustDesk, a screenshot), a red dot shows in the top right corner of every screen, and for 3 s
+RustDesk, a screenshot), a small red dot shows in the top right corner of every screen, and for 3 s
 after the last frame; it is never in what is captured. The replay buffer does not show it
 (`CAPTURE_INDICATOR`). Only tested in the test suite so far.
 

@@ -303,11 +303,7 @@ fn a_capture_shows_the_mark_on_the_screen_and_not_in_the_capture() {
         .iter()
         .map(|(g, _)| (g.loc.x, g.loc.y, g.size.w, g.size.h))
         .collect();
-    assert_eq!(
-        mark[1],
-        (1898, 10, 12, 12),
-        "the ring, 10 px from the corner"
-    );
+    assert_eq!(mark[0], (1906, 8, 6, 6), "the dot, 8 px from the corner");
     assert_eq!(solid_rects(&mut r, false), mark, "drawn on the screen");
     assert!(solid_rects(&mut r, true).is_empty(), "not in the capture");
     assert!(

@@ -29,6 +29,10 @@ Leave out an optional part (the session starts each one only when it is installe
   --no-power-profiles  no power modes on a laptop (power-profiles-daemon)
   --minimal            all of the above
 
+Turn on:
+  --replay-buffer      keep the last minutes of the screen, saved with Super+Alt+C
+                       (ENABLE_REPLAY_BUFFER; off by default)
+
 How it starts:
   --no-autologin       without a display manager: log in on tty1 to start Infynitae, instead of
                        the machine booting to the Infynitae lock screen
@@ -37,6 +41,7 @@ USAGE
 }
 
 AUTOLOGIN=true
+REPLAY_BUFFER=false
 TERMINAL_PKG=true
 BLUETOOTH=true
 POWER_PROFILES=true
@@ -52,11 +57,15 @@ for arg in "$@"; do
             SKIP="notifications keyring automount clipboard fonts recorder"
             TERMINAL_PKG=false BLUETOOTH=false POWER_PROFILES=false ;;
         --no-autologin) AUTOLOGIN=false ;;
+        --replay-buffer) REPLAY_BUFFER=true ;;
         -h | --help) usage; exit 0 ;;
         *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
     esac
 done
 SKIP="$(echo $SKIP)"
+case " $SKIP " in
+    *" recorder "*) [ "$REPLAY_BUFFER" = true ] && { echo "--replay-buffer needs the recorder: drop --no-recorder (or --minimal)" >&2; exit 2; } ;;
+esac
 
 # ---- checks before anything is changed -------------------------------------------------------
 fail() { echo "==> $*" >&2; exit 1; }
@@ -243,6 +252,7 @@ if [ ! -f "$HOME/.config/infynitae/config" ]; then
         sed -i 's/^CLIPBOARD_HISTORY="[^"]*"/CLIPBOARD_HISTORY="false"/; s/^CLIPBOARD_PERSIST="[^"]*"/CLIPBOARD_PERSIST="false"/' \
             "$HOME/.config/infynitae/config"
     fi
+    [ "$REPLAY_BUFFER" = true ] && sed -i 's/^ENABLE_REPLAY_BUFFER="[^"]*"/ENABLE_REPLAY_BUFFER="true"/' "$HOME/.config/infynitae/config"
     echo "==> Created your configuration: ~/.config/infynitae/config"
 else
     cp -f config/config "$HOME/.config/infynitae/config.template"
