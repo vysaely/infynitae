@@ -57,6 +57,7 @@ WALLPAPER_MODE="fill"             # [save] fill | fit | stretch | center | tile
 OUTPUT_SCALE="1.0"                # 1.0, 1.25, 1.5, 2.0 …
 SCALING_FILTER="nearest"          # zoomed windows — nearest: sharp pixels | linear: smooth
 VRR_ENABLED="auto"                # auto: FreeSync while a window is fullscreen | on | off
+                                  # (display tools can switch it per screen: wlr-randr --adaptive-sync)
 DIRECT_SCANOUT="true"             # [save] a fullscreen game's frames go straight to the screen
 OVERLAY_PLANES="false"            # [save] also windows' buffers on overlay planes (on AMD this
                                   # dropped frames whenever Electron apps like Discord drew)

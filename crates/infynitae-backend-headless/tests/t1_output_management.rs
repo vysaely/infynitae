@@ -1,7 +1,7 @@
 //! wlr-output-management-v1 with a real client (a display settings tool): the screens are
 //! reported, a configuration changes the scale, position or rotation in Core and is reported
-//! back, and a configuration that cannot be carried out (stale, unknown mode, turning a screen
-//! off) changes nothing.
+//! back, VRR is switched on a screen that has it, and a configuration that cannot be carried
+//! out (stale, unknown mode, turning a screen off, VRR on a screen without it) changes nothing.
 
 mod common;
 
@@ -68,6 +68,7 @@ impl Dispatch<ZwlrOutputHeadV1, ()> for Probe {
             Event::Scale { scale } => format!("scale {scale}"),
             Event::Enabled { enabled } => format!("enabled {enabled}"),
             Event::Transform { transform } => format!("transform {transform:?}"),
+            Event::AdaptiveSync { state } => format!("adaptive_sync {state:?}"),
             Event::Finished => "finished".into(),
             _ => return,
         });
@@ -344,4 +345,86 @@ fn a_scale_out_of_range_fails() {
     let serial = s.serial();
     assert_eq!(s.configure(serial, true, |h| h.set_scale(10.0)), "failed");
     assert_eq!(s.scale(), 1.0);
+}
+
+/// The screen has VRR (the console backend reports it): `allowed` is its state now.
+fn with_vrr(s: &mut S, allowed: bool) {
+    let id = s.ls.state.core().outputs()[0].id;
+    s.ls.state.set_output_head_info(
+        id,
+        infynitae_wayland::output_management::HeadInfo {
+            adaptive_sync: Some(allowed),
+            ..Default::default()
+        },
+    );
+    s.ls.pump();
+}
+
+/// A tool turns VRR off and on again (wlr-randr --adaptive-sync): it applies, and every tool is
+/// told the new state with a new serial.
+#[test]
+fn vrr_switches_and_is_reported() {
+    use zwlr_output_head_v1::AdaptiveSyncState as A;
+    let mut s = S::new();
+    with_vrr(&mut s, true);
+    assert!(
+        s.ls.probe
+            .log
+            .contains(&"adaptive_sync Value(Enabled)".to_string()),
+        "reported: {:?}",
+        s.ls.probe.log
+    );
+    let serial = s.serial();
+    assert_eq!(
+        s.configure(serial, true, |h| h.set_adaptive_sync(A::Disabled)),
+        "succeeded"
+    );
+    assert!(
+        s.ls.probe
+            .log
+            .contains(&"adaptive_sync Value(Disabled)".to_string()),
+        "re-reported: {:?}",
+        s.ls.probe.log
+    );
+    assert!(s.serial() != serial, "with a new serial");
+    let serial = s.serial();
+    assert_eq!(
+        s.configure(serial, true, |h| h.set_adaptive_sync(A::Enabled)),
+        "succeeded"
+    );
+    assert!(
+        s.ls.probe
+            .log
+            .contains(&"adaptive_sync Value(Enabled)".to_string()),
+        "{:?}",
+        s.ls.probe.log
+    );
+}
+
+/// A test of a VRR switch succeeds and changes nothing; a screen without VRR refuses it.
+#[test]
+fn vrr_test_changes_nothing_and_no_vrr_fails() {
+    use zwlr_output_head_v1::AdaptiveSyncState as A;
+    let mut s = S::new();
+    let serial = s.serial();
+    assert_eq!(
+        s.configure(serial, true, |h| h.set_adaptive_sync(A::Enabled)),
+        "failed",
+        "the screen has no VRR"
+    );
+    with_vrr(&mut s, true);
+    let serial = s.serial();
+    assert_eq!(
+        s.configure(serial, false, |h| h.set_adaptive_sync(A::Disabled)),
+        "succeeded"
+    );
+    assert!(
+        !s.ls
+            .probe
+            .log
+            .iter()
+            .any(|l| l.starts_with("adaptive_sync") || l.starts_with("done")),
+        "a test changes and reports nothing: {:?}",
+        s.ls.probe.log
+    );
 }

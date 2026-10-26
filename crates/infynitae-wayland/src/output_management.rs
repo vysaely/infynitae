@@ -1,5 +1,5 @@
 //! `zwlr_output_manager_v1`: display settings tools (wlr-randr, wdisplays, kanshi) read the
-//! screens and change their mode, scale, position and rotation.
+//! screens and change their mode, scale, position, rotation and VRR.
 //!
 //! A configuration is checked here against what the backend reported for each screen
 //! ([`HeadInfo`]: its modes, its size in mm, its VRR state), then handed to the backend
@@ -8,8 +8,8 @@
 //! ([`WaylandState::output_change_plan`]), and reports the outcome
 //! ([`WaylandState::finish_output_configuration`]). Everything changes or nothing does.
 //!
-//! Not yet: turning a screen off or on, and switching VRR (the backend runs it with fullscreen
-//! windows itself); a configuration asking for one of them fails.
+//! VRR as a tool sees it is whether the screen may use it: on, or the backend's automatic mode
+//! (while a window is fullscreen); off is off. Not yet: turning a screen off or on, which fails.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -60,6 +60,8 @@ pub struct HeadChange {
     pub scale_120: Option<u32>,
     /// A rotation or flip (the backend draws through it, Core swaps the view for 90° and 270°).
     pub transform: Option<Transform>,
+    /// VRR allowed or off, on a screen that has it.
+    pub adaptive_sync: Option<bool>,
 }
 
 /// One screen's part of a configuration as Core takes it ([`WaylandState::output_change_plan`]).
@@ -256,12 +258,21 @@ impl WaylandState {
         Some(plan)
     }
 
-    /// Tells the client how its configuration went.
+    /// Tells the client how its configuration went; a VRR change it made is reported to every
+    /// tool.
     pub fn finish_output_configuration(&mut self, pending: PendingConfiguration, ok: bool) {
-        if ok {
-            pending.resource.succeeded();
-        } else {
+        if !ok {
             pending.resource.failed();
+            return;
+        }
+        pending.resource.succeeded();
+        for c in &pending.changes {
+            if let Some(on) = c.adaptive_sync
+                && let Some(info) = self.output_management.info.get_mut(&c.output)
+            {
+                info.adaptive_sync = Some(on);
+                self.output_heads_changed(c.output);
+            }
         }
     }
 
@@ -463,24 +474,30 @@ impl WaylandState {
             }
             .filter(|m| Some(*m) != now.mode);
             let transform = req.transform.filter(|t| *t != now.transform);
-            if req
-                .adaptive_sync
-                .is_some_and(|v| Some(v) != now.adaptive_sync)
-            {
-                return None;
-            }
+            let adaptive_sync = match (req.adaptive_sync, now.adaptive_sync) {
+                (None, _) => None,
+                // a screen without VRR
+                (Some(_), None) => return None,
+                (Some(v), Some(was)) => (v != was).then_some(v),
+            };
             let scale_120 = match req.scale {
                 None => None,
                 Some(s) => Some((s * 120.0).round() as u32).filter(|s| *s != now.scale_120),
             };
             let position = req.position.filter(|p| *p != now.position);
-            if mode.is_some() || scale_120.is_some() || position.is_some() || transform.is_some() {
+            if mode.is_some()
+                || scale_120.is_some()
+                || position.is_some()
+                || transform.is_some()
+                || adaptive_sync.is_some()
+            {
                 changes.push(HeadChange {
                     output: *output,
                     mode,
                     position,
                     scale_120,
                     transform,
+                    adaptive_sync,
                 });
             }
         }

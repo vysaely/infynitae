@@ -256,6 +256,9 @@ struct Screen {
     vrr_supported: bool,
     /// VRR is on now.
     vrr_on: bool,
+    /// This screen's VRR mode: `VRR_ENABLED` until a display settings tool changes it (always
+    /// on, off, or `None`: while a window is fullscreen).
+    vrr_mode: Option<bool>,
     /// Screen power mode turned off by output power management.
     power_off: bool,
     /// The connector's modes, as display settings tools see them and as DRM sets them.
@@ -413,6 +416,18 @@ fn apply_output_configuration(data: &mut LoopData, changes: &[HeadChange]) -> bo
             }
         }
     }
+    // VRR last: nothing to undo. Allowed again, it is the config's mode, or while fullscreen
+    for c in changes {
+        if let Some(on) = c.adaptive_sync
+            && let Some(s) = data.screens.iter_mut().find(|s| s.id == c.output)
+        {
+            s.vrr_mode = if on {
+                data.vrr_mode.filter(|&v| v)
+            } else {
+                Some(false)
+            };
+        }
+    }
     data.session.request_frame();
     true
 }
@@ -455,7 +470,7 @@ struct LoopData {
     idle_sleep_timeout_min: u32,
     idle_auto_lock: bool,
     lock_process: Option<std::process::Child>,
-    /// The VRR setting (`ConsoleOptions::vrr`).
+    /// The VRR setting (`ConsoleOptions::vrr`), each screen's until a tool changes it.
     vrr_mode: Option<bool>,
     /// For timers set from the render path (a refused page flip's retry).
     loop_handle: smithay::reexports::calloop::LoopHandle<'static, LoopData>,
@@ -819,6 +834,7 @@ fn connect_screen(
         no_scanout_until: None,
         vrr_supported,
         vrr_on,
+        vrr_mode: f.vrr,
         power_off: false,
         modes: conn
             .modes()
@@ -834,14 +850,14 @@ fn connect_screen(
             })
             .collect(),
     };
-    // VRR is not reported: it follows fullscreen windows (or the config), not the tools
+    // VRR as tools see it: allowed (always on, or while a window is fullscreen) or off
     let (mm_w, mm_h) = conn.size().unwrap_or((0, 0));
     state.set_output_head_info(
         id,
         HeadInfo {
             modes: screen.modes.iter().map(|(h, _)| *h).collect(),
             physical_size: Some((mm_w as i32, mm_h as i32)),
-            adaptive_sync: None,
+            adaptive_sync: vrr_supported.then_some(f.vrr != Some(false)),
         },
     );
 
@@ -1675,7 +1691,7 @@ fn render(data: &mut LoopData) {
             }
         };
         // VRR auto: on while this screen shows a fullscreen window
-        let want_vrr = data
+        let want_vrr = data.screens[i]
             .vrr_mode
             .unwrap_or_else(|| data.state.core().presentation(id).is_some());
         let s = &mut data.screens[i];
