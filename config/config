@@ -117,6 +117,9 @@ CAPTURE_INDICATOR="true"          # [save] a small red dot in the top right corn
                                   # false: no dot
 PRIVACY_APPS=""                   # hidden from captures, e.g. "bitwarden,keepassxc"
 PRIVACY_TITLES=""                 # by title, e.g. "Password"; Super+Shift+P toggles a window
+REMOTE_DESKTOP="false"            # [restart] true: remote desktop apps (AnyDesk, GNOME's clients)
+                                  # get the screen and, once you allow it, the keyboard and mouse
+                                  # (the RemoteDesktop portal). RustDesk uses it too when it is on.
 
 # ── Screen recorder & replay buffer ───────────────────────────────────── [use] ──
 # A rolling buffer in RAM: about 110 MB per minute, frames copied through the CPU. Audio: see

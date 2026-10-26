@@ -1,8 +1,9 @@
 /*
  * Infynitae GlobalShortcuts XDG Desktop Portal Implementation
  * Pure C + GIO. Zero bloat (<2MB RAM, 0% CPU idle).
- * Implements org.freedesktop.impl.portal.GlobalShortcuts for Discord, OBS, WebRTC, and
- * org.freedesktop.ScreenSaver (apps keeping the screens on while they play video).
+ * Implements org.freedesktop.impl.portal.GlobalShortcuts for Discord, OBS, WebRTC,
+ * org.freedesktop.ScreenSaver (apps keeping the screens on while they play video), and
+ * RemoteDesktop with ScreenCast (remote-desktop.c).
  */
 
 #include <gio/gio.h>
@@ -13,6 +14,8 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/stat.h>
+
+#include "remote-desktop.h"
 
 #define BUS_NAME "org.freedesktop.impl.portal.desktop.infynitae"
 #define OBJECT_PATH "/org/freedesktop/portal/desktop"
@@ -582,6 +585,7 @@ static void on_bus_acquired(GDBusConnection *connection,
         printf("[infynitae-portal] Registered %s on %s\n", INTERFACE_NAME, OBJECT_PATH);
         fflush(stdout);
     }
+    remote_desktop_init(connection, OBJECT_PATH);
 }
 
 // -----------------------------------------------------------------------------

@@ -131,20 +131,29 @@ export DCONF_PROFILE="$INFYNITAE_CFG_DIR/dconf-profile"
 # 7. XDG Desktop Portal routing & Global Shortcuts backend
 PORTAL_DATA_DIR="$HOME/.local/share/xdg-desktop-portal/portals"
 mkdir -p "$PORTAL_DATA_DIR"
-cat << 'EOF' > "$PORTAL_DATA_DIR/infynitae.portal"
+# REMOTE_DESKTOP: ours also serves RemoteDesktop and ScreenCast, passing the screen cast through
+# to xdg-desktop-portal-wlr (a remote desktop session's screens come from the same backend)
+case "${REMOTE_DESKTOP:-false}" in
+    1|true|yes|on|TRUE|True)
+        REMOTE_IFACES="org.freedesktop.impl.portal.RemoteDesktop;org.freedesktop.impl.portal.ScreenCast;"
+        SCREENCAST_BACKEND="infynitae" ;;
+    *) REMOTE_IFACES="" SCREENCAST_BACKEND="wlr" ;;
+esac
+cat << EOF > "$PORTAL_DATA_DIR/infynitae.portal"
 [portal]
 DBusName=org.freedesktop.impl.portal.desktop.infynitae
-Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;
+Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;$REMOTE_IFACES
 UseIn=infynitae;wlroots;
 EOF
 
 PORTAL_CFG_DIR="$HOME/.config/xdg-desktop-portal"
 mkdir -p "$PORTAL_CFG_DIR"
-cat << 'EOF' > "$PORTAL_CFG_DIR/infynitae-portals.conf"
+cat << EOF > "$PORTAL_CFG_DIR/infynitae-portals.conf"
 [preferred]
 default=gtk;wlr
 org.freedesktop.impl.portal.GlobalShortcuts=infynitae
-org.freedesktop.impl.portal.ScreenCast=wlr
+org.freedesktop.impl.portal.RemoteDesktop=$SCREENCAST_BACKEND
+org.freedesktop.impl.portal.ScreenCast=$SCREENCAST_BACKEND
 org.freedesktop.impl.portal.Screenshot=wlr
 org.freedesktop.impl.portal.Settings=gtk
 org.freedesktop.impl.portal.FileChooser=gtk

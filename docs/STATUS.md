@@ -59,14 +59,18 @@ These pass the test suite but have not run on a real screen or device yet:
 - **Crash reports:** a crash leaves a report in `~/.local/state/infynitae/crashes/` (the last
   10) and the next start says so in a notification. Tested with a fake compositor, not a real
   crash yet.
+- **Remote desktop through the portal** (`REMOTE_DESKTOP`, off by default): apps like AnyDesk
+  get the screen through xdg-desktop-portal-wlr and, once you allow it (this time, or always),
+  the keyboard and mouse as real input: Super shortcuts work, the lock screen gets no keys from
+  it. Display tools and VNC servers (wayvnc) can also drive the pointer
+  (`zwlr_virtual_pointer_v1`). Tested end to end on a private bus against a headless compositor,
+  not yet with a real app.
 - **The session scripts and the C helpers** have the least test coverage of anything here.
 
 ## Missing
 
 - **Pens and drawing tablets,** HDR, accessibility and screen readers.
 - **Output management:** tools cannot yet turn a screen off through it (wlopm can).
-- **The `RemoteDesktop` portal,** which AnyDesk and GNOME's remote desktop clients need for
-  input.
 - **Hardware:** a second GPU, NVIDIA's explicit sync.
 - **Packaging** for anything other than Arch Linux. The install assumes one user and
   `~/infynitae`.
