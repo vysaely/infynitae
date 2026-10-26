@@ -445,3 +445,24 @@ fn the_popup_is_drawn_under_the_text_cursor() {
         "its corner is at the cursor's bottom left"
     );
 }
+
+/// An input method that does not grab the keyboard (an on-screen keyboard: squeekboard): the
+/// app with an enabled text input still gets the keyboard's keys, and the input method's text.
+#[test]
+fn an_input_method_without_a_grab_leaves_the_keys_to_the_app() {
+    let (mut r, im, _) = setup();
+    let _ti = enable_text_input(&mut r);
+    assert!(r.ls.probe.log.contains(&"im activate".to_string()));
+    let before = r.ls.probe.key_events.len();
+    key(&mut r, KEY_A, true);
+    key(&mut r, KEY_A, false);
+    assert_eq!(
+        r.ls.probe.key_events.len(),
+        before + 2,
+        "the app gets the key press and release: {:?}",
+        r.ls.probe.log
+    );
+    r.ls.probe.log.retain(|l| l == "im done");
+    commit_text(&mut r, &im, "b");
+    assert!(r.ls.probe.log.contains(&"ti commit b".to_string()));
+}
