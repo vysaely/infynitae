@@ -604,6 +604,11 @@ impl WaylandState {
         {
             return None;
         }
+        self.named_cursor_due(now)
+    }
+
+    /// [`Self::cursor_animation_due`] for a cursor that is drawn.
+    fn named_cursor_due(&self, now: std::time::Duration) -> Option<std::time::Duration> {
         match &self.cursor {
             CursorImageStatus::Hidden => return None,
             CursorImageStatus::Named(icon) if icon.name() == "none" => return None,
@@ -1100,7 +1105,7 @@ mod tests {
         // 1. Static cursor "default": due is None
         state.set_cursor_status(smithay::input::pointer::CursorImageStatus::default_named());
         assert_eq!(
-            state.cursor_animation_due(now),
+            state.named_cursor_due(now),
             None,
             "static default cursor is not animated"
         );
@@ -1111,12 +1116,17 @@ mod tests {
         ));
         state.set_cursor_epoch(Duration::from_millis(500));
         assert_eq!(
-            state.cursor_animation_due(now),
+            state.named_cursor_due(now),
             Some(Duration::from_millis(100)),
             "wait cursor is animated"
         );
         assert_eq!(
-            state.cursor_animation_due(now + Duration::from_millis(30)),
+            state.cursor_animation_due(now),
+            None,
+            "but not redrawn while the pointer is on no screen"
+        );
+        assert_eq!(
+            state.named_cursor_due(now + Duration::from_millis(30)),
             Some(Duration::from_millis(70)),
             "30ms elapsed leaves 70ms"
         );
@@ -1124,7 +1134,7 @@ mod tests {
         // 3. Hidden cursor: due is None
         state.set_cursor_status(smithay::input::pointer::CursorImageStatus::Hidden);
         assert_eq!(
-            state.cursor_animation_due(now),
+            state.named_cursor_due(now),
             None,
             "hidden cursor has no animation due"
         );
