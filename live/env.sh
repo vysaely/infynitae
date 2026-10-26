@@ -29,6 +29,8 @@ export QT_QPA_PLATFORM="wayland;xcb"
 export QT_QPA_PLATFORMTHEME=""
 export QT_WAYLAND_DISABLE_WINDOWDECORATION="1"
 export QT_AUTO_SCREEN_SCALE_FACTOR="1"
+# Qt 6 apps reconnect to a compositor that restarted (after a crash) instead of quitting
+export QT_WAYLAND_RECONNECT="1"
 
 # 4. Standard toolkit Wayland backends (with X11 fallback for Xwayland)
 export GDK_BACKEND="wayland,x11,*"

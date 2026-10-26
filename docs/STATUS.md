@@ -69,6 +69,10 @@ These pass the test suite but have not run on a real screen or device yet:
   at the first tap, and while locked a finger reaches only the lock surface, so the password
   never leaves the lock screen. Tested off-screen and in the test suite; not yet on a
   touchscreen.
+- **Out of GPU memory, windows stay open:** when the GPU resets or refuses the compositor's work
+  (seen with a model training on it), the compositor makes a new renderer instead of being
+  aborted by Mesa; the screens freeze until memory frees up. Tested: the robust context on this
+  GPU; not yet: a real reset.
 - **Hardware cursor** (`HARDWARE_CURSOR`): the cursor on the GPU's cursor plane, so it moves
   without a redraw and a fullscreen game with a cursor is still shown directly. Where the GPU
   refuses a cursor, it is drawn as before.

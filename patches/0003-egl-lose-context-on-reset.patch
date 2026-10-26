@@ -1,0 +1,104 @@
+--- a/src/backend/egl/context.rs
++++ b/src/backend/egl/context.rs
+@@ -117,7 +117,15 @@
+ 
+     /// Creates a new configless `EGLContext` from a given `EGLDisplay`
+     pub fn new(display: &EGLDisplay) -> Result<EGLContext, Error> {
+-        Self::new_internal(display, None, None, None)
++        Self::new_internal(display, None, None, None, false)
++    }
++
++    /// Creates a new configless `EGLContext` that is lost, not aborted, when the GPU resets or refuses
++    /// its work (`EGL_EXT_create_context_robustness`, `LOSE_CONTEXT_ON_RESET`): the caller then sees
++    /// a reset status (`glGetGraphicsResetStatus`) and makes a new context. Without the extension
++    /// it is an ordinary context.
++    pub fn new_lose_context_on_reset(display: &EGLDisplay) -> Result<EGLContext, Error> {
++        Self::new_internal(display, None, None, None, true)
+     }
+ 
+     /// Creates a new configless `EGLContext` with the specified priority from a given `EGLDisplay`
+@@ -126,7 +134,7 @@
+     /// It also requires `EGL_IMG_context_priority` to be available, otherwise the priority will be
+     /// ignored.
+     pub fn new_with_priority(display: &EGLDisplay, priority: ContextPriority) -> Result<EGLContext, Error> {
+-        Self::new_internal(display, None, None, Some(priority))
++        Self::new_internal(display, None, None, Some(priority), false)
+     }
+ 
+     /// Create a new [`EGLContext`] from a given `EGLDisplay` and configuration requirements
+@@ -135,7 +143,7 @@
+         attributes: GlAttributes,
+         reqs: PixelFormatRequirements,
+     ) -> Result<EGLContext, Error> {
+-        Self::new_internal(display, None, Some((attributes, reqs)), None)
++        Self::new_internal(display, None, Some((attributes, reqs)), None, false)
+     }
+ 
+     /// Create a new [`EGLContext`] from a given `EGLDisplay`, configuration requirements and priority
+@@ -149,12 +157,12 @@
+         reqs: PixelFormatRequirements,
+         priority: ContextPriority,
+     ) -> Result<EGLContext, Error> {
+-        Self::new_internal(display, None, Some((attributes, reqs)), Some(priority))
++        Self::new_internal(display, None, Some((attributes, reqs)), Some(priority), false)
+     }
+ 
+     /// Create a new configless `EGLContext` from a given `EGLDisplay` sharing resources with another context
+     pub fn new_shared(display: &EGLDisplay, share: &EGLContext) -> Result<EGLContext, Error> {
+-        Self::new_internal(display, Some(share), None, None)
++        Self::new_internal(display, Some(share), None, None, false)
+     }
+ 
+     /// Create a new configless `EGLContext` with the specified priority from a given `EGLDisplay` sharing resources with another context
+@@ -167,7 +175,7 @@
+         share: &EGLContext,
+         priority: ContextPriority,
+     ) -> Result<EGLContext, Error> {
+-        Self::new_internal(display, Some(share), None, Some(priority))
++        Self::new_internal(display, Some(share), None, Some(priority), false)
+     }
+ 
+     /// Create a new `EGLContext` from a given `EGLDisplay` and configuration requirements sharing resources with another context
+@@ -177,7 +185,7 @@
+         attributes: GlAttributes,
+         reqs: PixelFormatRequirements,
+     ) -> Result<EGLContext, Error> {
+-        Self::new_internal(display, Some(share), Some((attributes, reqs)), None)
++        Self::new_internal(display, Some(share), Some((attributes, reqs)), None, false)
+     }
+ 
+     /// Create a new `EGLContext` with the specified priority from a given `EGLDisplay` and configuration requirements sharing resources with another context
+@@ -192,7 +200,7 @@
+         reqs: PixelFormatRequirements,
+         priority: ContextPriority,
+     ) -> Result<EGLContext, Error> {
+-        Self::new_internal(display, Some(share), Some((attributes, reqs)), Some(priority))
++        Self::new_internal(display, Some(share), Some((attributes, reqs)), Some(priority), false)
+     }
+ 
+     fn new_internal(
+@@ -200,6 +208,7 @@
+         shared: Option<&EGLContext>,
+         config: Option<(GlAttributes, PixelFormatRequirements)>,
+         priority: Option<ContextPriority>,
++        lose_context_on_reset: bool,
+     ) -> Result<EGLContext, Error> {
+         let span = info_span!(parent: &display.span, "egl_context", ptr = tracing::field::Empty, shared = tracing::field::Empty);
+         let _guard = span.enter();
+@@ -287,6 +296,16 @@
+             }
+         }
+ 
++        if lose_context_on_reset
++            && display
++                .extensions()
++                .iter()
++                .any(|x| x == "EGL_EXT_create_context_robustness")
++        {
++            context_attributes.push(ffi::egl::CONTEXT_OPENGL_RESET_NOTIFICATION_STRATEGY_EXT as i32);
++            context_attributes.push(ffi::egl::LOSE_CONTEXT_ON_RESET_EXT as i32);
++        }
++
+         context_attributes.push(ffi::egl::NONE as i32);
+ 
+         trace!("Creating EGL context...");

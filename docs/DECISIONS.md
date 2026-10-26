@@ -110,6 +110,13 @@ these by date, e.g. "(owner, 2026-10-24)".
 - **The capture dot steps aside over a fullscreen window** (2026-10-26): anything drawn over a
   game keeps it from going to the screen directly (tearing, game mode), so while a screen shows
   a fullscreen window the dot is hidden there and a notification announces the capture once.
-- **Two Smithay patches, by decision** (D-B12-PIN): Smithay 0.7.0 is vendored with two
+- **Three Smithay patches, by decision** (D-B12-PIN): Smithay 0.7.0 is vendored with three
   authorized changes: P1, pointer constraints; P2 (2026-10-26), async page flips for tearing in
-  games, which Smithay 0.7 cannot do. Anything else is worked around in the adapter.
+  games, which Smithay 0.7 cannot do; P3 (2026-10-26), an EGL context that is lost instead of
+  aborted when the GPU resets or runs out of memory. Anything else is worked around in the
+  adapter.
+- **Apps must not die with the compositor** (2026-10-26): out of GPU memory (a model training,
+  several games), Mesa aborted the compositor and every window closed. The console renderer's
+  context is now lost instead (P3, U-009), and the backend makes a new renderer: the screens
+  freeze until GPU memory frees up, the windows stay. Qt 6 apps also reconnect after a restart
+  (`QT_WAYLAND_RECONNECT`).

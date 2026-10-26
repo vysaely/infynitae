@@ -472,6 +472,11 @@ struct LoopData {
     /// The shader averaging windows drawn smaller than their buffer (`smooth`); `None` with
     /// `SCALING_FILTER="fast"` or where it does not compile.
     smooth_program: Option<GlesTexProgram>,
+    /// `SCALING_FILTER`, for a renderer made again after a GPU reset.
+    scaling_filter: String,
+    /// When the renderer was last made again after a GPU reset (at most once a second: GPU
+    /// memory still full makes the next one fail too).
+    renderer_recovered_at: Option<std::time::Instant>,
     config_path: Option<PathBuf>,
     last_config_check: std::time::Instant,
     last_config_mtime: Option<std::time::SystemTime>,
@@ -591,11 +596,31 @@ fn gles_renderer(gbm: &GbmDevice<DrmDeviceFd>) -> Result<GlesRenderer, Box<dyn E
     // (the device and its fd are owned by the loop data, which outlives the renderer); EGL is
     // used on this thread only.
     let display = unsafe { EGLDisplay::new(gbm.clone()) }?;
-    let context = EGLContext::new(&display)?;
+    // lost, not aborted, when the GPU resets or refuses its work (out of GPU memory): the loop
+    // then makes a new renderer and every window stays open (`renderer_lost`)
+    let context = EGLContext::new_lose_context_on_reset(&display)?;
     // SAFETY: the context was just made and is current on no other thread; the renderer takes it
     // over and is used on this thread only.
     let renderer = unsafe { GlesRenderer::new(context) }?;
     Ok(renderer)
+}
+
+/// Whether the renderer's context is lost: the GPU reset, or refused its work (out of GPU
+/// memory). Its frames then draw nothing, and a new renderer is made (`recover_renderer`).
+/// Asked after every frame: one GL call (U-009, `docs/foundation/UNSAFE_INVENTORY.md`).
+#[allow(unsafe_code)]
+fn renderer_lost(renderer: &mut GlesRenderer) -> bool {
+    renderer
+        .with_context(|gl| {
+            if !gl.GetGraphicsResetStatus.is_loaded() {
+                return false;
+            }
+            // SAFETY: `with_context` made the renderer's context current on this thread; the
+            // call takes no arguments and only reads the context's reset status.
+            let status = unsafe { gl.GetGraphicsResetStatus() };
+            status != smithay::backend::renderer::gles::ffi::NO_ERROR
+        })
+        .unwrap_or(false)
 }
 
 /// Reads and parses the EDID of a connector, if present and valid.
@@ -1389,6 +1414,8 @@ pub fn run_console_with(
         known_mapped: HashSet::new(),
         direct_scanout: options.direct_scanout.unwrap_or(true),
         smooth_program,
+        scaling_filter: filter.to_string(),
+        renderer_recovered_at: None,
         config_path: cfg_path,
         last_config_check: std::time::Instant::now(),
         last_config_mtime: initial_mtime,
@@ -1756,6 +1783,48 @@ pub fn run_console_with(
     Ok(())
 }
 
+/// The GPU lost the renderer's context (a reset, or out of GPU memory): a new renderer on the same
+/// GPU takes its place, and the screens draw everything again. Clients keep their windows; their
+/// buffers are imported again by the new renderer. At most once a second: until GPU memory frees
+/// up, frames draw nothing and the screens keep their last picture.
+fn recover_renderer(data: &mut LoopData) {
+    let now = std::time::Instant::now();
+    if data
+        .renderer_recovered_at
+        .is_some_and(|t| now.duration_since(t) < Duration::from_secs(1))
+    {
+        return;
+    }
+    data.renderer_recovered_at = Some(now);
+    eprintln!(
+        "[infynitae] The GPU reset or ran out of memory: making a new renderer (windows stay open)"
+    );
+    let mut renderer = match gles_renderer(&data.factory.gbm) {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("[infynitae] No new renderer yet ({e}): trying again in a second");
+            return;
+        }
+    };
+    if data.scaling_filter != "linear" {
+        let _ = renderer.upscale_filter(TextureFilter::Nearest);
+    }
+    data.smooth_program = if data.scaling_filter == "fast" {
+        None
+    } else {
+        smooth::program(&mut renderer)
+    };
+    data.renderer = renderer;
+    for s in &mut data.screens {
+        s.screencopy_texture = None;
+        let _ = s.compositor.reset_state();
+    }
+    if let Some(v) = data.virtual_screen.as_mut() {
+        v.screencopy_texture = None;
+    }
+    data.session.request_frame();
+}
+
 /// Async page flips refused in a row before a screen stops trying (until its window stops
 /// tearing): an occasional refusal (the cursor moved in the same frame) is not the driver
 /// lacking support.
@@ -2025,6 +2094,9 @@ fn render(data: &mut LoopData) {
     }
     confirm_lock(data);
     data.session.flush();
+    if renderer_lost(&mut data.renderer) {
+        recover_renderer(data);
+    }
 }
 
 /// Locked, and no screen shows a window any more: the lock client is told it holds the lock.
@@ -2884,6 +2956,57 @@ fn configure_input_device(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// On the GPU (the first render node; skipped without one): the console renderer's context
+    /// is made to be lost, not aborted, on a GPU reset (the display offers the extension), and a
+    /// healthy one reports no reset after drawing.
+    #[test]
+    fn the_console_renderer_survives_a_gpu_reset_and_a_healthy_one_is_not_lost() {
+        use smithay::backend::allocator::Fourcc;
+        use smithay::backend::allocator::gbm::GbmDevice;
+        use smithay::backend::renderer::gles::GlesRenderbuffer;
+        use smithay::backend::renderer::{Bind, Frame, Offscreen, Renderer};
+        use smithay::utils::DeviceFd;
+
+        let Some(mut renderer) = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/dri/renderD128")
+            .ok()
+            .and_then(|f| {
+                GbmDevice::new(DrmDeviceFd::new(DeviceFd::from(
+                    std::os::fd::OwnedFd::from(f),
+                )))
+                .ok()
+            })
+            .and_then(|gbm| gles_renderer(&gbm).ok())
+        else {
+            eprintln!("no GPU render node: skipped");
+            return;
+        };
+        assert!(
+            renderer
+                .egl_context()
+                .display()
+                .extensions()
+                .iter()
+                .any(|e| e == "EGL_EXT_create_context_robustness"),
+            "the display can make a context that is lost on reset"
+        );
+        let mut buffer: GlesRenderbuffer =
+            Offscreen::create_buffer(&mut renderer, Fourcc::Abgr8888, (16, 16).into())
+                .expect("buffer");
+        {
+            let mut target = renderer.bind(&mut buffer).expect("bind");
+            let mut frame = renderer
+                .render(&mut target, (16, 16).into(), smithay::utils::Transform::Normal)
+                .expect("frame");
+            let all = smithay::utils::Rectangle::from_size((16, 16).into());
+            frame.clear([0.0, 0.0, 0.0, 1.0].into(), &[all]).expect("clear");
+            frame.finish().expect("finish").wait().expect("wait");
+        }
+        assert!(!renderer_lost(&mut renderer), "a healthy context is not lost");
+    }
 
     /// T6: Ctrl+Alt+Backspace quits and Ctrl+Alt+F1…F12 switch VT, with both modifiers held; any
     /// other key, or a missing modifier, is the session's.
