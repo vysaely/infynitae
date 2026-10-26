@@ -206,7 +206,12 @@ impl Core {
                     return Err(EntryError::InvalidEvent);
                 }
                 self.input.clock.accepted(time_us);
-                self.touch_motion(slot, p, ms(time_us), out);
+                // a finger on the canvas moves the camera (INV-CAMERA-1)
+                let proof = self
+                    .touches
+                    .on_canvas(slot)
+                    .then(authority::Authorized::mint);
+                self.touch_motion(proof, slot, p, ms(time_us), out);
                 self.physical_input_activity = true;
                 Ok(())
             }
@@ -236,8 +241,9 @@ impl Core {
 
     /// A finger's first contact (`touch`): hit-tested like a click (INV-INPUT-8: a tap on a
     /// window raises and focuses it, a tap on an on-demand layer surface gives it the keyboard),
-    /// and the surface keeps the finger until it lifts. Nothing while a compositor interaction
-    /// owns the input, on an unknown output, or on empty canvas.
+    /// and the surface keeps the finger until it lifts. On empty canvas the finger joins the
+    /// canvas gesture (`touch::CanvasGesture`). Nothing while a compositor interaction owns the
+    /// input, or on an unknown output.
     fn touch_down(
         &mut self,
         slot: u32,
@@ -302,6 +308,9 @@ impl Core {
                 },
             )
         } else {
+            if let Some(camera) = self.cameras.camera_for_output(output) {
+                self.touches.canvas_down(slot, output, camera, p);
+            }
             return;
         };
         self.touches.insert(
@@ -320,8 +329,19 @@ impl Core {
         });
     }
 
-    /// A finger's motion, to the surface of its first contact (`touch`).
-    fn touch_motion(&mut self, slot: u32, p: (f64, f64), time_ms: u32, out: &mut Vec<Effect>) {
+    /// A finger's motion, to the surface of its first contact (`touch`), or the canvas gesture's.
+    fn touch_motion(
+        &mut self,
+        proof: Option<authority::Authorized>,
+        slot: u32,
+        p: (f64, f64),
+        time_ms: u32,
+        out: &mut Vec<Effect>,
+    ) {
+        if let Some(proof) = proof {
+            self.canvas_gesture_step(proof, slot, p, out);
+            return;
+        }
         let Some(tp) = self.touches.get(slot) else {
             return;
         };
@@ -342,6 +362,62 @@ impl Core {
             location,
             time_ms,
         });
+    }
+
+    /// A canvas finger moved to `p`: the grab is taken from the camera and the fingers' places
+    /// before it if they changed since, then the camera takes the zoom and centre that keep it
+    /// under them. Nothing while a fullscreen window is presented there or a compositor
+    /// interaction owns the input.
+    fn canvas_gesture_step(
+        &mut self,
+        proof: authority::Authorized,
+        slot: u32,
+        p: (f64, f64),
+        out: &mut Vec<Effect>,
+    ) {
+        let Some(g) = &self.touches.canvas else {
+            return;
+        };
+        let (output, camera) = (g.output, g.camera);
+        let blocked = self.input.interaction.active()
+            || (self.presentation(output).is_some() && !self.is_presentation_suppressed(output));
+        let camera_now = (
+            self.cameras.zoom(camera),
+            self.cameras.center(camera),
+            self.output(output).map(|o| o.logical_extent()),
+        );
+        let Some(g) = &mut self.touches.canvas else {
+            return;
+        };
+        let (false, (Some(zoom), Some(center), Some(extent))) = (blocked, camera_now) else {
+            // the finger is followed still; the grab is taken again once the camera can move
+            if let Some(f) = g.fingers.iter_mut().find(|(s, _)| *s == slot) {
+                f.1 = p;
+            }
+            g.grab = None;
+            return;
+        };
+        let q = crate::geom::Q16_ONE as f64;
+        let grab = *g.grab.get_or_insert_with(|| {
+            crate::touch::Grab::take(
+                &g.fingers,
+                (center.x as f64 / q, center.y as f64 / q),
+                zoom,
+                extent,
+            )
+        });
+        if let Some(f) = g.fingers.iter_mut().find(|(s, _)| *s == slot) {
+            f.1 = p;
+        }
+        let (zoom, (cx, cy)) = grab.camera(&g.fingers, extent);
+        let limit = crate::geom::CANVAS_LIMIT_PX * crate::geom::Q16_ONE;
+        let center = crate::geom::CanvasPos {
+            x: crate::geom::q16(cx).clamp(-limit, limit),
+            y: crate::geom::q16(cy).clamp(-limit, limit),
+        };
+        self.cameras
+            .set_zoom_and_center(proof, camera, zoom, center);
+        self.camera_written(output, camera, out);
     }
 
     /// [`Core::physical_input`] into a new `Vec`: for tests and one-off callers. It allocates;

@@ -1,7 +1,8 @@
 //! Touch (`wl_touch`, Core's `touch`) with a real client: a finger on a window reaches it at its
 //! surface-local position; the window keeps that finger as it moves, even past the window's
 //! edge, until it lifts; a finger on empty canvas reaches no client; a tap focuses the window;
-//! a cancel gives up the fingers. The seat offers touch only once a touchscreen is there.
+//! a cancel gives up the fingers; fingers on empty canvas drag it and pinch-zoom it. The seat
+//! offers touch only once a touchscreen is there.
 
 mod common;
 
@@ -210,6 +211,76 @@ fn a_tap_focuses_the_window_and_a_cancel_gives_up_the_fingers() {
     assert!(
         !r.ls.probe.log.iter().any(|l| l.starts_with("motion")),
         "cancelled: nothing more: {:?}",
+        r.ls.probe.log
+    );
+}
+
+/// The camera of the rig's output: its centre (Canvas px) and zoom.
+fn camera(r: &Rig) -> ((f64, f64), f64) {
+    let core = r.ls.state.core();
+    let cam = core
+        .cameras()
+        .camera_for_output(r.ls.output())
+        .expect("a camera");
+    let c = core.cameras().center(cam).expect("a centre");
+    let q = infynitae_core::geom::Q16_ONE as f64;
+    (
+        (c.x as f64 / q, c.y as f64 / q),
+        core.cameras().zoom(cam).expect("a zoom"),
+    )
+}
+
+/// One finger on empty canvas drags it: the camera moves against the finger, the zoom stays, and
+/// the lift ends the drag (a later finger elsewhere moves nothing until it moves itself).
+#[test]
+fn a_finger_on_empty_canvas_drags_the_canvas() {
+    let (mut r, _touch) = rig();
+    let ((x0, y0), z0) = camera(&r);
+    down(&mut r, 1, (1800.0, 1000.0));
+    motion(&mut r, 1, (1700.0, 900.0));
+    let ((x, y), z) = camera(&r);
+    assert_eq!(z, z0);
+    assert!(
+        (x - (x0 + 100.0 / z0)).abs() < 0.01 && (y - (y0 + 100.0 / z0)).abs() < 0.01,
+        "the canvas followed the finger: {x0},{y0} -> {x},{y}"
+    );
+    up(&mut r, 1);
+    down(&mut r, 2, (100.0, 100.0));
+    assert_eq!(camera(&r), ((x, y), z), "a new finger alone moves nothing");
+}
+
+/// Two fingers on empty canvas pinch: twice their spread is twice the zoom, and the Canvas point
+/// between them stays between them.
+#[test]
+fn two_fingers_on_empty_canvas_pinch_zoom_around_their_midpoint() {
+    let (mut r, _touch) = rig();
+    let ((x0, y0), z0) = camera(&r);
+    let (mid, extent) = ((1700.0, 950.0), (1920.0, 1080.0));
+    let under = |((x, y), z): ((f64, f64), f64)| {
+        (
+            x + (mid.0 - extent.0 / 2.0) / z,
+            y + (mid.1 - extent.1 / 2.0) / z,
+        )
+    };
+    let before = under(((x0, y0), z0));
+    down(&mut r, 1, (1650.0, 950.0));
+    down(&mut r, 2, (1750.0, 950.0));
+    motion(&mut r, 1, (1600.0, 950.0));
+    motion(&mut r, 2, (1800.0, 950.0));
+    let after = camera(&r);
+    assert!(
+        (after.1 - 2.0 * z0).abs() < 1e-9,
+        "zoom {z0} -> {}",
+        after.1
+    );
+    let now = under(after);
+    assert!(
+        (now.0 - before.0).abs() < 0.01 && (now.1 - before.1).abs() < 0.01,
+        "{before:?} -> {now:?}"
+    );
+    assert!(
+        !r.ls.probe.log.iter().any(|l| l.starts_with("down")),
+        "no client saw the fingers: {:?}",
         r.ls.probe.log
     );
 }
