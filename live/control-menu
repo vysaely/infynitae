@@ -1,8 +1,9 @@
 #!/bin/sh
-# Super+A: the control menu. Wi-Fi, Bluetooth, sound output, power mode and notifications, each
-# shown only when its tool is installed: nmcli (NetworkManager) or iwctl (iwd), bluetoothctl
-# (bluez-utils), pactl (pipewire-pulse), powerprofilesctl (power-profiles-daemon), makoctl or
-# swaync-client. The picker is MENU_PICKER (empty: fuzzel --dmenu); any dmenu-style command works.
+# Super+A: the control menu. Wi-Fi, Bluetooth, volume (all sound and each app), sound output,
+# power mode and notifications, each shown only when its tool is installed: nmcli
+# (NetworkManager) or iwctl (iwd), bluetoothctl (bluez-utils), pactl (pipewire-pulse),
+# powerprofilesctl (power-profiles-daemon), makoctl or swaync-client. The picker is MENU_PICKER
+# (empty: fuzzel --dmenu); any dmenu-style command works.
 # CONTROL_MENU in the config replaces this whole menu with your own command.
 
 PICKER="${MENU_PICKER:-fuzzel --dmenu}"
@@ -97,6 +98,48 @@ sound_menu() {
     [ -n "$name" ] && pactl set-default-sink "$name" && note "Sound output" "$desc"
 }
 
+# ── Volume ─────────────────────────────────────────────────────────────────────────────────────
+# "target<TAB>name<TAB>volume<TAB>muted": all sound (the default output) first, then every app
+# playing now (its sink input's index)
+volumes() {
+    vol=$(LC_ALL=C pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -o '[0-9]*%' | head -1)
+    mute=$(LC_ALL=C pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | awk '{ print $2 }')
+    [ -n "$vol" ] && printf '@DEFAULT_SINK@\tAll sound\t%s\t%s\n' "$vol" "$mute"
+    LC_ALL=C pactl list sink-inputs 2>/dev/null | awk '
+        function out() { if (idx != "") print idx "\t" (app != "" ? app : "Stream " idx) "\t" vol "\t" mute }
+        /^Sink Input #/ { out(); idx = substr($3, 2); app = ""; vol = ""; mute = "" }
+        /^\s*Mute:/ { mute = $2 }
+        /^\s*Volume:/ && vol == "" { if (match($0, /[0-9]+%/)) vol = substr($0, RSTART, RLENGTH) }
+        /^\s*application\.name = / { sub(/^[^"]*"/, ""); sub(/"$/, ""); app = $0 }
+        END { out() }'
+}
+volume_label() { awk -F'\t' '{ printf "%s · %s%s\n", $2, $3, ($4 == "yes") ? " (muted)" : "" }'; }
+volume_menu() {
+    list=$(volumes)
+    [ -z "$list" ] && { note "No sound output"; return; }
+    choice=$(printf '%s\n' "$list" | volume_label | $PICKER)
+    [ -z "$choice" ] && return
+    line=$(printf '%s\n' "$list" | while IFS= read -r l; do
+        [ "$(printf '%s\n' "$l" | volume_label)" = "$choice" ] && printf '%s\n' "$l" && break
+    done)
+    [ -z "$line" ] && return
+    target=$(printf '%s' "$line" | cut -f1)
+    name=$(printf '%s' "$line" | cut -f2)
+    current=$(printf '%s' "$line" | cut -f3 | tr -d '%')
+    if [ "$target" = @DEFAULT_SINK@ ]; then kind=sink; else kind=sink-input; fi
+    if [ "$(printf '%s' "$line" | cut -f4)" = yes ]; then mute_label="Unmute"; else mute_label="Mute"; fi
+    level=$(pick "100%" "75%" "50%" "25%" "+10%" "-10%" "$mute_label" | tr -d ' ')
+    # +10% stops at 100%
+    [ "$level" = "+10%" ] && [ "${current:-0}" -ge 90 ] && level="100%"
+    case "$level" in
+        "") return ;;
+        Mute|Unmute) pactl "set-$kind-mute" "$target" toggle ;;
+        *) pactl "set-$kind-volume" "$target" "$level" && pactl "set-$kind-mute" "$target" 0 ;;
+    esac
+    now=$(volumes | awk -F'\t' -v t="$target" '$1 == t { print $3 ($4 == "yes" ? ", muted" : ""); exit }')
+    note "$name" "Volume ${now:-changed}"
+}
+
 # ── Power mode ─────────────────────────────────────────────────────────────────────────────────
 power_menu() {
     current=$(powerprofilesctl get 2>/dev/null)
@@ -145,6 +188,7 @@ add() { entries="${entries}${1}
 "; }
 { have nmcli || have iwctl; } && add "Wi-Fi"
 have bluetoothctl && [ -n "$(ls /sys/class/bluetooth 2>/dev/null)" ] && add "Bluetooth"
+have pactl && add "Volume"
 have pactl && add "Sound output"
 have powerprofilesctl && add "Power mode"
 if have makoctl; then
@@ -166,6 +210,7 @@ case "$(printf '%s' "$entries" | $PICKER)" in
     "Wi-Fi") wifi_menu ;;
     "Bluetooth") bt_menu ;;
     "Sound output") sound_menu ;;
+    "Volume") volume_menu ;;
     "Power mode") power_menu ;;
     "Do not disturb"|"Notifications: off (turn on)"|"Do not disturb (toggle)") dnd_toggle ;;
     "Replay buffer: on (turn off)"|"Replay buffer: off (turn on)") replay_toggle ;;
