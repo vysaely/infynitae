@@ -39,7 +39,8 @@ use smithay::backend::drm::{DrmDevice, DrmDeviceFd, DrmEvent};
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyState,
-    KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+    KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, Switch,
+    SwitchState, SwitchToggleEvent,
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -462,6 +463,8 @@ struct LoopData {
     factory: ScreenFactory,
     /// The connectors are compared with the screens then (a display change settled; hotplug).
     rescan_at: Option<std::time::Instant>,
+    /// The laptop's lid is closed: its panel is left out while another screen is connected.
+    lid_closed: bool,
 }
 
 /// The device limit Core is told: assumed, not queried, as in the nested backend (OB-52).
@@ -535,6 +538,27 @@ fn screens_gone<I: Copy, C: PartialEq>(
         .collect()
 }
 
+/// A laptop's own panel (eDP, LVDS, DSI), which its lid covers.
+fn is_internal_panel(i: connector::Interface) -> bool {
+    matches!(
+        i,
+        connector::Interface::EmbeddedDisplayPort
+            | connector::Interface::LVDS
+            | connector::Interface::DSI
+    )
+}
+
+/// Which connected connectors (`internal`: each is a laptop panel) are shown: under a closed lid
+/// the panels are left out, but only while another screen is connected, so the session never
+/// ends up with none (with no other screen, logind suspends the machine). Pure.
+fn lid_shows(lid_closed: bool, internal: &[bool]) -> Vec<bool> {
+    let other = internal.iter().any(|i| !i);
+    internal
+        .iter()
+        .map(|i| !(lid_closed && other && *i))
+        .collect()
+}
+
 /// Hotplug: a screen whose connector is no longer connected is removed (Core disconnects its
 /// output: its camera is kept for its return, its windows stay on the canvas), and a newly
 /// connected connector becomes a screen.
@@ -542,12 +566,22 @@ fn rescan_screens(data: &mut LoopData) {
     let Ok(resources) = data.drm.resource_handles() else {
         return;
     };
-    let connected: Vec<(connector::Handle, connector::Info)> = resources
+    let mut connected: Vec<(connector::Handle, connector::Info)> = resources
         .connectors()
         .iter()
         .filter_map(|&h| data.drm.get_connector(h, true).ok().map(|c| (h, c)))
         .filter(|(_, c)| c.state() == connector::State::Connected)
         .collect();
+    let internal: Vec<bool> = connected
+        .iter()
+        .map(|(_, c)| is_internal_panel(c.interface()))
+        .collect();
+    let shown = lid_shows(data.lid_closed, &internal);
+    let mut i = 0;
+    connected.retain(|_| {
+        i += 1;
+        shown[i - 1]
+    });
     let handles: Vec<connector::Handle> = connected.iter().map(|(h, _)| *h).collect();
     let gone = screens_gone(
         data.screens
@@ -1233,6 +1267,7 @@ pub fn run_console_with(
         loop_handle: handle.clone(),
         factory,
         rescan_at: None,
+        lid_closed: false,
     };
 
     data.state.reload_config();
@@ -2102,6 +2137,22 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             data.buttons_down.push(button);
         }
     }
+    // the lid (also while locked): closed, the laptop's panel is left out while another screen
+    // is connected (with none, logind suspends the machine, its default); open, it comes back
+    if let InputEvent::SwitchToggle { event } = &event {
+        if SwitchToggleEvent::switch(event) == Some(Switch::Lid) {
+            let closed = matches!(SwitchToggleEvent::state(event), SwitchState::On);
+            if closed != data.lid_closed {
+                println!(
+                    "[infynitae] Lid {}",
+                    if closed { "closed" } else { "opened" }
+                );
+                data.lid_closed = closed;
+                data.rescan_at = Some(std::time::Instant::now());
+            }
+        }
+        return;
+    }
     // locked: pointer and touch go nowhere (keys go to the lock surface, below); a button
     // Core holds and that is released meanwhile gets its release after the unlock
     if data.state.is_locked()
@@ -2546,6 +2597,28 @@ mod tests {
         assert_eq!(parse_transform("normal"), Some(Transform::Normal));
         assert_eq!(parse_transform("45"), None);
         assert_eq!(parse_transform(""), None);
+    }
+
+    #[test]
+    fn a_closed_lid_leaves_the_panel_out_only_beside_another_screen() {
+        assert_eq!(
+            lid_shows(true, &[true, false]),
+            [false, true],
+            "panel out, monitor kept"
+        );
+        assert_eq!(
+            lid_shows(true, &[true]),
+            [true],
+            "alone: kept (logind suspends)"
+        );
+        assert_eq!(lid_shows(false, &[true, false]), [true, true], "open: both");
+        assert_eq!(
+            lid_shows(true, &[false, false]),
+            [true, true],
+            "no panel: nothing to hide"
+        );
+        assert!(is_internal_panel(connector::Interface::EmbeddedDisplayPort));
+        assert!(!is_internal_panel(connector::Interface::HDMIA));
     }
 
     #[test]

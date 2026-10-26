@@ -90,8 +90,12 @@ Also missing:
 - Packaging and installs other than Arch Linux; the install assumes one user and `~/infynitae`.
 - Crash reporting beyond the logs.
 
-Not handled yet on laptops and other hardware: closing the lid, touch as real touch (it acts as a
-mouse), pens, a second GPU, and NVIDIA's explicit sync.
+Closing a laptop's lid with another screen connected leaves the laptop's panel out (windows and
+the pointer stay on the other screen) until the lid opens; with no other screen, logind suspends
+the machine as it does by default. Not yet tried on a laptop.
+
+Not handled yet on laptops and other hardware: touch as real touch (it acts as a mouse), pens, a
+second GPU, and NVIDIA's explicit sync.
 
 ## Known limits
 
