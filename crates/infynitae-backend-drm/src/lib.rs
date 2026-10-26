@@ -90,6 +90,9 @@ pub struct ConsoleOptions {
     pub vrr: Option<bool>,
     /// Start locked (`--locked`): locked before any client runs, until a lock client unlocks.
     pub locked: bool,
+    /// `VIRTUAL_SCREEN`: with no screen connected (a monitor off or unplugged), a virtual one
+    /// stands in, so remote desktops and captures still have a screen.
+    pub virtual_screen: bool,
 }
 
 /// What the console takes before Core sees a key (T6), given the evdev code and whether Ctrl and
@@ -480,6 +483,88 @@ struct LoopData {
     rescan_at: Option<std::time::Instant>,
     /// The laptop's lid is closed: its panel is left out while another screen is connected.
     lid_closed: bool,
+    /// `ConsoleOptions::virtual_screen`.
+    virtual_screen_enabled: bool,
+    /// The virtual screen standing in while no screen is connected.
+    virtual_screen: Option<VirtualScreen>,
+}
+
+/// A screen with no monitor: drawn only for captures (remote desktops, screen sharing), its
+/// frames paced by the session's frame timer.
+struct VirtualScreen {
+    id: OutputId,
+    screencopy_texture: Option<GlesTexture>,
+}
+
+/// The virtual screen's mode: the common 1080p, at 60 Hz.
+pub const VIRTUAL_SCREEN_SIZE: (i32, i32) = (1920, 1080);
+
+/// Whether the virtual screen comes (`Some(true)`) or goes (`Some(false)`): it is there exactly
+/// while it is enabled and no real screen is connected.
+pub fn virtual_screen_change(enabled: bool, real_screens: usize, present: bool) -> Option<bool> {
+    let wanted = enabled && real_screens == 0;
+    (wanted != present).then_some(wanted)
+}
+
+/// The virtual screen comes or goes with the real ones: it comes when the last is gone, and goes
+/// once a real one is connected (after it, so windows and the pointer have somewhere to be).
+fn update_virtual_screen(data: &mut LoopData) {
+    match virtual_screen_change(
+        data.virtual_screen_enabled,
+        data.screens.len(),
+        data.virtual_screen.is_some(),
+    ) {
+        Some(true) => {
+            let descriptor = OutputDescriptor {
+                key: OutputKey {
+                    device: "virtual".into(),
+                    connector: "VIRTUAL-1".into(),
+                    make: "Infynitae".into(),
+                    model: "Virtual screen".into(),
+                    serial: None,
+                },
+                mode: (VIRTUAL_SCREEN_SIZE.0 as u32, VIRTUAL_SCREEN_SIZE.1 as u32),
+                transform: Transform::Normal,
+                scale_120: data.scale_120,
+                refresh_mhz: 60_000,
+            };
+            match data
+                .state
+                .core_mut()
+                .output_connected(&mut data.output_token, descriptor)
+            {
+                Ok((id, fx)) => {
+                    data.state.apply(&fx);
+                    data.virtual_screen = Some(VirtualScreen {
+                        id,
+                        screencopy_texture: None,
+                    });
+                    println!(
+                        "[infynitae] No screen connected: a virtual {}x{} screen stands in (VIRTUAL_SCREEN)",
+                        VIRTUAL_SCREEN_SIZE.0, VIRTUAL_SCREEN_SIZE.1
+                    );
+                    data.session.request_frame();
+                }
+                Err(e) => eprintln!("[infynitae] The virtual screen could not be set up: {e:?}"),
+            }
+        }
+        Some(false) => {
+            if let Some(v) = data.virtual_screen.take() {
+                match data
+                    .state
+                    .core_mut()
+                    .output_disconnected(&mut data.output_token, v.id)
+                {
+                    Ok(fx) => data.state.apply(&fx),
+                    Err(e) => {
+                        eprintln!("[infynitae] The virtual screen could not be removed: {e:?}")
+                    }
+                }
+                println!("[infynitae] A screen is connected: the virtual screen is gone");
+            }
+        }
+        None => {}
+    }
 }
 
 /// The device limit Core is told: assumed, not queried, as in the nested backend (OB-52).
@@ -655,6 +740,7 @@ fn rescan_screens(data: &mut LoopData) {
             Err(e) => eprintln!("[infynitae] A connected screen could not be set up: {e}"),
         }
     }
+    update_virtual_screen(data);
 }
 
 /// What setting up a screen needs, kept for screens connected later (hotplug).
@@ -1299,7 +1385,10 @@ pub fn run_console_with(
         factory,
         rescan_at: None,
         lid_closed: false,
+        virtual_screen_enabled: options.virtual_screen,
+        virtual_screen: None,
     };
+    update_virtual_screen(&mut data);
 
     data.state.reload_config();
     if let Some(ds) = data.state.direct_scanout {
@@ -1316,7 +1405,9 @@ pub fn run_console_with(
         let has_screencopy = data
             .screens
             .iter()
-            .any(|s| data.state.screencopy.has_pending(s.id));
+            .map(|s| s.id)
+            .chain(data.virtual_screen.as_ref().map(|v| v.id))
+            .any(|id| data.state.screencopy.has_pending(id));
         if has_screencopy {
             data.session.request_frame();
         }
@@ -1605,7 +1696,9 @@ pub fn run_console_with(
         let has_screencopy = data
             .screens
             .iter()
-            .any(|s| data.state.screencopy.has_pending(s.id));
+            .map(|s| s.id)
+            .chain(data.virtual_screen.as_ref().map(|v| v.id))
+            .any(|id| data.state.screencopy.has_pending(id));
         if (data.session.frame_due() || has_screencopy) && data.active {
             render(&mut data);
         }
@@ -1831,6 +1924,18 @@ fn render(data: &mut LoopData) {
             let now = infynitae_wayland::presentation_clock_now();
             data.state.frame_tick(id, now);
         }
+    }
+    if let Some(v) = data.virtual_screen.as_mut() {
+        serve_captures(
+            &mut data.state,
+            &mut data.renderer,
+            &mut v.screencopy_texture,
+            v.id,
+            VIRTUAL_SCREEN_SIZE,
+            clear,
+        );
+        let now = infynitae_wayland::presentation_clock_now();
+        data.state.frame_tick(v.id, now);
     }
     confirm_lock(data);
     data.session.flush();
@@ -2309,12 +2414,18 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             let screen = current_output
                 .and_then(|out_id| data.screens.iter().find(|s| s.id == out_id))
                 .or_else(|| data.screens.first());
-            let (target_phys_x, target_phys_y) = match screen {
-                Some(s) => (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
-                None => (event.x(), event.y()),
+            let (target_phys_x, target_phys_y) = match (screen, &data.virtual_screen) {
+                (Some(s), _) => (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
+                (None, Some(_)) => (
+                    event.x_transformed(VIRTUAL_SCREEN_SIZE.0),
+                    event.y_transformed(VIRTUAL_SCREEN_SIZE.1),
+                ),
+                (None, None) => (event.x(), event.y()),
             };
             let scale = screen
-                .and_then(|s| data.state.core().output(s.id).map(|o| o.scale))
+                .map(|s| s.id)
+                .or(data.virtual_screen.as_ref().map(|v| v.id))
+                .and_then(|id| data.state.core().output(id).map(|o| o.scale))
                 .unwrap_or_else(|| (f64::from(data.scale_120) / 120.0).max(0.001));
             let delta =
                 calculate_abs_pointer_delta_scale((target_phys_x, target_phys_y), current_p, scale);
@@ -2753,6 +2864,37 @@ mod tests {
         assert_eq!(refresh_mhz(148_500, 2200, 1125, 60), 60_000);
         assert_eq!(refresh_mhz(148_352, 2200, 1125, 60), 59_940);
         assert_eq!(refresh_mhz(0, 0, 0, 75), 75_000);
+    }
+
+    #[test]
+    fn the_virtual_screen_stands_in_only_while_no_screen_is_connected() {
+        // no screen (a monitor off at boot, or unplugged): it comes
+        assert_eq!(virtual_screen_change(true, 0, false), Some(true));
+        assert_eq!(virtual_screen_change(true, 0, true), None);
+        // a screen is connected: it goes, and stays away
+        assert_eq!(virtual_screen_change(true, 1, true), Some(false));
+        assert_eq!(virtual_screen_change(true, 2, false), None);
+        // VIRTUAL_SCREEN=off: never
+        assert_eq!(virtual_screen_change(false, 0, false), None);
+        assert_eq!(virtual_screen_change(false, 0, true), Some(false));
+    }
+
+    #[test]
+    fn the_virtual_screen_is_a_screen_core_takes() {
+        let d = OutputDescriptor {
+            key: OutputKey {
+                device: "virtual".into(),
+                connector: "VIRTUAL-1".into(),
+                make: "Infynitae".into(),
+                model: "Virtual screen".into(),
+                serial: None,
+            },
+            mode: (VIRTUAL_SCREEN_SIZE.0 as u32, VIRTUAL_SCREEN_SIZE.1 as u32),
+            transform: Transform::Normal,
+            scale_120: 120,
+            refresh_mhz: 60_000,
+        };
+        assert!(infynitae_core::output::valid(&d));
     }
 
     #[test]

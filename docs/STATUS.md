@@ -51,6 +51,10 @@ These pass the test suite but have not run on a real screen or device yet:
 - **Touchscreens** as real touch (`wl_touch`): apps get each finger, so scrolling, pinching and
   gestures work inside them. A tap focuses the window under it. A finger on empty canvas drags
   the canvas; two fingers pinch-zoom it around their midpoint.
+- **Virtual screen** (`VIRTUAL_SCREEN`, on by default): with no screen connected (a monitor off
+  that reports itself unplugged, or none at all), a virtual 1920x1080 screen stands in, so remote
+  desktop still has a screen; it goes once a real one is connected. A monitor that is off but
+  still connected keeps being drawn as before.
 - **Laptop lid:** closing it with another screen connected moves everything to that screen
   until the lid opens. With no other screen, logind suspends as usual.
 - **Night light, screen power,** the capture dot, single-window sharing.

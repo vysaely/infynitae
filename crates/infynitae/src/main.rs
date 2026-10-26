@@ -330,6 +330,7 @@ fn main() -> ExitCode {
     core.set_teleport_on_open(true);
 
     let mut direct_scanout: Option<bool> = None;
+    let mut virtual_screen = true;
     let mut vrr: Option<bool> = None;
 
     if let Ok(fp) = std::env::var("FULLSCREEN_PAN") {
@@ -476,6 +477,12 @@ fn main() -> ExitCode {
                                 ));
                             }
                         }
+                        "VIRTUAL_SCREEN" => {
+                            virtual_screen = !matches!(
+                                val.to_lowercase().as_str(),
+                                "0" | "false" | "off" | "no"
+                            );
+                        }
                         "VRR_ENABLED" | "VRR" | "ADAPTIVE_SYNC" if vrr.is_none() => {
                             match val.to_lowercase().as_str() {
                                 // auto (None): only while a window is fullscreen
@@ -574,6 +581,7 @@ fn main() -> ExitCode {
             direct_scanout,
             vrr,
             locked,
+            virtual_screen,
         };
         match infynitae_backend_drm::run_console_with(
             core,
