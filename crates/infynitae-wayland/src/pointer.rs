@@ -14,6 +14,9 @@ use smithay::input::pointer::{
     GestureSwipeUpdateEvent, GrabStartData, MotionEvent, PointerGrab, PointerHandle,
     PointerInnerHandle, RelativeMotionEvent,
 };
+use smithay::input::touch::{
+    DownEvent as TouchDownEvent, MotionEvent as TouchMotionEvent, UpEvent as TouchUpEvent,
+};
 use smithay::input::{Seat, SeatHandler};
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -263,7 +266,7 @@ impl WaylandState {
 
     /// The Smithay focus of a Core target: the live surface and its Canvas origin. A target whose
     /// surface is no longer registered resolves to no focus (fail closed).
-    fn focus(&self, target: Option<PointerTarget>) -> Focus {
+    pub(crate) fn focus(&self, target: Option<PointerTarget>) -> Focus {
         let t = target?;
         let surface: WlSurface = self.registry.surface(t.surface)?.clone();
         Some((surface, convert::canvas_point_to_global(t.origin)))
@@ -632,4 +635,107 @@ fn axis_frame(axis: Axis, time_ms: u32) -> AxisFrame {
         }
     }
     frame
+}
+
+// ---- touch ----------------------------------------------------------------------------------
+// `wl_touch`: the seat's touch, offered only while a touchscreen is there (`enable_touch`; some
+// apps change their look for a touch seat). Core decides which surface each finger is on
+// (`infynitae_core::touch`); this applies its effects to Smithay's touch handle, which keeps
+// each finger on the surface it landed on. It is input delivery, so it lives here (C4.2).
+
+impl WaylandState {
+    /// The seat gets touch (a touchscreen was found). Idempotent.
+    pub fn enable_touch(&mut self) {
+        if self.seat.get_touch().is_none() {
+            self.seat.add_touch();
+        }
+    }
+
+    /// The seat's touch goes (the last touchscreen was removed): fingers down are given up.
+    pub fn disable_touch(&mut self) {
+        self.cancel_touches();
+        if self.seat.get_touch().is_some() {
+            self.seat.remove_touch();
+        }
+    }
+
+    /// Every finger down is given up (`wl_touch.cancel`). Smithay 0.7 sends a cancel only to a
+    /// finger with an event since its last frame, which leaves out a finger that is held
+    /// still: each one is sent its last location again first (a motion to where it is), so the
+    /// cancel reaches every client holding a finger.
+    pub(crate) fn cancel_touches(&mut self) {
+        let Some(touch) = self.seat.get_touch() else {
+            self.touch_last.clear();
+            return;
+        };
+        for (slot, location) in std::mem::take(&mut self.touch_last) {
+            let event = TouchMotionEvent {
+                slot: Some(slot).into(),
+                location: convert::canvas_to_global(location),
+                time: 0,
+            };
+            touch.motion(self, None, &event);
+        }
+        touch.cancel(self);
+    }
+
+    /// Applies one touch effect. Returns `false` for an effect that is not a touch effect.
+    pub(crate) fn apply_touch(&mut self, effect: &Effect) -> bool {
+        let touch = self.seat.get_touch();
+        match *effect {
+            Effect::TouchDown {
+                slot,
+                target,
+                location,
+                time_ms,
+            } => {
+                let Some(touch) = touch else { return true };
+                let focus = self.focus(Some(target));
+                self.touch_last.retain(|(s, _)| *s != slot);
+                self.touch_last.push((slot, location));
+                let event = TouchDownEvent {
+                    slot: Some(slot).into(),
+                    location: convert::canvas_to_global(location),
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                };
+                touch.down(self, focus, &event);
+            }
+            Effect::TouchMotion {
+                slot,
+                location,
+                time_ms,
+            } => {
+                let Some(touch) = touch else { return true };
+                // Smithay delivers it to the surface the finger landed on
+                if let Some(last) = self.touch_last.iter_mut().find(|(s, _)| *s == slot) {
+                    last.1 = location;
+                }
+                let event = TouchMotionEvent {
+                    slot: Some(slot).into(),
+                    location: convert::canvas_to_global(location),
+                    time: time_ms,
+                };
+                touch.motion(self, None, &event);
+            }
+            Effect::TouchUp { slot, time_ms } => {
+                let Some(touch) = touch else { return true };
+                self.touch_last.retain(|(s, _)| *s != slot);
+                let event = TouchUpEvent {
+                    slot: Some(slot).into(),
+                    serial: SERIAL_COUNTER.next_serial(),
+                    time: time_ms,
+                };
+                touch.up(self, &event);
+            }
+            Effect::TouchFrame => {
+                if let Some(touch) = touch {
+                    touch.frame(self);
+                }
+            }
+            Effect::TouchCancel => self.cancel_touches(),
+            _ => return false,
+        }
+        true
+    }
 }

@@ -100,8 +100,13 @@ Closing a laptop's lid with another screen connected leaves the laptop's panel o
 the pointer stay on the other screen) until the lid opens; with no other screen, logind suspends
 the machine as it does by default. Not yet tried on a laptop.
 
-Not handled yet on laptops and other hardware: touch as real touch (it acts as a mouse), pens, a
-second GPU, and NVIDIA's explicit sync.
+Touchscreens are real touch (`wl_touch`): apps get each finger, so scrolling, pinching and
+multi-finger gestures work inside them; a tap on a window focuses it, and a finger stays with the
+window it landed on until it lifts. A finger on empty canvas does nothing yet (no panning or
+pinch-zoom of the canvas by touch). Only tested in the test suite so far.
+
+Not handled yet on laptops and other hardware: pens and drawing tablets, touch gestures on the
+canvas, a second GPU, and NVIDIA's explicit sync.
 
 ## Known limits
 

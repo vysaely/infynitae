@@ -313,6 +313,8 @@ impl SessionLockHandler for WaylandState {
             g.ungrab(PopupUngrabStrategy::All);
         }
         self.keyboard_unset_grab();
+        // a finger held on a window is given up: nothing reaches a window while locked
+        self.cancel_touches();
         let kb = self.keyboard_handle();
         kb.set_focus(self, None, SERIAL_COUNTER.next_serial());
         // Smithay tells a newly focused surface which forwarded keys are down; keys held now

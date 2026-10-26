@@ -40,7 +40,7 @@ use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::input::{
     AbsolutePositionEvent, Axis, AxisSource, ButtonState, Event, InputEvent, KeyState,
     KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent, Switch,
-    SwitchState, SwitchToggleEvent,
+    SwitchState, SwitchToggleEvent, TouchEvent,
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -2179,6 +2179,15 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 | InputEvent::DeviceRemoved { .. }
         )
     {
+        if matches!(
+            event,
+            InputEvent::TouchDown { .. }
+                | InputEvent::TouchMotion { .. }
+                | InputEvent::TouchUp { .. }
+                | InputEvent::TouchCancel { .. }
+        ) {
+            core_touch(data, PhysicalEvent::TouchCancel);
+        }
         return;
     }
     match event {
@@ -2313,123 +2322,40 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 .with_effects(|core, fx| core.physical_input(port, phys, fx));
         }
         InputEvent::TouchDown { event } => {
-            let current_ptr = data.state.core().pointer();
-            let (current_output, current_p) = match current_ptr {
-                infynitae_core::pointer::PointerState::Located { output, p } => (Some(output), p),
-                infynitae_core::pointer::PointerState::NoOutput => (None, (0.0, 0.0)),
-            };
-            let screen = current_output
-                .and_then(|out_id| data.screens.iter().find(|s| s.id == out_id))
-                .or_else(|| data.screens.first());
-            // the touchscreen reports the panel's own orientation: turned with the screen
-            let (target_phys_x, target_phys_y) = match screen {
-                Some(s) => convert::panel_point_to_view(
-                    (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
-                    s.size,
-                    data.state
-                        .core()
-                        .output(s.id)
-                        .map_or(Transform::Normal, |o| o.transform),
-                ),
-                None => (event.x(), event.y()),
-            };
-            let scale = screen
-                .and_then(|s| data.state.core().output(s.id).map(|o| o.scale))
-                .unwrap_or_else(|| (f64::from(data.scale_120) / 120.0).max(0.001));
-            let delta =
-                calculate_abs_pointer_delta_scale((target_phys_x, target_phys_y), current_p, scale);
-            data.last_abs_pointer = Some((target_phys_x / scale, target_phys_y / scale));
-            let time_us = Event::time(&event);
-            if delta.0.abs() > 0.0001 || delta.1.abs() > 0.0001 {
-                let phys = PhysicalEvent::PointerMotion {
-                    delta,
-                    delta_unaccel: delta,
-                    time_us,
-                };
-                let port = &mut data.input_port;
-                let _ = data
-                    .state
-                    .with_effects(|core, fx| core.physical_input(port, phys, fx));
+            if let Some((output, p)) = touch_position(data, &event) {
+                let slot = touch_slot(TouchEvent::slot(&event));
+                let time_us = Event::time(&event);
+                core_touch(
+                    data,
+                    PhysicalEvent::TouchDown {
+                        slot,
+                        output,
+                        p,
+                        time_us,
+                    },
+                );
             }
-            let btn_phys = PhysicalEvent::PointerButton {
-                button: 272, // BTN_LEFT
-                pressed: true,
-                modifiers: data.state.seat_modifiers(),
-                time_us,
-            };
-            let port = &mut data.input_port;
-            let _ = data
-                .state
-                .with_effects(|core, fx| core.physical_input(port, btn_phys, fx));
         }
         InputEvent::TouchMotion { event } => {
-            let current_ptr = data.state.core().pointer();
-            let (current_output, current_p) = match current_ptr {
-                infynitae_core::pointer::PointerState::Located { output, p } => (Some(output), p),
-                infynitae_core::pointer::PointerState::NoOutput => (None, (0.0, 0.0)),
-            };
-            let screen = current_output
-                .and_then(|out_id| data.screens.iter().find(|s| s.id == out_id))
-                .or_else(|| data.screens.first());
-            // the touchscreen reports the panel's own orientation: turned with the screen
-            let (target_phys_x, target_phys_y) = match screen {
-                Some(s) => convert::panel_point_to_view(
-                    (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
-                    s.size,
-                    data.state
-                        .core()
-                        .output(s.id)
-                        .map_or(Transform::Normal, |o| o.transform),
-                ),
-                None => (event.x(), event.y()),
-            };
-            let scale = screen
-                .and_then(|s| data.state.core().output(s.id).map(|o| o.scale))
-                .unwrap_or_else(|| (f64::from(data.scale_120) / 120.0).max(0.001));
-            let delta =
-                calculate_abs_pointer_delta_scale((target_phys_x, target_phys_y), current_p, scale);
-            data.last_abs_pointer = Some((target_phys_x / scale, target_phys_y / scale));
-            let time_us = Event::time(&event);
-            if delta.0.abs() > 0.0001 || delta.1.abs() > 0.0001 {
-                let phys = PhysicalEvent::PointerMotion {
-                    delta,
-                    delta_unaccel: delta,
-                    time_us,
-                };
-                let port = &mut data.input_port;
-                let _ = data
-                    .state
-                    .with_effects(|core, fx| core.physical_input(port, phys, fx));
+            if let Some((_, p)) = touch_position(data, &event) {
+                let slot = touch_slot(TouchEvent::slot(&event));
+                let time_us = Event::time(&event);
+                core_touch(data, PhysicalEvent::TouchMotion { slot, p, time_us });
             }
         }
         InputEvent::TouchUp { event } => {
+            let slot = touch_slot(TouchEvent::slot(&event));
             let time_us = Event::time(&event);
-            let btn_phys = PhysicalEvent::PointerButton {
-                button: 272, // BTN_LEFT
-                pressed: false,
-                modifiers: data.state.seat_modifiers(),
-                time_us,
-            };
-            let port = &mut data.input_port;
-            let _ = data
-                .state
-                .with_effects(|core, fx| core.physical_input(port, btn_phys, fx));
+            core_touch(data, PhysicalEvent::TouchUp { slot, time_us });
         }
-        InputEvent::TouchCancel { event } => {
-            let time_us = Event::time(&event);
-            let btn_phys = PhysicalEvent::PointerButton {
-                button: 272, // BTN_LEFT
-                pressed: false,
-                modifiers: data.state.seat_modifiers(),
-                time_us,
-            };
-            let port = &mut data.input_port;
-            let _ = data
-                .state
-                .with_effects(|core, fx| core.physical_input(port, btn_phys, fx));
-        }
+        InputEvent::TouchCancel { .. } => core_touch(data, PhysicalEvent::TouchCancel),
+        InputEvent::TouchFrame { .. } => core_touch(data, PhysicalEvent::TouchFrame),
         InputEvent::DeviceAdded { mut device } => {
             configure_input_device(&mut device, data.state.input_config());
+            if device.has_capability(smithay::reexports::input::DeviceCapability::Touch) {
+                println!("[infynitae] Touchscreen: {}", device.name());
+                data.state.enable_touch();
+            }
             let is_kb =
                 device.has_capability(smithay::reexports::input::DeviceCapability::Keyboard);
             let is_ptr =
@@ -2460,6 +2386,14 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             data.input_devices
                 .retain(|d| d.sysname() != device.sysname());
             data.last_abs_pointer = None;
+            if device.has_capability(smithay::reexports::input::DeviceCapability::Touch)
+                && !data
+                    .input_devices
+                    .iter()
+                    .any(|d| d.has_capability(smithay::reexports::input::DeviceCapability::Touch))
+            {
+                data.state.disable_touch();
+            }
         }
         _ => {}
     }
@@ -2485,6 +2419,57 @@ fn core_key(data: &mut LoopData, key: u32, pressed: bool, time_us: u64) {
             .state
             .with_effects(|core, fx| core.physical_input(port, phys, fx));
     }
+}
+
+/// One touch event to Core (its effects to the clients).
+fn core_touch(data: &mut LoopData, ev: PhysicalEvent) {
+    let port = &mut data.input_port;
+    let _ = data
+        .state
+        .with_effects(|core, fx| core.physical_input(port, ev, fx));
+}
+
+/// A libinput slot as Core's (one per finger; a device without slots has one finger).
+fn touch_slot(slot: smithay::backend::input::TouchSlot) -> u32 {
+    u32::try_from(i32::from(slot)).unwrap_or(0)
+}
+
+/// Where a touch is: on the laptop's own panel (the touchscreen is part of it), else the screen
+/// the pointer is on, else the first; in that screen's logical px, turned with its rotation
+/// (the touchscreen reports the panel's own orientation).
+fn touch_position<E>(data: &LoopData, event: &E) -> Option<(OutputId, (f64, f64))>
+where
+    E: AbsolutePositionEvent<LibinputInputBackend>,
+{
+    let core = data.state.core();
+    let internal = |s: &&Screen| {
+        core.output(s.id).is_some_and(|o| {
+            ["eDP", "LVDS", "DSI"]
+                .iter()
+                .any(|p| o.key.connector.starts_with(p))
+        })
+    };
+    let pointer_output = match core.pointer() {
+        infynitae_core::pointer::PointerState::Located { output, .. } => Some(output),
+        infynitae_core::pointer::PointerState::NoOutput => None,
+    };
+    let screen = data
+        .screens
+        .iter()
+        .find(internal)
+        .or_else(|| data.screens.iter().find(|s| Some(s.id) == pointer_output))
+        .or_else(|| data.screens.first())?;
+    let model = core.output(screen.id)?;
+    let (x, y) = convert::panel_point_to_view(
+        (
+            event.x_transformed(screen.size.0),
+            event.y_transformed(screen.size.1),
+        ),
+        screen.size,
+        model.transform,
+    );
+    let scale = model.scale.max(0.001);
+    Some((screen.id, (x / scale, y / scale)))
 }
 
 fn update_keyboard_leds(

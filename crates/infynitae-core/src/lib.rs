@@ -27,6 +27,7 @@ pub mod render;
 pub mod scale;
 pub mod snapshot;
 pub mod stage;
+pub mod touch;
 pub mod visibility;
 
 mod entry;
@@ -127,6 +128,26 @@ pub enum PhysicalEvent {
     },
     /// Centers the camera of the active output on an element.
     RecenterElement { element: stage::ElementId },
+    /// A finger touched a touchscreen on `output` at `p` (output logical px, the screen's
+    /// rotation already applied), in `slot` (one per finger).
+    TouchDown {
+        slot: u32,
+        output: output::OutputId,
+        p: (f64, f64),
+        time_us: u64,
+    },
+    /// A finger down in `slot` moved to `p` on its output.
+    TouchMotion {
+        slot: u32,
+        p: (f64, f64),
+        time_us: u64,
+    },
+    /// The finger in `slot` lifted.
+    TouchUp { slot: u32, time_us: u64 },
+    /// The end of one touch frame (the events of a moment, all fingers).
+    TouchFrame,
+    /// The touchscreen gave up the touches (a gesture taken by the hardware, a palm).
+    TouchCancel,
 }
 
 /// A semantic command from the trusted shell (C7.2, INV-SHELL-1): a value Core validates and then
@@ -416,6 +437,8 @@ pub struct Core {
     pub teleport_on_open: bool,
     /// Whether physical input occurred since the last query (INV-IDLE-1).
     pub(crate) physical_input_activity: bool,
+    /// The fingers down on a surface (`touch`).
+    pub(crate) touches: touch::Touches,
     /// NEGATIVE PROBE (PD-F2-01): Core retaining a proof for a later mutation. Must make the
     /// protocol state fail its `Send` assertion (built through infynitae-wayland's probe feature).
     #[cfg(feature = "probe_sticky_fit_retains_authority")]
@@ -499,6 +522,7 @@ impl Core {
                 closed_windows: Vec::new(),
                 teleport_on_open: false,
                 physical_input_activity: false,
+                touches: touch::Touches::default(),
                 frame_liveness: frames::FrameLiveness::default(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
@@ -1086,6 +1110,17 @@ impl Core {
             E::ConstraintActivate { surface, .. } | E::ConstraintDeactivate { surface, .. } => {
                 recipients[0] = self.frame_kick_surface(surface);
             }
+            // a finger on a window is input to it: the window it landed on
+            E::TouchDown { target, .. } => {
+                recipients[0] = self.frame_kick_surface(target.surface);
+            }
+            E::TouchMotion { slot, .. } => {
+                recipients[0] = self
+                    .touches
+                    .get(slot)
+                    .and_then(|t| self.frame_kick_surface(t.target.surface));
+            }
+            E::TouchUp { .. } | E::TouchFrame | E::TouchCancel => {}
             E::InitialConfigure(_)
             | E::LayerConfigure { .. }
             | E::LayerClosed(_)

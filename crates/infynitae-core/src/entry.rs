@@ -187,7 +187,161 @@ impl Core {
                 self.recenter_on_element(proof, element, false, out);
                 Ok(())
             }
+            PhysicalEvent::TouchDown {
+                slot,
+                output,
+                p,
+                time_us,
+            } => {
+                if !(p.0.is_finite() && p.1.is_finite()) {
+                    return Err(EntryError::InvalidEvent);
+                }
+                self.input.clock.accepted(time_us);
+                self.touch_down(slot, output, p, ms(time_us), out);
+                self.physical_input_activity = true;
+                Ok(())
+            }
+            PhysicalEvent::TouchMotion { slot, p, time_us } => {
+                if !(p.0.is_finite() && p.1.is_finite()) {
+                    return Err(EntryError::InvalidEvent);
+                }
+                self.input.clock.accepted(time_us);
+                self.touch_motion(slot, p, ms(time_us), out);
+                self.physical_input_activity = true;
+                Ok(())
+            }
+            PhysicalEvent::TouchUp { slot, time_us } => {
+                self.input.clock.accepted(time_us);
+                if self.touches.remove(slot) {
+                    out.push(Effect::TouchUp {
+                        slot,
+                        time_ms: ms(time_us),
+                    });
+                }
+                self.physical_input_activity = true;
+                Ok(())
+            }
+            PhysicalEvent::TouchFrame => {
+                out.push(Effect::TouchFrame);
+                Ok(())
+            }
+            PhysicalEvent::TouchCancel => {
+                if self.touches.clear() {
+                    out.push(Effect::TouchCancel);
+                }
+                Ok(())
+            }
         }
+    }
+
+    /// A finger's first contact (`touch`): hit-tested like a click (INV-INPUT-8: a tap on a
+    /// window raises and focuses it, a tap on an on-demand layer surface gives it the keyboard),
+    /// and the surface keeps the finger until it lifts. Nothing while a compositor interaction
+    /// owns the input, on an unknown output, or on empty canvas.
+    fn touch_down(
+        &mut self,
+        slot: u32,
+        output: OutputId,
+        p: (f64, f64),
+        time_ms: u32,
+        out: &mut Vec<Effect>,
+    ) {
+        // a slot still held (its lift was never seen: dropped while the session was locked) is
+        // a new contact now
+        self.touches.remove(slot);
+        if self.output(output).is_none() || self.input.interaction.active() {
+            return;
+        }
+        let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
+        let on_layer = self.layer_hit(output, p, true);
+        let element = if on_layer.is_none() {
+            self.hit_test(output, pt)
+        } else {
+            None
+        };
+        let on_layer = on_layer.or_else(|| {
+            element
+                .is_none()
+                .then(|| self.layer_hit(output, p, false))
+                .flatten()
+        });
+        let q = crate::geom::Q16_ONE;
+        let (target, location, anchor) = if let Some(hit) = element {
+            self.raise_by_user(hit.element);
+            out.extend(self.focus.set_focus(Some(hit.element)));
+            (
+                crate::protocol::PointerTarget {
+                    surface: hit.surface,
+                    origin: hit.origin,
+                },
+                crate::geom::CanvasPos {
+                    x: hit.origin.x * q + hit.local.x,
+                    y: hit.origin.y * q + hit.local.y,
+                },
+                crate::touch::Anchor::Canvas,
+            )
+        } else if let Some(h) = on_layer {
+            if self
+                .layer(h.layer)
+                .is_some_and(|r| r.state.keyboard == crate::layer::KeyboardInteractivity::OnDemand)
+            {
+                out.extend(self.focus.layer_take(h.layer, false));
+            }
+            let local = (h.local.x as f64 / q as f64, h.local.y as f64 / q as f64);
+            (
+                crate::protocol::PointerTarget {
+                    surface: h.surface,
+                    origin: crate::geom::CanvasPoint { x: 0, y: 0 },
+                },
+                crate::geom::CanvasPos {
+                    x: h.local.x,
+                    y: h.local.y,
+                },
+                crate::touch::Anchor::Layer {
+                    offset: (p.0 - local.0, p.1 - local.1),
+                },
+            )
+        } else {
+            return;
+        };
+        self.touches.insert(
+            slot,
+            crate::touch::TouchPoint {
+                output,
+                target,
+                anchor,
+            },
+        );
+        out.push(Effect::TouchDown {
+            slot,
+            target,
+            location,
+            time_ms,
+        });
+    }
+
+    /// A finger's motion, to the surface of its first contact (`touch`).
+    fn touch_motion(&mut self, slot: u32, p: (f64, f64), time_ms: u32, out: &mut Vec<Effect>) {
+        let Some(tp) = self.touches.get(slot) else {
+            return;
+        };
+        let location = match tp.anchor {
+            crate::touch::Anchor::Canvas => {
+                let Some(view) = self.current_frame(tp.output).map(|f| f.view) else {
+                    return;
+                };
+                view.unproject(crate::geom::OutputLogicalPoint { x: p.0, y: p.1 })
+            }
+            crate::touch::Anchor::Layer { offset } => crate::geom::CanvasPos {
+                x: crate::geom::q16(p.0 - offset.0),
+                y: crate::geom::q16(p.1 - offset.1),
+            },
+        };
+        out.push(Effect::TouchMotion {
+            slot,
+            location,
+            time_ms,
+        });
     }
 
     /// [`Core::physical_input`] into a new `Vec`: for tests and one-off callers. It allocates;
@@ -2136,6 +2290,7 @@ impl Core {
             .position(|o| o.id == output)
             .ok_or(EntryError::UnknownOutput)?;
         let lost = self.outputs.remove(index);
+        let touch_cancelled = self.touches.on_output(output) && self.touches.clear();
         self.remove_frame(output);
         self.remove_lattice(output);
         // its layer surfaces are closed before the pointer is relocated (they are not on any
@@ -2170,6 +2325,9 @@ impl Core {
         // INV-OUTPUT-1: "fullscreen presentation dropped with the INV-PRES-1 configure"
         let restored = self.fullscreen_output_removed(output);
         let mut fx = closed;
+        if touch_cancelled {
+            fx.push(Effect::TouchCancel);
+        }
         fx.extend(self.visibility_pass());
         fx.extend(restored);
         fx.extend(pointer_fx);

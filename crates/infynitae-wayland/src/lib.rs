@@ -199,6 +199,8 @@ pub struct WaylandState {
     foreign_toplevel_list: smithay::wayland::foreign_toplevel_list::ForeignToplevelListState,
     /// Apps keeping the screens on (`idle_inhibit`).
     idle_inhibit: idle_inhibit::IdleInhibit,
+    /// Each finger's last location sent (`touch`: a cancel needs it).
+    touch_last: Vec<(u32, infynitae_core::geom::CanvasPos)>,
     foreign_toplevels: std::collections::HashMap<
         ElementId,
         smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle,
@@ -528,6 +530,7 @@ impl WaylandState {
                     display,
                 ),
             idle_inhibit: idle_inhibit::IdleInhibit::new(display),
+            touch_last: Vec::new(),
             foreign_toplevels: std::collections::HashMap::new(),
             shortcuts_inhibit: shortcuts_inhibit::ShortcutsInhibitState::new(display),
             wlr_toplevels: wlr_toplevels::WlrToplevelsState::new(display),

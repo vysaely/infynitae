@@ -277,7 +277,9 @@ impl WaylandState {
                     self.spawn_action("media-prev");
                 }
                 ref other => {
-                    let applied = self.apply_layer(other) || self.apply_pointer(other);
+                    let applied = self.apply_layer(other)
+                        || self.apply_pointer(other)
+                        || self.apply_touch(other);
                     debug_assert!(applied, "unhandled effect {other:?}");
                 }
             }

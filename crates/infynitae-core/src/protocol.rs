@@ -70,6 +70,26 @@ pub enum Effect {
     PointerZeroOutputBegin,
     /// The first output after NoOutput: remove the zero-output grab before the startup placement.
     PointerZeroOutputEnd,
+    /// A finger's first contact (`wl_touch.down`) on `target` at `location` (Canvas, as for
+    /// `PointerMotion`: the client gets `location - origin`).
+    TouchDown {
+        slot: u32,
+        target: PointerTarget,
+        location: CanvasPos,
+        time_ms: u32,
+    },
+    /// The finger in `slot` moved (`wl_touch.motion`), delivered to its first contact's surface.
+    TouchMotion {
+        slot: u32,
+        location: CanvasPos,
+        time_ms: u32,
+    },
+    /// The finger in `slot` lifted (`wl_touch.up`).
+    TouchUp { slot: u32, time_ms: u32 },
+    /// `wl_touch.frame`.
+    TouchFrame,
+    /// `wl_touch.cancel`: every finger is given up.
+    TouchCancel,
     /// Change keyboard focus to `Option<ElementId>` (INV-INPUT-8).
     KeyboardFocus(Option<ElementId>),
     /// Send a configure to an xdg_toplevel, e.g. for `activated` state updates (INV-PROTO-1). Its
