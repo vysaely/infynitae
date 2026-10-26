@@ -1,6 +1,8 @@
 #!/bin/sh
 # Infynitae session launcher: restarts the compositor after a clean quit (Ctrl+Alt+Backspace =
-# reload), stops after a crash loop, and logs to ~/.local/state/infynitae/session.log.
+# reload), stops after a crash loop, and logs to ~/.local/state/infynitae/session.log. A crash
+# leaves a report in ~/.local/state/infynitae/crashes/ (the last 10), which the next start
+# announces in a notification (session.sh).
 #
 #   infynitae-session          run the session
 #   infynitae-session stop     end the session for real (no restart)
@@ -51,6 +53,33 @@ if command -v xwayland-satellite >/dev/null 2>&1; then
     XWLS="--xwayland-satellite $(command -v xwayland-satellite)"
 fi
 
+CRASH_DIR="$STATE_DIR/crashes"
+CRASH_NOTE="$STATE_DIR/crashed"
+
+# The crash just seen, in a report: how it ended, the panic message if Rust left one, and the
+# end of this run's log. CRASH_NOTE tells the next start (session.sh) to say so.
+crash_report() {
+    mkdir -p "$CRASH_DIR"
+    report="$CRASH_DIR/$(date '+%F_%H-%M-%S').log"
+    run_log() { tail -c +"$((START_BYTES + 1))" "$SESSION_LOG" 2>/dev/null; }
+    how="exit status $STATUS"
+    [ "$STATUS" -gt 128 ] && how="signal $(kill -l "$((STATUS - 128))" 2>/dev/null || echo "$((STATUS - 128))")"
+    # "thread 'main' panicked at src/…:", then the message on the next line
+    panic=$(run_log | grep -m1 -A1 "panicked at" | tail -n 1)
+    {
+        echo "Infynitae crashed ($how) after ${DURATION}s"
+        echo "Date:    $(date '+%F %T')"
+        echo "Version: $(git -C "$HOME/infynitae" describe --always --dirty 2>/dev/null || echo unknown)"
+        echo "Kernel:  $(uname -r)"
+        [ -n "$panic" ] && echo "Panic:   $panic"
+        echo ""
+        echo "The end of the session log:"
+        run_log | tail -n 200
+    } > "$report"
+    printf '%s\t%s\n' "$report" "${panic:-$how}" > "$CRASH_NOTE"
+    ls -1t "$CRASH_DIR"/*.log 2>/dev/null | tail -n +11 | while IFS= read -r old; do rm -f "$old"; done
+}
+
 rm -f "$STOP_FILE"
 FAILS=0
 
@@ -61,6 +90,8 @@ while true; do
     fi
 
     START_TIME=$(date +%s)
+    START_BYTES=0
+    [ -f "$SESSION_LOG" ] && START_BYTES=$(wc -c < "$SESSION_LOG")
     echo "[infynitae-session] $(date '+%F %T') Starting Infynitae compositor..." >> "$SESSION_LOG"
 
     # Refresh environment and drop stale auth before launch
@@ -99,6 +130,12 @@ while true; do
         echo "[infynitae-session] Stop requested; ending session." >> "$SESSION_LOG"
         exit 0
     fi
+
+    # a crash, not a quit (0) or the system ending the session (SIGHUP, SIGINT, SIGTERM)
+    case "$STATUS" in
+        0|129|130|143) ;;
+        *) crash_report ;;
+    esac
 
     if [ "$STATUS" -ne 0 ] && [ "$DURATION" -lt "$FAST_FAIL_SECS" ]; then
         FAILS=$((FAILS + 1))

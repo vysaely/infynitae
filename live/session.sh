@@ -135,6 +135,20 @@ if [ -n "$NOTIFY_CMD" ]; then
     $NOTIFY_CMD >/dev/null 2>&1 &
 fi
 
+# 6c2. The last crash (infynitae-session wrote a report): said once, in a notification
+CRASH_NOTE="$HOME/.local/state/infynitae/crashed"
+if [ -f "$CRASH_NOTE" ]; then
+    IFS="$(printf '\t')" read -r CRASH_REPORT CRASH_WHAT < "$CRASH_NOTE"
+    rm -f "$CRASH_NOTE"
+    if command -v notify-send >/dev/null 2>&1; then
+        CRASH_REPORT=$(printf '%s' "$CRASH_REPORT" | sed "s|^$HOME|~|")
+        # once the daemon started above is up
+        (sleep 2; notify-send -a Infynitae -u critical "Infynitae restarted after a crash" \
+            "$CRASH_WHAT
+Report: $CRASH_REPORT") &
+    fi
+fi
+
 # 6d. USB drives and SD cards mount when plugged in (udiskie, through udisks2): AUTOMOUNT
 case "${AUTOMOUNT:-true}" in
     1|true|yes|on|TRUE|True)
