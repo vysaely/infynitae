@@ -67,9 +67,12 @@ console, so the session restarts it once the compositor runs; that needs the pol
 `live/remote/` installed once (root). Without it the connections still work, but RustDesk's own
 "someone is connected" window cannot open; the capture indicator shows them either way.
 
-Display settings tools (wlr-randr, wdisplays, kanshi) can change a screen's mode, scale and
-position while you work (`wlr-output-management`). They cannot yet turn a screen off, rotate it
-or switch VRR; mode changes have only run in the test suite, not on a real screen.
+Display settings tools (wlr-randr, wdisplays, kanshi) can change a screen's mode, scale,
+position and rotation while you work (`wlr-output-management`), and `OUTPUT_<NAME>_TRANSFORM`
+turns a screen from the start. A turned screen is captured the way wlroots does it (in the
+panel's orientation, which grim and the screen-sharing portal turn back), and a touchscreen's
+touches turn with it. They cannot yet turn a screen off or switch VRR; mode changes and rotation
+have only run in the test suite, not on a real screen.
 
 Still missing, because the compositor has to speak the protocol first:
 
@@ -87,9 +90,8 @@ Also missing:
 - Packaging and installs other than Arch Linux; the install assumes one user and `~/infynitae`.
 - Crash reporting beyond the logs.
 
-Not handled yet on laptops and other hardware: closing the lid, rotating a screen (portrait
-monitors, convertibles), touch as real touch (it acts as a mouse), pens, a second GPU, and
-NVIDIA's explicit sync.
+Not handled yet on laptops and other hardware: closing the lid, touch as real touch (it acts as a
+mouse), pens, a second GPU, and NVIDIA's explicit sync.
 
 ## Known limits
 

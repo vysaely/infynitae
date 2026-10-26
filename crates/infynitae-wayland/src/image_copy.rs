@@ -412,6 +412,13 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, FrameData> for WaylandState {
                     with_damage: true,
                     region: None,
                     window,
+                    transform: match window {
+                        Some(_) => infynitae_core::output::Transform::Normal,
+                        None => state
+                            .core
+                            .output(output_id)
+                            .map_or(infynitae_core::output::Transform::Normal, |m| m.transform),
+                    },
                 });
             }
             ext_image_copy_capture_frame_v1::Request::Destroy => {

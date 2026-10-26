@@ -1,6 +1,6 @@
 //! wlr-output-management-v1 with a real client (a display settings tool): the screens are
-//! reported, a configuration changes the scale or position in Core and is reported back, and a
-//! configuration that cannot be carried out (stale, unknown mode, a rotation, turning a screen
+//! reported, a configuration changes the scale, position or rotation in Core and is reported
+//! back, and a configuration that cannot be carried out (stale, unknown mode, turning a screen
 //! off) changes nothing.
 
 mod common;
@@ -67,6 +67,7 @@ impl Dispatch<ZwlrOutputHeadV1, ()> for Probe {
             Event::Position { x, y } => format!("position {x},{y}"),
             Event::Scale { scale } => format!("scale {scale}"),
             Event::Enabled { enabled } => format!("enabled {enabled}"),
+            Event::Transform { transform } => format!("transform {transform:?}"),
             Event::Finished => "finished".into(),
             _ => return,
         });
@@ -264,15 +265,7 @@ fn what_cannot_be_done_fails_and_changes_nothing() {
         "failed",
         "a mode the screen does not have"
     );
-    assert_eq!(
-        s.configure(serial, true, |h| {
-            h.set_scale(1.5);
-            h.set_transform(wayland_client::protocol::wl_output::Transform::_90);
-        }),
-        "failed",
-        "a rotation"
-    );
-    assert_eq!(s.scale(), 1.0, "and the scale with them was not applied");
+    assert_eq!(s.scale(), 1.0, "and the scale with it was not applied");
 
     let config = s.manager.create_configuration(serial, &s.ls.qh, ());
     config.disable_head(&s.head());
@@ -310,6 +303,38 @@ fn a_listed_mode_is_accepted() {
         s.configure(serial, true, |h| h.set_mode(&mode)),
         "succeeded"
     );
+}
+
+/// A rotation (a convertible in tablet mode, a portrait monitor): Core's view turns with it (90°
+/// swaps width and height), the head reports it, and turning back restores the landscape view.
+#[test]
+fn a_rotation_turns_the_screen() {
+    use wayland_client::protocol::wl_output::Transform as T;
+    let mut s = S::new();
+    let serial = s.serial();
+    assert_eq!(
+        s.configure(serial, true, |h| h.set_transform(T::_90)),
+        "succeeded"
+    );
+    let out = &s.ls.state.core().outputs()[0];
+    assert_eq!(out.transform, infynitae_core::output::Transform::R90);
+    let view = s.ls.state.core().view(out.id).expect("a view").size;
+    assert_eq!(view, (1080, 1920), "the view is portrait");
+    assert!(
+        s.ls.probe
+            .log
+            .iter()
+            .any(|l| l.starts_with("transform") && l.contains("_90")),
+        "reported: {:?}",
+        s.ls.probe.log
+    );
+    let serial = s.serial();
+    assert_eq!(
+        s.configure(serial, true, |h| h.set_transform(T::Normal)),
+        "succeeded"
+    );
+    let out = &s.ls.state.core().outputs()[0];
+    assert_eq!(s.ls.state.core().view(out.id).unwrap().size, (1920, 1080));
 }
 
 /// A scale Core cannot take (beyond 8) fails, and the screen keeps its scale.

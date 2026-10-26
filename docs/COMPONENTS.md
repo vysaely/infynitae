@@ -47,7 +47,7 @@ compositor work in this repository, then the tool just works:
 | Remote desktop host for apps that need the portal for input | AnyDesk, GNOME's remote-desktop clients (RustDesk works already) | the `RemoteDesktop` portal (with our own ScreenCast) |
 
 Already spoken, so these just work: display settings (wdisplays, nwg-displays, kanshi, wlr-randr:
-`wlr-output-management`; mode, scale and position, not yet turning a screen off, rotating it or
+`wlr-output-management`; mode, scale, position and rotation, not yet turning a screen off or
 VRR), night light (wlsunset, gammastep: `wlr-gamma-control`),
 screen power (wlopm: `wlr-output-power-management`), external idle tools (swayidle, hypridle:
 `ext-idle-notify`; idle and auto-lock are built in already), task bars and window switchers

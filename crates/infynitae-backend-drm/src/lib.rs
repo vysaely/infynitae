@@ -112,6 +112,22 @@ pub fn console_key(key: u32, ctrl: bool, alt: bool) -> Option<ConsoleKey> {
     }
 }
 
+/// `OUTPUT_<NAME>_TRANSFORM`: the rotation's name, as wlr-randr names them (and the degrees alone,
+/// counter-clockwise like wl_output). Pure.
+fn parse_transform(v: &str) -> Option<Transform> {
+    Some(match v.trim().to_ascii_lowercase().as_str() {
+        "normal" | "0" => Transform::Normal,
+        "90" => Transform::R90,
+        "180" => Transform::R180,
+        "270" => Transform::R270,
+        "flipped" => Transform::Flipped,
+        "flipped-90" => Transform::Flipped90,
+        "flipped-180" => Transform::Flipped180,
+        "flipped-270" => Transform::Flipped270,
+        _ => return None,
+    })
+}
+
 /// Validates an output scale factor, returning its 1/120 representation if within 0.25..=8.0. Pure.
 pub fn validate_scale(scale: f64) -> Option<u32> {
     if (0.25..=8.0).contains(&scale) {
@@ -220,6 +236,8 @@ struct Screen {
     compositor: Compositor,
     /// The k the compositor's mode source was set with.
     k: f64,
+    /// The rotation it is drawn through (`OUTPUT_<NAME>_TRANSFORM`, display settings tools).
+    transform: smithay::utils::Transform,
     /// A frame is queued and its vblank has not come yet.
     pending: bool,
     /// The queued frame was drawn while locked (no window in it).
@@ -310,44 +328,56 @@ impl infynitae_wayland::output_power::OutputPowerHandler for DrmOutputPowerHandl
 /// hardware first, then Core's descriptors and positions. Everything or nothing: a mode the
 /// hardware refuses, or a configuration Core refuses, sets every changed screen back.
 fn apply_output_configuration(data: &mut LoopData, changes: &[HeadChange]) -> bool {
-    let mut changed: Vec<(usize, smithay::reexports::drm::control::Mode)> = Vec::new();
-    let revert = |data: &mut LoopData,
-                  changed: &[(usize, smithay::reexports::drm::control::Mode)]| {
-        for &(i, old) in changed {
+    type Before = (
+        usize,
+        smithay::reexports::drm::control::Mode,
+        smithay::utils::Transform,
+    );
+    let mut changed: Vec<Before> = Vec::new();
+    let revert = |data: &mut LoopData, changed: &[Before]| {
+        for &(i, old, old_transform) in changed {
             let s = &mut data.screens[i];
             let _ = s.compositor.use_mode(old);
             s.size = (i32::from(old.size().0), i32::from(old.size().1));
+            s.transform = old_transform;
             s.compositor
                 .set_output_mode_source(OutputModeSource::Static {
                     size: s.size.into(),
                     scale: smithay::utils::Scale::from(s.k),
-                    transform: smithay::utils::Transform::Normal,
+                    transform: s.transform,
                 });
         }
     };
     for c in changes {
-        let Some(m) = c.mode else { continue };
+        if c.mode.is_none() && c.transform.is_none() {
+            continue;
+        }
         let Some(i) = data.screens.iter().position(|s| s.id == c.output) else {
             revert(data, &changed);
             return false;
         };
         let s = &mut data.screens[i];
-        let Some(&(_, mode)) = s.modes.iter().find(|(h, _)| *h == m) else {
-            revert(data, &changed);
-            return false;
-        };
         let old = s.compositor.pending_mode();
-        if s.compositor.use_mode(mode).is_err() {
-            revert(data, &changed);
-            return false;
+        changed.push((i, old, s.transform));
+        if let Some(m) = c.mode {
+            let Some(&(_, mode)) = s.modes.iter().find(|(h, _)| *h == m) else {
+                revert(data, &changed);
+                return false;
+            };
+            if s.compositor.use_mode(mode).is_err() {
+                revert(data, &changed);
+                return false;
+            }
+            s.size = (i32::from(mode.size().0), i32::from(mode.size().1));
         }
-        changed.push((i, old));
-        s.size = (i32::from(mode.size().0), i32::from(mode.size().1));
+        if let Some(t) = c.transform {
+            s.transform = convert::output_transform(t);
+        }
         s.compositor
             .set_output_mode_source(OutputModeSource::Static {
                 size: s.size.into(),
                 scale: smithay::utils::Scale::from(s.k),
-                transform: smithay::utils::Transform::Normal,
+                transform: s.transform,
             });
     }
     let Some(plan) = data.state.output_change_plan(changes) else {
@@ -574,6 +604,7 @@ struct ScreenFactory {
     custom_modes: HashMap<String, (u16, u16)>,
     custom_rates: HashMap<String, u32>,
     custom_scales: HashMap<String, u32>,
+    custom_transforms: HashMap<String, Transform>,
     scale_120: u32,
     vrr: Option<bool>,
 }
@@ -614,6 +645,13 @@ fn connect_screen(
         .or_else(|| f.custom_scales.get(&dbg_lower))
         .copied()
         .unwrap_or(f.scale_120);
+    let transform = f
+        .custom_transforms
+        .get(&n_lower)
+        .or_else(|| f.custom_transforms.get(&dbg_lower))
+        .copied()
+        .unwrap_or(Transform::Normal);
+    let draw_transform = convert::output_transform(transform);
 
     let infos: Vec<ModeInfo> = conn
         .modes()
@@ -675,7 +713,7 @@ fn connect_screen(
             serial,
         },
         mode: (u32::from(w), u32::from(h)),
-        transform: Transform::Normal,
+        transform,
         scale_120: conn_scale,
         refresh_mhz: refresh,
     };
@@ -690,7 +728,7 @@ fn connect_screen(
         OutputModeSource::Static {
             size: size.into(),
             scale: smithay::utils::Scale::from(k),
-            transform: smithay::utils::Transform::Normal,
+            transform: draw_transform,
         },
         surface,
         None,
@@ -723,6 +761,7 @@ fn connect_screen(
         size,
         compositor,
         k,
+        transform: draw_transform,
         pending: false,
         queued_locked: false,
         shows_locked: false,
@@ -880,6 +919,7 @@ pub fn run_console_with(
     let mut custom_scales: HashMap<String, u32> = HashMap::new();
     let mut custom_modes: HashMap<String, (u16, u16)> = HashMap::new();
     let mut custom_rates: HashMap<String, u32> = HashMap::new();
+    let mut custom_transforms: HashMap<String, Transform> = HashMap::new();
     let mut idle_timeout_min = 15u32;
     let mut idle_auto_lock = true;
 
@@ -920,6 +960,19 @@ pub fn run_console_with(
                                     conn_name
                                 );
                             }
+                        }
+                    } else if key.starts_with("OUTPUT_") && key.ends_with("_TRANSFORM") {
+                        let conn_name = key
+                            .trim_start_matches("OUTPUT_")
+                            .trim_end_matches("_TRANSFORM")
+                            .replace('_', "-");
+                        match parse_transform(val) {
+                            Some(t) => {
+                                custom_transforms.insert(conn_name.to_lowercase(), t);
+                            }
+                            None => eprintln!(
+                                "[infynitae] OUTPUT_{conn_name}_TRANSFORM={val}: not a rotation (normal, 90, 180, 270, flipped, flipped-90, flipped-180, flipped-270), ignoring"
+                            ),
                         }
                     } else if key.starts_with("OUTPUT_") && key.ends_with("_RATE") {
                         let conn_name = key
@@ -987,6 +1040,7 @@ pub fn run_console_with(
         custom_modes,
         custom_rates,
         custom_scales,
+        custom_transforms,
         scale_120,
         vrr: options.vrr,
     };
@@ -1582,7 +1636,7 @@ fn render(data: &mut LoopData) {
                 .set_output_mode_source(OutputModeSource::Static {
                     size: s.size.into(),
                     scale: smithay::utils::Scale::from(k),
-                    transform: smithay::utils::Transform::Normal,
+                    transform: s.transform,
                 });
             s.k = k;
         }
@@ -1815,6 +1869,13 @@ fn handle_screencopy<E>(
     E: smithay::backend::renderer::element::RenderElement<GlesRenderer>,
 {
     let now = infynitae_wayland::presentation_clock_now();
+    // a rotated screen is captured in the panel's orientation (its buffer, `size`), drawn
+    // through its rotation; `view` is what the screen shows. One screen per call: one transform.
+    let transform = pending
+        .first()
+        .map_or(infynitae_core::output::Transform::Normal, |p| p.transform);
+    let draw_transform = convert::output_transform(transform);
+    let view = convert::capture_buffer_size(size, transform);
 
     // -------------------------------------------------------------------------
     // 1. Direct DMA-BUF GPU Render
@@ -1830,12 +1891,14 @@ fn handle_screencopy<E>(
             if let Ok(mut dmabuf_tex) = renderer.import_dmabuf(dmabuf, None)
                 && let Ok(mut dmabuf_fb) = renderer.bind(&mut dmabuf_tex)
             {
-                let target_size = req.region.map(|(_, _, w, h)| (w, h)).unwrap_or(size);
+                // the region (or the whole view) in what the screen shows, its buffer turned
+                let view_target = req.region.map(|(_, _, w, h)| (w, h)).unwrap_or(view);
+                let target_size = convert::capture_buffer_size(view_target, transform);
                 let (rx, ry) = screencopy_region_offset(req.region);
                 let mut damage_tracker = OutputDamageTracker::new(
                     target_size,
                     smithay::utils::Scale::from(k),
-                    smithay::utils::Transform::Normal,
+                    draw_transform,
                 );
                 let render_res = if rx != 0 || ry != 0 {
                     let relocated: Vec<_> = elements
@@ -1903,11 +1966,8 @@ fn handle_screencopy<E>(
         }
     };
 
-    let mut damage_tracker = OutputDamageTracker::new(
-        size,
-        smithay::utils::Scale::from(k),
-        smithay::utils::Transform::Normal,
-    );
+    let mut damage_tracker =
+        OutputDamageTracker::new(size, smithay::utils::Scale::from(k), draw_transform);
     if let Err(e) = damage_tracker.render_output(renderer, &mut framebuffer, 0, elements, clear) {
         eprintln!("[screencopy] Failed to render output: {e:?}");
         for p in remaining {
@@ -1946,8 +2006,10 @@ fn handle_screencopy<E>(
     let src_stride = (size.0 * 4) as usize;
 
     for req in remaining {
+        // the region's place in the whole-screen buffer (the panel's orientation)
         let (rx, ry) = req
             .region
+            .map(|r| convert::capture_region_in_buffer(r, view, transform))
             .map(|(x, y, _, _)| (x.max(0) as usize, y.max(0) as usize))
             .unwrap_or((0, 0));
 
@@ -1997,7 +2059,10 @@ fn handle_screencopy<E>(
         });
 
         if matches!(copy_result, Ok(true)) {
-            let target_size = req.region.map(|(_, _, w, h)| (w, h)).unwrap_or(size);
+            let target_size = req
+                .region
+                .map(|(_, _, w, h)| convert::capture_buffer_size((w, h), transform))
+                .unwrap_or(size);
             req.ready((target_size.0 as u32, target_size.1 as u32), now);
         } else {
             req.fail();
@@ -2189,8 +2254,16 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             let screen = current_output
                 .and_then(|out_id| data.screens.iter().find(|s| s.id == out_id))
                 .or_else(|| data.screens.first());
+            // the touchscreen reports the panel's own orientation: turned with the screen
             let (target_phys_x, target_phys_y) = match screen {
-                Some(s) => (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
+                Some(s) => convert::panel_point_to_view(
+                    (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
+                    s.size,
+                    data.state
+                        .core()
+                        .output(s.id)
+                        .map_or(Transform::Normal, |o| o.transform),
+                ),
                 None => (event.x(), event.y()),
             };
             let scale = screen
@@ -2231,8 +2304,16 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             let screen = current_output
                 .and_then(|out_id| data.screens.iter().find(|s| s.id == out_id))
                 .or_else(|| data.screens.first());
+            // the touchscreen reports the panel's own orientation: turned with the screen
             let (target_phys_x, target_phys_y) = match screen {
-                Some(s) => (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
+                Some(s) => convert::panel_point_to_view(
+                    (event.x_transformed(s.size.0), event.y_transformed(s.size.1)),
+                    s.size,
+                    data.state
+                        .core()
+                        .output(s.id)
+                        .map_or(Transform::Normal, |o| o.transform),
+                ),
                 None => (event.x(), event.y()),
             };
             let scale = screen
@@ -2455,6 +2536,18 @@ mod tests {
 
     /// T6: Ctrl+Alt+Backspace quits and Ctrl+Alt+F1…F12 switch VT, with both modifiers held; any
     /// other key, or a missing modifier, is the session's.
+    #[test]
+    fn rotations_are_read_by_their_names() {
+        assert_eq!(parse_transform("90"), Some(Transform::R90));
+        assert_eq!(
+            parse_transform(" Flipped-270 "),
+            Some(Transform::Flipped270)
+        );
+        assert_eq!(parse_transform("normal"), Some(Transform::Normal));
+        assert_eq!(parse_transform("45"), None);
+        assert_eq!(parse_transform(""), None);
+    }
+
     #[test]
     fn a_screen_is_gone_only_when_awake_and_disconnected() {
         let screens = [(1, 'a', false), (2, 'b', false), (3, 'c', true)];

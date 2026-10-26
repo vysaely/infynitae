@@ -35,6 +35,9 @@ pub struct PendingFrame {
     /// A window captured alone (window sharing) instead of the output: drawn from
     /// `Core::window_frame`, the output only says which screen's loop draws it.
     pub window: Option<infynitae_core::stage::ElementId>,
+    /// The screen's rotation, which the buffer is drawn through (in the panel's orientation, as
+    /// wlroots does; `Normal` for a window).
+    pub transform: infynitae_core::output::Transform,
 }
 
 impl PendingFrame {
@@ -75,9 +78,7 @@ impl PendingFrame {
                 f.ready(hi, lo, ns);
             }
             CaptureFrame::Ext(f) => {
-                f.transform(
-                    smithay::reexports::wayland_server::protocol::wl_output::Transform::Normal,
-                );
+                f.transform(crate::convert::wl_transform(self.transform));
                 f.damage(0, 0, size.0 as i32, size.1 as i32);
                 f.presentation_time(hi, lo, ns);
                 f.ready();
@@ -325,8 +326,15 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
                     return;
                 };
 
-                let w = width.clamp(1, size.0);
-                let h = height.clamp(1, size.1);
+                // the region is in what the screen shows; its buffer in the panel's orientation
+                let transform = state
+                    .core
+                    .output(output_id)
+                    .map_or(infynitae_core::output::Transform::Normal, |m| m.transform);
+                let view = crate::convert::capture_buffer_size(size, transform);
+                let w = width.clamp(1, view.0);
+                let h = height.clamp(1, view.1);
+                let (bw, bh) = crate::convert::capture_buffer_size((w, h), transform);
 
                 let frame = data_init.init(
                     frame,
@@ -339,12 +347,22 @@ impl Dispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
                 );
 
                 if frame.version() >= 3 {
-                    frame.linux_dmabuf(875713112, w as u32, h as u32);
-                    frame.linux_dmabuf(875713089, w as u32, h as u32);
+                    frame.linux_dmabuf(875713112, bw as u32, bh as u32);
+                    frame.linux_dmabuf(875713089, bw as u32, bh as u32);
                 }
-                frame.buffer(wl_shm::Format::Xrgb8888, w as u32, h as u32, (w * 4) as u32);
+                frame.buffer(
+                    wl_shm::Format::Xrgb8888,
+                    bw as u32,
+                    bh as u32,
+                    (bw * 4) as u32,
+                );
                 if frame.version() >= 3 {
-                    frame.buffer(wl_shm::Format::Argb8888, w as u32, h as u32, (w * 4) as u32);
+                    frame.buffer(
+                        wl_shm::Format::Argb8888,
+                        bw as u32,
+                        bh as u32,
+                        (bw * 4) as u32,
+                    );
                     frame.buffer_done();
                 }
             }
@@ -396,6 +414,10 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
                     with_damage: false,
                     region: data.region,
                     window: None,
+                    transform: state
+                        .core
+                        .output(output_id)
+                        .map_or(infynitae_core::output::Transform::Normal, |m| m.transform),
                 });
             }
             zwlr_screencopy_frame_v1::Request::CopyWithDamage { buffer } => {
@@ -421,6 +443,10 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
                     with_damage: true,
                     region: data.region,
                     window: None,
+                    transform: state
+                        .core
+                        .output(output_id)
+                        .map_or(infynitae_core::output::Transform::Normal, |m| m.transform),
                 });
             }
             zwlr_screencopy_frame_v1::Request::Destroy => {

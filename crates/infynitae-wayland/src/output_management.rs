@@ -1,5 +1,5 @@
 //! `zwlr_output_manager_v1`: display settings tools (wlr-randr, wdisplays, kanshi) read the
-//! screens and change their mode, scale and position.
+//! screens and change their mode, scale, position and rotation.
 //!
 //! A configuration is checked here against what the backend reported for each screen
 //! ([`HeadInfo`]: its modes, its size in mm, its VRR state), then handed to the backend
@@ -8,8 +8,8 @@
 //! ([`WaylandState::output_change_plan`]), and reports the outcome
 //! ([`WaylandState::finish_output_configuration`]). Everything changes or nothing does.
 //!
-//! Not yet: turning a screen off or on, rotating one, and switching VRR (the backend runs it
-//! with fullscreen windows itself); a configuration asking for one of them fails.
+//! Not yet: turning a screen off or on, and switching VRR (the backend runs it with fullscreen
+//! windows itself); a configuration asking for one of them fails.
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -58,6 +58,8 @@ pub struct HeadChange {
     pub mode: Option<HeadMode>,
     pub position: Option<(i32, i32)>,
     pub scale_120: Option<u32>,
+    /// A rotation or flip (the backend draws through it, Core swaps the view for 90° and 270°).
+    pub transform: Option<Transform>,
 }
 
 /// One screen's part of a configuration as Core takes it ([`WaylandState::output_change_plan`]).
@@ -174,16 +176,7 @@ impl OutputManagementState {
 }
 
 fn transform_to_wl(t: Transform) -> wl_output::Transform {
-    match t {
-        Transform::Normal => wl_output::Transform::Normal,
-        Transform::R90 => wl_output::Transform::_90,
-        Transform::R180 => wl_output::Transform::_180,
-        Transform::R270 => wl_output::Transform::_270,
-        Transform::Flipped => wl_output::Transform::Flipped,
-        Transform::Flipped90 => wl_output::Transform::Flipped90,
-        Transform::Flipped180 => wl_output::Transform::Flipped180,
-        Transform::Flipped270 => wl_output::Transform::Flipped270,
-    }
+    crate::convert::wl_transform(t)
 }
 
 fn transform_from_wl(t: wl_output::Transform) -> Option<Transform> {
@@ -247,10 +240,13 @@ impl WaylandState {
             if let Some(s) = c.scale_120 {
                 desc.scale_120 = s;
             }
+            if let Some(t) = c.transform {
+                desc.transform = t;
+            }
             if !infynitae_core::output::valid(&desc) {
                 return None;
             }
-            let reconfigure = c.mode.is_some() || c.scale_120.is_some();
+            let reconfigure = c.mode.is_some() || c.scale_120.is_some() || c.transform.is_some();
             plan.push(OutputChangePlan {
                 output: c.output,
                 descriptor: reconfigure.then_some(desc),
@@ -466,9 +462,7 @@ impl WaylandState {
                 ),
             }
             .filter(|m| Some(*m) != now.mode);
-            if req.transform.is_some_and(|t| t != now.transform) {
-                return None;
-            }
+            let transform = req.transform.filter(|t| *t != now.transform);
             if req
                 .adaptive_sync
                 .is_some_and(|v| Some(v) != now.adaptive_sync)
@@ -480,12 +474,13 @@ impl WaylandState {
                 Some(s) => Some((s * 120.0).round() as u32).filter(|s| *s != now.scale_120),
             };
             let position = req.position.filter(|p| *p != now.position);
-            if mode.is_some() || scale_120.is_some() || position.is_some() {
+            if mode.is_some() || scale_120.is_some() || position.is_some() || transform.is_some() {
                 changes.push(HeadChange {
                     output: *output,
                     mode,
                     position,
                     scale_120,
+                    transform,
                 });
             }
         }

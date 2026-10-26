@@ -464,7 +464,60 @@ pub(crate) fn output_mode(model: &OutputModel) -> smithay::output::Mode {
     }
 }
 
-pub(crate) fn output_transform(t: Transform) -> smithay::utils::Transform {
+/// A capture of a rotated screen is in the panel's own orientation (its buffer), as wlroots gives
+/// it: tools rotate it with the screen's `wl_output.transform` (grim, xdg-desktop-portal-wlr).
+/// The size of that buffer for a capture of `view` px (what the screen shows): width and height
+/// swap under 90° and 270°.
+pub fn capture_buffer_size(view: (i32, i32), transform: Transform) -> (i32, i32) {
+    if transform.swaps() {
+        (view.1, view.0)
+    } else {
+        view
+    }
+}
+
+/// Where a capture region `(x, y, w, h)` of the view (`view` px, what the screen shows) lies in
+/// the screen's buffer (the panel's orientation): the part of a whole-screen capture to cut.
+pub fn capture_region_in_buffer(
+    region: (i32, i32, i32, i32),
+    view: (i32, i32),
+    transform: Transform,
+) -> (i32, i32, i32, i32) {
+    let r: Rectangle<i32, Physical> =
+        Rectangle::new((region.0, region.1).into(), (region.2, region.3).into());
+    let b = output_transform(transform)
+        .invert()
+        .transform_rect_in(r, &Size::from(view));
+    (b.loc.x, b.loc.y, b.size.w, b.size.h)
+}
+
+/// A point on the panel (`phys` px in its own orientation: where a touchscreen or a pen reports
+/// it) as a point of what the screen shows through `transform`.
+pub fn panel_point_to_view(p: (f64, f64), phys: (i32, i32), transform: Transform) -> (f64, f64) {
+    let size: Size<f64, Physical> = Size::from((f64::from(phys.0), f64::from(phys.1)));
+    let v = output_transform(transform).transform_point_in(Point::<f64, Physical>::from(p), &size);
+    (v.x, v.y)
+}
+
+/// Core's output transform as the protocols name it (`wl_output.transform`).
+pub(crate) fn wl_transform(
+    t: Transform,
+) -> smithay::reexports::wayland_server::protocol::wl_output::Transform {
+    use smithay::reexports::wayland_server::protocol::wl_output::Transform as W;
+    match t {
+        Transform::Normal => W::Normal,
+        Transform::R90 => W::_90,
+        Transform::R180 => W::_180,
+        Transform::R270 => W::_270,
+        Transform::Flipped => W::Flipped,
+        Transform::Flipped90 => W::Flipped90,
+        Transform::Flipped180 => W::Flipped180,
+        Transform::Flipped270 => W::Flipped270,
+    }
+}
+
+/// Core's output transform as the renderer's (the backends draw and capture through it).
+pub fn output_transform(t: Transform) -> smithay::utils::Transform {
     use smithay::utils::Transform as S;
     match t {
         Transform::Normal => S::Normal,
