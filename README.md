@@ -33,6 +33,18 @@ manager (GDM, SDDM…), pick **Infynitae** at its login.
 For the text login instead, install with `./install.sh --no-autologin`, or later run
 `sudo ~/infynitae/live/setup-autologin.sh --off`: logging in on tty1 then starts Infynitae.
 
+Every optional part can be left out: `--no-notifications`, `--no-keyring`, `--no-automount`,
+`--no-clipboard`, `--no-fonts`, `--no-recorder`, `--no-terminal`, `--no-bluetooth`,
+`--no-power-profiles`, or `--minimal` for all of them (`./install.sh --help`).
+`infynitae-update` keeps them out.
+
+What the installer takes care of: it updates the system first (Arch is only consistent whole),
+waits for another package manager instead of failing, replaces a conflicting package
+(pulseaudio by pipewire-pulse) instead of stopping, installs NVIDIA's kernel driver for Turing
+and newer cards (an older card runs on nouveau, and it says so), builds with fewer jobs on a
+machine with little memory, and stops early, before changing anything, without internet, disk
+space or sudo. Everything it prints is also in `~/.local/state/infynitae/install.log`.
+
 Update any time with `infynitae-update` (your config is never overwritten).
 
 ## Shortcuts

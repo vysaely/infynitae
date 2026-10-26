@@ -1,146 +1,203 @@
 #!/usr/bin/env bash
-# Infynitae Automated Installer for Pure Arch Linux
-# Supports both:
-#   1. curl -fsSL https://raw.githubusercontent.com/vysaely/infynitae/main/install.sh | bash
-#   2. git clone https://github.com/vysaely/infynitae.git && cd infynitae && ./install.sh
-set -e
+# Infynitae installer for Arch Linux: one command, your password once, then it runs by itself.
+#   curl -fsSL https://raw.githubusercontent.com/vysaely/infynitae/main/install.sh | bash
+#   git clone https://github.com/vysaely/infynitae.git ~/infynitae && ~/infynitae/install.sh
+# Options (through curl: ... | bash -s -- --no-keyring): ./install.sh --help
+set -eE
 
 REPO_URL="https://github.com/vysaely/infynitae.git"
 INSTALL_DIR="$HOME/infynitae"
 
-# Without a display manager the machine boots straight to the Infynitae lock screen (tty1
-# autologin, the session started locked; live/setup-autologin.sh). --no-autologin keeps the text
-# login instead (log in on tty1 and Infynitae starts). Through curl: ... | bash -s -- --no-autologin
+usage() {
+    cat <<'USAGE'
+Infynitae installer for Arch Linux. It asks for your password once, then runs by itself;
+reboot when it is done.
+
+Leave out an optional part (the session starts each one only when it is installed):
+  --no-notifications   no notification daemon (mako)
+  --no-keyring         no password store for apps (gnome-keyring)
+  --no-automount       USB drives are not mounted when plugged in (udiskie)
+  --no-clipboard       no clipboard history (Super+V) and clipboard keeping
+  --no-fonts           no Noto fonts (other languages, emoji)
+  --no-recorder        no screen recording or replay clips (ffmpeg)
+  --no-terminal        no terminal added when none is installed (alacritty)
+  --no-bluetooth       Bluetooth is not set up, even with an adapter
+  --no-power-profiles  no power modes on a laptop (power-profiles-daemon)
+  --minimal            all of the above
+
+How it starts:
+  --no-autologin       without a display manager: log in on tty1 to start Infynitae, instead of
+                       the machine booting to the Infynitae lock screen
+  -h, --help           this help
+USAGE
+}
+
 AUTOLOGIN=true
+TERMINAL_PKG=true
+BLUETOOTH=true
+POWER_PROFILES=true
+SKIP=""
 for arg in "$@"; do
     case "$arg" in
+        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder)
+            SKIP="$SKIP ${arg#--no-}" ;;
+        --no-terminal) TERMINAL_PKG=false ;;
+        --no-bluetooth) BLUETOOTH=false ;;
+        --no-power-profiles) POWER_PROFILES=false ;;
+        --minimal)
+            SKIP="notifications keyring automount clipboard fonts recorder"
+            TERMINAL_PKG=false BLUETOOTH=false POWER_PROFILES=false ;;
         --no-autologin) AUTOLOGIN=false ;;
-        *) echo "unknown option: $arg (known: --no-autologin)" >&2; exit 2 ;;
+        -h | --help) usage; exit 0 ;;
+        *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
     esac
 done
+SKIP="$(echo $SKIP)"
 
-if [ "$(id -u)" -eq 0 ]; then
-    echo "Run the installer as your own user, not root: it asks for your password itself." >&2
-    exit 1
-fi
+# ---- checks before anything is changed -------------------------------------------------------
+fail() { echo "==> $*" >&2; exit 1; }
+[ "$(id -u)" -ne 0 ] || fail "Run the installer as your own user, not root: it asks for your password itself."
+command -v pacman >/dev/null 2>&1 || fail "This installer is for Arch Linux (pacman was not found)."
+[ -d /run/systemd/system ] || fail "Infynitae needs systemd (logind runs the seat)."
+getent ahosts archlinux.org >/dev/null 2>&1 || getent ahosts github.com >/dev/null 2>&1 \
+    || fail "No internet connection (archlinux.org and github.com cannot be resolved)."
+# the build needs ~3 GB (the compiler and the build), packages up to ~2 GB more
+free_gb() { df -Pk "$1" 2>/dev/null | awk 'NR == 2 { print int($4 / 1048576) }'; }
+[ "$(free_gb "$HOME")" -ge 4 ] || fail "Not enough free space in $HOME: 4 GB are needed for the build."
+[ "$(free_gb /var/cache/pacman)" -ge 2 ] || fail "Not enough free space for packages: 2 GB are needed in /var."
 
-# One password, at the start: everything after it runs unattended. sudo's permission is kept
-# fresh in the background while the installer runs (the build takes minutes) and no longer.
-echo "==> Infynitae needs your password once (packages, drivers, the login setup)."
-sudo -v
-( while kill -0 "$$" 2>/dev/null; do sudo -n true; sleep 50; done ) >/dev/null 2>&1 &
-SUDO_KEEPER=$!
-trap 'kill "$SUDO_KEEPER" 2>/dev/null' EXIT
-
-echo "=========================================================="
-echo "      INFYNITAE - PURE ARCH LINUX INSTALLER"
-echo "=========================================================="
-
-# 1. Ensure git and source repository
-if [ ! -f "Cargo.toml" ] || [ ! -d "crates/infynitae" ]; then
-    echo "==> Cloning Infynitae repository..."
-    if ! command -v git >/dev/null 2>&1; then
-        echo "==> Installing git..."
-        sudo pacman -S --needed --noconfirm git
-    fi
-    mkdir -p "$(dirname "$INSTALL_DIR")"
-    if [ ! -d "$INSTALL_DIR/.git" ]; then
-        git clone "$REPO_URL" "$INSTALL_DIR"
+# ---- the source: ~/infynitae (the session scripts run from there) ----------------------------
+if [ -f "Cargo.toml" ] && [ -d "crates/infynitae" ]; then
+    HERE="$(pwd -P)"
+    if [ ! -e "$INSTALL_DIR" ]; then
+        ln -s "$HERE" "$INSTALL_DIR"
+        echo "==> $INSTALL_DIR points to $HERE"
+    elif [ "$(cd "$INSTALL_DIR" && pwd -P)" != "$HERE" ]; then
+        fail "$INSTALL_DIR already exists and is another folder: Infynitae runs from $INSTALL_DIR. Run the installer there, or move that folder away."
     fi
     cd "$INSTALL_DIR"
-    git checkout main 2>/dev/null || true
-    git pull 2>/dev/null || true
+fi
+
+# from here on everything is also written to the install log
+mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
+LOG="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae/install.log"
+exec > >(tee -a "$LOG") 2>&1
+echo "==> $(date '+%F %T') Infynitae install${SKIP:+ (leaving out: $SKIP)}"
+trap 'echo "==> The install stopped at line $LINENO of install.sh. The log: $LOG" >&2' ERR
+
+# ---- your password, once ------------------------------------------------------------------------
+echo "==> Infynitae needs your password once (packages, drivers, the login setup)."
+if [ -f "$INSTALL_DIR/live/install-lib.sh" ]; then
+    . "$INSTALL_DIR/live/install-lib.sh"
+    sudo_once
 else
-    INSTALL_DIR="$(pwd)"
+    # through curl, before the clone: the clone brings the shared library
+    sudo -v || fail "Your user cannot use sudo: add it to the wheel group and allow wheel in sudoers (visudo)."
+    ( parent=$$; while kill -0 "$parent" 2>/dev/null; do sudo -n true; sleep 50; done ) >/dev/null 2>&1 &
+    SUDO_KEEPER=$!
 fi
+trap 'kill "${SUDO_KEEPER:-}" 2>/dev/null || true' EXIT
 
-# 2. Run universal hardware detection & graphics driver setup (Vulkan, 32-bit, Xwayland)
-if [ -f "live/setup-drivers.sh" ]; then
-    chmod +x live/setup-drivers.sh
-    ./live/setup-drivers.sh
-elif [ -f "$INSTALL_DIR/live/setup-drivers.sh" ]; then
-    chmod +x "$INSTALL_DIR/live/setup-drivers.sh"
-    "$INSTALL_DIR/live/setup-drivers.sh"
-fi
+echo "=========================================================="
+echo "      INFYNITAE - ARCH LINUX INSTALLER"
+echo "=========================================================="
 
-echo "==> Checking essential system packages..."
-PKGS=()
-# Barebones essentials: build tools, libinput, portals (screenshare/dialogs), audio stack (PipeWire),
-# polkit, fast app launcher (fuzzel), fonts, clipboard & screenshots, and Xwayland for Steam/games.
-# Build and runtime libraries: seatd provides libseat (linked by the compositor, the daemon is not
-# enabled), mesa (GBM/EGL), and the helpers' cairo/pango/gdk-pixbuf2/gtk3; ffmpeg for the recorder.
-for pkg in $(cat "$INSTALL_DIR/live/packages.txt" 2>/dev/null || cat live/packages.txt); do
-    if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
-        PKGS+=("$pkg")
-    fi
-done
-
-# Ensure at least one fast Wayland terminal is installed for an out-of-the-box experience
-if ! command -v kitty >/dev/null 2>&1 && ! command -v alacritty >/dev/null 2>&1 && ! command -v foot >/dev/null 2>&1; then
-    echo "==> No terminal emulator detected. Adding alacritty for out-of-the-box terminal support..."
-    if ! pacman -Qi alacritty >/dev/null 2>&1; then
-        PKGS+=("alacritty")
-    fi
-fi
-
-# Hardware the control menu (Super+A) can drive, only where it exists. NetworkManager is not added:
-# a machine on iwd or systemd-networkd keeps its own networking, and the menu uses what is there.
-if [ -n "$(ls /sys/class/bluetooth 2>/dev/null)" ]; then
-    for pkg in bluez bluez-utils; do
-        pacman -Qi "$pkg" >/dev/null 2>&1 || PKGS+=("$pkg")
+# ---- 1. the system up to date (Arch is only consistent whole: installing onto stale packages
+#         breaks things), the signing keys first so old keys do not refuse the new packages ----
+waitlock() {
+    while [ -e /var/lib/pacman/db.lck ]; do
+        pgrep -x 'pacman|pamac|pamac-daemon|packagekitd|yay|paru' >/dev/null 2>&1 \
+            || fail "pacman's lock file is left over (no package manager is running): sudo rm /var/lib/pacman/db.lck, then run this again."
+        echo "==> Waiting for another package manager to finish..."
+        sleep 5
     done
-    ENABLE_BLUETOOTH=true
-fi
-if ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1 && ! pacman -Qi tlp >/dev/null 2>&1; then
-    # power modes on a laptop; tlp, when installed, manages power instead
-    pacman -Qi power-profiles-daemon >/dev/null 2>&1 || PKGS+=("power-profiles-daemon")
-    ENABLE_POWER_PROFILES=true
-fi
+}
+waitlock
+echo "==> Updating the system (signing keys first)..."
+sudo pacman -Sy --needed --noconfirm archlinux-keyring
+sudo pacman -Su --noconfirm --ask 4
 
-# Only install rustup if neither rust nor cargo is installed
-if ! command -v cargo >/dev/null 2>&1 && ! pacman -Qi rust >/dev/null 2>&1 && ! pacman -Qi rustup >/dev/null 2>&1; then
-    PKGS+=("rustup")
+# ---- 2. the source --------------------------------------------------------------------------------
+if [ ! -f "$INSTALL_DIR/Cargo.toml" ]; then
+    command -v git >/dev/null 2>&1 || sudo pacman -S --needed --noconfirm git
+    if [ -e "$INSTALL_DIR" ]; then
+        fail "$INSTALL_DIR exists but is not Infynitae: move it away, then run this again."
+    fi
+    echo "==> Downloading Infynitae..."
+    git clone "$REPO_URL" "$INSTALL_DIR"
+elif [ -d "$INSTALL_DIR/.git" ] && git -C "$INSTALL_DIR" diff --quiet 2>/dev/null; then
+    git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || echo "==> Could not update the source (offline, or local commits); installing it as it is"
 fi
+cd "$INSTALL_DIR"
+. "$INSTALL_DIR/live/install-lib.sh"
+[ -n "${SUDO_KEEPER:-}" ] || sudo_once
 
+# ---- 3. graphics drivers (Vulkan, 32-bit for Steam, Xwayland; NVIDIA's kernel driver) --------
+bash "$INSTALL_DIR/live/setup-drivers.sh"
+
+# ---- 4. packages ----------------------------------------------------------------------------------
+echo "==> Checking the packages Infynitae needs..."
+PKGS=()
+mapfile -t -O "${#PKGS[@]}" PKGS < <(missing_pkgs $(cat "$INSTALL_DIR/live/packages.txt"))
+for group in $(optional_groups); do
+    is_skipped "$group" && continue
+    mapfile -t -O "${#PKGS[@]}" PKGS < <(missing_pkgs $(optional_pkgs "$group"))
+done
+# a terminal for Super+Q, when there is none
+if [ "$TERMINAL_PKG" = true ] && ! command -v kitty >/dev/null 2>&1 \
+    && ! command -v alacritty >/dev/null 2>&1 && ! command -v foot >/dev/null 2>&1; then
+    PKGS+=(alacritty)
+fi
+# hardware the control menu (Super+A) can drive, only where it exists. NetworkManager is not
+# added: a machine on iwd or systemd-networkd keeps its own networking
+if [ "$BLUETOOTH" = true ] && [ -n "$(ls /sys/class/bluetooth 2>/dev/null)" ]; then
+    mapfile -t -O "${#PKGS[@]}" PKGS < <(missing_pkgs bluez bluez-utils)
+else
+    BLUETOOTH=false
+fi
+if [ "$POWER_PROFILES" = true ] && ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1 \
+    && ! pacman -Qi tlp >/dev/null 2>&1; then
+    # tlp, when installed, manages power instead
+    mapfile -t -O "${#PKGS[@]}" PKGS < <(missing_pkgs power-profiles-daemon)
+else
+    POWER_PROFILES=false
+fi
+# the compiler through rustup: the source pins its version (rust-toolchain.toml), which Arch's
+# own rust package ignores; rustup replaces it
+pacman -Qi rustup >/dev/null 2>&1 || PKGS+=(rustup)
 if [ ${#PKGS[@]} -gt 0 ]; then
-    echo "==> Installing missing packages via pacman: ${PKGS[*]}"
-    sudo pacman -S --needed --noconfirm "${PKGS[@]}"
+    echo "==> Installing: ${PKGS[*]}"
+    pacman_run -S --needed "${PKGS[@]}"
 fi
-if [ "${ENABLE_BLUETOOTH:-false}" = true ] && ! systemctl is-enabled --quiet bluetooth.service 2>/dev/null; then
-    echo "==> Enabling Bluetooth"
+if [ "$BLUETOOTH" = true ] && ! systemctl is-enabled --quiet bluetooth.service 2>/dev/null; then
     sudo systemctl enable --now bluetooth.service || echo "==> Could not enable bluetooth.service"
 fi
-if [ "${ENABLE_POWER_PROFILES:-false}" = true ] && ! systemctl is-enabled --quiet power-profiles-daemon.service 2>/dev/null; then
-    echo "==> Enabling power modes"
+if [ "$POWER_PROFILES" = true ] && ! systemctl is-enabled --quiet power-profiles-daemon.service 2>/dev/null; then
     sudo systemctl enable --now power-profiles-daemon.service || echo "==> Could not enable power-profiles-daemon.service"
 fi
+save_install_choices
 
-# 3. Setup Rust toolchain if rustup is used
-if command -v rustup >/dev/null 2>&1 && ! rustup show active-toolchain >/dev/null 2>&1; then
-    echo "==> Setting up default Rust toolchain..."
-    rustup default stable
+# ---- 5. seat access: logind gives the compositor the GPU and the input devices (no input group);
+#         seatd only where logind does not run ---------------------------------------------------
+if ! systemctl is-active --quiet systemd-logind 2>/dev/null; then
+    sudo systemctl enable --now seatd 2>/dev/null || true
+    sudo usermod -aG seat "$USER" 2>/dev/null || true
 fi
-
-# 4. Ensure seat and hardware permissions (Standard Systemd Logind / Seatd architecture)
-# Wayland compositors (like Sway, GNOME, KDE, and Infynitae) open input devices and GPUs
-# via libseat and systemd-logind. This securely passes device file descriptors without requiring
-# the user to be in the raw 'input' group or granting arbitrary user-space processes access to keystrokes.
-echo "==> Configuring hardware access and libseat integration..."
-if command -v systemctl >/dev/null 2>&1; then
-    if ! systemctl is-active --quiet systemd-logind 2>/dev/null; then
-        sudo systemctl enable --now seatd 2>/dev/null || true
-        sudo usermod -aG seat "$USER" 2>/dev/null || true
-    fi
-fi
-
 # GPU, joystick and uinput access come from systemd (70-uaccess) and the steam package
 # (60-steam-input); Infynitae needs no udev rules of its own.
 
-# 5. Build Infynitae in release mode
-echo "==> Building Infynitae compositor in release mode..."
-cargo build --release -p infynitae
+# ---- 6. build ----------------------------------------------------------------------------------------
+echo "==> Getting the pinned Rust compiler..."
+rustup toolchain install 2>/dev/null || rustup show >/dev/null
+# linking needs ~1.5 GB per job: fewer jobs on a machine with little memory
+MEM_GB=$(awk '/MemTotal/ { print int($2 / 1048576) }' /proc/meminfo)
+JOBS=$(nproc)
+[ $((MEM_GB * 2 / 3)) -lt "$JOBS" ] && JOBS=$((MEM_GB * 2 / 3))
+[ "$JOBS" -ge 1 ] || JOBS=1
+echo "==> Building Infynitae ($JOBS jobs; this takes a few minutes)..."
+cargo build --release -p infynitae -j "$JOBS"
 
-# 6. Install release binary
+# ---- 7. install ------------------------------------------------------------------------------------
 mkdir -p "$HOME/.local/bin"
 install -m 755 "${CARGO_TARGET_DIR:-target}/release/infynitae" "$HOME/.local/bin/infynitae"
 install -m 755 live/dev.sh "$HOME/.local/bin/infynitae-dev"
@@ -150,103 +207,93 @@ install -m 755 update.sh "$HOME/.local/bin/infynitae-update"
 install -m 755 live/infynitae-reload "$HOME/.local/bin/infynitae-reload"
 install -m 755 live/infynitae-restore "$HOME/.local/bin/infynitae-restore"
 install -m 755 live/record/infynitae-recorder "$HOME/.local/bin/infynitae-recorder"
-echo "==> Installed binaries to ~/.local/bin"
-
-# 7. Deploy live runtime scripts & companion helpers
-mkdir -p "$HOME/infynitae/live"
-SRC_LIVE="$(cd live 2>/dev/null && pwd -P || echo "")"
-DST_LIVE="$(cd "$HOME/infynitae/live" 2>/dev/null && pwd -P || echo "")"
-if [ -n "$SRC_LIVE" ] && [ "$SRC_LIVE" != "$DST_LIVE" ]; then
-    cp -rf live/* "$HOME/infynitae/live/"
-fi
-# The C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream): one recipe
-# shared with infynitae-update; a failure is reported, never hidden.
-sh "$HOME/infynitae/live/build-helpers.sh" "$HOME/infynitae" "$HOME/.local/bin" \
+install -m 755 live/infynitae-session "$HOME/.local/bin/infynitae-session"
+install -m 755 live/xdg-open "$HOME/.local/bin/xdg-open"
+chmod +x live/*.sh live/*.py 2>/dev/null || true
+# the C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream): one recipe
+# shared with infynitae-update; a failure is reported, never hidden
+sh live/build-helpers.sh "$INSTALL_DIR" "$HOME/.local/bin" \
     || echo "==> Some helpers were not built (see above); Infynitae runs without them"
-if command -v sudo >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/lock/infynitae.pam" ] && [ ! -f /etc/pam.d/infynitae ]; then
-    sudo cp -f "$HOME/infynitae/live/lock/infynitae.pam" /etc/pam.d/infynitae 2>/dev/null || true
+# the lock screen's password check (PAM): kept current
+if ! cmp -s live/lock/infynitae.pam /etc/pam.d/infynitae; then
+    sudo install -m 644 live/lock/infynitae.pam /etc/pam.d/infynitae
 fi
-chmod +x "$HOME/infynitae/live"/*.sh "$HOME/infynitae/live"/*.py 2>/dev/null || true
+echo "==> Installed to ~/.local/bin"
 
-# Deploy XDG Desktop Portal GlobalShortcuts backend definition
+# the GlobalShortcuts portal (Discord, OBS push-to-talk)
 mkdir -p "$HOME/.local/share/xdg-desktop-portal/portals"
-cat << 'EOF' > "$HOME/.local/share/xdg-desktop-portal/portals/infynitae.portal"
+cat <<'PORTAL' > "$HOME/.local/share/xdg-desktop-portal/portals/infynitae.portal"
 [portal]
 DBusName=org.freedesktop.impl.portal.desktop.infynitae
 Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;
 UseIn=infynitae;wlroots;
-EOF
+PORTAL
 
-# 8. Deploy default configuration safely (preserving user changes)
+# ---- 8. configuration (yours is never overwritten) -------------------------------------------
 mkdir -p "$HOME/.config/infynitae"
-if [ -f "config/config" ]; then
-    if [ ! -f "$HOME/.config/infynitae/config" ]; then
-        cp -f "config/config" "$HOME/.config/infynitae/config"
-        echo "==> Created default configuration at ~/.config/infynitae/config"
-    else
-        cp -f "config/config" "$HOME/.config/infynitae/config.template"
-        echo "==> User config preserved at ~/.config/infynitae/config (template saved to config.template)"
+if [ ! -f "$HOME/.config/infynitae/config" ]; then
+    cp -f config/config "$HOME/.config/infynitae/config"
+    # a part left out is switched off too, so the config says what the desktop does
+    is_skipped notifications && sed -i 's/^NOTIFICATIONS="[^"]*"/NOTIFICATIONS="none"/' "$HOME/.config/infynitae/config"
+    is_skipped automount && sed -i 's/^AUTOMOUNT="[^"]*"/AUTOMOUNT="false"/' "$HOME/.config/infynitae/config"
+    if is_skipped clipboard; then
+        sed -i 's/^CLIPBOARD_HISTORY="[^"]*"/CLIPBOARD_HISTORY="false"/; s/^CLIPBOARD_PERSIST="[^"]*"/CLIPBOARD_PERSIST="false"/' \
+            "$HOME/.config/infynitae/config"
     fi
+    echo "==> Created your configuration: ~/.config/infynitae/config"
+else
+    cp -f config/config "$HOME/.config/infynitae/config.template"
+    echo "==> Your configuration is kept (the new template: ~/.config/infynitae/config.template)"
 fi
 
-# 9. Install ~/.local/bin/infynitae-session (single source: live/infynitae-session)
-cp -f "$HOME/infynitae/live/infynitae-session" "$HOME/.local/bin/infynitae-session"
-chmod +x "$HOME/.local/bin/infynitae-session"
-cp -f "$HOME/infynitae/live/xdg-open" "$HOME/.local/bin/xdg-open" 2>/dev/null || true
-chmod +x "$HOME/.local/bin/xdg-open" 2>/dev/null || true
-
-# Display managers start sessions without ~/.local/bin on PATH: /usr/local/bin gets a tiny
+# ---- 9. sessions ------------------------------------------------------------------------------------
+# display managers start sessions without ~/.local/bin on PATH: /usr/local/bin gets a tiny
 # launcher that runs the user's own copy (copies of the binaries there would go stale)
-sudo install -D -m 755 "$HOME/infynitae/live/infynitae-session-shim" /usr/local/bin/infynitae-session
-
-# 10. Ensure ~/.local/bin is in user PATH across interactive and login shells
-for prof in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile"; do
+sudo install -D -m 755 live/infynitae-session-shim /usr/local/bin/infynitae-session
+for prof in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zprofile"; do
     if [ -f "$prof" ] && ! grep -q '\.local/bin' "$prof"; then
         echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$prof"
     fi
 done
-
-# 11. Create Wayland session desktop entry (selectable in login display manager)
 mkdir -p "$HOME/.local/share/wayland-sessions"
-cat << 'EOF' > "$HOME/.local/share/wayland-sessions/infynitae.desktop"
+cat <<'SESSION' > "$HOME/.local/share/wayland-sessions/infynitae.desktop"
 [Desktop Entry]
 Name=Infynitae
 Comment=Infynitae Infinite Canvas Wayland Compositor
 Exec=infynitae-session
 Type=Application
 DesktopNames=infynitae;wlroots
-EOF
+SESSION
+sudo install -D -m 644 "$HOME/.local/share/wayland-sessions/infynitae.desktop" \
+    /usr/share/wayland-sessions/infynitae.desktop
 
-# Also make available system-wide for display managers (GDM, SDDM, LightDM)
-sudo mkdir -p /usr/share/wayland-sessions 2>/dev/null || true
-sudo cp -f "$HOME/.local/share/wayland-sessions/infynitae.desktop" /usr/share/wayland-sessions/ 2>/dev/null || true
-
-# 12. RustDesk, when installed: the session restarts its service once the compositor runs, so it
-#     sees a Wayland session (live/session.sh); this rule allows that one restart, nothing else
+# RustDesk, when installed: the session restarts its service once the compositor runs, so it
+# sees a Wayland session (live/session.sh); this rule allows that one restart, nothing else
 if systemctl cat rustdesk.service >/dev/null 2>&1; then
-    sudo install -D -m 644 "$HOME/infynitae/live/remote/50-infynitae-rustdesk.rules" \
+    sudo install -D -m 644 live/remote/50-infynitae-rustdesk.rules \
         /etc/polkit-1/rules.d/50-infynitae-rustdesk.rules
     echo "==> RustDesk: allowed the session to restart its service"
 fi
 
-# 13. How Infynitae starts after a reboot: a display manager's session list; else tty1 logs in by
-#     itself to the Infynitae lock screen (or, with --no-autologin, or when the lock screen could
-#     not be installed, logging in on tty1 starts Infynitae)
+# ---- 10. how Infynitae starts after a reboot: a display manager's session list; else tty1 logs
+#          in by itself to the Infynitae lock screen (--no-autologin, or a lock screen that could
+#          not be installed: logging in on tty1 starts Infynitae) ----------------------------------
 if systemctl is-enabled --quiet display-manager.service 2>/dev/null; then
     START_HOW="pick \"Infynitae\" at your display manager's login"
-elif [ "$AUTOLOGIN" = true ] && sudo sh "$HOME/infynitae/live/setup-autologin.sh"; then
-    START_HOW="reboot: the machine starts at the Infynitae lock screen"
+elif [ "$AUTOLOGIN" = true ] && sudo sh live/setup-autologin.sh; then
+    START_HOW="the machine starts at the Infynitae lock screen"
 else
-    sh "$HOME/infynitae/live/setup-autologin.sh" --autostart
-    START_HOW="reboot (or log out) and log in on tty1: Infynitae starts"
+    sh live/setup-autologin.sh --autostart
+    START_HOW="log in on tty1: Infynitae starts"
 fi
 
 echo ""
 echo "=========================================================="
-echo "        INFYNITAE INSTALLATION COMPLETE!"
+echo "        INFYNITAE INSTALLATION COMPLETE"
 echo "=========================================================="
-echo "  Start: $START_HOW"
+echo "  Reboot, then: $START_HOW"
 echo "  Text login instead of the lock screen: sudo ~/infynitae/live/setup-autologin.sh --off"
+echo "  Update any time: infynitae-update    The install log: $LOG"
 echo ""
 echo "  Keybindings:"
 echo "    Super + 1..9         Focus Window Slot 1..9"

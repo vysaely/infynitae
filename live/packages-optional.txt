@@ -1,0 +1,9 @@
+# The optional parts of the desktop: "group package…". install.sh --no-<group> leaves one out,
+# --minimal all of them; infynitae-update keeps them out. Everything here is also optional at run
+# time: the session starts each one only when it is installed.
+notifications mako libnotify
+keyring gnome-keyring libsecret
+automount udisks2 udiskie gvfs
+clipboard wl-clip-persist cliphist
+fonts noto-fonts noto-fonts-emoji
+recorder ffmpeg

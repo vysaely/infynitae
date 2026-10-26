@@ -20,6 +20,13 @@ fi
 
 cd "$REPO_DIR"
 
+# the shared, unattended pacman, the parts left out at install, and one password for the run
+. "$REPO_DIR/live/install-lib.sh"
+load_install_choices
+echo "==> infynitae-update needs your password once (new packages, system files)."
+sudo_once
+trap 'kill "${SUDO_KEEPER:-}" 2>/dev/null || true' EXIT
+
 echo "=========================================================="
 echo "        INFYNITAE - UNIVERSAL COMPOSITOR UPDATER"
 echo "=========================================================="
@@ -57,23 +64,25 @@ if [ -d ".git" ]; then
     fi
 fi
 
-# 2. Check and install any newly added essential packages
+# 2. Packages added since: the required ones and the optional parts not left out at install
+#    (install-choices). Installed onto the current package lists: when a package is gone from
+#    them, the system needs an update first (sudo pacman -Syu), which is the user's to start.
 if command -v pacman >/dev/null 2>&1; then
     NEW_PKGS=()
-    for pkg in $(cat live/packages.txt); do
-        if ! pacman -Qi "$pkg" >/dev/null 2>&1; then
-            NEW_PKGS+=("$pkg")
-        fi
+    mapfile -t -O "${#NEW_PKGS[@]}" NEW_PKGS < <(missing_pkgs $(cat live/packages.txt))
+    for group in $(optional_groups); do
+        is_skipped "$group" && continue
+        mapfile -t -O "${#NEW_PKGS[@]}" NEW_PKGS < <(missing_pkgs $(optional_pkgs "$group"))
     done
-    if ! command -v kitty >/dev/null 2>&1 && ! command -v alacritty >/dev/null 2>&1 && ! command -v foot >/dev/null 2>&1; then
-        if ! pacman -Qi alacritty >/dev/null 2>&1; then
-            NEW_PKGS+=("alacritty")
-        fi
-    fi
+    pacman -Qi rustup >/dev/null 2>&1 || NEW_PKGS+=(rustup)
     if [ ${#NEW_PKGS[@]} -gt 0 ]; then
-        echo "==> Installing missing packages: ${NEW_PKGS[*]}"
-        sudo pacman -S --needed --noconfirm "${NEW_PKGS[@]}"
+        echo "==> Installing new packages: ${NEW_PKGS[*]}"
+        pacman_run -S --needed "${NEW_PKGS[@]}" || {
+            echo "[infynitae-update] Could not install ${NEW_PKGS[*]}: update the system (sudo pacman -Syu), then run infynitae-update again." >&2
+            exit 1
+        }
     fi
+    rustup toolchain install 2>/dev/null || rustup show >/dev/null
 fi
 
 # GPU, joystick and uinput access come from systemd (70-uaccess) and the steam package
@@ -113,6 +122,11 @@ if [ -n "$SRC_LIVE" ] && [ "$SRC_LIVE" != "$DST_LIVE" ]; then
     cp -rf live/* "$HOME/infynitae/live/"
 fi
 chmod +x "$HOME/infynitae/live"/*.sh "$HOME/infynitae/live"/*.py 2>/dev/null || true
+
+# 6b. The lock screen's password check (PAM), kept current
+if ! cmp -s live/lock/infynitae.pam /etc/pam.d/infynitae; then
+    sudo install -m 644 live/lock/infynitae.pam /etc/pam.d/infynitae || true
+fi
 
 # 7. Display managers: /usr/local/bin/infynitae-session is a launcher for the user's own copy
 if ! cmp -s live/infynitae-session-shim /usr/local/bin/infynitae-session && command -v sudo >/dev/null 2>&1; then
