@@ -213,7 +213,6 @@ install -m 755 live/infynitae-restore "$HOME/.local/bin/infynitae-restore"
 install -m 755 live/record/infynitae-recorder "$HOME/.local/bin/infynitae-recorder"
 install -m 755 live/infynitae-session "$HOME/.local/bin/infynitae-session"
 install -m 755 live/xdg-open "$HOME/.local/bin/xdg-open"
-chmod +x live/*.sh live/*.py 2>/dev/null || true
 # the C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream): one recipe
 # shared with infynitae-update; a failure is reported, never hidden
 sh live/build-helpers.sh "$INSTALL_DIR" "$HOME/.local/bin" \
@@ -270,6 +269,8 @@ DesktopNames=infynitae;wlroots
 SESSION
 sudo install -D -m 644 "$HOME/.local/share/wayland-sessions/infynitae.desktop" \
     /usr/share/wayland-sessions/infynitae.desktop
+# an older install under a private umask made the folder root-only: display managers read it
+sudo chmod 755 /usr/share/wayland-sessions
 
 # RustDesk, when installed: the session restarts its service once the compositor runs, so it
 # sees a Wayland session (live/session.sh); this rule allows that one restart, nothing else

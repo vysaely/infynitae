@@ -125,7 +125,6 @@ DST_LIVE="$(cd "$HOME/infynitae/live" 2>/dev/null && pwd -P || echo "")"
 if [ -n "$SRC_LIVE" ] && [ "$SRC_LIVE" != "$DST_LIVE" ]; then
     cp -rf live/* "$HOME/infynitae/live/"
 fi
-chmod +x "$HOME/infynitae/live"/*.sh "$HOME/infynitae/live"/*.py 2>/dev/null || true
 
 # 6b. The lock screen's password check (PAM), kept current
 if ! cmp -s live/lock/infynitae.pam /etc/pam.d/infynitae; then
@@ -171,6 +170,8 @@ if command -v sudo >/dev/null 2>&1; then
     sudo mkdir -p /usr/share/wayland-sessions 2>/dev/null || true
     sudo install -D -m 644 "$HOME/.local/share/wayland-sessions/infynitae.desktop" \
         /usr/share/wayland-sessions/infynitae.desktop || true
+    # an older install under a private umask made the folder root-only: display managers read it
+    sudo chmod 755 /usr/share/wayland-sessions || true
 fi
 
 # 10. Live session: restart the helpers in place (windows stay open)
