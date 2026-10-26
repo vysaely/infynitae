@@ -2999,13 +2999,22 @@ mod tests {
         {
             let mut target = renderer.bind(&mut buffer).expect("bind");
             let mut frame = renderer
-                .render(&mut target, (16, 16).into(), smithay::utils::Transform::Normal)
+                .render(
+                    &mut target,
+                    (16, 16).into(),
+                    smithay::utils::Transform::Normal,
+                )
                 .expect("frame");
             let all = smithay::utils::Rectangle::from_size((16, 16).into());
-            frame.clear([0.0, 0.0, 0.0, 1.0].into(), &[all]).expect("clear");
+            frame
+                .clear([0.0, 0.0, 0.0, 1.0].into(), &[all])
+                .expect("clear");
             frame.finish().expect("finish").wait().expect("wait");
         }
-        assert!(!renderer_lost(&mut renderer), "a healthy context is not lost");
+        assert!(
+            !renderer_lost(&mut renderer),
+            "a healthy context is not lost"
+        );
     }
 
     /// T6: Ctrl+Alt+Backspace quits and Ctrl+Alt+F1…F12 switch VT, with both modifiers held; any
