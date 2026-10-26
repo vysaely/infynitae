@@ -413,6 +413,11 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, FrameData> for WaylandState {
                     with_damage: true,
                     region: None,
                     window,
+                    // a window's capture also drives its frames off screen: never held back
+                    consumer: window
+                        .is_none()
+                        .then(|| crate::screencopy::Consumer::Session(data.session.id())),
+                    damage: None,
                     transform: match window {
                         Some(_) => infynitae_core::output::Transform::Normal,
                         None => state
@@ -423,13 +428,7 @@ impl Dispatch<ExtImageCopyCaptureFrameV1, FrameData> for WaylandState {
                 });
             }
             ext_image_copy_capture_frame_v1::Request::Destroy => {
-                let id = frame.id();
-                state
-                    .screencopy
-                    .pending
-                    .lock()
-                    .unwrap()
-                    .retain(|p| p.id() != id);
+                state.screencopy.forget(&frame.id());
             }
             _ => {}
         }

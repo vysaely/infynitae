@@ -316,6 +316,9 @@ pub struct WaylandState {
     /// Client buffers may also go on overlay planes (`OVERLAY_PLANES`, off by default: amdgpu
     /// refused page flips for Electron's viewport-scaled subsurfaces there).
     pub overlay_planes: bool,
+    /// The cursor on the GPU's cursor plane (`HARDWARE_CURSOR`, on by default): it moves without
+    /// a redraw, and a fullscreen game with a cursor still goes to the screen directly.
+    pub hardware_cursor: bool,
     pub wallpaper: Option<String>,
     pub wallpaper_mode: Option<String>,
     /// The config was read once: a wallpaper change after it restarts the wallpaper (the
@@ -597,6 +600,7 @@ impl WaylandState {
             input_config: InputDeviceConfig::default(),
             direct_scanout: None,
             overlay_planes: false,
+            hardware_cursor: true,
             wallpaper: None,
             wallpaper_mode: None,
             wallpaper_loaded: false,
@@ -993,6 +997,12 @@ impl WaylandState {
                             }
                             "SUPER_FREES_CURSOR" => {
                                 free_cursor_on_super = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
+                            }
+                            "HARDWARE_CURSOR" => {
+                                self.hardware_cursor = !matches!(
                                     val.to_lowercase().as_str(),
                                     "0" | "false" | "off" | "no"
                                 );

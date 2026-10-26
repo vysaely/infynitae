@@ -67,6 +67,11 @@ These pass the test suite but have not run on a real screen or device yet:
   at the first tap, and while locked a finger reaches only the lock surface, so the password
   never leaves the lock screen. Tested off-screen and in the test suite; not yet on a
   touchscreen.
+- **Hardware cursor** (`HARDWARE_CURSOR`): the cursor on the GPU's cursor plane, so it moves
+  without a redraw and a fullscreen game with a cursor is still shown directly. Where the GPU
+  refuses a cursor, it is drawn as before.
+- **Screen sharing only on change:** a remote desktop or a screen share gets a frame when the
+  screen changed since its last one, with just what changed; a still screen costs nothing.
 - **Tearing for games** (`TEARING`, Super+Shift+T): a fullscreen window shown directly flips
   each frame at once (an async page flip) when its app asks (`tearing-control-v1`, a Vulkan or
   OpenGL game with vsync off) or after Super+Shift+T on it (X11 games, which cannot ask). A

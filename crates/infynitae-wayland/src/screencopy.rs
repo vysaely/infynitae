@@ -1,5 +1,11 @@
 //! `zwlr_screencopy_v1` protocol implementation for screen capture.
 //! Allows xdg-desktop-portal-wlr to capture output frames for Discord, OBS, WebRTC.
+//!
+//! A capture that may wait for a change (`copy_with_damage`, and every ext-image-copy frame) is
+//! served only once the screen differs from that consumer's last capture, with what changed as
+//! its damage ([`CaptureDamage`]); until then it waits ([`ScreencopyState::defer`]) and costs
+//! nothing. A still screen shared over a remote desktop is drawn once, not every frame. A plain
+//! `copy` is served at once.
 
 use infynitae_core::output::OutputId;
 pub use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::{
@@ -13,7 +19,19 @@ use smithay::reexports::wayland_server::{
 };
 use std::sync::{Arc, Mutex};
 
+use smithay::reexports::wayland_server::backend::{ClientId, ObjectId};
+
 use crate::WaylandState;
+
+/// Who a capture is for, across its frames: an ext-image-copy session, or a wlr-screencopy
+/// client capturing one output (and region) with damage.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Consumer {
+    Session(ObjectId),
+    Client(ClientId, OutputId, Option<(i32, i32, i32, i32)>),
+}
+
+pub use crate::convert::CaptureDamage;
 
 /// The protocol object a capture answers: `zwlr_screencopy_frame_v1`, or
 /// `ext_image_copy_capture_frame_v1` (`image_copy`).
@@ -38,6 +56,10 @@ pub struct PendingFrame {
     /// The screen's rotation, which the buffer is drawn through (in the panel's orientation, as
     /// wlroots does; `Normal` for a window).
     pub transform: infynitae_core::output::Transform,
+    /// Whose capture it is, when it may wait for a change (`CaptureDamage`); `None`: at once.
+    pub consumer: Option<Consumer>,
+    /// What changed since the consumer's last capture, in buffer px; `None`: all of it.
+    pub damage: Option<Vec<(i32, i32, i32, i32)>>,
 }
 
 impl PendingFrame {
@@ -61,9 +83,11 @@ impl PendingFrame {
         }
     }
 
-    /// The buffer holds the frame: its `size` (all of it damaged), presented at `time`
-    /// (CLOCK_MONOTONIC).
+    /// The buffer holds the frame: its `size`, presented at `time` (CLOCK_MONOTONIC); the
+    /// damage is [`PendingFrame::damage`], or all of it.
     pub fn ready(&self, size: (u32, u32), time: std::time::Duration) {
+        let whole = [(0, 0, size.0 as i32, size.1 as i32)];
+        let damage = self.damage.as_deref().unwrap_or(&whole);
         let (hi, lo, ns) = (
             (time.as_secs() >> 32) as u32,
             (time.as_secs() & 0xFFFF_FFFF) as u32,
@@ -72,14 +96,18 @@ impl PendingFrame {
         match &self.frame {
             CaptureFrame::Wlr(f) => {
                 if self.with_damage && f.version() >= 2 {
-                    f.damage(0, 0, size.0, size.1);
+                    for &(x, y, w, h) in damage {
+                        f.damage(x.max(0) as u32, y.max(0) as u32, w as u32, h as u32);
+                    }
                 }
                 f.flags(Flags::empty());
                 f.ready(hi, lo, ns);
             }
             CaptureFrame::Ext(f) => {
                 f.transform(crate::convert::wl_transform(self.transform));
-                f.damage(0, 0, size.0 as i32, size.1 as i32);
+                for &(x, y, w, h) in damage {
+                    f.damage(x, y, w, h);
+                }
                 f.presentation_time(hi, lo, ns);
                 f.ready();
             }
@@ -107,6 +135,10 @@ pub struct FrameUserData {
 pub struct ScreencopyState {
     pub global: GlobalId,
     pub pending: Arc<Mutex<Vec<PendingFrame>>>,
+    /// Captures waiting for the screen to change (back in `pending` at its next redraw).
+    waiting: Mutex<Vec<PendingFrame>>,
+    /// What changed for each consumer since its last capture.
+    pub damage: Mutex<CaptureDamage>,
     pub hide_cursor: std::sync::atomic::AtomicBool,
     pub serves_capture: std::sync::atomic::AtomicBool,
 }
@@ -134,6 +166,8 @@ impl ScreencopyState {
         Self {
             global,
             pending: Arc::new(Mutex::new(Vec::new())),
+            waiting: Mutex::new(Vec::new()),
+            damage: Mutex::new(CaptureDamage::default()),
             hide_cursor: std::sync::atomic::AtomicBool::new(hide),
             serves_capture: std::sync::atomic::AtomicBool::new(false),
         }
@@ -158,6 +192,32 @@ impl ScreencopyState {
             .store(hide, std::sync::atomic::Ordering::Relaxed);
     }
 
+    /// Captures that found the screen unchanged: they wait for its next redraw
+    /// ([`wake_waiting`](Self::wake_waiting)), which does not come by itself.
+    pub fn defer(&self, frames: Vec<PendingFrame>) {
+        self.waiting.lock().unwrap().extend(frames);
+    }
+
+    /// The screen `output_id` redraws: its waiting captures look again.
+    pub fn wake_waiting(&self, output_id: OutputId) {
+        let mut waiting = self.waiting.lock().unwrap();
+        let mut pending = self.pending.lock().unwrap();
+        let mut i = 0;
+        while i < waiting.len() {
+            if waiting[i].output_id == output_id {
+                pending.push(waiting.swap_remove(i));
+            } else {
+                i += 1;
+            }
+        }
+    }
+
+    /// Forgets a destroyed frame, served or waiting.
+    pub fn forget(&self, id: &ObjectId) {
+        self.pending.lock().unwrap().retain(|p| p.id() != *id);
+        self.waiting.lock().unwrap().retain(|p| p.id() != *id);
+    }
+
     /// Takes all pending requests for a specific output to fulfill during rendering.
     pub fn take_pending(&self, output_id: OutputId) -> Vec<PendingFrame> {
         let mut list = self.pending.lock().unwrap();
@@ -175,6 +235,7 @@ impl ScreencopyState {
 
     /// Fails and removes all pending capture requests for a specific output when it disappears.
     pub fn fail_pending_output(&self, output_id: OutputId) {
+        self.wake_waiting(output_id);
         let mut list = self.pending.lock().unwrap();
         let mut i = 0;
         while i < list.len() {
@@ -418,6 +479,8 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
                         .core
                         .output(output_id)
                         .map_or(infynitae_core::output::Transform::Normal, |m| m.transform),
+                    consumer: None,
+                    damage: None,
                 });
             }
             zwlr_screencopy_frame_v1::Request::CopyWithDamage { buffer } => {
@@ -447,16 +510,12 @@ impl Dispatch<ZwlrScreencopyFrameV1, FrameUserData> for WaylandState {
                         .core
                         .output(output_id)
                         .map_or(infynitae_core::output::Transform::Normal, |m| m.transform),
+                    consumer: Some(Consumer::Client(client.id(), output_id, data.region)),
+                    damage: None,
                 });
             }
             zwlr_screencopy_frame_v1::Request::Destroy => {
-                let id = frame.id();
-                state
-                    .screencopy
-                    .pending
-                    .lock()
-                    .unwrap()
-                    .retain(|p| p.id() != id);
+                state.screencopy.forget(&frame.id());
             }
             _ => {}
         }

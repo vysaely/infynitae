@@ -256,8 +256,9 @@ struct Screen {
     /// Direct scanout is off for this screen until then: a frame scanning out a client's
     /// buffer was refused.
     no_scanout_until: Option<std::time::Instant>,
-    /// The kernel refused an async page flip here: no tearing until the window stops tearing.
-    tearing_refused: bool,
+    /// Async page flips the kernel refused here in a row (a frame that also moved the cursor
+    /// plane is one); at [`TEARING_REFUSALS`] no tearing until the window stops tearing.
+    tearing_refused: u32,
     /// The monitor and driver support VRR on this connector.
     vrr_supported: bool,
     /// VRR is on now.
@@ -924,7 +925,7 @@ fn connect_screen(
         screencopy_texture: None,
         flip_failures: 0,
         no_scanout_until: None,
-        tearing_refused: false,
+        tearing_refused: 0,
         vrr_supported,
         vrr_on,
         vrr_mode: f.vrr,
@@ -1751,6 +1752,11 @@ pub fn run_console_with(
     Ok(())
 }
 
+/// Async page flips refused in a row before a screen stops trying (until its window stops
+/// tearing): an occasional refusal (the cursor moved in the same frame) is not the driver
+/// lacking support.
+const TEARING_REFUSALS: u32 = 60;
+
 /// One frame on every screen that is not waiting for its vblank. A screen whose frame changed
 /// nothing completes its frame callbacks now; a queued one at its vblank.
 fn render(data: &mut LoopData) {
@@ -1830,11 +1836,13 @@ fn render(data: &mut LoopData) {
         // Direct scanout: a fullscreen client's buffer on the primary plane (games). Overlay
         // planes only on request: amdgpu refused page flips (EINVAL, hundreds per Electron
         // start) for viewport-scaled subsurfaces there, although Smithay's test commit passed.
-        // The cursor is drawn by the compositor, never on the cursor plane.
+        // The cursor goes on the cursor plane (HARDWARE_CURSOR): it moves without a redraw, and
+        // a fullscreen game under a cursor can still be scanned out. Smithay test-commits it and
+        // draws the cursor itself when the plane is refused.
         let scanout_banned = s
             .no_scanout_until
             .is_some_and(|t| std::time::Instant::now() < t);
-        let frame_flags = match (
+        let mut frame_flags = match (
             data.direct_scanout && !scanout_banned,
             data.state.overlay_planes,
         ) {
@@ -1844,6 +1852,9 @@ fn render(data: &mut LoopData) {
                 FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT | FrameFlags::ALLOW_OVERLAY_PLANE_SCANOUT
             }
         };
+        if data.state.hardware_cursor {
+            frame_flags |= FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT;
+        }
         let queued = match s.compositor.render_frame(
             &mut data.renderer,
             &elements,
@@ -1861,9 +1872,9 @@ fn render(data: &mut LoopData) {
                 // tearing: a scanned-out frame of a window that tears flips at once (async)
                 let wants_tearing = scanout && data.state.tears(id);
                 if !wants_tearing {
-                    s.tearing_refused = false;
+                    s.tearing_refused = 0;
                 }
-                let tear = wants_tearing && !s.tearing_refused;
+                let tear = wants_tearing && s.tearing_refused < TEARING_REFUSALS;
                 if tear != s.compositor.async_flip() {
                     println!(
                         "[infynitae] Tearing {} on screen {id:?}",
@@ -1872,11 +1883,18 @@ fn render(data: &mut LoopData) {
                     s.compositor.set_async_flip(tear);
                 }
                 let queued = s.compositor.queue_frame(());
-                if tear && !s.compositor.async_flip() {
-                    eprintln!(
-                        "[infynitae] The driver refused tearing on screen {id:?}: frames wait for the refresh"
-                    );
-                    s.tearing_refused = true;
+                if tear {
+                    if s.compositor.async_flip() {
+                        s.tearing_refused = 0;
+                    } else {
+                        // this frame waited for the refresh; the next one tries again
+                        s.tearing_refused += 1;
+                        if s.tearing_refused == TEARING_REFUSALS {
+                            eprintln!(
+                                "[infynitae] The driver refused tearing on screen {id:?} {TEARING_REFUSALS} times in a row: frames wait for the refresh"
+                            );
+                        }
+                    }
                 }
                 match queued {
                     Ok(()) => {
@@ -2008,6 +2026,8 @@ fn serve_captures(
     size: (i32, i32),
     clear: smithay::backend::renderer::Color32F,
 ) {
+    // the screen redraws: captures waiting for a change look again
+    state.screencopy.wake_waiting(output_id);
     if !state.screencopy.has_pending(output_id) {
         return;
     }
@@ -2069,6 +2089,33 @@ fn serve_captures(
         .into_iter()
         .map(|e| smooth::Smoothed::new(e, smooth_program.cloned()))
         .collect();
+    // a capture that may wait is served once its consumer's last capture differs, with what
+    // changed as its damage (whole for a region or a turned screen); else it waits
+    let now = std::time::Instant::now();
+    let mut serve = Vec::new();
+    let mut waiting = Vec::new();
+    {
+        let mut damage = state.screencopy.damage.lock().unwrap();
+        for mut req in pending {
+            if let Some(consumer) = req.consumer.clone() {
+                let draw_transform = convert::output_transform(req.transform);
+                let Some(rects) = damage.damage(&consumer, size, k, draw_transform, &elements, now)
+                else {
+                    waiting.push(req);
+                    continue;
+                };
+                let exact = req.region.is_none()
+                    && req.transform == infynitae_core::output::Transform::Normal;
+                req.damage = exact.then_some(rects);
+            }
+            serve.push(req);
+        }
+    }
+    let pending = serve;
+    state.screencopy.defer(waiting);
+    if pending.is_empty() {
+        return;
+    }
     handle_screencopy(
         renderer,
         screencopy_texture,

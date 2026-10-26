@@ -27,3 +27,9 @@ publish = false
 [patch.crates-io]
 smithay = { path = "vendor/smithay-0.7.0" }
 
+
+# The installed compositor: whole-program optimization (LTO, one codegen unit) for a faster and
+# smaller binary; a release build takes about twice as long
+[profile.release]
+lto = "fat"
+codegen-units = 1

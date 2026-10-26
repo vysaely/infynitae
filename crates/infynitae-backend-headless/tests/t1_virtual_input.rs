@@ -107,7 +107,10 @@ fn keyboard(r: &mut Rig, layout: Option<&str>) -> ZwpVirtualKeyboardV1 {
             text
         }
     };
-    let path = std::env::temp_dir().join(format!("ifn-vi-{}-{layout:?}", std::process::id()));
+    // one file per call: tests run in parallel, each removes its own
+    static N: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("ifn-vi-{}-{n}-{layout:?}", std::process::id()));
     std::fs::File::create(&path)
         .unwrap()
         .write_all(&keymap)

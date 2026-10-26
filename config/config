@@ -74,6 +74,9 @@ GAME_MODE="true"                  # [save] while a game is fullscreen (shown dir
 BACKGROUND_PRIORITY="true"        # [save] an app whose windows have all been out of sight for 15
                                   # seconds runs at a lower CPU priority, back when you see one
                                   # (never a shared window, the game, or X11 apps)
+HARDWARE_CURSOR="true"            # [save] the cursor on the GPU's own cursor layer: it moves without
+                                  # a redraw, and a fullscreen game under it still goes to the
+                                  # screen directly (tearing, game mode) | false: drawn in
 OVERLAY_PLANES="false"            # [save] also windows' buffers on overlay planes (on AMD this
                                   # dropped frames whenever Electron apps like Discord drew)
 OSK="auto"                        # [restart] on-screen keyboard (squeekboard) for text fields —

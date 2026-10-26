@@ -1200,6 +1200,70 @@ fn send_preferred_scale(
     );
 }
 
+/// A consumer's capture state unused this long is dropped (its session or client is gone).
+const CONSUMER_TTL: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// What changed for each consumer since its last capture (`OutputDamageTracker` per consumer),
+/// by any key (a [`Consumer`](crate::screencopy::Consumer); a number in the tests).
+pub struct CaptureDamage<K = crate::screencopy::Consumer> {
+    trackers:
+        std::collections::HashMap<K, (OutputDamageTracker, (i32, i32), f64, std::time::Instant)>,
+}
+
+impl<K> Default for CaptureDamage<K> {
+    fn default() -> Self {
+        Self {
+            trackers: std::collections::HashMap::new(),
+        }
+    }
+}
+
+impl<K: std::hash::Hash + Eq + Clone> CaptureDamage<K> {
+    /// The damage of `elements` (a `size` px frame at scale `k`, drawn through `transform`) since
+    /// `consumer`'s last capture, as rectangles in the frame's px: the whole frame for its first
+    /// capture or after a size or scale change, `None` when nothing changed (the capture waits).
+    pub fn damage<E: smithay::backend::renderer::element::Element>(
+        &mut self,
+        consumer: &K,
+        size: (i32, i32),
+        k: f64,
+        transform: smithay::utils::Transform,
+        elements: &[E],
+        now: std::time::Instant,
+    ) -> Option<Vec<(i32, i32, i32, i32)>> {
+        self.trackers
+            .retain(|_, (_, _, _, used)| now.duration_since(*used) < CONSUMER_TTL);
+        let fresh = !matches!(
+            self.trackers.get(consumer),
+            Some((_, s, kk, _)) if *s == size && *kk == k
+        );
+        if fresh {
+            self.trackers.insert(
+                consumer.clone(),
+                (
+                    OutputDamageTracker::new(size, smithay::utils::Scale::from(k), transform),
+                    size,
+                    k,
+                    now,
+                ),
+            );
+        }
+        let (tracker, _, _, used) = self.trackers.get_mut(consumer)?;
+        *used = now;
+        let damage = tracker.damage_output(1, elements).ok()?.0.cloned();
+        if fresh {
+            return Some(vec![(0, 0, size.0, size.1)]);
+        }
+        let rects: Vec<_> = damage
+            .unwrap_or_default()
+            .into_iter()
+            .map(|r| (r.loc.x, r.loc.y, r.size.w, r.size.h))
+            .filter(|r| r.2 > 0 && r.3 > 0)
+            .collect();
+        (!rects.is_empty()).then_some(rects)
+    }
+}
+
 #[cfg(test)]
 mod cursor_tests {
     use super::*;
