@@ -130,6 +130,70 @@ impl VirtualInputState {
     }
 }
 
+/// The layout and options the seat's keyboard uses, once chosen (`usable_keymap_names`): every
+/// client the compositor starts gets them (`apply_keymap_env`), so apps that build their own
+/// keymap from `XKB_DEFAULT_*` (kitty) never differ from the seat's.
+static SEAT_KEYMAP_NAMES: std::sync::OnceLock<(String, String)> = std::sync::OnceLock::new();
+
+/// The configured layout and options when they make a keymap; else the layout alone; else `us`,
+/// with a warning. An empty layout (`XKB_DEFAULT_LAYOUT=""`, a console keymap name such as
+/// `de-latin1` taken for one) would make none: the seat would have no keyboard, and an app given
+/// it types nothing (seen 2026-10-26 on a ThinkPad).
+pub fn usable_keymap_names(layout: &str, options: &str) -> (String, String) {
+    use smithay::input::keyboard::xkb;
+    let compiles = |layout: &str, options: &str| {
+        let ctx = xkb::Context::new(xkb::CONTEXT_NO_FLAGS);
+        let options = (!options.is_empty()).then(|| options.to_string());
+        xkb::Keymap::new_from_names(
+            &ctx,
+            "evdev",
+            "",
+            layout,
+            "",
+            options,
+            xkb::COMPILE_NO_FLAGS,
+        )
+        .is_some()
+    };
+    let (layout, options) = (layout.trim(), options.trim());
+    if !layout.is_empty() && compiles(layout, options) {
+        return (layout.to_string(), options.to_string());
+    }
+    if !layout.is_empty() && !options.is_empty() && compiles(layout, "") {
+        eprintln!(
+            "[infynitae] Keyboard options {options:?} make no keymap: layout {layout:?} without them"
+        );
+        return (layout.to_string(), String::new());
+    }
+    eprintln!(
+        "[infynitae] Keyboard layout {layout:?} makes no keymap: using \"us\" (set XKB_DEFAULT_LAYOUT)"
+    );
+    ("us".to_string(), String::new())
+}
+
+/// Records the seat's layout and options for the clients started from now on (once).
+pub(crate) fn set_seat_keymap_names(layout: &str, options: &str) {
+    let _ = SEAT_KEYMAP_NAMES.set((layout.to_string(), options.to_string()));
+}
+
+/// Gives `command` the seat's layout and options: `XKB_DEFAULT_LAYOUT`/`_OPTIONS` for the apps,
+/// and `INFYNITAE_XKB_LAYOUT`/`_OPTIONS`, which the session scripts keep over the config's
+/// (`live/config.sh`). Nothing before the seat's keyboard exists.
+pub(crate) fn apply_keymap_env(command: &mut std::process::Command) {
+    let Some((layout, options)) = SEAT_KEYMAP_NAMES.get() else {
+        return;
+    };
+    command
+        .env("XKB_DEFAULT_LAYOUT", layout)
+        .env("INFYNITAE_XKB_LAYOUT", layout)
+        .env("INFYNITAE_XKB_OPTIONS", options);
+    if options.is_empty() {
+        command.env_remove("XKB_DEFAULT_OPTIONS");
+    } else {
+        command.env("XKB_DEFAULT_OPTIONS", options);
+    }
+}
+
 /// The text of the keymap `layout` and `options` compile to: what the seat's keyboard sends.
 pub(crate) fn keymap_text(layout: &str, options: Option<String>) -> Option<String> {
     use smithay::input::keyboard::xkb;
@@ -421,5 +485,25 @@ mod tests {
         let de = keymap_text("de", None).expect("de compiles");
         assert!(!is_seat_keymap(&us, de.as_bytes()));
         assert!(!is_seat_keymap(&us, b"not a keymap"));
+    }
+}
+
+#[cfg(test)]
+mod keymap_names_tests {
+    use super::usable_keymap_names;
+
+    #[test]
+    fn a_layout_that_makes_no_keymap_is_us_and_a_good_one_is_kept() {
+        assert_eq!(usable_keymap_names("", ""), ("us".into(), String::new()), "empty");
+        assert_eq!(
+            usable_keymap_names("de-latin1", ""),
+            ("us".into(), String::new()),
+            "a console keymap name"
+        );
+        assert_eq!(
+            usable_keymap_names(" us,ru ", "grp:alt_shift_toggle"),
+            ("us,ru".into(), "grp:alt_shift_toggle".into()),
+            "a real one, kept"
+        );
     }
 }

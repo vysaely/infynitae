@@ -476,6 +476,10 @@ impl WaylandState {
             }
         }
 
+        // a layout that makes no keymap (empty, misspelled) is never the seat's: `us` then
+        let (xkb_layout, xkb_options) =
+            virtual_input::usable_keymap_names(&xkb_layout, &xkb_options);
+        virtual_input::set_seat_keymap_names(&xkb_layout, &xkb_options);
         let seat_keymap = virtual_input::keymap_text(
             &xkb_layout,
             (!xkb_options.is_empty()).then(|| xkb_options.clone()),

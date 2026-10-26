@@ -317,6 +317,7 @@ impl WaylandState {
         if let Ok(a) = std::env::var("XAUTHORITY") {
             cmd.env("XAUTHORITY", a);
         }
+        crate::virtual_input::apply_keymap_env(&mut cmd);
         cmd.env_remove("KDE_FULL_SESSION")
             .env_remove("KDE_SESSION_VERSION")
             .env_remove("KDE_SESSION_UID")

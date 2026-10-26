@@ -549,6 +549,7 @@ fn client_command(
         .env_remove("KDE_SESSION_UID")
         .env_remove("KDE_APPLICATIONS_AS_SCOPE")
         .env_remove("XDG_MENU_PREFIX");
+    crate::virtual_input::apply_keymap_env(&mut command);
     match x_display {
         Some(x) => command.env("DISPLAY", x),
         None => command.env_remove("DISPLAY"),
