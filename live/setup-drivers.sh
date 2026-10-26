@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Universal Hardware Graphics & Xwayland Driver Detector for Infynitae
-# Detects AMD, Intel, NVIDIA, and Virtualized GPUs, and installs the required
-# Vulkan, 32-bit (multilib), and Xwayland drivers.
+# infynitae-drivers: finds the GPUs (AMD, Intel, NVIDIA, virtual machines) and installs their
+# Vulkan, 32-bit (multilib, for Steam) and Xwayland packages. --dry-run only says what it would do.
 set -e
 # files it creates are readable by everyone, like any installed file: the session's private
 # umask (077) would make /etc/pam.d/infynitae unreadable to the lock screen, and the session
@@ -25,13 +24,11 @@ if ! command -v pacman_run >/dev/null 2>&1; then
     pacman_run() { sudo pacman "$@" --noconfirm --ask 4; }
 fi
 
-echo "=========================================================="
-echo "    INFYNITAE - UNIVERSAL GRAPHICS & DRIVER SETUP"
-echo "=========================================================="
+echo "==> Graphics drivers"
 
-# 1. Ensure pciutils is available for accurate detection
+# 1. lspci, to name the GPUs
 if ! command -v lspci >/dev/null 2>&1; then
-    echo "==> Installing pciutils for hardware detection..."
+    echo "==> Installing pciutils (GPU detection)..."
     if [ "$DRY_RUN" = true ]; then
         echo "==> [Dry-run] would install pciutils"
     else
@@ -39,15 +36,15 @@ if ! command -v lspci >/dev/null 2>&1; then
     fi
 fi
 
-# 2. Ensure [multilib] repository is enabled in pacman.conf (required for 32-bit drivers & Steam)
+# 2. [multilib] in pacman.conf: the 32-bit drivers (Steam)
 if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
     if [ "$DRY_RUN" = true ]; then
         echo "==> [Dry-run] would enable [multilib] in /etc/pacman.conf"
     else
-        echo "==> Enabling [multilib] repository in /etc/pacman.conf..."
+        echo "==> Enabling [multilib] in /etc/pacman.conf..."
         sudo sed -i '/^#\[multilib\]$/,/^#Include/ s/^#//' /etc/pacman.conf
         if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
-            echo "==> /etc/pacman.conf has no [multilib] section to enable; 32-bit drivers (Steam) are left out." >&2
+            echo "==> /etc/pacman.conf has no [multilib] section; 32-bit drivers (Steam) are left out." >&2
         else
             pacman_run -Syu --needed
         fi
@@ -56,8 +53,7 @@ fi
 MULTILIB=false
 grep -q "^\[multilib\]" /etc/pacman.conf && MULTILIB=true
 
-# 3. Detect graphics hardware
-echo "==> Scanning PCI bus and DRM subsystems..."
+# 3. the GPUs
 GPU_OUTPUT=""
 if command -v lspci >/dev/null 2>&1; then
     GPU_OUTPUT=$(lspci -nn | grep -iE 'vga|3d controller|display controller' 2>/dev/null || true)
@@ -104,20 +100,19 @@ TARGET_PKGS+=(
     xwayland-satellite
 )
 
-echo "==> Hardware Detection Results:"
 if [ "$DETECTED_AMD" = true ]; then
-    echo "  [✓] AMD Radeon GPU detected"
+    echo "    Found: AMD GPU"
     TARGET_PKGS+=(vulkan-radeon lib32-vulkan-radeon)
 fi
 
 if [ "$DETECTED_INTEL" = true ]; then
-    echo "  [✓] Intel Graphics detected"
+    echo "    Found: Intel GPU"
     TARGET_PKGS+=(vulkan-intel lib32-vulkan-intel intel-media-driver)
 fi
 
 NVIDIA_NOTE=""
 if [ "$DETECTED_NVIDIA" = true ]; then
-    echo "  [✓] NVIDIA GPU detected"
+    echo "    Found: NVIDIA GPU"
     TARGET_PKGS+=(nvidia-utils lib32-nvidia-utils egl-wayland libva-nvidia-driver)
     # the kernel driver: nvidia-utils is only its user-space half. The open modules (the only
     # ones in Arch's repositories now) need a Turing card or newer (RTX, GTX 16xx); an older
@@ -145,16 +140,16 @@ if [ "$DETECTED_NVIDIA" = true ]; then
 fi
 
 if [ "$DETECTED_VM" = true ]; then
-    echo "  [✓] Virtual Machine / VirtIO GPU detected"
+    echo "    Found: virtual machine GPU"
     TARGET_PKGS+=(vulkan-virtio lib32-vulkan-virtio vulkan-swrast lib32-vulkan-swrast)
 fi
 
 if [ "$DETECTED_AMD" = false ] && [ "$DETECTED_INTEL" = false ] && [ "$DETECTED_NVIDIA" = false ] && [ "$DETECTED_VM" = false ]; then
-    echo "  [!] Unknown/Generic GPU detected; adding universal software Vulkan rasterizer"
+    echo "    No known GPU found: using software Vulkan (vulkan-swrast)"
     TARGET_PKGS+=(vulkan-swrast lib32-vulkan-swrast)
 fi
 
-# Filter only uninstalled packages (32-bit ones only with multilib)
+# the ones not installed yet (32-bit ones only with multilib)
 MISSING=()
 for pkg in "${TARGET_PKGS[@]}"; do
     [ -z "$pkg" ] && continue
@@ -165,15 +160,14 @@ for pkg in "${TARGET_PKGS[@]}"; do
 done
 
 if [ ${#MISSING[@]} -gt 0 ]; then
-    echo "==> Missing driver packages to install: ${MISSING[*]}"
+    echo "==> Installing: ${MISSING[*]}"
     if [ "$DRY_RUN" = true ]; then
-        echo "==> [Dry-run] Command that would run: sudo pacman -S --needed --noconfirm ${MISSING[*]}"
+        echo "==> [Dry-run] would run: sudo pacman -S --needed --noconfirm ${MISSING[*]}"
     else
         pacman_run -S --needed "${MISSING[@]}"
-        echo "==> All required drivers successfully installed!"
     fi
 else
-    echo "==> All required graphics and Xwayland drivers are already installed."
+    echo "==> Drivers already installed"
 fi
 
 # NVIDIA: the compositor needs the driver's kernel modesetting (nvidia_drm modeset=1); current
@@ -185,7 +179,7 @@ if [ "$DETECTED_NVIDIA" = true ] && [ -z "$NVIDIA_NOTE" ] \
         echo "==> [Dry-run] would turn on NVIDIA kernel modesetting (/etc/modprobe.d/infynitae-nvidia.conf)"
     else
         echo "options nvidia_drm modeset=1 fbdev=1" | sudo tee /etc/modprobe.d/infynitae-nvidia.conf >/dev/null
-        echo "==> NVIDIA kernel modesetting turned on (after the reboot)"
+        echo "==> NVIDIA kernel modesetting turned on (applies after a reboot)"
     fi
 fi
 if [ -n "$NVIDIA_NOTE" ]; then

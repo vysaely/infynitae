@@ -20,7 +20,7 @@ this repository already.
 | :--- | :--- | :--- | :--- | :--- |
 | Notifications | mako | swaync (with a panel), dunst, fnott | `NOTIFICATIONS` | **Yes, small**: notifications placed on the screen you look at, matching the canvas look |
 | Volume / brightness pop-ups | `notify-send` from `live/launch.sh` | swayosd, avizo, wob | none yet | **Yes, small**: a native on-screen display |
-| Control menu (Wi-Fi, Bluetooth, sound, power) | `live/control-menu` (ours) on fuzzel | nm-applet, iwgtk, blueman, pwvucontrol, a bar's widgets | `CONTROL_MENU` | Ours already; a graphical panel later |
+| Control menu (Wi-Fi, Bluetooth, volume, sound output, power) | `live/control-menu` (ours) on fuzzel | nm-applet, iwgtk, blueman, pwvucontrol, a bar's widgets | `CONTROL_MENU` | Ours already; a graphical panel later |
 | Bar / panel | none (optional Quickshell island, ours) | waybar, ironbar, eww, quickshell | `ENABLE_QUICKSHELL`, or start yours in `autostart.sh` | **Yes, medium**: the island is the start |
 | Clipboard history | cliphist + wl-clip-persist | clipman, copyq | `CLIPBOARD_HISTORY`, `CLIPBOARD_PICKER` | Low value |
 | Screenshots | grim + slurp | grimblast, flameshot, satty (annotate) | `SCREENSHOT_CMD` | **Yes, small**: the compositor can already capture; a native region picker is little work |

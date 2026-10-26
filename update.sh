@@ -1,23 +1,19 @@
 #!/usr/bin/env bash
-# ==============================================================================
-# INFYNITAE - UNIVERSAL COMPOSITOR & SYSTEM UPDATER
-#
-# Single-command update: pulls latest code, builds optimized release binaries,
-# syncs runtime companion scripts, and preserves all user configurations.
-# ==============================================================================
+# infynitae-update: pull the source, install new packages, rebuild, reinstall; the config is
+# never overwritten and a running session keeps its windows.
 set -e
 # files it creates are readable by everyone, like any installed file: the session's private
 # umask (077) would make /etc/pam.d/infynitae unreadable to the lock screen, and the session
 # entry unreadable to a display manager
 umask 022
 
-# Detect Infynitae repository location
+# the source: next to this script, or ~/infynitae for the installed copy
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd -P)"
 if [ ! -f "$REPO_DIR/Cargo.toml" ]; then
     if [ -d "$HOME/infynitae" ] && [ -f "$HOME/infynitae/Cargo.toml" ]; then
         REPO_DIR="$HOME/infynitae"
     else
-        echo "[infynitae-update] Error: Cannot find Infynitae repository directory." >&2
+        echo "==> Infynitae source not found (expected ~/infynitae)." >&2
         exit 1
     fi
 fi
@@ -27,23 +23,18 @@ cd "$REPO_DIR"
 # the shared, unattended pacman, the parts left out at install, and one password for the run
 . "$REPO_DIR/live/install-lib.sh"
 load_install_choices
-echo "==> infynitae-update needs your password once (new packages, system files)."
+echo "==> Your password, once (new packages, system files)"
 sudo_once
 trap 'kill "${SUDO_KEEPER:-}" 2>/dev/null || true' EXIT
 
-echo "=========================================================="
-echo "        INFYNITAE - UNIVERSAL COMPOSITOR UPDATER"
-echo "=========================================================="
-echo "==> Working in: $REPO_DIR"
+echo "==> Updating Infynitae in $REPO_DIR"
 
-# 1. Pull latest commits from GitHub
+# 1. the source; local changes are stashed and put back
 if [ -d ".git" ]; then
-    echo "==> Fetching latest changes from remote repository..."
     CURRENT_BRANCH=$(git branch --show-current 2>/dev/null || echo "main")
-    # Stash uncommitted changes safely if any
     PUSHED_STASH=false
     if ! git diff-index --quiet HEAD -- 2>/dev/null; then
-        echo "==> Stashing local working tree changes..."
+        echo "==> Stashing local changes..."
         STASH_BEFORE=$(git rev-parse -q --verify refs/stash 2>/dev/null || true)
         if git stash push -m "infynitae-auto-update-$(date +%s)" >/dev/null 2>&1; then
             STASH_AFTER=$(git rev-parse -q --verify refs/stash 2>/dev/null || true)
@@ -53,16 +44,16 @@ if [ -d ".git" ]; then
         fi
     fi
 
-    echo "==> Pulling branch: $CURRENT_BRANCH..."
+    echo "==> Pulling $CURRENT_BRANCH..."
     git pull origin "$CURRENT_BRANCH" || {
-        echo "[infynitae-update] Warning: git pull failed (offline or remote mismatch). Continuing build..."
+        echo "==> Could not pull (offline?); building the source as it is"
     }
 
     if [ "$PUSHED_STASH" = true ]; then
-        echo "==> Re-applying local changes..."
+        echo "==> Restoring local changes..."
         if ! git stash pop; then
-            echo "[infynitae-update] Error: Conflict while restoring stashed changes." >&2
-            echo "[infynitae-update] Stopping before building or installing. Your changes remain in git stash." >&2
+            echo "==> Your local changes conflict with the update; nothing was built or installed." >&2
+            echo "    They are kept in git stash." >&2
             exit 1
         fi
     fi
@@ -81,9 +72,9 @@ if command -v pacman >/dev/null 2>&1; then
     done
     pacman -Qi rustup >/dev/null 2>&1 || NEW_PKGS+=(rustup)
     if [ ${#NEW_PKGS[@]} -gt 0 ]; then
-        echo "==> Installing new packages: ${NEW_PKGS[*]}"
+        echo "==> Installing: ${NEW_PKGS[*]}"
         pacman_run -S --needed "${NEW_PKGS[@]}" || {
-            echo "[infynitae-update] Could not install ${NEW_PKGS[*]}: update the system (sudo pacman -Syu), then run infynitae-update again." >&2
+            echo "==> Could not install ${NEW_PKGS[*]}: run sudo pacman -Syu, then infynitae-update again." >&2
             exit 1
         }
     fi
@@ -93,11 +84,11 @@ fi
 # GPU, joystick and uinput access come from systemd (70-uaccess) and the steam package
 # (60-steam-input); Infynitae needs no udev rules of its own.
 
-# 3. Build optimized release binary
-echo "==> Compiling latest Infynitae release binary..."
+# 3. build
+echo "==> Building..."
 cargo build --release -p infynitae
 
-# 4. Install binaries to ~/.local/bin
+# 4. install to ~/.local/bin
 mkdir -p "$HOME/.local/bin"
 # replace by rename: the running compositor keeps its old file until the next restart
 install -m 755 "${CARGO_TARGET_DIR:-target}/release/infynitae" "$HOME/.local/bin/infynitae.new"
@@ -113,13 +104,13 @@ if [ -f "live/xdg-open" ]; then
     install -m 755 live/xdg-open "$HOME/.local/bin/xdg-open" 2>/dev/null || true
 fi
 
-# 5. Compile the C helpers (portal, polkit, lock, wallpaper, recorder stream)
+# 5. the C helpers (portal, polkit, lock, wallpaper, recorder stream)
 sh "$REPO_DIR/live/build-helpers.sh" "$REPO_DIR" "$HOME/.local/bin" \
-    || echo "[infynitae-update] Warning: some helpers were not built (see above)"
+    || echo "==> Some helpers were not built (see above); Infynitae runs without them"
 install -m 755 "$REPO_DIR/live/record/infynitae-recorder" "$HOME/.local/bin/infynitae-recorder.new"
 mv -f "$HOME/.local/bin/infynitae-recorder.new" "$HOME/.local/bin/infynitae-recorder"
 
-# 6. Deploy live companion scripts
+# 6. the session scripts, when this source is not ~/infynitae itself
 mkdir -p "$HOME/infynitae/live"
 SRC_LIVE="$(cd live 2>/dev/null && pwd -P || echo "")"
 DST_LIVE="$(cd "$HOME/infynitae/live" 2>/dev/null && pwd -P || echo "")"
@@ -145,24 +136,24 @@ if systemctl cat rustdesk.service >/dev/null 2>&1 \
         /etc/polkit-1/rules.d/50-infynitae-rustdesk.rules || true
 fi
 
-# 8. Safely synchronize configuration templates without overwriting user settings
+# 8. the config: created when missing, otherwise only the new defaults as config.template
 mkdir -p "$HOME/.config/infynitae"
 if [ -f "config/config" ]; then
     if [ ! -f "$HOME/.config/infynitae/config" ]; then
         cp -f "config/config" "$HOME/.config/infynitae/config"
-        echo "==> Created default configuration at ~/.config/infynitae/config"
+        echo "==> Created ~/.config/infynitae/config"
     else
         cp -f "config/config" "$HOME/.config/infynitae/config.template"
-        echo "==> User config preserved at ~/.config/infynitae/config (template saved to config.template)"
+        echo "==> Kept your config (new defaults: ~/.config/infynitae/config.template)"
     fi
 fi
 
-# 9. Update desktop entry
+# 9. the session entry for display managers
 mkdir -p "$HOME/.local/share/wayland-sessions"
 cat << 'EOF' > "$HOME/.local/share/wayland-sessions/infynitae.desktop"
 [Desktop Entry]
 Name=Infynitae
-Comment=High-Performance Infinite Canvas Wayland Compositor
+Comment=Infinite-canvas Wayland compositor
 Exec=infynitae-session
 Type=Application
 DesktopNames=infynitae;wlroots
@@ -175,18 +166,13 @@ if command -v sudo >/dev/null 2>&1; then
     sudo chmod 755 /usr/share/wayland-sessions || true
 fi
 
-# 10. Live session: restart the helpers in place (windows stay open)
+# 10. a running session: restart the helpers in place (windows stay open)
 if pgrep -x infynitae >/dev/null 2>&1; then
-    echo "==> Restarting helpers in the running session (windows stay open)..."
+    echo "==> Restarting the helpers (windows stay open)..."
     "$HOME/.local/bin/infynitae-reload" settings wallpaper portal polkit || true
-    echo "    (the replay recorder keeps running; 'infynitae-reload recorder' restarts it and clears its buffer)"
+    echo "    The replay recorder keeps running; infynitae-reload recorder restarts it (clears its buffer)."
     "$HOME/.local/bin/infynitae-reload" status | tail -1
 fi
 
 echo ""
-echo "=========================================================="
-echo "          INFYNITAE UPDATE COMPLETE!"
-echo "=========================================================="
-echo "Infynitae is up to date and ready to use."
-echo "To update anytime in the future, simply run: infynitae-update"
-echo "=========================================================="
+echo "==> Infynitae is up to date. A new compositor runs from its next start (Ctrl+Alt+Backspace)."

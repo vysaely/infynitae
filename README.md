@@ -1,52 +1,49 @@
 # Infynitae
 
-An infinite-canvas Wayland compositor for Arch Linux, written in Rust. Windows live on one
-endless canvas; each screen is a camera you pan and zoom over it. Built for my own desktop and
-workflow, with AI agents doing a lot of the typing.
+An infinite-canvas Wayland compositor for Arch Linux, written in Rust. Your windows sit on one
+endless canvas, and each screen is a camera you pan and zoom over it.
 
-**Ready out of the box, every piece your choice.** A fresh install is a complete desktop:
-terminal, launcher, lock screen, wallpaper, screenshots, screen sharing, clipboard history,
-session restore. Nothing of it is fixed. Each app is a setting (`TERMINAL`, `LAUNCHER`,
-`FILE_MANAGER`, …, or any command), every key can be rebound, the optional helpers (clipboard
-history, session restore, the replay buffer, the island) are switches, and the whole
-configuration is one commented file. No settings daemons: what the toolkits need is written to
-their files once.
+A fresh install is a complete desktop: terminal, launcher, lock screen, wallpaper, screenshots,
+screen sharing, clipboard history and session restore. Every piece is a setting you can swap or
+turn off, every key can be rebound, and the whole configuration is one commented file.
 
-Status: my daily desktop, tested on my own hardware only. See [docs/STATUS.md](docs/STATUS.md)
-for what is solid, what is untested and what is missing.
+**Status:** my daily desktop, tested on my own hardware only. [docs/STATUS.md](docs/STATUS.md)
+says what is solid, what is untested and what is missing.
 
 ## Install
 
-Arch Linux:
-
 ```bash
 git clone https://github.com/vysaely/infynitae.git ~/infynitae
-cd ~/infynitae
-./install.sh
+~/infynitae/install.sh
 ```
 
-It asks for your password once at the start and then runs by itself. Then reboot: without a
-display manager the machine starts at the Infynitae lock screen (the session starts locked,
-nothing runs before you unlock; it is also what RustDesk reaches after a reboot). With a display
-manager (GDM, SDDM…), pick **Infynitae** at its login.
+It asks for your password once, then runs by itself. Reboot when it is done:
 
-For the text login instead, install with `./install.sh --no-autologin`, or later run
-`sudo ~/infynitae/live/setup-autologin.sh --off`: logging in on tty1 then starts Infynitae.
+- **No display manager:** the machine starts at the Infynitae lock screen.
+- **A display manager** (GDM, SDDM…): pick **Infynitae** at its login.
 
-Every optional part can be left out: `--no-notifications`, `--no-keyring`, `--no-automount`,
-`--no-clipboard`, `--no-fonts`, `--no-recorder`, `--no-terminal`, `--no-bluetooth`,
-`--no-power-profiles`, `--no-autorotate`, or `--minimal` for all of them (`./install.sh --help`). `--replay-buffer`
-turns on the replay buffer (the last minutes of the screen, saved with Super+Alt+C).
-`infynitae-update` keeps them out.
+The installer updates the system first, installs the right graphics drivers (NVIDIA included),
+and stops before changing anything if there is no internet, disk space or sudo. Its log is
+`~/.local/state/infynitae/install.log`.
 
-What the installer takes care of: it updates the system first (Arch is only consistent whole),
-waits for another package manager instead of failing, replaces a conflicting package
-(pulseaudio by pipewire-pulse) instead of stopping, installs NVIDIA's kernel driver for Turing
-and newer cards (an older card runs on nouveau, and it says so), builds with fewer jobs on a
-machine with little memory, and stops early, before changing anything, without internet, disk
-space or sudo. Everything it prints is also in `~/.local/state/infynitae/install.log`.
+### Options
 
-Update any time with `infynitae-update` (your config is never overwritten).
+| Flag | Effect |
+| :--- | :--- |
+| `--no-notifications` `--no-keyring` `--no-automount` `--no-clipboard` `--no-fonts` `--no-recorder` `--no-terminal` `--no-bluetooth` `--no-power-profiles` `--no-autorotate` | Leave out that part |
+| `--minimal` | Leave out all of them |
+| `--replay-buffer` | Keep the last minutes of the screen, saved with `Super + Alt + C` |
+| `--no-autologin` | Log in on tty1 instead of booting to the lock screen |
+
+`./install.sh --help` explains each one.
+
+### Update
+
+```bash
+infynitae-update
+```
+
+Your config is never overwritten, and parts left out at install stay out.
 
 ## Shortcuts
 
@@ -54,71 +51,70 @@ Update any time with `infynitae-update` (your config is never overwritten).
 | :--- | :--- |
 | `Super + 1..9` | Focus window slot 1..9 |
 | `Super + Shift + 1..9` | Focus cluster slot 1..9 |
-| `Super + Space` | Center the focused window, zoom back to 100% |
+| `Super + Space` | Center the focused window at 100% zoom |
 | `Super + Shift + Space` | Center the focused window, keep the zoom |
 | `Super + Enter` | Maximize the window, or fit the view to it (`SUPER_ENTER_ACTION`) |
 | `Super + Shift + Enter` | Fullscreen (you can still pan out of it) |
-| `Super + Left Drag` | Move window |
-| `Super + Right Drag` | Resize window from nearest corner |
-| `Super + Shift + Left Drag` | Move entire window cluster |
-| `Super + Shift + Right Drag` | Resize entire window cluster |
-| `Super + Middle Drag` | Pan canvas (`free`, `grab`, or `rts` mode) |
-| `Super + Shift + Wheel` | Zoom canvas in / out |
-| `Super + Tab` | Cycle window focus (auto-centers camera) |
-| `Super + Shift + Tab` | Canvas overview toggle (fits all windows / restores view) |
-| `Super + Q` | Terminal (`TERMINAL`) |
-| `Super + W` | Launcher (`LAUNCHER`) |
-| `Super + E` | Files (`FILE_MANAGER`) |
-| `Super + Shift + S` / `Print` | Screenshot full screen |
-| `Super + Shift + R` | Region screenshot (`slurp` + `grim`) |
-| `Super + Shift + Backspace` | Reload the config and restart the helpers (windows stay) |
-| `Super + L` | Lock the screen |
-| `Super + V` | Clipboard history (`cliphist`) |
-| `Super + A` | Control menu: Wi-Fi, Bluetooth, sound output, power mode, do not disturb |
-| `Super + C` | Close focused window |
-| `Super + Shift + C` | Force close (ends the app) |
-| `Super + Shift + P` | Hide the focused window from screen captures |
-| `Super + Shift + I` | Stay awake (no idle screen-off / auto-lock) |
-| `Super + Alt + C` | Save a replay clip (`ENABLE_REPLAY_BUFFER`) |
+| `Super + Tab` | Next window |
+| `Super + Shift + Tab` | Overview of all windows |
+| `Super + Left drag` | Move a window |
+| `Super + Right drag` | Resize a window |
+| `Super + Shift + Left / Right drag` | Move / resize a whole cluster |
+| `Super + Middle drag` | Pan the canvas |
+| `Super + Shift + Wheel` | Zoom the canvas |
+| Finger on empty canvas | Drag the canvas (two fingers: pinch to zoom) |
+| `Super + Q` / `W` / `E` | Terminal / launcher / files |
+| `Super + Shift + S` or `Print` | Screenshot |
+| `Super + Shift + R` | Region screenshot |
+| `Super + V` | Clipboard history |
+| `Super + A` | Control menu: Wi-Fi, Bluetooth, volume (all sound or one app), sound output, power, do not disturb |
+| `Super + L` | Lock |
+| `Super + C` | Close the window (`Shift`: force) |
+| `Super + Shift + P` | Hide the window from screenshots and sharing |
+| `Super + Shift + I` | Stay awake |
 | `Super + Alt + R` | Start / stop recording |
-| `Super` (held) | Frees a cursor a game captured (`SUPER_FREES_CURSOR`) |
+| `Super + Alt + C` | Save a replay clip |
+| `Super` (held) | Free a cursor a game captured |
+| `Super + Shift + Backspace` | Reload the config (windows stay) |
 | `Ctrl + Alt + Backspace` | Restart the compositor (windows close) |
-| `Ctrl + Alt + F1..F12` | Switch VT |
-| `XF86Audio*` / `XF86MonBrightness*` | Volume & brightness control |
 
-## Changing things
+## Configuration
 
-Everything is in one file: **`~/.config/infynitae/config`**. Every option is explained in it with
-its default, and each section says when a change applies (most of them as soon as you save).
+Everything is in **`~/.config/infynitae/config`**. Each option is explained there with its
+default, and most changes apply as soon as you save.
 
-- Apps: `TERMINAL`, `LAUNCHER`, `FILE_MANAGER`, `BROWSER`: `"auto"` or any command.
-- Keys: `BIND_TERMINAL="SUPER+RETURN"` moves a shortcut, `BIND_LAUNCHER="none"` frees one,
-  `EXEC_BROWSER="SUPER+B:firefox"` adds your own.
-- Look: `CURSOR_THEME`, `ICON_THEME`, `FONT_NAME`, `WALLPAPER`, `OUTPUT_SCALE`.
+```bash
+TERMINAL="kitty"                    # apps: "auto" or any command
+BIND_TERMINAL="SUPER+RETURN"        # move a shortcut
+BIND_LAUNCHER="none"                # free one
+EXEC_BROWSER="SUPER+B:firefox"      # add your own
+```
 
-`Super + Shift + Backspace` reloads it.
+## Troubleshooting
 
-## When something goes wrong
+`~/.local/state/infynitae/session.log` shows what the compositor saw: the screens it found,
+config lines it skipped, errors.
 
-`~/.local/state/infynitae/session.log` says what the compositor saw: the screens it found,
-config lines it skipped, errors. `infynitae-session stop` ends the session; after three quick
-crashes it stops by itself.
+After a crash the session restarts by itself (locked) and a notification says what happened.
+The report, with the panic message and the end of the log, is in
+`~/.local/state/infynitae/crashes/`; attach it to a bug report. After three crashes in a row
+within seconds it stops restarting. `infynitae-session stop` ends the session.
 
 ## Documentation
 
 | | |
 | :--- | :--- |
-| [docs/STATUS.md](docs/STATUS.md) | What works, what is untested, what is missing |
-| [docs/COMPONENTS.md](docs/COMPONENTS.md) | Every piece of the desktop, what to install instead, and which ones to build ourselves |
-| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Working on it: layout, building, the test suite and the checks, the design docs |
-| [docs/DECISIONS.md](docs/DECISIONS.md) | The choices behind how it behaves, and why |
-| [docs/foundation/](docs/foundation) | The design specification: invariants (`INV-*`), state machines (`M*`), formulas (`F-*`) |
+| [STATUS](docs/STATUS.md) | What works, what is untested, what is missing |
+| [COMPONENTS](docs/COMPONENTS.md) | Every piece of the desktop and what to use instead |
+| [DEVELOPMENT](docs/DEVELOPMENT.md) | Layout, building, the test suite and the checks |
+| [DECISIONS](docs/DECISIONS.md) | The choices behind how it behaves, and why |
+| [foundation/](docs/foundation) | The design specification: invariants, state machines, formulas |
 
 ## Acknowledgements
 
-Inspired by [driftwm](https://github.com/malbiruk/driftwm) and [hyprland-infinitie-desktop-v2](https://github.com/sarodscommits/hyprland-infinitie-desktop-v2).
+Inspired by [driftwm](https://github.com/malbiruk/driftwm) and
+[hyprland-infinitie-desktop-v2](https://github.com/sarodscommits/hyprland-infinitie-desktop-v2).
 
 ## License
 
 [MIT](LICENSE) © vysaely
-

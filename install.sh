@@ -14,30 +14,31 @@ INSTALL_DIR="$HOME/infynitae"
 
 usage() {
     cat <<'USAGE'
-Infynitae installer for Arch Linux. It asks for your password once, then runs by itself;
-reboot when it is done.
+Usage: install.sh [options]
 
-Leave out an optional part (the session starts each one only when it is installed):
-  --no-notifications   no notification daemon (mako)
-  --no-keyring         no password store for apps (gnome-keyring)
-  --no-automount       USB drives are not mounted when plugged in (udiskie)
-  --no-clipboard       no clipboard history (Super+V) and clipboard keeping
-  --no-fonts           no Noto fonts (other languages, emoji)
-  --no-recorder        no screen recording or replay clips (ffmpeg)
-  --no-terminal        no terminal added when none is installed (alacritty)
-  --no-bluetooth       Bluetooth is not set up, even with an adapter
-  --no-power-profiles  no power modes on a laptop (power-profiles-daemon)
-  --no-autorotate      no screen auto-rotation on convertibles (iio-sensor-proxy)
+Installs Infynitae on Arch Linux. Asks for your password once; reboot when it is done.
+
+Leave out a part:
+  --no-notifications   notifications (mako)
+  --no-keyring         password store for apps (gnome-keyring)
+  --no-automount       USB drives mounted when plugged in (udiskie)
+  --no-clipboard       clipboard history, Super+V (cliphist)
+  --no-fonts           fonts for other languages and emoji (Noto)
+  --no-recorder        screen recording and replay clips (ffmpeg)
+  --no-terminal        a terminal when none is installed (alacritty)
+  --no-bluetooth       Bluetooth, even with an adapter
+  --no-power-profiles  power modes on a laptop (power-profiles-daemon)
+  --no-autorotate      screen rotation on convertibles (iio-sensor-proxy)
   --minimal            all of the above
 
 Turn on:
   --replay-buffer      keep the last minutes of the screen, saved with Super+Alt+C
-                       (ENABLE_REPLAY_BUFFER; off by default)
 
-How it starts:
-  --no-autologin       without a display manager: log in on tty1 to start Infynitae, instead of
-                       the machine booting to the Infynitae lock screen
-  -h, --help           this help
+Startup:
+  --no-autologin       log in on tty1 instead of booting to the lock screen
+                       (only without a display manager)
+
+  -h, --help           show this help
 USAGE
 }
 
@@ -97,10 +98,10 @@ mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOG="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae/install.log"
 exec > >(tee -a "$LOG") 2>&1
 echo "==> $(date '+%F %T') Infynitae install${SKIP:+ (leaving out: $SKIP)}"
-trap 'echo "==> The install stopped at line $LINENO of install.sh. The log: $LOG" >&2' ERR
+trap 'echo "==> The install stopped (install.sh line $LINENO). Log: $LOG" >&2' ERR
 
 # ---- your password, once ------------------------------------------------------------------------
-echo "==> Infynitae needs your password once (packages, drivers, the login setup)."
+echo "==> Your password, once (packages, drivers, login setup)"
 if [ -f "$INSTALL_DIR/live/install-lib.sh" ]; then
     . "$INSTALL_DIR/live/install-lib.sh"
     sudo_once
@@ -111,10 +112,6 @@ else
     SUDO_KEEPER=$!
 fi
 trap 'kill "${SUDO_KEEPER:-}" 2>/dev/null || true' EXIT
-
-echo "=========================================================="
-echo "      INFYNITAE - ARCH LINUX INSTALLER"
-echo "=========================================================="
 
 # ---- 1. the system up to date (Arch is only consistent whole: installing onto stale packages
 #         breaks things), the signing keys first so old keys do not refuse the new packages ----
@@ -127,7 +124,7 @@ waitlock() {
     done
 }
 waitlock
-echo "==> Updating the system (signing keys first)..."
+echo "==> Updating the system..."
 sudo pacman -Sy --needed --noconfirm archlinux-keyring
 sudo pacman -Su --noconfirm --ask 4
 
@@ -140,7 +137,7 @@ if [ ! -f "$INSTALL_DIR/Cargo.toml" ]; then
     echo "==> Downloading Infynitae..."
     git clone "$REPO_URL" "$INSTALL_DIR"
 elif [ -d "$INSTALL_DIR/.git" ] && git -C "$INSTALL_DIR" diff --quiet 2>/dev/null; then
-    git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || echo "==> Could not update the source (offline, or local commits); installing it as it is"
+    git -C "$INSTALL_DIR" pull --ff-only 2>/dev/null || echo "==> Could not pull the latest source (offline or local commits); installing it as it is"
 fi
 cd "$INSTALL_DIR"
 . "$INSTALL_DIR/live/install-lib.sh"
@@ -150,7 +147,7 @@ cd "$INSTALL_DIR"
 bash "$INSTALL_DIR/live/setup-drivers.sh"
 
 # ---- 4. packages ----------------------------------------------------------------------------------
-echo "==> Checking the packages Infynitae needs..."
+echo "==> Checking packages..."
 PKGS=()
 mapfile -t -O "${#PKGS[@]}" PKGS < <(missing_pkgs $(cat "$INSTALL_DIR/live/packages.txt"))
 for group in $(optional_groups); do
@@ -202,14 +199,14 @@ fi
 # (60-steam-input); Infynitae needs no udev rules of its own.
 
 # ---- 6. build ----------------------------------------------------------------------------------------
-echo "==> Getting the pinned Rust compiler..."
+echo "==> Getting the Rust toolchain..."
 rustup toolchain install 2>/dev/null || rustup show >/dev/null
 # linking needs ~1.5 GB per job: fewer jobs on a machine with little memory
 MEM_GB=$(awk '/MemTotal/ { print int($2 / 1048576) }' /proc/meminfo)
 JOBS=$(nproc)
 [ $((MEM_GB * 2 / 3)) -lt "$JOBS" ] && JOBS=$((MEM_GB * 2 / 3))
 [ "$JOBS" -ge 1 ] || JOBS=1
-echo "==> Building Infynitae ($JOBS jobs; this takes a few minutes)..."
+echo "==> Building ($JOBS jobs, a few minutes)..."
 cargo build --release -p infynitae -j "$JOBS"
 
 # ---- 7. install ------------------------------------------------------------------------------------
@@ -256,10 +253,10 @@ if [ ! -f "$HOME/.config/infynitae/config" ]; then
     fi
     is_skipped autorotate && sed -i 's/^AUTO_ROTATE="[^"]*"/AUTO_ROTATE="false"/' "$HOME/.config/infynitae/config"
     [ "$REPLAY_BUFFER" = true ] && sed -i 's/^ENABLE_REPLAY_BUFFER="[^"]*"/ENABLE_REPLAY_BUFFER="true"/' "$HOME/.config/infynitae/config"
-    echo "==> Created your configuration: ~/.config/infynitae/config"
+    echo "==> Created ~/.config/infynitae/config"
 else
     cp -f config/config "$HOME/.config/infynitae/config.template"
-    echo "==> Your configuration is kept (the new template: ~/.config/infynitae/config.template)"
+    echo "==> Kept your config (new defaults: ~/.config/infynitae/config.template)"
 fi
 
 # ---- 9. sessions ------------------------------------------------------------------------------------
@@ -275,7 +272,7 @@ mkdir -p "$HOME/.local/share/wayland-sessions"
 cat <<'SESSION' > "$HOME/.local/share/wayland-sessions/infynitae.desktop"
 [Desktop Entry]
 Name=Infynitae
-Comment=Infynitae Infinite Canvas Wayland Compositor
+Comment=Infinite-canvas Wayland compositor
 Exec=infynitae-session
 Type=Application
 DesktopNames=infynitae;wlroots
@@ -296,42 +293,22 @@ fi
 # ---- 10. how Infynitae starts after a reboot: a display manager's session list; else tty1 logs
 #          in by itself to the Infynitae lock screen (--no-autologin, or a lock screen that could
 #          not be installed: logging in on tty1 starts Infynitae) ----------------------------------
+AUTOLOGIN_ON=false
 if systemctl is-enabled --quiet display-manager.service 2>/dev/null; then
-    START_HOW="pick \"Infynitae\" at your display manager's login"
+    START_HOW="pick Infynitae at your display manager's login"
 elif [ "$AUTOLOGIN" = true ] && sudo sh live/setup-autologin.sh; then
-    START_HOW="the machine starts at the Infynitae lock screen"
+    START_HOW="it starts at the Infynitae lock screen"
+    AUTOLOGIN_ON=true
 else
     sh live/setup-autologin.sh --autostart
-    START_HOW="log in on tty1: Infynitae starts"
+    START_HOW="log in on tty1 to start Infynitae"
 fi
 
 echo ""
-echo "=========================================================="
-echo "        INFYNITAE INSTALLATION COMPLETE"
-echo "=========================================================="
-echo "  Reboot, then: $START_HOW"
-echo "  Text login instead of the lock screen: sudo ~/infynitae/live/setup-autologin.sh --off"
-echo "  Update any time: infynitae-update    The install log: $LOG"
-echo ""
-echo "  Keybindings:"
-echo "    Super + 1..9         Focus Window Slot 1..9"
-echo "    Super + Shift + 1..9 Focus Cluster Slot 1..9"
-echo "    Super + Space        Recenter Active Window (Shift: keep zoom)"
-echo "    Super + Tab          Next Window (Shift: overview)"
-echo "    Super + Enter        Fit Window to Screen"
-echo "    Super + Shift + Enter Fullscreen"
-echo "    Super + Q            Terminal (auto: kitty, alacritty, foot)"
-echo "    Super + W            Launcher (auto: fuzzel, rofi, …)"
-echo "    Super + E            Files"
-echo "    Super + L            Lock Screen"
-echo "    Super + V            Clipboard History"
-echo "    Super + A            Control Menu (Wi-Fi, Bluetooth, sound, power)"
-echo "    Super + Shift + P    Hide Window from Screenshots & Sharing"
-echo "    Super + Alt + C      Save Replay Clip"
-echo "    Super + Shift + S    Screenshot"
-echo "    Super + Shift + R    Region Screenshot"
-echo "    Super + Shift + Backspace  Reload Config & Helpers"
-echo "    Super + C            Close Window (Shift: force)"
-echo "    Super + Middle drag  Pan the canvas"
-echo "    Ctrl + Alt + Backspace Restart Compositor (infynitae-session stop: quit)"
-echo "=========================================================="
+echo "==> Infynitae is installed. Reboot, then $START_HOW."
+echo "    Update:      infynitae-update"
+echo "    Config:      ~/.config/infynitae/config"
+echo "    Install log: $LOG"
+if [ "$AUTOLOGIN_ON" = true ]; then
+    echo "    Text login instead: sudo ~/infynitae/live/setup-autologin.sh --off"
+fi
