@@ -171,14 +171,14 @@ if command -v xdg-user-dirs-update >/dev/null 2>&1; then
     xdg-user-dirs-update >/dev/null 2>&1 || true
 fi
 
-# 6e2. The on-screen keyboard (squeekboard, OSK): it shows for a text field while enabled;
-# "auto" enables it in tablet mode only (the compositor's tablet-mode switch, launch.sh)
+# 6e2. The on-screen keyboard (squeekboard, OSK): it shows for a text field. "always" runs it
+# from the start; "auto" runs it in tablet mode only (the compositor's tablet-mode switch,
+# launch.sh): running, it is an input method, and with one apps such as terminals take typed
+# text from it instead of the keyboard's keys
 case "${OSK:-auto}" in
-    off|false|0|no|OFF|Off|FALSE|False) ;;
-    *)
+    always|on|true)
         if command -v squeekboard >/dev/null 2>&1; then
-            case "${OSK:-auto}" in always|on|true) osk_on=true ;; *) osk_on=false ;; esac
-            gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled "$osk_on" 2>/dev/null || true
+            gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true 2>/dev/null || true
             squeekboard >/dev/null 2>&1 &
         fi
         ;;

@@ -80,7 +80,8 @@ HARDWARE_CURSOR="true"            # [save] the cursor on the GPU's own cursor la
 OVERLAY_PLANES="false"            # [save] also windows' buffers on overlay planes (on AMD this
                                   # dropped frames whenever Electron apps like Discord drew)
 OSK="auto"                        # [restart] on-screen keyboard (squeekboard) for text fields —
-                                  # auto: in tablet mode | always | off. The lock screen has its own
+                                  # auto: runs in tablet mode only | always | off. The lock screen
+                                  # has its own
 AUTO_ROTATE="auto"                # [restart] turn the laptop's own screen with the device
                                   # (convertibles; needs iio-sensor-proxy) | false
 OUTPUT_ORDER=""                   # left to right, e.g. "DP-1,HDMI-A-1" (the names

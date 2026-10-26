@@ -102,11 +102,16 @@ case "$ACTION" in
         ;;
     tablet-mode)
         # the convertible folded (on) or opened (off): with OSK="auto" the on-screen keyboard
-        # shows for text fields in tablet mode only
+        # runs in tablet mode only; opened, nothing stands between the keyboard and the apps
         case "${OSK:-auto}" in
             auto|"")
-                [ "$2" = on ] && on=true || on=false
-                gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled "$on" 2>/dev/null
+                if [ "$2" = on ]; then
+                    command -v squeekboard >/dev/null 2>&1 || exit 0
+                    gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true 2>/dev/null
+                    pgrep -x squeekboard >/dev/null || squeekboard >/dev/null 2>&1 &
+                else
+                    pkill -x squeekboard 2>/dev/null
+                fi
                 ;;
         esac
         ;;

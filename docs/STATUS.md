@@ -65,7 +65,10 @@ These pass the test suite but have not run on a real screen or device yet:
   `xdg-open` says so when no app opens a type. KDE apps (Dolphin) get the menu file their "Open
   With" needs. File managers' "Open Terminal Here" runs `TERMINAL` (`xdg-terminal-exec`).
 - **Tablet mode** (convertibles; `OSK`, `--no-osk`): folded, an on-screen keyboard
-  (squeekboard) shows for text fields; opened, it does not. The lock screen has its own key grid
+  (squeekboard) runs and shows for text fields; opened, it is stopped, so the keyboard types
+  into apps directly (running, it is an input method, and on a ThinkPad a terminal then took
+  text only from it). In a terminal its backspace does nothing (it deletes text the terminal
+  does not report). The lock screen has its own key grid
   at the first tap, and while locked a finger reaches only the lock surface, so the password
   never leaves the lock screen. Tested off-screen and in the test suite; not yet on a
   touchscreen.
