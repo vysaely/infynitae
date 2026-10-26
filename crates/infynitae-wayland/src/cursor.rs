@@ -783,20 +783,20 @@ mod tests {
 
         // "default" is not present directly, but its alias "left_ptr" is!
         let loaded = mgr.get_or_load("default", 16).expect("loaded via alias");
-        assert_eq!(loaded.width, 16);
-        assert_eq!(loaded.height, 16);
-        assert_eq!(loaded.xhot, 1);
-        assert_eq!(loaded.yhot, 1);
+        assert_eq!(loaded.frames[0].image.width, 16);
+        assert_eq!(loaded.frames[0].image.height, 16);
+        assert_eq!(loaded.frames[0].image.xhot, 1);
+        assert_eq!(loaded.frames[0].image.yhot, 1);
 
         // Cache must have stored it
         let cached = mgr.get_or_load("default", 16).expect("cached");
-        assert_eq!(cached.width, 16);
+        assert_eq!(cached.frames[0].image.width, 16);
 
         // An unknown icon with no aliases falls back to "default"/"left_ptr"
         let unknown = mgr
             .get_or_load("some_unknown_icon", 16)
             .expect("fallback to left_ptr");
-        assert_eq!(unknown.width, 16);
+        assert_eq!(unknown.frames[0].image.width, 16);
     }
 
     #[test]
@@ -832,9 +832,9 @@ mod tests {
         let search_paths = vec![tmp.path().to_path_buf()];
         let mut mgr = CursorThemeManager::with_search_paths("child_theme", 24, search_paths);
         let loaded = mgr.get_or_load("pointer", 24).expect("inherited");
-        assert_eq!(loaded.width, 24);
-        assert_eq!(loaded.xhot, 3);
-        assert_eq!(loaded.yhot, 4);
+        assert_eq!(loaded.frames[0].image.width, 24);
+        assert_eq!(loaded.frames[0].image.xhot, 3);
+        assert_eq!(loaded.frames[0].image.yhot, 4);
     }
 
     /// `Inherits=` may list several themes: a missing first one does not stop the search.
@@ -861,7 +861,10 @@ mod tests {
         let loaded = mgr
             .get_or_load("default", 24)
             .expect("found in the second inherited theme");
-        assert_eq!((loaded.xhot, loaded.yhot), (5, 6));
+        assert_eq!(
+            (loaded.frames[0].image.xhot, loaded.frames[0].image.yhot),
+            (5, 6)
+        );
     }
 
     #[test]
