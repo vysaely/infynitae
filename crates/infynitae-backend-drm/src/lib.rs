@@ -18,6 +18,7 @@
 #![deny(unsafe_code)]
 
 mod edid;
+mod smooth;
 
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
@@ -44,7 +45,7 @@ use smithay::backend::input::{
 };
 use smithay::backend::libinput::{LibinputInputBackend, LibinputSessionInterface};
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexture};
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexProgram, GlesTexture};
 use smithay::backend::renderer::{Bind, ExportMem, Offscreen, Texture};
 use smithay::backend::renderer::{Renderer, TextureFilter};
 use smithay::backend::session::libseat::LibSeatSession;
@@ -465,6 +466,9 @@ struct LoopData {
     known_mapped: HashSet<infynitae_core::stage::ElementId>,
     /// Direct scanout for primary and overlay planes.
     direct_scanout: bool,
+    /// The shader averaging windows drawn smaller than their buffer (`smooth`); `None` with
+    /// `SCALING_FILTER="fast"` or where it does not compile.
+    smooth_program: Option<GlesTexProgram>,
     config_path: Option<PathBuf>,
     last_config_check: std::time::Instant,
     last_config_mtime: Option<std::time::SystemTime>,
@@ -1046,11 +1050,19 @@ pub fn run_console_with(
         state.set_dmabuf_device_formats(node.dev_id(), formats);
     }
 
-    // Scaling filter: nearest-neighbor filtering on upscaled surfaces by default
-    let use_nearest = !matches!(options.scaling_filter.as_deref(), Some("linear"));
-    if use_nearest && let Err(e) = renderer.upscale_filter(TextureFilter::Nearest) {
+    // SCALING_FILTER: zoomed in, nearest (crisp pixels, the default) or linear; zoomed out,
+    // averaged (`smooth`) unless "fast"
+    let filter = options.scaling_filter.as_deref().unwrap_or("nearest");
+    if filter != "linear"
+        && let Err(e) = renderer.upscale_filter(TextureFilter::Nearest)
+    {
         eprintln!("[infynitae] Warning: failed to set upscale filter to Nearest: {e:?}");
     }
+    let smooth_program = if filter == "fast" {
+        None
+    } else {
+        smooth::program(&mut renderer)
+    };
     let allocator = GbmAllocator::new(
         gbm.clone(),
         GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
@@ -1372,6 +1384,7 @@ pub fn run_console_with(
         last_abs_pointer: None,
         known_mapped: HashSet::new(),
         direct_scanout: options.direct_scanout.unwrap_or(true),
+        smooth_program,
         config_path: cfg_path,
         last_config_check: std::time::Instant::now(),
         last_config_mtime: initial_mtime,
@@ -1751,6 +1764,7 @@ fn render(data: &mut LoopData) {
             &mut data.state,
             &mut data.renderer,
             &mut data.screens[i].screencopy_texture,
+            data.smooth_program.as_ref(),
             id,
             size,
             clear,
@@ -1784,6 +1798,10 @@ fn render(data: &mut LoopData) {
                 continue;
             }
         };
+        let elements: Vec<_> = elements
+            .into_iter()
+            .map(|e| smooth::Smoothed::new(e, data.smooth_program.clone()))
+            .collect();
         // VRR auto: on while this screen shows a fullscreen window
         let want_vrr = data.screens[i]
             .vrr_mode
@@ -1930,6 +1948,7 @@ fn render(data: &mut LoopData) {
             &mut data.state,
             &mut data.renderer,
             &mut v.screencopy_texture,
+            data.smooth_program.as_ref(),
             v.id,
             VIRTUAL_SCREEN_SIZE,
             clear,
@@ -1955,6 +1974,7 @@ fn serve_captures(
     state: &mut WaylandState,
     renderer: &mut GlesRenderer,
     screencopy_texture: &mut Option<GlesTexture>,
+    smooth_program: Option<&GlesTexProgram>,
     output_id: OutputId,
     size: (i32, i32),
     clear: smithay::backend::renderer::Color32F,
@@ -2016,6 +2036,10 @@ fn serve_captures(
             return;
         }
     };
+    let elements: Vec<_> = elements
+        .into_iter()
+        .map(|e| smooth::Smoothed::new(e, smooth_program.cloned()))
+        .collect();
     handle_screencopy(
         renderer,
         screencopy_texture,

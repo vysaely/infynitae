@@ -55,7 +55,11 @@ WALLPAPER_MODE="fill"             # [save] fill | fit | stretch | center | tile
 
 # ── Displays ──────────────────────────────────────────────────────────── [restart] ──
 OUTPUT_SCALE="1.0"                # 1.0, 1.25, 1.5, 2.0 …
-SCALING_FILTER="nearest"          # zoomed windows — nearest: sharp pixels | linear: smooth
+SCALING_FILTER="nearest"          # zoomed in — nearest: sharp pixels | linear: smooth; zoomed
+                                  # out, windows are averaged so text stays legible | fast: not
+                                  # averaged (the least GPU work; games are never affected)
+MAX_APP_SCALE="3"                 # [save] apps redraw sharper as you zoom in, up to this scale
+                                  # (1 = never: cheapest, blurry when zoomed in)
 VRR_ENABLED="auto"                # auto: FreeSync while a window is fullscreen | on | off
                                   # (display tools can switch it per screen: wlr-randr --adaptive-sync)
 VIRTUAL_SCREEN="auto"             # [restart] with no screen connected (monitor off or unplugged), a

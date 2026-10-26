@@ -734,6 +734,32 @@ impl WaylandState {
     }
 
     /// Reloads configuration from ~/.config/infynitae/config into Core and compositor state.
+    /// `MAX_APP_SCALE`: how far apps render sharper as you zoom in (the scale policy's ceiling,
+    /// PROV-1). Never below a screen's own scale, at most 8; absent or invalid, the default (3).
+    fn set_max_app_scale(&mut self, value: Option<f64>) {
+        use infynitae_core::scale::{DEFAULT_H_CFG, ScalePolicyConfig};
+        let screens = self
+            .core
+            .outputs()
+            .iter()
+            .map(|o| o.scale)
+            .fold(1.0, f64::max);
+        let h_cfg = value
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(DEFAULT_H_CFG)
+            .clamp(screens, 8.0_f64.max(screens));
+        let config = ScalePolicyConfig {
+            h_cfg,
+            ..*self.core.scale_config()
+        };
+        if config != *self.core.scale_config() {
+            match self.core.set_scale_config(config) {
+                Ok(fx) => self.apply(&fx),
+                Err(e) => eprintln!("[infynitae] MAX_APP_SCALE {h_cfg} refused: {e:?}"),
+            }
+        }
+    }
+
     pub fn reload_config(&mut self) {
         let mut new_cursor_theme: Option<String> = None;
         let mut new_cursor_size: Option<u32> = None;
@@ -750,6 +776,7 @@ impl WaylandState {
                 let mut free_cursor_on_super = true;
                 let mut bind_lines: Vec<(String, String)> = Vec::new();
                 let mut exec_lines: Vec<(String, String)> = Vec::new();
+                let mut max_app_scale: Option<f64> = None;
                 for line in content.lines() {
                     if let Some((key, val)) = config_line(line) {
                         let (key, val) = (key.as_str(), val.as_str());
@@ -790,6 +817,9 @@ impl WaylandState {
                                     "0" | "false" | "off" | "no"
                                 );
                                 self.screencopy.set_hide_cursor(hide);
+                            }
+                            "MAX_APP_SCALE" => {
+                                max_app_scale = val.parse::<f64>().ok();
                             }
                             "CAPTURE_INDICATOR" => {
                                 self.capture_indicator.enabled = !matches!(
@@ -1007,6 +1037,7 @@ impl WaylandState {
                 self.core.set_key_bindings(bindings);
                 self.core.set_free_cursor_on_super(free_cursor_on_super);
                 self.exec_commands = commands;
+                self.set_max_app_scale(max_app_scale);
                 if new_wallpaper != self.wallpaper || new_wallpaper_mode != self.wallpaper_mode {
                     self.wallpaper = new_wallpaper;
                     self.wallpaper_mode = new_wallpaper_mode;

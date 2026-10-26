@@ -55,6 +55,9 @@ These pass the test suite but have not run on a real screen or device yet:
   that reports itself unplugged, or none at all), a virtual 1920x1080 screen stands in, so remote
   desktop still has a screen; it goes once a real one is connected. A monitor that is off but
   still connected keeps being drawn as before.
+- **Zoomed-out windows averaged** (`SCALING_FILTER`, `fast` turns it off): text and thin lines
+  stay legible below 100% instead of shimmering; checked on this GPU off-screen. `MAX_APP_SCALE`
+  sets how far apps redraw sharper as you zoom in (default 3).
 - **Laptop lid:** closing it with another screen connected moves everything to that screen
   until the lid opens. With no other screen, logind suspends as usual.
 - **Night light, screen power,** the capture dot, single-window sharing.
