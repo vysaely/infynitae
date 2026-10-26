@@ -149,7 +149,22 @@ if command -v xdg-user-dirs-update >/dev/null 2>&1; then
     xdg-user-dirs-update >/dev/null 2>&1 || true
 fi
 
-# 6f. RustDesk's service decides X11 or Wayland once per login, while this session is still a
+# 6f. Screen auto-rotation on convertible laptops (AUTO_ROTATE; needs iio-sensor-proxy)
+case "${AUTO_ROTATE:-auto}" in
+    false|0|off|no|FALSE|False|OFF|Off|NO|No) ;;
+    *)
+        if command -v monitor-sensor >/dev/null 2>&1; then
+            for r in "$HOME/infynitae/live/autorotate" "$HOME/.local/bin/autorotate" "$(dirname "$0")/autorotate"; do
+                if [ -x "$r" ]; then
+                    "$r" >/dev/null 2>&1 &
+                    break
+                fi
+            done
+        fi
+        ;;
+esac
+
+# 6g. RustDesk's service decides X11 or Wayland once per login, while this session is still a
 # text console, and then guesses X11: no Wayland display for its windows (the "someone is
 # connected" window never opens). Restarted now that the session is Wayland, it looks again.
 # Needs live/remote/50-infynitae-rustdesk.rules installed; without it nothing happens.

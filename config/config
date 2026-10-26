@@ -60,6 +60,7 @@ VRR_ENABLED="auto"                # auto: FreeSync while a window is fullscreen 
 DIRECT_SCANOUT="true"             # [save] a fullscreen game's frames go straight to the screen
 OVERLAY_PLANES="false"            # [save] also windows' buffers on overlay planes (on AMD this
                                   # dropped frames whenever Electron apps like Discord drew)
+AUTO_ROTATE="auto"                # [restart] rotate the built-in screen with the device (convertibles; needs iio-sensor-proxy) | false
 OUTPUT_ORDER=""                   # left to right, e.g. "DP-1,HDMI-A-1" (the names
                                   # are the "Screen …" lines in ~/.local/state/infynitae/session.log)
 OUTPUT_LAYOUT="left-to-right"     # or right-to-left
