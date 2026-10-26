@@ -679,6 +679,71 @@ impl WaylandState {
         touch.cancel(self);
     }
 
+    /// A touchscreen event, before Core (`PhysicalEvent::Touch*`, in the touched screen's logical
+    /// px). Returns `true` when the lock took it (Core must not see it): where it goes is the
+    /// lock's decision ([`WaylandState::lock_touch_route`]), delivered here.
+    pub fn lock_touch(&mut self, ev: &infynitae_core::PhysicalEvent) -> bool {
+        use crate::lock::LockTouchRoute;
+        use infynitae_core::PhysicalEvent as P;
+        let route = self.lock_touch_route(ev);
+        let ms = |t: u64| (t / 1000) as u32;
+        let touch = self.seat.get_touch();
+        match (route, *ev) {
+            (LockTouchRoute::Core, _) => return false,
+            (LockTouchRoute::Dropped, _) => {}
+            (
+                LockTouchRoute::Down(surface),
+                P::TouchDown {
+                    slot, p, time_us, ..
+                },
+            ) => {
+                if let Some(touch) = touch {
+                    // a lock surface covers its screen from its origin: the screen point is
+                    // the surface point
+                    let event = TouchDownEvent {
+                        slot: Some(slot).into(),
+                        location: p.into(),
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time: ms(time_us),
+                    };
+                    touch.down(self, Some((surface, (0.0, 0.0).into())), &event);
+                }
+            }
+            (LockTouchRoute::Lock, P::TouchMotion { slot, p, time_us }) => {
+                if let Some(touch) = touch {
+                    let event = TouchMotionEvent {
+                        slot: Some(slot).into(),
+                        location: p.into(),
+                        time: ms(time_us),
+                    };
+                    touch.motion(self, None, &event);
+                }
+            }
+            (LockTouchRoute::Lock, P::TouchUp { slot, time_us }) => {
+                if let Some(touch) = touch {
+                    let event = TouchUpEvent {
+                        slot: Some(slot).into(),
+                        serial: SERIAL_COUNTER.next_serial(),
+                        time: ms(time_us),
+                    };
+                    touch.up(self, &event);
+                }
+            }
+            (LockTouchRoute::Lock, P::TouchFrame) => {
+                if let Some(touch) = touch {
+                    touch.frame(self);
+                }
+            }
+            (LockTouchRoute::Lock, P::TouchCancel) => {
+                if let Some(touch) = touch {
+                    touch.cancel(self);
+                }
+            }
+            _ => {}
+        }
+        true
+    }
+
     /// Applies one touch effect. Returns `false` for an effect that is not a touch effect.
     pub(crate) fn apply_touch(&mut self, effect: &Effect) -> bool {
         let touch = self.seat.get_touch();

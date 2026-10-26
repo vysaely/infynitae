@@ -2346,6 +2346,12 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 data.rescan_at = Some(std::time::Instant::now());
             }
         }
+        // tablet mode (a convertible folded): the on-screen keyboard follows
+        if SwitchToggleEvent::switch(event) == Some(Switch::TabletMode) {
+            let on = matches!(SwitchToggleEvent::state(event), SwitchState::On);
+            println!("[infynitae] Tablet mode {}", if on { "on" } else { "off" });
+            data.state.tablet_mode_changed(on);
+        }
         return;
     }
     // locked: pointer and touch go nowhere (keys go to the lock surface, below); a button
@@ -2356,16 +2362,23 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
             InputEvent::Keyboard { .. }
                 | InputEvent::DeviceAdded { .. }
                 | InputEvent::DeviceRemoved { .. }
-        )
-    {
-        if matches!(
-            event,
-            InputEvent::TouchDown { .. }
+                | InputEvent::TouchDown { .. }
                 | InputEvent::TouchMotion { .. }
                 | InputEvent::TouchUp { .. }
                 | InputEvent::TouchCancel { .. }
-        ) {
+                | InputEvent::TouchFrame { .. }
+        )
+    {
+        return;
+    }
+    // touches: the lock screen's first (its keyboard), else Core's; locked, the fingers Core
+    // holds from before the lock are given up
+    if let Some(ev) = touch_physical(data, &event) {
+        if data.state.is_locked() {
             core_touch(data, PhysicalEvent::TouchCancel);
+        }
+        if !data.state.lock_touch(&ev) {
+            core_touch(data, ev);
         }
         return;
     }
@@ -2506,35 +2519,6 @@ fn handle_input(data: &mut LoopData, event: InputEvent<LibinputInputBackend>) {
                 .state
                 .with_effects(|core, fx| core.physical_input(port, phys, fx));
         }
-        InputEvent::TouchDown { event } => {
-            if let Some((output, p)) = touch_position(data, &event) {
-                let slot = touch_slot(TouchEvent::slot(&event));
-                let time_us = Event::time(&event);
-                core_touch(
-                    data,
-                    PhysicalEvent::TouchDown {
-                        slot,
-                        output,
-                        p,
-                        time_us,
-                    },
-                );
-            }
-        }
-        InputEvent::TouchMotion { event } => {
-            if let Some((_, p)) = touch_position(data, &event) {
-                let slot = touch_slot(TouchEvent::slot(&event));
-                let time_us = Event::time(&event);
-                core_touch(data, PhysicalEvent::TouchMotion { slot, p, time_us });
-            }
-        }
-        InputEvent::TouchUp { event } => {
-            let slot = touch_slot(TouchEvent::slot(&event));
-            let time_us = Event::time(&event);
-            core_touch(data, PhysicalEvent::TouchUp { slot, time_us });
-        }
-        InputEvent::TouchCancel { .. } => core_touch(data, PhysicalEvent::TouchCancel),
-        InputEvent::TouchFrame { .. } => core_touch(data, PhysicalEvent::TouchFrame),
         InputEvent::DeviceAdded { mut device } => {
             configure_input_device(&mut device, data.state.input_config());
             if device.has_capability(smithay::reexports::input::DeviceCapability::Touch) {
@@ -2604,6 +2588,40 @@ fn core_key(data: &mut LoopData, key: u32, pressed: bool, time_us: u64) {
             .state
             .with_effects(|core, fx| core.physical_input(port, phys, fx));
     }
+}
+
+/// A libinput touch event as Core's (and the lock's) touch: where it is on which screen
+/// (`touch_position`), its slot and time. `None` for any other event, or a touch off every screen.
+fn touch_physical(
+    data: &LoopData,
+    event: &InputEvent<LibinputInputBackend>,
+) -> Option<PhysicalEvent> {
+    Some(match event {
+        InputEvent::TouchDown { event } => {
+            let (output, p) = touch_position(data, event)?;
+            PhysicalEvent::TouchDown {
+                slot: touch_slot(TouchEvent::slot(event)),
+                output,
+                p,
+                time_us: Event::time(event),
+            }
+        }
+        InputEvent::TouchMotion { event } => {
+            let (_, p) = touch_position(data, event)?;
+            PhysicalEvent::TouchMotion {
+                slot: touch_slot(TouchEvent::slot(event)),
+                p,
+                time_us: Event::time(event),
+            }
+        }
+        InputEvent::TouchUp { event } => PhysicalEvent::TouchUp {
+            slot: touch_slot(TouchEvent::slot(event)),
+            time_us: Event::time(event),
+        },
+        InputEvent::TouchCancel { .. } => PhysicalEvent::TouchCancel,
+        InputEvent::TouchFrame { .. } => PhysicalEvent::TouchFrame,
+        _ => return None,
+    })
 }
 
 /// One touch event to Core (its effects to the clients).

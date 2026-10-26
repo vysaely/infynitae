@@ -1,7 +1,9 @@
 //! Session lock, `ext-session-lock-v1` (2026-10-24). While the session is locked, each output
 //! shows only its lock surface (over black), and every key goes to the lock surface: the backend
-//! hands keys to [`WaylandState::lock_key`] before Core, and pointer and touch input to nothing,
-//! so no binding, window or other client sees input. Core is not told about the lock.
+//! hands keys to [`WaylandState::lock_key`] before Core, touches to [`WaylandState::lock_touch`]
+//! (a finger reaches the lock surface of the screen it touched: the lock screen's own on-screen
+//! keyboard, for tablets), and pointer input to nothing, so no binding, window or other client
+//! sees input. Core is not told about the lock.
 //!
 //! Core keeps its own record of held keys. A key Core holds when the lock starts (Super of
 //! Super+L) is released while Core does not listen: its release only updates the seat's XKB
@@ -42,9 +44,22 @@ use smithay::wayland::session_lock::{
     LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
 
+use infynitae_core::PhysicalEvent;
 use infynitae_core::output::OutputId;
 
 use crate::WaylandState;
+
+/// Where a touchscreen event goes ([`WaylandState::lock_touch_route`]).
+pub(crate) enum LockTouchRoute {
+    /// Not the lock's: Core's.
+    Core,
+    /// The lock takes it and nobody gets it (locked, a finger on no lock surface).
+    Dropped,
+    /// A finger lands on this lock surface.
+    Down(WlSurface),
+    /// A finger on a lock surface moves, lifts, or the frame or cancel that ends it.
+    Lock,
+}
 
 /// Evdev codes are below this (KEY_MAX + 1).
 const KEY_COUNT: u32 = 0x300;
@@ -65,6 +80,8 @@ pub(crate) struct SessionLock {
     lock_keys: HashSet<u32>,
     /// Keys physically down (every key passes `lock_key`).
     phys_down: HashSet<u32>,
+    /// Fingers that landed on a lock surface: they stay with it until they lift.
+    fingers: Vec<u32>,
     /// Unlocked: Core's releases and the keyboard's return are still to come.
     just_unlocked: bool,
 }
@@ -84,6 +101,7 @@ impl WaylandState {
                 surfaces: Vec::new(),
                 lock_keys: HashSet::new(),
                 phys_down: HashSet::new(),
+                fingers: Vec::new(),
                 just_unlocked: false,
             });
         }
@@ -162,6 +180,70 @@ impl WaylandState {
             return true;
         }
         false
+    }
+
+    /// Where a touchscreen event goes while the lock may hold it (`PhysicalEvent::Touch*`, in
+    /// the touched screen's logical px); [`WaylandState::lock_touch`] (`pointer`) delivers it.
+    /// While locked a finger goes to the lock surface of the screen it touched and nothing else
+    /// sees it; a finger that landed there stays with it until it lifts, past an unlock.
+    pub(crate) fn lock_touch_route(&mut self, ev: &PhysicalEvent) -> LockTouchRoute {
+        let Some(l) = self.session_lock.as_mut() else {
+            return LockTouchRoute::Core;
+        };
+        let locked = l.locked;
+        let unheld = if locked {
+            LockTouchRoute::Dropped
+        } else {
+            LockTouchRoute::Core
+        };
+        match *ev {
+            PhysicalEvent::TouchDown { slot, output, .. } => {
+                if !locked {
+                    return LockTouchRoute::Core;
+                }
+                let Some(surface) = l
+                    .surfaces
+                    .iter()
+                    .find(|(o, s)| *o == output && s.alive())
+                    .map(|(_, s)| s.wl_surface().clone())
+                else {
+                    return LockTouchRoute::Dropped;
+                };
+                l.fingers.retain(|s| *s != slot);
+                l.fingers.push(slot);
+                LockTouchRoute::Down(surface)
+            }
+            PhysicalEvent::TouchMotion { slot, .. } => {
+                if l.fingers.contains(&slot) {
+                    LockTouchRoute::Lock
+                } else {
+                    unheld
+                }
+            }
+            PhysicalEvent::TouchUp { slot, .. } => {
+                if l.fingers.contains(&slot) {
+                    l.fingers.retain(|s| *s != slot);
+                    LockTouchRoute::Lock
+                } else {
+                    unheld
+                }
+            }
+            PhysicalEvent::TouchFrame => {
+                if locked || !l.fingers.is_empty() {
+                    LockTouchRoute::Lock
+                } else {
+                    LockTouchRoute::Core
+                }
+            }
+            PhysicalEvent::TouchCancel => {
+                if !std::mem::take(&mut l.fingers).is_empty() {
+                    LockTouchRoute::Lock
+                } else {
+                    unheld
+                }
+            }
+            _ => LockTouchRoute::Core,
+        }
     }
 
     /// After an unlock, once: the keys Core holds that are no longer down. The backend passes

@@ -62,6 +62,11 @@ These pass the test suite but have not run on a real screen or device yet:
   marked) and can save it as the default in `mimeapps.list`, which GTK, KDE and `xdg-open` share;
   `xdg-open` says so when no app opens a type. KDE apps (Dolphin) get the menu file their "Open
   With" needs. File managers' "Open Terminal Here" runs `TERMINAL` (`xdg-terminal-exec`).
+- **Tablet mode** (convertibles; `OSK`, `--no-osk`): folded, an on-screen keyboard
+  (squeekboard) shows for text fields; opened, it does not. The lock screen has its own key grid
+  at the first tap, and while locked a finger reaches only the lock surface, so the password
+  never leaves the lock screen. Tested off-screen and in the test suite; not yet on a
+  touchscreen.
 - **Laptop lid:** closing it with another screen connected moves everything to that screen
   until the lid opens. With no other screen, logind suspends as usual.
 - **Night light, screen power,** the capture dot, single-window sharing.

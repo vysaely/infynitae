@@ -68,6 +68,8 @@ VIRTUAL_SCREEN="auto"             # [restart] with no screen connected (monitor 
 DIRECT_SCANOUT="true"             # [save] a fullscreen game's frames go straight to the screen
 OVERLAY_PLANES="false"            # [save] also windows' buffers on overlay planes (on AMD this
                                   # dropped frames whenever Electron apps like Discord drew)
+OSK="auto"                        # [restart] on-screen keyboard (squeekboard) for text fields —
+                                  # auto: in tablet mode | always | off. The lock screen has its own
 AUTO_ROTATE="auto"                # [restart] turn the laptop's own screen with the device
                                   # (convertibles; needs iio-sensor-proxy) | false
 OUTPUT_ORDER=""                   # left to right, e.g. "DP-1,HDMI-A-1" (the names

@@ -65,6 +65,16 @@ typedef struct {
     bool running;
     bool caps_lock;
 
+    /* the on-screen keyboard (touchscreens): shown, its layers, the key a finger holds */
+    struct wl_touch *touch;
+    bool osk_visible;
+    bool osk_shift;
+    bool osk_symbols;
+    int osk_pressed;
+    struct LockOutput *osk_pressed_output;
+    int32_t osk_touch_id;
+    double osk_touch_x, osk_touch_y;
+
     char username[128];
     char password[PASSWORD_MAX_LEN];
     size_t password_len;
@@ -286,6 +296,227 @@ static void draw_rounded_rect(cairo_t *cr, double x, double y, double w, double 
     cairo_close_path(cr);
 }
 
+/* ========================================================================== */
+/* On-screen keyboard (touchscreens, tablet mode)                             */
+/* ========================================================================== */
+/* A key grid drawn on the lock surface itself: the compositor gives the lock surface the taps
+ * on its screen and nothing else sees them, so the password never leaves this program (no
+ * input method or virtual keyboard reaches a lock screen). It appears at the first tap and
+ * types characters directly, whatever the keyboard layout. A key acts when the finger lifts
+ * on it. */
+typedef enum { OSK_CHAR, OSK_SHIFT, OSK_BACKSPACE, OSK_SYMBOLS, OSK_SPACE, OSK_HIDE, OSK_ENTER } OskKind;
+
+typedef struct {
+    OskKind kind;
+    char ch;
+    double x, y, w, h;
+} OskKey;
+
+#define OSK_MAX_KEYS 48
+
+static const char *osk_letters[4] = { "1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm" };
+static const char *osk_symbols[4] = { "1234567890", "!@#$%^&*()", "-_=+;:'\"/", ".,?<>\\|" };
+
+/* The grid for a w x h surface, bottom-centred: 10 units wide, 5 rows. Returns the key count and
+ * the grid's top in *top. */
+static int osk_layout(const LockApp *app, int w, int h, OskKey keys[OSK_MAX_KEYS], double *top) {
+    const char **rows = app->osk_symbols ? osk_symbols : osk_letters;
+    double u = fmin(w * 0.96 / 10.0, 76.0);
+    double kh = fmin(u * 0.92, 64.0);
+    double gap = 6.0;
+    double x0 = (w - u * 10.0) / 2.0;
+    double y0 = h - 24.0 - 5 * kh;
+    int n = 0;
+    *top = y0 - 12.0;
+#define OSK_ADD(k, c, cx, units, row) do { \
+        keys[n].kind = (k); keys[n].ch = (c); \
+        keys[n].x = x0 + (cx) * u + gap / 2; keys[n].y = y0 + (row) * kh + gap / 2; \
+        keys[n].w = (units) * u - gap; keys[n].h = kh - gap; n++; \
+    } while (0)
+    for (int r = 0; r < 3; r++) {
+        size_t len = strlen(rows[r]);
+        double start = (10.0 - (double)len) / 2.0;
+        for (size_t i = 0; i < len; i++)
+            OSK_ADD(OSK_CHAR, rows[r][i], start + (double)i, 1.0, r);
+    }
+    OSK_ADD(OSK_SHIFT, 0, 0.0, 1.5, 3);
+    for (size_t i = 0; i < strlen(rows[3]); i++)
+        OSK_ADD(OSK_CHAR, rows[3][i], 1.5 + (double)i, 1.0, 3);
+    OSK_ADD(OSK_BACKSPACE, 0, 8.5, 1.5, 3);
+    OSK_ADD(OSK_SYMBOLS, 0, 0.0, 1.5, 4);
+    OSK_ADD(OSK_SPACE, ' ', 1.5, 5.0, 4);
+    OSK_ADD(OSK_HIDE, 0, 6.5, 1.5, 4);
+    OSK_ADD(OSK_ENTER, 0, 8.0, 2.0, 4);
+#undef OSK_ADD
+    return n;
+}
+
+static char osk_char(const LockApp *app, char c) {
+    return (app->osk_shift && c >= 'a' && c <= 'z') ? (char)(c - 32) : c;
+}
+
+static void osk_label(const LockApp *app, const OskKey *k, char out[8]) {
+    switch (k->kind) {
+    case OSK_CHAR: out[0] = osk_char(app, k->ch); out[1] = '\0'; break;
+    case OSK_SHIFT: strcpy(out, "⇧"); break;
+    case OSK_BACKSPACE: strcpy(out, "⌫"); break;
+    case OSK_SYMBOLS: strcpy(out, app->osk_symbols ? "ABC" : "?123"); break;
+    case OSK_SPACE: strcpy(out, ""); break;
+    case OSK_HIDE: strcpy(out, "⌄"); break;
+    case OSK_ENTER: strcpy(out, "⏎"); break;
+    }
+}
+
+static int osk_hit(const OskKey keys[], int n, double x, double y) {
+    for (int i = 0; i < n; i++)
+        if (x >= keys[i].x && x < keys[i].x + keys[i].w && y >= keys[i].y && y < keys[i].y + keys[i].h)
+            return i;
+    return -1;
+}
+
+static void osk_draw(cairo_t *cr, PangoLayout *layout, const LockApp *app, const LockOutput *output,
+                     int w, int h) {
+    OskKey keys[OSK_MAX_KEYS];
+    double top;
+    int n = osk_layout(app, w, h, keys, &top);
+    cairo_set_source_rgba(cr, 0.04, 0.06, 0.08, 0.92);
+    cairo_rectangle(cr, 0, top, w, h - top);
+    cairo_fill(cr);
+    PangoFontDescription *desc = pango_font_description_from_string("Sans 15");
+    pango_layout_set_font_description(layout, desc);
+    pango_font_description_free(desc);
+    for (int i = 0; i < n; i++) {
+        bool pressed = app->osk_pressed == i && app->osk_pressed_output == output;
+        bool lit = keys[i].kind == OSK_SHIFT && app->osk_shift;
+        if (pressed)
+            cairo_set_source_rgba(cr, 0.30, 0.55, 0.90, 0.85);
+        else if (keys[i].kind == OSK_CHAR || keys[i].kind == OSK_SPACE)
+            cairo_set_source_rgba(cr, 0.14, 0.18, 0.24, 0.95);
+        else
+            cairo_set_source_rgba(cr, lit ? 0.22 : 0.10, lit ? 0.32 : 0.13, lit ? 0.48 : 0.18, 0.95);
+        draw_rounded_rect(cr, keys[i].x, keys[i].y, keys[i].w, keys[i].h, 8.0);
+        cairo_fill(cr);
+        char label[8];
+        osk_label(app, &keys[i], label);
+        int tw, th;
+        pango_layout_set_text(layout, label, -1);
+        pango_layout_get_pixel_size(layout, &tw, &th);
+        cairo_set_source_rgba(cr, 0.90, 0.95, 1.0, 0.92);
+        cairo_move_to(cr, keys[i].x + (keys[i].w - tw) / 2.0, keys[i].y + (keys[i].h - th) / 2.0);
+        pango_cairo_show_layout(cr, layout);
+    }
+}
+
+static void osk_type(LockApp *app, char c) {
+    if (app->password_len + 1 < PASSWORD_MAX_LEN - 1) {
+        app->password[app->password_len++] = c;
+        app->password[app->password_len] = '\0';
+        app->auth_state = AUTH_STATE_TYPING;
+    }
+}
+
+/* A key's action, when the finger lifts on it. */
+static void osk_activate(LockApp *app, const OskKey *k) {
+    if (app->auth_state == AUTH_STATE_VERIFYING) return;
+    switch (k->kind) {
+    case OSK_CHAR:
+        osk_type(app, osk_char(app, k->ch));
+        app->osk_shift = false; /* one capital, as phones do */
+        break;
+    case OSK_SPACE: osk_type(app, ' '); break;
+    case OSK_SHIFT: app->osk_shift = !app->osk_shift; break;
+    case OSK_SYMBOLS: app->osk_symbols = !app->osk_symbols; break;
+    case OSK_HIDE: app->osk_visible = false; break;
+    case OSK_BACKSPACE:
+        if (app->password_len > 0) {
+            app->password[--app->password_len] = '\0';
+            app->auth_state = app->password_len > 0 ? AUTH_STATE_TYPING : AUTH_STATE_IDLE;
+        }
+        break;
+    case OSK_ENTER:
+        if (app->password_len > 0) trigger_auth(app);
+        break;
+    }
+}
+
+static LockOutput *output_of_surface(LockApp *app, struct wl_surface *surface) {
+    for (LockOutput *o = app->outputs; o; o = o->next)
+        if (o->surface == surface) return o;
+    return NULL;
+}
+
+static void touch_down(void *data, struct wl_touch *touch, uint32_t serial, uint32_t time,
+                       struct wl_surface *surface, int32_t id, wl_fixed_t x, wl_fixed_t y) {
+    (void)touch; (void)serial; (void)time;
+    LockApp *app = data;
+    LockOutput *o = output_of_surface(app, surface);
+    if (!o || app->osk_pressed >= 0) return;
+    if (!app->osk_visible) {
+        /* the first tap brings the keyboard */
+        app->osk_visible = true;
+        damage_all_outputs(app);
+        return;
+    }
+    OskKey keys[OSK_MAX_KEYS];
+    double top;
+    int n = osk_layout(app, o->width, o->height, keys, &top);
+    int i = osk_hit(keys, n, wl_fixed_to_double(x), wl_fixed_to_double(y));
+    if (i < 0) return;
+    app->osk_pressed = i;
+    app->osk_pressed_output = o;
+    app->osk_touch_id = id;
+    app->osk_touch_x = wl_fixed_to_double(x);
+    app->osk_touch_y = wl_fixed_to_double(y);
+    request_frame(o);
+}
+
+static void touch_motion(void *data, struct wl_touch *touch, uint32_t time, int32_t id,
+                         wl_fixed_t x, wl_fixed_t y) {
+    (void)touch; (void)time;
+    LockApp *app = data;
+    if (app->osk_pressed >= 0 && id == app->osk_touch_id) {
+        app->osk_touch_x = wl_fixed_to_double(x);
+        app->osk_touch_y = wl_fixed_to_double(y);
+    }
+}
+
+static void touch_up(void *data, struct wl_touch *touch, uint32_t serial, uint32_t time, int32_t id) {
+    (void)touch; (void)serial; (void)time;
+    LockApp *app = data;
+    if (app->osk_pressed < 0 || id != app->osk_touch_id) return;
+    LockOutput *o = app->osk_pressed_output;
+    OskKey keys[OSK_MAX_KEYS];
+    double top;
+    int n = osk_layout(app, o->width, o->height, keys, &top);
+    int pressed = app->osk_pressed;
+    app->osk_pressed = -1;
+    app->osk_pressed_output = NULL;
+    /* only if the finger lifts on the key it pressed */
+    if (pressed < n && osk_hit(keys, n, app->osk_touch_x, app->osk_touch_y) == pressed)
+        osk_activate(app, &keys[pressed]);
+    damage_all_outputs(app);
+}
+
+static void touch_frame(void *data, struct wl_touch *touch) {
+    (void)data; (void)touch;
+}
+
+static void touch_cancel(void *data, struct wl_touch *touch) {
+    (void)touch;
+    LockApp *app = data;
+    app->osk_pressed = -1;
+    app->osk_pressed_output = NULL;
+    damage_all_outputs(app);
+}
+
+static const struct wl_touch_listener touch_listener = {
+    .down = touch_down,
+    .up = touch_up,
+    .motion = touch_motion,
+    .frame = touch_frame,
+    .cancel = touch_cancel,
+};
+
 static void render_output(LockOutput *output) {
     if (!output->configured || output->width <= 0 || output->height <= 0) return;
     if (!allocate_output_buffer(output)) return;
@@ -329,6 +560,13 @@ static void render_output(LockOutput *output) {
 
     double cx = (w / 2.0) + shake_offset;
     double cy = h / 2.0;
+    if (app->osk_visible) {
+        /* the password stays above the keyboard */
+        OskKey keys[OSK_MAX_KEYS];
+        double kb_top;
+        osk_layout(app, w, h, keys, &kb_top);
+        if (cy + 140 > kb_top) cy = kb_top - 140;
+    }
 
     // Pango layout initialization
     PangoLayout *layout = pango_cairo_create_layout(cr);
@@ -501,7 +739,10 @@ static void render_output(LockOutput *output) {
         pango_cairo_show_layout(cr, layout);
     }
 
-    // 6. Bottom Brand Hint: "Infynitae Native Canvas"
+    if (app->osk_visible) osk_draw(cr, layout, app, output, w, h);
+
+    // 6. Bottom Brand Hint: "Infynitae Native Canvas" (under the keyboard when it is shown)
+    if (!app->osk_visible) {
     desc = pango_font_description_from_string("Sans 10");
     pango_font_description_set_weight(desc, PANGO_WEIGHT_LIGHT);
     pango_layout_set_font_description(layout, desc);
@@ -511,6 +752,7 @@ static void render_output(LockOutput *output) {
     cairo_set_source_rgba(cr, 0.40, 0.46, 0.58, 0.40);
     cairo_move_to(cr, cx - (tw / 2.0), h - 45);
     pango_cairo_show_layout(cr, layout);
+    }
 
     g_object_unref(layout);
     cairo_destroy(cr);
@@ -741,6 +983,13 @@ static void seat_capabilities(void *data, struct wl_seat *seat, uint32_t capabil
         wl_keyboard_destroy(app->keyboard);
         app->keyboard = NULL;
     }
+    if ((capabilities & WL_SEAT_CAPABILITY_TOUCH) && !app->touch) {
+        app->touch = wl_seat_get_touch(seat);
+        wl_touch_add_listener(app->touch, &touch_listener, app);
+    } else if (!(capabilities & WL_SEAT_CAPABILITY_TOUCH) && app->touch) {
+        wl_touch_destroy(app->touch);
+        app->touch = NULL;
+    }
 }
 
 static void seat_name(void *data, struct wl_seat *seat, const char *name) {
@@ -813,6 +1062,7 @@ static const struct wl_registry_listener registry_listener = {
 int main(int argc, char **argv) {
     LockApp app = {0};
     app.running = true;
+    app.osk_pressed = -1;
     app.auth_state = AUTH_STATE_IDLE;
     strncpy(app.session_cmd, "infynitae-session", sizeof(app.session_cmd) - 1);
 

@@ -30,7 +30,7 @@ and stops before changing anything if there is no internet, disk space or sudo. 
 
 | Flag | Effect |
 | :--- | :--- |
-| `--no-notifications` `--no-keyring` `--no-automount` `--no-clipboard` `--no-fonts` `--no-recorder` `--no-files` `--no-terminal` `--no-bluetooth` `--no-power-profiles` `--no-autorotate` | Leave out that part |
+| `--no-notifications` `--no-keyring` `--no-automount` `--no-clipboard` `--no-fonts` `--no-recorder` `--no-files` `--no-terminal` `--no-bluetooth` `--no-power-profiles` `--no-autorotate` `--no-osk` | Leave out that part |
 | `--minimal` | Leave out all of them |
 | `--replay-buffer` | Keep the last minutes of the screen, saved with `Super + Alt + C` |
 | `--no-autologin` | Log in on tty1 instead of booting to the lock screen |

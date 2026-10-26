@@ -31,6 +31,7 @@ Leave out a part:
   --no-bluetooth       Bluetooth, even with an adapter
   --no-power-profiles  power modes on a laptop (power-profiles-daemon)
   --no-autorotate      screen rotation on convertibles (iio-sensor-proxy)
+  --no-osk             an on-screen keyboard in tablet mode on convertibles (squeekboard)
   --minimal            all of the above
 
 Turn on:
@@ -52,13 +53,13 @@ POWER_PROFILES=true
 SKIP=""
 for arg in "$@"; do
     case "$arg" in
-        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate | --no-files)
+        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate | --no-files | --no-osk)
             SKIP="$SKIP ${arg#--no-}" ;;
         --no-terminal) TERMINAL_PKG=false ;;
         --no-bluetooth) BLUETOOTH=false ;;
         --no-power-profiles) POWER_PROFILES=false ;;
         --minimal)
-            SKIP="notifications keyring automount clipboard fonts recorder autorotate files"
+            SKIP="notifications keyring automount clipboard fonts recorder autorotate files osk"
             TERMINAL_PKG=false BLUETOOTH=false POWER_PROFILES=false ;;
         --no-autologin) AUTOLOGIN=false ;;
         --replay-buffer) REPLAY_BUFFER=true ;;

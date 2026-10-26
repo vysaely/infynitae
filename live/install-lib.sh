@@ -66,6 +66,11 @@ has_accelerometer() {
     done
     return 1
 }
+# a tablet-mode switch (convertibles): SW_TABLET_MODE, bit 1 of an input device's switches
+has_tablet_mode_switch() {
+    awk '/^B: SW=/ { split($2, a, "="); n = split(a[2], w, " ");
+        if (and(strtonum("0x" w[n]), 2)) found = 1 } END { exit !found }' /proc/bus/input/devices 2>/dev/null
+}
 # a file manager other than Thunar is in use: Thunar is not added beside it
 other_file_manager() {
     local fm
@@ -77,6 +82,8 @@ other_file_manager() {
 group_applies() {
     case "$1" in
         autorotate) has_accelerometer ;;
+        # an on-screen keyboard for tablet mode, on convertibles only
+        osk) has_tablet_mode_switch || has_accelerometer ;;
         # Thunar with its previews (tumbler) when it is there or nothing else is
         files) command -v thunar >/dev/null 2>&1 || ! other_file_manager ;;
         *) return 0 ;;

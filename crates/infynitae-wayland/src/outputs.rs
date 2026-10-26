@@ -293,6 +293,12 @@ impl WaylandState {
         self.spawn_action_with(action, "");
     }
 
+    /// The convertible went into tablet mode (`on`) or out of it: the session's on-screen
+    /// keyboard follows (`launch.sh tablet-mode`, OSK).
+    pub fn tablet_mode_changed(&mut self, on: bool) {
+        self.spawn_action_with("tablet-mode", if on { "on" } else { "off" });
+    }
+
     /// [`spawn_action`](Self::spawn_action) with an argument (`exec`: the command to run).
     pub(crate) fn spawn_action_with(&mut self, action: &str, arg: &str) {
         let home = std::env::var("HOME").unwrap_or_default();

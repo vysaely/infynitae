@@ -100,6 +100,16 @@ case "$ACTION" in
             echo "[infynitae] Error: No terminal emulator found. Please install kitty, alacritty, or foot." >&2
         fi
         ;;
+    tablet-mode)
+        # the convertible folded (on) or opened (off): with OSK="auto" the on-screen keyboard
+        # shows for text fields in tablet mode only
+        case "${OSK:-auto}" in
+            auto|"")
+                [ "$2" = on ] && on=true || on=false
+                gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled "$on" 2>/dev/null
+                ;;
+        esac
+        ;;
     file-manager|files)
         # Super+E: File explorer (configurable via ~/.config/infynitae/config)
         FM="${FILE_MANAGER:-auto}"
