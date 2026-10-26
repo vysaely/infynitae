@@ -204,8 +204,8 @@ case "$ACTION" in
         # Super+Shift+Tab: Overview (Quickshell Canvas Radar if enabled, or fast Fuzzel window switcher)
         if [ "${ENABLE_QUICKSHELL:-false}" = "true" ] && command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
             exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call overview toggle
-        elif [ -x "$HOME/infynitae/live/overview-menu.py" ]; then
-            exec "$HOME/infynitae/live/overview-menu.py"
+        elif command -v infynitae >/dev/null 2>&1; then
+            exec infynitae msg overview
         elif command -v fuzzel >/dev/null 2>&1; then
             exec fuzzel
         fi
@@ -492,13 +492,13 @@ case "$ACTION" in
     mute|toggle-mute)
         # Trigger Discord / App Global Shortcuts portal (in-app mute only, zero OS hardware muting)
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
-            python3 -c "import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect('$XDG_RUNTIME_DIR/infynitae/shortcuts.sock'); s.sendall(b'mute'); s.close()" 2>/dev/null || true
+            infynitae msg shortcut mute 2>/dev/null || true
         fi
         ;;
     deafen|toggle-deafen)
         # Trigger Discord / App Global Shortcuts portal (in-app deafen only, zero OS hardware muting)
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
-            python3 -c "import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect('$XDG_RUNTIME_DIR/infynitae/shortcuts.sock'); s.sendall(b'deafen'); s.close()" 2>/dev/null || true
+            infynitae msg shortcut deafen 2>/dev/null || true
         fi
         ;;
     notify-privacy-on)
@@ -545,13 +545,13 @@ case "$ACTION" in
     toggle-idle-inhibit|inhibit-idle)
         # Send keypress or signal to compositor to toggle idle inhibit
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
-            python3 -c "import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect('$XDG_RUNTIME_DIR/infynitae/shortcuts.sock'); s.sendall(b'idle_inhibit'); s.close()" 2>/dev/null || true
+            infynitae msg shortcut idle_inhibit 2>/dev/null || true
         fi
         ;;
     toggle-privacy|privacy)
         # Send keypress or signal to compositor to toggle privacy
         if [ -S "$XDG_RUNTIME_DIR/infynitae/shortcuts.sock" ]; then
-            python3 -c "import socket; s=socket.socket(socket.AF_UNIX, socket.SOCK_STREAM); s.connect('$XDG_RUNTIME_DIR/infynitae/shortcuts.sock'); s.sendall(b'privacy'); s.close()" 2>/dev/null || true
+            infynitae msg shortcut privacy 2>/dev/null || true
         fi
         ;;
     save-replay|clip-save|clip)

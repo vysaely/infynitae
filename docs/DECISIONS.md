@@ -107,6 +107,9 @@ these by date, e.g. "(owner, 2026-10-24)".
   checks pass; this file records the choices.
 - **AI agents do a lot of the work, and nothing lands unreviewed.** Every agent change is read in
   full and must pass the whole test suite and the checks before it is merged.
+- **No Python at run time** (2026-10-26): the session's helpers that talked to the compositor
+  and restored the session were Python; they are the binary's own subcommands now (`infynitae msg`,
+  `infynitae restore`), so the desktop needs no Python. Development tools still use it.
 - **The capture dot steps aside over a fullscreen window** (2026-10-26): anything drawn over a
   game keeps it from going to the screen directly (tearing, game mode), so while a screen shows
   a fullscreen window the dot is hidden there and a notification announces the capture once.

@@ -494,7 +494,11 @@ mod keymap_names_tests {
 
     #[test]
     fn a_layout_that_makes_no_keymap_is_us_and_a_good_one_is_kept() {
-        assert_eq!(usable_keymap_names("", ""), ("us".into(), String::new()), "empty");
+        assert_eq!(
+            usable_keymap_names("", ""),
+            ("us".into(), String::new()),
+            "empty"
+        );
         assert_eq!(
             usable_keymap_names("de-latin1", ""),
             ("us".into(), String::new()),

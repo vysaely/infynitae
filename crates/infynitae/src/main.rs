@@ -10,6 +10,8 @@ use std::time::Duration;
 use infynitae_core::Core;
 use infynitae_core::navigation::PersistedCameras;
 
+mod msg;
+mod restore;
 mod shell;
 
 fn find_xwayland_satellite() -> Option<std::path::PathBuf> {
@@ -108,6 +110,13 @@ fn main() -> ExitCode {
     }));
 
     let args: Vec<String> = std::env::args().collect();
+    // the session's helpers, from the same binary (no Python): `msg` talks to the running
+    // compositor, `restore` saves and brings back the session
+    match args.get(1).map(String::as_str) {
+        Some("msg") => return msg::run(&args[2..]),
+        Some("restore") => return restore::run(&args[2..]),
+        _ => {}
+    }
     let mut socket_name: Option<String> = None;
     let mut exec_cmd: Option<String> = None;
     let mut title = "Infynitae Native Compositor".to_string();

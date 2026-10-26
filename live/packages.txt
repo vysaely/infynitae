@@ -24,4 +24,3 @@ wl-clipboard
 xorg-xwayland
 xwayland-satellite
 xdg-user-dirs
-python

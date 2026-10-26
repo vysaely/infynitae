@@ -51,7 +51,7 @@ ShellRoot {
     // Background process to query snapshot from Infynitae IPC socket
     Process {
         id: refreshProc
-        command: ["python3", Qt.resolvedUrl("../infynitae-ipc.py").toString().replace("file://", ""), "snapshot"]
+        command: ["infynitae", "msg", "snapshot"]
         stdout: SplitParser {
             onRead: data => {
                 try {
@@ -676,7 +676,7 @@ ShellRoot {
                                 anchors.fill: parent
                                 cursorShape: Qt.PointingHandCursor
                                 onClicked: {
-                                    Quickshell.execDetached(["python3", Qt.resolvedUrl("../infynitae-ipc.py").toString().replace("file://", ""), "focus", elem.id[0].toString(), elem.id[1].toString()]);
+                                    Quickshell.execDetached(["infynitae", "msg", "focus", elem.id[0].toString(), elem.id[1].toString()]);
                                     root.overviewVisible = false;
                                 }
                             }
@@ -748,7 +748,7 @@ ShellRoot {
                                 onClicked: {
                                     if (hasWin) {
                                         var targetElem = root.snapshotData.elements[index];
-                                        Quickshell.execDetached(["python3", Qt.resolvedUrl("../infynitae-ipc.py").toString().replace("file://", ""), "focus", targetElem.id[0].toString(), targetElem.id[1].toString()]);
+                                        Quickshell.execDetached(["infynitae", "msg", "focus", targetElem.id[0].toString(), targetElem.id[1].toString()]);
                                         root.overviewVisible = false;
                                     }
                                 }

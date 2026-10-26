@@ -284,7 +284,7 @@ case "$1" in
         echo "==> Quickshell UI reloaded."
         ;;
     restore|reset-zoom)
-        python3 "$HOME/infynitae/live/infynitae-ipc.py" restore
+        infynitae msg restore
         echo "==> Canvas viewport restored to default 100% scale (zoom 1.0)."
         ;;
     update)
