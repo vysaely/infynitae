@@ -186,6 +186,18 @@ static uint32_t trigger_to_evdev(const char *trigger) {
     return 0;
 }
 
+// The modifier a key is itself: held while it is pressed, so a shortcut on a lone modifier (Discord's
+// Right Shift, sent as F15) must not count it.
+static uint32_t own_modifier(uint32_t evdev_key) {
+    switch (evdev_key) {
+        case 42: case 54: return PORTAL_MOD_SHIFT;
+        case 29: case 97: return PORTAL_MOD_CTRL;
+        case 56: case 100: return PORTAL_MOD_ALT;
+        case 125: case 126: return PORTAL_MOD_LOGO;
+        default: return 0;
+    }
+}
+
 static uint32_t trigger_to_modifiers(const char *trigger) {
     if (!trigger || !*trigger) return 0;
     if (!strchr(trigger, '+')) return 0;
@@ -277,6 +289,7 @@ static void dispatch_action(const char *action) {
         uint32_t key_mods = 0;
         int parsed = sscanf(act + 4, "%u:%d:%u", &key_code, &pressed, &key_mods);
         if (parsed >= 1) {
+            key_mods &= ~own_modifier(key_code);
             for (GList *sl = sessions; sl != NULL; sl = sl->next) {
                 SessionEntry *sess = (SessionEntry *)sl->data;
                 for (GList *k = sess->shortcuts; k != NULL; k = k->next) {
