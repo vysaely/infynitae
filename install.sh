@@ -62,7 +62,8 @@ POWER_PROFILES=true
 SKIP=""
 # menus: a person at a terminal, who gave no options
 MENU=false
-[ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] && MENU=true
+# (and a terminal that can draw them: without TERM, whiptail fails as if cancelled)
+[ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] && [ -n "${TERM:-}" ] && [ "$TERM" != dumb ] && MENU=true
 for arg in "$@"; do
     case "$arg" in
         --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate | --no-files | --no-osk | --no-gamemode | --no-thermal)

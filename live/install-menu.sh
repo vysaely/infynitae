@@ -95,9 +95,12 @@ Next: what to install. Nothing is changed before the last screen." "$MENU_H" "$M
     has power-profiles || POWER_PROFILES=false
     has gaming && GAMING=true
     has replay-buffer && REPLAY_BUFFER=true
+    # the replay buffer records with the recorder: it stays, and the summary says so
     if [ "$REPLAY_BUFFER" = true ] && is_skipped recorder; then
         SKIP=$(printf '%s\n' $SKIP | grep -vx recorder | tr '\n' ' ')
         SKIP="$(echo $SKIP)"
+        chosen="$chosen
+recorder"
     fi
 
     # how it starts: a display manager lists it; without one, tty1 logs in by itself
@@ -122,8 +125,7 @@ Next: what to install. Nothing is changed before the last screen." "$MENU_H" "$M
 Left out: ${SKIP:-nothing}
 Startup:  $startup
 
-The system is updated first, then Infynitae is built from source (a few minutes, longer on a
-slow machine). It then runs by itself; the log is in ~/.local/state/infynitae/install.log." \
+The system is updated first, then Infynitae is built from source (a few minutes, longer on a slow machine). It then runs by itself; the log is in ~/.local/state/infynitae/install.log." \
         "$MENU_H" "$MENU_W" \
         || { echo "==> Cancelled: nothing was changed."; exit 0; }
 }
