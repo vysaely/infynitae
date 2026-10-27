@@ -1659,6 +1659,10 @@ impl Core {
     /// `None` keeps the anchor of the initial commit: under [`PlacementPolicy::OriginAtCameraCentre`],
     /// without an output, or when out of Canvas bounds.
     fn first_map_anchor(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
+        // an app's notification: the view's bottom right corner, above the ones already there
+        if self.is_notification(id) {
+            return self.notification_anchor(id, tree);
+        }
         // a child window (xdg_toplevel.set_parent: dialogs, an app's second window) opens centred
         // over its mapped parent's window geometry, whatever the policy (owner, 2026-10-24); one
         // nearly the parent's size (Discord's pop-out) would hide it or peek out from behind it
@@ -1844,6 +1848,55 @@ impl Core {
 
     /// Where a new window takes its app's closed window's place: centred there, when no other
     /// window of the app is mapped and that centre lies in the first output's current view.
+    /// A notification's place: the first output's usable area, bottom right, 12 px in from its
+    /// edges, at the camera's zoom; one already there pushes it up, as notifications stack.
+    fn notification_anchor(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
+        const MARGIN: f64 = 12.0;
+        let output = self.outputs.first()?;
+        let camera = self.cameras.camera_for_output(output.id)?;
+        let (centre, zoom) = (self.cameras.center(camera)?, self.cameras.zoom(camera)?);
+        let extent = output.logical_extent();
+        let (ux, uy, uw, uh) = self
+            .usable_area(output.id)
+            .unwrap_or((0.0, 0.0, extent.0, extent.1));
+        let q = Q16_ONE as f64;
+        // the usable area's bottom right corner in Canvas px
+        let corner = (
+            centre.x as f64 / q + (ux + uw - MARGIN - extent.0 / 2.0) / zoom,
+            centre.y as f64 / q + (uy + uh - MARGIN - extent.1 / 2.0) / zoom,
+        );
+        let g = tree.geometry;
+        let (w, h) = (i64::from(g.size.w), i64::from(g.size.h));
+        let gap = (MARGIN / zoom).round() as i64;
+        let x = corner.0.round() as i64 - w;
+        let mut y = corner.1.round() as i64 - h;
+        let others: Vec<(i64, i64, i64, i64)> = self
+            .stage
+            .mapped_elements()
+            .into_iter()
+            .filter(|&e| e != id && self.is_notification(e))
+            .filter_map(|e| {
+                let (a, t) = (self.stage.anchor(e)?, self.stage.tree(e)?);
+                let s = t.geometry.size;
+                Some((a.x, a.y, a.x + i64::from(s.w), a.y + i64::from(s.h)))
+            })
+            .collect();
+        // up past each one in the way, at most once per notification open
+        for _ in 0..=others.len() {
+            let Some(top) = others
+                .iter()
+                .filter(|o| x < o.2 && o.0 < x + w && y < o.3 + gap && o.1 < y + h + gap)
+                .map(|o| o.1)
+                .min()
+            else {
+                break;
+            };
+            y = top - gap - h;
+        }
+        // the anchor is the window geometry's origin (INV-STAGE-2)
+        Some(CanvasPoint { x, y })
+    }
+
     fn successor_anchor(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
         let app = self.stage.meta(id)?.app_id.as_deref()?.to_ascii_lowercase();
         let same_app = |e: ElementId| {

@@ -829,6 +829,19 @@ impl Core {
         Ok(fx)
     }
 
+    /// A window that is an app's own notification (Steam's toasts, `notificationtoasts_<n>_desktop`,
+    /// drawn as small X11 windows): placed in the screen's bottom right corner, never focused.
+    pub fn is_notification(&self, id: stage::ElementId) -> bool {
+        self.stage.meta(id).is_some_and(|m| {
+            m.app_id
+                .as_deref()
+                .is_some_and(|a| a.eq_ignore_ascii_case("steam"))
+                && m.title
+                    .as_deref()
+                    .is_some_and(|t| t.starts_with("notificationtoasts_"))
+        })
+    }
+
     /// Grants initial focus to `target` if the seat is eligible for initial activation (INV-INPUT-8, Section 5).
     pub fn grant_initial_focus(
         &mut self,
@@ -839,7 +852,7 @@ impl Core {
         if self.stage.state(target) != Some(stage::Lifecycle::Mapped) {
             return Err(EntryError::InvalidEvent);
         }
-        if self.hidden_by_presentation(target) {
+        if self.hidden_by_presentation(target) || self.is_notification(target) {
             return Ok(Vec::new());
         }
         let mut fx = self.focus.grant_initial_focus(target);
