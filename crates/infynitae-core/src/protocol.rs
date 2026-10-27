@@ -1436,7 +1436,11 @@ impl Core {
                     .collect();
                 // M1: "fullscreen dropped (M9)"; the client must request it again after a remap
                 self.drop_fullscreen(id);
+                let had = self.focus.target() == Some(id);
                 out.extend(self.focus.target_lost(id, &live));
+                if had {
+                    self.strict_successor(id, out);
+                }
             }
         }
         self.membership_pass_element(id, out);
@@ -1542,7 +1546,11 @@ impl Core {
         }
         self.frame_liveness.destroyed(id);
         let live: Vec<ElementId> = self.focusable_elements();
+        let had = self.focus.target() == Some(id);
         let mut fx = self.focus.target_lost(id, &live);
+        if had {
+            self.strict_successor(id, &mut fx);
+        }
         self.drop_fullscreen(id);
         let ended: Vec<OutputId> = before
             .iter()

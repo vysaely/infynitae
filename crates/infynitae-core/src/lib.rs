@@ -631,6 +631,35 @@ impl Core {
         self.focus_follows_mouse_strict
     }
 
+    /// The window under the pointer, none under a layer surface above the windows: what strict
+    /// focus follows.
+    pub(crate) fn hovered_window(&mut self) -> Option<stage::ElementId> {
+        let pointer::PointerState::Located { output, p } = self.pointer else {
+            return None;
+        };
+        if self.layer_hit(output, p, true).is_some() {
+            return None;
+        }
+        self.hit_test(output, geom::OutputLogicalPoint { x: p.0, y: p.1 })
+            .map(|h| h.element)
+    }
+
+    /// Strict focus after the focused window went away: the window under the pointer, or none,
+    /// never the last one used elsewhere on the canvas (Super+C next would close that one).
+    pub(crate) fn strict_successor(
+        &mut self,
+        gone: stage::ElementId,
+        out: &mut Vec<protocol::Effect>,
+    ) {
+        if !(self.focus_follows_mouse && self.focus_follows_mouse_strict) {
+            return;
+        }
+        let hovered = self.hovered_window().filter(|&e| e != gone);
+        if self.focus.target() != hovered {
+            out.extend(self.focus.set_focus(hovered));
+        }
+    }
+
     /// Sets whether Super+Tab focus cycling automatically moves camera to the focused window.
     pub fn set_focus_cycle_navigate(&mut self, enabled: bool) {
         self.focus_cycle_navigate = enabled;

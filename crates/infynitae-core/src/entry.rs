@@ -585,15 +585,13 @@ impl Core {
             }
             KeyAction::ToggleFullscreen => self.toggle_fullscreen(),
             KeyAction::ForceCloseFocused => self
-                .focus
-                .target()
+                .close_target()
                 .map(Effect::ForceClose)
                 .into_iter()
                 .collect(),
             // a request, not a destruction: the client closes (or asks the user first)
             KeyAction::CloseFocused => self
-                .focus
-                .target()
+                .close_target()
                 .map(Effect::CloseRequest)
                 .into_iter()
                 .collect(),
@@ -1353,6 +1351,21 @@ impl Core {
                 self.routed_motion(delta, delta_unaccel, time_us, out);
             }
         }
+    }
+
+    /// The window Super+C closes: the focused one; with strict focus only while it is under the
+    /// pointer, so a key pressed over empty canvas closes nothing (focus can be stale there: the
+    /// canvas moved under a still pointer).
+    fn close_target(&mut self) -> Option<crate::stage::ElementId> {
+        let focused = self.focus.target()?;
+        if self.focus_follows_mouse
+            && self.focus_follows_mouse_strict
+            && matches!(self.pointer, PointerState::Located { .. })
+            && self.hovered_window() != Some(focused)
+        {
+            return None;
+        }
+        Some(focused)
     }
 
     /// One motion of a pan (F-PAN-1): the camera moves by the accumulated delta; the pointer stays.
@@ -3659,6 +3672,81 @@ mod tests {
             None,
             "strict focus-follows-mouse must clear focus over empty canvas"
         );
+    }
+
+    /// Strict focus: a closed window's focus goes to the window under the pointer or none, never
+    /// to the one used before it elsewhere; and Super+C closes nothing over empty canvas, even
+    /// with a focus left on a window there (ThinkPad and desktop, 2026-10-27: "it would close a
+    /// random window").
+    #[test]
+    fn strict_focus_never_hands_a_close_to_a_window_away_from_the_pointer() {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        use std::num::NonZeroU64;
+
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+        c.set_focus_follows_mouse_strict(true);
+        let win = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(NonZeroU64::new(k).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        let w = c.toplevel_created();
+        c.toplevel_committed(w, win(1, 400, 300, false)).unwrap();
+        c.toplevel_committed(w, win(1, 400, 300, true)).unwrap();
+        let v = c.toplevel_created();
+        c.toplevel_committed(v, win(2, 200, 150, false)).unwrap();
+        c.toplevel_committed(v, win(2, 200, 150, true)).unwrap();
+        let mut fx = Vec::new();
+        // v in the top left corner of the view, w in its centre
+        c.place_by_user(v, crate::geom::CanvasPoint { x: -950, y: -530 }, &mut fx)
+            .unwrap();
+        c.render_list(a).unwrap();
+        let mut motion = |c: &mut Core, d: (f64, f64), time_us: u64| {
+            let _ = c
+                .physical_input_vec(
+                    &mut i,
+                    crate::PhysicalEvent::PointerMotion {
+                        delta: d,
+                        delta_unaccel: d,
+                        time_us,
+                    },
+                )
+                .unwrap();
+            c.render_list(a).unwrap();
+        };
+        // over v (logical ~ (60, 60)), then over w (the centre)
+        motion(&mut c, (-900.0, -480.0), 1000);
+        assert_eq!(c.focus().target(), Some(v));
+        motion(&mut c, (901.0, 481.0), 2000);
+        assert_eq!(c.focus().target(), Some(w));
+
+        // w closes under the still pointer: the canvas is empty there, nothing is focused
+        let _ = c.toplevel_destroyed(w);
+        c.render_list(a).unwrap();
+        assert_eq!(c.focus().target(), None, "not v, the window used before");
+
+        // a focus left on v (the canvas moved under a still pointer): Super+C closes nothing
+        let _ = c.focus.set_focus(Some(v));
+        assert_eq!(c.close_target(), None);
+        // over v it closes v
+        motion(&mut c, (-901.0, -481.0), 3000);
+        assert_eq!(c.close_target(), Some(v));
     }
 
     #[test]
