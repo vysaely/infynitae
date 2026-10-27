@@ -33,6 +33,7 @@ Leave out a part:
   --no-autorotate      screen rotation on convertibles (iio-sensor-proxy)
   --no-osk             an on-screen keyboard in tablet mode on convertibles (squeekboard)
   --no-gamemode        the CPU at full speed while a fullscreen game runs (gamemode)
+  --no-thermal         Intel's thermal manager on Intel laptops (thermald)
   --minimal            all of the above
 
 Turn on:
@@ -54,13 +55,13 @@ POWER_PROFILES=true
 SKIP=""
 for arg in "$@"; do
     case "$arg" in
-        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate | --no-files | --no-osk | --no-gamemode)
+        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate | --no-files | --no-osk | --no-gamemode | --no-thermal)
             SKIP="$SKIP ${arg#--no-}" ;;
         --no-terminal) TERMINAL_PKG=false ;;
         --no-bluetooth) BLUETOOTH=false ;;
         --no-power-profiles) POWER_PROFILES=false ;;
         --minimal)
-            SKIP="notifications keyring automount clipboard fonts recorder autorotate files osk gamemode"
+            SKIP="notifications keyring automount clipboard fonts recorder autorotate files osk gamemode thermal"
             TERMINAL_PKG=false BLUETOOTH=false POWER_PROFILES=false ;;
         --no-autologin) AUTOLOGIN=false ;;
         --replay-buffer) REPLAY_BUFFER=true ;;
@@ -245,6 +246,7 @@ install -m 755 live/infynitae-session "$HOME/.local/bin/infynitae-session"
 install -m 755 live/xdg-open "$HOME/.local/bin/xdg-open"
 install -m 755 live/xdg-terminal-exec "$HOME/.local/bin/xdg-terminal-exec"
 install -m 755 live/infynitae-open-with "$HOME/.local/bin/infynitae-open-with"
+install -m 755 live/battery-limit "$HOME/.local/bin/infynitae-battery-limit"
 # the C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream): one recipe
 # shared with infynitae-update; a failure is reported, never hidden
 sh live/build-helpers.sh "$INSTALL_DIR" "$HOME/.local/bin" \
@@ -252,6 +254,19 @@ sh live/build-helpers.sh "$INSTALL_DIR" "$HOME/.local/bin" \
 # the lock screen's password check (PAM): kept current
 if ! cmp -s live/lock/infynitae.pam /etc/pam.d/infynitae; then
     sudo install -m 644 live/lock/infynitae.pam /etc/pam.d/infynitae
+fi
+# the battery's charge limit (BATTERY_LIMIT): settable by this user, on laptops whose battery
+# supports one; thermald on Intel laptops (the thermal optional part), running
+if ls /sys/class/power_supply/BAT*/charge_control_end_threshold >/dev/null 2>&1; then
+    sed "s/@GROUP@/$(id -gn)/" live/99-infynitae-battery.rules > "${TMPDIR:-/tmp}/99-infynitae-battery.rules.$$"
+    if ! cmp -s "${TMPDIR:-/tmp}/99-infynitae-battery.rules.$$" /etc/udev/rules.d/99-infynitae-battery.rules; then
+        sudo install -D -m 644 "${TMPDIR:-/tmp}/99-infynitae-battery.rules.$$" /etc/udev/rules.d/99-infynitae-battery.rules \
+            && sudo udevadm trigger --subsystem-match=power_supply
+    fi
+    rm -f "${TMPDIR:-/tmp}/99-infynitae-battery.rules.$$"
+fi
+if pacman -Qi thermald >/dev/null 2>&1 && ! systemctl is-enabled --quiet thermald.service 2>/dev/null; then
+    sudo systemctl enable --now thermald.service || echo "==> Could not enable thermald.service"
 fi
 # apps out of sight run at a lower priority (BACKGROUND_PRIORITY): a limit that lets them come
 # back to normal (nice 0) and never above it, from the next login

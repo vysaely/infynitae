@@ -82,6 +82,9 @@ OVERLAY_PLANES="false"            # [save] also windows' buffers on overlay plan
 OSK="auto"                        # [restart] on-screen keyboard (squeekboard) for text fields —
                                   # auto: runs in tablet mode only | always | off. The lock screen
                                   # has its own
+BATTERY_LIMIT="off"               # the battery stops charging at this % (e.g. "80": it wears
+                                  # more slowly) | off: to full. Laptops that support it; also
+                                  # in the control menu (Super+A)
 AUTO_ROTATE="auto"                # [restart] turn the laptop's own screen with the device
                                   # (convertibles; needs iio-sensor-proxy) | false
 OUTPUT_ORDER=""                   # left to right, e.g. "DP-1,HDMI-A-1" (the names

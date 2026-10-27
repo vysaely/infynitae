@@ -129,6 +129,19 @@ fi
 if ! cmp -s live/lock/infynitae.pam /etc/pam.d/infynitae; then
     sudo install -m 644 live/lock/infynitae.pam /etc/pam.d/infynitae || true
 fi
+# the battery's charge limit (BATTERY_LIMIT): settable by this user, on laptops whose battery
+# supports one; thermald on Intel laptops (the thermal optional part), running
+if ls /sys/class/power_supply/BAT*/charge_control_end_threshold >/dev/null 2>&1; then
+    sed "s/@GROUP@/$(id -gn)/" live/99-infynitae-battery.rules > "${TMPDIR:-/tmp}/99-infynitae-battery.rules.$$"
+    if ! cmp -s "${TMPDIR:-/tmp}/99-infynitae-battery.rules.$$" /etc/udev/rules.d/99-infynitae-battery.rules; then
+        sudo install -D -m 644 "${TMPDIR:-/tmp}/99-infynitae-battery.rules.$$" /etc/udev/rules.d/99-infynitae-battery.rules \
+            && sudo udevadm trigger --subsystem-match=power_supply || true
+    fi
+    rm -f "${TMPDIR:-/tmp}/99-infynitae-battery.rules.$$"
+fi
+if pacman -Qi thermald >/dev/null 2>&1 && ! systemctl is-enabled --quiet thermald.service 2>/dev/null; then
+    sudo systemctl enable --now thermald.service || true
+fi
 # apps out of sight run at a lower priority (BACKGROUND_PRIORITY): a limit that lets them come
 # back to normal (nice 0) and never above it, from the next login
 if ! cmp -s live/90-infynitae-nice.conf /etc/security/limits.d/90-infynitae-nice.conf; then

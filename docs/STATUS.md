@@ -94,6 +94,10 @@ These pass the test suite but have not run on a real screen or device yet:
   once when one is seen. A shared window, the game and X11 apps are never lowered. It needs the
   installer's limit (`/etc/security/limits.d/90-infynitae-nice.conf`) and a new login; before
   that nothing is lowered.
+- **Battery limit** (`BATTERY_LIMIT`, control menu): the battery stops charging at a level
+  (80%) on laptops whose firmware supports it (ThinkPads and many others); a udev rule lets the
+  user set it. Tested against a stand-in battery; read on a ThinkPad S1 Yoga 12.
+- **thermald** on Intel laptops (`--no-thermal`): Intel's thermal manager, running.
 - **Laptop lid:** closing it with another screen connected moves everything to that screen
   until the lid opens. With no other screen, logind suspends as usual.
 - **Night light, screen power,** the capture dot, single-window sharing.

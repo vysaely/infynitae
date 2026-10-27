@@ -1,0 +1,48 @@
+#!/bin/sh
+# The battery stops charging at a level (BATTERY_LIMIT): kept below full, a battery that is
+# mostly plugged in wears much more slowly. For batteries whose firmware supports it (ThinkPads
+# and many others: charge_control_end_threshold), writable by the user once the installer's
+# udev rule (99-infynitae-battery.rules) is in place.
+#   battery-limit 80     stop charging at 80% (start again below 75%)
+#   battery-limit off    charge to full
+#   battery-limit        print the limit now ("off" at 100%); exit 1 without support
+set -u
+
+threshold_files() {
+    for b in "${INFYNITAE_POWER_SUPPLY:-/sys/class/power_supply}"/BAT*; do
+        [ -e "$b/charge_control_end_threshold" ] && printf '%s\n' "$b"
+    done
+}
+
+batteries=$(threshold_files)
+[ -n "$batteries" ] || exit 1
+
+if [ $# -eq 0 ]; then
+    end=$(cat "$(printf '%s\n' "$batteries" | head -1)/charge_control_end_threshold" 2>/dev/null)
+    if [ "${end:-100}" -ge 100 ]; then echo off; else echo "$end"; fi
+    exit 0
+fi
+
+case "$1" in
+    off | false | no | full | 100) end=100 ;;
+    *[!0-9]* | "") echo "battery-limit: a percentage from 50 to 100, or off" >&2; exit 2 ;;
+    *) end=$1 ;;
+esac
+# never so low that a laptop is left without a charge by a typo
+if [ "$end" -lt 50 ] || [ "$end" -gt 100 ]; then
+    echo "battery-limit: a percentage from 50 to 100, or off" >&2
+    exit 2
+fi
+
+status=1
+for b in $batteries; do
+    start="$b/charge_control_start_threshold"
+    # the start threshold must stay below the end one: lowest first, then both
+    [ -w "$start" ] && { echo 0 > "$start"; } 2>/dev/null
+    { echo "$end" > "$b/charge_control_end_threshold"; } 2>/dev/null && status=0
+    if [ -w "$start" ] && [ "$end" -lt 100 ]; then
+        { echo $((end - 5)) > "$start"; } 2>/dev/null
+    fi
+done
+[ $status -eq 0 ] || echo "battery-limit: not allowed (the udev rule is installed by infynitae-update)" >&2
+exit $status

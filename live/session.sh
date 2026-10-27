@@ -184,6 +184,12 @@ case "${OSK:-auto}" in
         ;;
 esac
 
+# 6e3. The battery's charge limit (BATTERY_LIMIT: a percentage, or off), where it is supported
+case "${BATTERY_LIMIT:-off}" in
+    off|false|no|"") ;;
+    *) sh "$HOME/infynitae/live/battery-limit" "$BATTERY_LIMIT" >/dev/null 2>&1 || true ;;
+esac
+
 # 6f. Screen auto-rotation on convertible laptops (AUTO_ROTATE; needs iio-sensor-proxy)
 case "${AUTO_ROTATE:-auto}" in
     false|0|off|no|FALSE|False|OFF|Off|NO|No) ;;

@@ -177,6 +177,24 @@ replay_toggle() {
     if [ "$to" = true ]; then note "Replay buffer on" "Super+Alt+C saves a clip"; else note "Replay buffer off"; fi
 }
 
+# ── Battery limit ──────────────────────────────────────────────────────────────────────────────
+# BATTERY_LIMIT in the config (80 or off), applied at once and at every login
+BATTERY_LIMIT_SCRIPT="$HOME/infynitae/live/battery-limit"
+battery_limit_now() { sh "$BATTERY_LIMIT_SCRIPT" 2>/dev/null; }
+battery_limit_toggle() {
+    if [ "$(battery_limit_now)" = off ]; then to=80; else to=off; fi
+    if ! sh "$BATTERY_LIMIT_SCRIPT" "$to" 2>/dev/null; then
+        note "Battery limit" "Not allowed yet: run infynitae-update once"
+        return
+    fi
+    if grep -q '^BATTERY_LIMIT=' "$CONFIG"; then
+        sed -i "s/^BATTERY_LIMIT=\"[^\"]*\"/BATTERY_LIMIT=\"$to\"/; s/^BATTERY_LIMIT=[^\" ]*\$/BATTERY_LIMIT=\"$to\"/" "$CONFIG"
+    else
+        echo "BATTERY_LIMIT=\"$to\"" >> "$CONFIG"
+    fi
+    if [ "$to" = off ]; then note "Battery charges to full"; else note "Battery stops at $to%" "It wears more slowly"; fi
+}
+
 # ── The menu ───────────────────────────────────────────────────────────────────────────────────
 battery=""
 for b in /sys/class/power_supply/BAT*; do
@@ -199,6 +217,11 @@ fi
 if have ffmpeg && { have infynitae-recorder || [ -x "$HOME/.local/bin/infynitae-recorder" ]; }; then
     if replay_on; then add "Replay buffer: on (turn off)"; else add "Replay buffer: off (turn on)"; fi
 fi
+case "$(battery_limit_now)" in
+    "") ;;
+    off) add "Battery limit: off (stop at 80%)" ;;
+    *) add "Battery limit: $(battery_limit_now)% (charge to full)" ;;
+esac
 [ -n "$battery" ] && add "$battery"
 
 if [ -z "$entries" ]; then
@@ -214,4 +237,5 @@ case "$(printf '%s' "$entries" | $PICKER)" in
     "Power mode") power_menu ;;
     "Do not disturb"|"Notifications: off (turn on)"|"Do not disturb (toggle)") dnd_toggle ;;
     "Replay buffer: on (turn off)"|"Replay buffer: off (turn on)") replay_toggle ;;
+    "Battery limit: "*) battery_limit_toggle ;;
 esac

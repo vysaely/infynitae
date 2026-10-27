@@ -30,7 +30,7 @@ and stops before changing anything if there is no internet, disk space or sudo. 
 
 | Flag | Effect |
 | :--- | :--- |
-| `--no-notifications` `--no-keyring` `--no-automount` `--no-clipboard` `--no-fonts` `--no-recorder` `--no-files` `--no-terminal` `--no-bluetooth` `--no-power-profiles` `--no-autorotate` `--no-osk` `--no-gamemode` | Leave out that part |
+| `--no-notifications` `--no-keyring` `--no-automount` `--no-clipboard` `--no-fonts` `--no-recorder` `--no-files` `--no-terminal` `--no-bluetooth` `--no-power-profiles` `--no-autorotate` `--no-osk` `--no-gamemode` `--no-thermal` | Leave out that part |
 | `--minimal` | Leave out all of them |
 | `--replay-buffer` | Keep the last minutes of the screen, saved with `Super + Alt + C` |
 | `--no-autologin` | Log in on tty1 instead of booting to the lock screen |
@@ -67,7 +67,7 @@ Your config is never overwritten, and parts left out at install stay out.
 | `Super + Shift + S` or `Print` | Screenshot |
 | `Super + Shift + R` | Region screenshot |
 | `Super + V` | Clipboard history |
-| `Super + A` | Control menu: Wi-Fi, Bluetooth, volume (all sound or one app), sound output, power, do not disturb |
+| `Super + A` | Control menu: Wi-Fi, Bluetooth, volume (all sound or one app), sound output, power, battery limit, do not disturb |
 | `Super + L` | Lock |
 | `Super + C` | Close the window (`Shift`: force) |
 | `Super + Shift + P` | Hide the window from screenshots and sharing |

@@ -1,0 +1,3 @@
+# Infynitae: the battery's charge limit (BATTERY_LIMIT, live/battery-limit) may be set by the
+# group below (the installing user's), not only by root
+SUBSYSTEM=="power_supply", KERNEL=="BAT*", RUN+="/bin/sh -c 'for f in /sys%p/charge_control_start_threshold /sys%p/charge_control_end_threshold; do [ -e $$f ] && chgrp @GROUP@ $$f && chmod g+w $$f; done'"

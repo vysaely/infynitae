@@ -71,6 +71,10 @@ has_tablet_mode_switch() {
     awk '/^B: SW=/ { split($2, a, "="); n = split(a[2], w, " ");
         if (and(strtonum("0x" w[n]), 2)) found = 1 } END { exit !found }' /proc/bus/input/devices 2>/dev/null
 }
+# an Intel CPU in a laptop (a battery): thermald manages its heat
+intel_laptop() {
+    grep -q GenuineIntel /proc/cpuinfo 2>/dev/null && ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1
+}
 # a file manager other than Thunar is in use: Thunar is not added beside it
 other_file_manager() {
     local fm
@@ -84,6 +88,8 @@ group_applies() {
         autorotate) has_accelerometer ;;
         # an on-screen keyboard for tablet mode, on convertibles only
         osk) has_tablet_mode_switch || has_accelerometer ;;
+        # Intel's thermal manager, on Intel laptops only
+        thermal) intel_laptop ;;
         # Thunar with its previews (tumbler) when it is there or nothing else is
         files) command -v thunar >/dev/null 2>&1 || ! other_file_manager ;;
         *) return 0 ;;
