@@ -453,6 +453,22 @@ pub fn restore(
         return;
     }
 
+    // the windows open before anything launches: never moved, and a saved place one of them
+    // covers now is not taken back (the window stays where the cluster placement put it)
+    let mut placed: HashSet<(u64, u64)> = HashSet::new();
+    let mut open: Vec<[f64; 4]> = Vec::new();
+    let before = ipc.request(req(next(), "snapshot", []));
+    if ok(&before) {
+        for e in snapshot_elements(&before) {
+            if let Some(key) = element_key(e) {
+                placed.insert(key);
+            }
+            if let Some(r) = rect_of(e) {
+                open.push(r);
+            }
+        }
+    }
+
     struct App {
         cmd: Vec<String>,
         saved: usize,
@@ -496,24 +512,12 @@ pub fn restore(
                 && app_of(w).is_some_and(|a| apps.contains_key(&a.to_lowercase()))
         })
         .collect();
-    let mut placed: HashSet<(u64, u64)> = HashSet::new();
     let start = Instant::now();
     while !pending.is_empty() && start.elapsed() < timing.poll_timeout {
         let reply = ipc.request(req(next(), "snapshot", []));
         if ok(&reply) {
-            let elements = reply
-                .get("snapshot")
-                .and_then(|s| s.get("elements"))
-                .and_then(Value::as_array)
-                .unwrap_or(&[]);
-            for e in elements {
-                let Some(raw) = e.get("id").and_then(Value::as_array) else {
-                    continue;
-                };
-                let (Some(inst), Some(elem)) = (
-                    raw.first().and_then(Value::as_u64),
-                    raw.get(1).and_then(Value::as_u64),
-                ) else {
+            for e in snapshot_elements(&reply) {
+                let Some((inst, elem)) = element_key(e) else {
                     continue;
                 };
                 if placed.contains(&(inst, elem))
@@ -537,7 +541,15 @@ pub fn restore(
                 if let Some(app) = apps.get_mut(&key) {
                     app.last = Instant::now();
                 }
-                if let Some(anchor) = target.get("anchor") {
+                let covered = rect_of(target).is_some_and(|t| open.iter().any(|o| overlap(&t, o)));
+                if covered {
+                    log(
+                        log_file,
+                        &format!(
+                            "Keeping {app_id} (element [{inst}, {elem}]) where it opened: a window open before covers its saved place"
+                        ),
+                    );
+                } else if let Some(anchor) = target.get("anchor") {
                     log(
                         log_file,
                         &format!(
@@ -584,6 +596,36 @@ pub fn restore(
 
     // 3. the cameras back where they were
     navigate_back(&mut |r| drop(ipc.request(r)), &mut next);
+}
+
+fn snapshot_elements(reply: &Value) -> &[Value] {
+    reply
+        .get("snapshot")
+        .and_then(|s| s.get("elements"))
+        .and_then(Value::as_array)
+        .unwrap_or(&[])
+}
+
+/// An element's `[instance, element]` id.
+fn element_key(e: &Value) -> Option<(u64, u64)> {
+    let raw = e.get("id").and_then(Value::as_array)?;
+    Some((raw.first()?.as_u64()?, raw.get(1)?.as_u64()?))
+}
+
+/// A window's `[x, y, w, h]` from its anchor and size, saved or in a snapshot.
+fn rect_of(w: &Value) -> Option<[f64; 4]> {
+    let a = w.get("anchor")?.as_array()?;
+    let s = w.get("size")?.as_array()?;
+    Some([
+        a.first()?.as_f64()?,
+        a.get(1)?.as_f64()?,
+        s.first()?.as_f64()?,
+        s.get(1)?.as_f64()?,
+    ])
+}
+
+fn overlap(a: &[f64; 4], b: &[f64; 4]) -> bool {
+    a[0] < b[0] + b[2] && b[0] < a[0] + a[2] && a[1] < b[1] + b[3] && b[1] < a[1] + a[3]
 }
 
 /// The saved session has a window whose app can be launched: a desktop file whose command is
@@ -804,11 +846,19 @@ mod tests {
               {"id":[1,103],"state":"mapped","app_id":"demo-app"}],"outputs":[]}}"#,
         )
         .unwrap();
+        // nothing is open before the launch; then the app's windows are
+        let snapshots = std::cell::Cell::new(0);
         let mut ipc = Fake {
             calls: vec![],
             reply: |r: &Value| {
                 if r.get("cmd").and_then(Value::as_str) == Some("snapshot") {
-                    snapshot.clone()
+                    snapshots.set(snapshots.get() + 1);
+                    if snapshots.get() == 1 {
+                        json::parse(r#"{"ok":true,"snapshot":{"elements":[],"outputs":[]}}"#)
+                            .unwrap()
+                    } else {
+                        snapshot.clone()
+                    }
                 } else {
                     json::parse(r#"{"ok":true}"#).unwrap()
                 }
@@ -853,6 +903,84 @@ mod tests {
         assert_eq!(
             navs[0].get("to").unwrap().to_json(),
             r#"{"canvas":[1200,800]}"#
+        );
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A window open before the restore (a browser a login opened) is never moved, and a saved
+    /// place it covers now is not taken back: the restored window stays where it was placed.
+    #[test]
+    fn windows_open_before_the_restore_are_left_alone_and_not_covered() {
+        let d = tmp("open-before");
+        let apps = d.join("apps");
+        std::fs::create_dir_all(&apps).unwrap();
+        desktop(&apps, "term", "Name=Term\nExec=term-bin\n");
+        desktop(&apps, "browser", "Name=Browser\nExec=browser-bin\n");
+        let file = d.join("session.json");
+        std::fs::write(
+            &file,
+            r#"{"windows":[
+              {"app_id":"term","anchor":[-600,-1094],"size":[1237,721]},
+              {"app_id":"term","anchor":[2000,0],"size":[800,600]}],"outputs":[]}"#,
+        )
+        .unwrap();
+        let browser = r#"{"id":[1,7],"state":"mapped","app_id":"browser","anchor":[-622,-1105],"size":[1281,743]}"#;
+        let old_term = r#"{"id":[1,8],"state":"mapped","app_id":"term","anchor":[5000,5000],"size":[800,600]}"#;
+        let windows = std::cell::RefCell::new(vec![
+            json::parse(browser).unwrap(),
+            json::parse(old_term).unwrap(),
+        ]);
+        let next = std::cell::Cell::new(100u64);
+        let mut ipc = Fake {
+            calls: vec![],
+            reply: |r: &Value| {
+                if r.get("cmd").and_then(Value::as_str) == Some("snapshot") {
+                    Value::obj([
+                        ("ok", true.into()),
+                        (
+                            "snapshot",
+                            Value::obj([("elements", Value::Arr(windows.borrow().clone()))]),
+                        ),
+                    ])
+                } else {
+                    Value::obj([("ok", true.into())])
+                }
+            },
+        };
+        restore(
+            &file,
+            std::slice::from_ref(&apps),
+            &mut ipc,
+            &mut |app, _| {
+                next.set(next.get() + 1);
+                windows.borrow_mut().push(Value::obj([
+                    ("id", Value::Arr(vec![1u64.into(), next.get().into()])),
+                    ("state", "mapped".into()),
+                    ("app_id", app.into()),
+                ]));
+            },
+            &d.join("log"),
+            quick(),
+        );
+        let moves: Vec<String> = ipc
+            .calls
+            .iter()
+            .filter(|c| c.get("cmd").and_then(Value::as_str) == Some("move_element"))
+            .map(|c| {
+                format!(
+                    "{} {}",
+                    c.get("element").unwrap().to_json(),
+                    c.get("to").unwrap().to_json()
+                )
+            })
+            .collect();
+        // the first terminal's saved place is under the browser: kept where it opened; the
+        // second goes back; neither the browser nor the terminal open before moves
+        assert_eq!(moves, vec!["[1,102] [2000,0]".to_string()]);
+        assert!(
+            std::fs::read_to_string(d.join("log"))
+                .unwrap()
+                .contains("Keeping term (element [1, 101]) where it opened")
         );
         let _ = std::fs::remove_dir_all(&d);
     }
