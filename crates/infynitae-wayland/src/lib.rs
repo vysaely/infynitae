@@ -304,6 +304,9 @@ pub struct WaylandState {
     xdg_decoration: smithay::wayland::shell::xdg::decoration::XdgDecorationState,
     pub border_width: i32,
     pub border_ignore_csd: bool,
+    /// CLIP_TO_GEOMETRY: a window's surfaces are drawn only inside its window geometry, not in the
+    /// margins apps keep around it (stale pixels there showed as black blocks beside Discord).
+    pub clip_to_geometry: bool,
     pub border_active: smithay::backend::renderer::Color32F,
     pub border_inactive: smithay::backend::renderer::Color32F,
     pub border_ids: std::collections::HashMap<
@@ -595,8 +598,10 @@ impl WaylandState {
             xdg_decoration: smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(
                 display,
             ),
-            border_width: 1,
+            // none until the config asks for one (config/config: BORDER_WIDTH="1")
+            border_width: 0,
             border_ignore_csd: true,
+            clip_to_geometry: true,
             border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
             border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 0.8),
             border_ids: std::collections::HashMap::new(),
@@ -945,6 +950,12 @@ impl WaylandState {
                                 if let Ok(w) = val.parse::<i32>() {
                                     self.border_width = w.max(0);
                                 }
+                            }
+                            "CLIP_TO_GEOMETRY" => {
+                                self.clip_to_geometry = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                             }
                             "BORDER_IGNORE_CSD" => {
                                 self.border_ignore_csd = !matches!(

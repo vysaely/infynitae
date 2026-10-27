@@ -212,7 +212,8 @@ fn render(r: &mut Rig) -> Vec<u32> {
 /// The opaque colour of the test square, as rendered ARGB; no other surface here uses it.
 const SQUARE: u32 = 0xFF12_AB34;
 
-/// A 50 x 50 subsurface of W at (10, 10): one pixel of [`SQUARE`] stretched by a viewport. Its
+/// A 50 x 50 subsurface of W at (30, 30), inside its window geometry (W's surface has a 20 px
+/// shadow margin, which is not drawn): one pixel of [`SQUARE`] stretched by a viewport. Its
 /// surface is returned uncommitted with the buffer attached, so a test can add state first.
 fn square(r: &mut Rig) -> (usize, wayland_client::protocol::wl_surface::WlSurface) {
     let w_idx =
@@ -225,7 +226,7 @@ fn square(r: &mut Rig) -> (usize, wayland_client::protocol::wl_surface::WlSurfac
     let manager: WpSinglePixelBufferManagerV1 = bind(r, "wp_single_pixel_buffer_manager_v1", 1);
     let s_idx =
         r.ls.probe
-            .subsurface_uncommitted(&qh, "S", w_idx, (10, 10), (50, 50), false);
+            .subsurface_uncommitted(&qh, "S", w_idx, (30, 30), (50, 50), false);
     // each channel scaled to the full u32 range
     let ch = |v: u32| v * 0x0101_0101;
     let buffer = manager.create_u32_rgba_buffer(ch(0x12), ch(0xAB), ch(0x34), u32::MAX, &qh, ());

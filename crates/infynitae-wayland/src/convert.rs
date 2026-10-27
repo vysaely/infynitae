@@ -126,6 +126,10 @@ pub struct CanonicalRect<E> {
     rect: Rectangle<i32, Physical>,
     src: Rectangle<f64, Buffer>,
     remapped: bool,
+    /// A cut alone (the canonical rect is the element's own geometry, cropped): where the element's
+    /// origin lies from the cut rect's, so its damage and opaque regions map exactly instead of
+    /// conservatively.
+    cut: Option<Point<i32, Physical>>,
     force_transparent: bool,
 }
 
@@ -157,12 +161,48 @@ impl<E: Element> CanonicalRect<E> {
         limit: i64,
         force_transparent: bool,
     ) -> Self {
+        Self::clipped(inner, rect, k, None, limit, force_transparent)
+    }
+
+    /// [`CanonicalRect::new_opt`] cut to `clip` (view-space physical px): the part of the surface
+    /// outside it is not drawn (a window's surfaces cut to its window geometry, CLIP_TO_GEOMETRY).
+    pub fn new_clipped(
+        inner: E,
+        rect: PhysicalRect,
+        k: f64,
+        clip: Option<PhysicalRect>,
+        force_transparent: bool,
+    ) -> Self {
+        Self::clipped(inner, rect, k, clip, RENDER_LIMIT, force_transparent)
+    }
+
+    fn clipped(
+        inner: E,
+        rect: PhysicalRect,
+        k: f64,
+        clip: Option<PhysicalRect>,
+        limit: i64,
+        force_transparent: bool,
+    ) -> Self {
         let r = rect;
+        let b = clip.unwrap_or(PhysicalRect {
+            x0: -limit,
+            y0: -limit,
+            x1: limit,
+            y1: limit,
+        });
+        let (bx0, by0, bx1, by1) = (
+            b.x0.clamp(-limit, limit),
+            b.y0.clamp(-limit, limit),
+            b.x1.clamp(-limit, limit),
+            b.y1.clamp(-limit, limit),
+        );
+        // a surface wholly outside the clip keeps a 0-sized rect at its clamped corner
         let c = (
-            r.x0.clamp(-limit, limit),
-            r.y0.clamp(-limit, limit),
-            r.x1.clamp(-limit, limit),
-            r.y1.clamp(-limit, limit),
+            r.x0.clamp(bx0, bx1),
+            r.y0.clamp(by0, by1),
+            r.x1.clamp(bx0, bx1).max(r.x0.clamp(bx0, bx1)),
+            r.y1.clamp(by0, by1).max(r.y0.clamp(by0, by1)),
         );
         // a rect over the whole box is 2·limit wide; Smithay's i32 size holds at most 2³¹ − 1, so
         // its far edge stays one pixel inside the box (at ±2³⁰, outside every view)
@@ -186,18 +226,41 @@ impl<E: Element> CanonicalRect<E> {
         };
         // every coordinate is within ±limit ≤ 2³⁰ here: the conversions are exact
         let rect = Rectangle::new((c.0 as i32, c.1 as i32).into(), (w as i32, h as i32).into());
-        let remapped = cropped || inner.geometry(Scale::from(k)) != rect;
+        let own = inner.geometry(Scale::from(k));
+        let remapped = cropped || own != rect;
+        let whole = (r.x1 - r.x0, r.y1 - r.y0);
+        let exact = i64::from(own.loc.x) == r.x0
+            && i64::from(own.loc.y) == r.y0
+            && i64::from(own.size.w) == whole.0
+            && i64::from(own.size.h) == whole.1;
+        let cut = (cropped && exact).then(|| own.loc - rect.loc);
         CanonicalRect {
             inner,
             rect,
             src,
             remapped,
+            cut,
             force_transparent,
         }
     }
 
     pub fn inner(&self) -> &E {
         &self.inner
+    }
+
+    /// Rects relative to the element's origin, moved to the cut rect's origin and trimmed to it;
+    /// empty ones left out (`drop_empty`).
+    fn cut_rects(
+        &self,
+        rects: impl Iterator<Item = Rectangle<i32, Physical>>,
+        shift: Point<i32, Physical>,
+    ) -> impl Iterator<Item = Rectangle<i32, Physical>> {
+        let bounds = Rectangle::from_size(self.rect.size);
+        rects.filter_map(move |r| {
+            Rectangle::new(r.loc + shift, r.size)
+                .intersection(bounds)
+                .filter(|r| !r.is_empty())
+        })
     }
 
     /// Whether the canonical rect differs from the wrapped element's own geometry (or was cropped):
@@ -291,13 +354,20 @@ impl<E: Element> Element for CanonicalRect<E> {
         }
         if !self.remapped || damage.is_empty() {
             damage
+        } else if let Some(shift) = self.cut {
+            self.cut_rects(damage.into_iter(), shift).collect()
         } else {
             DamageSet::from_slice(&[Rectangle::from_size(self.rect.size)])
         }
     }
 
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
-        if self.remapped || self.force_transparent {
+        if self.force_transparent {
+            OpaqueRegions::default()
+        } else if let Some(shift) = self.cut {
+            self.cut_rects(self.inner.opaque_regions(scale).into_iter(), shift)
+                .collect()
+        } else if self.remapped {
             OpaqueRegions::default()
         } else {
             // a client's opaque region reaching past the surface is clipped to a 0-wide or
@@ -362,30 +432,104 @@ where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
 {
-    render_elements_opt(renderer, registry, entries, k, |_| false)
+    render_elements_opt(renderer, registry, entries, k, |_| false, |_| None)
 }
 
 /// Render elements with optional forced transparency predicate per element.
-pub fn render_elements_opt<R, F>(
+pub fn render_elements_opt<R, F, C>(
     renderer: &mut R,
     registry: &SurfaceRegistry,
     entries: &[FrameEntry],
     k: f64,
     force_transparent: F,
+    clip: C,
 ) -> Result<Vec<(FrameEntry, SurfaceElement<R>)>, R::Error>
 where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
     F: Fn(infynitae_core::stage::ElementId) -> bool,
+    C: Fn(&FrameEntry) -> Option<PhysicalRect>,
 {
     let mut out = Vec::with_capacity(entries.len());
     for e in entries {
         if let Some(el) = surface_element(renderer, registry, e)? {
             let ft = force_transparent(e.element);
-            out.push((e.clone(), CanonicalRect::new_opt(el, e.rect, k, ft)));
+            out.push((
+                e.clone(),
+                CanonicalRect::new_clipped(el, e.rect, k, clip(e), ft),
+            ));
         }
     }
     Ok(out)
+}
+
+/// Each window's geometry in view-space physical px, from its root surface's rect in the frame:
+/// the window's own edges, inside the margins apps leave around them for shadows and resize
+/// handles (Chromium: 16 px left and right, 10 above, 32 below). `None` for a window whose root
+/// is not in the frame.
+pub fn window_geometry_rects(
+    stage: &infynitae_core::stage::Stage,
+    entries: &[FrameEntry],
+) -> std::collections::HashMap<infynitae_core::stage::ElementId, PhysicalRect> {
+    use infynitae_core::snapshot::SurfaceRole;
+    let mut out = std::collections::HashMap::new();
+    for e in entries {
+        if out.contains_key(&e.element) {
+            continue;
+        }
+        let Some(tree) = stage.tree(e.element) else {
+            continue;
+        };
+        let is_root = tree
+            .surfaces
+            .iter()
+            .any(|s| s.key == e.surface && matches!(s.role, SurfaceRole::Root));
+        if !is_root || e.size.w <= 0 || e.size.h <= 0 {
+            continue;
+        }
+        let g = tree.geometry;
+        if g.size.w <= 0 || g.size.h <= 0 {
+            continue;
+        }
+        // physical px per surface px on each axis, as the rect draws it
+        let kx = (e.rect.x1 - e.rect.x0) as f64 / f64::from(e.size.w);
+        let ky = (e.rect.y1 - e.rect.y0) as f64 / f64::from(e.size.h);
+        let x = |v: i32| e.rect.x0 + (f64::from(v) * kx).round() as i64;
+        let y = |v: i32| e.rect.y0 + (f64::from(v) * ky).round() as i64;
+        out.insert(
+            e.element,
+            PhysicalRect {
+                x0: x(g.loc.x),
+                y0: y(g.loc.y),
+                x1: x(g.loc.x + g.size.w),
+                y1: y(g.loc.y + g.size.h),
+            },
+        );
+    }
+    out
+}
+
+/// Whether `surface` of `element` is cut to the window's geometry: its root and subsurfaces, not
+/// its popups (menus open past the window's edges).
+fn clipped_surface(
+    stage: &infynitae_core::stage::Stage,
+    element: infynitae_core::stage::ElementId,
+    surface: infynitae_core::snapshot::SurfaceKey,
+) -> bool {
+    use infynitae_core::snapshot::SurfaceRole;
+    let Some(tree) = stage.tree(element) else {
+        return false;
+    };
+    // a subsurface of a popup belongs to the popup
+    let mut i = tree.surfaces.iter().position(|s| s.key == surface);
+    while let Some(idx) = i {
+        match tree.surfaces[idx].role {
+            SurfaceRole::Root => return true,
+            SurfaceRole::Popup { .. } => return false,
+            SurfaceRole::Subsurface { parent, .. } => i = Some(parent),
+        }
+    }
+    false
 }
 
 /// Render elements for layer-surface entries (L2), front to back, each at its physical rect in the
@@ -650,19 +794,8 @@ where
             .into_iter()
             .map(OutputElement::Surface),
     );
-    let force_transparent = |elem| state.is_element_transparent(elem);
-    elements.extend(
-        render_elements_opt(
-            renderer,
-            &state.registry,
-            &entries,
-            view.k,
-            force_transparent,
-        )
-        .map_err(RenderOutputError::Renderer)?
-        .into_iter()
-        .map(|(_, e)| OutputElement::Surface(e)),
-    );
+    window_elements(state, renderer, &entries, view.k, view.scale, &mut elements)
+        .map_err(RenderOutputError::Renderer)?;
     elements.extend(
         layer_render_elements(renderer, &state.registry, &layers.below, view.k)
             .map_err(RenderOutputError::Renderer)?
@@ -671,6 +804,116 @@ where
     );
     drop_empty(&mut elements, view.k);
     Ok((elements, view.k))
+}
+
+/// The windows' elements, front to back: each window's surfaces, cut to its geometry
+/// (CLIP_TO_GEOMETRY), with its border just in front of them and behind the windows before it.
+fn window_elements<R>(
+    state: &mut WaylandState,
+    renderer: &mut R,
+    entries: &[FrameEntry],
+    k: f64,
+    scale: f64,
+    elements: &mut Vec<OutputElement<R>>,
+) -> Result<(), R::Error>
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+{
+    let geometry = window_geometry_rects(state.core.stage(), entries);
+    let windows = {
+        let stage = state.core.stage();
+        let clip_on = state.clip_to_geometry;
+        let force_transparent = |elem| state.is_element_transparent(elem);
+        let core = &state.core;
+        // a fullscreen window is shown whole: its surface is the screen, and a cut one could not
+        // be scanned out
+        let clip = |e: &FrameEntry| {
+            if !clip_on
+                || core.fullscreen_of(e.element).is_some()
+                || !clipped_surface(stage, e.element, e.surface)
+            {
+                return None;
+            }
+            geometry.get(&e.element).copied()
+        };
+        render_elements_opt(
+            renderer,
+            &state.registry,
+            entries,
+            k,
+            force_transparent,
+            clip,
+        )?
+    };
+    let mut bordered = std::collections::HashSet::new();
+    for (entry, e) in windows {
+        if bordered.insert(entry.element) {
+            border_elements(state, &geometry, entry.element, scale, elements);
+        }
+        elements.push(OutputElement::Surface(e));
+    }
+    Ok(())
+}
+
+/// A window's border (BORDER_WIDTH, logical px): four rects just outside its geometry, in the
+/// active colour on the focused window. None for a window that draws its own decorations while
+/// BORDER_IGNORE_CSD is on, or a fullscreen one.
+fn border_elements<R>(
+    state: &mut WaylandState,
+    geometry: &std::collections::HashMap<infynitae_core::stage::ElementId, PhysicalRect>,
+    element: infynitae_core::stage::ElementId,
+    scale: f64,
+    out: &mut Vec<OutputElement<R>>,
+) where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+{
+    if state.border_width <= 0
+        || state.core.fullscreen_of(element).is_some()
+        || (state.border_ignore_csd && state.is_csd_element(element))
+    {
+        return;
+    }
+    let Some(g) = geometry.get(&element).copied() else {
+        return;
+    };
+    let w = (f64::from(state.border_width) * scale).round().max(1.0) as i64;
+    let color = if state.core.focus().target() == Some(element) {
+        state.border_active
+    } else {
+        state.border_inactive
+    };
+    let ids = state
+        .border_ids
+        .entry(element)
+        .or_insert_with(|| std::array::from_fn(|_| Id::new()))
+        .clone();
+    // top and bottom span the corners; left and right fit between them
+    let sides = [
+        (g.x0 - w, g.y0 - w, g.x1 + w, g.y0),
+        (g.x0 - w, g.y1, g.x1 + w, g.y1 + w),
+        (g.x0 - w, g.y0, g.x0, g.y1),
+        (g.x1, g.y0, g.x1 + w, g.y1),
+    ];
+    let limit = i64::from(i32::MAX / 2);
+    for ((x0, y0, x1, y1), id) in sides.into_iter().zip(ids) {
+        let (x0, y0) = (x0.clamp(-limit, limit), y0.clamp(-limit, limit));
+        let (x1, y1) = (x1.clamp(-limit, limit), y1.clamp(-limit, limit));
+        if x1 <= x0 || y1 <= y0 {
+            continue;
+        }
+        out.push(OutputElement::Solid(SolidColorRenderElement::new(
+            id,
+            Rectangle::new(
+                (x0 as i32, y0 as i32).into(),
+                ((x1 - x0) as i32, (y1 - y0) as i32).into(),
+            ),
+            CommitCounter::default(),
+            color,
+            Kind::Unspecified,
+        )));
+    }
 }
 
 /// The capture indicator (`capture_indicator`) on a view of `size` physical px at `scale`: a
@@ -766,19 +1009,8 @@ where
             .into_iter()
             .map(OutputElement::Surface),
     );
-    let force_transparent = |elem| state.is_element_transparent(elem);
-    elements.extend(
-        render_elements_opt(
-            renderer,
-            &state.registry,
-            &entries,
-            view.k,
-            force_transparent,
-        )
-        .map_err(RenderOutputError::Renderer)?
-        .into_iter()
-        .map(|(_, e)| OutputElement::Surface(e)),
-    );
+    window_elements(state, renderer, &entries, view.k, view.scale, &mut elements)
+        .map_err(RenderOutputError::Renderer)?;
     elements.extend(
         layer_render_elements(renderer, &state.registry, &layers.below, view.k)
             .map_err(RenderOutputError::Renderer)?
