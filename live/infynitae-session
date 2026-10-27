@@ -21,7 +21,17 @@ cleanup() {
     stty sane 2>/dev/null || true
     tput cnorm 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM HUP
+# told to end (logout, shutdown: systemd sends TERM, the console HUP): the compositor running now
+# is let finish, and no new one starts. Before this, the trap only tidied the terminal and the loop
+# started a fresh session at the lock screen while the system went down, which systemd then waited
+# 90 s for before killing it.
+ENDING=""
+end_session() {
+    ENDING=1
+    cleanup
+}
+trap cleanup EXIT
+trap end_session INT TERM HUP
 umask 077
 
 # Decide console vs nested from environment before sourcing env.sh
@@ -130,6 +140,18 @@ while true; do
         echo "[infynitae-session] Stop requested; ending session." >> "$SESSION_LOG"
         exit 0
     fi
+
+    # the session or the system is ending: no restart
+    if [ -n "$ENDING" ]; then
+        echo "[infynitae-session] Told to end (logout or shutdown); not restarting." >> "$SESSION_LOG"
+        exit 0
+    fi
+    case "$(systemctl is-system-running 2>/dev/null)" in
+        stopping)
+            echo "[infynitae-session] The system is shutting down; not restarting." >> "$SESSION_LOG"
+            exit 0
+            ;;
+    esac
 
     # a crash, not a quit (0) or the system ending the session (SIGHUP, SIGINT, SIGTERM)
     case "$STATUS" in
