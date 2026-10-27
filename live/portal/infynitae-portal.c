@@ -16,6 +16,7 @@
 #include <sys/stat.h>
 
 #include "remote-desktop.h"
+#include <xkbcommon/xkbcommon.h>
 
 #define BUS_NAME "org.freedesktop.impl.portal.desktop.infynitae"
 #define OBJECT_PATH "/org/freedesktop/portal/desktop"
@@ -127,13 +128,68 @@ static void free_session(SessionEntry *s) {
     g_free(s);
 }
 
+// The key a trigger's last part names ("CTRL+SHIFT+m", "KP_Add", "XF86AudioMute", "F20"…): any key
+// of the user's layout (the session's XKB_DEFAULT_*), first in its plain level, then shifted. 0
+// when nothing produces it.
+static uint32_t keysym_name_to_evdev(const char *name) {
+    static struct xkb_keymap *keymap;
+    static gboolean tried;
+    if (!tried) {
+        tried = TRUE;
+        struct xkb_context *ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+        if (ctx) {
+            keymap = xkb_keymap_new_from_names(ctx, NULL, XKB_KEYMAP_COMPILE_NO_FLAGS);
+            if (!keymap) {
+                struct xkb_rule_names us = { .layout = "us" };
+                keymap = xkb_keymap_new_from_names(ctx, &us, XKB_KEYMAP_COMPILE_NO_FLAGS);
+            }
+            xkb_context_unref(ctx);
+        }
+    }
+    if (!keymap || !name || !*name) return 0;
+    xkb_keysym_t sym = xkb_keysym_from_name(name, XKB_KEYSYM_NO_FLAGS);
+    if (sym == XKB_KEY_NoSymbol) sym = xkb_keysym_from_name(name, XKB_KEYSYM_CASE_INSENSITIVE);
+    if (sym == XKB_KEY_NoSymbol) return 0;
+    xkb_keysym_t lower = xkb_keysym_to_lower(sym);
+    xkb_keycode_t min = xkb_keymap_min_keycode(keymap), max = xkb_keymap_max_keycode(keymap);
+    for (xkb_level_index_t level = 0; level < 2; level++) {
+        for (xkb_keycode_t kc = min; kc <= max && kc >= 8; kc++) {
+            xkb_layout_index_t layouts = xkb_keymap_num_layouts_for_key(keymap, kc);
+            for (xkb_layout_index_t l = 0; l < layouts; l++) {
+                const xkb_keysym_t *syms;
+                int n = xkb_keymap_key_get_syms_by_level(keymap, kc, l, level, &syms);
+                for (int i = 0; i < n; i++) {
+                    if (syms[i] == sym || syms[i] == lower) return kc - 8;
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 static uint32_t trigger_to_evdev(const char *trigger) {
     if (!trigger || !*trigger) return 0;
-    // Specific virtual triggers from Discord lone modifier wrapper
-    if (strstr(trigger, "F15") || strstr(trigger, "F23") || strstr(trigger, "Shift_R") || strstr(trigger, "ShiftRight")) return 54;
-    if (strstr(trigger, "F16") || strstr(trigger, "F24") || strstr(trigger, "Control_R") || strstr(trigger, "ControlRight")) return 97;
-    if (strstr(trigger, "F13") || strstr(trigger, "F21") || strstr(trigger, "Shift_L") || strstr(trigger, "ShiftLeft")) return 42;
-    if (strstr(trigger, "F14") || strstr(trigger, "F22") || strstr(trigger, "Control_L") || strstr(trigger, "ControlLeft")) return 29;
+    const char *last = strrchr(trigger, '+');
+    last = last ? last + 1 : trigger;
+    while (*last == ' ') last++;
+    // Discord sends a lone modifier as F13-F16 (older builds F21-F24): the modifier itself
+    static const struct { const char *name; uint32_t evdev; } lone[] = {
+        {"F13", 42}, {"F14", 29}, {"F15", 54}, {"F16", 97},
+        {"F21", 42}, {"F22", 29}, {"F23", 54}, {"F24", 97},
+    };
+    for (size_t i = 0; i < G_N_ELEMENTS(lone); i++) {
+        if (strcmp(last, lone[i].name) == 0) return lone[i].evdev;
+    }
+    uint32_t key = keysym_name_to_evdev(last);
+    if (key) return key;
+    // F17-F20: keyboards and mice that send them, which the layout names as media keys
+    int fn = 0;
+    if (sscanf(last, "F%d", &fn) == 1 && fn >= 17 && fn <= 20) return 183 + (fn - 13);
+    // without a keymap: the names below
+    if (strstr(trigger, "Shift_R") || strstr(trigger, "ShiftRight")) return 54;
+    if (strstr(trigger, "Control_R") || strstr(trigger, "ControlRight")) return 97;
+    if (strstr(trigger, "Shift_L") || strstr(trigger, "ShiftLeft")) return 42;
+    if (strstr(trigger, "Control_L") || strstr(trigger, "ControlLeft")) return 29;
     if (strstr(trigger, "Alt_R") || strstr(trigger, "AltRight")) return 100;
     if (strstr(trigger, "Alt_L") || strstr(trigger, "AltLeft")) return 56;
     if (strstr(trigger, "Pause")) return 119;
@@ -296,16 +352,17 @@ static void dispatch_action(const char *action) {
                     ShortcutEntry *sc = (ShortcutEntry *)k->data;
                     if (sc->evdev_key == key_code) {
                         if (pressed) {
-                            if (parsed >= 3 && sc->modifiers != key_mods) {
+                            // the shortcut's modifiers held, others too (Shift held to run while
+                            // talking), as on Windows
+                            if (parsed >= 3 && (key_mods & sc->modifiers) != sc->modifiers) {
                                 continue;
                             }
                             sc->active = TRUE;
                             emit_portal_signal(sess->session_handle, sc->id, "Activated");
                         } else {
+                            // released however the modifiers changed meanwhile
                             if (sc->active) {
                                 sc->active = FALSE;
-                                emit_portal_signal(sess->session_handle, sc->id, "Deactivated");
-                            } else if (parsed < 3 || sc->modifiers == key_mods) {
                                 emit_portal_signal(sess->session_handle, sc->id, "Deactivated");
                             }
                         }
