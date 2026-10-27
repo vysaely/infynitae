@@ -93,31 +93,10 @@ fi
 echo "==> Building..."
 cargo build --release -p infynitae
 
-# 4. install to ~/.local/bin
-mkdir -p "$HOME/.local/bin"
-# replace by rename: the running compositor keeps its old file until the next restart
-install -m 755 "${CARGO_TARGET_DIR:-target}/release/infynitae" "$HOME/.local/bin/infynitae.new"
-mv -f "$HOME/.local/bin/infynitae.new" "$HOME/.local/bin/infynitae"
-install -m 755 live/infynitae-reload "$HOME/.local/bin/infynitae-reload"
-install -m 755 live/infynitae-restore "$HOME/.local/bin/infynitae-restore"
-install -m 755 live/dev.sh "$HOME/.local/bin/infynitae-dev"
-install -m 755 live/settings.sh "$HOME/.local/bin/infynitae-settings"
-install -m 755 live/setup-drivers.sh "$HOME/.local/bin/infynitae-drivers"
-install -m 755 update.sh "$HOME/.local/bin/infynitae-update"
-install -m 755 live/infynitae-session "$HOME/.local/bin/infynitae-session.new" && mv -f "$HOME/.local/bin/infynitae-session.new" "$HOME/.local/bin/infynitae-session"
-if [ -f "live/xdg-open" ]; then
-    install -m 755 live/xdg-open "$HOME/.local/bin/xdg-open" 2>/dev/null || true
-    install -m 755 live/xdg-terminal-exec "$HOME/.local/bin/xdg-terminal-exec" 2>/dev/null || true
-    install -m 755 live/infynitae-open-with "$HOME/.local/bin/infynitae-open-with" 2>/dev/null || true
-fi
+# 4. the programs, into ~/.local/bin (a running compositor keeps its old file until it restarts)
+install_programs "$REPO_DIR"
 
-# 5. the C helpers (portal, polkit, lock, wallpaper, recorder stream)
-sh "$REPO_DIR/live/build-helpers.sh" "$REPO_DIR" "$HOME/.local/bin" \
-    || echo "==> Some helpers were not built (see above); Infynitae runs without them"
-install -m 755 "$REPO_DIR/live/record/infynitae-recorder" "$HOME/.local/bin/infynitae-recorder.new"
-mv -f "$HOME/.local/bin/infynitae-recorder.new" "$HOME/.local/bin/infynitae-recorder"
-
-# 6. the session scripts, when this source is not ~/infynitae itself
+# 5. the session scripts, when this source is not ~/infynitae itself
 mkdir -p "$HOME/infynitae/live"
 SRC_LIVE="$(cd live 2>/dev/null && pwd -P || echo "")"
 DST_LIVE="$(cd "$HOME/infynitae/live" 2>/dev/null && pwd -P || echo "")"
@@ -125,77 +104,11 @@ if [ -n "$SRC_LIVE" ] && [ "$SRC_LIVE" != "$DST_LIVE" ]; then
     cp -rf live/* "$HOME/infynitae/live/"
 fi
 
-# 6b. The lock screen's password check (PAM), kept current
-if ! cmp -s live/lock/infynitae.pam /etc/pam.d/infynitae; then
-    sudo install -m 644 live/lock/infynitae.pam /etc/pam.d/infynitae || true
-fi
-# the battery's charge limit (BATTERY_LIMIT): settable by this user, on laptops whose battery
-# supports one; thermald on Intel laptops (the thermal optional part), running
-if ls /sys/class/power_supply/BAT*/charge_control_end_threshold >/dev/null 2>&1; then
-    sed "s/@GROUP@/$(id -gn)/" live/99-infynitae-battery.rules > "${TMPDIR:-/tmp}/99-infynitae-battery.rules.$$"
-    if ! cmp -s "${TMPDIR:-/tmp}/99-infynitae-battery.rules.$$" /etc/udev/rules.d/99-infynitae-battery.rules; then
-        sudo install -D -m 644 "${TMPDIR:-/tmp}/99-infynitae-battery.rules.$$" /etc/udev/rules.d/99-infynitae-battery.rules \
-            && sudo udevadm trigger --subsystem-match=power_supply || true
-    fi
-    rm -f "${TMPDIR:-/tmp}/99-infynitae-battery.rules.$$"
-fi
-if pacman -Qi thermald >/dev/null 2>&1 && ! systemctl is-enabled --quiet thermald.service 2>/dev/null; then
-    sudo systemctl enable --now thermald.service || true
-fi
-# apps out of sight run at a lower priority (BACKGROUND_PRIORITY): a limit that lets them come
-# back to normal (nice 0) and never above it, from the next login
-if ! cmp -s live/90-infynitae-nice.conf /etc/security/limits.d/90-infynitae-nice.conf; then
-    sudo install -D -m 644 live/90-infynitae-nice.conf /etc/security/limits.d/90-infynitae-nice.conf || true
-fi
-# gamemode (game mode for fullscreen games): its CPU settings need the gamemode group
-if getent group gamemode >/dev/null && ! id -nG "$USER" | grep -qw gamemode; then
-    sudo usermod -aG gamemode "$USER" || true
-fi
+# 6. what Infynitae needs outside the home folder, and the config (yours is never overwritten)
+install_system_files "$REPO_DIR"
+install_config "$REPO_DIR"
 
-# 7. Display managers: /usr/local/bin/infynitae-session is a launcher for the user's own copy
-if ! cmp -s live/infynitae-session-shim /usr/local/bin/infynitae-session && command -v sudo >/dev/null 2>&1; then
-    sudo install -D -m 755 live/infynitae-session-shim /usr/local/bin/infynitae-session || true
-fi
-
-# 7b. RustDesk, when installed: the rule that lets the session restart its service (install.sh)
-if systemctl cat rustdesk.service >/dev/null 2>&1 \
-    && ! cmp -s live/remote/50-infynitae-rustdesk.rules /etc/polkit-1/rules.d/50-infynitae-rustdesk.rules \
-    && command -v sudo >/dev/null 2>&1; then
-    sudo install -D -m 644 live/remote/50-infynitae-rustdesk.rules \
-        /etc/polkit-1/rules.d/50-infynitae-rustdesk.rules || true
-fi
-
-# 8. the config: created when missing, otherwise only the new defaults as config.template
-mkdir -p "$HOME/.config/infynitae"
-if [ -f "config/config" ]; then
-    if [ ! -f "$HOME/.config/infynitae/config" ]; then
-        cp -f "config/config" "$HOME/.config/infynitae/config"
-        echo "==> Created ~/.config/infynitae/config"
-    else
-        cp -f "config/config" "$HOME/.config/infynitae/config.template"
-        echo "==> Kept your config (new defaults: ~/.config/infynitae/config.template)"
-    fi
-fi
-
-# 9. the session entry for display managers
-mkdir -p "$HOME/.local/share/wayland-sessions"
-cat << 'EOF' > "$HOME/.local/share/wayland-sessions/infynitae.desktop"
-[Desktop Entry]
-Name=Infynitae
-Comment=Infinite-canvas Wayland compositor
-Exec=infynitae-session
-Type=Application
-DesktopNames=infynitae;wlroots
-EOF
-if command -v sudo >/dev/null 2>&1; then
-    sudo mkdir -p /usr/share/wayland-sessions 2>/dev/null || true
-    sudo install -D -m 644 "$HOME/.local/share/wayland-sessions/infynitae.desktop" \
-        /usr/share/wayland-sessions/infynitae.desktop || true
-    # an older install under a private umask made the folder root-only: display managers read it
-    sudo chmod 755 /usr/share/wayland-sessions || true
-fi
-
-# 10. a running session: restart the helpers in place (windows stay open)
+# 7. a running session: restart the helpers in place (windows stay open)
 if pgrep -x infynitae >/dev/null 2>&1; then
     echo "==> Restarting the helpers (windows stay open)..."
     "$HOME/.local/bin/infynitae-reload" settings wallpaper portal polkit || true

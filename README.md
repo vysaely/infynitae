@@ -17,7 +17,9 @@ git clone https://github.com/vysaely/infynitae.git ~/infynitae
 ~/infynitae/install.sh
 ```
 
-It asks for your password once, then runs by itself. Reboot when it is done:
+It asks for your password once, then menus show what was found on the machine and what to
+install, with what fits it already ticked. After the last menu it runs by itself. Reboot when it
+is done:
 
 - **No display manager:** the machine starts at the Infynitae lock screen.
 - **A display manager** (GDM, SDDM…): pick **Infynitae** at its login.
@@ -28,10 +30,14 @@ and stops before changing anything if there is no internet, disk space or sudo. 
 
 ### Options
 
+With an option, or through `curl -fsSL https://raw.githubusercontent.com/vysaely/infynitae/main/install.sh | bash`,
+there are no menus: it installs what fits the machine, minus what the options leave out.
+
 | Flag | Effect |
 | :--- | :--- |
 | `--no-notifications` `--no-keyring` `--no-automount` `--no-clipboard` `--no-fonts` `--no-recorder` `--no-files` `--no-terminal` `--no-bluetooth` `--no-power-profiles` `--no-autorotate` `--no-osk` `--no-gamemode` `--no-thermal` | Leave out that part |
 | `--minimal` | Leave out all of them |
+| `--defaults` | No menus: what fits this machine |
 | `--replay-buffer` | Keep the last minutes of the screen, saved with `Super + Alt + C` |
 | `--gaming` | 32-bit graphics drivers for Steam, Wine and 32-bit games (automatic when Steam or Wine is installed; later: `infynitae-drivers --gaming`) |
 | `--no-autologin` | Log in on tty1 instead of booting to the lock screen |
