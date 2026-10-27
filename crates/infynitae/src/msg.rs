@@ -10,6 +10,7 @@
 //! infynitae msg restore [output]                the camera back to where it was
 //! infynitae msg shortcut <name>                 a global shortcut (mute, deafen, …) to apps
 //! infynitae msg overview                        pick a window from a menu and go to it
+//! infynitae msg layers [app]                    every window's surfaces and where they are drawn
 //! ```
 
 use std::io::{BufRead, BufReader, Write};
@@ -102,11 +103,61 @@ fn print_reply(reply: &Value) -> ExitCode {
 }
 
 /// `infynitae msg …` (`args` after "msg").
+/// `infynitae msg layers [app]`: per window (of `app`, any case), its geometry, then each surface
+/// with its role, offset and size and, under it, the physical rects it is drawn at.
+fn layers(app: Option<&str>) -> ExitCode {
+    let reply = request(&Value::obj([("id", 1u64.into()), ("cmd", "layers".into())]));
+    let Some(windows) = reply
+        .get("snapshot")
+        .and_then(|s| s.get("windows"))
+        .and_then(Value::as_array)
+    else {
+        eprintln!("infynitae msg: no answer (an older compositor without `layers`?)");
+        return ExitCode::FAILURE;
+    };
+    let text = |v: Option<&Value>| v.map(Value::to_json).unwrap_or_default();
+    for w in windows {
+        let name = w.get("app_id").and_then(Value::as_str).unwrap_or("?");
+        if app.is_some_and(|a| !a.eq_ignore_ascii_case(name)) {
+            continue;
+        }
+        println!(
+            "{name} {} anchor {} geometry {}",
+            text(w.get("id")),
+            text(w.get("anchor")),
+            text(w.get("geometry"))
+        );
+        let drawn = w.get("drawn").and_then(Value::as_array).unwrap_or(&[]);
+        for s in w.get("surfaces").and_then(Value::as_array).unwrap_or(&[]) {
+            println!(
+                "  surface {} {} parent {} offset {} size {} mapped {}",
+                text(s.get("key")),
+                s.get("role").and_then(Value::as_str).unwrap_or("?"),
+                text(s.get("parent")),
+                text(s.get("offset")),
+                text(s.get("size")),
+                text(s.get("mapped"))
+            );
+            for d in drawn.iter().filter(|d| d.get("key") == s.get("key")) {
+                println!(
+                    "    drawn on output {} at {} (canvas {} size {})",
+                    text(d.get("output")),
+                    text(d.get("rect")),
+                    text(d.get("origin")),
+                    text(d.get("size"))
+                );
+            }
+        }
+    }
+    ExitCode::SUCCESS
+}
+
 pub fn run(args: &[String]) -> ExitCode {
     let num = |i: usize| args.get(i).and_then(|a| a.parse::<u64>().ok());
     let id = ("id", Value::from(1u64));
     match args.first().map(String::as_str) {
         Some("snapshot") => print_reply(&request(&Value::obj([id, ("cmd", "snapshot".into())]))),
+        Some("layers") => layers(args.get(1).map(String::as_str)),
         Some("focus") => match (num(1), num(2)) {
             (Some(i), Some(e)) => print_reply(&request(&Value::obj([
                 id,

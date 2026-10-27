@@ -174,6 +174,9 @@ impl ShellServer {
                 let g = self.refresh(core, done);
                 protocol::ok_reply(rid, g, self.model.as_ref().map(Model::to_value))
             }
+            Ok(Request::Layers) => {
+                protocol::ok_reply(rid, self.generation, Some(crate::model::layers(core)))
+            }
             Ok(Request::Subscribe) => {
                 // the events up to this generation go to the subscribers there were; this one
                 // starts from the snapshot it is given

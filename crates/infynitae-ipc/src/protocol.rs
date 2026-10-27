@@ -4,7 +4,8 @@
 //! Requests: `{"id": <number|string>, "cmd": <name>, ...}`. `snapshot`, `subscribe` and
 //! `unsubscribe` are queries; `navigate`, `viewport_fit`, `viewport_restore`, `focus`,
 //! `acknowledge_attention` and `move_element` are commands Core validates and executes. Elements are
-//! named `[instance, element]` (INV-STAGE-3), outputs by their id.
+//! named `[instance, element]` (INV-STAGE-3), outputs by their id. `layers` is a diagnostic
+//! query: each window's surfaces and the physical rects they are drawn at.
 //!
 //! Replies: `{"id": …, "ok": true, "generation": g}` (plus `"snapshot"` for the queries that return
 //! one) or `{"id": …, "ok": false, "error": <code>}`; nothing was changed by a failed request.
@@ -24,6 +25,8 @@ pub const MAX_LINE: usize = 64 * 1024;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
     Snapshot,
+    /// A diagnostic: every window's surfaces as Core holds them and the rects it draws them at.
+    Layers,
     Subscribe,
     Unsubscribe,
     Command(ShellCommand),
@@ -108,6 +111,7 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
     };
     Ok(match cmd {
         "snapshot" => Request::Snapshot,
+        "layers" => Request::Layers,
         "subscribe" => Request::Subscribe,
         "unsubscribe" => Request::Unsubscribe,
         "navigate" => {

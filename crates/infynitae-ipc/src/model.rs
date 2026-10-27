@@ -246,3 +246,91 @@ fn diff(
         }
     }
 }
+
+/// The `layers` diagnostic: for each mapped window, its geometry and surfaces (role, offset,
+/// size, mapped) as the last snapshot holds them, and per output the physical rects those
+/// surfaces are drawn at (the render list, built here without recording it as a frame). For
+/// finding a surface drawn where the app did not put it.
+pub fn layers(core: &Core) -> Value {
+    use infynitae_core::render::ProjectionFrame;
+    use infynitae_core::snapshot::SurfaceRole;
+    let instance = core.stage().instance().get();
+    let stage = core.stage();
+    let frames: Vec<(u64, ProjectionFrame)> = core
+        .outputs()
+        .iter()
+        .filter_map(|o| Some((o.id.get(), ProjectionFrame::build(core.view(o.id)?, stage))))
+        .collect();
+    let windows = stage
+        .z_order()
+        .iter()
+        .filter_map(|&id| {
+            let tree = stage.tree(id)?;
+            let anchor = stage.anchor(id)?;
+            let g = tree.geometry;
+            let surfaces = tree
+                .surfaces
+                .iter()
+                .map(|s| {
+                    let (role, parent, offset) = match s.role {
+                        SurfaceRole::Root => ("root", Value::Null, (0, 0)),
+                        SurfaceRole::Subsurface { parent, offset } => {
+                            ("subsurface", (parent as u64).into(), (offset.x, offset.y))
+                        }
+                        SurfaceRole::Popup { position, .. } => {
+                            ("popup", Value::Null, (position.x, position.y))
+                        }
+                    };
+                    Value::obj([
+                        ("key", s.key.raw().get().into()),
+                        ("role", role.into()),
+                        ("parent", parent),
+                        ("offset", pair(f64::from(offset.0), f64::from(offset.1))),
+                        ("size", pair(f64::from(s.size.w), f64::from(s.size.h))),
+                        ("mapped", s.mapped.into()),
+                    ])
+                })
+                .collect();
+            let drawn = frames
+                .iter()
+                .flat_map(|(out, f)| {
+                    f.entries.iter().filter(|e| e.element == id).map(move |e| {
+                        Value::obj([
+                            ("output", (*out).into()),
+                            ("key", e.surface.raw().get().into()),
+                            ("origin", pair(e.origin.x as f64, e.origin.y as f64)),
+                            ("size", pair(f64::from(e.size.w), f64::from(e.size.h))),
+                            (
+                                "rect",
+                                Value::Arr(vec![
+                                    (e.rect.x0 as f64).into(),
+                                    (e.rect.y0 as f64).into(),
+                                    (e.rect.x1 as f64).into(),
+                                    (e.rect.y1 as f64).into(),
+                                ]),
+                            ),
+                        ])
+                    })
+                })
+                .collect();
+            let app = stage.meta(id).and_then(|m| m.app_id.clone());
+            Some(Value::obj([
+                ("id", element_ref(instance, id.get().get())),
+                ("app_id", app.map_or(Value::Null, |a| a.as_str().into())),
+                ("anchor", pair(anchor.x as f64, anchor.y as f64)),
+                (
+                    "geometry",
+                    Value::Arr(vec![
+                        f64::from(g.loc.x).into(),
+                        f64::from(g.loc.y).into(),
+                        f64::from(g.size.w).into(),
+                        f64::from(g.size.h).into(),
+                    ]),
+                ),
+                ("surfaces", Value::Arr(surfaces)),
+                ("drawn", Value::Arr(drawn)),
+            ]))
+        })
+        .collect();
+    Value::obj([("windows", Value::Arr(windows))])
+}

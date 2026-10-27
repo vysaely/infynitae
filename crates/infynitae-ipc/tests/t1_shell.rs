@@ -677,3 +677,37 @@ fn malformed_requests_are_refused_precisely_and_unicode_survives() {
         .map(str::to_owned);
     assert_eq!(title.as_deref(), Some("日本語 \"quoted\" \\ tab\t😀"));
 }
+
+/// The `layers` diagnostic lists each window's surfaces and the rects they are drawn at, and
+/// changes nothing (the generation stays).
+#[test]
+fn layers_lists_each_windows_surfaces_and_where_they_are_drawn() {
+    let (mut core, mut server, _) = setup();
+    let w = map_win(&mut core, 1, 300, 200);
+    let mut shell = connect(&mut server);
+    let g0 = gen_of(&shell.reply(&mut server, &mut core, r#"{"id":1,"cmd":"snapshot"}"#));
+    let r = shell.reply(&mut server, &mut core, r#"{"id":2,"cmd":"layers"}"#);
+    let windows = r.get("snapshot").and_then(|s| s.get("windows")).unwrap();
+    let win = &windows.as_array().unwrap()[0];
+    assert_eq!(win.get("id").unwrap().to_json(), eref(&core, w));
+    let surfaces = win.get("surfaces").unwrap().as_array().unwrap();
+    assert_eq!(surfaces.len(), 1);
+    assert_eq!(
+        surfaces[0].get("role").and_then(Value::as_str),
+        Some("root")
+    );
+    assert_eq!(surfaces[0].get("size").unwrap().to_json(), "[300,200]");
+    let drawn = win.get("drawn").unwrap().as_array().unwrap();
+    assert_eq!(drawn.len(), 1, "the root is drawn on the one output");
+    let rect = drawn[0].get("rect").unwrap().as_array().unwrap();
+    let (w_px, h_px) = (
+        rect[2].as_f64().unwrap() - rect[0].as_f64().unwrap(),
+        rect[3].as_f64().unwrap() - rect[1].as_f64().unwrap(),
+    );
+    assert_eq!(
+        (w_px, h_px),
+        (300.0, 200.0),
+        "at zoom 1 it is drawn at its size"
+    );
+    assert_eq!(gen_of(&r), g0, "a diagnostic changes nothing");
+}
