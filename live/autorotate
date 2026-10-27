@@ -11,8 +11,9 @@ log() {
     printf '%s %s\n' "$(date '+%F %T')" "$*" >> "$LOG" 2>/dev/null || true
 }
 
-# Orientation to transform mapping (wl_output transforms are counter-clockwise).
-# Some convertible devices have their accelerometer inverted; AUTO_ROTATE_INVERT=true swaps 90 and 270.
+# Orientation to transform mapping (wl_output transforms are counter-clockwise): the right edge
+# up turns the picture a quarter clockwise, 270. Some convertible devices have their accelerometer
+# inverted; AUTO_ROTATE_INVERT=true swaps 90 and 270.
 orientation_to_transform() {
     case "$1" in
         normal)
@@ -23,14 +24,14 @@ orientation_to_transform() {
             ;;
         right-up)
             case "${AUTO_ROTATE_INVERT:-false}" in
-                1|true|yes|on|TRUE|True) printf '270\n' ;;
-                *) printf '90\n' ;;
+                1|true|yes|on|TRUE|True) printf '90\n' ;;
+                *) printf '270\n' ;;
             esac
             ;;
         left-up)
             case "${AUTO_ROTATE_INVERT:-false}" in
-                1|true|yes|on|TRUE|True) printf '90\n' ;;
-                *) printf '270\n' ;;
+                1|true|yes|on|TRUE|True) printf '270\n' ;;
+                *) printf '90\n' ;;
             esac
             ;;
         *)
