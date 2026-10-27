@@ -1626,7 +1626,7 @@ impl Core {
         }
         // the next window of an app whose window just closed takes its place (Steam: updater,
         // then login, then the main window), when no other window of the app is open and the
-        // place is still in view (owner, 2026-10-25)
+        // place is still in view (owner, 2026-10-25) and free
         if let Some(at) = self.successor_anchor(id, tree) {
             return Some(at);
         }
@@ -1823,10 +1823,26 @@ impl Core {
             return None;
         }
         let g = tree.geometry;
-        Some(CanvasPoint {
+        let at = CanvasPoint {
             x: centre.x - i64::from(g.size.w) / 2 - i64::from(g.loc.x),
             y: centre.y - i64::from(g.size.h) / 2 - i64::from(g.loc.y),
-        })
+        };
+        // only a place still free: a window opened on it since (a browser centred in the view)
+        // is not covered; the policy places this one instead. A neighbour the bigger successor
+        // reaches over (Steam's login after its updater) does not count.
+        let taken = self.stage.mapped_elements().into_iter().any(|e| {
+            let (Some(a), Some(t)) = (self.stage.anchor(e), self.stage.tree(e)) else {
+                return false;
+            };
+            let (x0, y0) = (
+                a.x + i64::from(t.geometry.loc.x),
+                a.y + i64::from(t.geometry.loc.y),
+            );
+            e != id
+                && (x0..x0 + i64::from(t.geometry.size.w)).contains(&centre.x)
+                && (y0..y0 + i64::from(t.geometry.size.h)).contains(&centre.y)
+        });
+        (!taken).then_some(at)
     }
 
     /// The adapter's report of an element's `xdg_toplevel` parent (`None`: none), before each
