@@ -38,6 +38,8 @@ Leave out a part:
 
 Turn on:
   --replay-buffer      keep the last minutes of the screen, saved with Super+Alt+C
+  --gaming             32-bit graphics drivers for Steam, Wine and 32-bit games (~400 MB);
+                       later: infynitae-drivers --gaming. Automatic when Steam or Wine is installed
 
 Startup:
   --no-autologin       log in on tty1 instead of booting to the lock screen
@@ -49,6 +51,7 @@ USAGE
 
 AUTOLOGIN=true
 REPLAY_BUFFER=false
+GAMING=false
 TERMINAL_PKG=true
 BLUETOOTH=true
 POWER_PROFILES=true
@@ -65,6 +68,7 @@ for arg in "$@"; do
             TERMINAL_PKG=false BLUETOOTH=false POWER_PROFILES=false ;;
         --no-autologin) AUTOLOGIN=false ;;
         --replay-buffer) REPLAY_BUFFER=true ;;
+        --gaming) GAMING=true ;;
         -h | --help) usage; exit 0 ;;
         *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
     esac
@@ -161,7 +165,11 @@ cd "$INSTALL_DIR"
 [ -n "${SUDO_KEEPER:-}" ] || sudo_once
 
 # ---- 3. graphics drivers (Vulkan, 32-bit for Steam, Xwayland; NVIDIA's kernel driver) --------
-bash "$INSTALL_DIR/live/setup-drivers.sh"
+if [ "$GAMING" = true ]; then
+    bash "$INSTALL_DIR/live/setup-drivers.sh" --gaming
+else
+    bash "$INSTALL_DIR/live/setup-drivers.sh"
+fi
 
 # ---- 4. packages ----------------------------------------------------------------------------------
 echo "==> Checking packages..."

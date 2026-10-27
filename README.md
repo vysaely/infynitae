@@ -33,6 +33,7 @@ and stops before changing anything if there is no internet, disk space or sudo. 
 | `--no-notifications` `--no-keyring` `--no-automount` `--no-clipboard` `--no-fonts` `--no-recorder` `--no-files` `--no-terminal` `--no-bluetooth` `--no-power-profiles` `--no-autorotate` `--no-osk` `--no-gamemode` `--no-thermal` | Leave out that part |
 | `--minimal` | Leave out all of them |
 | `--replay-buffer` | Keep the last minutes of the screen, saved with `Super + Alt + C` |
+| `--gaming` | 32-bit graphics drivers for Steam, Wine and 32-bit games (automatic when Steam or Wine is installed; later: `infynitae-drivers --gaming`) |
 | `--no-autologin` | Log in on tty1 instead of booting to the lock screen |
 
 `./install.sh --help` explains each one.

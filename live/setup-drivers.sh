@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # infynitae-drivers: finds the GPUs (AMD, Intel, NVIDIA, virtual machines) and installs their
-# Vulkan, 32-bit (multilib, for Steam) and Xwayland packages. --dry-run only says what it would do.
+# Vulkan and Xwayland packages; with --gaming also the 32-bit ones (multilib: Steam, Wine, 32-bit
+# games), and on their own when Steam or Wine is installed already. --dry-run only says what it
+# would do.
 set -e
 # files it creates are readable by everyone, like any installed file: the session's private
 # umask (077) would make /etc/pam.d/infynitae unreadable to the lock screen, and the session
@@ -8,7 +10,19 @@ set -e
 umask 022
 
 DRY_RUN=false
-[ "${1:-}" = "--dry-run" ] && DRY_RUN=true
+GAMING=false
+for arg in "$@"; do
+    case "$arg" in
+        --dry-run) DRY_RUN=true ;;
+        --gaming) GAMING=true ;;
+    esac
+done
+# 32-bit drivers (56 packages, ~400 MB) only for what needs them: Steam, Wine, or a machine that
+# has them already
+if pacman -Qq steam wine wine-staging lutris 2>/dev/null | grep -q . \
+    || pacman -Qq lib32-mesa >/dev/null 2>&1; then
+    GAMING=true
+fi
 
 # the shared, unattended pacman (waits for another package manager, replaces a conflicting
 # package instead of stopping); next to this script in the repo, or in ~/infynitae when this is
@@ -36,8 +50,8 @@ if ! command -v lspci >/dev/null 2>&1; then
     fi
 fi
 
-# 2. [multilib] in pacman.conf: the 32-bit drivers (Steam)
-if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
+# 2. [multilib] in pacman.conf: the 32-bit drivers (gaming)
+if [ "$GAMING" = true ] && ! grep -q "^\[multilib\]" /etc/pacman.conf; then
     if [ "$DRY_RUN" = true ]; then
         echo "==> [Dry-run] would enable [multilib] in /etc/pacman.conf"
     else
@@ -51,7 +65,7 @@ if ! grep -q "^\[multilib\]" /etc/pacman.conf; then
     fi
 fi
 MULTILIB=false
-grep -q "^\[multilib\]" /etc/pacman.conf && MULTILIB=true
+[ "$GAMING" = true ] && grep -q "^\[multilib\]" /etc/pacman.conf && MULTILIB=true
 
 # 3. the GPUs
 GPU_OUTPUT=""
@@ -149,7 +163,7 @@ if [ "$DETECTED_AMD" = false ] && [ "$DETECTED_INTEL" = false ] && [ "$DETECTED_
     TARGET_PKGS+=(vulkan-swrast lib32-vulkan-swrast)
 fi
 
-# the ones not installed yet (32-bit ones only with multilib)
+# the ones not installed yet (32-bit ones only for gaming, with multilib)
 MISSING=()
 for pkg in "${TARGET_PKGS[@]}"; do
     [ -z "$pkg" ] && continue
