@@ -74,3 +74,25 @@ fn another_steam_window_is_an_ordinary_one() {
     assert!(!r.ls.state.core().is_notification(s));
     assert_ne!(on_screen(&r, s), (1920 - 12 - 283, 1080 - 12 - 70));
 }
+
+/// The title can come after the window appeared (Steam's toasts through xwayland-satellite): the
+/// window is moved to the corner as soon as it turns out to be a notification (2026-10-27: they
+/// still showed up in random places).
+#[test]
+fn a_notification_whose_title_comes_late_still_goes_to_the_corner() {
+    let mut r = Rig::x8();
+    let qh = r.ls.qh.clone();
+    let idx = r.ls.probe.toplevel(&qh, "T", (283, 70), 0);
+    let tl = r.ls.probe.surfaces[idx].toplevel.clone().unwrap();
+    tl.set_app_id("steam".to_string());
+    r.ls.pump();
+    r.frame();
+    let t = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    assert!(!r.ls.state.core().is_notification(t), "not yet: no title");
+
+    tl.set_title("notificationtoasts_52_desktop".to_string());
+    r.ls.pump();
+    r.frame();
+    assert!(r.ls.state.core().is_notification(t));
+    assert_eq!(on_screen(&r, t), (1920 - 12 - 283, 1080 - 12 - 70));
+}

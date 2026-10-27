@@ -489,9 +489,13 @@ impl WaylandState {
                 })
                 .unwrap_or_default()
         });
-        let _ = self
+        // a window that turned out to be a notification moves to its corner
+        if let Ok(fx) = self
             .core
-            .toplevel_metadata(id, title.as_deref(), app_id.as_deref());
+            .toplevel_metadata(id, title.as_deref(), app_id.as_deref())
+        {
+            self.apply(&fx);
+        }
         if let Some(handle) = self.foreign_toplevels.get(&id) {
             handle.send_title(title.as_deref().unwrap_or_default());
             handle.send_app_id(app_id.as_deref().unwrap_or_default());

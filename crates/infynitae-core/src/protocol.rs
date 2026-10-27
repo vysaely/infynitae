@@ -1032,12 +1032,16 @@ impl Core {
     /// toplevel's title and app_id, replaced wholesale, kept as display metadata for the shell.
     /// Each is cut to [`TOPLEVEL_META_MAX`] bytes at a character boundary, so a client cannot make
     /// Core hold an unbounded string. Decides nothing, emits nothing.
+    ///
+    /// A window that turns out to be an app's notification only now (its title came after it
+    /// appeared: Steam's toasts through xwayland-satellite) is moved to the notification corner;
+    /// the returned effects are that move's.
     pub fn toplevel_metadata(
         &mut self,
         id: ElementId,
         title: Option<&str>,
         app_id: Option<&str>,
-    ) -> Result<(), ProtocolError> {
+    ) -> Result<Vec<Effect>, ProtocolError> {
         let cut = |s: &str| {
             let mut end = s.len().min(TOPLEVEL_META_MAX);
             while !s.is_char_boundary(end) {
@@ -1045,6 +1049,7 @@ impl Core {
             }
             s[..end].to_owned()
         };
+        let was_notification = self.is_notification(id);
         self.stage
             .set_meta(
                 id,
@@ -1053,7 +1058,17 @@ impl Core {
                     app_id: app_id.map(cut),
                 },
             )
-            .map_err(|_| ProtocolError::StaleElement)
+            .map_err(|_| ProtocolError::StaleElement)?;
+        let mut out = Vec::new();
+        if !was_notification
+            && self.is_notification(id)
+            && self.stage.mapped(id).is_some()
+            && let Some(tree) = self.stage.tree(id).cloned()
+            && let Some(at) = self.notification_anchor(id, &tree)
+        {
+            self.place_by_shell(id, at, &mut out)?;
+        }
+        Ok(out)
     }
 
     /// B10.7 / INV-INPUT-9: an `xdg_activation_v1` request for `id`. `validated`: its token
