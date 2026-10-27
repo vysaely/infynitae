@@ -159,3 +159,54 @@ fn the_border_is_repainted_when_the_focus_moves() {
     // unchanged: the same commit, nothing to repaint
     assert_eq!(border(&mut r).1, c_off);
 }
+
+/// A window's menu that opens over its edge is drawn over the window's border, not under it
+/// (2026-10-27: the border line crossed Thunar's context menu). Front to back, the border comes
+/// after every surface of its window, popups included.
+#[test]
+fn a_menu_over_the_windows_edge_covers_its_border() {
+    use common::PopupSpec;
+    let mut r = Rig::x8();
+    r.ls.state.border_width = 1;
+    let qh = r.ls.qh.clone();
+    let w_idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
+    // a 200 x 300 menu anchored at W's bottom edge (W: 800 x 600 inside a 20 px margin)
+    r.ls.probe.popup(
+        &qh,
+        "M",
+        w_idx,
+        PopupSpec {
+            content: (200, 300),
+            shadow: 0,
+            anchor_rect: (100, 590, 1, 1),
+            slide: false,
+        },
+    );
+    r.ls.pump();
+    r.frame();
+    let o = r.ls.output();
+    let mut renderer = PixmanRenderer::new().expect("pixman");
+    let (elements, _) =
+        convert::output_elements(&mut r.ls.state, &mut renderer, o).expect("elements");
+    let kinds: Vec<&str> = elements
+        .iter()
+        .filter_map(|e| match e {
+            OutputElement::Surface(_) => Some("surface"),
+            OutputElement::Solid(_) => Some("border"),
+            _ => None,
+        })
+        .collect();
+    let surfaces = kinds.iter().filter(|k| **k == "surface").count();
+    assert_eq!(surfaces, 2, "the window and its menu: {kinds:?}");
+    let first_border = kinds.iter().position(|k| *k == "border").expect("a border");
+    let last_surface = kinds.iter().rposition(|k| *k == "surface").unwrap();
+    assert!(
+        first_border > last_surface,
+        "front to back the border is behind the window and its menu: {kinds:?}"
+    );
+}

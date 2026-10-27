@@ -807,7 +807,7 @@ where
 }
 
 /// The windows' elements, front to back: each window's surfaces, cut to its geometry
-/// (CLIP_TO_GEOMETRY), with its border just in front of them and behind the windows before it.
+/// (CLIP_TO_GEOMETRY), with its border right behind them, in front of the windows behind it.
 fn window_elements<R>(
     state: &mut WaylandState,
     renderer: &mut R,
@@ -846,12 +846,25 @@ where
             clip,
         )?
     };
+    // a window's surfaces are consecutive, front to back (its popups first); its border goes right
+    // behind the last of them: behind its own menus, which may open over its edge, and in front of
+    // the windows behind it
+    let mut current = None;
     let mut bordered = std::collections::HashSet::new();
     for (entry, e) in windows {
-        if bordered.insert(entry.element) {
-            border_elements(state, &geometry, entry.element, scale, elements);
+        if let Some(prev) = current
+            && prev != entry.element
+            && bordered.insert(prev)
+        {
+            border_elements(state, &geometry, prev, scale, elements);
         }
+        current = Some(entry.element);
         elements.push(OutputElement::Surface(e));
+    }
+    if let Some(last) = current
+        && bordered.insert(last)
+    {
+        border_elements(state, &geometry, last, scale, elements);
     }
     Ok(())
 }
