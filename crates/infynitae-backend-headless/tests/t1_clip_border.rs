@@ -93,3 +93,69 @@ fn with_clip_to_geometry_off_the_whole_surface_is_drawn() {
         (x0 - 20, y0 - 20, x1 + 20, y1 + 20)
     );
 }
+
+/// SQUARE_CORNERS: a window is told it is tiled on every side, so an app that rounds its corners
+/// draws them square, flush with the border; switched off, it is told nothing of the kind.
+#[test]
+fn windows_are_told_they_are_tiled_unless_square_corners_is_off() {
+    const TILED: [u32; 4] = [5, 6, 7, 8];
+    let mut r = Rig::x8();
+    let states = |r: &Rig, label: &str| {
+        let idx =
+            r.ls.probe
+                .surfaces
+                .iter()
+                .position(|s| s.label == label)
+                .unwrap();
+        r.ls.probe
+            .toplevel_states
+            .iter()
+            .rev()
+            .find(|(i, _)| *i == idx)
+            .map(|(_, s)| s.clone())
+            .unwrap()
+    };
+    assert!(TILED.iter().all(|t| states(&r, "W").contains(t)));
+
+    r.ls.state.square_corners = false;
+    let qh = r.ls.qh.clone();
+    r.ls.probe.toplevel(&qh, "X", (300, 200), 0);
+    r.ls.pump();
+    r.frame();
+    assert!(TILED.iter().all(|t| !states(&r, "X").contains(t)));
+}
+
+/// The border follows the focus: when the window loses it, the border's colour changes and so
+/// does its commit, which is what makes the damage tracker repaint it (2026-10-27: the border
+/// kept its focused colour after the focus moved).
+#[test]
+fn the_border_is_repainted_when_the_focus_moves() {
+    use smithay::backend::renderer::element::solid::SolidColorRenderElement;
+    let mut r = Rig::x8();
+    r.ls.state.border_width = 1;
+    let border = |r: &mut Rig| {
+        let o = r.ls.output();
+        let mut renderer = PixmanRenderer::new().expect("pixman");
+        let (elements, _) =
+            convert::output_elements(&mut r.ls.state, &mut renderer, o).expect("elements");
+        let solid: Vec<&SolidColorRenderElement> = elements
+            .iter()
+            .filter_map(|e| match e {
+                OutputElement::Solid(s) => Some(s),
+                _ => None,
+            })
+            .collect();
+        let first = solid.first().copied().expect("a border");
+        (first.color(), first.current_commit())
+    };
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    infynitae_backend_headless::set_focus(&mut r.ls.state, &mut r.ls.input, Some(w)).unwrap();
+    let (on, c_on) = border(&mut r);
+    assert_eq!(on, r.ls.state.border_active);
+    infynitae_backend_headless::set_focus(&mut r.ls.state, &mut r.ls.input, None).unwrap();
+    let (off, c_off) = border(&mut r);
+    assert_eq!(off, r.ls.state.border_inactive);
+    assert_ne!(c_on, c_off, "a new colour is a new commit");
+    // unchanged: the same commit, nothing to repaint
+    assert_eq!(border(&mut r).1, c_off);
+}

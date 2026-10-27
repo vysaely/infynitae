@@ -307,11 +307,23 @@ pub struct WaylandState {
     /// CLIP_TO_GEOMETRY: a window's surfaces are drawn only inside its window geometry, not in the
     /// margins apps keep around it (stale pixels there showed as black blocks beside Discord).
     pub clip_to_geometry: bool,
+    /// SQUARE_CORNERS: every window is told it is tiled on all four sides, so apps that round
+    /// their corners and draw shadows draw a plain rectangle instead.
+    pub square_corners: bool,
     pub border_active: smithay::backend::renderer::Color32F,
     pub border_inactive: smithay::backend::renderer::Color32F,
     pub border_ids: std::collections::HashMap<
         infynitae_core::stage::ElementId,
         [smithay::backend::renderer::element::Id; 4],
+    >,
+    /// Each window's border colour as last drawn, and its commit counter: bumped when the colour
+    /// changes (focus moved), so the damage tracker repaints the border.
+    pub border_commits: std::collections::HashMap<
+        infynitae_core::stage::ElementId,
+        (
+            smithay::backend::renderer::Color32F,
+            smithay::backend::renderer::utils::CommitCounter,
+        ),
     >,
     pub rendered_elements: Vec<infynitae_core::stage::ElementId>,
     pub input_config: InputDeviceConfig,
@@ -602,9 +614,11 @@ impl WaylandState {
             border_width: 0,
             border_ignore_csd: true,
             clip_to_geometry: true,
+            square_corners: true,
             border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
             border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 0.8),
             border_ids: std::collections::HashMap::new(),
+            border_commits: std::collections::HashMap::new(),
             rendered_elements: Vec::new(),
             input_config: InputDeviceConfig::default(),
             direct_scanout: None,
@@ -950,6 +964,12 @@ impl WaylandState {
                                 if let Ok(w) = val.parse::<i32>() {
                                     self.border_width = w.max(0);
                                 }
+                            }
+                            "SQUARE_CORNERS" => {
+                                self.square_corners = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                             }
                             "CLIP_TO_GEOMETRY" => {
                                 self.clip_to_geometry = !matches!(

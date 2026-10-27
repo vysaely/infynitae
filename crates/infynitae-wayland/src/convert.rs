@@ -889,6 +889,18 @@ fn border_elements<R>(
         .entry(element)
         .or_insert_with(|| std::array::from_fn(|_| Id::new()))
         .clone();
+    // a new colour is a new commit: without it the damage tracker keeps the old border on screen
+    let commit = {
+        let (last, counter) = state
+            .border_commits
+            .entry(element)
+            .or_insert((color, CommitCounter::default()));
+        if *last != color {
+            *last = color;
+            counter.increment();
+        }
+        *counter
+    };
     // top and bottom span the corners; left and right fit between them
     let sides = [
         (g.x0 - w, g.y0 - w, g.x1 + w, g.y0),
@@ -909,7 +921,7 @@ fn border_elements<R>(
                 (x0 as i32, y0 as i32).into(),
                 ((x1 - x0) as i32, (y1 - y0) as i32).into(),
             ),
-            CommitCounter::default(),
+            commit,
             color,
             Kind::Unspecified,
         )));

@@ -540,6 +540,7 @@ impl XdgShellHandler for WaylandState {
             .retain(|e| e.window.toplevel() != Some(&surface));
         for id in gone {
             self.border_ids.remove(&id);
+            self.border_commits.remove(&id);
             self.list_toplevel(id, false);
             let effects = self.core.toplevel_destroyed(id);
             self.apply(&effects);
