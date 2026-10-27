@@ -110,6 +110,8 @@ BROWSER="auto"                    # auto: the system default; programs open link
 POLKIT_AGENT="auto"               # [restart] password prompts — auto: infynitae-polkit, or a path
 SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
 SCREENSHOT_CMD=""                 # Super+Shift+S — empty: grim; a command gets the file path
+FREEZE_SCREENSHOT="true"          # Super+Shift+R: the screen stays frozen at the key press while you
+                                  # pick the region (videos and games keep running underneath)
 XWAYLAND="true"                   # [restart] X11 apps and games (xwayland-satellite, on demand)
 SESSION_RESTORE="true"            # [restart] reopen the apps that were open, where they were
 START_TERMINAL="true"             # [restart] open a terminal at login when nothing was restored

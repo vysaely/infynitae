@@ -39,6 +39,7 @@ static void sig_handler(int sig) {
 struct wallpaper_output {
     struct wl_output *output;
     uint32_t name;
+    char connector[64];
     int32_t width;
     int32_t height;
     int32_t scale;
@@ -60,6 +61,10 @@ struct wallpaper_app {
     struct wallpaper_output *outputs;
     GdkPixbuf *pixbuf;
     char mode[32];
+    /* --overlay: above every window (a frozen screenshot shown while a region is chosen); only on
+     * the output named by --output when one is */
+    int overlay;
+    char only_output[64];
 };
 
 static int create_shm_file(off_t size) {
@@ -276,14 +281,15 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
 
 static void setup_layer_surface(struct wallpaper_output *out) {
     if (!out->app->layer_shell || !out->app->compositor) return;
+    if (out->app->only_output[0] && strcmp(out->connector, out->app->only_output) != 0) return;
 
     out->surface = wl_compositor_create_surface(out->app->compositor);
     out->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
         out->app->layer_shell,
         out->surface,
         out->output,
-        ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND,
-        "wallpaper"
+        out->app->overlay ? ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY : ZWLR_LAYER_SHELL_V1_LAYER_BACKGROUND,
+        out->app->overlay ? "infynitae-freeze" : "wallpaper"
     );
 
     zwlr_layer_surface_v1_set_anchor(
@@ -334,7 +340,9 @@ static void output_scale(void *data, struct wl_output *wl_output, int32_t factor
 }
 
 static void output_name(void *data, struct wl_output *wl_output, const char *name) {
-    (void)data; (void)wl_output; (void)name;
+    (void)wl_output;
+    struct wallpaper_output *out = data;
+    snprintf(out->connector, sizeof(out->connector), "%s", name);
 }
 
 static void output_description(void *data, struct wl_output *wl_output, const char *description) {
@@ -606,6 +614,8 @@ int main(int argc, char *argv[]) {
     char target[1024] = "";
     char mode[32] = "";
     int foreground = 0;
+    int overlay = 0;
+    char only_output[64] = "";
 
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--kill") == 0 || strcmp(argv[i], "-k") == 0) {
@@ -613,12 +623,21 @@ int main(int argc, char *argv[]) {
             return 0;
         } else if (strcmp(argv[i], "--foreground") == 0 || strcmp(argv[i], "-f") == 0) {
             foreground = 1;
+        } else if (strcmp(argv[i], "--overlay") == 0) {
+            /* a frozen screenshot over everything: the wallpaper itself is left running */
+            overlay = 1;
+            foreground = 1;
+        } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
+            snprintf(only_output, sizeof(only_output), "%s", argv[++i]);
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Usage: infynitae-wallpaper [IMAGE_PATH] [MODE] [OPTIONS]\n");
             printf("Modes: fill, fit, stretch, center, tile\n");
             printf("Options:\n");
             printf("  -k, --kill         Terminate current wallpaper\n");
             printf("  -f, --foreground   Stay in foreground (do not daemonize)\n");
+            printf("  --overlay          Show IMAGE above every window (a frozen screen), in the\n");
+            printf("                     foreground, leaving the wallpaper running\n");
+            printf("  --output NAME      Only on the output NAME (e.g. DP-1)\n");
             printf("  -h, --help         Show this help message\n");
             return 0;
         } else if (target[0] == '\0') {
@@ -628,8 +647,13 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    if (target[0] == '\0') {
+    if (target[0] == '\0' && !overlay) {
         load_config_defaults(target, sizeof(target), mode, sizeof(mode));
+    }
+
+    if (target[0] == '\0' && overlay) {
+        fprintf(stderr, "[infynitae-wallpaper] --overlay needs an image\n");
+        return 1;
     }
 
     if (target[0] == '\0') {
@@ -690,7 +714,9 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    kill_other_wallpapers();
+    if (!overlay) {
+        kill_other_wallpapers();
+    }
 
     // Auto-daemonize to detach cleanly unless foreground was requested
     if (!foreground) {
@@ -710,6 +736,8 @@ int main(int argc, char *argv[]) {
     struct wallpaper_app app = {0};
     app.pixbuf = pixbuf;
     snprintf(app.mode, sizeof(app.mode), "%s", mode);
+    app.overlay = overlay;
+    snprintf(app.only_output, sizeof(app.only_output), "%s", only_output);
 
     app.display = wl_display_connect(NULL);
     if (!app.display) {
@@ -726,14 +754,18 @@ int main(int argc, char *argv[]) {
     wl_display_roundtrip(app.display);
     wl_display_roundtrip(app.display);
 
-    write_pid_file();
+    if (!overlay) {
+        write_pid_file();
+    }
 
     while (wl_display_dispatch(app.display) != -1) {
         // Sleep on events; consumes 0% CPU
     }
 
     // Clean up
-    unlink(get_pid_file_path());
+    if (!overlay) {
+        unlink(get_pid_file_path());
+    }
 
     struct wallpaper_output *curr = app.outputs;
     while (curr) {

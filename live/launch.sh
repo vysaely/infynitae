@@ -256,14 +256,40 @@ case "$ACTION" in
         fi
         ;;
     region-screenshot)
-        # Super+Shift+R: Interactive region screenshot (slurp + grim)
+        # Super+Shift+R: Interactive region screenshot (slurp + grim) of the moment the key was
+        # pressed
         SHOT_DIR="${SCREENSHOT_DIR:-$HOME/Pictures/Screenshots}"
         mkdir -p "$SHOT_DIR"
         SHOT_FILE="$SHOT_DIR/region-$(date +%Y%m%d-%H%M%S).png"
         if command -v slurp >/dev/null 2>&1 && command -v grim >/dev/null 2>&1; then
+            # the moment of the key press (FREEZE_SCREENSHOT): each screen is captured first and
+            # shown frozen above every window while the region is chosen, then cut from it
+            FREEZE_DIR=""
+            FREEZERS=""
+            FREEZER="$HOME/.local/bin/infynitae-wallpaper"
+            if [ "${FREEZE_SCREENSHOT:-true}" = true ] && [ -x "$FREEZER" ]; then
+                FREEZE_DIR=$(mktemp -d "${XDG_RUNTIME_DIR:-/tmp}/infynitae-freeze.XXXXXX")
+                # the output names are the only "name" keys of the snapshot
+                for out in $("${INFYNITAE_BIN:-$HOME/.local/bin/infynitae}" msg snapshot 2>/dev/null \
+                    | grep -o '"name":"[^"]*"' | cut -d'"' -f4); do
+                    grim -o "$out" "$FREEZE_DIR/$out.png" 2>/dev/null || continue
+                    "$FREEZER" --overlay --output "$out" "$FREEZE_DIR/$out.png" stretch &
+                    FREEZERS="$FREEZERS $!"
+                done
+                # the frozen pictures on screen before slurp opens above them
+                [ -n "$FREEZERS" ] && sleep 0.2
+            fi
+            unfreeze() {
+                [ -n "$FREEZERS" ] && kill $FREEZERS 2>/dev/null
+                FREEZERS=""
+                [ -n "$FREEZE_DIR" ] && rm -rf "$FREEZE_DIR"
+            }
+            trap unfreeze EXIT INT TERM
             GEOM=$(slurp)
             if [ -n "$GEOM" ]; then
+                # what is on screen now is the frozen moment: the region is cut from it
                 grim -g "$GEOM" "$SHOT_FILE"
+                unfreeze
                 if [ -f "$SHOT_FILE" ] && command -v wl-copy >/dev/null 2>&1; then
                     wl-copy < "$SHOT_FILE"
                 fi
