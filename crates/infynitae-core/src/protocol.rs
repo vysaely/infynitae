@@ -1652,10 +1652,14 @@ impl Core {
     /// without an output, or when out of Canvas bounds.
     fn first_map_anchor(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
         // a child window (xdg_toplevel.set_parent: dialogs, an app's second window) opens centred
-        // over its mapped parent's window geometry, whatever the policy (owner, 2026-10-24)
+        // over its mapped parent's window geometry, whatever the policy (owner, 2026-10-24); one
+        // nearly the parent's size (Discord's pop-out) would hide it or peek out from behind it
+        // by a few pixels, and is placed by the policy instead
         if let Some(parent) = self.toplevel_parent(id)
             && self.stage.mapped(parent).is_some()
             && let (Some(a), Some(pt)) = (self.stage.anchor(parent), self.stage.tree(parent))
+            && (tree.geometry.size.w * 20 < pt.geometry.size.w * 17
+                || tree.geometry.size.h * 20 < pt.geometry.size.h * 17)
         {
             let g = tree.geometry;
             let pg = pt.geometry;
