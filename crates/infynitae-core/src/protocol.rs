@@ -826,7 +826,36 @@ impl Core {
         target_rect: (i64, i64, i64, i64),
         out: &mut Vec<Effect>,
     ) {
+        self.push_reached(target_elem, None, target_rect, out);
+    }
+
+    /// A window that grew by itself (an app settling into its remembered size, a resize) pushes
+    /// aside the windows its new rect reaches, closer than the gap; one its old rect already
+    /// reached (windows the user stacked) stays where it is.
+    fn push_grown(
+        &mut self,
+        id: ElementId,
+        old: (i64, i64, i64, i64),
+        new: (i64, i64, i64, i64),
+        out: &mut Vec<Effect>,
+    ) {
+        if new.0 < old.0 || new.1 < old.1 || new.2 > old.2 || new.3 > old.3 {
+            self.push_reached(id, Some(old), new, out);
+        }
+    }
+
+    fn push_reached(
+        &mut self,
+        target_elem: ElementId,
+        before: Option<(i64, i64, i64, i64)>,
+        target_rect: (i64, i64, i64, i64),
+        out: &mut Vec<Effect>,
+    ) {
         const GAP: i64 = 12;
+        // within the gap counts: windows never touch
+        let reaches = |r: (i64, i64, i64, i64), x0: i64, y0: i64, x1: i64, y1: i64| {
+            !(x1 + GAP <= r.0 || x0 >= r.2 + GAP || y1 + GAP <= r.1 || y0 >= r.3 + GAP)
+        };
         let mapped = self.stage.mapped_elements();
         let mut overlapping = Vec::new();
 
@@ -847,10 +876,8 @@ impl Core {
                 let gx1 = gx0.saturating_add(w);
                 let gy1 = gy0.saturating_add(h);
 
-                let intersects = !(gx1 <= target_rect.0
-                    || gx0 >= target_rect.2
-                    || gy1 <= target_rect.1
-                    || gy0 >= target_rect.3);
+                let intersects = reaches(target_rect, gx0, gy0, gx1, gy1)
+                    && !before.is_some_and(|b| reaches(b, gx0, gy0, gx1, gy1));
                 if intersects {
                     overlapping.push((other, gx0, gy0, w, h));
                 }
@@ -1315,6 +1342,13 @@ impl Core {
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
             }
             (Lifecycle::Mapped, true) => {
+                // the rect before this commit: what a window that grew newly reaches
+                let old_size = self.stage.tree(id).map(|old| old.geometry.size);
+                let old_rect = self
+                    .stage
+                    .anchor(id)
+                    .zip(old_size)
+                    .map(|(a, s)| (a.x, a.y, a.x + i64::from(s.w), a.y + i64::from(s.h)));
                 // a window being resized from its left or top keeps its opposite corner in place
                 if let Some(anchor) = self.resize_committed(id, tree.geometry.size, out) {
                     self.stage.place(id, anchor).map_err(stale)?;
@@ -1328,14 +1362,25 @@ impl Core {
                     self.place_by_default(id, &tree)?;
                 }
                 // the client redrew at another size: a size still on offer is spent
-                if self
-                    .stage
-                    .tree(id)
-                    .is_some_and(|old| old.geometry.size != tree.geometry.size)
-                {
+                if old_size.is_some_and(|old| old != tree.geometry.size) {
                     self.restore_offers.retain(|(e, _)| *e != id);
                 }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
+                if self.placement == PlacementPolicy::ClusterTiling
+                    && self.fullscreen_of(id).is_none()
+                    && let (Some(old), Some(a), Some(t)) =
+                        (old_rect, self.stage.anchor(id), self.stage.tree(id))
+                    && old.2 > old.0
+                    && old.3 > old.1
+                {
+                    let new = (
+                        a.x,
+                        a.y,
+                        a.x + i64::from(t.geometry.size.w),
+                        a.y + i64::from(t.geometry.size.h),
+                    );
+                    self.push_grown(id, old, new, out);
+                }
                 if self.placement == PlacementPolicy::ClusterTiling
                     && self.fullscreen_of(id).is_some()
                     && let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id))
@@ -6054,6 +6099,73 @@ mod tests {
     /// INV-STAGE-2: an element's anchor is the Canvas position of its window-geometry origin.
     /// Cluster tiling and push_overlapping_cluster use the same convention as CentredInView
     /// and stage.rs even when geometry.loc != 0 (CSD window with client margins/shadows).
+    /// A window that grows by itself pushes aside the neighbour it reaches, keeping the 12 px
+    /// gap; windows the user stacked stay stacked when one of them grows.
+    #[test]
+    fn a_window_that_grows_pushes_the_neighbour_it_reaches() {
+        let win = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint { x: 0, y: 0 },
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: key(k),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        let mut c = centred((1280, 800), 120, None);
+        c.set_placement_policy(PlacementPolicy::ClusterTiling);
+        let open = |c: &mut Core, k: u64, w: i32, h: i32| {
+            let id = c.toplevel_created();
+            c.toplevel_committed(id, win(k, w, h, false)).unwrap();
+            c.toplevel_committed(id, win(k, w, h, true)).unwrap();
+            id
+        };
+        let a = open(&mut c, 1, 400, 300);
+        let b = open(&mut c, 2, 400, 300);
+        let (aa, ab) = (c.stage().anchor(a).unwrap(), c.stage().anchor(b).unwrap());
+        // B is beside or below A; A grows by 200 px toward it, on both axes
+        c.toplevel_committed(a, win(1, 600, 500, true)).unwrap();
+        let ab2 = c.stage().anchor(b).unwrap();
+        let (bx0, by0) = (ab2.x, ab2.y);
+        let apart = bx0 >= aa.x + 600 + 12
+            || bx0 + 400 + 12 <= aa.x
+            || by0 >= aa.y + 500 + 12
+            || by0 + 300 + 12 <= aa.y;
+        assert!(
+            apart,
+            "B {ab2:?} keeps the gap from A {aa:?} grown to 600x500 (was {ab:?})"
+        );
+
+        // the user drags B onto A: when A grows again, B is not pushed off it
+        let mut fx = Vec::new();
+        c.place_by_user(
+            b,
+            CanvasPoint {
+                x: aa.x + 100,
+                y: aa.y + 100,
+            },
+            &mut fx,
+        )
+        .unwrap();
+        c.toplevel_committed(a, win(1, 700, 550, true)).unwrap();
+        assert_eq!(
+            c.stage().anchor(b).unwrap(),
+            CanvasPoint {
+                x: aa.x + 100,
+                y: aa.y + 100
+            }
+        );
+    }
+
     #[test]
     fn cluster_placement_and_push_with_csd_window_respects_stage_anchor_convention() {
         let csd = |k: u64, w: i32, h: i32, lx: i32, ly: i32, mapped: bool| SurfaceTree {
