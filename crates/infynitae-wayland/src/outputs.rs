@@ -304,13 +304,16 @@ impl WaylandState {
 
     /// [`spawn_action`](Self::spawn_action) with an argument (`exec`: the command to run).
     pub(crate) fn spawn_action_with(&mut self, action: &str, arg: &str) {
+        let args: &[&str] = if arg.is_empty() { &[] } else { &[arg] };
+        self.spawn_action_args(action, args);
+    }
+
+    /// [`spawn_action`](Self::spawn_action) with any number of arguments, each passed as is.
+    pub(crate) fn spawn_action_args(&mut self, action: &str, args: &[&str]) {
         let home = std::env::var("HOME").unwrap_or_default();
         let script = format!("{home}/infynitae/live/launch.sh");
         let mut cmd = std::process::Command::new("sh");
-        cmd.arg(script).arg(action);
-        if !arg.is_empty() {
-            cmd.arg(arg);
-        }
+        cmd.arg(script).arg(action).args(args);
         if let Ok(d) = std::env::var("DISPLAY") {
             cmd.env("DISPLAY", d);
         }

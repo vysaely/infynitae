@@ -155,6 +155,7 @@ live/xdg-open xdg-open
 live/xdg-terminal-exec xdg-terminal-exec
 live/infynitae-open-with infynitae-open-with
 live/battery-limit infynitae-battery-limit
+live/infynitae-xkill infynitae-xkill
 LIST
     # the C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream)
     sh "$src/live/build-helpers.sh" "$src" "$bin" \

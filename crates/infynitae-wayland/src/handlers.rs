@@ -455,7 +455,16 @@ impl WaylandState {
         };
         let creds = client.get_credentials(&self.dh).ok();
         if creds.is_some_and(|c| crate::ownership::is_xwayland_satellite(c.pid)) {
+            // every X11 window comes through the satellite's one connection: the app's own
+            // process is found from its X11 window (launch.sh force-close-x11), and the window
+            // is asked to close in case none matches
             toplevel.send_close();
+            let meta = self.core.stage().meta(element);
+            let app_id = meta.and_then(|m| m.app_id.clone()).unwrap_or_default();
+            let title = meta.and_then(|m| m.title.clone()).unwrap_or_default();
+            if !app_id.is_empty() {
+                self.spawn_action_args("force-close-x11", &[&app_id, &title]);
+            }
             return;
         }
         // pinned while connected, then disconnected (nothing more is read from it), then killed

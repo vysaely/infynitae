@@ -1,0 +1,61 @@
+#!/bin/sh
+# infynitae-xkill APP_ID TITLE: Super+Shift+C on an X11 window. Every X11 app reaches the
+# compositor through xwayland-satellite's one connection, so cutting it would end them all; the
+# app's own process is found instead: the X11 window of that class with exactly that title, its
+# _NET_WM_PID, and that process with everything it started is killed. Nothing is killed unless
+# exactly one process matches (the window was already asked to close).
+#   exit 0: killed   1: no single match, nothing killed   2: no X11 tools or display
+#   INFYNITAE_XKILL_DRY=1: print the processes instead of killing them
+set -u
+app=${1:-}
+title=${2:-}
+[ -n "$app" ] && [ -n "${DISPLAY:-}" ] && command -v xprop >/dev/null 2>&1 || exit 2
+
+lower() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
+want_class=$(lower "$app")
+
+# the X11 windows: xwininfo's tree, else xdotool
+windows() {
+    if command -v xwininfo >/dev/null 2>&1; then
+        xwininfo -root -tree 2>/dev/null | awk '$1 ~ /^0x[0-9a-f]+$/ { print $1 }'
+    elif command -v xdotool >/dev/null 2>&1; then
+        xdotool search --name '' 2>/dev/null
+    fi
+}
+
+pids=""
+for w in $(windows); do
+    props=$(xprop -id "$w" WM_CLASS _NET_WM_NAME WM_NAME _NET_WM_PID 2>/dev/null) || continue
+    # WM_CLASS = "instance", "class": either may be the app id the satellite gave the toplevel
+    class_line=$(printf '%s\n' "$props" | grep '^WM_CLASS')
+    inst=$(lower "$(printf '%s' "$class_line" | cut -d'"' -f2)")
+    cls=$(lower "$(printf '%s' "$class_line" | cut -d'"' -f4)")
+    [ "$inst" = "$want_class" ] || [ "$cls" = "$want_class" ] || continue
+    name=$(printf '%s\n' "$props" | grep '^_NET_WM_NAME' | sed 's/^[^"]*"//; s/"$//')
+    [ -n "$name" ] || name=$(printf '%s\n' "$props" | grep '^WM_NAME' | sed 's/^[^"]*"//; s/"$//')
+    [ "$name" = "$title" ] || continue
+    pid=$(printf '%s\n' "$props" | awk '/^_NET_WM_PID/ { print $3 }')
+    case "$pid" in '' | *[!0-9]*) continue ;; esac
+    case " $pids " in *" $pid "*) ;; *) pids="$pids $pid" ;; esac
+done
+
+set -- $pids
+[ $# -eq 1 ] || exit 1
+root=$1
+# only this user's own processes
+[ "$(stat -c %u "/proc/$root" 2>/dev/null)" = "$(id -u)" ] || exit 1
+
+# the tree: the process and everything it started
+tree() {
+    echo "$1"
+    for c in $(cat /proc/"$1"/task/*/children 2>/dev/null); do tree "$c"; done
+}
+all=$(tree "$root")
+if [ -n "${INFYNITAE_XKILL_DRY:-}" ]; then
+    echo $all
+    exit 0
+fi
+# stop them all first, so none starts new ones, then kill
+kill -STOP $all 2>/dev/null
+kill -KILL $all 2>/dev/null
+exit 0

@@ -255,6 +255,11 @@ case "$ACTION" in
             fi
         fi
         ;;
+    force-close-x11)
+        # Super+Shift+C on an X11 window: its own process, found from the X11 window (all X11
+        # windows share xwayland-satellite's connection)
+        "$HOME/.local/bin/infynitae-xkill" "$2" "$3"
+        ;;
     region-screenshot)
         # Super+Shift+R: Interactive region screenshot (slurp + grim) of the moment the key was
         # pressed
