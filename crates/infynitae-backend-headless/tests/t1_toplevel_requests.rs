@@ -281,8 +281,9 @@ fn requests_while_unmapped_are_not_answered() {
 /// its first configure, and the set is fullscreen alone: no maximize, minimize or window menu.
 /// (A client that reads the set shows no control for those.)
 ///
-/// Also recorded: Smithay sends `configure_bounds(0, 0)` with the first configure. Zero means
-/// "no bounds"; INV-PROTO-1 says none is sent in Foundation 01, and no bound is ever proposed.
+/// Also recorded: the first configure carries the room the window has, `configure_bounds` of the
+/// screen's usable area less the 12 px tiling gap on each side (INV-PROTO-1 as amended 2026-10-27),
+/// and nothing later repeats it while that room is unchanged.
 #[test]
 fn the_announced_capabilities_are_what_the_policy_grants() {
     let mut t = T::new();
@@ -304,7 +305,10 @@ fn the_announced_capabilities_are_what_the_policy_grants() {
     t.adv();
     t.ask(w, |tl| tl.set_maximized());
     assert_eq!(t.ls.probe.wm_capabilities, vec![(w, want)]);
-    assert_eq!(t.ls.probe.configure_bounds, vec![(w, (0, 0))]);
+    assert_eq!(
+        t.ls.probe.configure_bounds,
+        vec![(w, (1920 - 24, 1080 - 24))]
+    );
 }
 
 /// 300 requests in a fixed pseudo-random order on a focused window that never resizes: the

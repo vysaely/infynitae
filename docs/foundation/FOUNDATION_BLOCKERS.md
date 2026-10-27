@@ -370,8 +370,8 @@ Original finding text: the sections above (PD-F2) and audit/README (PD-F1-01…0
 
 ### W-SM-17
 - **Quirk:** `ToplevelSurface::send_configure` emits `xdg_toplevel.configure_bounds(0, 0)` with a toplevel's first configure to every client that bound `xdg_wm_base` ≥ 4; there is no API to omit it
-- **Infynitae response:** none needed: `(0, 0)` is xdg-shell's "bounds unknown", equivalent to the event never having been sent. Bounds are never set (INV-PROTO-1, C12.F3); a T1 test fails on any non-zero value or any occurrence outside an initial configure
-- **Evidence:** vendored Smithay 0.7.0 source; client traces (KCalc, fs_client); T1 `configure_bounds_is_zero_and_only_with_an_initial_configure`
+- **Infynitae response:** bounds are always set (INV-PROTO-1 as amended 2026-10-27), so the event carries the screen's usable area, never `(0, 0)`; Smithay sends it again only when it changed
+- **Evidence:** vendored Smithay 0.7.0 source; client traces (KCalc, fs_client); T1 `configure_bounds_is_the_screens_room_and_follows_it`, `a_portrait_screen_gives_portrait_room`
 - **Obligations:** —
 
 ### W-SM-18

@@ -356,6 +356,14 @@ impl WaylandState {
         let activated = self.core.focus().target() == Some(id);
         let state = self.core.toplevel_configure_state(id);
         let size = state.size.map(|s| (s.w, s.h)).or(offered);
+        // the room a window has (xdg_toplevel.configure_bounds): the first screen's usable area at
+        // its current rotation, less the tiling gap on each side, so an app opening at a size of
+        // its own fits a portrait screen instead of keeping its landscape width
+        let bounds = self.core.outputs().first().and_then(|o| {
+            let (_, _, w, h) = self.core.usable_area(o.id)?;
+            let fit = |v: f64| ((v - 2.0 * 12.0).floor() as i32).max(1);
+            Some((fit(w), fit(h)))
+        });
         let set = |states: &mut smithay::wayland::shell::xdg::ToplevelStateSet, flag, on: bool| {
             if on {
                 states.set(flag);
@@ -372,6 +380,7 @@ impl WaylandState {
             );
             set(&mut s.states, xdg_toplevel::State::Resizing, state.resizing);
             s.size = size.map(Into::into);
+            s.bounds = bounds.map(Into::into);
             s.fullscreen_output = None;
         });
         t.send_configure();

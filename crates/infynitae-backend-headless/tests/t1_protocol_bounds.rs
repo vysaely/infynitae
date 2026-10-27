@@ -1,8 +1,9 @@
-//! INV-PROTO-1 as amended by C12.F3, on the production path: no bounds are proposed.
-//! `xdg_toplevel.configure_bounds` reaches a client only as `(0, 0)` and only together with an
-//! initial configure, where Smithay emits it by itself (W-SM-17); xdg-shell defines zero
-//! dimensions as "bounds unknown", equivalent to the event never having been sent. The oracle is
-//! the client's own record of the events it received.
+//! INV-PROTO-1 as amended 2026-10-27 (owner: windows opened in the ThinkPad's portrait mode kept
+//! their landscape width), on the production path: a toplevel is told the room it has,
+//! `xdg_toplevel.configure_bounds` of the first screen's usable area at its current rotation and
+//! scale, less the 12 px tiling gap on each side. It comes with the initial configure and again with
+//! a configure after that room changed, never as `(0, 0)`. The oracle is the client's own record of
+//! the events it received.
 
 mod common;
 
@@ -27,20 +28,17 @@ fn bounds_of(ls: &Lockstep, idx: usize) -> Vec<(i32, i32)> {
         .collect()
 }
 
-/// Through everything that could plausibly change a bound — focus, a maximize request, an output
-/// reconfiguration to another size and scale, a second output, an unmap and a re-show — the only
-/// `configure_bounds` a client sees is `(0, 0)`, once per initial configure and never between.
+/// The bounds a client sees: the first screen's room with its initial configure, nothing more for
+/// focus or a maximize request, the new room after the screen changed size and scale, and its own
+/// again for a second window and after an unmap and re-show.
 #[test]
-fn configure_bounds_is_zero_and_only_with_an_initial_configure() {
+fn configure_bounds_is_the_screens_room_and_follows_it() {
     let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
     let qh = ls.qh.clone();
     let w = ls.probe.toplevel(&qh, "W", (400, 300), 0);
     adv(&mut ls);
-    assert_eq!(
-        bounds_of(&ls, w),
-        vec![(0, 0)],
-        "with the initial configure"
-    );
+    let first = (1920 - 24, 1080 - 24);
+    assert_eq!(bounds_of(&ls, w), vec![first], "with the initial configure");
     let id = ls.state.elements().next().expect("element");
 
     set_focus(&mut ls.state, &mut ls.input, Some(id)).expect("focus");
@@ -51,41 +49,34 @@ fn configure_bounds_is_zero_and_only_with_an_initial_configure() {
         .expect("toplevel")
         .set_maximized();
     adv(&mut ls);
+    assert_eq!(bounds_of(&ls, w), vec![first], "the room did not change");
+
+    // 2560 x 1440 at scale 1.5: 1706.67 x 960 logical px
     let o = ls.output();
     ls.reconfigure(o, &output_k("A", (2560, 1440), 180, 60_000));
     adv(&mut ls);
-    ls.connect(&output_k("B", (1280, 720), 120, 60_000));
+    // a configure after the change carries the new room
+    set_focus(&mut ls.state, &mut ls.input, None).expect("unfocus");
     adv(&mut ls);
-    assert!(
-        ls.probe.toplevel_configures.len() >= 3,
-        "the window was configured several times: {:?}",
-        ls.probe.toplevel_configures
-    );
-    assert_eq!(
-        bounds_of(&ls, w),
-        vec![(0, 0)],
-        "a later configure carried bounds"
-    );
+    let seen = bounds_of(&ls, w);
+    assert_eq!(seen.last(), Some(&(1682, 936)), "the new room: {seen:?}");
+    assert!(seen.iter().all(|b| *b != (0, 0)), "never (0, 0): {seen:?}");
 
-    // unmap and re-show: a new initial configure, and with it at most one more (0, 0)
-    ls.probe.unmap(w);
-    adv(&mut ls);
-    assert_eq!(bounds_of(&ls, w), vec![(0, 0)], "an unmap carried bounds");
-    ls.probe.surfaces[w].wl.commit();
-    adv(&mut ls);
-    let after = bounds_of(&ls, w);
-    assert!(
-        after.len() <= 2,
-        "more bounds than initial configures: {after:?}"
-    );
-    assert!(
-        after.iter().all(|b| *b == (0, 0)),
-        "a non-zero bound was proposed: {after:?}"
-    );
-
-    // a second toplevel gets its own, and the first gets nothing more
+    // a second toplevel is told the room with its own initial configure
     let x = ls.probe.toplevel(&qh, "X", (300, 200), 0);
     adv(&mut ls);
-    assert_eq!(bounds_of(&ls, x), vec![(0, 0)]);
-    assert_eq!(bounds_of(&ls, w), after);
+    assert_eq!(bounds_of(&ls, x), vec![(1682, 936)]);
+}
+
+/// The ThinkPad's case: its 1366 x 768 panel turned to portrait. The room is the rotated one,
+/// 768 wide, so an app opening at its own size fits the screen.
+#[test]
+fn a_portrait_screen_gives_portrait_room() {
+    let mut portrait = output((1366, 768), 120);
+    portrait.transform = infynitae_core::output::Transform::R90;
+    let mut ls = Lockstep::new(Some(portrait));
+    let qh = ls.qh.clone();
+    let w = ls.probe.toplevel(&qh, "W", (400, 300), 0);
+    adv(&mut ls);
+    assert_eq!(bounds_of(&ls, w), vec![(768 - 24, 1366 - 24)]);
 }

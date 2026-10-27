@@ -782,13 +782,13 @@ that verify it, the formulas it uses and the ADRs that explain it. Where the wor
 - **ADR:** ADR-14
 
 ### INV-PROTO-1
-- **Wording:** xdg_toplevel state policy (Foundation 01). `set_maximized`/`unset_maximized` are each answered with exactly one configure that does not grant `maximized`; they never invoke fit, move a camera or change the Stage (adapter overrides Smithay's default, W-SM-13). A pre-configure request is recorded and ignored. `set_minimized` is ignored. `activated` holds exactly when the element holds ActiveElementFocus and changes only on its transitions (a kick trigger if unobserved). No bounds are proposed in Foundation 01. `configure_bounds` is sent only as `(0, 0)` and only with a toplevel's initial configure, where Smithay emits it for a client that binds `xdg_wm_base` version 4 or later (W-SM-17); xdg-shell defines zero dimensions as bounds unknown, equivalent to the event never having been sent. A non-zero bound is never sent.
+- **Wording:** xdg_toplevel state policy (Foundation 01). `set_maximized`/`unset_maximized` are each answered with exactly one configure that does not grant `maximized`; they never invoke fit, move a camera or change the Stage (adapter overrides Smithay's default, W-SM-13). A pre-configure request is recorded and ignored. `set_minimized` is ignored. `activated` holds exactly when the element holds ActiveElementFocus and changes only on its transitions (a kick trigger if unobserved). Every configure proposes bounds (amended 2026-10-27): the first output's usable area (L4) at its current transform and scale, less the 12 px tiling gap on each side, in logical px. Smithay sends `configure_bounds` with the initial configure and with a later configure when the bounds changed (W-SM-17), never as `(0, 0)`. A client that opens at a size of its own then fits the screen, a rotated one included.
 - **Owner:** core `protocol` + adapter
 - **Class:** P+E
 - **Violation:** D7-authored (D-F0): mandatory xdg_toplevel requests left unanswered, or maximize used as a camera/Stage path
 - **Origin:** C12.F3 @ ADOPTED 2026-10-14 (owner approval; base d6714f6)
 - **Layers:** C12.R1 → C12.F3
-- **Trigger:** owner amendment 2026-10-14 (configure_bounds)
+- **Trigger:** owner amendment 2026-10-14 (configure_bounds); owner amendment 2026-10-27 (bounds proposed: windows opened on the ThinkPad's portrait screen kept their landscape width)
 - **Evidence:** ER-3
 - **Tests (historical column):** T1 (OB-32)
 - **Obligations:** OB-32
