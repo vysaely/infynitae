@@ -22,6 +22,16 @@ use wayland_protocols::xdg::shell::client::xdg_toplevel::{ResizeEdge, XdgTopleve
 const MAXIMIZED: u32 = 1;
 const FULLSCREEN: u32 = 2;
 const ACTIVATED: u32 = 4;
+/// `tiled_left` … `tiled_bottom`: a window that is not fullscreen is tiled on every side
+/// (SQUARE_CORNERS).
+const TILED: [u32; 4] = [5, 6, 7, 8];
+
+/// The sorted states of a window that is not fullscreen.
+fn windowed_states(activated: bool) -> Vec<u32> {
+    let mut s = if activated { vec![ACTIVATED] } else { vec![] };
+    s.extend(TILED);
+    s
+}
 const BTN_LEFT: u32 = 0x110;
 
 struct T {
@@ -157,7 +167,7 @@ fn tst22_each_request_gets_its_policy_answer_and_nothing_moves() {
     let before = t.authority();
     let ptr = t.ls.probe.ptr.len();
 
-    let declined = vec![((0, 0), vec![ACTIVATED])];
+    let declined = vec![((0, 0), windowed_states(true))];
     assert_eq!(t.ask(w, |tl| tl.set_maximized()), declined, "set_maximized");
     assert_eq!(
         t.ask(w, |tl| tl.unset_maximized()),
@@ -210,9 +220,12 @@ fn an_unfocused_window_is_answered_the_same_way() {
     let other = t.configures(w2).len();
     assert_eq!(
         t.ask(w1, |tl| tl.set_fullscreen(None)),
-        vec![((0, 0), vec![])]
+        vec![((0, 0), windowed_states(false))]
     );
-    assert_eq!(t.ask(w1, |tl| tl.set_maximized()), vec![((0, 0), vec![])]);
+    assert_eq!(
+        t.ask(w1, |tl| tl.set_maximized()),
+        vec![((0, 0), windowed_states(false))]
+    );
     assert_eq!(t.ask(w1, |tl| tl.set_minimized()), vec![]);
     assert_eq!(
         t.configures(w2).len(),
@@ -329,7 +342,7 @@ fn a_stream_of_requests_is_answered_one_for_one() {
     let mut x = 0x9E37_79B9_7F4A_7C15u64;
     let mut expected = Vec::new();
     let mut fullscreen = false;
-    let windowed = ((0, 0), vec![ACTIVATED]);
+    let windowed = ((0, 0), windowed_states(true));
     let full = ((1920, 1080), vec![FULLSCREEN, ACTIVATED]);
     for _ in 0..300 {
         x ^= x << 13;
@@ -355,7 +368,7 @@ fn a_stream_of_requests_is_answered_one_for_one() {
             }
             3 if fullscreen => {
                 fullscreen = false;
-                expected.push(((400, 300), vec![ACTIVATED]));
+                expected.push(((400, 300), windowed_states(true)));
             }
             3 => expected.push(windowed.clone()),
             _ => {}
@@ -368,6 +381,6 @@ fn a_stream_of_requests_is_answered_one_for_one() {
     let got = &t.configures(w)[start..];
     assert_eq!(got.len(), expected.len(), "one configure per state request");
     assert_eq!(got, expected.as_slice());
-    assert!(expected.contains(&full) && expected.contains(&((400, 300), vec![ACTIVATED])));
+    assert!(expected.contains(&full) && expected.contains(&((400, 300), windowed_states(true))));
     assert_eq!(t.authority(), before);
 }

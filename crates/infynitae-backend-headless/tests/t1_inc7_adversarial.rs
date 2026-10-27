@@ -37,6 +37,16 @@ const BLUE: u32 = 0xFF00_00FF;
 const YELLOW: u32 = 0xFFFF_FF00;
 const FULLSCREEN: u32 = 2;
 const ACTIVATED: u32 = 4;
+/// `tiled_left` … `tiled_bottom`: a window that is not fullscreen is tiled on every side
+/// (SQUARE_CORNERS).
+const TILED: [u32; 4] = [5, 6, 7, 8];
+
+/// The states of a focused window that is not fullscreen, sorted.
+fn windowed_states() -> Vec<u32> {
+    let mut s = vec![ACTIVATED];
+    s.extend(TILED);
+    s
+}
 const SIZE: (i32, i32) = (640, 480);
 
 type Layer = ((i32, i32, i32, i32), u32);
@@ -302,13 +312,13 @@ fn re_entering_before_redrawing_windowed_keeps_the_windowed_size() {
     t.resize(w, (640, 480), RED);
     assert_eq!(
         t.ask(w, |tl| tl.unset_fullscreen()),
-        vec![((200, 100), vec![ACTIVATED])]
+        vec![((200, 100), windowed_states())]
     );
     // the user toggles again before the client has drawn its 200x100 buffer
     assert_eq!(t.ask(w, |tl| tl.set_fullscreen(None)), granted());
     assert_eq!(
         t.ask(w, |tl| tl.unset_fullscreen()),
-        vec![((200, 100), vec![ACTIVATED])],
+        vec![((200, 100), windowed_states())],
         "the fullscreen size was saved as the windowed size"
     );
     t.resize(w, (200, 100), RED);
@@ -331,7 +341,7 @@ fn fifty_toggles_without_a_single_redraw() {
         assert_eq!(t.ask(w, |tl| tl.set_fullscreen(None)), granted(), "set {i}");
         assert_eq!(
             t.ask(w, |tl| tl.unset_fullscreen()),
-            vec![((200, 100), vec![ACTIVATED])],
+            vec![((200, 100), windowed_states())],
             "unset {i}"
         );
     }
@@ -361,7 +371,7 @@ fn a_set_and_an_unset_in_one_batch_get_one_configure_each() {
         got,
         vec![
             ((640, 480), vec![FULLSCREEN, ACTIVATED]),
-            ((200, 100), vec![ACTIVATED]),
+            ((200, 100), windowed_states()),
             ((640, 480), vec![FULLSCREEN, ACTIVATED]),
         ]
     );
@@ -423,7 +433,10 @@ fn unmapped_before_acknowledging_the_grant() {
     let before = t.configures(w).len();
     t.ls.probe.surfaces[w].wl.commit();
     t.adv();
-    assert_eq!(t.configures(w)[before..].to_vec(), vec![((0, 0), vec![])]);
+    assert_eq!(
+        t.configures(w)[before..].to_vec(),
+        vec![((0, 0), TILED.to_vec())]
+    );
     t.resize(w, (200, 100), RED);
     assert_layers(&t.frame(), &[W_WINDOWED, OTHER], "re-shown, on top");
     t.core_is_clean();
@@ -439,7 +452,7 @@ fn a_stale_acknowledgement_does_not_bring_fullscreen_back() {
     assert_eq!(t.ask(w, |tl| tl.set_fullscreen(None)), granted());
     assert_eq!(
         t.ask(w, |tl| tl.unset_fullscreen()),
-        vec![((200, 100), vec![ACTIVATED])]
+        vec![((200, 100), windowed_states())]
     );
     let held = t.ls.probe.held_acks.clone();
     assert_eq!(held.len(), 2);
@@ -525,7 +538,7 @@ fn a_client_that_never_answers_the_grant() {
     assert!(!t.frame_of(o, 1).0, "damage with nothing changed");
     assert_eq!(
         t.ask(w, |tl| tl.unset_fullscreen()),
-        vec![((200, 100), vec![ACTIVATED])]
+        vec![((200, 100), windowed_states())]
     );
     assert_eq!(t.frame(), windowed);
     t.core_is_clean();
@@ -588,7 +601,7 @@ fn twenty_rounds_of_fullscreen_unmap_and_reshow() {
         t.adv();
         assert_eq!(
             t.configures(w)[before..].to_vec(),
-            vec![((0, 0), vec![])],
+            vec![((0, 0), TILED.to_vec())],
             "round {i}: the re-show"
         );
         t.resize(w, (200, 100), RED);
@@ -857,7 +870,7 @@ fn a_camera_pan_under_a_presentation() {
     assert_eq!((dx, dy), (-50, -30), "the hidden camera follows the hand");
     assert_eq!(
         t.ask(w, |tl| tl.unset_fullscreen()),
-        vec![((200, 100), vec![ACTIVATED])]
+        vec![((200, 100), windowed_states())]
     );
     t.resize(w, (200, 100), RED);
     // the content moved with the hand: every window 50 right and 30 down of where it was
@@ -903,7 +916,7 @@ fn the_last_output_is_removed_under_a_presentation() {
     t.adv();
     assert_eq!(
         t.configures(w)[before..].to_vec(),
-        vec![((200, 100), vec![ACTIVATED])]
+        vec![((200, 100), windowed_states())]
     );
     t.core_is_clean();
     t.resize(w, (200, 100), RED);
@@ -1008,7 +1021,7 @@ fn a_pre_map_grant_takes_the_output_only_when_its_window_maps() {
     t.adv();
     assert_eq!(
         t.configures(w)[before..].to_vec(),
-        vec![((200, 100), vec![ACTIVATED])],
+        vec![((200, 100), windowed_states())],
         "W is told to leave when X maps"
     );
     let xid = t.ls.state.elements().last().expect("X");

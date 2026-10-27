@@ -39,6 +39,8 @@ BORDER_WIDTH="1"                  # px, 0 = none
 BORDER_ACTIVE="#7aa2f7"
 BORDER_INACTIVE="#333b54"
 BORDER_IGNORE_CSD="true"          # no border around apps that draw their own (Firefox…)
+SQUARE_CORNERS="true"             # apps draw square corners and no shadow (they are told they are
+                                  # tiled), flush with the border; false: their own rounded look
 CLIP_TO_GEOMETRY="true"           # windows are drawn only inside their own edges, not in the
                                   # margins apps keep for shadows (stale pixels there: black blocks)
 WINE_TRANSPARENCY="true"          # no black boxes behind Wine/Proton/X11 layered windows

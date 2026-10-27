@@ -354,6 +354,7 @@ impl WaylandState {
             return;
         };
         let activated = self.core.focus().target() == Some(id);
+        let square_corners = self.square_corners;
         let state = self.core.toplevel_configure_state(id);
         let size = state.size.map(|s| (s.w, s.h)).or(offered);
         // the room a window has (xdg_toplevel.configure_bounds): the first screen's usable area at
@@ -379,6 +380,18 @@ impl WaylandState {
                 state.fullscreen.is_some(),
             );
             set(&mut s.states, xdg_toplevel::State::Resizing, state.resizing);
+            // tiled on every side (SQUARE_CORNERS): apps that round their corners and draw a
+            // shadow (GTK, libadwaita, Chromium) draw a square window instead, flush with its
+            // border; not while fullscreen, which has no edges
+            let square = square_corners && state.fullscreen.is_none();
+            for edge in [
+                xdg_toplevel::State::TiledLeft,
+                xdg_toplevel::State::TiledRight,
+                xdg_toplevel::State::TiledTop,
+                xdg_toplevel::State::TiledBottom,
+            ] {
+                set(&mut s.states, edge, square);
+            }
             s.size = size.map(Into::into);
             s.bounds = bounds.map(Into::into);
             s.fullscreen_output = None;

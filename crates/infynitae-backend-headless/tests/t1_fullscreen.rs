@@ -31,6 +31,16 @@ const RED: u32 = 0xFFFF_0000;
 const BLUE: u32 = 0xFF00_00FF;
 const FULLSCREEN: u32 = 2;
 const ACTIVATED: u32 = 4;
+/// `tiled_left`, `tiled_right`, `tiled_top`, `tiled_bottom`: a window that is not fullscreen is
+/// tiled on every side (SQUARE_CORNERS).
+const TILED: [u32; 4] = [5, 6, 7, 8];
+
+/// The states of a window that is not fullscreen.
+fn windowed_states(activated: bool) -> Vec<u32> {
+    let mut s = if activated { vec![ACTIVATED] } else { vec![] };
+    s.extend(TILED);
+    s
+}
 const SIZE: (i32, i32) = (640, 480);
 
 type Layer = ((i32, i32, i32, i32), u32);
@@ -260,7 +270,7 @@ fn a_focused_client_goes_fullscreen_and_back() {
     let got = t.ask(w, |tl| tl.unset_fullscreen());
     assert_eq!(
         got,
-        vec![((200, 100), vec![ACTIVATED])],
+        vec![((200, 100), windowed_states(true))],
         "the saved size is offered"
     );
     assert_eq!(
@@ -275,7 +285,7 @@ fn a_focused_client_goes_fullscreen_and_back() {
     assert!(t.ls.state.core().fullscreen().is_empty());
     // later configures carry no size: the offer was made once
     let got = t.ask(w, |tl| tl.set_maximized());
-    assert_eq!(got, vec![((0, 0), vec![ACTIVATED])]);
+    assert_eq!(got, vec![((0, 0), windowed_states(true))]);
 }
 
 /// M9 row 2: a client that does not hold the focus is declined with one configure, and nothing
@@ -290,7 +300,7 @@ fn an_unfocused_client_is_declined_and_nothing_changes() {
     let log = t.ls.probe.log.len();
     assert_eq!(
         t.ask(w, |tl| tl.set_fullscreen(None)),
-        vec![((0, 0), vec![])]
+        vec![((0, 0), windowed_states(false))]
     );
     assert_eq!(t.log_since(log), Vec::<String>::new());
     assert_eq!(t.frame(), before);
@@ -579,7 +589,7 @@ fn the_client_can_name_the_output() {
     let got = t.configures(w)[before..].to_vec();
     assert_eq!(
         got,
-        vec![((200, 100), vec![ACTIVATED])],
+        vec![((200, 100), windowed_states(true))],
         "told to leave, with the saved size"
     );
     assert!(t.ls.state.core().fullscreen().is_empty());
@@ -689,7 +699,7 @@ fn a_popup_survives_the_grant_and_is_presented_with_its_fullscreen_window() {
     );
 
     let got = t.ask(w, |tl| tl.unset_fullscreen());
-    assert_eq!(got, vec![((200, 100), vec![ACTIVATED])]);
+    assert_eq!(got, vec![((200, 100), windowed_states(true))]);
     t.resize(w, (200, 100), RED);
     assert!(
         t.ls.probe.popup_dones.is_empty(),
