@@ -71,6 +71,9 @@ impl Default for Background {
 #[derive(Default)]
 struct Lowered {
     threads: HashMap<i32, i32>,
+    /// Threads already at [`BACKGROUND_NICE`] or lower when the tree was lowered (an app the user
+    /// started with `nice`): left alone then, and never raised by the restore.
+    kept: std::collections::HashSet<i32>,
 }
 
 /// What [`Background::plan`] decided.
@@ -301,10 +304,9 @@ fn lower(pid: u32, windowed: &[u32]) -> Lowered {
             let Ok(nice) = getpriority_process(Some(id)) else {
                 continue;
             };
-            if nice < BACKGROUND_NICE
-                && nice >= floor
-                && setpriority_process(Some(id), BACKGROUND_NICE).is_ok()
-            {
+            if nice >= BACKGROUND_NICE {
+                lowered.kept.insert(tid);
+            } else if nice >= floor && setpriority_process(Some(id), BACKGROUND_NICE).is_ok() {
                 lowered.threads.insert(tid, nice);
             }
         }
@@ -315,13 +317,21 @@ fn lower(pid: u32, windowed: &[u32]) -> Lowered {
 /// Raises `pid`'s tree back: each thread still at [`BACKGROUND_NICE`] to its nice before, a
 /// thread started since to the nice its app had.
 fn restore(pid: u32, lowered: &Lowered, windowed: &[u32]) {
-    let default = lowered.threads.get(&(pid as i32)).copied().unwrap_or(0);
+    // a thread started since takes its app's own level back: the root's before, or its own if the
+    // root was left alone
+    let root = pid as i32;
+    let default = match lowered.threads.get(&root) {
+        Some(&n) => n,
+        None if lowered.kept.contains(&root) => BACKGROUND_NICE,
+        None => 0,
+    };
     for process in tree(pid, windowed) {
         for tid in threads(process) {
             let Some(id) = Pid::from_raw(tid) else {
                 continue;
             };
-            if getpriority_process(Some(id)) == Ok(BACKGROUND_NICE) {
+            if !lowered.kept.contains(&tid) && getpriority_process(Some(id)) == Ok(BACKGROUND_NICE)
+            {
                 let before = lowered.threads.get(&tid).copied().unwrap_or(default);
                 let _ = setpriority_process(Some(id), before);
             }
@@ -390,6 +400,46 @@ mod tests {
             }
         );
         assert_eq!(bg.due(t0), None);
+    }
+
+    /// An app the user started with `nice` (already at or below the background level) is left
+    /// alone when lowered and is not raised by the restore, even where the nice limit would allow
+    /// it (2026-10-27: with gamemode's limit, restore raised such a tree to nice 0).
+    #[test]
+    fn an_app_started_with_nice_is_never_raised() {
+        // exactly at the background level: the case a restore could take for its own lowering
+        let own = getpriority_process(None).unwrap();
+        if own > BACKGROUND_NICE {
+            return; // this process runs lower already: no child can be placed at the level
+        }
+        let by = (BACKGROUND_NICE - own).to_string();
+        let mut child = crate::ownership::spawn_owned(std::process::Command::new("nice").args([
+            "-n",
+            &by,
+            "sh",
+            "-c",
+            "sleep 30 & wait",
+        ]))
+        .unwrap();
+        let pid = child.id();
+        let started = Instant::now();
+        while tree(pid, &[]).len() < 2 && started.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let tids: Vec<i32> = tree(pid, &[]).into_iter().flat_map(threads).collect();
+        let nice = |tid: i32| getpriority_process(Pid::from_raw(tid)).unwrap();
+        let before: Vec<i32> = tids.iter().map(|t| nice(*t)).collect();
+        assert!(
+            before.iter().all(|n| *n == BACKGROUND_NICE),
+            "started at the level: {before:?}"
+        );
+        let lowered = lower(pid, &[]);
+        assert!(lowered.threads.is_empty(), "nothing to lower");
+        restore(pid, &lowered, &[]);
+        let after: Vec<i32> = tids.iter().map(|t| nice(*t)).collect();
+        assert_eq!(after, before, "left where the user put it");
+        let _ = child.kill();
+        let _ = child.wait();
     }
 
     #[test]
