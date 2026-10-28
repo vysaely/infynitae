@@ -90,6 +90,7 @@ impl CanvasGesture {
             self.moved = true;
         }
     }
+}
 
 /// Where a gesture took hold: the Canvas point under the centroid (Canvas px), the zoom then,
 /// and the fingers' spread then.
