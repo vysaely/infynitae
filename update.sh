@@ -107,6 +107,7 @@ fi
 # 6. what Infynitae needs outside the home folder, and the config (yours is never overwritten)
 install_system_files "$REPO_DIR"
 install_config "$REPO_DIR"
+install_default_apps
 
 # 7. a running session: restart the helpers in place (windows stay open)
 if pgrep -x infynitae >/dev/null 2>&1; then

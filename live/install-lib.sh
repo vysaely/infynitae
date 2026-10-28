@@ -236,6 +236,36 @@ PORTAL
     fi
 }
 
+# The parts' own apps open their files: folders in Thunar (not a terminal that also says it opens
+# them), videos and music in Celluloid, pictures in Ristretto, text in Mousepad. Only for the types
+# with no default of yours in ~/.config/mimeapps.list: a choice you made is never changed.
+install_default_apps() {
+    local list="$HOME/.config/mimeapps.list" d t types chosen add=""
+    mkdir -p "$HOME/.config"
+    [ -f "$list" ] || : > "$list"
+    chosen=$(awk '/^\[/ { s = ($0 == "[Default Applications]") } s && /=/ { sub(/=.*/, ""); print }' "$list")
+    for d in thunar.desktop io.github.celluloid_player.Celluloid.desktop \
+        org.xfce.ristretto.desktop org.xfce.mousepad.desktop; do
+        [ -f "/usr/share/applications/$d" ] || continue
+        types=$(sed -n 's/^MimeType=//p' "/usr/share/applications/$d" | tr ';' '\n')
+        for t in $types; do
+            printf '%s\n' "$chosen" | grep -qxF "$t" && continue
+            add="$add$t=$d
+"
+            chosen="$chosen
+$t"
+        done
+    done
+    [ -n "$add" ] || return 0
+    if grep -qx '\[Default Applications\]' "$list"; then
+        awk -v add="$add" '{ print } $0 == "[Default Applications]" { printf "%s", add }' "$list" \
+            > "$list.new" && mv -f "$list.new" "$list"
+    else
+        printf '\n[Default Applications]\n%s' "$add" >> "$list"
+    fi
+    echo "==> Default apps for $(printf '%s' "$add" | grep -c .) more file types (~/.config/mimeapps.list)"
+}
+
 # The config: created when missing, with the parts left out switched off too, so it says what the
 # desktop does; yours is never overwritten (the new defaults go to config.template).
 install_config() {

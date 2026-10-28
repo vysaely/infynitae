@@ -11,4 +11,5 @@ files thunar tumbler ffmpegthumbnailer poppler-glib thunar-archive-plugin xarchi
 autorotate iio-sensor-proxy wlr-randr
 osk squeekboard
 gamemode gamemode
+viewers celluloid ristretto mousepad
 thermal thermald

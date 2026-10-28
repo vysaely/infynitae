@@ -1,5 +1,7 @@
 #%PAM-1.0
 auth        include     system-auth
+# the password store for apps (gnome-keyring) opens with your password; skipped when not installed
+-auth       optional    pam_gnome_keyring.so
 account     include     system-auth
 password    include     system-auth
 session     include     system-auth

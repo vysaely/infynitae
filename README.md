@@ -35,7 +35,7 @@ there are no menus: it installs what fits the machine, minus what the options le
 
 | Flag | Effect |
 | :--- | :--- |
-| `--no-notifications` `--no-keyring` `--no-automount` `--no-clipboard` `--no-fonts` `--no-recorder` `--no-files` `--no-terminal` `--no-bluetooth` `--no-power-profiles` `--no-autorotate` `--no-osk` `--no-gamemode` `--no-thermal` | Leave out that part |
+| `--no-notifications` `--no-keyring` `--no-automount` `--no-clipboard` `--no-fonts` `--no-recorder` `--no-files` `--no-terminal` `--no-bluetooth` `--no-power-profiles` `--no-autorotate` `--no-osk` `--no-gamemode` `--no-thermal` `--no-viewers` | Leave out that part |
 | `--minimal` | Leave out all of them |
 | `--defaults` | No menus: what fits this machine |
 | `--replay-buffer` | Keep the last minutes of the screen, saved with `Super + Alt + C` |

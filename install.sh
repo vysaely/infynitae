@@ -38,6 +38,8 @@ Leave out a part:
   --no-osk             an on-screen keyboard in tablet mode on convertibles (squeekboard)
   --no-gamemode        the CPU at full speed while a fullscreen game runs (gamemode)
   --no-thermal         Intel's thermal manager on Intel laptops (thermald)
+  --no-viewers         apps for videos and music (celluloid), pictures (ristretto) and text
+                       (mousepad)
   --minimal            all of the above
 
 Turn on:
@@ -66,13 +68,13 @@ MENU=false
 [ $# -eq 0 ] && [ -t 0 ] && [ -t 1 ] && [ -n "${TERM:-}" ] && [ "$TERM" != dumb ] && MENU=true
 for arg in "$@"; do
     case "$arg" in
-        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate | --no-files | --no-osk | --no-gamemode | --no-thermal)
+        --no-notifications | --no-keyring | --no-automount | --no-clipboard | --no-fonts | --no-recorder | --no-autorotate | --no-files | --no-osk | --no-gamemode | --no-thermal | --no-viewers)
             SKIP="$SKIP ${arg#--no-}" ;;
         --no-terminal) TERMINAL_PKG=false ;;
         --no-bluetooth) BLUETOOTH=false ;;
         --no-power-profiles) POWER_PROFILES=false ;;
         --minimal)
-            SKIP="notifications keyring automount clipboard fonts recorder autorotate files osk gamemode thermal"
+            SKIP="notifications keyring automount clipboard fonts recorder autorotate files osk gamemode thermal viewers"
             TERMINAL_PKG=false BLUETOOTH=false POWER_PROFILES=false ;;
         --no-autologin) AUTOLOGIN=false ;;
         --replay-buffer) REPLAY_BUFFER=true ;;
@@ -266,6 +268,7 @@ echo "==> Installing..."
 install_programs "$INSTALL_DIR"
 install_system_files "$INSTALL_DIR"
 install_config "$INSTALL_DIR"
+install_default_apps
 # terminals started outside Infynitae find its commands too
 for prof in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zprofile"; do
     if [ -f "$prof" ] && ! grep -q '\.local/bin' "$prof"; then

@@ -40,6 +40,7 @@ part_label() {
         osk) echo "On-screen keyboard in tablet mode" ;;
         gamemode) echo "Game mode: full CPU speed in games" ;;
         thermal) echo "Intel's thermal manager (thermald)" ;;
+        viewers) echo "Video, picture and text apps" ;;
         terminal) echo "A terminal (alacritty)" ;;
         bluetooth) echo "Bluetooth" ;;
         power-profiles) echo "Power modes (power-profiles-daemon)" ;;

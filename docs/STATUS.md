@@ -98,6 +98,13 @@ These pass the test suite but have not run on a real screen or device yet:
   (80%) on laptops whose firmware supports it (ThinkPads and many others); a udev rule lets the
   user set it. Tested against a stand-in battery; read on a ThinkPad S1 Yoga 12.
 - **thermald** on Intel laptops (`--no-thermal`): Intel's thermal manager, running.
+- **Default apps** (`--no-viewers` leaves the apps out): folders open in Thunar, videos and music
+  in Celluloid, pictures in Ristretto, text in Mousepad, set for the file types with no default of
+  yours in `~/.config/mimeapps.list` (install and update). Tested against a stand-in home; not yet
+  on a fresh install.
+- **Password store unlocked at login:** gnome-keyring starts before the start lock screen, and
+  the lock screen's password opens it (`pam_gnome_keyring`), so apps no longer ask for a second
+  password. Not yet tested on hardware.
 - **Laptop lid:** closing it with another screen connected moves everything to that screen
   until the lid opens. With no other screen, logind suspends as usual.
 - **Night light, screen power,** the capture dot, single-window sharing.

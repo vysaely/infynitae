@@ -11,6 +11,13 @@ if [ -f "$HOME/infynitae/live/config.sh" ]; then
     . "$HOME/infynitae/live/config.sh"
 fi
 
+# 1a. The password store for apps (gnome-keyring) runs before the lock screen asks for the
+# password, so that password opens it (/etc/pam.d/infynitae), as a login does on other desktops;
+# apps reach it through D-Bus
+if command -v gnome-keyring-daemon >/dev/null 2>&1; then
+    gnome-keyring-daemon --start --components=secrets >/dev/null 2>&1 || true
+fi
+
 # 1b. Start Screen (replacing the TTY prompt with the lock screen). First, before any window can
 # open: nothing else starts until the compositor has confirmed the lock. If it cannot be engaged
 # (no locker installed, the locker failed), the session ends rather than stay unlocked.
