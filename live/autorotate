@@ -123,7 +123,23 @@ NO_SENSOR_FILE="$STATE_DIR/autorotate-nosensor-$$"
 cleanup() {
     rm -f "$STATUS_FILE" "$ORI_FILE" "$NO_SENSOR_FILE" 2>/dev/null || true
 }
-trap cleanup EXIT INT TERM HUP
+# this script's own processes (the monitor-sensor pipeline, a sleep), deepest first
+stop_children() {
+    for c in $(cat /proc/"$1"/task/*/children 2>/dev/null); do
+        stop_children "$c"
+        kill -TERM "$c" 2>/dev/null
+    done
+}
+# told to end (logout, shutdown): stop the sensor reader and leave. Before this the trap only
+# removed the state files, the loop took the stopped monitor-sensor for a crash and started it
+# again, and systemd waited 90 s for it at every shutdown (ThinkPad, 2026-10-27)
+stop() {
+    trap - INT TERM HUP
+    stop_children $$
+    exit 0
+}
+trap cleanup EXIT
+trap stop INT TERM HUP
 
 process_stream() {
     current_orientation=""
@@ -169,11 +185,14 @@ use_accel=true
 
 while [ "$restarts" -le "$MAX_RESTARTS" ]; do
     start_time=$(date +%s)
+    # in the background and waited for: a signal interrupts the wait (a foreground pipeline would
+    # hold the trap until it ended)
     if [ "$use_accel" = true ]; then
-        ( monitor-sensor --accel 2>>"$LOG"; echo $? > "$STATUS_FILE" ) | process_stream
+        ( monitor-sensor --accel 2>>"$LOG"; echo $? > "$STATUS_FILE" ) | process_stream &
     else
-        ( monitor-sensor 2>>"$LOG"; echo $? > "$STATUS_FILE" ) | process_stream
+        ( monitor-sensor 2>>"$LOG"; echo $? > "$STATUS_FILE" ) | process_stream &
     fi
+    wait $!
     rc=$(cat "$STATUS_FILE" 2>/dev/null || echo 1)
     end_time=$(date +%s)
     duration=$((end_time - start_time))
@@ -200,5 +219,6 @@ while [ "$restarts" -le "$MAX_RESTARTS" ]; do
     fi
 
     log "monitor-sensor died (exit $rc); waiting ${RETRY_DELAY}s before restart ($restarts of $MAX_RESTARTS)..."
-    sleep "$RETRY_DELAY"
+    sleep "$RETRY_DELAY" &
+    wait $!
 done
