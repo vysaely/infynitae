@@ -1898,6 +1898,8 @@ fn render(data: &mut LoopData) {
             // Blanked screens count as showing no window.
             let s = &mut data.screens[i];
             s.shows_locked = true;
+            // a frame held back for its start time is not waited for either
+            s.deferred = None;
             let now = infynitae_wayland::presentation_clock_now();
             data.state.frame_tick(id, now);
             continue;
@@ -1916,7 +1918,11 @@ fn render(data: &mut LoopData) {
             s.schedule.set_mode(data.state.latency_mode);
             let immediate =
                 data.state.tears(id) || (s.vrr_on && data.state.core().presentation(id).is_some());
-            match s.schedule.start_at(started).filter(|_| !immediate) {
+            match s
+                .schedule
+                .start_for(started, s.deferred)
+                .filter(|_| !immediate)
+            {
                 Some(at) => {
                     s.deferred = Some(at);
                     continue;

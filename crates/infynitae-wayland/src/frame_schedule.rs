@@ -136,6 +136,17 @@ impl FrameSchedule {
         (start > now).then_some(start)
     }
 
+    /// [`Self::start_at`] for a frame that may already be held back until `held`: once that
+    /// time has come, it is drawn now. The loop wakes a little after the time it asked for, and
+    /// from there the refresh looks missed; asking again would push the frame back a whole
+    /// refresh, every time, and nothing would be drawn again.
+    pub fn start_for(&self, now: Duration, held: Option<Duration>) -> Option<Duration> {
+        if held.is_some_and(|t| t <= now) {
+            return None;
+        }
+        self.start_at(now)
+    }
+
     /// A frame started at `started` was submitted at `submitted`; it is meant for the next
     /// refresh after it.
     pub fn rendered(&mut self, started: Duration, submitted: Duration) {
@@ -272,6 +283,22 @@ mod tests {
         // exactly at the start point: draw now
         let at = ms(100.0) + P - ms(2.0);
         assert_eq!(s.start_at(at), None);
+    }
+
+    #[test]
+    fn a_held_frame_woken_late_is_drawn_not_pushed_back() {
+        let mut s = warmed(LatencyMode::Balanced, 1.0);
+        s.vblank(ms(100.0));
+        let held = s.start_at(ms(100.2)).expect("held back");
+        let woke = held + Duration::from_micros(80);
+        // asked afresh, that moment is past this refresh's start: the next refresh
+        assert!(s.start_at(woke).is_some());
+        // but the frame held for it is drawn now
+        assert_eq!(s.start_for(woke, Some(held)), None);
+        // woken early by something else: still held until its time
+        let early = held - ms(1.0);
+        let again = s.start_for(early, Some(held)).expect("still held");
+        assert!(again.abs_diff(held) < Duration::from_micros(5));
     }
 
     #[test]
