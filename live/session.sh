@@ -190,6 +190,14 @@ case "${BATTERY_LIMIT:-off}" in
     *) sh "$HOME/infynitae/live/battery-limit" "$BATTERY_LIMIT" >/dev/null 2>&1 || true ;;
 esac
 
+# 6e2. The screen locks before the machine sleeps (the lid, the power button): it wakes locked
+for s in "$HOME/.local/bin/infynitae-sleep-lock" "$HOME/infynitae/live/infynitae-sleep-lock"; do
+    if [ -x "$s" ]; then
+        "$s" >/dev/null 2>&1 &
+        break
+    fi
+done
+
 # 6f. Screen auto-rotation on convertible laptops (AUTO_ROTATE; needs iio-sensor-proxy)
 case "${AUTO_ROTATE:-auto}" in
     false|0|off|no|FALSE|False|OFF|Off|NO|No) ;;

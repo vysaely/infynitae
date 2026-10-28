@@ -156,6 +156,7 @@ live/xdg-terminal-exec xdg-terminal-exec
 live/infynitae-open-with infynitae-open-with
 live/battery-limit infynitae-battery-limit
 live/infynitae-xkill infynitae-xkill
+live/infynitae-sleep-lock infynitae-sleep-lock
 LIST
     # the C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream)
     sh "$src/live/build-helpers.sh" "$src" "$bin" \
@@ -209,6 +210,15 @@ PORTAL
             sudo udevadm trigger --subsystem-match=power_supply 2>/dev/null || true
         fi
         rm -f "$tmp"
+    fi
+    # a convertible's power button works like a tablet's: a tap sleeps, holding it shuts down
+    if has_tablet_mode_switch || has_accelerometer; then
+        if ! cmp -s "$src/live/50-infynitae-power-key.conf" /etc/systemd/logind.conf.d/50-infynitae-power-key.conf; then
+            install_root_file "$src/live/50-infynitae-power-key.conf" \
+                /etc/systemd/logind.conf.d/50-infynitae-power-key.conf 644
+            # a reload re-reads the setting and leaves the sessions alone (a restart would end them)
+            sudo systemctl reload systemd-logind 2>/dev/null || true
+        fi
     fi
     # thermald (the thermal part, Intel laptops) runs
     if pacman -Qi thermald >/dev/null 2>&1 && ! systemctl is-enabled --quiet thermald.service 2>/dev/null; then
