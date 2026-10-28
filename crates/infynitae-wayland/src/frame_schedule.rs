@@ -212,10 +212,10 @@ impl LatencyStats {
 
     /// The refresh at `time` showed that frame.
     pub fn shown(&mut self, time: Duration) {
-        if let Some(t) = self.in_flight.take() {
-            if self.samples.len() < 100_000 {
-                self.samples.push(time.saturating_sub(t));
-            }
+        if let Some(t) = self.in_flight.take()
+            && self.samples.len() < 100_000
+        {
+            self.samples.push(time.saturating_sub(t));
         }
     }
 
