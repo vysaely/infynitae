@@ -52,6 +52,10 @@ const MISS_STEP: Duration = Duration::from_micros(750);
 const SHRINK_AFTER: u32 = 240;
 /// The margin never exceeds this.
 const MARGIN_MAX: Duration = Duration::from_millis(4);
+/// Refreshes drawn at once after a miss at the largest margin: frames keep missing although the
+/// margin is as wide as it goes, so the render times measured do not tell when a frame is really
+/// ready (a GPU still busy after the submission); late scheduling stops for a while.
+const PAUSE_REFRESHES: u32 = 600;
 
 /// One screen's schedule.
 #[derive(Debug)]
@@ -69,6 +73,9 @@ pub struct FrameSchedule {
     made_in_a_row: u32,
     misses: u64,
     frames: u64,
+    /// Refreshes left drawn at once (PAUSE_REFRESHES).
+    paused: u32,
+    pauses: u64,
 }
 
 impl FrameSchedule {
@@ -86,6 +93,8 @@ impl FrameSchedule {
             made_in_a_row: 0,
             misses: 0,
             frames: 0,
+            paused: 0,
+            pauses: 0,
         }
     }
 
@@ -122,7 +131,7 @@ impl FrameSchedule {
     /// the next refresh that can still be made. `None`: draw now (late scheduling off, nothing
     /// measured yet, no refresh seen, or no time to wait).
     pub fn start_at(&self, now: Duration) -> Option<Duration> {
-        if self.mode == LatencyMode::Off {
+        if self.mode == LatencyMode::Off || self.paused > 0 {
             return None;
         }
         let (last, budget) = (self.last_vblank?, self.budget()?);
@@ -166,14 +175,28 @@ impl FrameSchedule {
 
     /// The refresh at `time` showed the frame in flight: a frame that came a refresh or more
     /// after the one it was meant for missed it, and the margin widens.
+    /// A miss at the widest margin stops late scheduling for PAUSE_REFRESHES; frames drawn at
+    /// once meanwhile leave the margin alone.
     pub fn vblank(&mut self, time: Duration) {
+        let paused = self.paused > 0;
+        self.paused = self.paused.saturating_sub(1);
         if let Some(target) = self.target.take() {
             self.frames += 1;
-            if time > target + self.period / 2 {
+            let missed = time > target + self.period / 2;
+            if missed {
                 self.misses += 1;
                 self.made_in_a_row = 0;
-                self.margin = (self.margin + MISS_STEP).min(MARGIN_MAX);
-            } else {
+            }
+            let late_scheduled = !paused && self.mode != LatencyMode::Off;
+            if late_scheduled && missed {
+                if self.margin >= MARGIN_MAX {
+                    self.paused = PAUSE_REFRESHES;
+                    self.pauses += 1;
+                    self.margin = self.mode.margins().0;
+                } else {
+                    self.margin = (self.margin + MISS_STEP).min(MARGIN_MAX);
+                }
+            } else if late_scheduled {
                 self.made_in_a_row += 1;
                 if self.made_in_a_row >= SHRINK_AFTER {
                     self.made_in_a_row = 0;
@@ -192,6 +215,12 @@ impl FrameSchedule {
 
     pub fn margin(&self) -> Duration {
         self.margin
+    }
+
+    /// How often late scheduling stopped for a while (PAUSE_REFRESHES), and whether it is
+    /// stopped now.
+    pub fn pauses(&self) -> (u64, bool) {
+        (self.pauses, self.paused > 0)
     }
 }
 
@@ -337,6 +366,35 @@ mod tests {
             s.vblank(t);
         }
         assert_eq!(s.margin(), Duration::from_micros(500));
+    }
+
+    #[test]
+    fn misses_at_the_widest_margin_stop_late_scheduling_for_a_while() {
+        let mut s = warmed(LatencyMode::Balanced, 1.0);
+        let mut t = ms(100.0);
+        s.vblank(t);
+        // every frame shown a refresh late, whatever the margin
+        let mut n = 0;
+        while s.pauses().0 == 0 {
+            s.rendered(t + ms(1.0), t + ms(2.0));
+            t += P * 2;
+            s.vblank(t);
+            n += 1;
+            assert!(n < 20, "never paused");
+        }
+        assert!(s.pauses().1);
+        assert_eq!(s.start_at(t + ms(0.2)), None, "drawn at once while paused");
+        for _ in 0..PAUSE_REFRESHES {
+            t += P;
+            s.vblank(t);
+        }
+        assert!(!s.pauses().1);
+        assert!(s.start_at(t + ms(0.2)).is_some(), "late again afterwards");
+        assert_eq!(
+            s.margin(),
+            Duration::from_micros(1000),
+            "from the start margin"
+        );
     }
 
     #[test]

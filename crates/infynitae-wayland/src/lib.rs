@@ -620,7 +620,7 @@ impl WaylandState {
             border_ignore_csd: true,
             clip_to_geometry: true,
             square_corners: true,
-            latency_mode: crate::frame_schedule::LatencyMode::Balanced,
+            latency_mode: crate::frame_schedule::LatencyMode::Off,
             latency_stats: false,
             border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
             border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 0.8),

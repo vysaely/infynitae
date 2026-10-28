@@ -2544,16 +2544,18 @@ fn latency_summary(data: &mut LoopData) {
     data.latency_logged = Some(now);
     for s in &mut data.screens {
         let (frames, misses) = s.schedule.counts();
+        let (pauses, paused) = s.schedule.pauses();
         if let Some((p50, p95, max, n)) = s.latency.take_summary() {
             let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
             println!(
-                "[infynitae] Latency {:?}: input to screen p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms ({n} frames); budget {:.2} ms, margin {:.2} ms, {misses} of {frames} frames missed their refresh",
+                "[infynitae] Latency {:?}: input to screen p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms ({n} frames); budget {:.2} ms, margin {:.2} ms, {misses} of {frames} frames missed their refresh; paused {pauses} times{}",
                 s.id,
                 ms(p50),
                 ms(p95),
                 ms(max),
                 ms(s.schedule.budget().unwrap_or_default()),
                 ms(s.schedule.margin()),
+                if paused { " (now)" } else { "" },
             );
         }
     }

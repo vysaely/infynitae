@@ -39,8 +39,8 @@ BORDER_WIDTH="1"                  # px, 0 = none
 BORDER_ACTIVE="#7aa2f7"
 BORDER_INACTIVE="#333b54"
 BORDER_IGNORE_CSD="true"          # no border around apps that draw their own (Firefox…)
-LATENCY="balanced"                # balanced: each frame drawn just in time for the refresh (about a
-                                  # frame less delay) | lowest: tighter | off: drawn at once
+LATENCY="off"                     # off: drawn at once | balanced: each frame drawn just in time for the
+                                  # refresh (about a frame less delay; experimental) | lowest: tighter
 LATENCY_STATS="false"             # true: input-to-screen times in the session log every 10 s
 SQUARE_CORNERS="true"             # apps draw square corners and no shadow (they are told they are
                                   # tiled), flush with the border; false: their own rounded look
