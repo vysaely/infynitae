@@ -217,11 +217,16 @@ impl Core {
             }
             PhysicalEvent::TouchUp { slot, time_us } => {
                 self.input.clock.accepted(time_us);
-                if self.touches.remove(slot) {
+                let (on_surface, double_tap) = self.touches.lift(slot, Some(ms(time_us)));
+                if on_surface {
                     out.push(Effect::TouchUp {
                         slot,
                         time_ms: ms(time_us),
                     });
+                }
+                // a two-finger double tap recenters like Super+Space (INV-CAMERA-1)
+                if let Some((output, at)) = double_tap {
+                    self.touch_recenter(authority::Authorized::mint(), output, at, out);
                 }
                 self.physical_input_activity = true;
                 Ok(())
@@ -257,6 +262,25 @@ impl Core {
         self.touches.remove(slot);
         if self.output(output).is_none() || self.input.interaction.active() {
             return;
+        }
+        // a second finger moves the canvas, also on a window: it joins fingers on the canvas,
+        // or takes the ones on windows from their app (cancelled there); not on a fullscreen
+        // window (a game's own touch), never from a layer surface (the on-screen keyboard)
+        let presenting =
+            self.presentation(output).is_some() && !self.is_presentation_suppressed(output);
+        if !presenting && let Some(camera) = self.cameras.camera_for_output(output) {
+            if self.touches.canvas.as_ref().is_some_and(|g| g.output == output) {
+                self.touches.canvas_down(slot, output, camera, p, time_ms);
+                return;
+            }
+            if let Some(fingers) = self.touches.take_window_fingers(output) {
+                out.push(Effect::TouchCancel);
+                for (s, at) in fingers {
+                    self.touches.canvas_down(s, output, camera, at, time_ms);
+                }
+                self.touches.canvas_down(slot, output, camera, p, time_ms);
+                return;
+            }
         }
         let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
         let on_layer = self.layer_hit(output, p, true);
@@ -309,7 +333,7 @@ impl Core {
             )
         } else {
             if let Some(camera) = self.cameras.camera_for_output(output) {
-                self.touches.canvas_down(slot, output, camera, p);
+                self.touches.canvas_down(slot, output, camera, p, time_ms);
             }
             return;
         };
@@ -319,6 +343,7 @@ impl Core {
                 output,
                 target,
                 anchor,
+                at: p,
             },
         );
         out.push(Effect::TouchDown {
@@ -342,6 +367,7 @@ impl Core {
             self.canvas_gesture_step(proof, slot, p, out);
             return;
         }
+        self.touches.surface_finger_at(slot, p);
         let Some(tp) = self.touches.get(slot) else {
             return;
         };
@@ -391,9 +417,7 @@ impl Core {
         };
         let (false, (Some(zoom), Some(center), Some(extent))) = (blocked, camera_now) else {
             // the finger is followed still; the grab is taken again once the camera can move
-            if let Some(f) = g.fingers.iter_mut().find(|(s, _)| *s == slot) {
-                f.1 = p;
-            }
+            g.follow(slot, p);
             g.grab = None;
             return;
         };
@@ -406,9 +430,7 @@ impl Core {
                 extent,
             )
         });
-        if let Some(f) = g.fingers.iter_mut().find(|(s, _)| *s == slot) {
-            f.1 = p;
-        }
+        g.follow(slot, p);
         let (zoom, (cx, cy)) = grab.camera(&g.fingers, extent);
         let limit = crate::geom::CANVAS_LIMIT_PX * crate::geom::Q16_ONE;
         let center = crate::geom::CanvasPos {
@@ -797,9 +819,20 @@ impl Core {
             PointerState::Located { output, .. } => Some(output),
             PointerState::NoOutput => self.outputs.first().map(|o| o.id),
         };
-        let Some(output) = output else {
-            return;
-        };
+        if let Some(output) = output {
+            self.recenter_on_element_at(proof, output, element, keep_zoom, out);
+        }
+    }
+
+    /// [`Core::recenter_on_element`] on `output`'s camera.
+    fn recenter_on_element_at(
+        &mut self,
+        proof: authority::Authorized,
+        output: OutputId,
+        element: crate::stage::ElementId,
+        keep_zoom: bool,
+        out: &mut Vec<Effect>,
+    ) {
         if self.presentation(output).is_some() && !self.is_presentation_suppressed(output) {
             return;
         }
@@ -842,6 +875,28 @@ impl Core {
         self.cameras
             .set_zoom_and_center(proof, camera, target_zoom, center);
         self.camera_written(output, camera, out);
+    }
+
+    /// A two-finger double tap at `at` (output logical px of `output`): Super+Space for the
+    /// window under the fingers (raised, focused, centred at zoom 1.0); on empty canvas, zoom 1.0.
+    fn touch_recenter(
+        &mut self,
+        proof: authority::Authorized,
+        output: OutputId,
+        at: (f64, f64),
+        out: &mut Vec<Effect>,
+    ) {
+        if self.input.interaction.active() {
+            return;
+        }
+        let pt = crate::geom::OutputLogicalPoint { x: at.0, y: at.1 };
+        if let Some(hit) = self.hit_test(output, pt) {
+            self.raise_by_user(hit.element);
+            out.extend(self.focus.set_focus(Some(hit.element)));
+            self.recenter_on_element_at(proof, output, hit.element, false, out);
+        } else if let Some(camera) = self.cameras.camera_for_output(output) {
+            self.zoom_reset(proof, output, camera, out);
+        }
     }
 
     fn recenter(&mut self, proof: authority::Authorized, keep_zoom: bool, out: &mut Vec<Effect>) {

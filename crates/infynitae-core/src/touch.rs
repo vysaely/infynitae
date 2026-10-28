@@ -7,6 +7,12 @@
 //! position unprojected through the output's view (a window's surface coordinates are Canvas
 //! units); on a layer surface, the position less the surface's place on the output (its events
 //! are surface-local, never zoomed).
+//!
+//! Two fingers move the canvas, also on a window (owner, 2026-10-27): a finger joining one on a
+//! window takes it from the app (its touch is cancelled) into the canvas gesture, and a finger
+//! landing while fingers are on the canvas joins them. Fingers on a layer surface (the on-screen
+//! keyboard types with two) and on a fullscreen window (games) stay theirs. A quick two-finger
+//! tap, twice, recenters like Super+Space.
 
 use crate::output::OutputId;
 use crate::protocol::PointerTarget;
@@ -25,6 +31,24 @@ pub(crate) struct TouchPoint {
     pub output: OutputId,
     pub target: PointerTarget,
     pub anchor: Anchor,
+    /// Where the finger is now, output logical px (it moves to the canvas from there).
+    pub at: (f64, f64),
+}
+
+/// A two-finger tap: both fingers down and up within this, moving no more than `TAP_SLOP`.
+const TAP_MAX_MS: u32 = 250;
+/// How far (output logical px) a tapping finger may move.
+const TAP_SLOP: f64 = 16.0;
+/// The second tap starts within this of the first's end, near it.
+const DOUBLE_TAP_GAP_MS: u32 = 350;
+const DOUBLE_TAP_DISTANCE: f64 = 80.0;
+
+/// The end of a two-finger tap, waiting for a second.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Tap {
+    output: OutputId,
+    end_ms: u32,
+    centroid: (f64, f64),
 }
 
 /// The fingers down on a surface, by slot, and the ones on empty canvas.
@@ -32,6 +56,7 @@ pub(crate) struct TouchPoint {
 pub(crate) struct Touches {
     points: Vec<(u32, TouchPoint)>,
     pub canvas: Option<CanvasGesture>,
+    last_tap: Option<Tap>,
 }
 
 /// Fingers on empty canvas move their output's camera: the Canvas point under their centroid
@@ -45,7 +70,26 @@ pub(crate) struct CanvasGesture {
     pub fingers: Vec<(u32, (f64, f64))>,
     /// `None`: to be taken from the camera at the next motion.
     pub grab: Option<Grab>,
+    /// For the two-finger tap: when it began, where each finger came down, how many were down
+    /// at most, and whether one moved further than a tap.
+    started_ms: u32,
+    downs: Vec<(u32, (f64, f64))>,
+    most: usize,
+    moved: bool,
 }
+
+impl CanvasGesture {
+    /// The finger `slot` is at `p` now.
+    pub(crate) fn follow(&mut self, slot: u32, p: (f64, f64)) {
+        if let Some(f) = self.fingers.iter_mut().find(|(s, _)| *s == slot) {
+            f.1 = p;
+        }
+        if let Some((_, d)) = self.downs.iter().find(|(s, _)| *s == slot)
+            && (p.0 - d.0).hypot(p.1 - d.1) > TAP_SLOP
+        {
+            self.moved = true;
+        }
+    }
 
 /// Where a gesture took hold: the Canvas point under the centroid (Canvas px), the zoom then,
 /// and the fingers' spread then.
@@ -125,25 +169,91 @@ impl Touches {
         self.points.push((slot, point));
     }
 
-    /// The finger lifted: whether it was on a surface. A finger on the canvas lets go of it.
+    /// The finger is forgotten: whether it was on a surface. A finger on the canvas lets go of it.
     pub(crate) fn remove(&mut self, slot: u32) -> bool {
+        self.lift(slot, None).0
+    }
+
+    /// The finger lifted at `time_ms`: whether it was on a surface, and the output and place
+    /// (output logical px) of a two-finger double tap it ended.
+    pub(crate) fn lift(
+        &mut self,
+        slot: u32,
+        time_ms: Option<u32>,
+    ) -> (bool, Option<(OutputId, (f64, f64))>) {
+        let mut double_tap = None;
         if let Some(g) = &mut self.canvas
             && g.fingers.iter().any(|(s, _)| *s == slot)
         {
             g.fingers.retain(|(s, _)| *s != slot);
             g.grab = None;
             if g.fingers.is_empty() {
-                self.canvas = None;
+                let g = self.canvas.take().expect("the gesture just seen");
+                if let Some(t) = time_ms {
+                    double_tap = self.tapped(&g, t);
+                }
             }
         }
         let before = self.points.len();
         self.points.retain(|(s, _)| *s != slot);
-        self.points.len() != before
+        (self.points.len() != before, double_tap)
+    }
+
+    /// A gesture ended at `end_ms`: a two-finger tap is kept for the next, and the second of two
+    /// is a double tap, at their centroid.
+    fn tapped(&mut self, g: &CanvasGesture, end_ms: u32) -> Option<(OutputId, (f64, f64))> {
+        let tap = g.most == 2
+            && g.downs.len() == 2
+            && !g.moved
+            && end_ms.wrapping_sub(g.started_ms) <= TAP_MAX_MS;
+        if !tap {
+            self.last_tap = None;
+            return None;
+        }
+        let (centroid, _) = centroid_spread(&g.downs);
+        let second = self.last_tap.take().is_some_and(|first| {
+            first.output == g.output
+                && g.started_ms.wrapping_sub(first.end_ms) <= DOUBLE_TAP_GAP_MS
+                && (centroid.0 - first.centroid.0).hypot(centroid.1 - first.centroid.1)
+                    <= DOUBLE_TAP_DISTANCE
+        });
+        if second {
+            return Some((g.output, centroid));
+        }
+        self.last_tap = Some(Tap {
+            output: g.output,
+            end_ms,
+            centroid,
+        });
+        None
+    }
+
+    /// The finger `slot` on a surface is at `p` now.
+    pub(crate) fn surface_finger_at(&mut self, slot: u32, p: (f64, f64)) {
+        if let Some((_, tp)) = self.points.iter_mut().find(|(s, _)| *s == slot) {
+            tp.at = p;
+        }
+    }
+
+    /// The fingers on windows of `output`, taken from their surfaces with their places, when
+    /// every finger down is one (none on a layer surface, none on another output); `None`
+    /// otherwise, and nothing changes.
+    pub(crate) fn take_window_fingers(&mut self, output: OutputId) -> Option<Vec<(u32, (f64, f64))>> {
+        if self.points.is_empty()
+            || self
+                .points
+                .iter()
+                .any(|(_, p)| p.output != output || p.anchor != Anchor::Canvas)
+        {
+            return None;
+        }
+        Some(self.points.drain(..).map(|(s, p)| (s, p.at)).collect())
     }
 
     /// Every finger is forgotten: whether any was on a surface.
     pub(crate) fn clear(&mut self) -> bool {
         self.canvas = None;
+        self.last_tap = None;
         let any = !self.points.is_empty();
         self.points.clear();
         any
@@ -163,17 +273,24 @@ impl Touches {
         output: OutputId,
         camera: usize,
         p: (f64, f64),
+        time_ms: u32,
     ) -> bool {
         let g = self.canvas.get_or_insert_with(|| CanvasGesture {
             output,
             camera,
             fingers: Vec::new(),
             grab: None,
+            started_ms: time_ms,
+            downs: Vec::new(),
+            most: 0,
+            moved: false,
         });
         if g.output != output {
             return false;
         }
         g.fingers.push((slot, p));
+        g.downs.push((slot, p));
+        g.most = g.most.max(g.fingers.len());
         g.grab = None;
         true
     }
@@ -238,10 +355,10 @@ mod tests {
     fn a_lift_lets_go_and_the_last_ends_the_gesture() {
         let mut t = Touches::default();
         let o = OutputId::for_test(1);
-        assert!(t.canvas_down(0, o, 0, (0.0, 0.0)));
-        assert!(t.canvas_down(1, o, 0, (10.0, 0.0)));
+        assert!(t.canvas_down(0, o, 0, (0.0, 0.0), 0));
+        assert!(t.canvas_down(1, o, 0, (10.0, 0.0), 0));
         assert!(
-            !t.canvas_down(2, OutputId::for_test(2), 1, (0.0, 0.0)),
+            !t.canvas_down(2, OutputId::for_test(2), 1, (0.0, 0.0), 0),
             "another output's canvas"
         );
         t.canvas.as_mut().unwrap().grab =
@@ -255,5 +372,90 @@ mod tests {
         assert!(t.on_output(o));
         t.remove(0);
         assert!(t.canvas.is_none());
+    }
+
+    /// Two fingers down at `ms` and up `held` ms later, `moved` px apart from where they landed.
+    fn two_finger_tap(
+        t: &mut Touches,
+        o: OutputId,
+        ms: u32,
+        held: u32,
+        moved: f64,
+    ) -> Option<(OutputId, (f64, f64))> {
+        t.canvas_down(0, o, 0, (100.0, 100.0), ms);
+        t.canvas_down(1, o, 0, (200.0, 100.0), ms + 10);
+        t.canvas.as_mut().unwrap().follow(1, (200.0 + moved, 100.0));
+        assert_eq!(t.lift(0, Some(ms + held)).1, None);
+        t.lift(1, Some(ms + held + 5)).1
+    }
+
+    #[test]
+    fn two_quick_two_finger_taps_are_a_double_tap_at_their_centre() {
+        let mut t = Touches::default();
+        let o = OutputId::for_test(1);
+        assert_eq!(two_finger_tap(&mut t, o, 1000, 100, 0.0), None, "the first");
+        assert_eq!(
+            two_finger_tap(&mut t, o, 1300, 100, 5.0),
+            Some((o, (150.0, 100.0)))
+        );
+        assert_eq!(
+            two_finger_tap(&mut t, o, 1600, 100, 0.0),
+            None,
+            "a third starts over"
+        );
+    }
+
+    #[test]
+    fn a_drag_a_slow_tap_or_a_late_second_tap_is_no_double_tap() {
+        let o = OutputId::for_test(1);
+        let mut t = Touches::default();
+        two_finger_tap(&mut t, o, 1000, 100, 0.0);
+        assert_eq!(two_finger_tap(&mut t, o, 1300, 100, 40.0), None, "moved: a pan");
+        let mut t = Touches::default();
+        two_finger_tap(&mut t, o, 1000, 100, 0.0);
+        assert_eq!(two_finger_tap(&mut t, o, 1300, 600, 0.0), None, "held: no tap");
+        let mut t = Touches::default();
+        two_finger_tap(&mut t, o, 1000, 100, 0.0);
+        assert_eq!(two_finger_tap(&mut t, o, 2000, 100, 0.0), None, "too late");
+        // one finger, then two: the one-finger gesture is no tap
+        let mut t = Touches::default();
+        t.canvas_down(0, o, 0, (100.0, 100.0), 0);
+        t.lift(0, Some(50));
+        assert_eq!(two_finger_tap(&mut t, o, 100, 100, 0.0), None);
+    }
+
+    fn on_window(o: OutputId, at: (f64, f64)) -> TouchPoint {
+        TouchPoint {
+            output: o,
+            target: PointerTarget {
+                surface: crate::snapshot::SurfaceKey::from_raw(std::num::NonZeroU64::new(1).unwrap()),
+                origin: crate::geom::CanvasPoint { x: 0, y: 0 },
+            },
+            anchor: Anchor::Canvas,
+            at,
+        }
+    }
+
+    #[test]
+    fn fingers_on_windows_are_taken_but_never_one_on_a_layer_surface() {
+        let o = OutputId::for_test(1);
+        let mut t = Touches::default();
+        t.insert(0, on_window(o, (10.0, 10.0)));
+        t.surface_finger_at(0, (12.0, 14.0));
+        assert_eq!(t.take_window_fingers(o), Some(vec![(0, (12.0, 14.0))]));
+        assert!(!t.remove(0), "taken: on no surface any more");
+
+        let mut t = Touches::default();
+        t.insert(0, on_window(o, (10.0, 10.0)));
+        t.insert(
+            1,
+            TouchPoint {
+                anchor: Anchor::Layer { offset: (0.0, 0.0) },
+                ..on_window(o, (5.0, 5.0))
+            },
+        );
+        assert_eq!(t.take_window_fingers(o), None, "the on-screen keyboard keeps its fingers");
+        assert!(t.get(0).is_some() && t.get(1).is_some(), "nothing changed");
+        assert_eq!(Touches::default().take_window_fingers(o), None);
     }
 }

@@ -1,8 +1,10 @@
 //! Touch (`wl_touch`, Core's `touch`) with a real client: a finger on a window reaches it at its
 //! surface-local position; the window keeps that finger as it moves, even past the window's
 //! edge, until it lifts; a finger on empty canvas reaches no client; a tap focuses the window;
-//! a cancel gives up the fingers; fingers on empty canvas drag it and pinch-zoom it. The seat
-//! offers touch only once a touchscreen is there.
+//! a cancel gives up the fingers; fingers on empty canvas drag it and pinch-zoom it; a second
+//! finger takes the first from a window (cancelled there) and the two move the canvas; a
+//! two-finger double tap recenters like Super+Space. The seat offers touch only once a
+//! touchscreen is there.
 
 mod common;
 
@@ -283,4 +285,67 @@ fn two_fingers_on_empty_canvas_pinch_zoom_around_their_midpoint() {
         "no client saw the fingers: {:?}",
         r.ls.probe.log
     );
+}
+
+/// A second finger next to one on W: W's touch is cancelled, and the two pinch-zoom the canvas
+/// (owner: "pinch to zoom even if the fingers are on an app"); W sees nothing more of them.
+#[test]
+fn a_second_finger_on_a_window_takes_both_to_the_canvas() {
+    let (mut r, _touch) = rig();
+    let (_, z0) = camera(&r);
+    let (p, _) = on_w(&mut r);
+    down(&mut r, 0, p);
+    assert!(r.ls.probe.log.iter().any(|l| l.starts_with("down 0 W")));
+    down(&mut r, 1, (p.0 + 100.0, p.1));
+    assert!(
+        r.ls.probe.log.contains(&"cancel".to_string()),
+        "W's touch is cancelled: {:?}",
+        r.ls.probe.log
+    );
+    assert!(
+        !r.ls.probe.log.iter().any(|l| l.starts_with("down 1")),
+        "the second finger is no touch for W: {:?}",
+        r.ls.probe.log
+    );
+    r.ls.probe.log.clear();
+    motion(&mut r, 0, (p.0 - 50.0, p.1));
+    motion(&mut r, 1, (p.0 + 150.0, p.1));
+    assert!(
+        (camera(&r).1 - 2.0 * z0).abs() < 1e-9,
+        "twice the spread, twice the zoom: {z0} -> {}",
+        camera(&r).1
+    );
+    up(&mut r, 0);
+    up(&mut r, 1);
+    assert!(
+        !r.ls.probe.log.iter().any(|l| l.starts_with("motion") || l.starts_with("up")),
+        "W saw nothing more: {:?}",
+        r.ls.probe.log
+    );
+}
+
+/// Two quick two-finger taps on W: W is focused and centred at zoom 1.0, as Super+Space does.
+#[test]
+fn a_two_finger_double_tap_on_a_window_recenters_it() {
+    let (mut r, _touch) = rig();
+    // zoomed out first (a pinch on empty canvas), and W not focused
+    down(&mut r, 1, (1600.0, 950.0));
+    down(&mut r, 2, (1800.0, 950.0));
+    motion(&mut r, 1, (1650.0, 950.0));
+    motion(&mut r, 2, (1750.0, 950.0));
+    up(&mut r, 1);
+    up(&mut r, 2);
+    assert!(camera(&r).1 < 0.99, "zoomed out: {}", camera(&r).1);
+    let fx = r.ls.state.core_mut().set_focus(&mut r.ls.input, None).unwrap();
+    r.ls.state.apply(&fx);
+    r.ls.pump();
+    let (p, _) = on_w(&mut r);
+    for _ in 0..2 {
+        down(&mut r, 3, p);
+        down(&mut r, 4, (p.0 + 10.0, p.1));
+        up(&mut r, 3);
+        up(&mut r, 4);
+    }
+    assert_eq!(camera(&r).1, 1.0, "zoom 1.0");
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("W"), "W focused");
 }
