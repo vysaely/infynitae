@@ -8,13 +8,26 @@
 set -u
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOCK_LOG="$STATE_DIR/lock.log"
+LOG="$STATE_DIR/sleep-lock.log"
 mkdir -p "$STATE_DIR"
+log() {
+    printf '%s %s\n' "$(date '+%F %T.%3N')" "$*" >> "$LOG" 2>/dev/null || true
+}
+
+# one per session: two would race for the same sleep (fd 9 holds the lock; the programs started
+# below do not inherit it, so a lock screen still up never keeps the next session's helper out)
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/infynitae"
+mkdir -p "$RUN_DIR"
+exec 9> "$RUN_DIR/sleep-lock.lock"
+if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
+    exit 0
+fi
 
 INH=""
 take() {
     [ -n "$INH" ] && kill -0 "$INH" 2>/dev/null && return
     systemd-inhibit --what=sleep --mode=delay --who=Infynitae \
-        --why="Locking the screen before sleep" sleep infinity &
+        --why="Locking the screen before sleep" sleep infinity 9>&- &
     INH=$!
 }
 release() {
@@ -45,22 +58,29 @@ locker() {
 # InhibitDelayMaxSec (5 s by default), so the wait for the confirmation is shorter
 lock_now() {
     if pgrep -u "$(id -u)" -x infynitae-lock >/dev/null 2>&1; then
+        log "already locked"
         return
     fi
     l=$(locker)
-    [ -n "$l" ] || return
+    [ -n "$l" ] || { log "no lock screen installed"; return; }
+    log "starting the lock screen ($l)"
     case "$l" in
         *infynitae-lock)
-            "$l" > "$LOCK_LOG" 2>&1 &
+            "$l" > "$LOCK_LOG" 2>&1 9>&- &
             i=0
             while [ "$i" -lt 40 ] && ! grep -q "Screen locked" "$LOCK_LOG" 2>/dev/null; do
                 sleep 0.1
                 i=$((i + 1))
             done
+            if grep -q "Screen locked" "$LOCK_LOG" 2>/dev/null; then
+                log "lock confirmed"
+            else
+                log "no confirmation within 4 s: $(tail -1 "$LOCK_LOG" 2>/dev/null)"
+            fi
             ;;
         *)
             # another locker: no confirmation to wait for; a moment for its first frame
-            $l >/dev/null 2>&1 &
+            $l >/dev/null 2>&1 9>&- &
             sleep 1
             ;;
     esac
@@ -75,22 +95,26 @@ monitor() {
 }
 
 command -v systemd-inhibit >/dev/null 2>&1 || exit 0
+log "started (WAYLAND_DISPLAY=${WAYLAND_DISPLAY:-unset})"
 take
 # the monitor in the background, its lines through a FIFO: a signal ends the script at once
 FIFO="$STATE_DIR/sleep-lock.$$"
 rm -f "$FIFO"
 mkfifo "$FIFO" || exit 1
-monitor > "$FIFO" 2>/dev/null &
+monitor > "$FIFO" 2>/dev/null 9>&- &
 MON=$!
 exec 3< "$FIFO"
 rm -f "$FIFO"
 while IFS= read -r line <&3; do
     case "$line" in
         *PrepareForSleep*true*)
+            log "sleep announced"
             lock_now
+            log "letting the sleep go on"
             release
             ;;
         *PrepareForSleep*false*)
+            log "woke up"
             take
             ;;
     esac
