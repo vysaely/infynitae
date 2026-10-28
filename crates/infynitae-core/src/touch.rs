@@ -51,6 +51,13 @@ struct Tap {
     centroid: (f64, f64),
 }
 
+/// A finger's lift: whether it was on a surface, and where (output, output logical px) a
+/// two-finger double tap it ended was.
+pub(crate) struct Lift {
+    pub on_surface: bool,
+    pub double_tap: Option<(OutputId, (f64, f64))>,
+}
+
 /// The fingers down on a surface, by slot, and the ones on empty canvas.
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Touches {
@@ -172,16 +179,12 @@ impl Touches {
 
     /// The finger is forgotten: whether it was on a surface. A finger on the canvas lets go of it.
     pub(crate) fn remove(&mut self, slot: u32) -> bool {
-        self.lift(slot, None).0
+        self.lift(slot, None).on_surface
     }
 
     /// The finger lifted at `time_ms`: whether it was on a surface, and the output and place
     /// (output logical px) of a two-finger double tap it ended.
-    pub(crate) fn lift(
-        &mut self,
-        slot: u32,
-        time_ms: Option<u32>,
-    ) -> (bool, Option<(OutputId, (f64, f64))>) {
+    pub(crate) fn lift(&mut self, slot: u32, time_ms: Option<u32>) -> Lift {
         let mut double_tap = None;
         if let Some(g) = &mut self.canvas
             && g.fingers.iter().any(|(s, _)| *s == slot)
@@ -197,7 +200,10 @@ impl Touches {
         }
         let before = self.points.len();
         self.points.retain(|(s, _)| *s != slot);
-        (self.points.len() != before, double_tap)
+        Lift {
+            on_surface: self.points.len() != before,
+            double_tap,
+        }
     }
 
     /// A gesture ended at `end_ms`: a two-finger tap is kept for the next, and the second of two
@@ -239,7 +245,10 @@ impl Touches {
     /// The fingers on windows of `output`, taken from their surfaces with their places, when
     /// every finger down is one (none on a layer surface, none on another output); `None`
     /// otherwise, and nothing changes.
-    pub(crate) fn take_window_fingers(&mut self, output: OutputId) -> Option<Vec<(u32, (f64, f64))>> {
+    pub(crate) fn take_window_fingers(
+        &mut self,
+        output: OutputId,
+    ) -> Option<Vec<(u32, (f64, f64))>> {
         if self.points.is_empty()
             || self
                 .points
@@ -386,8 +395,8 @@ mod tests {
         t.canvas_down(0, o, 0, (100.0, 100.0), ms);
         t.canvas_down(1, o, 0, (200.0, 100.0), ms + 10);
         t.canvas.as_mut().unwrap().follow(1, (200.0 + moved, 100.0));
-        assert_eq!(t.lift(0, Some(ms + held)).1, None);
-        t.lift(1, Some(ms + held + 5)).1
+        assert_eq!(t.lift(0, Some(ms + held)).double_tap, None);
+        t.lift(1, Some(ms + held + 5)).double_tap
     }
 
     #[test]
@@ -411,10 +420,18 @@ mod tests {
         let o = OutputId::for_test(1);
         let mut t = Touches::default();
         two_finger_tap(&mut t, o, 1000, 100, 0.0);
-        assert_eq!(two_finger_tap(&mut t, o, 1300, 100, 40.0), None, "moved: a pan");
+        assert_eq!(
+            two_finger_tap(&mut t, o, 1300, 100, 40.0),
+            None,
+            "moved: a pan"
+        );
         let mut t = Touches::default();
         two_finger_tap(&mut t, o, 1000, 100, 0.0);
-        assert_eq!(two_finger_tap(&mut t, o, 1300, 600, 0.0), None, "held: no tap");
+        assert_eq!(
+            two_finger_tap(&mut t, o, 1300, 600, 0.0),
+            None,
+            "held: no tap"
+        );
         let mut t = Touches::default();
         two_finger_tap(&mut t, o, 1000, 100, 0.0);
         assert_eq!(two_finger_tap(&mut t, o, 2000, 100, 0.0), None, "too late");
@@ -429,7 +446,9 @@ mod tests {
         TouchPoint {
             output: o,
             target: PointerTarget {
-                surface: crate::snapshot::SurfaceKey::from_raw(std::num::NonZeroU64::new(1).unwrap()),
+                surface: crate::snapshot::SurfaceKey::from_raw(
+                    std::num::NonZeroU64::new(1).unwrap(),
+                ),
                 origin: crate::geom::CanvasPoint { x: 0, y: 0 },
             },
             anchor: Anchor::Canvas,
@@ -455,7 +474,11 @@ mod tests {
                 ..on_window(o, (5.0, 5.0))
             },
         );
-        assert_eq!(t.take_window_fingers(o), None, "the on-screen keyboard keeps its fingers");
+        assert_eq!(
+            t.take_window_fingers(o),
+            None,
+            "the on-screen keyboard keeps its fingers"
+        );
         assert!(t.get(0).is_some() && t.get(1).is_some(), "nothing changed");
         assert_eq!(Touches::default().take_window_fingers(o), None);
     }

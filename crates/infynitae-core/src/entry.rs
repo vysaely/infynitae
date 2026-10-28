@@ -217,7 +217,10 @@ impl Core {
             }
             PhysicalEvent::TouchUp { slot, time_us } => {
                 self.input.clock.accepted(time_us);
-                let (on_surface, double_tap) = self.touches.lift(slot, Some(ms(time_us)));
+                let crate::touch::Lift {
+                    on_surface,
+                    double_tap,
+                } = self.touches.lift(slot, Some(ms(time_us)));
                 if on_surface {
                     out.push(Effect::TouchUp {
                         slot,
@@ -269,7 +272,12 @@ impl Core {
         let presenting =
             self.presentation(output).is_some() && !self.is_presentation_suppressed(output);
         if !presenting && let Some(camera) = self.cameras.camera_for_output(output) {
-            if self.touches.canvas.as_ref().is_some_and(|g| g.output == output) {
+            if self
+                .touches
+                .canvas
+                .as_ref()
+                .is_some_and(|g| g.output == output)
+            {
                 self.touches.canvas_down(slot, output, camera, p, time_ms);
                 return;
             }

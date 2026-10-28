@@ -318,7 +318,11 @@ fn a_second_finger_on_a_window_takes_both_to_the_canvas() {
     up(&mut r, 0);
     up(&mut r, 1);
     assert!(
-        !r.ls.probe.log.iter().any(|l| l.starts_with("motion") || l.starts_with("up")),
+        !r.ls
+            .probe
+            .log
+            .iter()
+            .any(|l| l.starts_with("motion") || l.starts_with("up")),
         "W saw nothing more: {:?}",
         r.ls.probe.log
     );
@@ -336,7 +340,11 @@ fn a_two_finger_double_tap_on_a_window_recenters_it() {
     up(&mut r, 1);
     up(&mut r, 2);
     assert!(camera(&r).1 < 0.99, "zoomed out: {}", camera(&r).1);
-    let fx = r.ls.state.core_mut().set_focus(&mut r.ls.input, None).unwrap();
+    let fx =
+        r.ls.state
+            .core_mut()
+            .set_focus(&mut r.ls.input, None)
+            .unwrap();
     r.ls.state.apply(&fx);
     r.ls.pump();
     let (p, _) = on_w(&mut r);
