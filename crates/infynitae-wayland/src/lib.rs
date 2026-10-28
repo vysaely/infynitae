@@ -17,6 +17,7 @@ pub mod capture_indicator;
 pub mod convert;
 pub mod cursor;
 pub mod extension;
+pub mod frame_schedule;
 mod frames;
 pub mod gamma;
 mod handlers;
@@ -310,6 +311,10 @@ pub struct WaylandState {
     /// SQUARE_CORNERS: every window is told it is tiled on all four sides, so apps that round
     /// their corners and draw shadows draw a plain rectangle instead.
     pub square_corners: bool,
+    /// LATENCY: when each screen's frame is drawn (frame_schedule).
+    pub latency_mode: crate::frame_schedule::LatencyMode,
+    /// LATENCY_STATS: input-to-screen times in the session log every 10 s.
+    pub latency_stats: bool,
     pub border_active: smithay::backend::renderer::Color32F,
     pub border_inactive: smithay::backend::renderer::Color32F,
     pub border_ids: std::collections::HashMap<
@@ -615,6 +620,8 @@ impl WaylandState {
             border_ignore_csd: true,
             clip_to_geometry: true,
             square_corners: true,
+            latency_mode: crate::frame_schedule::LatencyMode::Balanced,
+            latency_stats: false,
             border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
             border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 0.8),
             border_ids: std::collections::HashMap::new(),
@@ -964,6 +971,15 @@ impl WaylandState {
                                 if let Ok(w) = val.parse::<i32>() {
                                     self.border_width = w.max(0);
                                 }
+                            }
+                            "LATENCY" => {
+                                self.latency_mode = crate::frame_schedule::LatencyMode::parse(val);
+                            }
+                            "LATENCY_STATS" => {
+                                self.latency_stats = matches!(
+                                    val.to_lowercase().as_str(),
+                                    "1" | "true" | "on" | "yes"
+                                );
                             }
                             "SQUARE_CORNERS" => {
                                 self.square_corners = !matches!(

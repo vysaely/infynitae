@@ -270,6 +270,12 @@ struct Screen {
     power_off: bool,
     /// The connector's modes, as display settings tools see them and as DRM sets them.
     modes: Vec<(HeadMode, smithay::reexports::drm::control::Mode)>,
+    /// When to draw its next frame: just in time for its next refresh (LATENCY).
+    schedule: infynitae_wayland::frame_schedule::FrameSchedule,
+    /// A frame wanted, held back until then (presentation clock).
+    deferred: Option<std::time::Duration>,
+    /// Input-to-screen times (LATENCY_STATS).
+    latency: infynitae_wayland::frame_schedule::LatencyStats,
 }
 
 /// DRM per-screen gamma ramp state.
@@ -481,6 +487,8 @@ struct LoopData {
     last_config_check: std::time::Instant,
     last_config_mtime: Option<std::time::SystemTime>,
     last_user_activity: std::time::Instant,
+    /// The last LATENCY_STATS summary.
+    latency_logged: Option<std::time::Instant>,
     dpms_active: bool,
     idle_sleep_timeout_min: u32,
     idle_auto_lock: bool,
@@ -955,6 +963,12 @@ fn connect_screen(
         vrr_on,
         vrr_mode: f.vrr,
         power_off: false,
+        schedule: infynitae_wayland::frame_schedule::FrameSchedule::new(
+            infynitae_wayland::frame_schedule::LatencyMode::Balanced,
+            std::time::Duration::from_nanos(16_666_667),
+        ),
+        deferred: None,
+        latency: Default::default(),
         modes: conn
             .modes()
             .iter()
@@ -1339,11 +1353,18 @@ pub fn run_console_with(
         })
         .map_err(|e| format!("seat events: {e}"))?;
     handle
-        .insert_source(drm_notifier, |event, _, data| match event {
+        .insert_source(drm_notifier, |event, meta, data| match event {
             DrmEvent::VBlank(crtc) => {
                 if let Some(s) = data.screens.iter_mut().find(|s| s.crtc == crtc) {
                     let _ = s.compositor.frame_submitted();
                     s.pending = false;
+                    // the refresh's own time (the kernel's), else now
+                    let shown = match meta.as_ref().map(|m| m.time) {
+                        Some(smithay::backend::drm::DrmEventTime::Monotonic(t)) => t,
+                        _ => infynitae_wayland::presentation_clock_now(),
+                    };
+                    s.schedule.vblank(shown);
+                    s.latency.shown(shown);
                     if !data.dpms_active {
                         s.shows_locked = s.queued_locked;
                     }
@@ -1420,6 +1441,7 @@ pub fn run_console_with(
         last_config_check: std::time::Instant::now(),
         last_config_mtime: initial_mtime,
         last_user_activity: std::time::Instant::now(),
+        latency_logged: None,
         dpms_active: false,
         idle_sleep_timeout_min: idle_timeout_min,
         idle_auto_lock,
@@ -1751,9 +1773,19 @@ pub fn run_console_with(
             .map(|s| s.id)
             .chain(data.virtual_screen.as_ref().map(|v| v.id))
             .any(|id| data.state.screencopy.has_pending(id));
-        if (data.session.frame_due() || has_screencopy) && data.active {
+        // a frame held back for its start time (LATENCY) is drawn when it comes
+        let now = infynitae_wayland::presentation_clock_now();
+        let deferred_due = data
+            .screens
+            .iter()
+            .any(|s| s.deferred.is_some_and(|t| t <= now));
+        if (data.session.frame_due() || has_screencopy || deferred_due) && data.active {
             render(&mut data);
         }
+        let now = infynitae_wayland::presentation_clock_now();
+        let next_deferred = data.screens.iter().filter_map(|s| s.deferred).min();
+        data.session.set_render_deadline(next_deferred, now);
+        latency_summary(&mut data);
 
         let now = infynitae_wayland::presentation_clock_now();
         let deadline = data.state.frame_fallback(now);
@@ -1871,6 +1903,28 @@ fn render(data: &mut LoopData) {
             continue;
         }
 
+        // just in time for the next refresh (LATENCY): held back until its start time, unless the
+        // window on it tears or a fullscreen game runs under VRR (those are drawn at once)
+        let started = infynitae_wayland::presentation_clock_now();
+        {
+            let s = &mut data.screens[i];
+            let m = s.compositor.pending_mode();
+            let mhz = refresh_mhz(m.clock(), m.hsync().2, m.vsync().2, m.vrefresh()).max(1);
+            s.schedule.set_period(std::time::Duration::from_nanos(
+                1_000_000_000_000 / u64::from(mhz),
+            ));
+            s.schedule.set_mode(data.state.latency_mode);
+            let immediate =
+                data.state.tears(id) || (s.vrr_on && data.state.core().presentation(id).is_some());
+            match s.schedule.start_at(started).filter(|_| !immediate) {
+                Some(at) => {
+                    s.deferred = Some(at);
+                    continue;
+                }
+                None => s.deferred = None,
+            }
+        }
+
         // locked: only the lock surface (lock.rs); never a window
         let frame = match convert::lock_elements(&data.state, &mut data.renderer, id) {
             Ok(Some(f)) => Ok(f),
@@ -1972,6 +2026,11 @@ fn render(data: &mut LoopData) {
                     s.compositor.set_async_flip(tear);
                 }
                 let queued = s.compositor.queue_frame(());
+                if queued.is_ok() {
+                    s.schedule
+                        .rendered(started, infynitae_wayland::presentation_clock_now());
+                    s.latency.drawn();
+                }
                 if tear {
                     if s.compositor.async_flip() {
                         s.tearing_refused = 0;
@@ -2463,9 +2522,44 @@ fn apply_virtual_input(data: &mut LoopData) {
     data.session.request_frame();
 }
 
+/// LATENCY_STATS: every 10 s, each screen's input-to-screen times and missed refreshes, in the
+/// session log.
+fn latency_summary(data: &mut LoopData) {
+    if !data.state.latency_stats {
+        return;
+    }
+    let now = std::time::Instant::now();
+    if data
+        .latency_logged
+        .is_some_and(|t| now.duration_since(t) < std::time::Duration::from_secs(10))
+    {
+        return;
+    }
+    data.latency_logged = Some(now);
+    for s in &mut data.screens {
+        let (frames, misses) = s.schedule.counts();
+        if let Some((p50, p95, max, n)) = s.latency.take_summary() {
+            let ms = |d: std::time::Duration| d.as_secs_f64() * 1000.0;
+            println!(
+                "[infynitae] Latency {:?}: input to screen p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms ({n} frames); budget {:.2} ms, margin {:.2} ms, {misses} of {frames} frames missed their refresh",
+                s.id,
+                ms(p50),
+                ms(p95),
+                ms(max),
+                ms(s.schedule.budget().unwrap_or_default()),
+                ms(s.schedule.margin()),
+            );
+        }
+    }
+}
+
 /// Input was seen: the idle timer starts again, and screens asleep wake.
 fn user_activity(data: &mut LoopData) {
     data.last_user_activity = std::time::Instant::now();
+    let now = infynitae_wayland::presentation_clock_now();
+    for s in &mut data.screens {
+        s.latency.input(now);
+    }
     if data.dpms_active {
         println!("[infynitae] User input detected: waking up screens from DPMS sleep");
         data.dpms_active = false;

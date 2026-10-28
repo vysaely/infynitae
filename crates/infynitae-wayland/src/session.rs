@@ -136,6 +136,8 @@ pub struct Session {
     wake: Option<Instant>,
     /// When the off-screen fallback timer fires (M16); `None` while no unobserved element has a
     /// pending callback, and then it is not armed (INV-IDLE-1).
+    /// A held-back frame's start (LATENCY).
+    render_at: Option<Instant>,
     fallback: Option<Instant>,
     /// When an idle notification timer fires; `None` while no notification is pending (INV-IDLE-1).
     idle: Option<Instant>,
@@ -260,6 +262,7 @@ impl Session {
             display_ready,
             wake: None,
             fallback: None,
+            render_at: None,
             idle: None,
             cursor_anim: None,
             terminated,
@@ -342,6 +345,7 @@ impl Session {
         let fallback = self.fallback.map(|t| t.saturating_duration_since(now));
         let idle = self.idle.map(|t| t.saturating_duration_since(now));
         let cursor_anim = self.cursor_anim.map(|t| t.saturating_duration_since(now));
+        let render_at = self.render_at.map(|t| t.saturating_duration_since(now));
         [
             self.timer.until_due(now),
             limit,
@@ -349,6 +353,7 @@ impl Session {
             fallback,
             idle,
             cursor_anim,
+            render_at,
         ]
         .into_iter()
         .flatten()
@@ -359,6 +364,12 @@ impl Session {
     /// current time is `now` (Core's [`crate::WaylandState::frame_fallback`]), or disarms it.
     pub fn set_fallback_deadline(&mut self, deadline: Option<Duration>, now: Duration) {
         self.fallback = deadline.map(|d| Instant::now() + d.saturating_sub(now));
+    }
+
+    /// Arms the wake-up for a frame held back until `deadline` (LATENCY, on the presentation
+    /// clock whose current time is `now`), or disarms it.
+    pub fn set_render_deadline(&mut self, deadline: Option<Duration>, now: Duration) {
+        self.render_at = deadline.map(|d| Instant::now() + d.saturating_sub(now));
     }
 
     /// Arms the idle notification timer for `deadline`, given on the presentation clock whose
