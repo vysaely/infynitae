@@ -2,8 +2,9 @@
 # infynitae-xkill APP_ID TITLE: Super+Shift+C on an X11 window. Every X11 app reaches the
 # compositor through xwayland-satellite's one connection, so cutting it would end them all; the
 # app's own process is found instead: the X11 window of that class with exactly that title, its
-# _NET_WM_PID, and that process with everything it started is killed. Nothing is killed unless
-# exactly one process matches (the window was already asked to close).
+# _NET_WM_PID, and that process with everything it started is killed. Matches started by another
+# match count as that one; nothing is killed unless exactly one process remains (the window was
+# already asked to close).
 #   exit 0: killed   1: no single match, nothing killed   2: no X11 tools or display
 #   INFYNITAE_XKILL_DRY=1: print the processes instead of killing them
 set -u
@@ -39,7 +40,26 @@ for w in $(windows); do
     case " $pids " in *" $pid "*) ;; *) pids="$pids $pid" ;; esac
 done
 
-set -- $pids
+# a match started by another match is part of that app (Steam's window comes from both steam
+# and the steamwebhelper it started): only the topmost ones are kept
+descends() {
+    up=$(awk '{ print $4 }' "/proc/$1/stat" 2>/dev/null)
+    while [ -n "$up" ] && [ "$up" -gt 1 ]; do
+        [ "$up" = "$2" ] && return 0
+        up=$(awk '{ print $4 }' "/proc/$up/stat" 2>/dev/null)
+    done
+    return 1
+}
+roots=""
+for p in $pids; do
+    under=false
+    for q in $pids; do
+        [ "$q" != "$p" ] && descends "$p" "$q" && under=true
+    done
+    [ "$under" = true ] || roots="$roots $p"
+done
+
+set -- $roots
 [ $# -eq 1 ] || exit 1
 root=$1
 # only this user's own processes

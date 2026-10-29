@@ -89,9 +89,35 @@ impl WaylandState {
                 .and_then(|root| self.element_index_by_root(&root))
                 .and_then(|i| self.core.preferred_scale_of(self.elements[i].id)),
         };
-        if let Some((scale_120, integer_scale)) = hint {
+        if let Some(hint) = hint {
+            let (scale_120, integer_scale) = self.routed_scale_hint(surface, hint);
             convert::send_preferred_scale_to_tree(surface, scale_120, integer_scale);
         }
+    }
+
+    /// The scale hint as `surface`'s client is told it. xwayland-satellite resizes an X11
+    /// window by the hint (X11 apps cannot draw at another scale), so a zoom would shrink Steam
+    /// as you zoom in and grow it as you zoom out: its windows are told the screens' own scale,
+    /// whatever the zoom. Every other client gets Core's hint (OBJ-16) as it is.
+    pub(crate) fn routed_scale_hint(&self, surface: &WlSurface, hint: (u32, u32)) -> (u32, u32) {
+        use smithay::reexports::wayland_server::Resource;
+        let x11 = surface
+            .client()
+            .and_then(|c| c.get_credentials(&self.dh).ok())
+            .is_some_and(|c| crate::ownership::is_xwayland_satellite(c.pid));
+        if !x11 {
+            return hint;
+        }
+        let screens = self
+            .core
+            .outputs()
+            .iter()
+            .map(|o| o.scale)
+            .fold(1.0, f64::max);
+        (
+            infynitae_core::scale::preferred_scale_120(screens),
+            (screens - 1e-9).ceil().max(1.0) as u32,
+        )
     }
 
     /// Input consequence of a popup's death (A1, INV-INPUT-8/10). The popup lifetime is owned by
