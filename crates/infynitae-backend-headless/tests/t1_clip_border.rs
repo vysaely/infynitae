@@ -210,3 +210,65 @@ fn a_menu_over_the_windows_edge_covers_its_border() {
         "front to back the border is behind the window and its menu: {kinds:?}"
     );
 }
+
+/// A window that goes away takes its border with it at once (owner, 2026-10-29: a border outline
+/// stayed on screen for a moment after a Steam window closed). The border is drawn just outside
+/// the window, so the next frame must repaint those four strips too, not only the window: the
+/// damage after an unmap and after a destroy covers every side of the old border.
+#[test]
+fn a_closed_windows_border_is_repainted_in_the_next_frame() {
+    use smithay::backend::renderer::damage::OutputDamageTracker;
+    use smithay::utils::{Rectangle, Transform};
+    for destroy in [false, true] {
+        let mut r = Rig::x8();
+        r.ls.state.border_width = 1;
+        let (x0, y0, x1, y1) = w_geometry(&r);
+        let sides = [
+            (x0 - 1, y0 - 1, x1 + 1, y0),
+            (x0 - 1, y1, x1 + 1, y1 + 1),
+            (x0 - 1, y0, x0, y1),
+            (x1, y0, x1 + 1, y1),
+        ];
+        let o = r.ls.output();
+        let mut renderer = PixmanRenderer::new().expect("pixman");
+        let (before, k) =
+            convert::output_elements(&mut r.ls.state, &mut renderer, o).expect("elements");
+        let mut tracker =
+            OutputDamageTracker::new((x1 + 64, y1 + 64), Scale::from(k), Transform::Normal);
+        tracker.damage_output(1, &before).expect("first frame");
+
+        let w_idx =
+            r.ls.probe
+                .surfaces
+                .iter()
+                .position(|s| s.label == "W")
+                .unwrap();
+        if destroy {
+            r.ls.probe.destroy_toplevel(w_idx);
+        } else {
+            r.ls.probe.unmap(w_idx);
+        }
+        r.ls.pump();
+        r.frame();
+        let (after, _) =
+            convert::output_elements(&mut r.ls.state, &mut renderer, o).expect("elements");
+        assert!(
+            !after.iter().any(|e| matches!(e, OutputElement::Solid(_))),
+            "no border without the window (destroy: {destroy})"
+        );
+        let (damage, _) = tracker.damage_output(1, &after).expect("second frame");
+        let damage = damage.cloned().unwrap_or_default();
+        for (sx0, sy0, sx1, sy1) in sides {
+            let side = Rectangle::new((sx0, sy0).into(), (sx1 - sx0, sy1 - sy0).into());
+            let covered: i64 = damage
+                .iter()
+                .filter_map(|d| d.intersection(side))
+                .map(|i| i64::from(i.size.w) * i64::from(i.size.h))
+                .sum();
+            assert!(
+                covered >= i64::from(side.size.w) * i64::from(side.size.h),
+                "the old border side {side:?} is repainted (destroy: {destroy}): {damage:?}"
+            );
+        }
+    }
+}
