@@ -41,10 +41,7 @@ fn focus(r: &mut Rig, e: ElementId) {
 
 /// A flag file of this test's own: the real session's Do Not Disturb never leaks in.
 fn dnd_flag(name: &str) -> std::path::PathBuf {
-    let p = std::env::temp_dir().join(format!(
-        "infynitae-test-dnd-{}-{name}",
-        std::process::id()
-    ));
+    let p = std::env::temp_dir().join(format!("infynitae-test-dnd-{}-{name}", std::process::id()));
     let _ = std::fs::remove_file(&p);
     p
 }
@@ -60,7 +57,10 @@ fn a_fullscreen_window_keeps_the_focus_against_all_but_its_own_dialogs() {
 
     // windowed: any new window takes the focus
     focus(&mut r, w);
-    assert!(!r.ls.state.open_focus_held(x, false), "windowed: X takes it");
+    assert!(
+        !r.ls.state.open_focus_held(x, false),
+        "windowed: X takes it"
+    );
 
     // W fullscreen and focused: another app's window is held, W's own dialog is not, and a
     // window the user opened always takes it
@@ -72,8 +72,14 @@ fn a_fullscreen_window_keeps_the_focus_against_all_but_its_own_dialogs() {
     r.ls.pump();
     r.frame();
     focus(&mut r, w);
-    assert!(r.ls.state.core().fullscreen_of(w).is_some(), "W is fullscreen");
-    assert!(r.ls.state.open_focus_held(x, false), "fullscreen: X is held");
+    assert!(
+        r.ls.state.core().fullscreen_of(w).is_some(),
+        "W is fullscreen"
+    );
+    assert!(
+        r.ls.state.open_focus_held(x, false),
+        "fullscreen: X is held"
+    );
     assert!(
         !r.ls.state.open_focus_held(d, false),
         "fullscreen: W's own dialog takes it"
@@ -92,7 +98,10 @@ fn a_fullscreen_window_keeps_the_focus_against_all_but_its_own_dialogs() {
     r.ls.pump();
     r.frame();
     focus(&mut r, w);
-    assert!(r.ls.state.core().fullscreen_of(w).is_none(), "W is windowed");
+    assert!(
+        r.ls.state.core().fullscreen_of(w).is_none(),
+        "W is windowed"
+    );
     assert!(!r.ls.state.open_focus_held(x, false), "windowed again");
 }
 
