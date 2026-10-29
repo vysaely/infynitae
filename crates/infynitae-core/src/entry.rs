@@ -198,6 +198,7 @@ impl Core {
                 }
                 self.input.clock.accepted(time_us);
                 self.touch_down(slot, output, p, ms(time_us), out);
+                self.touch_resize_settle(out);
                 self.physical_input_activity = true;
                 Ok(())
             }
@@ -206,6 +207,11 @@ impl Core {
                     return Err(EntryError::InvalidEvent);
                 }
                 self.input.clock.accepted(time_us);
+                if self.touches.on_window(slot) {
+                    self.window_gesture_step(slot, p, out);
+                    self.physical_input_activity = true;
+                    return Ok(());
+                }
                 // a finger on the canvas moves the camera (INV-CAMERA-1)
                 let proof = self
                     .touches
@@ -231,6 +237,7 @@ impl Core {
                 if let Some((output, at)) = double_tap {
                     self.touch_recenter(authority::Authorized::mint(), output, at, out);
                 }
+                self.touch_resize_settle(out);
                 self.physical_input_activity = true;
                 Ok(())
             }
@@ -242,6 +249,7 @@ impl Core {
                 if self.touches.clear() {
                     out.push(Effect::TouchCancel);
                 }
+                self.touch_resize_settle(out);
                 Ok(())
             }
         }
@@ -272,6 +280,9 @@ impl Core {
         let presenting =
             self.presentation(output).is_some() && !self.is_presentation_suppressed(output);
         if !presenting && let Some(camera) = self.cameras.camera_for_output(output) {
+            if self.touches.window_down(slot, output, p) {
+                return;
+            }
             if self
                 .touches
                 .canvas
@@ -279,6 +290,7 @@ impl Core {
                 .is_some_and(|g| g.output == output)
             {
                 self.touches.canvas_down(slot, output, camera, p, time_ms);
+                self.touch_window_take(output, out);
                 return;
             }
             if let Some(fingers) = self.touches.take_window_fingers(output) {
@@ -448,6 +460,133 @@ impl Core {
         self.cameras
             .set_zoom_and_center(proof, camera, zoom, center);
         self.camera_written(output, camera, out);
+    }
+
+    /// Three or more canvas fingers whose centroid is on a window take it (raised and focused):
+    /// from now on they move or resize it (`touch::WindowGesture`).
+    fn touch_window_take(&mut self, output: OutputId, out: &mut Vec<Effect>) {
+        let Some(g) = self
+            .touches
+            .canvas
+            .as_ref()
+            .filter(|g| g.fingers.len() >= 3)
+        else {
+            return;
+        };
+        let ((x, y), _) = crate::touch::WindowGesture::centroid_of(&g.fingers);
+        let pt = crate::geom::OutputLogicalPoint { x, y };
+        let Some(hit) = self.hit_test(output, pt) else {
+            return;
+        };
+        self.touches.canvas_to_window(hit.element);
+        self.raise_by_user(hit.element);
+        out.extend(self.focus.set_focus(Some(hit.element)));
+    }
+
+    /// A finger of the window gesture moved to `p`: once the fingers moved or spread
+    /// `WINDOW_SLOP`, the window follows their centroid (a move) or their extent (a resize, its
+    /// top-left corner staying). Nothing while a compositor interaction owns the input; the
+    /// gesture ends if its window went.
+    fn window_gesture_step(&mut self, slot: u32, p: (f64, f64), out: &mut Vec<Effect>) {
+        use crate::touch::WindowMode;
+        let Some(g) = self.touches.window.as_mut() else {
+            return;
+        };
+        let (output, element, mode) = (g.output, g.element, g.mode);
+        if self.input.interaction.active() {
+            // the finger is followed still; the grab is taken again once the window can move
+            g.follow(slot, p);
+            g.grab = None;
+            return;
+        }
+        let (Some(anchor), Some(tree), Some(view)) = (
+            self.stage.anchor(element),
+            self.stage.tree(element),
+            self.view(output),
+        ) else {
+            self.touches.end_window();
+            return;
+        };
+        let size = self
+            .resize
+            .filter(|r| r.element == element && !r.released)
+            .map_or((tree.geometry.size.w, tree.geometry.size.h), |r| r.target);
+        let Some(g) = self.touches.window.as_mut() else {
+            return;
+        };
+        // the grab is of the fingers before this motion, so none of it is lost
+        if g.grab.is_none() {
+            let (centroid, extent) = g.shape();
+            g.grab = Some(crate::touch::WindowGrab {
+                centroid,
+                extent,
+                anchor,
+                size,
+            });
+        }
+        g.follow(slot, p);
+        let grab = g.grab.expect("just taken");
+        let (centroid, extent) = g.shape();
+        let moved = (centroid.0 - grab.centroid.0).hypot(centroid.1 - grab.centroid.1);
+        let spread = (extent.0 - grab.extent.0)
+            .abs()
+            .max((extent.1 - grab.extent.1).abs());
+        let mode = match mode {
+            WindowMode::Undecided if moved > crate::touch::WINDOW_SLOP && moved >= spread => {
+                WindowMode::Move
+            }
+            WindowMode::Undecided if spread > crate::touch::WINDOW_SLOP => {
+                if self.begin_resize(element, false, false).is_none() {
+                    return;
+                }
+                WindowMode::Resize
+            }
+            m => m,
+        };
+        if let Some(g) = self.touches.window.as_mut() {
+            g.mode = mode;
+        }
+        match mode {
+            WindowMode::Undecided => {}
+            WindowMode::Move => {
+                let at =
+                    |(x, y): (f64, f64)| view.unproject(crate::geom::OutputLogicalPoint { x, y });
+                let (now, then) = (at(centroid), at(grab.centroid));
+                let q = crate::geom::Q16_ONE;
+                let target = crate::geom::CanvasPos {
+                    x: grab.anchor.x * q + (now.x - then.x),
+                    y: grab.anchor.y * q + (now.y - then.y),
+                };
+                if let Some(to) = target.round_to_point()
+                    && to != anchor
+                {
+                    let _ = self.place_by_user(element, to, out);
+                }
+            }
+            WindowMode::Resize => {
+                let zoom = view.zoom.max(0.001);
+                let grow = |start: i32, d: f64| {
+                    (f64::from(start) + d / zoom)
+                        .round()
+                        .clamp(32.0, f64::from(i32::MAX)) as i32
+                };
+                self.resize_to(
+                    (
+                        grow(grab.size.0, extent.0 - grab.extent.0),
+                        grow(grab.size.1, extent.1 - grab.extent.1),
+                    ),
+                    out,
+                );
+            }
+        }
+        self.invalidate_frame(output);
+    }
+
+    /// A window gesture that was resizing ended: the last configure, without `resizing`.
+    fn touch_resize_settle(&mut self, out: &mut Vec<Effect>) {
+        if self.touches.take_resize_done() && self.resize.is_some_and(|r| !r.released) {
+            self.end_resize(out);
+        }
     }
 
     /// [`Core::physical_input`] into a new `Vec`: for tests and one-off callers. It allocates;

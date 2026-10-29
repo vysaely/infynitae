@@ -13,9 +13,18 @@
 //! landing while fingers are on the canvas joins them. Fingers on a layer surface (the on-screen
 //! keyboard types with two) and on a fullscreen window (games) stay theirs. A quick two-finger
 //! tap, twice, recenters like Super+Space.
+//!
+//! Three fingers on a window move or resize it (owner, 2026-10-28): a third finger joining two
+//! whose centroid is on a window takes the gesture from the canvas to that window. Moved
+//! together, they carry it (the Canvas point under their centroid stays under it); spread or
+//! pinched, they resize it, the width by their horizontal spread and the height by their
+//! vertical one, its top-left corner staying put. Which is decided once they have moved
+//! `WINDOW_SLOP`; the last lift ends it.
 
+use crate::geom::CanvasPoint;
 use crate::output::OutputId;
 use crate::protocol::PointerTarget;
+use crate::stage::ElementId;
 
 /// How a finger's later positions become the location delivered to its surface.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -42,6 +51,9 @@ const TAP_SLOP: f64 = 16.0;
 /// The second tap starts within this of the first's end, near it.
 const DOUBLE_TAP_GAP_MS: u32 = 350;
 const DOUBLE_TAP_DISTANCE: f64 = 80.0;
+/// How far (output logical px) three fingers move, or change their spread, before they move or
+/// resize their window.
+pub(crate) const WINDOW_SLOP: f64 = 24.0;
 
 /// The end of a two-finger tap, waiting for a second.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -63,7 +75,72 @@ pub(crate) struct Lift {
 pub(crate) struct Touches {
     points: Vec<(u32, TouchPoint)>,
     pub canvas: Option<CanvasGesture>,
+    pub window: Option<WindowGesture>,
     last_tap: Option<Tap>,
+    /// A window gesture that was resizing ended: its last configure is to be sent.
+    resize_done: bool,
+}
+
+/// Three or more fingers on a window: they move or resize it.
+#[derive(Clone, Debug)]
+pub(crate) struct WindowGesture {
+    pub output: OutputId,
+    pub element: ElementId,
+    /// Each finger's position, output logical px.
+    pub fingers: Vec<(u32, (f64, f64))>,
+    /// `None`: to be taken from the window at the next motion (a finger joined or lifted).
+    pub grab: Option<WindowGrab>,
+    pub mode: WindowMode,
+}
+
+/// What a window gesture does: nothing yet, until its fingers moved `WINDOW_SLOP`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WindowMode {
+    Undecided,
+    Move,
+    Resize,
+}
+
+/// Where a window gesture took hold: the fingers' centroid and extent (the width and height of
+/// the box around them, output logical px), and the window's anchor and size then.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WindowGrab {
+    pub centroid: (f64, f64),
+    pub extent: (f64, f64),
+    pub anchor: CanvasPoint,
+    pub size: (i32, i32),
+}
+
+/// The width and height of the box around `fingers`.
+pub(crate) fn extent(fingers: &[(u32, (f64, f64))]) -> (f64, f64) {
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for (_, p) in fingers {
+        (x0, y0, x1, y1) = (x0.min(p.0), y0.min(p.1), x1.max(p.0), y1.max(p.1));
+    }
+    if fingers.is_empty() {
+        (0.0, 0.0)
+    } else {
+        (x1 - x0, y1 - y0)
+    }
+}
+
+impl WindowGesture {
+    /// The finger `slot` is at `p` now.
+    pub(crate) fn follow(&mut self, slot: u32, p: (f64, f64)) {
+        if let Some(f) = self.fingers.iter_mut().find(|(s, _)| *s == slot) {
+            f.1 = p;
+        }
+    }
+
+    /// The fingers' centroid and extent now.
+    pub(crate) fn shape(&self) -> ((f64, f64), (f64, f64)) {
+        Self::centroid_of(&self.fingers)
+    }
+
+    /// `fingers`' centroid and extent.
+    pub(crate) fn centroid_of(fingers: &[(u32, (f64, f64))]) -> ((f64, f64), (f64, f64)) {
+        (centroid_spread(fingers).0, extent(fingers))
+    }
 }
 
 /// Fingers on empty canvas move their output's camera: the Canvas point under their centroid
@@ -186,6 +263,15 @@ impl Touches {
     /// (output logical px) of a two-finger double tap it ended.
     pub(crate) fn lift(&mut self, slot: u32, time_ms: Option<u32>) -> Lift {
         let mut double_tap = None;
+        if let Some(g) = &mut self.window
+            && g.fingers.iter().any(|(s, _)| *s == slot)
+        {
+            g.fingers.retain(|(s, _)| *s != slot);
+            g.grab = None;
+            if g.fingers.is_empty() {
+                self.end_window();
+            }
+        }
         if let Some(g) = &mut self.canvas
             && g.fingers.iter().any(|(s, _)| *s == slot)
         {
@@ -263,6 +349,7 @@ impl Touches {
     /// Every finger is forgotten: whether any was on a surface.
     pub(crate) fn clear(&mut self) -> bool {
         self.canvas = None;
+        self.end_window();
         self.last_tap = None;
         let any = !self.points.is_empty();
         self.points.clear();
@@ -273,6 +360,7 @@ impl Touches {
     pub(crate) fn on_output(&self, output: OutputId) -> bool {
         self.points.iter().any(|(_, p)| p.output == output)
             || self.canvas.as_ref().is_some_and(|g| g.output == output)
+            || self.window.as_ref().is_some_and(|g| g.output == output)
     }
 
     /// A finger on empty canvas of `output`, whose camera is `camera`: it joins the gesture there.
@@ -310,6 +398,54 @@ impl Touches {
         self.canvas
             .as_ref()
             .is_some_and(|g| g.fingers.iter().any(|(s, _)| *s == slot))
+    }
+
+    /// Whether `slot` is a finger of the window gesture.
+    pub(crate) fn on_window(&self, slot: u32) -> bool {
+        self.window
+            .as_ref()
+            .is_some_and(|g| g.fingers.iter().any(|(s, _)| *s == slot))
+    }
+
+    /// The canvas gesture's fingers move or resize `element` from now on (it ends, and no tap
+    /// is counted).
+    pub(crate) fn canvas_to_window(&mut self, element: ElementId) {
+        let Some(g) = self.canvas.take() else {
+            return;
+        };
+        self.last_tap = None;
+        self.end_window();
+        self.window = Some(WindowGesture {
+            output: g.output,
+            element,
+            fingers: g.fingers,
+            grab: None,
+            mode: WindowMode::Undecided,
+        });
+    }
+
+    /// A finger joins the window gesture on `output`: `false` when there is none there.
+    pub(crate) fn window_down(&mut self, slot: u32, output: OutputId, p: (f64, f64)) -> bool {
+        let Some(g) = self.window.as_mut().filter(|g| g.output == output) else {
+            return false;
+        };
+        g.fingers.push((slot, p));
+        g.grab = None;
+        true
+    }
+
+    /// The window gesture ends (a resize of it waits for its last configure).
+    pub(crate) fn end_window(&mut self) {
+        if let Some(g) = self.window.take()
+            && g.mode == WindowMode::Resize
+        {
+            self.resize_done = true;
+        }
+    }
+
+    /// Whether a window gesture's resize ended since this was last asked.
+    pub(crate) fn take_resize_done(&mut self) -> bool {
+        std::mem::take(&mut self.resize_done)
     }
 }
 

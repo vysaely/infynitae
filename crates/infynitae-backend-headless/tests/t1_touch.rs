@@ -357,3 +357,140 @@ fn a_two_finger_double_tap_on_a_window_recenters_it() {
     assert_eq!(camera(&r).1, 1.0, "zoom 1.0");
     assert_eq!(r.ls.probe.kb.active.as_deref(), Some("W"), "W focused");
 }
+
+/// The window the rig's fingers act on.
+fn element(r: &Rig) -> infynitae_core::stage::ElementId {
+    *r.ls.state.core().stage().mapped_elements().last().unwrap()
+}
+
+/// Three fingers on W, moved together: W follows them by their motion / zoom (the canvas, which
+/// two fingers would pan, stays), W is focused, and W saw none of the fingers past the first.
+#[test]
+fn three_fingers_on_a_window_move_it() {
+    let (mut r, _touch) = rig();
+    let w = element(&r);
+    let fx =
+        r.ls.state
+            .core_mut()
+            .set_focus(&mut r.ls.input, None)
+            .unwrap();
+    r.ls.state.apply(&fx);
+    r.ls.pump();
+    let (p, _) = on_w(&mut r);
+    let fingers = [
+        (0, (p.0, p.1)),
+        (1, (p.0 + 20.0, p.1)),
+        (2, (p.0 + 10.0, p.1 + 15.0)),
+    ];
+    for (s, at) in fingers {
+        down(&mut r, s, at);
+    }
+    let (c0, z) = camera(&r);
+    let a0 = r.ls.state.core().stage().anchor(w).unwrap();
+    assert_eq!(r.ls.probe.kb.active.as_deref(), Some("W"), "W focused");
+    r.ls.probe.log.clear();
+    for step in 1..=4 {
+        for (s, at) in fingers {
+            motion(
+                &mut r,
+                s,
+                (at.0 + 30.0 * f64::from(step), at.1 + 10.0 * f64::from(step)),
+            );
+        }
+    }
+    let a = r.ls.state.core().stage().anchor(w).unwrap();
+    let want = ((120.0 / z).round() as i64, (40.0 / z).round() as i64);
+    assert!(
+        ((a.x - a0.x) - want.0).abs() <= 1 && ((a.y - a0.y) - want.1).abs() <= 1,
+        "W moved {:?}, want {want:?} (zoom {z})",
+        (a.x - a0.x, a.y - a0.y)
+    );
+    assert_eq!(camera(&r), (c0, z), "the canvas stayed");
+    for (s, _) in fingers {
+        up(&mut r, s);
+    }
+    assert!(
+        !r.ls
+            .probe
+            .log
+            .iter()
+            .any(|l| l.starts_with("motion") || l.starts_with("up") || l.starts_with("down")),
+        "W saw nothing of the gesture: {:?}",
+        r.ls.probe.log
+    );
+    // over: one finger on W is W's again
+    let (p, _) = on_w(&mut r);
+    down(&mut r, 5, p);
+    assert!(
+        r.ls.probe.log.iter().any(|l| l.starts_with("down 5 W")),
+        "{:?}",
+        r.ls.probe.log
+    );
+}
+
+/// xdg_toplevel state `resizing`.
+const RESIZING: u32 = 3;
+
+/// Three fingers on a 400 × 300 window spread 100 px wider and 60 px taller: it is asked for that
+/// much more (at zoom 1), `resizing`, one configure at a time; the last lift sends the last size
+/// without `resizing`, and the window's top-left corner stays.
+#[test]
+fn three_fingers_spread_on_a_window_resize_it() {
+    let mut r = Rig::new(common::Lockstep::new(Some(a_1080())));
+    r.ls.state.enable_touch();
+    let qh = r.ls.qh.clone();
+    let idx = r.ls.probe.toplevel(&qh, "R", (400, 300), 0);
+    r.ls.pump();
+    r.frame();
+    let w = element(&r);
+    let start = r.ls.state.core().stage().anchor(w).unwrap();
+    let z = camera(&r).1;
+    // the window is centred on the view (960, 540)
+    let fingers = [
+        (0, (900.0, 500.0)),
+        (1, (1000.0, 500.0)),
+        (2, (950.0, 560.0)),
+    ];
+    for (s, at) in fingers {
+        down(&mut r, s, at);
+    }
+    r.ls.probe.toplevel_configures.clear();
+    // fingers 0 and 1 spread 50 px each sideways, finger 2 goes 60 px down
+    motion(&mut r, 0, (850.0, 500.0));
+    motion(&mut r, 1, (1050.0, 500.0));
+    motion(&mut r, 2, (950.0, 620.0));
+    let asked =
+        r.ls.probe
+            .toplevel_configures
+            .first()
+            .cloned()
+            .expect("a configure");
+    assert!(asked.2.contains(&RESIZING), "{:?}", asked.2);
+    // the client draws what it was last asked for
+    let last = r.ls.probe.toplevel_configures.last().cloned().unwrap();
+    r.ls.probe.surfaces[idx].size = last.1;
+    r.ls.probe.draw(&qh, idx);
+    r.ls.pump();
+    r.frame();
+    let want = (
+        400 + (100.0 / z).round() as i32,
+        300 + (60.0 / z).round() as i32,
+    );
+    let now = r.ls.probe.toplevel_configures.last().cloned().unwrap();
+    assert_eq!(now.1, want, "the spread's size (zoom {z})");
+    for (s, _) in fingers {
+        up(&mut r, s);
+    }
+    let fin = r.ls.probe.toplevel_configures.last().cloned().unwrap();
+    assert_eq!(fin.1, want, "the last size, once more");
+    assert!(!fin.2.contains(&RESIZING), "without resizing: {:?}", fin.2);
+    r.ls.probe.surfaces[idx].size = want;
+    r.ls.probe.draw(&qh, idx);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(
+        r.ls.state.core().stage().anchor(w),
+        Some(start),
+        "the top-left corner stayed"
+    );
+}
