@@ -574,7 +574,7 @@ fn k9_ob15_key_repeat_probe() {
     let expected_rate = std::env::var("KEYBOARD_REPEAT_RATE")
         .ok()
         .and_then(|s| s.parse::<i32>().ok())
-        .unwrap_or(25);
+        .unwrap_or(35);
     let expected_delay = std::env::var("KEYBOARD_REPEAT_DELAY")
         .ok()
         .and_then(|s| s.parse::<i32>().ok())
@@ -588,7 +588,7 @@ fn k9_ob15_key_repeat_probe() {
     s.key(KEY_A, true);
     assert_eq!(s.ls.probe.key_events.len(), keys_before + 1);
 
-    // Advance time by 500 ms (past the 200 ms delay and multiple 25 Hz intervals)
+    // Advance time by 500 ms (past the 200 ms delay and multiple 35 Hz intervals)
     let t = s.ls.now + Duration::from_millis(500);
     s.ls.run_until(t);
 
