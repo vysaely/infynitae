@@ -363,6 +363,11 @@ pub struct WaylandState {
     /// FOCUS_ON_OPEN / TELEPORT_ON_OPEN = "user" (the default): only windows the user opened.
     pub(crate) focus_open_user_only: bool,
     pub(crate) teleport_open_user_only: bool,
+    /// FOCUS_ON_OPEN = "priority": new windows take the focus unless it is busy
+    /// (`open_focus_held`).
+    pub focus_open_priority: bool,
+    /// The control menu's Do Not Disturb flag file (`do_not_disturb`); None without a runtime dir.
+    pub dnd_flag: Option<std::path::PathBuf>,
     /// FOCUS_ON_ACTIVATE = "user" (the default): only tokens from the user's launches or the app
     /// itself move the focus (`request_activation`).
     pub(crate) activate_user_only: bool,
@@ -646,7 +651,10 @@ impl WaylandState {
             current_time: None,
             exec_commands: Vec::new(),
             launches: launch::Launches::default(),
-            focus_open_user_only: true,
+            focus_open_user_only: false,
+            focus_open_priority: true,
+            dnd_flag: std::env::var_os("XDG_RUNTIME_DIR")
+                .map(|d| std::path::PathBuf::from(d).join("infynitae/do-not-disturb")),
             teleport_open_user_only: true,
             activate_user_only: true,
             session_lock: None,
@@ -921,6 +929,7 @@ impl WaylandState {
                                 );
                                 self.core.set_focus_on_open(enabled);
                                 self.focus_open_user_only = val.eq_ignore_ascii_case("user");
+                                self.focus_open_priority = val.eq_ignore_ascii_case("priority");
                             }
                             "TELEPORT_ON_OPEN" => {
                                 let enabled = !matches!(

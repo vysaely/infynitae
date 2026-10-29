@@ -123,3 +123,8 @@ these by date, e.g. "(owner, 2026-10-24)".
   context is now lost instead (P3, U-009), and the backend makes a new renderer: the screens
   freeze until GPU memory frees up, the windows stay. Qt 6 apps also reconnect after a restart
   (`QT_WAYLAND_RECONNECT`).
+- **A new window takes the focus unless you are busy** (2026-10-29, `FOCUS_ON_OPEN="priority"`,
+  the new default): windows rank against the focus. One you opened always takes it; with Do Not
+  Disturb on (Super+A, a flag file the compositor reads) no other does; a fullscreen window (a
+  game, a video) keeps it against all but its own dialogs; otherwise the new window takes it. A
+  held window opens without the focus, asks for attention and leaves the camera where it is.

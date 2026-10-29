@@ -1,6 +1,6 @@
 #!/bin/sh
 # Super+A: the control menu. Wi-Fi, Bluetooth, volume (all sound and each app), sound output,
-# power mode and notifications, each shown only when its tool is installed: nmcli
+# power mode, each shown only when its tool is installed, and do not disturb: nmcli
 # (NetworkManager) or iwctl (iwd), bluetoothctl (bluez-utils), pactl (pipewire-pulse),
 # powerprofilesctl (power-profiles-daemon), makoctl or swaync-client. The picker is MENU_PICKER
 # (empty: fuzzel --dmenu); any dmenu-style command works.
@@ -149,13 +149,21 @@ power_menu() {
     [ -n "$choice" ] && powerprofilesctl set "$(printf '%s' "$choice" | sed 's/^\(● \|  \)//')"
 }
 
-# ── Notifications ──────────────────────────────────────────────────────────────────────────────
+# ── Do not disturb ─────────────────────────────────────────────────────────────────────────────
+# One switch, its state a flag file the compositor reads (FOCUS_ON_OPEN=priority: no window an
+# app opens takes the focus while it is on); the notification daemon follows it
+DND_FLAG="${XDG_RUNTIME_DIR:-/tmp}/infynitae/do-not-disturb"
+dnd_on() { [ -e "$DND_FLAG" ]; }
 dnd_toggle() {
-    if have makoctl; then
-        if makoctl mode | grep -qx do-not-disturb; then makoctl mode -r do-not-disturb >/dev/null; note "Notifications on"
-        else makoctl mode -a do-not-disturb >/dev/null; fi
-    elif have swaync-client; then
-        swaync-client -d >/dev/null
+    if dnd_on; then
+        rm -f "$DND_FLAG"
+        if have makoctl; then makoctl mode -r do-not-disturb >/dev/null 2>&1
+        elif have swaync-client; then swaync-client --dnd-off >/dev/null 2>&1; fi
+        note "Do not disturb off"
+    else
+        mkdir -p "$(dirname "$DND_FLAG")" && : > "$DND_FLAG"
+        if have makoctl; then makoctl mode -a do-not-disturb >/dev/null 2>&1
+        elif have swaync-client; then swaync-client --dnd-on >/dev/null 2>&1; fi
     fi
 }
 
@@ -209,11 +217,7 @@ have bluetoothctl && [ -n "$(ls /sys/class/bluetooth 2>/dev/null)" ] && add "Blu
 have pactl && add "Volume"
 have pactl && add "Sound output"
 have powerprofilesctl && add "Power mode"
-if have makoctl; then
-    if makoctl mode 2>/dev/null | grep -qx do-not-disturb; then add "Notifications: off (turn on)"; else add "Do not disturb"; fi
-elif have swaync-client; then
-    add "Do not disturb (toggle)"
-fi
+if dnd_on; then add "Do not disturb: on (turn off)"; else add "Do not disturb"; fi
 if have ffmpeg && { have infynitae-recorder || [ -x "$HOME/.local/bin/infynitae-recorder" ]; }; then
     if replay_on; then add "Replay buffer: on (turn off)"; else add "Replay buffer: off (turn on)"; fi
 fi
@@ -235,7 +239,7 @@ case "$(printf '%s' "$entries" | $PICKER)" in
     "Sound output") sound_menu ;;
     "Volume") volume_menu ;;
     "Power mode") power_menu ;;
-    "Do not disturb"|"Notifications: off (turn on)"|"Do not disturb (toggle)") dnd_toggle ;;
+    "Do not disturb"|"Do not disturb: on (turn off)") dnd_toggle ;;
     "Replay buffer: on (turn off)"|"Replay buffer: off (turn on)") replay_toggle ;;
     "Battery limit: "*) battery_limit_toggle ;;
 esac

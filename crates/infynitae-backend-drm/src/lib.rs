@@ -1704,12 +1704,20 @@ pub fn run_console_with(
         data.known_mapped.extend(current_mapped);
         // which new windows the user opened, decided before any of them takes the focus
         let (focus_user_only, teleport_user_only) = data.state.open_policy_user_only();
+        let priority = data.state.open_policy_priority();
         let by_user: Vec<bool> = new_mapped
             .iter()
             .map(|&id| {
-                (focus_user_only || teleport_user_only)
+                (focus_user_only || teleport_user_only || priority)
                     && data.state.opened_by_user(id, data.last_user_activity)
             })
+            .collect();
+        // FOCUS_ON_OPEN=priority: the windows that may not take the focus now, decided against
+        // the focus as it is before any of them takes it
+        let held: Vec<bool> = new_mapped
+            .iter()
+            .zip(&by_user)
+            .map(|(&id, &user)| priority && data.state.open_focus_held(id, user))
             .collect();
 
         if data.state.core().focus().is_initial_eligible() {
@@ -1723,8 +1731,16 @@ pub fn run_console_with(
                 data.session.flush();
             }
         } else if data.state.core().focus_on_open() {
-            for (&new_id, &user) in new_mapped.iter().zip(&by_user) {
+            for ((&new_id, &user), &hold) in new_mapped.iter().zip(&by_user).zip(&held) {
                 if focus_user_only && !user {
+                    continue;
+                }
+                if hold {
+                    // opens without the focus and asks for attention: Super+Tab or a click
+                    if let Ok(effects) = data.state.core_mut().activation_request(new_id, false) {
+                        data.state.apply(&effects);
+                        data.session.flush();
+                    }
                     continue;
                 }
                 if let Ok(effects) = data
@@ -1739,9 +1755,11 @@ pub fn run_console_with(
         }
 
         if data.state.core().teleport_on_open() {
-            for (&new_id, &user) in new_mapped.iter().zip(&by_user) {
-                // a child window opens over its parent, already in view: the camera stays
-                if (teleport_user_only && !user)
+            for ((&new_id, &user), &hold) in new_mapped.iter().zip(&by_user).zip(&held) {
+                // a child window opens over its parent, already in view: the camera stays; a
+                // held window does not move it either
+                if hold
+                    || (teleport_user_only && !user)
                     || data.state.core().toplevel_parent(new_id).is_some()
                 {
                     continue;

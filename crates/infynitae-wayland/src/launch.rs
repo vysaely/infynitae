@@ -208,6 +208,41 @@ impl WaylandState {
     pub fn open_policy_user_only(&self) -> (bool, bool) {
         (self.focus_open_user_only, self.teleport_open_user_only)
     }
+
+    /// FOCUS_ON_OPEN = "priority" (owner, 2026-10-29): a new window takes the focus unless the
+    /// focus is busy with something it must not be pulled from. In rank order:
+    /// 1. a window the user opened always takes it (`opened_by_user`);
+    /// 2. Do Not Disturb on (the control menu's switch, [`WaylandState::do_not_disturb`]): no
+    ///    other window does;
+    /// 3. a fullscreen window keeps it (a game, a video): only its own child windows (a dialog of
+    ///    that app) take it;
+    /// 4. otherwise the new window takes it.
+    ///
+    /// A held window opens without the focus and asks for attention (as a link opened from
+    /// another app does), so Super+Tab or a click reaches it.
+    pub fn open_focus_held(&self, element: ElementId, by_user: bool) -> bool {
+        if by_user {
+            return false;
+        }
+        if self.do_not_disturb() {
+            return true;
+        }
+        let focused = self.core.focus().target().filter(|f| *f != element);
+        focused.is_some_and(|f| {
+            self.core.fullscreen_of(f).is_some() && self.core.toplevel_parent(element) != Some(f)
+        })
+    }
+
+    /// Whether FOCUS_ON_OPEN is "priority" ([`Self::open_focus_held`]).
+    pub fn open_policy_priority(&self) -> bool {
+        self.focus_open_priority
+    }
+
+    /// The control menu's Do Not Disturb: its flag file exists
+    /// (`$XDG_RUNTIME_DIR/infynitae/do-not-disturb`, `live/control-menu`).
+    pub fn do_not_disturb(&self) -> bool {
+        self.dnd_flag.as_ref().is_some_and(|p| p.exists())
+    }
 }
 
 #[cfg(test)]

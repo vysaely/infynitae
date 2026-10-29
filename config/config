@@ -21,9 +21,12 @@ SUPER_FREES_CURSOR="true"         # holding Super frees a cursor a game captured
 # ── Windows & canvas ──────────────────────────────────────────────────── [save] ──
 FOCUS_FOLLOWS_MOUSE="strict"      # sloppy: hover focuses, kept over empty canvas
                                   # strict: hover focuses, empty canvas unfocuses | click
-FOCUS_ON_OPEN="user"              # a new window takes the focus — user: only windows you opened
-                                  # (shortcuts, launcher, a command in the focused terminal), not
-                                  # ones an app opens by itself | 1: every window | 0: never
+FOCUS_ON_OPEN="priority"          # a new window takes the focus — priority: unless you are busy:
+                                  # windows you opened always do; with Do Not Disturb (Super+A)
+                                  # no other does; a fullscreen game or video keeps it (only its
+                                  # own dialogs get in). A held window asks for attention instead
+                                  # | user: only windows you opened (shortcuts, launcher, a command
+                                  # in the focused terminal) | 1: every window | 0: never
 TELEPORT_ON_OPEN="user"           # the camera moves to a new window — same values
 FOCUS_ON_ACTIVATE="user"          # an app asks to be focused — user: only from your launcher or
                                   # itself; one app handing focus to another (a link from Discord
