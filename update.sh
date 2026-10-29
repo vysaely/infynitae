@@ -27,7 +27,11 @@ echo "==> Your password, once (new packages, system files)"
 sudo_once
 trap 'kill "${SUDO_KEEPER:-}" 2>/dev/null || true' EXIT
 
-echo "==> Updating Infynitae in $REPO_DIR"
+# everything is also written to the install log
+mkdir -p "$INFY_STATE"
+LOG="$INFY_STATE/install.log"
+exec > >(tee -a "$LOG") 2>&1
+echo "==> $(date '+%F %T') Updating Infynitae in $REPO_DIR"
 
 # 1. the source; local changes are stashed and put back
 if [ -d ".git" ]; then
@@ -45,8 +49,9 @@ if [ -d ".git" ]; then
     fi
 
     echo "==> Pulling $CURRENT_BRANCH..."
-    git pull origin "$CURRENT_BRANCH" || {
-        echo "==> Could not pull (offline?); building the source as it is"
+    # only forward: a source with commits of its own is built as it is, never merged
+    git pull --ff-only origin "$CURRENT_BRANCH" || {
+        echo "==> Could not pull (offline, or local commits); building the source as it is"
     }
 
     if [ "$PUSHED_STASH" = true ]; then
@@ -59,18 +64,12 @@ if [ -d ".git" ]; then
     fi
 fi
 
-# 2. Packages added since: the required ones and the optional parts not left out at install
-#    (install-choices). Installed onto the current package lists: when a package is gone from
-#    them, the system needs an update first (sudo pacman -Syu), which is the user's to start.
+# 2. Packages added since: the required ones, the optional parts not left out at install and the
+#    hardware parts chosen then (install-choices). Installed onto the current package lists:
+#    when a package is gone from them, the system needs an update first (sudo pacman -Syu),
+#    which is the user's to start. Graphics drivers: infynitae-drivers.
 if command -v pacman >/dev/null 2>&1; then
-    NEW_PKGS=()
-    mapfile -t -O "${#NEW_PKGS[@]}" NEW_PKGS < <(missing_pkgs $(cat live/packages.txt))
-    for group in $(optional_groups); do
-        is_skipped "$group" && continue
-        group_applies "$group" || continue
-        mapfile -t -O "${#NEW_PKGS[@]}" NEW_PKGS < <(missing_pkgs $(optional_pkgs "$group"))
-    done
-    pacman -Qi rustup >/dev/null 2>&1 || NEW_PKGS+=(rustup)
+    mapfile -t NEW_PKGS < <(wanted_pkgs)
     if [ ${#NEW_PKGS[@]} -gt 0 ]; then
         echo "==> Installing: ${NEW_PKGS[*]}"
         pacman_run -S --needed "${NEW_PKGS[@]}" || {
@@ -78,6 +77,7 @@ if command -v pacman >/dev/null 2>&1; then
             exit 1
         }
     fi
+    enable_hw_services
     rustup toolchain install || rustup show >/dev/null || { echo "==> The Rust toolchain could not be installed (see the error above; a folder from a run with sudo: sudo chown -R $USER: ~/.rustup ~/.cargo)" >&2; exit 1; }
 fi
 
@@ -90,8 +90,9 @@ if [ -L target ] && [ ! -d target/ ]; then
     echo "==> The build folder's drive is not mounted ($(readlink target)): building in ./target"
     rm target && mkdir target
 fi
-echo "==> Building..."
-cargo build --release -p infynitae
+JOBS=$(build_jobs)
+echo "==> Building ($JOBS jobs)..."
+cargo build --release -p infynitae -j "$JOBS"
 
 # 4. the programs, into ~/.local/bin (a running compositor keeps its old file until it restarts)
 install_programs "$REPO_DIR"

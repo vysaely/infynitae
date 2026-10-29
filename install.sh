@@ -199,45 +199,12 @@ fi
 
 # ---- 5. packages ----------------------------------------------------------------------------------
 echo "==> Checking packages..."
-PKGS=()
-mapfile -t -O "${#PKGS[@]}" PKGS < <(missing_pkgs $(cat "$INSTALL_DIR/live/packages.txt"))
-for group in $(optional_groups); do
-    is_skipped "$group" && continue
-    group_applies "$group" || continue
-    mapfile -t -O "${#PKGS[@]}" PKGS < <(missing_pkgs $(optional_pkgs "$group"))
-done
-# a terminal for Super+Q, when there is none
-if [ "$TERMINAL_PKG" = true ] && ! command -v kitty >/dev/null 2>&1 \
-    && ! command -v alacritty >/dev/null 2>&1 && ! command -v foot >/dev/null 2>&1; then
-    PKGS+=(alacritty)
-fi
-# hardware the control menu (Super+A) can drive, only where it exists. NetworkManager is not
-# added: a machine on iwd or systemd-networkd keeps its own networking
-if [ "$BLUETOOTH" = true ] && [ -n "$(ls /sys/class/bluetooth 2>/dev/null)" ]; then
-    mapfile -t -O "${#PKGS[@]}" PKGS < <(missing_pkgs bluez bluez-utils)
-else
-    BLUETOOTH=false
-fi
-if [ "$POWER_PROFILES" = true ] && ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1 \
-    && ! pacman -Qi tlp >/dev/null 2>&1; then
-    # tlp, when installed, manages power instead
-    mapfile -t -O "${#PKGS[@]}" PKGS < <(missing_pkgs power-profiles-daemon)
-else
-    POWER_PROFILES=false
-fi
-# the compiler through rustup: the source pins its version (rust-toolchain.toml), which Arch's
-# own rust package ignores; rustup replaces it
-pacman -Qi rustup >/dev/null 2>&1 || PKGS+=(rustup)
+mapfile -t PKGS < <(wanted_pkgs)
 if [ ${#PKGS[@]} -gt 0 ]; then
     echo "==> Installing ${#PKGS[@]} packages: ${PKGS[*]}"
     pacman_run -S --needed "${PKGS[@]}"
 fi
-if [ "$BLUETOOTH" = true ] && ! systemctl is-enabled --quiet bluetooth.service 2>/dev/null; then
-    sudo systemctl enable --now bluetooth.service || warn "Could not enable bluetooth.service"
-fi
-if [ "$POWER_PROFILES" = true ] && ! systemctl is-enabled --quiet power-profiles-daemon.service 2>/dev/null; then
-    sudo systemctl enable --now power-profiles-daemon.service || warn "Could not enable power-profiles-daemon.service"
-fi
+enable_hw_services
 save_install_choices
 # seat access: logind gives the compositor the GPU and the input devices; seatd only where
 # logind does not run
@@ -250,11 +217,7 @@ fi
 echo "==> Getting the Rust toolchain..."
 rustup toolchain install || rustup show >/dev/null \
     || fail "The Rust toolchain could not be installed (see the error above)."
-# linking needs ~1.5 GB per job: fewer jobs on a machine with little memory
-MEM_GB=$(awk '/MemTotal/ { print int($2 / 1048576) }' /proc/meminfo)
-JOBS=$(nproc)
-[ $((MEM_GB * 2 / 3)) -lt "$JOBS" ] && JOBS=$((MEM_GB * 2 / 3))
-[ "$JOBS" -ge 1 ] || JOBS=1
+JOBS=$(build_jobs)
 # a build folder linked to another drive that is not mounted: build here instead
 if [ -L target ] && [ ! -d target/ ]; then
     echo "==> The build folder's drive is not mounted ($(readlink target)): building in ./target"

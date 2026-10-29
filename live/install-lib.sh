@@ -100,14 +100,71 @@ is_skipped() {
     return 1
 }
 load_install_choices() {
-    SKIP=""
+    # an install from before these were saved: nothing added that it may have left out
+    SKIP="" BLUETOOTH=false POWER_PROFILES=false TERMINAL_PKG=false
     # shellcheck disable=SC1090
     [ -f "$INSTALL_CHOICES" ] && . "$INSTALL_CHOICES"
     return 0
 }
 save_install_choices() {
     mkdir -p "$INFY_STATE"
-    printf 'SKIP="%s"\n' "${SKIP:-}" > "$INSTALL_CHOICES"
+    printf 'SKIP="%s"\nBLUETOOTH=%s\nPOWER_PROFILES=%s\nTERMINAL_PKG=%s\n' "${SKIP:-}" \
+        "${BLUETOOTH:-false}" "${POWER_PROFILES:-false}" "${TERMINAL_PKG:-false}" > "$INSTALL_CHOICES"
+}
+
+# The hardware parts: chosen, and the hardware is there. Asked again at each update, so an
+# adapter added later gets its packages.
+want_bluetooth() {
+    [ "${BLUETOOTH:-false}" = true ] && [ -n "$(ls /sys/class/bluetooth 2>/dev/null)" ]
+}
+# tlp, when installed, manages power instead
+want_power_profiles() {
+    [ "${POWER_PROFILES:-false}" = true ] && ls -d /sys/class/power_supply/BAT* >/dev/null 2>&1 \
+        && ! pacman -Qi tlp >/dev/null 2>&1
+}
+# a terminal for Super+Q, when there is none
+want_terminal() {
+    [ "${TERMINAL_PKG:-false}" = true ] && ! command -v kitty >/dev/null 2>&1 \
+        && ! command -v alacritty >/dev/null 2>&1 && ! command -v foot >/dev/null 2>&1
+}
+
+# The packages Infynitae wants that are not installed, one per line: the required ones, the
+# optional parts not left out that fit this machine, the hardware parts. NetworkManager is not
+# among them: a machine on iwd or systemd-networkd keeps its own networking.
+wanted_pkgs() {
+    local group
+    missing_pkgs $(cat "$INFY_LIVE/packages.txt")
+    for group in $(optional_groups); do
+        is_skipped "$group" && continue
+        group_applies "$group" || continue
+        missing_pkgs $(optional_pkgs "$group")
+    done
+    want_terminal && echo alacritty
+    want_bluetooth && missing_pkgs bluez bluez-utils
+    want_power_profiles && missing_pkgs power-profiles-daemon
+    # the compiler through rustup: the source pins its version (rust-toolchain.toml), which
+    # Arch's own rust package ignores; rustup replaces it
+    missing_pkgs rustup
+}
+
+# The hardware parts' services run.
+enable_hw_services() {
+    if want_bluetooth && ! systemctl is-enabled --quiet bluetooth.service 2>/dev/null; then
+        sudo systemctl enable --now bluetooth.service || warn "Could not enable bluetooth.service"
+    fi
+    if want_power_profiles && ! systemctl is-enabled --quiet power-profiles-daemon.service 2>/dev/null; then
+        sudo systemctl enable --now power-profiles-daemon.service || warn "Could not enable power-profiles-daemon.service"
+    fi
+}
+
+# Build jobs: linking needs ~1.5 GB per job, so fewer on a machine with little memory.
+build_jobs() {
+    local mem_gb jobs
+    mem_gb=$(awk '/MemTotal/ { print int($2 / 1048576) }' /proc/meminfo)
+    jobs=$(nproc)
+    [ $((mem_gb * 2 / 3)) -lt "$jobs" ] && jobs=$((mem_gb * 2 / 3))
+    [ "$jobs" -ge 1 ] || jobs=1
+    echo "$jobs"
 }
 
 # One password, at the start: what needs root later runs unattended. sudo's permission is kept
@@ -267,13 +324,27 @@ $t"
 }
 
 # The config: created when missing, with the parts left out switched off too, so it says what the
-# desktop does; yours is never overwritten (the new defaults go to config.template).
+# desktop does. Yours is never overwritten: settings added since are appended with their
+# defaults and comments (a value of yours is never changed), and the whole new file goes to
+# config.template.
 install_config() {
-    local src="$1" cfg="$HOME/.config/infynitae/config"
+    local src="$1" cfg="$HOME/.config/infynitae/config" new
     mkdir -p "$HOME/.config/infynitae"
     if [ -f "$cfg" ]; then
         cp -f "$src/config/config" "$cfg.template"
-        echo "==> Kept your config (new defaults: ~/.config/infynitae/config.template)"
+        # each setting the config does not have, with the comment lines under it
+        new=$(awk 'NR == FNR { if (match($0, /^[A-Z_]+=/)) have[substr($0, 1, RLENGTH)] = 1; next }
+            match($0, /^[A-Z_]+=/) { take = !(substr($0, 1, RLENGTH) in have); if (take) print; next }
+            take && /^[[:space:]]+#/ { print; next }
+            { take = 0 }' "$cfg" "$src/config/config")
+        if [ -n "$new" ]; then
+            cp -f "$cfg" "$cfg.bak-$(date +%F)"
+            [ -z "$(tail -c 1 "$cfg")" ] || echo >> "$cfg"
+            printf '\n# New settings (%s), at their defaults:\n%s\n' "$(date +%F)" "$new" >> "$cfg"
+            echo "==> Added $(printf '%s\n' "$new" | grep -c '^[A-Z_]*=') new settings to your config (before: $cfg.bak-$(date +%F))"
+        else
+            echo "==> Kept your config (new defaults: ~/.config/infynitae/config.template)"
+        fi
         return 0
     fi
     cp -f "$src/config/config" "$cfg"

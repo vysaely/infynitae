@@ -1027,6 +1027,9 @@ mod tests {
                     )
                 })
                 .collect();
+            // the seat's keymap names are set once per process, by whichever test makes a
+            // keyboard first: present or not depending on the test order
+            e.retain(|(k, _)| !k.contains("XKB_"));
             e.sort();
             (c.get_program().to_owned(), c.get_args().count(), e)
         };
