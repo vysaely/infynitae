@@ -56,10 +56,10 @@ impl WaylandState {
                     integer_scale,
                 } => {
                     if let Some(w) = self.window(element) {
-                        let (scale_120, integer_scale) = w.toplevel().map_or(
-                            (scale_120, integer_scale),
-                            |t| self.routed_scale_hint(t.wl_surface(), (scale_120, integer_scale)),
-                        );
+                        let (scale_120, integer_scale) =
+                            w.toplevel().map_or((scale_120, integer_scale), |t| {
+                                self.routed_scale_hint(t.wl_surface(), (scale_120, integer_scale))
+                            });
                         convert::send_preferred_scale_to_window(w, scale_120, integer_scale);
                     }
                 }
