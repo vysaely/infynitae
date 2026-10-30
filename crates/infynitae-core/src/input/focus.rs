@@ -118,18 +118,29 @@ impl FocusModel {
         effects
     }
 
-    /// FocusNext binding (Super+Enter): cycles to the next live element in stage order.
+    /// FocusNext binding (Super+Tab): toggles strictly between the two most recently focused
+    /// live elements in MRU history (falling back to the next live element if history has < 2).
     pub fn focus_next(&mut self, live_elements: &[ElementId]) -> Vec<Effect> {
         self.initial_eligible = false;
         if live_elements.is_empty() {
             return self.set_focus(None);
         }
         let next = match self.target {
-            Some(cur) => {
-                let pos = live_elements.iter().position(|&e| e == cur).unwrap_or(0);
-                live_elements[(pos + 1) % live_elements.len()]
-            }
-            None => live_elements[0],
+            Some(cur) => self
+                .history
+                .iter()
+                .copied()
+                .find(|&e| e != cur && live_elements.contains(&e))
+                .unwrap_or_else(|| {
+                    let pos = live_elements.iter().position(|&e| e == cur).unwrap_or(0);
+                    live_elements[(pos + 1) % live_elements.len()]
+                }),
+            None => self
+                .history
+                .iter()
+                .copied()
+                .find(|e| live_elements.contains(e))
+                .unwrap_or(live_elements[0]),
         };
         self.set_focus(Some(next))
     }
@@ -287,45 +298,45 @@ mod tests {
         assert_eq!(fm.target(), Some(e2));
         assert_eq!(fm.history(), &[e2, e1]);
 
-        // focus next among [e1, e2, e3]
+        // focus next among [e1, e2, e3]: toggles strictly between the two last focused (e2 <-> e1)
         let live = [e1, e2, e3];
-        let fx = fm.focus_next(&live);
-        assert_eq!(fm.target(), Some(e3));
-        assert_eq!(
-            fx,
-            vec![
-                Effect::ToplevelConfigure(e2),
-                Effect::ToplevelConfigure(e3),
-                Effect::KeyboardFocus(Some(e3)),
-            ]
-        );
-
-        // cycle again from e3 -> e1
         let fx = fm.focus_next(&live);
         assert_eq!(fm.target(), Some(e1));
         assert_eq!(
             fx,
             vec![
-                Effect::ToplevelConfigure(e3),
+                Effect::ToplevelConfigure(e2),
                 Effect::ToplevelConfigure(e1),
                 Effect::KeyboardFocus(Some(e1)),
             ]
         );
 
-        // target loss: e1 destroyed, live is [e2, e3].
-        // history is [e1, e3, e2]. Successor should be e3!
-        let fx = fm.target_lost(e1, &[e2, e3]);
-        assert!(
-            !fm.history().contains(&e1),
-            "dead element retained in history"
-        );
-        assert_eq!(fm.target(), Some(e3));
+        // toggle again from e1 -> e2
+        let fx = fm.focus_next(&live);
+        assert_eq!(fm.target(), Some(e2));
         assert_eq!(
             fx,
             vec![
                 Effect::ToplevelConfigure(e1),
+                Effect::ToplevelConfigure(e2),
+                Effect::KeyboardFocus(Some(e2)),
+            ]
+        );
+
+        // focus e3 explicitly, then target loss: e3 destroyed, live is [e1, e2].
+        let _ = fm.set_focus(Some(e3));
+        let fx = fm.target_lost(e3, &[e1, e2]);
+        assert!(
+            !fm.history().contains(&e3),
+            "dead element retained in history"
+        );
+        assert_eq!(fm.target(), Some(e2));
+        assert_eq!(
+            fx,
+            vec![
                 Effect::ToplevelConfigure(e3),
-                Effect::KeyboardFocus(Some(e3)),
+                Effect::ToplevelConfigure(e2),
+                Effect::KeyboardFocus(Some(e2)),
             ]
         );
     }

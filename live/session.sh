@@ -141,6 +141,37 @@ esac
 
 # 6c. Notifications: NOTIFICATIONS picks the daemon ("auto": mako, swaync, dunst, fnott, the first
 # installed; "none": none; or a command). Started here so the choice wins over D-Bus activation.
+if [ ! -f "$HOME/.config/mako/config" ]; then
+    mkdir -p "$HOME/.config/mako"
+    cat << 'EOF' > "$HOME/.config/mako/config"
+# managed by infynitae — minimalist single-border notification toast (5s auto-expire + history)
+font=Sans 8.5
+markup=1
+format=<b>%s</b>\n<span alpha="68%" size="small">%b</span>
+background-color=#111317f7
+text-color=#eef2f8
+border-color=#333b54e6
+border-size=1
+border-radius=0
+width=288
+height=84
+margin=8
+padding=8,11
+default-timeout=5000
+ignore-timeout=1
+max-history=20
+max-visible=4
+sort=-time
+layer=overlay
+anchor=top-right
+
+[mode=do-not-disturb]
+invisible=1
+EOF
+fi
+if [ -f "$HOME/infynitae/live/patch-discord-shortcuts.py" ] && command -v python3 >/dev/null 2>&1; then
+    python3 "$HOME/infynitae/live/patch-discord-shortcuts.py" >/dev/null 2>&1 &
+fi
 NOTIFY_CMD=""
 case "${NOTIFICATIONS:-auto}" in
     none|off|false) ;;

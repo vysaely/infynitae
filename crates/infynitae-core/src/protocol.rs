@@ -1775,9 +1775,39 @@ impl Core {
 
         let center_gx = center_anchor.x;
         let center_gy = center_anchor.y;
+        let (target_gx, target_gy) = if let pointer::PointerState::Located { output: ptr_out, p } =
+            self.pointer
+            && ptr_out == output.id
+            && ((p.0 - extent.0 / 2.0).abs() > 1.0 || (p.1 - extent.1 / 2.0).abs() > 1.0)
+        {
+            let cd = (
+                (p.0 - extent.0 / 2.0) / zoom,
+                (p.1 - extent.1 / 2.0) / zoom,
+            );
+            CanvasPos {
+                x: axis(
+                    centre.x.saturating_add(geom::q16(cd.0)),
+                    usable.0,
+                    tree.geometry.size.w,
+                ),
+                y: axis(
+                    centre.y.saturating_add(geom::q16(cd.1)),
+                    usable.1,
+                    tree.geometry.size.h,
+                ),
+            }
+            .round_to_point()
+            .map(|pt| (pt.x, pt.y))
+            .unwrap_or((center_gx, center_gy))
+        } else {
+            (center_gx, center_gy)
+        };
 
         if existing.is_empty() {
-            return Some(center_anchor);
+            return Some(CanvasPoint {
+                x: target_gx,
+                y: target_gy,
+            });
         }
 
         const GAP: i64 = 12;
@@ -1789,6 +1819,12 @@ impl Core {
             })
         };
 
+        if !overlaps(target_gx, target_gy) {
+            return Some(CanvasPoint {
+                x: target_gx,
+                y: target_gy,
+            });
+        }
         if !overlaps(center_gx, center_gy) {
             return Some(center_anchor);
         }
@@ -1806,6 +1842,12 @@ impl Core {
             candidates.push((w1.0, w1.1 - new_h - GAP)); // Above, left-aligned
             candidates.push((w1.2 - new_w, w1.1 - new_h - GAP)); // Above, right-aligned
 
+            // Cursor-aligned flush placements relative to w1
+            candidates.push((w1.2 + GAP, target_gy));
+            candidates.push((w1.0 - new_w - GAP, target_gy));
+            candidates.push((target_gx, w1.3 + GAP));
+            candidates.push((target_gx, w1.1 - new_h - GAP));
+
             // Grid intersections with other windows
             for &w2 in &existing {
                 candidates.push((w1.2 + GAP, w2.1));
@@ -1820,12 +1862,12 @@ impl Core {
             .into_iter()
             .filter(|&(gx, gy)| !overlaps(gx, gy))
             .min_by_key(|&(gx, gy)| {
-                let dx = (gx - center_gx) as i128;
-                let dy = (gy - center_gy) as i128;
+                let dx = (gx - target_gx) as i128;
+                let dy = (gy - target_gy) as i128;
                 dx * dx + dy * dy
             });
 
-        let (chosen_gx, chosen_gy) = best.unwrap_or((center_gx, center_gy));
+        let (chosen_gx, chosen_gy) = best.unwrap_or((target_gx, target_gy));
         Some(CanvasPoint {
             x: chosen_gx,
             y: chosen_gy,

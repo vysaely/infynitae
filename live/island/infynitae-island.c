@@ -50,6 +50,7 @@
 #define MAX_SNI_ITEMS 16
 #define MAX_CTX_ITEMS 10
 #define MAX_SUB_ITEMS 8
+#define MAX_NOTIFS 4
 #define MAX_HITBOXES 64
 
 typedef enum {
@@ -89,6 +90,7 @@ typedef struct {
 
 typedef struct {
     char name[64];
+    char proc_name[64];
     char mem[24];
     uint32_t pid;
     int sni_idx;      /* >= 0 if matched with a registered StatusNotifierItem */
@@ -105,6 +107,12 @@ typedef struct {
     char meta[32];
     bool active;
 } SubItem;
+
+typedef struct {
+    uint32_t id;
+    char app[32];
+    char text[128];
+} NotifItem;
 
 typedef struct {
     double x, y, w, h;
@@ -222,6 +230,11 @@ typedef struct IslandApp {
     SubItem sub_items[MAX_SUB_ITEMS];
     int sub_count;
 
+    NotifItem notifs[MAX_NOTIFS];
+    int notif_count;
+    uint32_t cleared_notif_id;
+    uint32_t max_notif_id;
+
     /* Config & Status state */
     bool bottom_edge;
     bool control_on_left;
@@ -230,6 +243,7 @@ typedef struct IslandApp {
     bool bt_on;
     char bt_label[48];
     bool dnd_on;
+    bool replay_on;
     int volume_pct;
     bool volume_muted;
     char power_profile[32];
@@ -257,6 +271,10 @@ enum {
     ACT_BT_TOGGLE,
     ACT_DND_TOGGLE,
     ACT_POWER_PROFILE,
+    ACT_REPLAY_TOGGLE,
+    ACT_REPLAY_SAVE,
+    ACT_NOTIF_ITEM,
+    ACT_NOTIF_CLEAR,
     ACT_SUB_SELECT,
     ACT_TRAY_ITEM,
     ACT_TRAY_CTX_CLICK,
@@ -476,12 +494,13 @@ static void setup_sni_watcher(IslandApp *app) {
 }
 
 static int find_sni_for_tray_app(IslandApp *app, const TrayApp *ta) {
+    const char *key = ta->proc_name[0] ? ta->proc_name : ta->name;
     for (int i = 0; i < app->sni_count; i++) {
         SniItem *s = &app->sni_items[i];
         if (s->pid > 0 && ta->pid > 0 && s->pid == ta->pid) return i;
-        if (s->id[0] && strcasestr(s->id, ta->name)) return i;
-        if (s->title[0] && strcasestr(s->title, ta->name)) return i;
-        if (s->id[0] && strcasestr(ta->name, s->id)) return i;
+        if (s->id[0] && strcasestr(s->id, key)) return i;
+        if (s->title[0] && strcasestr(s->title, key)) return i;
+        if (s->id[0] && strcasestr(key, s->id)) return i;
     }
     return -1;
 }
@@ -739,6 +758,37 @@ static void parse_snapshot_buf(IslandApp *app, const char *buf) {
     update_filters(app);
 }
 
+static void format_pretty_app_name(char *dst, size_t dst_sz, const char *raw) {
+    if (!raw || !*raw) {
+        dst[0] = '\0';
+        return;
+    }
+    if (strcasecmp(raw, "rustdesk") == 0) {
+        snprintf(dst, dst_sz, "RustDesk");
+        return;
+    }
+    if (strcasecmp(raw, "obs") == 0 || strcasecmp(raw, "obs-studio") == 0) {
+        snprintf(dst, dst_sz, "OBS");
+        return;
+    }
+    if (strcasecmp(raw, "telegram-desktop") == 0) {
+        snprintf(dst, dst_sz, "Telegram");
+        return;
+    }
+    snprintf(dst, dst_sz, "%s", raw);
+    bool cap_next = true;
+    for (size_t i = 0; dst[i]; i++) {
+        if (dst[i] == '-' || dst[i] == '_') {
+            cap_next = true;
+        } else if (cap_next && isalpha((unsigned char)dst[i])) {
+            dst[i] = (char)toupper((unsigned char)dst[i]);
+            cap_next = false;
+        } else {
+            cap_next = false;
+        }
+    }
+}
+
 static void parse_control_buf(IslandApp *app, char *buf) {
     app->tray_count = 0;
     char *saveptr = NULL;
@@ -796,7 +846,8 @@ static void parse_control_buf(IslandApp *app, char *buf) {
             }
 
             TrayApp *ta = &app->tray_apps[app->tray_count++];
-            snprintf(ta->name, sizeof(ta->name), "%s", f_name);
+            snprintf(ta->proc_name, sizeof(ta->proc_name), "%s", f_name);
+            format_pretty_app_name(ta->name, sizeof(ta->name), f_name);
             snprintf(ta->mem, sizeof(ta->mem), "%s", f_mem);
             ta->pid = pid;
             ta->sni_idx = find_sni_for_tray_app(app, ta);
@@ -835,12 +886,133 @@ static void parse_subpanel_buf(IslandApp *app, char *buf) {
     }
 }
 
+static void sanitize_inline_text(char *dst, size_t dst_sz, const char *src) {
+    char tmp[256];
+    size_t j = 0;
+    bool prev_space = true;
+    for (size_t i = 0; src && src[i] && j + 1 < sizeof(tmp); i++) {
+        unsigned char c = (unsigned char)src[i];
+        if (c == '\n' || c == '\r' || c == '\t' || c == ' ') {
+            if (!prev_space) {
+                tmp[j++] = ' ';
+                prev_space = true;
+            }
+        } else if (c >= 32) {
+            tmp[j++] = (char)c;
+            prev_space = false;
+        }
+    }
+    while (j > 0 && tmp[j - 1] == ' ') j--;
+    tmp[j] = '\0';
+
+    const char *home = getenv("HOME");
+    size_t hlen = (home && *home) ? strlen(home) : 0;
+    size_t out = 0;
+    for (size_t i = 0; tmp[i] && out + 1 < dst_sz;) {
+        if (hlen > 1 && strncmp(tmp + i, home, hlen) == 0 &&
+            (tmp[i + hlen] == '/' || tmp[i + hlen] == '\0' || tmp[i + hlen] == ' ')) {
+            dst[out++] = '~';
+            i += hlen;
+        } else {
+            dst[out++] = tmp[i++];
+        }
+    }
+    dst[out] = '\0';
+}
+
+static void fetch_mako_notifications(IslandApp *app) {
+    app->notif_count = 0;
+    if (!app->dbus) return;
+
+    const char *methods[2] = { "ListNotifications", "ListHistory" };
+    for (int m = 0; m < 2; m++) {
+        GVariant *res = g_dbus_connection_call_sync(
+            app->dbus, "org.freedesktop.Notifications", "/fr/emersion/Mako",
+            "fr.emersion.Mako", methods[m], NULL, G_VARIANT_TYPE("(aa{sv})"),
+            G_DBUS_CALL_FLAGS_NONE, 120, NULL, NULL);
+        if (!res) continue;
+
+        GVariant *arr = g_variant_get_child_value(res, 0);
+        GVariantIter iter;
+        GVariant *dict = NULL;
+        g_variant_iter_init(&iter, arr);
+        while ((dict = g_variant_iter_next_value(&iter)) != NULL) {
+            guint32 nid = 0;
+            const gchar *app_s = NULL, *sum_s = NULL, *body_s = NULL;
+            g_variant_lookup(dict, "id", "u", &nid);
+            g_variant_lookup(dict, "app-name", "&s", &app_s);
+            g_variant_lookup(dict, "summary", "&s", &sum_s);
+            g_variant_lookup(dict, "body", "&s", &body_s);
+
+            if (nid > app->max_notif_id) app->max_notif_id = nid;
+
+            bool dup = false;
+            for (int k = 0; k < app->notif_count; k++) {
+                if (app->notifs[k].id == nid && nid != 0) {
+                    dup = true;
+                    break;
+                }
+            }
+
+            if (!dup && nid > app->cleared_notif_id && app->notif_count < MAX_NOTIFS) {
+                char s_clean[96] = {0}, b_clean[96] = {0}, a_clean[32] = {0};
+                sanitize_inline_text(s_clean, sizeof(s_clean), sum_s);
+                sanitize_inline_text(b_clean, sizeof(b_clean), body_s);
+                sanitize_inline_text(a_clean, sizeof(a_clean), app_s);
+
+                if (s_clean[0] != '\0' || b_clean[0] != '\0') {
+                    char full_app[32], full_text[128];
+                    snprintf(full_app, sizeof(full_app), "%s", a_clean[0] ? a_clean : "Notify");
+                    if (s_clean[0] && b_clean[0] && strcasecmp(s_clean, b_clean) != 0) {
+                        snprintf(full_text, sizeof(full_text), "%s — %s", s_clean, b_clean);
+                    } else {
+                        snprintf(full_text, sizeof(full_text), "%s", s_clean[0] ? s_clean : b_clean);
+                    }
+
+                    bool text_dup = false;
+                    for (int k = 0; k < app->notif_count; k++) {
+                        if (strcmp(app->notifs[k].app, full_app) == 0 &&
+                            strcmp(app->notifs[k].text, full_text) == 0) {
+                            text_dup = true;
+                            break;
+                        }
+                    }
+
+                    if (!text_dup) {
+                        NotifItem *ni = &app->notifs[app->notif_count++];
+                        ni->id = nid;
+                        snprintf(ni->app, sizeof(ni->app), "%s", full_app);
+                        snprintf(ni->text, sizeof(ni->text), "%s", full_text);
+                    }
+                }
+            }
+            g_variant_unref(dict);
+        }
+        g_variant_unref(arr);
+        g_variant_unref(res);
+    }
+}
+
+static bool check_pid_file_alive(const char *path) {
+    FILE *f = fopen(path, "r");
+    if (!f) return false;
+    int pid = 0;
+    bool ok = (fscanf(f, "%d", &pid) == 1 && pid > 0 && kill(pid, 0) == 0);
+    fclose(f);
+    return ok;
+}
+
 static void start_async_refresh(IslandApp *app, int kind) {
     if (kind == MODE_CONTROL) {
         const char *rt = getenv("XDG_RUNTIME_DIR");
-        char dnd_path[256];
-        snprintf(dnd_path, sizeof(dnd_path), "%s/infynitae/do-not-disturb", rt ? rt : "/tmp");
+        if (!rt) rt = "/tmp";
+        char dnd_path[256], sup_pid[256], rep_pid[256];
+        snprintf(dnd_path, sizeof(dnd_path), "%s/infynitae/do-not-disturb", rt);
+        snprintf(sup_pid, sizeof(sup_pid), "%s/infynitae-recorder-supervisor.pid", rt);
+        snprintf(rep_pid, sizeof(rep_pid), "%s/infynitae-replay.pid", rt);
         app->dnd_on = (access(dnd_path, F_OK) == 0);
+        app->replay_on = check_pid_file_alive(sup_pid) || check_pid_file_alive(rep_pid);
+        fetch_mako_notifications(app);
 
         app->battery_pct = -1;
         app->battery_charging = false;
@@ -1015,38 +1187,49 @@ static void draw_text_right(cairo_t *cr, PangoLayout *layout, const char *font_s
     PangoFontDescription *desc = pango_font_description_from_string(font_str);
     pango_layout_set_font_description(layout, desc);
     pango_font_description_free(desc);
+    pango_layout_set_width(layout, -1);
+    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
     pango_layout_set_text(layout, text, -1);
 
     PangoRectangle ink, logical;
     pango_layout_get_extents(layout, &ink, &logical);
     double w = (double)logical.width / (double)PANGO_SCALE;
+    if (w > 72.0) {
+        pango_layout_set_width(layout, (int)(72.0 * PANGO_SCALE));
+        pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
+        pango_layout_get_extents(layout, &ink, &logical);
+        w = (double)logical.width / (double)PANGO_SCALE;
+    }
     double oy = ((double)logical.y + (double)logical.height / 2.0) / (double)PANGO_SCALE;
     cairo_move_to(cr, right_x - w, cy - oy);
     pango_cairo_show_layout(cr, layout);
+    pango_layout_set_width(layout, -1);
+    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
 }
 
 /* Borderless canvas-window row: NO inner box border, only a subtle flat highlight when selected */
 static void draw_bare_item(cairo_t *cr, double x, double y, double w, double h,
                            bool active, bool selected) {
     if (selected) {
-        cairo_set_source_rgba(cr, 0.14, 0.17, 0.24, 0.95);
+        cairo_set_source_rgba(cr, 0.15, 0.17, 0.22, 0.95);
         fill_rect(cr, x, y, w, h);
     } else if (active) {
-        cairo_set_source_rgba(cr, 0.08, 0.10, 0.14, 0.70);
+        cairo_set_source_rgba(cr, 0.10, 0.12, 0.16, 0.78);
         fill_rect(cr, x, y, w, h);
     }
 }
 
 static void draw_hline(cairo_t *cr, double x, double y, double w) {
-    cairo_set_source_rgba(cr, 0.20, 0.23, 0.32, 0.55);
+    double inset = (w > 24.0) ? 8.0 : 0.0;
+    cairo_set_source_rgba(cr, 0.22, 0.25, 0.34, 0.26);
     cairo_set_line_width(cr, 1.0);
-    cairo_move_to(cr, round(x), round(y) + 0.5);
-    cairo_line_to(cr, round(x + w), round(y) + 0.5);
+    cairo_move_to(cr, round(x + inset), round(y) + 0.5);
+    cairo_line_to(cr, round(x + w - inset), round(y) + 0.5);
     cairo_stroke(cr);
 }
 
 static void draw_vline(cairo_t *cr, double x, double y, double h) {
-    cairo_set_source_rgba(cr, 0.20, 0.23, 0.32, 0.55);
+    cairo_set_source_rgba(cr, 0.22, 0.25, 0.34, 0.34);
     cairo_set_line_width(cr, 1.0);
     cairo_move_to(cr, round(x) + 0.5, round(y));
     cairo_line_to(cr, round(x) + 0.5, round(y + h));
@@ -1252,11 +1435,22 @@ static void render_output(IslandOutput *out) {
                 : 0;
             int app_rows = show_launcher ? ((shown_apps > 0 ? shown_apps : 1) + 1) / 2 : 0;
 
+            int max_tabs = 6;
+            int tab_cnt = app->filtered_win_count < max_tabs ? app->filtered_win_count : max_tabs;
+            double sb_w = 152.0;
+
             double row_h = 28.0;
             double ext_h = show_launcher ? (1.0 + app_rows * 24.0 + 4.0) : 0.0;
-            double bar_w = w - 160.0;
-            if (bar_w > 780.0) bar_w = 780.0;
-            if (bar_w < 420.0) bar_w = w - 24.0;
+            double max_bar_w = w - 160.0;
+            if (max_bar_w > 780.0) max_bar_w = 780.0;
+            if (max_bar_w < 420.0) max_bar_w = w - 24.0;
+
+            double bar_w = max_bar_w;
+            if (!show_launcher) {
+                double ideal_w = sb_w + (tab_cnt > 0 ? tab_cnt * 168.0 : 180.0);
+                if (ideal_w < 360.0) ideal_w = 360.0;
+                if (ideal_w < bar_w) bar_w = ideal_w;
+            }
             double total_h = row_h + ext_h;
             double bar_x = round((w - bar_w) / 2.0);
             double bar_y = round(app->bottom_edge
@@ -1268,8 +1462,8 @@ static void render_output(IslandOutput *out) {
             cur_dw = (int)bar_w + 4;
             cur_dh = (int)total_h + 4;
 
-            /* Single flat dark window (#0c0e12) + 1px #333b54 border */
-            cairo_set_source_rgba(cr, 0.047, 0.055, 0.071, 0.97 * ease);
+            /* Single flat dark obsidian window (#111317) + 1px #333b54 border */
+            cairo_set_source_rgba(cr, 0.067, 0.075, 0.090, 0.97 * ease);
             fill_rect(cr, bar_x, bar_y, bar_w, total_h);
 
             cairo_set_source_rgba(cr, 0.20, 0.23, 0.33, 0.90 * ease);
@@ -1280,7 +1474,6 @@ static void render_output(IslandOutput *out) {
             double top_y = app->bottom_edge ? (bar_y + ext_h) : bar_y;
 
             /* 1. Search field (left, borderless) */
-            double sb_w = 160.0;
             if (app->search_len > 0) {
                 cairo_set_source_rgba(cr, 0.94, 0.96, 0.98, 0.96);
                 draw_text_left(cr, layout, "Sans 8.5", app->search, bar_x + 10.0, top_y + row_h / 2.0, sb_w - 18.0);
@@ -1289,36 +1482,35 @@ static void render_output(IslandOutput *out) {
                 draw_text_left(cr, layout, "Sans 8.5", "Search…", bar_x + 10.0, top_y + row_h / 2.0, sb_w - 18.0);
             }
             add_hitbox(app, bar_x, top_y, sb_w, row_h, ACT_SEARCH_BOX, 0);
-            draw_vline(cr, bar_x + sb_w, top_y + 5.0, row_h - 10.0);
+            draw_vline(cr, bar_x + sb_w, top_y + 4.0, row_h - 8.0);
 
-            /* 2. Open Window Tabs (borderless text cells separated by hairlines) */
+            /* 2. Open Window Tabs (borderless text cells separated by hairlines, flush to right border) */
             double cur_x = bar_x + sb_w + 1.0;
-            double tabs_avail_w = (bar_x + bar_w) - cur_x;
-            int max_tabs = 6;
-            int tab_cnt = app->filtered_win_count < max_tabs ? app->filtered_win_count : max_tabs;
+            double right_inner = bar_x + bar_w - 1.0;
+            double tabs_avail_w = right_inner - cur_x;
             if (tab_cnt == 0) {
                 cairo_set_source_rgba(cr, 0.40, 0.44, 0.52, 0.70);
                 draw_text_left(cr, layout, "Sans 8.5", "No open windows", cur_x + 10.0, top_y + row_h / 2.0, tabs_avail_w - 16.0);
             } else {
-                double tab_w = floor(tabs_avail_w / tab_cnt);
-                if (tab_w > 170.0) tab_w = 170.0;
+                double base_tab_w = floor(tabs_avail_w / tab_cnt);
 
                 for (int i = 0; i < tab_cnt; i++) {
                     CanvasWindow *cw = &app->windows[app->filtered_wins[i]];
-                    double tx = cur_x + i * tab_w;
+                    double tx = cur_x + i * base_tab_w;
+                    double tw_cell = (i == tab_cnt - 1) ? (right_inner - tx) : base_tab_w;
                     bool sel = (app->selected_idx == i);
 
-                    draw_bare_item(cr, tx, top_y + 1.0, tab_w - 1.0, row_h - 2.0, cw->focused, sel);
-                    if (i > 0) draw_vline(cr, tx, top_y + 6.0, row_h - 12.0);
+                    draw_bare_item(cr, tx, top_y + 1.0, tw_cell, row_h - 2.0, cw->focused, sel);
+                    if (i > 0) draw_vline(cr, tx, top_y + 4.0, row_h - 8.0);
 
                     cairo_set_source_rgba(cr, (cw->focused || sel) ? 0.95 : 0.62,
                                           (cw->focused || sel) ? 0.97 : 0.67,
                                           (cw->focused || sel) ? 1.00 : 0.75, 0.95);
                     draw_text_left(cr, layout, cw->focused ? "Sans Medium 8.5" : "Sans 8.5",
                                    cw->title[0] ? cw->title : cw->app_id,
-                                   tx + 10.0, top_y + row_h / 2.0, tab_w - 18.0);
+                                   tx + 10.0, top_y + row_h / 2.0, tw_cell - 18.0);
 
-                    add_hitbox_nav(app, tx, top_y, tab_w, row_h, ACT_WIN_ITEM, app->filtered_wins[i], i);
+                    add_hitbox_nav(app, tx, top_y, tw_cell, row_h, ACT_WIN_ITEM, app->filtered_wins[i], i);
                 }
             }
 
@@ -1361,9 +1553,10 @@ static void render_output(IslandOutput *out) {
             int ctx_rows = (app->tray_ctx_idx >= 0 && app->tray_ctx_idx < app->tray_count)
                 ? ((app->ctx_count + 2) / 3) : 0;
             double ctx_extra_h = ctx_rows * 22.0;
+            double notif_extra_h = (app->notif_count > 0) ? (26.0 + app->notif_count * 22.0) : 0.0;
 
             double ctrl_w = 264.0;
-            double ctrl_h = 126.0 + sub_extra_h + tray_extra_h + ctx_extra_h;
+            double ctrl_h = 148.0 + sub_extra_h + tray_extra_h + ctx_extra_h + notif_extra_h;
             double ctrl_x = app->control_on_left ? 8.0 : (w - ctrl_w - 8.0);
             double ctrl_y = round(app->bottom_edge
                 ? (h + ctrl_h * (1.0 - ease) - (ctrl_h + 8.0) * ease)
@@ -1374,8 +1567,8 @@ static void render_output(IslandOutput *out) {
             cur_dw = (int)ctrl_w + 4;
             cur_dh = (int)ctrl_h + 4;
 
-            /* Single flat dark window (#0c0e12) + 1px #333b54 border */
-            cairo_set_source_rgba(cr, 0.047, 0.055, 0.071, 0.97 * ease);
+            /* Single flat dark obsidian window (#111317) + 1px #333b54 border */
+            cairo_set_source_rgba(cr, 0.067, 0.075, 0.090, 0.97 * ease);
             fill_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h);
 
             cairo_set_source_rgba(cr, 0.20, 0.23, 0.33, 0.90 * ease);
@@ -1439,28 +1632,31 @@ static void render_output(IslandOutput *out) {
             draw_hline(cr, rx, ry, rw);
             ry += 2.0;
 
-            /* Rows 3 & 4: Borderless 2×2 Text Toggles */
+            /* Rows 3, 4 & 5: Borderless 3×2 Text Toggles (Wi-Fi, BT, DND, Power, Replay, Clip) */
             double tw = floor(rw / 2.0);
             double th = 22.0;
-            char w_lbl[64], b_lbl[64], d_lbl[64], p_lbl[64];
-            snprintf(w_lbl, sizeof(w_lbl), "Wi-Fi  %s", app->wifi_label);
-            snprintf(b_lbl, sizeof(b_lbl), "BT  %s", app->bt_label);
-            snprintf(d_lbl, sizeof(d_lbl), "DND  %s", app->dnd_on ? "On" : "Off");
-            snprintf(p_lbl, sizeof(p_lbl), "Power  %s", app->power_profile);
+            const char *p_disp = "Balanced";
+            if (strcasecmp(app->power_profile, "performance") == 0) p_disp = "Performance";
+            else if (strcasecmp(app->power_profile, "power-saver") == 0) p_disp = "Saver";
 
             struct {
-                const char *text;
+                const char *label;
+                const char *val;
                 bool active;
                 int action;
                 bool sub_open;
-            } sw[4] = {
-                { w_lbl, app->wifi_on, ACT_WIFI_TOGGLE, app->subpanel == SUB_WIFI },
-                { b_lbl, app->bt_on, ACT_BT_TOGGLE, app->subpanel == SUB_BT },
-                { d_lbl, app->dnd_on, ACT_DND_TOGGLE, false },
-                { p_lbl, strcmp(app->power_profile, "performance") == 0, ACT_POWER_PROFILE, false }
+            } sw[6] = {
+                { "Wi-Fi", app->wifi_label, app->wifi_on, ACT_WIFI_TOGGLE, app->subpanel == SUB_WIFI },
+                { "BT", app->bt_label, app->bt_on, ACT_BT_TOGGLE, app->subpanel == SUB_BT },
+                { "DND", app->dnd_on ? "On" : "Off", app->dnd_on, ACT_DND_TOGGLE, false },
+                { "Power", p_disp, strcasecmp(app->power_profile, "performance") == 0, ACT_POWER_PROFILE, false },
+                { "Replay", app->replay_on ? "On" : "Off", app->replay_on, ACT_REPLAY_TOGGLE, false },
+                { "Clip", "Save", app->replay_on, ACT_REPLAY_SAVE, false }
             };
 
-            for (int i = 0; i < 4; i++) {
+            draw_vline(cr, rx + tw, ry + 4.0, 3.0 * th - 8.0);
+
+            for (int i = 0; i < 6; i++) {
                 int r = i / 2;
                 int c = i % 2;
                 double sx = rx + c * tw;
@@ -1468,16 +1664,22 @@ static void render_output(IslandOutput *out) {
                 bool sel = (app->selected_idx == i);
 
                 draw_bare_item(cr, sx, sy, tw, th, false, sel || sw[i].sub_open);
-                cairo_set_source_rgba(cr, (sw[i].active || sel) ? 0.92 : 0.48,
-                                      (sw[i].active || sel) ? 0.95 : 0.53,
-                                      (sw[i].active || sel) ? 0.99 : 0.60, 0.95);
+                cairo_set_source_rgba(cr, (sw[i].active || sel) ? 0.92 : 0.56,
+                                      (sw[i].active || sel) ? 0.95 : 0.61,
+                                      (sw[i].active || sel) ? 0.99 : 0.69, 0.95);
                 draw_text_left(cr, layout, sw[i].active ? "Sans Medium 8" : "Sans 8",
-                               sw[i].text, sx + 9.0, sy + th / 2.0, tw - 14.0);
+                               sw[i].label, sx + 9.0, sy + th / 2.0, 44.0);
+
+                cairo_set_source_rgba(cr, (sw[i].active || sel) ? 0.86 : 0.44,
+                                      (sw[i].active || sel) ? 0.90 : 0.49,
+                                      (sw[i].active || sel) ? 0.96 : 0.57, 0.92);
+                draw_text_right(cr, layout, "Sans 7.5", sw[i].val, sx + tw - 9.0, sy + th / 2.0);
+
                 add_hitbox_nav(app, sx, sy, tw, th, sw[i].action, i, i);
             }
 
-            ry += 2 * th + 2.0;
-            int nav_cursor = 4;
+            ry += 3 * th + 2.0;
+            int nav_cursor = 6;
 
             /* Optional Inline Sub-List (Wi-Fi / Bluetooth / Audio Output) */
             if (app->subpanel != SUB_NONE) {
@@ -1561,6 +1763,42 @@ static void render_output(IslandOutput *out) {
                 ry += 3.0;
             }
 
+            /* Notification History (from Mako D-Bus ListNotifications + ListHistory; hidden if 0) */
+            if (app->notif_count > 0) {
+                draw_hline(cr, rx, ry, rw);
+                ry += 3.0;
+                double hh = 20.0;
+                int clr_nav = nav_cursor++;
+                bool clr_sel = (app->selected_idx == clr_nav);
+
+                cairo_set_source_rgba(cr, 0.46, 0.51, 0.60, 0.85);
+                draw_text_left(cr, layout, "Sans 7.5", "Notifications", rx + 9.0, ry + hh / 2.0, rw - 68.0);
+
+                draw_bare_item(cr, rx + rw - 54.0, ry, 54.0, hh, false, clr_sel);
+                cairo_set_source_rgba(cr, clr_sel ? 0.96 : 0.64, clr_sel ? 0.98 : 0.70, 0.80, 0.92);
+                draw_text_right(cr, layout, "Sans 7.5", "Clear", rx + rw - 9.0, ry + hh / 2.0);
+                add_hitbox_nav(app, rx + rw - 54.0, ry, 54.0, hh, ACT_NOTIF_CLEAR, 0, clr_nav);
+                ry += hh;
+
+                for (int i = 0; i < app->notif_count; i++) {
+                    NotifItem *ni = &app->notifs[i];
+                    double nh = 22.0;
+                    int nav_i = nav_cursor++;
+                    bool sel = (app->selected_idx == nav_i);
+
+                    draw_bare_item(cr, rx, ry, rw, nh, false, sel);
+                    cairo_set_source_rgba(cr, sel ? 0.96 : 0.76, sel ? 0.98 : 0.80, 0.88, 0.94);
+                    draw_text_left(cr, layout, "Sans 8", ni->text, rx + 9.0, ry + nh / 2.0, rw - 68.0);
+
+                    cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
+                    draw_text_right(cr, layout, "Sans 7.5", ni->app, rx + rw - 9.0, ry + nh / 2.0);
+
+                    add_hitbox_nav(app, rx, ry, rw, nh, ACT_NOTIF_ITEM, i, nav_i);
+                    ry += nh;
+                }
+                ry += 3.0;
+            }
+
             /* Row 6: Borderless Session Strip (Reboot · Power Off · Log Out) */
             draw_hline(cr, rx, ry, rw);
             ry += 2.0;
@@ -1633,7 +1871,7 @@ static void set_mode(IslandApp *app, IslandMode new_mode) {
             refresh_snapshot(app);
         } else if (new_mode == MODE_CONTROL) {
             refresh_control_data(app);
-            app->selected_idx = (app->tray_count > 0) ? 4 : 0;
+            app->selected_idx = (app->tray_count > 0) ? 6 : 0;
         }
     } else {
         app->mode = MODE_CLOSED;
@@ -1660,7 +1898,7 @@ static void toggle_subpanel(IslandApp *app, ControlSubpanel target) {
             strcpy(app->bt_label, "On");
         }
         refresh_subpanel_data(app);
-        app->selected_idx = 4;
+        app->selected_idx = 6;
     }
     damage_all(app);
 }
@@ -1684,10 +1922,13 @@ static void close_window_at(IslandApp *app, int widx) {
 
 static void quit_tray_at(IslandApp *app, int tidx, const char *sig_name) {
     if (tidx < 0 || tidx >= app->tray_count) return;
+    const char *pname = app->tray_apps[tidx].proc_name[0]
+        ? app->tray_apps[tidx].proc_name
+        : app->tray_apps[tidx].name;
     char cmd[256];
     snprintf(cmd, sizeof(cmd),
              "sh \"$HOME/infynitae/live/control-menu\" apps-kill '%s' %s",
-             app->tray_apps[tidx].name, sig_name ? sig_name : "TERM");
+             pname, sig_name ? sig_name : "TERM");
     spawn_detached(cmd);
     for (int k = tidx; k < app->tray_count - 1; k++) {
         app->tray_apps[k] = app->tray_apps[k + 1];
@@ -1711,6 +1952,13 @@ static void close_selected_item(IslandApp *app) {
             }
             if (hb->action_id == ACT_TRAY_CTX_CLICK && app->tray_ctx_idx >= 0) {
                 quit_tray_at(app, app->tray_ctx_idx, "TERM");
+                return;
+            }
+            if (hb->action_id == ACT_NOTIF_ITEM || hb->action_id == ACT_NOTIF_CLEAR) {
+                app->cleared_notif_id = app->max_notif_id;
+                app->notif_count = 0;
+                spawn_detached("makoctl dismiss -a 2>/dev/null");
+                damage_all(app);
                 return;
             }
         }
@@ -1794,11 +2042,14 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
     case ACT_TRAY_ITEM: {
         int tidx = hb->index;
         if (tidx >= 0 && tidx < app->tray_count) {
+            const char *pname = app->tray_apps[tidx].proc_name[0]
+                ? app->tray_apps[tidx].proc_name
+                : app->tray_apps[tidx].name;
             char cmd[256];
             snprintf(cmd, sizeof(cmd),
                      "app=$(printf '%s' '%s' | tr '[:upper:]' '[:lower:]'); "
                      "command -v \"$app\" >/dev/null 2>&1 && exec \"$app\" || gtk-launch \"$app\" 2>/dev/null",
-                     app->tray_apps[tidx].name, app->tray_apps[tidx].name);
+                     pname, pname);
             set_mode(app, MODE_CLOSED);
             spawn_detached(cmd);
         }
@@ -1814,11 +2065,14 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
                 app->tray_ctx_idx = -1;
                 damage_all(app);
             } else if (item_id == -1) {
+                const char *pname = app->tray_apps[tidx].proc_name[0]
+                    ? app->tray_apps[tidx].proc_name
+                    : app->tray_apps[tidx].name;
                 char cmd[256];
                 snprintf(cmd, sizeof(cmd),
                          "app=$(printf '%s' '%s' | tr '[:upper:]' '[:lower:]'); "
                          "command -v \"$app\" >/dev/null 2>&1 && exec \"$app\" || gtk-launch \"$app\" 2>/dev/null",
-                         app->tray_apps[tidx].name, app->tray_apps[tidx].name);
+                         pname, pname);
                 set_mode(app, MODE_CLOSED);
                 spawn_detached(cmd);
             } else if (item_id == -2) {
@@ -1906,6 +2160,43 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
         snprintf(cmd, sizeof(cmd), "powerprofilesctl set %s 2>/dev/null", next_p);
         spawn_detached(cmd);
         damage_all(app);
+        return true;
+    }
+    case ACT_REPLAY_TOGGLE: {
+        app->replay_on = !app->replay_on;
+        if (app->replay_on) {
+            spawn_detached("sh \"$HOME/infynitae/live/settings.sh\" set ENABLE_REPLAY_BUFFER true >/dev/null 2>&1; sh \"$HOME/infynitae/live/infynitae-reload\" recorder >/dev/null 2>&1");
+        } else {
+            spawn_detached("sh \"$HOME/infynitae/live/settings.sh\" set ENABLE_REPLAY_BUFFER false >/dev/null 2>&1; sh \"$HOME/infynitae/live/infynitae-reload\" recorder >/dev/null 2>&1");
+        }
+        damage_all(app);
+        return true;
+    }
+    case ACT_REPLAY_SAVE:
+        spawn_detached("~/.local/bin/infynitae-recorder replay-save >/dev/null 2>&1 || ~/infynitae/live/record/infynitae-recorder replay-save >/dev/null 2>&1");
+        set_mode(app, MODE_CLOSED);
+        return true;
+    case ACT_NOTIF_CLEAR:
+        app->cleared_notif_id = app->max_notif_id;
+        app->notif_count = 0;
+        spawn_detached("makoctl dismiss -a 2>/dev/null");
+        damage_all(app);
+        return true;
+    case ACT_NOTIF_ITEM: {
+        int nidx = hb->index;
+        if (nidx >= 0 && nidx < app->notif_count) {
+            char cmd[128];
+            snprintf(cmd, sizeof(cmd), "makoctl dismiss -n %u 2>/dev/null", app->notifs[nidx].id);
+            spawn_detached(cmd);
+            if (app->notifs[nidx].id > app->cleared_notif_id) {
+                app->cleared_notif_id = app->notifs[nidx].id;
+            }
+            for (int k = nidx; k < app->notif_count - 1; k++) {
+                app->notifs[k] = app->notifs[k + 1];
+            }
+            app->notif_count--;
+            damage_all(app);
+        }
         return true;
     }
     case ACT_VOL_DOWN:
@@ -2348,7 +2639,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
             toggle_subpanel(app, app->selected_idx == 0 ? SUB_WIFI : SUB_BT);
             return;
         } else if (total > 0) {
-            int step = (app->mode == MODE_CONTROL && app->selected_idx >= 4) ? 1 : 2;
+            int step = (app->mode == MODE_CONTROL && app->selected_idx >= 6) ? 1 : 2;
             int next = app->selected_idx + step;
             app->selected_idx = (next < total) ? next : total - 1;
         }
@@ -2357,7 +2648,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
     }
     if (sym == XKB_KEY_Up) {
         if (total > 0) {
-            int step = (app->mode == MODE_CONTROL && app->selected_idx > 4) ? 1 : 2;
+            int step = (app->mode == MODE_CONTROL && app->selected_idx > 6) ? 1 : 2;
             int prev = app->selected_idx - step;
             app->selected_idx = (prev >= 0) ? prev : 0;
         }
