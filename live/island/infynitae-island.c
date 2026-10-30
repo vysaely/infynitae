@@ -181,6 +181,7 @@ typedef struct IslandApp {
     /* Inline Tray & Background Apps */
     TrayApp tray_apps[MAX_TRAY_APPS];
     int tray_count;
+    int tray_ctx_idx; /* -1 = none, >= 0 = index of tray app whose context menu is expanded */
 
     /* Inline Sub-panel items (Wi-Fi networks, Bluetooth devices, Audio sinks) */
     SubItem sub_items[MAX_SUB_ITEMS];
@@ -203,6 +204,13 @@ typedef struct IslandApp {
     HitBox hitboxes[MAX_HITBOXES];
     int hitbox_count;
 
+    /* Non-blocking async refresh pipe so opening Super+W / Super+A is 0ms instant! */
+    int async_fd;
+    pid_t async_pid;
+    IslandMode async_kind;
+    char async_buf[65536];
+    size_t async_len;
+
     bool running;
 } IslandApp;
 
@@ -221,6 +229,9 @@ enum {
     ACT_AUDIO_SUB,
     ACT_SUB_SELECT,
     ACT_TRAY_ITEM,
+    ACT_TRAY_CTX_OPEN,
+    ACT_TRAY_CTX_QUIT,
+    ACT_TRAY_CTX_KILL,
     ACT_VOL_DOWN,
     ACT_VOL_UP,
     ACT_VOL_MUTE,
@@ -383,18 +394,8 @@ static void update_filters(IslandApp *app) {
     else if (app->selected_idx >= total) app->selected_idx = total - 1;
 }
 
-static void refresh_snapshot(IslandApp *app) {
+static void parse_snapshot_buf(IslandApp *app, const char *buf) {
     app->win_count = 0;
-    FILE *fp = popen("infynitae msg snapshot 2>/dev/null", "r");
-    if (!fp) {
-        update_filters(app);
-        return;
-    }
-    static char buf[65536];
-    size_t n = fread(buf, 1, sizeof(buf) - 1, fp);
-    pclose(fp);
-    buf[n] = '\0';
-
     const char *elems = strstr(buf, "\"elements\":[");
     if (!elems) {
         update_filters(app);
@@ -447,51 +448,10 @@ static void refresh_snapshot(IslandApp *app) {
     update_filters(app);
 }
 
-/* Single combined fast query for Super+A (System status + Inline Tray Apps) */
-static void refresh_control_data(IslandApp *app) {
-    const char *rt = getenv("XDG_RUNTIME_DIR");
-    char dnd_path[256];
-    snprintf(dnd_path, sizeof(dnd_path), "%s/infynitae/do-not-disturb", rt ? rt : "/tmp");
-    app->dnd_on = (access(dnd_path, F_OK) == 0);
-
-    app->battery_pct = -1;
-    app->battery_charging = false;
-    for (int i = 0; i <= 1; i++) {
-        char cap_path[128], st_path[128];
-        snprintf(cap_path, sizeof(cap_path), "/sys/class/power_supply/BAT%d/capacity", i);
-        snprintf(st_path, sizeof(st_path), "/sys/class/power_supply/BAT%d/status", i);
-        FILE *f = fopen(cap_path, "r");
-        if (f) {
-            if (fscanf(f, "%d", &app->battery_pct) != 1) app->battery_pct = -1;
-            fclose(f);
-            FILE *sf = fopen(st_path, "r");
-            if (sf) {
-                char st[32] = {0};
-                if (fgets(st, sizeof(st), sf)) {
-                    app->battery_charging = (strncmp(st, "Charging", 8) == 0 || strncmp(st, "Full", 4) == 0);
-                }
-                fclose(sf);
-            }
-            break;
-        }
-    }
-
-    FILE *fp = popen(
-        "ssid=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | sed -n 's/^yes://p' | head -1); "
-        "wradio=$(nmcli radio wifi 2>/dev/null); "
-        "bt=$(bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo on || echo off); "
-        "btdev=$( [ \"$bt\" = on ] && bluetoothctl devices Connected 2>/dev/null | head -1 | cut -d' ' -f3- ); "
-        "vol=$(LC_ALL=C pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'); "
-        "mute=$(LC_ALL=C pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | awk '{print $2}'); "
-        "pp=$(powerprofilesctl get 2>/dev/null || echo balanced); "
-        "printf 'SYS\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"${wradio:-disabled}\" \"${ssid:-}\" \"$bt\" \"${btdev:-}\" \"${vol:-75}\" \"${mute:-no}\" \"$pp\"; "
-        "sh \"$HOME/infynitae/live/control-menu\" apps-list 2>/dev/null | head -n 6",
-        "r");
-    if (!fp) return;
-
+static void parse_control_buf(IslandApp *app, char *buf) {
     app->tray_count = 0;
-    char line[256];
-    while (fgets(line, sizeof(line), fp)) {
+    char *saveptr = NULL;
+    for (char *line = strtok_r(buf, "\n", &saveptr); line; line = strtok_r(NULL, "\n", &saveptr)) {
         size_t len = strlen(line);
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
 
@@ -547,7 +507,98 @@ static void refresh_control_data(IslandApp *app) {
             ta->is_tray = (strcmp(f_state, "tray") == 0);
         }
     }
-    pclose(fp);
+    if (app->tray_ctx_idx >= app->tray_count) app->tray_ctx_idx = -1;
+}
+
+static void start_async_refresh(IslandApp *app, IslandMode kind) {
+    /* Read 0ms sysfs files immediately (battery + DND flag) */
+    if (kind == MODE_CONTROL) {
+        const char *rt = getenv("XDG_RUNTIME_DIR");
+        char dnd_path[256];
+        snprintf(dnd_path, sizeof(dnd_path), "%s/infynitae/do-not-disturb", rt ? rt : "/tmp");
+        app->dnd_on = (access(dnd_path, F_OK) == 0);
+
+        app->battery_pct = -1;
+        app->battery_charging = false;
+        for (int i = 0; i <= 1; i++) {
+            char cap_path[128], st_path[128];
+            snprintf(cap_path, sizeof(cap_path), "/sys/class/power_supply/BAT%d/capacity", i);
+            snprintf(st_path, sizeof(st_path), "/sys/class/power_supply/BAT%d/status", i);
+            FILE *f = fopen(cap_path, "r");
+            if (f) {
+                if (fscanf(f, "%d", &app->battery_pct) != 1) app->battery_pct = -1;
+                fclose(f);
+                FILE *sf = fopen(st_path, "r");
+                if (sf) {
+                    char st[32] = {0};
+                    if (fgets(st, sizeof(st), sf)) {
+                        app->battery_charging = (strncmp(st, "Charging", 8) == 0 || strncmp(st, "Full", 4) == 0);
+                    }
+                    fclose(sf);
+                }
+                break;
+            }
+        }
+    }
+
+    if (app->async_fd >= 0) {
+        close(app->async_fd);
+        app->async_fd = -1;
+    }
+
+    int pfd[2];
+    if (pipe(pfd) < 0) return;
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pfd[0]);
+        close(pfd[1]);
+        return;
+    }
+    if (pid == 0) {
+        close(pfd[0]);
+        dup2(pfd[1], STDOUT_FILENO);
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            if (devnull > 2) close(devnull);
+        }
+        if (pfd[1] > 2) close(pfd[1]);
+
+        if (kind == MODE_CENTER) {
+            execl("/bin/sh", "sh", "-c", "infynitae msg snapshot 2>/dev/null", (char *)NULL);
+        } else {
+            execl("/bin/sh", "sh", "-c",
+                  "ssid=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | sed -n 's/^yes://p' | head -1); "
+                  "wradio=$(nmcli radio wifi 2>/dev/null); "
+                  "bt=$(bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo on || echo off); "
+                  "btdev=$( [ \"$bt\" = on ] && bluetoothctl devices Connected 2>/dev/null | head -1 | cut -d' ' -f3- ); "
+                  "vol=$(LC_ALL=C pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'); "
+                  "mute=$(LC_ALL=C pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | awk '{print $2}'); "
+                  "pp=$(cat /sys/firmware/acpi/platform_profile 2>/dev/null || powerprofilesctl get 2>/dev/null || echo balanced); "
+                  "printf 'SYS\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"${wradio:-disabled}\" \"${ssid:-}\" \"$bt\" \"${btdev:-}\" \"${vol:-75}\" \"${mute:-no}\" \"$pp\"; "
+                  "sh \"$HOME/infynitae/live/control-menu\" apps-list 2>/dev/null | head -n 6",
+                  (char *)NULL);
+        }
+        _exit(127);
+    }
+
+    close(pfd[1]);
+    int flags = fcntl(pfd[0], F_GETFL, 0);
+    fcntl(pfd[0], F_SETFL, flags | O_NONBLOCK);
+    app->async_fd = pfd[0];
+    app->async_pid = pid;
+    app->async_kind = kind;
+    app->async_len = 0;
+}
+
+static void refresh_snapshot(IslandApp *app) {
+    start_async_refresh(app, MODE_CENTER);
+}
+
+static void refresh_control_data(IslandApp *app) {
+    start_async_refresh(app, MODE_CONTROL);
 }
 
 /* Fast on-demand collector when expanding Wi-Fi, Bluetooth, or Audio sub-panel */
@@ -1055,9 +1106,10 @@ static void render_output(IslandOutput *out) {
             int sub_rows = (app->subpanel != SUB_NONE) ? (app->sub_count > 0 ? app->sub_count : 1) : 0;
             double sub_extra_h = (app->subpanel != SUB_NONE) ? (20.0 + sub_rows * 30.0) : 0.0;
             int tray_rows = app->tray_count > 0 ? app->tray_count : 1;
+            double ctx_extra_h = (app->tray_ctx_idx >= 0 && app->tray_ctx_idx < app->tray_count) ? 30.0 : 0.0;
 
             double ctrl_w = 340.0;
-            double ctrl_h = 216.0 + sub_extra_h + tray_rows * 32.0;
+            double ctrl_h = 216.0 + sub_extra_h + tray_rows * 32.0 + ctx_extra_h;
             double ctrl_x = app->control_on_left ? 12.0 : (w - ctrl_w - 12.0);
             double ctrl_y = app->bottom_edge
                 ? (h + ctrl_h * (1.0 - ease) - (ctrl_h + 10.0) * ease)
@@ -1265,9 +1317,9 @@ static void render_output(IslandOutput *out) {
             }
 
             /* Section 5: Unified Inline System Tray & Running Apps (NO nested [Quit ×] button!) */
-            /* Hover or select + Super+C / Delete / Middle-Click quits the app; Left-Click / Enter opens it */
+            /* Left-Click / Enter opens app; Right-Click / Hold opens inline context menu; Super+C closes it */
             cairo_set_source_rgba(cr, 0.54, 0.64, 0.78, 0.82);
-            draw_text_left(cr, layout, "Sans Bold 7.5", "TRAY & APPS  ·  SUPER+C TO CLOSE", rx + 2.0, ry + 6.0, rw);
+            draw_text_left(cr, layout, "Sans Bold 7.5", "TRAY & APPS  ·  RIGHT-CLICK MENU  ·  SUPER+C CLOSE", rx + 2.0, ry + 6.0, rw);
             ry += 16.0;
 
             if (app->tray_count == 0) {
@@ -1280,13 +1332,14 @@ static void render_output(IslandOutput *out) {
                     TrayApp *ta = &app->tray_apps[i];
                     double row_h = 28.0;
                     int nav_i = nav_cursor++;
+                    bool ctx_open = (app->tray_ctx_idx == i);
                     bool sel = (app->selected_idx == nav_i);
 
-                    draw_unified_item(cr, rx, ry, rw, row_h, ta->is_tray, sel, app->bottom_edge, true);
+                    draw_unified_item(cr, rx, ry, rw, row_h, ta->is_tray, sel || ctx_open, app->bottom_edge, true);
 
                     char row_lbl[128];
                     snprintf(row_lbl, sizeof(row_lbl), "%s%s", ta->is_tray ? "● " : "  ", ta->name);
-                    cairo_set_source_rgba(cr, (ta->is_tray || sel) ? 0.96 : 0.78, (ta->is_tray || sel) ? 0.98 : 0.84, 1.0, 0.94);
+                    cairo_set_source_rgba(cr, (ta->is_tray || sel || ctx_open) ? 0.96 : 0.78, (ta->is_tray || sel || ctx_open) ? 0.98 : 0.84, 1.0, 0.94);
                     draw_text_left(cr, layout, ta->is_tray ? "Sans Medium 8.5" : "Sans 8.5", row_lbl, rx + 9.0, ry + row_h / 2.0, rw - 84.0);
 
                     cairo_set_source_rgba(cr, sel ? 0.74 : 0.52, sel ? 0.84 : 0.62, 0.94, 0.85);
@@ -1294,6 +1347,40 @@ static void render_output(IslandOutput *out) {
 
                     add_hitbox_nav(app, rx, ry, rw, row_h, ACT_TRAY_ITEM, i, nav_i);
                     ry += row_h + 4.0;
+
+                    /* Inline Right-Click Context Menu for this Tray App */
+                    if (ctx_open) {
+                        double ch = 26.0;
+                        double c_gap = 4.0;
+                        double cw = (rw - 2 * c_gap) / 3.0;
+                        const char *c_labels[3] = { "Open", "Quit", "Force Kill" };
+                        int c_acts[3] = { ACT_TRAY_CTX_OPEN, ACT_TRAY_CTX_QUIT, ACT_TRAY_CTX_KILL };
+
+                        for (int k = 0; k < 3; k++) {
+                            double cx_b = rx + k * (cw + c_gap);
+                            int c_nav = nav_cursor++;
+                            bool c_sel = (app->selected_idx == c_nav);
+                            bool danger = (k >= 1);
+
+                            if (c_sel) {
+                                cairo_set_source_rgba(cr, danger ? 0.30 : 0.16, danger ? 0.14 : 0.25, danger ? 0.18 : 0.40, 0.96);
+                            } else {
+                                cairo_set_source_rgba(cr, danger ? 0.18 : 0.10, danger ? 0.09 : 0.15, danger ? 0.12 : 0.23, 0.94);
+                            }
+                            draw_rounded_rect(cr, cx_b, ry, cw, ch, 4.0);
+                            cairo_fill(cr);
+
+                            cairo_set_source_rgba(cr, danger ? 0.48 : 0.32, danger ? 0.24 : 0.52, danger ? 0.28 : 0.82, c_sel ? 0.90 : 0.55);
+                            cairo_set_line_width(cr, 1.0);
+                            draw_rounded_rect(cr, cx_b, ry, cw, ch, 4.0);
+                            cairo_stroke(cr);
+
+                            cairo_set_source_rgba(cr, danger ? 0.98 : 0.88, danger ? 0.72 : 0.94, danger ? 0.74 : 1.0, 0.96);
+                            draw_text_centered(cr, layout, "Sans Medium 8", c_labels[k], cx_b + cw / 2.0, ry + ch / 2.0, false);
+                            add_hitbox_nav(app, cx_b, ry, cw, ch, c_acts[k], i, c_nav);
+                        }
+                        ry += ch + 4.0;
+                    }
                 }
             }
 
@@ -1365,6 +1452,7 @@ static void set_mode(IslandApp *app, IslandMode new_mode) {
         app->search_len = 0;
         app->launcher_open = false;
         app->subpanel = SUB_NONE;
+        app->tray_ctx_idx = -1;
         app->selected_idx = 0;
         if (new_mode == MODE_CENTER) {
             refresh_snapshot(app);
@@ -1378,6 +1466,7 @@ static void set_mode(IslandApp *app, IslandMode new_mode) {
         app->kb_grab = false;
         app->launcher_open = false;
         app->subpanel = SUB_NONE;
+        app->tray_ctx_idx = -1;
     }
     damage_all(app);
 }
@@ -1419,17 +1508,18 @@ static void close_window_at(IslandApp *app, int widx) {
     spawn_detached(cmd);
 }
 
-static void quit_tray_at(IslandApp *app, int tidx) {
+static void quit_tray_at(IslandApp *app, int tidx, const char *sig_name) {
     if (tidx < 0 || tidx >= app->tray_count) return;
     char cmd[256];
     snprintf(cmd, sizeof(cmd),
-             "sh \"$HOME/infynitae/live/control-menu\" apps-kill '%s' TERM",
-             app->tray_apps[tidx].name);
+             "sh \"$HOME/infynitae/live/control-menu\" apps-kill '%s' %s",
+             app->tray_apps[tidx].name, sig_name ? sig_name : "TERM");
     spawn_detached(cmd);
     for (int k = tidx; k < app->tray_count - 1; k++) {
         app->tray_apps[k] = app->tray_apps[k + 1];
     }
     app->tray_count--;
+    app->tray_ctx_idx = -1;
     damage_all(app);
 }
 
@@ -1442,8 +1532,9 @@ static void close_selected_item(IslandApp *app) {
                 close_window_at(app, hb->index);
                 return;
             }
-            if (hb->action_id == ACT_TRAY_ITEM) {
-                quit_tray_at(app, hb->index);
+            if (hb->action_id == ACT_TRAY_ITEM || hb->action_id == ACT_TRAY_CTX_OPEN ||
+                hb->action_id == ACT_TRAY_CTX_QUIT || hb->action_id == ACT_TRAY_CTX_KILL) {
+                quit_tray_at(app, hb->index, "TERM");
                 return;
             }
         }
@@ -1451,7 +1542,7 @@ static void close_selected_item(IslandApp *app) {
 }
 
 static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t button) {
-    /* Right-click on Wi-Fi or Bluetooth tile expands its connection list inline */
+    /* Right-click on Wi-Fi, Bluetooth, Volume, or a Tray App opens its inline sub-menu / context menu! */
     if (button == BTN_RIGHT) {
         if (hb->action_id == ACT_WIFI_TOGGLE || hb->action_id == ACT_WIFI_SUB) {
             toggle_subpanel(app, SUB_WIFI);
@@ -1465,12 +1556,13 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
             toggle_subpanel(app, SUB_AUDIO);
             return true;
         }
-        if (hb->action_id == ACT_WIN_ITEM) {
-            close_window_at(app, hb->index);
+        if (hb->action_id == ACT_TRAY_ITEM) {
+            app->tray_ctx_idx = (app->tray_ctx_idx == hb->index) ? -1 : hb->index;
+            damage_all(app);
             return true;
         }
-        if (hb->action_id == ACT_TRAY_ITEM) {
-            quit_tray_at(app, hb->index);
+        if (hb->action_id == ACT_WIN_ITEM) {
+            close_window_at(app, hb->index);
             return true;
         }
     }
@@ -1482,7 +1574,7 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
             return true;
         }
         if (hb->action_id == ACT_TRAY_ITEM) {
-            quit_tray_at(app, hb->index);
+            quit_tray_at(app, hb->index, "TERM");
             return true;
         }
         return true;
@@ -1521,7 +1613,8 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
         spawn_detached(da->exec_cmd);
         return true;
     }
-    case ACT_TRAY_ITEM: {
+    case ACT_TRAY_ITEM:
+    case ACT_TRAY_CTX_OPEN: {
         int tidx = hb->index;
         if (tidx >= 0 && tidx < app->tray_count) {
             char cmd[256];
@@ -1534,6 +1627,12 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
         }
         return true;
     }
+    case ACT_TRAY_CTX_QUIT:
+        quit_tray_at(app, hb->index, "TERM");
+        return true;
+    case ACT_TRAY_CTX_KILL:
+        quit_tray_at(app, hb->index, "KILL");
+        return true;
     case ACT_WIFI_SUB:
         toggle_subpanel(app, SUB_WIFI);
         return true;
@@ -1730,7 +1829,7 @@ static void on_frame_done(void *data, struct wl_callback *cb, uint32_t time_ms) 
     double target = (app->mode == MODE_CLOSED) ? 0.0 : 1.0;
     double diff = target - app->anim_progress;
     if (fabs(diff) > 0.015) {
-        app->anim_progress += diff * 0.40;
+        app->anim_progress += diff * 0.55;
         render_output(out);
         request_frame(out);
     } else {
@@ -2008,7 +2107,10 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
     bool ctrl_down = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0;
 
     if (sym == XKB_KEY_Escape) {
-        if (app->subpanel != SUB_NONE) {
+        if (app->tray_ctx_idx >= 0) {
+            app->tray_ctx_idx = -1;
+            damage_all(app);
+        } else if (app->subpanel != SUB_NONE) {
             app->subpanel = SUB_NONE;
             damage_all(app);
         } else {
@@ -2313,6 +2415,8 @@ int main(int argc, char **argv) {
     app.mode = MODE_CLOSED;
     app.target_mode = MODE_CENTER;
     app.touch_id = -1;
+    app.tray_ctx_idx = -1;
+    app.async_fd = -1;
     app.volume_pct = 75;
     app.battery_pct = -1;
     strcpy(app.power_profile, "balanced");
@@ -2334,6 +2438,9 @@ int main(int argc, char **argv) {
     wl_display_roundtrip(app.display);
     for (IslandOutput *o = app.outputs; o; o = o->next) setup_layer_surface(o);
     wl_display_roundtrip(app.display);
+
+    /* Warm cache asynchronously in background at startup so first Super+A is populated */
+    start_async_refresh(&app, MODE_CONTROL);
 
     if (argc > 1 && (strcmp(argv[1], "toggle") == 0 || strcmp(argv[1], "center") == 0 || strcmp(argv[1], "open") == 0)) {
         set_mode(&app, MODE_CENTER);
@@ -2361,20 +2468,48 @@ int main(int argc, char **argv) {
         if (!app.running) break;
         wl_display_flush(app.display);
 
-        struct pollfd pfd = {
-            .fd = wl_display_get_fd(app.display),
-            .events = POLLIN,
-            .revents = 0
-        };
+        struct pollfd pfds[2];
+        pfds[0].fd = wl_display_get_fd(app.display);
+        pfds[0].events = POLLIN;
+        pfds[0].revents = 0;
+        nfds_t nfds = 1;
+        if (app.async_fd >= 0) {
+            pfds[1].fd = app.async_fd;
+            pfds[1].events = POLLIN | POLLHUP;
+            pfds[1].revents = 0;
+            nfds = 2;
+        }
+
         int timeout = (app.mode != MODE_CLOSED) ? 1000 : -1;
-        int ret = poll(&pfd, 1, timeout);
-        if (ret > 0 && (pfd.revents & POLLIN)) {
+        int ret = poll(pfds, nfds, timeout);
+        if (ret > 0 && (pfds[0].revents & POLLIN)) {
             if (wl_display_read_events(app.display) < 0 ||
                 wl_display_dispatch_pending(app.display) < 0) {
                 break;
             }
         } else {
             wl_display_cancel_read(app.display);
+        }
+
+        if (nfds == 2 && (pfds[1].revents & (POLLIN | POLLHUP))) {
+            ssize_t r;
+            while ((r = read(app.async_fd, app.async_buf + app.async_len,
+                             sizeof(app.async_buf) - 1 - app.async_len)) > 0) {
+                app.async_len += (size_t)r;
+            }
+            if (r == 0 || (r < 0 && errno != EAGAIN && errno != EWOULDBLOCK)) {
+                app.async_buf[app.async_len] = '\0';
+                close(app.async_fd);
+                app.async_fd = -1;
+                if (app.async_kind == MODE_CENTER) {
+                    parse_snapshot_buf(&app, app.async_buf);
+                } else if (app.async_kind == MODE_CONTROL) {
+                    parse_control_buf(&app, app.async_buf);
+                }
+                if (app.mode != MODE_CLOSED) {
+                    damage_all(&app);
+                }
+            }
         }
     }
 
