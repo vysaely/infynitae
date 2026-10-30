@@ -36,6 +36,8 @@ export QT_WAYLAND_RECONNECT="1"
 export GDK_BACKEND="wayland,x11,*"
 export MOZ_ENABLE_WAYLAND="1"
 export SDL_VIDEODRIVER="wayland,x11"
+# SDL3 name; Valve's dota.sh / cs2.sh force x11 unless this one is set
+export SDL_VIDEO_DRIVER="wayland,x11"
 export CLUTTER_BACKEND="wayland"
 export ELECTRON_OZONE_PLATFORM_HINT="auto"
 export _JAVA_AWT_WM_NONREPARENTING="1"

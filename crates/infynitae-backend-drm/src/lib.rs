@@ -276,6 +276,9 @@ struct Screen {
     deferred: Option<std::time::Duration>,
     /// Input-to-screen times (LATENCY_STATS).
     latency: infynitae_wayland::frame_schedule::LatencyStats,
+    /// The last logged (fullscreen shown, its buffer scanned out) pair: a change is logged, so
+    /// the log says whether a game's frames reach the screen as they are or are composited.
+    scanout_logged: Option<(bool, bool)>,
 }
 
 /// DRM per-screen gamma ramp state.
@@ -976,6 +979,7 @@ fn connect_screen(
         ),
         deferred: None,
         latency: Default::default(),
+        scanout_logged: None,
         modes: conn
             .modes()
             .iter()
@@ -2039,6 +2043,40 @@ fn render(data: &mut LoopData) {
                 use smithay::backend::drm::compositor::PrimaryPlaneElement;
                 let scanout = matches!(result.primary_element, PrimaryPlaneElement::Element(_));
                 data.state.frame_scanned_out(id, scanout);
+                // a change of (fullscreen shown, scanned out) is logged; composited while
+                // fullscreen says what else is drawn over or around the window
+                if s.scanout_logged != Some((presenting, scanout)) {
+                    let was = s.scanout_logged.replace((presenting, scanout));
+                    match (presenting, scanout) {
+                        (true, true) => println!(
+                            "[infynitae] Fullscreen on screen {id:?}: its frames go to the screen as they are (direct scanout)"
+                        ),
+                        (true, false) => {
+                            let geometries: Vec<_> = elements
+                                .iter()
+                                .map(|e| {
+                                    smithay::backend::renderer::element::Element::geometry(
+                                        e,
+                                        smithay::utils::Scale::from(k),
+                                    )
+                                })
+                                .collect();
+                            println!(
+                                "[infynitae] Fullscreen on screen {id:?}: composited, not scanned out ({} elements{}): {geometries:?}",
+                                elements.len(),
+                                if data.direct_scanout && !scanout_banned {
+                                    ""
+                                } else {
+                                    ", direct scanout off"
+                                }
+                            );
+                        }
+                        (false, _) if was.is_some_and(|(p, _)| p) => {
+                            println!("[infynitae] Fullscreen off on screen {id:?}")
+                        }
+                        (false, _) => {}
+                    }
+                }
                 let (overlays, cursor) = (
                     result.overlay_elements.len(),
                     result.cursor_element.is_some(),
