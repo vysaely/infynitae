@@ -162,11 +162,13 @@ case "$ACTION" in
         esac
         ;;
     launcher|island)
-        # Super+W: Application launcher (configurable via ~/.config/infynitae/config)
+        # Super+W: Application launcher / Dynamic Island
         L="${LAUNCHER:-auto}"
         case "$L" in
-            auto|"")
-                if [ "${ENABLE_QUICKSHELL:-false}" = "true" ] && command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
+            auto|""|island)
+                if [ -x "$HOME/.local/bin/infynitae-island" ]; then
+                    exec "$HOME/.local/bin/infynitae-island" toggle
+                elif [ "${ENABLE_QUICKSHELL:-false}" = "true" ] && command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
                     exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
                 elif command -v fuzzel >/dev/null 2>&1; then
                     exec fuzzel

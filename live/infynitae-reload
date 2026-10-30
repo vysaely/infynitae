@@ -170,6 +170,15 @@ reload_polkit() {
     fi
 }
 
+reload_island() {
+    p=$(first "$BIN_DIR/infynitae-island")
+    stop_helper infynitae-island
+    if [ -n "$p" ]; then
+        spawn "$p"
+        echo "island: restarted"
+    fi
+}
+
 # Screen sharing (xdg-desktop-portal-wlr): what a share shows (live/screenshare-chooser).
 # SCREENSHARE_ASK=false (default) shares the first screen as soon as an app asks for a screen,
 # and an app asking for a window gets a menu of the windows; true always asks, in a menu of the
@@ -252,9 +261,10 @@ status() {
 [ $# -eq 0 ] && set -- all
 for what in "$@"; do
     case "$what" in
-        all) reload_settings; reload_wallpaper; reload_recorder; reload_portal; reload_polkit; reload_screenshare; reload_clipboard ;;
+        all) reload_settings; reload_wallpaper; reload_island; reload_recorder; reload_portal; reload_polkit; reload_screenshare; reload_clipboard ;;
         settings) reload_settings ;;
         wallpaper) reload_wallpaper ;;
+        island) reload_island ;;
         recorder) reload_recorder ;;
         portal) reload_portal ;;
         polkit) reload_polkit ;;

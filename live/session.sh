@@ -106,6 +106,11 @@ if [ -n "$WP_BIN" ]; then
     fi
 fi
 
+# 4b. Native Dynamic Island & Top-Edge Touch Hybrid Shell
+if [ -x "$HOME/.local/bin/infynitae-island" ]; then
+    "$HOME/.local/bin/infynitae-island" >/dev/null 2>&1 &
+fi
+
 
 # 6. Native Screen Recorder & 20-minute Replay Buffer (Invincible background watchdog)
 if [ "${ENABLE_REPLAY_BUFFER:-false}" = "true" ] || [ "${ENABLE_REPLAY_BUFFER:-false}" = "1" ]; then
