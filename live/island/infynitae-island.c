@@ -146,6 +146,8 @@ typedef struct IslandApp {
     int filtered_app_count;
 
     /* Control Center cached status */
+    bool bottom_edge;     /* false = Top edge, true = Bottom edge */
+    bool control_on_left; /* true = Left corner, false = Right corner */
     bool wifi_on;
     char wifi_label[48];
     bool bt_on;
@@ -186,7 +188,9 @@ enum {
     ACT_REBOOT,
     ACT_POWEROFF,
     ACT_LOGOUT,
-    ACT_PILL_TAP
+    ACT_PILL_TAP,
+    ACT_SWAP_SIDE,
+    ACT_SWAP_EDGE
 };
 
 static volatile sig_atomic_t g_sig_cmd = 0; /* 1 = toggle hybrid, 2 = toggle control, 3 = quit */
@@ -577,16 +581,61 @@ static void add_hitbox(IslandApp *app, double x, double y, double w, double h, i
     hb->index = index;
 }
 
+static void load_position_config(IslandApp *app) {
+    app->bottom_edge = false;
+    app->control_on_left = false;
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/.config/infynitae/config", home);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "ISLAND_EDGE=", 12) == 0) {
+            if (strstr(line + 12, "bottom")) app->bottom_edge = true;
+            else if (strstr(line + 12, "top")) app->bottom_edge = false;
+        } else if (strncmp(line, "ISLAND_CONTROL_SIDE=", 20) == 0) {
+            if (strstr(line + 20, "left")) app->control_on_left = true;
+            else if (strstr(line + 20, "right")) app->control_on_left = false;
+        }
+    }
+    fclose(f);
+}
+
+static void save_position_config(const IslandApp *app) {
+    char cmd[512];
+    const char *edge = app->bottom_edge ? "bottom" : "top";
+    const char *side = app->control_on_left ? "left" : "right";
+    snprintf(cmd, sizeof(cmd),
+             "cfg=\"$HOME/.config/infynitae/config\"; "
+             "if [ -f \"$cfg\" ]; then "
+             "  if grep -q '^ISLAND_EDGE=' \"$cfg\"; then sed -i 's/^ISLAND_EDGE=.*/ISLAND_EDGE=\"%s\"/' \"$cfg\"; else echo 'ISLAND_EDGE=\"%s\"' >> \"$cfg\"; fi; "
+             "  if grep -q '^ISLAND_CONTROL_SIDE=' \"$cfg\"; then sed -i 's/^ISLAND_CONTROL_SIDE=.*/ISLAND_CONTROL_SIDE=\"%s\"/' \"$cfg\"; else echo 'ISLAND_CONTROL_SIDE=\"%s\"' >> \"$cfg\"; fi; "
+             "fi",
+             edge, edge, side, side);
+    spawn_detached(cmd);
+}
+
 static void update_surface_input_region(IslandOutput *out) {
     IslandApp *app = out->app;
     if (!out->surface || !app->compositor) return;
 
     struct wl_region *reg = wl_compositor_create_region(app->compositor);
     if (app->mode == MODE_CLOSED && app->anim_progress <= 0.02 && !app->dragging) {
-        /* Only a 10px strip along the top edge (from 20% to 100% width) intercepts touch/click!
-         * Left 20% is left completely open for browser tab clicks at x=0..20%. */
-        int strip_x = (int)(out->width * 0.22);
-        wl_region_add(reg, strip_x, 0, out->width - strip_x, 10);
+        /* Only two small 8px-tall touch/click zones on the configured edge (top or bottom):
+         * 1. Center pill (180px wide around center)
+         * 2. Corner gesture strip (180px wide on the configured left or right side)
+         * Everything else—including window [X] buttons and browser tabs—is 100% unblocked! */
+        int strip_y = app->bottom_edge ? (out->height - 8) : 0;
+        int pill_w = 180;
+        wl_region_add(reg, (out->width - pill_w) / 2, strip_y, pill_w, 8);
+        int corner_w = 180;
+        if (app->control_on_left) {
+            wl_region_add(reg, 0, strip_y, corner_w, 8);
+        } else {
+            wl_region_add(reg, out->width - corner_w, strip_y, corner_w, 8);
+        }
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             out->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
     } else {
@@ -661,16 +710,17 @@ static void render_output(IslandOutput *out) {
     /* Smooth cubic ease-out curve for crisp Apple-style spring feel */
     double ease = 1.0 - pow(1.0 - p, 3.0);
 
-    /* 1. Collapsed subtle Dynamic Island top handle when closed */
+    /* 1. Collapsed subtle Dynamic Island handle when closed (at Top or Bottom edge) */
     if (p < 0.15) {
         double pill_w = 116.0;
         double pill_h = 5.0;
         double pill_x = (w - pill_w) / 2.0;
-        double pill_y = 3.0;
+        double pill_y = app->bottom_edge ? (h - 8.0) : 3.0;
+        double hit_y = app->bottom_edge ? (h - 12.0) : 0.0;
         cairo_set_source_rgba(cr, 0.75, 0.85, 1.0, 0.24 * (1.0 - p * 5.0));
         draw_rounded_rect(cr, pill_x, pill_y, pill_w, pill_h, 2.5);
         cairo_fill(cr);
-        add_hitbox(app, w * 0.25, 0, w * 0.47, 12, ACT_PILL_TAP, 0);
+        add_hitbox(app, w * 0.25, hit_y, w * 0.47, 12, ACT_PILL_TAP, 0);
     }
 
     if (p > 0.01) {
@@ -683,25 +733,38 @@ static void render_output(IslandOutput *out) {
         bool show_center = (active_m == MODE_CENTER || active_m == MODE_HYBRID);
         bool show_control = (active_m == MODE_CONTROL || active_m == MODE_HYBRID);
 
-        /* Calculate horizontal placement so Center Island and Right Control Box never overlap */
+        /* Calculate placement (Top or Bottom edge, Left or Right control box) */
         double ctrl_w = 356.0;
         double ctrl_h = 376.0;
-        double ctrl_x = w - ctrl_w - 18.0;
-        double ctrl_y = -ctrl_h * (1.0 - ease) + 14.0 * ease;
+        double ctrl_x = app->control_on_left ? 18.0 : (w - ctrl_w - 18.0);
+        double ctrl_y = app->bottom_edge
+            ? (h + ctrl_h * (1.0 - ease) - (ctrl_h + 14.0) * ease)
+            : (-ctrl_h * (1.0 - ease) + 14.0 * ease);
 
         double isl_w = 720.0;
-        if (show_control && (w - isl_w) / 2.0 + isl_w + 16.0 > ctrl_x) {
-            isl_w = ctrl_x - 36.0;
-            if (isl_w > 720.0) isl_w = 720.0;
-            if (isl_w < 460.0) isl_w = 460.0;
-        }
         double isl_h = 336.0;
         double isl_x = (w - isl_w) / 2.0;
-        if (show_control && isl_x + isl_w + 16.0 > ctrl_x) {
-            isl_x = ctrl_x - isl_w - 16.0;
-            if (isl_x < 18.0) isl_x = 18.0;
+        if (show_control) {
+            if (app->control_on_left) {
+                double min_x = ctrl_x + ctrl_w + 16.0;
+                if (isl_x < min_x) {
+                    isl_x = min_x;
+                    if (isl_x + isl_w > w - 18.0) isl_w = (w - 18.0) - isl_x;
+                }
+            } else {
+                if (isl_x + isl_w + 16.0 > ctrl_x) {
+                    isl_x = ctrl_x - isl_w - 16.0;
+                    if (isl_x < 18.0) {
+                        isl_x = 18.0;
+                        isl_w = ctrl_x - 34.0;
+                    }
+                }
+            }
+            if (isl_w < 460.0) isl_w = 460.0;
         }
-        double isl_y = -isl_h * (1.0 - ease) + 14.0 * ease;
+        double isl_y = app->bottom_edge
+            ? (h + isl_h * (1.0 - ease) - (isl_h + 14.0) * ease)
+            : (-isl_h * (1.0 - ease) + 14.0 * ease);
 
         /* ─────────────────────────────────────────────────────────────────── */
         /* A. TOP-CENTER DYNAMIC ISLAND (Search + Open Tabs + App Launcher)    */
@@ -815,12 +878,22 @@ static void render_output(IslandOutput *out) {
 
                     cairo_set_source_rgba(cr, 0.94, 0.97, 1.0, 0.95);
                     draw_text_left(cr, layout, "Sans Bold 10", cw->app_id,
-                                   tx + (cw->focused ? 22.0 : 12.0), tab_y + 20.0, tab_w - 34.0);
+                                   tx + (cw->focused ? 22.0 : 12.0), tab_y + 20.0, tab_w - 46.0);
+
+                    /* Window [×] close button on the right of each tab */
+                    double cx_btn = tx + tab_w - 24.0;
+                    double cy_btn = tab_y + 6.0;
+                    cairo_set_source_rgba(cr, 0.22, 0.14, 0.18, 0.85);
+                    draw_rounded_rect(cr, cx_btn, cy_btn, 18.0, 18.0, 6.0);
+                    cairo_fill(cr);
+                    cairo_set_source_rgba(cr, 0.95, 0.65, 0.68, 0.92);
+                    draw_text_centered(cr, layout, "Sans Bold 9", "×", cx_btn + 9.0, cy_btn + 9.0, true);
 
                     cairo_set_source_rgba(cr, 0.64, 0.72, 0.84, 0.85);
                     draw_text_left(cr, layout, "Sans 9", cw->title, tx + 12.0, tab_y + 42.0, tab_w - 20.0);
 
                     add_hitbox(app, tx, tab_y, tab_w, tab_h, ACT_WIN_FOCUS, app->filtered_wins[i]);
+                    add_hitbox(app, cx_btn - 4.0, cy_btn - 4.0, 26.0, 26.0, ACT_WIN_CLOSE, app->filtered_wins[i]);
                 }
             }
 
@@ -885,7 +958,7 @@ static void render_output(IslandOutput *out) {
             draw_rounded_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h, 24.0);
             cairo_stroke(cr);
 
-            /* 1. Clock, Date & Battery Header */
+            /* 1. Clock, Date, Position Switchers (Top/Bot & Left/Right) & Battery Header */
             time_t now = time(NULL);
             struct tm *tm_info = localtime(&now);
             char t_str[32], d_str[64];
@@ -893,23 +966,51 @@ static void render_output(IslandOutput *out) {
             strftime(d_str, sizeof(d_str), "%a, %b %d", tm_info);
 
             cairo_set_source_rgba(cr, 0.95, 0.98, 1.0, 0.96);
-            draw_text_left(cr, layout, "Sans Bold 18", t_str, ctrl_x + 20.0, ctrl_y + 30.0, 120.0);
+            draw_text_left(cr, layout, "Sans Bold 17", t_str, ctrl_x + 18.0, ctrl_y + 30.0, 90.0);
 
             cairo_set_source_rgba(cr, 0.62, 0.70, 0.84, 0.86);
-            draw_text_left(cr, layout, "Sans Medium 10", d_str, ctrl_x + 98.0, ctrl_y + 31.0, 130.0);
+            draw_text_left(cr, layout, "Sans Medium 9.5", d_str, ctrl_x + 86.0, ctrl_y + 31.0, 96.0);
+
+            /* Position toggle pills: [⇅ Top/Bot] and [⇄ L/R] */
+            double sw_h = 24.0;
+            double sw_y = ctrl_y + 18.0;
+            double sw_edge_w = 46.0;
+            double sw_side_w = 46.0;
+            double right_cursor = ctrl_x + ctrl_w - 18.0;
 
             if (app->battery_pct >= 0) {
                 char bat_str[32];
-                snprintf(bat_str, sizeof(bat_str), "%s%d%%", app->battery_charging ? "⚡ " : "", app->battery_pct);
-                double bw = 68.0, bh = 26.0;
-                double bx = ctrl_x + ctrl_w - bw - 18.0;
-                double by = ctrl_y + 17.0;
+                snprintf(bat_str, sizeof(bat_str), "%s%d%%", app->battery_charging ? "⚡" : "", app->battery_pct);
+                double bw = 52.0;
+                right_cursor -= bw;
                 cairo_set_source_rgba(cr, 0.12, 0.18, 0.26, 0.92);
-                draw_rounded_rect(cr, bx, by, bw, bh, 13.0);
+                draw_rounded_rect(cr, right_cursor, sw_y, bw, sw_h, 12.0);
                 cairo_fill(cr);
                 cairo_set_source_rgba(cr, 0.78, 0.92, 0.84, 0.95);
-                draw_text_centered(cr, layout, "Sans Bold 9.5", bat_str, bx + bw / 2.0, by + bh / 2.0, true);
+                draw_text_centered(cr, layout, "Sans Bold 8.5", bat_str, right_cursor + bw / 2.0, sw_y + sw_h / 2.0, true);
+                right_cursor -= 6.0;
             }
+
+            /* [⇄ Left / Right] button */
+            right_cursor -= sw_side_w;
+            cairo_set_source_rgba(cr, 0.14, 0.20, 0.30, 0.92);
+            draw_rounded_rect(cr, right_cursor, sw_y, sw_side_w, sw_h, 12.0);
+            cairo_fill(cr);
+            cairo_set_source_rgba(cr, 0.85, 0.92, 1.0, 0.92);
+            draw_text_centered(cr, layout, "Sans Bold 8.5", app->control_on_left ? "⇄ Left" : "⇄ Right",
+                               right_cursor + sw_side_w / 2.0, sw_y + sw_h / 2.0, false);
+            add_hitbox(app, right_cursor, sw_y, sw_side_w, sw_h, ACT_SWAP_SIDE, 0);
+            right_cursor -= 6.0;
+
+            /* [⇅ Top / Bot] button */
+            right_cursor -= sw_edge_w;
+            cairo_set_source_rgba(cr, 0.14, 0.20, 0.30, 0.92);
+            draw_rounded_rect(cr, right_cursor, sw_y, sw_edge_w, sw_h, 12.0);
+            cairo_fill(cr);
+            cairo_set_source_rgba(cr, 0.85, 0.92, 1.0, 0.92);
+            draw_text_centered(cr, layout, "Sans Bold 8.5", app->bottom_edge ? "⇅ Bot" : "⇅ Top",
+                               right_cursor + sw_edge_w / 2.0, sw_y + sw_h / 2.0, false);
+            add_hitbox(app, right_cursor, sw_y, sw_edge_w, sw_h, ACT_SWAP_EDGE, 0);
 
             /* 2. 2×3 Quick Toggle Tiles */
             double t_start_y = ctrl_y + 56.0;
@@ -1106,6 +1207,28 @@ static bool handle_click_at(IslandApp *app, IslandOutput *out, double x, double 
                 spawn_detached(cmd);
                 return true;
             }
+            case ACT_WIN_CLOSE: {
+                CanvasWindow *cw = &app->windows[hb->index];
+                char cmd[256];
+                snprintf(cmd, sizeof(cmd),
+                         "infynitae msg focus %lu %lu && infynitae msg shortcut close; sleep 0.1",
+                         cw->inst, cw->elem);
+                spawn_detached(cmd);
+                usleep(90000);
+                refresh_snapshot(app);
+                damage_all(app);
+                return true;
+            }
+            case ACT_SWAP_SIDE:
+                app->control_on_left = !app->control_on_left;
+                save_position_config(app);
+                damage_all(app);
+                return true;
+            case ACT_SWAP_EDGE:
+                app->bottom_edge = !app->bottom_edge;
+                save_position_config(app);
+                damage_all(app);
+                return true;
             case ACT_APP_LAUNCH: {
                 DesktopApp *da = &app->apps[hb->index];
                 set_mode(app, MODE_CLOSED);
@@ -1284,15 +1407,17 @@ static void touch_down(void *data, struct wl_touch *touch, uint32_t serial, uint
     app->touch_cur_y = y;
 
     if (app->mode == MODE_CLOSED) {
-        /* Split top-edge zones (just like iPadOS / iOS):
-         * - Right 28% of top bezel -> pulls down Control Center Box
-         * - Middle of top bezel -> pulls down Dynamic Island (Search + Tabs + Apps) */
+        /* Split edge zones (respecting Left or Right Control Box setting):
+         * - Corner strip (Left 28% or Right 28%) -> pulls out Control Box
+         * - Center strip -> pulls out Dynamic Island (Search + Tabs + Apps) */
         app->dragging = true;
-        if (out && x >= out->width * 0.72) {
-            app->target_mode = MODE_CONTROL;
-        } else {
-            app->target_mode = MODE_CENTER;
+        bool in_ctrl_zone = false;
+        if (out) {
+            in_ctrl_zone = app->control_on_left
+                ? (x <= out->width * 0.28)
+                : (x >= out->width * 0.72);
         }
+        app->target_mode = in_ctrl_zone ? MODE_CONTROL : MODE_CENTER;
         refresh_snapshot(app);
         refresh_system_status(app);
     }
@@ -1306,17 +1431,20 @@ static void touch_motion(void *data, struct wl_touch *touch, uint32_t time, int3
     app->touch_cur_x = wl_fixed_to_double(fx);
     app->touch_cur_y = wl_fixed_to_double(fy);
 
-    double dy = app->touch_cur_y - app->touch_start_y;
+    /* Positive pull_dist = pulling inward from the active edge (down from top, or up from bottom) */
+    double raw_dy = app->touch_cur_y - app->touch_start_y;
+    double pull_dist = app->bottom_edge ? (-raw_dy) : raw_dy;
+
     if (app->mode == MODE_CLOSED && app->dragging) {
-        double prog = dy / 140.0;
+        double prog = pull_dist / 140.0;
         if (prog < 0.0) prog = 0.0;
         if (prog > 1.0) prog = 1.0;
         app->anim_progress = prog;
         for (IslandOutput *o = app->outputs; o; o = o->next) request_frame(o);
-    } else if (app->mode != MODE_CLOSED && dy < -30.0) {
-        /* Swiping up while open tracks dismissal */
+    } else if (app->mode != MODE_CLOSED && pull_dist < -30.0) {
+        /* Swiping back toward the edge while open tracks dismissal */
         app->dragging = true;
-        double prog = 1.0 + (dy / 160.0);
+        double prog = 1.0 + (pull_dist / 160.0);
         if (prog < 0.0) prog = 0.0;
         if (prog > 1.0) prog = 1.0;
         app->anim_progress = prog;
@@ -1330,26 +1458,27 @@ static void touch_up(void *data, struct wl_touch *touch, uint32_t serial, uint32
     if (id != app->touch_id) return;
 
     double dx = app->touch_cur_x - app->touch_start_x;
-    double dy = app->touch_cur_y - app->touch_start_y;
+    double raw_dy = app->touch_cur_y - app->touch_start_y;
+    double pull_dist = app->bottom_edge ? (-raw_dy) : raw_dy;
     bool was_dragging = app->dragging;
     app->dragging = false;
 
     if (app->mode == MODE_CLOSED) {
-        if (dy > 36.0) {
-            /* Completed swipe down from top edge -> snap open! */
+        if (pull_dist > 36.0) {
+            /* Completed swipe inward from edge -> snap open! */
             app->mode = app->target_mode;
             damage_all(app);
-        } else if (hypot(dx, dy) < 16.0) {
-            /* Single tap on the top edge pill -> open that zone */
+        } else if (hypot(dx, raw_dy) < 16.0) {
+            /* Single tap on the edge pill -> open that zone */
             set_mode(app, app->target_mode);
         } else {
             set_mode(app, MODE_CLOSED);
         }
     } else {
-        if (was_dragging && dy < -45.0) {
-            /* Swiped up -> dismiss */
+        if (was_dragging && pull_dist < -45.0) {
+            /* Swiped back toward edge -> dismiss */
             set_mode(app, MODE_CLOSED);
-        } else if (hypot(dx, dy) < 20.0) {
+        } else if (hypot(dx, raw_dy) < 20.0) {
             handle_click_at(app, app->outputs, app->touch_cur_x, app->touch_cur_y);
         } else {
             damage_all(app);
@@ -1401,11 +1530,13 @@ static void pointer_button(void *data, struct wl_pointer *p, uint32_t s, uint32_
     if (state != WL_POINTER_BUTTON_STATE_PRESSED) return;
     if (app->mode == MODE_CLOSED) {
         IslandOutput *out = app->pointer_output ? app->pointer_output : app->outputs;
-        if (out && app->pointer_x >= out->width * 0.72) {
-            set_mode(app, MODE_CONTROL);
-        } else {
-            set_mode(app, MODE_HYBRID);
+        bool in_ctrl_zone = false;
+        if (out) {
+            in_ctrl_zone = app->control_on_left
+                ? (app->pointer_x <= out->width * 0.28)
+                : (app->pointer_x >= out->width * 0.72);
         }
+        set_mode(app, in_ctrl_zone ? MODE_CONTROL : MODE_HYBRID);
         return;
     }
     handle_click_at(app, app->pointer_output, app->pointer_x, app->pointer_y);
@@ -1720,6 +1851,7 @@ int main(int argc, char **argv) {
     strcpy(app.power_profile, "balanced");
     strcpy(app.wifi_label, "On");
 
+    load_position_config(&app);
     load_all_apps(&app);
 
     app.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);

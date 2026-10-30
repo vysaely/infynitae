@@ -436,6 +436,16 @@ AUTOMOUNT="true"
     # default: true
     # options: true  · false
 
+ISLAND_EDGE="top"
+    # Which screen edge the Dynamic Island & Quick Control Box slide in from (also togglable live via [⇅ Top/Bot] in the Control Box)
+    # default: top
+    # options: top  · bottom
+
+ISLAND_CONTROL_SIDE="right"
+    # Which corner the Quick Control Box sits on ("left" leaves top-right window [X] buttons clear; also togglable live via [⇄ Left/Right])
+    # default: right
+    # options: right  · left
+
 
 # ═══ Lock & idle ═══════════════════════════════════════════════════════════════════ [save] ═══
 
