@@ -606,7 +606,14 @@ fn gles_renderer(gbm: &GbmDevice<DrmDeviceFd>) -> Result<GlesRenderer, Box<dyn E
     let display = unsafe { EGLDisplay::new(gbm.clone()) }?;
     // lost, not aborted, when the GPU resets or refuses its work (out of GPU memory): the loop
     // then makes a new renderer and every window stays open (`renderer_lost`)
-    let context = EGLContext::new_lose_context_on_reset(&display)?;
+    // and scheduled ahead of other GPU work (a game, a training run): the compositor's frames are
+    // small, and a frame queued behind a long job misses its refresh. The kernel grants high
+    // priority to the display's master, which this process is; otherwise it falls back.
+    let context = EGLContext::new_lose_context_on_reset_with_priority(
+        &display,
+        smithay::backend::egl::context::ContextPriority::High,
+    )?;
+    println!("[infynitae] GPU context priority: {:?}", context.priority());
     // SAFETY: the context was just made and is current on no other thread; the renderer takes it
     // over and is used on this thread only.
     let renderer = unsafe { GlesRenderer::new(context) }?;

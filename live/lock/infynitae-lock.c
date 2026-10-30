@@ -88,6 +88,7 @@ typedef struct {
 
     bool greeter_mode;
     char session_cmd[256];
+    char status_msg[128];
 } LockApp;
 
 typedef struct LockOutput {
@@ -296,6 +297,40 @@ static void draw_rounded_rect(cairo_t *cr, double x, double y, double w, double 
     cairo_close_path(cr);
 }
 
+/* Draws `text` centered at `(cx, cy)` using exact Pango sub-pixel extents.
+ * When `use_ink_y` is true (single glyphs, uppercase badges, numerals), vertical centering uses
+ * the actual ink bounding box so ascenders/descenders never push the glyph off-center.
+ * When `use_ink_y` is false (mixed-case phrases), vertical centering uses the logical box while
+ * horizontal centering still uses the ink box so left/right bearings never shift text sideways. */
+static void draw_text_centered(cairo_t *cr, PangoLayout *layout, const char *font_str,
+                               const char *text, double cx, double cy, bool use_ink_y) {
+    PangoFontDescription *desc = pango_font_description_from_string(font_str);
+    pango_layout_set_font_description(layout, desc);
+    pango_font_description_free(desc);
+    pango_layout_set_text(layout, text, -1);
+
+    PangoRectangle ink, logical;
+    pango_layout_get_extents(layout, &ink, &logical);
+
+    double ix = (double)ink.x / PANGO_SCALE;
+    double iw = (double)ink.width / PANGO_SCALE;
+    double x = cx - (ix + iw / 2.0);
+
+    double y;
+    if (use_ink_y) {
+        double iy = (double)ink.y / PANGO_SCALE;
+        double ih = (double)ink.height / PANGO_SCALE;
+        y = cy - (iy + ih / 2.0);
+    } else {
+        double ly = (double)logical.y / PANGO_SCALE;
+        double lh = (double)logical.height / PANGO_SCALE;
+        y = cy - (ly + lh / 2.0);
+    }
+
+    cairo_move_to(cr, x, y);
+    pango_cairo_show_layout(cr, layout);
+}
+
 /* ========================================================================== */
 /* On-screen keyboard (touchscreens, tablet mode)                             */
 /* ========================================================================== */
@@ -398,12 +433,10 @@ static void osk_draw(cairo_t *cr, PangoLayout *layout, const LockApp *app, const
         cairo_fill(cr);
         char label[8];
         osk_label(app, &keys[i], label);
-        int tw, th;
-        pango_layout_set_text(layout, label, -1);
-        pango_layout_get_pixel_size(layout, &tw, &th);
         cairo_set_source_rgba(cr, 0.90, 0.95, 1.0, 0.92);
-        cairo_move_to(cr, keys[i].x + (keys[i].w - tw) / 2.0, keys[i].y + (keys[i].h - th) / 2.0);
-        pango_cairo_show_layout(cr, layout);
+        draw_text_centered(cr, layout, "Sans 15", label,
+                           keys[i].x + keys[i].w / 2.0,
+                           keys[i].y + keys[i].h / 2.0, true);
     }
 }
 
@@ -417,7 +450,7 @@ static void osk_type(LockApp *app, char c) {
 
 /* A key's action, when the finger lifts on it. */
 static void osk_activate(LockApp *app, const OskKey *k) {
-    if (app->auth_state == AUTH_STATE_VERIFYING) return;
+    if (app->auth_state == AUTH_STATE_VERIFYING || app->status_msg[0] != '\0') return;
     switch (k->kind) {
     case OSK_CHAR:
         osk_type(app, osk_char(app, k->ch));
@@ -450,7 +483,7 @@ static void touch_down(void *data, struct wl_touch *touch, uint32_t serial, uint
     (void)touch; (void)serial; (void)time;
     LockApp *app = data;
     LockOutput *o = output_of_surface(app, surface);
-    if (!o || app->osk_pressed >= 0) return;
+    if (!o || app->osk_pressed >= 0 || app->status_msg[0] != '\0') return;
     if (!app->osk_visible) {
         /* the first tap brings the keyboard */
         app->osk_visible = true;
@@ -571,7 +604,7 @@ static void render_output(LockOutput *output) {
     // Pango layout initialization
     PangoLayout *layout = pango_cairo_create_layout(cr);
 
-    // 2. Clock & Date
+    // 2. Clock & Date (ink-centered so digit bearings never shift the clock off-axis)
     time_t now = time(NULL);
     struct tm *tm = localtime(&now);
     char time_str[64];
@@ -579,179 +612,151 @@ static void render_output(LockOutput *output) {
     strftime(time_str, sizeof(time_str), "%H:%M", tm);
     strftime(date_str, sizeof(date_str), "%A, %B %d", tm);
 
-    // Large Time
-    PangoFontDescription *desc = pango_font_description_from_string("Sans 80");
-    pango_font_description_set_weight(desc, PANGO_WEIGHT_LIGHT);
-    pango_layout_set_font_description(layout, desc);
-    pango_layout_set_text(layout, time_str, -1);
-    pango_font_description_free(desc);
+    // Tabular numbers attribute so all digits have identical width and ':' stays centered
+    PangoAttrList *clock_attrs = pango_attr_list_new();
+    pango_attr_list_insert(clock_attrs, pango_attr_font_features_new("tnum=1"));
+    pango_layout_set_attributes(layout, clock_attrs);
+    cairo_set_source_rgba(cr, 0.95, 0.97, 1.0, 0.94);
+    draw_text_centered(cr, layout, "Sans Light 76", time_str, cx, cy - 185.0, true);
+    pango_layout_set_attributes(layout, NULL);
+    pango_attr_list_unref(clock_attrs);
 
-    int tw, th;
-    pango_layout_get_pixel_size(layout, &tw, &th);
-    cairo_set_source_rgba(cr, 0.95, 0.97, 1.0, 0.92);
-    cairo_move_to(cr, cx - (tw / 2.0), cy - 230);
-    pango_cairo_show_layout(cr, layout);
+    // Date beneath clock (clean 32px separation below the clock's bottom edge)
+    cairo_set_source_rgba(cr, 0.62, 0.68, 0.78, 0.78);
+    draw_text_centered(cr, layout, "Sans 14", date_str, cx, cy - 110.0, false);
 
-    // Date beneath clock
-    desc = pango_font_description_from_string("Sans 15");
-    pango_font_description_set_weight(desc, PANGO_WEIGHT_NORMAL);
-    pango_layout_set_font_description(layout, desc);
-    pango_layout_set_text(layout, date_str, -1);
-    pango_font_description_free(desc);
-
-    pango_layout_get_pixel_size(layout, &tw, &th);
-    cairo_set_source_rgba(cr, 0.60, 0.65, 0.75, 0.70);
-    cairo_move_to(cr, cx - (tw / 2.0), cy - 130);
-    pango_cairo_show_layout(cr, layout);
-
-    // 3. User Avatar / Initial Badge
+    // 3. User Avatar / Initial Badge (or Loading Spinner in status/verifying mode)
     double avatar_radius = 34.0;
-    double avatar_y = cy - 40;
+    double avatar_y = cy - 28.0;
 
     // Avatar background circle
-    cairo_set_source_rgba(cr, 0.12, 0.16, 0.22, 0.85);
+    cairo_set_source_rgba(cr, 0.10, 0.14, 0.20, 0.90);
     cairo_arc(cr, cx, avatar_y, avatar_radius, 0, 2 * M_PI);
     cairo_fill(cr);
 
-    // Avatar glowing ring
-    if (app->auth_state == AUTH_STATE_VERIFYING) {
-        cairo_set_source_rgba(cr, 0.35, 0.70, 1.0, 0.85);
-        cairo_set_line_width(cr, 2.5);
-    } else if (app->auth_state == AUTH_STATE_FAILED) {
-        cairo_set_source_rgba(cr, 0.97, 0.32, 0.29, 0.85);
-        cairo_set_line_width(cr, 2.0);
-    } else {
-        cairo_set_source_rgba(cr, 0.25, 0.32, 0.45, 0.50);
-        cairo_set_line_width(cr, 1.5);
-    }
-    cairo_arc(cr, cx, avatar_y, avatar_radius, 0, 2 * M_PI);
-    cairo_stroke(cr);
+    // Avatar ring + animated spinner arc when verifying, unlocking, or showing status_msg
+    bool busy = (app->auth_state == AUTH_STATE_VERIFYING ||
+                 app->auth_state == AUTH_STATE_SUCCESS ||
+                 app->status_msg[0] != '\0');
+    if (busy) {
+        cairo_set_source_rgba(cr, 0.25, 0.35, 0.50, 0.35);
+        cairo_set_line_width(cr, 2.2);
+        cairo_arc(cr, cx, avatar_y, avatar_radius, 0, 2 * M_PI);
+        cairo_stroke(cr);
 
-    // Initial letter in avatar
+        cairo_set_source_rgba(cr, 0.48, 0.64, 0.97, 0.95);
+        cairo_set_line_width(cr, 2.5);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+        cairo_arc(cr, cx, avatar_y, avatar_radius, app->pulse_phase, app->pulse_phase + 1.8);
+        cairo_stroke(cr);
+    } else if (app->auth_state == AUTH_STATE_FAILED) {
+        cairo_set_source_rgba(cr, 0.97, 0.32, 0.29, 0.90);
+        cairo_set_line_width(cr, 2.0);
+        cairo_arc(cr, cx, avatar_y, avatar_radius, 0, 2 * M_PI);
+        cairo_stroke(cr);
+    } else {
+        cairo_set_source_rgba(cr, 0.25, 0.32, 0.45, 0.55);
+        cairo_set_line_width(cr, 1.5);
+        cairo_arc(cr, cx, avatar_y, avatar_radius, 0, 2 * M_PI);
+        cairo_stroke(cr);
+    }
+
+    // Initial letter in avatar (ink-centered so capital letters sit dead-center in the circle)
     char initial[2] = { (char)(app->username[0] >= 'a' && app->username[0] <= 'z' ? app->username[0] - 32 : app->username[0]), '\0' };
     if (!initial[0]) initial[0] = 'I';
-    desc = pango_font_description_from_string("Sans Bold 20");
-    pango_layout_set_font_description(layout, desc);
-    pango_layout_set_text(layout, initial, -1);
-    pango_font_description_free(desc);
-    pango_layout_get_pixel_size(layout, &tw, &th);
-    cairo_set_source_rgba(cr, 0.90, 0.95, 1.0, 0.90);
-    cairo_move_to(cr, cx - (tw / 2.0), avatar_y - (th / 2.0));
-    pango_cairo_show_layout(cr, layout);
+    cairo_set_source_rgba(cr, 0.92, 0.96, 1.0, 0.94);
+    draw_text_centered(cr, layout, "Sans Bold 20", initial, cx, avatar_y, true);
 
-    // Username label
-    desc = pango_font_description_from_string("Sans Medium 13");
-    pango_layout_set_font_description(layout, desc);
-    pango_layout_set_text(layout, app->username, -1);
-    pango_font_description_free(desc);
-    pango_layout_get_pixel_size(layout, &tw, &th);
-    cairo_set_source_rgba(cr, 0.80, 0.85, 0.95, 0.85);
-    cairo_move_to(cr, cx - (tw / 2.0), avatar_y + 44);
-    pango_cairo_show_layout(cr, layout);
+    // Username label (centered 22px below the avatar circle)
+    cairo_set_source_rgba(cr, 0.82, 0.87, 0.96, 0.88);
+    draw_text_centered(cr, layout, "Sans Medium 13", app->username, cx, avatar_y + avatar_radius + 20.0, false);
 
-    // 4. Password Input Pill
-    double pill_w = 260.0;
-    double pill_h = 44.0;
+    // 4. Password Input / Status Pill
+    double pill_w = 280.0;
+    double pill_h = 46.0;
     double pill_x = cx - (pill_w / 2.0);
-    double pill_y = cy + 75.0;
+    double pill_y = cy + 60.0;
+    double pill_cy = pill_y + (pill_h / 2.0);
 
     // Pill background
-    cairo_set_source_rgba(cr, 0.08, 0.11, 0.15, 0.90);
-    draw_rounded_rect(cr, pill_x, pill_y, pill_w, pill_h, 22.0);
+    cairo_set_source_rgba(cr, 0.08, 0.11, 0.15, 0.92);
+    draw_rounded_rect(cr, pill_x, pill_y, pill_w, pill_h, pill_h / 2.0);
     cairo_fill(cr);
 
     // Pill Border
     if (app->auth_state == AUTH_STATE_FAILED) {
-        cairo_set_source_rgba(cr, 0.97, 0.32, 0.29, 0.90); // Red error border
+        cairo_set_source_rgba(cr, 0.97, 0.32, 0.29, 0.90);
         cairo_set_line_width(cr, 1.8);
-    } else if (app->auth_state == AUTH_STATE_VERIFYING) {
-        cairo_set_source_rgba(cr, 0.35, 0.70, 1.0, 0.90);  // Cyan verifying
-        cairo_set_line_width(cr, 1.8);
+    } else if (busy) {
+        cairo_set_source_rgba(cr, 0.48, 0.64, 0.97, 0.85);
+        cairo_set_line_width(cr, 1.6);
     } else if (app->password_len > 0) {
-        cairo_set_source_rgba(cr, 0.30, 0.55, 0.90, 0.80);  // Active input border
+        cairo_set_source_rgba(cr, 0.48, 0.64, 0.97, 0.80);
         cairo_set_line_width(cr, 1.5);
     } else {
-        cairo_set_source_rgba(cr, 0.20, 0.26, 0.35, 0.60);  // Idle subtle border
+        cairo_set_source_rgba(cr, 0.20, 0.26, 0.35, 0.60);
         cairo_set_line_width(cr, 1.2);
     }
-    draw_rounded_rect(cr, pill_x, pill_y, pill_w, pill_h, 22.0);
+    draw_rounded_rect(cr, pill_x, pill_y, pill_w, pill_h, pill_h / 2.0);
     cairo_stroke(cr);
 
     // Password indicator contents inside pill
-    if (app->auth_state == AUTH_STATE_VERIFYING) {
-        desc = pango_font_description_from_string("Sans 11");
-        pango_layout_set_font_description(layout, desc);
-        pango_layout_set_text(layout, "Verifying...", -1);
-        pango_font_description_free(desc);
-        pango_layout_get_pixel_size(layout, &tw, &th);
-        cairo_set_source_rgba(cr, 0.60, 0.75, 0.95, 0.85);
-        cairo_move_to(cr, cx - (tw / 2.0), pill_y + ((pill_h - th) / 2.0));
-        pango_cairo_show_layout(cr, layout);
+    if (app->status_msg[0] != '\0') {
+        cairo_set_source_rgba(cr, 0.78, 0.86, 0.98, 0.92);
+        draw_text_centered(cr, layout, "Sans Medium 11", app->status_msg, cx, pill_cy, false);
+    } else if (app->auth_state == AUTH_STATE_SUCCESS) {
+        cairo_set_source_rgba(cr, 0.65, 0.88, 0.75, 0.92);
+        draw_text_centered(cr, layout, "Sans Medium 11", "Starting session…", cx, pill_cy, false);
+    } else if (app->auth_state == AUTH_STATE_VERIFYING) {
+        cairo_set_source_rgba(cr, 0.65, 0.80, 0.98, 0.90);
+        draw_text_centered(cr, layout, "Sans Medium 11", "Verifying…", cx, pill_cy, false);
     } else if (app->password_len > 0) {
-        // Draw elegant glowing dots
         double dot_spacing = 14.0;
-        size_t max_dots = 14;
+        size_t max_dots = 16;
         size_t visible_dots = app->password_len < max_dots ? app->password_len : max_dots;
         double total_dots_w = visible_dots > 0 ? (visible_dots - 1) * dot_spacing : 0;
         double start_dot_x = cx - (total_dots_w / 2.0);
-        double dot_y = pill_y + (pill_h / 2.0);
 
-        cairo_set_source_rgba(cr, 0.85, 0.92, 1.0, 0.90);
+        cairo_set_source_rgba(cr, 0.88, 0.93, 1.0, 0.92);
         for (size_t i = 0; i < visible_dots; ++i) {
-            cairo_arc(cr, start_dot_x + (i * dot_spacing), dot_y, 3.5, 0, 2 * M_PI);
+            cairo_arc(cr, start_dot_x + (i * dot_spacing), pill_cy, 3.5, 0, 2 * M_PI);
             cairo_fill(cr);
         }
     } else {
-        // Subtle placeholder
-        desc = pango_font_description_from_string("Sans 11");
-        pango_layout_set_font_description(layout, desc);
-        pango_layout_set_text(layout, "Enter Password", -1);
-        pango_font_description_free(desc);
-        pango_layout_get_pixel_size(layout, &tw, &th);
-        cairo_set_source_rgba(cr, 0.40, 0.45, 0.55, 0.55);
-        cairo_move_to(cr, cx - (tw / 2.0), pill_y + ((pill_h - th) / 2.0));
-        pango_cairo_show_layout(cr, layout);
+        cairo_set_source_rgba(cr, 0.44, 0.50, 0.62, 0.65);
+        draw_text_centered(cr, layout, "Sans 11", "Enter password", cx, pill_cy, false);
     }
 
-    // 5. Caps Lock Warning Badge
-    if (app->caps_lock) {
-        double badge_w = 110.0;
-        double badge_h = 24.0;
+    // 5. Status / Caps Lock / Error Badge below pill
+    double badge_cy = pill_y + pill_h + 26.0;
+    if (app->auth_state == AUTH_STATE_FAILED && app->password_len == 0) {
+        cairo_set_source_rgba(cr, 0.97, 0.42, 0.39, 0.92);
+        draw_text_centered(cr, layout, "Sans Medium 10", "Authentication failed · try again", cx, badge_cy, false);
+    } else if (app->caps_lock) {
+        double badge_w = 124.0;
+        double badge_h = 26.0;
         double badge_x = cx - (badge_w / 2.0);
-        double badge_y = pill_y + pill_h + 16.0;
+        double badge_y = badge_cy - (badge_h / 2.0);
 
-        cairo_set_source_rgba(cr, 0.95, 0.60, 0.15, 0.18);
-        draw_rounded_rect(cr, badge_x, badge_y, badge_w, badge_h, 12.0);
+        cairo_set_source_rgba(cr, 0.95, 0.60, 0.15, 0.16);
+        draw_rounded_rect(cr, badge_x, badge_y, badge_w, badge_h, 13.0);
         cairo_fill(cr);
 
-        cairo_set_source_rgba(cr, 0.95, 0.65, 0.20, 0.60);
+        cairo_set_source_rgba(cr, 0.95, 0.65, 0.20, 0.55);
         cairo_set_line_width(cr, 1.0);
-        draw_rounded_rect(cr, badge_x, badge_y, badge_w, badge_h, 12.0);
+        draw_rounded_rect(cr, badge_x, badge_y, badge_w, badge_h, 13.0);
         cairo_stroke(cr);
 
-        desc = pango_font_description_from_string("Sans Bold 9");
-        pango_layout_set_font_description(layout, desc);
-        pango_layout_set_text(layout, "⇪ CAPS LOCK", -1);
-        pango_font_description_free(desc);
-        pango_layout_get_pixel_size(layout, &tw, &th);
-        cairo_set_source_rgba(cr, 1.0, 0.75, 0.30, 0.95);
-        cairo_move_to(cr, cx - (tw / 2.0), badge_y + ((badge_h - th) / 2.0));
-        pango_cairo_show_layout(cr, layout);
+        cairo_set_source_rgba(cr, 1.0, 0.78, 0.32, 0.95);
+        draw_text_centered(cr, layout, "Sans Bold 9", "CAPS LOCK ON", cx, badge_cy, true);
     }
 
     if (app->osk_visible) osk_draw(cr, layout, app, output, w, h);
 
-    // 6. Bottom Brand Hint: "Infynitae Native Canvas" (under the keyboard when it is shown)
+    // 6. Bottom Brand Hint (under the keyboard when it is shown)
     if (!app->osk_visible) {
-    desc = pango_font_description_from_string("Sans 10");
-    pango_font_description_set_weight(desc, PANGO_WEIGHT_LIGHT);
-    pango_layout_set_font_description(layout, desc);
-    pango_layout_set_text(layout, "Infynitae Native", -1);
-    pango_font_description_free(desc);
-    pango_layout_get_pixel_size(layout, &tw, &th);
-    cairo_set_source_rgba(cr, 0.40, 0.46, 0.58, 0.40);
-    cairo_move_to(cr, cx - (tw / 2.0), h - 45);
-    pango_cairo_show_layout(cr, layout);
+        cairo_set_source_rgba(cr, 0.42, 0.48, 0.60, 0.42);
+        draw_text_centered(cr, layout, "Sans Light 10", "Infynitae Native", w / 2.0, h - 36.0, false);
     }
 
     g_object_unref(layout);
@@ -777,9 +782,12 @@ static void on_frame_done(void *data, struct wl_callback *cb, uint32_t time_ms) 
         app->shake_frame--;
         render_output(output);
         request_frame(output);
-    } else if (app->auth_state == AUTH_STATE_VERIFYING) {
+    } else if (app->auth_state == AUTH_STATE_VERIFYING || app->status_msg[0] != '\0') {
+        app->pulse_phase += 0.14;
         render_output(output);
         request_frame(output);
+    } else {
+        render_output(output);
     }
 }
 
@@ -798,7 +806,7 @@ static void request_frame(LockOutput *output) {
 static void damage_all_outputs(LockApp *app) {
     for (LockOutput *o = app->outputs; o != NULL; o = o->next) {
         render_output(o);
-        if (app->shake_frame > 0 || app->auth_state == AUTH_STATE_VERIFYING) {
+        if (app->shake_frame > 0 || app->auth_state == AUTH_STATE_VERIFYING || app->status_msg[0] != '\0') {
             request_frame(o);
         }
     }
@@ -816,6 +824,9 @@ static void lock_surface_configure(void *data, struct ext_session_lock_surface_v
 
     ext_session_lock_surface_v1_ack_configure(lock_surface, serial);
     render_output(output);
+    if (output->app->status_msg[0] != '\0') {
+        request_frame(output);
+    }
 }
 
 static const struct ext_session_lock_surface_v1_listener lock_surface_listener = {
@@ -892,7 +903,7 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard,
     LockApp *app = (LockApp *)data;
 
     if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->xkb_state) return;
-    if (app->auth_state == AUTH_STATE_VERIFYING) return;
+    if (app->auth_state == AUTH_STATE_VERIFYING || app->status_msg[0] != '\0') return;
 
     uint32_t keycode = key + 8; // evdev -> xkb translation offset
     xkb_keysym_t sym = xkb_state_key_get_one_sym(app->xkb_state, keycode);
@@ -1074,6 +1085,8 @@ int main(int argc, char **argv) {
             strncpy(app.session_cmd, argv[++i], sizeof(app.session_cmd) - 1);
         } else if (strcmp(argv[i], "--user") == 0 && i + 1 < argc) {
             strncpy(app.username, argv[++i], sizeof(app.username) - 1);
+        } else if (strcmp(argv[i], "--status") == 0 && i + 1 < argc) {
+            strncpy(app.status_msg, argv[++i], sizeof(app.status_msg) - 1);
         }
     }
 
@@ -1163,7 +1176,7 @@ int main(int argc, char **argv) {
         };
 
         // Poll every 250ms for clock update and state transition
-        int poll_timeout = (app.shake_frame > 0 || app.auth_state == AUTH_STATE_VERIFYING) ? 16 : 250;
+        int poll_timeout = (app.shake_frame > 0 || app.auth_state == AUTH_STATE_VERIFYING || app.status_msg[0] != '\0') ? 16 : 250;
         int ret = poll(&pfd, 1, poll_timeout);
 
         if (ret > 0 && (pfd.revents & POLLIN)) {
@@ -1182,6 +1195,8 @@ int main(int argc, char **argv) {
 
         // Check auth status
         if (app.auth_state == AUTH_STATE_SUCCESS) {
+            damage_all_outputs(&app);
+            wl_display_roundtrip(app.display);
             app.running = false;
             break;
         }

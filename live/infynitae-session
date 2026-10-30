@@ -152,10 +152,20 @@ while true; do
             exit 0
             ;;
     esac
+    if systemctl list-jobs 2>/dev/null | grep -qE 'shutdown\.target|reboot\.target|poweroff\.target|halt\.target'; then
+        echo "[infynitae-session] Shutdown or reboot in progress; not restarting." >> "$SESSION_LOG"
+        exit 0
+    fi
 
-    # a crash, not a quit (0) or the system ending the session (SIGHUP, SIGINT, SIGTERM)
+    # SIGHUP (129), SIGINT (130), SIGTERM (143): the login/session was ended by the console or
+    # systemd (shutdown, reboot, logout). Exit instead of respawning a locked session that would
+    # block shutdown for 90s. Only clean quit (0, e.g. Ctrl+Alt+Backspace) or a crash restarts.
     case "$STATUS" in
-        0|129|130|143) ;;
+        129|130|143)
+            echo "[infynitae-session] Compositor ended by signal (status $STATUS); ending session." >> "$SESSION_LOG"
+            exit 0
+            ;;
+        0) ;;
         *) crash_report ;;
     esac
 

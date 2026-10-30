@@ -203,6 +203,148 @@ battery_limit_toggle() {
     if [ "$to" = off ]; then note "Battery charges to full"; else note "Battery stops at $to%" "It wears more slowly"; fi
 }
 
+# ── Tray & background apps ─────────────────────────────────────────────────────────────────────
+# GUI apps connected to the display or session bus that have no window on the canvas right now
+# (minimized to tray, or lingering in the background), followed by open apps.
+apps_list() {
+    inf_bin="${INFYNITAE_BIN:-$HOME/.local/bin/infynitae}"
+    snap=$("$inf_bin" msg snapshot 2>/dev/null)
+    {
+        echo "===MAPPED==="
+        printf '%s\n' "$snap" | grep -o '"app_id":"[^"]*"' | cut -d'"' -f4
+        echo "===CLIENTS==="
+        ss -xp 2>/dev/null | awk '
+            /\/wayland-[0-9]+|@\/tmp\/\.X11-unix\/X/ { peer[$8] = 1 }
+            match($0, /users:\(\("([^"]+)",pid=([0-9]+)/, m) { pid[$6] = m[2] }
+            END { for (i in peer) if (i in pid) print pid[i] }
+        '
+        busctl --user list --no-pager 2>/dev/null | awk '$3 ~ /^[0-9]+$/ && $4 == ENVIRON["USER"] { print $3 }'
+        echo "===PS==="
+        ps -u "${USER:-$(id -un)}" -o pid=,ppid=,rss=,comm=
+    } | awk '
+        function norm(c) {
+            c = tolower(c)
+            if (c == "steamwebhelper" || c == "steam-runtime-l") return "steam"
+            return c
+        }
+        function is_Mapped(cl,    m) {
+            if (cl in mapped) return 1
+            for (m in mapped) {
+                if (m != "" && (index(m, cl) > 0 || index(cl, m) > 0)) return 1
+            }
+            return 0
+        }
+        /^===MAPPED===$/ { mode = "mapped"; next }
+        /^===CLIENTS===$/ { mode = "clients"; next }
+        /^===PS===$/ { mode = "ps"; next }
+        mode == "mapped" && $0 != "" { mapped[tolower($0)] = 1; next }
+        mode == "clients" && $1 ~ /^[0-9]+$/ { is_client[$1] = 1; next }
+        mode == "ps" {
+            pid = $1 + 0; ppid = $2 + 0; rss = $3 + 0; comm = $4
+            comm_of[pid] = comm
+            cl = norm(comm)
+            rss_by_app[cl] += rss
+            if (!(cl in leader_pid) || pid < leader_pid[cl]) {
+                leader_pid[cl] = pid
+                leader_name[cl] = (cl == "steam") ? "steam" : comm
+            }
+        }
+        END {
+            for (p in is_client) {
+                if (!(p in comm_of)) continue
+                cl = norm(comm_of[p])
+                if (cl ~ /^(infynitae.*|xwayland.*|wl-paste|wl-clip-persist|mako|swaync.*|dunst|fnott|udiskie|xdg-.*|dbus-.*|systemd.*|wireplumber|pipewire.*|pulseaudio|gvfs.*|at-spi.*|dconf.*|gnome-keyring.*|polkit.*|squeekboard|slurp|grim|fuzzel|rofi|wofi|tofi|busctl|bash|zsh|fish|sh)$/) continue
+                if (seen[cl]++) continue
+                state = is_Mapped(cl) ? "open" : "tray"
+                mb = int((rss_by_app[cl] + 512) / 1024)
+                printf "%s\t%s\t%d MB\t%d\n", state, leader_name[cl], mb, leader_pid[cl]
+            }
+        }
+    ' | sort -t"$(printf '\t')" -k1,1r -k3,3rn
+}
+
+apps_kill() {
+    app_name="$1"
+    sig="${2:-TERM}"
+    app_low=$(printf '%s' "$app_name" | tr '[:upper:]' '[:lower:]')
+    pids=$(ps -u "${USER:-$(id -un)}" -o pid=,comm=,args= | awk -v target="$app_low" '
+        {
+            pid = $1
+            comm = tolower($2)
+            if (comm == "steamwebhelper" || comm == "steam-runtime-l") comm = "steam"
+            args = tolower($0)
+            if (comm == target || (target == "epicgameslaunch" && index(args, "epicgameslauncher") > 0)) {
+                print pid
+            }
+        }
+    ')
+    [ -n "$pids" ] && kill -s "$sig" $pids 2>/dev/null
+}
+
+apps_menu() {
+    list=$(apps_list)
+    [ -z "$list" ] && { note "No background or tray apps running"; return; }
+    choice=$(printf '%s\n' "$list" | awk -F'\t' '{
+        mark = ($1 == "tray") ? "● " : "  "
+        printf "%s%s · %s · %s\n", mark, $2, $1, $3
+    }' | $PICKER)
+    [ -z "$choice" ] && return
+    app=$(printf '%s' "$choice" | sed 's/^\(● \|  \)//; s/ · .*$//')
+    state=$(printf '%s\n' "$list" | awk -F'\t' -v a="$app" '$2 == a { print $1; exit }')
+    if [ "$state" = "tray" ]; then
+        action=$(pick "Quit $app" "Open $app" "Force kill $app")
+    else
+        action=$(pick "Quit $app" "Force kill $app")
+    fi
+    case "$action" in
+        "Quit $app")
+            apps_kill "$app" TERM
+            note "Stopped $app"
+            ;;
+        "Force kill $app")
+            apps_kill "$app" KILL
+            note "Killed $app"
+            ;;
+        "Open $app")
+            cmd=$(printf '%s' "$app" | tr '[:upper:]' '[:lower:]')
+            if have "$cmd"; then
+                "$cmd" >/dev/null 2>&1 &
+            elif have gtk-launch; then
+                gtk-launch "$cmd" >/dev/null 2>&1 &
+            fi
+            ;;
+    esac
+}
+
+# ── Session & power ────────────────────────────────────────────────────────────────────────────
+session_menu() {
+    lock_bin="$HOME/.local/bin/infynitae-lock"
+    [ -x "$lock_bin" ] || lock_bin="$HOME/infynitae/live/lock/infynitae-lock"
+    sess_bin="$HOME/.local/bin/infynitae-session"
+    [ -x "$sess_bin" ] || sess_bin="$HOME/infynitae/live/infynitae-session"
+    choice=$(pick "Lock screen" "Reboot" "Power off" "Log out")
+    case "$choice" in
+        "Lock screen")
+            [ -x "$lock_bin" ] && setsid -f "$lock_bin" >/dev/null 2>&1
+            ;;
+        "Reboot")
+            : > "$HOME/.local/state/infynitae/stop" 2>/dev/null || true
+            [ -x "$lock_bin" ] && setsid -f "$lock_bin" --status "Rebooting…" >/dev/null 2>&1
+            sleep 0.25
+            systemctl reboot
+            ;;
+        "Power off")
+            : > "$HOME/.local/state/infynitae/stop" 2>/dev/null || true
+            [ -x "$lock_bin" ] && setsid -f "$lock_bin" --status "Shutting down…" >/dev/null 2>&1
+            sleep 0.25
+            systemctl poweroff
+            ;;
+        "Log out")
+            [ -x "$sess_bin" ] && "$sess_bin" stop
+            ;;
+    esac
+}
+
 # ── The menu ───────────────────────────────────────────────────────────────────────────────────
 battery=""
 for b in /sys/class/power_supply/BAT*; do
@@ -216,6 +358,12 @@ add() { entries="${entries}${1}
 have bluetoothctl && [ -n "$(ls /sys/class/bluetooth 2>/dev/null)" ] && add "Bluetooth"
 have pactl && add "Volume"
 have pactl && add "Sound output"
+tray_count=$(apps_list | awk -F'\t' '$1 == "tray" { c++ } END { print c + 0 }')
+if [ "$tray_count" -gt 0 ]; then
+    add "Tray & background apps ($tray_count)"
+else
+    add "Tray & background apps"
+fi
 have powerprofilesctl && add "Power mode"
 if dnd_on; then add "Do not disturb: on (turn off)"; else add "Do not disturb"; fi
 if have ffmpeg && { have infynitae-recorder || [ -x "$HOME/.local/bin/infynitae-recorder" ]; }; then
@@ -227,6 +375,7 @@ case "$(battery_limit_now)" in
     *) add "Battery limit: $(battery_limit_now)% (charge to full)" ;;
 esac
 [ -n "$battery" ] && add "$battery"
+add "Session & power"
 
 if [ -z "$entries" ]; then
     note "Nothing to control" "Install NetworkManager, bluez-utils, pipewire-pulse or power-profiles-daemon"
@@ -238,8 +387,10 @@ case "$(printf '%s' "$entries" | $PICKER)" in
     "Bluetooth") bt_menu ;;
     "Sound output") sound_menu ;;
     "Volume") volume_menu ;;
+    "Tray & background apps"*) apps_menu ;;
     "Power mode") power_menu ;;
     "Do not disturb"|"Do not disturb: on (turn off)") dnd_toggle ;;
     "Replay buffer: on (turn off)"|"Replay buffer: off (turn on)") replay_toggle ;;
     "Battery limit: "*) battery_limit_toggle ;;
+    "Session & power") session_menu ;;
 esac

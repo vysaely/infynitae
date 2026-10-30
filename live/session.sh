@@ -3,6 +3,13 @@
 # Executed by the compositor's --exec argument.
 umask 077
 
+# 0. The compositor's own thread runs ahead of apps (nice -10, the most the gamemode group's limit
+# allows without root): if it is starved, every window stutters with it. Only its main thread is
+# raised; the apps this script starts stay at nice 0.
+if [ "$(cat /proc/$PPID/comm 2>/dev/null)" = "infynitae" ]; then
+    renice -n -10 -p "$PPID" >/dev/null 2>&1 || true
+fi
+
 # 1. Environment & Config
 if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"
@@ -64,6 +71,7 @@ fi
 if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment --systemd WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY XAUTHORITY 2>/dev/null || true
 fi
+systemctl --user start infynitae-shutdown-guard.service 2>/dev/null || true
 
 # 2b. Screen sharing: the portal's config for the screens present (infynitae-reload screenshare)
 for r in "$HOME/.local/bin/infynitae-reload" "$HOME/infynitae/live/infynitae-reload"; do

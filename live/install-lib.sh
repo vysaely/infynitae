@@ -291,6 +291,26 @@ PORTAL
         install_root_file "$src/live/remote/50-infynitae-rustdesk.rules" \
             /etc/polkit-1/rules.d/50-infynitae-rustdesk.rules 644
     fi
+    # Clean shutdown/reboot guard (prevents respawning a locked session during system shutdown)
+    mkdir -p "$HOME/.config/systemd/user"
+    cat > "$HOME/.config/systemd/user/infynitae-shutdown-guard.service" <<'GUARD'
+[Unit]
+Description=Stop Infynitae session cleanly and show status screen on shutdown or reboot
+DefaultDependencies=no
+Before=shutdown.target exit.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c 'rm -f "%h/.local/state/infynitae/stop"'
+ExecStop=/bin/sh -c 'mkdir -p "%h/.local/state/infynitae"; : > "%h/.local/state/infynitae/stop"; if ! pgrep -x infynitae-lock >/dev/null 2>&1 && [ -x "%h/.local/bin/infynitae-lock" ]; then setsid -f "%h/.local/bin/infynitae-lock" --status "Shutting down…" >/dev/null 2>&1 || true; fi'
+
+[Install]
+WantedBy=default.target
+GUARD
+    systemctl --user daemon-reload 2>/dev/null || true
+    systemctl --user enable --now infynitae-shutdown-guard.service 2>/dev/null || true
+    sh "$src/live/setup-autologin.sh" --autostart >/dev/null 2>&1 || true
 }
 
 # The parts' own apps open their files: folders in Thunar (not a terminal that also says it opens

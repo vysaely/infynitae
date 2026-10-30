@@ -128,6 +128,39 @@ impl EGLContext {
         Self::new_internal(display, None, None, None, true)
     }
 
+    /// [`EGLContext::new_lose_context_on_reset`] with a scheduling priority
+    /// (`EGL_IMG_context_priority`): a hint the driver may refuse, in which case the context is
+    /// made at the priority it allows ([`EGLContext::priority`] tells which).
+    pub fn new_lose_context_on_reset_with_priority(
+        display: &EGLDisplay,
+        priority: ContextPriority,
+    ) -> Result<EGLContext, Error> {
+        Self::new_internal(display, None, None, Some(priority), true)
+    }
+
+    /// The priority the driver gave this context; `None` without `EGL_IMG_context_priority`.
+    pub fn priority(&self) -> Option<ContextPriority> {
+        let supported = self
+            .display
+            .extensions()
+            .iter()
+            .any(|x| x == "EGL_IMG_context_priority");
+        if !supported {
+            return None;
+        }
+        let mut value = 0;
+        wrap_egl_call_bool(|| unsafe {
+            ffi::egl::QueryContext(
+                **self.display.get_display_handle(),
+                self.context,
+                ffi::egl::CONTEXT_PRIORITY_LEVEL_IMG as ffi::egl::types::EGLint,
+                &mut value,
+            )
+        })
+        .ok()?;
+        ContextPriority::try_from(value as ffi::egl::types::EGLenum).ok()
+    }
+
     /// Creates a new configless `EGLContext` with the specified priority from a given `EGLDisplay`
     ///
     /// Note: The priority is a hint that might be ignored by the underlying platform.

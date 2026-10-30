@@ -77,15 +77,19 @@ if [ ! -f "$PROFILE_TARGET" ]; then
     esac
     chown "$USER_NAME:" "$PROFILE_TARGET"
 fi
-AUTORUN_MARKER="# Infynitae tty1 autostart v2"
+AUTORUN_MARKER="# Infynitae tty1 autostart v3"
 if ! grep -q "$AUTORUN_MARKER" "$PROFILE_TARGET"; then
-    # an older block (it ended the login with the session) is replaced
-    sed -i '/^# Infynitae tty1 autostart$/,/^fi$/d' "$PROFILE_TARGET"
+    # an older block is replaced
+    sed -i '/^# Infynitae tty1 autostart/,/^fi$/d' "$PROFILE_TARGET"
     cat <<'EOF' >> "$PROFILE_TARGET"
 
-# Infynitae tty1 autostart v2
+# Infynitae tty1 autostart v3
 if [ -z "$WAYLAND_DISPLAY" ] && [ "$XDG_VTNR" = 1 ] && [ -x "$HOME/.local/bin/infynitae-session" ]; then
     "$HOME/.local/bin/infynitae-session"
+    if [ "$(systemctl is-system-running 2>/dev/null)" = "stopping" ] || \
+       systemctl list-jobs 2>/dev/null | grep -qE 'shutdown\.target|reboot\.target|poweroff\.target|halt\.target'; then
+        exit 0
+    fi
     # the session ended (stopped, or its lock screen could not start): a shell on this console
     # only after your password, since with autologin nobody typed one. A wrong one logs out and
     # tty1 starts the session again, locked.
