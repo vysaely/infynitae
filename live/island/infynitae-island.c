@@ -611,7 +611,7 @@ static void update_surface_input_region(IslandOutput *out) {
     } else {
         wl_region_add(reg, 0, 0, out->width, out->height);
         zwlr_layer_surface_v1_set_keyboard_interactivity(
-            out->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
+            out->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
     }
     wl_surface_set_input_region(out->surface, reg);
     wl_region_destroy(reg);
