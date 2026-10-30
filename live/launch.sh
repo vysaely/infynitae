@@ -500,9 +500,12 @@ case "$ACTION" in
         esac
         ;;
     control-menu)
-        # Super+A: the control menu (Wi-Fi, Bluetooth, sound output, power), or CONTROL_MENU
+        # Super+A: the control flyout (or CONTROL_MENU if set)
         case "${CONTROL_MENU:-auto}" in
             auto|"")
+                if [ -x "$HOME/.local/bin/infynitae-island" ]; then
+                    exec "$HOME/.local/bin/infynitae-island" control
+                fi
                 for m in "$HOME/.local/bin/infynitae-control-menu" "$HOME/infynitae/live/control-menu"; do
                     if [ -x "$m" ]; then exec "$m"; fi
                 done

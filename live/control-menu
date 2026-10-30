@@ -346,6 +346,11 @@ session_menu() {
 }
 
 # ── The menu ───────────────────────────────────────────────────────────────────────────────────
+if [ "${1:-}" = "apps" ]; then
+    apps_menu
+    exit 0
+fi
+
 battery=""
 for b in /sys/class/power_supply/BAT*; do
     [ -r "$b/capacity" ] && battery="Battery $(cat "$b/capacity")% ($(cat "$b/status" 2>/dev/null))" && break
