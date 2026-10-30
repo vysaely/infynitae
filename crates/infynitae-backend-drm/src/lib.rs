@@ -1143,74 +1143,71 @@ pub fn run_console_with(
     if let Ok(home) = std::env::var("HOME") {
         let config_path = format!("{home}/.config/infynitae/config");
         if let Ok(content) = std::fs::read_to_string(&config_path) {
-            for line in content.lines() {
-                let line_clean = line.split('#').next().unwrap_or("").trim();
-                if let Some((k, v)) = line_clean.split_once('=') {
-                    let key = k.trim();
-                    let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
-                    if key == "OUTPUT_ORDER" {
-                        output_order = val
-                            .split(',')
-                            .map(|s| s.trim().to_lowercase())
-                            .filter(|s| !s.is_empty())
-                            .collect();
-                    } else if key == "OUTPUT_LAYOUT" && val.eq_ignore_ascii_case("right-to-left") {
-                        output_layout_reverse = true;
-                    } else if key == "IDLE_SLEEP_TIMEOUT_MIN" {
-                        if let Ok(m) = val.parse::<u32>() {
-                            idle_timeout_min = m;
+            for (k, v) in content.lines().filter_map(infynitae_wayland::config_line) {
+                let key = k.trim();
+                let val = v.trim();
+                if key == "OUTPUT_ORDER" {
+                    output_order = val
+                        .split(',')
+                        .map(|s| s.trim().to_lowercase())
+                        .filter(|s| !s.is_empty())
+                        .collect();
+                } else if key == "OUTPUT_LAYOUT" && val.eq_ignore_ascii_case("right-to-left") {
+                    output_layout_reverse = true;
+                } else if key == "IDLE_SLEEP_TIMEOUT_MIN" {
+                    if let Ok(m) = val.parse::<u32>() {
+                        idle_timeout_min = m;
+                    }
+                } else if key == "IDLE_AUTO_LOCK" {
+                    idle_auto_lock =
+                        !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                } else if key.starts_with("OUTPUT_") && key.ends_with("_SCALE") {
+                    let conn_name = key
+                        .trim_start_matches("OUTPUT_")
+                        .trim_end_matches("_SCALE")
+                        .replace('_', "-");
+                    if let Ok(s) = val.parse::<f64>() {
+                        if let Some(s_120) = validate_scale(s) {
+                            custom_scales.insert(conn_name.to_lowercase(), s_120);
+                        } else {
+                            eprintln!(
+                                "[infynitae] OUTPUT_{}_SCALE={s} outside accepted range (0.25..8.0), ignoring",
+                                conn_name
+                            );
                         }
-                    } else if key == "IDLE_AUTO_LOCK" {
-                        idle_auto_lock =
-                            !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
-                    } else if key.starts_with("OUTPUT_") && key.ends_with("_SCALE") {
-                        let conn_name = key
-                            .trim_start_matches("OUTPUT_")
-                            .trim_end_matches("_SCALE")
-                            .replace('_', "-");
-                        if let Ok(s) = val.parse::<f64>() {
-                            if let Some(s_120) = validate_scale(s) {
-                                custom_scales.insert(conn_name.to_lowercase(), s_120);
-                            } else {
-                                eprintln!(
-                                    "[infynitae] OUTPUT_{}_SCALE={s} outside accepted range (0.25..8.0), ignoring",
-                                    conn_name
-                                );
-                            }
+                    }
+                } else if key.starts_with("OUTPUT_") && key.ends_with("_TRANSFORM") {
+                    let conn_name = key
+                        .trim_start_matches("OUTPUT_")
+                        .trim_end_matches("_TRANSFORM")
+                        .replace('_', "-");
+                    match parse_transform(val) {
+                        Some(t) => {
+                            custom_transforms.insert(conn_name.to_lowercase(), t);
                         }
-                    } else if key.starts_with("OUTPUT_") && key.ends_with("_TRANSFORM") {
-                        let conn_name = key
-                            .trim_start_matches("OUTPUT_")
-                            .trim_end_matches("_TRANSFORM")
-                            .replace('_', "-");
-                        match parse_transform(val) {
-                            Some(t) => {
-                                custom_transforms.insert(conn_name.to_lowercase(), t);
-                            }
-                            None => eprintln!(
-                                "[infynitae] OUTPUT_{conn_name}_TRANSFORM={val}: not a rotation (normal, 90, 180, 270, flipped, flipped-90, flipped-180, flipped-270), ignoring"
-                            ),
-                        }
-                    } else if key.starts_with("OUTPUT_") && key.ends_with("_RATE") {
-                        let conn_name = key
-                            .trim_start_matches("OUTPUT_")
-                            .trim_end_matches("_RATE")
-                            .replace('_', "-");
-                        if let Ok(r) = val.parse::<f64>() {
-                            custom_rates
-                                .insert(conn_name.to_lowercase(), (r * 1000.0).round() as u32);
-                        }
-                    } else if key.starts_with("OUTPUT_") && key.ends_with("_MODE") {
-                        let conn_name = key
-                            .trim_start_matches("OUTPUT_")
-                            .trim_end_matches("_MODE")
-                            .replace('_', "-");
-                        if let Some((w_s, h_s)) = val.split_once('x')
-                            && let (Ok(w), Ok(h)) =
-                                (w_s.trim().parse::<u16>(), h_s.trim().parse::<u16>())
-                        {
-                            custom_modes.insert(conn_name.to_lowercase(), (w, h));
-                        }
+                        None => eprintln!(
+                            "[infynitae] OUTPUT_{conn_name}_TRANSFORM={val}: not a rotation (normal, 90, 180, 270, flipped, flipped-90, flipped-180, flipped-270), ignoring"
+                        ),
+                    }
+                } else if key.starts_with("OUTPUT_") && key.ends_with("_RATE") {
+                    let conn_name = key
+                        .trim_start_matches("OUTPUT_")
+                        .trim_end_matches("_RATE")
+                        .replace('_', "-");
+                    if let Ok(r) = val.parse::<f64>() {
+                        custom_rates
+                            .insert(conn_name.to_lowercase(), (r * 1000.0).round() as u32);
+                    }
+                } else if key.starts_with("OUTPUT_") && key.ends_with("_MODE") {
+                    let conn_name = key
+                        .trim_start_matches("OUTPUT_")
+                        .trim_end_matches("_MODE")
+                        .replace('_', "-");
+                    if let Some((w_s, h_s)) = val.split_once('x')
+                        && let (Ok(w), Ok(h)) =
+                            (w_s.trim().parse::<u16>(), h_s.trim().parse::<u16>())
+                    {
+                        custom_modes.insert(conn_name.to_lowercase(), (w, h));
                     }
                 }
             }
@@ -1380,8 +1377,7 @@ pub fn run_console_with(
                         s.shows_locked = s.queued_locked;
                     }
                     let id = s.id;
-                    let now = infynitae_wayland::presentation_clock_now();
-                    data.state.frame_tick(id, now);
+                    data.state.frame_tick(id, shown);
                     confirm_lock(data);
                     data.session.request_frame();
                 }
@@ -1555,21 +1551,18 @@ pub fn run_console_with(
                         data.direct_scanout = ds;
                     }
                     if let Ok(content) = std::fs::read_to_string(path) {
-                        for line in content.lines() {
-                            let line_clean = line.split('#').next().unwrap_or("").trim();
-                            if let Some((k, v)) = line_clean.split_once('=') {
-                                let key = k.trim();
-                                let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
-                                if key == "IDLE_SLEEP_TIMEOUT_MIN" {
-                                    if let Ok(m) = val.parse::<u32>() {
-                                        data.idle_sleep_timeout_min = m;
-                                    }
-                                } else if key == "IDLE_AUTO_LOCK" {
-                                    data.idle_auto_lock = !matches!(
-                                        val.to_lowercase().as_str(),
-                                        "0" | "false" | "off" | "no"
-                                    );
+                        for (k, v) in content.lines().filter_map(infynitae_wayland::config_line) {
+                            let key = k.trim();
+                            let val = v.trim();
+                            if key == "IDLE_SLEEP_TIMEOUT_MIN" {
+                                if let Ok(m) = val.parse::<u32>() {
+                                    data.idle_sleep_timeout_min = m;
                                 }
+                            } else if key == "IDLE_AUTO_LOCK" {
+                                data.idle_auto_lock = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                             }
                         }
                     }

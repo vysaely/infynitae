@@ -261,6 +261,16 @@ COLOR_SCHEME="prefer-dark"
     # default: prefer-dark
     # options: prefer-dark  · prefer-light
 
+SURFACE_COLOR="#111317"
+    # Background of panels, menus, notifications, lock box, and managed terminals
+    # default: "#111317"
+    # options: "#111317"  · any "#rrggbb"
+
+TEXT_COLOR="#eef2f8"
+    # Primary text color across panels, menus, notifications, and managed apps
+    # default: "#eef2f8"
+    # options: "#eef2f8"  · any "#rrggbb"
+
 WALLPAPER=""
     # Wallpaper image (PNG, JPG, WebP; "$HOME/…" works) [save]
     # default: ""

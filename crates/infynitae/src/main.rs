@@ -394,12 +394,10 @@ fn main() -> ExitCode {
     if let Ok(home) = std::env::var("HOME") {
         let config_path = format!("{home}/.config/infynitae/config");
         if let Ok(content) = std::fs::read_to_string(config_path) {
-            for line in content.lines() {
-                let line_clean = line.split('#').next().unwrap_or("").trim();
-                if let Some((k, v)) = line_clean.split_once('=') {
-                    let key = k.trim();
-                    let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
-                    match key {
+            for (key, val) in content.lines().filter_map(infynitae_wayland::config_line) {
+                let key = key.trim();
+                let val = val.trim();
+                match key {
                         "PAN_MODE" => match val.to_lowercase().as_str() {
                             "rts" => core.set_pan_mode(infynitae_core::navigation::PanMode::Rts),
                             "free" => core.set_pan_mode(infynitae_core::navigation::PanMode::Free),
@@ -501,7 +499,6 @@ fn main() -> ExitCode {
                             }
                         }
                         _ => {}
-                    }
                 }
             }
         }

@@ -46,6 +46,8 @@
 #define MAX_WINDOWS 24
 #define MAX_APPS 160
 #define VISIBLE_APPS 8
+#define MAX_CLIP_ITEMS 24
+#define VISIBLE_CLIP_ITEMS 8
 #define MAX_TRAY_APPS 8
 #define MAX_SNI_ITEMS 16
 #define MAX_CTX_ITEMS 10
@@ -55,8 +57,9 @@
 
 typedef enum {
     MODE_CLOSED = 0,
-    MODE_CENTER = 1,  /* Super+W: Search + Open Window Tabs */
-    MODE_CONTROL = 2  /* Super+A: System Control + Tray Apps */
+    MODE_CENTER = 1,    /* Super+W: Search + Open Window Tabs */
+    MODE_CONTROL = 2,   /* Super+A: System Control + Tray Apps */
+    MODE_CLIPBOARD = 3  /* Super+V: Clipboard History */
 } IslandMode;
 
 typedef enum {
@@ -113,6 +116,11 @@ typedef struct {
     char app[32];
     char text[128];
 } NotifItem;
+
+typedef struct {
+    char raw_line[256];
+    char preview[128];
+} ClipItem;
 
 typedef struct {
     double x, y, w, h;
@@ -235,9 +243,17 @@ typedef struct IslandApp {
     uint32_t cleared_notif_id;
     uint32_t max_notif_id;
 
+    ClipItem clip_items[MAX_CLIP_ITEMS];
+    int clip_count;
+    int filtered_clips[MAX_CLIP_ITEMS];
+    int filtered_clip_count;
+
     /* Config & Status state */
     bool bottom_edge;
     bool control_on_left;
+    double surface_rgb[3];
+    double border_rgb[3];
+    double text_rgb[3];
     bool wifi_on;
     char wifi_label[48];
     bool bt_on;
@@ -285,6 +301,8 @@ enum {
     ACT_REBOOT,
     ACT_POWEROFF,
     ACT_LOGOUT,
+    ACT_CLIP_ITEM,
+    ACT_CLIP_CLEAR,
     ACT_CENTER_EDGE,
     ACT_CORNER_EDGE
 };
@@ -294,6 +312,7 @@ static volatile sig_atomic_t g_sig_cmd = 0;
 static void on_sigusr1(int sig) { (void)sig; g_sig_cmd = 1; }
 static void on_sigusr2(int sig) { (void)sig; g_sig_cmd = 2; }
 static void on_sigterm(int sig) { (void)sig; g_sig_cmd = 3; }
+static void on_sigrtmin(int sig) { (void)sig; g_sig_cmd = 4; }
 
 static void request_frame(IslandOutput *out);
 static void damage_all(IslandApp *app);
@@ -696,6 +715,18 @@ static void update_filters(IslandApp *app) {
             app->filtered_apps[app->filtered_app_count++] = i;
         }
     }
+    app->filtered_clip_count = 0;
+    for (int i = 0; i < app->clip_count; i++) {
+        if (str_contains_ci(app->clip_items[i].preview, app->search)) {
+            app->filtered_clips[app->filtered_clip_count++] = i;
+        }
+    }
+    if (app->mode == MODE_CLIPBOARD || app->target_mode == MODE_CLIPBOARD) {
+        int shown = app->filtered_clip_count < VISIBLE_CLIP_ITEMS ? app->filtered_clip_count : VISIBLE_CLIP_ITEMS;
+        if (shown <= 0) app->selected_idx = 0;
+        else if (app->selected_idx >= shown) app->selected_idx = shown - 1;
+        return;
+    }
     bool show_flyout = (app->launcher_open || app->search_len > 0);
     int max_w = app->filtered_win_count < 6 ? app->filtered_win_count : 6;
     int max_a = show_flyout ? (app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS) : 0;
@@ -920,6 +951,28 @@ static void sanitize_inline_text(char *dst, size_t dst_sz, const char *src) {
     dst[out] = '\0';
 }
 
+static void parse_clipboard_buf(IslandApp *app, char *buf) {
+    app->clip_count = 0;
+    char *saveptr = NULL;
+    for (char *line = strtok_r(buf, "\n", &saveptr);
+         line && app->clip_count < MAX_CLIP_ITEMS;
+         line = strtok_r(NULL, "\n", &saveptr)) {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
+        if (len == 0) continue;
+
+        ClipItem *ci = &app->clip_items[app->clip_count++];
+        snprintf(ci->raw_line, sizeof(ci->raw_line), "%s", line);
+        const char *tab = strchr(line, '\t');
+        const char *body = tab ? (tab + 1) : line;
+        sanitize_inline_text(ci->preview, sizeof(ci->preview), body);
+        if (ci->preview[0] == '\0') {
+            snprintf(ci->preview, sizeof(ci->preview), "(Clipboard item)");
+        }
+    }
+    update_filters(app);
+}
+
 static void fetch_mako_notifications(IslandApp *app) {
     app->notif_count = 0;
     if (!app->dbus) return;
@@ -1104,6 +1157,8 @@ static void start_async_refresh(IslandApp *app, int kind) {
                       "' | head -n 6",
                       (char *)NULL);
             }
+        } else if (kind == 4) {
+            execl("/bin/sh", "sh", "-c", "cliphist list 2>/dev/null | head -n 24", (char *)NULL);
         }
         _exit(127);
     }
@@ -1128,6 +1183,10 @@ static void refresh_control_data(IslandApp *app) {
 static void refresh_subpanel_data(IslandApp *app) {
     app->sub_count = 0;
     start_async_refresh(app, 3);
+}
+
+static void refresh_clipboard_data(IslandApp *app) {
+    start_async_refresh(app, 4);
 }
 
 /* ========================================================================== */
@@ -1253,9 +1312,23 @@ static void add_hitbox(IslandApp *app, double x, double y, double w, double h, i
     add_hitbox_nav(app, x, y, w, h, action_id, index, -1);
 }
 
+static void parse_hex_rgb(const char *val, double out[3]) {
+    while (*val && (*val == ' ' || *val == '\t' || *val == '"' || *val == '\'')) val++;
+    if (*val == '#') val++;
+    unsigned int r = 0, g = 0, b = 0;
+    if (sscanf(val, "%02x%02x%02x", &r, &g, &b) == 3) {
+        out[0] = r / 255.0;
+        out[1] = g / 255.0;
+        out[2] = b / 255.0;
+    }
+}
+
 static void load_position_config(IslandApp *app) {
     app->bottom_edge = true;
     app->control_on_left = false;
+    app->surface_rgb[0] = 0x11 / 255.0; app->surface_rgb[1] = 0x13 / 255.0; app->surface_rgb[2] = 0x17 / 255.0;
+    app->border_rgb[0]  = 0x33 / 255.0; app->border_rgb[1]  = 0x3b / 255.0; app->border_rgb[2]  = 0x54 / 255.0;
+    app->text_rgb[0]    = 0xee / 255.0; app->text_rgb[1]    = 0xf2 / 255.0; app->text_rgb[2]    = 0xf8 / 255.0;
     const char *home = getenv("HOME");
     if (!home) return;
     char path[512];
@@ -1264,12 +1337,20 @@ static void load_position_config(IslandApp *app) {
     if (!f) return;
     char line[256];
     while (fgets(line, sizeof(line), f)) {
-        if (strncmp(line, "ISLAND_EDGE=", 12) == 0) {
-            if (strstr(line + 12, "top")) app->bottom_edge = false;
-            else if (strstr(line + 12, "bottom")) app->bottom_edge = true;
-        } else if (strncmp(line, "ISLAND_CONTROL_SIDE=", 20) == 0) {
-            if (strstr(line + 20, "left")) app->control_on_left = true;
-            else if (strstr(line + 20, "right")) app->control_on_left = false;
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (strncmp(p, "ISLAND_EDGE=", 12) == 0) {
+            if (strstr(p + 12, "top")) app->bottom_edge = false;
+            else if (strstr(p + 12, "bottom")) app->bottom_edge = true;
+        } else if (strncmp(p, "ISLAND_CONTROL_SIDE=", 20) == 0) {
+            if (strstr(p + 20, "left")) app->control_on_left = true;
+            else if (strstr(p + 20, "right")) app->control_on_left = false;
+        } else if (strncmp(p, "SURFACE_COLOR=", 14) == 0) {
+            parse_hex_rgb(p + 14, app->surface_rgb);
+        } else if (strncmp(p, "BORDER_ACTIVE=", 14) == 0) {
+            parse_hex_rgb(p + 14, app->border_rgb);
+        } else if (strncmp(p, "TEXT_COLOR=", 11) == 0) {
+            parse_hex_rgb(p + 11, app->text_rgb);
         }
     }
     fclose(f);
@@ -1462,11 +1543,11 @@ static void render_output(IslandOutput *out) {
             cur_dw = (int)bar_w + 4;
             cur_dh = (int)total_h + 4;
 
-            /* Single flat dark obsidian window (#111317) + 1px #333b54 border */
-            cairo_set_source_rgba(cr, 0.067, 0.075, 0.090, 0.97 * ease);
+            /* Single flat dark obsidian window + 1px border from config */
+            cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.97 * ease);
             fill_rect(cr, bar_x, bar_y, bar_w, total_h);
 
-            cairo_set_source_rgba(cr, 0.20, 0.23, 0.33, 0.90 * ease);
+            cairo_set_source_rgba(cr, app->border_rgb[0], app->border_rgb[1], app->border_rgb[2], 0.90 * ease);
             cairo_set_line_width(cr, 1.0);
             draw_rect(cr, bar_x, bar_y, bar_w, total_h);
             cairo_stroke(cr);
@@ -1567,11 +1648,11 @@ static void render_output(IslandOutput *out) {
             cur_dw = (int)ctrl_w + 4;
             cur_dh = (int)ctrl_h + 4;
 
-            /* Single flat dark obsidian window (#111317) + 1px #333b54 border */
-            cairo_set_source_rgba(cr, 0.067, 0.075, 0.090, 0.97 * ease);
+            /* Single flat dark obsidian window + 1px border from config */
+            cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.97 * ease);
             fill_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h);
 
-            cairo_set_source_rgba(cr, 0.20, 0.23, 0.33, 0.90 * ease);
+            cairo_set_source_rgba(cr, app->border_rgb[0], app->border_rgb[1], app->border_rgb[2], 0.90 * ease);
             cairo_set_line_width(cr, 1.0);
             draw_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h);
             cairo_stroke(cr);
@@ -1818,6 +1899,78 @@ static void render_output(IslandOutput *out) {
                 add_hitbox_nav(app, px_b, ry, pw, ph, p_acts[i], 0, p_nav);
             }
         }
+
+        /* ─────────────────────────────────────────────────────────────────── */
+        /* C. MINIMALIST CLIPBOARD BAR (Super+V) — single outer 1px border     */
+        /* ─────────────────────────────────────────────────────────────────── */
+        if (active_m == MODE_CLIPBOARD) {
+            int shown_clips = app->filtered_clip_count < VISIBLE_CLIP_ITEMS
+                ? app->filtered_clip_count : VISIBLE_CLIP_ITEMS;
+            int rows = shown_clips > 0 ? shown_clips : 1;
+            double row_h = 28.0;
+            double item_h = 24.0;
+            double ext_h = 1.0 + rows * item_h + 4.0;
+            double bar_w = w - 160.0;
+            if (bar_w > 580.0) bar_w = 580.0;
+            if (bar_w < 360.0) bar_w = w - 24.0;
+
+            double total_h = row_h + ext_h;
+            double bar_x = round((w - bar_w) / 2.0);
+            double bar_y = round(app->bottom_edge
+                ? (h + total_h * (1.0 - ease) - (total_h + 8.0) * ease)
+                : (-total_h * (1.0 - ease) + 8.0 * ease));
+
+            cur_dx = (int)bar_x - 2;
+            cur_dy = (int)bar_y - 2;
+            cur_dw = (int)bar_w + 4;
+            cur_dh = (int)total_h + 4;
+
+            cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.97 * ease);
+            fill_rect(cr, bar_x, bar_y, bar_w, total_h);
+
+            cairo_set_source_rgba(cr, app->border_rgb[0], app->border_rgb[1], app->border_rgb[2], 0.90 * ease);
+            cairo_set_line_width(cr, 1.0);
+            draw_rect(cr, bar_x, bar_y, bar_w, total_h);
+            cairo_stroke(cr);
+
+            double top_y = app->bottom_edge ? (bar_y + ext_h) : bar_y;
+            double list_y = app->bottom_edge ? (bar_y + 2.0) : (bar_y + row_h + 1.0);
+
+            if (app->search_len > 0) {
+                cairo_set_source_rgba(cr, 0.94, 0.96, 0.98, 0.96);
+                draw_text_left(cr, layout, "Sans 8.5", app->search, bar_x + 10.0, top_y + row_h / 2.0, bar_w - 80.0);
+            } else {
+                cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
+                draw_text_left(cr, layout, "Sans 8.5", "Search clipboard…", bar_x + 10.0, top_y + row_h / 2.0, bar_w - 80.0);
+            }
+
+            if (app->clip_count > 0) {
+                cairo_set_source_rgba(cr, 0.62, 0.68, 0.78, 0.90);
+                draw_text_right(cr, layout, "Sans 7.5", "Clear", bar_x + bar_w - 10.0, top_y + row_h / 2.0);
+                add_hitbox(app, bar_x + bar_w - 56.0, top_y, 55.0, row_h, ACT_CLIP_CLEAR, 0);
+            }
+
+            draw_hline(cr, bar_x + 1.0, app->bottom_edge ? top_y : (bar_y + row_h), bar_w - 2.0);
+
+            if (shown_clips == 0) {
+                cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.80);
+                draw_text_left(cr, layout, "Sans 8.5",
+                               app->clip_count == 0 ? "Clipboard is empty" : "No matching clipboard items",
+                               bar_x + 10.0, list_y + item_h / 2.0, bar_w - 20.0);
+            } else {
+                for (int i = 0; i < shown_clips; i++) {
+                    int cidx = app->filtered_clips[i];
+                    ClipItem *ci = &app->clip_items[cidx];
+                    double cy = list_y + i * item_h;
+                    bool sel = (app->selected_idx == i);
+
+                    draw_bare_item(cr, bar_x + 1.0, cy, bar_w - 2.0, item_h, false, sel);
+                    cairo_set_source_rgba(cr, sel ? 0.96 : 0.76, sel ? 0.98 : 0.81, sel ? 1.0 : 0.88, 0.95);
+                    draw_text_left(cr, layout, "Sans 8.5", ci->preview, bar_x + 10.0, cy + item_h / 2.0, bar_w - 22.0);
+                    add_hitbox_nav(app, bar_x + 1.0, cy, bar_w - 2.0, item_h, ACT_CLIP_ITEM, cidx, i);
+                }
+            }
+        }
     }
 
     g_object_unref(layout);
@@ -1872,6 +2025,8 @@ static void set_mode(IslandApp *app, IslandMode new_mode) {
         } else if (new_mode == MODE_CONTROL) {
             refresh_control_data(app);
             app->selected_idx = (app->tray_count > 0) ? 6 : 0;
+        } else if (new_mode == MODE_CLIPBOARD) {
+            refresh_clipboard_data(app);
         }
     } else {
         app->mode = MODE_CLOSED;
@@ -1938,12 +2093,59 @@ static void quit_tray_at(IslandApp *app, int tidx, const char *sig_name) {
     damage_all(app);
 }
 
+static void run_cliphist_with_stdin(const char *cmd, const char *line) {
+    if (!cmd || !line || !*line) return;
+    int pfd[2];
+    if (pipe(pfd) < 0) return;
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid();
+        close(pfd[1]);
+        dup2(pfd[0], STDIN_FILENO);
+        close(pfd[0]);
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            if (devnull > 2) close(devnull);
+        }
+        execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
+        _exit(127);
+    } else if (pid > 0) {
+        close(pfd[0]);
+        size_t len = strlen(line);
+        ssize_t w = write(pfd[1], line, len);
+        (void)w;
+        w = write(pfd[1], "\n", 1);
+        (void)w;
+        close(pfd[1]);
+    } else {
+        close(pfd[0]);
+        close(pfd[1]);
+    }
+}
+
+static void delete_clip_at(IslandApp *app, int cidx) {
+    if (cidx < 0 || cidx >= app->clip_count) return;
+    run_cliphist_with_stdin("cliphist delete 2>/dev/null", app->clip_items[cidx].raw_line);
+    for (int k = cidx; k < app->clip_count - 1; k++) {
+        app->clip_items[k] = app->clip_items[k + 1];
+    }
+    app->clip_count--;
+    update_filters(app);
+    damage_all(app);
+}
+
 static void close_selected_item(IslandApp *app) {
     for (int i = 0; i < app->hitbox_count; i++) {
         HitBox *hb = &app->hitboxes[i];
         if (hb->nav_idx == app->selected_idx) {
             if (hb->action_id == ACT_WIN_ITEM) {
                 close_window_at(app, hb->index);
+                return;
+            }
+            if (hb->action_id == ACT_CLIP_ITEM) {
+                delete_clip_at(app, hb->index);
                 return;
             }
             if (hb->action_id == ACT_TRAY_ITEM) {
@@ -1993,11 +2195,19 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
             close_window_at(app, hb->index);
             return true;
         }
+        if (hb->action_id == ACT_CLIP_ITEM) {
+            delete_clip_at(app, hb->index);
+            return true;
+        }
     }
 
     if (button == BTN_MIDDLE) {
         if (hb->action_id == ACT_WIN_ITEM) {
             close_window_at(app, hb->index);
+            return true;
+        }
+        if (hb->action_id == ACT_CLIP_ITEM) {
+            delete_clip_at(app, hb->index);
             return true;
         }
         if (hb->action_id == ACT_TRAY_ITEM) {
@@ -2229,15 +2439,52 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
     }
     case ACT_REBOOT:
         set_mode(app, MODE_CLOSED);
-        spawn_detached(": > ~/.local/state/infynitae/stop; setsid -f ~/.local/bin/infynitae-lock --status 'Rebooting…'; sleep 0.25; systemctl reboot");
+        spawn_detached(
+            ": > ~/.local/state/infynitae/stop; "
+            "pkill -f 'infynitae.*restore watch' 2>/dev/null || true; "
+            "(~/.local/bin/infynitae restore save 2>/dev/null || infynitae restore save 2>/dev/null || true); "
+            "rm -f ~/.local/state/infynitae/lock.log; "
+            "setsid -f ~/.local/bin/infynitae-lock --status 'Rebooting…' >/dev/null 2>&1; "
+            "i=0; while [ $i -lt 15 ]; do "
+            "  grep -q 'ready on' ~/.local/state/infynitae/lock.log 2>/dev/null && break; "
+            "  sleep 0.05; i=$((i+1)); "
+            "done; "
+            "systemctl reboot");
         return true;
     case ACT_POWEROFF:
         set_mode(app, MODE_CLOSED);
-        spawn_detached(": > ~/.local/state/infynitae/stop; setsid -f ~/.local/bin/infynitae-lock --status 'Shutting down…'; sleep 0.25; systemctl poweroff");
+        spawn_detached(
+            ": > ~/.local/state/infynitae/stop; "
+            "pkill -f 'infynitae.*restore watch' 2>/dev/null || true; "
+            "(~/.local/bin/infynitae restore save 2>/dev/null || infynitae restore save 2>/dev/null || true); "
+            "rm -f ~/.local/state/infynitae/lock.log; "
+            "setsid -f ~/.local/bin/infynitae-lock --status 'Shutting down…' >/dev/null 2>&1; "
+            "i=0; while [ $i -lt 15 ]; do "
+            "  grep -q 'ready on' ~/.local/state/infynitae/lock.log 2>/dev/null && break; "
+            "  sleep 0.05; i=$((i+1)); "
+            "done; "
+            "systemctl poweroff");
         return true;
     case ACT_LOGOUT:
         set_mode(app, MODE_CLOSED);
-        spawn_detached("~/.local/bin/infynitae-session stop");
+        spawn_detached(
+            "pkill -f 'infynitae.*restore watch' 2>/dev/null || true; "
+            "(~/.local/bin/infynitae restore save 2>/dev/null || infynitae restore save 2>/dev/null || true); "
+            "~/.local/bin/infynitae-session stop");
+        return true;
+    case ACT_CLIP_ITEM: {
+        int cidx = hb->index;
+        if (cidx >= 0 && cidx < app->clip_count) {
+            run_cliphist_with_stdin("cliphist decode 2>/dev/null | wl-copy", app->clip_items[cidx].raw_line);
+            set_mode(app, MODE_CLOSED);
+        }
+        return true;
+    }
+    case ACT_CLIP_CLEAR:
+        app->clip_count = 0;
+        app->filtered_clip_count = 0;
+        spawn_detached("cliphist wipe 2>/dev/null");
+        damage_all(app);
         return true;
     }
     return false;
@@ -2595,6 +2842,10 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
             set_mode(app, app->mode == MODE_CONTROL ? MODE_CLOSED : MODE_CONTROL);
             return;
         }
+        if (sym == XKB_KEY_v || sym == XKB_KEY_V) {
+            set_mode(app, app->mode == MODE_CLIPBOARD ? MODE_CLOSED : MODE_CLIPBOARD);
+            return;
+        }
         if (sym == XKB_KEY_c || sym == XKB_KEY_C || sym == XKB_KEY_q || sym == XKB_KEY_Q) {
             close_selected_item(app);
             return;
@@ -2639,7 +2890,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
             toggle_subpanel(app, app->selected_idx == 0 ? SUB_WIFI : SUB_BT);
             return;
         } else if (total > 0) {
-            int step = (app->mode == MODE_CONTROL && app->selected_idx >= 6) ? 1 : 2;
+            int step = (app->mode == MODE_CLIPBOARD || (app->mode == MODE_CONTROL && app->selected_idx >= 6)) ? 1 : 2;
             int next = app->selected_idx + step;
             app->selected_idx = (next < total) ? next : total - 1;
         }
@@ -2648,7 +2899,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
     }
     if (sym == XKB_KEY_Up) {
         if (total > 0) {
-            int step = (app->mode == MODE_CONTROL && app->selected_idx > 6) ? 1 : 2;
+            int step = (app->mode == MODE_CLIPBOARD || (app->mode == MODE_CONTROL && app->selected_idx > 6)) ? 1 : 2;
             int prev = app->selected_idx - step;
             app->selected_idx = (prev >= 0) ? prev : 0;
         }
@@ -2671,10 +2922,14 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
             memcpy(app->search + app->search_len, utf8, (size_t)len);
             app->search_len += (size_t)len;
             app->search[app->search_len] = '\0';
-            app->launcher_open = true;
+            if (app->mode == MODE_CENTER) app->launcher_open = true;
             update_filters(app);
-            int sw = app->filtered_win_count < 6 ? app->filtered_win_count : 6;
-            app->selected_idx = (sw > 0) ? 0 : sw;
+            if (app->mode == MODE_CLIPBOARD) {
+                app->selected_idx = 0;
+            } else {
+                int sw = app->filtered_win_count < 6 ? app->filtered_win_count : 6;
+                app->selected_idx = (sw > 0) ? 0 : sw;
+            }
             damage_all(app);
         }
     }
@@ -2963,6 +3218,8 @@ int main(int argc, char **argv) {
             if (running_pid > 0 && kill(running_pid, SIGUSR1) == 0) return 0;
         } else if (strcmp(argv[1], "control") == 0) {
             if (running_pid > 0 && kill(running_pid, SIGUSR2) == 0) return 0;
+        } else if (strcmp(argv[1], "clipboard") == 0) {
+            if (running_pid > 0 && kill(running_pid, SIGRTMIN) == 0) return 0;
         } else if (strcmp(argv[1], "stop") == 0) {
             if (running_pid > 0) kill(running_pid, SIGTERM);
             return 0;
@@ -2987,6 +3244,7 @@ int main(int argc, char **argv) {
 
     signal(SIGUSR1, on_sigusr1);
     signal(SIGUSR2, on_sigusr2);
+    signal(SIGRTMIN, on_sigrtmin);
     signal(SIGTERM, on_sigterm);
     signal(SIGINT, on_sigterm);
     signal(SIGCHLD, SIG_IGN);
@@ -3027,6 +3285,8 @@ int main(int argc, char **argv) {
         set_mode(&app, MODE_CENTER);
     } else if (argc > 1 && strcmp(argv[1], "control") == 0) {
         set_mode(&app, MODE_CONTROL);
+    } else if (argc > 1 && strcmp(argv[1], "clipboard") == 0) {
+        set_mode(&app, MODE_CLIPBOARD);
     }
 
     while (app.running) {
@@ -3036,6 +3296,9 @@ int main(int argc, char **argv) {
         } else if (g_sig_cmd == 2) {
             g_sig_cmd = 0;
             set_mode(&app, app.mode == MODE_CONTROL ? MODE_CLOSED : MODE_CONTROL);
+        } else if (g_sig_cmd == 4) {
+            g_sig_cmd = 0;
+            set_mode(&app, app.mode == MODE_CLIPBOARD ? MODE_CLOSED : MODE_CLIPBOARD);
         } else if (g_sig_cmd == 3) {
             break;
         }
@@ -3105,6 +3368,8 @@ int main(int argc, char **argv) {
                     parse_control_buf(&app, app.async_buf);
                 } else if (app.async_kind == 3) {
                     parse_subpanel_buf(&app, app.async_buf);
+                } else if (app.async_kind == 4) {
+                    parse_clipboard_buf(&app, app.async_buf);
                 }
                 if (app.mode != MODE_CLOSED) {
                     damage_all(&app);

@@ -514,8 +514,11 @@ case "$ACTION" in
         esac
         ;;
     clipboard-history)
-        # Super+V: Clipboard history picker (cliphist + CLIPBOARD_PICKER, MENU_PICKER or fuzzel)
+        # Super+V: Clipboard history picker (native infynitae-island clipboard mode, or CLIPBOARD_PICKER / MENU_PICKER / fuzzel)
         if command -v cliphist >/dev/null 2>&1; then
+            if [ -z "${CLIPBOARD_PICKER:-}" ] && [ -z "${MENU_PICKER:-}" ] && [ -x "$HOME/.local/bin/infynitae-island" ]; then
+                exec "$HOME/.local/bin/infynitae-island" clipboard
+            fi
             PICKER="${CLIPBOARD_PICKER:-${MENU_PICKER:-fuzzel --dmenu}}"
             # Escape in the picker selects nothing: the clipboard is left as it was
             PICK=$(cliphist list | $PICKER)

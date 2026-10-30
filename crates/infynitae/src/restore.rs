@@ -330,13 +330,17 @@ fn default_apps_dirs() -> Vec<PathBuf> {
 }
 
 /// The command that starts `app_id`: the desktop file named after it, else the one whose
-/// `StartupWMClass` is it (both ignoring case).
+/// `StartupWMClass` is it, else the desktop file whose `Exec` binary basename matches it,
+/// else a direct executable on `PATH` (all ignoring case).
 pub fn app_command(app_id: &str, apps_dirs: &[PathBuf]) -> Option<Vec<String>> {
     let target = app_id.to_lowercase();
     let target = target
         .strip_suffix(".desktop")
         .unwrap_or(&target)
         .to_string();
+    if target.is_empty() {
+        return None;
+    }
     let mut files = Vec::new();
     for d in apps_dirs {
         desktop_files(d, &mut files);
@@ -345,15 +349,43 @@ pub fn app_command(app_id: &str, apps_dirs: &[PathBuf]) -> Option<Vec<String>> {
         let base = f.file_stem()?.to_string_lossy().to_lowercase();
         (base == target).then(|| desktop_entry(f).get("exec").cloned())?
     });
-    let exec = by_name.or_else(|| {
-        files.iter().find_map(|f| {
-            let e = desktop_entry(f);
-            (e.get("startupwmclass").map(|c| c.to_lowercase()) == Some(target.clone()))
-                .then(|| e.get("exec").cloned())?
+    let exec = by_name
+        .or_else(|| {
+            files.iter().find_map(|f| {
+                let e = desktop_entry(f);
+                (e.get("startupwmclass").map(|c| c.to_lowercase()) == Some(target.clone()))
+                    .then(|| e.get("exec").cloned())?
+            })
         })
-    })?;
-    let args = clean_exec(&exec);
-    (!args.is_empty()).then_some(args)
+        .or_else(|| {
+            files.iter().find_map(|f| {
+                let e = desktop_entry(f);
+                let ex = e.get("exec")?;
+                let first = clean_exec(ex).into_iter().next()?;
+                let bin_base = Path::new(&first).file_name()?.to_string_lossy().to_lowercase();
+                (bin_base == target).then(|| ex.clone())
+            })
+        });
+    if let Some(exec_str) = exec {
+        let args = clean_exec(&exec_str);
+        if !args.is_empty() {
+            return Some(args);
+        }
+    }
+    // Fallback: check if `target` (or `app_id`) is directly an executable on PATH
+    if !target.contains('/')
+        && let Some(path_var) = std::env::var_os("PATH")
+    {
+        for dir in std::env::split_paths(&path_var) {
+            for cand in [&target, app_id] {
+                let full = dir.join(cand);
+                if full.is_file() {
+                    return Some(vec![full.to_string_lossy().into_owned()]);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Starts an app on its own, its output not the restore's (it would flood restore.log).
@@ -656,15 +688,27 @@ pub fn restorable(session: &Path, apps_dirs: &[PathBuf]) -> bool {
         .any(|a| app_command(a, apps_dirs).is_some_and(|cmd| installed(&cmd[0])))
 }
 
-/// `infynitae restore watch|restore|check` (`args` after "restore").
+/// `infynitae restore watch|save|restore|check` (`args` after "restore").
 pub fn run(args: &[String]) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("watch") => {
             let mut ipc = Socket(0);
+            let first_id = ipc.next().as_u64().unwrap_or(1);
+            save_snapshot(&session_path(), &mut ipc, first_id);
             loop {
                 std::thread::sleep(WATCH_INTERVAL);
                 let id = ipc.next().as_u64().unwrap_or(1);
                 save_snapshot(&session_path(), &mut ipc, id);
+            }
+        }
+        Some("save") => {
+            let path = args.get(1).map_or_else(session_path, PathBuf::from);
+            let mut ipc = Socket(0);
+            let id = ipc.next().as_u64().unwrap_or(1);
+            if save_snapshot(&path, &mut ipc, id) {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::FAILURE
             }
         }
         Some("restore") => {
@@ -687,7 +731,7 @@ pub fn run(args: &[String]) -> ExitCode {
             }
         }
         _ => {
-            eprintln!("Usage: infynitae restore watch | restore | check [session.json]");
+            eprintln!("Usage: infynitae restore watch | save | restore | check [session.json]");
             ExitCode::from(2)
         }
     }

@@ -470,32 +470,29 @@ impl WaylandState {
         if let Ok(home) = std::env::var("HOME") {
             let config_path = format!("{home}/.config/infynitae/config");
             if let Ok(content) = std::fs::read_to_string(config_path) {
-                for line in content.lines() {
-                    let line_clean = line.split('#').next().unwrap_or("").trim();
-                    if let Some((k, v)) = line_clean.split_once('=') {
-                        let key = k.trim();
-                        let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
-                        match key {
-                            "KEYBOARD_REPEAT_DELAY" => {
-                                if let Ok(d) = val.parse::<i32>() {
-                                    repeat_delay = d;
-                                }
+                for (key, val) in content.lines().filter_map(config_line) {
+                    let key = key.trim();
+                    let val = val.trim();
+                    match key {
+                        "KEYBOARD_REPEAT_DELAY" => {
+                            if let Ok(d) = val.parse::<i32>() {
+                                repeat_delay = d;
                             }
-                            "KEYBOARD_REPEAT_RATE" => {
-                                if let Ok(r) = val.parse::<i32>() {
-                                    repeat_rate = r;
-                                }
-                            }
-                            "XKB_DEFAULT_LAYOUT" => {
-                                if !val.is_empty() {
-                                    xkb_layout = val.to_string();
-                                }
-                            }
-                            "XKB_DEFAULT_OPTIONS" if !val.is_empty() => {
-                                xkb_options = val.to_string();
-                            }
-                            _ => {}
                         }
+                        "KEYBOARD_REPEAT_RATE" => {
+                            if let Ok(r) = val.parse::<i32>() {
+                                repeat_rate = r;
+                            }
+                        }
+                        "XKB_DEFAULT_LAYOUT" => {
+                            if !val.is_empty() {
+                                xkb_layout = val.to_string();
+                            }
+                        }
+                        "XKB_DEFAULT_OPTIONS" if !val.is_empty() => {
+                            xkb_options = val.to_string();
+                        }
+                        _ => {}
                     }
                 }
             }

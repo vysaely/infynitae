@@ -189,63 +189,107 @@ static void on_cancellable_cancelled(GCancellable *cancellable, gpointer user_da
     on_cancel_clicked(NULL, data);
 }
 
+static void read_cfg_val(const char *line, const char *key, char *dst, size_t dst_sz) {
+    size_t klen = strlen(key);
+    if (strncmp(line, key, klen) != 0 || line[klen] != '=') return;
+    const char *p = line + klen + 1;
+    while (*p == ' ' || *p == '\t' || *p == '"' || *p == '\'') p++;
+    size_t j = 0;
+    while (p[j] && p[j] != '"' && p[j] != '\'' && p[j] != '\n' && p[j] != '\r' && j + 1 < dst_sz) {
+        dst[j] = p[j];
+        j++;
+    }
+    if (j > 0) dst[j] = '\0';
+}
+
 static void apply_css(void) {
+    char surface[32] = "#111317";
+    char canvas[32] = "#0b0f14";
+    char border_act[32] = "#7aa2f7";
+    char border_inact[32] = "#333b54";
+    char text_col[32] = "#eef2f8";
+
+    const char *home = g_get_home_dir();
+    if (home) {
+        gchar *cfg_path = g_build_filename(home, ".config", "infynitae", "config", NULL);
+        FILE *f = fopen(cfg_path, "r");
+        if (f) {
+            char line[256];
+            while (fgets(line, sizeof(line), f)) {
+                char * s = line;
+                while (*s == ' ' || *s == '\t') s++;
+                if (*s == '#') continue;
+                read_cfg_val(s, "SURFACE_COLOR", surface, sizeof(surface));
+                read_cfg_val(s, "CANVAS_COLOR", canvas, sizeof(canvas));
+                read_cfg_val(s, "BORDER_ACTIVE", border_act, sizeof(border_act));
+                read_cfg_val(s, "BORDER_INACTIVE", border_inact, sizeof(border_inact));
+                read_cfg_val(s, "TEXT_COLOR", text_col, sizeof(text_col));
+            }
+            fclose(f);
+        }
+        g_free(cfg_path);
+    }
+
     GtkCssProvider *provider = gtk_css_provider_new();
-    const gchar *css =
+    gchar *css = g_strdup_printf(
         "window.infynitae-polkit {\n"
-        "    background-color: #181825;\n"
-        "    border: 2px solid #89b4fa;\n"
-        "    border-radius: 12px;\n"
-        "    font-family: monospace;\n"
+        "    background-color: %s;\n"
+        "    border: 1px solid %s;\n"
+        "    border-radius: 0px;\n"
+        "    font-family: Sans;\n"
         "}\n"
         "label.title {\n"
-        "    color: #cdd6f4;\n"
-        "    font-size: 15px;\n"
-        "    font-weight: bold;\n"
+        "    color: %s;\n"
+        "    font-size: 13px;\n"
+        "    font-weight: 600;\n"
         "}\n"
         "label.action {\n"
-        "    color: #a6adc8;\n"
-        "    font-size: 12px;\n"
+        "    color: #9aa5b8;\n"
+        "    font-size: 11px;\n"
         "}\n"
         "label.error {\n"
-        "    color: #f38ba8;\n"
-        "    font-size: 12px;\n"
-        "    font-weight: bold;\n"
+        "    color: #f7768e;\n"
+        "    font-size: 11px;\n"
+        "    font-weight: 600;\n"
         "}\n"
         "entry.pass {\n"
-        "    background-color: #313244;\n"
-        "    color: #cdd6f4;\n"
-        "    border: 1px solid #45475a;\n"
-        "    border-radius: 6px;\n"
-        "    padding: 8px;\n"
-        "    font-size: 14px;\n"
+        "    background-color: %s;\n"
+        "    color: %s;\n"
+        "    border: 1px solid %s;\n"
+        "    border-radius: 0px;\n"
+        "    padding: 6px 10px;\n"
+        "    font-size: 12px;\n"
         "}\n"
         "entry.pass:focus {\n"
-        "    border: 1px solid #89b4fa;\n"
+        "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-auth {\n"
-        "    background-color: #89b4fa;\n"
-        "    color: #11111b;\n"
-        "    font-weight: bold;\n"
-        "    border-radius: 6px;\n"
-        "    padding: 8px 16px;\n"
-        "    border: none;\n"
+        "    background-color: #262b38;\n"
+        "    color: %s;\n"
+        "    font-weight: 600;\n"
+        "    border-radius: 0px;\n"
+        "    padding: 6px 14px;\n"
+        "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-auth:hover {\n"
-        "    background-color: #b4befe;\n"
+        "    background-color: #303748;\n"
         "}\n"
         "button.btn-cancel {\n"
-        "    background-color: #313244;\n"
-        "    color: #cdd6f4;\n"
-        "    border-radius: 6px;\n"
-        "    padding: 8px 16px;\n"
-        "    border: 1px solid #45475a;\n"
+        "    background-color: %s;\n"
+        "    color: #9aa5b8;\n"
+        "    border-radius: 0px;\n"
+        "    padding: 6px 14px;\n"
+        "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-cancel:hover {\n"
-        "    background-color: #45475a;\n"
-        "}\n";
+        "    background-color: #1c2028;\n"
+        "    color: %s;\n"
+        "}\n",
+        surface, border_inact, text_col, canvas, text_col, border_inact,
+        border_act, text_col, border_act, surface, border_inact, text_col);
 
     gtk_css_provider_load_from_data(provider, css, -1, NULL);
+    g_free(css);
     gtk_style_context_add_provider_for_screen(
         gdk_screen_get_default(),
         GTK_STYLE_PROVIDER(provider),

@@ -303,7 +303,7 @@ Before=shutdown.target exit.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/sh -c 'rm -f "%h/.local/state/infynitae/stop"'
-ExecStop=/bin/sh -c 'mkdir -p "%h/.local/state/infynitae"; : > "%h/.local/state/infynitae/stop"; if ! pgrep -x infynitae-lock >/dev/null 2>&1 && [ -x "%h/.local/bin/infynitae-lock" ]; then setsid -f "%h/.local/bin/infynitae-lock" --status "Shutting down…" >/dev/null 2>&1 || true; fi'
+ExecStop=/bin/sh -c 'mkdir -p "%h/.local/state/infynitae"; "%h/.local/bin/infynitae" restore save 2>/dev/null || true; pkill -f "infynitae.*restore watch" 2>/dev/null || true; : > "%h/.local/state/infynitae/stop"; msg="Shutting down…"; systemctl list-jobs 2>/dev/null | grep -q "reboot.target" && msg="Rebooting…"; if ! pgrep -x infynitae-lock >/dev/null 2>&1 && [ -x "%h/.local/bin/infynitae-lock" ]; then setsid -f "%h/.local/bin/infynitae-lock" --status "$msg" >/dev/null 2>&1 || true; fi'
 
 [Install]
 WantedBy=default.target

@@ -89,6 +89,12 @@ typedef struct {
     bool greeter_mode;
     char session_cmd[256];
     char status_msg[128];
+
+    double canvas_rgb[3];
+    double surface_rgb[3];
+    double border_act_rgb[3];
+    double border_inact_rgb[3];
+    double text_rgb[3];
 } LockApp;
 
 typedef struct LockOutput {
@@ -244,7 +250,7 @@ static void *pam_worker_thread(void *arg) {
     }
 
     // Securely shred sensitive memory
-    memset(data->password, 0, sizeof(data->password));
+    explicit_bzero(data->password, sizeof(data->password));
 
     if (rc == PAM_SUCCESS) {
         app->auth_state = AUTH_STATE_SUCCESS;
@@ -274,7 +280,7 @@ static void trigger_auth(LockApp *app) {
     data->app = app;
 
     // Clear local buffer immediately
-    memset(app->password, 0, sizeof(app->password));
+    explicit_bzero(app->password, sizeof(app->password));
     app->password_len = 0;
 
     app->pam_thread_active = true;
@@ -285,16 +291,49 @@ static void trigger_auth(LockApp *app) {
     }
 }
 
+static void parse_hex_rgb(const char *s, double out[3]) {
+    while (*s == ' ' || *s == '\t' || *s == '"' || *s == '\'') s++;
+    if (*s == '#') s++;
+    unsigned int r = 0, g = 0, b = 0;
+    if (sscanf(s, "%02x%02x%02x", &r, &g, &b) == 3) {
+        out[0] = (double)r / 255.0;
+        out[1] = (double)g / 255.0;
+        out[2] = (double)b / 255.0;
+    }
+}
+
+static void load_theme_config(LockApp *app) {
+    app->canvas_rgb[0] = 0.043; app->canvas_rgb[1] = 0.059; app->canvas_rgb[2] = 0.078;       /* #0b0f14 */
+    app->surface_rgb[0] = 0.067; app->surface_rgb[1] = 0.075; app->surface_rgb[2] = 0.090;     /* #111317 */
+    app->border_act_rgb[0] = 0.478; app->border_act_rgb[1] = 0.635; app->border_act_rgb[2] = 0.969; /* #7aa2f7 */
+    app->border_inact_rgb[0] = 0.200; app->border_inact_rgb[1] = 0.231; app->border_inact_rgb[2] = 0.329; /* #333b54 */
+    app->text_rgb[0] = 0.933; app->text_rgb[1] = 0.949; app->text_rgb[2] = 0.973;             /* #eef2f8 */
+
+    const char *home = getenv("HOME");
+    if (!home) return;
+    char path[512];
+    snprintf(path, sizeof(path), "%s/.config/infynitae/config", home);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == '#') continue;
+        if (strncmp(p, "CANVAS_COLOR=", 13) == 0) parse_hex_rgb(p + 13, app->canvas_rgb);
+        else if (strncmp(p, "SURFACE_COLOR=", 14) == 0) parse_hex_rgb(p + 14, app->surface_rgb);
+        else if (strncmp(p, "BORDER_ACTIVE=", 14) == 0) parse_hex_rgb(p + 14, app->border_act_rgb);
+        else if (strncmp(p, "BORDER_INACTIVE=", 16) == 0) parse_hex_rgb(p + 16, app->border_inact_rgb);
+        else if (strncmp(p, "TEXT_COLOR=", 11) == 0) parse_hex_rgb(p + 11, app->text_rgb);
+    }
+    fclose(f);
+}
+
 /* ========================================================================== */
 /* UI Rendering (Cairo & Pango)                                               */
 /* ========================================================================== */
-static void draw_rounded_rect(cairo_t *cr, double x, double y, double w, double h, double r) {
-    cairo_new_sub_path(cr);
-    cairo_arc(cr, x + w - r, y + r, r, -M_PI / 2, 0);
-    cairo_arc(cr, x + w - r, y + h - r, r, 0, M_PI / 2);
-    cairo_arc(cr, x + r, y + h - r, r, M_PI / 2, M_PI);
-    cairo_arc(cr, x + r, y + r, r, M_PI, 3 * M_PI / 2);
-    cairo_close_path(cr);
+static void draw_sharp_rect(cairo_t *cr, double x, double y, double w, double h) {
+    cairo_rectangle(cr, round(x) + 0.5, round(y) + 0.5, round(w) - 1.0, round(h) - 1.0);
 }
 
 /* Draws `text` centered at `(cx, cy)` using exact Pango sub-pixel extents.
@@ -399,6 +438,7 @@ static void osk_label(const LockApp *app, const OskKey *k, char out[8]) {
     case OSK_SPACE: strcpy(out, ""); break;
     case OSK_HIDE: strcpy(out, "⌄"); break;
     case OSK_ENTER: strcpy(out, "⏎"); break;
+    default: out[0] = '\0'; break;
     }
 }
 
@@ -414,27 +454,40 @@ static void osk_draw(cairo_t *cr, PangoLayout *layout, const LockApp *app, const
     OskKey keys[OSK_MAX_KEYS];
     double top;
     int n = osk_layout(app, w, h, keys, &top);
-    cairo_set_source_rgba(cr, 0.04, 0.06, 0.08, 0.92);
+    cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.96);
     cairo_rectangle(cr, 0, top, w, h - top);
     cairo_fill(cr);
-    PangoFontDescription *desc = pango_font_description_from_string("Sans 15");
+    cairo_set_source_rgba(cr, app->border_inact_rgb[0], app->border_inact_rgb[1], app->border_inact_rgb[2], 0.85);
+    cairo_set_line_width(cr, 1.0);
+    cairo_move_to(cr, 0, round(top) + 0.5);
+    cairo_line_to(cr, w, round(top) + 0.5);
+    cairo_stroke(cr);
+
+    PangoFontDescription *desc = pango_font_description_from_string("Sans 14");
     pango_layout_set_font_description(layout, desc);
     pango_font_description_free(desc);
     for (int i = 0; i < n; i++) {
         bool pressed = app->osk_pressed == i && app->osk_pressed_output == output;
         bool lit = keys[i].kind == OSK_SHIFT && app->osk_shift;
-        if (pressed)
-            cairo_set_source_rgba(cr, 0.30, 0.55, 0.90, 0.85);
-        else if (keys[i].kind == OSK_CHAR || keys[i].kind == OSK_SPACE)
-            cairo_set_source_rgba(cr, 0.14, 0.18, 0.24, 0.95);
+        if (pressed || lit)
+            cairo_set_source_rgba(cr, 0.16, 0.19, 0.25, 0.96);
         else
-            cairo_set_source_rgba(cr, lit ? 0.22 : 0.10, lit ? 0.32 : 0.13, lit ? 0.48 : 0.18, 0.95);
-        draw_rounded_rect(cr, keys[i].x, keys[i].y, keys[i].w, keys[i].h, 8.0);
+            cairo_set_source_rgba(cr, app->canvas_rgb[0], app->canvas_rgb[1], app->canvas_rgb[2], 0.95);
+        cairo_rectangle(cr, round(keys[i].x), round(keys[i].y), round(keys[i].w), round(keys[i].h));
         cairo_fill(cr);
+
+        if (pressed || lit)
+            cairo_set_source_rgba(cr, app->border_act_rgb[0], app->border_act_rgb[1], app->border_act_rgb[2], 0.85);
+        else
+            cairo_set_source_rgba(cr, app->border_inact_rgb[0], app->border_inact_rgb[1], app->border_inact_rgb[2], 0.65);
+        cairo_set_line_width(cr, 1.0);
+        draw_sharp_rect(cr, keys[i].x, keys[i].y, keys[i].w, keys[i].h);
+        cairo_stroke(cr);
+
         char label[8];
         osk_label(app, &keys[i], label);
-        cairo_set_source_rgba(cr, 0.90, 0.95, 1.0, 0.92);
-        draw_text_centered(cr, layout, "Sans 15", label,
+        cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], 0.94);
+        draw_text_centered(cr, layout, "Sans 14", label,
                            keys[i].x + keys[i].w / 2.0,
                            keys[i].y + keys[i].h / 2.0, true);
     }
@@ -563,10 +616,10 @@ static void render_output(LockOutput *output) {
     int w = output->width;
     int h = output->height;
 
-    // 1. Background: Deep obsidian infinite canvas (#0b0f14) with subtle radial vignette
+    // 1. Background: Deep obsidian infinite canvas (CANVAS_COLOR) with subtle radial vignette
     cairo_pattern_t *pat = cairo_pattern_create_radial(w / 2.0, h / 2.0, 50, w / 2.0, h / 2.0, w / 1.2);
-    cairo_pattern_add_color_stop_rgb(pat, 0.0, 0.063, 0.082, 0.106); // #10151b
-    cairo_pattern_add_color_stop_rgb(pat, 1.0, 0.043, 0.059, 0.078); // #0b0f14
+    cairo_pattern_add_color_stop_rgb(pat, 0.0, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2]);
+    cairo_pattern_add_color_stop_rgb(pat, 1.0, app->canvas_rgb[0], app->canvas_rgb[1], app->canvas_rgb[2]);
     cairo_set_source(cr, pat);
     cairo_paint(cr);
     cairo_pattern_destroy(pat);
@@ -671,84 +724,79 @@ static void render_output(LockOutput *output) {
     cairo_set_source_rgba(cr, 0.82, 0.87, 0.96, 0.88);
     draw_text_centered(cr, layout, "Sans Medium 13", app->username, cx, avatar_y + avatar_radius + 20.0, false);
 
-    // 4. Password Input / Status Pill
-    double pill_w = 280.0;
-    double pill_h = 46.0;
-    double pill_x = cx - (pill_w / 2.0);
-    double pill_y = cy + 60.0;
+    // 4. Password Input / Status Box (Sharp 1px Single-Border Obsidian Geometry)
+    double pill_w = 276.0;
+    double pill_h = 38.0;
+    double pill_x = round(cx - (pill_w / 2.0));
+    double pill_y = round(cy + 60.0);
     double pill_cy = pill_y + (pill_h / 2.0);
 
-    // Pill background
-    cairo_set_source_rgba(cr, 0.08, 0.11, 0.15, 0.92);
-    draw_rounded_rect(cr, pill_x, pill_y, pill_w, pill_h, pill_h / 2.0);
+    // Box background (SURFACE_COLOR)
+    cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.97);
+    cairo_rectangle(cr, pill_x, pill_y, pill_w, pill_h);
     cairo_fill(cr);
 
-    // Pill Border
+    // 1px Single Border (BORDER_ACTIVE when typing/verifying, BORDER_INACTIVE when idle)
+    cairo_set_line_width(cr, 1.0);
     if (app->auth_state == AUTH_STATE_FAILED) {
         cairo_set_source_rgba(cr, 0.97, 0.32, 0.29, 0.90);
-        cairo_set_line_width(cr, 1.8);
-    } else if (busy) {
-        cairo_set_source_rgba(cr, 0.48, 0.64, 0.97, 0.85);
-        cairo_set_line_width(cr, 1.6);
-    } else if (app->password_len > 0) {
-        cairo_set_source_rgba(cr, 0.48, 0.64, 0.97, 0.80);
-        cairo_set_line_width(cr, 1.5);
+    } else if (busy || app->password_len > 0) {
+        cairo_set_source_rgba(cr, app->border_act_rgb[0], app->border_act_rgb[1], app->border_act_rgb[2], 0.90);
     } else {
-        cairo_set_source_rgba(cr, 0.20, 0.26, 0.35, 0.60);
-        cairo_set_line_width(cr, 1.2);
+        cairo_set_source_rgba(cr, app->border_inact_rgb[0], app->border_inact_rgb[1], app->border_inact_rgb[2], 0.90);
     }
-    draw_rounded_rect(cr, pill_x, pill_y, pill_w, pill_h, pill_h / 2.0);
+    draw_sharp_rect(cr, pill_x, pill_y, pill_w, pill_h);
     cairo_stroke(cr);
 
-    // Password indicator contents inside pill
+    // Password indicator contents inside box
     if (app->status_msg[0] != '\0') {
-        cairo_set_source_rgba(cr, 0.78, 0.86, 0.98, 0.92);
-        draw_text_centered(cr, layout, "Sans Medium 11", app->status_msg, cx, pill_cy, false);
+        cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], 0.94);
+        draw_text_centered(cr, layout, "Sans Medium 10.5", app->status_msg, cx, pill_cy, false);
     } else if (app->auth_state == AUTH_STATE_SUCCESS) {
-        cairo_set_source_rgba(cr, 0.65, 0.88, 0.75, 0.92);
-        draw_text_centered(cr, layout, "Sans Medium 11", "Starting session…", cx, pill_cy, false);
+        cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], 0.94);
+        draw_text_centered(cr, layout, "Sans Medium 10.5", "Loading workspace…", cx, pill_cy, false);
     } else if (app->auth_state == AUTH_STATE_VERIFYING) {
-        cairo_set_source_rgba(cr, 0.65, 0.80, 0.98, 0.90);
-        draw_text_centered(cr, layout, "Sans Medium 11", "Verifying…", cx, pill_cy, false);
+        cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], 0.92);
+        draw_text_centered(cr, layout, "Sans Medium 10.5", "Verifying…", cx, pill_cy, false);
     } else if (app->password_len > 0) {
-        double dot_spacing = 14.0;
+        double dot_spacing = 13.0;
         size_t max_dots = 16;
         size_t visible_dots = app->password_len < max_dots ? app->password_len : max_dots;
         double total_dots_w = visible_dots > 0 ? (visible_dots - 1) * dot_spacing : 0;
         double start_dot_x = cx - (total_dots_w / 2.0);
 
-        cairo_set_source_rgba(cr, 0.88, 0.93, 1.0, 0.92);
+        cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], 0.94);
         for (size_t i = 0; i < visible_dots; ++i) {
-            cairo_arc(cr, start_dot_x + (i * dot_spacing), pill_cy, 3.5, 0, 2 * M_PI);
+            cairo_arc(cr, start_dot_x + (i * dot_spacing), pill_cy, 3.2, 0, 2 * M_PI);
             cairo_fill(cr);
         }
     } else {
-        cairo_set_source_rgba(cr, 0.44, 0.50, 0.62, 0.65);
-        draw_text_centered(cr, layout, "Sans 11", "Enter password", cx, pill_cy, false);
+        cairo_set_source_rgba(cr, 0.44, 0.50, 0.60, 0.72);
+        draw_text_centered(cr, layout, "Sans 10", "Enter password", cx, pill_cy, false);
     }
 
-    // 5. Status / Caps Lock / Error Badge below pill
-    double badge_cy = pill_y + pill_h + 26.0;
+    // 5. Status / Caps Lock / Error Badge below box
+    double badge_cy = pill_y + pill_h + 24.0;
     if (app->auth_state == AUTH_STATE_FAILED && app->password_len == 0) {
         cairo_set_source_rgba(cr, 0.97, 0.42, 0.39, 0.92);
-        draw_text_centered(cr, layout, "Sans Medium 10", "Authentication failed · try again", cx, badge_cy, false);
+        draw_text_centered(cr, layout, "Sans Medium 9.5", "Authentication failed · try again", cx, badge_cy, false);
     } else if (app->caps_lock) {
-        double badge_w = 124.0;
-        double badge_h = 26.0;
-        double badge_x = cx - (badge_w / 2.0);
-        double badge_y = badge_cy - (badge_h / 2.0);
+        double badge_w = 120.0;
+        double badge_h = 22.0;
+        double badge_x = round(cx - (badge_w / 2.0));
+        double badge_y = round(badge_cy - (badge_h / 2.0));
 
-        cairo_set_source_rgba(cr, 0.95, 0.60, 0.15, 0.16);
-        draw_rounded_rect(cr, badge_x, badge_y, badge_w, badge_h, 13.0);
+        cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.95);
+        cairo_rectangle(cr, badge_x, badge_y, badge_w, badge_h);
         cairo_fill(cr);
 
-        cairo_set_source_rgba(cr, 0.95, 0.65, 0.20, 0.55);
+        cairo_set_source_rgba(cr, 0.95, 0.65, 0.20, 0.75);
         cairo_set_line_width(cr, 1.0);
-        draw_rounded_rect(cr, badge_x, badge_y, badge_w, badge_h, 13.0);
+        draw_sharp_rect(cr, badge_x, badge_y, badge_w, badge_h);
         cairo_stroke(cr);
 
         cairo_set_source_rgba(cr, 1.0, 0.78, 0.32, 0.95);
-        draw_text_centered(cr, layout, "Sans Bold 9", "CAPS LOCK ON", cx, badge_cy, true);
+        draw_text_centered(cr, layout, "Sans Bold 8.5", "CAPS LOCK ON", cx, badge_cy, true);
     }
 
     if (app->osk_visible) osk_draw(cr, layout, app, output, w, h);
@@ -926,7 +974,7 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard,
     }
 
     if (sym == XKB_KEY_Escape) {
-        memset(app->password, 0, sizeof(app->password));
+        explicit_bzero(app->password, sizeof(app->password));
         app->password_len = 0;
         app->auth_state = AUTH_STATE_IDLE;
         damage_all_outputs(app);
@@ -936,7 +984,7 @@ static void keyboard_key(void *data, struct wl_keyboard *keyboard,
     // Ctrl+U clears line
     if ((sym == XKB_KEY_u || sym == XKB_KEY_U) &&
         xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_DEPRESSED)) {
-        memset(app->password, 0, sizeof(app->password));
+        explicit_bzero(app->password, sizeof(app->password));
         app->password_len = 0;
         app->auth_state = AUTH_STATE_IDLE;
         damage_all_outputs(app);
@@ -1076,6 +1124,7 @@ int main(int argc, char **argv) {
     app.osk_pressed = -1;
     app.auth_state = AUTH_STATE_IDLE;
     strncpy(app.session_cmd, "infynitae-session", sizeof(app.session_cmd) - 1);
+    load_theme_config(&app);
 
     // Parse options
     for (int i = 1; i < argc; ++i) {
@@ -1244,7 +1293,7 @@ int main(int argc, char **argv) {
     if (app.xkb_keymap) xkb_keymap_unref(app.xkb_keymap);
     if (app.xkb_ctx) xkb_context_unref(app.xkb_ctx);
 
-    memset(app.password, 0, sizeof(app.password));
+    explicit_bzero(app.password, sizeof(app.password));
 
     if (app.greeter_mode && app.auth_state == AUTH_STATE_SUCCESS) {
         printf("[infynitae-lock] Launching session: %s\n", app.session_cmd);
