@@ -346,10 +346,15 @@ session_menu() {
 }
 
 # ── The menu ───────────────────────────────────────────────────────────────────────────────────
-if [ "${1:-}" = "apps" ]; then
-    apps_menu
-    exit 0
-fi
+case "${1:-}" in
+    apps) apps_menu; exit 0 ;;
+    apps-list) apps_list; exit 0 ;;
+    apps-kill) [ -n "${2:-}" ] && apps_kill "$2" "${3:-TERM}"; exit 0 ;;
+    wifi) wifi_menu; exit 0 ;;
+    bluetooth) bt_menu; exit 0 ;;
+    sound) sound_menu; exit 0 ;;
+    volume) volume_menu; exit 0 ;;
+esac
 
 battery=""
 for b in /sys/class/power_supply/BAT*; do

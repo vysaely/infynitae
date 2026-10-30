@@ -1,14 +1,20 @@
 /*
- * Infynitae Native Auto-Hiding Windows Taskbar & Control Flyout (infynitae-island)
+ * Infynitae Native Auto-Hiding Taskbar (Super+W) & System Control / Tray Panel (Super+A)
  *
- * Desktop-first, sharp geometric design (4-6px corners, 46px horizontal taskbar strip):
- *   - Super+W (or Center Edge Swipe): Summons ONLY the Middle Taskbar Strip:
- *       [ ⊞ Apps ] [ ⌕ Search… ] | [ ● Alacritty × ] [ discord × ] [ Firefox × ] | [ Overview ]
- *     Typing in Search (or clicking [ ⊞ Apps ]) pops up a compact Start/Launcher list flyout.
- *   - Super+A (or Corner Edge Swipe): Summons ONLY the Corner Control Flyout:
- *       Sharp, compact desktop system tray panel (Clock, [⇅ Top/Bot], [⇄ Left/Right], Volume bar,
- *       flat Wi-Fi / BT / DND / Power switches, Tray & Background Apps manager, Lock/Reboot/Power).
- *   - 100% auto-hidden when closed: only two tiny 8px edge strips accept swipe/click input.
+ * Harmonized Infynitae Workstation Design ("One Action, One Key, Zero Redundancy"):
+ *   - Unified Geometry & Visual Language:
+ *       Sharp 4–5px corners, crisp 1px borders (#2e3d52 normal, #528bff selected/hovered),
+ *       and identical 32px item pills across both Super+W and Super+A.
+ *   - Zero Nested Mini-Buttons:
+ *       No cluttered [×] or [Quit ×] inside items. Instead, hovering or selecting any
+ *       window tab (in Super+W) or tray app (in Super+A) and pressing Super+C (or Delete
+ *       or Middle-Click) closes that window or quits that tray app—matching Infynitae's
+ *       global Super+C close philosophy!
+ *   - Inline Expandable Sub-Lists in Super+A (Zero External Popups):
+ *       - Left-click / Enter on Wi-Fi, Bluetooth, or Sound Output toggles it immediately.
+ *       - Right-click, Long-press (350ms touch hold), or clicking the ▾ chevron expands
+ *         the live Wi-Fi network list, paired Bluetooth devices, or Audio output sinks
+ *         directly inside the panel!
  */
 
 #define _GNU_SOURCE
@@ -16,6 +22,7 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <linux/input-event-codes.h>
 #include <math.h>
 #include <poll.h>
 #include <signal.h>
@@ -38,14 +45,24 @@
 #include "../wallpaper/wlr-layer-shell-protocol.h"
 
 #define MAX_WINDOWS 24
-#define MAX_APPS 128
+#define MAX_APPS 160
 #define VISIBLE_APPS 8
+#define MAX_TRAY_APPS 6
+#define MAX_SUB_ITEMS 8
+#define MAX_HITBOXES 64
 
 typedef enum {
     MODE_CLOSED = 0,
-    MODE_CENTER = 1,  /* Super+W / center swipe: 46px Windows Taskbar strip (+ Start flyout when typing/opened) */
-    MODE_CONTROL = 2  /* Super+A / corner swipe: Compact Windows System Tray & Quick Settings box */
+    MODE_CENTER = 1,  /* Super+W: Search + Open Window Tabs */
+    MODE_CONTROL = 2  /* Super+A: System Control + Inline Tray Apps + Sub-lists */
 } IslandMode;
+
+typedef enum {
+    SUB_NONE = 0,
+    SUB_WIFI = 1,
+    SUB_BT = 2,
+    SUB_AUDIO = 3
+} ControlSubpanel;
 
 typedef struct {
     uint64_t inst;
@@ -61,12 +78,24 @@ typedef struct {
 } DesktopApp;
 
 typedef struct {
+    char name[64];
+    char mem[24];
+    bool is_tray;
+} TrayApp;
+
+typedef struct {
+    char id[128];     /* SSID, MAC address, or Sink name */
+    char label[128];  /* Display text */
+    char meta[32];    /* Signal %, Connected/Paired, etc. */
+    bool active;
+} SubItem;
+
+typedef struct {
     double x, y, w, h;
     int action_id;
     int index;
+    int nav_idx;      /* Unified keyboard/hover selection index (-1 if non-selectable) */
 } HitBox;
-
-#define MAX_HITBOXES 64
 
 struct IslandApp;
 
@@ -88,6 +117,11 @@ typedef struct IslandOutput {
     size_t shm_size;
     int32_t buf_w;
     int32_t buf_h;
+
+    /* Previous frame's drawn bounding box so we only clear & damage what we touched */
+    int prev_dx, prev_dy, prev_dw, prev_dh;
+    /* Current interactive panel bounding box (non-blocking pass-through outside it!) */
+    int input_x, input_y, input_w, input_h;
 
     struct IslandOutput *next;
 } IslandOutput;
@@ -111,9 +145,12 @@ typedef struct IslandApp {
 
     IslandMode mode;
     IslandMode target_mode;
-    double anim_progress; /* 0.0 = collapsed, 1.0 = open */
+    ControlSubpanel subpanel;
+    bool kb_grab;
+    double anim_progress;
     bool dragging;
     int32_t touch_id;
+    uint32_t touch_down_ms;
     double touch_start_x;
     double touch_start_y;
     double touch_cur_x;
@@ -123,13 +160,13 @@ typedef struct IslandApp {
     double pointer_y;
     IslandOutput *pointer_output;
 
-    /* Search & Start menu state */
+    /* Search & unified selection state */
     char search[128];
     size_t search_len;
-    bool start_menu_open; /* True when [Apps] is clicked or user types in search */
+    bool launcher_open;
     int selected_idx;
 
-    /* Snapshot windows */
+    /* Open windows on canvas */
     CanvasWindow windows[MAX_WINDOWS];
     int win_count;
     int filtered_wins[MAX_WINDOWS];
@@ -141,19 +178,27 @@ typedef struct IslandApp {
     int filtered_apps[MAX_APPS];
     int filtered_app_count;
 
-    /* Position & Control Box state */
-    bool bottom_edge;     /* true = Bottom taskbar (default), false = Top bar */
-    bool control_on_left; /* false = Right corner (default), true = Left corner */
+    /* Inline Tray & Background Apps */
+    TrayApp tray_apps[MAX_TRAY_APPS];
+    int tray_count;
+
+    /* Inline Sub-panel items (Wi-Fi networks, Bluetooth devices, Audio sinks) */
+    SubItem sub_items[MAX_SUB_ITEMS];
+    int sub_count;
+
+    /* Position & Control state */
+    bool bottom_edge;
+    bool control_on_left;
     bool wifi_on;
     char wifi_label[48];
     bool bt_on;
+    char bt_label[48];
     bool dnd_on;
     int volume_pct;
     bool volume_muted;
     char power_profile[32];
     int battery_pct;
     bool battery_charging;
-    time_t last_status_refresh;
 
     HitBox hitboxes[MAX_HITBOXES];
     int hitbox_count;
@@ -163,32 +208,33 @@ typedef struct IslandApp {
 
 enum {
     ACT_NONE = 0,
-    ACT_START_TOGGLE,
+    ACT_SEARCH_BOX,
     ACT_SEARCH_CLEAR,
-    ACT_OVERVIEW,
-    ACT_WIN_FOCUS,
-    ACT_WIN_CLOSE,
+    ACT_WIN_ITEM,
     ACT_APP_LAUNCH,
     ACT_WIFI_TOGGLE,
+    ACT_WIFI_SUB,
     ACT_BT_TOGGLE,
+    ACT_BT_SUB,
     ACT_DND_TOGGLE,
-    ACT_TRAY_APPS,
     ACT_POWER_PROFILE,
+    ACT_AUDIO_SUB,
+    ACT_SUB_SELECT,
+    ACT_TRAY_ITEM,
     ACT_VOL_DOWN,
     ACT_VOL_UP,
     ACT_VOL_MUTE,
     ACT_VOL_BAR,
-    ACT_LOCK,
     ACT_REBOOT,
     ACT_POWEROFF,
     ACT_LOGOUT,
-    ACT_PILL_TAP,
-    ACT_CORNER_TAP,
+    ACT_CENTER_EDGE,
+    ACT_CORNER_EDGE,
     ACT_SWAP_SIDE,
     ACT_SWAP_EDGE
 };
 
-static volatile sig_atomic_t g_sig_cmd = 0; /* 1 = toggle center (Super+W), 2 = toggle control (Super+A), 3 = quit */
+static volatile sig_atomic_t g_sig_cmd = 0; /* 1 = Super+W (center), 2 = Super+A (control), 3 = quit */
 
 static void on_sigusr1(int sig) { (void)sig; g_sig_cmd = 1; }
 static void on_sigusr2(int sig) { (void)sig; g_sig_cmd = 2; }
@@ -199,7 +245,7 @@ static void damage_all(IslandApp *app);
 static void set_mode(IslandApp *app, IslandMode new_mode);
 
 /* ========================================================================== */
-/* PID & Command Helper                                                       */
+/* Helpers                                                                    */
 /* ========================================================================== */
 static const char *pid_file_path(void) {
     static char path[512];
@@ -226,21 +272,8 @@ static void spawn_detached(const char *cmd) {
     }
 }
 
-static bool read_cmd_line(const char *cmd, char *out, size_t out_sz) {
-    out[0] = '\0';
-    FILE *fp = popen(cmd, "r");
-    if (!fp) return false;
-    if (fgets(out, (int)out_sz, fp)) {
-        size_t len = strlen(out);
-        while (len > 0 && (out[len - 1] == '\n' || out[len - 1] == '\r'))
-            out[--len] = '\0';
-    }
-    pclose(fp);
-    return out[0] != '\0';
-}
-
 /* ========================================================================== */
-/* Data Collectors: Desktop Apps, Canvas Snapshot, System Status              */
+/* Data Collectors                                                            */
 /* ========================================================================== */
 static void load_desktop_dir(IslandApp *app, const char *dir_path) {
     DIR *d = opendir(dir_path);
@@ -342,7 +375,7 @@ static void update_filters(IslandApp *app) {
             app->filtered_apps[app->filtered_app_count++] = i;
         }
     }
-    bool show_flyout = (app->start_menu_open || app->search_len > 0);
+    bool show_flyout = (app->launcher_open || app->search_len > 0);
     int max_w = app->filtered_win_count < 6 ? app->filtered_win_count : 6;
     int max_a = show_flyout ? (app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS) : 0;
     int total = max_w + max_a;
@@ -414,11 +447,8 @@ static void refresh_snapshot(IslandApp *app) {
     update_filters(app);
 }
 
-static void refresh_system_status(IslandApp *app) {
-    time_t now = time(NULL);
-    if (now - app->last_status_refresh < 2) return;
-    app->last_status_refresh = now;
-
+/* Single combined fast query for Super+A (System status + Inline Tray Apps) */
+static void refresh_control_data(IslandApp *app) {
     const char *rt = getenv("XDG_RUNTIME_DIR");
     char dnd_path[256];
     snprintf(dnd_path, sizeof(dnd_path), "%s/infynitae/do-not-disturb", rt ? rt : "/tmp");
@@ -446,47 +476,143 @@ static void refresh_system_status(IslandApp *app) {
         }
     }
 
-    if (read_cmd_line("nmcli -t -f active,ssid dev wifi 2>/dev/null | sed -n 's/^yes://p' | head -1",
-                      app->wifi_label, sizeof(app->wifi_label))) {
-        app->wifi_on = true;
-    } else {
-        char wstate[32];
-        if (read_cmd_line("nmcli radio wifi 2>/dev/null", wstate, sizeof(wstate)) &&
-            strcmp(wstate, "enabled") == 0) {
-            app->wifi_on = true;
-            strcpy(app->wifi_label, "On");
-        } else {
-            app->wifi_on = false;
-            strcpy(app->wifi_label, "Off");
+    FILE *fp = popen(
+        "ssid=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | sed -n 's/^yes://p' | head -1); "
+        "wradio=$(nmcli radio wifi 2>/dev/null); "
+        "bt=$(bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo on || echo off); "
+        "btdev=$( [ \"$bt\" = on ] && bluetoothctl devices Connected 2>/dev/null | head -1 | cut -d' ' -f3- ); "
+        "vol=$(LC_ALL=C pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'); "
+        "mute=$(LC_ALL=C pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | awk '{print $2}'); "
+        "pp=$(powerprofilesctl get 2>/dev/null || echo balanced); "
+        "printf 'SYS\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"${wradio:-disabled}\" \"${ssid:-}\" \"$bt\" \"${btdev:-}\" \"${vol:-75}\" \"${mute:-no}\" \"$pp\"; "
+        "sh \"$HOME/infynitae/live/control-menu\" apps-list 2>/dev/null | head -n 6",
+        "r");
+    if (!fp) return;
+
+    app->tray_count = 0;
+    char line[256];
+    while (fgets(line, sizeof(line), fp)) {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
+
+        if (strncmp(line, "SYS\t", 4) == 0) {
+            char *p = line + 4;
+            char *fields[7] = {0};
+            for (int i = 0; i < 7; i++) {
+                fields[i] = p;
+                char *tab = strchr(p, '\t');
+                if (tab) {
+                    *tab = '\0';
+                    p = tab + 1;
+                } else {
+                    p += strlen(p);
+                }
+            }
+            app->wifi_on = (strcmp(fields[0], "enabled") == 0);
+            if (app->wifi_on) {
+                if (fields[1][0] != '\0') snprintf(app->wifi_label, sizeof(app->wifi_label), "%s", fields[1]);
+                else strcpy(app->wifi_label, "On");
+            } else {
+                strcpy(app->wifi_label, "Off");
+            }
+            app->bt_on = (strcmp(fields[2], "on") == 0);
+            if (app->bt_on) {
+                if (fields[3][0] != '\0') snprintf(app->bt_label, sizeof(app->bt_label), "%s", fields[3]);
+                else strcpy(app->bt_label, "On");
+            } else {
+                strcpy(app->bt_label, "Off");
+            }
+            app->volume_pct = atoi(fields[4]);
+            if (app->volume_pct < 0) app->volume_pct = 0;
+            if (app->volume_pct > 100) app->volume_pct = 100;
+            app->volume_muted = (strcmp(fields[5], "yes") == 0);
+            if (fields[6][0] != '\0') snprintf(app->power_profile, sizeof(app->power_profile), "%s", fields[6]);
+        } else if (app->tray_count < MAX_TRAY_APPS) {
+            char *p = line;
+            char *f_state = p;
+            char *t1 = strchr(p, '\t');
+            if (!t1) continue;
+            *t1 = '\0';
+            char *f_name = t1 + 1;
+            char *t2 = strchr(f_name, '\t');
+            if (!t2) continue;
+            *t2 = '\0';
+            char *f_mem = t2 + 1;
+            char *t3 = strchr(f_mem, '\t');
+            if (t3) *t3 = '\0';
+
+            TrayApp *ta = &app->tray_apps[app->tray_count++];
+            snprintf(ta->name, sizeof(ta->name), "%s", f_name);
+            snprintf(ta->mem, sizeof(ta->mem), "%s", f_mem);
+            ta->is_tray = (strcmp(f_state, "tray") == 0);
         }
     }
+    pclose(fp);
+}
 
-    char bt_st[16];
-    app->bt_on = (read_cmd_line("bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo yes", bt_st, sizeof(bt_st)) &&
-                  strcmp(bt_st, "yes") == 0);
+/* Fast on-demand collector when expanding Wi-Fi, Bluetooth, or Audio sub-panel */
+static void refresh_subpanel_data(IslandApp *app) {
+    app->sub_count = 0;
+    FILE *fp = NULL;
 
-    char vol_st[32];
-    if (read_cmd_line("LC_ALL=C pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'",
-                      vol_st, sizeof(vol_st))) {
-        app->volume_pct = atoi(vol_st);
-        if (app->volume_pct < 0) app->volume_pct = 0;
-        if (app->volume_pct > 100) app->volume_pct = 100;
-    } else {
-        app->volume_pct = 75;
+    if (app->subpanel == SUB_WIFI) {
+        fp = popen(
+            "nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan no 2>/dev/null "
+            "| sed 's/\\\\:/\\x1f/g' "
+            "| awk -F: '$4 != \"\" { gsub(\"\\x1f\", \":\", $4); if (!seen[$4]++) printf \"%d\\t%s\\t%s\\t%s%%\\n\", ($1==\"*\"), $4, $4, $2 }' "
+            "| head -n 6",
+            "r");
+    } else if (app->subpanel == SUB_BT) {
+        fp = popen(
+            "bluetoothctl devices Paired 2>/dev/null | head -n 6 | while read -r _ mac name; do "
+            "  [ -z \"$mac\" ] && continue; "
+            "  if bluetoothctl info \"$mac\" 2>/dev/null | grep -q 'Connected: yes'; then "
+            "    printf '1\\t%s\\t%s\\tConnected\\n' \"$mac\" \"$name\"; "
+            "  else "
+            "    printf '0\\t%s\\t%s\\tPaired\\n' \"$mac\" \"$name\"; "
+            "  fi; "
+            "done",
+            "r");
+    } else if (app->subpanel == SUB_AUDIO) {
+        fp = popen(
+            "def=$(pactl get-default-sink 2>/dev/null); "
+            "pactl list sinks 2>/dev/null | awk -F': ' -v d=\"$def\" '"
+            "/^\\s*Name:/ { n=$2 } "
+            "/^\\s*Description:/ { printf \"%d\\t%s\\t%s\\tOutput\\n\", (n==d), n, $2 }"
+            "' | head -n 6",
+            "r");
     }
 
-    char mute_st[16];
-    app->volume_muted = (read_cmd_line("LC_ALL=C pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | awk '{print $2}'",
-                                       mute_st, sizeof(mute_st)) &&
-                         strcmp(mute_st, "yes") == 0);
+    if (!fp) return;
+    char line[256];
+    while (fgets(line, sizeof(line), fp) && app->sub_count < MAX_SUB_ITEMS) {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) line[--len] = '\0';
+        char *f_act = line;
+        char *t1 = strchr(f_act, '\t');
+        if (!t1) continue;
+        *t1 = '\0';
+        char *f_id = t1 + 1;
+        char *t2 = strchr(f_id, '\t');
+        if (!t2) continue;
+        *t2 = '\0';
+        char *f_lbl = t2 + 1;
+        char *t3 = strchr(f_lbl, '\t');
+        if (!t3) continue;
+        *t3 = '\0';
+        char *f_meta = t3 + 1;
 
-    if (!read_cmd_line("powerprofilesctl get 2>/dev/null", app->power_profile, sizeof(app->power_profile))) {
-        strcpy(app->power_profile, "balanced");
+        SubItem *si = &app->sub_items[app->sub_count++];
+        si->active = (atoi(f_act) != 0);
+        snprintf(si->id, sizeof(si->id), "%s", f_id);
+        snprintf(si->label, sizeof(si->label), "%s", f_lbl);
+        snprintf(si->meta, sizeof(si->meta), "%s", f_meta);
     }
+    pclose(fp);
 }
 
 /* ========================================================================== */
-/* Cairo + Pango Rendering Helpers                                            */
+/* Cairo + Pango Helpers                                                      */
 /* ========================================================================== */
 static void draw_rounded_rect(cairo_t *cr, double x, double y, double w, double h, double r) {
     if (r <= 0.5) {
@@ -543,7 +669,56 @@ static void draw_text_left(cairo_t *cr, PangoLayout *layout, const char *font_st
     pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
 }
 
-static void add_hitbox(IslandApp *app, double x, double y, double w, double h, int action_id, int index) {
+static void draw_text_right(cairo_t *cr, PangoLayout *layout, const char *font_str,
+                            const char *text, double right_x, double cy) {
+    PangoFontDescription *desc = pango_font_description_from_string(font_str);
+    pango_layout_set_font_description(layout, desc);
+    pango_font_description_free(desc);
+    pango_layout_set_text(layout, text, -1);
+
+    PangoRectangle ink, logical;
+    pango_layout_get_extents(layout, &ink, &logical);
+    double w = (double)logical.width / (double)PANGO_SCALE;
+    double oy = ((double)logical.y + (double)logical.height / 2.0) / (double)PANGO_SCALE;
+    cairo_move_to(cr, right_x - w, cy - oy);
+    pango_cairo_show_layout(cr, layout);
+}
+
+/* Unified Pill Renderer used by both Super+W and Super+A for 100% visual harmony */
+static void draw_unified_item(cairo_t *cr, double x, double y, double w, double h,
+                              bool active, bool selected, bool bottom_edge, bool show_bar) {
+    if (selected) {
+        cairo_set_source_rgba(cr, 0.14, 0.22, 0.35, 0.96);
+    } else if (active) {
+        cairo_set_source_rgba(cr, 0.11, 0.17, 0.27, 0.94);
+    } else {
+        cairo_set_source_rgba(cr, 0.075, 0.105, 0.155, 0.92);
+    }
+    draw_rounded_rect(cr, x, y, w, h, 4.0);
+    cairo_fill(cr);
+
+    if (selected) {
+        cairo_set_source_rgba(cr, 0.38, 0.64, 0.98, 0.90);
+        cairo_set_line_width(cr, 1.0);
+        draw_rounded_rect(cr, x, y, w, h, 4.0);
+        cairo_stroke(cr);
+    } else if (active) {
+        cairo_set_source_rgba(cr, 0.24, 0.38, 0.58, 0.65);
+        cairo_set_line_width(cr, 1.0);
+        draw_rounded_rect(cr, x, y, w, h, 4.0);
+        cairo_stroke(cr);
+    }
+
+    if (show_bar && active) {
+        cairo_set_source_rgba(cr, 0.35, 0.66, 0.98, 0.98);
+        double ind_y = bottom_edge ? (y + h - 2.0) : y;
+        cairo_rectangle(cr, x + 8.0, ind_y, w - 16.0, 2.0);
+        cairo_fill(cr);
+    }
+}
+
+static void add_hitbox_nav(IslandApp *app, double x, double y, double w, double h,
+                           int action_id, int index, int nav_idx) {
     if (app->hitbox_count >= MAX_HITBOXES) return;
     HitBox *hb = &app->hitboxes[app->hitbox_count++];
     hb->x = x;
@@ -552,10 +727,14 @@ static void add_hitbox(IslandApp *app, double x, double y, double w, double h, i
     hb->h = h;
     hb->action_id = action_id;
     hb->index = index;
+    hb->nav_idx = nav_idx;
+}
+
+static void add_hitbox(IslandApp *app, double x, double y, double w, double h, int action_id, int index) {
+    add_hitbox_nav(app, x, y, w, h, action_id, index, -1);
 }
 
 static void load_position_config(IslandApp *app) {
-    /* Default: bottom edge (classic Windows taskbar position), right corner for control tray */
     app->bottom_edge = true;
     app->control_on_left = false;
     const char *home = getenv("HOME");
@@ -596,29 +775,45 @@ static void update_surface_input_region(IslandOutput *out) {
     if (!out->surface || !app->compositor) return;
 
     struct wl_region *reg = wl_compositor_create_region(app->compositor);
+    int strip_y = app->bottom_edge ? (out->height - 6) : 0;
+    int pill_w = 240;
+    wl_region_add(reg, (out->width - pill_w) / 2, strip_y, pill_w, 6);
+    int corner_w = 160;
+    if (app->control_on_left) {
+        wl_region_add(reg, 0, strip_y, corner_w, 6);
+    } else {
+        wl_region_add(reg, out->width - corner_w, strip_y, corner_w, 6);
+    }
+
     if (app->mode == MODE_CLOSED && app->anim_progress <= 0.02 && !app->dragging) {
-        int strip_y = app->bottom_edge ? (out->height - 6) : 0;
-        int pill_w = 220;
-        wl_region_add(reg, (out->width - pill_w) / 2, strip_y, pill_w, 6);
-        int corner_w = 160;
-        if (app->control_on_left) {
-            wl_region_add(reg, 0, strip_y, corner_w, 6);
-        } else {
-            wl_region_add(reg, out->width - corner_w, strip_y, corner_w, 6);
-        }
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             out->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
-    } else {
+    } else if (app->dragging) {
         wl_region_add(reg, 0, 0, out->width, out->height);
         zwlr_layer_surface_v1_set_keyboard_interactivity(
-            out->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE);
+            out->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
+    } else {
+        /*
+         * Fluent, non-blocking floating bar/panel:
+         * 1. Input region covers ONLY the drawn bar/panel box (so clicking, panning, or
+         *    zooming anywhere on the canvas works naturally while Super+W or Super+A is open).
+         * 2. Keyboard interactivity is ON_DEMAND when hovering/focused on the bar/panel, and
+         *    yielded when the user clicks a canvas window (so Escape/typing works in both!).
+         */
+        if (out->input_w > 0 && out->input_h > 0) {
+            wl_region_add(reg, out->input_x, out->input_y, out->input_w, out->input_h);
+        }
+        zwlr_layer_surface_v1_set_keyboard_interactivity(
+            out->layer_surface,
+            app->kb_grab ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE
+                         : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
     }
     wl_surface_set_input_region(out->surface, reg);
     wl_region_destroy(reg);
 }
 
 /* ========================================================================== */
-/* Windows-Style Taskbar Strip & Compact Control Flyout Renderer              */
+/* Fast Dirty-Rect Renderer                                                   */
 /* ========================================================================== */
 static bool allocate_buffer(IslandOutput *out) {
     if (out->buffer && out->buf_w == out->width && out->buf_h == out->height) return true;
@@ -651,10 +846,15 @@ static bool allocate_buffer(IslandOutput *out) {
     wl_shm_pool_destroy(pool);
     close(fd);
 
+    memset(data, 0, size);
     out->shm_data = data;
     out->shm_size = size;
     out->buf_w = out->width;
     out->buf_h = out->height;
+    out->prev_dx = 0;
+    out->prev_dy = 0;
+    out->prev_dw = out->width;
+    out->prev_dh = out->height;
     return true;
 }
 
@@ -666,151 +866,119 @@ static void render_output(IslandOutput *out) {
     int w = out->width;
     int h = out->height;
 
-    memset(out->shm_data, 0, out->shm_size);
     cairo_surface_t *surf = cairo_image_surface_create_for_data(
         (unsigned char *)out->shm_data, CAIRO_FORMAT_ARGB32, w, h, w * 4);
     cairo_t *cr = cairo_create(surf);
-    PangoLayout *layout = pango_cairo_create_layout(cr);
 
+    /* Clear only the previous frame's dirty region instead of 8.3 MB memset */
+    if (out->prev_dw > 0 && out->prev_dh > 0) {
+        cairo_save(cr);
+        cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+        cairo_rectangle(cr, out->prev_dx, out->prev_dy, out->prev_dw, out->prev_dh);
+        cairo_fill(cr);
+        cairo_restore(cr);
+    }
+
+    PangoLayout *layout = pango_cairo_create_layout(cr);
     app->hitbox_count = 0;
+
     double p = app->anim_progress;
     if (p < 0.0) p = 0.0;
     if (p > 1.0) p = 1.0;
     double ease = 1.0 - pow(1.0 - p, 3.0);
 
-    /* Subtle 2px thin line handle at the active edge when closed */
-    if (p < 0.15) {
-        double line_w = 96.0;
-        double line_x = (w - line_w) / 2.0;
-        double line_y = app->bottom_edge ? (h - 3.0) : 1.0;
-        double hit_y = app->bottom_edge ? (h - 8.0) : 0.0;
-        cairo_set_source_rgba(cr, 0.55, 0.68, 0.88, 0.22 * (1.0 - p * 5.0));
-        cairo_rectangle(cr, line_x, line_y, line_w, 2.0);
-        cairo_fill(cr);
-        add_hitbox(app, (w - 220.0) / 2.0, hit_y, 220.0, 8.0, ACT_PILL_TAP, 0);
-        double corner_x = app->control_on_left ? 0.0 : (w - 160.0);
-        add_hitbox(app, corner_x, hit_y, 160.0, 8.0, ACT_CORNER_TAP, 0);
-    }
+    int cur_dx = 0, cur_dy = 0, cur_dw = 0, cur_dh = 0;
 
-    if (p > 0.01) {
+    /* 100% invisible when closed (zero visual clutter on screen, only edge hitboxes) */
+    if (p <= 0.01) {
+        double hit_y = app->bottom_edge ? (h - 6.0) : 0.0;
+        add_hitbox(app, (w - 240.0) / 2.0, hit_y, 240.0, 6.0, ACT_CENTER_EDGE, 0);
+        double corner_x = app->control_on_left ? 0.0 : (w - 160.0);
+        add_hitbox(app, corner_x, hit_y, 160.0, 6.0, ACT_CORNER_EDGE, 0);
+    } else {
         IslandMode active_m = (app->mode != MODE_CLOSED) ? app->mode : app->target_mode;
 
         /* ─────────────────────────────────────────────────────────────────── */
         /* A. MIDDLE TASKBAR STRIP (Super+W / Center Swipe)                    */
-        /*    44px tall, sharp 6px corners, Windows Taskbar layout             */
+        /*    Pure & uncluttered: [ Search… ] | [ Unified Window Tabs ]        */
+        /*    Super+C / Delete / Middle-Click on any tab closes the window!    */
         /* ─────────────────────────────────────────────────────────────────── */
         if (active_m == MODE_CENTER) {
-            double bar_w = w - 80.0;
-            if (bar_w > 1080.0) bar_w = 1080.0;
-            if (bar_w < 520.0) bar_w = w - 20.0;
-            double bar_h = 44.0;
+            double bar_w = w - 120.0;
+            if (bar_w > 1020.0) bar_w = 1020.0;
+            if (bar_w < 480.0) bar_w = w - 24.0;
+            double bar_h = 40.0;
             double bar_x = (w - bar_w) / 2.0;
             double bar_y = app->bottom_edge
                 ? (h + bar_h * (1.0 - ease) - (bar_h + 10.0) * ease)
                 : (-bar_h * (1.0 - ease) + 10.0 * ease);
 
-            /* Taskbar base: crisp dark workstation slate (#0c1017), 6px corners, 1px border */
-            cairo_set_source_rgba(cr, 0.047, 0.063, 0.090, 0.96 * ease);
-            draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 6.0);
+            cur_dx = (int)bar_x - 4;
+            cur_dy = (int)bar_y - 4;
+            cur_dw = (int)bar_w + 8;
+            cur_dh = (int)bar_h + 8;
+
+            /* Taskbar background (#0b0f16, 5px corners, 1px crisp border) */
+            cairo_set_source_rgba(cr, 0.043, 0.059, 0.086, 0.96 * ease);
+            draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 5.0);
             cairo_fill(cr);
 
-            cairo_set_source_rgba(cr, 0.20, 0.27, 0.38, 0.75 * ease);
+            cairo_set_source_rgba(cr, 0.20, 0.27, 0.38, 0.82 * ease);
             cairo_set_line_width(cr, 1.0);
-            draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 6.0);
+            draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 5.0);
             cairo_stroke(cr);
 
-            double pad = 5.0;
+            double pad = 4.0;
             double item_y = bar_y + pad;
-            double item_h = bar_h - 2 * pad;
+            double item_h = bar_h - 2 * pad; /* 32px unified height */
             double cur_x = bar_x + pad;
 
-            /* 1. [ ⊞ Apps ] Start button */
-            double start_w = 64.0;
-            bool start_lit = (app->start_menu_open || app->search_len > 0);
-            cairo_set_source_rgba(cr, start_lit ? 0.18 : 0.09, start_lit ? 0.32 : 0.13, start_lit ? 0.56 : 0.19, 0.95);
-            draw_rounded_rect(cr, cur_x, item_y, start_w, item_h, 4.0);
-            cairo_fill(cr);
-            cairo_set_source_rgba(cr, 0.92, 0.96, 1.0, 0.95);
-            draw_text_centered(cr, layout, "Sans Bold 9.5", "⊞ Apps", cur_x + start_w / 2.0, item_y + item_h / 2.0, false);
-            add_hitbox(app, cur_x, item_y, start_w, item_h, ACT_START_TOGGLE, 0);
-            cur_x += start_w + 5.0;
-
-            /* 2. Compact Search Box [ ⌕ Search… ] */
-            double sb_w = 185.0;
-            cairo_set_source_rgba(cr, 0.07, 0.10, 0.14, 0.96);
+            /* 1. Search / App Launcher Box (left of bar) */
+            double sb_w = 210.0;
+            bool show_launcher = (app->launcher_open || app->search_len > 0);
+            cairo_set_source_rgba(cr, 0.07, 0.10, 0.15, 0.96);
             draw_rounded_rect(cr, cur_x, item_y, sb_w, item_h, 4.0);
             cairo_fill(cr);
-            cairo_set_source_rgba(cr, (app->search_len > 0) ? 0.35 : 0.18, (app->search_len > 0) ? 0.55 : 0.24, (app->search_len > 0) ? 0.88 : 0.34, 0.80);
+
+            cairo_set_source_rgba(cr, show_launcher ? 0.38 : 0.18, show_launcher ? 0.62 : 0.24, show_launcher ? 0.95 : 0.34, 0.85);
             cairo_set_line_width(cr, 1.0);
             draw_rounded_rect(cr, cur_x, item_y, sb_w, item_h, 4.0);
             cairo_stroke(cr);
 
             if (app->search_len > 0) {
                 cairo_set_source_rgba(cr, 0.95, 0.98, 1.0, 0.96);
-                draw_text_left(cr, layout, "Sans 9.5", app->search, cur_x + 10.0, item_y + item_h / 2.0, sb_w - 30.0);
-                cairo_set_source_rgba(cr, 0.65, 0.74, 0.88, 0.85);
-                draw_text_centered(cr, layout, "Sans Bold 9.5", "×", cur_x + sb_w - 13.0, item_y + item_h / 2.0, true);
-                add_hitbox(app, cur_x + sb_w - 26.0, item_y, 26.0, item_h, ACT_SEARCH_CLEAR, 0);
+                draw_text_left(cr, layout, "Sans 9.5", app->search, cur_x + 10.0, item_y + item_h / 2.0, sb_w - 28.0);
+                add_hitbox(app, cur_x, item_y, sb_w, item_h, ACT_SEARCH_BOX, 0);
             } else {
-                cairo_set_source_rgba(cr, 0.48, 0.56, 0.68, 0.80);
-                draw_text_left(cr, layout, "Sans 9.5", "Search tabs & apps…", cur_x + 10.0, item_y + item_h / 2.0, sb_w - 16.0);
+                cairo_set_source_rgba(cr, 0.50, 0.58, 0.70, 0.82);
+                draw_text_left(cr, layout, "Sans 9.5", "Search or launch apps…", cur_x + 10.0, item_y + item_h / 2.0, sb_w - 16.0);
+                add_hitbox(app, cur_x, item_y, sb_w, item_h, ACT_SEARCH_BOX, 0);
             }
             cur_x += sb_w + 8.0;
 
-            /* Thin vertical separator */
+            /* Subtle vertical divider */
             cairo_set_source_rgba(cr, 0.22, 0.29, 0.40, 0.55);
-            cairo_rectangle(cr, cur_x - 4.0, item_y + 4.0, 1.0, item_h - 8.0);
+            cairo_rectangle(cr, cur_x - 4.0, item_y + 5.0, 1.0, item_h - 10.0);
             cairo_fill(cr);
 
-            /* 3. Right-side [ Overview ] button */
-            double ov_w = 78.0;
-            double ov_x = bar_x + bar_w - pad - ov_w;
-            cairo_set_source_rgba(cr, 0.09, 0.13, 0.19, 0.95);
-            draw_rounded_rect(cr, ov_x, item_y, ov_w, item_h, 4.0);
-            cairo_fill(cr);
-            cairo_set_source_rgba(cr, 0.82, 0.89, 0.98, 0.92);
-            draw_text_centered(cr, layout, "Sans Medium 9", "Overview", ov_x + ov_w / 2.0, item_y + item_h / 2.0, false);
-            add_hitbox(app, ov_x, item_y, ov_w, item_h, ACT_OVERVIEW, 0);
-
-            /* 4. Horizontal Windows Taskbar Tabs in the middle! */
-            double tabs_avail_w = (ov_x - 8.0) - cur_x;
+            /* 2. Open Window Tabs across the rest of the taskbar (NO nested [×] button) */
+            double tabs_avail_w = (bar_x + bar_w - pad) - cur_x;
             int max_tabs = 6;
             int tab_cnt = app->filtered_win_count < max_tabs ? app->filtered_win_count : max_tabs;
             if (tab_cnt == 0) {
                 cairo_set_source_rgba(cr, 0.44, 0.52, 0.64, 0.70);
-                draw_text_left(cr, layout, "Sans 9", "No open windows on canvas", cur_x + 6.0, item_y + item_h / 2.0, tabs_avail_w);
+                draw_text_left(cr, layout, "Sans 9", "No open windows on canvas", cur_x + 8.0, item_y + item_h / 2.0, tabs_avail_w);
             } else {
                 double t_gap = 4.0;
                 double tab_w = (tabs_avail_w - t_gap * (tab_cnt - 1)) / tab_cnt;
-                if (tab_w > 180.0) tab_w = 180.0;
+                if (tab_w > 205.0) tab_w = 205.0;
 
                 for (int i = 0; i < tab_cnt; i++) {
                     CanvasWindow *cw = &app->windows[app->filtered_wins[i]];
                     double tx = cur_x + i * (tab_w + t_gap);
                     bool sel = (app->selected_idx == i);
 
-                    if (sel || cw->focused) {
-                        cairo_set_source_rgba(cr, 0.13, 0.19, 0.29, 0.96);
-                    } else {
-                        cairo_set_source_rgba(cr, 0.08, 0.11, 0.16, 0.92);
-                    }
-                    draw_rounded_rect(cr, tx, item_y, tab_w, item_h, 4.0);
-                    cairo_fill(cr);
-
-                    if (sel) {
-                        cairo_set_source_rgba(cr, 0.38, 0.62, 0.96, 0.85);
-                        cairo_set_line_width(cr, 1.0);
-                        draw_rounded_rect(cr, tx, item_y, tab_w, item_h, 4.0);
-                        cairo_stroke(cr);
-                    }
-
-                    /* Windows-style active bottom/top indicator line */
-                    if (cw->focused) {
-                        cairo_set_source_rgba(cr, 0.35, 0.65, 0.98, 0.98);
-                        double ind_y = app->bottom_edge ? (item_y + item_h - 2.0) : item_y;
-                        cairo_rectangle(cr, tx + 8.0, ind_y, tab_w - 16.0, 2.0);
-                        cairo_fill(cr);
-                    }
+                    draw_unified_item(cr, tx, item_y, tab_w, item_h, cw->focused, sel, app->bottom_edge, true);
 
                     char tab_label[192];
                     if (strcasecmp(cw->app_id, cw->title) != 0 && cw->title[0] != '\0') {
@@ -819,96 +987,99 @@ static void render_output(IslandOutput *out) {
                         snprintf(tab_label, sizeof(tab_label), "%s", cw->app_id);
                     }
 
-                    cairo_set_source_rgba(cr, cw->focused ? 0.96 : 0.78, cw->focused ? 0.98 : 0.84, 1.0, 0.95);
+                    cairo_set_source_rgba(cr, (cw->focused || sel) ? 0.96 : 0.78, (cw->focused || sel) ? 0.98 : 0.84, 1.0, 0.95);
                     draw_text_left(cr, layout, cw->focused ? "Sans Medium 9" : "Sans 9",
-                                   tab_label, tx + 9.0, item_y + item_h / 2.0, tab_w - 30.0);
+                                   tab_label, tx + 10.0, item_y + item_h / 2.0, tab_w - 20.0);
 
-                    /* Compact [×] close button on the right edge of the tab */
-                    double cx_x = tx + tab_w - 20.0;
-                    cairo_set_source_rgba(cr, 0.68, 0.74, 0.84, 0.75);
-                    draw_text_centered(cr, layout, "Sans Bold 8.5", "×", cx_x + 7.0, item_y + item_h / 2.0, true);
-
-                    add_hitbox(app, tx, item_y, tab_w - 22.0, item_h, ACT_WIN_FOCUS, app->filtered_wins[i]);
-                    add_hitbox(app, cx_x - 2.0, item_y, 22.0, item_h, ACT_WIN_CLOSE, app->filtered_wins[i]);
+                    add_hitbox_nav(app, tx, item_y, tab_w, item_h, ACT_WIN_ITEM, app->filtered_wins[i], i);
                 }
             }
 
-            /* 5. Compact Start / App Launcher Flyout (ONLY shown when typing or [⊞ Apps] clicked!) */
-            if (start_lit) {
+            /* 3. App Launcher Flyout (shown when typing or search box clicked) */
+            if (show_launcher) {
                 int shown_apps = app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS;
                 int rows = (shown_apps + 1) / 2;
                 if (rows < 1) rows = 1;
-                double fly_w = 380.0;
-                double fly_h = 16.0 + rows * 34.0;
+                double fly_w = 360.0;
+                double fly_h = 8.0 + rows * 36.0;
                 double fly_x = bar_x;
                 double fly_y = app->bottom_edge ? (bar_y - fly_h - 6.0) : (bar_y + bar_h + 6.0);
 
-                cairo_set_source_rgba(cr, 0.047, 0.063, 0.090, 0.97 * ease);
-                draw_rounded_rect(cr, fly_x, fly_y, fly_w, fly_h, 6.0);
+                if (fly_y < cur_dy) {
+                    cur_dh += (cur_dy - (int)fly_y) + 4;
+                    cur_dy = (int)fly_y - 4;
+                } else {
+                    cur_dh = (int)((fly_y + fly_h) - cur_dy) + 4;
+                }
+
+                cairo_set_source_rgba(cr, 0.043, 0.059, 0.086, 0.97 * ease);
+                draw_rounded_rect(cr, fly_x, fly_y, fly_w, fly_h, 5.0);
                 cairo_fill(cr);
 
-                cairo_set_source_rgba(cr, 0.22, 0.30, 0.42, 0.80 * ease);
+                cairo_set_source_rgba(cr, 0.20, 0.27, 0.38, 0.82 * ease);
                 cairo_set_line_width(cr, 1.0);
-                draw_rounded_rect(cr, fly_x, fly_y, fly_w, fly_h, 6.0);
+                draw_rounded_rect(cr, fly_x, fly_y, fly_w, fly_h, 5.0);
                 cairo_stroke(cr);
 
                 if (shown_apps == 0) {
                     cairo_set_source_rgba(cr, 0.50, 0.58, 0.70, 0.80);
                     draw_text_centered(cr, layout, "Sans 9", "No matching applications", fly_x + fly_w / 2.0, fly_y + fly_h / 2.0, false);
                 } else {
-                    double cw = (fly_w - 20.0) / 2.0;
-                    double ch = 30.0;
+                    double cw = (fly_w - 12.0) / 2.0;
+                    double ch = 32.0;
                     for (int i = 0; i < shown_apps; i++) {
                         DesktopApp *da = &app->apps[app->filtered_apps[i]];
                         int r = i / 2;
                         int c = i % 2;
-                        double ax = fly_x + 8.0 + c * (cw + 4.0);
-                        double ay = fly_y + 8.0 + r * (ch + 4.0);
-                        bool sel = (app->selected_idx == tab_cnt + i);
+                        double ax = fly_x + 4.0 + c * (cw + 4.0);
+                        double ay = fly_y + 4.0 + r * (ch + 4.0);
+                        int nav_i = tab_cnt + i;
+                        bool sel = (app->selected_idx == nav_i);
 
-                        cairo_set_source_rgba(cr, sel ? 0.16 : 0.08, sel ? 0.28 : 0.11, sel ? 0.46 : 0.16, 0.94);
-                        draw_rounded_rect(cr, ax, ay, cw, ch, 4.0);
-                        cairo_fill(cr);
+                        draw_unified_item(cr, ax, ay, cw, ch, false, sel, app->bottom_edge, false);
 
-                        if (sel) {
-                            cairo_set_source_rgba(cr, 0.38, 0.62, 0.96, 0.85);
-                            cairo_set_line_width(cr, 1.0);
-                            draw_rounded_rect(cr, ax, ay, cw, ch, 4.0);
-                            cairo_stroke(cr);
-                        }
-
-                        cairo_set_source_rgba(cr, 0.90, 0.95, 1.0, 0.95);
+                        cairo_set_source_rgba(cr, 0.92, 0.96, 1.0, 0.95);
                         draw_text_left(cr, layout, "Sans Medium 9", da->name, ax + 10.0, ay + ch / 2.0, cw - 16.0);
-                        add_hitbox(app, ax, ay, cw, ch, ACT_APP_LAUNCH, app->filtered_apps[i]);
+                        add_hitbox_nav(app, ax, ay, cw, ch, ACT_APP_LAUNCH, app->filtered_apps[i], nav_i);
                     }
                 }
             }
         }
 
         /* ─────────────────────────────────────────────────────────────────── */
-        /* B. COMPACT WINDOWS SYSTEM TRAY & CONTROL FLYOUT (Super+A)           */
-        /*    Sharp 6px corners, flat rows, no bubbly phone cards              */
+        /* B. SYSTEM CONTROL & INLINE TRAY PANEL (Super+A / Corner Swipe)      */
+        /*    Unified 32px pills, inline expandable Wi-Fi/BT/Audio lists,      */
+        /*    and Super+C / Delete / Middle-Click to quit any tray app!        */
         /* ─────────────────────────────────────────────────────────────────── */
         if (active_m == MODE_CONTROL) {
-            double ctrl_w = 332.0;
-            double ctrl_h = 248.0;
+            int sub_rows = (app->subpanel != SUB_NONE) ? (app->sub_count > 0 ? app->sub_count : 1) : 0;
+            double sub_extra_h = (app->subpanel != SUB_NONE) ? (20.0 + sub_rows * 30.0) : 0.0;
+            int tray_rows = app->tray_count > 0 ? app->tray_count : 1;
+
+            double ctrl_w = 340.0;
+            double ctrl_h = 216.0 + sub_extra_h + tray_rows * 32.0;
             double ctrl_x = app->control_on_left ? 12.0 : (w - ctrl_w - 12.0);
             double ctrl_y = app->bottom_edge
                 ? (h + ctrl_h * (1.0 - ease) - (ctrl_h + 10.0) * ease)
                 : (-ctrl_h * (1.0 - ease) + 10.0 * ease);
 
-            cairo_set_source_rgba(cr, 0.047, 0.063, 0.090, 0.97 * ease);
-            draw_rounded_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h, 6.0);
+            cur_dx = (int)ctrl_x - 4;
+            cur_dy = (int)ctrl_y - 4;
+            cur_dw = (int)ctrl_w + 8;
+            cur_dh = (int)ctrl_h + 8;
+
+            cairo_set_source_rgba(cr, 0.043, 0.059, 0.086, 0.97 * ease);
+            draw_rounded_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h, 5.0);
             cairo_fill(cr);
 
-            cairo_set_source_rgba(cr, 0.20, 0.27, 0.38, 0.80 * ease);
+            cairo_set_source_rgba(cr, 0.20, 0.27, 0.38, 0.82 * ease);
             cairo_set_line_width(cr, 1.0);
-            draw_rounded_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h, 6.0);
+            draw_rounded_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h, 5.0);
             cairo_stroke(cr);
 
-            double rx = ctrl_x + 10.0;
-            double rw = ctrl_w - 20.0;
-            double ry = ctrl_y + 10.0;
+            double rx = ctrl_x + 8.0;
+            double rw = ctrl_w - 16.0;
+            double ry = ctrl_y + 8.0;
 
             /* Row 1: Clock, Date, [⇅ Top/Bot], [⇄ L/R], Battery */
             time_t now = time(NULL);
@@ -917,7 +1088,7 @@ static void render_output(IslandOutput *out) {
             strftime(clock_str, sizeof(clock_str), "%H:%M  ·  %a, %b %d", tm_info);
 
             cairo_set_source_rgba(cr, 0.94, 0.97, 1.0, 0.96);
-            draw_text_left(cr, layout, "Sans Bold 10.5", clock_str, rx + 2.0, ry + 12.0, 175.0);
+            draw_text_left(cr, layout, "Sans Bold 9.5", clock_str, rx + 4.0, ry + 11.0, 175.0);
 
             double right_x = rx + rw;
             if (app->battery_pct >= 0) {
@@ -925,47 +1096,45 @@ static void render_output(IslandOutput *out) {
                 snprintf(bat_s, sizeof(bat_s), "%s%d%%", app->battery_charging ? "⚡" : "", app->battery_pct);
                 double bw = 42.0;
                 right_x -= bw;
-                cairo_set_source_rgba(cr, 0.09, 0.14, 0.20, 0.95);
-                draw_rounded_rect(cr, right_x, ry, bw, 24.0, 4.0);
+                cairo_set_source_rgba(cr, 0.08, 0.13, 0.19, 0.95);
+                draw_rounded_rect(cr, right_x, ry, bw, 22.0, 3.0);
                 cairo_fill(cr);
                 cairo_set_source_rgba(cr, 0.76, 0.92, 0.82, 0.95);
-                draw_text_centered(cr, layout, "Sans Bold 8.5", bat_s, right_x + bw / 2.0, ry + 12.0, true);
+                draw_text_centered(cr, layout, "Sans Bold 8", bat_s, right_x + bw / 2.0, ry + 11.0, true);
                 right_x -= 4.0;
             }
 
-            double sw_w = 44.0;
+            double sw_w = 42.0;
             right_x -= sw_w;
-            cairo_set_source_rgba(cr, 0.10, 0.15, 0.22, 0.95);
-            draw_rounded_rect(cr, right_x, ry, sw_w, 24.0, 4.0);
+            cairo_set_source_rgba(cr, 0.09, 0.14, 0.21, 0.95);
+            draw_rounded_rect(cr, right_x, ry, sw_w, 22.0, 3.0);
             cairo_fill(cr);
             cairo_set_source_rgba(cr, 0.82, 0.89, 0.98, 0.92);
             draw_text_centered(cr, layout, "Sans Medium 8", app->control_on_left ? "⇄ Left" : "⇄ Right",
-                               right_x + sw_w / 2.0, ry + 12.0, false);
-            add_hitbox(app, right_x, ry, sw_w, 24.0, ACT_SWAP_SIDE, 0);
+                               right_x + sw_w / 2.0, ry + 11.0, false);
+            add_hitbox(app, right_x, ry, sw_w, 22.0, ACT_SWAP_SIDE, 0);
             right_x -= (sw_w + 4.0);
 
-            cairo_set_source_rgba(cr, 0.10, 0.15, 0.22, 0.95);
-            draw_rounded_rect(cr, right_x, ry, sw_w, 24.0, 4.0);
+            cairo_set_source_rgba(cr, 0.09, 0.14, 0.21, 0.95);
+            draw_rounded_rect(cr, right_x, ry, sw_w, 22.0, 3.0);
             cairo_fill(cr);
             cairo_set_source_rgba(cr, 0.82, 0.89, 0.98, 0.92);
             draw_text_centered(cr, layout, "Sans Medium 8", app->bottom_edge ? "⇅ Bot" : "⇅ Top",
-                               right_x + sw_w / 2.0, ry + 12.0, false);
-            add_hitbox(app, right_x, ry, sw_w, 24.0, ACT_SWAP_EDGE, 0);
+                               right_x + sw_w / 2.0, ry + 11.0, false);
+            add_hitbox(app, right_x, ry, sw_w, 22.0, ACT_SWAP_EDGE, 0);
 
-            ry += 32.0;
+            ry += 28.0;
 
-            /* Row 2: Flat Volume Bar */
-            double vh = 34.0;
-            cairo_set_source_rgba(cr, 0.08, 0.11, 0.16, 0.95);
-            draw_rounded_rect(cr, rx, ry, rw, vh, 4.0);
-            cairo_fill(cr);
+            /* Row 2: Flat Volume Bar + Audio Output Sub-Panel Trigger (▾) */
+            double vh = 32.0;
+            draw_unified_item(cr, rx, ry, rw, vh, app->subpanel == SUB_AUDIO, false, app->bottom_edge, false);
 
-            add_hitbox(app, rx, ry, 30.0, vh, ACT_VOL_DOWN, 0);
+            add_hitbox(app, rx, ry, 26.0, vh, ACT_VOL_DOWN, 0);
             cairo_set_source_rgba(cr, 0.85, 0.91, 1.0, 0.90);
-            draw_text_centered(cr, layout, "Sans Bold 11", "−", rx + 15.0, ry + vh / 2.0, true);
+            draw_text_centered(cr, layout, "Sans Bold 11", "−", rx + 13.0, ry + vh / 2.0, true);
 
-            double bx = rx + 32.0;
-            double bw = rw - 110.0;
+            double bx = rx + 28.0;
+            double bw = rw - 122.0;
             double by = ry + (vh - 6.0) / 2.0;
             cairo_set_source_rgba(cr, 0.15, 0.20, 0.28, 0.95);
             draw_rounded_rect(cr, bx, by, bw, 6.0, 2.0);
@@ -980,90 +1149,167 @@ static void render_output(IslandOutput *out) {
             add_hitbox(app, bx, ry, bw, vh, ACT_VOL_BAR, (int)bx);
 
             double px = bx + bw + 2.0;
-            add_hitbox(app, px, ry, 30.0, vh, ACT_VOL_UP, 0);
+            add_hitbox(app, px, ry, 26.0, vh, ACT_VOL_UP, 0);
             cairo_set_source_rgba(cr, 0.85, 0.91, 1.0, 0.90);
-            draw_text_centered(cr, layout, "Sans Bold 11", "+", px + 15.0, ry + vh / 2.0, true);
+            draw_text_centered(cr, layout, "Sans Bold 11", "+", px + 13.0, ry + vh / 2.0, true);
 
             char v_s[16];
             if (app->volume_muted) strcpy(v_s, "Muted");
             else snprintf(v_s, sizeof(v_s), "%d%%", app->volume_pct);
-            double mx = px + 30.0;
-            add_hitbox(app, mx, ry, 46.0, vh, ACT_VOL_MUTE, 0);
+            double mx = px + 26.0;
+            add_hitbox(app, mx, ry, 42.0, vh, ACT_VOL_MUTE, 0);
             cairo_set_source_rgba(cr, app->volume_muted ? 0.95 : 0.78, app->volume_muted ? 0.45 : 0.86, 0.45, 0.95);
-            draw_text_centered(cr, layout, "Sans Bold 8.5", v_s, mx + 22.0, ry + vh / 2.0, true);
+            draw_text_centered(cr, layout, "Sans Bold 8.5", v_s, mx + 21.0, ry + vh / 2.0, true);
 
-            ry += vh + 6.0;
+            /* Audio Output Device Selector chevron [▾] */
+            double ax_sub = mx + 42.0;
+            cairo_set_source_rgba(cr, 0.22, 0.30, 0.42, 0.55);
+            cairo_rectangle(cr, ax_sub, ry + 6.0, 1.0, vh - 12.0);
+            cairo_fill(cr);
+            cairo_set_source_rgba(cr, app->subpanel == SUB_AUDIO ? 0.45 : 0.72, app->subpanel == SUB_AUDIO ? 0.78 : 0.82, 0.98, 0.92);
+            draw_text_centered(cr, layout, "Sans Bold 9", app->subpanel == SUB_AUDIO ? "▴" : "▾", ax_sub + 13.0, ry + vh / 2.0, true);
+            add_hitbox(app, ax_sub, ry, 26.0, vh, ACT_AUDIO_SUB, 0);
 
-            /* Rows 3 & 4: Compact 2×2 Flat Desktop Switches (34px tall, 4px corners) */
-            double tw = (rw - 6.0) / 2.0;
-            double th = 34.0;
+            ry += vh + 5.0;
+
+            /* Rows 3 & 4: Unified 2×2 Switches (Wi-Fi, Bluetooth, DND, Power) */
+            /* Wi-Fi and Bluetooth support Right-Click / Hold / ▾ to expand connections! */
+            double tw = (rw - 4.0) / 2.0;
+            double th = 32.0;
             char w_lbl[64], b_lbl[64], d_lbl[64], p_lbl[64];
-            snprintf(w_lbl, sizeof(w_lbl), "Wi-Fi: %s", app->wifi_label);
-            snprintf(b_lbl, sizeof(b_lbl), "Bluetooth: %s", app->bt_on ? "On" : "Off");
-            snprintf(d_lbl, sizeof(d_lbl), "DND: %s", app->dnd_on ? "On" : "Off");
-            snprintf(p_lbl, sizeof(p_lbl), "Power: %s", app->power_profile);
+            snprintf(w_lbl, sizeof(w_lbl), "Wi-Fi · %s", app->wifi_label);
+            snprintf(b_lbl, sizeof(b_lbl), "BT · %s", app->bt_label);
+            snprintf(d_lbl, sizeof(d_lbl), "DND · %s", app->dnd_on ? "On" : "Off");
+            snprintf(p_lbl, sizeof(p_lbl), "Power · %s", app->power_profile);
 
             struct {
                 const char *text;
                 bool active;
                 int action;
+                int sub_action;
+                bool sub_open;
             } sw[4] = {
-                { w_lbl, app->wifi_on, ACT_WIFI_TOGGLE },
-                { b_lbl, app->bt_on, ACT_BT_TOGGLE },
-                { d_lbl, app->dnd_on, ACT_DND_TOGGLE },
-                { p_lbl, strcmp(app->power_profile, "performance") == 0, ACT_POWER_PROFILE }
+                { w_lbl, app->wifi_on, ACT_WIFI_TOGGLE, ACT_WIFI_SUB, app->subpanel == SUB_WIFI },
+                { b_lbl, app->bt_on, ACT_BT_TOGGLE, ACT_BT_SUB, app->subpanel == SUB_BT },
+                { d_lbl, app->dnd_on, ACT_DND_TOGGLE, ACT_NONE, false },
+                { p_lbl, strcmp(app->power_profile, "performance") == 0, ACT_POWER_PROFILE, ACT_NONE, false }
             };
 
             for (int i = 0; i < 4; i++) {
                 int r = i / 2;
                 int c = i % 2;
-                double sx = rx + c * (tw + 6.0);
-                double sy = ry + r * (th + 6.0);
+                double sx = rx + c * (tw + 4.0);
+                double sy = ry + r * (th + 4.0);
+                bool sel = (app->selected_idx == i);
 
-                if (sw[i].active) {
-                    cairo_set_source_rgba(cr, 0.15, 0.28, 0.48, 0.95);
+                draw_unified_item(cr, sx, sy, tw, th, sw[i].active, sel || sw[i].sub_open, app->bottom_edge, true);
+
+                double text_max_w = (sw[i].sub_action != ACT_NONE) ? (tw - 34.0) : (tw - 16.0);
+                cairo_set_source_rgba(cr, 0.94, 0.97, 1.0, 0.95);
+                draw_text_left(cr, layout, "Sans Medium 8.5", sw[i].text, sx + 9.0, sy + th / 2.0, text_max_w);
+
+                if (sw[i].sub_action != ACT_NONE) {
+                    double chev_x = sx + tw - 24.0;
+                    cairo_set_source_rgba(cr, 0.24, 0.34, 0.48, 0.50);
+                    cairo_rectangle(cr, chev_x, sy + 6.0, 1.0, th - 12.0);
+                    cairo_fill(cr);
+                    cairo_set_source_rgba(cr, sw[i].sub_open ? 0.45 : 0.72, sw[i].sub_open ? 0.78 : 0.82, 0.98, 0.92);
+                    draw_text_centered(cr, layout, "Sans Bold 8.5", sw[i].sub_open ? "▴" : "▾", chev_x + 12.0, sy + th / 2.0, true);
+                    add_hitbox_nav(app, sx, sy, tw - 24.0, th, sw[i].action, i, i);
+                    add_hitbox(app, chev_x, sy, 24.0, th, sw[i].sub_action, i);
                 } else {
-                    cairo_set_source_rgba(cr, 0.08, 0.11, 0.16, 0.95);
+                    add_hitbox_nav(app, sx, sy, tw, th, sw[i].action, i, i);
                 }
-                draw_rounded_rect(cr, sx, sy, tw, th, 4.0);
-                cairo_fill(cr);
-
-                if (sw[i].active) {
-                    cairo_set_source_rgba(cr, 0.35, 0.62, 0.96, 0.70);
-                    cairo_set_line_width(cr, 1.0);
-                    draw_rounded_rect(cr, sx, sy, tw, th, 4.0);
-                    cairo_stroke(cr);
-                }
-
-                cairo_set_source_rgba(cr, 0.92, 0.96, 1.0, 0.95);
-                draw_text_left(cr, layout, "Sans Medium 9", sw[i].text, sx + 10.0, sy + th / 2.0, tw - 16.0);
-                add_hitbox(app, sx, sy, tw, th, sw[i].action, i);
             }
 
-            ry += 2 * (th + 6.0);
+            ry += 2 * (th + 4.0) + 4.0;
 
-            /* Row 5: Tray & Background Apps Manager Row */
-            double tray_h = 32.0;
-            cairo_set_source_rgba(cr, 0.09, 0.13, 0.19, 0.95);
-            draw_rounded_rect(cr, rx, ry, rw, tray_h, 4.0);
-            cairo_fill(cr);
-            cairo_set_source_rgba(cr, 0.85, 0.91, 1.0, 0.94);
-            draw_text_left(cr, layout, "Sans Medium 9", "Tray & Background Apps (quit lingering apps…)", rx + 10.0, ry + tray_h / 2.0, rw - 20.0);
-            add_hitbox(app, rx, ry, rw, tray_h, ACT_TRAY_APPS, 0);
+            int nav_cursor = 4;
 
-            ry += tray_h + 6.0;
+            /* Optional Section 4b: Inline Expandable Sub-Panel (Wi-Fi / Bluetooth / Audio Output) */
+            if (app->subpanel != SUB_NONE) {
+                const char *sub_hdr = (app->subpanel == SUB_WIFI) ? "WI-FI NETWORKS (CLICK TO CONNECT)"
+                                    : (app->subpanel == SUB_BT)   ? "BLUETOOTH DEVICES (CLICK TO TOGGLE)"
+                                                                  : "SOUND OUTPUT SINKS";
+                cairo_set_source_rgba(cr, 0.46, 0.72, 0.98, 0.92);
+                draw_text_left(cr, layout, "Sans Bold 7.5", sub_hdr, rx + 2.0, ry + 6.0, rw);
+                ry += 16.0;
 
-            /* Row 6: Session & Power Strip */
-            double ph = 30.0;
-            double p_gap = 5.0;
-            double pw = (rw - 3 * p_gap) / 4.0;
-            const char *p_labels[4] = { "Lock", "Reboot", "Power Off", "Log Out" };
-            int p_acts[4] = { ACT_LOCK, ACT_REBOOT, ACT_POWEROFF, ACT_LOGOUT };
+                if (app->sub_count == 0) {
+                    draw_unified_item(cr, rx, ry, rw, 26.0, false, false, app->bottom_edge, false);
+                    cairo_set_source_rgba(cr, 0.50, 0.58, 0.70, 0.80);
+                    draw_text_left(cr, layout, "Sans 8.5", "None found", rx + 10.0, ry + 13.0, rw - 20.0);
+                    ry += 30.0;
+                } else {
+                    for (int i = 0; i < app->sub_count; i++) {
+                        SubItem *si = &app->sub_items[i];
+                        double sh = 26.0;
+                        int nav_i = nav_cursor++;
+                        bool sel = (app->selected_idx == nav_i);
 
-            for (int i = 0; i < 4; i++) {
+                        draw_unified_item(cr, rx, ry, rw, sh, si->active, sel, app->bottom_edge, true);
+
+                        char lbl[160];
+                        snprintf(lbl, sizeof(lbl), "%s%s", si->active ? "● " : "  ", si->label);
+                        cairo_set_source_rgba(cr, si->active ? 0.96 : 0.80, si->active ? 0.98 : 0.86, 1.0, 0.95);
+                        draw_text_left(cr, layout, si->active ? "Sans Medium 8.5" : "Sans 8.5", lbl, rx + 8.0, ry + sh / 2.0, rw - 76.0);
+
+                        cairo_set_source_rgba(cr, 0.56, 0.68, 0.84, 0.85);
+                        draw_text_right(cr, layout, "Sans 8", si->meta, rx + rw - 8.0, ry + sh / 2.0);
+
+                        add_hitbox_nav(app, rx, ry, rw, sh, ACT_SUB_SELECT, i, nav_i);
+                        ry += sh + 4.0;
+                    }
+                }
+                ry += 4.0;
+            }
+
+            /* Section 5: Unified Inline System Tray & Running Apps (NO nested [Quit ×] button!) */
+            /* Hover or select + Super+C / Delete / Middle-Click quits the app; Left-Click / Enter opens it */
+            cairo_set_source_rgba(cr, 0.54, 0.64, 0.78, 0.82);
+            draw_text_left(cr, layout, "Sans Bold 7.5", "TRAY & APPS  ·  SUPER+C TO CLOSE", rx + 2.0, ry + 6.0, rw);
+            ry += 16.0;
+
+            if (app->tray_count == 0) {
+                draw_unified_item(cr, rx, ry, rw, 28.0, false, false, app->bottom_edge, false);
+                cairo_set_source_rgba(cr, 0.48, 0.56, 0.68, 0.75);
+                draw_text_left(cr, layout, "Sans 8.5", "No background or tray apps running", rx + 10.0, ry + 14.0, rw - 16.0);
+                ry += 32.0;
+            } else {
+                for (int i = 0; i < app->tray_count; i++) {
+                    TrayApp *ta = &app->tray_apps[i];
+                    double row_h = 28.0;
+                    int nav_i = nav_cursor++;
+                    bool sel = (app->selected_idx == nav_i);
+
+                    draw_unified_item(cr, rx, ry, rw, row_h, ta->is_tray, sel, app->bottom_edge, true);
+
+                    char row_lbl[128];
+                    snprintf(row_lbl, sizeof(row_lbl), "%s%s", ta->is_tray ? "● " : "  ", ta->name);
+                    cairo_set_source_rgba(cr, (ta->is_tray || sel) ? 0.96 : 0.78, (ta->is_tray || sel) ? 0.98 : 0.84, 1.0, 0.94);
+                    draw_text_left(cr, layout, ta->is_tray ? "Sans Medium 8.5" : "Sans 8.5", row_lbl, rx + 9.0, ry + row_h / 2.0, rw - 84.0);
+
+                    cairo_set_source_rgba(cr, sel ? 0.74 : 0.52, sel ? 0.84 : 0.62, 0.94, 0.85);
+                    draw_text_right(cr, layout, "Sans 8", ta->mem, rx + rw - 9.0, ry + row_h / 2.0);
+
+                    add_hitbox_nav(app, rx, ry, rw, row_h, ACT_TRAY_ITEM, i, nav_i);
+                    ry += row_h + 4.0;
+                }
+            }
+
+            ry += 2.0;
+
+            /* Row 6: Session Strip (No redundant Lock button since Super+L is Lock) */
+            double ph = 28.0;
+            double p_gap = 4.0;
+            double pw = (rw - 2 * p_gap) / 3.0;
+            const char *p_labels[3] = { "Reboot", "Power Off", "Log Out" };
+            int p_acts[3] = { ACT_REBOOT, ACT_POWEROFF, ACT_LOGOUT };
+
+            for (int i = 0; i < 3; i++) {
                 double px_b = rx + i * (pw + p_gap);
-                bool danger = (i == 2);
-                cairo_set_source_rgba(cr, danger ? 0.22 : 0.09, danger ? 0.10 : 0.13, danger ? 0.12 : 0.19, 0.95);
+                bool danger = (i == 1);
+                cairo_set_source_rgba(cr, danger ? 0.20 : 0.08, danger ? 0.10 : 0.12, danger ? 0.12 : 0.18, 0.95);
                 draw_rounded_rect(cr, px_b, ry, pw, ph, 4.0);
                 cairo_fill(cr);
 
@@ -1078,209 +1324,374 @@ static void render_output(IslandOutput *out) {
     cairo_destroy(cr);
     cairo_surface_destroy(surf);
 
+    /* Damage union of previous dirty box and current dirty box */
+    int dmg_x = out->prev_dx < cur_dx ? out->prev_dx : cur_dx;
+    int dmg_y = out->prev_dy < cur_dy ? out->prev_dy : cur_dy;
+    int dmg_r = (out->prev_dx + out->prev_dw) > (cur_dx + cur_dw) ? (out->prev_dx + out->prev_dw) : (cur_dx + cur_dw);
+    int dmg_b = (out->prev_dy + out->prev_dh) > (cur_dy + cur_dh) ? (out->prev_dy + out->prev_dh) : (cur_dy + cur_dh);
+    if (dmg_x < 0) dmg_x = 0;
+    if (dmg_y < 0) dmg_y = 0;
+    if (dmg_r > w) dmg_r = w;
+    if (dmg_b > h) dmg_b = h;
+
+    out->prev_dx = cur_dx;
+    out->prev_dy = cur_dy;
+    out->prev_dw = cur_dw;
+    out->prev_dh = cur_dh;
+    out->input_x = cur_dx;
+    out->input_y = cur_dy;
+    out->input_w = cur_dw;
+    out->input_h = cur_dh;
+
     update_surface_input_region(out);
     wl_surface_attach(out->surface, out->buffer, 0, 0);
-    wl_surface_damage_buffer(out->surface, 0, 0, w, h);
+    if (dmg_r > dmg_x && dmg_b > dmg_y) {
+        wl_surface_damage_buffer(out->surface, dmg_x, dmg_y, dmg_r - dmg_x, dmg_b - dmg_y);
+    } else {
+        wl_surface_damage_buffer(out->surface, 0, 0, 1, 1);
+    }
     wl_surface_commit(out->surface);
 }
 
 /* ========================================================================== */
-/* Actions & Hit Testing                                                      */
+/* Unified Actions: Focus/Toggle (Enter/Left-Click) & Close (Super+C/MidClick)*/
 /* ========================================================================== */
 static void set_mode(IslandApp *app, IslandMode new_mode) {
     if (new_mode != MODE_CLOSED) {
         app->target_mode = new_mode;
         app->mode = new_mode;
+        app->kb_grab = true;
         app->search[0] = '\0';
         app->search_len = 0;
-        app->start_menu_open = false;
+        app->launcher_open = false;
+        app->subpanel = SUB_NONE;
         app->selected_idx = 0;
-        refresh_snapshot(app);
-        refresh_system_status(app);
+        if (new_mode == MODE_CENTER) {
+            refresh_snapshot(app);
+        } else if (new_mode == MODE_CONTROL) {
+            refresh_control_data(app);
+            /* Default selection in Super+A: first tray app if present, else first switch */
+            app->selected_idx = (app->tray_count > 0) ? 4 : 0;
+        }
     } else {
         app->mode = MODE_CLOSED;
-        app->start_menu_open = false;
+        app->kb_grab = false;
+        app->launcher_open = false;
+        app->subpanel = SUB_NONE;
     }
     damage_all(app);
 }
 
-static void activate_selected(IslandApp *app) {
-    int max_tabs = 6;
-    int shown_wins = app->filtered_win_count < max_tabs ? app->filtered_win_count : max_tabs;
-    if (app->selected_idx < shown_wins && app->filtered_win_count > 0) {
-        CanvasWindow *cw = &app->windows[app->filtered_wins[app->selected_idx]];
-        char cmd[256];
-        snprintf(cmd, sizeof(cmd),
-                 "infynitae msg navigate element %lu %lu && infynitae msg focus %lu %lu",
-                 cw->inst, cw->elem, cw->inst, cw->elem);
-        spawn_detached(cmd);
-        set_mode(app, MODE_CLOSED);
+static void toggle_subpanel(IslandApp *app, ControlSubpanel target) {
+    if (app->subpanel == target) {
+        app->subpanel = SUB_NONE;
     } else {
-        int app_idx = app->selected_idx - shown_wins;
-        if (app_idx >= 0 && app_idx < app->filtered_app_count) {
-            DesktopApp *da = &app->apps[app->filtered_apps[app_idx]];
-            spawn_detached(da->exec_cmd);
-            set_mode(app, MODE_CLOSED);
+        app->subpanel = target;
+        if (target == SUB_WIFI && !app->wifi_on) {
+            spawn_detached("nmcli radio wifi on");
+            app->wifi_on = true;
+            strcpy(app->wifi_label, "On");
+        } else if (target == SUB_BT && !app->bt_on) {
+            spawn_detached("bluetoothctl power on");
+            app->bt_on = true;
+            strcpy(app->bt_label, "On");
+        }
+        refresh_subpanel_data(app);
+        app->selected_idx = 4;
+    }
+    damage_all(app);
+}
+
+static void close_window_at(IslandApp *app, int widx) {
+    if (widx < 0 || widx >= app->win_count) return;
+    CanvasWindow cw = app->windows[widx];
+    for (int k = widx; k < app->win_count - 1; k++) {
+        app->windows[k] = app->windows[k + 1];
+    }
+    app->win_count--;
+    update_filters(app);
+    damage_all(app);
+
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+             "infynitae msg focus %lu %lu && infynitae msg shortcut close",
+             cw.inst, cw.elem);
+    spawn_detached(cmd);
+}
+
+static void quit_tray_at(IslandApp *app, int tidx) {
+    if (tidx < 0 || tidx >= app->tray_count) return;
+    char cmd[256];
+    snprintf(cmd, sizeof(cmd),
+             "sh \"$HOME/infynitae/live/control-menu\" apps-kill '%s' TERM",
+             app->tray_apps[tidx].name);
+    spawn_detached(cmd);
+    for (int k = tidx; k < app->tray_count - 1; k++) {
+        app->tray_apps[k] = app->tray_apps[k + 1];
+    }
+    app->tray_count--;
+    damage_all(app);
+}
+
+/* Harmonized Super+C / Delete action: closes selected window (Super+W) or quits selected tray app (Super+A) */
+static void close_selected_item(IslandApp *app) {
+    for (int i = 0; i < app->hitbox_count; i++) {
+        HitBox *hb = &app->hitboxes[i];
+        if (hb->nav_idx == app->selected_idx) {
+            if (hb->action_id == ACT_WIN_ITEM) {
+                close_window_at(app, hb->index);
+                return;
+            }
+            if (hb->action_id == ACT_TRAY_ITEM) {
+                quit_tray_at(app, hb->index);
+                return;
+            }
         }
     }
 }
 
-static bool handle_click_at(IslandApp *app, IslandOutput *out, double x, double y) {
+static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t button) {
+    /* Right-click on Wi-Fi or Bluetooth tile expands its connection list inline */
+    if (button == BTN_RIGHT) {
+        if (hb->action_id == ACT_WIFI_TOGGLE || hb->action_id == ACT_WIFI_SUB) {
+            toggle_subpanel(app, SUB_WIFI);
+            return true;
+        }
+        if (hb->action_id == ACT_BT_TOGGLE || hb->action_id == ACT_BT_SUB) {
+            toggle_subpanel(app, SUB_BT);
+            return true;
+        }
+        if (hb->action_id == ACT_VOL_BAR || hb->action_id == ACT_VOL_MUTE) {
+            toggle_subpanel(app, SUB_AUDIO);
+            return true;
+        }
+        if (hb->action_id == ACT_WIN_ITEM) {
+            close_window_at(app, hb->index);
+            return true;
+        }
+        if (hb->action_id == ACT_TRAY_ITEM) {
+            quit_tray_at(app, hb->index);
+            return true;
+        }
+    }
+
+    /* Middle-click closes window or quits tray app (harmonized with Super+C) */
+    if (button == BTN_MIDDLE) {
+        if (hb->action_id == ACT_WIN_ITEM) {
+            close_window_at(app, hb->index);
+            return true;
+        }
+        if (hb->action_id == ACT_TRAY_ITEM) {
+            quit_tray_at(app, hb->index);
+            return true;
+        }
+        return true;
+    }
+
+    switch (hb->action_id) {
+    case ACT_CENTER_EDGE:
+        set_mode(app, MODE_CENTER);
+        return true;
+    case ACT_CORNER_EDGE:
+        set_mode(app, MODE_CONTROL);
+        return true;
+    case ACT_SEARCH_BOX:
+        app->launcher_open = !app->launcher_open;
+        update_filters(app);
+        damage_all(app);
+        return true;
+    case ACT_WIN_ITEM: {
+        CanvasWindow *cw = &app->windows[hb->index];
+        char cmd[256];
+        snprintf(cmd, sizeof(cmd),
+                 "infynitae msg navigate element %lu %lu && infynitae msg focus %lu %lu",
+                 cw->inst, cw->elem, cw->inst, cw->elem);
+        for (int k = 0; k < app->win_count; k++) {
+            app->windows[k].focused = (k == hb->index);
+        }
+        /* Yield exclusive keyboard grab so the newly focused canvas window receives keys immediately */
+        app->kb_grab = false;
+        damage_all(app);
+        spawn_detached(cmd);
+        return true;
+    }
+    case ACT_APP_LAUNCH: {
+        DesktopApp *da = &app->apps[hb->index];
+        set_mode(app, MODE_CLOSED);
+        spawn_detached(da->exec_cmd);
+        return true;
+    }
+    case ACT_TRAY_ITEM: {
+        int tidx = hb->index;
+        if (tidx >= 0 && tidx < app->tray_count) {
+            char cmd[256];
+            snprintf(cmd, sizeof(cmd),
+                     "app=$(printf '%s' '%s' | tr '[:upper:]' '[:lower:]'); "
+                     "command -v \"$app\" >/dev/null 2>&1 && exec \"$app\" || gtk-launch \"$app\" 2>/dev/null",
+                     app->tray_apps[tidx].name, app->tray_apps[tidx].name);
+            set_mode(app, MODE_CLOSED);
+            spawn_detached(cmd);
+        }
+        return true;
+    }
+    case ACT_WIFI_SUB:
+        toggle_subpanel(app, SUB_WIFI);
+        return true;
+    case ACT_BT_SUB:
+        toggle_subpanel(app, SUB_BT);
+        return true;
+    case ACT_AUDIO_SUB:
+        toggle_subpanel(app, SUB_AUDIO);
+        return true;
+    case ACT_SUB_SELECT: {
+        int sidx = hb->index;
+        if (sidx >= 0 && sidx < app->sub_count) {
+            SubItem *si = &app->sub_items[sidx];
+            char cmd[384];
+            if (app->subpanel == SUB_WIFI) {
+                snprintf(cmd, sizeof(cmd),
+                         "nmcli connection up id '%s' >/dev/null 2>&1 || nmcli dev wifi connect '%s' >/dev/null 2>&1",
+                         si->id, si->id);
+                spawn_detached(cmd);
+                snprintf(app->wifi_label, sizeof(app->wifi_label), "%s", si->label);
+                for (int k = 0; k < app->sub_count; k++) app->sub_items[k].active = (k == sidx);
+            } else if (app->subpanel == SUB_BT) {
+                if (si->active) {
+                    snprintf(cmd, sizeof(cmd), "bluetoothctl disconnect '%s' >/dev/null 2>&1", si->id);
+                    si->active = false;
+                    strcpy(si->meta, "Paired");
+                    strcpy(app->bt_label, "On");
+                } else {
+                    snprintf(cmd, sizeof(cmd), "bluetoothctl connect '%s' >/dev/null 2>&1", si->id);
+                    si->active = true;
+                    strcpy(si->meta, "Connected");
+                    snprintf(app->bt_label, sizeof(app->bt_label), "%s", si->label);
+                }
+                spawn_detached(cmd);
+            } else if (app->subpanel == SUB_AUDIO) {
+                snprintf(cmd, sizeof(cmd), "pactl set-default-sink '%s' >/dev/null 2>&1", si->id);
+                spawn_detached(cmd);
+                for (int k = 0; k < app->sub_count; k++) app->sub_items[k].active = (k == sidx);
+            }
+            damage_all(app);
+        }
+        return true;
+    }
+    case ACT_SWAP_SIDE:
+        app->control_on_left = !app->control_on_left;
+        save_position_config(app);
+        damage_all(app);
+        return true;
+    case ACT_SWAP_EDGE:
+        app->bottom_edge = !app->bottom_edge;
+        save_position_config(app);
+        damage_all(app);
+        return true;
+    case ACT_WIFI_TOGGLE:
+        if (app->wifi_on) spawn_detached("nmcli radio wifi off");
+        else spawn_detached("nmcli radio wifi on");
+        app->wifi_on = !app->wifi_on;
+        strcpy(app->wifi_label, app->wifi_on ? "On" : "Off");
+        if (!app->wifi_on && app->subpanel == SUB_WIFI) app->subpanel = SUB_NONE;
+        damage_all(app);
+        return true;
+    case ACT_BT_TOGGLE:
+        if (app->bt_on) spawn_detached("bluetoothctl power off");
+        else spawn_detached("bluetoothctl power on");
+        app->bt_on = !app->bt_on;
+        strcpy(app->bt_label, app->bt_on ? "On" : "Off");
+        if (!app->bt_on && app->subpanel == SUB_BT) app->subpanel = SUB_NONE;
+        damage_all(app);
+        return true;
+    case ACT_DND_TOGGLE: {
+        const char *rt = getenv("XDG_RUNTIME_DIR");
+        char dnd_path[256];
+        snprintf(dnd_path, sizeof(dnd_path), "%s/infynitae/do-not-disturb", rt ? rt : "/tmp");
+        if (app->dnd_on) {
+            unlink(dnd_path);
+            spawn_detached("makoctl mode -r do-not-disturb 2>/dev/null || swaync-client --dnd-off 2>/dev/null");
+            app->dnd_on = false;
+        } else {
+            char dir_cmd[300];
+            snprintf(dir_cmd, sizeof(dir_cmd), "mkdir -p '%s/infynitae' && : > '%s'", rt ? rt : "/tmp", dnd_path);
+            spawn_detached(dir_cmd);
+            spawn_detached("makoctl mode -a do-not-disturb 2>/dev/null || swaync-client --dnd-on 2>/dev/null");
+            app->dnd_on = true;
+        }
+        damage_all(app);
+        return true;
+    }
+    case ACT_POWER_PROFILE: {
+        const char *next_p = "balanced";
+        if (strcmp(app->power_profile, "balanced") == 0) next_p = "performance";
+        else if (strcmp(app->power_profile, "performance") == 0) next_p = "power-saver";
+        snprintf(app->power_profile, sizeof(app->power_profile), "%s", next_p);
+        char cmd[128];
+        snprintf(cmd, sizeof(cmd), "powerprofilesctl set %s 2>/dev/null", next_p);
+        spawn_detached(cmd);
+        damage_all(app);
+        return true;
+    }
+    case ACT_VOL_DOWN:
+        app->volume_pct = (app->volume_pct >= 5) ? app->volume_pct - 5 : 0;
+        spawn_detached("pactl set-sink-volume @DEFAULT_SINK@ -5%");
+        damage_all(app);
+        return true;
+    case ACT_VOL_UP:
+        app->volume_pct = (app->volume_pct <= 95) ? app->volume_pct + 5 : 100;
+        spawn_detached("pactl set-sink-volume @DEFAULT_SINK@ +5% && pactl set-sink-mute @DEFAULT_SINK@ 0");
+        app->volume_muted = false;
+        damage_all(app);
+        return true;
+    case ACT_VOL_MUTE:
+        app->volume_muted = !app->volume_muted;
+        spawn_detached("pactl set-sink-mute @DEFAULT_SINK@ toggle");
+        damage_all(app);
+        return true;
+    case ACT_VOL_BAR: {
+        int pct = (int)(((click_x - hb->x) / hb->w) * 100.0 + 0.5);
+        if (pct < 0) pct = 0;
+        if (pct > 100) pct = 100;
+        app->volume_pct = pct;
+        app->volume_muted = false;
+        char cmd[128];
+        snprintf(cmd, sizeof(cmd), "pactl set-sink-volume @DEFAULT_SINK@ %d%% && pactl set-sink-mute @DEFAULT_SINK@ 0", pct);
+        spawn_detached(cmd);
+        damage_all(app);
+        return true;
+    }
+    case ACT_REBOOT:
+        set_mode(app, MODE_CLOSED);
+        spawn_detached(": > ~/.local/state/infynitae/stop; setsid -f ~/.local/bin/infynitae-lock --status 'Rebooting…'; sleep 0.25; systemctl reboot");
+        return true;
+    case ACT_POWEROFF:
+        set_mode(app, MODE_CLOSED);
+        spawn_detached(": > ~/.local/state/infynitae/stop; setsid -f ~/.local/bin/infynitae-lock --status 'Shutting down…'; sleep 0.25; systemctl poweroff");
+        return true;
+    case ACT_LOGOUT:
+        set_mode(app, MODE_CLOSED);
+        spawn_detached("~/.local/bin/infynitae-session stop");
+        return true;
+    }
+    return false;
+}
+
+static void activate_selected(IslandApp *app) {
+    for (int i = 0; i < app->hitbox_count; i++) {
+        HitBox *hb = &app->hitboxes[i];
+        if (hb->nav_idx == app->selected_idx) {
+            execute_hitbox(app, hb, hb->x + hb->w / 2.0, BTN_LEFT);
+            return;
+        }
+    }
+}
+
+static bool handle_click_at(IslandApp *app, IslandOutput *out, double x, double y, uint32_t button) {
     (void)out;
     for (int i = app->hitbox_count - 1; i >= 0; i--) {
         HitBox *hb = &app->hitboxes[i];
         if (x >= hb->x && x <= hb->x + hb->w && y >= hb->y && y <= hb->y + hb->h) {
-            switch (hb->action_id) {
-            case ACT_PILL_TAP:
-                set_mode(app, MODE_CENTER);
-                return true;
-            case ACT_CORNER_TAP:
-                set_mode(app, MODE_CONTROL);
-                return true;
-            case ACT_START_TOGGLE:
-                app->start_menu_open = !app->start_menu_open;
-                update_filters(app);
-                damage_all(app);
-                return true;
-            case ACT_SEARCH_CLEAR:
-                app->search[0] = '\0';
-                app->search_len = 0;
-                update_filters(app);
-                damage_all(app);
-                return true;
-            case ACT_OVERVIEW:
-                set_mode(app, MODE_CLOSED);
-                spawn_detached("infynitae msg overview");
-                return true;
-            case ACT_WIN_FOCUS: {
-                CanvasWindow *cw = &app->windows[hb->index];
-                char cmd[256];
-                snprintf(cmd, sizeof(cmd),
-                         "infynitae msg navigate element %lu %lu && infynitae msg focus %lu %lu",
-                         cw->inst, cw->elem, cw->inst, cw->elem);
-                set_mode(app, MODE_CLOSED);
-                spawn_detached(cmd);
-                return true;
-            }
-            case ACT_WIN_CLOSE: {
-                CanvasWindow *cw = &app->windows[hb->index];
-                char cmd[256];
-                snprintf(cmd, sizeof(cmd),
-                         "infynitae msg focus %lu %lu && infynitae msg shortcut close; sleep 0.1",
-                         cw->inst, cw->elem);
-                spawn_detached(cmd);
-                usleep(90000);
-                refresh_snapshot(app);
-                damage_all(app);
-                return true;
-            }
-            case ACT_SWAP_SIDE:
-                app->control_on_left = !app->control_on_left;
-                save_position_config(app);
-                damage_all(app);
-                return true;
-            case ACT_SWAP_EDGE:
-                app->bottom_edge = !app->bottom_edge;
-                save_position_config(app);
-                damage_all(app);
-                return true;
-            case ACT_APP_LAUNCH: {
-                DesktopApp *da = &app->apps[hb->index];
-                set_mode(app, MODE_CLOSED);
-                spawn_detached(da->exec_cmd);
-                return true;
-            }
-            case ACT_WIFI_TOGGLE:
-                if (app->wifi_on) spawn_detached("nmcli radio wifi off");
-                else spawn_detached("nmcli radio wifi on");
-                app->wifi_on = !app->wifi_on;
-                strcpy(app->wifi_label, app->wifi_on ? "On" : "Off");
-                damage_all(app);
-                return true;
-            case ACT_BT_TOGGLE:
-                if (app->bt_on) spawn_detached("bluetoothctl power off");
-                else spawn_detached("bluetoothctl power on");
-                app->bt_on = !app->bt_on;
-                damage_all(app);
-                return true;
-            case ACT_DND_TOGGLE: {
-                const char *rt = getenv("XDG_RUNTIME_DIR");
-                char dnd_path[256];
-                snprintf(dnd_path, sizeof(dnd_path), "%s/infynitae/do-not-disturb", rt ? rt : "/tmp");
-                if (app->dnd_on) {
-                    unlink(dnd_path);
-                    spawn_detached("makoctl mode -r do-not-disturb 2>/dev/null || swaync-client --dnd-off 2>/dev/null");
-                    app->dnd_on = false;
-                } else {
-                    char dir_cmd[300];
-                    snprintf(dir_cmd, sizeof(dir_cmd), "mkdir -p '%s/infynitae' && : > '%s'", rt ? rt : "/tmp", dnd_path);
-                    spawn_detached(dir_cmd);
-                    spawn_detached("makoctl mode -a do-not-disturb 2>/dev/null || swaync-client --dnd-on 2>/dev/null");
-                    app->dnd_on = true;
-                }
-                damage_all(app);
-                return true;
-            }
-            case ACT_TRAY_APPS:
-                set_mode(app, MODE_CLOSED);
-                spawn_detached("sh \"$HOME/infynitae/live/control-menu\" apps");
-                return true;
-            case ACT_POWER_PROFILE: {
-                const char *next_p = "balanced";
-                if (strcmp(app->power_profile, "balanced") == 0) next_p = "performance";
-                else if (strcmp(app->power_profile, "performance") == 0) next_p = "power-saver";
-                strncpy(app->power_profile, next_p, sizeof(app->power_profile) - 1);
-                char cmd[128];
-                snprintf(cmd, sizeof(cmd), "powerprofilesctl set %s 2>/dev/null", next_p);
-                spawn_detached(cmd);
-                damage_all(app);
-                return true;
-            }
-            case ACT_VOL_DOWN:
-                app->volume_pct = (app->volume_pct >= 5) ? app->volume_pct - 5 : 0;
-                spawn_detached("pactl set-sink-volume @DEFAULT_SINK@ -5%");
-                damage_all(app);
-                return true;
-            case ACT_VOL_UP:
-                app->volume_pct = (app->volume_pct <= 95) ? app->volume_pct + 5 : 100;
-                spawn_detached("pactl set-sink-volume @DEFAULT_SINK@ +5% && pactl set-sink-mute @DEFAULT_SINK@ 0");
-                app->volume_muted = false;
-                damage_all(app);
-                return true;
-            case ACT_VOL_MUTE:
-                app->volume_muted = !app->volume_muted;
-                spawn_detached("pactl set-sink-mute @DEFAULT_SINK@ toggle");
-                damage_all(app);
-                return true;
-            case ACT_VOL_BAR: {
-                int pct = (int)(((x - hb->x) / hb->w) * 100.0 + 0.5);
-                if (pct < 0) pct = 0;
-                if (pct > 100) pct = 100;
-                app->volume_pct = pct;
-                app->volume_muted = false;
-                char cmd[128];
-                snprintf(cmd, sizeof(cmd), "pactl set-sink-volume @DEFAULT_SINK@ %d%% && pactl set-sink-mute @DEFAULT_SINK@ 0", pct);
-                spawn_detached(cmd);
-                damage_all(app);
-                return true;
-            }
-            case ACT_LOCK:
-                set_mode(app, MODE_CLOSED);
-                spawn_detached("~/.local/bin/infynitae-lock");
-                return true;
-            case ACT_REBOOT:
-                set_mode(app, MODE_CLOSED);
-                spawn_detached(": > ~/.local/state/infynitae/stop; setsid -f ~/.local/bin/infynitae-lock --status 'Rebooting…'; sleep 0.25; systemctl reboot");
-                return true;
-            case ACT_POWEROFF:
-                set_mode(app, MODE_CLOSED);
-                spawn_detached(": > ~/.local/state/infynitae/stop; setsid -f ~/.local/bin/infynitae-lock --status 'Shutting down…'; sleep 0.25; systemctl poweroff");
-                return true;
-            case ACT_LOGOUT:
-                set_mode(app, MODE_CLOSED);
-                spawn_detached("~/.local/bin/infynitae-session stop");
-                return true;
-            }
+            return execute_hitbox(app, hb, x, button);
         }
     }
 
@@ -1291,8 +1702,18 @@ static bool handle_click_at(IslandApp *app, IslandOutput *out, double x, double 
     return false;
 }
 
+static int count_nav_items(IslandApp *app) {
+    int max_nav = -1;
+    for (int i = 0; i < app->hitbox_count; i++) {
+        if (app->hitboxes[i].nav_idx > max_nav) {
+            max_nav = app->hitboxes[i].nav_idx;
+        }
+    }
+    return max_nav + 1;
+}
+
 /* ========================================================================== */
-/* Frame Animation & Wayland Input Listeners                                  */
+/* Animation & Wayland Listeners                                              */
 /* ========================================================================== */
 static void on_frame_done(void *data, struct wl_callback *cb, uint32_t time_ms) {
     (void)time_ms;
@@ -1309,7 +1730,7 @@ static void on_frame_done(void *data, struct wl_callback *cb, uint32_t time_ms) 
     double target = (app->mode == MODE_CLOSED) ? 0.0 : 1.0;
     double diff = target - app->anim_progress;
     if (fabs(diff) > 0.015) {
-        app->anim_progress += diff * 0.36;
+        app->anim_progress += diff * 0.40;
         render_output(out);
         request_frame(out);
     } else {
@@ -1347,13 +1768,14 @@ static IslandOutput *output_for_surface(IslandApp *app, struct wl_surface *s) {
 
 static void touch_down(void *data, struct wl_touch *touch, uint32_t serial, uint32_t time,
                        struct wl_surface *surface, int32_t id, wl_fixed_t fx, wl_fixed_t fy) {
-    (void)touch; (void)serial; (void)time;
+    (void)touch; (void)serial;
     IslandApp *app = data;
     IslandOutput *out = output_for_surface(app, surface);
     double x = wl_fixed_to_double(fx);
     double y = wl_fixed_to_double(fy);
 
     app->touch_id = id;
+    app->touch_down_ms = time;
     app->touch_start_x = x;
     app->touch_start_y = y;
     app->touch_cur_x = x;
@@ -1368,8 +1790,8 @@ static void touch_down(void *data, struct wl_touch *touch, uint32_t serial, uint
                 : (x >= out->width * 0.72);
         }
         app->target_mode = in_ctrl_zone ? MODE_CONTROL : MODE_CENTER;
-        refresh_snapshot(app);
-        refresh_system_status(app);
+        if (app->target_mode == MODE_CENTER) refresh_snapshot(app);
+        else refresh_control_data(app);
     }
 }
 
@@ -1385,14 +1807,14 @@ static void touch_motion(void *data, struct wl_touch *touch, uint32_t time, int3
     double pull_dist = app->bottom_edge ? (-raw_dy) : raw_dy;
 
     if (app->mode == MODE_CLOSED && app->dragging) {
-        double prog = pull_dist / 80.0;
+        double prog = pull_dist / 70.0;
         if (prog < 0.0) prog = 0.0;
         if (prog > 1.0) prog = 1.0;
         app->anim_progress = prog;
         for (IslandOutput *o = app->outputs; o; o = o->next) request_frame(o);
-    } else if (app->mode != MODE_CLOSED && pull_dist < -24.0) {
+    } else if (app->mode != MODE_CLOSED && pull_dist < -20.0) {
         app->dragging = true;
-        double prog = 1.0 + (pull_dist / 90.0);
+        double prog = 1.0 + (pull_dist / 80.0);
         if (prog < 0.0) prog = 0.0;
         if (prog > 1.0) prog = 1.0;
         app->anim_progress = prog;
@@ -1401,18 +1823,19 @@ static void touch_motion(void *data, struct wl_touch *touch, uint32_t time, int3
 }
 
 static void touch_up(void *data, struct wl_touch *touch, uint32_t serial, uint32_t time, int32_t id) {
-    (void)touch; (void)serial; (void)time;
+    (void)touch; (void)serial;
     IslandApp *app = data;
     if (id != app->touch_id) return;
 
     double dx = app->touch_cur_x - app->touch_start_x;
     double raw_dy = app->touch_cur_y - app->touch_start_y;
     double pull_dist = app->bottom_edge ? (-raw_dy) : raw_dy;
+    uint32_t held_ms = time - app->touch_down_ms;
     bool was_dragging = app->dragging;
     app->dragging = false;
 
     if (app->mode == MODE_CLOSED) {
-        if (pull_dist > 24.0) {
+        if (pull_dist > 22.0) {
             app->mode = app->target_mode;
             damage_all(app);
         } else if (hypot(dx, raw_dy) < 16.0) {
@@ -1421,10 +1844,12 @@ static void touch_up(void *data, struct wl_touch *touch, uint32_t serial, uint32
             set_mode(app, MODE_CLOSED);
         }
     } else {
-        if (was_dragging && pull_dist < -32.0) {
+        if (was_dragging && pull_dist < -28.0) {
             set_mode(app, MODE_CLOSED);
         } else if (hypot(dx, raw_dy) < 20.0) {
-            handle_click_at(app, app->outputs, app->touch_cur_x, app->touch_cur_y);
+            /* Holding a tile for >= 350ms on touch acts like Right-Click (expands Wi-Fi / BT sub-list) */
+            uint32_t btn = (held_ms >= 350) ? BTN_RIGHT : BTN_LEFT;
+            handle_click_at(app, app->outputs, app->touch_cur_x, app->touch_cur_y, btn);
         } else {
             damage_all(app);
         }
@@ -1454,10 +1879,23 @@ static void pointer_enter(void *data, struct wl_pointer *p, uint32_t s,
     app->pointer_output = output_for_surface(app, surface);
     app->pointer_x = wl_fixed_to_double(fx);
     app->pointer_y = wl_fixed_to_double(fy);
+    if (app->mode != MODE_CLOSED && !app->kb_grab) {
+        app->kb_grab = true;
+        if (app->mode == MODE_CENTER) refresh_snapshot(app);
+        damage_all(app);
+    }
 }
 
 static void pointer_leave(void *data, struct wl_pointer *p, uint32_t s, struct wl_surface *surface) {
-    (void)data; (void)p; (void)s; (void)surface;
+    (void)p; (void)s; (void)surface;
+    IslandApp *app = data;
+    if (app->mode != MODE_CLOSED && app->kb_grab) {
+        app->kb_grab = false;
+        for (IslandOutput *o = app->outputs; o; o = o->next) {
+            update_surface_input_region(o);
+            wl_surface_commit(o->surface);
+        }
+    }
 }
 
 static void pointer_motion(void *data, struct wl_pointer *p, uint32_t t, wl_fixed_t fx, wl_fixed_t fy) {
@@ -1465,11 +1903,27 @@ static void pointer_motion(void *data, struct wl_pointer *p, uint32_t t, wl_fixe
     IslandApp *app = data;
     app->pointer_x = wl_fixed_to_double(fx);
     app->pointer_y = wl_fixed_to_double(fy);
+
+    if (app->mode == MODE_CLOSED) return;
+
+    /* Hovering any unified item selects it so Super+C can immediately close/quit it */
+    for (int i = app->hitbox_count - 1; i >= 0; i--) {
+        HitBox *hb = &app->hitboxes[i];
+        if (hb->nav_idx >= 0 &&
+            app->pointer_x >= hb->x && app->pointer_x <= hb->x + hb->w &&
+            app->pointer_y >= hb->y && app->pointer_y <= hb->y + hb->h) {
+            if (app->selected_idx != hb->nav_idx) {
+                app->selected_idx = hb->nav_idx;
+                damage_all(app);
+            }
+            break;
+        }
+    }
 }
 
 static void pointer_button(void *data, struct wl_pointer *p, uint32_t s, uint32_t t,
                            uint32_t button, uint32_t state) {
-    (void)p; (void)s; (void)t; (void)button;
+    (void)p; (void)s; (void)t;
     IslandApp *app = data;
     if (state != WL_POINTER_BUTTON_STATE_PRESSED) return;
     if (app->mode == MODE_CLOSED) {
@@ -1483,11 +1937,25 @@ static void pointer_button(void *data, struct wl_pointer *p, uint32_t s, uint32_
         set_mode(app, in_ctrl_zone ? MODE_CONTROL : MODE_CENTER);
         return;
     }
-    handle_click_at(app, app->pointer_output, app->pointer_x, app->pointer_y);
+    handle_click_at(app, app->pointer_output, app->pointer_x, app->pointer_y, button);
 }
 
-static void pointer_axis(void *d, struct wl_pointer *p, uint32_t t, uint32_t a, wl_fixed_t v) {
-    (void)d; (void)p; (void)t; (void)a; (void)v;
+/* Mouse wheel over Control Box adjusts volume smoothly */
+static void pointer_axis(void *data, struct wl_pointer *p, uint32_t t, uint32_t axis, wl_fixed_t val) {
+    (void)p; (void)t;
+    IslandApp *app = data;
+    if (app->mode != MODE_CONTROL || axis != WL_POINTER_AXIS_VERTICAL_SCROLL) return;
+    double v = wl_fixed_to_double(val);
+    if (v < -0.5) {
+        app->volume_pct = (app->volume_pct <= 95) ? app->volume_pct + 5 : 100;
+        app->volume_muted = false;
+        spawn_detached("pactl set-sink-volume @DEFAULT_SINK@ +5% && pactl set-sink-mute @DEFAULT_SINK@ 0");
+        damage_all(app);
+    } else if (v > 0.5) {
+        app->volume_pct = (app->volume_pct >= 5) ? app->volume_pct - 5 : 0;
+        spawn_detached("pactl set-sink-volume @DEFAULT_SINK@ -5%");
+        damage_all(app);
+    }
 }
 static void pointer_frame(void *d, struct wl_pointer *p) { (void)d; (void)p; }
 static void pointer_axis_source(void *d, struct wl_pointer *p, uint32_t s) { (void)d; (void)p; (void)s; }
@@ -1536,11 +2004,39 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
 
     uint32_t keycode = key + 8;
     xkb_keysym_t sym = xkb_state_key_get_one_sym(app->xkb_state, keycode);
+    bool super_down = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE) > 0;
+    bool ctrl_down = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0;
 
     if (sym == XKB_KEY_Escape) {
-        set_mode(app, MODE_CLOSED);
+        if (app->subpanel != SUB_NONE) {
+            app->subpanel = SUB_NONE;
+            damage_all(app);
+        } else {
+            set_mode(app, MODE_CLOSED);
+        }
         return;
     }
+
+    /* Harmonized Super+W / Super+A / Super+C / Delete shortcuts while island has focus */
+    if (super_down) {
+        if (sym == XKB_KEY_w || sym == XKB_KEY_W) {
+            set_mode(app, app->mode == MODE_CENTER ? MODE_CLOSED : MODE_CENTER);
+            return;
+        }
+        if (sym == XKB_KEY_a || sym == XKB_KEY_A) {
+            set_mode(app, app->mode == MODE_CONTROL ? MODE_CLOSED : MODE_CONTROL);
+            return;
+        }
+        if (sym == XKB_KEY_c || sym == XKB_KEY_C || sym == XKB_KEY_q || sym == XKB_KEY_Q) {
+            close_selected_item(app);
+            return;
+        }
+    }
+    if (sym == XKB_KEY_Delete || (ctrl_down && (sym == XKB_KEY_w || sym == XKB_KEY_W))) {
+        close_selected_item(app);
+        return;
+    }
+
     if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
         activate_selected(app);
         return;
@@ -1555,10 +2051,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
         return;
     }
 
-    int shown_wins = app->filtered_win_count < 6 ? app->filtered_win_count : 6;
-    bool show_fly = (app->start_menu_open || app->search_len > 0);
-    int shown_apps = show_fly ? (app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS) : 0;
-    int total = shown_wins + shown_apps;
+    int total = count_nav_items(app);
 
     if (sym == XKB_KEY_Right || sym == XKB_KEY_Tab) {
         if (total > 0) app->selected_idx = (app->selected_idx + 1) % total;
@@ -1571,8 +2064,15 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
         return;
     }
     if (sym == XKB_KEY_Down) {
-        if (total > 0) {
-            int next = app->selected_idx + 2;
+        if (app->mode == MODE_CENTER && !app->launcher_open && app->search_len == 0) {
+            app->launcher_open = true;
+            update_filters(app);
+        } else if (app->mode == MODE_CONTROL && app->selected_idx < 2 && app->subpanel == SUB_NONE) {
+            toggle_subpanel(app, app->selected_idx == 0 ? SUB_WIFI : SUB_BT);
+            return;
+        } else if (total > 0) {
+            int step = (app->mode == MODE_CONTROL && app->selected_idx >= 4) ? 1 : 2;
+            int next = app->selected_idx + step;
             app->selected_idx = (next < total) ? next : total - 1;
         }
         damage_all(app);
@@ -1580,23 +2080,31 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
     }
     if (sym == XKB_KEY_Up) {
         if (total > 0) {
-            int prev = app->selected_idx - 2;
+            int step = (app->mode == MODE_CONTROL && app->selected_idx > 4) ? 1 : 2;
+            int prev = app->selected_idx - step;
             app->selected_idx = (prev >= 0) ? prev : 0;
         }
         damage_all(app);
         return;
     }
 
+    if (super_down || ctrl_down) return;
+
     char utf8[16] = {0};
     int len = xkb_state_key_get_utf8(app->xkb_state, keycode, utf8, sizeof(utf8));
     if (len > 0 && (unsigned char)utf8[0] >= 32 && (unsigned char)utf8[0] != 127) {
+        if (app->mode == MODE_CONTROL) {
+            app->mode = MODE_CENTER;
+            app->target_mode = MODE_CENTER;
+            app->subpanel = SUB_NONE;
+            refresh_snapshot(app);
+        }
         if (app->search_len + (size_t)len < sizeof(app->search) - 1) {
             memcpy(app->search + app->search_len, utf8, (size_t)len);
             app->search_len += (size_t)len;
             app->search[app->search_len] = '\0';
-            app->start_menu_open = true;
+            app->launcher_open = true;
             update_filters(app);
-            /* When typing, default selection to the first matching app if no window matches */
             int sw = app->filtered_win_count < 6 ? app->filtered_win_count : 6;
             app->selected_idx = (sw > 0) ? 0 : sw;
             damage_all(app);
@@ -1809,6 +2317,7 @@ int main(int argc, char **argv) {
     app.battery_pct = -1;
     strcpy(app.power_profile, "balanced");
     strcpy(app.wifi_label, "On");
+    strcpy(app.bt_label, "Off");
 
     load_position_config(&app);
     load_all_apps(&app);

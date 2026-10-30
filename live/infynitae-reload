@@ -246,7 +246,7 @@ reload_clipboard() {
 
 status() {
     printf '%-26s %s\n' infynitae "$(pgrep -x infynitae | tr '\n' ' ')"
-    for n in infynitae-wallpaper infynitae-recorder infynitae-record-stream infynitae-portal infynitae-polkit infynitae-lock; do
+    for n in infynitae-wallpaper infynitae-island infynitae-recorder infynitae-record-stream infynitae-portal infynitae-polkit infynitae-lock; do
         pids=$(pids_of "$n" | tr '\n' ' ')
         printf '%-26s %s\n' "$n" "${pids:-not running}"
     done
