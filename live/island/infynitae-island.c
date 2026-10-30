@@ -1,20 +1,17 @@
 /*
- * Infynitae Native Auto-Hiding Taskbar (Super+W) & System Control / Tray Panel (Super+A)
+ * Infynitae Native Taskbar (Super+W) & System Control / StatusNotifier Tray (Super+A)
  *
- * Harmonized Infynitae Workstation Design ("One Action, One Key, Zero Redundancy"):
- *   - Unified Geometry & Visual Language:
- *       Sharp 4–5px corners, crisp 1px borders (#2e3d52 normal, #528bff selected/hovered),
- *       and identical 32px item pills across both Super+W and Super+A.
- *   - Zero Nested Mini-Buttons:
- *       No cluttered [×] or [Quit ×] inside items. Instead, hovering or selecting any
- *       window tab (in Super+W) or tray app (in Super+A) and pressing Super+C (or Delete
- *       or Middle-Click) closes that window or quits that tray app—matching Infynitae's
- *       global Super+C close philosophy!
- *   - Inline Expandable Sub-Lists in Super+A (Zero External Popups):
- *       - Left-click / Enter on Wi-Fi, Bluetooth, or Sound Output toggles it immediately.
- *       - Right-click, Long-press (350ms touch hold), or clicking the ▾ chevron expands
- *         the live Wi-Fi network list, paired Bluetooth devices, or Audio output sinks
- *         directly inside the panel!
+ * Barebones, monochrome obsidian geometry (#0b0f14 background, 2px sharp corners,
+ * 1px subtle border, zero nested buttons, zero visual bloat):
+ *   - Position (`ISLAND_EDGE="bottom|top"`, `ISLAND_CONTROL_SIDE="right|left"`) is read
+ *     strictly from `~/.config/infynitae/config` (no UI buttons for it).
+ *   - Non-blocking input region: only the drawn bar/panel captures pointer events;
+ *     clicking/panning the canvas works freely while open.
+ *   - Super+C / Delete / Middle-Click closes the selected/hovered window (in Super+W)
+ *     or quits the selected/hovered tray app (in Super+A).
+ *   - Built-in org.kde.StatusNotifierWatcher + com.canonical.dbusmenu host:
+ *     Right-clicking a tray app fetches and displays the app's own native context menu
+ *     items (e.g. Steam, Discord, Telegram, OBS) inline, or falls back to Open / Quit / Kill.
  */
 
 #define _GNU_SOURCE
@@ -38,6 +35,7 @@
 #include <unistd.h>
 
 #include <cairo/cairo.h>
+#include <gio/gio.h>
 #include <pango/pangocairo.h>
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon.h>
@@ -47,14 +45,16 @@
 #define MAX_WINDOWS 24
 #define MAX_APPS 160
 #define VISIBLE_APPS 8
-#define MAX_TRAY_APPS 6
+#define MAX_TRAY_APPS 8
+#define MAX_SNI_ITEMS 16
+#define MAX_CTX_ITEMS 10
 #define MAX_SUB_ITEMS 8
 #define MAX_HITBOXES 64
 
 typedef enum {
     MODE_CLOSED = 0,
     MODE_CENTER = 1,  /* Super+W: Search + Open Window Tabs */
-    MODE_CONTROL = 2  /* Super+A: System Control + Inline Tray Apps + Sub-lists */
+    MODE_CONTROL = 2  /* Super+A: System Control + Tray Apps */
 } IslandMode;
 
 typedef enum {
@@ -78,15 +78,30 @@ typedef struct {
 } DesktopApp;
 
 typedef struct {
+    char bus_name[128];
+    char obj_path[128];
+    char menu_path[128];
+    char id[64];
+    char title[64];
+    uint32_t pid;
+} SniItem;
+
+typedef struct {
     char name[64];
     char mem[24];
-    bool is_tray;
+    uint32_t pid;
+    int sni_idx;      /* >= 0 if matched with a registered StatusNotifierItem */
 } TrayApp;
 
 typedef struct {
-    char id[128];     /* SSID, MAC address, or Sink name */
-    char label[128];  /* Display text */
-    char meta[32];    /* Signal %, Connected/Paired, etc. */
+    int32_t id;       /* >= 0 for native dbusmenu item ID; -1=Open, -2=Quit, -3=Force Kill */
+    char label[64];
+} CtxMenuItem;
+
+typedef struct {
+    char id[128];
+    char label[128];
+    char meta[32];
     bool active;
 } SubItem;
 
@@ -94,7 +109,7 @@ typedef struct {
     double x, y, w, h;
     int action_id;
     int index;
-    int nav_idx;      /* Unified keyboard/hover selection index (-1 if non-selectable) */
+    int nav_idx;
 } HitBox;
 
 struct IslandApp;
@@ -118,9 +133,7 @@ typedef struct IslandOutput {
     int32_t buf_w;
     int32_t buf_h;
 
-    /* Previous frame's drawn bounding box so we only clear & damage what we touched */
     int prev_dx, prev_dy, prev_dw, prev_dh;
-    /* Current interactive panel bounding box (non-blocking pass-through outside it!) */
     int input_x, input_y, input_w, input_h;
 
     struct IslandOutput *next;
@@ -141,6 +154,13 @@ typedef struct IslandApp {
     struct xkb_keymap *xkb_keymap;
     struct xkb_state *xkb_state;
 
+    /* D-Bus StatusNotifierWatcher + dbusmenu host */
+    GDBusConnection *dbus;
+    guint sni_watcher_reg_id;
+    guint sni_bus_owner_id;
+    SniItem sni_items[MAX_SNI_ITEMS];
+    int sni_count;
+
     IslandOutput *outputs;
 
     IslandMode mode;
@@ -160,34 +180,32 @@ typedef struct IslandApp {
     double pointer_y;
     IslandOutput *pointer_output;
 
-    /* Search & unified selection state */
     char search[128];
     size_t search_len;
     bool launcher_open;
     int selected_idx;
 
-    /* Open windows on canvas */
     CanvasWindow windows[MAX_WINDOWS];
     int win_count;
     int filtered_wins[MAX_WINDOWS];
     int filtered_win_count;
 
-    /* Installed .desktop apps */
     DesktopApp apps[MAX_APPS];
     int app_count;
     int filtered_apps[MAX_APPS];
     int filtered_app_count;
 
-    /* Inline Tray & Background Apps */
+    /* Tray & Background Apps + Native Context Menu */
     TrayApp tray_apps[MAX_TRAY_APPS];
     int tray_count;
-    int tray_ctx_idx; /* -1 = none, >= 0 = index of tray app whose context menu is expanded */
+    int tray_ctx_idx;
+    CtxMenuItem ctx_items[MAX_CTX_ITEMS];
+    int ctx_count;
 
-    /* Inline Sub-panel items (Wi-Fi networks, Bluetooth devices, Audio sinks) */
     SubItem sub_items[MAX_SUB_ITEMS];
     int sub_count;
 
-    /* Position & Control state */
+    /* Config & Status state */
     bool bottom_edge;
     bool control_on_left;
     bool wifi_on;
@@ -204,7 +222,6 @@ typedef struct IslandApp {
     HitBox hitboxes[MAX_HITBOXES];
     int hitbox_count;
 
-    /* Non-blocking async refresh pipe so opening Super+W / Super+A is 0ms instant! */
     int async_fd;
     pid_t async_pid;
     IslandMode async_kind;
@@ -217,21 +234,15 @@ typedef struct IslandApp {
 enum {
     ACT_NONE = 0,
     ACT_SEARCH_BOX,
-    ACT_SEARCH_CLEAR,
     ACT_WIN_ITEM,
     ACT_APP_LAUNCH,
     ACT_WIFI_TOGGLE,
-    ACT_WIFI_SUB,
     ACT_BT_TOGGLE,
-    ACT_BT_SUB,
     ACT_DND_TOGGLE,
     ACT_POWER_PROFILE,
-    ACT_AUDIO_SUB,
     ACT_SUB_SELECT,
     ACT_TRAY_ITEM,
-    ACT_TRAY_CTX_OPEN,
-    ACT_TRAY_CTX_QUIT,
-    ACT_TRAY_CTX_KILL,
+    ACT_TRAY_CTX_CLICK,
     ACT_VOL_DOWN,
     ACT_VOL_UP,
     ACT_VOL_MUTE,
@@ -240,12 +251,10 @@ enum {
     ACT_POWEROFF,
     ACT_LOGOUT,
     ACT_CENTER_EDGE,
-    ACT_CORNER_EDGE,
-    ACT_SWAP_SIDE,
-    ACT_SWAP_EDGE
+    ACT_CORNER_EDGE
 };
 
-static volatile sig_atomic_t g_sig_cmd = 0; /* 1 = Super+W (center), 2 = Super+A (control), 3 = quit */
+static volatile sig_atomic_t g_sig_cmd = 0;
 
 static void on_sigusr1(int sig) { (void)sig; g_sig_cmd = 1; }
 static void on_sigusr2(int sig) { (void)sig; g_sig_cmd = 2; }
@@ -281,6 +290,271 @@ static void spawn_detached(const char *cmd) {
         execl("/bin/sh", "sh", "-c", cmd, (char *)NULL);
         _exit(127);
     }
+}
+
+/* ========================================================================== */
+/* StatusNotifierWatcher + com.canonical.dbusmenu Host                        */
+/* ========================================================================== */
+static const gchar sni_watcher_xml[] =
+    "<node>"
+    "  <interface name='org.kde.StatusNotifierWatcher'>"
+    "    <method name='RegisterStatusNotifierItem'>"
+    "      <arg type='s' name='service' direction='in'/>"
+    "    </method>"
+    "    <method name='RegisterStatusNotifierHost'>"
+    "      <arg type='s' name='service' direction='in'/>"
+    "    </method>"
+    "    <property name='RegisteredStatusNotifierItems' type='as' access='read'/>"
+    "    <property name='IsStatusNotifierHostRegistered' type='b' access='read'/>"
+    "    <property name='ProtocolVersion' type='i' access='read'/>"
+    "    <signal name='StatusNotifierItemRegistered'>"
+    "      <arg type='s' name='service'/>"
+    "    </signal>"
+    "    <signal name='StatusNotifierItemUnregistered'>"
+    "      <arg type='s' name='service'/>"
+    "    </signal>"
+    "    <signal name='StatusNotifierHostRegistered'/>"
+    "  </interface>"
+    "</node>";
+
+static void sni_fetch_item_props(IslandApp *app, SniItem *item) {
+    if (!app->dbus) return;
+
+    /* Get PID of the D-Bus sender so we can match it to tray_apps */
+    GVariant *pid_res = g_dbus_connection_call_sync(
+        app->dbus, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+        "org.freedesktop.DBus", "GetConnectionUnixProcessID",
+        g_variant_new("(s)", item->bus_name), G_VARIANT_TYPE("(u)"),
+        G_DBUS_CALL_FLAGS_NONE, 150, NULL, NULL);
+    if (pid_res) {
+        g_variant_get(pid_res, "(u)", &item->pid);
+        g_variant_unref(pid_res);
+    }
+
+    const char *ifaces[2] = { "org.kde.StatusNotifierItem", "org.ayatana.StatusNotifierItem" };
+    for (int i = 0; i < 2; i++) {
+        GVariant *res = g_dbus_connection_call_sync(
+            app->dbus, item->bus_name, item->obj_path,
+            "org.freedesktop.DBus.Properties", "GetAll",
+            g_variant_new("(s)", ifaces[i]), G_VARIANT_TYPE("(a{sv})"),
+            G_DBUS_CALL_FLAGS_NONE, 150, NULL, NULL);
+        if (!res) continue;
+
+        GVariant *dict = g_variant_get_child_value(res, 0);
+        const gchar *s_val = NULL;
+        if (g_variant_lookup(dict, "Id", "&s", &s_val) && s_val)
+            snprintf(item->id, sizeof(item->id), "%s", s_val);
+        if (g_variant_lookup(dict, "Title", "&s", &s_val) && s_val)
+            snprintf(item->title, sizeof(item->title), "%s", s_val);
+        if (g_variant_lookup(dict, "Menu", "&o", &s_val) && s_val)
+            snprintf(item->menu_path, sizeof(item->menu_path), "%s", s_val);
+        g_variant_unref(dict);
+        g_variant_unref(res);
+        if (item->menu_path[0] != '\0' || item->id[0] != '\0') break;
+    }
+}
+
+static void sni_handle_method_call(GDBusConnection *conn, const gchar *sender,
+                                   const gchar *object_path, const gchar *interface_name,
+                                   const gchar *method_name, GVariant *parameters,
+                                   GDBusMethodInvocation *invocation, gpointer user_data) {
+    (void)object_path; (void)interface_name;
+    IslandApp *app = user_data;
+
+    if (g_strcmp0(method_name, "RegisterStatusNotifierItem") == 0) {
+        const gchar *service = NULL;
+        g_variant_get(parameters, "(&s)", &service);
+        if (service && app->sni_count < MAX_SNI_ITEMS) {
+            char bus_name[128] = {0};
+            char obj_path[128] = {0};
+            if (service[0] == '/') {
+                snprintf(bus_name, sizeof(bus_name), "%s", sender ? sender : "");
+                snprintf(obj_path, sizeof(obj_path), "%s", service);
+            } else {
+                snprintf(bus_name, sizeof(bus_name), "%s", service);
+                strcpy(obj_path, "/StatusNotifierItem");
+            }
+            if (bus_name[0] != '\0') {
+                int idx = -1;
+                for (int i = 0; i < app->sni_count; i++) {
+                    if (strcmp(app->sni_items[i].bus_name, bus_name) == 0 &&
+                        strcmp(app->sni_items[i].obj_path, obj_path) == 0) {
+                        idx = i;
+                        break;
+                    }
+                }
+                if (idx < 0) idx = app->sni_count++;
+                SniItem *it = &app->sni_items[idx];
+                memset(it, 0, sizeof(*it));
+                snprintf(it->bus_name, sizeof(it->bus_name), "%s", bus_name);
+                snprintf(it->obj_path, sizeof(it->obj_path), "%s", obj_path);
+                sni_fetch_item_props(app, it);
+
+                char full_item[260];
+                snprintf(full_item, sizeof(full_item), "%s%s", bus_name, obj_path);
+                g_dbus_connection_emit_signal(
+                    conn, NULL, "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher",
+                    "StatusNotifierItemRegistered", g_variant_new("(s)", full_item), NULL);
+            }
+        }
+        g_dbus_method_invocation_return_value(invocation, NULL);
+    } else if (g_strcmp0(method_name, "RegisterStatusNotifierHost") == 0) {
+        g_dbus_method_invocation_return_value(invocation, NULL);
+    } else {
+        g_dbus_method_invocation_return_dbus_error(invocation, "org.freedesktop.DBus.Error.UnknownMethod", "Unknown method");
+    }
+}
+
+static GVariant *sni_handle_get_property(GDBusConnection *conn, const gchar *sender,
+                                         const gchar *object_path, const gchar *interface_name,
+                                         const gchar *property_name, GError **error,
+                                         gpointer user_data) {
+    (void)conn; (void)sender; (void)object_path; (void)interface_name; (void)error;
+    IslandApp *app = user_data;
+
+    if (g_strcmp0(property_name, "RegisteredStatusNotifierItems") == 0) {
+        GVariantBuilder b;
+        g_variant_builder_init(&b, G_VARIANT_TYPE("as"));
+        for (int i = 0; i < app->sni_count; i++) {
+            char full[260];
+            snprintf(full, sizeof(full), "%s%s", app->sni_items[i].bus_name, app->sni_items[i].obj_path);
+            g_variant_builder_add(&b, "s", full);
+        }
+        return g_variant_builder_end(&b);
+    }
+    if (g_strcmp0(property_name, "IsStatusNotifierHostRegistered") == 0) {
+        return g_variant_new_boolean(TRUE);
+    }
+    if (g_strcmp0(property_name, "ProtocolVersion") == 0) {
+        return g_variant_new_int32(0);
+    }
+    return NULL;
+}
+
+static const GDBusInterfaceVTable sni_vtable = {
+    .method_call = sni_handle_method_call,
+    .get_property = sni_handle_get_property,
+    .set_property = NULL,
+};
+
+static void setup_sni_watcher(IslandApp *app) {
+    app->dbus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL);
+    if (!app->dbus) return;
+
+    GDBusNodeInfo *node = g_dbus_node_info_new_for_xml(sni_watcher_xml, NULL);
+    if (!node) return;
+
+    app->sni_watcher_reg_id = g_dbus_connection_register_object(
+        app->dbus, "/StatusNotifierWatcher", node->interfaces[0],
+        &sni_vtable, app, NULL, NULL);
+    g_dbus_node_info_unref(node);
+
+    app->sni_bus_owner_id = g_bus_own_name_on_connection(
+        app->dbus, "org.kde.StatusNotifierWatcher",
+        G_BUS_NAME_OWNER_FLAGS_REPLACE, NULL, NULL, NULL, NULL);
+
+    g_dbus_connection_emit_signal(
+        app->dbus, NULL, "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher",
+        "StatusNotifierHostRegistered", NULL, NULL);
+}
+
+static int find_sni_for_tray_app(IslandApp *app, const TrayApp *ta) {
+    for (int i = 0; i < app->sni_count; i++) {
+        SniItem *s = &app->sni_items[i];
+        if (s->pid > 0 && ta->pid > 0 && s->pid == ta->pid) return i;
+        if (s->id[0] && strcasestr(s->id, ta->name)) return i;
+        if (s->title[0] && strcasestr(s->title, ta->name)) return i;
+        if (s->id[0] && strcasestr(ta->name, s->id)) return i;
+    }
+    return -1;
+}
+
+/* Strip mnemonic underscores ("_Mute" -> "Mute") */
+static void clean_menu_label(char *dst, size_t dst_sz, const char *src) {
+    size_t j = 0;
+    for (size_t i = 0; src[i] && j + 1 < dst_sz; i++) {
+        if (src[i] == '_' && src[i + 1] != '_') continue;
+        dst[j++] = src[i];
+    }
+    dst[j] = '\0';
+}
+
+/* Populate ctx_items: first from the app's own com.canonical.dbusmenu, then fallback Open/Quit/Kill */
+static void build_tray_context_menu(IslandApp *app, int tidx) {
+    app->ctx_count = 0;
+    if (tidx < 0 || tidx >= app->tray_count) return;
+    TrayApp *ta = &app->tray_apps[tidx];
+    ta->sni_idx = find_sni_for_tray_app(app, ta);
+
+    if (ta->sni_idx >= 0 && app->dbus) {
+        SniItem *sni = &app->sni_items[ta->sni_idx];
+        if (sni->menu_path[0] != '\0') {
+            g_dbus_connection_call_sync(
+                app->dbus, sni->bus_name, sni->menu_path,
+                "com.canonical.dbusmenu", "AboutToShow",
+                g_variant_new("(i)", 0), NULL,
+                G_DBUS_CALL_FLAGS_NONE, 120, NULL, NULL);
+
+            const gchar *prop_names[] = { "label", "visible", "enabled", "type", NULL };
+            GVariant *res = g_dbus_connection_call_sync(
+                app->dbus, sni->bus_name, sni->menu_path,
+                "com.canonical.dbusmenu", "GetLayout",
+                g_variant_new("(ii^as)", 0, 1, prop_names),
+                G_VARIANT_TYPE("(u(ia{sv}av))"),
+                G_DBUS_CALL_FLAGS_NONE, 180, NULL, NULL);
+
+            if (res) {
+                GVariant *layout = g_variant_get_child_value(res, 1);
+                GVariant *children = g_variant_get_child_value(layout, 2);
+                GVariantIter iter;
+                GVariant *child_v = NULL;
+                g_variant_iter_init(&iter, children);
+                while (g_variant_iter_next(&iter, "v", &child_v) && app->ctx_count < MAX_CTX_ITEMS - 1) {
+                    int32_t cid = 0;
+                    GVariant *cprops = g_variant_get_child_value(child_v, 1);
+                    g_variant_get_child(child_v, 0, "i", &cid);
+
+                    gboolean visible = TRUE, enabled = TRUE;
+                    const gchar *type_s = NULL, *label_s = NULL;
+                    g_variant_lookup(cprops, "visible", "b", &visible);
+                    g_variant_lookup(cprops, "enabled", "b", &enabled);
+                    g_variant_lookup(cprops, "type", "&s", &type_s);
+                    g_variant_lookup(cprops, "label", "&s", &label_s);
+
+                    if (visible && enabled && (!type_s || strcmp(type_s, "separator") != 0) &&
+                        label_s && label_s[0] != '\0') {
+                        CtxMenuItem *cm = &app->ctx_items[app->ctx_count++];
+                        cm->id = cid;
+                        clean_menu_label(cm->label, sizeof(cm->label), label_s);
+                    }
+                    g_variant_unref(cprops);
+                    g_variant_unref(child_v);
+                }
+                g_variant_unref(children);
+                g_variant_unref(layout);
+                g_variant_unref(res);
+            }
+        }
+    }
+
+    /* Always provide clean fallback actions if the app has no dbusmenu */
+    if (app->ctx_count == 0) {
+        app->ctx_items[0].id = -1; strcpy(app->ctx_items[0].label, "Open");
+        app->ctx_items[1].id = -2; strcpy(app->ctx_items[1].label, "Quit");
+        app->ctx_items[2].id = -3; strcpy(app->ctx_items[2].label, "Force Kill");
+        app->ctx_count = 3;
+    }
+}
+
+static void trigger_dbusmenu_click(IslandApp *app, int sni_idx, int32_t item_id) {
+    if (!app->dbus || sni_idx < 0 || sni_idx >= app->sni_count) return;
+    SniItem *sni = &app->sni_items[sni_idx];
+    if (sni->menu_path[0] == '\0') return;
+    g_dbus_connection_call(
+        app->dbus, sni->bus_name, sni->menu_path,
+        "com.canonical.dbusmenu", "Event",
+        g_variant_new("(isvu)", item_id, "clicked", g_variant_new_int32(0), (guint32)time(NULL)),
+        NULL, G_DBUS_CALL_FLAGS_NONE, 200, NULL, NULL, NULL);
 }
 
 /* ========================================================================== */
@@ -489,7 +763,6 @@ static void parse_control_buf(IslandApp *app, char *buf) {
             if (fields[6][0] != '\0') snprintf(app->power_profile, sizeof(app->power_profile), "%s", fields[6]);
         } else if (app->tray_count < MAX_TRAY_APPS) {
             char *p = line;
-            char *f_state = p;
             char *t1 = strchr(p, '\t');
             if (!t1) continue;
             *t1 = '\0';
@@ -499,19 +772,23 @@ static void parse_control_buf(IslandApp *app, char *buf) {
             *t2 = '\0';
             char *f_mem = t2 + 1;
             char *t3 = strchr(f_mem, '\t');
-            if (t3) *t3 = '\0';
+            uint32_t pid = 0;
+            if (t3) {
+                *t3 = '\0';
+                pid = (uint32_t)atoi(t3 + 1);
+            }
 
             TrayApp *ta = &app->tray_apps[app->tray_count++];
             snprintf(ta->name, sizeof(ta->name), "%s", f_name);
             snprintf(ta->mem, sizeof(ta->mem), "%s", f_mem);
-            ta->is_tray = (strcmp(f_state, "tray") == 0);
+            ta->pid = pid;
+            ta->sni_idx = find_sni_for_tray_app(app, ta);
         }
     }
     if (app->tray_ctx_idx >= app->tray_count) app->tray_ctx_idx = -1;
 }
 
 static void start_async_refresh(IslandApp *app, IslandMode kind) {
-    /* Read 0ms sysfs files immediately (battery + DND flag) */
     if (kind == MODE_CONTROL) {
         const char *rt = getenv("XDG_RUNTIME_DIR");
         char dnd_path[256];
@@ -601,7 +878,6 @@ static void refresh_control_data(IslandApp *app) {
     start_async_refresh(app, MODE_CONTROL);
 }
 
-/* Fast on-demand collector when expanding Wi-Fi, Bluetooth, or Audio sub-panel */
 static void refresh_subpanel_data(IslandApp *app) {
     app->sub_count = 0;
     FILE *fp = NULL;
@@ -663,21 +939,15 @@ static void refresh_subpanel_data(IslandApp *app) {
 }
 
 /* ========================================================================== */
-/* Cairo + Pango Helpers                                                      */
+/* Cairo + Pango Helpers (Barebones Monochrome Obsidian)                      */
 /* ========================================================================== */
-static void draw_rounded_rect(cairo_t *cr, double x, double y, double w, double h, double r) {
-    if (r <= 0.5) {
-        cairo_rectangle(cr, x, y, w, h);
-        return;
-    }
-    if (r > w / 2.0) r = w / 2.0;
-    if (r > h / 2.0) r = h / 2.0;
-    cairo_new_sub_path(cr);
-    cairo_arc(cr, x + w - r, y + r, r, -M_PI / 2, 0);
-    cairo_arc(cr, x + w - r, y + h - r, r, 0, M_PI / 2);
-    cairo_arc(cr, x + r, y + h - r, r, M_PI / 2, M_PI);
-    cairo_arc(cr, x + r, y + r, r, M_PI, 3 * M_PI / 2);
-    cairo_close_path(cr);
+static void draw_rect(cairo_t *cr, double x, double y, double w, double h) {
+    cairo_rectangle(cr, round(x) + 0.5, round(y) + 0.5, round(w) - 1.0, round(h) - 1.0);
+}
+
+static void fill_rect(cairo_t *cr, double x, double y, double w, double h) {
+    cairo_rectangle(cr, round(x), round(y), round(w), round(h));
+    cairo_fill(cr);
 }
 
 static void draw_text_centered(cairo_t *cr, PangoLayout *layout, const char *font_str,
@@ -735,37 +1005,28 @@ static void draw_text_right(cairo_t *cr, PangoLayout *layout, const char *font_s
     pango_cairo_show_layout(cr, layout);
 }
 
-/* Unified Pill Renderer used by both Super+W and Super+A for 100% visual harmony */
-static void draw_unified_item(cairo_t *cr, double x, double y, double w, double h,
-                              bool active, bool selected, bool bottom_edge, bool show_bar) {
+/* Barebones monochrome cell: flat #10141c normal, #181f2c selected, crisp 1px border */
+static void draw_bare_item(cairo_t *cr, double x, double y, double w, double h,
+                           bool active, bool selected) {
     if (selected) {
-        cairo_set_source_rgba(cr, 0.14, 0.22, 0.35, 0.96);
+        cairo_set_source_rgba(cr, 0.11, 0.14, 0.20, 0.98);
     } else if (active) {
-        cairo_set_source_rgba(cr, 0.11, 0.17, 0.27, 0.94);
+        cairo_set_source_rgba(cr, 0.08, 0.10, 0.14, 0.96);
     } else {
-        cairo_set_source_rgba(cr, 0.075, 0.105, 0.155, 0.92);
+        cairo_set_source_rgba(cr, 0.055, 0.07, 0.095, 0.94);
     }
-    draw_rounded_rect(cr, x, y, w, h, 4.0);
-    cairo_fill(cr);
+    fill_rect(cr, x, y, w, h);
 
     if (selected) {
-        cairo_set_source_rgba(cr, 0.38, 0.64, 0.98, 0.90);
-        cairo_set_line_width(cr, 1.0);
-        draw_rounded_rect(cr, x, y, w, h, 4.0);
-        cairo_stroke(cr);
+        cairo_set_source_rgba(cr, 0.72, 0.78, 0.88, 0.75);
     } else if (active) {
-        cairo_set_source_rgba(cr, 0.24, 0.38, 0.58, 0.65);
-        cairo_set_line_width(cr, 1.0);
-        draw_rounded_rect(cr, x, y, w, h, 4.0);
-        cairo_stroke(cr);
+        cairo_set_source_rgba(cr, 0.35, 0.42, 0.52, 0.55);
+    } else {
+        cairo_set_source_rgba(cr, 0.16, 0.20, 0.26, 0.50);
     }
-
-    if (show_bar && active) {
-        cairo_set_source_rgba(cr, 0.35, 0.66, 0.98, 0.98);
-        double ind_y = bottom_edge ? (y + h - 2.0) : y;
-        cairo_rectangle(cr, x + 8.0, ind_y, w - 16.0, 2.0);
-        cairo_fill(cr);
-    }
+    cairo_set_line_width(cr, 1.0);
+    draw_rect(cr, x, y, w, h);
+    cairo_stroke(cr);
 }
 
 static void add_hitbox_nav(IslandApp *app, double x, double y, double w, double h,
@@ -807,20 +1068,6 @@ static void load_position_config(IslandApp *app) {
     fclose(f);
 }
 
-static void save_position_config(const IslandApp *app) {
-    char cmd[512];
-    const char *edge = app->bottom_edge ? "bottom" : "top";
-    const char *side = app->control_on_left ? "left" : "right";
-    snprintf(cmd, sizeof(cmd),
-             "cfg=\"$HOME/.config/infynitae/config\"; "
-             "if [ -f \"$cfg\" ]; then "
-             "  if grep -q '^ISLAND_EDGE=' \"$cfg\"; then sed -i 's/^ISLAND_EDGE=.*/ISLAND_EDGE=\"%s\"/' \"$cfg\"; else echo 'ISLAND_EDGE=\"%s\"' >> \"$cfg\"; fi; "
-             "  if grep -q '^ISLAND_CONTROL_SIDE=' \"$cfg\"; then sed -i 's/^ISLAND_CONTROL_SIDE=.*/ISLAND_CONTROL_SIDE=\"%s\"/' \"$cfg\"; else echo 'ISLAND_CONTROL_SIDE=\"%s\"' >> \"$cfg\"; fi; "
-             "fi",
-             edge, edge, side, side);
-    spawn_detached(cmd);
-}
-
 static void update_surface_input_region(IslandOutput *out) {
     IslandApp *app = out->app;
     if (!out->surface || !app->compositor) return;
@@ -844,13 +1091,6 @@ static void update_surface_input_region(IslandOutput *out) {
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             out->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
     } else {
-        /*
-         * Fluent, non-blocking floating bar/panel:
-         * 1. Input region covers ONLY the drawn bar/panel box (so clicking, panning, or
-         *    zooming anywhere on the canvas works naturally while Super+W or Super+A is open).
-         * 2. Keyboard interactivity is ON_DEMAND when hovering/focused on the bar/panel, and
-         *    yielded when the user clicks a canvas window (so Escape/typing works in both!).
-         */
         if (out->input_w > 0 && out->input_h > 0) {
             wl_region_add(reg, out->input_x, out->input_y, out->input_w, out->input_h);
         }
@@ -864,7 +1104,7 @@ static void update_surface_input_region(IslandOutput *out) {
 }
 
 /* ========================================================================== */
-/* Fast Dirty-Rect Renderer                                                   */
+/* Fast Dirty-Rect Renderer (Barebones Clean)                                 */
 /* ========================================================================== */
 static bool allocate_buffer(IslandOutput *out) {
     if (out->buffer && out->buf_w == out->width && out->buf_h == out->height) return true;
@@ -921,7 +1161,6 @@ static void render_output(IslandOutput *out) {
         (unsigned char *)out->shm_data, CAIRO_FORMAT_ARGB32, w, h, w * 4);
     cairo_t *cr = cairo_create(surf);
 
-    /* Clear only the previous frame's dirty region instead of 8.3 MB memset */
     if (out->prev_dw > 0 && out->prev_dh > 0) {
         cairo_save(cr);
         cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
@@ -940,7 +1179,6 @@ static void render_output(IslandOutput *out) {
 
     int cur_dx = 0, cur_dy = 0, cur_dw = 0, cur_dh = 0;
 
-    /* 100% invisible when closed (zero visual clutter on screen, only edge hitboxes) */
     if (p <= 0.01) {
         double hit_y = app->bottom_edge ? (h - 6.0) : 0.0;
         add_hitbox(app, (w - 240.0) / 2.0, hit_y, 240.0, 6.0, ACT_CENTER_EDGE, 0);
@@ -950,147 +1188,125 @@ static void render_output(IslandOutput *out) {
         IslandMode active_m = (app->mode != MODE_CLOSED) ? app->mode : app->target_mode;
 
         /* ─────────────────────────────────────────────────────────────────── */
-        /* A. MIDDLE TASKBAR STRIP (Super+W / Center Swipe)                    */
-        /*    Pure & uncluttered: [ Search… ] | [ Unified Window Tabs ]        */
-        /*    Super+C / Delete / Middle-Click on any tab closes the window!    */
+        /* A. BAREBONES TASKBAR STRIP (Super+W)                                */
         /* ─────────────────────────────────────────────────────────────────── */
         if (active_m == MODE_CENTER) {
-            double bar_w = w - 120.0;
-            if (bar_w > 1020.0) bar_w = 1020.0;
-            if (bar_w < 480.0) bar_w = w - 24.0;
-            double bar_h = 40.0;
-            double bar_x = (w - bar_w) / 2.0;
-            double bar_y = app->bottom_edge
-                ? (h + bar_h * (1.0 - ease) - (bar_h + 10.0) * ease)
-                : (-bar_h * (1.0 - ease) + 10.0 * ease);
+            double bar_w = w - 160.0;
+            if (bar_w > 960.0) bar_w = 960.0;
+            if (bar_w < 460.0) bar_w = w - 24.0;
+            double bar_h = 34.0;
+            double bar_x = round((w - bar_w) / 2.0);
+            double bar_y = round(app->bottom_edge
+                ? (h + bar_h * (1.0 - ease) - (bar_h + 8.0) * ease)
+                : (-bar_h * (1.0 - ease) + 8.0 * ease));
 
-            cur_dx = (int)bar_x - 4;
-            cur_dy = (int)bar_y - 4;
-            cur_dw = (int)bar_w + 8;
-            cur_dh = (int)bar_h + 8;
+            cur_dx = (int)bar_x - 2;
+            cur_dy = (int)bar_y - 2;
+            cur_dw = (int)bar_w + 4;
+            cur_dh = (int)bar_h + 4;
 
-            /* Taskbar background (#0b0f16, 5px corners, 1px crisp border) */
-            cairo_set_source_rgba(cr, 0.043, 0.059, 0.086, 0.96 * ease);
-            draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 5.0);
-            cairo_fill(cr);
+            /* Flat obsidian bar (#0b0f14) + 1px border */
+            cairo_set_source_rgba(cr, 0.043, 0.059, 0.078, 0.96 * ease);
+            fill_rect(cr, bar_x, bar_y, bar_w, bar_h);
 
-            cairo_set_source_rgba(cr, 0.20, 0.27, 0.38, 0.82 * ease);
+            cairo_set_source_rgba(cr, 0.20, 0.24, 0.30, 0.85 * ease);
             cairo_set_line_width(cr, 1.0);
-            draw_rounded_rect(cr, bar_x, bar_y, bar_w, bar_h, 5.0);
+            draw_rect(cr, bar_x, bar_y, bar_w, bar_h);
             cairo_stroke(cr);
 
-            double pad = 4.0;
+            double pad = 3.0;
             double item_y = bar_y + pad;
-            double item_h = bar_h - 2 * pad; /* 32px unified height */
+            double item_h = bar_h - 2 * pad; /* 28px */
             double cur_x = bar_x + pad;
 
-            /* 1. Search / App Launcher Box (left of bar) */
-            double sb_w = 210.0;
+            /* 1. Search Input */
+            double sb_w = 180.0;
             bool show_launcher = (app->launcher_open || app->search_len > 0);
-            cairo_set_source_rgba(cr, 0.07, 0.10, 0.15, 0.96);
-            draw_rounded_rect(cr, cur_x, item_y, sb_w, item_h, 4.0);
-            cairo_fill(cr);
-
-            cairo_set_source_rgba(cr, show_launcher ? 0.38 : 0.18, show_launcher ? 0.62 : 0.24, show_launcher ? 0.95 : 0.34, 0.85);
-            cairo_set_line_width(cr, 1.0);
-            draw_rounded_rect(cr, cur_x, item_y, sb_w, item_h, 4.0);
-            cairo_stroke(cr);
+            draw_bare_item(cr, cur_x, item_y, sb_w, item_h, false, show_launcher);
 
             if (app->search_len > 0) {
-                cairo_set_source_rgba(cr, 0.95, 0.98, 1.0, 0.96);
-                draw_text_left(cr, layout, "Sans 9.5", app->search, cur_x + 10.0, item_y + item_h / 2.0, sb_w - 28.0);
-                add_hitbox(app, cur_x, item_y, sb_w, item_h, ACT_SEARCH_BOX, 0);
+                cairo_set_source_rgba(cr, 0.94, 0.96, 0.98, 0.96);
+                draw_text_left(cr, layout, "Sans 9", app->search, cur_x + 8.0, item_y + item_h / 2.0, sb_w - 16.0);
             } else {
-                cairo_set_source_rgba(cr, 0.50, 0.58, 0.70, 0.82);
-                draw_text_left(cr, layout, "Sans 9.5", "Search or launch apps…", cur_x + 10.0, item_y + item_h / 2.0, sb_w - 16.0);
-                add_hitbox(app, cur_x, item_y, sb_w, item_h, ACT_SEARCH_BOX, 0);
+                cairo_set_source_rgba(cr, 0.48, 0.54, 0.62, 0.85);
+                draw_text_left(cr, layout, "Sans 9", "Search…", cur_x + 8.0, item_y + item_h / 2.0, sb_w - 16.0);
             }
-            cur_x += sb_w + 8.0;
+            add_hitbox(app, cur_x, item_y, sb_w, item_h, ACT_SEARCH_BOX, 0);
+            cur_x += sb_w + 4.0;
 
-            /* Subtle vertical divider */
-            cairo_set_source_rgba(cr, 0.22, 0.29, 0.40, 0.55);
-            cairo_rectangle(cr, cur_x - 4.0, item_y + 5.0, 1.0, item_h - 10.0);
-            cairo_fill(cr);
-
-            /* 2. Open Window Tabs across the rest of the taskbar (NO nested [×] button) */
+            /* 2. Open Window Tabs */
             double tabs_avail_w = (bar_x + bar_w - pad) - cur_x;
             int max_tabs = 6;
             int tab_cnt = app->filtered_win_count < max_tabs ? app->filtered_win_count : max_tabs;
             if (tab_cnt == 0) {
-                cairo_set_source_rgba(cr, 0.44, 0.52, 0.64, 0.70);
-                draw_text_left(cr, layout, "Sans 9", "No open windows on canvas", cur_x + 8.0, item_y + item_h / 2.0, tabs_avail_w);
+                cairo_set_source_rgba(cr, 0.42, 0.48, 0.56, 0.70);
+                draw_text_left(cr, layout, "Sans 8.5", "No open windows", cur_x + 8.0, item_y + item_h / 2.0, tabs_avail_w);
             } else {
-                double t_gap = 4.0;
-                double tab_w = (tabs_avail_w - t_gap * (tab_cnt - 1)) / tab_cnt;
-                if (tab_w > 205.0) tab_w = 205.0;
+                double t_gap = 3.0;
+                double tab_w = floor((tabs_avail_w - t_gap * (tab_cnt - 1)) / tab_cnt);
+                if (tab_w > 190.0) tab_w = 190.0;
 
                 for (int i = 0; i < tab_cnt; i++) {
                     CanvasWindow *cw = &app->windows[app->filtered_wins[i]];
                     double tx = cur_x + i * (tab_w + t_gap);
                     bool sel = (app->selected_idx == i);
 
-                    draw_unified_item(cr, tx, item_y, tab_w, item_h, cw->focused, sel, app->bottom_edge, true);
+                    draw_bare_item(cr, tx, item_y, tab_w, item_h, cw->focused, sel);
 
-                    char tab_label[192];
-                    if (strcasecmp(cw->app_id, cw->title) != 0 && cw->title[0] != '\0') {
-                        snprintf(tab_label, sizeof(tab_label), "%s — %s", cw->app_id, cw->title);
-                    } else {
-                        snprintf(tab_label, sizeof(tab_label), "%s", cw->app_id);
-                    }
-
-                    cairo_set_source_rgba(cr, (cw->focused || sel) ? 0.96 : 0.78, (cw->focused || sel) ? 0.98 : 0.84, 1.0, 0.95);
-                    draw_text_left(cr, layout, cw->focused ? "Sans Medium 9" : "Sans 9",
-                                   tab_label, tx + 10.0, item_y + item_h / 2.0, tab_w - 20.0);
+                    cairo_set_source_rgba(cr, (cw->focused || sel) ? 0.95 : 0.70,
+                                          (cw->focused || sel) ? 0.97 : 0.75,
+                                          (cw->focused || sel) ? 1.00 : 0.82, 0.95);
+                    draw_text_left(cr, layout, cw->focused ? "Sans Medium 8.5" : "Sans 8.5",
+                                   cw->title[0] ? cw->title : cw->app_id,
+                                   tx + 8.0, item_y + item_h / 2.0, tab_w - 16.0);
 
                     add_hitbox_nav(app, tx, item_y, tab_w, item_h, ACT_WIN_ITEM, app->filtered_wins[i], i);
                 }
             }
 
-            /* 3. App Launcher Flyout (shown when typing or search box clicked) */
+            /* 3. App Launcher Flyout */
             if (show_launcher) {
                 int shown_apps = app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS;
                 int rows = (shown_apps + 1) / 2;
                 if (rows < 1) rows = 1;
-                double fly_w = 360.0;
-                double fly_h = 8.0 + rows * 36.0;
+                double fly_w = 340.0;
+                double fly_h = 6.0 + rows * 30.0;
                 double fly_x = bar_x;
-                double fly_y = app->bottom_edge ? (bar_y - fly_h - 6.0) : (bar_y + bar_h + 6.0);
+                double fly_y = app->bottom_edge ? (bar_y - fly_h - 4.0) : (bar_y + bar_h + 4.0);
 
                 if (fly_y < cur_dy) {
-                    cur_dh += (cur_dy - (int)fly_y) + 4;
-                    cur_dy = (int)fly_y - 4;
+                    cur_dh += (cur_dy - (int)fly_y) + 2;
+                    cur_dy = (int)fly_y - 2;
                 } else {
-                    cur_dh = (int)((fly_y + fly_h) - cur_dy) + 4;
+                    cur_dh = (int)((fly_y + fly_h) - cur_dy) + 2;
                 }
 
-                cairo_set_source_rgba(cr, 0.043, 0.059, 0.086, 0.97 * ease);
-                draw_rounded_rect(cr, fly_x, fly_y, fly_w, fly_h, 5.0);
-                cairo_fill(cr);
+                cairo_set_source_rgba(cr, 0.043, 0.059, 0.078, 0.97 * ease);
+                fill_rect(cr, fly_x, fly_y, fly_w, fly_h);
 
-                cairo_set_source_rgba(cr, 0.20, 0.27, 0.38, 0.82 * ease);
+                cairo_set_source_rgba(cr, 0.20, 0.24, 0.30, 0.85 * ease);
                 cairo_set_line_width(cr, 1.0);
-                draw_rounded_rect(cr, fly_x, fly_y, fly_w, fly_h, 5.0);
+                draw_rect(cr, fly_x, fly_y, fly_w, fly_h);
                 cairo_stroke(cr);
 
                 if (shown_apps == 0) {
-                    cairo_set_source_rgba(cr, 0.50, 0.58, 0.70, 0.80);
-                    draw_text_centered(cr, layout, "Sans 9", "No matching applications", fly_x + fly_w / 2.0, fly_y + fly_h / 2.0, false);
+                    cairo_set_source_rgba(cr, 0.48, 0.54, 0.62, 0.80);
+                    draw_text_centered(cr, layout, "Sans 8.5", "No matching apps", fly_x + fly_w / 2.0, fly_y + fly_h / 2.0, false);
                 } else {
-                    double cw = (fly_w - 12.0) / 2.0;
-                    double ch = 32.0;
+                    double cw = floor((fly_w - 9.0) / 2.0);
+                    double ch = 27.0;
                     for (int i = 0; i < shown_apps; i++) {
                         DesktopApp *da = &app->apps[app->filtered_apps[i]];
                         int r = i / 2;
                         int c = i % 2;
-                        double ax = fly_x + 4.0 + c * (cw + 4.0);
-                        double ay = fly_y + 4.0 + r * (ch + 4.0);
+                        double ax = fly_x + 3.0 + c * (cw + 3.0);
+                        double ay = fly_y + 3.0 + r * (ch + 3.0);
                         int nav_i = tab_cnt + i;
                         bool sel = (app->selected_idx == nav_i);
 
-                        draw_unified_item(cr, ax, ay, cw, ch, false, sel, app->bottom_edge, false);
-
-                        cairo_set_source_rgba(cr, 0.92, 0.96, 1.0, 0.95);
-                        draw_text_left(cr, layout, "Sans Medium 9", da->name, ax + 10.0, ay + ch / 2.0, cw - 16.0);
+                        draw_bare_item(cr, ax, ay, cw, ch, false, sel);
+                        cairo_set_source_rgba(cr, sel ? 0.96 : 0.82, sel ? 0.98 : 0.86, 1.0, 0.95);
+                        draw_text_left(cr, layout, "Sans 8.5", da->name, ax + 8.0, ay + ch / 2.0, cw - 14.0);
                         add_hitbox_nav(app, ax, ay, cw, ch, ACT_APP_LAUNCH, app->filtered_apps[i], nav_i);
                     }
                 }
@@ -1098,310 +1314,225 @@ static void render_output(IslandOutput *out) {
         }
 
         /* ─────────────────────────────────────────────────────────────────── */
-        /* B. SYSTEM CONTROL & INLINE TRAY PANEL (Super+A / Corner Swipe)      */
-        /*    Unified 32px pills, inline expandable Wi-Fi/BT/Audio lists,      */
-        /*    and Super+C / Delete / Middle-Click to quit any tray app!        */
+        /* B. BAREBONES CONTROL & TRAY PANEL (Super+A)                         */
         /* ─────────────────────────────────────────────────────────────────── */
         if (active_m == MODE_CONTROL) {
             int sub_rows = (app->subpanel != SUB_NONE) ? (app->sub_count > 0 ? app->sub_count : 1) : 0;
-            double sub_extra_h = (app->subpanel != SUB_NONE) ? (20.0 + sub_rows * 30.0) : 0.0;
-            int tray_rows = app->tray_count > 0 ? app->tray_count : 1;
-            double ctx_extra_h = (app->tray_ctx_idx >= 0 && app->tray_ctx_idx < app->tray_count) ? 30.0 : 0.0;
+            double sub_extra_h = (app->subpanel != SUB_NONE) ? (4.0 + sub_rows * 27.0) : 0.0;
+            double tray_extra_h = (app->tray_count > 0) ? (4.0 + app->tray_count * 27.0) : 0.0;
+            int ctx_rows = (app->tray_ctx_idx >= 0 && app->tray_ctx_idx < app->tray_count)
+                ? ((app->ctx_count + 2) / 3) : 0;
+            double ctx_extra_h = ctx_rows * 27.0;
 
-            double ctrl_w = 340.0;
-            double ctrl_h = 216.0 + sub_extra_h + tray_rows * 32.0 + ctx_extra_h;
-            double ctrl_x = app->control_on_left ? 12.0 : (w - ctrl_w - 12.0);
-            double ctrl_y = app->bottom_edge
-                ? (h + ctrl_h * (1.0 - ease) - (ctrl_h + 10.0) * ease)
-                : (-ctrl_h * (1.0 - ease) + 10.0 * ease);
+            double ctrl_w = 300.0;
+            double ctrl_h = 152.0 + sub_extra_h + tray_extra_h + ctx_extra_h;
+            double ctrl_x = app->control_on_left ? 8.0 : (w - ctrl_w - 8.0);
+            double ctrl_y = round(app->bottom_edge
+                ? (h + ctrl_h * (1.0 - ease) - (ctrl_h + 8.0) * ease)
+                : (-ctrl_h * (1.0 - ease) + 8.0 * ease));
 
-            cur_dx = (int)ctrl_x - 4;
-            cur_dy = (int)ctrl_y - 4;
-            cur_dw = (int)ctrl_w + 8;
-            cur_dh = (int)ctrl_h + 8;
+            cur_dx = (int)ctrl_x - 2;
+            cur_dy = (int)ctrl_y - 2;
+            cur_dw = (int)ctrl_w + 4;
+            cur_dh = (int)ctrl_h + 4;
 
-            cairo_set_source_rgba(cr, 0.043, 0.059, 0.086, 0.97 * ease);
-            draw_rounded_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h, 5.0);
-            cairo_fill(cr);
+            /* Flat obsidian panel (#0b0f14) + 1px border */
+            cairo_set_source_rgba(cr, 0.043, 0.059, 0.078, 0.97 * ease);
+            fill_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h);
 
-            cairo_set_source_rgba(cr, 0.20, 0.27, 0.38, 0.82 * ease);
+            cairo_set_source_rgba(cr, 0.20, 0.24, 0.30, 0.85 * ease);
             cairo_set_line_width(cr, 1.0);
-            draw_rounded_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h, 5.0);
+            draw_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h);
             cairo_stroke(cr);
 
-            double rx = ctrl_x + 8.0;
-            double rw = ctrl_w - 16.0;
-            double ry = ctrl_y + 8.0;
+            double rx = ctrl_x + 6.0;
+            double rw = ctrl_w - 12.0;
+            double ry = ctrl_y + 6.0;
 
-            /* Row 1: Clock, Date, [⇅ Top/Bot], [⇄ L/R], Battery */
+            /* Row 1: Clock & Date (left) + Battery % (right) — NO Bot/Right buttons */
             time_t now = time(NULL);
             struct tm *tm_info = localtime(&now);
             char clock_str[64];
             strftime(clock_str, sizeof(clock_str), "%H:%M  ·  %a, %b %d", tm_info);
 
-            cairo_set_source_rgba(cr, 0.94, 0.97, 1.0, 0.96);
-            draw_text_left(cr, layout, "Sans Bold 9.5", clock_str, rx + 4.0, ry + 11.0, 175.0);
+            cairo_set_source_rgba(cr, 0.92, 0.95, 0.98, 0.95);
+            draw_text_left(cr, layout, "Sans Medium 9", clock_str, rx + 2.0, ry + 10.0, 210.0);
 
-            double right_x = rx + rw;
             if (app->battery_pct >= 0) {
                 char bat_s[24];
-                snprintf(bat_s, sizeof(bat_s), "%s%d%%", app->battery_charging ? "⚡" : "", app->battery_pct);
-                double bw = 42.0;
-                right_x -= bw;
-                cairo_set_source_rgba(cr, 0.08, 0.13, 0.19, 0.95);
-                draw_rounded_rect(cr, right_x, ry, bw, 22.0, 3.0);
-                cairo_fill(cr);
-                cairo_set_source_rgba(cr, 0.76, 0.92, 0.82, 0.95);
-                draw_text_centered(cr, layout, "Sans Bold 8", bat_s, right_x + bw / 2.0, ry + 11.0, true);
-                right_x -= 4.0;
+                snprintf(bat_s, sizeof(bat_s), "%s%d%%", app->battery_charging ? "+" : "", app->battery_pct);
+                cairo_set_source_rgba(cr, 0.68, 0.76, 0.84, 0.90);
+                draw_text_right(cr, layout, "Sans 8.5", bat_s, rx + rw - 2.0, ry + 10.0);
             }
+            ry += 22.0;
 
-            double sw_w = 42.0;
-            right_x -= sw_w;
-            cairo_set_source_rgba(cr, 0.09, 0.14, 0.21, 0.95);
-            draw_rounded_rect(cr, right_x, ry, sw_w, 22.0, 3.0);
-            cairo_fill(cr);
-            cairo_set_source_rgba(cr, 0.82, 0.89, 0.98, 0.92);
-            draw_text_centered(cr, layout, "Sans Medium 8", app->control_on_left ? "⇄ Left" : "⇄ Right",
-                               right_x + sw_w / 2.0, ry + 11.0, false);
-            add_hitbox(app, right_x, ry, sw_w, 22.0, ACT_SWAP_SIDE, 0);
-            right_x -= (sw_w + 4.0);
+            /* Row 2: Barebones Volume Bar (Left-click sets level; Right-click opens Audio Sinks) */
+            double vh = 26.0;
+            draw_bare_item(cr, rx, ry, rw, vh, app->subpanel == SUB_AUDIO, false);
 
-            cairo_set_source_rgba(cr, 0.09, 0.14, 0.21, 0.95);
-            draw_rounded_rect(cr, right_x, ry, sw_w, 22.0, 3.0);
-            cairo_fill(cr);
-            cairo_set_source_rgba(cr, 0.82, 0.89, 0.98, 0.92);
-            draw_text_centered(cr, layout, "Sans Medium 8", app->bottom_edge ? "⇅ Bot" : "⇅ Top",
-                               right_x + sw_w / 2.0, ry + 11.0, false);
-            add_hitbox(app, right_x, ry, sw_w, 22.0, ACT_SWAP_EDGE, 0);
+            add_hitbox(app, rx, ry, 22.0, vh, ACT_VOL_DOWN, 0);
+            cairo_set_source_rgba(cr, 0.78, 0.84, 0.90, 0.90);
+            draw_text_centered(cr, layout, "Sans 10", "−", rx + 11.0, ry + vh / 2.0, true);
 
-            ry += 28.0;
-
-            /* Row 2: Flat Volume Bar + Audio Output Sub-Panel Trigger (▾) */
-            double vh = 32.0;
-            draw_unified_item(cr, rx, ry, rw, vh, app->subpanel == SUB_AUDIO, false, app->bottom_edge, false);
-
-            add_hitbox(app, rx, ry, 26.0, vh, ACT_VOL_DOWN, 0);
-            cairo_set_source_rgba(cr, 0.85, 0.91, 1.0, 0.90);
-            draw_text_centered(cr, layout, "Sans Bold 11", "−", rx + 13.0, ry + vh / 2.0, true);
-
-            double bx = rx + 28.0;
-            double bw = rw - 122.0;
-            double by = ry + (vh - 6.0) / 2.0;
-            cairo_set_source_rgba(cr, 0.15, 0.20, 0.28, 0.95);
-            draw_rounded_rect(cr, bx, by, bw, 6.0, 2.0);
-            cairo_fill(cr);
+            double bx = rx + 24.0;
+            double bw = rw - 92.0;
+            double by = ry + (vh - 4.0) / 2.0;
+            cairo_set_source_rgba(cr, 0.14, 0.17, 0.22, 0.95);
+            fill_rect(cr, bx, by, bw, 4.0);
 
             double fill_w = (bw * (app->volume_muted ? 0 : app->volume_pct)) / 100.0;
-            if (fill_w > 2.0) {
-                cairo_set_source_rgba(cr, 0.35, 0.64, 0.96, 0.95);
-                draw_rounded_rect(cr, bx, by, fill_w, 6.0, 2.0);
-                cairo_fill(cr);
+            if (fill_w > 1.0) {
+                cairo_set_source_rgba(cr, 0.78, 0.84, 0.92, 0.95);
+                fill_rect(cr, bx, by, fill_w, 4.0);
             }
             add_hitbox(app, bx, ry, bw, vh, ACT_VOL_BAR, (int)bx);
 
             double px = bx + bw + 2.0;
-            add_hitbox(app, px, ry, 26.0, vh, ACT_VOL_UP, 0);
-            cairo_set_source_rgba(cr, 0.85, 0.91, 1.0, 0.90);
-            draw_text_centered(cr, layout, "Sans Bold 11", "+", px + 13.0, ry + vh / 2.0, true);
+            add_hitbox(app, px, ry, 22.0, vh, ACT_VOL_UP, 0);
+            cairo_set_source_rgba(cr, 0.78, 0.84, 0.90, 0.90);
+            draw_text_centered(cr, layout, "Sans 10", "+", px + 11.0, ry + vh / 2.0, true);
 
             char v_s[16];
-            if (app->volume_muted) strcpy(v_s, "Muted");
+            if (app->volume_muted) strcpy(v_s, "Mute");
             else snprintf(v_s, sizeof(v_s), "%d%%", app->volume_pct);
-            double mx = px + 26.0;
-            add_hitbox(app, mx, ry, 42.0, vh, ACT_VOL_MUTE, 0);
-            cairo_set_source_rgba(cr, app->volume_muted ? 0.95 : 0.78, app->volume_muted ? 0.45 : 0.86, 0.45, 0.95);
-            draw_text_centered(cr, layout, "Sans Bold 8.5", v_s, mx + 21.0, ry + vh / 2.0, true);
+            double mx = px + 22.0;
+            add_hitbox(app, mx, ry, 44.0, vh, ACT_VOL_MUTE, 0);
+            cairo_set_source_rgba(cr, app->volume_muted ? 0.55 : 0.82, app->volume_muted ? 0.58 : 0.86, 0.92, 0.92);
+            draw_text_centered(cr, layout, "Sans 8.5", v_s, mx + 22.0, ry + vh / 2.0, true);
 
-            /* Audio Output Device Selector chevron [▾] */
-            double ax_sub = mx + 42.0;
-            cairo_set_source_rgba(cr, 0.22, 0.30, 0.42, 0.55);
-            cairo_rectangle(cr, ax_sub, ry + 6.0, 1.0, vh - 12.0);
-            cairo_fill(cr);
-            cairo_set_source_rgba(cr, app->subpanel == SUB_AUDIO ? 0.45 : 0.72, app->subpanel == SUB_AUDIO ? 0.78 : 0.82, 0.98, 0.92);
-            draw_text_centered(cr, layout, "Sans Bold 9", app->subpanel == SUB_AUDIO ? "▴" : "▾", ax_sub + 13.0, ry + vh / 2.0, true);
-            add_hitbox(app, ax_sub, ry, 26.0, vh, ACT_AUDIO_SUB, 0);
+            ry += vh + 4.0;
 
-            ry += vh + 5.0;
-
-            /* Rows 3 & 4: Unified 2×2 Switches (Wi-Fi, Bluetooth, DND, Power) */
-            /* Wi-Fi and Bluetooth support Right-Click / Hold / ▾ to expand connections! */
-            double tw = (rw - 4.0) / 2.0;
-            double th = 32.0;
+            /* Rows 3 & 4: Clean 2×2 Switches (Left-click toggles; Right-click/Hold expands list) */
+            double tw = floor((rw - 3.0) / 2.0);
+            double th = 26.0;
             char w_lbl[64], b_lbl[64], d_lbl[64], p_lbl[64];
-            snprintf(w_lbl, sizeof(w_lbl), "Wi-Fi · %s", app->wifi_label);
-            snprintf(b_lbl, sizeof(b_lbl), "BT · %s", app->bt_label);
-            snprintf(d_lbl, sizeof(d_lbl), "DND · %s", app->dnd_on ? "On" : "Off");
-            snprintf(p_lbl, sizeof(p_lbl), "Power · %s", app->power_profile);
+            snprintf(w_lbl, sizeof(w_lbl), "Wi-Fi: %s", app->wifi_label);
+            snprintf(b_lbl, sizeof(b_lbl), "BT: %s", app->bt_label);
+            snprintf(d_lbl, sizeof(d_lbl), "DND: %s", app->dnd_on ? "On" : "Off");
+            snprintf(p_lbl, sizeof(p_lbl), "Power: %s", app->power_profile);
 
             struct {
                 const char *text;
                 bool active;
                 int action;
-                int sub_action;
                 bool sub_open;
             } sw[4] = {
-                { w_lbl, app->wifi_on, ACT_WIFI_TOGGLE, ACT_WIFI_SUB, app->subpanel == SUB_WIFI },
-                { b_lbl, app->bt_on, ACT_BT_TOGGLE, ACT_BT_SUB, app->subpanel == SUB_BT },
-                { d_lbl, app->dnd_on, ACT_DND_TOGGLE, ACT_NONE, false },
-                { p_lbl, strcmp(app->power_profile, "performance") == 0, ACT_POWER_PROFILE, ACT_NONE, false }
+                { w_lbl, app->wifi_on, ACT_WIFI_TOGGLE, app->subpanel == SUB_WIFI },
+                { b_lbl, app->bt_on, ACT_BT_TOGGLE, app->subpanel == SUB_BT },
+                { d_lbl, app->dnd_on, ACT_DND_TOGGLE, false },
+                { p_lbl, strcmp(app->power_profile, "performance") == 0, ACT_POWER_PROFILE, false }
             };
 
             for (int i = 0; i < 4; i++) {
                 int r = i / 2;
                 int c = i % 2;
-                double sx = rx + c * (tw + 4.0);
-                double sy = ry + r * (th + 4.0);
+                double sx = rx + c * (tw + 3.0);
+                double sy = ry + r * (th + 3.0);
                 bool sel = (app->selected_idx == i);
 
-                draw_unified_item(cr, sx, sy, tw, th, sw[i].active, sel || sw[i].sub_open, app->bottom_edge, true);
-
-                double text_max_w = (sw[i].sub_action != ACT_NONE) ? (tw - 34.0) : (tw - 16.0);
-                cairo_set_source_rgba(cr, 0.94, 0.97, 1.0, 0.95);
-                draw_text_left(cr, layout, "Sans Medium 8.5", sw[i].text, sx + 9.0, sy + th / 2.0, text_max_w);
-
-                if (sw[i].sub_action != ACT_NONE) {
-                    double chev_x = sx + tw - 24.0;
-                    cairo_set_source_rgba(cr, 0.24, 0.34, 0.48, 0.50);
-                    cairo_rectangle(cr, chev_x, sy + 6.0, 1.0, th - 12.0);
-                    cairo_fill(cr);
-                    cairo_set_source_rgba(cr, sw[i].sub_open ? 0.45 : 0.72, sw[i].sub_open ? 0.78 : 0.82, 0.98, 0.92);
-                    draw_text_centered(cr, layout, "Sans Bold 8.5", sw[i].sub_open ? "▴" : "▾", chev_x + 12.0, sy + th / 2.0, true);
-                    add_hitbox_nav(app, sx, sy, tw - 24.0, th, sw[i].action, i, i);
-                    add_hitbox(app, chev_x, sy, 24.0, th, sw[i].sub_action, i);
-                } else {
-                    add_hitbox_nav(app, sx, sy, tw, th, sw[i].action, i, i);
-                }
+                draw_bare_item(cr, sx, sy, tw, th, sw[i].active, sel || sw[i].sub_open);
+                cairo_set_source_rgba(cr, (sw[i].active || sel) ? 0.94 : 0.68,
+                                      (sw[i].active || sel) ? 0.96 : 0.74,
+                                      (sw[i].active || sel) ? 1.00 : 0.80, 0.95);
+                draw_text_left(cr, layout, "Sans 8.5", sw[i].text, sx + 8.0, sy + th / 2.0, tw - 14.0);
+                add_hitbox_nav(app, sx, sy, tw, th, sw[i].action, i, i);
             }
 
-            ry += 2 * (th + 4.0) + 4.0;
-
+            ry += 2 * (th + 3.0) + 2.0;
             int nav_cursor = 4;
 
-            /* Optional Section 4b: Inline Expandable Sub-Panel (Wi-Fi / Bluetooth / Audio Output) */
+            /* Optional Inline Sub-List (Wi-Fi / Bluetooth / Audio Output) */
             if (app->subpanel != SUB_NONE) {
-                const char *sub_hdr = (app->subpanel == SUB_WIFI) ? "WI-FI NETWORKS (CLICK TO CONNECT)"
-                                    : (app->subpanel == SUB_BT)   ? "BLUETOOTH DEVICES (CLICK TO TOGGLE)"
-                                                                  : "SOUND OUTPUT SINKS";
-                cairo_set_source_rgba(cr, 0.46, 0.72, 0.98, 0.92);
-                draw_text_left(cr, layout, "Sans Bold 7.5", sub_hdr, rx + 2.0, ry + 6.0, rw);
-                ry += 16.0;
-
+                ry += 2.0;
                 if (app->sub_count == 0) {
-                    draw_unified_item(cr, rx, ry, rw, 26.0, false, false, app->bottom_edge, false);
-                    cairo_set_source_rgba(cr, 0.50, 0.58, 0.70, 0.80);
-                    draw_text_left(cr, layout, "Sans 8.5", "None found", rx + 10.0, ry + 13.0, rw - 20.0);
-                    ry += 30.0;
+                    draw_bare_item(cr, rx, ry, rw, 24.0, false, false);
+                    cairo_set_source_rgba(cr, 0.48, 0.54, 0.62, 0.80);
+                    draw_text_left(cr, layout, "Sans 8", "None found", rx + 8.0, ry + 12.0, rw - 16.0);
+                    ry += 27.0;
                 } else {
                     for (int i = 0; i < app->sub_count; i++) {
                         SubItem *si = &app->sub_items[i];
-                        double sh = 26.0;
+                        double sh = 24.0;
                         int nav_i = nav_cursor++;
                         bool sel = (app->selected_idx == nav_i);
 
-                        draw_unified_item(cr, rx, ry, rw, sh, si->active, sel, app->bottom_edge, true);
+                        draw_bare_item(cr, rx, ry, rw, sh, si->active, sel);
+                        cairo_set_source_rgba(cr, (si->active || sel) ? 0.95 : 0.74,
+                                              (si->active || sel) ? 0.97 : 0.80, 1.0, 0.95);
+                        draw_text_left(cr, layout, "Sans 8", si->label, rx + 8.0, ry + sh / 2.0, rw - 68.0);
 
-                        char lbl[160];
-                        snprintf(lbl, sizeof(lbl), "%s%s", si->active ? "● " : "  ", si->label);
-                        cairo_set_source_rgba(cr, si->active ? 0.96 : 0.80, si->active ? 0.98 : 0.86, 1.0, 0.95);
-                        draw_text_left(cr, layout, si->active ? "Sans Medium 8.5" : "Sans 8.5", lbl, rx + 8.0, ry + sh / 2.0, rw - 76.0);
-
-                        cairo_set_source_rgba(cr, 0.56, 0.68, 0.84, 0.85);
-                        draw_text_right(cr, layout, "Sans 8", si->meta, rx + rw - 8.0, ry + sh / 2.0);
+                        cairo_set_source_rgba(cr, 0.52, 0.58, 0.66, 0.85);
+                        draw_text_right(cr, layout, "Sans 7.5", si->meta, rx + rw - 8.0, ry + sh / 2.0);
 
                         add_hitbox_nav(app, rx, ry, rw, sh, ACT_SUB_SELECT, i, nav_i);
-                        ry += sh + 4.0;
+                        ry += sh + 3.0;
                     }
                 }
-                ry += 4.0;
+                ry += 2.0;
             }
 
-            /* Section 5: Unified Inline System Tray & Running Apps (NO nested [Quit ×] button!) */
-            /* Left-Click / Enter opens app; Right-Click / Hold opens inline context menu; Super+C closes it */
-            cairo_set_source_rgba(cr, 0.54, 0.64, 0.78, 0.82);
-            draw_text_left(cr, layout, "Sans Bold 7.5", "TRAY & APPS  ·  RIGHT-CLICK MENU  ·  SUPER+C CLOSE", rx + 2.0, ry + 6.0, rw);
-            ry += 16.0;
-
-            if (app->tray_count == 0) {
-                draw_unified_item(cr, rx, ry, rw, 28.0, false, false, app->bottom_edge, false);
-                cairo_set_source_rgba(cr, 0.48, 0.56, 0.68, 0.75);
-                draw_text_left(cr, layout, "Sans 8.5", "No background or tray apps running", rx + 10.0, ry + 14.0, rw - 16.0);
-                ry += 32.0;
-            } else {
+            /* Tray Apps (ONLY actual unmapped background/tray apps; hidden if 0!) */
+            if (app->tray_count > 0) {
+                ry += 2.0;
                 for (int i = 0; i < app->tray_count; i++) {
                     TrayApp *ta = &app->tray_apps[i];
-                    double row_h = 28.0;
+                    double row_h = 24.0;
                     int nav_i = nav_cursor++;
                     bool ctx_open = (app->tray_ctx_idx == i);
                     bool sel = (app->selected_idx == nav_i);
 
-                    draw_unified_item(cr, rx, ry, rw, row_h, ta->is_tray, sel || ctx_open, app->bottom_edge, true);
+                    draw_bare_item(cr, rx, ry, rw, row_h, false, sel || ctx_open);
 
-                    char row_lbl[128];
-                    snprintf(row_lbl, sizeof(row_lbl), "%s%s", ta->is_tray ? "● " : "  ", ta->name);
-                    cairo_set_source_rgba(cr, (ta->is_tray || sel || ctx_open) ? 0.96 : 0.78, (ta->is_tray || sel || ctx_open) ? 0.98 : 0.84, 1.0, 0.94);
-                    draw_text_left(cr, layout, ta->is_tray ? "Sans Medium 8.5" : "Sans 8.5", row_lbl, rx + 9.0, ry + row_h / 2.0, rw - 84.0);
+                    cairo_set_source_rgba(cr, (sel || ctx_open) ? 0.96 : 0.82,
+                                          (sel || ctx_open) ? 0.98 : 0.86, 1.0, 0.94);
+                    draw_text_left(cr, layout, "Sans 8.5", ta->name, rx + 8.0, ry + row_h / 2.0, rw - 72.0);
 
-                    cairo_set_source_rgba(cr, sel ? 0.74 : 0.52, sel ? 0.84 : 0.62, 0.94, 0.85);
-                    draw_text_right(cr, layout, "Sans 8", ta->mem, rx + rw - 9.0, ry + row_h / 2.0);
+                    cairo_set_source_rgba(cr, 0.48, 0.54, 0.62, 0.85);
+                    draw_text_right(cr, layout, "Sans 7.5", ta->mem, rx + rw - 8.0, ry + row_h / 2.0);
 
                     add_hitbox_nav(app, rx, ry, rw, row_h, ACT_TRAY_ITEM, i, nav_i);
-                    ry += row_h + 4.0;
+                    ry += row_h + 3.0;
 
-                    /* Inline Right-Click Context Menu for this Tray App */
-                    if (ctx_open) {
-                        double ch = 26.0;
-                        double c_gap = 4.0;
-                        double cw = (rw - 2 * c_gap) / 3.0;
-                        const char *c_labels[3] = { "Open", "Quit", "Force Kill" };
-                        int c_acts[3] = { ACT_TRAY_CTX_OPEN, ACT_TRAY_CTX_QUIT, ACT_TRAY_CTX_KILL };
+                    /* App's Own Native Context Menu (from com.canonical.dbusmenu) or Open/Quit/Kill */
+                    if (ctx_open && app->ctx_count > 0) {
+                        double ch = 24.0;
+                        double c_gap = 3.0;
+                        int cols = app->ctx_count < 3 ? app->ctx_count : 3;
+                        double cw = floor((rw - (cols - 1) * c_gap) / cols);
 
-                        for (int k = 0; k < 3; k++) {
-                            double cx_b = rx + k * (cw + c_gap);
+                        for (int k = 0; k < app->ctx_count; k++) {
+                            int r = k / 3;
+                            int c = k % 3;
+                            double cx_b = rx + c * (cw + c_gap);
+                            double cy_b = ry + r * (ch + c_gap);
                             int c_nav = nav_cursor++;
                             bool c_sel = (app->selected_idx == c_nav);
-                            bool danger = (k >= 1);
 
-                            if (c_sel) {
-                                cairo_set_source_rgba(cr, danger ? 0.30 : 0.16, danger ? 0.14 : 0.25, danger ? 0.18 : 0.40, 0.96);
-                            } else {
-                                cairo_set_source_rgba(cr, danger ? 0.18 : 0.10, danger ? 0.09 : 0.15, danger ? 0.12 : 0.23, 0.94);
-                            }
-                            draw_rounded_rect(cr, cx_b, ry, cw, ch, 4.0);
-                            cairo_fill(cr);
-
-                            cairo_set_source_rgba(cr, danger ? 0.48 : 0.32, danger ? 0.24 : 0.52, danger ? 0.28 : 0.82, c_sel ? 0.90 : 0.55);
-                            cairo_set_line_width(cr, 1.0);
-                            draw_rounded_rect(cr, cx_b, ry, cw, ch, 4.0);
-                            cairo_stroke(cr);
-
-                            cairo_set_source_rgba(cr, danger ? 0.98 : 0.88, danger ? 0.72 : 0.94, danger ? 0.74 : 1.0, 0.96);
-                            draw_text_centered(cr, layout, "Sans Medium 8", c_labels[k], cx_b + cw / 2.0, ry + ch / 2.0, false);
-                            add_hitbox_nav(app, cx_b, ry, cw, ch, c_acts[k], i, c_nav);
+                            draw_bare_item(cr, cx_b, cy_b, cw, ch, true, c_sel);
+                            cairo_set_source_rgba(cr, c_sel ? 0.98 : 0.82, c_sel ? 0.98 : 0.86, 1.0, 0.95);
+                            draw_text_centered(cr, layout, "Sans 8", app->ctx_items[k].label,
+                                               cx_b + cw / 2.0, cy_b + ch / 2.0, false);
+                            add_hitbox_nav(app, cx_b, cy_b, cw, ch, ACT_TRAY_CTX_CLICK, k, c_nav);
                         }
-                        ry += ch + 4.0;
+                        int rows_used = (app->ctx_count + 2) / 3;
+                        ry += rows_used * (ch + c_gap);
                     }
                 }
+                ry += 2.0;
             }
 
-            ry += 2.0;
-
-            /* Row 6: Session Strip (No redundant Lock button since Super+L is Lock) */
-            double ph = 28.0;
-            double p_gap = 4.0;
-            double pw = (rw - 2 * p_gap) / 3.0;
+            /* Row 6: Barebones Session Strip (Reboot · Power Off · Log Out) */
+            double ph = 26.0;
+            double p_gap = 3.0;
+            double pw = floor((rw - 2 * p_gap) / 3.0);
             const char *p_labels[3] = { "Reboot", "Power Off", "Log Out" };
             int p_acts[3] = { ACT_REBOOT, ACT_POWEROFF, ACT_LOGOUT };
 
             for (int i = 0; i < 3; i++) {
                 double px_b = rx + i * (pw + p_gap);
-                bool danger = (i == 1);
-                cairo_set_source_rgba(cr, danger ? 0.20 : 0.08, danger ? 0.10 : 0.12, danger ? 0.12 : 0.18, 0.95);
-                draw_rounded_rect(cr, px_b, ry, pw, ph, 4.0);
-                cairo_fill(cr);
-
-                cairo_set_source_rgba(cr, danger ? 0.98 : 0.84, danger ? 0.68 : 0.90, danger ? 0.68 : 0.98, 0.94);
-                draw_text_centered(cr, layout, "Sans Medium 8.5", p_labels[i], px_b + pw / 2.0, ry + ph / 2.0, false);
+                draw_bare_item(cr, px_b, ry, pw, ph, false, false);
+                cairo_set_source_rgba(cr, 0.78, 0.82, 0.88, 0.92);
+                draw_text_centered(cr, layout, "Sans 8.5", p_labels[i], px_b + pw / 2.0, ry + ph / 2.0, false);
                 add_hitbox(app, px_b, ry, pw, ph, p_acts[i], 0);
             }
         }
@@ -1411,7 +1542,6 @@ static void render_output(IslandOutput *out) {
     cairo_destroy(cr);
     cairo_surface_destroy(surf);
 
-    /* Damage union of previous dirty box and current dirty box */
     int dmg_x = out->prev_dx < cur_dx ? out->prev_dx : cur_dx;
     int dmg_y = out->prev_dy < cur_dy ? out->prev_dy : cur_dy;
     int dmg_r = (out->prev_dx + out->prev_dw) > (cur_dx + cur_dw) ? (out->prev_dx + out->prev_dw) : (cur_dx + cur_dw);
@@ -1441,10 +1571,11 @@ static void render_output(IslandOutput *out) {
 }
 
 /* ========================================================================== */
-/* Unified Actions: Focus/Toggle (Enter/Left-Click) & Close (Super+C/MidClick)*/
+/* Actions & Input                                                            */
 /* ========================================================================== */
 static void set_mode(IslandApp *app, IslandMode new_mode) {
     if (new_mode != MODE_CLOSED) {
+        load_position_config(app);
         app->target_mode = new_mode;
         app->mode = new_mode;
         app->kb_grab = true;
@@ -1458,7 +1589,6 @@ static void set_mode(IslandApp *app, IslandMode new_mode) {
             refresh_snapshot(app);
         } else if (new_mode == MODE_CONTROL) {
             refresh_control_data(app);
-            /* Default selection in Super+A: first tray app if present, else first switch */
             app->selected_idx = (app->tray_count > 0) ? 4 : 0;
         }
     } else {
@@ -1523,7 +1653,6 @@ static void quit_tray_at(IslandApp *app, int tidx, const char *sig_name) {
     damage_all(app);
 }
 
-/* Harmonized Super+C / Delete action: closes selected window (Super+W) or quits selected tray app (Super+A) */
 static void close_selected_item(IslandApp *app) {
     for (int i = 0; i < app->hitbox_count; i++) {
         HitBox *hb = &app->hitboxes[i];
@@ -1532,9 +1661,12 @@ static void close_selected_item(IslandApp *app) {
                 close_window_at(app, hb->index);
                 return;
             }
-            if (hb->action_id == ACT_TRAY_ITEM || hb->action_id == ACT_TRAY_CTX_OPEN ||
-                hb->action_id == ACT_TRAY_CTX_QUIT || hb->action_id == ACT_TRAY_CTX_KILL) {
+            if (hb->action_id == ACT_TRAY_ITEM) {
                 quit_tray_at(app, hb->index, "TERM");
+                return;
+            }
+            if (hb->action_id == ACT_TRAY_CTX_CLICK && app->tray_ctx_idx >= 0) {
+                quit_tray_at(app, app->tray_ctx_idx, "TERM");
                 return;
             }
         }
@@ -1542,13 +1674,12 @@ static void close_selected_item(IslandApp *app) {
 }
 
 static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t button) {
-    /* Right-click on Wi-Fi, Bluetooth, Volume, or a Tray App opens its inline sub-menu / context menu! */
     if (button == BTN_RIGHT) {
-        if (hb->action_id == ACT_WIFI_TOGGLE || hb->action_id == ACT_WIFI_SUB) {
+        if (hb->action_id == ACT_WIFI_TOGGLE) {
             toggle_subpanel(app, SUB_WIFI);
             return true;
         }
-        if (hb->action_id == ACT_BT_TOGGLE || hb->action_id == ACT_BT_SUB) {
+        if (hb->action_id == ACT_BT_TOGGLE) {
             toggle_subpanel(app, SUB_BT);
             return true;
         }
@@ -1557,7 +1688,12 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
             return true;
         }
         if (hb->action_id == ACT_TRAY_ITEM) {
-            app->tray_ctx_idx = (app->tray_ctx_idx == hb->index) ? -1 : hb->index;
+            if (app->tray_ctx_idx == hb->index) {
+                app->tray_ctx_idx = -1;
+            } else {
+                app->tray_ctx_idx = hb->index;
+                build_tray_context_menu(app, hb->index);
+            }
             damage_all(app);
             return true;
         }
@@ -1567,7 +1703,6 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
         }
     }
 
-    /* Middle-click closes window or quits tray app (harmonized with Super+C) */
     if (button == BTN_MIDDLE) {
         if (hb->action_id == ACT_WIN_ITEM) {
             close_window_at(app, hb->index);
@@ -1601,7 +1736,6 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
         for (int k = 0; k < app->win_count; k++) {
             app->windows[k].focused = (k == hb->index);
         }
-        /* Yield exclusive keyboard grab so the newly focused canvas window receives keys immediately */
         app->kb_grab = false;
         damage_all(app);
         spawn_detached(cmd);
@@ -1613,8 +1747,7 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
         spawn_detached(da->exec_cmd);
         return true;
     }
-    case ACT_TRAY_ITEM:
-    case ACT_TRAY_CTX_OPEN: {
+    case ACT_TRAY_ITEM: {
         int tidx = hb->index;
         if (tidx >= 0 && tidx < app->tray_count) {
             char cmd[256];
@@ -1627,21 +1760,31 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
         }
         return true;
     }
-    case ACT_TRAY_CTX_QUIT:
-        quit_tray_at(app, hb->index, "TERM");
+    case ACT_TRAY_CTX_CLICK: {
+        int cidx = hb->index;
+        int tidx = app->tray_ctx_idx;
+        if (tidx >= 0 && tidx < app->tray_count && cidx >= 0 && cidx < app->ctx_count) {
+            int32_t item_id = app->ctx_items[cidx].id;
+            if (item_id >= 0) {
+                trigger_dbusmenu_click(app, app->tray_apps[tidx].sni_idx, item_id);
+                app->tray_ctx_idx = -1;
+                damage_all(app);
+            } else if (item_id == -1) {
+                char cmd[256];
+                snprintf(cmd, sizeof(cmd),
+                         "app=$(printf '%s' '%s' | tr '[:upper:]' '[:lower:]'); "
+                         "command -v \"$app\" >/dev/null 2>&1 && exec \"$app\" || gtk-launch \"$app\" 2>/dev/null",
+                         app->tray_apps[tidx].name, app->tray_apps[tidx].name);
+                set_mode(app, MODE_CLOSED);
+                spawn_detached(cmd);
+            } else if (item_id == -2) {
+                quit_tray_at(app, tidx, "TERM");
+            } else if (item_id == -3) {
+                quit_tray_at(app, tidx, "KILL");
+            }
+        }
         return true;
-    case ACT_TRAY_CTX_KILL:
-        quit_tray_at(app, hb->index, "KILL");
-        return true;
-    case ACT_WIFI_SUB:
-        toggle_subpanel(app, SUB_WIFI);
-        return true;
-    case ACT_BT_SUB:
-        toggle_subpanel(app, SUB_BT);
-        return true;
-    case ACT_AUDIO_SUB:
-        toggle_subpanel(app, SUB_AUDIO);
-        return true;
+    }
     case ACT_SUB_SELECT: {
         int sidx = hb->index;
         if (sidx >= 0 && sidx < app->sub_count) {
@@ -1676,16 +1819,6 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
         }
         return true;
     }
-    case ACT_SWAP_SIDE:
-        app->control_on_left = !app->control_on_left;
-        save_position_config(app);
-        damage_all(app);
-        return true;
-    case ACT_SWAP_EDGE:
-        app->bottom_edge = !app->bottom_edge;
-        save_position_config(app);
-        damage_all(app);
-        return true;
     case ACT_WIFI_TOGGLE:
         if (app->wifi_on) spawn_detached("nmcli radio wifi off");
         else spawn_detached("nmcli radio wifi on");
@@ -1881,6 +2014,7 @@ static void touch_down(void *data, struct wl_touch *touch, uint32_t serial, uint
     app->touch_cur_y = y;
 
     if (app->mode == MODE_CLOSED) {
+        load_position_config(app);
         app->dragging = true;
         bool in_ctrl_zone = false;
         if (out) {
@@ -1936,6 +2070,7 @@ static void touch_up(void *data, struct wl_touch *touch, uint32_t serial, uint32
     if (app->mode == MODE_CLOSED) {
         if (pull_dist > 22.0) {
             app->mode = app->target_mode;
+            app->kb_grab = true;
             damage_all(app);
         } else if (hypot(dx, raw_dy) < 16.0) {
             set_mode(app, app->target_mode);
@@ -1946,7 +2081,6 @@ static void touch_up(void *data, struct wl_touch *touch, uint32_t serial, uint32
         if (was_dragging && pull_dist < -28.0) {
             set_mode(app, MODE_CLOSED);
         } else if (hypot(dx, raw_dy) < 20.0) {
-            /* Holding a tile for >= 350ms on touch acts like Right-Click (expands Wi-Fi / BT sub-list) */
             uint32_t btn = (held_ms >= 350) ? BTN_RIGHT : BTN_LEFT;
             handle_click_at(app, app->outputs, app->touch_cur_x, app->touch_cur_y, btn);
         } else {
@@ -2005,7 +2139,6 @@ static void pointer_motion(void *data, struct wl_pointer *p, uint32_t t, wl_fixe
 
     if (app->mode == MODE_CLOSED) return;
 
-    /* Hovering any unified item selects it so Super+C can immediately close/quit it */
     for (int i = app->hitbox_count - 1; i >= 0; i--) {
         HitBox *hb = &app->hitboxes[i];
         if (hb->nav_idx >= 0 &&
@@ -2039,7 +2172,6 @@ static void pointer_button(void *data, struct wl_pointer *p, uint32_t s, uint32_
     handle_click_at(app, app->pointer_output, app->pointer_x, app->pointer_y, button);
 }
 
-/* Mouse wheel over Control Box adjusts volume smoothly */
 static void pointer_axis(void *data, struct wl_pointer *p, uint32_t t, uint32_t axis, wl_fixed_t val) {
     (void)p; (void)t;
     IslandApp *app = data;
@@ -2119,7 +2251,6 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
         return;
     }
 
-    /* Harmonized Super+W / Super+A / Super+C / Delete shortcuts while island has focus */
     if (super_down) {
         if (sym == XKB_KEY_w || sym == XKB_KEY_W) {
             set_mode(app, app->mode == MODE_CENTER ? MODE_CLOSED : MODE_CENTER);
@@ -2425,6 +2556,7 @@ int main(int argc, char **argv) {
 
     load_position_config(&app);
     load_all_apps(&app);
+    setup_sni_watcher(&app);
 
     app.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     app.display = connect_wayland_auto();
@@ -2439,7 +2571,6 @@ int main(int argc, char **argv) {
     for (IslandOutput *o = app.outputs; o; o = o->next) setup_layer_surface(o);
     wl_display_roundtrip(app.display);
 
-    /* Warm cache asynchronously in background at startup so first Super+A is populated */
     start_async_refresh(&app, MODE_CONTROL);
 
     if (argc > 1 && (strcmp(argv[1], "toggle") == 0 || strcmp(argv[1], "center") == 0 || strcmp(argv[1], "open") == 0)) {
@@ -2459,6 +2590,9 @@ int main(int argc, char **argv) {
             break;
         }
 
+        /* Pump GLib / GIO main context so D-Bus StatusNotifierWatcher calls are processed */
+        while (g_main_context_iteration(NULL, FALSE)) {}
+
         while (wl_display_prepare_read(app.display) != 0) {
             if (wl_display_dispatch_pending(app.display) < 0) {
                 app.running = false;
@@ -2468,16 +2602,30 @@ int main(int argc, char **argv) {
         if (!app.running) break;
         wl_display_flush(app.display);
 
-        struct pollfd pfds[2];
+        struct pollfd pfds[3];
         pfds[0].fd = wl_display_get_fd(app.display);
         pfds[0].events = POLLIN;
         pfds[0].revents = 0;
         nfds_t nfds = 1;
+
         if (app.async_fd >= 0) {
-            pfds[1].fd = app.async_fd;
-            pfds[1].events = POLLIN | POLLHUP;
-            pfds[1].revents = 0;
-            nfds = 2;
+            pfds[nfds].fd = app.async_fd;
+            pfds[nfds].events = POLLIN | POLLHUP;
+            pfds[nfds].revents = 0;
+            nfds++;
+        }
+
+        int dbus_fd = -1;
+        if (app.dbus) {
+            GSocket *sock = g_socket_connection_get_socket(
+                G_SOCKET_CONNECTION(g_dbus_connection_get_stream(app.dbus)));
+            if (sock) dbus_fd = g_socket_get_fd(sock);
+        }
+        if (dbus_fd >= 0) {
+            pfds[nfds].fd = dbus_fd;
+            pfds[nfds].events = POLLIN;
+            pfds[nfds].revents = 0;
+            nfds++;
         }
 
         int timeout = (app.mode != MODE_CLOSED) ? 1000 : -1;
@@ -2491,7 +2639,7 @@ int main(int argc, char **argv) {
             wl_display_cancel_read(app.display);
         }
 
-        if (nfds == 2 && (pfds[1].revents & (POLLIN | POLLHUP))) {
+        if (app.async_fd >= 0 && (pfds[1].revents & (POLLIN | POLLHUP))) {
             ssize_t r;
             while ((r = read(app.async_fd, app.async_buf + app.async_len,
                              sizeof(app.async_buf) - 1 - app.async_len)) > 0) {
@@ -2511,6 +2659,8 @@ int main(int argc, char **argv) {
                 }
             }
         }
+
+        while (g_main_context_iteration(NULL, FALSE)) {}
     }
 
     unlink(pfile);

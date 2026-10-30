@@ -255,9 +255,9 @@ apps_list() {
                 cl = norm(comm_of[p])
                 if (cl ~ /^(infynitae.*|xwayland.*|wl-paste|wl-clip-persist|mako|swaync.*|dunst|fnott|udiskie|xdg-.*|dbus-.*|systemd.*|wireplumber|pipewire.*|pulseaudio|gvfs.*|at-spi.*|dconf.*|gnome-keyring.*|polkit.*|squeekboard|slurp|grim|fuzzel|rofi|wofi|tofi|busctl|bash|zsh|fish|sh)$/) continue
                 if (seen[cl]++) continue
-                state = is_Mapped(cl) ? "open" : "tray"
+                if (is_Mapped(cl)) continue
                 mb = int((rss_by_app[cl] + 512) / 1024)
-                printf "%s\t%s\t%d MB\t%d\n", state, leader_name[cl], mb, leader_pid[cl]
+                printf "tray\t%s\t%d MB\t%d\n", leader_name[cl], mb, leader_pid[cl]
             }
         }
     ' | sort -t"$(printf '\t')" -k1,1r -k3,3rn
