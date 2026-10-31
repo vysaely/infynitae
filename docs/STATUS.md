@@ -15,7 +15,7 @@ edges on other hardware.
   and `tools/verify-architecture` checks that the architecture holds.
 - **The desktop:** lock screen, wallpaper, screenshots, clipboard history, session restore,
   recording and a replay buffer, polkit prompts, notifications (mako), a keyring
-  (gnome-keyring), USB automount (udiskie), the control menu (Super+A: Wi-Fi, Bluetooth, volume
+  (gnome-keyring), USB automount (infynitae-automount on udisks2), the control menu (Super+A: Wi-Fi, Bluetooth, volume
   for all sound or one app, sound output, power mode), global shortcuts for
   apps, layer shell for bars, X11 apps through xwayland-satellite, VRR and direct scanout for
   games, idle screen-off and auto-lock.

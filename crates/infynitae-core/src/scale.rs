@@ -45,6 +45,11 @@ pub struct ScalePolicyConfig {
     /// Device limit `D_max` supplied by the backend for its renderer (F-SCALE-2, OBJ-29).
     /// The default is the EC-16 device fact, not a query.
     pub d_max: u32,
+    /// Increases wait for the epoch's settlement (ZOOM_SHARPEN="after", owner 2026-10-31):
+    /// during a zoom the client keeps its scale and the frame is scaled as it is, then it
+    /// re-renders once at the settled target. A terminal re-flowed its text at every rung it
+    /// crossed while the wheel turned. Off by default (INV-SCALE-3 as written).
+    pub sharpen_after: bool,
 }
 
 impl Default for ScalePolicyConfig {
@@ -55,6 +60,7 @@ impl Default for ScalePolicyConfig {
             sigma: DEFAULT_SIGMA,
             t_settle_ms: DEFAULT_T_SETTLE_MS,
             d_max: DEFAULT_D_MAX,
+            sharpen_after: false,
         }
     }
 }
@@ -277,9 +283,13 @@ impl ScaleState {
             // Grouped interaction epoch (INV-SCALE-3):
             // Decreases suppressed; increases happen only in the epoch's direction.
             if t > self.h + 1e-12 && self.epoch.direction != -1 {
-                self.h = t;
                 self.epoch.direction = 1;
                 self.last_stimulus_direction = 1;
+                // sharpen_after: the settlement raises it, once
+                if config.sharpen_after {
+                    return false;
+                }
+                self.h = t;
                 return true;
             }
             false
@@ -1476,5 +1486,61 @@ mod tests {
         // When there are no outputs, fallback returns 1.0.
         let rho_empty = predict_rho(anchor, geometry, &[], &[]);
         assert_eq!(rho_empty, 1.0, "sane fallback with no outputs is 1.0");
+    }
+
+    /// ZOOM_SHARPEN="after" (owner, 2026-10-31: a terminal re-flowed its text at each rung while
+    /// the wheel turned): a wheel zoom from 1 to 2.7 changes nothing while it lasts, then the
+    /// settlement raises the hint once, to a whole scale.
+    #[test]
+    fn sharpen_after_raises_once_at_the_settlement_to_a_whole_scale() {
+        let config = ScalePolicyConfig {
+            sharpen_after: true,
+            r: 2.0,
+            ..ScalePolicyConfig::default()
+        };
+        let l = ladder(&[1.0], 3.0, config.r);
+        assert_eq!(l, vec![1.0, 2.0, 3.0], "whole scales only");
+        let mut st = ScaleState::new(1.0);
+        let mut changes = 0;
+        for (i, rho) in [1.1, 1.3, 1.6, 1.9, 2.2, 2.5, 2.7].into_iter().enumerate() {
+            if st.step(
+                i as u64 * 50,
+                Some(InteractionKind::CameraZoom),
+                Some(rho),
+                false,
+                &l,
+                3.0,
+                f64::INFINITY,
+                &config,
+                false,
+            ) {
+                changes += 1;
+            }
+        }
+        assert_eq!((changes, st.h), (0, 1.0), "nothing while the wheel turns");
+        assert!(st.settle(&l, 3.0, config.sigma), "the settlement raises it");
+        assert_eq!(st.h, 3.0, "once, to the whole scale over 2.7");
+
+        // as written (sharpen_after off): a change at each rung crossed while zooming
+        let live = ScalePolicyConfig::default();
+        let l = ladder(&[1.0], 3.0, live.r);
+        let mut st = ScaleState::new(1.0);
+        let mut changes = 0;
+        for (i, rho) in [1.1, 1.3, 1.6, 1.9, 2.2, 2.5, 2.7].into_iter().enumerate() {
+            if st.step(
+                i as u64 * 50,
+                Some(InteractionKind::CameraZoom),
+                Some(rho),
+                false,
+                &l,
+                3.0,
+                f64::INFINITY,
+                &live,
+                false,
+            ) {
+                changes += 1;
+            }
+        }
+        assert!(changes >= 4, "live: {changes} re-renders during one zoom");
     }
 }

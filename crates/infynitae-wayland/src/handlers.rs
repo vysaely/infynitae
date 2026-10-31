@@ -231,10 +231,41 @@ impl WaylandState {
             .map(|i| self.elements[i].id);
         self.core.set_toplevel_parent(id, parent);
         let mapped = tree.root().is_some_and(|r| r.mapped);
+        // listed while mapped: not yet, so this commit maps it
+        let opens = mapped && !self.foreign_toplevels.contains_key(&id);
         let _ = self.with_effects(|core, fx| {
             core.toplevel_committed_acked_into(id, tree, acked_fullscreen, fx)
         });
         self.list_toplevel(id, mapped);
+        if opens && !acked_fullscreen {
+            self.fit_opening_window(id, &window);
+        }
+    }
+
+    /// A window that opens larger than its room (`window_room`, the `configure_bounds` it was
+    /// told) is offered that room, once. Chromium and Electron ignore the bounds and reopen at the
+    /// size they saved, which outgrows the screen (Discord at 1944x1124 on 1920x1080, a little
+    /// more at each start); an X11 window asks for its own size through xwayland-satellite,
+    /// which binds no bounds at all (xterm -geometry 400x150: 2404x1954). A size the compositor
+    /// chose itself is left as it is.
+    fn fit_opening_window(&mut self, id: infynitae_core::stage::ElementId, window: &Window) {
+        let Some(toplevel) = window.toplevel() else {
+            return;
+        };
+        let chosen = toplevel
+            .current_state()
+            .size
+            .is_some_and(|s| s.w > 0 && s.h > 0);
+        let Some((room_w, room_h)) = self.window_room() else {
+            return;
+        };
+        let size = window.geometry().size;
+        if chosen || (size.w <= room_w && size.h <= room_h) {
+            return;
+        }
+        let fitted = (size.w.min(room_w), size.h.min(room_h));
+        self.configure_toplevel(id, Some(fitted));
+        let _ = self.with_effects(|core, fx| core.place_opening_at_size(id, fitted, fx));
     }
 
     /// The window an `ext_foreign_toplevel_handle_v1` stands for, while it is listed.
@@ -365,6 +396,18 @@ impl CompositorHandler for WaylandState {
     }
 
     fn new_surface(&mut self, surface: &WlSurface) {
+        // xwayland-satellite's connection, for XWAYLAND_KEYS (asked once per client)
+        use smithay::reexports::wayland_server::Resource;
+        if let Some(client) = surface.client()
+            && let Some(data) = client.get_data::<crate::ClientState>()
+            && *data.x11.get_or_init(|| {
+                client
+                    .get_credentials(&self.dh)
+                    .is_ok_and(|c| crate::ownership::is_xwayland_satellite(c.pid))
+            })
+        {
+            self.note_x11_client(&client);
+        }
         add_destruction_hook(surface, |state: &mut Self, s| {
             if let Some(key) = state.registry.key(s) {
                 let fx = state.core.destroy_pointer_constraint(key);

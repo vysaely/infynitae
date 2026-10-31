@@ -1,0 +1,256 @@
+#!/bin/sh
+# tools/test-automount: test live/infynitae-automount without root or real drives.
+# Tests hotplug signals and start-time mounts using INFYNITAE_AUTOMOUNT_MONITOR and
+# INFYNITAE_AUTOMOUNT_UDISKSCTL.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+WATCHER="$REPO_DIR/live/infynitae-automount"
+
+if [ ! -x "$WATCHER" ]; then
+    echo "FAIL: watcher not found or not executable: $WATCHER" >&2
+    exit 1
+fi
+
+TMP=$(mktemp -d "/tmp/infynitae-test-automount.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+
+BIN_DIR="$TMP/bin"
+STATE_DIR="$TMP/state"
+RUN_DIR="$TMP/run"
+mkdir -p "$BIN_DIR" "$STATE_DIR" "$RUN_DIR"
+
+MOCK_UDISKSCTL="$BIN_DIR/mock-udisksctl"
+NOTIFY_LOG="$TMP/notifications.log"
+CALLS_LOG="$TMP/udisksctl-calls.log"
+
+# Mock notify-send
+cat > "$BIN_DIR/notify-send" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$NOTIFY_LOG"
+EOF
+chmod +x "$BIN_DIR/notify-send"
+
+# Mock udisksctl
+cat > "$MOCK_UDISKSCTL" <<EOF
+#!/bin/sh
+cmd="\$1"
+shift
+printf '%s %s\n' "\$cmd" "\$*" >> "$CALLS_LOG"
+
+case "\$cmd" in
+    dump)
+        if [ -f "$TMP/dump.txt" ]; then
+            cat "$TMP/dump.txt"
+        fi
+        exit 0
+        ;;
+    mount)
+        dev=""
+        while [ \$# -gt 0 ]; do
+            case "\$1" in
+                -b) dev="\$2"; shift 2 ;;
+                *) shift ;;
+            esac
+        done
+        case "\$dev" in
+            /dev/sdd1)
+                echo "Mounted /dev/sdd1 at /run/media/testuser/USB_STICK."
+                exit 0
+                ;;
+            /dev/sdf1)
+                echo "Error mounting /dev/sdf1: GDBus.Error:org.freedesktop.UDisks2.Error.Failed: Mount failed: wrong fs type, bad superblock" >&2
+                exit 1
+                ;;
+            /dev/sdg1)
+                echo "Mounted /dev/sdg1 at /run/media/testuser/EXT_USB."
+                exit 0
+                ;;
+            /dev/sdh1)
+                echo "Mounted /dev/sdh1 at /run/media/testuser/START_STICK."
+                exit 0
+                ;;
+            *)
+                echo "Error mounting \$dev: unknown device in mock" >&2
+                exit 1
+                ;;
+        esac
+        ;;
+    info)
+        exit 1
+        ;;
+    *)
+        exit 0
+        ;;
+esac
+EOF
+chmod +x "$MOCK_UDISKSCTL"
+
+echo "=== Test 1: Hotplug signals (4 required cases + drive removable + removal) ==="
+
+# Real gdbus monitor signal line format from org.freedesktop.UDisks2 ObjectManager
+SIGNALS="$TMP/signals.txt"
+cat > "$SIGNALS" <<'EOF'
+/org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/block_devices/sdd1', {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sdd1'>, 'IdLabel': <'USB_STICK'>, 'HintAuto': <true>, 'HintSystem': <false>, 'HintIgnore': <false>, 'Drive': <objectpath '/org/freedesktop/UDisks2/drives/Generic_Flash_Disk'>}, 'org.freedesktop.UDisks2.Filesystem': {'MountPoints': <@aay []>}})
+/org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/block_devices/sda2', {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sda2'>, 'IdLabel': <'SystemRoot'>, 'HintAuto': <false>, 'HintSystem': <true>, 'HintIgnore': <false>, 'Drive': <objectpath '/org/freedesktop/UDisks2/drives/NVME_DISK'>}, 'org.freedesktop.UDisks2.Filesystem': {'MountPoints': <@aay []>}})
+/org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/block_devices/sde1', {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sde1'>, 'IdLabel': <'ALREADY_MOUNTED'>, 'HintAuto': <true>, 'HintSystem': <false>, 'HintIgnore': <false>, 'Drive': <objectpath '/org/freedesktop/UDisks2/drives/Generic_Flash_Disk_2'>}, 'org.freedesktop.UDisks2.Filesystem': {'MountPoints': <[b'/mnt/data']>}})
+/org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/block_devices/sdf1', {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sdf1'>, 'IdLabel': <'BROKEN_DRIVE'>, 'HintAuto': <true>, 'HintSystem': <false>, 'HintIgnore': <false>, 'Drive': <objectpath '/org/freedesktop/UDisks2/drives/Broken_Flash_Disk'>}, 'org.freedesktop.UDisks2.Filesystem': {'MountPoints': <@aay []>}})
+/org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/drives/External_USB', {'org.freedesktop.UDisks2.Drive': {'Removable': <true>, 'Model': <'External'>}})
+/org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/block_devices/sdg1', {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sdg1'>, 'IdLabel': <'EXT_USB'>, 'HintAuto': <false>, 'HintSystem': <false>, 'HintIgnore': <false>, 'Drive': <objectpath '/org/freedesktop/UDisks2/drives/External_USB'>}, 'org.freedesktop.UDisks2.Filesystem': {'MountPoints': <@aay []>}})
+/org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesRemoved (objectpath '/org/freedesktop/UDisks2/block_devices/sdd1', ['org.freedesktop.UDisks2.Block', 'org.freedesktop.UDisks2.Filesystem'])
+EOF
+
+PATH="$BIN_DIR:$PATH" \
+XDG_STATE_HOME="$STATE_DIR" \
+XDG_RUNTIME_DIR="$RUN_DIR" \
+INFYNITAE_AUTOMOUNT_MONITOR="cat $SIGNALS" \
+INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
+"$WATCHER"
+
+LOG_FILE="$STATE_DIR/infynitae/automount.log"
+
+if [ ! -f "$LOG_FILE" ]; then
+    echo "FAIL: log file not created at $LOG_FILE" >&2
+    exit 1
+fi
+
+echo "--- Checking mock udisksctl calls ---"
+if ! grep -q "mount --no-user-interaction -b /dev/sdd1" "$CALLS_LOG"; then
+    echo "FAIL: expected mount call for /dev/sdd1 (USB stick)" >&2
+    exit 1
+fi
+echo "PASS: /dev/sdd1 was mounted"
+
+if grep -q "mount .* /dev/sda2" "$CALLS_LOG"; then
+    echo "FAIL: system disk /dev/sda2 was mounted" >&2
+    exit 1
+fi
+echo "PASS: /dev/sda2 (system disk) was not mounted"
+
+if grep -q "mount .* /dev/sde1" "$CALLS_LOG"; then
+    echo "FAIL: already mounted /dev/sde1 was mounted again" >&2
+    exit 1
+fi
+echo "PASS: /dev/sde1 (already mounted) was not mounted again"
+
+if ! grep -q "mount --no-user-interaction -b /dev/sdf1" "$CALLS_LOG"; then
+    echo "FAIL: expected mount attempt for /dev/sdf1 (broken drive)" >&2
+    exit 1
+fi
+echo "PASS: /dev/sdf1 mount was attempted"
+
+if ! grep -q "mount --no-user-interaction -b /dev/sdg1" "$CALLS_LOG"; then
+    echo "FAIL: expected mount call for /dev/sdg1 (removable drive)" >&2
+    exit 1
+fi
+echo "PASS: /dev/sdg1 (drive Removable true) was mounted"
+
+echo "--- Checking watcher log entries ---"
+if ! grep -q "mounted /dev/sdd1 at /run/media/testuser/USB_STICK" "$LOG_FILE"; then
+    echo "FAIL: log missing mount success for /dev/sdd1" >&2
+    cat "$LOG_FILE" >&2
+    exit 1
+fi
+echo "PASS: log recorded successful mount of /dev/sdd1"
+
+if ! grep -q "ignoring /dev/sda2 (system disk)" "$LOG_FILE"; then
+    echo "FAIL: log missing system disk ignore for /dev/sda2" >&2
+    exit 1
+fi
+echo "PASS: log recorded system disk ignore for /dev/sda2"
+
+if ! grep -q "ignoring /dev/sde1 (already mounted)" "$LOG_FILE"; then
+    echo "FAIL: log missing already mounted ignore for /dev/sde1" >&2
+    exit 1
+fi
+echo "PASS: log recorded already mounted ignore for /dev/sde1"
+
+if ! grep -q "mount failed for /dev/sdf1:" "$LOG_FILE" || ! grep -q "wrong fs type" "$LOG_FILE"; then
+    echo "FAIL: log missing mount failure details for /dev/sdf1" >&2
+    exit 1
+fi
+echo "PASS: log recorded mount failure details for /dev/sdf1"
+
+if ! grep -q "device removed: /dev/sdd1" "$LOG_FILE"; then
+    echo "FAIL: log missing device removal for /dev/sdd1" >&2
+    exit 1
+fi
+echo "PASS: log recorded device removal"
+
+echo "--- Checking notifications ---"
+if [ ! -f "$NOTIFY_LOG" ]; then
+    echo "FAIL: notification log missing" >&2
+    exit 1
+fi
+
+if ! grep -q -- "-a Infynitae USB_STICK mounted at /run/media/testuser/USB_STICK" "$NOTIFY_LOG"; then
+    echo "FAIL: missing notification for USB_STICK mount" >&2
+    cat "$NOTIFY_LOG" >&2
+    exit 1
+fi
+echo "PASS: notification sent for USB_STICK mount"
+
+if ! grep -q -- "Mount failed for BROKEN_DRIVE" "$NOTIFY_LOG" || ! grep -q "wrong fs type" "$NOTIFY_LOG"; then
+    echo "FAIL: missing failure notification for BROKEN_DRIVE" >&2
+    cat "$NOTIFY_LOG" >&2
+    exit 1
+fi
+echo "PASS: failure notification sent for BROKEN_DRIVE with error reason"
+
+if grep -q "SystemRoot" "$NOTIFY_LOG"; then
+    echo "FAIL: unexpected notification for system disk" >&2
+    exit 1
+fi
+echo "PASS: no notification for system disk"
+
+if grep -q "ALREADY_MOUNTED" "$NOTIFY_LOG"; then
+    echo "FAIL: unexpected notification for already mounted disk" >&2
+    exit 1
+fi
+echo "PASS: no notification for already mounted disk"
+
+echo "=== Test 2: Startup scan of pre-plugged drive ==="
+
+# Clean state/logs for test 2
+rm -f "$CALLS_LOG" "$NOTIFY_LOG" "$LOG_FILE"
+
+DUMP="$TMP/dump.txt"
+cat > "$DUMP" <<'EOF'
+/org/freedesktop/UDisks2/drives/Generic_Start_Disk:
+  org.freedesktop.UDisks2.Drive:
+    Removable:                  true
+    MediaRemovable:             false
+
+/org/freedesktop/UDisks2/block_devices/sdh1:
+  org.freedesktop.UDisks2.Block:
+    Device:                     /dev/sdh1
+    Drive:                      '/org/freedesktop/UDisks2/drives/Generic_Start_Disk'
+    HintAuto:                   true
+    HintIgnore:                 false
+    HintSystem:                 false
+    IdLabel:                    START_STICK
+  org.freedesktop.UDisks2.Filesystem:
+    MountPoints:                []
+EOF
+
+PATH="$BIN_DIR:$PATH" \
+XDG_STATE_HOME="$STATE_DIR" \
+XDG_RUNTIME_DIR="$RUN_DIR" \
+INFYNITAE_AUTOMOUNT_MONITOR="true" \
+INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
+"$WATCHER"
+
+if ! grep -q "mount --no-user-interaction -b /dev/sdh1" "$CALLS_LOG"; then
+    echo "FAIL: pre-plugged drive /dev/sdh1 was not mounted at start" >&2
+    exit 1
+fi
+echo "PASS: pre-plugged drive /dev/sdh1 was mounted at start"
+
+if ! grep -q -- "-a Infynitae START_STICK mounted at /run/media/testuser/START_STICK" "$NOTIFY_LOG"; then
+    echo "FAIL: missing notification for pre-plugged drive" >&2
+    exit 1
+fi
+echo "PASS: notification sent for pre-plugged drive"
+
+echo "=== ALL AUTOMOUNT TESTS PASSED ==="
+exit 0

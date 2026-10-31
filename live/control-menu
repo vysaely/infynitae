@@ -253,11 +253,11 @@ apps_list() {
             for (p in is_client) {
                 if (!(p in comm_of)) continue
                 cl = norm(comm_of[p])
-                if (cl ~ /^(infynitae.*|xwayland.*|wl-paste|wl-clip-persist|mako|swaync.*|dunst|fnott|udiskie|xdg-.*|dbus-.*|systemd.*|wireplumber|pipewire.*|pulseaudio|gvfs.*|at-spi.*|dconf.*|gnome-keyring.*|polkit.*|squeekboard|slurp|grim|fuzzel|rofi|wofi|tofi|busctl|bash|zsh|fish|sh)$/) continue
+                if (cl ~ /^(infynitae.*|xwayland.*|wl-paste|wl-clip-persist|mako|swaync.*|dunst|fnott|udiskie|infynitae-automount|xdg-.*|dbus-.*|systemd.*|wireplumber|pipewire.*|pulseaudio|gvfs.*|at-spi.*|dconf.*|gnome-keyring.*|polkit.*|squeekboard|slurp|grim|fuzzel|rofi|wofi|tofi|busctl|bash|zsh|fish|sh)$/) continue
                 if (seen[cl]++) continue
-                state = is_Mapped(cl) ? "open" : "tray"
+                if (is_Mapped(cl)) continue
                 mb = int((rss_by_app[cl] + 512) / 1024)
-                printf "%s\t%s\t%d MB\t%d\n", state, leader_name[cl], mb, leader_pid[cl]
+                printf "tray\t%s\t%d MB\t%d\n", leader_name[cl], mb, leader_pid[cl]
             }
         }
     ' | sort -t"$(printf '\t')" -k1,1r -k3,3rn
@@ -346,6 +346,16 @@ session_menu() {
 }
 
 # ── The menu ───────────────────────────────────────────────────────────────────────────────────
+case "${1:-}" in
+    apps) apps_menu; exit 0 ;;
+    apps-list) apps_list; exit 0 ;;
+    apps-kill) [ -n "${2:-}" ] && apps_kill "$2" "${3:-TERM}"; exit 0 ;;
+    wifi) wifi_menu; exit 0 ;;
+    bluetooth) bt_menu; exit 0 ;;
+    sound) sound_menu; exit 0 ;;
+    volume) volume_menu; exit 0 ;;
+esac
+
 battery=""
 for b in /sys/class/power_supply/BAT*; do
     [ -r "$b/capacity" ] && battery="Battery $(cat "$b/capacity")% ($(cat "$b/status" 2>/dev/null))" && break

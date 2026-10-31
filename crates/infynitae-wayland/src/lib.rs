@@ -44,6 +44,7 @@ mod snapshot;
 pub mod tearing;
 pub mod virtual_input;
 mod wlr_toplevels;
+mod x11_keys;
 pub mod xwayland;
 
 pub use handlers::ACTIVATION_TOKENS_KEPT;
@@ -87,12 +88,19 @@ pub fn presentation_clock_now() -> std::time::Duration {
 }
 
 pub use idle_notify::IdleNotifyState;
+
+/// MAX_APP_SCALE when the config has none (owner, 2026-10-31): zooming only scales what apps
+/// drew; they never re-render for it (a HiDPI screen still gets its own scale). Re-rendering
+/// made a terminal re-flow its text as you zoomed.
+pub const DEFAULT_MAX_APP_SCALE: f64 = 1.0;
 pub use registry::SurfaceRegistry;
 
 /// Per-client data the composition root attaches when inserting a client.
 #[derive(Debug, Default)]
 pub struct ClientState {
     compositor: CompositorClientState,
+    /// Whether the client is xwayland-satellite (its surfaces are X11 windows), once asked.
+    x11: std::sync::OnceLock<bool>,
 }
 
 impl ClientData for ClientState {
@@ -135,6 +143,8 @@ pub struct WaylandState {
     /// The compositor started a process of its own (a shortcut, a launch, the wallpaper): the
     /// session reaps exits from then on (SIGCHLD), also without an `-e` command.
     pub(crate) spawned_children: bool,
+    /// What X11 apps hear while a Wayland window has focus (XWAYLAND_KEYS, `x11_keys`).
+    pub(crate) x11_keys: x11_keys::X11Keys,
     /// What the backend's framebuffer is (`set_host_window_target`).
     pub(crate) target: convert::RenderTarget,
     /// The cursor clients asked for, drawn when the target draws one (`cursor`).
@@ -470,32 +480,29 @@ impl WaylandState {
         if let Ok(home) = std::env::var("HOME") {
             let config_path = format!("{home}/.config/infynitae/config");
             if let Ok(content) = std::fs::read_to_string(config_path) {
-                for line in content.lines() {
-                    let line_clean = line.split('#').next().unwrap_or("").trim();
-                    if let Some((k, v)) = line_clean.split_once('=') {
-                        let key = k.trim();
-                        let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
-                        match key {
-                            "KEYBOARD_REPEAT_DELAY" => {
-                                if let Ok(d) = val.parse::<i32>() {
-                                    repeat_delay = d;
-                                }
+                for (key, val) in content.lines().filter_map(config_line) {
+                    let key = key.trim();
+                    let val = val.trim();
+                    match key {
+                        "KEYBOARD_REPEAT_DELAY" => {
+                            if let Ok(d) = val.parse::<i32>() {
+                                repeat_delay = d;
                             }
-                            "KEYBOARD_REPEAT_RATE" => {
-                                if let Ok(r) = val.parse::<i32>() {
-                                    repeat_rate = r;
-                                }
-                            }
-                            "XKB_DEFAULT_LAYOUT" => {
-                                if !val.is_empty() {
-                                    xkb_layout = val.to_string();
-                                }
-                            }
-                            "XKB_DEFAULT_OPTIONS" if !val.is_empty() => {
-                                xkb_options = val.to_string();
-                            }
-                            _ => {}
                         }
+                        "KEYBOARD_REPEAT_RATE" => {
+                            if let Ok(r) = val.parse::<i32>() {
+                                repeat_rate = r;
+                            }
+                        }
+                        "XKB_DEFAULT_LAYOUT" => {
+                            if !val.is_empty() {
+                                xkb_layout = val.to_string();
+                            }
+                        }
+                        "XKB_DEFAULT_OPTIONS" if !val.is_empty() => {
+                            xkb_options = val.to_string();
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -541,6 +548,7 @@ impl WaylandState {
             outputs: Vec::new(),
             disabled_outputs: Vec::new(),
             spawned_children: false,
+            x11_keys: Default::default(),
             target: convert::RenderTarget::default(),
             cursor: smithay::input::pointer::CursorImageStatus::default_named(),
             cursor_epoch: std::time::Duration::ZERO,
@@ -789,9 +797,10 @@ impl WaylandState {
 
     /// Reloads configuration from ~/.config/infynitae/config into Core and compositor state.
     /// `MAX_APP_SCALE`: how far apps render sharper as you zoom in (the scale policy's ceiling,
-    /// PROV-1). Never below a screen's own scale, at most 8; absent or invalid, the default (3).
+    /// PROV-1). Never below a screen's own scale, at most 8; absent or invalid,
+    /// [`DEFAULT_MAX_APP_SCALE`].
     fn set_max_app_scale(&mut self, value: Option<f64>) {
-        use infynitae_core::scale::{DEFAULT_H_CFG, ScalePolicyConfig};
+        use infynitae_core::scale::ScalePolicyConfig;
         let screens = self
             .core
             .outputs()
@@ -800,7 +809,7 @@ impl WaylandState {
             .fold(1.0, f64::max);
         let h_cfg = value
             .filter(|v| v.is_finite() && *v > 0.0)
-            .unwrap_or(DEFAULT_H_CFG)
+            .unwrap_or(DEFAULT_MAX_APP_SCALE)
             .clamp(screens, 8.0_f64.max(screens));
         let config = ScalePolicyConfig {
             h_cfg,
@@ -810,6 +819,24 @@ impl WaylandState {
             match self.core.set_scale_config(config) {
                 Ok(fx) => self.apply(&fx),
                 Err(e) => eprintln!("[infynitae] MAX_APP_SCALE {h_cfg} refused: {e:?}"),
+            }
+        }
+    }
+
+    /// `ZOOM_SHARPEN`: "after" (apps re-render once a zoom settles, at whole scales only) or
+    /// "live" (at each rung while zooming, the ladder's finer steps).
+    fn set_zoom_sharpen(&mut self, after: bool) {
+        use infynitae_core::scale::{DEFAULT_R, ScalePolicyConfig};
+        let config = ScalePolicyConfig {
+            sharpen_after: after,
+            // a ratio of 2 leaves the whole scales (and the screens' own) as the only rungs
+            r: if after { 2.0 } else { DEFAULT_R },
+            ..*self.core.scale_config()
+        };
+        if config != *self.core.scale_config() {
+            match self.core.set_scale_config(config) {
+                Ok(fx) => self.apply(&fx),
+                Err(e) => eprintln!("[infynitae] ZOOM_SHARPEN refused: {e:?}"),
             }
         }
     }
@@ -831,6 +858,9 @@ impl WaylandState {
                 let mut bind_lines: Vec<(String, String)> = Vec::new();
                 let mut exec_lines: Vec<(String, String)> = Vec::new();
                 let mut max_app_scale: Option<f64> = None;
+                let mut x11_keys_mode = x11_keys::Mode::default();
+                // "after" unless the config says "live" (a config from before the setting too)
+                let mut zoom_sharpen_after = true;
                 let (mut background_priority, mut game_mode) = (true, true);
                 let mut tearing = true;
                 for line in content.lines() {
@@ -1038,6 +1068,10 @@ impl WaylandState {
                                     "1" | "true" | "yes" | "on"
                                 ));
                             }
+                            "XWAYLAND_KEYS" => x11_keys_mode = x11_keys::Mode::parse(val),
+                            "ZOOM_SHARPEN" => {
+                                zoom_sharpen_after = !val.eq_ignore_ascii_case("live")
+                            }
                             "DIRECT_SCANOUT" => {
                                 self.direct_scanout = Some(matches!(
                                     val.to_lowercase().as_str(),
@@ -1140,6 +1174,8 @@ impl WaylandState {
                 self.core.set_free_cursor_on_super(free_cursor_on_super);
                 self.exec_commands = commands;
                 self.set_max_app_scale(max_app_scale);
+                self.x11_keys.mode = x11_keys_mode;
+                self.set_zoom_sharpen(zoom_sharpen_after);
                 self.background.game_mode = game_mode;
                 self.set_tearing_enabled(tearing);
                 self.background.enabled = background_priority;

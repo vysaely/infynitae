@@ -394,114 +394,101 @@ fn main() -> ExitCode {
     if let Ok(home) = std::env::var("HOME") {
         let config_path = format!("{home}/.config/infynitae/config");
         if let Ok(content) = std::fs::read_to_string(config_path) {
-            for line in content.lines() {
-                let line_clean = line.split('#').next().unwrap_or("").trim();
-                if let Some((k, v)) = line_clean.split_once('=') {
-                    let key = k.trim();
-                    let val = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
-                    match key {
-                        "PAN_MODE" => match val.to_lowercase().as_str() {
-                            "rts" => core.set_pan_mode(infynitae_core::navigation::PanMode::Rts),
-                            "free" => core.set_pan_mode(infynitae_core::navigation::PanMode::Free),
-                            _ => core.set_pan_mode(infynitae_core::navigation::PanMode::Grab),
-                        },
-                        "FOCUS_FOLLOWS_MOUSE" => match val.to_lowercase().as_str() {
-                            "strict" => {
-                                core.set_focus_follows_mouse(true);
-                                core.set_focus_follows_mouse_strict(true);
-                            }
-                            "0" | "false" | "off" | "no" | "click" => {
-                                core.set_focus_follows_mouse(false);
-                                core.set_focus_follows_mouse_strict(false);
-                            }
-                            _ => {
-                                core.set_focus_follows_mouse(true);
-                                core.set_focus_follows_mouse_strict(false);
-                            }
-                        },
-                        "FOCUS_CYCLE_NAVIGATE" => {
-                            let enabled = !matches!(
-                                val.to_lowercase().as_str(),
-                                "0" | "false" | "off" | "no"
-                            );
-                            core.set_focus_cycle_navigate(enabled);
+            for (key, val) in content.lines().filter_map(infynitae_wayland::config_line) {
+                let key = key.trim();
+                let val = val.trim();
+                match key {
+                    "PAN_MODE" => match val.to_lowercase().as_str() {
+                        "rts" => core.set_pan_mode(infynitae_core::navigation::PanMode::Rts),
+                        "free" => core.set_pan_mode(infynitae_core::navigation::PanMode::Free),
+                        _ => core.set_pan_mode(infynitae_core::navigation::PanMode::Grab),
+                    },
+                    "FOCUS_FOLLOWS_MOUSE" => match val.to_lowercase().as_str() {
+                        "strict" => {
+                            core.set_focus_follows_mouse(true);
+                            core.set_focus_follows_mouse_strict(true);
                         }
-                        "FOCUS_ON_OPEN" => {
-                            let enabled = !matches!(
-                                val.to_lowercase().as_str(),
-                                "0" | "false" | "off" | "no"
-                            );
-                            core.set_focus_on_open(enabled);
+                        "0" | "false" | "off" | "no" | "click" => {
+                            core.set_focus_follows_mouse(false);
+                            core.set_focus_follows_mouse_strict(false);
                         }
-                        "TELEPORT_ON_OPEN" => {
-                            let enabled = !matches!(
-                                val.to_lowercase().as_str(),
-                                "0" | "false" | "off" | "no"
-                            );
-                            core.set_teleport_on_open(enabled);
+                        _ => {
+                            core.set_focus_follows_mouse(true);
+                            core.set_focus_follows_mouse_strict(false);
                         }
-                        "PLACEMENT_POLICY" => match val.to_lowercase().as_str() {
-                            "center" | "centred" | "centered" => core.set_placement_policy(
-                                infynitae_core::PlacementPolicy::CentredInView,
-                            ),
-                            "origin" => core.set_placement_policy(
-                                infynitae_core::PlacementPolicy::OriginAtCameraCentre,
-                            ),
-                            _ => core.set_placement_policy(
-                                infynitae_core::PlacementPolicy::ClusterTiling,
-                            ),
-                        },
-                        "SUPER_ENTER_ACTION" => {
-                            if val.eq_ignore_ascii_case("fit") {
-                                core.set_enter_mode(infynitae_core::EnterMode::Fit);
-                            } else {
-                                core.set_enter_mode(infynitae_core::EnterMode::Maximize);
-                            }
-                        }
-                        "FULLSCREEN_PAN" => {
-                            let enabled = !matches!(
-                                val.to_lowercase().as_str(),
-                                "0" | "false" | "off" | "no" | "exclusive"
-                            );
-                            core.set_fullscreen_pan(enabled);
-                        }
-                        "OUTPUT_SCALE" => {
-                            if scale_120.is_none()
-                                && let Ok(f) = val.parse::<f64>()
-                                && (0.25..=8.0).contains(&f)
-                            {
-                                scale_120 = Some((f * 120.0).round().max(1.0) as u32);
-                            }
-                        }
-                        "SCALING_FILTER" => {
-                            if scaling_filter.is_none() {
-                                scaling_filter = Some(val.to_lowercase());
-                            }
-                        }
-                        "DIRECT_SCANOUT" => {
-                            if direct_scanout.is_none() {
-                                direct_scanout = Some(!matches!(
-                                    val.to_lowercase().as_str(),
-                                    "0" | "false" | "off" | "no"
-                                ));
-                            }
-                        }
-                        "VIRTUAL_SCREEN" => {
-                            virtual_screen = !matches!(
-                                val.to_lowercase().as_str(),
-                                "0" | "false" | "off" | "no"
-                            );
-                        }
-                        "VRR_ENABLED" | "VRR" | "ADAPTIVE_SYNC" if vrr.is_none() => {
-                            match val.to_lowercase().as_str() {
-                                // auto (None): only while a window is fullscreen
-                                "on" | "true" | "1" | "yes" => vrr = Some(true),
-                                "off" | "false" | "0" | "no" => vrr = Some(false),
-                                _ => {}
-                            }
-                        }
-                        _ => {}
+                    },
+                    "FOCUS_CYCLE_NAVIGATE" => {
+                        let enabled =
+                            !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                        core.set_focus_cycle_navigate(enabled);
                     }
+                    "FOCUS_ON_OPEN" => {
+                        let enabled =
+                            !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                        core.set_focus_on_open(enabled);
+                    }
+                    "TELEPORT_ON_OPEN" => {
+                        let enabled =
+                            !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                        core.set_teleport_on_open(enabled);
+                    }
+                    "PLACEMENT_POLICY" => match val.to_lowercase().as_str() {
+                        "center" | "centred" | "centered" => core
+                            .set_placement_policy(infynitae_core::PlacementPolicy::CentredInView),
+                        "origin" => core.set_placement_policy(
+                            infynitae_core::PlacementPolicy::OriginAtCameraCentre,
+                        ),
+                        _ => core
+                            .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling),
+                    },
+                    "SUPER_ENTER_ACTION" => {
+                        if val.eq_ignore_ascii_case("fit") {
+                            core.set_enter_mode(infynitae_core::EnterMode::Fit);
+                        } else {
+                            core.set_enter_mode(infynitae_core::EnterMode::Maximize);
+                        }
+                    }
+                    "FULLSCREEN_PAN" => {
+                        let enabled = !matches!(
+                            val.to_lowercase().as_str(),
+                            "0" | "false" | "off" | "no" | "exclusive"
+                        );
+                        core.set_fullscreen_pan(enabled);
+                    }
+                    "OUTPUT_SCALE" => {
+                        if scale_120.is_none()
+                            && let Ok(f) = val.parse::<f64>()
+                            && (0.25..=8.0).contains(&f)
+                        {
+                            scale_120 = Some((f * 120.0).round().max(1.0) as u32);
+                        }
+                    }
+                    "SCALING_FILTER" => {
+                        if scaling_filter.is_none() {
+                            scaling_filter = Some(val.to_lowercase());
+                        }
+                    }
+                    "DIRECT_SCANOUT" => {
+                        if direct_scanout.is_none() {
+                            direct_scanout = Some(!matches!(
+                                val.to_lowercase().as_str(),
+                                "0" | "false" | "off" | "no"
+                            ));
+                        }
+                    }
+                    "VIRTUAL_SCREEN" => {
+                        virtual_screen =
+                            !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                    }
+                    "VRR_ENABLED" | "VRR" | "ADAPTIVE_SYNC" if vrr.is_none() => {
+                        match val.to_lowercase().as_str() {
+                            // auto (None): only while a window is fullscreen
+                            "on" | "true" | "1" | "yes" => vrr = Some(true),
+                            "off" | "false" | "0" | "no" => vrr = Some(false),
+                            _ => {}
+                        }
+                    }
+                    _ => {}
                 }
             }
         }

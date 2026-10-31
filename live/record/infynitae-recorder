@@ -1,8 +1,8 @@
 #!/bin/sh
 # ==============================================================================
-# Infynitae Universal Screen Recorder & 20-Minute Replay Buffer
+# Infynitae screen recorder and replay buffer (the last 20 minutes, saved on demand)
 # Auto-detects and runs on ANY device: AMD, Intel, NVIDIA, Handhelds, Laptops, VMs
-# Zero bloat (< 5MB RAM), hardware accelerated, zero popups, zero lost clips.
+# Uses the GPU video encoder when there is one, else the CPU; no popups.
 # ==============================================================================
 
 set -e
@@ -78,7 +78,7 @@ notify_toast() {
 }
 
 # ------------------------------------------------------------------------------
-# Universal Display Geometry Auto-Detection
+# The display size
 # Queries Wayland compositor for real output width & height (works on any screen)
 # ------------------------------------------------------------------------------
 detect_screen_geometry() {
@@ -100,7 +100,7 @@ detect_screen_geometry() {
 }
 
 # ------------------------------------------------------------------------------
-# Universal Hardware Video Encoder Auto-Detection
+# The video encoder: the GPU's, when there is one
 # Scans AMD, Intel, NVIDIA, and software CPU fallbacks for any device
 # ------------------------------------------------------------------------------
 detect_encoder_pipeline() {
@@ -146,12 +146,12 @@ detect_encoder_pipeline() {
         return
     fi
 
-    # 4. Universal Software CPU Fallback (VMs, QEMU, old CPUs, llvmpipe)
+    # 4. The CPU encoder otherwise (VMs, old GPUs, software rendering)
     echo "-c:v libx264 -preset ultrafast -tune zerolatency -crf 22"
 }
 
 # ------------------------------------------------------------------------------
-# Universal Audio Input Auto-Detection
+# The audio input
 # Scans PipeWire, PulseAudio, and ALSA; gracefully falls back if soundcard absent
 # ------------------------------------------------------------------------------
 # RECORD_AUDIO: desktop (the default output's sound) | mic (the default input) | both (mixed) |
@@ -216,7 +216,7 @@ start_replay_engine() {
 
 supervisor_loop() {
     echo $$ > "$SUPERVISOR_PID_FILE"
-    echo "[infynitae-recorder] Invincible universal replay supervisor started (PID $$)"
+    echo "[infynitae-recorder] Replay supervisor started (PID $$)"
 
     # Trap clean session termination
     # the encoder at the end of the engine's pipeline outlives the engine: stop it by its output dir

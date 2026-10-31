@@ -5,7 +5,7 @@
 mod common;
 
 use common::{Lockstep, output};
-use infynitae_core::scale::DEFAULT_H_CFG;
+use infynitae_wayland::DEFAULT_MAX_APP_SCALE;
 use infynitae_wayland::cursor::TestTempDir;
 
 fn reload(ls: &mut Lockstep, home: &std::path::Path, config: &str) -> f64 {
@@ -35,12 +35,12 @@ fn the_config_sets_the_ceiling_within_its_bounds() {
     );
     assert_eq!(
         reload(&mut ls, temp.path(), "MAX_APP_SCALE=\"x\"\n"),
-        DEFAULT_H_CFG
+        DEFAULT_MAX_APP_SCALE
     );
     assert_eq!(reload(&mut ls, temp.path(), "MAX_APP_SCALE=\"2\"\n"), 2.0);
     assert_eq!(
         reload(&mut ls, temp.path(), ""),
-        DEFAULT_H_CFG,
+        DEFAULT_MAX_APP_SCALE,
         "removed: the default"
     );
 }

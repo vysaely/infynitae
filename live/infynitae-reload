@@ -164,9 +164,103 @@ reload_portal() {
 reload_polkit() {
     p=$(first "$BIN_DIR/infynitae-polkit")
     stop_helper infynitae-polkit
-    if [ -n "$p" ]; then
+    case "${POLKIT_AGENT:-auto}" in
+        none|off|false|0|FALSE|False)
+            echo "polkit: stopped (POLKIT_AGENT is off)"
+            ;;
+        auto|"")
+            if [ -n "$p" ]; then
+                spawn "$p"
+                echo "polkit: restarted"
+            fi
+            ;;
+        *)
+            if [ -x "$POLKIT_AGENT" ]; then
+                spawn "$POLKIT_AGENT"
+                echo "polkit: restarted ($POLKIT_AGENT)"
+            fi
+            ;;
+    esac
+}
+
+reload_island() {
+    p=$(first "$BIN_DIR/infynitae-island")
+    stop_helper infynitae-island
+    if is_true "${ENABLE_ISLAND:-true}" && [ -n "$p" ]; then
         spawn "$p"
-        echo "polkit: restarted"
+        echo "island: restarted"
+    else
+        echo "island: stopped (ENABLE_ISLAND is off)"
+    fi
+}
+
+reload_restore() {
+    stop_matching infynitae "watch"
+    stop_helper infynitae-restore
+    if is_true "${SESSION_RESTORE:-true}"; then
+        r=$(first "$BIN_DIR/infynitae-restore" "$LIVE/infynitae-restore")
+        if [ -n "$r" ]; then
+            "$r" save >/dev/null 2>&1 || true
+            spawn "$r" watch
+            echo "restore: restarted"
+        fi
+    else
+        rm -f "$STATE_DIR/session.json"
+        echo "restore: stopped (SESSION_RESTORE is off)"
+    fi
+}
+
+reload_sleep_lock() {
+    stop_helper infynitae-sleep-lock
+    if is_true "${SLEEP_LOCK:-true}"; then
+        s=$(first "$BIN_DIR/infynitae-sleep-lock" "$LIVE/infynitae-sleep-lock")
+        if [ -n "$s" ]; then
+            spawn "$s"
+            echo "sleep-lock: restarted"
+        fi
+    else
+        echo "sleep-lock: stopped (SLEEP_LOCK is off)"
+    fi
+}
+
+reload_notifications() {
+    for d in mako swaync dunst fnott; do
+        stop_helper "$d"
+    done
+    case "${NOTIFICATIONS:-auto}" in
+        none|off|false|0|FALSE|False)
+            echo "notifications: stopped (NOTIFICATIONS is off)"
+            ;;
+        auto|"")
+            for d in mako swaync dunst fnott; do
+                if command -v "$d" >/dev/null 2>&1; then
+                    spawn "$d"
+                    echo "notifications: restarted ($d)"
+                    break
+                fi
+            done
+            ;;
+        *)
+            spawn sh -c "$NOTIFICATIONS"
+            echo "notifications: restarted ($NOTIFICATIONS)"
+            ;;
+    esac
+}
+
+reload_automount() {
+    stop_helper infynitae-automount
+    stop_helper udiskie
+    if is_true "${AUTOMOUNT:-true}"; then
+        s=$(first "$BIN_DIR/infynitae-automount" "$LIVE/infynitae-automount")
+        if [ -n "$s" ]; then
+            spawn "$s"
+            echo "automount: restarted"
+        elif command -v udiskie >/dev/null 2>&1; then
+            spawn udiskie --no-tray --notify
+            echo "automount: restarted"
+        fi
+    else
+        echo "automount: stopped"
     fi
 }
 
@@ -237,7 +331,7 @@ reload_clipboard() {
 
 status() {
     printf '%-26s %s\n' infynitae "$(pgrep -x infynitae | tr '\n' ' ')"
-    for n in infynitae-wallpaper infynitae-recorder infynitae-record-stream infynitae-portal infynitae-polkit infynitae-lock; do
+    for n in infynitae-wallpaper infynitae-island infynitae-recorder infynitae-record-stream infynitae-portal infynitae-polkit infynitae-lock; do
         pids=$(pids_of "$n" | tr '\n' ' ')
         printf '%-26s %s\n' "$n" "${pids:-not running}"
     done
@@ -252,9 +346,14 @@ status() {
 [ $# -eq 0 ] && set -- all
 for what in "$@"; do
     case "$what" in
-        all) reload_settings; reload_wallpaper; reload_recorder; reload_portal; reload_polkit; reload_screenshare; reload_clipboard ;;
+        all) reload_settings; reload_wallpaper; reload_island; reload_restore; reload_sleep_lock; reload_notifications; reload_automount; reload_recorder; reload_portal; reload_polkit; reload_screenshare; reload_clipboard ;;
         settings) reload_settings ;;
         wallpaper) reload_wallpaper ;;
+        island) reload_island ;;
+        restore) reload_restore ;;
+        sleep-lock) reload_sleep_lock ;;
+        notifications) reload_notifications ;;
+        automount) reload_automount ;;
         recorder) reload_recorder ;;
         portal) reload_portal ;;
         polkit) reload_polkit ;;
@@ -262,7 +361,7 @@ for what in "$@"; do
         clipboard) reload_clipboard ;;
         status) status ;;
         *)
-            echo "usage: infynitae-reload [all|settings|wallpaper|recorder|portal|polkit|screenshare|clipboard|status] ..." >&2
+            echo "usage: infynitae-reload [all|settings|wallpaper|island|restore|sleep-lock|notifications|automount|recorder|portal|polkit|screenshare|clipboard|status] ..." >&2
             exit 2
             ;;
     esac

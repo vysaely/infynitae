@@ -21,11 +21,13 @@ Installs Infynitae on Arch Linux. In a terminal with no options, menus ask what 
 with any option it runs by itself. Asks for your password once; reboot when it is done.
 
   --defaults           no menus: what fits this machine (as the menus would tick it)
+  --timezone=AREA/CITY the time zone, e.g. --timezone=Europe/Kyiv (the menus ask while the
+                       system is on UTC; later: infynitae-settings timezone)
 
 Leave out a part:
   --no-notifications   notifications (mako)
   --no-keyring         password store for apps (gnome-keyring)
-  --no-automount       USB drives mounted when plugged in (udiskie)
+  --no-automount       USB drives mounted when plugged in (udisks2)
   --no-clipboard       clipboard history, Super+V (cliphist)
   --no-fonts           fonts for other languages and emoji (Noto)
   --no-recorder        screen recording and replay clips (ffmpeg)
@@ -56,6 +58,7 @@ USAGE
 }
 
 AUTOLOGIN=true
+TIMEZONE=""
 REPLAY_BUFFER=false
 GAMING=false
 TERMINAL_PKG=true
@@ -79,6 +82,7 @@ for arg in "$@"; do
         --no-autologin) AUTOLOGIN=false ;;
         --replay-buffer) REPLAY_BUFFER=true ;;
         --gaming) GAMING=true ;;
+        --timezone=*) TIMEZONE="${arg#--timezone=}" ;;
         --defaults) ;;
         -h | --help) usage; exit 0 ;;
         *) echo "Unknown option: $arg" >&2; usage >&2; exit 2 ;;
@@ -232,6 +236,11 @@ install_programs "$INSTALL_DIR"
 install_system_files "$INSTALL_DIR"
 install_config "$INSTALL_DIR"
 install_default_apps
+if [ -n "$TIMEZONE" ]; then
+    set_timezone "$TIMEZONE" || true
+elif timezone_unset; then
+    echo "==> The time zone is still UTC: infynitae-settings timezone Europe/Kyiv (your city) sets it"
+fi
 # terminals started outside Infynitae find its commands too
 for prof in "$HOME/.bashrc" "$HOME/.bash_profile" "$HOME/.profile" "$HOME/.zprofile"; do
     if [ -f "$prof" ] && ! grep -q '\.local/bin' "$prof"; then

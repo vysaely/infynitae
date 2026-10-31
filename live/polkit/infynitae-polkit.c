@@ -1,6 +1,6 @@
 /*
  * Infynitae Native Modular Polkit Authentication Agent
- * Zero-bloat, lightweight PolicyKit authentication dialog for Wayland.
+ * The PolicyKit authentication dialog (password prompts for system actions) on Wayland.
  *
  * Implements PolkitAgentListener, registers with org.freedesktop.PolicyKit1.Authority,
  * and creates transient GTK3 Wayland dialogs upon challenge.
@@ -189,69 +189,128 @@ static void on_cancellable_cancelled(GCancellable *cancellable, gpointer user_da
     on_cancel_clicked(NULL, data);
 }
 
+static void read_cfg_val(const char *line, const char *key, char *dst, size_t dst_sz) {
+    size_t klen = strlen(key);
+    if (strncmp(line, key, klen) != 0 || line[klen] != '=') return;
+    const char *p = line + klen + 1;
+    while (*p == ' ' || *p == '\t' || *p == '"' || *p == '\'') p++;
+    /* a color only (#rrggbb or a name): anything else would end up in the CSS and break it all */
+    char val[32];
+    size_t j = 0;
+    while ((g_ascii_isalnum(p[j]) || (j == 0 && p[j] == '#')) && j + 1 < sizeof(val)) {
+        val[j] = p[j];
+        j++;
+    }
+    val[j] = '\0';
+    if (j > 1 && j < dst_sz) memcpy(dst, val, j + 1);
+}
+
 static void apply_css(void) {
+    char surface[32] = "#111317";
+    char canvas[32] = "#0b0f14";
+    char border_act[32] = "#7aa2f7";
+    char border_inact[32] = "#333b54";
+    char text_col[32] = "#eef2f8";
+
+    const char *home = g_get_home_dir();
+    if (home) {
+        gchar *cfg_path = g_build_filename(home, ".config", "infynitae", "config", NULL);
+        FILE *f = fopen(cfg_path, "r");
+        if (f) {
+            char line[256];
+            while (fgets(line, sizeof(line), f)) {
+                char * s = line;
+                while (*s == ' ' || *s == '\t') s++;
+                if (*s == '#') continue;
+                read_cfg_val(s, "SURFACE_COLOR", surface, sizeof(surface));
+                read_cfg_val(s, "CANVAS_COLOR", canvas, sizeof(canvas));
+                read_cfg_val(s, "BORDER_ACTIVE", border_act, sizeof(border_act));
+                read_cfg_val(s, "BORDER_INACTIVE", border_inact, sizeof(border_inact));
+                read_cfg_val(s, "TEXT_COLOR", text_col, sizeof(text_col));
+            }
+            fclose(f);
+        }
+        g_free(cfg_path);
+    }
+
     GtkCssProvider *provider = gtk_css_provider_new();
-    const gchar *css =
+    gchar *css = g_strdup_printf(
         "window.infynitae-polkit {\n"
-        "    background-color: #181825;\n"
-        "    border: 2px solid #89b4fa;\n"
-        "    border-radius: 12px;\n"
-        "    font-family: monospace;\n"
+        "    background-color: %s;\n"
+        "    border: 1px solid %s;\n"
+        "    border-radius: 0px;\n"
+        "    font-family: Sans;\n"
         "}\n"
         "label.title {\n"
-        "    color: #cdd6f4;\n"
-        "    font-size: 15px;\n"
-        "    font-weight: bold;\n"
+        "    color: %s;\n"
+        "    font-size: 13px;\n"
+        "    font-weight: 600;\n"
         "}\n"
         "label.action {\n"
-        "    color: #a6adc8;\n"
-        "    font-size: 12px;\n"
+        "    color: #9aa5b8;\n"
+        "    font-size: 11px;\n"
         "}\n"
         "label.error {\n"
-        "    color: #f38ba8;\n"
-        "    font-size: 12px;\n"
-        "    font-weight: bold;\n"
+        "    color: #f7768e;\n"
+        "    font-size: 11px;\n"
+        "    font-weight: 600;\n"
         "}\n"
         "entry.pass {\n"
-        "    background-color: #313244;\n"
-        "    color: #cdd6f4;\n"
-        "    border: 1px solid #45475a;\n"
-        "    border-radius: 6px;\n"
-        "    padding: 8px;\n"
-        "    font-size: 14px;\n"
+        "    background-color: %s;\n"
+        "    color: %s;\n"
+        "    border: 1px solid %s;\n"
+        "    border-radius: 0px;\n"
+        "    padding: 6px 10px;\n"
+        "    font-size: 12px;\n"
         "}\n"
         "entry.pass:focus {\n"
-        "    border: 1px solid #89b4fa;\n"
+        "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-auth {\n"
-        "    background-color: #89b4fa;\n"
-        "    color: #11111b;\n"
-        "    font-weight: bold;\n"
-        "    border-radius: 6px;\n"
-        "    padding: 8px 16px;\n"
-        "    border: none;\n"
+        "    background-color: #262b38;\n"
+        "    color: %s;\n"
+        "    font-weight: 600;\n"
+        "    border-radius: 0px;\n"
+        "    padding: 6px 14px;\n"
+        "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-auth:hover {\n"
-        "    background-color: #b4befe;\n"
+        "    background-color: #303748;\n"
         "}\n"
         "button.btn-cancel {\n"
-        "    background-color: #313244;\n"
-        "    color: #cdd6f4;\n"
-        "    border-radius: 6px;\n"
-        "    padding: 8px 16px;\n"
-        "    border: 1px solid #45475a;\n"
+        "    background-color: %s;\n"
+        "    color: #9aa5b8;\n"
+        "    border-radius: 0px;\n"
+        "    padding: 6px 14px;\n"
+        "    border: 1px solid %s;\n"
         "}\n"
         "button.btn-cancel:hover {\n"
-        "    background-color: #45475a;\n"
-        "}\n";
+        "    background-color: #1c2028;\n"
+        "    color: %s;\n"
+        "}\n",
+        surface, border_inact, text_col, canvas, text_col, border_inact,
+        border_act, text_col, border_act, surface, border_inact, text_col);
 
     gtk_css_provider_load_from_data(provider, css, -1, NULL);
+    g_free(css);
     gtk_style_context_add_provider_for_screen(
         gdk_screen_get_default(),
         GTK_STYLE_PROVIDER(provider),
         GTK_STYLE_PROVIDER_PRIORITY_APPLICATION
     );
     g_object_unref(provider);
+}
+
+/* GTK starts with the first prompt, not with the session: until a program asks for a password,
+ * the agent is only its D-Bus registration (GTK's display connection, theme and CSS were most of
+ * its memory, held all session for a dialog seldom shown). TRUE once GTK is up. */
+static gboolean ensure_gtk(void) {
+    static gboolean up;
+    if (!up && gtk_init_check(NULL, NULL)) {
+        apply_css();
+        up = TRUE;
+    }
+    return up;
 }
 
 static void infynitae_agent_listener_initiate_authentication(
@@ -301,6 +360,13 @@ static void infynitae_agent_listener_initiate_authentication(
             data,
             NULL
         );
+    }
+
+    if (!ensure_gtk()) {
+        g_task_return_new_error(data->task, POLKIT_ERROR, POLKIT_ERROR_FAILED,
+                                "No display to show the password prompt on");
+        free_auth_dialog(data);
+        return;
     }
 
     // Build GUI Window
@@ -390,8 +456,8 @@ static void infynitae_agent_listener_init(InfynitaeAgentListener *listener) {
 }
 
 int main(int argc, char **argv) {
-    gtk_init(&argc, &argv);
-    apply_css();
+    (void)argc;
+    (void)argv;
 
     GError *error = NULL;
     InfynitaeAgentListener *listener = g_object_new(INFYNITAE_TYPE_AGENT_LISTENER, NULL);
@@ -419,7 +485,10 @@ int main(int argc, char **argv) {
     }
 
     g_print("[infynitae-polkit] PolicyKit Authentication Agent registered successfully on D-Bus.\n");
-    gtk_main();
+    /* GTK's events run in this loop too, once a prompt started it (the default main context) */
+    GMainLoop *loop = g_main_loop_new(NULL, FALSE);
+    g_main_loop_run(loop);
+    g_main_loop_unref(loop);
 
     polkit_agent_listener_unregister(reg_handle);
     g_object_unref(listener);

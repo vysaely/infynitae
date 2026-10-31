@@ -1,5 +1,5 @@
 #!/bin/sh
-# Infynitae Native Session Starter (Barebones & Fast)
+# Infynitae session start script
 # Executed by the compositor's --exec argument.
 umask 077
 
@@ -89,11 +89,19 @@ for r in "$HOME/.local/bin/infynitae-reload" "$HOME/infynitae/live/infynitae-rel
 done
 
 # 3. Native Polkit authentication agent (for sudo / system prompts in GUI)
-if [ -x "$HOME/.local/bin/infynitae-polkit" ]; then
-    "$HOME/.local/bin/infynitae-polkit" >/dev/null 2>&1 &
-elif [ -n "$POLKIT_AGENT" ] && [ -x "$POLKIT_AGENT" ]; then
-    "$POLKIT_AGENT" >/dev/null 2>&1 &
-fi
+case "${POLKIT_AGENT:-auto}" in
+    none|off|false|0|FALSE|False) ;;
+    auto|"")
+        if [ -x "$HOME/.local/bin/infynitae-polkit" ]; then
+            "$HOME/.local/bin/infynitae-polkit" >/dev/null 2>&1 &
+        fi
+        ;;
+    *)
+        if [ -x "$POLKIT_AGENT" ]; then
+            "$POLKIT_AGENT" >/dev/null 2>&1 &
+        fi
+        ;;
+esac
 
 # 4. Wallpaper & Canvas Background (Configured or Auto-Detected)
 WP_BIN=""
@@ -113,8 +121,18 @@ if [ -n "$WP_BIN" ]; then
     fi
 fi
 
+# 4b. The island: window strip, control panel and clipboard (ENABLE_ISLAND)
+case "${ENABLE_ISLAND:-true}" in
+    0|false|no|off|FALSE|False) ;;
+    *)
+        if [ -x "$HOME/.local/bin/infynitae-island" ]; then
+            "$HOME/.local/bin/infynitae-island" >/dev/null 2>&1 &
+        fi
+        ;;
+esac
 
-# 6. Native Screen Recorder & 20-minute Replay Buffer (Invincible background watchdog)
+
+# 6. Screen recorder and replay buffer (the last 20 minutes; a supervisor restarts it)
 if [ "${ENABLE_REPLAY_BUFFER:-false}" = "true" ] || [ "${ENABLE_REPLAY_BUFFER:-false}" = "1" ]; then
     if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
         "$HOME/.local/bin/infynitae-recorder" supervisor >/dev/null 2>&1 &
@@ -141,7 +159,12 @@ case "${CLIPBOARD_HISTORY:-true}" in
         ;;
 esac
 
-# 6c. Notifications: NOTIFICATIONS picks the daemon ("auto": mako, swaync, dunst, fnott, the first
+# 6c. Theme sync: the config's colors and fonts to mako, fuzzel, GTK, Qt and terminals
+if [ -f "$HOME/infynitae/live/settings.sh" ]; then
+    sh "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1 || true
+fi
+
+# Notifications: NOTIFICATIONS picks the daemon ("auto": mako, swaync, dunst, fnott, the first
 # installed; "none": none; or a command). Started here so the choice wins over D-Bus activation.
 NOTIFY_CMD=""
 case "${NOTIFICATIONS:-auto}" in
@@ -178,10 +201,18 @@ if [ -x "$HOME/infynitae/live/config-check" ]; then
     (sleep 2; "$HOME/infynitae/live/config-check" --notify >/dev/null) &
 fi
 
-# 6d. USB drives and SD cards mount when plugged in (udiskie, through udisks2): AUTOMOUNT
+# 6d. USB drives and SD cards mount when plugged in (infynitae-automount, through udisks2): AUTOMOUNT
 case "${AUTOMOUNT:-true}" in
     1|true|yes|on|TRUE|True)
-        if command -v udiskie >/dev/null 2>&1; then
+        started=0
+        for s in "$HOME/.local/bin/infynitae-automount" "$HOME/infynitae/live/infynitae-automount"; do
+            if [ -x "$s" ]; then
+                "$s" >/dev/null 2>&1 &
+                started=1
+                break
+            fi
+        done
+        if [ "$started" -eq 0 ] && command -v udiskie >/dev/null 2>&1; then
             udiskie --no-tray --notify >/dev/null 2>&1 &
         fi
         ;;
@@ -219,13 +250,18 @@ case "${BATTERY_LIMIT:-off}" in
     *) sh "$HOME/infynitae/live/battery-limit" "$BATTERY_LIMIT" >/dev/null 2>&1 || true ;;
 esac
 
-# 6e2. The screen locks before the machine sleeps (the lid, the power button): it wakes locked
-for s in "$HOME/.local/bin/infynitae-sleep-lock" "$HOME/infynitae/live/infynitae-sleep-lock"; do
-    if [ -x "$s" ]; then
-        "$s" >/dev/null 2>&1 &
-        break
-    fi
-done
+# 6e2. The screen locks before the machine sleeps (the lid, the power button): it wakes locked (SLEEP_LOCK)
+case "${SLEEP_LOCK:-true}" in
+    0|false|no|off|FALSE|False) ;;
+    *)
+        for s in "$HOME/.local/bin/infynitae-sleep-lock" "$HOME/infynitae/live/infynitae-sleep-lock"; do
+            if [ -x "$s" ]; then
+                "$s" >/dev/null 2>&1 &
+                break
+            fi
+        done
+        ;;
+esac
 
 # 6f. Screen auto-rotation on convertible laptops (AUTO_ROTATE; needs iio-sensor-proxy)
 case "${AUTO_ROTATE:-auto}" in

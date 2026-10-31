@@ -2097,6 +2097,7 @@ mod tests {
             sigma: 0.1,
             t_settle_ms: 250,
             d_max: 8192,
+            sharpen_after: true,
         };
         assert_eq!(core.set_scale_config(tuned).map(|_| ()), Ok(()));
         assert_eq!(*core.scale_config(), tuned);

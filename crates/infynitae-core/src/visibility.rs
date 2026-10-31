@@ -1635,6 +1635,7 @@ mod tests {
                 sigma: [0.0, 0.05][rng.below(2) as usize],
                 t_settle_ms: [100, 300][rng.below(2) as usize],
                 d_max: 16384,
+                sharpen_after: rng.below(2) == 0,
             };
             let d_max = [16384, 2000, 900, 500][rng.below(4) as usize];
             let output = (!outputs.is_empty()).then(|| outputs[pick as usize % outputs.len()].0);

@@ -121,10 +121,17 @@ recorder"
         fi
     fi
 
+    # the time zone, while the system has none of its own (UTC)
+    tz_line=""
+    if timezone_unset && TIMEZONE=$(pick_timezone); then
+        tz_line="
+Time:     $TIMEZONE"
+    fi
+
     whiptail --title "Ready to install" --yes-button "Install" --no-button "Cancel" --yesno \
 "Parts:    $(printf '%s\n' "$chosen" | while read -r p; do [ -n "$p" ] && printf '%s, ' "$p"; done | sed 's/, $//')
 Left out: ${SKIP:-nothing}
-Startup:  $startup
+Startup:  $startup$tz_line
 
 The system is updated first, then Infynitae is built from source (a few minutes, longer on a slow machine). It then runs by itself; the log is in ~/.local/state/infynitae/install.log." \
         "$MENU_H" "$MENU_W" \

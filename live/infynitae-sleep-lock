@@ -86,11 +86,13 @@ lock_now() {
     esac
 }
 
+# the background job becomes the monitor itself (exec): $MON is then gdbus, ended by `end`, and
+# no subshell of this script (which a stop would end without its trap) is left holding it
 monitor() {
     if [ -n "${INFYNITAE_SLEEP_MONITOR:-}" ]; then
-        sh -c "$INFYNITAE_SLEEP_MONITOR"
+        exec sh -c "$INFYNITAE_SLEEP_MONITOR"
     else
-        gdbus monitor --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1
+        exec gdbus monitor --system --dest org.freedesktop.login1 --object-path /org/freedesktop/login1
     fi
 }
 

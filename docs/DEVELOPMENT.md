@@ -13,7 +13,7 @@
 | `crates/infynitae` | The binary: command line, picks a backend. |
 | `live/` | The desktop around the compositor: session scripts, environment, shortcut dispatcher, settings sync, and the C helpers (lock, wallpaper, portal, polkit, recorder). |
 | `config/config` | The config template, installed as `~/.config/infynitae/config`. |
-| `vendor/smithay-0.7.0` | Smithay, vendored with three authorized patches (`patches/`). |
+| `vendor/smithay-0.7.0` | Smithay, vendored with four authorized patches (`patches/`). |
 | `tools/`, `enforcement/` | The checks (below). |
 | `docs/foundation/` | The design specification. |
 | `docs/knowledge/` | Research notes, rejected approaches, pitfalls. |

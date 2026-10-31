@@ -1,0 +1,370 @@
+#!/bin/sh
+# infynitae-automount: USB drives and SD cards mount when plugged in, through udisks2. At start,
+# it mounts drives already plugged in and unmounted; it then watches udisks2 for added filesystem
+# interfaces on removable media, mounts them with udisksctl, and posts a notification. Started
+# by session.sh; ends with the session.
+#   INFYNITAE_AUTOMOUNT_MONITOR: a command printing udisks2 signals instead of gdbus (tests)
+#   INFYNITAE_AUTOMOUNT_UDISKSCTL: a command used instead of udisksctl (tests)
+set -u
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
+LOG="$STATE_DIR/automount.log"
+mkdir -p "$STATE_DIR"
+log() {
+    printf '%s %s\n' "$(date '+%F %T.%3N')" "$*" >> "$LOG" 2>/dev/null || true
+}
+
+# one per session: two watchers would race to mount the same filesystem (fd 9 holds the lock;
+# helpers started below do not inherit it)
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/infynitae"
+mkdir -p "$RUN_DIR"
+exec 9> "$RUN_DIR/automount.lock"
+if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
+    exit 0
+fi
+
+run_udisksctl() {
+    ${INFYNITAE_AUTOMOUNT_UDISKSCTL:-udisksctl} "$@"
+}
+
+notify() {
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -a Infynitae "$@" 2>/dev/null || true
+    fi
+}
+
+removable_drives=""
+# fields of the parsed lines: not a tab, which `read` merges when a field (a label) is empty
+SEP=$(printf '\037')
+
+is_removable_drive() {
+    drv="$1"
+    [ -n "$drv" ] || return 1
+    case " $removable_drives " in
+        *" $drv "*) return 0 ;;
+    esac
+    drv_info=$(run_udisksctl info -p "$drv" 2>/dev/null) || return 1
+    case "$drv_info" in
+        *Removable:*true*|*MediaRemovable:*true*)
+            removable_drives="$removable_drives $drv "
+            return 0
+            ;;
+    esac
+    return 1
+}
+
+mount_device() {
+    dev="$1"
+    label="$2"
+    [ -n "$label" ] || label="$dev"
+
+    log "mounting $dev ($label)"
+    mount_out=$(run_udisksctl mount --no-user-interaction -b "$dev" 2>&1)
+    mount_rc=$?
+
+    if [ "$mount_rc" -eq 0 ]; then
+        mount_path=$(printf '%s\n' "$mount_out" | sed -n 's/^Mounted .* at \(.*\)\./\1/p')
+        [ -z "$mount_path" ] && mount_path=$(printf '%s\n' "$mount_out" | sed -n 's/^Mounted .* at //p')
+        [ -z "$mount_path" ] && mount_path="$mount_out"
+        log "mounted $dev at $mount_path"
+        notify "$label mounted at $mount_path"
+    else
+        log "mount failed for $dev: $mount_out"
+        notify "Mount failed for $label" "$mount_out"
+    fi
+}
+
+handle_block() {
+    dev="$1"
+    label="$2"
+    hint_auto="$3"
+    hint_sys="$4"
+    hint_ign="$5"
+    is_mounted="$6"
+    drv="$7"
+
+    if [ "$is_mounted" = "1" ]; then
+        log "ignoring $dev (already mounted)"
+        return 0
+    fi
+    if [ "$hint_ign" = "true" ]; then
+        log "ignoring $dev (HintIgnore is set)"
+        return 0
+    fi
+    if [ "$hint_sys" = "true" ]; then
+        log "ignoring $dev (system disk)"
+        return 0
+    fi
+
+    if [ "$hint_auto" = "true" ] || is_removable_drive "$drv"; then
+        mount_device "$dev" "$label"
+    else
+        log "ignoring $dev (not removable)"
+    fi
+}
+
+scan_existing() {
+    dump=$(run_udisksctl dump 2>/dev/null) || return 0
+    [ -n "$dump" ] || return 0
+
+    items=$(printf '%s\n' "$dump" | awk -v SEP="$SEP" '
+    BEGIN {
+        q = sprintf("%c", 39)
+    }
+    /^(\/org\/freedesktop\/UDisks2\/[a-zA-Z0-9_/]+):/ {
+        obj = substr($1, 1, length($1)-1)
+        section = ""
+    }
+    /^[ ]+org\.freedesktop\.UDisks2\./ {
+        section = $1
+        sub(/:$/, "", section)
+    }
+    /^[ ]+Device:[ ]+/ {
+        if (section == "org.freedesktop.UDisks2.Block") {
+            device[obj] = $2
+        }
+    }
+    /^[ ]+Drive:[ ]+/ {
+        if (section == "org.freedesktop.UDisks2.Block") {
+            d = $2
+            gsub(q, "", d)
+            gsub("\"", "", d)
+            drive[obj] = d
+        }
+    }
+    /^[ ]+HintAuto:[ ]+/ {
+        if (section == "org.freedesktop.UDisks2.Block") hintauto[obj] = $2
+    }
+    /^[ ]+HintSystem:[ ]+/ {
+        if (section == "org.freedesktop.UDisks2.Block") hintsystem[obj] = $2
+    }
+    /^[ ]+HintIgnore:[ ]+/ {
+        if (section == "org.freedesktop.UDisks2.Block") hintignore[obj] = $2
+    }
+    /^[ ]+IdLabel:[ ]+/ {
+        if (section == "org.freedesktop.UDisks2.Block") {
+            l = $0
+            sub(/^[ ]+IdLabel:[ ]+/, "", l)
+            label[obj] = l
+        }
+    }
+    /^[ ]+MountPoints:[ ]+/ {
+        if (section == "org.freedesktop.UDisks2.Filesystem") {
+            mp = $0
+            sub(/^[ ]+MountPoints:[ ]+/, "", mp)
+            mountpoints[obj] = mp
+        }
+    }
+    /^[ ]+(Removable|MediaRemovable):[ ]+/ {
+        if (section == "org.freedesktop.UDisks2.Drive") {
+            if ($2 == "true") removable[obj] = 1
+        }
+    }
+    END {
+        for (d in removable) {
+            print "DRIVE" SEP d
+        }
+        for (o in device) {
+            if (o in mountpoints) {
+                d = drive[o]
+                is_mounted = (mountpoints[o] != "" && mountpoints[o] != "[]" && mountpoints[o] !~ /^\[[[:space:]]*\]$/) ? "1" : "0"
+                ha = (hintauto[o] == "true") ? "true" : "false"
+                hs = (hintsystem[o] == "true") ? "true" : "false"
+                hi = (hintignore[o] == "true") ? "true" : "false"
+                print "BLOCK" SEP device[o] SEP label[o] SEP ha SEP hs SEP hi SEP is_mounted SEP d
+            }
+        }
+    }
+    ')
+
+    while IFS="$SEP" read -r type f1 f2 f3 f4 f5 f6 f7; do
+        case "$type" in
+            DRIVE)
+                removable_drives="$removable_drives $f1 "
+                ;;
+            BLOCK)
+                handle_block "$f1" "$f2" "$f3" "$f4" "$f5" "$f6" "$f7"
+                ;;
+        esac
+    done <<EOF
+$items
+EOF
+}
+
+# A block's label, HintAuto, HintSystem, HintIgnore, mounted (1/0) and drive, from udisksctl info
+# (false when udisks does not know it)
+block_info() {
+    run_udisksctl info -b "$1" 2>/dev/null | awk -v SEP="$SEP" '
+    /^  org\.freedesktop\.UDisks2\./ { section = $1; sub(/:$/, "", section) }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "IdLabel:" { l = $0; sub(/^ +IdLabel: */, "", l); label = l }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "HintAuto:" { ha = $2 }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "HintSystem:" { hs = $2 }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "HintIgnore:" { hi = $2 }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "Drive:" { d = $2; gsub(/\047/, "", d) }
+    section == "org.freedesktop.UDisks2.Filesystem" && $1 == "MountPoints:" { if (NF > 1) m = 1 }
+    END {
+        if (d == "") exit 1
+        print label SEP (ha == "true" ? "true" : "false") SEP (hs == "true" ? "true" : "false") SEP (hi == "true" ? "true" : "false") SEP (m ? 1 : 0) SEP d
+    }'
+}
+
+process_line() {
+    line="$1"
+    case "$line" in
+        *InterfacesAdded*) ;;
+        *InterfacesRemoved*) ;;
+        *) return 0 ;;
+    esac
+
+    parsed=$(printf '%s\n' "$line" | awk -v SEP="$SEP" '
+    BEGIN {
+        q = sprintf("%c", 39)
+    }
+    {
+        line = $0
+        if (line ~ /InterfacesAdded/) {
+            obj = ""
+            if (match(line, "objectpath " q "[^" q "]+" q)) {
+                obj = substr(line, RSTART, RLENGTH)
+                sub("^objectpath " q, "", obj)
+                sub(q "$", "", obj)
+            }
+
+            if (line ~ (q "org\\.freedesktop\\.UDisks2\\.Drive" q)) {
+                rem = (match(line, q "Removable" q ": <true>")) || (match(line, q "MediaRemovable" q ": <true>"))
+                if (rem) printf "DRIVE_ADD%s%s\n", SEP, obj
+                next
+            }
+
+            if (line ~ (q "org\\.freedesktop\\.UDisks2\\.Filesystem" q)) {
+                dev = ""
+                if (match(line, q "Device" q ": <(b|objectpath )?" q "[^" q "]*" q ">")) {
+                    dev = substr(line, RSTART, RLENGTH)
+                    sub("^" q "Device" q ": <(b|objectpath )?" q, "", dev)
+                    sub(q ">$", "", dev)
+                }
+                if (dev == "") {
+                    dev = obj
+                    sub("^/org/freedesktop/UDisks2/block_devices/", "/dev/", dev)
+                }
+                label = ""
+                if (match(line, q "IdLabel" q ": <" q "[^" q "]*" q ">")) {
+                    label = substr(line, RSTART, RLENGTH)
+                    sub("^" q "IdLabel" q ": <" q, "", label)
+                    sub(q ">$", "", label)
+                }
+                hint_auto = (match(line, q "HintAuto" q ": <true>")) ? "true" : "false"
+                hint_sys = (match(line, q "HintSystem" q ": <true>")) ? "true" : "false"
+                hint_ign = (match(line, q "HintIgnore" q ": <true>")) ? "true" : "false"
+
+                drive = ""
+                if (match(line, q "Drive" q ": <(objectpath )?" q "[^" q "]*" q ">")) {
+                    drive = substr(line, RSTART, RLENGTH)
+                    sub("^" q "Drive" q ": <(objectpath )?" q, "", drive)
+                    sub(q ">$", "", drive)
+                }
+
+                is_mounted = "0"
+                if (match(line, q "MountPoints" q ": <[^>]+>")) {
+                    mp = substr(line, RSTART, RLENGTH)
+                    sub("^" q "MountPoints" q ": <", "", mp)
+                    sub(">$", "", mp)
+                    if (mp !~ /\[[[:space:]]*\]/) {
+                        is_mounted = "1"
+                    }
+                }
+                printf "BLOCK_ADD%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n", SEP, dev, SEP, label, SEP, hint_auto, SEP, hint_sys, SEP, hint_ign, SEP, is_mounted, SEP, drive
+                next
+            }
+        } else if (line ~ /InterfacesRemoved/) {
+            obj = ""
+            if (match(line, "objectpath " q "[^" q "]+" q)) {
+                obj = substr(line, RSTART, RLENGTH)
+                sub("^objectpath " q, "", obj)
+                sub(q "$", "", obj)
+                printf "REMOVED%s%s\n", SEP, obj
+            }
+            next
+        }
+    }
+    ')
+
+    [ -n "$parsed" ] || return 0
+
+    while IFS="$SEP" read -r type f1 f2 f3 f4 f5 f6 f7; do
+        case "$type" in
+            DRIVE_ADD)
+                removable_drives="$removable_drives $f1 "
+                log "drive added: $f1"
+                ;;
+            BLOCK_ADD)
+                if [ -z "$f7" ]; then
+                    # the filesystem came alone, once udisks probed it: the block's hints from
+                    # udisks itself, not guessed
+                    if ! info=$(block_info "$f1"); then
+                        log "no information on $f1 from udisks: not mounted"
+                        continue
+                    fi
+                    IFS="$SEP" read -r f2 f3 f4 f5 f6 f7 <<INFO
+$info
+INFO
+                fi
+                handle_block "$f1" "$f2" "$f3" "$f4" "$f5" "$f6" "$f7"
+                ;;
+            REMOVED)
+                case "$f1" in
+                    /org/freedesktop/UDisks2/block_devices/*)
+                        dev="/dev/${f1##*/}"
+                        log "device removed: $dev"
+                        ;;
+                    /org/freedesktop/UDisks2/drives/*)
+                        log "drive removed: $f1"
+                        removable_drives=$(printf '%s' "$removable_drives" | sed "s| $f1 ||g")
+                        ;;
+                    *)
+                        log "removed: $f1"
+                        ;;
+                esac
+                ;;
+        esac
+    done <<EOF
+$parsed
+EOF
+}
+
+# the background job becomes the monitor itself (exec): $MON is then gdbus, ended by `end`, and
+# no subshell of this script (which a stop would end without its trap) is left holding it
+monitor() {
+    if [ -n "${INFYNITAE_AUTOMOUNT_MONITOR:-}" ]; then
+        exec sh -c "$INFYNITAE_AUTOMOUNT_MONITOR"
+    else
+        exec gdbus monitor --system --dest org.freedesktop.UDisks2
+    fi
+}
+
+end() {
+    trap - INT TERM HUP
+    [ -n "${MON:-}" ] && kill "$MON" 2>/dev/null
+    exit 0
+}
+trap end INT TERM HUP
+
+# require udisksctl and gdbus (or test overrides)
+command -v "${INFYNITAE_AUTOMOUNT_UDISKSCTL:-udisksctl}" >/dev/null 2>&1 || exit 0
+if [ -z "${INFYNITAE_AUTOMOUNT_MONITOR:-}" ] && ! command -v gdbus >/dev/null 2>&1; then
+    exit 0
+fi
+
+log "started"
+scan_existing
+
+FIFO="$STATE_DIR/automount.$$"
+rm -f "$FIFO"
+mkfifo "$FIFO" || exit 1
+monitor > "$FIFO" 2>/dev/null 9>&- &
+MON=$!
+exec 3< "$FIFO"
+rm -f "$FIFO"
+while IFS= read -r line <&3; do
+    process_line "$line"
+done
+end

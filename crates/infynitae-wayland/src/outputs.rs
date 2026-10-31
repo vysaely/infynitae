@@ -177,6 +177,7 @@ impl WaylandState {
                         time_ms,
                         mods_changed,
                     );
+                    self.forward_key_to_x11(key, pressed, mods, time_ms);
                 }
                 Effect::KeyboardIntercept { .. } => {}
                 // an output change is news to the focused client: Core's true position after it
@@ -363,7 +364,17 @@ impl WaylandState {
     /// fullscreen (the size saved when fullscreen was granted). Every field is written on every
     /// configure, so nothing of an earlier one survives in Smithay's pending state: the adapter
     /// holds no fullscreen state of its own.
-    fn configure_toplevel(&mut self, id: ElementId, offered: Option<(i32, i32)>) {
+    /// The room a window has (xdg_toplevel.configure_bounds): the first screen's usable area at
+    /// its current rotation, less the tiling gap on each side, so an app opening at a size of its
+    /// own fits a portrait screen instead of keeping its landscape width.
+    pub(crate) fn window_room(&self) -> Option<(i32, i32)> {
+        let o = self.core.outputs().first()?;
+        let (_, _, w, h) = self.core.usable_area(o.id)?;
+        let fit = |v: f64| ((v - 2.0 * 12.0).floor() as i32).max(1);
+        Some((fit(w), fit(h)))
+    }
+
+    pub(crate) fn configure_toplevel(&mut self, id: ElementId, offered: Option<(i32, i32)>) {
         let Some(t) = self.window(id).and_then(|w| w.toplevel()) else {
             return;
         };
@@ -371,14 +382,7 @@ impl WaylandState {
         let square_corners = self.square_corners;
         let state = self.core.toplevel_configure_state(id);
         let size = state.size.map(|s| (s.w, s.h)).or(offered);
-        // the room a window has (xdg_toplevel.configure_bounds): the first screen's usable area at
-        // its current rotation, less the tiling gap on each side, so an app opening at a size of
-        // its own fits a portrait screen instead of keeping its landscape width
-        let bounds = self.core.outputs().first().and_then(|o| {
-            let (_, _, w, h) = self.core.usable_area(o.id)?;
-            let fit = |v: f64| ((v - 2.0 * 12.0).floor() as i32).max(1);
-            Some((fit(w), fit(h)))
-        });
+        let bounds = self.window_room();
         let set = |states: &mut smithay::wayland::shell::xdg::ToplevelStateSet, flag, on: bool| {
             if on {
                 states.set(flag);

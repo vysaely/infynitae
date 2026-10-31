@@ -805,6 +805,77 @@ impl Core {
         Ok(())
     }
 
+    /// The first screen's usable view in Canvas px, `(x0, y0, x1, y1)`: what the camera shows less
+    /// the layers' exclusive zones (bars), at the camera's zoom.
+    fn usable_view(&self) -> Option<(i64, i64, i64, i64)> {
+        let output = self.outputs.first()?;
+        let camera = self.cameras.camera_for_output(output.id)?;
+        let centre = self.cameras.center(camera)?;
+        let zoom = self.cameras.zoom(camera).unwrap_or(1.0);
+        let extent = output.logical_extent();
+        let (ux, uy, uw, uh) = self
+            .usable_area(output.id)
+            .unwrap_or((0.0, 0.0, extent.0, extent.1));
+        let (cx, cy) = (
+            centre.x as f64 / Q16_ONE as f64,
+            centre.y as f64 / Q16_ONE as f64,
+        );
+        let x0 = cx + (ux - extent.0 / 2.0) / zoom;
+        let y0 = cy + (uy - extent.1 / 2.0) / zoom;
+        Some((
+            x0.ceil() as i64,
+            y0.ceil() as i64,
+            (x0 + uw / zoom).floor() as i64,
+            (y0 + uh / zoom).floor() as i64,
+        ))
+    }
+
+    /// A window that opened larger than its room and was offered the room (the adapter's fit,
+    /// `fit_opening_window`) is placed again as if it had opened at that size: its first place
+    /// was chosen for a size it never keeps, and would leave the fitted window off screen.
+    pub fn place_opening_at_size(
+        &mut self,
+        id: ElementId,
+        size: (i32, i32),
+        out: &mut EffectBuf,
+    ) -> Result<(), ProtocolError> {
+        let mut tree = self
+            .stage
+            .tree(id)
+            .ok_or(ProtocolError::StaleElement)?
+            .clone();
+        tree.geometry.size = LocalSize {
+            w: size.0,
+            h: size.1,
+        };
+        let Some(mut anchor) = self.first_map_anchor(id, &tree) else {
+            return Ok(());
+        };
+        // a window that fills the room seldom has a free place on the screen: then it takes the
+        // middle of the view, and what it would cover is pushed aside, as when a window grows
+        // over its neighbours
+        if let Some((x0, y0, x1, y1)) = self.usable_view() {
+            let (w, h) = (i64::from(size.0), i64::from(size.1));
+            let on_screen =
+                anchor.x >= x0 && anchor.y >= y0 && anchor.x + w <= x1 && anchor.y + h <= y1;
+            if !on_screen {
+                anchor = CanvasPoint {
+                    x: x0 + (x1 - x0 - w) / 2,
+                    y: y0 + (y1 - y0 - h) / 2,
+                };
+            }
+        }
+        self.place_by_shell(id, anchor, &mut out.fx)?;
+        let rect = (
+            anchor.x,
+            anchor.y,
+            anchor.x + i64::from(size.0),
+            anchor.y + i64::from(size.1),
+        );
+        self.push_overlapping_cluster(id, rect, &mut out.fx);
+        Ok(())
+    }
+
     /// Super+left drag: the window's anchor follows the pointer, written here, in the Stage's single
     /// writer (INV-STAGE-1), with the same consequences as a shell `MoveElement` (membership, one
     /// scale evaluation).
@@ -1381,8 +1452,13 @@ impl Core {
                     self.restore_offers.retain(|(e, _)| *e != id);
                 }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
+                // a window that grew pushes its neighbours; a fullscreen one never does: it is
+                // shown over the whole screen (F-PRESENT-1), not at its place on the canvas. A
+                // frame drawn for an acknowledged fullscreen is one, whether or not the grant has
+                // reached Core yet (the screen-sized frame came first and pushed)
                 if self.placement == PlacementPolicy::ClusterTiling
                     && self.fullscreen_of(id).is_none()
+                    && !acked_fullscreen
                     && let (Some(old), Some(a), Some(t)) =
                         (old_rect, self.stage.anchor(id), self.stage.tree(id))
                     && old.2 > old.0
@@ -1395,17 +1471,6 @@ impl Core {
                         a.y + i64::from(t.geometry.size.h),
                     );
                     self.push_grown(id, old, new, out);
-                }
-                if self.placement == PlacementPolicy::ClusterTiling
-                    && self.fullscreen_of(id).is_some()
-                    && let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id))
-                {
-                    let w = t.geometry.size.w as i64;
-                    let h = t.geometry.size.h as i64;
-                    if w > 0 && h > 0 {
-                        let target_rect = (a.x, a.y, a.x + w, a.y + h);
-                        self.push_overlapping_cluster(id, target_rect, out);
-                    }
                 }
             }
             (Lifecycle::AwaitingFirstBuffer, true) => {
@@ -1421,17 +1486,6 @@ impl Core {
                 self.stage.raise(id);
                 // a grant made before this map takes its output now (A-3)
                 out.extend(self.take_output(id));
-                if self.placement == PlacementPolicy::ClusterTiling
-                    && self.fullscreen_of(id).is_some()
-                    && let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id))
-                {
-                    let w = t.geometry.size.w as i64;
-                    let h = t.geometry.size.h as i64;
-                    if w > 0 && h > 0 {
-                        let target_rect = (a.x, a.y, a.x + w, a.y + h);
-                        self.push_overlapping_cluster(id, target_rect, out);
-                    }
-                }
             }
             (Lifecycle::Mapped, false) => {
                 // null-buffer commit: unmap; identity and anchor kept, snapshot dropped
@@ -1760,6 +1814,10 @@ impl Core {
         // Visual geometry bounds of all currently mapped windows
         let mut existing: Vec<(i64, i64, i64, i64)> = Vec::new();
         for elem in self.stage.mapped_elements() {
+            // the window itself, placed again (`place_opening_at_size`), is no obstacle
+            if elem == id {
+                continue;
+            }
             if let Some(a) = self.stage.anchor(elem)
                 && let Some(t) = self.stage.tree(elem)
             {
@@ -1775,9 +1833,36 @@ impl Core {
 
         let center_gx = center_anchor.x;
         let center_gy = center_anchor.y;
+        let (target_gx, target_gy) = if let pointer::PointerState::Located { output: ptr_out, p } =
+            self.pointer
+            && ptr_out == output.id
+            && ((p.0 - extent.0 / 2.0).abs() > 1.0 || (p.1 - extent.1 / 2.0).abs() > 1.0)
+        {
+            let cd = ((p.0 - extent.0 / 2.0) / zoom, (p.1 - extent.1 / 2.0) / zoom);
+            CanvasPos {
+                x: axis(
+                    centre.x.saturating_add(geom::q16(cd.0)),
+                    usable.0,
+                    tree.geometry.size.w,
+                ),
+                y: axis(
+                    centre.y.saturating_add(geom::q16(cd.1)),
+                    usable.1,
+                    tree.geometry.size.h,
+                ),
+            }
+            .round_to_point()
+            .map(|pt| (pt.x, pt.y))
+            .unwrap_or((center_gx, center_gy))
+        } else {
+            (center_gx, center_gy)
+        };
 
         if existing.is_empty() {
-            return Some(center_anchor);
+            return Some(CanvasPoint {
+                x: target_gx,
+                y: target_gy,
+            });
         }
 
         const GAP: i64 = 12;
@@ -1789,6 +1874,12 @@ impl Core {
             })
         };
 
+        if !overlaps(target_gx, target_gy) {
+            return Some(CanvasPoint {
+                x: target_gx,
+                y: target_gy,
+            });
+        }
         if !overlaps(center_gx, center_gy) {
             return Some(center_anchor);
         }
@@ -1806,6 +1897,12 @@ impl Core {
             candidates.push((w1.0, w1.1 - new_h - GAP)); // Above, left-aligned
             candidates.push((w1.2 - new_w, w1.1 - new_h - GAP)); // Above, right-aligned
 
+            // Cursor-aligned flush placements relative to w1
+            candidates.push((w1.2 + GAP, target_gy));
+            candidates.push((w1.0 - new_w - GAP, target_gy));
+            candidates.push((target_gx, w1.3 + GAP));
+            candidates.push((target_gx, w1.1 - new_h - GAP));
+
             // Grid intersections with other windows
             for &w2 in &existing {
                 candidates.push((w1.2 + GAP, w2.1));
@@ -1816,16 +1913,24 @@ impl Core {
             }
         }
 
+        // a free spot wholly on screen wins over a nearer one that is not (a window an app opens
+        // by itself does not bring the camera to it)
+        let view = self.usable_view();
+        let in_view = |gx: i64, gy: i64| {
+            view.is_some_and(|(x0, y0, x1, y1)| {
+                gx >= x0 && gy >= y0 && gx + new_w <= x1 && gy + new_h <= y1
+            })
+        };
         let best = candidates
             .into_iter()
             .filter(|&(gx, gy)| !overlaps(gx, gy))
             .min_by_key(|&(gx, gy)| {
-                let dx = (gx - center_gx) as i128;
-                let dy = (gy - center_gy) as i128;
-                dx * dx + dy * dy
+                let dx = (gx - target_gx) as i128;
+                let dy = (gy - target_gy) as i128;
+                (!in_view(gx, gy), dx * dx + dy * dy)
             });
 
-        let (chosen_gx, chosen_gy) = best.unwrap_or((center_gx, center_gy));
+        let (chosen_gx, chosen_gy) = best.unwrap_or((target_gx, target_gy));
         Some(CanvasPoint {
             x: chosen_gx,
             y: chosen_gy,
@@ -6246,6 +6351,50 @@ mod tests {
         );
     }
 
+    /// A free spot wholly in view wins over a nearer one that is not: beside the first window,
+    /// not below it past the bottom of a 1280 x 800 screen (the VM's second terminal, 2026-10-31).
+    #[test]
+    fn cluster_placement_prefers_a_spot_in_view() {
+        let win = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint { x: 0, y: 0 },
+                size: LocalSize { w, h },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: key(k),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w, h }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        let mut c = centred((1280, 800), 120, None);
+        c.set_placement_policy(PlacementPolicy::ClusterTiling);
+        let open = |c: &mut Core, k: u64, w: i32, h: i32| {
+            let id = c.toplevel_created();
+            c.toplevel_committed(id, win(k, w, h, false)).unwrap();
+            c.toplevel_committed(id, win(k, w, h, true)).unwrap();
+            id
+        };
+        let a = open(&mut c, 1, 400, 300);
+        let b = open(&mut c, 2, 400, 300);
+        let (aa, ab) = (c.stage().anchor(a).unwrap(), c.stage().anchor(b).unwrap());
+        // A is centred: the view is A's centre +- 640 x 400
+        let (cx, cy) = (aa.x + 200, aa.y + 150);
+        assert!(
+            ab.x >= cx - 640
+                && ab.x + 400 <= cx + 640
+                && ab.y >= cy - 400
+                && ab.y + 300 <= cy + 400,
+            "B {ab:?} wholly in the view around A {aa:?}"
+        );
+    }
+
     #[test]
     fn cluster_placement_and_push_with_csd_window_respects_stage_anchor_convention() {
         let csd = |k: u64, w: i32, h: i32, lx: i32, ly: i32, mapped: bool| SurfaceTree {
@@ -6296,7 +6445,8 @@ mod tests {
             "first cluster window anchor must match CentredInView anchor"
         );
 
-        // 3. Second CSD window placed adjacent (below is closer to center than right since h < w)
+        // 3. Second CSD window placed adjacent: beside it, flush with a 12 px gap (below would be
+        // nearer the centre, since h < w, but runs past the bottom of the 800 px view)
         let w2 = c.toplevel_created();
         c.toplevel_committed(w2, csd(2, 400, 300, 20, 30, false))
             .unwrap();
@@ -6306,10 +6456,10 @@ mod tests {
         assert_eq!(
             a2,
             CanvasPoint {
-                x: a1.x,
-                y: a1.y + 312,
+                x: a1.x + 412,
+                y: a1.y,
             },
-            "second window placed flush below with 12px gap based on window geometry"
+            "second window placed flush beside with 12px gap based on window geometry"
         );
 
         // 4. push_overlapping_cluster with target_rect overlapping w1

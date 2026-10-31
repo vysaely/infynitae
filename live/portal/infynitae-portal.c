@@ -1,6 +1,6 @@
 /*
  * Infynitae GlobalShortcuts XDG Desktop Portal Implementation
- * Pure C + GIO. Zero bloat (<2MB RAM, 0% CPU idle).
+ * C and GIO; idle, it only waits for D-Bus calls.
  * Implements org.freedesktop.impl.portal.GlobalShortcuts for Discord, OBS, WebRTC,
  * org.freedesktop.ScreenSaver (apps keeping the screens on while they play video), and
  * RemoteDesktop with ScreenCast (remote-desktop.c).
@@ -30,7 +30,8 @@
 typedef struct {
     char *id;
     char *description;
-    char *trigger;
+    char *trigger;          // the key it is bound to: GLOBAL_SHORTCUTS's, else the app's
+    char *preferred;        // the key the app asked for
     uint32_t evdev_key;
     uint32_t modifiers;
     gboolean active;
@@ -117,6 +118,7 @@ static void free_shortcut(ShortcutEntry *sc) {
     g_free(sc->id);
     g_free(sc->description);
     g_free(sc->trigger);
+    g_free(sc->preferred);
     g_free(sc);
 }
 
@@ -279,6 +281,79 @@ static uint32_t trigger_to_modifiers(const char *trigger) {
     }
     g_strfreev(tokens);
     return mods;
+}
+
+// GLOBAL_SHORTCUTS in ~/.config/infynitae/config: the key each shortcut is bound to, whatever
+// the app asked for, as "id=trigger" (or "app/id=trigger") pairs split by spaces or commas:
+//   GLOBAL_SHORTCUTS="discord-toggle-mute=Shift_R discord-toggle-deafen=Control_R"
+// A trigger is a key name ("Shift_R", "F9", "XF86AudioMute"), with modifiers before it
+// ("CTRL+SHIFT+m"). NULL when the config has none.
+static gchar **read_global_shortcuts(void) {
+    gchar *path = g_build_filename(g_get_home_dir(), ".config", "infynitae", "config", NULL);
+    gchar *text = NULL;
+    gchar *value = NULL;
+    if (g_file_get_contents(path, &text, NULL, NULL)) {
+        gchar **lines = g_strsplit(text, "\n", -1);
+        for (gchar **l = lines; *l; l++) {
+            const gchar *p = *l;
+            while (*p == ' ' || *p == '\t') p++;
+            if (g_str_has_prefix(p, "export ")) p += 7;
+            if (!g_str_has_prefix(p, "GLOBAL_SHORTCUTS=")) continue;
+            p += strlen("GLOBAL_SHORTCUTS=");
+            // the quoted value (the last such line wins, as the shell does)
+            gchar quote = (*p == '"' || *p == '\'') ? *p++ : 0;
+            const gchar *end = quote ? strchr(p, quote) : p + strcspn(p, " \t#");
+            if (!end) end = p + strlen(p);
+            g_free(value);
+            value = g_strndup(p, end - p);
+        }
+        g_strfreev(lines);
+        g_free(text);
+    }
+    g_free(path);
+    if (!value || !*value) {
+        g_free(value);
+        return NULL;
+    }
+    gchar **pairs = g_strsplit_set(value, " \t,", -1);
+    g_free(value);
+    return pairs;
+}
+
+// The trigger GLOBAL_SHORTCUTS gives shortcut `id` of `app_id`, or NULL.
+static const gchar *shortcut_override(gchar **pairs, const char *app_id, const char *id) {
+    for (gchar **p = pairs; p && *p; p++) {
+        const gchar *eq = strchr(*p, '=');
+        if (!eq || eq == *p || !eq[1]) continue;
+        gsize klen = eq - *p;
+        const gchar *slash = memchr(*p, '/', klen);
+        if (slash) {
+            // "app/id"
+            gsize alen = slash - *p;
+            if (!app_id || strlen(app_id) != alen || g_ascii_strncasecmp(*p, app_id, alen) != 0)
+                continue;
+            if (strlen(id) == klen - alen - 1 && g_ascii_strncasecmp(slash + 1, id, klen - alen - 1) == 0)
+                return eq + 1;
+        } else if (strlen(id) == klen && g_ascii_strncasecmp(*p, id, klen) == 0) {
+            return eq + 1;
+        }
+    }
+    return NULL;
+}
+
+// Binds `sc` to its key: GLOBAL_SHORTCUTS's for it, else the one the app asked for. TRUE when
+// the key changed.
+static gboolean bind_trigger(ShortcutEntry *sc, const char *app_id, gchar **pairs) {
+    const gchar *chosen = shortcut_override(pairs, app_id, sc->id);
+    if (!chosen) chosen = sc->preferred ? sc->preferred : "";
+    if (sc->trigger && strcmp(sc->trigger, chosen) == 0) return FALSE;
+    g_free(sc->trigger);
+    sc->trigger = g_strdup(chosen);
+    sc->evdev_key = trigger_to_evdev(chosen);
+    sc->modifiers = trigger_to_modifiers(chosen);
+    if (*chosen && !sc->evdev_key)
+        g_printerr("[infynitae-portal] Shortcut '%s': no key is named '%s'\n", sc->id, chosen);
+    return TRUE;
 }
 
 static void sync_bound_keys_file(void) {
@@ -508,6 +583,7 @@ static void handle_method_call(GDBusConnection *connection,
             GVariantBuilder bound_shortcuts_builder;
             g_variant_builder_init(&bound_shortcuts_builder, G_VARIANT_TYPE("a(sa{sv})"));
 
+            gchar **overrides = read_global_shortcuts();
             GVariantIter iter;
             g_variant_iter_init(&iter, shortcuts_v);
             const gchar *sc_id = NULL;
@@ -523,9 +599,8 @@ static void handle_method_call(GDBusConnection *connection,
                 g_variant_lookup(sc_opts, "preferred_trigger", "&s", &pref_trigger);
 
                 sc->description = g_strdup(desc);
-                sc->trigger = g_strdup(pref_trigger);
-                sc->evdev_key = trigger_to_evdev(pref_trigger);
-                sc->modifiers = trigger_to_modifiers(pref_trigger);
+                sc->preferred = g_strdup(pref_trigger);
+                bind_trigger(sc, sess->app_id, overrides);
                 sc->active = FALSE;
                 sess->shortcuts = g_list_append(sess->shortcuts, sc);
 
@@ -533,14 +608,15 @@ static void handle_method_call(GDBusConnection *connection,
                 GVariantBuilder ret_sc_opts;
                 g_variant_builder_init(&ret_sc_opts, G_VARIANT_TYPE("a{sv}"));
                 g_variant_builder_add(&ret_sc_opts, "{sv}", "description", g_variant_new_string(desc));
-                g_variant_builder_add(&ret_sc_opts, "{sv}", "trigger_description", g_variant_new_string(pref_trigger));
+                g_variant_builder_add(&ret_sc_opts, "{sv}", "trigger_description", g_variant_new_string(sc->trigger));
 
                 g_variant_builder_add(&bound_shortcuts_builder, "(sa{sv})", sc_id, &ret_sc_opts);
 
-                printf("[infynitae-portal] Bound shortcut '%s': desc='%s', trigger='%s' (evdev=%u)\n", sc_id, desc, pref_trigger, sc->evdev_key);
+                printf("[infynitae-portal] Bound shortcut '%s': desc='%s', trigger='%s' (asked '%s', evdev=%u)\n", sc_id, desc, sc->trigger, pref_trigger, sc->evdev_key);
                 g_variant_unref(sc_opts);
             }
 
+            g_strfreev(overrides);
             sync_bound_keys_file();
 
             GVariantBuilder results;
@@ -867,6 +943,56 @@ static void ss_on_bus_acquired(GDBusConnection *connection, const gchar *name, g
     }
 }
 
+// The config changed: every bound shortcut takes its key from GLOBAL_SHORTCUTS again, and its
+// app hears of a new one (ShortcutsChanged), as when the user rebinds it in a settings panel.
+static void on_config_changed(GFileMonitor *monitor, GFile *file, GFile *other,
+                              GFileMonitorEvent event, gpointer user_data) {
+    (void)monitor; (void)file; (void)other; (void)user_data;
+    if (event != G_FILE_MONITOR_EVENT_CHANGES_DONE_HINT && event != G_FILE_MONITOR_EVENT_CREATED)
+        return;
+    gchar **overrides = read_global_shortcuts();
+    gboolean any = FALSE;
+    for (GList *sl = sessions; sl; sl = sl->next) {
+        SessionEntry *sess = (SessionEntry *)sl->data;
+        gboolean changed = FALSE;
+        for (GList *k = sess->shortcuts; k; k = k->next) {
+            ShortcutEntry *sc = (ShortcutEntry *)k->data;
+            if (bind_trigger(sc, sess->app_id, overrides)) {
+                sc->active = FALSE;
+                changed = TRUE;
+                printf("[infynitae-portal] Rebound shortcut '%s' to '%s'\n", sc->id, sc->trigger);
+            }
+        }
+        if (!changed || !dbus_conn) continue;
+        any = TRUE;
+        GVariantBuilder list;
+        g_variant_builder_init(&list, G_VARIANT_TYPE("a(sa{sv})"));
+        for (GList *k = sess->shortcuts; k; k = k->next) {
+            ShortcutEntry *sc = (ShortcutEntry *)k->data;
+            GVariantBuilder opts;
+            g_variant_builder_init(&opts, G_VARIANT_TYPE("a{sv}"));
+            g_variant_builder_add(&opts, "{sv}", "description", g_variant_new_string(sc->description ? sc->description : ""));
+            g_variant_builder_add(&opts, "{sv}", "trigger_description", g_variant_new_string(sc->trigger ? sc->trigger : ""));
+            g_variant_builder_add(&list, "(sa{sv})", sc->id, &opts);
+        }
+        g_dbus_connection_emit_signal(dbus_conn, NULL, OBJECT_PATH, INTERFACE_NAME, "ShortcutsChanged",
+                                      g_variant_new("(oa(sa{sv}))", sess->session_handle, &list), NULL);
+    }
+    g_strfreev(overrides);
+    if (any) sync_bound_keys_file();
+    fflush(stdout);
+}
+
+static void watch_config(void) {
+    gchar *path = g_build_filename(g_get_home_dir(), ".config", "infynitae", "config", NULL);
+    GFile *file = g_file_new_for_path(path);
+    GFileMonitor *monitor = g_file_monitor_file(file, G_FILE_MONITOR_NONE, NULL, NULL);
+    if (monitor) g_signal_connect(monitor, "changed", G_CALLBACK(on_config_changed), NULL);
+    /* the monitor lives as long as the portal */
+    g_object_unref(file);
+    g_free(path);
+}
+
 int main(int argc, char *argv[]) {
     setup_socket_listener();
 
@@ -882,6 +1008,8 @@ int main(int argc, char *argv[]) {
     /* not when another desktop's screensaver service already answers in this session */
     guint ss_owner_id = g_bus_own_name(G_BUS_TYPE_SESSION, SS_BUS_NAME, G_BUS_NAME_OWNER_FLAGS_NONE,
                                        ss_on_bus_acquired, NULL, NULL, NULL, NULL);
+
+    watch_config();
 
     GMainLoop *loop = g_main_loop_new(NULL, FALSE);
     g_main_loop_run(loop);

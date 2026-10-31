@@ -36,6 +36,8 @@ export QT_WAYLAND_RECONNECT="1"
 export GDK_BACKEND="wayland,x11,*"
 export MOZ_ENABLE_WAYLAND="1"
 export SDL_VIDEODRIVER="wayland,x11"
+# SDL3 name; Valve's dota.sh / cs2.sh force x11 unless this one is set
+export SDL_VIDEO_DRIVER="wayland,x11"
 export CLUTTER_BACKEND="wayland"
 export ELECTRON_OZONE_PLATFORM_HINT="auto"
 export _JAVA_AWT_WM_NONREPARENTING="1"
@@ -76,7 +78,7 @@ if [ -z "$LIBSEAT_BACKEND" ]; then
     fi
 fi
 
-# 6. Load user config and synchronize universal settings
+# 6. Load the user config and apply its settings
 if [ -f "$HOME/infynitae/live/config.sh" ]; then
     . "$HOME/infynitae/live/config.sh"
 fi

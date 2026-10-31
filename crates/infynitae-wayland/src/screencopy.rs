@@ -152,12 +152,9 @@ impl ScreencopyState {
         if let Ok(home) = std::env::var("HOME") {
             let config_path = format!("{home}/.config/infynitae/config");
             if let Ok(content) = std::fs::read_to_string(config_path) {
-                for line in content.lines() {
-                    let line_clean = line.split('#').next().unwrap_or("").trim();
-                    if let Some((k, v)) = line_clean.split_once('=')
-                        && k.trim() == "SCREENCOPY_CURSOR"
-                    {
-                        let mode = v.trim().trim_matches(|c| c == '"' || c == '\'').trim();
+                for (k, v) in content.lines().filter_map(crate::config_line) {
+                    if k.trim() == "SCREENCOPY_CURSOR" {
+                        let mode = v.trim();
                         hide = matches!(mode.to_lowercase().as_str(), "0" | "false" | "off" | "no");
                     }
                 }

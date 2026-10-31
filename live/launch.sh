@@ -1,5 +1,5 @@
 #!/bin/sh
-# Universal action launcher for Infynitae
+# Infynitae's shortcut actions (the compositor runs: launch.sh <action>)
 # Dispatches shortcuts: terminal (Super+Q), file-manager (Super+E), launcher (Super+W)
 ACTION="$1"
 
@@ -70,7 +70,7 @@ if [ -x "$USER_SCRIPT" ]; then
     exec "$USER_SCRIPT" "$ACTION"
 fi
 
-# Universal terminal resolution (respects config if specified, or auto-detects kitty/alacritty/foot/etc.)
+# The terminal: TERMINAL from the config, else the first installed (kitty, alacritty, foot…)
 resolve_terminal() {
     if [ -n "$TERMINAL" ] && [ "$TERMINAL" != "auto" ]; then
         echo "$TERMINAL"
@@ -86,6 +86,14 @@ resolve_terminal() {
 }
 
 TERM_CMD=$(resolve_terminal)
+
+# The island (ENABLE_ISLAND) serves Super+W, Super+A and Super+V when it is on and installed
+island_on() {
+    case "${ENABLE_ISLAND:-true}" in
+        0|false|no|off|FALSE|False) return 1 ;;
+    esac
+    [ -x "$HOME/.local/bin/infynitae-island" ]
+}
 
 case "$ACTION" in
     terminal)
@@ -162,12 +170,13 @@ case "$ACTION" in
         esac
         ;;
     launcher|island)
-        # Super+W: Application launcher (configurable via ~/.config/infynitae/config)
+        # Super+W: the island (window strip and app search), else a launcher; LAUNCHER: any
+        # command, which is also how another shell (Quickshell, eww, AGS…) takes the key
         L="${LAUNCHER:-auto}"
         case "$L" in
-            auto|"")
-                if [ "${ENABLE_QUICKSHELL:-false}" = "true" ] && command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
-                    exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
+            auto|""|island)
+                if island_on; then
+                    exec "$HOME/.local/bin/infynitae-island" toggle
                 elif command -v fuzzel >/dev/null 2>&1; then
                     exec fuzzel
                 elif command -v rofi >/dev/null 2>&1; then
@@ -176,12 +185,7 @@ case "$ACTION" in
                     exec tofi-drun
                 elif command -v wofi >/dev/null 2>&1; then
                     exec wofi --show drun
-                elif command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
-                    exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
                 fi
-                ;;
-            quickshell|qs)
-                exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
                 ;;
             fuzzel)
                 exec fuzzel
@@ -201,10 +205,8 @@ case "$ACTION" in
         esac
         ;;
     overview|radar)
-        # Super+Shift+Tab: Overview (Quickshell Canvas Radar if enabled, or fast Fuzzel window switcher)
-        if [ "${ENABLE_QUICKSHELL:-false}" = "true" ] && command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
-            exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call overview toggle
-        elif command -v infynitae >/dev/null 2>&1; then
+        # Super+Shift+Tab: the overview, a menu of the windows to go to
+        if command -v infynitae >/dev/null 2>&1; then
             exec infynitae msg overview
         elif command -v fuzzel >/dev/null 2>&1; then
             exec fuzzel
@@ -212,15 +214,10 @@ case "$ACTION" in
         ;;
     reload|reload-shell|restart-shell)
         # Super+Shift+BackSpace: Live reload settings, shell UI, and desktop environment
-        # 1. Re-apply settings and restart the wallpaper (infynitae-reload; windows stay open)
-        "$HOME/infynitae/live/infynitae-reload" settings wallpaper screenshare >/dev/null 2>&1 || true
+        # 1. Re-apply settings and reload all configured helpers (infynitae-reload; windows stay open)
+        "$HOME/infynitae/live/infynitae-reload" all >/dev/null 2>&1 || true
 
-        # 2. Restart Quickshell Island / HUD if running
-        if pidof qs >/dev/null 2>&1; then
-            killall qs 2>/dev/null || true
-        fi
-
-        # 3. Reload third-party bars/daemons if running
+        # 2. Reload third-party bars/daemons if running
         if pidof waybar >/dev/null 2>&1; then
             killall -SIGUSR2 waybar 2>/dev/null || true
         fi
@@ -498,9 +495,12 @@ case "$ACTION" in
         esac
         ;;
     control-menu)
-        # Super+A: the control menu (Wi-Fi, Bluetooth, sound output, power), or CONTROL_MENU
+        # Super+A: the control flyout (or CONTROL_MENU if set)
         case "${CONTROL_MENU:-auto}" in
             auto|"")
+                if island_on; then
+                    exec "$HOME/.local/bin/infynitae-island" control
+                fi
                 for m in "$HOME/.local/bin/infynitae-control-menu" "$HOME/infynitae/live/control-menu"; do
                     if [ -x "$m" ]; then exec "$m"; fi
                 done
@@ -509,8 +509,11 @@ case "$ACTION" in
         esac
         ;;
     clipboard-history)
-        # Super+V: Clipboard history picker (cliphist + CLIPBOARD_PICKER, MENU_PICKER or fuzzel)
+        # Super+V: Clipboard history picker (native infynitae-island clipboard mode, or CLIPBOARD_PICKER / MENU_PICKER / fuzzel)
         if command -v cliphist >/dev/null 2>&1; then
+            if island_on && [ -z "${CLIPBOARD_PICKER:-}" ] && [ -z "${MENU_PICKER:-}" ]; then
+                exec "$HOME/.local/bin/infynitae-island" clipboard
+            fi
             PICKER="${CLIPBOARD_PICKER:-${MENU_PICKER:-fuzzel --dmenu}}"
             # Escape in the picker selects nothing: the clipboard is left as it was
             PICK=$(cliphist list | $PICKER)

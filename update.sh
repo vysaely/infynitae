@@ -113,7 +113,7 @@ install_default_apps
 # 7. a running session: restart the helpers in place (windows stay open)
 if pgrep -x infynitae >/dev/null 2>&1; then
     echo "==> Restarting the helpers (windows stay open)..."
-    "$HOME/.local/bin/infynitae-reload" settings wallpaper portal polkit || true
+    "$HOME/.local/bin/infynitae-reload" settings wallpaper island portal polkit || true
     echo "    The replay recorder keeps running; infynitae-reload recorder restarts it (clears its buffer)."
     "$HOME/.local/bin/infynitae-reload" status | tail -1
 fi

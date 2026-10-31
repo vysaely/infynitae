@@ -104,7 +104,7 @@ fi
 
 TARGET_PKGS=()
 
-# Universal Wayland, Xwayland, Mesa, and Vulkan loaders
+# Wayland, Xwayland, Mesa and Vulkan loaders
 TARGET_PKGS+=(
     mesa
     lib32-mesa
