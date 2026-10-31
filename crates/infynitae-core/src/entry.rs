@@ -1293,6 +1293,8 @@ impl Core {
             fx.extend(t_fx);
         }
         if let Some(a) = anchor {
+            // dragged out: the drag places it, where the user lets go
+            self.returning.retain(|e| *e != id);
             let _ = self.place_by_shell(id, a, &mut fx);
         }
         if let Some(o) = self.pointer_output() {

@@ -681,6 +681,7 @@ impl Core {
     ) -> Vec<Effect> {
         let mut fx = Vec::new();
         let mut saved = saved;
+        self.returning.retain(|e| *e != id);
         if let Some(i) = self.fullscreen.iter().position(|f| f.element == id) {
             // still fullscreen: the size to return to is the one saved at the first grant
             saved = self.fullscreen.remove(i).saved;
@@ -731,6 +732,7 @@ impl Core {
     fn drop_fullscreen(&mut self, id: ElementId) {
         // nor is it held to a size or maximized: its next map starts at its own size
         self.held_sizes.retain(|(e, _)| *e != id);
+        self.returning.retain(|e| *e != id);
         self.maximized.retain(|(e, _)| *e != id);
         self.stage.set_saved_floating(id, None);
         self.premap_fullscreen.retain(|(e, _)| *e != id);
@@ -763,6 +765,10 @@ impl Core {
             && !self.windowed_placement_pending.contains(&old.element)
         {
             self.windowed_placement_pending.push(old.element);
+        }
+        // a placed window's first windowed frame decides whether it keeps its place
+        if self.stage.default_placed(old.element) && !self.returning.contains(&old.element) {
+            self.returning.push(old.element);
         }
         // The size offered is remembered: the element's geometry is still the fullscreen one
         // until it redraws, so a grant made before that must save the offered size again, not
@@ -910,8 +916,9 @@ impl Core {
     }
 
     /// A window that opened larger than its room and was offered the room (the adapter's fit,
-    /// `fit_opening_window`) is placed again as if it had opened at that size: its first place
-    /// was chosen for a size it never keeps, and would leave the fitted window off screen.
+    /// `fit_opening_window`) is placed again as if it had opened at that size (F-PLACE-1): its
+    /// first place was chosen for a size it never keeps, and would leave the fitted window off
+    /// screen.
     pub fn place_opening_at_size(
         &mut self,
         id: ElementId,
@@ -927,32 +934,13 @@ impl Core {
             w: size.0,
             h: size.1,
         };
-        let Some(mut anchor) = self.first_map_anchor(id, &tree) else {
+        let Some(anchor) = self.first_map_anchor(id, &tree) else {
             return Ok(());
         };
-        // a window that fills the room seldom has a free place on the screen: then it takes the
-        // middle of the view, and what it would cover is pushed aside, as when a window grows
-        // over its neighbours
-        if let Some((x0, y0, x1, y1)) = self.usable_view() {
-            let (w, h) = (i64::from(size.0), i64::from(size.1));
-            let on_screen =
-                anchor.x >= x0 && anchor.y >= y0 && anchor.x + w <= x1 && anchor.y + h <= y1;
-            if !on_screen {
-                anchor = CanvasPoint {
-                    x: x0 + (x1 - x0 - w) / 2,
-                    y: y0 + (y1 - y0 - h) / 2,
-                };
-            }
-        }
-        self.place_by_shell(id, anchor, &mut out.fx)?;
-        let rect = (
-            anchor.x,
-            anchor.y,
-            anchor.x + i64::from(size.0),
-            anchor.y + i64::from(size.1),
-        );
-        self.push_overlapping_cluster(id, rect, &mut out.fx);
-        Ok(())
+        // like any new window: in free space near the cursor, nothing moved (owner, 2026-10-31;
+        // before, a window that filled the room took the middle of the view and pushed the
+        // others aside)
+        self.place_by_shell(id, anchor, &mut out.fx)
     }
 
     /// Super+left drag: the window's anchor follows the pointer, written here, in the Stage's single
@@ -979,9 +967,10 @@ impl Core {
         self.push_reached(target_elem, None, target_rect, out);
     }
 
-    /// A window that grew by itself (an app settling into its remembered size, a resize) pushes
-    /// aside the windows its new rect reaches, closer than the gap; one its old rect already
-    /// reached (windows the user stacked) stays where it is.
+    /// A window that grew to a size the compositor or the user asked for (a maximize, a resize
+    /// drag) pushes aside the windows its new rect reaches, closer than the gap; one its old rect
+    /// already reached (windows the user stacked) stays where it is. A window that grew by itself
+    /// pushes nothing: [`Core::self_resized`].
     fn push_grown(
         &mut self,
         id: ElementId,
@@ -1530,6 +1519,17 @@ impl Core {
                     self.restore_offers.retain(|(e, _)| *e != id);
                 }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
+                // back from fullscreen: its first windowed frame keeps its place or finds a free one
+                let returned = !acked_fullscreen
+                    && self.fullscreen_of(id).is_none()
+                    && self.returning.contains(&id);
+                if returned {
+                    self.returning.retain(|e| *e != id);
+                    if let Some(at) = self.returned_from_fullscreen(id) {
+                        self.stage.place(id, at).map_err(stale)?;
+                        self.invalidate_all_frames();
+                    }
+                }
                 // a window that grew pushes its neighbours; a fullscreen one never does: it is
                 // shown over the whole screen (F-PRESENT-1), not at its place on the canvas. A
                 // frame drawn for an acknowledged fullscreen is one, whether or not the grant has
@@ -1537,6 +1537,7 @@ impl Core {
                 if self.placement == PlacementPolicy::ClusterTiling
                     && self.fullscreen_of(id).is_none()
                     && !acked_fullscreen
+                    && !returned
                     && let (Some(old), Some(a), Some(t)) =
                         (old_rect, self.stage.anchor(id), self.stage.tree(id))
                     && old.2 > old.0
@@ -1548,7 +1549,17 @@ impl Core {
                         a.x + i64::from(t.geometry.size.w),
                         a.y + i64::from(t.geometry.size.h),
                     );
-                    self.push_grown(id, old, new, out);
+                    // a size the compositor or the user asked for (maximize, a drag, the room)
+                    // makes room as before; one the app took by itself makes none: the window
+                    // finds room instead (owner, 2026-10-31)
+                    let asked = self.held_size(id) == Some(t.geometry.size)
+                        || self.resize.is_some_and(|r| r.element == id);
+                    if asked {
+                        self.push_grown(id, old, new, out);
+                    } else if let Some(at) = self.self_resized(id, old, new) {
+                        self.stage.place(id, at).map_err(stale)?;
+                        self.invalidate_all_frames();
+                    }
                 }
             }
             (Lifecycle::AwaitingFirstBuffer, true) => {
@@ -1889,25 +1900,9 @@ impl Core {
             return Some(center_anchor);
         }
 
-        // Visual geometry bounds of all currently mapped windows
-        let mut existing: Vec<(i64, i64, i64, i64)> = Vec::new();
-        for elem in self.stage.mapped_elements() {
-            // the window itself, placed again (`place_opening_at_size`), is no obstacle
-            if elem == id {
-                continue;
-            }
-            if let Some(a) = self.stage.anchor(elem)
-                && let Some(t) = self.stage.tree(elem)
-            {
-                let ew = t.geometry.size.w as i64;
-                let eh = t.geometry.size.h as i64;
-                if ew > 0 && eh > 0 {
-                    let gx0 = a.x;
-                    let gy0 = a.y;
-                    existing.push((gx0, gy0, gx0.saturating_add(ew), gy0.saturating_add(eh)));
-                }
-            }
-        }
+        // Visual geometry bounds of all currently mapped windows (the window itself, placed again
+        // by `place_opening_at_size`, is no obstacle)
+        let existing = self.window_rects_except(id);
 
         let center_gx = center_anchor.x;
         let center_gy = center_anchor.y;
@@ -1935,6 +1930,20 @@ impl Core {
         } else {
             (center_gx, center_gy)
         };
+        // near the cursor, but on the screen: a window that fits the usable view is kept inside it
+        // (owner, 2026-10-31: every new window opens in free space near the cursor)
+        let (target_gx, target_gy) = match self.usable_view() {
+            Some((x0, y0, x1, y1)) => {
+                let keep = |t: i64, lo: i64, hi: i64, s: i64| {
+                    if hi - lo >= s { t.clamp(lo, hi - s) } else { t }
+                };
+                (
+                    keep(target_gx, x0, x1, new_w),
+                    keep(target_gy, y0, y1, new_h),
+                )
+            }
+            None => (target_gx, target_gy),
+        };
 
         if existing.is_empty() {
             return Some(CanvasPoint {
@@ -1943,14 +1952,7 @@ impl Core {
             });
         }
 
-        const GAP: i64 = 12;
-        let overlaps = |gx: i64, gy: i64| -> bool {
-            let gx1 = gx.saturating_add(new_w);
-            let gy1 = gy.saturating_add(new_h);
-            existing.iter().any(|&(ex0, ey0, ex1, ey1)| {
-                !(gx1 + GAP <= ex0 || gx >= ex1 + GAP || gy1 + GAP <= ey0 || gy >= ey1 + GAP)
-            })
-        };
+        let overlaps = |gx: i64, gy: i64| overlaps_any(&existing, (gx, gy, new_w, new_h));
 
         if !overlaps(target_gx, target_gy) {
             return Some(CanvasPoint {
@@ -1958,13 +1960,56 @@ impl Core {
                 y: target_gy,
             });
         }
-        if !overlaps(center_gx, center_gy) {
-            return Some(center_anchor);
-        }
+        // never over another window: the nearest free spot to the cursor, one wholly on screen
+        // first, else the nearest on the Canvas (owner, 2026-10-31)
+        let best = self.free_spot_near(&existing, (new_w, new_h), (target_gx, target_gy));
+        let (chosen_gx, chosen_gy) =
+            best.unwrap_or_else(|| beside_all(&existing, (target_gx, target_gy)));
+        Some(CanvasPoint {
+            x: chosen_gx,
+            y: chosen_gy,
+        })
+    }
 
+    /// The window-geometry rects `(x0, y0, x1, y1)` of every mapped window but `id`.
+    fn window_rects_except(&self, id: ElementId) -> Vec<(i64, i64, i64, i64)> {
+        let mut existing = Vec::new();
+        for elem in self.stage.mapped_elements() {
+            if elem == id {
+                continue;
+            }
+            if let Some(a) = self.stage.anchor(elem)
+                && let Some(t) = self.stage.tree(elem)
+            {
+                let ew = t.geometry.size.w as i64;
+                let eh = t.geometry.size.h as i64;
+                if ew > 0 && eh > 0 {
+                    let gx0 = a.x;
+                    let gy0 = a.y;
+                    existing.push((gx0, gy0, gx0.saturating_add(ew), gy0.saturating_add(eh)));
+                }
+            }
+        }
+        existing
+    }
+
+    /// The free spot nearest `target` for a window of `size` among `existing` (the cluster
+    /// placement's search, F-PLACE-1): grid-aligned candidates flush with the windows' edges and
+    /// the target's lines, the 12 px gap kept; a spot wholly in the first screen's view wins over
+    /// a nearer one that is not. `None` when no candidate is free.
+    fn free_spot_near(
+        &self,
+        existing: &[(i64, i64, i64, i64)],
+        size: (i64, i64),
+        target: (i64, i64),
+    ) -> Option<(i64, i64)> {
+        const GAP: i64 = 12;
+        let (new_w, new_h) = size;
+        let (target_gx, target_gy) = target;
+        let overlaps = |gx: i64, gy: i64| overlaps_any(existing, (gx, gy, new_w, new_h));
         // Generate grid-aligned candidate positions flush with existing window edges
         let mut candidates = Vec::new();
-        for &w1 in &existing {
+        for &w1 in existing {
             // Adjacent flush placements relative to w1
             candidates.push((w1.2 + GAP, w1.1)); // Right, top-aligned
             candidates.push((w1.2 + GAP, w1.3 - new_h)); // Right, bottom-aligned
@@ -1982,7 +2027,7 @@ impl Core {
             candidates.push((target_gx, w1.1 - new_h - GAP));
 
             // Grid intersections with other windows
-            for &w2 in &existing {
+            for &w2 in existing {
                 candidates.push((w1.2 + GAP, w2.1));
                 candidates.push((w1.0, w2.3 + GAP));
                 candidates.push((w1.0 - new_w - GAP, w2.1));
@@ -1999,20 +2044,83 @@ impl Core {
                 gx >= x0 && gy >= y0 && gx + new_w <= x1 && gy + new_h <= y1
             })
         };
-        let best = candidates
+        candidates
             .into_iter()
             .filter(|&(gx, gy)| !overlaps(gx, gy))
             .min_by_key(|&(gx, gy)| {
                 let dx = (gx - target_gx) as i128;
                 let dy = (gy - target_gy) as i128;
                 (!in_view(gx, gy), dx * dx + dy * dy)
-            });
+            })
+    }
 
-        let (chosen_gx, chosen_gy) = best.unwrap_or((target_gx, target_gy));
-        Some(CanvasPoint {
-            x: chosen_gx,
-            y: chosen_gy,
-        })
+    /// Owner, 2026-10-31: a window back from fullscreen never pushes its neighbours and never
+    /// overlaps them. At the size it now draws: if its place is free (the 12 px gap kept) it
+    /// stays; else (it came back larger, or a window moved or opened into its place meanwhile) it
+    /// moves to the nearest free spot by the cluster placement's search, one wholly in view
+    /// preferred. `None`: it stays. Cluster tiling only; the other policies let windows overlap.
+    fn returned_from_fullscreen(&self, id: ElementId) -> Option<CanvasPoint> {
+        if self.placement != PlacementPolicy::ClusterTiling {
+            return None;
+        }
+        let (anchor, tree) = (self.stage.anchor(id)?, self.stage.tree(id)?);
+        let size = (
+            i64::from(tree.geometry.size.w),
+            i64::from(tree.geometry.size.h),
+        );
+        if size.0 <= 0 || size.1 <= 0 {
+            return None;
+        }
+        let existing = self.window_rects_except(id);
+        if !overlaps_any(&existing, (anchor.x, anchor.y, size.0, size.1)) {
+            return None;
+        }
+        let (x, y) = self
+            .free_spot_near(&existing, size, (anchor.x, anchor.y))
+            .unwrap_or_else(|| beside_all(&existing, (anchor.x, anchor.y)));
+        Some(CanvasPoint { x, y })
+    }
+
+    /// Owner, 2026-10-31: a window that changed its size by itself (the app, not the user)
+    /// never pushes its neighbours and never overlaps them. `old` and `new` are its rects before
+    /// and after (same anchor). If the new size reaches no window the old rect did not already
+    /// reach, it stays; else it keeps the edge away from them (its right, bottom or both edges,
+    /// or its centre) if that fits; else it moves to the nearest free spot. Windows the user
+    /// stacked over it stay stacked. `None`: it stays.
+    fn self_resized(
+        &self,
+        id: ElementId,
+        old: (i64, i64, i64, i64),
+        new: (i64, i64, i64, i64),
+    ) -> Option<CanvasPoint> {
+        let (w, h) = (new.2 - new.0, new.3 - new.1);
+        if w <= 0 || h <= 0 {
+            return None;
+        }
+        let all = self.window_rects_except(id);
+        let ow = (old.2 - old.0, old.3 - old.1);
+        let others: Vec<_> = all
+            .iter()
+            .copied()
+            .filter(|r| !overlaps_any(&[*r], (old.0, old.1, ow.0, ow.1)))
+            .collect();
+        let free = |x: i64, y: i64| !overlaps_any(&others, (x, y, w, h));
+        if free(new.0, new.1) {
+            return None;
+        }
+        let tries = [
+            (old.2 - w, old.1),
+            (old.0, old.3 - h),
+            (old.2 - w, old.3 - h),
+            ((old.0 + old.2) / 2 - w / 2, (old.1 + old.3) / 2 - h / 2),
+        ];
+        if let Some(&(x, y)) = tries.iter().find(|&&(x, y)| free(x, y)) {
+            return Some(CanvasPoint { x, y });
+        }
+        let (x, y) = self
+            .free_spot_near(&all, (w, h), (new.0, new.1))
+            .unwrap_or_else(|| beside_all(&all, (new.0, new.1)));
+        Some(CanvasPoint { x, y })
     }
 
     /// The placement policy for elements mapped from now on. It never moves an element that is
@@ -2552,6 +2660,23 @@ impl Core {
             p: (clamped_x, clamped_y),
         }
     }
+}
+
+/// A spot free whatever the windows: right of all of them, at `target`'s height.
+fn beside_all(existing: &[(i64, i64, i64, i64)], target: (i64, i64)) -> (i64, i64) {
+    let right = existing.iter().map(|r| r.2).max().unwrap_or(target.0);
+    (right.saturating_add(12).max(target.0), target.1)
+}
+
+/// `(x, y, w, h)` comes within the 12 px tiling gap of one of the rects `(x0, y0, x1, y1)`.
+fn overlaps_any(existing: &[(i64, i64, i64, i64)], r: (i64, i64, i64, i64)) -> bool {
+    const GAP: i64 = 12;
+    let (gx, gy) = (r.0, r.1);
+    let gx1 = gx.saturating_add(r.2);
+    let gy1 = gy.saturating_add(r.3);
+    existing.iter().any(|&(ex0, ey0, ex1, ey1)| {
+        !(gx1 + GAP <= ex0 || gx >= ex1 + GAP || gy1 + GAP <= ey0 || gy >= ey1 + GAP)
+    })
 }
 
 #[cfg(test)]
@@ -6364,10 +6489,11 @@ mod tests {
     /// INV-STAGE-2: an element's anchor is the Canvas position of its window-geometry origin.
     /// Cluster tiling and push_overlapping_cluster use the same convention as CentredInView
     /// and stage.rs even when geometry.loc != 0 (CSD window with client margins/shadows).
-    /// A window that grows by itself pushes aside the neighbour it reaches, keeping the 12 px
-    /// gap; windows the user stacked stay stacked when one of them grows.
+    /// A window that grows by itself pushes nothing (owner, 2026-10-31): it keeps the 12 px gap
+    /// from the neighbour it would reach by moving itself; windows the user stacked stay stacked
+    /// when one of them grows.
     #[test]
-    fn a_window_that_grows_pushes_the_neighbour_it_reaches() {
+    fn a_window_that_grows_by_itself_moves_off_its_neighbour() {
         let win = |k: u64, w: i32, h: i32, mapped: bool| SurfaceTree {
             geometry: LocalRect {
                 loc: LocalPoint { x: 0, y: 0 },
@@ -6399,16 +6525,18 @@ mod tests {
         let (aa, ab) = (c.stage().anchor(a).unwrap(), c.stage().anchor(b).unwrap());
         // B is beside or below A; A grows by 200 px toward it, on both axes
         c.toplevel_committed(a, win(1, 600, 500, true)).unwrap();
-        let ab2 = c.stage().anchor(b).unwrap();
-        let (bx0, by0) = (ab2.x, ab2.y);
-        let apart = bx0 >= aa.x + 600 + 12
-            || bx0 + 400 + 12 <= aa.x
-            || by0 >= aa.y + 500 + 12
-            || by0 + 300 + 12 <= aa.y;
+        assert_eq!(c.stage().anchor(b).unwrap(), ab, "B is not pushed");
+        let aa2 = c.stage().anchor(a).unwrap();
+        let (bx0, by0) = (ab.x, ab.y);
+        let apart = bx0 >= aa2.x + 600 + 12
+            || bx0 + 400 + 12 <= aa2.x
+            || by0 >= aa2.y + 500 + 12
+            || by0 + 300 + 12 <= aa2.y;
         assert!(
             apart,
-            "B {ab2:?} keeps the gap from A {aa:?} grown to 600x500 (was {ab:?})"
+            "A {aa2:?} grown to 600x500 keeps the gap from B {ab:?} (was {aa:?})"
         );
+        let aa = aa2;
 
         // the user drags B onto A: when A grows again, B is not pushed off it
         let mut fx = Vec::new();

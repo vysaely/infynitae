@@ -2030,6 +2030,25 @@ CONTROLS = [
      "",
      "infynitae-backend-headless", ["--test", "t1_window_states"],
      "a_maximized_window_fills_the_screen_left_after_an_unplug"),
+    # ---- free space (owner, 2026-10-31: windows never overlap or push on their own)
+    ("F-PLACE-1 (2026-10-31): a new window near the cursor may hang off the screen", f"{CORE}/protocol.rs",
+     "                    if hi - lo >= s { t.clamp(lo, hi - s) } else { t }\n",
+     "                    if hi - lo >= s && false { t.clamp(lo, hi - s) } else { t }\n",
+     "infynitae-backend-headless", ["--test", "t1_window_states"],
+     "a_new_window_near_the_screen_edge_opens_on_the_screen"),
+    ("F-PLACE-1 (2026-10-31): a window that grows by itself pushes its neighbours", f"{CORE}/protocol.rs",
+     "                    let asked = self.held_size(id) == Some(t.geometry.size)\n",
+     "                    let asked = true || self.held_size(id) == Some(t.geometry.size)\n",
+     "infynitae-backend-headless", ["--test", "t1_window_states"], "a_window_that_grows_by_itself_pushes_nothing"),
+    ("F-PLACE-1 (2026-10-31): a window that grows by itself overlaps its neighbours", f"{CORE}/protocol.rs",
+     "                    } else if let Some(at) = self.self_resized(id, old, new) {\n",
+     "                    } else if let Some(at) = self.self_resized(id, old, new).filter(|_| false) {\n",
+     "infynitae-backend-headless", ["--test", "t1_window_states"], "a_window_that_grows_by_itself_pushes_nothing"),
+    ("F-PLACE-1 (2026-10-31): a window back from fullscreen larger overlaps its neighbour", f"{CORE}/protocol.rs",
+     "                    if let Some(at) = self.returned_from_fullscreen(id) {\n",
+     "                    if let Some(at) = self.returned_from_fullscreen(id).filter(|_| false) {\n",
+     "infynitae-backend-headless", ["--test", "t1_window_states"],
+     "back_from_fullscreen_larger_it_moves_to_free_space"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

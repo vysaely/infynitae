@@ -399,6 +399,10 @@ pub struct Core {
     /// The windows Super+Enter maximized (`EnterMode::Maximize`) and the output whose usable
     /// area they fill: a change of that output fits them to it again.
     maximized: Vec<(stage::ElementId, output::OutputId)>,
+    /// Windows whose fullscreen ended and that have not drawn a windowed frame yet: that frame
+    /// decides whether they keep their place (owner, 2026-10-31). Written by `core::protocol`
+    /// (and dropped by a Super+drag out of fullscreen, which places the window itself).
+    returning: Vec<stage::ElementId>,
     /// The window a Super+right drag resizes, until the client has drawn the last size asked of
     /// it (`core::protocol` writes it).
     resize: Option<protocol::ResizeTrack>,
@@ -513,6 +517,7 @@ impl Core {
                 restore_offers: Vec::new(),
                 held_sizes: Vec::new(),
                 maximized: Vec::new(),
+                returning: Vec::new(),
                 resize: None,
                 shell_stream: false,
                 layers: Vec::new(),

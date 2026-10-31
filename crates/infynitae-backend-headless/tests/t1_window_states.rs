@@ -486,3 +486,259 @@ fn a_fullscreen_window_is_told_so_after_a_rotation() {
     assert_eq!(last.1, (1080, 1920));
     assert!(last.2.contains(&FULLSCREEN), "{:?}", last.2);
 }
+
+// ---- free space (owner, 2026-10-31): a new window opens in free space near the cursor; a window
+// that resizes by itself or comes back from fullscreen never pushes its neighbours and never
+// overlaps them. User moves and resizes are left as they were.
+
+/// Two windows side by side (cluster tiling), A focused: (A's probe index, A, B).
+fn two_side_by_side(r: &mut Rig) -> (usize, ElementId, ElementId) {
+    let (a, ea) = map(r, "A", (800, 600));
+    let (_, eb) = map(r, "B", (800, 600));
+    focus(r, ea);
+    assert!(apart(r, ea, eb), "precondition: side by side");
+    (a, ea, eb)
+}
+
+/// The window geometries of `x` and `y` are at least the 12 px gap apart.
+fn apart(r: &Rig, x: ElementId, y: ElementId) -> bool {
+    let core = r.ls.state.core();
+    let rect = |e| {
+        let a = core.stage().anchor(e).expect("anchor");
+        let s = core.stage().tree(e).expect("tree").geometry.size;
+        (a.x, a.y, a.x + i64::from(s.w), a.y + i64::from(s.h))
+    };
+    let (p, q) = (rect(x), rect(y));
+    p.2 + 12 <= q.0 || q.2 + 12 <= p.0 || p.3 + 12 <= q.1 || q.3 + 12 <= p.1
+}
+
+/// `e` lies wholly in the first screen's view.
+fn in_view(r: &Rig, e: ElementId) -> bool {
+    let core = r.ls.state.core();
+    let a = core.stage().anchor(e).expect("anchor");
+    let s = core.stage().tree(e).expect("tree").geometry.size;
+    let (cx, cy) = camera_centre(r);
+    let (w, h) = logical_floor(r);
+    let (vw, vh) = (i64::from(w), i64::from(h));
+    a.x >= cx - vw / 2
+        && a.y >= cy - vh / 2
+        && a.x + i64::from(s.w) <= cx + vw / 2
+        && a.y + i64::from(s.h) <= cy + vh / 2
+}
+
+fn anchor_of(r: &Rig, e: ElementId) -> CanvasPoint {
+    r.ls.state.core().stage().anchor(e).expect("anchor")
+}
+
+/// The app asks for fullscreen and draws at the screen's size.
+fn app_fullscreen(r: &mut Rig, idx: usize) {
+    r.ls.probe.surfaces[idx]
+        .toplevel
+        .as_ref()
+        .expect("toplevel")
+        .set_fullscreen(None);
+    r.ls.pump();
+    r.frame();
+    let full = logical_floor(r);
+    draw(r, idx, full);
+}
+
+fn app_unfullscreen(r: &mut Rig, idx: usize) {
+    r.ls.probe.surfaces[idx]
+        .toplevel
+        .as_ref()
+        .expect("toplevel")
+        .unset_fullscreen();
+    r.ls.pump();
+    r.frame();
+}
+
+/// A new window with the pointer near the screen's right edge: it opens near the cursor but
+/// wholly on the screen (it used to be centred on the cursor, half off the screen).
+#[test]
+fn a_new_window_near_the_screen_edge_opens_on_the_screen() {
+    let mut r = rig(a_1080());
+    r.motion((900.0, 0.0));
+    let (_, e) = map(&mut r, "A", (800, 600));
+    assert!(in_view(&r, e), "on the screen: {:?}", anchor_of(&r, e));
+}
+
+/// A new window whose place under the cursor is taken opens beside the window there, on the
+/// screen, and moves nothing.
+#[test]
+fn a_new_window_opens_in_free_space_and_moves_nothing() {
+    let mut r = rig(a_1080());
+    let (_, ea) = map(&mut r, "A", (800, 600));
+    let a0 = anchor_of(&r, ea);
+    r.motion((100.0, 50.0));
+    let (_, eb) = map(&mut r, "B", (500, 400));
+    assert_eq!(anchor_of(&r, ea), a0, "A is not moved");
+    assert!(apart(&r, ea, eb), "no overlap");
+    assert!(in_view(&r, eb), "on the screen: {:?}", anchor_of(&r, eb));
+}
+
+/// An app grows its window by itself toward its neighbour: the neighbour is not pushed (it used
+/// to be); the window keeps its far edge and grows away from the neighbour.
+#[test]
+fn a_window_that_grows_by_itself_pushes_nothing() {
+    let mut r = rig(a_1080());
+    let (a, ea, eb) = two_side_by_side(&mut r);
+    let (a0, b0) = (anchor_of(&r, ea), anchor_of(&r, eb));
+    // 200 px more on both axes: toward B whichever side B is on
+    draw(&mut r, a, (1000, 800));
+    assert_eq!(anchor_of(&r, eb), b0, "the neighbour is not pushed");
+    assert!(apart(&r, ea, eb), "no overlap");
+    // it grew away from B: the edge that faces B stayed
+    let a1 = anchor_of(&r, ea);
+    if b0.x >= a0.x + 800 {
+        assert_eq!(a1.x + 1000, a0.x + 800, "right edge kept");
+    } else if b0.x + 800 <= a0.x {
+        assert_eq!(a1.x, a0.x, "left edge kept");
+    } else if b0.y >= a0.y + 600 {
+        assert_eq!(a1.y + 800, a0.y + 600, "bottom edge kept");
+    } else {
+        assert_eq!(a1.y, a0.y, "top edge kept");
+    }
+}
+
+/// An app grows its window by itself so much that it cannot stay: it moves to free space.
+#[test]
+fn a_window_that_grows_by_itself_past_its_room_moves_to_free_space() {
+    let mut r = rig(a_1080());
+    let (a, ea, eb) = two_side_by_side(&mut r);
+    let (_, ec) = map(&mut r, "C", (800, 600));
+    let (b0, c0) = (anchor_of(&r, eb), anchor_of(&r, ec));
+    draw(&mut r, a, (1500, 900));
+    assert_eq!(
+        (anchor_of(&r, eb), anchor_of(&r, ec)),
+        (b0, c0),
+        "nothing pushed"
+    );
+    assert!(apart(&r, ea, eb) && apart(&r, ea, ec), "no overlap");
+}
+
+/// (a) The app leaves fullscreen and draws at the size offered: both windows where they were.
+#[test]
+fn back_from_fullscreen_at_its_size_it_keeps_its_place() {
+    let mut r = rig(a_1080());
+    let (a, ea, eb) = two_side_by_side(&mut r);
+    let (a0, b0) = (anchor_of(&r, ea), anchor_of(&r, eb));
+    app_fullscreen(&mut r, a);
+    app_unfullscreen(&mut r, a);
+    assert_eq!(last_size(&r, a), Some((800, 600)), "offered its size");
+    draw(&mut r, a, (800, 600));
+    assert_eq!((anchor_of(&r, ea), anchor_of(&r, eb)), (a0, b0));
+}
+
+/// (b) The app comes back larger than its place (Electron reopening at a size of its own, GTK
+/// remembering another): it overlapped its neighbour. Now it moves to the nearest free spot and
+/// the neighbour stays.
+#[test]
+fn back_from_fullscreen_larger_it_moves_to_free_space() {
+    let mut r = rig(a_1080());
+    let (a, ea, eb) = two_side_by_side(&mut r);
+    let b0 = anchor_of(&r, eb);
+    app_fullscreen(&mut r, a);
+    app_unfullscreen(&mut r, a);
+    draw(&mut r, a, (1100, 700));
+    assert_eq!(anchor_of(&r, eb), b0, "the neighbour is not pushed");
+    assert!(apart(&r, ea, eb), "no overlap");
+    // a later frame at the same size does not move it again
+    let a1 = anchor_of(&r, ea);
+    draw(&mut r, a, (1100, 700));
+    assert_eq!(anchor_of(&r, ea), a1);
+}
+
+/// (c) Super+Shift+Enter off: as (a); and larger, as (b).
+#[test]
+fn back_from_fullscreen_by_the_key_keeps_or_finds_its_place() {
+    for size in [(800, 600), (1100, 700)] {
+        let mut r = rig(a_1080());
+        let (a, ea, eb) = two_side_by_side(&mut r);
+        let (a0, b0) = (anchor_of(&r, ea), anchor_of(&r, eb));
+        chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT], KEY_ENTER);
+        let full = logical_floor(&r);
+        draw(&mut r, a, full);
+        chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT], KEY_ENTER);
+        draw(&mut r, a, size);
+        assert_eq!(anchor_of(&r, eb), b0, "{size:?}: the neighbour stays");
+        assert!(apart(&r, ea, eb), "{size:?}: no overlap");
+        if size == (800, 600) {
+            assert_eq!(anchor_of(&r, ea), a0, "its own place");
+        }
+    }
+}
+
+/// (e) While A is fullscreen its neighbour is moved into A's place (a drag, the shell): A comes
+/// back to free space next to it instead of on top of it.
+#[test]
+fn back_from_fullscreen_into_a_taken_place_it_moves_to_free_space() {
+    let mut r = rig(a_1080());
+    let (a, ea, eb) = two_side_by_side(&mut r);
+    let a0 = anchor_of(&r, ea);
+    app_fullscreen(&mut r, a);
+    let element = infynitae_core::stage::ElementRef {
+        instance: r.ls.state.core().stage().instance(),
+        element: eb,
+    };
+    let fx =
+        r.ls.state
+            .core_mut()
+            .shell_command(
+                &mut r.ls.shell,
+                infynitae_core::ShellCommand::MoveElement {
+                    element,
+                    to: (a0.x as f64 + 50.0, a0.y as f64 + 30.0),
+                    stream: infynitae_core::ShellStream::Atomic,
+                },
+            )
+            .expect("move");
+    r.ls.state.apply(&fx);
+    r.ls.pump();
+    let b1 = anchor_of(&r, eb);
+    app_unfullscreen(&mut r, a);
+    draw(&mut r, a, (800, 600));
+    assert_eq!(
+        anchor_of(&r, eb),
+        b1,
+        "the neighbour stays where it was put"
+    );
+    assert!(apart(&r, ea, eb), "no overlap");
+    // no free place for it is left on this screen: it is beside B on the Canvas
+}
+
+/// (f) The screen turns to portrait while A is fullscreen: A comes back without overlapping B.
+#[test]
+fn back_from_fullscreen_after_a_rotation_overlaps_nothing() {
+    let mut r = rig(a_1080());
+    let (a, ea, eb) = two_side_by_side(&mut r);
+    let b0 = anchor_of(&r, eb);
+    app_fullscreen(&mut r, a);
+    let o = r.ls.output();
+    let mut portrait = output((1920, 1080), 120);
+    portrait.transform = Transform::R90;
+    r.ls.reconfigure(o, &portrait);
+    r.frame();
+    let full = logical_floor(&r);
+    draw(&mut r, a, full);
+    app_unfullscreen(&mut r, a);
+    draw(&mut r, a, (800, 600));
+    assert_eq!(anchor_of(&r, eb), b0);
+    assert!(apart(&r, ea, eb));
+}
+
+/// A window that goes fullscreen again before it drew a windowed frame is decided at its next
+/// return, not by the frames of the second fullscreen.
+#[test]
+fn a_regrant_before_the_windowed_frame_keeps_the_decision_for_later() {
+    let mut r = rig(a_1080());
+    let (a, ea, eb) = two_side_by_side(&mut r);
+    let (a0, b0) = (anchor_of(&r, ea), anchor_of(&r, eb));
+    app_fullscreen(&mut r, a);
+    app_unfullscreen(&mut r, a);
+    app_fullscreen(&mut r, a);
+    assert_eq!(anchor_of(&r, ea), a0, "a fullscreen frame moves nothing");
+    app_unfullscreen(&mut r, a);
+    draw(&mut r, a, (800, 600));
+    assert_eq!((anchor_of(&r, ea), anchor_of(&r, eb)), (a0, b0));
+}
