@@ -27,7 +27,7 @@ with any option it runs by itself. Asks for your password once; reboot when it i
 Leave out a part:
   --no-notifications   notifications (mako)
   --no-keyring         password store for apps (gnome-keyring)
-  --no-automount       USB drives mounted when plugged in (udiskie)
+  --no-automount       USB drives mounted when plugged in (udisks2)
   --no-clipboard       clipboard history, Super+V (cliphist)
   --no-fonts           fonts for other languages and emoji (Noto)
   --no-recorder        screen recording and replay clips (ffmpeg)

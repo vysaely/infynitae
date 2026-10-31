@@ -454,7 +454,7 @@ NOTIFICATIONS="auto"
     #   auto    mako, swaync, dunst, fnott (first installed)  · none / false  · a command
 
 AUTOMOUNT="true"
-    # USB drives and SD cards mount when plugged in (udiskie) [reload]
+    # USB drives and SD cards mount when plugged in (udisks2) [reload]
     # default: true
     # options: true  · false
 

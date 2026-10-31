@@ -214,6 +214,7 @@ live/infynitae-open-with infynitae-open-with
 live/battery-limit infynitae-battery-limit
 live/infynitae-xkill infynitae-xkill
 live/infynitae-sleep-lock infynitae-sleep-lock
+live/infynitae-automount infynitae-automount
 LIST
     # the C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream)
     sh "$src/live/build-helpers.sh" "$src" "$bin" \

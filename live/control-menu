@@ -253,7 +253,7 @@ apps_list() {
             for (p in is_client) {
                 if (!(p in comm_of)) continue
                 cl = norm(comm_of[p])
-                if (cl ~ /^(infynitae.*|xwayland.*|wl-paste|wl-clip-persist|mako|swaync.*|dunst|fnott|udiskie|xdg-.*|dbus-.*|systemd.*|wireplumber|pipewire.*|pulseaudio|gvfs.*|at-spi.*|dconf.*|gnome-keyring.*|polkit.*|squeekboard|slurp|grim|fuzzel|rofi|wofi|tofi|busctl|bash|zsh|fish|sh)$/) continue
+                if (cl ~ /^(infynitae.*|xwayland.*|wl-paste|wl-clip-persist|mako|swaync.*|dunst|fnott|udiskie|infynitae-automount|xdg-.*|dbus-.*|systemd.*|wireplumber|pipewire.*|pulseaudio|gvfs.*|at-spi.*|dconf.*|gnome-keyring.*|polkit.*|squeekboard|slurp|grim|fuzzel|rofi|wofi|tofi|busctl|bash|zsh|fish|sh)$/) continue
                 if (seen[cl]++) continue
                 if (is_Mapped(cl)) continue
                 mb = int((rss_by_app[cl] + 512) / 1024)
