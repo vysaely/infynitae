@@ -301,6 +301,18 @@ static void apply_css(void) {
     g_object_unref(provider);
 }
 
+/* GTK starts with the first prompt, not with the session: until a program asks for a password,
+ * the agent is only its D-Bus registration (GTK's display connection, theme and CSS were most of
+ * its memory, held all session for a dialog seldom shown). TRUE once GTK is up. */
+static gboolean ensure_gtk(void) {
+    static gboolean up;
+    if (!up && gtk_init_check(NULL, NULL)) {
+        apply_css();
+        up = TRUE;
+    }
+    return up;
+}
+
 static void infynitae_agent_listener_initiate_authentication(
     PolkitAgentListener *listener,
     const gchar *action_id,
@@ -348,6 +360,13 @@ static void infynitae_agent_listener_initiate_authentication(
             data,
             NULL
         );
+    }
+
+    if (!ensure_gtk()) {
+        g_task_return_new_error(data->task, POLKIT_ERROR, POLKIT_ERROR_FAILED,
+                                "No display to show the password prompt on");
+        free_auth_dialog(data);
+        return;
     }
 
     // Build GUI Window
@@ -437,8 +456,8 @@ static void infynitae_agent_listener_init(InfynitaeAgentListener *listener) {
 }
 
 int main(int argc, char **argv) {
-    gtk_init(&argc, &argv);
-    apply_css();
+    (void)argc;
+    (void)argv;
 
     GError *error = NULL;
     InfynitaeAgentListener *listener = g_object_new(INFYNITAE_TYPE_AGENT_LISTENER, NULL);
@@ -466,7 +485,10 @@ int main(int argc, char **argv) {
     }
 
     g_print("[infynitae-polkit] PolicyKit Authentication Agent registered successfully on D-Bus.\n");
-    gtk_main();
+    /* GTK's events run in this loop too, once a prompt started it (the default main context) */
+    GMainLoop *loop = g_main_loop_new(NULL, FALSE);
+    g_main_loop_run(loop);
+    g_main_loop_unref(loop);
 
     polkit_agent_listener_unregister(reg_handle);
     g_object_unref(listener);
