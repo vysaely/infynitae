@@ -44,6 +44,7 @@ mod snapshot;
 pub mod tearing;
 pub mod virtual_input;
 mod wlr_toplevels;
+mod x11_keys;
 pub mod xwayland;
 
 pub use handlers::ACTIVATION_TOKENS_KEPT;
@@ -93,6 +94,8 @@ pub use registry::SurfaceRegistry;
 #[derive(Debug, Default)]
 pub struct ClientState {
     compositor: CompositorClientState,
+    /// Whether the client is xwayland-satellite (its surfaces are X11 windows), once asked.
+    x11: std::sync::OnceLock<bool>,
 }
 
 impl ClientData for ClientState {
@@ -135,6 +138,8 @@ pub struct WaylandState {
     /// The compositor started a process of its own (a shortcut, a launch, the wallpaper): the
     /// session reaps exits from then on (SIGCHLD), also without an `-e` command.
     pub(crate) spawned_children: bool,
+    /// What X11 apps hear while a Wayland window has focus (XWAYLAND_KEYS, `x11_keys`).
+    pub(crate) x11_keys: x11_keys::X11Keys,
     /// What the backend's framebuffer is (`set_host_window_target`).
     pub(crate) target: convert::RenderTarget,
     /// The cursor clients asked for, drawn when the target draws one (`cursor`).
@@ -538,6 +543,7 @@ impl WaylandState {
             outputs: Vec::new(),
             disabled_outputs: Vec::new(),
             spawned_children: false,
+            x11_keys: Default::default(),
             target: convert::RenderTarget::default(),
             cursor: smithay::input::pointer::CursorImageStatus::default_named(),
             cursor_epoch: std::time::Duration::ZERO,
@@ -828,6 +834,7 @@ impl WaylandState {
                 let mut bind_lines: Vec<(String, String)> = Vec::new();
                 let mut exec_lines: Vec<(String, String)> = Vec::new();
                 let mut max_app_scale: Option<f64> = None;
+                let mut x11_keys_mode = x11_keys::Mode::default();
                 let (mut background_priority, mut game_mode) = (true, true);
                 let mut tearing = true;
                 for line in content.lines() {
@@ -1035,6 +1042,7 @@ impl WaylandState {
                                     "1" | "true" | "yes" | "on"
                                 ));
                             }
+                            "XWAYLAND_KEYS" => x11_keys_mode = x11_keys::Mode::parse(val),
                             "DIRECT_SCANOUT" => {
                                 self.direct_scanout = Some(matches!(
                                     val.to_lowercase().as_str(),
@@ -1137,6 +1145,7 @@ impl WaylandState {
                 self.core.set_free_cursor_on_super(free_cursor_on_super);
                 self.exec_commands = commands;
                 self.set_max_app_scale(max_app_scale);
+                self.x11_keys.mode = x11_keys_mode;
                 self.background.game_mode = game_mode;
                 self.set_tearing_enabled(tearing);
                 self.background.enabled = background_priority;

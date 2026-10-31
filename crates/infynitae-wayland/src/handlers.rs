@@ -365,6 +365,18 @@ impl CompositorHandler for WaylandState {
     }
 
     fn new_surface(&mut self, surface: &WlSurface) {
+        // xwayland-satellite's connection, for XWAYLAND_KEYS (asked once per client)
+        use smithay::reexports::wayland_server::Resource;
+        if let Some(client) = surface.client()
+            && let Some(data) = client.get_data::<crate::ClientState>()
+            && *data.x11.get_or_init(|| {
+                client
+                    .get_credentials(&self.dh)
+                    .is_ok_and(|c| crate::ownership::is_xwayland_satellite(c.pid))
+            })
+        {
+            self.note_x11_client(&client);
+        }
         add_destruction_hook(surface, |state: &mut Self, s| {
             if let Some(key) = state.registry.key(s) {
                 let fx = state.core.destroy_pointer_constraint(key);

@@ -592,6 +592,30 @@ RECORD_AUDIO="desktop"
 # A line that is not understood is skipped and noted in ~/.local/state/infynitae/session.log.
 # Built-in keys and mouse gestures: see the README.
 
+GLOBAL_SHORTCUTS=""
+    # Your keys for apps' global shortcuts (Discord, OBS, browsers: what they register through
+    # the shortcuts portal), whatever key the app asked for; the key still types as usual
+    # default: ""   (each app keeps the key it asked for)
+    #   "ID=KEY ID=KEY"         e.g. "discord-toggle-mute=Shift_R discord-toggle-deafen=Control_R"
+    #   "APP/ID=KEY"            one app's shortcut only
+    # KEY: a key name (Shift_R, Control_R, F9, Pause, XF86AudioMute) or a chord (CTRL+SHIFT+m).
+    # The IDs: `grep "Bound shortcut" ~/.local/state/infynitae/portal.log`
+
+DISCORD_KEY_PATCH="false"
+    # Patch Discord's files at login so it accepts Right Shift / Right Ctrl alone as keybinds
+    # (the older way; GLOBAL_SHORTCUTS does it without touching Discord) [restart]
+    # default: false
+    # options: false  · true
+
+XWAYLAND_KEYS="modifiers"
+    # Keys X11 apps hear while another window has focus (push-to-talk in an X11 Discord or
+    # TeamSpeak, a game's or OBS's hotkeys). Never while the screen is locked.
+    # default: modifiers
+    #   off          none
+    #   modifiers    keys that type nothing: Shift, Ctrl, Alt, Super alone, F1-F24, media keys
+    #   shortcuts    those, and any key while Ctrl, Alt or Super is held
+    #   all          every key (an X11 app can then read whatever you type)
+
 
 # ═══ Your own scripts ═══
 # ~/.config/infynitae/autostart.sh   run at session start (bars, notifications…)

@@ -330,8 +330,7 @@ fn default_apps_dirs() -> Vec<PathBuf> {
 }
 
 /// The command that starts `app_id`: the desktop file named after it, else the one whose
-/// `StartupWMClass` is it, else the desktop file whose `Exec` binary basename matches it,
-/// else a direct executable on `PATH` (all ignoring case).
+/// `StartupWMClass` is it, else the one whose `Exec` program is named it (all ignoring case).
 pub fn app_command(app_id: &str, apps_dirs: &[PathBuf]) -> Option<Vec<String>> {
     let target = app_id.to_lowercase();
     let target = target
@@ -362,30 +361,17 @@ pub fn app_command(app_id: &str, apps_dirs: &[PathBuf]) -> Option<Vec<String>> {
                 let e = desktop_entry(f);
                 let ex = e.get("exec")?;
                 let first = clean_exec(ex).into_iter().next()?;
-                let bin_base = Path::new(&first).file_name()?.to_string_lossy().to_lowercase();
+                let bin_base = Path::new(&first)
+                    .file_name()?
+                    .to_string_lossy()
+                    .to_lowercase();
                 (bin_base == target).then(|| ex.clone())
             })
         });
-    if let Some(exec_str) = exec {
-        let args = clean_exec(&exec_str);
-        if !args.is_empty() {
-            return Some(args);
-        }
-    }
-    // Fallback: check if `target` (or `app_id`) is directly an executable on PATH
-    if !target.contains('/')
-        && let Some(path_var) = std::env::var_os("PATH")
-    {
-        for dir in std::env::split_paths(&path_var) {
-            for cand in [&target, app_id] {
-                let full = dir.join(cand);
-                if full.is_file() {
-                    return Some(vec![full.to_string_lossy().into_owned()]);
-                }
-            }
-        }
-    }
-    None
+    // only an installed app's own desktop file starts it: an app picks its app_id, and a window
+    // named after any program on PATH (`poweroff`) must never run it at the next login
+    let args = clean_exec(&exec?);
+    (!args.is_empty()).then_some(args)
 }
 
 /// Starts an app on its own, its output not the restore's (it would flood restore.log).
@@ -697,7 +683,10 @@ fn session_restore_enabled() -> bool {
     {
         for (k, v) in content.lines().filter_map(infynitae_wayland::config_line) {
             if k.trim() == "SESSION_RESTORE" {
-                return !matches!(v.trim().to_lowercase().as_str(), "0" | "false" | "off" | "no");
+                return !matches!(
+                    v.trim().to_lowercase().as_str(),
+                    "0" | "false" | "off" | "no"
+                );
             }
         }
     }
@@ -715,6 +704,9 @@ pub fn run(args: &[String]) -> ExitCode {
             let mut ipc = Socket(0);
             let first_id = ipc.next().as_u64().unwrap_or(1);
             save_snapshot(&session_path(), &mut ipc, first_id);
+            // a minute without an answer: the compositor is gone (the session ended, or this was
+            // started outside one), and the next session starts its own watcher
+            let mut unanswered = 0;
             loop {
                 std::thread::sleep(WATCH_INTERVAL);
                 if !session_restore_enabled() {
@@ -722,7 +714,14 @@ pub fn run(args: &[String]) -> ExitCode {
                     return ExitCode::SUCCESS;
                 }
                 let id = ipc.next().as_u64().unwrap_or(1);
-                save_snapshot(&session_path(), &mut ipc, id);
+                if save_snapshot(&session_path(), &mut ipc, id) {
+                    unanswered = 0;
+                } else {
+                    unanswered += 1;
+                    if unanswered >= 4 {
+                        return ExitCode::FAILURE;
+                    }
+                }
             }
         }
         Some("save") => {

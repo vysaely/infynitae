@@ -1780,10 +1780,7 @@ impl Core {
             && ptr_out == output.id
             && ((p.0 - extent.0 / 2.0).abs() > 1.0 || (p.1 - extent.1 / 2.0).abs() > 1.0)
         {
-            let cd = (
-                (p.0 - extent.0 / 2.0) / zoom,
-                (p.1 - extent.1 / 2.0) / zoom,
-            );
+            let cd = ((p.0 - extent.0 / 2.0) / zoom, (p.1 - extent.1 / 2.0) / zoom);
             CanvasPos {
                 x: axis(
                     centre.x.saturating_add(geom::q16(cd.0)),

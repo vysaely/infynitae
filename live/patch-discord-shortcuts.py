@@ -18,6 +18,17 @@ def patch_file(path: str) -> bool:
 
     orig = bytes(data)
 
+    # BuildTrigger's X11 105 (Right Ctrl) check, before and after step 4a: it says whether this
+    # build is one the patch knows and whether an earlier run patched it already. A patched file
+    # is left as it is: the jump-table search (4b) must never run twice, since the table it
+    # patched no longer matches and a second run would rewrite the next lookalike instead
+    old_kc105 = bytes.fromhex("4183f96974b34183f96c74a7")
+    new_kc105 = bytes.fromhex("4183f96990904183f96c74a7")
+    if new_kc105 in data:
+        return False
+    if old_kc105 not in data:
+        return False  # an unknown build: patching it by search could break it
+
     # 1. Patch kKeyMap evdev codes for F13..F16 (183, 184, 185, 186 -> 42, 29, 54, 97)
     # Each entry is 16 bytes: <uint64 evdev_code, uint64 char_ptr>
     for old_evdev, new_evdev, name in [
@@ -68,10 +79,7 @@ def patch_file(path: str) -> bool:
 
     # 4. Patch BuildTrigger Loop 2:
     # (a) X11 105 (0x69) check: nop out `je` so kc=105 falls through to kKeyMap lookup
-    old_kc105 = bytes.fromhex("4183f96974b34183f96c74a7")
-    new_kc105 = bytes.fromhex("4183f96990904183f96c74a7")
-    if old_kc105 in data:
-        data = data.replace(old_kc105, new_kc105)
+    data = data.replace(old_kc105, new_kc105)
 
     # (b) Jump table entry 25 (kc = 37 + 25 = 62, Right Shift):
     # Find the 28-entry jump table in .rodata where entry[1..12] == entry[14..24]

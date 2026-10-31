@@ -1195,8 +1195,7 @@ pub fn run_console_with(
                         .trim_end_matches("_RATE")
                         .replace('_', "-");
                     if let Ok(r) = val.parse::<f64>() {
-                        custom_rates
-                            .insert(conn_name.to_lowercase(), (r * 1000.0).round() as u32);
+                        custom_rates.insert(conn_name.to_lowercase(), (r * 1000.0).round() as u32);
                     }
                 } else if key.starts_with("OUTPUT_") && key.ends_with("_MODE") {
                     let conn_name = key

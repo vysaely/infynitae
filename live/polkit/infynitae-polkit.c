@@ -194,12 +194,15 @@ static void read_cfg_val(const char *line, const char *key, char *dst, size_t ds
     if (strncmp(line, key, klen) != 0 || line[klen] != '=') return;
     const char *p = line + klen + 1;
     while (*p == ' ' || *p == '\t' || *p == '"' || *p == '\'') p++;
+    /* a color only (#rrggbb or a name): anything else would end up in the CSS and break it all */
+    char val[32];
     size_t j = 0;
-    while (p[j] && p[j] != '"' && p[j] != '\'' && p[j] != '\n' && p[j] != '\r' && j + 1 < dst_sz) {
-        dst[j] = p[j];
+    while ((g_ascii_isalnum(p[j]) || (j == 0 && p[j] == '#')) && j + 1 < sizeof(val)) {
+        val[j] = p[j];
         j++;
     }
-    if (j > 0) dst[j] = '\0';
+    val[j] = '\0';
+    if (j > 1 && j < dst_sz) memcpy(dst, val, j + 1);
 }
 
 static void apply_css(void) {

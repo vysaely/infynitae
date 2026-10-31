@@ -166,9 +166,15 @@ fi
 
 # Notifications: NOTIFICATIONS picks the daemon ("auto": mako, swaync, dunst, fnott, the first
 # installed; "none": none; or a command). Started here so the choice wins over D-Bus activation.
-if [ -f "$HOME/infynitae/live/patch-discord-shortcuts.py" ] && command -v python3 >/dev/null 2>&1; then
-    python3 "$HOME/infynitae/live/patch-discord-shortcuts.py" >/dev/null 2>&1 &
-fi
+# Discord's lone Right Shift / Right Ctrl keybinds, by patching its files (DISCORD_KEY_PATCH; off:
+# GLOBAL_SHORTCUTS gives any of its shortcuts any key without touching Discord)
+case "${DISCORD_KEY_PATCH:-false}" in
+    1|true|yes|on|TRUE|True)
+        if [ -f "$HOME/infynitae/live/patch-discord-shortcuts.py" ] && command -v python3 >/dev/null 2>&1; then
+            python3 "$HOME/infynitae/live/patch-discord-shortcuts.py" >/dev/null 2>&1 &
+        fi
+        ;;
+esac
 NOTIFY_CMD=""
 case "${NOTIFICATIONS:-auto}" in
     none|off|false) ;;

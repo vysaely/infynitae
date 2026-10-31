@@ -177,6 +177,7 @@ impl WaylandState {
                         time_ms,
                         mods_changed,
                     );
+                    self.forward_key_to_x11(key, pressed, mods, time_ms);
                 }
                 Effect::KeyboardIntercept { .. } => {}
                 // an output change is news to the focused client: Core's true position after it

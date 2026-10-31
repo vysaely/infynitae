@@ -36,6 +36,20 @@ OUTPUT_SCALE="${OUTPUT_SCALE:-1.0}"
 XKB_DEFAULT_LAYOUT="${XKB_DEFAULT_LAYOUT:-us}"
 XKB_DEFAULT_OPTIONS="${XKB_DEFAULT_OPTIONS:-}"
 
+# Writes stdin to $1 only when it differs: an unchanged login touches no file, so the apps that
+# watch their config (kitty, alacritty, mako) are not reloaded for nothing. PUT_CHANGED says
+# whether it changed; it always succeeds (this script runs with set -e).
+put_file() {
+    PUT_CHANGED=false
+    cat > "$1.new.$$" || { rm -f "$1.new.$$"; return 0; }
+    if cmp -s "$1.new.$$" "$1"; then
+        rm -f "$1.new.$$"
+    else
+        mv -f "$1.new.$$" "$1" && PUT_CHANGED=true
+    fi
+    return 0
+}
+
 apply_settings() {
     # 1. Export standard environment variables
     export XCURSOR_THEME="$CURSOR_THEME"
@@ -52,7 +66,7 @@ apply_settings() {
 
     # 2. Synchronize Xwayland & Legacy X11 fallback cursor (~/.icons/default/index.theme)
     mkdir -p "$HOME/.icons/default"
-    cat << EOF > "$HOME/.icons/default/index.theme"
+    put_file "$HOME/.icons/default/index.theme" << EOF
 [Icon Theme]
 Name=Default
 Comment=Default Cursor Theme
@@ -62,7 +76,7 @@ EOF
     # 3. Synchronize GTK 3 & GTK 4 settings.ini + unified gtk.css (zero daemons, pure disk file)
     for gtk_dir in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do
         mkdir -p "$gtk_dir"
-        cat << EOF > "$gtk_dir/settings.ini"
+        put_file "$gtk_dir/settings.ini" << EOF
 [Settings]
 gtk-cursor-theme-name=$CURSOR_THEME
 gtk-cursor-theme-size=$CURSOR_SIZE
@@ -76,7 +90,7 @@ EOF
             0|false|no|off|FALSE|False) ;;
             *)
                 if [ ! -f "$gtk_css" ] || grep -q 'managed by infynitae' "$gtk_css" 2>/dev/null; then
-                    cat << EOF > "$gtk_css"
+                    put_file "$gtk_css" << EOF
 /* managed by infynitae — delete this line to keep custom GTK CSS */
 @define-color theme_bg_color $SURFACE_COLOR;
 @define-color theme_fg_color $TEXT_COLOR;
@@ -109,7 +123,7 @@ EOF
     mako_cfg="$HOME/.config/mako/config"
     if [ ! -f "$mako_cfg" ] || grep -q 'managed by infynitae' "$mako_cfg" 2>/dev/null; then
         mkdir -p "$HOME/.config/mako"
-        cat << EOF > "$mako_cfg"
+        put_file "$mako_cfg" << EOF
 # managed by infynitae — minimalist single-border notification toast (5s auto-expire + history)
 font=Sans 8.5
 markup=1
@@ -134,7 +148,7 @@ anchor=top-right
 [mode=do-not-disturb]
 invisible=1
 EOF
-        if command -v makoctl >/dev/null 2>&1 && pgrep -x mako >/dev/null 2>&1; then
+        if [ "$PUT_CHANGED" = true ] && command -v makoctl >/dev/null 2>&1 && pgrep -x mako >/dev/null 2>&1; then
             makoctl reload >/dev/null 2>&1 || true
         fi
     fi
@@ -142,7 +156,7 @@ EOF
     fuzzel_cfg="$HOME/.config/fuzzel/fuzzel.ini"
     if [ ! -f "$fuzzel_cfg" ] || grep -q 'managed by infynitae' "$fuzzel_cfg" 2>/dev/null; then
         mkdir -p "$HOME/.config/fuzzel"
-        cat << EOF > "$fuzzel_cfg"
+        put_file "$fuzzel_cfg" << EOF
 # managed by infynitae — delete this line to keep custom fuzzel settings
 [main]
 font=${FONT_NAME}:size=${FONT_SIZE}
@@ -172,7 +186,7 @@ EOF
     foot_cfg="$HOME/.config/foot/foot.ini"
     if [ ! -f "$foot_cfg" ] || grep -q 'managed by infynitae' "$foot_cfg" 2>/dev/null; then
         mkdir -p "$HOME/.config/foot"
-        cat << EOF > "$foot_cfg"
+        put_file "$foot_cfg" << EOF
 # managed by infynitae — delete this line to keep custom foot settings
 [main]
 font=${FONT_NAME}:size=${FONT_SIZE}
@@ -195,7 +209,7 @@ EOF
 
     kitty_theme="$HOME/.config/kitty/infynitae-theme.conf"
     mkdir -p "$HOME/.config/kitty"
-    cat << EOF > "$kitty_theme"
+    put_file "$kitty_theme" << EOF
 # managed by infynitae
 font_family      $FONT_NAME
 font_size        $FONT_SIZE
@@ -208,7 +222,7 @@ window_padding_width 6
 EOF
     kitty_cfg="$HOME/.config/kitty/kitty.conf"
     if [ ! -f "$kitty_cfg" ] || grep -q 'managed by infynitae' "$kitty_cfg" 2>/dev/null; then
-        cat << 'EOF' > "$kitty_cfg"
+        put_file "$kitty_cfg" << 'EOF'
 # managed by infynitae — delete this line to keep custom kitty settings
 include infynitae-theme.conf
 EOF
@@ -216,14 +230,14 @@ EOF
 
     alacritty_theme="$HOME/.config/alacritty/infynitae-theme.toml"
     mkdir -p "$HOME/.config/alacritty"
-    cat << EOF > "$alacritty_theme"
+    put_file "$alacritty_theme" << EOF
 # managed by infynitae
 [window]
 padding = { x = 8, y = 8 }
 dynamic_padding = true
 
 [font]
-size = ${FONT_SIZE}.0
+size = $(case "$FONT_SIZE" in *.*) echo "$FONT_SIZE" ;; *) echo "$FONT_SIZE.0" ;; esac)
 normal = { family = "$FONT_NAME", style = "Regular" }
 
 [colors.primary]
@@ -240,11 +254,14 @@ background = "#262b38"
 EOF
     alacritty_cfg="$HOME/.config/alacritty/alacritty.toml"
     if [ ! -f "$alacritty_cfg" ] || grep -q 'managed by infynitae' "$alacritty_cfg" 2>/dev/null; then
-        cat << 'EOF' > "$alacritty_cfg"
+        put_file "$alacritty_cfg" << 'EOF'
 # managed by infynitae — delete this line to keep custom alacritty settings
 general.import = ["~/.config/alacritty/infynitae-theme.toml"]
 EOF
-    elif ! grep -q 'infynitae-theme\.toml' "$alacritty_cfg" 2>/dev/null; then
+    # your own alacritty.toml: the import goes first, unless the file has a [general] table or a
+    # general.* key of its own (a second definition of the table makes TOML reject the whole file)
+    elif ! grep -q 'infynitae-theme\.toml' "$alacritty_cfg" 2>/dev/null \
+        && ! grep -qE '^[[:space:]]*(\[general\]|general\.|import[[:space:]]*=)' "$alacritty_cfg"; then
         # Prepend import while preserving the user's existing alacritty.toml rules
         {
             echo 'general.import = ["~/.config/alacritty/infynitae-theme.toml"]'
