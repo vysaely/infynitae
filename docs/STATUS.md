@@ -59,7 +59,7 @@ These pass the test suite but have not run on a real screen or device yet:
   still connected keeps being drawn as before.
 - **Zoomed-out windows averaged** (`SCALING_FILTER`, `fast` turns it off): text and thin lines
   stay legible below 100% instead of shimmering; checked on this GPU off-screen. `MAX_APP_SCALE`
-  sets how far apps redraw sharper as you zoom in (default 3).
+  sets how far apps redraw sharper as you zoom in (default 1: zooming in magnifies without the app redrawing; 2 or 3 redraw sharper).
 - **Open with, everywhere:** `infynitae-open-with FILE` picks an app for a file (the default
   marked) and can save it as the default in `mimeapps.list`, which GTK, KDE and `xdg-open` share;
   `xdg-open` says so when no app opens a type. KDE apps (Dolphin) get the menu file their "Open
