@@ -423,3 +423,32 @@ fn a_session_started_locked_stays_locked_until_a_lock_client_unlocks() {
     super_delete(&mut r);
     assert_eq!(r.ls.probe.close_requests, [idx], "bindings work again");
 }
+
+/// M4 (owner, 2026-10-31): when the lock holder's client dies while locked, the session stays
+/// locked and the compositor starts the locker itself, again every few seconds until one holds
+/// the lock; a living holder is never replaced.
+#[test]
+fn a_dead_locker_is_started_again_by_the_compositor() {
+    let (mut r, _) = focused_w();
+    let mut x = Intruder::connect(&mut r);
+    let manager: ExtSessionLockManagerV1 = x.bind(&r, "ext_session_lock_manager_v1", 1);
+    let _held = manager.lock(&x.queue.handle(), ());
+    x.send(&mut r);
+    assert!(r.ls.state.is_locked());
+    let t0 = std::time::Instant::now();
+    assert!(!r.ls.state.restart_dead_locker(t0), "the holder lives");
+    drop(x);
+    r.ls.pump();
+    assert!(r.ls.state.is_locked(), "its death unlocks nothing");
+    assert!(r.ls.state.restart_dead_locker(t0));
+    assert!(
+        !r.ls
+            .state
+            .restart_dead_locker(t0 + std::time::Duration::from_secs(1))
+    );
+    assert!(
+        r.ls.state
+            .restart_dead_locker(t0 + std::time::Duration::from_secs(6))
+    );
+    assert_eq!(r.ls.state.locker_restarts(), 2);
+}

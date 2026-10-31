@@ -557,6 +557,7 @@ impl Session {
             (self.serve_sandbox)(source, context);
         }
         state.settle_unlock();
+        state.restart_dead_locker(Instant::now());
         state.clear_orphaned_selections();
         state.refuse_client_drags();
         state.prune_disabled_outputs();

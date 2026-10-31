@@ -60,4 +60,5 @@ the clipboard while it has the keyboard focus, and drag and drop.
 
 Nothing captures (a capture shows the lock screen or is refused), no virtual keyboard or input
 method reaches anything, and only the lock screen gets keys. Only the program that locked can
-unlock, and only an allowed locker may take the lock.
+unlock, and only an allowed locker may take the lock. If the lock screen's program dies while
+locked, the session stays locked and the compositor starts the lock screen again itself.
