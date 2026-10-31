@@ -33,6 +33,8 @@ notify() {
 }
 
 removable_drives=""
+# fields of the parsed lines: not a tab, which `read` merges when a field (a label) is empty
+SEP=$(printf '\037')
 
 is_removable_drive() {
     drv="$1"
@@ -104,7 +106,7 @@ scan_existing() {
     dump=$(run_udisksctl dump 2>/dev/null) || return 0
     [ -n "$dump" ] || return 0
 
-    items=$(printf '%s\n' "$dump" | awk '
+    items=$(printf '%s\n' "$dump" | awk -v SEP="$SEP" '
     BEGIN {
         q = sprintf("%c", 39)
     }
@@ -159,7 +161,7 @@ scan_existing() {
     }
     END {
         for (d in removable) {
-            print "DRIVE\t" d
+            print "DRIVE" SEP d
         }
         for (o in device) {
             if (o in mountpoints) {
@@ -168,13 +170,13 @@ scan_existing() {
                 ha = (hintauto[o] == "true") ? "true" : "false"
                 hs = (hintsystem[o] == "true") ? "true" : "false"
                 hi = (hintignore[o] == "true") ? "true" : "false"
-                print "BLOCK\t" device[o] "\t" label[o] "\t" ha "\t" hs "\t" hi "\t" is_mounted "\t" d
+                print "BLOCK" SEP device[o] SEP label[o] SEP ha SEP hs SEP hi SEP is_mounted SEP d
             }
         }
     }
     ')
 
-    while IFS='	' read -r type f1 f2 f3 f4 f5 f6 f7; do
+    while IFS="$SEP" read -r type f1 f2 f3 f4 f5 f6 f7; do
         case "$type" in
             DRIVE)
                 removable_drives="$removable_drives $f1 "
@@ -188,6 +190,23 @@ $items
 EOF
 }
 
+# A block's label, HintAuto, HintSystem, HintIgnore, mounted (1/0) and drive, from udisksctl info
+# (false when udisks does not know it)
+block_info() {
+    run_udisksctl info -b "$1" 2>/dev/null | awk -v SEP="$SEP" '
+    /^  org\.freedesktop\.UDisks2\./ { section = $1; sub(/:$/, "", section) }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "IdLabel:" { l = $0; sub(/^ +IdLabel: */, "", l); label = l }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "HintAuto:" { ha = $2 }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "HintSystem:" { hs = $2 }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "HintIgnore:" { hi = $2 }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "Drive:" { d = $2; gsub(/\047/, "", d) }
+    section == "org.freedesktop.UDisks2.Filesystem" && $1 == "MountPoints:" { if (NF > 1) m = 1 }
+    END {
+        if (d == "") exit 1
+        print label SEP (ha == "true" ? "true" : "false") SEP (hs == "true" ? "true" : "false") SEP (hi == "true" ? "true" : "false") SEP (m ? 1 : 0) SEP d
+    }'
+}
+
 process_line() {
     line="$1"
     case "$line" in
@@ -196,7 +215,7 @@ process_line() {
         *) return 0 ;;
     esac
 
-    parsed=$(printf '%s\n' "$line" | awk '
+    parsed=$(printf '%s\n' "$line" | awk -v SEP="$SEP" '
     BEGIN {
         q = sprintf("%c", 39)
     }
@@ -212,7 +231,7 @@ process_line() {
 
             if (line ~ (q "org\\.freedesktop\\.UDisks2\\.Drive" q)) {
                 rem = (match(line, q "Removable" q ": <true>")) || (match(line, q "MediaRemovable" q ": <true>"))
-                if (rem) printf "DRIVE_ADD\t%s\n", obj
+                if (rem) printf "DRIVE_ADD%s%s\n", SEP, obj
                 next
             }
 
@@ -253,7 +272,7 @@ process_line() {
                         is_mounted = "1"
                     }
                 }
-                printf "BLOCK_ADD\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n", dev, label, hint_auto, hint_sys, hint_ign, is_mounted, drive
+                printf "BLOCK_ADD%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n", SEP, dev, SEP, label, SEP, hint_auto, SEP, hint_sys, SEP, hint_ign, SEP, is_mounted, SEP, drive
                 next
             }
         } else if (line ~ /InterfacesRemoved/) {
@@ -262,7 +281,7 @@ process_line() {
                 obj = substr(line, RSTART, RLENGTH)
                 sub("^objectpath " q, "", obj)
                 sub(q "$", "", obj)
-                printf "REMOVED\t%s\n", obj
+                printf "REMOVED%s%s\n", SEP, obj
             }
             next
         }
@@ -271,13 +290,24 @@ process_line() {
 
     [ -n "$parsed" ] || return 0
 
-    while IFS='	' read -r type f1 f2 f3 f4 f5 f6 f7; do
+    while IFS="$SEP" read -r type f1 f2 f3 f4 f5 f6 f7; do
         case "$type" in
             DRIVE_ADD)
                 removable_drives="$removable_drives $f1 "
                 log "drive added: $f1"
                 ;;
             BLOCK_ADD)
+                if [ -z "$f7" ]; then
+                    # the filesystem came alone, once udisks probed it: the block's hints from
+                    # udisks itself, not guessed
+                    if ! info=$(block_info "$f1"); then
+                        log "no information on $f1 from udisks: not mounted"
+                        continue
+                    fi
+                    IFS="$SEP" read -r f2 f3 f4 f5 f6 f7 <<INFO
+$info
+INFO
+                fi
                 handle_block "$f1" "$f2" "$f3" "$f4" "$f5" "$f6" "$f7"
                 ;;
             REMOVED)
