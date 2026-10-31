@@ -281,6 +281,7 @@ impl WaylandState {
                 location,
                 time_ms,
             } => {
+                self.pointer_motions += 1;
                 let focus = self.focus(target);
                 let location = convert::canvas_to_global(location);
                 // a grab may deliver the motion elsewhere or not at all: always passed on, and
