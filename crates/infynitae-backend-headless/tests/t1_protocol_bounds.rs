@@ -127,11 +127,18 @@ fn a_window_opening_larger_than_its_room_is_offered_the_room() {
 }
 
 /// The VM's case (2026-10-31): a terminal is open in the middle of the screen when a window opens
-/// too large. Fitted to the room, it has no place beside the terminal that is on the screen: it
-/// takes the middle of the view, and the terminal is pushed aside on the canvas, uncovered.
+/// too large. It used to take the middle of the view and push the terminal aside (the owner's
+/// decision earlier that day). The owner's rule since (2026-10-31): every new window opens in free
+/// space near the cursor, never over another window and never moving one. Fitted to the room, it
+/// has no free place on the screen beside the terminal: it takes the nearest free place on the
+/// Canvas (a window the user opened brings the camera to it, TELEPORT_ON_OPEN), and the terminal
+/// stays where it was.
 #[test]
-fn a_fitted_window_takes_the_view_and_pushes_the_others_aside() {
+fn a_fitted_window_takes_free_space_and_moves_no_other_window() {
     let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    ls.state
+        .core_mut()
+        .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
     let qh = ls.qh.clone();
     let room = (1920 - 24, 1080 - 24);
     ls.probe.toplevel(&qh, "Terminal", (800, 600), 0);
@@ -144,14 +151,17 @@ fn a_fitted_window_takes_the_view_and_pushes_the_others_aside() {
         .mapped_elements()
         .first()
         .expect("mapped");
-    // the pointer toward the bottom right, as in the VM: the nearest free place is then below the
-    // terminal, off the screen
+    let t0 = ls.state.core().stage().anchor(terminal).expect("anchor");
+    // the pointer toward the bottom right, as in the VM
     let d = (500.0, 400.0);
     infynitae_backend_headless::pointer_motion(&mut ls.state, &mut ls.input, d, d, 1).unwrap();
     adv(&mut ls);
 
-    ls.probe.toplevel(&qh, "XTerm", (2404, 1954), 0);
+    let xterm = ls.probe.toplevel(&qh, "XTerm", (2404, 1954), 0);
     adv(&mut ls);
+    adv(&mut ls);
+    ls.probe.surfaces[xterm].size = room;
+    ls.probe.draw(&qh, xterm);
     adv(&mut ls);
     let core = ls.state.core();
     let big = *core
@@ -161,18 +171,16 @@ fn a_fitted_window_takes_the_view_and_pushes_the_others_aside() {
         .find(|e| **e != terminal)
         .expect("the second window");
     let a = core.stage().anchor(big).expect("anchor");
-    let c = core.cameras().center(0).expect("camera");
-    let (cx, cy) = (c.x >> 16, c.y >> 16);
     let (w, h) = (i64::from(room.0), i64::from(room.1));
-    assert!(
-        a.x >= cx - 960 && a.x + w <= cx + 960 && a.y >= cy - 540 && a.y + h <= cy + 540,
-        "the fitted window {a:?} is on the screen around {cx},{cy}"
-    );
     let t = core.stage().anchor(terminal).expect("terminal anchor");
-    let apart = t.x + 800 <= a.x || t.x >= a.x + w || t.y + 600 <= a.y || t.y >= a.y + h;
+    assert_eq!(t, t0, "the terminal is not moved");
+    let apart = t.x + 800 + 12 <= a.x
+        || t.x >= a.x + w + 12
+        || t.y + 600 + 12 <= a.y
+        || t.y >= a.y + h + 12;
     assert!(
         apart,
-        "the terminal {t:?} is pushed off the fitted window {a:?}"
+        "the fitted window {a:?} is beside the terminal {t:?}"
     );
 }
 

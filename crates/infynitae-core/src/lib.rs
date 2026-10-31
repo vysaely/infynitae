@@ -391,6 +391,18 @@ pub struct Core {
     /// changes: until then its geometry is still the fullscreen one, so a new grant saves this
     /// size and not that one. Written by `core::protocol` alone.
     restore_offers: Vec<(stage::ElementId, geom::LocalSize)>,
+    /// The size each window was last asked for by the compositor (a maximize and its restore, a
+    /// resize, the room, the size after fullscreen), carried by every later configure until the
+    /// client acknowledges it and draws another size, or unmaps (INV-PROTO-1, amended
+    /// 2026-10-31). Written by `core::protocol` alone.
+    held_sizes: Vec<(stage::ElementId, geom::LocalSize)>,
+    /// The windows Super+Enter maximized (`EnterMode::Maximize`) and the output whose usable
+    /// area they fill: a change of that output fits them to it again.
+    maximized: Vec<(stage::ElementId, output::OutputId)>,
+    /// Windows whose fullscreen ended and that have not drawn a windowed frame yet: that frame
+    /// decides whether they keep their place (owner, 2026-10-31). Written by `core::protocol`
+    /// (and dropped by a Super+drag out of fullscreen, which places the window itself).
+    returning: Vec<stage::ElementId>,
     /// The window a Super+right drag resizes, until the client has drawn the last size asked of
     /// it (`core::protocol` writes it).
     resize: Option<protocol::ResizeTrack>,
@@ -503,6 +515,9 @@ impl Core {
                 fullscreen: Vec::new(),
                 premap_fullscreen: Vec::new(),
                 restore_offers: Vec::new(),
+                held_sizes: Vec::new(),
+                maximized: Vec::new(),
+                returning: Vec::new(),
                 resize: None,
                 shell_stream: false,
                 layers: Vec::new(),

@@ -233,9 +233,19 @@ impl WaylandState {
         let mapped = tree.root().is_some_and(|r| r.mapped);
         // listed while mapped: not yet, so this commit maps it
         let opens = mapped && !self.foreign_toplevels.contains_key(&id);
+        let drawn = tree.geometry.size;
         let _ = self.with_effects(|core, fx| {
             core.toplevel_committed_acked_into(id, tree, acked_fullscreen, fx)
         });
+        // the size this frame answers: a window that drew another size than the one it is held
+        // to, under a configure that asked for it, has chosen its own (INV-PROTO-1)
+        if mapped {
+            let acked = window
+                .toplevel()
+                .and_then(|t| t.current_state().size)
+                .map(|s| infynitae_core::geom::LocalSize { w: s.w, h: s.h });
+            self.core.toplevel_size_drawn(id, acked, drawn);
+        }
         self.list_toplevel(id, mapped);
         if opens && !acked_fullscreen {
             self.fit_opening_window(id, &window);
