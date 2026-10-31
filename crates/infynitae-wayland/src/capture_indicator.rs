@@ -237,7 +237,7 @@ mod tests {
             infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
         let display: Display<WaylandState> = Display::new().unwrap();
         let mut state = WaylandState::new(&display.handle(), core);
-        let mut insert = |data: crate::ClientState| {
+        let insert = |data: crate::ClientState| {
             let (server, client) = std::os::unix::net::UnixStream::pair().unwrap();
             let c = display
                 .handle()
