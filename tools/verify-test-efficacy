@@ -748,7 +748,7 @@ CONTROLS = [
     ("INC-7 INV-OUTPUT-1: a removed output's fullscreen element is not told and keeps its state", f"{CORE}/entry.rs",
      "        let restored = self.fullscreen_output_removed(output);", "        let restored: Vec<Effect> = Vec::new();",
      "infynitae-backend-headless", ["--test", "t1_fullscreen"], "the_client_can_name_the_output"),
-    ("INC-7 adapter: an offered size stays in every later configure (a second fullscreen-size authority)", f"{WAYLAND}/outputs.rs",
+    ("INC-7 adapter: an offered size stays in later configures after the client chose its own (a second size authority)", f"{WAYLAND}/outputs.rs",
      "            s.size = size.map(Into::into);", "            if size.is_some() {\n                s.size = size.map(Into::into);\n            }",
      "infynitae-backend-headless", ["--test", "t1_fullscreen"], "a_focused_client_goes_fullscreen_and_back"),
     ("INC-7 adapter: the adapter grants fullscreen itself (Smithay-style handler)", f"{WAYLAND}/handlers.rs",
@@ -2005,6 +2005,21 @@ CONTROLS = [
      "        let child = command.spawn();\n",
      "infynitae-wayland", ["--test", "satellite_ownership"],
      "the_orphan_reaper_leaves_the_satellite_to_its_supervisor"),
+    # ---- window states (owner, 2026-10-31: "maximizing is lost on window switch")
+    ("INV-PROTO-1 (2026-10-31): a configure without an offer drops the held size (0x0)", f"{WAYLAND}/outputs.rs",
+     "        let size = state.size.map(|s| (s.w, s.h)).or(offered).or(held);",
+     "        let size = state.size.map(|s| (s.w, s.h)).or(offered).or(held.filter(|_| false));",
+     "infynitae-backend-headless", ["--test", "t1_window_states"],
+     "a_maximized_window_keeps_its_size_through_focus_changes"),
+    ("INV-PROTO-1 (2026-10-31): a window that drew its own size is still held to the old one", f"{CORE}/protocol.rs",
+     "            && drawn != held\n",
+     "            && drawn != held\n            && false\n",
+     "infynitae-backend-headless", ["--test", "t1_window_states"], "a_window_that_takes_its_own_size_is_let_go"),
+    ("INV-PROTO-1 (2026-10-31): a frame drawn before the client read the size lets it go", f"{CORE}/protocol.rs",
+     "            && acked == Some(held)\n",
+     "            && (acked == Some(held) || acked != Some(held))\n",
+     "infynitae-backend-headless", ["--test", "t1_window_states"],
+     "a_frame_drawn_before_the_maximize_was_read_keeps_the_hold"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

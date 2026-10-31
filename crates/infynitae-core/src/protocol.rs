@@ -380,6 +380,9 @@ pub struct ToplevelConfigureState {
     /// The size asked of the client: the fullscreen output's logical size, or none (0×0: the
     /// client chooses).
     pub size: Option<LocalSize>,
+    /// Not fullscreen: the size the compositor last asked of the window and still holds it to
+    /// (INV-PROTO-1, amended 2026-10-31), for a configure that offers no other size.
+    pub held: Option<LocalSize>,
 }
 
 impl Core {
@@ -425,6 +428,7 @@ impl Core {
         let Some(fs) = self.fullscreen_of(id) else {
             return ToplevelConfigureState {
                 resizing,
+                held: self.held_size(id),
                 ..ToplevelConfigureState::default()
             };
         };
@@ -439,6 +443,52 @@ impl Core {
             fullscreen: Some(fs.output),
             resizing,
             size,
+            held: None,
+        }
+    }
+
+    /// The size the compositor holds `id` to, if any (INV-PROTO-1, amended 2026-10-31).
+    pub fn held_size(&self, id: ElementId) -> Option<LocalSize> {
+        self.held_sizes
+            .iter()
+            .find(|(e, _)| *e == id)
+            .map(|(_, s)| *s)
+    }
+
+    /// The adapter sent `id` a configure asking for `size` (a maximize, its restore, a resize,
+    /// the room, the size after fullscreen): every later configure carries it too. Apps told they
+    /// are tiled on every side (SQUARE_CORNERS) take a configure without a size as "back to your
+    /// own size" and dropped a maximized size at the next focus change (owner, 2026-10-31).
+    /// Ignored while `id` is fullscreen (its configures carry the output's size) and for an
+    /// element that is not mapped.
+    pub fn toplevel_size_offered(&mut self, id: ElementId, size: LocalSize) {
+        if self.fullscreen_of(id).is_some() || self.stage.mapped(id).is_none() {
+            return;
+        }
+        self.hold_size(id, size);
+    }
+
+    fn hold_size(&mut self, id: ElementId, size: LocalSize) {
+        match self.held_sizes.iter_mut().find(|(e, _)| *e == id) {
+            Some((_, s)) => *s = size,
+            None => self.held_sizes.push((id, size)),
+        }
+    }
+
+    /// `id` committed a frame of `drawn` size under the configure it acknowledged last, which
+    /// asked for `acked` (none: its own choice). A client that acknowledged the held size and
+    /// drew another one chose its own size: it is no longer held to it.
+    pub fn toplevel_size_drawn(
+        &mut self,
+        id: ElementId,
+        acked: Option<LocalSize>,
+        drawn: LocalSize,
+    ) {
+        if let Some(held) = self.held_size(id)
+            && acked == Some(held)
+            && drawn != held
+        {
+            self.held_sizes.retain(|(e, _)| *e != id);
         }
     }
 
@@ -679,6 +729,8 @@ impl Core {
     /// destruction: the protocol state went with the surface's role state). The caller reports
     /// the presentation that ended.
     fn drop_fullscreen(&mut self, id: ElementId) {
+        // nor is it held to a size: its next map starts at its own size
+        self.held_sizes.retain(|(e, _)| *e != id);
         self.premap_fullscreen.retain(|(e, _)| *e != id);
         self.fullscreen.retain(|f| f.element != id);
         self.windowed_placement_pending.retain(|e| *e != id);
@@ -3124,7 +3176,8 @@ mod tests {
             ToplevelConfigureState {
                 fullscreen: Some(a),
                 resizing: false,
-                size: Some(LocalSize { w: 1920, h: 1080 })
+                size: Some(LocalSize { w: 1920, h: 1080 }),
+                held: None,
             }
         );
         assert_eq!(c.presentation(a), Some(w1));
@@ -3261,7 +3314,8 @@ mod tests {
             ToplevelConfigureState {
                 fullscreen: Some(a),
                 resizing: false,
-                size: Some(LocalSize { w: 1920, h: 1080 })
+                size: Some(LocalSize { w: 1920, h: 1080 }),
+                held: None,
             }
         );
         assert_eq!(

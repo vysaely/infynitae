@@ -358,12 +358,6 @@ impl WaylandState {
         self.spawned_children = true;
     }
 
-    /// Sends one `xdg_toplevel.configure` whose states and size are Core's at this moment:
-    /// `activated` from the focus (INV-PROTO-1), `fullscreen` and the fullscreen size from
-    /// OBJ-19 (INV-PRES-1). `offered` is a one-time size offer for a toplevel that is not
-    /// fullscreen (the size saved when fullscreen was granted). Every field is written on every
-    /// configure, so nothing of an earlier one survives in Smithay's pending state: the adapter
-    /// holds no fullscreen state of its own.
     /// The room a window has (xdg_toplevel.configure_bounds): the first screen's usable area at
     /// its current rotation, less the tiling gap on each side, so an app opening at a size of its
     /// own fits a portrait screen instead of keeping its landscape width.
@@ -374,14 +368,27 @@ impl WaylandState {
         Some((fit(w), fit(h)))
     }
 
+    /// Sends one `xdg_toplevel.configure` whose states and size are Core's at this moment:
+    /// `activated` from the focus (INV-PROTO-1), `fullscreen` and the fullscreen size from
+    /// OBJ-19 (INV-PRES-1). `offered` is a size asked of a toplevel that is not fullscreen (a
+    /// maximize, a resize, the size saved when fullscreen was granted): Core holds the window
+    /// to it, and a later configure without an offer carries the held size. Every field is
+    /// written on every configure, so nothing of an earlier one survives in Smithay's pending
+    /// state: the adapter holds no window state of its own.
     pub(crate) fn configure_toplevel(&mut self, id: ElementId, offered: Option<(i32, i32)>) {
+        // a size offered to a window is held: later configures carry it (INV-PROTO-1)
+        if let Some((w, h)) = offered {
+            self.core
+                .toplevel_size_offered(id, infynitae_core::geom::LocalSize { w, h });
+        }
         let Some(t) = self.window(id).and_then(|w| w.toplevel()) else {
             return;
         };
         let activated = self.core.focus().target() == Some(id);
         let square_corners = self.square_corners;
         let state = self.core.toplevel_configure_state(id);
-        let size = state.size.map(|s| (s.w, s.h)).or(offered);
+        let held = state.held.map(|s| (s.w, s.h));
+        let size = state.size.map(|s| (s.w, s.h)).or(offered).or(held);
         let bounds = self.window_room();
         let set = |states: &mut smithay::wayland::shell::xdg::ToplevelStateSet, flag, on: bool| {
             if on {

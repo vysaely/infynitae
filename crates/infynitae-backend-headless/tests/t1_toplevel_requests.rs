@@ -327,8 +327,9 @@ fn the_announced_capabilities_are_what_the_policy_grants() {
 /// 300 requests in a fixed pseudo-random order on a focused window that never resizes: the
 /// configures received are exactly one per state request, in order, and each is what a model of
 /// the policy predicts — `[fullscreen, activated]` with the output's size while fullscreen, the
-/// saved 400x300 once when it ends, `[activated]` with no size otherwise. No anchor, camera or
-/// focus changes.
+/// saved 400x300 when it ends, `[activated]` with no size before the first fullscreen ended and
+/// with the held 400x300 after it (INV-PROTO-1, amended 2026-10-31). No anchor, camera or focus
+/// changes.
 #[test]
 fn a_stream_of_requests_is_answered_one_for_one() {
     let mut t = T::new();
@@ -342,7 +343,7 @@ fn a_stream_of_requests_is_answered_one_for_one() {
     let mut x = 0x9E37_79B9_7F4A_7C15u64;
     let mut expected = Vec::new();
     let mut fullscreen = false;
-    let windowed = ((0, 0), windowed_states(true));
+    let mut windowed = ((0, 0), windowed_states(true));
     let full = ((1920, 1080), vec![FULLSCREEN, ACTIVATED]);
     for _ in 0..300 {
         x ^= x << 13;
@@ -368,7 +369,9 @@ fn a_stream_of_requests_is_answered_one_for_one() {
             }
             3 if fullscreen => {
                 fullscreen = false;
-                expected.push(((400, 300), windowed_states(true)));
+                // the size offered is held from now on
+                windowed = ((400, 300), windowed_states(true));
+                expected.push(windowed.clone());
             }
             3 => expected.push(windowed.clone()),
             _ => {}

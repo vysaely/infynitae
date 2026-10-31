@@ -283,7 +283,12 @@ fn a_focused_client_goes_fullscreen_and_back() {
     assert_eq!(t.ls.state.core().stage().anchor(id), anchor);
     assert_eq!(t.ls.probe.kb.active.as_deref(), Some("W"));
     assert!(t.ls.state.core().fullscreen().is_empty());
-    // later configures carry no size: the offer was made once
+    // later configures carry the size it was asked for (INV-PROTO-1, amended 2026-10-31: an app
+    // told it is tiled takes 0x0 as "back to your own size")
+    let got = t.ask(w, |tl| tl.set_maximized());
+    assert_eq!(got, vec![((200, 100), windowed_states(true))]);
+    // until it draws another size of its own: then the size is its choice again
+    t.resize(w, (300, 150), RED);
     let got = t.ask(w, |tl| tl.set_maximized());
     assert_eq!(got, vec![((0, 0), windowed_states(true))]);
 }
