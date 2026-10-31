@@ -84,9 +84,9 @@ these by date, e.g. "(owner, 2026-10-24)".
   screenshot), every screen shows a red dot, drawn by the compositor and never into a capture, so
   a remote desktop or a share cannot run unseen even when the app shows nothing itself (RustDesk's
   window could not open in this session and its connections ran without any sign). Only the
-  replay buffer's helper is left out, known by its executable's name: a same-user program could
-  take that name, but one that can do that can also turn the dot off in the config; the dot
-  guards against apps behaving as designed, not against malware.
+  replay buffer's helper is left out. Since 2026-10-31 (owner) it is known by the private socket
+  the compositor opens for it (`$XDG_RUNTIME_DIR/infynitae/<socket>.recorder`, in a 0700
+  directory no sandbox is given), never by an executable's name, which any app could copy.
 - **Input methods get nothing while locked** (2026-10-25): the keys go to the lock screen past
   an input method's keyboard grab, a virtual keyboard types nothing, and no text input is enabled,
   so no text (the password field included) reaches an input method or comes from one.

@@ -105,6 +105,9 @@ pub struct ClientState {
     /// Who the client is, for the privileged globals (`trust`). Unset: the compositor's own
     /// connection (an internal socket pair, a test), which is trusted.
     identity: std::sync::OnceLock<trust::Identity>,
+    /// Connected through the recorder's own socket (`session::recorder_socket_path`, M2): the
+    /// replay buffer Infynitae started, left out of the capture mark.
+    recorder: bool,
 }
 
 impl ClientState {
@@ -119,6 +122,18 @@ impl ClientState {
     /// first request is read).
     pub fn identify(&self, identity: trust::Identity) {
         let _ = self.identity.set(identity);
+    }
+
+    /// A client of the recorder's own socket.
+    pub fn recorder() -> ClientState {
+        ClientState {
+            recorder: true,
+            ..ClientState::default()
+        }
+    }
+
+    pub fn is_recorder(&self) -> bool {
+        self.recorder
     }
 
     pub fn identity(&self) -> Option<&trust::Identity> {

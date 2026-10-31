@@ -313,6 +313,10 @@ impl SharedPolicy {
         let Some(state) = client.get_data::<ClientState>() else {
             return false;
         };
+        // the replay recorder Infynitae started captures through its own socket
+        if state.is_recorder() && cap == Capability::Capture {
+            return true;
+        }
         let Some(identity) = state.identity() else {
             // the compositor's own connection
             return true;

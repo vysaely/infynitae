@@ -3,8 +3,9 @@
 //! is never silent. A client counts from each frame it asks for until `HOLD` after its last one.
 //!
 //! The replay buffer's own helper (`infynitae-record-stream`) captures all the time and is left
-//! out: the mark would never go away. It is known by its executable's name, read when a client
-//! starts capturing.
+//! out: the mark would never go away. It is known by the socket it connected to, the recorder's
+//! own that the compositor opened (`session::recorder_socket_path`), never by an executable's
+//! name (M2, owner 2026-10-31).
 //! The mark is drawn on the screen only, never into a capture (`output_elements_screencopy`).
 //!
 //! On a screen showing a fullscreen window the mark steps aside (owner decision 2026-10-26):
@@ -22,9 +23,6 @@ use crate::WaylandState;
 
 /// How long the mark stays after a client's last frame: a share at 1 frame per second keeps it.
 pub const HOLD: Duration = Duration::from_secs(3);
-
-/// The executable left out: the replay buffer's helper.
-const RECORDER: &str = "infynitae-record-stream";
 
 pub struct CaptureIndicator {
     /// Whether the mark is drawn at all (`CAPTURE_INDICATOR`, on by default).
@@ -118,24 +116,15 @@ impl<K: Hash + Eq> Seen<K> {
     }
 }
 
-/// Whether the process is the replay buffer's helper, by its executable's file name.
-fn is_recorder(pid: i32) -> bool {
-    std::fs::read_link(format!("/proc/{pid}/exe"))
-        .ok()
-        .and_then(|p| p.file_name().map(|n| n == RECORDER))
-        .unwrap_or(false)
-}
-
 impl WaylandState {
     /// A client asked for a capture frame: the mark shows (unless the client is left out).
     pub(crate) fn note_capture(&mut self, client: &Client) {
-        let dh = self.dh.clone();
         self.capture_indicator
             .seen
             .note(client.id(), Instant::now(), || {
                 client
-                    .get_credentials(&dh)
-                    .is_ok_and(|c| is_recorder(c.pid))
+                    .get_data::<crate::ClientState>()
+                    .is_some_and(|s| s.is_recorder())
             });
     }
 
@@ -238,9 +227,41 @@ mod tests {
         assert_eq!(s.due(t0), None);
     }
 
+    /// Only a client of the recorder's own socket is left out; any other client shows the mark,
+    /// whatever its executable is called (M2).
     #[test]
-    fn only_the_helper_by_name_is_left_out() {
-        assert!(!is_recorder(std::process::id() as i32), "the test binary");
-        assert!(!is_recorder(-1), "no such process");
+    fn only_the_recorder_socket_is_left_out() {
+        use smithay::reexports::wayland_server::Display;
+        use std::sync::Arc;
+        let (core, _input, _shell, _token) =
+            infynitae_core::Core::new(infynitae_core::navigation::PersistedCameras::default());
+        let display: Display<WaylandState> = Display::new().unwrap();
+        let mut state = WaylandState::new(&display.handle(), core);
+        let mut insert = |data: crate::ClientState| {
+            let (server, client) = std::os::unix::net::UnixStream::pair().unwrap();
+            let c = display
+                .handle()
+                .insert_client(server, Arc::new(data))
+                .unwrap();
+            (c, client)
+        };
+        let (recorder, _r) = insert(crate::ClientState::recorder());
+        let (named, _n) = insert(crate::ClientState::with_identity(
+            crate::trust::Identity::Native {
+                exe: None,
+                path: Some("/tmp/infynitae-record-stream".into()),
+            },
+        ));
+        let now = Instant::now();
+        state.note_capture(&recorder);
+        assert!(
+            !state.capture_indicator.active(now),
+            "the recorder is left out"
+        );
+        state.note_capture(&named);
+        assert!(
+            state.capture_indicator.active(now),
+            "a name exempts nothing"
+        );
     }
 }
