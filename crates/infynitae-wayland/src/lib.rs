@@ -42,6 +42,7 @@ mod shortcuts_inhibit;
 mod signals;
 mod snapshot;
 pub mod tearing;
+pub mod trust;
 pub mod virtual_input;
 mod wlr_toplevels;
 mod x11_keys;
@@ -101,6 +102,28 @@ pub struct ClientState {
     compositor: CompositorClientState,
     /// Whether the client is xwayland-satellite (its surfaces are X11 windows), once asked.
     x11: std::sync::OnceLock<bool>,
+    /// Who the client is, for the privileged globals (`trust`). Unset: the compositor's own
+    /// connection (an internal socket pair, a test), which is trusted.
+    identity: std::sync::OnceLock<trust::Identity>,
+}
+
+impl ClientState {
+    /// A client whose identity is known when it connects (a sandbox's listener).
+    pub fn with_identity(identity: trust::Identity) -> ClientState {
+        let state = ClientState::default();
+        let _ = state.identity.set(identity);
+        state
+    }
+
+    /// Sets the identity of a client that connected to the ordinary socket (once; before its
+    /// first request is read).
+    pub fn identify(&self, identity: trust::Identity) {
+        let _ = self.identity.set(identity);
+    }
+
+    pub fn identity(&self) -> Option<&trust::Identity> {
+        self.identity.get()
+    }
 }
 
 impl ClientData for ClientState {
@@ -278,6 +301,15 @@ pub struct WaylandState {
     drag_started: bool,
     /// `xdg_activation_v1` (B10.7, INV-INPUT-9, W-SM-8).
     activation: XdgActivationState,
+    /// Who may use the privileged globals (`trust`, `ALLOW_*`).
+    pub(crate) trust: trust::SharedPolicy,
+    /// `wp_security_context_manager_v1`: sandboxes (Flatpak) connect their apps through it.
+    _security_context: smithay::wayland::security_context::SecurityContextState,
+    /// Listeners a sandbox created, for the session loop to serve (`Session::dispatch`).
+    pub(crate) security_listeners: Vec<(
+        smithay::wayland::security_context::SecurityContextListenerSource,
+        smithay::wayland::security_context::SecurityContext,
+    )>,
     /// `zwlr_layer_shell_v1` (L1–L8) and its surfaces, in creation order.
     layer_shell: WlrLayerShellState,
     layers: Vec<layers::LayerHandle>,
@@ -538,16 +570,28 @@ impl WaylandState {
             .expect("the seat has a keyboard");
         let capabilities = convert::wm_capabilities(core.toplevel_capabilities());
 
+        // the privileged globals are offered only to the clients the policy allows (`trust`)
+        let trust = trust::SharedPolicy::default();
+        if let Ok(home) = std::env::var("HOME")
+            && let Ok(content) = std::fs::read_to_string(format!("{home}/.config/infynitae/config"))
+        {
+            trust.set(trust_policy(std::path::Path::new(&home), &content));
+        }
+        use trust::Capability as Cap;
         // the primary selection exists before the data-control globals that also serve it
         let primary_selection = PrimarySelectionState::new::<Self>(display);
-        let wlr_data_control = smithay::wayland::selection::wlr_data_control::DataControlState::new::<
-            Self,
-            _,
-        >(display, Some(&primary_selection), |_| true);
-        let ext_data_control = smithay::wayland::selection::ext_data_control::DataControlState::new::<
-            Self,
-            _,
-        >(display, Some(&primary_selection), |_| true);
+        let wlr_data_control =
+            smithay::wayland::selection::wlr_data_control::DataControlState::new::<Self, _>(
+                display,
+                Some(&primary_selection),
+                trust.gate(Cap::Clipboard).filter(),
+            );
+        let ext_data_control =
+            smithay::wayland::selection::ext_data_control::DataControlState::new::<Self, _>(
+                display,
+                Some(&primary_selection),
+                trust.gate(Cap::Clipboard).filter(),
+            );
         let mut state = WaylandState {
             core,
             dh: display.clone(),
@@ -593,17 +637,20 @@ impl WaylandState {
                 Self,
             >(display),
             foreign_toplevel_list:
-                smithay::wayland::foreign_toplevel_list::ForeignToplevelListState::new::<Self>(
-                    display,
-                ),
+                smithay::wayland::foreign_toplevel_list::ForeignToplevelListState::new_with_filter::<
+                    Self,
+                >(display, trust.gate(Cap::Windows).filter()),
             idle_inhibit: idle_inhibit::IdleInhibit::new(display),
             tearing: tearing::Tearing::new(display),
             touch_last: Vec::new(),
             foreign_toplevels: std::collections::HashMap::new(),
             shortcuts_inhibit: shortcuts_inhibit::ShortcutsInhibitState::new(display),
-            wlr_toplevels: wlr_toplevels::WlrToplevelsState::new(display),
-            output_management: output_management::OutputManagementState::new(display),
-            input_method: input_method::InputMethodState::new(display),
+            wlr_toplevels: wlr_toplevels::WlrToplevelsState::new(display, trust.gate(Cap::Windows)),
+            output_management: output_management::OutputManagementState::new(
+                display,
+                trust.gate(Cap::Display),
+            ),
+            input_method: input_method::InputMethodState::new(display, &trust),
             content_type: smithay::wayland::content_type::ContentTypeState::new::<Self>(display),
             alpha_modifier: smithay::wayland::alpha_modifier::AlphaModifierState::new::<Self>(
                 display,
@@ -620,16 +667,28 @@ impl WaylandState {
             data_control_owner: None,
             drag_started: false,
             activation: XdgActivationState::new::<Self>(display),
-            layer_shell: WlrLayerShellState::new::<Self>(display),
+            _security_context: smithay::wayland::security_context::SecurityContextState::new::<
+                Self,
+                _,
+            >(display, trust::SharedPolicy::unsandboxed),
+            security_listeners: Vec::new(),
+            layer_shell: WlrLayerShellState::new_with_filter::<Self, _>(
+                display,
+                trust.gate(Cap::Layers).filter(),
+            ),
             layers: Vec::new(),
             registry: SurfaceRegistry::default(),
             elements: Vec::new(),
             serial_outputs: std::collections::VecDeque::new(),
-            screencopy: screencopy::ScreencopyState::new(display),
-            gamma: gamma::GammaState::new(display),
-            output_power: output_power::OutputPowerState::new(display),
-            virtual_input: virtual_input::VirtualInputState::new(display, seat_keymap),
-            image_copy: image_copy::ImageCopyState::new(display),
+            screencopy: screencopy::ScreencopyState::new(display, trust.gate(Cap::Capture)),
+            gamma: gamma::GammaState::new(display, trust.gate(Cap::Display)),
+            output_power: output_power::OutputPowerState::new(display, trust.gate(Cap::Display)),
+            virtual_input: virtual_input::VirtualInputState::new(
+                display,
+                seat_keymap,
+                trust.gate(Cap::Input),
+            ),
+            image_copy: image_copy::ImageCopyState::new(display, trust.gate(Cap::Capture)),
             dmabuf: DmabufState::new(),
             dmabuf_global: None,
             dmabuf_main_dev: None,
@@ -681,6 +740,7 @@ impl WaylandState {
             leaked_port: unreachable!(),
             #[cfg(feature = "probe_store_output_token_in_state")]
             leaked_token: unreachable!(),
+            trust,
         };
         // a guess until the backend names its GPU (the console does)
         if let Some(dev) = guess_dmabuf_device() {
@@ -862,6 +922,9 @@ impl WaylandState {
         if let Some(ref home) = home {
             let config_path = format!("{home}/.config/infynitae/config");
             if let Ok(content) = std::fs::read_to_string(config_path) {
+                // for the clients that connect from now on
+                self.trust
+                    .set(trust_policy(std::path::Path::new(home), &content));
                 let mut new_wallpaper: Option<String> = None;
                 let mut new_wallpaper_mode: Option<String> = None;
                 let mut free_cursor_on_super = true;
@@ -1561,6 +1624,36 @@ impl WaylandState {
 /// read as one shell word (`"…"` with `\"` escapes, `'…'`, or bare up to a blank), so a `#` or a
 /// quote inside it is kept, and a ` # comment` after it is not. `None` for a comment or a line
 /// without `=`. Pure.
+/// The `ALLOW_*` lists of a config's text (`trust`); a key it lacks keeps its default.
+fn trust_policy(home: &std::path::Path, content: &str) -> trust::Policy {
+    let lines: Vec<(String, String)> = content.lines().filter_map(config_line).collect();
+    let mut lists: Vec<(trust::Capability, String)> = lines
+        .iter()
+        .filter_map(|(k, v)| trust::Capability::from_key(k.trim()).map(|c| (c, v.clone())))
+        .collect();
+    // the locker SCREEN_LOCKER names may hold the lock too
+    let locker = lines
+        .iter()
+        .rev()
+        .find(|(k, _)| k == "SCREEN_LOCKER")
+        .and_then(|(_, v)| v.split_whitespace().next().map(str::to_string))
+        .filter(|l| l != "auto");
+    if let Some(locker) = locker {
+        match lists
+            .iter_mut()
+            .rev()
+            .find(|(c, _)| *c == trust::Capability::Lock)
+        {
+            Some((_, list)) => list.push_str(&format!(" {locker}")),
+            None => lists.push((
+                trust::Capability::Lock,
+                format!("{} {locker}", trust::Capability::Lock.default_list()),
+            )),
+        }
+    }
+    trust::Policy::from_lists(Some(home), lists.iter().map(|(c, v)| (*c, v.as_str())))
+}
+
 pub fn config_line(line: &str) -> Option<(String, String)> {
     let line = line.trim_start();
     if line.starts_with('#') {

@@ -535,6 +535,46 @@ PRIVACY_TITLES=""
     # default: ""
     # options: ""  · e.g. "Password"
 
+# Which apps may use the powers above the normal app's (docs/SECURITY.md). Each list holds
+# app ids (a sandboxed app, e.g. Flatpak: "com.obsproject.Studio") and program names or paths
+# (a desktop app, known by its real file), separated by spaces. The word "native" lets every
+# desktop app in; take it out to allow only the ones named. A sandboxed app gets a power only
+# when its app id is listed. Infynitae's own helpers always have what they need. Applies to
+# apps that start after you save.
+
+ALLOW_CAPTURE="native grim wf-recorder obs xdg-desktop-portal-wlr"
+    # Capture the screen or a window directly (screenshots, recorders, screen sharing)
+    # default: "native grim wf-recorder obs xdg-desktop-portal-wlr"
+
+ALLOW_CLIPBOARD="native wl-copy wl-paste cliphist wl-clip-persist"
+    # Read and set the clipboard at any time, without focus (clipboard managers)
+    # default: "native wl-copy wl-paste cliphist wl-clip-persist"
+
+ALLOW_INPUT="native wtype ydotool"
+    # Type and move the mouse as if you did (virtual keyboard and pointer)
+    # default: "native wtype ydotool"
+
+ALLOW_INPUT_METHOD="native fcitx5"
+    # Be the input method (it sees every key you type)
+    # default: "native fcitx5"
+
+ALLOW_WINDOWS="native"
+    # List every window and focus or close any (taskbars, window switchers)
+    # default: "native"
+
+ALLOW_DISPLAY="native wlr-randr kanshi wlsunset gammastep"
+    # Change screen colours, modes and power (night light, screen setup)
+    # default: "native wlr-randr kanshi wlsunset gammastep"
+
+ALLOW_LAYERS="native slurp mako swaync fuzzel"
+    # Draw panels, overlays and notifications above or below every window
+    # default: "native slurp mako swaync fuzzel"
+
+ALLOW_LOCK=""
+    # Lock the session (infynitae-lock and the SCREEN_LOCKER command always may)
+    # default: ""
+    # options: ""  · e.g. "swaylock"
+
 REMOTE_DESKTOP="false"
     # Remote desktop apps (AnyDesk, GNOME's clients) get the screen and, once you allow it,
     # the keyboard and mouse (the RemoteDesktop portal). RustDesk uses it too when on [restart]

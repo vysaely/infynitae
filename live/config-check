@@ -46,6 +46,19 @@ problems=$(
                     *) echo "line $n: unknown setting $key, ignored" ;;
                 esac
             fi
+            # an app list (docs/SECURITY.md): app ids, program names, absolute paths, "native"
+            case "$key" in
+                ALLOW_*)
+                    value=$(sh -c "$line"'; eval "printf %s \"\$'"$key"'\""' 2>/dev/null)
+                    for word in $(printf '%s' "$value" | tr ',' ' '); do
+                        case "$word" in
+                            /*) [ -f "$word" ] || echo "line $n: $key: no file $word, skipped" ;;
+                            */*) echo "line $n: $key: \"$word\" is a path that does not start with /, skipped" ;;
+                            *[!A-Za-z0-9._+-]*) echo "line $n: $key: \"$word\" is not an app id or a program name, skipped" ;;
+                        esac
+                    done
+                    ;;
+            esac
         elif printf '%s' "$trimmed" | grep -qE '^[A-Z][A-Z0-9_]*([[:space:]]|$)'; then
             echo "line $n: \"$(printf '%s' "$trimmed" | cut -c1-40)\" is not a setting (SETTING=\"value\"), skipped"
         fi

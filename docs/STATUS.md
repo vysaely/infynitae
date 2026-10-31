@@ -25,6 +25,11 @@ edges on other hardware.
   it, and is never in the capture itself (`CAPTURE_INDICATOR`). Over a fullscreen window it
   steps aside, so a game still goes to the screen directly, and a notification says the screen
   is being captured instead.
+- **App permissions** (2026-10-31, [SECURITY.md](SECURITY.md)): sandboxed apps (Flatpak, through
+  security-context-v1) get no capture, clipboard management, virtual input, input method,
+  window list, display control, layer-shell or lock unless their app id is listed in
+  `ALLOW_*`; desktop apps are known by their real program file and allowed by default, except
+  the lock.
 - **RustDesk as a host** (seen working on this machine): the picture through the portal, input
   through its own virtual devices. The session restarts RustDesk's service once the compositor
   runs, which needs the polkit rule in `live/remote/` (the installer adds it).

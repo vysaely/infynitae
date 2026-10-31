@@ -93,6 +93,19 @@ these by date, e.g. "(owner, 2026-10-24)".
 - **Layer surfaces** (bars, wallpaper, the launcher) follow decisions L1–L8 (2026-10-21) in
   [foundation/FOUNDATION_ARCHITECTURE.md](foundation/FOUNDATION_ARCHITECTURE.md).
 
+## Security and trust
+
+- **Privileged protocols go only to the apps allowed them** (owner, 2026-10-31;
+  [SECURITY.md](SECURITY.md)). Screen capture, clipboard management, virtual input, the input
+  method, the window list, display control, layer-shell and the session lock are each a power
+  with a list (`ALLOW_*`). An app not allowed one is never shown those globals. Sandboxed apps
+  connect through `security-context-v1` and get a power only when their app id is listed; a
+  native app is known by its executable's device and inode, never its file name. The default
+  lets every native app in (the word `native`) for all powers but the lock, so OBS, screenshot
+  tools and `wtype` keep working; a native app runs with the user's rights anyway. Layer-shell
+  is a power too: a sandboxed app drawing over every window could imitate a lock or password
+  prompt. The lock is Infynitae's own (`infynitae-lock`) and the `SCREEN_LOCKER` command's.
+
 ## Shell IPC
 
 - **JSON lines over a unix socket** (2026-10-20, D1–D9): one JSON object per line, a minimal

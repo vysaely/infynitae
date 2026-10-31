@@ -92,7 +92,10 @@ impl WaylandState {
     pub fn enable_session_lock(&mut self) {
         if self.session_lock.is_none() {
             self.session_lock = Some(SessionLock {
-                manager: SessionLockManagerState::new::<Self, _>(&self.dh, |_| true),
+                manager: SessionLockManagerState::new::<Self, _>(
+                    &self.dh,
+                    self.trust.gate(crate::trust::Capability::Lock).filter(),
+                ),
                 locked: false,
                 holder: None,
                 holder_client: None,
