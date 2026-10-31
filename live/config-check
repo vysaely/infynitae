@@ -18,6 +18,8 @@ KNOWN_FROM="$HOME/infynitae/config/config"
 known=""
 if [ -f "$KNOWN_FROM" ]; then
     known=" $(grep -oE '[A-Z][A-Z0-9_]+=' "$KNOWN_FROM" | tr -d = | sort -u | tr '\n' ' ')"
+    # old names of renamed settings, still read (live/config.sh)
+    known="$known ENABLE_ISLAND ISLAND_EDGE ISLAND_CONTROL_SIDE "
 fi
 
 problems=$(

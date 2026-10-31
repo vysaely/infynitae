@@ -9,7 +9,7 @@ this repository already.
 | Piece | Default | Alternatives you can install | Switch | Build our own? |
 | :--- | :--- | :--- | :--- | :--- |
 | Terminal | first installed: kitty, alacritty, foot… | wezterm, ghostty, konsole, any | `TERMINAL` | No: huge, and good ones exist |
-| Launcher | the island (Super+W), fuzzel without it | rofi, tofi, wofi, walker, anyrun | `LAUNCHER`, `ENABLE_ISLAND` | **Yes, a good fit**: a launcher that knows the canvas (open here, jump to a window). The island is a start |
+| Launcher | the edge (Super+W), fuzzel without it | rofi, tofi, wofi, walker, anyrun | `LAUNCHER`, `ENABLE_EDGE` | **Yes, a good fit**: a launcher that knows the canvas (open here, jump to a window). The edge is a start |
 | Menus (control menu, clipboard) | `fuzzel --dmenu` | `rofi -dmenu`, tofi, bemenu, `wofi --dmenu` | `MENU_PICKER` | Comes with our launcher |
 | File manager | thunar with tumbler's previews (installed unless another is in use); yazi, lf (in the terminal), nemo, dolphin when installed | nautilus, pcmanfm, any | `FILE_MANAGER` | No |
 | Browser | the system default | any | `BROWSER` | No |
@@ -21,7 +21,7 @@ this repository already.
 | Notifications | mako | swaync (with a panel), dunst, fnott | `NOTIFICATIONS` | **Yes, small**: notifications placed on the screen you look at, matching the canvas look |
 | Volume / brightness pop-ups | `notify-send` from `live/launch.sh` | swayosd, avizo, wob | none yet | **Yes, small**: a native on-screen display |
 | Control menu (Wi-Fi, Bluetooth, volume, sound output, power) | `live/control-menu` (ours) on fuzzel | nm-applet, iwgtk, blueman, pwvucontrol, a bar's widgets | `CONTROL_MENU` | Ours already; a graphical panel later |
-| Bar / panel | the island (ours, in C) | waybar, ironbar, eww, quickshell | `ENABLE_ISLAND="false"`, then start yours in `autostart.sh`; `LAUNCHER` / `CONTROL_MENU` give it Super+W / Super+A | **Yes, medium**: the island is the start |
+| Bar / panel | the edge (ours, in C) | waybar, ironbar, eww, quickshell | `ENABLE_EDGE="false"`, then start yours in `autostart.sh`; `LAUNCHER` / `CONTROL_MENU` give it Super+W / Super+A | **Yes, medium**: the edge is the start |
 | Clipboard history | cliphist + wl-clip-persist | clipman, copyq | `CLIPBOARD_HISTORY`, `CLIPBOARD_PICKER` | Low value |
 | Screenshots | grim + slurp | grimblast, flameshot, satty (annotate) | `SCREENSHOT_CMD` | **Yes, small**: the compositor can already capture; a native region picker is little work |
 | Recording, replay buffer | `infynitae-recorder` (ours) + ffmpeg | wf-recorder, gpu-screen-recorder, OBS | `ENABLE_REPLAY_BUFFER` | Ours |

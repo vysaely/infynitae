@@ -70,6 +70,10 @@ case "\$cmd" in
                 echo "Mounted /dev/sdh1 at /run/media/testuser/START_STICK."
                 exit 0
                 ;;
+            /dev/dm-7)
+                echo "Mounted /dev/dm-7 at /run/media/testuser/SECRET."
+                exit 0
+                ;;
             *)
                 echo "Error mounting \$dev: unknown device in mock" >&2
                 exit 1
@@ -77,6 +81,22 @@ case "\$cmd" in
         esac
         ;;
     info)
+        if [ "\$*" = "-b /dev/dm-7" ]; then
+            echo "  org.freedesktop.UDisks2.Block:"
+            echo "    CryptoBackingDevice:        '/org/freedesktop/UDisks2/block_devices/sdi1'"
+            exit 0
+        fi
+        exit 1
+        ;;
+    unlock)
+        # the passphrase comes on stdin, never in the arguments
+        pass=\$(cat)
+        printf 'unlock-stdin %s\n' "\$pass" >> "$CALLS_LOG"
+        if [ "\$pass" = "secret" ]; then
+            echo "Unlocked /dev/sdi1 as /dev/dm-7."
+            exit 0
+        fi
+        echo "Error unlocking /dev/sdi1: Failed to activate device: Incorrect passphrase" >&2
         exit 1
         ;;
     *)
@@ -85,6 +105,17 @@ case "\$cmd" in
 esac
 EOF
 chmod +x "$MOCK_UDISKSCTL"
+
+# Notifications with actions and unlock prompts run in the background: wait up to 3 s for a line
+wait_for() {
+    i=0
+    while [ "$i" -lt 30 ]; do
+        grep -q -- "$2" "$1" 2>/dev/null && return 0
+        sleep 0.1
+        i=$((i + 1))
+    done
+    return 1
+}
 
 echo "=== Test 1: Hotplug signals (4 required cases + drive removable + removal) ==="
 
@@ -178,12 +209,13 @@ fi
 echo "PASS: log recorded device removal"
 
 echo "--- Checking notifications ---"
+wait_for "$NOTIFY_LOG" "USB_STICK" || true
 if [ ! -f "$NOTIFY_LOG" ]; then
     echo "FAIL: notification log missing" >&2
     exit 1
 fi
 
-if ! grep -q -- "-a Infynitae USB_STICK mounted at /run/media/testuser/USB_STICK" "$NOTIFY_LOG"; then
+if ! wait_for "$NOTIFY_LOG" "-A open=Open -A eject=Eject USB_STICK mounted at /run/media/testuser/USB_STICK"; then
     echo "FAIL: missing notification for USB_STICK mount" >&2
     cat "$NOTIFY_LOG" >&2
     exit 1
@@ -246,11 +278,65 @@ if ! grep -q "mount --no-user-interaction -b /dev/sdh1" "$CALLS_LOG"; then
 fi
 echo "PASS: pre-plugged drive /dev/sdh1 was mounted at start"
 
-if ! grep -q -- "-a Infynitae START_STICK mounted at /run/media/testuser/START_STICK" "$NOTIFY_LOG"; then
+if ! wait_for "$NOTIFY_LOG" "START_STICK mounted at /run/media/testuser/START_STICK"; then
     echo "FAIL: missing notification for pre-plugged drive" >&2
     exit 1
 fi
 echo "PASS: notification sent for pre-plugged drive"
+
+echo "=== Test 3: An encrypted drive asks for its passphrase, then mounts ==="
+rm -f "$CALLS_LOG" "$NOTIFY_LOG" "$LOG_FILE" "$DUMP"
+ENC="$TMP/enc-signals.txt"
+cat > "$ENC" <<'EOF'
+/org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/block_devices/sdi1', {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sdi1'>, 'IdLabel': <''>, 'HintAuto': <true>, 'HintSystem': <false>, 'HintIgnore': <false>, 'Drive': <objectpath '/org/freedesktop/UDisks2/drives/Crypt_Stick'>}, 'org.freedesktop.UDisks2.Encrypted': {'CleartextDevice': <objectpath '/'>}})
+EOF
+ASKS="$TMP/asks"
+: > "$ASKS"
+# a wrong passphrase first, then the right one
+printf 'wrong\nsecret\n' > "$TMP/answers"
+PATH="$BIN_DIR:$PATH" \
+XDG_STATE_HOME="$STATE_DIR" \
+XDG_RUNTIME_DIR="$RUN_DIR" \
+INFYNITAE_AUTOMOUNT_MONITOR="cat $ENC" \
+INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
+INFYNITAE_AUTOMOUNT_ASK="n=\$(wc -l < $ASKS 2>/dev/null || echo 0); echo x >> $ASKS; sed -n \"\$((n + 1))p\" $TMP/answers" \
+"$WATCHER"
+if ! wait_for "$CALLS_LOG" "mount --no-user-interaction -b /dev/dm-7"; then
+    echo "FAIL: the unlocked drive was not mounted" >&2
+    cat "$CALLS_LOG" "$LOG_FILE" >&2
+    exit 1
+fi
+echo "PASS: unlocked after a wrong passphrase, then mounted"
+if grep -q "unlock .*secret" "$CALLS_LOG"; then
+    echo "FAIL: the passphrase was on udisksctl's command line" >&2
+    exit 1
+fi
+echo "PASS: the passphrase went through stdin"
+if ! wait_for "$NOTIFY_LOG" "Wrong passphrase for /dev/sdi1"; then
+    echo "FAIL: no notification for the wrong passphrase" >&2
+    exit 1
+fi
+echo "PASS: a wrong passphrase is said"
+
+echo "=== Test 4: eject unmounts, locks and powers off ==="
+rm -f "$CALLS_LOG" "$NOTIFY_LOG"
+PATH="$BIN_DIR:$PATH" \
+XDG_STATE_HOME="$STATE_DIR" \
+XDG_RUNTIME_DIR="$RUN_DIR" \
+INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
+"$WATCHER" eject /dev/dm-7
+for want in "unmount --no-user-interaction -b /dev/dm-7" "lock --no-user-interaction -b /dev/sdi1" "power-off --no-user-interaction -b /dev/sdi1"; do
+    if ! grep -q -- "$want" "$CALLS_LOG"; then
+        echo "FAIL: eject did not call: $want" >&2
+        cat "$CALLS_LOG" >&2
+        exit 1
+    fi
+done
+if ! grep -q "/dev/dm-7 can be removed" "$NOTIFY_LOG"; then
+    echo "FAIL: no notification that the drive can be removed" >&2
+    exit 1
+fi
+echo "PASS: eject unmounted, locked the encrypted device and powered the drive off"
 
 echo "=== ALL AUTOMOUNT TESTS PASSED ==="
 exit 0

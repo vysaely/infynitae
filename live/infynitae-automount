@@ -1,10 +1,14 @@
 #!/bin/sh
 # infynitae-automount: USB drives and SD cards mount when plugged in, through udisks2. At start,
 # it mounts drives already plugged in and unmounted; it then watches udisks2 for added filesystem
-# interfaces on removable media, mounts them with udisksctl, and posts a notification. Started
-# by session.sh; ends with the session.
+# interfaces on removable media, mounts them with udisksctl, and posts a notification with Open and
+# Eject. An encrypted drive asks for its passphrase (fuzzel) and mounts once unlocked. Started by
+# session.sh; ends with the session.
+#   infynitae-automount eject [DEVICE]: unmounts DEVICE (else every drive mounted under
+#   /run/media), locks it if encrypted and powers the drive off, so it is safe to pull
 #   INFYNITAE_AUTOMOUNT_MONITOR: a command printing udisks2 signals instead of gdbus (tests)
 #   INFYNITAE_AUTOMOUNT_UDISKSCTL: a command used instead of udisksctl (tests)
+#   INFYNITAE_AUTOMOUNT_ASK: a command printing a passphrase instead of fuzzel (tests)
 set -u
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
 LOG="$STATE_DIR/automount.log"
@@ -12,15 +16,6 @@ mkdir -p "$STATE_DIR"
 log() {
     printf '%s %s\n' "$(date '+%F %T.%3N')" "$*" >> "$LOG" 2>/dev/null || true
 }
-
-# one per session: two watchers would race to mount the same filesystem (fd 9 holds the lock;
-# helpers started below do not inherit it)
-RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/infynitae"
-mkdir -p "$RUN_DIR"
-exec 9> "$RUN_DIR/automount.lock"
-if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
-    exit 0
-fi
 
 run_udisksctl() {
     ${INFYNITAE_AUTOMOUNT_UDISKSCTL:-udisksctl} "$@"
@@ -31,6 +26,70 @@ notify() {
         notify-send -a Infynitae "$@" 2>/dev/null || true
     fi
 }
+
+# a notification with actions waits for its answer: in the background, without the lock (fd 9)
+notify_actions() {
+    command -v notify-send >/dev/null 2>&1 || return 0
+    notify-send -a Infynitae "$@" 2>/dev/null
+}
+
+# the device under a dm cleartext device (/dev/dm-N), else nothing
+backing_device() {
+    run_udisksctl info -b "$1" 2>/dev/null | awk '
+    $1 == "CryptoBackingDevice:" { d = $2; gsub(/\047/, "", d); if (d != "/") { sub(".*/", "/dev/", d); print d } }'
+}
+
+# unmounts DEVICE, locks its encrypted device and powers the drive off; one notification says
+# whether it can be pulled
+eject_device() {
+    dev="$1"
+    label="${2:-$1}"
+    backing=$(backing_device "$dev")
+    if ! out=$(run_udisksctl unmount --no-user-interaction -b "$dev" 2>&1); then
+        case "$out" in
+            *NotMounted*|*"not mounted"*) ;;
+            *)
+                log "unmount failed for $dev: $out"
+                notify "$label is still in use" "Close the files and windows open on it, then eject again."
+                return 1
+                ;;
+        esac
+    fi
+    if [ -n "$backing" ]; then
+        run_udisksctl lock --no-user-interaction -b "$backing" >/dev/null 2>&1 || true
+    fi
+    # powering off ends the drive's power and its write cache; some readers refuse it, and an
+    # unmounted drive is safe to pull anyway
+    run_udisksctl power-off --no-user-interaction -b "${backing:-$dev}" >/dev/null 2>&1 || true
+    log "ejected $dev"
+    notify "$label can be removed"
+}
+
+if [ "${1:-}" = "eject" ]; then
+    if [ -n "${2:-}" ]; then
+        eject_device "$2"
+        exit
+    fi
+    rc=0
+    found=0
+    # every filesystem udisks mounted for this user
+    while read -r src target _; do
+        case "$target" in
+            /run/media/*) found=1; eject_device "$src" "$(printf '%b' "${target##*/}")" || rc=1 ;;
+        esac
+    done < /proc/mounts
+    [ "$found" = 1 ] || notify "No drive to eject"
+    exit "$rc"
+fi
+
+# one per session: two watchers would race to mount the same filesystem (fd 9 holds the lock;
+# helpers started below do not inherit it)
+RUN_DIR="${XDG_RUNTIME_DIR:-/tmp}/infynitae"
+mkdir -p "$RUN_DIR"
+exec 9> "$RUN_DIR/automount.lock"
+if command -v flock >/dev/null 2>&1 && ! flock -n 9; then
+    exit 0
+fi
 
 removable_drives=""
 # fields of the parsed lines: not a tab, which `read` merges when a field (a label) is empty
@@ -66,11 +125,61 @@ mount_device() {
         [ -z "$mount_path" ] && mount_path=$(printf '%s\n' "$mount_out" | sed -n 's/^Mounted .* at //p')
         [ -z "$mount_path" ] && mount_path="$mount_out"
         log "mounted $dev at $mount_path"
-        notify "$label mounted at $mount_path"
+        # Open shows it in the file manager, Eject makes it safe to pull (in the background:
+        # the notification waits for its answer)
+        (
+            case $(notify_actions -A open=Open -A eject=Eject "$label mounted at $mount_path") in
+                open) xdg-open "$mount_path" >/dev/null 2>&1 ;;
+                eject) eject_device "$dev" "$label" ;;
+            esac
+        ) 9>&- &
     else
         log "mount failed for $dev: $mount_out"
         notify "Mount failed for $label" "$mount_out"
     fi
+}
+
+# the passphrase for an encrypted drive, from fuzzel (empty: cancelled)
+ask_passphrase() {
+    if [ -n "${INFYNITAE_AUTOMOUNT_ASK:-}" ]; then
+        sh -c "$INFYNITAE_AUTOMOUNT_ASK"
+    elif command -v fuzzel >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        fuzzel --dmenu --password --lines 0 --prompt-only "$1 " </dev/null 2>/dev/null
+    fi
+}
+
+# an encrypted partition on a removable drive: its passphrase asked (three tries), the cleartext
+# device then mounted like any other. In the background: the prompt waits for the user.
+unlock_device() {
+    dev="$1"
+    label="$2"
+    [ -n "$label" ] || label="$dev"
+    (
+        tries=0
+        while [ "$tries" -lt 3 ]; do
+            tries=$((tries + 1))
+            pass=$(ask_passphrase "Passphrase for $label:")
+            if [ -z "$pass" ]; then
+                if [ "$tries" -eq 1 ] && [ -z "${WAYLAND_DISPLAY:-}${INFYNITAE_AUTOMOUNT_ASK:-}" ]; then
+                    notify "$label is encrypted" "Unlock it with: udisksctl unlock -b $dev"
+                fi
+                log "unlock of $dev cancelled"
+                exit 0
+            fi
+            # the passphrase goes through a pipe, never the command line (ps would show it)
+            if out=$(printf '%s' "$pass" | run_udisksctl unlock --no-user-interaction -b "$dev" --key-file /dev/stdin 2>&1); then
+                clear=$(printf '%s\n' "$out" | sed -n 's/^Unlocked .* as \(.*\)\.$/\1/p')
+                log "unlocked $dev as ${clear:-?}"
+                [ -n "$clear" ] && mount_device "$clear" "$label"
+                exit 0
+            fi
+            log "unlock failed for $dev: $out"
+            case "$out" in
+                *AlreadyUnlocked*|*"already unlocked"*) exit 0 ;;
+            esac
+            notify "Wrong passphrase for $label"
+        done
+    ) 9>&- &
 }
 
 handle_block() {
@@ -96,7 +205,11 @@ handle_block() {
     fi
 
     if [ "$hint_auto" = "true" ] || is_removable_drive "$drv"; then
-        mount_device "$dev" "$label"
+        if [ "${8:-}" = "encrypted" ]; then
+            unlock_device "$dev" "$label"
+        else
+            mount_device "$dev" "$label"
+        fi
     else
         log "ignoring $dev (not removable)"
     fi
@@ -154,6 +267,13 @@ scan_existing() {
             mountpoints[obj] = mp
         }
     }
+    /^[ ]+CleartextDevice:[ ]+/ {
+        if (section == "org.freedesktop.UDisks2.Encrypted") {
+            c = $2
+            gsub(q, "", c)
+            locked[obj] = (c == "/")
+        }
+    }
     /^[ ]+(Removable|MediaRemovable):[ ]+/ {
         if (section == "org.freedesktop.UDisks2.Drive") {
             if ($2 == "true") removable[obj] = 1
@@ -171,18 +291,23 @@ scan_existing() {
                 hs = (hintsystem[o] == "true") ? "true" : "false"
                 hi = (hintignore[o] == "true") ? "true" : "false"
                 print "BLOCK" SEP device[o] SEP label[o] SEP ha SEP hs SEP hi SEP is_mounted SEP d
+            } else if (locked[o]) {
+                ha = (hintauto[o] == "true") ? "true" : "false"
+                hs = (hintsystem[o] == "true") ? "true" : "false"
+                hi = (hintignore[o] == "true") ? "true" : "false"
+                print "BLOCK" SEP device[o] SEP label[o] SEP ha SEP hs SEP hi SEP "0" SEP drive[o] SEP "encrypted"
             }
         }
     }
     ')
 
-    while IFS="$SEP" read -r type f1 f2 f3 f4 f5 f6 f7; do
+    while IFS="$SEP" read -r type f1 f2 f3 f4 f5 f6 f7 f8; do
         case "$type" in
             DRIVE)
                 removable_drives="$removable_drives $f1 "
                 ;;
             BLOCK)
-                handle_block "$f1" "$f2" "$f3" "$f4" "$f5" "$f6" "$f7"
+                handle_block "$f1" "$f2" "$f3" "$f4" "$f5" "$f6" "$f7" "$f8"
                 ;;
         esac
     done <<EOF
@@ -235,7 +360,8 @@ process_line() {
                 next
             }
 
-            if (line ~ (q "org\\.freedesktop\\.UDisks2\\.Filesystem" q)) {
+            enc = (line ~ (q "org\\.freedesktop\\.UDisks2\\.Encrypted" q)) ? "encrypted" : ""
+            if (enc != "" || line ~ (q "org\\.freedesktop\\.UDisks2\\.Filesystem" q)) {
                 dev = ""
                 if (match(line, q "Device" q ": <(b|objectpath )?" q "[^" q "]*" q ">")) {
                     dev = substr(line, RSTART, RLENGTH)
@@ -272,7 +398,7 @@ process_line() {
                         is_mounted = "1"
                     }
                 }
-                printf "BLOCK_ADD%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n", SEP, dev, SEP, label, SEP, hint_auto, SEP, hint_sys, SEP, hint_ign, SEP, is_mounted, SEP, drive
+                printf "BLOCK_ADD%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s%s\n", SEP, dev, SEP, label, SEP, hint_auto, SEP, hint_sys, SEP, hint_ign, SEP, is_mounted, SEP, drive, SEP, enc
                 next
             }
         } else if (line ~ /InterfacesRemoved/) {
@@ -290,7 +416,7 @@ process_line() {
 
     [ -n "$parsed" ] || return 0
 
-    while IFS="$SEP" read -r type f1 f2 f3 f4 f5 f6 f7; do
+    while IFS="$SEP" read -r type f1 f2 f3 f4 f5 f6 f7 f8; do
         case "$type" in
             DRIVE_ADD)
                 removable_drives="$removable_drives $f1 "
@@ -308,7 +434,7 @@ process_line() {
 $info
 INFO
                 fi
-                handle_block "$f1" "$f2" "$f3" "$f4" "$f5" "$f6" "$f7"
+                handle_block "$f1" "$f2" "$f3" "$f4" "$f5" "$f6" "$f7" "$f8"
                 ;;
             REMOVED)
                 case "$f1" in

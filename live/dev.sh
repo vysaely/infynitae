@@ -19,7 +19,7 @@ fi
 
 case "$ACTION" in
     reload|r)
-        # the helpers (island, wallpaper, portal…) restart in place; windows stay open
+        # the helpers (edge, wallpaper, portal…) restart in place; windows stay open
         exec "$REPO_DIR/live/infynitae-reload" all
         ;;
     logs|log|l)
@@ -79,7 +79,7 @@ case "$ACTION" in
         echo "Usage: infynitae-dev <command>"
         echo ""
         echo "Commands:"
-        echo "  reload, r       Restart the helpers in place: island, wallpaper, portal… (windows stay)"
+        echo "  reload, r       Restart the helpers in place: edge, wallpaper, portal… (windows stay)"
         echo "  test, t         Launch a safe nested compositor window to test live changes"
         echo "  logs, l [type]  Stream logs (all, helpers, session, crash)"
         echo "  build, b        Rebuild release binary and deploy to ~/.local/bin/infynitae"

@@ -3,7 +3,7 @@
  *
  * Drawn in the theme colors from the config (CANVAS_COLOR, …): square corners,
  * 1px subtle border, zero nested buttons, zero visual bloat):
- *   - Position (`ISLAND_EDGE="bottom|top"`, `ISLAND_CONTROL_SIDE="right|left"`) is read
+ *   - Position (`EDGE_POSITION="bottom|top"`, `EDGE_CONTROL_SIDE="right|left"`) is read
  *     strictly from `~/.config/infynitae/config` (no UI buttons for it).
  *   - Non-blocking input region: only the drawn bar/panel captures pointer events;
  *     clicking/panning the canvas works freely while open.
@@ -60,7 +60,7 @@ typedef enum {
     MODE_CENTER = 1,    /* Super+W: Search + Open Window Tabs */
     MODE_CONTROL = 2,   /* Super+A: System Control + Tray Apps */
     MODE_CLIPBOARD = 3  /* Super+V: Clipboard History */
-} IslandMode;
+} EdgeMode;
 
 typedef enum {
     SUB_NONE = 0,
@@ -129,10 +129,10 @@ typedef struct {
     int nav_idx;
 } HitBox;
 
-struct IslandApp;
+struct EdgeApp;
 
-typedef struct IslandOutput {
-    struct IslandApp *app;
+typedef struct EdgeOutput {
+    struct EdgeApp *app;
     struct wl_output *wl_output;
     uint32_t registry_name;
     int32_t width;
@@ -157,8 +157,8 @@ typedef struct IslandOutput {
      * screen as they are (direct scanout, tearing) and the edge strips take no clicks */
     bool unmapped;
 
-    struct IslandOutput *next;
-} IslandOutput;
+    struct EdgeOutput *next;
+} EdgeOutput;
 
 /* A toplevel as wlr-foreign-toplevel reports it: fullscreen, and on which outputs */
 #define FS_MAX_OUTPUTS 8
@@ -170,7 +170,7 @@ typedef struct FsToplevel {
     struct FsToplevel *next;
 } FsToplevel;
 
-typedef struct IslandApp {
+typedef struct EdgeApp {
     struct wl_display *display;
     struct wl_registry *registry;
     struct wl_compositor *compositor;
@@ -194,10 +194,10 @@ typedef struct IslandApp {
     SniItem sni_items[MAX_SNI_ITEMS];
     int sni_count;
 
-    IslandOutput *outputs;
+    EdgeOutput *outputs;
 
-    IslandMode mode;
-    IslandMode target_mode;
+    EdgeMode mode;
+    EdgeMode target_mode;
     ControlSubpanel subpanel;
     bool kb_grab;
     double anim_progress;
@@ -211,7 +211,7 @@ typedef struct IslandApp {
 
     double pointer_x;
     double pointer_y;
-    IslandOutput *pointer_output;
+    EdgeOutput *pointer_output;
 
     char search[128];
     size_t search_len;
@@ -276,7 +276,7 @@ typedef struct IslandApp {
     size_t async_len;
 
     bool running;
-} IslandApp;
+} EdgeApp;
 
 enum {
     ACT_NONE = 0,
@@ -326,9 +326,9 @@ static void on_sigusr2(int sig) { (void)sig; g_sig_cmd = 2; wake_main(); }
 static void on_sigterm(int sig) { (void)sig; g_sig_cmd = 3; wake_main(); }
 static void on_sigrtmin(int sig) { (void)sig; g_sig_cmd = 4; wake_main(); }
 
-static void request_frame(IslandOutput *out);
-static void damage_all(IslandApp *app);
-static void set_mode(IslandApp *app, IslandMode new_mode);
+static void request_frame(EdgeOutput *out);
+static void damage_all(EdgeApp *app);
+static void set_mode(EdgeApp *app, EdgeMode new_mode);
 
 /* ========================================================================== */
 /* Helpers                                                                    */
@@ -337,7 +337,7 @@ static const char *pid_file_path(void) {
     static char path[512];
     const char *rt = getenv("XDG_RUNTIME_DIR");
     if (!rt) rt = "/tmp";
-    snprintf(path, sizeof(path), "%s/infynitae-island.pid", rt);
+    snprintf(path, sizeof(path), "%s/infynitae-edge.pid", rt);
     return path;
 }
 
@@ -406,7 +406,7 @@ static const gchar sni_watcher_xml[] =
     "  </interface>"
     "</node>";
 
-static void sni_fetch_item_props(IslandApp *app, SniItem *item) {
+static void sni_fetch_item_props(EdgeApp *app, SniItem *item) {
     if (!app->dbus) return;
 
     /* Get PID of the D-Bus sender so we can match it to tray_apps */
@@ -448,7 +448,7 @@ static void sni_handle_method_call(GDBusConnection *conn, const gchar *sender,
                                    const gchar *method_name, GVariant *parameters,
                                    GDBusMethodInvocation *invocation, gpointer user_data) {
     (void)object_path; (void)interface_name;
-    IslandApp *app = user_data;
+    EdgeApp *app = user_data;
 
     if (g_strcmp0(method_name, "RegisterStatusNotifierItem") == 0) {
         const gchar *service = NULL;
@@ -499,7 +499,7 @@ static GVariant *sni_handle_get_property(GDBusConnection *conn, const gchar *sen
                                          const gchar *property_name, GError **error,
                                          gpointer user_data) {
     (void)conn; (void)sender; (void)object_path; (void)interface_name; (void)error;
-    IslandApp *app = user_data;
+    EdgeApp *app = user_data;
 
     if (g_strcmp0(property_name, "RegisteredStatusNotifierItems") == 0) {
         GVariantBuilder b;
@@ -526,7 +526,7 @@ static const GDBusInterfaceVTable sni_vtable = {
     .set_property = NULL,
 };
 
-static void setup_sni_watcher(IslandApp *app) {
+static void setup_sni_watcher(EdgeApp *app) {
     app->dbus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL);
     if (!app->dbus) return;
 
@@ -547,7 +547,7 @@ static void setup_sni_watcher(IslandApp *app) {
         "StatusNotifierHostRegistered", NULL, NULL);
 }
 
-static int find_sni_for_tray_app(IslandApp *app, const TrayApp *ta) {
+static int find_sni_for_tray_app(EdgeApp *app, const TrayApp *ta) {
     const char *key = ta->proc_name[0] ? ta->proc_name : ta->name;
     for (int i = 0; i < app->sni_count; i++) {
         SniItem *s = &app->sni_items[i];
@@ -570,7 +570,7 @@ static void clean_menu_label(char *dst, size_t dst_sz, const char *src) {
 }
 
 /* Populate ctx_items: first from the app's own com.canonical.dbusmenu, then fallback Open/Quit/Kill */
-static void build_tray_context_menu(IslandApp *app, int tidx) {
+static void build_tray_context_menu(EdgeApp *app, int tidx) {
     app->ctx_count = 0;
     if (tidx < 0 || tidx >= app->tray_count) return;
     TrayApp *ta = &app->tray_apps[tidx];
@@ -636,7 +636,7 @@ static void build_tray_context_menu(IslandApp *app, int tidx) {
     }
 }
 
-static void trigger_dbusmenu_click(IslandApp *app, int sni_idx, int32_t item_id) {
+static void trigger_dbusmenu_click(EdgeApp *app, int sni_idx, int32_t item_id) {
     if (!app->dbus || sni_idx < 0 || sni_idx >= app->sni_count) return;
     SniItem *sni = &app->sni_items[sni_idx];
     if (sni->menu_path[0] == '\0') return;
@@ -650,7 +650,7 @@ static void trigger_dbusmenu_click(IslandApp *app, int sni_idx, int32_t item_id)
 /* ========================================================================== */
 /* Data Collectors                                                            */
 /* ========================================================================== */
-static void load_desktop_dir(IslandApp *app, const char *dir_path) {
+static void load_desktop_dir(EdgeApp *app, const char *dir_path) {
     DIR *d = opendir(dir_path);
     if (!d) return;
     struct dirent *de;
@@ -713,7 +713,7 @@ static void load_desktop_dir(IslandApp *app, const char *dir_path) {
     closedir(d);
 }
 
-static void load_all_apps(IslandApp *app) {
+static void load_all_apps(EdgeApp *app) {
     app->app_count = 0;
     const char *home = getenv("HOME");
     if (home) {
@@ -735,7 +735,7 @@ static bool str_contains_ci(const char *hay, const char *needle) {
     return false;
 }
 
-static void update_filters(IslandApp *app) {
+static void update_filters(EdgeApp *app) {
     app->filtered_win_count = 0;
     for (int i = 0; i < app->win_count; i++) {
         if (str_contains_ci(app->windows[i].app_id, app->search) ||
@@ -770,7 +770,7 @@ static void update_filters(IslandApp *app) {
     else if (app->selected_idx >= total) app->selected_idx = total - 1;
 }
 
-static void parse_snapshot_buf(IslandApp *app, const char *buf) {
+static void parse_snapshot_buf(EdgeApp *app, const char *buf) {
     app->win_count = 0;
     const char *elems = strstr(buf, "\"elements\":[");
     if (!elems) {
@@ -855,7 +855,7 @@ static void format_pretty_app_name(char *dst, size_t dst_sz, const char *raw) {
     }
 }
 
-static void parse_control_buf(IslandApp *app, char *buf) {
+static void parse_control_buf(EdgeApp *app, char *buf) {
     app->tray_count = 0;
     char *saveptr = NULL;
     for (char *line = strtok_r(buf, "\n", &saveptr); line; line = strtok_r(NULL, "\n", &saveptr)) {
@@ -922,7 +922,7 @@ static void parse_control_buf(IslandApp *app, char *buf) {
     if (app->tray_ctx_idx >= app->tray_count) app->tray_ctx_idx = -1;
 }
 
-static void parse_subpanel_buf(IslandApp *app, char *buf) {
+static void parse_subpanel_buf(EdgeApp *app, char *buf) {
     app->sub_count = 0;
     char *saveptr = NULL;
     for (char *line = strtok_r(buf, "\n", &saveptr);
@@ -986,7 +986,7 @@ static void sanitize_inline_text(char *dst, size_t dst_sz, const char *src) {
     dst[out] = '\0';
 }
 
-static void parse_clipboard_buf(IslandApp *app, char *buf) {
+static void parse_clipboard_buf(EdgeApp *app, char *buf) {
     app->clip_count = 0;
     char *saveptr = NULL;
     for (char *line = strtok_r(buf, "\n", &saveptr);
@@ -1008,7 +1008,7 @@ static void parse_clipboard_buf(IslandApp *app, char *buf) {
     update_filters(app);
 }
 
-static void fetch_mako_notifications(IslandApp *app) {
+static void fetch_mako_notifications(EdgeApp *app) {
     app->notif_count = 0;
     if (!app->dbus) return;
 
@@ -1090,7 +1090,7 @@ static bool check_pid_file_alive(const char *path) {
     return ok;
 }
 
-static void start_async_refresh(IslandApp *app, int kind) {
+static void start_async_refresh(EdgeApp *app, int kind) {
     if (kind == MODE_CONTROL) {
         const char *rt = getenv("XDG_RUNTIME_DIR");
         if (!rt) rt = "/tmp";
@@ -1207,20 +1207,20 @@ static void start_async_refresh(IslandApp *app, int kind) {
     app->async_len = 0;
 }
 
-static void refresh_snapshot(IslandApp *app) {
+static void refresh_snapshot(EdgeApp *app) {
     start_async_refresh(app, MODE_CENTER);
 }
 
-static void refresh_control_data(IslandApp *app) {
+static void refresh_control_data(EdgeApp *app) {
     start_async_refresh(app, MODE_CONTROL);
 }
 
-static void refresh_subpanel_data(IslandApp *app) {
+static void refresh_subpanel_data(EdgeApp *app) {
     app->sub_count = 0;
     start_async_refresh(app, 3);
 }
 
-static void refresh_clipboard_data(IslandApp *app) {
+static void refresh_clipboard_data(EdgeApp *app) {
     start_async_refresh(app, 4);
 }
 
@@ -1330,7 +1330,7 @@ static void draw_vline(cairo_t *cr, double x, double y, double h) {
     cairo_stroke(cr);
 }
 
-static void add_hitbox_nav(IslandApp *app, double x, double y, double w, double h,
+static void add_hitbox_nav(EdgeApp *app, double x, double y, double w, double h,
                            int action_id, int index, int nav_idx) {
     if (app->hitbox_count >= MAX_HITBOXES) return;
     HitBox *hb = &app->hitboxes[app->hitbox_count++];
@@ -1343,7 +1343,7 @@ static void add_hitbox_nav(IslandApp *app, double x, double y, double w, double 
     hb->nav_idx = nav_idx;
 }
 
-static void add_hitbox(IslandApp *app, double x, double y, double w, double h, int action_id, int index) {
+static void add_hitbox(EdgeApp *app, double x, double y, double w, double h, int action_id, int index) {
     add_hitbox_nav(app, x, y, w, h, action_id, index, -1);
 }
 
@@ -1358,7 +1358,7 @@ static void parse_hex_rgb(const char *val, double out[3]) {
     }
 }
 
-static void load_position_config(IslandApp *app) {
+static void load_position_config(EdgeApp *app) {
     app->bottom_edge = true;
     app->control_on_left = false;
     app->surface_rgb[0] = 0x11 / 255.0; app->surface_rgb[1] = 0x13 / 255.0; app->surface_rgb[2] = 0x17 / 255.0;
@@ -1374,12 +1374,21 @@ static void load_position_config(IslandApp *app) {
     while (fgets(line, sizeof(line), f)) {
         char *p = line;
         while (*p == ' ' || *p == '\t') p++;
-        if (strncmp(p, "ISLAND_EDGE=", 12) == 0) {
-            if (strstr(p + 12, "top")) app->bottom_edge = false;
-            else if (strstr(p + 12, "bottom")) app->bottom_edge = true;
-        } else if (strncmp(p, "ISLAND_CONTROL_SIDE=", 20) == 0) {
-            if (strstr(p + 20, "left")) app->control_on_left = true;
-            else if (strstr(p + 20, "right")) app->control_on_left = false;
+        /* EDGE_POSITION and EDGE_CONTROL_SIDE; ISLAND_EDGE and ISLAND_CONTROL_SIDE, their names
+         * before 2026-10-31, still read */
+        const char *v = NULL;
+        if (strncmp(p, "EDGE_POSITION=", 14) == 0) v = p + 14;
+        else if (strncmp(p, "ISLAND_EDGE=", 12) == 0) v = p + 12;
+        if (v) {
+            if (strstr(v, "top")) app->bottom_edge = false;
+            else if (strstr(v, "bottom")) app->bottom_edge = true;
+            continue;
+        }
+        if (strncmp(p, "EDGE_CONTROL_SIDE=", 18) == 0) v = p + 18;
+        else if (strncmp(p, "ISLAND_CONTROL_SIDE=", 20) == 0) v = p + 20;
+        if (v) {
+            if (strstr(v, "left")) app->control_on_left = true;
+            else if (strstr(v, "right")) app->control_on_left = false;
         } else if (strncmp(p, "SURFACE_COLOR=", 14) == 0) {
             parse_hex_rgb(p + 14, app->surface_rgb);
         } else if (strncmp(p, "BORDER_ACTIVE=", 14) == 0) {
@@ -1391,8 +1400,8 @@ static void load_position_config(IslandApp *app) {
     fclose(f);
 }
 
-static void update_surface_input_region(IslandOutput *out) {
-    IslandApp *app = out->app;
+static void update_surface_input_region(EdgeOutput *out) {
+    EdgeApp *app = out->app;
     if (!out->surface || !app->compositor) return;
 
     struct wl_region *reg = wl_compositor_create_region(app->compositor);
@@ -1429,7 +1438,7 @@ static void update_surface_input_region(IslandOutput *out) {
 /* ========================================================================== */
 /* Renderer (redraws only damaged rectangles)                                 */
 /* ========================================================================== */
-static bool allocate_buffer(IslandOutput *out) {
+static bool allocate_buffer(EdgeOutput *out) {
     if (out->buffer && out->buf_w == out->width && out->buf_h == out->height) return true;
     if (out->buffer) {
         wl_buffer_destroy(out->buffer);
@@ -1442,7 +1451,7 @@ static bool allocate_buffer(IslandOutput *out) {
 
     int stride = out->width * 4;
     size_t size = (size_t)stride * out->height;
-    char tmpl[] = "/tmp/infynitae-island-XXXXXX";
+    char tmpl[] = "/tmp/infynitae-edge-XXXXXX";
     int fd = mkstemp(tmpl);
     if (fd < 0) return false;
     unlink(tmpl);
@@ -1472,9 +1481,9 @@ static bool allocate_buffer(IslandOutput *out) {
     return true;
 }
 
-static bool output_has_fullscreen(IslandOutput *out);
+static bool output_has_fullscreen(EdgeOutput *out);
 
-static void render_output(IslandOutput *out) {
+static void render_output(EdgeOutput *out) {
     if (!out->configured || out->width <= 0 || out->height <= 0) return;
 
     /* Closed over a fullscreen window: unmapped, nothing drawn over the game */
@@ -1507,7 +1516,7 @@ static void render_output(IslandOutput *out) {
 
     if (!allocate_buffer(out)) return;
 
-    IslandApp *app = out->app;
+    EdgeApp *app = out->app;
     int w = out->width;
     int h = out->height;
 
@@ -1539,7 +1548,7 @@ static void render_output(IslandOutput *out) {
         double corner_x = app->control_on_left ? 0.0 : (w - 160.0);
         add_hitbox(app, corner_x, hit_y, 160.0, 6.0, ACT_CORNER_EDGE, 0);
     } else {
-        IslandMode active_m = (app->mode != MODE_CLOSED) ? app->mode : app->target_mode;
+        EdgeMode active_m = (app->mode != MODE_CLOSED) ? app->mode : app->target_mode;
 
         /* ─────────────────────────────────────────────────────────────────── */
         /* A. Window strip (Super+W): one outer 1 px border                    */
@@ -2043,7 +2052,7 @@ static void render_output(IslandOutput *out) {
 /* ========================================================================== */
 /* Actions & Input                                                            */
 /* ========================================================================== */
-static void set_mode(IslandApp *app, IslandMode new_mode) {
+static void set_mode(EdgeApp *app, EdgeMode new_mode) {
     if (new_mode != MODE_CLOSED) {
         load_position_config(app);
         app->target_mode = new_mode;
@@ -2073,7 +2082,7 @@ static void set_mode(IslandApp *app, IslandMode new_mode) {
     damage_all(app);
 }
 
-static void toggle_subpanel(IslandApp *app, ControlSubpanel target) {
+static void toggle_subpanel(EdgeApp *app, ControlSubpanel target) {
     if (app->subpanel == target) {
         app->subpanel = SUB_NONE;
     } else {
@@ -2093,7 +2102,7 @@ static void toggle_subpanel(IslandApp *app, ControlSubpanel target) {
     damage_all(app);
 }
 
-static void close_window_at(IslandApp *app, int widx) {
+static void close_window_at(EdgeApp *app, int widx) {
     if (widx < 0 || widx >= app->win_count) return;
     CanvasWindow cw = app->windows[widx];
     for (int k = widx; k < app->win_count - 1; k++) {
@@ -2110,7 +2119,7 @@ static void close_window_at(IslandApp *app, int widx) {
     spawn_detached(cmd);
 }
 
-static void quit_tray_at(IslandApp *app, int tidx, const char *sig_name) {
+static void quit_tray_at(EdgeApp *app, int tidx, const char *sig_name) {
     if (tidx < 0 || tidx >= app->tray_count) return;
     const char *pname = app->tray_apps[tidx].proc_name[0]
         ? app->tray_apps[tidx].proc_name
@@ -2157,7 +2166,7 @@ static void run_cliphist_with_stdin(const char *cmd, const char *line) {
     }
 }
 
-static void delete_clip_at(IslandApp *app, int cidx) {
+static void delete_clip_at(EdgeApp *app, int cidx) {
     if (cidx < 0 || cidx >= app->clip_count) return;
     run_cliphist_with_stdin("cliphist delete 2>/dev/null", app->clip_items[cidx].raw_line);
     for (int k = cidx; k < app->clip_count - 1; k++) {
@@ -2168,7 +2177,7 @@ static void delete_clip_at(IslandApp *app, int cidx) {
     damage_all(app);
 }
 
-static void close_selected_item(IslandApp *app) {
+static void close_selected_item(EdgeApp *app) {
     for (int i = 0; i < app->hitbox_count; i++) {
         HitBox *hb = &app->hitboxes[i];
         if (hb->nav_idx == app->selected_idx) {
@@ -2199,7 +2208,7 @@ static void close_selected_item(IslandApp *app) {
     }
 }
 
-static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t button) {
+static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t button) {
     if (button == BTN_RIGHT) {
         if (hb->action_id == ACT_WIFI_TOGGLE) {
             toggle_subpanel(app, SUB_WIFI);
@@ -2514,7 +2523,7 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
     return false;
 }
 
-static void activate_selected(IslandApp *app) {
+static void activate_selected(EdgeApp *app) {
     for (int i = 0; i < app->hitbox_count; i++) {
         HitBox *hb = &app->hitboxes[i];
         if (hb->nav_idx == app->selected_idx) {
@@ -2524,7 +2533,7 @@ static void activate_selected(IslandApp *app) {
     }
 }
 
-static bool handle_click_at(IslandApp *app, IslandOutput *out, double x, double y, uint32_t button) {
+static bool handle_click_at(EdgeApp *app, EdgeOutput *out, double x, double y, uint32_t button) {
     (void)out;
     for (int i = app->hitbox_count - 1; i >= 0; i--) {
         HitBox *hb = &app->hitboxes[i];
@@ -2540,7 +2549,7 @@ static bool handle_click_at(IslandApp *app, IslandOutput *out, double x, double 
     return false;
 }
 
-static int count_nav_items(IslandApp *app) {
+static int count_nav_items(EdgeApp *app) {
     int max_nav = -1;
     for (int i = 0; i < app->hitbox_count; i++) {
         if (app->hitboxes[i].nav_idx > max_nav) {
@@ -2555,11 +2564,11 @@ static int count_nav_items(IslandApp *app) {
 /* ========================================================================== */
 static void on_frame_done(void *data, struct wl_callback *cb, uint32_t time_ms) {
     (void)time_ms;
-    IslandOutput *out = data;
+    EdgeOutput *out = data;
     if (cb) wl_callback_destroy(cb);
     out->frame_cb = NULL;
 
-    IslandApp *app = out->app;
+    EdgeApp *app = out->app;
     if (app->dragging) {
         render_output(out);
         return;
@@ -2581,15 +2590,15 @@ static const struct wl_callback_listener frame_listener = {
     .done = on_frame_done,
 };
 
-static void request_frame(IslandOutput *out) {
+static void request_frame(EdgeOutput *out) {
     if (out->frame_cb || !out->configured) return;
     out->frame_cb = wl_surface_frame(out->surface);
     wl_callback_add_listener(out->frame_cb, &frame_listener, out);
     wl_surface_commit(out->surface);
 }
 
-static void damage_all(IslandApp *app) {
-    for (IslandOutput *o = app->outputs; o; o = o->next) {
+static void damage_all(EdgeApp *app) {
+    for (EdgeOutput *o = app->outputs; o; o = o->next) {
         render_output(o);
         double target = (app->mode == MODE_CLOSED) ? 0.0 : 1.0;
         if (fabs(target - app->anim_progress) > 0.01) {
@@ -2598,8 +2607,8 @@ static void damage_all(IslandApp *app) {
     }
 }
 
-static IslandOutput *output_for_surface(IslandApp *app, struct wl_surface *s) {
-    for (IslandOutput *o = app->outputs; o; o = o->next)
+static EdgeOutput *output_for_surface(EdgeApp *app, struct wl_surface *s) {
+    for (EdgeOutput *o = app->outputs; o; o = o->next)
         if (o->surface == s) return o;
     return app->outputs;
 }
@@ -2607,8 +2616,8 @@ static IslandOutput *output_for_surface(IslandApp *app, struct wl_surface *s) {
 static void touch_down(void *data, struct wl_touch *touch, uint32_t serial, uint32_t time,
                        struct wl_surface *surface, int32_t id, wl_fixed_t fx, wl_fixed_t fy) {
     (void)touch; (void)serial;
-    IslandApp *app = data;
-    IslandOutput *out = output_for_surface(app, surface);
+    EdgeApp *app = data;
+    EdgeOutput *out = output_for_surface(app, surface);
     double x = wl_fixed_to_double(fx);
     double y = wl_fixed_to_double(fy);
 
@@ -2637,7 +2646,7 @@ static void touch_down(void *data, struct wl_touch *touch, uint32_t serial, uint
 static void touch_motion(void *data, struct wl_touch *touch, uint32_t time, int32_t id,
                          wl_fixed_t fx, wl_fixed_t fy) {
     (void)touch; (void)time;
-    IslandApp *app = data;
+    EdgeApp *app = data;
     if (id != app->touch_id) return;
     app->touch_cur_x = wl_fixed_to_double(fx);
     app->touch_cur_y = wl_fixed_to_double(fy);
@@ -2650,20 +2659,20 @@ static void touch_motion(void *data, struct wl_touch *touch, uint32_t time, int3
         if (prog < 0.0) prog = 0.0;
         if (prog > 1.0) prog = 1.0;
         app->anim_progress = prog;
-        for (IslandOutput *o = app->outputs; o; o = o->next) request_frame(o);
+        for (EdgeOutput *o = app->outputs; o; o = o->next) request_frame(o);
     } else if (app->mode != MODE_CLOSED && pull_dist < -20.0) {
         app->dragging = true;
         double prog = 1.0 + (pull_dist / 80.0);
         if (prog < 0.0) prog = 0.0;
         if (prog > 1.0) prog = 1.0;
         app->anim_progress = prog;
-        for (IslandOutput *o = app->outputs; o; o = o->next) request_frame(o);
+        for (EdgeOutput *o = app->outputs; o; o = o->next) request_frame(o);
     }
 }
 
 static void touch_up(void *data, struct wl_touch *touch, uint32_t serial, uint32_t time, int32_t id) {
     (void)touch; (void)serial;
-    IslandApp *app = data;
+    EdgeApp *app = data;
     if (id != app->touch_id) return;
 
     double dx = app->touch_cur_x - app->touch_start_x;
@@ -2698,7 +2707,7 @@ static void touch_up(void *data, struct wl_touch *touch, uint32_t serial, uint32
 static void touch_frame(void *data, struct wl_touch *t) { (void)data; (void)t; }
 static void touch_cancel(void *data, struct wl_touch *t) {
     (void)t;
-    IslandApp *app = data;
+    EdgeApp *app = data;
     app->dragging = false;
     damage_all(app);
 }
@@ -2714,7 +2723,7 @@ static const struct wl_touch_listener touch_listener = {
 static void pointer_enter(void *data, struct wl_pointer *p, uint32_t s,
                           struct wl_surface *surface, wl_fixed_t fx, wl_fixed_t fy) {
     (void)p; (void)s;
-    IslandApp *app = data;
+    EdgeApp *app = data;
     app->pointer_output = output_for_surface(app, surface);
     app->pointer_x = wl_fixed_to_double(fx);
     app->pointer_y = wl_fixed_to_double(fy);
@@ -2727,10 +2736,10 @@ static void pointer_enter(void *data, struct wl_pointer *p, uint32_t s,
 
 static void pointer_leave(void *data, struct wl_pointer *p, uint32_t s, struct wl_surface *surface) {
     (void)p; (void)s; (void)surface;
-    IslandApp *app = data;
+    EdgeApp *app = data;
     if (app->mode != MODE_CLOSED && app->kb_grab) {
         app->kb_grab = false;
-        for (IslandOutput *o = app->outputs; o; o = o->next) {
+        for (EdgeOutput *o = app->outputs; o; o = o->next) {
             update_surface_input_region(o);
             wl_surface_commit(o->surface);
         }
@@ -2739,7 +2748,7 @@ static void pointer_leave(void *data, struct wl_pointer *p, uint32_t s, struct w
 
 static void pointer_motion(void *data, struct wl_pointer *p, uint32_t t, wl_fixed_t fx, wl_fixed_t fy) {
     (void)p; (void)t;
-    IslandApp *app = data;
+    EdgeApp *app = data;
     app->pointer_x = wl_fixed_to_double(fx);
     app->pointer_y = wl_fixed_to_double(fy);
 
@@ -2762,10 +2771,10 @@ static void pointer_motion(void *data, struct wl_pointer *p, uint32_t t, wl_fixe
 static void pointer_button(void *data, struct wl_pointer *p, uint32_t s, uint32_t t,
                            uint32_t button, uint32_t state) {
     (void)p; (void)s; (void)t;
-    IslandApp *app = data;
+    EdgeApp *app = data;
     if (state != WL_POINTER_BUTTON_STATE_PRESSED) return;
     if (app->mode == MODE_CLOSED) {
-        IslandOutput *out = app->pointer_output ? app->pointer_output : app->outputs;
+        EdgeOutput *out = app->pointer_output ? app->pointer_output : app->outputs;
         bool in_ctrl_zone = false;
         if (out) {
             in_ctrl_zone = app->control_on_left
@@ -2780,7 +2789,7 @@ static void pointer_button(void *data, struct wl_pointer *p, uint32_t s, uint32_
 
 static void pointer_axis(void *data, struct wl_pointer *p, uint32_t t, uint32_t axis, wl_fixed_t val) {
     (void)p; (void)t;
-    IslandApp *app = data;
+    EdgeApp *app = data;
     if (app->mode != MODE_CONTROL || axis != WL_POINTER_AXIS_VERTICAL_SCROLL) return;
     double v = wl_fixed_to_double(val);
     if (v < -0.5) {
@@ -2813,7 +2822,7 @@ static const struct wl_pointer_listener pointer_listener = {
 
 static void keyboard_keymap(void *data, struct wl_keyboard *kb, uint32_t format, int32_t fd, uint32_t size) {
     (void)kb;
-    IslandApp *app = data;
+    EdgeApp *app = data;
     if (format != WL_KEYBOARD_KEYMAP_FORMAT_XKB_V1) { close(fd); return; }
     char *map_str = mmap(NULL, size, PROT_READ, MAP_SHARED, fd, 0);
     if (map_str == MAP_FAILED) { close(fd); return; }
@@ -2836,7 +2845,7 @@ static void keyboard_leave(void *d, struct wl_keyboard *k, uint32_t s, struct wl
 static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, uint32_t time,
                          uint32_t key, uint32_t state) {
     (void)kb; (void)serial; (void)time;
-    IslandApp *app = data;
+    EdgeApp *app = data;
     if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->xkb_state || app->mode == MODE_CLOSED) return;
 
     uint32_t keycode = key + 8;
@@ -2962,7 +2971,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
 static void keyboard_modifiers(void *data, struct wl_keyboard *kb, uint32_t s,
                                uint32_t dep, uint32_t lat, uint32_t lock, uint32_t grp) {
     (void)kb; (void)s;
-    IslandApp *app = data;
+    EdgeApp *app = data;
     if (app->xkb_state) xkb_state_update_mask(app->xkb_state, dep, lat, lock, 0, 0, grp);
 }
 
@@ -2980,7 +2989,7 @@ static const struct wl_keyboard_listener keyboard_listener = {
 };
 
 static void seat_capabilities(void *data, struct wl_seat *seat, uint32_t caps) {
-    IslandApp *app = data;
+    EdgeApp *app = data;
     if ((caps & WL_SEAT_CAPABILITY_POINTER) && !app->pointer) {
         app->pointer = wl_seat_get_pointer(seat);
         wl_pointer_add_listener(app->pointer, &pointer_listener, app);
@@ -3004,14 +3013,14 @@ static const struct wl_seat_listener seat_listener = {
 
 static void layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *ls,
                                     uint32_t serial, uint32_t width, uint32_t height) {
-    IslandOutput *out = data;
+    EdgeOutput *out = data;
     zwlr_layer_surface_v1_ack_configure(ls, serial);
     if (width > 0) out->width = (int32_t)width;
     if (height > 0) out->height = (int32_t)height;
     out->configured = true;
     render_output(out);
     /* remapped mid-animation (opened over a fullscreen window): keep animating */
-    IslandApp *app = out->app;
+    EdgeApp *app = out->app;
     double target = (app->mode == MODE_CLOSED) ? 0.0 : 1.0;
     if (app->dragging || fabs(target - app->anim_progress) > 0.01) request_frame(out);
 }
@@ -3025,14 +3034,14 @@ static const struct zwlr_layer_surface_v1_listener layer_surface_listener = {
     .closed = layer_surface_closed,
 };
 
-static void setup_layer_surface(IslandOutput *out) {
-    IslandApp *app = out->app;
+static void setup_layer_surface(EdgeOutput *out) {
+    EdgeApp *app = out->app;
     if (!app->layer_shell || !app->compositor || out->layer_surface) return;
 
     out->surface = wl_compositor_create_surface(app->compositor);
     out->layer_surface = zwlr_layer_shell_v1_get_layer_surface(
         app->layer_shell, out->surface, out->wl_output,
-        ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "infynitae-island");
+        ZWLR_LAYER_SHELL_V1_LAYER_OVERLAY, "infynitae-edge");
 
     zwlr_layer_surface_v1_set_anchor(
         out->layer_surface,
@@ -3048,9 +3057,9 @@ static void setup_layer_surface(IslandOutput *out) {
 }
 
 /* ========================================================================== */
-/* Fullscreen windows (wlr-foreign-toplevel): the island unmaps over them      */
+/* Fullscreen windows (wlr-foreign-toplevel): the edge unmaps over them      */
 /* ========================================================================== */
-static bool output_has_fullscreen(IslandOutput *out) {
+static bool output_has_fullscreen(EdgeOutput *out) {
     for (FsToplevel *t = out->app->toplevels; t; t = t->next) {
         if (!t->fullscreen) continue;
         for (int i = 0; i < t->n_outputs; i++)
@@ -3094,10 +3103,10 @@ static void fs_state(void *d, struct zwlr_foreign_toplevel_handle_v1 *h, struct 
     }
 }
 
-static IslandApp *fs_app; /* the one app, for the toplevel callbacks */
+static EdgeApp *fs_app; /* the one app, for the toplevel callbacks */
 
-static void fs_changed(IslandApp *app) {
-    for (IslandOutput *o = app->outputs; o; o = o->next) render_output(o);
+static void fs_changed(EdgeApp *app) {
+    for (EdgeOutput *o = app->outputs; o; o = o->next) render_output(o);
 }
 static void fs_done(void *d, struct zwlr_foreign_toplevel_handle_v1 *h) {
     (void)h;
@@ -3135,7 +3144,7 @@ static const struct zwlr_foreign_toplevel_handle_v1_listener fs_handle_listener 
 static void fs_toplevel(void *d, struct zwlr_foreign_toplevel_manager_v1 *m,
                         struct zwlr_foreign_toplevel_handle_v1 *h) {
     (void)m;
-    IslandApp *app = d;
+    EdgeApp *app = d;
     FsToplevel *t = calloc(1, sizeof(FsToplevel));
     if (!t) return;
     t->handle = h;
@@ -3154,7 +3163,7 @@ static const struct zwlr_foreign_toplevel_manager_v1_listener fs_manager_listene
 static void registry_global(void *data, struct wl_registry *reg, uint32_t name,
                             const char *interface, uint32_t version) {
     (void)version;
-    IslandApp *app = data;
+    EdgeApp *app = data;
     if (strcmp(interface, zwlr_foreign_toplevel_manager_v1_interface.name) == 0) {
         /* v2: the fullscreen state; v3's parent event is not listened to */
         fs_app = app;
@@ -3172,7 +3181,7 @@ static void registry_global(void *data, struct wl_registry *reg, uint32_t name,
         app->seat = wl_registry_bind(reg, name, &wl_seat_interface, 5);
         wl_seat_add_listener(app->seat, &seat_listener, app);
     } else if (strcmp(interface, wl_output_interface.name) == 0) {
-        IslandOutput *out = calloc(1, sizeof(IslandOutput));
+        EdgeOutput *out = calloc(1, sizeof(EdgeOutput));
         out->app = app;
         out->registry_name = name;
         out->wl_output = wl_registry_bind(reg, name, &wl_output_interface, 4);
@@ -3185,11 +3194,11 @@ static void registry_global(void *data, struct wl_registry *reg, uint32_t name,
 
 static void registry_global_remove(void *data, struct wl_registry *reg, uint32_t name) {
     (void)reg;
-    IslandApp *app = data;
-    IslandOutput **curr = &app->outputs;
+    EdgeApp *app = data;
+    EdgeOutput **curr = &app->outputs;
     while (*curr) {
         if ((*curr)->registry_name == name) {
-            IslandOutput *rm = *curr;
+            EdgeOutput *rm = *curr;
             *curr = rm->next;
             if (rm->frame_cb) wl_callback_destroy(rm->frame_cb);
             if (rm->layer_surface) zwlr_layer_surface_v1_destroy(rm->layer_surface);
@@ -3228,9 +3237,9 @@ static struct wl_display *connect_wayland_auto(void) {
     return NULL;
 }
 
-/* The island the pid file names, or 0: a pid file left by an island that crashed may name another
- * process by now, which a signal meant for the island would end (SIGUSR1 terminates by default). */
-static pid_t island_pid(const char *pfile) {
+/* The edge the pid file names, or 0: a pid file left by an edge that crashed may name another
+ * process by now, which a signal meant for the edge would end (SIGUSR1 terminates by default). */
+static pid_t edge_pid(const char *pfile) {
     pid_t pid = 0;
     FILE *pf = fopen(pfile, "r");
     if (!pf) return 0;
@@ -3243,15 +3252,15 @@ static pid_t island_pid(const char *pfile) {
     if (!cf) return 0;
     if (!fgets(comm, sizeof(comm), cf)) comm[0] = '\0';
     fclose(cf);
-    /* comm is the name cut to 15 characters: "infynitae-islan" */
-    return strncmp(comm, "infynitae-islan", 15) == 0 ? pid : 0;
+    comm[strcspn(comm, "\n")] = '\0';
+    return strcmp(comm, "infynitae-edge") == 0 ? pid : 0;
 }
 
 int main(int argc, char **argv) {
     const char *pfile = pid_file_path();
 
     if (argc > 1) {
-        pid_t running_pid = island_pid(pfile);
+        pid_t running_pid = edge_pid(pfile);
         if (strcmp(argv[1], "toggle") == 0 || strcmp(argv[1], "center") == 0) {
             if (running_pid > 0 && kill(running_pid, SIGUSR1) == 0) return 0;
         } else if (strcmp(argv[1], "control") == 0) {
@@ -3264,7 +3273,7 @@ int main(int argc, char **argv) {
         }
     }
 
-    pid_t old_pid = island_pid(pfile);
+    pid_t old_pid = edge_pid(pfile);
     if (old_pid > 0) {
         kill(old_pid, SIGTERM);
         usleep(50000);
@@ -3284,7 +3293,7 @@ int main(int argc, char **argv) {
     signal(SIGINT, on_sigterm);
     signal(SIGCHLD, SIG_IGN);
 
-    IslandApp app = {0};
+    EdgeApp app = {0};
     app.running = true;
     app.mode = MODE_CLOSED;
     app.target_mode = MODE_CENTER;
@@ -3304,14 +3313,14 @@ int main(int argc, char **argv) {
     app.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     app.display = connect_wayland_auto();
     if (!app.display) {
-        fprintf(stderr, "[infynitae-island] Cannot connect to Wayland display\n");
+        fprintf(stderr, "[infynitae-edge] Cannot connect to Wayland display\n");
         return 1;
     }
 
     app.registry = wl_display_get_registry(app.display);
     wl_registry_add_listener(app.registry, &registry_listener, &app);
     wl_display_roundtrip(app.display);
-    for (IslandOutput *o = app.outputs; o; o = o->next) setup_layer_surface(o);
+    for (EdgeOutput *o = app.outputs; o; o = o->next) setup_layer_surface(o);
     wl_display_roundtrip(app.display);
 
     start_async_refresh(&app, MODE_CONTROL);

@@ -31,12 +31,19 @@ if [ ! -O "$RUNTIME_DIR" ]; then
     exit 1
 fi
 
-if [ -z "$REPLAY_DIR" ] || [ "$REPLAY_DIR" = "/dev/shm/infynitae-replay" ]; then
-    REPLAY_DIR="$RUNTIME_DIR/infynitae-replay"
-fi
 CLIPS_DIR="${CLIPS_DIR:-$HOME/Videos/Clips}"
 RECORDINGS_DIR="${RECORDINGS_DIR:-$HOME/Videos/Recordings}"
 REPLAY_MINUTES="${REPLAY_BUFFER_MINUTES:-20}"
+if [ -z "$REPLAY_DIR" ] || [ "$REPLAY_DIR" = "/dev/shm/infynitae-replay" ]; then
+    # the replay in memory (tmpfs) where it fits: at most about 135 MB a minute (18 Mbit/s), kept
+    # under a quarter of the RAM; on a smaller machine it goes to the disk cache instead
+    mem_mb=$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo 2>/dev/null)
+    if [ -n "$mem_mb" ] && [ $((REPLAY_MINUTES * 135 * 4)) -gt "$mem_mb" ]; then
+        REPLAY_DIR="${XDG_CACHE_HOME:-$HOME/.cache}/infynitae-replay"
+    else
+        REPLAY_DIR="$RUNTIME_DIR/infynitae-replay"
+    fi
+fi
 RECORD_FPS="${RECORD_FPS:-60}"
 RECORD_CODEC="${RECORD_CODEC:-auto}" # auto, hevc, av1, h264
 RECORD_AUDIO="${RECORD_AUDIO:-desktop}"
@@ -103,6 +110,22 @@ detect_screen_geometry() {
 # The video encoder: the GPU's, when there is one
 # Scans AMD, Intel, NVIDIA, and software CPU fallbacks for any device
 # ------------------------------------------------------------------------------
+# The ffmpeg arguments for a VAAPI encoder ($1, with its rate arguments $2), printed when the GPU
+# encodes a test frame. The frames come as BGRX: the GPU converts them to NV12 (scale_vaapi, tagged
+# BT.709), about a fifth of the CPU of converting them before the upload; a driver that cannot
+# gets the conversion on the CPU.
+vaapi_args() {
+    dev="-init_hw_device vaapi=va:$TARGET_DRI"
+    for vf in "hwupload,scale_vaapi=format=nv12:out_color_matrix=bt709:out_range=tv" "format=nv12,hwupload"; do
+        # shellcheck disable=SC2086
+        if ffmpeg -loglevel error $dev -f lavfi -i testsrc=duration=0.05:size=640x360,format=bgr0 -vf "$vf" -c:v "$1" -f null - >/dev/null 2>&1; then
+            echo "$dev -vf $vf -c:v $1 $2"
+            return 0
+        fi
+    done
+    return 1
+}
+
 detect_encoder_pipeline() {
     # 1. Try VA-API (AMD Radeon, Intel Graphics, or Nouveau)
     TARGET_DRI="${DRI_DEVICE:-}"
@@ -116,14 +139,11 @@ detect_encoder_pipeline() {
     fi
 
     if [ -n "$TARGET_DRI" ] && [ -c "$TARGET_DRI" ]; then
-        if [ "$RECORD_CODEC" = "av1" ] && ffmpeg -loglevel error -init_hw_device vaapi=va:"$TARGET_DRI" -f lavfi -i testsrc=duration=0.05:size=640x360 -vf 'format=nv12,hwupload' -c:v av1_vaapi -f null - >/dev/null 2>&1; then
-            echo "-init_hw_device vaapi=va:$TARGET_DRI -vf format=nv12,hwupload -c:v av1_vaapi -b:v 14M -maxrate 18M"
+        if [ "$RECORD_CODEC" = "av1" ] && vaapi_args av1_vaapi "-b:v 14M -maxrate 18M"; then
             return
-        elif [ "$RECORD_CODEC" != "h264" ] && ffmpeg -loglevel error -init_hw_device vaapi=va:"$TARGET_DRI" -f lavfi -i testsrc=duration=0.05:size=640x360 -vf 'format=nv12,hwupload' -c:v hevc_vaapi -f null - >/dev/null 2>&1; then
-            echo "-init_hw_device vaapi=va:$TARGET_DRI -vf format=nv12,hwupload -c:v hevc_vaapi -b:v 14M -maxrate 18M"
+        elif [ "$RECORD_CODEC" != "h264" ] && vaapi_args hevc_vaapi "-b:v 14M -maxrate 18M"; then
             return
-        elif ffmpeg -loglevel error -init_hw_device vaapi=va:"$TARGET_DRI" -f lavfi -i testsrc=duration=0.05:size=640x360 -vf 'format=nv12,hwupload' -c:v h264_vaapi -f null - >/dev/null 2>&1; then
-            echo "-init_hw_device vaapi=va:$TARGET_DRI -vf format=nv12,hwupload -c:v h264_vaapi -b:v 16M -maxrate 20M"
+        elif vaapi_args h264_vaapi "-b:v 16M -maxrate 20M"; then
             return
         fi
     fi

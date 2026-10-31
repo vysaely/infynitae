@@ -47,9 +47,11 @@ build infynitae-lock "wayland-client cairo pangocairo xkbcommon pam" \
 build infynitae-wallpaper "wayland-client cairo gdk-pixbuf-2.0" \
     "$LIVE/wallpaper/infynitae-wallpaper.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
     "$LIVE/wallpaper/xdg-shell-protocol.c" -- -lm
-build infynitae-island "wayland-client cairo pangocairo xkbcommon gio-2.0" \
-    "$LIVE/island/infynitae-island.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
-    "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/island/wlr-foreign-toplevel-protocol.c" -- -lm
+build infynitae-edge "wayland-client cairo pangocairo xkbcommon gio-2.0" \
+    "$LIVE/edge/infynitae-edge.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
+    "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/edge/wlr-foreign-toplevel-protocol.c" -- -lm
+# the edge was called the island before 2026-10-31: its old binary goes
+[ -x "$BIN/infynitae-edge" ] && rm -f "$BIN/infynitae-island"
 build infynitae-record-stream "wayland-client" \
     "$LIVE/record/infynitae-record-stream.c" "$LIVE/record/wlr-screencopy-protocol.c" -- -pthread -lrt
 

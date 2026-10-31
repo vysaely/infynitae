@@ -430,7 +430,7 @@ CLIPBOARD_HISTORY="true"
 CLIPBOARD_PICKER=""
     # Super+V picker
     # default: ""
-    #   ""    infynitae-island clipboard (or MENU_PICKER)  · any dmenu-style command
+    #   ""    infynitae-edge clipboard (or MENU_PICKER)  · any dmenu-style command
 
 MENU_PICKER=""
     # Menus (control menu, clipboard)
@@ -453,17 +453,18 @@ AUTOMOUNT="true"
     # default: true
     # options: true  · false
 
-ENABLE_ISLAND="true"
-    # Native top/bottom shell bar for Super+W, Super+A, Super+V, and edge swipe [reload]
+ENABLE_EDGE="true"
+    # The edge: window strip and app search (Super+W), control panel (Super+A), clipboard
+    # (Super+V), from a screen edge [reload] (ENABLE_ISLAND, its old name, still works)
     # default: true
     # options: true  · false (falls back to fuzzel / control-menu)
 
-ISLAND_EDGE="top"
-    # Which screen edge the island and the control panel open from [reload]
+EDGE_POSITION="top"
+    # Which screen edge the edge and the control panel open from [reload]
     # default: top
     # options: top  · bottom
 
-ISLAND_CONTROL_SIDE="right"
+EDGE_CONTROL_SIDE="right"
     # Which corner the control panel sits in ("left" keeps clear of window close buttons top right) [reload]
     # default: right
     # options: right  · left
@@ -556,7 +557,8 @@ REPLAY_BUFFER_MINUTES="20"
 
 REPLAY_DIR="/dev/shm/infynitae-replay"
     # default: "/dev/shm/infynitae-replay"
-    #   "/dev/shm/infynitae-replay"    (RAM)  · any folder
+    #   "/dev/shm/infynitae-replay"    (RAM; on a machine whose RAM it would fill a quarter of,
+    #                                   the disk cache ~/.cache/infynitae-replay)  · any folder
 
 CLIPS_DIR="$HOME/Videos/Clips"
     # default: "$HOME/Videos/Clips"

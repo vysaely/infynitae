@@ -521,6 +521,6 @@ case "$1" in
         echo "  list cursors         List all installed cursor themes"
         echo "  list fonts           List recommended monospace/system fonts"
         echo "  edit                 Open ~/.config/infynitae/config in editor"
-        echo "  reload               Restart the helpers in place (island, wallpaper, portal…)"
+        echo "  reload               Restart the helpers in place (edge, wallpaper, portal…)"
         ;;
 esac

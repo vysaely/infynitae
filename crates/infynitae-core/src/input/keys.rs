@@ -58,7 +58,7 @@ pub enum KeyAction {
     FocusSlot(usize),
     /// Super+Shift+1..9: focus, raise, and frame/recenter camera on cluster at slot 0..8 (creation order)
     FocusClusterSlot(usize),
-    /// Super+W: toggles the island (window strip and app search)
+    /// Super+W: toggles the edge (window strip and app search)
     ToggleLauncher,
     /// Super+Q: launches terminal
     SpawnTerminal,
@@ -407,7 +407,7 @@ pub fn resolve_key_binding(
             return Some(KeyAction::FocusClusterSlot(s));
         }
     }
-    // Super+W: toggles the island; exactly Logo, never during interaction
+    // Super+W: toggles the edge; exactly Logo, never during interaction
     if key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ToggleLauncher);
     }
