@@ -372,11 +372,6 @@ LAUNCHER="auto"
     # default: auto
     #   auto    fuzzel, rofi, tofi, wofi  · any command, e.g. "wofi --show drun"
 
-ENABLE_QUICKSHELL="false"
-    # The Quickshell island/radar instead (needs quickshell)
-    # default: false
-    # options: false  · true
-
 FILE_MANAGER="auto"
     # Super+E (terminal ones like yazi, lf open in TERMINAL)
     # default: auto

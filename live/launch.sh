@@ -170,14 +170,13 @@ case "$ACTION" in
         esac
         ;;
     launcher|island)
-        # Super+W: Application launcher / Dynamic Island
+        # Super+W: the island (window strip and app search), else a launcher; LAUNCHER: any
+        # command, which is also how another shell (Quickshell, eww, AGS…) takes the key
         L="${LAUNCHER:-auto}"
         case "$L" in
             auto|""|island)
                 if island_on; then
                     exec "$HOME/.local/bin/infynitae-island" toggle
-                elif [ "${ENABLE_QUICKSHELL:-false}" = "true" ] && command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
-                    exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
                 elif command -v fuzzel >/dev/null 2>&1; then
                     exec fuzzel
                 elif command -v rofi >/dev/null 2>&1; then
@@ -186,12 +185,7 @@ case "$ACTION" in
                     exec tofi-drun
                 elif command -v wofi >/dev/null 2>&1; then
                     exec wofi --show drun
-                elif command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
-                    exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
                 fi
-                ;;
-            quickshell|qs)
-                exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
                 ;;
             fuzzel)
                 exec fuzzel
@@ -211,10 +205,8 @@ case "$ACTION" in
         esac
         ;;
     overview|radar)
-        # Super+Shift+Tab: Overview (Quickshell Canvas Radar if enabled, or fast Fuzzel window switcher)
-        if [ "${ENABLE_QUICKSHELL:-false}" = "true" ] && command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
-            exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call overview toggle
-        elif command -v infynitae >/dev/null 2>&1; then
+        # Super+Shift+Tab: the overview, a menu of the windows to go to
+        if command -v infynitae >/dev/null 2>&1; then
             exec infynitae msg overview
         elif command -v fuzzel >/dev/null 2>&1; then
             exec fuzzel
@@ -225,12 +217,7 @@ case "$ACTION" in
         # 1. Re-apply settings and reload all configured helpers (infynitae-reload; windows stay open)
         "$HOME/infynitae/live/infynitae-reload" all >/dev/null 2>&1 || true
 
-        # 2. Restart Quickshell Island / HUD if running
-        if pidof qs >/dev/null 2>&1; then
-            killall qs 2>/dev/null || true
-        fi
-
-        # 3. Reload third-party bars/daemons if running
+        # 2. Reload third-party bars/daemons if running
         if pidof waybar >/dev/null 2>&1; then
             killall -SIGUSR2 waybar 2>/dev/null || true
         fi

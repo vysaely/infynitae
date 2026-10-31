@@ -495,8 +495,7 @@ case "$1" in
         fi
         ;;
     reload)
-        killall qs 2>/dev/null || true
-        echo "==> Quickshell UI reloaded."
+        exec "$HOME/infynitae/live/infynitae-reload" all
         ;;
     restore|reset-zoom)
         infynitae msg restore
@@ -522,6 +521,6 @@ case "$1" in
         echo "  list cursors         List all installed cursor themes"
         echo "  list fonts           List recommended monospace/system fonts"
         echo "  edit                 Open ~/.config/infynitae/config in editor"
-        echo "  reload               Hot-reload Quickshell UI"
+        echo "  reload               Restart the helpers in place (island, wallpaper, portal…)"
         ;;
 esac

@@ -19,15 +19,14 @@ fi
 
 case "$ACTION" in
     reload|r)
-        echo "==> Reloading Quickshell UI..."
-        killall qs 2>/dev/null || true
-        echo "==> Quickshell supervisor will respawn immediately."
+        # the helpers (island, wallpaper, portal…) restart in place; windows stay open
+        exec "$REPO_DIR/live/infynitae-reload" all
         ;;
     logs|log|l)
         TARGET="${1:-all}"
         case "$TARGET" in
-            shell|qs)
-                tail -n 50 -f "$STATE_DIR/quickshell.log"
+            shell|helpers|h)
+                tail -n 50 -f "$STATE_DIR/helpers.log"
                 ;;
             session|s)
                 tail -n 50 -f "$STATE_DIR/session.log"
@@ -41,8 +40,8 @@ case "$ACTION" in
                 ;;
             *)
                 echo "=== Streaming Infynitae Logs (Ctrl+C to stop) ==="
-                touch "$STATE_DIR/session.log" "$STATE_DIR/quickshell.log"
-                tail -n 30 -f "$STATE_DIR/session.log" "$STATE_DIR/quickshell.log" "$STATE_DIR/crash.log" 2>/dev/null
+                touch "$STATE_DIR/session.log" "$STATE_DIR/helpers.log"
+                tail -n 30 -f "$STATE_DIR/session.log" "$STATE_DIR/helpers.log" "$STATE_DIR/crash.log" 2>/dev/null
                 ;;
         esac
         ;;
@@ -80,9 +79,9 @@ case "$ACTION" in
         echo "Usage: infynitae-dev <command>"
         echo ""
         echo "Commands:"
-        echo "  reload, r       Reload Quickshell Dynamic Island & Radar HUD (Super+Shift+R)"
+        echo "  reload, r       Restart the helpers in place: island, wallpaper, portal… (windows stay)"
         echo "  test, t         Launch a safe nested compositor window to test live changes"
-        echo "  logs, l [type]  Stream logs (all, shell, session, crash)"
+        echo "  logs, l [type]  Stream logs (all, helpers, session, crash)"
         echo "  build, b        Rebuild release binary and deploy to ~/.local/bin/infynitae"
         echo "  check           Verify architecture and run slot tests"
         ;;
