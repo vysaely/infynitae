@@ -113,11 +113,13 @@ these by date, e.g. "(owner, 2026-10-24)".
 - **The capture dot steps aside over a fullscreen window** (2026-10-26): anything drawn over a
   game keeps it from going to the screen directly (tearing, game mode), so while a screen shows
   a fullscreen window the dot is hidden there and a notification announces the capture once.
-- **Three Smithay patches, by decision** (D-B12-PIN): Smithay 0.7.0 is vendored with three
+- **Four Smithay patches, by decision** (D-B12-PIN): Smithay 0.7.0 is vendored with four
   authorized changes: P1, pointer constraints; P2 (2026-10-26), async page flips for tearing in
   games, which Smithay 0.7 cannot do; P3 (2026-10-26), an EGL context that is lost instead of
-  aborted when the GPU resets or runs out of memory. Anything else is worked around in the
-  adapter.
+  aborted when the GPU resets or runs out of memory; P4 (2026-10-31), that context created at a
+  high GPU priority (`EGL_IMG_context_priority`) and the granted one read back, so the desktop
+  stays smooth while a game loads the GPU (written 2026-10-30 without a decision, approved
+  2026-10-31). Anything else is worked around in the adapter.
 - **Apps must not die with the compositor** (2026-10-26): out of GPU memory (a model training,
   several games), Mesa aborted the compositor and every window closed. The console renderer's
   context is now lost instead (P3, U-009), and the backend makes a new renderer: the screens
