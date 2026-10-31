@@ -895,23 +895,23 @@ An optional user setting such as "navigate to activated windows" would be user p
 
 ## B11 — Camera-pan input semantics (X-8)
 
-### B11.1 Lifecycle (DECISION D-B11-PAN; ★ = verified by X-8)
+### B11.1 Lifecycle (DECISION D-B11-PAN; "(verified)" = verified by X-8)
 
 | Phase | Rule |
 |---|---|
-| Acquisition ★ | Binding press with no client-owned button (B10.3). The press is consumed. Records: initiating button, output, camera at start, Σ=0, and the lock point if a lock is active on the focused surface. |
-| Ownership ★ | The initiator plus every button pressed during the pan, each until its own release (C7). Motion while active. The **modifier is not part of ownership**: releasing it first changes nothing (C8). |
-| Accumulation ★ | Σ += physical Δ (accelerated) in f64. Camera = start − Q(Σ), quantized from the gesture origin (B1). X-8: 30 × (7.3, −2.1) → camera exactly (−219, 63). |
-| Camera update ★ | Per motion: camera set mutated; visibility pass (enter/leave per B9); preferred-scale increases only (MaxGesture). Stage untouched (INV-3). |
-| Input consumption ★ | No `wl_pointer.motion`, no `relative_motion`, no `wl_pointer.button` to any client while the pan owns the pointer (INV-1, all 9 cases). The pointer's output-local position is **frozen**: the world slides under a stationary cursor, so pans are unbounded and never clip at output edges. Frozen-cursor vs cursor-follows-world is UX policy (revisitable); ownership semantics are the same either way. |
-| Existing grabs | Client-owned button ⇒ no acquisition (C6 ★). Popup grab without a held button ⇒ chain dismissed, then acquired (B6.3; X-11). |
-| Pointer focus | **KeepFocus** (D-B11-FOCUS, B11.2) ★ |
-| Constraints ★ | Active locks persist through the pan with no `unlocked`, persistent or oneshot (C3). Confinement persists if the pointer stays over the surface (C5 small). |
-| Relative pointer ★ | Consumed. Nothing is replayed after termination; the first genuine motion yields exactly its own delta (INV-4, INV-5). |
+| Acquisition (verified) | Binding press with no client-owned button (B10.3). The press is consumed. Records: initiating button, output, camera at start, Σ=0, and the lock point if a lock is active on the focused surface. |
+| Ownership (verified) | The initiator plus every button pressed during the pan, each until its own release (C7). Motion while active. The **modifier is not part of ownership**: releasing it first changes nothing (C8). |
+| Accumulation (verified) | Σ += physical Δ (accelerated) in f64. Camera = start − Q(Σ), quantized from the gesture origin (B1). X-8: 30 × (7.3, −2.1) → camera exactly (−219, 63). |
+| Camera update (verified) | Per motion: camera set mutated; visibility pass (enter/leave per B9); preferred-scale increases only (MaxGesture). Stage untouched (INV-3). |
+| Input consumption (verified) | No `wl_pointer.motion`, no `relative_motion`, no `wl_pointer.button` to any client while the pan owns the pointer (INV-1, all 9 cases). The pointer's output-local position is **frozen**: the world slides under a stationary cursor, so pans are unbounded and never clip at output edges. Frozen-cursor vs cursor-follows-world is UX policy (revisitable); ownership semantics are the same either way. |
+| Existing grabs | Client-owned button ⇒ no acquisition (C6, verified). Popup grab without a held button ⇒ chain dismissed, then acquired (B6.3; X-11). |
+| Pointer focus | **KeepFocus** (D-B11-FOCUS, B11.2) (verified) |
+| Constraints (verified) | Active locks persist through the pan with no `unlocked`, persistent or oneshot (C3). Confinement persists if the pointer stays over the surface (C5 small). |
+| Relative pointer (verified) | Consumed. Nothing is replayed after termination; the first genuine motion yields exactly its own delta (INV-4, INV-5). |
 | Cancellation | Terminate without reverting the camera; owned buttons stay owned. |
-| Target destruction ★ | No effect on the pan (it has no element target). A destroyed lock target falls back to free reconciliation (C9). |
+| Target destruction (verified) | No effect on the pan (it has no element target). A destroyed lock target falls back to free reconciliation (C9). |
 | Output disappearance | Orphaned pan (B10.4). Design only (X-11). |
-| Termination ★ | Initiator release (consumed). `gesture_active` = false → deferred scale decreases apply (B8.3). |
+| Termination (verified) | Initiator release (consumed). `gesture_active` = false → deferred scale decreases apply (B8.3). |
 
 ### B11.2 Pan focus mode (DECISION D-B11-FOCUS = KeepFocus; EXPERIMENT X-8 C3)
 
@@ -944,10 +944,10 @@ INV-1 held in each: 0 motion, 0 relative, 0 button during ownership.
 |---|---|---|
 | Free | Re-hit-test at the unchanged output-local position | One `wl_pointer.motion` at the **true** surface-local position, or leave/enter if the surface under the pointer changed. X-8: exactly (11, 283), then (12, 283) after the next +1 motion. Not a replayed delta. |
 | Locked, lock point still on the pointer's output | Keep the lock. The output-local position is re-derived from the Canvas lock point. | **nothing** (C3). The next genuine Δ arrives as `relative_motion` only. |
-| Locked, lock point no longer observable | End the lock (protocol allows compositor deactivation); free reconciliation. **Ordering rule (W-SM-4a):** deactivate explicitly only if pointer focus will not change; otherwise Smithay's `leave()` deactivates. | `leave`, then exactly one `unlocked` (C4, after the rule ★). Before the rule the client received `unlocked` **twice**, because Smithay's `leave()` deactivates unconditionally (EB-16). |
+| Locked, lock point no longer observable | End the lock (protocol allows compositor deactivation); free reconciliation. **Ordering rule (W-SM-4a):** deactivate explicitly only if pointer focus will not change; otherwise Smithay's `leave()` deactivates. | `leave`, then exactly one `unlocked` (C4, after the rule, verified). Before the rule the client received `unlocked` **twice**, because Smithay's `leave()` deactivates unconditionally (EB-16). |
 | Confined, pointer leaves the surface through the pan | Free reconciliation | `leave` + `unconfined` (C5 large). No warping. |
 
-No warping of the client-visible pointer to viewport edges, no synthetic relative motion, no replay of consumed deltas (INV-5 ★).
+No warping of the client-visible pointer to viewport edges, no synthetic relative motion, no replay of consumed deltas (INV-5, verified).
 
 **Uncertainty recorded, not invented:**
 - Whether real games behave well when their surface moves under a held lock (camera moved, lock point kept) is not established. No game was run (X-7, T5).
@@ -1031,7 +1031,7 @@ No warping of the client-visible pointer to viewport edges, no synthetic relativ
 | W-SM-1 | `Space` owns placement, z-order and activation (B2.4) | **not used** | design (EB-2) |
 | W-SM-2 | `Window::output_enter` / `Space::refresh` mis-compute membership for CSD trees and popups | own per-surface membership via `Output::enter`/`leave` (D-B8-ENTER) | quirk confirmed (X5); replacement tested in T1 |
 | W-SM-3 | `CompositorState::new` → v5 | always `new_v6`; T1 asserts the bound version | harness uses v6 (SC1) |
-| W-SM-4a | seat `leave()` → unconditional `deactivate()`, duplicating `unlocked` after an explicit deactivate | ordering rule: explicit `deactivate()` only when no pointer-focus change follows | **X-8 C4 ★** (48/48) |
+| W-SM-4a | seat `leave()` → unconditional `deactivate()`, duplicating `unlocked` after an explicit deactivate | ordering rule: explicit `deactivate()` only when no pointer-focus change follows | **X-8 C4 (verified)** (48/48) |
 | W-SM-4b | the same unconditional `deactivate()` **destroys a oneshot constraint that was never activated** when the pointer leaves its surface (only possible when Infynitae declines activation while the surface is focused, e.g. pointer outside a lock region) | **No public-API workaround.** A wrapper `PointerFocus` cannot send `wl_pointer.leave` itself (`PointerHandle.wl_pointer` is `pub(crate)`, `input/pointer/mod.rs:36`). Options: upstream fix (`if constraint.is_active()`); a vendored one-line `[patch]` under D-B12-PIN's patch policy; or accept. Decision deferred to Phase F; risk RB-10 | **reproduced (X-12)**; intervention deferred to the implementation phase |
 | W-SM-5 | `render_elements_from_surface_tree` takes an i32 root | build elements with `from_surface` (f64) over its own traversal | X-6 |
 | W-SM-6 | `ensure_configured` opt-in | call on every role commit | T1 (RB-3) |

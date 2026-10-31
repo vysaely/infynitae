@@ -113,7 +113,7 @@ Undefined-transition search method: for each machine, take every (state × trigg
 
 ## M6 Camera pan (pointer gesture)
 
-- **Sealed:** B11.1 (★ verified, X-8), B10.4, C4.6. Writer: interaction state (intake) + `navigation`. INV: INPUT-1/2/3/4, COORD-3, CAMERA-2/4. Tier: T1 (X-8 port), T4 (OB-21), T5 (OB-20).
+- **Sealed:** B11.1 (verified, X-8), B10.4, C4.6. Writer: interaction state (intake) + `navigation`. INV: INPUT-1/2/3/4, COORD-3, CAMERA-2/4. Tier: T1 (X-8 port), T4 (OB-21), T5 (OB-20).
 - **States:** `Idle` → `Panning{initiator, output, camera_start, Σ, lock}` → `Idle`, with `Orphaned` as a sub-state after output removal.
 
 | From | Trigger [guard] | To | Effects |
