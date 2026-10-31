@@ -210,10 +210,18 @@ if [ -x "$HOME/infynitae/live/config-check" ]; then
     (sleep 2; "$HOME/infynitae/live/config-check" --notify >/dev/null) &
 fi
 
-# 6d. USB drives and SD cards mount when plugged in (udiskie, through udisks2): AUTOMOUNT
+# 6d. USB drives and SD cards mount when plugged in (infynitae-automount, through udisks2): AUTOMOUNT
 case "${AUTOMOUNT:-true}" in
     1|true|yes|on|TRUE|True)
-        if command -v udiskie >/dev/null 2>&1; then
+        started=0
+        for s in "$HOME/.local/bin/infynitae-automount" "$HOME/infynitae/live/infynitae-automount"; do
+            if [ -x "$s" ]; then
+                "$s" >/dev/null 2>&1 &
+                started=1
+                break
+            fi
+        done
+        if [ "$started" -eq 0 ] && command -v udiskie >/dev/null 2>&1; then
             udiskie --no-tray --notify >/dev/null 2>&1 &
         fi
         ;;

@@ -248,10 +248,17 @@ reload_notifications() {
 }
 
 reload_automount() {
+    stop_helper infynitae-automount
     stop_helper udiskie
-    if is_true "${AUTOMOUNT:-true}" && command -v udiskie >/dev/null 2>&1; then
-        spawn udiskie --no-tray --notify
-        echo "automount: restarted"
+    if is_true "${AUTOMOUNT:-true}"; then
+        s=$(first "$BIN_DIR/infynitae-automount" "$LIVE/infynitae-automount")
+        if [ -n "$s" ]; then
+            spawn "$s"
+            echo "automount: restarted"
+        elif command -v udiskie >/dev/null 2>&1; then
+            spawn udiskie --no-tray --notify
+            echo "automount: restarted"
+        fi
     else
         echo "automount: stopped"
     fi
