@@ -556,7 +556,8 @@ REPLAY_BUFFER_MINUTES="20"
 
 REPLAY_DIR="/dev/shm/infynitae-replay"
     # default: "/dev/shm/infynitae-replay"
-    #   "/dev/shm/infynitae-replay"    (RAM)  · any folder
+    #   "/dev/shm/infynitae-replay"    (RAM; on a machine whose RAM it would fill a quarter of,
+    #                                   the disk cache ~/.cache/infynitae-replay)  · any folder
 
 CLIPS_DIR="$HOME/Videos/Clips"
     # default: "$HOME/Videos/Clips"
