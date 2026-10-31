@@ -817,6 +817,24 @@ impl WaylandState {
         }
     }
 
+    /// `ZOOM_SHARPEN`: "after" (apps re-render once a zoom settles, at whole scales only) or
+    /// "live" (at each rung while zooming, the ladder's finer steps).
+    fn set_zoom_sharpen(&mut self, after: bool) {
+        use infynitae_core::scale::{DEFAULT_R, ScalePolicyConfig};
+        let config = ScalePolicyConfig {
+            sharpen_after: after,
+            // a ratio of 2 leaves the whole scales (and the screens' own) as the only rungs
+            r: if after { 2.0 } else { DEFAULT_R },
+            ..*self.core.scale_config()
+        };
+        if config != *self.core.scale_config() {
+            match self.core.set_scale_config(config) {
+                Ok(fx) => self.apply(&fx),
+                Err(e) => eprintln!("[infynitae] ZOOM_SHARPEN refused: {e:?}"),
+            }
+        }
+    }
+
     pub fn reload_config(&mut self) {
         let mut new_cursor_theme: Option<String> = None;
         let mut new_cursor_size: Option<u32> = None;
@@ -835,6 +853,8 @@ impl WaylandState {
                 let mut exec_lines: Vec<(String, String)> = Vec::new();
                 let mut max_app_scale: Option<f64> = None;
                 let mut x11_keys_mode = x11_keys::Mode::default();
+                // "after" unless the config says "live" (a config from before the setting too)
+                let mut zoom_sharpen_after = true;
                 let (mut background_priority, mut game_mode) = (true, true);
                 let mut tearing = true;
                 for line in content.lines() {
@@ -1043,6 +1063,9 @@ impl WaylandState {
                                 ));
                             }
                             "XWAYLAND_KEYS" => x11_keys_mode = x11_keys::Mode::parse(val),
+                            "ZOOM_SHARPEN" => {
+                                zoom_sharpen_after = !val.eq_ignore_ascii_case("live")
+                            }
                             "DIRECT_SCANOUT" => {
                                 self.direct_scanout = Some(matches!(
                                     val.to_lowercase().as_str(),
@@ -1146,6 +1169,7 @@ impl WaylandState {
                 self.exec_commands = commands;
                 self.set_max_app_scale(max_app_scale);
                 self.x11_keys.mode = x11_keys_mode;
+                self.set_zoom_sharpen(zoom_sharpen_after);
                 self.background.game_mode = game_mode;
                 self.set_tearing_enabled(tearing);
                 self.background.enabled = background_priority;

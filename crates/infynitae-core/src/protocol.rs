@@ -805,6 +805,31 @@ impl Core {
         Ok(())
     }
 
+    /// The first screen's usable view in Canvas px, `(x0, y0, x1, y1)`: what the camera shows less
+    /// the layers' exclusive zones (bars), at the camera's zoom.
+    fn usable_view(&self) -> Option<(i64, i64, i64, i64)> {
+        let output = self.outputs.first()?;
+        let camera = self.cameras.camera_for_output(output.id)?;
+        let centre = self.cameras.center(camera)?;
+        let zoom = self.cameras.zoom(camera).unwrap_or(1.0);
+        let extent = output.logical_extent();
+        let (ux, uy, uw, uh) = self
+            .usable_area(output.id)
+            .unwrap_or((0.0, 0.0, extent.0, extent.1));
+        let (cx, cy) = (
+            centre.x as f64 / Q16_ONE as f64,
+            centre.y as f64 / Q16_ONE as f64,
+        );
+        let x0 = cx + (ux - extent.0 / 2.0) / zoom;
+        let y0 = cy + (uy - extent.1 / 2.0) / zoom;
+        Some((
+            x0.ceil() as i64,
+            y0.ceil() as i64,
+            (x0 + uw / zoom).floor() as i64,
+            (y0 + uh / zoom).floor() as i64,
+        ))
+    }
+
     /// A window that opened larger than its room and was offered the room (the adapter's fit,
     /// `fit_opening_window`) is placed again as if it had opened at that size: its first place
     /// was chosen for a size it never keeps, and would leave the fitted window off screen.
@@ -823,12 +848,24 @@ impl Core {
             w: size.0,
             h: size.1,
         };
-        let Some(anchor) = self.first_map_anchor(id, &tree) else {
+        let Some(mut anchor) = self.first_map_anchor(id, &tree) else {
             return Ok(());
         };
+        // a window that fills the room seldom has a free place on the screen: then it takes the
+        // middle of the view, and what it would cover is pushed aside, as when a window grows
+        // over its neighbours
+        if let Some((x0, y0, x1, y1)) = self.usable_view() {
+            let (w, h) = (i64::from(size.0), i64::from(size.1));
+            let on_screen =
+                anchor.x >= x0 && anchor.y >= y0 && anchor.x + w <= x1 && anchor.y + h <= y1;
+            if !on_screen {
+                anchor = CanvasPoint {
+                    x: x0 + (x1 - x0 - w) / 2,
+                    y: y0 + (y1 - y0 - h) / 2,
+                };
+            }
+        }
         self.place_by_shell(id, anchor, &mut out.fx)?;
-        // a window that fills the room has no free place on the screen: it takes the view, and
-        // what it would cover is pushed aside, as when a window grows over its neighbours
         let rect = (
             anchor.x,
             anchor.y,
@@ -1893,16 +1930,13 @@ impl Core {
             }
         }
 
-        // the usable view in Canvas px: a free spot wholly on screen wins over a nearer one that is
-        // not (a window an app opens by itself does not bring the camera to it)
-        let (half_w, half_h) = ((uw / (2.0 * zoom)) as i64, (uh / (2.0 * zoom)) as i64);
-        let view_cx = center_gx + (new_w / 2).min(half_w);
-        let view_cy = center_gy + (new_h / 2).min(half_h);
+        // a free spot wholly on screen wins over a nearer one that is not (a window an app opens
+        // by itself does not bring the camera to it)
+        let view = self.usable_view();
         let in_view = |gx: i64, gy: i64| {
-            gx >= view_cx - half_w
-                && gx + new_w <= view_cx + half_w
-                && gy >= view_cy - half_h
-                && gy + new_h <= view_cy + half_h
+            view.is_some_and(|(x0, y0, x1, y1)| {
+                gx >= x0 && gy >= y0 && gx + new_w <= x1 && gy + new_h <= y1
+            })
         };
         let best = candidates
             .into_iter()

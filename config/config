@@ -307,6 +307,12 @@ MAX_APP_SCALE="3"
     # default: 3
     # options: 3  · 1 never (cheapest, blurry when zoomed in)  · 2  · 4 …
 
+ZOOM_SHARPEN="after"
+    # When apps redraw sharper as you zoom [save]
+    # default: after
+    #   after   once the zoom stops, at a whole scale (2x, 3x): text does not shift while zooming
+    #   live    at each step while zooming (finer steps; a terminal re-flows its text at each)
+
 VRR_ENABLED="auto"
     # Variable refresh rate (FreeSync)
     # default: auto

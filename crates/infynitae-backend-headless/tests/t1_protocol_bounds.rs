@@ -144,6 +144,11 @@ fn a_fitted_window_takes_the_view_and_pushes_the_others_aside() {
         .mapped_elements()
         .first()
         .expect("mapped");
+    // the pointer toward the bottom right, as in the VM: the nearest free place is then below the
+    // terminal, off the screen
+    let d = (500.0, 400.0);
+    infynitae_backend_headless::pointer_motion(&mut ls.state, &mut ls.input, d, d, 1).unwrap();
+    adv(&mut ls);
 
     ls.probe.toplevel(&qh, "XTerm", (2404, 1954), 0);
     adv(&mut ls);
