@@ -93,3 +93,18 @@ lock screen that does not confirm in time holds the sleep back as long as logind
   of it only when the password manager marks it as sensitive and both wl-clipboard (2.2 or
   newer, `CLIPBOARD_STATE`) and cliphist honour that mark; if yours do not, turn the history off
   if you copy passwords.
+
+## Updates
+
+`infynitae-update` pulls the source with git, only forward, then installs some of its files as
+root (the lock screen's PAM file, the session entry) and builds it.
+
+- With `UPDATE_SIGNING_KEY` set in the config (a GnuPG fingerprint, or an SSH key as git prints
+  it), a new version is taken only when its commit carries a good signature by that key;
+  otherwise the update says so and builds the source as it was. Unset (the default), updates
+  work as before.
+- Your password is asked once at the start. The steps that need root run before the build, and
+  sudo's permission is ended (`sudo -k`) before the build starts, so nothing the build runs can
+  use it.
+- `install.sh` can be run from a download (`curl | bash`); reading the script first, or cloning
+  and checking the commit's signature, is the careful way.

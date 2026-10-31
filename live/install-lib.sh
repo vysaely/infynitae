@@ -183,6 +183,34 @@ sudo_once() {
     SUDO_KEEPER=$!
 }
 
+# The root steps are done: the keeper stops and sudo's permission ends now, not minutes later,
+# so nothing that runs afterwards (a build) can use it.
+end_sudo() {
+    [ -n "${SUDO_KEEPER:-}" ] && kill "$SUDO_KEEPER" 2>/dev/null
+    SUDO_KEEPER=""
+    sudo -k 2>/dev/null || true
+}
+
+# Whether commit $2 carries a good signature by key $1: a GnuPG fingerprint (or its end), or for
+# an SSH signature the key as git prints it (SHA256:...; needs gpg.ssh.allowedSignersFile).
+signed_by() {
+    local want out
+    want=$(printf '%s' "$1" | tr -d ' ' | tr '[:lower:]' '[:upper:]')
+    out=$(git verify-commit --raw "$2" 2>&1) || return 1
+    if printf '%s\n' "$out" | awk -v w="$want" '
+        $2 == "VALIDSIG" {
+            n = length(w)
+            if (n >= 16 && (substr($3, length($3) - n + 1) == w || substr($NF, length($NF) - n + 1) == w)) ok = 1
+        }
+        END { exit !ok }'; then
+        return 0
+    fi
+    case "$1" in
+        SHA256:*) printf '%s\n' "$out" | grep -q 'Good "git" signature' && printf '%s\n' "$out" | grep -qF "$1" ;;
+        *) return 1 ;;
+    esac
+}
+
 # ---- the install steps install.sh and update.sh share -------------------------------------------
 # One list each, so an installed copy never differs from a fresh one. A step that cannot be done
 # is said and skipped: the rest of Infynitae still installs.

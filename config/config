@@ -628,6 +628,13 @@ RECORD_AUDIO="desktop"
     # options: desktop  · mic  · both  · none
 
 
+UPDATE_SIGNING_KEY=""
+    # infynitae-update takes a new version only when its commit is signed by this key [use]
+    # default: ""   (any version from the repository, as before)
+    # options: ""  · a GnuPG fingerprint · an SSH key as git shows it (SHA256:..., with
+    #            gpg.ssh.allowedSignersFile set in git)
+
+
 # ═══ Key bindings ══════════════════════════════════════════════════════════════════ [save] ═══
 # Give an action other keys (its own are freed), or free them with "none":
 #   BIND_<ACTION>="CHORD[,CHORD]"       e.g. BIND_TERMINAL="SUPER+RETURN"

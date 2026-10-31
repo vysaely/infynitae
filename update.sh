@@ -49,10 +49,21 @@ if [ -d ".git" ]; then
     fi
 
     echo "==> Pulling $CURRENT_BRANCH..."
-    # only forward: a source with commits of its own is built as it is, never merged
-    git pull --ff-only origin "$CURRENT_BRANCH" || {
-        echo "==> Could not pull (offline, or local commits); building the source as it is"
-    }
+    # only forward: a source with commits of its own is built as it is, never merged. With
+    # UPDATE_SIGNING_KEY in the config, the new commit must be signed by that key (docs/SECURITY.md);
+    # an unsigned or otherwise signed one is not taken, and the source stays as it is
+    if git fetch origin "$CURRENT_BRANCH"; then
+        SIGNER=$( . "$HOME/.config/infynitae/config" 2>/dev/null; printf '%s' "${UPDATE_SIGNING_KEY:-}")
+        if [ -n "$SIGNER" ] && [ "$(git rev-parse FETCH_HEAD)" != "$(git rev-parse HEAD)" ] \
+            && ! signed_by "$SIGNER" FETCH_HEAD; then
+            echo "==> The update is not signed by your UPDATE_SIGNING_KEY: not taken; building the source as it is" >&2
+        else
+            git merge --ff-only FETCH_HEAD || \
+                echo "==> Could not move forward (local commits); building the source as it is"
+        fi
+    else
+        echo "==> Could not pull (offline); building the source as it is"
+    fi
 
     if [ "$PUSHED_STASH" = true ]; then
         echo "==> Restoring local changes..."
@@ -84,7 +95,13 @@ fi
 # GPU, joystick and uinput access come from systemd (70-uaccess) and the steam package
 # (60-steam-input); Infynitae needs no udev rules of its own.
 
-# 3. build
+# 3. what Infynitae needs outside the home folder (files of the source, none built): done with
+#    root now, so that the build runs with no sudo permission left (a build script of a
+#    dependency can never use it)
+install_system_files "$REPO_DIR"
+end_sudo
+
+# 4. build
 # a build folder linked to another drive that is not mounted: build here instead
 if [ -L target ] && [ ! -d target/ ]; then
     echo "==> The build folder's drive is not mounted ($(readlink target)): building in ./target"
@@ -94,10 +111,10 @@ JOBS=$(build_jobs)
 echo "==> Building ($JOBS jobs)..."
 cargo build --release -p infynitae -j "$JOBS"
 
-# 4. the programs, into ~/.local/bin (a running compositor keeps its old file until it restarts)
+# 5. the programs, into ~/.local/bin (a running compositor keeps its old file until it restarts)
 install_programs "$REPO_DIR"
 
-# 5. the session scripts, when this source is not ~/infynitae itself
+# 6. the session scripts, when this source is not ~/infynitae itself
 mkdir -p "$HOME/infynitae/live"
 SRC_LIVE="$(cd live 2>/dev/null && pwd -P || echo "")"
 DST_LIVE="$(cd "$HOME/infynitae/live" 2>/dev/null && pwd -P || echo "")"
@@ -105,12 +122,11 @@ if [ -n "$SRC_LIVE" ] && [ "$SRC_LIVE" != "$DST_LIVE" ]; then
     cp -rf live/* "$HOME/infynitae/live/"
 fi
 
-# 6. what Infynitae needs outside the home folder, and the config (yours is never overwritten)
-install_system_files "$REPO_DIR"
+# 7. the config (yours is never overwritten)
 install_config "$REPO_DIR"
 install_default_apps
 
-# 7. a running session: restart the helpers in place (windows stay open)
+# 8. a running session: restart the helpers in place (windows stay open)
 if pgrep -x infynitae >/dev/null 2>&1; then
     echo "==> Restarting the helpers (windows stay open)..."
     "$HOME/.local/bin/infynitae-reload" settings wallpaper edge portal polkit || true
