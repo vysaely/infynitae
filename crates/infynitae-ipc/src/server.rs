@@ -25,6 +25,10 @@ use crate::protocol::{self, MAX_LINE, Request, RequestError};
 /// How many lines may wait for one shell before it is disconnected.
 pub const OUTBOX: usize = 1024;
 
+/// Connections open at once (each has two threads). One more is closed at once; the acceptor
+/// goes on (owner, 2026-10-31). A shell needs one or two.
+pub const MAX_CONNECTIONS: usize = 64;
+
 /// Wakes the compositor's loop (a loop ping); called from the I/O threads.
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
@@ -76,6 +80,8 @@ pub struct ShellServer {
     model: Option<Model>,
     generation: u64,
     acceptor: Option<Acceptor>,
+    /// Connections whose reader still runs (`MAX_CONNECTIONS`).
+    live: Arc<std::sync::atomic::AtomicUsize>,
     /// The session is locked (`set_locked`).
     locked: bool,
 }
@@ -94,6 +100,7 @@ impl ShellServer {
             model: None,
             generation: 0,
             locked: false,
+            live: Arc::default(),
             acceptor: None,
         }
     }
@@ -107,24 +114,34 @@ impl ShellServer {
             self.next_id.clone(),
             stop.clone(),
         );
-        std::thread::spawn(move || {
-            for stream in listener.incoming() {
-                if stop.load(Ordering::Acquire) {
-                    return;
+        let live = self.live.clone();
+        // the acceptor never ends before the server: a refused or failed connection is dropped
+        let spawned = std::thread::Builder::new()
+            .name("shell-accept".into())
+            .spawn(move || {
+                for stream in listener.incoming() {
+                    if stop.load(Ordering::Acquire) {
+                        return;
+                    }
+                    let Ok(stream) = stream else { continue };
+                    if !admit(&stream) {
+                        continue; // dropped: closed without a word
+                    }
+                    if live.load(Ordering::Acquire) >= MAX_CONNECTIONS {
+                        continue; // too many open: closed at once
+                    }
+                    open(stream, &tx, &wake, &ids, &live);
                 }
-                let Ok(stream) = stream else { continue };
-                if !admit(&stream) {
-                    continue; // dropped: closed without a word
-                }
-                open(stream, &tx, &wake, &ids);
-            }
-        });
+            });
+        if let Err(e) = spawned {
+            eprintln!("[infynitae] Shell socket: cannot start its acceptor: {e}");
+        }
         self.acceptor = Some(Acceptor { path, stop: stop_t });
     }
 
     /// Adds a connection already admitted (a test's socket pair, or a launcher's).
     pub fn connect(&mut self, stream: UnixStream) {
-        open(stream, &self.tx, &self.wake, &self.next_id);
+        open(stream, &self.tx, &self.wake, &self.next_id, &self.live);
     }
 
     /// How many connections are open.
@@ -318,15 +335,31 @@ fn stream_of(cmd: &ShellCommand) -> ShellStream {
     }
 }
 
-/// Starts a connection's reader and writer threads and announces it.
-fn open(stream: UnixStream, tx: &Sender<Inbound>, wake: &Wake, ids: &Mutex<u64>) {
+/// Counts a connection while its reader runs.
+struct Live(Arc<std::sync::atomic::AtomicUsize>);
+
+impl Drop for Live {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, Ordering::AcqRel);
+    }
+}
+
+/// Starts a connection's reader and writer threads and announces it. When a thread cannot be
+/// started the connection is closed; nothing panics.
+fn open(
+    stream: UnixStream,
+    tx: &Sender<Inbound>,
+    wake: &Wake,
+    ids: &Mutex<u64>,
+    live: &Arc<std::sync::atomic::AtomicUsize>,
+) {
     let (Ok(reader), Ok(writer), Ok(handle)) =
         (stream.try_clone(), stream.try_clone(), stream.try_clone())
     else {
         return;
     };
     let id = {
-        let mut n = ids.lock().unwrap();
+        let mut n = ids.lock().unwrap_or_else(|e| e.into_inner());
         let id = *n;
         *n += 1;
         id
@@ -342,9 +375,24 @@ fn open(stream: UnixStream, tx: &Sender<Inbound>, wake: &Wake, ids: &Mutex<u64>)
     {
         return;
     }
-    std::thread::spawn(move || write_lines(writer, outbox));
-    let (tx, wake_r) = (tx.clone(), wake.clone());
-    std::thread::spawn(move || read_lines(id, reader, &tx, &wake_r));
+    if std::thread::Builder::new()
+        .spawn(move || write_lines(writer, outbox))
+        .is_err()
+    {
+        let _ = tx.send(Inbound::Closed(id));
+        return;
+    }
+    live.fetch_add(1, Ordering::AcqRel);
+    let counted = Live(live.clone());
+    let (tx_r, wake_r) = (tx.clone(), wake.clone());
+    let spawned = std::thread::Builder::new().spawn(move || {
+        let _counted = counted;
+        read_lines(id, reader, &tx_r, &wake_r)
+    });
+    if spawned.is_err() {
+        // the closure (and its count) is dropped with the error
+        let _ = tx.send(Inbound::Closed(id));
+    }
     wake();
 }
 

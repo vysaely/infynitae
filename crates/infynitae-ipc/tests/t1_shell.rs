@@ -711,3 +711,44 @@ fn layers_lists_each_windows_surfaces_and_where_they_are_drawn() {
     );
     assert_eq!(gen_of(&r), g0, "a diagnostic changes nothing");
 }
+
+/// L8 (owner, 2026-10-31): the shell socket keeps at most MAX_CONNECTIONS open; one more is closed
+/// at once, the acceptor goes on, and a closed connection frees its place.
+#[test]
+fn connections_beyond_the_limit_are_closed_and_the_socket_keeps_accepting() {
+    use std::io::Read;
+    use std::os::unix::net::UnixListener;
+    let (_core, mut server, _) = setup();
+    let dir = std::env::temp_dir().join(format!("t1_shell_limit_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("shell.sock");
+    let listener = UnixListener::bind(&path).unwrap();
+    server.listen(listener, path.clone(), Box::new(|_| true));
+    let closed_at_once = |s: &mut UnixStream| {
+        s.set_read_timeout(Some(Duration::from_millis(300)))
+            .unwrap();
+        matches!(s.read(&mut [0u8; 1]), Ok(0))
+    };
+    let mut open: Vec<UnixStream> = (0..infynitae_ipc::server::MAX_CONNECTIONS)
+        .map(|_| UnixStream::connect(&path).unwrap())
+        .collect();
+    // the acceptor has taken them all
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(
+        !closed_at_once(open.last_mut().unwrap()),
+        "within the limit it stays"
+    );
+    let mut extra = UnixStream::connect(&path).unwrap();
+    assert!(closed_at_once(&mut extra), "one more is closed");
+    // a closed one frees its place
+    drop(open.pop());
+    std::thread::sleep(Duration::from_millis(300));
+    let mut again = UnixStream::connect(&path).unwrap();
+    assert!(
+        !closed_at_once(&mut again),
+        "the acceptor still runs and has room"
+    );
+    drop(server);
+    let _ = std::fs::remove_dir_all(&dir);
+}
