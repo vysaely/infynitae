@@ -125,9 +125,11 @@ fi
 case "${ENABLE_EDGE:-true}" in
     0|false|no|off|FALSE|False) ;;
     *)
-        if [ -x "$HOME/.local/bin/infynitae-edge" ]; then
-            "$HOME/.local/bin/infynitae-edge" >/dev/null 2>&1 &
-        fi
+        # its name before 2026-10-31, until an update builds the new one
+        for _edge in "$HOME/.local/bin/infynitae-edge" "$HOME/.local/bin/infynitae-island"; do
+            if [ -x "$_edge" ]; then "$_edge" >/dev/null 2>&1 & break; fi
+        done
+        unset _edge
         ;;
 esac
 

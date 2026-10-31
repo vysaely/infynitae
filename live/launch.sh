@@ -88,11 +88,15 @@ resolve_terminal() {
 TERM_CMD=$(resolve_terminal)
 
 # The edge (ENABLE_EDGE) serves Super+W, Super+A and Super+V when it is on and installed
+# (EDGE_BIN; its name before 2026-10-31, infynitae-island, until an update builds the new one)
 edge_on() {
     case "${ENABLE_EDGE:-true}" in
         0|false|no|off|FALSE|False) return 1 ;;
     esac
-    [ -x "$HOME/.local/bin/infynitae-edge" ]
+    for EDGE_BIN in "$HOME/.local/bin/infynitae-edge" "$HOME/.local/bin/infynitae-island"; do
+        [ -x "$EDGE_BIN" ] && return 0
+    done
+    return 1
 }
 
 case "$ACTION" in
@@ -176,7 +180,7 @@ case "$ACTION" in
         case "$L" in
             auto|""|edge|island)
                 if edge_on; then
-                    exec "$HOME/.local/bin/infynitae-edge" toggle
+                    exec "$EDGE_BIN" toggle
                 elif command -v fuzzel >/dev/null 2>&1; then
                     exec fuzzel
                 elif command -v rofi >/dev/null 2>&1; then
@@ -499,7 +503,7 @@ case "$ACTION" in
         case "${CONTROL_MENU:-auto}" in
             auto|"")
                 if edge_on; then
-                    exec "$HOME/.local/bin/infynitae-edge" control
+                    exec "$EDGE_BIN" control
                 fi
                 for m in "$HOME/.local/bin/infynitae-control-menu" "$HOME/infynitae/live/control-menu"; do
                     if [ -x "$m" ]; then exec "$m"; fi
@@ -512,7 +516,7 @@ case "$ACTION" in
         # Super+V: Clipboard history picker (native infynitae-edge clipboard mode, or CLIPBOARD_PICKER / MENU_PICKER / fuzzel)
         if command -v cliphist >/dev/null 2>&1; then
             if edge_on && [ -z "${CLIPBOARD_PICKER:-}" ] && [ -z "${MENU_PICKER:-}" ]; then
-                exec "$HOME/.local/bin/infynitae-edge" clipboard
+                exec "$EDGE_BIN" clipboard
             fi
             PICKER="${CLIPBOARD_PICKER:-${MENU_PICKER:-fuzzel --dmenu}}"
             # Escape in the picker selects nothing: the clipboard is left as it was

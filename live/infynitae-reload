@@ -184,7 +184,7 @@ reload_polkit() {
 }
 
 reload_edge() {
-    p=$(first "$BIN_DIR/infynitae-edge")
+    p=$(first "$BIN_DIR/infynitae-edge" "$BIN_DIR/infynitae-island")
     stop_helper infynitae-edge
     # its name before 2026-10-31, still running from before an update
     stop_helper infynitae-island
