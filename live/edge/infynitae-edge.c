@@ -75,6 +75,7 @@ typedef struct {
     char app_id[64];
     char title[128];
     bool focused;
+    bool attention; /* opened without the focus or refused an activation: Super+Tab goes there first */
 } CanvasWindow;
 
 typedef struct {
@@ -814,6 +815,9 @@ static void parse_snapshot_buf(EdgeApp *app, const char *buf) {
                     }
                     w->title[i] = '\0';
                 }
+                /* the window wants attention (owner, 2026-10-31): its element says so */
+                const char *att_pos = strstr(id_pos, "\"attention\":true");
+                w->attention = att_pos && (!next_obj || att_pos < next_obj);
                 if (w->app_id[0] == '\0') strcpy(w->app_id, "Window");
                 if (w->title[0] == '\0') strcpy(w->title, w->app_id);
                 app->win_count++;
@@ -1628,12 +1632,25 @@ static void render_output(EdgeOutput *out) {
                     draw_bare_item(cr, tx, top_y + 1.0, tw_cell, row_h - 2.0, cw->focused, sel);
                     if (i > 0) draw_vline(cr, tx, top_y + 4.0, row_h - 8.0);
 
-                    cairo_set_source_rgba(cr, (cw->focused || sel) ? 0.95 : 0.62,
-                                          (cw->focused || sel) ? 0.97 : 0.67,
-                                          (cw->focused || sel) ? 1.00 : 0.75, 0.95);
-                    draw_text_left(cr, layout, cw->focused ? "Sans Medium 8.5" : "Sans 8.5",
+                    /* a window that wants attention (owner, 2026-10-31): an accent dot before its
+                     * title and an accent line under its tile, in the active border colour */
+                    double text_x = tx + 10.0;
+                    if (cw->attention) {
+                        cairo_set_source_rgba(cr, app->border_rgb[0], app->border_rgb[1],
+                                              app->border_rgb[2], 0.95 * ease);
+                        cairo_new_sub_path(cr);
+                        cairo_arc(cr, tx + 10.0, top_y + row_h / 2.0, 3.0, 0.0, 6.283185307179586);
+                        cairo_fill(cr);
+                        fill_rect(cr, tx + 4.0, top_y + row_h - 3.0, tw_cell - 8.0, 2.0);
+                        text_x = tx + 19.0;
+                    }
+
+                    cairo_set_source_rgba(cr, (cw->focused || sel || cw->attention) ? 0.95 : 0.62,
+                                          (cw->focused || sel || cw->attention) ? 0.97 : 0.67,
+                                          (cw->focused || sel || cw->attention) ? 1.00 : 0.75, 0.95);
+                    draw_text_left(cr, layout, (cw->focused || cw->attention) ? "Sans Medium 8.5" : "Sans 8.5",
                                    cw->title[0] ? cw->title : cw->app_id,
-                                   tx + 10.0, top_y + row_h / 2.0, tw_cell - 18.0);
+                                   text_x, top_y + row_h / 2.0, tw_cell - 8.0 - (text_x - tx));
 
                     add_hitbox_nav(app, tx, top_y, tw_cell, row_h, ACT_WIN_ITEM, app->filtered_wins[i], i);
                 }

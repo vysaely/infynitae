@@ -1,6 +1,6 @@
 # Status
 
-Updated 2026-10-26.
+Updated 2026-10-31.
 
 Infynitae is my daily desktop. It is young and has only run on my own machine, so expect rough
 edges on other hardware.
@@ -81,9 +81,10 @@ These pass the test suite but have not run on a real screen or device yet:
   refuses a cursor, it is drawn as before.
 - **Screen sharing only on change:** a remote desktop or a screen share gets a frame when the
   screen changed since its last one, with just what changed; a still screen costs nothing.
-- **Tearing for games** (`TEARING`, Super+Shift+T): a fullscreen window shown directly flips
-  each frame at once (an async page flip) when its app asks (`tearing-control-v1`, a Vulkan or
-  OpenGL game with vsync off) or after Super+Shift+T on it (X11 games, which cannot ask). A
+- **Tearing for games** (`TEARING`, Super+Shift+O; Super+Shift+T too): a fullscreen window
+  shown directly flips each frame at once (an async page flip) when its app asks
+  (`tearing-control-v1`, a Vulkan or OpenGL game with vsync off) or after Super+Shift+O on it
+  (X11 games, which cannot ask). A
   driver that refuses gets the usual flip. In the test suite; this GPU (amdgpu) reports support,
   not yet seen in a game.
 - **Game mode** (`GAME_MODE`, `--no-gamemode`): a fullscreen window the GPU shows directly is
@@ -120,6 +121,16 @@ These pass the test suite but have not run on a real screen or device yet:
   (`zwlr_virtual_pointer_v1`). Tested end to end on a private bus against a headless compositor,
   not yet with a real app.
 - **The session scripts and the C helpers** have the least test coverage of anything here.
+- **New key defaults (2026-10-31),** by the rule "often used on the left hand, rare on the
+  right": **Super+Tab** goes back to the window used before (tap again to return); holding
+  Super, each Tab goes one further back, and letting Super go picks the window. A window that
+  opened without the focus (`FOCUS_ON_OPEN` "user" or "priority") or whose request to be focused
+  was refused asks for attention: Super+Tab goes to it first and brings it into view, the edge
+  (Super+W) marks its tile with an accent dot and line, and `infynitae msg snapshot` says
+  `"attention": true` on it. **Super+S** takes a region screenshot (Super+Shift+S the whole
+  screen), **Super+Shift+O** turns tearing on for a window, **Super+Alt+P** starts or stops
+  recording; Super+Shift+R, Super+Shift+T and Super+Alt+R still work. In the test suite; not
+  yet used day to day.
 
 ## Missing
 

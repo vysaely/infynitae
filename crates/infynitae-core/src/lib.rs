@@ -969,10 +969,17 @@ impl Core {
             .any(|f| self.stage.mapped(f.element).is_some())
     }
 
-    /// FocusNext binding (Super+Tab): cycles focus to next live mapped element in stage order.
-    pub(crate) fn focus_next(&mut self) -> Vec<protocol::Effect> {
+    /// FocusNext binding (Super+Tab, owner 2026-10-31): the window that most recently asked for
+    /// attention if one does, else the window used before the focused one, and while Super stays
+    /// held one further back at each Tab (`FocusModel::focus_next`). Returns the effects and
+    /// whether it went to a window that asked for attention (the camera then always follows).
+    pub(crate) fn focus_next(&mut self) -> (Vec<protocol::Effect>, bool) {
         let live = self.focusable_elements();
-        let mut fx = self.focus.focus_next(&live);
+        let held = self.input.modifiers;
+        let (mut fx, attention) = match self.focus.focus_attention(&live, held) {
+            Some(fx) => (fx, true),
+            None => (self.focus.focus_next(&live, held), false),
+        };
         // Super+Tab brings the newly focused window to the front; what lies under the pointer may
         // have changed, so it gets one true-position event (M10), as after a camera write
         let raised = self.focus.target().is_some_and(|id| self.raise_by_user(id));
@@ -984,7 +991,17 @@ impl Core {
         {
             self.true_position_into(&mut fx);
         }
-        fx
+        (fx, attention)
+    }
+
+    /// A new window opened without the focus: FOCUS_ON_OPEN "user" (the user did not open it)
+    /// or "priority" (the focus was busy) held it back. It is marked for attention, so Super+Tab
+    /// reaches it first and the edge shows the mark (owner, 2026-10-31). Never a focus or camera
+    /// change; a window that is not mapped is ignored.
+    pub fn opened_without_focus(&mut self, id: stage::ElementId) {
+        if self.stage.state(id) == Some(stage::Lifecycle::Mapped) {
+            self.focus.mark_attention(id);
+        }
     }
 
     /// Resolves an evdev keycode and modifier snapshot against bindings.

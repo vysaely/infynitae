@@ -219,6 +219,9 @@ fn element(core: &Core, instance: u64, id: ElementId) -> Value {
             core.fullscreen_of(id)
                 .map_or(Value::Null, |f| f.output.get().into()),
         ),
+        // the window wants attention (opened without the focus, or its activation was refused):
+        // the edge marks its tile, Super+Tab goes to it first (owner, 2026-10-31)
+        ("attention", core.focus().attention().contains(&id).into()),
     ])
 }
 

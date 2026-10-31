@@ -1,6 +1,8 @@
 #!/bin/sh
 # Infynitae's shortcut actions (the compositor runs: launch.sh <action>)
 # Dispatches shortcuts: terminal (Super+Q), file-manager (Super+E), launcher (Super+W)
+# The keys follow the owner's rule (2026-10-31): often used on the left hand (Super+Tab, Q, W, E,
+# A, S, C, V), rare on the right (Super+L, Shift+O, Shift+P, Shift+I, Alt+P, Shift+BackSpace).
 ACTION="$1"
 
 # Initialize decoupled standalone desktop environment
@@ -235,7 +237,7 @@ case "$ACTION" in
         fi
         ;;
     screenshot)
-        # Super+Shift+S / PrintScreen: Screenshot dispatcher
+        # Super+Shift+S / PrintScreen: Screenshot dispatcher (the whole screen)
         SHOT_DIR="${SCREENSHOT_DIR:-$HOME/Pictures/Screenshots}"
         mkdir -p "$SHOT_DIR"
         SHOT_FILE="$SHOT_DIR/shot-$(date +%Y%m%d-%H%M%S).png"
@@ -262,8 +264,8 @@ case "$ACTION" in
         "$HOME/.local/bin/infynitae-xkill" "$2" "$3"
         ;;
     region-screenshot)
-        # Super+Shift+R: Interactive region screenshot (slurp + grim) of the moment the key was
-        # pressed
+        # Super+S (Super+Shift+R too): Interactive region screenshot (slurp + grim) of the moment
+        # the key was pressed
         SHOT_DIR="${SCREENSHOT_DIR:-$HOME/Pictures/Screenshots}"
         mkdir -p "$SHOT_DIR"
         SHOT_FILE="$SHOT_DIR/region-$(date +%Y%m%d-%H%M%S).png"
@@ -563,7 +565,7 @@ case "$ACTION" in
         fi
         ;;
     notify-tearing-on)
-        # Super+Shift+T: the focused window tears while fullscreen
+        # Super+Shift+O (Super+Shift+T too): the focused window tears while fullscreen
         if command -v notify-send >/dev/null 2>&1; then
             notify-send -a "Infynitae" -i video-display -h string:x-canonical-private-synchronous:tearing -t 1500 "Tearing: ON" "Fullscreen frames show at once: lowest latency" 2>/dev/null || true
         fi
@@ -606,7 +608,7 @@ case "$ACTION" in
         fi
         ;;
     record-toggle|toggle-record)
-        # Super+Alt+R: Toggle continuous screen recording
+        # Super+Alt+P (Super+Alt+R too): Toggle continuous screen recording
         if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
             exec "$HOME/.local/bin/infynitae-recorder" record-toggle
         elif [ -x "$HOME/infynitae/live/record/infynitae-recorder" ]; then

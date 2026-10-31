@@ -32,6 +32,7 @@ pub const KEY_Q: u32 = 16;
 pub const KEY_W: u32 = 17;
 pub const KEY_E: u32 = 18;
 pub const KEY_I: u32 = 23;
+pub const KEY_O: u32 = 24;
 pub const KEY_P: u32 = 25;
 pub const KEY_T: u32 = 20;
 pub const KEY_C: u32 = 46;
@@ -51,8 +52,14 @@ pub const KEY_BRIGHTNESSDOWN: u32 = 224;
 pub const KEY_BRIGHTNESSUP: u32 = 225;
 
 /// An action triggered by a matched compositor key binding.
+///
+/// The keys follow the owner's rule (2026-10-31): what is used often sits on the left hand
+/// (Super+Tab, Q, W, E, A, S, C, V), what is used rarely on the right (Super+L, Shift+O, Shift+P,
+/// Shift+I, Alt+P, Shift+BackSpace).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyAction {
+    /// Super+Tab (owner, 2026-10-31): the window that asked for attention, else the window used
+    /// before this one; Tab again with Super held steps further back (`FocusModel::focus_next`)
     FocusNext,
     /// Super+1..9: focus, raise, and recenter camera on mapped window at slot 0..8 (creation order)
     FocusSlot(usize),
@@ -66,7 +73,7 @@ pub enum KeyAction {
     SpawnFileManager,
     /// Super+Shift+S or PrintScreen: capture fullscreen screenshot
     SpawnScreenshot,
-    /// Super+Shift+R: capture region screenshot
+    /// Super+S (owner, 2026-10-31), or Super+Shift+R as before: capture region screenshot
     SpawnRegionScreenshot,
     /// Super+Shift+Tab: toggles canvas overview radar
     ToggleOverview,
@@ -82,11 +89,13 @@ pub enum KeyAction {
     TogglePrivacy,
     /// Super+Shift+I: toggle idle sleep inhibition (stay awake mode: prevents DPMS screen sleep and auto-lock)
     ToggleIdleInhibit,
-    /// Super+Shift+T: the focused window tears while fullscreen (its frames shown at once), or no longer
+    /// Super+Shift+O (owner, 2026-10-31), or Super+Shift+T as before: the focused window tears
+    /// while fullscreen (its frames shown at once), or no longer
     ToggleTearing,
     /// Super+Alt+C: save instant 20-minute replay clip
     SaveReplay,
-    /// Super+Alt+R: toggle continuous screen recording
+    /// Super+Alt+P (owner, 2026-10-31), or Super+Alt+R as before: toggle continuous screen
+    /// recording
     ToggleRecording,
     /// Hardware Volume Up
     VolumeUp,
@@ -318,7 +327,7 @@ pub struct KeyBinding {
 
 /// Canonical key bindings: none beyond the exact-modifier bindings resolved in
 /// [`resolve_key_binding`]. FocusNext is on Super+Tab; Super+Shift+Tab is reserved for the overview
-/// (owner decisions 2026-10-21).
+/// (owner decisions 2026-10-21; Super+Tab flips between the last two windows, 2026-10-31).
 pub const CANONICAL_BINDINGS: [KeyBinding; 0] = [];
 
 /// Pure binding filter: resolves an evdev keycode and modifier snapshot against bindings.
@@ -347,7 +356,8 @@ pub fn resolve_key_binding(
             false => KeyAction::FitToggle,
         });
     }
-    // Super+Tab cycles the focus; Super+Shift+Tab toggles canvas overview radar
+    // Super+Tab goes to the window asking for attention, else flips between the last two used
+    // (held: steps further back); Super+Shift+Tab toggles canvas overview radar
     if key == KEY_TAB && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
         if mods.shift {
             return Some(KeyAction::ToggleOverview);
@@ -425,7 +435,12 @@ pub fn resolve_key_binding(
     {
         return Some(KeyAction::SpawnScreenshot);
     }
-    // Super+Shift+R: region screenshot; Logo+Shift, never during interaction
+    // Super+S: region screenshot (owner, 2026-10-31: often used, on the left hand); exactly
+    // Logo, never during interaction
+    if key == KEY_S && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::SpawnRegionScreenshot);
+    }
+    // Super+Shift+R: region screenshot, kept as an alias; Logo+Shift, never during interaction
     if key == KEY_R && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::SpawnRegionScreenshot);
     }
@@ -459,16 +474,30 @@ pub fn resolve_key_binding(
     if key == KEY_I && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ToggleIdleInhibit);
     }
-    // Super+Shift+T: the focused window tears while fullscreen; Logo+Shift, never during interaction
-    if key == KEY_T && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+    // Super+Shift+O (owner, 2026-10-31: rarely used, on the right hand), or Super+Shift+T kept as
+    // an alias: the focused window tears while fullscreen; Logo+Shift, never during interaction
+    if (key == KEY_O || key == KEY_T)
+        && mods.logo
+        && mods.shift
+        && !mods.ctrl
+        && !mods.alt
+        && !interaction_active
+    {
         return Some(KeyAction::ToggleTearing);
     }
     // Super+Alt+C: save instant 20-minute replay clip; Logo+Alt, never during interaction
     if key == KEY_C && mods.logo && mods.alt && !mods.ctrl && !mods.shift && !interaction_active {
         return Some(KeyAction::SaveReplay);
     }
-    // Super+Alt+R: toggle continuous screen recording; Logo+Alt, never during interaction
-    if key == KEY_R && mods.logo && mods.alt && !mods.ctrl && !mods.shift && !interaction_active {
+    // Super+Alt+P (owner, 2026-10-31: rarely used, on the right hand), or Super+Alt+R kept as an
+    // alias: toggle continuous screen recording; Logo+Alt, never during interaction
+    if (key == KEY_P || key == KEY_R)
+        && mods.logo
+        && mods.alt
+        && !mods.ctrl
+        && !mods.shift
+        && !interaction_active
+    {
         return Some(KeyAction::ToggleRecording);
     }
     // Hardware media and volume keys: triggered directly on keypress, never during interaction
@@ -1046,5 +1075,103 @@ mod tests {
         // During interaction: None
         assert_eq!(resolve_key_binding(KEY_V, logo, true), None);
         assert!(ACTION_NAMES.contains(&("CLIPBOARD", KeyAction::ClipboardHistory)));
+    }
+
+    /// The owner's keys of 2026-10-31 ("often used on the left hand, rare on the right"): Super+S
+    /// region screenshot, Super+Shift+O tearing, Super+Alt+P recording, each with its old chord
+    /// kept as an alias; Super+Shift+S stays the full screenshot. Exact modifiers, never during
+    /// an interaction.
+    #[test]
+    fn left_hand_keys_and_their_aliases() {
+        let logo = mods(true, false, false, false);
+        let logo_shift = mods(true, false, false, true);
+        let logo_alt = mods(true, false, true, false);
+        let cases = [
+            (KEY_S, logo, KeyAction::SpawnRegionScreenshot),
+            (KEY_R, logo_shift, KeyAction::SpawnRegionScreenshot),
+            (KEY_S, logo_shift, KeyAction::SpawnScreenshot),
+            (KEY_O, logo_shift, KeyAction::ToggleTearing),
+            (KEY_T, logo_shift, KeyAction::ToggleTearing),
+            (KEY_P, logo_alt, KeyAction::ToggleRecording),
+            (KEY_R, logo_alt, KeyAction::ToggleRecording),
+            (KEY_P, logo_shift, KeyAction::TogglePrivacy),
+            (KEY_C, logo_alt, KeyAction::SaveReplay),
+        ];
+        for (key, m, action) in cases {
+            assert_eq!(
+                resolve_key_binding(key, m, false),
+                Some(action),
+                "{key} {m:?}"
+            );
+            assert_eq!(resolve_key_binding(key, m, true), None, "{key} interaction");
+        }
+        // other modifiers resolve none of the new chords
+        assert_eq!(
+            resolve_key_binding(KEY_S, mods(true, true, false, false), false),
+            None
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_S, mods(false, false, false, false), false),
+            None
+        );
+        assert_eq!(resolve_key_binding(KEY_O, logo, false), None);
+        assert_eq!(resolve_key_binding(KEY_P, logo, false), None);
+        assert_eq!(
+            resolve_key_binding(KEY_O, mods(true, true, false, true), false),
+            None
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_P, mods(true, false, true, true), false),
+            None
+        );
+        // the rebindable names: TEARING and RECORD name the actions
+        assert!(ACTION_NAMES.contains(&("TEARING", KeyAction::ToggleTearing)));
+        assert!(ACTION_NAMES.contains(&("RECORD", KeyAction::ToggleRecording)));
+        assert!(ACTION_NAMES.contains(&("REGION_SCREENSHOT", KeyAction::SpawnRegionScreenshot)));
+    }
+
+    /// The user's own bindings still win over the new keys: a chord of theirs on Super+S keeps
+    /// its command, and an action they moved answers neither its new chord nor its alias.
+    #[test]
+    fn user_bindings_win_over_the_new_keys_and_free_both_chords() {
+        let logo = mods(true, false, false, false);
+        let user = UserBindings {
+            chords: vec![
+                (
+                    Chord {
+                        key: KEY_S,
+                        mods: logo,
+                    },
+                    Some(KeyAction::Exec(3)),
+                ),
+                (
+                    Chord {
+                        key: KEY_F,
+                        mods: logo,
+                    },
+                    Some(KeyAction::ToggleTearing),
+                ),
+            ],
+            moved: vec![KeyAction::ToggleTearing, KeyAction::ToggleRecording],
+        };
+        let r = |key, m| resolve_key_binding_with(&user, key, m, false);
+        assert_eq!(r(KEY_S, logo), Some(KeyAction::Exec(3)), "their Super+S");
+        assert_eq!(
+            r(KEY_R, mods(true, false, false, true)),
+            Some(KeyAction::SpawnRegionScreenshot),
+            "the region screenshot still has its alias"
+        );
+        assert_eq!(r(KEY_O, mods(true, false, false, true)), None, "moved");
+        assert_eq!(r(KEY_T, mods(true, false, false, true)), None, "moved");
+        assert_eq!(r(KEY_F, logo), Some(KeyAction::ToggleTearing));
+        assert_eq!(r(KEY_P, mods(true, false, true, false)), None, "freed");
+        assert_eq!(r(KEY_R, mods(true, false, true, false)), None, "freed");
+        assert_eq!(
+            parse_chord("SUPER+SHIFT+O"),
+            Some(Chord {
+                key: KEY_O,
+                mods: mods(true, false, false, true)
+            })
+        );
     }
 }
