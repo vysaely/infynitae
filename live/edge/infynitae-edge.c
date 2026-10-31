@@ -1164,7 +1164,7 @@ static void start_async_refresh(EdgeApp *app, int kind) {
             execl("/bin/sh", "sh", "-c", "infynitae msg snapshot 2>/dev/null", (char *)NULL);
         } else if (kind == MODE_CONTROL) {
             execl("/bin/sh", "sh", "-c",
-                  "ssid=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | sed -n 's/^yes://p' | head -1); "
+                  "ssid=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | sed -n 's/^yes://p' | head -1 | tr '\\t\\r' '  '); "
                   "wradio=$(nmcli radio wifi 2>/dev/null); "
                   "bt=$(bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo on || echo off); "
                   "btdev=$( [ \"$bt\" = on ] && bluetoothctl devices Connected 2>/dev/null | head -1 | cut -d' ' -f3- ); "
@@ -1179,7 +1179,11 @@ static void start_async_refresh(EdgeApp *app, int kind) {
                 execl("/bin/sh", "sh", "-c",
                       "nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan no 2>/dev/null "
                       "| sed 's/\\\\:/\\x1f/g' "
-                      "| awk -F: '$4 != \"\" { gsub(\"\\x1f\", \":\", $4); if (!seen[$4]++) printf \"%d\\t%s\\t%s\\t%s%%\\n\", ($1==\"*\"), $4, $4, $2 }' "
+                      /* a network's name is the access point's: a tab in it is carried as \036 in the id (the
+                       * connect script turns it back) and shown as a space, so it never adds a field */
+                      "| awk -F: '$4 != \"\" { gsub(\"\\x1f\", \":\", $4); if (seen[$4]++) next; "
+                      "id = $4; gsub(\"\\t\", \"\\036\", id); lbl = $4; gsub(/[[:cntrl:]]/, \" \", lbl); "
+                      "printf \"%d\\t%s\\t%s\\t%s%%\\n\", ($1==\"*\"), id, lbl, $2 }' "
                       "| head -n 6",
                       (char *)NULL);
             } else if (app->subpanel == SUB_BT) {
@@ -2340,8 +2344,9 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
         if (sidx >= 0 && sidx < app->sub_count) {
             SubItem *si = &app->sub_items[sidx];
             if (app->subpanel == SUB_WIFI) {
-                spawn_script("nmcli connection up id \"$1\" >/dev/null 2>&1 || "
-                             "nmcli dev wifi connect \"$1\" >/dev/null 2>&1",
+                spawn_script("s=$(printf '%s' \"$1\" | tr '\\036' '\\t'); "
+                             "nmcli connection up id \"$s\" >/dev/null 2>&1 || "
+                             "nmcli dev wifi connect \"$s\" >/dev/null 2>&1",
                              si->id, NULL);
                 snprintf(app->wifi_label, sizeof(app->wifi_label), "%s", si->label);
                 for (int k = 0; k < app->sub_count; k++) app->sub_items[k].active = (k == sidx);
