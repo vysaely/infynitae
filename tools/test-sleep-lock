@@ -1,0 +1,94 @@
+#!/bin/sh
+# tools/test-sleep-lock: test live/infynitae-sleep-lock without logind or a compositor. The
+# compositor's answer (`infynitae msg snapshot`), the inhibitor, logind's delay and the lock
+# screen are stand-ins; logind's signals come through INFYNITAE_SLEEP_MONITOR.
+# It checks: the sleep goes on only once the compositor says the session is locked; a process
+# merely named like the lock screen counts for nothing; a lock that is not confirmed keeps the
+# inhibitor (the sleep is never let go early).
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+SCRIPT="$REPO_DIR/live/infynitae-sleep-lock"
+TMP=$(mktemp -d "/tmp/infynitae-test-sleep-lock.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+BIN="$TMP/bin"
+mkdir -p "$BIN" "$TMP/home" "$TMP/run"
+
+# the compositor: locked once $TMP/locked exists
+cat > "$BIN/infynitae" <<EOF
+#!/bin/sh
+[ "\$1 \$2" = "msg snapshot" ] || exit 2
+if [ -f "$TMP/locked" ]; then echo '{"id":1,"ok":true,"snapshot":{"locked":true}}'
+else echo '{"id":1,"ok":true,"snapshot":{"locked":false}}'; fi
+EOF
+# the inhibitor: alive until killed (released)
+cat > "$BIN/systemd-inhibit" <<EOF
+#!/bin/sh
+echo \$\$ > "$TMP/inhibitor.pid"
+exec sleep 1000
+EOF
+# logind's delay limit: 1 s, so the test is quick
+cat > "$BIN/busctl" <<EOF
+#!/bin/sh
+echo "t 1000000"
+EOF
+# a lock screen that locks, and one that never does
+cat > "$BIN/good-lock" <<EOF
+#!/bin/sh
+sleep 0.3; touch "$TMP/locked"; sleep 1000
+EOF
+cat > "$BIN/stuck-lock" <<EOF
+#!/bin/sh
+exec sleep 1000
+EOF
+chmod +x "$BIN"/*
+
+fail=0
+# run LOCKER [pre-locked]: one announced sleep; prints the script's log
+run() {
+    rm -f "$TMP/locked" "$TMP/inhibitor.pid"
+    rm -rf "$TMP/home/.local/state"
+    [ "${2:-}" = pre ] && touch "$TMP/locked"
+    HOME="$TMP/home" XDG_RUNTIME_DIR="$TMP/run" PATH="$BIN:$PATH" \
+        INFYNITAE_BIN="$BIN/infynitae" SCREEN_LOCKER="$BIN/$1" \
+        INFYNITAE_SLEEP_MONITOR="sleep 0.3; echo 'PrepareForSleep (true,)'; sleep 3" \
+        sh "$SCRIPT" &
+    pid=$!
+    sleep 2.5
+    # the inhibitor still held?
+    held=no
+    if [ -f "$TMP/inhibitor.pid" ] && kill -0 "$(cat "$TMP/inhibitor.pid")" 2>/dev/null; then held=yes; fi
+    kill "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    pkill -f "$BIN/" 2>/dev/null || true
+    LOG=$(cat "$TMP/home/.local/state/infynitae/sleep-lock.log" 2>/dev/null || true)
+}
+check() {
+    if printf '%s\n' "$LOG" | grep -q "$2"; then echo "ok    $1"; else echo "FAIL  $1: no \"$2\" in:"; printf '%s\n' "$LOG"; fail=1; fi
+}
+held_is() {
+    if [ "$held" = "$2" ]; then echo "ok    $1"; else echo "FAIL  $1: inhibitor held=$held"; fail=1; fi
+}
+
+run good-lock
+check "a confirmed lock lets the sleep go on" "lock confirmed"
+check "  and then releases the inhibitor" "letting the sleep go on"
+held_is "  the inhibitor is gone" no
+
+run stuck-lock
+check "an unconfirmed lock is said" "no confirmation in time"
+held_is "  and keeps the inhibitor" yes
+
+# a process named like the lock screen is no lock: the script asks the compositor
+mkdir -p "$TMP/named"
+cp "$(command -v sleep)" "$TMP/named/infynitae-lock"
+"$TMP/named/infynitae-lock" 30 &
+fake=$!
+run good-lock
+kill "$fake" 2>/dev/null || true
+check "a process named infynitae-lock counts for nothing" "starting the lock screen"
+
+run good-lock pre
+check "a session already locked starts nothing" "already locked"
+
+exit "$fail"

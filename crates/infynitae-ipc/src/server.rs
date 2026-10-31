@@ -76,6 +76,8 @@ pub struct ShellServer {
     model: Option<Model>,
     generation: u64,
     acceptor: Option<Acceptor>,
+    /// The session is locked (`set_locked`).
+    locked: bool,
 }
 
 impl ShellServer {
@@ -91,6 +93,7 @@ impl ShellServer {
             conns: Vec::new(),
             model: None,
             generation: 0,
+            locked: false,
             acceptor: None,
         }
     }
@@ -138,6 +141,11 @@ impl ShellServer {
     /// arrival order (per connection: the order sent, C7.3), then brings the subscribers up to
     /// date. Call it after every loop dispatch; it does nothing when nothing arrived and nobody
     /// subscribes.
+    /// The session's lock state for the next copies (the adapter's, given before `service`).
+    pub fn set_locked(&mut self, locked: bool) {
+        self.locked = locked;
+    }
+
     pub fn service(&mut self, core: &mut Core) -> Serviced {
         let mut done = Serviced::default();
         while let Ok(msg) = self.rx.try_recv() {
@@ -230,7 +238,7 @@ impl ShellServer {
     /// Compares Core's state with the last copy; when it changed, the generation advances and the
     /// subscribers get the events, stamped with it. Returns the current generation.
     fn refresh(&mut self, core: &mut Core, done: &mut Serviced) -> u64 {
-        let next = Model::of(core);
+        let next = Model::of(core).with_locked(self.locked);
         match &self.model {
             None => {}
             Some(old) => {
