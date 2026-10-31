@@ -304,7 +304,7 @@ Before=shutdown.target exit.target
 Type=oneshot
 RemainAfterExit=yes
 ExecStart=/bin/sh -c 'rm -f "%h/.local/state/infynitae/stop"'
-ExecStop=/bin/sh -c '[ -f "%h/.config/infynitae/config" ] && . "%h/.config/infynitae/config" 2>/dev/null || true; mkdir -p "%h/.local/state/infynitae"; "%h/.local/bin/infynitae" restore save 2>/dev/null || true; pkill -f "infynitae.*restore watch" 2>/dev/null || true; : > "%h/.local/state/infynitae/stop"; case "${SHUTDOWN_SCREEN:-true}" in 0|false|no|off|FALSE|False) ;; *) msg="Shutting down…"; systemctl list-jobs 2>/dev/null | grep -q "reboot.target" && msg="Rebooting…"; if ! pgrep -x infynitae-lock >/dev/null 2>&1 && [ -x "%h/.local/bin/infynitae-lock" ]; then setsid -f "%h/.local/bin/infynitae-lock" --status "$msg" >/dev/null 2>&1 || true; fi ;; esac'
+ExecStop=/bin/sh -c '[ -f "%h/.config/infynitae/config" ] && . "%h/.config/infynitae/config" 2>/dev/null || true; mkdir -p "%h/.local/state/infynitae"; "%h/.local/bin/infynitae" restore save 2>/dev/null || true; pkill -f "infynitae restore [w]atch" 2>/dev/null || true; : > "%h/.local/state/infynitae/stop"; case "${SHUTDOWN_SCREEN:-true}" in 0|false|no|off|FALSE|False) ;; *) msg="Shutting down…"; systemctl list-jobs 2>/dev/null | grep -q "reboot.target" && msg="Rebooting…"; if ! pgrep -x infynitae-lock >/dev/null 2>&1 && [ -x "%h/.local/bin/infynitae-lock" ]; then setsid -f "%h/.local/bin/infynitae-lock" --status "$msg" >/dev/null 2>&1 || true; fi ;; esac'
 
 [Install]
 WantedBy=default.target
