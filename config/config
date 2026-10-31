@@ -603,12 +603,6 @@ GLOBAL_SHORTCUTS=""
     # KEY: a key name (Shift_R, Control_R, F9, Pause, XF86AudioMute) or a chord (CTRL+SHIFT+m).
     # The IDs: `grep "Bound shortcut" ~/.local/state/infynitae/portal.log`
 
-DISCORD_KEY_PATCH="false"
-    # Patch Discord's files at login so it accepts Right Shift / Right Ctrl alone as keybinds
-    # (the older way; GLOBAL_SHORTCUTS does it without touching Discord) [restart]
-    # default: false
-    # options: false  · true
-
 XWAYLAND_KEYS="modifiers"
     # Keys X11 apps hear while another window has focus (push-to-talk in an X11 Discord or
     # TeamSpeak, a game's or OBS's hotkeys). Never while the screen is locked.
