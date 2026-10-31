@@ -882,6 +882,7 @@ impl Core {
         }
         if let Some((orig_anchor, orig_size)) = self.stage.saved_floating(element) {
             self.stage.set_saved_floating(element, None);
+            self.set_maximized(element, None);
             let _ = self.place_by_shell(element, orig_anchor, out);
             out.push(Effect::ToplevelConfigureSize {
                 element,
@@ -932,6 +933,8 @@ impl Core {
 
             self.stage
                 .set_saved_floating(element, Some((anchor, orig_size)));
+            // it follows the output's changes (INV-OUTPUT-2, amended 2026-10-31)
+            self.set_maximized(element, Some(output));
             let _ = self.place_by_shell(element, tl, out);
             let target_rect = (tl.x, tl.y, tl.x + canvas_w as i64, tl.y + canvas_h as i64);
             if self.placement == crate::protocol::PlacementPolicy::ClusterTiling {

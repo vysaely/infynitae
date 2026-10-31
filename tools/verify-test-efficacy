@@ -2020,6 +2020,16 @@ CONTROLS = [
      "            && (acked == Some(held) || acked != Some(held))\n",
      "infynitae-backend-headless", ["--test", "t1_window_states"],
      "a_frame_drawn_before_the_maximize_was_read_keeps_the_hold"),
+    ("INV-OUTPUT-2 (2026-10-31): a maximized window keeps its size after its screen changed", f"{CORE}/protocol.rs",
+     "        self.refit_maximized(output, &mut fx);\n        fx\n",
+     "        fx\n",
+     "infynitae-backend-headless", ["--test", "t1_window_states"],
+     "maximized_and_fullscreen_windows_follow_every_screen_change"),
+    ("INV-OUTPUT-1 (2026-10-31): a maximized window keeps an unplugged screen's size", f"{CORE}/protocol.rs",
+     "                self.refit_maximized(first, &mut fx);\n",
+     "",
+     "infynitae-backend-headless", ["--test", "t1_window_states"],
+     "a_maximized_window_fills_the_screen_left_after_an_unplug"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.

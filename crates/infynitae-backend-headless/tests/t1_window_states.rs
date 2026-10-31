@@ -12,11 +12,12 @@
 mod common;
 
 use common::input::*;
-use common::{Lockstep, delta_to};
+use common::{Lockstep, delta_to, output, output_k};
 use infynitae_backend_headless::{VirtualOutput, keyboard_key, set_focus};
 use infynitae_core::geom::LocalSize;
 use infynitae_core::input::bindings::Modifiers;
 use infynitae_core::input::keys::{KEY_ENTER, KEY_LEFTMETA};
+use infynitae_core::output::Transform;
 use infynitae_core::stage::ElementId;
 use infynitae_core::{EnterMode, PlacementPolicy};
 
@@ -26,6 +27,9 @@ const LOGO: Modifiers = Modifiers {
     alt: false,
     shift: false,
 };
+
+/// xdg_toplevel state `fullscreen`.
+const FULLSCREEN: u32 = 2;
 
 /// The owner's setup: windows beside one another, Super+Enter maximizes.
 fn rig(o: VirtualOutput) -> Rig {
@@ -246,4 +250,191 @@ fn a_frame_drawn_before_the_maximize_was_read_keeps_the_hold() {
     let from = r.ls.probe.toplevel_configures.len();
     focus(&mut r, eb);
     assert_eq!(sizes_since(&r, a, from), vec![max]);
+}
+
+/// One screen setting: a name, its physical mode, scale (×120) and rotation.
+struct Screen {
+    name: &'static str,
+    mode: (u32, u32),
+    scale_120: u32,
+    transform: Transform,
+}
+
+const fn screen(name: &'static str, mode: (u32, u32), scale_120: u32, r90: bool) -> Screen {
+    Screen {
+        name,
+        mode,
+        scale_120,
+        transform: if r90 {
+            Transform::R90
+        } else {
+            Transform::Normal
+        },
+    }
+}
+
+const SCREENS: [Screen; 10] = [
+    screen("1920x1080", (1920, 1080), 120, false),
+    screen("1366x768", (1366, 768), 120, false),
+    screen("2560x1440", (2560, 1440), 120, false),
+    screen("2560x1440@1.5", (2560, 1440), 180, false),
+    screen("2560x1440@2", (2560, 1440), 240, false),
+    screen("3840x2160@2", (3840, 2160), 240, false),
+    screen("1366x768 portrait", (1366, 768), 120, true),
+    screen("1920x1080 portrait", (1920, 1080), 120, true),
+    screen("1920x1080@1.5", (1920, 1080), 180, false),
+    screen("2560x1440@1.5 portrait", (2560, 1440), 180, true),
+];
+
+fn virtual_output(s: &Screen) -> VirtualOutput {
+    let mut o = output_k("A", s.mode, s.scale_120, 60_000);
+    o.transform = s.transform;
+    o
+}
+
+/// The screen's logical size, rounded down (the fullscreen size, C5.2).
+fn logical_floor(r: &Rig) -> (i32, i32) {
+    let core = r.ls.state.core();
+    let o = core.output(r.ls.output()).expect("output");
+    let (w, h) = o.logical_extent();
+    (w.floor() as i32, h.floor() as i32)
+}
+
+/// The camera's centre on the first output, in whole Canvas px.
+fn camera_centre(r: &Rig) -> (i64, i64) {
+    let c = r.ls.state.core().cameras().center(0).expect("camera");
+    (c.x >> 16, c.y >> 16)
+}
+
+/// On every screen of the list, then after a change to every other one while it is open: a
+/// maximized window fills the usable area (its configure asks for exactly that size, and it sits
+/// in the middle of the view), a fullscreen window is asked for the screen's size, and both keep
+/// their sizes through a focus change on the new screen.
+#[test]
+fn maximized_and_fullscreen_windows_follow_every_screen_change() {
+    for from in &SCREENS {
+        for to in &SCREENS {
+            if from.name == to.name {
+                continue;
+            }
+            let what = format!("{} -> {}", from.name, to.name);
+            let mut r = rig(virtual_output(from));
+            let (m, em) = map(&mut r, "Maximized", (640, 480));
+            let (f, ef) = map(&mut r, "Fullscreen", (640, 480));
+            let (_, et) = map(&mut r, "Tiled", (300, 200));
+
+            // the maximized one (first: Super+Enter does nothing over a fullscreen screen)
+            focus(&mut r, em);
+            super_enter_on(&mut r, em);
+            let max = usable(&r);
+            assert_eq!(last_size(&r, m), Some(max), "{what}: maximized at first");
+            draw(&mut r, m, max);
+            let before = r.ls.state.core().stage().anchor(em).expect("anchor");
+            let centre = (
+                before.x + i64::from(max.0) / 2,
+                before.y + i64::from(max.1) / 2,
+            );
+
+            // the fullscreen one: granted to the focused window, drawn at the screen's size
+            focus(&mut r, ef);
+            r.ls.probe.surfaces[f]
+                .toplevel
+                .as_ref()
+                .expect("toplevel")
+                .set_fullscreen(None);
+            r.ls.pump();
+            r.frame();
+            let full = logical_floor(&r);
+            assert_eq!(last_size(&r, f), Some(full), "{what}: fullscreen at first");
+            draw(&mut r, f, full);
+
+            // the screen changes
+            let o = r.ls.output();
+            r.ls.reconfigure(o, &virtual_output(to));
+            r.frame();
+            let full = logical_floor(&r);
+            let max = usable(&r);
+            assert_eq!(last_size(&r, f), Some(full), "{what}: fullscreen follows");
+            assert_eq!(last_size(&r, m), Some(max), "{what}: maximized follows");
+            draw(&mut r, m, max);
+            draw(&mut r, f, full);
+            let a = r.ls.state.core().stage().anchor(em).expect("anchor");
+            assert_eq!(
+                (a.x + i64::from(max.0) / 2, a.y + i64::from(max.1) / 2),
+                centre,
+                "{what}: it keeps its centre"
+            );
+            // the camera did not move: the maximized window fills the view it was maximized in
+            let (cx, cy) = camera_centre(&r);
+            assert!(
+                (a.x - (cx - i64::from(max.0) / 2)).abs() <= 2
+                    && (a.y - (cy - i64::from(max.1) / 2)).abs() <= 2,
+                "{what}: the maximized window {a:?} fills the view around {cx},{cy}"
+            );
+            // a focus change keeps every size
+            let from_n = r.ls.probe.toplevel_configures.len();
+            focus(&mut r, et);
+            focus(&mut r, em);
+            assert!(
+                sizes_since(&r, m, from_n).iter().all(|s| *s == max),
+                "{what}: maximized through focus"
+            );
+            assert!(
+                sizes_since(&r, f, from_n).iter().all(|s| *s == full),
+                "{what}: fullscreen through focus"
+            );
+            assert!(
+                r.ls.state.core().fullscreen_of(ef).is_some(),
+                "{what}: still fullscreen"
+            );
+        }
+    }
+}
+
+/// A window maximized on a screen that is unplugged fills the screen that is left.
+#[test]
+fn a_maximized_window_fills_the_screen_left_after_an_unplug() {
+    let mut r = rig(output_k("A", (2560, 1440), 120, 60_000));
+    let (m, em) = map(&mut r, "Maximized", (640, 480));
+    focus(&mut r, em);
+    super_enter_on(&mut r, em);
+    assert_eq!(last_size(&r, m), Some((2560, 1440)));
+    draw(&mut r, m, (2560, 1440));
+    let laptop = r.ls.connect(&output_k("B", (1366, 768), 120, 60_000));
+    let first = r.ls.output();
+    r.ls.disconnect(first);
+    r.ls.output = Some(laptop);
+    r.frame();
+    assert_eq!(last_size(&r, m), Some((1366, 768)));
+}
+
+/// The configure a fullscreen window gets carries the `fullscreen` state and the screen's size;
+/// the configures above are checked by size, this one by its state too.
+#[test]
+fn a_fullscreen_window_is_told_so_after_a_rotation() {
+    let mut r = rig(a_1080());
+    let (f, ef) = map(&mut r, "F", (640, 480));
+    focus(&mut r, ef);
+    r.ls.probe.surfaces[f]
+        .toplevel
+        .as_ref()
+        .expect("toplevel")
+        .set_fullscreen(None);
+    r.ls.pump();
+    r.frame();
+    let o = r.ls.output();
+    let mut portrait = output((1920, 1080), 120);
+    portrait.transform = Transform::R90;
+    r.ls.reconfigure(o, &portrait);
+    r.frame();
+    let last =
+        r.ls.probe
+            .toplevel_configures
+            .iter()
+            .rev()
+            .find(|(i, _, _)| *i == f)
+            .cloned()
+            .expect("a configure");
+    assert_eq!(last.1, (1080, 1920));
+    assert!(last.2.contains(&FULLSCREEN), "{:?}", last.2);
 }

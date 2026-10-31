@@ -729,8 +729,10 @@ impl Core {
     /// destruction: the protocol state went with the surface's role state). The caller reports
     /// the presentation that ended.
     fn drop_fullscreen(&mut self, id: ElementId) {
-        // nor is it held to a size: its next map starts at its own size
+        // nor is it held to a size or maximized: its next map starts at its own size
         self.held_sizes.retain(|(e, _)| *e != id);
+        self.maximized.retain(|(e, _)| *e != id);
+        self.stage.set_saved_floating(id, None);
         self.premap_fullscreen.retain(|(e, _)| *e != id);
         self.fullscreen.retain(|f| f.element != id);
         self.windowed_placement_pending.retain(|e| *e != id);
@@ -815,8 +817,21 @@ impl Core {
 
     /// INV-OUTPUT-1 / M9 `Fullscreen{O} | O disconnected → Windowed`: the states on a removed
     /// output are dropped, each with its configure.
+    /// The windows maximized on it fill the first remaining output's usable area instead (they
+    /// stay maximized, at the size of the screen that is left), before a fullscreen one among
+    /// them is told the size it returns to.
     pub(crate) fn fullscreen_output_removed(&mut self, output: OutputId) -> Vec<Effect> {
         let mut fx = Vec::new();
+        match self.outputs.first().map(|o| o.id) {
+            Some(first) => {
+                self.maximized
+                    .iter_mut()
+                    .filter(|(_, o)| *o == output)
+                    .for_each(|(_, o)| *o = first);
+                self.refit_maximized(first, &mut fx);
+            }
+            None => self.maximized.retain(|(_, o)| *o != output),
+        }
         self.premap_fullscreen
             .iter_mut()
             .filter(|(_, o)| *o == Some(output))
@@ -829,13 +844,66 @@ impl Core {
     }
 
     /// M4 reconfiguration: "one configure only for an element in protocol fullscreen on this
-    /// output" — its size follows the output's.
-    pub(crate) fn fullscreen_output_reconfigured(&self, output: OutputId) -> Vec<Effect> {
-        self.fullscreen
+    /// output" — its size follows the output's; and one for a window maximized on it, which fills
+    /// the new usable area (amended 2026-10-31, [`Core::refit_maximized`]).
+    pub(crate) fn fullscreen_output_reconfigured(&mut self, output: OutputId) -> Vec<Effect> {
+        let mut fx: Vec<Effect> = self
+            .fullscreen
             .iter()
             .filter(|f| f.output == output)
             .map(|f| Effect::ToplevelConfigure(f.element))
-            .collect()
+            .collect();
+        self.refit_maximized(output, &mut fx);
+        fx
+    }
+
+    /// Super+Enter maximized `id` to fill `output`'s usable area (`Some`), or restored it.
+    pub(crate) fn set_maximized(&mut self, id: ElementId, output: Option<OutputId>) {
+        self.maximized.retain(|(e, _)| *e != id);
+        if let Some(o) = output {
+            self.maximized.push((id, o));
+        }
+    }
+
+    /// The windows maximized on `output` fill its usable area again after it changed (a mode,
+    /// scale or rotation, or the output they were on removed): each keeps its centre on the Canvas
+    /// and is asked for the new size, rounded as Super+Enter rounds it. One that is fullscreen too
+    /// is not told now: the size its fullscreen returns it to becomes the new one. The caller
+    /// runs the visibility pass.
+    pub(crate) fn refit_maximized(&mut self, output: OutputId, out: &mut Vec<Effect>) {
+        let Some((_, _, uw, uh)) = self.usable_area(output) else {
+            return;
+        };
+        let size = LocalSize {
+            w: uw.round().max(1.0) as i32,
+            h: uh.round().max(1.0) as i32,
+        };
+        for i in 0..self.maximized.len() {
+            let (id, o) = self.maximized[i];
+            if o != output {
+                continue;
+            }
+            let (Some(anchor), Some(tree)) = (self.stage.anchor(id), self.stage.tree(id)) else {
+                continue;
+            };
+            let was = self.held_size(id).unwrap_or(tree.geometry.size);
+            if was == size {
+                continue;
+            }
+            let at = CanvasPoint {
+                x: anchor.x + i64::from(was.w) / 2 - i64::from(size.w) / 2,
+                y: anchor.y + i64::from(was.h) / 2 - i64::from(size.h) / 2,
+            };
+            if self.stage.place(id, at).is_err() {
+                continue;
+            }
+            self.hold_size(id, size);
+            match self.fullscreen.iter_mut().find(|f| f.element == id) {
+                Some(f) => f.saved = Some(size),
+                None => out.push(Effect::ToplevelConfigureSize { element: id, size }),
+            }
+        }
+        self.invalidate_all_frames();
     }
 
     /// C7.2 `MoveElement` after its validation (`Core::shell_command`): the anchor is written here,

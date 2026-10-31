@@ -396,6 +396,9 @@ pub struct Core {
     /// client acknowledges it and draws another size, or unmaps (INV-PROTO-1, amended
     /// 2026-10-31). Written by `core::protocol` alone.
     held_sizes: Vec<(stage::ElementId, geom::LocalSize)>,
+    /// The windows Super+Enter maximized (`EnterMode::Maximize`) and the output whose usable
+    /// area they fill: a change of that output fits them to it again.
+    maximized: Vec<(stage::ElementId, output::OutputId)>,
     /// The window a Super+right drag resizes, until the client has drawn the last size asked of
     /// it (`core::protocol` writes it).
     resize: Option<protocol::ResizeTrack>,
@@ -509,6 +512,7 @@ impl Core {
                 premap_fullscreen: Vec::new(),
                 restore_offers: Vec::new(),
                 held_sizes: Vec::new(),
+                maximized: Vec::new(),
                 resize: None,
                 shell_stream: false,
                 layers: Vec::new(),
