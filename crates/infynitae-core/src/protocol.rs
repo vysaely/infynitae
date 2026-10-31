@@ -843,6 +843,7 @@ impl Core {
             w: uw.round().max(1.0) as i32,
             h: uh.round().max(1.0) as i32,
         };
+        let mut moved = false;
         for i in 0..self.maximized.len() {
             let (id, o) = self.maximized[i];
             if o != output {
@@ -862,13 +863,18 @@ impl Core {
             if self.stage.place(id, at).is_err() {
                 continue;
             }
+            moved = true;
             self.hold_size(id, size);
             match self.fullscreen.iter_mut().find(|f| f.element == id) {
                 Some(f) => f.saved = Some(size),
                 None => out.push(Effect::ToplevelConfigureSize { element: id, size }),
             }
         }
-        self.invalidate_all_frames();
+        // only a window that moved makes the frames stale (the output's own frame is the
+        // caller's: INC2-F07)
+        if moved {
+            self.invalidate_all_frames();
+        }
     }
 
     /// C7.2 `MoveElement` after its validation (`Core::shell_command`): the anchor is written here,
