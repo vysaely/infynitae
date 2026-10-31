@@ -103,8 +103,18 @@ fn pan_release_under(lock: bool) -> (Rig, Vec<String>) {
     r.motion((3.0, 2.0));
     assert_ne!(r.camera(), camera, "the pan moved the camera");
     let m = r.mark();
+    let sent = r.ls.state.pointer_motions();
     r.button(BTN_MIDDLE, false, logo());
     let lines = r.since(m).iter().map(|s| s.to_string()).collect();
+    // Core's own output, not only the wire: the adapter drops a motion repeating what the client
+    // has, and one to a lock's point always does
+    if lock {
+        assert_eq!(
+            r.ls.state.pointer_motions(),
+            sent,
+            "Core sent absolute motion to a locked surface"
+        );
+    }
     assert_eq!(kind(&r), Some(want), "constraint lost at the release");
     assert!(
         smithay_active(&r),
@@ -200,8 +210,17 @@ fn relocation_under(lock: bool) -> (Vec<String>, (f64, f64)) {
     assert!(smithay_active(&r));
 
     let m = r.mark();
+    let sent = r.ls.state.pointer_motions();
     r.ls.disconnect(ob);
     let lines: Vec<String> = r.since(m).iter().map(|s| s.to_string()).collect();
+    // Core's own output, not only the wire (as at the pan release)
+    if lock {
+        assert_eq!(
+            r.ls.state.pointer_motions(),
+            sent,
+            "Core sent absolute motion to a locked surface"
+        );
+    }
     let lines: Vec<&str> = lines.iter().map(|s| s.as_str()).collect();
     let (o, _) = located(&r);
     assert_eq!(o, oa, "relocated onto A");
