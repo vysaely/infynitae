@@ -331,11 +331,13 @@ $parsed
 EOF
 }
 
+# the background job becomes the monitor itself (exec): $MON is then gdbus, ended by `end`, and
+# no subshell of this script (which a stop would end without its trap) is left holding it
 monitor() {
     if [ -n "${INFYNITAE_AUTOMOUNT_MONITOR:-}" ]; then
-        sh -c "$INFYNITAE_AUTOMOUNT_MONITOR"
+        exec sh -c "$INFYNITAE_AUTOMOUNT_MONITOR"
     else
-        gdbus monitor --system --dest org.freedesktop.UDisks2
+        exec gdbus monitor --system --dest org.freedesktop.UDisks2
     fi
 }
 
