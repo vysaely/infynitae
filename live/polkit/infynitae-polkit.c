@@ -387,7 +387,7 @@ static void infynitae_agent_listener_initiate_authentication(
     gtk_container_set_border_width(GTK_CONTAINER(vbox), 24);
     gtk_container_add(GTK_CONTAINER(data->window), vbox);
 
-    GtkWidget *lbl_title = gtk_label_new("🔒 Authentication Required");
+    GtkWidget *lbl_title = gtk_label_new("Authentication required");
     gtk_widget_set_halign(lbl_title, GTK_ALIGN_START);
     gtk_style_context_add_class(gtk_widget_get_style_context(lbl_title), "title");
     gtk_box_pack_start(GTK_BOX(vbox), lbl_title, FALSE, FALSE, 0);
