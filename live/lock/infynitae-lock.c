@@ -1139,19 +1139,27 @@ int main(int argc, char **argv) {
         }
     }
 
-    // Resolve username
-    if (app.username[0] == '\0') {
+    // Resolve username. Locking, it is always the real account (getuid), never the environment
+    // or an argument: only that account's password unlocks the session. `--user` picks the
+    // account only for the greeter, which logs someone in.
+    if (!app.greeter_mode) {
+        if (app.username[0] != '\0')
+            fprintf(stderr, "[infynitae-lock] --user is only for --greeter; locking for the real account\n");
+        struct passwd *pw = getpwuid(getuid());
+        if (!pw || !pw->pw_name || !pw->pw_name[0]) {
+            fprintf(stderr, "[infynitae-lock] Error: cannot find the account of uid %u\n", (unsigned)getuid());
+            return 1;
+        }
+        memset(app.username, 0, sizeof(app.username));
+        strncpy(app.username, pw->pw_name, sizeof(app.username) - 1);
+    } else if (app.username[0] == '\0') {
         const char *login_user = getenv("USER");
         if (!login_user) login_user = getenv("LOGNAME");
         if (!login_user) {
             struct passwd *pw = getpwuid(getuid());
             if (pw) login_user = pw->pw_name;
         }
-        if (login_user) {
-            strncpy(app.username, login_user, sizeof(app.username) - 1);
-        } else {
-            strncpy(app.username, "user", sizeof(app.username) - 1);
-        }
+        strncpy(app.username, login_user ? login_user : "user", sizeof(app.username) - 1);
     }
 
     app.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
