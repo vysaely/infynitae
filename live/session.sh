@@ -121,12 +121,12 @@ if [ -n "$WP_BIN" ]; then
     fi
 fi
 
-# 4b. The island: window strip, control panel and clipboard (ENABLE_ISLAND)
-case "${ENABLE_ISLAND:-true}" in
+# 4b. The edge: window strip, control panel and clipboard (ENABLE_EDGE)
+case "${ENABLE_EDGE:-true}" in
     0|false|no|off|FALSE|False) ;;
     *)
-        if [ -x "$HOME/.local/bin/infynitae-island" ]; then
-            "$HOME/.local/bin/infynitae-island" >/dev/null 2>&1 &
+        if [ -x "$HOME/.local/bin/infynitae-edge" ]; then
+            "$HOME/.local/bin/infynitae-edge" >/dev/null 2>&1 &
         fi
         ;;
 esac

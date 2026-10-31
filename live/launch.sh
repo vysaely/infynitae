@@ -87,12 +87,12 @@ resolve_terminal() {
 
 TERM_CMD=$(resolve_terminal)
 
-# The island (ENABLE_ISLAND) serves Super+W, Super+A and Super+V when it is on and installed
-island_on() {
-    case "${ENABLE_ISLAND:-true}" in
+# The edge (ENABLE_EDGE) serves Super+W, Super+A and Super+V when it is on and installed
+edge_on() {
+    case "${ENABLE_EDGE:-true}" in
         0|false|no|off|FALSE|False) return 1 ;;
     esac
-    [ -x "$HOME/.local/bin/infynitae-island" ]
+    [ -x "$HOME/.local/bin/infynitae-edge" ]
 }
 
 case "$ACTION" in
@@ -169,14 +169,14 @@ case "$ACTION" in
                 ;;
         esac
         ;;
-    launcher|island)
-        # Super+W: the island (window strip and app search), else a launcher; LAUNCHER: any
+    launcher|edge|island)
+        # Super+W: the edge (window strip and app search), else a launcher; LAUNCHER: any
         # command, which is also how another shell (Quickshell, eww, AGS…) takes the key
         L="${LAUNCHER:-auto}"
         case "$L" in
-            auto|""|island)
-                if island_on; then
-                    exec "$HOME/.local/bin/infynitae-island" toggle
+            auto|""|edge|island)
+                if edge_on; then
+                    exec "$HOME/.local/bin/infynitae-edge" toggle
                 elif command -v fuzzel >/dev/null 2>&1; then
                     exec fuzzel
                 elif command -v rofi >/dev/null 2>&1; then
@@ -498,8 +498,8 @@ case "$ACTION" in
         # Super+A: the control flyout (or CONTROL_MENU if set)
         case "${CONTROL_MENU:-auto}" in
             auto|"")
-                if island_on; then
-                    exec "$HOME/.local/bin/infynitae-island" control
+                if edge_on; then
+                    exec "$HOME/.local/bin/infynitae-edge" control
                 fi
                 for m in "$HOME/.local/bin/infynitae-control-menu" "$HOME/infynitae/live/control-menu"; do
                     if [ -x "$m" ]; then exec "$m"; fi
@@ -509,10 +509,10 @@ case "$ACTION" in
         esac
         ;;
     clipboard-history)
-        # Super+V: Clipboard history picker (native infynitae-island clipboard mode, or CLIPBOARD_PICKER / MENU_PICKER / fuzzel)
+        # Super+V: Clipboard history picker (native infynitae-edge clipboard mode, or CLIPBOARD_PICKER / MENU_PICKER / fuzzel)
         if command -v cliphist >/dev/null 2>&1; then
-            if island_on && [ -z "${CLIPBOARD_PICKER:-}" ] && [ -z "${MENU_PICKER:-}" ]; then
-                exec "$HOME/.local/bin/infynitae-island" clipboard
+            if edge_on && [ -z "${CLIPBOARD_PICKER:-}" ] && [ -z "${MENU_PICKER:-}" ]; then
+                exec "$HOME/.local/bin/infynitae-edge" clipboard
             fi
             PICKER="${CLIPBOARD_PICKER:-${MENU_PICKER:-fuzzel --dmenu}}"
             # Escape in the picker selects nothing: the clipboard is left as it was

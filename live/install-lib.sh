@@ -353,6 +353,14 @@ install_config() {
     mkdir -p "$HOME/.config/infynitae"
     if [ -f "$cfg" ]; then
         cp -f "$src/config/config" "$cfg.template"
+        # renamed settings keep their values under the new name (else the new name would be added
+        # below at its default, over the old one): the island became the edge, 2026-10-31
+        if grep -qE '^(ENABLE_ISLAND|ISLAND_EDGE|ISLAND_CONTROL_SIDE)=' "$cfg"; then
+            cp -f "$cfg" "$cfg.bak-$(date +%F)-rename"
+            sed -i -e 's/^ENABLE_ISLAND=/ENABLE_EDGE=/' -e 's/^ISLAND_EDGE=/EDGE_POSITION=/' \
+                -e 's/^ISLAND_CONTROL_SIDE=/EDGE_CONTROL_SIDE=/' "$cfg"
+            echo "==> Renamed the island's settings to the edge's in your config"
+        fi
         # each setting the config does not have, with the comment lines under it
         new=$(awk 'NR == FNR { if (match($0, /^[A-Z_]+=/)) have[substr($0, 1, RLENGTH)] = 1; next }
             match($0, /^[A-Z_]+=/) { take = !(substr($0, 1, RLENGTH) in have); if (take) print; next }

@@ -21,6 +21,12 @@ if [ -f "$_infy_config" ]; then
     fi
 fi
 unset _infy_config
+# settings renamed: the old name still works where the new one is not set
+# (the island became the edge, 2026-10-31)
+: "${ENABLE_EDGE:=${ENABLE_ISLAND:-}}" "${EDGE_POSITION:=${ISLAND_EDGE:-}}" "${EDGE_CONTROL_SIDE:=${ISLAND_CONTROL_SIDE:-}}"
+[ -n "$ENABLE_EDGE" ] || unset ENABLE_EDGE
+[ -n "$EDGE_POSITION" ] || unset EDGE_POSITION
+[ -n "$EDGE_CONTROL_SIDE" ] || unset EDGE_CONTROL_SIDE
 
 # the compositor checked the layout it uses makes a keymap (an empty or misspelled one does
 # not) and gives it to what it starts: the apps use that one, never another

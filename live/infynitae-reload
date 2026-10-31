@@ -183,14 +183,16 @@ reload_polkit() {
     esac
 }
 
-reload_island() {
-    p=$(first "$BIN_DIR/infynitae-island")
+reload_edge() {
+    p=$(first "$BIN_DIR/infynitae-edge")
+    stop_helper infynitae-edge
+    # its name before 2026-10-31, still running from before an update
     stop_helper infynitae-island
-    if is_true "${ENABLE_ISLAND:-true}" && [ -n "$p" ]; then
+    if is_true "${ENABLE_EDGE:-true}" && [ -n "$p" ]; then
         spawn "$p"
-        echo "island: restarted"
+        echo "edge: restarted"
     else
-        echo "island: stopped (ENABLE_ISLAND is off)"
+        echo "edge: stopped (ENABLE_EDGE is off)"
     fi
 }
 
@@ -331,7 +333,7 @@ reload_clipboard() {
 
 status() {
     printf '%-26s %s\n' infynitae "$(pgrep -x infynitae | tr '\n' ' ')"
-    for n in infynitae-wallpaper infynitae-island infynitae-recorder infynitae-record-stream infynitae-portal infynitae-polkit infynitae-lock; do
+    for n in infynitae-wallpaper infynitae-edge infynitae-recorder infynitae-record-stream infynitae-portal infynitae-polkit infynitae-lock; do
         pids=$(pids_of "$n" | tr '\n' ' ')
         printf '%-26s %s\n' "$n" "${pids:-not running}"
     done
@@ -346,10 +348,10 @@ status() {
 [ $# -eq 0 ] && set -- all
 for what in "$@"; do
     case "$what" in
-        all) reload_settings; reload_wallpaper; reload_island; reload_restore; reload_sleep_lock; reload_notifications; reload_automount; reload_recorder; reload_portal; reload_polkit; reload_screenshare; reload_clipboard ;;
+        all) reload_settings; reload_wallpaper; reload_edge; reload_restore; reload_sleep_lock; reload_notifications; reload_automount; reload_recorder; reload_portal; reload_polkit; reload_screenshare; reload_clipboard ;;
         settings) reload_settings ;;
         wallpaper) reload_wallpaper ;;
-        island) reload_island ;;
+        edge|island) reload_edge ;;
         restore) reload_restore ;;
         sleep-lock) reload_sleep_lock ;;
         notifications) reload_notifications ;;
@@ -361,7 +363,7 @@ for what in "$@"; do
         clipboard) reload_clipboard ;;
         status) status ;;
         *)
-            echo "usage: infynitae-reload [all|settings|wallpaper|island|restore|sleep-lock|notifications|automount|recorder|portal|polkit|screenshare|clipboard|status] ..." >&2
+            echo "usage: infynitae-reload [all|settings|wallpaper|edge|restore|sleep-lock|notifications|automount|recorder|portal|polkit|screenshare|clipboard|status] ..." >&2
             exit 2
             ;;
     esac

@@ -12,7 +12,7 @@ env:
   CARGO_TERM_COLOR: never
 
 jobs:
-  # The C helpers (portal, polkit agent, lock, wallpaper, island, recorder) as the installer
+  # The C helpers (portal, polkit agent, lock, wallpaper, edge, recorder) as the installer
   # builds them, and the shell helpers' own tests.
   helpers:
     runs-on: ubuntu-24.04
