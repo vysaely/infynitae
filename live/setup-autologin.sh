@@ -77,25 +77,41 @@ if [ ! -f "$PROFILE_TARGET" ]; then
     esac
     chown "$USER_NAME:" "$PROFILE_TARGET"
 fi
-AUTORUN_MARKER="# Infynitae tty1 autostart v3"
+AUTORUN_MARKER="# Infynitae tty1 autostart v4"
 if ! grep -q "$AUTORUN_MARKER" "$PROFILE_TARGET"; then
-    # an older block is replaced
+    # an older block is replaced; the block goes first in the file, so nothing before it runs
+    # in a shell that a key could stop
     sed -i '/^# Infynitae tty1 autostart/,/^fi$/d' "$PROFILE_TARGET"
-    cat <<'EOF' >> "$PROFILE_TARGET"
-
-# Infynitae tty1 autostart v3
+    BLOCK=$(mktemp)
+    cat <<'EOF' > "$BLOCK"
+# Infynitae tty1 autostart v4
+# Ctrl+C, Ctrl+\ and Ctrl+Z on this console must never leave a shell nobody logged in to: this
+# login shell ignores them and becomes a plain sh at once, which runs the session (with the
+# keys back to normal for it and the apps) and then, whatever happened, asks for the password.
 if [ -z "$WAYLAND_DISPLAY" ] && [ "$XDG_VTNR" = 1 ] && [ -x "$HOME/.local/bin/infynitae-session" ]; then
-    "$HOME/.local/bin/infynitae-session"
-    if [ "$(systemctl is-system-running 2>/dev/null)" = "stopping" ] || \
-       systemctl list-jobs 2>/dev/null | grep -qE 'shutdown\.target|reboot\.target|poweroff\.target|halt\.target'; then
-        exit 0
-    fi
-    # the session ended (stopped, or its lock screen could not start): a shell on this console
-    # only after your password, since with autologin nobody typed one. A wrong one logs out and
-    # tty1 starts the session again, locked.
-    exec su -l "$(id -un)"
+    trap '' INT QUIT TSTP
+    exec /bin/sh -c '
+        trap "" INT QUIT TSTP
+        if env --default-signal=INT true 2>/dev/null; then
+            env --default-signal=INT,QUIT,TSTP "$HOME/.local/bin/infynitae-session"
+        else
+            "$HOME/.local/bin/infynitae-session"
+        fi
+        if [ "$(systemctl is-system-running 2>/dev/null)" = stopping ] ||
+            systemctl list-jobs 2>/dev/null | grep -qE "shutdown\.target|reboot\.target|poweroff\.target|halt\.target"; then
+            exit 0
+        fi
+        # the session ended (stopped, or its lock screen could not start): a shell on this
+        # console only after your password, since with autologin nobody typed one. A wrong one
+        # logs out and tty1 starts the session again, locked.
+        exec su -l "$(id -un)"
+    '
 fi
+
 EOF
+    cat "$PROFILE_TARGET" >> "$BLOCK"
+    cat "$BLOCK" > "$PROFILE_TARGET"
+    rm -f "$BLOCK"
     chown "$USER_NAME:" "$PROFILE_TARGET"
     echo "  -> Logging in on tty1 starts Infynitae ($PROFILE_TARGET)"
 else
