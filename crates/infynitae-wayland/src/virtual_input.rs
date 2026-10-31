@@ -67,9 +67,12 @@ pub struct VirtualInputState {
 }
 
 impl VirtualInputState {
-    pub fn new(dh: &DisplayHandle, seat_keymap: Option<String>) -> Self {
+    pub fn new(dh: &DisplayHandle, seat_keymap: Option<String>, gate: crate::trust::Gate) -> Self {
         Self {
-            global: dh.create_global::<WaylandState, ZwlrVirtualPointerManagerV1, ()>(2, ()),
+            global: dh
+                .create_global::<WaylandState, ZwlrVirtualPointerManagerV1, crate::trust::Gate>(
+                    2, gate,
+                ),
             queue: Vec::new(),
             seat_keymap,
             keyboards: HashMap::new(),
@@ -300,13 +303,16 @@ struct PointerInner {
     held: Vec<u32>,
 }
 
-impl GlobalDispatch<ZwlrVirtualPointerManagerV1, ()> for WaylandState {
+impl GlobalDispatch<ZwlrVirtualPointerManagerV1, crate::trust::Gate> for WaylandState {
+    fn can_view(client: Client, gate: &crate::trust::Gate) -> bool {
+        gate.allows(&client)
+    }
     fn bind(
         _state: &mut Self,
         _dh: &DisplayHandle,
         _client: &Client,
         resource: New<ZwlrVirtualPointerManagerV1>,
-        _global_data: &(),
+        _global_data: &crate::trust::Gate,
         data_init: &mut DataInit<'_, Self>,
     ) {
         data_init.init(resource, ());

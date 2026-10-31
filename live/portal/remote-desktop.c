@@ -4,12 +4,16 @@
  *
  * ScreenCast is xdg-desktop-portal-wlr's, passed through: every call goes to it unchanged (its
  * chooser, its PipeWire streams) under the same session handle, so screen sharing works as it
- * did. A remote desktop session adds the input. The first time an app asks you are asked
- * (live/remote/remote-desktop-ask: this time, always, or deny); then its pointer drives a virtual
+ * did, except that a screen share's Start asks you first (live/remote/screenshare-ask: this time,
+ * always, or deny; owner, 2026-10-31). A remote desktop session adds the input. The first time
+ * an app asks you are asked (live/remote/remote-desktop-ask); then its pointer drives a virtual
  * pointer (zwlr_virtual_pointer_v1; one per shared screen for absolute motion, bound to it) and
  * its keys a virtual keyboard that uploads the keymap the compositor gave this client, so the
  * compositor takes it as a real keyboard: the shortcuts work, and while locked it types nothing
- * (owner, 2026-10-25). env.sh routes the two interfaces here only when REMOTE_DESKTOP is on.
+ * (owner, 2026-10-25). "Always" is remembered only for an app with a sandbox app id
+ * (~/.local/state/infynitae/screenshare-allowed, remote-desktop-allowed; one id per line, delete
+ * a line to be asked again). Only xdg-desktop-portal may call this backend. env.sh routes
+ * ScreenCast here always, RemoteDesktop when REMOTE_DESKTOP is on.
  */
 
 #define _GNU_SOURCE
@@ -400,9 +404,13 @@ static void session_cast(Session *s) {
 
 typedef enum { STEP_CREATE, STEP_SELECT_AFTER_CREATE, STEP_SELECT, STEP_START, STEP_RD_START } Step;
 
+/* what an app is asked for: the keyboard and mouse (remote desktop), or the screen (sharing) */
+typedef enum { CONSENT_INPUT, CONSENT_SCREEN } Consent;
+
 typedef struct {
     GDBusMethodInvocation *inv;
     Step step;
+    Consent consent;
     char *handle;
     char *session;
     char *app_id;
@@ -570,22 +578,28 @@ static void wlr_call(const char *method, GVariant *params, Call *call) {
 
 /* ---- asking you ------------------------------------------------------------------------- */
 
-static char *allowed_file(void) {
-    return g_build_filename(g_get_user_state_dir(), "infynitae", "remote-desktop-allowed", NULL);
+static char *allowed_file(Consent kind) {
+    return g_build_filename(g_get_user_state_dir(), "infynitae",
+                            kind == CONSENT_SCREEN ? "screenshare-allowed" : "remote-desktop-allowed",
+                            NULL);
 }
 
-/* apps outside a sandbox have no id: one name for all of them */
-static const char *app_key(const char *app_id) {
-    return (app_id && *app_id) ? app_id : "(unsandboxed)";
+/* An answer is remembered only for an app with an id from its sandbox (owner, 2026-10-31): apps
+ * outside a sandbox reach the portal with no id, so one remembered "always" would cover every
+ * one of them; they are asked each time. */
+static gboolean rememberable(const char *app_id) {
+    return app_id && *app_id;
 }
 
-static gboolean always_allowed(const char *app_id) {
-    char *path = allowed_file(), *text = NULL;
+static gboolean always_allowed(Consent kind, const char *app_id) {
+    if (!rememberable(app_id))
+        return FALSE;
+    char *path = allowed_file(kind), *text = NULL;
     gboolean yes = FALSE;
     if (g_file_get_contents(path, &text, NULL, NULL)) {
         char **lines = g_strsplit(text, "\n", -1);
         for (char **l = lines; *l && !yes; l++)
-            yes = g_strcmp0(g_strstrip(*l), app_key(app_id)) == 0;
+            yes = g_strcmp0(g_strstrip(*l), app_id) == 0;
         g_strfreev(lines);
     }
     g_free(text);
@@ -593,16 +607,28 @@ static gboolean always_allowed(const char *app_id) {
     return yes;
 }
 
-static void remember(const char *app_id) {
-    char *path = allowed_file(), *dir = g_path_get_dirname(path);
+static void remember(Consent kind, const char *app_id) {
+    /* one line per app: an id with a newline could add another */
+    if (!rememberable(app_id) || strchr(app_id, '\n'))
+        return;
+    char *path = allowed_file(kind), *dir = g_path_get_dirname(path);
     g_mkdir_with_parents(dir, 0700);
     FILE *f = fopen(path, "a");
     if (f) {
-        fprintf(f, "%s\n", app_key(app_id));
+        fprintf(f, "%s\n", app_id);
         fclose(f);
     }
     g_free(dir);
     g_free(path);
+}
+
+/* a screen share's Start goes on to xdg-desktop-portal-wlr (its chooser picks the source) */
+static void cast_start(Call *call) {
+    call->step = STEP_START;
+    wlr_call("Start",
+             g_variant_new("(ooss@a{sv})", call->handle, call->session, call->app_id, call->parent,
+                           call->options),
+             call);
 }
 
 static void start_after_consent(Call *call) {
@@ -625,11 +651,15 @@ static void asked(GObject *source, GAsyncResult *res, gpointer data) {
     g_subprocess_communicate_utf8_finish(G_SUBPROCESS(source), res, &out, NULL, NULL);
     char *answer = g_strstrip(out ? out : g_strdup(""));
     if (g_strcmp0(answer, "always") == 0)
-        remember(call->app_id);
+        remember(call->consent, call->app_id);
     if (g_strcmp0(answer, "always") == 0 || g_strcmp0(answer, "once") == 0) {
-        start_after_consent(call);
+        if (call->consent == CONSENT_SCREEN)
+            cast_start(call);
+        else
+            start_after_consent(call);
     } else {
-        printf("[infynitae-portal] Remote desktop denied: app='%s'\n", call->app_id);
+        printf("[infynitae-portal] %s denied: app='%s'\n",
+               call->consent == CONSENT_SCREEN ? "Screen sharing" : "Remote desktop", call->app_id);
         fflush(stdout);
         reply(call->inv, 1, NULL);
         call_free(call);
@@ -640,9 +670,12 @@ static void asked(GObject *source, GAsyncResult *res, gpointer data) {
 
 static void ask(Call *call) {
     char *script = g_build_filename(g_get_home_dir(), "infynitae", "live", "remote",
-                                    "remote-desktop-ask", NULL);
+                                    call->consent == CONSENT_SCREEN ? "screenshare-ask"
+                                                                    : "remote-desktop-ask",
+                                    NULL);
     GError *error = NULL;
-    GSubprocess *p = g_subprocess_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE, &error, script,
+    /* the app id as an argument after "--": never an option, never shell text */
+    GSubprocess *p = g_subprocess_new(G_SUBPROCESS_FLAGS_STDOUT_PIPE, &error, script, "--",
                                       call->app_id, NULL);
     g_free(script);
     if (!p) {
@@ -769,9 +802,31 @@ static Call *call_new(GDBusMethodInvocation *inv, Step step, const char *handle,
     return call;
 }
 
+/* Whether `sender` is xdg-desktop-portal, the only caller a portal backend serves: the app id
+ * it passes is the one it checked; any other caller could name any app. */
+static gboolean from_portal(GDBusConnection *c, const gchar *sender) {
+    GVariant *ret = g_dbus_connection_call_sync(c, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+                                                "org.freedesktop.DBus", "GetNameOwner",
+                                                g_variant_new("(s)", "org.freedesktop.portal.Desktop"),
+                                                G_VARIANT_TYPE("(s)"), G_DBUS_CALL_FLAGS_NONE, 2000,
+                                                NULL, NULL);
+    if (!ret)
+        return FALSE;
+    const char *owner;
+    g_variant_get(ret, "(&s)", &owner);
+    gboolean yes = g_strcmp0(owner, sender) == 0;
+    g_variant_unref(ret);
+    return yes;
+}
+
 static void method_call(GDBusConnection *c, const gchar *sender, const gchar *path,
                         const gchar *iface, const gchar *method, GVariant *params,
                         GDBusMethodInvocation *inv, gpointer data) {
+    if (!from_portal(c, sender)) {
+        g_dbus_method_invocation_return_dbus_error(inv, "org.freedesktop.DBus.Error.AccessDenied",
+                                                   "only xdg-desktop-portal may call this");
+        return;
+    }
     if (g_strcmp0(iface, SESSION_IFACE) == 0) {
         Session *s = session_find(path);
         if (s)
@@ -816,7 +871,8 @@ static void method_call(GDBusConnection *c, const gchar *sender, const gchar *pa
                 if (!s->devices)
                     s->devices = DEVICE_KEYBOARD | DEVICE_POINTER;
                 Call *call = call_new(inv, STEP_RD_START, handle, session, app_id, parent, options);
-                if (always_allowed(app_id))
+                call->consent = CONSENT_INPUT;
+                if (always_allowed(CONSENT_INPUT, app_id))
                     start_after_consent(call);
                 else
                     ask(call);
@@ -840,8 +896,13 @@ static void method_call(GDBusConnection *c, const gchar *sender, const gchar *pa
                          call_new(inv, STEP_SELECT, handle, session, app_id, NULL, options));
             }
         } else if (g_strcmp0(method, "Start") == 0) {
-            wlr_call("Start", params,
-                     call_new(inv, STEP_START, handle, session, app_id, parent, options));
+            /* a screen share asks you first, once per app (owner, 2026-10-31) */
+            Call *call = call_new(inv, STEP_START, handle, session, app_id, parent, options);
+            call->consent = CONSENT_SCREEN;
+            if (always_allowed(CONSENT_SCREEN, app_id))
+                cast_start(call);
+            else
+                ask(call);
         }
     }
     g_variant_unref(options);

@@ -56,8 +56,9 @@ pub struct GammaState {
 }
 
 impl GammaState {
-    pub fn new(dh: &DisplayHandle) -> Self {
-        let global = dh.create_global::<WaylandState, ZwlrGammaControlManagerV1, ()>(1, ());
+    pub fn new(dh: &DisplayHandle, gate: crate::trust::Gate) -> Self {
+        let global = dh
+            .create_global::<WaylandState, ZwlrGammaControlManagerV1, crate::trust::Gate>(1, gate);
         Self {
             global,
             handler: None,
@@ -106,13 +107,16 @@ fn read_gamma_table(fd: &OwnedFd, gamma_size: u32) -> Result<Vec<u16>, ()> {
 // Manager Dispatch
 // -----------------------------------------------------------------------------
 
-impl GlobalDispatch<ZwlrGammaControlManagerV1, ()> for WaylandState {
+impl GlobalDispatch<ZwlrGammaControlManagerV1, crate::trust::Gate> for WaylandState {
+    fn can_view(client: Client, gate: &crate::trust::Gate) -> bool {
+        gate.allows(&client)
+    }
     fn bind(
         _state: &mut Self,
         _dh: &DisplayHandle,
         _client: &Client,
         resource: New<ZwlrGammaControlManagerV1>,
-        _global_data: &(),
+        _global_data: &crate::trust::Gate,
         data_init: &mut DataInit<'_, Self>,
     ) {
         data_init.init(resource, ());

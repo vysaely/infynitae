@@ -15,6 +15,9 @@ pub trait LoopExtension {
     /// Does what arrived since the last call. Returns Core's effects, for the adapter to apply,
     /// and whether what is shown may have changed (the loop then asks for a frame).
     fn service(&mut self, core: &mut Core) -> (Vec<Effect>, bool);
+
+    /// The session's lock state, which the adapter holds; a backend gives it before `service`.
+    fn set_locked(&mut self, _locked: bool) {}
 }
 
 /// Wakes the loop from another thread (`Send`, cloneable). A wake-up with nothing behind it costs

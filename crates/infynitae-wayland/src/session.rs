@@ -151,7 +151,86 @@ pub struct Session {
     child_notify: Option<UnixStream>,
     x_display: Option<String>,
     x_authority: Option<std::path::PathBuf>,
+    /// Serves a sandbox's listener that the state collected (`trust`).
+    serve_sandbox: ServeSandbox,
+    /// The recorder's socket file, removed with the session.
+    _recorder_socket: Option<SocketFile>,
 }
+
+/// A socket file removed when dropped.
+struct SocketFile(std::path::PathBuf);
+
+impl Drop for SocketFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// Where the replay recorder connects: `$XDG_RUNTIME_DIR/infynitae/<socket>.recorder`, in the
+/// compositor's own 0700 directory (a sandbox is not given it). `live/record/infynitae-recorder`
+/// points `WAYLAND_DISPLAY` at it.
+pub fn recorder_socket_path(socket_name: &str) -> Option<std::path::PathBuf> {
+    std::env::var_os("XDG_RUNTIME_DIR").map(|d| {
+        std::path::PathBuf::from(d)
+            .join("infynitae")
+            .join(format!("{socket_name}.recorder"))
+    })
+}
+
+/// Opens the recorder's socket and serves it: its clients are marked as the recorder.
+fn open_recorder_socket<D: 'static>(
+    socket_name: &str,
+    display: &Display<WaylandState>,
+    handle: &LoopHandle<'static, D>,
+) -> std::io::Result<Option<SocketFile>> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    let Some(path) = recorder_socket_path(socket_name) else {
+        return Ok(None);
+    };
+    let dir = path.parent().expect("the path has a directory");
+    std::fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)?;
+    std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    // a stale file of an earlier session of this socket name
+    let _ = std::fs::remove_file(&path);
+    let listener = std::os::unix::net::UnixListener::bind(&path)?;
+    let file = SocketFile(path.clone());
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    listener.set_nonblocking(true)?;
+    let mut dh = display.handle();
+    handle
+        .insert_source(
+            Generic::new(listener, Interest::READ, Mode::Level),
+            move |_, listener, _| {
+                while let Ok((stream, _)) = listener.accept() {
+                    let state = ClientState::recorder();
+                    match dh.insert_client(stream, Arc::new(state)) {
+                        Ok(client) => {
+                            if let (Ok(c), Some(data)) = (
+                                client.get_credentials(&dh),
+                                client.get_data::<ClientState>(),
+                            ) {
+                                data.identify(crate::trust::Identity::of_pid(c.pid));
+                            }
+                        }
+                        Err(e) => eprintln!("[infynitae] Failed to insert the recorder: {e}"),
+                    }
+                }
+                Ok(PostAction::Continue)
+            },
+        )
+        .map_err(|e| std::io::Error::other(e.to_string()))?;
+    Ok(Some(file))
+}
+
+type ServeSandbox = Box<
+    dyn Fn(
+        smithay::wayland::security_context::SecurityContextListenerSource,
+        smithay::wayland::security_context::SecurityContext,
+    ),
+>;
 
 impl Session {
     /// Opens the listening socket and registers it and the display with the event loop, then
@@ -159,7 +238,7 @@ impl Session {
     /// when the event loop that owns their source is dropped.
     pub fn new<D: 'static>(
         mut display: Display<WaylandState>,
-        handle: &LoopHandle<'_, D>,
+        handle: &LoopHandle<'static, D>,
         options: &SessionOptions,
     ) -> Result<Session, Box<dyn Error>> {
         // SIGTERM and SIGINT, first: from here on they only end the loop (the caller then shuts
@@ -229,11 +308,54 @@ impl Session {
         let mut clients = display.handle();
         handle
             .insert_source(socket, move |stream, _, _| {
-                if let Err(e) = clients.insert_client(stream, Arc::new(ClientState::default())) {
-                    eprintln!("[infynitae] Failed to insert client: {e}");
+                match clients.insert_client(stream, Arc::new(ClientState::default())) {
+                    // a native client is known by its executable, read before its first request
+                    // (`trust`)
+                    Ok(client) => {
+                        let identity = match client.get_credentials(&clients) {
+                            Ok(c) => crate::trust::Identity::of_pid(c.pid),
+                            Err(_) => crate::trust::Identity::Native {
+                                exe: None,
+                                path: None,
+                            },
+                        };
+                        if let Some(data) = client.get_data::<ClientState>() {
+                            data.identify(identity);
+                        }
+                    }
+                    Err(e) => eprintln!("[infynitae] Failed to insert client: {e}"),
                 }
             })
             .map_err(|e| format!("Failed to register listening socket: {e}"))?;
+        // the replay recorder's own socket (M2): only what connects there is exempt from the
+        // capture mark, never a client known by its executable's name
+        let recorder_socket = match open_recorder_socket(&socket_name, &display, handle) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!(
+                    "[infynitae] No recorder socket ({e}): the replay buffer shows the capture mark"
+                );
+                None
+            }
+        };
+        // a sandbox's listener (security-context-v1): every client through it is sandboxed. The
+        // session holds the loop handle for this (the loop must not: a source holding its own
+        // loop's handle would keep the loop, and the socket, alive)
+        let listeners = handle.clone();
+        let sandboxed_clients = display.handle();
+        let serve_sandbox: ServeSandbox = Box::new(move |source, context| {
+            let mut dh = sandboxed_clients.clone();
+            let identity = crate::trust::sandboxed(&context);
+            println!("[infynitae] Sandbox listener for {}", identity.describe());
+            if let Err(e) = listeners.insert_source(source, move |stream, _, _| {
+                let state = ClientState::with_identity(identity.clone());
+                if let Err(e) = dh.insert_client(stream, Arc::new(state)) {
+                    eprintln!("[infynitae] Failed to insert sandboxed client: {e}");
+                }
+            }) {
+                eprintln!("[infynitae] Failed to serve a sandbox listener: {e}");
+            }
+        });
         // a readable display wakes the loop; the requests are dispatched by `dispatch`
         let display_ready = Rc::new(Cell::new(false));
         let ready = display_ready.clone();
@@ -270,6 +392,8 @@ impl Session {
             child_notify,
             x_display: options.x_display.clone(),
             x_authority: options.x_authority.clone(),
+            serve_sandbox,
+            _recorder_socket: recorder_socket,
         };
         if let Some(cmd) = &options.exec {
             session.spawn(handle, cmd);
@@ -429,7 +553,11 @@ impl Session {
                 self.request_frame();
             }
         }
+        for (source, context) in state.security_listeners.drain(..) {
+            (self.serve_sandbox)(source, context);
+        }
         state.settle_unlock();
+        state.restart_dead_locker(Instant::now());
         state.clear_orphaned_selections();
         state.refuse_client_drags();
         state.prune_disabled_outputs();

@@ -164,9 +164,10 @@ pub struct OutputManagementState {
 }
 
 impl OutputManagementState {
-    pub fn new(dh: &DisplayHandle) -> Self {
+    pub fn new(dh: &DisplayHandle, gate: crate::trust::Gate) -> Self {
         Self {
-            global: dh.create_global::<WaylandState, ZwlrOutputManagerV1, ()>(4, ()),
+            global: dh
+                .create_global::<WaylandState, ZwlrOutputManagerV1, crate::trust::Gate>(4, gate),
             serial: 1,
             managers: Vec::new(),
             heads: Vec::new(),
@@ -542,13 +543,16 @@ fn send_changes(h: &mut Head, now: &Told) -> bool {
     sent
 }
 
-impl GlobalDispatch<ZwlrOutputManagerV1, ()> for WaylandState {
+impl GlobalDispatch<ZwlrOutputManagerV1, crate::trust::Gate> for WaylandState {
+    fn can_view(client: Client, gate: &crate::trust::Gate) -> bool {
+        gate.allows(&client)
+    }
     fn bind(
         state: &mut Self,
         _dh: &DisplayHandle,
         _client: &Client,
         resource: New<ZwlrOutputManagerV1>,
-        _global_data: &(),
+        _global_data: &crate::trust::Gate,
         data_init: &mut DataInit<'_, Self>,
     ) {
         let manager = data_init.init(resource, ());

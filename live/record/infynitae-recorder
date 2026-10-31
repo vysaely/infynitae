@@ -220,6 +220,11 @@ start_replay_engine() {
 
     echo "[infynitae-recorder] Replay buffer: geometry ${GEOM}, ${RECORD_FPS}fps, encoder [${V_PIPELINE}]"
 
+    # The compositor's own socket for the replay buffer, so that it alone is left out of the
+    # capture mark (a compositor from before it has none: then the mark shows)
+    REC_SOCK="${XDG_RUNTIME_DIR}/infynitae/${WAYLAND_DISPLAY##*/}.recorder"
+    [ -n "$XDG_RUNTIME_DIR" ] && [ -S "$REC_SOCK" ] && export WAYLAND_DISPLAY="$REC_SOCK"
+
     # Screen streamer -> FFmpeg hardware encoder -> circular segment ring buffer
     # Uses nice -n 10 so foreground games/apps always get 100% priority
     set -f  # $A_ARGS holds ffmpeg filter text with brackets: no filename expansion

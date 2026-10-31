@@ -427,6 +427,9 @@ CLIPBOARD_PERSIST="true"
 
 CLIPBOARD_HISTORY="true"
     # Super+V clipboard history (needs cliphist and wl-paste) [reload]
+    # It is kept on disk. A password copied from a password manager stays out of it only
+    # when wl-clipboard (2.2 or newer) and cliphist both honour the manager's "sensitive"
+    # hint (CLIPBOARD_STATE); if yours do not, set this to false if you copy passwords
     # default: true
     # options: true  · false
 
@@ -508,13 +511,16 @@ START_LOCKED="false"
 
 # ═══ Privacy & screen capture ══════════════════════════════════════════════════════ [save] ═══
 
-SCREENSHARE_ASK="false"
-    # An app's Share button [reload]
-    # default: false
-    #   false    shares the (first) screen at once; a window tab gets a menu of the windows
-    #    true    always pick a screen or a window from a menu
-    # Desktop apps can also capture directly (wlr-screencopy, used by recorders and
-    # screenshots); the prompt guards the screen-sharing portal only.
+SCREENSHARE_ASK="app"
+    # An app's Share button (the screen-sharing portal) [reload]
+    # default: app
+    #   app      the first time an app shares, you are asked (this time, always, or deny);
+    #            then the (first) screen is shared at once, a window tab gets a menu
+    #    true    asked as with app, and always pick a screen or a window from a menu
+    #   false    no question: the first screen is shared at once
+    # "Always" is remembered per app id in ~/.local/state/infynitae/screenshare-allowed (one
+    # per line: delete a line to be asked again). Apps outside a sandbox have no id and are
+    # asked each time. Direct capture (screenshots, recorders) is ALLOW_CAPTURE below.
 
 SCREENCOPY_CURSOR="false"
     # Draw the cursor into captures
@@ -537,6 +543,46 @@ PRIVACY_TITLES=""
     # Hidden from captures, by title (Super+Shift+P toggles a window)
     # default: ""
     # options: ""  · e.g. "Password"
+
+# Which apps may use the powers above the normal app's (docs/SECURITY.md). Each list holds
+# app ids (a sandboxed app, e.g. Flatpak: "com.obsproject.Studio") and program names or paths
+# (a desktop app, known by its real file), separated by spaces. The word "native" lets every
+# desktop app in; take it out to allow only the ones named. A sandboxed app gets a power only
+# when its app id is listed. Infynitae's own helpers always have what they need. Applies to
+# apps that start after you save.
+
+ALLOW_CAPTURE="native grim wf-recorder obs xdg-desktop-portal-wlr"
+    # Capture the screen or a window directly (screenshots, recorders, screen sharing)
+    # default: "native grim wf-recorder obs xdg-desktop-portal-wlr"
+
+ALLOW_CLIPBOARD="native wl-copy wl-paste cliphist wl-clip-persist"
+    # Read and set the clipboard at any time, without focus (clipboard managers)
+    # default: "native wl-copy wl-paste cliphist wl-clip-persist"
+
+ALLOW_INPUT="native wtype ydotool"
+    # Type and move the mouse as if you did (virtual keyboard and pointer)
+    # default: "native wtype ydotool"
+
+ALLOW_INPUT_METHOD="native fcitx5"
+    # Be the input method (it sees every key you type)
+    # default: "native fcitx5"
+
+ALLOW_WINDOWS="native"
+    # List every window and focus or close any (taskbars, window switchers)
+    # default: "native"
+
+ALLOW_DISPLAY="native wlr-randr kanshi wlsunset gammastep"
+    # Change screen colours, modes and power (night light, screen setup)
+    # default: "native wlr-randr kanshi wlsunset gammastep"
+
+ALLOW_LAYERS="native slurp mako swaync fuzzel"
+    # Draw panels, overlays and notifications above or below every window
+    # default: "native slurp mako swaync fuzzel"
+
+ALLOW_LOCK=""
+    # Lock the session (infynitae-lock and the SCREEN_LOCKER command always may)
+    # default: ""
+    # options: ""  · e.g. "swaylock"
 
 REMOTE_DESKTOP="false"
     # Remote desktop apps (AnyDesk, GNOME's clients) get the screen and, once you allow it,
@@ -583,6 +629,13 @@ RECORD_AUDIO="desktop"
     # The system's default devices (the microphone only for mic or both)
     # default: desktop
     # options: desktop  · mic  · both  · none
+
+
+UPDATE_SIGNING_KEY=""
+    # infynitae-update takes a new version only when its commit is signed by this key [use]
+    # default: ""   (any version from the repository, as before)
+    # options: ""  · a GnuPG fingerprint · an SSH key as git shows it (SHA256:..., with
+    #            gpg.ssh.allowedSignersFile set in git)
 
 
 # ═══ Key bindings ══════════════════════════════════════════════════════════════════ [save] ═══

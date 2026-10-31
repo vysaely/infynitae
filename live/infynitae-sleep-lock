@@ -1,9 +1,10 @@
 #!/bin/sh
 # infynitae-sleep-lock: the screen is locked before the machine sleeps (the lid, the power button,
 # a menu), so it wakes at the lock screen. It holds a logind "delay" sleep inhibitor; when sleep
-# is announced (PrepareForSleep true) it starts the lock screen, waits until the compositor has
-# confirmed the lock (the locker prints "Screen locked"), and only then lets the sleep go on. After
-# the wake it takes the inhibitor again. Started by session.sh; ends with the session.
+# is announced (PrepareForSleep true) it starts the lock screen, waits until the compositor says
+# the session is locked (the shell snapshot), and only then lets the sleep go on; without that
+# answer it keeps the inhibitor until logind's own limit. After the wake it takes the inhibitor
+# again (or still has it). Started by session.sh; ends with the session.
 #   INFYNITAE_SLEEP_MONITOR: a command printing logind's signals instead of gdbus (tests)
 set -u
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
@@ -54,36 +55,66 @@ locker() {
     esac
 }
 
-# the lock screen up, then the sleep may go on: logind waits for the inhibitor at most its
-# InhibitDelayMaxSec (5 s by default), so the wait for the confirmation is shorter
+# Whether the session is locked, as the compositor says (the shell snapshot's "locked"): yes,
+# no, or unknown (a compositor from before the field, or no answer). Never a process name: any
+# program can call itself infynitae-lock.
+INF_BIN="${INFYNITAE_BIN:-$HOME/.local/bin/infynitae}"
+lock_state() {
+    snap=$("$INF_BIN" msg snapshot 2>/dev/null) || { echo unknown; return; }
+    case "$snap" in
+        *'"locked":true'*) echo yes ;;
+        *'"locked":false'*) echo no ;;
+        *) echo unknown ;;
+    esac
+}
+
+# logind waits for the inhibitor at most InhibitDelayMaxSec (5 s by default): that long, in
+# tenths of a second, less one so the last check comes before it
+delay_tenths() {
+    us=$(busctl get-property org.freedesktop.login1 /org/freedesktop/login1 \
+        org.freedesktop.login1.Manager InhibitDelayMaxUSec 2>/dev/null | awk '{print $2}')
+    case "$us" in
+        '' | *[!0-9]*) echo 49 ;;
+        *) t=$((us / 100000 - 1)); [ "$t" -gt 0 ] && echo "$t" || echo 49 ;;
+    esac
+}
+
+# the lock screen up, then the sleep may go on. Returns 0 once the lock is confirmed; 1 when it
+# is not: the inhibitor is then kept, so the sleep waits as long as logind allows (it never goes
+# on early because a lock screen was slow)
 lock_now() {
-    if pgrep -u "$(id -u)" -x infynitae-lock >/dev/null 2>&1; then
+    state=$(lock_state)
+    if [ "$state" = yes ]; then
         log "already locked"
-        return
+        return 0
     fi
     l=$(locker)
-    [ -n "$l" ] || { log "no lock screen installed"; return; }
+    [ -n "$l" ] || { log "no lock screen installed"; return 1; }
     log "starting the lock screen ($l)"
-    case "$l" in
-        *infynitae-lock)
-            "$l" > "$LOCK_LOG" 2>&1 9>&- &
-            i=0
-            while [ "$i" -lt 40 ] && ! grep -q "Screen locked" "$LOCK_LOG" 2>/dev/null; do
-                sleep 0.1
-                i=$((i + 1))
-            done
-            if grep -q "Screen locked" "$LOCK_LOG" 2>/dev/null; then
-                log "lock confirmed"
-            else
-                log "no confirmation within 4 s: $(tail -1 "$LOCK_LOG" 2>/dev/null)"
-            fi
-            ;;
-        *)
-            # another locker: no confirmation to wait for; a moment for its first frame
-            $l >/dev/null 2>&1 9>&- &
-            sleep 1
-            ;;
-    esac
+    : > "$LOCK_LOG" 2>/dev/null
+    $l > "$LOCK_LOG" 2>&1 9>&- &
+    limit=$(delay_tenths)
+    i=0
+    while [ "$i" -lt "$limit" ]; do
+        case "$state" in
+            unknown)
+                # a compositor without "locked": infynitae-lock's own confirmation, else a moment
+                case "$l" in
+                    *infynitae-lock*) grep -q "Screen locked" "$LOCK_LOG" 2>/dev/null && break ;;
+                    *) [ "$i" -ge 10 ] && break ;;
+                esac
+                ;;
+            *) [ "$(lock_state)" = yes ] && { log "lock confirmed"; return 0; } ;;
+        esac
+        sleep 0.1
+        i=$((i + 1))
+    done
+    if [ "$state" = unknown ] && [ "$i" -lt "$limit" ]; then
+        log "lock confirmed by the lock screen"
+        return 0
+    fi
+    log "no confirmation in time: the sleep waits for logind's limit ($(tail -1 "$LOCK_LOG" 2>/dev/null))"
+    return 1
 }
 
 # the background job becomes the monitor itself (exec): $MON is then gdbus, ended by `end`, and
@@ -111,9 +142,10 @@ while IFS= read -r line <&3; do
     case "$line" in
         *PrepareForSleep*true*)
             log "sleep announced"
-            lock_now
-            log "letting the sleep go on"
-            release
+            if lock_now; then
+                log "letting the sleep go on"
+                release
+            fi
             ;;
         *PrepareForSleep*false*)
             log "woke up"
