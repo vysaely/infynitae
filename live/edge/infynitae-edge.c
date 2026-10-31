@@ -1160,7 +1160,7 @@ static void start_async_refresh(EdgeApp *app, int kind) {
                   "btdev=$( [ \"$bt\" = on ] && bluetoothctl devices Connected 2>/dev/null | head -1 | cut -d' ' -f3- ); "
                   "vol=$(LC_ALL=C pactl get-sink-volume @DEFAULT_SINK@ 2>/dev/null | grep -o '[0-9]*%' | head -1 | tr -d '%'); "
                   "mute=$(LC_ALL=C pactl get-sink-mute @DEFAULT_SINK@ 2>/dev/null | awk '{print $2}'); "
-                  "pp=$(cat /sys/firmware/acpi/platform_profile 2>/dev/null || powerprofilesctl get 2>/dev/null || echo balanced); "
+                  "pp=$(powerprofilesctl get 2>/dev/null || echo none); "
                   "printf 'SYS\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\t%s\\n' \"${wradio:-disabled}\" \"${ssid:-}\" \"$bt\" \"${btdev:-}\" \"${vol:-75}\" \"${mute:-no}\" \"$pp\"; "
                   "sh \"$HOME/infynitae/live/control-menu\" apps-list 2>/dev/null | head -n 6",
                   (char *)NULL);
@@ -1761,7 +1761,8 @@ static void render_output(EdgeOutput *out) {
             double tw = floor(rw / 2.0);
             double th = 22.0;
             const char *p_disp = "Balanced";
-            if (strcasecmp(app->power_profile, "performance") == 0) p_disp = "Performance";
+            if (strcmp(app->power_profile, "none") == 0) p_disp = "N/A";
+            else if (strcasecmp(app->power_profile, "performance") == 0) p_disp = "Performance";
             else if (strcasecmp(app->power_profile, "power-saver") == 0) p_disp = "Saver";
 
             struct {
@@ -2391,13 +2392,20 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
         return true;
     }
     case ACT_POWER_PROFILE: {
+        if (strcmp(app->power_profile, "none") == 0) {
+            spawn_detached("notify-send -a Infynitae 'Power modes' "
+                           "'They need power-profiles-daemon, which is not installed'");
+            return true;
+        }
         const char *next_p = "balanced";
         if (strcmp(app->power_profile, "balanced") == 0) next_p = "performance";
         else if (strcmp(app->power_profile, "performance") == 0) next_p = "power-saver";
         snprintf(app->power_profile, sizeof(app->power_profile), "%s", next_p);
-        char cmd[128];
-        snprintf(cmd, sizeof(cmd), "powerprofilesctl set %s 2>/dev/null", next_p);
-        spawn_detached(cmd);
+        /* a mode the machine lacks (performance, on many laptops) is refused: said, and the tile
+         * shows the real mode again */
+        spawn_script("powerprofilesctl set \"$1\" 2>/dev/null || "
+                     "notify-send -a Infynitae 'Power modes' \"This machine has no $1 mode\"",
+                     next_p, NULL);
         damage_all(app);
         return true;
     }
@@ -2471,7 +2479,7 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
         spawn_detached(
             "[ -f ~/.config/infynitae/config ] && . ~/.config/infynitae/config 2>/dev/null || true; "
             ": > ~/.local/state/infynitae/stop; "
-            "pkill -f 'infynitae.*restore watch' 2>/dev/null || true; "
+            "pkill -f 'infynitae restore [w]atch' 2>/dev/null || true; "
             "(~/.local/bin/infynitae restore save 2>/dev/null || infynitae restore save 2>/dev/null || true); "
             "case \"${SHUTDOWN_SCREEN:-true}\" in 0|false|no|off|FALSE|False) ;; *) "
             "rm -f ~/.local/state/infynitae/lock.log; "
@@ -2487,7 +2495,7 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
         spawn_detached(
             "[ -f ~/.config/infynitae/config ] && . ~/.config/infynitae/config 2>/dev/null || true; "
             ": > ~/.local/state/infynitae/stop; "
-            "pkill -f 'infynitae.*restore watch' 2>/dev/null || true; "
+            "pkill -f 'infynitae restore [w]atch' 2>/dev/null || true; "
             "(~/.local/bin/infynitae restore save 2>/dev/null || infynitae restore save 2>/dev/null || true); "
             "case \"${SHUTDOWN_SCREEN:-true}\" in 0|false|no|off|FALSE|False) ;; *) "
             "rm -f ~/.local/state/infynitae/lock.log; "
@@ -2501,7 +2509,7 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
     case ACT_LOGOUT:
         set_mode(app, MODE_CLOSED);
         spawn_detached(
-            "pkill -f 'infynitae.*restore watch' 2>/dev/null || true; "
+            "pkill -f 'infynitae restore [w]atch' 2>/dev/null || true; "
             "(~/.local/bin/infynitae restore save 2>/dev/null || infynitae restore save 2>/dev/null || true); "
             "~/.local/bin/infynitae-session stop");
         return true;
