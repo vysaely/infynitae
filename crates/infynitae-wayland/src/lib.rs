@@ -154,6 +154,8 @@ pub struct WaylandState {
     /// The focus (surface and origin) and position of the last `wl_pointer.motion` delivered,
     /// and whether pointer events wait for their `wl_pointer.frame` (`pointer`).
     pointer_sent: pointer::Sent,
+    /// Core's `PointerMotion` effects applied, counted before a repeat is dropped (for tests).
+    pointer_motions: u64,
     arrow: cursor::Arrow,
     capture_indicator: capture_indicator::CaptureIndicator,
     /// Apps out of sight yield the CPU; the game gets game mode (`background`).
@@ -444,6 +446,13 @@ impl WaylandState {
         });
     }
 
+    /// How many absolute motions Core has sent, counting those the adapter then dropped as a
+    /// repeat of what the client has (for tests: a motion Core should not have sent is seen even
+    /// when it changed nothing on the wire).
+    pub fn pointer_motions(&self) -> u64 {
+        self.pointer_motions
+    }
+
     /// Number of disabled output globals awaiting removal (for tests).
     pub fn disabled_outputs_count(&self) -> usize {
         self.disabled_outputs.len()
@@ -553,6 +562,7 @@ impl WaylandState {
             cursor: smithay::input::pointer::CursorImageStatus::default_named(),
             cursor_epoch: std::time::Duration::ZERO,
             pointer_sent: pointer::Sent::default(),
+            pointer_motions: 0,
             arrow: cursor::Arrow::default(),
             capture_indicator: capture_indicator::CaptureIndicator::default(),
             background: background::Background::default(),

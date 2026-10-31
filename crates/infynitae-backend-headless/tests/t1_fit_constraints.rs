@@ -140,6 +140,7 @@ fn act(r: &mut Rig, setup: Setup, shift: bool, zoom: f64) {
     let what = format!("{setup:?} {}", if shift { "restore" } else { "fit" });
     let p0 = pointer(r);
     let m = r.mark();
+    let sent = r.ls.state.pointer_motions();
     combo(r, shift);
     assert_eq!(
         r.ls.state.core().cameras().zoom(0),
@@ -174,6 +175,13 @@ fn act(r: &mut Rig, setup: Setup, shift: bool, zoom: f64) {
             assert!(
                 delivered.is_empty(),
                 "{what}: absolute motion to a locked surface: {lines:?}"
+            );
+            // Core's own output, not only the wire: the adapter drops a motion repeating what
+            // the client has, and one to a lock's point always does
+            assert_eq!(
+                r.ls.state.pointer_motions(),
+                sent,
+                "{what}: Core sent absolute motion to a locked surface"
             );
             assert_eq!(count(&lines, "unlocked"), 0, "{what}: {lines:?}");
             assert_eq!(

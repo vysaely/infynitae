@@ -176,7 +176,15 @@ fn a_presentation_start_and_end_send_no_motion_to_a_kept_lock() {
         let o = r.ls.output();
         let w = r.ls.state.elements().next().unwrap();
         for on in [true, false] {
+            let sent = r.ls.state.pointer_motions();
             let wire = fullscreen(&mut r, on);
+            // Core's own output, not only the wire: the adapter drops a motion repeating what
+            // the client has, and one to a lock's point always does
+            assert_eq!(
+                r.ls.state.pointer_motions(),
+                sent,
+                "oneshot {oneshot}, presentation {on}: Core sent absolute motion to a locked surface"
+            );
             assert_eq!(
                 r.ls.state.core().presentation(o),
                 on.then_some(w),
