@@ -267,10 +267,11 @@ reload_automount() {
 }
 
 # Screen sharing (xdg-desktop-portal-wlr): what a share shows (live/screenshare-chooser).
-# SCREENSHARE_ASK=false (default) shares the first screen as soon as an app asks for a screen,
-# and an app asking for a window gets a menu of the windows; true always asks, in a menu of the
-# screens and the windows (MENU_PICKER, fuzzel by default; without one, click a screen with
-# slurp). Written only when absent or marked as ours (a hand-written config is the user's); the
+# Whether an app may share at all is asked by infynitae-portal first (live/remote/screenshare-ask,
+# once per app; SCREENSHARE_ASK="app", the default). Then: "app" or "false" share the first
+# screen at once, and an app asking for a window gets a menu of the windows; "true" always shows
+# a menu of the screens and the windows (MENU_PICKER, fuzzel by default; without one, click a
+# screen with slurp). Written only when absent or marked as ours (a hand-written config is the user's); the
 # portal reads it when it next starts, so a running one is stopped (it restarts on demand).
 reload_screenshare() {
     cfg="$HOME/.config/xdg-desktop-portal-wlr/config"
@@ -307,7 +308,7 @@ reload_screenshare() {
     if is_true "${SCREENSHARE_ASK:-false}"; then
         echo "screenshare: pick a screen or a window when an app asks"
     else
-        echo "screenshare: a screen is shared as soon as an app asks; a window is picked from a menu"
+        echo "screenshare: an app is asked about once; then a screen is shared at once, a window picked from a menu"
     fi
 }
 

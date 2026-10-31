@@ -19,7 +19,8 @@ edges on other hardware.
   for all sound or one app, sound output, power mode), global shortcuts for
   apps, layer shell for bars, X11 apps through xwayland-satellite, VRR and direct scanout for
   games, idle screen-off and auto-lock.
-- **Screen sharing:** a screen or a single window, through the portal or screencopy. A
+- **Screen sharing:** a screen or a single window, through the portal or screencopy. The
+  portal asks before an app's first share (this time, always, or deny; `SCREENSHARE_ASK`). A
   private window (`PRIVACY_APPS`, `PRIVACY_TITLES`, Super+Shift+P) is never shared, and nothing
   is while the screen is locked. A small red dot shows on every screen while anything captures
   it, and is never in the capture itself (`CAPTURE_INDICATOR`). Over a fullscreen window it

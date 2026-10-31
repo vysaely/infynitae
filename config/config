@@ -508,13 +508,16 @@ START_LOCKED="false"
 
 # ═══ Privacy & screen capture ══════════════════════════════════════════════════════ [save] ═══
 
-SCREENSHARE_ASK="false"
-    # An app's Share button [reload]
-    # default: false
-    #   false    shares the (first) screen at once; a window tab gets a menu of the windows
-    #    true    always pick a screen or a window from a menu
-    # Desktop apps can also capture directly (wlr-screencopy, used by recorders and
-    # screenshots); the prompt guards the screen-sharing portal only.
+SCREENSHARE_ASK="app"
+    # An app's Share button (the screen-sharing portal) [reload]
+    # default: app
+    #   app      the first time an app shares, you are asked (this time, always, or deny);
+    #            then the (first) screen is shared at once, a window tab gets a menu
+    #    true    asked as with app, and always pick a screen or a window from a menu
+    #   false    no question: the first screen is shared at once
+    # "Always" is remembered per app id in ~/.local/state/infynitae/screenshare-allowed (one
+    # per line: delete a line to be asked again). Apps outside a sandbox have no id and are
+    # asked each time. Direct capture (screenshots, recorders) is ALLOW_CAPTURE below.
 
 SCREENCOPY_CURSOR="false"
     # Draw the cursor into captures

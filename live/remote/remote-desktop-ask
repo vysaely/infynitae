@@ -1,13 +1,20 @@
 #!/bin/sh
 # Asked by infynitae-portal before an app takes the keyboard and mouse (remote desktop): prints
 # "once", "always" or nothing (deny). The picker is MENU_PICKER (empty: fuzzel --dmenu).
-#   remote-desktop-ask <app id>      (empty: an app outside a sandbox)
+#   remote-desktop-ask -- <app id>   (empty: an app outside a sandbox, which is asked each time)
 [ -f "$HOME/infynitae/live/config.sh" ] && . "$HOME/infynitae/live/config.sh"
-app="${1:-an app outside a sandbox}"
+[ "${1:-}" = "--" ] && shift
 PICKER="${MENU_PICKER:-fuzzel --dmenu}"
-once="Allow $app to control the keyboard and mouse"
-always="Always allow $app"
-case "$(printf '%s\n' "$once" "$always" "Deny" | $PICKER)" in
-    "$once") echo once ;;
-    "$always") echo always ;;
-esac
+# the id is shown as text only, on one line
+app=$(printf '%s' "${1:-}" | tr -d '\n\r' | cut -c1-80)
+if [ -n "$app" ]; then
+    once="Allow $app to control the keyboard and mouse"
+    always="Always allow $app"
+    case "$(printf '%s\n' "$once" "$always" "Deny" | $PICKER)" in
+        "$once") echo once ;;
+        "$always") echo always ;;
+    esac
+else
+    once="Allow an app outside a sandbox to control the keyboard and mouse"
+    [ "$(printf '%s\n' "$once" "Deny" | $PICKER)" = "$once" ] && echo once
+fi

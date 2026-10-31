@@ -56,6 +56,25 @@ running keeps what it had until it restarts. `live/config-check` names a word it
 Without any list, a sandboxed app still has everything an ordinary app has: its own windows,
 the clipboard while it has the keyboard focus, and drag and drop.
 
+## Screen sharing and remote desktop: you are asked
+
+An app that shares the screen through the portal (a video call's Share button) or wants the
+keyboard and mouse (a remote desktop) goes through Infynitae's portal, which asks you first:
+this time, always, or deny.
+
+- "Always" is remembered per app id, the id the sandbox gives the app, in
+  `~/.local/state/infynitae/screenshare-allowed` and `remote-desktop-allowed` (one id per line).
+  To forget a choice, delete that app's line (or the file); the app is asked again next time.
+- An app outside a sandbox reaches the portal without an id, so it cannot be told apart from
+  any other such app: it is asked every time, never remembered.
+- Only xdg-desktop-portal may call Infynitae's portal, so the app id it passes is the one the
+  portal checked; another program calling it directly is refused.
+- `SCREENSHARE_ASK="false"` shares without asking (the old behaviour); `"true"` asks and also
+  always lets you pick the screen or window.
+- While anything captures the screen, a red dot shows in the corner of every screen
+  (`CAPTURE_INDICATOR`). Only the replay buffer Infynitae itself started is left out; it is
+  known by a private socket the compositor gives it, never by a program name.
+
 ## While the screen is locked
 
 Nothing captures (a capture shows the lock screen or is refused), no virtual keyboard or input

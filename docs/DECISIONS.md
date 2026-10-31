@@ -109,6 +109,13 @@ these by date, e.g. "(owner, 2026-10-24)".
   is a power too: a sandboxed app drawing over every window could imitate a lock or password
   prompt. The lock is Infynitae's own (`infynitae-lock`) and the `SCREEN_LOCKER` command's.
 
+- **Screen sharing asks once per app** (owner, 2026-10-31): the ScreenCast portal always goes
+  through infynitae-portal, which asks before an app's first share (`SCREENSHARE_ASK="app"`, the
+  new default; it was "false", sharing the first screen at once). "Always" is kept per sandbox
+  app id; an app outside a sandbox has no id the portal can trust and is asked every time (the
+  remote desktop's shared "(unsandboxed)" entry is gone for the same reason). Only
+  xdg-desktop-portal may call the backend.
+
 ## Shell IPC
 
 - **JSON lines over a unix socket** (2026-10-20, D1–D9): one JSON object per line, a minimal
