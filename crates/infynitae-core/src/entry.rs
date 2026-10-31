@@ -4749,21 +4749,12 @@ mod tests {
         );
     }
 
-    /// A Core with one output A and `n` mapped 400x300 windows, and a key press or release with
-    /// the modifiers the seat would report after it (the adapter's `sync_seat_key`).
-    fn super_tab_scene(
-        n: u64,
-    ) -> (
-        Core,
-        crate::InputPort,
-        OutputId,
-        Vec<crate::stage::ElementId>,
-    ) {
+    /// Maps `n` 400x300 windows on `c` (output `a` connected) and returns them; `press` below
+    /// is a key press or release with the modifiers the seat would report after it.
+    fn map_windows(c: &mut Core, a: OutputId, n: u64) -> Vec<crate::stage::ElementId> {
         use crate::geom::{LocalPoint, LocalRect, LocalSize};
         use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
         use std::num::NonZeroU64;
-        let (mut c, i, _, mut t) = Core::new(PersistedCameras::default());
-        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
         let win = |k: u64, mapped: bool| SurfaceTree {
             geometry: LocalRect {
                 loc: LocalPoint::default(),
@@ -4791,7 +4782,7 @@ mod tests {
             })
             .collect();
         c.render_list(a).unwrap();
-        (c, i, a, ws)
+        ws
     }
 
     fn press(c: &mut Core, i: &mut crate::InputPort, key: u32, pressed: bool, logo: bool) {
@@ -4828,7 +4819,9 @@ mod tests {
     #[test]
     fn super_tab_flips_the_last_two_and_steps_back_while_super_is_held() {
         use crate::input::keys::{KEY_LEFTMETA, KEY_TAB};
-        let (mut c, mut i, _, ws) = super_tab_scene(3);
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 3);
         let [w1, w2, w3] = [ws[0], ws[1], ws[2]];
         for w in [w1, w2, w3] {
             c.set_focus(&mut i, Some(w)).unwrap();
@@ -4868,7 +4861,9 @@ mod tests {
     /// FOCUS_CYCLE_NAVIGATE off); the next Super+Tab goes back to the window the user was in.
     #[test]
     fn super_tab_goes_to_the_window_asking_for_attention_first_then_back() {
-        let (mut c, mut i, a, ws) = super_tab_scene(3);
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 3);
         let [w1, w2, w3] = [ws[0], ws[1], ws[2]];
         c.set_focus_cycle_navigate(false);
         // w3 far to the right, out of view
