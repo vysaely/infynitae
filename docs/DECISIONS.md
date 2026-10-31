@@ -19,6 +19,19 @@ these by date, e.g. "(owner, 2026-10-24)".
 
 ## Keys
 
+- **Often used on the left hand, rare on the right** (2026-10-31). Super+Tab, Q, W, E, A, S, C,
+  V and Space are the everyday keys; Super+L, Shift+O, Shift+P, Shift+I, Alt+P and
+  Shift+BackSpace the rare ones. So **Super+S is the region screenshot** (Super+Shift+S the whole
+  screen), **Super+Shift+O the tearing toggle** and **Super+Alt+P recording**; the old chords
+  (Super+Shift+R, Super+Shift+T, Super+Alt+R) stay as aliases, and a binding of the user's
+  (`BIND_*`, `EXEC_*`) still wins over both.
+- **Super+Tab flips between the last two windows** (2026-10-31), most recently used order, so two
+  apps can be switched fast. Holding Super, each further Tab goes one window back, like Alt+Tab;
+  letting Super go picks the window reached and makes it the most recent. **Attention first:** a
+  window that opened without the focus (FOCUS_ON_OPEN "user" or "priority" held it back) or
+  whose activation was refused wants attention; Super+Tab goes to the most recent such window
+  first, brings it into view as Super+1..9 does, and clears its mark; the next Super+Tab goes
+  back. A window loses the mark whenever it is focused. The edge marks such a window's tile.
 - **Super+Q / W / E** start the terminal, launcher and file manager through one dispatcher
   (`live/launch.sh`), so each is a config setting.
 - **Super+C closes, Super+Shift+C force-closes** (2026-10-25; Super+Delete before). Force close
@@ -29,7 +42,8 @@ these by date, e.g. "(owner, 2026-10-24)".
 - **Super+Shift+Enter is native fullscreen** (2026-10-21), and with `FULLSCREEN_PAN` you can still
   pan out of it and use Super+1…9 (2026-10-25).
 - **Super+Tab cycles focus** and centres the camera on the window (2026-10-21,
-  `FOCUS_CYCLE_NAVIGATE`); Super+Shift+Tab is the overview.
+  `FOCUS_CYCLE_NAVIGATE`); Super+Shift+Tab is the overview. Its order is the recently used one
+  since 2026-10-31 (above).
 - **Super+Space centres the focused window at 100%, Super+Shift+Space keeps the zoom**
   (2026-10-05, restated 2026-10-24). Super+Shift+Middle click no longer resets the zoom
   (2026-10-24).

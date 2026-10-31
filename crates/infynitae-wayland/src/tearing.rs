@@ -4,7 +4,7 @@
 //!
 //! A window tears while it is fullscreen and shown directly (direct scanout) and either its app
 //! asked (`wp_tearing_control_v1` hint `async`: Vulkan and OpenGL games with vsync off, through
-//! Mesa) or the user turned it on for that window (Super+Shift+T: X11 games, which cannot ask).
+//! Mesa) or the user turned it on for that window (Super+Shift+O or Super+Shift+T: X11 games, which cannot ask).
 //! `TEARING="off"` turns it off everywhere. Never while the session is locked.
 
 use infynitae_core::output::OutputId;
@@ -27,7 +27,7 @@ pub struct Tearing {
     pub(crate) enabled: bool,
     /// The surfaces with a tearing control object, and whether their hint is `async`.
     hints: Vec<(WlSurface, bool)>,
-    /// The windows the user turned tearing on for (Super+Shift+T).
+    /// The windows the user turned tearing on for (Super+Shift+O).
     forced: Vec<ElementId>,
 }
 
@@ -59,7 +59,7 @@ impl WaylandState {
                 .is_some_and(|s| t.hints.iter().any(|(h, on)| *on && *h == s))
     }
 
-    /// Super+Shift+T: tearing on or off for the focused window (it tears while fullscreen), with
+    /// Super+Shift+O (or Super+Shift+T): tearing on or off for the focused window (it tears while fullscreen), with
     /// a notification saying which.
     pub fn toggle_tearing_focused(&mut self) {
         let Some(focused) = self.core.focus().target() else {

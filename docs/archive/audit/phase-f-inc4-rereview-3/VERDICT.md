@@ -97,7 +97,7 @@ It is still not ratifiable:
 | `check-foundation-docs` / `--self-test` | PASS / PASS (57 invariants; 51 obligations × 7 fields) |
 | authority spike | PASS |
 | `verify-development-environment` | **FAIL** (only because it runs efficacy) |
-| CI 37450191322 | foundation-docs ✓, verify-architecture ✓, workspace-build **✗** |
+| CI 37450191322 | foundation-docs pass, verify-architecture pass, workspace-build **fail** |
 
 ## 5. Next action
 1. **R3-A1:** when a destroyed popup leaves its chain without a live grabbing popup, perform the INV-INPUT-10 teardown (keyboard `unset_grab`, pointer grab by install serial) and `set_focus(root)` *before* the next input. Add a client-wire regression for depth 2/3 close + key.

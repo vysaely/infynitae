@@ -278,19 +278,19 @@ Every decision is the owner's; this section prepares them and decides none.
 ### 8.1 Q1 — fit/restore during a protocol-fullscreen presentation
 
 > **Q1 (C12.F17) — owner decision, dated 2026-10-19.**
-> ☐ **A — living contract confirmed.** While output O presents a protocol-fullscreen element
+> [ ] **A — living contract confirmed.** While output O presents a protocol-fullscreen element
 > (INV-PRES-1; `Core::presentation(O)` is some element), `FitViewport(O, W)` and
 > `ViewportRestore(O)` keep M8's guards unchanged and change O's camera and navigation history
 > (OBJ-30) as at any other time; the presentation keeps rendering precedence, and O shows the
 > changed camera when the presentation ends. §C5's historical row stays as provenance.
-> ☒ **B — refused during a presentation.** While O presents a protocol-fullscreen element (from
+> [x] **B — refused during a presentation.** While O presents a protocol-fullscreen element (from
 > the presentation's start to its exit decision, INV-PRES-1; a grant still waiting for its
 > element's map is not a presentation) the operations in scope are refused: no camera mutation;
 > no history entry recorded, evicted or removed; no lattice, frame, membership or epoch change; no
 > pointer reconciliation or pointer event.
-> **Scope:** ☐ 1. the input bindings only — Logo+F and Logo+Shift+F still resolve and are consumed
+> **Scope:** [ ] 1. the input bindings only — Logo+F and Logo+Shift+F still resolve and are consumed
 > (M12, the F key is not forwarded); shell-issued fit/restore keep the living M8 rule until INC-11
-> amends it. ☒ 2. the bindings and the shell-issued `FitViewport` (and a shell restore, if INC-11
+> amends it. [x] 2. the bindings and the shell-issued `FitViewport` (and a shell restore, if INC-11
 > has one) — under B refused with the same state effects; how a refusal is reported to the shell
 > is INC-11's ShellPort contract; no keyboard event is involved.
 
@@ -345,8 +345,8 @@ picture the owner is deciding about; it decides nothing. (The earlier test's cli
 
 ### 8.2 Q2 — the lock rule beyond camera actions (OB-55)
 
-> **Q2 — owner decision, dated 2026-10-19.** ☒ **Widen:** INV-INPUT-5 states that no absolute motion
-> reaches a surface whose lock is active, on every path. ☐ **Keep scoped:** C12.F17's clause
+> **Q2 — owner decision, dated 2026-10-19.** [x] **Widen:** INV-INPUT-5 states that no absolute motion
+> reaches a surface whose lock is active, on every path. [ ] **Keep scoped:** C12.F17's clause
 > covers camera actions only; the other paths follow the protocol without an invariant clause.
 
 The protocol forbids `wl_pointer.motion` while a lock is active either way (zwp_pointer_constraints_v1
@@ -362,9 +362,9 @@ protocol-compliance fix under OB-55, outside C12.F17.
 
 ### 8.3 Q3 — pan release (and output relocation) under a kept confinement (OB-56)
 
-> **Q3 — owner decision, dated 2026-10-19.** ☒ **Exactly one:** the end of an interaction and an output
+> **Q3 — owner decision, dated 2026-10-19.** [x] **Exactly one:** the end of an interaction and an output
 > relocation send the one true-position event to a kept confinement, as a fit or restore does
-> (C12.F17 K4). ☐ **Keep "≤ 1":** M10's rows stay as they are.
+> (C12.F17 K4). [ ] **Keep "≤ 1":** M10's rows stay as they are.
 
 `end_interaction` (fix branch) and `output_disconnected` both send the event only when no
 constraint remains (`if self.constraint.is_none()`), so a kept confinement gets none. Under
@@ -375,15 +375,15 @@ lock re-activating in the batch whose lock point is unobservable) stays a separa
 
 ### 8.4 Q4 — F during a pan
 
-> **Q4 — owner decision, dated 2026-10-19.** ☒ **Forward** (as implemented: no binding during an
-> interaction; F follows M12's client path). ☐ **Consume** (a change to `resolve_key_binding` and
+> **Q4 — owner decision, dated 2026-10-19.** [x] **Forward** (as implemented: no binding during an
+> interaction; F follows M12's client path). [ ] **Consume** (a change to `resolve_key_binding` and
 > its tests).
 
 ### 8.5 Q5 — GPU tolerance for fractional crop cuts (OB-57)
 
-> **Q5 — owner decision, dated 2026-10-19.** ☐ **Set now:** the pass criterion for fractional-pixel crop
+> **Q5 — owner decision, dated 2026-10-19.** [ ] **Set now:** the pass criterion for fractional-pixel crop
 > cuts on a GPU is ____ (e.g. "≤ 1 physical px of sampling offset at any cut, no pixel outside the
-> canonical rect"). ☒ **Defer** to OB-57's T2 work; no GPU claim is made for zoom ≠ 1 until then.
+> canonical rect"). [x] **Defer** to OB-57's T2 work; no GPU claim is made for zoom ≠ 1 until then.
 
 Q5 does not block the software-only INC-10 exit (OB-57 "Blocks: any GPU-rendering claim").
 

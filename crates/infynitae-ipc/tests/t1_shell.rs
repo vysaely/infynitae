@@ -186,6 +186,49 @@ fn a_snapshot_is_a_derived_copy_of_core() {
     );
 }
 
+/// Each element says whether it wants attention (owner, 2026-10-31: the edge marks its tile):
+/// `true` for a window that opened without the focus or whose activation was refused, `false`
+/// again once it is focused.
+#[test]
+fn a_snapshot_element_says_whether_it_wants_attention() {
+    let (mut core, mut server, _o) = setup();
+    let a = map_win(&mut core, 1, 400, 300);
+    let b = map_win(&mut core, 2, 300, 200);
+    let c = map_win(&mut core, 3, 200, 100);
+    let mut shell = connect(&mut server);
+    let focus = |shell: &mut Shell, server: &mut ShellServer, core: &mut Core, e: ElementId| {
+        let line = format!(r#"{{"id":2,"cmd":"focus","element":{}}}"#, eref(core, e));
+        let reply = shell.reply(server, core, &line);
+        assert_eq!(reply.get("ok"), Some(&Value::Bool(true)));
+    };
+    focus(&mut shell, &mut server, &mut core, a);
+    core.opened_without_focus(b);
+    core.activation_request(c, false).unwrap();
+    let marks = |shell: &mut Shell, server: &mut ShellServer, core: &mut Core| {
+        let reply = shell.reply(server, core, r#"{"id":1,"cmd":"snapshot"}"#);
+        reply
+            .get("snapshot")
+            .and_then(|s| s.get("elements"))
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .map(|e| e.get("attention").cloned())
+            .collect::<Vec<_>>()
+    };
+    let t = Some(Value::Bool(true));
+    let f = Some(Value::Bool(false));
+    assert_eq!(
+        marks(&mut shell, &mut server, &mut core),
+        [f.clone(), t.clone(), t.clone()]
+    );
+    focus(&mut shell, &mut server, &mut core, b);
+    assert_eq!(
+        marks(&mut shell, &mut server, &mut core),
+        [f.clone(), f, t],
+        "focused: no mark"
+    );
+}
+
 /// C7.3: commands run in the order sent; each reply carries its request id and the generation
 /// that resulted; a request that fails changes nothing and moves no generation (atomic).
 #[test]

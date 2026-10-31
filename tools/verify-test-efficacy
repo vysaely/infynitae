@@ -2049,6 +2049,32 @@ CONTROLS = [
      "                    if let Some(at) = self.returned_from_fullscreen(id).filter(|_| false) {\n",
      "infynitae-backend-headless", ["--test", "t1_window_states"],
      "back_from_fullscreen_larger_it_moves_to_free_space"),
+    # ---- Super+Tab: the last two windows, step-through while Super is held, attention first;
+    # the left-hand keys (owner, 2026-10-31)
+    ("Super+Tab: a further Tab with Super held stays on the same window", f"{CORE}/input/focus.rs",
+     "                let next = cycle.order[at.map_or(0, |i| (i + 1) % cycle.order.len())];",
+     "                let next = cycle.order[at.map_or(0, |i| i % cycle.order.len())];",
+     "infynitae-core", ["--lib"], "holding_super_steps_further_back_and_letting_go_chooses"),
+    ("Super+Tab: letting Super go does not make the chosen window the most recent", f"{CORE}/input/focus.rs",
+     "        if let Some(id) = self.target {\n            self.history.retain(|&e| e != id);\n            self.history.insert(0, id);\n        }\n    }\n\n    /// Whether a Super+Tab",
+     "        let _ = self.target;\n    }\n\n    /// Whether a Super+Tab",
+     "infynitae-core", ["--lib"], "holding_super_steps_further_back_and_letting_go_chooses"),
+    ("Super+Tab: a window asking for attention does not come first", f"{CORE}/lib.rs",
+     "match self.focus.focus_attention(&live, held) {",
+     "match self.focus.focus_attention(&[], held) {",
+     "infynitae-backend-headless", ["--test", "t1_super_tab"],
+     "super_tab_flips_steps_back_while_held_and_puts_attention_first"),
+    ("attention: the successor of a closed window keeps its mark", f"{CORE}/input/focus.rs",
+     "        self.attention.retain(|&e| Some(e) != successor);\n", "",
+     "infynitae-core", ["--lib"], "a_mark_is_cleared_whenever_the_window_is_focused"),
+    ("attention: the snapshot never says an element wants attention", "crates/infynitae-ipc/src/model.rs",
+     "(\"attention\", core.focus().attention().contains(&id).into()),",
+     "(\"attention\", false.into()),",
+     "infynitae-ipc", ["--test", "t1_shell"], "a_snapshot_element_says_whether_it_wants_attention"),
+    ("keys: Super+S takes no region screenshot", f"{CORE}/input/keys.rs",
+     "    if key == KEY_S && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {",
+     "    if key == KEY_S && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active && false {",
+     "infynitae-core", ["--lib"], "left_hand_keys_and_their_aliases"),
 ]
 
 # Controls of the judge itself: a harmless seed must be MISSED, an unknown test name BROKEN.
