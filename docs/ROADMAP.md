@@ -51,3 +51,9 @@ Written down so they are not lost; none is planned until the owner decides.
   fades the windows and makes the widgets clickable?); widgets must update rarely and draw
   nothing while idle, so the GPU can sleep. Most of it could be an add-on over the wallpaper and
   layer-shell surfaces, not Core.
+- **Cluster types** (owner, 2026-10-31): a choice of how a cluster arranges its windows, beside
+  today's (windows placed beside one another). Candidates: **scrolling**, a row of full-height
+  columns that scrolls sideways as focus moves (the PaperWM and niri style); **dwindle**, each
+  new window splitting the focused one in half, alternating direction (Hyprland's default);
+  **master and stack**, one large window and the rest stacked beside it. Per cluster or one for
+  all? Core owns placement, so each type starts as rules in the foundation spec, then tests.
