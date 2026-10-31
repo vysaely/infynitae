@@ -306,6 +306,13 @@ impl WaylandState {
         self.spawn_action_with("tablet-mode", if on { "on" } else { "off" });
     }
 
+    /// The config file changed while running: the settings it has that were skipped (unknown,
+    /// misspelled, unreadable) keep their defaults, and a notification names them
+    /// (`launch.sh config-check`).
+    pub fn config_changed(&mut self) {
+        self.spawn_action("config-check");
+    }
+
     /// [`spawn_action`](Self::spawn_action) with an argument (`exec`: the command to run).
     pub(crate) fn spawn_action_with(&mut self, action: &str, arg: &str) {
         let args: &[&str] = if arg.is_empty() { &[] } else { &[arg] };

@@ -532,6 +532,11 @@ case "$ACTION" in
             infynitae msg shortcut deafen 2>/dev/null || true
         fi
         ;;
+    config-check)
+        # the config changed while running: what it has that was skipped (unknown, unreadable)
+        # keeps its default, and a notification names it
+        exec "$HOME/infynitae/live/config-check" --notify >/dev/null 2>&1
+        ;;
     notify-privacy-on)
         # OSD Toast: Privacy Mode Enabled
         if command -v notify-send >/dev/null 2>&1; then

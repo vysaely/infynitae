@@ -3,6 +3,13 @@
 # Executed by the compositor's --exec argument.
 umask 077
 
+# Started outside a compositor (a console login that runs this file by mistake): start the session
+# itself, never the apps with no screen to show them on
+if [ -z "$WAYLAND_DISPLAY" ] && [ -x "$HOME/infynitae/live/infynitae-session" ]; then
+    echo "[infynitae] session.sh runs inside the compositor; starting infynitae-session instead" >&2
+    exec "$HOME/infynitae/live/infynitae-session" "$@"
+fi
+
 # 0. The compositor's own thread runs ahead of apps (nice -10, the most the gamemode group's limit
 # allows without root): if it is starved, every window stutters with it. Only its main thread is
 # raised; the apps this script starts stay at nice 0.
@@ -162,6 +169,13 @@ if [ -f "$CRASH_NOTE" ]; then
             "$CRASH_WHAT
 Report: $CRASH_REPORT") &
     fi
+fi
+
+# 6c2. Settings the config has that Infynitae skipped (unknown, misspelled, unreadable): each keeps
+# its default, and a notification names them once the daemon is up
+if [ -x "$HOME/infynitae/live/config-check" ]; then
+    rm -f "$HOME/.local/state/infynitae/config-problems"
+    (sleep 2; "$HOME/infynitae/live/config-check" --notify >/dev/null) &
 fi
 
 # 6d. USB drives and SD cards mount when plugged in (udiskie, through udisks2): AUTOMOUNT

@@ -1547,6 +1547,7 @@ pub fn run_console_with(
                         "[infynitae] Config change detected (~/.config/infynitae/config). Live reloading..."
                     );
                     data.state.reload_config();
+                    data.state.config_changed();
                     if let Some(ds) = data.state.direct_scanout {
                         data.direct_scanout = ds;
                     }

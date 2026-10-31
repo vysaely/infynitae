@@ -4,7 +4,23 @@
 
 # the layout env.sh found (the system's), for a config that leaves it empty
 _infy_layout="$XKB_DEFAULT_LAYOUT" _infy_options="$XKB_DEFAULT_OPTIONS"
-[ -f "$HOME/.config/infynitae/config" ] && . "$HOME/.config/infynitae/config"
+_infy_config="$HOME/.config/infynitae/config"
+if [ -f "$_infy_config" ]; then
+    if sh -n "$_infy_config" 2>/dev/null; then
+        . "$_infy_config"
+    else
+        # a line the shell cannot read would end the script loading it (and the session with it):
+        # only the settings that read on their own load, the others keep their defaults
+        # (live/config-check names them in a notification)
+        while IFS= read -r _infy_line || [ -n "$_infy_line" ]; do
+            case "$_infy_line" in
+                *=*) sh -n -c "$_infy_line" 2>/dev/null && eval "$_infy_line" ;;
+            esac
+        done < "$_infy_config"
+        unset _infy_line
+    fi
+fi
+unset _infy_config
 
 # the compositor checked the layout it uses makes a keymap (an empty or misspelled one does
 # not) and gives it to what it starts: the apps use that one, never another
