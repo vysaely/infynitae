@@ -12,6 +12,16 @@ env:
   CARGO_TERM_COLOR: never
 
 jobs:
+  # The C helpers (portal, polkit agent, lock, wallpaper, island, recorder) as the installer
+  # builds them, and the shell helpers' own tests.
+  helpers:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Helper build dependencies
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglib2.0-dev libwayland-dev libxkbcommon-dev libpolkit-agent-1-dev libgtk-3-dev libcairo2-dev libpango1.0-dev libpam0g-dev libgdk-pixbuf-2.0-dev
+      - run: sh live/build-helpers.sh "$PWD" "$RUNNER_TEMP/bin"
+      - run: sh tools/test-automount
   # OB-36: the documentation checker and its seeded negative controls, on every commit.
   foundation-docs:
     runs-on: ubuntu-24.04
