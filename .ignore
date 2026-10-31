@@ -1,0 +1,5 @@
+# Search tools (ripgrep, so Claude Code Grep/Glob and editors) skip these: history, not current rules.
+# They stay in git; open a file by its path when you need it.
+docs/archive/
+experiments/
+vendor/
