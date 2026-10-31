@@ -57,7 +57,13 @@ run() {
     sleep 2.5
     # the inhibitor still held?
     held=no
-    if [ -f "$TMP/inhibitor.pid" ] && kill -0 "$(cat "$TMP/inhibitor.pid")" 2>/dev/null; then held=yes; fi
+    # alive and not a zombie (dash reaps its background jobs only when it waits)
+    if [ -f "$TMP/inhibitor.pid" ]; then
+        ipid=$(cat "$TMP/inhibitor.pid")
+        if kill -0 "$ipid" 2>/dev/null && ! grep -q '^State:[[:space:]]*Z' "/proc/$ipid/status" 2>/dev/null; then
+            held=yes
+        fi
+    fi
     kill "$pid" 2>/dev/null || true
     wait "$pid" 2>/dev/null || true
     pkill -f "$BIN/" 2>/dev/null || true
