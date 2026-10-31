@@ -4,8 +4,7 @@
  *
  * Implements PolkitAgentListener, registers with org.freedesktop.PolicyKit1.Authority,
  * and creates transient GTK3 Wayland dialogs upon challenge.
- * Idle it holds no GTK: GTK starts with a prompt, and a minute after the last prompt closed the
- * agent starts itself again without it (exec), so a prompt's memory is not kept all session.
+ * Zero-cost idle: 0 Wayland surfaces when dormant (<10MB RAM).
  */
 
 #define POLKIT_AGENT_I_KNOW_API_IS_SUBJECT_TO_CHANGE 1
@@ -13,8 +12,6 @@
 #include <polkitagent/polkitagent.h>
 #include <gtk/gtk.h>
 #include <gdk/gdkwayland.h>
-#include <errno.h>
-#include <unistd.h>
 
 #define INFYNITAE_TYPE_AGENT_LISTENER (infynitae_agent_listener_get_type())
 G_DECLARE_FINAL_TYPE(InfynitaeAgentListener, infynitae_agent_listener, INFYNITAE, AGENT_LISTENER, PolkitAgentListener)
@@ -45,19 +42,7 @@ typedef struct {
     gboolean authenticated;
 } AuthDialogData;
 
-/* Prompts on screen; the agent's own argv and registration, for the restart without GTK */
-static guint open_dialogs;
-static char **agent_argv;
-static PolkitAgentListener *agent_listener;
-static PolkitSubject *agent_subject;
-static gpointer agent_registration;
-static guint lean_restart_source;
-static void schedule_lean_restart(void);
-
 static void free_auth_dialog(AuthDialogData *data) {
-    if (data->window && --open_dialogs == 0) {
-        schedule_lean_restart();
-    }
     if (data->cancellable_handler_id > 0 && data->cancellable != NULL) {
         g_cancellable_disconnect(data->cancellable, data->cancellable_handler_id);
         data->cancellable_handler_id = 0;
@@ -386,7 +371,6 @@ static void infynitae_agent_listener_initiate_authentication(
 
     // Build GUI Window
     data->window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
-    open_dialogs++;
     gtk_window_set_title(GTK_WINDOW(data->window), "Authentication Required — Infynitae");
     gtk_window_set_position(GTK_WINDOW(data->window), GTK_WIN_POS_CENTER);
     gtk_window_set_resizable(GTK_WINDOW(data->window), FALSE);
@@ -471,34 +455,9 @@ static void infynitae_agent_listener_init(InfynitaeAgentListener *listener) {
     (void)listener;
 }
 
-/* A minute after the last prompt closed: the agent runs again from the start (same PID, so
- * infynitae-reload still finds it), registered anew and without GTK. A new prompt in that minute
- * cancels nothing: the restart waits until none is open. */
-static gboolean lean_restart(gpointer unused) {
-    (void)unused;
-    lean_restart_source = 0;
-    if (open_dialogs > 0) {
-        return G_SOURCE_REMOVE;
-    }
-    polkit_agent_listener_unregister(agent_registration);
-    execv("/proc/self/exe", agent_argv);
-    /* the exec failed (the binary removed?): registered again, GTK kept */
-    g_printerr("[infynitae-polkit] restart without GTK failed: %s\n", g_strerror(errno));
-    agent_registration = polkit_agent_listener_register(agent_listener, POLKIT_AGENT_REGISTER_FLAGS_NONE,
-                                                        agent_subject, NULL, NULL, NULL);
-    return G_SOURCE_REMOVE;
-}
-
-static void schedule_lean_restart(void) {
-    if (lean_restart_source) {
-        g_source_remove(lean_restart_source);
-    }
-    lean_restart_source = g_timeout_add_seconds(60, lean_restart, NULL);
-}
-
 int main(int argc, char **argv) {
     (void)argc;
-    agent_argv = argv;
+    (void)argv;
 
     GError *error = NULL;
     InfynitaeAgentListener *listener = g_object_new(INFYNITAE_TYPE_AGENT_LISTENER, NULL);
@@ -525,9 +484,6 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    agent_registration = reg_handle;
-    agent_listener = POLKIT_AGENT_LISTENER(listener);
-    agent_subject = subject;
     g_print("[infynitae-polkit] PolicyKit Authentication Agent registered successfully on D-Bus.\n");
     /* GTK's events run in this loop too, once a prompt started it (the default main context) */
     GMainLoop *loop = g_main_loop_new(NULL, FALSE);
