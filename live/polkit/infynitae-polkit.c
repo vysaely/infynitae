@@ -10,6 +10,9 @@
 #define POLKIT_AGENT_I_KNOW_API_IS_SUBJECT_TO_CHANGE 1
 
 #include <polkitagent/polkitagent.h>
+#include <pwd.h>
+#include <grp.h>
+#include <unistd.h>
 #include <gtk/gtk.h>
 #include <gdk/gdkwayland.h>
 
@@ -140,6 +143,25 @@ static void on_session_show_info(PolkitAgentSession *session,
 static void on_session_completed(PolkitAgentSession *session,
                                  gboolean gained_authorization,
                                  gpointer user_data);
+
+/* The identity as a person reads it: a user's login name (or uid), a group's name. */
+static gchar *identity_name(PolkitIdentity *identity) {
+    if (POLKIT_IS_UNIX_USER(identity)) {
+        gint uid = polkit_unix_user_get_uid(POLKIT_UNIX_USER(identity));
+        struct passwd *pw = getpwuid((uid_t)uid);
+        if (pw && pw->pw_name && pw->pw_name[0])
+            return g_strdup(pw->pw_name);
+        return g_strdup_printf("user %d", uid);
+    }
+    if (POLKIT_IS_UNIX_GROUP(identity)) {
+        gint gid = polkit_unix_group_get_gid(POLKIT_UNIX_GROUP(identity));
+        struct group *gr = getgrgid((gid_t)gid);
+        return gr && gr->gr_name ? g_strdup_printf("a member of %s", gr->gr_name)
+                                 : g_strdup_printf("a member of group %d", gid);
+    }
+    gchar *text = polkit_identity_to_string(identity);
+    return text ? text : g_strdup("unknown account");
+}
 
 /* A new polkit session for the identity: one per attempt. Its "request" re-enables the entry. */
 static void start_session(AuthDialogData *data) {
@@ -333,8 +355,17 @@ static void infynitae_agent_listener_initiate_authentication(
     data->task = g_task_new(listener, cancellable, callback, user_data);
     data->cancellable = cancellable;
 
+    /* the account whose password is asked: your own when polkit accepts it, else the first
+     * one it names; the dialog says which (it is never a guess the user cannot see) */
     PolkitIdentity *identity = NULL;
-    if (identities != NULL) {
+    for (GList *l = identities; l != NULL; l = l->next) {
+        if (POLKIT_IS_UNIX_USER(l->data) &&
+            (uid_t)polkit_unix_user_get_uid(POLKIT_UNIX_USER(l->data)) == getuid()) {
+            identity = POLKIT_IDENTITY(l->data);
+            break;
+        }
+    }
+    if (identity == NULL && identities != NULL) {
         identity = POLKIT_IDENTITY(identities->data);
     }
     if (identity == NULL) {
@@ -400,6 +431,15 @@ static void infynitae_agent_listener_initiate_authentication(
     gtk_widget_set_halign(lbl_action, GTK_ALIGN_START);
     gtk_style_context_add_class(gtk_widget_get_style_context(lbl_action), "action");
     gtk_box_pack_start(GTK_BOX(vbox), lbl_action, FALSE, FALSE, 0);
+
+    /* whose password: plain text, the identity's user name (or group) */
+    gchar *who = identity_name(data->identity);
+    gchar *who_text = g_strdup_printf("Password for %s", who);
+    GtkWidget *lbl_who = gtk_label_new(who_text);
+    g_free(who_text);
+    g_free(who);
+    gtk_widget_set_halign(lbl_who, GTK_ALIGN_START);
+    gtk_box_pack_start(GTK_BOX(vbox), lbl_who, FALSE, FALSE, 0);
 
     data->lbl_error = gtk_label_new("");
     gtk_widget_set_halign(data->lbl_error, GTK_ALIGN_START);
