@@ -65,3 +65,12 @@ locked, the session stays locked and the compositor starts the lock screen again
 Before the machine sleeps, the sleep lock asks the compositor whether the session is locked
 (`infynitae msg snapshot`, its `locked` field), never whether a process of some name runs; a
 lock screen that does not confirm in time holds the sleep back as long as logind allows.
+
+## Data kept on disk
+
+- The screen-sharing log (`~/.local/state/infynitae/screenshare.log`) names screens and counts
+  windows; it never records a window's title.
+- Clipboard history (`CLIPBOARD_HISTORY`, cliphist) is kept on disk. A copied password stays out
+  of it only when the password manager marks it as sensitive and both wl-clipboard (2.2 or
+  newer, `CLIPBOARD_STATE`) and cliphist honour that mark; if yours do not, turn the history off
+  if you copy passwords.

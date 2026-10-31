@@ -424,6 +424,9 @@ CLIPBOARD_PERSIST="true"
 
 CLIPBOARD_HISTORY="true"
     # Super+V clipboard history (needs cliphist and wl-paste) [reload]
+    # It is kept on disk. A password copied from a password manager stays out of it only
+    # when wl-clipboard (2.2 or newer) and cliphist both honour the manager's "sensitive"
+    # hint (CLIPBOARD_STATE); if yours do not, set this to false if you copy passwords
     # default: true
     # options: true  · false
 
