@@ -39,3 +39,15 @@ Core is a specified state machine, so this starts with its rules in the foundati
 
 HDR, accessibility and screen readers, a second GPU, NVIDIA's explicit sync, packaging beyond
 Arch Linux.
+
+## Ideas, undecided
+
+Written down so they are not lost; none is planned until the owner decides.
+
+- **A widget layer behind the canvas** (seen on another canvas desktop, 2026-10-31): a second
+  plane behind the windows holding widgets (clock, system stats, notes, now playing), seen in
+  the gaps between windows and when zoomed out. Questions before a design: does it pan with the
+  canvas, slower (parallax) or not at all; how is a widget reached behind a window (a key that
+  fades the windows and makes the widgets clickable?); widgets must update rarely and draw
+  nothing while idle, so the GPU can sleep. Most of it could be an add-on over the wallpaper and
+  layer-shell surfaces, not Core.
