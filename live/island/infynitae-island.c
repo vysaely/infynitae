@@ -346,6 +346,29 @@ static void spawn_detached(const char *cmd) {
     }
 }
 
+/* `script` run by sh with `a1` and `a2` as "$1" and "$2": a name from outside (a Wi-Fi network's,
+ * a Bluetooth device's, an app's) is never read as shell code, whatever quotes it holds. */
+/* A tray app's window, opened again: its program by its name (lowercased), else its desktop file */
+#define TRAY_LAUNCH_SCRIPT \
+    "app=$(printf '%s' \"$1\" | tr '[:upper:]' '[:lower:]'); " \
+    "command -v \"$app\" >/dev/null 2>&1 && exec \"$app\" || gtk-launch \"$app\" 2>/dev/null"
+
+static void spawn_script(const char *script, const char *a1, const char *a2) {
+    pid_t pid = fork();
+    if (pid == 0) {
+        setsid();
+        int devnull = open("/dev/null", O_RDWR);
+        if (devnull >= 0) {
+            dup2(devnull, STDIN_FILENO);
+            dup2(devnull, STDOUT_FILENO);
+            dup2(devnull, STDERR_FILENO);
+            if (devnull > 2) close(devnull);
+        }
+        execl("/bin/sh", "sh", "-c", script, "sh", a1 ? a1 : "", a2 ? a2 : "", (char *)NULL);
+        _exit(127);
+    }
+}
+
 /* ========================================================================== */
 /* StatusNotifierWatcher + com.canonical.dbusmenu Host                        */
 /* ========================================================================== */
@@ -2080,11 +2103,8 @@ static void quit_tray_at(IslandApp *app, int tidx, const char *sig_name) {
     const char *pname = app->tray_apps[tidx].proc_name[0]
         ? app->tray_apps[tidx].proc_name
         : app->tray_apps[tidx].name;
-    char cmd[256];
-    snprintf(cmd, sizeof(cmd),
-             "sh \"$HOME/infynitae/live/control-menu\" apps-kill '%s' %s",
-             pname, sig_name ? sig_name : "TERM");
-    spawn_detached(cmd);
+    spawn_script("sh \"$HOME/infynitae/live/control-menu\" apps-kill \"$1\" \"$2\"",
+                 pname, sig_name ? sig_name : "TERM");
     for (int k = tidx; k < app->tray_count - 1; k++) {
         app->tray_apps[k] = app->tray_apps[k + 1];
     }
@@ -2255,13 +2275,8 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
             const char *pname = app->tray_apps[tidx].proc_name[0]
                 ? app->tray_apps[tidx].proc_name
                 : app->tray_apps[tidx].name;
-            char cmd[256];
-            snprintf(cmd, sizeof(cmd),
-                     "app=$(printf '%s' '%s' | tr '[:upper:]' '[:lower:]'); "
-                     "command -v \"$app\" >/dev/null 2>&1 && exec \"$app\" || gtk-launch \"$app\" 2>/dev/null",
-                     pname, pname);
             set_mode(app, MODE_CLOSED);
-            spawn_detached(cmd);
+            spawn_script(TRAY_LAUNCH_SCRIPT, pname, NULL);
         }
         return true;
     }
@@ -2278,13 +2293,8 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
                 const char *pname = app->tray_apps[tidx].proc_name[0]
                     ? app->tray_apps[tidx].proc_name
                     : app->tray_apps[tidx].name;
-                char cmd[256];
-                snprintf(cmd, sizeof(cmd),
-                         "app=$(printf '%s' '%s' | tr '[:upper:]' '[:lower:]'); "
-                         "command -v \"$app\" >/dev/null 2>&1 && exec \"$app\" || gtk-launch \"$app\" 2>/dev/null",
-                         pname, pname);
                 set_mode(app, MODE_CLOSED);
-                spawn_detached(cmd);
+                spawn_script(TRAY_LAUNCH_SCRIPT, pname, NULL);
             } else if (item_id == -2) {
                 quit_tray_at(app, tidx, "TERM");
             } else if (item_id == -3) {
@@ -2297,30 +2307,28 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
         int sidx = hb->index;
         if (sidx >= 0 && sidx < app->sub_count) {
             SubItem *si = &app->sub_items[sidx];
-            char cmd[384];
             if (app->subpanel == SUB_WIFI) {
-                snprintf(cmd, sizeof(cmd),
-                         "nmcli connection up id '%s' >/dev/null 2>&1 || nmcli dev wifi connect '%s' >/dev/null 2>&1",
-                         si->id, si->id);
-                spawn_detached(cmd);
+                spawn_script("nmcli connection up id \"$1\" >/dev/null 2>&1 || "
+                             "nmcli dev wifi connect \"$1\" >/dev/null 2>&1",
+                             si->id, NULL);
                 snprintf(app->wifi_label, sizeof(app->wifi_label), "%s", si->label);
                 for (int k = 0; k < app->sub_count; k++) app->sub_items[k].active = (k == sidx);
             } else if (app->subpanel == SUB_BT) {
+                const char *bt_cmd;
                 if (si->active) {
-                    snprintf(cmd, sizeof(cmd), "bluetoothctl disconnect '%s' >/dev/null 2>&1", si->id);
+                    bt_cmd = "bluetoothctl disconnect \"$1\" >/dev/null 2>&1";
                     si->active = false;
                     strcpy(si->meta, "Paired");
                     strcpy(app->bt_label, "On");
                 } else {
-                    snprintf(cmd, sizeof(cmd), "bluetoothctl connect '%s' >/dev/null 2>&1", si->id);
+                    bt_cmd = "bluetoothctl connect \"$1\" >/dev/null 2>&1";
                     si->active = true;
                     strcpy(si->meta, "Connected");
                     snprintf(app->bt_label, sizeof(app->bt_label), "%s", si->label);
                 }
-                spawn_detached(cmd);
+                spawn_script(bt_cmd, si->id, NULL);
             } else if (app->subpanel == SUB_AUDIO) {
-                snprintf(cmd, sizeof(cmd), "pactl set-default-sink '%s' >/dev/null 2>&1", si->id);
-                spawn_detached(cmd);
+                spawn_script("pactl set-default-sink \"$1\" >/dev/null 2>&1", si->id, NULL);
                 for (int k = 0; k < app->sub_count; k++) app->sub_items[k].active = (k == sidx);
             }
             damage_all(app);
@@ -3208,16 +3216,30 @@ static struct wl_display *connect_wayland_auto(void) {
     return NULL;
 }
 
+/* The island the pid file names, or 0: a pid file left by an island that crashed may name another
+ * process by now, which a signal meant for the island would end (SIGUSR1 terminates by default). */
+static pid_t island_pid(const char *pfile) {
+    pid_t pid = 0;
+    FILE *pf = fopen(pfile, "r");
+    if (!pf) return 0;
+    if (fscanf(pf, "%d", &pid) != 1) pid = 0;
+    fclose(pf);
+    if (pid <= 0 || pid == getpid()) return 0;
+    char path[64], comm[32] = {0};
+    snprintf(path, sizeof(path), "/proc/%d/comm", (int)pid);
+    FILE *cf = fopen(path, "r");
+    if (!cf) return 0;
+    if (!fgets(comm, sizeof(comm), cf)) comm[0] = '\0';
+    fclose(cf);
+    /* comm is the name cut to 15 characters: "infynitae-islan" */
+    return strncmp(comm, "infynitae-islan", 15) == 0 ? pid : 0;
+}
+
 int main(int argc, char **argv) {
     const char *pfile = pid_file_path();
 
     if (argc > 1) {
-        FILE *pf = fopen(pfile, "r");
-        pid_t running_pid = 0;
-        if (pf) {
-            if (fscanf(pf, "%d", &running_pid) != 1) running_pid = 0;
-            fclose(pf);
-        }
+        pid_t running_pid = island_pid(pfile);
         if (strcmp(argv[1], "toggle") == 0 || strcmp(argv[1], "center") == 0) {
             if (running_pid > 0 && kill(running_pid, SIGUSR1) == 0) return 0;
         } else if (strcmp(argv[1], "control") == 0) {
@@ -3230,14 +3252,10 @@ int main(int argc, char **argv) {
         }
     }
 
-    FILE *old_pf = fopen(pfile, "r");
-    if (old_pf) {
-        pid_t old_pid = 0;
-        if (fscanf(old_pf, "%d", &old_pid) == 1 && old_pid > 0 && old_pid != getpid()) {
-            kill(old_pid, SIGTERM);
-            usleep(50000);
-        }
-        fclose(old_pf);
+    pid_t old_pid = island_pid(pfile);
+    if (old_pid > 0) {
+        kill(old_pid, SIGTERM);
+        usleep(50000);
     }
 
     FILE *pf = fopen(pfile, "w");
@@ -3293,6 +3311,8 @@ int main(int argc, char **argv) {
         set_mode(&app, MODE_CLIPBOARD);
     }
 
+    GMainContext *glib_ctx = g_main_context_default();
+    g_main_context_acquire(glib_ctx);
     while (app.running) {
         if (g_sig_cmd == 1) {
             g_sig_cmd = 0;
@@ -3307,9 +3327,6 @@ int main(int argc, char **argv) {
             break;
         }
 
-        /* Pump GLib / GIO main context so D-Bus StatusNotifierWatcher calls are processed */
-        while (g_main_context_iteration(NULL, FALSE)) {}
-
         while (wl_display_prepare_read(app.display) != 0) {
             if (wl_display_dispatch_pending(app.display) < 0) {
                 app.running = false;
@@ -3319,7 +3336,17 @@ int main(int argc, char **argv) {
         if (!app.running) break;
         wl_display_flush(app.display);
 
-        struct pollfd pfds[3];
+        /* GLib's sources (D-Bus: the tray's icons and menus) are polled here with ours: GDBus reads
+         * its socket on a thread of its own and wakes the main context through a fd of GLib's, so
+         * polling the socket would see a signal before it can be dispatched, or not at all */
+        enum { MAX_GLIB_FDS = 16 };
+        gint glib_prio = 0, glib_timeout = -1;
+        g_main_context_prepare(glib_ctx, &glib_prio);
+        GPollFD gfds[MAX_GLIB_FDS];
+        gint n_glib = g_main_context_query(glib_ctx, glib_prio, &glib_timeout, gfds, MAX_GLIB_FDS);
+        if (n_glib > MAX_GLIB_FDS) n_glib = MAX_GLIB_FDS;
+
+        struct pollfd pfds[2 + MAX_GLIB_FDS];
         pfds[0].fd = wl_display_get_fd(app.display);
         pfds[0].events = POLLIN;
         pfds[0].revents = 0;
@@ -3332,21 +3359,18 @@ int main(int argc, char **argv) {
             nfds++;
         }
 
-        int dbus_fd = -1;
-        if (app.dbus) {
-            GSocket *sock = g_socket_connection_get_socket(
-                G_SOCKET_CONNECTION(g_dbus_connection_get_stream(app.dbus)));
-            if (sock) dbus_fd = g_socket_get_fd(sock);
-        }
-        if (dbus_fd >= 0) {
-            pfds[nfds].fd = dbus_fd;
-            pfds[nfds].events = POLLIN;
+        nfds_t glib_first = nfds;
+        for (gint i = 0; i < n_glib; i++) {
+            pfds[nfds].fd = gfds[i].fd;
+            pfds[nfds].events = gfds[i].events;
             pfds[nfds].revents = 0;
             nfds++;
         }
 
         int timeout = (app.mode != MODE_CLOSED) ? 1000 : -1;
+        if (glib_timeout >= 0 && (timeout < 0 || glib_timeout < timeout)) timeout = glib_timeout;
         int ret = poll(pfds, nfds, timeout);
+        for (gint i = 0; i < n_glib; i++) gfds[i].revents = pfds[glib_first + i].revents;
         if (ret > 0 && (pfds[0].revents & POLLIN)) {
             if (wl_display_read_events(app.display) < 0 ||
                 wl_display_dispatch_pending(app.display) < 0) {
@@ -3381,7 +3405,7 @@ int main(int argc, char **argv) {
             }
         }
 
-        while (g_main_context_iteration(NULL, FALSE)) {}
+        if (g_main_context_check(glib_ctx, glib_prio, gfds, n_glib)) g_main_context_dispatch(glib_ctx);
     }
 
     unlink(pfile);

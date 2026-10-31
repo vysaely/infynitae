@@ -296,7 +296,7 @@ EOF
         mkdir -p "$HOME/.config/Thunar"
         cp /etc/xdg/Thunar/uca.xml "$uca"
     fi
-    if [ -f "$uca" ]; then
+    if [ -f "$uca" ] && grep -q 'exo-open --working-directory %f --launch TerminalEmulator' "$uca"; then
         sed -i "s|<command>exo-open --working-directory %f --launch TerminalEmulator</command>|<command>$term_exec --dir=%f</command>|" "$uca"
     fi
     # Dolphin (KDE): its terminal, unless kdeglobals names one
