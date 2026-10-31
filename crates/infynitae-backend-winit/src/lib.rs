@@ -350,6 +350,7 @@ pub fn run_nested_with(
                         "[infynitae] Config change detected (~/.config/infynitae/config). Live reloading..."
                     );
                     data.state.reload_config();
+                    data.state.config_changed();
                     data.session.request_frame();
                 } else if data.last_config_mtime.is_none() {
                     data.last_config_mtime = Some(mtime);

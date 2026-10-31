@@ -1,0 +1,75 @@
+#!/bin/sh
+# Names what in ~/.config/infynitae/config Infynitae does not use: settings it does not know
+# (misspelled, or removed), lines that are not a setting, and lines the shell cannot read. None of
+# them stops the session: each is skipped and its setting keeps the default.
+#
+#   config-check            print the problems (exit 1 if there are any)
+#   config-check --notify   also show them in a notification, once per change (the session start
+#                           and the compositor's live reload run this)
+
+CONFIG="${CONFIG_FILE:-$HOME/.config/infynitae/config}"
+STATE_DIR="$HOME/.local/state/infynitae"
+# the settings there are: the shipped config, else the copy the installer left
+KNOWN_FROM="$HOME/infynitae/config/config"
+[ -f "$KNOWN_FROM" ] || KNOWN_FROM="$HOME/.config/infynitae/config.template"
+
+[ -f "$CONFIG" ] || exit 0
+
+known=""
+if [ -f "$KNOWN_FROM" ]; then
+    known=" $(grep -oE '[A-Z][A-Z0-9_]+=' "$KNOWN_FROM" | tr -d = | sort -u | tr '\n' ' ')"
+fi
+
+problems=$(
+    n=0
+    while IFS= read -r line || [ -n "$line" ]; do
+        n=$((n + 1))
+        trimmed="${line#"${line%%[![:space:]]*}"}"
+        case "$trimmed" in
+            ''|'#'*) continue ;;
+        esac
+        if ! sh -n -c "$line" 2>/dev/null; then
+            echo "line $n: cannot be read (a quote left open?), skipped"
+            continue
+        fi
+        # an `export` is an environment variable for apps, which Infynitae need not know
+        case "$trimmed" in
+            export\ *) continue ;;
+        esac
+        key=$(printf '%s' "$trimmed" | sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p')
+        if [ -n "$key" ]; then
+            if [ -n "$known" ]; then
+                case "$known" in
+                    *" $key "*) ;;
+                    *) echo "line $n: unknown setting $key, ignored" ;;
+                esac
+            fi
+        elif printf '%s' "$trimmed" | grep -qE '^[A-Z][A-Z0-9_]*([[:space:]]|$)'; then
+            echo "line $n: \"$(printf '%s' "$trimmed" | cut -c1-40)\" is not a setting (SETTING=\"value\"), skipped"
+        fi
+    done < "$CONFIG"
+)
+
+[ -n "$problems" ] && printf '%s\n' "$problems"
+
+if [ "$1" = "--notify" ]; then
+    mkdir -p "$STATE_DIR"
+    LAST="$STATE_DIR/config-problems"
+    # once per set of problems: a reload that changed something else does not repeat them
+    if [ -z "$problems" ]; then
+        rm -f "$LAST"
+    elif [ "$problems" != "$(cat "$LAST" 2>/dev/null)" ]; then
+        printf '%s' "$problems" > "$LAST"
+        if command -v notify-send >/dev/null 2>&1; then
+            count=$(printf '%s\n' "$problems" | wc -l)
+            body=$(printf '%s\n' "$problems" | head -n 5)
+            [ "$count" -gt 5 ] && body="$body
+… and $((count - 5)) more (run ~/infynitae/live/config-check)"
+            notify-send -a Infynitae -u normal \
+                "Config: $count line(s) skipped, defaults used" \
+                "$(printf '%s' "$body" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')"
+        fi
+    fi
+fi
+
+[ -z "$problems" ]
