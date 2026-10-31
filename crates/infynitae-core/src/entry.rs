@@ -2296,6 +2296,55 @@ impl Core {
                 }
                 self.shell_stream_end(stream, &mut out);
             }
+            ShellCommand::ResizeElement {
+                element,
+                size,
+                maximized,
+            } => {
+                let id = self.shell_mapped(element)?;
+                // a fullscreen window's size is the screen's
+                let presenting = self.fullscreen_of(id).is_some();
+                if presenting {
+                    return Err(ShellError::Presenting);
+                }
+                let valid =
+                    |s: (i32, i32)| (1..=32768).contains(&s.0) && (1..=32768).contains(&s.1);
+                if !valid(size) || maximized.is_some_and(|(_, s)| !valid(s)) {
+                    return Err(ShellError::InvalidArgument);
+                }
+                let mut size = crate::geom::LocalSize {
+                    w: size.0,
+                    h: size.1,
+                };
+                match maximized {
+                    Some((at, before)) => {
+                        let at = shell_canvas_pos(at)
+                            .and_then(|p| p.round_to_point())
+                            .ok_or(ShellError::InvalidArgument)?;
+                        let output = self.outputs.first().map(|o| o.id);
+                        let usable = output.and_then(|o| self.usable_area(o));
+                        let (Some(output), Some((_, _, uw, uh))) = (output, usable) else {
+                            return Err(ShellError::UnknownOutput);
+                        };
+                        // the usable area now, not the one it was saved at
+                        size = crate::geom::LocalSize {
+                            w: uw.round().max(1.0) as i32,
+                            h: uh.round().max(1.0) as i32,
+                        };
+                        let before = crate::geom::LocalSize {
+                            w: before.0,
+                            h: before.1,
+                        };
+                        self.stage.set_saved_floating(id, Some((at, before)));
+                        self.set_maximized(id, Some(output));
+                    }
+                    None => {
+                        self.stage.set_saved_floating(id, None);
+                        self.set_maximized(id, None);
+                    }
+                }
+                out.push(Effect::ToplevelConfigureSize { element: id, size });
+            }
         }
         Ok(out)
     }
@@ -2494,6 +2543,8 @@ impl Core {
             fx.extend(self.true_position());
         }
         fx.extend(self.settle_all_epochs());
+        // a window now larger than the room is offered the room (owner, 2026-10-31)
+        self.offer_room_after_change(output, &mut fx);
         // a presented element is told its new size: the hint for it goes first (as at entry)
         Self::hints_before_configures(&mut fx);
         Ok(fx)

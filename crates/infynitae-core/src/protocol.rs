@@ -810,17 +810,50 @@ impl Core {
     }
 
     /// M4 reconfiguration: "one configure only for an element in protocol fullscreen on this
-    /// output" — its size follows the output's; and one for a window maximized on it, which fills
-    /// the new usable area (amended 2026-10-31, [`Core::refit_maximized`]).
+    /// output" — its size follows the output's. (A window maximized on it fills the new usable
+    /// area: the layers' arrangement before this refits it, [`Core::refit_maximized`].)
     pub(crate) fn fullscreen_output_reconfigured(&mut self, output: OutputId) -> Vec<Effect> {
-        let mut fx: Vec<Effect> = self
-            .fullscreen
+        self.fullscreen
             .iter()
             .filter(|f| f.output == output)
             .map(|f| Effect::ToplevelConfigure(f.element))
-            .collect();
-        self.refit_maximized(output, &mut fx);
-        fx
+            .collect()
+    }
+
+    /// After a change of the first output (a mode, scale or rotation): a window that is not
+    /// maximized or fullscreen and is now larger than the room (the usable area less the 12 px
+    /// gap on each side, INV-PROTO-1) is offered the room, as an oversized new window is (owner,
+    /// 2026-10-31). Nothing moves; the side that fits keeps its size.
+    pub(crate) fn offer_room_after_change(&mut self, output: OutputId, out: &mut Vec<Effect>) {
+        if self.outputs.first().map(|o| o.id) != Some(output) {
+            return;
+        }
+        let Some((_, _, uw, uh)) = self.usable_area(output) else {
+            return;
+        };
+        let fit = |v: f64| ((v - 2.0 * 12.0).floor() as i32).max(1);
+        let room = (fit(uw), fit(uh));
+        for id in self.stage.mapped_elements() {
+            if self.fullscreen_of(id).is_some() || self.maximized.iter().any(|(e, _)| *e == id) {
+                continue;
+            }
+            let Some(tree) = self.stage.tree(id) else {
+                continue;
+            };
+            let size = self.held_size(id).unwrap_or(tree.geometry.size);
+            if size.w <= room.0 && size.h <= room.1 {
+                continue;
+            }
+            let fitted = LocalSize {
+                w: size.w.min(room.0),
+                h: size.h.min(room.1),
+            };
+            self.hold_size(id, fitted);
+            out.push(Effect::ToplevelConfigureSize {
+                element: id,
+                size: fitted,
+            });
+        }
     }
 
     /// Super+Enter maximized `id` to fill `output`'s usable area (`Some`), or restored it.
@@ -834,17 +867,21 @@ impl Core {
     /// The windows maximized on `output` fill its usable area again after it changed (a mode,
     /// scale or rotation, or the output they were on removed): each keeps its centre on the Canvas
     /// and is asked for the new size, rounded as Super+Enter rounds it. One that is fullscreen too
-    /// is not told now: the size its fullscreen returns it to becomes the new one. The caller
-    /// runs the visibility pass.
-    pub(crate) fn refit_maximized(&mut self, output: OutputId, out: &mut Vec<Effect>) {
+    /// is not told now: the size its fullscreen returns it to becomes the new one. Returns the
+    /// windows it moved; the caller runs their membership (or the visibility pass).
+    pub(crate) fn refit_maximized(
+        &mut self,
+        output: OutputId,
+        out: &mut Vec<Effect>,
+    ) -> Vec<ElementId> {
         let Some((_, _, uw, uh)) = self.usable_area(output) else {
-            return;
+            return Vec::new();
         };
         let size = LocalSize {
             w: uw.round().max(1.0) as i32,
             h: uh.round().max(1.0) as i32,
         };
-        let mut moved = false;
+        let mut moved = Vec::new();
         for i in 0..self.maximized.len() {
             let (id, o) = self.maximized[i];
             if o != output {
@@ -864,7 +901,7 @@ impl Core {
             if self.stage.place(id, at).is_err() {
                 continue;
             }
-            moved = true;
+            moved.push(id);
             self.hold_size(id, size);
             match self.fullscreen.iter_mut().find(|f| f.element == id) {
                 Some(f) => f.saved = Some(size),
@@ -873,9 +910,10 @@ impl Core {
         }
         // only a window that moved makes the frames stale (the output's own frame is the
         // caller's: INC2-F07)
-        if moved {
+        if !moved.is_empty() {
             self.invalidate_all_frames();
         }
+        moved
     }
 
     /// C7.2 `MoveElement` after its validation (`Core::shell_command`): the anchor is written here,
@@ -1040,9 +1078,13 @@ impl Core {
         let mut right_cursor = target_rect.2 + GAP;
         let mut left_cursor = target_rect.0 - GAP;
 
-        for (other, gx0, gy0, w, _) in overlapping {
+        let mut moved = vec![target_elem];
+        // (rect after the push, pushed rightwards)
+        let mut wave: Vec<((i64, i64, i64, i64), bool)> = Vec::new();
+        for (other, gx0, gy0, w, h) in overlapping {
             let other_mid_x = gx0 + w / 2;
-            let new_gx0 = if other_mid_x >= target_mid_x {
+            let right = other_mid_x >= target_mid_x;
+            let new_gx0 = if right {
                 let chosen = right_cursor;
                 right_cursor = chosen + w + GAP;
                 chosen
@@ -1054,6 +1096,29 @@ impl Core {
 
             let new_anchor = CanvasPoint { x: new_gx0, y: gy0 };
             let _ = self.place_by_shell(other, new_anchor, out);
+            moved.push(other);
+            wave.push(((new_gx0, gy0, new_gx0 + w, gy0 + h), right));
+        }
+        // "let it push the whole cluster, because when one window pushes a window, the pushed
+        // window doesn't push another" (owner, 2026-10-31): a pushed window pushes on, in the
+        // same direction, every window it now reaches; each window moves at most once
+        while let Some((r, right)) = wave.pop() {
+            for other in self.stage.mapped_elements() {
+                if moved.contains(&other) {
+                    continue;
+                }
+                let (Some(a), Some(t)) = (self.stage.anchor(other), self.stage.tree(other)) else {
+                    continue;
+                };
+                let (w, h) = (i64::from(t.geometry.size.w), i64::from(t.geometry.size.h));
+                if w <= 0 || h <= 0 || !reaches(r, a.x, a.y, a.x + w, a.y + h) {
+                    continue;
+                }
+                let x = if right { r.2 + GAP } else { r.0 - w - GAP };
+                let _ = self.place_by_shell(other, CanvasPoint { x, y: a.y }, out);
+                moved.push(other);
+                wave.push(((x, a.y, x + w, a.y + h), right));
+            }
         }
     }
 

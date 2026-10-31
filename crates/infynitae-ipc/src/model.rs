@@ -218,6 +218,16 @@ fn element(core: &Core, instance: u64, id: ElementId) -> Value {
                 pair(f64::from(t.geometry.size.w), f64::from(t.geometry.size.h))
             }),
         ),
+        // maximized by Super+Enter: the place and size it had before (session restore)
+        (
+            "maximized",
+            stage.saved_floating(id).map_or(Value::Null, |(a, s)| {
+                Value::obj([
+                    ("anchor", pair(a.x as f64, a.y as f64)),
+                    ("size", pair(f64::from(s.w), f64::from(s.h))),
+                ])
+            }),
+        ),
         (
             "title",
             meta.and_then(|m| m.title.as_deref())

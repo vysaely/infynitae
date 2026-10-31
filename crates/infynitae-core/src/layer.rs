@@ -500,11 +500,24 @@ impl crate::Core {
                 .iter_mut()
                 .filter(|r| r.output == output && r.tree.is_some()),
         );
+        let before = self
+            .usable
+            .iter()
+            .find(|(o, _)| *o == output)
+            .map(|(_, a)| *a);
         match self.usable.iter_mut().find(|(o, _)| *o == output) {
             Some((_, a)) => *a = usable,
             None => self.usable.push((output, usable)),
         }
         let mut fx = Vec::new();
+        // a new mode, scale or rotation, or a bar that comes, goes or changes its zone: the
+        // windows maximized on the output fill the new usable area (INV-OUTPUT-2 and the owner,
+        // 2026-10-31)
+        if before != Some(usable) {
+            for id in self.refit_maximized(output, &mut fx) {
+                self.membership_pass_element(id, &mut fx);
+            }
+        }
         for r in self.layers.iter_mut().filter(|r| r.output == output) {
             if r.tree.is_some() && r.configured != Some(r.geometry.size) {
                 r.configured = Some(r.geometry.size);

@@ -742,3 +742,219 @@ fn a_regrant_before_the_windowed_frame_keeps_the_decision_for_later() {
     draw(&mut r, a, (800, 600));
     assert_eq!((anchor_of(&r, ea), anchor_of(&r, eb)), (a0, b0));
 }
+
+// ---- follow-ups (owner, 2026-10-31)
+
+/// Moves `e` to the Canvas point `to` through the shell (as a drag would put it).
+fn move_to(r: &mut Rig, e: ElementId, to: (i64, i64)) {
+    let element = infynitae_core::stage::ElementRef {
+        instance: r.ls.state.core().stage().instance(),
+        element: e,
+    };
+    let fx =
+        r.ls.state
+            .core_mut()
+            .shell_command(
+                &mut r.ls.shell,
+                infynitae_core::ShellCommand::MoveElement {
+                    element,
+                    to: (to.0 as f64, to.1 as f64),
+                    stream: infynitae_core::ShellStream::Atomic,
+                },
+            )
+            .expect("move");
+    r.ls.state.apply(&fx);
+    r.ls.pump();
+    r.frame();
+}
+
+/// Five 400x300 windows in a row, 12 px apart, A in the middle: (A's index, [D, E] left of A
+/// nearest first, A, [B, C] right of A nearest first).
+fn row(r: &mut Rig) -> (usize, [ElementId; 5]) {
+    let (a, ea) = map(r, "A", (400, 300));
+    let (_, eb) = map(r, "B", (400, 300));
+    let (_, ec) = map(r, "C", (400, 300));
+    let (_, ed) = map(r, "D", (400, 300));
+    let (_, ee) = map(r, "E", (400, 300));
+    for (e, x) in [(ea, -200), (eb, 212), (ec, 624), (ed, -612), (ee, -1024)] {
+        move_to(r, e, (x, -150));
+    }
+    focus(r, ea);
+    (a, [ee, ed, ea, eb, ec])
+}
+
+fn all_apart(r: &Rig, es: &[ElementId]) -> bool {
+    es.iter()
+        .enumerate()
+        .all(|(i, x)| es[i + 1..].iter().all(|y| apart(r, *x, *y)))
+}
+
+/// Owner: "let it push the whole cluster, because when one window pushes a window, the pushed
+/// window doesn't push another". A Super+right drag widens A to the right: B is pushed, and B
+/// pushes C in turn (C used to stay under B).
+#[test]
+fn a_resize_pushes_the_whole_row_to_the_right() {
+    let mut r = rig(a_1080());
+    let (a, es) = row(&mut r);
+    let d = delta_to(&r.ls, es[2], (390.0, 290.0));
+    r.motion(d);
+    r.button(BTN_RIGHT, true, LOGO);
+    r.motion((200.0, 0.0));
+    draw(&mut r, a, (600, 300));
+    r.button(BTN_RIGHT, false, LOGO);
+    draw(&mut r, a, (600, 300));
+    assert!(all_apart(&r, &es), "no two windows overlap");
+    // D and E on the other side did not move
+    assert_eq!(anchor_of(&r, es[1]).x, -612);
+    assert_eq!(anchor_of(&r, es[0]).x, -1024);
+}
+
+/// The same to the left: A widened from its left side pushes D, and D pushes E.
+#[test]
+fn a_resize_pushes_the_whole_row_to_the_left() {
+    let mut r = rig(a_1080());
+    let (a, es) = row(&mut r);
+    let d = delta_to(&r.ls, es[2], (10.0, 10.0));
+    r.motion(d);
+    r.button(BTN_RIGHT, true, LOGO);
+    r.motion((-200.0, 0.0));
+    draw(&mut r, a, (600, 300));
+    r.button(BTN_RIGHT, false, LOGO);
+    draw(&mut r, a, (600, 300));
+    assert!(all_apart(&r, &es), "no two windows overlap");
+    // B and C on the other side did not move
+    assert_eq!(anchor_of(&r, es[3]).x, 212);
+    assert_eq!(anchor_of(&r, es[4]).x, 624);
+}
+
+/// A maximize pushes its neighbour off the view, and the neighbour pushes the next one along.
+#[test]
+fn a_maximize_pushes_the_whole_row() {
+    let mut r = rig(a_1080());
+    let (a, ea) = map(&mut r, "A", (400, 300));
+    let (_, eb) = map(&mut r, "B", (800, 300));
+    let (_, ec) = map(&mut r, "C", (400, 300));
+    move_to(&mut r, ea, (-200, -150));
+    move_to(&mut r, eb, (212, -150));
+    move_to(&mut r, ec, (1024, -150));
+    focus(&mut r, ea);
+    super_enter_on(&mut r, ea);
+    let max = usable(&r);
+    draw(&mut r, a, max);
+    assert!(all_apart(&r, &[ea, eb, ec]), "no two windows overlap");
+}
+
+/// A bar appears (an exclusive zone): the maximized window fills what is left; it goes: the whole
+/// screen again.
+#[test]
+fn a_maximized_window_follows_a_bar() {
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::Layer;
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::{
+        Anchor, KeyboardInteractivity,
+    };
+    let mut r = rig(a_1080());
+    r.ls.bind_layer_shell();
+    let (a, ea) = map(&mut r, "A", (800, 600));
+    focus(&mut r, ea);
+    super_enter_on(&mut r, ea);
+    draw(&mut r, a, (1920, 1080));
+    let bar = r.ls.probe.layer_surface(
+        &r.ls.qh,
+        "bar",
+        Layer::Top,
+        Anchor::Top | Anchor::Left | Anchor::Right,
+        (0, 30),
+        30,
+        KeyboardInteractivity::None,
+    );
+    r.ls.pump();
+    r.ls.probe.frame_and_draw(&r.ls.qh, bar);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(last_size(&r, a), Some((1920, 1050)), "below the bar");
+    draw(&mut r, a, (1920, 1050));
+    r.ls.probe.destroy_layer(bar);
+    r.ls.pump();
+    r.frame();
+    assert_eq!(
+        last_size(&r, a),
+        Some((1920, 1080)),
+        "the whole screen again"
+    );
+}
+
+/// The screen turns to portrait: a window wider than the new room is offered the room; one that
+/// fits is left alone, and nothing moves.
+#[test]
+fn after_a_rotation_a_window_larger_than_the_room_is_offered_the_room() {
+    let mut r = rig(a_1080());
+    let (big, eb) = map(&mut r, "Big", (1200, 700));
+    let (small, _) = map(&mut r, "Small", (500, 400));
+    let at = anchor_of(&r, eb);
+    let o = r.ls.output();
+    let mut portrait = output((1920, 1080), 120);
+    portrait.transform = Transform::R90;
+    r.ls.reconfigure(o, &portrait);
+    r.frame();
+    assert_eq!(
+        last_size(&r, big),
+        Some((1080 - 24, 700)),
+        "the room's width"
+    );
+    assert_eq!(anchor_of(&r, eb), at, "not moved");
+    assert!(
+        sizes_since(&r, small, 0).iter().all(|s| *s == (0, 0)),
+        "{:?}",
+        sizes_since(&r, small, 0)
+    );
+}
+
+/// Session restore's command: a window comes back at its saved size, or maximized again on this
+/// screen (whatever size it was saved at) with the place and size it had before, which Super+Enter
+/// then gives back.
+#[test]
+fn the_shell_brings_a_window_back_at_its_size_or_maximized() {
+    let mut r = rig(a_1080());
+    let (a, ea) = map(&mut r, "A", (800, 600));
+    let (b, eb) = map(&mut r, "B", (800, 600));
+    let resize = |r: &mut Rig, e, size, maximized| {
+        let element = infynitae_core::stage::ElementRef {
+            instance: r.ls.state.core().stage().instance(),
+            element: e,
+        };
+        let fx =
+            r.ls.state
+                .core_mut()
+                .shell_command(
+                    &mut r.ls.shell,
+                    infynitae_core::ShellCommand::ResizeElement {
+                        element,
+                        size,
+                        maximized,
+                    },
+                )
+                .expect("resize");
+        r.ls.state.apply(&fx);
+        r.ls.pump();
+        r.frame();
+    };
+    resize(&mut r, eb, (640, 480), None);
+    assert_eq!(last_size(&r, b), Some((640, 480)));
+    resize(&mut r, ea, (2560, 1440), Some(((5.0, 6.0), (700, 500))));
+    assert_eq!(
+        last_size(&r, a),
+        Some((1920, 1080)),
+        "this screen's usable area"
+    );
+    draw(&mut r, a, (1920, 1080));
+    // maximized as by Super+Enter: it follows the screen
+    let o = r.ls.output();
+    r.ls.reconfigure(o, &output((1366, 768), 120));
+    r.frame();
+    assert_eq!(last_size(&r, a), Some((1366, 768)), "it follows the screen");
+    draw(&mut r, a, (1366, 768));
+    focus(&mut r, ea);
+    super_enter_on(&mut r, ea);
+    assert_eq!(last_size(&r, a), Some((700, 500)), "Super+Enter restores");
+    assert_eq!(anchor_of(&r, ea), CanvasPoint { x: 5, y: 6 });
+}
