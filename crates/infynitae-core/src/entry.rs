@@ -157,6 +157,8 @@ impl Core {
             } => {
                 self.input.clock.accepted(time_us);
                 self.input.modifiers = modifiers;
+                // letting Super go ends a Super+Tab step-through: the window reached is chosen
+                self.focus.modifiers_changed(modifiers);
                 out.extend(self.suspend_constraints(modifiers.logo && self.free_cursor_on_super));
                 if pressed {
                     // a press bound to fit or restore mutates a camera: its proof is minted here
@@ -686,7 +688,7 @@ impl Core {
     ) {
         let fx = match action {
             crate::input::keys::KeyAction::FocusNext => {
-                let fx = self.focus_next();
+                let (fx, attention) = self.focus_next();
                 out.extend(fx);
                 if let PointerState::Located { output, .. } = self.pointer
                     && let Some(pres) = self.presentation(output)
@@ -698,7 +700,9 @@ impl Core {
                         self.suppress_presentation(output, out);
                     }
                 }
-                if self.focus_cycle_navigate
+                // a window that asked for attention is brought into view as a focus jump does
+                // (Super+1..9), whatever FOCUS_CYCLE_NAVIGATE says (owner, 2026-10-31)
+                if (self.focus_cycle_navigate || attention)
                     && let Some(p) = proof
                 {
                     self.recenter(p, false, out);
@@ -4743,5 +4747,157 @@ mod tests {
             c.stage().saved_floating(w).is_some(),
             "Super+Enter maximized and saved floating geometry"
         );
+    }
+
+    /// Maps `n` 400x300 windows on `c` (output `a` connected) and returns them; `press` below
+    /// is a key press or release with the modifiers the seat would report after it.
+    fn map_windows(c: &mut Core, a: OutputId, n: u64) -> Vec<crate::stage::ElementId> {
+        use crate::geom::{LocalPoint, LocalRect, LocalSize};
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
+        use std::num::NonZeroU64;
+        let win = |k: u64, mapped: bool| SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint::default(),
+                size: LocalSize { w: 400, h: 300 },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: SurfaceKey::from_raw(NonZeroU64::new(k).unwrap()),
+                role: SurfaceRole::Root,
+                size: if mapped {
+                    LocalSize { w: 400, h: 300 }
+                } else {
+                    LocalSize::default()
+                },
+                mapped,
+                input: InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        let ws = (1..=n)
+            .map(|k| {
+                let w = c.toplevel_created();
+                c.toplevel_committed(w, win(k, false)).unwrap();
+                c.toplevel_committed(w, win(k, true)).unwrap();
+                w
+            })
+            .collect();
+        c.render_list(a).unwrap();
+        ws
+    }
+
+    fn press(c: &mut Core, i: &mut crate::InputPort, key: u32, pressed: bool, logo: bool) {
+        let modifiers = Modifiers {
+            logo,
+            ..Modifiers::default()
+        };
+        let _ = c
+            .physical_input_vec(
+                i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key,
+                    pressed,
+                    modifiers,
+                    mods_changed: key == crate::input::keys::KEY_LEFTMETA,
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+    }
+
+    /// Super+Tab tapped (Super down, Tab, Super up), through the physical key path.
+    fn super_tab(c: &mut Core, i: &mut crate::InputPort) {
+        use crate::input::keys::{KEY_LEFTMETA, KEY_TAB};
+        press(c, i, KEY_LEFTMETA, true, true);
+        press(c, i, KEY_TAB, true, true);
+        press(c, i, KEY_TAB, false, true);
+        press(c, i, KEY_LEFTMETA, false, false);
+    }
+
+    /// Super+Tab (owner, 2026-10-31) through the key path: two taps flip between the last two
+    /// windows used; with Super held, Tab steps further back, and letting Super go makes the
+    /// window reached the most recent, so the next tap returns to where the user started.
+    #[test]
+    fn super_tab_flips_the_last_two_and_steps_back_while_super_is_held() {
+        use crate::input::keys::{KEY_LEFTMETA, KEY_TAB};
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 3);
+        let [w1, w2, w3] = [ws[0], ws[1], ws[2]];
+        for w in [w1, w2, w3] {
+            c.set_focus(&mut i, Some(w)).unwrap();
+        }
+        // used: w3, w2, w1
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(w2));
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(w3), "Tab, Tab returns");
+
+        // held: w2, then w1; let go on w1
+        press(&mut c, &mut i, KEY_LEFTMETA, true, true);
+        press(&mut c, &mut i, KEY_TAB, true, true);
+        press(&mut c, &mut i, KEY_TAB, false, true);
+        assert_eq!(c.focus().target(), Some(w2));
+        press(&mut c, &mut i, KEY_TAB, true, true);
+        press(&mut c, &mut i, KEY_TAB, false, true);
+        assert_eq!(c.focus().target(), Some(w1), "one further back");
+        assert!(c.focus().cycling());
+        press(&mut c, &mut i, KEY_LEFTMETA, false, false);
+        assert!(!c.focus().cycling(), "letting Super go ends it");
+        assert_eq!(c.focus().history(), &[w1, w3, w2]);
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(w3), "back to where it started");
+
+        // a window closed is dropped from the history and skipped
+        let _ = c.toplevel_destroyed(w1);
+        assert!(!c.focus().history().contains(&w1));
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(w2));
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(w3));
+    }
+
+    /// Attention first (owner, 2026-10-31): a window that opened without the focus is where
+    /// Super+Tab goes first, its mark cleared and the camera brought to it (even with
+    /// FOCUS_CYCLE_NAVIGATE off); the next Super+Tab goes back to the window the user was in.
+    #[test]
+    fn super_tab_goes_to_the_window_asking_for_attention_first_then_back() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 3);
+        let [w1, w2, w3] = [ws[0], ws[1], ws[2]];
+        c.set_focus_cycle_navigate(false);
+        // w3 far to the right, out of view
+        let mut fx = Vec::new();
+        c.place_by_user(w3, crate::geom::CanvasPoint { x: 6000, y: 0 }, &mut fx)
+            .unwrap();
+        for w in [w2, w1] {
+            c.set_focus(&mut i, Some(w)).unwrap();
+        }
+        c.opened_without_focus(w3);
+        assert_eq!(c.focus().attention(), &[w3]);
+        let cam = camera_of(&c, a);
+        let before = c.cameras().center(cam);
+
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(w3), "attention first");
+        assert!(c.focus().attention().is_empty(), "its mark is cleared");
+        let at = c.cameras().center(cam).unwrap();
+        assert_ne!(Some(at), before, "the camera went to it");
+        assert!(at.x > 5000 << 16, "centred on w3: {at:?}");
+
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(w1), "back to where the user was");
+        assert_eq!(
+            c.cameras().center(cam),
+            Some(at),
+            "a plain flip keeps the camera (FOCUS_CYCLE_NAVIGATE off)"
+        );
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(w3), "then the flip as usual");
+
+        // an unmapped window is never marked
+        let _ = c.toplevel_destroyed(w2);
+        c.opened_without_focus(w2);
+        assert!(c.focus().attention().is_empty());
     }
 }

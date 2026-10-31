@@ -154,7 +154,7 @@ pub enum Effect {
     SpawnFileManager,
     /// Capture a fullscreen screenshot (by default Super+Shift+S or PrintScreen).
     SpawnScreenshot,
-    /// Capture a region screenshot (by default Super+Shift+R).
+    /// Capture a region screenshot (by default Super+S, or Super+Shift+R).
     SpawnRegionScreenshot,
     /// Toggle the canvas overview radar (by default Super+Shift+Tab).
     ToggleOverview,
@@ -170,11 +170,12 @@ pub enum Effect {
     TogglePrivacy,
     /// Toggle idle sleep inhibition (stay-awake mode, by default Super+Shift+I).
     ToggleIdleInhibit,
-    /// Toggle tearing for the focused window while it is fullscreen (by default Super+Shift+T).
+    /// Toggle tearing for the focused window while it is fullscreen (by default Super+Shift+O, or
+    /// Super+Shift+T).
     ToggleTearing,
     /// Save an instant replay clip (by default Super+Alt+C).
     SaveReplay,
-    /// Toggle continuous screen recording (by default Super+Alt+R).
+    /// Toggle continuous screen recording (by default Super+Alt+P, or Super+Alt+R).
     ToggleRecording,
     /// Hardware volume up.
     VolumeUp,

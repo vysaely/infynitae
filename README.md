@@ -54,6 +54,9 @@ Your config is never overwritten, and parts left out at install stay out.
 
 ## Shortcuts
 
+One rule places the keys: what you use often is on the left hand, what you use rarely on the
+right.
+
 | Key | Action |
 | :--- | :--- |
 | `Super + 1..9` | Focus window slot 1..9 |
@@ -62,7 +65,7 @@ Your config is never overwritten, and parts left out at install stay out.
 | `Super + Shift + Space` | Center the focused window, keep the zoom |
 | `Super + Enter` | Maximize the window, or fit the view to it (`SUPER_ENTER_ACTION`) |
 | `Super + Shift + Enter` | Fullscreen (you can still pan out of it) |
-| `Super + Tab` | Next window |
+| `Super + Tab` | Back to the window you used before (tap again to return); hold `Super` and tap `Tab` to go further back. A window asking for attention comes first |
 | `Super + Shift + Tab` | Overview of all windows |
 | `Super + Left drag` | Move a window |
 | `Super + Right drag` | Resize a window |
@@ -71,16 +74,16 @@ Your config is never overwritten, and parts left out at install stay out.
 | `Super + Shift + Wheel` | Zoom the canvas |
 | Finger on empty canvas | Drag the canvas (two fingers: pinch to zoom) |
 | `Super + Q` / `W` / `E` | Terminal / launcher / files |
-| `Super + Shift + S` or `Print` | Screenshot |
-| `Super + Shift + R` | Region screenshot |
+| `Super + S` | Region screenshot (`Super + Shift + R` too) |
+| `Super + Shift + S` or `Print` | Screenshot of the whole screen |
 | `Super + V` | Clipboard history |
 | `Super + A` | Control menu: Wi-Fi, Bluetooth, volume (all sound or one app), sound output, power, battery limit, do not disturb |
 | `Super + L` | Lock |
 | `Super + C` | Close the window (`Shift`: force) |
 | `Super + Shift + P` | Hide the window from screenshots and sharing |
 | `Super + Shift + I` | Stay awake |
-| `Super + Shift + T` | Tearing for the window while fullscreen: lowest latency for games |
-| `Super + Alt + R` | Start / stop recording |
+| `Super + Shift + O` | Tearing for the window while fullscreen: lowest latency for games (`Super + Shift + T` too) |
+| `Super + Alt + P` | Start / stop recording (`Super + Alt + R` too) |
 | `Super + Alt + C` | Save a replay clip |
 | `Super` (held) | Free a cursor a game captured |
 | `Super + Shift + Backspace` | Reload the config (windows stay) |

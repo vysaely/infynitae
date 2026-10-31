@@ -1736,15 +1736,12 @@ pub fn run_console_with(
             }
         } else if data.state.core().focus_on_open() {
             for ((&new_id, &user), &hold) in new_mapped.iter().zip(&by_user).zip(&held) {
-                if focus_user_only && !user {
-                    continue;
-                }
-                if hold {
-                    // opens without the focus and asks for attention: Super+Tab or a click
-                    if let Ok(effects) = data.state.core_mut().activation_request(new_id, false) {
-                        data.state.apply(&effects);
-                        data.session.flush();
-                    }
+                // a window the rules keep from the focus (one the user did not open, or one held
+                // while the focus is busy) opens without it and asks for attention: Super+Tab
+                // goes to it first, the edge marks it (owner, 2026-10-31). Never through an
+                // activation, which FOCUS_ON_ACTIVATE="always" would turn into a focus.
+                if (focus_user_only && !user) || hold {
+                    data.state.core_mut().opened_without_focus(new_id);
                     continue;
                 }
                 if let Ok(effects) = data
