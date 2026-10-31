@@ -80,3 +80,40 @@ fn a_portrait_screen_gives_portrait_room() {
     adv(&mut ls);
     assert_eq!(bounds_of(&ls, w), vec![(768 - 24, 1366 - 24)]);
 }
+
+/// The sizes the toplevel `idx` was configured with, in order ((0, 0): its own choice).
+fn sizes_of(ls: &Lockstep, idx: usize) -> Vec<(i32, i32)> {
+    ls.probe
+        .toplevel_configures
+        .iter()
+        .filter(|(i, _, _)| *i == idx)
+        .map(|(_, s, _)| *s)
+        .collect()
+}
+
+/// Discord's case: Electron ignores `configure_bounds` and opens at the size it saved, larger than
+/// the screen. The window is offered the room once it maps; one that fits keeps its own size, and a
+/// window too large on one side only keeps the other.
+#[test]
+fn a_window_opening_larger_than_its_room_is_offered_the_room() {
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    let qh = ls.qh.clone();
+    let room = (1920 - 24, 1080 - 24);
+
+    let big = ls.probe.toplevel(&qh, "Discord", (1944, 1124), 0);
+    adv(&mut ls);
+    adv(&mut ls);
+    let sizes = sizes_of(&ls, big);
+    assert_eq!(sizes.first(), Some(&(0, 0)), "its own size first: {sizes:?}");
+    assert_eq!(sizes.last(), Some(&room), "then the room: {sizes:?}");
+
+    let wide = ls.probe.toplevel(&qh, "Wide", (2400, 600), 0);
+    adv(&mut ls);
+    adv(&mut ls);
+    assert_eq!(sizes_of(&ls, wide).last(), Some(&(room.0, 600)));
+
+    let fits = ls.probe.toplevel(&qh, "Fits", (800, 600), 0);
+    adv(&mut ls);
+    adv(&mut ls);
+    assert_eq!(sizes_of(&ls, fits), vec![(0, 0)], "a window that fits is left alone");
+}

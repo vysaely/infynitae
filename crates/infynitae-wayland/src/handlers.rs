@@ -231,10 +231,34 @@ impl WaylandState {
             .map(|i| self.elements[i].id);
         self.core.set_toplevel_parent(id, parent);
         let mapped = tree.root().is_some_and(|r| r.mapped);
+        // listed while mapped: not yet, so this commit maps it
+        let opens = mapped && !self.foreign_toplevels.contains_key(&id);
         let _ = self.with_effects(|core, fx| {
             core.toplevel_committed_acked_into(id, tree, acked_fullscreen, fx)
         });
         self.list_toplevel(id, mapped);
+        if opens && !acked_fullscreen {
+            self.fit_opening_window(id, &window);
+        }
+    }
+
+    /// A window that opens larger than the room it was offered (`configure_bounds`) is offered
+    /// that room, once. Chromium and Electron ignore the bounds and reopen at the size they
+    /// saved, which outgrows the screen (Discord at 1944x1124 on 1920x1080, a little more at
+    /// each start); a size the compositor chose itself is left as it is.
+    fn fit_opening_window(&mut self, id: infynitae_core::stage::ElementId, window: &Window) {
+        let Some(toplevel) = window.toplevel() else {
+            return;
+        };
+        let current = toplevel.current_state();
+        let (None, Some(bounds)) = (current.size, current.bounds) else {
+            return;
+        };
+        let size = window.geometry().size;
+        if size.w <= bounds.w && size.h <= bounds.h {
+            return;
+        }
+        self.configure_toplevel(id, Some((size.w.min(bounds.w), size.h.min(bounds.h))));
     }
 
     /// The window an `ext_foreign_toplevel_handle_v1` stands for, while it is listed.

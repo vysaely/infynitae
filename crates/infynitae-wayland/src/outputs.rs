@@ -364,7 +364,7 @@ impl WaylandState {
     /// fullscreen (the size saved when fullscreen was granted). Every field is written on every
     /// configure, so nothing of an earlier one survives in Smithay's pending state: the adapter
     /// holds no fullscreen state of its own.
-    fn configure_toplevel(&mut self, id: ElementId, offered: Option<(i32, i32)>) {
+    pub(crate) fn configure_toplevel(&mut self, id: ElementId, offered: Option<(i32, i32)>) {
         let Some(t) = self.window(id).and_then(|w| w.toplevel()) else {
             return;
         };
