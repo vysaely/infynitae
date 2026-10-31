@@ -361,9 +361,19 @@ static void spawn_detached(const char *cmd) {
 /* `script` run by sh with `a1` and `a2` as "$1" and "$2": a name from outside (a Wi-Fi network's,
  * a Bluetooth device's, an app's) is never read as shell code, whatever quotes it holds. */
 /* A tray app's window, opened again: its program by its name (lowercased), else its desktop file */
+/* "Open" on a background app: its name is only a process's short name, which the process chose,
+ * so it is never run as a command. A name with a slash (or that looks like an option) is refused;
+ * otherwise the app opens through its desktop file: the one with that id, else the one whose
+ * Exec program has that name. */
 #define TRAY_LAUNCH_SCRIPT \
     "app=$(printf '%s' \"$1\" | tr '[:upper:]' '[:lower:]'); " \
-    "command -v \"$app\" >/dev/null 2>&1 && exec \"$app\" || gtk-launch \"$app\" 2>/dev/null"
+    "case \"$app\" in ''|*/*|-*|.*) exit 0;; esac; " \
+    "gtk-launch \"$app\" 2>/dev/null && exit 0; " \
+    "IFS=:; for d in \"${XDG_DATA_HOME:-$HOME/.local/share}\" ${XDG_DATA_DIRS:-/usr/local/share:/usr/share}; do " \
+    "for f in \"$d\"/applications/*.desktop; do [ -f \"$f\" ] || continue; " \
+    "e=$(sed -n 's/^Exec=//p' \"$f\" | head -n1); e=${e%% *}; e=${e##*/}; " \
+    "if [ \"$(printf '%s' \"$e\" | tr '[:upper:]' '[:lower:]')\" = \"$app\" ]; then " \
+    "id=${f##*/}; exec gtk-launch \"${id%.desktop}\"; fi; done; done"
 
 static void spawn_script(const char *script, const char *a1, const char *a2) {
     pid_t pid = fork();
