@@ -14,9 +14,9 @@ mod common;
 use common::input::*;
 use common::{Lockstep, delta_to, output, output_k};
 use infynitae_backend_headless::{VirtualOutput, keyboard_key, set_focus};
-use infynitae_core::geom::LocalSize;
+use infynitae_core::geom::{CanvasPoint, LocalSize};
 use infynitae_core::input::bindings::Modifiers;
-use infynitae_core::input::keys::{KEY_ENTER, KEY_LEFTMETA};
+use infynitae_core::input::keys::{KEY_ENTER, KEY_LEFTMETA, KEY_LEFTSHIFT};
 use infynitae_core::output::Transform;
 use infynitae_core::stage::ElementId;
 use infynitae_core::{EnterMode, PlacementPolicy};
@@ -406,6 +406,54 @@ fn a_maximized_window_fills_the_screen_left_after_an_unplug() {
     r.ls.output = Some(laptop);
     r.frame();
     assert_eq!(last_size(&r, m), Some((1366, 768)));
+}
+
+/// Owner, 2026-10-31: "a fullscreen window is shown over the whole screen, not at its place on the
+/// canvas: nothing on the canvas makes room for it". Super+Shift+Enter (fullscreen by the
+/// compositor) did not follow it: it moved the window to the view's corner and pushed its
+/// neighbour away. Now neither moves, as when the app asks.
+#[test]
+fn super_shift_enter_fullscreen_moves_and_pushes_no_window() {
+    let mut r = rig(a_1080());
+    let (a, ea) = map(&mut r, "A", (800, 600));
+    let (_, eb) = map(&mut r, "B", (800, 600));
+    let anchor = |r: &Rig, e| r.ls.state.core().stage().anchor(e).expect("anchor");
+    let (a0, b0) = (anchor(&r, ea), anchor(&r, eb));
+    focus(&mut r, ea);
+    chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT], KEY_ENTER);
+    assert!(r.ls.state.core().fullscreen_of(ea).is_some(), "fullscreen");
+    let full = logical_floor(&r);
+    draw(&mut r, a, full);
+    assert_eq!(anchor(&r, eb), b0, "B stays where it was");
+    assert_eq!(anchor(&r, ea), a0, "A keeps its place on the canvas");
+    chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT], KEY_ENTER);
+    assert!(r.ls.state.core().fullscreen_of(ea).is_none(), "back");
+    assert_eq!(last_size(&r, a), Some((800, 600)), "its size before");
+    draw(&mut r, a, (800, 600));
+    assert_eq!((anchor(&r, ea), anchor(&r, eb)), (a0, b0));
+}
+
+/// Maximized, then fullscreen, then back: the window is maximized again, where it was, and
+/// Super+Enter restores the size it had before the maximize.
+#[test]
+fn a_maximized_window_is_maximized_again_after_fullscreen() {
+    let mut r = rig(a_1080());
+    let (a, ea) = map(&mut r, "A", (800, 600));
+    focus(&mut r, ea);
+    super_enter_on(&mut r, ea);
+    let max = usable(&r);
+    draw(&mut r, a, max);
+    let at: CanvasPoint = r.ls.state.core().stage().anchor(ea).expect("anchor");
+    chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT], KEY_ENTER);
+    let full = logical_floor(&r);
+    draw(&mut r, a, full);
+    chord(&mut r, &[KEY_LEFTMETA, KEY_LEFTSHIFT], KEY_ENTER);
+    assert!(r.ls.state.core().fullscreen_of(ea).is_none());
+    assert_eq!(last_size(&r, a), Some(max), "back at the maximized size");
+    draw(&mut r, a, max);
+    assert_eq!(r.ls.state.core().stage().anchor(ea), Some(at), "in place");
+    super_enter_on(&mut r, ea);
+    assert_eq!(last_size(&r, a), Some((800, 600)), "Super+Enter restores");
 }
 
 /// The configure a fullscreen window gets carries the `fullscreen` state and the screen's size;

@@ -1303,71 +1303,31 @@ impl Core {
     }
 
     /// Super+Shift+Enter: the focused window's fullscreen toggles on the pointer's output, as if it
-    /// had asked (`set_fullscreen` / `unset_fullscreen`: the same path, M9, INV-PRES-1).
-    /// Under cluster tiling, entering fullscreen pushes any overlapping windows away into
-    /// adjacent cluster slots (12px gap) so no window is occluded or covered. Exiting fullscreen
-    /// restores original saved floating geometry.
+    /// had asked (`set_fullscreen` / `unset_fullscreen`: the same path, M9, INV-PRES-1). Nothing
+    /// on the Canvas moves: the window is shown over the whole screen, not at its place, and no
+    /// neighbour makes room for it (owner, 2026-10-31; INV-PRES-1 "fullscreen never touches
+    /// cameras or anchors").
     fn toggle_fullscreen(&mut self) -> Vec<Effect> {
         let Some(id) = self.focus.target() else {
             return Vec::new();
         };
         let was_fullscreen = self.fullscreen_of(id).is_some();
         if was_fullscreen {
-            self.leave_fullscreen(id, None)
-        } else {
-            let mut fx = Vec::new();
-            let output = self
-                .pointer_output()
-                .or_else(|| self.outputs.first().map(|o| o.id));
-            let orig_anchor = self.stage.anchor(id);
-            let orig_size = self.stage.tree(id).map(|t| t.geometry.size);
-
-            if let Some(out_id) = output
-                && let Some(out_model) = self.outputs.iter().find(|o| o.id == out_id)
-            {
-                let (out_w, out_h) = out_model.logical_extent();
-                let canvas_w = out_w.round().max(1.0) as i32;
-                let canvas_h = out_h.round().max(1.0) as i32;
-
-                if self.current_frame(out_id).is_none() {
-                    let _ = self.render_list(out_id);
-                }
-                let tl = if let Some(frame) = self.current_frame(out_id)
-                    && let Some(p) = frame
-                        .view
-                        .unproject(crate::geom::OutputLogicalPoint { x: 0.0, y: 0.0 })
-                        .round_to_point()
-                {
-                    p
-                } else if let Some(a) = orig_anchor {
-                    a
-                } else {
-                    crate::geom::CanvasPoint { x: 0, y: 0 }
-                };
-
-                if self.stage.saved_floating(id).is_none()
-                    && let (Some(a), Some(s)) = (orig_anchor, orig_size)
-                {
-                    self.stage.set_saved_floating(id, Some((a, s)));
-                }
-
-                let _ = self.place_by_shell(id, tl, &mut fx);
-                let target_rect = (tl.x, tl.y, tl.x + canvas_w as i64, tl.y + canvas_h as i64);
-                if self.placement == crate::protocol::PlacementPolicy::ClusterTiling {
-                    self.push_overlapping_cluster(id, target_rect, &mut fx);
-                }
-            }
-
-            let request = crate::protocol::ToplevelRequest::SetFullscreen { output };
-            if let Ok((_, t_fx)) = self.toplevel_request(id, request) {
-                fx.extend(t_fx);
-            }
-            if let Some(o) = output {
-                self.invalidate_frame(o);
-            }
-            fx.extend(self.visibility_pass());
-            fx
+            return self.leave_fullscreen(id, None);
         }
+        let mut fx = Vec::new();
+        let output = self
+            .pointer_output()
+            .or_else(|| self.outputs.first().map(|o| o.id));
+        let request = crate::protocol::ToplevelRequest::SetFullscreen { output };
+        if let Ok((_, t_fx)) = self.toplevel_request(id, request) {
+            fx.extend(t_fx);
+        }
+        if let Some(o) = output {
+            self.invalidate_frame(o);
+        }
+        fx.extend(self.visibility_pass());
+        fx
     }
 
     /// F-FIT-1 on `element` for `output`'s camera, shared by the binding and the shell: refused
@@ -1999,14 +1959,12 @@ impl Core {
                     rel(press.x, anchor.x, size.w),
                     rel(press.y, anchor.y, size.h),
                 );
-                let windowed = self
-                    .stage
-                    .saved_floating(element)
-                    .map(|(_, s)| s)
-                    .unwrap_or(crate::geom::LocalSize {
+                let windowed = self.fullscreen_of(element).and_then(|f| f.saved).unwrap_or(
+                    crate::geom::LocalSize {
                         w: size.w / 2,
                         h: size.h / 2,
-                    });
+                    },
+                );
                 let at = crate::geom::CanvasPoint {
                     x: (press.x / crate::geom::Q16_ONE) - (rx * f64::from(windowed.w)) as i64,
                     y: (press.y / crate::geom::Q16_ONE) - (ry * f64::from(windowed.h)) as i64,
@@ -4215,7 +4173,10 @@ mod tests {
     }
 
     #[test]
-    fn fullscreen_pushes_overlapping_windows_into_cluster_slot() {
+    /// Owner, 2026-10-31: a fullscreen window is shown over the whole screen, not at its place on
+    /// the Canvas: Super+Shift+Enter moves neither it nor its neighbour (it used to put the window
+    /// at the view's corner and push the neighbour away).
+    fn fullscreen_by_the_key_moves_and_pushes_no_window() {
         use crate::geom::{LocalPoint, LocalRect, LocalSize};
         use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
         use std::num::NonZeroU64;
@@ -4296,17 +4257,12 @@ mod tests {
             )
             .unwrap();
 
-        // w1 expands to fill viewport (-960..960, -540..540)
-        // w2 was at (812, 0), so cluster tiling pushes w2 to (960 + 12 = 972, 0)
+        // fullscreen, and nothing on the Canvas moved
+        assert!(c.fullscreen_of(w1).is_some());
         let anchor_w1 = c.stage().anchor(w1).unwrap();
         let anchor_w2 = c.stage().anchor(w2).unwrap();
-        assert_eq!(anchor_w1.x, -960);
-        assert_eq!(anchor_w1.y, -540);
-        assert_eq!(
-            anchor_w2.x, 972,
-            "w2 must be displaced to x=972 to avoid being covered by fullscreen w1"
-        );
-        assert_eq!(anchor_w2.y, 0);
+        assert_eq!((anchor_w1.x, anchor_w1.y), (0, 0), "w1 keeps its place");
+        assert_eq!((anchor_w2.x, anchor_w2.y), (812, 0), "w2 is not pushed");
 
         // Release Enter key
         let _ = c
@@ -4336,12 +4292,11 @@ mod tests {
             )
             .unwrap();
 
-        // w1 restores to original floating anchor (0, 0)
+        // back, both where they were
+        assert!(c.fullscreen_of(w1).is_none());
         let restored_w1 = c.stage().anchor(w1).unwrap();
-        assert_eq!(restored_w1.x, 0);
-        assert_eq!(restored_w1.y, 0);
-        // w2 remains at (972, 0)
-        assert_eq!(c.stage().anchor(w2).unwrap().x, 972);
+        assert_eq!((restored_w1.x, restored_w1.y), (0, 0));
+        assert_eq!(c.stage().anchor(w2).unwrap().x, 812);
     }
 
     #[test]
@@ -4609,7 +4564,7 @@ mod tests {
     }
 
     #[test]
-    fn client_side_unset_fullscreen_restores_saved_floating_and_allows_subsequent_maximize() {
+    fn client_side_unset_fullscreen_keeps_the_place_and_allows_subsequent_maximize() {
         use crate::geom::{CanvasPoint, LocalPoint, LocalRect, LocalSize};
         use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
         use std::num::NonZeroU64;
@@ -4693,15 +4648,12 @@ mod tests {
 
         assert!(c.fullscreen_of(w).is_some(), "window is fullscreen");
         assert_eq!(
-            c.stage().saved_floating(w),
-            Some((orig_anchor, LocalSize { w: 400, h: 300 })),
-            "saved_floating recorded"
+            c.fullscreen_of(w).and_then(|f| f.saved),
+            Some(LocalSize { w: 400, h: 300 }),
+            "the size it returns to"
         );
-        assert_ne!(
-            c.stage().anchor(w),
-            Some(orig_anchor),
-            "anchor moved for fullscreen"
-        );
+        assert_eq!(c.stage().saved_floating(w), None, "it is not maximized");
+        assert_eq!(c.stage().anchor(w), Some(orig_anchor), "the anchor stays");
 
         // Client itself unsets fullscreen via toplevel_request
         let _ = c
@@ -4709,17 +4661,9 @@ mod tests {
             .unwrap();
         assert!(c.fullscreen_of(w).is_none(), "no longer fullscreen");
 
-        // Window must be back at its old anchor, and saved_floating cleared
-        assert_eq!(
-            c.stage().anchor(w),
-            Some(orig_anchor),
-            "window anchor restored to orig_anchor"
-        );
-        assert_eq!(
-            c.stage().saved_floating(w),
-            None,
-            "saved_floating cleared after client unsets fullscreen"
-        );
+        // the window is where it was, and not maximized
+        assert_eq!(c.stage().anchor(w), Some(orig_anchor), "the anchor stayed");
+        assert_eq!(c.stage().saved_floating(w), None);
 
         // A following Super+Enter must maximize, NOT restore
         let logo_only = Modifiers {
