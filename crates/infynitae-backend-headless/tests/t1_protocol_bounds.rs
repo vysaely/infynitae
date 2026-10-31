@@ -175,3 +175,75 @@ fn a_fitted_window_takes_the_view_and_pushes_the_others_aside() {
         "the terminal {t:?} is pushed off the fitted window {a:?}"
     );
 }
+
+/// The owner's case (2026-10-31): a window going fullscreen moved the window beside it, and after
+/// the fullscreen ended the two overlapped. A fullscreen window is shown over the whole screen
+/// (F-PRESENT-1), not at its place on the canvas: nothing on the canvas makes room for it, and it
+/// comes back to its own place beside the other.
+#[test]
+fn a_fullscreen_window_pushes_no_other_window() {
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    // the default placement (the owner's: windows beside one another)
+    ls.state
+        .core_mut()
+        .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+    let qh = ls.qh.clone();
+    let a = ls.probe.toplevel(&qh, "A", (800, 600), 0);
+    adv(&mut ls);
+    adv(&mut ls);
+    ls.probe.toplevel(&qh, "B", (800, 600), 0);
+    adv(&mut ls);
+    adv(&mut ls);
+    let ids = ls.state.core().stage().mapped_elements();
+    let (ea, eb) = (ids[0], ids[1]);
+    let anchor = |ls: &Lockstep, e| ls.state.core().stage().anchor(e).expect("anchor");
+    let (a0, b0) = (anchor(&ls, ea), anchor(&ls, eb));
+
+    // A, focused (only the focused window is granted fullscreen), goes fullscreen and draws at
+    // the screen's size, as an app does
+    infynitae_backend_headless::set_focus(&mut ls.state, &mut ls.input, Some(ea)).expect("focus");
+    adv(&mut ls);
+    ls.probe.surfaces[a]
+        .toplevel
+        .as_ref()
+        .expect("toplevel")
+        .set_fullscreen(None);
+    adv(&mut ls);
+    let last = ls
+        .probe
+        .toplevel_configures
+        .iter()
+        .rev()
+        .find(|(i, _, _)| *i == a)
+        .cloned();
+    assert!(
+        last.as_ref().is_some_and(|(_, _, st)| st.contains(&2)),
+        "A was granted fullscreen: {last:?}"
+    );
+    ls.probe.surfaces[a].size = (1920, 1080);
+    ls.probe.draw(&qh, a);
+    adv(&mut ls);
+    adv(&mut ls);
+    assert_eq!(
+        anchor(&ls, eb),
+        b0,
+        "B stays where it was while A is fullscreen"
+    );
+
+    // and back: A at its own place, the two apart
+    ls.probe.surfaces[a]
+        .toplevel
+        .as_ref()
+        .expect("toplevel")
+        .unset_fullscreen();
+    adv(&mut ls);
+    ls.probe.surfaces[a].size = (800, 600);
+    ls.probe.draw(&qh, a);
+    adv(&mut ls);
+    adv(&mut ls);
+    let (a1, b1) = (anchor(&ls, ea), anchor(&ls, eb));
+    assert_eq!((a1, b1), (a0, b0), "both where they were before");
+    let apart =
+        a1.x + 800 <= b1.x || b1.x + 800 <= a1.x || a1.y + 600 <= b1.y || b1.y + 600 <= a1.y;
+    assert!(apart, "A {a1:?} and B {b1:?} do not overlap");
+}

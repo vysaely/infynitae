@@ -1452,8 +1452,13 @@ impl Core {
                     self.restore_offers.retain(|(e, _)| *e != id);
                 }
                 self.stage.set_tree(id, Some(tree)).map_err(stale)?;
+                // a window that grew pushes its neighbours; a fullscreen one never does: it is
+                // shown over the whole screen (F-PRESENT-1), not at its place on the canvas. A
+                // frame drawn for an acknowledged fullscreen is one, whether or not the grant has
+                // reached Core yet (the screen-sized frame came first and pushed)
                 if self.placement == PlacementPolicy::ClusterTiling
                     && self.fullscreen_of(id).is_none()
+                    && !acked_fullscreen
                     && let (Some(old), Some(a), Some(t)) =
                         (old_rect, self.stage.anchor(id), self.stage.tree(id))
                     && old.2 > old.0
@@ -1466,17 +1471,6 @@ impl Core {
                         a.y + i64::from(t.geometry.size.h),
                     );
                     self.push_grown(id, old, new, out);
-                }
-                if self.placement == PlacementPolicy::ClusterTiling
-                    && self.fullscreen_of(id).is_some()
-                    && let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id))
-                {
-                    let w = t.geometry.size.w as i64;
-                    let h = t.geometry.size.h as i64;
-                    if w > 0 && h > 0 {
-                        let target_rect = (a.x, a.y, a.x + w, a.y + h);
-                        self.push_overlapping_cluster(id, target_rect, out);
-                    }
                 }
             }
             (Lifecycle::AwaitingFirstBuffer, true) => {
@@ -1492,17 +1486,6 @@ impl Core {
                 self.stage.raise(id);
                 // a grant made before this map takes its output now (A-3)
                 out.extend(self.take_output(id));
-                if self.placement == PlacementPolicy::ClusterTiling
-                    && self.fullscreen_of(id).is_some()
-                    && let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id))
-                {
-                    let w = t.geometry.size.w as i64;
-                    let h = t.geometry.size.h as i64;
-                    if w > 0 && h > 0 {
-                        let target_rect = (a.x, a.y, a.x + w, a.y + h);
-                        self.push_overlapping_cluster(id, target_rect, out);
-                    }
-                }
             }
             (Lifecycle::Mapped, false) => {
                 // null-buffer commit: unmap; identity and anchor kept, snapshot dropped

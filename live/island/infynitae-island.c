@@ -309,10 +309,22 @@ enum {
 
 static volatile sig_atomic_t g_sig_cmd = 0;
 
-static void on_sigusr1(int sig) { (void)sig; g_sig_cmd = 1; }
-static void on_sigusr2(int sig) { (void)sig; g_sig_cmd = 2; }
-static void on_sigterm(int sig) { (void)sig; g_sig_cmd = 3; }
-static void on_sigrtmin(int sig) { (void)sig; g_sig_cmd = 4; }
+/* The signals (Super+W, Super+A, Super+V) reach any thread that does not block them, GLib's own
+ * (gdbus, pool) as well: a byte in this pipe wakes the main loop's poll whichever thread ran the
+ * handler, where the flag alone waited for the next unrelated event (the keys did nothing). */
+static int g_wake_pipe[2] = {-1, -1};
+static void wake_main(void) {
+    if (g_wake_pipe[1] >= 0) {
+        int saved = errno;
+        ssize_t w = write(g_wake_pipe[1], "x", 1);
+        (void)w;
+        errno = saved;
+    }
+}
+static void on_sigusr1(int sig) { (void)sig; g_sig_cmd = 1; wake_main(); }
+static void on_sigusr2(int sig) { (void)sig; g_sig_cmd = 2; wake_main(); }
+static void on_sigterm(int sig) { (void)sig; g_sig_cmd = 3; wake_main(); }
+static void on_sigrtmin(int sig) { (void)sig; g_sig_cmd = 4; wake_main(); }
 
 static void request_frame(IslandOutput *out);
 static void damage_all(IslandApp *app);
@@ -3264,6 +3276,7 @@ int main(int argc, char **argv) {
         fclose(pf);
     }
 
+    if (pipe2(g_wake_pipe, O_NONBLOCK | O_CLOEXEC) < 0) g_wake_pipe[0] = g_wake_pipe[1] = -1;
     signal(SIGUSR1, on_sigusr1);
     signal(SIGUSR2, on_sigusr2);
     signal(SIGRTMIN, on_sigrtmin);
@@ -3346,7 +3359,7 @@ int main(int argc, char **argv) {
         gint n_glib = g_main_context_query(glib_ctx, glib_prio, &glib_timeout, gfds, MAX_GLIB_FDS);
         if (n_glib > MAX_GLIB_FDS) n_glib = MAX_GLIB_FDS;
 
-        struct pollfd pfds[2 + MAX_GLIB_FDS];
+        struct pollfd pfds[3 + MAX_GLIB_FDS];
         pfds[0].fd = wl_display_get_fd(app.display);
         pfds[0].events = POLLIN;
         pfds[0].revents = 0;
@@ -3367,10 +3380,22 @@ int main(int argc, char **argv) {
             nfds++;
         }
 
+        nfds_t wake_idx = nfds;
+        if (g_wake_pipe[0] >= 0) {
+            pfds[nfds].fd = g_wake_pipe[0];
+            pfds[nfds].events = POLLIN;
+            pfds[nfds].revents = 0;
+            nfds++;
+        }
+
         int timeout = (app.mode != MODE_CLOSED) ? 1000 : -1;
         if (glib_timeout >= 0 && (timeout < 0 || glib_timeout < timeout)) timeout = glib_timeout;
         int ret = poll(pfds, nfds, timeout);
         for (gint i = 0; i < n_glib; i++) gfds[i].revents = pfds[glib_first + i].revents;
+        if (g_wake_pipe[0] >= 0 && (pfds[wake_idx].revents & POLLIN)) {
+            char drain[64];
+            while (read(g_wake_pipe[0], drain, sizeof(drain)) > 0) {}
+        }
         if (ret > 0 && (pfds[0].revents & POLLIN)) {
             if (wl_display_read_events(app.display) < 0 ||
                 wl_display_dispatch_pending(app.display) < 0) {
