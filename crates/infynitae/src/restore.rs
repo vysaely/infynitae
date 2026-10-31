@@ -1,7 +1,7 @@
 //! `infynitae restore`: saving and restoring the canvas session across restarts (it replaces the
 //! Python `infynitae-restore`; `live/infynitae-restore` is now a wrapper around this).
 //!
-//! - `watch`: every 15 s, the mapped windows (app, title, anchor, size, fullscreen) and each
+//! - `watch`: every 15 s, the mapped windows (app, title, anchor, size, fullscreen, maximized) and each
 //!   screen's camera centre to `~/.local/state/infynitae/session.json`. Ended by SIGTERM with no
 //!   last snapshot: the session is ending and its windows are already closing, so it would
 //!   overwrite the last good file with a partial one.
@@ -156,10 +156,17 @@ pub fn session_of(reply: &Value) -> Option<Value> {
         })
         .map(|e| {
             Value::Obj(
-                ["app_id", "title", "anchor", "size", "fullscreen"]
-                    .iter()
-                    .map(|k| (k.to_string(), field(e, k)))
-                    .collect(),
+                [
+                    "app_id",
+                    "title",
+                    "anchor",
+                    "size",
+                    "fullscreen",
+                    "maximized",
+                ]
+                .iter()
+                .map(|k| (k.to_string(), field(e, k)))
+                .collect(),
             )
         })
         .collect();
@@ -583,6 +590,19 @@ pub fn restore(
                             ("to", anchor.clone()),
                         ],
                     ));
+                    // and its size, maximized again if it was (owner, 2026-10-31)
+                    if let Some(size) = target.get("size").filter(|s| **s != Value::Null) {
+                        let maximized = target.get("maximized").cloned().unwrap_or(Value::Null);
+                        ipc.request(req(
+                            next(),
+                            "resize_element",
+                            [
+                                ("element", Value::Arr(vec![inst.into(), elem.into()])),
+                                ("size", size.clone()),
+                                ("maximized", maximized),
+                            ],
+                        ));
+                    }
                 }
             }
         }
@@ -903,8 +923,10 @@ mod tests {
         std::fs::write(
             &file,
             r#"{"windows":[
-              {"app_id":"demo-app","title":"Win 1","anchor":[100.0,200.0]},
-              {"app_id":"demo-app","title":"Win 2","anchor":[300.0,400.0]},
+              {"app_id":"demo-app","title":"Win 1","anchor":[100.0,200.0],"size":[1920.0,1080.0],
+               "maximized":{"anchor":[5.0,6.0],"size":[800.0,600.0]}},
+              {"app_id":"demo-app","title":"Win 2","anchor":[300.0,400.0],"size":[640.0,480.0],
+               "maximized":null},
               {"app_id":"app-without-desktop","title":"Win 3","anchor":[50.0,50.0]}],
               "outputs":[{"id":1,"center":[1200.0,800.0]}]}"#,
         )
@@ -964,6 +986,21 @@ mod tests {
         assert_eq!(moves[0].get("to").unwrap().to_json(), "[100,200]");
         assert_eq!(moves[1].get("element").unwrap().to_json(), "[1,103]");
         assert_eq!(moves[1].get("to").unwrap().to_json(), "[300,400]");
+        // each window comes back at its size, the first maximized again (owner, 2026-10-31)
+        let resizes: Vec<_> = ipc
+            .calls
+            .iter()
+            .filter(|c| c.get("cmd").and_then(Value::as_str) == Some("resize_element"))
+            .collect();
+        assert_eq!(resizes.len(), 2);
+        assert_eq!(resizes[0].get("element").unwrap().to_json(), "[1,101]");
+        assert_eq!(resizes[0].get("size").unwrap().to_json(), "[1920,1080]");
+        assert_eq!(
+            resizes[0].get("maximized").unwrap().to_json(),
+            r#"{"anchor":[5,6],"size":[800,600]}"#
+        );
+        assert_eq!(resizes[1].get("size").unwrap().to_json(), "[640,480]");
+        assert_eq!(resizes[1].get("maximized"), Some(&Value::Null));
         let navs: Vec<_> = ipc
             .calls
             .iter()

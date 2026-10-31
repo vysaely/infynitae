@@ -3,7 +3,9 @@
 //!
 //! Requests: `{"id": <number|string>, "cmd": <name>, ...}`. `snapshot`, `subscribe` and
 //! `unsubscribe` are queries; `navigate`, `viewport_fit`, `viewport_restore`, `focus`,
-//! `acknowledge_attention` and `move_element` are commands Core validates and executes. Elements are
+//! `acknowledge_attention`, `move_element` and `resize_element` (a size asked of the window, or
+//! `"maximized": {"anchor", "size"}` to maximize it, session restore) are commands Core validates
+//! and executes. Elements are
 //! named `[instance, element]` (INV-STAGE-3), outputs by their id. `layers` is a diagnostic
 //! query: each window's surfaces and the physical rects they are drawn at.
 //!
@@ -144,6 +146,25 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
         "acknowledge_attention" => Request::Command(ShellCommand::AcknowledgeAttention {
             element: element("element")?,
         }),
+        "resize_element" => {
+            let pair = |k: &str, v: &Value| -> Result<(i32, i32), RequestError> {
+                let (w, h) = point(v.get(k)).ok_or(Invalid)?;
+                let int = |x: f64| {
+                    (x.fract() == 0.0 && x >= f64::from(i32::MIN) && x <= f64::from(i32::MAX))
+                        .then_some(x as i32)
+                };
+                Ok((int(w).ok_or(Invalid)?, int(h).ok_or(Invalid)?))
+            };
+            let maximized = match v.get("maximized") {
+                None | Some(Value::Null) => None,
+                Some(m) => Some((point(m.get("anchor")).ok_or(Invalid)?, pair("size", m)?)),
+            };
+            Request::Command(ShellCommand::ResizeElement {
+                element: element("element")?,
+                size: pair("size", v)?,
+                maximized,
+            })
+        }
         "move_element" => Request::Command(ShellCommand::MoveElement {
             element: element("element")?,
             to: point(v.get("to")).ok_or(Invalid)?,

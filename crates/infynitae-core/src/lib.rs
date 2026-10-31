@@ -181,6 +181,16 @@ pub enum ShellCommand {
         to: (f64, f64),
         stream: ShellStream,
     },
+    /// Asks `element` for `size` (a configure, as a Super+right drag asks; the size is held,
+    /// INV-PROTO-1), or, with `maximized` (the place and size it had before), maximizes it as
+    /// Super+Enter does on the first output, keeping its anchor. Session restore brings a window
+    /// back at its size and maximized state this way (owner, 2026-10-31). Mapped, not fullscreen,
+    /// sizes 1..=32768; rejected otherwise.
+    ResizeElement {
+        element: stage::ElementRef,
+        size: (i32, i32),
+        maximized: Option<((f64, f64), (i32, i32))>,
+    },
 }
 
 /// Where [`ShellCommand::Navigate`] centres the camera.
