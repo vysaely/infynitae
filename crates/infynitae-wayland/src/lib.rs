@@ -88,6 +88,11 @@ pub fn presentation_clock_now() -> std::time::Duration {
 }
 
 pub use idle_notify::IdleNotifyState;
+
+/// MAX_APP_SCALE when the config has none (owner, 2026-10-31): zooming only scales what apps
+/// drew; they never re-render for it (a HiDPI screen still gets its own scale). Re-rendering
+/// made a terminal re-flow its text as you zoomed.
+pub const DEFAULT_MAX_APP_SCALE: f64 = 1.0;
 pub use registry::SurfaceRegistry;
 
 /// Per-client data the composition root attaches when inserting a client.
@@ -792,9 +797,10 @@ impl WaylandState {
 
     /// Reloads configuration from ~/.config/infynitae/config into Core and compositor state.
     /// `MAX_APP_SCALE`: how far apps render sharper as you zoom in (the scale policy's ceiling,
-    /// PROV-1). Never below a screen's own scale, at most 8; absent or invalid, the default (3).
+    /// PROV-1). Never below a screen's own scale, at most 8; absent or invalid,
+    /// [`DEFAULT_MAX_APP_SCALE`].
     fn set_max_app_scale(&mut self, value: Option<f64>) {
-        use infynitae_core::scale::{DEFAULT_H_CFG, ScalePolicyConfig};
+        use infynitae_core::scale::ScalePolicyConfig;
         let screens = self
             .core
             .outputs()
@@ -803,7 +809,7 @@ impl WaylandState {
             .fold(1.0, f64::max);
         let h_cfg = value
             .filter(|v| v.is_finite() && *v > 0.0)
-            .unwrap_or(DEFAULT_H_CFG)
+            .unwrap_or(DEFAULT_MAX_APP_SCALE)
             .clamp(screens, 8.0_f64.max(screens));
         let config = ScalePolicyConfig {
             h_cfg,

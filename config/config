@@ -302,10 +302,11 @@ SCALING_FILTER="nearest"
     #    fast      not averaged: the crispest edges zoomed out, but text shimmers while the
     #              camera moves; the least GPU work (games are never affected)
 
-MAX_APP_SCALE="3"
+MAX_APP_SCALE="1"
     # Apps redraw sharper as you zoom in, up to this scale [save]
-    # default: 3
-    # options: 3  · 1 never (cheapest, blurry when zoomed in)  · 2  · 4 …
+    # default: 1
+    # options: 1 never: zooming only scales what is drawn (text soft when zoomed in, never
+    #            shifts)  · 2  · 3 sharper, apps redraw as you zoom (see ZOOM_SHARPEN)  · 4 …
 
 ZOOM_SHARPEN="after"
     # When apps redraw sharper as you zoom [save]
