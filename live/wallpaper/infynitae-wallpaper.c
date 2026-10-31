@@ -406,9 +406,11 @@ static const struct wl_registry_listener registry_listener = {
     .global_remove = registry_global_remove,
 };
 
+/* The pid file lives only in the user's own runtime directory: never a shared one like /tmp,
+ * where another user could plant it. Without XDG_RUNTIME_DIR there is none (NULL). */
 static char *get_pid_file_path(void) {
     const char *runtime_dir = getenv("XDG_RUNTIME_DIR");
-    if (!runtime_dir) runtime_dir = "/tmp";
+    if (!runtime_dir || runtime_dir[0] != '/') return NULL;
     static char path[512];
     snprintf(path, sizeof(path), "%s/infynitae-wallpaper.pid", runtime_dir);
     return path;
@@ -479,6 +481,7 @@ static void kill_other_wallpapers(void) {
 
 static void write_pid_file(void) {
     const char *pid_path = get_pid_file_path();
+    if (!pid_path) return;
     FILE *f = fopen(pid_path, "w");
     if (f) {
         fprintf(f, "%d\n", getpid());
@@ -764,7 +767,7 @@ int main(int argc, char *argv[]) {
 
     // Clean up
     if (!overlay) {
-        unlink(get_pid_file_path());
+        if (get_pid_file_path()) unlink(get_pid_file_path());
     }
 
     struct wallpaper_output *curr = app.outputs;

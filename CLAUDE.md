@@ -36,6 +36,7 @@ history, hidden from search by `.ignore`.
 | Window placement, focus, cameras | `crates/infynitae-core/src/` (stage, focus, cameras, input/) |
 | A protocol | `crates/infynitae-wayland/src/` (one file per protocol) |
 | The shell socket (`infynitae msg …`) | `crates/infynitae-ipc` |
+| Who may use capture, clipboard, input, lock… (`ALLOW_*`) | `crates/infynitae-wayland/src/trust.rs`; the model in `docs/SECURITY.md` |
 | Settings and their comments | `config/config`; loading `live/config.sh`; checks `live/config-check` |
 | C helpers (edge, lock, wallpaper, polkit, portal, recorder) | `live/<name>/`; built by `live/build-helpers.sh` |
 | Install and update | `install.sh`, `update.sh`, `live/install-lib.sh` |

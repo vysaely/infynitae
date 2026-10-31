@@ -57,13 +57,18 @@ pub struct InputMethodState {
 }
 
 impl InputMethodState {
-    pub fn new(display: &DisplayHandle) -> Self {
+    pub fn new(display: &DisplayHandle, trust: &crate::trust::SharedPolicy) -> Self {
+        use crate::trust::Capability;
         Self {
-            input_method: InputMethodManagerState::new::<WaylandState, _>(display, |_| true),
+            input_method: InputMethodManagerState::new::<WaylandState, _>(
+                display,
+                trust.gate(Capability::InputMethod).filter(),
+            ),
             text_input: TextInputManagerState::new::<WaylandState>(display),
-            virtual_keyboard: VirtualKeyboardManagerState::new::<WaylandState, _>(display, |_| {
-                true
-            }),
+            virtual_keyboard: VirtualKeyboardManagerState::new::<WaylandState, _>(
+                display,
+                trust.gate(Capability::Input).filter(),
+            ),
             popups: Vec::new(),
         }
     }

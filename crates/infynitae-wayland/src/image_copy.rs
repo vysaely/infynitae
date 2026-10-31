@@ -59,16 +59,13 @@ pub struct ImageCopyState {
 }
 
 impl ImageCopyState {
-    pub fn new(dh: &DisplayHandle) -> Self {
+    pub fn new(dh: &DisplayHandle, gate: crate::trust::Gate) -> Self {
         Self {
             _sources: dh
-                .create_global::<WaylandState, ExtOutputImageCaptureSourceManagerV1, ()>(1, ()),
+                .create_global::<WaylandState, ExtOutputImageCaptureSourceManagerV1, crate::trust::Gate>(1, gate.clone()),
             _window_sources: dh
-                .create_global::<WaylandState, ExtForeignToplevelImageCaptureSourceManagerV1, ()>(
-                    1,
-                    (),
-                ),
-            _manager: dh.create_global::<WaylandState, ExtImageCopyCaptureManagerV1, ()>(1, ()),
+                .create_global::<WaylandState, ExtForeignToplevelImageCaptureSourceManagerV1, crate::trust::Gate>(1, gate.clone()),
+            _manager: dh.create_global::<WaylandState, ExtImageCopyCaptureManagerV1, crate::trust::Gate>(1, gate.clone()),
         }
     }
 }
@@ -154,13 +151,16 @@ impl WaylandState {
     }
 }
 
-impl GlobalDispatch<ExtOutputImageCaptureSourceManagerV1, ()> for WaylandState {
+impl GlobalDispatch<ExtOutputImageCaptureSourceManagerV1, crate::trust::Gate> for WaylandState {
+    fn can_view(client: Client, gate: &crate::trust::Gate) -> bool {
+        gate.allows(&client)
+    }
     fn bind(
         _state: &mut Self,
         _dh: &DisplayHandle,
         _client: &Client,
         resource: New<ExtOutputImageCaptureSourceManagerV1>,
-        _global_data: &(),
+        _global_data: &crate::trust::Gate,
         data_init: &mut DataInit<'_, Self>,
     ) {
         data_init.init(resource, ());
@@ -188,13 +188,18 @@ impl Dispatch<ExtOutputImageCaptureSourceManagerV1, ()> for WaylandState {
     }
 }
 
-impl GlobalDispatch<ExtForeignToplevelImageCaptureSourceManagerV1, ()> for WaylandState {
+impl GlobalDispatch<ExtForeignToplevelImageCaptureSourceManagerV1, crate::trust::Gate>
+    for WaylandState
+{
+    fn can_view(client: Client, gate: &crate::trust::Gate) -> bool {
+        gate.allows(&client)
+    }
     fn bind(
         _state: &mut Self,
         _dh: &DisplayHandle,
         _client: &Client,
         resource: New<ExtForeignToplevelImageCaptureSourceManagerV1>,
-        _global_data: &(),
+        _global_data: &crate::trust::Gate,
         data_init: &mut DataInit<'_, Self>,
     ) {
         data_init.init(resource, ());
@@ -235,13 +240,16 @@ impl Dispatch<ExtImageCaptureSourceV1, SourceData> for WaylandState {
     }
 }
 
-impl GlobalDispatch<ExtImageCopyCaptureManagerV1, ()> for WaylandState {
+impl GlobalDispatch<ExtImageCopyCaptureManagerV1, crate::trust::Gate> for WaylandState {
+    fn can_view(client: Client, gate: &crate::trust::Gate) -> bool {
+        gate.allows(&client)
+    }
     fn bind(
         _state: &mut Self,
         _dh: &DisplayHandle,
         _client: &Client,
         resource: New<ExtImageCopyCaptureManagerV1>,
-        _global_data: &(),
+        _global_data: &crate::trust::Gate,
         data_init: &mut DataInit<'_, Self>,
     ) {
         data_init.init(resource, ());

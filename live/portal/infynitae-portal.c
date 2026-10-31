@@ -738,17 +738,49 @@ static void on_bus_acquired(GDBusConnection *connection,
 // UNIX Socket IPC Listener: /run/user/<uid>/infynitae/shortcuts.sock
 // -----------------------------------------------------------------------------
 
+/* One connection's read: asynchronous, so a client that connects and sends nothing never holds
+ * the portal's main loop; it is dropped after SOCKET_READ_TIMEOUT_S. */
+#define SOCKET_READ_TIMEOUT_S 2
+
+typedef struct {
+    GSocketConnection *connection;
+    GCancellable *cancel;
+    guint timeout;
+    char buf[128];
+} SocketRead;
+
+static gboolean socket_read_timeout(gpointer data) {
+    SocketRead *r = data;
+    r->timeout = 0;
+    g_cancellable_cancel(r->cancel);
+    return G_SOURCE_REMOVE;
+}
+
+static void socket_read_done(GObject *source, GAsyncResult *res, gpointer data) {
+    SocketRead *r = data;
+    gssize bytes = g_input_stream_read_finish(G_INPUT_STREAM(source), res, NULL);
+    if (r->timeout)
+        g_source_remove(r->timeout);
+    if (bytes > 0) {
+        r->buf[bytes] = '\0';
+        dispatch_action(r->buf);
+    }
+    g_object_unref(r->cancel);
+    g_object_unref(r->connection);
+    g_free(r);
+}
+
 static gboolean on_socket_incoming(GSocketService *service,
                                     GSocketConnection *connection,
                                     GObject *source_object,
                                     gpointer user_data) {
+    SocketRead *r = g_new0(SocketRead, 1);
+    r->connection = g_object_ref(connection);
+    r->cancel = g_cancellable_new();
+    r->timeout = g_timeout_add_seconds(SOCKET_READ_TIMEOUT_S, socket_read_timeout, r);
     GInputStream *istream = g_io_stream_get_input_stream(G_IO_STREAM(connection));
-    char buf[128] = {0};
-    gssize bytes = g_input_stream_read(istream, buf, sizeof(buf) - 1, NULL, NULL);
-    if (bytes > 0) {
-        buf[bytes] = '\0';
-        dispatch_action(buf);
-    }
+    g_input_stream_read_async(istream, r->buf, sizeof(r->buf) - 1, G_PRIORITY_DEFAULT, r->cancel,
+                              socket_read_done, r);
     return FALSE;
 }
 

@@ -98,14 +98,37 @@ these by date, e.g. "(owner, 2026-10-24)".
   screenshot), every screen shows a red dot, drawn by the compositor and never into a capture, so
   a remote desktop or a share cannot run unseen even when the app shows nothing itself (RustDesk's
   window could not open in this session and its connections ran without any sign). Only the
-  replay buffer's helper is left out, known by its executable's name: a same-user program could
-  take that name, but one that can do that can also turn the dot off in the config; the dot
-  guards against apps behaving as designed, not against malware.
+  replay buffer's helper is left out. Since 2026-10-31 (owner) it is known by the private socket
+  the compositor opens for it (`$XDG_RUNTIME_DIR/infynitae/<socket>.recorder`, in a 0700
+  directory no sandbox is given), never by an executable's name, which any app could copy.
+- **A dead lock screen is started again** (owner, 2026-10-31): when the lock's holder dies
+  while locked, the compositor runs the locker itself (`launch.sh lock-screen`), again every 5
+  seconds until one holds the lock; until then the screens stay black and locked.
 - **Input methods get nothing while locked** (2026-10-25): the keys go to the lock screen past
   an input method's keyboard grab, a virtual keyboard types nothing, and no text input is enabled,
   so no text (the password field included) reaches an input method or comes from one.
 - **Layer surfaces** (bars, wallpaper, the launcher) follow decisions L1–L8 (2026-10-21) in
   [foundation/FOUNDATION_ARCHITECTURE.md](foundation/FOUNDATION_ARCHITECTURE.md).
+
+## Security and trust
+
+- **Privileged protocols go only to the apps allowed them** (owner, 2026-10-31;
+  [SECURITY.md](SECURITY.md)). Screen capture, clipboard management, virtual input, the input
+  method, the window list, display control, layer-shell and the session lock are each a power
+  with a list (`ALLOW_*`). An app not allowed one is never shown those globals. Sandboxed apps
+  connect through `security-context-v1` and get a power only when their app id is listed; a
+  native app is known by its executable's device and inode, never its file name. The default
+  lets every native app in (the word `native`) for all powers but the lock, so OBS, screenshot
+  tools and `wtype` keep working; a native app runs with the user's rights anyway. Layer-shell
+  is a power too: a sandboxed app drawing over every window could imitate a lock or password
+  prompt. The lock is Infynitae's own (`infynitae-lock`) and the `SCREEN_LOCKER` command's.
+
+- **Screen sharing asks once per app** (owner, 2026-10-31): the ScreenCast portal always goes
+  through infynitae-portal, which asks before an app's first share (`SCREENSHARE_ASK="app"`, the
+  new default; it was "false", sharing the first screen at once). "Always" is kept per sandbox
+  app id; an app outside a sandbox has no id the portal can trust and is asked every time (the
+  remote desktop's shared "(unsandboxed)" entry is gone for the same reason). Only
+  xdg-desktop-portal may call the backend.
 
 ## Shell IPC
 

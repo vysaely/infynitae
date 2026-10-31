@@ -1,0 +1,24 @@
+#!/bin/sh
+# Asked by infynitae-portal before an app shares the screen (the ScreenCast portal): prints
+# "once", "always" or nothing (deny). With SCREENSHARE_ASK="false" it allows without asking.
+# "Always" is offered only to an app with a sandbox app id (one outside a sandbox has none, so
+# it is asked each time). The picker is MENU_PICKER (empty: fuzzel --dmenu).
+#   screenshare-ask -- <app id>
+[ -f "$HOME/infynitae/live/config.sh" ] && . "$HOME/infynitae/live/config.sh"
+[ "${1:-}" = "--" ] && shift
+case "${SCREENSHARE_ASK:-app}" in
+    false | 0 | no | off) echo once; exit 0 ;;
+esac
+PICKER="${MENU_PICKER:-fuzzel --dmenu}"
+app=$(printf '%s' "${1:-}" | tr -d '\n\r' | cut -c1-80)
+if [ -n "$app" ]; then
+    once="Allow $app to share the screen this time"
+    always="Always allow $app to share the screen"
+    case "$(printf '%s\n' "$once" "$always" "Deny" | $PICKER)" in
+        "$once") echo once ;;
+        "$always") echo always ;;
+    esac
+else
+    once="Allow an app outside a sandbox to share the screen"
+    [ "$(printf '%s\n' "$once" "Deny" | $PICKER)" = "$once" ] && echo once
+fi

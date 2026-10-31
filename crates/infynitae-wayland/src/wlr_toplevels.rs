@@ -47,9 +47,12 @@ pub struct WlrToplevelsState {
 }
 
 impl WlrToplevelsState {
-    pub fn new(dh: &DisplayHandle) -> Self {
+    pub fn new(dh: &DisplayHandle, gate: crate::trust::Gate) -> Self {
         Self {
-            global: dh.create_global::<WaylandState, ZwlrForeignToplevelManagerV1, ()>(3, ()),
+            global: dh
+                .create_global::<WaylandState, ZwlrForeignToplevelManagerV1, crate::trust::Gate>(
+                    3, gate,
+                ),
             managers: Vec::new(),
             handles: HashMap::new(),
         }
@@ -200,13 +203,16 @@ fn states_bytes(states: &[u32]) -> Vec<u8> {
     states.iter().flat_map(|s| s.to_ne_bytes()).collect()
 }
 
-impl GlobalDispatch<ZwlrForeignToplevelManagerV1, ()> for WaylandState {
+impl GlobalDispatch<ZwlrForeignToplevelManagerV1, crate::trust::Gate> for WaylandState {
+    fn can_view(client: Client, gate: &crate::trust::Gate) -> bool {
+        gate.allows(&client)
+    }
     fn bind(
         state: &mut Self,
         _dh: &DisplayHandle,
         _client: &Client,
         resource: New<ZwlrForeignToplevelManagerV1>,
-        _global_data: &(),
+        _global_data: &crate::trust::Gate,
         data_init: &mut DataInit<'_, Self>,
     ) {
         let manager = data_init.init(resource, ());

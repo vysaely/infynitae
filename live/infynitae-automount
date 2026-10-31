@@ -21,9 +21,18 @@ run_udisksctl() {
     ${INFYNITAE_AUTOMOUNT_UDISKSCTL:-udisksctl} "$@"
 }
 
+# a notification's text is plain: a drive's label is the drive's own (anything a stick says), so
+# what a notification daemon would read as markup is escaped
+plain() {
+    printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
+}
 notify() {
     if command -v notify-send >/dev/null 2>&1; then
-        notify-send -a Infynitae "$@" 2>/dev/null || true
+        if [ "$#" -ge 2 ]; then
+            notify-send -a Infynitae "$(plain "$1")" "$(plain "$2")" 2>/dev/null || true
+        else
+            notify-send -a Infynitae "$(plain "$1")" 2>/dev/null || true
+        fi
     fi
 }
 
@@ -128,7 +137,7 @@ mount_device() {
         # Open shows it in the file manager, Eject makes it safe to pull (in the background:
         # the notification waits for its answer)
         (
-            case $(notify_actions -A open=Open -A eject=Eject "$label mounted at $mount_path") in
+            case $(notify_actions -A open=Open -A eject=Eject "$(plain "$label mounted at $mount_path")") in
                 open) xdg-open "$mount_path" >/dev/null 2>&1 ;;
                 eject) eject_device "$dev" "$label" ;;
             esac
@@ -225,15 +234,24 @@ scan_existing() {
     }
     /^(\/org\/freedesktop\/UDisks2\/[a-zA-Z0-9_/]+):/ {
         obj = substr($1, 1, length($1)-1)
+        # a label or a name with a line break can print lines that look like udisks own: an
+        # object, section or property that comes twice, or a device two objects claim, means
+        # one of them is such text, and that object is not trusted
+        if (seen_obj[obj]++) bad[obj] = 1
         section = ""
     }
     /^[ ]+org\.freedesktop\.UDisks2\./ {
         section = $1
         sub(/:$/, "", section)
+        if (seen_sec[obj, section]++) bad[obj] = 1
+    }
+    /^[ ]+[A-Za-z]+:/ {
+        if (section != "" && seen_prop[obj, section, $1]++) bad[obj] = 1
     }
     /^[ ]+Device:[ ]+/ {
         if (section == "org.freedesktop.UDisks2.Block") {
             device[obj] = $2
+            if ((claimed[$2]++) > 0) bad_dev[$2] = 1
         }
     }
     /^[ ]+Drive:[ ]+/ {
@@ -257,6 +275,7 @@ scan_existing() {
         if (section == "org.freedesktop.UDisks2.Block") {
             l = $0
             sub(/^[ ]+IdLabel:[ ]+/, "", l)
+            gsub(/[[:cntrl:]]/, " ", l)
             label[obj] = l
         }
     }
@@ -284,6 +303,10 @@ scan_existing() {
             print "DRIVE" SEP d
         }
         for (o in device) {
+            if ((o in bad) || (device[o] in bad_dev) || device[o] !~ /^\/dev\/[A-Za-z0-9_.\/-]+$/) {
+                print "SKIP" SEP device[o]
+                continue
+            }
             if (o in mountpoints) {
                 d = drive[o]
                 is_mounted = (mountpoints[o] != "" && mountpoints[o] != "[]" && mountpoints[o] !~ /^\[[[:space:]]*\]$/) ? "1" : "0"
@@ -306,6 +329,9 @@ scan_existing() {
             DRIVE)
                 removable_drives="$removable_drives $f1 "
                 ;;
+            SKIP)
+                log "ignoring $f1 (udisks lists it inconsistently: a label with a line break?)"
+                ;;
             BLOCK)
                 handle_block "$f1" "$f2" "$f3" "$f4" "$f5" "$f6" "$f7" "$f8"
                 ;;
@@ -319,15 +345,18 @@ EOF
 # (false when udisks does not know it)
 block_info() {
     run_udisksctl info -b "$1" 2>/dev/null | awk -v SEP="$SEP" '
-    /^  org\.freedesktop\.UDisks2\./ { section = $1; sub(/:$/, "", section) }
-    section == "org.freedesktop.UDisks2.Block" && $1 == "IdLabel:" { l = $0; sub(/^ +IdLabel: */, "", l); label = l }
+    /^\// { if (objs++) bad = 1 }
+    /^  org\.freedesktop\.UDisks2\./ { section = $1; sub(/:$/, "", section); if (secs[section]++) bad = 1 }
+    /^ +[A-Za-z]+:/ { if (section != "" && props[section, $1]++) bad = 1 }
+    section == "org.freedesktop.UDisks2.Block" && $1 == "IdLabel:" { l = $0; sub(/^ +IdLabel: */, "", l); gsub(/[[:cntrl:]]/, " ", l); label = l }
     section == "org.freedesktop.UDisks2.Block" && $1 == "HintAuto:" { ha = $2 }
     section == "org.freedesktop.UDisks2.Block" && $1 == "HintSystem:" { hs = $2 }
     section == "org.freedesktop.UDisks2.Block" && $1 == "HintIgnore:" { hi = $2 }
     section == "org.freedesktop.UDisks2.Block" && $1 == "Drive:" { d = $2; gsub(/\047/, "", d) }
     section == "org.freedesktop.UDisks2.Filesystem" && $1 == "MountPoints:" { if (NF > 1) m = 1 }
     END {
-        if (d == "") exit 1
+        # text that only looks like udisks own lines (see scan_existing): not trusted
+        if (d == "" || bad) exit 1
         print label SEP (ha == "true" ? "true" : "false") SEP (hs == "true" ? "true" : "false") SEP (hi == "true" ? "true" : "false") SEP (m ? 1 : 0) SEP d
     }'
 }
