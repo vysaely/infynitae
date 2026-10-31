@@ -362,9 +362,19 @@ static void spawn_detached(const char *cmd) {
 /* `script` run by sh with `a1` and `a2` as "$1" and "$2": a name from outside (a Wi-Fi network's,
  * a Bluetooth device's, an app's) is never read as shell code, whatever quotes it holds. */
 /* A tray app's window, opened again: its program by its name (lowercased), else its desktop file */
+/* "Open" on a background app: its name is only a process's short name, which the process chose,
+ * so it is never run as a command. A name with a slash (or that looks like an option) is refused;
+ * otherwise the app opens through its desktop file: the one with that id, else the one whose
+ * Exec program has that name. */
 #define TRAY_LAUNCH_SCRIPT \
     "app=$(printf '%s' \"$1\" | tr '[:upper:]' '[:lower:]'); " \
-    "command -v \"$app\" >/dev/null 2>&1 && exec \"$app\" || gtk-launch \"$app\" 2>/dev/null"
+    "case \"$app\" in ''|*/*|-*|.*) exit 0;; esac; " \
+    "gtk-launch \"$app\" 2>/dev/null && exit 0; " \
+    "IFS=:; for d in \"${XDG_DATA_HOME:-$HOME/.local/share}\" ${XDG_DATA_DIRS:-/usr/local/share:/usr/share}; do " \
+    "for f in \"$d\"/applications/*.desktop; do [ -f \"$f\" ] || continue; " \
+    "e=$(sed -n 's/^Exec=//p' \"$f\" | head -n1); e=${e%% *}; e=${e##*/}; " \
+    "if [ \"$(printf '%s' \"$e\" | tr '[:upper:]' '[:lower:]')\" = \"$app\" ]; then " \
+    "id=${f##*/}; exec gtk-launch \"${id%.desktop}\"; fi; done; done"
 
 static void spawn_script(const char *script, const char *a1, const char *a2) {
     pid_t pid = fork();
@@ -1158,7 +1168,7 @@ static void start_async_refresh(EdgeApp *app, int kind) {
             execl("/bin/sh", "sh", "-c", "infynitae msg snapshot 2>/dev/null", (char *)NULL);
         } else if (kind == MODE_CONTROL) {
             execl("/bin/sh", "sh", "-c",
-                  "ssid=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | sed -n 's/^yes://p' | head -1); "
+                  "ssid=$(nmcli -t -f active,ssid dev wifi 2>/dev/null | sed -n 's/^yes://p' | head -1 | tr '\\t\\r' '  '); "
                   "wradio=$(nmcli radio wifi 2>/dev/null); "
                   "bt=$(bluetoothctl show 2>/dev/null | grep -q 'Powered: yes' && echo on || echo off); "
                   "btdev=$( [ \"$bt\" = on ] && bluetoothctl devices Connected 2>/dev/null | head -1 | cut -d' ' -f3- ); "
@@ -1173,7 +1183,11 @@ static void start_async_refresh(EdgeApp *app, int kind) {
                 execl("/bin/sh", "sh", "-c",
                       "nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan no 2>/dev/null "
                       "| sed 's/\\\\:/\\x1f/g' "
-                      "| awk -F: '$4 != \"\" { gsub(\"\\x1f\", \":\", $4); if (!seen[$4]++) printf \"%d\\t%s\\t%s\\t%s%%\\n\", ($1==\"*\"), $4, $4, $2 }' "
+                      /* a network's name is the access point's: a tab in it is carried as \036 in the id (the
+                       * connect script turns it back) and shown as a space, so it never adds a field */
+                      "| awk -F: '$4 != \"\" { gsub(\"\\x1f\", \":\", $4); if (seen[$4]++) next; "
+                      "id = $4; gsub(\"\\t\", \"\\036\", id); lbl = $4; gsub(/[[:cntrl:]]/, \" \", lbl); "
+                      "printf \"%d\\t%s\\t%s\\t%s%%\\n\", ($1==\"*\"), id, lbl, $2 }' "
                       "| head -n 6",
                       (char *)NULL);
             } else if (app->subpanel == SUB_BT) {
@@ -2347,8 +2361,9 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
         if (sidx >= 0 && sidx < app->sub_count) {
             SubItem *si = &app->sub_items[sidx];
             if (app->subpanel == SUB_WIFI) {
-                spawn_script("nmcli connection up id \"$1\" >/dev/null 2>&1 || "
-                             "nmcli dev wifi connect \"$1\" >/dev/null 2>&1",
+                spawn_script("s=$(printf '%s' \"$1\" | tr '\\036' '\\t'); "
+                             "nmcli connection up id \"$s\" >/dev/null 2>&1 || "
+                             "nmcli dev wifi connect \"$s\" >/dev/null 2>&1",
                              si->id, NULL);
                 snprintf(app->wifi_label, sizeof(app->wifi_label), "%s", si->label);
                 for (int k = 0; k < app->sub_count; k++) app->sub_items[k].active = (k == sidx);

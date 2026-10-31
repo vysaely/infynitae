@@ -15,17 +15,19 @@ picker="${2:-fuzzel --dmenu}"
 sources=$(cat)
 log="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae/screenshare.log"
 note() { { printf '%s %s\n' "$(date '+%F %T')" "$1" >> "$log"; } 2>/dev/null; }
-note "offered: $(printf '%s' "$sources" | tr '\n' '|')"
+# the log names screens only: a window's title can be private (a document, a chat)
+what() { case "$1" in Monitor:*) printf '%s' "$1" ;; '') printf 'nothing (cancelled)' ;; *) printf 'a window' ;; esac; }
+note "offered: $(printf '%s\n' "$sources" | grep -c '^Monitor: ') screen(s), $(printf '%s\n' "$sources" | grep -vc '^Monitor: ') window(s)"
 
 if [ "$mode" = "first" ]; then
     monitor=$(printf '%s\n' "$sources" | grep -m1 '^Monitor: ')
     if [ -n "$monitor" ]; then
-        note "shared at once: $monitor"
+        note "shared at once: $(what "$monitor")"
         printf '%s\n' "$monitor"
         exit 0
     fi
 fi
 
 choice=$(printf '%s\n' "$sources" | $picker)
-note "picked: ${choice:-nothing (cancelled)}"
+note "picked: $(what "$choice")"
 [ -n "$choice" ] && printf '%s\n' "$choice"

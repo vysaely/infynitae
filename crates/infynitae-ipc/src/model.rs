@@ -18,6 +18,9 @@ pub struct Model {
     pub elements: Vec<(u64, Value)>,
     pub focus: Option<u64>,
     pub attention: Vec<u64>,
+    /// The session is locked (`ext-session-lock`), as the compositor says; the sleep lock asks
+    /// this instead of looking for a process name (M1, owner 2026-10-31).
+    pub locked: bool,
 }
 
 /// An element as the shell names it: `[instance, element]` (D-B4, INV-STAGE-3).
@@ -98,7 +101,14 @@ impl Model {
                 .iter()
                 .map(|e| e.get().get())
                 .collect(),
+            locked: false,
         }
+    }
+
+    /// The copy with the session's lock state, which the adapter holds (not Core).
+    pub fn with_locked(mut self, locked: bool) -> Model {
+        self.locked = locked;
+        self
     }
 
     /// The Snapshot body (C7.2 Queries).
@@ -122,6 +132,7 @@ impl Model {
                 "attention",
                 Value::Arr(self.attention.iter().map(|&e| element_ref(i, e)).collect()),
             ),
+            ("locked", self.locked.into()),
         ])
     }
 
@@ -176,6 +187,9 @@ impl Model {
                 "elements",
                 Value::Arr(next.attention.iter().map(|&e| element_ref(i, e)).collect()),
             ));
+        }
+        if self.locked != next.locked {
+            ev.push(event("lock", "locked", next.locked.into()));
         }
         ev
     }
@@ -336,4 +350,25 @@ pub fn layers(core: &Core) -> Value {
         })
         .collect();
     Value::obj([("windows", Value::Arr(windows))])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use infynitae_core::navigation::PersistedCameras;
+
+    /// M1 (owner, 2026-10-31): the snapshot says whether the session is locked, and a change of
+    /// it is an event, so the sleep lock asks the compositor instead of a process name.
+    #[test]
+    fn the_snapshot_says_whether_the_session_is_locked() {
+        let (core, _input, _shell, _token) = Core::new(PersistedCameras::default());
+        let open = Model::of(&core);
+        assert_eq!(open.to_value().get("locked"), Some(&Value::Bool(false)));
+        let locked = Model::of(&core).with_locked(true);
+        assert_eq!(locked.to_value().get("locked"), Some(&Value::Bool(true)));
+        let ev = open.events_to(&locked);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(ev[0].get("event"), Some(&Value::Str("lock".into())));
+        assert_eq!(ev[0].get("locked"), Some(&Value::Bool(true)));
+    }
 }

@@ -84,7 +84,14 @@ pub(crate) struct SessionLock {
     fingers: Vec<u32>,
     /// Unlocked: Core's releases and the keyboard's return are still to come.
     just_unlocked: bool,
+    /// When the compositor last started the locker because the holder died (M4).
+    relaunched: Option<std::time::Instant>,
+    /// How many times it did (for the tests).
+    relaunches: u32,
 }
+
+/// How long a locker the compositor started has to take the lock before it is started again.
+const RELAUNCH_AFTER: std::time::Duration = std::time::Duration::from_secs(5);
 
 impl WaylandState {
     /// Offers `ext_session_lock_manager_v1`. Only for a backend that draws locked frames and
@@ -92,7 +99,10 @@ impl WaylandState {
     pub fn enable_session_lock(&mut self) {
         if self.session_lock.is_none() {
             self.session_lock = Some(SessionLock {
-                manager: SessionLockManagerState::new::<Self, _>(&self.dh, |_| true),
+                manager: SessionLockManagerState::new::<Self, _>(
+                    &self.dh,
+                    self.trust.gate(crate::trust::Capability::Lock).filter(),
+                ),
                 locked: false,
                 holder: None,
                 holder_client: None,
@@ -103,6 +113,8 @@ impl WaylandState {
                 phys_down: HashSet::new(),
                 fingers: Vec::new(),
                 just_unlocked: false,
+                relaunched: None,
+                relaunches: 0,
             });
         }
     }
@@ -288,6 +300,43 @@ impl WaylandState {
         }
     }
 
+    /// After each client dispatch: while locked, a lock holder whose client is gone is replaced
+    /// by the compositor itself, which starts the locker (`launch.sh lock-screen`, the
+    /// `SCREEN_LOCKER`), and again every `RELAUNCH_AFTER` until one holds the lock (M4, owner
+    /// 2026-10-31). The session stays locked meanwhile. Returns whether it started one.
+    pub fn restart_dead_locker(&mut self, now: std::time::Instant) -> bool {
+        let Some(l) = self.session_lock.as_ref() else {
+            return false;
+        };
+        if !l.locked || l.holder.is_none() {
+            return false;
+        }
+        let mut connected = false;
+        if let Some(id) = l.holder_client.clone() {
+            self.dh
+                .backend_handle()
+                .with_all_clients(|c| connected |= c == id);
+        }
+        if connected
+            || l.relaunched
+                .is_some_and(|t| now.saturating_duration_since(t) < RELAUNCH_AFTER)
+        {
+            return false;
+        }
+        if let Some(l) = self.session_lock.as_mut() {
+            l.relaunched = Some(now);
+            l.relaunches += 1;
+        }
+        eprintln!("[infynitae] Session lock: the locker is gone while locked; starting it again");
+        self.spawn_action("lock-screen");
+        true
+    }
+
+    /// How many times the compositor started the locker after the holder died.
+    pub fn locker_restarts(&self) -> u32 {
+        self.session_lock.as_ref().map_or(0, |l| l.relaunches)
+    }
+
     /// After each client dispatch: an unlock asked for during it ends the lock only if the holder
     /// destroyed its confirmed lock (its lock object is gone, its client still connected). An
     /// `unlock_and_destroy` on a refused lock, or the holder's death, leaves the session locked.
@@ -377,6 +426,7 @@ impl SessionLockHandler for WaylandState {
         if l.holder.as_ref().is_some_and(|h| h.is_alive()) {
             return; // a live lock client holds the lock already
         }
+        l.relaunched = None;
         l.holder = Some(confirmation.ext_session_lock().clone());
         l.holder_client = confirmation.ext_session_lock().client().map(|c| c.id());
         l.unlock_requested = false;

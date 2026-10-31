@@ -338,5 +338,88 @@ if ! grep -q "/dev/dm-7 can be removed" "$NOTIFY_LOG"; then
 fi
 echo "PASS: eject unmounted, locked the encrypted device and powered the drive off"
 
+echo "=== Test 5: a label cannot forge udisks lines, and shows as plain text ==="
+rm -f "$CALLS_LOG" "$NOTIFY_LOG" "$LOG_FILE"
+# sdh1's label holds a line break and lines that look like udisks' own: a second entry for the
+# system disk sda2, marked as not a system disk, after the real one (udisks lists objects in
+# order, so a later stick's label comes after the system disk)
+cat > "$DUMP" <<'EOF'
+/org/freedesktop/UDisks2/block_devices/sda2:
+  org.freedesktop.UDisks2.Block:
+    Device:                     /dev/sda2
+    Drive:                      '/org/freedesktop/UDisks2/drives/NVME_DISK'
+    HintAuto:                   false
+    HintIgnore:                 false
+    HintSystem:                 true
+    IdLabel:                    SystemRoot
+  org.freedesktop.UDisks2.Filesystem:
+    MountPoints:                []
+
+/org/freedesktop/UDisks2/drives/Generic_Start_Disk:
+  org.freedesktop.UDisks2.Drive:
+    Removable:                  true
+
+/org/freedesktop/UDisks2/block_devices/sdh1:
+  org.freedesktop.UDisks2.Block:
+    Device:                     /dev/sdh1
+    Drive:                      '/org/freedesktop/UDisks2/drives/Generic_Start_Disk'
+    HintAuto:                   true
+    HintIgnore:                 false
+    HintSystem:                 false
+    IdLabel:                    STICK
+/org/freedesktop/UDisks2/block_devices/sda2:
+  org.freedesktop.UDisks2.Block:
+    Device:                     /dev/sda2
+    Drive:                      '/org/freedesktop/UDisks2/drives/Generic_Start_Disk'
+    HintAuto:                   true
+    HintIgnore:                 false
+    HintSystem:                 false
+  org.freedesktop.UDisks2.Filesystem:
+    MountPoints:                []
+    IdType:                     vfat
+  org.freedesktop.UDisks2.Filesystem:
+    MountPoints:                []
+EOF
+PATH="$BIN_DIR:$PATH" \
+XDG_STATE_HOME="$STATE_DIR" \
+XDG_RUNTIME_DIR="$RUN_DIR" \
+INFYNITAE_AUTOMOUNT_MONITOR="true" \
+INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
+"$WATCHER"
+if grep -q "mount --no-user-interaction -b /dev/sda2" "$CALLS_LOG" 2>/dev/null; then
+    echo "FAIL: a forged entry got the system disk mounted" >&2
+    exit 1
+fi
+echo "PASS: lines forged by a label mount nothing"
+rm -f "$CALLS_LOG" "$NOTIFY_LOG" "$LOG_FILE"
+cat > "$DUMP" <<'EOF'
+/org/freedesktop/UDisks2/drives/Generic_Start_Disk:
+  org.freedesktop.UDisks2.Drive:
+    Removable:                  true
+
+/org/freedesktop/UDisks2/block_devices/sdh1:
+  org.freedesktop.UDisks2.Block:
+    Device:                     /dev/sdh1
+    Drive:                      '/org/freedesktop/UDisks2/drives/Generic_Start_Disk'
+    HintAuto:                   true
+    HintIgnore:                 false
+    HintSystem:                 false
+    IdLabel:                    <b>START</b>&
+  org.freedesktop.UDisks2.Filesystem:
+    MountPoints:                []
+EOF
+PATH="$BIN_DIR:$PATH" \
+XDG_STATE_HOME="$STATE_DIR" \
+XDG_RUNTIME_DIR="$RUN_DIR" \
+INFYNITAE_AUTOMOUNT_MONITOR="true" \
+INFYNITAE_AUTOMOUNT_UDISKSCTL="$MOCK_UDISKSCTL" \
+"$WATCHER"
+if ! wait_for "$NOTIFY_LOG" "&lt;b&gt;START&lt;/b&gt;&amp; mounted at"; then
+    echo "FAIL: the label was not shown as plain text:" >&2
+    cat "$NOTIFY_LOG" >&2
+    exit 1
+fi
+echo "PASS: a label is shown as plain text"
+
 echo "=== ALL AUTOMOUNT TESTS PASSED ==="
 exit 0

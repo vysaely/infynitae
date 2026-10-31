@@ -47,6 +47,10 @@ impl LoopExtension for ShellExtension {
         let done = self.server.service(core);
         (done.effects, done.changed)
     }
+
+    fn set_locked(&mut self, locked: bool) {
+        self.server.set_locked(locked);
+    }
 }
 
 /// The shell server as the backend starts it (after its signal handlers exist).

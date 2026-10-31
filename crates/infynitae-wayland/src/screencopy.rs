@@ -144,8 +144,9 @@ pub struct ScreencopyState {
 }
 
 impl ScreencopyState {
-    pub fn new(dh: &DisplayHandle) -> Self {
-        let global = dh.create_global::<WaylandState, ZwlrScreencopyManagerV1, ()>(3, ());
+    pub fn new(dh: &DisplayHandle, gate: crate::trust::Gate) -> Self {
+        let global =
+            dh.create_global::<WaylandState, ZwlrScreencopyManagerV1, crate::trust::Gate>(3, gate);
         let mut hide = std::env::var("SCREENCOPY_CURSOR")
             .map(|v| matches!(v.to_lowercase().as_str(), "0" | "false" | "off" | "no"))
             .unwrap_or(false);
@@ -259,13 +260,16 @@ impl ScreencopyState {
 // Manager Dispatch
 // -----------------------------------------------------------------------------
 
-impl GlobalDispatch<ZwlrScreencopyManagerV1, ()> for WaylandState {
+impl GlobalDispatch<ZwlrScreencopyManagerV1, crate::trust::Gate> for WaylandState {
+    fn can_view(client: Client, gate: &crate::trust::Gate) -> bool {
+        gate.allows(&client)
+    }
     fn bind(
         _state: &mut Self,
         _dh: &DisplayHandle,
         _client: &Client,
         resource: New<ZwlrScreencopyManagerV1>,
-        _global_data: &(),
+        _global_data: &crate::trust::Gate,
         data_init: &mut DataInit<'_, Self>,
     ) {
         data_init.init(resource, ());
@@ -527,7 +531,10 @@ mod tests {
     #[test]
     fn serves_capture_defaults_to_false_and_enables() {
         let display: Display<WaylandState> = Display::new().unwrap();
-        let state = ScreencopyState::new(&display.handle());
+        let state = ScreencopyState::new(
+            &display.handle(),
+            crate::trust::SharedPolicy::default().gate(crate::trust::Capability::Capture),
+        );
         assert!(!state.serves_capture());
         state.enable_capture();
         assert!(state.serves_capture());

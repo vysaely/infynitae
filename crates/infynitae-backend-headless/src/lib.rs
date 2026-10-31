@@ -469,6 +469,7 @@ pub fn run_headless_with(
         };
         event_loop.dispatch(timeout, &mut ())?;
         if let Some(ext) = extension.as_mut() {
+            ext.set_locked(state.is_locked());
             let (fx, changed) = ext.service(state.core_mut());
             state.apply(&fx);
             if changed {

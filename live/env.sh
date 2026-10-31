@@ -135,13 +135,17 @@ export DCONF_PROFILE="$INFYNITAE_CFG_DIR/dconf-profile"
 # 7. XDG Desktop Portal routing & Global Shortcuts backend
 PORTAL_DATA_DIR="$HOME/.local/share/xdg-desktop-portal/portals"
 mkdir -p "$PORTAL_DATA_DIR"
-# REMOTE_DESKTOP: ours also serves RemoteDesktop and ScreenCast, passing the screen cast through
-# to xdg-desktop-portal-wlr (a remote desktop session's screens come from the same backend)
+# ScreenCast goes through ours, which asks once per app before a share and passes the rest
+# through to xdg-desktop-portal-wlr (owner, 2026-10-31); REMOTE_DESKTOP adds RemoteDesktop. A
+# portal from before the consent has no screenshare-ask next to it: then wlr directly.
+REMOTE_IFACES="" SCREENCAST_BACKEND="wlr" RD_BACKEND="wlr"
+if [ -x "$HOME/infynitae/live/remote/screenshare-ask" ]; then
+    REMOTE_IFACES="org.freedesktop.impl.portal.ScreenCast;" SCREENCAST_BACKEND="infynitae"
+fi
 case "${REMOTE_DESKTOP:-false}" in
     1|true|yes|on|TRUE|True)
         REMOTE_IFACES="org.freedesktop.impl.portal.RemoteDesktop;org.freedesktop.impl.portal.ScreenCast;"
-        SCREENCAST_BACKEND="infynitae" ;;
-    *) REMOTE_IFACES="" SCREENCAST_BACKEND="wlr" ;;
+        SCREENCAST_BACKEND="infynitae" RD_BACKEND="infynitae" ;;
 esac
 cat << EOF > "$PORTAL_DATA_DIR/infynitae.portal"
 [portal]
@@ -156,7 +160,7 @@ cat << EOF > "$PORTAL_CFG_DIR/infynitae-portals.conf"
 [preferred]
 default=gtk;wlr
 org.freedesktop.impl.portal.GlobalShortcuts=infynitae
-org.freedesktop.impl.portal.RemoteDesktop=$SCREENCAST_BACKEND
+org.freedesktop.impl.portal.RemoteDesktop=$RD_BACKEND
 org.freedesktop.impl.portal.ScreenCast=$SCREENCAST_BACKEND
 org.freedesktop.impl.portal.Screenshot=wlr
 org.freedesktop.impl.portal.Settings=gtk
