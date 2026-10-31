@@ -947,6 +947,12 @@ fn the_shell_brings_a_window_back_at_its_size_or_maximized() {
         "this screen's usable area"
     );
     draw(&mut r, a, (1920, 1080));
+    // maximized as by Super+Enter: it follows the screen
+    let o = r.ls.output();
+    r.ls.reconfigure(o, &output((1366, 768), 120));
+    r.frame();
+    assert_eq!(last_size(&r, a), Some((1366, 768)), "it follows the screen");
+    draw(&mut r, a, (1366, 768));
     focus(&mut r, ea);
     super_enter_on(&mut r, ea);
     assert_eq!(last_size(&r, a), Some((700, 500)), "Super+Enter restores");
