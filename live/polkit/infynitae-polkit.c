@@ -1,6 +1,6 @@
 /*
  * Infynitae Native Modular Polkit Authentication Agent
- * Zero-bloat, lightweight PolicyKit authentication dialog for Wayland.
+ * The PolicyKit authentication dialog (password prompts for system actions) on Wayland.
  *
  * Implements PolkitAgentListener, registers with org.freedesktop.PolicyKit1.Authority,
  * and creates transient GTK3 Wayland dialogs upon challenge.

@@ -1,6 +1,6 @@
 #!/bin/sh
-# Infynitae Universal Settings & Tooling Engine
-# Zero-bloat, daemonless settings synchronization across Wayland, GTK, Qt, and Xwayland.
+# infynitae-settings: reads and changes ~/.config/infynitae/config and applies it
+# to the toolkits (GTK, Qt) and apps that keep their own files; no daemon runs for it.
 set -e
 umask 077
 
@@ -73,7 +73,7 @@ Comment=Default Cursor Theme
 Inherits=$CURSOR_THEME
 EOF
 
-    # 3. Synchronize GTK 3 & GTK 4 settings.ini + unified gtk.css (zero daemons, pure disk file)
+    # 3. Synchronize GTK 3 & GTK 4 settings.ini + gtk.css (theme sync; files only)
     for gtk_dir in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do
         mkdir -p "$gtk_dir"
         put_file "$gtk_dir/settings.ini" << EOF
@@ -124,7 +124,7 @@ EOF
     if [ ! -f "$mako_cfg" ] || grep -q 'managed by infynitae' "$mako_cfg" 2>/dev/null; then
         mkdir -p "$HOME/.config/mako"
         put_file "$mako_cfg" << EOF
-# managed by infynitae — minimalist single-border notification toast (5s auto-expire + history)
+# managed by infynitae — notifications: one border, gone after 5 s, kept in the history
 font=Sans 8.5
 markup=1
 format=<b>%s</b>\n<span alpha="68%" size="small">%b</span>
@@ -465,7 +465,7 @@ cmd_list() {
 case "$1" in
     apply)
         apply_settings
-        echo "==> Infynitae universal settings applied cleanly."
+        echo "==> Settings applied."
         ;;
     set)
         shift
@@ -509,7 +509,7 @@ case "$1" in
         fi
         ;;
     *)
-        echo "Infynitae Universal Settings Engine (Zero-Bloat)"
+        echo "infynitae-settings"
         echo "Usage: infynitae-settings <command>"
         echo ""
         echo "Commands:"

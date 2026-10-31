@@ -1,6 +1,6 @@
 /*
  * Infynitae GlobalShortcuts XDG Desktop Portal Implementation
- * Pure C + GIO. Zero bloat (<2MB RAM, 0% CPU idle).
+ * C and GIO; idle, it only waits for D-Bus calls.
  * Implements org.freedesktop.impl.portal.GlobalShortcuts for Discord, OBS, WebRTC,
  * org.freedesktop.ScreenSaver (apps keeping the screens on while they play video), and
  * RemoteDesktop with ScreenCast (remote-desktop.c).

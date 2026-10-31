@@ -1,8 +1,8 @@
 /*
- * infynitae-lock - Native Minimalist Wayland Screen Locker & Start Screen Greeter
+ * infynitae-lock - the lock screen (and the start screen after login)
  * 
  * Part of the Infynitae Compositor ecosystem.
- * Philosophy: Zero bloat, instant startup, deep obsidian canvas aesthetics,
+ * It draws in the theme colors from the config (CANVAS_COLOR, SURFACE_COLOR, …),
  * standard Linux PAM authentication, ext-session-lock-v1: the compositor shows only this
  * client's surfaces and gives them every key until it unlocks, even if this client dies.
  */
@@ -616,7 +616,7 @@ static void render_output(LockOutput *output) {
     int w = output->width;
     int h = output->height;
 
-    // 1. Background: Deep obsidian infinite canvas (CANVAS_COLOR) with subtle radial vignette
+    // 1. Background: CANVAS_COLOR, with a subtle radial vignette
     cairo_pattern_t *pat = cairo_pattern_create_radial(w / 2.0, h / 2.0, 50, w / 2.0, h / 2.0, w / 1.2);
     cairo_pattern_add_color_stop_rgb(pat, 0.0, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2]);
     cairo_pattern_add_color_stop_rgb(pat, 1.0, app->canvas_rgb[0], app->canvas_rgb[1], app->canvas_rgb[2]);
@@ -724,7 +724,7 @@ static void render_output(LockOutput *output) {
     cairo_set_source_rgba(cr, 0.82, 0.87, 0.96, 0.88);
     draw_text_centered(cr, layout, "Sans Medium 13", app->username, cx, avatar_y + avatar_radius + 20.0, false);
 
-    // 4. Password Input / Status Box (Sharp 1px Single-Border Obsidian Geometry)
+    // 4. Password input / status box (1 px border, square corners)
     double pill_w = 276.0;
     double pill_h = 38.0;
     double pill_x = round(cx - (pill_w / 2.0));

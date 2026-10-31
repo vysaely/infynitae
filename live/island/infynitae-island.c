@@ -1,7 +1,7 @@
 /*
  * Infynitae Native Taskbar (Super+W) & System Control / StatusNotifier Tray (Super+A)
  *
- * Barebones, monochrome obsidian geometry (#0b0f14 background, 2px sharp corners,
+ * Drawn in the theme colors from the config (CANVAS_COLOR, …): square corners,
  * 1px subtle border, zero nested buttons, zero visual bloat):
  *   - Position (`ISLAND_EDGE="bottom|top"`, `ISLAND_CONTROL_SIDE="right|left"`) is read
  *     strictly from `~/.config/infynitae/config` (no UI buttons for it).
@@ -1225,7 +1225,7 @@ static void refresh_clipboard_data(IslandApp *app) {
 }
 
 /* ========================================================================== */
-/* Cairo + Pango Helpers (Barebones Monochrome Obsidian)                      */
+/* Cairo + Pango helpers                                                       */
 /* ========================================================================== */
 static void draw_rect(cairo_t *cr, double x, double y, double w, double h) {
     cairo_rectangle(cr, round(x) + 0.5, round(y) + 0.5, round(w) - 1.0, round(h) - 1.0);
@@ -1427,7 +1427,7 @@ static void update_surface_input_region(IslandOutput *out) {
 }
 
 /* ========================================================================== */
-/* Fast Dirty-Rect Renderer (Barebones Clean)                                 */
+/* Renderer (redraws only damaged rectangles)                                 */
 /* ========================================================================== */
 static bool allocate_buffer(IslandOutput *out) {
     if (out->buffer && out->buf_w == out->width && out->buf_h == out->height) return true;
@@ -1542,7 +1542,7 @@ static void render_output(IslandOutput *out) {
         IslandMode active_m = (app->mode != MODE_CLOSED) ? app->mode : app->target_mode;
 
         /* ─────────────────────────────────────────────────────────────────── */
-        /* A. MINIMALIST WINDOW STRIP (Super+W) — single outer 1px border      */
+        /* A. Window strip (Super+W): one outer 1 px border                    */
         /* ─────────────────────────────────────────────────────────────────── */
         if (active_m == MODE_CENTER) {
             bool show_launcher = (app->launcher_open || app->search_len > 0);
@@ -1578,7 +1578,7 @@ static void render_output(IslandOutput *out) {
             cur_dw = (int)bar_w + 4;
             cur_dh = (int)total_h + 4;
 
-            /* Single flat dark obsidian window + 1px border from config */
+            /* one flat panel in SURFACE_COLOR, 1 px border from the config */
             cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.97 * ease);
             fill_rect(cr, bar_x, bar_y, bar_w, total_h);
 
@@ -1660,7 +1660,7 @@ static void render_output(IslandOutput *out) {
         }
 
         /* ─────────────────────────────────────────────────────────────────── */
-        /* B. MINIMALIST CONTROL WINDOW (Super+A) — single outer 1px border    */
+        /* B. Control panel (Super+A): one outer 1 px border                   */
         /* ─────────────────────────────────────────────────────────────────── */
         if (active_m == MODE_CONTROL) {
             int sub_rows = (app->subpanel != SUB_NONE) ? (app->sub_count > 0 ? app->sub_count : 1) : 0;
@@ -1683,7 +1683,7 @@ static void render_output(IslandOutput *out) {
             cur_dw = (int)ctrl_w + 4;
             cur_dh = (int)ctrl_h + 4;
 
-            /* Single flat dark obsidian window + 1px border from config */
+            /* one flat panel in SURFACE_COLOR, 1 px border from the config */
             cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.97 * ease);
             fill_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h);
 
@@ -1936,7 +1936,7 @@ static void render_output(IslandOutput *out) {
         }
 
         /* ─────────────────────────────────────────────────────────────────── */
-        /* C. MINIMALIST CLIPBOARD BAR (Super+V) — single outer 1px border     */
+        /* C. Clipboard bar (Super+V): one outer 1 px border                   */
         /* ─────────────────────────────────────────────────────────────────── */
         if (active_m == MODE_CLIPBOARD) {
             int shown_clips = app->filtered_clip_count < VISIBLE_CLIP_ITEMS

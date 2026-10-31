@@ -78,7 +78,7 @@ if [ -z "$LIBSEAT_BACKEND" ]; then
     fi
 fi
 
-# 6. Load user config and synchronize universal settings
+# 6. Load the user config and apply its settings
 if [ -f "$HOME/infynitae/live/config.sh" ]; then
     . "$HOME/infynitae/live/config.sh"
 fi

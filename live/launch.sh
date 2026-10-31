@@ -1,5 +1,5 @@
 #!/bin/sh
-# Universal action launcher for Infynitae
+# Infynitae's shortcut actions (the compositor runs: launch.sh <action>)
 # Dispatches shortcuts: terminal (Super+Q), file-manager (Super+E), launcher (Super+W)
 ACTION="$1"
 
@@ -70,7 +70,7 @@ if [ -x "$USER_SCRIPT" ]; then
     exec "$USER_SCRIPT" "$ACTION"
 fi
 
-# Universal terminal resolution (respects config if specified, or auto-detects kitty/alacritty/foot/etc.)
+# The terminal: TERMINAL from the config, else the first installed (kitty, alacritty, foot…)
 resolve_terminal() {
     if [ -n "$TERMINAL" ] && [ "$TERMINAL" != "auto" ]; then
         echo "$TERMINAL"

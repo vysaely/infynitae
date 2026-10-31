@@ -459,12 +459,12 @@ ENABLE_ISLAND="true"
     # options: true  · false (falls back to fuzzel / control-menu)
 
 ISLAND_EDGE="top"
-    # Which screen edge the Dynamic Island & Quick Control Box slide in from [reload]
+    # Which screen edge the island and the control panel open from [reload]
     # default: top
     # options: top  · bottom
 
 ISLAND_CONTROL_SIDE="right"
-    # Which corner the Quick Control Box sits on ("left" leaves top-right window [X] buttons clear) [reload]
+    # Which corner the control panel sits in ("left" keeps clear of window close buttons top right) [reload]
     # default: right
     # options: right  · left
 

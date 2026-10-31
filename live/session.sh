@@ -1,5 +1,5 @@
 #!/bin/sh
-# Infynitae Native Session Starter (Barebones & Fast)
+# Infynitae session start script
 # Executed by the compositor's --exec argument.
 umask 077
 
@@ -121,7 +121,7 @@ if [ -n "$WP_BIN" ]; then
     fi
 fi
 
-# 4b. Native Dynamic Island & Top-Edge Touch Hybrid Shell (ENABLE_ISLAND)
+# 4b. The island: window strip, control panel and clipboard (ENABLE_ISLAND)
 case "${ENABLE_ISLAND:-true}" in
     0|false|no|off|FALSE|False) ;;
     *)
@@ -132,7 +132,7 @@ case "${ENABLE_ISLAND:-true}" in
 esac
 
 
-# 6. Native Screen Recorder & 20-minute Replay Buffer (Invincible background watchdog)
+# 6. Screen recorder and replay buffer (the last 20 minutes; a supervisor restarts it)
 if [ "${ENABLE_REPLAY_BUFFER:-false}" = "true" ] || [ "${ENABLE_REPLAY_BUFFER:-false}" = "1" ]; then
     if [ -x "$HOME/.local/bin/infynitae-recorder" ]; then
         "$HOME/.local/bin/infynitae-recorder" supervisor >/dev/null 2>&1 &
@@ -159,7 +159,7 @@ case "${CLIPBOARD_HISTORY:-true}" in
         ;;
 esac
 
-# 6c. Synchronize unified desktop theme & settings (Mako, Fuzzel, GTK, Qt, Terminals)
+# 6c. Theme sync: the config's colors and fonts to mako, fuzzel, GTK, Qt and terminals
 if [ -f "$HOME/infynitae/live/settings.sh" ]; then
     sh "$HOME/infynitae/live/settings.sh" apply >/dev/null 2>&1 || true
 fi
