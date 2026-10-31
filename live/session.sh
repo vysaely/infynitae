@@ -82,11 +82,19 @@ for r in "$HOME/.local/bin/infynitae-reload" "$HOME/infynitae/live/infynitae-rel
 done
 
 # 3. Native Polkit authentication agent (for sudo / system prompts in GUI)
-if [ -x "$HOME/.local/bin/infynitae-polkit" ]; then
-    "$HOME/.local/bin/infynitae-polkit" >/dev/null 2>&1 &
-elif [ -n "$POLKIT_AGENT" ] && [ -x "$POLKIT_AGENT" ]; then
-    "$POLKIT_AGENT" >/dev/null 2>&1 &
-fi
+case "${POLKIT_AGENT:-auto}" in
+    none|off|false|0|FALSE|False) ;;
+    auto|"")
+        if [ -x "$HOME/.local/bin/infynitae-polkit" ]; then
+            "$HOME/.local/bin/infynitae-polkit" >/dev/null 2>&1 &
+        fi
+        ;;
+    *)
+        if [ -x "$POLKIT_AGENT" ]; then
+            "$POLKIT_AGENT" >/dev/null 2>&1 &
+        fi
+        ;;
+esac
 
 # 4. Wallpaper & Canvas Background (Configured or Auto-Detected)
 WP_BIN=""
@@ -106,10 +114,15 @@ if [ -n "$WP_BIN" ]; then
     fi
 fi
 
-# 4b. Native Dynamic Island & Top-Edge Touch Hybrid Shell
-if [ -x "$HOME/.local/bin/infynitae-island" ]; then
-    "$HOME/.local/bin/infynitae-island" >/dev/null 2>&1 &
-fi
+# 4b. Native Dynamic Island & Top-Edge Touch Hybrid Shell (ENABLE_ISLAND)
+case "${ENABLE_ISLAND:-true}" in
+    0|false|no|off|FALSE|False) ;;
+    *)
+        if [ -x "$HOME/.local/bin/infynitae-island" ]; then
+            "$HOME/.local/bin/infynitae-island" >/dev/null 2>&1 &
+        fi
+        ;;
+esac
 
 
 # 6. Native Screen Recorder & 20-minute Replay Buffer (Invincible background watchdog)
@@ -218,13 +231,18 @@ case "${BATTERY_LIMIT:-off}" in
     *) sh "$HOME/infynitae/live/battery-limit" "$BATTERY_LIMIT" >/dev/null 2>&1 || true ;;
 esac
 
-# 6e2. The screen locks before the machine sleeps (the lid, the power button): it wakes locked
-for s in "$HOME/.local/bin/infynitae-sleep-lock" "$HOME/infynitae/live/infynitae-sleep-lock"; do
-    if [ -x "$s" ]; then
-        "$s" >/dev/null 2>&1 &
-        break
-    fi
-done
+# 6e2. The screen locks before the machine sleeps (the lid, the power button): it wakes locked (SLEEP_LOCK)
+case "${SLEEP_LOCK:-true}" in
+    0|false|no|off|FALSE|False) ;;
+    *)
+        for s in "$HOME/.local/bin/infynitae-sleep-lock" "$HOME/infynitae/live/infynitae-sleep-lock"; do
+            if [ -x "$s" ]; then
+                "$s" >/dev/null 2>&1 &
+                break
+            fi
+        done
+        ;;
+esac
 
 # 6f. Screen auto-rotation on convertible laptops (AUTO_ROTATE; needs iio-sensor-proxy)
 case "${AUTO_ROTATE:-auto}" in

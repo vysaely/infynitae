@@ -2440,29 +2440,33 @@ static bool execute_hitbox(IslandApp *app, HitBox *hb, double click_x, uint32_t 
     case ACT_REBOOT:
         set_mode(app, MODE_CLOSED);
         spawn_detached(
+            "[ -f ~/.config/infynitae/config ] && . ~/.config/infynitae/config 2>/dev/null || true; "
             ": > ~/.local/state/infynitae/stop; "
             "pkill -f 'infynitae.*restore watch' 2>/dev/null || true; "
             "(~/.local/bin/infynitae restore save 2>/dev/null || infynitae restore save 2>/dev/null || true); "
+            "case \"${SHUTDOWN_SCREEN:-true}\" in 0|false|no|off|FALSE|False) ;; *) "
             "rm -f ~/.local/state/infynitae/lock.log; "
             "setsid -f ~/.local/bin/infynitae-lock --status 'Rebooting…' >/dev/null 2>&1; "
             "i=0; while [ $i -lt 15 ]; do "
             "  grep -q 'ready on' ~/.local/state/infynitae/lock.log 2>/dev/null && break; "
             "  sleep 0.05; i=$((i+1)); "
-            "done; "
+            "done ;; esac; "
             "systemctl reboot");
         return true;
     case ACT_POWEROFF:
         set_mode(app, MODE_CLOSED);
         spawn_detached(
+            "[ -f ~/.config/infynitae/config ] && . ~/.config/infynitae/config 2>/dev/null || true; "
             ": > ~/.local/state/infynitae/stop; "
             "pkill -f 'infynitae.*restore watch' 2>/dev/null || true; "
             "(~/.local/bin/infynitae restore save 2>/dev/null || infynitae restore save 2>/dev/null || true); "
+            "case \"${SHUTDOWN_SCREEN:-true}\" in 0|false|no|off|FALSE|False) ;; *) "
             "rm -f ~/.local/state/infynitae/lock.log; "
             "setsid -f ~/.local/bin/infynitae-lock --status 'Shutting down…' >/dev/null 2>&1; "
             "i=0; while [ $i -lt 15 ]; do "
             "  grep -q 'ready on' ~/.local/state/infynitae/lock.log 2>/dev/null && break; "
             "  sleep 0.05; i=$((i+1)); "
-            "done; "
+            "done ;; esac; "
             "systemctl poweroff");
         return true;
     case ACT_LOGOUT:

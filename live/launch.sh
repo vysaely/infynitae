@@ -166,7 +166,7 @@ case "$ACTION" in
         L="${LAUNCHER:-auto}"
         case "$L" in
             auto|""|island)
-                if [ -x "$HOME/.local/bin/infynitae-island" ]; then
+                if [ "${ENABLE_ISLAND:-true}" != "false" ] && [ "${ENABLE_ISLAND:-true}" != "0" ] && [ -x "$HOME/.local/bin/infynitae-island" ]; then
                     exec "$HOME/.local/bin/infynitae-island" toggle
                 elif [ "${ENABLE_QUICKSHELL:-false}" = "true" ] && command -v qs >/dev/null 2>&1 && [ -f "$HOME/infynitae/live/quickshell/shell.qml" ]; then
                     exec qs ipc -p "$HOME/infynitae/live/quickshell/shell.qml" call island toggle
@@ -214,8 +214,8 @@ case "$ACTION" in
         ;;
     reload|reload-shell|restart-shell)
         # Super+Shift+BackSpace: Live reload settings, shell UI, and desktop environment
-        # 1. Re-apply settings and restart the wallpaper (infynitae-reload; windows stay open)
-        "$HOME/infynitae/live/infynitae-reload" settings wallpaper screenshare >/dev/null 2>&1 || true
+        # 1. Re-apply settings and reload all configured helpers (infynitae-reload; windows stay open)
+        "$HOME/infynitae/live/infynitae-reload" all >/dev/null 2>&1 || true
 
         # 2. Restart Quickshell Island / HUD if running
         if pidof qs >/dev/null 2>&1; then
@@ -503,7 +503,7 @@ case "$ACTION" in
         # Super+A: the control flyout (or CONTROL_MENU if set)
         case "${CONTROL_MENU:-auto}" in
             auto|"")
-                if [ -x "$HOME/.local/bin/infynitae-island" ]; then
+                if [ "${ENABLE_ISLAND:-true}" != "false" ] && [ "${ENABLE_ISLAND:-true}" != "0" ] && [ -x "$HOME/.local/bin/infynitae-island" ]; then
                     exec "$HOME/.local/bin/infynitae-island" control
                 fi
                 for m in "$HOME/.local/bin/infynitae-control-menu" "$HOME/infynitae/live/control-menu"; do
@@ -516,7 +516,7 @@ case "$ACTION" in
     clipboard-history)
         # Super+V: Clipboard history picker (native infynitae-island clipboard mode, or CLIPBOARD_PICKER / MENU_PICKER / fuzzel)
         if command -v cliphist >/dev/null 2>&1; then
-            if [ -z "${CLIPBOARD_PICKER:-}" ] && [ -z "${MENU_PICKER:-}" ] && [ -x "$HOME/.local/bin/infynitae-island" ]; then
+            if [ "${ENABLE_ISLAND:-true}" != "false" ] && [ "${ENABLE_ISLAND:-true}" != "0" ] && [ -z "${CLIPBOARD_PICKER:-}" ] && [ -z "${MENU_PICKER:-}" ] && [ -x "$HOME/.local/bin/infynitae-island" ]; then
                 exec "$HOME/.local/bin/infynitae-island" clipboard
             fi
             PICKER="${CLIPBOARD_PICKER:-${MENU_PICKER:-fuzzel --dmenu}}"

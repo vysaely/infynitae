@@ -72,8 +72,11 @@ gtk-application-prefer-dark-theme=$([ "$COLOR_SCHEME" = "prefer-dark" ] && echo 
 gtk-enable-animations=false
 EOF
         gtk_css="$gtk_dir/gtk.css"
-        if [ ! -f "$gtk_css" ] || grep -q 'managed by infynitae' "$gtk_css" 2>/dev/null; then
-            cat << EOF > "$gtk_css"
+        case "${THEME_SYNC:-true}" in
+            0|false|no|off|FALSE|False) ;;
+            *)
+                if [ ! -f "$gtk_css" ] || grep -q 'managed by infynitae' "$gtk_css" 2>/dev/null; then
+                    cat << EOF > "$gtk_css"
 /* managed by infynitae — delete this line to keep custom GTK CSS */
 @define-color theme_bg_color $SURFACE_COLOR;
 @define-color theme_fg_color $TEXT_COLOR;
@@ -88,10 +91,15 @@ window, dialog, popover, menu, .background {
     border-radius: 0px;
 }
 EOF
-        fi
+                fi
+                ;;
+        esac
     done
 
-    # 3b. Synchronize Mako, Fuzzel, Foot, Kitty & Alacritty theme files (only when missing or managed)
+    # 3b. Synchronize Mako, Fuzzel, Foot, Kitty & Alacritty theme files (when THEME_SYNC="true")
+    case "${THEME_SYNC:-true}" in
+        0|false|no|off|FALSE|False) ;;
+        *)
     s_hex="${SURFACE_COLOR#\#}"
     c_hex="${CANVAS_COLOR#\#}"
     ba_hex="${BORDER_ACTIVE#\#}"
@@ -243,6 +251,8 @@ EOF
             cat "$alacritty_cfg"
         } > "$alacritty_cfg.tmp.$$" && mv -f "$alacritty_cfg.tmp.$$" "$alacritty_cfg"
     fi
+        ;;
+    esac
 
     # 4. Synchronize Qt platform settings (~/.config/kdeglobals) without clobbering existing KDE configs
     mkdir -p "$HOME/.config"

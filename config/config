@@ -271,6 +271,11 @@ TEXT_COLOR="#eef2f8"
     # default: "#eef2f8"
     # options: "#eef2f8"  · any "#rrggbb"
 
+THEME_SYNC="true"
+    # Synchronize the palette above to Mako, Fuzzel, GTK 3/4, Foot, Kitty, and Alacritty [reload]
+    # default: true
+    # options: true  · false
+
 WALLPAPER=""
     # Wallpaper image (PNG, JPG, WebP; "$HOME/…" works) [save]
     # default: ""
@@ -376,9 +381,9 @@ BROWSER="auto"
     #   auto    the system default  · any command
 
 POLKIT_AGENT="auto"
-    # Password prompts [restart]
+    # Password prompts [reload]
     # default: auto
-    #   auto    infynitae-polkit  · a path
+    #   auto    infynitae-polkit  · none / false  · a path
 
 SCREENSHOT_DIR="$HOME/Pictures/Screenshots"
     # default: "$HOME/Pictures/Screenshots"
@@ -401,7 +406,7 @@ XWAYLAND="true"
     # options: true  · false
 
 SESSION_RESTORE="true"
-    # Reopen the apps that were open, where they were [restart]
+    # Save and reopen the apps that were open, where they were [reload]
     # default: true
     # options: true  · false
 
@@ -423,7 +428,7 @@ CLIPBOARD_HISTORY="true"
 CLIPBOARD_PICKER=""
     # Super+V picker
     # default: ""
-    #   ""    MENU_PICKER  · any dmenu-style command
+    #   ""    infynitae-island clipboard (or MENU_PICKER)  · any dmenu-style command
 
 MENU_PICKER=""
     # Menus (control menu, clipboard)
@@ -437,22 +442,27 @@ CONTROL_MENU="auto"
     # options: auto  · a command
 
 NOTIFICATIONS="auto"
-    # Notification daemon [restart]
+    # Notification daemon [reload]
     # default: auto
-    #   auto    mako, swaync, dunst, fnott (first installed)  · none  · a command
+    #   auto    mako, swaync, dunst, fnott (first installed)  · none / false  · a command
 
 AUTOMOUNT="true"
-    # USB drives and SD cards mount when plugged in (udiskie) [restart]
+    # USB drives and SD cards mount when plugged in (udiskie) [reload]
     # default: true
     # options: true  · false
 
+ENABLE_ISLAND="true"
+    # Native top/bottom shell bar for Super+W, Super+A, Super+V, and edge swipe [reload]
+    # default: true
+    # options: true  · false (falls back to fuzzel / control-menu)
+
 ISLAND_EDGE="top"
-    # Which screen edge the Dynamic Island & Quick Control Box slide in from (also togglable live via [⇅ Top/Bot] in the Control Box)
+    # Which screen edge the Dynamic Island & Quick Control Box slide in from [reload]
     # default: top
     # options: top  · bottom
 
 ISLAND_CONTROL_SIDE="right"
-    # Which corner the Quick Control Box sits on ("left" leaves top-right window [X] buttons clear; also togglable live via [⇄ Left/Right])
+    # Which corner the Quick Control Box sits on ("left" leaves top-right window [X] buttons clear) [reload]
     # default: right
     # options: right  · left
 
@@ -466,6 +476,16 @@ IDLE_SLEEP_TIMEOUT_MIN="15"
 
 IDLE_AUTO_LOCK="true"
     # Lock when the screens go off (Super+Shift+I: stay awake)
+    # default: true
+    # options: true  · false
+
+SLEEP_LOCK="true"
+    # Lock the screen before the machine sleeps or closes the lid [reload]
+    # default: true
+    # options: true  · false
+
+SHUTDOWN_SCREEN="true"
+    # Show the clean "Rebooting…" / "Shutting down…" screen on reboot or power off [use]
     # default: true
     # options: true  · false
 

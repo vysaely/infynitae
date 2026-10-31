@@ -688,21 +688,49 @@ pub fn restorable(session: &Path, apps_dirs: &[PathBuf]) -> bool {
         .any(|a| app_command(a, apps_dirs).is_some_and(|cmd| installed(&cmd[0])))
 }
 
+fn session_restore_enabled() -> bool {
+    if let Ok(val) = std::env::var("SESSION_RESTORE") {
+        return !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
+    }
+    if let Ok(home) = std::env::var("HOME")
+        && let Ok(content) = std::fs::read_to_string(format!("{home}/.config/infynitae/config"))
+    {
+        for (k, v) in content.lines().filter_map(infynitae_wayland::config_line) {
+            if k.trim() == "SESSION_RESTORE" {
+                return !matches!(v.trim().to_lowercase().as_str(), "0" | "false" | "off" | "no");
+            }
+        }
+    }
+    true
+}
+
 /// `infynitae restore watch|save|restore|check` (`args` after "restore").
 pub fn run(args: &[String]) -> ExitCode {
     match args.first().map(String::as_str) {
         Some("watch") => {
+            if !session_restore_enabled() {
+                let _ = std::fs::remove_file(session_path());
+                return ExitCode::SUCCESS;
+            }
             let mut ipc = Socket(0);
             let first_id = ipc.next().as_u64().unwrap_or(1);
             save_snapshot(&session_path(), &mut ipc, first_id);
             loop {
                 std::thread::sleep(WATCH_INTERVAL);
+                if !session_restore_enabled() {
+                    let _ = std::fs::remove_file(session_path());
+                    return ExitCode::SUCCESS;
+                }
                 let id = ipc.next().as_u64().unwrap_or(1);
                 save_snapshot(&session_path(), &mut ipc, id);
             }
         }
         Some("save") => {
             let path = args.get(1).map_or_else(session_path, PathBuf::from);
+            if args.get(1).is_none() && !session_restore_enabled() {
+                let _ = std::fs::remove_file(&path);
+                return ExitCode::SUCCESS;
+            }
             let mut ipc = Socket(0);
             let id = ipc.next().as_u64().unwrap_or(1);
             if save_snapshot(&path, &mut ipc, id) {
