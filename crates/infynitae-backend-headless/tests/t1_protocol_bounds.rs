@@ -104,7 +104,11 @@ fn a_window_opening_larger_than_its_room_is_offered_the_room() {
     adv(&mut ls);
     adv(&mut ls);
     let sizes = sizes_of(&ls, big);
-    assert_eq!(sizes.first(), Some(&(0, 0)), "its own size first: {sizes:?}");
+    assert_eq!(
+        sizes.first(),
+        Some(&(0, 0)),
+        "its own size first: {sizes:?}"
+    );
     assert_eq!(sizes.last(), Some(&room), "then the room: {sizes:?}");
 
     let wide = ls.probe.toplevel(&qh, "Wide", (2400, 600), 0);
@@ -115,5 +119,54 @@ fn a_window_opening_larger_than_its_room_is_offered_the_room() {
     let fits = ls.probe.toplevel(&qh, "Fits", (800, 600), 0);
     adv(&mut ls);
     adv(&mut ls);
-    assert_eq!(sizes_of(&ls, fits), vec![(0, 0)], "a window that fits is left alone");
+    assert_eq!(
+        sizes_of(&ls, fits),
+        vec![(0, 0)],
+        "a window that fits is left alone"
+    );
+}
+
+/// The VM's case (2026-10-31): a terminal is open in the middle of the screen when a window opens
+/// too large. Fitted to the room, it has no place beside the terminal that is on the screen: it
+/// takes the middle of the view, and the terminal is pushed aside on the canvas, uncovered.
+#[test]
+fn a_fitted_window_takes_the_view_and_pushes_the_others_aside() {
+    let mut ls = Lockstep::new(Some(output((1920, 1080), 120)));
+    let qh = ls.qh.clone();
+    let room = (1920 - 24, 1080 - 24);
+    ls.probe.toplevel(&qh, "Terminal", (800, 600), 0);
+    adv(&mut ls);
+    adv(&mut ls);
+    let terminal = *ls
+        .state
+        .core()
+        .stage()
+        .mapped_elements()
+        .first()
+        .expect("mapped");
+
+    ls.probe.toplevel(&qh, "XTerm", (2404, 1954), 0);
+    adv(&mut ls);
+    adv(&mut ls);
+    let core = ls.state.core();
+    let big = *core
+        .stage()
+        .mapped_elements()
+        .iter()
+        .find(|e| **e != terminal)
+        .expect("the second window");
+    let a = core.stage().anchor(big).expect("anchor");
+    let c = core.cameras().center(0).expect("camera");
+    let (cx, cy) = (c.x >> 16, c.y >> 16);
+    let (w, h) = (i64::from(room.0), i64::from(room.1));
+    assert!(
+        a.x >= cx - 960 && a.x + w <= cx + 960 && a.y >= cy - 540 && a.y + h <= cy + 540,
+        "the fitted window {a:?} is on the screen around {cx},{cy}"
+    );
+    let t = core.stage().anchor(terminal).expect("terminal anchor");
+    let apart = t.x + 800 <= a.x || t.x >= a.x + w || t.y + 600 <= a.y || t.y >= a.y + h;
+    assert!(
+        apart,
+        "the terminal {t:?} is pushed off the fitted window {a:?}"
+    );
 }

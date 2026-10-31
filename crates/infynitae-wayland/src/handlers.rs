@@ -242,23 +242,30 @@ impl WaylandState {
         }
     }
 
-    /// A window that opens larger than the room it was offered (`configure_bounds`) is offered
-    /// that room, once. Chromium and Electron ignore the bounds and reopen at the size they
-    /// saved, which outgrows the screen (Discord at 1944x1124 on 1920x1080, a little more at
-    /// each start); a size the compositor chose itself is left as it is.
+    /// A window that opens larger than its room (`window_room`, the `configure_bounds` it was
+    /// told) is offered that room, once. Chromium and Electron ignore the bounds and reopen at the
+    /// size they saved, which outgrows the screen (Discord at 1944x1124 on 1920x1080, a little
+    /// more at each start); an X11 window asks for its own size through xwayland-satellite,
+    /// which binds no bounds at all (xterm -geometry 400x150: 2404x1954). A size the compositor
+    /// chose itself is left as it is.
     fn fit_opening_window(&mut self, id: infynitae_core::stage::ElementId, window: &Window) {
         let Some(toplevel) = window.toplevel() else {
             return;
         };
-        let current = toplevel.current_state();
-        let (None, Some(bounds)) = (current.size, current.bounds) else {
+        let chosen = toplevel
+            .current_state()
+            .size
+            .is_some_and(|s| s.w > 0 && s.h > 0);
+        let Some((room_w, room_h)) = self.window_room() else {
             return;
         };
         let size = window.geometry().size;
-        if size.w <= bounds.w && size.h <= bounds.h {
+        if chosen || (size.w <= room_w && size.h <= room_h) {
             return;
         }
-        self.configure_toplevel(id, Some((size.w.min(bounds.w), size.h.min(bounds.h))));
+        let fitted = (size.w.min(room_w), size.h.min(room_h));
+        self.configure_toplevel(id, Some(fitted));
+        let _ = self.with_effects(|core, fx| core.place_opening_at_size(id, fitted, fx));
     }
 
     /// The window an `ext_foreign_toplevel_handle_v1` stands for, while it is listed.

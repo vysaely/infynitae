@@ -376,3 +376,47 @@ install_config() {
     [ "${REPLAY_BUFFER:-false}" = true ] && set_option ENABLE_REPLAY_BUFFER true
     echo "==> Created ~/.config/infynitae/config"
 }
+
+# ---- the time zone ---------------------------------------------------------------------------
+# Cloud images and live media start on UTC: the clock is right, the hour shown is not. The zone is
+# a city (`timedatectl list-timezones`), so summer time follows by itself; nothing is looked up
+# online (that would send the machine's address to someone).
+
+# The system's zone ("UTC" when none is set).
+current_timezone() {
+    tz=$(timedatectl show -p Timezone --value 2>/dev/null)
+    [ -n "$tz" ] || tz=$(readlink /etc/localtime 2>/dev/null | sed 's|.*/zoneinfo/||')
+    echo "${tz:-UTC}"
+}
+
+# Whether the system still has no zone of its own.
+timezone_unset() {
+    case "$(current_timezone)" in UTC | Etc/UTC | Etc/Universal | Universal | Zulu) return 0 ;; esac
+    return 1
+}
+
+# Asks for a zone in two whiptail menus (region, then city) and prints it; nothing on Cancel.
+pick_timezone() {
+    zones=$(timedatectl list-timezones 2>/dev/null) || return 1
+    # shellcheck disable=SC2046
+    area=$(whiptail --title "Time zone" --ok-button "Next" --cancel-button "Skip" --noitem \
+        --menu "Your region:" "${MENU_H:-24}" "${MENU_W:-78}" 14 \
+        $(printf '%s\n' "$zones" | cut -d/ -f1 | sort -u \
+            | grep -xE 'Africa|America|Antarctica|Asia|Atlantic|Australia|Europe|Indian|Pacific' \
+            | sed 's/$/ x/') \
+        3>&1 1>&2 2>&3) || return 1
+    # shellcheck disable=SC2046
+    city=$(whiptail --title "Time zone: $area" --ok-button "Next" --cancel-button "Skip" --noitem \
+        --menu "Your city (or the nearest one in your time zone):" "${MENU_H:-24}" "${MENU_W:-78}" 14 \
+        $(printf '%s\n' "$zones" | sed -n "s|^$area/||p" | sed 's/$/ x/') \
+        3>&1 1>&2 2>&3) || return 1
+    echo "$area/$city"
+}
+
+# Sets the zone $1 (Area/City) and keeps the clock synchronised; false for a zone that is none.
+set_timezone() {
+    timedatectl list-timezones 2>/dev/null | grep -qx "$1" || { warn "Not a time zone: $1 (timedatectl list-timezones)"; return 1; }
+    sudo timedatectl set-timezone "$1" || return 1
+    timedatectl show -p NTP --value 2>/dev/null | grep -qx yes || sudo timedatectl set-ntp true 2>/dev/null || true
+    echo "==> Time zone: $1 ($(date '+%H:%M'))"
+}

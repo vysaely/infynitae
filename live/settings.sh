@@ -482,6 +482,18 @@ case "$1" in
     edit)
         exec "${EDITOR:-nano}" "$CONFIG_FILE"
         ;;
+    timezone)
+        # infynitae-settings timezone [Area/City]: the zone, or menus to pick it in a terminal
+        . "$HOME/infynitae/live/install-lib.sh"
+        if [ -n "${2:-}" ]; then
+            set_timezone "$2"
+        elif [ -t 0 ] && command -v whiptail >/dev/null 2>&1 && tz=$(pick_timezone); then
+            set_timezone "$tz"
+        else
+            echo "Time zone: $(current_timezone) ($(date '+%H:%M'))"
+            echo "Set it:    infynitae-settings timezone Europe/Kyiv   (timedatectl list-timezones)"
+        fi
+        ;;
     reload)
         killall qs 2>/dev/null || true
         echo "==> Quickshell UI reloaded."
