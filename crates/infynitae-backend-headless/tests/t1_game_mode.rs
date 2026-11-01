@@ -105,6 +105,27 @@ fn a_fullscreen_window_shown_directly_is_the_game_until_it_leaves_fullscreen() {
     assert_eq!(t.ls.state.game(), None, "game mode ends with fullscreen");
 }
 
+/// A game that cannot be scanned out still gets game mode when it asks to tear (owner, 2026-11-01).
+#[test]
+fn a_composited_game_asking_to_tear_gets_game_mode() {
+    let mut t = T {
+        ls: Lockstep::new(Some(output((640, 480), 120))),
+    };
+    let o = t.ls.output();
+    let (w, id) = t.map("game");
+    t.fullscreen(w, true);
+    t.ls.state.frame_scanned_out(o, false);
+    assert_eq!(
+        t.ls.state.game(),
+        None,
+        "composited, no tearing: not a game"
+    );
+    t.ls.state.toggle_tearing_focused();
+    assert!(t.ls.state.tears(o), "the focused fullscreen window tears");
+    t.ls.state.frame_scanned_out(o, false);
+    assert_eq!(t.ls.state.game().map(|g| g.0), Some(id));
+}
+
 #[test]
 fn closing_the_game_ends_game_mode() {
     let mut t = T {

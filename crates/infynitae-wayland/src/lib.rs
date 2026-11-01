@@ -348,6 +348,10 @@ pub struct WaylandState {
     dmabuf_global: Option<smithay::wayland::dmabuf::DmabufGlobal>,
     /// The GPU clients allocate on (`set_dmabuf_main_device`), also offered to capture sessions.
     pub(crate) dmabuf_main_dev: Option<libc::dev_t>,
+    /// The formats clients may allocate (`set_dmabuf_device_formats`).
+    dmabuf_formats: Vec<smithay::backend::allocator::Format>,
+    /// Those the screens can show as they are (`add_dmabuf_scanout_formats`).
+    dmabuf_scanout_formats: Vec<smithay::backend::allocator::Format>,
     pub(crate) popup_pointer_grab_serial: Option<smithay::utils::Serial>,
     /// Install serial of the popup keyboard grab (the latest level of the chain), the identity by
     /// which teardown releases exactly that grab (A1).
@@ -707,6 +711,8 @@ impl WaylandState {
             dmabuf: DmabufState::new(),
             dmabuf_global: None,
             dmabuf_main_dev: None,
+            dmabuf_formats: Vec::new(),
+            dmabuf_scanout_formats: Vec::new(),
             effects: infynitae_core::protocol::EffectBuf::new(),
             ticked: Vec::new(),
             xdg_decoration: smithay::wayland::shell::xdg::decoration::XdgDecorationState::new::<Self>(
@@ -783,7 +789,68 @@ impl WaylandState {
         } else {
             formats
         };
-        let global = match DmabufFeedbackBuilder::new(dev, formats.iter().copied()).build() {
+        self.dmabuf_formats = formats;
+        self.dmabuf_main_dev = Some(dev);
+        self.publish_dmabuf_global();
+    }
+
+    /// The formats a screen's main plane shows as they are. Clients hear of them first, so a
+    /// fullscreen game allocates buffers the screen can take directly (direct scanout) and not
+    /// a compressed layout only the GPU can read, which must be redrawn every frame.
+    pub fn add_dmabuf_scanout_formats(
+        &mut self,
+        plane: impl IntoIterator<Item = smithay::backend::allocator::Format>,
+    ) {
+        let new = scanout_tranche(&self.dmabuf_formats, plane);
+        let before = self.dmabuf_scanout_formats.len();
+        for format in new {
+            if !self.dmabuf_scanout_formats.contains(&format) {
+                self.dmabuf_scanout_formats.push(format);
+            }
+        }
+        if self.dmabuf_scanout_formats.len() != before {
+            println!(
+                "[infynitae] Client buffers: {} formats/modifiers the screen shows directly",
+                self.dmabuf_scanout_formats.len()
+            );
+            self.publish_dmabuf_global();
+        }
+    }
+
+    /// The format and modifier of the buffer `id` shows, when it is a dmabuf.
+    pub fn window_buffer_format(
+        &self,
+        id: ElementId,
+    ) -> Option<smithay::backend::allocator::Format> {
+        use smithay::backend::allocator::Buffer as _;
+        let surface = self.window_surface(id)?;
+        smithay::wayland::compositor::with_states(&surface, |states| {
+            let state = states
+                .data_map
+                .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()?
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let dmabuf = smithay::wayland::dmabuf::get_dmabuf(state.buffer()?).ok()?;
+            Some(dmabuf.format())
+        })
+    }
+
+    /// (Re)creates the linux-dmabuf global from the device and formats known now.
+    fn publish_dmabuf_global(&mut self) {
+        use smithay::reexports::wayland_protocols::wp::linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
+        let Some(dev) = self.dmabuf_main_dev else {
+            return;
+        };
+        let formats = self.dmabuf_formats.clone();
+        let mut builder = DmabufFeedbackBuilder::new(dev, formats.iter().copied());
+        if !self.dmabuf_scanout_formats.is_empty() {
+            builder = builder.add_preference_tranche(
+                dev,
+                Some(TrancheFlags::Scanout),
+                self.dmabuf_scanout_formats.iter().copied(),
+            );
+        }
+        let global = match builder.build() {
             Ok(feedback) => self
                 .dmabuf
                 .create_global_with_default_feedback::<Self>(&self.dh, &feedback),
@@ -792,7 +859,6 @@ impl WaylandState {
         if let Some(old) = self.dmabuf_global.replace(global) {
             self.dmabuf.destroy_global::<Self>(&self.dh, old);
         }
-        self.dmabuf_main_dev = Some(dev);
     }
 
     pub fn set_border_config(
@@ -1799,6 +1865,19 @@ const DMABUF_FORMATS: [smithay::backend::allocator::Format; 2] = [
 
 /// A DRM device for backends that do not name theirs: the first render node, else the first
 /// card node.
+/// The formats of a plane that clients may also allocate, in the clients' order.
+fn scanout_tranche<F: PartialEq + Copy>(
+    render: &[F],
+    plane: impl IntoIterator<Item = F>,
+) -> Vec<F> {
+    let plane: Vec<F> = plane.into_iter().collect();
+    render
+        .iter()
+        .copied()
+        .filter(|f| plane.contains(f))
+        .collect()
+}
+
 fn guess_dmabuf_device() -> Option<libc::dev_t> {
     use std::os::unix::fs::MetadataExt;
     let mut nodes: Vec<std::path::PathBuf> = std::fs::read_dir("/dev/dri")
@@ -1963,5 +2042,16 @@ mod key_binding_config_tests {
         let c2 = parse_color_hex("#00ff0080").unwrap();
         assert_eq!((c2.r(), c2.g(), c2.b()), (0.0, 1.0, 0.0));
         assert!((c2.a() - 128.0 / 255.0).abs() < 1e-4);
+    }
+}
+
+#[cfg(test)]
+mod scanout_tranche_tests {
+    /// Only what the renderer can also read is offered: a plane's format no client could be
+    /// composited from would break the window the moment it leaves fullscreen.
+    #[test]
+    fn a_scanout_tranche_is_what_both_the_plane_and_the_renderer_take() {
+        assert_eq!(super::scanout_tranche(&[1, 2, 3, 4], [9, 4, 2]), [2, 4]);
+        assert!(super::scanout_tranche(&[1, 2], [3]).is_empty());
     }
 }

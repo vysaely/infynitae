@@ -941,9 +941,16 @@ fn connect_screen(
     )
     .map_err(|e| format!("screen {name}: {e:?}"))?;
 
+    state.add_dmabuf_scanout_formats(compositor.surface().plane_info().formats.iter().copied());
+
     let vrr_supported = compositor
         .vrr_supported(handle)
         .is_ok_and(|s| !matches!(s, smithay::backend::drm::VrrSupport::NotSupported));
+    if !vrr_supported {
+        println!(
+            "[infynitae] Screen {name}: no VRR (FreeSync off on the monitor, or not supported)"
+        );
+    }
     let mut vrr_on = false;
     match (vrr_supported, f.vrr) {
         (false, _) => {}
@@ -2043,6 +2050,17 @@ fn render(data: &mut LoopData) {
                             "[infynitae] Fullscreen on screen {id:?}: its frames go to the screen as they are (direct scanout)"
                         ),
                         (true, false) => {
+                            let plane_formats = &s.compositor.surface().plane_info().formats;
+                            let buffer = core_presentation_format(&data.state, id);
+                            let buffer_note = match buffer {
+                                Some(f) if plane_formats.contains(&f) => {
+                                    format!("; its buffer {f:?} is one the screen takes")
+                                }
+                                Some(f) => {
+                                    format!("; its buffer {f:?} is NOT one the screen takes")
+                                }
+                                None => "; its buffer is not a GPU buffer".to_string(),
+                            };
                             let geometries: Vec<_> = elements
                                 .iter()
                                 .map(|e| {
@@ -2053,7 +2071,7 @@ fn render(data: &mut LoopData) {
                                 })
                                 .collect();
                             println!(
-                                "[infynitae] Fullscreen on screen {id:?}: composited, not scanned out ({} elements{}): {geometries:?}",
+                                "[infynitae] Fullscreen on screen {id:?}: composited, not scanned out ({} elements{}): {geometries:?}{buffer_note}",
                                 elements.len(),
                                 if data.direct_scanout && !scanout_banned {
                                     ""
@@ -2580,6 +2598,14 @@ fn apply_virtual_input(data: &mut LoopData) {
         }
     }
     data.session.request_frame();
+}
+
+/// The format of the buffer the fullscreen window on `id` shows (a diagnosis when it is composited).
+fn core_presentation_format(
+    state: &WaylandState,
+    id: OutputId,
+) -> Option<smithay::backend::allocator::Format> {
+    state.window_buffer_format(state.core().presentation(id)?)
 }
 
 /// LATENCY_STATS: every 10 s, each screen's input-to-screen times and missed refreshes, in the

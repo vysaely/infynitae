@@ -53,6 +53,10 @@ these by date, e.g. "(owner, 2026-10-24)".
 - **Super+left / Super+right drag move and resize a window, "like Hyprland"** (2026-10-22), from
   the nearest corner; Super+Shift drags the whole cluster. Super+middle during a move pans the
   camera and carries the window (2026-10-22).
+- **Clients hear first which formats the screen shows directly** (2026-11-01, Dota was composited
+  every frame and stuttered at full FPS): a scanout tranche in the linux-dmabuf feedback, for every
+  client, not per surface, as the simple first step. A game asking to tear gets game mode even when
+  composited.
 - **An app can take the shortcuts while it has focus** (2026-10-25, `keyboard-shortcuts-inhibit`:
   a VM, a remote desktop, a game): its keys go to it, Super-chords included, until it lets go
   or loses focus. Super+L (lock), Super+Tab (leave it, 2026-11-01: a fullscreen game took it),

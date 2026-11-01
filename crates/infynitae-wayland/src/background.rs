@@ -11,7 +11,7 @@
 //! without that limit nothing is lowered.
 //!
 //! Game mode (`GAME_MODE`, on by default): a fullscreen window the GPU shows directly (direct
-//! scanout, [`WaylandState::frame_scanned_out`]) is a game. Its app is registered with Feral's
+//! scanout or asking to tear, [`WaylandState::frame_scanned_out`]) is a game. Its app is registered with Feral's
 //! gamemode, when installed (`launch.sh game-mode`), until the window is no longer fullscreen.
 
 use std::collections::{BTreeMap, HashMap};
@@ -139,9 +139,14 @@ impl WaylandState {
     }
 
     /// A frame of `output` was shown: `scanout` when it was a client's buffer on the screen as
-    /// is (direct scanout). The fullscreen window shown that way is the game.
+    /// is (direct scanout). The fullscreen window shown that way is the game, and so is one that
+    /// asks to tear (vsync off), even composited (owner, 2026-11-01: a game that could not be
+    /// scanned out never got game mode, and needs the CPU most).
     pub fn frame_scanned_out(&mut self, output: OutputId, scanout: bool) {
-        if !scanout || !self.background.game_mode || self.background.game.is_some() {
+        if !(scanout || self.tears(output))
+            || !self.background.game_mode
+            || self.background.game.is_some()
+        {
             return;
         }
         let Some(window) = self.core.presentation(output) else {
