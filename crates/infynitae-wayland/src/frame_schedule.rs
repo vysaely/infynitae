@@ -84,8 +84,11 @@ pub struct FrameSchedule {
     to_flip: Vec<Duration>,
 }
 
-/// p50, p95 and max of `v`, which it empties; `None` when it is empty.
-fn percentiles(v: &mut Vec<Duration>) -> Option<(Duration, Duration, Duration)> {
+/// p50, p95 and max.
+pub type Percentiles = (Duration, Duration, Duration);
+
+/// The [`Percentiles`] of `v`, which it empties; `None` when it is empty.
+fn percentiles(v: &mut Vec<Duration>) -> Option<Percentiles> {
     if v.is_empty() {
         return None;
     }
@@ -247,12 +250,7 @@ impl FrameSchedule {
     /// to the frame's submission, and from the submission to the refresh that showed it. A missed
     /// refresh is late in one of the two: the first is this process, the second the kernel and
     /// GPU. Resets.
-    pub fn take_timings(
-        &mut self,
-    ) -> (
-        Option<(Duration, Duration, Duration)>,
-        Option<(Duration, Duration, Duration)>,
-    ) {
+    pub fn take_timings(&mut self) -> (Option<Percentiles>, Option<Percentiles>) {
         (
             percentiles(&mut self.to_submit),
             percentiles(&mut self.to_flip),
