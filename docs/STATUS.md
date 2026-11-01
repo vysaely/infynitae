@@ -129,11 +129,11 @@ These pass the test suite but have not run on a real screen or device yet:
 - **The session scripts and the C helpers** have the least test coverage of anything here.
 - **New key defaults (2026-10-31),** by the rule "often used on the left hand, rare on the
   right": **Super+Tab** flips between the last two windows, Super held or not, and
-  **Super+arrow** goes to the nearest window that way (2026-11-01). **Super+W** opens the app launcher, recently started apps first, and **Super+D** lists only the
+  **Super+arrow** goes to the nearest window that way (2026-11-01). **Super+W** opens the app launcher, recently started apps first, and **Super+L** lists only the
   open windows (2026-11-01). A window that
   opened without the focus (`FOCUS_ON_OPEN` "user" or "priority") or whose request to be focused
   was refused asks for attention: Super+Tab goes to it first and brings it into view, the edge
-  (Super+D) marks its tile with an accent dot and line, and `infynitae msg snapshot` says
+  (Super+L) marks its tile with an accent dot and line, and `infynitae msg snapshot` says
   `"attention": true` on it. **Super+S** takes a region screenshot (Super+Shift+S the whole
   screen), **Super+Shift+O** turns tearing on for a window, **Super+Alt+P** starts or stops
   recording; Super+Shift+R, Super+Shift+T and Super+Alt+R still work. In the test suite; not

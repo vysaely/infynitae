@@ -59,7 +59,7 @@ pub const KEY_BRIGHTNESSUP: u32 = 225;
 /// An action triggered by a matched compositor key binding.
 ///
 /// The keys follow the owner's rule (2026-10-31): what is used often sits on the left hand
-/// (Super+Tab, Q, W, E, A, S, C, V), what is used rarely on the right (Super+L, Shift+O, Shift+P,
+/// (Super+Tab, Q, W, E, A, S, C, V), what is used rarely on the right (Super+Shift+L, Shift+O, Shift+P,
 /// Shift+I, Alt+P, Shift+BackSpace).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyAction {
@@ -73,14 +73,16 @@ pub enum KeyAction {
     FocusSlot(usize),
     /// Super+Shift+1..9: focus, raise, and frame/recenter camera on cluster at slot 0..8 (creation order)
     FocusClusterSlot(usize),
-    /// Super+D (Super+W on 2026-11-01): the list of open windows, and nothing else
+    /// Super+L (Super+W on 2026-11-01): the list of open windows, and nothing else
     ToggleWindowList,
-    /// Super+W (owner, 2026-11-01; Super+D for a day): the app launcher, and nothing else
+    /// Super+W (owner, 2026-11-01; Super+L for a day): the app launcher, and nothing else
     ToggleLauncher,
     /// Super+Q: launches terminal
     SpawnTerminal,
     /// Super+E: launches file manager
     SpawnFileManager,
+    /// Super+Shift+Escape (owner, 2026-11-01): the system monitor
+    SpawnSystemMonitor,
     /// Super+Shift+S or PrintScreen: capture fullscreen screenshot
     SpawnScreenshot,
     /// Super+S (owner, 2026-10-31), or Super+Shift+R as before: capture region screenshot
@@ -89,7 +91,7 @@ pub enum KeyAction {
     ToggleOverview,
     /// Super+Shift+BackSpace: reload shell UI and scripts
     ReloadShell,
-    /// Super+L: lock screen
+    /// Super+Shift+L: lock screen
     SpawnLockScreen,
     /// Super+V: clipboard history
     ClipboardHistory,
@@ -300,6 +302,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("LAUNCHER", KeyAction::ToggleLauncher),
     ("TERMINAL", KeyAction::SpawnTerminal),
     ("FILE_MANAGER", KeyAction::SpawnFileManager),
+    ("SYSTEM_MONITOR", KeyAction::SpawnSystemMonitor),
     ("SCREENSHOT", KeyAction::SpawnScreenshot),
     ("REGION_SCREENSHOT", KeyAction::SpawnRegionScreenshot),
     ("RELOAD", KeyAction::ReloadShell),
@@ -365,6 +368,10 @@ pub fn resolve_key_binding(
     mods: Modifiers,
     interaction_active: bool,
 ) -> Option<KeyAction> {
+    // Super+Shift+Escape: the system monitor; an interaction keeps Escape as its cancel
+    if key == KEY_ESC && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::SpawnSystemMonitor);
+    }
     if key == KEY_ESC {
         return if interaction_active {
             Some(KeyAction::Cancel)
@@ -457,8 +464,8 @@ pub fn resolve_key_binding(
     if key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ToggleLauncher);
     }
-    // Super+D: the open windows; exactly Logo, never during interaction
-    if key == KEY_D && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+    // Super+L: the open windows; exactly Logo, never during interaction
+    if key == KEY_L && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ToggleWindowList);
     }
     // Super+Q: launches terminal; exactly Logo, never during interaction
@@ -494,8 +501,8 @@ pub fn resolve_key_binding(
     {
         return Some(KeyAction::ReloadShell);
     }
-    // Super+L: lock screen; Logo, never during interaction
-    if key == KEY_L && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+    // Super+Shift+L: lock screen; exactly Logo and Shift, never during interaction
+    if key == KEY_L && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::SpawnLockScreen);
     }
     // Super+V: clipboard history; Logo, never during interaction
@@ -651,7 +658,7 @@ mod tests {
         // exact modifiers: Super+Ctrl+B is not Super+B
         assert_eq!(r(KEY_B, mods(true, true, false, false), false), None);
         // untouched bindings and Escape's cancel
-        assert_eq!(r(KEY_L, logo, false), Some(KeyAction::SpawnLockScreen));
+        assert_eq!(r(KEY_L, logo, false), Some(KeyAction::ToggleWindowList));
         assert_eq!(
             r(KEY_ESC, Modifiers::default(), true),
             Some(KeyAction::Cancel)
@@ -699,6 +706,29 @@ mod tests {
             None,
             "not during an interaction"
         );
+    }
+
+    /// The system monitor: Logo and Shift with Escape, and an interaction keeps its cancel.
+    #[test]
+    fn logo_shift_escape_opens_the_system_monitor() {
+        let logo_shift = Modifiers {
+            logo: true,
+            shift: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(
+            resolve_key_binding(KEY_ESC, logo_shift, false),
+            Some(KeyAction::SpawnSystemMonitor)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_ESC, logo_shift, true),
+            Some(KeyAction::Cancel)
+        );
+        let shift_only = Modifiers {
+            shift: true,
+            ..Modifiers::default()
+        };
+        assert_eq!(resolve_key_binding(KEY_ESC, shift_only, false), None);
     }
 
     /// The owner's Super+Shift+C: exactly Logo and Shift held, never during an interaction;
@@ -993,8 +1023,25 @@ mod tests {
         };
         let none = Modifiers::default();
         assert_eq!(
-            resolve_key_binding(KEY_L, logo, false),
+            resolve_key_binding(
+                KEY_L,
+                Modifiers {
+                    logo: true,
+                    shift: true,
+                    ..Modifiers::default()
+                },
+                false
+            ),
             Some(KeyAction::SpawnLockScreen)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_L, logo, false),
+            Some(KeyAction::ToggleWindowList)
+        );
+        assert_eq!(
+            resolve_key_binding(KEY_D, logo, false),
+            None,
+            "Super+D is free"
         );
         let logo_shift = Modifiers {
             logo: true,

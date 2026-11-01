@@ -369,7 +369,7 @@ pub struct Core {
     /// specified behaviour keeps a lock through a Super+middle pan).
     free_cursor_on_super: bool,
     /// The focused window holds a keyboard-shortcuts inhibitor (`set_shortcuts_inhibited`):
-    /// its keys go to it, except Super+L.
+    /// its keys go to it, except Super+Shift+L.
     shortcuts_inhibited: bool,
     /// OBJ-09: read only by `output_connected`.
     persisted: navigation::PersistedCameras,
@@ -1049,8 +1049,8 @@ impl Core {
     }
 
     /// The focused window took over the compositor's shortcuts (`keyboard-shortcuts-inhibit`), or
-    /// gave them back. While it holds them, every key goes to it except Super+L, Super+Tab, Super+W,
-    /// Super+D and Super+A, so an app can never keep you from locking (owner, 2026-10-25), leaving it or
+    /// gave them back. While it holds them, every key goes to it except Super+Shift+L, Super+Tab, Super+W,
+    /// Super+L and Super+A, so an app can never keep you from locking (owner, 2026-10-25), leaving it or
     /// reaching the edge (2026-11-01). Quitting the session and switching
     /// terminals are the console backend's and never reach Core.
     pub fn set_shortcuts_inhibited(&mut self, inhibited: bool) {
@@ -1229,6 +1229,7 @@ impl Core {
             | E::ToggleLauncher
             | E::SpawnTerminal
             | E::SpawnFileManager
+            | E::SpawnSystemMonitor
             | E::SpawnScreenshot
             | E::ToggleOverview
             | E::SpawnRegionScreenshot

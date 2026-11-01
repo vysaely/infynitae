@@ -636,6 +636,7 @@ impl Core {
                             | KeyAction::ToggleLauncher
                             | KeyAction::ControlMenu
                             | KeyAction::ToggleOverview
+                            | KeyAction::SpawnSystemMonitor
                     )
             });
 
@@ -789,6 +790,7 @@ impl Core {
             KeyAction::ToggleLauncher => vec![Effect::ToggleLauncher],
             KeyAction::SpawnTerminal => vec![Effect::SpawnTerminal],
             KeyAction::SpawnFileManager => vec![Effect::SpawnFileManager],
+            KeyAction::SpawnSystemMonitor => vec![Effect::SpawnSystemMonitor],
             KeyAction::SpawnScreenshot => vec![Effect::SpawnScreenshot],
             KeyAction::SpawnRegionScreenshot => vec![Effect::SpawnRegionScreenshot],
             KeyAction::ToggleOverview => {
@@ -3587,7 +3589,7 @@ mod tests {
     }
 
     /// While the focused window holds a shortcuts inhibitor, a bound chord goes to it as a key;
-    /// Super+L still locks; given back, the chord is the compositor's again.
+    /// Super+Shift+L still locks; given back, the chord is the compositor's again.
     #[test]
     fn inhibited_shortcuts_go_to_the_window_except_lock() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
@@ -3598,6 +3600,7 @@ mod tests {
             ctrl: false,
             alt: false,
         };
+        let held = std::cell::Cell::new(logo);
         let mut time = 1000;
         let mut press = |c: &mut Core, key, mods_changed| {
             time += 1000;
@@ -3607,7 +3610,7 @@ mod tests {
                     crate::PhysicalEvent::KeyboardKey {
                         key,
                         pressed: true,
-                        modifiers: logo,
+                        modifiers: held.get(),
                         mods_changed,
                         time_us: time,
                     },
@@ -3619,14 +3622,14 @@ mod tests {
                 crate::PhysicalEvent::KeyboardKey {
                     key,
                     pressed: false,
-                    modifiers: logo,
+                    modifiers: held.get(),
                     mods_changed: false,
                     time_us: time,
                 },
             );
             fx
         };
-        use crate::input::keys::{KEY_L, KEY_LEFTMETA, KEY_Q};
+        use crate::input::keys::{KEY_ESC, KEY_L, KEY_LEFTMETA, KEY_Q};
         let _ = press(&mut c, KEY_LEFTMETA, true);
         let forwarded = |fx: &[Effect], key| {
             fx.iter().any(
@@ -3648,10 +3651,20 @@ mod tests {
             !fx.contains(&Effect::SpawnTerminal),
             "and starts nothing: {fx:?}"
         );
+        held.set(Modifiers {
+            shift: true,
+            ..logo
+        });
+        let fx = press(&mut c, KEY_ESC, false);
+        assert!(
+            fx.contains(&Effect::SpawnSystemMonitor),
+            "a stuck fullscreen game can't hide the system monitor: {fx:?}"
+        );
         let fx = press(&mut c, KEY_L, false);
+        held.set(logo);
         assert!(
             fx.contains(&Effect::SpawnLockScreen),
-            "Super+L still locks: {fx:?}"
+            "Super+Shift+L still locks: {fx:?}"
         );
         assert!(!forwarded(&fx, KEY_L), "and the window does not get it");
         let fx = press(&mut c, crate::input::keys::KEY_TAB, false);
@@ -3661,7 +3674,7 @@ mod tests {
         );
         for key in [
             crate::input::keys::KEY_W,
-            crate::input::keys::KEY_D,
+            crate::input::keys::KEY_L,
             crate::input::keys::KEY_A,
         ] {
             let fx = press(&mut c, key, false);

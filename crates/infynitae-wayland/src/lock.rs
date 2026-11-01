@@ -6,7 +6,7 @@
 //! sees input. Core is not told about the lock.
 //!
 //! Core keeps its own record of held keys. A key Core holds when the lock starts (Super of
-//! Super+L) is released while Core does not listen: its release only updates the seat's XKB
+//! Super+Shift+L) is released while Core does not listen: its release only updates the seat's XKB
 //! state (the lock surface never saw it pressed), and after the unlock the backend passes Core
 //! those releases ([`WaylandState::take_unlock_releases`]) while no surface has the keyboard,
 //! then gives the keyboard back ([`WaylandState::finish_unlock`]). A key pressed while locked

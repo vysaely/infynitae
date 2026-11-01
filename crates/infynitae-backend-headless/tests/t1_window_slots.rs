@@ -6,7 +6,7 @@ mod common;
 use common::input::*;
 use infynitae_backend_headless::keyboard_key;
 use infynitae_core::input::keys::{
-    KEY_1, KEY_2, KEY_3, KEY_9, KEY_D, KEY_E, KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_Q, KEY_S, KEY_SYSRQ,
+    KEY_1, KEY_2, KEY_3, KEY_9, KEY_E, KEY_L, KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_Q, KEY_S, KEY_SYSRQ,
     KEY_TAB, KEY_W,
 };
 use infynitae_core::stage::ElementId;
@@ -131,18 +131,18 @@ fn super_1_to_9_handles_three_windows() {
 }
 
 #[test]
-fn super_d_toggles_window_list() {
+fn super_l_toggles_window_list() {
     let mods = infynitae_core::input::bindings::Modifiers {
         logo: true,
         ..Default::default()
     };
     assert_eq!(
-        infynitae_core::input::keys::resolve_key_binding(KEY_D, mods, false),
+        infynitae_core::input::keys::resolve_key_binding(KEY_L, mods, false),
         Some(infynitae_core::input::keys::KeyAction::ToggleWindowList),
-        "Super+D resolves to ToggleWindowList"
+        "Super+L resolves to ToggleWindowList"
     );
     assert_eq!(
-        infynitae_core::input::keys::resolve_key_binding(KEY_D, mods, true),
+        infynitae_core::input::keys::resolve_key_binding(KEY_L, mods, true),
         None,
         "not during interaction"
     );

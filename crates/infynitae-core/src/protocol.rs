@@ -146,7 +146,7 @@ pub enum Effect {
         scale_120: u32,
         integer_scale: u32,
     },
-    /// Toggle the list of open windows (by default Super+D).
+    /// Toggle the list of open windows (by default Super+L).
     ToggleWindowList,
     /// Toggle the app launcher (by default Super+W).
     ToggleLauncher,
@@ -154,6 +154,8 @@ pub enum Effect {
     SpawnTerminal,
     /// Launch the file manager (by default Super+E).
     SpawnFileManager,
+    /// Launch the system monitor (by default Super+Shift+Escape).
+    SpawnSystemMonitor,
     /// Capture a fullscreen screenshot (by default Super+Shift+S or PrintScreen).
     SpawnScreenshot,
     /// Capture a region screenshot (by default Super+S, or Super+Shift+R).
@@ -162,7 +164,7 @@ pub enum Effect {
     ToggleOverview,
     /// Reload shell UI and scripts (by default Super+Shift+Backspace).
     ReloadShell,
-    /// Lock the screen (by default Super+L).
+    /// Lock the screen (by default Super+Shift+L).
     SpawnLockScreen,
     /// Open clipboard history (by default Super+V).
     SpawnClipboardHistory,

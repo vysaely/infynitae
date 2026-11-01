@@ -1,8 +1,8 @@
 #!/bin/sh
 # Infynitae's shortcut actions (the compositor runs: launch.sh <action>)
-# Dispatches shortcuts: terminal (Super+Q), file-manager (Super+E), apps (Super+W), windows (Super+D)
+# Dispatches shortcuts: terminal (Super+Q), file-manager (Super+E), apps (Super+W), windows (Super+L)
 # The keys follow the owner's rule (2026-10-31): often used on the left hand (Super+Tab, Q, W, E, D,
-# A, S, C, V), rare on the right (Super+L, Shift+O, Shift+P, Shift+I, Alt+P, Shift+BackSpace).
+# A, S, C, V), rare on the right (Super+Shift+L, Shift+O, Shift+P, Shift+I, Alt+P, Shift+BackSpace).
 ACTION="$1"
 
 # Initialize decoupled standalone desktop environment
@@ -89,7 +89,7 @@ resolve_terminal() {
 
 TERM_CMD=$(resolve_terminal)
 
-# The edge (ENABLE_EDGE) serves Super+W, Super+D, Super+A and Super+V when it is on and installed
+# The edge (ENABLE_EDGE) serves Super+W, Super+L, Super+A and Super+V when it is on and installed
 # (EDGE_BIN; its name before 2026-10-31, infynitae-island, until an update builds the new one)
 edge_on() {
     case "${ENABLE_EDGE:-true}" in
@@ -139,6 +139,23 @@ case "$ACTION" in
             --object-path /com/feralinteractive/GameMode \
             --method "com.feralinteractive.GameMode.$call" "$2" >/dev/null 2>&1
         ;;
+    system-monitor)
+        # Super+Shift+Escape: a window of its own if one is installed, else in the terminal
+        SM="${SYSTEM_MONITOR:-auto}"
+        case "$SM" in
+            auto|"")
+                for m in missioncenter gnome-system-monitor plasma-systemmonitor; do
+                    command -v "$m" >/dev/null 2>&1 && exec "$m"
+                done
+                for m in btop htop top; do
+                    command -v "$m" >/dev/null 2>&1 && exec $TERM_CMD -e "$m"
+                done
+                ;;
+            *)
+                exec sh -c "$SM"
+                ;;
+        esac
+        ;;
     file-manager|files)
         # Super+E: File explorer (configurable via ~/.config/infynitae/config)
         FM="${FILE_MANAGER:-auto}"
@@ -176,7 +193,7 @@ case "$ACTION" in
         esac
         ;;
     windows)
-        # Super+D: the open windows in the edge; without the edge the key does nothing
+        # Super+L: the open windows in the edge; without the edge the key does nothing
         edge_on && exec "$EDGE_BIN" toggle
         ;;
     apps|launcher|edge|island)
@@ -486,7 +503,7 @@ case "$ACTION" in
         [ -n "$2" ] && exec sh -c "$2"
         ;;
     lock-screen)
-        # Super+L: Lock screen (native infynitae-lock, hyprlock, swaylock, gtklock, waylock)
+        # Super+Shift+L: Lock screen (native infynitae-lock, hyprlock, swaylock, gtklock, waylock)
         LOCKER="${SCREEN_LOCKER:-auto}"
         case "$LOCKER" in
             auto|"")

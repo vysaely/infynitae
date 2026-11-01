@@ -223,6 +223,9 @@ impl WaylandState {
                 Effect::SpawnFileManager => {
                     self.spawn_action("file-manager");
                 }
+                Effect::SpawnSystemMonitor => {
+                    self.spawn_action("system-monitor");
+                }
                 Effect::SpawnScreenshot => {
                     self.spawn_action("screenshot");
                 }
@@ -349,6 +352,7 @@ impl WaylandState {
             "terminal"
                 | "apps"
                 | "file-manager"
+                | "system-monitor"
                 | "exec"
                 | "browser"
                 | "overview"

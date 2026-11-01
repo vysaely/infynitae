@@ -1,5 +1,5 @@
 /*
- * Infynitae Native App Launcher (Super+W), Taskbar (Super+D) & System Control / StatusNotifier Tray (Super+A)
+ * Infynitae Native App Launcher (Super+W), Taskbar (Super+L) & System Control / StatusNotifier Tray (Super+A)
  *
  * Drawn in the theme colors from the config (CANVAS_COLOR, …): square corners,
  * 1px subtle border, zero nested buttons, zero visual bloat):
@@ -7,7 +7,7 @@
  *     strictly from `~/.config/infynitae/config` (no UI buttons for it).
  *   - Non-blocking input region: only the drawn bar/panel captures pointer events;
  *     clicking/panning the canvas works freely while open.
- *   - Super+Shift+C / Delete / Middle-Click closes the selected/hovered window (in Super+D)
+ *   - Super+Shift+C / Delete / Middle-Click closes the selected/hovered window (in Super+L)
  *     or quits the selected/hovered tray app (in Super+A).
  *   - Built-in org.kde.StatusNotifierWatcher + com.canonical.dbusmenu host:
  *     Right-clicking a tray app fetches and displays the app's own native context menu
@@ -58,7 +58,7 @@
 
 typedef enum {
     MODE_CLOSED = 0,
-    MODE_CENTER = 1,    /* Super+D: Search + Open Window Tabs, windows only */
+    MODE_CENTER = 1,    /* Super+L: Search + Open Window Tabs, windows only */
     MODE_CONTROL = 2,   /* Super+A: System Control + Tray Apps */
     MODE_CLIPBOARD = 3, /* Super+V: Clipboard History */
     MODE_APPS = 4       /* Super+W: Search + Apps */
@@ -307,7 +307,7 @@ enum {
 
 static volatile sig_atomic_t g_sig_cmd = 0;
 
-/* The signals (Super+W, Super+D, Super+A, Super+V) reach any thread that does not block them, GLib's own
+/* The signals (Super+W, Super+L, Super+A, Super+V) reach any thread that does not block them, GLib's own
  * (gdbus, pool) as well: a byte in this pipe wakes the main loop's poll whichever thread ran the
  * handler, where the flag alone waited for the next unrelated event (the keys did nothing). */
 static int g_wake_pipe[2] = {-1, -1};
@@ -1491,7 +1491,7 @@ static void render_output(EdgeOutput *out) {
         EdgeMode active_m = (app->mode != MODE_CLOSED) ? app->mode : app->target_mode;
 
         /* ─────────────────────────────────────────────────────────────────── */
-        /* A. Window strip (Super+D): one outer 1 px border                    */
+        /* A. Window strip (Super+L): one outer 1 px border                    */
         /* ─────────────────────────────────────────────────────────────────── */
         if (active_m == MODE_CENTER) {
             int max_tabs = 6;
@@ -2877,7 +2877,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
             set_mode(app, app->mode == MODE_APPS ? MODE_CLOSED : MODE_APPS);
             return;
         }
-        if (sym == XKB_KEY_d || sym == XKB_KEY_D) {
+        if (sym == XKB_KEY_l || sym == XKB_KEY_L) {
             set_mode(app, app->mode == MODE_CENTER ? MODE_CLOSED : MODE_CENTER);
             return;
         }

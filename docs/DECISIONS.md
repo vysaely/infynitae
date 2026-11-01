@@ -19,17 +19,19 @@ these by date, e.g. "(owner, 2026-10-24)".
 
 ## Keys
 
-- **Super+W is the apps, Super+D the windows** (owner, 2026-11-01; for a few hours that day the other
-  way round). One bar did both, so a search for a window also filled the panel with apps. Now
-  Super+W only searches and starts apps, and Super+D only lists and narrows open windows.
+- **Super+W is the apps, Super+L the windows, Super+Shift+L locks** (owner, 2026-11-01; for a few
+  hours that day Super+W was the windows and Super+D the apps, and Super+D is free now). One bar did both, so a search for a window also filled the panel with apps. Now
+  Super+W only searches and starts apps, and Super+L only lists and narrows open windows.
   `LAUNCHER` and `BIND_LAUNCHER` follow the apps; `BIND_WINDOWS` moves the list. Without the edge
-  Super+D does nothing.
+  Super+L does nothing.
+- **Super+Shift+Escape opens a system monitor** (owner, 2026-11-01; `SYSTEM_MONITOR`), also over a
+  fullscreen game holding the shortcuts, as a stuck game is when it is needed.
 - **The launcher puts what you started recently first** (owner, 2026-11-01). An exact name comes
   first, then recently started apps whose name matches, latest first, then other names. Apps count
   as started only from the launcher, as there is no other record of them
   (`~/.local/state/infynitae/recent-apps`).
 - **Often used on the left hand, rare on the right** (2026-10-31). Super+Tab, Q, W, E, A, S, C,
-  V and Space are the everyday keys; Super+L, Shift+O, Shift+P, Shift+I, Alt+P and
+  V and Space are the everyday keys; Super+Shift+L, Shift+O, Shift+P, Shift+I, Alt+P and
   Shift+BackSpace the rare ones. So **Super+S is the region screenshot** (Super+Shift+S the whole
   screen), **Super+Shift+O the tearing toggle** and **Super+Alt+P recording**; the old chords
   (Super+Shift+R, Super+Shift+T, Super+Alt+R) stay as aliases, and a binding of the user's
@@ -72,7 +74,7 @@ these by date, e.g. "(owner, 2026-10-24)".
   gets game mode, however it is shown. LATENCY_STATS also logs why frames are not shown directly.
 - **An app can take the shortcuts while it has focus** (2026-10-25, `keyboard-shortcuts-inhibit`:
   a VM, a remote desktop, a game): its keys go to it, Super-chords included, until it lets go
-  or loses focus. Super+L (lock), and since 2026-11-01 Super+Tab, Super+W, Super+D and Super+A (a fullscreen game
+  or loses focus. Super+Shift+L (lock), and since 2026-11-01 Super+Tab, Super+W, Super+L and Super+A (a fullscreen game
   took them, "what if I need it"), Ctrl+Alt+Backspace (quit) and Ctrl+Alt+F1… (terminals) always stay yours.
 - **Holding Super frees a cursor a game captured** (2026-10-25, "feel free in my desktop";
   `SUPER_FREES_CURSOR`).

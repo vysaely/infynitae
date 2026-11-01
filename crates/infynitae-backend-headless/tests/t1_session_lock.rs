@@ -169,7 +169,7 @@ fn focused_w() -> (Rig, usize) {
 #[test]
 fn while_locked_keys_reach_only_the_lock_surface_and_no_binding_fires() {
     let (mut r, idx) = focused_w();
-    // Super+L as a user locks: Super is down (Core holds it) when the lock starts
+    // Super+Shift+L as a user locks: Super is down (Core holds it) when the lock starts
     key(&mut r, KEY_LEFTMETA, true);
     let (lock, _surface) = lock(&mut r, 1);
     assert!(
