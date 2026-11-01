@@ -26,6 +26,7 @@ cargo build                                   # debug build
 cargo run -- --nested --width 1600 --height 900   # a session in a window
 live/run.sh                                   # the same with the whole desktop (session.sh)
 ./install.sh / infynitae-update               # release build installed to ~/.local/bin
+tools/everyday-use-tests                      # how people use the desktop, in a throwaway VM only
 ```
 
 Never start a second compositor on the console of a running session.

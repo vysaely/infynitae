@@ -1,0 +1,361 @@
+#!/usr/bin/env python3
+"""Everyday-use tests inside a test VM's session: real input through uinput, results read back from the
+compositor's snapshot, the process list and the files, screenshots in ~/results. A throwaway VM only: it kills
+apps and clicks Log Out, Reboot and Power Off. It expects user `tester` with password `tester`, a 1920x1080 or
+smaller screen and the apps it opens. In the VM's session:
+  sudo -E python3 everyday-use-tests [test name ...]
+Tests ending in SEE-SHOT need a person to look at the screenshot."""
+import fcntl, json, os, re, struct, subprocess, sys, time
+E = dict(os.environ, XDG_RUNTIME_DIR="/run/user/1000", WAYLAND_DISPLAY="wayland-1", DISPLAY=":1",
+         XAUTHORITY="/run/user/1000/infynitae-xauth", HOME="/home/tester", USER="tester", LANG="en_US.UTF-8",
+         PATH="/home/tester/.local/bin:/usr/local/bin:/usr/bin:/bin")
+OUT = "/home/tester/results"; os.makedirs(OUT, exist_ok=True); os.chown(OUT, 1000, 1000)
+KEYS = {"esc":1,"bs":14,"tab":15,"enter":28,"ctrl":29,"shift":42,"alt":56,"space":57,"super":125,"del":111,
+ "left":105,"right":106,"up":103,"down":108,"f4":62,"f11":87,"print":99,"voldown":114,"volup":115,"mute":113,
+ "1":2,"2":3,"3":4,"4":5,"5":6,"6":7,"7":8,"8":9,"9":10,"0":11,"-":12,"=":13,".":52,"/":53,",":51,
+ "q":16,"w":17,"e":18,"r":19,"t":20,"y":21,"u":22,"i":23,"o":24,"p":25,"a":30,"s":31,"d":32,"f":33,"g":34,"h":35,
+ "j":36,"k":37,"l":38,"z":44,"x":45,"c":46,"v":47,"b":48,"n":49,"m":50}
+BTN = {"left":0x110,"right":0x111,"middle":0x112}
+fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+for ev in (0x40045564,):
+    fcntl.ioctl(fd, ev, 1); fcntl.ioctl(fd, ev, 2)
+for k in list(KEYS.values()) + list(BTN.values()): fcntl.ioctl(fd, 0x40045565, k)
+for r in (0, 1, 8): fcntl.ioctl(fd, 0x40045566, r)
+os.write(fd, b"everyday-test-input".ljust(80, b"\0") + struct.pack("<4HI", 3, 0x1234, 0x5678, 1, 0) + b"\0" * 1024)
+fcntl.ioctl(fd, 0x5501); time.sleep(2)
+def emit(*ev):
+    for t, c, v in ev: os.write(fd, struct.pack("<qqHHi", 0, 0, t, c, v))
+    os.write(fd, struct.pack("<qqHHi", 0, 0, 0, 0, 0))
+def wait(s): time.sleep(s)
+def chord(spec, hold=0.05):
+    ks = [KEYS[k] for k in spec.split("+")]
+    for k in ks: emit((1, k, 1)); wait(0.03)
+    wait(hold)
+    for k in reversed(ks): emit((1, k, 0)); wait(0.03)
+    wait(0.25)
+def text(s, gap=0.04):
+    for ch in s:
+        n = {" ": "space", "\n": "enter"}.get(ch, ch)
+        if n.isupper(): chord("shift+" + n.lower())
+        else:
+            emit((1, KEYS[n], 1)); wait(0.015); emit((1, KEYS[n], 0)); wait(gap)
+def move(dx, dy, steps=25):
+    px = py = 0
+    for i in range(1, steps + 1):
+        nx, ny = dx * i // steps, dy * i // steps
+        emit((2, 0, nx - px), (2, 1, ny - py)); px, py = nx, ny; wait(0.008)
+    wait(0.1)
+def click(b="left"): emit((1, BTN[b], 1)); wait(0.05); emit((1, BTN[b], 0)); wait(0.2)
+def sh(cmd, t=30):
+    r = subprocess.run(["su", "tester", "-c", cmd] if os.geteuid() == 0 else cmd, shell=os.geteuid() != 0, env=E,
+                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=t)
+    return r.stdout.strip()
+def snap():
+    try: return json.loads(sh("infynitae msg snapshot"))["snapshot"]
+    except Exception as e: return {"elements": [], "error": str(e)}
+def els(): return snap().get("elements", [])
+def ids(): return [e.get("app_id") or e.get("title") for e in els()]
+def has(app): return any(app.lower() in str(e.get("app_id", "")).lower() or app.lower() in str(e.get("title", "")).lower() for e in els())
+def until(f, t=12, step=0.25):
+    end = time.time() + t
+    while time.time() < end:
+        v = f()
+        if v: return v
+        wait(step)
+    return f()
+def shot(name): sh(f"grim {OUT}/{name}.png"); return f"{name}.png"
+def run_bg(cmd): subprocess.Popen(["su", "tester", "-c", f"setsid sh -c '{cmd}' >/dev/null 2>&1 &"], env=E); wait(0.2)
+def pid_alive(pat): return sh(f"pgrep -f '{pat}' | head -1") != ""
+def point_at(app):
+    # strict focus: the keys act on the window under the pointer
+    e = [x for x in els() if app in str(x.get("app_id", "")).lower()][0]; c = snap()["outputs"][0]["camera"]["center"]
+    move(-3000, -3000, 30); move(int(960 + e["anchor"][0] - c[0] + e["size"][0] / 2), int(540 + e["anchor"][1] - c[1] + e["size"][1] / 2), 30); wait(.4)
+def close_all():
+    for _ in range(40):
+        l = els()
+        if not l: return
+        sh("pkill -x mousepad; pkill -x alacritty; pkill -x thunar; pkill -x xterm; pkill -x kate; pkill -x evince; pkill -x soffice.bin; pkill -x vlc; pkill -f [g]imp; pkill -f [f]irefox; pkill -f [s]office; pkill -9 pavucontrol; pkill -x btop; true"); wait(0.5)
+RES = []
+def rec(name, ok, detail=""):
+    s = "PASS" if ok is True else ("FAIL" if ok is False else str(ok))
+    RES.append((name, s, detail)); line = f"{s:5} {name}: {detail}"; print(line, flush=True)
+    open(f"{OUT}/results.txt", "a").write(line + "\n")
+TESTS = []
+def test(f): TESTS.append(f); return f
+def focused():
+    return snap().get("focus")
+
+@test
+def launcher_type_enter():
+    close_all(); chord("super+w"); wait(1); shot("launcher-open"); text("mousep", 0.12); wait(0.6); shot("launcher-typed"); chord("enter")
+    rec("Super+W, type, Enter starts the app", bool(until(lambda: has("mousepad"))), str(ids()))
+    r = sh("cat ~/.local/state/infynitae/recent-apps"); rec("the start is remembered", "mousepad" in r.lower(), r[:80])
+@test
+def launcher_fast_enter():
+    close_all(); chord("super+w"); wait(0.8); text("alac", 0); emit((1, 28, 1)); emit((1, 28, 0))
+    rec("Enter straight after typing starts what was typed", bool(until(lambda: has("alacritty"), 8)), str(ids()))
+@test
+def launcher_recent_first():
+    close_all(); latest = sh("head -1 ~/.local/state/infynitae/recent-apps | cut -f2"); chord("super+w"); wait(1); shot("launcher-recents"); chord("esc"); wait(.5)
+    chord("super+w"); wait(.8); chord("enter"); key = "mousepad" if "mousepad" in latest else ("alacritty" if "lacritty" in latest else latest.split(".")[0])
+    rec("nothing typed, Enter: the latest app again", bool(until(lambda: has(key), 8)), f"latest {latest}, got {ids()}")
+@test
+def launcher_no_match_enter():
+    close_all(); chord("super+w"); wait(.8); text("zzzzq"); wait(.5); shot("launcher-nomatch"); chord("enter"); wait(2)
+    rec("no match, Enter starts nothing", not els(), str(ids())); chord("esc"); wait(.4)
+@test
+def launcher_backspace_escape_toggle():
+    close_all(); chord("super+w"); wait(.8); text("xx"); chord("bs"); chord("bs"); wait(.3); shot("launcher-backspaced")
+    chord("super+w"); wait(.8); shot("launcher-toggled-closed"); chord("super+w"); wait(.8); shot("launcher-reopened")
+    chord("esc"); wait(.6); shot("launcher-esc-closed"); rec("backspace, toggle and Escape", "SEE-SHOT", "4 screens")
+@test
+def app_waits_for_child():
+    sh("""mkdir -p ~/.local/share/applications; cat > ~/.local/share/applications/waittest.desktop <<'X'
+[Desktop Entry]
+Type=Application
+Name=Waittest
+Exec=sh -c 'python3 -c "import os,signal,sys; p=os.fork(); os._exit(5) if p==0 else None; r=os.waitpid(p,0); open(\\"/tmp/waitres\\",\\"w\\").write(str(os.waitstatus_to_exitcode(r[1])))" 2>/tmp/waiterr'
+X
+rm -f /tmp/waitres /tmp/waiterr""")
+    chord("super+w"); wait(.8); text("waittest"); wait(.4); chord("enter"); wait(3)
+    r = sh("cat /tmp/waitres 2>/dev/null; cat /tmp/waiterr 2>/dev/null | tail -1"); rec("an app from the launcher can wait for its child (the Mocktail bug)", r.startswith("5"), r[:100])
+@test
+def window_list_keys():
+    close_all(); run_bg("mousepad"); run_bg("alacritty"); until(lambda: len(els()) >= 2); wait(1)
+    chord("super+l"); wait(1); shot("window-list"); locked = pid_alive("swaylock") ; chord("esc"); wait(.5)
+    st = sh("pgrep -c -x infynitae-lock || true"); rec("Super+L opens the list, not the lock", st.strip() in ("0", ""), f"lock processes {st}")
+    chord("super+d"); wait(.6); shot("super-d-free"); rec("Super+D is free", "SEE-SHOT", "")
+@test
+def lock_unlock():
+    chord("super+shift+l"); locked = until(lambda: sh("pgrep -c -x infynitae-lock || true").strip() not in ("0", ""), 6)
+    rec("Super+Shift+L locks", bool(locked)); wait(1.5); shot("locked")
+    text("wrong"); chord("enter"); wait(4); still = sh("pgrep -c -x infynitae-lock || true").strip() not in ("0", ""); rec("a wrong password stays locked", still); shot("locked-wrong")
+    text("tester"); chord("enter"); gone = until(lambda: sh("pgrep -c -x infynitae-lock || true").strip() in ("0", ""), 8); rec("the right password unlocks", bool(gone)); wait(1); shot("unlocked")
+@test
+def system_monitor():
+    close_all(); chord("super+shift+esc"); ok = until(lambda: pid_alive("btop"), 8); wait(1.5); shot("system-monitor"); rec("Super+Shift+Escape opens the system monitor", bool(ok), str(ids())); close_all()
+@test
+def close_keys():
+    close_all(); run_bg("alacritty"); until(lambda: has("alacritty")); wait(1); point_at("alacritty")
+    chord("super+c"); wait(1); rec("Super+C closes nothing", has("alacritty"), str(ids()))
+    chord("super+shift+c"); rec("Super+Shift+C closes", bool(until(lambda: not els(), 5)), str(ids()))
+    run_bg("mousepad"); until(lambda: has("mousepad")); wait(1); point_at("mousepad"); text("unsaved"); wait(.3)
+    chord("super+shift+c"); wait(1.5); shot("close-unsaved"); rec("closing unsaved work: the app can ask", has("mousepad"), str(ids()))
+    chord("super+del"); rec("Super+Delete force closes", bool(until(lambda: not pid_alive("^mousepad"), 5)), str(ids())); wait(.5); close_all()
+    run_bg("alacritty"); until(lambda: has("alacritty")); wait(1); chord("super+ctrl+shift+c"); wait(1); rec("Super+Ctrl+Shift+C does nothing", has("alacritty")); close_all()
+@test
+def spawn_keys():
+    close_all(); chord("super+q"); rec("Super+Q terminal", bool(until(lambda: len(els()) >= 1, 6)), str(ids())); close_all()
+    chord("super+e"); rec("Super+E files", bool(until(lambda: len(els()) >= 1, 8)), str(ids())); close_all()
+    chord("super+a"); wait(1); shot("control-menu"); chord("esc"); wait(.3)
+    sh("printf copied-text | wl-copy"); wait(.4); chord("super+v"); wait(1); shot("clipboard"); chord("esc"); wait(.3); rec("Super+A and Super+V show", "SEE-SHOT")
+@test
+def screenshots():
+    d = "~/Pictures"; before = sh(f"find ~ -name '*.png' -newermt '1 min ago' -not -path '*/results/*' 2>/dev/null | wc -l")
+    chord("super+shift+s"); wait(2); after = sh(f"find ~ -name '*.png' -newermt '1 min ago' -not -path '*/results/*' 2>/dev/null | wc -l"); shot("after-fullshot")
+    clip = sh("wl-paste -l 2>/dev/null | head -2"); rec("Super+Shift+S takes a screenshot", int(after or 0) > int(before or 0) or "png" in clip, f"files {before}->{after}; clipboard {clip}")
+@test
+def focus_switching():
+    close_all(); run_bg("alacritty -T AAA"); until(lambda: len(els()) >= 1); wait(.8); run_bg("xterm -T BBB"); until(lambda: len(els()) >= 2); wait(1)
+    a = focused(); chord("super+tab"); wait(.6); b = focused(); chord("super+tab"); wait(.6); c = focused()
+    f = lambda e: e[1] if e else None
+    rec("Super+Tab flips the last two", f(a) != f(b) and f(a) == f(c), f"{f(a)} {f(b)} {f(c)}")
+    chord("super+1"); wait(.5); x = focused(); chord("super+2"); wait(.5); y = focused(); rec("Super+1 and 2 go to window slots", f(x) != f(y), f"{f(x)} {f(y)}")
+    chord("super+left"); wait(.5); chord("super+right"); wait(.5); shot("arrows"); close_all()
+@test
+def copy_paste_apps():
+    close_all(); sh("rm -f /tmp/pa.txt; rm -rf ~/.local/share/Mousepad ~/.config/Mousepad; gsettings set org.xfce.mousepad.preferences.file session-restore never 2>/dev/null; true"); run_bg("mousepad /tmp/pa.txt"); until(lambda: has("mousepad")); wait(2); point_at("mousepad"); text("hello paste")
+    chord("ctrl+a"); chord("ctrl+c"); wait(.6); r = sh("wl-paste -n 2>/dev/null"); rec("copy in a Wayland app reaches the clipboard", r == "hello paste", repr(r))
+    run_bg("xterm -e sh -c \"sleep 8\""); until(lambda: len(els()) >= 2); wait(1); x = sh("DISPLAY=:1 xclip -selection clipboard -o 2>&1 | head -1"); rec("the same text in X11", x == "hello paste", repr(x))
+    sh("printf from-x11 | DISPLAY=:1 timeout 3 xclip -selection clipboard -i; true"); wait(.6); r = sh("wl-paste -n 2>/dev/null"); rec("X11 copy reaches Wayland", r == "from-x11", repr(r))
+    # the clipboard survives its app
+    sh("pkill -x mousepad; true"); wait(1); r = sh("wl-paste -n 2>/dev/null"); rec("clipboard survives closing other apps", r == "from-x11" or r != "", repr(r)); close_all()
+@test
+def save_file_flow():
+    close_all(); sh("rm -f ~/note.txt ~/Documents/note.txt; rm -rf ~/.config/Mousepad ~/.local/share/Mousepad; true"); run_bg("mousepad"); until(lambda: has("mousepad")); wait(2); point_at("mousepad"); text("my note"); chord("ctrl+shift+s"); wait(2.5); shot("save-dialog"); text("/home/tester/note.txt"); wait(.5); chord("enter"); wait(3); shot("after-save")
+    rec("type and save a file through the dialog", "my note" in sh("cat ~/note.txt 2>/dev/null"), repr(sh("cat ~/note.txt 2>/dev/null"))); close_all()
+@test
+def typing_right_after_open():
+    # the first letters typed into a window that just opened: how long until keys arrive?
+    for delay in (0.0, 0.5, 1.0, 2.0):
+        close_all(); sh("rm -f /tmp/ty.txt; rm -rf ~/.config/Mousepad; true"); run_bg("xterm -e sh -c \"cat > /tmp/ty.txt\""); until(lambda: len(els()) >= 1, 8, .05); wait(delay); text("abcdefgh\n", 0.03); wait(.8); sh("pkill -x xterm; true"); wait(.3)
+        r = sh("cat /tmp/ty.txt 2>/dev/null"); rec(f"typing {delay}s after a window maps (xterm)", r == "abcdefgh" if delay >= 1 else "INFO", repr(r))
+    for delay in (0.0, 0.5, 1.0, 2.0):
+        close_all(); sh("rm -rf ~/.config/Mousepad ~/.local/share/Mousepad; true"); run_bg("alacritty -e sh -c \"cat > /tmp/ty2.txt\""); until(lambda: len(els()) >= 1, 8, .05); wait(delay); text("abcdefgh\n", 0.03); wait(.8); sh("pkill -x alacritty; true"); wait(.3)
+        r = sh("cat /tmp/ty2.txt 2>/dev/null; rm -f /tmp/ty2.txt"); rec(f"typing {delay}s after a window maps (alacritty)", r == "abcdefgh" if delay >= 1 else "INFO", repr(r))
+    close_all()
+@test
+def mouse_use():
+    close_all(); run_bg("mousepad"); until(lambda: has("mousepad")); wait(2); shot("m0"); first = lambda: [x for x in els() if "mousepad" in x["app_id"]][0]; e = first(); a0, s0 = e["anchor"], e["size"]
+    # move far to the top left, then onto the window's title bar and drag
+    move(-3000, -3000, 40); ax, ay = a0
+    cam = snap()["outputs"][0]["camera"]["center"]; x = 960 + ax - cam[0] + s0[0] // 2; y = 540 + ay - cam[1] + 18; move(int(x), int(y), 40); wait(.5)
+    emit((1, BTN["left"], 1)); wait(.25); move(200, 120, 30); wait(.2); emit((1, BTN["left"], 0)); wait(.8); e = first(); c2 = snap()["outputs"][0]["camera"]["center"]; rec("dragging the title bar moves the window", e["anchor"] != a0, f"{a0}->{e['anchor']} camera {cam}->{c2}"); shot("m1-dragged")
+    # resize from the bottom right corner
+    e = first(); a1, s1 = e["anchor"], e["size"]; move(s1[0] // 2 + 3, s1[1] - 15, 30); wait(.4); shot("m1b-corner"); emit((1, BTN["left"], 1)); wait(.25); move(150, 100, 30); wait(.2); emit((1, BTN["left"], 0)); wait(.8); e = first(); shot("m2-resized"); rec("dragging the corner resizes", e["size"] != s1, f"{s1}->{e['size']}")
+    # double click on the title bar maximizes
+    e = first(); move(-(e["size"][0] // 2), -(e["size"][1] - 18), 30); wait(.4); click(); wait(.02); click(); wait(1.2); e2 = first(); shot("m3-dbl"); rec("double click on the title bar maximizes", e2["size"] != e["size"], f"{e['size']}->{e2['size']} maximized={e2.get('maximized')}")
+    click(); wait(.05); click(); wait(1); close_all()
+    # launcher with the mouse: click the first entry
+    move(-3000, -3000, 40); chord("super+w"); wait(1); move(830, 49, 40); wait(.3); shot("m4-hover"); click(); ok = until(lambda: len(els()) >= 1, 6); rec("clicking an app in the launcher starts it", bool(ok), str(ids())); close_all()
+    chord("super+w"); wait(1); move(0, 500, 20); click(); wait(.8); shot("m5-click-away"); rec("clicking away closes the launcher", "SEE-SHOT")
+    # right click menu in an app
+    run_bg("mousepad"); until(lambda: has("mousepad")); wait(2); click("right"); wait(1); shot("m6-menu"); rec("a right click menu shows", "SEE-SHOT"); chord("esc"); close_all()
+@test
+def camera_keys():
+    close_all(); run_bg("alacritty"); until(lambda: has("alacritty")); wait(1); c0 = snap()["outputs"][0]["camera"]
+    emit((1, KEYS["super"], 1)); wait(.1); emit((1, BTN["middle"], 1)); move(-300, -150, 30); emit((1, BTN["middle"], 0)); wait(.1); emit((1, KEYS["super"], 0)); wait(.6); c1 = snap()["outputs"][0]["camera"]; rec("Super + middle drag pans the canvas", c0 != c1, f"{c0.get('center')}->{c1.get('center')}")
+    chord("super+space"); wait(.8); c2 = snap()["outputs"][0]["camera"]; rec("Super+Space brings the window back", c2 != c1, f"{c2.get('center')}"); close_all()
+@test
+def dialog_placement():
+    res = []
+    for pos, cmds in (("centre", []),):
+        close_all(); sh("rm -rf ~/.config/Mousepad; true"); run_bg("mousepad"); until(lambda: has("mousepad")); wait(2); text("x"); chord("ctrl+shift+s"); until(lambda: len(els()) >= 2, 6); wait(1.2); shot("dialog-from-editor")
+        s = snap(); o = s["outputs"][0]; c = o["camera"]["center"]; z = o["camera"]["zoom"]; W, H = o["mode"]
+        for e in s["elements"]:
+            ax, ay = e["anchor"]; ew, eh = e["size"]; sx, sy = (ax - c[0]) * z + W / 2, (ay - c[1]) * z + H / 2; inside = sx >= 0 and sy >= 0 and sx + ew * z <= W and sy + eh * z <= H
+            res.append(f"{e['title'][:18]} screen=({sx:.0f},{sy:.0f}) {ew}x{eh} fully-on-screen={inside}")
+        d = s["elements"][-1] if len(s["elements"]) >= 2 else None
+        rec("a dialog opens fully on screen", all("fully-on-screen=True" in r for r in res) and bool(d), " | ".join(res))
+        text("/home/tester/note2.txt"); wait(.5); shot("dialog-typed"); chord("enter"); wait(2); shot("dialog-after-enter"); rec("typing a path in the dialog and Enter saves", sh("cat ~/note2.txt 2>/dev/null; rm -f ~/note2.txt") != "", str(ids()))
+    close_all()
+def on_screen(e):
+    o = snap()["outputs"][0]; c = o["camera"]["center"]; z = o["camera"]["zoom"]; W, H = o["mode"]
+    ax, ay = e["anchor"]; w, h = e["size"]; sx, sy = (ax - c[0]) * z + W / 2, (ay - c[1]) * z + H / 2
+    return sx >= 0 and sy >= 0 and sx + w * z <= W and sy + h * z <= H, f"screen=({sx:.0f},{sy:.0f}) {w}x{h}"
+@test
+def new_window_after_pan():
+    close_all(); wait(1); run_bg("alacritty"); until(lambda: has("alacritty")); wait(1); ok, d = on_screen(els()[0]); rec("a first window opens on screen", ok, d)
+    move(-3000, -3000, 40); move(960, 540, 30)
+    emit((1, KEYS["super"], 1)); wait(.1); emit((1, BTN["middle"], 1)); move(-900, -500, 40); emit((1, BTN["middle"], 0)); wait(.1); emit((1, KEYS["super"], 0)); wait(.7); shot("n1-panned")
+    c0 = snap()["outputs"][0]["camera"]["center"]; run_bg("mousepad"); until(lambda: has("mousepad"), 12, .05); e = [x for x in els() if "mousepad" in x["app_id"]][0]; d0 = on_screen(e)[1]; c1 = snap()["outputs"][0]["camera"]["center"]; wait(1.5); e = [x for x in els() if "mousepad" in x["app_id"]][0]; ok, d = on_screen(e); d += f" (at map {d0}, camera {c0}->{c1}->{snap()['outputs'][0]['camera']['center']}, others {[o['anchor'] for o in els()]})"; shot("n2-opened-after-pan"); rec("after panning away, a new window opens on screen", ok, d)
+    chord("super+space"); wait(.8); close_all(); wait(1); run_bg("xterm"); until(lambda: has("xterm")); wait(1); ok, d = on_screen(els()[0]); rec("after everything closed, a new window opens on screen", ok, d); close_all()
+    for i in range(5): run_bg("xterm"); wait(1.2)
+    until(lambda: len(els()) >= 5, 8); wait(1); res = [on_screen(e) for e in els()]; shot("n3-five"); rec("five windows in a row: all on screen", all(r[0] for r in res), " ".join(r[1].split()[0] + ("" if r[0] else "!OFF") for r in res)); close_all()
+@test
+def drag_fresh():
+    close_all(); wait(1); run_bg("mousepad"); until(lambda: has("mousepad")); wait(2); e = els()[0]; a0, s0 = e["anchor"], e["size"]; ok, d = on_screen(e)
+    move(-3000, -3000, 40); o = snap()["outputs"][0]; c = o["camera"]["center"]; x = int(960 + a0[0] - c[0] + s0[0] // 2); y = int(540 + a0[1] - c[1] + 18); move(x, y, 40); wait(.6); shot("d0-before")
+    emit((1, BTN["left"], 1)); wait(.3); move(200, 120, 30); wait(.3); shot("d1-mid"); emit((1, BTN["left"], 0)); wait(1); e = els()[0]; c2 = snap()["outputs"][0]["camera"]["center"]; shot("d2-after")
+    rec("dragging the title bar moves the window (fresh)", e["anchor"] != a0, f"{d} pointer ({x},{y}) {a0}->{e['anchor']} camera {c}->{c2}"); close_all()
+def pixel(x, y):
+    r = subprocess.run(["su", "tester", "-c", f"grim -g '{x},{y} 1x1' -t ppm -"], env=E, stdout=subprocess.PIPE)
+    return tuple(r.stdout[-3:])
+def panel_open(): return pixel(960, 8) != (13, 17, 23) and sum(pixel(960, 8)) > sum(pixel(960, 300)) + 40
+@test
+def launcher_click_away():
+    close_all(); wait(1); base = pixel(960, 8); chord("super+w"); wait(1); opened = pixel(960, 8); move(-3000, -3000, 40); move(960, 600, 40); click(); wait(1); closed = pixel(960, 8); shot("click-away")
+    rec("clicking away closes the launcher", opened != base and closed == base, f"desktop {base}, open {opened}, after click {closed}")
+    chord("super+w"); wait(1); move(0, -578, 30); wait(.4); click(); wait(1); still = pixel(960, 8); chord("esc"); wait(.6); rec("a click on the search box keeps it open", still == opened, f"{still}")
+    run_bg("mousepad"); until(lambda: has("mousepad")); wait(2); text("ab"); chord("super+w"); wait(1); move(-3000, -3000, 40); move(960, 600, 40); click(); wait(1); text("cd"); wait(.5); shot("click-away-typing"); chord("ctrl+a"); chord("ctrl+c"); wait(.5); r = sh("wl-paste -n 2>/dev/null"); rec("after clicking away, typing reaches the window", r == "abcd", repr(r)); close_all()
+@test
+def super_drag_and_maximize():
+    close_all(); wait(1); run_bg("alacritty"); until(lambda: has("alacritty")); wait(1.5); e = els()[0]; a0, s0 = e["anchor"], e["size"]; ok, d = on_screen(e)
+    c = snap()["outputs"][0]["camera"]["center"]; move(-3000, -3000, 40); move(int(960 + a0[0] - c[0] + s0[0] / 2), int(540 + a0[1] - c[1] + s0[1] / 2), 40); wait(.4)
+    emit((1, KEYS["super"], 1)); wait(.1); emit((1, BTN["left"], 1)); wait(.1); move(150, 90, 30); wait(.2); emit((1, BTN["left"], 0)); wait(.1); emit((1, KEYS["super"], 0)); wait(.8); e = els()[0]; rec("Super + left drag moves a window", e["anchor"] != a0, f"{a0}->{e['anchor']}"); shot("s1-moved")
+    a1, s1 = e["anchor"], e["size"]; emit((1, KEYS["super"], 1)); wait(.1); emit((1, BTN["right"], 1)); wait(.1); move(120, 80, 30); wait(.3); emit((1, BTN["right"], 0)); wait(.1); emit((1, KEYS["super"], 0)); wait(1); e = els()[0]; rec("Super + right drag resizes a window", e["size"] != s1, f"{s1}->{e['size']}"); shot("s2-resized")
+    s2 = e["size"]; chord("super+enter"); wait(1); e = els()[0]; shot("s3-fit"); rec("Super+Enter fills the view", e["size"] != s2, f"{s2}->{e['size']}"); chord("super+enter"); wait(1); e = els()[0]; rec("and Super+Enter again restores it", e["size"] == s2, f"{e['size']}"); close_all()
+@test
+def zoom_overview():
+    close_all(); run_bg("alacritty"); until(lambda: has("alacritty")); wait(1); z0 = snap()["outputs"][0]["camera"]["zoom"]; emit((1, KEYS["super"], 1)); emit((1, KEYS["shift"], 1)); wait(.05)
+    for _ in range(4): emit((2, 8, 1)); wait(.1)
+    emit((1, KEYS["shift"], 0)); emit((1, KEYS["super"], 0)); wait(.8); z1 = snap()["outputs"][0]["camera"]["zoom"]; shot("z1"); rec("Super+Shift+wheel zooms", z1 != z0, f"{z0}->{z1}"); chord("super+space"); wait(.8); z2 = snap()["outputs"][0]["camera"]["zoom"]; rec("Super+Space resets the zoom", z2 == 1, str(z2))
+    chord("super+shift+tab"); wait(1.2); shot("overview"); z3 = snap()["outputs"][0]["camera"]["zoom"]; chord("esc"); wait(1); chord("super+shift+tab"); wait(1); chord("super+shift+tab"); wait(1); shot("overview-off"); rec("Super+Shift+Tab overview", "SEE-SHOT", f"zoom in overview {z3}"); close_all()
+@test
+def notifications_real():
+    sh("notify-send -a Tester 'Hello' 'A notification body'"); wait(1); shot("notification"); r = sh("makoctl list 2>&1 | head -3"); rec("a notification shows", "Hello" in r, r[:80] + " / daemon " + sh("pgrep -x mako | head -1"))
+    chord("super+w"); wait(.8); shot("notification-with-panel"); chord("esc")
+@test
+def recording_and_clip():
+    close_all(); run_bg("alacritty"); until(lambda: has("alacritty")); wait(1); b = sh("find ~ -type f \\( -name '*.mp4' -o -name '*.mkv' -o -name '*.webm' \\) 2>/dev/null | wc -l"); chord("super+alt+p"); wait(5); shot("recording"); chord("super+alt+p"); wait(4); a = sh("find ~ -type f \\( -name '*.mp4' -o -name '*.mkv' -o -name '*.webm' \\) 2>/dev/null | wc -l"); rec("Super+Alt+P records a video", int(a or 0) > int(b or 0), f"videos {b}->{a}; " + sh("tail -2 ~/.local/state/infynitae/helpers.log | cut -c1-100")); close_all()
+@test
+def session_restore():
+    close_all(); wait(1); run_bg("mousepad"); run_bg("alacritty"); run_bg("thunar"); until(lambda: len(els()) >= 3, 12); wait(3); sh("cat ~/.local/state/infynitae/session.json 2>/dev/null | python3 -c \"import json,sys; print(len(json.load(sys.stdin).get('windows',[])))\" > /tmp/saved; true"); rec("three windows are saved for the next start", "INFO", sh("cat /tmp/saved"))
+@test
+def typing_fresh_apps():
+    def editor(name, cmd, marker, wait_s):
+        got = []
+        for i in range(4):
+            close_all(); wait(.8); sh("gsettings set org.xfce.mousepad.preferences.file session-restore never 2>/dev/null; rm -rf ~/.local/share/Mousepad ~/.config/Mousepad ~/.cache/Mousepad; true"); run_bg(cmd); until(lambda: has(marker), 15, .05); wait(wait_s); point_at(marker.lower()); text("hello paste"); wait(.4); chord("ctrl+a"); chord("ctrl+c"); wait(.6); got.append(sh("wl-paste -n 2>/dev/null"))
+        rec(f"typing into a new {name} window, 4 tries", all(g == "hello paste" for g in got), str(got))
+    editor("Mousepad (session restore off)", "mousepad", "mousepad", 1.5); editor("Kate (Qt)", "kate -n", "kate", 3); close_all()
+@test
+def typing_without_pointing():
+    got = []
+    for i in range(3):
+        close_all(); wait(.8); sh("rm -rf ~/.local/share/Mousepad ~/.config/Mousepad; true"); move(-3000, -3000, 30); run_bg("mousepad"); until(lambda: has("mousepad"), 8, .05); wait(1.5); text("hello paste"); wait(.4); chord("ctrl+a"); chord("ctrl+c"); wait(.6); got.append(sh("wl-paste -n 2>/dev/null"))
+    rec("typing into a new window with the pointer elsewhere", all(g == "hello paste" for g in got), str(got)); close_all()
+def click_menu(x, y):
+    W = snap()["outputs"][0]["mode"][0]; chord("super+a"); wait(1); move(-3000, -3000, 30); move(W - 30, 143, 40); wait(.3); click(); wait(1); shot("menu-cleared"); chord("esc"); wait(.5)
+    chord("super+a"); wait(1); move(-3000, -3000, 30); move(x, y, 40); wait(.4); shot("menu-hover"); click()
+@test
+def menu_logout():
+    close_all(); click_menu(1866, 143); wait(1)
+@test
+def menu_reboot():
+    close_all(); sh("makoctl dismiss -a; true"); W = snap()["outputs"][0]["mode"][0]; click_menu(W - 228, 143); wait(1)
+@test
+def small_screen():
+    W, H = snap()["outputs"][0]["mode"]; run_bg("mousepad"); until(lambda: has("mousepad")); wait(2); chord("super+w"); wait(1); shot("small-launcher"); chord("esc"); chord("super+a"); wait(1); shot("small-control"); chord("esc"); wait(.3); text("x"); chord("ctrl+shift+s"); until(lambda: len(els()) >= 2, 8); wait(1.5); shot("small-dialog")
+    res = [on_screen(e) for e in els()]; rec(f"on a {W}x{H} screen every window shows whole", all(r[0] for r in res), " | ".join(r[1] for r in res)); chord("esc"); wait(.5); close_all()
+    run_bg("firefox"); until(lambda: has("firefox"), 30, .5); wait(4); shot("small-firefox"); e = [x for x in els() if "firefox" in x["app_id"]][0]; ok, d = on_screen(e); rec("a browser fits the small screen", ok, d); close_all()
+@test
+def usb_drive():
+    r = sh("lsblk -rno NAME,SIZE,MOUNTPOINT,RM | grep -E '^sd' | head -5"); m = sh("findmnt -rno TARGET,SOURCE | grep -E '/run/media|/media' | head -3"); shot("usb-plugged"); rec("a plugged USB drive is mounted", bool(m), f"disks [{r}] mounted [{m}]"); rec("drive notification", "INFO", sh("makoctl history 2>/dev/null | grep -iE 'drive|usb|mount|Notification' | head -3 | cut -c1-90; tail -3 ~/.local/state/infynitae/automount.log 2>/dev/null | cut -c1-110"))
+@test
+def two_screens():
+    s = snap(); rec("two screens are seen", len(s["outputs"]) >= 2, str([(o["name"], o["mode"]) for o in s["outputs"]])); shot("two-screens"); run_bg("alacritty"); until(lambda: has("alacritty")); wait(1); shot("two-screens-window"); close_all(); chord("super+w"); wait(1); shot("two-screens-launcher"); chord("esc")
+@test
+def menu_poweroff():
+    close_all(); sh("makoctl dismiss -a; true"); W = snap()["outputs"][0]["mode"][0]; click_menu(W - 141, 143); wait(1)
+@test
+def launcher_shows_new_window():
+    close_all(); wait(1); run_bg("alacritty"); until(lambda: has("alacritty")); wait(1.5); chord("super+w"); wait(1); text("mousepad"); wait(.4); chord("enter"); until(lambda: has("mousepad"), 8, .1); wait(2); shot("launcher-second-window"); e = [x for x in els() if "mousepad" in x["app_id"]][0]; ok, d = on_screen(e); rec("a window started from the launcher shows whole, the camera follows it", ok, d); close_all()
+@test
+def apps_open():
+    for name, cmd, marker, t in [("Firefox","firefox --new-window about:blank","firefox",40),("Thunar","thunar","thunar",10),("Kate (Qt)","kate","kate",20),("Mousepad (GTK)","mousepad","mousepad",8),("xterm (X11)","xterm","xterm",8),("LibreOffice","soffice --writer","soffice",50),("GIMP","gimp","gimp",70),("VLC","vlc","vlc",20),("Evince","evince","evince",12),("pavucontrol","pavucontrol","pavucontrol",10)]:
+        close_all(); wait(1); left = ids(); t0 = time.time(); run_bg(cmd); ok = until(lambda: has(marker) or (marker == "soffice" and has("libreoffice")), t, .5); took = time.time() - t0; wait(3); shot("app-" + marker)
+        l = els(); rec(f"{name} opens and shows a window", bool(ok), f"{took:.1f}s {[(e.get('app_id'), e.get('size')) for e in l][:3]}" + (f" left over {left}" if left else ""))
+    close_all()
+@test
+def file_opens():
+    close_all(); sh("printf 'hi' > ~/t.txt; xdg-mime query default text/plain"); run_bg("xdg-open ~/t.txt"); ok = until(lambda: len(els()) >= 1, 12); wait(1); rec("xdg-open opens a text file", bool(ok), str(ids())); close_all()
+    run_bg("xdg-open https://example.org"); ok = until(lambda: has("firefox"), 40, .5); wait(5); shot("browser-page"); rec("a link opens the browser", bool(ok), str(ids())); close_all()
+@test
+def fullscreen_and_mouse():
+    close_all(); run_bg("alacritty"); until(lambda: has("alacritty")); wait(1); s0 = els()[0]["size"]; chord("super+shift+enter"); wait(1); s1 = (els() or [{}])[0].get("size"); shot("fullscreen")
+    rec("Super+Shift+Enter fills the screen", s1 == [1920, 1080], f"{s0}->{s1}"); chord("super+shift+enter"); wait(1); s2 = (els() or [{}])[0].get("size"); rec("and comes back", s2 == s0, f"{s2}")
+    chord("super+w"); wait(.8); shot("launcher-over-window"); chord("esc"); close_all()
+@test
+def notifications_audio():
+    sh("notify-send -a Tester 'Hello' 'A notification body'"); wait(1.2); shot("notification"); rec("a notification shows", "SEE-SHOT")
+    sh("systemctl --user restart pipewire wireplumber pipewire-pulse 2>/dev/null; sleep 1; true"); v0 = sh("pactl get-sink-volume @DEFAULT_SINK@ | head -1"); chord("volup"); wait(.6); v1 = sh("pactl get-sink-volume @DEFAULT_SINK@ | head -1"); chord("mute"); wait(.5); m = sh("pactl get-sink-mute @DEFAULT_SINK@"); chord("mute")
+    rec("volume keys", v0 != v1 and "yes" in m, f"{v0[:60]} -> {v1[:60]}; {m}")
+@test
+def session_restore_and_crash():
+    close_all(); run_bg("alacritty"); until(lambda: has("alacritty")); wait(1)
+    p = sh("pgrep -x alacritty | head -1"); sh(f"kill -9 {p}"); rec("a killed app's window goes", bool(until(lambda: not els(), 5)), str(ids()))
+    e0 = sh("pgrep -x infynitae-edge | head -1"); sh(f"kill -9 {e0}"); wait(4); e1 = sh("pgrep -x infynitae-edge | head -1"); chord("super+w"); wait(1.5); shot("launcher-after-edge-crash"); e2 = sh("pgrep -x infynitae-edge | head -1"); rec("after a launcher crash, Super+W starts it again", e2 not in ("", e0), f"before {e0}, after crash {e1 or 'none'}, after Super+W {e2}"); chord("esc")
+@test
+def many_windows():
+    close_all(); [run_bg("xterm") for _ in range(25)]; n = until(lambda: len(els()) >= 25, 25) ; wait(1.5); shot("many-windows"); rec("25 windows", bool(n), str(len(els())))
+    chord("super+l"); wait(1.2); shot("many-window-list"); chord("esc"); chord("super+shift+tab"); wait(1.5); shot("many-overview"); chord("esc"); wait(.5)
+    cpu = sh("P=$(pgrep -x infynitae | head -1); a=$(awk '{print $14+$15}' /proc/$P/stat); sleep 5; b=$(awk '{print $14+$15}' /proc/$P/stat); echo $(( (b-a)/5 ))% CPU, $(awk '/VmRSS/{print $2/1024\" MB\"}' /proc/$P/status)"); rec("the compositor with 25 windows", "INFO", cpu); close_all()
+    rec("all closed", bool(until(lambda: not els(), 8)), str(len(els())))
+@test
+def config_changes():
+    sh("cp ~/.config/infynitae/config /tmp/config.bak; printf 'BIND_TERMINAL=\"SUPER+Y\"\\nBROKEN LINE (\\n' >> ~/.config/infynitae/config"); wait(3); shot("config-broken")
+    chord("super+y"); ok = until(lambda: len(els()) >= 1, 5); rec("a broken config line keeps the rest working", bool(ok), f"Super+Y gives {ids()}"); close_all()
+    sh("cp /tmp/config.bak ~/.config/infynitae/config"); wait(2)
+    sh("sh ~/infynitae/live/config-check 2>&1 | head -3"); rec("config-check names settings an old config still has", "INFO", sh("sh ~/infynitae/live/config-check 2>&1 | head -3"))
+
+names = sys.argv[1:]
+open(f"{OUT}/results.txt", "a").write(f"--- {time.strftime('%H:%M:%S')} {names or 'all'}\n")
+for f in TESTS:
+    if names and f.__name__ not in names: continue
+    try: f()
+    except Exception as e: rec(f.__name__, False, f"test crashed: {e!r}")
+    try:
+        for _ in range(1): chord("esc")
+    except Exception: pass
+fcntl.ioctl(fd, 0x5502)
