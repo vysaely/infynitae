@@ -32,6 +32,9 @@ these by date, e.g. "(owner, 2026-10-24)".
   whose activation was refused wants attention; Super+Tab goes to the most recent such window
   first, brings it into view as Super+1..9 does, and clears its mark; the next Super+Tab goes
   back. A window loses the mark whenever it is focused. The edge marks such a window's tile.
+  **With focus following the mouse** (2026-11-01): hover moves the focus only when the pointer
+  crosses into something else, so a nudge after Super+Tab keeps its window; and a window counts
+  as used only after 0.3 s (or a click), so one the pointer just passed is not the "last window".
 - **Super+Q / W / E** start the terminal, launcher and file manager through one dispatcher
   (`live/launch.sh`), so each is a config setting.
 - **Super+C closes, Super+Shift+C force-closes** (2026-10-25; Super+Delete before). Force close
@@ -52,8 +55,8 @@ these by date, e.g. "(owner, 2026-10-24)".
   camera and carries the window (2026-10-22).
 - **An app can take the shortcuts while it has focus** (2026-10-25, `keyboard-shortcuts-inhibit`:
   a VM, a remote desktop, a game): its keys go to it, Super-chords included, until it lets go
-  or loses focus. Super+L (lock), Ctrl+Alt+Backspace (quit) and Ctrl+Alt+F1… (terminals) always
-  stay yours.
+  or loses focus. Super+L (lock), Super+Tab (leave it, 2026-11-01: a fullscreen game took it),
+  Ctrl+Alt+Backspace (quit) and Ctrl+Alt+F1… (terminals) always stay yours.
 - **Holding Super frees a cursor a game captured** (2026-10-25, "feel free in my desktop";
   `SUPER_FREES_CURSOR`).
 

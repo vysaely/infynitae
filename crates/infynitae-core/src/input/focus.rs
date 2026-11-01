@@ -41,7 +41,14 @@ pub struct FocusModel {
     layer: Option<(crate::layer::LayerId, bool)>,
     /// A Super+Tab step-through in progress ([`Cycle`]).
     cycle: Option<Cycle>,
+    /// When the pointer moved the focus to the window now focused, until it counts as used
+    /// ([`FocusModel::settle_hover`]); until then it is not in the history.
+    hovered_since: Option<u64>,
 }
+
+/// How long the pointer must keep a window focused before it counts as used: a window the pointer
+/// only passed on its way elsewhere does not become Super+Tab's "last window" (owner, 2026-11-01).
+const HOVER_SETTLES_US: u64 = 300_000;
 
 /// A Super+Tab step-through (owner, 2026-10-31, "like Alt+Tab"): while Super stays held, each
 /// Tab steps one window further back through the recently used ones, in the order they had when
@@ -65,6 +72,7 @@ impl Default for FocusModel {
             activation_policy: ActivationPolicy::Strict,
             layer: None,
             cycle: None,
+            hovered_since: None,
         }
     }
 }
@@ -99,7 +107,43 @@ impl FocusModel {
     /// A Super+Tab step-through in progress ends first, keeping the window it reached as used.
     pub fn set_focus(&mut self, next: Option<ElementId>) -> Vec<Effect> {
         self.end_cycle();
-        self.focus_to(next, true)
+        self.hovered_since = None;
+        let fx = self.focus_to(next, true);
+        // a click on the window the pointer had already focused: it is used now
+        if let Some(id) = next
+            && self.history.first() != Some(&id)
+        {
+            self.record(id);
+        }
+        fx
+    }
+
+    /// The pointer crossed into `next` (focus follows the mouse) at `now_us`: the focus moves, and
+    /// `next` counts as used only once it stayed focused a moment ([`Self::settle_hover`]).
+    pub fn hover_focus(&mut self, next: Option<ElementId>, now_us: u64) -> Vec<Effect> {
+        self.settle_hover(now_us);
+        self.end_cycle();
+        self.hovered_since = next.map(|_| now_us);
+        self.focus_to(next, false)
+    }
+
+    /// A window the pointer focused and that has stayed focused long enough becomes the most
+    /// recently used. Called with each key and each crossing, before they act.
+    pub fn settle_hover(&mut self, now_us: u64) {
+        let settled = self
+            .hovered_since
+            .is_some_and(|since| now_us.saturating_sub(since) >= HOVER_SETTLES_US);
+        if settled {
+            self.hovered_since = None;
+            if let Some(id) = self.target {
+                self.record(id);
+            }
+        }
+    }
+
+    fn record(&mut self, id: ElementId) {
+        self.history.retain(|&e| e != id);
+        self.history.insert(0, id);
     }
 
     /// Moves the focus to `next`; `record`: it becomes the most recently used window (not while a
@@ -122,8 +166,7 @@ impl FocusModel {
         self.target = next;
         if let Some(id) = next {
             if record {
-                self.history.retain(|&e| e != id);
-                self.history.insert(0, id);
+                self.record(id);
             }
             // a focused element needs no attention
             self.attention.retain(|&e| e != id);
@@ -154,6 +197,7 @@ impl FocusModel {
     /// never focused come after the used ones, the newest first.
     pub fn focus_next(&mut self, live_elements: &[ElementId], held: Modifiers) -> Vec<Effect> {
         self.initial_eligible = false;
+        self.hovered_since = None;
         if live_elements.is_empty() {
             self.cycle = None;
             return self.set_focus(None);
@@ -257,8 +301,7 @@ impl FocusModel {
             return;
         }
         if let Some(id) = self.target {
-            self.history.retain(|&e| e != id);
-            self.history.insert(0, id);
+            self.record(id);
         }
     }
 
@@ -283,6 +326,7 @@ impl FocusModel {
             return Vec::new();
         }
         self.cycle = None;
+        self.hovered_since = None;
         let successor = self
             .history
             .iter()
@@ -574,6 +618,31 @@ mod tests {
         fm.modifiers_changed(Modifiers::default());
         assert_eq!(fm.target(), Some(b), "Tab, Tab returns");
         assert_eq!(fm.history(), &[b, c, a]);
+    }
+
+    /// The pointer passing over a window on its way elsewhere does not make it the last window
+    /// used (owner, 2026-11-01); a window it stays on does, and a click at once.
+    #[test]
+    fn a_window_the_pointer_only_passed_is_not_the_last_used() {
+        let [a, b, c, _] = ids();
+        let live = [a, b, c];
+        let mut fm = FocusModel::default();
+        for e in [a, b] {
+            let _ = fm.set_focus(Some(e));
+        }
+        // from b, past c, onto a: c had the focus for a moment only
+        let _ = fm.hover_focus(Some(c), 1_000_000);
+        let _ = fm.hover_focus(Some(a), 1_050_000);
+        fm.settle_hover(2_000_000);
+        assert_eq!(fm.history()[..2], [a, b]);
+        let _ = fm.focus_next(&live, SUPER);
+        fm.modifiers_changed(Modifiers::default());
+        assert_eq!(fm.target(), Some(b), "back to b, not c");
+
+        // a click on the window the pointer just focused counts at once
+        let _ = fm.hover_focus(Some(c), 3_000_000);
+        let _ = fm.set_focus(Some(c));
+        assert_eq!(fm.history()[0], c);
     }
 
     /// Holding Super, each further Tab steps one window further back (wrapping round); the

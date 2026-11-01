@@ -438,6 +438,9 @@ pub struct Core {
     pub focus_follows_mouse: bool,
     /// Whether focus is cleared when pointer hovers over empty canvas (Strict vs Sloppy).
     pub focus_follows_mouse_strict: bool,
+    /// The window under the pointer at the last motion: hover moves the focus only when this
+    /// changes, so a focus moved by keyboard stays until the pointer really goes somewhere.
+    hover_seen: Option<stage::ElementId>,
     /// Whether focus cycling (Super+Tab) moves the camera to the focused window.
     pub focus_cycle_navigate: bool,
     /// Super+Enter action mode: Maximize (fill usable viewport) vs Fit (camera zoom).
@@ -537,6 +540,7 @@ impl Core {
                 pan_mode: navigation::PanMode::default(),
                 focus_follows_mouse: false,
                 focus_follows_mouse_strict: false,
+                hover_seen: None,
                 focus_cycle_navigate: false,
                 enter_mode: EnterMode::default(),
                 presentation_suppressed: Vec::new(),
@@ -1046,8 +1050,8 @@ impl Core {
     }
 
     /// The focused window took over the compositor's shortcuts (`keyboard-shortcuts-inhibit`), or
-    /// gave them back. While it holds them, every key goes to it except Super+L, so an app can
-    /// never keep you from locking (owner, 2026-10-25). Quitting the session and switching
+    /// gave them back. While it holds them, every key goes to it except Super+L and Super+Tab, so
+    /// an app can never keep you from locking (owner, 2026-10-25) or from leaving it (2026-11-01). Quitting the session and switching
     /// terminals are the console backend's and never reach Core.
     pub fn set_shortcuts_inhibited(&mut self, inhibited: bool) {
         self.shortcuts_inhibited = inhibited;

@@ -157,6 +157,7 @@ impl Core {
             } => {
                 self.input.clock.accepted(time_us);
                 self.input.modifiers = modifiers;
+                self.focus.settle_hover(time_us);
                 // letting Super go ends a Super+Tab step-through: the window reached is chosen
                 self.focus.modifiers_changed(modifiers);
                 out.extend(self.suspend_constraints(modifiers.logo && self.free_cursor_on_super));
@@ -626,7 +627,10 @@ impl Core {
         let interaction_active = self.input.interaction.active();
         let matched = self
             .resolve_key_binding(key, modifiers, interaction_active)
-            .filter(|a| !self.shortcuts_inhibited || *a == KeyAction::SpawnLockScreen);
+            .filter(|a| {
+                !self.shortcuts_inhibited
+                    || matches!(a, KeyAction::SpawnLockScreen | KeyAction::FocusNext)
+            });
 
         // K3: keys that change XKB modifier or lock state are never compositor-owned (observe mode)
         if mods_changed {
@@ -707,6 +711,8 @@ impl Core {
                 {
                     self.recenter(p, false, out);
                 }
+                // what is under the pointer now is not a crossing: the camera moved, not the hand
+                self.hover_seen = self.hovered_window();
                 return;
             }
             // M22 cancel: no revert, owned buttons stay owned; the interaction terminates as at
@@ -1511,12 +1517,19 @@ impl Core {
                         x: cur_p.0,
                         y: cur_p.1,
                     };
-                    if let Some(hit) = self.hit_test(cur_o, pt) {
-                        if self.focus.target() != Some(hit.element) {
-                            out.extend(self.focus.set_focus(Some(hit.element)));
+                    // only a crossing moves the focus, not every motion: Super+Tab's window
+                    // stays when the mouse is nudged (owner, 2026-11-01)
+                    let under = self.hit_test(cur_o, pt).map(|hit| hit.element);
+                    if under != self.hover_seen {
+                        self.hover_seen = under;
+                        let target = self.focus.target();
+                        if under.is_some() && under != target
+                            || under.is_none()
+                                && self.focus_follows_mouse_strict
+                                && target.is_some()
+                        {
+                            out.extend(self.focus.hover_focus(under, time_us));
                         }
-                    } else if self.focus_follows_mouse_strict && self.focus.target().is_some() {
-                        out.extend(self.focus.set_focus(None));
                     }
                 }
                 self.routed_motion(delta, delta_unaccel, time_us, out);
@@ -3565,6 +3578,11 @@ mod tests {
             "Super+L still locks: {fx:?}"
         );
         assert!(!forwarded(&fx, KEY_L), "and the window does not get it");
+        let fx = press(&mut c, crate::input::keys::KEY_TAB, false);
+        assert!(
+            !forwarded(&fx, crate::input::keys::KEY_TAB),
+            "Super+Tab always leaves the window: {fx:?}"
+        );
         c.set_shortcuts_inhibited(false);
         assert!(
             !forwarded(&press(&mut c, KEY_Q, false), KEY_Q),
@@ -4811,6 +4829,54 @@ mod tests {
         press(c, i, KEY_TAB, true, true);
         press(c, i, KEY_TAB, false, true);
         press(c, i, KEY_LEFTMETA, false, false);
+    }
+
+    /// With focus following the mouse, Super+Tab's window keeps the focus when the mouse is nudged;
+    /// only going to another window moves it (owner, 2026-11-01).
+    #[test]
+    fn super_tab_keeps_its_window_when_the_mouse_is_nudged() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        c.set_focus_follows_mouse(true);
+        c.set_focus_follows_mouse_strict(true);
+        let ws = map_windows(&mut c, a, 2);
+        let mut fx = Vec::new();
+        // ws[1] far off, ws[0] under the pointer at the middle of the screen
+        c.place_by_user(
+            ws[1],
+            crate::geom::CanvasPoint { x: 5000, y: 5000 },
+            &mut fx,
+        )
+        .unwrap();
+        c.place_by_user(
+            ws[0],
+            crate::geom::CanvasPoint { x: -100, y: -100 },
+            &mut fx,
+        )
+        .unwrap();
+        c.render_list(a).unwrap();
+        let motion = |c: &mut Core, i: &mut crate::InputPort, delta: (f64, f64), time_us: u64| {
+            c.physical_input_vec(
+                i,
+                crate::PhysicalEvent::PointerMotion {
+                    delta,
+                    delta_unaccel: delta,
+                    time_us,
+                },
+            )
+            .unwrap();
+        };
+        c.set_focus(&mut i, Some(ws[1])).unwrap();
+        motion(&mut c, &mut i, (1.0, 1.0), 1000);
+        assert_eq!(c.focus().target(), Some(ws[0]), "the pointer went onto it");
+        c.focus.settle_hover(1_000_000);
+
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(ws[1]));
+        motion(&mut c, &mut i, (1.0, 1.0), 2_000_000);
+        assert_eq!(c.focus().target(), Some(ws[1]), "a nudge does not take it");
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(ws[0]), "Tab, Tab returns");
     }
 
     /// Super+Tab (owner, 2026-10-31) through the key path: two taps flip between the last two

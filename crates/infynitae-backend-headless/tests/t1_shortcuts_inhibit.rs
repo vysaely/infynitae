@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use common::{Lockstep, Probe, output};
 use infynitae_backend_headless::{keyboard_key, set_focus};
-use infynitae_core::input::keys::{KEY_LEFTMETA, KEY_TAB};
+use infynitae_core::input::keys::{KEY_ENTER, KEY_LEFTMETA, KEY_TAB};
 use infynitae_core::stage::ElementId;
 use wayland_protocols::wp::keyboard_shortcuts_inhibit::zv1::client::zwp_keyboard_shortcuts_inhibit_manager_v1::ZwpKeyboardShortcutsInhibitManagerV1;
 use wayland_protocols::wp::keyboard_shortcuts_inhibit::zv1::client::zwp_keyboard_shortcuts_inhibitor_v1::{
@@ -57,16 +57,16 @@ impl S {
         self.pump();
     }
 
-    /// Super+Tab (focus the next window): whether the focused client got the Tab.
-    fn super_tab_reaches_client(&mut self) -> bool {
+    /// Super+`key`: whether the focused client got the key.
+    fn chord_reaches_client(&mut self, key: u32) -> bool {
         let before = self.ls.probe.key_events.len();
         self.key(KEY_LEFTMETA, true);
-        self.key(KEY_TAB, true);
-        self.key(KEY_TAB, false);
+        self.key(key, true);
+        self.key(key, false);
         self.key(KEY_LEFTMETA, false);
         self.ls.probe.key_events[before..]
             .iter()
-            .any(|(k, pressed)| *k == KEY_TAB && *pressed)
+            .any(|(k, pressed)| *k == key && *pressed)
     }
 }
 
@@ -80,7 +80,10 @@ fn the_focused_window_takes_the_shortcuts_and_gives_them_back() {
     let e: Vec<ElementId> = ls.state.elements().collect();
     let mut s = S { ls, t: 10_000 };
     s.focus(e[0]);
-    assert!(!s.super_tab_reaches_client(), "Super+Tab is a shortcut");
+    assert!(
+        !s.chord_reaches_client(KEY_ENTER),
+        "Super+Enter is a shortcut"
+    );
     s.focus(e[0]);
 
     let (name, _, _) =
@@ -98,8 +101,8 @@ fn the_focused_window_takes_the_shortcuts_and_gives_them_back() {
     s.pump();
     assert_eq!(s.ls.probe.log, ["active"], "focused: active at once");
     assert!(
-        s.super_tab_reaches_client(),
-        "inhibited: the window gets Super+Tab"
+        s.chord_reaches_client(KEY_ENTER),
+        "inhibited: the window gets Super+Enter"
     );
     assert_eq!(
         s.ls.state.core().focus().target(),
@@ -107,12 +110,24 @@ fn the_focused_window_takes_the_shortcuts_and_gives_them_back() {
         "and the focus did not move"
     );
 
+    // Super+Tab stays yours, so a game cannot trap you in it (owner, 2026-11-01)
+    assert!(
+        !s.chord_reaches_client(KEY_TAB),
+        "inhibited: Super+Tab does not reach the window"
+    );
+    assert_eq!(
+        s.ls.state.core().focus().target(),
+        Some(e[1]),
+        "and it switches windows"
+    );
+    s.focus(e[0]);
+
     s.ls.probe.log.clear();
     s.focus(e[1]);
     assert_eq!(s.ls.probe.log, ["inactive"], "unfocused: inactive");
     assert!(
-        !s.super_tab_reaches_client(),
-        "another window: Super+Tab is a shortcut"
+        !s.chord_reaches_client(KEY_ENTER),
+        "another window: Super+Enter is a shortcut"
     );
 
     s.focus(e[0]);
@@ -120,7 +135,7 @@ fn the_focused_window_takes_the_shortcuts_and_gives_them_back() {
     inhibitor.destroy();
     s.pump();
     assert!(
-        !s.super_tab_reaches_client(),
+        !s.chord_reaches_client(KEY_ENTER),
         "destroyed: the shortcuts are back"
     );
 }
