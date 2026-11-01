@@ -591,6 +591,7 @@ dependencies = [
  "infynitae-core",
  "infynitae-wayland",
  "smithay",
+ "tracing",
 ]
 
 [[package]]

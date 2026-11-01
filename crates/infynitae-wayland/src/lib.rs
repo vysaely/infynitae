@@ -348,6 +348,9 @@ pub struct WaylandState {
     dmabuf_global: Option<smithay::wayland::dmabuf::DmabufGlobal>,
     /// The GPU clients allocate on (`set_dmabuf_main_device`), also offered to capture sessions.
     pub(crate) dmabuf_main_dev: Option<libc::dev_t>,
+    /// Frames waiting for the GPU to finish them, for the backend (`take_frame_waits`); `None`:
+    /// this backend does not wait.
+    frame_waits: Option<Vec<handlers::FrameWait>>,
     /// The formats clients may allocate (`set_dmabuf_device_formats`).
     dmabuf_formats: Vec<smithay::backend::allocator::Format>,
     /// Those the screens can show as they are (`add_dmabuf_scanout_formats`).
@@ -711,6 +714,7 @@ impl WaylandState {
             dmabuf: DmabufState::new(),
             dmabuf_global: None,
             dmabuf_main_dev: None,
+            frame_waits: None,
             dmabuf_formats: Vec::new(),
             dmabuf_scanout_formats: Vec::new(),
             effects: infynitae_core::protocol::EffectBuf::new(),
@@ -815,6 +819,28 @@ impl WaylandState {
             );
             self.publish_dmabuf_global();
         }
+    }
+
+    /// From now on a client's frame is applied only once the GPU has finished it; the backend
+    /// takes the frames to watch with [`Self::take_frame_waits`].
+    pub fn enable_frame_waits(&mut self) {
+        self.frame_waits = Some(Vec::new());
+    }
+
+    /// The frames that began to wait since the last call.
+    pub fn take_frame_waits(&mut self) -> Vec<handlers::FrameWait> {
+        self.frame_waits
+            .as_mut()
+            .map(std::mem::take)
+            .unwrap_or_default()
+    }
+
+    /// A frame of `client` is finished: what waited for it is applied.
+    pub fn frame_ready(&mut self, client: &smithay::reexports::wayland_server::Client) {
+        use smithay::wayland::compositor::CompositorHandler;
+        let dh = self.dh.clone();
+        self.client_compositor_state(client)
+            .blocker_cleared(self, &dh);
     }
 
     /// The format and modifier of the buffer `id` shows, when it is a dmabuf.

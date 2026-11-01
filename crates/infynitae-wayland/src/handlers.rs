@@ -418,6 +418,7 @@ impl CompositorHandler for WaylandState {
         {
             self.note_x11_client(&client);
         }
+        smithay::wayland::compositor::add_pre_commit_hook::<Self, _>(surface, wait_for_frame);
         add_destruction_hook(surface, |state: &mut Self, s| {
             if let Some(key) = state.registry.key(s) {
                 let fx = state.core.destroy_pointer_constraint(key);
@@ -494,6 +495,77 @@ impl CompositorHandler for WaylandState {
 
 impl BufferHandler for WaylandState {
     fn buffer_destroyed(&mut self, _buffer: &wl_buffer::WlBuffer) {}
+}
+
+/// A client's frame the GPU may still be drawing, and the flag that releases its commit.
+#[derive(Debug)]
+pub struct FrameWait {
+    dmabuf: smithay::backend::allocator::dmabuf::Dmabuf,
+    ready: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    client: smithay::reexports::wayland_server::Client,
+}
+
+impl FrameWait {
+    /// The buffer to watch, the flag to set when it is finished, and whose it is.
+    pub fn into_parts(
+        self,
+    ) -> (
+        smithay::backend::allocator::dmabuf::Dmabuf,
+        std::sync::Arc<std::sync::atomic::AtomicBool>,
+        smithay::reexports::wayland_server::Client,
+    ) {
+        (self.dmabuf, self.ready, self.client)
+    }
+}
+
+/// Holds a commit back until the flag is set.
+struct FrameBlocker(std::sync::Arc<std::sync::atomic::AtomicBool>);
+
+impl smithay::wayland::compositor::Blocker for FrameBlocker {
+    fn state(&self) -> smithay::wayland::compositor::BlockerState {
+        use smithay::wayland::compositor::BlockerState;
+        if self.0.load(std::sync::atomic::Ordering::Acquire) {
+            BlockerState::Released
+        } else {
+            BlockerState::Pending
+        }
+    }
+}
+
+/// A client hands over a frame as it submits it, while the GPU may still be drawing it (owner,
+/// 2026-11-01: games lost frames at full FPS). Drawing with it would stall on the GPU and miss the
+/// refresh, so the commit waits for it and the window shows its previous frame meanwhile.
+fn wait_for_frame(
+    state: &mut WaylandState,
+    _: &smithay::reexports::wayland_server::DisplayHandle,
+    surface: &WlSurface,
+) {
+    use smithay::reexports::wayland_server::Resource;
+    use smithay::wayland::compositor::{BufferAssignment, SurfaceAttributes};
+    if state.frame_waits.is_none() {
+        return;
+    }
+    let dmabuf = with_states(surface, |states| {
+        let mut attributes = states.cached_state.get::<SurfaceAttributes>();
+        match attributes.pending().buffer.as_ref() {
+            Some(BufferAssignment::NewBuffer(buffer)) => {
+                smithay::wayland::dmabuf::get_dmabuf(buffer).ok().cloned()
+            }
+            _ => None,
+        }
+    });
+    let (Some(dmabuf), Some(client)) = (dmabuf, surface.client()) else {
+        return;
+    };
+    let ready = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    smithay::wayland::compositor::add_blocker(surface, FrameBlocker(ready.clone()));
+    if let Some(waits) = state.frame_waits.as_mut() {
+        waits.push(FrameWait {
+            dmabuf,
+            ready,
+            client,
+        });
+    }
 }
 
 impl DmabufHandler for WaylandState {

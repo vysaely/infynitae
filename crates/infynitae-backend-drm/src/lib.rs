@@ -18,6 +18,7 @@
 #![deny(unsafe_code)]
 
 mod edid;
+mod scanout_log;
 mod smooth;
 
 use std::collections::{HashMap, HashSet};
@@ -1474,6 +1475,11 @@ pub fn run_console_with(
         data.direct_scanout = ds;
     }
 
+    data.state.enable_frame_waits();
+    if data.state.latency_stats {
+        scanout_log::install();
+    }
+
     println!("[infynitae] Compositor running. Ctrl+Alt+Backspace quits.");
     while !data.quit && !data.session.finished() {
         data.session
@@ -1642,6 +1648,7 @@ pub fn run_console_with(
             }
         }
         data.session.dispatch(&mut data.state);
+        watch_frame_waits(&mut data);
         for c in data.state.take_output_configurations() {
             let ok = apply_output_configuration(&mut data, &c.changes);
             data.state.finish_output_configuration(c, ok);
@@ -2031,6 +2038,7 @@ fn render(data: &mut LoopData) {
         } else {
             clear
         };
+        scanout_log::watch(presenting);
         let queued = match s.compositor.render_frame(
             &mut data.renderer,
             &elements,
@@ -2040,7 +2048,7 @@ fn render(data: &mut LoopData) {
             Ok(result) if !result.is_empty => {
                 use smithay::backend::drm::compositor::PrimaryPlaneElement;
                 let scanout = matches!(result.primary_element, PrimaryPlaneElement::Element(_));
-                data.state.frame_scanned_out(id, scanout);
+                data.state.fullscreen_frame_shown(id);
                 // a change of (fullscreen shown, scanned out) is logged; composited while
                 // fullscreen says what else is drawn over or around the window
                 if s.scanout_logged != Some((presenting, scanout)) {
@@ -2598,6 +2606,35 @@ fn apply_virtual_input(data: &mut LoopData) {
         }
     }
     data.session.request_frame();
+}
+
+/// Clients' frames still being drawn (`WaylandState::take_frame_waits`): each is applied when the
+/// GPU has finished it. Until then the window shows its previous frame and the screen keeps its
+/// refresh, instead of a redraw waiting for the GPU and going out a refresh late.
+fn watch_frame_waits(data: &mut LoopData) {
+    use smithay::reexports::calloop::Interest;
+    for wait in data.state.take_frame_waits() {
+        let (dmabuf, ready, client) = wait.into_parts();
+        let source = match dmabuf.generate_blocker(Interest::READ) {
+            Ok((_, source)) => source,
+            Err(_) => {
+                // finished already
+                ready.store(true, std::sync::atomic::Ordering::Release);
+                data.state.frame_ready(&client);
+                continue;
+            }
+        };
+        let (flag, who) = (ready.clone(), client.clone());
+        let inserted = data.loop_handle.insert_source(source, move |_, _, data| {
+            flag.store(true, std::sync::atomic::Ordering::Release);
+            data.state.frame_ready(&who);
+            Ok(())
+        });
+        if inserted.is_err() {
+            ready.store(true, std::sync::atomic::Ordering::Release);
+            data.state.frame_ready(&client);
+        }
+    }
 }
 
 /// The format of the buffer the fullscreen window on `id` shows (a diagnosis when it is composited).

@@ -10,6 +10,9 @@ publish.workspace = true
 [dependencies]
 infynitae-core = { path = "../infynitae-core" }
 infynitae-wayland = { path = "../infynitae-wayland" }
+# Smithay reports why a frame cannot be shown directly only through tracing (`scanout_log`; already
+# in the locked graph through Smithay: no new crate).
+tracing = { version = "0.1", default-features = false, features = ["std"] }
 smithay = { version = "=0.7.0", default-features = false, features = [
     "backend_drm",
     "backend_gbm",

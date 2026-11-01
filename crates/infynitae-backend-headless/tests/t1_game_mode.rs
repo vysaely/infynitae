@@ -2,7 +2,7 @@
 //! no longer fullscreen; a composited frame or a window that is not fullscreen is no game.
 //!
 //! The headless backend composites every frame, so the DRM backend's report of a direct
-//! scanout (`frame_scanned_out`) is made by hand.
+//! scanout (`fullscreen_frame_shown`) is made by hand.
 
 mod common;
 
@@ -84,46 +84,21 @@ fn a_fullscreen_window_shown_directly_is_the_game_until_it_leaves_fullscreen() {
     let (w, id) = t.map("game");
     let pid = std::process::id();
 
-    // not fullscreen: a scanout report changes nothing
-    t.ls.state.frame_scanned_out(o, true);
+    // not fullscreen: a frame shown changes nothing
+    t.ls.state.fullscreen_frame_shown(o);
     assert_eq!(t.ls.state.game(), None);
 
     t.fullscreen(w, true);
     assert_eq!(t.ls.state.core().presentation(o), Some(id));
-    // fullscreen but composited: no game
-    t.ls.state.frame_scanned_out(o, false);
-    assert_eq!(t.ls.state.game(), None);
-    // shown directly: the game
-    t.ls.state.frame_scanned_out(o, true);
+    // fullscreen, however it is shown: the game
+    t.ls.state.fullscreen_frame_shown(o);
     assert_eq!(t.ls.state.game(), Some((id, pid)));
-    // a composited frame on the way (a notification over it) does not end it
-    t.ls.state.frame_scanned_out(o, false);
+    t.ls.state.fullscreen_frame_shown(o);
     t.ls.state.background_update(Instant::now());
     assert_eq!(t.ls.state.game(), Some((id, pid)));
 
     t.fullscreen(w, false);
     assert_eq!(t.ls.state.game(), None, "game mode ends with fullscreen");
-}
-
-/// A game that cannot be scanned out still gets game mode when it asks to tear (owner, 2026-11-01).
-#[test]
-fn a_composited_game_asking_to_tear_gets_game_mode() {
-    let mut t = T {
-        ls: Lockstep::new(Some(output((640, 480), 120))),
-    };
-    let o = t.ls.output();
-    let (w, id) = t.map("game");
-    t.fullscreen(w, true);
-    t.ls.state.frame_scanned_out(o, false);
-    assert_eq!(
-        t.ls.state.game(),
-        None,
-        "composited, no tearing: not a game"
-    );
-    t.ls.state.toggle_tearing_focused();
-    assert!(t.ls.state.tears(o), "the focused fullscreen window tears");
-    t.ls.state.frame_scanned_out(o, false);
-    assert_eq!(t.ls.state.game().map(|g| g.0), Some(id));
 }
 
 #[test]
@@ -134,7 +109,7 @@ fn closing_the_game_ends_game_mode() {
     let o = t.ls.output();
     let (w, id) = t.map("game");
     t.fullscreen(w, true);
-    t.ls.state.frame_scanned_out(o, true);
+    t.ls.state.fullscreen_frame_shown(o);
     assert_eq!(t.ls.state.game().map(|g| g.0), Some(id));
 
     let tl = t.ls.probe.surfaces[w].toplevel.take().expect("toplevel");

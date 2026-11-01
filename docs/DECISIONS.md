@@ -58,6 +58,9 @@ these by date, e.g. "(owner, 2026-10-24)".
   every frame and stuttered at full FPS): a scanout tranche in the linux-dmabuf feedback, for every
   client, not per surface, as the simple first step. A game asking to tear gets game mode even when
   composited.
+- **A client's frame is applied when the GPU has finished it** (2026-11-01, games lost about 1
+  frame in 11 at full FPS): until then its window shows the previous frame. Every fullscreen window
+  gets game mode, however it is shown. LATENCY_STATS also logs why frames are not shown directly.
 - **An app can take the shortcuts while it has focus** (2026-10-25, `keyboard-shortcuts-inhibit`:
   a VM, a remote desktop, a game): its keys go to it, Super-chords included, until it lets go
   or loses focus. Super+L (lock), and since 2026-11-01 Super+Tab, Super+W and Super+A (a fullscreen game

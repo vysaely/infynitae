@@ -86,7 +86,9 @@ ALLOWED_EXTERNAL = {
     WAYLAND: {"smithay", "libc", "xcursor", "wayland-protocols-wlr"},
     HEADLESS: {"smithay"},
     WINIT: {"smithay"},
-    DRM: {"smithay"},  # T7: drm, gbm, input, libseat, udev arrive through Smithay's features only
+    # T7: drm, gbm, input, libseat, udev arrive through Smithay's features only; tracing: Smithay's
+    # reasons a frame is not scanned out (asked by the owner 2026-11-01; already locked)
+    DRM: {"smithay", "tracing"},
     IPC: set(),
     BIN: {"rustix"},  # SO_PEERCRED admission of the shell socket (C7.1; owner decision 2026-10-20, D1)
 }
