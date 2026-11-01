@@ -6,7 +6,7 @@ mod common;
 
 use common::input::*;
 use infynitae_backend_headless::keyboard_key;
-use infynitae_core::input::keys::{KEY_C, KEY_LEFTCTRL, KEY_LEFTMETA, KEY_LEFTSHIFT};
+use infynitae_core::input::keys::{KEY_C, KEY_DELETE, KEY_LEFTMETA, KEY_LEFTSHIFT};
 
 /// Holds `mods`, taps C, and releases `mods`.
 fn chord(r: &mut Rig, mods: &[u32]) {
@@ -61,11 +61,11 @@ fn super_shift_c_asks_the_focused_window_to_close() {
     );
 }
 
-/// Super+Ctrl+Shift+C ends the focused window's client: its connection is cut and its window is
+/// Super+Delete ends the focused window's client: its connection is cut and its window is
 /// destroyed, with no polite close first. The probe client lives in this process, which is never
 /// signalled (only processes other than the compositor's are killed; `ownership` tests the kill).
 #[test]
-fn super_ctrl_shift_c_ends_the_focused_windows_client() {
+fn super_delete_ends_the_focused_windows_client() {
     let mut r = Rig::x8();
     let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
     let fx =
@@ -75,12 +75,7 @@ fn super_ctrl_shift_c_ends_the_focused_windows_client() {
             .unwrap();
     r.ls.state.apply(&fx);
     r.ls.pump();
-    for (key, pressed) in [
-        (KEY_LEFTMETA, true),
-        (KEY_LEFTCTRL, true),
-        (KEY_LEFTSHIFT, true),
-        (KEY_C, true),
-    ] {
+    for (key, pressed) in [(KEY_LEFTMETA, true), (KEY_DELETE, true)] {
         r.t += 1000;
         keyboard_key(&mut r.ls.state, &mut r.ls.input, key, pressed, r.t).expect("key");
     }

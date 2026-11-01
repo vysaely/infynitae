@@ -127,7 +127,7 @@ pub enum Effect {
     },
     /// Ask the client to close (by default Super+Shift+C, xdg_toplevel.close).
     CloseRequest(ElementId),
-    /// Terminate the element's client (by default Super+Ctrl+Shift+C): cuts its connection and ends its process;
+    /// Terminate the element's client (by default Super+Delete): cuts its connection and ends its process;
     /// the adapter decides how for a client it cannot end alone (X11).
     ForceClose(ElementId),
     /// Configure a layer surface with the size its arrangement gives it (L1, L4).

@@ -283,7 +283,7 @@ case "$ACTION" in
         fi
         ;;
     force-close-x11)
-        # Super+Ctrl+Shift+C on an X11 window: its own process, found from the X11 window (all X11
+        # Super+Delete on an X11 window: its own process, found from the X11 window (all X11
         # windows share xwayland-satellite's connection)
         "$HOME/.local/bin/infynitae-xkill" "$2" "$3"
         ;;

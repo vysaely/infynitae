@@ -138,7 +138,7 @@ pub enum KeyAction {
     /// Super+Shift+Enter (owner decision 2026-10-21): the focused window enters or leaves native
     /// fullscreen on the pointer's output, through the same path as its own request.
     ToggleFullscreen,
-    /// Super+Ctrl+Shift+C (owner, 2026-11-01; Super+Shift+C before, Shift+Delete until 2026-10-25): the focused window's
+    /// Super+Delete (owner, 2026-11-01; Super+Shift+C before, Shift+Delete until 2026-10-25): the focused window's
     /// client is ended now — its connection is cut and its process killed — for an app that does
     /// not answer a close. The adapter falls back to a close request for an X11 window (all of
     /// them share one client).
@@ -408,13 +408,19 @@ pub fn resolve_key_binding(
         }
         return Some(KeyAction::FocusNext);
     }
-    // Logo+Shift+C closes the focused window, Logo+Ctrl+Shift+C ends its app (owner, 2026-11-01:
-    // Logo+C alone was too easy to press; Delete before 2026-10-25); the modifiers match exactly
-    if key == KEY_C && mods.logo && mods.shift && !mods.alt && !interaction_active {
-        if mods.ctrl {
-            return Some(KeyAction::ForceCloseFocused);
-        }
+    // Logo+Shift+C closes the focused window, Logo+Delete ends its app (owner, 2026-11-01); the
+    // modifiers match exactly
+    if key == KEY_C && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::CloseFocused);
+    }
+    if key == KEY_DELETE
+        && mods.logo
+        && !mods.shift
+        && !mods.ctrl
+        && !mods.alt
+        && !interaction_active
+    {
+        return Some(KeyAction::ForceCloseFocused);
     }
     // Super+Space centres the focused window and reverts zoom to 1.0; Super+Shift+Space centres
     // it and keeps the zoom; never during an interaction
@@ -732,7 +738,7 @@ mod tests {
     }
 
     /// The owner's Super+Shift+C: exactly Logo and Shift held, never during an interaction;
-    /// Super+C reaches the app, Super+Alt+C stays the replay clip, and Delete closes nothing.
+    /// Super+C reaches the app, Super+Alt+C stays the replay clip, and Delete alone closes nothing.
     #[test]
     fn logo_shift_c_closes_with_exact_modifiers() {
         let m = |logo, ctrl, alt, shift| Modifiers {
@@ -746,26 +752,36 @@ mod tests {
             Some(KeyAction::CloseFocused)
         );
         assert_eq!(
-            resolve_key_binding(KEY_C, m(true, true, false, true), false),
+            resolve_key_binding(KEY_DELETE, m(true, false, false, false), false),
             Some(KeyAction::ForceCloseFocused),
-            "Super+Ctrl+Shift+C ends the app"
+            "Super+Delete ends the app"
         );
         assert_eq!(
             resolve_key_binding(KEY_C, m(true, false, true, false), false),
             Some(KeyAction::SaveReplay),
             "Super+Alt+C saves a clip"
         );
-        for mods in [m(true, false, false, false), m(true, false, false, true)] {
+        for mods in [
+            m(false, false, false, false),
+            m(true, false, false, true),
+            m(true, true, false, false),
+        ] {
             assert_eq!(
                 resolve_key_binding(KEY_DELETE, mods, false),
                 None,
-                "Delete is free: {mods:?}"
+                "only Super alone: {mods:?}"
             );
         }
+        assert_eq!(
+            resolve_key_binding(KEY_DELETE, m(true, false, false, false), true),
+            None,
+            "not while an interaction owns the pointer"
+        );
         for mods in [
             m(false, false, false, false),
             m(true, false, false, false),
             m(true, true, false, false),
+            m(true, true, false, true),
             m(false, true, false, true),
         ] {
             assert_eq!(resolve_key_binding(KEY_C, mods, false), None, "{mods:?}");
