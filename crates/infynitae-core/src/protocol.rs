@@ -1900,21 +1900,31 @@ impl Core {
         // a child window (xdg_toplevel.set_parent: dialogs, an app's second window) opens centred
         // over its mapped parent's window geometry, whatever the policy (owner, 2026-10-24); one
         // nearly the parent's size (Discord's pop-out) would hide it or peek out from behind it
-        // by a few pixels, and is placed by the policy instead
+        // by a few pixels, and is placed by the policy instead. One much larger covers its parent
+        // whole (a save dialog over a small editor) and stays centred, kept in the view.
         if let Some(parent) = self.toplevel_parent(id)
             && self.stage.mapped(parent).is_some()
             && let (Some(a), Some(pt)) = (self.stage.anchor(parent), self.stage.tree(parent))
-            && (tree.geometry.size.w * 20 < pt.geometry.size.w * 17
-                || tree.geometry.size.h * 20 < pt.geometry.size.h * 17)
         {
-            let g = tree.geometry;
-            let pg = pt.geometry;
-            let centre_x = a.x + i64::from(pg.loc.x) + i64::from(pg.size.w) / 2;
-            let centre_y = a.y + i64::from(pg.loc.y) + i64::from(pg.size.h) / 2;
-            return Some(CanvasPoint {
-                x: centre_x - i64::from(g.size.w) / 2 - i64::from(g.loc.x),
-                y: centre_y - i64::from(g.size.h) / 2 - i64::from(g.loc.y),
-            });
+            let (g, pg) = (tree.geometry, pt.geometry);
+            let near =
+                |size: i32, parent: i32| size * 20 >= parent * 17 && size * 17 <= parent * 20;
+            if !(near(g.size.w, pg.size.w) && near(g.size.h, pg.size.h)) {
+                let centre_x = a.x + i64::from(pg.loc.x) + i64::from(pg.size.w) / 2;
+                let centre_y = a.y + i64::from(pg.loc.y) + i64::from(pg.size.h) / 2;
+                let (mut x, mut y) = (
+                    centre_x - i64::from(g.size.w) / 2,
+                    centre_y - i64::from(g.size.h) / 2,
+                );
+                if let Some(view) = self.usable_view() {
+                    x = keep_in_range(x, i64::from(g.size.w), view.0, view.2);
+                    y = keep_in_range(y, i64::from(g.size.h), view.1, view.3);
+                }
+                return Some(CanvasPoint {
+                    x: x - i64::from(g.loc.x),
+                    y: y - i64::from(g.loc.y),
+                });
+            }
         }
         if self.placement == PlacementPolicy::OriginAtCameraCentre {
             return None;
@@ -2315,9 +2325,19 @@ impl Core {
             return None;
         }
         let g = tree.geometry;
+        // the old place, moved as little as it takes for the whole window to show: it may have been
+        // near the edge, or the camera has moved since
+        let (mut x, mut y) = (
+            centre.x - i64::from(g.size.w) / 2,
+            centre.y - i64::from(g.size.h) / 2,
+        );
+        if let Some(view) = self.usable_view() {
+            x = keep_in_range(x, i64::from(g.size.w), view.0, view.2);
+            y = keep_in_range(y, i64::from(g.size.h), view.1, view.3);
+        }
         let at = CanvasPoint {
-            x: centre.x - i64::from(g.size.w) / 2 - i64::from(g.loc.x),
-            y: centre.y - i64::from(g.size.h) / 2 - i64::from(g.loc.y),
+            x: x - i64::from(g.loc.x),
+            y: y - i64::from(g.loc.y),
         };
         // only a place still free: a window opened on it since (a browser centred in the view)
         // is not covered; the policy places this one instead. A neighbour the bigger successor
@@ -2739,6 +2759,12 @@ impl Core {
 }
 
 /// A spot free whatever the windows: right of all of them, at `target`'s height.
+/// `start` moved as little as it takes for `size` to lie within `low..high`; what does not fit
+/// keeps its start at `low`, so its top left stays reachable.
+fn keep_in_range(start: i64, size: i64, low: i64, high: i64) -> i64 {
+    start.min(high - size).max(low)
+}
+
 fn beside_all(existing: &[(i64, i64, i64, i64)], target: (i64, i64)) -> (i64, i64) {
     let right = existing.iter().map(|r| r.2).max().unwrap_or(target.0);
     (right.saturating_add(12).max(target.0), target.1)

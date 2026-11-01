@@ -1,0 +1,20 @@
+#!/bin/sh
+# mako refuses a config whose format has a % it does not know, and then no notification shows at
+# all. The format in live/settings.sh may use %s %b %a %i %g %h %t %% only. Run from the repository root.
+set -eu
+line=$(grep -n '^format=' live/settings.sh | head -1)
+[ -n "$line" ] || { echo "FAIL: no format line in live/settings.sh" >&2; exit 1; }
+rest=$(printf '%s' "$line" | sed 's/%%//g; s/%[sbaight]//g')
+case "$rest" in
+    *%*) echo "FAIL: mako does not know a % here: $line" >&2; exit 1 ;;
+esac
+if command -v mako >/dev/null 2>&1; then
+    dir=$(mktemp -d)
+    trap 'rm -rf "$dir"' EXIT
+    grep '^format=' live/settings.sh | head -1 > "$dir/config"
+    if mako -c "$dir/config" --help 2>&1 | grep -q 'Failed to parse'; then
+        echo "FAIL: mako refuses it" >&2
+        exit 1
+    fi
+fi
+echo "test-mako-config: passed"

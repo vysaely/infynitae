@@ -74,6 +74,31 @@ fn a_child_window_opens_centred_over_its_parent() {
     );
 }
 
+/// A dialog larger than its parent (GTK's save dialog, 1096x903 over a 640x517 editor) stays over
+/// its parent, not beside it where the screen ends.
+#[test]
+fn a_child_larger_than_its_parent_opens_centred_over_it() {
+    let mut r = Rig::x8();
+    r.ls.state
+        .core_mut()
+        .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    let w_idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
+    let ws = r.ls.state.core().stage().tree(w).unwrap().geometry.size;
+    let d = open_sized(&mut r, "D", Some(w_idx), (ws.w * 2, ws.h * 2));
+    assert_eq!(r.ls.state.core().toplevel_parent(d), Some(w));
+    let (cd, cw) = (centre(&r, d), centre(&r, w));
+    assert!(
+        (cd.0 - cw.0).abs() < i64::from(ws.w) && (cd.1 - cw.1).abs() < i64::from(ws.h),
+        "the dialog {cd:?} is over its parent {cw:?}"
+    );
+}
+
 /// A child nearly its parent's size (Discord's pop-out, 1913×1043 over 1920×1080) is not stacked
 /// on its parent: the policy places it beside, clear of it.
 #[test]

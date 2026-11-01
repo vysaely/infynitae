@@ -1363,7 +1363,11 @@ static void update_surface_input_region(EdgeOutput *out) {
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             out->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
     } else {
-        if (out->input_w > 0 && out->input_h > 0) {
+        if (app->kb_grab && app->mode != MODE_CLOSED) {
+            /* opened by a key, it holds the keyboard: the whole screen takes the pointer too, so
+             * a click anywhere else reaches handle_click_at and closes it */
+            wl_region_add(reg, 0, 0, out->width, out->height);
+        } else if (out->input_w > 0 && out->input_h > 0) {
             wl_region_add(reg, out->input_x, out->input_y, out->input_w, out->input_h);
         }
         zwlr_layer_surface_v1_set_keyboard_interactivity(

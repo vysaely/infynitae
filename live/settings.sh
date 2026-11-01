@@ -127,7 +127,7 @@ EOF
 # managed by infynitae — notifications: one border, gone after 5 s, kept in the history
 font=Sans 8.5
 markup=1
-format=<b>%s</b>\n<span alpha="68%" size="small">%b</span>
+format=<b>%s</b>\n<span alpha="68%%" size="small">%b</span>
 background-color=#${s_hex}f7
 text-color=#${t_hex}
 border-color=#${bi_hex}e6

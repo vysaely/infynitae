@@ -51,7 +51,7 @@ fn an_apps_next_window_takes_the_place_of_the_one_that_closed() {
     r.frame();
 
     // the login window, of another size: centred where the updater was
-    let (_, login) = open(&mut r, "L", "steam", (400, 300));
+    let (_, login) = open(&mut r, "L", "steam", (400, 200));
     assert_eq!(
         centre(&r, login),
         place,
@@ -65,6 +65,31 @@ fn an_apps_next_window_takes_the_place_of_the_one_that_closed() {
     // another app never takes steam's place
     let (_, other) = open(&mut r, "O", "firefox", (300, 200));
     assert_ne!(centre(&r, other), place);
+}
+
+/// The next window takes the old place moved just enough to show whole (the test VM, 2026-11-01:
+/// an editor reopened 263 px past the left edge after the camera moved).
+#[test]
+fn the_next_window_is_kept_on_screen_at_the_old_place() {
+    let mut r = Rig::x8();
+    r.ls.state
+        .core_mut()
+        .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+    let (small, _) = open(&mut r, "U", "steam", (300, 200));
+    r.ls.probe.destroy_toplevel(small);
+    r.ls.pump();
+    r.frame();
+    let (_, big) = open(&mut r, "B", "steam", (1200, 700));
+    let core = r.ls.state.core();
+    let a = core.stage().anchor(big).unwrap();
+    let g = core.stage().tree(big).unwrap().geometry;
+    let (x, y) = (a.x + i64::from(g.loc.x), a.y + i64::from(g.loc.y));
+    // the camera is at the origin of a 1920x1080 screen
+    assert!(
+        x >= -960 && y >= -540 && x + i64::from(g.size.w) <= 960 && y + i64::from(g.size.h) <= 540,
+        "the whole window shows: {x},{y} {:?}",
+        g.size
+    );
 }
 
 /// A terminal closes; a browser opens alone where it was (the view's centre); the next terminal
