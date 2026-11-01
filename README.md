@@ -65,7 +65,8 @@ right.
 | `Super + Shift + Space` | Center the focused window, keep the zoom |
 | `Super + Enter` | Maximize the window, or fit the view to it (`SUPER_ENTER_ACTION`) |
 | `Super + Shift + Enter` | Fullscreen (you can still pan out of it) |
-| `Super + Tab` | Back to the window you used before (tap again to return); hold `Super` and tap `Tab` to go further back. A window asking for attention comes first |
+| `Super + Tab` | Flip between the last two windows (a window asking for attention first) |
+| `Super + arrow` | Go to the nearest window that way on the canvas |
 | `Super + Shift + Tab` | Overview of all windows |
 | `Super + Left drag` | Move a window |
 | `Super + Right drag` | Resize a window |

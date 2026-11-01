@@ -158,8 +158,6 @@ impl Core {
                 self.input.clock.accepted(time_us);
                 self.input.modifiers = modifiers;
                 self.focus.settle_hover(time_us);
-                // letting Super go ends a Super+Tab step-through: the window reached is chosen
-                self.focus.modifiers_changed(modifiers);
                 out.extend(self.suspend_constraints(modifiers.logo && self.free_cursor_on_super));
                 if pressed {
                     // a press bound to fit or restore mutates a camera: its proof is minted here
@@ -174,6 +172,7 @@ impl Core {
                                 | KeyAction::FocusSlot(_)
                                 | KeyAction::FocusClusterSlot(_)
                                 | KeyAction::FocusNext
+                                | KeyAction::FocusDirection(_)
                                 | KeyAction::ToggleOverview
                         )
                     )
@@ -629,7 +628,13 @@ impl Core {
             .resolve_key_binding(key, modifiers, interaction_active)
             .filter(|a| {
                 !self.shortcuts_inhibited
-                    || matches!(a, KeyAction::SpawnLockScreen | KeyAction::FocusNext)
+                    || matches!(
+                        a,
+                        KeyAction::SpawnLockScreen
+                            | KeyAction::FocusNext
+                            | KeyAction::ToggleLauncher
+                            | KeyAction::ControlMenu
+                    )
             });
 
         // K3: keys that change XKB modifier or lock state are never compositor-owned (observe mode)
@@ -752,6 +757,10 @@ impl Core {
                 if let Some(p) = proof {
                     self.recenter(p, true, out);
                 }
+                return;
+            }
+            KeyAction::FocusDirection(direction) => {
+                self.focus_direction(direction, proof, out);
                 return;
             }
             KeyAction::FocusSlot(slot) => {
@@ -1086,6 +1095,58 @@ impl Core {
         let Some(&element) = live.get(slot) else {
             return;
         };
+        self.jump_to_window(element, proof, out);
+    }
+
+    /// Super+arrow: focus, raise, and recenter camera on the nearest window that way, from the
+    /// focused window, or from the middle of the view with nothing focused.
+    fn focus_direction(
+        &mut self,
+        direction: crate::input::keys::Direction,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) {
+        let focused = self.focus.target();
+        let centre = |c: &Self, e: crate::stage::ElementId| {
+            let anchor = c.stage.anchor(e)?;
+            let size = c.stage.tree(e)?.geometry.size;
+            Some((
+                anchor.x + i64::from(size.w) / 2,
+                anchor.y + i64::from(size.h) / 2,
+            ))
+        };
+        let from = focused.and_then(|e| centre(self, e)).or_else(|| {
+            let output = match self.pointer {
+                PointerState::Located { output, .. } => output,
+                PointerState::NoOutput => self.outputs.first()?.id,
+            };
+            let at = self
+                .cameras
+                .center(self.cameras.camera_for_output(output)?)?;
+            Some((at.x >> 16, at.y >> 16))
+        });
+        let Some(from) = from else {
+            return;
+        };
+        let windows: Vec<_> = self
+            .focusable_elements_in_creation_order()
+            .into_iter()
+            .filter(|&e| Some(e) != focused)
+            .filter_map(|e| Some((e, centre(self, e)?)))
+            .collect();
+        if let Some(element) = crate::input::focus::nearest_in_direction(from, direction, &windows)
+        {
+            self.jump_to_window(element, proof, out);
+        }
+    }
+
+    /// Focus, raise, and recenter the camera on `element`, out of a fullscreen window if need be.
+    fn jump_to_window(
+        &mut self,
+        element: crate::stage::ElementId,
+        proof: Option<authority::Authorized>,
+        out: &mut Vec<Effect>,
+    ) {
         if let PointerState::Located { output, .. } = self.pointer
             && let Some(pres) = self.presentation(output)
         {
@@ -1108,6 +1169,8 @@ impl Core {
         if let Some(p) = proof {
             self.recenter(p, false, out);
         }
+        // what is under the pointer now is not a crossing: the camera moved, not the hand
+        self.hover_seen = self.hovered_window();
     }
 
     /// Super+Shift+1..9: focus, raise primary window, and frame/recenter camera on cluster at slot `slot` (0-indexed creation order).
@@ -3583,6 +3646,10 @@ mod tests {
             !forwarded(&fx, crate::input::keys::KEY_TAB),
             "Super+Tab always leaves the window: {fx:?}"
         );
+        for key in [crate::input::keys::KEY_W, crate::input::keys::KEY_A] {
+            let fx = press(&mut c, key, false);
+            assert!(!forwarded(&fx, key), "the edge stays reachable: {fx:?}");
+        }
         c.set_shortcuts_inhibited(false);
         assert!(
             !forwarded(&press(&mut c, KEY_Q, false), KEY_Q),
@@ -4879,11 +4946,10 @@ mod tests {
         assert_eq!(c.focus().target(), Some(ws[0]), "Tab, Tab returns");
     }
 
-    /// Super+Tab (owner, 2026-10-31) through the key path: two taps flip between the last two
-    /// windows used; with Super held, Tab steps further back, and letting Super go makes the
-    /// window reached the most recent, so the next tap returns to where the user started.
+    /// Super+Tab (owner, 2026-11-01) through the key path: every press flips between the last two
+    /// windows used, whether Super is let go in between or held.
     #[test]
-    fn super_tab_flips_the_last_two_and_steps_back_while_super_is_held() {
+    fn super_tab_flips_the_last_two_and_never_goes_further_back() {
         use crate::input::keys::{KEY_LEFTMETA, KEY_TAB};
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
         let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
@@ -4898,28 +4964,54 @@ mod tests {
         super_tab(&mut c, &mut i);
         assert_eq!(c.focus().target(), Some(w3), "Tab, Tab returns");
 
-        // held: w2, then w1; let go on w1
+        // Super held: still only those two
         press(&mut c, &mut i, KEY_LEFTMETA, true, true);
-        press(&mut c, &mut i, KEY_TAB, true, true);
-        press(&mut c, &mut i, KEY_TAB, false, true);
-        assert_eq!(c.focus().target(), Some(w2));
-        press(&mut c, &mut i, KEY_TAB, true, true);
-        press(&mut c, &mut i, KEY_TAB, false, true);
-        assert_eq!(c.focus().target(), Some(w1), "one further back");
-        assert!(c.focus().cycling());
+        for expected in [w2, w3, w2] {
+            press(&mut c, &mut i, KEY_TAB, true, true);
+            press(&mut c, &mut i, KEY_TAB, false, true);
+            assert_eq!(c.focus().target(), Some(expected));
+        }
         press(&mut c, &mut i, KEY_LEFTMETA, false, false);
-        assert!(!c.focus().cycling(), "letting Super go ends it");
-        assert_eq!(c.focus().history(), &[w1, w3, w2]);
-        super_tab(&mut c, &mut i);
-        assert_eq!(c.focus().target(), Some(w3), "back to where it started");
+        assert_eq!(c.focus().history(), &[w2, w3, w1]);
 
         // a window closed is dropped from the history and skipped
-        let _ = c.toplevel_destroyed(w1);
-        assert!(!c.focus().history().contains(&w1));
+        let _ = c.toplevel_destroyed(w3);
+        assert!(!c.focus().history().contains(&w3));
+        super_tab(&mut c, &mut i);
+        assert_eq!(c.focus().target(), Some(w1));
         super_tab(&mut c, &mut i);
         assert_eq!(c.focus().target(), Some(w2));
-        super_tab(&mut c, &mut i);
-        assert_eq!(c.focus().target(), Some(w3));
+    }
+
+    /// Super+arrow (owner, 2026-11-01): to the nearest window that way, the camera with it.
+    #[test]
+    fn super_arrow_goes_to_the_nearest_window_that_way() {
+        use crate::input::keys::{KEY_LEFT, KEY_LEFTMETA, KEY_RIGHT, KEY_UP};
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 2);
+        let mut fx = Vec::new();
+        c.place_by_user(ws[1], crate::geom::CanvasPoint { x: 6000, y: 0 }, &mut fx)
+            .unwrap();
+        c.place_by_user(ws[0], crate::geom::CanvasPoint { x: 0, y: 0 }, &mut fx)
+            .unwrap();
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        let cam = camera_of(&c, a);
+        let arrow = |c: &mut Core, i: &mut crate::InputPort, key: u32| {
+            press(c, i, KEY_LEFTMETA, true, true);
+            press(c, i, key, true, true);
+            press(c, i, key, false, true);
+            press(c, i, KEY_LEFTMETA, false, false);
+        };
+
+        arrow(&mut c, &mut i, KEY_RIGHT);
+        assert_eq!(c.focus().target(), Some(ws[1]));
+        let at = c.cameras().center(cam).unwrap();
+        assert!(at.x > 5000 << 16, "the camera came along: {at:?}");
+        arrow(&mut c, &mut i, KEY_UP);
+        assert_eq!(c.focus().target(), Some(ws[1]), "nothing that way: no move");
+        arrow(&mut c, &mut i, KEY_LEFT);
+        assert_eq!(c.focus().target(), Some(ws[0]));
     }
 
     /// Attention first (owner, 2026-10-31): a window that opened without the focus is where

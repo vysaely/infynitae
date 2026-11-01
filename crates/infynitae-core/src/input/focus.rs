@@ -5,7 +5,6 @@
 //! or target loss (surface destroyed or unmapped). Cameras, visibility, and pointer motion never
 //! change it.
 
-use crate::input::bindings::Modifiers;
 use crate::protocol::Effect;
 use crate::stage::ElementId;
 
@@ -39,8 +38,6 @@ pub struct FocusModel {
     /// A layer surface holds the keyboard (L5), and whether it holds it exclusively. The window
     /// focus (`target`) is kept underneath and gets the keyboard back when the layer lets go.
     layer: Option<(crate::layer::LayerId, bool)>,
-    /// A Super+Tab step-through in progress ([`Cycle`]).
-    cycle: Option<Cycle>,
     /// When the pointer moved the focus to the window now focused, until it counts as used
     /// ([`FocusModel::settle_hover`]); until then it is not in the history.
     hovered_since: Option<u64>,
@@ -49,18 +46,6 @@ pub struct FocusModel {
 /// How long the pointer must keep a window focused before it counts as used: a window the pointer
 /// only passed on its way elsewhere does not become Super+Tab's "last window" (owner, 2026-11-01).
 const HOVER_SETTLES_US: u64 = 300_000;
-
-/// A Super+Tab step-through (owner, 2026-10-31, "like Alt+Tab"): while Super stays held, each
-/// Tab steps one window further back through the recently used ones, in the order they had when
-/// the first Tab was pressed. The history is left alone meanwhile; letting Super go ends it and
-/// makes the window it stopped on the most recent ([`FocusModel::end_cycle`]).
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Cycle {
-    /// The windows to step through, most recently used first, as they were at the first Tab.
-    order: Vec<ElementId>,
-    /// The modifiers held at the first Tab: letting any of them go ends the step-through.
-    held: Modifiers,
-}
 
 impl Default for FocusModel {
     fn default() -> Self {
@@ -71,7 +56,6 @@ impl Default for FocusModel {
             attention: Vec::new(),
             activation_policy: ActivationPolicy::Strict,
             layer: None,
-            cycle: None,
             hovered_since: None,
         }
     }
@@ -104,9 +88,7 @@ impl FocusModel {
     }
 
     /// Sets keyboard focus directly via an explicit action (click-to-focus, activation, shell).
-    /// A Super+Tab step-through in progress ends first, keeping the window it reached as used.
     pub fn set_focus(&mut self, next: Option<ElementId>) -> Vec<Effect> {
-        self.end_cycle();
         self.hovered_since = None;
         let fx = self.focus_to(next, true);
         // a click on the window the pointer had already focused: it is used now
@@ -122,7 +104,6 @@ impl FocusModel {
     /// `next` counts as used only once it stayed focused a moment ([`Self::settle_hover`]).
     pub fn hover_focus(&mut self, next: Option<ElementId>, now_us: u64) -> Vec<Effect> {
         self.settle_hover(now_us);
-        self.end_cycle();
         self.hovered_since = next.map(|_| now_us);
         self.focus_to(next, false)
     }
@@ -146,8 +127,7 @@ impl FocusModel {
         self.history.insert(0, id);
     }
 
-    /// Moves the focus to `next`; `record`: it becomes the most recently used window (not while a
-    /// Super+Tab step-through runs). A window loses its attention mark when it is focused, any
+    /// Moves the focus to `next`; `record`: it becomes the most recently used window. A window loses its attention mark when it is focused, any
     /// way (owner, 2026-10-31).
     fn focus_to(&mut self, next: Option<ElementId>, record: bool) -> Vec<Effect> {
         if next.is_some() {
@@ -188,32 +168,15 @@ impl FocusModel {
         effects
     }
 
-    /// FocusNext binding (Super+Tab, owner 2026-10-31): the recently used windows, most recent
-    /// first. A tap goes to the window used before the focused one, so two taps flip between the
-    /// last two. `held`: the modifiers held with the key. While they stay held, another tap steps
-    /// one window further back (wrapping round); letting them go ends the step-through
-    /// ([`Self::modifiers_changed`]). With no modifier held there is nothing to hold, and every
-    /// press is a tap. `live_elements`: the windows that may be focused, bottom to top; those
-    /// never focused come after the used ones, the newest first.
-    pub fn focus_next(&mut self, live_elements: &[ElementId], held: Modifiers) -> Vec<Effect> {
+    /// FocusNext binding (Super+Tab): the window used before the focused one, so every press
+    /// flips between the last two, Super held or not (owner, 2026-11-01: never through the
+    /// others). `live_elements`: the windows that may be focused, bottom to top; those never
+    /// focused come after the used ones, the newest first.
+    pub fn focus_next(&mut self, live_elements: &[ElementId]) -> Vec<Effect> {
         self.initial_eligible = false;
         self.hovered_since = None;
         if live_elements.is_empty() {
-            self.cycle = None;
             return self.set_focus(None);
-        }
-        // Tab again while held: one step further back from where the step-through is now
-        if let Some(mut cycle) = self.cycle.take() {
-            cycle.order.retain(|e| live_elements.contains(e));
-            if !cycle.order.is_empty() {
-                let at = self
-                    .target
-                    .and_then(|t| cycle.order.iter().position(|&e| e == t));
-                let next = cycle.order[at.map_or(0, |i| (i + 1) % cycle.order.len())];
-                let fx = self.focus_to(Some(next), false);
-                self.cycle = Some(cycle);
-                return fx;
-            }
         }
         let order = self.recently_used(live_elements);
         // the window used before the focused one; with nothing focused, the last one used
@@ -221,44 +184,20 @@ impl FocusModel {
             Some(cur) if order.first() == Some(&cur) => order[1 % order.len()],
             _ => order[0],
         };
-        self.step(order, next, held)
+        self.set_focus(Some(next))
     }
 
-    /// Attention first (owner, 2026-10-31): a Super+Tab that starts a step-through goes to the
-    /// window that most recently asked for attention, if it may be focused, and clears its mark;
-    /// it is then the most recent window, so the next tap goes back. `None` when no window asks
-    /// for attention, or a step-through is already running (Tab steps on).
-    pub fn focus_attention(
-        &mut self,
-        live_elements: &[ElementId],
-        held: Modifiers,
-    ) -> Option<Vec<Effect>> {
-        if self.cycle.is_some() {
-            return None;
-        }
+    /// Attention first (owner, 2026-10-31): Super+Tab goes to the window that most recently asked
+    /// for attention, if it may be focused, and clears its mark; it is then the most recent
+    /// window, so the next press goes back. `None` when no window asks for attention.
+    pub fn focus_attention(&mut self, live_elements: &[ElementId]) -> Option<Vec<Effect>> {
         let marked = self
             .attention
             .iter()
             .rev()
             .copied()
             .find(|e| live_elements.contains(e))?;
-        // recorded at once: the window that asked is the most recent one, the focused one before
-        // it comes next
-        let mut fx = self.set_focus(Some(marked));
-        let order = self.recently_used(live_elements);
-        fx.extend(self.step(order, marked, held));
-        Some(fx)
-    }
-
-    /// Focuses `next` as a step of a step-through over `order`, which runs on while `held` stay
-    /// held; with no modifier held it ends at once.
-    fn step(&mut self, order: Vec<ElementId>, next: ElementId, held: Modifiers) -> Vec<Effect> {
-        let fx = self.focus_to(Some(next), false);
-        self.cycle = Some(Cycle { order, held });
-        if held == Modifiers::default() {
-            self.end_cycle();
-        }
-        fx
+        Some(self.set_focus(Some(marked)))
     }
 
     /// The live windows, most recently used first; those never focused after them, the newest
@@ -278,38 +217,6 @@ impl FocusModel {
         order
     }
 
-    /// The seat's modifiers changed (`now`: those held now): a step-through whose modifiers are
-    /// no longer all held ends (Super let go).
-    pub fn modifiers_changed(&mut self, now: Modifiers) {
-        let Some(cycle) = &self.cycle else {
-            return;
-        };
-        let h = cycle.held;
-        let still = (!h.logo || now.logo)
-            && (!h.ctrl || now.ctrl)
-            && (!h.alt || now.alt)
-            && (!h.shift || now.shift);
-        if !still {
-            self.end_cycle();
-        }
-    }
-
-    /// Ends a Super+Tab step-through: the window it stopped on becomes the most recently used;
-    /// the others keep the order they had before it.
-    pub fn end_cycle(&mut self) {
-        if self.cycle.take().is_none() {
-            return;
-        }
-        if let Some(id) = self.target {
-            self.record(id);
-        }
-    }
-
-    /// Whether a Super+Tab step-through is running (Super still held since the first Tab).
-    pub fn cycling(&self) -> bool {
-        self.cycle.is_some()
-    }
-
     /// Target loss (K7, M11): focused element was destroyed or unmapped.
     /// The successor policy selects the most recently focused live element.
     pub fn target_lost(&mut self, dead: ElementId, live_elements: &[ElementId]) -> Vec<Effect> {
@@ -318,14 +225,9 @@ impl FocusModel {
             self.initial_eligible = true;
         }
         self.attention.retain(|&e| e != dead);
-        // a closed window drops out of a step-through; the step-through ends with its window
-        if let Some(cycle) = &mut self.cycle {
-            cycle.order.retain(|&e| e != dead);
-        }
         if self.target != Some(dead) {
             return Vec::new();
         }
-        self.cycle = None;
         self.hovered_since = None;
         let successor = self
             .history
@@ -446,6 +348,31 @@ impl FocusModel {
     }
 }
 
+/// The window to go to from `from` in a direction: of the windows whose centre lies that way, the
+/// one nearest along it, a window off to the side counting double. `windows`: their centres in
+/// canvas coordinates (y grows downwards).
+pub(crate) fn nearest_in_direction(
+    from: (i64, i64),
+    direction: crate::input::keys::Direction,
+    windows: &[(ElementId, (i64, i64))],
+) -> Option<ElementId> {
+    use crate::input::keys::Direction;
+    windows
+        .iter()
+        .filter_map(|&(id, (x, y))| {
+            let (dx, dy) = (x - from.0, y - from.1);
+            let (along, side) = match direction {
+                Direction::Left => (-dx, dy),
+                Direction::Right => (dx, dy),
+                Direction::Up => (-dy, dx),
+                Direction::Down => (dy, dx),
+            };
+            (along > 0).then_some((along + 2 * side.abs(), id))
+        })
+        .min_by_key(|&(score, _)| score)
+        .map(|(_, id)| id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -484,7 +411,7 @@ mod tests {
 
         // focus next among [e1, e2, e3]: toggles strictly between the two last focused (e2 <-> e1)
         let live = [e1, e2, e3];
-        let fx = fm.focus_next(&live, Modifiers::default());
+        let fx = fm.focus_next(&live);
         assert_eq!(fm.target(), Some(e1));
         assert_eq!(
             fx,
@@ -496,7 +423,7 @@ mod tests {
         );
 
         // toggle again from e1 -> e2
-        let fx = fm.focus_next(&live, Modifiers::default());
+        let fx = fm.focus_next(&live);
         assert_eq!(fm.target(), Some(e2));
         assert_eq!(
             fx,
@@ -593,15 +520,8 @@ mod tests {
         [1, 2, 3, 4].map(|i| ElementId::new(NonZeroU64::new(i).unwrap()))
     }
 
-    const SUPER: Modifiers = Modifiers {
-        logo: true,
-        ctrl: false,
-        alt: false,
-        shift: false,
-    };
-
-    /// Super+Tab (owner, 2026-10-31): a tap goes to the window used before the focused one, so two
-    /// taps (Super let go between them) come back: Tab, Tab returns.
+    /// Super+Tab (owner, 2026-11-01): every press goes to the window used before the focused one,
+    /// never further back: Tab, Tab returns, Tab, Tab, Tab is the other one.
     #[test]
     fn super_tab_flips_between_the_last_two_windows() {
         let [a, b, c, _] = ids();
@@ -611,13 +531,33 @@ mod tests {
             let _ = fm.set_focus(Some(e));
         }
         // used: b, c, a
-        let _ = fm.focus_next(&live, SUPER);
-        fm.modifiers_changed(Modifiers::default());
+        let _ = fm.focus_next(&live);
         assert_eq!(fm.target(), Some(c), "the window used before b");
-        let _ = fm.focus_next(&live, SUPER);
-        fm.modifiers_changed(Modifiers::default());
+        let _ = fm.focus_next(&live);
         assert_eq!(fm.target(), Some(b), "Tab, Tab returns");
-        assert_eq!(fm.history(), &[b, c, a]);
+        let _ = fm.focus_next(&live);
+        assert_eq!(fm.target(), Some(c), "only ever these two");
+        assert_eq!(fm.history(), &[c, b, a]);
+    }
+
+    /// Super+arrow (owner, 2026-11-01): the nearest window that way; none that way, no move.
+    #[test]
+    fn the_arrows_go_to_the_nearest_window_that_way() {
+        use crate::input::keys::Direction::{Down, Left, Right, Up};
+        let [a, b, c, d] = ids();
+        let windows = [
+            (a, (1000, 0)),
+            (b, (300, 900)),
+            (c, (0, 500)),
+            (d, (-400, 0)),
+        ];
+        assert_eq!(
+            super::nearest_in_direction((0, 0), Right, &windows),
+            Some(a)
+        );
+        assert_eq!(super::nearest_in_direction((0, 0), Left, &windows), Some(d));
+        assert_eq!(super::nearest_in_direction((0, 0), Down, &windows), Some(c));
+        assert_eq!(super::nearest_in_direction((0, 0), Up, &windows), None);
     }
 
     /// The pointer passing over a window on its way elsewhere does not make it the last window
@@ -635,69 +575,13 @@ mod tests {
         let _ = fm.hover_focus(Some(a), 1_050_000);
         fm.settle_hover(2_000_000);
         assert_eq!(fm.history()[..2], [a, b]);
-        let _ = fm.focus_next(&live, SUPER);
-        fm.modifiers_changed(Modifiers::default());
+        let _ = fm.focus_next(&live);
         assert_eq!(fm.target(), Some(b), "back to b, not c");
 
         // a click on the window the pointer just focused counts at once
         let _ = fm.hover_focus(Some(c), 3_000_000);
         let _ = fm.set_focus(Some(c));
         assert_eq!(fm.history()[0], c);
-    }
-
-    /// Holding Super, each further Tab steps one window further back (wrapping round); the
-    /// history is left alone until Super is let go, and then the chosen window is the most recent.
-    #[test]
-    fn holding_super_steps_further_back_and_letting_go_chooses() {
-        let [a, b, c, d] = ids();
-        let live = [a, b, c, d];
-        let mut fm = FocusModel::default();
-        for e in [a, b, c, d] {
-            let _ = fm.set_focus(Some(e));
-        }
-        // used: d, c, b, a
-        let _ = fm.focus_next(&live, SUPER);
-        assert_eq!(fm.target(), Some(c));
-        assert!(fm.cycling());
-        let _ = fm.focus_next(&live, SUPER);
-        assert_eq!(fm.target(), Some(b), "one further back");
-        assert_eq!(fm.history(), &[d, c, b, a], "untouched while held");
-        // Shift pressed as well keeps it going; only Super let go ends it
-        fm.modifiers_changed(Modifiers {
-            shift: true,
-            ..SUPER
-        });
-        assert!(fm.cycling());
-        let _ = fm.focus_next(&live, SUPER);
-        let _ = fm.focus_next(&live, SUPER);
-        assert_eq!(fm.target(), Some(d), "wraps round to the start");
-        let _ = fm.focus_next(&live, SUPER);
-        assert_eq!(fm.target(), Some(c));
-        fm.modifiers_changed(Modifiers::default());
-        assert!(!fm.cycling());
-        assert_eq!(
-            fm.history(),
-            &[c, d, b, a],
-            "the chosen one is the most recent"
-        );
-        // the next tap flips back to the window left before
-        let _ = fm.focus_next(&live, SUPER);
-        assert_eq!(fm.target(), Some(d));
-    }
-
-    /// A press with no modifier held (a user binding such as F5) is always a tap.
-    #[test]
-    fn a_binding_without_modifiers_is_always_a_tap() {
-        let [a, b, c, _] = ids();
-        let live = [a, b, c];
-        let mut fm = FocusModel::default();
-        for e in [a, b, c] {
-            let _ = fm.set_focus(Some(e));
-        }
-        let _ = fm.focus_next(&live, Modifiers::default());
-        assert!(!fm.cycling());
-        let _ = fm.focus_next(&live, Modifiers::default());
-        assert_eq!(fm.target(), Some(c), "flips back, never steps on");
     }
 
     /// Attention first (owner, 2026-10-31): Super+Tab goes to the window that most recently asked
@@ -713,29 +597,23 @@ mod tests {
         fm.mark_attention(c);
         let _ = fm.activation(d, false, true);
         assert_eq!(fm.attention(), &[c, d]);
-        let fx = fm.focus_attention(&live, SUPER).expect("attention first");
+        let fx = fm.focus_attention(&live).expect("attention first");
         assert!(fx.contains(&Effect::KeyboardFocus(Some(d))), "{fx:?}");
         assert_eq!(fm.target(), Some(d), "the most recent mark");
         assert_eq!(fm.attention(), &[c], "its mark is cleared");
-        // Tab again while held: a step-through, not another attention jump
-        assert_eq!(fm.focus_attention(&live, SUPER), None);
-        let _ = fm.focus_next(&live, SUPER);
-        assert_eq!(fm.target(), Some(b), "back to where the user was");
-        fm.modifiers_changed(Modifiers::default());
         // a new press goes to the next window asking
-        let _ = fm.focus_attention(&live, SUPER).expect("c asks");
-        fm.modifiers_changed(Modifiers::default());
+        let _ = fm.focus_attention(&live).expect("c asks");
         assert_eq!(fm.target(), Some(c));
-        assert!(fm.attention().is_empty());
-        let _ = fm.focus_next(&live, SUPER);
-        fm.modifiers_changed(Modifiers::default());
-        assert_eq!(fm.target(), Some(b), "then the toggle again");
+        assert_eq!(fm.attention(), &[] as &[ElementId]);
+        assert_eq!(fm.focus_attention(&live), None, "nobody asks now");
+        let _ = fm.focus_next(&live);
+        assert_eq!(fm.target(), Some(d), "then the flip");
         // a mark on a window that may not be focused (hidden) is passed over
         fm.mark_attention(a);
-        assert_eq!(fm.focus_attention(&[b, c, d], SUPER), None);
+        assert_eq!(fm.focus_attention(&[b, c, d]), None);
     }
 
-    /// A window loses its mark when it is focused any way: a click (set_focus), a step-through,
+    /// A window loses its mark when it is focused any way: a click (set_focus), Super+Tab,
     /// or as the successor of a closed window. The focused window is never marked.
     #[test]
     fn a_mark_is_cleared_whenever_the_window_is_focused() {
@@ -755,11 +633,9 @@ mod tests {
         fm.mark_attention(c);
         let _ = fm.set_focus(Some(a));
         fm.mark_attention(c);
-        let _ = fm.focus_next(&live, SUPER);
-        let _ = fm.focus_next(&live, SUPER);
-        assert_eq!(fm.target(), Some(c), "stepped to");
-        assert!(fm.attention().is_empty(), "stepped to");
-        fm.modifiers_changed(Modifiers::default());
+        let _ = fm.focus_attention(&live);
+        assert_eq!(fm.target(), Some(c), "gone to");
+        assert!(fm.attention().is_empty(), "gone to");
         // a successor
         fm.mark_attention(b);
         let _ = fm.target_lost(c, &[a, b]);
@@ -770,29 +646,24 @@ mod tests {
         assert!(fm.attention().is_empty(), "the successor");
     }
 
-    /// A closed window leaves the history and a running step-through; one that was the
-    /// step-through's window ends it.
+    /// A closed window leaves the history; the flip goes on without it.
     #[test]
-    fn a_closed_window_drops_out_of_the_history_and_the_step_through() {
+    fn a_closed_window_drops_out_of_the_history() {
         let [a, b, c, d] = ids();
         let mut fm = FocusModel::default();
         for e in [a, b, c, d] {
             let _ = fm.set_focus(Some(e));
         }
-        let _ = fm.focus_next(&[a, b, c, d], SUPER);
-        assert_eq!(fm.target(), Some(c));
-        // b closes while Super is held: the next Tab skips it
-        let _ = fm.target_lost(b, &[a, c, d]);
-        assert!(!fm.history().contains(&b));
-        let _ = fm.focus_next(&[a, c, d], SUPER);
-        assert_eq!(fm.target(), Some(a), "b is gone");
-        // the window the step-through is on closes: it ends, the successor is the last used
-        let _ = fm.target_lost(a, &[c, d]);
-        assert!(!fm.cycling());
+        // used: d, c, b, a; c closes, the one before d is b now
+        let _ = fm.target_lost(c, &[a, b, d]);
+        assert!(!fm.history().contains(&c));
+        let _ = fm.focus_next(&[a, b, d]);
+        assert_eq!(fm.target(), Some(b));
+        // the focused window closes: the successor is the last one used
+        let _ = fm.target_lost(b, &[a, d]);
         assert_eq!(fm.target(), Some(d));
-        assert_eq!(fm.history(), &[d, c]);
-        let _ = fm.focus_next(&[c, d], SUPER);
-        fm.modifiers_changed(Modifiers::default());
-        assert_eq!(fm.target(), Some(c));
+        assert_eq!(fm.history(), &[d, a]);
+        let _ = fm.focus_next(&[a, d]);
+        assert_eq!(fm.target(), Some(a));
     }
 }

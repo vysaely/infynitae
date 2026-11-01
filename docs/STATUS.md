@@ -128,8 +128,8 @@ These pass the test suite but have not run on a real screen or device yet:
   not yet with a real app.
 - **The session scripts and the C helpers** have the least test coverage of anything here.
 - **New key defaults (2026-10-31),** by the rule "often used on the left hand, rare on the
-  right": **Super+Tab** goes back to the window used before (tap again to return); holding
-  Super, each Tab goes one further back, and letting Super go picks the window. A window that
+  right": **Super+Tab** flips between the last two windows, Super held or not, and
+  **Super+arrow** goes to the nearest window that way (2026-11-01). A window that
   opened without the focus (`FOCUS_ON_OPEN` "user" or "priority") or whose request to be focused
   was refused asks for attention: Super+Tab goes to it first and brings it into view, the edge
   (Super+W) marks its tile with an accent dot and line, and `infynitae msg snapshot` says

@@ -26,8 +26,9 @@ these by date, e.g. "(owner, 2026-10-24)".
   (Super+Shift+R, Super+Shift+T, Super+Alt+R) stay as aliases, and a binding of the user's
   (`BIND_*`, `EXEC_*`) still wins over both.
 - **Super+Tab flips between the last two windows** (2026-10-31), most recently used order, so two
-  apps can be switched fast. Holding Super, each further Tab goes one window back, like Alt+Tab;
-  letting Super go picks the window reached and makes it the most recent. **Attention first:** a
+  apps can be switched fast. It never goes further back, even with Super held (2026-11-01, owner:
+  the step-through of 2026-10-31 felt like cycling every window). **Super+arrow** goes to the
+  nearest window that way on the canvas and brings it into view (2026-11-01). **Attention first:** a
   window that opened without the focus (FOCUS_ON_OPEN "user" or "priority" held it back) or
   whose activation was refused wants attention; Super+Tab goes to the most recent such window
   first, brings it into view as Super+1..9 does, and clears its mark; the next Super+Tab goes
@@ -59,8 +60,8 @@ these by date, e.g. "(owner, 2026-10-24)".
   composited.
 - **An app can take the shortcuts while it has focus** (2026-10-25, `keyboard-shortcuts-inhibit`:
   a VM, a remote desktop, a game): its keys go to it, Super-chords included, until it lets go
-  or loses focus. Super+L (lock), Super+Tab (leave it, 2026-11-01: a fullscreen game took it),
-  Ctrl+Alt+Backspace (quit) and Ctrl+Alt+F1… (terminals) always stay yours.
+  or loses focus. Super+L (lock), and since 2026-11-01 Super+Tab, Super+W and Super+A (a fullscreen game
+  took them, "what if I need it"), Ctrl+Alt+Backspace (quit) and Ctrl+Alt+F1… (terminals) always stay yours.
 - **Holding Super frees a cursor a game captured** (2026-10-25, "feel free in my desktop";
   `SUPER_FREES_CURSOR`).
 

@@ -90,6 +90,9 @@ pub struct LayerRecord {
     pub geometry: LocalRect,
     /// The size last sent in a configure (`None`: no configure yet).
     pub configured: Option<LocalSize>,
+    /// It unmapped (a null buffer) and has not asked to map again: its next commit without a
+    /// buffer gets a configure, as a new surface's first commit does.
+    pub unmapped: bool,
     /// The surfaces told `wl_surface.enter` for the output.
     pub(crate) entered: Vec<SurfaceKey>,
 }
@@ -417,6 +420,7 @@ impl crate::Core {
             tree: None,
             geometry: LocalRect::default(),
             configured: None,
+            unmapped: false,
             entered: Vec::new(),
         });
         Some(id)
@@ -455,6 +459,17 @@ impl crate::Core {
         let r = &self.layers[i];
         let mapped = r.mapped();
         let changed = mapped != was_mapped || (r.geometry, r.state) != before || reshaped;
+        // layer-shell: after a null buffer, a commit without one starts over and is answered with
+        // a configure. Without it a bar that hid over a fullscreen window never came back
+        // (owner, 2026-11-01: Super+W and Super+A did nothing)
+        let remap = !mapped && !was_mapped && r.unmapped;
+        let size = r.geometry.size;
+        let id = r.id;
+        self.layers[i].unmapped = !mapped && was_mapped;
+        if remap {
+            self.layers[i].configured = Some(size);
+            fx.push(Effect::LayerConfigure { layer: id, size });
+        }
         fx.extend(self.layer_membership(i));
         if mapped && !was_mapped {
             fx.extend(self.layer_scale(i));
@@ -1095,6 +1110,36 @@ mod tests {
             state(Layer::Overlay, (true, false, false, true), (300, 100), -1),
         );
         assert_eq!(c.layer(osd).unwrap().geometry, rect(1620, 0, 300, 100));
+    }
+
+    /// layer-shell: a bar that unmapped with a null buffer maps again by committing without a
+    /// buffer and waiting for a configure, which comes even at the same size, once.
+    #[test]
+    fn a_bar_that_unmapped_is_configured_again_when_it_asks() {
+        let Fx { mut c, o, .. } = setup();
+        let s = || state(Layer::Overlay, (true, true, true, true), (0, 0), -1);
+        let (bar, _) = map(&mut c, o, 1, s());
+        let configures = |fx: &[Effect]| {
+            fx.iter()
+                .filter(|e| matches!(e, Effect::LayerConfigure { .. }))
+                .count()
+        };
+        let fx = c
+            .layer_committed(bar, s(), tree(1, 1920, 1080, false))
+            .unwrap();
+        assert_eq!(configures(&fx), 0, "unmapping is not asking: {fx:?}");
+        let fx = c
+            .layer_committed(bar, s(), tree(1, 1920, 1080, false))
+            .unwrap();
+        assert_eq!(configures(&fx), 1, "the commit that asks: {fx:?}");
+        let fx = c
+            .layer_committed(bar, s(), tree(1, 1920, 1080, false))
+            .unwrap();
+        assert_eq!(configures(&fx), 0, "answered once: {fx:?}");
+        let fx = c
+            .layer_committed(bar, s(), tree(1, 1920, 1080, true))
+            .unwrap();
+        assert_eq!(configures(&fx), 0, "and it maps: {fx:?}");
     }
 
     /// A new size or zone from the client: configured again, the usable area follows.

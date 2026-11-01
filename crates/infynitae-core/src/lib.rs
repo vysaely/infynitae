@@ -998,16 +998,15 @@ impl Core {
             .any(|f| self.stage.mapped(f.element).is_some())
     }
 
-    /// FocusNext binding (Super+Tab, owner 2026-10-31): the window that most recently asked for
-    /// attention if one does, else the window used before the focused one, and while Super stays
-    /// held one further back at each Tab (`FocusModel::focus_next`). Returns the effects and
-    /// whether it went to a window that asked for attention (the camera then always follows).
+    /// FocusNext binding (Super+Tab): the window that most recently asked for attention if one
+    /// does, else the window used before the focused one (`FocusModel::focus_next`). Returns the
+    /// effects and whether it went to a window that asked for attention (the camera then always
+    /// follows).
     pub(crate) fn focus_next(&mut self) -> (Vec<protocol::Effect>, bool) {
         let live = self.focusable_elements();
-        let held = self.input.modifiers;
-        let (mut fx, attention) = match self.focus.focus_attention(&live, held) {
+        let (mut fx, attention) = match self.focus.focus_attention(&live) {
             Some(fx) => (fx, true),
-            None => (self.focus.focus_next(&live, held), false),
+            None => (self.focus.focus_next(&live), false),
         };
         // Super+Tab brings the newly focused window to the front; what lies under the pointer may
         // have changed, so it gets one true-position event (M10), as after a camera write
@@ -1050,8 +1049,9 @@ impl Core {
     }
 
     /// The focused window took over the compositor's shortcuts (`keyboard-shortcuts-inhibit`), or
-    /// gave them back. While it holds them, every key goes to it except Super+L and Super+Tab, so
-    /// an app can never keep you from locking (owner, 2026-10-25) or from leaving it (2026-11-01). Quitting the session and switching
+    /// gave them back. While it holds them, every key goes to it except Super+L, Super+Tab, Super+W
+    /// and Super+A, so an app can never keep you from locking (owner, 2026-10-25), leaving it or
+    /// reaching the edge (2026-11-01). Quitting the session and switching
     /// terminals are the console backend's and never reach Core.
     pub fn set_shortcuts_inhibited(&mut self, inhibited: bool) {
         self.shortcuts_inhibited = inhibited;

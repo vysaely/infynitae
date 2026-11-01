@@ -3,7 +3,7 @@
 //! and would make `WaylandState` lose `Send`, so the protocol is served here.
 //!
 //! An inhibitor is active only while its surface has keyboard focus; Core then lets every key
-//! through except Super+L and Super+Tab (`Core::set_shortcuts_inhibited`).
+//! through except Super+L, Super+Tab, Super+W and Super+A (`Core::set_shortcuts_inhibited`).
 
 use smithay::reexports::wayland_protocols::wp::keyboard_shortcuts_inhibit::zv1::server::{
     zwp_keyboard_shortcuts_inhibit_manager_v1::{self, ZwpKeyboardShortcutsInhibitManagerV1},

@@ -1,8 +1,7 @@
-//! Super+Tab through the real key path (owner, 2026-10-31): the recently used windows, most recent
-//! first. A tap flips between the last two; holding Super, each Tab steps one further back, and
-//! letting Super go chooses the window reached. A window that asks for attention (it opened
-//! without the focus) comes first, and the next tap goes back. The client sees each change as a
-//! keyboard enter.
+//! Super+Tab through the real key path (owner, 2026-11-01): every press flips between the last
+//! two windows used, Super held or not. A window that asks for attention (it opened without the
+//! focus) comes first, and the next press goes back. The client sees each change as a keyboard
+//! enter.
 
 mod common;
 
@@ -42,7 +41,7 @@ fn active(r: &Rig) -> Option<&str> {
 /// W, X, Y used in that order: taps flip Y and X; held, Tab steps X then W; a window asking for
 /// attention comes first, then the flip goes back.
 #[test]
-fn super_tab_flips_steps_back_while_held_and_puts_attention_first() {
+fn super_tab_flips_the_last_two_and_puts_attention_first() {
     let mut r = Rig::x8();
     let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
     let x = open(&mut r, "X");
@@ -59,24 +58,17 @@ fn super_tab_flips_steps_back_while_held_and_puts_attention_first() {
     tap(&mut r);
     assert_eq!(active(&r), Some("Y"), "Tab, Tab returns");
 
-    // Super held: X, then W; Super let go on W
+    // Super held: only those two, never W
     key(&mut r, KEY_LEFTMETA, true);
     key(&mut r, KEY_TAB, true);
     key(&mut r, KEY_TAB, false);
     assert_eq!(active(&r), Some("X"));
     key(&mut r, KEY_TAB, true);
     key(&mut r, KEY_TAB, false);
-    assert_eq!(
-        active(&r),
-        Some("W"),
-        "one further back while Super is held"
-    );
+    assert_eq!(active(&r), Some("Y"), "back, not further");
     key(&mut r, KEY_LEFTMETA, false);
     r.frame();
-    assert_eq!(r.ls.state.core().focus().target(), Some(w));
-    // W is the most recent now: a tap goes back to Y, where the step-through began
-    tap(&mut r);
-    assert_eq!(active(&r), Some("Y"));
+    assert_eq!(r.ls.state.core().focus().target(), Some(y));
 
     // X opened without the focus (the adapter's FOCUS_ON_OPEN rules): Super+Tab goes to it first
     r.ls.state.core_mut().opened_without_focus(x);

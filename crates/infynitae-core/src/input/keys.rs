@@ -16,6 +16,10 @@ pub const KEY_A: u32 = 30;
 pub const KEY_LEFTSHIFT: u32 = 42;
 pub const KEY_B: u32 = 48;
 pub const KEY_TAB: u32 = 15;
+pub const KEY_UP: u32 = 103;
+pub const KEY_LEFT: u32 = 105;
+pub const KEY_RIGHT: u32 = 106;
+pub const KEY_DOWN: u32 = 108;
 pub const KEY_DELETE: u32 = 111;
 pub const KEY_SPACE: u32 = 57;
 pub const KEY_LEFTMETA: u32 = 125;
@@ -58,9 +62,12 @@ pub const KEY_BRIGHTNESSUP: u32 = 225;
 /// Shift+I, Alt+P, Shift+BackSpace).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum KeyAction {
-    /// Super+Tab (owner, 2026-10-31): the window that asked for attention, else the window used
-    /// before this one; Tab again with Super held steps further back (`FocusModel::focus_next`)
+    /// Super+Tab (owner, 2026-11-01): the window that asked for attention, else the window used
+    /// before this one, so it flips between the last two (`FocusModel::focus_next`)
     FocusNext,
+    /// Super+arrow (owner, 2026-11-01): focus, raise, and centre the camera on the nearest window
+    /// that way on the canvas
+    FocusDirection(Direction),
     /// Super+1..9: focus, raise, and recenter camera on mapped window at slot 0..8 (creation order)
     FocusSlot(usize),
     /// Super+Shift+1..9: focus, raise, and frame/recenter camera on cluster at slot 0..8 (creation order)
@@ -269,9 +276,22 @@ pub fn parse_chord(text: &str) -> Option<Chord> {
     Some(Chord { key: key?, mods })
 }
 
+/// A way across the canvas (Super+arrow).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Direction {
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
 /// The actions a config can bind, by the name after `BIND_` (`BIND_TERMINAL="SUPER+RETURN"`).
 pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("FOCUS_NEXT", KeyAction::FocusNext),
+    ("FOCUS_LEFT", KeyAction::FocusDirection(Direction::Left)),
+    ("FOCUS_RIGHT", KeyAction::FocusDirection(Direction::Right)),
+    ("FOCUS_UP", KeyAction::FocusDirection(Direction::Up)),
+    ("FOCUS_DOWN", KeyAction::FocusDirection(Direction::Down)),
     ("OVERVIEW", KeyAction::ToggleOverview),
     ("LAUNCHER", KeyAction::ToggleLauncher),
     ("TERMINAL", KeyAction::SpawnTerminal),
@@ -356,8 +376,21 @@ pub fn resolve_key_binding(
             false => KeyAction::FitToggle,
         });
     }
-    // Super+Tab goes to the window asking for attention, else flips between the last two used
-    // (held: steps further back); Super+Shift+Tab toggles canvas overview radar
+    // Super+arrow goes to the nearest window that way on the canvas; exactly Logo
+    if mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        let direction = match key {
+            KEY_LEFT => Some(Direction::Left),
+            KEY_RIGHT => Some(Direction::Right),
+            KEY_UP => Some(Direction::Up),
+            KEY_DOWN => Some(Direction::Down),
+            _ => None,
+        };
+        if let Some(d) = direction {
+            return Some(KeyAction::FocusDirection(d));
+        }
+    }
+    // Super+Tab goes to the window asking for attention, else flips between the last two used;
+    // Super+Shift+Tab toggles canvas overview radar
     if key == KEY_TAB && mods.logo && !mods.ctrl && !mods.alt && !interaction_active {
         if mods.shift {
             return Some(KeyAction::ToggleOverview);
