@@ -13,6 +13,7 @@ pub const KEY_LEFTCTRL: u32 = 29;
 pub const KEY_LEFTALT: u32 = 56;
 pub const KEY_F: u32 = 33;
 pub const KEY_A: u32 = 30;
+pub const KEY_D: u32 = 32;
 pub const KEY_LEFTSHIFT: u32 = 42;
 pub const KEY_B: u32 = 48;
 pub const KEY_TAB: u32 = 15;
@@ -72,7 +73,9 @@ pub enum KeyAction {
     FocusSlot(usize),
     /// Super+Shift+1..9: focus, raise, and frame/recenter camera on cluster at slot 0..8 (creation order)
     FocusClusterSlot(usize),
-    /// Super+W: toggles the edge (window strip and app search)
+    /// Super+W (owner, 2026-11-01): the list of open windows, and nothing else
+    ToggleWindowList,
+    /// Super+D (owner, 2026-11-01: apart from the windows): the app launcher
     ToggleLauncher,
     /// Super+Q: launches terminal
     SpawnTerminal,
@@ -293,6 +296,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("FOCUS_UP", KeyAction::FocusDirection(Direction::Up)),
     ("FOCUS_DOWN", KeyAction::FocusDirection(Direction::Down)),
     ("OVERVIEW", KeyAction::ToggleOverview),
+    ("WINDOWS", KeyAction::ToggleWindowList),
     ("LAUNCHER", KeyAction::ToggleLauncher),
     ("TERMINAL", KeyAction::SpawnTerminal),
     ("FILE_MANAGER", KeyAction::SpawnFileManager),
@@ -450,8 +454,12 @@ pub fn resolve_key_binding(
             return Some(KeyAction::FocusClusterSlot(s));
         }
     }
-    // Super+W: toggles the edge; exactly Logo, never during interaction
+    // Super+W: the open windows; exactly Logo, never during interaction
     if key == KEY_W && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::ToggleWindowList);
+    }
+    // Super+D: the app launcher; exactly Logo, never during interaction
+    if key == KEY_D && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ToggleLauncher);
     }
     // Super+Q: launches terminal; exactly Logo, never during interaction

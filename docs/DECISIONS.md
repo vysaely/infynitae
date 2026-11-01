@@ -19,6 +19,10 @@ these by date, e.g. "(owner, 2026-10-24)".
 
 ## Keys
 
+- **Super+W is the windows, Super+D the apps** (owner, 2026-11-01). One bar did both, so a search
+  for a window also filled the panel with apps. Now Super+W only lists and narrows open windows,
+  and Super+D only searches and starts apps. `LAUNCHER` and `BIND_LAUNCHER` follow the apps;
+  `BIND_WINDOWS` moves the list. Without the edge Super+W does nothing.
 - **Often used on the left hand, rare on the right** (2026-10-31). Super+Tab, Q, W, E, A, S, C,
   V and Space are the everyday keys; Super+L, Shift+O, Shift+P, Shift+I, Alt+P and
   Shift+BackSpace the rare ones. So **Super+S is the region screenshot** (Super+Shift+S the whole
@@ -63,7 +67,7 @@ these by date, e.g. "(owner, 2026-10-24)".
   gets game mode, however it is shown. LATENCY_STATS also logs why frames are not shown directly.
 - **An app can take the shortcuts while it has focus** (2026-10-25, `keyboard-shortcuts-inhibit`:
   a VM, a remote desktop, a game): its keys go to it, Super-chords included, until it lets go
-  or loses focus. Super+L (lock), and since 2026-11-01 Super+Tab, Super+W and Super+A (a fullscreen game
+  or loses focus. Super+L (lock), and since 2026-11-01 Super+Tab, Super+W, Super+D and Super+A (a fullscreen game
   took them, "what if I need it"), Ctrl+Alt+Backspace (quit) and Ctrl+Alt+F1… (terminals) always stay yours.
 - **Holding Super frees a cursor a game captured** (2026-10-25, "feel free in my desktop";
   `SUPER_FREES_CURSOR`).

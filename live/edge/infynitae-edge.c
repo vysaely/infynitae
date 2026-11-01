@@ -1,5 +1,5 @@
 /*
- * Infynitae Native Taskbar (Super+W) & System Control / StatusNotifier Tray (Super+A)
+ * Infynitae Native Taskbar (Super+W), App Launcher (Super+D) & System Control / StatusNotifier Tray (Super+A)
  *
  * Drawn in the theme colors from the config (CANVAS_COLOR, …): square corners,
  * 1px subtle border, zero nested buttons, zero visual bloat):
@@ -57,9 +57,10 @@
 
 typedef enum {
     MODE_CLOSED = 0,
-    MODE_CENTER = 1,    /* Super+W: Search + Open Window Tabs */
+    MODE_CENTER = 1,    /* Super+W: Search + Open Window Tabs, windows only */
     MODE_CONTROL = 2,   /* Super+A: System Control + Tray Apps */
-    MODE_CLIPBOARD = 3  /* Super+V: Clipboard History */
+    MODE_CLIPBOARD = 3, /* Super+V: Clipboard History */
+    MODE_APPS = 4       /* Super+D: Search + Apps */
 } EdgeMode;
 
 typedef enum {
@@ -216,7 +217,6 @@ typedef struct EdgeApp {
 
     char search[128];
     size_t search_len;
-    bool launcher_open;
     int selected_idx;
 
     CanvasWindow windows[MAX_WINDOWS];
@@ -281,7 +281,6 @@ typedef struct EdgeApp {
 
 enum {
     ACT_NONE = 0,
-    ACT_SEARCH_BOX,
     ACT_WIN_ITEM,
     ACT_APP_LAUNCH,
     ACT_WIFI_TOGGLE,
@@ -305,12 +304,13 @@ enum {
     ACT_CLIP_ITEM,
     ACT_CLIP_CLEAR,
     ACT_CENTER_EDGE,
-    ACT_CORNER_EDGE
+    ACT_CORNER_EDGE,
+    ACT_SEARCH_BOX    /* a click there keeps the panel open */
 };
 
 static volatile sig_atomic_t g_sig_cmd = 0;
 
-/* The signals (Super+W, Super+A, Super+V) reach any thread that does not block them, GLib's own
+/* The signals (Super+W, Super+D, Super+A, Super+V) reach any thread that does not block them, GLib's own
  * (gdbus, pool) as well: a byte in this pipe wakes the main loop's poll whichever thread ran the
  * handler, where the flag alone waited for the next unrelated event (the keys did nothing). */
 static int g_wake_pipe[2] = {-1, -1};
@@ -326,6 +326,7 @@ static void on_sigusr1(int sig) { (void)sig; g_sig_cmd = 1; wake_main(); }
 static void on_sigusr2(int sig) { (void)sig; g_sig_cmd = 2; wake_main(); }
 static void on_sigterm(int sig) { (void)sig; g_sig_cmd = 3; wake_main(); }
 static void on_sigrtmin(int sig) { (void)sig; g_sig_cmd = 4; wake_main(); }
+static void on_sigapps(int sig) { (void)sig; g_sig_cmd = 5; wake_main(); }
 
 static void request_frame(EdgeOutput *out);
 static void damage_all(EdgeApp *app);
@@ -773,10 +774,9 @@ static void update_filters(EdgeApp *app) {
         else if (app->selected_idx >= shown) app->selected_idx = shown - 1;
         return;
     }
-    bool show_flyout = (app->launcher_open || app->search_len > 0);
-    int max_w = app->filtered_win_count < 6 ? app->filtered_win_count : 6;
-    int max_a = show_flyout ? (app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS) : 0;
-    int total = max_w + max_a;
+    int total = app->mode == MODE_APPS
+        ? (app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS)
+        : (app->filtered_win_count < 6 ? app->filtered_win_count : 6);
     if (total <= 0) app->selected_idx = 0;
     else if (app->selected_idx >= total) app->selected_idx = total - 1;
 }
@@ -1572,29 +1572,20 @@ static void render_output(EdgeOutput *out) {
         /* A. Window strip (Super+W): one outer 1 px border                    */
         /* ─────────────────────────────────────────────────────────────────── */
         if (active_m == MODE_CENTER) {
-            bool show_launcher = (app->launcher_open || app->search_len > 0);
-            int shown_apps = show_launcher
-                ? (app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS)
-                : 0;
-            int app_rows = show_launcher ? ((shown_apps > 0 ? shown_apps : 1) + 1) / 2 : 0;
-
             int max_tabs = 6;
             int tab_cnt = app->filtered_win_count < max_tabs ? app->filtered_win_count : max_tabs;
             double sb_w = 152.0;
 
             double row_h = 28.0;
-            double ext_h = show_launcher ? (1.0 + app_rows * 24.0 + 4.0) : 0.0;
             double max_bar_w = w - 160.0;
             if (max_bar_w > 780.0) max_bar_w = 780.0;
             if (max_bar_w < 420.0) max_bar_w = w - 24.0;
 
             double bar_w = max_bar_w;
-            if (!show_launcher) {
-                double ideal_w = sb_w + (tab_cnt > 0 ? tab_cnt * 168.0 : 180.0);
-                if (ideal_w < 360.0) ideal_w = 360.0;
-                if (ideal_w < bar_w) bar_w = ideal_w;
-            }
-            double total_h = row_h + ext_h;
+            double ideal_w = sb_w + (tab_cnt > 0 ? tab_cnt * 168.0 : 180.0);
+            if (ideal_w < 360.0) ideal_w = 360.0;
+            if (ideal_w < bar_w) bar_w = ideal_w;
+            double total_h = row_h;
             double bar_x = round((w - bar_w) / 2.0);
             double bar_y = round(app->bottom_edge
                 ? (h + total_h * (1.0 - ease) - (total_h + 8.0) * ease)
@@ -1614,15 +1605,15 @@ static void render_output(EdgeOutput *out) {
             draw_rect(cr, bar_x, bar_y, bar_w, total_h);
             cairo_stroke(cr);
 
-            double top_y = app->bottom_edge ? (bar_y + ext_h) : bar_y;
+            double top_y = bar_y;
 
-            /* 1. Search field (left, borderless) */
+            /* 1. Search field (left, borderless): narrows the windows */
             if (app->search_len > 0) {
                 cairo_set_source_rgba(cr, 0.94, 0.96, 0.98, 0.96);
                 draw_text_left(cr, layout, "Sans 8.5", app->search, bar_x + 10.0, top_y + row_h / 2.0, sb_w - 18.0);
             } else {
                 cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
-                draw_text_left(cr, layout, "Sans 8.5", "Search…", bar_x + 10.0, top_y + row_h / 2.0, sb_w - 18.0);
+                draw_text_left(cr, layout, "Sans 8.5", "Search windows…", bar_x + 10.0, top_y + row_h / 2.0, sb_w - 18.0);
             }
             add_hitbox(app, bar_x, top_y, sb_w, row_h, ACT_SEARCH_BOX, 0);
             draw_vline(cr, bar_x + sb_w, top_y + 4.0, row_h - 8.0);
@@ -1633,7 +1624,7 @@ static void render_output(EdgeOutput *out) {
             double tabs_avail_w = right_inner - cur_x;
             if (tab_cnt == 0) {
                 cairo_set_source_rgba(cr, 0.40, 0.44, 0.52, 0.70);
-                draw_text_left(cr, layout, "Sans 8.5", "No open windows", cur_x + 10.0, top_y + row_h / 2.0, tabs_avail_w - 16.0);
+                draw_text_left(cr, layout, "Sans 8.5", app->search_len > 0 ? "No matching windows" : "No open windows", cur_x + 10.0, top_y + row_h / 2.0, tabs_avail_w - 16.0);
             } else {
                 double base_tab_w = floor(tabs_avail_w / tab_cnt);
 
@@ -1669,32 +1660,70 @@ static void render_output(EdgeOutput *out) {
                     add_hitbox_nav(app, tx, top_y, tw_cell, row_h, ACT_WIN_ITEM, app->filtered_wins[i], i);
                 }
             }
+        }
 
-            /* 3. Inline App Results inside the same single window frame */
-            if (show_launcher) {
-                double list_y = app->bottom_edge ? (bar_y + 2.0) : (bar_y + row_h + 1.0);
-                draw_hline(cr, bar_x + 1.0, app->bottom_edge ? top_y : (bar_y + row_h), bar_w - 2.0);
+        /* ─────────────────────────────────────────────────────────────────── */
+        /* A2. Apps (Super+D): one outer 1 px border                           */
+        /* ─────────────────────────────────────────────────────────────────── */
+        if (active_m == MODE_APPS) {
+            int shown_apps = app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS;
+            int app_rows = ((shown_apps > 0 ? shown_apps : 1) + 1) / 2;
 
-                if (shown_apps == 0) {
-                    cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.80);
-                    draw_text_left(cr, layout, "Sans 8.5", "No matching apps", bar_x + 10.0, list_y + 12.0, bar_w - 20.0);
-                } else {
-                    double cw = floor((bar_w - 2.0) / 2.0);
-                    double ch = 24.0;
-                    for (int i = 0; i < shown_apps; i++) {
-                        DesktopApp *da = &app->apps[app->filtered_apps[i]];
-                        int r = i / 2;
-                        int c = i % 2;
-                        double ax = bar_x + 1.0 + c * cw;
-                        double ay = list_y + r * ch;
-                        int nav_i = tab_cnt + i;
-                        bool sel = (app->selected_idx == nav_i);
+            double row_h = 28.0;
+            double ch = 24.0;
+            double ext_h = 1.0 + app_rows * ch + 4.0;
+            double bar_w = w - 160.0;
+            if (bar_w > 520.0) bar_w = 520.0;
+            if (bar_w < 300.0) bar_w = w - 24.0;
+            double total_h = row_h + ext_h;
+            double bar_x = round((w - bar_w) / 2.0);
+            double bar_y = round(app->bottom_edge
+                ? (h + total_h * (1.0 - ease) - (total_h + 8.0) * ease)
+                : (-total_h * (1.0 - ease) + 8.0 * ease));
 
-                        draw_bare_item(cr, ax, ay, cw, ch, false, sel);
-                        cairo_set_source_rgba(cr, sel ? 0.96 : 0.74, sel ? 0.98 : 0.79, sel ? 1.0 : 0.86, 0.95);
-                        draw_text_left(cr, layout, "Sans 8.5", da->name, ax + 10.0, ay + ch / 2.0, cw - 16.0);
-                        add_hitbox_nav(app, ax, ay, cw, ch, ACT_APP_LAUNCH, app->filtered_apps[i], nav_i);
-                    }
+            cur_dx = (int)bar_x - 2;
+            cur_dy = (int)bar_y - 2;
+            cur_dw = (int)bar_w + 4;
+            cur_dh = (int)total_h + 4;
+
+            /* one flat panel in SURFACE_COLOR, 1 px border from the config */
+            cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.97 * ease);
+            fill_rect(cr, bar_x, bar_y, bar_w, total_h);
+
+            cairo_set_source_rgba(cr, app->border_rgb[0], app->border_rgb[1], app->border_rgb[2], 0.90 * ease);
+            cairo_set_line_width(cr, 1.0);
+            draw_rect(cr, bar_x, bar_y, bar_w, total_h);
+            cairo_stroke(cr);
+
+            /* the search field sits on the side of the screen edge, the apps grow away from it */
+            double top_y = app->bottom_edge ? (bar_y + ext_h) : bar_y;
+            if (app->search_len > 0) {
+                cairo_set_source_rgba(cr, 0.94, 0.96, 0.98, 0.96);
+                draw_text_left(cr, layout, "Sans 8.5", app->search, bar_x + 10.0, top_y + row_h / 2.0, bar_w - 20.0);
+            } else {
+                cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
+                draw_text_left(cr, layout, "Sans 8.5", "Search apps…", bar_x + 10.0, top_y + row_h / 2.0, bar_w - 20.0);
+            }
+            add_hitbox(app, bar_x, top_y, bar_w, row_h, ACT_SEARCH_BOX, 0);
+
+            double list_y = app->bottom_edge ? (bar_y + 2.0) : (bar_y + row_h + 1.0);
+            draw_hline(cr, bar_x + 1.0, app->bottom_edge ? top_y : (bar_y + row_h), bar_w - 2.0);
+
+            if (shown_apps == 0) {
+                cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.80);
+                draw_text_left(cr, layout, "Sans 8.5", "No matching apps", bar_x + 10.0, list_y + 12.0, bar_w - 20.0);
+            } else {
+                double cw = floor((bar_w - 2.0) / 2.0);
+                for (int i = 0; i < shown_apps; i++) {
+                    DesktopApp *da = &app->apps[app->filtered_apps[i]];
+                    double ax = bar_x + 1.0 + (i % 2) * cw;
+                    double ay = list_y + (i / 2) * ch;
+                    bool sel = (app->selected_idx == i);
+
+                    draw_bare_item(cr, ax, ay, cw, ch, false, sel);
+                    cairo_set_source_rgba(cr, sel ? 0.96 : 0.74, sel ? 0.98 : 0.79, sel ? 1.0 : 0.86, 0.95);
+                    draw_text_left(cr, layout, "Sans 8.5", da->name, ax + 10.0, ay + ch / 2.0, cw - 16.0);
+                    add_hitbox_nav(app, ax, ay, cw, ch, ACT_APP_LAUNCH, app->filtered_apps[i], i);
                 }
             }
         }
@@ -2092,7 +2121,6 @@ static void set_mode(EdgeApp *app, EdgeMode new_mode) {
         app->kb_grab = true;
         app->search[0] = '\0';
         app->search_len = 0;
-        app->launcher_open = false;
         app->subpanel = SUB_NONE;
         app->tray_ctx_idx = -1;
         app->selected_idx = 0;
@@ -2103,11 +2131,12 @@ static void set_mode(EdgeApp *app, EdgeMode new_mode) {
             app->selected_idx = (app->tray_count > 0) ? 6 : 0;
         } else if (new_mode == MODE_CLIPBOARD) {
             refresh_clipboard_data(app);
+        } else if (new_mode == MODE_APPS) {
+            update_filters(app);
         }
     } else {
         app->mode = MODE_CLOSED;
         app->kb_grab = false;
-        app->launcher_open = false;
         app->subpanel = SUB_NONE;
         app->tray_ctx_idx = -1;
     }
@@ -2297,11 +2326,6 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
     case ACT_CORNER_EDGE:
         set_mode(app, MODE_CONTROL);
         return true;
-    case ACT_SEARCH_BOX:
-        app->launcher_open = !app->launcher_open;
-        update_filters(app);
-        damage_all(app);
-        return true;
     case ACT_WIN_ITEM: {
         CanvasWindow *cw = &app->windows[hb->index];
         char cmd[256];
@@ -2316,6 +2340,8 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
         spawn_detached(cmd);
         return true;
     }
+    case ACT_SEARCH_BOX:
+        return true;
     case ACT_APP_LAUNCH: {
         DesktopApp *da = &app->apps[hb->index];
         set_mode(app, MODE_CLOSED);
@@ -2911,6 +2937,10 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
             set_mode(app, app->mode == MODE_CENTER ? MODE_CLOSED : MODE_CENTER);
             return;
         }
+        if (sym == XKB_KEY_d || sym == XKB_KEY_D) {
+            set_mode(app, app->mode == MODE_APPS ? MODE_CLOSED : MODE_APPS);
+            return;
+        }
         if (sym == XKB_KEY_a || sym == XKB_KEY_A) {
             set_mode(app, app->mode == MODE_CONTROL ? MODE_CLOSED : MODE_CONTROL);
             return;
@@ -2956,10 +2986,11 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
         return;
     }
     if (sym == XKB_KEY_Down) {
-        if (app->mode == MODE_CENTER && !app->launcher_open && app->search_len == 0) {
-            app->launcher_open = true;
-            update_filters(app);
-        } else if (app->mode == MODE_CONTROL && app->selected_idx < 2 && app->subpanel == SUB_NONE) {
+        if (app->mode == MODE_CENTER) {
+            /* one row of windows: Left and Right move along it */
+            return;
+        }
+        if (app->mode == MODE_CONTROL && app->selected_idx < 2 && app->subpanel == SUB_NONE) {
             toggle_subpanel(app, app->selected_idx == 0 ? SUB_WIFI : SUB_BT);
             return;
         } else if (total > 0) {
@@ -2971,7 +3002,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
         return;
     }
     if (sym == XKB_KEY_Up) {
-        if (total > 0) {
+        if (app->mode != MODE_CENTER && total > 0) {
             int step = (app->mode == MODE_CLIPBOARD || (app->mode == MODE_CONTROL && app->selected_idx > 6)) ? 1 : 2;
             int prev = app->selected_idx - step;
             app->selected_idx = (prev >= 0) ? prev : 0;
@@ -2985,23 +3016,21 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
     char utf8[16] = {0};
     int len = xkb_state_key_get_utf8(app->xkb_state, keycode, utf8, sizeof(utf8));
     if (len > 0 && (unsigned char)utf8[0] >= 32 && (unsigned char)utf8[0] != 127) {
+        /* typing in the control panel looks for an app */
         if (app->mode == MODE_CONTROL) {
-            app->mode = MODE_CENTER;
-            app->target_mode = MODE_CENTER;
+            app->mode = MODE_APPS;
+            app->target_mode = MODE_APPS;
             app->subpanel = SUB_NONE;
-            refresh_snapshot(app);
         }
         if (app->search_len + (size_t)len < sizeof(app->search) - 1) {
             memcpy(app->search + app->search_len, utf8, (size_t)len);
             app->search_len += (size_t)len;
             app->search[app->search_len] = '\0';
-            if (app->mode == MODE_CENTER) app->launcher_open = true;
             update_filters(app);
             if (app->mode == MODE_CLIPBOARD) {
                 app->selected_idx = 0;
             } else {
-                int sw = app->filtered_win_count < 6 ? app->filtered_win_count : 6;
-                app->selected_idx = (sw > 0) ? 0 : sw;
+                app->selected_idx = 0;
             }
             damage_all(app);
         }
@@ -3307,6 +3336,8 @@ int main(int argc, char **argv) {
             if (running_pid > 0 && kill(running_pid, SIGUSR2) == 0) return 0;
         } else if (strcmp(argv[1], "clipboard") == 0) {
             if (running_pid > 0 && kill(running_pid, SIGRTMIN) == 0) return 0;
+        } else if (strcmp(argv[1], "apps") == 0) {
+            if (running_pid > 0 && kill(running_pid, SIGRTMIN + 1) == 0) return 0;
         } else if (strcmp(argv[1], "stop") == 0) {
             if (running_pid > 0) kill(running_pid, SIGTERM);
             return 0;
@@ -3329,6 +3360,7 @@ int main(int argc, char **argv) {
     signal(SIGUSR1, on_sigusr1);
     signal(SIGUSR2, on_sigusr2);
     signal(SIGRTMIN, on_sigrtmin);
+    signal(SIGRTMIN + 1, on_sigapps);
     signal(SIGTERM, on_sigterm);
     signal(SIGINT, on_sigterm);
     signal(SIGCHLD, SIG_IGN);
@@ -3371,6 +3403,8 @@ int main(int argc, char **argv) {
         set_mode(&app, MODE_CONTROL);
     } else if (argc > 1 && strcmp(argv[1], "clipboard") == 0) {
         set_mode(&app, MODE_CLIPBOARD);
+    } else if (argc > 1 && strcmp(argv[1], "apps") == 0) {
+        set_mode(&app, MODE_APPS);
     }
 
     GMainContext *glib_ctx = g_main_context_default();
@@ -3385,6 +3419,9 @@ int main(int argc, char **argv) {
         } else if (g_sig_cmd == 4) {
             g_sig_cmd = 0;
             set_mode(&app, app.mode == MODE_CLIPBOARD ? MODE_CLOSED : MODE_CLIPBOARD);
+        } else if (g_sig_cmd == 5) {
+            g_sig_cmd = 0;
+            set_mode(&app, app.mode == MODE_APPS ? MODE_CLOSED : MODE_APPS);
         } else if (g_sig_cmd == 3) {
             break;
         }

@@ -1049,8 +1049,8 @@ impl Core {
     }
 
     /// The focused window took over the compositor's shortcuts (`keyboard-shortcuts-inhibit`), or
-    /// gave them back. While it holds them, every key goes to it except Super+L, Super+Tab, Super+W
-    /// and Super+A, so an app can never keep you from locking (owner, 2026-10-25), leaving it or
+    /// gave them back. While it holds them, every key goes to it except Super+L, Super+Tab, Super+W,
+    /// Super+D and Super+A, so an app can never keep you from locking (owner, 2026-10-25), leaving it or
     /// reaching the edge (2026-11-01). Quitting the session and switching
     /// terminals are the console backend's and never reach Core.
     pub fn set_shortcuts_inhibited(&mut self, inhibited: bool) {
@@ -1225,6 +1225,7 @@ impl Core {
             // a scale hint is not in INV-FRAME-3's kick list (ARCHITECTURE scenario 11); an
             // unobserved element's hint is held, except that P7 still lowers it
             | E::PreferredScale { .. }
+            | E::ToggleWindowList
             | E::ToggleLauncher
             | E::SpawnTerminal
             | E::SpawnFileManager

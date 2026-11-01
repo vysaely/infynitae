@@ -370,7 +370,7 @@ TERMINAL="auto"
     #   auto    kitty, alacritty, foot, …  · any command
 
 LAUNCHER="auto"
-    # Super+W
+    # Super+D
     # default: auto
     #   auto    fuzzel, rofi, tofi, wofi  · any command, e.g. "wofi --show drun"
 
@@ -460,7 +460,7 @@ AUTOMOUNT="true"
     # options: true  · false
 
 ENABLE_EDGE="true"
-    # The edge: window strip and app search (Super+W), control panel (Super+A), clipboard
+    # The edge: open windows (Super+W), apps (Super+D), control panel (Super+A), clipboard
     # (Super+V), from a screen edge [reload] (ENABLE_ISLAND, its old name, still works)
     # default: true
     # options: true  · false (falls back to fuzzel / control-menu)
@@ -642,7 +642,8 @@ UPDATE_SIGNING_KEY=""
 # The built-in keys follow one rule: often used on the left hand, rare on the right.
 #   Often:  Super+Tab  last two windows (a window asking for attention first)
 #           Super+Shift+Tab  overview    Super+arrows  nearest window that way
-#           Super+Q / W / E  terminal / edge / files    Super+A  control menu
+#           Super+Q / E  terminal / files    Super+W  open windows    Super+D  apps
+#           Super+A  control menu
 #           Super+S  region screenshot    Super+Shift+S  whole screen    Super+V  clipboard
 #           Super+C  close (Shift: force)    Super+Space  centre    Super+1..9  window slots
 #   Rare:   Super+L  lock    Super+Shift+O  tearing    Super+Shift+P  privacy
@@ -652,7 +653,7 @@ UPDATE_SIGNING_KEY=""
 #   Super+Alt+R (record).
 # Give an action other keys (all its built-in ones are freed), or free them with "none":
 #   BIND_<ACTION>="CHORD[,CHORD]"       e.g. BIND_TERMINAL="SUPER+RETURN"
-#   FOCUS_NEXT FOCUS_LEFT FOCUS_RIGHT FOCUS_UP FOCUS_DOWN OVERVIEW LAUNCHER TERMINAL FILE_MANAGER SCREENSHOT REGION_SCREENSHOT RELOAD LOCK
+#   FOCUS_NEXT FOCUS_LEFT FOCUS_RIGHT FOCUS_UP FOCUS_DOWN OVERVIEW WINDOWS LAUNCHER TERMINAL FILE_MANAGER SCREENSHOT REGION_SCREENSHOT RELOAD LOCK
 #   CLIPBOARD CONTROL PRIVACY IDLE_INHIBIT TEARING SAVE_REPLAY RECORD FIT FULLSCREEN CLOSE
 #   FORCE_CLOSE RECENTER RECENTER_KEEP_ZOOM
 # Run a command:

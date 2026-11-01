@@ -1,7 +1,7 @@
 #!/bin/sh
 # Infynitae's shortcut actions (the compositor runs: launch.sh <action>)
-# Dispatches shortcuts: terminal (Super+Q), file-manager (Super+E), launcher (Super+W)
-# The keys follow the owner's rule (2026-10-31): often used on the left hand (Super+Tab, Q, W, E,
+# Dispatches shortcuts: terminal (Super+Q), file-manager (Super+E), windows (Super+W), apps (Super+D)
+# The keys follow the owner's rule (2026-10-31): often used on the left hand (Super+Tab, Q, W, E, D,
 # A, S, C, V), rare on the right (Super+L, Shift+O, Shift+P, Shift+I, Alt+P, Shift+BackSpace).
 ACTION="$1"
 
@@ -89,7 +89,7 @@ resolve_terminal() {
 
 TERM_CMD=$(resolve_terminal)
 
-# The edge (ENABLE_EDGE) serves Super+W, Super+A and Super+V when it is on and installed
+# The edge (ENABLE_EDGE) serves Super+W, Super+D, Super+A and Super+V when it is on and installed
 # (EDGE_BIN; its name before 2026-10-31, infynitae-island, until an update builds the new one)
 edge_on() {
     case "${ENABLE_EDGE:-true}" in
@@ -175,13 +175,19 @@ case "$ACTION" in
                 ;;
         esac
         ;;
-    launcher|edge|island)
-        # Super+W: the edge (window strip and app search), else a launcher; LAUNCHER: any
-        # command, which is also how another shell (Quickshell, eww, AGS…) takes the key
+    windows)
+        # Super+W: the open windows in the edge; without the edge the key does nothing
+        edge_on && exec "$EDGE_BIN" toggle
+        ;;
+    apps|launcher|edge|island)
+        # Super+D: the apps in the edge, else a launcher; LAUNCHER: any command, which is also
+        # how another shell (Quickshell, eww, AGS…) takes the key. A compositor from before
+        # 2026-11-01 sends "launcher" for Super+W with an edge that does not know "apps".
         L="${LAUNCHER:-auto}"
         case "$L" in
             auto|""|edge|island)
                 if edge_on; then
+                    [ "$ACTION" = apps ] && exec "$EDGE_BIN" apps
                     exec "$EDGE_BIN" toggle
                 elif command -v fuzzel >/dev/null 2>&1; then
                     exec fuzzel

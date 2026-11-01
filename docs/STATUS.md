@@ -129,7 +129,8 @@ These pass the test suite but have not run on a real screen or device yet:
 - **The session scripts and the C helpers** have the least test coverage of anything here.
 - **New key defaults (2026-10-31),** by the rule "often used on the left hand, rare on the
   right": **Super+Tab** flips between the last two windows, Super held or not, and
-  **Super+arrow** goes to the nearest window that way (2026-11-01). A window that
+  **Super+arrow** goes to the nearest window that way (2026-11-01). **Super+W** lists only the
+  open windows and **Super+D** opens the app launcher (split 2026-11-01). A window that
   opened without the focus (`FOCUS_ON_OPEN` "user" or "priority") or whose request to be focused
   was refused asks for attention: Super+Tab goes to it first and brings it into view, the edge
   (Super+W) marks its tile with an accent dot and line, and `infynitae msg snapshot` says

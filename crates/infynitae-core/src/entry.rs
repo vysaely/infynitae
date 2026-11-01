@@ -632,6 +632,7 @@ impl Core {
                         a,
                         KeyAction::SpawnLockScreen
                             | KeyAction::FocusNext
+                            | KeyAction::ToggleWindowList
                             | KeyAction::ToggleLauncher
                             | KeyAction::ControlMenu
                             | KeyAction::ToggleOverview
@@ -784,6 +785,7 @@ impl Core {
                 .map(Effect::CloseRequest)
                 .into_iter()
                 .collect(),
+            KeyAction::ToggleWindowList => vec![Effect::ToggleWindowList],
             KeyAction::ToggleLauncher => vec![Effect::ToggleLauncher],
             KeyAction::SpawnTerminal => vec![Effect::SpawnTerminal],
             KeyAction::SpawnFileManager => vec![Effect::SpawnFileManager],
@@ -3657,7 +3659,11 @@ mod tests {
             !forwarded(&fx, crate::input::keys::KEY_TAB),
             "Super+Tab always leaves the window: {fx:?}"
         );
-        for key in [crate::input::keys::KEY_W, crate::input::keys::KEY_A] {
+        for key in [
+            crate::input::keys::KEY_W,
+            crate::input::keys::KEY_D,
+            crate::input::keys::KEY_A,
+        ] {
             let fx = press(&mut c, key, false);
             assert!(!forwarded(&fx, key), "the edge stays reachable: {fx:?}");
         }

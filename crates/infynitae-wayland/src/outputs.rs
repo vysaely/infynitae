@@ -209,8 +209,13 @@ impl WaylandState {
                         h.output.leave(s);
                     }
                 }
+                Effect::ToggleWindowList => {
+                    self.spawn_action("windows");
+                }
+                // "apps", not the old "launcher": the scripts change at a merge and the binaries
+                // only at an update, and the running compositor still sends "launcher" for Super+W
                 Effect::ToggleLauncher => {
-                    self.spawn_action("launcher");
+                    self.spawn_action("apps");
                 }
                 Effect::SpawnTerminal => {
                     self.spawn_action("terminal");
@@ -342,7 +347,7 @@ impl WaylandState {
         if matches!(
             action,
             "terminal"
-                | "launcher"
+                | "apps"
                 | "file-manager"
                 | "exec"
                 | "browser"

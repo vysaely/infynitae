@@ -146,7 +146,9 @@ pub enum Effect {
         scale_120: u32,
         integer_scale: u32,
     },
-    /// Toggle the launcher (by default Super+W).
+    /// Toggle the list of open windows (by default Super+W).
+    ToggleWindowList,
+    /// Toggle the app launcher (by default Super+D).
     ToggleLauncher,
     /// Launch the terminal (by default Super+Q).
     SpawnTerminal,
