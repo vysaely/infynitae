@@ -1613,7 +1613,7 @@ impl Core {
         }
     }
 
-    /// The window Super+C closes: the focused one; with strict focus only while it is under the
+    /// The window Super+Shift+C closes: the focused one; with strict focus only while it is under the
     /// pointer, so a key pressed over empty canvas closes nothing (focus can be stale there: the
     /// canvas moved under a still pointer).
     fn close_target(&mut self) -> Option<crate::stage::ElementId> {
@@ -3997,7 +3997,7 @@ mod tests {
     }
 
     /// Strict focus: a closed window's focus goes to the window under the pointer or none, never
-    /// to the one used before it elsewhere; and Super+C closes nothing over empty canvas, even
+    /// to the one used before it elsewhere; and Super+Shift+C closes nothing over empty canvas, even
     /// with a focus left on a window there (ThinkPad and desktop, 2026-10-27: "it would close a
     /// random window").
     #[test]
@@ -4063,7 +4063,7 @@ mod tests {
         c.render_list(a).unwrap();
         assert_eq!(c.focus().target(), None, "not v, the window used before");
 
-        // a focus left on v (the canvas moved under a still pointer): Super+C closes nothing
+        // a focus left on v (the canvas moved under a still pointer): Super+Shift+C closes nothing
         let _ = c.focus.set_focus(Some(v));
         assert_eq!(c.close_target(), None);
         // over v it closes v

@@ -213,7 +213,7 @@ impl WaylandState {
                     self.spawn_action("windows");
                 }
                 // "apps", not the old "launcher": the scripts change at a merge and the binaries
-                // only at an update, and the running compositor still sends "launcher" for Super+W
+                // only at an update, and a compositor from before 2026-11-01 still sends "launcher" for Super+W
                 Effect::ToggleLauncher => {
                     self.spawn_action("apps");
                 }

@@ -19,10 +19,15 @@ these by date, e.g. "(owner, 2026-10-24)".
 
 ## Keys
 
-- **Super+W is the windows, Super+D the apps** (owner, 2026-11-01). One bar did both, so a search
-  for a window also filled the panel with apps. Now Super+W only lists and narrows open windows,
-  and Super+D only searches and starts apps. `LAUNCHER` and `BIND_LAUNCHER` follow the apps;
-  `BIND_WINDOWS` moves the list. Without the edge Super+W does nothing.
+- **Super+W is the apps, Super+D the windows** (owner, 2026-11-01; for a few hours that day the other
+  way round). One bar did both, so a search for a window also filled the panel with apps. Now
+  Super+W only searches and starts apps, and Super+D only lists and narrows open windows.
+  `LAUNCHER` and `BIND_LAUNCHER` follow the apps; `BIND_WINDOWS` moves the list. Without the edge
+  Super+D does nothing.
+- **The launcher puts what you started recently first** (owner, 2026-11-01). An exact name comes
+  first, then recently started apps whose name matches, latest first, then other names. Apps count
+  as started only from the launcher, as there is no other record of them
+  (`~/.local/state/infynitae/recent-apps`).
 - **Often used on the left hand, rare on the right** (2026-10-31). Super+Tab, Q, W, E, A, S, C,
   V and Space are the everyday keys; Super+L, Shift+O, Shift+P, Shift+I, Alt+P and
   Shift+BackSpace the rare ones. So **Super+S is the region screenshot** (Super+Shift+S the whole
@@ -42,7 +47,7 @@ these by date, e.g. "(owner, 2026-10-24)".
   as used only after 0.3 s (or a click), so one the pointer just passed is not the "last window".
 - **Super+Q / W / E** start the terminal, launcher and file manager through one dispatcher
   (`live/launch.sh`), so each is a config setting.
-- **Super+C closes, Super+Shift+C force-closes** (2026-10-25; Super+Delete before). Force close
+- **Super+Shift+C closes, Super+Ctrl+Shift+C force-closes** (owner, 2026-11-01; Super+C and Super+Shift+C from 2026-10-25, Super+Delete before). Force close
   ends the window's client process, pinned by a pidfd so a reused pid is never killed.
 - **Super+Enter is a fit toggle** (2026-10-21): it fits the window under the pointer, and pressed
   at the fit it restores the view. Super+F was removed, it duplicated Super+Enter.

@@ -1,6 +1,6 @@
 #!/bin/sh
 # Infynitae's shortcut actions (the compositor runs: launch.sh <action>)
-# Dispatches shortcuts: terminal (Super+Q), file-manager (Super+E), windows (Super+W), apps (Super+D)
+# Dispatches shortcuts: terminal (Super+Q), file-manager (Super+E), apps (Super+W), windows (Super+D)
 # The keys follow the owner's rule (2026-10-31): often used on the left hand (Super+Tab, Q, W, E, D,
 # A, S, C, V), rare on the right (Super+L, Shift+O, Shift+P, Shift+I, Alt+P, Shift+BackSpace).
 ACTION="$1"
@@ -176,18 +176,19 @@ case "$ACTION" in
         esac
         ;;
     windows)
-        # Super+W: the open windows in the edge; without the edge the key does nothing
+        # Super+D: the open windows in the edge; without the edge the key does nothing
         edge_on && exec "$EDGE_BIN" toggle
         ;;
     apps|launcher|edge|island)
-        # Super+D: the apps in the edge, else a launcher; LAUNCHER: any command, which is also
+        # Super+W: the apps in the edge, else a launcher; LAUNCHER: any command, which is also
         # how another shell (Quickshell, eww, AGS…) takes the key. A compositor from before
-        # 2026-11-01 sends "launcher" for Super+W with an edge that does not know "apps".
+        # 2026-11-01 sends "launcher" for Super+W, maybe with an edge that does not know "apps".
         L="${LAUNCHER:-auto}"
         case "$L" in
             auto|""|edge|island)
                 if edge_on; then
                     [ "$ACTION" = apps ] && exec "$EDGE_BIN" apps
+                    grep -aq 'Search apps' "$EDGE_BIN" && exec "$EDGE_BIN" apps
                     exec "$EDGE_BIN" toggle
                 elif command -v fuzzel >/dev/null 2>&1; then
                     exec fuzzel
@@ -265,7 +266,7 @@ case "$ACTION" in
         fi
         ;;
     force-close-x11)
-        # Super+Shift+C on an X11 window: its own process, found from the X11 window (all X11
+        # Super+Ctrl+Shift+C on an X11 window: its own process, found from the X11 window (all X11
         # windows share xwayland-satellite's connection)
         "$HOME/.local/bin/infynitae-xkill" "$2" "$3"
         ;;

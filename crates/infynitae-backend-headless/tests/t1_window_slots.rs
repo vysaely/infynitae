@@ -131,15 +131,15 @@ fn super_1_to_9_handles_three_windows() {
 }
 
 #[test]
-fn super_d_toggles_launcher() {
+fn super_d_toggles_window_list() {
     let mods = infynitae_core::input::bindings::Modifiers {
         logo: true,
         ..Default::default()
     };
     assert_eq!(
         infynitae_core::input::keys::resolve_key_binding(KEY_D, mods, false),
-        Some(infynitae_core::input::keys::KeyAction::ToggleLauncher),
-        "Super+D resolves to ToggleLauncher"
+        Some(infynitae_core::input::keys::KeyAction::ToggleWindowList),
+        "Super+D resolves to ToggleWindowList"
     );
     assert_eq!(
         infynitae_core::input::keys::resolve_key_binding(KEY_D, mods, true),
@@ -149,15 +149,15 @@ fn super_d_toggles_launcher() {
 }
 
 #[test]
-fn super_w_toggles_window_list() {
+fn super_w_toggles_launcher() {
     let mods = infynitae_core::input::bindings::Modifiers {
         logo: true,
         ..Default::default()
     };
     assert_eq!(
         infynitae_core::input::keys::resolve_key_binding(KEY_W, mods, false),
-        Some(infynitae_core::input::keys::KeyAction::ToggleWindowList),
-        "Super+W resolves to ToggleWindowList"
+        Some(infynitae_core::input::keys::KeyAction::ToggleLauncher),
+        "Super+W resolves to ToggleLauncher"
     );
     assert_eq!(
         infynitae_core::input::keys::resolve_key_binding(KEY_W, mods, true),

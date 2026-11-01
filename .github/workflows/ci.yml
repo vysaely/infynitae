@@ -38,6 +38,7 @@ jobs:
       - run: sh tools/test-automount
       - run: sh tools/test-sleep-lock
       - run: sh tools/test-edge-child-signals
+      - run: sh tools/test-edge-app-search
 
   # OB-19: production architecture enforcement.
   verify-architecture:

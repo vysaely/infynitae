@@ -85,7 +85,7 @@ FOCUS_ON_OPEN="priority"
     #               dialogs get in). A held window asks for attention instead
     #    user       only windows you opened (shortcuts, launcher, a command in the focused
     #               terminal), not ones an app opens by itself; those ask for attention
-    # A window asking for attention is marked in the edge (Super+W), and Super+Tab goes to it
+    # A window asking for attention is marked in the edge (Super+D), and Super+Tab goes to it
     # first.
     #    1          every window
     #    0          never
@@ -370,7 +370,7 @@ TERMINAL="auto"
     #   auto    kitty, alacritty, foot, …  · any command
 
 LAUNCHER="auto"
-    # Super+D
+    # Super+W
     # default: auto
     #   auto    fuzzel, rofi, tofi, wofi  · any command, e.g. "wofi --show drun"
 
@@ -460,7 +460,7 @@ AUTOMOUNT="true"
     # options: true  · false
 
 ENABLE_EDGE="true"
-    # The edge: open windows (Super+W), apps (Super+D), control panel (Super+A), clipboard
+    # The edge: apps (Super+W), open windows (Super+D), control panel (Super+A), clipboard
     # (Super+V), from a screen edge [reload] (ENABLE_ISLAND, its old name, still works)
     # default: true
     # options: true  · false (falls back to fuzzel / control-menu)
@@ -642,10 +642,10 @@ UPDATE_SIGNING_KEY=""
 # The built-in keys follow one rule: often used on the left hand, rare on the right.
 #   Often:  Super+Tab  last two windows (a window asking for attention first)
 #           Super+Shift+Tab  overview    Super+arrows  nearest window that way
-#           Super+Q / E  terminal / files    Super+W  open windows    Super+D  apps
+#           Super+Q / E  terminal / files    Super+W  apps    Super+D  open windows
 #           Super+A  control menu
 #           Super+S  region screenshot    Super+Shift+S  whole screen    Super+V  clipboard
-#           Super+C  close (Shift: force)    Super+Space  centre    Super+1..9  window slots
+#           Super+Shift+C  close (with Ctrl: force)    Super+Space  centre    Super+1..9  window slots
 #   Rare:   Super+L  lock    Super+Shift+O  tearing    Super+Shift+P  privacy
 #           Super+Shift+I  stay awake    Super+Alt+P  record    Super+Alt+C  replay clip
 #           Super+Shift+BackSpace  reload

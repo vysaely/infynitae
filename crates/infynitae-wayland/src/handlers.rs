@@ -592,7 +592,7 @@ impl ShmHandler for WaylandState {
 }
 
 impl WaylandState {
-    /// Super+Shift+C: the window's client is ended — its process pinned, its connection cut,
+    /// Super+Ctrl+Shift+C: the window's client is ended — its process pinned, its connection cut,
     /// then SIGKILL (`ownership::pin_client_process`, `kill_pinned`). An X11 window (whose client is
     /// xwayland-satellite, shared by every X11 window) is asked to close instead.
     pub(crate) fn force_close(&mut self, element: infynitae_core::stage::ElementId) {

@@ -1,5 +1,5 @@
 /*
- * Infynitae Native Taskbar (Super+W), App Launcher (Super+D) & System Control / StatusNotifier Tray (Super+A)
+ * Infynitae Native App Launcher (Super+W), Taskbar (Super+D) & System Control / StatusNotifier Tray (Super+A)
  *
  * Drawn in the theme colors from the config (CANVAS_COLOR, …): square corners,
  * 1px subtle border, zero nested buttons, zero visual bloat):
@@ -7,7 +7,7 @@
  *     strictly from `~/.config/infynitae/config` (no UI buttons for it).
  *   - Non-blocking input region: only the drawn bar/panel captures pointer events;
  *     clicking/panning the canvas works freely while open.
- *   - Super+C / Delete / Middle-Click closes the selected/hovered window (in Super+W)
+ *   - Super+Shift+C / Delete / Middle-Click closes the selected/hovered window (in Super+D)
  *     or quits the selected/hovered tray app (in Super+A).
  *   - Built-in org.kde.StatusNotifierWatcher + com.canonical.dbusmenu host:
  *     Right-clicking a tray app fetches and displays the app's own native context menu
@@ -40,12 +40,12 @@
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include "app-search.h"
 #include "child-signals.h"
 #include "../wallpaper/wlr-layer-shell-protocol.h"
 #include "wlr-foreign-toplevel-protocol.h"
 
 #define MAX_WINDOWS 24
-#define MAX_APPS 160
 #define VISIBLE_APPS 8
 #define MAX_CLIP_ITEMS 24
 #define VISIBLE_CLIP_ITEMS 8
@@ -58,10 +58,10 @@
 
 typedef enum {
     MODE_CLOSED = 0,
-    MODE_CENTER = 1,    /* Super+W: Search + Open Window Tabs, windows only */
+    MODE_CENTER = 1,    /* Super+D: Search + Open Window Tabs, windows only */
     MODE_CONTROL = 2,   /* Super+A: System Control + Tray Apps */
     MODE_CLIPBOARD = 3, /* Super+V: Clipboard History */
-    MODE_APPS = 4       /* Super+D: Search + Apps */
+    MODE_APPS = 4       /* Super+W: Search + Apps */
 } EdgeMode;
 
 typedef enum {
@@ -79,11 +79,6 @@ typedef struct {
     bool focused;
     bool attention; /* opened without the focus or refused an activation: Super+Tab goes there first */
 } CanvasWindow;
-
-typedef struct {
-    char name[64];
-    char exec_cmd[256];
-} DesktopApp;
 
 typedef struct {
     char bus_name[128];
@@ -229,6 +224,7 @@ typedef struct EdgeApp {
     int app_count;
     int filtered_apps[MAX_APPS];
     int filtered_app_count;
+    RecentApps recent_apps;
 
     /* Tray & Background Apps + Native Context Menu */
     TrayApp tray_apps[MAX_TRAY_APPS];
@@ -663,79 +659,10 @@ static void trigger_dbusmenu_click(EdgeApp *app, int sni_idx, int32_t item_id) {
 /* ========================================================================== */
 /* Data Collectors                                                            */
 /* ========================================================================== */
-static void load_desktop_dir(EdgeApp *app, const char *dir_path) {
-    DIR *d = opendir(dir_path);
-    if (!d) return;
-    struct dirent *de;
-    while ((de = readdir(d)) != NULL && app->app_count < MAX_APPS) {
-        size_t nlen = strlen(de->d_name);
-        if (nlen < 9 || strcmp(de->d_name + nlen - 8, ".desktop") != 0) continue;
-
-        char path[512];
-        snprintf(path, sizeof(path), "%s/%s", dir_path, de->d_name);
-        FILE *f = fopen(path, "r");
-        if (!f) continue;
-
-        char line[512];
-        char name[64] = {0};
-        char exec_cmd[256] = {0};
-        bool in_entry = false;
-        bool no_display = false;
-
-        while (fgets(line, sizeof(line), f)) {
-            if (line[0] == '[') {
-                in_entry = (strncmp(line, "[Desktop Entry]", 15) == 0);
-                continue;
-            }
-            if (!in_entry) continue;
-            if (strncmp(line, "NoDisplay=true", 14) == 0 || strncmp(line, "Hidden=true", 11) == 0) {
-                no_display = true;
-                break;
-            }
-            if (name[0] == '\0' && strncmp(line, "Name=", 5) == 0) {
-                snprintf(name, sizeof(name), "%.*s", (int)(sizeof(name) - 1), line + 5);
-                char *nl = strpbrk(name, "\r\n");
-                if (nl) *nl = '\0';
-            } else if (exec_cmd[0] == '\0' && strncmp(line, "Exec=", 5) == 0) {
-                snprintf(exec_cmd, sizeof(exec_cmd), "%.*s", (int)(sizeof(exec_cmd) - 1), line + 5);
-                char *nl = strpbrk(exec_cmd, "\r\n");
-                if (nl) *nl = '\0';
-                char *pct;
-                while ((pct = strstr(exec_cmd, " %")) != NULL) {
-                    *pct = '\0';
-                }
-            }
-        }
-        fclose(f);
-
-        if (no_display || name[0] == '\0' || exec_cmd[0] == '\0') continue;
-
-        bool dup = false;
-        for (int i = 0; i < app->app_count; i++) {
-            if (strcasecmp(app->apps[i].name, name) == 0) {
-                dup = true;
-                break;
-            }
-        }
-        if (!dup) {
-            snprintf(app->apps[app->app_count].name, sizeof(app->apps[0].name), "%s", name);
-            snprintf(app->apps[app->app_count].exec_cmd, sizeof(app->apps[0].exec_cmd), "%s", exec_cmd);
-            app->app_count++;
-        }
-    }
-    closedir(d);
-}
-
 static void load_all_apps(EdgeApp *app) {
-    app->app_count = 0;
-    const char *home = getenv("HOME");
-    if (home) {
-        char local_dir[512];
-        snprintf(local_dir, sizeof(local_dir), "%s/.local/share/applications", home);
-        load_desktop_dir(app, local_dir);
-    }
-    load_desktop_dir(app, "/usr/local/share/applications");
-    load_desktop_dir(app, "/usr/share/applications");
+    app->app_count = app_load_all(app->apps, MAX_APPS);
+    recent_apps_load(&app->recent_apps);
+    recent_apps_apply(&app->recent_apps, app->apps, app->app_count);
 }
 
 static bool str_contains_ci(const char *hay, const char *needle) {
@@ -756,13 +683,7 @@ static void update_filters(EdgeApp *app) {
             app->filtered_wins[app->filtered_win_count++] = i;
         }
     }
-    app->filtered_app_count = 0;
-    for (int i = 0; i < app->app_count; i++) {
-        if (str_contains_ci(app->apps[i].name, app->search) ||
-            str_contains_ci(app->apps[i].exec_cmd, app->search)) {
-            app->filtered_apps[app->filtered_app_count++] = i;
-        }
-    }
+    app->filtered_app_count = app_search(app->apps, app->app_count, app->search, app->filtered_apps, MAX_APPS);
     app->filtered_clip_count = 0;
     for (int i = 0; i < app->clip_count; i++) {
         if (str_contains_ci(app->clip_items[i].preview, app->search)) {
@@ -1570,7 +1491,7 @@ static void render_output(EdgeOutput *out) {
         EdgeMode active_m = (app->mode != MODE_CLOSED) ? app->mode : app->target_mode;
 
         /* ─────────────────────────────────────────────────────────────────── */
-        /* A. Window strip (Super+W): one outer 1 px border                    */
+        /* A. Window strip (Super+D): one outer 1 px border                    */
         /* ─────────────────────────────────────────────────────────────────── */
         if (active_m == MODE_CENTER) {
             int max_tabs = 6;
@@ -1664,7 +1585,7 @@ static void render_output(EdgeOutput *out) {
         }
 
         /* ─────────────────────────────────────────────────────────────────── */
-        /* A2. Apps (Super+D): one outer 1 px border                           */
+        /* A2. Apps (Super+W): one outer 1 px border                           */
         /* ─────────────────────────────────────────────────────────────────── */
         if (active_m == MODE_APPS) {
             int shown_apps = app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS;
@@ -2133,6 +2054,8 @@ static void set_mode(EdgeApp *app, EdgeMode new_mode) {
         } else if (new_mode == MODE_CLIPBOARD) {
             refresh_clipboard_data(app);
         } else if (new_mode == MODE_APPS) {
+            /* each opening: an app just installed is there, the recent list is current */
+            load_all_apps(app);
             update_filters(app);
         }
     } else {
@@ -2270,6 +2193,15 @@ static void close_selected_item(EdgeApp *app) {
     }
 }
 
+static void launch_app(EdgeApp *app, int index) {
+    if (index < 0 || index >= app->app_count) return;
+    DesktopApp *da = &app->apps[index];
+    recent_apps_note(&app->recent_apps, da->id, (long)time(NULL));
+    recent_apps_save(&app->recent_apps);
+    set_mode(app, MODE_CLOSED);
+    spawn_detached(da->exec_cmd);
+}
+
 static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t button) {
     if (button == BTN_RIGHT) {
         if (hb->action_id == ACT_WIFI_TOGGLE) {
@@ -2343,12 +2275,9 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
     }
     case ACT_SEARCH_BOX:
         return true;
-    case ACT_APP_LAUNCH: {
-        DesktopApp *da = &app->apps[hb->index];
-        set_mode(app, MODE_CLOSED);
-        spawn_detached(da->exec_cmd);
+    case ACT_APP_LAUNCH:
+        launch_app(app, hb->index);
         return true;
-    }
     case ACT_TRAY_ITEM: {
         int tidx = hb->index;
         if (tidx >= 0 && tidx < app->tray_count) {
@@ -2591,6 +2520,15 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
 }
 
 static void activate_selected(EdgeApp *app) {
+    /* from the list itself: the hitboxes are from the last frame, and Enter right after typing
+     * must start what the search says now */
+    if (app->mode == MODE_APPS) {
+        int shown = app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS;
+        if (app->selected_idx >= 0 && app->selected_idx < shown) {
+            launch_app(app, app->filtered_apps[app->selected_idx]);
+        }
+        return;
+    }
     for (int i = 0; i < app->hitbox_count; i++) {
         HitBox *hb = &app->hitboxes[i];
         if (hb->nav_idx == app->selected_idx) {
@@ -2919,6 +2857,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
     xkb_keysym_t sym = xkb_state_key_get_one_sym(app->xkb_state, keycode);
     bool super_down = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE) > 0;
     bool ctrl_down = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0;
+    bool shift_down = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE) > 0;
 
     if (sym == XKB_KEY_Escape) {
         if (app->tray_ctx_idx >= 0) {
@@ -2935,11 +2874,11 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
 
     if (super_down) {
         if (sym == XKB_KEY_w || sym == XKB_KEY_W) {
-            set_mode(app, app->mode == MODE_CENTER ? MODE_CLOSED : MODE_CENTER);
+            set_mode(app, app->mode == MODE_APPS ? MODE_CLOSED : MODE_APPS);
             return;
         }
         if (sym == XKB_KEY_d || sym == XKB_KEY_D) {
-            set_mode(app, app->mode == MODE_APPS ? MODE_CLOSED : MODE_APPS);
+            set_mode(app, app->mode == MODE_CENTER ? MODE_CLOSED : MODE_CENTER);
             return;
         }
         if (sym == XKB_KEY_a || sym == XKB_KEY_A) {
@@ -2950,7 +2889,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
             set_mode(app, app->mode == MODE_CLIPBOARD ? MODE_CLOSED : MODE_CLIPBOARD);
             return;
         }
-        if (sym == XKB_KEY_c || sym == XKB_KEY_C || sym == XKB_KEY_q || sym == XKB_KEY_Q) {
+        if ((shift_down && (sym == XKB_KEY_c || sym == XKB_KEY_C)) || sym == XKB_KEY_q || sym == XKB_KEY_Q) {
             close_selected_item(app);
             return;
         }
@@ -3022,6 +2961,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
             app->mode = MODE_APPS;
             app->target_mode = MODE_APPS;
             app->subpanel = SUB_NONE;
+            load_all_apps(app);
         }
         if (app->search_len + (size_t)len < sizeof(app->search) - 1) {
             memcpy(app->search + app->search_len, utf8, (size_t)len);

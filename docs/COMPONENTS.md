@@ -9,7 +9,7 @@ this repository already.
 | Piece | Default | Alternatives you can install | Switch | Build our own? |
 | :--- | :--- | :--- | :--- | :--- |
 | Terminal | first installed: kitty, alacritty, foot… | wezterm, ghostty, konsole, any | `TERMINAL` | No: huge, and good ones exist |
-| Launcher | the edge (Super+D), fuzzel without it | rofi, tofi, wofi, walker, anyrun | `LAUNCHER`, `ENABLE_EDGE` | **Yes, a good fit**: a launcher that knows the canvas (open here, jump to a window). The edge is a start |
+| Launcher | the edge (Super+W), fuzzel without it | rofi, tofi, wofi, walker, anyrun | `LAUNCHER`, `ENABLE_EDGE` | **Yes, a good fit**: a launcher that knows the canvas (open here, jump to a window). The edge is a start |
 | Menus (control menu, clipboard) | `fuzzel --dmenu` | `rofi -dmenu`, tofi, bemenu, `wofi --dmenu` | `MENU_PICKER` | Comes with our launcher |
 | File manager | thunar with tumbler's previews (installed unless another is in use); yazi, lf (in the terminal), nemo, dolphin when installed | nautilus, pcmanfm, any | `FILE_MANAGER` | No |
 | Browser | the system default | any | `BROWSER` | No |

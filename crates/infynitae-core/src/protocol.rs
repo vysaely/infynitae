@@ -125,9 +125,9 @@ pub enum Effect {
         scale_120: u32,
         integer_scale: u32,
     },
-    /// Ask the client to close (by default Super+C, xdg_toplevel.close).
+    /// Ask the client to close (by default Super+Shift+C, xdg_toplevel.close).
     CloseRequest(ElementId),
-    /// Terminate the element's client (by default Super+Shift+C): cuts its connection and ends its process;
+    /// Terminate the element's client (by default Super+Ctrl+Shift+C): cuts its connection and ends its process;
     /// the adapter decides how for a client it cannot end alone (X11).
     ForceClose(ElementId),
     /// Configure a layer surface with the size its arrangement gives it (L1, L4).
@@ -146,9 +146,9 @@ pub enum Effect {
         scale_120: u32,
         integer_scale: u32,
     },
-    /// Toggle the list of open windows (by default Super+W).
+    /// Toggle the list of open windows (by default Super+D).
     ToggleWindowList,
-    /// Toggle the app launcher (by default Super+D).
+    /// Toggle the app launcher (by default Super+W).
     ToggleLauncher,
     /// Launch the terminal (by default Super+Q).
     SpawnTerminal,

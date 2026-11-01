@@ -1,0 +1,151 @@
+#!/bin/sh
+# The launcher's search and its recent list. Run from the repository root.
+set -eu
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+cat > "$dir/test.c" <<'C'
+#include "app-search.h"
+static int failures;
+static const char *top(const DesktopApp *apps, int count, const char *q, int pos) {
+    int out[MAX_APPS];
+    int n = app_search(apps, count, q, out, MAX_APPS);
+    return pos < n ? apps[out[pos]].name : "(none)";
+}
+static void expect(const DesktopApp *apps, int count, const char *q, int pos, const char *want) {
+    const char *got = top(apps, count, q, pos);
+    if (strcmp(got, want) != 0) {
+        printf("FAIL: \"%s\" place %d: wanted %s, got %s\n", q, pos, want, got);
+        failures++;
+    }
+}
+static DesktopApp mk(const char *name, const char *exec, const char *generic, const char *keys, long when) {
+    DesktopApp a;
+    memset(&a, 0, sizeof a);
+    snprintf(a.id, sizeof a.id, "%s.desktop", name);
+    snprintf(a.name, sizeof a.name, "%s", name);
+    snprintf(a.exec_cmd, sizeof a.exec_cmd, "%s", exec);
+    snprintf(a.generic, sizeof a.generic, "%s", generic);
+    snprintf(a.keywords, sizeof a.keywords, "%s", keys);
+    a.last_launched = when;
+    return a;
+}
+static void write_file(const char *dir, const char *name, const char *text) {
+    char path[600];
+    snprintf(path, sizeof path, "%s/%s", dir, name);
+    FILE *f = fopen(path, "w");
+    fputs(text, f);
+    fclose(f);
+}
+static const DesktopApp *by_name(const DesktopApp *apps, int n, const char *name) {
+    for (int i = 0; i < n; i++) if (strcmp(apps[i].name, name) == 0) return &apps[i];
+    return NULL;
+}
+int main(int argc, char **argv) {
+    (void)argc;
+    DesktopApp apps[] = {
+        mk("Calculator", "/usr/bin/gnome-calculator", "", "math;", 0),
+        mk("Discord", "/opt/discord/Discord", "Chat", "voice;", 0),
+        mk("Disks", "gnome-disks", "", "", 0),
+        mk("Firefox", "/usr/bin/firefox %u", "Web Browser", "internet;", 0),
+        mk("Mocktail", "/home/u/.local/bin/mocktail", "", "roblox;", 100),
+        mk("Steam", "/usr/bin/steam", "", "", 300),
+        mk("Settings", "/usr/bin/settings", "", "", 0),
+        mk("System Monitor", "/usr/bin/sysmon", "", "", 0),
+        mk("Set", "/usr/bin/setter", "", "", 0),
+        mk("Écran", "/usr/bin/ecran", "", "", 0),
+    };
+    int n = sizeof apps / sizeof apps[0];
+    expect(apps, n, "", 0, "Steam");            /* no query: latest first */
+    expect(apps, n, "", 1, "Mocktail");
+    expect(apps, n, "", 2, "Calculator");       /* then by name */
+    expect(apps, n, "s", 0, "Steam");           /* a recent app ahead of other names */
+    expect(apps, n, "s", 1, "Set");
+    expect(apps, n, "set", 0, "Set");           /* an exact name beats everything */
+    expect(apps, n, "set", 1, "Settings");
+    expect(apps, n, "c", 0, "Mocktail");        /* recent, inside the word, ahead of Calculator */
+    expect(apps, n, "c", 1, "Calculator");
+    expect(apps, n, "dis", 0, "Discord");       /* names in order */
+    expect(apps, n, "dis", 1, "Disks");
+    expect(apps, n, "mon", 0, "System Monitor");/* the start of a later word */
+    expect(apps, n, "browser", 0, "Firefox");   /* description */
+    expect(apps, n, "roblox", 0, "Mocktail");   /* keywords */
+    expect(apps, n, "sysmon", 0, "System Monitor"); /* the command */
+    expect(apps, n, "frfx", 0, "Firefox");      /* letters in order */
+    expect(apps, n, "web fire", 0, "Firefox");  /* every word, anywhere */
+    expect(apps, n, "web steam", 0, "(none)");
+    expect(apps, n, "ÉCRAN", 0, "Écran");       /* case, beyond ASCII */
+    expect(apps, n, "usr", 0, "(none)");        /* a path is not the app's name */
+    expect(apps, n, "zzzz", 0, "(none)");
+
+    /* the launch command */
+    char e1[64] = "foo %U --bar", e2[64] = "foo --pct=50%% %f";
+    app_clean_exec(e1);
+    app_clean_exec(e2);
+    if (strcmp(e1, "foo --bar") || strcmp(e2, "foo --pct=50%")) {
+        printf("FAIL: field codes: [%s] [%s]\n", e1, e2);
+        failures++;
+    }
+
+    /* the recent list: order, once each, saved and read back */
+    setenv("XDG_STATE_HOME", argv[1], 1);
+    RecentApps r = {0};
+    recent_apps_note(&r, "a.desktop", 1);
+    recent_apps_note(&r, "b.desktop", 2);
+    recent_apps_note(&r, "a.desktop", 3);
+    recent_apps_save(&r);
+    RecentApps back = {0};
+    recent_apps_load(&back);
+    if (back.count != 2 || strcmp(back.items[0].id, "a.desktop") || back.items[0].when != 3 ||
+        strcmp(back.items[1].id, "b.desktop")) {
+        printf("FAIL: recent list read back %d items\n", back.count);
+        failures++;
+    }
+    for (int i = 0; i < MAX_RECENT_APPS + 5; i++) {
+        char id[32];
+        snprintf(id, sizeof id, "x%d.desktop", i);
+        recent_apps_note(&r, id, 10 + i);
+    }
+    if (r.count != MAX_RECENT_APPS || strcmp(r.items[0].id, "x68.desktop")) {
+        printf("FAIL: the full recent list: %d, top %s\n", r.count, r.items[0].id);
+        failures++;
+    }
+
+    /* the desktop files: yours hide the system's, and only real apps count */
+    char home[512], sys[512], cmd[1100];
+    snprintf(home, sizeof home, "%s/home/applications", argv[1]);
+    snprintf(sys, sizeof sys, "%s/sys/applications", argv[1]);
+    snprintf(cmd, sizeof cmd, "mkdir -p '%s' '%s'", home, sys);
+    if (system(cmd) != 0) return 1;
+    write_file(home, "hidden.desktop", "[Desktop Entry]\nType=Application\nName=Hidden\nExec=x\nNoDisplay=true\n");
+    write_file(sys, "hidden.desktop", "[Desktop Entry]\nType=Application\nName=Hidden\nExec=x\n");
+    write_file(home, "mine.desktop", "[Desktop Entry]\nType=Application\nName=Mine\nExec=mine-new %U\nKeywords=abc;\n[Desktop Action x]\nName=Other\nExec=other\n");
+    write_file(sys, "mine.desktop", "[Desktop Entry]\nType=Application\nName=Mine\nExec=mine-old\n");
+    write_file(sys, "link.desktop", "[Desktop Entry]\nType=Link\nName=Link\nExec=x\n");
+    write_file(sys, "other.desktop", "[Desktop Entry]\nType=Application\nName=Other App\nExec=o\n");
+    snprintf(cmd, sizeof cmd, "%s/home", argv[1]);
+    setenv("XDG_DATA_HOME", cmd, 1);
+    snprintf(cmd, sizeof cmd, "%s/sys", argv[1]);
+    setenv("XDG_DATA_DIRS", cmd, 1);
+    setenv("HOME", argv[1], 1);
+    /* more apps than the old cap of 160 */
+    for (int i = 0; i < 200; i++) {
+        char name[40], text[120];
+        snprintf(name, sizeof name, "many%d.desktop", i);
+        snprintf(text, sizeof text, "[Desktop Entry]\nType=Application\nName=Many %d\nExec=m\n", i);
+        write_file(sys, name, text);
+    }
+    DesktopApp *loaded = calloc(MAX_APPS, sizeof(DesktopApp));
+    int count = app_load_all(loaded, MAX_APPS);
+    const DesktopApp *mine = by_name(loaded, count, "Mine");
+    if (count != 202 || by_name(loaded, count, "Hidden") || by_name(loaded, count, "Link") || !mine ||
+        strcmp(mine->exec_cmd, "mine-new") || strcmp(mine->keywords, "abc;") || !by_name(loaded, count, "Other App")) {
+        printf("FAIL: desktop files: %d loaded\n", count);
+        failures++;
+    }
+    free(loaded);
+    return failures != 0;
+}
+C
+cc -Wall -Wno-unused-function -Ilive/edge $(pkg-config --cflags glib-2.0) -o "$dir/test" "$dir/test.c" $(pkg-config --libs glib-2.0)
+"$dir/test" "$dir"
+echo "test-edge-app-search: passed"

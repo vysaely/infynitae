@@ -1,5 +1,5 @@
 #!/bin/sh
-# infynitae-xkill APP_ID TITLE: Super+Shift+C on an X11 window. Every X11 app reaches the
+# infynitae-xkill APP_ID TITLE: Super+Ctrl+Shift+C on an X11 window. Every X11 app reaches the
 # compositor through xwayland-satellite's one connection, so cutting it would end them all; the
 # app's own process is found instead: the X11 window of that class with exactly that title, its
 # _NET_WM_PID, and that process with everything it started is killed. Matches started by another

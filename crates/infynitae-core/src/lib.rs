@@ -674,7 +674,7 @@ impl Core {
     }
 
     /// Strict focus after the focused window went away: the window under the pointer, or none,
-    /// never the last one used elsewhere on the canvas (Super+C next would close that one).
+    /// never the last one used elsewhere on the canvas (Super+Shift+C next would close that one).
     pub(crate) fn strict_successor(
         &mut self,
         gone: stage::ElementId,
