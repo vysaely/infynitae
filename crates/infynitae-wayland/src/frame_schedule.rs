@@ -76,7 +76,28 @@ pub struct FrameSchedule {
     /// Refreshes left drawn at once (PAUSE_REFRESHES).
     paused: u32,
     pauses: u64,
+    /// When the frame in flight was submitted.
+    submitted: Option<Duration>,
+    /// From a refresh to the frame submitted after it, since the last summary.
+    to_submit: Vec<Duration>,
+    /// From a frame's submission to the refresh that showed it, since the last summary.
+    to_flip: Vec<Duration>,
 }
+
+/// p50, p95 and max of `v`, which it empties; `None` when it is empty.
+fn percentiles(v: &mut Vec<Duration>) -> Option<(Duration, Duration, Duration)> {
+    if v.is_empty() {
+        return None;
+    }
+    v.sort_unstable();
+    let at = |q: usize| v[((v.len() * q).div_ceil(100)).saturating_sub(1)];
+    let summary = (at(50), at(95), v[v.len() - 1]);
+    v.clear();
+    Some(summary)
+}
+
+/// Longest list of timings kept between summaries (a summary comes every 10 s).
+const TIMINGS_KEPT: usize = 10_000;
 
 impl FrameSchedule {
     /// A schedule for a screen refreshing every `period`.
@@ -95,6 +116,9 @@ impl FrameSchedule {
             frames: 0,
             paused: 0,
             pauses: 0,
+            submitted: None,
+            to_submit: Vec::new(),
+            to_flip: Vec::new(),
         }
     }
 
@@ -163,6 +187,12 @@ impl FrameSchedule {
         self.samples[self.next] = took;
         self.next = (self.next + 1) % SAMPLES;
         self.filled = (self.filled + 1).min(SAMPLES);
+        self.submitted = Some(submitted);
+        if let Some(last) = self.last_vblank
+            && self.to_submit.len() < TIMINGS_KEPT
+        {
+            self.to_submit.push(submitted.saturating_sub(last));
+        }
         self.target = self.last_vblank.map(|last| {
             let period = self.period.max(Duration::from_micros(1));
             let mut r = last + period;
@@ -180,6 +210,11 @@ impl FrameSchedule {
     pub fn vblank(&mut self, time: Duration) {
         let paused = self.paused > 0;
         self.paused = self.paused.saturating_sub(1);
+        if let Some(submitted) = self.submitted.take()
+            && self.to_flip.len() < TIMINGS_KEPT
+        {
+            self.to_flip.push(time.saturating_sub(submitted));
+        }
         if let Some(target) = self.target.take() {
             self.frames += 1;
             let missed = time > target + self.period / 2;
@@ -206,6 +241,22 @@ impl FrameSchedule {
             }
         }
         self.last_vblank = Some(time);
+    }
+
+    /// Where a frame's time went since the last summary, each as p50, p95 and max: from a refresh
+    /// to the frame's submission, and from the submission to the refresh that showed it. A missed
+    /// refresh is late in one of the two: the first is this process, the second the kernel and
+    /// GPU. Resets.
+    pub fn take_timings(
+        &mut self,
+    ) -> (
+        Option<(Duration, Duration, Duration)>,
+        Option<(Duration, Duration, Duration)>,
+    ) {
+        (
+            percentiles(&mut self.to_submit),
+            percentiles(&mut self.to_flip),
+        )
     }
 
     /// Frames shown, and how many missed the refresh they were drawn for.
@@ -286,6 +337,22 @@ mod tests {
             s.rendered(Duration::ZERO, ms(took));
         }
         s
+    }
+
+    #[test]
+    fn timings_say_where_a_frames_time_went_and_reset() {
+        let mut s = FrameSchedule::new(LatencyMode::Off, P);
+        s.vblank(ms(100.0));
+        // submitted 1 ms after the refresh, shown 11 ms later: it waited out a whole refresh
+        s.rendered(ms(100.5), ms(101.0));
+        s.vblank(ms(112.0));
+        let (submit, flip) = s.take_timings();
+        assert_eq!(submit.map(|t| t.2.as_micros()), Some(1000));
+        assert_eq!(flip.map(|t| t.2.as_micros()), Some(11000));
+        assert_eq!(s.take_timings(), (None, None), "a summary resets them");
+        // a refresh with no frame in flight is not a frame's time
+        s.vblank(ms(118.0));
+        assert_eq!(s.take_timings().1, None);
     }
 
     #[test]

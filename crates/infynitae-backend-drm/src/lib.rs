@@ -2674,6 +2674,18 @@ fn latency_summary(data: &mut LoopData) {
                 ms(s.schedule.margin()),
                 if paused { " (now)" } else { "" },
             );
+            if let (Some(sub), Some(flip)) = s.schedule.take_timings() {
+                println!(
+                    "[infynitae] Frame timing {:?}: refresh to submit p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms; submit to refresh p50 {:.2} ms, p95 {:.2} ms, max {:.2} ms",
+                    s.id,
+                    ms(sub.0),
+                    ms(sub.1),
+                    ms(sub.2),
+                    ms(flip.0),
+                    ms(flip.1),
+                    ms(flip.2),
+                );
+            }
         }
     }
 }
