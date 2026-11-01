@@ -634,6 +634,7 @@ impl Core {
                             | KeyAction::FocusNext
                             | KeyAction::ToggleLauncher
                             | KeyAction::ControlMenu
+                            | KeyAction::ToggleOverview
                     )
             });
 
@@ -1346,8 +1347,18 @@ impl Core {
             && self.cameras.history(camera).is_some_and(|h| !h.is_empty());
 
         if at_overview {
+            // back from the overview: into the fullscreen window if it still has the focus
+            if self.presentation(output).is_some()
+                && self.presentation(output) == self.focus.target()
+            {
+                self.unsuppress_presentation(output, out);
+            }
             self.viewport_restore(proof, out);
         } else {
+            // the overview shows the canvas: a fullscreen window steps aside for it
+            if self.presentation(output).is_some() {
+                self.suppress_presentation(output, out);
+            }
             self.cameras.fit(proof, camera, target);
             self.camera_written(output, camera, out);
         }
@@ -4981,6 +4992,53 @@ mod tests {
         assert_eq!(c.focus().target(), Some(w1));
         super_tab(&mut c, &mut i);
         assert_eq!(c.focus().target(), Some(w2));
+    }
+
+    /// Super+Shift+Tab over a fullscreen window (owner, 2026-11-01): the overview shows the canvas;
+    /// again, and the window is back.
+    #[test]
+    fn the_overview_opens_over_a_fullscreen_window_and_returns_to_it() {
+        use crate::input::keys::{KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_TAB};
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 2);
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        c.toplevel_request(
+            ws[0],
+            crate::protocol::ToplevelRequest::SetFullscreen { output: Some(a) },
+        )
+        .unwrap();
+        assert_eq!(c.presentation(a), Some(ws[0]));
+        let overview = |c: &mut Core, i: &mut crate::InputPort| {
+            let mods = |logo, shift| crate::input::bindings::Modifiers {
+                logo,
+                shift,
+                ..Default::default()
+            };
+            let mut key = |c: &mut Core, key, pressed, logo, shift, changed| {
+                c.physical_input_vec(
+                    i,
+                    crate::PhysicalEvent::KeyboardKey {
+                        key,
+                        pressed,
+                        modifiers: mods(logo, shift),
+                        mods_changed: changed,
+                        time_us: 1000,
+                    },
+                )
+                .unwrap();
+            };
+            key(c, KEY_LEFTMETA, true, true, false, true);
+            key(c, KEY_LEFTSHIFT, true, true, true, true);
+            key(c, KEY_TAB, true, true, true, false);
+            key(c, KEY_TAB, false, true, true, false);
+            key(c, KEY_LEFTSHIFT, false, true, false, true);
+            key(c, KEY_LEFTMETA, false, false, false, true);
+        };
+        overview(&mut c, &mut i);
+        assert!(c.is_presentation_suppressed(a), "the canvas is shown");
+        overview(&mut c, &mut i);
+        assert!(!c.is_presentation_suppressed(a), "the window is back");
     }
 
     /// Super+arrow (owner, 2026-11-01): to the nearest window that way, the camera with it.
