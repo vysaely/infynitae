@@ -40,6 +40,7 @@
 #include <wayland-client.h>
 #include <xkbcommon/xkbcommon.h>
 
+#include "child-signals.h"
 #include "../wallpaper/wlr-layer-shell-protocol.h"
 #include "wlr-foreign-toplevel-protocol.h"
 
@@ -3363,7 +3364,7 @@ int main(int argc, char **argv) {
     signal(SIGRTMIN + 1, on_sigapps);
     signal(SIGTERM, on_sigterm);
     signal(SIGINT, on_sigterm);
-    signal(SIGCHLD, SIG_IGN);
+    reap_children_without_waiting();
 
     EdgeApp app = {0};
     app.running = true;

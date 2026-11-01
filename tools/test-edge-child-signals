@@ -1,0 +1,72 @@
+#!/bin/sh
+# An app started by the edge must be able to wait for its own children, and the edge must not
+# leave zombies behind. Run from the repository root.
+set -eu
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+
+# The edge must use the shared setup, not ignore SIGCHLD itself.
+if grep -nE 'signal\(SIGCHLD, *SIG_IGN\)' live/edge/infynitae-edge.c; then
+    echo "FAIL: the edge ignores SIGCHLD, and its apps inherit that" >&2
+    exit 1
+fi
+grep -q 'reap_children_without_waiting();' live/edge/infynitae-edge.c || {
+    echo "FAIL: the edge does not call reap_children_without_waiting" >&2
+    exit 1
+}
+
+# What an app does: start a child and wait for it.
+cat > "$dir/app.c" <<'C'
+#include <sys/wait.h>
+#include <unistd.h>
+int main(void) {
+    pid_t child = fork();
+    if (child == 0) _exit(7);
+    int status = 0;
+    if (waitpid(child, &status, 0) != child) return 1; /* ECHILD: SIGCHLD was inherited ignored */
+    return WIFEXITED(status) && WEXITSTATUS(status) == 7 ? 0 : 2;
+}
+C
+
+# What the edge does: set up once, start the app, never wait.
+cat > "$dir/edge.c" <<'C'
+#include <stdio.h>
+#include <sys/stat.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <errno.h>
+#include "child-signals.h"
+int main(int argc, char **argv) {
+    (void)argc;
+    reap_children_without_waiting();
+    pid_t app = fork();
+    if (app == 0) {
+        /* The app reports through a file, as the edge does not wait for its exit status. */
+        execl("/bin/sh", "sh", "-c", "\"$0\"; echo $? > \"$1\"", argv[1], argv[2], (char *)NULL);
+        _exit(127);
+    }
+    for (int i = 0; i < 500; i++) {
+        struct stat st;
+        if (stat(argv[2], &st) == 0 && st.st_size > 0) break;
+        usleep(10000);
+    }
+    usleep(100000);
+    struct stat gone;
+    char path[64];
+    snprintf(path, sizeof path, "/proc/%d", (int)app);
+    if (stat(path, &gone) == 0) return 3; /* still listed: a zombie */
+    return 0;
+}
+C
+cc -Wall -o "$dir/app" "$dir/app.c"
+cc -Wall -Ilive/edge -o "$dir/edge" "$dir/edge.c"
+if ! "$dir/edge" "$dir/app" "$dir/result"; then
+    echo "FAIL: the started app stayed behind as a zombie" >&2
+    exit 1
+fi
+result=$(cat "$dir/result")
+if [ "$result" != 0 ]; then
+    echo "FAIL: the app could not wait for its child (exit $result)" >&2
+    exit 1
+fi
+echo "test-edge-child-signals: passed"
