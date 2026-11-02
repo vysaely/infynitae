@@ -40,6 +40,7 @@ jobs:
       - run: sh tools/test-edge-child-signals
       - run: sh tools/test-edge-app-search
       - run: sh tools/test-mako-config
+      - run: sh tools/test-reload-match
 
   # OB-19: production architecture enforcement.
   verify-architecture:

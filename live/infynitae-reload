@@ -76,18 +76,20 @@ stop_helper() {
 # PIDs of a helper matching program $1 and arguments matching $2.
 pids_matching() {
     found=1
+    want_prog=$1
+    want_arg=$2
     for d in /proc/[0-9]*; do
         [ "${d#/proc/}" = "$$" ] && continue
-        set -- "$1" "$2" $( { tr '\0' ' ' < "$d/cmdline"; } 2>/dev/null)
-        [ $# -ge 3 ] || continue
-        prog=${3##*/}
+        set -- $( { tr '\0' ' ' < "$d/cmdline"; } 2>/dev/null)
+        [ $# -ge 1 ] || continue
+        prog=${1##*/}
         case "$prog" in
-            sh|bash|dash|python3|python) [ $# -ge 4 ] && prog=${4##*/} ;;
+            sh|bash|dash|python3|python) [ $# -ge 2 ] && prog=${2##*/} ;;
         esac
-        if [ "$prog" = "$1" ]; then
-            shift 3
+        if [ "$prog" = "$want_prog" ]; then
+            shift
             case " $* " in
-                *" $2 "*)
+                *" $want_arg "*)
                     echo "${d#/proc/}"
                     found=0
                     ;;

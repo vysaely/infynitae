@@ -32,8 +32,8 @@ for w in $(windows); do
     inst=$(lower "$(printf '%s' "$class_line" | cut -d'"' -f2)")
     cls=$(lower "$(printf '%s' "$class_line" | cut -d'"' -f4)")
     [ "$inst" = "$want_class" ] || [ "$cls" = "$want_class" ] || continue
-    name=$(printf '%s\n' "$props" | grep '^_NET_WM_NAME' | sed 's/^[^"]*"//; s/"$//')
-    [ -n "$name" ] || name=$(printf '%s\n' "$props" | grep '^WM_NAME' | sed 's/^[^"]*"//; s/"$//')
+    name=$(printf '%s\n' "$props" | grep '^_NET_WM_NAME.* = ' | sed 's/^[^"]*"//; s/"$//')
+    [ -n "$name" ] || name=$(printf '%s\n' "$props" | grep '^WM_NAME.* = ' | sed 's/^[^"]*"//; s/"$//')
     [ "$name" = "$title" ] || continue
     pid=$(printf '%s\n' "$props" | awk '/^_NET_WM_PID/ { print $3 }')
     case "$pid" in '' | *[!0-9]*) continue ;; esac

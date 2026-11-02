@@ -1,0 +1,17 @@
+#!/bin/sh
+# infynitae-reload stops helpers by program and argument: the compositor, the same program with
+# other arguments, must never match (it did, and Super+Shift+Backspace restarted the session).
+set -u
+here=$(cd "$(dirname "$0")/.." && pwd)
+tmp=$(mktemp -d)
+trap 'kill $a $b 2>/dev/null; rm -rf "$tmp"' EXIT
+sed -n '/^pids_matching() {/,/^}/p' "$here/live/infynitae-reload" > "$tmp/fn"
+. "$tmp/fn"
+cp "$(command -v sleep)" "$tmp/infynitae"
+"$tmp/infynitae" 300 5 & a=$!
+"$tmp/infynitae" 300 7 & b=$!
+sleep 0.2
+got=$(pids_matching infynitae 7)
+[ "$got" = "$b" ] || { echo "FAIL: expected only $b, got: $got (other copy is $a)"; exit 1; }
+if pids_matching infynitae 9 >/dev/null; then echo "FAIL: no copy has that argument"; exit 1; fi
+echo "ok: only the matching copy"
