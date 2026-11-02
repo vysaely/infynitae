@@ -744,6 +744,9 @@ impl Core {
         self.held_sizes.retain(|(e, _)| *e != id);
         self.returning.retain(|e| *e != id);
         self.maximized.retain(|(e, _)| *e != id);
+        self.left_fullscreen.retain(|e| *e != id);
+        self.pushed_by_maximize
+            .retain(|(by, pushed, ..)| *by != id && *pushed != id);
         self.stage.set_saved_floating(id, None);
         self.premap_fullscreen.retain(|(e, _)| *e != id);
         self.fullscreen.retain(|f| f.element != id);
@@ -1359,7 +1362,8 @@ impl Core {
                 Lifecycle::Unmapped => (Ignored, Vec::new()),
                 Lifecycle::AwaitingFirstBuffer | Lifecycle::Mapped => {
                     let before_first_map = !self.stage.mapped_before(id);
-                    let allowed = before_first_map || self.focus.target() == Some(id);
+                    let allowed = (before_first_map || self.focus.target() == Some(id))
+                        && !self.left_fullscreen.contains(&id);
                     match self.fullscreen_output(id, output).filter(|_| allowed) {
                         Some(o) => {
                             // the last windowed size: one still on offer, else the geometry

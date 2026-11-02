@@ -910,6 +910,19 @@ impl Core {
             self.stage.set_saved_floating(element, None);
             self.set_maximized(element, None);
             let _ = self.place_by_shell(element, orig_anchor, out);
+            // the windows it pushed aside go back, unless they have been moved since
+            let pushed: Vec<_> = self
+                .pushed_by_maximize
+                .iter()
+                .filter(|(by, ..)| *by == element)
+                .copied()
+                .collect();
+            self.pushed_by_maximize.retain(|(by, ..)| *by != element);
+            for (_, other, was, went) in pushed {
+                if self.stage.anchor(other) == Some(went) {
+                    let _ = self.place_by_shell(other, was, out);
+                }
+            }
             out.push(Effect::ToplevelConfigureSize {
                 element,
                 size: orig_size,
@@ -967,7 +980,19 @@ impl Core {
             let _ = self.place_by_shell(element, tl, out);
             let target_rect = (tl.x, tl.y, tl.x + canvas_w as i64, tl.y + canvas_h as i64);
             if self.placement == crate::protocol::PlacementPolicy::ClusterTiling {
+                let before: Vec<_> = self
+                    .stage
+                    .mapped_elements()
+                    .into_iter()
+                    .filter(|e| *e != element)
+                    .filter_map(|e| Some((e, self.stage.anchor(e)?)))
+                    .collect();
                 self.push_overlapping_cluster(element, target_rect, out);
+                for (other, was) in before {
+                    if let Some(went) = self.stage.anchor(other).filter(|a| *a != was) {
+                        self.pushed_by_maximize.push((element, other, was, went));
+                    }
+                }
             }
             out.push(Effect::ToplevelConfigureSize {
                 element,
@@ -1535,6 +1560,9 @@ impl Core {
         anchor: Option<crate::geom::CanvasPoint>,
     ) -> Vec<Effect> {
         let mut fx = Vec::new();
+        if !self.left_fullscreen.contains(&id) {
+            self.left_fullscreen.push(id);
+        }
         let request = crate::protocol::ToplevelRequest::UnsetFullscreen;
         if let Ok((_, t_fx)) = self.toplevel_request(id, request) {
             fx.extend(t_fx);
@@ -1564,6 +1592,7 @@ impl Core {
         if was_fullscreen {
             return self.leave_fullscreen(id, None);
         }
+        self.left_fullscreen.retain(|e| *e != id); // the user asks for it again
         let mut fx = Vec::new();
         let output = self
             .pointer_output()
@@ -5488,6 +5517,152 @@ mod tests {
         assert_eq!(fx, vec![Effect::ToplevelConfigure(ws[0])]);
         assert_eq!(c.cameras().zoom(0), zoom);
         assert!(!c.toplevel_configure_state(ws[0]).maximized);
+    }
+
+    /// Maximized, or as large as the view, with nothing in front: the edge's strips step aside.
+    #[test]
+    fn a_window_fills_the_view_only_when_it_covers_it_with_nothing_in_front() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let ws = window_under_pointer(&mut c, &mut i, &mut t);
+        assert!(!c.fills_view(ws[0]), "a small window");
+        let _ = c.client_maximize(ws[0], true);
+        let mut fx = Vec::new();
+        c.raise_by_user(ws[0]);
+        assert!(!c.fills_view(ws[0]), "not until it has drawn at that size");
+        let output = c.outputs()[0].id;
+        let (_, _, w, h) = c.usable_area(output).unwrap();
+        let size = crate::geom::LocalSize {
+            w: w as i32,
+            h: h as i32,
+        };
+        let tree = crate::snapshot::SurfaceTree {
+            geometry: crate::geom::LocalRect {
+                loc: crate::geom::LocalPoint::default(),
+                size,
+            },
+            surfaces: vec![crate::snapshot::SnapshotSurface {
+                key: crate::snapshot::SurfaceKey::from_raw(std::num::NonZeroU64::new(1).unwrap()),
+                role: crate::snapshot::SurfaceRole::Root,
+                size,
+                mapped: true,
+                input: crate::snapshot::InputRegion::Infinite,
+                frame_requested: false,
+            }],
+        };
+        c.toplevel_committed(ws[0], tree).unwrap();
+        assert!(c.fills_view(ws[0]), "maximized");
+        let at = c.stage().anchor(ws[0]).unwrap();
+        c.place_by_user(ws[1], at, &mut fx).unwrap();
+        c.raise_by_user(ws[1]);
+        assert!(!c.fills_view(ws[0]), "another window in front");
+        c.raise_by_user(ws[0]);
+        assert!(c.fills_view(ws[0]));
+        c.place_by_user(
+            ws[0],
+            crate::geom::CanvasPoint { x: 9000, y: 9000 },
+            &mut fx,
+        )
+        .unwrap();
+        assert!(!c.fills_view(ws[0]), "moved away");
+    }
+
+    /// Taken out of fullscreen by the user, a window stays out when it asks again (Wine does at
+    /// once, for a window as large as the screen), until the user asks for fullscreen.
+    #[test]
+    fn a_window_taken_out_of_fullscreen_stays_out_until_the_user_asks() {
+        use crate::protocol::{ToplevelDecision, ToplevelRequest};
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, ws) = fullscreen_rig(&mut c, &mut i, &mut t);
+        assert_eq!(c.presentation(a), Some(ws[0]));
+        let _ = c.toggle_fullscreen();
+        assert_eq!(c.presentation(a), None);
+        let ask = ToplevelRequest::SetFullscreen { output: Some(a) };
+        let (decision, _) = c.toplevel_request(ws[0], ask).unwrap();
+        assert_eq!(decision, ToplevelDecision::Declined);
+        assert_eq!(c.presentation(a), None);
+        let _ = c.toggle_fullscreen();
+        assert_eq!(c.presentation(a), Some(ws[0]), "the user asked");
+    }
+
+    /// Pulled out of fullscreen with Super+drag, a window can be dragged again.
+    #[test]
+    fn a_window_pulled_out_of_fullscreen_can_be_dragged_again() {
+        use crate::input::bindings::{BTN_LEFT, Modifiers};
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, ws) = fullscreen_rig(&mut c, &mut i, &mut t);
+        let (w, h) = c.output(a).unwrap().logical_extent();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (w / 2.0, h / 2.0),
+        };
+        let logo = Modifiers {
+            logo: true,
+            ..Default::default()
+        };
+        let button = |c: &mut Core, i: &mut crate::InputPort, pressed| {
+            c.physical_input_vec(
+                i,
+                crate::PhysicalEvent::PointerButton {
+                    button: BTN_LEFT,
+                    pressed,
+                    modifiers: logo,
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+        };
+        button(&mut c, &mut i, true);
+        mouse_move(&mut c, &mut i, (40.0, 20.0));
+        button(&mut c, &mut i, false);
+        assert_eq!(c.presentation(a), None);
+        let (x0, y0) = {
+            let e = c.stage().anchor(ws[0]).unwrap();
+            (e.x, e.y)
+        };
+        // the pointer back over the window
+        assert_eq!(c.hovered_window(), Some(ws[0]), "under the pointer");
+        button(&mut c, &mut i, true);
+        assert!(c.input.interaction.active(), "the second drag starts");
+        mouse_move(&mut c, &mut i, (30.0, 10.0));
+        button(&mut c, &mut i, false);
+        let e = c.stage().anchor(ws[0]).unwrap();
+        assert_eq!((e.x - x0, e.y - y0), (30, 10));
+    }
+
+    /// Maximize pushes the neighbours aside; restoring puts back those nobody moved since.
+    #[test]
+    fn restoring_a_maximized_window_puts_back_the_windows_it_pushed() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        c.set_placement_policy(crate::PlacementPolicy::ClusterTiling);
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 3);
+        let mut fx = Vec::new();
+        let at = |x, y| crate::geom::CanvasPoint { x, y };
+        c.place_by_user(ws[0], at(-200, -150), &mut fx).unwrap();
+        c.place_by_user(ws[1], at(250, -150), &mut fx).unwrap();
+        c.place_by_user(ws[2], at(-700, -150), &mut fx).unwrap();
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        let (w, h) = c.output(a).unwrap().logical_extent();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (w / 2.0, h / 2.0),
+        };
+        let _ = c.client_maximize(ws[0], true);
+        assert_ne!(c.stage().anchor(ws[1]), Some(at(250, -150)), "pushed aside");
+        assert_ne!(
+            c.stage().anchor(ws[2]),
+            Some(at(-700, -150)),
+            "pushed aside"
+        );
+        // the user moves one of them
+        c.place_by_user(ws[2], at(5000, 5000), &mut fx).unwrap();
+        let _ = c.client_maximize(ws[0], false);
+        assert_eq!(c.stage().anchor(ws[1]), Some(at(250, -150)), "back");
+        assert_eq!(
+            c.stage().anchor(ws[2]),
+            Some(at(5000, 5000)),
+            "the user's place"
+        );
     }
 
     /// A window the user opens over a fullscreen window is shown, not hidden behind it.

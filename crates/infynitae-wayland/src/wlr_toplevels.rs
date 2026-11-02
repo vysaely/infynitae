@@ -75,7 +75,8 @@ impl WaylandState {
         });
         let current = toplevel.current_state().states;
         use zwlr_foreign_toplevel_handle_v1::State;
-        if current.contains(xdg_toplevel::State::Maximized) {
+        // a window as large as the view counts: to the bar and the edge it is the same (Core::fills_view)
+        if current.contains(xdg_toplevel::State::Maximized) || self.core.fills_view(id) {
             told.states.push(State::Maximized as u32);
         }
         if self.core.focus().target() == Some(id) {

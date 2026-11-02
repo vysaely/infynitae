@@ -327,6 +327,14 @@ struct LatticeSlot {
     view_size: (u32, u32),
 }
 
+/// One window a maximize pushed aside: see `Core::pushed_by_maximize`.
+pub(crate) type PushedAside = (
+    stage::ElementId,
+    stage::ElementId,
+    geom::CanvasPoint,
+    geom::CanvasPoint,
+);
+
 /// A camera's centre and the bits of its zoom, to tell whether it has moved.
 pub(crate) type CameraView = (Option<geom::CanvasPos>, Option<u64>);
 
@@ -451,6 +459,12 @@ pub struct Core {
     /// Outputs on which fullscreen presentation is temporarily suppressed (e.g. user navigated to another window).
     pub(crate) presentation_suppressed: Vec<output::OutputId>,
     /// Where the overview left each output's camera: at it, the overview is open.
+    /// Windows the user took out of fullscreen: their own requests for it are declined until the
+    /// user asks again. A Wine window as large as the screen asks at once, and snaps back.
+    pub(crate) left_fullscreen: Vec<stage::ElementId>,
+    /// Windows a maximize pushed aside: (maximized window, pushed window, where it was, where it
+    /// went). Restoring puts each back, unless the user has moved it since.
+    pub(crate) pushed_by_maximize: Vec<PushedAside>,
     pub(crate) overview_at: Vec<(output::OutputId, CameraView)>,
     /// Whether Super+Middle pan or camera navigation moves out of fullscreen presentation.
     pub fullscreen_pan: bool,
@@ -550,6 +564,8 @@ impl Core {
                 enter_mode: EnterMode::default(),
                 presentation_suppressed: Vec::new(),
                 overview_at: Vec::new(),
+                pushed_by_maximize: Vec::new(),
+                left_fullscreen: Vec::new(),
                 fullscreen_pan: false,
                 focus_on_open: false,
                 key_bindings: input::keys::UserBindings::default(),
@@ -899,6 +915,45 @@ impl Core {
             fx.extend(self.reconcile_constraints());
         }
         Ok(fx)
+    }
+
+    /// Whether `element` fills what a screen shows and nothing is in front of it: maximized,
+    /// or just as large as the view. The edge's strips step aside then, as for fullscreen, or a
+    /// click near the screen's edge would open a panel instead of reaching the app.
+    pub fn fills_view(&self, element: stage::ElementId) -> bool {
+        let rect = |id| {
+            let anchor = self.stage.anchor(id)?;
+            let size = self.stage.tree(id)?.geometry.size;
+            Some((
+                anchor.x,
+                anchor.y,
+                anchor.x.saturating_add(i64::from(size.w)),
+                anchor.y.saturating_add(i64::from(size.h)),
+            ))
+        };
+        let Some((left, top, right, bottom)) = rect(element) else {
+            return false;
+        };
+        self.outputs.iter().any(|o| {
+            let (Some(view), Some((ux, uy, uw, uh))) =
+                (self.camera_view(o.id), self.usable_area(o.id))
+            else {
+                return false;
+            };
+            let corner = |x, y| view.unproject(geom::OutputLogicalPoint { x, y });
+            let (from, to) = (corner(ux, uy), corner(ux + uw, uy + uh));
+            let px = |q: i64| q.div_euclid(geom::Q16_ONE);
+            let (vl, vt, vr, vb) = (px(from.x), px(from.y), px(to.x), px(to.y));
+            // within a pixel or two: rounding, not a gap anyone could click
+            let covers = left <= vl + 2 && top <= vt + 2 && right >= vr - 2 && bottom >= vb - 2;
+            let z = self.stage.z_order();
+            let above = z.iter().skip_while(|e| **e != element).skip(1);
+            covers
+                && !above.into_iter().any(|&e| {
+                    self.stage.mapped(e).is_some()
+                        && rect(e).is_some_and(|(l, t, r, b)| l < vr && r > vl && t < vb && b > vt)
+                })
+        })
     }
 
     /// A-8: `element` is hidden by a presentation — an output presents another

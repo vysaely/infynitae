@@ -1430,7 +1430,7 @@ static bool output_has_fullscreen(EdgeOutput *out);
 static void render_output(EdgeOutput *out) {
     if (!out->configured || out->width <= 0 || out->height <= 0) return;
 
-    /* Closed over a fullscreen window: unmapped, nothing drawn over the game */
+    /* Closed over a window that fills the screen: unmapped, nothing drawn over it, no strips */
     bool idle = out->app->mode == MODE_CLOSED && out->app->anim_progress <= 0.01 &&
                 !out->app->dragging;
     if (idle && output_has_fullscreen(out)) {
@@ -3113,7 +3113,10 @@ static void fs_state(void *d, struct zwlr_foreign_toplevel_handle_v1 *h, struct 
     t->pending_fullscreen = false;
     uint32_t *s;
     wl_array_for_each(s, st) {
-        if (*s == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN) t->pending_fullscreen = true;
+        /* maximized counts: the compositor also says so of a window as large as the view. The
+         * strips must not take a click near the screen's edge from an app that fills it */
+        if (*s == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_FULLSCREEN ||
+            *s == ZWLR_FOREIGN_TOPLEVEL_HANDLE_V1_STATE_MAXIMIZED) t->pending_fullscreen = true;
     }
 }
 

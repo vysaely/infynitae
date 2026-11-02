@@ -1430,6 +1430,19 @@ impl PointerConstraintsHandler for WaylandState {
             let fx = self
                 .core
                 .request_pointer_constraint(key, kind, lifetime, region, hint);
+            // when a game's view spins, this says whether it had the lock it asked for
+            eprintln!(
+                "[infynitae] Pointer {kind:?} asked: {}",
+                if self
+                    .core
+                    .constraint()
+                    .is_some_and(|c| c.surface == key && c.kind == kind)
+                {
+                    "granted"
+                } else {
+                    "not granted yet"
+                }
+            );
             self.apply(&fx);
         }
     }
