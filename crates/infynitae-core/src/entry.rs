@@ -1384,6 +1384,40 @@ impl Core {
         }
     }
 
+    /// A new window the rules let in over a fullscreen window (the user opened it, or it is a
+    /// dialog of an app): it is shown and takes the focus. `set_focus` alone would decline
+    /// (A-8), leaving it hidden behind the fullscreen window.
+    pub fn show_opened(
+        &mut self,
+        port: &mut InputPort,
+        id: crate::stage::ElementId,
+    ) -> Result<Vec<Effect>, EntryError> {
+        self.check_port(port)?;
+        if self.stage.state(id) != Some(crate::stage::Lifecycle::Mapped) {
+            return Err(EntryError::InvalidEvent);
+        }
+        let mut out = Vec::new();
+        self.show_chosen(id, &mut out);
+        out.extend(self.focus.set_focus(Some(id)));
+        out.extend(self.reconcile_constraints());
+        Ok(out)
+    }
+
+    /// The user chose `id`: its own fullscreen comes back, another one on the pointer's screen,
+    /// or one that would hide it, steps aside.
+    fn show_chosen(&mut self, id: crate::stage::ElementId, out: &mut Vec<Effect>) {
+        let pointer_on = self.pointer_output();
+        let hidden = self.hidden_by_presentation(id);
+        let outputs: Vec<_> = self.outputs.iter().map(|o| o.id).collect();
+        for o in outputs {
+            match self.presentation(o) {
+                Some(p) if p == id => self.unsuppress_presentation(o, out),
+                Some(_) if hidden || pointer_on == Some(o) => self.suppress_presentation(o, out),
+                _ => {}
+            }
+        }
+    }
+
     /// `id` leaves fullscreen: back to its size before it (when known), at its position before
     /// it, or at `anchor` (a Super+drag out of fullscreen).
     fn leave_fullscreen(
@@ -1617,14 +1651,10 @@ impl Core {
                     if under != self.hover_seen {
                         self.hover_seen = under;
                         let target = self.focus.target();
-                        // a fullscreen window keeps the focus until a click or Super+Tab: many
-                        // games minimize themselves when they lose it
-                        let held = target.is_some() && self.presentation(cur_o) == target;
-                        if !held
-                            && (under.is_some() && under != target
-                                || under.is_none()
-                                    && self.focus_follows_mouse_strict
-                                    && target.is_some())
+                        if under.is_some() && under != target
+                            || under.is_none()
+                                && self.focus_follows_mouse_strict
+                                && target.is_some()
                         {
                             out.extend(self.focus.hover_focus(under, time_us));
                         }
@@ -2340,6 +2370,10 @@ impl Core {
         let mut out = Vec::new();
         match cmd {
             ShellCommand::Navigate { output, to, stream } => {
+                if let NavigateTo::Element(element) = to {
+                    let id = self.shell_mapped(element)?;
+                    self.show_chosen(id, &mut out);
+                }
                 let camera = self.shell_camera(output)?;
                 let center = self.navigate_center(camera, to)?;
                 self.shell_stream_step(stream);
@@ -2367,10 +2401,9 @@ impl Core {
             }
             ShellCommand::Focus { element } => {
                 let id = self.shell_mapped(element)?;
-                // A-8: focus never moves to an element a presentation hides
-                if self.hidden_by_presentation(id) {
-                    return Err(ShellError::Presenting);
-                }
+                // a window picked from the list is the user's choice: a fullscreen window steps
+                // aside for it (owner, 2026-11-02; A-8 still holds for focus nobody asked for)
+                self.show_chosen(id, &mut out);
                 out.extend(self.focus.set_focus(Some(id)));
                 out.extend(self.reconcile_constraints());
             }
@@ -2481,6 +2514,7 @@ impl Core {
             .ok_or(ShellError::UnknownOutput)?;
         if let Some(pres) = self.presentation(output)
             && self.focus.target() == Some(pres)
+            && !self.is_presentation_suppressed(output)
         {
             return Err(ShellError::Presenting);
         }
@@ -5162,10 +5196,10 @@ mod tests {
         assert!(!c.is_presentation_suppressed(a), "the window is back");
     }
 
-    /// The mouse does not take the focus from a fullscreen window, shown or under the overview:
-    /// many games minimize themselves when they lose it. A click or Super+Tab still does.
+    /// A fullscreen window the user left holds on to nothing: with it stepped aside, hovering
+    /// moves the focus as anywhere else, or the mouse seems dead over the other windows.
     #[test]
-    fn the_mouse_does_not_take_the_focus_from_a_fullscreen_window() {
+    fn hovering_moves_the_focus_away_from_a_fullscreen_window_stepped_aside() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
         let (_, ws) = fullscreen_rig(&mut c, &mut i, &mut t);
         c.set_focus_follows_mouse(true);
@@ -5181,7 +5215,29 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(c.focus().target(), Some(ws[0]));
+        assert_ne!(c.focus().target(), Some(ws[0]));
+    }
+
+    /// A window the user opens over a fullscreen window is shown, not hidden behind it.
+    #[test]
+    fn a_window_the_user_opens_comes_out_over_fullscreen() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, ws) = fullscreen_rig(&mut c, &mut i, &mut t);
+        let fx = c.show_opened(&mut i, ws[1]).unwrap();
+        assert!(!fx.is_empty());
+        assert!(c.is_presentation_suppressed(a));
+        assert_eq!(c.focus().target(), Some(ws[1]));
+    }
+
+    /// A fullscreen window stepped aside goes behind its neighbours: at the screen's size it
+    /// would cover them on the canvas, and they could not be seen or clicked.
+    #[test]
+    fn a_fullscreen_window_stepped_aside_goes_behind_the_others() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, ws) = fullscreen_rig(&mut c, &mut i, &mut t);
+        press_overview(&mut c, &mut i);
+        assert!(c.is_presentation_suppressed(a));
+        assert_eq!(*c.stage.mapped_elements().first().unwrap(), ws[0]);
     }
 
     /// Super+arrow (owner, 2026-11-01): to the nearest window that way, the camera with it.

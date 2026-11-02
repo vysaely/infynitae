@@ -723,6 +723,10 @@ impl Core {
     ) {
         if !self.presentation_suppressed.contains(&output) {
             self.presentation_suppressed.push(output);
+            // at the screen's size it would cover its neighbours on the canvas
+            if let Some(element) = self.presentation(output) {
+                self.stage.lower(element);
+            }
             self.reconcile_presentation_change(output, out);
         }
     }

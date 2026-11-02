@@ -291,7 +291,7 @@ fn a_shell_fit_and_restore_round_trip() {
 }
 
 /// C12.F17 Q1 B scope 2: no shell camera write on an output that presents; MoveElement refuses a
-/// fullscreen element (C7.2); focus never moves to an element a presentation hides (A-8).
+/// fullscreen element (C7.2). Choosing a window is the exception, below.
 #[test]
 fn shell_commands_are_refused_while_the_output_presents() {
     let mut f = fixture();
@@ -332,7 +332,6 @@ fn shell_commands_are_refused_while_the_output_presents() {
             to: (0.0, 0.0),
             stream: ShellStream::Atomic,
         },
-        ShellCommand::Focus { element: rh },
     ] {
         assert_eq!(
             f.c.shell_command(&mut f.s, cmd),
@@ -341,6 +340,31 @@ fn shell_commands_are_refused_while_the_output_presents() {
         );
     }
     assert_eq!(state(&f.c), before);
+}
+
+/// A window picked from the window list (navigate, then focus) comes out from under a fullscreen
+/// window, and picking the fullscreen window brings it back (owner, 2026-11-02).
+#[test]
+fn a_window_chosen_in_the_list_comes_out_from_under_fullscreen() {
+    let mut f = fixture();
+    let other = map_win(&mut f.c, 9, 300, 200);
+    let w = map_win(&mut f.c, 1, 400, 300);
+    let (ro, rw) = (r(&f.c, other), r(&f.c, w));
+    f.c.shell_command(&mut f.s, ShellCommand::Focus { element: rw })
+        .unwrap();
+    f.c.toplevel_request(w, ToplevelRequest::SetFullscreen { output: Some(f.o) })
+        .unwrap();
+    assert!(!f.c.is_presentation_suppressed(f.o));
+    f.c.shell_command(&mut f.s, navigate(f.o, NavigateTo::Element(ro)))
+        .unwrap();
+    f.c.shell_command(&mut f.s, ShellCommand::Focus { element: ro })
+        .unwrap();
+    assert!(f.c.is_presentation_suppressed(f.o));
+    assert_eq!(f.c.focus().target(), Some(other));
+    f.c.shell_command(&mut f.s, ShellCommand::Focus { element: rw })
+        .unwrap();
+    assert!(!f.c.is_presentation_suppressed(f.o));
+    assert_eq!(f.c.focus().target(), Some(w));
 }
 
 /// MoveElement goes through `stage::place` with R3 (round half to even) and the ±2³⁶ bound; an

@@ -389,6 +389,12 @@ impl Stage {
         self.z.push(id);
     }
 
+    /// Puts the element below every other (a fullscreen window stepped aside).
+    pub(crate) fn lower(&mut self, id: ElementId) {
+        self.z.retain(|&e| e != id);
+        self.z.insert(0, id);
+    }
+
     /// Destroy purges every reference; idempotent (INV-STAGE-4). Returns whether it existed.
     pub(crate) fn destroy(&mut self, id: ElementId) -> bool {
         self.z.retain(|&e| e != id);

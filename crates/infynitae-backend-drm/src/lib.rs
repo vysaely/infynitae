@@ -1759,11 +1759,15 @@ pub fn run_console_with(
                     data.state.core_mut().opened_without_focus(new_id);
                     continue;
                 }
-                if let Ok(effects) = data
-                    .state
-                    .core_mut()
-                    .set_focus(&mut data.input_port, Some(new_id))
-                {
+                // one the user opened, or a dialog, comes out over a fullscreen window
+                let shown = user || data.state.core().toplevel_parent(new_id).is_some();
+                let core = data.state.core_mut();
+                let result = if shown {
+                    core.show_opened(&mut data.input_port, new_id)
+                } else {
+                    core.set_focus(&mut data.input_port, Some(new_id))
+                };
+                if let Ok(effects) = result {
                     data.state.apply(&effects);
                     data.session.flush();
                 }
