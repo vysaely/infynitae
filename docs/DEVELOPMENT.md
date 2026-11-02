@@ -14,6 +14,7 @@
 | `live/` | The desktop around the compositor: session scripts, environment, shortcut dispatcher, settings sync, and the C helpers (lock, wallpaper, portal, polkit, recorder). |
 | `config/config` | The config template, installed as `~/.config/infynitae/config`. |
 | `vendor/smithay-0.7.0` | Smithay, vendored with four authorized patches (`patches/`). |
+| `patches/xwayland-satellite-*` | Our patch to xwayland-satellite; `live/build-satellite.sh` builds it at install. |
 | `tools/`, `enforcement/` | The checks (below). |
 | `docs/foundation/` | The design specification. |
 | `docs/knowledge/` | Research notes, rejected approaches, pitfalls. |

@@ -1,0 +1,146 @@
+diff --git a/src/xstate/mod.rs b/src/xstate/mod.rs
+index 6f08eb9..1415ae5 100644
+--- a/src/xstate/mod.rs
++++ b/src/xstate/mod.rs
+@@ -563,6 +563,14 @@ impl XState {
+             x if x == self.atoms.active_win => {
+                 server_state.activate_window(e.window());
+             }
++            x if x == self.atoms.wm_change_state => {
++                let x::ClientMessageData::Data32(data) = e.data() else {
++                    unreachable!();
++                };
++                if data[0] == WmState::Iconic as u32 {
++                    self.iconify(e.window());
++                }
++            }
+             x if x == self.atoms.moveresize => {
+                 let x::ClientMessageData::Data32(data) = e.data() else {
+                     unreachable!();
+@@ -615,6 +623,37 @@ impl XState {
+         }
+     }
+ 
++    /// A window asking to be minimized (exclusive fullscreen games do on focus loss). There is
++    /// nothing to minimize it to, but it must hear the answer: Wine stays minimized, drawing
++    /// nothing, until WM_STATE goes Iconic and back. Focusing the window sets Normal again; one
++    /// that already has the focus would never get that, so it is told at once.
++    fn iconify(&self, window: x::Window) {
++        let set_state = |state: WmState| {
++            if let Err(e) = self.connection.send_and_check_request(&x::ChangeProperty {
++                mode: x::PropMode::Replace,
++                window,
++                property: self.atoms.wm_state,
++                r#type: self.atoms.wm_state,
++                data: &[state as u32, 0],
++            }) {
++                debug!("ChangeProperty failed ({window:?}: {e:?})");
++            }
++        };
++        set_state(WmState::Iconic);
++        let active = self
++            .connection
++            .wait_for_reply(self.get_property_cookie(
++                self.root,
++                self.atoms.active_win,
++                x::ATOM_WINDOW,
++                1,
++            ))
++            .unwrap();
++        if active.value::<x::Window>().first() == Some(&window) {
++            set_state(WmState::Normal);
++        }
++    }
++
+     fn handle_window_properties(
+         &self,
+         server_state: &mut super::RealServerState,
+@@ -898,6 +937,7 @@ xcb::atoms_struct! {
+         wm_delete_window => b"WM_DELETE_WINDOW" only_if_exists = false,
+         wm_transient_for => b"WM_TRANSIENT_FOR" only_if_exists = false,
+         wm_state => b"WM_STATE" only_if_exists = false,
++        wm_change_state => b"WM_CHANGE_STATE" only_if_exists = false,
+         wm_s0 => b"WM_S0" only_if_exists = false,
+         net_wm_cm_s0 => b"_NET_WM_CM_S0" only_if_exists = false,
+         wm_check => b"_NET_SUPPORTING_WM_CHECK" only_if_exists = false,
+diff --git a/tests/integration.rs b/tests/integration.rs
+index d35a065..63bf72c 100644
+--- a/tests/integration.rs
++++ b/tests/integration.rs
+@@ -364,6 +364,7 @@ xcb::atoms_struct! {
+         targets => b"TARGETS",
+         multiple => b"MULTIPLE",
+         wm_state => b"WM_STATE",
++        wm_change_state => b"WM_CHANGE_STATE",
+         wm_check => b"_NET_SUPPORTING_WM_CHECK",
+         win_type => b"_NET_WM_WINDOW_TYPE",
+         win_type_normal => b"_NET_WM_WINDOW_TYPE_NORMAL",
+@@ -920,6 +921,68 @@ fn window_properties_after_reparent() {
+     f.wait_and_dispatch();
+ }
+ 
++#[test]
++fn wm_change_state_iconic_is_answered_and_focus_restores() {
++    let mut f = Fixture::new();
++    let mut connection = Connection::new(&f.display);
++    let wm_state = connection.atoms.wm_state;
++
++    let new_win = |f: &mut Fixture, connection: &mut Connection| {
++        let win = connection.new_window(connection.root, 0, 0, 20, 20, false);
++        connection.map_window(win);
++        f.wait_and_dispatch();
++        let surface = f
++            .testwl
++            .last_created_surface_id()
++            .expect("No surface created!");
++        f.configure_and_verify_new_toplevel(connection, win, surface);
++        (win, surface)
++    };
++    let (win1, surface1) = new_win(&mut f, &mut connection);
++    new_win(&mut f, &mut connection); // takes the focus from win1
++
++    let state = |connection: &Connection, win| {
++        connection
++            .get_reply(&x::GetProperty {
++                delete: false,
++                window: win,
++                property: wm_state,
++                r#type: wm_state,
++                long_offset: 0,
++                long_length: 1,
++            })
++            .value::<u32>()
++            .first()
++            .and_then(|s| WmState::try_from(*s).ok())
++    };
++    let iconify = |connection: &Connection, win| {
++        connection
++            .send_and_check_request(&x::SendEvent {
++                propagate: false,
++                destination: x::SendEventDest::Window(connection.root),
++                event_mask: x::EventMask::SUBSTRUCTURE_REDIRECT | x::EventMask::SUBSTRUCTURE_NOTIFY,
++                event: &x::ClientMessageEvent::new(
++                    win,
++                    connection.atoms.wm_change_state,
++                    x::ClientMessageData::Data32([WmState::Iconic as u32, 0, 0, 0, 0]),
++                ),
++            })
++            .unwrap();
++        std::thread::sleep(std::time::Duration::from_millis(50));
++    };
++
++    // not focused: it hears Iconic, and focusing it brings it back
++    iconify(&connection, win1);
++    assert_eq!(state(&connection, win1), Some(WmState::Iconic));
++    f.testwl.focus_toplevel(surface1);
++    std::thread::sleep(std::time::Duration::from_millis(50));
++    assert_eq!(state(&connection, win1), Some(WmState::Normal));
++
++    // focused: no focus event will ever come, so it is back at once
++    iconify(&connection, win1);
++    assert_eq!(state(&connection, win1), Some(WmState::Normal));
++}
++
+ #[test]
+ fn input_focus() {
+     let mut f = Fixture::new();

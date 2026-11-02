@@ -327,6 +327,9 @@ struct LatticeSlot {
     view_size: (u32, u32),
 }
 
+/// A camera's centre and the bits of its zoom, to tell whether it has moved.
+pub(crate) type CameraView = (Option<geom::CanvasPos>, Option<u64>);
+
 pub struct Core {
     id: u64,
     stage: stage::Stage,
@@ -447,6 +450,8 @@ pub struct Core {
     pub enter_mode: EnterMode,
     /// Outputs on which fullscreen presentation is temporarily suppressed (e.g. user navigated to another window).
     pub(crate) presentation_suppressed: Vec<output::OutputId>,
+    /// Where the overview left each output's camera: at it, the overview is open.
+    pub(crate) overview_at: Vec<(output::OutputId, CameraView)>,
     /// Whether Super+Middle pan or camera navigation moves out of fullscreen presentation.
     pub fullscreen_pan: bool,
     /// Whether newly opened windows are automatically focused.
@@ -544,6 +549,7 @@ impl Core {
                 focus_cycle_navigate: false,
                 enter_mode: EnterMode::default(),
                 presentation_suppressed: Vec::new(),
+                overview_at: Vec::new(),
                 fullscreen_pan: false,
                 focus_on_open: false,
                 key_bindings: input::keys::UserBindings::default(),

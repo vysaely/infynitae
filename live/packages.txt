@@ -23,6 +23,7 @@ slurp
 wl-clipboard
 xorg-xwayland
 xwayland-satellite
+clang
 xorg-xprop
 xorg-xwininfo
 xdg-user-dirs

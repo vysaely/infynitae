@@ -244,6 +244,8 @@ live/infynitae-xkill infynitae-xkill
 live/infynitae-sleep-lock infynitae-sleep-lock
 live/infynitae-automount infynitae-automount
 LIST
+    # xwayland-satellite with our patch; a failed build keeps the copy already installed
+    sh "$src/live/build-satellite.sh" "$src" "$bin"
     # the C helpers (portal, polkit agent, lock screen, wallpaper, recorder stream)
     sh "$src/live/build-helpers.sh" "$src" "$bin" \
         || warn "Some helpers were not built (see above); Infynitae runs without them"

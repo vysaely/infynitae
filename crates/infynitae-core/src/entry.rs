@@ -1346,9 +1346,18 @@ impl Core {
         };
         target.zoom = target.zoom.min(1.0);
 
-        let at_overview = self.cameras.center(camera) == Some(target.center)
-            && self.cameras.zoom(camera).map(f64::to_bits) == Some(target.zoom.to_bits())
+        // where the overview left the camera, not where it would go now: windows move under it.
+        // A fullscreen window on top means the overview is not showing, wherever the camera is.
+        let view = (
+            self.cameras.center(camera),
+            self.cameras.zoom(camera).map(f64::to_bits),
+        );
+        let on_top =
+            self.presentation(output).is_some() && !self.is_presentation_suppressed(output);
+        let at_overview = !on_top
+            && self.overview_at.contains(&(output, view))
             && self.cameras.history(camera).is_some_and(|h| !h.is_empty());
+        self.overview_at.retain(|o| o.0 != output);
 
         if at_overview {
             // back from the overview: into the fullscreen window if it still has the focus
@@ -1364,6 +1373,13 @@ impl Core {
                 self.suppress_presentation(output, out);
             }
             self.cameras.fit(proof, camera, target);
+            self.overview_at.push((
+                output,
+                (
+                    self.cameras.center(camera),
+                    self.cameras.zoom(camera).map(f64::to_bits),
+                ),
+            ));
             self.camera_written(output, camera, out);
         }
     }
@@ -1601,10 +1617,14 @@ impl Core {
                     if under != self.hover_seen {
                         self.hover_seen = under;
                         let target = self.focus.target();
-                        if under.is_some() && under != target
-                            || under.is_none()
-                                && self.focus_follows_mouse_strict
-                                && target.is_some()
+                        // a fullscreen window keeps the focus until a click or Super+Tab: many
+                        // games minimize themselves when they lose it
+                        let held = target.is_some() && self.presentation(cur_o) == target;
+                        if !held
+                            && (under.is_some() && under != target
+                                || under.is_none()
+                                    && self.focus_follows_mouse_strict
+                                    && target.is_some())
                         {
                             out.extend(self.focus.hover_focus(under, time_us));
                         }
@@ -5058,6 +5078,110 @@ mod tests {
         assert!(c.is_presentation_suppressed(a), "the canvas is shown");
         overview(&mut c, &mut i);
         assert!(!c.is_presentation_suppressed(a), "the window is back");
+    }
+
+    fn press_overview(c: &mut Core, i: &mut crate::InputPort) {
+        use crate::input::keys::{KEY_LEFTMETA, KEY_LEFTSHIFT, KEY_TAB};
+        let mods = |logo, shift| crate::input::bindings::Modifiers {
+            logo,
+            shift,
+            ..Default::default()
+        };
+        for (key, pressed, logo, shift, changed) in [
+            (KEY_LEFTMETA, true, true, false, true),
+            (KEY_LEFTSHIFT, true, true, true, true),
+            (KEY_TAB, true, true, true, false),
+            (KEY_TAB, false, true, true, false),
+            (KEY_LEFTSHIFT, false, true, false, true),
+            (KEY_LEFTMETA, false, false, false, true),
+        ] {
+            c.physical_input_vec(
+                i,
+                crate::PhysicalEvent::KeyboardKey {
+                    key,
+                    pressed,
+                    modifiers: mods(logo, shift),
+                    mods_changed: changed,
+                    time_us: 1000,
+                },
+            )
+            .unwrap();
+        }
+    }
+
+    /// A fullscreen window, focused, with another window on the canvas and the pointer on screen.
+    fn fullscreen_rig(
+        c: &mut Core,
+        i: &mut crate::InputPort,
+        t: &mut crate::OutputLifecycleToken,
+    ) -> (OutputId, Vec<crate::stage::ElementId>) {
+        let (a, _) = c.output_connected(t, desc("A")).unwrap();
+        let ws = map_windows(c, a, 2);
+        c.set_focus(i, Some(ws[0])).unwrap();
+        c.toplevel_request(
+            ws[0],
+            crate::protocol::ToplevelRequest::SetFullscreen { output: Some(a) },
+        )
+        .unwrap();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (1.0, 1.0),
+        };
+        (a, ws)
+    }
+
+    /// Back in the game with the camera still framing the canvas: the next press opens the
+    /// overview. It used to count as closing it, so the game stayed and nothing seemed to happen.
+    #[test]
+    fn the_overview_opens_after_returning_to_the_fullscreen_window_another_way() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, ws) = fullscreen_rig(&mut c, &mut i, &mut t);
+        press_overview(&mut c, &mut i);
+        assert!(c.is_presentation_suppressed(a));
+        let mut fx = Vec::new();
+        c.unsuppress_presentation(a, &mut fx);
+        assert_eq!(c.focus().target(), Some(ws[0]));
+        press_overview(&mut c, &mut i);
+        assert!(c.is_presentation_suppressed(a), "the overview opened");
+    }
+
+    /// A window moving while the overview is open must not stop the next press closing it.
+    #[test]
+    fn the_overview_closes_after_a_window_moved_under_it() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, ws) = fullscreen_rig(&mut c, &mut i, &mut t);
+        press_overview(&mut c, &mut i);
+        let mut fx = Vec::new();
+        c.place_by_user(
+            ws[1],
+            crate::geom::CanvasPoint { x: 9000, y: 9000 },
+            &mut fx,
+        )
+        .unwrap();
+        press_overview(&mut c, &mut i);
+        assert!(!c.is_presentation_suppressed(a), "the window is back");
+    }
+
+    /// The mouse does not take the focus from a fullscreen window, shown or under the overview:
+    /// many games minimize themselves when they lose it. A click or Super+Tab still does.
+    #[test]
+    fn the_mouse_does_not_take_the_focus_from_a_fullscreen_window() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (_, ws) = fullscreen_rig(&mut c, &mut i, &mut t);
+        c.set_focus_follows_mouse(true);
+        c.set_focus_follows_mouse_strict(true);
+        press_overview(&mut c, &mut i);
+        c.hover_seen = Some(ws[1]); // the next motion is a crossing, onto empty canvas
+        c.physical_input_vec(
+            &mut i,
+            crate::PhysicalEvent::PointerMotion {
+                delta: (0.5, 0.5),
+                delta_unaccel: (0.5, 0.5),
+                time_us: 2000,
+            },
+        )
+        .unwrap();
+        assert_eq!(c.focus().target(), Some(ws[0]));
     }
 
     /// Super+arrow (owner, 2026-11-01): to the nearest window that way, the camera with it.
