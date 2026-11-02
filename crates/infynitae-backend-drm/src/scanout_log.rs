@@ -26,12 +26,19 @@ pub(crate) fn watch(on: bool) {
 
 /// Starts listening; a later call changes nothing.
 pub(crate) fn install() {
-    let _ = tracing::subscriber::set_global_default(Refusals);
+    let installed = tracing::subscriber::set_global_default(Refusals).is_ok();
+    // a silent log must say why: a build that compiled trace lines out can never explain a refusal
+    println!(
+        "[infynitae] Direct scanout log: listening {installed}, built with trace lines up to {}",
+        tracing::level_filters::STATIC_MAX_LEVEL
+    );
 }
 
 /// A refusal, as opposed to Smithay's other trace lines.
 fn is_refusal(message: &str) -> bool {
-    message.contains("skipping direct scan-out") || message.contains("failed to assign")
+    ["skipping", "failed", "could not", "Can't obtain", "too big"]
+        .iter()
+        .any(|word| message.contains(word))
 }
 
 struct Message(String);
@@ -90,5 +97,16 @@ mod tests {
         ));
         assert!(super::is_refusal("failed to assign element to primary"));
         assert!(!super::is_refusal("testing direct scan-out for element"));
+        assert!(super::is_refusal("failed to add framebuffer: Unsupported"));
+        assert!(super::is_refusal(
+            "could not import framebuffer for element"
+        ));
+        assert!(super::is_refusal(
+            "Can't obtain cursor's underlying storage"
+        ));
+        assert!(super::is_refusal(
+            "element 3 too big for cursor plane(s), skipping"
+        ));
+        assert!(!super::is_refusal("assigned element 3 to primary"));
     }
 }
