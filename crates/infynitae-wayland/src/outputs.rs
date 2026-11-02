@@ -414,6 +414,11 @@ impl WaylandState {
                 state.fullscreen.is_some(),
             );
             set(&mut s.states, xdg_toplevel::State::Resizing, state.resizing);
+            set(
+                &mut s.states,
+                xdg_toplevel::State::Maximized,
+                state.maximized,
+            );
             // tiled on every side (SQUARE_CORNERS): apps that round their corners and draw a
             // shadow (GTK, libadwaita, Chromium) draw a square window instead, flush with its
             // border; not while fullscreen, which has no edges

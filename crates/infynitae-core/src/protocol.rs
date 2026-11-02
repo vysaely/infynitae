@@ -382,6 +382,8 @@ pub struct ToplevelConfigureState {
     pub fullscreen: Option<OutputId>,
     /// A Super+right drag is resizing it (`xdg_toplevel` state `resizing`).
     pub resizing: bool,
+    /// Maximized (`xdg_toplevel` state `maximized`): an app's button then shows "restore".
+    pub maximized: bool,
     /// The size asked of the client: the fullscreen output's logical size, or none (0×0: the
     /// client chooses).
     pub size: Option<LocalSize>,
@@ -397,6 +399,7 @@ impl Core {
     pub fn toplevel_capabilities(&self) -> ToplevelCapabilities {
         ToplevelCapabilities {
             fullscreen: true,
+            maximize: true,
             ..ToplevelCapabilities::default()
         }
     }
@@ -433,6 +436,7 @@ impl Core {
         let Some(fs) = self.fullscreen_of(id) else {
             return ToplevelConfigureState {
                 resizing,
+                maximized: self.maximized.iter().any(|(e, _)| *e == id),
                 held: self.held_size(id),
                 ..ToplevelConfigureState::default()
             };
@@ -447,6 +451,7 @@ impl Core {
         ToplevelConfigureState {
             fullscreen: Some(fs.output),
             resizing,
+            maximized: false,
             size,
             held: None,
         }
@@ -1323,7 +1328,9 @@ impl Core {
     /// - `unset_fullscreen`: ends fullscreen with one configure offering the saved size; when
     ///   not fullscreen, one configure.
     /// - `set_minimized`: ignored (INV-PROTO-1). `show_window_menu`: ignored, there is none.
-    /// - `move`, `resize`: ignored: windows are moved and resized by the compositor (Super+drag), not on a client's request.
+    /// - `set_maximized`, `unset_maximized`, `move`, `resize` from an app go through
+    ///   [`Core::client_maximize`] and [`Core::client_drag`] (owner, 2026-11-02); here they stay
+    ///   as declined or ignored, for a request with nothing to act on.
     ///
     /// Nothing is answered while the toplevel is unmapped. No request moves an anchor, a camera
     /// or the focus.
@@ -3336,13 +3343,14 @@ mod tests {
         assert!(granted.iter().all(|r| *r == FS), "{granted:?}");
         let caps = connected(120).toplevel_capabilities();
         assert_eq!(caps.fullscreen, granted.contains(&FS));
-        assert_eq!(caps.maximize, granted.contains(&SetMaximized));
+        assert!(caps.maximize, "answered by Core::client_maximize, not here");
         assert_eq!(caps.minimize, granted.contains(&SetMinimized));
         assert_eq!(caps.window_menu, granted.contains(&ShowWindowMenu));
         assert_eq!(
             caps,
             ToplevelCapabilities {
                 fullscreen: true,
+                maximize: true,
                 ..ToplevelCapabilities::default()
             }
         );
@@ -3434,6 +3442,7 @@ mod tests {
             ToplevelConfigureState {
                 fullscreen: Some(a),
                 resizing: false,
+                maximized: false,
                 size: Some(LocalSize { w: 1920, h: 1080 }),
                 held: None,
             }
@@ -3572,6 +3581,7 @@ mod tests {
             ToplevelConfigureState {
                 fullscreen: Some(a),
                 resizing: false,
+                maximized: false,
                 size: Some(LocalSize { w: 1920, h: 1080 }),
                 held: None,
             }

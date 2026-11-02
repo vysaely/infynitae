@@ -168,7 +168,6 @@ fn tst22_each_request_gets_its_policy_answer_and_nothing_moves() {
     let ptr = t.ls.probe.ptr.len();
 
     let declined = vec![((0, 0), windowed_states(true))];
-    assert_eq!(t.ask(w, |tl| tl.set_maximized()), declined, "set_maximized");
     assert_eq!(
         t.ask(w, |tl| tl.unset_maximized()),
         declined,
@@ -205,6 +204,22 @@ fn tst22_each_request_gets_its_policy_answer_and_nothing_moves() {
         "a request produced a pointer event"
     );
     assert_eq!(t.ls.state.core().stage().state(id), Some(Lifecycle::Mapped));
+}
+
+/// An app's maximize button: answered once, with the state and the screen's room, and undone.
+#[test]
+fn the_focused_window_maximizes_and_restores() {
+    let mut t = T::new();
+    let (w, id) = t.map("W");
+    set_focus(&mut t.ls.state, &mut t.ls.input, Some(id)).expect("focus");
+    t.adv();
+    let got = t.ask(w, |tl| tl.set_maximized());
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(got[0].1.contains(&MAXIMIZED), "{got:?}");
+    assert_eq!(got[0].0, (1920, 1080));
+    let got = t.ask(w, |tl| tl.unset_maximized());
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(!got[0].1.contains(&MAXIMIZED), "{got:?}");
 }
 
 /// The same answers for a window that does not hold the focus: declined, without `activated`.
@@ -311,13 +326,22 @@ fn the_announced_capabilities_are_what_the_policy_grants() {
     .into_iter()
     .filter_map(|(on, v)| on.then_some(v))
     .collect();
-    assert_eq!(want, vec![3], "fullscreen, and nothing else");
-    assert_eq!(t.ls.probe.wm_capabilities, vec![(w, want.clone())]);
+    assert_eq!(
+        want,
+        vec![2, 3],
+        "maximize and fullscreen, and nothing else"
+    );
+    let announced = |t: &T| {
+        let mut caps = t.ls.probe.wm_capabilities.clone();
+        caps.iter_mut().for_each(|(_, list)| list.sort_unstable());
+        caps
+    };
+    assert_eq!(announced(&t), vec![(w, want.clone())]);
     // later configures do not repeat or change it
     set_focus(&mut t.ls.state, &mut t.ls.input, Some(id)).expect("focus");
     t.adv();
-    t.ask(w, |tl| tl.set_maximized());
-    assert_eq!(t.ls.probe.wm_capabilities, vec![(w, want)]);
+    t.ask(w, |tl| tl.unset_maximized());
+    assert_eq!(announced(&t), vec![(w, want)]);
     assert_eq!(
         t.ls.probe.configure_bounds,
         vec![(w, (1920 - 24, 1080 - 24))]
@@ -351,8 +375,7 @@ fn a_stream_of_requests_is_answered_one_for_one() {
         x ^= x << 17;
         let tl = t.toplevel(w);
         match x % 8 {
-            0 => tl.set_maximized(),
-            1 => tl.unset_maximized(),
+            0 | 1 => tl.unset_maximized(),
             2 => tl.set_fullscreen(None),
             3 => tl.unset_fullscreen(),
             4 => tl.set_minimized(),

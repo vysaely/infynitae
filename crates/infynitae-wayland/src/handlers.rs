@@ -716,11 +716,17 @@ impl XdgShellHandler for WaylandState {
     // maximize and fullscreen handlers send a configure, even before the initial one).
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {
-        self.toplevel_request(&surface, ToplevelRequest::SetMaximized);
+        if let Some(i) = self.element_index_by_root(surface.wl_surface()) {
+            let fx = self.core.client_maximize(self.elements[i].id, true);
+            self.apply(&fx);
+        }
     }
 
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
-        self.toplevel_request(&surface, ToplevelRequest::UnsetMaximized);
+        if let Some(i) = self.element_index_by_root(surface.wl_surface()) {
+            let fx = self.core.client_maximize(self.elements[i].id, false);
+            self.apply(&fx);
+        }
     }
 
     fn fullscreen_request(&mut self, surface: ToplevelSurface, output: Option<WlOutput>) {
@@ -739,7 +745,9 @@ impl XdgShellHandler for WaylandState {
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, _seat: wl_seat::WlSeat, _serial: Serial) {
-        self.toplevel_request(&surface, ToplevelRequest::Move);
+        if let Some(i) = self.element_index_by_root(surface.wl_surface()) {
+            self.core.client_drag(self.elements[i].id, None);
+        }
     }
 
     fn resize_request(
@@ -747,9 +755,19 @@ impl XdgShellHandler for WaylandState {
         surface: ToplevelSurface,
         _seat: wl_seat::WlSeat,
         _serial: Serial,
-        _edges: xdg_toplevel::ResizeEdge,
+        edges: xdg_toplevel::ResizeEdge,
     ) {
-        self.toplevel_request(&surface, ToplevelRequest::Resize);
+        use xdg_toplevel::ResizeEdge as E;
+        let on = |list: &[E]| list.contains(&edges);
+        let edges = infynitae_core::input::interaction::ResizeEdges {
+            left: on(&[E::Left, E::TopLeft, E::BottomLeft]),
+            right: on(&[E::Right, E::TopRight, E::BottomRight]),
+            top: on(&[E::Top, E::TopLeft, E::TopRight]),
+            bottom: on(&[E::Bottom, E::BottomLeft, E::BottomRight]),
+        };
+        if let Some(i) = self.element_index_by_root(surface.wl_surface()) {
+            self.core.client_drag(self.elements[i].id, Some(edges));
+        }
     }
 
     fn show_window_menu(

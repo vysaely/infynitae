@@ -8,6 +8,7 @@ these by date, e.g. "(owner, 2026-10-24)".
 
 ## Why it exists
 
+- **Apps may move, resize and maximize their own windows** (owner, 2026-11-02). A title bar drag and an app's edge start the same drag as Super+drag, only while the user holds a press the app owns on that window, so an app can never move itself by its own decision. An app's maximize button does what Super+Enter does, for the focused window only. Minimize is not done yet, and the bridge does not pass on an X11 app's maximize.
 - **Its own compositor, after driftwm's idea** (2026-10-04). driftwm showed the idea: one endless
   canvas you drift over instead of workspaces. Infynitae is a separate compositor so that the
   spatial model (per-screen cameras, clusters, fit, fullscreen panning) and every default are its

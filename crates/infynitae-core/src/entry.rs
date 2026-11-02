@@ -870,7 +870,7 @@ impl Core {
                 Some(e) => e,
                 None => return,
             };
-            self.maximize_toggle(proof, output, element, out);
+            self.maximize_toggle(Some(proof), output, element, out);
             return;
         }
         let Some(hit) = self.hit_test(output, pt) else {
@@ -894,9 +894,11 @@ impl Core {
 
     /// Viewport fill toggle (EnterMode::Maximize): maximizes the window to fill
     /// the usable screen area, or restores it.
+    /// Without `proof` (an app's own button) no camera is written: apps never move it, so at
+    /// another zoom than 1 the window stays as it is and the app is only answered.
     fn maximize_toggle(
         &mut self,
-        proof: authority::Authorized,
+        proof: Option<authority::Authorized>,
         output: OutputId,
         element: crate::stage::ElementId,
         out: &mut Vec<Effect>,
@@ -928,11 +930,14 @@ impl Core {
             // If camera zoom is not 1.0, reset camera zoom to 1.0
             if let Some(camera) = self.cameras.camera_for_output(output) {
                 let zoom = self.cameras.zoom(camera).unwrap_or(1.0);
-                if (zoom - 1.0).abs() > 0.001
-                    && let Some(center) = self.cameras.center(camera)
-                {
-                    self.cameras.set_zoom_and_center(proof, camera, 1.0, center);
-                    self.camera_written(output, camera, out);
+                if (zoom - 1.0).abs() > 0.001 {
+                    let Some(proof) = proof else {
+                        return;
+                    };
+                    if let Some(center) = self.cameras.center(camera) {
+                        self.cameras.set_zoom_and_center(proof, camera, 1.0, center);
+                        self.camera_written(output, camera, out);
+                    }
                 }
             }
 
@@ -1384,6 +1389,110 @@ impl Core {
         }
     }
 
+    /// An app asks to move its window, or to resize it from `edges` (`xdg_toplevel.move`,
+    /// `.resize`; `_NET_WM_MOVERESIZE` through the bridge). Granted only while the user holds a
+    /// press the app owns with the pointer on that window: an app can never move itself by its
+    /// own decision. The press stays the app's, so the release reaches it and ends the drag.
+    pub fn client_drag(
+        &mut self,
+        id: crate::stage::ElementId,
+        edges: Option<crate::input::interaction::ResizeEdges>,
+    ) {
+        let PointerState::Located { output, p } = self.pointer else {
+            return;
+        };
+        let held = self
+            .input
+            .ownership
+            .pressed()
+            .iter()
+            .find(|(_, o)| *o == Owner::Client)
+            .map(|(b, _)| *b);
+        let Some(button) = held else {
+            return;
+        };
+        if self.input.interaction.active() || self.locked() || self.fullscreen_of(id).is_some() {
+            return;
+        }
+        let pt = crate::geom::OutputLogicalPoint { x: p.0, y: p.1 };
+        let Some(hit) = self.hit_test(output, pt).filter(|h| h.element == id) else {
+            return;
+        };
+        let (Some(anchor), Some(size)) = (
+            self.stage.anchor(id),
+            self.stage.tree(id).map(|t| t.geometry.size),
+        ) else {
+            return;
+        };
+        let press = crate::geom::CanvasPos {
+            x: hit.origin.x * crate::geom::Q16_ONE + hit.local.x,
+            y: hit.origin.y * crate::geom::Q16_ONE + hit.local.y,
+        };
+        self.input.cluster_drag.clear();
+        self.input.interaction = match edges {
+            None => Interaction::ElementMove {
+                element: id,
+                initiator: button,
+                grab_offset: crate::geom::CanvasPos {
+                    x: press.x - anchor.x * crate::geom::Q16_ONE,
+                    y: press.y - anchor.y * crate::geom::Q16_ONE,
+                },
+                pan: None,
+                is_cluster: false,
+            },
+            Some(e) => {
+                let start_size = self
+                    .begin_resize(id, e.left, e.top)
+                    .unwrap_or((size.w, size.h));
+                Interaction::ElementResize {
+                    element: id,
+                    initiator: button,
+                    left: e.left,
+                    top: e.top,
+                    axes: (e.left || e.right, e.top || e.bottom),
+                    start_size,
+                    press,
+                    is_cluster: false,
+                }
+            }
+        };
+    }
+
+    /// An app's maximize button (`xdg_toplevel.set_maximized`, `.unset_maximized`): the same as
+    /// Super+Enter maximizing, only for the focused window. Always answers with a configure.
+    pub fn client_maximize(&mut self, id: crate::stage::ElementId, on: bool) -> Vec<Effect> {
+        let mut out = Vec::new();
+        let state = self.stage.state(id);
+        let answerable = matches!(
+            state,
+            Some(crate::stage::Lifecycle::AwaitingFirstBuffer | crate::stage::Lifecycle::Mapped)
+        );
+        if !answerable {
+            return out; // nothing is answered before the first configure or while unmapped
+        }
+        let is_on = self.maximized.iter().any(|(e, _)| *e == id);
+        let output = self
+            .pointer_output()
+            .or_else(|| self.outputs.first().map(|o| o.id));
+        if let Some(output) = output
+            && on != is_on
+            && self.focus.target() == Some(id)
+            && self.fullscreen_of(id).is_none()
+            && !self.input.interaction.active()
+            && self.stage.mapped(id).is_some()
+        {
+            self.maximize_toggle(None, output, id, &mut out);
+        }
+        // the toggle's own configure answers it; exactly one in every case
+        if !out
+            .iter()
+            .any(|e| matches!(e, Effect::ToplevelConfigureSize { element, .. } if *element == id))
+        {
+            out.push(Effect::ToplevelConfigure(id));
+        }
+        out
+    }
+
     /// A new window the rules let in over a fullscreen window (the user opened it, or it is a
     /// dialog of an app): it is shown and takes the focus. `set_focus` alone would decline
     /// (A-8), leaving it hidden behind the fullscreen window.
@@ -1803,6 +1912,7 @@ impl Core {
             Interaction::ElementResize {
                 left,
                 top,
+                axes,
                 start_size,
                 press,
                 is_cluster,
@@ -1816,8 +1926,16 @@ impl Core {
                         .clamp(32.0, f64::from(i32::MAX)) as i32
                 };
                 let size = (
-                    grow(start_size.0, d(q_now.x, press.x), left),
-                    grow(start_size.1, d(q_now.y, press.y), top),
+                    if axes.0 {
+                        grow(start_size.0, d(q_now.x, press.x), left)
+                    } else {
+                        start_size.0
+                    },
+                    if axes.1 {
+                        grow(start_size.1, d(q_now.y, press.y), top)
+                    } else {
+                        start_size.1
+                    },
                 );
                 if is_cluster && !self.input.cluster_drag.is_empty() {
                     let cluster_drag = self.input.cluster_drag.clone();
@@ -2178,6 +2296,7 @@ impl Core {
                             initiator: button,
                             left,
                             top,
+                            axes: (true, true),
                             start_size: (span_w as i32, span_h as i32),
                             press,
                             is_cluster: true,
@@ -2197,6 +2316,7 @@ impl Core {
                             initiator: button,
                             left,
                             top,
+                            axes: (true, true),
                             start_size,
                             press,
                             is_cluster: false,
@@ -2344,6 +2464,10 @@ impl Core {
                     },
                     Effect::PointerFrame,
                 ]);
+                // an app's own title bar drag: the press stays the app's, its release ends the drag
+                if self.input.interaction.initiator() == Some(button) {
+                    out.extend(self.end_interaction());
+                }
                 if !self.input.ownership.client_owns_any() {
                     let had_constraint = self.constraint.is_some();
                     out.extend(self.reconcile_constraints());
@@ -5216,6 +5340,154 @@ mod tests {
         )
         .unwrap();
         assert_ne!(c.focus().target(), Some(ws[0]));
+    }
+
+    /// Two windows, the first focused and under the pointer in the middle of the screen.
+    fn window_under_pointer(
+        c: &mut Core,
+        i: &mut crate::InputPort,
+        t: &mut crate::OutputLifecycleToken,
+    ) -> Vec<crate::stage::ElementId> {
+        let (a, _) = c.output_connected(t, desc("A")).unwrap();
+        let ws = map_windows(c, a, 2);
+        let mut fx = Vec::new();
+        c.place_by_user(
+            ws[1],
+            crate::geom::CanvasPoint { x: 5000, y: 5000 },
+            &mut fx,
+        )
+        .unwrap();
+        c.place_by_user(
+            ws[0],
+            crate::geom::CanvasPoint { x: -100, y: -100 },
+            &mut fx,
+        )
+        .unwrap();
+        c.set_focus(i, Some(ws[0])).unwrap();
+        let (w, h) = c.output(a).unwrap().logical_extent();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (w / 2.0, h / 2.0),
+        };
+        c.hover_seen = c.hovered_window();
+        assert_eq!(c.hover_seen, Some(ws[0]));
+        ws
+    }
+
+    fn mouse_button(c: &mut Core, i: &mut crate::InputPort, pressed: bool) -> Vec<Effect> {
+        c.physical_input_vec(
+            i,
+            crate::PhysicalEvent::PointerButton {
+                button: crate::input::bindings::BTN_LEFT,
+                pressed,
+                modifiers: Default::default(),
+                time_us: 1000,
+            },
+        )
+        .unwrap()
+    }
+
+    fn mouse_move(c: &mut Core, i: &mut crate::InputPort, d: (f64, f64)) {
+        c.physical_input_vec(
+            i,
+            crate::PhysicalEvent::PointerMotion {
+                delta: d,
+                delta_unaccel: d,
+                time_us: 2000,
+            },
+        )
+        .unwrap();
+    }
+
+    /// Title bar drag: the window follows the mouse, and the release reaches the app and ends it.
+    #[test]
+    fn an_app_moves_its_window_while_the_user_holds_a_press_on_it() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let ws = window_under_pointer(&mut c, &mut i, &mut t);
+        let before = c.stage().anchor(ws[0]).unwrap();
+        mouse_button(&mut c, &mut i, true);
+        c.client_drag(ws[0], None);
+        assert!(c.input.interaction.active());
+        mouse_move(&mut c, &mut i, (70.0, 30.0));
+        let after = c.stage().anchor(ws[0]).unwrap();
+        assert_eq!((after.x - before.x, after.y - before.y), (70, 30));
+        let fx = mouse_button(&mut c, &mut i, false);
+        assert!(
+            fx.iter()
+                .any(|e| matches!(e, Effect::PointerButton { pressed: false, .. })),
+            "{fx:?}"
+        );
+        assert!(!c.input.interaction.active());
+        mouse_move(&mut c, &mut i, (70.0, 30.0));
+        assert_eq!(c.stage().anchor(ws[0]), Some(after), "the drag ended");
+    }
+
+    /// An app cannot move itself by its own decision: no press, or a window not under the pointer.
+    #[test]
+    fn an_app_cannot_move_a_window_without_the_users_press_on_it() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let ws = window_under_pointer(&mut c, &mut i, &mut t);
+        c.client_drag(ws[0], None);
+        assert!(!c.input.interaction.active(), "no press");
+        mouse_button(&mut c, &mut i, true);
+        c.client_drag(ws[1], None);
+        assert!(!c.input.interaction.active(), "not the window pressed");
+    }
+
+    /// An app's right edge changes the width only.
+    #[test]
+    fn an_app_edge_resizes_only_that_way() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let ws = window_under_pointer(&mut c, &mut i, &mut t);
+        mouse_button(&mut c, &mut i, true);
+        let edges = crate::input::interaction::ResizeEdges {
+            right: true,
+            ..Default::default()
+        };
+        c.client_drag(ws[0], Some(edges));
+        match c.input.interaction {
+            crate::input::interaction::Interaction::ElementResize {
+                axes, left, top, ..
+            } => {
+                assert_eq!((axes, left, top), ((true, false), false, false));
+            }
+            ref other => panic!("{other:?}"),
+        }
+    }
+
+    /// An app's maximize button: only the focused window, on and off, and the app is told.
+    #[test]
+    fn an_app_maximizes_and_restores_its_focused_window() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let ws = window_under_pointer(&mut c, &mut i, &mut t);
+        let at = c.stage().anchor(ws[0]);
+        let fx = c.client_maximize(ws[1], true);
+        assert_eq!(
+            fx,
+            vec![Effect::ToplevelConfigure(ws[1])],
+            "not focused: declined"
+        );
+        assert!(!c.toplevel_configure_state(ws[1]).maximized);
+        let _ = c.client_maximize(ws[0], true);
+        assert!(c.toplevel_configure_state(ws[0]).maximized);
+        let _ = c.client_maximize(ws[0], false);
+        assert!(!c.toplevel_configure_state(ws[0]).maximized);
+        assert_eq!(c.stage().anchor(ws[0]), at, "back where it was");
+    }
+
+    /// Apps never move the camera: zoomed out, an app's maximize is answered and changes nothing.
+    #[test]
+    fn an_app_maximize_leaves_a_zoomed_camera_alone() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let ws = window_under_pointer(&mut c, &mut i, &mut t);
+        press_overview(&mut c, &mut i);
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        let zoom = c.cameras().zoom(0);
+        assert!(zoom.is_some_and(|z| z < 1.0));
+        let fx = c.client_maximize(ws[0], true);
+        assert_eq!(fx, vec![Effect::ToplevelConfigure(ws[0])]);
+        assert_eq!(c.cameras().zoom(0), zoom);
+        assert!(!c.toplevel_configure_state(ws[0]).maximized);
     }
 
     /// A window the user opens over a fullscreen window is shown, not hidden behind it.

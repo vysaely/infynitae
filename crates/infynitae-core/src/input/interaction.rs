@@ -19,6 +19,15 @@ pub struct MovePan {
     pub sum: (f64, f64),
 }
 
+/// Which edges of its window an app is being resized from (`xdg_toplevel.resize`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ResizeEdges {
+    pub left: bool,
+    pub right: bool,
+    pub top: bool,
+    pub bottom: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum Interaction {
     /// No compositor interaction: the pointer is client-routed.
@@ -52,13 +61,15 @@ pub enum Interaction {
         /// Whether the whole cluster moves together (Super+Shift+Left drag).
         is_cluster: bool,
     },
-    /// Super+right drag: the window is resized from the corner nearest the pointer at the press
+    /// Super+right drag, or an app's own edge (`xdg_toplevel.resize`): the window is resized from the corner nearest the pointer at the press
     /// (`left`, `top` say which); the opposite corner stays where it was.
     ElementResize {
         element: ElementId,
         initiator: u32,
         left: bool,
         top: bool,
+        /// Which sizes change, (width, height): both from a corner, one from an app's edge.
+        axes: (bool, bool),
         /// The window geometry's size at the press.
         start_size: (i32, i32),
         /// The pointer's Canvas position at the press.
