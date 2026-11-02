@@ -181,7 +181,7 @@ Object: OBJ-20, OBJ-21, OBJ-24. Implements INV-COORD-5, INV-INPUT-5, INV-OUTPUT-
 
 | From | Trigger [guard] | To | Effects | Cites |
 |---|---|---|---|---|
-| Requested | batch end [ActiveElementFocus = element(S) ∧ pointer focus S ∧ inside region ∧ no acquisition] | Active | `locked`/`confined` once | INV-INPUT-5 |
+| Requested | batch end [ActiveElementFocus = element(S) ∧ pointer focus S ∧ inside region ∧ no compositor interaction] | Active | `locked`/`confined` once | INV-INPUT-5 |
 | Active | any trigger while a compositor interaction or client-owned grab is active | Active (deferred) | core = Smithay; no absolute motion to a locked surface; relative only from physical deltas | INV-INPUT-5 |
 | Active (lock) | batch end [lock point (F-LOCK-1) observable through the interaction output ∧ ActiveElementFocus = element(S)] | Active | nothing | INV-INPUT-5 |
 | Active (lock) | batch end [otherwise] | Inactive / destroyed (oneshot) | exactly one `unlocked`; explicit deactivate only if the delivered focus does not change (W-SM-4a); no later event (P1, W-SM-4c) | INV-INPUT-5 |

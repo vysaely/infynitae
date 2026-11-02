@@ -58,11 +58,6 @@ MAX_FAST_FAILS=3
 BIN="$HOME/.local/bin/infynitae"
 SESSION_SCRIPT="$HOME/infynitae/live/session.sh"
 
-XWLS=""
-if command -v xwayland-satellite >/dev/null 2>&1; then
-    XWLS="--xwayland-satellite $(command -v xwayland-satellite)"
-fi
-
 CRASH_DIR="$STATE_DIR/crashes"
 CRASH_NOTE="$STATE_DIR/crashed"
 
@@ -126,6 +121,12 @@ while true; do
     fi
 
     # No pipe: $? must be the compositor's own exit status
+    # looked up at every start, not once: this script runs from boot, and an update can install
+    # our patched copy into ~/.local/bin while it runs
+    XWLS=""
+    if command -v xwayland-satellite >/dev/null 2>&1; then
+        XWLS="--xwayland-satellite $(command -v xwayland-satellite)"
+    fi
     "$BIN" $TTY_MODE $LOCKED_ARG $XWLS --exec "$SESSION_SCRIPT" "$@" >> "$SESSION_LOG" 2>&1
     STATUS=$?
     # every later start is locked (session.sh): a compositor that crashed, or was quit, while

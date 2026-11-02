@@ -582,6 +582,74 @@ mod tests {
         }
     }
 
+    /// Hold a button to look around: the lock a game asks for on the press is granted at once.
+    /// Through Xwayland an ungranted lock turned every warp into a jump, and the view span.
+    #[test]
+    fn a_lock_asked_for_while_a_button_is_held_is_granted() {
+        use crate::geom::{LocalRect, LocalSize};
+        use crate::input::bindings::Modifiers;
+        use crate::navigation::PersistedCameras;
+        use crate::output::Transform;
+        use crate::protocol::Effect;
+        use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceRole, SurfaceTree};
+        use crate::{Core, PhysicalEvent};
+
+        let desc = OutputDescriptor {
+            key: crate::output::tests::key("O1"),
+            mode: (800, 600),
+            transform: Transform::Normal,
+            scale_120: 120,
+            refresh_mhz: 60_000,
+        };
+        let (mut core, mut input_port, _, mut token) = Core::new(PersistedCameras::default());
+        let (o1, _) = core.output_connected(&mut token, desc).unwrap();
+        let elem = core.toplevel_created();
+        let skey = crate::snapshot::tests::key(1);
+        let tree = SurfaceTree {
+            geometry: LocalRect {
+                loc: LocalPoint { x: 0, y: 0 },
+                size: LocalSize { w: 400, h: 300 },
+            },
+            surfaces: vec![SnapshotSurface {
+                key: skey,
+                role: SurfaceRole::Root,
+                size: LocalSize { w: 400, h: 300 },
+                input: InputRegion::Infinite,
+                mapped: true,
+                frame_requested: false,
+            }],
+        };
+        let mut unmapped = tree.clone();
+        unmapped.surfaces[0].mapped = false;
+        unmapped.surfaces[0].size = LocalSize::default();
+        let _ = core.toplevel_committed(elem, unmapped).unwrap();
+        let _ = core.toplevel_committed(elem, tree).unwrap();
+        core.render_list(o1).unwrap();
+        let _ = core.set_focus(&mut input_port, Some(elem)).unwrap();
+
+        let press = PhysicalEvent::PointerButton {
+            button: 0x110,
+            pressed: true,
+            modifiers: Modifiers::default(),
+            time_us: 1000,
+        };
+        let _ = core.physical_input_vec(&mut input_port, press).unwrap();
+        assert!(core.buttons().client_owns_any());
+
+        let fx = core.request_pointer_constraint(
+            skey,
+            ConstraintKind::Lock,
+            ConstraintLifetime::Persistent,
+            None,
+            None,
+        );
+        assert!(fx.contains(&Effect::ConstraintActivate {
+            surface: skey,
+            kind: ConstraintKind::Lock
+        }));
+        assert!(core.constraint().is_some());
+    }
+
     /// INV-INPUT-5: Reconciliation is deferred while a client-owned grab sequence is active.
     #[test]
     fn m13_reconciliation_deferred_under_client_grab() {

@@ -280,6 +280,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 - **1R amendment:**
   - Seat state is split into physical `(interaction output, p)` and a constraint `{surface, kind, SurfaceLocal lock point}` (INV-COORD-5).
   - One batch-end reconciliation, deferred during compositor interactions **and client-owned grab sequences** (INV-INPUT-5; ER-2 shows the deferral is the only strategy that keeps core and Smithay equal with exactly one `unlocked`).
+  - Owner fix 2026-11-02: the deferral holds an active constraint in place during a client's press; granting a requested one does not wait for the press to end, or hold-to-look through Xwayland spins.
   - Confinement is clamped on the interaction output with no crossing (ER-5 R5).
   - Focus layering: ADR-14.
 - **D7 note (PD-F0-11, editorial):** affected invariants also include INV-CAMERA-4. Pan-originated input never reaches clients.

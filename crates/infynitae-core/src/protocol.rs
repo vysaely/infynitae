@@ -2480,7 +2480,12 @@ impl Core {
     /// output set, ActiveElementFocus, or an interaction/grab ended.
     pub fn reconcile_constraints(&mut self) -> Vec<Effect> {
         // Deferral rule: deferred while compositor pointer interaction or client-owned grab sequence is active.
-        if self.input.interaction.active() || self.input.ownership.client_owns_any() {
+        // Only taking a constraint away waits for a client's press to end. Granting one does not:
+        // a game asks for its lock on the press itself (hold to look around), and through Xwayland
+        // an ungranted lock turns every warp into a jump back and forth.
+        if self.input.interaction.active()
+            || (self.input.ownership.client_owns_any() && self.constraint.is_some())
+        {
             return Vec::new();
         }
 
@@ -2592,8 +2597,8 @@ impl Core {
         if self.constraints_suspended {
             return false;
         }
-        // 1. no compositor pointer interaction or client-owned grab being acquired
-        if self.input.interaction.active() || self.input.ownership.client_owns_any() {
+        // 1. no compositor pointer interaction being acquired
+        if self.input.interaction.active() {
             return false;
         }
 
