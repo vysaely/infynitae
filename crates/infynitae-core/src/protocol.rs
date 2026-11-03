@@ -1909,33 +1909,27 @@ impl Core {
             return self.notification_anchor(id, tree);
         }
         // a child window (xdg_toplevel.set_parent: dialogs, an app's second window) opens centred
-        // over its mapped parent's window geometry, whatever the policy (owner, 2026-10-24); one
-        // nearly the parent's size (Discord's pop-out) would hide it or peek out from behind it
-        // by a few pixels, and is placed by the policy instead. One much larger covers its parent
-        // whole (a save dialog over a small editor) and stays centred, kept in the view.
+        // over its mapped parent's window geometry, whatever the policy and whatever its size, kept
+        // in the view. It may cover its parent (owner, 2026-10-24 and 2026-11-03).
         if let Some(parent) = self.toplevel_parent(id)
             && self.stage.mapped(parent).is_some()
             && let (Some(a), Some(pt)) = (self.stage.anchor(parent), self.stage.tree(parent))
         {
             let (g, pg) = (tree.geometry, pt.geometry);
-            let near =
-                |size: i32, parent: i32| size * 20 >= parent * 17 && size * 17 <= parent * 20;
-            if !(near(g.size.w, pg.size.w) && near(g.size.h, pg.size.h)) {
-                let centre_x = a.x + i64::from(pg.loc.x) + i64::from(pg.size.w) / 2;
-                let centre_y = a.y + i64::from(pg.loc.y) + i64::from(pg.size.h) / 2;
-                let (mut x, mut y) = (
-                    centre_x - i64::from(g.size.w) / 2,
-                    centre_y - i64::from(g.size.h) / 2,
-                );
-                if let Some(view) = self.usable_view() {
-                    x = keep_in_range(x, i64::from(g.size.w), view.0, view.2);
-                    y = keep_in_range(y, i64::from(g.size.h), view.1, view.3);
-                }
-                return Some(CanvasPoint {
-                    x: x - i64::from(g.loc.x),
-                    y: y - i64::from(g.loc.y),
-                });
+            let centre_x = a.x + i64::from(pg.loc.x) + i64::from(pg.size.w) / 2;
+            let centre_y = a.y + i64::from(pg.loc.y) + i64::from(pg.size.h) / 2;
+            let (mut x, mut y) = (
+                centre_x - i64::from(g.size.w) / 2,
+                centre_y - i64::from(g.size.h) / 2,
+            );
+            if let Some(view) = self.usable_view() {
+                x = keep_in_range(x, i64::from(g.size.w), view.0, view.2);
+                y = keep_in_range(y, i64::from(g.size.h), view.1, view.3);
             }
+            return Some(CanvasPoint {
+                x: x - i64::from(g.loc.x),
+                y: y - i64::from(g.loc.y),
+            });
         }
         if self.placement == PlacementPolicy::OriginAtCameraCentre {
             return None;

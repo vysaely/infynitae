@@ -1,7 +1,7 @@
 //! A child window (`xdg_toplevel.set_parent`: a dialog, an app's second window) opens centred over
-//! its parent (owner, 2026-10-24), whatever the placement policy; a window without a parent is
-//! placed by the policy (cluster tiling beside the others), and so is a child nearly its parent's
-//! size, which would otherwise hide it or peek out from behind it.
+//! its parent (owner, 2026-10-24), whatever the placement policy and its size, and may cover it
+//! (owner, 2026-11-03); a window without a parent is placed by the policy (cluster tiling beside
+//! the others).
 
 mod common;
 
@@ -99,10 +99,10 @@ fn a_child_larger_than_its_parent_opens_centred_over_it() {
     );
 }
 
-/// A child nearly its parent's size (Discord's pop-out, 1913×1043 over 1920×1080) is not stacked
-/// on its parent: the policy places it beside, clear of it.
+/// A child nearly its parent's size (Discord's pop-out, 1913×1043 over 1920×1080) takes its
+/// parent's place like any other child.
 #[test]
-fn a_child_nearly_its_parents_size_is_placed_beside_it() {
+fn a_child_nearly_its_parents_size_takes_its_place() {
     let mut r = Rig::x8();
     r.ls.state
         .core_mut()
@@ -117,20 +117,9 @@ fn a_child_nearly_its_parents_size_is_placed_beside_it() {
     let ws = r.ls.state.core().stage().tree(w).unwrap().geometry.size;
     let p = open_sized(&mut r, "P", Some(w_idx), (ws.w - 7, ws.h - 7));
     assert_eq!(r.ls.state.core().toplevel_parent(p), Some(w));
-    let core = r.ls.state.core();
-    let rect = |id: ElementId| {
-        let a = core.stage().anchor(id).unwrap();
-        let g = core.stage().tree(id).unwrap().geometry;
-        (
-            a.x,
-            a.y,
-            a.x + i64::from(g.size.w),
-            a.y + i64::from(g.size.h),
-        )
-    };
-    let (a, b) = (rect(w), rect(p));
+    let (cp, cw) = (centre(&r, p), centre(&r, w));
     assert!(
-        b.2 <= a.0 || a.2 <= b.0 || b.3 <= a.1 || a.3 <= b.1,
-        "the pop-out {b:?} does not overlap its parent {a:?}"
+        (cp.0 - cw.0).abs() <= 4 && (cp.1 - cw.1).abs() <= 4,
+        "the pop-out {cp:?} is centred over its parent {cw:?}"
     );
 }
