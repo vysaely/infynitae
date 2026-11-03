@@ -356,7 +356,8 @@ pub struct WaylandState {
     /// FRAME_GUARD: LATENCY off, how late in a refresh, in percent, a frame waits for the next.
     pub frame_guard_percent: u32,
     /// Run on each client buffer as it arrives (`set_dmabuf_mark`).
-    pub(crate) dmabuf_mark: Option<Box<dyn Fn(&smithay::backend::allocator::dmabuf::Dmabuf)>>,
+    pub(crate) dmabuf_mark:
+        Option<Box<dyn Fn(&smithay::backend::allocator::dmabuf::Dmabuf) + Send>>,
     /// The GPU clients allocate on (`set_dmabuf_main_device`), also offered to capture sessions.
     pub(crate) dmabuf_main_dev: Option<libc::dev_t>,
     /// Frames waiting for the GPU to finish them, for the backend (`take_frame_waits`); `None`:
@@ -882,7 +883,7 @@ impl WaylandState {
     /// A backend with a display notes on each client buffer what the display needs to know of it.
     pub fn set_dmabuf_mark(
         &mut self,
-        mark: Box<dyn Fn(&smithay::backend::allocator::dmabuf::Dmabuf)>,
+        mark: Box<dyn Fn(&smithay::backend::allocator::dmabuf::Dmabuf) + Send>,
     ) {
         self.dmabuf_mark = Some(mark);
     }
