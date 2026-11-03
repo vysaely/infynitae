@@ -381,6 +381,8 @@ pub struct WaylandState {
     pub latency_mode: crate::frame_schedule::LatencyMode,
     /// LATENCY_STATS: input-to-screen times in the session log every 10 s.
     pub latency_stats: bool,
+    /// GPU_RELIEF: a screen missing refreshes slows the windows out of use.
+    pub gpu_relief: bool,
     pub border_active: smithay::backend::renderer::Color32F,
     pub border_inactive: smithay::backend::renderer::Color32F,
     pub border_ids: std::collections::HashMap<
@@ -729,6 +731,7 @@ impl WaylandState {
             square_corners: true,
             latency_mode: crate::frame_schedule::LatencyMode::Off,
             latency_stats: false,
+            gpu_relief: true,
             border_active: smithay::backend::renderer::Color32F::new(0.48, 0.64, 0.97, 1.0),
             border_inactive: smithay::backend::renderer::Color32F::new(0.20, 0.23, 0.33, 0.8),
             border_ids: std::collections::HashMap::new(),
@@ -1042,6 +1045,7 @@ impl WaylandState {
                 // "after" unless the config says "live" (a config from before the setting too)
                 let mut zoom_sharpen_after = true;
                 let (mut background_priority, mut game_mode) = (true, true);
+                let mut gpu_relief = true;
                 let mut tearing = true;
                 for line in content.lines() {
                     if let Some((key, val)) = config_line(line) {
@@ -1086,6 +1090,12 @@ impl WaylandState {
                             }
                             "MAX_APP_SCALE" => {
                                 max_app_scale = val.parse::<f64>().ok();
+                            }
+                            "GPU_RELIEF" => {
+                                gpu_relief = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
                             }
                             "BACKGROUND_PRIORITY" => {
                                 background_priority = !matches!(
@@ -1359,6 +1369,7 @@ impl WaylandState {
                 self.background.game_mode = game_mode;
                 self.set_tearing_enabled(tearing);
                 self.background.enabled = background_priority;
+                self.gpu_relief = gpu_relief;
                 if !background_priority {
                     self.background_restore_all();
                 }

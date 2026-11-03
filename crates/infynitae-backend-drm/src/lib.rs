@@ -273,6 +273,8 @@ struct Screen {
     modes: Vec<(HeadMode, smithay::reexports::drm::control::Mode)>,
     /// When to draw its next frame: just in time for its next refresh (LATENCY).
     schedule: infynitae_wayland::frame_schedule::FrameSchedule,
+    /// Whether this screen spares the GPU (`GPU_RELIEF`).
+    relief: infynitae_wayland::frame_schedule::FrameRelief,
     /// A frame wanted, held back until then (presentation clock).
     deferred: Option<std::time::Duration>,
     /// Input-to-screen times (LATENCY_STATS).
@@ -986,6 +988,7 @@ fn connect_screen(
             std::time::Duration::from_nanos(16_666_667),
         ),
         deferred: None,
+        relief: Default::default(),
         latency: Default::default(),
         scanout_logged: None,
         modes: conn
@@ -1380,6 +1383,28 @@ pub fn run_console_with(
                     };
                     s.schedule.vblank(shown);
                     s.latency.shown(shown);
+                    let id = s.id;
+                    if data.state.gpu_relief {
+                        let hz = data
+                            .state
+                            .core()
+                            .output(id)
+                            .map_or(60, |m| u64::from(m.refresh_mhz / 1000));
+                        let (on, changed) = s.relief.step(s.schedule.counts(), hz);
+                        if changed {
+                            data.state.core_mut().set_frame_relief(id, on);
+                            println!(
+                                "[infynitae] GPU relief on screen {id:?}: {}",
+                                if on {
+                                    "refreshes missed, windows out of use slow down"
+                                } else {
+                                    "over"
+                                }
+                            );
+                        }
+                    } else {
+                        data.state.core_mut().set_frame_relief(id, false);
+                    }
                     if !data.dpms_active {
                         s.shows_locked = s.queued_locked;
                     }
@@ -2082,8 +2107,19 @@ fn render(data: &mut LoopData) {
                                     )
                                 })
                                 .collect();
+                            // what Smithay checks without saying: a GPU buffer to show at all
+                            let storage: Vec<_> = elements
+                                .iter()
+                                .map(|e| {
+                                    smithay::backend::renderer::element::RenderElement::underlying_storage(
+                                        e,
+                                        &mut data.renderer,
+                                    )
+                                    .is_some()
+                                })
+                                .collect();
                             println!(
-                                "[infynitae] Fullscreen on screen {id:?}: composited, not scanned out ({} elements{}): {geometries:?}{buffer_note}",
+                                "[infynitae] Fullscreen on screen {id:?}: composited, not scanned out ({} elements{}): {geometries:?}{buffer_note}; buffers offered {storage:?}",
                                 elements.len(),
                                 if data.direct_scanout && !scanout_banned {
                                     ""

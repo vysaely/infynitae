@@ -377,6 +377,34 @@ mod tests {
         let _ = a;
     }
 
+    /// A screen sparing the GPU: a window out of use completes on every 2nd refresh at 60 Hz (about
+    /// 30 FPS), the focused one on each, and all of them again when it stops.
+    #[test]
+    fn a_screen_sparing_the_gpu_slows_only_the_windows_out_of_use() {
+        let (mut c, _, _, mut t) = Core::new(persisted(true));
+        let (o, _) = c.output_connected(&mut t, desc("A", 60_000)).unwrap();
+        let (first, second) = (map(&mut c), map(&mut c));
+        let focused = c.focus().target();
+        let other = if focused == Some(first) {
+            second
+        } else {
+            first
+        };
+        assert_eq!(c.frame_tick_vec(o).len(), 2, "both are in view");
+        c.set_frame_relief(o, true);
+        assert!(!c.frame_tick_vec(o).contains(&other), "it waits");
+        assert!(c.frame_tick_vec(o).contains(&other), "its turn");
+        let again = c.frame_tick_vec(o);
+        assert!(!again.contains(&other));
+        assert_eq!(
+            again.first().copied(),
+            focused,
+            "the focused one does not wait"
+        );
+        c.set_frame_relief(o, false);
+        assert_eq!(c.frame_tick_vec(o).len(), 2, "over");
+    }
+
     /// INV-FRAME-2: the clock is the highest-refresh observer; equal refresh → lowest OutputId;
     /// `frame_tick` returns the element only for its clock output; an unobserved element is never
     /// returned (withheld: unobserved elements do not tick; fallback handles them).

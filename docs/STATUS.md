@@ -96,6 +96,10 @@ These pass the test suite but have not run on a real screen or device yet:
 - **Game mode** (`GAME_MODE`, `--no-gamemode`): a fullscreen window the GPU shows directly is
   a game, registered with Feral's gamemode (full CPU speed) until it leaves fullscreen. A
   fullscreen video shown directly counts too.
+- **A full GPU slows the windows out of use** (`GPU_RELIEF`): a screen missing one refresh in
+  twenty for a second completes the frames of windows that are neither focused nor filling it at
+  about 30 FPS for 30 s, longer if it had to start again at once. A game can only be slowed
+  this way if it waits for its frame callbacks.
 - **Apps out of sight yield the CPU** (`BACKGROUND_PRIORITY`): an app none of whose windows has
   been on a screen for 15 seconds runs at nice 10, with the processes it started, and returns at
   once when one is seen. A shared window, the game and X11 apps are never lowered. It needs the

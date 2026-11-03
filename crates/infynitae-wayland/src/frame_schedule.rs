@@ -273,6 +273,58 @@ impl FrameSchedule {
     }
 }
 
+/// Whether a screen spares the GPU: its refreshes are being missed. Missing about one in twenty for
+/// a second starts it; it holds for a while, longer each time it had to start again at once, since
+/// the misses stop while it works and say nothing of whether the load has gone.
+#[derive(Debug, Default)]
+pub struct FrameRelief {
+    /// The counts at the start of this second.
+    mark: (u64, u64),
+    /// The refreshes it still holds for.
+    left: u64,
+    /// Its last hold, in seconds.
+    hold: u64,
+    /// The refreshes since it last ended.
+    since: u64,
+}
+
+const RELIEF_HOLD: u64 = 30;
+const RELIEF_HOLD_MAX: u64 = 300;
+const RELIEF_AGAIN: u64 = 5;
+
+impl FrameRelief {
+    /// A refresh, with the schedule's counts ([`FrameSchedule::counts`]) and the screen's rate.
+    /// Returns whether to spare the GPU, and whether that changed.
+    pub fn step(&mut self, (frames, misses): (u64, u64), hz: u64) -> (bool, bool) {
+        let was = self.left > 0;
+        if was {
+            self.left -= 1;
+        } else {
+            self.since = self.since.saturating_add(1);
+        }
+        let done = frames.saturating_sub(self.mark.0);
+        if done >= hz.max(1) {
+            let missed = misses.saturating_sub(self.mark.1);
+            self.mark = (frames, misses);
+            if missed * 20 >= done {
+                if !was {
+                    self.hold = if self.hold > 0 && self.since < RELIEF_AGAIN * hz {
+                        (self.hold * 2).min(RELIEF_HOLD_MAX)
+                    } else {
+                        RELIEF_HOLD
+                    };
+                }
+                self.left = self.hold * hz;
+            }
+        }
+        let on = self.left > 0;
+        if was && !on {
+            self.since = 0;
+        }
+        (on, on != was)
+    }
+}
+
 /// Input-to-screen times: from an input event to the refresh that first showed a frame drawn
 /// after it (LATENCY_STATS logs a summary).
 #[derive(Debug, Default)]
@@ -335,6 +387,44 @@ mod tests {
             s.rendered(Duration::ZERO, ms(took));
         }
         s
+    }
+
+    #[test]
+    fn missed_refreshes_start_the_relief_and_it_holds_longer_each_time_it_comes_back() {
+        let mut r = FrameRelief::default();
+        // one second at 100 Hz with 4 missed: nothing
+        let mut seen = (false, false);
+        for f in 1..=100 {
+            seen = r.step((f, 4), 100);
+        }
+        assert_eq!(seen, (false, false));
+        // the next with 5 of 100 missed: on, for 30 s
+        for f in 101..=199 {
+            r.step((f, 4), 100);
+        }
+        assert_eq!(r.step((200, 9), 100), (true, true));
+        for f in 201..3200 {
+            assert!(r.step((f, 9), 100).0, "still held at {f}");
+        }
+        assert_eq!(r.step((3200, 9), 100), (false, true));
+        // missing again at once: 60 s now
+        for f in 3201..3300 {
+            r.step((f, 9), 100);
+        }
+        assert_eq!(r.step((3300, 29), 100), (true, true));
+        for f in 3301..9300 {
+            assert!(r.step((f, 29), 100).0, "still held at {f}");
+        }
+        assert_eq!(r.step((9300, 29), 100), (false, true));
+        // a long time later: back to 30 s
+        for f in 9301..12000 {
+            r.step((f, 29), 100);
+        }
+        for f in 12000..12099 {
+            r.step((f, 29), 100);
+        }
+        assert_eq!(r.step((12100, 49), 100), (true, true));
+        assert_eq!(r.hold, RELIEF_HOLD);
     }
 
     #[test]

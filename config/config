@@ -212,6 +212,12 @@ GAME_MODE="true"
     # default: true
     # options: true  · false
 
+GPU_RELIEF="true"
+    # When the desktop starts missing refreshes because the GPU is full, windows you are not
+    # using (not focused, not filling the screen) slow to about 30 FPS until it has room
+    # default: true
+    # options: true  · false
+
 BACKGROUND_PRIORITY="true"
     # An app whose windows have all been out of sight for 15 s runs at a lower CPU priority,
     # back when you see one (never a shared window, the game, or X11 apps)

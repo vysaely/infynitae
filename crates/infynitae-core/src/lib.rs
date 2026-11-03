@@ -335,6 +335,9 @@ pub(crate) type PushedAside = (
     geom::CanvasPoint,
 );
 
+/// The frame rate of a window sparing the GPU (`Core::set_frame_relief`).
+pub const RELIEF_FPS: u32 = 30;
+
 /// A camera's centre and the bits of its zoom, to tell whether it has moved.
 pub(crate) type CameraView = (Option<geom::CanvasPos>, Option<u64>);
 
@@ -443,6 +446,8 @@ pub struct Core {
     /// OBJ-17: frame liveness of every element (M16). Written by the commit entry points,
     /// `frame_tick`, `frame_kick` and `frame_fallback` only.
     frame_liveness: frames::FrameLiveness,
+    /// Each screen's refreshes counted while it spares the GPU (`set_frame_relief`).
+    frame_relief: Vec<(output::OutputId, u32)>,
     /// Canvas pan interaction style (Grab vs Rts).
     pub pan_mode: navigation::PanMode,
     /// Whether keyboard focus follows pointer hover (Focus Follows Mouse).
@@ -577,6 +582,7 @@ impl Core {
                 physical_input_activity: false,
                 touches: touch::Touches::default(),
                 frame_liveness: frames::FrameLiveness::default(),
+                frame_relief: Vec::new(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
             },
@@ -1205,8 +1211,46 @@ impl Core {
                 .observed()
                 .filter(|&e| self.clock_output_of(e) == Some(output)),
         );
+        self.relieve_frames(output, start, out);
         for &e in &out[start..] {
             self.frame_liveness.completed(e);
+        }
+    }
+
+    /// A screen spares the GPU or stops (the adapter decides, from its missed refreshes): the
+    /// windows on it that are neither focused nor filling it complete their frames at about
+    /// [`RELIEF_FPS`], so a game in the background cannot hold the whole GPU (owner, 2026-11-03).
+    pub fn set_frame_relief(&mut self, output: output::OutputId, on: bool) {
+        self.frame_relief.retain(|(o, _)| *o != output);
+        if on {
+            self.frame_relief.push((output, 0));
+        }
+    }
+
+    /// While `output` spares the GPU, takes from `out[start..]` the windows that wait for a later
+    /// refresh. Their callbacks stay pending.
+    fn relieve_frames(
+        &mut self,
+        output: output::OutputId,
+        start: usize,
+        out: &mut Vec<stage::ElementId>,
+    ) {
+        let hz = self.output(output).map_or(0, |m| m.refresh_mhz / 1000);
+        let Some((_, tick)) = self.frame_relief.iter_mut().find(|(o, _)| *o == output) else {
+            return;
+        };
+        *tick = tick.wrapping_add(1);
+        if *tick % (hz / RELIEF_FPS).max(1) == 0 {
+            return;
+        }
+        let (focused, filling) = (self.focus.target(), self.presentation(output));
+        let mut i = start;
+        while i < out.len() {
+            if Some(out[i]) == focused || Some(out[i]) == filling {
+                i += 1;
+            } else {
+                out.remove(i);
+            }
         }
     }
 
