@@ -2,6 +2,8 @@
 //! opens an updater, then a login window, then its main window, each closing before the next):
 //! only when no other window of the app is open; another app, or a second window beside an open
 //! one, is placed by the policy as before. A place another window has taken since is not covered.
+//! Reopening an app after any key press, button press or touch is the user's act, and opens near
+//! the cursor (owner, 2026-11-03).
 
 mod common;
 
@@ -125,5 +127,59 @@ fn a_place_another_window_has_taken_since_is_not_covered() {
     assert!(
         n.2 <= b.0 || b.2 <= n.0 || n.3 <= b.1 || b.3 <= n.1,
         "the terminal {n:?} does not cover the browser {b:?}"
+    );
+}
+
+/// Closes a window away from the cursor, gives the input, reopens: at the cursor, not the old place.
+fn reopened_after(input: impl FnOnce(&mut Rig)) -> ((i64, i64), (i64, i64)) {
+    let mut r = Rig::x8();
+    r.ls.state
+        .core_mut()
+        .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+    let (first, f) = open(&mut r, "A", "mousepad", (300, 200));
+    let place = centre(&r, f);
+    r.ls.probe.destroy_toplevel(first);
+    r.ls.pump();
+    r.frame();
+    r.motion((-500.0, -250.0));
+    input(&mut r);
+    let (_, next) = open(&mut r, "B", "mousepad", (300, 200));
+    (place, centre(&r, next))
+}
+
+/// With no press, the app's own next window keeps the place even though the cursor has moved away
+/// (a splash screen turning into the game).
+#[test]
+fn moving_the_cursor_alone_keeps_the_place() {
+    let (place, at) = reopened_after(|_| {});
+    assert_eq!(at, place);
+}
+
+#[test]
+fn a_click_before_reopening_opens_it_near_the_cursor() {
+    let (place, at) = reopened_after(|r| {
+        r.button(BTN_LEFT, true, none());
+        r.button(BTN_LEFT, false, none());
+    });
+    assert!(
+        (at.0 - place.0).abs() > 100 || (at.1 - place.1).abs() > 100,
+        "away from {place:?}, at the cursor: {at:?}"
+    );
+}
+
+#[test]
+fn a_key_press_before_reopening_opens_it_near_the_cursor() {
+    let (place, at) = reopened_after(|r| {
+        r.t += 1000;
+        let key = infynitae_core::input::keys::KEY_LEFTMETA;
+        let (state, input) = (&mut r.ls.state, &mut r.ls.input);
+        infynitae_backend_headless::keyboard_key(state, input, key, true, r.t).expect("press");
+        r.t += 1000;
+        let (state, input) = (&mut r.ls.state, &mut r.ls.input);
+        infynitae_backend_headless::keyboard_key(state, input, key, false, r.t).expect("release");
+    });
+    assert!(
+        (at.0 - place.0).abs() > 100 || (at.1 - place.1).abs() > 100,
+        "away from {place:?}, at the cursor: {at:?}"
     );
 }

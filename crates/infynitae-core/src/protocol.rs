@@ -1940,9 +1940,9 @@ impl Core {
         if self.placement == PlacementPolicy::OriginAtCameraCentre {
             return None;
         }
-        // the next window of an app whose window just closed takes its place (Steam: updater,
-        // then login, then the main window), when no other window of the app is open and the
-        // place is still in view (owner, 2026-10-25) and free
+        // an app swapping its own windows keeps the place (Steam: updater, then login, then the
+        // main window; owner, 2026-10-25): no input since the close, no other window of the app
+        // open, the place still in view and free. Anything else opens near the cursor.
         if let Some(at) = self.successor_anchor(id, tree) {
             return Some(at);
         }

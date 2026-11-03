@@ -475,7 +475,9 @@ pub struct Core {
     /// `xdg_toplevel` parents, (child, parent), from the adapter (`set_toplevel_parent`).
     toplevel_parents: Vec<(stage::ElementId, stage::ElementId)>,
     /// The centre of each app's last destroyed window (app_id lowercase), newest last, at most
-    /// 32: its next window takes that place (`successor_anchor`).
+    /// 32: its next window takes that place (`successor_anchor`). A key press, button press or
+    /// touch forgets them: a window opened after one is the user's, and opens near the cursor
+    /// (owner, 2026-11-03).
     closed_windows: Vec<(String, geom::CanvasPoint)>,
     /// Whether camera teleports/recenters to newly opened windows.
     pub teleport_on_open: bool,
