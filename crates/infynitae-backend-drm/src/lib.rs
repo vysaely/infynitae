@@ -1124,6 +1124,9 @@ pub fn run_console_with(
             formats.len()
         );
         state.set_dmabuf_device_formats(node.dev_id(), formats);
+        // Smithay never says which GPU a client's buffer belongs to, and without that the screen
+        // refuses it silently. Clients are told to allocate on this one.
+        state.set_dmabuf_mark(Box::new(move |dmabuf| dmabuf.set_node(node)));
     }
 
     // SCALING_FILTER: zoomed in, nearest (crisp pixels, the default) or linear; zoomed out,

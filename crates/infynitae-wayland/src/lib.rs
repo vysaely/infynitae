@@ -355,6 +355,8 @@ pub struct WaylandState {
     pub(crate) fitted_windows: fitted::FittedWindows,
     /// FRAME_GUARD: LATENCY off, how late in a refresh, in percent, a frame waits for the next.
     pub frame_guard_percent: u32,
+    /// Run on each client buffer as it arrives (`set_dmabuf_mark`).
+    pub(crate) dmabuf_mark: Option<Box<dyn Fn(&smithay::backend::allocator::dmabuf::Dmabuf)>>,
     /// The GPU clients allocate on (`set_dmabuf_main_device`), also offered to capture sessions.
     pub(crate) dmabuf_main_dev: Option<libc::dev_t>,
     /// Frames waiting for the GPU to finish them, for the backend (`take_frame_waits`); `None`:
@@ -727,6 +729,7 @@ impl WaylandState {
             image_copy: image_copy::ImageCopyState::new(display, trust.gate(Cap::Capture)),
             dmabuf: DmabufState::new(),
             dmabuf_global: None,
+            dmabuf_mark: None,
             dmabuf_main_dev: None,
             frame_waits: None,
             dmabuf_formats: Vec::new(),
@@ -874,6 +877,14 @@ impl WaylandState {
             let dmabuf = smithay::wayland::dmabuf::get_dmabuf(state.buffer()?).ok()?;
             Some(dmabuf.format())
         })
+    }
+
+    /// A backend with a display notes on each client buffer what the display needs to know of it.
+    pub fn set_dmabuf_mark(
+        &mut self,
+        mark: Box<dyn Fn(&smithay::backend::allocator::dmabuf::Dmabuf)>,
+    ) {
+        self.dmabuf_mark = Some(mark);
     }
 
     /// (Re)creates the linux-dmabuf global from the device and formats known now.

@@ -579,13 +579,8 @@ impl DmabufHandler for WaylandState {
         dmabuf: smithay::backend::allocator::dmabuf::Dmabuf,
         notifier: smithay::wayland::dmabuf::ImportNotifier,
     ) {
-        // Smithay never says which GPU a client's buffer belongs to, and without that the screen
-        // refuses it silently. Clients are told to allocate on this one (`publish_dmabuf_global`).
-        if let Some(node) = self
-            .dmabuf_main_dev
-            .and_then(|dev| smithay::backend::drm::DrmNode::from_dev_id(dev).ok())
-        {
-            dmabuf.set_node(node);
+        if let Some(mark) = &self.dmabuf_mark {
+            mark(&dmabuf);
         }
         let _ = notifier.successful::<WaylandState>();
     }
