@@ -206,6 +206,26 @@ TEARING="true"
     #   true     when it asks (vsync off) or after Super+Shift+O on its window
     #    false   never
 
+FIT_IS_FULLSCREEN="true"
+    # A window that exactly fills the screen, with no transparency, is treated as fullscreen though it
+    # never asked: shown directly when possible, tearing and game mode apply. It stops when it stops fitting.
+    # default: true
+
+FRAME_GUARD="33"
+    # LATENCY off: how late in a refresh, in percent, a frame waits for the next refresh instead of
+    # risking a miss. 0 turns it off; a quarter of it applies while a window is shown directly.
+    # default: 33
+
+FIT_IS_FULLSCREEN="true"
+    # A window that exactly fills the screen, with no transparency, is treated as fullscreen though it
+    # never asked: shown directly when possible, tearing and game mode apply. It stops when it stops fitting.
+    # default: true
+
+FRAME_GUARD="33"
+    # LATENCY off: how late in a refresh, in percent, a frame waits for the next refresh instead of
+    # risking a miss. 0 turns it off; a quarter of it applies while a window is shown directly.
+    # default: 33
+
 GAME_MODE="true"
     # While a game is fullscreen (shown directly), gamemode runs the CPU at full speed
     # (when installed)

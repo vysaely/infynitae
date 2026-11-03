@@ -761,7 +761,14 @@ where
         .render_list(output)
         .map_err(|_| RenderOutputError::NoFrame)?;
     let view = frame.view;
-    let entries = frame.entries.clone();
+    let mut entries = frame.entries.clone();
+    let fitted = crate::fitted::fills_the_view(&entries, &view)
+        .filter(|w| state.fit_counts_as_fullscreen(*w, output));
+    state.set_fitted_window(output, fitted);
+    if let Some(window) = fitted {
+        // nothing behind it can show: the window alone, so the GPU has nothing to draw
+        entries.retain(|e| e.element == window);
+    }
     let layers = state.core.layer_frame(output);
     let mut elements = Vec::new();
     if include_cursor {
@@ -821,6 +828,7 @@ where
     R::TextureId: Send + Clone + 'static,
 {
     let geometry = window_geometry_rects(state.core.stage(), entries);
+    let fitted: Vec<_> = state.fitted_windows.values().copied().collect();
     let windows = {
         let stage = state.core.stage();
         let clip_on = state.clip_to_geometry;
@@ -831,6 +839,7 @@ where
         let clip = |e: &FrameEntry| {
             if !clip_on
                 || core.fullscreen_of(e.element).is_some()
+                || fitted.contains(&e.element)
                 || !clipped_surface(stage, e.element, e.surface)
             {
                 return None;
@@ -884,6 +893,7 @@ fn border_elements<R>(
 {
     if state.border_width <= 0
         || state.core.fullscreen_of(element).is_some()
+        || state.fitted_windows.values().any(|w| *w == element)
         || (state.border_ignore_csd && state.is_csd_element(element))
     {
         return;

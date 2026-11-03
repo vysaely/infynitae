@@ -275,6 +275,8 @@ struct Screen {
     schedule: infynitae_wayland::frame_schedule::FrameSchedule,
     /// Whether this screen spares the GPU (`GPU_RELIEF`).
     relief: infynitae_wayland::frame_schedule::FrameRelief,
+    /// Whether its last frame went to the screen without being drawn.
+    scanned_out: bool,
     /// A frame wanted, held back until then (presentation clock).
     deferred: Option<std::time::Duration>,
     /// Input-to-screen times (LATENCY_STATS).
@@ -493,6 +495,8 @@ struct LoopData {
     last_config_check: std::time::Instant,
     last_config_mtime: Option<std::time::SystemTime>,
     last_user_activity: std::time::Instant,
+    /// The longest turn of the loop since the last LATENCY_STATS summary.
+    loop_busy_max: Duration,
     /// The last LATENCY_STATS summary.
     latency_logged: Option<std::time::Instant>,
     dpms_active: bool,
@@ -983,6 +987,7 @@ fn connect_screen(
         vrr_on,
         vrr_mode: f.vrr,
         power_off: false,
+        scanned_out: false,
         schedule: infynitae_wayland::frame_schedule::FrameSchedule::new(
             infynitae_wayland::frame_schedule::LatencyMode::Balanced,
             std::time::Duration::from_nanos(16_666_667),
@@ -1098,11 +1103,14 @@ pub fn run_console_with(
     let gbm = GbmDevice::new(fd.clone())?;
     let mut renderer = gles_renderer(&gbm)?;
     // clients allocate on the GPU this compositor draws with (its render node), not a guess
-    if let Ok(node) = smithay::backend::drm::DrmNode::from_path(&gpu) {
-        let node = node
-            .node_with_type(smithay::backend::drm::NodeType::Render)
-            .and_then(Result::ok)
-            .unwrap_or(node);
+    let render_node = smithay::backend::drm::DrmNode::from_path(&gpu)
+        .ok()
+        .map(|node| {
+            node.node_with_type(smithay::backend::drm::NodeType::Render)
+                .and_then(Result::ok)
+                .unwrap_or(node)
+        });
+    if let Some(node) = render_node {
         // every format and modifier the renderer imports, not only linear
         let formats: Vec<_> = smithay::backend::renderer::ImportDma::dmabuf_formats(&renderer)
             .iter()
@@ -1132,7 +1140,9 @@ pub fn run_console_with(
         gbm.clone(),
         GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
     );
-    let exporter = GbmFramebufferExporter::new(gbm.clone(), None);
+    // Which GPU's client buffers may go to the screen as they are. Smithay refuses every one
+    // without saying so when this is None: no window was ever scanned out (2026-11-03).
+    let exporter = GbmFramebufferExporter::new(gbm.clone(), render_node);
     let render_formats = renderer
         .egl_context()
         .dmabuf_render_formats()
@@ -1383,6 +1393,7 @@ pub fn run_console_with(
                     };
                     s.schedule.vblank(shown);
                     s.latency.shown(shown);
+                    data.session.frame_refreshed();
                     let id = s.id;
                     if data.state.gpu_relief {
                         let hz = data
@@ -1472,6 +1483,7 @@ pub fn run_console_with(
         input_devices: Vec::new(),
         last_abs_pointer: None,
         known_mapped: HashSet::new(),
+        loop_busy_max: Duration::ZERO,
         direct_scanout: options.direct_scanout.unwrap_or(true),
         smooth_program,
         scaling_filter: filter.to_string(),
@@ -1506,6 +1518,8 @@ pub fn run_console_with(
     }
 
     println!("[infynitae] Compositor running. Ctrl+Alt+Backspace quits.");
+    data.session.follow_display();
+    let mut turn_started = std::time::Instant::now();
     while !data.quit && !data.session.finished() {
         data.session
             .wake_at(data.state.core().next_settlement_deadline());
@@ -1547,7 +1561,11 @@ pub fn run_console_with(
         .into_iter()
         .flatten()
         .min();
+        // time spent in the loop's own turn, every wait left out: a stall of this process alone,
+        // where "refresh to submit" also counts a quiet screen
+        data.loop_busy_max = data.loop_busy_max.max(turn_started.elapsed());
         event_loop.dispatch(timeout, &mut data)?;
+        turn_started = std::time::Instant::now();
         if data.active
             && data
                 .rescan_at
@@ -1979,8 +1997,14 @@ fn render(data: &mut LoopData) {
                 1_000_000_000_000 / u64::from(mhz),
             ));
             s.schedule.set_mode(data.state.latency_mode);
+            // a frame the GPU has to draw needs more of the refresh than one it only shows
+            s.schedule.set_guard_percent(if s.scanned_out {
+                data.state.frame_guard_percent / 4
+            } else {
+                data.state.frame_guard_percent
+            });
             let immediate =
-                data.state.tears(id) || (s.vrr_on && data.state.core().presentation(id).is_some());
+                data.state.tears(id) || (s.vrr_on && data.state.exclusive_window(id).is_some());
             match s
                 .schedule
                 .start_for(started, s.deferred)
@@ -2015,7 +2039,7 @@ fn render(data: &mut LoopData) {
         // VRR auto: on while this screen shows a fullscreen window
         let want_vrr = data.screens[i]
             .vrr_mode
-            .unwrap_or_else(|| data.state.core().presentation(id).is_some());
+            .unwrap_or_else(|| data.state.exclusive_window(id).is_some());
         let s = &mut data.screens[i];
         if s.vrr_supported && s.vrr_on != want_vrr && s.compositor.use_vrr(want_vrr).is_ok() {
             s.vrr_on = want_vrr;
@@ -2060,8 +2084,9 @@ fn render(data: &mut LoopData) {
         // behind a fullscreen window the screen is black: Smithay scans out a window that does
         // not say it is opaque (most games and players) only over a black background
         let core = data.state.core();
-        let presenting =
-            core.presentation(id).is_some() && !core.is_presentation_suppressed(id) && !locked;
+        let presenting = !locked
+            && (data.state.fitted_window(id).is_some()
+                || (core.presentation(id).is_some() && !core.is_presentation_suppressed(id)));
         let clear = if presenting {
             smithay::backend::renderer::Color32F::BLACK
         } else {
@@ -2077,6 +2102,7 @@ fn render(data: &mut LoopData) {
             Ok(result) if !result.is_empty => {
                 use smithay::backend::drm::compositor::PrimaryPlaneElement;
                 let scanout = matches!(result.primary_element, PrimaryPlaneElement::Element(_));
+                s.scanned_out = scanout;
                 data.state.fullscreen_frame_shown(id);
                 // a change of (fullscreen shown, scanned out) is logged; composited while
                 // fullscreen says what else is drawn over or around the window
@@ -2261,6 +2287,10 @@ fn render(data: &mut LoopData) {
             data.session.count_frame();
         } else {
             let now = infynitae_wayland::presentation_clock_now();
+            // nothing to show, so no vblank will come: the next frame waits for the refresh this
+            // one would have been, or a client drawing nothing new would spin the loop
+            let wait = s.schedule.until_next_refresh(now);
+            data.session.frame_rests(wait);
             data.state.frame_tick(id, now);
         }
     }
@@ -2682,7 +2712,7 @@ fn core_presentation_format(
     state: &WaylandState,
     id: OutputId,
 ) -> Option<smithay::backend::allocator::Format> {
-    state.window_buffer_format(state.core().presentation(id)?)
+    state.window_buffer_format(state.exclusive_window(id)?)
 }
 
 /// LATENCY_STATS: every 10 s, each screen's input-to-screen times and missed refreshes, in the
@@ -2699,6 +2729,13 @@ fn latency_summary(data: &mut LoopData) {
         return;
     }
     data.latency_logged = Some(now);
+    let busy = std::mem::take(&mut data.loop_busy_max);
+    if busy >= Duration::from_millis(5) {
+        println!(
+            "[infynitae] Loop busy: longest turn {:.1} ms",
+            busy.as_secs_f64() * 1000.0
+        );
+    }
     for s in &mut data.screens {
         let (frames, misses) = s.schedule.counts();
         let (pauses, paused) = s.schedule.pauses();

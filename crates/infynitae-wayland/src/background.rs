@@ -145,7 +145,7 @@ impl WaylandState {
         if !self.background.game_mode || self.background.game.is_some() {
             return;
         }
-        let Some(window) = self.core.presentation(output) else {
+        let Some(window) = self.exclusive_window(output) else {
             return;
         };
         let Some(pid) = self.client_pid(window) else {
@@ -184,7 +184,7 @@ impl WaylandState {
                     .core
                     .outputs()
                     .iter()
-                    .any(|o| self.core.presentation(o.id) == Some(window));
+                    .any(|o| self.exclusive_window(o.id) == Some(window));
             if !still {
                 println!("[infynitae] Game mode off for process {pid}");
                 self.background.game = None;

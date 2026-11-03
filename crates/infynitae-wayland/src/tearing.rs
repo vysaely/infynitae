@@ -50,7 +50,7 @@ impl WaylandState {
         if !t.enabled || self.is_locked() {
             return false;
         }
-        let Some(window) = self.core.presentation(output) else {
+        let Some(window) = self.exclusive_window(output) else {
             return false;
         };
         t.forced.contains(&window)

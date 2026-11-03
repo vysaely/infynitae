@@ -56,6 +56,10 @@ const MARGIN_MAX: Duration = Duration::from_millis(4);
 /// margin is as wide as it goes, so the render times measured do not tell when a frame is really
 /// ready (a GPU still busy after the submission); late scheduling stops for a while.
 const PAUSE_REFRESHES: u32 = 600;
+/// How long after a refresh its successors' times are trusted for [`FrameSchedule`]'s guard.
+const GUARD_TRUSTED: Duration = Duration::from_secs(1);
+/// A guarded frame starts this long after the refresh it waited for.
+const AFTER_REFRESH: Duration = Duration::from_micros(100);
 
 /// One screen's schedule.
 #[derive(Debug)]
@@ -76,6 +80,9 @@ pub struct FrameSchedule {
     /// Refreshes left drawn at once (PAUSE_REFRESHES).
     paused: u32,
     pauses: u64,
+    /// LATENCY off: how much of a refresh before its end a frame no longer starts, and waits for
+    /// the next instead (FRAME_GUARD, percent).
+    guard_percent: u32,
     /// When the frame in flight was submitted.
     submitted: Option<Duration>,
     /// From a refresh to the frame submitted after it, since the last summary.
@@ -119,6 +126,7 @@ impl FrameSchedule {
             frames: 0,
             paused: 0,
             pauses: 0,
+            guard_percent: 0,
             submitted: None,
             to_submit: Vec::new(),
             to_flip: Vec::new(),
@@ -134,6 +142,35 @@ impl FrameSchedule {
 
     pub fn set_period(&mut self, period: Duration) {
         self.period = period;
+    }
+
+    pub fn set_guard_percent(&mut self, percent: u32) {
+        self.guard_percent = percent.min(90);
+    }
+
+    /// How long until the next refresh, from the last real one (so it never slides against the
+    /// display); one period when none was seen lately.
+    pub fn until_next_refresh(&self, now: Duration) -> Duration {
+        let period = self.period.max(Duration::from_micros(1));
+        match self.last_vblank {
+            Some(last) if now >= last => {
+                let done = (now - last).as_nanos() % period.as_nanos();
+                period - Duration::from_nanos(done as u64)
+            }
+            _ => period,
+        }
+    }
+
+    /// LATENCY off: a frame that would start too close to the refresh's end waits until just after
+    /// it (with the newest buffers then), as a late start only misses the refresh and blocks the
+    /// next frame too. Only near a refresh seen lately: long after the last one its time is a guess.
+    fn guarded_start(&self, now: Duration) -> Option<Duration> {
+        let last = self.last_vblank?;
+        if self.guard_percent == 0 || now < last || now - last > GUARD_TRUSTED {
+            return None;
+        }
+        let left = self.until_next_refresh(now);
+        (left < self.period * self.guard_percent / 100).then(|| now + left + AFTER_REFRESH)
     }
 
     /// The predicted time a frame needs, from start to submitted: the 95th percentile of the
@@ -158,7 +195,10 @@ impl FrameSchedule {
     /// the next refresh that can still be made. `None`: draw now (late scheduling off, nothing
     /// measured yet, no refresh seen, or no time to wait).
     pub fn start_at(&self, now: Duration) -> Option<Duration> {
-        if self.mode == LatencyMode::Off || self.paused > 0 {
+        if self.mode == LatencyMode::Off {
+            return self.guarded_start(now);
+        }
+        if self.paused > 0 {
             return None;
         }
         let (last, budget) = (self.last_vblank?, self.budget()?);
@@ -191,8 +231,10 @@ impl FrameSchedule {
         self.next = (self.next + 1) % SAMPLES;
         self.filled = (self.filled + 1).min(SAMPLES);
         self.submitted = Some(submitted);
+        // a frame long after the last refresh is a screen that was quiet, not a late frame
         if let Some(last) = self.last_vblank
             && self.to_submit.len() < TIMINGS_KEPT
+            && submitted.saturating_sub(last) < self.period * 4
         {
             self.to_submit.push(submitted.saturating_sub(last));
         }
@@ -573,5 +615,48 @@ mod tests {
         assert_eq!(max, ms(4.0));
         assert!(p50 == ms(2.0) || p50 == ms(4.0));
         assert!(l.take_summary().is_none(), "reset");
+    }
+
+    #[test]
+    fn the_guard_holds_a_late_frame_until_just_after_the_refresh() {
+        let mut s = FrameSchedule::new(LatencyMode::Off, P);
+        s.set_guard_percent(30);
+        s.vblank(Duration::from_secs(10));
+        let start = Duration::from_secs(10);
+        assert_eq!(
+            s.start_at(start + P / 10),
+            None,
+            "early in the refresh: at once"
+        );
+        assert_eq!(s.start_at(start + P * 69 / 100), None);
+        let held = s.start_at(start + P * 80 / 100).expect("too late: held");
+        assert!(held > start + P && held < start + P + P / 10);
+    }
+
+    #[test]
+    fn no_guard_without_a_percent_or_a_recent_refresh() {
+        let mut s = FrameSchedule::new(LatencyMode::Off, P);
+        s.vblank(Duration::from_secs(10));
+        assert_eq!(s.start_at(Duration::from_secs(10) + P * 95 / 100), None);
+        s.set_guard_percent(30);
+        assert_eq!(s.start_at(Duration::from_secs(12) + P * 95 / 100), None);
+    }
+
+    #[test]
+    fn the_next_refresh_comes_from_the_last_real_one() {
+        let mut s = FrameSchedule::new(LatencyMode::Off, P);
+        let t = Duration::from_secs(5);
+        s.vblank(t);
+        assert_eq!(s.until_next_refresh(t + P / 4), P - P / 4);
+        assert_eq!(s.until_next_refresh(t + P * 3 + P / 4), P - P / 4);
+    }
+
+    #[test]
+    fn a_quiet_screen_is_not_a_late_frame() {
+        let mut s = FrameSchedule::new(LatencyMode::Off, P);
+        let t = Duration::from_secs(5);
+        s.vblank(t);
+        s.rendered(t + P * 100, t + P * 100);
+        assert_eq!(s.take_timings().0, None);
     }
 }

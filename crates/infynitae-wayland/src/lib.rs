@@ -17,6 +17,7 @@ pub mod capture_indicator;
 pub mod convert;
 pub mod cursor;
 pub mod extension;
+pub mod fitted;
 pub mod frame_schedule;
 mod frames;
 pub mod gamma;
@@ -94,6 +95,9 @@ pub use idle_notify::IdleNotifyState;
 /// drew; they never re-render for it (a HiDPI screen still gets its own scale). Re-rendering
 /// made a terminal re-flow its text as you zoomed.
 pub const DEFAULT_MAX_APP_SCALE: f64 = 1.0;
+/// `FRAME_GUARD`: a third of a refresh. On the owner's PC refreshes were missed from about there on (under
+/// 0.8% of frames submitted earlier, 9-29% later; 2026-11-03).
+pub const DEFAULT_FRAME_GUARD: u32 = 33;
 pub use registry::SurfaceRegistry;
 
 /// Per-client data the composition root attaches when inserting a client.
@@ -346,6 +350,11 @@ pub struct WaylandState {
     pub dmabuf: DmabufState,
     /// The linux-dmabuf global, replaced when the backend names its GPU (`set_dmabuf_main_device`).
     dmabuf_global: Option<smithay::wayland::dmabuf::DmabufGlobal>,
+    /// FIT_IS_FULLSCREEN and the window now filling each screen (`fitted`).
+    pub(crate) fitted: fitted::Fitted,
+    pub(crate) fitted_windows: fitted::FittedWindows,
+    /// FRAME_GUARD: LATENCY off, how late in a refresh, in percent, a frame waits for the next.
+    pub frame_guard_percent: u32,
     /// The GPU clients allocate on (`set_dmabuf_main_device`), also offered to capture sessions.
     pub(crate) dmabuf_main_dev: Option<libc::dev_t>,
     /// Frames waiting for the GPU to finish them, for the backend (`take_frame_waits`); `None`:
@@ -621,6 +630,9 @@ impl WaylandState {
             dh: display.clone(),
             compositor: CompositorState::new_v6::<Self>(display),
             output_manager: OutputManagerState::new_with_xdg_output::<Self>(display),
+            fitted: fitted::Fitted::default(),
+            fitted_windows: fitted::FittedWindows::new(),
+            frame_guard_percent: DEFAULT_FRAME_GUARD,
             presentation: PresentationState::new::<Self>(display, CLOCK_MONOTONIC),
             outputs: Vec::new(),
             disabled_outputs: Vec::new(),
@@ -1108,6 +1120,17 @@ impl WaylandState {
                                     val.to_lowercase().as_str(),
                                     "0" | "false" | "off" | "no"
                                 );
+                            }
+                            "FIT_IS_FULLSCREEN" => {
+                                self.fitted.enabled = !matches!(
+                                    val.to_lowercase().as_str(),
+                                    "0" | "false" | "off" | "no"
+                                );
+                            }
+                            "FRAME_GUARD" => {
+                                self.frame_guard_percent = val
+                                    .parse::<u32>()
+                                    .map_or(DEFAULT_FRAME_GUARD, |p| p.min(90));
                             }
                             "GAME_MODE" => {
                                 game_mode = !matches!(

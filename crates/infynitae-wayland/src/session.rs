@@ -47,6 +47,11 @@ pub struct FrameTimer {
     last: Option<Instant>,
     /// The deadline of the requested tick.
     next: Option<Instant>,
+    /// Driven by a display: no cadence of its own, whose rate is never quite the display's and so
+    /// slides against its refreshes. A tick is due at once, or after [`Self::rest`].
+    display_paced: bool,
+    /// No tick before this ([`Self::rest`]).
+    rests_until: Option<Instant>,
 }
 
 impl FrameTimer {
@@ -56,7 +61,28 @@ impl FrameTimer {
             period: Duration::from_nanos(1_000_000_000_000 / u64::from(refresh_mhz.max(1))),
             last: None,
             next: None,
+            display_paced: false,
+            rests_until: None,
         }
+    }
+
+    /// The display's refreshes pace the frames from now on.
+    pub fn follow_display(&mut self) {
+        self.display_paced = true;
+        self.last = None;
+    }
+
+    /// A refresh came: whatever was rested for is over, and a pending tick is due now.
+    pub fn refreshed(&mut self, now: Instant) {
+        self.rests_until = None;
+        if self.next.is_some() {
+            self.next = Some(now);
+        }
+    }
+
+    /// A frame had nothing new, so no refresh will say when to try again: not before `until`.
+    pub fn rest(&mut self, until: Instant) {
+        self.rests_until = Some(until);
     }
 
     pub fn period(&self) -> Duration {
@@ -67,6 +93,10 @@ impl FrameTimer {
     /// one is already pending changes nothing.
     pub fn request(&mut self, now: Instant) {
         if self.next.is_some() {
+            return;
+        }
+        if self.display_paced {
+            self.next = Some(self.rests_until.filter(|t| *t > now).unwrap_or(now));
             return;
         }
         self.next = Some(match self.last {
@@ -568,6 +598,21 @@ impl Session {
     /// redraw asked for by the host).
     pub fn request_frame(&mut self) {
         self.timer.request(Instant::now());
+    }
+
+    /// The display paces the frames (a backend with real refreshes), not this session's timer.
+    pub fn follow_display(&mut self) {
+        self.timer.follow_display();
+    }
+
+    /// A refresh of the display came.
+    pub fn frame_refreshed(&mut self) {
+        self.timer.refreshed(Instant::now());
+    }
+
+    /// A frame had nothing new to show: the next one waits this long.
+    pub fn frame_rests(&mut self, wait: Duration) {
+        self.timer.rest(Instant::now() + wait);
     }
 
     /// Whether the frame timer's tick is due; taking it ends the request. Under a frame limit
@@ -1289,5 +1334,40 @@ mod tests {
         );
         assert!(elapsed < Duration::from_millis(500), "took {elapsed:?}");
         assert!(!exists(pid), "still running or a zombie");
+    }
+
+    /// The drift this replaces: a cadence of its own slides against the display's refreshes, by
+    /// 0.07 ms per 10 s on the owner's screen, until it draws just before one (2026-11-03).
+    #[test]
+    fn following_the_display_a_tick_never_waits_for_a_cadence() {
+        let mut timer = FrameTimer::new(165_000);
+        timer.follow_display();
+        let t0 = Instant::now();
+        for n in 0..10_000u32 {
+            let refresh = t0 + Duration::from_nanos(6_060_650) * n;
+            timer.refreshed(refresh);
+            timer.request(refresh);
+            assert_eq!(timer.until_due(refresh), Some(Duration::ZERO));
+            assert!(timer.take_due(refresh));
+        }
+    }
+
+    #[test]
+    fn a_rest_holds_ticks_until_it_ends_or_a_refresh_comes() {
+        let mut timer = FrameTimer::new(100_000);
+        timer.follow_display();
+        let t0 = Instant::now();
+        timer.rest(t0 + 5 * MS);
+        timer.request(t0);
+        assert_eq!(timer.until_due(t0), Some(5 * MS));
+        assert!(!timer.take_due(t0 + MS));
+        timer.refreshed(t0 + 2 * MS);
+        assert!(timer.take_due(t0 + 2 * MS));
+        timer.rest(t0 + 9 * MS);
+        timer.request(t0 + 20 * MS);
+        assert!(
+            timer.take_due(t0 + 20 * MS),
+            "a rest in the past holds nothing"
+        );
     }
 }
