@@ -78,9 +78,33 @@ impl WaylandState {
         self.fitted.enabled
             && !self.is_locked()
             && !self.is_element_transparent(window)
-            && self
-                .window_buffer_format(window)
-                .is_some_and(|f| is_opaque(f.code))
+            && self.window_has_no_alpha(window)
+    }
+
+    /// Whether the window's buffer, on the GPU or in shared memory, has no alpha channel.
+    fn window_has_no_alpha(&self, window: ElementId) -> bool {
+        if let Some(format) = self.window_buffer_format(window) {
+            return is_opaque(format.code);
+        }
+        let Some(surface) = self.window_surface(window) else {
+            return false;
+        };
+        smithay::wayland::compositor::with_states(&surface, |states| {
+            let state = states
+                .data_map
+                .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()?
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            let buffer = state.buffer()?;
+            smithay::wayland::shm::with_buffer_contents(buffer, |_, _, data| {
+                data.format
+                    == smithay::reexports::wayland_server::protocol::wl_shm::Format::Xrgb8888
+                    || data.format
+                        == smithay::reexports::wayland_server::protocol::wl_shm::Format::Xbgr8888
+            })
+            .ok()
+        })
+        .unwrap_or(false)
     }
 
     pub(crate) fn set_fitted_window(&mut self, output: OutputId, window: Option<ElementId>) {
