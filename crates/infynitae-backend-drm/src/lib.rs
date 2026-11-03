@@ -275,6 +275,8 @@ struct Screen {
     schedule: infynitae_wayland::frame_schedule::FrameSchedule,
     /// Whether this screen spares the GPU (`GPU_RELIEF`).
     relief: infynitae_wayland::frame_schedule::FrameRelief,
+    /// A frame had nothing to show since the last refresh.
+    empty_since_refresh: bool,
     /// Whether its last frame went to the screen without being drawn.
     scanned_out: bool,
     /// A frame wanted, held back until then (presentation clock).
@@ -988,6 +990,7 @@ fn connect_screen(
         vrr_mode: f.vrr,
         power_off: false,
         scanned_out: false,
+        empty_since_refresh: false,
         schedule: infynitae_wayland::frame_schedule::FrameSchedule::new(
             infynitae_wayland::frame_schedule::LatencyMode::Balanced,
             std::time::Duration::from_nanos(16_666_667),
@@ -1394,6 +1397,7 @@ pub fn run_console_with(
                     s.schedule.vblank(shown);
                     s.latency.shown(shown);
                     data.session.frame_refreshed();
+                    s.empty_since_refresh = false;
                     let id = s.id;
                     if data.state.gpu_relief {
                         let hz = data
@@ -2287,10 +2291,14 @@ fn render(data: &mut LoopData) {
             data.session.count_frame();
         } else {
             let now = infynitae_wayland::presentation_clock_now();
-            // nothing to show, so no vblank will come: the next frame waits for the refresh this
-            // one would have been, or a client drawing nothing new would spin the loop
-            let wait = s.schedule.until_next_refresh(now);
-            data.session.frame_rests(wait);
+            // nothing to show, so no vblank will come. The first such frame after a refresh rests
+            // for nothing: the app is still drawing, and what it sends goes to the very next
+            // refresh. A second means a client is sending nothing new: it waits, or would spin the loop.
+            if s.empty_since_refresh {
+                let wait = s.schedule.until_next_refresh(now);
+                data.session.frame_rests(wait);
+            }
+            s.empty_since_refresh = true;
             data.state.frame_tick(id, now);
         }
     }
