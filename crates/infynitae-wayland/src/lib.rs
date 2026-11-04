@@ -360,6 +360,8 @@ pub struct WaylandState {
     pub frame_guard_percent: u32,
     /// Run on each client buffer as it arrives (`set_dmabuf_mark`).
     pub(crate) dmabuf_mark: Option<DmabufMark>,
+    /// A client's commit brought a buffer since the backend last asked (`take_new_buffer`).
+    pub(crate) new_buffer: bool,
     /// What the session log last said of a pointer confine and a pointer lock request.
     pub(crate) constraint_logged: [Option<bool>; 2],
     /// The GPU clients allocate on (`set_dmabuf_main_device`), also offered to capture sessions.
@@ -735,6 +737,7 @@ impl WaylandState {
             dmabuf: DmabufState::new(),
             dmabuf_global: None,
             dmabuf_mark: None,
+            new_buffer: false,
             constraint_logged: [None; 2],
             dmabuf_main_dev: None,
             frame_waits: None,
@@ -883,6 +886,11 @@ impl WaylandState {
             let dmabuf = smithay::wayland::dmabuf::get_dmabuf(state.buffer()?).ok()?;
             Some(dmabuf.format())
         })
+    }
+
+    /// Whether a client sent a buffer since the last call.
+    pub fn take_new_buffer(&mut self) -> bool {
+        std::mem::take(&mut self.new_buffer)
     }
 
     /// A backend with a display notes on each client buffer what the display needs to know of it.

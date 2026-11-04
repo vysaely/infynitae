@@ -107,7 +107,7 @@ impl WaylandState {
         .unwrap_or(false)
     }
 
-    pub(crate) fn set_fitted_window(&mut self, output: OutputId, window: Option<ElementId>) {
+    pub fn set_fitted_window(&mut self, output: OutputId, window: Option<ElementId>) {
         let was = match window {
             Some(w) => self.fitted_windows.insert(output, w),
             None => self.fitted_windows.remove(&output),

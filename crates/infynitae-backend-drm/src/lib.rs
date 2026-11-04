@@ -258,8 +258,12 @@ struct Screen {
     /// buffer was refused.
     no_scanout_until: Option<std::time::Instant>,
     /// Async page flips the kernel refused here in a row (a frame that also moved the cursor
-    /// plane is one); at [`TEARING_REFUSALS`] no tearing until the window stops tearing.
+    /// plane is one); at [`TEARING_REFUSALS`] no tearing for [`TEARING_RETRY`].
     tearing_refused: u32,
+    /// When tearing is tried again after too many refusals.
+    tearing_retry_at: Option<std::time::Instant>,
+    /// Whether the session log last said tearing was on.
+    tearing_logged: bool,
     /// The monitor and driver support VRR on this connector.
     vrr_supported: bool,
     /// VRR is on now.
@@ -985,6 +989,8 @@ fn connect_screen(
         flip_failures: 0,
         no_scanout_until: None,
         tearing_refused: 0,
+        tearing_retry_at: None,
+        tearing_logged: false,
         vrr_supported,
         vrr_on,
         vrr_mode: f.vrr,
@@ -1356,6 +1362,10 @@ pub fn run_console_with(
                 data.libinput.suspend();
                 data.drm.pause();
                 data.active = false;
+                // a frame held back would come due with nothing to draw it, and the loop would spin
+                for s in &mut data.screens {
+                    s.deferred = None;
+                }
             }
             SeatEvent::ActivateSession => {
                 println!("[infynitae] Session resumed");
@@ -1661,19 +1671,26 @@ pub fn run_console_with(
                     infynitae_wayland::output_power::OutputPowerMode::Off,
                 );
                 if data.idle_auto_lock {
+                    // an error here is a child someone else reaped: it is not running, or the screen
+                    // would never lock again after the first failure
                     let is_running = data
                         .lock_process
                         .as_mut()
-                        .is_some_and(|p| p.try_wait().ok().flatten().is_none());
+                        .is_some_and(|p| matches!(p.try_wait(), Ok(None)));
                     if !is_running {
                         println!("[infynitae] Auto-locking session with infynitae-lock...");
+                        // this process's own environment names no display: without this the lock
+                        // client could not connect, and the screen blanked unlocked (2026-11-04)
+                        let display = data.session.socket_name().to_string();
                         let child = std::process::Command::new("infynitae-lock")
+                            .env("WAYLAND_DISPLAY", &display)
                             .spawn()
                             .or_else(|_| {
                                 if let Ok(home) = std::env::var("HOME") {
                                     std::process::Command::new(format!(
                                         "{home}/.local/bin/infynitae-lock"
                                     ))
+                                    .env("WAYLAND_DISPLAY", &display)
                                     .spawn()
                                 } else {
                                     Err(std::io::Error::new(
@@ -1682,8 +1699,9 @@ pub fn run_console_with(
                                     ))
                                 }
                             });
-                        if let Ok(c) = child {
-                            data.lock_process = Some(c);
+                        match child {
+                            Ok(c) => data.lock_process = Some(c),
+                            Err(e) => eprintln!("[infynitae] Auto-lock could not start: {e}"),
                         }
                     }
                 }
@@ -1698,6 +1716,10 @@ pub fn run_console_with(
             }
         }
         data.session.dispatch(&mut data.state);
+        // a new buffer is what a rest must not hold back: it goes to the very next refresh
+        if data.state.take_new_buffer() {
+            data.session.frame_wake();
+        }
         watch_frame_waits(&mut data);
         for c in data.state.take_output_configurations() {
             let ok = apply_output_configuration(&mut data, &c.changes);
@@ -1949,6 +1971,8 @@ fn recover_renderer(data: &mut LoopData) {
 /// tearing): an occasional refusal (the cursor moved in the same frame) is not the driver
 /// lacking support.
 const TEARING_REFUSALS: u32 = 60;
+/// How long frames just wait for the refresh after that many refusals, before trying again.
+const TEARING_RETRY: Duration = Duration::from_secs(5);
 
 /// One frame on every screen that is not waiting for its vblank. A screen whose frame changed
 /// nothing completes its frame callbacks now; a queued one at its vblank.
@@ -1984,6 +2008,7 @@ fn render(data: &mut LoopData) {
         if data.dpms_active || data.screens[i].power_off {
             // While DPMS or power-off is active, do not render or queue frames to the screen.
             // Blanked screens count as showing no window.
+            data.state.set_fitted_window(id, None);
             let s = &mut data.screens[i];
             s.shows_locked = true;
             // a frame held back for its start time is not waited for either
@@ -2010,8 +2035,8 @@ fn render(data: &mut LoopData) {
             } else {
                 data.state.frame_guard_percent
             });
-            let immediate =
-                data.state.tears(id) || (s.vrr_on && data.state.exclusive_window(id).is_some());
+            let may_tear = data.state.tears(id) && s.tearing_refused < TEARING_REFUSALS;
+            let immediate = may_tear || (s.vrr_on && data.state.exclusive_window(id).is_some());
             match s
                 .schedule
                 .start_for(started, s.deferred)
@@ -2025,6 +2050,9 @@ fn render(data: &mut LoopData) {
             }
         }
 
+        if locked {
+            data.state.set_fitted_window(id, None);
+        }
         // locked: only the lock surface (lock.rs); never a window
         let frame = match convert::lock_elements(&data.state, &mut data.renderer, id) {
             Ok(Some(f)) => Ok(f),
@@ -2172,16 +2200,27 @@ fn render(data: &mut LoopData) {
                     result.cursor_element.is_some(),
                 );
                 // tearing: a scanned-out frame of a window that tears flips at once (async)
-                let wants_tearing = scanout && data.state.tears(id);
-                if !wants_tearing {
+                let tears_now = data.state.tears(id);
+                let wants_tearing = scanout && tears_now;
+                // a composited frame says nothing of the driver; only a window that stops
+                // tearing, or the wait's end, starts the count again
+                if !tears_now
+                    || s.tearing_retry_at
+                        .is_some_and(|t| std::time::Instant::now() >= t)
+                {
                     s.tearing_refused = 0;
+                    s.tearing_retry_at = None;
                 }
                 let tear = wants_tearing && s.tearing_refused < TEARING_REFUSALS;
-                if tear != s.compositor.async_flip() {
+                // the compositor drops async itself on a refusal, so this is said on a real change
+                if tear != s.tearing_logged {
+                    s.tearing_logged = tear;
                     println!(
                         "[infynitae] Tearing {} on screen {id:?}",
                         if tear { "on" } else { "off" }
                     );
+                }
+                if tear != s.compositor.async_flip() {
                     s.compositor.set_async_flip(tear);
                 }
                 let queued = s.compositor.queue_frame(());
@@ -2197,8 +2236,10 @@ fn render(data: &mut LoopData) {
                         // this frame waited for the refresh; the next one tries again
                         s.tearing_refused += 1;
                         if s.tearing_refused == TEARING_REFUSALS {
+                            s.tearing_retry_at = Some(std::time::Instant::now() + TEARING_RETRY);
                             eprintln!(
-                                "[infynitae] The driver refused tearing on screen {id:?} {TEARING_REFUSALS} times in a row: frames wait for the refresh"
+                                "[infynitae] Tearing refused {TEARING_REFUSALS} times in a row on screen {id:?}: frames wait for the refresh, trying again in {} s",
+                                TEARING_RETRY.as_secs()
                             );
                         }
                     }

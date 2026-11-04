@@ -135,10 +135,10 @@ impl WaylandState {
 
     /// Whether the mark steps aside on `output`: it shows a fullscreen window (unlocked).
     pub fn capture_mark_hidden(&self, output: infynitae_core::output::OutputId) -> bool {
+        // not for a window that merely fills the screen: a promise of docs/SECURITY.md
         !self.is_locked()
-            && (self.fitted_window(output).is_some()
-                || (self.core.presentation(output).is_some()
-                    && !self.core.is_presentation_suppressed(output)))
+            && self.core.presentation(output).is_some()
+            && !self.core.is_presentation_suppressed(output)
     }
 
     /// Whether a capture whose mark a fullscreen window hides is to be announced now: once per

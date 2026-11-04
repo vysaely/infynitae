@@ -145,7 +145,13 @@ impl WaylandState {
         if !self.background.game_mode || self.background.game.is_some() {
             return;
         }
-        let Some(window) = self.exclusive_window(output) else {
+        // fitting alone isn't a game: a maximized editor is not; a fitted window that tears is
+        let fullscreen = self
+            .core
+            .presentation(output)
+            .filter(|_| !self.core.is_presentation_suppressed(output));
+        let fitted = self.fitted_window(output).filter(|_| self.tears(output));
+        let Some(window) = fullscreen.or(fitted) else {
             return;
         };
         let Some(pid) = self.client_pid(window) else {

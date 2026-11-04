@@ -82,7 +82,14 @@ impl FrameTimer {
 
     /// A frame had nothing new, so no refresh will say when to try again: not before `until`.
     pub fn rest(&mut self, until: Instant) {
-        self.rests_until = Some(until);
+        // several screens rest at once: the soonest refresh decides, or a slow screen holds up a fast one
+        self.rests_until = Some(self.rests_until.map_or(until, |t| t.min(until)));
+    }
+
+    /// Something new to show: a rest doesn't hold it back.
+    pub fn wake(&mut self, now: Instant) {
+        self.rests_until = None;
+        self.next = Some(now);
     }
 
     pub fn period(&self) -> Duration {
@@ -608,6 +615,11 @@ impl Session {
     /// A refresh of the display came.
     pub fn frame_refreshed(&mut self) {
         self.timer.refreshed(Instant::now());
+    }
+
+    /// A client sent a new buffer: it may be drawn at once.
+    pub fn frame_wake(&mut self) {
+        self.timer.wake(Instant::now());
     }
 
     /// A frame had nothing new to show: the next one waits this long.
@@ -1369,5 +1381,21 @@ mod tests {
             timer.take_due(t0 + 20 * MS),
             "a rest in the past holds nothing"
         );
+    }
+
+    #[test]
+    fn the_soonest_rest_wins_and_a_new_buffer_ends_it() {
+        let mut timer = FrameTimer::new(100_000);
+        timer.follow_display();
+        let t0 = Instant::now();
+        timer.rest(t0 + 16 * MS);
+        timer.rest(t0 + 6 * MS);
+        timer.rest(t0 + 9 * MS);
+        timer.request(t0);
+        assert_eq!(timer.until_due(t0), Some(6 * MS));
+        timer.wake(t0 + MS);
+        assert!(timer.take_due(t0 + MS));
+        timer.request(t0 + MS);
+        assert!(timer.take_due(t0 + MS), "the rest is over");
     }
 }

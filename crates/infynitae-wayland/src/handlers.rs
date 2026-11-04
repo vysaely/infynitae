@@ -447,6 +447,7 @@ impl CompositorHandler for WaylandState {
                         .is_some()
                 })
         });
+        self.new_buffer |= has_buffer;
         // W-SM-6 / OB-18: a buffer on a popup that has not acknowledged a configure is a protocol
         // error, and that includes a buffer in its very first commit, before any configure was
         // sent. Checked first, so that an offending initial commit is not answered with a
