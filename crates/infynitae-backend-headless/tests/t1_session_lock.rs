@@ -454,3 +454,23 @@ fn a_dead_locker_is_started_again_by_the_compositor() {
     );
     assert_eq!(r.ls.state.locker_restarts(), 2);
 }
+
+/// Auto-lock (2026-11-04): the compositor locks first, then starts the locker. One that never takes
+/// the lock is started again, and the session stays locked meanwhile: waking the screen never shows
+/// the desktop. Before, a locker that failed left the screen blanked and unlocked.
+#[test]
+fn a_locker_that_never_takes_the_lock_is_started_again() {
+    let (mut r, _) = focused_w();
+    let t0 = std::time::Instant::now();
+    r.ls.state.start_locked();
+    assert!(r.ls.state.is_locked());
+    assert!(
+        !r.ls.state.restart_dead_locker(t0),
+        "the first locker gets its time"
+    );
+    assert!(
+        r.ls.state
+            .restart_dead_locker(t0 + std::time::Duration::from_secs(6))
+    );
+    assert!(r.ls.state.is_locked(), "still locked while no locker holds");
+}

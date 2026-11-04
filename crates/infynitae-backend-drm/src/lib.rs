@@ -1677,8 +1677,12 @@ pub fn run_console_with(
                         .lock_process
                         .as_mut()
                         .is_some_and(|p| matches!(p.try_wait(), Ok(None)));
-                    if !is_running {
+                    if !is_running && !data.state.is_locked() {
                         println!("[infynitae] Auto-locking session with infynitae-lock...");
+                        // locked first, by the compositor itself: if the locker fails to start or
+                        // never takes the lock, waking the screen shows black, not the desktop, and
+                        // the locker is started again (`restart_dead_locker`)
+                        data.state.start_locked();
                         // this process's own environment names no display: without this the lock
                         // client could not connect, and the screen blanked unlocked (2026-11-04)
                         let display = data.session.socket_name().to_string();

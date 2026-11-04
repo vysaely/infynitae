@@ -126,6 +126,8 @@ impl WaylandState {
         self.enable_session_lock();
         if let Some(l) = self.session_lock.as_mut() {
             l.locked = true;
+            // the caller starts a locker now; the compositor starts one again if it doesn't hold
+            l.relaunched = Some(std::time::Instant::now());
         }
         let kb = self.keyboard_handle();
         kb.set_focus(self, None, SERIAL_COUNTER.next_serial());
@@ -308,7 +310,9 @@ impl WaylandState {
         let Some(l) = self.session_lock.as_ref() else {
             return false;
         };
-        if !l.locked || l.holder.is_none() {
+        // locked with no holder ever (auto-lock, --locked) needs a locker as much as one whose
+        // holder died: else a locker that never started leaves a black screen with no way back
+        if !l.locked {
             return false;
         }
         let mut connected = false;
