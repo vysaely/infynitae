@@ -1433,19 +1433,26 @@ impl PointerConstraintsHandler for WaylandState {
             let fx = self
                 .core
                 .request_pointer_constraint(key, kind, lifetime, region, hint);
-            // when a game's view spins, this says whether it had the lock it asked for
-            eprintln!(
-                "[infynitae] Pointer {kind:?} asked: {}",
-                if self
-                    .core
-                    .constraint()
-                    .is_some_and(|c| c.surface == key && c.kind == kind)
-                {
-                    "granted"
-                } else {
-                    "not granted yet"
-                }
-            );
+            // when a game's view spins, this says whether it had the lock it asked for. Only a
+            // change: a game that warps the pointer through the X11 bridge asks about 1,000 times a
+            // second, and every line was written from this loop (2026-11-04: 430,000 lines in a session)
+            let granted = self
+                .core
+                .constraint()
+                .is_some_and(|c| c.surface == key && c.kind == kind);
+            let slot = matches!(kind, infynitae_core::pointer::ConstraintKind::Lock);
+            let logged = &mut self.constraint_logged[usize::from(slot)];
+            if *logged != Some(granted) {
+                *logged = Some(granted);
+                eprintln!(
+                    "[infynitae] Pointer {kind:?} asked: {}",
+                    if granted {
+                        "granted"
+                    } else {
+                        "not granted yet"
+                    }
+                );
+            }
             self.apply(&fx);
         }
     }

@@ -95,6 +95,9 @@ pub use idle_notify::IdleNotifyState;
 /// drew; they never re-render for it (a HiDPI screen still gets its own scale). Re-rendering
 /// made a terminal re-flow its text as you zoomed.
 pub const DEFAULT_MAX_APP_SCALE: f64 = 1.0;
+/// What a backend does to each client buffer as it arrives (`set_dmabuf_mark`).
+pub type DmabufMark = Box<dyn Fn(&smithay::backend::allocator::dmabuf::Dmabuf) + Send>;
+
 /// `FRAME_GUARD`: a third of a refresh. On the owner's PC refreshes were missed from about there on (under
 /// 0.8% of frames submitted earlier, 9-29% later; 2026-11-03).
 pub const DEFAULT_FRAME_GUARD: u32 = 33;
@@ -356,8 +359,9 @@ pub struct WaylandState {
     /// FRAME_GUARD: LATENCY off, how late in a refresh, in percent, a frame waits for the next.
     pub frame_guard_percent: u32,
     /// Run on each client buffer as it arrives (`set_dmabuf_mark`).
-    pub(crate) dmabuf_mark:
-        Option<Box<dyn Fn(&smithay::backend::allocator::dmabuf::Dmabuf) + Send>>,
+    pub(crate) dmabuf_mark: Option<DmabufMark>,
+    /// What the session log last said of a pointer confine and a pointer lock request.
+    pub(crate) constraint_logged: [Option<bool>; 2],
     /// The GPU clients allocate on (`set_dmabuf_main_device`), also offered to capture sessions.
     pub(crate) dmabuf_main_dev: Option<libc::dev_t>,
     /// Frames waiting for the GPU to finish them, for the backend (`take_frame_waits`); `None`:
@@ -731,6 +735,7 @@ impl WaylandState {
             dmabuf: DmabufState::new(),
             dmabuf_global: None,
             dmabuf_mark: None,
+            constraint_logged: [None; 2],
             dmabuf_main_dev: None,
             frame_waits: None,
             dmabuf_formats: Vec::new(),
@@ -881,10 +886,7 @@ impl WaylandState {
     }
 
     /// A backend with a display notes on each client buffer what the display needs to know of it.
-    pub fn set_dmabuf_mark(
-        &mut self,
-        mark: Box<dyn Fn(&smithay::backend::allocator::dmabuf::Dmabuf) + Send>,
-    ) {
+    pub fn set_dmabuf_mark(&mut self, mark: DmabufMark) {
         self.dmabuf_mark = Some(mark);
     }
 
