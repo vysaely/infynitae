@@ -14,6 +14,8 @@ const TARGET: &str = "smithay::backend::drm::compositor";
 
 static WATCHING: AtomicBool = AtomicBool::new(false);
 static SEEN: Mutex<Vec<Identifier>> = Mutex::new(Vec::new());
+/// Trace lines already known not to be refusals: never formatted again (10-30 a frame otherwise).
+static PLAIN: Mutex<Vec<Identifier>> = Mutex::new(Vec::new());
 
 /// Whether the next frames show a fullscreen window; a new fullscreen window reports afresh.
 pub(crate) fn watch(on: bool) {
@@ -70,12 +72,24 @@ impl Subscriber for Refusals {
         if !WATCHING.load(Ordering::Relaxed) {
             return;
         }
+        let callsite = event.metadata().callsite();
+        let mut plain = PLAIN.lock().unwrap_or_else(|e| e.into_inner());
+        if plain.contains(&callsite)
+            || SEEN
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(&callsite)
+        {
+            return;
+        }
         let mut message = Message(String::new());
         event.record(&mut message);
         if !is_refusal(&message.0) {
+            // a callsite's words are fixed, only its values change: it never becomes a refusal
+            plain.push(callsite);
             return;
         }
-        let callsite = event.metadata().callsite();
+        drop(plain);
         let mut seen = SEEN.lock().unwrap_or_else(|e| e.into_inner());
         if !seen.contains(&callsite) {
             seen.push(callsite);

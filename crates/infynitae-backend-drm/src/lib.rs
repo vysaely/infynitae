@@ -2486,6 +2486,23 @@ fn serve_captures(
     );
 }
 
+/// Says once each which way captures come: a GPU buffer, drawn into, or memory, copied out on this
+/// thread (each frame waits for the GPU then, so it may cost milliseconds).
+fn note_capture_path(gpu: bool) {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static SAID: [AtomicBool; 2] = [AtomicBool::new(false), AtomicBool::new(false)];
+    if !SAID[usize::from(gpu)].swap(true, Ordering::Relaxed) {
+        println!(
+            "[infynitae] A capture into {}",
+            if gpu {
+                "a GPU buffer (dmabuf)"
+            } else {
+                "memory (shm), copied on the main thread"
+            }
+        );
+    }
+}
+
 /// Renders `elements` (`size` px at `k`) into each waiting capture's buffer: a dmabuf on the GPU,
 /// a shm buffer through a copy (U-008).
 #[allow(unsafe_code)]
@@ -2517,6 +2534,7 @@ fn handle_screencopy<E>(
     let mut remaining = Vec::new();
 
     for req in pending {
+        note_capture_path(smithay::wayland::dmabuf::get_dmabuf(&req.buffer).is_ok());
         if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&req.buffer) {
             use smithay::backend::renderer::ImportDma;
             let mut dmabuf_rendered = false;

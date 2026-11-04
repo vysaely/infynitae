@@ -1028,10 +1028,17 @@ where
             .map_err(|_| RenderOutputError::NoFrame)?;
         (frame.view, frame.entries.clone())
     };
-    let entries: Vec<FrameEntry> = raw_entries
+    let mut entries: Vec<FrameEntry> = raw_entries
         .into_iter()
         .filter(|e| !state.is_element_private(e.element))
         .collect();
+    // a window filling the screen hides what is behind it: a capture need not draw that either
+    // (a private window that fills it was left out above, and then what is behind it shows)
+    if let Some(window) = state.fitted_window(output)
+        && entries.first().is_some_and(|e| e.element == window)
+    {
+        entries.retain(|e| e.element == window);
+    }
     let layers = state.core.layer_frame(output);
     let mut elements = Vec::new();
     if include_cursor {

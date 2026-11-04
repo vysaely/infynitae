@@ -35,6 +35,9 @@ pub const CAPTURE_HOLD: Duration = Duration::from_secs(5);
 /// The executable whose clients are X11 apps, all through one process.
 const SATELLITE: &str = "xwayland-satellite";
 
+/// How often apps out of sight are looked at.
+const SCAN_EVERY: std::time::Duration = std::time::Duration::from_millis(100);
+
 /// The background priority and game mode state.
 pub struct Background {
     /// `BACKGROUND_PRIORITY`.
@@ -51,6 +54,8 @@ pub struct Background {
     captured: HashMap<ElementId, Instant>,
     /// The game: its window and app.
     game: Option<(ElementId, u32)>,
+    /// The last scan of the apps out of sight (`background_update`).
+    pub(crate) scanned_at: Option<Instant>,
 }
 
 impl Default for Background {
@@ -58,6 +63,7 @@ impl Default for Background {
         Self {
             enabled: true,
             game_mode: true,
+            scanned_at: None,
             pids: HashMap::new(),
             hidden_since: HashMap::new(),
             lowered: HashMap::new(),
@@ -201,6 +207,15 @@ impl WaylandState {
         if !bg.enabled && bg.lowered.is_empty() && bg.hidden_since.is_empty() {
             return;
         }
+        // its waits are seconds long: ten scans a second are plenty, not one per wake (about
+        // 2,000 a second in a game, each listing and walking every window)
+        if bg
+            .scanned_at
+            .is_some_and(|t| now.duration_since(t) < SCAN_EVERY)
+        {
+            return;
+        }
+        self.background.scanned_at = Some(now);
 
         let mapped = self.core.stage().mapped_elements();
         self.background.pids.retain(|e, _| mapped.contains(e));
