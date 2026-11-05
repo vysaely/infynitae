@@ -159,7 +159,15 @@ impl Core {
                 self.input.clock.accepted(time_us);
                 self.input.modifiers = modifiers;
                 self.focus.settle_hover(time_us);
-                out.extend(self.suspend_constraints(modifiers.logo && self.free_cursor_on_super));
+                // a held Super frees the cursor from a window, but not from a game in fullscreen
+                // in front: there is nowhere to move it to, and a stray press threw the aim
+                // (owner, 2026-11-05). Super+Tab out still frees it, the game stepping aside.
+                let in_fullscreen = self.pointer_output().is_some_and(|o| {
+                    self.presentation(o).is_some() && !self.is_presentation_suppressed(o)
+                });
+                out.extend(self.suspend_constraints(
+                    modifiers.logo && self.free_cursor_on_super && !in_fullscreen,
+                ));
                 if pressed {
                     self.closed_windows.clear();
                     // a press bound to fit or restore mutates a camera: its proof is minted here
@@ -5703,6 +5711,31 @@ mod tests {
         c.unsuppress_presentation(a, &mut fx);
         assert!(!c.is_presentation_suppressed(a));
         assert_eq!(*c.stage.mapped_elements().last().unwrap(), ws[0]);
+    }
+
+    /// Holding Super over a game in fullscreen leaves the cursor with it (owner, 2026-11-05);
+    /// with the game stepped aside (the overview), a held Super frees it as over any window.
+    #[test]
+    fn a_held_super_does_not_free_the_cursor_from_a_fullscreen_game() {
+        use crate::input::keys::KEY_LEFTMETA;
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = fullscreen_rig(&mut c, &mut i, &mut t);
+        c.set_free_cursor_on_super(true);
+        press(&mut c, &mut i, KEY_LEFTMETA, true, true);
+        assert!(
+            !c.constraints_suspended,
+            "fullscreen in front: Super held, cursor kept"
+        );
+        press(&mut c, &mut i, KEY_LEFTMETA, false, false);
+        press_overview(&mut c, &mut i);
+        assert!(c.is_presentation_suppressed(a));
+        press(&mut c, &mut i, KEY_LEFTMETA, true, true);
+        assert!(
+            c.constraints_suspended,
+            "stepped aside: Super held frees it"
+        );
+        press(&mut c, &mut i, KEY_LEFTMETA, false, false);
+        assert!(!c.constraints_suspended);
     }
 
     /// Super+arrow (owner, 2026-11-01): to the nearest window that way, the camera with it.
