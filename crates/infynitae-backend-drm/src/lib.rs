@@ -2205,7 +2205,10 @@ fn render(data: &mut LoopData) {
                 );
                 // tearing: a scanned-out frame of a window that tears flips at once (async)
                 let tears_now = data.state.tears(id);
-                let wants_tearing = scanout && tears_now;
+                // not with a cursor on screen: the kernel refuses an async flip that moves it, so
+                // with a menu or the Steam overlay open every flip was refused, then waited
+                // (owner, 2026-11-05: CS2's overlay lagged in fullscreen only)
+                let wants_tearing = scanout && tears_now && !cursor;
                 // a composited frame says nothing of the driver; only a window that stops
                 // tearing, or the wait's end, starts the count again
                 if !tears_now

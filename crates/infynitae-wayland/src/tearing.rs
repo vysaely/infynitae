@@ -29,6 +29,9 @@ pub struct Tearing {
     hints: Vec<(WlSurface, bool)>,
     /// The windows the user turned tearing on for (Super+Shift+O).
     forced: Vec<ElementId>,
+    /// The windows the user turned tearing off for although their app asks (Super+Shift+O on a
+    /// game that tears by itself; owner, 2026-11-05: the key seemed to do nothing in CS2).
+    refused: Vec<ElementId>,
 }
 
 impl Tearing {
@@ -38,6 +41,7 @@ impl Tearing {
             enabled: true,
             hints: Vec::new(),
             forced: Vec::new(),
+            refused: Vec::new(),
         }
     }
 }
@@ -53,6 +57,9 @@ impl WaylandState {
         let Some(window) = self.exclusive_window(output) else {
             return false;
         };
+        if t.refused.contains(&window) {
+            return false;
+        }
         t.forced.contains(&window)
             || self
                 .window_surface(window)
@@ -77,18 +84,24 @@ impl WaylandState {
         });
     }
 
-    /// Tearing on or off for `window`; whether it is on now.
+    /// Tearing on or off for `window`; whether it is on now. Off holds even when its app asks.
     pub fn toggle_tearing(&mut self, window: ElementId) -> bool {
         let mapped = self.core.stage().mapped_elements();
-        let forced = &mut self.tearing.forced;
-        forced.retain(|e| mapped.contains(e));
-        if let Some(i) = forced.iter().position(|e| *e == window) {
-            forced.remove(i);
-            false
+        let asks = self
+            .window_surface(window)
+            .is_some_and(|s| self.tearing.hints.iter().any(|(h, on)| *on && *h == s));
+        let t = &mut self.tearing;
+        t.forced.retain(|e| mapped.contains(e));
+        t.refused.retain(|e| mapped.contains(e));
+        let was_on = !t.refused.contains(&window) && (asks || t.forced.contains(&window));
+        t.forced.retain(|e| *e != window);
+        t.refused.retain(|e| *e != window);
+        if was_on {
+            t.refused.push(window);
         } else {
-            forced.push(window);
-            true
+            t.forced.push(window);
         }
+        !was_on
     }
 
     /// `TEARING`: whether windows may tear at all.

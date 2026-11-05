@@ -149,6 +149,24 @@ fn super_shift_t_makes_a_window_tear_that_cannot_ask() {
     assert!(!t.ls.state.tears(o));
 }
 
+/// Super+Shift+O on a game that asks to tear turns it off, and on again (owner, 2026-11-05:
+/// in CS2 the key seemed to do nothing, the game's own ask kept it tearing).
+#[test]
+fn super_shift_o_turns_off_tearing_a_game_asked_for() {
+    let mut t = T::new();
+    let o = t.ls.output();
+    let (w, id) = t.map("game");
+    let c = t.control(w);
+    t.hint(&c, w, PresentationHint::Async);
+    t.fullscreen(w, true);
+    assert!(t.ls.state.tears(o), "asked: tears");
+
+    assert!(!t.ls.state.toggle_tearing(id), "off");
+    assert!(!t.ls.state.tears(o), "off holds while the game still asks");
+    assert!(t.ls.state.toggle_tearing(id), "on again");
+    assert!(t.ls.state.tears(o));
+}
+
 #[test]
 fn tearing_off_in_the_config_or_a_locked_session_never_tears() {
     let mut t = T::new();
