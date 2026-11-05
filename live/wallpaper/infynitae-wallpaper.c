@@ -59,7 +59,11 @@ struct wallpaper_app {
     struct wl_shm *shm;
     struct zwlr_layer_shell_v1 *layer_shell;
     struct wallpaper_output *outputs;
+    /* the decoded image, only while a screen still needs drawing: a 4961x3508 wallpaper held 70 MB
+     * all session after the screens were drawn (2026-11-06); it is decoded again from `path` when a
+     * screen is added or changes size */
     GdkPixbuf *pixbuf;
+    char path[4096];
     char mode[32];
     /* --overlay: above every window (a frozen screenshot shown while a region is chosen); only on
      * the output named by --output when one is */
@@ -145,8 +149,46 @@ static void draw_pixbuf_to_cairo(cairo_t *cr, GdkPixbuf *pb, int dx, int dy) {
     cairo_surface_destroy(surf);
 }
 
+/* The image at `path`, scaled down when a side passes cairo's limit; NULL when it cannot be read. */
+static GdkPixbuf *load_image(const char *path) {
+    GError *err = NULL;
+    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file(path, &err);
+    if (!pixbuf) {
+        fprintf(stderr, "[infynitae-wallpaper] Failed to load image '%s': %s\n", path, err ? err->message : "unknown error");
+        if (err) g_error_free(err);
+        return NULL;
+    }
+    int raw_w = gdk_pixbuf_get_width(pixbuf);
+    int raw_h = gdk_pixbuf_get_height(pixbuf);
+    if (raw_w > 32767 || raw_h > 32767) {
+        double factor = 32767.0 / (raw_w > raw_h ? raw_w : raw_h);
+        int nw = (int)(raw_w * factor);
+        int nh = (int)(raw_h * factor);
+        if (nw < 1) nw = 1;
+        if (nh < 1) nh = 1;
+        GdkPixbuf *downscaled = gdk_pixbuf_scale_simple(pixbuf, nw, nh, GDK_INTERP_BILINEAR);
+        if (downscaled) {
+            g_object_unref(pixbuf);
+            pixbuf = downscaled;
+        }
+    }
+    return pixbuf;
+}
+
+/* Once every screen shows its picture, the decoded image goes. */
+static void release_image_when_drawn(struct wallpaper_app *app) {
+    if (!app->pixbuf || !app->path[0]) return;
+    for (struct wallpaper_output *o = app->outputs; o; o = o->next) {
+        if (o->layer_surface && !o->buffer) return;
+    }
+    g_object_unref(app->pixbuf);
+    app->pixbuf = NULL;
+}
+
 static void render_output(struct wallpaper_output *out) {
-    if (out->width <= 0 || out->height <= 0 || !out->app->pixbuf) return;
+    if (out->width <= 0 || out->height <= 0) return;
+    if (!out->app->pixbuf && out->app->path[0]) out->app->pixbuf = load_image(out->app->path);
+    if (!out->app->pixbuf) return;
 
     int32_t w = out->width;
     int32_t h = out->height;
@@ -267,6 +309,7 @@ static void layer_surface_configure(void *data, struct zwlr_layer_surface_v1 *la
     if (height > 0) out->height = height;
 
     render_output(out);
+    release_image_when_drawn(out->app);
 }
 
 static void layer_surface_closed(void *data, struct zwlr_layer_surface_v1 *layer_surface) {
@@ -694,28 +737,9 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    GError *err = NULL;
-    GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file(target, &err);
-    if (!pixbuf) {
-        fprintf(stderr, "[infynitae-wallpaper] Failed to load image '%s': %s\n", target, err ? err->message : "unknown error");
-        if (err) g_error_free(err);
-        return 1;
-    }
-
-    int raw_w = gdk_pixbuf_get_width(pixbuf);
-    int raw_h = gdk_pixbuf_get_height(pixbuf);
-    if (raw_w > 32767 || raw_h > 32767) {
-        double factor = 32767.0 / (raw_w > raw_h ? raw_w : raw_h);
-        int nw = (int)(raw_w * factor);
-        int nh = (int)(raw_h * factor);
-        if (nw < 1) nw = 1;
-        if (nh < 1) nh = 1;
-        GdkPixbuf *downscaled = gdk_pixbuf_scale_simple(pixbuf, nw, nh, GDK_INTERP_BILINEAR);
-        if (downscaled) {
-            g_object_unref(pixbuf);
-            pixbuf = downscaled;
-        }
-    }
+    /* read before forking, so a bad image fails the command that set it */
+    GdkPixbuf *pixbuf = load_image(target);
+    if (!pixbuf) return 1;
 
     if (!overlay) {
         kill_other_wallpapers();
@@ -738,6 +762,8 @@ int main(int argc, char *argv[]) {
 
     struct wallpaper_app app = {0};
     app.pixbuf = pixbuf;
+    /* a path that does not fit is kept decoded instead (never released) */
+    if (strlen(target) < sizeof(app.path)) snprintf(app.path, sizeof(app.path), "%s", target);
     snprintf(app.mode, sizeof(app.mode), "%s", mode);
     app.overlay = overlay;
     snprintf(app.only_output, sizeof(app.only_output), "%s", only_output);
@@ -745,7 +771,7 @@ int main(int argc, char *argv[]) {
     app.display = wl_display_connect(NULL);
     if (!app.display) {
         fprintf(stderr, "[infynitae-wallpaper] Error: could not connect to Wayland display\n");
-        g_object_unref(pixbuf);
+        if (app.pixbuf) g_object_unref(app.pixbuf);
         return 1;
     }
 
@@ -788,7 +814,7 @@ int main(int argc, char *argv[]) {
     if (app.registry) wl_registry_destroy(app.registry);
     wl_display_disconnect(app.display);
 
-    g_object_unref(pixbuf);
+    if (app.pixbuf) g_object_unref(app.pixbuf);
 
     return 0;
 }
