@@ -39,6 +39,7 @@ jobs:
       - run: sh tools/test-sleep-lock
       - run: sh tools/test-edge-child-signals
       - run: sh tools/test-edge-app-search
+      - run: sh tools/test-edge-config-value
       - run: sh tools/test-mako-config
       - run: sh tools/test-reload-match
       - run: sh tools/test-launch-fast
