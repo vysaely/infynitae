@@ -5690,6 +5690,21 @@ mod tests {
         assert_eq!(*c.stage.mapped_elements().first().unwrap(), ws[0]);
     }
 
+    /// Back in front, the fullscreen window is on top again (owner, 2026-11-05: games came
+    /// back under the windows that had been over them while it stood aside).
+    #[test]
+    fn a_fullscreen_window_back_in_front_is_on_top_again() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, ws) = fullscreen_rig(&mut c, &mut i, &mut t);
+        press_overview(&mut c, &mut i);
+        assert!(c.is_presentation_suppressed(a));
+        assert_eq!(*c.stage.mapped_elements().first().unwrap(), ws[0]);
+        let mut fx = Vec::new();
+        c.unsuppress_presentation(a, &mut fx);
+        assert!(!c.is_presentation_suppressed(a));
+        assert_eq!(*c.stage.mapped_elements().last().unwrap(), ws[0]);
+    }
+
     /// Super+arrow (owner, 2026-11-01): to the nearest window that way, the camera with it.
     #[test]
     fn super_arrow_goes_to_the_nearest_window_that_way() {

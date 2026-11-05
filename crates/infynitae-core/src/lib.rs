@@ -767,6 +767,11 @@ impl Core {
             .position(|&o| o == output)
         {
             self.presentation_suppressed.swap_remove(pos);
+            // stepping aside put it below the others; back in front, it goes back on top
+            // (owner, 2026-11-05: games came back under the windows that had been over them)
+            if let Some(element) = self.presentation(output) {
+                self.stage.raise(element);
+            }
             self.reconcile_presentation_change(output, out);
         }
     }
@@ -780,6 +785,9 @@ impl Core {
             .position(|&o| o == output)
         {
             self.presentation_suppressed.swap_remove(pos);
+            if let Some(element) = self.presentation(output) {
+                self.stage.raise(element);
+            }
             self.invalidate_frame(output);
         }
     }
