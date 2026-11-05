@@ -1,0 +1,72 @@
+#!/bin/sh
+# tools/test-launch-fast: a Super+key action (live/launch.sh) does not redo the session's setup.
+# With stand-ins on PATH that log their calls, it checks: the first action pushes the environment
+# to D-Bus and systemd and starts the portal; the next ones push nothing and search no processes
+# (each press used to cost a pgrep -f and two D-Bus round trips); a changed display is pushed again;
+# a portal that died is started again; Super+W reaches the edge.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-launch-fast.XXXXXX")
+trap 'kill $(cat "$TMP/portal.pids" 2>/dev/null) 2>/dev/null || true; rm -rf "$TMP"' EXIT INT TERM
+BIN="$TMP/bin"
+HOMEDIR="$TMP/home"
+RUN="$TMP/run"
+LOG="$TMP/calls"
+mkdir -p "$BIN" "$HOMEDIR/.local/bin" "$HOMEDIR/.config/infynitae" "$RUN"
+chmod 700 "$RUN"
+ln -s "$REPO_DIR" "$HOMEDIR/infynitae"
+for tool in dbus-update-activation-environment systemctl pgrep localectl; do
+    printf '#!/bin/sh\necho "%s $*" >> "%s"\n' "$tool" "$LOG" > "$BIN/$tool"
+done
+# pgrep finds nothing, like a session with no portal yet
+printf 'exit 1\n' >> "$BIN/pgrep"
+# the portal: a script named like the real one, so /proc/<pid>/comm matches (no exec, which would
+# rename it); stays up until killed
+printf '#!/bin/sh\necho $$ >> "%s"\nwhile :; do sleep 1; done\n' "$TMP/portal.pids" > "$HOMEDIR/.local/bin/infynitae-portal"
+# the edge: logs what it was asked
+printf '#!/bin/sh\necho "edge $*" >> "%s"\n' "$LOG" > "$HOMEDIR/.local/bin/infynitae-edge"
+chmod +x "$BIN"/* "$HOMEDIR/.local/bin"/*
+
+fail=0
+press() {
+    env -i HOME="$HOMEDIR" PATH="$BIN:/usr/bin:/bin" XDG_RUNTIME_DIR="$RUN" DISPLAY=:9 \
+        WAYLAND_DISPLAY="${2:-wayland-9}" XKB_DEFAULT_LAYOUT=us LIBSEAT_BACKEND=logind INFYNITAE_SETTINGS_APPLIED=1 \
+        sh "$REPO_DIR/live/launch.sh" "$1" >/dev/null 2>&1 || true
+}
+count() { grep -c "^$1" "$LOG" 2>/dev/null || true; }
+portals() { if [ -f "$TMP/portal.pids" ]; then wc -l < "$TMP/portal.pids" | tr -d ' '; else echo 0; fi; }
+check() {
+    if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected $3, got $2"; fail=1; fi
+}
+
+: > "$LOG"
+press apps
+sleep 0.3
+check "first press pushes the environment to D-Bus" "$(count dbus-update)" 1
+check "first press pushes it to systemd" "$(count 'systemctl --user import-environment')" 1
+check "first press starts the portal" "$(portals)" 1
+check "Super+W reaches the edge" "$(count 'edge apps')" 1
+
+: > "$LOG"
+press apps
+press windows
+press apps
+sleep 0.3
+check "later presses push nothing to D-Bus" "$(count dbus-update)" 0
+check "later presses push nothing to systemd" "$(count 'systemctl --user import-environment')" 0
+check "later presses search no processes" "$(count pgrep)" 0
+check "later presses start no second portal" "$(portals)" 1
+check "every press reached the edge" "$(count edge)" 3
+
+: > "$LOG"
+press apps wayland-8
+check "a changed WAYLAND_DISPLAY is pushed again" "$(count dbus-update)" 1
+
+kill "$(head -1 "$TMP/portal.pids")" 2>/dev/null || true
+sleep 0.2
+press apps wayland-8
+sleep 0.3
+check "a portal that died is started again" "$(portals)" 2
+
+exit $fail

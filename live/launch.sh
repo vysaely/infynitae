@@ -10,61 +10,8 @@ if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"
 fi
 
-# Load user configuration if present
-if [ -f "$HOME/infynitae/live/config.sh" ]; then
-    . "$HOME/infynitae/live/config.sh"
-fi
-
-# Automatically resolve the current Infynitae Wayland display if not already set
-if [ -z "$WAYLAND_DISPLAY" ] && [ -n "$XDG_RUNTIME_DIR" ]; then
-    for wsock in "$XDG_RUNTIME_DIR"/wayland-[0-9]*; do
-        if [ -S "$wsock" ]; then
-            export WAYLAND_DISPLAY="${wsock##*/}"
-            break
-        fi
-    done
-fi
-
-# Automatically resolve X11 DISPLAY and XAUTHORITY with auto-healing
-if [ -z "$DISPLAY" ] || [ ! -S "/tmp/.X11-unix/X${DISPLAY#*:}" ]; then
-    for xsock in /tmp/.X11-unix/X*; do
-        if [ -S "$xsock" ]; then
-            num="${xsock##*/X}"
-            export DISPLAY=":$num"
-            break
-        fi
-    done
-fi
-
-
-LATEST_XAUTH=""
-if [ -n "$XDG_RUNTIME_DIR" ]; then
-    if [ -f "$XDG_RUNTIME_DIR/infynitae-xauth" ]; then
-        LATEST_XAUTH="$XDG_RUNTIME_DIR/infynitae-xauth"
-    else
-        LATEST_XAUTH=$(ls -t "$XDG_RUNTIME_DIR"/infynitae-xauth-* 2>/dev/null | head -1)
-    fi
-fi
-
-if [ -z "$XAUTHORITY" ] || [ ! -f "$XAUTHORITY" ]; then
-    if [ -n "$LATEST_XAUTH" ] && [ -f "$LATEST_XAUTH" ]; then
-        export XAUTHORITY="$LATEST_XAUTH"
-    elif [ -f "$HOME/.Xauthority" ]; then
-        export XAUTHORITY="$HOME/.Xauthority"
-    fi
-elif [ -n "$LATEST_XAUTH" ] && [ -f "$LATEST_XAUTH" ] && [ "$XAUTHORITY" != "$LATEST_XAUTH" ]; then
-    export XAUTHORITY="$LATEST_XAUTH"
-fi
-
-if [ -n "$XAUTHORITY" ] && [ -f "$XAUTHORITY" ]; then
-    if [ -n "$XDG_RUNTIME_DIR" ] && [ "$XAUTHORITY" != "$XDG_RUNTIME_DIR/infynitae-xauth" ]; then
-        ln -sf "$XAUTHORITY" "$XDG_RUNTIME_DIR/infynitae-xauth" 2>/dev/null || true
-    fi
-    # never replace a real ~/.Xauthority (another desktop's); only ours, a symlink
-    if [ "$XAUTHORITY" != "$HOME/.Xauthority" ] && { [ -L "$HOME/.Xauthority" ] || [ ! -e "$HOME/.Xauthority" ]; }; then
-        ln -sf "$XAUTHORITY" "$HOME/.Xauthority" 2>/dev/null || true
-    fi
-fi
+# env.sh loaded the user's config (live/config.sh) and resolved WAYLAND_DISPLAY, DISPLAY and
+# XAUTHORITY; a second copy of both ran here on every Super+key until 2026-11-06
 
 # Allow complete user-script overrides in ~/.config/infynitae/launch.sh if present
 USER_SCRIPT="$HOME/.config/infynitae/launch.sh"

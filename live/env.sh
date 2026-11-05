@@ -175,10 +175,25 @@ mkdir -p "$HOME/.local/state/infynitae"
 for PORTAL_BIN in "$HOME/.local/bin/infynitae-portal" "$HOME/infynitae/live/infynitae-portal"; do
     [ -x "$PORTAL_BIN" ] && break
 done
-# one instance: matched by its program path (kernel process names stop at 15 characters)
-if [ -x "$PORTAL_BIN" ] && ! pgrep -f '(^|/)infynitae-portal( |$)' >/dev/null 2>&1; then
-    "$PORTAL_BIN" >> "$PORTAL_LOG" 2>&1 &
+# one instance. Every Super+key runs this file, so the running portal is found by the PID it was
+# started with (a shell builtin read, no process scan: pgrep -f cost 14 ms a press), and only
+# when that is gone by its program path (kernel process names stop at 15 characters).
+_infy_portal_pid="${XDG_RUNTIME_DIR:-/tmp}/infynitae-portal.pid"
+_infy_portal_up=false
+if [ -r "$_infy_portal_pid" ] && read -r _infy_p < "$_infy_portal_pid" 2>/dev/null \
+    && [ -n "$_infy_p" ] && [ -r "/proc/$_infy_p/comm" ] && read -r _infy_c < "/proc/$_infy_p/comm" \
+    && [ "$_infy_c" = "infynitae-porta" ]; then
+    _infy_portal_up=true
+elif pgrep -f '(^|/)infynitae-portal( |$)' > "$_infy_portal_pid.new" 2>/dev/null; then
+    head -1 "$_infy_portal_pid.new" > "$_infy_portal_pid" 2>/dev/null
+    _infy_portal_up=true
 fi
+rm -f "$_infy_portal_pid.new"
+if [ -x "$PORTAL_BIN" ] && [ "$_infy_portal_up" = false ]; then
+    "$PORTAL_BIN" >> "$PORTAL_LOG" 2>&1 &
+    echo $! > "$_infy_portal_pid" 2>/dev/null
+fi
+unset _infy_portal_pid _infy_portal_up _infy_p _infy_c
 
 # 8. Resolve WAYLAND_DISPLAY, DISPLAY, and XAUTHORITY with auto-healing
 # WAYLAND_DISPLAY when unset: the socket the newest compositor start announced, else the first
@@ -242,7 +257,13 @@ if [ -n "$XAUTHORITY" ] && [ -f "$XAUTHORITY" ]; then
     fi
 fi
 
-# 9. Notify D-Bus / systemd activation environment if available
+# 9. Notify D-Bus / systemd activation environment if available: once per session and again only
+# when a pushed value changed (an Xwayland restart: new DISPLAY or XAUTHORITY), not on every Super+key
+_infy_env_key="$WAYLAND_DISPLAY|$DISPLAY|$XAUTHORITY|$XDG_CURRENT_DESKTOP|$XCURSOR_THEME|$XCURSOR_SIZE|$DCONF_PROFILE|$BROWSER"
+_infy_env_stamp="${XDG_RUNTIME_DIR:-/tmp}/infynitae-env-pushed"
+_infy_env_old=""
+[ -r "$_infy_env_stamp" ] && read -r _infy_env_old < "$_infy_env_stamp" 2>/dev/null
+if [ "$_infy_env_old" != "$_infy_env_key" ]; then
 if command -v dbus-update-activation-environment >/dev/null 2>&1; then
     dbus-update-activation-environment --systemd \
         WAYLAND_DISPLAY \
@@ -271,3 +292,6 @@ if command -v systemctl >/dev/null 2>&1; then
         DCONF_PROFILE \
         BROWSER 2>/dev/null || true
 fi
+printf '%s\n' "$_infy_env_key" > "$_infy_env_stamp" 2>/dev/null
+fi
+unset _infy_env_key _infy_env_stamp _infy_env_old
