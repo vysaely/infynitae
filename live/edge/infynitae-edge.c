@@ -41,6 +41,7 @@
 #include <xkbcommon/xkbcommon.h>
 
 #include "app-search.h"
+#include "config-value.h"
 #include "child-signals.h"
 #include "../wallpaper/wlr-layer-shell-protocol.h"
 #include "wlr-foreign-toplevel-protocol.h"
@@ -199,6 +200,11 @@ typedef struct EdgeApp {
     ControlSubpanel subpanel;
     bool kb_grab;
     double anim_progress;
+    /* CLOCK_MONOTONIC of the last animation step (0: none yet): the panel opens in OPEN_MS and
+     * closes in CLOSE_MS whatever the refresh rate and however many screens ask for frames */
+    int64_t anim_last_ns;
+    /* which opening the notification list belongs to (fetch_mako_notifications) */
+    unsigned notif_generation;
     bool dragging;
     int32_t touch_id;
     uint32_t touch_down_ms;
@@ -944,76 +950,104 @@ static void parse_clipboard_buf(EdgeApp *app, char *buf) {
     update_filters(app);
 }
 
+/* One mako list (ListNotifications or ListHistory) into the panel's notifications. */
+static void add_mako_list(EdgeApp *app, GVariant *res) {
+    GVariant *arr = g_variant_get_child_value(res, 0);
+    GVariantIter iter;
+    GVariant *dict = NULL;
+    g_variant_iter_init(&iter, arr);
+    while ((dict = g_variant_iter_next_value(&iter)) != NULL) {
+        guint32 nid = 0;
+        const gchar *app_s = NULL, *sum_s = NULL, *body_s = NULL;
+        g_variant_lookup(dict, "id", "u", &nid);
+        g_variant_lookup(dict, "app-name", "&s", &app_s);
+        g_variant_lookup(dict, "summary", "&s", &sum_s);
+        g_variant_lookup(dict, "body", "&s", &body_s);
+
+        if (nid > app->max_notif_id) app->max_notif_id = nid;
+
+        bool dup = false;
+        for (int k = 0; k < app->notif_count; k++) {
+            if (app->notifs[k].id == nid && nid != 0) {
+                dup = true;
+                break;
+            }
+        }
+
+        if (!dup && nid > app->cleared_notif_id && app->notif_count < MAX_NOTIFS) {
+            char s_clean[96] = {0}, b_clean[96] = {0}, a_clean[32] = {0};
+            sanitize_inline_text(s_clean, sizeof(s_clean), sum_s);
+            sanitize_inline_text(b_clean, sizeof(b_clean), body_s);
+            sanitize_inline_text(a_clean, sizeof(a_clean), app_s);
+
+            if (s_clean[0] != '\0' || b_clean[0] != '\0') {
+                char full_app[32], full_text[128];
+                snprintf(full_app, sizeof(full_app), "%s", a_clean[0] ? a_clean : "Notify");
+                if (s_clean[0] && b_clean[0] && strcasecmp(s_clean, b_clean) != 0) {
+                    snprintf(full_text, sizeof(full_text), "%s — %s", s_clean, b_clean);
+                } else {
+                    snprintf(full_text, sizeof(full_text), "%s", s_clean[0] ? s_clean : b_clean);
+                }
+
+                bool text_dup = false;
+                for (int k = 0; k < app->notif_count; k++) {
+                    if (strcmp(app->notifs[k].app, full_app) == 0 &&
+                        strcmp(app->notifs[k].text, full_text) == 0) {
+                        text_dup = true;
+                        break;
+                    }
+                }
+
+                if (!text_dup) {
+                    NotifItem *ni = &app->notifs[app->notif_count++];
+                    ni->id = nid;
+                    snprintf(ni->app, sizeof(ni->app), "%s", full_app);
+                    snprintf(ni->text, sizeof(ni->text), "%s", full_text);
+                }
+            }
+        }
+        g_variant_unref(dict);
+    }
+    g_variant_unref(arr);
+    g_variant_unref(res);
+}
+
+typedef struct {
+    EdgeApp *app;
+    unsigned generation;
+} MakoCall;
+
+static void on_mako_list(GObject *source, GAsyncResult *result, gpointer data) {
+    MakoCall *call = data;
+    GVariant *res = g_dbus_connection_call_finish(G_DBUS_CONNECTION(source), result, NULL);
+    EdgeApp *app = call->app;
+    /* a reply for an earlier opening is dropped: the list was started again since */
+    if (res && call->generation == app->notif_generation) {
+        add_mako_list(app, res);
+        damage_all(app);
+    } else if (res) {
+        g_variant_unref(res);
+    }
+    g_free(call);
+}
+
+/* The panel's notifications from mako, without waiting: the panel opens at once and the list
+ * fills in when mako answers (until 2026-11-06 two synchronous calls of up to 120 ms each ran
+ * before the first frame). */
 static void fetch_mako_notifications(EdgeApp *app) {
     app->notif_count = 0;
+    app->notif_generation++;
     if (!app->dbus) return;
 
     const char *methods[2] = { "ListNotifications", "ListHistory" };
     for (int m = 0; m < 2; m++) {
-        GVariant *res = g_dbus_connection_call_sync(
+        MakoCall *call = g_new0(MakoCall, 1);
+        call->app = app;
+        call->generation = app->notif_generation;
+        g_dbus_connection_call(
             app->dbus, "org.freedesktop.Notifications", "/fr/emersion/Mako",
             "fr.emersion.Mako", methods[m], NULL, G_VARIANT_TYPE("(aa{sv})"),
-            G_DBUS_CALL_FLAGS_NONE, 120, NULL, NULL);
-        if (!res) continue;
-
-        GVariant *arr = g_variant_get_child_value(res, 0);
-        GVariantIter iter;
-        GVariant *dict = NULL;
-        g_variant_iter_init(&iter, arr);
-        while ((dict = g_variant_iter_next_value(&iter)) != NULL) {
-            guint32 nid = 0;
-            const gchar *app_s = NULL, *sum_s = NULL, *body_s = NULL;
-            g_variant_lookup(dict, "id", "u", &nid);
-            g_variant_lookup(dict, "app-name", "&s", &app_s);
-            g_variant_lookup(dict, "summary", "&s", &sum_s);
-            g_variant_lookup(dict, "body", "&s", &body_s);
-
-            if (nid > app->max_notif_id) app->max_notif_id = nid;
-
-            bool dup = false;
-            for (int k = 0; k < app->notif_count; k++) {
-                if (app->notifs[k].id == nid && nid != 0) {
-                    dup = true;
-                    break;
-                }
-            }
-
-            if (!dup && nid > app->cleared_notif_id && app->notif_count < MAX_NOTIFS) {
-                char s_clean[96] = {0}, b_clean[96] = {0}, a_clean[32] = {0};
-                sanitize_inline_text(s_clean, sizeof(s_clean), sum_s);
-                sanitize_inline_text(b_clean, sizeof(b_clean), body_s);
-                sanitize_inline_text(a_clean, sizeof(a_clean), app_s);
-
-                if (s_clean[0] != '\0' || b_clean[0] != '\0') {
-                    char full_app[32], full_text[128];
-                    snprintf(full_app, sizeof(full_app), "%s", a_clean[0] ? a_clean : "Notify");
-                    if (s_clean[0] && b_clean[0] && strcasecmp(s_clean, b_clean) != 0) {
-                        snprintf(full_text, sizeof(full_text), "%s — %s", s_clean, b_clean);
-                    } else {
-                        snprintf(full_text, sizeof(full_text), "%s", s_clean[0] ? s_clean : b_clean);
-                    }
-
-                    bool text_dup = false;
-                    for (int k = 0; k < app->notif_count; k++) {
-                        if (strcmp(app->notifs[k].app, full_app) == 0 &&
-                            strcmp(app->notifs[k].text, full_text) == 0) {
-                            text_dup = true;
-                            break;
-                        }
-                    }
-
-                    if (!text_dup) {
-                        NotifItem *ni = &app->notifs[app->notif_count++];
-                        ni->id = nid;
-                        snprintf(ni->app, sizeof(ni->app), "%s", full_app);
-                        snprintf(ni->text, sizeof(ni->text), "%s", full_text);
-                    }
-                }
-            }
-            g_variant_unref(dict);
-        }
-        g_variant_unref(arr);
-        g_variant_unref(res);
+            G_DBUS_CALL_FLAGS_NONE, 500, NULL, on_mako_list, call);
     }
 }
 
@@ -1320,15 +1354,15 @@ static void load_position_config(EdgeApp *app) {
         if (strncmp(p, "EDGE_POSITION=", 14) == 0) v = p + 14;
         else if (strncmp(p, "ISLAND_EDGE=", 12) == 0) v = p + 12;
         if (v) {
-            if (strstr(v, "top")) app->bottom_edge = false;
-            else if (strstr(v, "bottom")) app->bottom_edge = true;
+            if (config_value_is(v, "top")) app->bottom_edge = false;
+            else if (config_value_is(v, "bottom")) app->bottom_edge = true;
             continue;
         }
         if (strncmp(p, "EDGE_CONTROL_SIDE=", 18) == 0) v = p + 18;
         else if (strncmp(p, "ISLAND_CONTROL_SIDE=", 20) == 0) v = p + 20;
         if (v) {
-            if (strstr(v, "left")) app->control_on_left = true;
-            else if (strstr(v, "right")) app->control_on_left = false;
+            if (config_value_is(v, "left")) app->control_on_left = true;
+            else if (config_value_is(v, "right")) app->control_on_left = false;
         } else if (strncmp(p, "SURFACE_COLOR=", 14) == 0) {
             parse_hex_rgb(p + 14, app->surface_rgb);
         } else if (strncmp(p, "BORDER_ACTIVE=", 14) == 0) {
@@ -2571,6 +2605,35 @@ static int count_nav_items(EdgeApp *app) {
 /* ========================================================================== */
 /* Animation & Wayland Listeners                                              */
 /* ========================================================================== */
+#define OPEN_MS 120.0
+#define CLOSE_MS 90.0
+
+static int64_t now_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+/* Moves the progress toward its target by the time since the last step (any screen's), so the
+ * open takes the same 120 ms at 60 Hz and at 165 Hz, and two screens don't run it twice as fast.
+ * Until 2026-11-06 each frame closed 55% of the gap: about 40 ms at 165 Hz, a pop. Returns
+ * whether it is still moving. */
+static bool step_animation(EdgeApp *app) {
+    double target = (app->mode == MODE_CLOSED) ? 0.0 : 1.0;
+    int64_t now = now_ns();
+    double dt_ms = app->anim_last_ns ? (double)(now - app->anim_last_ns) / 1e6 : 1000.0 / 60.0;
+    if (dt_ms > 50.0) dt_ms = 50.0;  /* a stalled frame does not jump to the end */
+    app->anim_last_ns = now;
+    double step = dt_ms / (target > app->anim_progress ? OPEN_MS : CLOSE_MS);
+    if (fabs(target - app->anim_progress) <= step) {
+        app->anim_progress = target;
+        app->anim_last_ns = 0;
+        return false;
+    }
+    app->anim_progress += target > app->anim_progress ? step : -step;
+    return true;
+}
+
 static void on_frame_done(void *data, struct wl_callback *cb, uint32_t time_ms) {
     (void)time_ms;
     EdgeOutput *out = data;
@@ -2583,14 +2646,10 @@ static void on_frame_done(void *data, struct wl_callback *cb, uint32_t time_ms) 
         return;
     }
 
-    double target = (app->mode == MODE_CLOSED) ? 0.0 : 1.0;
-    double diff = target - app->anim_progress;
-    if (fabs(diff) > 0.015) {
-        app->anim_progress += diff * 0.55;
+    if (step_animation(app)) {
         render_output(out);
         request_frame(out);
     } else {
-        app->anim_progress = target;
         render_output(out);
     }
 }

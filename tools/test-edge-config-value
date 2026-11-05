@@ -1,0 +1,33 @@
+#!/bin/sh
+# The edge reads EDGE_POSITION and EDGE_CONTROL_SIDE as words: quotes and comments aside, and a
+# word inside a comment never counts (strstr read `"bottom" # not top` as top). Run from the
+# repository root.
+set -eu
+dir=$(mktemp -d)
+trap 'rm -rf "$dir"' EXIT
+cat > "$dir/test.c" <<'C'
+#include <stdio.h>
+#include "config-value.h"
+static int failures;
+static void expect(const char *v, const char *word, bool want) {
+    if (config_value_is(v, word) != want) {
+        printf("FAIL: \"%s\" is %s: wanted %d\n", v, word, want);
+        failures++;
+    }
+}
+int main(void) {
+    expect("\"bottom\" # not top\n", "bottom", true);
+    expect("\"bottom\" # not top\n", "top", false);
+    expect("top\n", "top", true);
+    expect("'top'", "top", true);
+    expect("\"Top\"", "top", true);
+    expect("topmost", "top", false);
+    expect("\"left\"   # control on the left", "left", true);
+    expect("\"right\" # not left", "left", false);
+    expect("", "top", false);
+    if (failures == 0) printf("ok   config values read as words\n");
+    return failures != 0;
+}
+C
+cc -std=c11 -Wall -Wextra -Werror -I live/edge -o "$dir/test" "$dir/test.c"
+"$dir/test"
