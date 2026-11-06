@@ -70,13 +70,18 @@ fn an_apps_next_window_takes_the_place_of_the_one_that_closed() {
 }
 
 /// The next window takes the old place moved just enough to show whole (the test VM, 2026-11-01:
-/// an editor reopened 263 px past the left edge after the camera moved).
+/// an editor reopened 263 px past the left edge after the camera moved). Alone on the screen: with
+/// the rig's window W beside it, it could only show whole by covering W, which it never does
+/// (a_bigger_next_window_does_not_cover_the_neighbours).
 #[test]
 fn the_next_window_is_kept_on_screen_at_the_old_place() {
     let mut r = Rig::x8();
     r.ls.state
         .core_mut()
         .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+    r.ls.probe.destroy_toplevel(0);
+    r.ls.pump();
+    r.frame();
     let (small, _) = open(&mut r, "U", "steam", (300, 200));
     r.ls.probe.destroy_toplevel(small);
     r.ls.pump();
