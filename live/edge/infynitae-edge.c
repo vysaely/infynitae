@@ -1957,7 +1957,8 @@ static double mod_list(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p,
     if (mod == MOD_APPS) {
         for (int i = 0; i < app->filtered_app_count; i++) {
             DesktopApp *da = &app->apps[app->filtered_apps[i]];
-            rows[count++] = (ListRow){ da->name, da->generic, false, false, ACT_APP_LAUNCH, app->filtered_apps[i] };
+            /* the name alone (owner, 2026-11-07: no descriptions or counts nobody needs) */
+            rows[count++] = (ListRow){ da->name, "", false, false, ACT_APP_LAUNCH, app->filtered_apps[i] };
         }
         empty = "No matching apps";
     } else if (mod == MOD_WINDOWS) {
@@ -2024,18 +2025,6 @@ static double mod_list(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p,
         draw_text_left(cr, layout, (r->attention || r->focused) ? FONT_BODY_MEDIUM : FONT_BODY, r->primary, tx,
                        ry + ROW_H / 2.0, rx + rw - tx - 16.0 - sec_w);
         add_hitbox_nav(app, rx, ry, rw, ROW_H, r->action, r->index, start + i);
-    }
-    /* more than fit: where the selection is among them, else how many. The line is there whatever
-     * is selected: a panel never changes its size under the pointer (owner, 2026-11-07: hovering a
-     * favorite took the "1 of 38" line away and the panel jumped) */
-    if (count > LIST_ROWS) {
-        char more[32];
-        const char *what = mod == MOD_APPS ? "apps" : mod == MOD_WINDOWS ? "windows" : "items";
-        if (sel >= 0 && sel < count) snprintf(more, sizeof(more), "%d of %d", sel + 1, count);
-        else snprintf(more, sizeof(more), "%d %s", count, what);
-        set_text(cr, app, 0.40);
-        draw_text_right(cr, layout, FONT_CAPTION, more, rx + rw - 12.0, y + shown * ROW_H + TITLE_H / 2.0);
-        return shown * ROW_H + TITLE_H;
     }
     return shown * ROW_H;
 }
