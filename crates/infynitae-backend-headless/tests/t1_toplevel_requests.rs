@@ -281,6 +281,31 @@ fn requests_before_the_initial_configure_are_not_answered() {
     assert_eq!(got[0].0, (0, 0));
 }
 
+/// A window that asked to be maximized before it was shown (Firefox reopening maximized, owner
+/// 2026-11-06: it opened at the 240 x 292 it kept for its unmaximized state) is maximized when it
+/// maps: it is offered the screen, with `maximized`, as Super+Enter does. Its initial configure is
+/// still the plain one (INV-PROTO-1).
+#[test]
+fn a_maximize_asked_before_the_window_is_shown_is_granted_when_it_maps() {
+    let mut t = T::new();
+    let qh = t.ls.qh.clone();
+    let x = t.ls.probe.toplevel_uncommitted(&qh, "X", (240, 292));
+    t.toplevel(x).set_maximized();
+    t.ls.probe.surfaces[x].wl.commit();
+    t.adv();
+    let first = t.configures(x);
+    assert!(
+        !first.is_empty() && !first[0].1.contains(&MAXIMIZED),
+        "{first:?}"
+    );
+    t.adv();
+    t.adv();
+    let got = t.configures(x);
+    let last = got.last().expect("configures");
+    assert!(last.1.contains(&MAXIMIZED), "maximized once shown: {got:?}");
+    assert_eq!(last.0, (1920, 1080), "{got:?}");
+}
+
 /// An unmapped toplevel has no configure sequence until its next initial commit: a request made
 /// in between is not answered, and the re-initial commit gets exactly one configure.
 #[test]

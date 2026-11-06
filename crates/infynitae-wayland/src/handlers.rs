@@ -250,6 +250,11 @@ impl WaylandState {
         if opens && !acked_fullscreen {
             self.fit_opening_window(id, &window);
         }
+        // it asked to be maximized before it was shown: it fills the screen now
+        if opens && self.core.take_maximize_on_map(id) {
+            let fx = self.core.maximize_opened(id);
+            self.apply(&fx);
+        }
     }
 
     /// A window that opens larger than its room (`window_room`, the `configure_bounds` it was

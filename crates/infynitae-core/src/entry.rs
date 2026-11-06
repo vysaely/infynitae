@@ -1503,6 +1503,14 @@ impl Core {
             state,
             Some(crate::stage::Lifecycle::AwaitingFirstBuffer | crate::stage::Lifecycle::Mapped)
         );
+        // not shown yet: the request is kept for when it maps (owner, 2026-11-06: Firefox,
+        // saved maximized, reopened at a 240 x 292 size it had kept for its unmaximized state)
+        if self.stage.mapped(id).is_none() {
+            self.maximize_on_map.retain(|&e| e != id);
+            if on {
+                self.maximize_on_map.push(id);
+            }
+        }
         if !answerable {
             return out; // nothing is answered before the first configure or while unmapped
         }
@@ -1525,6 +1533,31 @@ impl Core {
             .any(|e| matches!(e, Effect::ToplevelConfigureSize { element, .. } if *element == id))
         {
             out.push(Effect::ToplevelConfigure(id));
+        }
+        out
+    }
+
+    /// Whether `id` asked to be maximized before it was shown (`client_maximize`); asked once,
+    /// when it maps.
+    pub fn take_maximize_on_map(&mut self, id: crate::stage::ElementId) -> bool {
+        let had = self.maximize_on_map.contains(&id);
+        self.maximize_on_map.retain(|&e| e != id);
+        had
+    }
+
+    /// A window that has just opened fills the screen under the pointer, as Super+Enter's
+    /// maximize does (it asked before it was shown); nothing for a fullscreen window or one
+    /// already maximized.
+    pub fn maximize_opened(&mut self, id: crate::stage::ElementId) -> Vec<Effect> {
+        let mut out = Vec::new();
+        let output = self
+            .pointer_output()
+            .or_else(|| self.outputs.first().map(|o| o.id));
+        if let Some(output) = output
+            && self.fullscreen_of(id).is_none()
+            && !self.maximized.iter().any(|(e, _)| *e == id)
+        {
+            self.maximize_toggle(None, output, id, &mut out);
         }
         out
     }
