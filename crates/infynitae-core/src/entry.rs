@@ -1077,11 +1077,12 @@ impl Core {
         ) else {
             return;
         };
-        // Super+Space resets the zoom to 1.0; Super+Shift+Space keeps it
+        // Super+Space resets the zoom to 1.0, or less for a window bigger than the view (all of
+        // it shown); Super+Shift+Space keeps it
         let target_zoom = if keep_zoom {
             self.cameras.zoom(camera).unwrap_or(1.0)
         } else {
-            1.0
+            crate::navigation::recenter_zoom(usable, g.2, g.3)
         };
         let Some(center) = crate::navigation::recenter_target(extent, usable, target_zoom, g)
         else {

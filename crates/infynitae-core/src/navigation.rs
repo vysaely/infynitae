@@ -167,6 +167,20 @@ pub fn recenter_target(
     })
 }
 
+/// Super+Space's zoom (owner, 2026-11-06: "a window bigger than the viewport can handle ... make
+/// Super+Space fit the scaling too"): 1.0 when the window geometry `w` x `h` (Canvas px) fits the
+/// usable area (output-logical) with a 12 px margin on each side, else the zoom at which it just
+/// does. Never above 1.0. Pure.
+pub fn recenter_zoom(usable: (f64, f64, f64, f64), w: i64, h: i64) -> f64 {
+    const MARGIN: f64 = 12.0;
+    if w <= 0 || h <= 0 {
+        return 1.0;
+    }
+    let room_w = (usable.2 - 2.0 * MARGIN).max(1.0);
+    let room_h = (usable.3 - 2.0 * MARGIN).max(1.0);
+    (room_w / w as f64).min(room_h / h as f64).min(1.0)
+}
+
 pub fn fit_target(
     view_size: (u32, u32),
     scale: f64,
@@ -461,6 +475,21 @@ pub(crate) enum Authority {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn super_space_zooms_out_only_for_a_window_bigger_than_the_view() {
+        let usable = (0.0, 0.0, 1920.0, 1080.0);
+        assert_eq!(super::recenter_zoom(usable, 800, 600), 1.0, "fits: 100%");
+        assert_eq!(super::recenter_zoom(usable, 1896, 1056), 1.0, "just fits");
+        let z = super::recenter_zoom(usable, 3792, 1056);
+        assert!((z - 0.5).abs() < 1e-9, "twice as wide: half, {z}");
+        let z = super::recenter_zoom(usable, 1000, 3168);
+        assert!(
+            (z - 1.0 / 3.0).abs() < 1e-9,
+            "three times as tall: a third, {z}"
+        );
+        assert_eq!(super::recenter_zoom(usable, 0, 600), 1.0);
+    }
+
     use super::*;
     use crate::output::tests::key;
 
