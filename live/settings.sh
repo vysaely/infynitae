@@ -119,24 +119,30 @@ EOF
     ba_hex="${BORDER_ACTIVE#\#}"
     bi_hex="${BORDER_INACTIVE#\#}"
     t_hex="${TEXT_COLOR#\#}"
+    # one look with the edge and the lock screen (2026-11-06): sans-serif 13 px, the hairline
+    # outline, rounded unless SQUARE_CORNERS
+    case "${SQUARE_CORNERS:-false}" in
+        1|true|yes|on|TRUE|True) radius=0 ;;
+        *) radius=8 ;;
+    esac
 
     mako_cfg="$HOME/.config/mako/config"
     if [ ! -f "$mako_cfg" ] || grep -q 'managed by infynitae' "$mako_cfg" 2>/dev/null; then
         mkdir -p "$HOME/.config/mako"
         put_file "$mako_cfg" << EOF
 # managed by infynitae — notifications: one border, gone after 5 s, kept in the history
-font=Sans 8.5
+font=sans-serif 10
 markup=1
 format=<b>%s</b>\n<span alpha="68%%" size="small">%b</span>
 background-color=#${s_hex}f7
 text-color=#${t_hex}
 border-color=#${bi_hex}e6
 border-size=1
-border-radius=0
-width=288
-height=84
-margin=8
-padding=8,11
+border-radius=${radius}
+width=360
+height=110
+margin=12
+padding=12,14
 default-timeout=5000
 ignore-timeout=1
 max-history=20
@@ -159,7 +165,7 @@ EOF
         put_file "$fuzzel_cfg" << EOF
 # managed by infynitae — delete this line to keep custom fuzzel settings
 [main]
-font=${FONT_NAME}:size=${FONT_SIZE}
+font=sans-serif:size=11
 prompt="› "
 terminal=$HOME/.local/bin/xdg-terminal-exec
 layer=overlay
@@ -172,14 +178,14 @@ inner-pad=4
 background=${s_hex}f7
 text=${t_hex}ff
 match=${ba_hex}ff
-selection=262b38ff
+selection=${ba_hex}2e
 selection-text=${t_hex}ff
 selection-match=${ba_hex}ff
 border=${bi_hex}e6
 
 [border]
 width=1
-radius=0
+radius=${radius}
 EOF
     fi
 
