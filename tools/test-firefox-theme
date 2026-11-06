@@ -1,0 +1,40 @@
+#!/bin/sh
+# tools/test-firefox-theme: Firefox follows the Infynitae colours (live/settings.sh, section 3c).
+# In a stand-in home with two Firefox profiles it checks: each gets chrome/infynitae.css with the
+# accent and surface; a missing userChrome.css is created with the import; one of the user's own
+# keeps its content with the import added once, as its first line; user.js gets the pref once;
+# an infynitae.css the user took over (no managed line) is kept; THEME_SYNC=false writes nothing.
+# Run from the repository root.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-firefox-theme.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+fail=0
+check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected $3, got $2"; fail=1; fi; }
+apply() { HOME="$1" CONFIG_FILE="$1/.config/infynitae/config" sh "$REPO_DIR/live/settings.sh" apply >/dev/null 2>&1 || true; }
+
+H="$TMP/a"; FF="$H/.config/mozilla/firefox"
+mkdir -p "$H/.config/infynitae" "$FF/one.default-release" "$FF/two.default/chrome"
+printf '[Profile0]\nPath=one.default-release\n\n[Profile1]\nPath=two.default\n' > "$FF/profiles.ini"
+printf '#nav-bar { padding: 2px; }\n' > "$FF/two.default/chrome/userChrome.css"
+printf 'SURFACE_COLOR="#171013"\nBORDER_ACTIVE="#cc70a9"\n' > "$H/.config/infynitae/config"
+apply "$H"; apply "$H"
+for p in one.default-release two.default; do
+    check "$p: the accent is in its style sheet" "$(grep -c 'cc70a9' "$FF/$p/chrome/infynitae.css" | tr -d ' ' | sed 's/^[1-9][0-9]*$/yes/')" "yes"
+    check "$p: the surface too" "$(grep -c '#171013' "$FF/$p/chrome/infynitae.css" | sed 's/^[1-9][0-9]*$/yes/')" "yes"
+    check "$p: userChrome.css imports it, once, first" "$(grep -c 'infynitae.css' "$FF/$p/chrome/userChrome.css") $(head -1 "$FF/$p/chrome/userChrome.css" | cut -c1-24)" '1 @import "infynitae.css";'
+    check "$p: user.js turns style sheets on, once" "$(grep -c 'legacyUserProfileCustomizations.stylesheets", true' "$FF/$p/user.js")" "1"
+done
+check "the user's own userChrome.css rules are kept" "$(grep -c 'padding: 2px' "$FF/two.default/chrome/userChrome.css")" "1"
+
+printf ':root { --toolbar-bgcolor: red; }\n' > "$FF/one.default-release/chrome/infynitae.css"
+apply "$H"
+check "a style sheet the user took over is kept" "$(cat "$FF/one.default-release/chrome/infynitae.css")" ":root { --toolbar-bgcolor: red; }"
+
+H="$TMP/b"; FF="$H/.config/mozilla/firefox"
+mkdir -p "$H/.config/infynitae" "$FF/p.default"
+printf '[Profile0]\nPath=p.default\n' > "$FF/profiles.ini"
+printf 'THEME_SYNC="false"\n' > "$H/.config/infynitae/config"
+apply "$H"
+check "THEME_SYNC=false writes nothing into Firefox" "$([ -e "$FF/p.default/chrome" ] || [ -e "$FF/p.default/user.js" ] && echo written || echo none)" "none"
+exit $fail
