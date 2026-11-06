@@ -377,20 +377,22 @@ mod tests {
         let _ = a;
     }
 
-    /// A screen sparing the GPU: a window out of use completes on every 2nd refresh at 60 Hz (about
-    /// 30 FPS), the focused one on each, and all of them again when it stops.
+    /// A screen sparing the GPU while a game fills it: a window out of use completes on every 2nd
+    /// refresh at 120 Hz (about 60 FPS), the focused one and the game on each, and all of them
+    /// again when it stops.
     #[test]
     fn a_screen_sparing_the_gpu_slows_only_the_windows_out_of_use() {
         let (mut c, _, _, mut t) = Core::new(persisted(true));
-        let (o, _) = c.output_connected(&mut t, desc("A", 60_000)).unwrap();
-        let (first, second) = (map(&mut c), map(&mut c));
+        let (o, _) = c.output_connected(&mut t, desc("A", 120_000)).unwrap();
+        let (first, second, game) = (map(&mut c), map(&mut c), map(&mut c));
         let focused = c.focus().target();
         let other = if focused == Some(first) {
             second
         } else {
             first
         };
-        assert_eq!(c.frame_tick_vec(o).len(), 2, "both are in view");
+        assert_eq!(c.frame_tick_vec(o).len(), 3, "all are in view");
+        c.set_relief_spared(o, Some(game));
         c.set_frame_relief(o, true);
         assert!(!c.frame_tick_vec(o).contains(&other), "it waits");
         assert!(c.frame_tick_vec(o).contains(&other), "its turn");
@@ -402,7 +404,20 @@ mod tests {
             "the focused one does not wait"
         );
         c.set_frame_relief(o, false);
-        assert_eq!(c.frame_tick_vec(o).len(), 2, "over");
+        assert_eq!(c.frame_tick_vec(o).len(), 3, "over");
+    }
+
+    /// With no window filling the screen, sparing the GPU slows nothing in view (owner,
+    /// 2026-11-06: picture-in-picture lagged beside a video while unfocused).
+    #[test]
+    fn a_screen_sparing_the_gpu_with_no_game_slows_nothing_in_view() {
+        let (mut c, _, _, mut t) = Core::new(persisted(true));
+        let (o, _) = c.output_connected(&mut t, desc("A", 120_000)).unwrap();
+        let (_first, _second) = (map(&mut c), map(&mut c));
+        c.set_frame_relief(o, true);
+        for _ in 0..4 {
+            assert_eq!(c.frame_tick_vec(o).len(), 2, "nothing waits");
+        }
     }
 
     /// A window that fills the screen without being fullscreen (a borderless game the camera
@@ -410,7 +425,7 @@ mod tests {
     #[test]
     fn a_screen_sparing_the_gpu_spares_the_window_that_fills_it() {
         let (mut c, _, _, mut t) = Core::new(persisted(true));
-        let (o, _) = c.output_connected(&mut t, desc("A", 60_000)).unwrap();
+        let (o, _) = c.output_connected(&mut t, desc("A", 120_000)).unwrap();
         let (first, second) = (map(&mut c), map(&mut c));
         let other = if c.focus().target() == Some(first) {
             second
@@ -422,11 +437,6 @@ mod tests {
         for _ in 0..4 {
             assert!(c.frame_tick_vec(o).contains(&other), "it never waits");
         }
-        c.set_relief_spared(o, None);
-        let ticks: Vec<bool> = (0..4)
-            .map(|_| c.frame_tick_vec(o).contains(&other))
-            .collect();
-        assert!(ticks.contains(&false), "no longer filling: it waits again");
     }
 
     /// INV-FRAME-2: the clock is the highest-refresh observer; equal refresh → lowest OutputId;
