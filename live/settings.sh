@@ -17,7 +17,22 @@ fi
 # Fallback defaults
 CURSOR_THEME="${CURSOR_THEME:-${XCURSOR_THEME:-Adwaita}}"
 CURSOR_SIZE="${CURSOR_SIZE:-${XCURSOR_SIZE:-24}}"
-FONT_NAME="${FONT_NAME:-monospace}"
+FONT_NAME="${FONT_NAME:-sans-serif}"
+# Terminals' font: TERMINAL_FONT, else FONT_NAME when that is a monospace font (as before
+# 2026-11-06, when one font served both), else monospace
+if [ -z "${TERMINAL_FONT:-}" ]; then
+    case "$FONT_NAME" in
+        monospace|Monospace) TERMINAL_FONT="$FONT_NAME" ;;
+        sans-serif|sans|Sans|"Sans Serif"|serif|Serif) TERMINAL_FONT="monospace" ;;
+        *)
+            if command -v fc-list >/dev/null 2>&1 && [ -n "$(fc-list ":family=$FONT_NAME:spacing=100" family 2>/dev/null)" ]; then
+                TERMINAL_FONT="$FONT_NAME"
+            else
+                TERMINAL_FONT="monospace"
+            fi
+            ;;
+    esac
+fi
 FONT_SIZE="${FONT_SIZE:-10}"
 ICON_THEME="${ICON_THEME:-Adwaita}"
 COLOR_SCHEME="${COLOR_SCHEME:-prefer-dark}"
@@ -73,7 +88,14 @@ Comment=Default Cursor Theme
 Inherits=$CURSOR_THEME
 EOF
 
-    # 3. Synchronize GTK 3 & GTK 4 settings.ini + gtk.css (theme sync; files only)
+    # 3. GTK 3 and GTK 4: settings.ini, and gtk.css in the system's colours (THEME_SYNC). One set of
+    # colour names for both (GTK 3's theme_*, libadwaita's window_* / view_* / accent_*); GTK 3 also
+    # gets a few widget rules, since its stock theme draws headerbars, buttons and entries in fixed
+    # colours. GTK 4 does not: libadwaita takes its look from the names and the Settings portal.
+    case "${SQUARE_CORNERS:-false}" in
+        1|true|yes|on|TRUE|True) gtk_radius=0 ;;
+        *) gtk_radius=6 ;;
+    esac
     for gtk_dir in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do
         mkdir -p "$gtk_dir"
         put_file "$gtk_dir/settings.ini" << EOF
@@ -87,20 +109,19 @@ gtk-enable-animations=false
 EOF
         gtk_css="$gtk_dir/gtk.css"
         case "${THEME_SYNC:-true}" in
-            0|false|no|off|FALSE|False) ;;
-            *)
-                if [ ! -f "$gtk_css" ] || grep -q 'managed by infynitae' "$gtk_css" 2>/dev/null; then
-                    put_file "$gtk_css" << EOF
+            0|false|no|off|FALSE|False) continue ;;
+        esac
+        [ ! -f "$gtk_css" ] || grep -q 'managed by infynitae' "$gtk_css" 2>/dev/null || continue
+        {
+            cat << EOF
 /* managed by infynitae — delete this line to keep custom GTK CSS */
 @define-color theme_bg_color $SURFACE_COLOR;
 @define-color theme_fg_color $TEXT_COLOR;
-@define-color theme_base_color $CANVAS_COLOR;
+@define-color theme_base_color mix($SURFACE_COLOR, $CANVAS_COLOR, 0.5);
 @define-color theme_text_color $TEXT_COLOR;
 @define-color theme_selected_bg_color $BORDER_ACTIVE;
 @define-color theme_selected_fg_color $SURFACE_COLOR;
 @define-color borders $BORDER_INACTIVE;
-/* GTK 4 apps on libadwaita (Celluloid, LACT) read these names; the accent itself also comes
-   through the Settings portal (infynitae-portal) */
 @define-color window_bg_color $SURFACE_COLOR;
 @define-color window_fg_color $TEXT_COLOR;
 @define-color view_bg_color mix($SURFACE_COLOR, $CANVAS_COLOR, 0.5);
@@ -119,15 +140,38 @@ EOF
 @define-color accent_bg_color $BORDER_ACTIVE;
 @define-color accent_color $BORDER_ACTIVE;
 @define-color accent_fg_color $SURFACE_COLOR;
-window, dialog, popover, menu, .background {
-    background-color: $SURFACE_COLOR;
-    color: $TEXT_COLOR;
-    border-radius: 0px;
-}
 EOF
-                fi
-                ;;
-        esac
+            [ "$gtk_dir" = "$HOME/.config/gtk-4.0" ] || cat << EOF
+window, dialog, popover, menu, .background { background-color: @theme_bg_color; color: @theme_fg_color; }
+headerbar, .titlebar, toolbar, menubar {
+    background: @headerbar_bg_color; color: @theme_fg_color; border-color: @borders; box-shadow: none;
+}
+headerbar:backdrop, .titlebar:backdrop { background: @headerbar_backdrop_color; }
+.view, iconview, treeview, textview text, list, scrolledwindow viewport {
+    background-color: @theme_base_color; color: @theme_text_color;
+}
+.sidebar, placessidebar, stacksidebar { background-color: @sidebar_bg_color; border-color: @borders; }
+button {
+    background: mix(@theme_bg_color, @theme_fg_color, 0.08); color: @theme_fg_color;
+    border: 1px solid @borders; border-radius: ${gtk_radius}px; box-shadow: none; text-shadow: none;
+}
+button:hover { background: mix(@theme_bg_color, @theme_fg_color, 0.14); }
+button:active, button:checked { background: mix(@theme_bg_color, @accent_bg_color, 0.35); }
+button.flat:not(:hover):not(:checked) { background: transparent; border-color: transparent; }
+entry, spinbutton {
+    background: @theme_base_color; color: @theme_text_color;
+    border: 1px solid @borders; border-radius: ${gtk_radius}px; box-shadow: none;
+}
+entry:focus, spinbutton:focus { border-color: @accent_bg_color; }
+*:selected, selection, .view:selected, treeview:selected, row:selected {
+    background-color: @theme_selected_bg_color; color: @theme_selected_fg_color;
+}
+scrollbar { background: transparent; border: none; }
+scrollbar slider { background: mix(@theme_bg_color, @theme_fg_color, 0.3); border: none; }
+separator { background: @borders; }
+tooltip { background: @popover_bg_color; color: @theme_fg_color; border: 1px solid @borders; }
+EOF
+        } | put_file "$gtk_css"
     done
 
     # 3b. Synchronize Mako, Fuzzel, Foot, Kitty & Alacritty theme files (when THEME_SYNC="true")
@@ -215,7 +259,7 @@ EOF
         put_file "$foot_cfg" << EOF
 # managed by infynitae — delete this line to keep custom foot settings
 [main]
-font=${FONT_NAME}:size=${FONT_SIZE}
+font=${TERMINAL_FONT}:size=${FONT_SIZE}
 pad=8x8
 
 [colors]
@@ -237,7 +281,7 @@ EOF
     mkdir -p "$HOME/.config/kitty"
     put_file "$kitty_theme" << EOF
 # managed by infynitae
-font_family      $FONT_NAME
+font_family      $TERMINAL_FONT
 font_size        $FONT_SIZE
 background       #$s_hex
 foreground       #$t_hex
@@ -264,7 +308,7 @@ dynamic_padding = true
 
 [font]
 size = $(case "$FONT_SIZE" in *.*) echo "$FONT_SIZE" ;; *) echo "$FONT_SIZE.0" ;; esac)
-normal = { family = "$FONT_NAME", style = "Regular" }
+normal = { family = "$TERMINAL_FONT", style = "Regular" }
 
 [colors.primary]
 background = "#$s_hex"
@@ -350,7 +394,6 @@ EOF
     qt_row() {  # $1 text, $2 highlight
         echo "$1, $q_btn, $q_light, $q_mid_light, $q_dark, $q_mid, $1, #ffffffff, $1, $q_base, $q_win, $q_shadow, $2, $q_on_acc, $q_link, $q_visited, $q_alt, $q_win, $q_btn, $q_text, $q_dim, $2"
     }
-    case "$FONT_NAME" in monospace|Monospace) qt_font="Sans Serif" ;; *) qt_font="$FONT_NAME" ;; esac
     for qt in qt6ct qt5ct; do
         mkdir -p "$HOME/.config/$qt/colors"
         put_file "$HOME/.config/$qt/colors/infynitae.conf" << EOF
@@ -371,8 +414,8 @@ standard_dialogs=default
 style=Fusion
 
 [Fonts]
-fixed="monospace,$FONT_SIZE,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
-general="$qt_font,$FONT_SIZE,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
+fixed="$TERMINAL_FONT,$FONT_SIZE,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
+general="$FONT_NAME,$FONT_SIZE,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
 
 [Interface]
 activate_item_on_single_click=0
@@ -431,6 +474,7 @@ EOF
         gsettings set org.gnome.desktop.interface cursor-theme "$CURSOR_THEME" 2>/dev/null || true
         gsettings set org.gnome.desktop.interface cursor-size "$CURSOR_SIZE" 2>/dev/null || true
         gsettings set org.gnome.desktop.interface font-name "$FONT_NAME $FONT_SIZE" 2>/dev/null || true
+        gsettings set org.gnome.desktop.interface monospace-font-name "$TERMINAL_FONT $FONT_SIZE" 2>/dev/null || true
         gsettings set org.gnome.desktop.interface icon-theme "$ICON_THEME" 2>/dev/null || true
         gsettings set org.gnome.desktop.interface color-scheme "$COLOR_SCHEME" 2>/dev/null || true
     fi

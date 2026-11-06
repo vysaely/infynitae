@@ -41,6 +41,19 @@ printf '[Appearance]\nstyle=kvantum\n' > "$c"
 apply "$H"
 check "a qt6ct.conf the user saved is kept" "$(sed -n 's/^style=//p' "$c")" "kvantum"
 
+check "GTK 3 gets widget rules" "$(grep -c '^button {' "$H/.config/gtk-3.0/gtk.css")" "1"
+check "GTK 4 gets colour names only" "$(grep -c '^button {' "$g")" "0"
+
+# fonts: apps FONT_NAME, terminals TERMINAL_FONT, else FONT_NAME when monospace, else monospace
+fonts() {  # $1 config lines -> "gtk|foot|qt fixed"
+    h="$TMP/f$$"; rm -rf "$h"; mkdir -p "$h/.config/infynitae"; printf "$1" > "$h/.config/infynitae/config"
+    apply "$h"
+    echo "$(sed -n 's/^gtk-font-name=//p' "$h/.config/gtk-3.0/settings.ini")|$(sed -n 's/^font=//p' "$h/.config/foot/foot.ini")|$(sed -n 's/^fixed="\([^,]*\),.*/\1/p' "$h/.config/qt6ct/qt6ct.conf")"
+}
+check "defaults: sans apps, monospace terminals" "$(fonts '')" "sans-serif 10|monospace:size=10|monospace"
+check "an old monospace FONT_NAME keeps terminals" "$(fonts 'FONT_NAME="monospace"\n')" "monospace 10|monospace:size=10|monospace"
+check "TERMINAL_FONT wins for terminals" "$(fonts 'FONT_NAME="Inter"\nTERMINAL_FONT="Hack"\n')" "Inter 10|Hack:size=10|Hack"
+
 H="$TMP/b"; mkdir -p "$H/.config/infynitae"
 printf 'THEME_SYNC="false"\n' > "$H/.config/infynitae/config"
 apply "$H"

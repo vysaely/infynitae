@@ -15,6 +15,10 @@
 #
 # A shell file: SETTING="value", '#' starts a comment. `infynitae-settings set KEY VALUE` edits
 # one setting and keeps the lines under it.
+#
+# Updates never change what you set here. A new setting is added at the end of this file at its
+# default (your file is backed up first); a renamed one keeps your value under its new name. The
+# current defaults, with their comments, are always in config.template next to this file.
 
 
 # ═══ Keyboard & mouse ═════════════════════════════════════════════════════════════ [save] ═══
@@ -259,10 +263,15 @@ CURSOR_SIZE="24"
     # default: 24
     # options: 24  · e.g. 16, 32, 48
 
-FONT_NAME="monospace"
-    # Apps' interface font
-    # default: monospace
-    # options: monospace  · any installed family: infynitae-settings list fonts
+FONT_NAME="sans-serif"
+    # Apps' interface font (GTK and Qt menus, labels, buttons)
+    # default: sans-serif
+    # options: sans-serif  · monospace  · any installed family: infynitae-settings list fonts
+
+TERMINAL_FONT=""
+    # Terminals' font (foot, kitty, alacritty) and apps' fixed-width text
+    # default: "" (FONT_NAME when that is a monospace font, else monospace)
+    # options: ""  · monospace  · any installed family
 
 FONT_SIZE="10"
     # Font size
