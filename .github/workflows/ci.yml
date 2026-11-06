@@ -46,6 +46,7 @@ jobs:
       - run: sh tools/test-launch-fast
       - run: sh tools/test-lock-render
       - run: sh tools/test-xdg-autostart
+      - run: sh tools/test-theme-from-wallpaper
       - run: sh tools/test-qt-theme
       - run: sh tools/test-portal-settings
 

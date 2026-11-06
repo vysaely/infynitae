@@ -34,6 +34,7 @@ extern char **environ;
 
 #include "wlr-layer-shell-protocol.h"
 #include "lock-cache.h"
+#include "theme-colors.h"
 
 static void sig_handler(int sig) {
     (void)sig;
@@ -685,6 +686,18 @@ int main(int argc, char *argv[]) {
             foreground = 1;
         } else if (strcmp(argv[i], "--output") == 0 && i + 1 < argc) {
             snprintf(only_output, sizeof(only_output), "%s", argv[++i]);
+        } else if (strcmp(argv[i], "--colors") == 0 && i + 1 < argc) {
+            /* the theme colours of an image (theme-colors.h), as config lines; nothing is drawn */
+            GdkPixbuf *img = gdk_pixbuf_new_from_file(argv[i + 1], NULL);
+            ThemeColors tc;
+            int rc = theme_colors_from(img, &tc);
+            if (img) g_object_unref(img);
+            if (rc != 0) {
+                fprintf(stderr, "[infynitae-wallpaper] --colors: cannot read %s\n", argv[i + 1]);
+                return 1;
+            }
+            theme_colors_print(&tc, stdout);
+            return 0;
         } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
             printf("Usage: infynitae-wallpaper [IMAGE_PATH] [MODE] [OPTIONS]\n");
             printf("Modes: fill, fit, stretch, center, tile\n");
@@ -694,6 +707,7 @@ int main(int argc, char *argv[]) {
             printf("  --overlay          Show IMAGE above every window (a frozen screen), in the\n");
             printf("                     foreground, leaving the wallpaper running\n");
             printf("  --output NAME      Only on the output NAME (e.g. DP-1)\n");
+            printf("  --colors IMAGE     Print theme colours taken from IMAGE (config lines)\n");
             printf("  -h, --help         Show this help message\n");
             return 0;
         } else if (target[0] == '\0') {

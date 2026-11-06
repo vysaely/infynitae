@@ -305,6 +305,13 @@ THEME_SYNC="true"
     # default: true
     # options: true  · false
 
+THEME_FROM_WALLPAPER="false"
+    # Take the colours above from the wallpaper whenever it changes: the accent (BORDER_ACTIVE)
+    # alone, or the accent, backgrounds and borders. Once, by hand: infynitae-settings
+    # wallpaper-colors [reload]
+    # default: false
+    # options: false  · accent  · all
+
 WALLPAPER=""
     # Wallpaper image (PNG, JPG, WebP; "$HOME/…" works) [save]
     # default: ""

@@ -65,7 +65,53 @@ put_file() {
     return 0
 }
 
+# Writes KEY="VALUE" (a value without quotes in it, e.g. a colour) over the line that sets KEY, or
+# at the end; the comment lines under it stay.
+config_write() {
+    export CW_KEY="$1" CW_VAL="$2"
+    awk 'BEGIN { k = ENVIRON["CW_KEY"]; v = ENVIRON["CW_VAL"]; found = 0 }
+        substr($0, 1, length(k) + 1) == k "=" { print k "=\"" v "\""; found = 1; next }
+        { print }
+        END { if (!found) print k "=\"" v "\"" }' "$CONFIG_FILE" > "$CONFIG_FILE.tmp.$$" \
+        && mv -f "$CONFIG_FILE.tmp.$$" "$CONFIG_FILE"
+}
+
+# The theme colours from an image (infynitae-wallpaper --colors) into the config: the accent alone
+# ("accent") or the accent, surface, canvas and borders ("all"). Returns 1 when the image cannot be
+# read or the helper is missing; the config is then unchanged.
+wallpaper_colors() {
+    wc_image="$1" wc_what="${2:-all}"
+    wc_bin="$HOME/.local/bin/infynitae-wallpaper"
+    [ -x "$wc_bin" ] && [ -n "$wc_image" ] || return 1
+    wc_out=$("$wc_bin" --colors "$wc_image" 2>/dev/null) || return 1
+    printf '%s\n' "$wc_out" | while IFS='=' read -r wc_key wc_val; do
+        wc_val=$(printf '%s' "$wc_val" | tr -d '"')
+        case "$wc_val" in \#[0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F][0-9a-fA-F]) ;; *) continue ;; esac
+        [ "$wc_what" = accent ] && [ "$wc_key" != BORDER_ACTIVE ] && continue
+        config_write "$wc_key" "$wc_val"
+    done
+    return 0
+}
+
 apply_settings() {
+    # THEME_FROM_WALLPAPER: a new wallpaper (path or file changed) gives the theme its colours
+    case "${THEME_FROM_WALLPAPER:-false}" in
+        accent|all|true|1|yes|on)
+            twf_what=all
+            [ "$THEME_FROM_WALLPAPER" = accent ] && twf_what=accent
+            twf_wp=$(eval "printf '%s' \"${WALLPAPER:-}\"" 2>/dev/null)
+            if [ -f "$twf_wp" ]; then
+                twf_stamp="${XDG_CACHE_HOME:-$HOME/.cache}/infynitae/theme-from-wallpaper"
+                twf_now="$twf_what $(stat -c '%s %Y' "$twf_wp" 2>/dev/null) $twf_wp"
+                if [ "$(cat "$twf_stamp" 2>/dev/null)" != "$twf_now" ] && wallpaper_colors "$twf_wp" "$twf_what"; then
+                    mkdir -p "$(dirname "$twf_stamp")"
+                    printf '%s\n' "$twf_now" > "$twf_stamp"
+                    . "$CONFIG_FILE"
+                    SURFACE_COLOR="${SURFACE_COLOR:-#111317}" BORDER_ACTIVE="${BORDER_ACTIVE:-#7aa2f7}"
+                fi
+            fi
+            ;;
+    esac
     # 1. Export standard environment variables
     export XCURSOR_THEME="$CURSOR_THEME"
     export XCURSOR_SIZE="$CURSOR_SIZE"
@@ -611,6 +657,27 @@ case "$1" in
         apply_settings
         echo "==> Settings applied."
         ;;
+    wallpaper-colors)
+        # infynitae-settings wallpaper-colors [accent|all] [IMAGE]: the theme from the wallpaper
+        wc_what=all wc_img=""
+        for a in "${2:-}" "${3:-}"; do
+            case "$a" in "") ;; accent|all) wc_what="$a" ;; *) wc_img="$a" ;; esac
+        done
+        [ -n "$wc_img" ] || wc_img=$(eval "printf '%s' \"${WALLPAPER:-}\"" 2>/dev/null)
+        if [ ! -f "$wc_img" ]; then
+            echo "No image: set WALLPAPER, or name one (infynitae-settings wallpaper-colors IMAGE)" >&2
+            exit 1
+        fi
+        cp -f "$CONFIG_FILE" "$CONFIG_FILE.bak-colors"
+        if ! wallpaper_colors "$wc_img" "$wc_what"; then
+            echo "Could not read colours from $wc_img (is infynitae-wallpaper up to date?)" >&2
+            exit 1
+        fi
+        . "$CONFIG_FILE"
+        grep -E '^(BORDER_ACTIVE|SURFACE_COLOR|CANVAS_COLOR|BORDER_INACTIVE)=' "$CONFIG_FILE"
+        apply_settings
+        echo "==> Colours from $wc_img (before: $CONFIG_FILE.bak-colors). Panels follow at once; apps on their next start."
+        ;;
     set)
         shift
         cmd_set "$@"
@@ -658,6 +725,8 @@ case "$1" in
         echo ""
         echo "Commands:"
         echo "  apply                Sync current ~/.config/infynitae/config across all toolkits"
+        echo "  wallpaper-colors [accent|all] [IMAGE]"
+        echo "                       Take the theme's colours from the wallpaper (or IMAGE)"
         echo "  update               Pull latest changes and recompile release binary"
         echo "  restore              Reset canvas zoom/viewport back to default 100% native scale"
         echo "  set <KEY> <VALUE>    Update setting and sync immediately (e.g. set CURSOR_THEME Bibata-Modern-Classic)"
