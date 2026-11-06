@@ -2856,7 +2856,7 @@ impl TurnClock {
             .iter()
             .filter(|(_, d)| *d >= Duration::from_millis(1))
             .collect();
-        parts.sort_by(|a, b| b.1.cmp(&a.1));
+        parts.sort_by_key(|p| std::cmp::Reverse(p.1));
         let marked: Duration = self.phases.iter().map(|(_, d)| *d).sum();
         let mut out: Vec<String> = parts
             .iter()
