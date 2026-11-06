@@ -440,9 +440,20 @@ fn a_dead_locker_is_started_again_by_the_compositor() {
     let t0 = std::time::Instant::now();
     assert!(!r.ls.state.restart_dead_locker(t0), "the holder lives");
     drop(x);
-    r.ls.pump();
-    assert!(r.ls.state.is_locked(), "its death unlocks nothing");
-    assert!(r.ls.state.restart_dead_locker(t0));
+    // the server notices the closed socket on a later dispatch; one pump was not always enough
+    // on a busy machine (CI, 2026-11-06: failed three times that day). Until then the holder still
+    // counts as alive and nothing is restarted, so asking again is harmless.
+    let mut restarted = false;
+    for _ in 0..200 {
+        r.ls.pump();
+        assert!(r.ls.state.is_locked(), "its death unlocks nothing");
+        if r.ls.state.restart_dead_locker(t0) {
+            restarted = true;
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(restarted, "the dead holder's locker is started again");
     assert!(
         !r.ls
             .state
