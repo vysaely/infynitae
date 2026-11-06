@@ -67,5 +67,9 @@ fav=$(rect apps 'FAVORITES="app0 Steam app3"' | cut -d' ' -f4)
 if [ "$fav" -gt "$plain" ]; then echo "ok   favorites show in the apps panel ($plain -> $fav px)"; else echo "FAIL favorites: $plain -> $fav"; fail=1; fi
 searched=$(INFYNITAE_EDGE_RENDER_SEARCH=fire rect apps 'FAVORITES="app0 Steam app3"' | cut -d' ' -f4)
 if [ "$searched" -lt "$fav" ]; then echo "ok   a search hides the favorites"; else echo "FAIL search with favorites: $searched"; fail=1; fi
+# the panel keeps its size whatever is selected (a favorite or a row of the list)
+on_fav=$(INFYNITAE_EDGE_RENDER_SELECT=0 rect apps 'FAVORITES="app0 Steam app3"' | cut -d' ' -f4)
+on_row=$(INFYNITAE_EDGE_RENDER_SELECT=5 rect apps 'FAVORITES="app0 Steam app3"' | cut -d' ' -f4)
+if [ "$on_fav" = "$on_row" ]; then echo "ok   the apps panel keeps its height whatever is selected ($on_fav px)"; else echo "FAIL height moves with the selection: $on_fav vs $on_row"; fail=1; fi
 if HOME="$TMP/home" "$TMP/edge" --render nosuch 1920x1080 "$TMP/p.png" 2>/dev/null; then echo "FAIL an unknown panel rendered"; fail=1; else echo "ok   an unknown panel is refused"; fi
 exit $fail

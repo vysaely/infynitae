@@ -2025,10 +2025,14 @@ static double mod_list(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p,
                        ry + ROW_H / 2.0, rx + rw - tx - 16.0 - sec_w);
         add_hitbox_nav(app, rx, ry, rw, ROW_H, r->action, r->index, start + i);
     }
-    /* more than fit: where the selection is among them */
-    if (count > LIST_ROWS && sel >= 0 && sel < count) {
+    /* more than fit: where the selection is among them, else how many. The line is there whatever
+     * is selected: a panel never changes its size under the pointer (owner, 2026-11-07: hovering a
+     * favorite took the "1 of 38" line away and the panel jumped) */
+    if (count > LIST_ROWS) {
         char more[32];
-        snprintf(more, sizeof(more), "%d of %d", sel + 1, count);
+        const char *what = mod == MOD_APPS ? "apps" : mod == MOD_WINDOWS ? "windows" : "items";
+        if (sel >= 0 && sel < count) snprintf(more, sizeof(more), "%d of %d", sel + 1, count);
+        else snprintf(more, sizeof(more), "%d %s", count, what);
         set_text(cr, app, 0.40);
         draw_text_right(cr, layout, FONT_CAPTION, more, rx + rw - 12.0, y + shown * ROW_H + TITLE_H / 2.0);
         return shown * ROW_H + TITLE_H;
@@ -3797,7 +3801,7 @@ static int render_to_png(const char *mode_name, const char *size, const char *ou
         fprintf(stderr, "[infynitae-edge] --render: no panel \"%s\" (apps, windows, control, clipboard, or a PANEL_ line's)\n", mode_name);
         return 2;
     }
-    app.selected_idx = 1;
+    app.selected_idx = getenv("INFYNITAE_EDGE_RENDER_SELECT") ? atoi(getenv("INFYNITAE_EDGE_RENDER_SELECT")) : 1;
     app.sel_shown = true;
     if (getenv("INFYNITAE_EDGE_RENDER_SEARCH")) {
         snprintf(app.search, sizeof(app.search), "%s", getenv("INFYNITAE_EDGE_RENDER_SEARCH"));
