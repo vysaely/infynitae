@@ -793,8 +793,15 @@ int main(int argc, char *argv[]) {
         posix_spawnattr_t attr;
         posix_spawnattr_init(&attr);
         posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+        /* the caller's terminal is not held open: input and output from /dev/null, errors still
+         * go where the caller's go (the session log) */
+        posix_spawn_file_actions_t files;
+        posix_spawn_file_actions_init(&files);
+        posix_spawn_file_actions_addopen(&files, STDIN_FILENO, "/dev/null", O_RDONLY, 0);
+        posix_spawn_file_actions_addopen(&files, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
         pid_t pid;
-        int rc = posix_spawn(&pid, exe, NULL, &attr, child_argv, environ);
+        int rc = posix_spawn(&pid, exe, &files, &attr, child_argv, environ);
+        posix_spawn_file_actions_destroy(&files);
         posix_spawnattr_destroy(&attr);
         if (rc != 0) {
             fprintf(stderr, "[infynitae-wallpaper] Failed to start in the background: %s\n", strerror(rc));
