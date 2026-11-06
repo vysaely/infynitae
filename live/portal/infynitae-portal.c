@@ -3,7 +3,8 @@
  * C and GIO; idle, it only waits for D-Bus calls.
  * Implements org.freedesktop.impl.portal.GlobalShortcuts for Discord, OBS, WebRTC,
  * org.freedesktop.ScreenSaver (apps keeping the screens on while they play video), and
- * RemoteDesktop with ScreenCast (remote-desktop.c).
+ * RemoteDesktop with ScreenCast (remote-desktop.c), and Settings: dark or light and the accent colour
+ * from the Infynitae config (settings.c).
  */
 
 #include <gio/gio.h>
@@ -16,6 +17,7 @@
 #include <sys/stat.h>
 
 #include "remote-desktop.h"
+#include "settings.h"
 #include <xkbcommon/xkbcommon.h>
 
 #define BUS_NAME "org.freedesktop.impl.portal.desktop.infynitae"
@@ -732,6 +734,9 @@ static void on_bus_acquired(GDBusConnection *connection,
         fflush(stdout);
     }
     remote_desktop_init(connection, OBJECT_PATH);
+    gchar *config = g_build_filename(g_get_home_dir(), ".config", "infynitae", "config", NULL);
+    portal_settings_init(connection, OBJECT_PATH, config);
+    g_free(config);
 }
 
 // -----------------------------------------------------------------------------
@@ -982,6 +987,7 @@ static void on_config_changed(GFileMonitor *monitor, GFile *file, GFile *other,
     (void)monitor; (void)file; (void)other; (void)user_data;
     if (event != G_FILE_MONITOR_EVENT_CHANGES_DONE_HINT && event != G_FILE_MONITOR_EVENT_CREATED)
         return;
+    portal_settings_config_changed();
     gchar **overrides = read_global_shortcuts();
     gboolean any = FALSE;
     for (GList *sl = sessions; sl; sl = sl->next) {
@@ -1026,6 +1032,14 @@ static void watch_config(void) {
 }
 
 int main(int argc, char *argv[]) {
+    /* --appearance CONFIG: what Settings would tell apps for that config (tools/test-portal-settings) */
+    if (argc == 3 && strcmp(argv[1], "--appearance") == 0) {
+        PortalAppearance a;
+        portal_appearance_read(argv[2], &a);
+        printf("color-scheme %u\naccent-color %.3f %.3f %.3f\ncontrast %u\n", a.color_scheme, a.accent[0],
+               a.accent[1], a.accent[2], a.contrast);
+        return 0;
+    }
     setup_socket_listener();
 
     guint owner_id = g_bus_own_name(G_BUS_TYPE_SESSION,

@@ -153,10 +153,16 @@ case "${REMOTE_DESKTOP:-false}" in
         REMOTE_IFACES="org.freedesktop.impl.portal.RemoteDesktop;org.freedesktop.impl.portal.ScreenCast;"
         SCREENCAST_BACKEND="infynitae" RD_BACKEND="infynitae" ;;
 esac
+# Settings (dark or light, the accent colour) from infynitae-portal once the installed one has it
+# (built before 2026-11-06 it does not: the GTK portal alone answers then)
+SETTINGS_IFACE="" SETTINGS_BACKEND="gtk"
+if grep -qF org.freedesktop.impl.portal.Settings "$HOME/.local/bin/infynitae-portal" 2>/dev/null; then
+    SETTINGS_IFACE="org.freedesktop.impl.portal.Settings;" SETTINGS_BACKEND="infynitae;gtk"
+fi
 cat << EOF > "$PORTAL_DATA_DIR/infynitae.portal"
 [portal]
 DBusName=org.freedesktop.impl.portal.desktop.infynitae
-Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;$REMOTE_IFACES
+Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;$SETTINGS_IFACE$REMOTE_IFACES
 UseIn=infynitae;wlroots;
 EOF
 
@@ -169,7 +175,7 @@ org.freedesktop.impl.portal.GlobalShortcuts=infynitae
 org.freedesktop.impl.portal.RemoteDesktop=$RD_BACKEND
 org.freedesktop.impl.portal.ScreenCast=$SCREENCAST_BACKEND
 org.freedesktop.impl.portal.Screenshot=wlr
-org.freedesktop.impl.portal.Settings=gtk
+org.freedesktop.impl.portal.Settings=$SETTINGS_BACKEND
 org.freedesktop.impl.portal.FileChooser=gtk
 org.freedesktop.impl.portal.AppChooser=gtk
 org.freedesktop.impl.portal.Notification=gtk

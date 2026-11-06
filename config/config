@@ -143,7 +143,7 @@ BORDER_WIDTH="1"
     # options: 1  · 0 none  · any number
 
 BORDER_ACTIVE="#7aa2f7"
-    # Border of the focused window
+    # Border of the focused window, and the accent colour apps use (selection, switches, links)
     # default: "#7aa2f7"
     # options: "#7aa2f7"  · any "#rrggbb"
 
@@ -275,7 +275,7 @@ ICON_THEME="Adwaita"
     # options: Adwaita  · Papirus-Dark  · any installed theme (GTK and Qt apps)
 
 COLOR_SCHEME="prefer-dark"
-    # Apps' light or dark look
+    # Apps' light or dark look (GTK, Qt, and apps that ask the desktop: Firefox, Chromium, Electron)
     # default: prefer-dark
     # options: prefer-dark  · prefer-light
 

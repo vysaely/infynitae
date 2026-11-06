@@ -286,7 +286,7 @@ SESSION
     cat > "$HOME/.local/share/xdg-desktop-portal/portals/infynitae.portal" <<'PORTAL'
 [portal]
 DBusName=org.freedesktop.impl.portal.desktop.infynitae
-Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;
+Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;org.freedesktop.impl.portal.Settings;
 UseIn=infynitae;wlroots;
 PORTAL
     # the battery's charge limit (BATTERY_LIMIT), settable by this user where supported

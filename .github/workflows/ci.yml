@@ -33,7 +33,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglib2.0-dev libwayland-dev libxkbcommon-dev libpolkit-agent-1-dev libgtk-3-dev libcairo2-dev libpango1.0-dev libpam0g-dev libgdk-pixbuf-2.0-dev fonts-dejavu-core
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libglib2.0-dev libwayland-dev libxkbcommon-dev libpolkit-agent-1-dev libgtk-3-dev libcairo2-dev libpango1.0-dev libpam0g-dev libgdk-pixbuf-2.0-dev fonts-dejavu-core dbus libglib2.0-bin
       - run: sh live/build-helpers.sh "$PWD" "$RUNNER_TEMP/bin"
       - run: sh tools/test-automount
       - run: sh tools/test-sleep-lock
@@ -46,6 +46,7 @@ jobs:
       - run: sh tools/test-launch-fast
       - run: sh tools/test-lock-render
       - run: sh tools/test-qt-theme
+      - run: sh tools/test-portal-settings
 
   # OB-19: production architecture enforcement.
   verify-architecture:

@@ -1,5 +1,6 @@
 #!/bin/sh
-# tools/test-qt-theme: Qt apps follow the Infynitae colours (live/settings.sh, section 4a). In a
+# tools/test-qt-theme: Qt and GTK 4 apps follow the Infynitae colours (live/settings.sh, sections 3
+# and 4a). In a
 # stand-in home it checks: the qt6ct and qt5ct palettes are written, 22 colours a row, the window
 # colour is SURFACE_COLOR, the selection BORDER_ACTIVE, the text TEXT_COLOR; qt6ct.conf points at
 # the palette and the icon theme; a qt6ct.conf the user saved (no infynitae_managed) is kept; a
@@ -29,6 +30,9 @@ c="$H/.config/qt6ct/qt6ct.conf"
 check "qt6ct.conf uses the palette" "$(sed -n 's/^color_scheme_path=//p' "$c")" "$H/.config/qt6ct/colors/infynitae.conf"
 check "qt6ct.conf has the icon theme" "$(sed -n 's/^icon_theme=//p' "$c")" "Papirus-Dark"
 
+g="$H/.config/gtk-4.0/gtk.css"
+check "GTK 4 window_bg_color is SURFACE_COLOR" "$(sed -n 's/^@define-color window_bg_color \(.*\);$/\1/p' "$g")" "#202124"
+check "GTK 4 accent_bg_color is BORDER_ACTIVE" "$(sed -n 's/^@define-color accent_bg_color \(.*\);$/\1/p' "$g")" "#ff5577"
 sed -i 's/^BORDER_ACTIVE=.*/BORDER_ACTIVE="#33cc66"/' "$H/.config/infynitae/config"
 apply "$H"
 check "a new accent rewrites the palette" "$(role "$H/.config/qt6ct/colors/infynitae.conf" 13)" "#ff33cc66"

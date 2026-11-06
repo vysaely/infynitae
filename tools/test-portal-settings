@@ -1,0 +1,65 @@
+#!/bin/sh
+# tools/test-portal-settings: the Settings portal (live/portal/settings.c) tells apps the desktop's
+# dark or light (COLOR_SCHEME) and accent colour (BORDER_ACTIVE). Builds infynitae-portal; checks
+# what it reads from configs (`--appearance`); then, on a private D-Bus session (dbus-run-session),
+# runs it with a stand-in home and checks ReadAll and Read answer, an unknown key is NotFound, and
+# a config change sends SettingChanged with the new accent. Run from the repository root.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-portal-settings.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+P="$REPO_DIR/live/portal"
+cc -O1 -o "$TMP/portal" "$P/infynitae-portal.c" "$P/remote-desktop.c" "$P/settings.c" \
+    "$P/wlr-virtual-pointer-protocol.c" "$P/virtual-keyboard-protocol.c" "$P/xdg-output-protocol.c" \
+    $(pkg-config --cflags --libs gio-2.0 gio-unix-2.0 wayland-client xkbcommon)
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected $3, got $2"; fail=1; fi
+}
+look() { "$TMP/portal" --appearance "$1" | tr '\n' '|'; }
+
+printf 'COLOR_SCHEME="prefer-dark"\nBORDER_ACTIVE="#ff0000"\n' > "$TMP/a"
+check "dark and a red accent" "$(look "$TMP/a")" "color-scheme 1|accent-color 1.000 0.000 0.000|contrast 0|"
+printf 'COLOR_SCHEME=prefer-light   # a comment\nBORDER_ACTIVE="#336699"\n' > "$TMP/b"
+check "light, unquoted with a comment" "$(look "$TMP/b")" "color-scheme 2|accent-color 0.200 0.400 0.600|contrast 0|"
+printf 'BORDER_ACTIVE="#ff0000"\nBORDER_ACTIVE="#00ff00"\n    # BORDER_ACTIVE="#0000ff"\n' > "$TMP/c"
+check "the last value wins, comments skipped" "$(look "$TMP/c")" "color-scheme 1|accent-color 0.000 1.000 0.000|contrast 0|"
+printf 'BORDER_ACTIVE="red"\n' > "$TMP/d"
+check "not a colour: the default accent" "$(look "$TMP/d")" "color-scheme 1|accent-color 0.478 0.635 0.969|contrast 0|"
+check "no config: the defaults" "$(look "$TMP/none")" "color-scheme 1|accent-color 0.478 0.635 0.969|contrast 0|"
+
+if command -v dbus-run-session >/dev/null 2>&1 && command -v gdbus >/dev/null 2>&1; then
+    mkdir -p "$TMP/home/.config/infynitae"
+    printf 'COLOR_SCHEME="prefer-dark"\nBORDER_ACTIVE="#ff0000"\n' > "$TMP/home/.config/infynitae/config"
+    cat > "$TMP/bus.sh" <<'BUS'
+set -u
+D=org.freedesktop.impl.portal.desktop.infynitae O=/org/freedesktop/portal/desktop I=org.freedesktop.impl.portal.Settings
+HOME="$1" XDG_RUNTIME_DIR="$1" "$2" > "$1/portal.log" 2>&1 &
+pid=$!
+for _ in $(seq 50); do gdbus introspect --session --dest $D --object-path $O 2>/dev/null | grep -q "$I" && break; sleep 0.1; done
+echo "all=$(gdbus call --session --dest $D --object-path $O --method $I.ReadAll "['org.freedesktop.*']")"
+echo "one=$(gdbus call --session --dest $D --object-path $O --method $I.Read org.freedesktop.appearance color-scheme)"
+echo "unknown=$(gdbus call --session --dest $D --object-path $O --method $I.Read org.freedesktop.appearance nope 2>&1 | grep -o NotFound)"
+gdbus monitor --session --dest $D > "$1/monitor.log" 2>&1 &
+mon=$!
+sleep 0.5
+printf 'COLOR_SCHEME="prefer-dark"\nBORDER_ACTIVE="#0000ff"\n' > "$1/.config/infynitae/config.new"
+mv "$1/.config/infynitae/config.new" "$1/.config/infynitae/config"
+for _ in $(seq 30); do grep -q SettingChanged "$1/monitor.log" && break; sleep 0.1; done
+sleep 0.2
+echo "changed=$(grep SettingChanged "$1/monitor.log" | tr -d '\n')"
+kill $mon $pid 2>/dev/null
+BUS
+    out=$(dbus-run-session -- sh "$TMP/bus.sh" "$TMP/home" "$TMP/portal" 2>&1)
+    all=$(printf '%s\n' "$out" | sed -n 's/^all=//p')
+    case "$all" in *"'color-scheme': <uint32 1>"*"'accent-color': <(1.0, 0.0, 0.0)>"*) r=yes ;; *) r="$all" ;; esac
+    check "ReadAll answers dark and the accent" "$r" "yes"
+    check "Read answers one key" "$(printf '%s\n' "$out" | sed -n 's/^one=//p')" "(<uint32 1>,)"
+    check "an unknown key is NotFound" "$(printf '%s\n' "$out" | sed -n 's/^unknown=//p')" "NotFound"
+    case "$(printf '%s\n' "$out" | sed -n 's/^changed=//p')" in
+        *"'accent-color', <(0.0, 0.0, 1.0)>"*) r=yes ;; *) r=$(printf '%s\n' "$out" | sed -n 's/^changed=//p') ;; esac
+    check "a new accent is announced (SettingChanged)" "$r" "yes"
+else
+    echo "skip D-Bus checks: no dbus-run-session or gdbus"
+fi
+exit $fail

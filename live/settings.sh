@@ -99,6 +99,26 @@ EOF
 @define-color theme_selected_bg_color $BORDER_ACTIVE;
 @define-color theme_selected_fg_color $SURFACE_COLOR;
 @define-color borders $BORDER_INACTIVE;
+/* GTK 4 apps on libadwaita (Celluloid, LACT) read these names; the accent itself also comes
+   through the Settings portal (infynitae-portal) */
+@define-color window_bg_color $SURFACE_COLOR;
+@define-color window_fg_color $TEXT_COLOR;
+@define-color view_bg_color mix($SURFACE_COLOR, $CANVAS_COLOR, 0.5);
+@define-color view_fg_color $TEXT_COLOR;
+@define-color headerbar_bg_color shade($SURFACE_COLOR, 1.15);
+@define-color headerbar_fg_color $TEXT_COLOR;
+@define-color headerbar_backdrop_color $SURFACE_COLOR;
+@define-color sidebar_bg_color shade($SURFACE_COLOR, 1.1);
+@define-color sidebar_fg_color $TEXT_COLOR;
+@define-color card_bg_color mix($SURFACE_COLOR, $TEXT_COLOR, 0.05);
+@define-color card_fg_color $TEXT_COLOR;
+@define-color popover_bg_color shade($SURFACE_COLOR, 1.2);
+@define-color popover_fg_color $TEXT_COLOR;
+@define-color dialog_bg_color shade($SURFACE_COLOR, 1.15);
+@define-color dialog_fg_color $TEXT_COLOR;
+@define-color accent_bg_color $BORDER_ACTIVE;
+@define-color accent_color $BORDER_ACTIVE;
+@define-color accent_fg_color $SURFACE_COLOR;
 window, dialog, popover, menu, .background {
     background-color: $SURFACE_COLOR;
     color: $TEXT_COLOR;
