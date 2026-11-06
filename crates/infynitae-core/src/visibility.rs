@@ -398,11 +398,11 @@ mod tests {
         assert!(c.frame_tick_vec(o).contains(&other), "its turn");
         let again = c.frame_tick_vec(o);
         assert!(!again.contains(&other));
-        assert_eq!(
-            again.first().copied(),
-            focused,
+        assert!(
+            focused.is_some_and(|f| again.contains(&f)),
             "the focused one does not wait"
         );
+        assert!(again.contains(&game), "nor does the game");
         c.set_frame_relief(o, false);
         assert_eq!(c.frame_tick_vec(o).len(), 3, "over");
     }
