@@ -1,0 +1,43 @@
+#!/bin/sh
+# tools/test-edge-render: the edge's four panels (Super+W, Super+L, Super+A, Super+V), drawn by
+# `infynitae-edge --render` (the live drawing code, made-up content, no compositor), at two sizes
+# and with the panel at the top and at the bottom. Checks each PNG is that size and not blank.
+# RENDER_OUT=dir keeps them. Run from the repository root.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-edge-render.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+OUT="${RENDER_OUT:-$TMP/out}"
+mkdir -p "$OUT" "$TMP/home/.config/infynitae"
+LIVE="$REPO_DIR/live"
+cc -O1 -o "$TMP/edge" "$LIVE/edge/infynitae-edge.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
+    "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/edge/wlr-foreign-toplevel-protocol.c" \
+    $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon gio-2.0) -lm
+fail=0
+for edge in bottom top; do
+    printf 'EDGE_POSITION="%s"\nSQUARE_CORNERS="true"\n' "$edge" > "$TMP/home/.config/infynitae/config"
+    for size in 1920x1080 1280x800; do
+        for mode in apps windows control clipboard; do
+            f="$OUT/edge-$mode-$edge-$size.png"
+            if ! HOME="$TMP/home" "$TMP/edge" --render "$mode" "$size" "$f"; then
+                echo "FAIL $mode $edge $size: render failed"; fail=1; continue
+            fi
+            got=$(python3 - "$f" <<'PY'
+import struct, sys, zlib
+d = open(sys.argv[1], 'rb').read()
+w, h = struct.unpack('>II', d[16:24])
+i, raw = 8, b''
+while i < len(d):
+    n = struct.unpack('>I', d[i:i+4])[0]
+    if d[i+4:i+8] == b'IDAT': raw += d[i+8:i+8+n]
+    i += 12 + n
+px = zlib.decompress(raw); first = px[1:5]
+print(w, h, 1 if any(px[k:k+4] != first for k in range(1, len(px) - 4, 4099)) else 0)
+PY
+)
+            want="$(echo "$size" | tr x ' ') 1"
+            if [ "$got" = "$want" ]; then echo "ok   $mode, panel at the $edge, $size"; else echo "FAIL $mode $edge $size: got $got"; fail=1; fi
+        done
+    done
+done
+exit $fail

@@ -258,6 +258,16 @@ typedef struct EdgeApp {
     double surface_rgb[3];
     double border_rgb[3];
     double text_rgb[3];
+    /* BORDER_INACTIVE: every panel outline and divider (the accent, border_rgb, only marks what is
+     * selected or on); SQUARE_CORNERS: no rounding anywhere */
+    double hair_rgb[3];
+    bool hair_set;
+    bool square;
+    /* the first row shown of a list longer than LIST_ROWS (launcher, windows, clipboard) */
+    int list_scroll;
+    /* Restart / Shut down pressed once: the action and until when a second press does it */
+    int power_confirm_action;
+    int64_t power_confirm_until;
     bool wifi_on;
     char wifi_label[48];
     bool bt_on;
@@ -697,14 +707,12 @@ static void update_filters(EdgeApp *app) {
         }
     }
     if (app->mode == MODE_CLIPBOARD || app->target_mode == MODE_CLIPBOARD) {
-        int shown = app->filtered_clip_count < VISIBLE_CLIP_ITEMS ? app->filtered_clip_count : VISIBLE_CLIP_ITEMS;
+        int shown = app->filtered_clip_count;
         if (shown <= 0) app->selected_idx = 0;
         else if (app->selected_idx >= shown) app->selected_idx = shown - 1;
         return;
     }
-    int total = app->mode == MODE_APPS
-        ? (app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS)
-        : (app->filtered_win_count < 6 ? app->filtered_win_count : 6);
+    int total = app->mode == MODE_APPS ? app->filtered_app_count : app->filtered_win_count;
     if (total <= 0) app->selected_idx = 0;
     else if (app->selected_idx >= total) app->selected_idx = total - 1;
 }
@@ -1250,8 +1258,17 @@ static void draw_text_left(cairo_t *cr, PangoLayout *layout, const char *font_st
     pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
 }
 
+static void draw_text_right_max(cairo_t *cr, PangoLayout *layout, const char *font_str,
+                                const char *text, double right_x, double cy, double max_w);
+
 static void draw_text_right(cairo_t *cr, PangoLayout *layout, const char *font_str,
                             const char *text, double right_x, double cy) {
+    draw_text_right_max(cr, layout, font_str, text, right_x, cy, 72.0);
+}
+
+/* Right-aligned at right_x, cut with an ellipsis past max_w. */
+static void draw_text_right_max(cairo_t *cr, PangoLayout *layout, const char *font_str,
+                                const char *text, double right_x, double cy, double max_w) {
     PangoFontDescription *desc = pango_font_description_from_string(font_str);
     pango_layout_set_font_description(layout, desc);
     pango_font_description_free(desc);
@@ -1262,8 +1279,8 @@ static void draw_text_right(cairo_t *cr, PangoLayout *layout, const char *font_s
     PangoRectangle ink, logical;
     pango_layout_get_extents(layout, &ink, &logical);
     double w = (double)logical.width / (double)PANGO_SCALE;
-    if (w > 72.0) {
-        pango_layout_set_width(layout, (int)(72.0 * PANGO_SCALE));
+    if (w > max_w) {
+        pango_layout_set_width(layout, (int)(max_w * PANGO_SCALE));
         pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_END);
         pango_layout_get_extents(layout, &ink, &logical);
         w = (double)logical.width / (double)PANGO_SCALE;
@@ -1275,21 +1292,37 @@ static void draw_text_right(cairo_t *cr, PangoLayout *layout, const char *font_s
     pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
 }
 
+/* the panel being drawn, for the helpers below that take no EdgeApp (set by draw_panels) */
+static const struct EdgeApp *g_theme;
+static int64_t now_ns(void);
+static const double *g_theme_accent(void);
+static const double *g_theme_hair(void);
+
 /* Borderless canvas-window row: NO inner box border, only a subtle flat highlight when selected */
 static void draw_bare_item(cairo_t *cr, double x, double y, double w, double h,
                            bool active, bool selected) {
-    if (selected) {
+    const double *a = g_theme ? ((const double *)g_theme_accent()) : NULL;
+    if (selected && a) {
+        cairo_set_source_rgba(cr, a[0], a[1], a[2], 0.18);
+        fill_rect(cr, x, y, w, h);
+    } else if (selected) {
         cairo_set_source_rgba(cr, 0.15, 0.17, 0.22, 0.95);
         fill_rect(cr, x, y, w, h);
     } else if (active) {
-        cairo_set_source_rgba(cr, 0.10, 0.12, 0.16, 0.78);
+        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.04);
         fill_rect(cr, x, y, w, h);
     }
 }
 
+static void theme_hair(cairo_t *cr, double alpha) {
+    const double *hr = g_theme_hair();
+    if (hr) cairo_set_source_rgba(cr, hr[0], hr[1], hr[2], alpha);
+    else cairo_set_source_rgba(cr, 0.22, 0.25, 0.34, 0.30 * alpha);
+}
+
 static void draw_hline(cairo_t *cr, double x, double y, double w) {
     double inset = (w > 24.0) ? 8.0 : 0.0;
-    cairo_set_source_rgba(cr, 0.22, 0.25, 0.34, 0.26);
+    theme_hair(cr, 0.8);
     cairo_set_line_width(cr, 1.0);
     cairo_move_to(cr, round(x + inset), round(y) + 0.5);
     cairo_line_to(cr, round(x + w - inset), round(y) + 0.5);
@@ -1297,7 +1330,7 @@ static void draw_hline(cairo_t *cr, double x, double y, double w) {
 }
 
 static void draw_vline(cairo_t *cr, double x, double y, double h) {
-    cairo_set_source_rgba(cr, 0.22, 0.25, 0.34, 0.34);
+    theme_hair(cr, 0.8);
     cairo_set_line_width(cr, 1.0);
     cairo_move_to(cr, round(x) + 0.5, round(y));
     cairo_line_to(cr, round(x) + 0.5, round(y + h));
@@ -1335,6 +1368,8 @@ static void parse_hex_rgb(const char *val, double out[3]) {
 static void load_position_config(EdgeApp *app) {
     app->bottom_edge = true;
     app->control_on_left = false;
+    app->hair_set = false;
+    app->square = false;
     app->surface_rgb[0] = 0x11 / 255.0; app->surface_rgb[1] = 0x13 / 255.0; app->surface_rgb[2] = 0x17 / 255.0;
     app->border_rgb[0]  = 0x33 / 255.0; app->border_rgb[1]  = 0x3b / 255.0; app->border_rgb[2]  = 0x54 / 255.0;
     app->text_rgb[0]    = 0xee / 255.0; app->text_rgb[1]    = 0xf2 / 255.0; app->text_rgb[2]    = 0xf8 / 255.0;
@@ -1365,6 +1400,12 @@ static void load_position_config(EdgeApp *app) {
             else if (config_value_is(v, "right")) app->control_on_left = false;
         } else if (strncmp(p, "SURFACE_COLOR=", 14) == 0) {
             parse_hex_rgb(p + 14, app->surface_rgb);
+        } else if (strncmp(p, "BORDER_INACTIVE=", 16) == 0) {
+            parse_hex_rgb(p + 16, app->hair_rgb);
+            app->hair_set = true;
+        } else if (strncmp(p, "SQUARE_CORNERS=", 15) == 0) {
+            app->square = config_value_is(p + 15, "true") || config_value_is(p + 15, "1") ||
+                          config_value_is(p + 15, "yes") || config_value_is(p + 15, "on");
         } else if (strncmp(p, "BORDER_ACTIVE=", 14) == 0) {
             parse_hex_rgb(p + 14, app->border_rgb);
         } else if (strncmp(p, "TEXT_COLOR=", 11) == 0) {
@@ -1461,6 +1502,527 @@ static bool allocate_buffer(EdgeOutput *out) {
 
 static bool output_has_fullscreen(EdgeOutput *out);
 
+/* ========================================================================== */
+/* One look for every panel (owner, 2026-11-06: "super A and W feel weird, everything to be clean")
+ * Fonts: sans-serif everywhere (12-15 px instead of 10-11); rows 32 px; a 40 px search field on the
+ * side of the screen edge; panel outlines in the hairline colour; the accent (BORDER_ACTIVE) only
+ * for what is selected or on; rounding off with SQUARE_CORNERS.                                    */
+/* ========================================================================== */
+static const double *g_theme_accent(void) { return g_theme ? g_theme->border_rgb : NULL; }
+static const double *g_theme_hair(void) { return g_theme && g_theme->hair_set ? g_theme->hair_rgb : NULL; }
+
+#define CTRL_ROW 28.0
+#define FONT_CAPTION "sans-serif 9"
+#define FONT_BODY "sans-serif 10"
+#define FONT_BODY_MEDIUM "sans-serif Medium 10"
+#define FONT_SEARCH "sans-serif 11"
+#define LIST_ROWS 8
+#define ROW_H 32.0
+#define SEARCH_H 40.0
+#define PANEL_PAD 4.0
+
+static void set_hair(cairo_t *cr, const EdgeApp *app, double alpha) {
+    if (app->hair_set) cairo_set_source_rgba(cr, app->hair_rgb[0], app->hair_rgb[1], app->hair_rgb[2], alpha);
+    else cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], 0.14 * alpha);
+}
+
+static void set_text(cairo_t *cr, const EdgeApp *app, double alpha) {
+    cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], alpha);
+}
+
+static void set_accent(cairo_t *cr, const EdgeApp *app, double alpha) {
+    cairo_set_source_rgba(cr, app->border_rgb[0], app->border_rgb[1], app->border_rgb[2], alpha);
+}
+
+/* A rounded rectangle as the current path (square with SQUARE_CORNERS). */
+static void round_rect(cairo_t *cr, const EdgeApp *app, double x, double y, double w, double h, double r) {
+    if (app->square || r <= 0.0) {
+        cairo_rectangle(cr, x, y, w, h);
+        return;
+    }
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, x + w - r, y + r, r, -M_PI / 2, 0);
+    cairo_arc(cr, x + w - r, y + h - r, r, 0, M_PI / 2);
+    cairo_arc(cr, x + r, y + h - r, r, M_PI / 2, M_PI);
+    cairo_arc(cr, x + r, y + r, r, M_PI, 3 * M_PI / 2);
+    cairo_close_path(cr);
+}
+
+/* The panel's background and outline. */
+static void draw_panel_box(cairo_t *cr, const EdgeApp *app, double x, double y, double w, double h, double ease) {
+    cairo_new_path(cr);
+    round_rect(cr, app, x + 0.5, y + 0.5, w - 1.0, h - 1.0, 8.0);
+    cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.96 * ease);
+    cairo_fill_preserve(cr);
+    set_hair(cr, app, 0.95 * ease);
+    cairo_set_line_width(cr, 1.0);
+    cairo_stroke(cr);
+}
+
+typedef struct {
+    const char *primary;
+    const char *secondary;
+    bool focused;    /* the window with the focus: a small accent dot */
+    bool attention;  /* a window asking for attention: an accent dot and its title in medium */
+    int action;
+    int index;
+} ListRow;
+
+/* The selected row moved into view. */
+static void list_follow(EdgeApp *app, int count) {
+    if (app->selected_idx < 0) app->selected_idx = 0;
+    if (count > 0 && app->selected_idx >= count) app->selected_idx = count - 1;
+    if (app->selected_idx < app->list_scroll) app->list_scroll = app->selected_idx;
+    if (app->selected_idx >= app->list_scroll + LIST_ROWS) app->list_scroll = app->selected_idx - LIST_ROWS + 1;
+    if (app->list_scroll > count - LIST_ROWS) app->list_scroll = count - LIST_ROWS;
+    if (app->list_scroll < 0) app->list_scroll = 0;
+}
+
+/* One list panel: the search field on the screen-edge side, then up to LIST_ROWS rows growing away
+ * from it (the first result next to the field), the selected one marked, a count when there are
+ * more than fit. `rows` holds all `count` rows; `empty` is said when there are none; `right_action`
+ * (>= 0) adds a word at the right of the search field (Clear). Returns the panel rectangle. */
+static void draw_list_panel(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, int h, double ease,
+                            double panel_w, const ListRow *rows, int count, const char *placeholder,
+                            const char *empty, const char *right_word, int right_action, int rect[4]) {
+    list_follow(app, count);
+    int shown = count < LIST_ROWS ? count : LIST_ROWS;
+    int slots = shown > 0 ? shown : 1;
+    double list_h = PANEL_PAD * 2 + slots * ROW_H;
+    double total_h = SEARCH_H + 1.0 + list_h;
+    double bw = panel_w;
+    if (bw > w - 24.0) bw = w - 24.0;
+    double bx = round((w - bw) / 2.0);
+    double by = round(app->bottom_edge ? (h + total_h * (1.0 - ease) - (total_h + 12.0) * ease)
+                                       : (-total_h * (1.0 - ease) + 12.0 * ease));
+    rect[0] = (int)bx - 2;
+    rect[1] = (int)by - 2;
+    rect[2] = (int)bw + 4;
+    rect[3] = (int)total_h + 4;
+    draw_panel_box(cr, app, bx, by, bw, total_h, ease);
+
+    /* the search field, with the screen edge */
+    double sy = app->bottom_edge ? by + list_h + 1.0 : by;
+    double scy = sy + SEARCH_H / 2.0;
+    double right_w = 0.0;
+    if (right_word && right_action >= 0 && count > 0) {
+        right_w = 64.0;
+        set_text(cr, app, 0.55 * ease);
+        draw_text_right(cr, layout, FONT_CAPTION, right_word, bx + bw - 14.0, scy);
+        add_hitbox(app, bx + bw - right_w, sy, right_w, SEARCH_H, right_action, 0);
+    } else if (count > LIST_ROWS) {
+        char more[32];
+        snprintf(more, sizeof(more), "%d of %d", app->selected_idx + 1, count);
+        right_w = 72.0;
+        set_text(cr, app, 0.40 * ease);
+        draw_text_right(cr, layout, FONT_CAPTION, more, bx + bw - 14.0, scy);
+    }
+    if (app->search_len > 0) {
+        set_text(cr, app, 0.96 * ease);
+        draw_text_left(cr, layout, FONT_SEARCH, app->search, bx + 16.0, scy, bw - 32.0 - right_w);
+    } else {
+        set_text(cr, app, 0.42 * ease);
+        draw_text_left(cr, layout, FONT_SEARCH, placeholder, bx + 16.0, scy, bw - 32.0 - right_w);
+    }
+    add_hitbox(app, bx, sy, bw - right_w, SEARCH_H, ACT_SEARCH_BOX, 0);
+    /* the divider between the field and the list */
+    set_hair(cr, app, 0.8 * ease);
+    cairo_set_line_width(cr, 1.0);
+    double div_y = app->bottom_edge ? sy - 0.5 : sy + SEARCH_H + 0.5;
+    cairo_move_to(cr, bx + 1.0, round(div_y) + 0.5);
+    cairo_line_to(cr, bx + bw - 1.0, round(div_y) + 0.5);
+    cairo_stroke(cr);
+
+    double list_top = app->bottom_edge ? by : sy + SEARCH_H + 1.0;
+    if (shown == 0) {
+        set_text(cr, app, 0.45 * ease);
+        draw_text_left(cr, layout, FONT_BODY, empty, bx + 16.0, list_top + PANEL_PAD + ROW_H / 2.0, bw - 32.0);
+        return;
+    }
+    for (int k = 0; k < shown; k++) {
+        int i = app->list_scroll + k;
+        const ListRow *r = &rows[i];
+        /* row k counted from the search field outward */
+        double ry = app->bottom_edge ? list_top + PANEL_PAD + (slots - 1 - k) * ROW_H
+                                     : list_top + PANEL_PAD + k * ROW_H;
+        double rx = bx + PANEL_PAD, rw = bw - 2 * PANEL_PAD;
+        bool sel = app->selected_idx == i;
+        if (sel) {
+            cairo_new_path(cr);
+            round_rect(cr, app, rx, ry, rw, ROW_H, 6.0);
+            set_accent(cr, app, 0.18 * ease);
+            cairo_fill(cr);
+            set_accent(cr, app, 0.95 * ease);
+            fill_rect(cr, rx, ry + 6.0, 2.0, ROW_H - 12.0);
+        }
+        double tx = rx + 14.0;
+        if (r->attention || r->focused) {
+            cairo_new_path(cr);
+            set_accent(cr, app, (r->attention ? 0.95 : 0.6) * ease);
+            cairo_arc(cr, rx + 14.0, ry + ROW_H / 2.0, r->attention ? 3.5 : 2.5, 0, 2 * M_PI);
+            cairo_fill(cr);
+            tx = rx + 26.0;
+        }
+        double sec_w = 0.0;
+        if (r->secondary && r->secondary[0]) {
+            sec_w = rw * 0.34;
+            set_text(cr, app, 0.50 * ease);
+            draw_text_right_max(cr, layout, FONT_CAPTION, r->secondary, rx + rw - 12.0, ry + ROW_H / 2.0, sec_w - 8.0);
+        }
+        set_text(cr, app, (sel ? 0.98 : 0.84) * ease);
+        draw_text_left(cr, layout, (r->attention || r->focused) ? FONT_BODY_MEDIUM : FONT_BODY, r->primary, tx,
+                       ry + ROW_H / 2.0, rx + rw - tx - 16.0 - sec_w);
+        add_hitbox_nav(app, rx, ry, rw, ROW_H, r->action, r->index, i);
+    }
+}
+
+/* Everything the edge shows for a screen of w x h at the current mode and progress, into cr; the
+ * rectangle drawn in goes to *rect (x, y, w, h). Shared by the live panels and --render. */
+static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, int h, int rect[4]) {
+    g_theme = app;
+    app->hitbox_count = 0;
+
+    double p = app->anim_progress;
+    if (p < 0.0) p = 0.0;
+    if (p > 1.0) p = 1.0;
+    double ease = 1.0 - pow(1.0 - p, 3.0);
+
+    int cur_dx = 0, cur_dy = 0, cur_dw = 0, cur_dh = 0;
+
+    if (p <= 0.01) {
+        double hit_y = app->bottom_edge ? (h - 6.0) : 0.0;
+        add_hitbox(app, (w - 240.0) / 2.0, hit_y, 240.0, 6.0, ACT_CENTER_EDGE, 0);
+        double corner_x = app->control_on_left ? 0.0 : (w - 160.0);
+        add_hitbox(app, corner_x, hit_y, 160.0, 6.0, ACT_CORNER_EDGE, 0);
+    } else {
+        EdgeMode active_m = (app->mode != MODE_CLOSED) ? app->mode : app->target_mode;
+
+        /* A. Window list (Super+L): every window, title and app, the focused one and the ones
+         *    asking for attention marked */
+        if (active_m == MODE_CENTER) {
+            static ListRow rows[MAX_WINDOWS];
+            for (int i = 0; i < app->filtered_win_count; i++) {
+                CanvasWindow *cw = &app->windows[app->filtered_wins[i]];
+                rows[i] = (ListRow){ cw->title[0] ? cw->title : cw->app_id, cw->title[0] ? cw->app_id : "",
+                                     cw->focused, cw->attention, ACT_WIN_ITEM, app->filtered_wins[i] };
+            }
+            int rect[4];
+            draw_list_panel(app, cr, layout, w, h, ease, 640.0, rows, app->filtered_win_count, "Search windows",
+                            app->search_len > 0 ? "No matching windows" : "No open windows", NULL, -1, rect);
+            cur_dx = rect[0]; cur_dy = rect[1]; cur_dw = rect[2]; cur_dh = rect[3];
+        }
+
+        /* A2. Apps (Super+W): one column, the best match next to the search field */
+        if (active_m == MODE_APPS) {
+            static ListRow rows[MAX_APPS];
+            for (int i = 0; i < app->filtered_app_count; i++) {
+                DesktopApp *da = &app->apps[app->filtered_apps[i]];
+                rows[i] = (ListRow){ da->name, da->generic, false, false, ACT_APP_LAUNCH, app->filtered_apps[i] };
+            }
+            int rect[4];
+            draw_list_panel(app, cr, layout, w, h, ease, 560.0, rows, app->filtered_app_count, "Search apps",
+                            "No matching apps", NULL, -1, rect);
+            cur_dx = rect[0]; cur_dy = rect[1]; cur_dw = rect[2]; cur_dh = rect[3];
+        }
+
+        /* ─────────────────────────────────────────────────────────────────── */
+        /* B. Control panel (Super+A): one outer 1 px border                   */
+        /* ─────────────────────────────────────────────────────────────────── */
+        if (active_m == MODE_CONTROL) {
+            int sub_rows = (app->subpanel != SUB_NONE) ? (app->sub_count > 0 ? app->sub_count : 1) : 0;
+            double sub_extra_h = (app->subpanel != SUB_NONE) ? (6.0 + sub_rows * CTRL_ROW) : 0.0;
+            double tray_extra_h = (app->tray_count > 0) ? (6.0 + app->tray_count * CTRL_ROW) : 0.0;
+            int ctx_rows = (app->tray_ctx_idx >= 0 && app->tray_ctx_idx < app->tray_count)
+                ? ((app->ctx_count + 2) / 3) : 0;
+            double ctx_extra_h = ctx_rows * CTRL_ROW;
+            double notif_extra_h = (app->notif_count > 0) ? ((CTRL_ROW + 2.0) + app->notif_count * CTRL_ROW) : 0.0;
+
+            double ctrl_w = 340.0;
+            double ctrl_h = (16.0 + 6.0 * CTRL_ROW) + sub_extra_h + tray_extra_h + ctx_extra_h + notif_extra_h;
+            double ctrl_x = app->control_on_left ? 8.0 : (w - ctrl_w - 8.0);
+            double ctrl_y = round(app->bottom_edge
+                ? (h + ctrl_h * (1.0 - ease) - (ctrl_h + 8.0) * ease)
+                : (-ctrl_h * (1.0 - ease) + 8.0 * ease));
+
+            cur_dx = (int)ctrl_x - 2;
+            cur_dy = (int)ctrl_y - 2;
+            cur_dw = (int)ctrl_w + 4;
+            cur_dh = (int)ctrl_h + 4;
+
+            draw_panel_box(cr, app, ctrl_x, ctrl_y, ctrl_w, ctrl_h, ease);
+
+            double rx = ctrl_x + 1.0;
+            double rw = ctrl_w - 2.0;
+            double ry = ctrl_y + 4.0;
+
+            /* Row 1: Clock & Date (left) + Battery % (right) */
+            time_t now = time(NULL);
+            struct tm *tm_info = localtime(&now);
+            char clock_str[64];
+            strftime(clock_str, sizeof(clock_str), "%H:%M  ·  %a %b %d", tm_info);
+
+            cairo_set_source_rgba(cr, 0.90, 0.93, 0.97, 0.95);
+            draw_text_left(cr, layout, FONT_BODY_MEDIUM, clock_str, rx + 14.0, ry + 10.0, 190.0);
+
+            if (app->battery_pct >= 0) {
+                char bat_s[24];
+                snprintf(bat_s, sizeof(bat_s), "%s%d%%", app->battery_charging ? "+" : "", app->battery_pct);
+                cairo_set_source_rgba(cr, 0.62, 0.68, 0.76, 0.90);
+                draw_text_right(cr, layout, FONT_BODY, bat_s, rx + rw - 14.0, ry + 10.0);
+            }
+            ry += CTRL_ROW;
+            draw_hline(cr, rx, ry, rw);
+            ry += 2.0;
+
+            /* Row 2: Borderless Volume Track (Left-click sets level; Right-click opens Audio Sinks) */
+            double vh = CTRL_ROW;
+            draw_bare_item(cr, rx, ry, rw, vh, app->subpanel == SUB_AUDIO, false);
+
+            cairo_set_source_rgba(cr, 0.56, 0.62, 0.70, 0.90);
+            draw_text_left(cr, layout, FONT_BODY, "Volume", rx + 14.0, ry + vh / 2.0, 60.0);
+            add_hitbox(app, rx, ry, 70.0, vh, ACT_VOL_MUTE, 0);
+
+            double bx = rx + 76.0;
+            double bw = rw - 132.0;
+            double by = ry + (vh - 2.0) / 2.0;
+            theme_hair(cr, 1.0);
+            fill_rect(cr, bx, by, bw, 2.0);
+
+            double fill_w = (bw * (app->volume_muted ? 0 : app->volume_pct)) / 100.0;
+            if (fill_w > 1.0) {
+                set_accent(cr, app, 0.95 * ease);
+                fill_rect(cr, bx, by, fill_w, 2.0);
+            }
+            add_hitbox(app, bx, ry, bw, vh, ACT_VOL_BAR, (int)bx);
+
+            char v_s[16];
+            if (app->volume_muted) strcpy(v_s, "Mute");
+            else snprintf(v_s, sizeof(v_s), "%d%%", app->volume_pct);
+            double mx = bx + bw + 2.0;
+            add_hitbox(app, mx, ry, 52.0, vh, ACT_VOL_MUTE, 0);
+            cairo_set_source_rgba(cr, app->volume_muted ? 0.48 : 0.78, app->volume_muted ? 0.52 : 0.82, 0.88, 0.92);
+            draw_text_right(cr, layout, FONT_BODY, v_s, rx + rw - 14.0, ry + vh / 2.0);
+
+            ry += vh + 2.0;
+            draw_hline(cr, rx, ry, rw);
+            ry += 2.0;
+
+            /* Rows 3, 4 & 5: Borderless 3×2 Text Toggles (Wi-Fi, BT, DND, Power, Replay, Clip) */
+            double tw = floor(rw / 2.0);
+            double th = CTRL_ROW;
+            const char *p_disp = "Balanced";
+            if (strcmp(app->power_profile, "none") == 0) p_disp = "";
+            else if (strcasecmp(app->power_profile, "performance") == 0) p_disp = "Performance";
+            else if (strcasecmp(app->power_profile, "power-saver") == 0) p_disp = "Saver";
+
+            struct {
+                const char *label;
+                const char *val;
+                bool active;
+                int action;
+                bool sub_open;
+            } sw[6] = {
+                { "Wi-Fi", app->wifi_label, app->wifi_on, ACT_WIFI_TOGGLE, app->subpanel == SUB_WIFI },
+                { "Bluetooth", app->bt_label, app->bt_on, ACT_BT_TOGGLE, app->subpanel == SUB_BT },
+                { "Do not disturb", app->dnd_on ? "On" : "Off", app->dnd_on, ACT_DND_TOGGLE, false },
+                { "Power mode", p_disp, strcasecmp(app->power_profile, "performance") == 0, ACT_POWER_PROFILE, false },
+                { "Replay", app->replay_on ? "On" : "Off", app->replay_on, ACT_REPLAY_TOGGLE, false },
+                { "Save clip", "", app->replay_on, ACT_REPLAY_SAVE, false }
+            };
+
+            draw_vline(cr, rx + tw, ry + 4.0, 3.0 * th - 8.0);
+
+            for (int i = 0; i < 6; i++) {
+                int r = i / 2;
+                int c = i % 2;
+                double sx = rx + c * tw;
+                double sy = ry + r * th;
+                bool sel = (app->selected_idx == i);
+
+                draw_bare_item(cr, sx, sy, tw, th, false, sel || sw[i].sub_open);
+                cairo_set_source_rgba(cr, (sw[i].active || sel) ? 0.92 : 0.56,
+                                      (sw[i].active || sel) ? 0.95 : 0.61,
+                                      (sw[i].active || sel) ? 0.99 : 0.69, 0.95);
+                draw_text_left(cr, layout, sw[i].active ? FONT_BODY_MEDIUM : FONT_BODY,
+                               sw[i].label, sx + 14.0, sy + th / 2.0, tw * 0.58);
+
+                cairo_set_source_rgba(cr, (sw[i].active || sel) ? 0.86 : 0.44,
+                                      (sw[i].active || sel) ? 0.90 : 0.49,
+                                      (sw[i].active || sel) ? 0.96 : 0.57, 0.92);
+                draw_text_right(cr, layout, FONT_CAPTION, sw[i].val, sx + tw - 12.0, sy + th / 2.0);
+
+                add_hitbox_nav(app, sx, sy, tw, th, sw[i].action, i, i);
+            }
+
+            ry += 3 * th + 2.0;
+            int nav_cursor = 6;
+
+            /* Optional Inline Sub-List (Wi-Fi / Bluetooth / Audio Output) */
+            if (app->subpanel != SUB_NONE) {
+                draw_hline(cr, rx, ry, rw);
+                ry += 3.0;
+                if (app->sub_count == 0) {
+                    cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.80);
+                    draw_text_left(cr, layout, FONT_BODY, "None found", rx + 14.0, ry + 11.0, rw - 18.0);
+                    ry += CTRL_ROW;
+                } else {
+                    for (int i = 0; i < app->sub_count; i++) {
+                        SubItem *si = &app->sub_items[i];
+                        double sh = CTRL_ROW;
+                        int nav_i = nav_cursor++;
+                        bool sel = (app->selected_idx == nav_i);
+
+                        draw_bare_item(cr, rx, ry, rw, sh, si->active, sel);
+                        cairo_set_source_rgba(cr, (si->active || sel) ? 0.95 : 0.68,
+                                              (si->active || sel) ? 0.97 : 0.73,
+                                              (si->active || sel) ? 1.00 : 0.80, 0.95);
+                        draw_text_left(cr, layout, si->active ? FONT_BODY_MEDIUM : FONT_BODY,
+                                       si->label, rx + 14.0, ry + sh / 2.0, rw - 68.0);
+
+                        cairo_set_source_rgba(cr, 0.46, 0.52, 0.60, 0.85);
+                        draw_text_right(cr, layout, FONT_CAPTION, si->meta, rx + rw - 14.0, ry + sh / 2.0);
+
+                        add_hitbox_nav(app, rx, ry, rw, sh, ACT_SUB_SELECT, i, nav_i);
+                        ry += sh;
+                    }
+                }
+                ry += 3.0;
+            }
+
+            /* Tray Apps (ONLY actual unmapped background/tray apps; hidden if 0!) */
+            if (app->tray_count > 0) {
+                draw_hline(cr, rx, ry, rw);
+                ry += 3.0;
+                for (int i = 0; i < app->tray_count; i++) {
+                    TrayApp *ta = &app->tray_apps[i];
+                    double row_h = CTRL_ROW;
+                    int nav_i = nav_cursor++;
+                    bool ctx_open = (app->tray_ctx_idx == i);
+                    bool sel = (app->selected_idx == nav_i);
+
+                    draw_bare_item(cr, rx, ry, rw, row_h, false, sel || ctx_open);
+
+                    cairo_set_source_rgba(cr, (sel || ctx_open) ? 0.96 : 0.78,
+                                          (sel || ctx_open) ? 0.98 : 0.82, 0.90, 0.94);
+                    draw_text_left(cr, layout, FONT_BODY, ta->name, rx + 14.0, ry + row_h / 2.0, rw - 72.0);
+
+                    cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
+                    draw_text_right(cr, layout, FONT_CAPTION, ta->mem, rx + rw - 14.0, ry + row_h / 2.0);
+
+                    add_hitbox_nav(app, rx, ry, rw, row_h, ACT_TRAY_ITEM, i, nav_i);
+                    ry += row_h;
+
+                    /* App's Own Native Context Menu (from com.canonical.dbusmenu) or Open/Quit/Kill */
+                    if (ctx_open && app->ctx_count > 0) {
+                        double ch = CTRL_ROW;
+                        int cols = app->ctx_count < 3 ? app->ctx_count : 3;
+                        double cw = floor(rw / cols);
+
+                        for (int k = 0; k < app->ctx_count; k++) {
+                            int r = k / 3;
+                            int c = k % 3;
+                            double cx_b = rx + c * cw;
+                            double cy_b = ry + r * ch;
+                            int c_nav = nav_cursor++;
+                            bool c_sel = (app->selected_idx == c_nav);
+
+                            draw_bare_item(cr, cx_b, cy_b, cw, ch, true, c_sel);
+                            cairo_set_source_rgba(cr, c_sel ? 0.98 : 0.76, c_sel ? 0.98 : 0.80, 0.90, 0.95);
+                            draw_text_centered(cr, layout, FONT_BODY, app->ctx_items[k].label,
+                                               cx_b + cw / 2.0, cy_b + ch / 2.0, false);
+                            add_hitbox_nav(app, cx_b, cy_b, cw, ch, ACT_TRAY_CTX_CLICK, k, c_nav);
+                        }
+                        int rows_used = (app->ctx_count + 2) / 3;
+                        ry += rows_used * ch;
+                    }
+                }
+                ry += 3.0;
+            }
+
+            /* Notification History (from Mako D-Bus ListNotifications + ListHistory; hidden if 0) */
+            if (app->notif_count > 0) {
+                draw_hline(cr, rx, ry, rw);
+                ry += 3.0;
+                double hh = CTRL_ROW - 4.0;
+                int clr_nav = nav_cursor++;
+                bool clr_sel = (app->selected_idx == clr_nav);
+
+                cairo_set_source_rgba(cr, 0.46, 0.51, 0.60, 0.85);
+                draw_text_left(cr, layout, FONT_CAPTION, "Notifications", rx + 14.0, ry + hh / 2.0, rw - 68.0);
+
+                draw_bare_item(cr, rx + rw - 54.0, ry, 54.0, hh, false, clr_sel);
+                cairo_set_source_rgba(cr, clr_sel ? 0.96 : 0.64, clr_sel ? 0.98 : 0.70, 0.80, 0.92);
+                draw_text_right(cr, layout, FONT_CAPTION, "Clear", rx + rw - 14.0, ry + hh / 2.0);
+                add_hitbox_nav(app, rx + rw - 54.0, ry, 54.0, hh, ACT_NOTIF_CLEAR, 0, clr_nav);
+                ry += hh;
+
+                for (int i = 0; i < app->notif_count; i++) {
+                    NotifItem *ni = &app->notifs[i];
+                    double nh = CTRL_ROW;
+                    int nav_i = nav_cursor++;
+                    bool sel = (app->selected_idx == nav_i);
+
+                    draw_bare_item(cr, rx, ry, rw, nh, false, sel);
+                    cairo_set_source_rgba(cr, sel ? 0.96 : 0.76, sel ? 0.98 : 0.80, 0.88, 0.94);
+                    draw_text_left(cr, layout, FONT_BODY, ni->text, rx + 14.0, ry + nh / 2.0, rw - 68.0);
+
+                    cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
+                    draw_text_right(cr, layout, FONT_CAPTION, ni->app, rx + rw - 14.0, ry + nh / 2.0);
+
+                    add_hitbox_nav(app, rx, ry, rw, nh, ACT_NOTIF_ITEM, i, nav_i);
+                    ry += nh;
+                }
+                ry += 3.0;
+            }
+
+            /* Row 6: Borderless Session Strip (Reboot · Power Off · Log Out) */
+            draw_hline(cr, rx, ry, rw);
+            ry += 2.0;
+            double ph = CTRL_ROW;
+            double pw = floor(rw / 3.0);
+            /* Restart and Shut down ask for a second press within 3 s (power_confirm_*) */
+            bool confirming = app->power_confirm_until > now_ns();
+            const char *p_labels[3] = {
+                confirming && app->power_confirm_action == ACT_REBOOT ? "Press again" : "Restart",
+                confirming && app->power_confirm_action == ACT_POWEROFF ? "Press again" : "Shut down",
+                "Log out" };
+            int p_acts[3] = { ACT_REBOOT, ACT_POWEROFF, ACT_LOGOUT };
+
+            for (int i = 0; i < 3; i++) {
+                double px_b = rx + i * pw;
+                int p_nav = nav_cursor++;
+                bool p_sel = (app->selected_idx == p_nav);
+                draw_bare_item(cr, px_b, ry, pw, ph, false, p_sel);
+                if (i > 0) draw_vline(cr, px_b, ry + 4.0, ph - 8.0);
+                bool warn = confirming && p_acts[i] == app->power_confirm_action;
+                if (warn) cairo_set_source_rgba(cr, 0.97, 0.46, 0.56, 0.98 * ease);
+                else set_text(cr, app, (p_sel ? 0.96 : 0.70) * ease);
+                draw_text_centered(cr, layout, warn ? FONT_BODY_MEDIUM : FONT_BODY, p_labels[i], px_b + pw / 2.0, ry + ph / 2.0, false);
+                add_hitbox_nav(app, px_b, ry, pw, ph, p_acts[i], 0, p_nav);
+            }
+        }
+
+        /* C. Clipboard (Super+V): the same list, Clear at the right of the search field */
+        if (active_m == MODE_CLIPBOARD) {
+            static ListRow rows[MAX_CLIP_ITEMS];
+            for (int i = 0; i < app->filtered_clip_count; i++) {
+                int cidx = app->filtered_clips[i];
+                rows[i] = (ListRow){ app->clip_items[cidx].preview, "", false, false, ACT_CLIP_ITEM, cidx };
+            }
+            int rect[4];
+            draw_list_panel(app, cr, layout, w, h, ease, 600.0, rows, app->filtered_clip_count, "Search clipboard",
+                            app->clip_count == 0 ? "Clipboard is empty" : "No matching clipboard items", "Clear",
+                            ACT_CLIP_CLEAR, rect);
+            cur_dx = rect[0]; cur_dy = rect[1]; cur_dw = rect[2]; cur_dh = rect[3];
+        }
+    }
+
+    rect[0] = cur_dx;
+    rect[1] = cur_dy;
+    rect[2] = cur_dw;
+    rect[3] = cur_dh;
+}
+
 static void render_output(EdgeOutput *out) {
     if (!out->configured || out->width <= 0 || out->height <= 0) return;
 
@@ -1511,533 +2073,9 @@ static void render_output(EdgeOutput *out) {
     }
 
     PangoLayout *layout = pango_cairo_create_layout(cr);
-    app->hitbox_count = 0;
-
-    double p = app->anim_progress;
-    if (p < 0.0) p = 0.0;
-    if (p > 1.0) p = 1.0;
-    double ease = 1.0 - pow(1.0 - p, 3.0);
-
-    int cur_dx = 0, cur_dy = 0, cur_dw = 0, cur_dh = 0;
-
-    if (p <= 0.01) {
-        double hit_y = app->bottom_edge ? (h - 6.0) : 0.0;
-        add_hitbox(app, (w - 240.0) / 2.0, hit_y, 240.0, 6.0, ACT_CENTER_EDGE, 0);
-        double corner_x = app->control_on_left ? 0.0 : (w - 160.0);
-        add_hitbox(app, corner_x, hit_y, 160.0, 6.0, ACT_CORNER_EDGE, 0);
-    } else {
-        EdgeMode active_m = (app->mode != MODE_CLOSED) ? app->mode : app->target_mode;
-
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* A. Window strip (Super+L): one outer 1 px border                    */
-        /* ─────────────────────────────────────────────────────────────────── */
-        if (active_m == MODE_CENTER) {
-            int max_tabs = 6;
-            int tab_cnt = app->filtered_win_count < max_tabs ? app->filtered_win_count : max_tabs;
-            double sb_w = 152.0;
-
-            double row_h = 28.0;
-            double max_bar_w = w - 160.0;
-            if (max_bar_w > 780.0) max_bar_w = 780.0;
-            if (max_bar_w < 420.0) max_bar_w = w - 24.0;
-
-            double bar_w = max_bar_w;
-            double ideal_w = sb_w + (tab_cnt > 0 ? tab_cnt * 168.0 : 180.0);
-            if (ideal_w < 360.0) ideal_w = 360.0;
-            if (ideal_w < bar_w) bar_w = ideal_w;
-            double total_h = row_h;
-            double bar_x = round((w - bar_w) / 2.0);
-            double bar_y = round(app->bottom_edge
-                ? (h + total_h * (1.0 - ease) - (total_h + 8.0) * ease)
-                : (-total_h * (1.0 - ease) + 8.0 * ease));
-
-            cur_dx = (int)bar_x - 2;
-            cur_dy = (int)bar_y - 2;
-            cur_dw = (int)bar_w + 4;
-            cur_dh = (int)total_h + 4;
-
-            /* one flat panel in SURFACE_COLOR, 1 px border from the config */
-            cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.97 * ease);
-            fill_rect(cr, bar_x, bar_y, bar_w, total_h);
-
-            cairo_set_source_rgba(cr, app->border_rgb[0], app->border_rgb[1], app->border_rgb[2], 0.90 * ease);
-            cairo_set_line_width(cr, 1.0);
-            draw_rect(cr, bar_x, bar_y, bar_w, total_h);
-            cairo_stroke(cr);
-
-            double top_y = bar_y;
-
-            /* 1. Search field (left, borderless): narrows the windows */
-            if (app->search_len > 0) {
-                cairo_set_source_rgba(cr, 0.94, 0.96, 0.98, 0.96);
-                draw_text_left(cr, layout, "Sans 8.5", app->search, bar_x + 10.0, top_y + row_h / 2.0, sb_w - 18.0);
-            } else {
-                cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
-                draw_text_left(cr, layout, "Sans 8.5", "Search windows…", bar_x + 10.0, top_y + row_h / 2.0, sb_w - 18.0);
-            }
-            add_hitbox(app, bar_x, top_y, sb_w, row_h, ACT_SEARCH_BOX, 0);
-            draw_vline(cr, bar_x + sb_w, top_y + 4.0, row_h - 8.0);
-
-            /* 2. Open Window Tabs (borderless text cells separated by hairlines, flush to right border) */
-            double cur_x = bar_x + sb_w + 1.0;
-            double right_inner = bar_x + bar_w - 1.0;
-            double tabs_avail_w = right_inner - cur_x;
-            if (tab_cnt == 0) {
-                cairo_set_source_rgba(cr, 0.40, 0.44, 0.52, 0.70);
-                draw_text_left(cr, layout, "Sans 8.5", app->search_len > 0 ? "No matching windows" : "No open windows", cur_x + 10.0, top_y + row_h / 2.0, tabs_avail_w - 16.0);
-            } else {
-                double base_tab_w = floor(tabs_avail_w / tab_cnt);
-
-                for (int i = 0; i < tab_cnt; i++) {
-                    CanvasWindow *cw = &app->windows[app->filtered_wins[i]];
-                    double tx = cur_x + i * base_tab_w;
-                    double tw_cell = (i == tab_cnt - 1) ? (right_inner - tx) : base_tab_w;
-                    bool sel = (app->selected_idx == i);
-
-                    draw_bare_item(cr, tx, top_y + 1.0, tw_cell, row_h - 2.0, cw->focused, sel);
-                    if (i > 0) draw_vline(cr, tx, top_y + 4.0, row_h - 8.0);
-
-                    /* a window that wants attention (owner, 2026-10-31): an accent dot before its
-                     * title and an accent line under its tile, in the active border colour */
-                    double text_x = tx + 10.0;
-                    if (cw->attention) {
-                        cairo_set_source_rgba(cr, app->border_rgb[0], app->border_rgb[1],
-                                              app->border_rgb[2], 0.95 * ease);
-                        cairo_new_sub_path(cr);
-                        cairo_arc(cr, tx + 10.0, top_y + row_h / 2.0, 3.0, 0.0, 6.283185307179586);
-                        cairo_fill(cr);
-                        fill_rect(cr, tx + 4.0, top_y + row_h - 3.0, tw_cell - 8.0, 2.0);
-                        text_x = tx + 19.0;
-                    }
-
-                    cairo_set_source_rgba(cr, (cw->focused || sel || cw->attention) ? 0.95 : 0.62,
-                                          (cw->focused || sel || cw->attention) ? 0.97 : 0.67,
-                                          (cw->focused || sel || cw->attention) ? 1.00 : 0.75, 0.95);
-                    draw_text_left(cr, layout, (cw->focused || cw->attention) ? "Sans Medium 8.5" : "Sans 8.5",
-                                   cw->title[0] ? cw->title : cw->app_id,
-                                   text_x, top_y + row_h / 2.0, tw_cell - 8.0 - (text_x - tx));
-
-                    add_hitbox_nav(app, tx, top_y, tw_cell, row_h, ACT_WIN_ITEM, app->filtered_wins[i], i);
-                }
-            }
-        }
-
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* A2. Apps (Super+W): one outer 1 px border                           */
-        /* ─────────────────────────────────────────────────────────────────── */
-        if (active_m == MODE_APPS) {
-            int shown_apps = app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS;
-            int app_rows = ((shown_apps > 0 ? shown_apps : 1) + 1) / 2;
-
-            double row_h = 28.0;
-            double ch = 24.0;
-            double ext_h = 1.0 + app_rows * ch + 4.0;
-            double bar_w = w - 160.0;
-            if (bar_w > 520.0) bar_w = 520.0;
-            if (bar_w < 300.0) bar_w = w - 24.0;
-            double total_h = row_h + ext_h;
-            double bar_x = round((w - bar_w) / 2.0);
-            double bar_y = round(app->bottom_edge
-                ? (h + total_h * (1.0 - ease) - (total_h + 8.0) * ease)
-                : (-total_h * (1.0 - ease) + 8.0 * ease));
-
-            cur_dx = (int)bar_x - 2;
-            cur_dy = (int)bar_y - 2;
-            cur_dw = (int)bar_w + 4;
-            cur_dh = (int)total_h + 4;
-
-            /* one flat panel in SURFACE_COLOR, 1 px border from the config */
-            cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.97 * ease);
-            fill_rect(cr, bar_x, bar_y, bar_w, total_h);
-
-            cairo_set_source_rgba(cr, app->border_rgb[0], app->border_rgb[1], app->border_rgb[2], 0.90 * ease);
-            cairo_set_line_width(cr, 1.0);
-            draw_rect(cr, bar_x, bar_y, bar_w, total_h);
-            cairo_stroke(cr);
-
-            /* the search field sits on the side of the screen edge, the apps grow away from it */
-            double top_y = app->bottom_edge ? (bar_y + ext_h) : bar_y;
-            if (app->search_len > 0) {
-                cairo_set_source_rgba(cr, 0.94, 0.96, 0.98, 0.96);
-                draw_text_left(cr, layout, "Sans 8.5", app->search, bar_x + 10.0, top_y + row_h / 2.0, bar_w - 20.0);
-            } else {
-                cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
-                draw_text_left(cr, layout, "Sans 8.5", "Search apps…", bar_x + 10.0, top_y + row_h / 2.0, bar_w - 20.0);
-            }
-            add_hitbox(app, bar_x, top_y, bar_w, row_h, ACT_SEARCH_BOX, 0);
-
-            double list_y = app->bottom_edge ? (bar_y + 2.0) : (bar_y + row_h + 1.0);
-            draw_hline(cr, bar_x + 1.0, app->bottom_edge ? top_y : (bar_y + row_h), bar_w - 2.0);
-
-            if (shown_apps == 0) {
-                cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.80);
-                draw_text_left(cr, layout, "Sans 8.5", "No matching apps", bar_x + 10.0, list_y + 12.0, bar_w - 20.0);
-            } else {
-                double cw = floor((bar_w - 2.0) / 2.0);
-                for (int i = 0; i < shown_apps; i++) {
-                    DesktopApp *da = &app->apps[app->filtered_apps[i]];
-                    double ax = bar_x + 1.0 + (i % 2) * cw;
-                    double ay = list_y + (i / 2) * ch;
-                    bool sel = (app->selected_idx == i);
-
-                    draw_bare_item(cr, ax, ay, cw, ch, false, sel);
-                    cairo_set_source_rgba(cr, sel ? 0.96 : 0.74, sel ? 0.98 : 0.79, sel ? 1.0 : 0.86, 0.95);
-                    draw_text_left(cr, layout, "Sans 8.5", da->name, ax + 10.0, ay + ch / 2.0, cw - 16.0);
-                    add_hitbox_nav(app, ax, ay, cw, ch, ACT_APP_LAUNCH, app->filtered_apps[i], i);
-                }
-            }
-        }
-
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* B. Control panel (Super+A): one outer 1 px border                   */
-        /* ─────────────────────────────────────────────────────────────────── */
-        if (active_m == MODE_CONTROL) {
-            int sub_rows = (app->subpanel != SUB_NONE) ? (app->sub_count > 0 ? app->sub_count : 1) : 0;
-            double sub_extra_h = (app->subpanel != SUB_NONE) ? (6.0 + sub_rows * 22.0) : 0.0;
-            double tray_extra_h = (app->tray_count > 0) ? (6.0 + app->tray_count * 22.0) : 0.0;
-            int ctx_rows = (app->tray_ctx_idx >= 0 && app->tray_ctx_idx < app->tray_count)
-                ? ((app->ctx_count + 2) / 3) : 0;
-            double ctx_extra_h = ctx_rows * 22.0;
-            double notif_extra_h = (app->notif_count > 0) ? (26.0 + app->notif_count * 22.0) : 0.0;
-
-            double ctrl_w = 264.0;
-            double ctrl_h = 148.0 + sub_extra_h + tray_extra_h + ctx_extra_h + notif_extra_h;
-            double ctrl_x = app->control_on_left ? 8.0 : (w - ctrl_w - 8.0);
-            double ctrl_y = round(app->bottom_edge
-                ? (h + ctrl_h * (1.0 - ease) - (ctrl_h + 8.0) * ease)
-                : (-ctrl_h * (1.0 - ease) + 8.0 * ease));
-
-            cur_dx = (int)ctrl_x - 2;
-            cur_dy = (int)ctrl_y - 2;
-            cur_dw = (int)ctrl_w + 4;
-            cur_dh = (int)ctrl_h + 4;
-
-            /* one flat panel in SURFACE_COLOR, 1 px border from the config */
-            cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.97 * ease);
-            fill_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h);
-
-            cairo_set_source_rgba(cr, app->border_rgb[0], app->border_rgb[1], app->border_rgb[2], 0.90 * ease);
-            cairo_set_line_width(cr, 1.0);
-            draw_rect(cr, ctrl_x, ctrl_y, ctrl_w, ctrl_h);
-            cairo_stroke(cr);
-
-            double rx = ctrl_x + 1.0;
-            double rw = ctrl_w - 2.0;
-            double ry = ctrl_y + 4.0;
-
-            /* Row 1: Clock & Date (left) + Battery % (right) */
-            time_t now = time(NULL);
-            struct tm *tm_info = localtime(&now);
-            char clock_str[64];
-            strftime(clock_str, sizeof(clock_str), "%H:%M  ·  %a %b %d", tm_info);
-
-            cairo_set_source_rgba(cr, 0.90, 0.93, 0.97, 0.95);
-            draw_text_left(cr, layout, "Sans Medium 8.5", clock_str, rx + 9.0, ry + 10.0, 190.0);
-
-            if (app->battery_pct >= 0) {
-                char bat_s[24];
-                snprintf(bat_s, sizeof(bat_s), "%s%d%%", app->battery_charging ? "+" : "", app->battery_pct);
-                cairo_set_source_rgba(cr, 0.62, 0.68, 0.76, 0.90);
-                draw_text_right(cr, layout, "Sans 8", bat_s, rx + rw - 9.0, ry + 10.0);
-            }
-            ry += 22.0;
-            draw_hline(cr, rx, ry, rw);
-            ry += 2.0;
-
-            /* Row 2: Borderless Volume Track (Left-click sets level; Right-click opens Audio Sinks) */
-            double vh = 22.0;
-            draw_bare_item(cr, rx, ry, rw, vh, app->subpanel == SUB_AUDIO, false);
-
-            cairo_set_source_rgba(cr, 0.56, 0.62, 0.70, 0.90);
-            draw_text_left(cr, layout, "Sans 8", "Vol", rx + 9.0, ry + vh / 2.0, 28.0);
-            add_hitbox(app, rx, ry, 30.0, vh, ACT_VOL_MUTE, 0);
-
-            double bx = rx + 34.0;
-            double bw = rw - 76.0;
-            double by = ry + (vh - 2.0) / 2.0;
-            cairo_set_source_rgba(cr, 0.16, 0.19, 0.25, 0.95);
-            fill_rect(cr, bx, by, bw, 2.0);
-
-            double fill_w = (bw * (app->volume_muted ? 0 : app->volume_pct)) / 100.0;
-            if (fill_w > 1.0) {
-                cairo_set_source_rgba(cr, 0.82, 0.86, 0.92, 0.95);
-                fill_rect(cr, bx, by, fill_w, 2.0);
-            }
-            add_hitbox(app, bx, ry, bw, vh, ACT_VOL_BAR, (int)bx);
-
-            char v_s[16];
-            if (app->volume_muted) strcpy(v_s, "Mute");
-            else snprintf(v_s, sizeof(v_s), "%d%%", app->volume_pct);
-            double mx = bx + bw + 2.0;
-            add_hitbox(app, mx, ry, 40.0, vh, ACT_VOL_MUTE, 0);
-            cairo_set_source_rgba(cr, app->volume_muted ? 0.48 : 0.78, app->volume_muted ? 0.52 : 0.82, 0.88, 0.92);
-            draw_text_right(cr, layout, "Sans 8", v_s, rx + rw - 9.0, ry + vh / 2.0);
-
-            ry += vh + 2.0;
-            draw_hline(cr, rx, ry, rw);
-            ry += 2.0;
-
-            /* Rows 3, 4 & 5: Borderless 3×2 Text Toggles (Wi-Fi, BT, DND, Power, Replay, Clip) */
-            double tw = floor(rw / 2.0);
-            double th = 22.0;
-            const char *p_disp = "Balanced";
-            if (strcmp(app->power_profile, "none") == 0) p_disp = "N/A";
-            else if (strcasecmp(app->power_profile, "performance") == 0) p_disp = "Performance";
-            else if (strcasecmp(app->power_profile, "power-saver") == 0) p_disp = "Saver";
-
-            struct {
-                const char *label;
-                const char *val;
-                bool active;
-                int action;
-                bool sub_open;
-            } sw[6] = {
-                { "Wi-Fi", app->wifi_label, app->wifi_on, ACT_WIFI_TOGGLE, app->subpanel == SUB_WIFI },
-                { "BT", app->bt_label, app->bt_on, ACT_BT_TOGGLE, app->subpanel == SUB_BT },
-                { "DND", app->dnd_on ? "On" : "Off", app->dnd_on, ACT_DND_TOGGLE, false },
-                { "Power", p_disp, strcasecmp(app->power_profile, "performance") == 0, ACT_POWER_PROFILE, false },
-                { "Replay", app->replay_on ? "On" : "Off", app->replay_on, ACT_REPLAY_TOGGLE, false },
-                { "Clip", "Save", app->replay_on, ACT_REPLAY_SAVE, false }
-            };
-
-            draw_vline(cr, rx + tw, ry + 4.0, 3.0 * th - 8.0);
-
-            for (int i = 0; i < 6; i++) {
-                int r = i / 2;
-                int c = i % 2;
-                double sx = rx + c * tw;
-                double sy = ry + r * th;
-                bool sel = (app->selected_idx == i);
-
-                draw_bare_item(cr, sx, sy, tw, th, false, sel || sw[i].sub_open);
-                cairo_set_source_rgba(cr, (sw[i].active || sel) ? 0.92 : 0.56,
-                                      (sw[i].active || sel) ? 0.95 : 0.61,
-                                      (sw[i].active || sel) ? 0.99 : 0.69, 0.95);
-                draw_text_left(cr, layout, sw[i].active ? "Sans Medium 8" : "Sans 8",
-                               sw[i].label, sx + 9.0, sy + th / 2.0, 44.0);
-
-                cairo_set_source_rgba(cr, (sw[i].active || sel) ? 0.86 : 0.44,
-                                      (sw[i].active || sel) ? 0.90 : 0.49,
-                                      (sw[i].active || sel) ? 0.96 : 0.57, 0.92);
-                draw_text_right(cr, layout, "Sans 7.5", sw[i].val, sx + tw - 9.0, sy + th / 2.0);
-
-                add_hitbox_nav(app, sx, sy, tw, th, sw[i].action, i, i);
-            }
-
-            ry += 3 * th + 2.0;
-            int nav_cursor = 6;
-
-            /* Optional Inline Sub-List (Wi-Fi / Bluetooth / Audio Output) */
-            if (app->subpanel != SUB_NONE) {
-                draw_hline(cr, rx, ry, rw);
-                ry += 3.0;
-                if (app->sub_count == 0) {
-                    cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.80);
-                    draw_text_left(cr, layout, "Sans 8", "None found", rx + 9.0, ry + 11.0, rw - 18.0);
-                    ry += 22.0;
-                } else {
-                    for (int i = 0; i < app->sub_count; i++) {
-                        SubItem *si = &app->sub_items[i];
-                        double sh = 22.0;
-                        int nav_i = nav_cursor++;
-                        bool sel = (app->selected_idx == nav_i);
-
-                        draw_bare_item(cr, rx, ry, rw, sh, si->active, sel);
-                        cairo_set_source_rgba(cr, (si->active || sel) ? 0.95 : 0.68,
-                                              (si->active || sel) ? 0.97 : 0.73,
-                                              (si->active || sel) ? 1.00 : 0.80, 0.95);
-                        draw_text_left(cr, layout, si->active ? "Sans Medium 8" : "Sans 8",
-                                       si->label, rx + 9.0, ry + sh / 2.0, rw - 68.0);
-
-                        cairo_set_source_rgba(cr, 0.46, 0.52, 0.60, 0.85);
-                        draw_text_right(cr, layout, "Sans 7.5", si->meta, rx + rw - 9.0, ry + sh / 2.0);
-
-                        add_hitbox_nav(app, rx, ry, rw, sh, ACT_SUB_SELECT, i, nav_i);
-                        ry += sh;
-                    }
-                }
-                ry += 3.0;
-            }
-
-            /* Tray Apps (ONLY actual unmapped background/tray apps; hidden if 0!) */
-            if (app->tray_count > 0) {
-                draw_hline(cr, rx, ry, rw);
-                ry += 3.0;
-                for (int i = 0; i < app->tray_count; i++) {
-                    TrayApp *ta = &app->tray_apps[i];
-                    double row_h = 22.0;
-                    int nav_i = nav_cursor++;
-                    bool ctx_open = (app->tray_ctx_idx == i);
-                    bool sel = (app->selected_idx == nav_i);
-
-                    draw_bare_item(cr, rx, ry, rw, row_h, false, sel || ctx_open);
-
-                    cairo_set_source_rgba(cr, (sel || ctx_open) ? 0.96 : 0.78,
-                                          (sel || ctx_open) ? 0.98 : 0.82, 0.90, 0.94);
-                    draw_text_left(cr, layout, "Sans 8", ta->name, rx + 9.0, ry + row_h / 2.0, rw - 72.0);
-
-                    cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
-                    draw_text_right(cr, layout, "Sans 7.5", ta->mem, rx + rw - 9.0, ry + row_h / 2.0);
-
-                    add_hitbox_nav(app, rx, ry, rw, row_h, ACT_TRAY_ITEM, i, nav_i);
-                    ry += row_h;
-
-                    /* App's Own Native Context Menu (from com.canonical.dbusmenu) or Open/Quit/Kill */
-                    if (ctx_open && app->ctx_count > 0) {
-                        double ch = 22.0;
-                        int cols = app->ctx_count < 3 ? app->ctx_count : 3;
-                        double cw = floor(rw / cols);
-
-                        for (int k = 0; k < app->ctx_count; k++) {
-                            int r = k / 3;
-                            int c = k % 3;
-                            double cx_b = rx + c * cw;
-                            double cy_b = ry + r * ch;
-                            int c_nav = nav_cursor++;
-                            bool c_sel = (app->selected_idx == c_nav);
-
-                            draw_bare_item(cr, cx_b, cy_b, cw, ch, true, c_sel);
-                            cairo_set_source_rgba(cr, c_sel ? 0.98 : 0.76, c_sel ? 0.98 : 0.80, 0.90, 0.95);
-                            draw_text_centered(cr, layout, "Sans 8", app->ctx_items[k].label,
-                                               cx_b + cw / 2.0, cy_b + ch / 2.0, false);
-                            add_hitbox_nav(app, cx_b, cy_b, cw, ch, ACT_TRAY_CTX_CLICK, k, c_nav);
-                        }
-                        int rows_used = (app->ctx_count + 2) / 3;
-                        ry += rows_used * ch;
-                    }
-                }
-                ry += 3.0;
-            }
-
-            /* Notification History (from Mako D-Bus ListNotifications + ListHistory; hidden if 0) */
-            if (app->notif_count > 0) {
-                draw_hline(cr, rx, ry, rw);
-                ry += 3.0;
-                double hh = 20.0;
-                int clr_nav = nav_cursor++;
-                bool clr_sel = (app->selected_idx == clr_nav);
-
-                cairo_set_source_rgba(cr, 0.46, 0.51, 0.60, 0.85);
-                draw_text_left(cr, layout, "Sans 7.5", "Notifications", rx + 9.0, ry + hh / 2.0, rw - 68.0);
-
-                draw_bare_item(cr, rx + rw - 54.0, ry, 54.0, hh, false, clr_sel);
-                cairo_set_source_rgba(cr, clr_sel ? 0.96 : 0.64, clr_sel ? 0.98 : 0.70, 0.80, 0.92);
-                draw_text_right(cr, layout, "Sans 7.5", "Clear", rx + rw - 9.0, ry + hh / 2.0);
-                add_hitbox_nav(app, rx + rw - 54.0, ry, 54.0, hh, ACT_NOTIF_CLEAR, 0, clr_nav);
-                ry += hh;
-
-                for (int i = 0; i < app->notif_count; i++) {
-                    NotifItem *ni = &app->notifs[i];
-                    double nh = 22.0;
-                    int nav_i = nav_cursor++;
-                    bool sel = (app->selected_idx == nav_i);
-
-                    draw_bare_item(cr, rx, ry, rw, nh, false, sel);
-                    cairo_set_source_rgba(cr, sel ? 0.96 : 0.76, sel ? 0.98 : 0.80, 0.88, 0.94);
-                    draw_text_left(cr, layout, "Sans 8", ni->text, rx + 9.0, ry + nh / 2.0, rw - 68.0);
-
-                    cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
-                    draw_text_right(cr, layout, "Sans 7.5", ni->app, rx + rw - 9.0, ry + nh / 2.0);
-
-                    add_hitbox_nav(app, rx, ry, rw, nh, ACT_NOTIF_ITEM, i, nav_i);
-                    ry += nh;
-                }
-                ry += 3.0;
-            }
-
-            /* Row 6: Borderless Session Strip (Reboot · Power Off · Log Out) */
-            draw_hline(cr, rx, ry, rw);
-            ry += 2.0;
-            double ph = 22.0;
-            double pw = floor(rw / 3.0);
-            const char *p_labels[3] = { "Reboot", "Power Off", "Log Out" };
-            int p_acts[3] = { ACT_REBOOT, ACT_POWEROFF, ACT_LOGOUT };
-
-            for (int i = 0; i < 3; i++) {
-                double px_b = rx + i * pw;
-                int p_nav = nav_cursor++;
-                bool p_sel = (app->selected_idx == p_nav);
-                draw_bare_item(cr, px_b, ry, pw, ph, false, p_sel);
-                if (i > 0) draw_vline(cr, px_b, ry + 4.0, ph - 8.0);
-                cairo_set_source_rgba(cr, p_sel ? 0.96 : 0.66, p_sel ? 0.98 : 0.71, p_sel ? 1.0 : 0.78, 0.90);
-                draw_text_centered(cr, layout, "Sans 8", p_labels[i], px_b + pw / 2.0, ry + ph / 2.0, false);
-                add_hitbox_nav(app, px_b, ry, pw, ph, p_acts[i], 0, p_nav);
-            }
-        }
-
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* C. Clipboard bar (Super+V): one outer 1 px border                   */
-        /* ─────────────────────────────────────────────────────────────────── */
-        if (active_m == MODE_CLIPBOARD) {
-            int shown_clips = app->filtered_clip_count < VISIBLE_CLIP_ITEMS
-                ? app->filtered_clip_count : VISIBLE_CLIP_ITEMS;
-            int rows = shown_clips > 0 ? shown_clips : 1;
-            double row_h = 28.0;
-            double item_h = 24.0;
-            double ext_h = 1.0 + rows * item_h + 4.0;
-            double bar_w = w - 160.0;
-            if (bar_w > 580.0) bar_w = 580.0;
-            if (bar_w < 360.0) bar_w = w - 24.0;
-
-            double total_h = row_h + ext_h;
-            double bar_x = round((w - bar_w) / 2.0);
-            double bar_y = round(app->bottom_edge
-                ? (h + total_h * (1.0 - ease) - (total_h + 8.0) * ease)
-                : (-total_h * (1.0 - ease) + 8.0 * ease));
-
-            cur_dx = (int)bar_x - 2;
-            cur_dy = (int)bar_y - 2;
-            cur_dw = (int)bar_w + 4;
-            cur_dh = (int)total_h + 4;
-
-            cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.97 * ease);
-            fill_rect(cr, bar_x, bar_y, bar_w, total_h);
-
-            cairo_set_source_rgba(cr, app->border_rgb[0], app->border_rgb[1], app->border_rgb[2], 0.90 * ease);
-            cairo_set_line_width(cr, 1.0);
-            draw_rect(cr, bar_x, bar_y, bar_w, total_h);
-            cairo_stroke(cr);
-
-            double top_y = app->bottom_edge ? (bar_y + ext_h) : bar_y;
-            double list_y = app->bottom_edge ? (bar_y + 2.0) : (bar_y + row_h + 1.0);
-
-            if (app->search_len > 0) {
-                cairo_set_source_rgba(cr, 0.94, 0.96, 0.98, 0.96);
-                draw_text_left(cr, layout, "Sans 8.5", app->search, bar_x + 10.0, top_y + row_h / 2.0, bar_w - 80.0);
-            } else {
-                cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
-                draw_text_left(cr, layout, "Sans 8.5", "Search clipboard…", bar_x + 10.0, top_y + row_h / 2.0, bar_w - 80.0);
-            }
-
-            if (app->clip_count > 0) {
-                cairo_set_source_rgba(cr, 0.62, 0.68, 0.78, 0.90);
-                draw_text_right(cr, layout, "Sans 7.5", "Clear", bar_x + bar_w - 10.0, top_y + row_h / 2.0);
-                add_hitbox(app, bar_x + bar_w - 56.0, top_y, 55.0, row_h, ACT_CLIP_CLEAR, 0);
-            }
-
-            draw_hline(cr, bar_x + 1.0, app->bottom_edge ? top_y : (bar_y + row_h), bar_w - 2.0);
-
-            if (shown_clips == 0) {
-                cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.80);
-                draw_text_left(cr, layout, "Sans 8.5",
-                               app->clip_count == 0 ? "Clipboard is empty" : "No matching clipboard items",
-                               bar_x + 10.0, list_y + item_h / 2.0, bar_w - 20.0);
-            } else {
-                for (int i = 0; i < shown_clips; i++) {
-                    int cidx = app->filtered_clips[i];
-                    ClipItem *ci = &app->clip_items[cidx];
-                    double cy = list_y + i * item_h;
-                    bool sel = (app->selected_idx == i);
-
-                    draw_bare_item(cr, bar_x + 1.0, cy, bar_w - 2.0, item_h, false, sel);
-                    cairo_set_source_rgba(cr, sel ? 0.96 : 0.76, sel ? 0.98 : 0.81, sel ? 1.0 : 0.88, 0.95);
-                    draw_text_left(cr, layout, "Sans 8.5", ci->preview, bar_x + 10.0, cy + item_h / 2.0, bar_w - 22.0);
-                    add_hitbox_nav(app, bar_x + 1.0, cy, bar_w - 2.0, item_h, ACT_CLIP_ITEM, cidx, i);
-                }
-            }
-        }
-    }
-
+    int rect[4];
+    draw_panels(app, cr, layout, w, h, rect);
+    int cur_dx = rect[0], cur_dy = rect[1], cur_dw = rect[2], cur_dh = rect[3];
     g_object_unref(layout);
     cairo_destroy(cr);
     cairo_surface_destroy(surf);
@@ -2084,6 +2122,7 @@ static void set_mode(EdgeApp *app, EdgeMode new_mode) {
         app->subpanel = SUB_NONE;
         app->tray_ctx_idx = -1;
         app->selected_idx = 0;
+        app->list_scroll = 0;
         if (new_mode == MODE_CENTER) {
             refresh_snapshot(app);
         } else if (new_mode == MODE_CONTROL) {
@@ -2501,6 +2540,14 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
         return true;
     }
     case ACT_REBOOT:
+        /* a second press within 3 s (owner, 2026-11-06: one click used to restart at once) */
+        if (app->power_confirm_action != ACT_REBOOT || app->power_confirm_until < now_ns()) {
+            app->power_confirm_action = ACT_REBOOT;
+            app->power_confirm_until = now_ns() + 3000000000LL;
+            damage_all(app);
+            return true;
+        }
+        app->power_confirm_until = 0;
         set_mode(app, MODE_CLOSED);
         spawn_detached(
             "[ -f ~/.config/infynitae/config ] && . ~/.config/infynitae/config 2>/dev/null || true; "
@@ -2517,6 +2564,14 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
             "systemctl reboot");
         return true;
     case ACT_POWEROFF:
+        /* a second press within 3 s (owner, 2026-11-06: one click used to restart at once) */
+        if (app->power_confirm_action != ACT_POWEROFF || app->power_confirm_until < now_ns()) {
+            app->power_confirm_action = ACT_POWEROFF;
+            app->power_confirm_until = now_ns() + 3000000000LL;
+            damage_all(app);
+            return true;
+        }
+        app->power_confirm_until = 0;
         set_mode(app, MODE_CLOSED);
         spawn_detached(
             "[ -f ~/.config/infynitae/config ] && . ~/.config/infynitae/config 2>/dev/null || true; "
@@ -2561,7 +2616,7 @@ static void activate_selected(EdgeApp *app) {
     /* from the list itself: the hitboxes are from the last frame, and Enter right after typing
      * must start what the search says now */
     if (app->mode == MODE_APPS) {
-        int shown = app->filtered_app_count < VISIBLE_APPS ? app->filtered_app_count : VISIBLE_APPS;
+        int shown = app->filtered_app_count;
         if (app->selected_idx >= 0 && app->selected_idx < shown) {
             launch_app(app, app->filtered_apps[app->selected_idx]);
         }
@@ -2978,6 +3033,34 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
 
     int total = count_nav_items(app);
 
+    /* the lists (launcher, windows, clipboard): one column, so Up and Down move along it (on a
+     * panel at the bottom the list grows upward from the search field: Up goes away from it),
+     * Tab and Shift+Tab too, Page Up and Page Down by a screenful; Left and Right do nothing */
+    if (app->mode == MODE_APPS || app->mode == MODE_CENTER || app->mode == MODE_CLIPBOARD) {
+        int count = app->mode == MODE_APPS ? app->filtered_app_count
+                  : app->mode == MODE_CENTER ? app->filtered_win_count : app->filtered_clip_count;
+        int step = 0;
+        bool away = app->bottom_edge ? sym == XKB_KEY_Up : sym == XKB_KEY_Down;
+        bool toward = app->bottom_edge ? sym == XKB_KEY_Down : sym == XKB_KEY_Up;
+        if (away || sym == XKB_KEY_Tab) step = 1;
+        else if (toward || sym == XKB_KEY_ISO_Left_Tab) step = -1;
+        else if (sym == XKB_KEY_Page_Down || sym == XKB_KEY_Next) step = app->bottom_edge ? -LIST_ROWS : LIST_ROWS;
+        else if (sym == XKB_KEY_Page_Up || sym == XKB_KEY_Prior) step = app->bottom_edge ? LIST_ROWS : -LIST_ROWS;
+        else if (sym == XKB_KEY_Left || sym == XKB_KEY_Right) return;
+        if (step != 0) {
+            if (count > 0) {
+                int next = app->selected_idx + step;
+                if (step == 1 || step == -1) next = (next + count) % count;  /* single steps wrap */
+                else if (next < 0) next = 0;
+                else if (next >= count) next = count - 1;
+                app->selected_idx = next;
+                list_follow(app, count);
+            }
+            damage_all(app);
+            return;
+        }
+    }
+
     if (sym == XKB_KEY_Right || sym == XKB_KEY_Tab) {
         if (total > 0) app->selected_idx = (app->selected_idx + 1) % total;
         damage_all(app);
@@ -3332,7 +3415,98 @@ static pid_t edge_pid(const char *pfile) {
     return strcmp(comm, "infynitae-edge") == 0 ? pid : 0;
 }
 
+/* --render MODE WxH OUT.png: one panel fully open, with fixed made-up content, into a PNG, through
+ * the same drawing code as the live panels; connects to nothing, signals nothing, starts nothing
+ * (tools/test-edge-render). MODE: apps, windows, control or clipboard. */
+static int render_to_png(const char *mode_name, const char *size, const char *out_path) {
+    int w = 0, h = 0;
+    if (sscanf(size, "%dx%d", &w, &h) != 2 || w < 200 || h < 200 || w > 8192 || h > 8192) {
+        fprintf(stderr, "[infynitae-edge] --render needs WxH, e.g. 1920x1080\n");
+        return 2;
+    }
+    static EdgeApp app;
+    memset(&app, 0, sizeof(app));
+    app.async_fd = -1;
+    app.tray_ctx_idx = -1;
+    load_position_config(&app);
+
+    static const char *names[][2] = {
+        {"Firefox", "Web Browser"}, {"Files", "File Manager"}, {"Terminal", "Terminal Emulator"},
+        {"Steam", "Games"}, {"Discord", "Chat"}, {"Text Editor", "Editor"}, {"Settings", "System"},
+        {"Image Viewer", "Graphics"}, {"Music", "Audio Player"}, {"Calculator", "Accessories"},
+        {"System Monitor", "System"}, {"Videos", "Video Player"},
+    };
+    app.app_count = (int)(sizeof(names) / sizeof(names[0]));
+    for (int i = 0; i < app.app_count; i++) {
+        snprintf(app.apps[i].id, sizeof(app.apps[i].id), "app%d.desktop", i);
+        snprintf(app.apps[i].name, sizeof(app.apps[i].name), "%s", names[i][0]);
+        snprintf(app.apps[i].generic, sizeof(app.apps[i].generic), "%s", names[i][1]);
+    }
+    static const char *wins[][2] = {
+        {"firefox", "Infynitae - GitHub - Mozilla Firefox"}, {"kitty", "~/infynitae: cargo test"},
+        {"discord", "Discord"}, {"steam", "Steam"}, {"thunar", "Downloads"}, {"mousepad", "notes.txt"},
+        {"cs2", "Counter-Strike 2"}, {"mpv", "video.mkv"}, {"gimp", "GNU Image Manipulation Program"},
+        {"btop", "btop"},
+    };
+    app.win_count = (int)(sizeof(wins) / sizeof(wins[0]));
+    for (int i = 0; i < app.win_count; i++) {
+        snprintf(app.windows[i].app_id, sizeof(app.windows[i].app_id), "%s", wins[i][0]);
+        snprintf(app.windows[i].title, sizeof(app.windows[i].title), "%s", wins[i][1]);
+    }
+    app.windows[1].focused = true;
+    app.windows[3].attention = true;
+    static const char *clips[] = {"git push origin main", "https://github.com/vysaely/infynitae",
+                                  "The quick brown fox jumps over the lazy dog", "192.168.1.20", "sudo pacman -Syu"};
+    app.clip_count = 5;
+    for (int i = 0; i < app.clip_count; i++) snprintf(app.clip_items[i].preview, sizeof(app.clip_items[i].preview), "%s", clips[i]);
+    app.wifi_on = true;
+    snprintf(app.wifi_label, sizeof(app.wifi_label), "HomeNet");
+    app.bt_on = true;
+    snprintf(app.bt_label, sizeof(app.bt_label), "Headphones");
+    app.volume_pct = 60;
+    snprintf(app.power_profile, sizeof(app.power_profile), "balanced");
+    app.battery_pct = -1;
+    static const char *notes[][2] = {{"Discord", "New message from a friend"}, {"Steam", "Download complete"},
+                                     {"Infynitae", "Screenshot saved"}};
+    app.notif_count = 3;
+    for (int i = 0; i < 3; i++) {
+        app.notifs[i].id = (uint32_t)(i + 1);
+        snprintf(app.notifs[i].app, sizeof(app.notifs[i].app), "%s", notes[i][0]);
+        snprintf(app.notifs[i].text, sizeof(app.notifs[i].text), "%s", notes[i][1]);
+    }
+
+    EdgeMode mode;
+    if (strcmp(mode_name, "apps") == 0) mode = MODE_APPS;
+    else if (strcmp(mode_name, "windows") == 0) mode = MODE_CENTER;
+    else if (strcmp(mode_name, "control") == 0) mode = MODE_CONTROL;
+    else if (strcmp(mode_name, "clipboard") == 0) mode = MODE_CLIPBOARD;
+    else {
+        fprintf(stderr, "[infynitae-edge] --render: apps, windows, control or clipboard\n");
+        return 2;
+    }
+    app.mode = app.target_mode = mode;
+    app.anim_progress = 1.0;
+    app.selected_idx = 1;
+    if (mode == MODE_CONTROL) app.selected_idx = 0;
+    update_filters(&app);
+
+    cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    cairo_t *cr = cairo_create(surf);
+    /* a plain desktop behind, so the panel's edges show */
+    cairo_set_source_rgb(cr, 0.16, 0.17, 0.20);
+    cairo_paint(cr);
+    PangoLayout *layout = pango_cairo_create_layout(cr);
+    int rect[4];
+    draw_panels(&app, cr, layout, w, h, rect);
+    g_object_unref(layout);
+    cairo_destroy(cr);
+    cairo_status_t st = cairo_surface_write_to_png(surf, out_path);
+    cairo_surface_destroy(surf);
+    return st == CAIRO_STATUS_SUCCESS ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
+    if (argc == 5 && strcmp(argv[1], "--render") == 0) return render_to_png(argv[2], argv[3], argv[4]);
     const char *pfile = pid_file_path();
 
     if (argc > 1) {
