@@ -197,7 +197,7 @@ def mouse_use():
     e = first(); move(-(e["size"][0] // 2), -(e["size"][1] - 18), 30); wait(.4); click(); wait(.02); click(); wait(1.2); e2 = first(); shot("m3-dbl"); rec("double click on the title bar maximizes", e2["size"] != e["size"], f"{e['size']}->{e2['size']} maximized={e2.get('maximized')}")
     click(); wait(.05); click(); wait(1); close_all()
     # launcher with the mouse: click the first entry
-    move(-3000, -3000, 40); chord("super+w"); wait(1); move(830, 49, 40); wait(.3); shot("m4-hover"); click(); ok = until(lambda: len(els()) >= 1, 6); rec("clicking an app in the launcher starts it", bool(ok), str(ids())); close_all()
+    move(-3000, -3000, 40); chord("super+w"); wait(1); move(830, 73, 40); wait(.3); shot("m4-hover"); click(); ok = until(lambda: len(els()) >= 1, 6); rec("clicking an app in the launcher starts it", bool(ok), str(ids())); close_all()
     chord("super+w"); wait(1); move(0, 500, 20); click(); wait(.8); shot("m5-click-away"); rec("clicking away closes the launcher", "SEE-SHOT")
     # right click menu in an app
     run_bg("mousepad"); until(lambda: has("mousepad")); wait(2); click("right"); wait(1); shot("m6-menu"); rec("a right click menu shows", "SEE-SHOT"); chord("esc"); close_all()
@@ -241,12 +241,11 @@ def drag_fresh():
 def pixel(x, y):
     r = subprocess.run(["su", "tester", "-c", f"grim -g '{x},{y} 1x1' -t ppm -"], env=E, stdout=subprocess.PIPE)
     return tuple(r.stdout[-3:])
-def panel_open(): return pixel(960, 8) != (13, 17, 23) and sum(pixel(960, 8)) > sum(pixel(960, 300)) + 40
 @test
 def launcher_click_away():
-    close_all(); wait(1); base = pixel(960, 8); chord("super+w"); wait(1); opened = pixel(960, 8); move(-3000, -3000, 40); move(960, 600, 40); click(); wait(1); closed = pixel(960, 8); shot("click-away")
+    close_all(); wait(1); base = pixel(960, 30); chord("super+w"); wait(1); opened = pixel(960, 30); move(-3000, -3000, 40); move(960, 600, 40); click(); wait(1); closed = pixel(960, 30); shot("click-away")
     rec("clicking away closes the launcher", opened != base and closed == base, f"desktop {base}, open {opened}, after click {closed}")
-    chord("super+w"); wait(1); move(0, -578, 30); wait(.4); click(); wait(1); still = pixel(960, 8); chord("esc"); wait(.6); rec("a click on the search box keeps it open", still == opened, f"{still}")
+    chord("super+w"); wait(1); move(0, -578, 30); wait(.4); click(); wait(1); still = pixel(960, 30); chord("esc"); wait(.6); rec("a click on the search box keeps it open", still == opened, f"{still}")
     run_bg("mousepad"); until(lambda: has("mousepad")); wait(2); text("ab"); chord("super+w"); wait(1); move(-3000, -3000, 40); move(960, 600, 40); click(); wait(1); text("cd"); wait(.5); shot("click-away-typing"); chord("ctrl+a"); chord("ctrl+c"); wait(.5); r = sh("wl-paste -n 2>/dev/null"); rec("after clicking away, typing reaches the window", r == "abcd", repr(r)); close_all()
 @test
 def super_drag_and_maximize():

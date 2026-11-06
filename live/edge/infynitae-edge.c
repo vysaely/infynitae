@@ -1366,7 +1366,8 @@ static void parse_hex_rgb(const char *val, double out[3]) {
 }
 
 static void load_position_config(EdgeApp *app) {
-    app->bottom_edge = true;
+    /* config/config's default (EDGE_POSITION="top"): a user with no config line got the bottom */
+    app->bottom_edge = false;
     app->control_on_left = false;
     app->hair_set = false;
     app->square = false;
