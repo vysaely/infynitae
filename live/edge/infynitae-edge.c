@@ -1290,7 +1290,6 @@ static void draw_text_right_max(cairo_t *cr, PangoLayout *layout, const char *fo
 /* the panel being drawn, for the helpers below that take no EdgeApp (set by draw_panels) */
 static const struct EdgeApp *g_theme;
 static int64_t now_ns(void);
-static const double *g_theme_hair(void);
 
 static void add_hitbox_nav(EdgeApp *app, double x, double y, double w, double h,
                            int action_id, int index, int nav_idx) {
@@ -1464,7 +1463,6 @@ static bool output_has_fullscreen(EdgeOutput *out);
  * side of the screen edge; panel outlines in the hairline colour; the accent (BORDER_ACTIVE) only
  * for what is selected or on; rounding off with SQUARE_CORNERS.                                    */
 /* ========================================================================== */
-static const double *g_theme_hair(void) { return g_theme && g_theme->hair_set ? g_theme->hair_rgb : NULL; }
 
 #define CTRL_ROW 28.0
 #define FONT_CAPTION "sans-serif 9"
