@@ -2246,9 +2246,8 @@ impl Core {
             x: x - i64::from(g.loc.x),
             y: y - i64::from(g.loc.y),
         };
-        // only a place still free: a window opened on it since (a browser centred in the view)
-        // is not covered; the policy places this one instead. A neighbour the bigger successor
-        // reaches over (Steam's login after its updater) does not count.
+        // a window opened on the old place since (a browser centred in the view) is not covered:
+        // the policy places this one instead
         let taken = self.stage.mapped_elements().into_iter().any(|e| {
             let (Some(a), Some(t)) = (self.stage.anchor(e), self.stage.tree(e)) else {
                 return false;
@@ -2261,7 +2260,24 @@ impl Core {
                 && (x0..x0 + i64::from(t.geometry.size.w)).contains(&centre.x)
                 && (y0..y0 + i64::from(t.geometry.size.h)).contains(&centre.y)
         });
-        (!taken).then_some(at)
+        if taken {
+            return None;
+        }
+        // a bigger successor that would reach over a neighbour (Discord's window after its small
+        // updater) goes to the nearest free spot from the old place instead: it never covers
+        // another window (owner, 2026-11-07; until then only the old centre had to be free)
+        let size = (i64::from(g.size.w), i64::from(g.size.h));
+        let existing = self.window_rects_except(id);
+        if !overlaps_any(&existing, (x, y, size.0, size.1)) {
+            return Some(at);
+        }
+        let (fx, fy) = self
+            .free_spot_near(&existing, size, (x, y))
+            .unwrap_or_else(|| beside_all(&existing, (x, y)));
+        Some(CanvasPoint {
+            x: fx - i64::from(g.loc.x),
+            y: fy - i64::from(g.loc.y),
+        })
     }
 
     /// The adapter's report of an element's `xdg_toplevel` parent (`None`: none), before each

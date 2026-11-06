@@ -183,3 +183,33 @@ fn a_key_press_before_reopening_opens_it_near_the_cursor() {
         "away from {place:?}, at the cursor: {at:?}"
     );
 }
+
+/// Owner, 2026-11-07: Discord's small updater closes and its main window, much bigger, opened
+/// centred on the updater's place over the windows beside it. A successor that would reach over
+/// a neighbour goes to the nearest free spot instead; it never covers another window.
+#[test]
+fn a_bigger_next_window_does_not_cover_the_neighbours() {
+    let mut r = Rig::x8();
+    r.ls.state
+        .core_mut()
+        .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+    let (_, browser) = open(&mut r, "B", "firefox", (500, 400));
+    // the updater, placed beside the browser
+    let (updater, _) = open(&mut r, "U", "discord", (300, 300));
+    r.ls.probe.destroy_toplevel(updater);
+    r.ls.pump();
+    r.frame();
+    let (_, main) = open(&mut r, "M", "discord", (1000, 700));
+    let core = r.ls.state.core();
+    let rect = |id: ElementId| {
+        let a = core.stage().anchor(id).unwrap();
+        let g = core.stage().tree(id).unwrap().geometry;
+        let (x, y) = (a.x + i64::from(g.loc.x), a.y + i64::from(g.loc.y));
+        (x, y, x + i64::from(g.size.w), y + i64::from(g.size.h))
+    };
+    let (b, m) = (rect(browser), rect(main));
+    assert!(
+        m.2 <= b.0 || b.2 <= m.0 || m.3 <= b.1 || b.3 <= m.1,
+        "Discord {m:?} does not cover the browser {b:?}"
+    );
+}
