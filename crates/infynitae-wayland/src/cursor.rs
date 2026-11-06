@@ -476,6 +476,32 @@ impl CursorThemeManager {
 impl WaylandState {
     /// The client asked for a cursor (`SeatHandler::cursor_image`).
     pub(crate) fn set_cursor_status(&mut self, status: CursorImageStatus) {
+        // an app hiding the cursor, or showing it again, in the session log (owner, 2026-11-06:
+        // Firefox's picture-in-picture never hid it, and nothing said whether it asked)
+        let kind = |s: &CursorImageStatus| match s {
+            CursorImageStatus::Hidden => "hidden",
+            CursorImageStatus::Named(i) if i.name() == "none" => "hidden",
+            CursorImageStatus::Surface(surface) => {
+                let drawn = smithay::wayland::compositor::with_states(surface, |states| {
+                    states
+                        .data_map
+                        .get::<smithay::backend::renderer::utils::RendererSurfaceStateUserData>()
+                        .and_then(|d| d.lock().ok().map(|d| d.view().is_some()))
+                        .unwrap_or(false)
+                });
+                if drawn {
+                    "an app's image"
+                } else {
+                    "an app's empty image"
+                }
+            }
+            CursorImageStatus::Named(_) => "a named shape",
+        };
+        let (was, now) = (kind(&self.cursor), kind(&status));
+        if was != now && (was.contains("hidden") || now.contains("hidden") || now.contains("empty"))
+        {
+            println!("[infynitae] Cursor: {was} -> {now}");
+        }
         if self.cursor != status {
             self.cursor = status;
             self.cursor_epoch = self
