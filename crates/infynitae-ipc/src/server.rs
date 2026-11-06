@@ -66,6 +66,8 @@ pub struct Serviced {
     pub effects: Vec<Effect>,
     /// A command changed state (what is shown may have changed: the loop asks for a frame).
     pub changed: bool,
+    /// A shell asked to lock the session (`lock`): the adapter locks.
+    pub lock: bool,
 }
 
 /// The shell server: owner of the `ShellPort` (C7.1) and of every connection's state (OBJ-31).
@@ -198,6 +200,11 @@ impl ShellServer {
             Ok(Request::Snapshot) => {
                 let g = self.refresh(core, done);
                 protocol::ok_reply(rid, g, self.model.as_ref().map(Model::to_value))
+            }
+            Ok(Request::Lock) => {
+                done.lock = true;
+                done.changed = true;
+                protocol::ok_reply(rid, self.generation, None)
             }
             Ok(Request::Layers) => {
                 protocol::ok_reply(rid, self.generation, Some(crate::model::layers(core)))

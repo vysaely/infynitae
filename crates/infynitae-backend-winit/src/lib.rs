@@ -360,6 +360,9 @@ pub fn run_nested_with(
         if let Some(ext) = extension.as_mut() {
             ext.set_locked(data.state.is_locked());
             let (fx, changed) = ext.service(data.state.core_mut());
+            if ext.take_lock_request() {
+                data.state.lock_now();
+            }
             data.state.apply(&fx);
             if changed {
                 data.session.request_frame();

@@ -2,7 +2,7 @@
 //! direction.
 //!
 //! Requests: `{"id": <number|string>, "cmd": <name>, ...}`. `snapshot`, `subscribe` and
-//! `unsubscribe` are queries; `navigate`, `viewport_fit`, `viewport_restore`, `focus`,
+//! `unsubscribe` are queries; `lock` asks the adapter to lock the session now; `navigate`, `viewport_fit`, `viewport_restore`, `focus`,
 //! `acknowledge_attention`, `move_element` and `resize_element` (a size asked of the window, or
 //! `"maximized": {"anchor", "size"}` to maximize it, session restore) are commands Core validates
 //! and executes. Elements are
@@ -27,6 +27,9 @@ pub const MAX_LINE: usize = 64 * 1024;
 #[derive(Clone, Debug, PartialEq)]
 pub enum Request {
     Snapshot,
+    /// Lock the session now, in the compositor itself (black and locked within a frame, then the
+    /// lock screen): before sleep, the lock must not wait for a lock screen to start (2026-11-06).
+    Lock,
     /// A diagnostic: every window's surfaces as Core holds them and the rects it draws them at.
     Layers,
     Subscribe,
@@ -113,6 +116,7 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
     };
     Ok(match cmd {
         "snapshot" => Request::Snapshot,
+        "lock" => Request::Lock,
         "layers" => Request::Layers,
         "subscribe" => Request::Subscribe,
         "unsubscribe" => Request::Unsubscribe,

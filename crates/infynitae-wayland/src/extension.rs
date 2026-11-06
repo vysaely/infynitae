@@ -18,6 +18,12 @@ pub trait LoopExtension {
 
     /// The session's lock state, which the adapter holds; a backend gives it before `service`.
     fn set_locked(&mut self, _locked: bool) {}
+
+    /// Whether something asked to lock the session since the last call (the shell's `lock`); a
+    /// backend then locks (`WaylandState::lock_now`).
+    fn take_lock_request(&mut self) -> bool {
+        false
+    }
 }
 
 /// Wakes the loop from another thread (`Send`, cloneable). A wake-up with nothing behind it costs

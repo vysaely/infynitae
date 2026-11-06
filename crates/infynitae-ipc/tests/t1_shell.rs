@@ -795,3 +795,21 @@ fn connections_beyond_the_limit_are_closed_and_the_socket_keeps_accepting() {
     drop(server);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// `lock` (2026-11-06, live/infynitae-sleep-lock before a sleep): the server answers ok and tells
+/// the adapter to lock (`Serviced::lock`); nothing in Core changes.
+#[test]
+fn lock_asks_the_adapter_to_lock() {
+    let (mut core, mut server, _) = setup();
+    let mut shell = connect(&mut server);
+    shell.send(r#"{"id":9,"cmd":"lock"}"#);
+    let end = Instant::now() + Duration::from_secs(5);
+    let mut locked = false;
+    while Instant::now() < end && !locked {
+        locked = server.service(&mut core).lock;
+    }
+    assert!(locked, "the server asks the adapter to lock");
+    let reply = shell.read_until(&mut server, &mut core, |got| !got.is_empty()).pop().unwrap();
+    assert_eq!(reply.get("id").and_then(Value::as_u64), Some(9));
+    assert_eq!(reply.get("ok"), Some(&Value::Bool(true)));
+}
