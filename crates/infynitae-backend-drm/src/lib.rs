@@ -1548,6 +1548,7 @@ pub fn run_console_with(
     println!("[infynitae] Compositor running. Ctrl+Alt+Backspace quits.");
     data.session.follow_display();
     let mut turn_started = std::time::Instant::now();
+    let mut turn = TurnClock::new(turn_started);
     while !data.quit && !data.session.finished() {
         data.session
             .wake_at(data.state.core().next_settlement_deadline());
@@ -1591,9 +1592,12 @@ pub fn run_console_with(
         .min();
         // time spent in the loop's own turn, every wait left out: a stall of this process alone,
         // where "refresh to submit" also counts a quiet screen
-        data.loop_busy_max = data.loop_busy_max.max(turn_started.elapsed());
+        let busy = turn_started.elapsed();
+        data.loop_busy_max = data.loop_busy_max.max(busy);
+        turn.report_if_slow(busy);
         event_loop.dispatch(timeout, &mut data)?;
         turn_started = std::time::Instant::now();
+        turn = TurnClock::new(turn_started);
         if data.active
             && data
                 .rescan_at
@@ -1603,8 +1607,10 @@ pub fn run_console_with(
             rescan_screens(&mut data);
             data.session.request_frame();
         }
+        turn.mark("screen rescan");
         // apps out of sight yield the CPU; game mode ends with the game's fullscreen
         data.state.background_update(std::time::Instant::now());
+        turn.mark("background priority");
         // the capture indicator came or went: every screen draws it, or no longer
         if data
             .state
@@ -1722,6 +1728,7 @@ pub fn run_console_with(
                 }
             }
         }
+        turn.mark("config and idle");
         if let Some(ext) = extension.as_mut() {
             ext.set_locked(data.state.is_locked());
             let (fx, changed) = ext.service(data.state.core_mut());
@@ -1733,7 +1740,9 @@ pub fn run_console_with(
                 data.session.request_frame();
             }
         }
+        turn.mark("shell socket");
         data.session.dispatch(&mut data.state);
+        turn.mark("client requests");
         // a new buffer is what a rest must not hold back: it goes to the very next refresh
         if data.state.take_new_buffer() {
             data.session.frame_wake();
@@ -1802,6 +1811,7 @@ pub fn run_console_with(
             data.state.finish_unlock();
         }
 
+        turn.mark("outputs, input, unlock");
         let current_mapped = data.state.core().stage().mapped_elements();
         let new_mapped: Vec<_> = current_mapped
             .iter()
@@ -1907,8 +1917,10 @@ pub fn run_console_with(
             .screens
             .iter()
             .any(|s| s.deferred.is_some_and(|t| t <= now));
+        turn.mark("new windows");
         if (data.session.frame_due() || has_screencopy || deferred_due) && data.active {
             render(&mut data);
+            turn.mark("render");
         }
         let now = infynitae_wayland::presentation_clock_now();
         let next_deferred = data.screens.iter().filter_map(|s| s.deferred).min();
@@ -1923,6 +1935,7 @@ pub fn run_console_with(
         let anim_due = data.state.cursor_animation_due(now);
         data.session.set_cursor_animation_due(anim_due);
         data.session.flush();
+        turn.mark("flush");
     }
 
     println!("[infynitae] Shutting down compositor...");
@@ -2806,6 +2819,67 @@ fn core_presentation_format(
     state.window_buffer_format(state.exclusive_window(id)?)
 }
 
+/// Where a turn of the loop spent its time, for a turn long enough to be felt as a stutter
+/// ([`SLOW_TURN`]): the session log names its slowest parts. "Loop busy" said only how long
+/// (553 ms on the owner's PC, 2026-11-06), not where.
+struct TurnClock {
+    last: std::time::Instant,
+    phases: Vec<(&'static str, Duration)>,
+}
+
+/// A turn this long is reported with its parts (about 8 refreshes at 165 Hz).
+const SLOW_TURN: Duration = Duration::from_millis(50);
+
+impl TurnClock {
+    fn new(start: std::time::Instant) -> Self {
+        Self {
+            last: start,
+            phases: Vec::with_capacity(12),
+        }
+    }
+
+    /// The part of the turn since the last mark is `name`.
+    fn mark(&mut self, name: &'static str) {
+        let now = std::time::Instant::now();
+        self.phases.push((name, now.duration_since(self.last)));
+        self.last = now;
+    }
+
+    /// The parts of a turn of `busy`, slowest first, those of 1 ms or more; the rest is time
+    /// before the first mark or between marks this turn did not reach.
+    fn slow_parts(&self, busy: Duration) -> Option<String> {
+        if busy < SLOW_TURN {
+            return None;
+        }
+        let mut parts: Vec<_> = self
+            .phases
+            .iter()
+            .filter(|(_, d)| *d >= Duration::from_millis(1))
+            .collect();
+        parts.sort_by(|a, b| b.1.cmp(&a.1));
+        let marked: Duration = self.phases.iter().map(|(_, d)| *d).sum();
+        let mut out: Vec<String> = parts
+            .iter()
+            .map(|(n, d)| format!("{n} {:.1} ms", d.as_secs_f64() * 1000.0))
+            .collect();
+        let rest = busy.saturating_sub(marked);
+        if rest >= Duration::from_millis(1) {
+            out.push(format!("other {:.1} ms", rest.as_secs_f64() * 1000.0));
+        }
+        Some(format!(
+            "[infynitae] Slow turn {:.1} ms: {}",
+            busy.as_secs_f64() * 1000.0,
+            out.join(", ")
+        ))
+    }
+
+    fn report_if_slow(&self, busy: Duration) {
+        if let Some(line) = self.slow_parts(busy) {
+            println!("{line}");
+        }
+    }
+}
+
 /// LATENCY_STATS: every 10 s, each screen's input-to-screen times and missed refreshes, in the
 /// session log.
 fn latency_summary(data: &mut LoopData) {
@@ -3354,6 +3428,24 @@ fn configure_input_device(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_slow_turn_names_its_slowest_parts() {
+        use std::time::Duration;
+        let mut c = super::TurnClock::new(std::time::Instant::now());
+        c.phases = vec![
+            ("client requests", Duration::from_millis(15)),
+            ("background priority", Duration::from_micros(500)),
+            ("render", Duration::from_millis(40)),
+        ];
+        assert_eq!(c.slow_parts(Duration::from_millis(30)), None);
+        assert_eq!(
+            c.slow_parts(Duration::from_micros(60_500)).as_deref(),
+            Some(
+                "[infynitae] Slow turn 60.5 ms: render 40.0 ms, client requests 15.0 ms, other 5.0 ms"
+            )
+        );
+    }
+
     use super::*;
 
     /// On the GPU (the first render node; skipped without one): the console renderer's context
