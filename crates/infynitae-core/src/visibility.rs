@@ -394,10 +394,18 @@ mod tests {
         assert_eq!(c.frame_tick_vec(o).len(), 3, "all are in view");
         c.set_relief_spared(o, Some(game));
         c.set_frame_relief(o, true);
-        assert!(!c.frame_tick_vec(o).contains(&other), "it waits");
-        assert!(c.frame_tick_vec(o).contains(&other), "its turn");
+        let ids = format!(
+            "first {first:?} second {second:?} game {game:?} focused {focused:?} other {other:?}"
+        );
+        let one = c.frame_tick_vec(o);
+        assert!(!one.contains(&other), "it waits: {one:?}; {ids}");
+        let two = c.frame_tick_vec(o);
+        assert!(two.contains(&other), "its turn: {two:?}; {ids}");
         let again = c.frame_tick_vec(o);
-        assert!(!again.contains(&other));
+        assert!(
+            !again.contains(&other),
+            "it waits again: {again:?} after {one:?}, {two:?}; {ids}"
+        );
         assert!(
             focused.is_some_and(|f| again.contains(&f)),
             "the focused one does not wait"
