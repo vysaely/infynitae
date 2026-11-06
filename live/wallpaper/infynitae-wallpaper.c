@@ -24,6 +24,9 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <errno.h>
+#include <spawn.h>
+
+extern char **environ;
 
 #include <wayland-client.h>
 #include <cairo/cairo.h>
@@ -662,6 +665,9 @@ int main(int argc, char *argv[]) {
     char mode[32] = "";
     int foreground = 0;
     int overlay = 0;
+    /* --spawned: the background copy started below; the starting command already checked the
+     * image, killed the old wallpaper and wrote the lock pictures */
+    int spawned = 0;
     char only_output[64] = "";
 
     for (int i = 1; i < argc; i++) {
@@ -669,6 +675,9 @@ int main(int argc, char *argv[]) {
             kill_other_wallpapers();
             return 0;
         } else if (strcmp(argv[i], "--foreground") == 0 || strcmp(argv[i], "-f") == 0) {
+            foreground = 1;
+        } else if (strcmp(argv[i], "--spawned") == 0) {
+            spawned = 1;
             foreground = 1;
         } else if (strcmp(argv[i], "--overlay") == 0) {
             /* a frozen screenshot over everything: the wallpaper itself is left running */
@@ -705,7 +714,7 @@ int main(int argc, char *argv[]) {
 
     /* the lock screen's picture of the user (lock-cache.h); the session starts this helper
      * whether or not there is a wallpaper */
-    if (!overlay) lock_cache_write_avatar();
+    if (!overlay && !spawned) lock_cache_write_avatar();
 
     if (target[0] == '\0') {
         autodetect_wallpaper(target, sizeof(target));
@@ -748,29 +757,51 @@ int main(int argc, char *argv[]) {
     GdkPixbuf *pixbuf = load_image(target);
     if (!pixbuf) return 1;
 
-    if (!overlay) {
+    if (!overlay && !spawned) {
         kill_other_wallpapers();
+        /* the lock screen's background, from the image just decoded. Before the fork: gdk-pixbuf
+         * 2.44 decodes and encodes through glycin's loader threads, which a forked child does not
+         * have (found in the VM 2026-11-06: the save failed after the fork) */
+        if (lock_cache_write_background(pixbuf) != 0)
+            fprintf(stderr, "[infynitae-wallpaper] could not write the lock screen background\n");
     }
 
-    // Auto-daemonize to detach cleanly unless foreground was requested
+    /* Into the background unless foreground was asked: a fresh copy of this program, in its own
+     * session, takes over and this command returns. Not a fork: gdk-pixbuf 2.44 decodes through
+     * glycin's loader threads, which a forked child lacks, so the child could not decode the
+     * image again for a new screen (found in the VM 2026-11-06). */
     if (!foreground) {
-        pid_t pid = fork();
-        if (pid < 0) {
-            fprintf(stderr, "[infynitae-wallpaper] Failed to daemonize fork\n");
-            g_object_unref(pixbuf);
+        g_object_unref(pixbuf);
+        char exe[4096];
+        ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+        if (n <= 0) {
+            fprintf(stderr, "[infynitae-wallpaper] cannot find its own program to start in the background\n");
             return 1;
         }
-        if (pid > 0) {
-            // Parent exits cleanly immediately
-            return 0;
+        exe[n] = '\0';
+        char *child_argv[8];
+        int c = 0;
+        child_argv[c++] = exe;
+        child_argv[c++] = "--spawned";
+        child_argv[c++] = target;
+        child_argv[c++] = mode;
+        if (only_output[0]) {
+            child_argv[c++] = "--output";
+            child_argv[c++] = only_output;
         }
-        setsid();
+        child_argv[c] = NULL;
+        posix_spawnattr_t attr;
+        posix_spawnattr_init(&attr);
+        posix_spawnattr_setflags(&attr, POSIX_SPAWN_SETSID);
+        pid_t pid;
+        int rc = posix_spawn(&pid, exe, NULL, &attr, child_argv, environ);
+        posix_spawnattr_destroy(&attr);
+        if (rc != 0) {
+            fprintf(stderr, "[infynitae-wallpaper] Failed to start in the background: %s\n", strerror(rc));
+            return 1;
+        }
+        return 0;
     }
-
-    /* the lock screen's background, from the image just decoded (in the child: the command that
-     * set the wallpaper does not wait for it) */
-    if (!overlay && lock_cache_write_background(pixbuf) != 0)
-        fprintf(stderr, "[infynitae-wallpaper] could not write the lock screen background\n");
 
     struct wallpaper_app app = {0};
     app.pixbuf = pixbuf;
