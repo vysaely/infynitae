@@ -133,6 +133,19 @@ impl WaylandState {
         kb.set_focus(self, None, SERIAL_COUNTER.next_serial());
     }
 
+    /// Locks the session now, as `--locked` starts it (`start_locked`: black and locked in the
+    /// compositor), and starts the lock screen; nothing when already locked. For the shell's
+    /// `lock` (live/infynitae-sleep-lock before a sleep: the lock holds before the sleep, however
+    /// slow the lock screen is to start).
+    pub fn lock_now(&mut self) {
+        if self.is_locked() {
+            return;
+        }
+        println!("[infynitae] Locked by request; starting the lock screen");
+        self.start_locked();
+        self.spawn_action("lock-screen");
+    }
+
     /// The session is locked: only lock surfaces are drawn and given input.
     pub fn is_locked(&self) -> bool {
         self.session_lock.as_ref().is_some_and(|l| l.locked)

@@ -32,6 +32,7 @@ pub fn same_user(stream: &UnixStream) -> bool {
 struct ShellExtension {
     server: ShellServer,
     _socket: SocketFile,
+    lock_requested: bool,
 }
 
 struct SocketFile(PathBuf);
@@ -45,7 +46,12 @@ impl Drop for SocketFile {
 impl LoopExtension for ShellExtension {
     fn service(&mut self, core: &mut Core) -> (Vec<Effect>, bool) {
         let done = self.server.service(core);
+        self.lock_requested |= done.lock;
         (done.effects, done.changed)
+    }
+
+    fn take_lock_request(&mut self) -> bool {
+        std::mem::take(&mut self.lock_requested)
     }
 
     fn set_locked(&mut self, locked: bool) {
@@ -93,6 +99,7 @@ pub fn serve(port: ShellPort, path: &Path) -> io::Result<Extension> {
         inner: Box::new(ShellExtension {
             server,
             _socket: socket,
+            lock_requested: false,
         }),
         wake,
     })

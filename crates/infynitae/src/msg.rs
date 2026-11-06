@@ -87,7 +87,7 @@ fn first_output() -> u64 {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> | navigate element <inst> <elem> | restore [output] | shortcut <name> | overview"
+        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> | navigate element <inst> <elem> | restore [output] | shortcut <name> | overview | lock"
     );
     ExitCode::from(2)
 }
@@ -202,6 +202,8 @@ pub fn run(args: &[String]) -> ExitCode {
             None => usage(),
         },
         Some("overview") => overview(),
+        // the session locked in the compositor now, then the lock screen (sleep-lock)
+        Some("lock") => print_reply(&request(&Value::obj([id, ("cmd", "lock".into())]))),
         _ => usage(),
     }
 }

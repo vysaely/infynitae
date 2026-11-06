@@ -88,6 +88,13 @@ lock_now() {
         log "already locked"
         return 0
     fi
+    # the compositor locks itself at once (black and locked within a frame) and starts the lock
+    # screen; the sleep then never waits on a lock screen's start-up, and logind's few seconds can
+    # never run out with the session open (2026-11-06; a compositor without `msg lock` refuses it)
+    if "$INF_BIN" msg lock >/dev/null 2>&1 && [ "$(lock_state)" = yes ]; then
+        log "locked by the compositor"
+        return 0
+    fi
     l=$(locker)
     [ -n "$l" ] || { log "no lock screen installed"; return 1; }
     log "starting the lock screen ($l)"

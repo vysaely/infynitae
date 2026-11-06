@@ -17,6 +17,11 @@ mkdir -p "$BIN" "$TMP/home" "$TMP/run"
 # the compositor: locked once $TMP/locked exists
 cat > "$BIN/infynitae" <<EOF
 #!/bin/sh
+# \`msg lock\`: only a compositor that has it (\$TMP/has-msg-lock), which locks at once
+if [ "\$1 \$2" = "msg lock" ]; then
+    [ -f "$TMP/has-msg-lock" ] || exit 2
+    touch "$TMP/locked"; echo '{"id":1,"ok":true}'; exit 0
+fi
 [ "\$1 \$2" = "msg snapshot" ] || exit 2
 if [ -f "$TMP/locked" ]; then echo '{"id":1,"ok":true,"snapshot":{"locked":true}}'
 else echo '{"id":1,"ok":true,"snapshot":{"locked":false}}'; fi
@@ -96,5 +101,12 @@ check "a process named infynitae-lock counts for nothing" "starting the lock scr
 
 run good-lock pre
 check "a session already locked starts nothing" "already locked"
+
+# a compositor with `msg lock`: it locks at once, no lock screen is waited for, the sleep goes on
+touch "$TMP/has-msg-lock"
+run stuck-lock
+rm -f "$TMP/has-msg-lock"
+check "a compositor that locks itself is asked first" "locked by the compositor"
+held_is "  and the sleep goes on at once" no
 
 exit "$fail"
