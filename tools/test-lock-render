@@ -1,0 +1,99 @@
+#!/bin/sh
+# tools/test-lock-render: the lock screen's look, without a compositor. It builds infynitae-lock
+# and the wallpaper helper's lock cache (live/wallpaper/lock-cache.h), makes the lock pictures from
+# a generated wallpaper and a ~/.face, and renders frames with `infynitae-lock --render` (which
+# connects to nothing and locks nothing). It checks: the background and avatar are written
+# (avatar 192 x 192); every state renders at two sizes and is not blank; with no picture the
+# initials come out; a broken, a truncated and an oversized cache file are ignored (the lock
+# draws its own background instead of failing). RENDER_OUT=dir keeps the PNGs. Run from the
+# repository root.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-lock-render.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+OUT="${RENDER_OUT:-$TMP/out}"
+mkdir -p "$OUT" "$TMP/home/.config/infynitae"
+LIVE="$REPO_DIR/live"
+
+cc -O1 -o "$TMP/infynitae-lock" "$LIVE/lock/infynitae-lock.c" "$LIVE/lock/ext-session-lock-v1-protocol.c" \
+    $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon) -lpam -lm -lpthread
+cat > "$TMP/cache.c" <<'C'
+#include "lock-cache.h"
+/* argv[1]: make a test wallpaper (a gradient) and a face, then the lock pictures */
+int main(int argc, char **argv) {
+    (void)argc;
+    GdkPixbuf *wp = gdk_pixbuf_new(GDK_COLORSPACE_RGB, FALSE, 8, 2400, 1350);
+    guchar *px = gdk_pixbuf_get_pixels(wp);
+    int rs = gdk_pixbuf_get_rowstride(wp);
+    for (int y = 0; y < 1350; y++)
+        for (int x = 0; x < 2400; x++) {
+            guchar *p = px + y * rs + x * 3;
+            p[0] = (guchar)(x * 255 / 2400); p[1] = (guchar)(y * 255 / 1350); p[2] = (guchar)((x / 60 + y / 60) % 2 ? 200 : 40);
+        }
+    char face[4096];
+    snprintf(face, sizeof(face), "%s/.face", argv[1]);
+    GdkPixbuf *f = gdk_pixbuf_new_subpixbuf(wp, 300, 100, 900, 600);
+    gdk_pixbuf_save(f, face, "png", NULL, NULL);
+    g_object_unref(f);
+    int bg = lock_cache_write_background(wp), av = lock_cache_write_avatar();
+    g_object_unref(wp);
+    printf("%d %d\n", bg, av);
+    return 0;
+}
+C
+cc -O1 -I "$LIVE/wallpaper" -o "$TMP/cache" "$TMP/cache.c" $(pkg-config --cflags --libs gdk-pixbuf-2.0)
+printf 'SQUARE_CORNERS="true"\nBORDER_ACTIVE="#7aa2f7"\n' > "$TMP/home/.config/infynitae/config"
+
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected $3, got $2"; fail=1; fi
+}
+# png_info FILE: "W H distinct" (distinct: 1 when a pixel differs from the top-left one)
+png_info() {
+    python3 - "$1" <<'PY' 2>/dev/null || echo "unreadable"
+import struct, sys, zlib
+d = open(sys.argv[1], 'rb').read()
+w, h = struct.unpack('>II', d[16:24])
+i, raw = 8, b''
+while i < len(d):
+    n = struct.unpack('>I', d[i:i+4])[0]; t = d[i+4:i+8]
+    if t == b'IDAT': raw += d[i+8:i+8+n]
+    i += 12 + n
+px = zlib.decompress(raw)
+first = px[1:5]
+print(w, h, 1 if any(px[k:k+4] != first for k in range(1, len(px) - 4, 4097)) else 0)
+PY
+}
+render() { HOME="$TMP/home" XDG_CACHE_HOME= INFYNITAE_LOCK_RENDER_STATE="$2" "$TMP/infynitae-lock" --render "$1" "$3"; }
+
+check "the cache writes the background and the avatar" "$(HOME="$TMP/home" XDG_CACHE_HOME= "$TMP/cache" "$TMP/home")" "0 0"
+check "the avatar is 192 x 192" "$(png_info "$TMP/home/.cache/infynitae/avatar.png" | cut -d' ' -f1,2)" "192 192"
+check "the background is 640 wide" "$(png_info "$TMP/home/.cache/infynitae/lock-background.png" | cut -d' ' -f1)" "640"
+
+for size in 1920x1080 1280x800; do
+    for state in idle typing failed caps verifying; do
+        f="$OUT/lock-$state-$size.png"
+        render "$size" "$state" "$f"
+        check "$state at $size renders, not blank" "$(png_info "$f")" "$(echo "$size" | tr x ' ') 1"
+    done
+done
+
+rm "$TMP/home/.cache/infynitae/avatar.png"
+render 1920x1080 idle "$OUT/lock-initials.png"
+check "no picture: still renders (initials)" "$(png_info "$OUT/lock-initials.png" | cut -d' ' -f3)" "1"
+
+bg="$TMP/home/.cache/infynitae/lock-background.png"
+printf 'not a png' > "$bg"
+check "a broken background is ignored" "$(render 1280x800 idle "$OUT/lock-broken.png"; echo $?)" "0"
+head -c 200 "$OUT/lock-idle-1920x1080.png" > "$bg"
+check "a truncated background is ignored" "$(render 1280x800 idle "$OUT/lock-truncated.png"; echo $?)" "0"
+python3 -c "
+import struct, zlib
+w, h = 5000, 8
+raw = b''.join(b'\0' + b'\x80' * (w * 3) for _ in range(h))
+def chunk(t, d): return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d))
+open('$bg', 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(raw)) + chunk(b'IEND', b''))"
+check "an oversized background is ignored" "$(render 1280x800 idle "$OUT/lock-oversized.png"; echo $?)" "0"
+
+exit $fail
