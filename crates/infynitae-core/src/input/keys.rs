@@ -149,7 +149,8 @@ pub enum KeyAction {
     CloseFocused,
     /// Super+Space or Super+Shift+Space (owner interaction intent of 2026-10-05, restated 2026-10-24):
     /// the pointer's output's camera is centred on the focused window and zoom is reverted to
-    /// default 1.0 scale (or, if no window is focused, camera zoom is reset to 1.0).
+    /// default 1.0 scale, or zoomed out just enough to show all of a window bigger than the view
+    /// (2026-11-06) (or, if no window is focused, camera zoom is reset to 1.0).
     /// No history entry, as a shell `Navigate`.
     Recenter,
     /// Super+Shift+Space (owner, 2026-10-24): centre the camera on the focused window and keep
