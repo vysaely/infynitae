@@ -500,13 +500,13 @@ AUTOMOUNT="true"
     # options: true  · false
 
 ENABLE_EDGE="true"
-    # The edge: apps (Super+W), open windows (Super+L), control panel (Super+A), clipboard
-    # (Super+V), from a screen edge [reload] (ENABLE_ISLAND, its old name, still works)
+    # The edge: panels that open from the screen's edges (below) [reload] (ENABLE_ISLAND, its old
+    # name, still works)
     # default: true
     # options: true  · false (falls back to fuzzel / control-menu)
 
 EDGE_POSITION="top"
-    # Which screen edge the edge and the control panel open from [reload]
+    # The edge the built-in panels open from, unless their PANEL_ line says another [reload]
     # default: top
     # options: top  · bottom
 
@@ -515,14 +515,29 @@ EDGE_CONTROL_SIDE="right"
     # default: right
     # options: right  · left
 
-CONTROL_MODULES="clock volume wifi bluetooth dnd power replay apps notifications session"
-    # What the control panel (Super+A) shows, like cards slotted in: leave a word out to remove
-    # it; the tiles (wifi bluetooth dnd power replay) appear in the order written. A module that
-    # cannot do anything hides itself (Power mode without power-profiles-daemon, Save clip while
-    # replay is off). [use]
-    # default: clock volume wifi bluetooth dnd power replay apps notifications session
-    # options: any of those words, in any order
+FAVORITES=""
+    # The apps the favorites module shows, in this order: desktop file names or app names.
+    # Right click an app (or Shift+Enter) in the apps panel to add it or take it out. [use]
+    # default: ""   e.g. "firefox org.gnome.Nautilus steam discord"
 
+# The edge's panels, one line each: PANEL_<NAME>="KEY PLACE MODULES", words in any order. [use]
+#   KEY     a chord (SUPER+W, SUPER+SHIFT+M, see the keys below), or none
+#   PLACE   the edge: top bottom left right; then where along it: left center right (top center
+#           bottom on a side edge); a width in px; hover: a touch of that screen edge opens it
+#   MODULES stacked in the order written; one with nothing to show hides itself:
+#           search  favorites  apps  windows  clipboard  clock  volume  wifi  bluetooth  dnd
+#           power  replay  tray  notifications  session
+# Four panels are built in; a line for one of them changes only what it says (PANEL_CONTROL="left"
+# moves it and keeps its key and modules). Any other name is a new panel:
+#   PANEL_APPS="SUPER+W top center search favorites apps"
+#   PANEL_CONTROL="SUPER+A top right hover clock volume wifi bluetooth dnd power replay tray notifications session"
+#   PANEL_WINDOWS="SUPER+L top center hover search windows"
+#   PANEL_CLIPBOARD="SUPER+V top center search clipboard"
+#   PANEL_MEDIA="SUPER+M right center 320 volume tray"      a panel of your own
+# In every panel: arrows move to the nearest item, Enter does it, Shift+Enter or a right click its
+# second action (a switch's list, an app in or out of the favorites, a tray app's menu), typing
+# searches, Escape closes. (CONTROL_MODULES, the control panel's modules before 2026-11-07, still
+# reads.)
 
 # ═══ Lock & idle ═══════════════════════════════════════════════════════════════════ [save] ═══
 

@@ -1099,6 +1099,20 @@ impl WaylandState {
                             exec_lines.push((key.to_string(), val.to_string()));
                             continue;
                         }
+                        // the edge's panels: a key moves a built-in panel's key or opens the
+                        // user's own panel (the edge reads the rest of the line itself)
+                        if let Some(name) = key.strip_prefix("PANEL_") {
+                            match panel_key(name, val) {
+                                Some(PanelKey::Bind(action, chord)) => {
+                                    bind_lines.push((action.to_string(), chord))
+                                }
+                                Some(PanelKey::Exec(line, command)) => {
+                                    exec_lines.push((line, command))
+                                }
+                                None => {}
+                            }
+                            continue;
+                        }
                         match key {
                             "CURSOR_THEME" => {
                                 let trimmed = val.trim();
@@ -1860,6 +1874,43 @@ pub fn config_line(line: &str) -> Option<(String, String)> {
     Some((key.trim().to_string(), out.trim().to_string()))
 }
 
+/// The key of an edge panel's config line (`PANEL_<NAME>="KEY PLACE MODULES"`).
+#[derive(Debug, PartialEq, Eq)]
+pub enum PanelKey {
+    /// A built-in panel (apps, control, windows, clipboard): its action's chord, as a
+    /// `BIND_<ACTION>` line ("none" frees it).
+    Bind(&'static str, String),
+    /// The user's own panel: an `EXEC_` line (its name, "CHORD:command") that opens it.
+    Exec(String, String),
+}
+
+/// The key a `PANEL_<name>` line gives its panel: the first word with a `+` (a chord), or
+/// "none". `None`: the line names no key (the panel keeps its own, or has none). Pure.
+pub fn panel_key(name: &str, value: &str) -> Option<PanelKey> {
+    let chord = value
+        .split(|c: char| c.is_whitespace() || c == ',' || c == ':')
+        .find(|w| w.contains('+') || w.eq_ignore_ascii_case("none"))?;
+    let lower = name.to_ascii_lowercase();
+    if lower.is_empty() || !lower.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return None;
+    }
+    let action = match lower.as_str() {
+        "apps" => Some("LAUNCHER"),
+        "control" => Some("CONTROL"),
+        "windows" => Some("WINDOWS"),
+        "clipboard" => Some("CLIPBOARD"),
+        _ => None,
+    };
+    match action {
+        Some(a) => Some(PanelKey::Bind(a, chord.to_string())),
+        None if chord.eq_ignore_ascii_case("none") => None,
+        None => Some(PanelKey::Exec(
+            format!("PANEL_{}", name.to_ascii_uppercase()),
+            format!("{chord}:\"$HOME/.local/bin/infynitae-edge\" panel {lower}"),
+        )),
+    }
+}
+
 /// The user's key bindings from config lines: `BIND_<ACTION>="CHORD[,CHORD]"` gives an action
 /// its own chords (its built-in chord is freed), `BIND_<ACTION>="none"` frees it without a new
 /// one; `EXEC_<NAME>="CHORD:command"` runs a command. Returns the bindings, the commands (by
@@ -2032,6 +2083,33 @@ mod key_binding_config_tests {
 
     /// BIND_ moves actions (several chords allowed) or frees them with "none"; EXEC_ adds
     /// commands in order; lines that cannot be understood are reported, not applied.
+    #[test]
+    fn panel_lines_give_keys_to_panels() {
+        use super::{PanelKey, panel_key};
+        assert_eq!(
+            panel_key("APPS", "SUPER+D top center search favorites apps"),
+            Some(PanelKey::Bind("LAUNCHER", "SUPER+D".into()))
+        );
+        assert_eq!(
+            panel_key("CONTROL", "none top right clock"),
+            Some(PanelKey::Bind("CONTROL", "none".into()))
+        );
+        assert_eq!(
+            panel_key("CONTROL", "bottom left"),
+            None,
+            "no key: its own stays"
+        );
+        assert_eq!(
+            panel_key("Music", "SUPER+M right center volume tray"),
+            Some(PanelKey::Exec(
+                "PANEL_MUSIC".into(),
+                "SUPER+M:\"$HOME/.local/bin/infynitae-edge\" panel music".into()
+            ))
+        );
+        assert_eq!(panel_key("MINE", "top volume"), None);
+        assert_eq!(panel_key("BAD;NAME", "SUPER+X volume"), None);
+    }
+
     #[test]
     fn config_lines_become_bindings_and_commands() {
         let (b, cmds, problems) = user_key_bindings(

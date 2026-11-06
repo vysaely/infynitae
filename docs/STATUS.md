@@ -52,6 +52,10 @@ These pass the test suite but have not run on a real screen or device yet:
     (AccountsService, `~/.face`) or up to two initials, the full name, a larger clock; the
     wallpaper helper prepares the pictures (`~/.cache/infynitae`), the lock screen reads them only
     once the lock holds.
+  - **Panels of modules (2026-11-07):** each panel is one config line, its key, its place on
+    any screen edge and its modules in order (`PANEL_<NAME>`); new panels of your own; a
+    favorites module (FAVORITES, right click an app to pin it); arrows move to the nearest item
+    in every panel; opens at once (no animation).
   - **Panels (Super+W, Super+L, Super+A, Super+V):** one look (sans-serif 12-15 px, 32 px rows,
     hairline outlines, the accent only for what is selected or on); the launcher, window list and
     clipboard are one-column lists with every item reachable (Up/Down, Page Up/Down); the control

@@ -51,4 +51,21 @@ few=$(panel_h 'CONTROL_MODULES="volume session"')
 junk=$(panel_h 'CONTROL_MODULES="nonsense"')
 if [ -n "$few" ] && [ "$few" -lt "$all" ]; then echo "ok   CONTROL_MODULES leaves modules out ($all -> $few px)"; else echo "FAIL CONTROL_MODULES: $all -> $few"; fail=1; fi
 if [ "$junk" = "$all" ]; then echo "ok   unknown module words show every module"; else echo "FAIL unknown words: $junk, all $all"; fail=1; fi
+# PANEL_ lines: a panel of one's own at its place; a built-in one moved keeps its modules;
+# FAVORITES adds the favorites to the apps panel; a search hides them
+rect() {
+    printf 'SQUARE_CORNERS="true"\n%s\n' "$2" > "$TMP/home/.config/infynitae/config"
+    HOME="$TMP/home" INFYNITAE_EDGE_RENDER_RECT=1 "$TMP/edge" --render "$1" 1920x1080 "$TMP/p.png"
+}
+set -- $(rect mine 'PANEL_MINE="SUPER+M right center 320 clock volume"')
+if [ "${1:-0}" -gt 1500 ] && [ "${2:-0}" -gt 300 ] && [ "${3:-0}" -le 330 ]; then echo "ok   a panel of one's own, at the right edge's middle"; else echo "FAIL own panel: $*"; fail=1; fi
+set -- $(rect control 'PANEL_CONTROL="bottom left"')
+ctl_h=$4
+if [ "$1" -lt 20 ] && [ $(( $2 + $4 )) -gt 1060 ] && [ "$ctl_h" = "$all" ]; then echo "ok   the control panel moved bottom left keeps its modules"; else echo "FAIL moved control: $* (all $all)"; fail=1; fi
+plain=$(rect apps '' | cut -d' ' -f4)
+fav=$(rect apps 'FAVORITES="app0 Steam app3"' | cut -d' ' -f4)
+if [ "$fav" -gt "$plain" ]; then echo "ok   favorites show in the apps panel ($plain -> $fav px)"; else echo "FAIL favorites: $plain -> $fav"; fail=1; fi
+searched=$(INFYNITAE_EDGE_RENDER_SEARCH=fire rect apps 'FAVORITES="app0 Steam app3"' | cut -d' ' -f4)
+if [ "$searched" -lt "$fav" ]; then echo "ok   a search hides the favorites"; else echo "FAIL search with favorites: $searched"; fail=1; fi
+if HOME="$TMP/home" "$TMP/edge" --render nosuch 1920x1080 "$TMP/p.png" 2>/dev/null; then echo "FAIL an unknown panel rendered"; fail=1; else echo "ok   an unknown panel is refused"; fi
 exit $fail

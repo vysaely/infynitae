@@ -23,8 +23,11 @@ these by date, e.g. "(owner, 2026-10-24)".
   the time has to say why in its commit. Measured 2026-11-06: about 76 MB for all of Infynitae,
   2.7% of a core while drawing a busy desktop at 165 Hz.
 - **Modular like a Framework laptop** (owner, 2026-11-06). A part is a module you can leave out,
-  and the panels are made of modules listed in one line of the config (`CONTROL_MODULES` first;
-  the launcher and the other panels next: favourite apps, search, Wi-Fi, media and the like).
+  and the panels are made of modules listed in one line of the config: since 2026-11-07 every
+  panel is a `PANEL_<NAME>="KEY PLACE MODULES"` line (search, favorites, apps, windows,
+  clipboard, clock, volume, the switches, tray, notifications, session), the four built-in ones
+  changed by it and any other name a new panel with its own key and place. No animation: a panel
+  is there at once (owner: "if needed we could add it later").
   A module that cannot do anything on this machine hides itself, and the rest closes up. Lean
   over feature-rich: KDE's widgets are the reference for what, not for how much.
 - **Updates never touch your settings** (owner, 2026-11-06, after Hyprland users rewriting their
