@@ -751,10 +751,10 @@ impl Core {
     ) {
         if !self.presentation_suppressed.contains(&output) {
             self.presentation_suppressed.push(output);
-            // at the screen's size it would cover its neighbours on the canvas
-            if let Some(element) = self.presentation(output) {
-                self.stage.lower(element);
-            }
+            // it keeps its place in the stack: a window the user turns to comes over it by its
+            // own raise, and the overview shows the game where it was, on top. Until 2026-11-06
+            // it went to the bottom, under every window (owner: "a fullscreen app, then centre,
+            // it goes under other windows")
             self.reconcile_presentation_change(output, out);
         }
     }

@@ -930,3 +930,44 @@ fn focus_cycle_suppress_and_unsuppress_recomputes_visibility() {
         "the reverse (unsuppress) leaves X; got: {left:?}"
     );
 }
+
+/// Owner, 2026-11-06 ("a fullscreen app, then centre, it goes under other windows"): a fullscreen
+/// window that steps aside for another one stays above the windows it was above; only the window
+/// the user turned to comes over it.
+#[test]
+fn a_fullscreen_window_stepping_aside_keeps_its_place_in_the_stack() {
+    use infynitae_backend_headless::keyboard_key;
+    use infynitae_core::input::keys::{KEY_LEFTMETA, KEY_TAB};
+
+    let mut t = T::new();
+    t.ls.state.core_mut().set_fullscreen_pan(true);
+    let (_y, id_y) = t.map("Y", (100, 60), BLUE);
+    let (_x, id_x) = t.map("X", (120, 80), BLUE);
+    let (w, id_w) = t.map("W", (200, 100), RED);
+    t.focus(id_w);
+    t.ask(w, |tl| tl.set_fullscreen(None));
+    assert_eq!(t.ls.state.core().presentation(t.ls.output()), Some(id_w));
+
+    // Super+Tab to the window before it: W steps aside
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_LEFTMETA, true, 1000).unwrap();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_TAB, true, 2000).unwrap();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_TAB, false, 2500).unwrap();
+    keyboard_key(&mut t.ls.state, &mut t.ls.input, KEY_LEFTMETA, false, 3000).unwrap();
+    t.adv();
+    assert!(t.ls.state.core().is_presentation_suppressed(t.ls.output()));
+
+    let z = t.ls.state.core().stage().z_order().to_vec();
+    let at = |e| z.iter().position(|&x| x == e).unwrap();
+    let chosen = t.ls.state.core().focus().target().unwrap();
+    assert_ne!(chosen, id_w);
+    assert_eq!(
+        at(chosen),
+        z.len() - 1,
+        "the chosen window is on top: {z:?}"
+    );
+    let other = if chosen == id_x { id_y } else { id_x };
+    assert!(
+        at(id_w) > at(other),
+        "W stays above the window nobody chose: {z:?}"
+    );
+}
