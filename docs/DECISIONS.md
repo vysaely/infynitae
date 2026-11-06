@@ -14,6 +14,23 @@ these by date, e.g. "(owner, 2026-10-24)".
   spatial model (per-screen cameras, clusters, fit, fullscreen panning) and every default are its
   own. An earlier version was a Hyprland plugin; a plugin could not give per-screen cameras,
   constant-time panning or exact hit-testing (see the foundation evidence).
+- **Nothing runs that is not needed** (owner, 2026-11-06: "we need 0 resources wasted ... the
+  active app in RAM, other stuff only called when needed, not staying in the background"). What
+  you look at gets the machine: windows in view draw at their full rate, windows out of view get
+  no frames, apps out of sight for 15 s get a lower CPU priority, and a game filling the screen
+  gets the GPU first (GPU relief slows the rest only then). Helpers sleep until something
+  happens (no polling) or start only when used; a new feature that needs a process running all
+  the time has to say why in its commit. Measured 2026-11-06: about 76 MB for all of Infynitae,
+  2.7% of a core while drawing a busy desktop at 165 Hz.
+- **Modular like a Framework laptop** (owner, 2026-11-06). A part is a module you can leave out,
+  and the panels are made of modules listed in one line of the config (`CONTROL_MODULES` first;
+  the launcher and the other panels next: favourite apps, search, Wi-Fi, media and the like).
+  A module that cannot do anything on this machine hides itself, and the rest closes up. Lean
+  over feature-rich: KDE's widgets are the reference for what, not for how much.
+- **Updates never touch your settings** (owner, 2026-11-06, after Hyprland users rewriting their
+  config every update). A new setting is added at the end of the config at its default, a
+  renamed one keeps your value, and the defaults are in config.template; no setting changes
+  meaning under you.
 - **Ready out of the box, every piece your choice.** A fresh install is a whole desktop; each
   app is a setting, each key can be rebound, the optional helpers are switches, and the
   configuration is one commented file. No settings daemons.
