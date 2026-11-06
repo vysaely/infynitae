@@ -90,6 +90,17 @@ typedef struct {
     char session_cmd[256];
     char status_msg[128];
 
+    /* what the screen shows of the user (owner, 2026-11-06: "the lock screen is mid, like the
+     * wallpaper on it and the user pfp"): the full name from the account (GECOS), else the login;
+     * up to two initials when there is no picture */
+    char display_name[128];
+    char initials[8];
+    /* the pictures the wallpaper helper prepared (live/wallpaper/lock-cache.h), loaded only once the
+     * compositor confirmed the lock, so nothing before the lock depends on them; NULL: none */
+    cairo_surface_t *background;
+    cairo_surface_t *avatar;
+    bool square_corners;
+
     double canvas_rgb[3];
     double surface_rgb[3];
     double border_act_rgb[3];
@@ -114,6 +125,11 @@ typedef struct LockOutput {
     struct wl_buffer *buffer;
     void *shm_data;
     size_t shm_size;
+
+    /* the background drawn once at this screen's size (scaled, darkened) and reused for every key */
+    cairo_surface_t *scene_bg;
+    int scene_bg_w, scene_bg_h;
+    cairo_surface_t *scene_bg_from;
 
     struct LockOutput *next;
 } LockOutput;
@@ -325,6 +341,11 @@ static void load_theme_config(LockApp *app) {
         else if (strncmp(p, "BORDER_ACTIVE=", 14) == 0) parse_hex_rgb(p + 14, app->border_act_rgb);
         else if (strncmp(p, "BORDER_INACTIVE=", 16) == 0) parse_hex_rgb(p + 16, app->border_inact_rgb);
         else if (strncmp(p, "TEXT_COLOR=", 11) == 0) parse_hex_rgb(p + 11, app->text_rgb);
+        else if (strncmp(p, "SQUARE_CORNERS=", 15) == 0) {
+            const char *v = p + 15;
+            while (*v == '"' || *v == '\'') v++;
+            app->square_corners = strncmp(v, "true", 4) == 0 || strncmp(v, "1", 1) == 0 || strncmp(v, "yes", 3) == 0 || strncmp(v, "on", 2) == 0;
+        }
     }
     fclose(f);
 }
@@ -603,211 +624,251 @@ static const struct wl_touch_listener touch_listener = {
     .cancel = touch_cancel,
 };
 
-static void render_output(LockOutput *output) {
-    if (!output->configured || output->width <= 0 || output->height <= 0) return;
-    if (!allocate_output_buffer(output)) return;
+/* A rounded rectangle (or a square one when SQUARE_CORNERS is set) as the current path. */
+static void scene_rect(cairo_t *cr, const LockApp *app, double x, double y, double w, double h, double r) {
+    if (app->square_corners || r <= 0) {
+        cairo_rectangle(cr, x, y, w, h);
+        return;
+    }
+    if (r > h / 2) r = h / 2;
+    cairo_new_sub_path(cr);
+    cairo_arc(cr, x + w - r, y + r, r, -M_PI / 2, 0);
+    cairo_arc(cr, x + w - r, y + h - r, r, 0, M_PI / 2);
+    cairo_arc(cr, x + r, y + h - r, r, M_PI / 2, M_PI);
+    cairo_arc(cr, x + r, y + r, r, M_PI, 3 * M_PI / 2);
+    cairo_close_path(cr);
+}
 
-    LockApp *app = output->app;
-    cairo_surface_t *surf = cairo_image_surface_create_for_data(
-        (unsigned char *)output->shm_data, CAIRO_FORMAT_ARGB32,
-        output->width, output->height, output->width * 4);
-    cairo_t *cr = cairo_create(surf);
-
-    int w = output->width;
-    int h = output->height;
-
-    // 1. Background: CANVAS_COLOR, with a subtle radial vignette
-    cairo_pattern_t *pat = cairo_pattern_create_radial(w / 2.0, h / 2.0, 50, w / 2.0, h / 2.0, w / 1.2);
-    cairo_pattern_add_color_stop_rgb(pat, 0.0, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2]);
-    cairo_pattern_add_color_stop_rgb(pat, 1.0, app->canvas_rgb[0], app->canvas_rgb[1], app->canvas_rgb[2]);
-    cairo_set_source(cr, pat);
+/* The background at w x h: the blurred wallpaper scaled to cover the screen and darkened toward
+ * CANVAS_COLOR, or the canvas colour alone. Drawn once per screen size, not per key press. */
+static void draw_background(cairo_t *cr, const LockApp *app, int w, int h) {
+    cairo_set_source_rgb(cr, app->canvas_rgb[0], app->canvas_rgb[1], app->canvas_rgb[2]);
     cairo_paint(cr);
-    cairo_pattern_destroy(pat);
-
-    // Subtle background grid lattice matching Infynitae
-    cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.015);
-    cairo_set_line_width(cr, 1.0);
-    for (int x = 0; x < w; x += 80) {
-        cairo_move_to(cr, x, 0);
-        cairo_line_to(cr, x, h);
+    if (app->background) {
+        int iw = cairo_image_surface_get_width(app->background);
+        int ih = cairo_image_surface_get_height(app->background);
+        if (iw > 0 && ih > 0) {
+            double sc = fmax((double)w / iw, (double)h / ih);
+            cairo_save(cr);
+            cairo_translate(cr, (w - iw * sc) / 2.0, (h - ih * sc) / 2.0);
+            cairo_scale(cr, sc, sc);
+            cairo_set_source_surface(cr, app->background, 0, 0);
+            /* bilinear: cairo's GOOD scales up through a box filter, which showed blocks */
+            cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_BILINEAR);
+            cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_PAD);
+            cairo_paint(cr);
+            cairo_restore(cr);
+            cairo_set_source_rgba(cr, app->canvas_rgb[0], app->canvas_rgb[1], app->canvas_rgb[2], 0.55);
+            cairo_paint(cr);
+        }
+    } else {
+        /* a soft light from the centre in the surface colour */
+        cairo_pattern_t *pat = cairo_pattern_create_radial(w / 2.0, h * 0.42, 0, w / 2.0, h * 0.42, fmax(w, h) * 0.75);
+        cairo_pattern_add_color_stop_rgba(pat, 0.0, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.9);
+        cairo_pattern_add_color_stop_rgba(pat, 1.0, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.0);
+        cairo_set_source(cr, pat);
+        cairo_paint(cr);
+        cairo_pattern_destroy(pat);
     }
-    for (int y = 0; y < h; y += 80) {
-        cairo_move_to(cr, 0, y);
-        cairo_line_to(cr, w, y);
-    }
-    cairo_stroke(cr);
+}
 
-    // Calculate center layout with shake offset
+/* Everything on top of the background, for a screen of w x h. */
+static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int w, int h) {
+    const double *tx = app->text_rgb;
+    // Shake offset after a wrong password
     double shake_offset = 0;
     if (app->shake_frame > 0) {
         double decay = (double)app->shake_frame / SHAKE_DURATION_FRAMES;
         shake_offset = sin(app->shake_frame * 1.5) * 16.0 * decay;
     }
-
-    double cx = (w / 2.0) + shake_offset;
-    double cy = h / 2.0;
+    double cx = w / 2.0;
+    double clock_y = h * 0.30;
+    double avatar_r = 48.0;
+    double avatar_y = h * 0.56;
     if (app->osk_visible) {
-        /* the password stays above the keyboard */
+        /* the password stays above the keyboard: everything moves up together */
         OskKey keys[OSK_MAX_KEYS];
         double kb_top;
         osk_layout(app, w, h, keys, &kb_top);
-        if (cy + 140 > kb_top) cy = kb_top - 140;
+        double lowest = avatar_y + avatar_r + 16 + 26 + 16 + 44 + 30;
+        if (lowest > kb_top) {
+            double up = lowest - kb_top;
+            avatar_y -= up;
+            clock_y -= up;
+            if (clock_y < 80) clock_y = 80;
+        }
     }
 
-    // Pango layout initialization
     PangoLayout *layout = pango_cairo_create_layout(cr);
 
-    // 2. Clock & Date (ink-centered so digit bearings never shift the clock off-axis)
+    // Clock and date (tabular digits so the colon never moves)
     time_t now = time(NULL);
     struct tm *tm = localtime(&now);
-    char time_str[64];
-    char date_str[128];
+    char time_str[64], date_str[128];
     strftime(time_str, sizeof(time_str), "%H:%M", tm);
-    strftime(date_str, sizeof(date_str), "%A, %B %d", tm);
-
-    // Tabular numbers attribute so all digits have identical width and ':' stays centered
+    strftime(date_str, sizeof(date_str), "%A, %B %-d", tm);
     PangoAttrList *clock_attrs = pango_attr_list_new();
     pango_attr_list_insert(clock_attrs, pango_attr_font_features_new("tnum=1"));
     pango_layout_set_attributes(layout, clock_attrs);
-    cairo_set_source_rgba(cr, 0.95, 0.97, 1.0, 0.94);
-    draw_text_centered(cr, layout, "Sans Light 76", time_str, cx, cy - 185.0, true);
+    cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.96);
+    draw_text_centered(cr, layout, "sans-serif Light 72", time_str, cx, clock_y, true);
     pango_layout_set_attributes(layout, NULL);
     pango_attr_list_unref(clock_attrs);
+    cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.66);
+    draw_text_centered(cr, layout, "sans-serif 13.5", date_str, cx, clock_y + 70.0, false);
 
-    // Date beneath clock (clean 32px separation below the clock's bottom edge)
-    cairo_set_source_rgba(cr, 0.62, 0.68, 0.78, 0.78);
-    draw_text_centered(cr, layout, "Sans 14", date_str, cx, cy - 110.0, false);
+    double ax = cx + shake_offset;
 
-    // 3. User Avatar / Initial Badge (or Loading Spinner in status/verifying mode)
-    double avatar_radius = 34.0;
-    double avatar_y = cy - 28.0;
+    // The user's picture, or initials on an accent disc
+    if (app->avatar) {
+        int iw = cairo_image_surface_get_width(app->avatar);
+        int ih = cairo_image_surface_get_height(app->avatar);
+        cairo_save(cr);
+        cairo_new_path(cr);
+        cairo_arc(cr, ax, avatar_y, avatar_r, 0, 2 * M_PI);
+        cairo_clip(cr);
+        if (iw > 0 && ih > 0) {
+            double sc = (2 * avatar_r) / fmin(iw, ih);
+            cairo_translate(cr, ax - iw * sc / 2.0, avatar_y - ih * sc / 2.0);
+            cairo_scale(cr, sc, sc);
+            cairo_set_source_surface(cr, app->avatar, 0, 0);
+            cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+            cairo_paint(cr);
+        }
+        cairo_restore(cr);
+    } else {
+        cairo_set_source_rgba(cr, app->border_act_rgb[0], app->border_act_rgb[1], app->border_act_rgb[2], 0.22);
+        cairo_new_path(cr);
+        cairo_arc(cr, ax, avatar_y, avatar_r, 0, 2 * M_PI);
+        cairo_fill(cr);
+        cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.94);
+        draw_text_centered(cr, layout, "sans-serif Medium 26", app->initials, ax, avatar_y, true);
+    }
 
-    // Avatar background circle
-    cairo_set_source_rgba(cr, 0.10, 0.14, 0.20, 0.90);
-    cairo_arc(cr, cx, avatar_y, avatar_radius, 0, 2 * M_PI);
-    cairo_fill(cr);
-
-    // Avatar ring + animated spinner arc when verifying, unlocking, or showing status_msg
+    // The ring: a hairline, a spinning arc while busy, red after a wrong password
     bool busy = (app->auth_state == AUTH_STATE_VERIFYING ||
                  app->auth_state == AUTH_STATE_SUCCESS ||
                  app->status_msg[0] != '\0');
+    cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
     if (busy) {
-        cairo_set_source_rgba(cr, 0.25, 0.35, 0.50, 0.35);
-        cairo_set_line_width(cr, 2.2);
-        cairo_arc(cr, cx, avatar_y, avatar_radius, 0, 2 * M_PI);
+        cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.14);
+        cairo_set_line_width(cr, 2.0);
+        cairo_new_path(cr);
+        cairo_arc(cr, ax, avatar_y, avatar_r + 3, 0, 2 * M_PI);
         cairo_stroke(cr);
-
-        cairo_set_source_rgba(cr, 0.48, 0.64, 0.97, 0.95);
+        cairo_set_source_rgba(cr, app->border_act_rgb[0], app->border_act_rgb[1], app->border_act_rgb[2], 0.95);
         cairo_set_line_width(cr, 2.5);
-        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
-        cairo_arc(cr, cx, avatar_y, avatar_radius, app->pulse_phase, app->pulse_phase + 1.8);
+        cairo_new_path(cr);
+        cairo_arc(cr, ax, avatar_y, avatar_r + 3, app->pulse_phase, app->pulse_phase + 1.8);
         cairo_stroke(cr);
     } else if (app->auth_state == AUTH_STATE_FAILED) {
-        cairo_set_source_rgba(cr, 0.97, 0.32, 0.29, 0.90);
+        cairo_set_source_rgba(cr, 0.97, 0.46, 0.56, 0.95);
         cairo_set_line_width(cr, 2.0);
-        cairo_arc(cr, cx, avatar_y, avatar_radius, 0, 2 * M_PI);
+        cairo_new_path(cr);
+        cairo_arc(cr, ax, avatar_y, avatar_r + 3, 0, 2 * M_PI);
         cairo_stroke(cr);
     } else {
-        cairo_set_source_rgba(cr, 0.25, 0.32, 0.45, 0.55);
-        cairo_set_line_width(cr, 1.5);
-        cairo_arc(cr, cx, avatar_y, avatar_radius, 0, 2 * M_PI);
+        cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.16);
+        cairo_set_line_width(cr, 1.0);
+        cairo_new_path(cr);
+        cairo_arc(cr, ax, avatar_y, avatar_r + 2, 0, 2 * M_PI);
         cairo_stroke(cr);
     }
 
-    // Initial letter in avatar (ink-centered so capital letters sit dead-center in the circle)
-    char initial[2] = { (char)(app->username[0] >= 'a' && app->username[0] <= 'z' ? app->username[0] - 32 : app->username[0]), '\0' };
-    if (!initial[0]) initial[0] = 'I';
-    cairo_set_source_rgba(cr, 0.92, 0.96, 1.0, 0.94);
-    draw_text_centered(cr, layout, "Sans Bold 20", initial, cx, avatar_y, true);
+    // The name
+    double name_y = avatar_y + avatar_r + 16.0 + 13.0;
+    cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.92);
+    draw_text_centered(cr, layout, "sans-serif Medium 13.5", app->display_name, ax, name_y, false);
 
-    // Username label (centered 22px below the avatar circle)
-    cairo_set_source_rgba(cr, 0.82, 0.87, 0.96, 0.88);
-    draw_text_centered(cr, layout, "Sans Medium 13", app->username, cx, avatar_y + avatar_radius + 20.0, false);
-
-    // 4. Password input / status box (1 px border, square corners)
-    double pill_w = 276.0;
-    double pill_h = 38.0;
-    double pill_x = round(cx - (pill_w / 2.0));
-    double pill_y = round(cy + 60.0);
-    double pill_cy = pill_y + (pill_h / 2.0);
-
-    // Box background (SURFACE_COLOR)
-    cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.97);
-    cairo_rectangle(cr, pill_x, pill_y, pill_w, pill_h);
-    cairo_fill(cr);
-
-    // 1px Single Border (BORDER_ACTIVE when typing/verifying, BORDER_INACTIVE when idle)
+    // The password field
+    double field_w = 320.0, field_h = 44.0;
+    double field_x = round(ax - field_w / 2.0);
+    double field_y = round(name_y + 13.0 + 16.0);
+    double field_cy = field_y + field_h / 2.0;
+    cairo_new_path(cr);
+    scene_rect(cr, app, field_x, field_y, field_w, field_h, field_h / 2.0);
+    cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], app->background ? 0.70 : 0.92);
+    cairo_fill_preserve(cr);
     cairo_set_line_width(cr, 1.0);
     if (app->auth_state == AUTH_STATE_FAILED) {
-        cairo_set_source_rgba(cr, 0.97, 0.32, 0.29, 0.90);
+        cairo_set_source_rgba(cr, 0.97, 0.46, 0.56, 0.90);
     } else if (busy || app->password_len > 0) {
         cairo_set_source_rgba(cr, app->border_act_rgb[0], app->border_act_rgb[1], app->border_act_rgb[2], 0.90);
     } else {
         cairo_set_source_rgba(cr, app->border_inact_rgb[0], app->border_inact_rgb[1], app->border_inact_rgb[2], 0.90);
     }
-    draw_sharp_rect(cr, pill_x, pill_y, pill_w, pill_h);
     cairo_stroke(cr);
 
-    // Password indicator contents inside box
     if (app->status_msg[0] != '\0') {
-        cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], 0.94);
-        draw_text_centered(cr, layout, "Sans Medium 10.5", app->status_msg, cx, pill_cy, false);
+        cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.94);
+        draw_text_centered(cr, layout, "sans-serif 11", app->status_msg, ax, field_cy, false);
     } else if (app->auth_state == AUTH_STATE_SUCCESS) {
-        cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], 0.94);
-        draw_text_centered(cr, layout, "Sans Medium 10.5", "Loading workspace…", cx, pill_cy, false);
+        cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.94);
+        draw_text_centered(cr, layout, "sans-serif 11", "Unlocking", ax, field_cy, false);
     } else if (app->auth_state == AUTH_STATE_VERIFYING) {
-        cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], 0.92);
-        draw_text_centered(cr, layout, "Sans Medium 10.5", "Verifying…", cx, pill_cy, false);
+        cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.80);
+        draw_text_centered(cr, layout, "sans-serif 11", "Checking", ax, field_cy, false);
     } else if (app->password_len > 0) {
-        double dot_spacing = 13.0;
-        size_t max_dots = 16;
+        double dot_spacing = 14.0;
+        size_t max_dots = 18;
         size_t visible_dots = app->password_len < max_dots ? app->password_len : max_dots;
         double total_dots_w = visible_dots > 0 ? (visible_dots - 1) * dot_spacing : 0;
-        double start_dot_x = cx - (total_dots_w / 2.0);
-
-        cairo_set_source_rgba(cr, app->text_rgb[0], app->text_rgb[1], app->text_rgb[2], 0.94);
+        double start_dot_x = ax - (total_dots_w / 2.0);
+        cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.94);
         for (size_t i = 0; i < visible_dots; ++i) {
-            cairo_arc(cr, start_dot_x + (i * dot_spacing), pill_cy, 3.2, 0, 2 * M_PI);
+            cairo_new_path(cr);
+            cairo_arc(cr, start_dot_x + (i * dot_spacing), field_cy, 3.5, 0, 2 * M_PI);
             cairo_fill(cr);
         }
     } else {
-        cairo_set_source_rgba(cr, 0.44, 0.50, 0.60, 0.72);
-        draw_text_centered(cr, layout, "Sans 10", "Enter password", cx, pill_cy, false);
+        cairo_set_source_rgba(cr, tx[0], tx[1], tx[2], 0.45);
+        draw_text_centered(cr, layout, "sans-serif 11", "Password", ax, field_cy, false);
     }
 
-    // 5. Status / Caps Lock / Error Badge below box
-    double badge_cy = pill_y + pill_h + 24.0;
+    // One line under the field: the error, or caps lock
+    double note_y = field_y + field_h + 22.0;
     if (app->auth_state == AUTH_STATE_FAILED && app->password_len == 0) {
-        cairo_set_source_rgba(cr, 0.97, 0.42, 0.39, 0.92);
-        draw_text_centered(cr, layout, "Sans Medium 9.5", "Authentication failed · try again", cx, badge_cy, false);
+        cairo_set_source_rgba(cr, 0.97, 0.46, 0.56, 0.95);
+        draw_text_centered(cr, layout, "sans-serif 10.5", "Wrong password, try again", ax, note_y, false);
     } else if (app->caps_lock) {
-        double badge_w = 120.0;
-        double badge_h = 22.0;
-        double badge_x = round(cx - (badge_w / 2.0));
-        double badge_y = round(badge_cy - (badge_h / 2.0));
-
-        cairo_set_source_rgba(cr, app->surface_rgb[0], app->surface_rgb[1], app->surface_rgb[2], 0.95);
-        cairo_rectangle(cr, badge_x, badge_y, badge_w, badge_h);
-        cairo_fill(cr);
-
-        cairo_set_source_rgba(cr, 0.95, 0.65, 0.20, 0.75);
-        cairo_set_line_width(cr, 1.0);
-        draw_sharp_rect(cr, badge_x, badge_y, badge_w, badge_h);
-        cairo_stroke(cr);
-
-        cairo_set_source_rgba(cr, 1.0, 0.78, 0.32, 0.95);
-        draw_text_centered(cr, layout, "Sans Bold 8.5", "CAPS LOCK ON", cx, badge_cy, true);
+        cairo_set_source_rgba(cr, 0.88, 0.69, 0.41, 0.95);
+        draw_text_centered(cr, layout, "sans-serif 10.5", "Caps Lock is on", ax, note_y, false);
     }
 
     if (app->osk_visible) osk_draw(cr, layout, app, output, w, h);
+    g_object_unref(layout);
+}
 
-    // 6. Bottom Brand Hint (under the keyboard when it is shown)
-    if (!app->osk_visible) {
-        cairo_set_source_rgba(cr, 0.42, 0.48, 0.60, 0.42);
-        draw_text_centered(cr, layout, "Sans Light 10", "Infynitae Native", w / 2.0, h - 36.0, false);
+static void render_output(LockOutput *output) {
+    if (!output->configured || output->width <= 0 || output->height <= 0) return;
+    if (!allocate_output_buffer(output)) return;
+
+    LockApp *app = output->app;
+    int w = output->width;
+    int h = output->height;
+
+    // the background for this size, drawn again only when the size or the picture changed
+    if (!output->scene_bg || output->scene_bg_w != w || output->scene_bg_h != h ||
+        output->scene_bg_from != app->background) {
+        if (output->scene_bg) cairo_surface_destroy(output->scene_bg);
+        output->scene_bg = cairo_image_surface_create(CAIRO_FORMAT_RGB24, w, h);
+        cairo_t *bg_cr = cairo_create(output->scene_bg);
+        draw_background(bg_cr, app, w, h);
+        cairo_destroy(bg_cr);
+        output->scene_bg_w = w;
+        output->scene_bg_h = h;
+        output->scene_bg_from = app->background;
     }
 
-    g_object_unref(layout);
+    cairo_surface_t *surf = cairo_image_surface_create_for_data(
+        (unsigned char *)output->shm_data, CAIRO_FORMAT_ARGB32,
+        output->width, output->height, output->width * 4);
+    cairo_t *cr = cairo_create(surf);
+    cairo_set_source_surface(cr, output->scene_bg, 0, 0);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_paint(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+    draw_scene(cr, app, output, w, h);
     cairo_destroy(cr);
     cairo_surface_destroy(surf);
 
@@ -1102,6 +1163,7 @@ static void registry_global_remove(void *data, struct wl_registry *registry, uin
             if (to_remove->lock_surface) ext_session_lock_surface_v1_destroy(to_remove->lock_surface);
             if (to_remove->surface) wl_surface_destroy(to_remove->surface);
             free_output_buffer(to_remove);
+        if (to_remove->scene_bg) cairo_surface_destroy(to_remove->scene_bg);
             if (to_remove->wl_output) wl_output_destroy(to_remove->wl_output);
             free(to_remove);
             break;
@@ -1118,6 +1180,102 @@ static const struct wl_registry_listener registry_listener = {
 /* ========================================================================== */
 /* Main Loop & Lifecycle                                                      */
 /* ========================================================================== */
+/* The name the screen shows and up to two initials (UTF-8 aware): the account's full name (GECOS
+ * up to the first comma), else the login. */
+static void resolve_display_name(LockApp *app) {
+    struct passwd *pw = getpwnam(app->username);
+    const char *full = NULL;
+    char gecos[128] = "";
+    if (pw && pw->pw_gecos && pw->pw_gecos[0]) {
+        snprintf(gecos, sizeof(gecos), "%s", pw->pw_gecos);
+        char *comma = strchr(gecos, ',');
+        if (comma) *comma = '\0';
+        if (gecos[0]) full = gecos;
+    }
+    snprintf(app->display_name, sizeof(app->display_name), "%s", full ? full : app->username);
+
+    /* the first character of the first word, and of the last word when there are several */
+    const char *src = app->display_name;
+    const char *words[2] = { NULL, NULL };
+    for (const char *q = src; *q; q++) {
+        if (*q != ' ' && (q == src || q[-1] == ' ')) {
+            if (!words[0]) words[0] = q;
+            else words[1] = q;
+        }
+    }
+    size_t n = 0;
+    for (int k = 0; k < 2; k++) {
+        const char *c = words[k];
+        if (!c) continue;
+        if ((unsigned char)*c < 0x80) {
+            char ch = *c;
+            if (ch >= 'a' && ch <= 'z') ch -= 32;
+            if (n + 1 < sizeof(app->initials)) app->initials[n++] = ch;
+        } else {
+            size_t len = 1;
+            while (c[len] && ((unsigned char)c[len] & 0xC0) == 0x80 && len < 4) len++;
+            if (n + len < sizeof(app->initials)) {
+                memcpy(app->initials + n, c, len);
+                n += len;
+            }
+        }
+    }
+    if (n == 0) app->initials[n++] = '?';
+    app->initials[n] = '\0';
+}
+
+/* One picture from the cache the wallpaper helper writes (lock-cache.h), only when it is a plain
+ * file of sane size and decodes to at most max_side pixels a side. */
+static cairo_surface_t *load_cached_picture(const char *name, int max_side) {
+    const char *xdg = getenv("XDG_CACHE_HOME");
+    const char *home = getenv("HOME");
+    char path[4096];
+    if (xdg && xdg[0] == '/') snprintf(path, sizeof(path), "%s/infynitae/%s", xdg, name);
+    else if (home && home[0]) snprintf(path, sizeof(path), "%s/.cache/infynitae/%s", home, name);
+    else return NULL;
+    struct stat st;
+    if (stat(path, &st) != 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 || st.st_size > 16 * 1024 * 1024) return NULL;
+    cairo_surface_t *img = cairo_image_surface_create_from_png(path);
+    if (!img || cairo_surface_status(img) != CAIRO_STATUS_SUCCESS ||
+        cairo_image_surface_get_width(img) <= 0 || cairo_image_surface_get_height(img) <= 0 ||
+        cairo_image_surface_get_width(img) > max_side || cairo_image_surface_get_height(img) > max_side) {
+        if (img) cairo_surface_destroy(img);
+        return NULL;
+    }
+    return img;
+}
+
+static void load_lock_pictures(LockApp *app) {
+    app->background = load_cached_picture("lock-background.png", 4096);
+    app->avatar = load_cached_picture("avatar.png", 1024);
+}
+
+/* --render WxH OUT.png: one frame of the lock screen into a PNG, for tests and screenshots. It
+ * connects to nothing and locks nothing. */
+static int render_to_png(LockApp *app, const char *size, const char *out) {
+    int w = 0, h = 0;
+    if (sscanf(size, "%dx%d", &w, &h) != 2 || w <= 0 || h <= 0 || w > 8192 || h > 8192) {
+        fprintf(stderr, "[infynitae-lock] --render needs WxH, e.g. 1920x1080\n");
+        return 2;
+    }
+    load_lock_pictures(app);
+    const char *state = getenv("INFYNITAE_LOCK_RENDER_STATE");
+    if (state && strcmp(state, "typing") == 0) app->password_len = 8;
+    else if (state && strcmp(state, "failed") == 0) app->auth_state = AUTH_STATE_FAILED;
+    else if (state && strcmp(state, "caps") == 0) app->caps_lock = true;
+    else if (state && strcmp(state, "verifying") == 0) app->auth_state = AUTH_STATE_VERIFYING;
+    cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, w, h);
+    cairo_t *cr = cairo_create(surf);
+    draw_background(cr, app, w, h);
+    draw_scene(cr, app, NULL, w, h);
+    cairo_destroy(cr);
+    cairo_status_t st = cairo_surface_write_to_png(surf, out);
+    cairo_surface_destroy(surf);
+    if (app->background) cairo_surface_destroy(app->background);
+    if (app->avatar) cairo_surface_destroy(app->avatar);
+    return st == CAIRO_STATUS_SUCCESS ? 0 : 1;
+}
+
 int main(int argc, char **argv) {
     LockApp app = {0};
     app.running = true;
@@ -1125,6 +1283,7 @@ int main(int argc, char **argv) {
     app.auth_state = AUTH_STATE_IDLE;
     strncpy(app.session_cmd, "infynitae-session", sizeof(app.session_cmd) - 1);
     load_theme_config(&app);
+    const char *render_size = NULL, *render_out = NULL;
 
     // Parse options
     for (int i = 1; i < argc; ++i) {
@@ -1136,6 +1295,9 @@ int main(int argc, char **argv) {
             strncpy(app.username, argv[++i], sizeof(app.username) - 1);
         } else if (strcmp(argv[i], "--status") == 0 && i + 1 < argc) {
             strncpy(app.status_msg, argv[++i], sizeof(app.status_msg) - 1);
+        } else if (strcmp(argv[i], "--render") == 0 && i + 2 < argc) {
+            render_size = argv[++i];
+            render_out = argv[++i];
         }
     }
 
@@ -1161,6 +1323,9 @@ int main(int argc, char **argv) {
         }
         strncpy(app.username, login_user ? login_user : "user", sizeof(app.username) - 1);
     }
+
+    resolve_display_name(&app);
+    if (render_out) return render_to_png(&app, render_size, render_out);
 
     app.xkb_ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     if (!app.xkb_ctx) {
@@ -1207,6 +1372,11 @@ int main(int argc, char **argv) {
     // session.sh waits for this line (START_LOCKED): printed only once the lock is confirmed
     printf("[infynitae-lock] Screen locked for user '%s'. Enter password to unlock.\n", app.username);
     fflush(stdout);
+
+    // only now the pictures: the lock already holds with the plain background, so a missing,
+    // broken or slow file can never stand between the request and the lock
+    load_lock_pictures(&app);
+    damage_all_outputs(&app);
 
     // Event poll loop
     time_t last_clock_tick = time(NULL);
@@ -1283,6 +1453,7 @@ int main(int argc, char **argv) {
         if (curr->lock_surface) ext_session_lock_surface_v1_destroy(curr->lock_surface);
         if (curr->surface) wl_surface_destroy(curr->surface);
         free_output_buffer(curr);
+        if (curr->scene_bg) cairo_surface_destroy(curr->scene_bg);
         if (curr->wl_output) wl_output_destroy(curr->wl_output);
         free(curr);
         curr = next;

@@ -30,6 +30,7 @@
 #include <gdk-pixbuf/gdk-pixbuf.h>
 
 #include "wlr-layer-shell-protocol.h"
+#include "lock-cache.h"
 
 static void sig_handler(int sig) {
     (void)sig;
@@ -702,12 +703,17 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    /* the lock screen's picture of the user (lock-cache.h); the session starts this helper
+     * whether or not there is a wallpaper */
+    if (!overlay) lock_cache_write_avatar();
+
     if (target[0] == '\0') {
         autodetect_wallpaper(target, sizeof(target));
     }
 
     if (target[0] == '\0') {
         kill_other_wallpapers();
+        lock_cache_remove("lock-background.png");
         return 0;
     }
 
@@ -725,6 +731,7 @@ int main(int argc, char *argv[]) {
     // Handle live animated video wallpaper via mpvpaper
     if (is_video_file(target)) {
         kill_other_wallpapers();
+        lock_cache_remove("lock-background.png");
         if (system("command -v mpvpaper >/dev/null 2>&1") == 0) {
             // the path goes to mpvpaper as one argument: no shell, so any file name works
             execlp("mpvpaper", "mpvpaper", "-o", "--loop-file=inf --hwdec=auto --no-audio --vo=gpu",
@@ -759,6 +766,11 @@ int main(int argc, char *argv[]) {
         }
         setsid();
     }
+
+    /* the lock screen's background, from the image just decoded (in the child: the command that
+     * set the wallpaper does not wait for it) */
+    if (!overlay && lock_cache_write_background(pixbuf) != 0)
+        fprintf(stderr, "[infynitae-wallpaper] could not write the lock screen background\n");
 
     struct wallpaper_app app = {0};
     app.pixbuf = pixbuf;
