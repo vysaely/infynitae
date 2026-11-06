@@ -328,24 +328,24 @@ impl WaylandState {
         self.spawn_action_args(action, args);
     }
 
+    /// The session's socket, X display and cookie for the shortcut actions (see `client_env`).
+    pub fn set_client_env(
+        &mut self,
+        socket: &str,
+        x_display: Option<String>,
+        x_authority: Option<std::path::PathBuf>,
+    ) {
+        self.client_env = Some(ClientEnv {
+            socket: socket.to_string(),
+            x_display,
+            x_authority,
+        });
+    }
+
     /// [`spawn_action`](Self::spawn_action) with any number of arguments, each passed as is.
     pub(crate) fn spawn_action_args(&mut self, action: &str, args: &[&str]) {
         let home = std::env::var("HOME").unwrap_or_default();
-        let script = format!("{home}/infynitae/live/launch.sh");
-        let mut cmd = std::process::Command::new("sh");
-        cmd.arg(script).arg(action).args(args);
-        if let Ok(d) = std::env::var("DISPLAY") {
-            cmd.env("DISPLAY", d);
-        }
-        if let Ok(a) = std::env::var("XAUTHORITY") {
-            cmd.env("XAUTHORITY", a);
-        }
-        crate::virtual_input::apply_keymap_env(&mut cmd);
-        cmd.env_remove("KDE_FULL_SESSION")
-            .env_remove("KDE_SESSION_VERSION")
-            .env_remove("KDE_SESSION_UID")
-            .env_remove("KDE_APPLICATIONS_AS_SCOPE")
-            .env_remove("XDG_MENU_PREFIX");
+        let mut cmd = action_command(&home, action, args, self.client_env.as_ref());
         // the shortcuts that open apps are launches (`launch`): their windows are the user's
         if matches!(
             action,
@@ -669,5 +669,105 @@ pub(crate) fn notify_portal_key(
         }
         let sock_path = format!("{runtime}/infynitae/shortcuts.sock");
         let _ = sender.try_send((key, pressed, mods_mask, sock_path));
+    }
+}
+
+/// The session's own Wayland socket, X display and cookie (`WaylandState::client_env`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClientEnv {
+    pub socket: String,
+    pub x_display: Option<String>,
+    pub x_authority: Option<std::path::PathBuf>,
+}
+
+/// The command of one shortcut action: `sh ~/infynitae/live/launch.sh ACTION ARGS...`. With the
+/// session's environment known it gets that session's socket and its X display and cookie, or no
+/// `DISPLAY` / `XAUTHORITY` at all (INV-XWAYLAND-1: never the compositor's own, which on the console
+/// are missing or left over from another run); before the session listens, the compositor's own
+/// `DISPLAY` / `XAUTHORITY` as before. Nothing of the compositor's own launch that would misdirect
+/// the action is passed on (a `WAYLAND_SOCKET` fd, host desktop session variables).
+pub(crate) fn action_command(
+    home: &str,
+    action: &str,
+    args: &[&str],
+    env: Option<&ClientEnv>,
+) -> std::process::Command {
+    let script = format!("{home}/infynitae/live/launch.sh");
+    let mut cmd = std::process::Command::new("sh");
+    cmd.arg(script).arg(action).args(args);
+    match env {
+        Some(e) => {
+            cmd.env("WAYLAND_DISPLAY", &e.socket);
+            match &e.x_display {
+                Some(x) => cmd.env("DISPLAY", x),
+                None => cmd.env_remove("DISPLAY"),
+            };
+            match &e.x_authority {
+                Some(a) => cmd.env("XAUTHORITY", a),
+                None => cmd.env_remove("XAUTHORITY"),
+            };
+        }
+        None => {
+            if let Ok(d) = std::env::var("DISPLAY") {
+                cmd.env("DISPLAY", d);
+            }
+            if let Ok(a) = std::env::var("XAUTHORITY") {
+                cmd.env("XAUTHORITY", a);
+            }
+        }
+    }
+    cmd.env_remove("WAYLAND_SOCKET");
+    crate::virtual_input::apply_keymap_env(&mut cmd);
+    cmd.env_remove("KDE_FULL_SESSION")
+        .env_remove("KDE_SESSION_VERSION")
+        .env_remove("KDE_SESSION_UID")
+        .env_remove("KDE_APPLICATIONS_AS_SCOPE")
+        .env_remove("XDG_MENU_PREFIX");
+    cmd
+}
+
+#[cfg(test)]
+mod action_env_tests {
+    use super::{ClientEnv, action_command};
+    use std::ffi::OsStr;
+
+    fn env_of(cmd: &std::process::Command, key: &str) -> Option<Option<String>> {
+        cmd.get_envs()
+            .find(|(k, _)| *k == OsStr::new(key))
+            .map(|(_, v)| v.map(|v| v.to_string_lossy().into_owned()))
+    }
+
+    /// A shortcut action gets the session's socket, X display and cookie, never the compositor's
+    /// own (owner, 2026-11-06: env.sh guessed them from the session log and /tmp/.X11-unix).
+    #[test]
+    fn an_action_gets_the_sessions_socket_and_x_display() {
+        let env = ClientEnv {
+            socket: "wayland-7".into(),
+            x_display: Some(":3".into()),
+            x_authority: Some("/run/user/1000/infynitae-xauth-3".into()),
+        };
+        let cmd = action_command("/home/u", "apps", &["x"], Some(&env));
+        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        assert_eq!(args, ["/home/u/infynitae/live/launch.sh", "apps", "x"]);
+        assert_eq!(env_of(&cmd, "WAYLAND_DISPLAY"), Some(Some("wayland-7".into())));
+        assert_eq!(env_of(&cmd, "DISPLAY"), Some(Some(":3".into())));
+        assert_eq!(
+            env_of(&cmd, "XAUTHORITY"),
+            Some(Some("/run/user/1000/infynitae-xauth-3".into()))
+        );
+        assert_eq!(env_of(&cmd, "WAYLAND_SOCKET"), Some(None), "removed");
+    }
+
+    /// Without an X display the action gets no DISPLAY at all, not the compositor's.
+    #[test]
+    fn without_an_x_display_an_action_gets_none() {
+        let env = ClientEnv {
+            socket: "wayland-7".into(),
+            x_display: None,
+            x_authority: None,
+        };
+        let cmd = action_command("/home/u", "terminal", &[], Some(&env));
+        assert_eq!(env_of(&cmd, "DISPLAY"), Some(None));
+        assert_eq!(env_of(&cmd, "XAUTHORITY"), Some(None));
     }
 }

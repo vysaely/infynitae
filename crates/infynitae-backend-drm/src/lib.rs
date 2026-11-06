@@ -1343,6 +1343,14 @@ pub fn run_console_with(
                 .and_then(|d| d.authority_path().map(|p| p.to_path_buf())),
         },
     )?;
+    // the shortcut actions get this session's socket and X display too (INV-XWAYLAND-1)
+    state.set_client_env(
+        session.socket_name(),
+        x_display.as_ref().map(|d| d.name()),
+        x_display
+            .as_ref()
+            .and_then(|d| d.authority_path().map(|p| p.to_path_buf())),
+    );
     let mut extension = infynitae_wayland::extension::start(extension, &event_loop.handle());
     let mut xwayland = match (x_display, options.xwayland_satellite.as_deref()) {
         (Some(d), Some(satellite)) => Some(infynitae_wayland::xwayland::start_for_session(
