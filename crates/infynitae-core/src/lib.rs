@@ -448,6 +448,9 @@ pub struct Core {
     frame_liveness: frames::FrameLiveness,
     /// Each screen's refreshes counted while it spares the GPU (`set_frame_relief`).
     frame_relief: Vec<(output::OutputId, u32)>,
+    /// A window that fills a screen without being fullscreen (a borderless game the camera
+    /// fits), which relief spares as it spares a fullscreen one (`set_relief_spared`).
+    relief_spared: Vec<(output::OutputId, stage::ElementId)>,
     /// Canvas pan interaction style (Grab vs Rts).
     pub pan_mode: navigation::PanMode,
     /// Whether keyboard focus follows pointer hover (Focus Follows Mouse).
@@ -583,6 +586,7 @@ impl Core {
                 touches: touch::Touches::default(),
                 frame_liveness: frames::FrameLiveness::default(),
                 frame_relief: Vec::new(),
+                relief_spared: Vec::new(),
                 #[cfg(feature = "probe_sticky_fit_retains_authority")]
                 sticky_fit: None,
             },
@@ -1235,6 +1239,20 @@ impl Core {
         }
     }
 
+    /// The window that fills `output` without being fullscreen (the adapter's fitted window), or
+    /// none: relief spares it like a fullscreen one. Before 2026-11-06 a borderless game the
+    /// camera fitted was slowed to 30 FPS once it lost the focus.
+    pub fn set_relief_spared(
+        &mut self,
+        output: output::OutputId,
+        element: Option<stage::ElementId>,
+    ) {
+        self.relief_spared.retain(|(o, _)| *o != output);
+        if let Some(e) = element {
+            self.relief_spared.push((output, e));
+        }
+    }
+
     /// While `output` spares the GPU, takes from `out[start..]` the windows that wait for a later
     /// refresh. Their callbacks stay pending.
     fn relieve_frames(
@@ -1252,9 +1270,14 @@ impl Core {
             return;
         }
         let (focused, filling) = (self.focus.target(), self.presentation(output));
+        let fitted = self
+            .relief_spared
+            .iter()
+            .find(|(o, _)| *o == output)
+            .map(|(_, e)| *e);
         let mut i = start;
         while i < out.len() {
-            if Some(out[i]) == focused || Some(out[i]) == filling {
+            if Some(out[i]) == focused || Some(out[i]) == filling || Some(out[i]) == fitted {
                 i += 1;
             } else {
                 out.remove(i);
