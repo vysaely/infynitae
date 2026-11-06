@@ -113,7 +113,8 @@ typedef struct {
 typedef struct {
     uint32_t id;
     char app[32];
-    char text[128];
+    char text[128];   /* the summary, else the body */
+    char body[128];   /* the body under a summary ("" when there is none or it repeats it) */
 } NotifItem;
 
 typedef struct {
@@ -200,6 +201,14 @@ typedef struct EdgeApp {
     ControlSubpanel subpanel;
     bool kb_grab;
     double anim_progress;
+    /* the control panel's modules (CONTROL_MODULES): which show (CM_* bits) and the order of the
+     * tiles among them; ctrl_tiles: how many tiles the last drawing showed (their nav indices
+     * come first); sel_shown: the selection is drawn only once a key or the pointer moved it */
+    unsigned ctrl_mods;
+    int ctrl_tile_order[8];
+    int ctrl_tile_order_n;
+    int ctrl_tiles;
+    bool sel_shown;
     /* CLOCK_MONOTONIC of the last animation step (0: none yet): the panel opens in OPEN_MS and
      * closes in CLOSE_MS whatever the refresh rate and however many screens ask for frames */
     int64_t anim_last_ns;
@@ -989,13 +998,11 @@ static void add_mako_list(EdgeApp *app, GVariant *res) {
             sanitize_inline_text(a_clean, sizeof(a_clean), app_s);
 
             if (s_clean[0] != '\0' || b_clean[0] != '\0') {
-                char full_app[32], full_text[128];
+                char full_app[32], full_text[128], full_body[128] = "";
                 snprintf(full_app, sizeof(full_app), "%s", a_clean[0] ? a_clean : "Notify");
-                if (s_clean[0] && b_clean[0] && strcasecmp(s_clean, b_clean) != 0) {
-                    snprintf(full_text, sizeof(full_text), "%s — %s", s_clean, b_clean);
-                } else {
-                    snprintf(full_text, sizeof(full_text), "%s", s_clean[0] ? s_clean : b_clean);
-                }
+                snprintf(full_text, sizeof(full_text), "%s", s_clean[0] ? s_clean : b_clean);
+                if (s_clean[0] && b_clean[0] && strcasecmp(s_clean, b_clean) != 0)
+                    snprintf(full_body, sizeof(full_body), "%s", b_clean);
 
                 bool text_dup = false;
                 for (int k = 0; k < app->notif_count; k++) {
@@ -1011,6 +1018,7 @@ static void add_mako_list(EdgeApp *app, GVariant *res) {
                     ni->id = nid;
                     snprintf(ni->app, sizeof(ni->app), "%s", full_app);
                     snprintf(ni->text, sizeof(ni->text), "%s", full_text);
+                    snprintf(ni->body, sizeof(ni->body), "%s", full_body);
                 }
             }
         }
@@ -1319,7 +1327,61 @@ static void parse_hex_rgb(const char *val, double out[3]) {
     }
 }
 
+/* The control panel's modules (CONTROL_MODULES in the config, owner 2026-11-06: modular like a
+ * Framework laptop's expansion cards): each word shows one; the tiles among them appear in the
+ * order written. Unknown words are ignored; an empty or missing setting shows them all. */
+enum {
+    CM_CLOCK = 1u << 0, CM_VOLUME = 1u << 1, CM_WIFI = 1u << 2, CM_BLUETOOTH = 1u << 3, CM_DND = 1u << 4,
+    CM_POWER = 1u << 5, CM_REPLAY = 1u << 6, CM_APPS = 1u << 7, CM_NOTIFICATIONS = 1u << 8, CM_SESSION = 1u << 9,
+};
+static const struct { const char *word; unsigned bit; } CONTROL_MODULE_WORDS[] = {
+    {"clock", CM_CLOCK}, {"volume", CM_VOLUME}, {"wifi", CM_WIFI}, {"bluetooth", CM_BLUETOOTH},
+    {"dnd", CM_DND}, {"power", CM_POWER}, {"replay", CM_REPLAY}, {"apps", CM_APPS},
+    {"notifications", CM_NOTIFICATIONS}, {"session", CM_SESSION},
+};
+#define CM_TILES (CM_WIFI | CM_BLUETOOTH | CM_DND | CM_POWER | CM_REPLAY)
+
+static void control_modules_default(EdgeApp *app) {
+    app->ctrl_mods = 0;
+    app->ctrl_tile_order_n = 0;
+    for (size_t i = 0; i < sizeof(CONTROL_MODULE_WORDS) / sizeof(CONTROL_MODULE_WORDS[0]); i++) {
+        app->ctrl_mods |= CONTROL_MODULE_WORDS[i].bit;
+        if (CONTROL_MODULE_WORDS[i].bit & CM_TILES) app->ctrl_tile_order[app->ctrl_tile_order_n++] = (int)CONTROL_MODULE_WORDS[i].bit;
+    }
+}
+
+/* v: the text after "CONTROL_MODULES=" (quoted or not, words split by spaces or commas) */
+static void control_modules_parse(EdgeApp *app, const char *v) {
+    char buf[256];
+    size_t n = 0;
+    while (*v == ' ' || *v == '\t') v++;
+    char quote = (*v == '"' || *v == '\'') ? *v++ : 0;
+    while (*v && *v != '\n' && n + 1 < sizeof(buf)) {
+        if (quote ? *v == quote : (*v == '#' || *v == ' ' || *v == '\t')) break;
+        buf[n++] = *v++;
+    }
+    buf[n] = '\0';
+    unsigned mods = 0;
+    int order[8], order_n = 0;
+    for (char *save = NULL, *w = strtok_r(buf, " ,\t", &save); w; w = strtok_r(NULL, " ,\t", &save)) {
+        for (size_t i = 0; i < sizeof(CONTROL_MODULE_WORDS) / sizeof(CONTROL_MODULE_WORDS[0]); i++) {
+            unsigned bit = CONTROL_MODULE_WORDS[i].bit;
+            if (strcasecmp(w, CONTROL_MODULE_WORDS[i].word) != 0 || (mods & bit)) continue;
+            mods |= bit;
+            if ((bit & CM_TILES) && order_n < 8) order[order_n++] = (int)bit;
+        }
+    }
+    if (mods == 0) {
+        control_modules_default(app);
+        return;
+    }
+    app->ctrl_mods = mods;
+    memcpy(app->ctrl_tile_order, order, sizeof(order));
+    app->ctrl_tile_order_n = order_n;
+}
+
 static void load_position_config(EdgeApp *app) {
+    control_modules_default(app);
     /* config/config's default (EDGE_POSITION="top"): a user with no config line got the bottom */
     app->bottom_edge = false;
     app->control_on_left = false;
@@ -1361,6 +1423,8 @@ static void load_position_config(EdgeApp *app) {
         } else if (strncmp(p, "SQUARE_CORNERS=", 15) == 0) {
             app->square = config_value_is(p + 15, "true") || config_value_is(p + 15, "1") ||
                           config_value_is(p + 15, "yes") || config_value_is(p + 15, "on");
+        } else if (strncmp(p, "CONTROL_MODULES=", 16) == 0) {
+            control_modules_parse(app, p + 16);
         } else if (strncmp(p, "BORDER_ACTIVE=", 14) == 0) {
             parse_hex_rgb(p + 14, app->border_rgb);
         } else if (strncmp(p, "TEXT_COLOR=", 11) == 0) {
@@ -1687,20 +1751,65 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
              * space and section titles separate. Navigation order and actions are unchanged. */
             const double PAD = 12.0, GAP = 6.0, SECTION = 12.0;
             const double HEAD_H = 34.0, VOL_H = 32.0, TILE_H = 46.0, ITEM_H = 30.0;
-            double NOTIF_H = 42.0;
+            const double NOTIF_H = 42.0;
             const double TITLE_H = 20.0, BTN_H = 32.0;
+
+            if (app->ctrl_mods == 0) control_modules_default(app);
+            const unsigned mods = app->ctrl_mods;
+            /* the tiles CONTROL_MODULES asks for, in its order; one that cannot do anything here is
+             * left out (Power mode without power-profiles-daemon, Save clip while replay is off) */
+            const char *p_disp = "Balanced";
+            if (strcasecmp(app->power_profile, "performance") == 0) p_disp = "Performance";
+            else if (strcasecmp(app->power_profile, "power-saver") == 0) p_disp = "Power saver";
+            struct { const char *label, *val; bool active; int action; bool sub_open; } sw[8];
+            int nt = 0;
+            for (int k = 0; k < app->ctrl_tile_order_n && nt < 7; k++) {
+                switch ((unsigned)app->ctrl_tile_order[k]) {
+                case CM_WIFI:
+                    sw[nt++] = (typeof(sw[0])){ "Wi-Fi", app->wifi_label, app->wifi_on, ACT_WIFI_TOGGLE, app->subpanel == SUB_WIFI };
+                    break;
+                case CM_BLUETOOTH:
+                    sw[nt++] = (typeof(sw[0])){ "Bluetooth", app->bt_label, app->bt_on, ACT_BT_TOGGLE, app->subpanel == SUB_BT };
+                    break;
+                case CM_DND:
+                    sw[nt++] = (typeof(sw[0])){ "Do not disturb", app->dnd_on ? "On" : "Off", app->dnd_on, ACT_DND_TOGGLE, false };
+                    break;
+                case CM_POWER:
+                    /* a choice of three modes, not a switch: never lit */
+                    if (strcmp(app->power_profile, "none") != 0 && app->power_profile[0])
+                        sw[nt++] = (typeof(sw[0])){ "Power mode", p_disp, false, ACT_POWER_PROFILE, false };
+                    break;
+                case CM_REPLAY:
+                    sw[nt++] = (typeof(sw[0])){ "Replay", app->replay_on ? "Recording" : "Off", app->replay_on, ACT_REPLAY_TOGGLE, false };
+                    if (app->replay_on)
+                        sw[nt++] = (typeof(sw[0])){ "Save clip", "Last 20 minutes", false, ACT_REPLAY_SAVE, false };
+                    break;
+                }
+            }
+            app->ctrl_tiles = nt;
+            int tile_rows = (nt + 1) / 2;
+            double tiles_h = tile_rows ? tile_rows * TILE_H + (tile_rows - 1) * GAP + GAP : 0.0;
+            bool show_apps = (mods & CM_APPS) && app->tray_count > 0;
+            bool show_notifs = (mods & CM_NOTIFICATIONS) && app->notif_count > 0;
+#define CTRL_SEL(i) (app->sel_shown && app->selected_idx == (i))
 
             int sub_rows = (app->subpanel != SUB_NONE) ? (app->sub_count > 0 ? app->sub_count : 1) : 0;
             int ctx_rows = (app->tray_ctx_idx >= 0 && app->tray_ctx_idx < app->tray_count)
                 ? ((app->ctx_count + 2) / 3) : 0;
             double sub_extra_h = sub_rows ? (GAP + sub_rows * ITEM_H) : 0.0;
-            double tray_extra_h = app->tray_count > 0 ? (SECTION + TITLE_H + app->tray_count * ITEM_H + ctx_rows * ITEM_H) : 0.0;
-            double fixed_h = PAD + HEAD_H + GAP + VOL_H + GAP + 3.0 * TILE_H + 2.0 * GAP + sub_extra_h + tray_extra_h +
-                             SECTION + BTN_H + PAD;
+            double tray_extra_h = show_apps ? (SECTION + TITLE_H + app->tray_count * ITEM_H + ctx_rows * ITEM_H) : 0.0;
+            double fixed_h = PAD + ((mods & CM_CLOCK) ? HEAD_H + GAP : 0.0) + ((mods & CM_VOLUME) ? VOL_H + GAP : 0.0) +
+                             tiles_h + sub_extra_h + tray_extra_h + ((mods & CM_SESSION) ? SECTION + BTN_H : 0.0) + PAD - GAP;
             /* a short screen with every section full: notifications on one line each */
-            bool notif_compact = fixed_h + (SECTION + TITLE_H + app->notif_count * NOTIF_H) > h - 16.0;
-            if (notif_compact) NOTIF_H = ITEM_H + 2.0;
-            double notif_extra_h = app->notif_count > 0 ? (SECTION + TITLE_H + app->notif_count * NOTIF_H) : 0.0;
+            /* a notification with a body takes two lines, one without it one */
+            int notif_bodies = 0;
+            for (int i = 0; i < app->notif_count; i++) notif_bodies += app->notifs[i].body[0] != '\0';
+            const double NOTIF_ONE = ITEM_H + 2.0;
+            bool notif_compact = fixed_h + (SECTION + TITLE_H + notif_bodies * NOTIF_H +
+                                            (app->notif_count - notif_bodies) * NOTIF_ONE) > h - 16.0;
+            double notifs_h = notif_compact ? app->notif_count * NOTIF_ONE
+                                            : notif_bodies * NOTIF_H + (app->notif_count - notif_bodies) * NOTIF_ONE;
+            double notif_extra_h = show_notifs ? (SECTION + TITLE_H + notifs_h) : 0.0;
 
             double ctrl_w = 360.0;
             double ctrl_h = fixed_h + notif_extra_h;
@@ -1739,6 +1848,7 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
             } while (0)
 
             /* Header: the time large, the date beside it, the battery at the right */
+            if (mods & CM_CLOCK) {
             time_t now = time(NULL);
             struct tm *tm_info = localtime(&now);
             char time_s[16], date_s[32];
@@ -1755,8 +1865,10 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
                 draw_text_right_max(cr, layout, FONT_BODY, bat_s, rx + rw - 2.0, ry + HEAD_H / 2.0 + 1.0, 100.0);
             }
             ry += HEAD_H + GAP;
+            }
 
             /* Volume: a label (click: mute), a slider with a knob, the level */
+            if (mods & CM_VOLUME) {
             bool vol_sel = app->subpanel == SUB_AUDIO;
             CTRL_TILE(rx, ry, rw, VOL_H, false, vol_sel);
             set_text(cr, app, (app->volume_muted ? 0.45 : 0.85) * ease);
@@ -1794,45 +1906,27 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
             set_text(cr, app, 0.80 * ease);
             draw_text_right_max(cr, layout, FONT_BODY, v_s, rx + rw - 12.0, ry + VOL_H / 2.0, 40.0);
             ry += VOL_H + GAP;
+            }
 
-            /* Six tiles in two columns: the name, and under it its state */
+            /* The tiles in two columns: the name, and under it its state */
             double tw = floor((rw - GAP) / 2.0);
-            const char *p_disp = "Balanced";
-            if (strcmp(app->power_profile, "none") == 0) p_disp = "Not available";
-            else if (strcasecmp(app->power_profile, "performance") == 0) p_disp = "Performance";
-            else if (strcasecmp(app->power_profile, "power-saver") == 0) p_disp = "Power saver";
-
-            struct {
-                const char *label;
-                const char *val;
-                bool active;
-                int action;
-                bool sub_open;
-            } sw[6] = {
-                { "Wi-Fi", app->wifi_label, app->wifi_on, ACT_WIFI_TOGGLE, app->subpanel == SUB_WIFI },
-                { "Bluetooth", app->bt_label, app->bt_on, ACT_BT_TOGGLE, app->subpanel == SUB_BT },
-                { "Do not disturb", app->dnd_on ? "On" : "Off", app->dnd_on, ACT_DND_TOGGLE, false },
-                { "Power mode", p_disp, strcasecmp(app->power_profile, "performance") == 0, ACT_POWER_PROFILE, false },
-                { "Replay", app->replay_on ? "Recording" : "Off", app->replay_on, ACT_REPLAY_TOGGLE, false },
-                { "Save clip", app->replay_on ? "Last 20 minutes" : "Replay is off", false, ACT_REPLAY_SAVE, false }
-            };
-
-            for (int i = 0; i < 6; i++) {
+            for (int i = 0; i < nt; i++) {
                 double sx = rx + (i % 2) * (tw + GAP);
                 double sy = ry + (i / 2) * (TILE_H + GAP);
-                double sw_w = (i % 2) ? (rw - tw - GAP) : tw;
-                bool sel = (app->selected_idx == i) || sw[i].sub_open;
-                bool dim = sw[i].action == ACT_REPLAY_SAVE && !app->replay_on;
+                /* an odd last tile spans the row */
+                double sw_w = (i % 2) ? (rw - tw - GAP) : (i == nt - 1 ? rw : tw);
+                bool sel = CTRL_SEL(i) || sw[i].sub_open;
                 CTRL_TILE(sx, sy, sw_w, TILE_H, sw[i].active, sel);
-                set_text(cr, app, (dim ? 0.45 : 0.95) * ease);
+                set_text(cr, app, 0.95 * ease);
                 draw_text_left(cr, layout, FONT_BODY_MEDIUM, sw[i].label, sx + 12.0, sy + 16.0, sw_w - 24.0);
                 if (sw[i].active) cairo_set_source_rgba(cr, acc[0], acc[1], acc[2], 0.95 * ease);
-                else set_text(cr, app, (dim ? 0.35 : 0.55) * ease);
+                else set_text(cr, app, 0.55 * ease);
                 draw_text_left(cr, layout, FONT_CAPTION, sw[i].val[0] ? sw[i].val : "Off", sx + 12.0, sy + 32.0, sw_w - 24.0);
                 add_hitbox_nav(app, sx, sy, sw_w, TILE_H, sw[i].action, i, i);
             }
-            ry += 3.0 * TILE_H + 2.0 * GAP;
-            int nav_cursor = 6;
+            ry += tiles_h;
+            if (tiles_h > 0.0) ry -= GAP;
+            int nav_cursor = nt;
 
             /* Under the tiles: the networks, devices or outputs of an open tile */
             if (app->subpanel != SUB_NONE) {
@@ -1845,7 +1939,7 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
                     for (int i = 0; i < app->sub_count; i++) {
                         SubItem *si = &app->sub_items[i];
                         int nav_i = nav_cursor++;
-                        bool sel = (app->selected_idx == nav_i);
+                        bool sel = CTRL_SEL(nav_i);
                         if (sel || si->active) CTRL_TILE(rx, ry, rw, ITEM_H - 2.0, si->active, sel);
                         set_text(cr, app, (si->active || sel ? 0.95 : 0.72) * ease);
                         draw_text_left(cr, layout, si->active ? FONT_BODY_MEDIUM : FONT_BODY, si->label,
@@ -1859,7 +1953,7 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
             }
 
             /* Background apps (hidden when there are none) */
-            if (app->tray_count > 0) {
+            if (show_apps) {
                 ry += SECTION;
                 set_text(cr, app, 0.48 * ease);
                 draw_text_left(cr, layout, FONT_CAPTION, "Background apps", rx + 2.0, ry + TITLE_H / 2.0, rw - 4.0);
@@ -1868,7 +1962,7 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
                     TrayApp *ta = &app->tray_apps[i];
                     int nav_i = nav_cursor++;
                     bool ctx_open = (app->tray_ctx_idx == i);
-                    bool sel = (app->selected_idx == nav_i);
+                    bool sel = CTRL_SEL(nav_i);
                     if (sel || ctx_open) CTRL_TILE(rx, ry, rw, ITEM_H - 2.0, false, sel);
                     set_text(cr, app, (sel || ctx_open ? 0.96 : 0.82) * ease);
                     draw_text_left(cr, layout, FONT_BODY, ta->name, rx + 12.0, ry + (ITEM_H - 2.0) / 2.0, rw - 110.0);
@@ -1885,7 +1979,7 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
                             double cx_b = rx + (k % 3) * (cw + GAP);
                             double cy_b = ry + (k / 3) * ITEM_H;
                             int c_nav = nav_cursor++;
-                            bool c_sel = (app->selected_idx == c_nav);
+                            bool c_sel = CTRL_SEL(c_nav);
                             CTRL_TILE(cx_b, cy_b, cw, ITEM_H - 4.0, false, c_sel);
                             set_text(cr, app, (c_sel ? 0.98 : 0.80) * ease);
                             draw_text_centered(cr, layout, FONT_BODY, app->ctx_items[k].label,
@@ -1899,10 +1993,10 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
 
             /* Notifications (mako's current and history; hidden when there are none): the app above
              * the text, each on its own line */
-            if (app->notif_count > 0) {
+            if (show_notifs) {
                 ry += SECTION;
                 int clr_nav = nav_cursor++;
-                bool clr_sel = (app->selected_idx == clr_nav);
+                bool clr_sel = CTRL_SEL(clr_nav);
                 set_text(cr, app, 0.48 * ease);
                 draw_text_left(cr, layout, FONT_CAPTION, "Notifications", rx + 2.0, ry + TITLE_H / 2.0, rw - 80.0);
                 if (clr_sel) CTRL_TILE(rx + rw - 56.0, ry, 56.0, TITLE_H, false, true);
@@ -1914,27 +2008,34 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
                 for (int i = 0; i < app->notif_count; i++) {
                     NotifItem *ni = &app->notifs[i];
                     int nav_i = nav_cursor++;
-                    bool sel = (app->selected_idx == nav_i);
-                    CTRL_TILE(rx, ry, rw, NOTIF_H - 4.0, false, sel);
-                    if (notif_compact) {
+                    bool sel = CTRL_SEL(nav_i);
+                    double nh = (notif_compact || !ni->body[0]) ? NOTIF_ONE : NOTIF_H;
+                    CTRL_TILE(rx, ry, rw, nh - 4.0, false, sel);
+                    if (notif_compact || !ni->body[0]) {
                         set_text(cr, app, (sel ? 0.98 : 0.88) * ease);
-                        draw_text_left(cr, layout, FONT_BODY, ni->text, rx + 12.0, ry + (NOTIF_H - 4.0) / 2.0, rw - 110.0);
-                        set_text(cr, app, 0.50 * ease);
-                        draw_text_right_max(cr, layout, FONT_CAPTION, ni->app, rx + rw - 12.0, ry + (NOTIF_H - 4.0) / 2.0, 80.0);
+                        draw_text_left(cr, layout, FONT_BODY_MEDIUM, ni->text, rx + 12.0, ry + (nh - 4.0) / 2.0, rw - 110.0);
+                        set_text(cr, app, 0.45 * ease);
+                        draw_text_right_max(cr, layout, FONT_CAPTION, ni->app, rx + rw - 12.0, ry + (nh - 4.0) / 2.0, 84.0);
                     } else {
-                        set_text(cr, app, 0.50 * ease);
-                        draw_text_left(cr, layout, FONT_CAPTION, ni->app[0] ? ni->app : "Notification", rx + 12.0, ry + 12.0, rw - 24.0);
-                        set_text(cr, app, (sel ? 0.98 : 0.88) * ease);
-                        draw_text_left(cr, layout, FONT_BODY, ni->text, rx + 12.0, ry + 27.0, rw - 24.0);
+                        /* the summary, the app at its right, the body under it in a dim small line */
+                        set_text(cr, app, (sel ? 0.98 : 0.92) * ease);
+                        draw_text_left(cr, layout, FONT_BODY_MEDIUM, ni->text, rx + 12.0, ry + 12.0, rw - 110.0);
+                        set_text(cr, app, 0.45 * ease);
+                        draw_text_right_max(cr, layout, FONT_CAPTION, ni->app, rx + rw - 12.0, ry + 12.0, 84.0);
+                        if (ni->body[0]) {
+                            set_text(cr, app, 0.60 * ease);
+                            draw_text_left(cr, layout, FONT_CAPTION, ni->body, rx + 12.0, ry + 27.0, rw - 24.0);
+                        }
                     }
-                    add_hitbox_nav(app, rx, ry, rw, NOTIF_H - 4.0, ACT_NOTIF_ITEM, i, nav_i);
-                    ry += NOTIF_H;
+                    add_hitbox_nav(app, rx, ry, rw, nh - 4.0, ACT_NOTIF_ITEM, i, nav_i);
+                    ry += nh;
                 }
                 ry -= 4.0;
             }
 
             /* Restart, Shut down, Log out: three buttons (Restart and Shut down ask for a second
              * press within 3 s, power_confirm_*) */
+            if (mods & CM_SESSION) {
             ry += SECTION;
             double pw = floor((rw - 2.0 * GAP) / 3.0);
             bool confirming = app->power_confirm_until > now_ns();
@@ -1947,7 +2048,7 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
                 double px_b = rx + i * (pw + GAP);
                 double pw_i = i == 2 ? (rx + rw - px_b) : pw;
                 int p_nav = nav_cursor++;
-                bool p_sel = (app->selected_idx == p_nav);
+                bool p_sel = CTRL_SEL(p_nav);
                 bool warn = confirming && p_acts[i] == app->power_confirm_action;
                 if (warn) {
                     cairo_new_path(cr);
@@ -1963,7 +2064,9 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
                                    px_b + pw_i / 2.0, ry + BTN_H / 2.0, false);
                 add_hitbox_nav(app, px_b, ry, pw_i, BTN_H, p_acts[i], 0, p_nav);
             }
+            }
 #undef CTRL_TILE
+#undef CTRL_SEL
         }
 
         /* C. Clipboard (Super+V): the same list, Clear at the right of the search field */
@@ -2086,12 +2189,13 @@ static void set_mode(EdgeApp *app, EdgeMode new_mode) {
         app->subpanel = SUB_NONE;
         app->tray_ctx_idx = -1;
         app->selected_idx = 0;
+        app->sel_shown = false;
         app->list_scroll = 0;
         if (new_mode == MODE_CENTER) {
             refresh_snapshot(app);
         } else if (new_mode == MODE_CONTROL) {
             refresh_control_data(app);
-            app->selected_idx = (app->tray_count > 0) ? 6 : 0;
+            app->selected_idx = 0;
         } else if (new_mode == MODE_CLIPBOARD) {
             refresh_clipboard_data(app);
         } else if (new_mode == MODE_APPS) {
@@ -2123,7 +2227,7 @@ static void toggle_subpanel(EdgeApp *app, ControlSubpanel target) {
             strcpy(app->bt_label, "On");
         }
         refresh_subpanel_data(app);
-        app->selected_idx = 6;
+        app->selected_idx = app->ctrl_tiles;
     }
     damage_all(app);
 }
@@ -2847,8 +2951,9 @@ static void pointer_motion(void *data, struct wl_pointer *p, uint32_t t, wl_fixe
         if (hb->nav_idx >= 0 &&
             app->pointer_x >= hb->x && app->pointer_x <= hb->x + hb->w &&
             app->pointer_y >= hb->y && app->pointer_y <= hb->y + hb->h) {
-            if (app->selected_idx != hb->nav_idx) {
+            if (app->selected_idx != hb->nav_idx || !app->sel_shown) {
                 app->selected_idx = hb->nav_idx;
+                app->sel_shown = true;
                 damage_all(app);
             }
             break;
@@ -2997,6 +3102,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
     }
 
     int total = count_nav_items(app);
+    app->sel_shown = true;
 
     /* the lists (launcher, windows, clipboard): one column, so Up and Down move along it (on a
      * panel at the bottom the list grows upward from the search field: Up goes away from it),
@@ -3041,11 +3147,15 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
             /* one row of windows: Left and Right move along it */
             return;
         }
-        if (app->mode == MODE_CONTROL && app->selected_idx < 2 && app->subpanel == SUB_NONE) {
-            toggle_subpanel(app, app->selected_idx == 0 ? SUB_WIFI : SUB_BT);
+        int sel_action = -1;
+        for (int i = 0; i < app->hitbox_count; i++)
+            if (app->hitboxes[i].nav_idx == app->selected_idx) sel_action = app->hitboxes[i].action_id;
+        if (app->mode == MODE_CONTROL && app->subpanel == SUB_NONE &&
+            (sel_action == ACT_WIFI_TOGGLE || sel_action == ACT_BT_TOGGLE)) {
+            toggle_subpanel(app, sel_action == ACT_WIFI_TOGGLE ? SUB_WIFI : SUB_BT);
             return;
         } else if (total > 0) {
-            int step = (app->mode == MODE_CLIPBOARD || (app->mode == MODE_CONTROL && app->selected_idx >= 6)) ? 1 : 2;
+            int step = (app->mode == MODE_CLIPBOARD || (app->mode == MODE_CONTROL && app->selected_idx >= app->ctrl_tiles)) ? 1 : 2;
             int next = app->selected_idx + step;
             app->selected_idx = (next < total) ? next : total - 1;
         }
@@ -3054,7 +3164,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
     }
     if (sym == XKB_KEY_Up) {
         if (app->mode != MODE_CENTER && total > 0) {
-            int step = (app->mode == MODE_CLIPBOARD || (app->mode == MODE_CONTROL && app->selected_idx > 6)) ? 1 : 2;
+            int step = (app->mode == MODE_CLIPBOARD || (app->mode == MODE_CONTROL && app->selected_idx > app->ctrl_tiles)) ? 1 : 2;
             int prev = app->selected_idx - step;
             app->selected_idx = (prev >= 0) ? prev : 0;
         }
@@ -3438,12 +3548,13 @@ static int render_to_png(const char *mode_name, const char *size, const char *ou
         snprintf(app.tray_apps[i].mem, sizeof(app.tray_apps[i].mem), "%s", trays[i][1]);
     }
     static const char *notes[][2] = {{"Discord", "New message from a friend"}, {"Steam", "Download complete"},
-                                     {"Infynitae", "Screen is being captured — The red dot is shown while an app records the screen"}};
+                                     {"Infynitae", "Screen is being captured"}};
     app.notif_count = 3;
     for (int i = 0; i < 3; i++) {
         app.notifs[i].id = (uint32_t)(i + 1);
         snprintf(app.notifs[i].app, sizeof(app.notifs[i].app), "%s", notes[i][0]);
         snprintf(app.notifs[i].text, sizeof(app.notifs[i].text), "%s", notes[i][1]);
+        if (i == 2) snprintf(app.notifs[i].body, sizeof(app.notifs[i].body), "%s", "The red dot is shown while an app records the screen");
     }
 
     EdgeMode mode;
@@ -3469,6 +3580,8 @@ static int render_to_png(const char *mode_name, const char *size, const char *ou
     PangoLayout *layout = pango_cairo_create_layout(cr);
     int rect[4];
     draw_panels(&app, cr, layout, w, h, rect);
+    /* the panel's rectangle, for tools/test-edge-render */
+    if (getenv("INFYNITAE_EDGE_RENDER_RECT")) printf("%d %d %d %d\n", rect[0], rect[1], rect[2], rect[3]);
     g_object_unref(layout);
     cairo_destroy(cr);
     cairo_status_t st = cairo_surface_write_to_png(surf, out_path);

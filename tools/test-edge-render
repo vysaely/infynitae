@@ -40,4 +40,15 @@ PY
         done
     done
 done
+
+# CONTROL_MODULES: fewer modules, a shorter panel; none or only unknown words, all of them
+panel_h() {
+    printf 'SQUARE_CORNERS="true"\n%s\n' "$1" > "$TMP/home/.config/infynitae/config"
+    HOME="$TMP/home" INFYNITAE_EDGE_RENDER_RECT=1 "$TMP/edge" --render control 1920x1080 "$TMP/m.png" | cut -d' ' -f4
+}
+all=$(panel_h '')
+few=$(panel_h 'CONTROL_MODULES="volume session"')
+junk=$(panel_h 'CONTROL_MODULES="nonsense"')
+if [ -n "$few" ] && [ "$few" -lt "$all" ]; then echo "ok   CONTROL_MODULES leaves modules out ($all -> $few px)"; else echo "FAIL CONTROL_MODULES: $all -> $few"; fail=1; fi
+if [ "$junk" = "$all" ]; then echo "ok   unknown module words show every module"; else echo "FAIL unknown words: $junk, all $all"; fail=1; fi
 exit $fail

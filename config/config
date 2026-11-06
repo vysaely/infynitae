@@ -507,6 +507,14 @@ EDGE_CONTROL_SIDE="right"
     # default: right
     # options: right  · left
 
+CONTROL_MODULES="clock volume wifi bluetooth dnd power replay apps notifications session"
+    # What the control panel (Super+A) shows, like cards slotted in: leave a word out to remove
+    # it; the tiles (wifi bluetooth dnd power replay) appear in the order written. A module that
+    # cannot do anything hides itself (Power mode without power-profiles-daemon, Save clip while
+    # replay is off). [use]
+    # default: clock volume wifi bluetooth dnd power replay apps notifications session
+    # options: any of those words, in any order
+
 
 # ═══ Lock & idle ═══════════════════════════════════════════════════════════════════ [save] ═══
 
