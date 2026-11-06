@@ -45,6 +45,7 @@ jobs:
       - run: sh tools/test-reload-match
       - run: sh tools/test-launch-fast
       - run: sh tools/test-lock-render
+      - run: sh tools/test-firefox-theme
       - run: sh tools/test-qt-theme
       - run: sh tools/test-portal-settings
 

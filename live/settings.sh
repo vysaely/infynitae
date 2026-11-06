@@ -341,6 +341,66 @@ EOF
         ;;
     esac
 
+    # 3c. Firefox in the system's colours (owner, 2026-11-06: its tab strip and toolbar kept
+    # Firefox's own greys). A style sheet in each profile (chrome/infynitae.css, imported by
+    # userChrome.css) sets Firefox's colour variables from the palette; user.js turns on reading
+    # it. Firefox reads both at its start. A userChrome.css of the user's own gets the import as its
+    # first line (kept otherwise); delete the "managed by infynitae" line of infynitae.css to stop.
+    case "${THEME_SYNC:-true}" in
+        0|false|no|off|FALSE|False) ;;
+        *)
+    for ff_root in "$HOME/.config/mozilla/firefox" "$HOME/.mozilla/firefox"; do
+        [ -f "$ff_root/profiles.ini" ] || continue
+        sed -n 's/^Path=//p' "$ff_root/profiles.ini" | while IFS= read -r ff_path; do
+            case "$ff_path" in /*) ff_dir="$ff_path" ;; *) ff_dir="$ff_root/$ff_path" ;; esac
+            [ -d "$ff_dir" ] || continue
+            mkdir -p "$ff_dir/chrome"
+            ff_css="$ff_dir/chrome/infynitae.css"
+            if [ ! -f "$ff_css" ] || grep -q 'managed by infynitae' "$ff_css" 2>/dev/null; then
+                put_file "$ff_css" << EOF
+/* managed by infynitae — delete this line to keep your own colours here */
+:root {
+  --toolbox-bgcolor: color-mix(in srgb, $SURFACE_COLOR 88%, $CANVAS_COLOR) !important;
+  --toolbox-non-lwt-bgcolor: color-mix(in srgb, $SURFACE_COLOR 88%, $CANVAS_COLOR) !important;
+  --toolbox-textcolor: $TEXT_COLOR !important;
+  --toolbar-bgcolor: color-mix(in srgb, $SURFACE_COLOR 92%, $TEXT_COLOR) !important;
+  --toolbar-color: $TEXT_COLOR !important;
+  --tab-selected-bgcolor: color-mix(in srgb, $SURFACE_COLOR 85%, $TEXT_COLOR) !important;
+  --tab-selected-textcolor: $TEXT_COLOR !important;
+  --toolbar-field-background-color: color-mix(in srgb, $SURFACE_COLOR 70%, $CANVAS_COLOR) !important;
+  --toolbar-field-focus-background-color: color-mix(in srgb, $SURFACE_COLOR 70%, $CANVAS_COLOR) !important;
+  --toolbar-field-color: $TEXT_COLOR !important;
+  --toolbar-field-focus-color: $TEXT_COLOR !important;
+  --toolbar-field-focus-border-color: $BORDER_ACTIVE !important;
+  --focus-outline-color: $BORDER_ACTIVE !important;
+  --arrowpanel-background: color-mix(in srgb, $SURFACE_COLOR 95%, $TEXT_COLOR) !important;
+  --arrowpanel-color: $TEXT_COLOR !important;
+  --arrowpanel-border-color: $BORDER_INACTIVE !important;
+  --urlbarView-highlight-background: color-mix(in srgb, $BORDER_ACTIVE 35%, $SURFACE_COLOR) !important;
+  --sidebar-background-color: $SURFACE_COLOR !important;
+  --chrome-content-separator-color: $BORDER_INACTIVE !important;
+  accent-color: $BORDER_ACTIVE !important;
+}
+#TabsToolbar, #titlebar, #navigator-toolbox { background-color: var(--toolbox-bgcolor) !important; }
+.tab-background:is([selected], [multiselected]) { background-color: var(--tab-selected-bgcolor) !important; }
+.tab-background[selected] { box-shadow: inset 0 -2px 0 $BORDER_ACTIVE !important; }
+EOF
+            fi
+            ff_uc="$ff_dir/chrome/userChrome.css"
+            if [ ! -f "$ff_uc" ]; then
+                printf '@import "infynitae.css"; /* managed by infynitae */\n' > "$ff_uc"
+            elif ! grep -q 'infynitae.css' "$ff_uc"; then
+                { printf '@import "infynitae.css"; /* managed by infynitae */\n'; cat "$ff_uc"; } > "$ff_uc.tmp.$$" \
+                    && mv -f "$ff_uc.tmp.$$" "$ff_uc"
+            fi
+            ff_js="$ff_dir/user.js"
+            grep -q 'toolkit.legacyUserProfileCustomizations.stylesheets' "$ff_js" 2>/dev/null \
+                || printf 'user_pref("toolkit.legacyUserProfileCustomizations.stylesheets", true); // infynitae: chrome/infynitae.css\n' >> "$ff_js"
+        done
+    done
+        ;;
+    esac
+
     # 4. Synchronize Qt platform settings (~/.config/kdeglobals) without clobbering existing KDE configs
     mkdir -p "$HOME/.config"
     if [ ! -f "$HOME/.config/kdeglobals" ]; then
