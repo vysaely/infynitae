@@ -382,15 +382,13 @@ mod tests {
     /// again when it stops.
     #[test]
     fn a_screen_sparing_the_gpu_slows_only_the_windows_out_of_use() {
-        let (mut c, _, _, mut t) = Core::new(persisted(true));
+        let (mut c, mut input, _, mut t) = Core::new(persisted(true));
         let (o, _) = c.output_connected(&mut t, desc("A", 120_000)).unwrap();
-        let (first, second, game) = (map(&mut c), map(&mut c), map(&mut c));
-        let focused = c.focus().target();
-        let other = if focused == Some(first) {
-            second
-        } else {
-            first
-        };
+        let (first, other, game) = (map(&mut c), map(&mut c), map(&mut c));
+        // the focus set here: who holds it after mapping is not this test's subject
+        c.set_focus(&mut input, Some(first)).unwrap();
+        let focused = Some(first);
+        let second = other;
         assert_eq!(c.frame_tick_vec(o).len(), 3, "all are in view");
         c.set_relief_spared(o, Some(game));
         c.set_frame_relief(o, true);
