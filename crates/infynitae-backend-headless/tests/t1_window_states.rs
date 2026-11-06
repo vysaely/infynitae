@@ -783,12 +783,6 @@ fn row(r: &mut Rig) -> (usize, [ElementId; 5]) {
     (a, [ee, ed, ea, eb, ec])
 }
 
-fn all_apart(r: &Rig, es: &[ElementId]) -> bool {
-    es.iter()
-        .enumerate()
-        .all(|(i, x)| es[i + 1..].iter().all(|y| apart(r, *x, *y)))
-}
-
 /// Owner, 2026-11-06: "the only window that is supposed to move is the one getting resized". A
 /// Super+right drag widens A to the right over B: no other window moves (until then B was
 /// pushed, and pushed C in turn).
@@ -832,9 +826,10 @@ fn a_resize_moves_no_other_window_to_the_left() {
     assert_eq!(anchor_of(&r, es[2]), a_moved, "A keeps its right edge");
 }
 
-/// A maximize pushes its neighbour off the view, and the neighbour pushes the next one along.
+/// Owner, 2026-11-06: "maximize moves the window itself, not the other windows". A maximize
+/// covers its neighbours; none of them moves (until then they were pushed off the view).
 #[test]
-fn a_maximize_pushes_the_whole_row() {
+fn a_maximize_moves_no_other_window() {
     let mut r = rig(a_1080());
     let (a, ea) = map(&mut r, "A", (400, 300));
     let (_, eb) = map(&mut r, "B", (800, 300));
@@ -846,7 +841,8 @@ fn a_maximize_pushes_the_whole_row() {
     super_enter_on(&mut r, ea);
     let max = usable(&r);
     draw(&mut r, a, max);
-    assert!(all_apart(&r, &[ea, eb, ec]), "no two windows overlap");
+    assert_eq!(anchor_of(&r, eb), CanvasPoint { x: 212, y: -150 });
+    assert_eq!(anchor_of(&r, ec), CanvasPoint { x: 1024, y: -150 });
 }
 
 /// A bar appears (an exclusive zone): the maximized window fills what is left; it goes: the whole

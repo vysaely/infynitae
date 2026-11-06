@@ -938,20 +938,6 @@ impl Core {
             self.stage.set_saved_floating(element, None);
             self.set_maximized(element, None);
             let _ = self.place_by_shell(element, back_to, out);
-            // the windows it pushed aside go back, unless they have been moved since, or it
-            // was (their old places were beside where it was)
-            let pushed: Vec<_> = self
-                .pushed_by_maximize
-                .iter()
-                .filter(|(by, ..)| *by == element && !moved)
-                .copied()
-                .collect();
-            self.pushed_by_maximize.retain(|(by, ..)| *by != element);
-            for (_, other, was, went) in pushed {
-                if self.stage.anchor(other) == Some(went) {
-                    let _ = self.place_by_shell(other, was, out);
-                }
-            }
             out.push(Effect::ToplevelConfigureSize {
                 element,
                 size: orig_size,
@@ -1008,22 +994,7 @@ impl Core {
             self.set_maximized(element, Some(output));
             self.maximized_at.push((element, tl));
             let _ = self.place_by_shell(element, tl, out);
-            let target_rect = (tl.x, tl.y, tl.x + canvas_w as i64, tl.y + canvas_h as i64);
-            if self.placement == crate::protocol::PlacementPolicy::ClusterTiling {
-                let before: Vec<_> = self
-                    .stage
-                    .mapped_elements()
-                    .into_iter()
-                    .filter(|e| *e != element)
-                    .filter_map(|e| Some((e, self.stage.anchor(e)?)))
-                    .collect();
-                self.push_overlapping_cluster(element, target_rect, out);
-                for (other, was) in before {
-                    if let Some(went) = self.stage.anchor(other).filter(|a| *a != was) {
-                        self.pushed_by_maximize.push((element, other, was, went));
-                    }
-                }
-            }
+            // it covers whatever is there: no other window moves (owner, 2026-11-06)
             out.push(Effect::ToplevelConfigureSize {
                 element,
                 size: crate::geom::LocalSize {
@@ -4555,7 +4526,7 @@ mod tests {
     }
 
     #[test]
-    fn maximize_pushes_overlapping_windows_into_cluster_slot() {
+    fn maximize_moves_only_the_maximized_window() {
         use crate::geom::{LocalPoint, LocalRect, LocalSize};
         use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceKey, SurfaceRole, SurfaceTree};
         use std::num::NonZeroU64;
@@ -4637,17 +4608,16 @@ mod tests {
 
         // w1 expands to fill viewport (-960..960, -540..540)
         // w2 was at (812, 0) which would be covered by w1's right edge at x=960!
-        // push_overlapping_cluster should displace w2 to (960 + 12 = 972, 0)
+        // owner, 2026-11-06: only w1 moves; w2 stays, covered (it used to be pushed to x=972)
         let anchor_w1 = c.stage().anchor(w1).unwrap();
         let anchor_w2 = c.stage().anchor(w2).unwrap();
-        println!("anchor_w1: {anchor_w1:?}, anchor_w2: {anchor_w2:?}");
         assert_eq!(anchor_w1.x, -960);
         assert_eq!(anchor_w1.y, -540);
         assert_eq!(
-            anchor_w2.x, 972,
-            "w2 should be displaced to x=972 flush with 12px gap from w1's right edge (+960)"
+            (anchor_w2.x, anchor_w2.y),
+            (812, 0),
+            "w2 stays where it was"
         );
-        assert_eq!(anchor_w2.y, 0);
     }
 
     #[test]
@@ -5786,7 +5756,7 @@ mod tests {
     }
 
     #[test]
-    fn restoring_a_maximized_window_puts_back_the_windows_it_pushed() {
+    fn maximize_and_restore_move_no_other_window() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
         c.set_placement_policy(crate::PlacementPolicy::ClusterTiling);
         let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
@@ -5803,21 +5773,12 @@ mod tests {
             p: (w / 2.0, h / 2.0),
         };
         let _ = c.client_maximize(ws[0], true);
-        assert_ne!(c.stage().anchor(ws[1]), Some(at(250, -150)), "pushed aside");
-        assert_ne!(
-            c.stage().anchor(ws[2]),
-            Some(at(-700, -150)),
-            "pushed aside"
-        );
-        // the user moves one of them
-        c.place_by_user(ws[2], at(5000, 5000), &mut fx).unwrap();
+        assert_eq!(c.stage().anchor(ws[1]), Some(at(250, -150)), "stays");
+        assert_eq!(c.stage().anchor(ws[2]), Some(at(-700, -150)), "stays");
         let _ = c.client_maximize(ws[0], false);
-        assert_eq!(c.stage().anchor(ws[1]), Some(at(250, -150)), "back");
-        assert_eq!(
-            c.stage().anchor(ws[2]),
-            Some(at(5000, 5000)),
-            "the user's place"
-        );
+        assert_eq!(c.stage().anchor(ws[0]), Some(at(-200, -150)), "back");
+        assert_eq!(c.stage().anchor(ws[1]), Some(at(250, -150)));
+        assert_eq!(c.stage().anchor(ws[2]), Some(at(-700, -150)));
     }
 
     /// A window the user opens over a fullscreen window is shown, not hidden behind it.

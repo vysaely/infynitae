@@ -746,8 +746,6 @@ impl Core {
         self.maximized.retain(|(e, _)| *e != id);
         self.maximized_at.retain(|(e, _)| *e != id);
         self.left_fullscreen.retain(|e| *e != id);
-        self.pushed_by_maximize
-            .retain(|(by, pushed, ..)| *by != id && *pushed != id);
         self.stage.set_saved_floating(id, None);
         self.premap_fullscreen.retain(|(e, _)| *e != id);
         self.fullscreen.retain(|f| f.element != id);
@@ -872,14 +870,13 @@ impl Core {
     /// A maximized window the user resizes (a drag of any kind, a scaled cluster) is maximized no
     /// longer (owner, 2026-11-06): its size is the one the user gives it, so a bar or a screen
     /// change does not snap it back, and the next Super+Enter maximizes it again instead of
-    /// restoring the size before. The windows its maximize pushed aside stay where they are.
+    /// restoring the size before.
     pub(crate) fn resized_out_of_maximize(&mut self, id: ElementId) {
         if !self.maximized.iter().any(|(e, _)| *e == id) {
             return;
         }
         self.set_maximized(id, None);
         self.stage.set_saved_floating(id, None);
-        self.pushed_by_maximize.retain(|(by, ..)| *by != id);
     }
 
     /// Super+Enter maximized `id` to fill `output`'s usable area (`Some`), or restored it.
@@ -1028,128 +1025,6 @@ impl Core {
         out: &mut Vec<Effect>,
     ) -> Result<(), ProtocolError> {
         self.place_by_shell(id, anchor, out)
-    }
-
-    /// When `target_elem` expands or moves to `target_rect` `(x0, y0, x1, y1)`, displace any other
-    /// mapped windows that intersect `target_rect` so they are pushed to the adjacent cluster slot
-    /// with the uniform 12px gap. Neither window ever covers or stomps on another window.
-    pub(crate) fn push_overlapping_cluster(
-        &mut self,
-        target_elem: ElementId,
-        target_rect: (i64, i64, i64, i64),
-        out: &mut Vec<Effect>,
-    ) {
-        self.push_reached(target_elem, None, target_rect, out);
-    }
-
-    /// A window that grew to a size the compositor or the user asked for (a maximize, a resize
-    /// drag) pushes aside the windows its new rect reaches, closer than the gap; one its old rect
-    /// already reached (windows the user stacked) stays where it is. A window that grew by itself
-    /// pushes nothing: [`Core::self_resized`].
-    fn push_grown(
-        &mut self,
-        id: ElementId,
-        old: (i64, i64, i64, i64),
-        new: (i64, i64, i64, i64),
-        out: &mut Vec<Effect>,
-    ) {
-        if new.0 < old.0 || new.1 < old.1 || new.2 > old.2 || new.3 > old.3 {
-            self.push_reached(id, Some(old), new, out);
-        }
-    }
-
-    fn push_reached(
-        &mut self,
-        target_elem: ElementId,
-        before: Option<(i64, i64, i64, i64)>,
-        target_rect: (i64, i64, i64, i64),
-        out: &mut Vec<Effect>,
-    ) {
-        const GAP: i64 = 12;
-        // within the gap counts: windows never touch
-        let reaches = |r: (i64, i64, i64, i64), x0: i64, y0: i64, x1: i64, y1: i64| {
-            !(x1 + GAP <= r.0 || x0 >= r.2 + GAP || y1 + GAP <= r.1 || y0 >= r.3 + GAP)
-        };
-        let mapped = self.stage.mapped_elements();
-        let mut overlapping = Vec::new();
-
-        for other in mapped {
-            if other == target_elem {
-                continue;
-            }
-            if let Some(a) = self.stage.anchor(other)
-                && let Some(t) = self.stage.tree(other)
-            {
-                let w = t.geometry.size.w as i64;
-                let h = t.geometry.size.h as i64;
-                if w <= 0 || h <= 0 {
-                    continue;
-                }
-                let gx0 = a.x;
-                let gy0 = a.y;
-                let gx1 = gx0.saturating_add(w);
-                let gy1 = gy0.saturating_add(h);
-
-                let intersects = reaches(target_rect, gx0, gy0, gx1, gy1)
-                    && !before.is_some_and(|b| reaches(b, gx0, gy0, gx1, gy1));
-                if intersects {
-                    overlapping.push((other, gx0, gy0, w, h));
-                }
-            }
-        }
-
-        if overlapping.is_empty() {
-            return;
-        }
-
-        overlapping.sort_by_key(|&(_, gx0, ..)| gx0);
-
-        let target_mid_x = (target_rect.0 + target_rect.2) / 2;
-        let mut right_cursor = target_rect.2 + GAP;
-        let mut left_cursor = target_rect.0 - GAP;
-
-        let mut moved = vec![target_elem];
-        // (rect after the push, pushed rightwards)
-        let mut wave: Vec<((i64, i64, i64, i64), bool)> = Vec::new();
-        for (other, gx0, gy0, w, h) in overlapping {
-            let other_mid_x = gx0 + w / 2;
-            let right = other_mid_x >= target_mid_x;
-            let new_gx0 = if right {
-                let chosen = right_cursor;
-                right_cursor = chosen + w + GAP;
-                chosen
-            } else {
-                let chosen = left_cursor - w;
-                left_cursor = chosen - GAP;
-                chosen
-            };
-
-            let new_anchor = CanvasPoint { x: new_gx0, y: gy0 };
-            let _ = self.place_by_shell(other, new_anchor, out);
-            moved.push(other);
-            wave.push(((new_gx0, gy0, new_gx0 + w, gy0 + h), right));
-        }
-        // "let it push the whole cluster, because when one window pushes a window, the pushed
-        // window doesn't push another" (owner, 2026-10-31): a pushed window pushes on, in the
-        // same direction, every window it now reaches; each window moves at most once
-        while let Some((r, right)) = wave.pop() {
-            for other in self.stage.mapped_elements() {
-                if moved.contains(&other) {
-                    continue;
-                }
-                let (Some(a), Some(t)) = (self.stage.anchor(other), self.stage.tree(other)) else {
-                    continue;
-                };
-                let (w, h) = (i64::from(t.geometry.size.w), i64::from(t.geometry.size.h));
-                if w <= 0 || h <= 0 || !reaches(r, a.x, a.y, a.x + w, a.y + h) {
-                    continue;
-                }
-                let x = if right { r.2 + GAP } else { r.0 - w - GAP };
-                let _ = self.place_by_shell(other, CanvasPoint { x, y: a.y }, out);
-                moved.push(other);
-                wave.push(((x, a.y, x + w, a.y + h), right));
-            }
-        }
     }
 
     /// Super+right drag starts on `id`: the size and the anchor at the press are kept, so the
@@ -1638,10 +1513,10 @@ impl Core {
                         self.invalidate_all_frames();
                     }
                 }
-                // a window that grew pushes its neighbours; a fullscreen one never does: it is
+                // a window that grew by itself finds room; a fullscreen one never does: it is
                 // shown over the whole screen (F-PRESENT-1), not at its place on the canvas. A
                 // frame drawn for an acknowledged fullscreen is one, whether or not the grant has
-                // reached Core yet (the screen-sized frame came first and pushed)
+                // reached Core yet
                 if self.placement == PlacementPolicy::ClusterTiling
                     && self.fullscreen_of(id).is_none()
                     && !acked_fullscreen
@@ -1657,18 +1532,17 @@ impl Core {
                         a.x + i64::from(t.geometry.size.w),
                         a.y + i64::from(t.geometry.size.h),
                     );
-                    // only a maximize makes room (owner, 2026-10-31); a resize moves no other
-                    // window, and the resized one stays where the drag puts it (owner,
-                    // 2026-11-06: "the only window that is supposed to move is the one getting
-                    // resized"); another size the compositor asked for (a session restore, a
-                    // cluster scaled) moves nothing either; one the app took by itself makes
-                    // none: the window finds room instead (owner, 2026-10-31)
+                    // a size the user or the compositor asked for (a resize, a maximize, a
+                    // session restore) moves no other window: only the window itself moves
+                    // (owner, 2026-11-06: "maximize moves the window itself, not the other
+                    // windows"; until then a maximize or a resize pushed the row aside). A
+                    // maximized window stays where the maximize put it. One that took a size by
+                    // itself moves off what it would reach (owner, 2026-10-31)
                     let asked = self.held_size(id) == Some(t.geometry.size);
                     let maximized = self.maximized.iter().any(|(e, _)| *e == id);
-                    if asked && maximized && !resizing {
-                        self.push_grown(id, old, new, out);
-                    } else if !asked
+                    if !asked
                         && !resizing
+                        && !maximized
                         && let Some(at) = self.self_resized(id, old, new)
                     {
                         self.stage.place(id, at).map_err(stale)?;
@@ -6630,7 +6504,7 @@ mod tests {
     }
 
     /// INV-STAGE-2: an element's anchor is the Canvas position of its window-geometry origin.
-    /// Cluster tiling and push_overlapping_cluster use the same convention as CentredInView
+    /// Cluster tiling uses the same convention as CentredInView
     /// and stage.rs even when geometry.loc != 0 (CSD window with client margins/shadows).
     /// A window that grows by itself pushes nothing (owner, 2026-10-31): it keeps the 12 px gap
     /// from the neighbour it would reach by moving itself; windows the user stacked stay stacked
@@ -6811,19 +6685,6 @@ mod tests {
                 y: a1.y,
             },
             "second window placed flush beside with 12px gap based on window geometry"
-        );
-
-        // 4. push_overlapping_cluster with target_rect overlapping w1
-        let mut fx = Vec::new();
-        let target_rect = (a1.x - 50, a1.y - 50, a1.x + 500, a1.y + 200);
-        c.push_overlapping_cluster(w2, target_rect, &mut fx);
-        let pushed_a1 = c.stage().anchor(w1).unwrap();
-        // target_rect.0 is a1.x - 50 = -250. Pushed left: -250 - 12 (GAP) - 400 (w) = -662.
-        // y must remain exactly a1.y (-150) without subtracting loc_y (30).
-        assert_eq!(
-            pushed_a1,
-            CanvasPoint { x: -662, y: a1.y },
-            "pushed window anchor must equal new window geometry origin without subtracting loc"
         );
     }
 }

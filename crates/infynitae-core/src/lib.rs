@@ -327,14 +327,6 @@ struct LatticeSlot {
     view_size: (u32, u32),
 }
 
-/// One window a maximize pushed aside: see `Core::pushed_by_maximize`.
-pub(crate) type PushedAside = (
-    stage::ElementId,
-    stage::ElementId,
-    geom::CanvasPoint,
-    geom::CanvasPoint,
-);
-
 /// The frame rate of a window sparing the GPU (`Core::set_frame_relief`): about 60, smooth enough
 /// for a video beside a game (30 until 2026-11-06).
 pub const RELIEF_FPS: u32 = 60;
@@ -474,9 +466,6 @@ pub struct Core {
     /// Windows the user took out of fullscreen: their own requests for it are declined until the
     /// user asks again. A Wine window as large as the screen asks at once, and snaps back.
     pub(crate) left_fullscreen: Vec<stage::ElementId>,
-    /// Windows a maximize pushed aside: (maximized window, pushed window, where it was, where it
-    /// went). Restoring puts each back, unless the user has moved it since.
-    pub(crate) pushed_by_maximize: Vec<PushedAside>,
     /// Where each maximized window was put (by Super+Enter or a refit): one found elsewhere when
     /// it is restored was moved by the user, and is restored where it is now.
     pub(crate) maximized_at: Vec<(stage::ElementId, geom::CanvasPoint)>,
@@ -582,7 +571,6 @@ impl Core {
                 enter_mode: EnterMode::default(),
                 presentation_suppressed: Vec::new(),
                 overview_at: Vec::new(),
-                pushed_by_maximize: Vec::new(),
                 maximized_at: Vec::new(),
                 left_fullscreen: Vec::new(),
                 fullscreen_pan: false,
