@@ -1516,10 +1516,26 @@ impl Core {
             return out; // nothing is answered before the first configure or while unmapped
         }
         let is_on = self.maximized.iter().any(|(e, _)| *e == id);
+        // an unmaximize while the user holds a press on the window is an app's "drag to restore"
+        // (GTK, Firefox, Chromium ask it as a title bar drag starts): the window stays maximized
+        // and only moves (owner, 2026-11-06: "moving an app I maximized resets the maximize").
+        // Super+Enter still restores it.
+        let dragging_it = !on
+            && is_on
+            && self
+                .input
+                .ownership
+                .pressed()
+                .iter()
+                .any(|(_, o)| *o == Owner::Client)
+            && matches!(self.pointer, PointerState::Located { output, p }
+                if self.hit_test(output, crate::geom::OutputLogicalPoint { x: p.0, y: p.1 })
+                    .is_some_and(|h| h.element == id));
         let output = self
             .pointer_output()
             .or_else(|| self.outputs.first().map(|o| o.id));
         if let Some(output) = output
+            && !dragging_it
             && on != is_on
             && self.focus.target() == Some(id)
             && self.fullscreen_of(id).is_none()

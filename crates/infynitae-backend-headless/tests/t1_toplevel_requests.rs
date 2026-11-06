@@ -222,6 +222,67 @@ fn the_focused_window_maximizes_and_restores() {
     assert!(!got[0].1.contains(&MAXIMIZED), "{got:?}");
 }
 
+/// An app's "drag to restore": GTK, Firefox and Chromium ask to be unmaximized as a title bar
+/// drag starts. While the user holds a press on the window the window stays maximized (owner,
+/// 2026-11-06: "moving an app I maximized resets the maximize"); once released, the same request
+/// restores it.
+#[test]
+fn an_unmaximize_during_a_press_on_the_window_keeps_it_maximized() {
+    let mut t = T::new();
+    let (w, id) = t.map("W");
+    set_focus(&mut t.ls.state, &mut t.ls.input, Some(id)).expect("focus");
+    t.adv();
+    let got = t.ask(w, |tl| tl.set_maximized());
+    assert!(
+        got.last().is_some_and(|c| c.1.contains(&MAXIMIZED)),
+        "{got:?}"
+    );
+    // the pointer over the window, the button held
+    t.t += 1000;
+    pointer_motion(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        (1.0, 1.0),
+        (1.0, 1.0),
+        t.t,
+    )
+    .expect("motion");
+    t.adv();
+    t.t += 1000;
+    pointer_button(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        BTN_LEFT,
+        true,
+        Modifiers::default(),
+        t.t,
+    )
+    .expect("press");
+    t.adv();
+    let got = t.ask(w, |tl| tl.unset_maximized());
+    assert!(
+        got.last()
+            .is_some_and(|c| c.1.contains(&MAXIMIZED) && c.0 == (1920, 1080)),
+        "still maximized during the press: {got:?}"
+    );
+    t.t += 1000;
+    pointer_button(
+        &mut t.ls.state,
+        &mut t.ls.input,
+        BTN_LEFT,
+        false,
+        Modifiers::default(),
+        t.t,
+    )
+    .expect("release");
+    t.adv();
+    let got = t.ask(w, |tl| tl.unset_maximized());
+    assert!(
+        got.last().is_some_and(|c| !c.1.contains(&MAXIMIZED)),
+        "restored once released: {got:?}"
+    );
+}
+
 /// The same answers for a window that does not hold the focus: declined, without `activated`.
 /// The focused window gets nothing.
 #[test]
