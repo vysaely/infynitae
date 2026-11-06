@@ -237,6 +237,11 @@ fn an_unmaximize_during_a_press_on_the_window_keeps_it_maximized() {
         got.last().is_some_and(|c| c.1.contains(&MAXIMIZED)),
         "{got:?}"
     );
+    // the app draws at the size it was given, as a real one does: it fills the screen
+    let qh = t.ls.qh.clone();
+    t.ls.probe.surfaces[w].size = (1920, 1080);
+    t.ls.probe.draw(&qh, w);
+    t.adv();
     // the pointer over the window, the button held
     t.t += 1000;
     pointer_motion(
