@@ -1520,17 +1520,22 @@ impl Core {
         // (GTK, Firefox, Chromium ask it as a title bar drag starts): the window stays maximized
         // and only moves (owner, 2026-11-06: "moving an app I maximized resets the maximize").
         // Super+Enter still restores it.
+        let press_held = self
+            .input
+            .ownership
+            .pressed()
+            .iter()
+            .any(|(_, o)| *o == Owner::Client);
+        let pointer = self.pointer;
         let dragging_it = !on
             && is_on
-            && self
-                .input
-                .ownership
-                .pressed()
-                .iter()
-                .any(|(_, o)| *o == Owner::Client)
-            && matches!(self.pointer, PointerState::Located { output, p }
-                if self.hit_test(output, crate::geom::OutputLogicalPoint { x: p.0, y: p.1 })
-                    .is_some_and(|h| h.element == id));
+            && press_held
+            && match pointer {
+                PointerState::Located { output, p } => self
+                    .hit_test(output, crate::geom::OutputLogicalPoint { x: p.0, y: p.1 })
+                    .is_some_and(|h| h.element == id),
+                PointerState::NoOutput => false,
+            };
         let output = self
             .pointer_output()
             .or_else(|| self.outputs.first().map(|o| o.id));
