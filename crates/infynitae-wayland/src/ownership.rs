@@ -333,8 +333,13 @@ pub fn register_xwayland_satellite(pid: i32) {
 /// program that only calls itself xwayland-satellite is not it (until 2026-11-06 the name alone
 /// was enough, so any program could take the X11 keys by its name).
 pub fn is_xwayland_satellite(pid: i32) -> bool {
+    satellite_by(pid, runs_xwayland_satellite)
+}
+
+/// `is_xwayland_satellite` with the program check given (`runs`), for the tests.
+fn satellite_by(pid: i32, runs: impl Fn(i32) -> bool) -> bool {
     let started = SATELLITES.lock().map(|s| s.contains(&pid)).unwrap_or(false);
-    started && runs_xwayland_satellite(pid)
+    started && runs(pid)
 }
 
 fn runs_xwayland_satellite(pid: i32) -> bool {
@@ -350,26 +355,25 @@ fn runs_xwayland_satellite(pid: i32) -> bool {
 #[cfg(test)]
 mod tests {
     /// A program named xwayland-satellite is not the satellite unless the supervisor started it
-    /// (its PID registered): only then do its connections get the X11 keys.
+    /// (its PID registered), and a registered PID that now runs another program is not either.
     #[test]
     fn a_program_named_like_the_satellite_is_not_it_until_registered() {
-        let dir = std::env::temp_dir().join(format!("infynitae-sat-name-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let fake = dir.join("xwayland-satellite");
-        std::fs::copy("/bin/sleep", &fake).unwrap();
-        let mut child = std::process::Command::new(&fake).arg("5").spawn().unwrap();
-        let pid = child.id() as i32;
-        std::thread::sleep(std::time::Duration::from_millis(100));
-        assert!(super::runs_xwayland_satellite(pid), "named like it");
+        // PIDs no real process of this test has (above the kernel's usual maximum)
+        let (named, other) = (4_000_001, 4_000_002);
         assert!(
-            !super::is_xwayland_satellite(pid),
-            "but not started by the supervisor"
+            !super::satellite_by(named, |_| true),
+            "named like it, not started"
         );
-        super::register_xwayland_satellite(pid);
-        assert!(super::is_xwayland_satellite(pid), "registered: it is");
-        let _ = child.kill();
-        let _ = child.wait();
-        let _ = std::fs::remove_dir_all(&dir);
+        super::register_xwayland_satellite(named);
+        assert!(
+            super::satellite_by(named, |_| true),
+            "started and still that program"
+        );
+        super::register_xwayland_satellite(other);
+        assert!(
+            !super::satellite_by(other, |_| false),
+            "the PID now runs another program"
+        );
     }
 
     /// Super+Delete's kill: a process of this user is pinned and killed; this process and a
