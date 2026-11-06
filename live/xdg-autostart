@@ -1,0 +1,74 @@
+#!/bin/sh
+# xdg-autostart: starts the apps that asked to start with the session (an app's "start on login"
+# writes ~/.config/autostart/NAME.desktop), as every desktop does (the XDG Autostart spec). Owner,
+# 2026-11-06: only ~/.config/infynitae/autostart.sh ran, so these were ignored.
+#
+# Read: $XDG_CONFIG_HOME/autostart (else ~/.config/autostart), then each $XDG_CONFIG_DIRS/autostart
+# (else /etc/xdg/autostart); a user file hides the system file of the same name. Skipped: Hidden
+# or X-GNOME-Autostart-enabled=false, OnlyShowIn without one of $XDG_CURRENT_DESKTOP's names,
+# NotShowIn with one, a TryExec that is not there, a Type other than Application. Field codes
+# (%U, %f…) are dropped from Exec. --dry-run prints the commands instead (tools/test-xdg-autostart).
+set -u
+dry=false
+[ "${1:-}" = "--dry-run" ] && dry=true
+
+desktops=":${XDG_CURRENT_DESKTOP:-infynitae}:"
+dirs="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+old_ifs=$IFS
+IFS=:
+for d in ${XDG_CONFIG_DIRS:-/etc/xdg}; do dirs="$dirs:$d/autostart"; done
+IFS=$old_ifs
+
+seen=" "
+IFS=:
+for dir in $dirs; do
+    IFS=$old_ifs
+    [ -d "$dir" ] || continue
+    for f in "$dir"/*.desktop; do
+        [ -f "$f" ] || continue
+        name=${f##*/}
+        case "$seen" in *" $name "*) continue ;; esac
+        seen="$seen$name "
+        # the [Desktop Entry] group's keys, unlocalised
+        cmd=$(awk -v desktops="$desktops" '
+            /^\[/ { group = $0; next }
+            group != "[Desktop Entry]" { next }
+            /^[A-Za-z0-9-]+=/ {
+                k = substr($0, 1, index($0, "=") - 1); v = substr($0, index($0, "=") + 1)
+                if (!(k in kv)) kv[k] = v
+            }
+            function shown(list,    n, i, a) {
+                n = split(list, a, ";")
+                for (i = 1; i <= n; i++) if (a[i] != "" && index(desktops, ":" tolower(a[i]) ":")) return 1
+                return 0
+            }
+            END {
+                if (("Type" in kv) && kv["Type"] != "Application") exit
+                if (tolower(kv["Hidden"]) == "true" || tolower(kv["X-GNOME-Autostart-enabled"]) == "false") exit
+                if (("OnlyShowIn" in kv) && !shown(tolower(kv["OnlyShowIn"]))) exit
+                if (("NotShowIn" in kv) && shown(tolower(kv["NotShowIn"]))) exit
+                e = kv["Exec"]
+                gsub(/ ?%[fFuUdDnNickvm]/, "", e)
+                gsub(/%%/, "%", e)
+                if (e == "") exit
+                print (("TryExec" in kv) ? kv["TryExec"] : "") "\t" e
+            }' "$f")
+        [ -n "$cmd" ] || continue
+        try=${cmd%%"	"*}
+        exec_line=${cmd#*"	"}
+        if [ -n "$try" ]; then
+            case "$try" in
+                /*) [ -x "$try" ] || continue ;;
+                *) command -v "$try" >/dev/null 2>&1 || continue ;;
+            esac
+        fi
+        if $dry; then
+            printf '%s\n' "$exec_line"
+        else
+            sh -c "$exec_line" >/dev/null 2>&1 &
+        fi
+    done
+    IFS=:
+done
+IFS=$old_ifs
+exit 0

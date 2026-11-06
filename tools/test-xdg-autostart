@@ -1,0 +1,39 @@
+#!/bin/sh
+# tools/test-xdg-autostart: live/xdg-autostart starts what the XDG Autostart spec says, nothing
+# else (--dry-run prints the commands). Run from the repository root.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-xdg-autostart.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+U="$TMP/user/autostart"; S="$TMP/sys/autostart"; mkdir -p "$U" "$S"
+entry() { printf '[Desktop Entry]\nType=Application\nName=%s\n%s\n' "$2" "$3" > "$1"; }
+entry "$U/discord.desktop" Discord 'Exec=/usr/bin/discord --start-minimized %U'
+entry "$U/hidden.desktop" Hidden 'Exec=hidden-app
+Hidden=true'
+entry "$U/off.desktop" Off 'Exec=off-app
+X-GNOME-Autostart-enabled=false'
+entry "$S/gnome-only.desktop" GnomeOnly 'Exec=gnome-thing
+OnlyShowIn=GNOME;Unity;'
+entry "$S/ours.desktop" Ours 'Exec=ours-app
+OnlyShowIn=GNOME;Infynitae;'
+entry "$S/not-here.desktop" NotHere 'Exec=not-here
+NotShowIn=infynitae;'
+entry "$S/tryexec.desktop" TryExec 'Exec=missing-app
+TryExec=/nonexistent/missing-app'
+entry "$S/discord.desktop" SystemDiscord 'Exec=system-discord'
+entry "$U/masks.desktop" Masks 'Exec=user-masks
+Hidden=true'
+entry "$S/masks.desktop" Masked 'Exec=system-masked'
+printf '[Desktop Entry]\nType=Link\nURL=https://example.org\nExec=link-thing\n' > "$S/link.desktop"
+printf '[Desktop Entry]\nType=Application\nExec=user-dirs\n\n[Desktop Action x]\nExec=action-thing\n' > "$S/userdirs.desktop"
+
+got=$(XDG_CONFIG_HOME="$TMP/user" XDG_CONFIG_DIRS="$TMP/sys" XDG_CURRENT_DESKTOP="infynitae:wlroots" \
+    sh "$REPO_DIR/live/xdg-autostart" --dry-run | LC_ALL=C sort | tr '\n' '|')
+want="/usr/bin/discord --start-minimized|ours-app|user-dirs|"
+if [ "$got" = "$want" ]; then
+    echo "ok   only the entries the spec starts, field codes dropped, user files win"
+    exit 0
+fi
+echo "FAIL expected $want"
+echo "     got      $got"
+exit 1
