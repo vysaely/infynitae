@@ -573,7 +573,10 @@ impl XwaylandSupervisor {
         // the copies were for the child only
         drop(fds);
         let child = match child {
-            Ok(child) => child,
+            Ok(child) => {
+                crate::ownership::register_xwayland_satellite(child.id() as i32);
+                child
+            }
             Err(e) => {
                 self.release_runtime();
                 return Err(e);
