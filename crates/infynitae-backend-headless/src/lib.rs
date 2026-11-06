@@ -440,6 +440,14 @@ pub fn run_headless_with(
                 .and_then(|d| d.authority_path().map(|p| p.to_path_buf())),
         },
     )?;
+    // the shortcut actions get this session's socket and X display too (INV-XWAYLAND-1)
+    state.set_client_env(
+        session.socket_name(),
+        x_display.as_ref().map(|d| d.name()),
+        x_display
+            .as_ref()
+            .and_then(|d| d.authority_path().map(|p| p.to_path_buf())),
+    );
     // after Session::new: from here a SIGTERM or SIGINT ends the loop, so what the extension
     // creates (the shell socket) is removed even when the signal comes during start-up
     let mut extension = infynitae_wayland::extension::start(extension, &event_loop.handle());

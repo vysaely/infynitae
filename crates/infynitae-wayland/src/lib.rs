@@ -446,6 +446,12 @@ pub struct WaylandState {
     pub(crate) exec_commands: Vec<String>,
     /// Processes started from shortcuts, to tell the windows the user opened (`launch`).
     pub(crate) launches: launch::Launches,
+    /// The session's own Wayland socket, X display and cookie, given to the shortcut actions
+    /// (`launch.sh`) as to every other client the session starts (INV-XWAYLAND-1); `None` until
+    /// the session listens (`set_client_env`). Before 2026-11-06 the actions got none of it and
+    /// `live/env.sh` guessed: the newest socket in the session log, the first X socket in
+    /// /tmp/.X11-unix, the newest cookie.
+    pub(crate) client_env: Option<outputs::ClientEnv>,
     /// FOCUS_ON_OPEN / TELEPORT_ON_OPEN = "user" (the default): only windows the user opened.
     pub(crate) focus_open_user_only: bool,
     pub(crate) teleport_open_user_only: bool,
@@ -780,6 +786,7 @@ impl WaylandState {
             current_time: None,
             exec_commands: Vec::new(),
             launches: launch::Launches::default(),
+            client_env: None,
             focus_open_user_only: false,
             focus_open_priority: true,
             dnd_flag: std::env::var_os("XDG_RUNTIME_DIR")
