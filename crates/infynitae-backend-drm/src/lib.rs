@@ -1445,6 +1445,9 @@ pub fn run_console_with(
                         s.shows_locked = s.queued_locked;
                     }
                     let id = s.id;
+                    // a window the camera fits to the screen is spared by relief like a fullscreen one
+                    let fitted = data.state.fitted_window(id);
+                    data.state.core_mut().set_relief_spared(id, fitted);
                     data.state.frame_tick(id, shown);
                     confirm_lock(data);
                     data.session.request_frame();

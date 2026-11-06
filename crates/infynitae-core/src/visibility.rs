@@ -405,6 +405,30 @@ mod tests {
         assert_eq!(c.frame_tick_vec(o).len(), 2, "over");
     }
 
+    /// A window that fills the screen without being fullscreen (a borderless game the camera
+    /// fits) is spared like a fullscreen one, focused or not (2026-11-06).
+    #[test]
+    fn a_screen_sparing_the_gpu_spares_the_window_that_fills_it() {
+        let (mut c, _, _, mut t) = Core::new(persisted(true));
+        let (o, _) = c.output_connected(&mut t, desc("A", 60_000)).unwrap();
+        let (first, second) = (map(&mut c), map(&mut c));
+        let other = if c.focus().target() == Some(first) {
+            second
+        } else {
+            first
+        };
+        c.set_frame_relief(o, true);
+        c.set_relief_spared(o, Some(other));
+        for _ in 0..4 {
+            assert!(c.frame_tick_vec(o).contains(&other), "it never waits");
+        }
+        c.set_relief_spared(o, None);
+        let ticks: Vec<bool> = (0..4)
+            .map(|_| c.frame_tick_vec(o).contains(&other))
+            .collect();
+        assert!(ticks.contains(&false), "no longer filling: it waits again");
+    }
+
     /// INV-FRAME-2: the clock is the highest-refresh observer; equal refresh → lowest OutputId;
     /// `frame_tick` returns the element only for its clock output; an unobserved element is never
     /// returned (withheld: unobserved elements do not tick; fallback handles them).
