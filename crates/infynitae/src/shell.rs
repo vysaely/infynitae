@@ -27,6 +27,9 @@ pub fn same_user(stream: &UnixStream) -> bool {
         .is_ok_and(|cred| cred.uid == rustix::process::getuid())
 }
 
+/// How often subscribers are brought up to date at most (shorter than one refresh at 120 Hz).
+pub const SHELL_BATCH: std::time::Duration = std::time::Duration::from_millis(8);
+
 /// The server as a loop extension; the socket file goes with it (after the server, whose drop
 /// still connects to it once to end its acceptor).
 struct ShellExtension {
@@ -56,6 +59,10 @@ impl LoopExtension for ShellExtension {
 
     fn set_locked(&mut self, locked: bool) {
         self.server.set_locked(locked);
+    }
+
+    fn wake_at(&self) -> Option<std::time::Instant> {
+        self.server.wake_at()
     }
 }
 
@@ -94,6 +101,10 @@ pub fn serve(port: ShellPort, path: &Path) -> io::Result<Extension> {
     fs::set_permissions(path, fs::Permissions::from_mode(0o600))?;
     let (w, wake) = waker()?;
     let mut server = ShellServer::new(port, Arc::new(move || w.wake()));
+    // subscribers' events at most once per SHELL_BATCH, not on every loop turn (a mouse moving
+    // makes about a thousand a second): owner, 2026-11-06, about 10% of a core while the Roblox
+    // macro's focus watcher was subscribed
+    server.set_refresh_every(SHELL_BATCH);
     server.listen(listener, path.to_path_buf(), Box::new(same_user));
     Ok(Extension {
         inner: Box::new(ShellExtension {

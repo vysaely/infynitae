@@ -24,6 +24,12 @@ pub trait LoopExtension {
     fn take_lock_request(&mut self) -> bool {
         false
     }
+
+    /// When the extension needs a loop turn although nothing else happens (the shell's batched
+    /// events); a backend sleeps no longer than that. `None`: only when something happens.
+    fn wake_at(&self) -> Option<std::time::Instant> {
+        None
+    }
 }
 
 /// Wakes the loop from another thread (`Send`, cloneable). A wake-up with nothing behind it costs

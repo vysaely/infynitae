@@ -15,6 +15,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use infynitae_core::protocol::Effect;
 use infynitae_core::{Core, ShellCommand, ShellError, ShellPort, ShellStream};
@@ -86,6 +87,14 @@ pub struct ShellServer {
     live: Arc<std::sync::atomic::AtomicUsize>,
     /// The session is locked (`set_locked`).
     locked: bool,
+    /// Subscribers are brought up to date at most this often (`set_refresh_every`; zero: on
+    /// every `service`, as the tests drive it).
+    refresh_every: Duration,
+    /// The next time they may be (set by each refresh).
+    next_refresh: Option<Instant>,
+    /// A `service` came before `next_refresh`: Core may have changed since the last refresh, and
+    /// one is owed at `next_refresh` (`wake_at`).
+    refresh_owed: bool,
 }
 
 impl ShellServer {
@@ -102,6 +111,9 @@ impl ShellServer {
             model: None,
             generation: 0,
             locked: false,
+            refresh_every: Duration::ZERO,
+            next_refresh: None,
+            refresh_owed: false,
             live: Arc::default(),
             acceptor: None,
         }
@@ -165,6 +177,19 @@ impl ShellServer {
         self.locked = locked;
     }
 
+    /// Subscribers' events at most once per `every` instead of on every `service`: what changed
+    /// in between goes out together, at the next `service` after it (`wake_at` says when).
+    /// Requests are answered at once, from a fresh copy, whatever this is.
+    pub fn set_refresh_every(&mut self, every: Duration) {
+        self.refresh_every = every;
+    }
+
+    /// When the loop must turn so subscribers get what changed (`None`: nothing is owed). A loop
+    /// with nothing happening sleeps after that one turn (INV-IDLE-1).
+    pub fn wake_at(&self) -> Option<Instant> {
+        self.refresh_owed.then_some(self.next_refresh).flatten()
+    }
+
     pub fn service(&mut self, core: &mut Core) -> Serviced {
         let mut done = Serviced::default();
         while let Ok(msg) = self.rx.try_recv() {
@@ -185,7 +210,13 @@ impl ShellServer {
             }
         }
         if self.conns.iter().any(|c| c.subscribed) {
-            self.refresh(core, &mut done);
+            if self.next_refresh.is_some_and(|t| Instant::now() < t) {
+                self.refresh_owed = true;
+            } else {
+                self.refresh(core, &mut done);
+            }
+        } else {
+            self.refresh_owed = false;
         }
         done
     }
@@ -262,6 +293,10 @@ impl ShellServer {
     /// Compares Core's state with the last copy; when it changed, the generation advances and the
     /// subscribers get the events, stamped with it. Returns the current generation.
     fn refresh(&mut self, core: &mut Core, done: &mut Serviced) -> u64 {
+        self.refresh_owed = false;
+        if !self.refresh_every.is_zero() {
+            self.next_refresh = Some(Instant::now() + self.refresh_every);
+        }
         let next = Model::of(core).with_locked(self.locked);
         match &self.model {
             None => {}

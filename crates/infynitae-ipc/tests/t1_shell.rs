@@ -375,6 +375,36 @@ fn subscribers_get_ordered_events_and_resync_by_snapshot() {
     assert!(gen_of(&later[0]) > snap);
 }
 
+/// Batched events (`set_refresh_every`, the live compositor's 8 ms): a change right after a
+/// refresh waits, the server names when it is owed (`wake_at`), and it arrives at the next
+/// `service` after that; with nothing changing nothing is owed, so an idle loop sleeps.
+#[test]
+fn batched_subscribers_get_a_change_by_the_wake_up_the_server_asks_for() {
+    let (mut core, mut server, _o) = setup();
+    server.set_refresh_every(Duration::from_millis(40));
+    let mut sub = connect(&mut server);
+    sub.reply(&mut server, &mut core, r#"{"id":1,"cmd":"subscribe"}"#);
+    // the subscribe refreshed just now: a change at once is held back, and owed
+    let w = map_win(&mut core, 1, 400, 300);
+    core.toplevel_metadata(w, Some("held"), None).unwrap();
+    server.service(&mut core);
+    let owed = server.wake_at().expect("a refresh is owed");
+    let mut line = String::new();
+    assert!(
+        sub.r.read_line(&mut line).is_err(),
+        "nothing yet, inside the batch: {line}"
+    );
+    // at the time it asked for, the change goes out
+    std::thread::sleep(owed.saturating_duration_since(Instant::now()));
+    server.service(&mut core);
+    assert_eq!(server.wake_at(), None, "nothing owed after the refresh");
+    let events = sub.read_until(&mut server, &mut core, |g| !g.is_empty());
+    assert_eq!(
+        events[0].get("event").and_then(Value::as_str),
+        Some("element_added")
+    );
+}
+
 /// C7.3 reconnect and shell crash: the compositor keeps nothing of a closed connection; a stream it
 /// left open is ended (its epoch settles); a new connection starts from a Snapshot.
 #[test]

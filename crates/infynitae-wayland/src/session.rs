@@ -171,6 +171,8 @@ pub struct Session {
     /// A deadline of Core's own on the session clock (a scale-settlement deadline); `None`
     /// when Core has nothing pending.
     wake: Option<Instant>,
+    /// When a loop extension wants a turn (`set_extension_wake`: the shell's batched events).
+    extension_wake: Option<Instant>,
     /// When the off-screen fallback timer fires (M16); `None` while no unobserved element has a
     /// pending callback, and then it is not armed (INV-IDLE-1).
     /// A held-back frame's start (LATENCY).
@@ -420,6 +422,7 @@ impl Session {
             max_frames: options.max_frames,
             display_ready,
             wake: None,
+            extension_wake: None,
             fallback: None,
             render_at: None,
             idle: None,
@@ -507,6 +510,9 @@ impl Session {
         let idle = self.idle.map(|t| t.saturating_duration_since(now));
         let cursor_anim = self.cursor_anim.map(|t| t.saturating_duration_since(now));
         let render_at = self.render_at.map(|t| t.saturating_duration_since(now));
+        let extension = self
+            .extension_wake
+            .map(|t| t.saturating_duration_since(now));
         [
             self.timer.until_due(now),
             limit,
@@ -515,10 +521,17 @@ impl Session {
             idle,
             cursor_anim,
             render_at,
+            extension,
         ]
         .into_iter()
         .flatten()
         .min()
+    }
+
+    /// Arms the wake-up a loop extension asked for ([`crate::extension::LoopExtension::wake_at`]),
+    /// or disarms it.
+    pub fn set_extension_wake(&mut self, at: Option<Instant>) {
+        self.extension_wake = at;
     }
 
     /// Arms the off-screen fallback timer for `deadline`, given on the presentation clock whose
