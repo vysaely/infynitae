@@ -46,6 +46,19 @@ edges on other hardware.
 
 These pass the test suite but have not run on a real screen or device yet:
 
+- **The 2026-11-06 overhaul** (tried as a fresh default user in the test VM, not yet on the
+  owner's screen):
+  - **Lock screen:** the wallpaper blurred and dimmed behind it, the user's picture
+    (AccountsService, `~/.face`) or up to two initials, the full name, a larger clock; the
+    wallpaper helper prepares the pictures (`~/.cache/infynitae`), the lock screen reads them only
+    once the lock holds.
+  - **Panels (Super+W, Super+L, Super+A, Super+V):** one look (sans-serif 12-15 px, 32 px rows,
+    hairline outlines, the accent only for what is selected or on); the launcher, window list and
+    clipboard are one-column lists with every item reachable (Up/Down, Page Up/Down); the control
+    panel spells everything out; **Restart and Shut down need a second press within 3 s.**
+  - **Faster shortcuts** (24 ms of shell setup a press down to 8 ms), the wallpaper no longer
+    keeps its decoded image (about 70 MB with a large wallpaper).
+
 - **Other machines.** The console backend (real screens, GPUs, input) cannot run in the test
   suite and has only run on my machine. Multi-GPU has never been tried.
 - **Monitor hotplug:** a screen plugged in, unplugged or woken is found about 1.5 s after the
