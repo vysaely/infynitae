@@ -294,6 +294,8 @@ fi
 if [ -x "$HOME/.config/infynitae/autostart.sh" ]; then
     "$HOME/.config/infynitae/autostart.sh" &
 fi
+# 7a. Apps that asked to start with the session (~/.config/autostart, the XDG way)
+[ -f "$HOME/infynitae/live/xdg-autostart" ] && sh "$HOME/infynitae/live/xdg-autostart"
 
 # 7b. Session restore & watcher
 RESTORE_BIN=""
