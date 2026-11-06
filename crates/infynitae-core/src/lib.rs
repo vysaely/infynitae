@@ -335,8 +335,9 @@ pub(crate) type PushedAside = (
     geom::CanvasPoint,
 );
 
-/// The frame rate of a window sparing the GPU (`Core::set_frame_relief`).
-pub const RELIEF_FPS: u32 = 30;
+/// The frame rate of a window sparing the GPU (`Core::set_frame_relief`): about 60, smooth enough
+/// for a video beside a game (30 until 2026-11-06).
+pub const RELIEF_FPS: u32 = 60;
 
 /// A camera's centre and the bits of its zoom, to tell whether it has moved.
 pub(crate) type CameraView = (Option<geom::CanvasPos>, Option<u64>);
@@ -1233,9 +1234,10 @@ impl Core {
         }
     }
 
-    /// A screen spares the GPU or stops (the adapter decides, from its missed refreshes): the
-    /// windows on it that are neither focused nor filling it complete their frames at about
-    /// [`RELIEF_FPS`], so a game in the background cannot hold the whole GPU (owner, 2026-11-03).
+    /// A screen spares the GPU or stops (the adapter decides, from its missed refreshes): while a
+    /// window fills it (fullscreen, or fitted by the camera: a game), the windows on it that are
+    /// neither focused nor filling it complete their frames at about [`RELIEF_FPS`], so the game
+    /// keeps the GPU (owner, 2026-11-03). With no window filling it nothing is slowed (2026-11-06).
     pub fn set_frame_relief(&mut self, output: output::OutputId, on: bool) {
         self.frame_relief.retain(|(o, _)| *o != output);
         if on {
@@ -1279,6 +1281,12 @@ impl Core {
             .iter()
             .find(|(o, _)| *o == output)
             .map(|(_, e)| *e);
+        // only for a game filling the screen: with none, every window in view keeps its rate
+        // (owner, 2026-11-06: picture-in-picture lagged while unfocused; relief came on from a
+        // few missed refreshes during video and held the windows beside it at 30 FPS for minutes)
+        if filling.is_none() && fitted.is_none() {
+            return;
+        }
         let mut i = start;
         while i < out.len() {
             if Some(out[i]) == focused || Some(out[i]) == filling || Some(out[i]) == fitted {

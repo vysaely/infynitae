@@ -227,8 +227,9 @@ GAME_MODE="true"
     # options: true  · false
 
 GPU_RELIEF="true"
-    # When the desktop starts missing refreshes because the GPU is full, windows you are not
-    # using (not focused, not filling the screen) slow to about 30 FPS until it has room
+    # While a game fills the screen and the desktop starts missing refreshes because the GPU is
+    # full, the windows you are not using slow to about 60 FPS until it has room; with no game on
+    # the screen nothing you can see is slowed
     # default: true
     # options: true  · false
 
