@@ -313,9 +313,31 @@ fn getuid_raw() -> u32 {
     smithay::reexports::rustix::process::getuid().as_raw()
 }
 
-/// Whether `pid` runs xwayland-satellite (its executable's name): the one client all X11 windows
-/// share, which a force-close of one window must not end.
+/// The xwayland-satellite processes this compositor started (`register_xwayland_satellite`).
+static SATELLITES: std::sync::Mutex<Vec<i32>> = std::sync::Mutex::new(Vec::new());
+
+/// The satellite supervisor started xwayland-satellite as `pid`.
+pub fn register_xwayland_satellite(pid: i32) {
+    if let Ok(mut s) = SATELLITES.lock() {
+        // a few restarts' worth: an old PID that came back as another program fails the name check
+        if s.len() >= 16 {
+            s.remove(0);
+        }
+        s.push(pid);
+    }
+}
+
+/// Whether `pid` is the xwayland-satellite this compositor started: the one client all X11
+/// windows share (its keys reach X11 apps, XWAYLAND_KEYS; a force-close of one window must not end
+/// it). Started by the supervisor (`register_xwayland_satellite`) and still that program: a
+/// program that only calls itself xwayland-satellite is not it (until 2026-11-06 the name alone
+/// was enough, so any program could take the X11 keys by its name).
 pub fn is_xwayland_satellite(pid: i32) -> bool {
+    let started = SATELLITES.lock().map(|s| s.contains(&pid)).unwrap_or(false);
+    started && runs_xwayland_satellite(pid)
+}
+
+fn runs_xwayland_satellite(pid: i32) -> bool {
     std::fs::read_link(format!("/proc/{pid}/exe"))
         .ok()
         .and_then(|p| {
@@ -327,6 +349,29 @@ pub fn is_xwayland_satellite(pid: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A program named xwayland-satellite is not the satellite unless the supervisor started it
+    /// (its PID registered): only then do its connections get the X11 keys.
+    #[test]
+    fn a_program_named_like_the_satellite_is_not_it_until_registered() {
+        let dir = std::env::temp_dir().join(format!("infynitae-sat-name-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let fake = dir.join("xwayland-satellite");
+        std::fs::copy("/bin/sleep", &fake).unwrap();
+        let mut child = std::process::Command::new(&fake).arg("5").spawn().unwrap();
+        let pid = child.id() as i32;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        assert!(super::runs_xwayland_satellite(pid), "named like it");
+        assert!(
+            !super::is_xwayland_satellite(pid),
+            "but not started by the supervisor"
+        );
+        super::register_xwayland_satellite(pid);
+        assert!(super::is_xwayland_satellite(pid), "registered: it is");
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Super+Delete's kill: a process of this user is pinned and killed; this process and a
     /// process of another uid are never pinned (a client in this process is only disconnected).
     #[test]
