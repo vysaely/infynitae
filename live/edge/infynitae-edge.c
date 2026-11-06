@@ -1208,11 +1208,6 @@ static void refresh_clipboard_data(EdgeApp *app) {
 
 /* ========================================================================== */
 /* Cairo + Pango helpers                                                       */
-/* ========================================================================== */
-static void draw_rect(cairo_t *cr, double x, double y, double w, double h) {
-    cairo_rectangle(cr, round(x) + 0.5, round(y) + 0.5, round(w) - 1.0, round(h) - 1.0);
-}
-
 static void fill_rect(cairo_t *cr, double x, double y, double w, double h) {
     cairo_rectangle(cr, round(x), round(y), round(w), round(h));
     cairo_fill(cr);
@@ -1295,47 +1290,7 @@ static void draw_text_right_max(cairo_t *cr, PangoLayout *layout, const char *fo
 /* the panel being drawn, for the helpers below that take no EdgeApp (set by draw_panels) */
 static const struct EdgeApp *g_theme;
 static int64_t now_ns(void);
-static const double *g_theme_accent(void);
 static const double *g_theme_hair(void);
-
-/* Borderless canvas-window row: NO inner box border, only a subtle flat highlight when selected */
-static void draw_bare_item(cairo_t *cr, double x, double y, double w, double h,
-                           bool active, bool selected) {
-    const double *a = g_theme ? ((const double *)g_theme_accent()) : NULL;
-    if (selected && a) {
-        cairo_set_source_rgba(cr, a[0], a[1], a[2], 0.18);
-        fill_rect(cr, x, y, w, h);
-    } else if (selected) {
-        cairo_set_source_rgba(cr, 0.15, 0.17, 0.22, 0.95);
-        fill_rect(cr, x, y, w, h);
-    } else if (active) {
-        cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.04);
-        fill_rect(cr, x, y, w, h);
-    }
-}
-
-static void theme_hair(cairo_t *cr, double alpha) {
-    const double *hr = g_theme_hair();
-    if (hr) cairo_set_source_rgba(cr, hr[0], hr[1], hr[2], alpha);
-    else cairo_set_source_rgba(cr, 0.22, 0.25, 0.34, 0.30 * alpha);
-}
-
-static void draw_hline(cairo_t *cr, double x, double y, double w) {
-    double inset = (w > 24.0) ? 8.0 : 0.0;
-    theme_hair(cr, 0.8);
-    cairo_set_line_width(cr, 1.0);
-    cairo_move_to(cr, round(x + inset), round(y) + 0.5);
-    cairo_line_to(cr, round(x + w - inset), round(y) + 0.5);
-    cairo_stroke(cr);
-}
-
-static void draw_vline(cairo_t *cr, double x, double y, double h) {
-    theme_hair(cr, 0.8);
-    cairo_set_line_width(cr, 1.0);
-    cairo_move_to(cr, round(x) + 0.5, round(y));
-    cairo_line_to(cr, round(x) + 0.5, round(y + h));
-    cairo_stroke(cr);
-}
 
 static void add_hitbox_nav(EdgeApp *app, double x, double y, double w, double h,
                            int action_id, int index, int nav_idx) {
@@ -1509,7 +1464,6 @@ static bool output_has_fullscreen(EdgeOutput *out);
  * side of the screen edge; panel outlines in the hairline colour; the accent (BORDER_ACTIVE) only
  * for what is selected or on; rounding off with SQUARE_CORNERS.                                    */
 /* ========================================================================== */
-static const double *g_theme_accent(void) { return g_theme ? g_theme->border_rgb : NULL; }
 static const double *g_theme_hair(void) { return g_theme && g_theme->hair_set ? g_theme->hair_rgb : NULL; }
 
 #define CTRL_ROW 28.0
@@ -1726,20 +1680,32 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
             cur_dx = rect[0]; cur_dy = rect[1]; cur_dw = rect[2]; cur_dh = rect[3];
         }
 
-        /* ─────────────────────────────────────────────────────────────────── */
-        /* B. Control panel (Super+A): one outer 1 px border                   */
-        /* ─────────────────────────────────────────────────────────────────── */
         if (active_m == MODE_CONTROL) {
+            /* B. Control panel (Super+A). Owner, 2026-11-06: "the design feels mid ... the text is
+             * over": labels ran into their values (Power mode / Performance) and a notification into
+             * its app name. Now every piece of text has its own room and is cut with an ellipsis:
+             * a clock header, a volume slider, six tiles (label above its state, lit in the accent
+             * when on), then optional sections under a small title, then three buttons. No dividers:
+             * space and section titles separate. Navigation order and actions are unchanged. */
+            const double PAD = 12.0, GAP = 6.0, SECTION = 12.0;
+            const double HEAD_H = 34.0, VOL_H = 32.0, TILE_H = 46.0, ITEM_H = 30.0;
+            double NOTIF_H = 42.0;
+            const double TITLE_H = 20.0, BTN_H = 32.0;
+
             int sub_rows = (app->subpanel != SUB_NONE) ? (app->sub_count > 0 ? app->sub_count : 1) : 0;
-            double sub_extra_h = (app->subpanel != SUB_NONE) ? (6.0 + sub_rows * CTRL_ROW) : 0.0;
-            double tray_extra_h = (app->tray_count > 0) ? (6.0 + app->tray_count * CTRL_ROW) : 0.0;
             int ctx_rows = (app->tray_ctx_idx >= 0 && app->tray_ctx_idx < app->tray_count)
                 ? ((app->ctx_count + 2) / 3) : 0;
-            double ctx_extra_h = ctx_rows * CTRL_ROW;
-            double notif_extra_h = (app->notif_count > 0) ? ((CTRL_ROW + 2.0) + app->notif_count * CTRL_ROW) : 0.0;
+            double sub_extra_h = sub_rows ? (GAP + sub_rows * ITEM_H) : 0.0;
+            double tray_extra_h = app->tray_count > 0 ? (SECTION + TITLE_H + app->tray_count * ITEM_H + ctx_rows * ITEM_H) : 0.0;
+            double fixed_h = PAD + HEAD_H + GAP + VOL_H + GAP + 3.0 * TILE_H + 2.0 * GAP + sub_extra_h + tray_extra_h +
+                             SECTION + BTN_H + PAD;
+            /* a short screen with every section full: notifications on one line each */
+            bool notif_compact = fixed_h + (SECTION + TITLE_H + app->notif_count * NOTIF_H) > h - 16.0;
+            if (notif_compact) NOTIF_H = ITEM_H + 2.0;
+            double notif_extra_h = app->notif_count > 0 ? (SECTION + TITLE_H + app->notif_count * NOTIF_H) : 0.0;
 
-            double ctrl_w = 340.0;
-            double ctrl_h = (16.0 + 6.0 * CTRL_ROW) + sub_extra_h + tray_extra_h + ctx_extra_h + notif_extra_h;
+            double ctrl_w = 360.0;
+            double ctrl_h = fixed_h + notif_extra_h;
             double ctrl_x = app->control_on_left ? 8.0 : (w - ctrl_w - 8.0);
             double ctrl_y = round(app->bottom_edge
                 ? (h + ctrl_h * (1.0 - ease) - (ctrl_h + 8.0) * ease)
@@ -1752,69 +1718,91 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
 
             draw_panel_box(cr, app, ctrl_x, ctrl_y, ctrl_w, ctrl_h, ease);
 
-            double rx = ctrl_x + 1.0;
-            double rw = ctrl_w - 2.0;
-            double ry = ctrl_y + 4.0;
+            double rx = ctrl_x + PAD;
+            double rw = ctrl_w - 2.0 * PAD;
+            double ry = ctrl_y + PAD;
+            const double *acc = app->border_rgb;
 
-            /* Row 1: Clock & Date (left) + Battery % (right) */
+            /* a rounded tile: the accent when on, a faint fill when off; selected: an accent outline */
+#define CTRL_TILE(X, Y, W, H, ON, SEL)                                                              \
+            do {                                                                                    \
+                cairo_new_path(cr);                                                                 \
+                round_rect(cr, app, (X) + 0.5, (Y) + 0.5, (W) - 1.0, (H) - 1.0, 7.0);               \
+                if (ON) cairo_set_source_rgba(cr, acc[0], acc[1], acc[2], 0.26 * ease);             \
+                else set_text(cr, app, 0.055 * ease);                                               \
+                cairo_fill_preserve(cr);                                                            \
+                if (SEL) {                                                                          \
+                    set_accent(cr, app, 0.95 * ease);                                               \
+                    cairo_set_line_width(cr, 1.0);                                                  \
+                    cairo_stroke(cr);                                                               \
+                } else {                                                                            \
+                    cairo_new_path(cr);                                                             \
+                }                                                                                   \
+            } while (0)
+
+            /* Header: the time large, the date beside it, the battery at the right */
             time_t now = time(NULL);
             struct tm *tm_info = localtime(&now);
-            char clock_str[64];
-            strftime(clock_str, sizeof(clock_str), "%H:%M  ·  %a %b %d", tm_info);
-
-            cairo_set_source_rgba(cr, 0.90, 0.93, 0.97, 0.95);
-            draw_text_left(cr, layout, FONT_BODY_MEDIUM, clock_str, rx + 14.0, ry + 10.0, 190.0);
-
+            char time_s[16], date_s[32];
+            strftime(time_s, sizeof(time_s), "%H:%M", tm_info);
+            strftime(date_s, sizeof(date_s), "%A, %B %d", tm_info);
+            set_text(cr, app, 0.96 * ease);
+            draw_text_left(cr, layout, "sans-serif Medium 16", time_s, rx + 2.0, ry + HEAD_H / 2.0, 90.0);
+            set_text(cr, app, 0.55 * ease);
+            draw_text_left(cr, layout, FONT_BODY, date_s, rx + 70.0, ry + HEAD_H / 2.0 + 1.0, rw - 140.0);
             if (app->battery_pct >= 0) {
                 char bat_s[24];
-                snprintf(bat_s, sizeof(bat_s), "%s%d%%", app->battery_charging ? "+" : "", app->battery_pct);
-                cairo_set_source_rgba(cr, 0.62, 0.68, 0.76, 0.90);
-                draw_text_right(cr, layout, FONT_BODY, bat_s, rx + rw - 14.0, ry + 10.0);
+                snprintf(bat_s, sizeof(bat_s), "%s%d%%", app->battery_charging ? "Charging " : "", app->battery_pct);
+                set_text(cr, app, 0.70 * ease);
+                draw_text_right_max(cr, layout, FONT_BODY, bat_s, rx + rw - 2.0, ry + HEAD_H / 2.0 + 1.0, 100.0);
             }
-            ry += CTRL_ROW;
-            draw_hline(cr, rx, ry, rw);
-            ry += 2.0;
+            ry += HEAD_H + GAP;
 
-            /* Row 2: Borderless Volume Track (Left-click sets level; Right-click opens Audio Sinks) */
-            double vh = CTRL_ROW;
-            draw_bare_item(cr, rx, ry, rw, vh, app->subpanel == SUB_AUDIO, false);
-
-            cairo_set_source_rgba(cr, 0.56, 0.62, 0.70, 0.90);
-            draw_text_left(cr, layout, FONT_BODY, "Volume", rx + 14.0, ry + vh / 2.0, 60.0);
-            add_hitbox(app, rx, ry, 70.0, vh, ACT_VOL_MUTE, 0);
+            /* Volume: a label (click: mute), a slider with a knob, the level */
+            bool vol_sel = app->subpanel == SUB_AUDIO;
+            CTRL_TILE(rx, ry, rw, VOL_H, false, vol_sel);
+            set_text(cr, app, (app->volume_muted ? 0.45 : 0.85) * ease);
+            draw_text_left(cr, layout, FONT_BODY, app->volume_muted ? "Muted" : "Volume", rx + 12.0, ry + VOL_H / 2.0, 58.0);
+            add_hitbox(app, rx, ry, 70.0, VOL_H, ACT_VOL_MUTE, 0);
 
             double bx = rx + 76.0;
-            double bw = rw - 132.0;
-            double by = ry + (vh - 2.0) / 2.0;
-            theme_hair(cr, 1.0);
-            fill_rect(cr, bx, by, bw, 2.0);
-
-            double fill_w = (bw * (app->volume_muted ? 0 : app->volume_pct)) / 100.0;
-            if (fill_w > 1.0) {
-                set_accent(cr, app, 0.95 * ease);
-                fill_rect(cr, bx, by, fill_w, 2.0);
+            double bw = rw - 76.0 - 56.0;
+            double by = ry + VOL_H / 2.0;
+            cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+            cairo_set_line_width(cr, 4.0);
+            set_text(cr, app, 0.14 * ease);
+            cairo_move_to(cr, bx, by);
+            cairo_line_to(cr, bx + bw, by);
+            cairo_stroke(cr);
+            double level = app->volume_muted ? 0.0 : (app->volume_pct > 100 ? 100 : app->volume_pct) / 100.0;
+            double kx = bx + bw * level;
+            if (level > 0.0) {
+                cairo_set_source_rgba(cr, acc[0], acc[1], acc[2], 0.95 * ease);
+                cairo_move_to(cr, bx, by);
+                cairo_line_to(cr, kx, by);
+                cairo_stroke(cr);
             }
-            add_hitbox(app, bx, ry, bw, vh, ACT_VOL_BAR, (int)bx);
+            cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+            cairo_new_path(cr);
+            cairo_arc(cr, kx, by, 6.0, 0, 2 * M_PI);
+            set_text(cr, app, (app->volume_muted ? 0.45 : 0.95) * ease);
+            cairo_fill(cr);
+            add_hitbox(app, bx, ry, bw, VOL_H, ACT_VOL_BAR, (int)bx);
 
             char v_s[16];
-            if (app->volume_muted) strcpy(v_s, "Mute");
+            if (app->volume_muted) strcpy(v_s, "Off");
             else snprintf(v_s, sizeof(v_s), "%d%%", app->volume_pct);
-            double mx = bx + bw + 2.0;
-            add_hitbox(app, mx, ry, 52.0, vh, ACT_VOL_MUTE, 0);
-            cairo_set_source_rgba(cr, app->volume_muted ? 0.48 : 0.78, app->volume_muted ? 0.52 : 0.82, 0.88, 0.92);
-            draw_text_right(cr, layout, FONT_BODY, v_s, rx + rw - 14.0, ry + vh / 2.0);
+            add_hitbox(app, bx + bw + 4.0, ry, rx + rw - (bx + bw + 4.0), VOL_H, ACT_VOL_MUTE, 0);
+            set_text(cr, app, 0.80 * ease);
+            draw_text_right_max(cr, layout, FONT_BODY, v_s, rx + rw - 12.0, ry + VOL_H / 2.0, 40.0);
+            ry += VOL_H + GAP;
 
-            ry += vh + 2.0;
-            draw_hline(cr, rx, ry, rw);
-            ry += 2.0;
-
-            /* Rows 3, 4 & 5: Borderless 3×2 Text Toggles (Wi-Fi, BT, DND, Power, Replay, Clip) */
-            double tw = floor(rw / 2.0);
-            double th = CTRL_ROW;
+            /* Six tiles in two columns: the name, and under it its state */
+            double tw = floor((rw - GAP) / 2.0);
             const char *p_disp = "Balanced";
-            if (strcmp(app->power_profile, "none") == 0) p_disp = "";
+            if (strcmp(app->power_profile, "none") == 0) p_disp = "Not available";
             else if (strcasecmp(app->power_profile, "performance") == 0) p_disp = "Performance";
-            else if (strcasecmp(app->power_profile, "power-saver") == 0) p_disp = "Saver";
+            else if (strcasecmp(app->power_profile, "power-saver") == 0) p_disp = "Power saver";
 
             struct {
                 const char *label;
@@ -1827,180 +1815,157 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
                 { "Bluetooth", app->bt_label, app->bt_on, ACT_BT_TOGGLE, app->subpanel == SUB_BT },
                 { "Do not disturb", app->dnd_on ? "On" : "Off", app->dnd_on, ACT_DND_TOGGLE, false },
                 { "Power mode", p_disp, strcasecmp(app->power_profile, "performance") == 0, ACT_POWER_PROFILE, false },
-                { "Replay", app->replay_on ? "On" : "Off", app->replay_on, ACT_REPLAY_TOGGLE, false },
-                { "Save clip", "", app->replay_on, ACT_REPLAY_SAVE, false }
+                { "Replay", app->replay_on ? "Recording" : "Off", app->replay_on, ACT_REPLAY_TOGGLE, false },
+                { "Save clip", app->replay_on ? "Last 20 minutes" : "Replay is off", false, ACT_REPLAY_SAVE, false }
             };
 
-            draw_vline(cr, rx + tw, ry + 4.0, 3.0 * th - 8.0);
-
             for (int i = 0; i < 6; i++) {
-                int r = i / 2;
-                int c = i % 2;
-                double sx = rx + c * tw;
-                double sy = ry + r * th;
-                bool sel = (app->selected_idx == i);
-
-                draw_bare_item(cr, sx, sy, tw, th, false, sel || sw[i].sub_open);
-                cairo_set_source_rgba(cr, (sw[i].active || sel) ? 0.92 : 0.56,
-                                      (sw[i].active || sel) ? 0.95 : 0.61,
-                                      (sw[i].active || sel) ? 0.99 : 0.69, 0.95);
-                draw_text_left(cr, layout, sw[i].active ? FONT_BODY_MEDIUM : FONT_BODY,
-                               sw[i].label, sx + 14.0, sy + th / 2.0, tw * 0.58);
-
-                cairo_set_source_rgba(cr, (sw[i].active || sel) ? 0.86 : 0.44,
-                                      (sw[i].active || sel) ? 0.90 : 0.49,
-                                      (sw[i].active || sel) ? 0.96 : 0.57, 0.92);
-                draw_text_right(cr, layout, FONT_CAPTION, sw[i].val, sx + tw - 12.0, sy + th / 2.0);
-
-                add_hitbox_nav(app, sx, sy, tw, th, sw[i].action, i, i);
+                double sx = rx + (i % 2) * (tw + GAP);
+                double sy = ry + (i / 2) * (TILE_H + GAP);
+                double sw_w = (i % 2) ? (rw - tw - GAP) : tw;
+                bool sel = (app->selected_idx == i) || sw[i].sub_open;
+                bool dim = sw[i].action == ACT_REPLAY_SAVE && !app->replay_on;
+                CTRL_TILE(sx, sy, sw_w, TILE_H, sw[i].active, sel);
+                set_text(cr, app, (dim ? 0.45 : 0.95) * ease);
+                draw_text_left(cr, layout, FONT_BODY_MEDIUM, sw[i].label, sx + 12.0, sy + 16.0, sw_w - 24.0);
+                if (sw[i].active) cairo_set_source_rgba(cr, acc[0], acc[1], acc[2], 0.95 * ease);
+                else set_text(cr, app, (dim ? 0.35 : 0.55) * ease);
+                draw_text_left(cr, layout, FONT_CAPTION, sw[i].val[0] ? sw[i].val : "Off", sx + 12.0, sy + 32.0, sw_w - 24.0);
+                add_hitbox_nav(app, sx, sy, sw_w, TILE_H, sw[i].action, i, i);
             }
-
-            ry += 3 * th + 2.0;
+            ry += 3.0 * TILE_H + 2.0 * GAP;
             int nav_cursor = 6;
 
-            /* Optional Inline Sub-List (Wi-Fi / Bluetooth / Audio Output) */
+            /* Under the tiles: the networks, devices or outputs of an open tile */
             if (app->subpanel != SUB_NONE) {
-                draw_hline(cr, rx, ry, rw);
-                ry += 3.0;
+                ry += GAP;
                 if (app->sub_count == 0) {
-                    cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.80);
-                    draw_text_left(cr, layout, FONT_BODY, "None found", rx + 14.0, ry + 11.0, rw - 18.0);
-                    ry += CTRL_ROW;
+                    set_text(cr, app, 0.45 * ease);
+                    draw_text_left(cr, layout, FONT_BODY, "None found", rx + 12.0, ry + ITEM_H / 2.0, rw - 24.0);
+                    ry += ITEM_H;
                 } else {
                     for (int i = 0; i < app->sub_count; i++) {
                         SubItem *si = &app->sub_items[i];
-                        double sh = CTRL_ROW;
                         int nav_i = nav_cursor++;
                         bool sel = (app->selected_idx == nav_i);
-
-                        draw_bare_item(cr, rx, ry, rw, sh, si->active, sel);
-                        cairo_set_source_rgba(cr, (si->active || sel) ? 0.95 : 0.68,
-                                              (si->active || sel) ? 0.97 : 0.73,
-                                              (si->active || sel) ? 1.00 : 0.80, 0.95);
-                        draw_text_left(cr, layout, si->active ? FONT_BODY_MEDIUM : FONT_BODY,
-                                       si->label, rx + 14.0, ry + sh / 2.0, rw - 68.0);
-
-                        cairo_set_source_rgba(cr, 0.46, 0.52, 0.60, 0.85);
-                        draw_text_right(cr, layout, FONT_CAPTION, si->meta, rx + rw - 14.0, ry + sh / 2.0);
-
-                        add_hitbox_nav(app, rx, ry, rw, sh, ACT_SUB_SELECT, i, nav_i);
-                        ry += sh;
+                        if (sel || si->active) CTRL_TILE(rx, ry, rw, ITEM_H - 2.0, si->active, sel);
+                        set_text(cr, app, (si->active || sel ? 0.95 : 0.72) * ease);
+                        draw_text_left(cr, layout, si->active ? FONT_BODY_MEDIUM : FONT_BODY, si->label,
+                                       rx + 12.0, ry + (ITEM_H - 2.0) / 2.0, rw - 110.0);
+                        set_text(cr, app, 0.50 * ease);
+                        draw_text_right_max(cr, layout, FONT_CAPTION, si->meta, rx + rw - 12.0, ry + (ITEM_H - 2.0) / 2.0, 84.0);
+                        add_hitbox_nav(app, rx, ry, rw, ITEM_H, ACT_SUB_SELECT, i, nav_i);
+                        ry += ITEM_H;
                     }
                 }
-                ry += 3.0;
             }
 
-            /* Tray Apps (ONLY actual unmapped background/tray apps; hidden if 0!) */
+            /* Background apps (hidden when there are none) */
             if (app->tray_count > 0) {
-                draw_hline(cr, rx, ry, rw);
-                ry += 3.0;
+                ry += SECTION;
+                set_text(cr, app, 0.48 * ease);
+                draw_text_left(cr, layout, FONT_CAPTION, "Background apps", rx + 2.0, ry + TITLE_H / 2.0, rw - 4.0);
+                ry += TITLE_H;
                 for (int i = 0; i < app->tray_count; i++) {
                     TrayApp *ta = &app->tray_apps[i];
-                    double row_h = CTRL_ROW;
                     int nav_i = nav_cursor++;
                     bool ctx_open = (app->tray_ctx_idx == i);
                     bool sel = (app->selected_idx == nav_i);
+                    if (sel || ctx_open) CTRL_TILE(rx, ry, rw, ITEM_H - 2.0, false, sel);
+                    set_text(cr, app, (sel || ctx_open ? 0.96 : 0.82) * ease);
+                    draw_text_left(cr, layout, FONT_BODY, ta->name, rx + 12.0, ry + (ITEM_H - 2.0) / 2.0, rw - 110.0);
+                    set_text(cr, app, 0.48 * ease);
+                    draw_text_right_max(cr, layout, FONT_CAPTION, ta->mem, rx + rw - 12.0, ry + (ITEM_H - 2.0) / 2.0, 84.0);
+                    add_hitbox_nav(app, rx, ry, rw, ITEM_H, ACT_TRAY_ITEM, i, nav_i);
+                    ry += ITEM_H;
 
-                    draw_bare_item(cr, rx, ry, rw, row_h, false, sel || ctx_open);
-
-                    cairo_set_source_rgba(cr, (sel || ctx_open) ? 0.96 : 0.78,
-                                          (sel || ctx_open) ? 0.98 : 0.82, 0.90, 0.94);
-                    draw_text_left(cr, layout, FONT_BODY, ta->name, rx + 14.0, ry + row_h / 2.0, rw - 72.0);
-
-                    cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
-                    draw_text_right(cr, layout, FONT_CAPTION, ta->mem, rx + rw - 14.0, ry + row_h / 2.0);
-
-                    add_hitbox_nav(app, rx, ry, rw, row_h, ACT_TRAY_ITEM, i, nav_i);
-                    ry += row_h;
-
-                    /* App's Own Native Context Menu (from com.canonical.dbusmenu) or Open/Quit/Kill */
+                    /* the app's own menu (com.canonical.dbusmenu) or Open / Quit / Kill */
                     if (ctx_open && app->ctx_count > 0) {
-                        double ch = CTRL_ROW;
                         int cols = app->ctx_count < 3 ? app->ctx_count : 3;
-                        double cw = floor(rw / cols);
-
+                        double cw = floor((rw - (cols - 1) * GAP) / cols);
                         for (int k = 0; k < app->ctx_count; k++) {
-                            int r = k / 3;
-                            int c = k % 3;
-                            double cx_b = rx + c * cw;
-                            double cy_b = ry + r * ch;
+                            double cx_b = rx + (k % 3) * (cw + GAP);
+                            double cy_b = ry + (k / 3) * ITEM_H;
                             int c_nav = nav_cursor++;
                             bool c_sel = (app->selected_idx == c_nav);
-
-                            draw_bare_item(cr, cx_b, cy_b, cw, ch, true, c_sel);
-                            cairo_set_source_rgba(cr, c_sel ? 0.98 : 0.76, c_sel ? 0.98 : 0.80, 0.90, 0.95);
+                            CTRL_TILE(cx_b, cy_b, cw, ITEM_H - 4.0, false, c_sel);
+                            set_text(cr, app, (c_sel ? 0.98 : 0.80) * ease);
                             draw_text_centered(cr, layout, FONT_BODY, app->ctx_items[k].label,
-                                               cx_b + cw / 2.0, cy_b + ch / 2.0, false);
-                            add_hitbox_nav(app, cx_b, cy_b, cw, ch, ACT_TRAY_CTX_CLICK, k, c_nav);
+                                               cx_b + cw / 2.0, cy_b + (ITEM_H - 4.0) / 2.0, false);
+                            add_hitbox_nav(app, cx_b, cy_b, cw, ITEM_H - 4.0, ACT_TRAY_CTX_CLICK, k, c_nav);
                         }
-                        int rows_used = (app->ctx_count + 2) / 3;
-                        ry += rows_used * ch;
+                        ry += ((app->ctx_count + 2) / 3) * ITEM_H;
                     }
                 }
-                ry += 3.0;
             }
 
-            /* Notification History (from Mako D-Bus ListNotifications + ListHistory; hidden if 0) */
+            /* Notifications (mako's current and history; hidden when there are none): the app above
+             * the text, each on its own line */
             if (app->notif_count > 0) {
-                draw_hline(cr, rx, ry, rw);
-                ry += 3.0;
-                double hh = CTRL_ROW - 4.0;
+                ry += SECTION;
                 int clr_nav = nav_cursor++;
                 bool clr_sel = (app->selected_idx == clr_nav);
-
-                cairo_set_source_rgba(cr, 0.46, 0.51, 0.60, 0.85);
-                draw_text_left(cr, layout, FONT_CAPTION, "Notifications", rx + 14.0, ry + hh / 2.0, rw - 68.0);
-
-                draw_bare_item(cr, rx + rw - 54.0, ry, 54.0, hh, false, clr_sel);
-                cairo_set_source_rgba(cr, clr_sel ? 0.96 : 0.64, clr_sel ? 0.98 : 0.70, 0.80, 0.92);
-                draw_text_right(cr, layout, FONT_CAPTION, "Clear", rx + rw - 14.0, ry + hh / 2.0);
-                add_hitbox_nav(app, rx + rw - 54.0, ry, 54.0, hh, ACT_NOTIF_CLEAR, 0, clr_nav);
-                ry += hh;
+                set_text(cr, app, 0.48 * ease);
+                draw_text_left(cr, layout, FONT_CAPTION, "Notifications", rx + 2.0, ry + TITLE_H / 2.0, rw - 80.0);
+                if (clr_sel) CTRL_TILE(rx + rw - 56.0, ry, 56.0, TITLE_H, false, true);
+                set_text(cr, app, (clr_sel ? 0.96 : 0.66) * ease);
+                draw_text_right_max(cr, layout, FONT_CAPTION, "Clear all", rx + rw - 8.0, ry + TITLE_H / 2.0, 50.0);
+                add_hitbox_nav(app, rx + rw - 56.0, ry, 56.0, TITLE_H, ACT_NOTIF_CLEAR, 0, clr_nav);
+                ry += TITLE_H;
 
                 for (int i = 0; i < app->notif_count; i++) {
                     NotifItem *ni = &app->notifs[i];
-                    double nh = CTRL_ROW;
                     int nav_i = nav_cursor++;
                     bool sel = (app->selected_idx == nav_i);
-
-                    draw_bare_item(cr, rx, ry, rw, nh, false, sel);
-                    cairo_set_source_rgba(cr, sel ? 0.96 : 0.76, sel ? 0.98 : 0.80, 0.88, 0.94);
-                    draw_text_left(cr, layout, FONT_BODY, ni->text, rx + 14.0, ry + nh / 2.0, rw - 68.0);
-
-                    cairo_set_source_rgba(cr, 0.44, 0.48, 0.56, 0.85);
-                    draw_text_right(cr, layout, FONT_CAPTION, ni->app, rx + rw - 14.0, ry + nh / 2.0);
-
-                    add_hitbox_nav(app, rx, ry, rw, nh, ACT_NOTIF_ITEM, i, nav_i);
-                    ry += nh;
+                    CTRL_TILE(rx, ry, rw, NOTIF_H - 4.0, false, sel);
+                    if (notif_compact) {
+                        set_text(cr, app, (sel ? 0.98 : 0.88) * ease);
+                        draw_text_left(cr, layout, FONT_BODY, ni->text, rx + 12.0, ry + (NOTIF_H - 4.0) / 2.0, rw - 110.0);
+                        set_text(cr, app, 0.50 * ease);
+                        draw_text_right_max(cr, layout, FONT_CAPTION, ni->app, rx + rw - 12.0, ry + (NOTIF_H - 4.0) / 2.0, 80.0);
+                    } else {
+                        set_text(cr, app, 0.50 * ease);
+                        draw_text_left(cr, layout, FONT_CAPTION, ni->app[0] ? ni->app : "Notification", rx + 12.0, ry + 12.0, rw - 24.0);
+                        set_text(cr, app, (sel ? 0.98 : 0.88) * ease);
+                        draw_text_left(cr, layout, FONT_BODY, ni->text, rx + 12.0, ry + 27.0, rw - 24.0);
+                    }
+                    add_hitbox_nav(app, rx, ry, rw, NOTIF_H - 4.0, ACT_NOTIF_ITEM, i, nav_i);
+                    ry += NOTIF_H;
                 }
-                ry += 3.0;
+                ry -= 4.0;
             }
 
-            /* Row 6: Borderless Session Strip (Reboot · Power Off · Log Out) */
-            draw_hline(cr, rx, ry, rw);
-            ry += 2.0;
-            double ph = CTRL_ROW;
-            double pw = floor(rw / 3.0);
-            /* Restart and Shut down ask for a second press within 3 s (power_confirm_*) */
+            /* Restart, Shut down, Log out: three buttons (Restart and Shut down ask for a second
+             * press within 3 s, power_confirm_*) */
+            ry += SECTION;
+            double pw = floor((rw - 2.0 * GAP) / 3.0);
             bool confirming = app->power_confirm_until > now_ns();
             const char *p_labels[3] = {
                 confirming && app->power_confirm_action == ACT_REBOOT ? "Press again" : "Restart",
                 confirming && app->power_confirm_action == ACT_POWEROFF ? "Press again" : "Shut down",
                 "Log out" };
             int p_acts[3] = { ACT_REBOOT, ACT_POWEROFF, ACT_LOGOUT };
-
             for (int i = 0; i < 3; i++) {
-                double px_b = rx + i * pw;
+                double px_b = rx + i * (pw + GAP);
+                double pw_i = i == 2 ? (rx + rw - px_b) : pw;
                 int p_nav = nav_cursor++;
                 bool p_sel = (app->selected_idx == p_nav);
-                draw_bare_item(cr, px_b, ry, pw, ph, false, p_sel);
-                if (i > 0) draw_vline(cr, px_b, ry + 4.0, ph - 8.0);
                 bool warn = confirming && p_acts[i] == app->power_confirm_action;
-                if (warn) cairo_set_source_rgba(cr, 0.97, 0.46, 0.56, 0.98 * ease);
-                else set_text(cr, app, (p_sel ? 0.96 : 0.70) * ease);
-                draw_text_centered(cr, layout, warn ? FONT_BODY_MEDIUM : FONT_BODY, p_labels[i], px_b + pw / 2.0, ry + ph / 2.0, false);
-                add_hitbox_nav(app, px_b, ry, pw, ph, p_acts[i], 0, p_nav);
+                if (warn) {
+                    cairo_new_path(cr);
+                    round_rect(cr, app, px_b + 0.5, ry + 0.5, pw_i - 1.0, BTN_H - 1.0, 7.0);
+                    cairo_set_source_rgba(cr, 0.97, 0.46, 0.56, 0.22 * ease);
+                    cairo_fill(cr);
+                } else {
+                    CTRL_TILE(px_b, ry, pw_i, BTN_H, false, p_sel);
+                }
+                if (warn) cairo_set_source_rgba(cr, 0.98, 0.62, 0.68, 0.98 * ease);
+                else set_text(cr, app, (p_sel ? 0.98 : 0.80) * ease);
+                draw_text_centered(cr, layout, warn ? FONT_BODY_MEDIUM : FONT_BODY, p_labels[i],
+                                   px_b + pw_i / 2.0, ry + BTN_H / 2.0, false);
+                add_hitbox_nav(app, px_b, ry, pw_i, BTN_H, p_acts[i], 0, p_nav);
             }
+#undef CTRL_TILE
         }
 
         /* C. Clipboard (Super+V): the same list, Clear at the right of the search field */
@@ -3466,10 +3431,16 @@ static int render_to_png(const char *mode_name, const char *size, const char *ou
     app.bt_on = true;
     snprintf(app.bt_label, sizeof(app.bt_label), "Headphones");
     app.volume_pct = 60;
-    snprintf(app.power_profile, sizeof(app.power_profile), "balanced");
     app.battery_pct = -1;
+    snprintf(app.power_profile, sizeof(app.power_profile), "%s", getenv("INFYNITAE_EDGE_RENDER_POWER") ? getenv("INFYNITAE_EDGE_RENDER_POWER") : "balanced");
+    static const char *trays[][2] = {{"Steam", "2159 MB"}, {"RustDesk", "127 MB"}, {"Gameoverlayui", "66 MB"}};
+    app.tray_count = 3;
+    for (int i = 0; i < 3; i++) {
+        snprintf(app.tray_apps[i].name, sizeof(app.tray_apps[i].name), "%s", trays[i][0]);
+        snprintf(app.tray_apps[i].mem, sizeof(app.tray_apps[i].mem), "%s", trays[i][1]);
+    }
     static const char *notes[][2] = {{"Discord", "New message from a friend"}, {"Steam", "Download complete"},
-                                     {"Infynitae", "Screenshot saved"}};
+                                     {"Infynitae", "Screen is being captured — The red dot is shown while an app records the screen"}};
     app.notif_count = 3;
     for (int i = 0; i < 3; i++) {
         app.notifs[i].id = (uint32_t)(i + 1);
