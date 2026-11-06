@@ -260,7 +260,8 @@ fn requests_before_the_initial_configure_are_not_answered() {
     let qh = t.ls.qh.clone();
     let x = t.ls.probe.toplevel_uncommitted(&qh, "X", (300, 200));
     let tl = t.toplevel(x);
-    tl.set_maximized();
+    // (set_maximized is kept for the map since 2026-11-06:
+    // a_maximize_asked_before_the_window_is_shown_is_granted_when_it_maps)
     tl.set_fullscreen(None);
     tl.set_minimized();
     tl.unset_fullscreen();
