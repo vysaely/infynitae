@@ -167,18 +167,35 @@ pub fn recenter_target(
     })
 }
 
-/// Super+Space's zoom (owner, 2026-11-06: "a window bigger than the viewport can handle ... make
-/// Super+Space fit the scaling too"): 1.0 when the window geometry `w` x `h` (Canvas px) fits the
-/// usable area (output-logical) with a 12 px margin on each side, else the zoom at which it just
-/// does. Never above 1.0. Pure.
-pub fn recenter_zoom(usable: (f64, f64, f64, f64), w: i64, h: i64) -> f64 {
+/// Super+Space's zoom and the area (output-logical) the window is centred in (owner, 2026-11-06:
+/// "a window bigger than the viewport can handle ... make Super+Space fit the scaling too"):
+/// - a window `w` x `h` (Canvas px) that fits the usable area: 1.0, centred in it;
+/// - one that fits the whole screen `extent` but not the usable area (a borderless game, a window
+///   filling the screen under the bars): 1.0, centred on the screen, so it covers it edge to edge;
+/// - one bigger than the screen: the zoom at which it fits the usable area with a 12 px margin on
+///   each side, centred in it.
+///
+/// A maximized window is exactly the usable area: it stays at 1.0 (owner, 2026-11-06: the margin
+/// once zoomed such a window out and showed the wallpaper at its corners). Never above 1.0. Pure.
+pub fn recenter_zoom(
+    extent: (f64, f64),
+    usable: (f64, f64, f64, f64),
+    w: i64,
+    h: i64,
+) -> (f64, (f64, f64, f64, f64)) {
     const MARGIN: f64 = 12.0;
-    if w <= 0 || h <= 0 {
-        return 1.0;
+    // half a pixel of slack: the sizes are rounded from logical px
+    let fits = |aw: f64, ah: f64| w as f64 <= aw + 0.5 && h as f64 <= ah + 0.5;
+    if w <= 0 || h <= 0 || fits(usable.2, usable.3) {
+        return (1.0, usable);
+    }
+    if fits(extent.0, extent.1) {
+        return (1.0, (0.0, 0.0, extent.0, extent.1));
     }
     let room_w = (usable.2 - 2.0 * MARGIN).max(1.0);
     let room_h = (usable.3 - 2.0 * MARGIN).max(1.0);
-    (room_w / w as f64).min(room_h / h as f64).min(1.0)
+    let zoom = (room_w / w as f64).min(room_h / h as f64).min(1.0);
+    (zoom, usable)
 }
 
 pub fn fit_target(
@@ -476,18 +493,31 @@ pub(crate) enum Authority {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn super_space_zooms_out_only_for_a_window_bigger_than_the_view() {
-        let usable = (0.0, 0.0, 1920.0, 1080.0);
-        assert_eq!(super::recenter_zoom(usable, 800, 600), 1.0, "fits: 100%");
-        assert_eq!(super::recenter_zoom(usable, 1896, 1056), 1.0, "just fits");
-        let z = super::recenter_zoom(usable, 3792, 1056);
-        assert!((z - 0.5).abs() < 1e-9, "twice as wide: half, {z}");
-        let z = super::recenter_zoom(usable, 1000, 3168);
-        assert!(
-            (z - 1.0 / 3.0).abs() < 1e-9,
-            "three times as tall: a third, {z}"
+    fn super_space_zooms_out_only_for_a_window_bigger_than_the_screen() {
+        let extent = (1920.0, 1080.0);
+        let usable = (0.0, 32.0, 1920.0, 1048.0);
+        let screen = (0.0, 0.0, 1920.0, 1080.0);
+        let z = |w, h| super::recenter_zoom(extent, usable, w, h);
+        assert_eq!(z(800, 600), (1.0, usable), "fits: 100%");
+        assert_eq!(
+            z(1920, 1048),
+            (1.0, usable),
+            "maximized: 100%, no wallpaper"
         );
-        assert_eq!(super::recenter_zoom(usable, 0, 600), 1.0);
+        assert_eq!(
+            z(1920, 1080),
+            (1.0, screen),
+            "fills the screen: 100%, on the screen"
+        );
+        let (zm, area) = z(3840, 1048);
+        assert_eq!(area, usable);
+        assert!((zm - 1896.0 / 3840.0).abs() < 1e-9, "twice as wide, {zm}");
+        let (zm, _) = z(1000, 3048);
+        assert!(
+            (zm - 1024.0 / 3048.0).abs() < 1e-9,
+            "three times as tall, {zm}"
+        );
+        assert_eq!(z(0, 600), (1.0, usable));
     }
 
     use super::*;
