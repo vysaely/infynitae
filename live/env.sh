@@ -26,7 +26,13 @@ unset KDE_FORBIDDEN_FILESYSTEMS
 
 # 3. Decouple Qt from KDE platform theme daemon (kded6 / plasma-workspace)
 export QT_QPA_PLATFORM="wayland;xcb"
-export QT_QPA_PLATFORMTHEME=""
+# Qt apps in the system's colours through qt6ct when it is installed (settings.sh writes its
+# palette from the Infynitae colours), else no platform theme
+if command -v qt6ct >/dev/null 2>&1; then
+    export QT_QPA_PLATFORMTHEME="qt6ct"
+else
+    export QT_QPA_PLATFORMTHEME=""
+fi
 export QT_WAYLAND_DISABLE_WINDOWDECORATION="1"
 export QT_AUTO_SCREEN_SCALE_FACTOR="1"
 # Qt 6 apps reconnect to a compositor that restarted (after a crash) instead of quitting

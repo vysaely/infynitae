@@ -1,0 +1,44 @@
+#!/bin/sh
+# tools/test-qt-theme: Qt apps follow the Infynitae colours (live/settings.sh, section 4a). In a
+# stand-in home it checks: the qt6ct and qt5ct palettes are written, 22 colours a row, the window
+# colour is SURFACE_COLOR, the selection BORDER_ACTIVE, the text TEXT_COLOR; qt6ct.conf points at
+# the palette and the icon theme; a qt6ct.conf the user saved (no infynitae_managed) is kept; a
+# colour change rewrites the palette; THEME_SYNC=false writes none. Run from the repository root.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-qt-theme.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+fail=0
+check() {
+    if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected $3, got $2"; fail=1; fi
+}
+apply() { HOME="$1" CONFIG_FILE="$1/.config/infynitae/config" sh "$REPO_DIR/live/settings.sh" apply >/dev/null 2>&1 || true; }
+role() { sed -n "s/^active_colors=//p" "$1" | tr -d ' ' | cut -d, -f"$2"; }
+
+H="$TMP/a"; mkdir -p "$H/.config/infynitae"
+printf 'SURFACE_COLOR="#202124"\nTEXT_COLOR="#f0f0f0"\nBORDER_ACTIVE="#ff5577"\nICON_THEME="Papirus-Dark"\n' > "$H/.config/infynitae/config"
+apply "$H"
+for qt in qt6ct qt5ct; do
+    p="$H/.config/$qt/colors/infynitae.conf"
+    check "$qt palette has 22 colours a row" "$(sed -n 's/^active_colors=//p' "$p" | tr ',' '\n' | grep -c .)" "22"
+    check "$qt window is SURFACE_COLOR" "$(role "$p" 11)" "#ff202124"
+    check "$qt highlight is BORDER_ACTIVE" "$(role "$p" 13)" "#ffff5577"
+    check "$qt text is TEXT_COLOR" "$(role "$p" 7)" "#fff0f0f0"
+done
+c="$H/.config/qt6ct/qt6ct.conf"
+check "qt6ct.conf uses the palette" "$(sed -n 's/^color_scheme_path=//p' "$c")" "$H/.config/qt6ct/colors/infynitae.conf"
+check "qt6ct.conf has the icon theme" "$(sed -n 's/^icon_theme=//p' "$c")" "Papirus-Dark"
+
+sed -i 's/^BORDER_ACTIVE=.*/BORDER_ACTIVE="#33cc66"/' "$H/.config/infynitae/config"
+apply "$H"
+check "a new accent rewrites the palette" "$(role "$H/.config/qt6ct/colors/infynitae.conf" 13)" "#ff33cc66"
+
+printf '[Appearance]\nstyle=kvantum\n' > "$c"
+apply "$H"
+check "a qt6ct.conf the user saved is kept" "$(sed -n 's/^style=//p' "$c")" "kvantum"
+
+H="$TMP/b"; mkdir -p "$H/.config/infynitae"
+printf 'THEME_SYNC="false"\n' > "$H/.config/infynitae/config"
+apply "$H"
+check "THEME_SYNC=false writes no Qt palette" "$([ -e "$H/.config/qt6ct" ] && echo written || echo none)" "none"
+exit $fail

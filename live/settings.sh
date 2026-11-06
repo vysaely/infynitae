@@ -293,6 +293,80 @@ cursorSize=$CURSOR_SIZE
 EOF
     fi
 
+    # 4a. Qt apps in the system's colours (owner, 2026-11-06: "i want all the apps to take the theme
+    # from the system"): a qt6ct / qt5ct palette from SURFACE_COLOR, TEXT_COLOR, BORDER_ACTIVE and
+    # CANVAS_COLOR, the Fusion style, ICON_THEME and the font. env.sh makes Qt load qt6ct when it is
+    # installed. Each qt*ct.conf is written while it is ours (infynitae_managed); qt6ct's own window
+    # saving it drops that key, and then it is the user's.
+    case "${THEME_SYNC:-true}" in
+        0|false|no|off|FALSE|False) ;;
+        *)
+    # mix A B T: A and B (#rrggbb) blended, T percent of B; printed as #ffrrggbb
+    qt_mix() {
+        awk -v a="${1#\#}" -v b="${2#\#}" -v t="$3" 'function h(s, i) { return index("0123456789abcdef", tolower(substr(s, i, 1))) - 1 }
+            function c(s, i) { return h(s, i) * 16 + h(s, i + 1) }
+            BEGIN { printf "#ff"; for (i = 1; i <= 5; i += 2) printf "%02x", int(c(a, i) * (100 - t) / 100 + c(b, i) * t / 100 + 0.5); print "" }'
+    }
+    q_win=$(qt_mix "$SURFACE_COLOR" "$SURFACE_COLOR" 0)
+    q_base=$(qt_mix "$SURFACE_COLOR" "$CANVAS_COLOR" 50)
+    q_alt=$(qt_mix "$SURFACE_COLOR" "$TEXT_COLOR" 4)
+    q_btn=$(qt_mix "$SURFACE_COLOR" "$TEXT_COLOR" 8)
+    q_light=$(qt_mix "$SURFACE_COLOR" "$TEXT_COLOR" 22)
+    q_mid_light=$(qt_mix "$SURFACE_COLOR" "$TEXT_COLOR" 14)
+    q_mid=$(qt_mix "$SURFACE_COLOR" "$BORDER_INACTIVE" 100)
+    q_dark=$(qt_mix "$SURFACE_COLOR" "#000000" 45)
+    q_shadow=$(qt_mix "$SURFACE_COLOR" "#000000" 75)
+    q_text=$(qt_mix "$TEXT_COLOR" "$TEXT_COLOR" 0)
+    q_dim=$(qt_mix "$TEXT_COLOR" "$SURFACE_COLOR" 45)
+    q_off=$(qt_mix "$TEXT_COLOR" "$SURFACE_COLOR" 60)
+    q_acc=$(qt_mix "$BORDER_ACTIVE" "$BORDER_ACTIVE" 0)
+    q_acc_off=$(qt_mix "$BORDER_ACTIVE" "$SURFACE_COLOR" 55)
+    q_on_acc=$(qt_mix "$SURFACE_COLOR" "#000000" 20)
+    q_link=$(qt_mix "$BORDER_ACTIVE" "$TEXT_COLOR" 25)
+    q_visited=$(qt_mix "$BORDER_ACTIVE" "$TEXT_COLOR" 55)
+    # QPalette roles in order: WindowText Button Light Midlight Dark Mid Text BrightText ButtonText
+    # Base Window Shadow Highlight HighlightedText Link LinkVisited AlternateBase NoRole ToolTipBase
+    # ToolTipText PlaceholderText Accent
+    qt_row() {  # $1 text, $2 highlight
+        echo "$1, $q_btn, $q_light, $q_mid_light, $q_dark, $q_mid, $1, #ffffffff, $1, $q_base, $q_win, $q_shadow, $2, $q_on_acc, $q_link, $q_visited, $q_alt, $q_win, $q_btn, $q_text, $q_dim, $2"
+    }
+    case "$FONT_NAME" in monospace|Monospace) qt_font="Sans Serif" ;; *) qt_font="$FONT_NAME" ;; esac
+    for qt in qt6ct qt5ct; do
+        mkdir -p "$HOME/.config/$qt/colors"
+        put_file "$HOME/.config/$qt/colors/infynitae.conf" << EOF
+[ColorScheme]
+active_colors=$(qt_row "$q_text" "$q_acc")
+disabled_colors=$(qt_row "$q_off" "$q_acc_off")
+inactive_colors=$(qt_row "$q_text" "$q_acc")
+EOF
+        qt_conf="$HOME/.config/$qt/$qt.conf"
+        if [ ! -f "$qt_conf" ] || grep -q '^infynitae_managed=true' "$qt_conf" 2>/dev/null; then
+            put_file "$qt_conf" << EOF
+[Appearance]
+color_scheme_path=$HOME/.config/$qt/colors/infynitae.conf
+custom_palette=true
+icon_theme=$ICON_THEME
+infynitae_managed=true
+standard_dialogs=default
+style=Fusion
+
+[Fonts]
+fixed="monospace,$FONT_SIZE,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
+general="$qt_font,$FONT_SIZE,-1,5,400,0,0,0,0,0,0,0,0,0,0,1"
+
+[Interface]
+activate_item_on_single_click=0
+dialog_buttons_have_icons=1
+menus_have_icons=true
+show_shortcuts_in_context_menus=true
+underline_shortcut=1
+wheel_scroll_lines=3
+EOF
+        fi
+    done
+        ;;
+    esac
+
     # 4b. "Open Terminal Here" in file managers: xdg-terminal-exec (Infynitae's, in
     # ~/.local/bin), which runs TERMINAL. Each pointer is set only where there is none of the
     # user's own. Thunar's stock action goes through exo-open, which needs xfce4-settings.

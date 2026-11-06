@@ -272,7 +272,7 @@ FONT_SIZE="10"
 ICON_THEME="Adwaita"
     # Icon theme
     # default: Adwaita
-    # options: Adwaita  · any installed theme
+    # options: Adwaita  · Papirus-Dark  · any installed theme (GTK and Qt apps)
 
 COLOR_SCHEME="prefer-dark"
     # Apps' light or dark look
@@ -290,7 +290,8 @@ TEXT_COLOR="#eef2f8"
     # options: "#eef2f8"  · any "#rrggbb"
 
 THEME_SYNC="true"
-    # Synchronize the palette above to Mako, Fuzzel, GTK 3/4, Foot, Kitty, and Alacritty [reload]
+    # Synchronize the palette above to Mako, Fuzzel, GTK 3/4, Qt (with qt6ct installed), Foot,
+    # Kitty, and Alacritty [reload]
     # default: true
     # options: true  · false
 
