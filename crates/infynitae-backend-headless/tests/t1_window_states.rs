@@ -789,13 +789,14 @@ fn all_apart(r: &Rig, es: &[ElementId]) -> bool {
         .all(|(i, x)| es[i + 1..].iter().all(|y| apart(r, *x, *y)))
 }
 
-/// Owner: "let it push the whole cluster, because when one window pushes a window, the pushed
-/// window doesn't push another". A Super+right drag widens A to the right: B is pushed, and B
-/// pushes C in turn (C used to stay under B).
+/// Owner, 2026-11-06: "the only window that is supposed to move is the one getting resized". A
+/// Super+right drag widens A to the right over B: no other window moves (until then B was
+/// pushed, and pushed C in turn).
 #[test]
-fn a_resize_pushes_the_whole_row_to_the_right() {
+fn a_resize_moves_no_other_window_to_the_right() {
     let mut r = rig(a_1080());
     let (a, es) = row(&mut r);
+    let before: Vec<_> = es.iter().map(|e| anchor_of(&r, *e)).collect();
     let d = delta_to(&r.ls, es[2], (390.0, 290.0));
     r.motion(d);
     r.button(BTN_RIGHT, true, LOGO);
@@ -803,17 +804,19 @@ fn a_resize_pushes_the_whole_row_to_the_right() {
     draw(&mut r, a, (600, 300));
     r.button(BTN_RIGHT, false, LOGO);
     draw(&mut r, a, (600, 300));
-    assert!(all_apart(&r, &es), "no two windows overlap");
-    // D and E on the other side did not move
-    assert_eq!(anchor_of(&r, es[1]).x, -612);
-    assert_eq!(anchor_of(&r, es[0]).x, -1024);
+    let after: Vec<_> = es.iter().map(|e| anchor_of(&r, *e)).collect();
+    assert_eq!(
+        after, before,
+        "every window where it was, A too (it grew to the right)"
+    );
 }
 
-/// The same to the left: A widened from its left side pushes D, and D pushes E.
+/// The same to the left: A widened from its left side keeps its right edge; D and E stay.
 #[test]
-fn a_resize_pushes_the_whole_row_to_the_left() {
+fn a_resize_moves_no_other_window_to_the_left() {
     let mut r = rig(a_1080());
     let (a, es) = row(&mut r);
+    let before: Vec<_> = es.iter().map(|e| anchor_of(&r, *e)).collect();
     let d = delta_to(&r.ls, es[2], (10.0, 10.0));
     r.motion(d);
     r.button(BTN_RIGHT, true, LOGO);
@@ -821,10 +824,12 @@ fn a_resize_pushes_the_whole_row_to_the_left() {
     draw(&mut r, a, (600, 300));
     r.button(BTN_RIGHT, false, LOGO);
     draw(&mut r, a, (600, 300));
-    assert!(all_apart(&r, &es), "no two windows overlap");
-    // B and C on the other side did not move
-    assert_eq!(anchor_of(&r, es[3]).x, 212);
-    assert_eq!(anchor_of(&r, es[4]).x, 624);
+    for i in [0, 1, 3, 4] {
+        assert_eq!(anchor_of(&r, es[i]), before[i], "window {i} stays");
+    }
+    let mut a_moved = before[2];
+    a_moved.x -= 200;
+    assert_eq!(anchor_of(&r, es[2]), a_moved, "A keeps its right edge");
 }
 
 /// A maximize pushes its neighbour off the view, and the neighbour pushes the next one along.

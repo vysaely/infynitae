@@ -744,6 +744,7 @@ impl Core {
         self.held_sizes.retain(|(e, _)| *e != id);
         self.returning.retain(|e| *e != id);
         self.maximized.retain(|(e, _)| *e != id);
+        self.maximized_at.retain(|(e, _)| *e != id);
         self.left_fullscreen.retain(|e| *e != id);
         self.pushed_by_maximize
             .retain(|(by, pushed, ..)| *by != id && *pushed != id);
@@ -868,9 +869,23 @@ impl Core {
         }
     }
 
+    /// A maximized window the user resizes (a drag of any kind, a scaled cluster) is maximized no
+    /// longer (owner, 2026-11-06): its size is the one the user gives it, so a bar or a screen
+    /// change does not snap it back, and the next Super+Enter maximizes it again instead of
+    /// restoring the size before. The windows its maximize pushed aside stay where they are.
+    pub(crate) fn resized_out_of_maximize(&mut self, id: ElementId) {
+        if !self.maximized.iter().any(|(e, _)| *e == id) {
+            return;
+        }
+        self.set_maximized(id, None);
+        self.stage.set_saved_floating(id, None);
+        self.pushed_by_maximize.retain(|(by, ..)| *by != id);
+    }
+
     /// Super+Enter maximized `id` to fill `output`'s usable area (`Some`), or restored it.
     pub(crate) fn set_maximized(&mut self, id: ElementId, output: Option<OutputId>) {
         self.maximized.retain(|(e, _)| *e != id);
+        self.maximized_at.retain(|(e, _)| *e != id);
         if let Some(o) = output {
             self.maximized.push((id, o));
         }
@@ -912,6 +927,9 @@ impl Core {
             };
             if self.stage.place(id, at).is_err() {
                 continue;
+            }
+            for m in self.maximized_at.iter_mut().filter(|(e, _)| *e == id) {
+                m.1 = at;
             }
             moved.push(id);
             self.hold_size(id, size);
@@ -1144,6 +1162,7 @@ impl Core {
     ) -> Option<(i32, i32)> {
         let (anchor, tree) = (self.stage.anchor(id)?, self.stage.tree(id)?);
         let size = (tree.geometry.size.w, tree.geometry.size.h);
+        self.resized_out_of_maximize(id);
         self.resize = Some(ResizeTrack {
             element: id,
             left,
@@ -1589,6 +1608,8 @@ impl Core {
                     .anchor(id)
                     .zip(old_size)
                     .map(|(a, s)| (a.x, a.y, a.x + i64::from(s.w), a.y + i64::from(s.h)));
+                // a resize drag on it (taken before the drag's last commit ends the track)
+                let resizing = self.resize.is_some_and(|r| r.element == id);
                 // a window being resized from its left or top keeps its opposite corner in place
                 if let Some(anchor) = self.resize_committed(id, tree.geometry.size, out) {
                     self.stage.place(id, anchor).map_err(stale)?;
@@ -1636,14 +1657,20 @@ impl Core {
                         a.x + i64::from(t.geometry.size.w),
                         a.y + i64::from(t.geometry.size.h),
                     );
-                    // a size the compositor or the user asked for (maximize, a drag, the room)
-                    // makes room as before; one the app took by itself makes none: the window
-                    // finds room instead (owner, 2026-10-31)
-                    let asked = self.held_size(id) == Some(t.geometry.size)
-                        || self.resize.is_some_and(|r| r.element == id);
-                    if asked {
+                    // only a maximize makes room (owner, 2026-10-31); a resize moves no other
+                    // window, and the resized one stays where the drag puts it (owner,
+                    // 2026-11-06: "the only window that is supposed to move is the one getting
+                    // resized"); another size the compositor asked for (a session restore, a
+                    // cluster scaled) moves nothing either; one the app took by itself makes
+                    // none: the window finds room instead (owner, 2026-10-31)
+                    let asked = self.held_size(id) == Some(t.geometry.size);
+                    let maximized = self.maximized.iter().any(|(e, _)| *e == id);
+                    if asked && maximized && !resizing {
                         self.push_grown(id, old, new, out);
-                    } else if let Some(at) = self.self_resized(id, old, new) {
+                    } else if !asked
+                        && !resizing
+                        && let Some(at) = self.self_resized(id, old, new)
+                    {
                         self.stage.place(id, at).map_err(stale)?;
                         self.invalidate_all_frames();
                     }

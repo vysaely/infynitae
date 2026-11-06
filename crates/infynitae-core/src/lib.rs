@@ -477,6 +477,9 @@ pub struct Core {
     /// Windows a maximize pushed aside: (maximized window, pushed window, where it was, where it
     /// went). Restoring puts each back, unless the user has moved it since.
     pub(crate) pushed_by_maximize: Vec<PushedAside>,
+    /// Where each maximized window was put (by Super+Enter or a refit): one found elsewhere when
+    /// it is restored was moved by the user, and is restored where it is now.
+    pub(crate) maximized_at: Vec<(stage::ElementId, geom::CanvasPoint)>,
     pub(crate) overview_at: Vec<(output::OutputId, CameraView)>,
     /// Whether Super+Middle pan or camera navigation moves out of fullscreen presentation.
     pub fullscreen_pan: bool,
@@ -580,6 +583,7 @@ impl Core {
                 presentation_suppressed: Vec::new(),
                 overview_at: Vec::new(),
                 pushed_by_maximize: Vec::new(),
+                maximized_at: Vec::new(),
                 left_fullscreen: Vec::new(),
                 fullscreen_pan: false,
                 focus_on_open: false,

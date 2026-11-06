@@ -918,14 +918,32 @@ impl Core {
             return;
         }
         if let Some((orig_anchor, orig_size)) = self.stage.saved_floating(element) {
+            // moved while maximized (a title bar drag keeps the maximize): it comes back at its
+            // size before, centred where it is now, not at the place it left (owner, 2026-11-06)
+            let now = self.stage.anchor(element);
+            let put = self
+                .maximized_at
+                .iter()
+                .find(|(e, _)| *e == element)
+                .map(|(_, a)| *a);
+            let current = self.stage.tree(element).map(|t| t.geometry.size);
+            let moved = matches!((now, put), (Some(n), Some(p)) if n != p);
+            let back_to = match (moved, now, current) {
+                (true, Some(n), Some(cur)) => crate::geom::CanvasPoint {
+                    x: n.x + i64::from(cur.w) / 2 - i64::from(orig_size.w) / 2,
+                    y: n.y + i64::from(cur.h) / 2 - i64::from(orig_size.h) / 2,
+                },
+                _ => orig_anchor,
+            };
             self.stage.set_saved_floating(element, None);
             self.set_maximized(element, None);
-            let _ = self.place_by_shell(element, orig_anchor, out);
-            // the windows it pushed aside go back, unless they have been moved since
+            let _ = self.place_by_shell(element, back_to, out);
+            // the windows it pushed aside go back, unless they have been moved since, or it
+            // was (their old places were beside where it was)
             let pushed: Vec<_> = self
                 .pushed_by_maximize
                 .iter()
-                .filter(|(by, ..)| *by == element)
+                .filter(|(by, ..)| *by == element && !moved)
                 .copied()
                 .collect();
             self.pushed_by_maximize.retain(|(by, ..)| *by != element);
@@ -988,6 +1006,7 @@ impl Core {
                 .set_saved_floating(element, Some((anchor, orig_size)));
             // it follows the output's changes (INV-OUTPUT-2, amended 2026-10-31)
             self.set_maximized(element, Some(output));
+            self.maximized_at.push((element, tl));
             let _ = self.place_by_shell(element, tl, out);
             let target_rect = (tl.x, tl.y, tl.x + canvas_w as i64, tl.y + canvas_h as i64);
             if self.placement == crate::protocol::PlacementPolicy::ClusterTiling {
@@ -1311,8 +1330,12 @@ impl Core {
         if let Some(mut target) =
             crate::navigation::fit_target_in(view_size, extent, usable, scale, g)
         {
-            // Cap zoom at 1.0 (clusters are not magnified beyond scale 1.0)
+            // Cap zoom at 1.0 (clusters are not magnified beyond scale 1.0), centred in the
+            // usable area at the capped zoom (the fit's centre is for its own zoom)
             target.zoom = target.zoom.min(1.0);
+            if let Some(c) = crate::navigation::recenter_target(extent, usable, target.zoom, g) {
+                target.center = c;
+            }
             self.cameras.fit(proof, camera, target);
             self.camera_written(output, camera, out);
         }
@@ -1387,6 +1410,10 @@ impl Core {
             return;
         };
         target.zoom = target.zoom.min(1.0);
+        // centred in the usable area at the capped zoom (the fit's centre is for its own zoom)
+        if let Some(c) = crate::navigation::recenter_target(extent, usable, target.zoom, g) {
+            target.center = c;
+        }
 
         // where the overview left the camera, not where it would go now: windows move under it.
         // A fullscreen window on top means the overview is not showing, wherever the camera is.
@@ -2370,6 +2397,12 @@ impl Core {
                 }
                 bindings::WindowDrag::Resize | bindings::WindowDrag::ClusterResize => {
                     if is_cluster && !self.input.cluster_drag.is_empty() {
+                        // a scaled cluster's maximized windows are maximized no longer
+                        let members: Vec<_> =
+                            self.input.cluster_drag.iter().map(|(e, ..)| *e).collect();
+                        for e in members {
+                            self.resized_out_of_maximize(e);
+                        }
                         let mut min_x = i64::MAX;
                         let mut min_y = i64::MAX;
                         let mut max_x = i64::MIN;
@@ -5696,6 +5729,62 @@ mod tests {
     }
 
     /// Maximize pushes the neighbours aside; restoring puts back those nobody moved since.
+    #[test]
+    fn resizing_a_maximized_window_ends_the_maximize() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 1);
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        let (w, h) = c.output(a).unwrap().logical_extent();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (w / 2.0, h / 2.0),
+        };
+        let _ = c.client_maximize(ws[0], true);
+        assert!(c.maximized.iter().any(|(e, _)| *e == ws[0]));
+        c.begin_resize(ws[0], false, false);
+        assert!(
+            !c.maximized.iter().any(|(e, _)| *e == ws[0]),
+            "resized: maximized no longer"
+        );
+        assert_eq!(c.stage().saved_floating(ws[0]), None);
+        c.resize = None;
+        // the next maximize maximizes again
+        let _ = c.client_maximize(ws[0], true);
+        assert!(c.maximized.iter().any(|(e, _)| *e == ws[0]));
+    }
+
+    #[test]
+    fn a_maximized_window_moved_is_restored_where_it_is() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        c.set_placement_policy(crate::PlacementPolicy::ClusterTiling);
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 1);
+        let mut fx = Vec::new();
+        let at = |x, y| crate::geom::CanvasPoint { x, y };
+        c.place_by_user(ws[0], at(-200, -150), &mut fx).unwrap();
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        let (w, h) = c.output(a).unwrap().logical_extent();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (w / 2.0, h / 2.0),
+        };
+        let _ = c.client_maximize(ws[0], true);
+        // dragged while maximized (the window has not redrawn: still 400 x 300)
+        c.place_by_user(ws[0], at(3000, 3000), &mut fx).unwrap();
+        let _ = c.client_maximize(ws[0], false);
+        assert_eq!(
+            c.stage().anchor(ws[0]),
+            Some(at(3000, 3000)),
+            "where it is, not back at (-200, -150)"
+        );
+        // not moved: back to its place before
+        c.place_by_user(ws[0], at(-200, -150), &mut fx).unwrap();
+        let _ = c.client_maximize(ws[0], true);
+        let _ = c.client_maximize(ws[0], false);
+        assert_eq!(c.stage().anchor(ws[0]), Some(at(-200, -150)));
+    }
+
     #[test]
     fn restoring_a_maximized_window_puts_back_the_windows_it_pushed() {
         let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());

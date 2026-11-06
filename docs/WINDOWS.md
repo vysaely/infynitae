@@ -17,7 +17,7 @@ usable area less the 12 px gap on each side.
 | First map | `protocol.rs` `first_map_anchor` | A notification: bottom right of the usable view. A child (dialog, or an app's second window that names a parent), whatever its size: centred over the parent, which it may cover. The next window of an app whose window just closed, with no key press, button press or touch since (an app swapping its own windows): its place. Else by `PLACEMENT_POLICY`: `cluster` (the default in the config; owner rule 2026-10-31, F-PLACE-1) centres it on the pointer, kept inside the usable view; if that spot is not free, the nearest free spot (12 px gap kept), one wholly on screen first, else the nearest on the Canvas. It never overlaps or moves another window. `center` centres it in the usable view. |
 | Too large | `handlers.rs` `fit_opening_window`, `protocol.rs` `place_opening_at_size` | A window that maps larger than the room (Chromium/Electron at a saved size, X11 through xwayland-satellite) is offered the room and placed again for that size by the same free-space rule; nothing is pushed (until 2026-10-31 it took the middle of the view and pushed the others aside). A window the user opened brings the camera to it (TELEPORT_ON_OPEN). |
 | Grew by itself | `protocol.rs` `self_resized` | An app that grows its window by itself pushes nothing: if the new size reaches no new window it stays; else it keeps its right, bottom or both edges, or its centre, the first that is free; else it moves to the nearest free spot (2026-10-31). |
-| Grew to a size asked for | `protocol.rs` `push_grown` | A maximize or a Super+right drag pushes the windows the new rect newly reaches, left or right, keeping the gap, and the push goes on along the cluster: a pushed window pushes the windows it then reaches, in the same direction, each moving once (owner, 2026-10-31). |
+| Grew to a size asked for | `protocol.rs` `push_grown` | A maximize pushes the windows the new rect newly reaches, left or right, keeping the gap, and the push goes on along the cluster: a pushed window pushes the windows it then reaches, in the same direction, each moving once (owner, 2026-10-31). A resize of any kind (Super+right drag, an app's edge, three fingers, a scaled cluster) and a session restore's size move no other window: only the resized one moves (owner, 2026-11-06). |
 
 Everything above uses the **first** screen: its camera, usable area and room, whichever screen
 the pointer is on.
@@ -27,9 +27,9 @@ the pointer is on.
 | Action | Where | What |
 | :--- | :--- | :--- |
 | Super+Enter, `SUPER_ENTER_ACTION="fit"` (default) | `entry.rs` `fit_toggle` | Camera zoom to fit the window under the pointer; again: the camera before. The window is not resized. |
-| Super+Enter, `"maximize"` | `entry.rs` `maximize_toggle` | Zoom reset to 1; the window moves to the usable view's top-left and is asked for the usable size; overlapping neighbours pushed aside; its place and size before are kept (`saved_floating`). Again: back to them. Remembered with its screen (`Core::maximized`). |
+| Super+Enter, `"maximize"` | `entry.rs` `maximize_toggle` | Zoom reset to 1; the window moves to the usable view's top-left and is asked for the usable size; overlapping neighbours pushed aside; its place and size before are kept (`saved_floating`). Again: back to them; if the user moved it while maximized (a title bar drag keeps the maximize), back to its size before, centred where it is now, and the pushed windows stay (2026-11-06). Remembered with its screen (`Core::maximized`). A resize ends the maximize (2026-11-06). An app's maximize button does the same, except at a zoom other than 1, where it is only answered (apps never move the camera). |
 | Super+Shift+Enter, an app's `set_fullscreen` | `entry.rs` `toggle_fullscreen`, `protocol.rs` (M9) | Protocol fullscreen on the pointer's screen: the screen shows only it, at the screen's logical size rounded down (F-PRESENT-1). Nothing on the Canvas moves (owner, 2026-10-31). Leaving: the size before (`FullscreenState.saved`); at its first windowed frame the window keeps its place if it is free at the size it draws, else it moves to the nearest free spot (it came back larger, or a window took its place); it never pushes (`returned_from_fullscreen`). A Super+drag out of fullscreen places it where the user lets go. |
-| Super+right drag | `protocol.rs` `begin_resize`/`resize_to`/`end_resize` | From the nearest corner; one configure outstanding at a time; the opposite corner stays. Super+Shift+right drag scales a cluster. |
+| Super+right drag | `protocol.rs` `begin_resize`/`resize_to`/`end_resize` | From the nearest corner; one configure outstanding at a time; the opposite corner stays; no other window moves. Super+Shift+right drag scales a cluster. |
 | App's `set_maximized`/`set_minimized` | `protocol.rs` `toplevel_request` | Declined / ignored (INV-PROTO-1): the compositor's maximize is Super+Enter. |
 
 **Held sizes** (INV-PROTO-1, amended 2026-10-31): a size the compositor asked of a window is
@@ -44,12 +44,12 @@ next window switch.
 | Input | What |
 | :--- | :--- |
 | Super+left drag / Super+Shift+left drag | Move the window / its cluster; out of fullscreen at the window's size before it. It may be dropped over other windows: nothing is pushed or kept apart (left as it is for the owner to decide). |
-| Super+right drag | Resize from the nearest corner; the new size pushes the windows it newly reaches aside, left or right. |
+| Super+right drag | Resize from the nearest corner; no other window moves, it may cover them (owner, 2026-11-06). |
 | Touch: three fingers | Move or resize the window under them (see the touch design notes). |
 | Super+Tab | Focus the next window; with `FOCUS_CYCLE_NAVIGATE` centre the camera on it. |
 | Super+1..9 / Super+Shift+1..9 | Focus window / cluster N (creation order), raise, centre the camera (zoom 1) / frame the cluster. |
 | Click | Focus and raise the window under the pointer. |
-| Super+Space / Super+Shift+Space | Centre the focused window in the usable area at zoom 1 / at the current zoom. |
+| Super+Space / Super+Shift+Space | Centre the focused window in the usable area at zoom 1 / at the current zoom. A window as large as the whole screen is lined up with it at zoom 1; only a window larger than the screen is zoomed out until it fits, with a 12 px margin (2026-11-06). Super+1..9, a two-finger double tap and TELEPORT_ON_OPEN centre the same way. |
 
 A focus change sends a configure to the window losing and the one gaining focus (`activated`);
 with held sizes it no longer changes their size.
