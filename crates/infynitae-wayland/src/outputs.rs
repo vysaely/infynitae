@@ -747,9 +747,15 @@ mod action_env_tests {
             x_authority: Some("/run/user/1000/infynitae-xauth-3".into()),
         };
         let cmd = action_command("/home/u", "apps", &["x"], Some(&env));
-        let args: Vec<_> = cmd.get_args().map(|a| a.to_string_lossy().into_owned()).collect();
+        let args: Vec<_> = cmd
+            .get_args()
+            .map(|a| a.to_string_lossy().into_owned())
+            .collect();
         assert_eq!(args, ["/home/u/infynitae/live/launch.sh", "apps", "x"]);
-        assert_eq!(env_of(&cmd, "WAYLAND_DISPLAY"), Some(Some("wayland-7".into())));
+        assert_eq!(
+            env_of(&cmd, "WAYLAND_DISPLAY"),
+            Some(Some("wayland-7".into()))
+        );
         assert_eq!(env_of(&cmd, "DISPLAY"), Some(Some(":3".into())));
         assert_eq!(
             env_of(&cmd, "XAUTHORITY"),

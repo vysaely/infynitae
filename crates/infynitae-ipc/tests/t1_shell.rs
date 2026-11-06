@@ -809,7 +809,10 @@ fn lock_asks_the_adapter_to_lock() {
         locked = server.service(&mut core).lock;
     }
     assert!(locked, "the server asks the adapter to lock");
-    let reply = shell.read_until(&mut server, &mut core, |got| !got.is_empty()).pop().unwrap();
+    let reply = shell
+        .read_until(&mut server, &mut core, |got| !got.is_empty())
+        .pop()
+        .unwrap();
     assert_eq!(reply.get("id").and_then(Value::as_u64), Some(9));
     assert_eq!(reply.get("ok"), Some(&Value::Bool(true)));
 }
