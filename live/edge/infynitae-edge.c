@@ -2661,8 +2661,8 @@ static int count_nav_items(EdgeApp *app) {
 /* ========================================================================== */
 /* Animation & Wayland Listeners                                              */
 /* ========================================================================== */
-#define OPEN_MS 120.0
-#define CLOSE_MS 90.0
+#define OPEN_MS 70.0
+#define CLOSE_MS 55.0
 
 static int64_t now_ns(void) {
     struct timespec ts;
@@ -2671,9 +2671,10 @@ static int64_t now_ns(void) {
 }
 
 /* Moves the progress toward its target by the time since the last step (any screen's), so the
- * open takes the same 120 ms at 60 Hz and at 165 Hz, and two screens don't run it twice as fast.
+ * open takes the same 70 ms at 60 Hz and at 165 Hz, and two screens don't run it twice as fast.
  * Until 2026-11-06 each frame closed 55% of the gap: about 40 ms at 165 Hz, a pop. Returns
- * whether it is still moving. */
+ * whether it is still moving. 120 ms until 2026-11-06 felt slow to the owner ("laggy when called":
+ * the frames were all there, 165 Hz, 14 ms from the key): 70 ms open, 55 ms close. */
 static bool step_animation(EdgeApp *app) {
     double target = (app->mode == MODE_CLOSED) ? 0.0 : 1.0;
     int64_t now = now_ns();
