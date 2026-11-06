@@ -1,0 +1,57 @@
+#!/bin/sh
+# tools/test-theme-from-wallpaper: the theme's colours from the wallpaper. Builds
+# infynitae-wallpaper into a stand-in home and checks: a red image gives a red accent and a dark
+# red-tinted surface; a grey one Infynitae's own blue; `infynitae-settings wallpaper-colors accent`
+# changes the accent alone and keeps the line's comments; THEME_FROM_WALLPAPER=all recolours on
+# apply when the wallpaper changes, and not again for the same file; a missing image leaves the
+# config unchanged. Run from the repository root.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-theme-wallpaper.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+H="$TMP/home"; mkdir -p "$H/.local/bin" "$H/.config/infynitae"
+W="$REPO_DIR/live/wallpaper"
+cc -O1 -o "$H/.local/bin/infynitae-wallpaper" "$W/infynitae-wallpaper.c" "$W/wlr-layer-shell-protocol.c" \
+    "$W/xdg-shell-protocol.c" $(pkg-config --cflags --libs wayland-client cairo gdk-pixbuf-2.0) -lm
+img() {  # img FILE R G B: a 64x36 image, mostly that colour with a grey band
+    python3 - "$@" <<'PY'
+import struct, sys, zlib
+f, r, g, b = sys.argv[1], int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
+w, h = 64, 36
+rows = b''.join(b'\0' + b''.join(bytes((r, g, b)) if y < 28 else b'\x50\x50\x50' for _ in range(w)) for y in range(h))
+def chunk(t, d): return struct.pack('>I', len(d)) + t + d + struct.pack('>I', zlib.crc32(t + d))
+open(f, 'wb').write(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', w, h, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b''))
+PY
+}
+fail=0
+check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: expected $3, got $2"; fail=1; fi; }
+val() { sed -n "s/^$1=\"\\(.*\\)\"$/\\1/p" "$H/.config/infynitae/config" | tail -1; }
+hue() {  # the dominant channel of #rrggbb: r, g or b
+    python3 -c "import sys; c=sys.argv[1].lstrip('#'); v=[int(c[i:i+2],16) for i in (0,2,4)]; print('rgb'[v.index(max(v))])" "$1"
+}
+settings() { HOME="$H" CONFIG_FILE="$H/.config/infynitae/config" sh "$REPO_DIR/live/settings.sh" "$@" >/dev/null 2>&1; }
+
+img "$TMP/red.png" 220 40 50; img "$TMP/grey.png" 128 128 128; img "$TMP/green.png" 40 200 60
+cp "$REPO_DIR/config/config" "$H/.config/infynitae/config"
+settings wallpaper-colors "$TMP/red.png"
+check "a red wallpaper gives a red accent" "$(hue "$(val BORDER_ACTIVE)")" "r"
+check "and a red-tinted surface" "$(hue "$(val SURFACE_COLOR)")" "r"
+check "the surface stays dark" "$(python3 -c "import sys; c=sys.argv[1].lstrip('#'); print(max(int(c[i:i+2],16) for i in (0,2,4)) < 40)" "$(val SURFACE_COLOR)")" "True"
+check "the comment under the setting is kept" "$(grep -A1 '^BORDER_ACTIVE=' "$H/.config/infynitae/config" | tail -1 | grep -c '#')" "1"
+
+surface=$(val SURFACE_COLOR)
+settings wallpaper-colors accent "$TMP/grey.png"
+check "a grey wallpaper gives the default blue" "$(val BORDER_ACTIVE)" "#7aa2f7"
+check "accent alone leaves the surface" "$(val SURFACE_COLOR)" "$surface"
+
+before=$(cat "$H/.config/infynitae/config")
+settings wallpaper-colors "$TMP/missing.png" || true
+check "a missing image changes nothing" "$(cat "$H/.config/infynitae/config")" "$before"
+
+sed -i 's|^THEME_FROM_WALLPAPER=.*|THEME_FROM_WALLPAPER="all"|; s|^WALLPAPER=.*|WALLPAPER="'"$TMP"'/green.png"|' "$H/.config/infynitae/config"
+settings apply
+check "THEME_FROM_WALLPAPER: a new wallpaper recolours on apply" "$(hue "$(val BORDER_ACTIVE)")" "g"
+sed -i 's|^BORDER_ACTIVE=.*|BORDER_ACTIVE="#123456"|' "$H/.config/infynitae/config"
+settings apply
+check "the same wallpaper again: a colour you set stays" "$(val BORDER_ACTIVE)" "#123456"
+exit $fail
