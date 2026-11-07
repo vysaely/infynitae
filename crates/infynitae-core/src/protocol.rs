@@ -1805,7 +1805,39 @@ impl Core {
     ///
     /// `None` keeps the anchor of the initial commit: under [`PlacementPolicy::OriginAtCameraCentre`],
     /// without an output, or when out of Canvas bounds.
+    ///
+    /// Whatever placed it, a new window never covers another app's window (owner, 2026-11-07:
+    /// "this should cover any app at compositor level"): a spot that would goes to the nearest
+    /// free one. A child may still cover its parent and its own app's windows; a notification
+    /// stacks in its corner.
     fn first_map_anchor(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
+        let at = self.first_map_spot(id, tree)?;
+        if self.is_notification(id) {
+            return Some(at);
+        }
+        let size = (
+            i64::from(tree.geometry.size.w),
+            i64::from(tree.geometry.size.h),
+        );
+        if size.0 <= 0 || size.1 <= 0 {
+            return Some(at);
+        }
+        let parent = self
+            .toplevel_parent(id)
+            .filter(|p| self.stage.mapped(*p).is_some())
+            .unwrap_or(id);
+        let strangers = self.other_apps_rects(id, parent);
+        if !overlaps_any(&strangers, (at.x, at.y, size.0, size.1)) {
+            return Some(at);
+        }
+        let (x, y) = self
+            .free_spot_near(&strangers, size, (at.x, at.y))
+            .unwrap_or_else(|| beside_all(&strangers, (at.x, at.y)));
+        Some(CanvasPoint { x, y })
+    }
+
+    /// Where a window opens before the rule that it covers no other app's window (`first_map_anchor`).
+    fn first_map_spot(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
         // an app's notification: the view's bottom right corner, above the ones already there
         if self.is_notification(id) {
             return self.notification_anchor(id, tree);
@@ -1829,13 +1861,6 @@ impl Core {
             if let Some(view) = self.usable_view() {
                 x = keep_in_range(x, i64::from(g.size.w), view.0, view.2);
                 y = keep_in_range(y, i64::from(g.size.h), view.1, view.3);
-            }
-            let size = (i64::from(g.size.w), i64::from(g.size.h));
-            let strangers = self.other_apps_rects(id, parent);
-            if overlaps_any(&strangers, (x, y, size.0, size.1)) {
-                (x, y) = self
-                    .free_spot_near(&strangers, size, (x, y))
-                    .unwrap_or_else(|| beside_all(&strangers, (x, y)));
             }
             return Some(CanvasPoint {
                 x: x - i64::from(g.loc.x),
@@ -1974,7 +1999,8 @@ impl Core {
     }
 
     /// The window-geometry rects of the mapped windows of other apps than `id`'s and `parent`'s
-    /// (`window_rects_except`, less `parent` and the windows sharing either's app id).
+    /// (`window_rects_except`, less `parent` and the windows sharing either's app id; a window
+    /// without an app id is another app's).
     fn other_apps_rects(&self, id: ElementId, parent: ElementId) -> Vec<(i64, i64, i64, i64)> {
         let app = |e: ElementId| {
             self.stage
