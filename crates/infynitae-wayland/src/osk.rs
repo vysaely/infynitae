@@ -63,6 +63,12 @@ impl WaylandState {
         if counts {
             self.osk.pressed_at = Some(Instant::now());
         }
+        if std::env::var_os("INFYNITAE_OSK_DEBUG").is_some() {
+            println!(
+                "[infynitae] On-screen keyboard: press (touch {touch}, counts {counts}, field active {})",
+                self.text_field_active()
+            );
+        }
     }
 
     fn text_field_active(&self) -> bool {
@@ -108,6 +114,11 @@ impl WaylandState {
     }
 
     fn osk_show(&mut self, on: bool, by_hand: bool) {
+        println!(
+            "[infynitae] On-screen keyboard {}{}",
+            if on { "shown" } else { "hidden" },
+            if by_hand { " by hand" } else { "" }
+        );
         self.osk.shown = on;
         self.osk.by_hand = on && by_hand;
         self.osk.gone_since = None;
