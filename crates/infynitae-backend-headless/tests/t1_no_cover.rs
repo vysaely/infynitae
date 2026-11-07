@@ -30,17 +30,38 @@ fn open(r: &mut Rig, label: &'static str, size: (i32, i32)) -> ElementId {
     *r.ls.state.core().stage().mapped_elements().last().unwrap()
 }
 
-/// The `center` policy centres a new window in the view, where W already is: it opens beside W.
+/// A big child of a small window centred over it would reach over the window beside: under the
+/// cluster policy it opens free of it (the rule after every path, here the child's).
 #[test]
-fn a_centred_window_does_not_cover_the_one_already_there() {
+fn a_child_bigger_than_its_parent_keeps_off_the_neighbour() {
     let mut r = Rig::x8();
     r.ls.state
         .core_mut()
-        .set_placement_policy(infynitae_core::PlacementPolicy::CentredInView);
+        .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
     let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
-    let n = open(&mut r, "N", (400, 300));
-    let (rw, rn) = (rect(&r, w), rect(&r, n));
-    assert!(apart(rw, rn), "the new window {rn:?} covers {rw:?}");
+    let ws = r.ls.state.core().stage().tree(w).unwrap().geometry.size;
+    let s = open(&mut r, "S", (300, 200));
+    let w_idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
+    let qh = r.ls.qh.clone();
+    let idx =
+        r.ls.probe
+            .toplevel(&qh, "D", (ws.w * 3 / 2, ws.h * 3 / 2), 0);
+    let parent = r.ls.probe.surfaces[w_idx].toplevel.clone().unwrap();
+    r.ls.probe.surfaces[idx]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_parent(Some(&parent));
+    r.ls.pump();
+    r.frame();
+    let d = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    let (rs, rd) = (rect(&r, s), rect(&r, d));
+    assert!(apart(rs, rd), "the child {rd:?} covers {rs:?}");
 }
 
 /// Under the default cluster policy, a stream of new windows never overlaps.

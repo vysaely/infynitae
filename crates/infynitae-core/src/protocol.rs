@@ -1809,10 +1809,11 @@ impl Core {
     /// Whatever placed it, a new window never covers another app's window (owner, 2026-11-07:
     /// "this should cover any app at compositor level"): a spot that would goes to the nearest
     /// free one. A child may still cover its parent and its own app's windows; a notification
-    /// stacks in its corner.
+    /// stacks in its corner; the `center` policy stacks every window in the middle by choice.
     fn first_map_anchor(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
         let at = self.first_map_spot(id, tree)?;
-        if self.is_notification(id) {
+        // `center` asks for every window in the middle of the view, stacked: the rule is off there
+        if self.is_notification(id) || self.placement == PlacementPolicy::CentredInView {
             return Some(at);
         }
         let size = (
