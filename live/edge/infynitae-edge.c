@@ -373,6 +373,9 @@ typedef struct EdgeApp {
     int edit_mi, edit_target, edit_look0;
     double edit_x0, edit_y0;
     double panel_ox, panel_oy;  /* the open panel's corner on the screen, from the last draw */
+    double panel_w, panel_h;
+    bool edit_after;            /* moving: it goes after the target (else before) */
+    bool logo_down;             /* Super as last seen, to draw the placeholders when it changes */
 } EdgeApp;
 
 enum {
@@ -2465,6 +2468,22 @@ static double mod_media(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double y
 /* wifi bluetooth dnd power replay, as many as follow each other from module mi: switches in two
  * columns, a name and its state; under them the list of an open Wi-Fi or Bluetooth switch. A
  * switch that cannot do anything here is left out (Power mode without power-profiles-daemon). */
+/* While Super is held over the open panel (or a module is being dragged): modules that show nothing
+ * now (a hidden search, no player, one keyboard layout) are drawn as placeholders, so they can be
+ * moved and resized too. */
+static bool g_edit_view;
+static bool super_held(const EdgeApp *app);
+
+static double text_px(PangoLayout *layout, const char *font, const char *text) {
+    PangoFontDescription *desc = pango_font_description_from_string(font);
+    pango_layout_set_font_description(layout, desc);
+    pango_font_description_free(desc);
+    pango_layout_set_text(layout, text, -1);
+    int w, h;
+    pango_layout_get_pixel_size(layout, &w, &h);
+    return w;
+}
+
 static double mod_tiles(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p, int mi, double y, double W) {
     const char *p_disp = "Balanced";
     if (strcasecmp(app->power_profile, "performance") == 0) p_disp = "Performance";
@@ -2494,15 +2513,21 @@ static double mod_tiles(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
             /* only with more than one layout to choose from */
             if (app->kb_count > 1)
                 sw[nt++] = (typeof(sw[0])){ "Keyboard", app->kb_label, false, ACT_KB_NEXT, false, k };
+            else if (g_edit_view)
+                sw[nt++] = (typeof(sw[0])){ "Keyboard", "Hidden now: one layout", false, ACT_KB_NEXT, false, k };
             break;
         case MOD_OSK:
             if (app->osk_have)
                 sw[nt++] = (typeof(sw[0])){ "Screen keyboard", app->osk_on ? "Shown" : "Hidden", app->osk_on, ACT_OSK_TOGGLE, false, k };
+            else if (g_edit_view)
+                sw[nt++] = (typeof(sw[0])){ "Screen keyboard", "Hidden now: not installed", false, ACT_OSK_TOGGLE, false, k };
             break;
         case MOD_POWER:
             /* a choice of three modes, not a switch: never lit */
             if (strcmp(app->power_profile, "none") != 0 && app->power_profile[0])
                 sw[nt++] = (typeof(sw[0])){ "Power mode", p_disp, false, ACT_POWER_PROFILE, false, k };
+            else if (g_edit_view)
+                sw[nt++] = (typeof(sw[0])){ "Power mode", "Hidden now: no power modes", false, ACT_POWER_PROFILE, false, k };
             break;
         case MOD_REPLAY:
             sw[nt++] = (typeof(sw[0])){ "Replay", app->replay_on ? "Recording" : "Off", app->replay_on, ACT_REPLAY_TOGGLE, false, k };
@@ -2529,7 +2554,12 @@ static double mod_tiles(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
     rows++;
     for (int i = 0; i < nt; i++) {
         bool last_in_row = i == nt - 1 || row_of[i + 1] != row_of[i];
-        int cols = last_in_row ? 4 - col_of[i] : span[i];
+        /* a row's last tile takes what the row has left only when it is a tile look in a row of
+         * tile looks (the odd last switch spanning its row, as always); a small one stays small */
+        bool row_has_small = false;
+        for (int j = 0; j < nt; j++)
+            if (row_of[j] == row_of[i] && span[j] == 1) row_has_small = true;
+        int cols = (last_in_row && span[i] == 2 && !row_has_small) ? 4 - col_of[i] : span[i];
         double sx = rx + col_of[i] * (unit + GAP);
         double sy = y + row_of[i] * (TILE_H + GAP);
         double sw_w = cols * unit + (cols - 1) * GAP;
@@ -2537,14 +2567,23 @@ static double mod_tiles(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
         int nav = app->nav_next++;
         draw_tile(cr, app, sx, sy, sw_w, TILE_H, sw[i].active, SEL(nav) || sw[i].sub_open);
         if (small) {
-            /* small: the name only; on shows in the tile's colour, as a tile's does */
-            set_text(cr, app, sw[i].active ? 0.98 : 0.80);
-            /* names that fit a quarter row */
+            /* small: the name only, centred (names that fit a quarter row); on: a bar of the accent
+             * under it, as the tile's colour alone is hard to tell at this size */
             const char *name = sw[i].label;
             if (!strcmp(name, "Do not disturb")) name = "Quiet";
             else if (!strcmp(name, "Screen keyboard")) name = "Screen keys";
             else if (!strcmp(name, "Power mode")) name = "Power";
-            draw_text_left(cr, layout, FONT_CAPTION, name, sx + 8.0, sy + TILE_H / 2.0, sw_w - 16.0);
+            else if (!strcmp(name, "Night light")) name = "Night";
+            else if (!strcmp(name, "Save clip")) name = "Save";
+            double tw = text_px(layout, FONT_CAPTION, name), room = sw_w - 12.0;
+            set_text(cr, app, sw[i].active ? 0.98 : 0.80);
+            draw_text_left(cr, layout, FONT_CAPTION, name, sx + 6.0 + (tw < room ? (room - tw) / 2.0 : 0.0),
+                           sy + TILE_H / 2.0 - 2.0, room);
+            if (sw[i].active) {
+                set_accent(cr, app, 0.95);
+                cairo_rectangle(cr, sx + sw_w / 2.0 - 9.0, sy + TILE_H - 9.0, 18.0, 3.0);
+                cairo_fill(cr);
+            }
         } else {
             set_text(cr, app, 0.95);
             draw_text_left(cr, layout, FONT_BODY_MEDIUM, sw[i].label, sx + 12.0, sy + 16.0, sw_w - 24.0);
@@ -2666,8 +2705,39 @@ static double mod_session(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double
 
 /* Every module of p, top to bottom from y = PAD in a panel W wide, drawn into cr at (0, 0);
  * the hitboxes land at (hb_ox, hb_oy). Returns the panel's height. */
+/* What a module is called on its placeholder while Super is held. */
+static const char *module_title(int m) {
+    switch (m) {
+    case MOD_SEARCH: return "Search: hidden until you type";
+    case MOD_FAVORITES: return "Favorites: none pinned";
+    case MOD_APPS: return "Apps";
+    case MOD_WINDOWS: return "Windows: none open";
+    case MOD_CLIPBOARD: return "Clipboard: empty";
+    case MOD_MEDIA: return "Media: nothing playing";
+    case MOD_TRAY: return "Background apps: none";
+    case MOD_NOTIFICATIONS: return "Notifications: none";
+    default: return "Hidden now";
+    }
+}
+
+static double draw_placeholder(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int m, double y, double W) {
+    double x = PAD, w = W - 2 * PAD, h = 30.0;
+    static const double dash[] = {4.0, 3.0};
+    cairo_new_path(cr);
+    round_rect(cr, app, x + 0.5, y + 0.5, w - 1.0, h - 1.0, 7.0);
+    set_text(cr, app, 0.35);
+    cairo_set_line_width(cr, 1.0);
+    cairo_set_dash(cr, dash, 2, 0.0);
+    cairo_stroke(cr);
+    cairo_set_dash(cr, NULL, 0, 0.0);
+    set_text(cr, app, 0.50);
+    draw_text_left(cr, layout, FONT_CAPTION, module_title(m), x + 12.0, y + h / 2.0, w - 24.0);
+    return h;
+}
+
 static double layout_modules(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p, double W) {
     app->nav_next = 0;
+    g_edit_view = app->open >= 0 && (app->edit || super_held(app));
     double y = PAD;
     bool any = false;
     for (int mi = 0; mi < p->n_mods; mi++) {
@@ -2694,6 +2764,8 @@ static double layout_modules(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Pan
         case MOD_SESSION: h = mod_session(app, cr, layout, top + (any ? 4.0 : 0.0), W); if (any) h += 4.0; break;
         default: if (MOD_IS_TILE(m)) h = mod_tiles(app, cr, layout, p, mi, top, W); break;
         }
+        if (h <= 0.0 && g_edit_view && !MOD_IS_TILE(m) && m != MOD_SESSION)
+            h = draw_placeholder(app, cr, layout, m, top, W);
         p->nav_count[mi] = app->nav_next - p->nav_start[mi];
         if (h > 0.0) {
             if (!MOD_IS_TILE(m)) {
@@ -2718,16 +2790,32 @@ static void draw_edit_marks(EdgeApp *app, cairo_t *cr, const Panel *p) {
         cairo_set_line_width(cr, 2.0);
         cairo_stroke(cr);
     }
-    if (app->edit != 1 || app->edit_target < 0 || app->edit_target == app->edit_mi) return;
+    if (app->edit != 1) return;
+    /* the module's place dimmed, and its outline under the pointer, kept inside the panel */
+    if (b[3] > 0.0) {
+        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.35);
+        cairo_rectangle(cr, b[0], b[1], b[2], b[3]);
+        cairo_fill(cr);
+        double gx = b[0] + (app->pointer_x - app->edit_x0), gy = b[1] + (app->pointer_y - app->edit_y0);
+        gx = fmax(0.0, fmin(gx, app->panel_w - b[2]));
+        gy = fmax(0.0, fmin(gy, app->panel_h - b[3]));
+        cairo_new_path(cr);
+        round_rect(cr, app, gx + 0.5, gy + 0.5, b[2] - 1.0, b[3] - 1.0, 7.0);
+        set_accent(cr, app, app->edit_target < 0 ? 0.08 : 0.18);
+        cairo_fill_preserve(cr);
+        set_accent(cr, app, app->edit_target < 0 ? 0.35 : 0.9);
+        cairo_set_line_width(cr, 1.5);
+        cairo_stroke(cr);
+    }
+    if (app->edit_target < 0 || app->edit_target == app->edit_mi) return;
     const double *t = p->box[app->edit_target];
     if (t[3] <= 0.0) return;
-    bool after = app->edit_target > app->edit_mi;
-    bool beside = fabs(t[1] - b[1]) < 1.0;  /* switches on one row: a bar at the side */
+    bool beside = MOD_IS_TILE(p->mods[app->edit_target]);  /* a switch: a bar at its side */
     set_accent(cr, app, 0.95);
     if (beside)
-        cairo_rectangle(cr, after ? t[0] + t[2] + 1.0 : t[0] - 4.0, t[1], 3.0, t[3]);
+        cairo_rectangle(cr, app->edit_after ? t[0] + t[2] + 1.0 : t[0] - 4.0, t[1], 3.0, t[3]);
     else
-        cairo_rectangle(cr, t[0], after ? t[1] + t[3] + 1.0 : t[1] - 4.0, t[2], 3.0);
+        cairo_rectangle(cr, t[0], app->edit_after ? t[1] + t[3] + 1.0 : t[1] - 4.0, t[2], 3.0);
     cairo_fill(cr);
 }
 
@@ -2765,6 +2853,8 @@ static void draw_open_panel(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int 
     app->hb_oy = y;
     app->panel_ox = x;
     app->panel_oy = y;
+    app->panel_w = pw;
+    app->panel_h = ph;
     cairo_save(cr);
     cairo_translate(cr, x, y);
     draw_panel_box(cr, app, 0.0, 0.0, pw, ph);
@@ -3582,6 +3672,7 @@ static bool edit_start(EdgeApp *app, double x, double y, uint32_t button) {
     app->edit_look0 = panel_look(p, mi);
     app->edit_x0 = x;
     app->edit_y0 = y;
+    app->edit_after = false;
     damage_all(app);
     return true;
 }
@@ -3590,11 +3681,20 @@ static void edit_motion(EdgeApp *app, double x, double y) {
     if (!app->edit || app->open < 0) return;
     Panel *p = &app->panels[app->open];
     if (app->edit == 1) {
-        int t = module_at(app, p, x, y);
-        if (t >= 0 && t != app->edit_target) {
-            app->edit_target = t;
-            damage_all(app);
+        /* let go more than 24 px outside the panel: nothing moves */
+        double px = x - app->panel_ox, py = y - app->panel_oy;
+        bool outside = px < -24.0 || py < -24.0 || px > app->panel_w + 24.0 || py > app->panel_h + 24.0;
+        int t = outside ? -1 : module_at(app, p, x, y);
+        bool after = false;
+        if (t >= 0) {
+            /* before or after it by the half of it under the pointer: across for a switch, down
+             * for the rest */
+            const double *b = p->box[t];
+            after = MOD_IS_TILE(p->mods[t]) ? px > b[0] + b[2] / 2.0 : py > b[1] + b[3] / 2.0;
         }
+        app->edit_target = t;
+        app->edit_after = after;
+        damage_all(app);
         return;
     }
     int n, def;
@@ -3615,17 +3715,19 @@ static void edit_finish(EdgeApp *app) {
     Panel *p = &app->panels[app->open];
     int mi = app->edit_mi, t = app->edit_target;
     bool changed = false;
-    if (app->edit == 1 && t >= 0 && t != mi && mi < p->n_mods && t < p->n_mods) {
+    /* where it goes once taken out: before or after the target */
+    int to = t < 0 ? mi : (t > mi ? t - 1 : t) + (app->edit_after ? 1 : 0);
+    if (app->edit == 1 && t >= 0 && t != mi && to != mi && mi < p->n_mods && t < p->n_mods) {
         int m = p->mods[mi], look = p->look[mi], sc = p->scroll[mi];
-        int step = t > mi ? 1 : -1;
-        for (int i = mi; i != t; i += step) {
+        int step = to > mi ? 1 : -1;
+        for (int i = mi; i != to; i += step) {
             p->mods[i] = p->mods[i + step];
             p->look[i] = p->look[i + step];
             p->scroll[i] = p->scroll[i + step];
         }
-        p->mods[t] = m;
-        p->look[t] = look;
-        p->scroll[t] = sc;
+        p->mods[to] = m;
+        p->look[to] = look;
+        p->scroll[to] = sc;
         changed = true;
     } else if (app->edit == 2) {
         changed = panel_look(p, mi) != app->edit_look0;
@@ -4057,6 +4159,12 @@ static void keyboard_modifiers(void *data, struct wl_keyboard *kb, uint32_t s,
     (void)kb; (void)s;
     EdgeApp *app = data;
     if (app->xkb_state) xkb_state_update_mask(app->xkb_state, dep, lat, lock, 0, 0, grp);
+    /* the placeholders of hidden modules show while Super is held over the open panel */
+    bool logo = super_held(app);
+    if (logo != app->logo_down) {
+        app->logo_down = logo;
+        if (app->open >= 0) damage_all(app);
+    }
 }
 
 static void keyboard_repeat_info(void *d, struct wl_keyboard *k, int32_t r, int32_t del) {
