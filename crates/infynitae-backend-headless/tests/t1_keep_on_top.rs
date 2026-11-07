@@ -9,6 +9,7 @@ use infynitae_core::stage::ElementId;
 use infynitae_core::{NavigateTo, ShellCommand, ShellStream};
 
 fn open(r: &mut Rig, label: &'static str, size: (i32, i32), title: Option<&str>) -> ElementId {
+    let before = r.ls.state.core().stage().mapped_elements();
     let qh = r.ls.qh.clone();
     let i = r.ls.probe.toplevel_uncommitted(&qh, label, size);
     if let Some(t) = title {
@@ -23,7 +24,14 @@ fn open(r: &mut Rig, label: &'static str, size: (i32, i32), title: Option<&str>)
         r.ls.pump();
         r.frame();
     }
-    *r.ls.state.core().stage().mapped_elements().last().unwrap()
+    // the new one (the last in the z-order may be one kept on top)
+    r.ls.state
+        .core()
+        .stage()
+        .mapped_elements()
+        .into_iter()
+        .find(|e| !before.contains(e))
+        .unwrap()
 }
 
 fn top(r: &Rig) -> ElementId {
