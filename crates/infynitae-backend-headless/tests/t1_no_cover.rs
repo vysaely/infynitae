@@ -10,7 +10,12 @@ fn rect(r: &Rig, id: ElementId) -> (i64, i64, i64, i64) {
     let core = r.ls.state.core();
     let a = core.stage().anchor(id).unwrap();
     let g = core.stage().tree(id).unwrap().geometry;
-    (a.x, a.y, a.x + i64::from(g.size.w), a.y + i64::from(g.size.h))
+    (
+        a.x,
+        a.y,
+        a.x + i64::from(g.size.w),
+        a.y + i64::from(g.size.h),
+    )
 }
 
 fn apart(a: (i64, i64, i64, i64), b: (i64, i64, i64, i64)) -> bool {
