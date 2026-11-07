@@ -439,6 +439,7 @@ enum {
     ACT_CLOCK,
     ACT_CAL_PREV,
     ACT_CAL_NEXT,
+    ACT_CAL_TODAY,
     ACT_MEDIA_PREV,
     ACT_MEDIA_PLAY,
     ACT_MEDIA_NEXT,
@@ -1520,8 +1521,20 @@ static void draw_text_centered(cairo_t *cr, PangoLayout *layout, const char *fon
     double oy = use_ink_y
         ? ((double)ink.y + (double)ink.height / 2.0) / (double)PANGO_SCALE
         : ((double)logical.y + (double)logical.height / 2.0) / (double)PANGO_SCALE;
-    cairo_move_to(cr, cx - ox, cy - oy);
+    cairo_move_to(cr, round(cx - ox), round(cy - oy));  /* letters on whole pixels */
     pango_cairo_show_layout(cr, layout);
+}
+
+/* A layout whose glyphs are hinted and advance by whole pixels (cairo's default leaves them at
+ * fractions, so the same text sits differently from row to row). */
+static PangoLayout *new_layout(cairo_t *cr) {
+    cairo_font_options_t *fo = cairo_font_options_create();
+    cairo_font_options_set_hint_metrics(fo, CAIRO_HINT_METRICS_ON);
+    cairo_font_options_set_hint_style(fo, CAIRO_HINT_STYLE_SLIGHT);
+    cairo_font_options_set_antialias(fo, CAIRO_ANTIALIAS_GRAY);
+    cairo_set_font_options(cr, fo);
+    cairo_font_options_destroy(fo);
+    return pango_cairo_create_layout(cr);
 }
 
 static void draw_text_left(cairo_t *cr, PangoLayout *layout, const char *font_str,
@@ -1541,7 +1554,7 @@ static void draw_text_left(cairo_t *cr, PangoLayout *layout, const char *font_st
     PangoRectangle ink, logical;
     pango_layout_get_extents(layout, &ink, &logical);
     double oy = ((double)logical.y + (double)logical.height / 2.0) / (double)PANGO_SCALE;
-    cairo_move_to(cr, x, cy - oy);
+    cairo_move_to(cr, round(x), round(cy - oy));
     pango_cairo_show_layout(cr, layout);
     pango_layout_set_width(layout, -1);
     pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
@@ -1549,6 +1562,43 @@ static void draw_text_left(cairo_t *cr, PangoLayout *layout, const char *font_st
 
 static void draw_text_right_max(cairo_t *cr, PangoLayout *layout, const char *font_str,
                                 const char *text, double right_x, double cy, double max_w);
+
+/* Where the baseline of text centred on cy is, on a whole pixel: texts of two sizes set on it line
+ * up as one line (the clock's time and date). */
+static double text_baseline(PangoLayout *layout, const char *font_str, const char *text, double cy) {
+    PangoFontDescription *desc = pango_font_description_from_string(font_str);
+    pango_layout_set_font_description(layout, desc);
+    pango_font_description_free(desc);
+    pango_layout_set_width(layout, -1);
+    pango_layout_set_text(layout, text, -1);
+    PangoRectangle ink, logical;
+    pango_layout_get_extents(layout, &ink, &logical);
+    double top = cy - ((double)logical.y + (double)logical.height / 2.0) / PANGO_SCALE;
+    return round(top + (double)pango_layout_get_baseline(layout) / PANGO_SCALE);
+}
+
+/* Text on a baseline from x (cut with an ellipsis past max_w when > 0); its width. */
+static double draw_text_on_baseline_max(cairo_t *cr, PangoLayout *layout, const char *font_str, const char *text,
+                                        double x, double baseline, double max_w) {
+    PangoFontDescription *desc = pango_font_description_from_string(font_str);
+    pango_layout_set_font_description(layout, desc);
+    pango_font_description_free(desc);
+    pango_layout_set_width(layout, max_w > 0 ? (int)(max_w * PANGO_SCALE) : -1);
+    pango_layout_set_ellipsize(layout, max_w > 0 ? PANGO_ELLIPSIZE_END : PANGO_ELLIPSIZE_NONE);
+    pango_layout_set_text(layout, text, -1);
+    PangoRectangle ink, logical;
+    pango_layout_get_extents(layout, &ink, &logical);
+    cairo_move_to(cr, round(x), baseline - round((double)pango_layout_get_baseline(layout) / PANGO_SCALE));
+    pango_cairo_show_layout(cr, layout);
+    pango_layout_set_width(layout, -1);
+    pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
+    return ceil((double)logical.width / PANGO_SCALE);
+}
+
+static double draw_text_on_baseline(cairo_t *cr, PangoLayout *layout, const char *font_str, const char *text,
+                                    double x, double baseline) {
+    return draw_text_on_baseline_max(cr, layout, font_str, text, x, baseline, 0.0);
+}
 
 static void draw_text_right(cairo_t *cr, PangoLayout *layout, const char *font_str,
                             const char *text, double right_x, double cy) {
@@ -1575,7 +1625,7 @@ static void draw_text_right_max(cairo_t *cr, PangoLayout *layout, const char *fo
         w = (double)logical.width / (double)PANGO_SCALE;
     }
     double oy = ((double)logical.y + (double)logical.height / 2.0) / (double)PANGO_SCALE;
-    cairo_move_to(cr, right_x - w, cy - oy);
+    cairo_move_to(cr, round(right_x - w), round(cy - oy));
     pango_cairo_show_layout(cr, layout);
     pango_layout_set_width(layout, -1);
     pango_layout_set_ellipsize(layout, PANGO_ELLIPSIZE_NONE);
@@ -2132,7 +2182,18 @@ static void set_accent(cairo_t *cr, const EdgeApp *app, double alpha) {
 }
 
 /* A rounded rectangle as the current path (square with SQUARE_CORNERS). */
+/* An edge on a whole pixel (a fill), or kept on a half one (a 1 px line drawn there on purpose). */
+static double px_edge(double v) {
+    double f = v - floor(v);
+    return fabs(f - 0.5) < 0.01 ? v : round(v);
+}
+
 static void round_rect(cairo_t *cr, const EdgeApp *app, double x, double y, double w, double h, double r) {
+    double x2 = px_edge(x + w), y2 = px_edge(y + h);
+    x = px_edge(x);
+    y = px_edge(y);
+    w = x2 - x;
+    h = y2 - y;
     if (app->square || r <= 0.0) {
         cairo_rectangle(cr, x, y, w, h);
         return;
@@ -2203,12 +2264,12 @@ static void draw_row_bg(cairo_t *cr, const EdgeApp *app, double x, double y, dou
 static double draw_section_title(cairo_t *cr, PangoLayout *layout, EdgeApp *app, double y, double W,
                                  const char *title, const char *word, int action) {
     set_text(cr, app, 0.48);
-    draw_text_left(cr, layout, FONT_CAPTION, title, PAD + 2.0, y + TITLE_H / 2.0, W - 2 * PAD - 80.0);
+    draw_text_left(cr, layout, FONT_CAPTION, title, PAD + 12.0, y + TITLE_H / 2.0, W - 2 * PAD - 92.0);
     if (word) {
         int nav = app->nav_next++;
         if (SEL(nav)) draw_tile(cr, app, W - PAD - 64.0, y, 64.0, TITLE_H, false, true);
         set_text(cr, app, SEL(nav) ? 0.96 : 0.66);
-        draw_text_right_max(cr, layout, FONT_CAPTION, word, W - PAD - 8.0, y + TITLE_H / 2.0, 56.0);
+        draw_text_right_max(cr, layout, FONT_CAPTION, word, W - PAD - 12.0, y + TITLE_H / 2.0, 52.0);
         add_hitbox_nav(app, W - PAD - 64.0, y, 64.0, TITLE_H, action, 0, nav);
     }
     return TITLE_H;
@@ -2238,15 +2299,15 @@ static double mod_search(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *
     if (panel_has(p, MOD_CLIPBOARD) && app->clip_count > 0) {
         right_w = 64.0;
         set_text(cr, app, 0.55);
-        draw_text_right(cr, layout, FONT_CAPTION, "Clear", x + w - 14.0, cy);
+        draw_text_right(cr, layout, FONT_CAPTION, "Clear", x + w - 12.0, cy);
         add_hitbox(app, x + w - right_w, y, right_w, SEARCH_H, ACT_CLIP_CLEAR, 0);
     }
     if (app->search_len > 0) {
         set_text(cr, app, 0.96);
-        draw_text_left(cr, layout, FONT_SEARCH, app->search, x + 14.0, cy, w - 28.0 - right_w);
+        draw_text_left(cr, layout, FONT_SEARCH, app->search, x + 12.0, cy, w - 24.0 - right_w);
     } else {
         set_text(cr, app, 0.42);
-        draw_text_left(cr, layout, FONT_SEARCH, search_placeholder(p), x + 14.0, cy, w - 28.0 - right_w);
+        draw_text_left(cr, layout, FONT_SEARCH, search_placeholder(p), x + 12.0, cy, w - 24.0 - right_w);
     }
     add_hitbox(app, x, y, w - right_w, SEARCH_H, ACT_SEARCH_BOX, 0);
     return SEARCH_H;
@@ -2307,7 +2368,7 @@ static double mod_list(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p,
     app->nav_next += count;
     if (count == 0) {
         set_text(cr, app, 0.45);
-        draw_text_left(cr, layout, FONT_BODY, empty, rx + 14.0, y + ROW_H / 2.0, rw - 28.0);
+        draw_text_left(cr, layout, FONT_BODY, empty, rx + 12.0, y + ROW_H / 2.0, rw - 24.0);
         return ROW_H;
     }
     /* the selection in view; placed, as many rows as its rectangle holds */
@@ -2335,11 +2396,11 @@ static double mod_list(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p,
             set_accent(cr, app, 0.95);
             fill_rect(cr, rx, ry + 6.0, 2.0, ROW_H - 12.0);
         }
-        double tx = rx + 14.0;
+        double tx = rx + 12.0;
         if (r->attention || r->focused) {
             cairo_new_path(cr);
             set_accent(cr, app, r->attention ? 0.95 : 0.6);
-            cairo_arc(cr, rx + 14.0, ry + ROW_H / 2.0, r->attention ? 3.5 : 2.5, 0, 2 * M_PI);
+            cairo_arc(cr, rx + 15.0, ry + ROW_H / 2.0, r->attention ? 3.0 : 2.0, 0, 2 * M_PI);
             cairo_fill(cr);
             tx = rx + 26.0;
         }
@@ -2361,9 +2422,11 @@ static double mod_list(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p,
 /* The calendar under the clock: a month (this one, or cal_month months away), Monday first,
  * today marked; Earlier and Later move it by a month. */
 #define CAL_ROW 26.0
+static double text_px(PangoLayout *layout, const char *font, const char *text);
+
 static double draw_calendar(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double y, double W,
                             const struct tm *today) {
-    double rx = PAD, rw = W - 2 * PAD;
+    /* (the grid is placed below) */
     struct tm first = {0};
     first.tm_year = today->tm_year;
     first.tm_mon = today->tm_mon + app->cal_month;
@@ -2376,51 +2439,75 @@ static double draw_calendar(EdgeApp *app, cairo_t *cr, PangoLayout *layout, doub
     mktime(&next);
     int days = (int)((mktime(&next) - mktime(&first) + 43200) / 86400);
     int lead = (first.tm_wday + 6) % 7; /* Monday first */
+    /* whole-pixel columns, the grid in the middle; the month starts where the grid does and the
+     * arrows end where it ends (owner, 2026-11-08: "clean lean minimal ... allign pixel to pixel") */
+    double rw = W - 2 * PAD;
+    int cw = (int)floor(rw / 7.0);
+    if (cw > 44) cw = 44;
+    double gw = 7.0 * cw, gx = PAD + floor((rw - gw) / 2.0);
+    const double HEAD = 28.0, DAY = 28.0, NAMES = 20.0;
+    double ry = y + 8.0;
     char title[48];
     strftime(title, sizeof(title), "%B %Y", &first);
-    double ry = y + GAP;
-    /* the month, and its buttons */
-    set_text(cr, app, 0.92);
-    draw_text_left(cr, layout, FONT_BODY_MEDIUM, title, rx + 4.0, ry + ITEM_H / 2.0, rw - 150.0);
-    double bw = 64.0;
-    const char *labels[2] = { "Earlier", "Later" };
-    int acts[2] = { ACT_CAL_PREV, ACT_CAL_NEXT };
+    /* the month starts where "Mo" does; the arrows sit over Sa and Su */
+    double mo = floor(gx + (cw - text_px(layout, FONT_CAPTION, "Mo")) / 2.0);
+    set_text(cr, app, 0.94);
+    draw_text_left(cr, layout, FONT_BODY_MEDIUM, title, mo, ry + HEAD / 2.0, gw - (mo - gx) - 2 * cw - 64.0);
     for (int i = 0; i < 2; i++) {
-        double bx = rx + rw - (2 - i) * bw - (1 - i) * GAP;
+        /* an arrow, no box until it is selected */
+        double bx = gx + (5 + i) * cw + (cw - HEAD) / 2.0, cx = gx + (5 + i) * cw + cw / 2.0, cy = ry + HEAD / 2.0;
         int nav = app->nav_next++;
-        draw_tile(cr, app, bx, ry + 2.0, bw, ITEM_H - 4.0, false, SEL(nav));
-        set_text(cr, app, SEL(nav) ? 0.98 : 0.78);
-        draw_text_centered(cr, layout, FONT_CAPTION, labels[i], bx + bw / 2.0, ry + ITEM_H / 2.0, false);
-        add_hitbox_nav(app, bx, ry + 2.0, bw, ITEM_H - 4.0, acts[i], 0, nav);
+        if (SEL(nav)) draw_tile(cr, app, bx, ry, HEAD, HEAD, false, true);
+        set_text(cr, app, SEL(nav) ? 0.98 : 0.70);
+        double d = i == 0 ? 1.0 : -1.0;
+        cairo_move_to(cr, cx + 2.0 * d, cy - 5.0);
+        cairo_line_to(cr, cx - 3.0 * d, cy);
+        cairo_line_to(cr, cx + 2.0 * d, cy + 5.0);
+        cairo_set_line_width(cr, 1.5);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+        cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+        cairo_stroke(cr);
+        cairo_set_line_cap(cr, CAIRO_LINE_CAP_BUTT);
+        add_hitbox_nav(app, bx, ry, HEAD, HEAD, i == 0 ? ACT_CAL_PREV : ACT_CAL_NEXT, 0, nav);
     }
-    ry += ITEM_H;
-    double cw = rw / 7.0;
+    if (app->cal_month != 0) {
+        /* another month shown: back to this one */
+        double tw = 56.0, tx = gx + 5 * cw - tw;
+        int nav = app->nav_next++;
+        if (SEL(nav)) draw_tile(cr, app, tx, ry, tw, HEAD, false, true);
+        set_text(cr, app, SEL(nav) ? 0.98 : 0.70);
+        draw_text_centered(cr, layout, FONT_CAPTION, "Today", tx + tw / 2.0, ry + HEAD / 2.0, false);
+        add_hitbox_nav(app, tx, ry, tw, HEAD, ACT_CAL_TODAY, 0, nav);
+    }
+    ry += HEAD + 4.0;
     static const char *names[7] = { "Mo", "Tu", "We", "Th", "Fr", "Sa", "Su" };
-    set_text(cr, app, 0.45);
+    set_text(cr, app, 0.40);
     for (int c = 0; c < 7; c++)
-        draw_text_centered(cr, layout, FONT_CAPTION, names[c], rx + c * cw + cw / 2.0, ry + CAL_ROW / 2.0, false);
-    ry += CAL_ROW;
+        draw_text_centered(cr, layout, FONT_CAPTION, names[c], gx + c * cw + cw / 2.0, ry + NAMES / 2.0, false);
+    ry += NAMES;
     bool this_month = first.tm_year == today->tm_year && first.tm_mon == today->tm_mon;
     int rows = (lead + days + 6) / 7;
     for (int d = 1; d <= days; d++) {
         int cell = lead + d - 1;
-        double cx = rx + (cell % 7) * cw + cw / 2.0;
-        double cy = ry + (cell / 7) * CAL_ROW + CAL_ROW / 2.0;
+        double cx = gx + (cell % 7) * cw + cw / 2.0;
+        double cy = ry + (cell / 7) * DAY + DAY / 2.0;
         char num[12];
         snprintf(num, sizeof(num), "%d", d);
         if (this_month && d == today->tm_mday) {
+            /* today: a filled circle in the accent, the number on it */
+            double r = floor(fmin(cw, DAY) / 2.0) - 2.0;
             cairo_new_path(cr);
-            cairo_arc(cr, cx, cy, CAL_ROW / 2.0 - 2.0, 0, 2 * M_PI);
-            set_accent(cr, app, 0.30);
+            cairo_arc(cr, cx, cy, r, 0, 2 * M_PI);
+            set_accent(cr, app, 0.95);
             cairo_fill(cr);
-            set_text(cr, app, 0.98);
+            set_text(cr, app, 1.0);
             draw_text_centered(cr, layout, FONT_BODY_MEDIUM, num, cx, cy, false);
         } else {
-            set_text(cr, app, cell % 7 >= 5 ? 0.55 : 0.80);
+            set_text(cr, app, cell % 7 >= 5 ? 0.45 : 0.86);
             draw_text_centered(cr, layout, FONT_BODY, num, cx, cy, false);
         }
     }
-    ry += rows * CAL_ROW;
+    ry += rows * DAY + 4.0;
     return ry - y;
 }
 
@@ -2473,21 +2560,22 @@ static double mod_clock(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
         return bh + draw_calendar(app, cr, layout, y + bh, W, tm_info);
     }
     set_text(cr, app, 0.96);
-    draw_text_left(cr, layout, "sans-serif Medium 16", time_s, rx + 4.0, y + HEAD_H / 2.0, 90.0);
+    double base = text_baseline(layout, "sans-serif Medium 16", time_s, y + HEAD_H / 2.0);
+    double tw = draw_text_on_baseline(cr, layout, "sans-serif Medium 16", time_s, rx + 12.0, base);
     set_text(cr, app, 0.55);
-    draw_text_left(cr, layout, FONT_BODY, date_s, rx + 72.0, y + HEAD_H / 2.0 + 1.0, rw - 140.0);
+    draw_text_on_baseline_max(cr, layout, FONT_BODY, date_s, rx + 12.0 + tw + 10.0, base, rw - 24.0 - tw - 10.0 - 70.0);
     if (app->battery_pct >= 0) {
         char bat_s[24];
         snprintf(bat_s, sizeof(bat_s), "%s%d%%", app->battery_charging ? "Charging " : "", app->battery_pct);
         set_text(cr, app, 0.70);
-        draw_text_right_max(cr, layout, FONT_BODY, bat_s, rx + rw - 4.0, y + HEAD_H / 2.0 + 1.0, 100.0);
+        draw_text_right_max(cr, layout, FONT_BODY, bat_s, rx + rw - 12.0, y + HEAD_H / 2.0, 70.0);
     }
     /* the clock opens and closes the calendar under it */
     int nav = app->nav_next++;
     if (SEL(nav)) {
         draw_row_bg(cr, app, rx, y, rw, HEAD_H, false, true);
         set_text(cr, app, 0.96);
-        draw_text_left(cr, layout, "sans-serif Medium 16", time_s, rx + 4.0, y + HEAD_H / 2.0, 90.0);
+        draw_text_on_baseline(cr, layout, "sans-serif Medium 16", time_s, rx + 12.0, base);
     }
     add_hitbox_nav(app, rx, y, rw, HEAD_H, ACT_CLOCK, 0, nav);
     /* calendar: the month always shown */
@@ -2587,10 +2675,10 @@ static double mod_media(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double y
         double bw = narrow ? rw : 76.0, bx = rx + rw - bw, th = g_box_h;
         if (!narrow) {
             set_text(cr, app, 0.95);
-            draw_text_left(cr, layout, FONT_BODY_MEDIUM, title, rx + 4.0, y + th / 2.0 - (app->media_artist[0] ? 8.0 : 0.0), rw - bw - 12.0);
+            draw_text_left(cr, layout, FONT_BODY_MEDIUM, title, rx + 12.0, y + th / 2.0 - (app->media_artist[0] ? 8.0 : 0.0), rw - bw - 20.0);
             if (app->media_artist[0]) {
                 set_text(cr, app, 0.55);
-                draw_text_left(cr, layout, FONT_CAPTION, app->media_artist, rx + 4.0, y + th / 2.0 + 9.0, rw - bw - 12.0);
+                draw_text_left(cr, layout, FONT_CAPTION, app->media_artist, rx + 12.0, y + th / 2.0 + 9.0, rw - bw - 20.0);
             }
         }
         int nav = app->nav_next++;
@@ -2601,10 +2689,10 @@ static double mod_media(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double y
         return th;
     }
     set_text(cr, app, 0.95);
-    draw_text_left(cr, layout, FONT_BODY_MEDIUM, title, rx + 4.0, ry + 10.0, rw - 8.0);
+    draw_text_left(cr, layout, FONT_BODY_MEDIUM, title, rx + 12.0, ry + 10.0, rw - 24.0);
     if (app->media_artist[0]) {
         set_text(cr, app, 0.55);
-        draw_text_left(cr, layout, FONT_CAPTION, app->media_artist, rx + 4.0, ry + 27.0, rw - 8.0);
+        draw_text_left(cr, layout, FONT_CAPTION, app->media_artist, rx + 12.0, ry + 27.0, rw - 24.0);
         ry += 38.0;
     } else {
         ry += 24.0;
@@ -3035,7 +3123,7 @@ static void draw_placeholder_in(EdgeApp *app, cairo_t *cr, PangoLayout *layout, 
     cairo_stroke(cr);
     cairo_set_dash(cr, NULL, 0, 0.0);
     set_text(cr, app, 0.50);
-    draw_text_left(cr, layout, FONT_CAPTION, module_title(m), x + 10.0, y + fmin(h, 30.0) / 2.0, w - 20.0);
+    draw_text_left(cr, layout, FONT_CAPTION, module_title(m), x + 12.0, y + fmin(h, 30.0) / 2.0, w - 24.0);
 }
 
 /* A placed panel: each module in its rectangle (one not placed yet goes to the nearest free spot);
@@ -3219,6 +3307,11 @@ static int child_parent(const EdgeApp *app, const Panel *p) {
 static double child_content(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double W) {
     const char *title = app->subpanel == SUB_WIFI ? "Wi-Fi networks" : app->subpanel == SUB_BT ? "Bluetooth devices"
                       : app->subpanel == SUB_AUDIO ? "Sound output" : "Calendar";
+    if (app->subpanel == SUB_NONE) {
+        /* the month: its own name is its title */
+        time_t now = time(NULL);
+        return draw_calendar(app, cr, layout, 0.0, W, localtime(&now)) + 4.0;
+    }
     double y = PAD + draw_section_title(cr, layout, app, PAD, W, title, NULL, 0);
     if (app->subpanel == SUB_NONE) {
         time_t now = time(NULL);
@@ -3241,7 +3334,7 @@ static void draw_child(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p,
     int hb = app->hitbox_count, nav = app->nav_next;
     cairo_surface_t *ms = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
     cairo_t *mcr = cairo_create(ms);
-    PangoLayout *ml = pango_cairo_create_layout(mcr);
+    PangoLayout *ml = new_layout(mcr);
     double ch = child_content(app, mcr, ml, W);
     g_object_unref(ml);
     cairo_destroy(mcr);
@@ -3274,7 +3367,7 @@ static void draw_open_panel(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int 
      * screen draws its notifications on one line each */
     cairo_surface_t *ms = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
     cairo_t *mcr = cairo_create(ms);
-    PangoLayout *ml = pango_cairo_create_layout(mcr);
+    PangoLayout *ml = new_layout(mcr);
     int hb_start = app->hitbox_count;
     app->hb_ox = app->hb_oy = 0.0;
     g_compact = false;
@@ -3376,7 +3469,7 @@ static void relayout(EdgeApp *app) {
     int w = app->last_w > 0 ? app->last_w : 1920, h = app->last_h > 0 ? app->last_h : 1080;
     cairo_surface_t *ms = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
     cairo_t *mcr = cairo_create(ms);
-    PangoLayout *ml = pango_cairo_create_layout(mcr);
+    PangoLayout *ml = new_layout(mcr);
     int rect[4];
     draw_panels(app, mcr, ml, w, h, rect);
     g_object_unref(ml);
@@ -3475,7 +3568,7 @@ static void render_output(EdgeOutput *out) {
         cairo_restore(cr);
     }
 
-    PangoLayout *layout = pango_cairo_create_layout(cr);
+    PangoLayout *layout = new_layout(cr);
     int rect[4];
     draw_panels(app, cr, layout, w, h, rect);
     int cur_dx = rect[0], cur_dy = rect[1], cur_dw = rect[2], cur_dh = rect[3];
@@ -3930,6 +4023,10 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
         return true;
     case ACT_CLOCK:
         app->cal_open = !app->cal_open;
+        app->cal_month = 0;
+        damage_all(app);
+        return true;
+    case ACT_CAL_TODAY:
         app->cal_month = 0;
         damage_all(app);
         return true;
@@ -5343,7 +5440,7 @@ static int render_to_png(const char *mode_name, const char *size, const char *ou
     /* a plain desktop behind, so the panel's edges show */
     cairo_set_source_rgb(cr, 0.16, 0.17, 0.20);
     cairo_paint(cr);
-    PangoLayout *layout = pango_cairo_create_layout(cr);
+    PangoLayout *layout = new_layout(cr);
     int rect[4];
     if (getenv("INFYNITAE_EDGE_RENDER_EDIT")) {
         /* the panel being edited: laid out once to know its modules' places, then edited, the
