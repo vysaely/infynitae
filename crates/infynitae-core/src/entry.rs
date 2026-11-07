@@ -1578,6 +1578,31 @@ impl Core {
             && !self.maximized.iter().any(|(e, _)| *e == id)
         {
             self.maximize_toggle(None, output, id, &mut out);
+            // a maximize the user asks for covers what the screen shows; one a new window asked
+            // for (Discord reopening maximized) covers no other app's window: it fills a screen's
+            // room in the nearest free space instead (owner, 2026-11-07)
+            let put = self
+                .maximized_at
+                .iter()
+                .find(|(e, _)| *e == id)
+                .map(|(_, a)| *a);
+            if let (Some(tl), Some(usable)) = (put, self.usable_area(output)) {
+                let size = (
+                    usable.2.round().max(1.0) as i64,
+                    usable.3.round().max(1.0) as i64,
+                );
+                if let Some(free) = self.free_place_for(id, size, tl)
+                    && self.place_by_shell(id, free, &mut out).is_ok()
+                {
+                    for (e, a) in &mut self.maximized_at {
+                        if *e == id {
+                            *a = free;
+                        }
+                    }
+                    self.invalidate_frame(output);
+                    out.extend(self.visibility_pass());
+                }
+            }
         }
         out
     }

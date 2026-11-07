@@ -1823,18 +1823,7 @@ impl Core {
         if size.0 <= 0 || size.1 <= 0 {
             return Some(at);
         }
-        let parent = self
-            .toplevel_parent(id)
-            .filter(|p| self.stage.mapped(*p).is_some())
-            .unwrap_or(id);
-        let strangers = self.other_apps_rects(id, parent);
-        if !overlaps_any(&strangers, (at.x, at.y, size.0, size.1)) {
-            return Some(at);
-        }
-        let (x, y) = self
-            .free_spot_near(&strangers, size, (at.x, at.y))
-            .unwrap_or_else(|| beside_all(&strangers, (at.x, at.y)));
-        Some(CanvasPoint { x, y })
+        Some(self.free_place_for(id, size, at).unwrap_or(at))
     }
 
     /// Where a window opens before the rule that it covers no other app's window (`first_map_anchor`).
@@ -1997,6 +1986,28 @@ impl Core {
             x: chosen_gx,
             y: chosen_gy,
         })
+    }
+
+    /// A spot for `id` at `size` near `at` that covers no other app's window, when `at` would:
+    /// the nearest free one, else beside them all; `None` when `at` covers none.
+    pub(crate) fn free_place_for(
+        &self,
+        id: ElementId,
+        size: (i64, i64),
+        at: CanvasPoint,
+    ) -> Option<CanvasPoint> {
+        let parent = self
+            .toplevel_parent(id)
+            .filter(|p| self.stage.mapped(*p).is_some())
+            .unwrap_or(id);
+        let strangers = self.other_apps_rects(id, parent);
+        if !overlaps_any(&strangers, (at.x, at.y, size.0, size.1)) {
+            return None;
+        }
+        let (x, y) = self
+            .free_spot_near(&strangers, size, (at.x, at.y))
+            .unwrap_or_else(|| beside_all(&strangers, (at.x, at.y)));
+        Some(CanvasPoint { x, y })
     }
 
     /// The window-geometry rects of the mapped windows of other apps than `id`'s and `parent`'s

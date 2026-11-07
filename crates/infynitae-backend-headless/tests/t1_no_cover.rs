@@ -83,3 +83,31 @@ fn many_new_windows_never_overlap() {
         }
     }
 }
+
+/// A window that asks to be maximized before it is shown (Discord reopening maximized) fills a
+/// screen's room in free space, not the screen in view over the window there (owner, 2026-11-07).
+#[test]
+fn a_window_opening_maximized_does_not_cover_the_window_in_view() {
+    let mut r = Rig::x8();
+    r.ls.state
+        .core_mut()
+        .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    let qh = r.ls.qh.clone();
+    let x = r.ls.probe.toplevel_uncommitted(&qh, "X", (240, 292));
+    r.ls.probe.surfaces[x]
+        .toplevel
+        .as_ref()
+        .unwrap()
+        .set_maximized();
+    r.ls.probe.surfaces[x].wl.commit();
+    for _ in 0..6 {
+        r.ls.pump();
+        r.frame();
+    }
+    let id = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    assert_ne!(id, w);
+    let (rw, rx) = (rect(&r, w), rect(&r, id));
+    assert!(rx.2 - rx.0 >= 1000, "it was maximized: {rx:?}");
+    assert!(apart(rw, rx), "the maximized window {rx:?} covers {rw:?}");
+}
