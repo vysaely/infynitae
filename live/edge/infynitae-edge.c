@@ -109,6 +109,11 @@ typedef struct {
     int n_mods;
     /* each module's rectangle in the panel from the last layout (x, y, w, h; h 0: not shown) */
     double box[MAX_PANEL_MODS][4];
+    /* placed by hand (owner, 2026-11-07: "the panels are same as the canvas but smaller"): each
+     * module's rectangle in the panel, kept and saved; fw 0: not placed yet (put at a free spot) */
+    bool placed;
+    int fx[MAX_PANEL_MODS], fy[MAX_PANEL_MODS], fw[MAX_PANEL_MODS], fh[MAX_PANEL_MODS];
+    int height;         /* px, a placed panel's height; 0: what its modules need */
     /* the list modules' first row shown, and from the last layout each module's nav items */
     int scroll[MAX_PANEL_MODS];
     int nav_start[MAX_PANEL_MODS];
@@ -376,7 +381,18 @@ typedef struct EdgeApp {
     double panel_ox, panel_oy;  /* the open panel's corner on the screen, from the last draw */
     double panel_w, panel_h;
     bool edit_after;            /* moving: it goes after the target (else before) */
-    bool logo_down;             /* Super as last seen, to draw the placeholders when it changes */
+    /* editing the open panel's layout (right click on its background; Done, Escape or closing
+     * it saves): modules move and resize like windows; locked otherwise */
+    bool editing, edit_changed, edit_adding;
+    bool snap, overlap;         /* PANEL_SNAP (default on), PANEL_OVERLAP (default off) */
+    Panel undo[16];
+    int undo_n;
+    char edit_before[640];      /* the panel's line when editing began (kept as a backup on save) */
+    int edit_r0[4];             /* the module's rectangle (or the panel's size) when the drag began */
+    bool edit_live;             /* the pointer went past the threshold: the drag acts */
+    int edit_sel;               /* the module clicked (selected): only it shows Remove */
+    double bar_rect[4];         /* the edit bar, on the screen */
+    double child_rect[4];       /* an open child module beside the panel, on the screen (w 0: none) */
 } EdgeApp;
 
 enum {
@@ -413,7 +429,10 @@ enum {
     ACT_MEDIA_PLAY,
     ACT_MEDIA_NEXT,
     ACT_OPEN_PANEL,   /* a hover strip: index, the panel */
-    ACT_SEARCH_BOX    /* a click there keeps the panel open */
+    ACT_SEARCH_BOX,   /* a click there keeps the panel open */
+    /* editing a panel's layout: the bar's buttons, a module's Remove, a module to add (index: it) */
+    ACT_EDIT_UNDO, ACT_EDIT_RESET, ACT_EDIT_SNAP, ACT_EDIT_OVERLAP, ACT_EDIT_ADD, ACT_EDIT_DONE,
+    ACT_EDIT_REMOVE, ACT_EDIT_ADDMOD
 };
 
 static volatile sig_atomic_t g_sig_cmd = 0;
@@ -458,6 +477,9 @@ static const char *panel_of_args(int argc, char **argv) {
 static void damage_all(EdgeApp *app);
 static void open_panel(EdgeApp *app, int idx);
 static void close_panel(EdgeApp *app);
+static void edit_enter(EdgeApp *app);
+static void edit_exit(EdgeApp *app);
+static void edit_release(EdgeApp *app);
 static void relayout(EdgeApp *app);
 
 /* ========================================================================== */
@@ -1676,20 +1698,46 @@ static void panel_line(EdgeApp *app, const char *raw_name, const char *value, in
         p = panel_add(app, name, default_side, 0, 0, false, NULL, 0);
         if (!p) return;
     }
-    char buf[512];
+    char buf[1400];
     config_text(value, buf, sizeof(buf));
     int mods[MAX_PANEL_MODS], looks[MAX_PANEL_MODS], nm = 0;
+    int rect_x[MAX_PANEL_MODS] = {0}, rect_y[MAX_PANEL_MODS] = {0}, rect_w[MAX_PANEL_MODS] = {0}, rect_h[MAX_PANEL_MODS] = {0};
     const char *place[4];
     int np = 0;
-    for (char *save = NULL, *w = strtok_r(buf, " ,\t", &save); w; w = strtok_r(NULL, " ,\t", &save)) {
-        /* module:look ("search:hidden"); a word ending in a colon is the word */
+    /* words are apart by spaces or commas, but a place's commas (after @) belong to it */
+    bool in_place = false;
+    for (char *c = buf; *c; c++) {
+        if (*c == '@') in_place = true;
+        else if (*c == ' ' || *c == '\t') in_place = false;
+        else if (*c == ',' && !in_place) *c = ' ';
+    }
+    for (char *save = NULL, *w = strtok_r(buf, " \t", &save); w; w = strtok_r(NULL, " \t", &save)) {
+        /* module:look ("search:hidden") and @x,y,WxH, where it was placed ("clock@8,8,344x34"); a
+         * word ending in a colon is the word */
+        char *at = strchr(w, '@');
+        if (at) *at = '\0';
         char *colon = strchr(w, ':');
         if (colon) *colon = '\0';
         if (!*w) continue;
         int m = module_of_word(w);
+        int pw_, ph_;
+        char px_;
+        if (m < 0 && sscanf(w, "%d%c%d", &pw_, &px_, &ph_) == 3 && (px_ == 'x' || px_ == 'X')) {
+            /* the panel's size, WxH */
+            if (pw_ >= 160 && pw_ <= 4000) p->width = pw_;
+            p->height = (ph_ >= 60 && ph_ <= 4000) ? ph_ : 0;
+            continue;
+        }
         if (m >= 0) {
             if (nm < MAX_PANEL_MODS) {
                 looks[nm] = look_of_word(m, colon ? colon + 1 : NULL);
+                int x, y, ww, hh;
+                char xx;
+                if (at && sscanf(at + 1, "%d,%d,%d%c%d", &x, &y, &ww, &xx, &hh) == 5 && ww >= 24 && hh >= 20) {
+                    rect_x[nm] = x; rect_y[nm] = y; rect_w[nm] = ww; rect_h[nm] = hh;
+                } else {
+                    rect_w[nm] = 0;
+                }
                 mods[nm++] = m;
             }
         } else if (strchr(w, '+')) {
@@ -1733,7 +1781,21 @@ static void panel_line(EdgeApp *app, const char *raw_name, const char *value, in
         if (horizontal && (s == SIDE_LEFT || s == SIDE_RIGHT)) p->align = s == SIDE_LEFT ? -1 : 1;
         if (!horizontal && (s == SIDE_TOP || s == SIDE_BOTTOM)) p->align = s == SIDE_TOP ? -1 : 1;
     }
-    if (nm > 0) panel_set_modules(p, mods, looks, nm);
+    if (nm > 0) {
+        panel_set_modules(p, mods, looks, nm);
+        /* placed by hand: every module's rectangle (one without is put at a free spot) */
+        p->placed = false;
+        for (int i = 0; i < p->n_mods; i++) {
+            int src = -1;
+            for (int k = 0; k < nm; k++)
+                if (mods[k] == p->mods[i]) { src = k; break; }
+            p->fw[i] = src >= 0 ? rect_w[src] : 0;
+            if (p->fw[i] > 0) {
+                p->fx[i] = rect_x[src]; p->fy[i] = rect_y[src]; p->fh[i] = rect_h[src];
+                p->placed = true;
+            }
+        }
+    }
 }
 
 static const int DEFAULT_CONTROL[] = {MOD_CLOCK, MOD_VOLUME, MOD_MEDIA, MOD_WIFI, MOD_BLUETOOTH, MOD_DND,
@@ -1746,6 +1808,8 @@ static const int DEFAULT_CONTROL[] = {MOD_CLOCK, MOD_VOLUME, MOD_MEDIA, MOD_WIFI
  * each PANEL_ line changes one or adds one. */
 static void load_position_config(EdgeApp *app) {
     int side = SIDE_TOP, ctrl_align = 1;
+    app->snap = true;
+    app->overlap = false;
     app->hair_set = false;
     app->square = false;
     app->favorites[0] = '\0';
@@ -1755,14 +1819,14 @@ static void load_position_config(EdgeApp *app) {
     int ctrl[MAX_PANEL_MODS], nctrl = (int)(sizeof(DEFAULT_CONTROL) / sizeof(DEFAULT_CONTROL[0]));
     memcpy(ctrl, DEFAULT_CONTROL, sizeof(DEFAULT_CONTROL));
     /* PANEL_ lines, applied after the built-in panels exist */
-    static char panel_lines[MAX_PANELS * 2][640];
+    static char panel_lines[MAX_PANELS * 2][1400];
     int n_lines = 0;
 
     const char *home = getenv("HOME");
     char path[512];
     snprintf(path, sizeof(path), "%s/.config/infynitae/config", home ? home : "");
     FILE *f = home ? fopen(path, "r") : NULL;
-    char line[640];
+    char line[1400];
     while (f && fgets(line, sizeof(line), f)) {
         char *p = line;
         while (*p == ' ' || *p == '\t') p++;
@@ -1785,6 +1849,14 @@ static void load_position_config(EdgeApp *app) {
             snprintf(panel_lines[n_lines++], sizeof(panel_lines[0]), "%s", p + 6);
         } else if (strncmp(p, "FAVORITES=", 10) == 0) {
             config_text(p + 10, app->favorites, sizeof(app->favorites));
+        } else if (strncmp(p, "PANELS_SNAP=", 12) == 0 || strncmp(p, "PANELS_OVERLAP=", 15) == 0) {
+            /* editing a panel: edges snap to each other; modules may cover each other */
+            char v[16];
+            bool snap = p[7] == 'S';
+            config_text(p + (snap ? 12 : 15), v, sizeof(v));
+            bool on = !(!strcasecmp(v, "false") || !strcasecmp(v, "off") || !strcasecmp(v, "no") || !strcmp(v, "0"));
+            if (snap) app->snap = on;
+            else app->overlap = on;
         } else if (strncmp(p, "SURFACE_COLOR=", 14) == 0) {
             parse_hex_rgb(p + 14, app->surface_rgb);
         } else if (strncmp(p, "BORDER_INACTIVE=", 16) == 0) {
@@ -2129,6 +2201,11 @@ static const char *search_placeholder(const Panel *p) {
 
 /* search: the field, the typed text or what it searches; Clear at its right in a panel with the
  * clipboard */
+/* Drawing one module into a rectangle of its own (a panel placed by hand): the rectangle's size,
+ * and the module shows what fits it. */
+static bool g_placed;
+static double g_box_w, g_box_h;
+
 static double mod_search(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p, int mi, double y, double W) {
     /* hidden: typing still searches; the bar shows once there is something typed */
     if (panel_look(p, mi) == 0 && app->search_len == 0) return 0.0;
@@ -2210,16 +2287,17 @@ static double mod_list(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p,
         draw_text_left(cr, layout, FONT_BODY, empty, rx + 14.0, y + ROW_H / 2.0, rw - 28.0);
         return ROW_H;
     }
-    /* the selection in view */
+    /* the selection in view; placed, as many rows as its rectangle holds */
+    int list_rows = g_placed ? (int)fmax(1.0, floor(g_box_h / ROW_H)) : LIST_ROWS;
     int *scroll = &p->scroll[mi];
     int sel = app->selected_idx - start;
     if (sel >= 0 && sel < count) {
         if (sel < *scroll) *scroll = sel;
-        if (sel >= *scroll + LIST_ROWS) *scroll = sel - LIST_ROWS + 1;
+        if (sel >= *scroll + list_rows) *scroll = sel - list_rows + 1;
     }
-    if (*scroll > count - LIST_ROWS) *scroll = count - LIST_ROWS;
+    if (*scroll > count - list_rows) *scroll = count - list_rows;
     if (*scroll < 0) *scroll = 0;
-    int shown = count < LIST_ROWS ? count : LIST_ROWS;
+    int shown = count < list_rows ? count : list_rows;
     for (int k = 0; k < shown; k++) {
         int i = *scroll + k;
         const ListRow *r = &rows[i];
@@ -2331,6 +2409,28 @@ static double mod_clock(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
     strftime(time_s, sizeof(time_s), "%H:%M", tm_info);
     strftime(date_s, sizeof(date_s), "%A, %B %d", tm_info);
     int look = panel_look(p, mi);
+    if (g_placed) {
+        /* placed: by its rectangle: the month when there is room, large when tall, else a line */
+        look = (g_box_h >= 200.0 && g_box_w >= 250.0) ? 2 : g_box_h >= 70.0 ? 1 : 0;
+        if (g_box_w < 150.0) {
+            /* narrow: the time alone (and the date under it when tall) */
+            int nav = app->nav_next++;
+            if (SEL(nav)) draw_row_bg(cr, app, rx, y, rw, g_box_h, false, true);
+            set_text(cr, app, 0.96);
+            double cy = g_box_h >= 70.0 ? y + g_box_h / 2.0 - 9.0 : y + g_box_h / 2.0;
+            draw_text_centered(cr, layout, g_box_h >= 70.0 ? "sans-serif Medium 22" : "sans-serif Medium 16",
+                               time_s, rx + rw / 2.0, cy, false);
+            if (g_box_h >= 70.0) {
+                char short_s[16];
+                strftime(short_s, sizeof(short_s), "%a %d", tm_info);
+                set_text(cr, app, 0.55);
+                draw_text_centered(cr, layout, FONT_CAPTION, short_s, rx + rw / 2.0, cy + 22.0, false);
+            }
+            add_hitbox_nav(app, rx, y, rw, g_box_h, ACT_CLOCK, 0, nav);
+            return g_box_h;
+        }
+        if (look == 0 && g_box_h > HEAD_H) y += floor((g_box_h - HEAD_H) / 2.0);
+    }
     if (look == 1) {
         /* big: the time large, the date and the battery under it; a click shows the month */
         double bh = 2.0 * HEAD_H + 8.0;
@@ -2346,7 +2446,7 @@ static double mod_clock(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
         set_text(cr, app, 0.55);
         draw_text_centered(cr, layout, FONT_BODY, under, rx + rw / 2.0, y + bh - HEAD_H / 2.0, false);
         add_hitbox_nav(app, rx, y, rw, bh, ACT_CLOCK, 0, nav);
-        if (!app->cal_open) return bh;
+        if (!app->cal_open || g_placed) return bh;
         return bh + draw_calendar(app, cr, layout, y + bh, W, tm_info);
     }
     set_text(cr, app, 0.96);
@@ -2368,7 +2468,7 @@ static double mod_clock(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
     }
     add_hitbox_nav(app, rx, y, rw, HEAD_H, ACT_CLOCK, 0, nav);
     /* calendar: the month always shown */
-    if (!app->cal_open && look != 2) return HEAD_H;
+    if ((!app->cal_open || g_placed) && look != 2) return HEAD_H;
     return HEAD_H + draw_calendar(app, cr, layout, y + HEAD_H, W, tm_info);
 }
 
@@ -2400,6 +2500,22 @@ static double draw_sub_items(EdgeApp *app, cairo_t *cr, PangoLayout *layout, dou
 /* volume: a label (click: mute), a slider with a knob, the level; right click: the outputs */
 static double mod_volume(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double y, double W) {
     double rx = PAD, rw = W - 2 * PAD;
+    if (g_placed && g_box_w < 150.0) {
+        /* placed and narrow: a tile, the level under its name; a click mutes, the wheel turns it */
+        int nav = app->nav_next++;
+        double th = g_box_h;
+        draw_tile(cr, app, rx, y, rw, th, !app->volume_muted, SEL(nav) || app->subpanel == SUB_AUDIO);
+        char v_s[16];
+        if (app->volume_muted) strcpy(v_s, "Muted");
+        else snprintf(v_s, sizeof(v_s), "%d%%", app->volume_pct);
+        set_text(cr, app, 0.92);
+        draw_text_centered(cr, layout, FONT_CAPTION, "Volume", rx + rw / 2.0, y + th / 2.0 - 8.0, false);
+        set_text(cr, app, 0.70);
+        draw_text_centered(cr, layout, FONT_CAPTION, v_s, rx + rw / 2.0, y + th / 2.0 + 8.0, false);
+        add_hitbox_nav(app, rx, y, rw, th, ACT_VOL_MUTE, 0, nav);
+        return th;
+    }
+    if (g_placed && g_box_h > VOL_H) y += floor((g_box_h - VOL_H) / 2.0);
     int nav = app->nav_next++;
     draw_tile(cr, app, rx, y, rw, VOL_H, false, SEL(nav) || app->subpanel == SUB_AUDIO);
     set_text(cr, app, app->volume_muted ? 0.45 : 0.85);
@@ -2433,7 +2549,7 @@ static double mod_volume(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double 
     set_text(cr, app, 0.80);
     draw_text_right_max(cr, layout, FONT_BODY, v_s, rx + rw - 12.0, y + VOL_H / 2.0, 40.0);
     double h = VOL_H;
-    if (app->subpanel == SUB_AUDIO) h += draw_sub_items(app, cr, layout, y + VOL_H, W);
+    if (app->subpanel == SUB_AUDIO && !g_placed) h += draw_sub_items(app, cr, layout, y + VOL_H, W);
     return h;
 }
 
@@ -2442,6 +2558,25 @@ static double mod_media(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double y
     if (!app->media_bus[0]) return 0.0;
     double rx = PAD, rw = W - 2 * PAD, ry = y;
     const char *title = app->media_title[0] ? app->media_title : "Playing";
+    if (g_placed && (g_box_w < 150.0 || g_box_h < 70.0)) {
+        /* placed and small: play or pause; with room beside it, the title */
+        bool narrow = g_box_w < 150.0;
+        double bw = narrow ? rw : 76.0, bx = rx + rw - bw, th = g_box_h;
+        if (!narrow) {
+            set_text(cr, app, 0.95);
+            draw_text_left(cr, layout, FONT_BODY_MEDIUM, title, rx + 4.0, y + th / 2.0 - (app->media_artist[0] ? 8.0 : 0.0), rw - bw - 12.0);
+            if (app->media_artist[0]) {
+                set_text(cr, app, 0.55);
+                draw_text_left(cr, layout, FONT_CAPTION, app->media_artist, rx + 4.0, y + th / 2.0 + 9.0, rw - bw - 12.0);
+            }
+        }
+        int nav = app->nav_next++;
+        draw_tile(cr, app, bx, y, bw, th, app->media_playing, SEL(nav));
+        set_text(cr, app, SEL(nav) ? 0.98 : 0.85);
+        draw_text_centered(cr, layout, FONT_BODY, app->media_playing ? "Pause" : "Play", bx + bw / 2.0, y + th / 2.0, false);
+        add_hitbox_nav(app, bx, y, bw, th, ACT_MEDIA_PLAY, 0, nav);
+        return th;
+    }
     set_text(cr, app, 0.95);
     draw_text_left(cr, layout, FONT_BODY_MEDIUM, title, rx + 4.0, ry + 10.0, rw - 8.0);
     if (app->media_artist[0]) {
@@ -2473,7 +2608,7 @@ static double mod_media(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double y
  * now (a hidden search, no player, one keyboard layout) are drawn as placeholders, so they can be
  * moved and resized too. */
 static bool g_edit_view;
-static bool super_held(const EdgeApp *app);
+
 
 static double text_px(PangoLayout *layout, const char *font, const char *text) {
     PangoFontDescription *desc = pango_font_description_from_string(font);
@@ -2492,7 +2627,7 @@ static double mod_tiles(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
     struct { const char *label, *val; bool active; int action; bool sub_open; int mi; } sw[12];
     int nt = 0;
     bool sub_here = false;
-    for (int k = mi; k < p->n_mods && MOD_IS_TILE(p->mods[k]) && nt < 11; k++) {
+    for (int k = mi; k < (g_placed ? mi + 1 : p->n_mods) && MOD_IS_TILE(p->mods[k]) && nt < 11; k++) {
         int before = nt;
         p->box[k][3] = 0.0;
         switch (p->mods[k]) {
@@ -2546,13 +2681,15 @@ static double mod_tiles(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
     int span[12], row_of[12], col_of[12], rows = 0, col = 0;
     for (int i = 0; i < nt; i++) {
         int look = panel_look(p, sw[i].mi);
-        span[i] = look == 0 ? 1 : look == 2 ? 4 : 2;
+        /* placed: the switch fills its rectangle (replay's two side by side) */
+        span[i] = g_placed ? (nt == 2 ? 2 : 4) : look == 0 ? 1 : look == 2 ? 4 : 2;
         if (col + span[i] > 4) { rows++; col = 0; }
         row_of[i] = rows;
         col_of[i] = col;
         col += span[i];
     }
     rows++;
+    double th = g_placed ? fmax(g_box_h, 30.0) : TILE_H, tdy = (th - TILE_H) / 2.0;
     for (int i = 0; i < nt; i++) {
         bool last_in_row = i == nt - 1 || row_of[i + 1] != row_of[i];
         /* a row's last tile takes what the row has left only when it is a tile look in a row of
@@ -2562,11 +2699,12 @@ static double mod_tiles(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
             if (row_of[j] == row_of[i] && span[j] == 1) row_has_small = true;
         int cols = (last_in_row && span[i] == 2 && !row_has_small) ? 4 - col_of[i] : span[i];
         double sx = rx + col_of[i] * (unit + GAP);
-        double sy = y + row_of[i] * (TILE_H + GAP);
+        double sy = y + row_of[i] * (th + GAP);
         double sw_w = cols * unit + (cols - 1) * GAP;
-        bool small = span[i] == 1;
+        bool small = g_placed ? sw_w < 110.0 : span[i] == 1;
         int nav = app->nav_next++;
-        draw_tile(cr, app, sx, sy, sw_w, TILE_H, sw[i].active, SEL(nav) || sw[i].sub_open);
+        draw_tile(cr, app, sx, sy, sw_w, th, sw[i].active, SEL(nav) || sw[i].sub_open);
+        sy += tdy;  /* a taller one: its text in the middle */
         if (small) {
             /* small: the name only, centred (names that fit a quarter row); on: a bar of the accent
              * under it, as the tile's colour alone is hard to tell at this size */
@@ -2592,19 +2730,20 @@ static double mod_tiles(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
             else set_text(cr, app, 0.55);
             draw_text_left(cr, layout, FONT_CAPTION, sw[i].val[0] ? sw[i].val : "Off", sx + 12.0, sy + 32.0, sw_w - 24.0);
         }
-        add_hitbox_nav(app, sx, sy, sw_w, TILE_H, sw[i].action, i, nav);
+        sy -= tdy;
+        add_hitbox_nav(app, sx, sy, sw_w, th, sw[i].action, i, nav);
         /* the module's rectangle: all its tiles (replay has two) */
         double *b = p->box[sw[i].mi];
         if (b[3] <= 0.0) {
-            b[0] = sx; b[1] = sy; b[2] = sw_w; b[3] = TILE_H;
+            b[0] = sx; b[1] = sy; b[2] = sw_w; b[3] = th;
         } else {
-            double x2 = fmax(b[0] + b[2], sx + sw_w), y2 = fmax(b[1] + b[3], sy + TILE_H);
+            double x2 = fmax(b[0] + b[2], sx + sw_w), y2 = fmax(b[1] + b[3], sy + th);
             b[0] = fmin(b[0], sx); b[1] = fmin(b[1], sy);
             b[2] = x2 - b[0]; b[3] = y2 - b[1];
         }
     }
-    double h = rows * TILE_H + (rows - 1) * GAP;
-    if (sub_here) h += draw_sub_items(app, cr, layout, y + h, W);
+    double h = rows * th + (rows - 1) * GAP;
+    if (sub_here && !g_placed) h += draw_sub_items(app, cr, layout, y + h, W);
     return h;
 }
 
@@ -2738,7 +2877,7 @@ static double draw_placeholder(EdgeApp *app, cairo_t *cr, PangoLayout *layout, i
 
 static double layout_modules(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p, double W) {
     app->nav_next = 0;
-    g_edit_view = app->open >= 0 && (app->edit || super_held(app));
+    g_edit_view = app->open >= 0 && app->editing;
     double y = PAD;
     bool any = false;
     for (int mi = 0; mi < p->n_mods; mi++) {
@@ -2779,45 +2918,329 @@ static double layout_modules(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Pan
     return y + PAD;
 }
 
-/* While a module is moved or resized by Super+drag: an outline round it and, moving, a bar where it
- * will go (before the module under the pointer when coming from below it, after it from above). */
-static void draw_edit_marks(EdgeApp *app, cairo_t *cr, const Panel *p) {
-    if (!app->edit || app->edit_mi < 0 || app->edit_mi >= p->n_mods) return;
-    const double *b = p->box[app->edit_mi];
-    if (b[3] > 0.0) {
-        cairo_new_path(cr);
-        round_rect(cr, app, b[0] - 2.5, b[1] - 2.5, b[2] + 5.0, b[3] + 5.0, 8.0);
-        set_accent(cr, app, 0.95);
-        cairo_set_line_width(cr, 2.0);
-        cairo_stroke(cr);
+/* ---- A panel as a small canvas (owner, 2026-11-07): modules placed like windows, each drawn into
+ * its own rectangle; moved and resized only while the layout is edited (locked otherwise). ---- */
+
+static const char *module_word_of(int m) {
+    for (size_t k = 0; k < sizeof(MODULE_WORDS) / sizeof(MODULE_WORDS[0]); k++)
+        if (MODULE_WORDS[k].mod == m) return MODULE_WORDS[k].word;
+    return "?";
+}
+
+static double draw_module(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p, int mi, double y, double W) {
+    switch (p->mods[mi]) {
+    case MOD_SEARCH: return mod_search(app, cr, layout, p, mi, y, W);
+    case MOD_FAVORITES: return mod_favorites(app, cr, layout, y, W);
+    case MOD_APPS: case MOD_WINDOWS: case MOD_CLIPBOARD: return mod_list(app, cr, layout, p, mi, y, W);
+    case MOD_CLOCK: return mod_clock(app, cr, layout, p, mi, y, W);
+    case MOD_VOLUME: return mod_volume(app, cr, layout, y, W);
+    case MOD_MEDIA: return mod_media(app, cr, layout, y, W);
+    case MOD_TRAY: return mod_tray(app, cr, layout, y, W);
+    case MOD_NOTIFICATIONS: return mod_notifications(app, cr, layout, y, W);
+    case MOD_SESSION: return mod_session(app, cr, layout, y, W);
+    default: return MOD_IS_TILE(p->mods[mi]) ? mod_tiles(app, cr, layout, p, mi, y, W) : 0.0;
     }
-    if (app->edit != 1) return;
-    /* the module's place dimmed, and its outline under the pointer, kept inside the panel */
-    if (b[3] > 0.0) {
-        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.35);
-        cairo_rectangle(cr, b[0], b[1], b[2], b[3]);
-        cairo_fill(cr);
-        double gx = b[0] + (app->pointer_x - app->edit_x0), gy = b[1] + (app->pointer_y - app->edit_y0);
-        gx = fmax(0.0, fmin(gx, app->panel_w - b[2]));
-        gy = fmax(0.0, fmin(gy, app->panel_h - b[3]));
+}
+
+/* A module's size when added to a placed panel W wide. */
+static void module_default_size(int m, double W, int *w, int *h) {
+    int full = (int)(W - 2 * PAD), half = (int)floor((W - 2 * PAD - GAP) / 2.0);
+    *w = MOD_IS_TILE(m) ? half : full;
+    switch (m) {
+    case MOD_SEARCH: *h = (int)SEARCH_H; break;
+    case MOD_CLOCK: *h = (int)HEAD_H; break;
+    case MOD_VOLUME: *h = (int)VOL_H; break;
+    case MOD_MEDIA: *h = 76; break;
+    case MOD_FAVORITES: *h = 88; break;
+    case MOD_APPS: case MOD_WINDOWS: case MOD_CLIPBOARD: *h = (int)(ROW_H * 8); break;
+    case MOD_TRAY: *h = 84; break;
+    case MOD_NOTIFICATIONS: *h = 120; break;
+    case MOD_SESSION: *h = (int)BTN_H; break;
+    default: *h = (int)TILE_H; break;
+    }
+}
+
+static bool rects_overlap(double ax, double ay, double aw, double ah, double bx, double by, double bw, double bh) {
+    return ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah;
+}
+
+/* Does module mi's rectangle at (x, y, w, h) cover another placed one? */
+static bool covers_other(const Panel *p, int mi, int x, int y, int w, int h) {
+    for (int k = 0; k < p->n_mods; k++)
+        if (k != mi && p->fw[k] > 0 && rects_overlap(x, y, w, h, p->fx[k], p->fy[k], p->fw[k], p->fh[k]))
+            return true;
+    return false;
+}
+
+/* The free spot nearest (x, y) for a w x h module in a panel W wide (it may lengthen the panel). */
+static void nearest_free(const Panel *p, int mi, int w, int h, double W, int *x, int *y) {
+    int maxx = (int)(W - PAD) - w, bx = *x, by = *y;
+    if (maxx < (int)PAD) maxx = (int)PAD;
+    long best = -1;
+    for (int yy = (int)PAD; yy < 4000 && (best < 0 || (long)(yy - by) * (yy - by) < best); yy += 2) {
+        for (int xx = (int)PAD; xx <= maxx; xx += 2) {
+            long d = (long)(xx - bx) * (xx - bx) + (long)(yy - by) * (yy - by);
+            if (best >= 0 && d >= best) continue;
+            if (!covers_other(p, mi, xx, yy, w, h)) { best = d; *x = xx; *y = yy; }
+        }
+    }
+}
+
+/* The panel's modules as they are laid out now, kept as where each is placed (editing begins). */
+static void freeze_layout(EdgeApp *app, Panel *p) {
+    for (int i = 0; i < p->n_mods; i++) {
+        const double *b = p->box[i];
+        if (b[3] > 0.0) {
+            p->fx[i] = (int)lround(b[0]); p->fy[i] = (int)lround(b[1]);
+            p->fw[i] = (int)lround(b[2]); p->fh[i] = (int)lround(b[3]);
+        } else {
+            p->fw[i] = 0;
+        }
+    }
+    p->placed = true;
+    p->height = 0;
+    if (p->width <= 0) p->width = (int)lround(app->panel_w);
+}
+
+static void draw_placeholder_in(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int m, double x, double y, double w, double h) {
+    static const double dash[] = {4.0, 3.0};
+    cairo_new_path(cr);
+    round_rect(cr, app, x + 0.5, y + 0.5, w - 1.0, h - 1.0, 7.0);
+    set_text(cr, app, 0.35);
+    cairo_set_line_width(cr, 1.0);
+    cairo_set_dash(cr, dash, 2, 0.0);
+    cairo_stroke(cr);
+    cairo_set_dash(cr, NULL, 0, 0.0);
+    set_text(cr, app, 0.50);
+    draw_text_left(cr, layout, FONT_CAPTION, module_title(m), x + 10.0, y + fmin(h, 30.0) / 2.0, w - 20.0);
+}
+
+/* A placed panel: each module in its rectangle (one not placed yet goes to the nearest free spot);
+ * its height: the lowest module's bottom (or the height given, if more). */
+static double layout_placed(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p, double W) {
+    app->nav_next = 0;
+    g_edit_view = app->open >= 0 && app->editing;
+    double bottom = PAD;
+    for (int mi = 0; mi < p->n_mods; mi++) {
+        p->nav_start[mi] = app->nav_next;
+        p->box[mi][3] = 0.0;
+        if (p->fw[mi] <= 0) {
+            int w, h, x = (int)PAD, y = (int)PAD;
+            module_default_size(p->mods[mi], W, &w, &h);
+            nearest_free(p, mi, w, h, W, &x, &y);
+            p->fx[mi] = x; p->fy[mi] = y; p->fw[mi] = w; p->fh[mi] = h;
+        }
+        double x = p->fx[mi], y = p->fy[mi], w = p->fw[mi], h = p->fh[mi];
+        cairo_save(cr);
+        cairo_rectangle(cr, x, y, w, h);
+        cairo_clip(cr);
+        cairo_translate(cr, x - PAD, 0.0);
+        app->hb_ox += x - PAD;
+        g_placed = true;
+        g_box_w = w;
+        g_box_h = h;
+        double got = draw_module(app, cr, layout, p, mi, y, w + 2 * PAD);
+        g_placed = false;
+        app->hb_ox -= x - PAD;
+        cairo_restore(cr);
+        if (got <= 0.0 && g_edit_view) draw_placeholder_in(app, cr, layout, p->mods[mi], x, y, w, h);
+        if (got > 0.0 || g_edit_view) {
+            p->box[mi][0] = x; p->box[mi][1] = y; p->box[mi][2] = w; p->box[mi][3] = h;
+        }
+        p->nav_count[mi] = app->nav_next - p->nav_start[mi];
+        /* one showing nothing now (no player) takes no room at the bottom */
+        if ((got > 0.0 || g_edit_view) && y + h > bottom) bottom = y + h;
+    }
+    double ph = bottom + PAD;
+    return p->height > ph ? p->height : ph;
+}
+
+/* The module of the open panel at a point on the screen (-1: none there). */
+static int module_under(const EdgeApp *app, const Panel *p, double sx, double sy) {
+    double x = sx - app->panel_ox, y = sy - app->panel_oy;
+    for (int i = p->n_mods - 1; i >= 0; i--) {
+        const double *b = p->box[i];
+        if (b[3] > 0.0 && x >= b[0] && x <= b[0] + b[2] && y >= b[1] && y <= b[1] + b[3]) return i;
+    }
+    return -1;
+}
+
+/* A module's name on the Add list. */
+static const char *module_name(int m) {
+    static const char *names[MOD_COUNT] = {
+        [MOD_SEARCH] = "Search", [MOD_FAVORITES] = "Favorites", [MOD_APPS] = "Apps", [MOD_WINDOWS] = "Windows",
+        [MOD_CLIPBOARD] = "Clipboard", [MOD_CLOCK] = "Clock", [MOD_VOLUME] = "Volume", [MOD_MEDIA] = "Media",
+        [MOD_WIFI] = "Wi-Fi", [MOD_BLUETOOTH] = "Bluetooth", [MOD_DND] = "Do not disturb", [MOD_NIGHT] = "Night light",
+        [MOD_KEYBOARD] = "Keyboard layout", [MOD_OSK] = "Screen keyboard", [MOD_POWER] = "Power mode",
+        [MOD_REPLAY] = "Replay", [MOD_TRAY] = "Background apps", [MOD_NOTIFICATIONS] = "Notifications",
+        [MOD_SESSION] = "Restart, shut down", };
+    return m >= 0 && m < MOD_COUNT && names[m] ? names[m] : "";
+}
+
+static void draw_button(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double x, double y, double w, double h,
+                        const char *label, bool on, bool dim, int action, int index) {
+    draw_tile(cr, app, x, y, w, h, on, false);
+    set_text(cr, app, dim ? 0.35 : 0.90);
+    draw_text_centered(cr, layout, FONT_CAPTION, label, x + w / 2.0, y + h / 2.0, false);
+    if (!dim) add_hitbox(app, x, y, w, h, action, index);
+}
+
+/* Editing: every module outlined (the one under the pointer brighter, its name, Remove, and a
+ * corner to resize it by), the panel's own corner, and outside the panel the edit bar (Undo,
+ * Reset, Snap, Overlap, Add, Done) and, after Add, the modules not in it. In panel coordinates;
+ * the bar's rectangle goes to app->bar_rect (on the screen). */
+static void draw_edit_overlay(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p, double pw, double ph, int sw, int sh) {
+    static const double dash[] = {4.0, 3.0};
+    int hover = app->edit ? app->edit_mi : module_under(app, p, app->pointer_x, app->pointer_y);
+    for (int i = 0; i < p->n_mods; i++) {
+        const double *b = p->box[i];
+        if (b[3] <= 0.0) continue;
+        bool hot = i == hover && app->edit != 3 && app->edit != 4;
         cairo_new_path(cr);
-        round_rect(cr, app, gx + 0.5, gy + 0.5, b[2] - 1.0, b[3] - 1.0, 7.0);
-        set_accent(cr, app, app->edit_target < 0 ? 0.08 : 0.18);
-        cairo_fill_preserve(cr);
-        set_accent(cr, app, app->edit_target < 0 ? 0.35 : 0.9);
+        round_rect(cr, app, b[0] + 0.5, b[1] + 0.5, b[2] - 1.0, b[3] - 1.0, 7.0);
+        set_accent(cr, app, hot ? 0.95 : 0.45);
+        cairo_set_line_width(cr, hot ? 1.5 : 1.0);
+        if (!hot) cairo_set_dash(cr, dash, 2, 0.0);
+        cairo_stroke(cr);
+        cairo_set_dash(cr, NULL, 0, 0.0);
+        if (!hot) continue;
+        /* the corner that resizes it */
+        set_accent(cr, app, 0.95);
+        for (int k = 0; k < 3; k++) {
+            double o = 4.0 + 4.0 * k;
+            cairo_move_to(cr, b[0] + b[2] - 3.0 - o, b[1] + b[3] - 3.0);
+            cairo_line_to(cr, b[0] + b[2] - 3.0, b[1] + b[3] - 3.0 - o);
+        }
         cairo_set_line_width(cr, 1.5);
         cairo_stroke(cr);
     }
-    if (app->edit_target < 0 || app->edit_target == app->edit_mi) return;
-    const double *t = p->box[app->edit_target];
-    if (t[3] <= 0.0) return;
-    bool beside = MOD_IS_TILE(p->mods[app->edit_target]);  /* a switch: a bar at its side */
-    set_accent(cr, app, 0.95);
-    if (beside)
-        cairo_rectangle(cr, app->edit_after ? t[0] + t[2] + 1.0 : t[0] - 4.0, t[1], 3.0, t[3]);
-    else
-        cairo_rectangle(cr, t[0], app->edit_after ? t[1] + t[3] + 1.0 : t[1] - 4.0, t[2], 3.0);
+    /* the module clicked: filled, and Remove (never on hover alone: a drag must not hit it) */
+    if (app->edit_sel >= 0 && app->edit_sel < p->n_mods && !app->edit) {
+        const double *b = p->box[app->edit_sel];
+        if (b[3] > 0.0) {
+            cairo_new_path(cr);
+            round_rect(cr, app, b[0] + 0.5, b[1] + 0.5, b[2] - 1.0, b[3] - 1.0, 7.0);
+            set_accent(cr, app, 0.12);
+            cairo_fill_preserve(cr);
+            set_accent(cr, app, 0.95);
+            cairo_set_line_width(cr, 2.0);
+            cairo_stroke(cr);
+            double rw = 58.0, rh = 18.0;
+            double rx = b[0] + b[2] - rw - 3.0, ry = b[1] + 3.0;
+            if (b[2] < rw + 8.0 || b[3] < rh + 6.0) ry = b[1] - rh - 2.0;  /* too small: above it */
+            draw_button(app, cr, layout, rx, ry, rw, rh, "Remove", false, false, ACT_EDIT_REMOVE, app->edit_sel);
+        }
+    }
+    /* the panel's corner away from its edge resizes the panel */
+    double cx = p->align > 0 && (p->side == SIDE_TOP || p->side == SIDE_BOTTOM) ? 4.0 : pw - 4.0;
+    double cy = p->side == SIDE_BOTTOM ? 4.0 : ph - 4.0;
+    set_text(cr, app, 0.55);
+    cairo_rectangle(cr, cx - 3.0, cy - 3.0, 6.0, 6.0);
     cairo_fill(cr);
+
+    /* the bar: under the panel when there is room, else above it */
+    double bw = fmax(pw, 470.0), bh = 34.0;
+    double ox = app->panel_ox, oy = app->panel_oy;
+    double bx = ox + (p->align > 0 && (p->side == SIDE_TOP || p->side == SIDE_BOTTOM) ? pw - bw : 0.0);
+    if (bx + bw > sw - 8.0) bx = sw - 8.0 - bw;
+    if (bx < 8.0) bx = 8.0;
+    int na = 0;
+    for (int m = 0; m < MOD_COUNT; m++) na += !panel_has(p, m);
+    double gh = app->edit_adding ? 8.0 + ceil(na / 4.0) * 30.0 : 0.0;
+    double by = oy + ph + 8.0;
+    if (by + bh + gh > sh - 8.0) by = oy - 8.0 - bh - gh;
+    app->bar_rect[0] = bx; app->bar_rect[1] = by; app->bar_rect[2] = bw; app->bar_rect[3] = bh + gh;
+    cairo_save(cr);
+    cairo_translate(cr, bx - ox, by - oy);
+    app->hb_ox += bx - ox;
+    app->hb_oy += by - oy;
+    draw_panel_box(cr, app, 0.0, 0.0, bw, bh + gh);
+    const char *labels[6] = {"Undo", "Reset", app->snap ? "Snap on" : "Snap off",
+                             app->overlap ? "Overlap on" : "Overlap off", "Add", "Done"};
+    int acts[6] = {ACT_EDIT_UNDO, ACT_EDIT_RESET, ACT_EDIT_SNAP, ACT_EDIT_OVERLAP, ACT_EDIT_ADD, ACT_EDIT_DONE};
+    double w6 = (bw - 2 * 5.0 - 5 * 4.0) / 6.0;
+    for (int i = 0; i < 6; i++)
+        draw_button(app, cr, layout, 5.0 + i * (w6 + 4.0), 5.0, w6, bh - 10.0, labels[i],
+                    (i == 2 && app->snap) || (i == 3 && app->overlap) || (i == 4 && app->edit_adding) || i == 5,
+                    i == 0 && app->undo_n == 0, acts[i], 0);
+    if (app->edit_adding) {
+        double w4 = (bw - 2 * 5.0 - 3 * 4.0) / 4.0;
+        int k = 0;
+        for (int m = 0; m < MOD_COUNT; m++) {
+            if (panel_has(p, m)) continue;
+            draw_button(app, cr, layout, 5.0 + (k % 4) * (w4 + 4.0), bh + 4.0 + (k / 4) * 30.0, w4, 26.0,
+                        module_name(m), false, false, ACT_EDIT_ADDMOD, m);
+            k++;
+        }
+    }
+    app->hb_ox -= bx - ox;
+    app->hb_oy -= by - oy;
+    cairo_restore(cr);
+}
+
+/* A child module (owner, 2026-11-07): an open switch's list (networks, devices, outputs) or the
+ * clock's month, for a placed panel drawn beside it next to its parent, on the side of the screen
+ * with more room; the panel's own modules stay where they are. While it is open only. */
+static int child_parent(const EdgeApp *app, const Panel *p) {
+    int m = app->subpanel == SUB_WIFI ? MOD_WIFI : app->subpanel == SUB_BT ? MOD_BLUETOOTH
+          : app->subpanel == SUB_AUDIO ? MOD_VOLUME : app->cal_open ? MOD_CLOCK : -1;
+    for (int i = 0; i < p->n_mods; i++) {
+        const double *b = p->box[i];
+        if (p->mods[i] != m || b[3] <= 0.0) continue;
+        if (m == MOD_CLOCK && b[3] >= 200.0 && b[2] >= 250.0) return -1;  /* it shows the month itself */
+        return i;
+    }
+    return -1;
+}
+
+static double child_content(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double W) {
+    const char *title = app->subpanel == SUB_WIFI ? "Wi-Fi networks" : app->subpanel == SUB_BT ? "Bluetooth devices"
+                      : app->subpanel == SUB_AUDIO ? "Sound output" : "Calendar";
+    double y = PAD + draw_section_title(cr, layout, app, PAD, W, title, NULL, 0);
+    if (app->subpanel == SUB_NONE) {
+        time_t now = time(NULL);
+        y += draw_calendar(app, cr, layout, y, W, localtime(&now));
+    } else {
+        y += draw_sub_items(app, cr, layout, y - GAP, W) - GAP;
+    }
+    return y + PAD;
+}
+
+/* The child beside the panel (x, y: the panel's corner; pw: its width; w x h the screen). Its
+ * rectangle on the screen goes to r (w 0: none). */
+static void draw_child(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p, double x, double y, double pw,
+                       int w, int h, double r[4]) {
+    r[2] = 0.0;
+    int pm = child_parent(app, p);
+    if (pm < 0) return;
+    double W = 300.0;
+    /* measured first, without keeping what it adds */
+    int hb = app->hitbox_count, nav = app->nav_next;
+    cairo_surface_t *ms = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, 1, 1);
+    cairo_t *mcr = cairo_create(ms);
+    PangoLayout *ml = pango_cairo_create_layout(mcr);
+    double ch = child_content(app, mcr, ml, W);
+    g_object_unref(ml);
+    cairo_destroy(mcr);
+    cairo_surface_destroy(ms);
+    app->hitbox_count = hb;
+    app->nav_next = nav;
+    bool left = x + pw / 2.0 > w / 2.0;
+    double cx = left ? x - W - 8.0 : x + pw + 8.0;
+    if (cx < 8.0) cx = 8.0;
+    if (cx + W > w - 8.0) cx = w - 8.0 - W;
+    double cy = y + p->box[pm][1];
+    if (cy + ch > h - 8.0) cy = h - 8.0 - ch;
+    if (cy < 8.0) cy = 8.0;
+    cairo_save(cr);
+    cairo_translate(cr, cx, cy);
+    app->hb_ox = cx;
+    app->hb_oy = cy;
+    draw_panel_box(cr, app, 0.0, 0.0, W, ch);
+    child_content(app, cr, layout, W);
+    cairo_restore(cr);
+    app->hb_ox = app->hb_oy = 0.0;
+    r[0] = cx; r[1] = cy; r[2] = W; r[3] = ch;
 }
 
 /* The open panel: measured, placed at its edge, drawn. Its rectangle goes to rect. */
@@ -2832,8 +3255,8 @@ static void draw_open_panel(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int 
     int hb_start = app->hitbox_count;
     app->hb_ox = app->hb_oy = 0.0;
     g_compact = false;
-    double ph = layout_modules(app, mcr, ml, p, pw);
-    if (ph > h - 16.0) {
+    double ph = p->placed ? layout_placed(app, mcr, ml, p, pw) : layout_modules(app, mcr, ml, p, pw);
+    if (!p->placed && ph > h - 16.0) {
         g_compact = true;
         app->hitbox_count = hb_start;
         ph = layout_modules(app, mcr, ml, p, pw);
@@ -2859,14 +3282,47 @@ static void draw_open_panel(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int 
     cairo_save(cr);
     cairo_translate(cr, x, y);
     draw_panel_box(cr, app, 0.0, 0.0, pw, ph);
-    layout_modules(app, cr, layout, p, pw);
-    draw_edit_marks(app, cr, p);
+    if (p->placed) layout_placed(app, cr, layout, p, pw);
+    else layout_modules(app, cr, layout, p, pw);
+    if (app->editing) draw_edit_overlay(app, cr, layout, p, pw, ph, w, h);
     cairo_restore(cr);
     app->hb_ox = app->hb_oy = 0.0;
     rect[0] = (int)x - 2;
     rect[1] = (int)y - 2;
     rect[2] = (int)pw + 4;
     rect[3] = (int)ph + 4;
+    double cr4[4] = {0, 0, 0, 0};
+    if (p->placed && !app->editing) {
+        draw_child(app, cr, layout, p, x, y, pw, w, h, cr4);
+        memcpy(app->child_rect, cr4, sizeof(cr4));
+        if (cr4[2] > 0.0) {
+            int x0 = (int)fmin(rect[0], cr4[0] - 2.0), y0 = (int)fmin(rect[1], cr4[1] - 2.0);
+            int x1 = (int)fmax(rect[0] + rect[2], cr4[0] + cr4[2] + 2.0), y1 = (int)fmax(rect[1] + rect[3], cr4[1] + cr4[3] + 2.0);
+            rect[0] = x0; rect[1] = y0; rect[2] = x1 - x0; rect[3] = y1 - y0;
+        }
+    }
+    if (getenv("INFYNITAE_EDGE_BOXES")) {
+        /* for tests (tools, the test VM): where the panel, its modules and the edit bar are */
+        FILE *bf = fopen(getenv("INFYNITAE_EDGE_BOXES"), "w");
+        if (bf) {
+            fprintf(bf, "panel %s %.0f %.0f %.0f %.0f %s\n", p->name, x, y, pw, ph, app->editing ? "editing" : "locked");
+            for (int i = 0; i < p->n_mods; i++)
+                if (p->box[i][3] > 0.0)
+                    fprintf(bf, "module %s %.0f %.0f %.0f %.0f\n", module_word_of(p->mods[i]),
+                            x + p->box[i][0], y + p->box[i][1], p->box[i][2], p->box[i][3]);
+            if (app->editing)
+                fprintf(bf, "bar %.0f %.0f %.0f %.0f\n", app->bar_rect[0], app->bar_rect[1], app->bar_rect[2], app->bar_rect[3]);
+            if (cr4[2] > 0.0) fprintf(bf, "child %.0f %.0f %.0f %.0f\n", cr4[0], cr4[1], cr4[2], cr4[3]);
+            fclose(bf);
+        }
+    }
+    if (app->editing) {
+        /* and the edit bar */
+        double *b = app->bar_rect;
+        int x0 = (int)fmin(rect[0], b[0] - 2.0), y0 = (int)fmin(rect[1], b[1] - 2.0);
+        int x1 = (int)fmax(rect[0] + rect[2], b[0] + b[2] + 2.0), y1 = (int)fmax(rect[1] + rect[3], b[1] + b[3] + 2.0);
+        rect[0] = x0; rect[1] = y0; rect[2] = x1 - x0; rect[3] = y1 - y0;
+    }
 }
 
 /* Everything the edge shows for a screen of w x h, into cr; the rectangle drawn in goes to *rect
@@ -3054,6 +3510,7 @@ static void open_panel_named(EdgeApp *app, const char *name) {
 }
 
 static void close_panel(EdgeApp *app) {
+    edit_exit(app);
     app->open = -1;
     app->kb_grab = false;
     app->subpanel = SUB_NONE;
@@ -3610,7 +4067,10 @@ static void panel_value(const Panel *p, char *out, size_t size) {
     if (p->key) n += snprintf(out + n, size - n, "SUPER+%c", toupper((unsigned char)p->key));
     else n += snprintf(out + n, size - n, "none");
     n += snprintf(out + n, size - n, " %s %s", SIDES[p->side], along);
-    if (p->width > 0 && (size_t)n < size) n += snprintf(out + n, size - n, " %d", p->width);
+    if (p->placed && p->width > 0 && p->height > 0 && (size_t)n < size)
+        n += snprintf(out + n, size - n, " %dx%d", p->width, p->height);
+    else if (p->width > 0 && (size_t)n < size)
+        n += snprintf(out + n, size - n, " %d", p->width);
     if ((size_t)n < size) n += snprintf(out + n, size - n, " %s", p->hover ? "hover" : "nohover");
     for (int i = 0; i < p->n_mods && (size_t)n < size; i++) {
         const char *word = "";
@@ -3621,6 +4081,8 @@ static void panel_value(const Panel *p, char *out, size_t size) {
         int look = panel_look(p, i);
         if (names && look != def) n += snprintf(out + n, size - n, " %s:%s", word, names[look]);
         else n += snprintf(out + n, size - n, " %s", word);
+        if (p->placed && p->fw[i] > 0 && (size_t)n < size)
+            n += snprintf(out + n, size - n, "@%d,%d,%dx%d", p->fx[i], p->fy[i], p->fw[i], p->fh[i]);
     }
 }
 
@@ -3628,113 +4090,312 @@ static void panel_value(const Panel *p, char *out, size_t size) {
  * favorites are: what was moved or resized stays after a restart, and the config stays the one
  * place it is said. */
 static void save_panel_line(const Panel *p) {
-    char value[640], name[32];
+    char value[1400], name[32];
     panel_value(p, value, sizeof(value));
     size_t n = 0;
     for (const char *c = p->name; *c && n + 1 < sizeof(name); c++) name[n++] = (char)toupper((unsigned char)*c);
     name[n] = '\0';
     spawn_script("f=\"$HOME/.config/infynitae/config\"; [ -f \"$f\" ] || exit 0; "
-                 "case \"$1$2\" in *[!A-Za-z0-9+:_\\ ]*) exit 0;; esac; "
+                 "case \"$1$2\" in *[!A-Za-z0-9+:_@,\\ ]*) exit 0;; esac; "
                  "awk -v k=\"PANEL_$1\" -v v=\"$2\" 'BEGIN{d=0} index($0, k \"=\")==1{print k \"=\\\"\" v \"\\\"\"; d=1; next} {print} "
                  "END{if(!d) print k \"=\\\"\" v \"\\\"\"}' \"$f\" > \"$f.tmp.$$\" && mv -f \"$f.tmp.$$\" \"$f\"",
                  name, value);
 }
 
-static bool super_held(const EdgeApp *app) {
-    return app->xkb_state &&
-           xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE) > 0;
+/* A line of the config set (added when missing); value: letters, digits, spaces, + : _ @ , only. */
+static void save_config_line(const char *key, const char *value) {
+    spawn_script("f=\"$HOME/.config/infynitae/config\"; [ -f \"$f\" ] || exit 0; "
+                 "case \"$1$2\" in *[!A-Za-z0-9+:_@,\\ ]*) exit 0;; esac; "
+                 "awk -v k=\"$1\" -v v=\"$2\" 'BEGIN{d=0} index($0, k \"=\")==1{print k \"=\\\"\" v \"\\\"\"; d=1; next} {print} "
+                 "END{if(!d) print k \"=\\\"\" v \"\\\"\"}' \"$f\" > \"$f.tmp.$$\" && mv -f \"$f.tmp.$$\" \"$f\"",
+                 key, value);
 }
 
-/* The module of the open panel at a point on the screen: the one there, else the nearest shown. */
-static int module_at(const EdgeApp *app, const Panel *p, double sx, double sy) {
-    double x = sx - app->panel_ox, y = sy - app->panel_oy, best_d = 1e18;
-    int best = -1;
-    for (int i = 0; i < p->n_mods; i++) {
-        const double *b = p->box[i];
-        if (b[3] <= 0.0) continue;
-        double dx = x < b[0] ? b[0] - x : x > b[0] + b[2] ? x - b[0] - b[2] : 0.0;
-        double dy = y < b[1] ? b[1] - y : y > b[1] + b[3] ? y - b[1] - b[3] : 0.0;
-        double d = dx * dx + dy * dy;
-        if (d < best_d) { best_d = d; best = i; }
+static void push_undo(EdgeApp *app, const Panel *p) {
+    int cap = (int)(sizeof(app->undo) / sizeof(app->undo[0]));
+    if (app->undo_n == cap) {
+        memmove(&app->undo[0], &app->undo[1], sizeof(Panel) * (cap - 1));
+        app->undo_n--;
     }
+    app->undo[app->undo_n++] = *p;
+}
+
+/* Right click on the open panel's background (or a long press): its layout may change until Done. */
+static void edit_enter(EdgeApp *app) {
+    if (app->open < 0 || app->editing) return;
+    Panel *p = &app->panels[app->open];
+    app->subpanel = SUB_NONE;
+    app->cal_open = false;
+    app->tray_ctx_idx = -1;
+    relayout(app);  /* the boxes as shown, without an open list */
+    panel_value(p, app->edit_before, sizeof(app->edit_before));
+    if (!p->placed) freeze_layout(app, p);
+    app->editing = true;
+    app->edit_changed = false;
+    app->edit_adding = false;
+    app->undo_n = 0;
+    app->edit = 0;
+    app->edit_sel = -1;
+    app->sel_shown = false;
+    damage_all(app);
+}
+
+/* Done, Escape or closing the panel: saved when something changed (the line before kept in
+ * panels.backup), in reading order so the keys go through the modules as they are seen. */
+static void edit_exit(EdgeApp *app) {
+    if (!app->editing) return;
+    app->editing = false;
+    app->edit_adding = false;
+    app->edit = 0;
+    if (app->open >= 0 && app->edit_changed) {
+        Panel *p = &app->panels[app->open];
+        for (int i = 1; i < p->n_mods; i++)
+            for (int k = i; k > 0 && (p->fy[k] < p->fy[k - 1] || (p->fy[k] == p->fy[k - 1] && p->fx[k] < p->fx[k - 1])); k--) {
+#define SWAP_I(arr) do { int t_ = p->arr[k]; p->arr[k] = p->arr[k - 1]; p->arr[k - 1] = t_; } while (0)
+                SWAP_I(mods); SWAP_I(look); SWAP_I(scroll); SWAP_I(fx); SWAP_I(fy); SWAP_I(fw); SWAP_I(fh);
+#undef SWAP_I
+            }
+        spawn_script("d=\"$HOME/.config/infynitae\"; [ -d \"$d\" ] || exit 0; "
+                     "printf '%s PANEL_%s=\"%s\"\\n' \"$(date '+%F %T')\" \"$1\" \"$2\" >> \"$d/panels.backup\"",
+                     p->name, app->edit_before);
+        save_panel_line(p);
+    }
+    damage_all(app);
+}
+
+static int snap_to(int v, const int *t, int n, bool *hit) {
+    int best = v, bd = 9;
+    for (int i = 0; i < n; i++) {
+        int d = abs(v - t[i]);
+        if (d < bd) { bd = d; best = t[i]; }
+    }
+    if (bd < 9) *hit = true;
     return best;
 }
 
-/* Super + left drag moves the module under the pointer, Super + right drag steps through its looks
- * (right or down: bigger); Shift may be held too. True when the press started one. */
-static bool edit_start(EdgeApp *app, double x, double y, uint32_t button) {
-    if (app->open < 0 || !super_held(app) || (button != BTN_LEFT && button != BTN_RIGHT)) return false;
-    Panel *p = &app->panels[app->open];
-    int mi = module_at(app, p, x, y);
-    if (mi < 0) return true;  /* a Super press on the panel never also clicks */
-    app->edit = button == BTN_LEFT ? 1 : 2;
-    app->edit_mi = mi;
-    app->edit_target = mi;
-    app->edit_look0 = panel_look(p, mi);
-    app->edit_x0 = x;
-    app->edit_y0 = y;
-    app->edit_after = false;
-    damage_all(app);
-    return true;
+/* With snapping on: a moved module's edges to the panel's and to the other modules' (side by side
+ * a gap apart, or lined up), within 8 px. */
+static void snap_move(const Panel *p, int mi, double W, int *x, int *y, int w, int h) {
+    int tx[4 + 4 * MAX_PANEL_MODS], ty[2 + 4 * MAX_PANEL_MODS], nx = 0, ny = 0;
+    tx[nx++] = (int)PAD; tx[nx++] = (int)(W - PAD) - w;
+    ty[ny++] = (int)PAD;
+    for (int k = 0; k < p->n_mods; k++) {
+        if (k == mi || p->fw[k] <= 0) continue;
+        int ox = p->fx[k], oy = p->fy[k], ow = p->fw[k], oh = p->fh[k];
+        tx[nx++] = ox; tx[nx++] = ox + ow + (int)GAP; tx[nx++] = ox + ow - w; tx[nx++] = ox - (int)GAP - w;
+        ty[ny++] = oy; ty[ny++] = oy + oh + (int)GAP; ty[ny++] = oy + oh - h; ty[ny++] = oy - (int)GAP - h;
+    }
+    bool hit = false;
+    *x = snap_to(*x, tx, nx, &hit);
+    *y = snap_to(*y, ty, ny, &hit);
 }
 
-static void edit_motion(EdgeApp *app, double x, double y) {
-    if (!app->edit || app->open < 0) return;
+static void snap_size(const Panel *p, int mi, double W, int x, int y, int *w, int *h) {
+    int tr[2 + 2 * MAX_PANEL_MODS], tb[2 * MAX_PANEL_MODS + 1], nr = 0, nb = 0;
+    tr[nr++] = (int)(W - PAD);
+    for (int k = 0; k < p->n_mods; k++) {
+        if (k == mi || p->fw[k] <= 0) continue;
+        tr[nr++] = p->fx[k] + p->fw[k]; tr[nr++] = p->fx[k] - (int)GAP;
+        tb[nb++] = p->fy[k] + p->fh[k]; tb[nb++] = p->fy[k] - (int)GAP;
+    }
+    bool hit = false;
+    *w = snap_to(x + *w, tr, nr, &hit) - x;
+    *h = snap_to(y + *h, tb, nb, &hit) - y;
+}
+
+/* Editing, a press: a bar button or Remove does its thing; on a module, left moves it and right
+ * (or its corner) resizes it; on the panel's background, left moves the panel to another edge and
+ * right (or its corner) resizes it; outside both, editing ends. Nothing acts before the pointer
+ * has gone 6 px (a click alone never changes the layout). */
+static void edit_press(EdgeApp *app, double x, double y, uint32_t button) {
     Panel *p = &app->panels[app->open];
-    if (app->edit == 1) {
-        /* let go more than 24 px outside the panel: nothing moves */
-        double px = x - app->panel_ox, py = y - app->panel_oy;
-        bool outside = px < -24.0 || py < -24.0 || px > app->panel_w + 24.0 || py > app->panel_h + 24.0;
-        int t = outside ? -1 : module_at(app, p, x, y);
-        bool after = false;
-        if (t >= 0) {
-            /* before or after it by the half of it under the pointer: across for a switch, down
-             * for the rest */
-            const double *b = p->box[t];
-            after = MOD_IS_TILE(p->mods[t]) ? px > b[0] + b[2] / 2.0 : py > b[1] + b[3] / 2.0;
+    /* the bar's buttons and Remove: the left button only (a right press always resizes) */
+    for (int i = app->hitbox_count - 1; i >= 0 && button == BTN_LEFT; i--) {
+        HitBox *hb = &app->hitboxes[i];
+        if (hb->action_id < ACT_EDIT_UNDO || x < hb->x || x > hb->x + hb->w || y < hb->y || y > hb->y + hb->h) continue;
+        switch (hb->action_id) {
+        case ACT_EDIT_UNDO:
+            if (app->undo_n > 0) { *p = app->undo[--app->undo_n]; app->edit_changed = true; }
+            break;
+        case ACT_EDIT_RESET: {
+            push_undo(app, p);
+            /* a built-in panel gets its own modules back, in their order; another keeps its own */
+            const int apps[] = {MOD_SEARCH, MOD_FAVORITES, MOD_APPS}, wins[] = {MOD_SEARCH, MOD_WINDOWS},
+                      clip[] = {MOD_SEARCH, MOD_CLIPBOARD};
+            if (!strcmp(p->name, "control"))
+                panel_set_modules(p, DEFAULT_CONTROL, NULL, (int)(sizeof(DEFAULT_CONTROL) / sizeof(DEFAULT_CONTROL[0])));
+            else if (!strcmp(p->name, "apps")) panel_set_modules(p, apps, NULL, 3);
+            else if (!strcmp(p->name, "windows")) panel_set_modules(p, wins, NULL, 2);
+            else if (!strcmp(p->name, "clipboard")) panel_set_modules(p, clip, NULL, 2);
+            p->placed = false;
+            p->width = 0;
+            p->height = 0;
+            for (int k = 0; k < p->n_mods; k++) p->look[k] = -1;
+            app->editing = false;
+            relayout(app);
+            freeze_layout(app, p);
+            app->editing = true;
+            app->edit_changed = true;
+            break;
         }
-        app->edit_target = t;
-        app->edit_after = after;
+        case ACT_EDIT_SNAP:
+            app->snap = !app->snap;
+            save_config_line("PANELS_SNAP", app->snap ? "true" : "false");
+            break;
+        case ACT_EDIT_OVERLAP:
+            app->overlap = !app->overlap;
+            save_config_line("PANELS_OVERLAP", app->overlap ? "true" : "false");
+            break;
+        case ACT_EDIT_ADD:
+            app->edit_adding = !app->edit_adding;
+            break;
+        case ACT_EDIT_DONE:
+            edit_exit(app);
+            return;
+        case ACT_EDIT_REMOVE: {
+            int mi = hb->index;
+            if (mi < 0 || mi >= p->n_mods) break;
+            push_undo(app, p);
+            for (int k = mi; k < p->n_mods - 1; k++) {
+                p->mods[k] = p->mods[k + 1]; p->look[k] = p->look[k + 1]; p->scroll[k] = p->scroll[k + 1];
+                p->fx[k] = p->fx[k + 1]; p->fy[k] = p->fy[k + 1]; p->fw[k] = p->fw[k + 1]; p->fh[k] = p->fh[k + 1];
+            }
+            p->n_mods--;
+            app->edit_sel = -1;
+            app->edit_changed = true;
+            break;
+        }
+        case ACT_EDIT_ADDMOD:
+            if (p->n_mods < MAX_PANEL_MODS && !panel_has(p, hb->index)) {
+                push_undo(app, p);
+                int k = p->n_mods++;
+                p->mods[k] = hb->index; p->look[k] = -1; p->scroll[k] = 0; p->fw[k] = 0;
+                app->edit_changed = true;
+            }
+            break;
+        }
         damage_all(app);
         return;
     }
-    int n, def;
-    if (!module_looks(p->mods[app->edit_mi], &n, &def) || n < 2) return;
-    double d = (x - app->edit_x0) + (y - app->edit_y0);
-    int look = app->edit_look0 + (int)(d / 50.0);
-    if (look < 0) look = 0;
-    if (look > n - 1) look = n - 1;
-    if (look != panel_look(p, app->edit_mi)) {
-        p->look[app->edit_mi] = look;
-        damage_all(app);
+    double px = x - app->panel_ox, py = y - app->panel_oy;
+    bool in_panel = px >= 0 && py >= 0 && px <= app->panel_w && py <= app->panel_h;
+    if (!in_panel) {
+        edit_exit(app);
+        return;
     }
+    int mi = module_under(app, p, x, y);
+    app->edit_x0 = x;
+    app->edit_y0 = y;
+    app->edit_live = false;
+    app->edit_mi = mi;
+    if (mi >= 0) {
+        const double *b = p->box[mi];
+        bool corner = px > b[0] + b[2] - 16.0 && py > b[1] + b[3] - 16.0;
+        app->edit = (button == BTN_RIGHT || corner) ? 2 : 1;
+        app->edit_r0[0] = p->fx[mi]; app->edit_r0[1] = p->fy[mi];
+        app->edit_r0[2] = p->fw[mi]; app->edit_r0[3] = p->fh[mi];
+    } else {
+        double cx = p->align > 0 && (p->side == SIDE_TOP || p->side == SIDE_BOTTOM) ? 0.0 : app->panel_w;
+        double cy = p->side == SIDE_BOTTOM ? 0.0 : app->panel_h;
+        bool corner = fabs(px - cx) < 16.0 && fabs(py - cy) < 16.0;
+        app->edit = (button == BTN_RIGHT || corner) ? 4 : 3;
+        app->edit_r0[2] = (int)lround(app->panel_w);
+        app->edit_r0[3] = (int)lround(app->panel_h);
+    }
+    damage_all(app);
 }
 
-/* Moves the module to where the bar showed, or keeps the look it was dragged to; then saves. */
-static void edit_finish(EdgeApp *app) {
+static void edit_drag(EdgeApp *app, double x, double y) {
+    if (!app->edit || app->open < 0) return;
+    Panel *p = &app->panels[app->open];
+    double dx = x - app->edit_x0, dy = y - app->edit_y0;
+    if (!app->edit_live) {
+        if (hypot(dx, dy) < 6.0) return;
+        app->edit_live = true;
+        push_undo(app, p);
+    }
+    double W = app->panel_w;
+    int mi = app->edit_mi, *r0 = app->edit_r0;
+    if (app->edit == 1) {
+        int nx = r0[0] + (int)lround(dx), ny = r0[1] + (int)lround(dy), w = p->fw[mi], h = p->fh[mi];
+        if (app->snap) snap_move(p, mi, W, &nx, &ny, w, h);
+        if (nx > (int)(W - PAD) - w) nx = (int)(W - PAD) - w;
+        if (nx < (int)PAD) nx = (int)PAD;
+        if (ny < (int)PAD) ny = (int)PAD;
+        p->fx[mi] = nx;
+        p->fy[mi] = ny;
+    } else if (app->edit == 2) {
+        int w = r0[2] + (int)lround(dx), h = r0[3] + (int)lround(dy);
+        if (app->snap) snap_size(p, mi, W, p->fx[mi], p->fy[mi], &w, &h);
+        if (w > (int)(W - PAD) - p->fx[mi]) w = (int)(W - PAD) - p->fx[mi];
+        if (w < 40) w = 40;
+        if (h < 26) h = 26;
+        if (!app->overlap) {
+            /* overlap off: it stops a gap short of a module below it or beside it, never moving */
+            int x = p->fx[mi], y = p->fy[mi];
+            for (int k = 0; k < p->n_mods; k++) {
+                if (k == mi || p->fw[k] <= 0 || p->box[k][3] <= 0.0) continue;
+                int ox = p->fx[k], oy = p->fy[k], ow = p->fw[k];
+                if (x < ox + ow && ox < x + w && oy >= y && oy < y + h && oy - (int)GAP - y >= 26) h = oy - (int)GAP - y;
+            }
+            for (int k = 0; k < p->n_mods; k++) {
+                if (k == mi || p->fw[k] <= 0 || p->box[k][3] <= 0.0) continue;
+                int ox = p->fx[k], oy = p->fy[k], oh = p->fh[k];
+                if (y < oy + oh && oy < y + h && ox >= x && ox < x + w && ox - (int)GAP - x >= 40) w = ox - (int)GAP - x;
+            }
+        }
+        p->fw[mi] = w;
+        p->fh[mi] = h;
+    } else if (app->edit == 3) {
+        /* the panel to the screen edge nearest the pointer, and to its start, middle or end */
+        double sw = app->last_w, sh = app->last_h;
+        double d[4] = {y, sh - y, x, sw - x};
+        int side = 0;
+        for (int i = 1; i < 4; i++)
+            if (d[i] < d[side]) side = i;
+        int sides[4] = {SIDE_TOP, SIDE_BOTTOM, SIDE_LEFT, SIDE_RIGHT};
+        double along = (side < 2) ? x / sw : y / sh;
+        p->side = sides[side];
+        p->align = along < 1.0 / 3.0 ? -1 : along > 2.0 / 3.0 ? 1 : 0;
+    } else {
+        /* the panel's size: wider away from where it is held, never smaller than its modules */
+        bool horizontal = p->side == SIDE_TOP || p->side == SIDE_BOTTOM;
+        double gw = horizontal ? (p->align < 0 ? dx : p->align > 0 ? -dx : 2 * dx) : (p->side == SIDE_LEFT ? dx : -dx);
+        double gh = horizontal ? (p->side == SIDE_TOP ? dy : -dy) : (p->align < 0 ? dy : p->align > 0 ? -dy : 2 * dy);
+        int need_w = 160, need_h = 60;
+        for (int k = 0; k < p->n_mods; k++) {
+            if (p->fw[k] <= 0) continue;
+            if (p->fx[k] + p->fw[k] + (int)PAD > need_w) need_w = p->fx[k] + p->fw[k] + (int)PAD;
+            if (p->fy[k] + p->fh[k] + (int)PAD > need_h) need_h = p->fy[k] + p->fh[k] + (int)PAD;
+        }
+        int nw = r0[2] + (int)lround(gw), nh = r0[3] + (int)lround(gh);
+        p->width = nw < need_w ? need_w : nw;
+        p->height = nh < need_h ? need_h : nh;
+    }
+    app->edit_changed = true;
+    damage_all(app);
+}
+
+/* The drag ends: with overlap off, a module let go over another goes to the nearest free spot. */
+static void edit_release(EdgeApp *app) {
     if (!app->edit || app->open < 0) { app->edit = 0; return; }
     Panel *p = &app->panels[app->open];
-    int mi = app->edit_mi, t = app->edit_target;
-    bool changed = false;
-    /* where it goes once taken out: before or after the target */
-    int to = t < 0 ? mi : (t > mi ? t - 1 : t) + (app->edit_after ? 1 : 0);
-    if (app->edit == 1 && t >= 0 && t != mi && to != mi && mi < p->n_mods && t < p->n_mods) {
-        int m = p->mods[mi], look = p->look[mi], sc = p->scroll[mi];
-        int step = to > mi ? 1 : -1;
-        for (int i = mi; i != to; i += step) {
-            p->mods[i] = p->mods[i + step];
-            p->look[i] = p->look[i + step];
-            p->scroll[i] = p->scroll[i + step];
-        }
-        p->mods[to] = m;
-        p->look[to] = look;
-        p->scroll[to] = sc;
-        changed = true;
-    } else if (app->edit == 2) {
-        changed = panel_look(p, mi) != app->edit_look0;
+    int mi = app->edit_mi;
+    /* a click without a drag: a module is selected (again: unselected), the background unselects */
+    if (!app->edit_live && app->edit == 1) app->edit_sel = app->edit_sel == mi ? -1 : mi;
+    else if (!app->edit_live && app->edit == 3) app->edit_sel = -1;
+    if (app->edit_live && app->edit == 1 && !app->overlap && mi >= 0 &&
+        covers_other(p, mi, p->fx[mi], p->fy[mi], p->fw[mi], p->fh[mi])) {
+        int x = p->fx[mi], y = p->fy[mi];
+        nearest_free(p, mi, p->fw[mi], p->fh[mi], app->panel_w, &x, &y);
+        /* and lined up with what is near, when that spot is free too */
+        int sx = x, sy = y;
+        if (app->snap) snap_move(p, mi, app->panel_w, &sx, &sy, p->fw[mi], p->fh[mi]);
+        if (!covers_other(p, mi, sx, sy, p->fw[mi], p->fh[mi]) && sx >= (int)PAD) x = sx, y = sy;
+        p->fx[mi] = x;
+        p->fy[mi] = y;
     }
     app->edit = 0;
-    if (changed) save_panel_line(p);
     damage_all(app);
 }
 
@@ -3748,6 +4409,15 @@ static bool handle_click_at(EdgeApp *app, EdgeOutput *out, double x, double y, u
     }
 
     if (app->open >= 0) {
+        /* the panel's own background: a right click (or a long press) edits its layout; a left one
+         * does nothing; outside it, the panel closes */
+        double px = x - app->panel_ox, py = y - app->panel_oy;
+        if (px >= 0 && py >= 0 && px <= app->panel_w && py <= app->panel_h) {
+            if (button == BTN_RIGHT) edit_enter(app);
+            return true;
+        }
+        const double *c = app->child_rect;
+        if (c[2] > 0.0 && x >= c[0] && y >= c[1] && x <= c[0] + c[2] && y <= c[1] + c[3]) return true;
         close_panel(app);
         return true;
     }
@@ -3803,6 +4473,11 @@ static void touch_down(void *data, struct wl_touch *touch, uint32_t serial, uint
     app->touch_start_x = app->touch_cur_x = x;
     app->touch_start_y = app->touch_cur_y = y;
     app->touch_panel = app->open < 0 ? hover_panel_at(app, x, y) : -1;
+    if (app->open >= 0 && app->editing) {
+        /* editing with a finger: as the left button */
+        edit_press(app, x, y, BTN_LEFT);
+        return;
+    }
     if (app->touch_panel >= 0) {
         /* the finger is followed over the whole screen until it lifts */
         app->dragging = true;
@@ -3817,6 +4492,7 @@ static void touch_motion(void *data, struct wl_touch *touch, uint32_t time, int3
     if (id != app->touch_id) return;
     app->touch_cur_x = wl_fixed_to_double(fx);
     app->touch_cur_y = wl_fixed_to_double(fy);
+    if (app->edit) edit_drag(app, app->touch_cur_x, app->touch_cur_y);
 }
 
 /* A tap or a pull from a hover strip opens its panel; a swipe back toward the open panel's edge
@@ -3829,6 +4505,10 @@ static void touch_up(void *data, struct wl_touch *touch, uint32_t serial, uint32
     double dy = app->touch_cur_y - app->touch_start_y;
     uint32_t held_ms = time - app->touch_down_ms;
     app->dragging = false;
+    if (app->open >= 0 && app->editing) {
+        if (app->edit) edit_release(app);
+        return;
+    }
     if (app->touch_panel >= 0) {
         int idx = app->touch_panel;
         app->touch_panel = -1;
@@ -3886,11 +4566,8 @@ static void pointer_unselect(EdgeApp *app) {
 static void pointer_leave(void *data, struct wl_pointer *p, uint32_t s, struct wl_surface *surface) {
     (void)p; (void)s; (void)surface;
     EdgeApp *app = data;
-    /* a drag whose button is let go elsewhere never ends here: it is called off */
-    if (app->edit) {
-        app->edit = 0;
-        damage_all(app);
-    }
+    /* a drag whose button is let go elsewhere never ends here: it ends where it is */
+    if (app->edit) edit_release(app);
     pointer_unselect(app);
     if (app->open >= 0 && app->kb_grab) {
         app->kb_grab = false;
@@ -3909,7 +4586,16 @@ static void pointer_motion(void *data, struct wl_pointer *p, uint32_t t, wl_fixe
 
     if (app->open < 0) return;
     if (app->edit) {
-        edit_motion(app, app->pointer_x, app->pointer_y);
+        edit_drag(app, app->pointer_x, app->pointer_y);
+        return;
+    }
+    if (app->editing) {
+        /* the module under the pointer is outlined brighter, with its Remove and corner */
+        int hot = module_under(app, &app->panels[app->open], app->pointer_x, app->pointer_y);
+        if (hot != app->edit_target) {
+            app->edit_target = hot;
+            damage_all(app);
+        }
         return;
     }
 
@@ -3940,14 +4626,17 @@ static void pointer_button(void *data, struct wl_pointer *p, uint32_t s, uint32_
     (void)p; (void)s; (void)t;
     EdgeApp *app = data;
     if (state != WL_POINTER_BUTTON_STATE_PRESSED) {
-        if (app->edit) edit_finish(app);
+        if (app->edit) edit_release(app);
         return;
     }
     if (app->open < 0) {
         open_panel(app, hover_panel_at(app, app->pointer_x, app->pointer_y));
         return;
     }
-    if (edit_start(app, app->pointer_x, app->pointer_y, button)) return;
+    if (app->editing) {
+        edit_press(app, app->pointer_x, app->pointer_y, button);
+        return;
+    }
     handle_click_at(app, app->pointer_output, app->pointer_x, app->pointer_y, button);
 }
 
@@ -4069,6 +4758,11 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
     bool shift_down = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE) > 0;
     Panel *p = &app->panels[app->open];
 
+    if (app->editing) {
+        /* editing: Escape is Done; the keys do nothing else (no search, no switch) */
+        if (sym == XKB_KEY_Escape) edit_exit(app);
+        return;
+    }
     if (sym == XKB_KEY_Escape) {
         if (app->tray_ctx_idx >= 0) {
             app->tray_ctx_idx = -1;
@@ -4182,12 +4876,6 @@ static void keyboard_modifiers(void *data, struct wl_keyboard *kb, uint32_t s,
     (void)kb; (void)s;
     EdgeApp *app = data;
     if (app->xkb_state) xkb_state_update_mask(app->xkb_state, dep, lat, lock, 0, 0, grp);
-    /* the placeholders of hidden modules show while Super is held over the open panel */
-    bool logo = super_held(app);
-    if (logo != app->logo_down) {
-        app->logo_down = logo;
-        if (app->open >= 0) damage_all(app);
-    }
 }
 
 static void keyboard_repeat_info(void *d, struct wl_keyboard *k, int32_t r, int32_t del) {
@@ -4548,6 +5236,19 @@ static int render_to_png(const char *mode_name, const char *size, const char *ou
     }
     app.selected_idx = getenv("INFYNITAE_EDGE_RENDER_SELECT") ? atoi(getenv("INFYNITAE_EDGE_RENDER_SELECT")) : 1;
     app.sel_shown = true;
+    if (getenv("INFYNITAE_EDGE_RENDER_SUB")) {
+        /* an open switch's list (wifi, bt, audio) or the month (cal), made up */
+        const char *sub = getenv("INFYNITAE_EDGE_RENDER_SUB");
+        if (!strcmp(sub, "cal")) app.cal_open = true;
+        else app.subpanel = !strcmp(sub, "bt") ? SUB_BT : !strcmp(sub, "audio") ? SUB_AUDIO : SUB_WIFI;
+        static const char *nets[][2] = {{"HomeNet", "90%"}, {"Neighbours 5G", "62%"}, {"Cafe guest", "40%"}};
+        app.sub_count = 3;
+        for (int i = 0; i < 3; i++) {
+            snprintf(app.sub_items[i].label, sizeof(app.sub_items[i].label), "%s", nets[i][0]);
+            snprintf(app.sub_items[i].meta, sizeof(app.sub_items[i].meta), "%s", nets[i][1]);
+            app.sub_items[i].active = i == 0;
+        }
+    }
     if (getenv("INFYNITAE_EDGE_RENDER_SEARCH")) {
         snprintf(app.search, sizeof(app.search), "%s", getenv("INFYNITAE_EDGE_RENDER_SEARCH"));
         app.search_len = strlen(app.search);
@@ -4561,6 +5262,26 @@ static int render_to_png(const char *mode_name, const char *size, const char *ou
     cairo_paint(cr);
     PangoLayout *layout = pango_cairo_create_layout(cr);
     int rect[4];
+    if (getenv("INFYNITAE_EDGE_RENDER_EDIT")) {
+        /* the panel being edited: laid out once to know its modules' places, then edited, the
+         * pointer over the module named by the variable's number */
+        app.last_w = w;
+        app.last_h = h;
+        app.sel_shown = false;
+        edit_enter(&app);
+        draw_panels(&app, cr, layout, w, h, rect);
+        int hot = atoi(getenv("INFYNITAE_EDGE_RENDER_EDIT")) - 1;
+        Panel *ep = &app.panels[app.open];
+        if (hot >= 0 && hot < ep->n_mods && ep->box[hot][3] > 0.0) {
+            app.pointer_x = app.panel_ox + ep->box[hot][0] + ep->box[hot][2] / 2.0;
+            app.pointer_y = app.panel_oy + ep->box[hot][1] + ep->box[hot][3] / 2.0;
+        } else {
+            app.pointer_x = app.pointer_y = -100.0;
+        }
+        if (getenv("INFYNITAE_EDGE_RENDER_ADD")) app.edit_adding = true;
+        cairo_set_source_rgb(cr, 0.16, 0.17, 0.20);
+        cairo_paint(cr);
+    }
     draw_panels(&app, cr, layout, w, h, rect);
     /* the panel's rectangle, for tools/test-edge-render */
     if (getenv("INFYNITAE_EDGE_RENDER_RECT")) printf("%d %d %d %d\n", rect[0], rect[1], rect[2], rect[3]);
@@ -4581,7 +5302,7 @@ int main(int argc, char **argv) {
         app.open = -1;
         load_position_config(&app);
         for (int i = 0; i < app.n_panels; i++) {
-            char value[640];
+            char value[1400];
             panel_value(&app.panels[i], value, sizeof(value));
             printf("%s %s\n", app.panels[i].name, value);
         }

@@ -23,6 +23,11 @@ check 'PANEL_APPS="search:hidden favorites apps"' apps 'SUPER+W top center nohov
 check 'PANEL_APPS="search:bar apps"' apps 'SUPER+W top center nohover search apps'
 check 'PANEL_CONTROL="clock:huge wifi:tile"' control 'SUPER+A top right hover clock wifi'
 check 'PANEL_MINE="SUPER+M left center 320 volume:loud wifi:small"' mine 'SUPER+M left center 320 nohover volume wifi:small'
+# a panel placed by hand: its size and each module's place come back as written (one without a
+# place is put at a free spot when drawn, and stays without one in the line until then)
+check 'PANEL_CONTROL="SUPER+A top right 360x400 hover clock@8,8,344x34 wifi@8,48,170x46 volume"' control \
+    'SUPER+A top right 360x400 hover clock@8,8,344x34 wifi@8,48,170x46 volume'
+check 'PANEL_APPS="search:hidden@8,8,544x40 apps@8,56,544x256"' apps 'SUPER+W top center nohover search:hidden@8,8,544x40 apps@8,56,544x256'
 printf 'PANEL_CONTROL="clock:calendar wifi:small bluetooth:small dnd:small nightlight:small volume replay:wide power"\nPANEL_APPS="search:hidden favorites apps"\n' \
     > "$TMP/home/.config/infynitae/config"
 for mode in apps windows control clipboard; do
@@ -30,6 +35,12 @@ for mode in apps windows control clipboard; do
         echo "ok   $mode drawn with looks"
     else
         echo "FAIL $mode with looks: render failed"; fail=1
+    fi
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_EDIT=1 INFYNITAE_EDGE_RENDER_ADD=1 "$TMP/edge" --render "$mode" 1280x800 "$TMP/$mode-edit.png" \
+        && [ -s "$TMP/$mode-edit.png" ]; then
+        echo "ok   $mode drawn while editing its layout"
+    else
+        echo "FAIL $mode editing: render failed"; fail=1
     fi
 done
 exit $fail
