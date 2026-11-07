@@ -255,6 +255,7 @@ typedef struct EdgeApp {
     /* the selection is drawn once a key or the pointer moved it, or at once in a panel with a
      * search (Enter starts the first result) */
     bool sel_shown;
+    bool sel_by_pointer;  /* shown because the pointer is over it (goes when the pointer leaves it) */
     /* the layout being drawn: hitboxes are offset by the panel's corner; nav items counted */
     double hb_ox, hb_oy;
     int nav_next;
@@ -3874,9 +3875,23 @@ static void pointer_enter(void *data, struct wl_pointer *p, uint32_t s,
     }
 }
 
+static void pointer_unselect(EdgeApp *app) {
+    if (!app->sel_by_pointer || !app->sel_shown || app->open < 0) return;
+    app->sel_by_pointer = false;
+    if (panel_has(&app->panels[app->open], MOD_SEARCH)) return;
+    app->sel_shown = false;
+    damage_all(app);
+}
+
 static void pointer_leave(void *data, struct wl_pointer *p, uint32_t s, struct wl_surface *surface) {
     (void)p; (void)s; (void)surface;
     EdgeApp *app = data;
+    /* a drag whose button is let go elsewhere never ends here: it is called off */
+    if (app->edit) {
+        app->edit = 0;
+        damage_all(app);
+    }
+    pointer_unselect(app);
     if (app->open >= 0 && app->kb_grab) {
         app->kb_grab = false;
         for (EdgeOutput *o = app->outputs; o; o = o->next) {
@@ -3898,19 +3913,26 @@ static void pointer_motion(void *data, struct wl_pointer *p, uint32_t t, wl_fixe
         return;
     }
 
+    bool over = false;
     for (int i = app->hitbox_count - 1; i >= 0; i--) {
         HitBox *hb = &app->hitboxes[i];
         if (hb->nav_idx >= 0 &&
             app->pointer_x >= hb->x && app->pointer_x <= hb->x + hb->w &&
             app->pointer_y >= hb->y && app->pointer_y <= hb->y + hb->h) {
+            over = true;
             if (app->selected_idx != hb->nav_idx || !app->sel_shown) {
                 app->selected_idx = hb->nav_idx;
                 app->sel_shown = true;
                 damage_all(app);
             }
+            app->sel_by_pointer = true;
             break;
         }
     }
+    /* the pointer off every item: the outline it put there goes (owner, 2026-11-07: "the outline
+     * stays even tho the cursor isnt on the thing anymore"); a panel with a search keeps it, as
+     * there it is what Enter opens */
+    if (!over) pointer_unselect(app);
 }
 
 static void pointer_button(void *data, struct wl_pointer *p, uint32_t s, uint32_t t,
@@ -4117,6 +4139,7 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
         if (app->sel_shown) move_selection(app, dx, dy, page);
     }
     app->sel_shown = true;
+    app->sel_by_pointer = false;
     damage_all(app);
     return;
 
