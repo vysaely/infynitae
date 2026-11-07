@@ -142,7 +142,7 @@ fn a_big_child_does_not_cover_another_apps_window() {
             .unwrap();
     let ws = r.ls.state.core().stage().tree(w).unwrap().geometry.size;
     let s = open(&mut r, "S", None); // another app's window, placed beside W
-    let d = open_sized(&mut r, "D", Some(w_idx), (ws.w * 3, ws.h * 3));
+    let d = open_sized(&mut r, "D", Some(w_idx), (ws.w * 3 / 2, ws.h * 3 / 2));
     assert_eq!(r.ls.state.core().toplevel_parent(d), Some(w));
     let rect = |id: ElementId| {
         let core = r.ls.state.core();

@@ -1832,10 +1832,10 @@ impl Core {
             }
             let size = (i64::from(g.size.w), i64::from(g.size.h));
             let strangers = self.other_apps_rects(id, parent);
-            if overlaps_any(&strangers, (x, y, size.0, size.1))
-                && let Some((fx, fy)) = self.free_spot_near(&strangers, size, (x, y))
-            {
-                (x, y) = (fx, fy);
+            if overlaps_any(&strangers, (x, y, size.0, size.1)) {
+                (x, y) = self
+                    .free_spot_near(&strangers, size, (x, y))
+                    .unwrap_or_else(|| beside_all(&strangers, (x, y)));
             }
             return Some(CanvasPoint {
                 x: x - i64::from(g.loc.x),
