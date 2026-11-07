@@ -3353,6 +3353,7 @@ mod tests {
             ToplevelCapabilities {
                 fullscreen: true,
                 maximize: true,
+                minimize: true,
                 ..ToplevelCapabilities::default()
             }
         );
