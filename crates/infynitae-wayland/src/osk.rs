@@ -7,8 +7,8 @@
 //!
 //! A press (a finger's tap; with `OSK="always"` a click as well) that leaves a text field active
 //! within [`PRESS_WINDOW`] shows it; the field going away for longer than [`HIDE_GRACE`] hides it.
-//! The panel's keyboard switch (`infynitae msg osk`) shows or hides it by hand, and one shown by
-//! hand stays until hidden by hand. `$XDG_RUNTIME_DIR/infynitae/osk-visible` exists while shown.
+//! The panel's keyboard switch (`infynitae msg osk`) shows or hides it by hand; one shown by
+//! hand also goes when a field that was active goes (squeekboard hides itself then). `$XDG_RUNTIME_DIR/infynitae/osk-visible` exists while shown.
 
 use std::time::{Duration, Instant};
 
@@ -49,7 +49,8 @@ pub struct OskState {
     pub mode: OskMode,
     pressed_at: Option<Instant>,
     shown: bool,
-    by_hand: bool,
+    /// A text field was active while it was shown (one shown by hand with none yet stays).
+    had_field: bool,
     gone_since: Option<Instant>,
 }
 
@@ -96,10 +97,11 @@ impl WaylandState {
                 self.osk_show(true, false);
             }
         }
-        if self.osk.shown && !self.osk.by_hand {
+        if self.osk.shown {
             if active {
                 self.osk.gone_since = None;
-            } else {
+                self.osk.had_field = true;
+            } else if self.osk.had_field {
                 let since = *self.osk.gone_since.get_or_insert(now);
                 if now.duration_since(since) > HIDE_GRACE {
                     self.osk_show(false, false);
@@ -121,7 +123,7 @@ impl WaylandState {
             if by_hand { " by hand" } else { "" }
         );
         self.osk.shown = on;
-        self.osk.by_hand = on && by_hand;
+        self.osk.had_field = on && !by_hand;
         self.osk.gone_since = None;
         self.spawn_action_with("osk", if on { "show" } else { "hide" });
         if let Some(dir) = std::env::var_os("XDG_RUNTIME_DIR") {
