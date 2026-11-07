@@ -257,6 +257,10 @@ pub enum ProtocolError {
 }
 
 /// Where the placement policy puts an ordinary toplevel (INV-STAGE-1 writer (a), C12.F1).
+/// The windows kept on top unless `KEEP_ON_TOP` says otherwise: Firefox's and Chromium's
+/// picture-in-picture, by their titles.
+pub(crate) const DEFAULT_KEEP_ON_TOP: &[&str] = &["picture-in-picture", "picture in picture"];
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PlacementPolicy {
     /// The window-geometry origin at the placement output's camera centre, decided at the
@@ -1167,6 +1171,7 @@ impl Core {
             s[..end].to_owned()
         };
         let was_notification = self.is_notification(id);
+        let was_on_top = self.stage.is_above(id);
         self.stage
             .set_meta(
                 id,
@@ -1184,6 +1189,17 @@ impl Core {
             && let Some(at) = self.notification_anchor(id, &tree)
         {
             self.place_by_shell(id, at, &mut out)?;
+        }
+        // picture-in-picture says what it is by its title: kept on top from then on, and put
+        // in the corner if it was already showing somewhere else
+        if !was_on_top && self.named_on_top(id) {
+            self.set_on_top(id, true);
+            if self.stage.mapped(id).is_some()
+                && let Some(tree) = self.stage.tree(id).cloned()
+                && let Some(at) = self.on_top_anchor(&tree)
+            {
+                self.place_by_shell(id, at, &mut out)?;
+            }
         }
         Ok(out)
     }
@@ -1811,6 +1827,11 @@ impl Core {
     /// free one. A child may still cover its parent and its own app's windows; a notification
     /// stacks in its corner; the `center` policy stacks every window in the middle by choice.
     fn first_map_anchor(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
+        if self.stage.is_above(id) {
+            return self
+                .on_top_anchor(tree)
+                .or_else(|| self.first_map_spot(id, tree));
+        }
         let at = self.first_map_spot(id, tree)?;
         // `center` asks for every window in the middle of the view, stacked: the rule is off there
         if self.is_notification(id) || self.placement == PlacementPolicy::CentredInView {
@@ -2197,6 +2218,127 @@ impl Core {
     /// already placed.
     pub fn set_placement_policy(&mut self, policy: PlacementPolicy) {
         self.placement = policy;
+    }
+
+    /// The titles or app_ids of windows kept on top from the moment they say so
+    /// (`KEEP_ON_TOP`, compared ignoring case); a window already kept on top stays so.
+    pub fn set_keep_on_top(&mut self, names: &[&str]) {
+        self.keep_on_top = names
+            .iter()
+            .map(|n| n.trim().to_lowercase())
+            .filter(|n| !n.is_empty())
+            .collect();
+    }
+
+    /// Whether the window's title or app_id is one of [`Core::set_keep_on_top`]'s.
+    fn named_on_top(&self, id: ElementId) -> bool {
+        let Some(meta) = self.stage.meta(id) else {
+            return false;
+        };
+        [meta.title.as_deref(), meta.app_id.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|n| self.keep_on_top.iter().any(|k| n.eq_ignore_ascii_case(k)))
+    }
+
+    /// A window kept on top opens in the usable view's bottom right corner, over whatever is
+    /// there (a picture-in-picture's place).
+    fn on_top_anchor(&self, tree: &SurfaceTree) -> Option<CanvasPoint> {
+        const MARGIN: f64 = 24.0;
+        let output = self.outputs.first()?;
+        let camera = self.cameras.camera_for_output(output.id)?;
+        let (centre, zoom) = (self.cameras.center(camera)?, self.cameras.zoom(camera)?);
+        let extent = output.logical_extent();
+        let (ux, uy, uw, uh) = self
+            .usable_area(output.id)
+            .unwrap_or((0.0, 0.0, extent.0, extent.1));
+        let q = Q16_ONE as f64;
+        let g = tree.geometry;
+        let x = centre.x as f64 / q + (ux + uw - MARGIN - extent.0 / 2.0) / zoom;
+        let y = centre.y as f64 / q + (uy + uh - MARGIN - extent.1 / 2.0) / zoom;
+        CanvasPoint::new(
+            x.round() as i64 - i64::from(g.size.w),
+            y.round() as i64 - i64::from(g.size.h),
+        )
+    }
+
+    /// Keeps `id` on top, or no longer: it goes above every other window at once and stays
+    /// there, keeping its place on the screen when the view moves.
+    pub(crate) fn set_on_top(&mut self, id: ElementId, on: bool) {
+        if self.stage.is_above(id) == on || self.stage.set_above(id, on).is_err() {
+            return;
+        }
+        if on {
+            self.note_on_top_views();
+        }
+        self.invalidate_all_frames();
+    }
+
+    /// Notes every camera's centre and zoom now: what the windows kept on top follow from.
+    fn note_on_top_views(&mut self) {
+        self.on_top_view.clear();
+        for camera in 0..self.cameras.len() {
+            if let (Some(c), Some(z)) = (self.cameras.center(camera), self.cameras.zoom(camera)) {
+                self.on_top_view.push((camera, c, z));
+            }
+        }
+    }
+
+    /// After `camera` moved: each window kept on top that was in its view keeps its place on
+    /// the screen (picture-in-picture stays where it was put while the canvas pans under it).
+    pub(crate) fn on_top_follow(&mut self, camera: usize, out: &mut Vec<Effect>) {
+        let (Some(now), Some(zoom)) = (self.cameras.center(camera), self.cameras.zoom(camera))
+        else {
+            return;
+        };
+        let Some(i) = self.on_top_view.iter().position(|(c, _, _)| *c == camera) else {
+            self.note_on_top_views();
+            return;
+        };
+        let (_, was, was_zoom) = self.on_top_view[i];
+        self.on_top_view[i] = (camera, now, zoom);
+        if (was.x, was.y, was_zoom.to_bits()) == (now.x, now.y, zoom.to_bits()) {
+            return;
+        }
+        let Some(extent) = self
+            .cameras
+            .bound_output(camera)
+            .and_then(|o| self.output(o))
+            .map(|o| o.logical_extent())
+        else {
+            return;
+        };
+        let q = Q16_ONE as f64;
+        let (wx, wy) = (was.x as f64 / q, was.y as f64 / q);
+        let half = (extent.0 / 2.0 / was_zoom, extent.1 / 2.0 / was_zoom);
+        for id in self.stage.kept_on_top() {
+            if self.stage.mapped(id).is_none()
+                || self.fullscreen_of(id).is_some()
+                || self.input.interaction.element() == Some(id)
+            {
+                continue;
+            }
+            let (Some(a), Some(t)) = (self.stage.anchor(id), self.stage.tree(id)) else {
+                continue;
+            };
+            let s = t.geometry.size;
+            let mid = (
+                a.x as f64 + f64::from(s.w) / 2.0,
+                a.y as f64 + f64::from(s.h) / 2.0,
+            );
+            // only one that was on this screen
+            if (mid.0 - wx).abs() > half.0 || (mid.1 - wy).abs() > half.1 {
+                continue;
+            }
+            let k = was_zoom / zoom;
+            let to = CanvasPoint::new(
+                (now.x as f64 / q + (a.x as f64 - wx) * k).round() as i64,
+                (now.y as f64 / q + (a.y as f64 - wy) * k).round() as i64,
+            );
+            if let Some(to) = to {
+                let _ = self.place_by_shell(id, to, out);
+            }
+        }
     }
 
     /// A mapped window being destroyed: its app's last window centre, for its successor.

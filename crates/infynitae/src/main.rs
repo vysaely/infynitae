@@ -432,6 +432,9 @@ fn main() -> ExitCode {
                             !matches!(val.to_lowercase().as_str(), "0" | "false" | "off" | "no");
                         core.set_teleport_on_open(enabled);
                     }
+                    "KEEP_ON_TOP" => {
+                        core.set_keep_on_top(&val.split(',').collect::<Vec<_>>());
+                    }
                     "PLACEMENT_POLICY" => match val.to_lowercase().as_str() {
                         "center" | "centred" | "centered" => core
                             .set_placement_policy(infynitae_core::PlacementPolicy::CentredInView),

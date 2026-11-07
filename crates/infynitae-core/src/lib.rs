@@ -398,6 +398,12 @@ pub struct Core {
     scale_clock: Option<scale::SessionTime>,
     /// The placement policy of elements not yet mapped (INV-STAGE-1 writer (a)).
     placement: protocol::PlacementPolicy,
+    /// Titles or app_ids (lowercase) of windows kept on top from the start (`KEEP_ON_TOP`):
+    /// picture-in-picture by default (owner, 2026-11-07).
+    keep_on_top: Vec<String>,
+    /// Each camera's centre and zoom when the windows kept on top last followed it: they keep
+    /// their place on the screen when the view moves.
+    on_top_view: Vec<(usize, geom::CanvasPos, f64)>,
     /// OBJ-19: the protocol-fullscreen states, at most one per output and one per element. The
     /// only store of fullscreen state; written by `core::protocol` alone (INV-PRES-1).
     fullscreen: Vec<protocol::FullscreenState>,
@@ -550,6 +556,11 @@ impl Core {
                 scale_passes: (0, 0),
                 scale_clock: None,
                 placement: protocol::PlacementPolicy::default(),
+                keep_on_top: protocol::DEFAULT_KEEP_ON_TOP
+                    .iter()
+                    .map(|s| s.to_string())
+                    .collect(),
+                on_top_view: Vec::new(),
                 fullscreen: Vec::new(),
                 premap_fullscreen: Vec::new(),
                 restore_offers: Vec::new(),

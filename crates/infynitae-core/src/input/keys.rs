@@ -39,6 +39,7 @@ pub const KEY_E: u32 = 18;
 pub const KEY_I: u32 = 23;
 pub const KEY_O: u32 = 24;
 pub const KEY_P: u32 = 25;
+pub const KEY_K: u32 = 37;
 pub const KEY_T: u32 = 20;
 pub const KEY_C: u32 = 46;
 pub const KEY_S: u32 = 31;
@@ -138,6 +139,9 @@ pub enum KeyAction {
     /// Super+Shift+Enter (owner decision 2026-10-21): the focused window enters or leaves native
     /// fullscreen on the pointer's output, through the same path as its own request.
     ToggleFullscreen,
+    /// Super+Shift+K (2026-11-07): the focused window is kept on top of the others and keeps its
+    /// place on the screen when the view moves, or no longer (picture-in-picture is from the start)
+    ToggleKeepOnTop,
     /// Super+Delete (owner, 2026-11-01; Super+Shift+C before, Shift+Delete until 2026-10-25): the focused window's
     /// client is ended now — its connection is cut and its process killed — for an app that does
     /// not answer a close. The adapter falls back to a close request for an X11 window (all of
@@ -317,6 +321,7 @@ pub const ACTION_NAMES: &[(&str, KeyAction)] = &[
     ("RECORD", KeyAction::ToggleRecording),
     ("FIT", KeyAction::FitToggle),
     ("FULLSCREEN", KeyAction::ToggleFullscreen),
+    ("KEEP_ON_TOP", KeyAction::ToggleKeepOnTop),
     ("CLOSE", KeyAction::CloseFocused),
     ("FORCE_CLOSE", KeyAction::ForceCloseFocused),
     ("RECENTER", KeyAction::Recenter),
@@ -519,6 +524,11 @@ pub fn resolve_key_binding(
     // Super+A: the control menu; Logo, never during interaction
     if key == KEY_A && mods.logo && !mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
         return Some(KeyAction::ControlMenu);
+    }
+    // Super+Shift+K: the focused window kept on top, or no longer; Logo+Shift, never during
+    // interaction
+    if key == KEY_K && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
+        return Some(KeyAction::ToggleKeepOnTop);
     }
     // Super+Shift+P: toggle privacy mode; Logo+Shift, never during interaction
     if key == KEY_P && mods.logo && mods.shift && !mods.ctrl && !mods.alt && !interaction_active {
@@ -1200,6 +1210,7 @@ mod tests {
             (KEY_P, logo_alt, KeyAction::ToggleRecording),
             (KEY_R, logo_alt, KeyAction::ToggleRecording),
             (KEY_P, logo_shift, KeyAction::TogglePrivacy),
+            (KEY_K, logo_shift, KeyAction::ToggleKeepOnTop),
             (KEY_C, logo_alt, KeyAction::SaveReplay),
         ];
         for (key, m, action) in cases {

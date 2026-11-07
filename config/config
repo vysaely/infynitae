@@ -118,6 +118,12 @@ PLACEMENT_POLICY="cluster"
     #    center    the middle of the view
     #    origin    the canvas origin
 
+KEEP_ON_TOP="Picture-in-Picture, Picture in picture"
+    # Windows kept on top of the others from the moment they open, by title or app id, comma
+    # separated: they open in the view's bottom right corner and keep their place on the screen
+    # when the view moves. Super+Shift+K does it for any window (and undoes it).
+    # default: Picture-in-Picture, Picture in picture   (Firefox's and Chromium's)
+
 SUPER_ENTER_ACTION="maximize"
     # Super+Enter
     # default: maximize

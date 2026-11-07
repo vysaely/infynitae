@@ -1240,6 +1240,10 @@ impl WaylandState {
                                 );
                                 self.core.set_fullscreen_pan(enabled);
                             }
+                            "KEEP_ON_TOP" => {
+                                self.core
+                                    .set_keep_on_top(&val.split(',').collect::<Vec<_>>());
+                            }
                             "PLACEMENT_POLICY" => match val.to_lowercase().as_str() {
                                 "center" | "centred" | "centered" => {
                                     self.core.set_placement_policy(

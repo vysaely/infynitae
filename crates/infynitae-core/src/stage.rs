@@ -95,6 +95,9 @@ struct Record {
     /// metadata for the shell, never authority. Out of line, like `layout`; `None` until set.
     meta: Option<Box<ToplevelMeta>>,
     saved_floating: Option<(CanvasPoint, crate::geom::LocalSize)>,
+    /// Kept on top (picture-in-picture, or Super+Shift+K): above every window that is not, in
+    /// the z-order and so in the picture and the hit test (owner, 2026-11-07).
+    above: bool,
 }
 
 /// What a toplevel calls itself (`xdg_toplevel.set_title` / `set_app_id`): derived protocol
@@ -323,6 +326,7 @@ impl Stage {
             default_placed: false,
             meta: None,
             saved_floating: None,
+            above: false,
         });
         id
     }
@@ -383,10 +387,44 @@ impl Stage {
             .find(|&id| self.state(id) == Some(Lifecycle::Mapped))
     }
 
-    /// Puts the element on top of the z-order (map and remap, INV-STAGE-5).
+    /// Puts the element on top of the z-order (map and remap, INV-STAGE-5); one that is not
+    /// kept on top goes only as high as just under the lowest one that is.
     pub(crate) fn raise(&mut self, id: ElementId) {
         self.z.retain(|&e| e != id);
-        self.z.push(id);
+        if self.is_above(id) {
+            self.z.push(id);
+        } else {
+            let at = self
+                .z
+                .iter()
+                .position(|&e| self.is_above(e))
+                .unwrap_or(self.z.len());
+            self.z.insert(at, id);
+        }
+    }
+
+    /// Whether the element is kept on top.
+    pub fn is_above(&self, id: ElementId) -> bool {
+        self.record(id).is_some_and(|r| r.above)
+    }
+
+    /// Keeps the element on top, or no longer; an element in the z-order takes its place at once
+    /// (on top of everything, or just under what is kept on top).
+    pub(crate) fn set_above(&mut self, id: ElementId, on: bool) -> Result<(), StaleElement> {
+        self.record_mut(id).ok_or(StaleElement)?.above = on;
+        if self.z.contains(&id) {
+            self.raise(id);
+        }
+        Ok(())
+    }
+
+    /// The elements kept on top, bottom to top. Allocates.
+    pub(crate) fn kept_on_top(&self) -> Vec<ElementId> {
+        self.z
+            .iter()
+            .copied()
+            .filter(|&e| self.is_above(e))
+            .collect()
     }
 
     /// Destroy purges every reference; idempotent (INV-STAGE-4). Returns whether it existed.
@@ -467,6 +505,29 @@ mod tests {
                 assert_eq!(s.state(id), None);
             }
         }
+    }
+
+    #[test]
+    fn a_window_kept_on_top_stays_above_a_raised_one() {
+        let mut s = Stage::new(InstanceId(1));
+        let a = s.create();
+        let b = s.create();
+        let c = s.create();
+        s.raise(a);
+        s.raise(b);
+        s.set_above(a, true).unwrap();
+        assert_eq!(s.z_order(), &[b, a]);
+        s.raise(b);
+        s.raise(c);
+        assert_eq!(
+            s.z_order(),
+            &[b, c, a],
+            "a raise went over the window kept on top"
+        );
+        s.set_above(a, false).unwrap();
+        assert_eq!(s.z_order(), &[b, c, a], "letting go moves nothing down");
+        s.raise(b);
+        assert_eq!(s.z_order(), &[c, a, b]);
     }
 
     #[test]

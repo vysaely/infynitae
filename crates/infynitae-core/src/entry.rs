@@ -786,6 +786,13 @@ impl Core {
                 return;
             }
             KeyAction::ToggleFullscreen => self.toggle_fullscreen(),
+            KeyAction::ToggleKeepOnTop => {
+                if let Some(id) = self.focus.target() {
+                    let on = !self.stage.is_above(id);
+                    self.set_on_top(id, on);
+                }
+                return;
+            }
             KeyAction::ForceCloseFocused => self
                 .close_target()
                 .map(Effect::ForceClose)
@@ -1792,6 +1799,7 @@ impl Core {
     ) {
         self.update_lattice(output);
         self.invalidate_frame(output);
+        self.on_top_follow(camera, out);
         self.visibility_pass_camera(camera, out);
         let on_it = matches!(self.pointer, PointerState::Located { output: o, .. } if o == output);
         if on_it && !self.input.interaction.active() {
@@ -1960,6 +1968,7 @@ impl Core {
         // F-LATTICE-1: the reference is kept while panning, unless the bound is exceeded
         self.update_lattice(output);
         self.invalidate_frame(output);
+        self.on_top_follow(camera, out);
         self.visibility_pass_camera(camera, out);
         if self.pan_mode == crate::navigation::PanMode::Free
             || self.pan_mode == crate::navigation::PanMode::Rts
