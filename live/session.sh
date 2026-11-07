@@ -234,11 +234,16 @@ if command -v xdg-user-dirs-update >/dev/null 2>&1; then
 fi
 
 # 6e2. The on-screen keyboard (squeekboard, OSK) opens when a text field is pressed: the
-# compositor asks (launch.sh osk), so nothing runs before the first time. Its own showing, for
-# every active field, stays off; an older session's keyboard goes.
+# compositor asks (launch.sh osk). It runs hidden from the start, as the input method: without
+# one the compositor never hears that a field is active. Its own showing, for every active
+# field, stays off. OSK="off": it starts only when the panel's switch asks for it.
 if command -v squeekboard >/dev/null 2>&1; then
     gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled false 2>/dev/null || true
     pkill -x squeekboard 2>/dev/null || true
+    case "${OSK:-auto}" in
+        off|false|no|never) ;;
+        *) squeekboard >/dev/null 2>&1 & ;;
+    esac
 fi
 
 # 6e3. The battery's charge limit (BATTERY_LIMIT: a percentage, or off), where it is supported

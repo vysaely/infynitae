@@ -1,8 +1,9 @@
 //! The on-screen keyboard (squeekboard) opens when a text field is pressed, not whenever one is
 //! active (owner, 2026-11-07, on the Yoga: squeekboard by itself shows for every focused field,
-//! one an app focuses on its own included). squeekboard runs with its own showing off; the
-//! compositor, which sees the press, asks it to show (`live/launch.sh osk show`, its
-//! `sm.puri.OSK0.SetVisible`).
+//! one an app focuses on its own included). squeekboard runs hidden from the session's start
+//! with its own showing off: it is the input method, without which no text field is active
+//! here (smithay drops text-input requests while there is none). The compositor, which sees
+//! the press, asks it to show (`live/launch.sh osk show`, its `sm.puri.OSK0.SetVisible`).
 //!
 //! A press (a finger's tap; with `OSK="always"` a click as well) that leaves a text field active
 //! within [`PRESS_WINDOW`] shows it; the field going away for longer than [`HIDE_GRACE`] hides it.

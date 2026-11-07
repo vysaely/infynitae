@@ -70,7 +70,8 @@ case "$ACTION" in
     osk)
         # the on-screen keyboard (squeekboard) shown or hidden; the compositor asks when a text
         # field is pressed or goes away, the panel's switch by hand. squeekboard's own showing
-        # (for every active field) stays off; it starts on the first show and keeps running.
+        # (for every active field) stays off. The session starts it hidden (session.sh); one
+        # that is not running (OSK="off", or it ended) starts here and keeps running.
         command -v squeekboard >/dev/null 2>&1 || {
             [ "$2" = show ] && notify-send -a Infynitae "On-screen keyboard" \
                 "It needs squeekboard: sudo pacman -S squeekboard" 2>/dev/null
