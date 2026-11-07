@@ -185,6 +185,20 @@ typedef struct {
 } HitBox;
 
 struct EdgeApp;
+struct EdgeOutput;
+
+/* One of a screen's two images: the compositor shows one while the other is drawn (owner,
+ * 2026-11-08: dragging in a panel "lags, disappears, appears": one image was cleared and redrawn
+ * while it was on the screen). busy: the compositor holds it (until its release). */
+typedef struct {
+    struct EdgeOutput *out;
+    struct wl_buffer *buffer;
+    void *data;
+    size_t size;
+    int32_t w, h;
+    bool busy;
+    int dx, dy, dw, dh;   /* what was drawn in it last (cleared before drawing again) */
+} ShmBuf;
 
 typedef struct EdgeOutput {
     struct EdgeApp *app;
@@ -199,13 +213,13 @@ typedef struct EdgeOutput {
     struct zwlr_layer_surface_v1 *layer_surface;
     struct wl_callback *frame_cb;
 
-    struct wl_buffer *buffer;
-    void *shm_data;
-    size_t shm_size;
-    int32_t buf_w;
-    int32_t buf_h;
+    ShmBuf bufs[2];
+    /* at most one drawing a frame: while one is on its way (frame_cb) a change only marks it
+     * dirty, and it is drawn when the compositor shows the last */
+    bool dirty;
+    int64_t frame_ns;
 
-    int prev_dx, prev_dy, prev_dw, prev_dh;
+    int prev_dx, prev_dy, prev_dw, prev_dh;   /* what the last image sent showed */
     int input_x, input_y, input_w, input_h;
 
     /* Closed over a fullscreen window: no buffer at all, so the window's frames go to the
@@ -2016,9 +2030,10 @@ static void update_surface_input_region(EdgeOutput *out) {
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             out->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
     } else {
-        if (app->kb_grab) {
+        if (app->kb_grab || app->editing) {
             /* opened by a key, it holds the keyboard: the whole screen takes the pointer too, so
-             * a click anywhere else reaches handle_click_at and closes it */
+             * a click anywhere else reaches handle_click_at and closes it; and while its layout is
+             * edited, a drag past its edge keeps going */
             wl_region_add(reg, 0, 0, out->width, out->height);
         } else if (out->input_w > 0 && out->input_h > 0) {
             wl_region_add(reg, out->input_x, out->input_y, out->input_w, out->input_h);
@@ -2035,15 +2050,18 @@ static void update_surface_input_region(EdgeOutput *out) {
 /* ========================================================================== */
 /* Renderer (redraws only damaged rectangles)                                 */
 /* ========================================================================== */
-static bool allocate_buffer(EdgeOutput *out) {
-    if (out->buffer && out->buf_w == out->width && out->buf_h == out->height) return true;
-    if (out->buffer) {
-        wl_buffer_destroy(out->buffer);
-        out->buffer = NULL;
+static void buffer_release(void *data, struct wl_buffer *buffer);
+static const struct wl_buffer_listener buffer_listener = {.release = buffer_release};
+
+static bool allocate_buffer(EdgeOutput *out, ShmBuf *sb) {
+    if (sb->buffer && sb->w == out->width && sb->h == out->height) return true;
+    if (sb->buffer) {
+        wl_buffer_destroy(sb->buffer);
+        sb->buffer = NULL;
     }
-    if (out->shm_data) {
-        munmap(out->shm_data, out->shm_size);
-        out->shm_data = NULL;
+    if (sb->data) {
+        munmap(sb->data, sb->size);
+        sb->data = NULL;
     }
 
     int stride = out->width * 4;
@@ -2062,15 +2080,20 @@ static bool allocate_buffer(EdgeOutput *out) {
         return false;
     }
     struct wl_shm_pool *pool = wl_shm_create_pool(out->app->shm, fd, size);
-    out->buffer = wl_shm_pool_create_buffer(pool, 0, out->width, out->height, stride, WL_SHM_FORMAT_ARGB8888);
+    sb->buffer = wl_shm_pool_create_buffer(pool, 0, out->width, out->height, stride, WL_SHM_FORMAT_ARGB8888);
     wl_shm_pool_destroy(pool);
     close(fd);
+    wl_buffer_add_listener(sb->buffer, &buffer_listener, sb);
 
     memset(data, 0, size);
-    out->shm_data = data;
-    out->shm_size = size;
-    out->buf_w = out->width;
-    out->buf_h = out->height;
+    sb->out = out;
+    sb->data = data;
+    sb->size = size;
+    sb->w = out->width;
+    sb->h = out->height;
+    sb->busy = false;
+    sb->dx = sb->dy = sb->dw = sb->dh = 0;  /* all clear */
+    /* the screen's size changed: what the compositor has is redrawn whole */
     out->prev_dx = 0;
     out->prev_dy = 0;
     out->prev_dw = out->width;
@@ -3361,6 +3384,25 @@ static void relayout(EdgeApp *app) {
     cairo_surface_destroy(ms);
 }
 
+static void render_output(EdgeOutput *out);
+static int64_t now_ns(void);
+
+static void frame_done(void *data, struct wl_callback *cb, uint32_t time) {
+    (void)time;
+    EdgeOutput *out = data;
+    wl_callback_destroy(cb);
+    if (out->frame_cb == cb) out->frame_cb = NULL;
+    if (out->dirty) render_output(out);
+}
+static const struct wl_callback_listener frame_listener = {.done = frame_done};
+
+static void buffer_release(void *data, struct wl_buffer *buffer) {
+    (void)buffer;
+    ShmBuf *sb = data;
+    sb->busy = false;
+    if (sb->out && sb->out->dirty && !sb->out->frame_cb) render_output(sb->out);
+}
+
 static void render_output(EdgeOutput *out) {
     if (!out->configured || out->width <= 0 || out->height <= 0) return;
 
@@ -3375,6 +3417,9 @@ static void render_output(EdgeOutput *out) {
             wl_surface_attach(out->surface, NULL, 0, 0);
             wl_surface_commit(out->surface);
             out->unmapped = true;
+            /* nothing of them is shown now: both images may be drawn in */
+            out->bufs[0].busy = out->bufs[1].busy = false;
+            out->dirty = false;
         }
         return;
     }
@@ -3387,24 +3432,45 @@ static void render_output(EdgeOutput *out) {
         out->prev_dy = 0;
         out->prev_dw = out->width;
         out->prev_dh = out->height;
+        for (int i = 0; i < 2; i++) {
+            ShmBuf *b = &out->bufs[i];
+            b->dx = 0; b->dy = 0; b->dw = b->w; b->dh = b->h;  /* cleared whole before its next use */
+        }
         wl_surface_commit(out->surface);
         return;
     }
 
-    if (!allocate_buffer(out)) return;
+    /* the last image not shown yet: drawn when it is (frame_done), or in 100 ms at the latest */
+    if (out->frame_cb && now_ns() - out->frame_ns < 100000000) {
+        out->dirty = true;
+        return;
+    }
+    if (out->frame_cb) {
+        wl_callback_destroy(out->frame_cb);
+        out->frame_cb = NULL;
+    }
+    ShmBuf *sb = !out->bufs[0].busy ? &out->bufs[0] : !out->bufs[1].busy ? &out->bufs[1] : NULL;
+    if (!sb) {
+        out->dirty = true;  /* both held: drawn at the next release */
+        return;
+    }
+    out->dirty = false;
+    int64_t t0 = now_ns();
+    if (!allocate_buffer(out, sb)) return;
 
     EdgeApp *app = out->app;
     int w = out->width;
     int h = out->height;
 
     cairo_surface_t *surf = cairo_image_surface_create_for_data(
-        (unsigned char *)out->shm_data, CAIRO_FORMAT_ARGB32, w, h, w * 4);
+        (unsigned char *)sb->data, CAIRO_FORMAT_ARGB32, w, h, w * 4);
     cairo_t *cr = cairo_create(surf);
 
-    if (out->prev_dw > 0 && out->prev_dh > 0) {
+    /* this image's own last drawing goes (it may be two drawings old) */
+    if (sb->dw > 0 && sb->dh > 0) {
         cairo_save(cr);
         cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-        cairo_rectangle(cr, out->prev_dx, out->prev_dy, out->prev_dw, out->prev_dh);
+        cairo_rectangle(cr, sb->dx, sb->dy, sb->dw, sb->dh);
         cairo_fill(cr);
         cairo_restore(cr);
     }
@@ -3417,10 +3483,19 @@ static void render_output(EdgeOutput *out) {
     cairo_destroy(cr);
     cairo_surface_destroy(surf);
 
+    /* changed against what is shown: the last image's drawing, this one's, and what this image
+     * had (cleared now) */
     int dmg_x = out->prev_dx < cur_dx ? out->prev_dx : cur_dx;
     int dmg_y = out->prev_dy < cur_dy ? out->prev_dy : cur_dy;
     int dmg_r = (out->prev_dx + out->prev_dw) > (cur_dx + cur_dw) ? (out->prev_dx + out->prev_dw) : (cur_dx + cur_dw);
     int dmg_b = (out->prev_dy + out->prev_dh) > (cur_dy + cur_dh) ? (out->prev_dy + out->prev_dh) : (cur_dy + cur_dh);
+    if (sb->dw > 0 && sb->dh > 0) {
+        if (sb->dx < dmg_x) dmg_x = sb->dx;
+        if (sb->dy < dmg_y) dmg_y = sb->dy;
+        if (sb->dx + sb->dw > dmg_r) dmg_r = sb->dx + sb->dw;
+        if (sb->dy + sb->dh > dmg_b) dmg_b = sb->dy + sb->dh;
+    }
+    sb->dx = cur_dx; sb->dy = cur_dy; sb->dw = cur_dw; sb->dh = cur_dh;
     if (dmg_x < 0) dmg_x = 0;
     if (dmg_y < 0) dmg_y = 0;
     if (dmg_r > w) dmg_r = w;
@@ -3436,13 +3511,19 @@ static void render_output(EdgeOutput *out) {
     out->input_h = cur_dh;
 
     update_surface_input_region(out);
-    wl_surface_attach(out->surface, out->buffer, 0, 0);
+    wl_surface_attach(out->surface, sb->buffer, 0, 0);
+    sb->busy = true;
+    out->frame_cb = wl_surface_frame(out->surface);
+    wl_callback_add_listener(out->frame_cb, &frame_listener, out);
+    out->frame_ns = now_ns();
     if (dmg_r > dmg_x && dmg_b > dmg_y) {
         wl_surface_damage_buffer(out->surface, dmg_x, dmg_y, dmg_r - dmg_x, dmg_b - dmg_y);
     } else {
         wl_surface_damage_buffer(out->surface, 0, 0, 1, 1);
     }
     wl_surface_commit(out->surface);
+    if (getenv("INFYNITAE_EDGE_STATS"))
+        fprintf(stderr, "[infynitae-edge] drawn in %.2f ms\n", (now_ns() - t0) / 1e6);
 }
 
 /* ========================================================================== */
@@ -5105,8 +5186,10 @@ static void registry_global_remove(void *data, struct wl_registry *reg, uint32_t
             if (rm->frame_cb) wl_callback_destroy(rm->frame_cb);
             if (rm->layer_surface) zwlr_layer_surface_v1_destroy(rm->layer_surface);
             if (rm->surface) wl_surface_destroy(rm->surface);
-            if (rm->buffer) wl_buffer_destroy(rm->buffer);
-            if (rm->shm_data) munmap(rm->shm_data, rm->shm_size);
+            for (int i = 0; i < 2; i++) {
+                if (rm->bufs[i].buffer) wl_buffer_destroy(rm->bufs[i].buffer);
+                if (rm->bufs[i].data) munmap(rm->bufs[i].data, rm->bufs[i].size);
+            }
             if (rm->wl_output) wl_output_destroy(rm->wl_output);
             free(rm);
             break;
@@ -5455,8 +5538,13 @@ int main(int argc, char **argv) {
         }
 
         int timeout = (app.open >= 0) ? 1000 : -1;
+        for (EdgeOutput *o = app.outputs; o; o = o->next)
+            if (o->dirty) timeout = 16;
         if (glib_timeout >= 0 && (timeout < 0 || glib_timeout < timeout)) timeout = glib_timeout;
         int ret = poll(pfds, nfds, timeout);
+        /* a screen marked for drawing whose frame never came back (hidden, asleep): drawn now */
+        for (EdgeOutput *o = app.outputs; o; o = o->next)
+            if (o->dirty) render_output(o);
         for (gint i = 0; i < n_glib; i++) gfds[i].revents = pfds[glib_first + i].revents;
         if (g_wake_pipe[0] >= 0 && (pfds[wake_idx].revents & POLLIN)) {
             char drain[64];
