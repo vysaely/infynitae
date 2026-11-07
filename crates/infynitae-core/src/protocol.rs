@@ -1812,7 +1812,9 @@ impl Core {
         }
         // a child window (xdg_toplevel.set_parent: dialogs, an app's second window) opens centred
         // over its mapped parent's window geometry, whatever the policy and whatever its size, kept
-        // in the view. It may cover its parent (owner, 2026-10-24 and 2026-11-03).
+        // in the view. It may cover its parent and its app's other windows (owner, 2026-10-24 and
+        // 2026-11-03), never another app's: one that would (Discord's main window, a child of its
+        // small updater) goes to the nearest spot free of them (owner, 2026-11-07)
         if let Some(parent) = self.toplevel_parent(id)
             && self.stage.mapped(parent).is_some()
             && let (Some(a), Some(pt)) = (self.stage.anchor(parent), self.stage.tree(parent))
@@ -1827,6 +1829,13 @@ impl Core {
             if let Some(view) = self.usable_view() {
                 x = keep_in_range(x, i64::from(g.size.w), view.0, view.2);
                 y = keep_in_range(y, i64::from(g.size.h), view.1, view.3);
+            }
+            let size = (i64::from(g.size.w), i64::from(g.size.h));
+            let strangers = self.other_apps_rects(id, parent);
+            if overlaps_any(&strangers, (x, y, size.0, size.1))
+                && let Some((fx, fy)) = self.free_spot_near(&strangers, size, (x, y))
+            {
+                (x, y) = (fx, fy);
             }
             return Some(CanvasPoint {
                 x: x - i64::from(g.loc.x),
@@ -1962,6 +1971,36 @@ impl Core {
             x: chosen_gx,
             y: chosen_gy,
         })
+    }
+
+    /// The window-geometry rects of the mapped windows of other apps than `id`'s and `parent`'s
+    /// (`window_rects_except`, less `parent` and the windows sharing either's app id).
+    fn other_apps_rects(&self, id: ElementId, parent: ElementId) -> Vec<(i64, i64, i64, i64)> {
+        let app = |e: ElementId| {
+            self.stage
+                .meta(e)
+                .and_then(|m| m.app_id.as_deref())
+                .map(str::to_ascii_lowercase)
+        };
+        let family = [app(id), app(parent)];
+        let mut out = Vec::new();
+        for elem in self.stage.mapped_elements() {
+            if elem == id || elem == parent {
+                continue;
+            }
+            if let Some(a) = app(elem)
+                && family.iter().any(|f| f.as_deref() == Some(a.as_str()))
+            {
+                continue;
+            }
+            if let (Some(a), Some(t)) = (self.stage.anchor(elem), self.stage.tree(elem)) {
+                let (w, h) = (i64::from(t.geometry.size.w), i64::from(t.geometry.size.h));
+                if w > 0 && h > 0 {
+                    out.push((a.x, a.y, a.x.saturating_add(w), a.y.saturating_add(h)));
+                }
+            }
+        }
+        out
     }
 
     /// The window-geometry rects `(x0, y0, x1, y1)` of every mapped window but `id`.

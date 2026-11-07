@@ -123,3 +123,37 @@ fn a_child_nearly_its_parents_size_takes_its_place() {
         "the pop-out {cp:?} is centred over its parent {cw:?}"
     );
 }
+
+/// A big child of a small window (Discord's main window, a child of its small updater) never covers
+/// another app's window beside the parent: it opens at the nearest spot free of them (owner,
+/// 2026-11-07).
+#[test]
+fn a_big_child_does_not_cover_another_apps_window() {
+    let mut r = Rig::x8();
+    r.ls.state
+        .core_mut()
+        .set_placement_policy(infynitae_core::PlacementPolicy::ClusterTiling);
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    let w_idx =
+        r.ls.probe
+            .surfaces
+            .iter()
+            .position(|s| s.label == "W")
+            .unwrap();
+    let ws = r.ls.state.core().stage().tree(w).unwrap().geometry.size;
+    let s = open(&mut r, "S", None); // another app's window, placed beside W
+    let d = open_sized(&mut r, "D", Some(w_idx), (ws.w * 3, ws.h * 3));
+    assert_eq!(r.ls.state.core().toplevel_parent(d), Some(w));
+    let rect = |id: ElementId| {
+        let core = r.ls.state.core();
+        let a = core.stage().anchor(id).unwrap();
+        let g = core.stage().tree(id).unwrap().geometry;
+        let (x, y) = (a.x + i64::from(g.loc.x), a.y + i64::from(g.loc.y));
+        (x, y, x + i64::from(g.size.w), y + i64::from(g.size.h))
+    };
+    let (rs, rd) = (rect(s), rect(d));
+    assert!(
+        rd.2 <= rs.0 || rs.2 <= rd.0 || rd.3 <= rs.1 || rs.3 <= rd.1,
+        "the child {rd:?} covers the other window {rs:?}"
+    );
+}
