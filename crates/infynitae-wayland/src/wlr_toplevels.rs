@@ -85,6 +85,9 @@ impl WaylandState {
         if current.contains(xdg_toplevel::State::Fullscreen) {
             told.states.push(State::Fullscreen as u32);
         }
+        if self.core.stage().is_minimized(id) {
+            told.states.push(State::Minimized as u32);
+        }
         told
     }
 
@@ -292,7 +295,17 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ElementId> for WaylandState {
             Request::UnsetFullscreen => {
                 state.wlr_toplevel_request(id, ToplevelRequest::UnsetFullscreen)
             }
-            // no minimizing on the canvas; set_rectangle is a hint for minimize animations
+            // a taskbar's minimize, as the app's own button (the focused window only)
+            Request::SetMinimized => {
+                let fx = state.core.client_minimize(id);
+                state.apply(&fx);
+            }
+            Request::UnsetMinimized => {
+                if let Ok(fx) = state.core.activation_request(id, true) {
+                    state.apply(&fx);
+                }
+            }
+            // set_rectangle is a hint for minimize animations
             _ => {}
         }
         state.sync_wlr_toplevels();

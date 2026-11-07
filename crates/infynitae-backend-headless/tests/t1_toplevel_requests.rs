@@ -398,7 +398,7 @@ fn requests_while_unmapped_are_not_answered() {
 }
 
 /// What the compositor says it can do is what its policy grants. The client is told once, with
-/// its first configure, and the set is fullscreen alone: no maximize, minimize or window menu.
+/// its first configure: maximize, fullscreen and minimize (2026-11-07), no window menu.
 /// (A client that reads the set shows no control for those.)
 ///
 /// Also recorded: the first configure carries the room the window has, `configure_bounds` of the
@@ -420,8 +420,8 @@ fn the_announced_capabilities_are_what_the_policy_grants() {
     .collect();
     assert_eq!(
         want,
-        vec![2, 3],
-        "maximize and fullscreen, and nothing else"
+        vec![2, 3, 4],
+        "maximize, fullscreen and minimize, no window menu"
     );
     let announced = |t: &T| {
         let mut caps = t.ls.probe.wm_capabilities.clone();

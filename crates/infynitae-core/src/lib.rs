@@ -998,6 +998,7 @@ impl Core {
     /// presentation that is every mapped element, at no extra cost.
     pub(crate) fn focusable_elements(&self) -> Vec<stage::ElementId> {
         let mut live = self.stage.mapped_elements();
+        live.retain(|&e| !self.stage.is_minimized(e));
         if self.presenting() && !self.fullscreen_pan {
             live.retain(|&e| !self.hidden_by_presentation(e));
         }
@@ -1006,7 +1007,9 @@ impl Core {
 
     /// The mapped elements in creation order (for Super+1..9 slot focus).
     pub(crate) fn focusable_elements_in_creation_order(&self) -> Vec<stage::ElementId> {
-        self.stage.mapped_in_creation_order()
+        let mut live = self.stage.mapped_in_creation_order();
+        live.retain(|&e| !self.stage.is_minimized(e));
+        live
     }
 
     /// Windows partitioned into connected spatial clusters (sorted by earliest creation order).

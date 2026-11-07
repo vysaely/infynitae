@@ -95,6 +95,9 @@ struct Record {
     /// metadata for the shell, never authority. Out of line, like `layout`; `None` until set.
     meta: Option<Box<ToplevelMeta>>,
     saved_floating: Option<(CanvasPoint, crate::geom::LocalSize)>,
+    /// Minimized (its app's minimize button, 2026-11-07): still mapped, but not drawn, not
+    /// under the pointer and not focused until it is chosen again.
+    minimized: bool,
 }
 
 /// What a toplevel calls itself (`xdg_toplevel.set_title` / `set_app_id`): derived protocol
@@ -239,6 +242,9 @@ impl Stage {
         id: ElementId,
     ) -> Option<(CanvasPoint, &SurfaceTree, Option<CanvasBox>)> {
         let r = self.record(id)?;
+        if r.minimized {
+            return None;
+        }
         match (r.state, r.anchor, r.tree.as_ref()) {
             (Lifecycle::Mapped, Some(a), Some(t)) => Some((a, t, r.extent.map(|e| at(a, e)))),
             _ => None,
@@ -261,6 +267,9 @@ impl Stage {
     }
 
     fn placed_record(r: &Record) -> Option<Placed<'_>> {
+        if r.minimized {
+            return None;
+        }
         match (r.state, r.anchor, r.tree.as_ref()) {
             (Lifecycle::Mapped, Some(anchor), Some(tree)) => Some(Placed {
                 id: r.id,
@@ -323,6 +332,7 @@ impl Stage {
             default_placed: false,
             meta: None,
             saved_floating: None,
+            minimized: false,
         });
         id
     }
@@ -380,7 +390,17 @@ impl Stage {
             .iter()
             .rev()
             .copied()
-            .find(|&id| self.state(id) == Some(Lifecycle::Mapped))
+            .find(|&id| self.state(id) == Some(Lifecycle::Mapped) && !self.is_minimized(id))
+    }
+
+    /// Whether the element is minimized (mapped, but hidden until chosen again).
+    pub fn is_minimized(&self, id: ElementId) -> bool {
+        self.record(id).is_some_and(|r| r.minimized)
+    }
+
+    pub(crate) fn set_minimized(&mut self, id: ElementId, on: bool) -> Result<(), StaleElement> {
+        self.record_mut(id).ok_or(StaleElement)?.minimized = on;
+        Ok(())
     }
 
     /// Puts the element on top of the z-order (map and remap, INV-STAGE-5).

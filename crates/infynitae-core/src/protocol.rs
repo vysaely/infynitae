@@ -400,6 +400,7 @@ impl Core {
         ToplevelCapabilities {
             fullscreen: true,
             maximize: true,
+            minimize: true,
             ..ToplevelCapabilities::default()
         }
     }
@@ -1207,7 +1208,14 @@ impl Core {
             return Ok(Vec::new());
         }
         let eligible = !self.hidden_by_presentation(id);
+        // a minimized window the user asks for (a validated activation: its app's own window
+        // brought forward, or chosen from a taskbar) comes back
+        let mut back = Vec::new();
+        if validated && eligible && self.stage.is_minimized(id) {
+            self.restore_minimized(id, &mut back);
+        }
         let mut fx = self.focus.activation(id, validated, eligible);
+        fx.splice(0..0, back);
         if !fx.is_empty() {
             fx.extend(self.reconcile_constraints());
         }
@@ -1224,7 +1232,8 @@ impl Core {
     ///   answers it.
     /// - `unset_fullscreen`: ends fullscreen with one configure offering the saved size; when
     ///   not fullscreen, one configure.
-    /// - `set_minimized`: ignored (INV-PROTO-1). `show_window_menu`: ignored, there is none.
+    /// - `set_minimized` goes through [`Core::client_minimize`] (2026-11-07); here it stays
+    ///   ignored. `show_window_menu`: ignored, there is none.
     /// - `set_maximized`, `unset_maximized`, `move`, `resize` from an app go through
     ///   [`Core::client_maximize`] and [`Core::client_drag`] (owner, 2026-11-02); here they stay
     ///   as declined or ignored, for a request with nothing to act on.
@@ -3337,7 +3346,7 @@ mod tests {
         let caps = connected(120).toplevel_capabilities();
         assert_eq!(caps.fullscreen, granted.contains(&FS));
         assert!(caps.maximize, "answered by Core::client_maximize, not here");
-        assert_eq!(caps.minimize, granted.contains(&SetMinimized));
+        assert!(caps.minimize, "answered by Core::client_minimize, not here");
         assert_eq!(caps.window_menu, granted.contains(&ShowWindowMenu));
         assert_eq!(
             caps,
