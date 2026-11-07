@@ -37,7 +37,7 @@ Leave out a part:
   --no-bluetooth       Bluetooth, even with an adapter
   --no-power-profiles  power modes on a laptop (power-profiles-daemon)
   --no-autorotate      screen rotation on convertibles (iio-sensor-proxy)
-  --no-osk             an on-screen keyboard in tablet mode on convertibles (squeekboard)
+  --no-osk             an on-screen keyboard on convertibles and touchscreens (squeekboard)
   --no-gamemode        the CPU at full speed while a fullscreen game runs (gamemode)
   --no-thermal         Intel's thermal manager on Intel laptops (thermald)
   --no-viewers         apps for videos and music (celluloid), pictures (ristretto) and text

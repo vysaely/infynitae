@@ -87,7 +87,7 @@ fn first_output() -> u64 {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> | navigate element <inst> <elem> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout"
+        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> | navigate element <inst> <elem> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout | osk [on|off]"
     );
     ExitCode::from(2)
 }
@@ -215,6 +215,20 @@ pub fn run(args: &[String]) -> ExitCode {
             print_reply(&request(&Value::obj([
                 id,
                 ("cmd", "night_light".into()),
+                ("on", on),
+            ])))
+        }
+        // the on-screen keyboard: shown, hidden, or the other way round (no word)
+        Some("osk") => {
+            let on = match args.get(1).map(String::as_str) {
+                None | Some("toggle") => Value::Null,
+                Some("on" | "show") => Value::Bool(true),
+                Some("off" | "hide") => Value::Bool(false),
+                _ => return usage(),
+            };
+            print_reply(&request(&Value::obj([
+                id,
+                ("cmd", "osk".into()),
                 ("on", on),
             ])))
         }

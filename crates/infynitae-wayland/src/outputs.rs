@@ -35,6 +35,9 @@ impl WaylandState {
     /// Applies Core's effects in order (C1.2 `WaylandState::apply`).
     pub fn apply(&mut self, effects: &[Effect]) {
         self.prune_disabled_outputs();
+        // once a loop turn (every backend applies each turn): a pressed text field shows the
+        // on-screen keyboard, one gone hides it
+        self.osk_check();
         for effect in effects {
             self.kick_before(effect);
             match *effect {

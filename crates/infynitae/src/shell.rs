@@ -56,6 +56,7 @@ impl LoopExtension for ShellExtension {
         self.asks.extend(done.asks.iter().map(|a| match *a {
             Ask::NightLight(on) => DeskAsk::NightLight(on),
             Ask::NextKeyboardLayout => DeskAsk::NextKeyboardLayout,
+            Ask::Osk(on) => DeskAsk::Osk(on),
         }));
         (done.effects, done.changed)
     }

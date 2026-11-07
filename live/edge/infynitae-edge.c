@@ -60,7 +60,7 @@
 /* The modules a panel is made of (MODULE_WORDS: their names in the config) */
 enum {
     MOD_SEARCH, MOD_FAVORITES, MOD_APPS, MOD_WINDOWS, MOD_CLIPBOARD, MOD_CLOCK, MOD_VOLUME,
-    MOD_MEDIA, MOD_WIFI, MOD_BLUETOOTH, MOD_DND, MOD_NIGHT, MOD_KEYBOARD, MOD_POWER, MOD_REPLAY,
+    MOD_MEDIA, MOD_WIFI, MOD_BLUETOOTH, MOD_DND, MOD_NIGHT, MOD_KEYBOARD, MOD_OSK, MOD_POWER, MOD_REPLAY,
     MOD_TRAY, MOD_NOTIFICATIONS, MOD_SESSION, MOD_COUNT
 };
 static const struct { const char *word; int mod; } MODULE_WORDS[] = {
@@ -68,7 +68,7 @@ static const struct { const char *word; int mod; } MODULE_WORDS[] = {
     {"apps", MOD_APPS}, {"windows", MOD_WINDOWS}, {"clipboard", MOD_CLIPBOARD}, {"clock", MOD_CLOCK},
     {"volume", MOD_VOLUME}, {"wifi", MOD_WIFI}, {"bluetooth", MOD_BLUETOOTH}, {"dnd", MOD_DND},
     {"power", MOD_POWER}, {"replay", MOD_REPLAY}, {"tray", MOD_TRAY}, {"media", MOD_MEDIA},
-    {"nightlight", MOD_NIGHT}, {"night", MOD_NIGHT}, {"keyboard", MOD_KEYBOARD},
+    {"nightlight", MOD_NIGHT}, {"night", MOD_NIGHT}, {"keyboard", MOD_KEYBOARD}, {"osk", MOD_OSK},
     {"notifications", MOD_NOTIFICATIONS}, {"session", MOD_SESSION},
 };
 /* the switches, drawn together in two columns when they follow each other */
@@ -315,6 +315,9 @@ typedef struct EdgeApp {
     char bt_label[48];
     bool dnd_on;
     bool night_on;
+    /* the on-screen keyboard: squeekboard installed, and shown (the compositor's osk-visible) */
+    bool osk_have;
+    bool osk_on;
     /* the keyboard layout (the compositor's keyboard-layout file): its name, how many there are */
     char kb_label[64];
     int kb_count;
@@ -374,6 +377,7 @@ enum {
     ACT_CLIP_CLEAR,
     ACT_NIGHT_TOGGLE,
     ACT_KB_NEXT,
+    ACT_OSK_TOGGLE,
     ACT_CLOCK,
     ACT_CAL_PREV,
     ACT_CAL_NEXT,
@@ -1151,6 +1155,9 @@ static void read_desk_state(EdgeApp *app) {
     char path[256];
     runtime_file(path, sizeof(path), "night-light");
     app->night_on = access(path, F_OK) == 0;
+    runtime_file(path, sizeof(path), "osk-visible");
+    app->osk_on = access(path, F_OK) == 0;
+    app->osk_have = access("/usr/bin/squeekboard", X_OK) == 0 || access("/usr/local/bin/squeekboard", X_OK) == 0;
     runtime_file(path, sizeof(path), "keyboard-layout");
     app->kb_count = 0;
     app->kb_label[0] = '\0';
@@ -1678,7 +1685,7 @@ static void panel_line(EdgeApp *app, const char *raw_name, const char *value, in
 }
 
 static const int DEFAULT_CONTROL[] = {MOD_CLOCK, MOD_VOLUME, MOD_MEDIA, MOD_WIFI, MOD_BLUETOOTH, MOD_DND,
-                                      MOD_NIGHT, MOD_KEYBOARD, MOD_POWER, MOD_REPLAY, MOD_TRAY,
+                                      MOD_NIGHT, MOD_KEYBOARD, MOD_OSK, MOD_POWER, MOD_REPLAY, MOD_TRAY,
                                       MOD_NOTIFICATIONS, MOD_SESSION};
 
 /* The panels, the theme and FAVORITES from ~/.config/infynitae/config. The built-in panels (Super+W
@@ -2416,6 +2423,10 @@ static double mod_tiles(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
             if (app->kb_count > 1)
                 sw[nt++] = (typeof(sw[0])){ "Keyboard", app->kb_label, false, ACT_KB_NEXT, false };
             break;
+        case MOD_OSK:
+            if (app->osk_have)
+                sw[nt++] = (typeof(sw[0])){ "Screen keyboard", app->osk_on ? "Shown" : "Hidden", app->osk_on, ACT_OSK_TOGGLE, false };
+            break;
         case MOD_POWER:
             /* a choice of three modes, not a switch: never lit */
             if (strcmp(app->power_profile, "none") != 0 && app->power_profile[0])
@@ -2761,7 +2772,7 @@ static void refresh_panel_data(EdgeApp *app, const Panel *p) {
         system |= m == MOD_CLOCK || m == MOD_VOLUME || MOD_IS_TILE(m) || m == MOD_TRAY || m == MOD_NOTIFICATIONS;
     }
     if (panel_has(p, MOD_MEDIA)) fetch_media(app);
-    if (panel_has(p, MOD_NIGHT) || panel_has(p, MOD_KEYBOARD)) read_desk_state(app);
+    if (panel_has(p, MOD_NIGHT) || panel_has(p, MOD_KEYBOARD) || panel_has(p, MOD_OSK)) read_desk_state(app);
     app->cal_open = false;
     app->cal_month = 0;
     app->bt_scan = false;
@@ -3144,6 +3155,12 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
         damage_all(app);
         return true;
     }
+    case ACT_OSK_TOGGLE:
+        /* the panel closes first, so the keyboard comes up over the window that was in use */
+        spawn_detached(app->osk_on ? "infynitae msg osk off" : "infynitae msg osk on");
+        app->osk_on = !app->osk_on;
+        close_panel(app);
+        return true;
     case ACT_CLOCK:
         app->cal_open = !app->cal_open;
         app->cal_month = 0;

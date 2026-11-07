@@ -340,6 +340,9 @@ impl WaylandState {
                 };
                 self.pointer_sent.frame_pending = true;
                 ptr.button(self, &event);
+                if pressed {
+                    self.osk_pressed(false);
+                }
             }
             Effect::PointerAxis { axis, time_ms } => {
                 self.pointer_sent.frame_pending = true;
@@ -766,6 +769,7 @@ impl WaylandState {
                     time: time_ms,
                 };
                 touch.down(self, focus, &event);
+                self.osk_pressed(true);
             }
             Effect::TouchMotion {
                 slot,

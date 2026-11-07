@@ -46,6 +46,8 @@ pub enum Request {
 pub enum Ask {
     NightLight(Option<bool>),
     NextKeyboardLayout,
+    /// `{"cmd": "osk", "on": …}`: the on-screen keyboard shown or hidden by hand.
+    Osk(Option<bool>),
 }
 
 /// Why a request was not executed, as its reply names it.
@@ -134,6 +136,11 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
             _ => return Err(Invalid),
         })),
         "keyboard_layout" => Request::Ask(Ask::NextKeyboardLayout),
+        "osk" => Request::Ask(Ask::Osk(match v.get("on") {
+            None | Some(Value::Null) => None,
+            Some(Value::Bool(b)) => Some(*b),
+            _ => return Err(Invalid),
+        })),
         "layers" => Request::Layers,
         "subscribe" => Request::Subscribe,
         "unsubscribe" => Request::Unsubscribe,

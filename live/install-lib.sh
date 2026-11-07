@@ -51,6 +51,11 @@ optional_pkgs() {
     grep -v '^[[:space:]]*\(#\|$\)' "$INFY_LIVE/packages-optional.txt" \
         | awk -v g="$1" '$1 == g { for (i = 2; i <= NF; i++) print $i }'
 }
+# a touchscreen (the Steam Deck, a convertible): udev marks it ID_INPUT_TOUCHSCREEN
+has_touchscreen() {
+    grep -qs '^E:ID_INPUT_TOUCHSCREEN=1' /run/udev/data/c13:* 2>/dev/null
+}
+
 has_accelerometer() {
     local dev f
     for dev in /sys/bus/iio/devices/iio:device*; do
@@ -86,8 +91,8 @@ other_file_manager() {
 group_applies() {
     case "$1" in
         autorotate) has_accelerometer ;;
-        # an on-screen keyboard for tablet mode, on convertibles only
-        osk) has_tablet_mode_switch || has_accelerometer ;;
+        # an on-screen keyboard, on convertibles and touchscreens (the Steam Deck)
+        osk) has_tablet_mode_switch || has_accelerometer || has_touchscreen ;;
         # Intel's thermal manager, on Intel laptops only
         thermal) intel_laptop ;;
         # Thunar with its previews (tumbler) when it is there or nothing else is

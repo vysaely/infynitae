@@ -20,6 +20,8 @@ pub enum DeskAsk {
     NightLight(Option<bool>),
     /// The next keyboard layout.
     NextKeyboardLayout,
+    /// The on-screen keyboard shown by hand (`Some(true)`), hidden, or the other way round.
+    Osk(Option<bool>),
 }
 
 /// Night light's colour temperature unless `NIGHT_LIGHT_TEMP` says otherwise, in kelvin.
@@ -98,6 +100,7 @@ impl WaylandState {
                 let on = on.unwrap_or(!self.night_light);
                 self.set_night_light(on);
             }
+            DeskAsk::Osk(on) => self.osk_by_hand(on),
             DeskAsk::NextKeyboardLayout => {
                 let kb = self.keyboard_handle();
                 kb.with_xkb_state(self, |mut ctx| ctx.cycle_next_layout());

@@ -374,9 +374,11 @@ VIRTUAL_SCREEN="auto"
     # options: auto  · off
 
 OSK="auto"
-    # On-screen keyboard (squeekboard) for text fields [restart]
+    # On-screen keyboard (squeekboard): it opens when a text field is pressed, and goes when
+    # the field does; the panel's osk switch opens it by hand
     # default: auto
-    #   auto    tablet mode only  · always  · off   (the lock screen has its own)
+    #   auto    a finger's tap on a field  · always  a tap or a click (Steam Deck's trackpad)
+    #   off     only by hand   (the lock screen has its own)
 
 BATTERY_LIMIT="off"
     # The battery stops charging at this % (it wears more slowly). Laptops that support it;
@@ -537,10 +539,11 @@ FAVORITES=""
 #           bottom on a side edge); a width in px; hover: a touch of that screen edge opens it
 #   MODULES stacked in the order written; one with nothing to show hides itself:
 #           search  favorites  apps  windows  clipboard  clock  volume  media  wifi  bluetooth
-#           dnd  nightlight  keyboard  power  replay  tray  notifications  session
+#           dnd  nightlight  keyboard  osk  power  replay  tray  notifications  session
 #           (clock: a click shows the month; media: the player playing, hidden when none;
 #           nightlight: warmer colours, NIGHT_LIGHT_TEMP; keyboard: the next layout, shown with
-#           more than one in XKB_DEFAULT_LAYOUT; bluetooth's list: Find new devices pairs one)
+#           more than one in XKB_DEFAULT_LAYOUT; osk: the on-screen keyboard, shown with squeekboard
+#           installed; bluetooth's list: Find new devices pairs one)
 # Four panels are built in; a line for one of them changes only what it says (PANEL_CONTROL="left"
 # moves it and keeps its key and modules). Any other name is a new panel:
 #   PANEL_APPS="SUPER+W top center search favorites apps"

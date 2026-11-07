@@ -233,18 +233,13 @@ if command -v xdg-user-dirs-update >/dev/null 2>&1; then
     xdg-user-dirs-update >/dev/null 2>&1 || true
 fi
 
-# 6e2. The on-screen keyboard (squeekboard, OSK): it shows for a text field. "always" runs it
-# from the start; "auto" runs it in tablet mode only (the compositor's tablet-mode switch,
-# launch.sh): running, it is an input method, and with one apps such as terminals take typed
-# text from it instead of the keyboard's keys
-case "${OSK:-auto}" in
-    always|on|true)
-        if command -v squeekboard >/dev/null 2>&1; then
-            gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true 2>/dev/null || true
-            squeekboard >/dev/null 2>&1 &
-        fi
-        ;;
-esac
+# 6e2. The on-screen keyboard (squeekboard, OSK) opens when a text field is pressed: the
+# compositor asks (launch.sh osk), so nothing runs before the first time. Its own showing, for
+# every active field, stays off; an older session's keyboard goes.
+if command -v squeekboard >/dev/null 2>&1; then
+    gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled false 2>/dev/null || true
+    pkill -x squeekboard 2>/dev/null || true
+fi
 
 # 6e3. The battery's charge limit (BATTERY_LIMIT: a percentage, or off), where it is supported
 case "${BATTERY_LIMIT:-off}" in

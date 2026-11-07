@@ -32,6 +32,7 @@ mod launch;
 mod layers;
 pub mod limits;
 mod lock;
+pub mod osk;
 pub mod output_management;
 pub mod output_power;
 mod outputs;
@@ -343,6 +344,8 @@ pub struct WaylandState {
     pub screencopy: screencopy::ScreencopyState,
     pub gamma: gamma::GammaState,
     /// Night light is on (`desk`), at this many kelvin (`NIGHT_LIGHT_TEMP`).
+    /// The on-screen keyboard: which presses open it, and whether it is shown (`osk`).
+    pub(crate) osk: osk::OskState,
     pub(crate) night_light: bool,
     pub(crate) night_light_temp: u32,
     /// The keyboard layout last written for the panels (`desk::note_keyboard_layout`).
@@ -739,6 +742,7 @@ impl WaylandState {
             serial_outputs: std::collections::VecDeque::new(),
             screencopy: screencopy::ScreencopyState::new(display, trust.gate(Cap::Capture)),
             gamma: gamma::GammaState::new(display, trust.gate(Cap::Display)),
+            osk: osk::OskState::default(),
             night_light: false,
             night_light_temp: desk::DEFAULT_NIGHT_TEMP,
             keyboard_layout_written: None,
@@ -1243,6 +1247,9 @@ impl WaylandState {
                                     self.core
                                         .set_enter_mode(infynitae_core::EnterMode::Maximize);
                                 }
+                            }
+                            "OSK" => {
+                                self.osk.mode = osk::OskMode::parse(val);
                             }
                             "NIGHT_LIGHT_TEMP" => {
                                 if let Ok(k) = val.parse::<u32>() {

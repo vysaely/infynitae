@@ -62,19 +62,38 @@ case "$ACTION" in
         fi
         ;;
     tablet-mode)
-        # the convertible folded (on) or opened (off): with OSK="auto" the on-screen keyboard
-        # runs in tablet mode only; opened, nothing stands between the keyboard and the apps
-        case "${OSK:-auto}" in
-            auto|"")
-                if [ "$2" = on ]; then
-                    command -v squeekboard >/dev/null 2>&1 || exit 0
-                    gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled true 2>/dev/null
-                    pgrep -x squeekboard >/dev/null || squeekboard >/dev/null 2>&1 &
-                else
-                    pkill -x squeekboard 2>/dev/null
-                fi
-                ;;
-        esac
+        # the convertible folded (on) or opened (off). The on-screen keyboard no longer follows
+        # it: it opens when a text field is tapped (the compositor asks, `osk` below; 2026-11-07).
+        # Opened, a keyboard that is showing goes away.
+        [ "$2" = off ] && sh "$0" osk hide
+        ;;
+    osk)
+        # the on-screen keyboard (squeekboard) shown or hidden; the compositor asks when a text
+        # field is pressed or goes away, the panel's switch by hand. squeekboard's own showing
+        # (for every active field) stays off; it starts on the first show and keeps running.
+        command -v squeekboard >/dev/null 2>&1 || {
+            [ "$2" = show ] && notify-send -a Infynitae "On-screen keyboard" \
+                "It needs squeekboard: sudo pacman -S squeekboard" 2>/dev/null
+            exit 0
+        }
+        osk_call() {
+            gdbus call --session --dest sm.puri.OSK0 --object-path /sm/puri/OSK0 \
+                --method sm.puri.OSK0.SetVisible "$1" >/dev/null 2>&1
+        }
+        if [ "$2" = show ]; then
+            gsettings set org.gnome.desktop.a11y.applications screen-keyboard-enabled false 2>/dev/null
+            if ! pgrep -x squeekboard >/dev/null; then
+                squeekboard >/dev/null 2>&1 &
+                # on the bus within about two seconds
+                for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+                    osk_call true && exit 0
+                    sleep 0.1
+                done
+            fi
+            osk_call true
+        else
+            pgrep -x squeekboard >/dev/null && osk_call false
+        fi
         ;;
     game-mode)
         # a fullscreen game shown directly started ("on <pid>") or ended ("off <pid>"): Feral's

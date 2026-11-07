@@ -37,7 +37,7 @@ part_label() {
         recorder) echo "Screen recording (ffmpeg)" ;;
         files) echo "File manager (Thunar, with previews)" ;;
         autorotate) echo "Screen rotation (convertible)" ;;
-        osk) echo "On-screen keyboard in tablet mode" ;;
+        osk) echo "On-screen keyboard (opens when a text field is tapped)" ;;
         gamemode) echo "Game mode: full CPU speed in games" ;;
         thermal) echo "Intel's thermal manager (thermald)" ;;
         viewers) echo "Video, picture and text apps" ;;
