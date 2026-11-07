@@ -25,6 +25,12 @@ pub trait LoopExtension {
         false
     }
 
+    /// What a shell asked of the compositor since the last call besides locking (night light,
+    /// the keyboard layout); a backend does it (`WaylandState::desk_ask`).
+    fn take_desk_asks(&mut self) -> Vec<crate::desk::DeskAsk> {
+        Vec::new()
+    }
+
     /// When the extension needs a loop turn although nothing else happens (the shell's batched
     /// events); a backend sleeps no longer than that. `None`: only when something happens.
     fn wake_at(&self) -> Option<std::time::Instant> {

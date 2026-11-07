@@ -69,6 +69,8 @@ pub struct Serviced {
     pub changed: bool,
     /// A shell asked to lock the session (`lock`): the adapter locks.
     pub lock: bool,
+    /// What shells asked of the adapter besides (night light, keyboard layout), in order.
+    pub asks: Vec<crate::protocol::Ask>,
 }
 
 /// The shell server: owner of the `ShellPort` (C7.1) and of every connection's state (OBJ-31).
@@ -234,6 +236,11 @@ impl ShellServer {
             }
             Ok(Request::Lock) => {
                 done.lock = true;
+                done.changed = true;
+                protocol::ok_reply(rid, self.generation, None)
+            }
+            Ok(Request::Ask(ask)) => {
+                done.asks.push(ask);
                 done.changed = true;
                 protocol::ok_reply(rid, self.generation, None)
             }

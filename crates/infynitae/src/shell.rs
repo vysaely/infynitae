@@ -36,6 +36,7 @@ struct ShellExtension {
     server: ShellServer,
     _socket: SocketFile,
     lock_requested: bool,
+    asks: Vec<infynitae_wayland::desk::DeskAsk>,
 }
 
 struct SocketFile(PathBuf);
@@ -50,11 +51,21 @@ impl LoopExtension for ShellExtension {
     fn service(&mut self, core: &mut Core) -> (Vec<Effect>, bool) {
         let done = self.server.service(core);
         self.lock_requested |= done.lock;
+        use infynitae_ipc::protocol::Ask;
+        use infynitae_wayland::desk::DeskAsk;
+        self.asks.extend(done.asks.iter().map(|a| match *a {
+            Ask::NightLight(on) => DeskAsk::NightLight(on),
+            Ask::NextKeyboardLayout => DeskAsk::NextKeyboardLayout,
+        }));
         (done.effects, done.changed)
     }
 
     fn take_lock_request(&mut self) -> bool {
         std::mem::take(&mut self.lock_requested)
+    }
+
+    fn take_desk_asks(&mut self) -> Vec<infynitae_wayland::desk::DeskAsk> {
+        std::mem::take(&mut self.asks)
     }
 
     fn set_locked(&mut self, locked: bool) {
@@ -111,6 +122,7 @@ pub fn serve(port: ShellPort, path: &Path) -> io::Result<Extension> {
             server,
             _socket: socket,
             lock_requested: false,
+            asks: Vec::new(),
         }),
         wake,
     })

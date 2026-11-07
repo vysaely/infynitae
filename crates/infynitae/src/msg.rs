@@ -87,7 +87,7 @@ fn first_output() -> u64 {
 
 fn usage() -> ExitCode {
     eprintln!(
-        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> | navigate element <inst> <elem> | restore [output] | shortcut <name> | overview | lock"
+        "Usage: infynitae msg snapshot | focus <inst> <elem> | navigate <x> <y> | navigate element <inst> <elem> | restore [output] | shortcut <name> | overview | lock | night-light [on|off] | keyboard-layout"
     );
     ExitCode::from(2)
 }
@@ -204,6 +204,25 @@ pub fn run(args: &[String]) -> ExitCode {
         Some("overview") => overview(),
         // the session locked in the compositor now, then the lock screen (sleep-lock)
         Some("lock") => print_reply(&request(&Value::obj([id, ("cmd", "lock".into())]))),
+        // night light: on, off, or the other way round (no word)
+        Some("night-light" | "night_light") => {
+            let on = match args.get(1).map(String::as_str) {
+                None | Some("toggle") => Value::Null,
+                Some("on") => Value::Bool(true),
+                Some("off") => Value::Bool(false),
+                _ => return usage(),
+            };
+            print_reply(&request(&Value::obj([
+                id,
+                ("cmd", "night_light".into()),
+                ("on", on),
+            ])))
+        }
+        // the next keyboard layout
+        Some("keyboard-layout" | "keyboard_layout") => print_reply(&request(&Value::obj([
+            id,
+            ("cmd", "keyboard_layout".into()),
+        ]))),
         _ => usage(),
     }
 }

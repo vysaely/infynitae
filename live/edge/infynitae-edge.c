@@ -60,14 +60,15 @@
 /* The modules a panel is made of (MODULE_WORDS: their names in the config) */
 enum {
     MOD_SEARCH, MOD_FAVORITES, MOD_APPS, MOD_WINDOWS, MOD_CLIPBOARD, MOD_CLOCK, MOD_VOLUME,
-    MOD_WIFI, MOD_BLUETOOTH, MOD_DND, MOD_POWER, MOD_REPLAY, MOD_TRAY, MOD_NOTIFICATIONS,
-    MOD_SESSION, MOD_COUNT
+    MOD_MEDIA, MOD_WIFI, MOD_BLUETOOTH, MOD_DND, MOD_NIGHT, MOD_KEYBOARD, MOD_POWER, MOD_REPLAY,
+    MOD_TRAY, MOD_NOTIFICATIONS, MOD_SESSION, MOD_COUNT
 };
 static const struct { const char *word; int mod; } MODULE_WORDS[] = {
     {"search", MOD_SEARCH}, {"favorites", MOD_FAVORITES}, {"favourites", MOD_FAVORITES},
     {"apps", MOD_APPS}, {"windows", MOD_WINDOWS}, {"clipboard", MOD_CLIPBOARD}, {"clock", MOD_CLOCK},
     {"volume", MOD_VOLUME}, {"wifi", MOD_WIFI}, {"bluetooth", MOD_BLUETOOTH}, {"dnd", MOD_DND},
-    {"power", MOD_POWER}, {"replay", MOD_REPLAY}, {"tray", MOD_TRAY},
+    {"power", MOD_POWER}, {"replay", MOD_REPLAY}, {"tray", MOD_TRAY}, {"media", MOD_MEDIA},
+    {"nightlight", MOD_NIGHT}, {"night", MOD_NIGHT}, {"keyboard", MOD_KEYBOARD},
     {"notifications", MOD_NOTIFICATIONS}, {"session", MOD_SESSION},
 };
 /* the switches, drawn together in two columns when they follow each other */
@@ -313,6 +314,21 @@ typedef struct EdgeApp {
     bool bt_on;
     char bt_label[48];
     bool dnd_on;
+    bool night_on;
+    /* the keyboard layout (the compositor's keyboard-layout file): its name, how many there are */
+    char kb_label[64];
+    int kb_count;
+    /* the calendar under the clock: open, and how many months from this one it shows */
+    bool cal_open;
+    int cal_month;
+    /* the media player playing (else paused) on the session bus (MPRIS), "" when there is none */
+    char media_bus[128];
+    char media_title[128];
+    char media_artist[128];
+    bool media_playing;
+    unsigned media_generation;
+    /* Bluetooth's list looks for new devices (Find new devices pressed) */
+    bool bt_scan;
     bool replay_on;
     int volume_pct;
     bool volume_muted;
@@ -356,6 +372,14 @@ enum {
     ACT_LOGOUT,
     ACT_CLIP_ITEM,
     ACT_CLIP_CLEAR,
+    ACT_NIGHT_TOGGLE,
+    ACT_KB_NEXT,
+    ACT_CLOCK,
+    ACT_CAL_PREV,
+    ACT_CAL_NEXT,
+    ACT_MEDIA_PREV,
+    ACT_MEDIA_PLAY,
+    ACT_MEDIA_NEXT,
     ACT_OPEN_PANEL,   /* a hover strip: index, the panel */
     ACT_SEARCH_BOX    /* a click there keeps the panel open */
 };
@@ -1117,6 +1141,133 @@ static bool check_pid_file_alive(const char *path) {
     return ok;
 }
 
+/* The compositor's state files (night light, keyboard layout; crates/infynitae-wayland desk.rs) */
+static void runtime_file(char *out, size_t n, const char *name) {
+    const char *rt = getenv("XDG_RUNTIME_DIR");
+    snprintf(out, n, "%s/infynitae/%s", rt ? rt : "/tmp", name);
+}
+
+static void read_desk_state(EdgeApp *app) {
+    char path[256];
+    runtime_file(path, sizeof(path), "night-light");
+    app->night_on = access(path, F_OK) == 0;
+    runtime_file(path, sizeof(path), "keyboard-layout");
+    app->kb_count = 0;
+    app->kb_label[0] = '\0';
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[256] = {0};
+    if (fgets(line, sizeof(line), f)) {
+        /* short name, full name, how many */
+        char *t1 = strchr(line, '\t');
+        char *t2 = t1 ? strchr(t1 + 1, '\t') : NULL;
+        if (t1 && t2) {
+            *t2 = '\0';
+            app->kb_count = atoi(t2 + 1);
+            snprintf(app->kb_label, sizeof(app->kb_label), "%s", t1 + 1);
+        }
+    }
+    fclose(f);
+}
+
+/* Media: the players on the session bus (MPRIS), asked without waiting; the one playing is
+ * shown, else the first paused one, else the module hides. */
+typedef struct {
+    EdgeApp *app;
+    unsigned generation;
+    char bus[128];
+} MediaCall;
+
+static void on_media_props(GObject *src, GAsyncResult *r, gpointer data) {
+    MediaCall *call = data;
+    EdgeApp *app = call->app;
+    GVariant *res = g_dbus_connection_call_finish(G_DBUS_CONNECTION(src), r, NULL);
+    if (res && call->generation == app->media_generation) {
+        GVariant *props = NULL;
+        g_variant_get(res, "(@a{sv})", &props);
+        const char *status = NULL;
+        g_variant_lookup(props, "PlaybackStatus", "&s", &status);
+        bool playing = status && strcmp(status, "Playing") == 0;
+        bool paused = status && strcmp(status, "Paused") == 0;
+        /* a playing one wins over one shown already; a paused one only fills an empty place */
+        if ((playing && !app->media_playing) || (paused && !app->media_bus[0])) {
+            snprintf(app->media_bus, sizeof(app->media_bus), "%s", call->bus);
+            app->media_playing = playing;
+            app->media_title[0] = app->media_artist[0] = '\0';
+            GVariant *meta = g_variant_lookup_value(props, "Metadata", G_VARIANT_TYPE("a{sv}"));
+            if (meta) {
+                const char *title = NULL;
+                if (g_variant_lookup(meta, "xesam:title", "&s", &title) && title)
+                    sanitize_inline_text(app->media_title, sizeof(app->media_title), title);
+                GVariant *artists = g_variant_lookup_value(meta, "xesam:artist", G_VARIANT_TYPE("as"));
+                if (artists) {
+                    if (g_variant_n_children(artists) > 0) {
+                        const char *a = NULL;
+                        g_variant_get_child(artists, 0, "&s", &a);
+                        if (a) sanitize_inline_text(app->media_artist, sizeof(app->media_artist), a);
+                    }
+                    g_variant_unref(artists);
+                }
+                g_variant_unref(meta);
+            }
+            damage_all(app);
+        }
+        g_variant_unref(props);
+    }
+    if (res) g_variant_unref(res);
+    g_free(call);
+}
+
+static void on_media_names(GObject *src, GAsyncResult *r, gpointer data) {
+    MediaCall *list = data;
+    EdgeApp *app = list->app;
+    GVariant *res = g_dbus_connection_call_finish(G_DBUS_CONNECTION(src), r, NULL);
+    if (res && list->generation == app->media_generation) {
+        GVariantIter *it = NULL;
+        const char *name;
+        g_variant_get(res, "(as)", &it);
+        int asked = 0;
+        while (asked < 6 && g_variant_iter_next(it, "&s", &name)) {
+            if (strncmp(name, "org.mpris.MediaPlayer2.", 23) != 0) continue;
+            MediaCall *call = g_new0(MediaCall, 1);
+            call->app = app;
+            call->generation = list->generation;
+            snprintf(call->bus, sizeof(call->bus), "%s", name);
+            g_dbus_connection_call(app->dbus, name, "/org/mpris/MediaPlayer2",
+                                   "org.freedesktop.DBus.Properties", "GetAll",
+                                   g_variant_new("(s)", "org.mpris.MediaPlayer2.Player"),
+                                   G_VARIANT_TYPE("(a{sv})"), G_DBUS_CALL_FLAGS_NONE, 500, NULL,
+                                   on_media_props, call);
+            asked++;
+        }
+        g_variant_iter_free(it);
+    }
+    if (res) g_variant_unref(res);
+    g_free(list);
+}
+
+static void fetch_media(EdgeApp *app) {
+    app->media_generation++;
+    app->media_bus[0] = '\0';
+    app->media_playing = false;
+    if (!app->dbus) return;
+    MediaCall *list = g_new0(MediaCall, 1);
+    list->app = app;
+    list->generation = app->media_generation;
+    g_dbus_connection_call(app->dbus, "org.freedesktop.DBus", "/org/freedesktop/DBus",
+                           "org.freedesktop.DBus", "ListNames", NULL, G_VARIANT_TYPE("(as)"),
+                           G_DBUS_CALL_FLAGS_NONE, 500, NULL, on_media_names, list);
+}
+
+/* One of the player's buttons (Previous, PlayPause, Next), then what it plays now. */
+static void media_button(EdgeApp *app, const char *method) {
+    if (!app->dbus || !app->media_bus[0]) return;
+    g_dbus_connection_call(app->dbus, app->media_bus, "/org/mpris/MediaPlayer2",
+                           "org.mpris.MediaPlayer2.Player", method, NULL, NULL,
+                           G_DBUS_CALL_FLAGS_NONE, 500, NULL, NULL, NULL);
+    if (strcmp(method, "PlayPause") == 0) app->media_playing = !app->media_playing;
+}
+
 /* What a refresh fetches (start_async_refresh's kind) */
 enum { KIND_SNAPSHOT = 1, KIND_CONTROL = 2, KIND_SUBPANEL = 3, KIND_CLIPBOARD = 4 };
 
@@ -1135,6 +1286,7 @@ static void start_async_refresh(EdgeApp *app, int kind) {
         snprintf(sup_pid, sizeof(sup_pid), "%s/infynitae-recorder-supervisor.pid", rt);
         snprintf(rep_pid, sizeof(rep_pid), "%s/infynitae-replay.pid", rt);
         app->dnd_on = (access(dnd_path, F_OK) == 0);
+        read_desk_state(app);
         app->replay_on = check_pid_file_alive(sup_pid) || check_pid_file_alive(rep_pid);
         fetch_mako_notifications(app);
 
@@ -1213,16 +1365,29 @@ static void start_async_refresh(EdgeApp *app, int kind) {
                       "| head -n 6",
                       (char *)NULL);
             } else if (app->subpanel == SUB_BT) {
+                /* the paired devices; then, once Find new devices was pressed, the ones found
+                 * nearby in 8 s (pressing one pairs it), else that entry */
                 execl("/bin/sh", "sh", "-c",
-                      "bluetoothctl devices Paired 2>/dev/null | head -n 6 | while read -r _ mac name; do "
+                      "[ \"$1\" = 1 ] && bluetoothctl --timeout 8 scan on >/dev/null 2>&1; "
+                      "paired=$(bluetoothctl devices Paired 2>/dev/null); "
+                      "printf '%s\\n' \"$paired\" | head -n 5 | while read -r _ mac name; do "
                       "  [ -z \"$mac\" ] && continue; "
                       "  if bluetoothctl info \"$mac\" 2>/dev/null | grep -q 'Connected: yes'; then "
                       "    printf '1\\t%s\\t%s\\tConnected\\n' \"$mac\" \"$name\"; "
                       "  else "
                       "    printf '0\\t%s\\t%s\\tPaired\\n' \"$mac\" \"$name\"; "
                       "  fi; "
-                      "done",
-                      (char *)NULL);
+                      "done; "
+                      "if [ \"$1\" = 1 ]; then "
+                      "  bluetoothctl devices 2>/dev/null | while read -r _ mac name; do "
+                      "    [ -z \"$mac\" ] && continue; "
+                      "    case \"$paired\" in *\"$mac\"*) continue;; esac; "
+                      /* a device without a name shows its address with dashes: not one to pick */
+                      "    [ \"$name\" = \"$(printf '%s' \"$mac\" | tr : -)\" ] && continue; "
+                      "    printf '0\\t%s\\t%s\\tPair\\n' \"$mac\" \"$name\"; "
+                      "  done | head -n 3; "
+                      "else printf '0\\t-\\tFind new devices\\t\\n'; fi",
+                      "sh", app->bt_scan ? "1" : "0", (char *)NULL);
             } else if (app->subpanel == SUB_AUDIO) {
                 execl("/bin/sh", "sh", "-c",
                       "def=$(pactl get-default-sink 2>/dev/null); "
@@ -1512,8 +1677,9 @@ static void panel_line(EdgeApp *app, const char *raw_name, const char *value, in
     if (nm > 0) panel_set_modules(p, mods, nm);
 }
 
-static const int DEFAULT_CONTROL[] = {MOD_CLOCK, MOD_VOLUME, MOD_WIFI, MOD_BLUETOOTH, MOD_DND, MOD_POWER,
-                                      MOD_REPLAY, MOD_TRAY, MOD_NOTIFICATIONS, MOD_SESSION};
+static const int DEFAULT_CONTROL[] = {MOD_CLOCK, MOD_VOLUME, MOD_MEDIA, MOD_WIFI, MOD_BLUETOOTH, MOD_DND,
+                                      MOD_NIGHT, MOD_KEYBOARD, MOD_POWER, MOD_REPLAY, MOD_TRAY,
+                                      MOD_NOTIFICATIONS, MOD_SESSION};
 
 /* The panels, the theme and FAVORITES from ~/.config/infynitae/config. The built-in panels (Super+W
  * apps, Super+A control, Super+L windows, Super+V clipboard) come first, at EDGE_POSITION, the
@@ -2030,6 +2196,72 @@ static double mod_list(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p,
 }
 
 /* clock: the time large, the date beside it, the battery at the right */
+/* The calendar under the clock: a month (this one, or cal_month months away), Monday first,
+ * today marked; Earlier and Later move it by a month. */
+#define CAL_ROW 26.0
+static double draw_calendar(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double y, double W,
+                            const struct tm *today) {
+    double rx = PAD, rw = W - 2 * PAD;
+    struct tm first = {0};
+    first.tm_year = today->tm_year;
+    first.tm_mon = today->tm_mon + app->cal_month;
+    first.tm_mday = 1;
+    first.tm_hour = 12;
+    first.tm_isdst = -1;
+    mktime(&first); /* normalises the month and year, and sets the weekday */
+    struct tm next = first;
+    next.tm_mon += 1;
+    mktime(&next);
+    int days = (int)((mktime(&next) - mktime(&first) + 43200) / 86400);
+    int lead = (first.tm_wday + 6) % 7; /* Monday first */
+    char title[48];
+    strftime(title, sizeof(title), "%B %Y", &first);
+    double ry = y + GAP;
+    /* the month, and its buttons */
+    set_text(cr, app, 0.92);
+    draw_text_left(cr, layout, FONT_BODY_MEDIUM, title, rx + 4.0, ry + ITEM_H / 2.0, rw - 150.0);
+    double bw = 64.0;
+    const char *labels[2] = { "Earlier", "Later" };
+    int acts[2] = { ACT_CAL_PREV, ACT_CAL_NEXT };
+    for (int i = 0; i < 2; i++) {
+        double bx = rx + rw - (2 - i) * bw - (1 - i) * GAP;
+        int nav = app->nav_next++;
+        draw_tile(cr, app, bx, ry + 2.0, bw, ITEM_H - 4.0, false, SEL(nav));
+        set_text(cr, app, SEL(nav) ? 0.98 : 0.78);
+        draw_text_centered(cr, layout, FONT_CAPTION, labels[i], bx + bw / 2.0, ry + ITEM_H / 2.0, false);
+        add_hitbox_nav(app, bx, ry + 2.0, bw, ITEM_H - 4.0, acts[i], 0, nav);
+    }
+    ry += ITEM_H;
+    double cw = rw / 7.0;
+    static const char *names[7] = { "Mo", "Tu", "We", "Th", "Fr", "Sa", "Su" };
+    set_text(cr, app, 0.45);
+    for (int c = 0; c < 7; c++)
+        draw_text_centered(cr, layout, FONT_CAPTION, names[c], rx + c * cw + cw / 2.0, ry + CAL_ROW / 2.0, false);
+    ry += CAL_ROW;
+    bool this_month = first.tm_year == today->tm_year && first.tm_mon == today->tm_mon;
+    int rows = (lead + days + 6) / 7;
+    for (int d = 1; d <= days; d++) {
+        int cell = lead + d - 1;
+        double cx = rx + (cell % 7) * cw + cw / 2.0;
+        double cy = ry + (cell / 7) * CAL_ROW + CAL_ROW / 2.0;
+        char num[4];
+        snprintf(num, sizeof(num), "%d", d);
+        if (this_month && d == today->tm_mday) {
+            cairo_new_path(cr);
+            cairo_arc(cr, cx, cy, CAL_ROW / 2.0 - 2.0, 0, 2 * M_PI);
+            set_accent(cr, app, 0.30);
+            cairo_fill(cr);
+            set_text(cr, app, 0.98);
+            draw_text_centered(cr, layout, FONT_BODY_MEDIUM, num, cx, cy, false);
+        } else {
+            set_text(cr, app, cell % 7 >= 5 ? 0.55 : 0.80);
+            draw_text_centered(cr, layout, FONT_BODY, num, cx, cy, false);
+        }
+    }
+    ry += rows * CAL_ROW;
+    return ry - y;
+}
+
 static double mod_clock(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double y, double W) {
     double rx = PAD, rw = W - 2 * PAD;
     time_t now = time(NULL);
@@ -2047,7 +2279,16 @@ static double mod_clock(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double y
         set_text(cr, app, 0.70);
         draw_text_right_max(cr, layout, FONT_BODY, bat_s, rx + rw - 4.0, y + HEAD_H / 2.0 + 1.0, 100.0);
     }
-    return HEAD_H;
+    /* the clock opens and closes the calendar under it */
+    int nav = app->nav_next++;
+    if (SEL(nav)) {
+        draw_row_bg(cr, app, rx, y, rw, HEAD_H, false, true);
+        set_text(cr, app, 0.96);
+        draw_text_left(cr, layout, "sans-serif Medium 16", time_s, rx + 4.0, y + HEAD_H / 2.0, 90.0);
+    }
+    add_hitbox_nav(app, rx, y, rw, HEAD_H, ACT_CLOCK, 0, nav);
+    if (!app->cal_open) return HEAD_H;
+    return HEAD_H + draw_calendar(app, cr, layout, y + HEAD_H, W, tm_info);
 }
 
 /* The list under an open switch (networks, devices) or under the volume (outputs). */
@@ -2055,7 +2296,9 @@ static double draw_sub_items(EdgeApp *app, cairo_t *cr, PangoLayout *layout, dou
     double rx = PAD, rw = W - 2 * PAD, ry = y + GAP;
     if (app->sub_count == 0) {
         set_text(cr, app, 0.45);
-        draw_text_left(cr, layout, FONT_BODY, "None found", rx + 12.0, ry + ITEM_H / 2.0, rw - 24.0);
+        draw_text_left(cr, layout, FONT_BODY,
+                       app->subpanel == SUB_BT && app->bt_scan ? "Looking for devices nearby" : "None found",
+                       rx + 12.0, ry + ITEM_H / 2.0, rw - 24.0);
         return GAP + ITEM_H;
     }
     for (int i = 0; i < app->sub_count; i++) {
@@ -2113,6 +2356,35 @@ static double mod_volume(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double 
     return h;
 }
 
+/* media: what the player plays (hidden when no player is open), and its three buttons */
+static double mod_media(EdgeApp *app, cairo_t *cr, PangoLayout *layout, double y, double W) {
+    if (!app->media_bus[0]) return 0.0;
+    double rx = PAD, rw = W - 2 * PAD, ry = y;
+    const char *title = app->media_title[0] ? app->media_title : "Playing";
+    set_text(cr, app, 0.95);
+    draw_text_left(cr, layout, FONT_BODY_MEDIUM, title, rx + 4.0, ry + 10.0, rw - 8.0);
+    if (app->media_artist[0]) {
+        set_text(cr, app, 0.55);
+        draw_text_left(cr, layout, FONT_CAPTION, app->media_artist, rx + 4.0, ry + 27.0, rw - 8.0);
+        ry += 38.0;
+    } else {
+        ry += 24.0;
+    }
+    double pw = floor((rw - 2.0 * GAP) / 3.0);
+    const char *labels[3] = { "Previous", app->media_playing ? "Pause" : "Play", "Next" };
+    int acts[3] = { ACT_MEDIA_PREV, ACT_MEDIA_PLAY, ACT_MEDIA_NEXT };
+    for (int i = 0; i < 3; i++) {
+        double bx = rx + i * (pw + GAP);
+        double bw = i == 2 ? (rx + rw - bx) : pw;
+        int nav = app->nav_next++;
+        draw_tile(cr, app, bx, ry, bw, BTN_H, i == 1 && app->media_playing, SEL(nav));
+        set_text(cr, app, SEL(nav) ? 0.98 : 0.82);
+        draw_text_centered(cr, layout, FONT_BODY, labels[i], bx + bw / 2.0, ry + BTN_H / 2.0, false);
+        add_hitbox_nav(app, bx, ry, bw, BTN_H, acts[i], 0, nav);
+    }
+    return ry + BTN_H - y;
+}
+
 /* wifi bluetooth dnd power replay, as many as follow each other from module mi: switches in two
  * columns, a name and its state; under them the list of an open Wi-Fi or Bluetooth switch. A
  * switch that cannot do anything here is left out (Power mode without power-profiles-daemon). */
@@ -2120,10 +2392,10 @@ static double mod_tiles(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
     const char *p_disp = "Balanced";
     if (strcasecmp(app->power_profile, "performance") == 0) p_disp = "Performance";
     else if (strcasecmp(app->power_profile, "power-saver") == 0) p_disp = "Power saver";
-    struct { const char *label, *val; bool active; int action; bool sub_open; } sw[8];
+    struct { const char *label, *val; bool active; int action; bool sub_open; } sw[10];
     int nt = 0;
     bool sub_here = false;
-    for (int k = mi; k < p->n_mods && MOD_IS_TILE(p->mods[k]) && nt < 7; k++) {
+    for (int k = mi; k < p->n_mods && MOD_IS_TILE(p->mods[k]) && nt < 9; k++) {
         switch (p->mods[k]) {
         case MOD_WIFI:
             sw[nt++] = (typeof(sw[0])){ "Wi-Fi", app->wifi_label, app->wifi_on, ACT_WIFI_TOGGLE, app->subpanel == SUB_WIFI };
@@ -2135,6 +2407,14 @@ static double mod_tiles(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Panel *p
             break;
         case MOD_DND:
             sw[nt++] = (typeof(sw[0])){ "Do not disturb", app->dnd_on ? "On" : "Off", app->dnd_on, ACT_DND_TOGGLE, false };
+            break;
+        case MOD_NIGHT:
+            sw[nt++] = (typeof(sw[0])){ "Night light", app->night_on ? "On" : "Off", app->night_on, ACT_NIGHT_TOGGLE, false };
+            break;
+        case MOD_KEYBOARD:
+            /* only with more than one layout to choose from */
+            if (app->kb_count > 1)
+                sw[nt++] = (typeof(sw[0])){ "Keyboard", app->kb_label, false, ACT_KB_NEXT, false };
             break;
         case MOD_POWER:
             /* a choice of three modes, not a switch: never lit */
@@ -2290,6 +2570,7 @@ static double layout_modules(EdgeApp *app, cairo_t *cr, PangoLayout *layout, Pan
         case MOD_APPS: case MOD_WINDOWS: case MOD_CLIPBOARD: h = mod_list(app, cr, layout, p, mi, top, W); break;
         case MOD_CLOCK: h = mod_clock(app, cr, layout, top, W); break;
         case MOD_VOLUME: h = mod_volume(app, cr, layout, top, W); break;
+        case MOD_MEDIA: h = mod_media(app, cr, layout, top, W); break;
         case MOD_TRAY: h = mod_tray(app, cr, layout, top + (any ? 4.0 : 0.0), W); if (h > 0 && any) h += 4.0; break;
         case MOD_NOTIFICATIONS: h = mod_notifications(app, cr, layout, top + (any ? 4.0 : 0.0), W); if (h > 0 && any) h += 4.0; break;
         case MOD_SESSION: h = mod_session(app, cr, layout, top + (any ? 4.0 : 0.0), W); if (any) h += 4.0; break;
@@ -2479,6 +2760,11 @@ static void refresh_panel_data(EdgeApp *app, const Panel *p) {
         int m = p->mods[i];
         system |= m == MOD_CLOCK || m == MOD_VOLUME || MOD_IS_TILE(m) || m == MOD_TRAY || m == MOD_NOTIFICATIONS;
     }
+    if (panel_has(p, MOD_MEDIA)) fetch_media(app);
+    if (panel_has(p, MOD_NIGHT) || panel_has(p, MOD_KEYBOARD)) read_desk_state(app);
+    app->cal_open = false;
+    app->cal_month = 0;
+    app->bt_scan = false;
     if (panel_has(p, MOD_WINDOWS)) refresh_snapshot(app);
     if (system) refresh_control_data(app);
     if (panel_has(p, MOD_CLIPBOARD)) refresh_clipboard_data(app);
@@ -2793,6 +3079,19 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
                              si->id, NULL);
                 snprintf(app->wifi_label, sizeof(app->wifi_label), "%s", si->label);
                 for (int k = 0; k < app->sub_count; k++) app->sub_items[k].active = (k == sidx);
+            } else if (app->subpanel == SUB_BT && strcmp(si->id, "-") == 0) {
+                /* Find new devices: the list again, after looking for 8 s */
+                app->bt_scan = true;
+                refresh_subpanel_data(app);
+                damage_all(app);
+                return true;
+            } else if (app->subpanel == SUB_BT && strcmp(si->meta, "Pair") == 0) {
+                spawn_script("bluetoothctl pair \"$1\" >/dev/null 2>&1 && bluetoothctl trust \"$1\" >/dev/null 2>&1 "
+                             "&& bluetoothctl connect \"$1\" >/dev/null 2>&1 "
+                             "|| notify-send -a Infynitae Bluetooth \"Could not pair with $2\"",
+                             si->id, si->label);
+                strcpy(si->meta, "Pairing");
+                snprintf(app->bt_label, sizeof(app->bt_label), "%s", si->label);
             } else if (app->subpanel == SUB_BT) {
                 const char *bt_cmd;
                 if (si->active) {
@@ -2829,6 +3128,42 @@ static bool execute_hitbox(EdgeApp *app, HitBox *hb, double click_x, uint32_t bu
         app->bt_on = !app->bt_on;
         strcpy(app->bt_label, app->bt_on ? "On" : "Off");
         if (!app->bt_on && app->subpanel == SUB_BT) app->subpanel = SUB_NONE;
+        damage_all(app);
+        return true;
+    case ACT_NIGHT_TOGGLE:
+        spawn_detached(app->night_on ? "infynitae msg night-light off" : "infynitae msg night-light on");
+        app->night_on = !app->night_on;
+        damage_all(app);
+        return true;
+    case ACT_KB_NEXT: {
+        /* asked and waited for (a few ms): the tile shows the new layout at once */
+        int rc = system("infynitae msg keyboard-layout >/dev/null 2>&1");
+        (void)rc;
+        usleep(40000);
+        read_desk_state(app);
+        damage_all(app);
+        return true;
+    }
+    case ACT_CLOCK:
+        app->cal_open = !app->cal_open;
+        app->cal_month = 0;
+        damage_all(app);
+        return true;
+    case ACT_CAL_PREV:
+    case ACT_CAL_NEXT:
+        app->cal_month += hb->action_id == ACT_CAL_NEXT ? 1 : -1;
+        damage_all(app);
+        return true;
+    case ACT_MEDIA_PREV:
+    case ACT_MEDIA_PLAY:
+    case ACT_MEDIA_NEXT:
+        media_button(app, hb->action_id == ACT_MEDIA_PREV ? "Previous"
+                          : hb->action_id == ACT_MEDIA_NEXT ? "Next" : "PlayPause");
+        /* the title of the next one: asked again shortly */
+        if (hb->action_id != ACT_MEDIA_PLAY) {
+            usleep(150000);
+            fetch_media(app);
+        }
         damage_all(app);
         return true;
     case ACT_DND_TOGGLE: {

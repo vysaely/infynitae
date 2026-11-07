@@ -483,6 +483,9 @@ pub fn run_headless_with(
             if ext.take_lock_request() {
                 state.lock_now();
             }
+            for ask in ext.take_desk_asks() {
+                state.desk_ask(ask);
+            }
             state.apply(&fx);
             if changed {
                 session.request_frame();

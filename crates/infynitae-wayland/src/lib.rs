@@ -16,6 +16,7 @@ pub mod background;
 pub mod capture_indicator;
 pub mod convert;
 pub mod cursor;
+pub mod desk;
 pub mod extension;
 pub mod fitted;
 pub mod frame_schedule;
@@ -341,6 +342,11 @@ pub struct WaylandState {
         std::collections::VecDeque<(smithay::utils::Serial, infynitae_core::output::OutputId)>,
     pub screencopy: screencopy::ScreencopyState,
     pub gamma: gamma::GammaState,
+    /// Night light is on (`desk`), at this many kelvin (`NIGHT_LIGHT_TEMP`).
+    pub(crate) night_light: bool,
+    pub(crate) night_light_temp: u32,
+    /// The keyboard layout last written for the panels (`desk::note_keyboard_layout`).
+    pub(crate) keyboard_layout_written: Option<usize>,
     pub output_power: output_power::OutputPowerState,
     /// Virtual pointers and seat-keymap virtual keyboards, as real input (`virtual_input`).
     pub(crate) virtual_input: virtual_input::VirtualInputState,
@@ -733,6 +739,9 @@ impl WaylandState {
             serial_outputs: std::collections::VecDeque::new(),
             screencopy: screencopy::ScreencopyState::new(display, trust.gate(Cap::Capture)),
             gamma: gamma::GammaState::new(display, trust.gate(Cap::Display)),
+            night_light: false,
+            night_light_temp: desk::DEFAULT_NIGHT_TEMP,
+            keyboard_layout_written: None,
             output_power: output_power::OutputPowerState::new(display, trust.gate(Cap::Display)),
             virtual_input: virtual_input::VirtualInputState::new(
                 display,
@@ -805,6 +814,8 @@ impl WaylandState {
         if let Some(dev) = guess_dmabuf_device() {
             state.set_dmabuf_main_device(dev);
         }
+        state.desk_start();
+        state.note_keyboard_layout();
         state
     }
 
@@ -1231,6 +1242,14 @@ impl WaylandState {
                                 } else {
                                     self.core
                                         .set_enter_mode(infynitae_core::EnterMode::Maximize);
+                                }
+                            }
+                            "NIGHT_LIGHT_TEMP" => {
+                                if let Ok(k) = val.parse::<u32>() {
+                                    self.night_light_temp = k.clamp(1000, 10000);
+                                    if self.night_light {
+                                        self.set_night_light(true);
+                                    }
                                 }
                             }
                             "FULLSCREEN_PAN" => {
