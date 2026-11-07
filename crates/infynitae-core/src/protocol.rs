@@ -404,6 +404,7 @@ impl Core {
         ToplevelCapabilities {
             fullscreen: true,
             maximize: true,
+            minimize: true,
             ..ToplevelCapabilities::default()
         }
     }
@@ -1223,7 +1224,14 @@ impl Core {
             return Ok(Vec::new());
         }
         let eligible = !self.hidden_by_presentation(id);
+        // a minimized window the user asks for (a validated activation: its app's own window
+        // brought forward, or chosen from a taskbar) comes back
+        let mut back = Vec::new();
+        if validated && eligible && self.stage.is_minimized(id) {
+            self.restore_minimized(id, &mut back);
+        }
         let mut fx = self.focus.activation(id, validated, eligible);
+        fx.splice(0..0, back);
         if !fx.is_empty() {
             fx.extend(self.reconcile_constraints());
         }
@@ -1240,7 +1248,8 @@ impl Core {
     ///   answers it.
     /// - `unset_fullscreen`: ends fullscreen with one configure offering the saved size; when
     ///   not fullscreen, one configure.
-    /// - `set_minimized`: ignored (INV-PROTO-1). `show_window_menu`: ignored, there is none.
+    /// - `set_minimized` goes through [`Core::client_minimize`] (2026-11-07); here it stays
+    ///   ignored. `show_window_menu`: ignored, there is none.
     /// - `set_maximized`, `unset_maximized`, `move`, `resize` from an app go through
     ///   [`Core::client_maximize`] and [`Core::client_drag`] (owner, 2026-11-02); here they stay
     ///   as declined or ignored, for a request with nothing to act on.
@@ -2212,6 +2221,47 @@ impl Core {
             .free_spot_near(&all, (w, h), (new.0, new.1))
             .unwrap_or_else(|| beside_all(&all, (new.0, new.1)));
         Some(CanvasPoint { x, y })
+    }
+
+    /// An app's minimize button (`xdg_toplevel.set_minimized`; an X11 app's through the bridge):
+    /// the window is hidden, still open, until it is picked again (the windows list, Super+W's
+    /// apps, or the app asking for it). Only the focused window, as its maximize button, and
+    /// never a fullscreen one: Wine asks to minimize a game when it loses the focus (the black
+    /// screens of 2026-11-02), which is then not the focused window and is left alone.
+    pub fn client_minimize(&mut self, id: ElementId) -> Vec<Effect> {
+        let mut out = Vec::new();
+        if self.focus.target() != Some(id)
+            || self.stage.mapped(id).is_none()
+            || self.fullscreen_of(id).is_some()
+            || self.input.interaction.active()
+        {
+            return out;
+        }
+        if self.stage.set_minimized(id, true).is_err() {
+            return out;
+        }
+        let live: Vec<ElementId> = self
+            .focusable_elements()
+            .into_iter()
+            .filter(|&e| e != id)
+            .collect();
+        out.extend(self.focus.target_lost(id, &live));
+        self.strict_successor(id, &mut out);
+        self.invalidate_all_frames();
+        self.membership_pass_element(id, &mut out);
+        out.extend(self.visibility_pass());
+        out
+    }
+
+    /// A minimized window comes back where it was, on top.
+    pub(crate) fn restore_minimized(&mut self, id: ElementId, out: &mut Vec<Effect>) {
+        if self.stage.set_minimized(id, false).is_err() {
+            return;
+        }
+        self.stage.raise(id);
+        self.invalidate_all_frames();
+        self.membership_pass_element(id, &mut *out);
+        out.extend(self.visibility_pass());
     }
 
     /// The placement policy for elements mapped from now on. It never moves an element that is
@@ -3479,13 +3529,14 @@ mod tests {
         let caps = connected(120).toplevel_capabilities();
         assert_eq!(caps.fullscreen, granted.contains(&FS));
         assert!(caps.maximize, "answered by Core::client_maximize, not here");
-        assert_eq!(caps.minimize, granted.contains(&SetMinimized));
+        assert!(caps.minimize, "answered by Core::client_minimize, not here");
         assert_eq!(caps.window_menu, granted.contains(&ShowWindowMenu));
         assert_eq!(
             caps,
             ToplevelCapabilities {
                 fullscreen: true,
                 maximize: true,
+                minimize: true,
                 ..ToplevelCapabilities::default()
             }
         );

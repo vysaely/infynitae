@@ -2628,7 +2628,7 @@ impl Core {
         match cmd {
             ShellCommand::Navigate { output, to, stream } => {
                 if let NavigateTo::Element(element) = to {
-                    let id = self.shell_mapped(element)?;
+                    let id = self.shell_chosen(element, &mut out)?;
                     self.show_chosen(id, &mut out);
                 }
                 let camera = self.shell_camera(output)?;
@@ -2657,7 +2657,7 @@ impl Core {
                 }
             }
             ShellCommand::Focus { element } => {
-                let id = self.shell_mapped(element)?;
+                let id = self.shell_chosen(element, &mut out)?;
                 // a window picked from the list is the user's choice: a fullscreen window steps
                 // aside for it (owner, 2026-11-02; A-8 still holds for focus nobody asked for)
                 self.show_chosen(id, &mut out);
@@ -2782,6 +2782,20 @@ impl Core {
     }
 
     /// The element a reference names, mapped.
+    /// A window the user picked (from the windows list): one that was minimized comes back first.
+    fn shell_chosen(
+        &mut self,
+        element: crate::stage::ElementRef,
+        out: &mut Vec<Effect>,
+    ) -> Result<crate::stage::ElementId, ShellError> {
+        if let Ok(id) = self.stage.resolve(element)
+            && self.stage.is_minimized(id)
+        {
+            self.restore_minimized(id, out);
+        }
+        self.shell_mapped(element)
+    }
+
     fn shell_mapped(
         &self,
         element: crate::stage::ElementRef,

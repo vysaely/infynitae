@@ -750,7 +750,10 @@ impl XdgShellHandler for WaylandState {
     }
 
     fn minimize_request(&mut self, surface: ToplevelSurface) {
-        self.toplevel_request(&surface, ToplevelRequest::SetMinimized);
+        if let Some(i) = self.element_index_by_root(surface.wl_surface()) {
+            let fx = self.core.client_minimize(self.elements[i].id);
+            self.apply(&fx);
+        }
     }
 
     fn move_request(&mut self, surface: ToplevelSurface, _seat: wl_seat::WlSeat, _serial: Serial) {

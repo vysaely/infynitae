@@ -98,6 +98,9 @@ struct Record {
     /// Kept on top (picture-in-picture, or Super+Shift+K): above every window that is not, in
     /// the z-order and so in the picture and the hit test (owner, 2026-11-07).
     above: bool,
+    /// Minimized (its app's minimize button, 2026-11-07): still mapped, but not drawn, not
+    /// under the pointer and not focused until it is chosen again.
+    minimized: bool,
 }
 
 /// What a toplevel calls itself (`xdg_toplevel.set_title` / `set_app_id`): derived protocol
@@ -242,6 +245,9 @@ impl Stage {
         id: ElementId,
     ) -> Option<(CanvasPoint, &SurfaceTree, Option<CanvasBox>)> {
         let r = self.record(id)?;
+        if r.minimized {
+            return None;
+        }
         match (r.state, r.anchor, r.tree.as_ref()) {
             (Lifecycle::Mapped, Some(a), Some(t)) => Some((a, t, r.extent.map(|e| at(a, e)))),
             _ => None,
@@ -264,6 +270,9 @@ impl Stage {
     }
 
     fn placed_record(r: &Record) -> Option<Placed<'_>> {
+        if r.minimized {
+            return None;
+        }
         match (r.state, r.anchor, r.tree.as_ref()) {
             (Lifecycle::Mapped, Some(anchor), Some(tree)) => Some(Placed {
                 id: r.id,
@@ -327,6 +336,7 @@ impl Stage {
             meta: None,
             saved_floating: None,
             above: false,
+            minimized: false,
         });
         id
     }
@@ -384,7 +394,17 @@ impl Stage {
             .iter()
             .rev()
             .copied()
-            .find(|&id| self.state(id) == Some(Lifecycle::Mapped))
+            .find(|&id| self.state(id) == Some(Lifecycle::Mapped) && !self.is_minimized(id))
+    }
+
+    /// Whether the element is minimized (mapped, but hidden until chosen again).
+    pub fn is_minimized(&self, id: ElementId) -> bool {
+        self.record(id).is_some_and(|r| r.minimized)
+    }
+
+    pub(crate) fn set_minimized(&mut self, id: ElementId, on: bool) -> Result<(), StaleElement> {
+        self.record_mut(id).ok_or(StaleElement)?.minimized = on;
+        Ok(())
     }
 
     /// Puts the element on top of the z-order (map and remap, INV-STAGE-5); one that is not

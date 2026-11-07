@@ -141,8 +141,8 @@ impl T {
     }
 }
 
-/// TST-22: each of the four state requests is answered by exactly one configure that grants
-/// nothing and proposes no size; the four others are answered by none. The window is focused, so
+/// TST-22: each state request is answered by exactly one configure that grants nothing and
+/// proposes no size; move, resize and the window menu by none; minimize (last) is granted. The window is focused, so
 /// the configures carry `activated` and nothing else. Stage, camera, focus and pointer are as
 /// before, and the client saw no pointer event.
 #[test]
@@ -180,7 +180,6 @@ fn tst22_each_request_gets_its_policy_answer_and_nothing_moves() {
         "unset_fullscreen"
     );
 
-    assert_eq!(t.ask(w, |tl| tl.set_minimized()), vec![], "set_minimized");
     assert_eq!(t.ask(w, |tl| tl._move(&seat, serial)), vec![], "move");
     assert_eq!(
         t.ask(w, |tl| tl.resize(&seat, serial, ResizeEdge::BottomRight)),
@@ -204,6 +203,14 @@ fn tst22_each_request_gets_its_policy_answer_and_nothing_moves() {
         "a request produced a pointer event"
     );
     assert_eq!(t.ls.state.core().stage().state(id), Some(Lifecycle::Mapped));
+    // last, as it changes the focus: the focused window's minimize is granted (2026-11-07);
+    // the one configure that answers it is the focus leaving
+    assert_eq!(
+        t.ask(w, |tl| tl.set_minimized()),
+        vec![((0, 0), windowed_states(false))],
+        "set_minimized"
+    );
+    assert!(t.ls.state.core().stage().is_minimized(id));
 }
 
 /// An app's maximize button: answered once, with the state and the screen's room, and undone.
@@ -398,7 +405,7 @@ fn requests_while_unmapped_are_not_answered() {
 }
 
 /// What the compositor says it can do is what its policy grants. The client is told once, with
-/// its first configure, and the set is fullscreen alone: no maximize, minimize or window menu.
+/// its first configure: maximize, fullscreen and minimize (2026-11-07), no window menu.
 /// (A client that reads the set shows no control for those.)
 ///
 /// Also recorded: the first configure carries the room the window has, `configure_bounds` of the
@@ -420,8 +427,8 @@ fn the_announced_capabilities_are_what_the_policy_grants() {
     .collect();
     assert_eq!(
         want,
-        vec![2, 3],
-        "maximize and fullscreen, and nothing else"
+        vec![2, 3, 4],
+        "maximize, fullscreen and minimize, no window menu"
     );
     let announced = |t: &T| {
         let mut caps = t.ls.probe.wm_capabilities.clone();
@@ -470,7 +477,10 @@ fn a_stream_of_requests_is_answered_one_for_one() {
             0 | 1 => tl.unset_maximized(),
             2 => tl.set_fullscreen(None),
             3 => tl.unset_fullscreen(),
-            4 => tl.set_minimized(),
+            // a fullscreen window's minimize is refused; a windowed one's would end the stream's
+            // focus (t1_minimize), so it asks for the window menu instead
+            4 if fullscreen => tl.set_minimized(),
+            4 => tl.show_window_menu(&seat, serial, 1, 1),
             5 => tl._move(&seat, serial),
             6 => tl.resize(&seat, serial, ResizeEdge::Top),
             _ => tl.show_window_menu(&seat, serial, 1, 1),
