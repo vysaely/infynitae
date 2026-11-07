@@ -1736,6 +1736,9 @@ pub fn run_console_with(
             if ext.take_lock_request() {
                 data.state.lock_now();
             }
+            for ask in ext.take_desk_asks() {
+                data.state.desk_ask(ask);
+            }
             data.state.apply(&fx);
             if changed {
                 data.session.request_frame();

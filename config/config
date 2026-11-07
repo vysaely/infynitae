@@ -35,6 +35,11 @@ XKB_DEFAULT_OPTIONS=""
     #   ""        none
     #    e.g. "grp:alt_shift_toggle,caps:swapescape"
 
+NIGHT_LIGHT_TEMP="4000"
+    # Night light's colour in kelvin (the nightlight switch in the control panel, or
+    # `infynitae msg night-light`): lower is warmer
+    # default: 4000   (6500 is daylight, 3000 very warm)
+
 KEYBOARD_REPEAT_DELAY="200"
     # Milliseconds before a held key repeats
     # default: 200
@@ -531,12 +536,15 @@ FAVORITES=""
 #   PLACE   the edge: top bottom left right; then where along it: left center right (top center
 #           bottom on a side edge); a width in px; hover: a touch of that screen edge opens it
 #   MODULES stacked in the order written; one with nothing to show hides itself:
-#           search  favorites  apps  windows  clipboard  clock  volume  wifi  bluetooth  dnd
-#           power  replay  tray  notifications  session
+#           search  favorites  apps  windows  clipboard  clock  volume  media  wifi  bluetooth
+#           dnd  nightlight  keyboard  power  replay  tray  notifications  session
+#           (clock: a click shows the month; media: the player playing, hidden when none;
+#           nightlight: warmer colours, NIGHT_LIGHT_TEMP; keyboard: the next layout, shown with
+#           more than one in XKB_DEFAULT_LAYOUT; bluetooth's list: Find new devices pairs one)
 # Four panels are built in; a line for one of them changes only what it says (PANEL_CONTROL="left"
 # moves it and keeps its key and modules). Any other name is a new panel:
 #   PANEL_APPS="SUPER+W top center search favorites apps"
-#   PANEL_CONTROL="SUPER+A top right hover clock volume wifi bluetooth dnd power replay tray notifications session"
+#   PANEL_CONTROL="SUPER+A top right hover clock volume media wifi bluetooth dnd nightlight keyboard power replay tray notifications session"
 #   PANEL_WINDOWS="SUPER+L top center hover search windows"
 #   PANEL_CLIPBOARD="SUPER+V top center search clipboard"
 #   PANEL_MEDIA="SUPER+M right center 320 volume tray"      a panel of your own

@@ -178,6 +178,10 @@ impl WaylandState {
                         mods_changed,
                     );
                     self.forward_key_to_x11(key, pressed, mods, time_ms);
+                    // a layout switch by the keys (grp:alt_shift_toggle) shows in the panels
+                    if mods_changed {
+                        self.note_keyboard_layout();
+                    }
                 }
                 Effect::KeyboardIntercept { .. } => {}
                 // an output change is news to the focused client: Core's true position after it
@@ -185,6 +189,9 @@ impl WaylandState {
                 Effect::OutputAdded(id) => {
                     self.pointer_sent = Default::default();
                     self.output_added(id);
+                    if self.night_light {
+                        self.night_light_on(id);
+                    }
                 }
                 Effect::OutputChanged(id) => {
                     self.pointer_sent = Default::default();

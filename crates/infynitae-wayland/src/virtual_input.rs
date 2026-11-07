@@ -175,6 +175,14 @@ pub fn usable_keymap_names(layout: &str, options: &str) -> (String, String) {
 }
 
 /// Records the seat's layout and options for the clients started from now on (once).
+/// The seat's layouts as configured (`"us,de"`), or empty before the keyboard exists.
+pub(crate) fn seat_layout_names() -> String {
+    SEAT_KEYMAP_NAMES
+        .get()
+        .map(|(l, _)| l.clone())
+        .unwrap_or_default()
+}
+
 pub(crate) fn set_seat_keymap_names(layout: &str, options: &str) {
     let _ = SEAT_KEYMAP_NAMES.set((layout.to_string(), options.to_string()));
 }

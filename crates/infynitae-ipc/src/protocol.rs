@@ -30,11 +30,22 @@ pub enum Request {
     /// Lock the session now, in the compositor itself (black and locked within a frame, then the
     /// lock screen): before sleep, the lock must not wait for a lock screen to start (2026-11-06).
     Lock,
+    /// Something the adapter does itself (`night_light`, `keyboard_layout`).
+    Ask(Ask),
     /// A diagnostic: every window's surfaces as Core holds them and the rects it draws them at.
     Layers,
     Subscribe,
     Unsubscribe,
     Command(ShellCommand),
+}
+
+/// What the adapter does itself when a shell asks (2026-11-07): the screens' colours warmer
+/// (`{"cmd": "night_light", "on": true|false}`, without `on`: the other way round) or the next
+/// keyboard layout (`{"cmd": "keyboard_layout"}`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ask {
+    NightLight(Option<bool>),
+    NextKeyboardLayout,
 }
 
 /// Why a request was not executed, as its reply names it.
@@ -117,6 +128,12 @@ fn request(v: &Value, core: &Core) -> Result<Request, RequestError> {
     Ok(match cmd {
         "snapshot" => Request::Snapshot,
         "lock" => Request::Lock,
+        "night_light" => Request::Ask(Ask::NightLight(match v.get("on") {
+            None | Some(Value::Null) => None,
+            Some(Value::Bool(b)) => Some(*b),
+            _ => return Err(Invalid),
+        })),
+        "keyboard_layout" => Request::Ask(Ask::NextKeyboardLayout),
         "layers" => Request::Layers,
         "subscribe" => Request::Subscribe,
         "unsubscribe" => Request::Unsubscribe,
