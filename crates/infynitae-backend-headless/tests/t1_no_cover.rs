@@ -107,7 +107,15 @@ fn a_window_opening_maximized_does_not_cover_the_window_in_view() {
     }
     let id = *r.ls.state.core().stage().mapped_elements().last().unwrap();
     assert_ne!(id, w);
-    let (rw, rx) = (rect(&r, w), rect(&r, id));
-    assert!(rx.2 - rx.0 >= 1000, "it was maximized: {rx:?}");
+    // the probe never redraws at the offered size: the maximize is the saved floating state, and
+    // the room it fills nearly the whole 1920x1080 screen from its anchor
+    let core = r.ls.state.core();
+    assert!(
+        core.stage().saved_floating(id).is_some(),
+        "it was maximized"
+    );
+    let a = core.stage().anchor(id).unwrap();
+    let rx = (a.x, a.y, a.x + 1900, a.y + 1000);
+    let rw = rect(&r, w);
     assert!(apart(rw, rx), "the maximized window {rx:?} covers {rw:?}");
 }
