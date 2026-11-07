@@ -1557,47 +1557,6 @@ impl Core {
         out
     }
 
-    /// An app's minimize button (`xdg_toplevel.set_minimized`; an X11 app's through the bridge):
-    /// the window is hidden, still open, until it is picked again (the windows list, Super+W's
-    /// apps, or the app asking for it). Only the focused window, as its maximize button, and
-    /// never a fullscreen one: Wine asks to minimize a game when it loses the focus (the black
-    /// screens of 2026-11-02), which is then not the focused window and is left alone.
-    pub fn client_minimize(&mut self, id: crate::stage::ElementId) -> Vec<Effect> {
-        let mut out = Vec::new();
-        if self.focus.target() != Some(id)
-            || self.stage.mapped(id).is_none()
-            || self.fullscreen_of(id).is_some()
-            || self.input.interaction.active()
-        {
-            return out;
-        }
-        if self.stage.set_minimized(id, true).is_err() {
-            return out;
-        }
-        let live: Vec<crate::stage::ElementId> = self
-            .focusable_elements()
-            .into_iter()
-            .filter(|&e| e != id)
-            .collect();
-        out.extend(self.focus.target_lost(id, &live));
-        self.strict_successor(id, &mut out);
-        self.invalidate_all_frames();
-        self.membership_pass_element(id, &mut out);
-        out.extend(self.visibility_pass());
-        out
-    }
-
-    /// A minimized window comes back where it was, on top.
-    pub(crate) fn restore_minimized(&mut self, id: crate::stage::ElementId, out: &mut Vec<Effect>) {
-        if self.stage.set_minimized(id, false).is_err() {
-            return;
-        }
-        self.stage.raise(id);
-        self.invalidate_all_frames();
-        self.membership_pass_element(id, &mut *out);
-        out.extend(self.visibility_pass());
-    }
-
     /// Whether `id` asked to be maximized before it was shown (`client_maximize`); asked once,
     /// when it maps.
     pub fn take_maximize_on_map(&mut self, id: crate::stage::ElementId) -> bool {
