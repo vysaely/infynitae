@@ -1,0 +1,35 @@
+#!/bin/sh
+# tools/test-edge-panel-lines: PANEL_ lines with looks (module:look) are read and written back the same
+# (`infynitae-edge --print-panels`, the line Super+drag saves), defaults leave no look, unknown looks
+# fall back to the default, and the four panels drawn with looks are not blank. Run from the repository root.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-edge-lines.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+LIVE="$REPO_DIR/live"
+cc -O1 -o "$TMP/edge" "$LIVE/edge/infynitae-edge.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
+    "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/edge/wlr-foreign-toplevel-protocol.c" \
+    $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon gio-2.0) -lm
+mkdir -p "$TMP/home/.config/infynitae"
+fail=0
+check() {  # config line, panel, the line expected back
+    printf '%s\n' "$1" > "$TMP/home/.config/infynitae/config"
+    got=$(HOME="$TMP/home" "$TMP/edge" --print-panels | awk -v p="$2" '$1 == p { $1 = ""; sub(/^ /, ""); print }')
+    if [ "$got" = "$3" ]; then echo "ok   $2: $3"; else echo "FAIL $2: got '$got', want '$3'"; fail=1; fi
+}
+check 'PANEL_CONTROL="SUPER+A top right hover clock:big wifi:small dnd:wide volume"' control \
+    'SUPER+A top right hover clock:big wifi:small dnd:wide volume'
+check 'PANEL_APPS="search:hidden favorites apps"' apps 'SUPER+W top center nohover search:hidden favorites apps'
+check 'PANEL_APPS="search:bar apps"' apps 'SUPER+W top center nohover search apps'
+check 'PANEL_CONTROL="clock:huge wifi:tile"' control 'SUPER+A top right hover clock wifi'
+check 'PANEL_MINE="SUPER+M left center 320 volume:loud wifi:small"' mine 'SUPER+M left center 320 nohover volume wifi:small'
+printf 'PANEL_CONTROL="clock:calendar wifi:small bluetooth:small dnd:small nightlight:small volume replay:wide power"\nPANEL_APPS="search:hidden favorites apps"\n' \
+    > "$TMP/home/.config/infynitae/config"
+for mode in apps windows control clipboard; do
+    if HOME="$TMP/home" "$TMP/edge" --render "$mode" 1280x800 "$TMP/$mode.png" && [ -s "$TMP/$mode.png" ]; then
+        echo "ok   $mode drawn with looks"
+    else
+        echo "FAIL $mode with looks: render failed"; fail=1
+    fi
+done
+exit $fail

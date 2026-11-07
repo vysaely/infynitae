@@ -544,6 +544,14 @@ FAVORITES=""
 #           nightlight: warmer colours, NIGHT_LIGHT_TEMP; keyboard: the next layout, shown with
 #           more than one in XKB_DEFAULT_LAYOUT; osk: the on-screen keyboard, shown with squeekboard
 #           installed; bluetooth's list: Find new devices pairs one)
+#   A module's look: module:look, smallest first (none written: the middle one shown here):
+#           the switches (wifi bluetooth dnd nightlight keyboard osk power replay):
+#             small (a quarter row, the name only)  tile (half a row, name and state)  wide (the row)
+#           search: hidden (shows once you type)  bar      clock: time  big  calendar (month shown)
+#           e.g. PANEL_CONTROL="clock:big wifi:small bluetooth:small dnd:small nightlight:small volume"
+#   In the open panel, Super + left drag moves a module (a bar shows where it goes), Super + right
+#   drag makes it bigger or smaller (right or down: bigger); Shift may be held too. The panel's
+#   line here is then rewritten with the change, as FAVORITES is.
 # Four panels are built in; a line for one of them changes only what it says (PANEL_CONTROL="left"
 # moves it and keeps its key and modules). Any other name is a new panel:
 #   PANEL_APPS="SUPER+W top center search favorites apps"
