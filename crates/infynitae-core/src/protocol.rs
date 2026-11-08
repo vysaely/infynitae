@@ -3028,7 +3028,8 @@ pub(crate) fn largest_gap(
         ))
     };
     let own = area(window);
-    let mut best: Option<((i64, i64), (i64, i64, i64, i64))> = None;
+    type Rect = (i64, i64, i64, i64);
+    let mut best: Option<((i64, i64), Rect)> = None;
     for (i, &x0) in xs.iter().enumerate() {
         for &x1 in &xs[i + 1..] {
             for (k, &y0) in ys.iter().enumerate() {
