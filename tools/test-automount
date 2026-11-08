@@ -70,6 +70,10 @@ case "\$cmd" in
                 echo "Mounted /dev/sdh1 at /run/media/testuser/START_STICK."
                 exit 0
                 ;;
+            /dev/sdj1)
+                echo "Mounted /dev/sdj1 at /run/media/testuser/HOT_SWAP."
+                exit 0
+                ;;
             /dev/dm-7)
                 echo "Mounted /dev/dm-7 at /run/media/testuser/SECRET."
                 exit 0
@@ -81,6 +85,20 @@ case "\$cmd" in
         esac
         ;;
     info)
+        # drives as udisksctl prints them (2026-11-09: an internal disk says "Removable: false"
+        # and "true" on later lines; only the path below /org/freedesktop/UDisks2/ is accepted)
+        if [ "\$*" = "-p drives/Internal_HDD" ]; then
+            printf '%s\n' "  org.freedesktop.UDisks2.Drive:" "    CanPowerOff:                false" \
+                "    MediaRemovable:             false" "    Removable:                  false" \
+                "  org.freedesktop.UDisks2.Drive.Ata:" "    PmEnabled:                  true" \
+                "    SmartEnabled:               true"
+            exit 0
+        fi
+        if [ "\$*" = "-p drives/Hot_Swap" ]; then
+            printf '%s\n' "  org.freedesktop.UDisks2.Drive:" "    MediaRemovable:             false" \
+                "    Removable:                  true"
+            exit 0
+        fi
         if [ "\$*" = "-b /dev/dm-7" ]; then
             echo "  org.freedesktop.UDisks2.Block:"
             echo "    CryptoBackingDevice:        '/org/freedesktop/UDisks2/block_devices/sdi1'"
@@ -128,6 +146,8 @@ cat > "$SIGNALS" <<'EOF'
 /org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/block_devices/sdf1', {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sdf1'>, 'IdLabel': <'BROKEN_DRIVE'>, 'HintAuto': <true>, 'HintSystem': <false>, 'HintIgnore': <false>, 'Drive': <objectpath '/org/freedesktop/UDisks2/drives/Broken_Flash_Disk'>}, 'org.freedesktop.UDisks2.Filesystem': {'MountPoints': <@aay []>}})
 /org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/drives/External_USB', {'org.freedesktop.UDisks2.Drive': {'Removable': <true>, 'Model': <'External'>}})
 /org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/block_devices/sdg1', {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sdg1'>, 'IdLabel': <'EXT_USB'>, 'HintAuto': <false>, 'HintSystem': <false>, 'HintIgnore': <false>, 'Drive': <objectpath '/org/freedesktop/UDisks2/drives/External_USB'>}, 'org.freedesktop.UDisks2.Filesystem': {'MountPoints': <@aay []>}})
+/org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/block_devices/sdk1', {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sdk1'>, 'IdLabel': <'INTERNAL_DATA'>, 'HintAuto': <false>, 'HintSystem': <false>, 'HintIgnore': <false>, 'Drive': <objectpath '/org/freedesktop/UDisks2/drives/Internal_HDD'>}, 'org.freedesktop.UDisks2.Filesystem': {'MountPoints': <@aay []>}})
+/org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesAdded (objectpath '/org/freedesktop/UDisks2/block_devices/sdj1', {'org.freedesktop.UDisks2.Block': {'Device': <b'/dev/sdj1'>, 'IdLabel': <'HOT_SWAP'>, 'HintAuto': <false>, 'HintSystem': <false>, 'HintIgnore': <false>, 'Drive': <objectpath '/org/freedesktop/UDisks2/drives/Hot_Swap'>}, 'org.freedesktop.UDisks2.Filesystem': {'MountPoints': <@aay []>}})
 /org/freedesktop/UDisks2: org.freedesktop.DBus.ObjectManager.InterfacesRemoved (objectpath '/org/freedesktop/UDisks2/block_devices/sdd1', ['org.freedesktop.UDisks2.Block', 'org.freedesktop.UDisks2.Filesystem'])
 EOF
 
@@ -175,6 +195,19 @@ if ! grep -q "mount --no-user-interaction -b /dev/sdg1" "$CALLS_LOG"; then
     exit 1
 fi
 echo "PASS: /dev/sdg1 (drive Removable true) was mounted"
+
+if grep -q "mount .* /dev/sdk1" "$CALLS_LOG"; then
+    echo "FAIL: /dev/sdk1 on an internal disk (Removable: false) was mounted" >&2
+    exit 1
+fi
+echo "PASS: /dev/sdk1 (internal disk, true only on other lines) was not mounted"
+
+if ! grep -q "mount --no-user-interaction -b /dev/sdj1" "$CALLS_LOG"; then
+    echo "FAIL: /dev/sdj1 on a drive udisks calls removable was not mounted" >&2
+    cat "$CALLS_LOG" >&2
+    exit 1
+fi
+echo "PASS: /dev/sdj1 (drive asked by its path, Removable true) was mounted"
 
 echo "--- Checking watcher log entries ---"
 if ! grep -q "mounted /dev/sdd1 at /run/media/testuser/USB_STICK" "$LOG_FILE"; then

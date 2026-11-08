@@ -110,13 +110,15 @@ is_removable_drive() {
     case " $removable_drives " in
         *" $drv "*) return 0 ;;
     esac
-    drv_info=$(run_udisksctl info -p "$drv" 2>/dev/null) || return 1
-    case "$drv_info" in
-        *Removable:*true*|*MediaRemovable:*true*)
-            removable_drives="$removable_drives $drv "
-            return 0
-            ;;
-    esac
+    # `info -p` takes the path below /org/freedesktop/UDisks2/ ("drives/..."): the full object
+    # path is refused, so this check never ran before 2026-11-09
+    drv_info=$(run_udisksctl info -p "${drv#/org/freedesktop/UDisks2/}" 2>/dev/null) || return 1
+    # line by line: a pattern over the whole text matched an internal disk's "Removable: false"
+    # followed by any later "true" (SmartEnabled, PmEnabled...), and mounted it (2026-11-09)
+    if printf '%s\n' "$drv_info" | grep -qE '^[[:space:]]*(Media)?Removable:[[:space:]]+true[[:space:]]*$'; then
+        removable_drives="$removable_drives $drv "
+        return 0
+    fi
     return 1
 }
 

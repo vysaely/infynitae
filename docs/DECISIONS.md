@@ -212,7 +212,10 @@ these by date, e.g. "(owner, 2026-10-24)".
   held window opens without the focus, asks for attention and leaves the camera where it is.
 - **A window never moves another window** (2026-11-06, owner): "the only window that is
   supposed to move is the one getting resized", "maximize moves the window itself, not the
-  other windows". A resize of any kind and a maximize change only that window, which may cover
-  its neighbours; the push along the cluster (2026-10-31) is gone. Resizing a maximized window
+  other windows". A resize of any kind and a maximize change only that window; the push along
+  the cluster (2026-10-31) is gone. A resize may cover a neighbour; a maximize does not since
+  2026-11-09 ("it should fullscreen to the free space nearby"): it grows into the largest free
+  part of the screen around the window, 12 px from the neighbours, and the whole screen only
+  when nothing else is in view. A window that already fills its gap does not change. Resizing a maximized window
   ends the maximize. New windows still open in free space, and a window that grows by itself
   still moves itself off its neighbours.

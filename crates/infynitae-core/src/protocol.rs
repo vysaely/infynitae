@@ -2978,11 +2978,137 @@ fn overlaps_any(existing: &[(i64, i64, i64, i64)], r: (i64, i64, i64, i64)) -> b
     })
 }
 
+/// Where a maximize grows (owner, 2026-11-09: "it should fullscreen to the free space nearby"):
+/// the largest rect `(x0, y0, x1, y1)` inside `view` that keeps the 12 px tiling gap from every
+/// rect in `others`, picked by how much of `window` it holds, then by its size. Only a rect
+/// larger than `window` counts; `None` when there is none (the window already fills its gap) or
+/// when more than 16 windows are in view (too many to search every gap quickly).
+///
+/// Every largest empty rect has each edge on the view's edge or on a neighbour's (gap-widened)
+/// edge, so trying every pair of those edges finds it.
+pub(crate) fn largest_gap(
+    view: (i64, i64, i64, i64),
+    others: &[(i64, i64, i64, i64)],
+    window: (i64, i64, i64, i64),
+) -> Option<(i64, i64, i64, i64)> {
+    const GAP: i64 = 12;
+    const MOST: usize = 16;
+    let clip = |r: (i64, i64, i64, i64)| {
+        (
+            r.0.max(view.0),
+            r.1.max(view.1),
+            r.2.min(view.2),
+            r.3.min(view.3),
+        )
+    };
+    let blocks: Vec<_> = others
+        .iter()
+        .map(|&(x0, y0, x1, y1)| clip((x0 - GAP, y0 - GAP, x1 + GAP, y1 + GAP)))
+        .filter(|b| b.0 < b.2 && b.1 < b.3)
+        .collect();
+    if blocks.len() > MOST || view.0 >= view.2 || view.1 >= view.3 {
+        return None;
+    }
+    let edges = |lo: i64, hi: i64, pick: fn(&(i64, i64, i64, i64)) -> [i64; 2]| {
+        let mut v = vec![lo, hi];
+        v.extend(blocks.iter().flat_map(pick));
+        v.sort_unstable();
+        v.dedup();
+        v
+    };
+    let xs = edges(view.0, view.2, |b| [b.0, b.2]);
+    let ys = edges(view.1, view.3, |b| [b.1, b.3]);
+    let area = |r: (i64, i64, i64, i64)| (r.2 - r.0).max(0) * (r.3 - r.1).max(0);
+    let held = |r: (i64, i64, i64, i64)| {
+        area((
+            r.0.max(window.0),
+            r.1.max(window.1),
+            r.2.min(window.2),
+            r.3.min(window.3),
+        ))
+    };
+    let own = area(window);
+    let mut best: Option<((i64, i64), (i64, i64, i64, i64))> = None;
+    for (i, &x0) in xs.iter().enumerate() {
+        for &x1 in &xs[i + 1..] {
+            for (k, &y0) in ys.iter().enumerate() {
+                for &y1 in &ys[k + 1..] {
+                    let r = (x0, y0, x1, y1);
+                    if blocks
+                        .iter()
+                        .any(|b| b.0 < x1 && x0 < b.2 && b.1 < y1 && y0 < b.3)
+                    {
+                        break; // a taller rect from the same top hits the same block
+                    }
+                    let a = area(r);
+                    if a <= own {
+                        continue;
+                    }
+                    let score = (held(r), a);
+                    if best.is_none_or(|(s, _)| score > s) {
+                        best = Some((score, r));
+                    }
+                }
+            }
+        }
+    }
+    best.map(|(_, r)| r)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::output::{OutputDescriptor, Transform};
     use crate::snapshot::{InputRegion, SnapshotSurface, SurfaceRole, tests::key};
+
+    // largest_gap: the screen of the owner's report (2026-11-09), Discord top left, a terminal
+    // top right, the browser below overlapping Discord a little
+    const VIEW: (i64, i64, i64, i64) = (0, 0, 1920, 1080);
+
+    #[test]
+    fn a_maximize_fills_the_whole_view_when_it_is_empty() {
+        assert_eq!(largest_gap(VIEW, &[], (200, 500, 1000, 1000)), Some(VIEW));
+    }
+
+    #[test]
+    fn a_maximize_grows_into_the_gap_and_covers_no_neighbour() {
+        let discord = (300, 75, 1165, 560);
+        let terminal = (1170, 130, 1710, 515);
+        let browser = (205, 518, 1070, 1003);
+        let gap = largest_gap(VIEW, &[discord, terminal], browser).unwrap();
+        assert_eq!(gap, (0, 572, 1920, 1080), "below both, the full width");
+        for o in [discord, terminal] {
+            assert!(
+                o.3 + 12 <= gap.1 || o.2 + 12 <= gap.0 || gap.2 + 12 <= o.0 || gap.3 + 12 <= o.1
+            );
+        }
+    }
+
+    #[test]
+    fn a_maximize_keeps_to_the_side_the_window_is_on() {
+        // a column in the middle: the window on the left grows on the left
+        let column = (900, 0, 1000, 1080);
+        let gap = largest_gap(VIEW, &[column], (100, 100, 400, 400)).unwrap();
+        assert_eq!(gap, (0, 0, 888, 1080));
+        let gap = largest_gap(VIEW, &[column], (1500, 100, 1700, 400)).unwrap();
+        assert_eq!(gap, (1012, 0, 1920, 1080));
+    }
+
+    #[test]
+    fn a_window_that_already_fills_its_gap_is_not_maximized() {
+        let left = (0, 0, 488, 1080);
+        let right = (1012, 0, 1920, 1080);
+        assert_eq!(
+            largest_gap(VIEW, &[left, right], (500, 0, 1000, 1080)),
+            None
+        );
+    }
+
+    #[test]
+    fn neighbours_outside_the_view_do_not_count() {
+        let far = (5000, 0, 6000, 1080);
+        assert_eq!(largest_gap(VIEW, &[far], (10, 10, 50, 50)), Some(VIEW));
+    }
 
     fn tree(mapped: bool) -> SurfaceTree {
         SurfaceTree {
