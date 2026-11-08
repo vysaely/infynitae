@@ -321,7 +321,9 @@ static void parallax_line(struct wallpaper_app *app, char *line) {
 
 static void parallax_read(struct wallpaper_app *app) {
     for (;;) {
-        ssize_t got = read(app->ipc_fd, app->ipc_buf + app->ipc_len, sizeof(app->ipc_buf) - 1 - app->ipc_len);
+        if (app->ipc_len >= sizeof(app->ipc_buf) - 1) app->ipc_len = 0;  /* a line too long: dropped */
+        size_t room = sizeof(app->ipc_buf) - 1 - app->ipc_len;
+        ssize_t got = read(app->ipc_fd, app->ipc_buf + app->ipc_len, room);
         if (got == 0 || (got < 0 && errno != EAGAIN && errno != EINTR)) {
             close(app->ipc_fd);  /* the compositor went: the image rests where it is */
             app->ipc_fd = -1;
@@ -339,7 +341,6 @@ static void parallax_read(struct wallpaper_app *app) {
         size_t rest = app->ipc_len - (size_t)(start - app->ipc_buf);
         memmove(app->ipc_buf, start, rest);
         app->ipc_len = rest;
-        if (app->ipc_len >= sizeof(app->ipc_buf) - 1) app->ipc_len = 0;  /* a line too long: dropped */
     }
 }
 

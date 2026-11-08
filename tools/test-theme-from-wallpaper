@@ -11,7 +11,7 @@ TMP=$(mktemp -d "/tmp/infynitae-test-theme-wallpaper.XXXXXX")
 trap 'rm -rf "$TMP"' EXIT INT TERM
 H="$TMP/home"; mkdir -p "$H/.local/bin" "$H/.config/infynitae"
 W="$REPO_DIR/live/wallpaper"
-cc -O1 -o "$H/.local/bin/infynitae-wallpaper" "$W/infynitae-wallpaper.c" "$W/wlr-layer-shell-protocol.c" \
+cc -O1 -o "$H/.local/bin/infynitae-wallpaper" "$W/infynitae-wallpaper.c" "$W/wlr-layer-shell-protocol.c" "$W/viewporter-protocol.c" \
     "$W/xdg-shell-protocol.c" $(pkg-config --cflags --libs wayland-client cairo gdk-pixbuf-2.0) -lm
 img() {  # img FILE R G B: a 64x36 image, mostly that colour with a grey band
     python3 - "$@" <<'PY'
