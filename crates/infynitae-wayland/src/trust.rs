@@ -180,10 +180,13 @@ struct Rule {
     exes: HashSet<FileId>,
 }
 
-/// The lists, resolved to app ids and files.
+/// The lists, resolved to app ids and files; and what they were resolved from, to resolve them again
+/// (`resolved_again`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Policy {
     rules: Vec<Rule>,
+    home: Option<PathBuf>,
+    lists: Vec<(Capability, String)>,
 }
 
 impl Policy {
@@ -193,9 +196,11 @@ impl Policy {
         home: Option<&Path>,
         lists: impl IntoIterator<Item = (Capability, &'a str)>,
     ) -> Policy {
+        let lists: Vec<(Capability, String)> =
+            lists.into_iter().map(|(c, l)| (c, l.to_string())).collect();
         let mut given: Vec<Option<&str>> = vec![None; Capability::ALL.len()];
-        for (cap, list) in lists {
-            given[cap as usize] = Some(list);
+        for (cap, list) in &lists {
+            given[*cap as usize] = Some(list.as_str());
         }
         let dirs = search_dirs(home);
         let rules = Capability::ALL
@@ -229,7 +234,38 @@ impl Policy {
                 rule
             })
             .collect();
-        Policy { rules }
+        Policy {
+            rules,
+            home: home.map(Path::to_path_buf),
+            lists,
+        }
+    }
+
+    /// Whether the list for `cap` names the program at `path`: one of Infynitae's helpers for it, a
+    /// program name given, or its absolute path.
+    fn names(&self, path: &Path, cap: Capability) -> bool {
+        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+        let given = self
+            .lists
+            .iter()
+            .find(|(c, _)| *c == cap)
+            .map(|(_, l)| l.as_str())
+            .unwrap_or(cap.default_list());
+        cap.helpers().contains(&name)
+            || given
+                .split([' ', ',', '\t'])
+                .any(|w| !w.is_empty() && (w == name || Path::new(w) == path))
+    }
+
+    /// The same lists resolved again. A program is known by its file, and an update replaces the
+    /// files (a new file renamed into place: another inode), so a helper updated while the session
+    /// runs is no longer the file this policy knows (owner's PC and the test VM, 2026-11-08: after
+    /// a helper rebuild the lock screen was refused the session lock and could not start).
+    pub fn resolved_again(&self) -> Policy {
+        Policy::from_lists(
+            self.home.as_deref(),
+            self.lists.iter().map(|(c, l)| (*c, l.as_str())),
+        )
     }
 
     /// Whether `identity` has `cap`.
@@ -321,7 +357,37 @@ impl SharedPolicy {
             // the compositor's own connection
             return true;
         };
-        self.0.read().is_ok_and(|p| p.allows(identity, cap))
+        self.allows_identity(identity, cap)
+    }
+
+    /// Whether `identity` has `cap`. A native program refused is checked once more against the
+    /// files as they are now (`Policy::resolved_again`): one updated since it was resolved is known
+    /// again, and the policy keeps the new resolution. Anything else refused stays refused.
+    pub fn allows_identity(&self, identity: &Identity, cap: Capability) -> bool {
+        let Ok(current) = self.0.read().map(|p| p.clone()) else {
+            return false;
+        };
+        if current.allows(identity, cap) {
+            return true;
+        }
+        // only a program the lists name (a helper, a program or a path given): another refused app
+        // costs nothing more
+        let Identity::Native {
+            path: Some(path), ..
+        } = identity
+        else {
+            return false;
+        };
+        if !current.names(path, cap) {
+            return false;
+        }
+        let fresh = current.resolved_again();
+        if fresh == current {
+            return false;
+        }
+        let allowed = fresh.allows(identity, cap);
+        self.set(fresh);
+        allowed
     }
 
     /// The globals that only native, unsandboxed clients may see: security-context-v1 itself.
@@ -422,5 +488,54 @@ mod tests {
         assert!(p.allows(&me(), Capability::Clipboard));
         let tight = Policy::from_lists(None, [(Capability::Clipboard, "wl-copy")]);
         assert!(!tight.allows(&me(), Capability::Clipboard));
+    }
+
+    /// An update writes each helper anew and renames it into place (`live/build-helpers.sh`): the
+    /// file the policy knew is gone. The lock screen as updated must still be allowed the lock, and
+    /// a program that is not a helper must still be refused.
+    #[test]
+    fn a_helper_replaced_by_an_update_is_still_known() {
+        let home = std::env::temp_dir().join(format!("infynitae-trust-{}", std::process::id()));
+        let bin = home.join(".local/bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let lock = bin.join("infynitae-lock");
+        std::fs::write(&lock, b"old").unwrap();
+        let shared = SharedPolicy::default();
+        shared.set(Policy::from_lists(Some(&home), []));
+        let old = Identity::Native {
+            exe: FileId::of(&lock),
+            path: Some(lock.clone()),
+        };
+        assert!(shared.allows_identity(&old, Capability::Lock));
+        // the update: a new file, renamed over the old one
+        let new_file = bin.join("infynitae-lock.new");
+        std::fs::write(&new_file, b"new").unwrap();
+        std::fs::rename(&new_file, &lock).unwrap();
+        let new = Identity::Native {
+            exe: FileId::of(&lock),
+            path: Some(lock.clone()),
+        };
+        assert_ne!(old, new, "the rename gave the file another inode");
+        let stale = shared.0.read().unwrap().clone();
+        assert!(
+            !stale.allows(&new, Capability::Lock),
+            "the policy as it was refuses it (the bug)"
+        );
+        assert!(
+            shared.allows_identity(&new, Capability::Lock),
+            "resolved again, it is allowed"
+        );
+        // a program that is no helper is still refused, also when named like one
+        let stranger = Identity::Native {
+            exe: FileId::of(Path::new("/bin/sh")),
+            path: Some("/bin/sh".into()),
+        };
+        assert!(!shared.allows_identity(&stranger, Capability::Lock));
+        let impostor = Identity::Native {
+            exe: FileId::of(Path::new("/bin/sh")),
+            path: Some(lock.clone()),
+        };
+        assert!(!shared.allows_identity(&impostor, Capability::Lock));
+        std::fs::remove_dir_all(&home).ok();
     }
 }

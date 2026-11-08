@@ -16,6 +16,10 @@ it are in [DECISIONS.md](DECISIONS.md) ("Security and trust", 2026-10-31).
   surprises more than against attacks.
 - **Infynitae's own helpers** (the edge, the lock screen, the wallpaper, the portal, the
   recorder, the polkit agent, as installed in `~/.local/bin`) always have what they need.
+- The files are looked up when the session starts and when the config changes. An update writes
+  a helper (or a listed program) anew, as another file; when such a program is refused, its
+  name or path on the list is looked up again, so an updated lock screen can still lock the
+  session without restarting it. A program the lists do not name is never looked up again.
 
 ## The powers and their lists
 
