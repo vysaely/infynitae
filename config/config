@@ -295,6 +295,13 @@ ICON_THEME="Adwaita"
     # default: Adwaita
     # options: Adwaita  · Papirus-Dark  · any installed theme (GTK and Qt apps)
 
+FOLDER_COLOR="accent"
+    # Folders in the file manager: in the theme's colour (BORDER_ACTIVE), following it when it
+    # changes, or the icon theme's own (Papirus only; a theme of your own named
+    # Infynitae-<icon theme> is made in ~/.local/share/icons, every other icon is Papirus's)
+    # default: accent
+    # options: accent · theme
+
 COLOR_SCHEME="prefer-dark"
     # Apps' light or dark look (GTK, Qt, and apps that ask the desktop: Firefox, Chromium, Electron)
     # default: prefer-dark
@@ -332,6 +339,13 @@ WALLPAPER_MODE="fill"
     # How the wallpaper covers the screen [save]
     # default: fill
     # options: fill  · fit  · stretch  · center  · tile
+
+WALLPAPER_PARALLAX="off"
+    # Depth: while the view moves the wallpaper shifts a little against it, as far things do, and
+    # settles back to the middle in about a second after (nothing is redrawn; the image is held
+    # 3%, strong 6%, larger than the screen) [save]
+    # default: off
+    # options: off  · subtle  · strong
 
 
 # ═══ Displays & sharpness ══════════════════════════════════════════════════════════ [restart] ═══

@@ -13,9 +13,11 @@
  */
 
 #define _GNU_SOURCE
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <signal.h>
@@ -33,6 +35,12 @@ extern char **environ;
 #include <gdk-pixbuf/gdk-pixbuf.h>
 
 #include "wlr-layer-shell-protocol.h"
+#include "viewporter-protocol.h"
+#include <math.h>
+#include <poll.h>
+#include <time.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include "lock-cache.h"
 #include "theme-colors.h"
 
@@ -53,6 +61,15 @@ struct wallpaper_output {
     struct wl_buffer *buffer;
     void *shm_data;
     size_t shm_size;
+    /* parallax: the image drawn `margin` px larger on every side, a screen-sized window of it shown
+     * (wp_viewport); the view's centre as the compositor last said, and the point the window
+     * eases back to after a move */
+    struct wp_viewport *viewport;
+    int margin;
+    bool have_cam;
+    double cam_x, cam_y, rest_x, rest_y, zoom;
+    struct wl_callback *frame_cb;
+    int64_t last_ns;
     struct wallpaper_app *app;
     struct wallpaper_output *next;
 };
@@ -74,6 +91,12 @@ struct wallpaper_app {
      * the output named by --output when one is */
     int overlay;
     char only_output[64];
+    /* WALLPAPER_PARALLAX: 0 off, 1 subtle, 2 strong; and the compositor's events, when on */
+    int parallax;
+    struct wp_viewporter *viewporter;
+    int ipc_fd;
+    char ipc_buf[65536];
+    size_t ipc_len;
 };
 
 static int create_shm_file(off_t size) {
@@ -190,13 +213,146 @@ static void release_image_when_drawn(struct wallpaper_app *app) {
     app->pixbuf = NULL;
 }
 
+/* ---- parallax (owner, 2026-11-08): the wallpaper behind the canvas, moving less than it ----
+ * The canvas has no end and the image has, so the image does not follow the view: it shifts while
+ * the view moves (as far things seem to) and eases back to the middle in about a second after.
+ * The shift: the view's distance from where the image rests, scaled by the depth (8%, strong 15%
+ * of the movement) and kept inside the margin smoothly (tanh). Nothing is redrawn: only the window
+ * into the larger image moves (wp_viewport), once a frame while it moves. */
+static int64_t mono_ns(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+}
+
+static void parallax_place(struct wallpaper_output *out) {
+    if (!out->viewport || out->margin <= 0) return;
+    double depth = out->app->parallax == 2 ? 0.15 : 0.08, m = out->margin;
+    double z = out->zoom > 0.0 ? out->zoom : 1.0;
+    double dx = out->have_cam ? (out->cam_x - out->rest_x) * z : 0.0;
+    double dy = out->have_cam ? (out->cam_y - out->rest_y) * z : 0.0;
+    double sx = m + m * tanh(dx * depth / m), sy = m + m * tanh(dy * depth / m);
+    wp_viewport_set_source(out->viewport, wl_fixed_from_double(sx), wl_fixed_from_double(sy),
+                           wl_fixed_from_int(out->width), wl_fixed_from_int(out->height));
+}
+
+static void parallax_frame(void *data, struct wl_callback *cb, uint32_t t);
+static const struct wl_callback_listener parallax_frame_listener = {.done = parallax_frame};
+
+/* One step of the easing back, then the next frame's while the image is still off its rest. */
+static void parallax_step(struct wallpaper_output *out) {
+    if (!out->viewport || !out->surface || out->margin <= 0 || out->frame_cb) return;
+    int64_t now = mono_ns();
+    double dt = out->last_ns ? (now - out->last_ns) / 1e9 : 0.0;
+    if (dt > 0.1) dt = 0.1;
+    out->last_ns = now;
+    double k = 1.0 - exp(-dt / 0.5);
+    out->rest_x += (out->cam_x - out->rest_x) * k;
+    out->rest_y += (out->cam_y - out->rest_y) * k;
+    parallax_place(out);
+    double off = fabs(out->cam_x - out->rest_x) + fabs(out->cam_y - out->rest_y);
+    if (off > 0.25) {
+        out->frame_cb = wl_surface_frame(out->surface);
+        wl_callback_add_listener(out->frame_cb, &parallax_frame_listener, out);
+    } else {
+        out->rest_x = out->cam_x;
+        out->rest_y = out->cam_y;
+        out->last_ns = 0;
+    }
+    wl_surface_commit(out->surface);
+}
+
+static void parallax_frame(void *data, struct wl_callback *cb, uint32_t t) {
+    (void)t;
+    struct wallpaper_output *out = data;
+    wl_callback_destroy(cb);
+    out->frame_cb = NULL;
+    parallax_step(out);
+}
+
+/* The compositor's shell socket: subscribed, its output events give each screen's view. */
+static void parallax_connect(struct wallpaper_app *app) {
+    app->ipc_fd = -1;
+    const char *rt = getenv("XDG_RUNTIME_DIR");
+    if (!app->parallax || !app->viewporter || !rt) return;
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return;
+    struct sockaddr_un sa = {.sun_family = AF_UNIX};
+    snprintf(sa.sun_path, sizeof(sa.sun_path), "%s/infynitae/shell.sock", rt);
+    const char *req = "{\"id\":1,\"cmd\":\"subscribe\"}\n";
+    if (connect(fd, (struct sockaddr *)&sa, sizeof(sa)) < 0 || write(fd, req, strlen(req)) < 0) {
+        close(fd);
+        return;
+    }
+    fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK);
+    app->ipc_fd = fd;
+    app->ipc_len = 0;
+}
+
+/* A line of the socket: every "name":"<connector>" with the "center":[x,y] and "zoom" after it. */
+static void parallax_line(struct wallpaper_app *app, char *line) {
+    for (char *p = strstr(line, "\"name\":\""); p; p = strstr(p + 1, "\"name\":\"")) {
+        char conn[64] = "";
+        const char *n = p + 8;
+        size_t k = 0;
+        while (n[k] && n[k] != '"' && k + 1 < sizeof(conn)) { conn[k] = n[k]; k++; }
+        conn[k] = '\0';
+        char *next = strstr(p + 1, "\"name\":\"");
+        char *c = strstr(p, "\"center\":[");
+        if (!c || (next && c > next)) continue;
+        double x, y, z = 1.0;
+        if (sscanf(c + 10, "%lf,%lf", &x, &y) != 2) continue;
+        char *zp = strstr(c, "\"zoom\":");
+        if (zp && (!next || zp < next)) z = atof(zp + 7);
+        for (struct wallpaper_output *o = app->outputs; o; o = o->next) {
+            if (strcmp(o->connector, conn) != 0) continue;
+            if (!o->have_cam) {
+                o->rest_x = x;
+                o->rest_y = y;
+                o->have_cam = true;
+            }
+            o->cam_x = x;
+            o->cam_y = y;
+            o->zoom = z;
+            parallax_step(o);
+        }
+    }
+}
+
+static void parallax_read(struct wallpaper_app *app) {
+    for (;;) {
+        ssize_t got = read(app->ipc_fd, app->ipc_buf + app->ipc_len, sizeof(app->ipc_buf) - 1 - app->ipc_len);
+        if (got == 0 || (got < 0 && errno != EAGAIN && errno != EINTR)) {
+            close(app->ipc_fd);  /* the compositor went: the image rests where it is */
+            app->ipc_fd = -1;
+            return;
+        }
+        if (got < 0) return;
+        app->ipc_len += (size_t)got;
+        app->ipc_buf[app->ipc_len] = '\0';
+        char *start = app->ipc_buf, *nl;
+        while ((nl = strchr(start, '\n'))) {
+            *nl = '\0';
+            parallax_line(app, start);
+            start = nl + 1;
+        }
+        size_t rest = app->ipc_len - (size_t)(start - app->ipc_buf);
+        memmove(app->ipc_buf, start, rest);
+        app->ipc_len = rest;
+        if (app->ipc_len >= sizeof(app->ipc_buf) - 1) app->ipc_len = 0;  /* a line too long: dropped */
+    }
+}
+
 static void render_output(struct wallpaper_output *out) {
     if (out->width <= 0 || out->height <= 0) return;
     if (!out->app->pixbuf && out->app->path[0]) out->app->pixbuf = load_image(out->app->path);
     if (!out->app->pixbuf) return;
 
-    int32_t w = out->width;
-    int32_t h = out->height;
+    /* parallax: drawn larger by a margin on every side (3% of the width, 6% when strong) */
+    out->margin = (out->app->parallax && out->app->viewporter && !out->app->overlay)
+                      ? (int)lround(out->width * (out->app->parallax == 2 ? 0.06 : 0.03)) : 0;
+    int32_t w = out->width + 2 * out->margin;
+    int32_t h = out->height + 2 * out->margin;
     int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, w);
     size_t size = (size_t)stride * h;
 
@@ -302,6 +458,11 @@ static void render_output(struct wallpaper_output *out) {
 
     wl_surface_attach(out->surface, out->buffer, 0, 0);
     wl_surface_damage_buffer(out->surface, 0, 0, w, h);
+    if (out->margin > 0) {
+        if (!out->viewport) out->viewport = wp_viewporter_get_viewport(out->app->viewporter, out->surface);
+        wp_viewport_set_destination(out->viewport, out->width, out->height);
+        parallax_place(out);
+    }
     wl_surface_commit(out->surface);
 }
 
@@ -417,6 +578,8 @@ static void registry_global(void *data, struct wl_registry *registry,
         app->shm = wl_registry_bind(registry, name, &wl_shm_interface, 1);
     } else if (strcmp(interface, zwlr_layer_shell_v1_interface.name) == 0) {
         app->layer_shell = wl_registry_bind(registry, name, &zwlr_layer_shell_v1_interface, 1);
+    } else if (strcmp(interface, wp_viewporter_interface.name) == 0) {
+        app->viewporter = wl_registry_bind(registry, name, &wp_viewporter_interface, 1);
     } else if (strcmp(interface, wl_output_interface.name) == 0) {
         struct wallpaper_output *out = calloc(1, sizeof(struct wallpaper_output));
         out->name = name;
@@ -548,6 +711,8 @@ static void expand_tilde(char *path, size_t max_len) {
     }
 }
 
+static int g_parallax;  /* WALLPAPER_PARALLAX, read with the config */
+
 static void load_config_defaults(char *target, size_t target_sz, char *mode, size_t mode_sz) {
     const char *home = getenv("HOME");
     if (!home) return;
@@ -597,6 +762,9 @@ static void load_config_defaults(char *target, size_t target_sz, char *mode, siz
             }
         } else if (strcmp(key, "WALLPAPER_MODE") == 0 && mode[0] == '\0') {
             snprintf(mode, mode_sz, "%s", val);
+        } else if (strcmp(key, "WALLPAPER_PARALLAX") == 0) {
+            g_parallax = !strcasecmp(val, "strong") ? 2 : (!strcasecmp(val, "subtle") || !strcasecmp(val, "on") ||
+                                                          !strcasecmp(val, "true")) ? 1 : 0;
         }
     }
     fclose(f);
@@ -717,7 +885,8 @@ int main(int argc, char *argv[]) {
         }
     }
 
-    if (target[0] == '\0' && !overlay) {
+    if (!overlay) {
+        /* the image and its mode from the config when not given; WALLPAPER_PARALLAX always */
         load_config_defaults(target, sizeof(target), mode, sizeof(mode));
     }
 
@@ -851,8 +1020,35 @@ int main(int argc, char *argv[]) {
         write_pid_file();
     }
 
-    while (wl_display_dispatch(app.display) != -1) {
-        // Sleep on events; consumes 0% CPU
+    app.parallax = overlay ? 0 : g_parallax;
+    parallax_connect(&app);
+    if (app.ipc_fd < 0) {
+        while (wl_display_dispatch(app.display) != -1) {
+            // Sleep on events; consumes 0% CPU
+        }
+    } else {
+        /* the display and the compositor's events: asleep between them */
+        struct pollfd pfd[2] = {{.fd = wl_display_get_fd(app.display), .events = POLLIN},
+                                {.fd = app.ipc_fd, .events = POLLIN}};
+        for (;;) {
+            while (wl_display_prepare_read(app.display) != 0)
+                if (wl_display_dispatch_pending(app.display) < 0) goto done;
+            wl_display_flush(app.display);
+            pfd[1].fd = app.ipc_fd;
+            if (poll(pfd, app.ipc_fd >= 0 ? 2 : 1, -1) < 0 && errno != EINTR) {
+                wl_display_cancel_read(app.display);
+                break;
+            }
+            if (pfd[0].revents & POLLIN) {
+                if (wl_display_read_events(app.display) < 0) break;
+            } else {
+                wl_display_cancel_read(app.display);
+            }
+            if (wl_display_dispatch_pending(app.display) < 0) break;
+            if (app.ipc_fd >= 0 && (pfd[1].revents & (POLLIN | POLLHUP))) parallax_read(&app);
+            wl_display_flush(app.display);
+        }
+    done:;
     }
 
     // Clean up

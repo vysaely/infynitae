@@ -46,7 +46,7 @@ build infynitae-lock "wayland-client cairo pangocairo xkbcommon pam" \
     "$LIVE/lock/infynitae-lock.c" "$LIVE/lock/ext-session-lock-v1-protocol.c" -- -lm -lpthread
 build infynitae-wallpaper "wayland-client cairo gdk-pixbuf-2.0" \
     "$LIVE/wallpaper/infynitae-wallpaper.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
-    "$LIVE/wallpaper/xdg-shell-protocol.c" -- -lm
+    "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/wallpaper/viewporter-protocol.c" -- -lm
 build infynitae-edge "wayland-client cairo pangocairo xkbcommon gio-2.0" \
     "$LIVE/edge/infynitae-edge.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
     "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/edge/wlr-foreign-toplevel-protocol.c" -- -lm

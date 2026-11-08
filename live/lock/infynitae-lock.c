@@ -387,7 +387,7 @@ static void draw_text_centered(cairo_t *cr, PangoLayout *layout, const char *fon
         y = cy - (ly + lh / 2.0);
     }
 
-    cairo_move_to(cr, x, y);
+    cairo_move_to(cr, round(x), round(y));  /* letters on whole pixels */
     pango_cairo_show_layout(cr, layout);
 }
 
@@ -699,6 +699,13 @@ static void draw_scene(cairo_t *cr, LockApp *app, const LockOutput *output, int 
         }
     }
 
+    /* hinted, whole-pixel glyph advances (as the panels: the same text lines up the same way) */
+    cairo_font_options_t *fo = cairo_font_options_create();
+    cairo_font_options_set_hint_metrics(fo, CAIRO_HINT_METRICS_ON);
+    cairo_font_options_set_hint_style(fo, CAIRO_HINT_STYLE_SLIGHT);
+    cairo_font_options_set_antialias(fo, CAIRO_ANTIALIAS_GRAY);
+    cairo_set_font_options(cr, fo);
+    cairo_font_options_destroy(fo);
     PangoLayout *layout = pango_cairo_create_layout(cr);
 
     // Clock and date (tabular digits so the colon never moves)

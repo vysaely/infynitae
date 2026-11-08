@@ -93,6 +93,55 @@ wallpaper_colors() {
     return 0
 }
 
+# Folders in the theme's colour (FOLDER_COLOR="accent", the default; "theme": the icon theme's
+# own). For Papirus, whose folders are drawn in two blues: a small icon theme of the user's,
+# Infynitae-<icon theme>, with those folders redrawn in BORDER_ACTIVE (its side 82%, its sign 35%), every
+# other icon inherited; made again only when the icon theme or the colour changes. Its name is
+# printed; the icon theme as set when there is nothing to do.
+folder_icon_theme() {
+    case "${FOLDER_COLOR:-accent}" in accent) ;; *) echo "$ICON_THEME"; return 0 ;; esac
+    case "$ICON_THEME" in Papirus|Papirus-Dark|Papirus-Light) ;; *) echo "$ICON_THEME"; return 0 ;; esac
+    src=""
+    for d in "$HOME/.local/share/icons/$ICON_THEME" /usr/share/icons/"$ICON_THEME"; do
+        [ -f "$d/index.theme" ] && { src="$d"; break; }
+    done
+    hex=$(printf '%s' "$BORDER_ACTIVE" | tr -d '#' | tr 'A-F' 'a-f')
+    case "$hex" in [0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]) ;; *) src="" ;; esac
+    [ -n "$src" ] || { echo "$ICON_THEME"; return 0; }
+    name="Infynitae-$ICON_THEME"
+    dst="$HOME/.local/share/icons/$name"
+    want="$ICON_THEME #$hex 3"
+    if [ -f "$dst/.made-for" ] && [ "$(cat "$dst/.made-for")" = "$want" ]; then
+        echo "$name"
+        return 0
+    fi
+    # the side of the folder: the colour 18% darker
+    r=$(printf '%d' "0x${hex%????}"); g=$(printf '%d' "0x$(printf '%s' "$hex" | cut -c3-4)"); b=$(printf '%d' "0x${hex#????}")
+    dark=$(printf '%02x%02x%02x' $((r * 82 / 100)) $((g * 82 / 100)) $((b * 82 / 100)))
+    # the sign on a folder (home, downloads): 35% of it, as Papirus's own
+    deep=$(printf '%02x%02x%02x' $((r * 35 / 100)) $((g * 35 / 100)) $((b * 35 / 100)))
+    tmp="$dst.new.$$"
+    rm -rf "$tmp"
+    mkdir -p "$tmp"
+    find -L "$src" -mindepth 2 -maxdepth 2 -type d -name places 2>/dev/null | while read -r places; do
+        size=$(basename "$(dirname "$places")")
+        mkdir -p "$tmp/$size/places"
+        # every folder drawn in Papirus's blue (a link to a -blue- one, or one of its own), but the
+        # ones named blue: they stay blue
+        grep -lis '#5294e2' "$places"/*.svg 2>/dev/null | while read -r icon; do
+            case "$(basename "$icon")" in *-blue*) continue ;; esac
+            sed -e "s/#5294e2/#$hex/gI" -e "s/#4877b1/#$dark/gI" -e "s/#1d344f/#$deep/gI" "$(readlink -f "$icon")" > "$tmp/$size/places/$(basename "$icon")" 2>/dev/null || true
+        done
+    done
+    sed -e "s/^Name=.*/Name=$name/" -e "s/^Inherits=.*/Inherits=$ICON_THEME,hicolor/" "$src/index.theme" > "$tmp/index.theme"
+    grep -q '^Inherits=' "$tmp/index.theme" || sed -i "/^Name=/a Inherits=$ICON_THEME,hicolor" "$tmp/index.theme"
+    command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t -f "$tmp" >/dev/null 2>&1 || true
+    printf '%s\n' "$want" > "$tmp/.made-for"
+    rm -rf "$dst"
+    mv "$tmp" "$dst"
+    echo "$name"
+}
+
 apply_settings() {
     # THEME_FROM_WALLPAPER: a new wallpaper (path or file changed) gives the theme its colours
     case "${THEME_FROM_WALLPAPER:-false}" in
@@ -142,6 +191,8 @@ EOF
         1|true|yes|on|TRUE|True) gtk_radius=0 ;;
         *) gtk_radius=6 ;;
     esac
+    # (after the colours are known: the wallpaper may have just given them)
+    ICON_THEME=$(folder_icon_theme)
     for gtk_dir in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do
         mkdir -p "$gtk_dir"
         put_file "$gtk_dir/settings.ini" << EOF
