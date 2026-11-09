@@ -31,12 +31,14 @@ pub mod calendar;
 pub mod clipboard;
 pub mod clock;
 pub mod favorites;
+pub mod media;
 pub mod memory;
 pub mod notifications;
 pub mod search;
 pub mod session;
 pub mod switches;
 pub mod system;
+pub mod tray;
 pub mod volume;
 pub mod windows;
 
@@ -119,6 +121,12 @@ pub fn run_sh(key: &str, cmd: &str) -> String {
         let map = parse_render_data(&text);
         return map.get(key).cloned().unwrap_or_default();
     }
+    if key == "tray" {
+        return tray::fetch_dbus_string();
+    }
+    if key == "media" {
+        return media::fetch_dbus_string();
+    }
     Command::new("sh")
         .arg("-c")
         .arg(cmd)
@@ -179,6 +187,8 @@ pub struct World {
     pub memory: memory::MemoryData,
     pub clipboard: clipboard::ClipboardData,
     pub notifications: notifications::NotificationsData,
+    pub tray: tray::TrayData,
+    pub media: media::MediaData,
     pub search: String,
     pub apps: apps::AppsData,
     pub windows: windows::WindowsData,
@@ -207,6 +217,8 @@ impl World {
             memory: memory::MemoryData::default(),
             clipboard: clipboard::ClipboardData::default(),
             notifications: notifications::NotificationsData::default(),
+            tray: tray::TrayData::default(),
+            media: media::MediaData::default(),
             search: String::new(),
             apps: apps::AppsData::default(),
             windows: windows::WindowsData::default(),
@@ -393,6 +405,8 @@ impl World {
             .chain(memory::CMDS.iter())
             .chain(clipboard::CMDS.iter())
             .chain(notifications::CMDS.iter())
+            .chain(tray::CMDS.iter())
+            .chain(media::CMDS.iter())
         {
             let out = run_sh(k, c);
             self.apply(k, &out);
@@ -417,6 +431,8 @@ impl World {
             || memory::apply(&mut self.memory, key, out)
             || clipboard::apply(&mut self.clipboard, key, out)
             || notifications::apply(&mut self.notifications, key, out)
+            || tray::apply(&mut self.tray, key, out)
+            || media::apply(&mut self.media, key, out)
             || apps::apply(&mut self.apps, key, out, &self.search)
             || windows::apply(&mut self.windows, key, out, &self.search)
     }
@@ -459,6 +475,8 @@ pub fn refresh_cmds(m: Module) -> &'static [(&'static str, &'static str)] {
         Module::Memory => memory::CMDS,
         Module::Clipboard => clipboard::CMDS,
         Module::Notifications => notifications::CMDS,
+        Module::Tray => tray::CMDS,
+        Module::Media => media::CMDS,
         _ => &[],
     }
 }
@@ -487,6 +505,8 @@ pub fn height_in(it: &Item, world: &World, th: &Theme, w: f64) -> f64 {
         Module::Session => session::height(),
         Module::Clipboard => clipboard::height(world),
         Module::Notifications => notifications::height(world),
+        Module::Tray => tray::height(world),
+        Module::Media => media::height(it, world),
         m if m.is_switch() => switches::height(it, world, th),
         _ => 2.0 * PAD_Y + 40.0,
     }
@@ -507,6 +527,8 @@ pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), bu
         Module::Session => session::click(world, size, pos, button),
         Module::Clipboard => clipboard::click(world, size, pos, button),
         Module::Notifications => notifications::click(world, size, pos, button),
+        Module::Tray => tray::click(world, size, pos, button),
+        Module::Media => media::click(world, size, pos, button),
         m if m.is_switch() => switches::click(m, world, button),
         _ => false,
     }
@@ -516,6 +538,7 @@ pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), bu
 pub fn drag(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
     match it.module {
         Module::Volume => volume::drag(world, size, pos),
+        Module::Media => media::drag(world, size, pos),
         _ => false,
     }
 }
@@ -527,6 +550,7 @@ pub fn scroll(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), d
         Module::Windows => windows::scroll(world, size, pos, dy),
         Module::Volume => volume::scroll(world, size, pos, dy),
         Module::Clipboard => clipboard::scroll(world, size, pos, dy),
+        Module::Media => media::scroll(world, size, pos, dy),
         _ => false,
     }
 }
@@ -553,6 +577,8 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
         Module::Session => session::draw(cr, th, rect),
         Module::Clipboard => clipboard::draw(cr, th, world, rect),
         Module::Notifications => notifications::draw(cr, th, world, rect),
+        Module::Tray => tray::draw(cr, th, world, rect),
+        Module::Media => media::draw(cr, th, world, rect),
         m if m.is_switch() => switches::draw(cr, th, it, world, rect),
         m => {
             draw::card(cr, th, x, y, w, h);

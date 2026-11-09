@@ -298,12 +298,45 @@ impl OutputSurface {
         let ph = content_h.min(max_panel_height(h as f64));
         let (ox, oy) = panel_origin(panel, w as f64, h as f64, pw, ph);
         let pad = 4;
-        let new_box = (
-            (ox.floor() as i32 - pad).max(0),
-            (oy.floor() as i32 - pad).max(0),
-            (pw.ceil() as i32 + 2 * pad).min(w),
-            (ph.ceil() as i32 + 2 * pad).min(h),
-        );
+        let mut tray_m_rect = None;
+        if let Some(open_idx) = shell.world.tray.open_menu {
+            if let Some((_, r)) = panel
+                .items
+                .iter()
+                .zip(&rects)
+                .find(|(it, _)| it.module == crate::config::Module::Tray)
+            {
+                let item_count = shell
+                    .world
+                    .tray
+                    .items
+                    .get(open_idx)
+                    .map(|it| it.effective_menu_items().len())
+                    .unwrap_or(3);
+                tray_m_rect = Some(modules::tray::menu_rect(
+                    (ox, oy),
+                    (pw, ph),
+                    *r,
+                    item_count,
+                    (w as f64, h as f64),
+                ));
+            }
+        }
+
+        let new_box = if let Some(mr) = tray_m_rect {
+            let min_x = (ox.min(mr.0).floor() as i32 - pad).max(0);
+            let min_y = (oy.min(mr.1).floor() as i32 - pad).max(0);
+            let max_x = ((ox + pw).max(mr.0 + mr.2).ceil() as i32 + pad).min(w);
+            let max_y = ((oy + ph).max(mr.1 + mr.3).ceil() as i32 + pad).min(h);
+            (min_x, min_y, (max_x - min_x).max(1), (max_y - min_y).max(1))
+        } else {
+            (
+                (ox.floor() as i32 - pad).max(0),
+                (oy.floor() as i32 - pad).max(0),
+                (pw.ceil() as i32 + 2 * pad).min(w),
+                (ph.ceil() as i32 + 2 * pad).min(h),
+            )
+        };
 
         let slot = self.slots[slot_idx].as_mut().unwrap();
         let old_box = slot.prev_box.replace(new_box);
@@ -346,6 +379,9 @@ impl OutputSurface {
                             (ox, oy),
                             pw,
                         );
+                    }
+                    if let Some(mr) = tray_m_rect {
+                        modules::tray::draw_menu(&cr, &shell.theme, &shell.world, mr);
                     }
                 }
                 surface.flush();

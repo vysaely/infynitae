@@ -552,7 +552,32 @@ impl Shell {
         let (rects, content_h) = layout_in(panel, pw, &self.world, &self.theme);
         let ph = content_h.min(max_panel_height(h));
         let (ox, oy) = panel_origin(panel, w, h, pw, ph);
+        if let Some(open_tray_idx) = self.world.tray.open_menu {
+            if let Some((_, r)) = panel
+                .items
+                .iter()
+                .zip(&rects)
+                .find(|(it, _)| it.module == config::Module::Tray)
+            {
+                let item_count = self
+                    .world
+                    .tray
+                    .items
+                    .get(open_tray_idx)
+                    .map(|it| it.effective_menu_items().len())
+                    .unwrap_or(3);
+                let m_rect = modules::tray::menu_rect((ox, oy), (pw, ph), *r, item_count, (w, h));
+                if x >= m_rect.0
+                    && x <= m_rect.0 + m_rect.2
+                    && y >= m_rect.1
+                    && y <= m_rect.1 + m_rect.3
+                {
+                    return modules::tray::click_menu(&mut self.world, m_rect, (x, y));
+                }
+            }
+        }
         if x < ox || x > ox + pw || y < oy || y > oy + ph {
+            self.world.tray.open_menu = None;
             return self.close();
         }
         if modules::is_left_button(button) {
@@ -725,6 +750,24 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         let _ = cr.restore();
     } else {
         modules::draw_panel(&cr, &th, panel, &rects, &world, (ox, oy), pw);
+    }
+    if let Some(open_idx) = world.tray.open_menu {
+        if let Some((_, r)) = panel
+            .items
+            .iter()
+            .zip(&rects)
+            .find(|(it, _)| it.module == config::Module::Tray)
+        {
+            let item_count = world
+                .tray
+                .items
+                .get(open_idx)
+                .map(|it| it.effective_menu_items().len())
+                .unwrap_or(3);
+            let m_rect =
+                modules::tray::menu_rect((ox, oy), (pw, ph), *r, item_count, (w as f64, h as f64));
+            modules::tray::draw_menu(&cr, &th, &world, m_rect);
+        }
     }
     drop(cr);
     let mut f = std::fs::File::create(out).map_err(|e| e.to_string())?;
@@ -1047,6 +1090,77 @@ mod tests {
             sh.world.actions.last().map(String::as_str),
             Some("printf '%s\\n' '108\tgit push origin main' | cliphist decode 2>/dev/null | wl-copy")
         );
+    }
+
+    #[test]
+    fn layout_and_clicks_work_for_tray_and_media() {
+        let cfg = Config::from_text("PANEL_TRAY_MEDIA=\"SUPER+M top right media tray\"\n");
+        let mut sh = Shell::from_config(cfg);
+        sh.world.apply(
+            "media",
+            "status=Playing\ntitle=Starless\nartist=King Crimson\nalbum=Red\nplayer=Melodyae\nposition=234000000\nduration=742000000\nlyrics_current=Starless and bible black\nqueue=Starless\tKing Crimson\t\t742000000\n",
+        );
+        sh.world.apply(
+            "tray",
+            "Steam\t2159 MB\nDiscord\t2 new\tattention\nmenu:10\tSettings\nmenu:20\tQuit\n",
+        );
+
+        assert!(sh.toggle_named("tray_media"));
+        let (w, h) = (1920.0, 1080.0);
+        let panel = sh.cfg.panels[sh.open.unwrap()].clone();
+        let pw = panel_width(&panel, w);
+        let (rects, ph) = layout_in(&panel, pw, &sh.world, &sh.theme);
+        let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
+
+        assert_eq!(rects.len(), 2);
+        let r_media = rects[0];
+        let r_tray = rects[1];
+        assert!(r_media.3 > 150.0);
+        assert!(r_tray.3 > 60.0);
+
+        // Click play/pause in media (medium size)
+        let play_pos = (ox + pw / 2.0, oy + r_media.1 + 146.0);
+        assert!(sh.click(w, h, play_pos.0, play_pos.1, 1));
+        assert_eq!(
+            sh.world.actions.last().map(String::as_str),
+            Some("media:play-pause")
+        );
+
+        // Left click Steam in tray activates Steam
+        let slot0 = modules::tray::item_slot((r_tray.2, r_tray.3), 0).expect("slot0");
+        assert!(sh.click(
+            w,
+            h,
+            ox + r_tray.0 + slot0.0 + 10.0,
+            oy + r_tray.1 + slot0.1 + 10.0,
+            1
+        ));
+        assert_eq!(
+            sh.world.actions.last().map(String::as_str),
+            Some("tray:activate:steam")
+        );
+
+        // Right click Discord in tray opens menu beside the panel
+        let slot1 = modules::tray::item_slot((r_tray.2, r_tray.3), 1).expect("slot1");
+        assert!(sh.click(
+            w,
+            h,
+            ox + r_tray.0 + slot1.0 + 10.0,
+            oy + r_tray.1 + slot1.1 + 10.0,
+            3
+        ));
+        assert_eq!(sh.world.tray.open_menu, Some(1));
+
+        // Click menu item in menu beside panel
+        let m_rect = modules::tray::menu_rect((ox, oy), (pw, ph), r_tray, 2, (w, h));
+        // Click Quit (id 20)
+        let menu_quit_y = m_rect.1 + 8.0 + 26.0 + 5.0;
+        assert!(sh.click(w, h, m_rect.0 + 20.0, menu_quit_y, 1));
+        assert_eq!(
+            sh.world.actions.last().map(String::as_str),
+            Some("tray:menu-action:discord:20")
+        );
+        assert_eq!(sh.world.tray.open_menu, None);
     }
 
     #[test]
