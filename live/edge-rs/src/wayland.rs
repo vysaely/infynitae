@@ -64,7 +64,10 @@ pub fn running_pid() -> Option<i32> {
         return None;
     }
     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok()?;
-    comm.trim().starts_with("infynitae-edge-").then_some(pid)
+    // the pid file is this edge's own (-rs); its process is named infynitae-edge-rs (cut to
+    // "infynitae-edge-" by the kernel), or infynitae-edge once it replaces the C one (stage 6)
+    let comm = comm.trim();
+    (comm.starts_with("infynitae-edge-") || comm == "infynitae-edge").then_some(pid)
 }
 
 /// Sends a panel name to a running `infynitae-edge-rs` via `.panel` + `SIGRTMIN+2`.
