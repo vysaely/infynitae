@@ -88,4 +88,18 @@ for p in apps windows; do
         && [ "$(stat -c %s "$TMP/$p-data.png")" -gt 4000 ]; then echo "ok   $p (data) drawn"
     else echo "FAIL $p (data) not drawn"; fail=1; fi
 done
+cat >> "$TMP/render-data.txt" <<'EOF'
+tray=Steam\t2159 MB\nDiscord\t2 new\tattention\nRustDesk\tIdle\nMelodyae\tPlaying
+media=status=Playing\ntitle=Starless\nartist=King Crimson\nalbum=Red\nplayer=Melodyae\nposition=234000000\nduration=742000000\nshuffle=true\nloop=Playlist\nlyrics_current=Starless and bible black\nlyrics_next=Ice and frozen darkness\nlyrics_before=Sundown dazzling day\nqueue=Starless\tKing Crimson\t\t742000000\nqueue=Fallen Angel\tKing Crimson\t\t363000000\nqueue=One More Red Nightmare\tKing Crimson\t\t427000000
+EOF
+printf 'PANEL_MEDIA="SUPER+M top right media tray"\nPANEL_LARGE="SUPER+L top center 400x600 media"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+for p in media large; do
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render "$p" 1280x800 "$TMP/stage3-$p.png" \
+        && [ "$(stat -c %s "$TMP/stage3-$p.png")" -gt 4000 ]; then echo "ok   stage3 $p drawn"
+    else echo "FAIL stage3 $p not drawn"; fail=1; fi
+done
+printf 'PANEL_CONTROL="SUPER+A bottom right 361x708 hover clock@8,8,344x34 volume@8,48,344x32 wifi@8,86,169x46 bluetooth@183,86,169x46 dnd@8,138,169x46 nightlight@183,138,169x46 keyboard@8,190,169x46 power@183,190,169x46 replay@8,242,169x40 osk@183,242,169x40 notifications@9,288,344x144 media@8,438,344x76 tray@8,520,345x143 session@9,669,344x36"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render control 1280x800 "$TMP/stage3-control-placed.png" \
+    && [ "$(stat -c %s "$TMP/stage3-control-placed.png")" -gt 4000 ]; then echo "ok   stage3 control (placed) drawn"
+else echo "FAIL stage3 control (placed) not drawn"; fail=1; fi
 [ "$fail" = 0 ] && echo "all edge-rs tests passed" || { echo "edge-rs tests failed"; exit 1; }
