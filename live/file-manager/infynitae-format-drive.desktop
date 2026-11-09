@@ -1,0 +1,13 @@
+[Desktop Entry]
+Type=Action
+Name=Format drive...
+Tooltip=Erase this USB drive or card and give it a new filesystem
+Icon=drive-removable-media
+Profiles=drive;
+
+[X-Action-Profile drive]
+Name=Format drive...
+MimeTypes=inode/directory;
+SelectionCount==1
+ShowIfTrue=infynitae-format-drive --can %f
+Exec=infynitae-format-drive %f

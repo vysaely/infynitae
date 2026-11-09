@@ -248,6 +248,7 @@ live/battery-limit infynitae-battery-limit
 live/infynitae-xkill infynitae-xkill
 live/infynitae-sleep-lock infynitae-sleep-lock
 live/infynitae-automount infynitae-automount
+live/infynitae-format-drive infynitae-format-drive
 LIST
     # xwayland-satellite with our patch; a failed build keeps the copy already installed
     sh "$src/live/build-satellite.sh" "$src" "$bin"
@@ -294,6 +295,10 @@ DBusName=org.freedesktop.impl.portal.desktop.infynitae
 Interfaces=org.freedesktop.impl.portal.GlobalShortcuts;org.freedesktop.impl.portal.Settings;
 UseIn=infynitae;wlroots;
 PORTAL
+    # "Format drive..." in file managers that read file-manager actions (PCManFM-Qt, PCManFM)
+    mkdir -p "$HOME/.local/share/file-manager/actions"
+    install -m 644 "$src/live/file-manager/infynitae-format-drive.desktop" \
+        "$HOME/.local/share/file-manager/actions/infynitae-format-drive.desktop"
     # the battery's charge limit (BATTERY_LIMIT), settable by this user where supported
     if ls /sys/class/power_supply/BAT*/charge_control_end_threshold >/dev/null 2>&1; then
         tmp="$(mktemp)"

@@ -31,6 +31,7 @@ this repository already.
 | Admin password prompts | `infynitae-polkit` (ours) | polkit-gnome, lxqt-policykit, hyprpolkitagent | `POLKIT_AGENT` | Ours |
 | Keyring (saved passwords) | gnome-keyring | KeePassXC (Secret Service), kwallet | whichever is installed answers D-Bus | No: security code, leave it to the experts |
 | USB automount | infynitae-automount (ours: a shell watcher on udisks2) | udiskie | `AUTOMOUNT` | No |
+| Formatting a drive | infynitae-format-drive (ours: udisks2, fuzzel prompts; "Format drive..." in PCManFM-Qt's menu) | GNOME Disks | none | No |
 | Session restore | `infynitae-restore` (ours) | none comparable | `SESSION_RESTORE` | Ours |
 | Settings sync (GTK, Qt, cursor) | `infynitae-settings` (ours) | nwg-look, qt6ct | edit the config | Ours |
 | Global shortcuts for apps | `infynitae-portal` (ours) | none for this compositor | always on | Ours |

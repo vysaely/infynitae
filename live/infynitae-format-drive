@@ -1,0 +1,160 @@
+#!/bin/sh
+# infynitae-format-drive: erases a removable drive (USB stick, SD card, USB disk) and gives it one
+# filesystem, through udisks2. The file manager's "Format drive..." runs it on a drive's folder.
+#   infynitae-format-drive PATH: PATH is a drive's folder under /run/media, or a /dev device on it
+#   infynitae-format-drive --can PATH: prints "true" when PATH is one this would format, nothing
+#   else, and asks nothing (the file manager shows "Format drive..." only then)
+# Asked with fuzzel: the filesystem (only those whose tools are installed), the name, then an
+# explicit "Erase" (the first choice is Cancel). Refused for anything not on a removable drive and
+# for a drive that holds the running system (/, /home, /boot, /usr, /var). The whole drive is
+# erased, every partition on it: one partition table (MBR, which every system reads), one
+# partition. The automount watcher mounts it once it exists.
+#   INFYNITAE_FORMAT_UDISKSCTL, INFYNITAE_FORMAT_GDBUS, INFYNITAE_FORMAT_LSBLK,
+#   INFYNITAE_FORMAT_FINDMNT: commands used instead of those tools (tests)
+#   INFYNITAE_FORMAT_ASK: a command printing the answer to a prompt instead of fuzzel; it gets the
+#   prompt's kind (fs, name, confirm) as $1 and the choices on stdin (tests)
+#   INFYNITAE_FORMAT_HAVE: the mkfs tools present, space separated, instead of looking (tests)
+set -u
+STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
+LOG="$STATE_DIR/format.log"
+mkdir -p "$STATE_DIR"
+log() {
+    printf '%s %s\n' "$(date '+%F %T.%3N')" "$*" >> "$LOG" 2>/dev/null || true
+}
+udisks() { ${INFYNITAE_FORMAT_UDISKSCTL:-udisksctl} "$@"; }
+dbus() { ${INFYNITAE_FORMAT_GDBUS:-gdbus} "$@"; }
+blk() { ${INFYNITAE_FORMAT_LSBLK:-lsblk} "$@"; }
+mnt() { ${INFYNITAE_FORMAT_FINDMNT:-findmnt} "$@"; }
+
+plain() {
+    printf '%s' "$1" | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g'
+}
+notify() {
+    if command -v notify-send >/dev/null 2>&1; then
+        notify-send -a Infynitae "$(plain "$1")" "$(plain "${2:-}")" 2>/dev/null || true
+    fi
+    log "said: $1 ${2:-}"
+}
+can=0
+if [ "${1:-}" = "--can" ]; then
+    can=1
+    shift
+fi
+fail() {
+    [ "$can" = 1 ] || notify "Could not format the drive" "$1"
+    exit 1
+}
+
+# a choice from fuzzel: $1 the kind (fs, name, confirm), $2 the prompt, the choices on stdin
+ask() {
+    if [ -n "${INFYNITAE_FORMAT_ASK:-}" ]; then
+        sh -c "$INFYNITAE_FORMAT_ASK \"\$@\"" ask "$1"
+    elif command -v fuzzel >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        if [ "$1" = name ]; then
+            fuzzel --dmenu --lines 0 --prompt-only "$2" </dev/null 2>/dev/null
+        else
+            fuzzel --dmenu --prompt "$2" 2>/dev/null
+        fi
+    fi
+}
+
+have_mkfs() {
+    if [ -n "${INFYNITAE_FORMAT_HAVE+set}" ]; then
+        case " $INFYNITAE_FORMAT_HAVE " in *" $1 "*) return 0 ;; esac
+        return 1
+    fi
+    command -v "$1" >/dev/null 2>&1
+}
+
+target="${1:-}"
+[ -n "$target" ] || fail "No drive given."
+case "$target" in
+    /dev/*) part="$target" ;;
+    *)
+        # a folder: the drive's own folder (its mount root), not a folder inside it
+        part=$(mnt -no SOURCE --mountpoint "$target" 2>/dev/null | head -n 1)
+        [ -n "$part" ] || fail "$target is not a drive. Choose the drive's own folder."
+        ;;
+esac
+# the whole disk under a partition (or the disk itself)
+parent=$(blk -ndo PKNAME "$part" 2>/dev/null | head -n 1)
+disk="/dev/${parent:-${part#/dev/}}"
+name_of_disk="${disk#/dev/}"
+
+drive=$(udisks info -b "$disk" 2>/dev/null | awk '$1 == "Drive:" { d = $2; gsub(/\047/, "", d); print d; exit }')
+[ -n "$drive" ] && [ "$drive" != "/" ] || fail "$disk is not a drive udisks knows."
+drive_info=$(udisks info -p "${drive#/org/freedesktop/UDisks2/}" 2>/dev/null)
+printf '%s\n' "$drive_info" | grep -qE '^[[:space:]]*(Media)?Removable:[[:space:]]+true[[:space:]]*$' \
+    || fail "$disk is not a removable drive: only USB drives and cards are formatted here."
+# the running system on it (a system started from a stick): never
+system=$(blk -nro MOUNTPOINTS "$disk" 2>/dev/null | grep -xE '/|/home|/boot|/boot/efi|/efi|/usr|/var' | head -n 1)
+[ -z "$system" ] || fail "$disk holds $system of the running system."
+if [ "$can" = 1 ]; then
+    echo true
+    exit 0
+fi
+
+model=$(printf '%s\n' "$drive_info" | awk -F': *' '$1 ~ /^ *Model$/ { gsub(/\047/, "", $2); print $2; exit }')
+size=$(blk -ndo SIZE "$disk" 2>/dev/null | tr -d ' ')
+what="${model:-Drive} ${size:-} ($name_of_disk)"
+
+# the filesystem: what this machine can make
+choices=""
+have_mkfs mkfs.exfat && choices="${choices}exFAT: every computer, phone and console
+"
+have_mkfs mkfs.vfat && choices="${choices}FAT32: every device, but no file over 4 GB
+"
+have_mkfs mkfs.ext4 && choices="${choices}ext4: Linux only
+"
+have_mkfs mkfs.ntfs && choices="${choices}NTFS: Windows and Linux
+"
+[ -n "$choices" ] || fail "No formatting tools are installed (exfatprogs, dosfstools)."
+fs_line=$(printf '%s' "$choices" | ask fs "Format $what as ")
+case "$fs_line" in
+    exFAT*) fs=exfat type=0x07 most=15 ;;
+    FAT32*) fs=vfat type=0x0c most=11 ;;
+    ext4*) fs=ext4 type=0x83 most=16 ;;
+    NTFS*) fs=ntfs type=0x07 most=32 ;;
+    *) log "cancelled at the filesystem ($fs_line)"; exit 0 ;;
+esac
+
+# the name: letters, digits, spaces, - and _ (a label is read by every system), cut to its
+# filesystem's longest
+label=$(ask name "Name: " </dev/null | tr -cd 'A-Za-z0-9 _-' | sed 's/^ *//; s/ *$//' | cut -c "1-$most")
+[ -n "$label" ] || label="USB"
+[ "$fs" = vfat ] && label=$(printf '%s' "$label" | tr 'a-z' 'A-Z')
+
+answer=$(printf 'Cancel\nErase everything on %s\n' "$what" | ask confirm "Erase $what? ")
+case "$answer" in
+    Erase*) ;;
+    *) log "cancelled at the confirmation"; exit 0 ;;
+esac
+
+log "formatting $disk ($what) as $fs, label $label"
+notify "Formatting $what" "Everything on it is being erased."
+# every filesystem on it unmounted, every encrypted partition locked
+blk -nro NAME,TYPE,FSTYPE,MOUNTPOINTS "$disk" 2>/dev/null | while read -r n t f m; do
+    [ -n "${m:-}" ] && { udisks unmount --no-user-interaction -b "/dev/$n" >/dev/null 2>&1 \
+        || udisks unmount -b "/dev/$n" >/dev/null 2>&1 || true; }
+    [ "$f" = crypto_LUKS ] && udisks lock --no-user-interaction -b "/dev/$n" >/dev/null 2>&1
+    true
+done
+still=$(blk -nro MOUNTPOINTS "$disk" 2>/dev/null | grep -v '^$' | head -n 1)
+[ -z "$still" ] || fail "$still is still in use: close what is open on it and try again."
+
+obj="/org/freedesktop/UDisks2/block_devices/$name_of_disk"
+if ! out=$(dbus call --system --timeout 600 --dest org.freedesktop.UDisks2 --object-path "$obj" \
+        --method org.freedesktop.UDisks2.Block.Format dos "{'tear-down': <true>}" 2>&1); then
+    log "partition table failed: $out"
+    fail "The drive refused a new partition table: $(printf '%s' "$out" | tail -n 1 | cut -c 1-160)"
+fi
+opts="{'label': <'$label'>}"
+[ "$fs" = ext4 ] && opts="{'label': <'$label'>, 'take-ownership': <true>}"
+if ! out=$(dbus call --system --timeout 600 --dest org.freedesktop.UDisks2 --object-path "$obj" \
+        --method org.freedesktop.UDisks2.PartitionTable.CreatePartitionAndFormat \
+        0 0 "$type" '' '{}' "$fs" "$opts" 2>&1); then
+    log "partition failed: $out"
+    fail "The new partition could not be made: $(printf '%s' "$out" | tail -n 1 | cut -c 1-160)"
+fi
+log "formatted $disk: $out"
+notify "$label is ready" "$what was formatted as $(printf '%s' "$fs_line" | cut -d: -f1)."
