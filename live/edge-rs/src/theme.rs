@@ -74,12 +74,10 @@ pub struct Theme {
     pub accent: Rgba,
     /// text and icons on an accent fill
     pub on_accent: Rgba,
-    /// a thin bar's empty part (stage 2)
-    #[allow(dead_code)]
+    /// a thin bar's empty part
     pub track: Rgba,
     pub corners: f64,
-    /// SWITCH_LOOK: rows, icons, tiles (the switches, stage 2)
-    #[allow(dead_code)]
+    /// SWITCH_LOOK: rows, icons, tiles
     pub switch_look: String,
 }
 

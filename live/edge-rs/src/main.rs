@@ -56,6 +56,18 @@ pub fn panel_origin(p: &Panel, w: f64, h: f64, pw: f64, ph: f64) -> (f64, f64) {
 
 /// Each module's rectangle in the panel: where it was placed by hand, else stacked.
 pub fn layout(p: &Panel, pw: f64) -> (Vec<(f64, f64, f64, f64)>, f64) {
+    let world = modules::World::now();
+    let th = theme::Theme::from_config(&Config::from_text(""));
+    layout_in(p, pw, &world, &th)
+}
+
+/// Each module's rectangle in the panel given `world` and `th`.
+pub fn layout_in(
+    p: &Panel,
+    pw: f64,
+    world: &modules::World,
+    th: &theme::Theme,
+) -> (Vec<(f64, f64, f64, f64)>, f64) {
     if p.placed {
         let rects: Vec<_> = p
             .items
@@ -77,11 +89,29 @@ pub fn layout(p: &Panel, pw: f64) -> (Vec<(f64, f64, f64, f64)>, f64) {
         );
     }
     let mut y = 0.0;
-    let mut rects = Vec::new();
-    for it in &p.items {
-        let h = modules::height(it, pw);
-        rects.push((0.0, y, pw, h));
-        y += h + draw::GAP;
+    let mut rects = Vec::with_capacity(p.items.len());
+    let mut i = 0;
+    while i < p.items.len() {
+        if p.items[i].module.is_switch() {
+            let mut j = i + 1;
+            while j < p.items.len() && p.items[j].module.is_switch() {
+                j += 1;
+            }
+            let (run_rects, card_h) =
+                modules::switches::layout_run(&p.items[i..j], world, &th.switch_look, pw, y);
+            rects.extend(run_rects);
+            if card_h > 0.0 {
+                y += card_h + draw::GAP;
+            }
+            i = j;
+        } else {
+            let h = modules::height_in(&p.items[i], world, th, pw);
+            rects.push((0.0, y, pw, h));
+            if h > 0.0 {
+                y += h + draw::GAP;
+            }
+            i += 1;
+        }
     }
     (rects, (y - draw::GAP).max(0.0))
 }
@@ -90,6 +120,20 @@ pub fn layout(p: &Panel, pw: f64) -> (Vec<(f64, f64, f64, f64)>, f64) {
 pub fn panel_rect(p: &Panel, w: f64, h: f64) -> (f64, f64, f64, f64) {
     let pw = panel_width(p, w);
     let (_, ph) = layout(p, pw);
+    let (ox, oy) = panel_origin(p, w, h, pw, ph);
+    (ox, oy, pw, ph)
+}
+
+/// The panel's rectangle `(x, y, w, h)` given `world` and `th`.
+pub fn panel_rect_in(
+    p: &Panel,
+    w: f64,
+    h: f64,
+    world: &modules::World,
+    th: &theme::Theme,
+) -> (f64, f64, f64, f64) {
+    let pw = panel_width(p, w);
+    let (_, ph) = layout_in(p, pw, world, th);
     let (ox, oy) = panel_origin(p, w, h, pw, ph);
     (ox, oy, pw, ph)
 }
@@ -108,6 +152,23 @@ pub fn hover_strip(p: &Panel, w: f64, h: f64) -> (f64, f64, f64, f64) {
 /// The panel's rectangle together with the 8 px gap to its screen edge (for hover tracking).
 pub fn panel_hover_box(p: &Panel, w: f64, h: f64) -> (f64, f64, f64, f64) {
     let (ox, oy, pw, ph) = panel_rect(p, w, h);
+    match p.side {
+        Side::Top => (ox, 0.0, pw, oy + ph),
+        Side::Bottom => (ox, oy, pw, (h - oy).max(ph)),
+        Side::Left => (0.0, oy, ox + pw, ph),
+        Side::Right => (ox, oy, (w - ox).max(pw), ph),
+    }
+}
+
+/// The panel's hover box given `world` and `th`.
+pub fn panel_hover_box_in(
+    p: &Panel,
+    w: f64,
+    h: f64,
+    world: &modules::World,
+    th: &theme::Theme,
+) -> (f64, f64, f64, f64) {
+    let (ox, oy, pw, ph) = panel_rect_in(p, w, h, world, th);
     match p.side {
         Side::Top => (ox, 0.0, pw, oy + ph),
         Side::Bottom => (ox, oy, pw, (h - oy).max(ph)),
@@ -169,6 +230,7 @@ pub struct Shell {
     pub config_mtime: Option<SystemTime>,
     pub open: Option<usize>,
     pub opened_by_hover: bool,
+    pub pointer_down: bool,
     pub world: modules::World,
 }
 
@@ -191,6 +253,7 @@ impl Shell {
             config_mtime: mtime,
             open: None,
             opened_by_hover: false,
+            pointer_down: false,
             world: modules::World::now(),
         }
     }
@@ -205,6 +268,7 @@ impl Shell {
             config_mtime: None,
             open: None,
             opened_by_hover: false,
+            pointer_down: false,
             world: modules::World::now(),
         }
     }
@@ -226,6 +290,7 @@ impl Shell {
                     if idx >= self.cfg.panels.len() {
                         self.open = None;
                         self.opened_by_hover = false;
+                        self.pointer_down = false;
                     }
                 }
             }
@@ -252,7 +317,8 @@ impl Shell {
         }
         self.open = Some(idx);
         self.opened_by_hover = by_hover;
-        self.world = modules::World::now();
+        self.pointer_down = false;
+        self.world.on_open();
         true
     }
 
@@ -266,12 +332,14 @@ impl Shell {
         } else {
             self.open = Some(idx);
             self.opened_by_hover = false;
-            self.world = modules::World::now();
+            self.pointer_down = false;
+            self.world.on_open();
             true
         }
     }
 
     pub fn close(&mut self) -> bool {
+        self.pointer_down = false;
         if self.open.is_some() {
             self.open = None;
             self.opened_by_hover = false;
@@ -320,10 +388,13 @@ impl Shell {
             return self.close();
         };
         let pw = panel_width(panel, w);
-        let (rects, ph) = layout(panel, pw);
+        let (rects, ph) = layout_in(panel, pw, &self.world, &self.theme);
         let (ox, oy) = panel_origin(panel, w, h, pw, ph);
         if x < ox || x > ox + pw || y < oy || y > oy + ph {
             return self.close();
+        }
+        if modules::is_left_button(button) {
+            self.pointer_down = true;
         }
         let mut changed = false;
         for (it, r) in panel.items.iter().zip(rects) {
@@ -335,14 +406,58 @@ impl Shell {
         changed
     }
 
+    pub fn pointer_release(&mut self) {
+        self.pointer_down = false;
+    }
+
+    pub fn scroll(&mut self, w: f64, h: f64, x: f64, y: f64, dy: f64) -> bool {
+        let Some(open_idx) = self.open else {
+            return false;
+        };
+        let Some(panel) = self.cfg.panels.get(open_idx) else {
+            return false;
+        };
+        let pw = panel_width(panel, w);
+        let (rects, ph) = layout_in(panel, pw, &self.world, &self.theme);
+        let (ox, oy) = panel_origin(panel, w, h, pw, ph);
+        let mut changed = false;
+        for (it, r) in panel.items.iter().zip(rects) {
+            let (mx, my, mw, mh) = (ox + r.0, oy + r.1, r.2, r.3);
+            if mw > 0.0 && mh > 0.0 && x >= mx && x <= mx + mw && y >= my && y <= my + mh {
+                changed |= modules::scroll(it, &mut self.world, (mw, mh), (x - mx, y - my), dy);
+            }
+        }
+        changed
+    }
+
     pub fn pointer_motion(&mut self, w: f64, h: f64, x: f64, y: f64) -> bool {
         if let Some(open_idx) = self.open {
-            if self.opened_by_hover {
-                if let Some(p) = self.cfg.panels.get(open_idx) {
-                    let (bx, by, bw, bh) = panel_hover_box(p, w, h);
+            if let Some(p) = self.cfg.panels.get(open_idx) {
+                if self.opened_by_hover {
+                    let (bx, by, bw, bh) = panel_hover_box_in(p, w, h, &self.world, &self.theme);
                     if x < bx || x > bx + bw || y < by || y > by + bh {
                         return self.close();
                     }
+                }
+                if self.pointer_down {
+                    let pw = panel_width(p, w);
+                    let (rects, ph) = layout_in(p, pw, &self.world, &self.theme);
+                    let (ox, oy) = panel_origin(p, w, h, pw, ph);
+                    let mut changed = false;
+                    for (it, r) in p.items.iter().zip(rects) {
+                        let (mx, my, mw, mh) = (ox + r.0, oy + r.1, r.2, r.3);
+                        if mw > 0.0
+                            && mh > 0.0
+                            && x >= mx
+                            && x <= mx + mw
+                            && y >= my
+                            && y <= my + mh
+                        {
+                            changed |=
+                                modules::drag(it, &mut self.world, (mw, mh), (x - mx, y - my));
+                        }
+                    }
+                    return changed;
                 }
             }
             return false;
@@ -363,6 +478,7 @@ impl Shell {
     }
 
     pub fn pointer_leave(&mut self) -> bool {
+        self.pointer_down = false;
         let Some(open_idx) = self.open else {
             return false;
         };
@@ -397,15 +513,11 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         0x0c as f64 / 255.0,
     );
     let _ = cr.paint();
-    let pw = panel_width(panel, w as f64);
-    let (rects, ph) = layout(panel, pw);
-    let (ox, oy) = panel_origin(panel, w as f64, h as f64, pw, ph);
     let world = modules::World::now();
-    for (it, r) in panel.items.iter().zip(rects) {
-        if r.2 > 0.0 && r.3 > 0.0 {
-            modules::draw(&cr, &th, it, &world, (ox + r.0, oy + r.1, r.2, r.3));
-        }
-    }
+    let pw = panel_width(panel, w as f64);
+    let (rects, ph) = layout_in(panel, pw, &world, &th);
+    let (ox, oy) = panel_origin(panel, w as f64, h as f64, pw, ph);
+    modules::draw_panel(&cr, &th, panel, &rects, &world, (ox, oy), pw);
     drop(cr);
     let mut f = std::fs::File::create(out).map_err(|e| e.to_string())?;
     surface.write_to_png(&mut f).map_err(|e| e.to_string())?;
@@ -615,5 +727,55 @@ mod tests {
         assert!(sh.toggle_named("control"));
         assert_eq!(sh.cfg.panels[0].side, Side::Bottom);
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn layout_and_clicks_work_for_switches_and_volume() {
+        for look in ["rows", "icons", "tiles"] {
+            let cfg = Config::from_text(&format!(
+                "SWITCH_LOOK=\"{look}\"\n\
+                 PANEL_CONTROL=\"SUPER+A top right wifi bluetooth dnd nightlight keyboard osk power replay volume\"\n"
+            ));
+            let mut sh = Shell::from_config(cfg);
+            sh.world.apply("wifi", "enabled\nyes:HomeNet");
+            sh.world.apply("bluetooth", "Powered: no\n");
+            sh.world.apply("keyboard", "US\tEnglish (US)\t2\n");
+            sh.world.apply("osk", "hidden\n");
+            sh.world.apply("power", "balanced\n");
+            sh.world
+                .apply("volume", "Volume: 50%\nMute: no\nDescription: Speakers\n");
+            sh.world
+                .apply("brightness", "amdgpu_bl1,backlight,128,50%,255\n");
+
+            assert!(sh.toggle_named("control"));
+            let (w, h) = (1920.0, 1080.0);
+            let panel = sh.cfg.panels[sh.open.unwrap()].clone();
+            let pw = panel_width(&panel, w);
+            let (rects, ph) = layout_in(&panel, pw, &sh.world, &sh.theme);
+            let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
+            assert!(ph > 100.0);
+
+            // Click wifi (index 0)
+            let r_wifi = rects[0];
+            assert!(sh.click(w, h, ox + r_wifi.0 + 10.0, oy + r_wifi.1 + 10.0, 1));
+            assert!(!sh.world.switches.wifi_on);
+            assert_eq!(
+                sh.world.actions.last().map(String::as_str),
+                Some("nmcli radio wifi off")
+            );
+            sh.pointer_release();
+
+            // Click and drag volume (index 8)
+            let r_vol = rects[8];
+            assert!(sh.click(w, h, ox + r_vol.0 + r_vol.2 - 14.0, oy + r_vol.1 + 36.0, 1));
+            assert_eq!(sh.world.volume.pct, 100);
+            assert!(sh.pointer_motion(w, h, ox + r_vol.0 + 14.0, oy + r_vol.1 + 36.0));
+            assert_eq!(sh.world.volume.pct, 0);
+            sh.pointer_release();
+
+            // Scroll volume up by 1 notch (-1.0)
+            assert!(sh.scroll(w, h, ox + r_vol.0 + 40.0, oy + r_vol.1 + 25.0, -1.0));
+            assert_eq!(sh.world.volume.pct, 5);
+        }
     }
 }

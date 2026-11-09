@@ -1,14 +1,20 @@
 //! The Wayland client: one wlr-layer-shell surface per output, two shm buffers per surface,
 //! paced by frame callbacks, zero work while closed, and signals / request files in calloop.
 
-use crate::{hover_strip, layout, modules, panel_hover_box, panel_origin, panel_width, Key, Shell};
+use crate::{
+    hover_strip, layout_in, modules, panel_hover_box_in, panel_origin, panel_width, Key, Shell,
+};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
     delegate_registry, delegate_seat, delegate_shm, delegate_touch,
     output::{OutputHandler, OutputState},
     reexports::{
-        calloop::{generic::Generic, EventLoop, Interest, Mode, PostAction},
+        calloop::{
+            channel::{self, Sender},
+            generic::Generic,
+            EventLoop, Interest, Mode, PostAction,
+        },
         calloop_wayland_source::WaylandSource,
         client::{
             globals::registry_queue_init,
@@ -39,7 +45,8 @@ use smithay_client_toolkit::{
 use std::{
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
     path::PathBuf,
-    time::Duration,
+    sync::{atomic::AtomicBool, Arc},
+    time::{Duration, Instant},
 };
 
 const PID_FILE: &str = "infynitae-edge-rs.pid";
@@ -124,7 +131,7 @@ impl OutputSurface {
                     // holds the keyboard); opened by hover: the panel and the way to it, so
                     // leaving it closes it
                     let (rx, ry, rw, rh) = if shell.opened_by_hover {
-                        panel_hover_box(p, w, h)
+                        panel_hover_box_in(p, w, h, &shell.world, &shell.theme)
                     } else {
                         (0.0, 0.0, w, h)
                     };
@@ -282,7 +289,7 @@ impl OutputSurface {
         };
 
         let pw = panel_width(panel, w as f64);
-        let (rects, ph) = layout(panel, pw);
+        let (rects, ph) = layout_in(panel, pw, &shell.world, &shell.theme);
         let (ox, oy) = panel_origin(panel, w as f64, h as f64, pw, ph);
         let pad = 4;
         let new_box = (
@@ -309,17 +316,15 @@ impl OutputSurface {
                 )
             } {
                 if let Ok(cr) = cairo::Context::new(&surface) {
-                    for (it, r) in panel.items.iter().zip(rects) {
-                        if r.2 > 0.0 && r.3 > 0.0 {
-                            modules::draw(
-                                &cr,
-                                &shell.theme,
-                                it,
-                                &shell.world,
-                                (ox + r.0, oy + r.1, r.2, r.3),
-                            );
-                        }
-                    }
+                    modules::draw_panel(
+                        &cr,
+                        &shell.theme,
+                        panel,
+                        &rects,
+                        &shell.world,
+                        (ox, oy),
+                        pw,
+                    );
                 }
                 surface.flush();
             }
@@ -355,11 +360,31 @@ struct App {
     modifiers: Modifiers,
 
     shell: Shell,
+    fetch_tx: Sender<Vec<(String, String)>>,
+    fetch_busy: Arc<AtomicBool>,
+    last_fetch: Option<Instant>,
+    prev_open: Option<usize>,
     exit: bool,
 }
 
 impl App {
+    fn request_fetch(&mut self, idx: usize) {
+        if let Some(panel) = self.shell.cfg.panels.get(idx) {
+            let cmds = modules::World::cmds_for_panel(panel);
+            self.last_fetch = Some(Instant::now());
+            modules::spawn_fetch(self.fetch_tx.clone(), self.fetch_busy.clone(), cmds);
+        }
+    }
+
     fn sync_all(&mut self) {
+        if self.shell.open != self.prev_open {
+            self.prev_open = self.shell.open;
+            if let Some(idx) = self.shell.open {
+                self.request_fetch(idx);
+            } else {
+                self.last_fetch = None;
+            }
+        }
         let qh = self.qh.clone();
         for os in &mut self.outputs {
             os.apply_mode(&qh, &self.compositor, &self.shell);
@@ -428,6 +453,12 @@ impl App {
                 } else {
                     false
                 }
+            }
+            b'K' => {
+                if let Some(idx) = self.shell.open {
+                    self.request_fetch(idx);
+                }
+                false
             }
             _ => false,
         };
@@ -720,7 +751,19 @@ impl PointerHandler for App {
                 PointerEventKind::Press { button, .. } => {
                     changed |= self.shell.click(w, h, x, y, button);
                 }
-                PointerEventKind::Release { .. } | PointerEventKind::Axis { .. } => {}
+                PointerEventKind::Release { .. } => {
+                    self.shell.pointer_release();
+                }
+                PointerEventKind::Axis { vertical, .. } => {
+                    let dy = if vertical.discrete != 0 {
+                        vertical.discrete as f64
+                    } else {
+                        vertical.absolute
+                    };
+                    if dy.abs() > 0.0 {
+                        changed |= self.shell.scroll(w, h, x, y, dy);
+                    }
+                }
             }
         }
         if changed {
@@ -870,9 +913,13 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     let shm = Shm::bind(&globals, &qh).map_err(|e| format!("wl_shm: {e}"))?;
 
     let mut shell = Shell::new();
+    shell.world.live = true;
     if let Some(name) = initial_panel {
         shell.toggle_named(name);
     }
+
+    let (fetch_tx, fetch_rx) = channel::channel::<Vec<(String, String)>>();
+    let fetch_busy = Arc::new(AtomicBool::new(false));
 
     let output_state = OutputState::new(&globals, &qh);
     let existing_outputs: Vec<_> = output_state.outputs().collect();
@@ -891,8 +938,17 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         touch: None,
         modifiers: Modifiers::default(),
         shell,
+        fetch_tx,
+        fetch_busy,
+        last_fetch: None,
+        prev_open: None,
         exit: false,
     };
+
+    if let Some(idx) = app.shell.open {
+        app.prev_open = Some(idx);
+        app.request_fetch(idx);
+    }
 
     for output in existing_outputs {
         app.create_output_surface(output);
@@ -900,6 +956,20 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
 
     let mut event_loop: EventLoop<App> = EventLoop::try_new().map_err(|e| e.to_string())?;
     let loop_handle = event_loop.handle();
+
+    loop_handle
+        .insert_source(fetch_rx, |evt, _, app| {
+            if let channel::Event::Msg(pairs) = evt {
+                let mut any = false;
+                for (k, v) in pairs {
+                    any |= app.shell.world.apply(&k, &v);
+                }
+                if any && app.shell.open.is_some() {
+                    app.sync_all();
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
 
     let sig_rd = setup_signal_pipe()?;
     loop_handle
@@ -926,9 +996,21 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         .insert(loop_handle)
         .map_err(|e| e.to_string())?;
 
+    const REFRESH: Duration = Duration::from_secs(2);
     while !app.exit {
+        let timeout = if let Some(idx) = app.shell.open {
+            let elapsed = app.last_fetch.map(|t| t.elapsed()).unwrap_or(REFRESH);
+            if elapsed >= REFRESH {
+                app.request_fetch(idx);
+                Some(REFRESH)
+            } else {
+                Some(REFRESH - elapsed)
+            }
+        } else {
+            None
+        };
         event_loop
-            .dispatch(None, &mut app)
+            .dispatch(timeout, &mut app)
             .map_err(|e| e.to_string())?;
     }
     Ok(())

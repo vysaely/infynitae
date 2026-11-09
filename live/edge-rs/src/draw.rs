@@ -84,6 +84,19 @@ pub fn text(cr: &Context, x: f64, y: f64, t: &Text) -> f64 {
     l.pixel_size().0 as f64
 }
 
+/// Text with its top left at (x, y), cut with an ellipsis past `max_w` when `max_w > 0`.
+pub fn text_max(cr: &Context, x: f64, y: f64, max_w: f64, t: &Text) -> f64 {
+    let l = layout(cr, t);
+    if max_w > 0.0 {
+        l.set_width((max_w * pango::SCALE as f64) as i32);
+        l.set_ellipsize(pango::EllipsizeMode::End);
+    }
+    set(cr, t.color);
+    cr.move_to(x.round(), y.round());
+    pangocairo::functions::show_layout(cr, &l);
+    l.pixel_size().0 as f64
+}
+
 /// Text with its right edge at x.
 pub fn text_right(cr: &Context, x: f64, y: f64, t: &Text) -> f64 {
     let (w, _) = measure(cr, t);
