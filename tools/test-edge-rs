@@ -58,6 +58,9 @@ volume=Volume: front-left: 39321 / 60% / -13.30 dB\nMute: no\nDescription: Built
 brightness=amdgpu_bl1,backlight,192,75%,255
 system=gpu_busy=67\nvram_used=7807320064\nvram_total=17095983104\ntemp=57000\n7550,\tC0,\tAMD Radeon RX 9070 XT\n=== labv15-pushback-s1 20:55
 memory=MemTotal: 33554432 kB\nMemAvailable: 13002342 kB\nfirefox\t4404019\ncode\t2306867\nalacritty\t655360
+apps=Firefox\tfirefox\tfirefox\torg.mozilla.firefox.desktop\tWeb Browser\tweb;browser;\t200\nFiles\tnautilus\torg.gnome.Nautilus\torg.gnome.Nautilus.desktop\tFile Manager\tfolder;\t150\nFoot\tfoot\tfoot\tfoot.desktop\tTerminal\tshell;\t100\nSettings\tgnome-control-center\torg.gnome.Settings\torg.gnome.Settings.desktop\tSettings\tpreferences;\t0\nSystem Monitor\tgnome-system-monitor\torg.gnome.SystemMonitor\torg.gnome.SystemMonitor.desktop\tProcess Viewer\ttop;cpu;\t0
+favorites=firefox org.gnome.Nautilus foot org.gnome.Settings org.gnome.SystemMonitor
+windows=1\tfirefox\tMozilla Firefox — Infynitae\tfocused\n2\tfoot\t~/infynitae — foot\t\n3\torg.gnome.Nautilus\tFiles — Home\t
 EOF
 for look in rows icons tiles; do
     printf 'SWITCH_LOOK="%s"\nPANEL_CONTROL="clock:calendar wifi bluetooth dnd nightlight keyboard osk power replay volume"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' "$look" > "$TMP/home/.config/infynitae/config"
@@ -78,5 +81,10 @@ for p in control clipboard; do
     if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render "$p" 1280x800 "$TMP/stage2b-$p.png" \
         && [ "$(stat -c %s "$TMP/stage2b-$p.png")" -gt 4000 ]; then echo "ok   stage2b $p drawn"
     else echo "FAIL stage2b $p not drawn"; fail=1; fi
+printf 'FAVORITES="firefox org.gnome.Nautilus foot org.gnome.Settings org.gnome.SystemMonitor"\nPANEL_APPS="SUPER+W top center search:bar favorites apps"\nPANEL_WINDOWS="SUPER+L top center search:bar windows"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+for p in apps windows; do
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render "$p" 1280x800 "$TMP/$p-data.png" \
+        && [ "$(stat -c %s "$TMP/$p-data.png")" -gt 4000 ]; then echo "ok   $p (data) drawn"
+    else echo "FAIL $p (data) not drawn"; fail=1; fi
 done
 [ "$fail" = 0 ] && echo "all edge-rs tests passed" || { echo "edge-rs tests failed"; exit 1; }
