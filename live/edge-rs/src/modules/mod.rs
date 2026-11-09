@@ -27,6 +27,7 @@
 //!   `makoctl history` plain text, or `id\tapp\ttime\tsummary\tbody` lines).
 
 pub mod apps;
+pub mod ask;
 pub mod calendar;
 pub mod clipboard;
 pub mod clock;
@@ -192,6 +193,7 @@ pub struct World {
     pub search: String,
     pub apps: apps::AppsData,
     pub windows: windows::WindowsData,
+    pub ask: ask::AskState,
     pub selected: usize,
     pub active_target: Option<NavTarget>,
     pub panel_scroll: f64,
@@ -222,6 +224,7 @@ impl World {
             search: String::new(),
             apps: apps::AppsData::default(),
             windows: windows::WindowsData::default(),
+            ask: ask::AskState::default(),
             selected: 0,
             active_target: None,
             panel_scroll: 0.0,
@@ -435,6 +438,7 @@ impl World {
             || media::apply(&mut self.media, key, out)
             || apps::apply(&mut self.apps, key, out, &self.search)
             || windows::apply(&mut self.windows, key, out, &self.search)
+            || ask::apply(&mut self.ask, key, out)
     }
 
     /// Records `cmd` in `actions` and, when running live in the Wayland daemon, spawns `sh -c cmd`

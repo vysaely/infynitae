@@ -196,6 +196,7 @@ pub enum Action {
         size: String,
         out: String,
     },
+    Ask(Vec<String>),
 }
 
 pub fn parse_args<S: AsRef<str>>(args: &[S]) -> Result<Action, String> {
@@ -208,6 +209,7 @@ pub fn parse_args<S: AsRef<str>>(args: &[S]) -> Result<Action, String> {
             size: (*size).to_string(),
             out: (*out).to_string(),
         }),
+        ["ask", rest @ ..] => Ok(Action::Ask(rest.iter().map(|s| (*s).to_string()).collect())),
         ["stop", ..] => Ok(Action::Stop),
         ["panel", name, ..] if !name.is_empty() => Ok(Action::Panel((*name).to_string())),
         ["control", ..] => Ok(Action::Panel("control".to_string())),
@@ -436,10 +438,26 @@ impl Shell {
         false
     }
 
+    pub fn ask_load(&mut self) -> bool {
+        self.reload_if_changed();
+        let req_path = wayland::runtime_path(modules::ask::ASK_FILE);
+        let changed = modules::ask::load_from_path(&mut self.world, &req_path);
+        if self.world.ask.on {
+            self.close();
+        }
+        changed
+    }
+
     pub fn open_panel(&mut self, idx: usize, by_hover: bool) -> bool {
+        if by_hover && self.world.ask.on {
+            return false;
+        }
         self.reload_if_changed();
         if idx >= self.cfg.panels.len() {
             return false;
+        }
+        if self.world.ask.on {
+            modules::ask::answer(&mut self.world, None);
         }
         if self.open == Some(idx) {
             if by_hover {
@@ -459,6 +477,9 @@ impl Shell {
         let Some(idx) = self.panel_index(name) else {
             return false;
         };
+        if self.world.ask.on {
+            modules::ask::answer(&mut self.world, None);
+        }
         if self.open == Some(idx) {
             self.close()
         } else {
@@ -482,6 +503,14 @@ impl Shell {
     }
 
     pub fn key(&mut self, k: Key) -> bool {
+        if self.world.ask.on {
+            return match k {
+                Key::Escape => modules::ask::key(&mut self.world, 0xff1b, None),
+                Key::ShiftReturn => modules::ask::key(&mut self.world, 0xff0d, None),
+                Key::Super(_) => false,
+                Key::Sym { keysym, ch } => modules::ask::key(&mut self.world, keysym, ch),
+            };
+        }
         let Some(open_idx) = self.open else {
             return false;
         };
@@ -542,6 +571,9 @@ impl Shell {
 
     pub fn click(&mut self, w: f64, h: f64, x: f64, y: f64, button: u32) -> bool {
         self.last_screen = (w, h);
+        if self.world.ask.on {
+            return modules::ask::click(&mut self.world, w, h, x, y, button);
+        }
         let Some(open_idx) = self.open else {
             return self.pointer_motion(w, h, x, y);
         };
@@ -647,6 +679,9 @@ impl Shell {
 
     pub fn pointer_motion(&mut self, w: f64, h: f64, x: f64, y: f64) -> bool {
         self.last_screen = (w, h);
+        if self.world.ask.on {
+            return modules::ask::hover(&mut self.world, w, h, x, y);
+        }
         if let Some(open_idx) = self.open {
             if let Some(p) = self.cfg.panels.get(open_idx) {
                 if self.opened_by_hover {
@@ -697,6 +732,9 @@ impl Shell {
 
     pub fn pointer_leave(&mut self) -> bool {
         self.pointer_down = false;
+        if self.world.ask.on {
+            return false;
+        }
         let Some(open_idx) = self.open else {
             return false;
         };
@@ -716,11 +754,17 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         .ok_or("--render needs WxH, e.g. 1920x1080")?;
     let cfg = Config::load();
     let th = theme::Theme::from_config(&cfg);
-    let panel = cfg
-        .panels
-        .iter()
-        .find(|p| p.name == name)
-        .ok_or(format!("no panel {name}"))?;
+    let is_ask = name == "ask";
+    let panel = if is_ask {
+        None
+    } else {
+        Some(
+            cfg.panels
+                .iter()
+                .find(|p| p.name == name)
+                .ok_or(format!("no panel {name}"))?,
+        )
+    };
     let surface =
         cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).map_err(|e| e.to_string())?;
     let cr = cairo::Context::new(&surface).map_err(|e| e.to_string())?;
@@ -732,41 +776,71 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
     );
     let _ = cr.paint();
     let mut world = modules::World::now();
-    if panel.has(config::Module::Apps) || panel.has(config::Module::Favorites) {
-        world.apps.ensure_loaded(&world.search);
-    }
-    if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
-        world.apps.set_favorites(&cfg.favorites);
-    }
-    let pw = panel_width(panel, w as f64);
-    let (rects, content_h) = layout_in(panel, pw, &world, &th);
-    let ph = content_h.min(max_panel_height(h as f64));
-    let (ox, oy) = panel_origin(panel, w as f64, h as f64, pw, ph);
-    if content_h > ph {
-        let _ = cr.save();
-        cr.rectangle(ox, oy, pw, ph);
-        cr.clip();
-        modules::draw_panel(&cr, &th, panel, &rects, &world, (ox, oy), pw);
-        let _ = cr.restore();
-    } else {
-        modules::draw_panel(&cr, &th, panel, &rects, &world, (ox, oy), pw);
-    }
-    if let Some(open_idx) = world.tray.open_menu {
-        if let Some((_, r)) = panel
-            .items
-            .iter()
-            .zip(&rects)
-            .find(|(it, _)| it.module == config::Module::Tray)
-        {
-            let item_count = world
-                .tray
+    if let Some(panel) = panel {
+        if panel.has(config::Module::Apps) || panel.has(config::Module::Favorites) {
+            world.apps.ensure_loaded(&world.search);
+        }
+        if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
+            world.apps.set_favorites(&cfg.favorites);
+        }
+        let pw = panel_width(panel, w as f64);
+        let (rects, content_h) = layout_in(panel, pw, &world, &th);
+        let ph = content_h.min(max_panel_height(h as f64));
+        let (ox, oy) = panel_origin(panel, w as f64, h as f64, pw, ph);
+        if content_h > ph {
+            let _ = cr.save();
+            cr.rectangle(ox, oy, pw, ph);
+            cr.clip();
+            modules::draw_panel(&cr, &th, panel, &rects, &world, (ox, oy), pw);
+            let _ = cr.restore();
+        } else {
+            modules::draw_panel(&cr, &th, panel, &rects, &world, (ox, oy), pw);
+        }
+        if let Some(open_idx) = world.tray.open_menu {
+            if let Some((_, r)) = panel
                 .items
-                .get(open_idx)
-                .map(|it| it.effective_menu_items().len())
-                .unwrap_or(3);
-            let m_rect =
-                modules::tray::menu_rect((ox, oy), (pw, ph), *r, item_count, (w as f64, h as f64));
-            modules::tray::draw_menu(&cr, &th, &world, m_rect);
+                .iter()
+                .zip(&rects)
+                .find(|(it, _)| it.module == config::Module::Tray)
+            {
+                let item_count = world
+                    .tray
+                    .items
+                    .get(open_idx)
+                    .map(|it| it.effective_menu_items().len())
+                    .unwrap_or(3);
+                let m_rect = modules::tray::menu_rect(
+                    (ox, oy),
+                    (pw, ph),
+                    *r,
+                    item_count,
+                    (w as f64, h as f64),
+                );
+                modules::tray::draw_menu(&cr, &th, &world, m_rect);
+            }
+        }
+        if std::env::var_os("INFYNITAE_EDGE_RENDER_RECT").is_some() {
+            println!(
+                "{} {} {} {}",
+                ox.round() as i32,
+                oy.round() as i32,
+                pw.round() as i32,
+                ph.round() as i32
+            );
+        }
+    } else {
+        if std::env::var_os("INFYNITAE_EDGE_RENDER_ASK").is_some() || !world.ask.on {
+            world.ask.load_render_env();
+        }
+        let (gx, gy, gw, gh) = modules::ask::draw(&cr, &th, &world.ask, (w as f64, h as f64));
+        if std::env::var_os("INFYNITAE_EDGE_RENDER_RECT").is_some() {
+            println!(
+                "{} {} {} {}",
+                gx.round() as i32,
+                gy.round() as i32,
+                gw.round() as i32,
+                gh.round() as i32
+            );
         }
     }
     drop(cr);
@@ -795,6 +869,7 @@ fn main() -> ExitCode {
             wayland::stop_running();
             ExitCode::SUCCESS
         }
+        Ok(Action::Ask(ask_args)) => ExitCode::from(modules::ask::run_client(&ask_args)),
         Ok(Action::Panel(name)) => {
             if wayland::send_panel(&name) {
                 return ExitCode::SUCCESS;
@@ -858,6 +933,13 @@ mod tests {
                 size: "1920x1080".into(),
                 out: "/tmp/out.png".into(),
             })
+        );
+        assert_eq!(
+            parse_args(&["ask", "--text", "Name for the drive"]),
+            Ok(Action::Ask(vec![
+                "--text".into(),
+                "Name for the drive".into()
+            ]))
         );
         assert!(parse_args(&["panel"]).is_err());
         assert!(parse_args(&["--unknown"]).is_err());
@@ -1254,5 +1336,37 @@ mod tests {
         let prev_panel_scroll = sh.world.panel_scroll;
         assert!(sh.scroll(w, h, 960.0, 12.0, -1.0));
         assert!(sh.world.panel_scroll < prev_panel_scroll);
+    }
+
+    #[test]
+    fn shell_ask_prompt_handles_keys_hover_and_clicks() {
+        let cfg = Config::from_text("PANEL_CONTROL=\"SUPER+A top right hover clock\"\n");
+        let mut sh = Shell::from_config(cfg);
+        sh.world
+            .apply("ask", "Format the drive as|exFAT|FAT32|ext4");
+        assert!(sh.world.ask.on);
+
+        let (w, h) = (1920.0, 1080.0);
+        let (gx, gy, gw, _gh) = sh.world.ask.geometry(w, h);
+        // Hovering over the panel's hover strip does not open the panel while asking
+        assert!(!sh.pointer_motion(w, h, 1800.0, 1.0));
+        assert_eq!(sh.open, None);
+        // Pointer leave does not close the ask prompt
+        assert!(!sh.pointer_leave());
+        assert!(sh.world.ask.on);
+
+        // Hover over row 1 selects FAT32, Enter confirms
+        let row1_y = gy + draw::PAD_Y + modules::ask::TITLE_H + modules::ask::ROW_H * 1.5;
+        assert!(sh.pointer_motion(w, h, gx + gw / 2.0, row1_y));
+        assert_eq!(sh.world.ask.sel, 1);
+        assert!(sh.key(Key::Sym {
+            keysym: 0xff0d,
+            ch: Some('\r'),
+        }));
+        assert!(!sh.world.ask.on);
+        assert_eq!(
+            sh.world.actions.last().map(String::as_str),
+            Some("ask:answer:FAT32")
+        );
     }
 }

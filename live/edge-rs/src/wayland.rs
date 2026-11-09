@@ -129,7 +129,9 @@ impl OutputSurface {
         let w = self.width as f64;
         let h = self.height as f64;
         if w > 0.0 && h > 0.0 {
-            if let Some(idx) = shell.open {
+            if shell.world.ask.on {
+                region.add(0, 0, w.ceil() as i32, h.ceil() as i32);
+            } else if let Some(idx) = shell.open {
                 if let Some(p) = shell.cfg.panels.get(idx) {
                     // opened by its key: the whole screen takes the pointer, so a click
                     // outside the panel reaches the edge and closes it (as the C edge while it
@@ -170,7 +172,8 @@ impl OutputSurface {
         if !self.configured || self.width == 0 || self.height == 0 {
             return;
         }
-        let kb = if shell.open.is_some() {
+        let active = shell.open.is_some() || shell.world.ask.on;
+        let kb = if active {
             KeyboardInteractivity::Exclusive
         } else {
             KeyboardInteractivity::None
@@ -178,7 +181,7 @@ impl OutputSurface {
         self.layer.set_keyboard_interactivity(kb);
         self.set_input_region(compositor, shell);
 
-        if shell.open.is_some() {
+        if active {
             self.dirty = true;
             self.mapped_closed = false;
             self.render_if_needed(qh, shell);
@@ -277,12 +280,9 @@ impl OutputSurface {
         if !self.configured || !self.dirty || self.frame_pending {
             return;
         }
-        let Some(open_idx) = shell.open else {
+        if !shell.world.ask.on && shell.open.is_none() {
             return;
-        };
-        let Some(panel) = shell.cfg.panels.get(open_idx) else {
-            return;
-        };
+        }
         let w = self.width as i32;
         let h = self.height as i32;
         let stride = w * 4;
@@ -293,11 +293,67 @@ impl OutputSurface {
             return;
         };
 
+        let pad = 4;
+        if shell.world.ask.on {
+            let (gx, gy, gw, gh) = shell.world.ask.geometry(w as f64, h as f64);
+            let new_box = (
+                (gx.floor() as i32 - pad).max(0),
+                (gy.floor() as i32 - pad).max(0),
+                (gw.ceil() as i32 + 2 * pad).min(w),
+                (gh.ceil() as i32 + 2 * pad).min(h),
+            );
+            let slot = self.slots[slot_idx].as_mut().unwrap();
+            let old_box = slot.prev_box.replace(new_box);
+            if let Some(canvas) = slot.buffer.canvas(&mut self.pool) {
+                if let Some(r) = old_box {
+                    Self::clear_box(canvas, stride, w, h, r);
+                }
+                Self::clear_box(canvas, stride, w, h, new_box);
+                if let Ok(surface) = unsafe {
+                    cairo::ImageSurface::create_for_data_unsafe(
+                        canvas.as_mut_ptr(),
+                        cairo::Format::ARgb32,
+                        w,
+                        h,
+                        stride,
+                    )
+                } {
+                    if let Ok(cr) = cairo::Context::new(&surface) {
+                        modules::ask::draw(
+                            &cr,
+                            &shell.theme,
+                            &shell.world.ask,
+                            (w as f64, h as f64),
+                        );
+                    }
+                    surface.flush();
+                }
+            }
+            let wl = self.layer.wl_surface();
+            if let Some((ox, oy, ow, oh)) = old_box {
+                wl.damage_buffer(ox, oy, ow, oh);
+            }
+            wl.damage_buffer(new_box.0, new_box.1, new_box.2, new_box.3);
+            wl.frame(qh, wl.clone());
+            self.frame_pending = true;
+            self.dirty = false;
+            if slot.buffer.attach_to(wl).is_ok() {
+                self.layer.commit();
+            }
+            return;
+        }
+
+        let Some(open_idx) = shell.open else {
+            return;
+        };
+        let Some(panel) = shell.cfg.panels.get(open_idx) else {
+            return;
+        };
+
         let pw = panel_width(panel, w as f64);
         let (rects, content_h) = layout_in(panel, pw, &shell.world, &shell.theme);
         let ph = content_h.min(max_panel_height(h as f64));
         let (ox, oy) = panel_origin(panel, w as f64, h as f64, pw, ph);
-        let pad = 4;
         let mut tray_m_rect = None;
         if let Some(open_idx) = shell.world.tray.open_menu {
             if let Some((_, r)) = panel
@@ -577,10 +633,14 @@ impl App {
                 }
             }
             b'K' => {
-                if let Some(idx) = self.shell.open {
-                    self.request_fetch(idx);
+                if self.shell.ask_load() {
+                    true
+                } else {
+                    if let Some(idx) = self.shell.open {
+                        self.request_fetch(idx);
+                    }
+                    false
                 }
-                false
             }
             _ => false,
         };
@@ -802,15 +862,21 @@ impl KeyboardHandler for App {
                 },
             }
         } else {
-            let ch = event
-                .utf8
-                .as_deref()
-                .and_then(|s| s.chars().next())
-                .or_else(|| event.keysym.key_char());
-            Key::Sym {
-                keysym: event.keysym.raw(),
-                ch,
-            }
+            let keysym = if self.modifiers.shift && event.keysym == Keysym::Tab {
+                0xfe20
+            } else {
+                event.keysym.raw()
+            };
+            let ch = if self.modifiers.ctrl {
+                None
+            } else {
+                event
+                    .utf8
+                    .as_deref()
+                    .and_then(|s| s.chars().next())
+                    .or_else(|| event.keysym.key_char())
+            };
+            Key::Sym { keysym, ch }
         };
         if self.shell.key(key) {
             self.sync_all();
@@ -1104,6 +1170,7 @@ pub fn run(initial_panel: Option<&str>) -> Result<(), String> {
 
     let res = run_loop(initial_panel);
     let _ = std::fs::remove_file(&pid_file);
+    let _ = std::fs::remove_file(runtime_path(modules::ask::FEATURES_FILE));
     res
 }
 
@@ -1201,6 +1268,9 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         )
         .map_err(|e| e.to_string())?;
 
+    let features_file = runtime_path(modules::ask::FEATURES_FILE);
+    let _ = std::fs::write(&features_file, "ask\n");
+
     WaylandSource::new(conn, event_queue)
         .insert(loop_handle)
         .map_err(|e| e.to_string())?;
@@ -1221,6 +1291,10 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         event_loop
             .dispatch(timeout, &mut app)
             .map_err(|e| e.to_string())?;
+    }
+    let _ = std::fs::remove_file(&features_file);
+    if app.shell.world.ask.on {
+        modules::ask::answer(&mut app.shell.world, None);
     }
     Ok(())
 }
