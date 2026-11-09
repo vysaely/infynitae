@@ -5,7 +5,8 @@
 set -eu
 REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
 TMP=$(mktemp -d "/tmp/infynitae-test-edge-rs.XXXXXX")
-trap 'rm -rf "$TMP"' EXIT INT TERM
+cleanup() { [ -n "${FAKE:-}" ] && kill "$FAKE" 2>/dev/null || true; rm -rf "$TMP"; }
+trap cleanup EXIT INT TERM
 LIVE="$REPO_DIR/live"
 cc -O1 -o "$TMP/edge-c" "$LIVE/edge/infynitae-edge.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
     "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/edge/wlr-foreign-toplevel-protocol.c" \
@@ -102,4 +103,82 @@ printf 'PANEL_CONTROL="SUPER+A bottom right 361x708 hover clock@8,8,344x34 volum
 if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render control 1280x800 "$TMP/stage3-control-placed.png" \
     && [ "$(stat -c %s "$TMP/stage3-control-placed.png")" -gt 4000 ]; then echo "ok   stage3 control (placed) drawn"
 else echo "FAIL stage3 control (placed) not drawn"; fail=1; fi
+for q in "Format the drive as|exFAT|FAT32|ext4" "text:Name for the drive" "secret:Passphrase for USB"; do
+    tag=${q%%:*}
+    tag=${tag%%|*}
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_ASK="$q" INFYNITAE_EDGE_RENDER_SEARCH="Photos" INFYNITAE_EDGE_RENDER_RECT=1 \
+        "$RS" --render ask 1920x1080 "$TMP/ask-$tag.png" > "$TMP/ask-rect" \
+        && [ "$(stat -c %s "$TMP/ask-$tag.png")" -gt 4000 ]; then
+        set -- $(cat "$TMP/ask-rect")
+        if [ $(( $1 + $3 / 2 )) -ge 955 ] && [ $(( $1 + $3 / 2 )) -le 965 ] && [ "$2" -lt 540 ] && [ "$3" -ge 400 ]; then
+            echo "ok   ask ($tag) drawn centred, $3 x $4"
+        else
+            echo "FAIL ask ($tag): rect $*"; fail=1
+        fi
+    else
+        echo "FAIL ask ($tag) not drawn"; fail=1
+    fi
+done
+if command -v bash >/dev/null; then
+    export XDG_RUNTIME_DIR="$TMP/run"
+    mkdir -p "$XDG_RUNTIME_DIR" "$TMP/fake"
+    cat > "$TMP/fake/infynitae-edge-rs" <<FAKE
+#!$(command -v bash)
+answer() {
+    req="\$XDG_RUNTIME_DIR/infynitae-edge-rs.ask"
+    cp "\$req" "$TMP/last-request"; rm -f "\$req"
+    pipe=\$(head -n 1 "$TMP/last-request")
+    a=\$(cat "$TMP/answer")
+    case "\$a" in
+        none) ;;
+        cancel) printf '0\n' > "\$pipe" ;;
+        *) printf '1\n%s\n' "\$a" > "\$pipe" ;;
+    esac
+}
+trap answer RTMIN+3
+echo \$\$ > "\$XDG_RUNTIME_DIR/infynitae-edge-rs.pid"
+while :; do sleep 0.1; done
+FAKE
+    chmod +x "$TMP/fake/infynitae-edge-rs"
+    check() { if eval "$2"; then echo "ok   ask: $1"; else echo "FAIL ask: $1"; fail=1; fi; }
+    ask() { rc=0; out=$("$RS" ask "$@") || rc=$?; }
+
+    ask "Pick" < /dev/null || true
+    check "no edge running: exit 3, so the caller asks another way" '[ "$rc" = 3 ]'
+
+    "$TMP/fake/infynitae-edge-rs" & FAKE=$!
+    for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$XDG_RUNTIME_DIR/infynitae-edge-rs.pid" ] && break; sleep 0.1; done
+
+    echo "FAT32: every device" > "$TMP/answer"
+    printf 'exFAT: every computer\nFAT32: every device\n\next4: Linux only\n' | { ask "Format the drive as"; echo "$rc|$out" > "$TMP/r"; }
+    check "a choice: prints the answer, exit 0" '[ "$(cat "$TMP/r")" = "0|FAT32: every device" ]'
+    check "a choice: the edge is told the pipe, the kind, the title" \
+        'sed -n 2,4p "$TMP/last-request" | tr "\n" "|" | grep -qx "choose|plain|Format the drive as|"'
+    check "a choice: the choices, empty lines left out" '[ "$(tail -n +6 "$TMP/last-request" | tr "\n" "|")" = "exFAT: every computer|FAT32: every device|ext4: Linux only|" ]'
+    check "a choice: the pipe is the runtime folder's and is gone after" \
+        'p=$(head -n 1 "$TMP/last-request"); case "$p" in "$XDG_RUNTIME_DIR"/infynitae-edge-rs.ask.*) [ ! -e "$p" ] ;; *) false ;; esac'
+
+    echo cancel > "$TMP/answer"
+    printf 'a\nb\n' | { ask "Pick"; echo "$rc|$out" > "$TMP/r"; }
+    check "cancelled: nothing printed, exit 1" '[ "$(cat "$TMP/r")" = "1|" ]'
+
+    echo "hunter two" > "$TMP/answer"
+    ask --secret --default "abc" "Passphrase for USB" < /dev/null
+    check "text: the typed text, exit 0" '[ "$rc" = 0 ] && [ "$out" = "hunter two" ]'
+    check "text: secret and the text to start from reach the edge" \
+        'sed -n 2,5p "$TMP/last-request" | tr "\n" "|" | grep -qx "text|secret|Passphrase for USB|abc|"'
+
+    echo "x" > "$TMP/answer"
+    printf 'one\n' | { ask "$(printf 'two\nlines')"; echo "$rc" > "$TMP/r"; }
+    check "a title of two lines reaches the edge as one" '[ "$(sed -n 4p "$TMP/last-request")" = "two" ] && [ "$(wc -l < "$TMP/last-request")" = 6 ]'
+
+    ask "Pick" < /dev/null || true
+    check "a choice with no choices: exit 2" '[ "$rc" = 2 ]'
+
+    echo none > "$TMP/answer"
+    ( sleep 1; kill "$FAKE" ) &
+    printf 'a\n' | { ask "Pick"; echo "$rc" > "$TMP/r"; }
+    check "the edge goes away without answering: exit 3, not a hang" '[ "$(cat "$TMP/r")" = 3 ]'
+    FAKE=""
+fi
 [ "$fail" = 0 ] && echo "all edge-rs tests passed" || { echo "edge-rs tests failed"; exit 1; }
