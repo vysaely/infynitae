@@ -1,0 +1,48 @@
+#!/bin/sh
+# tools/test-edge-rs: the Rust edge (live/edge-rs, docs/EDGE_RUST.md) reads PANEL_ lines exactly as the
+# C edge does (both print the same panels for the same config), and draws every panel to a PNG that
+# is not blank. Run from the repository root; builds both.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-edge-rs.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+LIVE="$REPO_DIR/live"
+cc -O1 -o "$TMP/edge-c" "$LIVE/edge/infynitae-edge.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
+    "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/edge/wlr-foreign-toplevel-protocol.c" \
+    $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon gio-2.0) -lm
+(cd "$LIVE/edge-rs" && cargo build --locked --quiet)
+RS="$LIVE/edge-rs/target/debug/infynitae-edge-rs"
+[ -n "${CARGO_TARGET_DIR:-}" ] && RS="$CARGO_TARGET_DIR/debug/infynitae-edge-rs"
+mkdir -p "$TMP/home/.config/infynitae"
+fail=0
+same() {  # a config; both edges must print the same panels
+    printf '%s\n' "$1" > "$TMP/home/.config/infynitae/config"
+    HOME="$TMP/home" "$TMP/edge-c" --print-panels > "$TMP/c.txt"
+    HOME="$TMP/home" "$RS" --print-panels > "$TMP/rs.txt"
+    if cmp -s "$TMP/c.txt" "$TMP/rs.txt"; then echo "ok   same panels: $1"
+    else echo "FAIL different panels for: $1"; diff "$TMP/c.txt" "$TMP/rs.txt" || true; fail=1; fi
+}
+same ''
+same 'EDGE_POSITION="bottom"
+EDGE_CONTROL_SIDE="left"'
+same 'PANEL_CONTROL="SUPER+A top right hover clock:big wifi:small dnd:wide volume"'
+same 'PANEL_APPS="search:hidden favorites apps"'
+same 'PANEL_APPS="search:bar apps"'
+same 'PANEL_CONTROL="clock:huge wifi:tile"'
+same 'PANEL_MINE="SUPER+M left center 320 volume:loud wifi:small"'
+same 'PANEL_CONTROL="SUPER+A top right 360x400 hover clock@8,8,344x34 wifi@8,48,170x46 volume"'
+same 'PANEL_APPS="search:hidden@8,8,544x40 apps@8,56,544x256"'
+same 'PANEL_CONTROL="left"
+PANEL_MEDIA="SUPER+M right center 320 volume tray"'
+same 'PANEL_X="none, top, left, clock:big,wifi:small bogus 99999"'
+same 'CONTROL_MODULES="clock apps wifi"'
+same 'EDGE_POSITION="bottom"
+EDGE_CONTROL_SIDE="right"
+PANEL_CONTROL="SUPER+A bottom right 361x708 hover clock@8,8,344x34 volume@8,48,344x32 wifi@8,86,169x46 bluetooth@183,86,169x46 dnd@8,138,169x46 nightlight@183,138,169x46 keyboard@8,190,169x46 power@183,190,169x46 replay@8,242,169x40 osk@183,242,169x40 notifications@9,288,344x144 media@8,438,344x76 tray@8,520,345x143 session@9,669,344x36"'
+printf 'PANEL_CONTROL="clock:calendar wifi volume"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+for p in apps windows control clipboard; do
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" "$RS" --render "$p" 1280x800 "$TMP/$p.png" \
+        && [ "$(stat -c %s "$TMP/$p.png")" -gt 4000 ]; then echo "ok   $p drawn"
+    else echo "FAIL $p not drawn"; fail=1; fi
+done
+[ "$fail" = 0 ] && echo "all edge-rs tests passed" || { echo "edge-rs tests failed"; exit 1; }

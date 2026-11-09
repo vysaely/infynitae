@@ -1,0 +1,126 @@
+//! Drawing helpers: cards, text, thin bars. Every module draws through these, so they all share
+//! one style (a 15 px title, text and small line icons, thin bars, the accent only on what is on).
+
+use crate::theme::{Rgba, Theme};
+use cairo::Context;
+
+pub const PAD_X: f64 = 18.0;
+pub const PAD_Y: f64 = 16.0;
+pub const GAP: f64 = 12.0;
+pub const FONT: &str = "sans-serif";
+
+pub fn set(cr: &Context, c: Rgba) {
+    cr.set_source_rgba(c.0, c.1, c.2, c.3);
+}
+
+/// A rectangle with rounded corners, its edges on whole pixels (a 1 px line on the half pixel).
+pub fn round_rect(cr: &Context, x: f64, y: f64, w: f64, h: f64, r: f64) {
+    let r = r.min(w / 2.0).min(h / 2.0).max(0.0);
+    cr.new_sub_path();
+    if r <= 0.0 {
+        cr.rectangle(x, y, w, h);
+        return;
+    }
+    use std::f64::consts::{FRAC_PI_2, PI};
+    cr.arc(x + w - r, y + r, r, -FRAC_PI_2, 0.0);
+    cr.arc(x + w - r, y + h - r, r, 0.0, FRAC_PI_2);
+    cr.arc(x + r, y + h - r, r, FRAC_PI_2, PI);
+    cr.arc(x + r, y + r, r, PI, 3.0 * FRAC_PI_2);
+    cr.close_path();
+}
+
+/// A module's card: its fill and its 1 px edge.
+pub fn card(cr: &Context, t: &Theme, x: f64, y: f64, w: f64, h: f64) {
+    round_rect(cr, x.round(), y.round(), w.round(), h.round(), t.corners);
+    set(cr, t.card);
+    let _ = cr.fill_preserve();
+    cr.new_path();
+    round_rect(
+        cr,
+        x.round() + 0.5,
+        y.round() + 0.5,
+        w.round() - 1.0,
+        h.round() - 1.0,
+        (t.corners - 0.5).max(0.0),
+    );
+    set(cr, t.edge);
+    cr.set_line_width(1.0);
+    let _ = cr.stroke();
+}
+
+pub struct Text<'a> {
+    pub size: f64,
+    pub bold: bool,
+    pub color: Rgba,
+    pub text: &'a str,
+}
+
+fn layout(cr: &Context, t: &Text) -> pango::Layout {
+    let l = pangocairo::functions::create_layout(cr);
+    let mut fd = pango::FontDescription::from_string(FONT);
+    fd.set_absolute_size(t.size * pango::SCALE as f64);
+    fd.set_weight(if t.bold {
+        pango::Weight::Semibold
+    } else {
+        pango::Weight::Normal
+    });
+    l.set_font_description(Some(&fd));
+    l.set_text(t.text);
+    l
+}
+
+/// Text's width and height in px.
+pub fn measure(cr: &Context, t: &Text) -> (f64, f64) {
+    let (w, h) = layout(cr, t).pixel_size();
+    (w as f64, h as f64)
+}
+
+/// Text with its top left at (x, y), on whole pixels; returns its width.
+pub fn text(cr: &Context, x: f64, y: f64, t: &Text) -> f64 {
+    let l = layout(cr, t);
+    set(cr, t.color);
+    cr.move_to(x.round(), y.round());
+    pangocairo::functions::show_layout(cr, &l);
+    l.pixel_size().0 as f64
+}
+
+/// Text with its right edge at x.
+pub fn text_right(cr: &Context, x: f64, y: f64, t: &Text) -> f64 {
+    let (w, _) = measure(cr, t);
+    text(cr, x - w, y, t);
+    w
+}
+
+/// Text centred on cx.
+pub fn text_center(cr: &Context, cx: f64, y: f64, t: &Text) {
+    let (w, _) = measure(cr, t);
+    text(cr, cx - w / 2.0, y, t);
+}
+
+/// A thin bar (3 px): its track and the filled part, `part` 0..1.
+pub fn bar(cr: &Context, th: &Theme, x: f64, y: f64, w: f64, part: f64, fill: Rgba) {
+    round_rect(cr, x, y, w, 3.0, 1.5);
+    set(cr, th.track);
+    let _ = cr.fill();
+    if part > 0.0 {
+        round_rect(cr, x, y, (w * part.clamp(0.0, 1.0)).max(3.0), 3.0, 1.5);
+        set(cr, fill);
+        let _ = cr.fill();
+    }
+}
+
+/// A module's title in 15 px semibold, at the top left of its content.
+pub fn title(cr: &Context, th: &Theme, x: f64, y: f64, s: &str) -> f64 {
+    text(
+        cr,
+        x,
+        y,
+        &Text {
+            size: 15.0,
+            bold: true,
+            color: th.text,
+            text: s,
+        },
+    );
+    20.0
+}

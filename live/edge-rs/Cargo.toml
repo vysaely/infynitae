@@ -1,0 +1,25 @@
+# The edge in Rust (docs/EDGE_RUST.md): panels of modules and the desktop widgets. Its own crate and
+# lockfile, outside the compositor workspace and its dependency policy, like the C helpers in live/.
+[package]
+name = "infynitae-edge-rs"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Infynitae's panels and desktop widgets"
+
+[[bin]]
+name = "infynitae-edge-rs"
+path = "src/main.rs"
+
+[dependencies]
+cairo-rs = { version = "0.20", features = ["png"] }
+pango = "0.20"
+pangocairo = "0.20"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+
+[profile.release]
+lto = "thin"
+strip = true
+
+# not a member of the compositor's workspace
+[workspace]
