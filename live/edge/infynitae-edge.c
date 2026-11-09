@@ -54,6 +54,7 @@
 #define MAX_SNI_ITEMS 16
 #define MAX_CTX_ITEMS 10
 #define MAX_SUB_ITEMS 8
+#define ASK_MAX 12
 #define MAX_NOTIFS 4
 #define MAX_HITBOXES 160
 
@@ -305,6 +306,19 @@ typedef struct EdgeApp {
     size_t search_len;
     int selected_idx;
 
+    /* `infynitae-edge ask`: a question a script asks, shown like the panels (owner, 2026-11-09:
+     * "make it like my edge panels and not fuzzel"). A list to choose from, or a field to type in */
+    bool ask_on;
+    bool ask_text;
+    bool ask_secret;
+    char ask_title[160];
+    char ask_items[ASK_MAX][160];
+    int ask_n;
+    int ask_sel;
+    char ask_buf[256];
+    size_t ask_len;
+    char ask_reply[256];  /* the asker's pipe: "1\nANSWER\n", or "0\n" when cancelled */
+
     CanvasWindow windows[MAX_WINDOWS];
     int win_count;
     int filtered_wins[MAX_WINDOWS];
@@ -470,6 +484,24 @@ static void on_sigterm(int sig) { (void)sig; g_sig_cmd = 3; wake_main(); }
 static void on_sigrtmin(int sig) { (void)sig; g_sig_cmd = 4; wake_main(); }
 static void on_sigapps(int sig) { (void)sig; g_sig_cmd = 5; wake_main(); }
 static void on_sigpanel(int sig) { (void)sig; g_sig_cmd = 6; wake_main(); }
+static void on_sigask(int sig) { (void)sig; g_sig_cmd = 7; wake_main(); }
+
+/* `infynitae-edge ask`: the question waits in this file for the running edge */
+static const char *ask_request_path(void) {
+    static char path[512];
+    const char *rt = getenv("XDG_RUNTIME_DIR");
+    snprintf(path, sizeof(path), "%s/infynitae-edge.ask", rt ? rt : "/tmp");
+    return path;
+}
+
+/* What the running edge can do, for scripts: an edge from before `ask` takes "ask" as a reason to
+ * start again (any word it does not know does), so a script asks only an edge that says it can */
+static const char *features_path(void) {
+    static char path[512];
+    const char *rt = getenv("XDG_RUNTIME_DIR");
+    snprintf(path, sizeof(path), "%s/infynitae-edge.features", rt ? rt : "/tmp");
+    return path;
+}
 
 /* `infynitae-edge panel NAME`: the name waits in this file for the running edge */
 static const char *panel_request_path(void) {
@@ -2072,7 +2104,7 @@ static void update_surface_input_region(EdgeOutput *out) {
         wl_region_add(reg, (int)r[0], (int)r[1], (int)r[2], (int)r[3]);
     }
 
-    if (app->open < 0 && !app->dragging) {
+    if (app->open < 0 && !app->dragging && !app->ask_on) {
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             out->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_NONE);
     } else if (app->dragging) {
@@ -2080,7 +2112,7 @@ static void update_surface_input_region(EdgeOutput *out) {
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             out->layer_surface, ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
     } else {
-        if (app->kb_grab || app->editing) {
+        if (app->kb_grab || app->editing || app->ask_on) {
             /* opened by a key, it holds the keyboard: the whole screen takes the pointer too, so
              * a click anywhere else reaches handle_click_at and closes it; and while its layout is
              * edited, a drag past its edge keeps going */
@@ -2090,7 +2122,7 @@ static void update_surface_input_region(EdgeOutput *out) {
         }
         zwlr_layer_surface_v1_set_keyboard_interactivity(
             out->layer_surface,
-            app->kb_grab ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE
+            app->kb_grab || app->ask_on ? ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_EXCLUSIVE
                          : ZWLR_LAYER_SURFACE_V1_KEYBOARD_INTERACTIVITY_ON_DEMAND);
     }
     wl_surface_set_input_region(out->surface, reg);
@@ -3441,6 +3473,89 @@ static void draw_open_panel(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int 
     }
 }
 
+/* A question (`infynitae-edge ask`): a box like a panel's, centred a little above the middle of the
+ * screen. Its place on a screen of w x h: x, y, width, height. */
+static void ask_geometry(const EdgeApp *app, int w, int h, double g[4]) {
+    double W = fmin(460.0, w - 32.0);
+    double body = app->ask_text ? SEARCH_H + GAP + TITLE_H : app->ask_n * ITEM_H;
+    double H = PAD + TITLE_H + 4.0 + body + PAD;
+    g[0] = round((w - W) / 2.0);
+    g[1] = round(fmax(16.0, h * 0.3 - H / 2.0));
+    g[2] = W;
+    g[3] = H;
+}
+
+/* The row of the list at (x, y) on a screen of w x h, or -1 */
+static int ask_row_at(const EdgeApp *app, int w, int h, double x, double y) {
+    if (app->ask_text) return -1;
+    double g[4];
+    ask_geometry(app, w, h, g);
+    double top = g[1] + PAD + TITLE_H + 4.0;
+    if (x < g[0] + PAD || x > g[0] + g[2] - PAD || y < top) return -1;
+    int i = (int)((y - top) / ITEM_H);
+    return i >= 0 && i < app->ask_n ? i : -1;
+}
+
+static void draw_ask(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, int h, int rect[4]) {
+    double g[4];
+    ask_geometry(app, w, h, g);
+    double W = g[2];
+    cairo_save(cr);
+    cairo_translate(cr, g[0], g[1]);
+    draw_panel_box(cr, app, 0.0, 0.0, W, g[3]);
+    set_text(cr, app, 0.92);
+    draw_text_left(cr, layout, FONT_BODY_MEDIUM, app->ask_title, PAD + 12.0, PAD + TITLE_H / 2.0, W - 2 * PAD - 24.0);
+    double y = PAD + TITLE_H + 4.0;
+    if (app->ask_text) {
+        draw_tile(cr, app, PAD, y, W - 2 * PAD, SEARCH_H, false, true);
+        char shown[256];
+        if (app->ask_secret) {
+            /* a dot for each character typed (not each byte) */
+            size_t n = 0;
+            for (size_t i = 0; i < app->ask_len && n + 4 < sizeof(shown); i++)
+                if (((unsigned char)app->ask_buf[i] & 0xC0) != 0x80) { memcpy(shown + n, "\u2022", 3); n += 3; }
+            shown[n] = '\0';
+        } else {
+            snprintf(shown, sizeof(shown), "%s", app->ask_buf);
+        }
+        double cy = y + SEARCH_H / 2.0;
+        if (app->ask_len > 0) {
+            set_text(cr, app, 0.96);
+            draw_text_left(cr, layout, FONT_SEARCH, shown, PAD + 12.0, cy, W - 2 * PAD - 30.0);
+        }
+        /* where the next letter goes */
+        double tx = PAD + 12.0 + (app->ask_len > 0 ? fmin(text_px(layout, FONT_SEARCH, shown), W - 2 * PAD - 30.0) + 1.0 : 0.0);
+        set_accent(cr, app, 0.95);
+        cairo_rectangle(cr, tx, cy - 8.0, 1.5, 16.0);
+        cairo_fill(cr);
+        y += SEARCH_H + GAP;
+        set_text(cr, app, 0.42);
+        draw_text_left(cr, layout, FONT_CAPTION, "Enter to confirm, Esc to cancel", PAD + 12.0, y + TITLE_H / 2.0,
+                       W - 2 * PAD - 24.0);
+    } else {
+        for (int i = 0; i < app->ask_n; i++) {
+            bool sel = i == app->ask_sel;
+            draw_row_bg(cr, app, PAD, y, W - 2 * PAD, ITEM_H - 2.0, false, sel);
+            set_text(cr, app, sel ? 0.96 : 0.74);
+            draw_text_left(cr, layout, sel ? FONT_BODY_MEDIUM : FONT_BODY, app->ask_items[i], PAD + 12.0,
+                           y + (ITEM_H - 2.0) / 2.0, W - 2 * PAD - 24.0);
+            y += ITEM_H;
+        }
+    }
+    cairo_restore(cr);
+    rect[0] = (int)g[0] - 2;
+    rect[1] = (int)g[1] - 2;
+    rect[2] = (int)g[2] + 4;
+    rect[3] = (int)g[3] + 4;
+    if (getenv("INFYNITAE_EDGE_BOXES")) {
+        FILE *bf = fopen(getenv("INFYNITAE_EDGE_BOXES"), "w");
+        if (bf) {
+            fprintf(bf, "ask %.0f %.0f %.0f %.0f\n", g[0], g[1], g[2], g[3]);
+            fclose(bf);
+        }
+    }
+}
+
 /* Everything the edge shows for a screen of w x h, into cr; the rectangle drawn in goes to *rect
  * (x, y, w, h). Closed: only the hover strips, which take the pointer. Shared by the live panels
  * and --render. */
@@ -3450,6 +3565,10 @@ static void draw_panels(EdgeApp *app, cairo_t *cr, PangoLayout *layout, int w, i
     app->last_w = w;
     app->last_h = h;
     rect[0] = rect[1] = rect[2] = rect[3] = 0;
+    if (app->ask_on) {
+        draw_ask(app, cr, layout, w, h, rect);
+        return;
+    }
     if (app->open < 0 || app->open >= app->n_panels) {
         for (int i = 0; i < app->n_panels; i++) {
             if (!app->panels[i].hover) continue;
@@ -3500,7 +3619,7 @@ static void render_output(EdgeOutput *out) {
     if (!out->configured || out->width <= 0 || out->height <= 0) return;
 
     /* Closed over a window that fills the screen: unmapped, nothing drawn over it, no strips */
-    bool idle = out->app->open < 0 && !out->app->dragging;
+    bool idle = out->app->open < 0 && !out->app->dragging && !out->app->ask_on;
     if (idle && output_has_fullscreen(out)) {
         if (!out->unmapped) {
             if (out->frame_cb) {
@@ -3690,6 +3809,129 @@ static void close_panel(EdgeApp *app) {
     app->subpanel = SUB_NONE;
     app->tray_ctx_idx = -1;
     damage_all(app);
+}
+
+/* A line from a script, shown as it is: control characters become spaces */
+static void ask_copy(char *dst, size_t n, const char *src) {
+    size_t j = 0;
+    for (size_t i = 0; src[i] && j + 1 < n; i++) {
+        unsigned char c = (unsigned char)src[i];
+        if (c == '\n' || c == '\r') break;
+        dst[j++] = c < 32 || c == 127 ? ' ' : (char)c;
+    }
+    dst[j] = '\0';
+}
+
+/* The asker's answer (NULL: cancelled) through its pipe, and the question gone. The pipe is opened
+ * without waiting: an asker that went away is not waited for. */
+static void ask_answer(EdgeApp *app, const char *answer) {
+    if (app->ask_reply[0]) {
+        int fd = open(app->ask_reply, O_WRONLY | O_NONBLOCK | O_CLOEXEC);
+        if (fd >= 0) {
+            char buf[320];
+            int n = answer ? snprintf(buf, sizeof(buf), "1\n%s\n", answer) : snprintf(buf, sizeof(buf), "0\n");
+            ssize_t wr = write(fd, buf, (size_t)(n < (int)sizeof(buf) ? n : (int)sizeof(buf) - 1));
+            (void)wr;
+            close(fd);
+        }
+    }
+    app->ask_on = false;
+    app->ask_reply[0] = '\0';
+    memset(app->ask_buf, 0, sizeof(app->ask_buf));
+    app->ask_len = 0;
+    app->kb_grab = false;
+    damage_all(app);
+}
+
+/* The question waiting in ask_request_path(): the asker's pipe, "text" or "choose", "secret" or
+ * "plain", the title, the text to start from, then the choices, a line each. A question asked while
+ * another shows ends the other (cancelled). */
+static void ask_load(EdgeApp *app) {
+    FILE *rf = fopen(ask_request_path(), "r");
+    if (!rf) return;
+    unlink(ask_request_path());
+    if (app->ask_on) ask_answer(app, NULL);
+    char line[512];
+    char reply[256] = "", kind[16] = "", secret[16] = "", title[160] = "", start[256] = "";
+    if (fgets(line, sizeof(line), rf)) ask_copy(reply, sizeof(reply), line);
+    if (fgets(line, sizeof(line), rf)) ask_copy(kind, sizeof(kind), line);
+    if (fgets(line, sizeof(line), rf)) ask_copy(secret, sizeof(secret), line);
+    if (fgets(line, sizeof(line), rf)) ask_copy(title, sizeof(title), line);
+    if (fgets(line, sizeof(line), rf)) ask_copy(start, sizeof(start), line);
+    app->ask_n = 0;
+    while (app->ask_n < ASK_MAX && fgets(line, sizeof(line), rf)) {
+        ask_copy(app->ask_items[app->ask_n], sizeof(app->ask_items[0]), line);
+        if (app->ask_items[app->ask_n][0]) app->ask_n++;
+    }
+    fclose(rf);
+    /* only a pipe of ours (the runtime folder, the name `ask` makes) is written to */
+    const char *rt = getenv("XDG_RUNTIME_DIR");
+    char want[300];
+    snprintf(want, sizeof(want), "%s/infynitae-edge.ask.", rt ? rt : "/tmp");
+    if (strncmp(reply, want, strlen(want)) != 0 || strstr(reply, "/..")) return;
+    struct stat st;
+    if (lstat(reply, &st) != 0 || !S_ISFIFO(st.st_mode) || st.st_uid != getuid()) return;
+    snprintf(app->ask_reply, sizeof(app->ask_reply), "%s", reply);
+    app->ask_text = strcmp(kind, "text") == 0;
+    app->ask_secret = app->ask_text && strcmp(secret, "secret") == 0;
+    snprintf(app->ask_title, sizeof(app->ask_title), "%s", title[0] ? title : "Choose");
+    snprintf(app->ask_buf, sizeof(app->ask_buf), "%s", app->ask_text ? start : "");
+    app->ask_len = strlen(app->ask_buf);
+    app->ask_sel = 0;
+    if (!app->ask_text && app->ask_n == 0) {
+        ask_answer(app, NULL);
+        return;
+    }
+    if (app->open >= 0) close_panel(app);
+    app->ask_on = true;
+    app->kb_grab = true;
+    damage_all(app);
+}
+
+static void ask_key(EdgeApp *app, uint32_t keycode, xkb_keysym_t sym) {
+    bool ctrl = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0;
+    bool super = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE) > 0;
+    bool shift = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE) > 0;
+    if (sym == XKB_KEY_Escape) {
+        ask_answer(app, NULL);
+        return;
+    }
+    if (sym == XKB_KEY_Return || sym == XKB_KEY_KP_Enter) {
+        if (app->ask_text) {
+            if (app->ask_len > 0) ask_answer(app, app->ask_buf);
+        } else if (app->ask_n > 0) {
+            ask_answer(app, app->ask_items[app->ask_sel]);
+        }
+        return;
+    }
+    if (!app->ask_text) {
+        int n = app->ask_n, step = 0;
+        if (sym == XKB_KEY_Up || (sym == XKB_KEY_ISO_Left_Tab) || (sym == XKB_KEY_Tab && shift)) step = -1;
+        else if (sym == XKB_KEY_Down || sym == XKB_KEY_Tab) step = 1;
+        else if (sym == XKB_KEY_Home) app->ask_sel = 0;
+        else if (sym == XKB_KEY_End) app->ask_sel = n - 1;
+        if (step && n > 0) app->ask_sel = (app->ask_sel + step + n) % n;
+        damage_all(app);
+        return;
+    }
+    if (sym == XKB_KEY_BackSpace) {
+        /* one character, not one byte */
+        while (app->ask_len > 0 && ((unsigned char)app->ask_buf[app->ask_len - 1] & 0xC0) == 0x80) app->ask_len--;
+        if (app->ask_len > 0) app->ask_len--;
+        app->ask_buf[app->ask_len] = '\0';
+        damage_all(app);
+        return;
+    }
+    if (ctrl || super) return;
+    char utf8[16] = {0};
+    int len = xkb_state_key_get_utf8(app->xkb_state, keycode, utf8, sizeof(utf8));
+    if (len <= 0 || (unsigned char)utf8[0] < 32 || (unsigned char)utf8[0] == 127) return;
+    if (app->ask_len + (size_t)len < sizeof(app->ask_buf) - 1) {
+        memcpy(app->ask_buf + app->ask_len, utf8, (size_t)len);
+        app->ask_len += (size_t)len;
+        app->ask_buf[app->ask_len] = '\0';
+        damage_all(app);
+    }
 }
 
 static void toggle_subpanel(EdgeApp *app, ControlSubpanel target) {
@@ -4762,6 +5004,16 @@ static void pointer_motion(void *data, struct wl_pointer *p, uint32_t t, wl_fixe
     app->pointer_x = wl_fixed_to_double(fx);
     app->pointer_y = wl_fixed_to_double(fy);
 
+    if (app->ask_on) {
+        /* the row under the pointer is the one Enter or a click takes */
+        EdgeOutput *o = app->pointer_output;
+        int row = o ? ask_row_at(app, o->width, o->height, app->pointer_x, app->pointer_y) : -1;
+        if (row >= 0 && row != app->ask_sel) {
+            app->ask_sel = row;
+            damage_all(app);
+        }
+        return;
+    }
     if (app->open < 0) return;
     if (app->edit) {
         edit_drag(app, app->pointer_x, app->pointer_y);
@@ -4805,6 +5057,18 @@ static void pointer_button(void *data, struct wl_pointer *p, uint32_t s, uint32_
     EdgeApp *app = data;
     if (state != WL_POINTER_BUTTON_STATE_PRESSED) {
         if (app->edit) edit_release(app);
+        return;
+    }
+    if (app->ask_on) {
+        /* a row answers; a click outside the box cancels, as it closes a panel */
+        EdgeOutput *o = app->pointer_output;
+        if (!o) return;
+        double g[4];
+        ask_geometry(app, o->width, o->height, g);
+        double x = app->pointer_x, y = app->pointer_y;
+        int row = ask_row_at(app, o->width, o->height, x, y);
+        if (row >= 0 && button == BTN_LEFT) ask_answer(app, app->ask_items[row]);
+        else if (x < g[0] || x > g[0] + g[2] || y < g[1] || y > g[1] + g[3]) ask_answer(app, NULL);
         return;
     }
     if (app->open < 0) {
@@ -4927,10 +5191,15 @@ static void keyboard_key(void *data, struct wl_keyboard *kb, uint32_t serial, ui
                          uint32_t key, uint32_t state) {
     (void)kb; (void)serial; (void)time;
     EdgeApp *app = data;
-    if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->xkb_state || app->open < 0) return;
+    if (state != WL_KEYBOARD_KEY_STATE_PRESSED || !app->xkb_state) return;
 
     uint32_t keycode = key + 8;
     xkb_keysym_t sym = xkb_state_key_get_one_sym(app->xkb_state, keycode);
+    if (app->ask_on) {
+        ask_key(app, keycode, sym);
+        return;
+    }
+    if (app->open < 0) return;
     bool super_down = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_LOGO, XKB_STATE_MODS_EFFECTIVE) > 0;
     bool ctrl_down = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_CTRL, XKB_STATE_MODS_EFFECTIVE) > 0;
     bool shift_down = xkb_state_mod_name_is_active(app->xkb_state, XKB_MOD_NAME_SHIFT, XKB_STATE_MODS_EFFECTIVE) > 0;
@@ -5338,9 +5607,103 @@ static pid_t edge_pid(const char *pfile) {
     return strcmp(comm, "infynitae-edge") == 0 ? pid : 0;
 }
 
+/* `infynitae-edge ask [--text] [--secret] [--default TEXT] TITLE`: asks the running edge, which
+ * shows the question like a panel; the choices come on stdin, a line each (at most ASK_MAX), unless
+ * --text asks for typed text. Prints the answer. Exit 0 answered, 1 cancelled, 2 a wrong question,
+ * 3 no edge to ask (the caller asks another way). */
+static int ask_client(int argc, char **argv) {
+    bool text = false, secret = false;
+    const char *start = "", *title = NULL;
+    for (int i = 2; i < argc; i++) {
+        if (!strcmp(argv[i], "--text")) text = true;
+        else if (!strcmp(argv[i], "--secret")) text = secret = true;
+        else if (!strcmp(argv[i], "--default") && i + 1 < argc) start = argv[++i];
+        else title = argv[i];
+    }
+    if (!title) {
+        fprintf(stderr, "usage: infynitae-edge ask [--text] [--secret] [--default TEXT] TITLE < choices\n");
+        return 2;
+    }
+    pid_t pid = edge_pid(pid_file_path());
+    if (pid <= 0) return 3;
+    char items[ASK_MAX][160];
+    int n = 0;
+    if (!text) {
+        char line[512];
+        while (n < ASK_MAX && fgets(line, sizeof(line), stdin)) {
+            ask_copy(items[n], sizeof(items[0]), line);
+            if (items[n][0]) n++;
+        }
+        if (n == 0) return 2;
+    }
+    const char *rt = getenv("XDG_RUNTIME_DIR");
+    char fifo[256], tmp[600], t[160], st[256];
+    snprintf(fifo, sizeof(fifo), "%s/infynitae-edge.ask.%d", rt ? rt : "/tmp", (int)getpid());
+    unlink(fifo);
+    if (mkfifo(fifo, 0600) != 0) return 3;
+    int fd = open(fifo, O_RDONLY | O_NONBLOCK | O_CLOEXEC);
+    if (fd < 0) {
+        unlink(fifo);
+        return 3;
+    }
+    /* another question not taken yet: a moment for the edge to take it */
+    for (int i = 0; i < 40 && access(ask_request_path(), F_OK) == 0; i++) usleep(50000);
+    /* written whole, then renamed: the edge never reads half a question (not the pipe's name) */
+    snprintf(tmp, sizeof(tmp), "%s-new.%d", ask_request_path(), (int)getpid());
+    FILE *f = fopen(tmp, "w");
+    if (!f) {
+        close(fd);
+        unlink(fifo);
+        return 3;
+    }
+    ask_copy(t, sizeof(t), title);
+    ask_copy(st, sizeof(st), start);
+    fprintf(f, "%s\n%s\n%s\n%s\n%s\n", fifo, text ? "text" : "choose", secret ? "secret" : "plain", t, st);
+    for (int i = 0; i < n; i++) fprintf(f, "%s\n", items[i]);
+    fclose(f);
+    if (rename(tmp, ask_request_path()) != 0 || kill(pid, SIGRTMIN + 3) != 0) {
+        unlink(tmp);
+        close(fd);
+        unlink(fifo);
+        return 3;
+    }
+    /* the answer: until the edge writes and closes the pipe; an edge that went away is no answer */
+    char got[400];
+    size_t len = 0;
+    int rc = 3;
+    for (;;) {
+        struct pollfd pfd = {.fd = fd, .events = POLLIN};
+        int r = poll(&pfd, 1, 1000);
+        if (r < 0 && errno == EINTR) continue;
+        if (r == 0) {
+            if (kill(pid, 0) != 0) break;
+            continue;
+        }
+        ssize_t k = read(fd, got + len, sizeof(got) - 1 - len);
+        if (k > 0) {
+            len += (size_t)k;
+            if (len < sizeof(got) - 1) continue;
+        }
+        if (k < 0 && errno == EAGAIN) continue;
+        got[len] = '\0';
+        if (len >= 2 && got[0] == '1' && got[1] == '\n') {
+            char *end = strchr(got + 2, '\n');
+            if (end) *end = '\0';
+            printf("%s\n", got + 2);
+            rc = 0;
+        } else if (len >= 1 && got[0] == '0') {
+            rc = 1;
+        }
+        break;
+    }
+    close(fd);
+    unlink(fifo);
+    return rc;
+}
+
 /* --render MODE WxH OUT.png: one panel fully open, with fixed made-up content, into a PNG, through
  * the same drawing code as the live panels; connects to nothing, signals nothing, starts nothing
- * (tools/test-edge-render). MODE: apps, windows, control or clipboard. */
+ * (tools/test-edge-render). MODE: apps, windows, control or clipboard, or ask (a question). */
 static int render_to_png(const char *mode_name, const char *size, const char *out_path) {
     int w = 0, h = 0;
     if (sscanf(size, "%dx%d", &w, &h) != 2 || w < 200 || h < 200 || w > 8192 || h > 8192) {
@@ -5407,10 +5770,37 @@ static int render_to_png(const char *mode_name, const char *size, const char *ou
     }
 
     resolve_favorites(&app);
+    if (strcmp(mode_name, "ask") == 0) {
+        /* a question: INFYNITAE_EDGE_RENDER_ASK is "Title|choice|choice", or "text:Title" with
+         * INFYNITAE_EDGE_RENDER_SEARCH as what is typed */
+        const char *q = getenv("INFYNITAE_EDGE_RENDER_ASK");
+        char buf[1024];
+        snprintf(buf, sizeof(buf), "%s", q ? q : "Format Type-C 119.5G (sdf) as|exFAT: every computer, phone and console|FAT32: every device, but no file over 4 GB|ext4: Linux only");
+        char *rest = buf;
+        if (!strncmp(rest, "text:", 5)) {
+            app.ask_text = true;
+            rest += 5;
+        } else if (!strncmp(rest, "secret:", 7)) {
+            app.ask_text = app.ask_secret = true;
+            rest += 7;
+        }
+        char *tok = strsep(&rest, "|");
+        snprintf(app.ask_title, sizeof(app.ask_title), "%s", tok ? tok : "");
+        while (rest && app.ask_n < ASK_MAX) {
+            tok = strsep(&rest, "|");
+            snprintf(app.ask_items[app.ask_n++], sizeof(app.ask_items[0]), "%s", tok);
+        }
+        if (getenv("INFYNITAE_EDGE_RENDER_SEARCH")) {
+            snprintf(app.ask_buf, sizeof(app.ask_buf), "%s", getenv("INFYNITAE_EDGE_RENDER_SEARCH"));
+            app.ask_len = strlen(app.ask_buf);
+        }
+        app.ask_sel = getenv("INFYNITAE_EDGE_RENDER_SELECT") ? atoi(getenv("INFYNITAE_EDGE_RENDER_SELECT")) : 0;
+        app.ask_on = true;
+    }
     /* the old names of the built-in panels' modes still work */
     const char *name = strcmp(mode_name, "center") == 0 ? "windows" : mode_name;
-    app.open = panel_index(&app, name);
-    if (app.open < 0) {
+    app.open = app.ask_on ? -1 : panel_index(&app, name);
+    if (app.open < 0 && !app.ask_on) {
         fprintf(stderr, "[infynitae-edge] --render: no panel \"%s\" (apps, windows, control, clipboard, or a PANEL_ line's)\n", mode_name);
         return 2;
     }
@@ -5488,6 +5878,7 @@ int main(int argc, char **argv) {
         }
         return 0;
     }
+    if (argc >= 2 && strcmp(argv[1], "ask") == 0) return ask_client(argc, argv);
     const char *pfile = pid_file_path();
 
     if (argc > 1) {
@@ -5524,6 +5915,13 @@ int main(int argc, char **argv) {
     signal(SIGRTMIN, on_sigrtmin);
     signal(SIGRTMIN + 1, on_sigapps);
     signal(SIGRTMIN + 2, on_sigpanel);
+    signal(SIGRTMIN + 3, on_sigask);
+    /* said only once the signal it needs is handled: before, it would end the edge */
+    FILE *ff = fopen(features_path(), "w");
+    if (ff) {
+        fprintf(ff, "ask\n");
+        fclose(ff);
+    }
     signal(SIGTERM, on_sigterm);
     signal(SIGINT, on_sigterm);
     reap_children_without_waiting();
@@ -5582,6 +5980,9 @@ int main(int argc, char **argv) {
             }
             for (char *c = want; *c; c++) *c = (char)tolower((unsigned char)*c);
             if (want[0]) open_panel_named(&app, want);
+        } else if (g_sig_cmd == 7) {
+            g_sig_cmd = 0;
+            ask_load(&app);
         } else if (g_sig_cmd == 3) {
             break;
         }
@@ -5693,6 +6094,8 @@ int main(int argc, char **argv) {
     }
 
     unlink(pfile);
+    unlink(features_path());
+    if (app.ask_on) ask_answer(&app, NULL);  /* an asker waiting is told: no answer */
     wl_display_disconnect(app.display);
     return 0;
 }

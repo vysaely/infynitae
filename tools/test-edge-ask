@@ -1,0 +1,83 @@
+#!/bin/sh
+# tools/test-edge-ask: `infynitae-edge ask`, the side that asks: what it hands the edge (the request
+# file), the answer it prints, its exit codes (0 answered, 1 cancelled, 3 no edge). The edge here is
+# a stand-in script named infynitae-edge that answers by the request's pipe as the real one does
+# (the real one's drawing of the question is checked by tools/test-edge-render). Run from the
+# repository root.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+command -v bash >/dev/null || { echo "skip: needs bash for the stand-in edge"; exit 0; }
+TMP=$(mktemp -d "/tmp/infynitae-test-edge-ask.XXXXXX")
+cleanup() { [ -n "${FAKE:-}" ] && kill "$FAKE" 2>/dev/null; rm -rf "$TMP"; }
+trap cleanup EXIT INT TERM
+LIVE="$REPO_DIR/live"
+cc -O1 -o "$TMP/edge" "$LIVE/edge/infynitae-edge.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
+    "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/edge/wlr-foreign-toplevel-protocol.c" \
+    $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon gio-2.0) -lm
+export XDG_RUNTIME_DIR="$TMP/run"
+mkdir -p "$XDG_RUNTIME_DIR" "$TMP/fake"
+# the stand-in: on SIGRTMIN+3 it keeps the request and answers as $TMP/answer says ("cancel",
+# "none": never, or the answer)
+cat > "$TMP/fake/infynitae-edge" <<FAKE
+#!BASH_PATH
+answer() {
+    req="\$XDG_RUNTIME_DIR/infynitae-edge.ask"
+    cp "\$req" "$TMP/last-request"; rm -f "\$req"
+    pipe=\$(head -n 1 "$TMP/last-request")
+    a=\$(cat "$TMP/answer")
+    case "\$a" in
+        none) ;;
+        cancel) printf '0\n' > "\$pipe" ;;
+        *) printf '1\n%s\n' "\$a" > "\$pipe" ;;
+    esac
+}
+trap answer RTMIN+3
+echo \$\$ > "\$XDG_RUNTIME_DIR/infynitae-edge.pid"
+while :; do sleep 0.1; done
+FAKE
+sed -i "1s|BASH_PATH|$(command -v bash)|" "$TMP/fake/infynitae-edge"
+chmod +x "$TMP/fake/infynitae-edge"
+fails=0
+check() { if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi; }
+ask() { rc=0; out=$("$TMP/edge" ask "$@") || rc=$?; }
+
+ask "Pick" < /dev/null || true
+check "no edge running: exit 3, so the caller asks another way" '[ "$rc" = 3 ]'
+
+"$TMP/fake/infynitae-edge" & FAKE=$!
+for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$XDG_RUNTIME_DIR/infynitae-edge.pid" ] && break; sleep 0.1; done
+
+echo "FAT32: every device" > "$TMP/answer"
+printf 'exFAT: every computer\nFAT32: every device\n\next4: Linux only\n' | { ask "Format the drive as"; echo "$rc|$out" > "$TMP/r"; }
+check "a choice: prints the answer, exit 0" '[ "$(cat "$TMP/r")" = "0|FAT32: every device" ]'
+check "a choice: the edge is told the pipe, the kind, the title" \
+    'sed -n 2,4p "$TMP/last-request" | tr "\n" "|" | grep -qx "choose|plain|Format the drive as|"'
+check "a choice: the choices, empty lines left out" '[ "$(tail -n +6 "$TMP/last-request" | tr "\n" "|")" = "exFAT: every computer|FAT32: every device|ext4: Linux only|" ]'
+check "a choice: the pipe is the runtime folder's and is gone after" \
+    'p=$(head -n 1 "$TMP/last-request"); case "$p" in "$XDG_RUNTIME_DIR"/infynitae-edge.ask.*) [ ! -e "$p" ] ;; *) false ;; esac'
+
+echo cancel > "$TMP/answer"
+printf 'a\nb\n' | { ask "Pick"; echo "$rc|$out" > "$TMP/r"; }
+check "cancelled: nothing printed, exit 1" '[ "$(cat "$TMP/r")" = "1|" ]'
+
+echo "hunter two" > "$TMP/answer"
+ask --secret --default "abc" "Passphrase for USB" < /dev/null
+check "text: the typed text, exit 0" '[ "$rc" = 0 ] && [ "$out" = "hunter two" ]'
+check "text: secret and the text to start from reach the edge" \
+    'sed -n 2,5p "$TMP/last-request" | tr "\n" "|" | grep -qx "text|secret|Passphrase for USB|abc|"'
+
+printf 'Title\nwith a line\n' > /dev/null
+echo "x" > "$TMP/answer"
+printf 'one\n' | { ask "$(printf 'two\nlines')"; echo "$rc" > "$TMP/r"; }
+check "a title of two lines reaches the edge as one" '[ "$(sed -n 4p "$TMP/last-request")" = "two" ] && [ "$(wc -l < "$TMP/last-request")" = 6 ]'
+
+ask "Pick" < /dev/null || true
+check "a choice with no choices: exit 2" '[ "$rc" = 2 ]'
+
+echo none > "$TMP/answer"
+( sleep 1; kill "$FAKE" ) &
+printf 'a\n' | { ask "Pick"; echo "$rc" > "$TMP/r"; }
+check "the edge goes away without answering: exit 3, not a hang" '[ "$(cat "$TMP/r")" = 3 ]'
+FAKE=""
+
+[ "$fails" = 0 ] && echo "all edge ask tests passed" || { echo "$fails failed"; exit 1; }

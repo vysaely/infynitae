@@ -1,0 +1,172 @@
+#!/bin/sh
+# tools/test-format-drive: test live/infynitae-format-drive without root or real drives. Every tool
+# it calls is a mock (udisksctl, gdbus, lsblk, findmnt, fuzzel's answers, notify-send), so what it
+# would do to a drive is read from the calls it made.
+set -eu
+
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+FMT="$REPO_DIR/live/infynitae-format-drive"
+[ -x "$FMT" ] || { echo "FAIL: $FMT not found or not executable" >&2; exit 1; }
+
+TMP=$(mktemp -d "/tmp/infynitae-test-format.XXXXXX")
+trap 'rm -rf "$TMP"' EXIT INT TERM
+BIN="$TMP/bin"
+mkdir -p "$BIN" "$TMP/state"
+CALLS="$TMP/calls.log"
+NOTES="$TMP/notes.log"
+
+cat > "$BIN/notify-send" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$NOTES"
+EOF
+
+# two drives: sdx, a removable stick with three partitions (two mounted), and sda, an internal disk.
+# MOUNTED_SYSTEM=1 puts / on the stick (a system started from it).
+cat > "$BIN/udisksctl" <<EOF
+#!/bin/sh
+printf 'udisksctl %s\n' "\$*" >> "$CALLS"
+case "\$*" in
+    "info -b /dev/sdx") echo "  Drive:   '/org/freedesktop/UDisks2/drives/Stick'" ;;
+    "info -b /dev/sda") echo "  Drive:   '/org/freedesktop/UDisks2/drives/Internal'" ;;
+    "info -p drives/Stick") printf '  Model:   Type-C\n  Removable:   true\n  SmartEnabled: false\n' ;;
+    "info -p drives/Internal") printf '  Model:   WDC\n  Removable:   false\n  PmEnabled:  true\n' ;;
+    unmount*) : > "$TMP/unmounted" ;;
+esac
+EOF
+
+cat > "$BIN/lsblk" <<EOF
+#!/bin/sh
+dev=""
+for a in "\$@"; do case "\$a" in /dev/*) dev="\$a" ;; esac; done
+case "\$*" in
+    *PKNAME*) case "\$dev" in /dev/sdx[0-9]) echo sdx ;; /dev/sda[0-9]) echo sda ;; *) echo "" ;; esac ;;
+    *SIZE*) echo " 119.5G" ;;
+    *NAME,TYPE,FSTYPE,MOUNTPOINTS*)
+        [ "\$dev" = /dev/sdx ] || exit 0
+        echo "sdx disk  "
+        echo "sdx1 part vfat /run/media/me/efi"
+        echo "sdx2 part crypto_LUKS "
+        echo "sdx3 part ext4 /run/media/me/home" ;;
+    *MOUNTPOINTS*)
+        if [ "\$dev" = /dev/sda ]; then echo "/mnt/III"; exit 0; fi
+        if [ -f "$TMP/unmounted" ] && [ "\${STILL_MOUNTED:-0}" = 0 ]; then echo ""; exit 0; fi
+        echo ""; echo "/run/media/me/efi"; echo ""
+        if [ "\${MOUNTED_SYSTEM:-0}" = 1 ]; then echo "/"; else echo "/run/media/me/home"; fi ;;
+esac
+EOF
+
+cat > "$BIN/findmnt" <<EOF
+#!/bin/sh
+for last in "\$@"; do :; done
+case "\$last" in
+    /run/media/me/home) echo /dev/sdx3 ;;
+    /mnt/III) echo /dev/sda1 ;;
+esac
+EOF
+
+cat > "$BIN/gdbus" <<EOF
+#!/bin/sh
+printf 'gdbus %s\n' "\$*" >> "$CALLS"
+case "\$*" in *CreatePartitionAndFormat*) echo "(objectpath '/org/freedesktop/UDisks2/block_devices/sdx1',)" ;; esac
+EOF
+
+# fuzzel's answers: FS, NAME, CONFIRM (CONFIRM=Erase... or Cancel); the choices offered are kept
+cat > "$BIN/ask" <<EOF
+#!/bin/sh
+cat > "$TMP/offered-\$1"
+case "\$1" in
+    fs) grep "^\${FS:-exFAT}" "$TMP/offered-fs" | head -n 1 ;;
+    name) printf '%s\n' "\${NAME-My Stick}" ;;
+    confirm) if [ "\${CONFIRM:-Erase}" = Erase ]; then grep '^Erase' "$TMP/offered-confirm"; else echo Cancel; fi ;;
+esac
+EOF
+chmod +x "$BIN"/*
+
+run() {
+    : > "$CALLS"; : > "$NOTES"; rm -f "$TMP/unmounted" "$TMP"/offered-*
+    PATH="$BIN:$PATH" XDG_STATE_HOME="$TMP/state" INFYNITAE_FORMAT_ASK="$BIN/ask" \
+        INFYNITAE_FORMAT_HAVE="${HAVE-mkfs.exfat mkfs.vfat mkfs.ext4}" "$FMT" "$@" >"$TMP/out" 2>&1
+}
+
+fails=0
+check() {
+    if eval "$2"; then echo "ok   $1"; else echo "FAIL $1"; fails=$((fails + 1)); fi
+}
+called() { grep -q -- "$1" "$CALLS"; }
+formatted() { grep -q 'Block.Format' "$CALLS" || grep -q 'CreatePartitionAndFormat' "$CALLS"; }
+
+# --can: the stick's folder yes, the internal disk and a folder inside the stick no; it asks nothing
+run --can /run/media/me/home || true
+check "--can says true for a removable drive's folder" '[ "$(cat "$TMP/out")" = true ]'
+check "--can asks nothing and says nothing" '! ls "$TMP"/offered-* >/dev/null 2>&1 && [ ! -s "$NOTES" ]'
+run --can /mnt/III || true
+check "--can refuses an internal disk" '[ ! -s "$TMP/out" ]'
+run --can /run/media/me/home/deck || true
+check "--can refuses a folder inside a drive" '[ ! -s "$TMP/out" ]'
+
+# the whole way, exFAT
+NAME="My Stick" run /run/media/me/home
+check "exFAT: offers only the filesystems it can make" '! grep -q NTFS "$TMP/offered-fs" && grep -q "^exFAT" "$TMP/offered-fs"'
+check "exFAT: Cancel is the first confirmation choice" '[ "$(head -n 1 "$TMP/offered-confirm")" = Cancel ]'
+check "exFAT: unmounts each mounted partition" 'called "unmount --no-user-interaction -b /dev/sdx1" && called "unmount --no-user-interaction -b /dev/sdx3"'
+check "exFAT: locks the encrypted partition" 'called "lock --no-user-interaction -b /dev/sdx2"'
+check "exFAT: a new MBR table on the whole disk" 'called "object-path /org/freedesktop/UDisks2/block_devices/sdx --method org.freedesktop.UDisks2.Block.Format dos"'
+check "exFAT: one exFAT partition named My Stick" "called \"CreatePartitionAndFormat 0 0 0x07  {} exfat {'label': <'My Stick'>}\""
+check "exFAT: says it is ready" 'grep -q "My Stick is ready" "$NOTES"'
+
+# FAT32: the name in capitals, cut to 11, odd characters dropped
+FS=FAT32 NAME="photos 2026 o'clock\"x" run /run/media/me/home
+check "FAT32: label in capitals, safe characters, 11 at most" "called \"0x0c  {} vfat {'label': <'PHOTOS 2026'>}\""
+
+# ext4: owned by the user; an empty name becomes USB
+FS=ext4 NAME="" run /dev/sdx3
+check "ext4: from a device path, take-ownership, default name" "called \"0x83  {} ext4 {'label': <'USB'>, 'take-ownership': <true>}\""
+
+# refusals: nothing is formatted
+CONFIRM=Cancel run /run/media/me/home
+check "Cancel at the confirmation formats nothing and unmounts nothing" '! formatted && ! called unmount'
+FS=none run /run/media/me/home
+check "no filesystem chosen formats nothing" '! formatted'
+run /mnt/III || true
+check "an internal disk is refused and said so" '! formatted && grep -q "not a removable drive" "$NOTES"'
+MOUNTED_SYSTEM=1 run /run/media/me/home || true
+check "a drive holding the running system is refused" '! formatted && grep -q "running system" "$NOTES"'
+STILL_MOUNTED=1 run /run/media/me/home || true
+check "a partition still in use stops it before the table is touched" '! formatted && grep -q "still in use" "$NOTES"'
+HAVE="" run /run/media/me/home || true
+check "no mkfs tools: says what to install" '! formatted && grep -q "exfatprogs" "$NOTES"'
+
+# the edge asks (it says so in its features file): titles, choices and the default name reach it
+mkdir -p "$TMP/rt"
+echo ask > "$TMP/rt/infynitae-edge.features"
+cat > "$BIN/infynitae-edge" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$TMP/edge-calls"
+case "\$*" in
+    *--text*) [ "\${EDGE_RC:-0}" = 3 ] && exit 3; echo "Photos" ;;
+    *) cat > "$TMP/edge-offered"; [ "\${EDGE_RC:-0}" = 3 ] && exit 3
+       case "\$*" in *Erase*) grep '^Erase' "$TMP/edge-offered" ;; *) grep '^exFAT' "$TMP/edge-offered" ;; esac ;;
+esac
+EOF
+cat > "$BIN/fuzzel" <<EOF
+#!/bin/sh
+echo fuzzel >> "$TMP/fuzzel-calls"
+cat >/dev/null
+EOF
+chmod +x "$BIN/infynitae-edge" "$BIN/fuzzel"
+edge_run() {
+    : > "$CALLS"; : > "$NOTES"; : > "$TMP/edge-calls"; : > "$TMP/fuzzel-calls"; rm -f "$TMP/unmounted"
+    PATH="$BIN:$PATH" XDG_STATE_HOME="$TMP/state" XDG_RUNTIME_DIR="$TMP/rt" WAYLAND_DISPLAY=w \
+        INFYNITAE_FORMAT_HAVE="mkfs.exfat mkfs.vfat" "$FMT" "$@" >"$TMP/out" 2>&1
+}
+edge_run /run/media/me/home
+check "edge: asked three times, fuzzel never" '[ "$(wc -l < "$TMP/edge-calls")" = 3 ] && [ ! -s "$TMP/fuzzel-calls" ]'
+check "edge: the name is typed, starting from USB" 'grep -q -- "ask --text --default USB Name for the drive" "$TMP/edge-calls"'
+check "edge: the answers are used" "called \"exfat {'label': <'Photos'>}\""
+EDGE_RC=3 edge_run /run/media/me/home || true
+check "an edge gone away: fuzzel asks instead" '[ -s "$TMP/fuzzel-calls" ]'
+rm -f "$TMP/rt/infynitae-edge.features"
+edge_run /run/media/me/home || true
+check "an edge that does not say it can ask is never asked (it would restart)" '[ ! -s "$TMP/edge-calls" ]'
+
+[ "$fails" = 0 ] && echo "all format-drive tests passed" || { echo "$fails failed"; exit 1; }
