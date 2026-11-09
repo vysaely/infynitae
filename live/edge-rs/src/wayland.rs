@@ -1,10 +1,7 @@
 //! The Wayland client: one wlr-layer-shell surface per output, two shm buffers per surface,
 //! paced by frame callbacks, zero work while closed, and signals / request files in calloop.
 
-use crate::{
-    hover_strip, layout, modules, panel_hover_box, panel_origin, panel_rect, panel_width, Key,
-    Shell,
-};
+use crate::{hover_strip, layout, modules, panel_hover_box, panel_origin, panel_width, Key, Shell};
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
     delegate_compositor, delegate_keyboard, delegate_layer, delegate_output, delegate_pointer,
@@ -119,10 +116,14 @@ impl OutputSurface {
         if w > 0.0 && h > 0.0 {
             if let Some(idx) = shell.open {
                 if let Some(p) = shell.cfg.panels.get(idx) {
+                    // opened by its key: the whole screen takes the pointer, so a click
+                    // outside the panel reaches the edge and closes it (as the C edge while it
+                    // holds the keyboard); opened by hover: the panel and the way to it, so
+                    // leaving it closes it
                     let (rx, ry, rw, rh) = if shell.opened_by_hover {
                         panel_hover_box(p, w, h)
                     } else {
-                        panel_rect(p, w, h)
+                        (0.0, 0.0, w, h)
                     };
                     region.add(
                         rx.floor() as i32,
