@@ -19,6 +19,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 smithay-client-toolkit = "0.20"
 signal-hook-registry = "1.4"
 libc = "0.2"
+zbus = { version = "5.19", features = ["blocking-api"] }
 
 [profile.release]
 lto = "thin"
