@@ -888,7 +888,7 @@ impl Core {
                 Some(e) => e,
                 None => return,
             };
-            self.maximize_toggle(Some(proof), output, element, out);
+            self.maximize_toggle(Some(proof), output, element, true, out);
             return;
         }
         let Some(hit) = self.hit_test(output, pt) else {
@@ -914,11 +914,16 @@ impl Core {
     /// the usable screen area, or restores it.
     /// Without `proof` (an app's own button) no camera is written: apps never move it, so at
     /// another zoom than 1 the window stays as it is and the app is only answered.
+    /// `into_gap`: the window grows only into the free space around it on the screen
+    /// (`largest_gap`), covering no other window (owner, 2026-11-09); otherwise it fills the
+    /// whole usable area (a window opening maximized, which `maximize_opened` then moves to free
+    /// canvas).
     fn maximize_toggle(
         &mut self,
         proof: Option<authority::Authorized>,
         output: OutputId,
         element: crate::stage::ElementId,
+        into_gap: bool,
         out: &mut Vec<Effect>,
     ) {
         if self.stage.mapped(element).is_none() {
@@ -992,8 +997,46 @@ impl Core {
                 return;
             };
 
-            let canvas_w = usable.2.round().max(1.0) as i32;
-            let canvas_h = usable.3.round().max(1.0) as i32;
+            let mut canvas_w = usable.2.round().max(1.0) as i32;
+            let mut canvas_h = usable.3.round().max(1.0) as i32;
+            let mut tl = tl;
+            if into_gap {
+                let view_rect = (
+                    tl.x,
+                    tl.y,
+                    tl.x + i64::from(canvas_w),
+                    tl.y + i64::from(canvas_h),
+                );
+                let window = (
+                    anchor.x,
+                    anchor.y,
+                    anchor.x + i64::from(orig_size.w),
+                    anchor.y + i64::from(orig_size.h),
+                );
+                // its own dialogs do not count: they sit over it
+                let others: Vec<_> = self
+                    .stage
+                    .mapped_elements()
+                    .into_iter()
+                    .filter(|&e| {
+                        e != element
+                            && self.toplevel_parent(e) != Some(element)
+                            && !self.stage.is_minimized(e) // hidden: nothing to cover
+                    })
+                    .filter_map(|e| {
+                        let (a, t) = (self.stage.anchor(e)?, self.stage.tree(e)?);
+                        let (w, h) = (i64::from(t.geometry.size.w), i64::from(t.geometry.size.h));
+                        (w > 0 && h > 0).then_some((a.x, a.y, a.x + w, a.y + h))
+                    })
+                    .collect();
+                // no gap larger than the window: it already fills its room, nothing changes
+                let Some(gap) = crate::protocol::largest_gap(view_rect, &others, window) else {
+                    return;
+                };
+                tl = crate::geom::CanvasPoint { x: gap.0, y: gap.1 };
+                canvas_w = (gap.2 - gap.0) as i32;
+                canvas_h = (gap.3 - gap.1) as i32;
+            }
 
             self.stage
                 .set_saved_floating(element, Some((anchor, orig_size)));
@@ -1001,7 +1044,7 @@ impl Core {
             self.set_maximized(element, Some(output));
             self.maximized_at.push((element, tl));
             let _ = self.place_by_shell(element, tl, out);
-            // it covers whatever is there: no other window moves (owner, 2026-11-06)
+            // no other window moves (owner, 2026-11-06), and none is covered (2026-11-09)
             out.push(Effect::ToplevelConfigureSize {
                 element,
                 size: crate::geom::LocalSize {
@@ -1552,7 +1595,7 @@ impl Core {
             && !self.input.interaction.active()
             && self.stage.mapped(id).is_some()
         {
-            self.maximize_toggle(None, output, id, &mut out);
+            self.maximize_toggle(None, output, id, true, &mut out);
         }
         // the toggle's own configure answers it; exactly one in every case
         if !out
@@ -1584,7 +1627,7 @@ impl Core {
             && self.fullscreen_of(id).is_none()
             && !self.maximized.iter().any(|(e, _)| *e == id)
         {
-            self.maximize_toggle(None, output, id, &mut out);
+            self.maximize_toggle(None, output, id, false, &mut out);
             // a maximize the user asks for covers what the screen shows; one a new window asked
             // for (Discord reopening maximized) covers no other app's window: it fills a screen's
             // room in the nearest free space instead (owner, 2026-11-07)
@@ -4641,7 +4684,7 @@ mod tests {
         };
 
         // Press Super+Enter on w1
-        let _ = c
+        let fx = c
             .physical_input_vec(
                 &mut i,
                 crate::PhysicalEvent::KeyboardKey {
@@ -4654,13 +4697,20 @@ mod tests {
             )
             .unwrap();
 
-        // w1 expands to fill viewport (-960..960, -540..540)
-        // w2 was at (812, 0) which would be covered by w1's right edge at x=960!
-        // owner, 2026-11-06: only w1 moves; w2 stays, covered (it used to be pushed to x=972)
+        // the viewport is (-960..960, -540..540), w2 at (812, 0). Owner, 2026-11-06: only w1
+        // moves (w2 used to be pushed to x=972); 2026-11-09: w1 grows into the free space and
+        // stops 12 px before w2 (it used to cover it)
         let anchor_w1 = c.stage().anchor(w1).unwrap();
         let anchor_w2 = c.stage().anchor(w2).unwrap();
         assert_eq!(anchor_w1.x, -960);
         assert_eq!(anchor_w1.y, -540);
+        assert!(
+            fx.iter().any(
+                |e| matches!(e, Effect::ToplevelConfigureSize { element, size }
+                if *element == w1 && (size.w, size.h) == (1760, 1080))
+            ),
+            "w1 fills the view up to w2: {fx:?}"
+        );
         assert_eq!(
             (anchor_w2.x, anchor_w2.y),
             (812, 0),

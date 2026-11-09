@@ -129,6 +129,9 @@ fn a_maximized_window_keeps_its_size_through_focus_changes() {
     let mut r = rig(a_1080());
     let (a, ea) = map(&mut r, "A", (800, 600));
     let (_, eb) = map(&mut r, "B", (800, 600));
+    // out of view: a maximize grows only into free space (owner, 2026-11-09), and this test is
+    // about the maximized size, the whole view
+    move_to(&mut r, eb, (20_000, 0));
     focus(&mut r, ea);
     super_enter_on(&mut r, ea);
     let max = usable(&r);
@@ -215,6 +218,9 @@ fn a_window_that_takes_its_own_size_is_let_go() {
     let mut r = rig(a_1080());
     let (a, ea) = map(&mut r, "A", (800, 600));
     let (_, eb) = map(&mut r, "B", (800, 600));
+    // out of view: a maximize grows only into free space (owner, 2026-11-09), and this test is
+    // about the maximized size, the whole view
+    move_to(&mut r, eb, (20_000, 0));
     focus(&mut r, ea);
     super_enter_on(&mut r, ea);
     let max = usable(&r);
@@ -236,6 +242,9 @@ fn a_frame_drawn_before_the_maximize_was_read_keeps_the_hold() {
     let mut r = rig(a_1080());
     let (a, ea) = map(&mut r, "A", (800, 600));
     let (_, eb) = map(&mut r, "B", (800, 600));
+    // out of view: a maximize grows only into free space (owner, 2026-11-09), and this test is
+    // about the maximized size, the whole view
+    move_to(&mut r, eb, (20_000, 0));
     focus(&mut r, ea);
     r.ls.probe.hold_acks = true;
     super_enter_on(&mut r, ea);
@@ -322,6 +331,9 @@ fn maximized_and_fullscreen_windows_follow_every_screen_change() {
             let (m, em) = map(&mut r, "Maximized", (640, 480));
             let (f, ef) = map(&mut r, "Fullscreen", (640, 480));
             let (_, et) = map(&mut r, "Tiled", (300, 200));
+            // out of view: a maximize grows only into free space (owner, 2026-11-09)
+            move_to(&mut r, ef, (20_000, 0));
+            move_to(&mut r, et, (30_000, 0));
 
             // the maximized one (first: Super+Enter does nothing over a fullscreen screen)
             focus(&mut r, em);
