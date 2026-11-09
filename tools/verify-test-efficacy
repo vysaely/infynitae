@@ -671,9 +671,9 @@ CONTROLS = [
      "        let r = |v: i64| (v as f64 / Q16_ONE as f64).round() as i64;",
      "infynitae-core", ["--lib"], "placement_agrees_with_the_exact_model_on_fractional_extents_and_ties"),
     # --- INC-7 (experimental): toplevel requests (M2)
-    ("INC-7 M2: Smithay's default maximize answer is used (a configure before the initial one, W-SM-13)", f"{WAYLAND}/handlers.rs",
-     "    fn maximize_request(&mut self, surface: ToplevelSurface) {\n        if let Some(i)",
-     "    fn maximize_request(&mut self, surface: ToplevelSurface) {\n        surface.send_configure();\n        if let Some(i)",
+    ("INC-7 M2: Smithay's default fullscreen answer is used (a configure before the initial one, W-SM-13)", f"{WAYLAND}/handlers.rs",
+     "        self.toplevel_request(&surface, ToplevelRequest::SetFullscreen { output });",
+     "        let _ = output;\n        surface.send_configure();",
      "infynitae-backend-headless", ["--test", "t1_toplevel_requests"], "requests_before_the_initial_configure_are_not_answered"),
     ("INC-7 M2: a declined request is recorded but not answered (TST-22 control: 0 answers)", f"{CORE}/protocol.rs",
      "            true => (Declined, vec![Effect::ToplevelConfigure(id)]),", "            true => (Declined, Vec::new()),",
