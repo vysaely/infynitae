@@ -4,14 +4,14 @@
 #   infynitae-format-drive PATH: PATH is a drive's folder under /run/media, or a /dev device on it
 #   infynitae-format-drive --can PATH: prints "true" when PATH is one this would format, nothing
 #   else, and asks nothing (the file manager shows "Format drive..." only then)
-# Asked with fuzzel: the filesystem (only those whose tools are installed), the name, then an
-# explicit "Erase" (the first choice is Cancel). Refused for anything not on a removable drive and
-# for a drive that holds the running system (/, /home, /boot, /usr, /var). The whole drive is
-# erased, every partition on it: one partition table (MBR, which every system reads), one
-# partition. The automount watcher mounts it once it exists.
+# Asked like the panels (infynitae-edge ask; fuzzel with an edge from before it): the filesystem
+# (only those whose tools are installed), the name, then an explicit "Erase" (Cancel comes first).
+# Refused for anything not on a removable drive and for a drive that holds the running system
+# (/, /home, /boot, /usr, /var). The whole drive is erased, every partition on it: one partition
+# table (MBR, which every system reads), one partition. The automount watcher mounts it after.
 #   INFYNITAE_FORMAT_UDISKSCTL, INFYNITAE_FORMAT_GDBUS, INFYNITAE_FORMAT_LSBLK,
 #   INFYNITAE_FORMAT_FINDMNT: commands used instead of those tools (tests)
-#   INFYNITAE_FORMAT_ASK: a command printing the answer to a prompt instead of fuzzel; it gets the
+#   INFYNITAE_FORMAT_ASK: a command printing the answer to a prompt instead of asking; it gets the
 #   prompt's kind (fs, name, confirm) as $1 and the choices on stdin (tests)
 #   INFYNITAE_FORMAT_HAVE: the mkfs tools present, space separated, instead of looking (tests)
 set -u
@@ -45,15 +45,37 @@ fail() {
     exit 1
 }
 
-# a choice from fuzzel: $1 the kind (fs, name, confirm), $2 the prompt, the choices on stdin
+# the edge (the panels) can ask: an edge from before `infynitae-edge ask` takes "ask" as a reason
+# to start again, so only one that says so in its features file is asked
+edge_can_ask() {
+    [ -n "${XDG_RUNTIME_DIR:-}" ] && grep -qx ask "$XDG_RUNTIME_DIR/infynitae-edge.features" 2>/dev/null \
+        && command -v infynitae-edge >/dev/null 2>&1
+}
+
+# a choice, shown like the panels (infynitae-edge ask), else by fuzzel: $1 the kind (fs, name,
+# confirm), $2 the title, the choices on stdin; prints the answer, nothing when cancelled
 ask() {
     if [ -n "${INFYNITAE_FORMAT_ASK:-}" ]; then
         sh -c "$INFYNITAE_FORMAT_ASK \"\$@\"" ask "$1"
-    elif command -v fuzzel >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        return
+    fi
+    offered=""
+    [ "$1" = name ] || offered=$(cat)
+    if edge_can_ask; then
+        rc=0
         if [ "$1" = name ]; then
-            fuzzel --dmenu --lines 0 --prompt-only "$2" </dev/null 2>/dev/null
+            infynitae-edge ask --text --default USB "$2" </dev/null || rc=$?
         else
-            fuzzel --dmenu --prompt "$2" 2>/dev/null
+            printf '%s\n' "$offered" | infynitae-edge ask "$2" || rc=$?
+        fi
+        # 3: no edge to ask after all (it stopped): fuzzel instead
+        [ "$rc" = 3 ] || return 0
+    fi
+    if command -v fuzzel >/dev/null 2>&1 && [ -n "${WAYLAND_DISPLAY:-}" ]; then
+        if [ "$1" = name ]; then
+            fuzzel --dmenu --lines 0 --prompt-only "$2: " </dev/null 2>/dev/null
+        else
+            printf '%s\n' "$offered" | fuzzel --dmenu --prompt "$2 " 2>/dev/null
         fi
     fi
 }
@@ -109,7 +131,7 @@ have_mkfs mkfs.ext4 && choices="${choices}ext4: Linux only
 have_mkfs mkfs.ntfs && choices="${choices}NTFS: Windows and Linux
 "
 [ -n "$choices" ] || fail "No formatting tools are installed (exfatprogs, dosfstools)."
-fs_line=$(printf '%s' "$choices" | ask fs "Format $what as ")
+fs_line=$(printf '%s' "$choices" | ask fs "Format $what as")
 case "$fs_line" in
     exFAT*) fs=exfat type=0x07 most=15 ;;
     FAT32*) fs=vfat type=0x0c most=11 ;;
@@ -120,11 +142,11 @@ esac
 
 # the name: letters, digits, spaces, - and _ (a label is read by every system), cut to its
 # filesystem's longest
-label=$(ask name "Name: " </dev/null | tr -cd 'A-Za-z0-9 _-' | sed 's/^ *//; s/ *$//' | cut -c "1-$most")
+label=$(ask name "Name for the drive" </dev/null | tr -cd 'A-Za-z0-9 _-' | sed 's/^ *//; s/ *$//' | cut -c "1-$most")
 [ -n "$label" ] || label="USB"
 [ "$fs" = vfat ] && label=$(printf '%s' "$label" | tr 'a-z' 'A-Z')
 
-answer=$(printf 'Cancel\nErase everything on %s\n' "$what" | ask confirm "Erase $what? ")
+answer=$(printf 'Cancel\nErase everything on %s\n' "$what" | ask confirm "Erase everything on $what?")
 case "$answer" in
     Erase*) ;;
     *) log "cancelled at the confirmation"; exit 0 ;;

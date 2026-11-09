@@ -42,6 +42,7 @@ jobs:
       - run: sh tools/test-edge-app-search
       - run: sh tools/test-edge-config-value
       - run: sh tools/test-edge-render
+      - run: sh tools/test-edge-ask
       - run: sh tools/test-edge-panel-lines
       - run: sh tools/test-mako-config
       - run: sh tools/test-reload-match

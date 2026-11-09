@@ -136,4 +136,37 @@ check "a partition still in use stops it before the table is touched" '! formatt
 HAVE="" run /run/media/me/home || true
 check "no mkfs tools: says what to install" '! formatted && grep -q "exfatprogs" "$NOTES"'
 
+# the edge asks (it says so in its features file): titles, choices and the default name reach it
+mkdir -p "$TMP/rt"
+echo ask > "$TMP/rt/infynitae-edge.features"
+cat > "$BIN/infynitae-edge" <<EOF
+#!/bin/sh
+printf '%s\n' "\$*" >> "$TMP/edge-calls"
+case "\$*" in
+    *--text*) [ "\${EDGE_RC:-0}" = 3 ] && exit 3; echo "Photos" ;;
+    *) cat > "$TMP/edge-offered"; [ "\${EDGE_RC:-0}" = 3 ] && exit 3
+       case "\$*" in *Erase*) grep '^Erase' "$TMP/edge-offered" ;; *) grep '^exFAT' "$TMP/edge-offered" ;; esac ;;
+esac
+EOF
+cat > "$BIN/fuzzel" <<EOF
+#!/bin/sh
+echo fuzzel >> "$TMP/fuzzel-calls"
+cat >/dev/null
+EOF
+chmod +x "$BIN/infynitae-edge" "$BIN/fuzzel"
+edge_run() {
+    : > "$CALLS"; : > "$NOTES"; : > "$TMP/edge-calls"; : > "$TMP/fuzzel-calls"; rm -f "$TMP/unmounted"
+    PATH="$BIN:$PATH" XDG_STATE_HOME="$TMP/state" XDG_RUNTIME_DIR="$TMP/rt" WAYLAND_DISPLAY=w \
+        INFYNITAE_FORMAT_HAVE="mkfs.exfat mkfs.vfat" "$FMT" "$@" >"$TMP/out" 2>&1
+}
+edge_run /run/media/me/home
+check "edge: asked three times, fuzzel never" '[ "$(wc -l < "$TMP/edge-calls")" = 3 ] && [ ! -s "$TMP/fuzzel-calls" ]'
+check "edge: the name is typed, starting from USB" 'grep -q -- "ask --text --default USB Name for the drive" "$TMP/edge-calls"'
+check "edge: the answers are used" "called \"exfat {'label': <'Photos'>}\""
+EDGE_RC=3 edge_run /run/media/me/home || true
+check "an edge gone away: fuzzel asks instead" '[ -s "$TMP/fuzzel-calls" ]'
+rm -f "$TMP/rt/infynitae-edge.features"
+edge_run /run/media/me/home || true
+check "an edge that does not say it can ask is never asked (it would restart)" '[ ! -s "$TMP/edge-calls" ]'
+
 [ "$fails" = 0 ] && echo "all format-drive tests passed" || { echo "$fails failed"; exit 1; }
