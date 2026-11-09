@@ -393,6 +393,12 @@ pub fn height(it: &Item, world: &World) -> f64 {
     234.0
 }
 
+/// The width text starting at `text_x` (on the screen) may take in a card at `x` of width `w`,
+/// keeping the right padding and `reserved` px for what is drawn right of it (at least 20 px).
+fn room(x: f64, w: f64, text_x: f64, reserved: f64) -> f64 {
+    (x + w - PAD_X - reserved - text_x).max(20.0)
+}
+
 /// Draws the `media` module in small, medium, or large size according to `h`.
 pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
@@ -424,7 +430,7 @@ fn draw_small(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     // Text between cover and buttons
     let btn_total_w = 36.0 + 8.0 + 32.0;
     let text_x = cx + cover_size + 12.0;
-    let max_text_w = (w - PAD_X - btn_total_w - 12.0 - text_x).max(20.0);
+    let max_text_w = room(x, w, text_x, btn_total_w + 12.0);
 
     let ty = y + (h / 2.0) - 16.0;
     draw::text_max(
@@ -507,7 +513,7 @@ fn draw_medium(cr: &Context, th: &Theme, world: &World, rect: Rect) {
 
     // Title (15 px semibold) & "artist · player" muted
     let text_x = cx + cover_size + 14.0;
-    let max_text_w = (w - PAD_X - text_x).max(20.0);
+    let max_text_w = room(x, w, text_x, 0.0);
 
     draw::text_max(
         cr,
@@ -743,7 +749,7 @@ fn draw_large(cr: &Context, th: &Theme, world: &World, rect: Rect) {
 
     // Track metadata beside 96 px cover
     let text_x = cx + cover_size + 16.0;
-    let max_text_w = (w - PAD_X - text_x).max(20.0);
+    let max_text_w = room(x, w, text_x, 0.0);
 
     draw::text_max(
         cr,
@@ -1008,7 +1014,7 @@ fn draw_large(cr: &Context, th: &Theme, world: &World, rect: Rect) {
             text: &s_dur_str,
         };
         let (dw, _) = draw::measure(cr, &s_dur_t);
-        let s_max_w = (w - PAD_X - dw - 12.0 - s_text_x).max(20.0);
+        let s_max_w = room(x, w, s_text_x, dw + 12.0);
 
         draw::text_max(
             cr,
@@ -1908,5 +1914,14 @@ mod tests {
         };
         let world = World::now();
         assert_eq!(height(&it, &world), 0.0);
+    }
+
+    #[test]
+    fn text_room_is_measured_inside_the_card_wherever_the_card_is() {
+        // a medium card 344 px wide at the screen's left and at its right: the same room
+        let left = room(8.0, 344.0, 8.0 + PAD_X + 64.0 + 14.0, 0.0);
+        let right = room(1560.0, 344.0, 1560.0 + PAD_X + 64.0 + 14.0, 0.0);
+        assert_eq!(left, right);
+        assert!(left > 200.0, "{left}");
     }
 }
