@@ -2,7 +2,8 @@
 //! paced by frame callbacks, zero work while closed, and signals / request files in calloop.
 
 use crate::{
-    hover_strip, layout_in, modules, panel_hover_box_in, panel_origin, panel_width, Key, Shell,
+    hover_strip, layout_in, max_panel_height, modules, panel_hover_box_in, panel_origin,
+    panel_width, Key, Shell,
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
@@ -19,7 +20,11 @@ use smithay_client_toolkit::{
         client::{
             globals::registry_queue_init,
             protocol::{wl_keyboard, wl_output, wl_pointer, wl_seat, wl_shm, wl_surface, wl_touch},
-            Connection, QueueHandle,
+            Connection, Dispatch, QueueHandle,
+        },
+        protocols_wlr::foreign_toplevel::v1::client::{
+            zwlr_foreign_toplevel_handle_v1::{self, ZwlrForeignToplevelHandleV1},
+            zwlr_foreign_toplevel_manager_v1::{self, ZwlrForeignToplevelManagerV1},
         },
     },
     registry::{ProvidesRegistryState, RegistryState},
@@ -289,7 +294,8 @@ impl OutputSurface {
         };
 
         let pw = panel_width(panel, w as f64);
-        let (rects, ph) = layout_in(panel, pw, &shell.world, &shell.theme);
+        let (rects, content_h) = layout_in(panel, pw, &shell.world, &shell.theme);
+        let ph = content_h.min(max_panel_height(h as f64));
         let (ox, oy) = panel_origin(panel, w as f64, h as f64, pw, ph);
         let pad = 4;
         let new_box = (
@@ -316,15 +322,31 @@ impl OutputSurface {
                 )
             } {
                 if let Ok(cr) = cairo::Context::new(&surface) {
-                    modules::draw_panel(
-                        &cr,
-                        &shell.theme,
-                        panel,
-                        &rects,
-                        &shell.world,
-                        (ox, oy),
-                        pw,
-                    );
+                    if content_h > ph {
+                        let _ = cr.save();
+                        cr.rectangle(ox, oy, pw, ph);
+                        cr.clip();
+                        modules::draw_panel(
+                            &cr,
+                            &shell.theme,
+                            panel,
+                            &rects,
+                            &shell.world,
+                            (ox, oy),
+                            pw,
+                        );
+                        let _ = cr.restore();
+                    } else {
+                        modules::draw_panel(
+                            &cr,
+                            &shell.theme,
+                            panel,
+                            &rects,
+                            &shell.world,
+                            (ox, oy),
+                            pw,
+                        );
+                    }
                 }
                 surface.flush();
             }
@@ -344,6 +366,14 @@ impl OutputSurface {
     }
 }
 
+struct ToplevelEntry {
+    id: u64,
+    handle: ZwlrForeignToplevelHandleV1,
+    title: String,
+    app_id: String,
+    focused: bool,
+}
+
 struct App {
     registry_state: RegistryState,
     seat_state: SeatState,
@@ -354,6 +384,8 @@ struct App {
     qh: QueueHandle<App>,
 
     outputs: Vec<OutputSurface>,
+    toplevels: Vec<ToplevelEntry>,
+    next_toplevel_id: u64,
     keyboard: Option<wl_keyboard::WlKeyboard>,
     pointer: Option<wl_pointer::WlPointer>,
     touch: Option<wl_touch::WlTouch>,
@@ -368,6 +400,59 @@ struct App {
 }
 
 impl App {
+    fn sync_toplevels_to_world(&mut self) {
+        let items: Vec<modules::windows::WindowItem> = self
+            .toplevels
+            .iter()
+            .map(|t| {
+                let app_id = if t.app_id.is_empty() {
+                    "Window".to_string()
+                } else {
+                    t.app_id.clone()
+                };
+                let title = if t.title.is_empty() {
+                    app_id.clone()
+                } else {
+                    t.title.clone()
+                };
+                modules::windows::WindowItem {
+                    id: t.id,
+                    inst: None,
+                    app_id,
+                    title,
+                    focused: t.focused,
+                    attention: false,
+                }
+            })
+            .collect();
+        let query = self.shell.world.search.clone();
+        self.shell.world.windows.set_windows(items, &query);
+    }
+
+    fn flush_window_ops(&mut self) {
+        let ops = std::mem::take(&mut self.shell.world.windows.pending_ops);
+        if ops.is_empty() {
+            return;
+        }
+        let seat = self.seat_state.seats().next();
+        for op in ops {
+            match op {
+                modules::windows::WindowOp::Activate(id) => {
+                    if let (Some(ref seat), Some(entry)) =
+                        (&seat, self.toplevels.iter().find(|t| t.id == id))
+                    {
+                        entry.handle.activate(seat);
+                    }
+                }
+                modules::windows::WindowOp::Close(id) => {
+                    if let Some(entry) = self.toplevels.iter().find(|t| t.id == id) {
+                        entry.handle.close();
+                    }
+                }
+            }
+        }
+    }
+
     fn request_fetch(&mut self, idx: usize) {
         if let Some(panel) = self.shell.cfg.panels.get(idx) {
             let cmds = modules::World::cmds_for_panel(panel);
@@ -377,6 +462,7 @@ impl App {
     }
 
     fn sync_all(&mut self) {
+        self.flush_window_ops();
         if self.shell.open != self.prev_open {
             self.prev_open = self.shell.open;
             if let Some(idx) = self.shell.open {
@@ -664,6 +750,9 @@ impl KeyboardHandler for App {
     ) {
         let key = if event.keysym == Keysym::Escape {
             Key::Escape
+        } else if self.modifiers.shift && matches!(event.keysym, Keysym::Return | Keysym::KP_Enter)
+        {
+            Key::ShiftReturn
         } else if self.modifiers.logo {
             let ch = event
                 .keysym
@@ -860,6 +949,87 @@ impl ProvidesRegistryState for App {
     registry_handlers![OutputState, SeatState];
 }
 
+impl Dispatch<ZwlrForeignToplevelManagerV1, ()> for App {
+    fn event(
+        state: &mut Self,
+        _proxy: &ZwlrForeignToplevelManagerV1,
+        event: zwlr_foreign_toplevel_manager_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        if let zwlr_foreign_toplevel_manager_v1::Event::Toplevel { toplevel } = event {
+            let id = state.next_toplevel_id;
+            state.next_toplevel_id += 1;
+            state.toplevels.push(ToplevelEntry {
+                id,
+                handle: toplevel,
+                title: String::new(),
+                app_id: String::new(),
+                focused: false,
+            });
+        }
+    }
+
+    smithay_client_toolkit::reexports::client::event_created_child!(
+        App,
+        ZwlrForeignToplevelManagerV1,
+        [
+            zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE => (ZwlrForeignToplevelHandleV1, ()),
+        ]
+    );
+}
+
+impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
+    fn event(
+        state: &mut Self,
+        handle: &ZwlrForeignToplevelHandleV1,
+        event: zwlr_foreign_toplevel_handle_v1::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_foreign_toplevel_handle_v1::Event::Title { title } => {
+                if let Some(t) = state.toplevels.iter_mut().find(|t| &t.handle == handle) {
+                    t.title = title;
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::AppId { app_id } => {
+                if let Some(t) = state.toplevels.iter_mut().find(|t| &t.handle == handle) {
+                    t.app_id = app_id;
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::State { state: raw } => {
+                let activated = zwlr_foreign_toplevel_handle_v1::State::Activated as u32;
+                let is_active = raw
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|&c| u32::from_ne_bytes(c) == activated);
+                if let Some(t) = state.toplevels.iter_mut().find(|t| &t.handle == handle) {
+                    t.focused = is_active;
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::Done => {
+                state.sync_toplevels_to_world();
+                if state.shell.open.is_some() {
+                    state.sync_all();
+                }
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::Closed => {
+                handle.destroy();
+                state.toplevels.retain(|t| &t.handle != handle);
+                state.sync_toplevels_to_world();
+                if state.shell.open.is_some() {
+                    state.sync_all();
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 fn setup_signal_pipe() -> Result<OwnedFd, String> {
     let mut fds = [0i32; 2];
     if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_NONBLOCK | libc::O_CLOEXEC) } != 0 {
@@ -911,6 +1081,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     let layer_shell =
         LayerShell::bind(&globals, &qh).map_err(|e| format!("zwlr_layer_shell_v1: {e}"))?;
     let shm = Shm::bind(&globals, &qh).map_err(|e| format!("wl_shm: {e}"))?;
+    let _toplevel_mgr: Option<ZwlrForeignToplevelManagerV1> = globals.bind(&qh, 1..=3, ()).ok();
 
     let mut shell = Shell::new();
     shell.world.live = true;
@@ -933,6 +1104,8 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         shm,
         qh: qh.clone(),
         outputs: Vec::new(),
+        toplevels: Vec::new(),
+        next_toplevel_id: 1,
         keyboard: None,
         pointer: None,
         touch: None,

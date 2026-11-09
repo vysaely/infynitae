@@ -237,7 +237,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
     if is_left_button(button) {
         let raw_line = world.clipboard.items[idx].raw_line.clone();
         let cmd = copy_command(&raw_line);
-        world.close_panel = true;
+        world.close_requested = true;
         world.run(cmd);
         true
     } else if button == 2 || button == 3 || button == 0x111 || button == 0x112 {
@@ -436,17 +436,17 @@ pin:106\t/home/alice/projects/infynitae/live/launch.sh\t2m
         // Left click on first row copies item 0 and requests closing the panel
         let row0_y = PAD_Y + HEAD_H + ROW_H * 0.5;
         assert!(click(&mut world, (w, h), (w / 2.0, row0_y), 1));
-        assert!(world.close_panel);
+        assert!(world.close_requested);
         assert_eq!(
             world.actions.last().map(String::as_str),
             Some("printf '%s\\n' '108\tgit push origin main' | cliphist decode 2>/dev/null | wl-copy")
         );
 
         // Right click on second row deletes item 1 from cliphist and removes it from list
-        world.close_panel = false;
+        world.close_requested = false;
         let row1_y = PAD_Y + HEAD_H + ROW_H * 1.5;
         assert!(click(&mut world, (w, h), (w / 2.0, row1_y), 3));
-        assert!(!world.close_panel);
+        assert!(!world.close_requested);
         assert_eq!(world.clipboard.items.len(), 1);
         assert_eq!(
             world.actions.last().map(String::as_str),

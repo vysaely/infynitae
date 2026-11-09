@@ -116,10 +116,16 @@ pub fn layout_in(
     (rects, (y - draw::GAP).max(0.0))
 }
 
+/// The maximum height a panel may take on a screen `h` px tall (screen height minus 16).
+pub fn max_panel_height(h: f64) -> f64 {
+    (h - 16.0).max(0.0)
+}
+
 /// The panel's rectangle `(x, y, w, h)` on an output of size `w x h`.
 pub fn panel_rect(p: &Panel, w: f64, h: f64) -> (f64, f64, f64, f64) {
     let pw = panel_width(p, w);
-    let (_, ph) = layout(p, pw);
+    let (_, content_h) = layout(p, pw);
+    let ph = content_h.min(max_panel_height(h));
     let (ox, oy) = panel_origin(p, w, h, pw, ph);
     (ox, oy, pw, ph)
 }
@@ -133,7 +139,8 @@ pub fn panel_rect_in(
     th: &theme::Theme,
 ) -> (f64, f64, f64, f64) {
     let pw = panel_width(p, w);
-    let (_, ph) = layout_in(p, pw, world, th);
+    let (_, content_h) = layout_in(p, pw, world, th);
+    let ph = content_h.min(max_panel_height(h));
     let (ox, oy) = panel_origin(p, w, h, pw, ph);
     (ox, oy, pw, ph)
 }
@@ -219,6 +226,7 @@ pub fn parse_args<S: AsRef<str>>(args: &[S]) -> Result<Action, String> {
 pub enum Key {
     Escape,
     Super(char),
+    ShiftReturn,
     Sym { keysym: u32, ch: Option<char> },
 }
 
@@ -231,6 +239,7 @@ pub struct Shell {
     pub open: Option<usize>,
     pub opened_by_hover: bool,
     pub pointer_down: bool,
+    pub last_screen: (f64, f64),
     pub world: modules::World,
 }
 
@@ -246,6 +255,10 @@ impl Shell {
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
         let cfg = Config::load();
         let theme = theme::Theme::from_config(&cfg);
+        let mut world = modules::World::now();
+        if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
+            world.apps.set_favorites(&cfg.favorites);
+        }
         Shell {
             cfg,
             theme,
@@ -254,13 +267,18 @@ impl Shell {
             open: None,
             opened_by_hover: false,
             pointer_down: false,
-            world: modules::World::now(),
+            last_screen: (1920.0, 1080.0),
+            world,
         }
     }
 
     #[cfg(test)]
     pub fn from_config(cfg: Config) -> Shell {
         let theme = theme::Theme::from_config(&cfg);
+        let mut world = modules::World::now();
+        if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
+            world.apps.set_favorites(&cfg.favorites);
+        }
         Shell {
             cfg,
             theme,
@@ -269,7 +287,8 @@ impl Shell {
             open: None,
             opened_by_hover: false,
             pointer_down: false,
-            world: modules::World::now(),
+            last_screen: (1920.0, 1080.0),
+            world,
         }
     }
 
@@ -285,6 +304,7 @@ impl Shell {
             if let Ok(text) = std::fs::read_to_string(&self.config_path) {
                 self.cfg = Config::from_text(&text);
                 self.theme = theme::Theme::from_config(&self.cfg);
+                self.world.apps.set_favorites(&self.cfg.favorites);
                 self.config_mtime = mtime;
                 if let Some(idx) = self.open {
                     if idx >= self.cfg.panels.len() {
@@ -304,6 +324,118 @@ impl Shell {
             .position(|p| p.name.eq_ignore_ascii_case(name))
     }
 
+    fn prepare_panel(&mut self, idx: usize) {
+        self.world.on_open();
+        if let Some(p) = self.cfg.panels.get(idx) {
+            if p.has(config::Module::Apps) || p.has(config::Module::Favorites) {
+                self.world.apps.ensure_loaded(&self.world.search);
+            }
+            if self.world.apps.favorites.is_empty() && !self.cfg.favorites.is_empty() {
+                self.world.apps.set_favorites(&self.cfg.favorites);
+            } else {
+                self.world.apps.resolve_favorites();
+            }
+        }
+        self.sync_selection();
+    }
+
+    fn sync_selection(&mut self) {
+        let Some(open_idx) = self.open else {
+            return;
+        };
+        let Some(panel) = self.cfg.panels.get(open_idx).cloned() else {
+            return;
+        };
+        let (w, h) = self.last_screen;
+        let pw = panel_width(&panel, w);
+        let (rects, content_h) = layout_in(&panel, pw, &self.world, &self.theme);
+        self.world
+            .ensure_selection_visible(&panel, &rects, content_h, max_panel_height(h));
+    }
+
+    fn move_selection(&mut self, delta: isize) -> bool {
+        let Some(open_idx) = self.open else {
+            return false;
+        };
+        let Some(panel) = self.cfg.panels.get(open_idx).cloned() else {
+            return false;
+        };
+        let (w, h) = self.last_screen;
+        let pw = panel_width(&panel, w);
+        let (rects, content_h) = layout_in(&panel, pw, &self.world, &self.theme);
+        let nav = self.world.nav_items(&panel, &rects);
+        if nav.is_empty() {
+            return false;
+        }
+        let max_idx = (nav.len() - 1) as isize;
+        let cur = (self.world.selected as isize).clamp(0, max_idx);
+        let next = (cur + delta).clamp(0, max_idx) as usize;
+        self.world.selected = next;
+        self.world
+            .ensure_selection_visible(&panel, &rects, content_h, max_panel_height(h));
+        true
+    }
+
+    fn activate_selected(&mut self, secondary: bool) -> bool {
+        self.sync_selection();
+        let changed = match self.world.active_target {
+            Some(modules::NavTarget::Favorite(slot)) => {
+                if let Some(&app_idx) = self.world.apps.fav_indices.get(slot) {
+                    if secondary {
+                        modules::favorites::toggle_favorite(&mut self.world, app_idx)
+                    } else {
+                        modules::apps::launch_app(&mut self.world, app_idx)
+                    }
+                } else {
+                    false
+                }
+            }
+            Some(modules::NavTarget::App(row)) => {
+                if let Some(&app_idx) = self.world.apps.filtered.get(row) {
+                    if secondary {
+                        modules::favorites::toggle_favorite(&mut self.world, app_idx)
+                    } else {
+                        modules::apps::launch_app(&mut self.world, app_idx)
+                    }
+                } else {
+                    false
+                }
+            }
+            Some(modules::NavTarget::Window(row)) => {
+                if let Some(&win_idx) = self.world.windows.filtered.get(row) {
+                    if secondary {
+                        modules::windows::close_window(&mut self.world, win_idx)
+                    } else {
+                        modules::windows::activate_window(&mut self.world, win_idx)
+                    }
+                } else {
+                    false
+                }
+            }
+            None => false,
+        };
+        self.cfg.favorites = self.world.apps.favorites.clone();
+        if self.world.close_requested {
+            self.world.close_requested = false;
+            self.close();
+        } else if changed {
+            self.sync_selection();
+        }
+        changed
+    }
+
+    fn close_selected_item(&mut self) -> bool {
+        self.sync_selection();
+        if let Some(modules::NavTarget::Window(row)) = self.world.active_target {
+            if let Some(&win_idx) = self.world.windows.filtered.get(row) {
+                let changed = modules::windows::close_window(&mut self.world, win_idx);
+                self.sync_selection();
+                return changed;
+            }
+        }
+        false
+    }
+
     pub fn open_panel(&mut self, idx: usize, by_hover: bool) -> bool {
         self.reload_if_changed();
         if idx >= self.cfg.panels.len() {
@@ -318,7 +450,7 @@ impl Shell {
         self.open = Some(idx);
         self.opened_by_hover = by_hover;
         self.pointer_down = false;
-        self.world.on_open();
+        self.prepare_panel(idx);
         true
     }
 
@@ -333,7 +465,7 @@ impl Shell {
             self.open = Some(idx);
             self.opened_by_hover = false;
             self.pointer_down = false;
-            self.world.on_open();
+            self.prepare_panel(idx);
             true
         }
     }
@@ -365,14 +497,42 @@ impl Shell {
                     false
                 }
             }
+            Key::ShiftReturn => self.activate_selected(true),
             Key::Sym { keysym, ch } => {
-                if keysym == 0xff1b {
-                    return self.close();
+                match keysym {
+                    0xff1b => return self.close(),
+                    0xff0d | 0xff8d => return self.activate_selected(false),
+                    0xff67 => return self.activate_selected(true),
+                    0xffff => return self.close_selected_item(),
+                    0xff54 | 0xff09 | 0xff53 => return self.move_selection(1),
+                    0xff52 | 0xfe20 | 0xff51 => return self.move_selection(-1),
+                    0xff56 => return self.move_selection(8),
+                    0xff55 => return self.move_selection(-8),
+                    0xff08 => {
+                        if !self.world.search.is_empty() {
+                            let mut next = self.world.search.clone();
+                            next.pop();
+                            self.world.set_search(next);
+                            self.sync_selection();
+                            return true;
+                        }
+                        return false;
+                    }
+                    _ => {}
                 }
                 let mut changed = false;
                 if let Some(p) = self.cfg.panels.get(open_idx) {
                     for it in &p.items {
                         changed |= modules::key(it, &mut self.world, keysym, ch);
+                    }
+                }
+                if !changed {
+                    if let Some(c) = ch.filter(|c| !c.is_control()) {
+                        let mut next = self.world.search.clone();
+                        next.push(c);
+                        self.world.set_search(next);
+                        self.sync_selection();
+                        changed = true;
                     }
                 }
                 changed
@@ -381,6 +541,7 @@ impl Shell {
     }
 
     pub fn click(&mut self, w: f64, h: f64, x: f64, y: f64, button: u32) -> bool {
+        self.last_screen = (w, h);
         let Some(open_idx) = self.open else {
             return self.pointer_motion(w, h, x, y);
         };
@@ -388,7 +549,8 @@ impl Shell {
             return self.close();
         };
         let pw = panel_width(panel, w);
-        let (rects, ph) = layout_in(panel, pw, &self.world, &self.theme);
+        let (rects, content_h) = layout_in(panel, pw, &self.world, &self.theme);
+        let ph = content_h.min(max_panel_height(h));
         let (ox, oy) = panel_origin(panel, w, h, pw, ph);
         if x < ox || x > ox + pw || y < oy || y > oy + ph {
             return self.close();
@@ -396,17 +558,22 @@ impl Shell {
         if modules::is_left_button(button) {
             self.pointer_down = true;
         }
+        let oy_scrolled = oy - self.world.panel_scroll;
         let mut changed = false;
         for (it, r) in panel.items.iter().zip(rects) {
-            let (mx, my, mw, mh) = (ox + r.0, oy + r.1, r.2, r.3);
+            let (mx, my, mw, mh) = (ox + r.0, oy_scrolled + r.1, r.2, r.3);
             if mw > 0.0 && mh > 0.0 && x >= mx && x <= mx + mw && y >= my && y <= my + mh {
                 changed |= modules::click(it, &mut self.world, (mw, mh), (x - mx, y - my), button);
             }
         }
-        if self.world.close_panel {
-            self.world.close_panel = false;
+        self.cfg.favorites = self.world.apps.favorites.clone();
+        if self.world.close_requested {
+            self.world.close_requested = false;
             self.close();
             return true;
+        }
+        if changed {
+            self.sync_selection();
         }
         changed
     }
@@ -416,6 +583,7 @@ impl Shell {
     }
 
     pub fn scroll(&mut self, w: f64, h: f64, x: f64, y: f64, dy: f64) -> bool {
+        self.last_screen = (w, h);
         let Some(open_idx) = self.open else {
             return false;
         };
@@ -423,19 +591,37 @@ impl Shell {
             return false;
         };
         let pw = panel_width(panel, w);
-        let (rects, ph) = layout_in(panel, pw, &self.world, &self.theme);
+        let (rects, content_h) = layout_in(panel, pw, &self.world, &self.theme);
+        let ph = content_h.min(max_panel_height(h));
         let (ox, oy) = panel_origin(panel, w, h, pw, ph);
+        let oy_scrolled = oy - self.world.panel_scroll;
         let mut changed = false;
-        for (it, r) in panel.items.iter().zip(rects) {
-            let (mx, my, mw, mh) = (ox + r.0, oy + r.1, r.2, r.3);
+        for (it, r) in panel.items.iter().zip(&rects) {
+            let (mx, my, mw, mh) = (ox + r.0, oy_scrolled + r.1, r.2, r.3);
             if mw > 0.0 && mh > 0.0 && x >= mx && x <= mx + mw && y >= my && y <= my + mh {
                 changed |= modules::scroll(it, &mut self.world, (mw, mh), (x - mx, y - my), dy);
+            }
+        }
+        if !changed && content_h > ph && x >= ox && x <= ox + pw && y >= oy && y <= oy + ph {
+            let max_scroll = (content_h - ph).max(0.0);
+            let step = if dy > 0.0 {
+                40.0
+            } else if dy < 0.0 {
+                -40.0
+            } else {
+                0.0
+            };
+            let next = (self.world.panel_scroll + step).clamp(0.0, max_scroll);
+            if (next - self.world.panel_scroll).abs() > 0.01 {
+                self.world.panel_scroll = next;
+                changed = true;
             }
         }
         changed
     }
 
     pub fn pointer_motion(&mut self, w: f64, h: f64, x: f64, y: f64) -> bool {
+        self.last_screen = (w, h);
         if let Some(open_idx) = self.open {
             if let Some(p) = self.cfg.panels.get(open_idx) {
                 if self.opened_by_hover {
@@ -446,11 +632,13 @@ impl Shell {
                 }
                 if self.pointer_down {
                     let pw = panel_width(p, w);
-                    let (rects, ph) = layout_in(p, pw, &self.world, &self.theme);
+                    let (rects, content_h) = layout_in(p, pw, &self.world, &self.theme);
+                    let ph = content_h.min(max_panel_height(h));
                     let (ox, oy) = panel_origin(p, w, h, pw, ph);
+                    let oy_scrolled = oy - self.world.panel_scroll;
                     let mut changed = false;
                     for (it, r) in p.items.iter().zip(rects) {
-                        let (mx, my, mw, mh) = (ox + r.0, oy + r.1, r.2, r.3);
+                        let (mx, my, mw, mh) = (ox + r.0, oy_scrolled + r.1, r.2, r.3);
                         if mw > 0.0
                             && mh > 0.0
                             && x >= mx
@@ -518,11 +706,26 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         0x0c as f64 / 255.0,
     );
     let _ = cr.paint();
-    let world = modules::World::now();
+    let mut world = modules::World::now();
+    if panel.has(config::Module::Apps) || panel.has(config::Module::Favorites) {
+        world.apps.ensure_loaded(&world.search);
+    }
+    if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
+        world.apps.set_favorites(&cfg.favorites);
+    }
     let pw = panel_width(panel, w as f64);
-    let (rects, ph) = layout_in(panel, pw, &world, &th);
+    let (rects, content_h) = layout_in(panel, pw, &world, &th);
+    let ph = content_h.min(max_panel_height(h as f64));
     let (ox, oy) = panel_origin(panel, w as f64, h as f64, pw, ph);
-    modules::draw_panel(&cr, &th, panel, &rects, &world, (ox, oy), pw);
+    if content_h > ph {
+        let _ = cr.save();
+        cr.rectangle(ox, oy, pw, ph);
+        cr.clip();
+        modules::draw_panel(&cr, &th, panel, &rects, &world, (ox, oy), pw);
+        let _ = cr.restore();
+    } else {
+        modules::draw_panel(&cr, &th, panel, &rects, &world, (ox, oy), pw);
+    }
     drop(cr);
     let mut f = std::fs::File::create(out).map_err(|e| e.to_string())?;
     surface.write_to_png(&mut f).map_err(|e| e.to_string())?;
@@ -844,5 +1047,98 @@ mod tests {
             sh.world.actions.last().map(String::as_str),
             Some("printf '%s\\n' '108\tgit push origin main' | cliphist decode 2>/dev/null | wl-copy")
         );
+    }
+
+    #[test]
+    fn typing_in_open_panel_searches_and_enter_or_shift_enter_acts_on_selection() {
+        let cfg = Config::from_text(
+            "FAVORITES=\"foot\"\n\
+             PANEL_APPS=\"SUPER+W top center search favorites apps\"\n",
+        );
+        let mut sh = Shell::from_config(cfg);
+        sh.world.apply(
+            "apps",
+            "Firefox\tfirefox\tfirefox\torg.mozilla.firefox.desktop\tWeb Browser\tweb;\n\
+             Foot\tfoot\tfoot\tfoot.desktop\tTerminal\tshell;\n\
+             Files\tnautilus\tnautilus\torg.gnome.Nautilus.desktop\tFile Manager\tfolder;\n",
+        );
+        assert!(sh.toggle_named("apps"));
+
+        // Initially Favorites has 1 item (foot), Apps has 3 items
+        assert_eq!(sh.world.apps.fav_indices, vec![1]);
+        assert_eq!(sh.world.apps.filtered.len(), 3);
+
+        // Typing 'f', 'i', 'l' anywhere in the open panel filters apps to Files and hides favorites
+        for c in ['f', 'i', 'l'] {
+            assert!(sh.key(Key::Sym {
+                keysym: c as u32,
+                ch: Some(c),
+            }));
+        }
+        assert_eq!(sh.world.search, "fil");
+        assert_eq!(sh.world.apps.filtered, vec![2]);
+
+        // Shift+Enter toggles Files into FAVORITES
+        assert!(sh.key(Key::ShiftReturn));
+        assert_eq!(sh.world.apps.favorites, "foot org.gnome.Nautilus");
+        assert_eq!(sh.cfg.favorites, "foot org.gnome.Nautilus");
+
+        // Enter launches the selected app (Files) and closes the panel
+        assert!(sh.key(Key::Sym {
+            keysym: 0xff0d,
+            ch: Some('\r'),
+        }));
+        assert_eq!(sh.open, None);
+        assert_eq!(
+            sh.world.actions.last().map(String::as_str),
+            Some("nautilus")
+        );
+    }
+
+    #[test]
+    fn tall_panel_clamps_to_screen_height_minus_16_and_scrolls_by_wheel_and_keys() {
+        let cfg = Config::from_text(
+            "FAVORITES=\"app0 app1 app2 app3 app4 app5\"\n\
+             PANEL_APPS=\"SUPER+W top center search favorites apps windows\"\n",
+        );
+        let mut sh = Shell::from_config(cfg);
+        let mut apps_tsv = String::new();
+        for i in 0..12 {
+            apps_tsv.push_str(&format!(
+                "App{i}\tapp-cmd-{i}\tapp{i}\tapp{i}.desktop\tTool\ttest;\n"
+            ));
+        }
+        sh.world.apply("apps", &apps_tsv);
+        sh.world.apply(
+            "windows",
+            "1\tapp0\tWindow Zero\tfocused\n2\tapp1\tWindow One\t\n3\tapp2\tWindow Two\t\n",
+        );
+        assert!(sh.toggle_named("apps"));
+
+        // Screen shorter than the panel's unclipped content height (e.g. 1920x420)
+        let (w, h) = (1920.0, 420.0);
+        sh.last_screen = (w, h);
+        let panel = sh.cfg.panels[sh.open.unwrap()].clone();
+        let (_, _, _, ph) = panel_rect_in(&panel, w, h, &sh.world, &sh.theme);
+        assert_eq!(ph, h - 16.0);
+
+        // Arrow Down past the 8 visible rows of Apps scrolls the Apps card and the panel
+        for _ in 0..16 {
+            assert!(sh.key(Key::Sym {
+                keysym: 0xff54,
+                ch: None,
+            }));
+        }
+        // Selection is now at row 10 of Apps (after 6 favorites: index 16 -> App(10))
+        assert_eq!(sh.world.active_target, Some(modules::NavTarget::App(10)));
+        // Apps list scrolled inside its own card to keep row 10 in view (8 visible rows -> scroll = 3)
+        assert_eq!(sh.world.apps.scroll, 3);
+        // Panel scrolled to keep the Apps card in view inside the 404 px tall panel
+        assert!(sh.world.panel_scroll > 0.0);
+
+        // Scrolling with the wheel over the search bar (which does not scroll internally) scrolls the panel
+        let prev_panel_scroll = sh.world.panel_scroll;
+        assert!(sh.scroll(w, h, 960.0, 12.0, -1.0));
+        assert!(sh.world.panel_scroll < prev_panel_scroll);
     }
 }

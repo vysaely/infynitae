@@ -26,15 +26,19 @@
 //! - `notifications`: output of `makoctl list -j` / `makoctl history -j` (or `makoctl list` /
 //!   `makoctl history` plain text, or `id\tapp\ttime\tsummary\tbody` lines).
 
+pub mod apps;
 pub mod calendar;
 pub mod clipboard;
 pub mod clock;
+pub mod favorites;
 pub mod memory;
 pub mod notifications;
+pub mod search;
 pub mod session;
 pub mod switches;
 pub mod system;
 pub mod volume;
+pub mod windows;
 
 #[cfg(test)]
 pub use calendar::{arrows as calendar_arrows, shifted_month};
@@ -157,6 +161,14 @@ fn current_time() -> NaiveDateTime {
         .unwrap_or_else(|| Local::now().naive_local())
 }
 
+/// A keyboard-selectable target inside an open panel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NavTarget {
+    Favorite(usize),
+    App(usize),
+    Window(usize),
+}
+
 /// What modules need from the world to draw (fixed in tests and `--render`).
 pub struct World {
     pub now: NaiveDateTime,
@@ -167,7 +179,13 @@ pub struct World {
     pub memory: memory::MemoryData,
     pub clipboard: clipboard::ClipboardData,
     pub notifications: notifications::NotificationsData,
-    pub close_panel: bool,
+    pub search: String,
+    pub apps: apps::AppsData,
+    pub windows: windows::WindowsData,
+    pub selected: usize,
+    pub active_target: Option<NavTarget>,
+    pub panel_scroll: f64,
+    pub close_requested: bool,
     pub live: bool,
     pub actions: Vec<String>,
 }
@@ -189,7 +207,13 @@ impl World {
             memory: memory::MemoryData::default(),
             clipboard: clipboard::ClipboardData::default(),
             notifications: notifications::NotificationsData::default(),
-            close_panel: false,
+            search: String::new(),
+            apps: apps::AppsData::default(),
+            windows: windows::WindowsData::default(),
+            selected: 0,
+            active_target: None,
+            panel_scroll: 0.0,
+            close_requested: false,
             live: false,
             actions: Vec::new(),
         };
@@ -203,10 +227,160 @@ impl World {
     pub fn on_open(&mut self) {
         self.now = current_time();
         self.cal_month = 0;
-        self.close_panel = false;
+        self.search.clear();
+        self.selected = 0;
+        self.active_target = None;
+        self.panel_scroll = 0.0;
+        self.close_requested = false;
+        self.apps.scroll = 0;
+        self.windows.scroll = 0;
+        self.apps.update_filter(&self.search);
+        self.windows.update_filter(&self.search);
         if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
             self.load_from_helper();
         }
+    }
+
+    /// Sets the search query, resets selection and list scroll positions, and re-filters `apps`
+    /// and `windows`.
+    pub fn set_search(&mut self, query: String) {
+        self.search = query;
+        self.selected = 0;
+        self.active_target = None;
+        self.panel_scroll = 0.0;
+        self.apps.scroll = 0;
+        self.windows.scroll = 0;
+        self.apps.update_filter(&self.search);
+        self.windows.update_filter(&self.search);
+    }
+
+    pub fn selected_favorite_slot(&self) -> Option<usize> {
+        match self.active_target {
+            Some(NavTarget::Favorite(s)) => Some(s),
+            _ => None,
+        }
+    }
+
+    pub fn selected_app_row(&self) -> Option<usize> {
+        match self.active_target {
+            Some(NavTarget::App(r)) => Some(r),
+            Some(_) => None,
+            None => (!self.apps.filtered.is_empty())
+                .then(|| self.selected.min(self.apps.filtered.len() - 1)),
+        }
+    }
+
+    pub fn selected_window_row(&self) -> Option<usize> {
+        match self.active_target {
+            Some(NavTarget::Window(r)) => Some(r),
+            Some(_) => None,
+            None => (!self.windows.filtered.is_empty())
+                .then(|| self.selected.min(self.windows.filtered.len() - 1)),
+        }
+    }
+
+    /// Returns the ordered list of keyboard-selectable targets in `panel` along with each item's
+    /// vertical `(y_top, y_bottom)` span in unclipped panel coordinates.
+    pub fn nav_items(&self, panel: &Panel, rects: &[Rect]) -> Vec<(NavTarget, f64, f64)> {
+        let mut out = Vec::new();
+        for (it, &(_, ry, _, rh)) in panel.items.iter().zip(rects) {
+            if rh <= 0.0 {
+                continue;
+            }
+            match it.module {
+                Module::Favorites if self.search.is_empty() => {
+                    for slot in 0..self.apps.fav_indices.len() {
+                        let row = slot / favorites::COLS;
+                        let top = ry
+                            + PAD_Y
+                            + favorites::TITLE_H
+                            + row as f64 * (favorites::CELL_H + favorites::ROW_GAP);
+                        out.push((
+                            NavTarget::Favorite(slot),
+                            (top - PAD_Y).max(ry),
+                            (top + favorites::CELL_H + PAD_Y).min(ry + rh),
+                        ));
+                    }
+                }
+                Module::Apps => {
+                    for row in 0..self.apps.filtered.len() {
+                        out.push((NavTarget::App(row), ry, ry + rh));
+                    }
+                }
+                Module::Windows => {
+                    for row in 0..self.windows.filtered.len() {
+                        out.push((NavTarget::Window(row), ry, ry + rh));
+                    }
+                }
+                _ => {}
+            }
+        }
+        out
+    }
+
+    /// Keeps `selected`, module list scrolls (`apps.scroll`, `windows.scroll`), and `panel_scroll`
+    /// synchronized so the selected item is always in view inside its card and inside the panel.
+    pub fn ensure_selection_visible(
+        &mut self,
+        panel: &Panel,
+        rects: &[Rect],
+        content_h: f64,
+        max_ph: f64,
+    ) {
+        let nav = self.nav_items(panel, rects);
+        if nav.is_empty() {
+            self.selected = 0;
+            self.active_target = None;
+            return;
+        }
+        if self.selected >= nav.len() {
+            self.selected = nav.len() - 1;
+        }
+        let (target, y_top, y_bot) = nav[self.selected];
+        self.active_target = Some(target);
+
+        match target {
+            NavTarget::App(row) => {
+                let card_h = panel
+                    .items
+                    .iter()
+                    .zip(rects)
+                    .find(|(it, _)| it.module == Module::Apps)
+                    .map(|(_, r)| r.3)
+                    .unwrap_or(0.0);
+                let vis = apps::visible_rows_for_height(card_h).max(1);
+                if row < self.apps.scroll {
+                    self.apps.scroll = row;
+                } else if row >= self.apps.scroll + vis {
+                    self.apps.scroll = row + 1 - vis;
+                }
+            }
+            NavTarget::Window(row) => {
+                let card_h = panel
+                    .items
+                    .iter()
+                    .zip(rects)
+                    .find(|(it, _)| it.module == Module::Windows)
+                    .map(|(_, r)| r.3)
+                    .unwrap_or(0.0);
+                let vis = windows::visible_rows_for_height(card_h).max(1);
+                if row < self.windows.scroll {
+                    self.windows.scroll = row;
+                } else if row >= self.windows.scroll + vis {
+                    self.windows.scroll = row + 1 - vis;
+                }
+            }
+            NavTarget::Favorite(_) => {}
+        }
+
+        let ph = content_h.min(max_ph);
+        let max_scroll = (content_h - ph).max(0.0);
+        if y_top < self.panel_scroll {
+            self.panel_scroll = y_top;
+        } else if y_bot > self.panel_scroll + ph {
+            self.panel_scroll = (y_bot - ph).max(0.0);
+        }
+        self.panel_scroll = self.panel_scroll.clamp(0.0, max_scroll);
     }
 
     /// Loads all module keys synchronously through [`run_sh`] (used when
@@ -233,12 +407,18 @@ impl World {
 
     /// Applies one `(key, output)` result from [`run_sh`] to the matching module state.
     pub fn apply(&mut self, key: &str, out: &str) -> bool {
+        if key == "search" {
+            self.set_search(out.trim().to_string());
+            return true;
+        }
         switches::apply(&mut self.switches, key, out)
             || volume::apply(&mut self.volume, key, out)
             || system::apply(&mut self.system, key, out)
             || memory::apply(&mut self.memory, key, out)
             || clipboard::apply(&mut self.clipboard, key, out)
             || notifications::apply(&mut self.notifications, key, out)
+            || apps::apply(&mut self.apps, key, out, &self.search)
+            || windows::apply(&mut self.windows, key, out, &self.search)
     }
 
     /// Records `cmd` in `actions` and, when running live in the Wayland daemon, spawns `sh -c cmd`
@@ -295,6 +475,10 @@ pub fn height(it: &Item, w: f64) -> f64 {
 pub fn height_in(it: &Item, world: &World, th: &Theme, w: f64) -> f64 {
     let _ = w;
     match it.module {
+        Module::Search => search::height(it, world),
+        Module::Favorites => favorites::height(it, world),
+        Module::Apps => apps::height(it, world),
+        Module::Windows => windows::height(it, world),
         Module::Clock => clock::height(it),
         Module::Calendar => calendar::height(),
         Module::Volume => volume::height(world),
@@ -311,6 +495,10 @@ pub fn height_in(it: &Item, world: &World, th: &Theme, w: f64) -> f64 {
 /// Dispatches a pointer click at `pos` inside `it`'s `size` card.
 pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) -> bool {
     match it.module {
+        Module::Search => search::click(world, size, pos, button),
+        Module::Favorites => favorites::click(world, size, pos, button),
+        Module::Apps => apps::click(world, size, pos, button),
+        Module::Windows => windows::click(world, size, pos, button),
         Module::Calendar => calendar::click(world, size.0, pos),
         Module::Clock => clock::click(it, world, size, pos),
         Module::Volume => volume::click(world, size, pos, button),
@@ -335,6 +523,8 @@ pub fn drag(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64)) -> 
 /// Dispatches a pointer scroll (`dy`) at `pos` inside `it`'s `size` card.
 pub fn scroll(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), dy: f64) -> bool {
     match it.module {
+        Module::Apps => apps::scroll(world, size, pos, dy),
+        Module::Windows => windows::scroll(world, size, pos, dy),
         Module::Volume => volume::scroll(world, size, pos, dy),
         Module::Clipboard => clipboard::scroll(world, size, pos, dy),
         _ => false,
@@ -351,6 +541,10 @@ pub fn key(it: &Item, world: &mut World, keysym: u32, ch: Option<char>) -> bool 
 pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
     match it.module {
+        Module::Search => search::draw(cr, th, it, world, rect),
+        Module::Favorites => favorites::draw(cr, th, world, rect),
+        Module::Apps => apps::draw(cr, th, world, rect),
+        Module::Windows => windows::draw(cr, th, world, rect),
         Module::Clock => clock::draw(cr, th, it, world, rect),
         Module::Calendar => calendar::draw(cr, th, world, rect),
         Module::Volume => volume::draw(cr, th, world, rect),
@@ -389,7 +583,8 @@ pub fn draw_panel(
     origin: (f64, f64),
     pw: f64,
 ) {
-    let (ox, oy) = origin;
+    let (ox, oy_raw) = origin;
+    let oy = oy_raw - world.panel_scroll;
     if !panel.placed {
         let mut y = 0.0;
         let mut i = 0;

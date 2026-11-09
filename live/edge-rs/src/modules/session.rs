@@ -87,7 +87,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
     let Some(act) = action_at(size, pos) else {
         return false;
     };
-    world.close_panel = true;
+    world.close_requested = true;
     world.run(act.command().to_string());
     true
 }
@@ -194,10 +194,10 @@ mod tests {
         let h = height();
 
         for (i, &expected) in ALL.iter().enumerate() {
-            world.close_panel = false;
+            world.close_requested = false;
             let r = button_rect((w, h), i);
             assert!(click(&mut world, (w, h), (r.0 + r.2 / 2.0, h / 2.0), 1));
-            assert!(world.close_panel);
+            assert!(world.close_requested);
             assert_eq!(
                 world.actions.last().map(String::as_str),
                 Some(expected.command())
