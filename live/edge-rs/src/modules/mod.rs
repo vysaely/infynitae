@@ -25,7 +25,9 @@
 
 pub mod calendar;
 pub mod clock;
+pub mod memory;
 pub mod switches;
+pub mod system;
 pub mod volume;
 
 #[cfg(test)]
@@ -155,6 +157,8 @@ pub struct World {
     pub cal_month: i32,
     pub switches: switches::SwitchesData,
     pub volume: volume::VolumeData,
+    pub system: system::SystemData,
+    pub memory: memory::MemoryData,
     pub live: bool,
     pub actions: Vec<String>,
 }
@@ -172,6 +176,8 @@ impl World {
             cal_month: 0,
             switches: switches::SwitchesData::default(),
             volume: volume::VolumeData::default(),
+            system: system::SystemData::default(),
+            memory: memory::MemoryData::default(),
             live: false,
             actions: Vec::new(),
         };
@@ -193,7 +199,12 @@ impl World {
     /// Loads all module keys synchronously through [`run_sh`] (used when
     /// `INFYNITAE_EDGE_RENDER_DATA` is set).
     pub fn load_from_helper(&mut self) {
-        for &(k, c) in switches::CMDS.iter().chain(volume::CMDS.iter()) {
+        for &(k, c) in switches::CMDS
+            .iter()
+            .chain(volume::CMDS.iter())
+            .chain(system::CMDS.iter())
+            .chain(memory::CMDS.iter())
+        {
             let out = run_sh(k, c);
             self.apply(k, &out);
         }
@@ -207,7 +218,10 @@ impl World {
 
     /// Applies one `(key, output)` result from [`run_sh`] to the matching module state.
     pub fn apply(&mut self, key: &str, out: &str) -> bool {
-        switches::apply(&mut self.switches, key, out) || volume::apply(&mut self.volume, key, out)
+        switches::apply(&mut self.switches, key, out)
+            || volume::apply(&mut self.volume, key, out)
+            || system::apply(&mut self.system, key, out)
+            || memory::apply(&mut self.memory, key, out)
     }
 
     /// Records `cmd` in `actions` and, when running live in the Wayland daemon, spawns `sh -c cmd`
@@ -244,6 +258,8 @@ pub fn refresh_cmds(m: Module) -> &'static [(&'static str, &'static str)] {
     match m {
         m if m.is_switch() => switches::CMDS,
         Module::Volume => volume::CMDS,
+        Module::System => system::CMDS,
+        Module::Memory => memory::CMDS,
         _ => &[],
     }
 }
@@ -263,6 +279,8 @@ pub fn height_in(it: &Item, world: &World, th: &Theme, w: f64) -> f64 {
         Module::Clock => clock::height(it),
         Module::Calendar => calendar::height(),
         Module::Volume => volume::height(world),
+        Module::System => system::height(world),
+        Module::Memory => memory::height(world),
         m if m.is_switch() => switches::height(it, world, th),
         _ => 2.0 * PAD_Y + 40.0,
     }
@@ -274,6 +292,8 @@ pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), bu
         Module::Calendar => calendar::click(world, size.0, pos),
         Module::Clock => clock::click(it, world, size, pos),
         Module::Volume => volume::click(world, size, pos, button),
+        Module::System => system::click(world, size, pos, button),
+        Module::Memory => memory::click(world, size, pos, button),
         m if m.is_switch() => switches::click(m, world, button),
         _ => false,
     }
@@ -308,6 +328,8 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
         Module::Clock => clock::draw(cr, th, it, world, rect),
         Module::Calendar => calendar::draw(cr, th, world, rect),
         Module::Volume => volume::draw(cr, th, world, rect),
+        Module::System => system::draw(cr, th, world, rect),
+        Module::Memory => memory::draw(cr, th, world, rect),
         m if m.is_switch() => switches::draw(cr, th, it, world, rect),
         m => {
             draw::card(cr, th, x, y, w, h);
