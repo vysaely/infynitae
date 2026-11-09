@@ -29,7 +29,7 @@ colour scheme (yours from the system, monochrome, neutral, tonal, vibrant, expre
 |---|---|---|
 | 0 (done) | Skeleton: config (`PANEL_` lines, theme colours, scheme, corners), the module trait with sizes, the card style, `--render` and `--print-panels`; clock and calendar | renders match the canvas; CI builds and tests it |
 | 1 (done) | Wayland: layer-shell surfaces per output, double buffers and frame callbacks, pointer, keyboard, touch, signals and the request files, hover edges | a panel opens by key and by hover in the VM |
-| 2 | Modules on commands: switches (wifi, bluetooth, dnd, nightlight, keyboard, osk, power, replay), sound, session, search, favorites, apps, windows (foreign toplevel), memory, system | each does what the C one does, VM checks |
+| 2 (2a done) | Modules on commands: switches (wifi, bluetooth, dnd, nightlight, keyboard, osk, power, replay), sound, session, search, favorites, apps, windows (foreign toplevel), memory, system | each does what the C one does, VM checks |
 | 3 | Modules on D-Bus and files: tray (StatusNotifierItem), media (MPRIS, Melodyae's queue and lyrics), notifications, clipboard, ask | as the C one, plus the new parts |
 | 4 | The canvas: edit mode (move, resize, snap, overlap, undo, reset, add, done), sizes that show more, child cards beside | VM real-input tests as `vmt/pcanvas.py` |
 | 5 | Desktop widgets: the same modules on a bottom layer under windows, `WIDGETS_` lines, edited the same way | placed, edited, kept across restarts |

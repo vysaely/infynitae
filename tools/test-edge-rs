@@ -45,4 +45,22 @@ for p in apps windows control clipboard; do
         && [ "$(stat -c %s "$TMP/$p.png")" -gt 4000 ]; then echo "ok   $p drawn"
     else echo "FAIL $p not drawn"; fail=1; fi
 done
+cat > "$TMP/render-data.txt" <<'EOF'
+wifi=enabled\nyes:HomeNet
+bluetooth=Powered: yes\nDevice 4C:87:5D:11:22:33 Headphones
+dnd=on
+nightlight=off
+keyboard=US\tEnglish (US)\t2
+osk=shown
+power=balanced
+replay=on
+volume=Volume: front-left: 39321 / 60% / -13.30 dB\nMute: no\nDescription: Built-in Audio
+brightness=amdgpu_bl1,backlight,192,75%,255
+EOF
+for look in rows icons tiles; do
+    printf 'SWITCH_LOOK="%s"\nPANEL_CONTROL="clock:calendar wifi bluetooth dnd nightlight keyboard osk power replay volume"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' "$look" > "$TMP/home/.config/infynitae/config"
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render control 1280x800 "$TMP/control-$look.png" \
+        && [ "$(stat -c %s "$TMP/control-$look.png")" -gt 4000 ]; then echo "ok   control ($look) drawn"
+    else echo "FAIL control ($look) not drawn"; fail=1; fi
+done
 [ "$fail" = 0 ] && echo "all edge-rs tests passed" || { echo "edge-rs tests failed"; exit 1; }
