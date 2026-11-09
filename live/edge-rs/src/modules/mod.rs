@@ -29,8 +29,10 @@
 pub mod apps;
 pub mod ask;
 pub mod calendar;
+pub mod child;
 pub mod clipboard;
 pub mod clock;
+pub mod edit;
 pub mod favorites;
 pub mod media;
 pub mod memory;
@@ -66,6 +68,10 @@ pub type Rect = (f64, f64, f64, f64);
 
 pub fn is_left_button(button: u32) -> bool {
     button == 1 || button == 0x110
+}
+
+pub fn is_right_button(button: u32) -> bool {
+    button == 3 || button == 0x111
 }
 
 fn unescape_value(v: &str) -> String {
@@ -176,6 +182,7 @@ pub enum NavTarget {
     Favorite(usize),
     App(usize),
     Window(usize),
+    Module(Module),
 }
 
 /// What modules need from the world to draw (fixed in tests and `--render`).
@@ -194,6 +201,8 @@ pub struct World {
     pub apps: apps::AppsData,
     pub windows: windows::WindowsData,
     pub ask: ask::AskState,
+    pub calendar_events: Vec<calendar::CalendarEvent>,
+    pub child: child::ChildState,
     pub selected: usize,
     pub active_target: Option<NavTarget>,
     pub panel_scroll: f64,
@@ -225,6 +234,8 @@ impl World {
             apps: apps::AppsData::default(),
             windows: windows::WindowsData::default(),
             ask: ask::AskState::default(),
+            calendar_events: Vec::new(),
+            child: child::ChildState::default(),
             selected: 0,
             active_target: None,
             panel_scroll: 0.0,
@@ -247,6 +258,7 @@ impl World {
         self.active_target = None;
         self.panel_scroll = 0.0;
         self.close_requested = false;
+        self.child = child::ChildState::default();
         self.apps.scroll = 0;
         self.windows.scroll = 0;
         self.apps.update_filter(&self.search);
@@ -327,6 +339,9 @@ impl World {
                         out.push((NavTarget::Window(row), ry, ry + rh));
                     }
                 }
+                m if m.is_switch() || m == Module::Volume || m == Module::Clock => {
+                    out.push((NavTarget::Module(m), ry, ry + rh));
+                }
                 _ => {}
             }
         }
@@ -386,6 +401,7 @@ impl World {
                 }
             }
             NavTarget::Favorite(_) => {}
+            NavTarget::Module(_) => {}
         }
 
         let ph = content_h.min(max_ph);
@@ -420,12 +436,79 @@ impl World {
                 self.apply(&k, &v);
             }
         }
+        if let Ok(sub) = std::env::var("INFYNITAE_EDGE_RENDER_SUB") {
+            let kind = match sub.as_str() {
+                "wifi" => child::ChildKind::Wifi,
+                "bt" => child::ChildKind::Bluetooth,
+                "audio" | "sound" => child::ChildKind::Audio,
+                "power" => child::ChildKind::Power,
+                "cal" => child::ChildKind::Calendar,
+                _ => child::ChildKind::Wifi,
+            };
+            self.child.kind = Some(kind);
+            match kind {
+                child::ChildKind::Wifi => {
+                    self.child.items = vec![
+                        child::ChildItem {
+                            id: "HomeNet".into(),
+                            label: "HomeNet".into(),
+                            meta: "90%".into(),
+                            active: true,
+                        },
+                        child::ChildItem {
+                            id: "Neighbours 5G".into(),
+                            label: "Neighbours 5G".into(),
+                            meta: "62%".into(),
+                            active: false,
+                        },
+                        child::ChildItem {
+                            id: "Cafe guest".into(),
+                            label: "Cafe guest".into(),
+                            meta: "40%".into(),
+                            active: false,
+                        },
+                    ];
+                }
+                child::ChildKind::Bluetooth => {
+                    self.child.items = vec![
+                        child::ChildItem {
+                            id: "4C:87:5D:11:22:33".into(),
+                            label: "Headphones".into(),
+                            meta: "Connected".into(),
+                            active: true,
+                        },
+                        child::ChildItem {
+                            id: "-".into(),
+                            label: "Find new devices".into(),
+                            meta: "".into(),
+                            active: false,
+                        },
+                    ];
+                }
+                child::ChildKind::Audio => {
+                    self.child.items = vec![child::ChildItem {
+                        id: "default_sink".into(),
+                        label: "Built-in Audio".into(),
+                        meta: "Output".into(),
+                        active: true,
+                    }];
+                }
+                child::ChildKind::Power => {
+                    self.child.items = child::power_profiles_list(&self.switches.power_profile);
+                }
+                child::ChildKind::Calendar => {}
+            }
+        }
     }
 
     /// Applies one `(key, output)` result from [`run_sh`] to the matching module state.
     pub fn apply(&mut self, key: &str, out: &str) -> bool {
         if key == "search" {
             self.set_search(out.trim().to_string());
+            return true;
+        }
+        if key == "calendar" || key == "events" {
+            self.calendar_events = calendar::parse_calendar_events(out);
             return true;
         }
         switches::apply(&mut self.switches, key, out)
@@ -516,15 +599,127 @@ pub fn height_in(it: &Item, world: &World, th: &Theme, w: f64) -> f64 {
     }
 }
 
+pub fn toggle_child(world: &mut World, kind: child::ChildKind) -> bool {
+    if world.child.open && world.child.kind == Some(kind) {
+        world.child.open = false;
+        world.child.kind = None;
+    } else {
+        world.child.open = true;
+        world.child.kind = Some(kind);
+        match kind {
+            child::ChildKind::Wifi => {
+                if let Some(path) = std::env::var_os("INFYNITAE_EDGE_RENDER_DATA") {
+                    let text = std::fs::read_to_string(path).unwrap_or_default();
+                    let map = parse_render_data(&text);
+                    let out = map
+                        .get("wifi_list")
+                        .or_else(|| map.get("wifi"))
+                        .cloned()
+                        .unwrap_or_default();
+                    world.child.items = child::parse_wifi_list(&out);
+                } else if world.live {
+                    let out = run_sh(
+                        "wifi_list",
+                        "nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan no 2>/dev/null",
+                    );
+                    world.child.items = child::parse_wifi_list(&out);
+                }
+                if world.child.items.is_empty() {
+                    world.child.items = vec![
+                        child::ChildItem {
+                            id: "HomeNet".into(),
+                            label: "HomeNet".into(),
+                            meta: "90%".into(),
+                            active: true,
+                        },
+                        child::ChildItem {
+                            id: "Neighbours 5G".into(),
+                            label: "Neighbours 5G".into(),
+                            meta: "62%".into(),
+                            active: false,
+                        },
+                        child::ChildItem {
+                            id: "Cafe guest".into(),
+                            label: "Cafe guest".into(),
+                            meta: "40%".into(),
+                            active: false,
+                        },
+                    ];
+                }
+            }
+            child::ChildKind::Bluetooth => {
+                let paired = run_sh("bt_paired", "bluetoothctl devices Paired 2>/dev/null");
+                let scanned = run_sh("bt_scanned", "bluetoothctl devices 2>/dev/null");
+                world.child.items =
+                    child::parse_bluetooth_list(&paired, &scanned, world.child.bt_scan);
+                if world.child.items.is_empty() {
+                    world.child.items = vec![
+                        child::ChildItem {
+                            id: "4C:87:5D:11:22:33".into(),
+                            label: "Headphones".into(),
+                            meta: "Connected".into(),
+                            active: true,
+                        },
+                        child::ChildItem {
+                            id: "-".into(),
+                            label: "Find new devices".into(),
+                            meta: "".into(),
+                            active: false,
+                        },
+                    ];
+                }
+            }
+            child::ChildKind::Audio => {
+                let def = run_sh("audio_def", "pactl get-default-sink 2>/dev/null");
+                let sinks = run_sh("audio_sinks", "pactl list sinks 2>/dev/null");
+                world.child.items = child::parse_audio_list(&sinks, &def);
+                if world.child.items.is_empty() {
+                    world.child.items = vec![child::ChildItem {
+                        id: "default_sink".into(),
+                        label: "Built-in Audio".into(),
+                        meta: "Output".into(),
+                        active: true,
+                    }];
+                }
+            }
+            child::ChildKind::Power => {
+                world.child.items = child::power_profiles_list(&world.switches.power_profile);
+            }
+            child::ChildKind::Calendar => {
+                world.child.items.clear();
+            }
+        }
+    }
+    true
+}
+
 /// Dispatches a pointer click at `pos` inside `it`'s `size` card.
 pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) -> bool {
+    if is_right_button(button) {
+        match it.module {
+            Module::Wifi => return toggle_child(world, child::ChildKind::Wifi),
+            Module::Bluetooth => return toggle_child(world, child::ChildKind::Bluetooth),
+            Module::Volume => return toggle_child(world, child::ChildKind::Audio),
+            Module::Power => return toggle_child(world, child::ChildKind::Power),
+            Module::Clock if clock::size_look(size.0, size.1) != "calendar" => {
+                return toggle_child(world, child::ChildKind::Calendar);
+            }
+            _ => {}
+        }
+    }
     match it.module {
         Module::Search => search::click(world, size, pos, button),
         Module::Favorites => favorites::click(world, size, pos, button),
         Module::Apps => apps::click(world, size, pos, button),
         Module::Windows => windows::click(world, size, pos, button),
         Module::Calendar => calendar::click(world, size.0, pos),
-        Module::Clock => clock::click(it, world, size, pos),
+        Module::Clock => {
+            if clock::size_look(size.0, size.1) != "calendar" && is_left_button(button) {
+                toggle_child(world, child::ChildKind::Calendar)
+            } else {
+                clock::click(it, world, size, pos)
+            }
+        }
         Module::Volume => volume::click(world, size, pos, button),
         Module::System => system::click(world, size, pos, button),
         Module::Memory => memory::click(world, size, pos, button),
@@ -602,6 +797,28 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
     }
 }
 
+pub fn draw_placeholder(cr: &Context, th: &Theme, it: &Item, rect: Rect) {
+    let (x, y, w, h) = rect;
+    let dash = [4.0, 3.0];
+    draw::round_rect(cr, x + 0.5, y + 0.5, w - 1.0, h - 1.0, th.corners.min(7.0));
+    draw::set(cr, th.muted.alpha(0.35));
+    cr.set_line_width(1.0);
+    cr.set_dash(&dash, 0.0);
+    let _ = cr.stroke();
+    cr.set_dash(&[], 0.0);
+    draw::text(
+        cr,
+        x + 12.0,
+        y + (h.min(30.0) - 13.0) / 2.0,
+        &Text {
+            size: 13.0,
+            bold: false,
+            color: th.muted.alpha(0.60),
+            text: it.module.word(),
+        },
+    );
+}
+
 /// Draws all items of `panel` at `origin = (ox, oy)` using their laid-out `rects`, including the
 /// shared card for consecutive switch runs.
 pub fn draw_panel(
@@ -644,7 +861,9 @@ pub fn draw_panel(
         if r.2 > 0.0 && r.3 > 0.0 {
             if panel.placed && it.module.is_switch() {
                 draw::card(cr, th, ox + r.0, oy + r.1, r.2, r.3);
-                let cell = if th.switch_look == "rows" || th.switch_look.is_empty() {
+                let cell = if r.3 < 56.0 {
+                    (ox + r.0, oy + r.1, r.2, r.3)
+                } else if th.switch_look == "rows" || th.switch_look.is_empty() {
                     (
                         ox + r.0 + 12.0,
                         oy + r.1 + ((r.3 - 34.0) / 2.0).max(4.0),
@@ -656,7 +875,15 @@ pub fn draw_panel(
                 };
                 draw(cr, th, it, world, cell);
             } else {
-                draw(cr, th, it, world, (ox + r.0, oy + r.1, r.2, r.3));
+                let is_editing = std::env::var_os("INFYNITAE_EDGE_RENDER_EDIT").is_some();
+                if panel.placed
+                    && is_editing
+                    && (it.module == Module::Media && world.media.is_empty())
+                {
+                    draw_placeholder(cr, th, it, (ox + r.0, oy + r.1, r.2, r.3));
+                } else {
+                    draw(cr, th, it, world, (ox + r.0, oy + r.1, r.2, r.3));
+                }
             }
         }
     }

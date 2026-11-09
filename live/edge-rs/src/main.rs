@@ -243,6 +243,7 @@ pub struct Shell {
     pub pointer_down: bool,
     pub last_screen: (f64, f64),
     pub world: modules::World,
+    pub edit: modules::edit::EditState,
 }
 
 impl Default for Shell {
@@ -261,6 +262,11 @@ impl Shell {
         if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
             world.apps.set_favorites(&cfg.favorites);
         }
+        let edit = modules::edit::EditState {
+            snap: cfg.snap,
+            overlap: cfg.overlap,
+            ..Default::default()
+        };
         Shell {
             cfg,
             theme,
@@ -271,6 +277,7 @@ impl Shell {
             pointer_down: false,
             last_screen: (1920.0, 1080.0),
             world,
+            edit,
         }
     }
 
@@ -281,6 +288,11 @@ impl Shell {
         if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
             world.apps.set_favorites(&cfg.favorites);
         }
+        let edit = modules::edit::EditState {
+            snap: cfg.snap,
+            overlap: cfg.overlap,
+            ..Default::default()
+        };
         Shell {
             cfg,
             theme,
@@ -291,6 +303,7 @@ impl Shell {
             pointer_down: false,
             last_screen: (1920.0, 1080.0),
             world,
+            edit,
         }
     }
 
@@ -308,6 +321,10 @@ impl Shell {
                 self.theme = theme::Theme::from_config(&self.cfg);
                 self.world.apps.set_favorites(&self.cfg.favorites);
                 self.config_mtime = mtime;
+                if !self.edit.active {
+                    self.edit.snap = self.cfg.snap;
+                    self.edit.overlap = self.cfg.overlap;
+                }
                 if let Some(idx) = self.open {
                     if idx >= self.cfg.panels.len() {
                         self.open = None;
@@ -414,6 +431,34 @@ impl Shell {
                     false
                 }
             }
+            Some(modules::NavTarget::Module(m)) => {
+                if secondary {
+                    match m {
+                        config::Module::Wifi => {
+                            modules::toggle_child(&mut self.world, modules::child::ChildKind::Wifi)
+                        }
+                        config::Module::Bluetooth => modules::toggle_child(
+                            &mut self.world,
+                            modules::child::ChildKind::Bluetooth,
+                        ),
+                        config::Module::Volume => {
+                            modules::toggle_child(&mut self.world, modules::child::ChildKind::Audio)
+                        }
+                        config::Module::Power => {
+                            modules::toggle_child(&mut self.world, modules::child::ChildKind::Power)
+                        }
+                        config::Module::Clock => modules::toggle_child(
+                            &mut self.world,
+                            modules::child::ChildKind::Calendar,
+                        ),
+                        _ => false,
+                    }
+                } else if m.is_switch() {
+                    modules::switches::click(m, &mut self.world, 1)
+                } else {
+                    false
+                }
+            }
             None => false,
         };
         self.cfg.favorites = self.world.apps.favorites.clone();
@@ -491,7 +536,524 @@ impl Shell {
         }
     }
 
+    pub fn edit_enter(&mut self) -> bool {
+        let Some(open_idx) = self.open else {
+            return false;
+        };
+        if self.edit.active {
+            return false;
+        }
+        self.world.child.open = false;
+        self.world.tray.open_menu = None;
+        let (w, h) = self.last_screen;
+        if let Some(panel) = self.cfg.panels.get_mut(open_idx) {
+            let pw = panel_width(panel, w);
+            let (rects, content_h) = layout_in(panel, pw, &self.world, &self.theme);
+            let ph = content_h.min(max_panel_height(h));
+            let (ox, oy) = panel_origin(panel, w, h, pw, ph);
+            self.edit.before = panel.value();
+            if !panel.placed {
+                modules::edit::freeze_layout(panel, &rects, pw);
+            }
+            self.edit.active = true;
+            self.edit.changed = false;
+            self.edit.adding = false;
+            self.edit.undo.clear();
+            self.edit.drag = None;
+            self.edit.live = false;
+            self.edit.selected = None;
+            self.edit.bar_rect =
+                modules::edit::calculate_bar_rect(panel, (ox, oy), pw, ph, (w, h), false);
+            self.opened_by_hover = false;
+            return true;
+        }
+        false
+    }
+
+    pub fn edit_exit(&mut self) -> bool {
+        if !self.edit.active {
+            return false;
+        }
+        self.edit.active = false;
+        self.edit.adding = false;
+        self.edit.drag = None;
+        self.edit.live = false;
+        if let Some(open_idx) = self.open {
+            if self.edit.changed {
+                if let Some(panel) = self.cfg.panels.get_mut(open_idx) {
+                    panel.items.sort_by(|a, b| {
+                        let ra = a.rect.unwrap_or((0, 0, 0, 0));
+                        let rb = b.rect.unwrap_or((0, 0, 0, 0));
+                        ra.1.cmp(&rb.1).then_with(|| ra.0.cmp(&rb.0))
+                    });
+                    let (backup_cmd, save_cmd) =
+                        modules::edit::save_panel_commands(panel, &self.edit.before);
+                    self.world.run(backup_cmd);
+                    self.world.run(save_cmd);
+                }
+            }
+        }
+        true
+    }
+
+    pub fn edit_press(&mut self, x: f64, y: f64, button: u32) -> bool {
+        let Some(open_idx) = self.open else {
+            return false;
+        };
+        let (w, h) = self.last_screen;
+        let Some(panel) = self.cfg.panels.get(open_idx).cloned() else {
+            return false;
+        };
+        let pw = panel_width(&panel, w);
+        let (_rects, content_h) = layout_in(&panel, pw, &self.world, &self.theme);
+        let ph = content_h.min(max_panel_height(h));
+        let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
+
+        let is_left = modules::is_left_button(button);
+        let (bx, by, bw, bh) =
+            modules::edit::calculate_bar_rect(&panel, (ox, oy), pw, ph, (w, h), self.edit.adding);
+        self.edit.bar_rect = (bx, by, bw, bh);
+
+        // Edit bar buttons (left click only)
+        if is_left && x >= bx && x <= bx + bw && y >= by && y <= by + bh {
+            let w6 = (bw - 10.0 - 5.0 * 4.0) / 6.0;
+            if y >= by + 5.0 && y <= by + 29.0 {
+                for i in 0..6 {
+                    let btn_x = bx + 5.0 + i as f64 * (w6 + 4.0);
+                    if x >= btn_x && x <= btn_x + w6 {
+                        match i {
+                            0 => {
+                                // Undo
+                                if let Some(prev) = self.edit.undo.pop() {
+                                    if let Some(p) = self.cfg.panels.get_mut(open_idx) {
+                                        *p = prev;
+                                        self.edit.changed = true;
+                                    }
+                                }
+                            }
+                            1 => {
+                                // Reset
+                                if let Some(p) = self.cfg.panels.get_mut(open_idx) {
+                                    self.edit.undo.push(p.clone());
+                                    let mods = match p.name.as_str() {
+                                        "control" => modules::edit::DEFAULT_CONTROL,
+                                        "apps" => modules::edit::DEFAULT_APPS,
+                                        "windows" => modules::edit::DEFAULT_WINDOWS,
+                                        "clipboard" => modules::edit::DEFAULT_CLIPBOARD,
+                                        _ => &[],
+                                    };
+                                    if !mods.is_empty() {
+                                        p.items = mods
+                                            .iter()
+                                            .map(|&m| config::Item {
+                                                module: m,
+                                                look: None,
+                                                rect: None,
+                                            })
+                                            .collect();
+                                    }
+                                    p.placed = false;
+                                    p.width = 0;
+                                    p.height = 0;
+                                    let pw = panel_width(p, w);
+                                    let (rects, _) = layout_in(p, pw, &self.world, &self.theme);
+                                    modules::edit::freeze_layout(p, &rects, pw);
+                                    self.edit.changed = true;
+                                }
+                            }
+                            2 => {
+                                // Snap
+                                self.edit.snap = !self.edit.snap;
+                                let v = if self.edit.snap { "true" } else { "false" };
+                                self.world.run(format!(
+                                    "f=\"$HOME/.config/infynitae/config\"; [ -f \"$f\" ] || exit 0; \
+                                     awk -v k=\"PANELS_SNAP\" -v v=\"{v}\" 'BEGIN{{d=0}} index($0, k \"=\")==1{{print k \"=\\\"\" v \"\\\"\"; d=1; next}} {{print}} \
+                                     END{{if(!d) print k \"=\\\"\" v \"\\\"\"}}' \"$f\" > \"$f.tmp.$$\" && mv -f \"$f.tmp.$$\" \"$f\""
+                                ));
+                            }
+                            3 => {
+                                // Overlap
+                                self.edit.overlap = !self.edit.overlap;
+                                let v = if self.edit.overlap { "true" } else { "false" };
+                                self.world.run(format!(
+                                    "f=\"$HOME/.config/infynitae/config\"; [ -f \"$f\" ] || exit 0; \
+                                     awk -v k=\"PANELS_OVERLAP\" -v v=\"{v}\" 'BEGIN{{d=0}} index($0, k \"=\")==1{{print k \"=\\\"\" v \"\\\"\"; d=1; next}} {{print}} \
+                                     END{{if(!d) print k \"=\\\"\" v \"\\\"\"}}' \"$f\" > \"$f.tmp.$$\" && mv -f \"$f.tmp.$$\" \"$f\""
+                                ));
+                            }
+                            4 => {
+                                // Add
+                                self.edit.adding = !self.edit.adding;
+                                let (bx, by, bw, bh) = modules::edit::calculate_bar_rect(
+                                    &panel,
+                                    (ox, oy),
+                                    pw,
+                                    ph,
+                                    (w, h),
+                                    self.edit.adding,
+                                );
+                                self.edit.bar_rect = (bx, by, bw, bh);
+                            }
+                            5 => {
+                                // Done
+                                self.edit_exit();
+                            }
+                            _ => {}
+                        }
+                        return true;
+                    }
+                }
+            }
+
+            // If Add menu is open
+            if self.edit.adding && y >= by + 34.0 {
+                let available: Vec<config::Module> = modules::edit::ALL_MODULES
+                    .iter()
+                    .copied()
+                    .filter(|&m| !panel.items.iter().any(|it| it.module == m))
+                    .collect();
+                let w4 = (bw - 10.0 - 3.0 * 4.0) / 4.0;
+                for (k, &m) in available.iter().enumerate() {
+                    let col = k % 4;
+                    let row = k / 4;
+                    let ax = bx + 5.0 + col as f64 * (w4 + 4.0);
+                    let ay = by + 34.0 + 4.0 + row as f64 * 30.0;
+                    if x >= ax && x <= ax + w4 && y >= ay && y <= ay + 26.0 {
+                        if let Some(p) = self.cfg.panels.get_mut(open_idx) {
+                            self.edit.undo.push(p.clone());
+                            let (dw, dh) = modules::edit::module_default_size(m, pw);
+                            let (fx, fy) =
+                                modules::edit::nearest_free(p, p.items.len(), dw, dh, pw);
+                            p.items.push(config::Item {
+                                module: m,
+                                look: None,
+                                rect: Some((fx, fy, dw, dh)),
+                            });
+                            self.edit.changed = true;
+                            self.edit.selected = Some(p.items.len() - 1);
+                        }
+                        return true;
+                    }
+                }
+            }
+            return true;
+        }
+
+        // Remove button for selected module
+        if is_left {
+            if let Some(sel) = self.edit.selected {
+                if let Some(it) = panel.items.get(sel) {
+                    if let Some((mx, my, mw, mh)) = it.rect {
+                        let rx = ox + mx as f64 + mw as f64 - 58.0 - 4.0;
+                        let ry = if mw < 68 || mh < 28 {
+                            oy + my as f64 - 18.0 - 3.0
+                        } else {
+                            oy + my as f64 + 4.0
+                        };
+                        if x >= rx && x <= rx + 58.0 && y >= ry && y <= ry + 18.0 {
+                            if let Some(p) = self.cfg.panels.get_mut(open_idx) {
+                                self.edit.undo.push(p.clone());
+                                p.items.remove(sel);
+                                self.edit.selected = None;
+                                self.edit.changed = true;
+                            }
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Outside panel and outside edit bar -> edit_exit()
+        let in_panel = x >= ox && x <= ox + pw && y >= oy && y <= oy + ph;
+        if !in_panel {
+            self.edit_exit();
+            return true;
+        }
+
+        let px_in = x - ox;
+        let py_in = y - oy;
+        let mi = modules::edit::module_under(&panel, px_in, py_in);
+
+        let is_right = modules::is_right_button(button);
+        if let Some(mi) = mi {
+            let it = &panel.items[mi];
+            let (mx, my, mw, mh) = it.rect.unwrap();
+            let corner = px_in > (mx + mw) as f64 - 16.0 && py_in > (my + mh) as f64 - 16.0;
+            let kind = if is_right || corner {
+                modules::edit::DragKind::ResizeModule(mi)
+            } else {
+                modules::edit::DragKind::MoveModule(mi)
+            };
+            self.edit.drag = Some(modules::edit::DragState {
+                kind,
+                start_pos: (x, y),
+                initial_rect: (mx, my, mw, mh),
+            });
+            self.edit.live = false;
+            self.pointer_down = true;
+        } else {
+            let cx = if panel.align > 0 && panel.side.horizontal() {
+                0.0
+            } else {
+                pw
+            };
+            let cy = if panel.side == config::Side::Bottom {
+                0.0
+            } else {
+                ph
+            };
+            let corner = (px_in - cx).abs() < 16.0 && (py_in - cy).abs() < 16.0;
+            let kind = if is_right || corner {
+                modules::edit::DragKind::ResizePanel
+            } else {
+                modules::edit::DragKind::MovePanel
+            };
+            self.edit.drag = Some(modules::edit::DragState {
+                kind,
+                start_pos: (x, y),
+                initial_rect: (0, 0, pw.round() as i32, ph.round() as i32),
+            });
+            self.edit.live = false;
+            self.pointer_down = true;
+        }
+        true
+    }
+
+    pub fn edit_drag(&mut self, x: f64, y: f64) -> bool {
+        let Some(open_idx) = self.open else {
+            return false;
+        };
+        let Some(drag) = self.edit.drag.clone() else {
+            return false;
+        };
+        let (w, h) = self.last_screen;
+        let (x0, y0) = drag.start_pos;
+        let (dx, dy) = (x - x0, y - y0);
+        if !self.edit.live {
+            if dx.hypot(dy) < 6.0 {
+                return false;
+            }
+            self.edit.live = true;
+            if let Some(p) = self.cfg.panels.get(open_idx) {
+                self.edit.undo.push(p.clone());
+            }
+        }
+
+        let Some(panel) = self.cfg.panels.get_mut(open_idx) else {
+            return false;
+        };
+        let pw = panel_width(panel, w);
+
+        match drag.kind {
+            modules::edit::DragKind::MoveModule(mi) => {
+                if mi >= panel.items.len() {
+                    return false;
+                }
+                let (r0_x, r0_y, mw, mh) = drag.initial_rect;
+                let mut nx = r0_x + dx.round() as i32;
+                let mut ny = r0_y + dy.round() as i32;
+                if self.edit.snap {
+                    modules::edit::snap_move(panel, mi, pw, &mut nx, &mut ny, mw, mh);
+                }
+                let max_x = (pw - modules::edit::PAD).round() as i32 - mw;
+                nx = nx.clamp(
+                    modules::edit::PAD as i32,
+                    max_x.max(modules::edit::PAD as i32),
+                );
+                ny = ny.max(modules::edit::PAD as i32);
+                panel.items[mi].rect = Some((nx, ny, mw, mh));
+                self.edit.changed = true;
+            }
+            modules::edit::DragKind::ResizeModule(mi) => {
+                if mi >= panel.items.len() {
+                    return false;
+                }
+                let (r0_x, r0_y, r0_w, r0_h) = drag.initial_rect;
+                let mut nw = r0_w + dx.round() as i32;
+                let mut nh = r0_h + dy.round() as i32;
+                if self.edit.snap {
+                    modules::edit::snap_size(panel, mi, pw, r0_x, r0_y, &mut nw, &mut nh);
+                }
+                let max_w = (pw - modules::edit::PAD).round() as i32 - r0_x;
+                nw = nw.clamp(40, max_w.max(40));
+                nh = nh.max(26);
+
+                if !self.edit.overlap {
+                    for (k, it) in panel.items.iter().enumerate() {
+                        if k == mi {
+                            continue;
+                        }
+                        if let Some((ox, oy, ow, oh)) = it.rect {
+                            if ow <= 0 || oh <= 0 {
+                                continue;
+                            }
+                            if r0_x < ox + ow && ox < r0_x + nw && oy >= r0_y && oy < r0_y + nh {
+                                let gap_limit = oy - modules::edit::GAP as i32 - r0_y;
+                                if gap_limit >= 26 {
+                                    nh = nh.min(gap_limit);
+                                }
+                            }
+                            if r0_y < oy + oh && oy < r0_y + nh && ox >= r0_x && ox < r0_x + nw {
+                                let gap_limit = ox - modules::edit::GAP as i32 - r0_x;
+                                if gap_limit >= 40 {
+                                    nw = nw.min(gap_limit);
+                                }
+                            }
+                        }
+                    }
+                }
+
+                panel.items[mi].rect = Some((r0_x, r0_y, nw, nh));
+                self.edit.changed = true;
+            }
+            modules::edit::DragKind::MovePanel => {
+                let d = [y, h - y, x, w - x];
+                let mut side_idx = 0;
+                for i in 1..4 {
+                    if d[i] < d[side_idx] {
+                        side_idx = i;
+                    }
+                }
+                let sides = [
+                    config::Side::Top,
+                    config::Side::Bottom,
+                    config::Side::Left,
+                    config::Side::Right,
+                ];
+                let along = if side_idx < 2 { x / w } else { y / h };
+                panel.side = sides[side_idx];
+                panel.align = if along < 1.0 / 3.0 {
+                    -1
+                } else if along > 2.0 / 3.0 {
+                    1
+                } else {
+                    0
+                };
+                self.edit.changed = true;
+            }
+            modules::edit::DragKind::ResizePanel => {
+                let horizontal = panel.side.horizontal();
+                let gw = if horizontal {
+                    if panel.align < 0 {
+                        dx
+                    } else if panel.align > 0 {
+                        -dx
+                    } else {
+                        2.0 * dx
+                    }
+                } else {
+                    if panel.side == config::Side::Left {
+                        dx
+                    } else {
+                        -dx
+                    }
+                };
+                let gh = if horizontal {
+                    if panel.side == config::Side::Top {
+                        dy
+                    } else {
+                        -dy
+                    }
+                } else {
+                    if panel.align < 0 {
+                        dy
+                    } else if panel.align > 0 {
+                        -dy
+                    } else {
+                        2.0 * dy
+                    }
+                };
+                let mut need_w = 160;
+                let mut need_h = 60;
+                for it in &panel.items {
+                    if let Some((mx, my, mw, mh)) = it.rect {
+                        if mw <= 0 || mh <= 0 {
+                            continue;
+                        }
+                        need_w = need_w.max(mx + mw + modules::edit::PAD as i32);
+                        need_h = need_h.max(my + mh + modules::edit::PAD as i32);
+                    }
+                }
+                let nw = (drag.initial_rect.2 as f64 + gw).round() as i32;
+                let nh = (drag.initial_rect.3 as f64 + gh).round() as i32;
+                panel.width = nw.max(need_w);
+                panel.height = nh.max(need_h);
+                self.edit.changed = true;
+            }
+        }
+        true
+    }
+
+    pub fn edit_release(&mut self) -> bool {
+        if !self.edit.active {
+            return false;
+        }
+        let Some(open_idx) = self.open else {
+            return false;
+        };
+        let drag = self.edit.drag.take();
+        self.pointer_down = false;
+        let (w, _h) = self.last_screen;
+
+        if let Some(drag) = drag {
+            if !self.edit.live {
+                match drag.kind {
+                    modules::edit::DragKind::MoveModule(mi) => {
+                        self.edit.selected = if self.edit.selected == Some(mi) {
+                            None
+                        } else {
+                            Some(mi)
+                        };
+                    }
+                    modules::edit::DragKind::MovePanel => {
+                        self.edit.selected = None;
+                    }
+                    _ => {}
+                }
+            } else {
+                if let modules::edit::DragKind::MoveModule(mi) = drag.kind {
+                    if !self.edit.overlap {
+                        if let Some(panel) = self.cfg.panels.get_mut(open_idx) {
+                            let pw = panel_width(panel, w);
+                            if let Some(it) = panel.items.get(mi) {
+                                if let Some((mx, my, mw, mh)) = it.rect {
+                                    if modules::edit::covers_other(panel, mi, mx, my, mw, mh) {
+                                        let (mut fx, mut fy) =
+                                            modules::edit::nearest_free(panel, mi, mw, mh, pw);
+                                        if self.edit.snap {
+                                            let (mut sx, mut sy) = (fx, fy);
+                                            modules::edit::snap_move(
+                                                panel, mi, pw, &mut sx, &mut sy, mw, mh,
+                                            );
+                                            if !modules::edit::covers_other(
+                                                panel, mi, sx, sy, mw, mh,
+                                            ) && sx >= modules::edit::PAD as i32
+                                            {
+                                                fx = sx;
+                                                fy = sy;
+                                            }
+                                        }
+                                        panel.items[mi].rect = Some((fx, fy, mw, mh));
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            self.edit.live = false;
+            return true;
+        }
+        false
+    }
+
     pub fn close(&mut self) -> bool {
+        if self.edit.active {
+            self.edit_exit();
+        }
+        self.world.child.open = false;
+        self.world.tray.open_menu = None;
         self.pointer_down = false;
         if self.open.is_some() {
             self.open = None;
@@ -515,7 +1077,17 @@ impl Shell {
             return false;
         };
         match k {
-            Key::Escape => self.close(),
+            Key::Escape => {
+                if self.edit.active {
+                    self.edit_exit();
+                    return true;
+                }
+                if self.world.child.open {
+                    self.world.child.open = false;
+                    return true;
+                }
+                self.close()
+            }
             Key::Super(c) => {
                 let c = c.to_ascii_lowercase();
                 if self.cfg.panels.get(open_idx).and_then(|p| p.key) == Some(c) {
@@ -526,12 +1098,96 @@ impl Shell {
                     false
                 }
             }
-            Key::ShiftReturn => self.activate_selected(true),
+            Key::ShiftReturn => {
+                if let Some(modules::NavTarget::Module(m)) = self.world.active_target {
+                    match m {
+                        config::Module::Wifi => {
+                            return modules::toggle_child(
+                                &mut self.world,
+                                modules::child::ChildKind::Wifi,
+                            )
+                        }
+                        config::Module::Bluetooth => {
+                            return modules::toggle_child(
+                                &mut self.world,
+                                modules::child::ChildKind::Bluetooth,
+                            )
+                        }
+                        config::Module::Volume => {
+                            return modules::toggle_child(
+                                &mut self.world,
+                                modules::child::ChildKind::Audio,
+                            )
+                        }
+                        config::Module::Power => {
+                            return modules::toggle_child(
+                                &mut self.world,
+                                modules::child::ChildKind::Power,
+                            )
+                        }
+                        config::Module::Clock => {
+                            return modules::toggle_child(
+                                &mut self.world,
+                                modules::child::ChildKind::Calendar,
+                            )
+                        }
+                        _ => {}
+                    }
+                }
+                self.activate_selected(true)
+            }
             Key::Sym { keysym, ch } => {
                 match keysym {
-                    0xff1b => return self.close(),
+                    0xff1b => {
+                        if self.edit.active {
+                            self.edit_exit();
+                            return true;
+                        }
+                        if self.world.child.open {
+                            self.world.child.open = false;
+                            return true;
+                        }
+                        return self.close();
+                    }
                     0xff0d | 0xff8d => return self.activate_selected(false),
-                    0xff67 => return self.activate_selected(true),
+                    0xff67 => {
+                        if let Some(modules::NavTarget::Module(m)) = self.world.active_target {
+                            match m {
+                                config::Module::Wifi => {
+                                    return modules::toggle_child(
+                                        &mut self.world,
+                                        modules::child::ChildKind::Wifi,
+                                    )
+                                }
+                                config::Module::Bluetooth => {
+                                    return modules::toggle_child(
+                                        &mut self.world,
+                                        modules::child::ChildKind::Bluetooth,
+                                    )
+                                }
+                                config::Module::Volume => {
+                                    return modules::toggle_child(
+                                        &mut self.world,
+                                        modules::child::ChildKind::Audio,
+                                    )
+                                }
+                                config::Module::Power => {
+                                    return modules::toggle_child(
+                                        &mut self.world,
+                                        modules::child::ChildKind::Power,
+                                    )
+                                }
+                                config::Module::Clock => {
+                                    return modules::toggle_child(
+                                        &mut self.world,
+                                        modules::child::ChildKind::Calendar,
+                                    )
+                                }
+                                _ => {}
+                            }
+                        }
+                        return self.activate_selected(true);
+                    }
                     0xffff => return self.close_selected_item(),
                     0xff54 | 0xff09 | 0xff53 => return self.move_selection(1),
                     0xff52 | 0xfe20 | 0xff51 => return self.move_selection(-1),
@@ -584,6 +1240,39 @@ impl Shell {
         let (rects, content_h) = layout_in(panel, pw, &self.world, &self.theme);
         let ph = content_h.min(max_panel_height(h));
         let (ox, oy) = panel_origin(panel, w, h, pw, ph);
+
+        // 1. Child list interaction
+        if self.world.child.open {
+            let child_kind = self
+                .world
+                .child
+                .kind
+                .unwrap_or(modules::child::ChildKind::Wifi);
+            let parent_rect = modules::child::find_parent_rect(panel, child_kind);
+            let parent_y = parent_rect.map(|r| r.1).unwrap_or(0.0);
+            let cr_rect = modules::child::child_card_geometry(
+                child_kind,
+                (ox, oy),
+                pw,
+                parent_y,
+                self.world.child.items.len(),
+                (w, h),
+            );
+            if x >= cr_rect.0
+                && x <= cr_rect.0 + cr_rect.2
+                && y >= cr_rect.1
+                && y <= cr_rect.1 + cr_rect.3
+            {
+                let (changed, _) =
+                    modules::child::click_child(&mut self.world, cr_rect, (x, y), button);
+                return changed;
+            } else {
+                self.world.child.open = false;
+                return true;
+            }
+        }
+
+        // 2. Tray menu interaction
         if let Some(open_tray_idx) = self.world.tray.open_menu {
             if let Some((_, r)) = panel
                 .items
@@ -608,21 +1297,38 @@ impl Shell {
                 }
             }
         }
+
+        // 3. Edit mode interaction
+        if self.edit.active {
+            return self.edit_press(x, y, button);
+        }
+
+        // 4. Click outside panel closes it
         if x < ox || x > ox + pw || y < oy || y > oy + ph {
             self.world.tray.open_menu = None;
             return self.close();
         }
+
+        // 5. Click inside panel
         if modules::is_left_button(button) {
             self.pointer_down = true;
         }
         let oy_scrolled = oy - self.world.panel_scroll;
+        let mut clicked_module = false;
         let mut changed = false;
         for (it, r) in panel.items.iter().zip(rects) {
             let (mx, my, mw, mh) = (ox + r.0, oy_scrolled + r.1, r.2, r.3);
             if mw > 0.0 && mh > 0.0 && x >= mx && x <= mx + mw && y >= my && y <= my + mh {
+                clicked_module = true;
                 changed |= modules::click(it, &mut self.world, (mw, mh), (x - mx, y - my), button);
             }
         }
+
+        // Right click on empty background enters edit mode
+        if !clicked_module && modules::is_right_button(button) {
+            return self.edit_enter();
+        }
+
         self.cfg.favorites = self.world.apps.favorites.clone();
         if self.world.close_requested {
             self.world.close_requested = false;
@@ -635,8 +1341,12 @@ impl Shell {
         changed
     }
 
-    pub fn pointer_release(&mut self) {
+    pub fn pointer_release(&mut self) -> bool {
         self.pointer_down = false;
+        if self.edit.active {
+            return self.edit_release();
+        }
+        false
     }
 
     pub fn scroll(&mut self, w: f64, h: f64, x: f64, y: f64, dy: f64) -> bool {
@@ -681,6 +1391,26 @@ impl Shell {
         self.last_screen = (w, h);
         if self.world.ask.on {
             return modules::ask::hover(&mut self.world, w, h, x, y);
+        }
+        if self.edit.active {
+            if self.pointer_down {
+                return self.edit_drag(x, y);
+            } else if let Some(open_idx) = self.open {
+                if let Some(panel) = self.cfg.panels.get(open_idx) {
+                    let pw = panel_width(panel, w);
+                    let (_, content_h) = layout_in(panel, pw, &self.world, &self.theme);
+                    let ph = content_h.min(max_panel_height(h));
+                    let (ox, oy) = panel_origin(panel, w, h, pw, ph);
+                    let px = x - ox;
+                    let py = y - oy;
+                    let next_hover = modules::edit::module_under(panel, px, py);
+                    if next_hover != self.edit.hover_module {
+                        self.edit.hover_module = next_hover;
+                        return true;
+                    }
+                }
+            }
+            return false;
         }
         if let Some(open_idx) = self.open {
             if let Some(p) = self.cfg.panels.get(open_idx) {
@@ -732,7 +1462,7 @@ impl Shell {
 
     pub fn pointer_leave(&mut self) -> bool {
         self.pointer_down = false;
-        if self.world.ask.on {
+        if self.world.ask.on || self.edit.active || self.world.child.open {
             return false;
         }
         let Some(open_idx) = self.open else {
@@ -752,16 +1482,16 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         .and_then(|(a, b)| Some((a.parse::<i32>().ok()?, b.parse::<i32>().ok()?)))
         .filter(|&(w, h)| (200..=8192).contains(&w) && (200..=8192).contains(&h))
         .ok_or("--render needs WxH, e.g. 1920x1080")?;
-    let cfg = Config::load();
+    let mut cfg = Config::load();
     let th = theme::Theme::from_config(&cfg);
     let is_ask = name == "ask";
-    let panel = if is_ask {
+    let panel_idx = if is_ask {
         None
     } else {
         Some(
             cfg.panels
                 .iter()
-                .find(|p| p.name == name)
+                .position(|p| p.name == name)
                 .ok_or(format!("no panel {name}"))?,
         )
     };
@@ -776,17 +1506,71 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
     );
     let _ = cr.paint();
     let mut world = modules::World::now();
-    if let Some(panel) = panel {
+    if let Some(open_idx) = panel_idx {
+        let is_editing = std::env::var_os("INFYNITAE_EDGE_RENDER_EDIT").is_some();
+        let is_adding = std::env::var_os("INFYNITAE_EDGE_RENDER_ADD").is_some();
+
+        let panel = &mut cfg.panels[open_idx];
         if panel.has(config::Module::Apps) || panel.has(config::Module::Favorites) {
             world.apps.ensure_loaded(&world.search);
         }
         if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
             world.apps.set_favorites(&cfg.favorites);
         }
+
         let pw = panel_width(panel, w as f64);
+        let (rects_init, content_h_init) = layout_in(panel, pw, &world, &th);
+        let ph_init = content_h_init.min(max_panel_height(h as f64));
+        let (ox_init, oy_init) = panel_origin(panel, w as f64, h as f64, pw, ph_init);
+
+        let mut edit_state = modules::edit::EditState {
+            active: is_editing,
+            adding: is_adding,
+            snap: cfg.snap,
+            overlap: cfg.overlap,
+            bar_rect: modules::edit::calculate_bar_rect(
+                panel,
+                (ox_init, oy_init),
+                pw,
+                ph_init,
+                (w as f64, h as f64),
+                is_adding,
+            ),
+            ..Default::default()
+        };
+
+        if is_editing {
+            if !panel.placed {
+                modules::edit::freeze_layout(panel, &rects_init, pw);
+            }
+            if let Ok(v) = std::env::var("INFYNITAE_EDGE_RENDER_EDIT") {
+                if let Ok(n) = v.parse::<usize>() {
+                    if n > 0 && n <= panel.items.len() {
+                        edit_state.selected = Some(n - 1);
+                        edit_state.hover_module = Some(n - 1);
+                    }
+                }
+            }
+        }
+
+        // Child subpanel via env
+        let mut child_kind = None;
+        if let Ok(sub) = std::env::var("INFYNITAE_EDGE_RENDER_SUB") {
+            let k = match sub.as_str() {
+                "cal" => modules::child::ChildKind::Calendar,
+                "bt" => modules::child::ChildKind::Bluetooth,
+                "audio" => modules::child::ChildKind::Audio,
+                "power" => modules::child::ChildKind::Power,
+                _ => modules::child::ChildKind::Wifi,
+            };
+            modules::toggle_child(&mut world, k);
+            child_kind = Some(k);
+        }
+
         let (rects, content_h) = layout_in(panel, pw, &world, &th);
         let ph = content_h.min(max_panel_height(h as f64));
         let (ox, oy) = panel_origin(panel, w as f64, h as f64, pw, ph);
+
         if content_h > ph {
             let _ = cr.save();
             cr.rectangle(ox, oy, pw, ph);
@@ -796,6 +1580,7 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         } else {
             modules::draw_panel(&cr, &th, panel, &rects, &world, (ox, oy), pw);
         }
+
         if let Some(open_idx) = world.tray.open_menu {
             if let Some((_, r)) = panel
                 .items
@@ -819,13 +1604,104 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
                 modules::tray::draw_menu(&cr, &th, &world, m_rect);
             }
         }
+
+        let mut total_rect = (
+            ox.round() as i32,
+            oy.round() as i32,
+            pw.round() as i32,
+            ph.round() as i32,
+        );
+
+        if is_editing {
+            edit_state.bar_rect = modules::edit::calculate_bar_rect(
+                panel,
+                (ox, oy),
+                pw,
+                ph,
+                (w as f64, h as f64),
+                is_adding,
+            );
+            modules::edit::draw_edit_overlay(
+                &cr,
+                &th,
+                panel,
+                (ox, oy),
+                pw,
+                ph,
+                (w as f64, h as f64),
+                &edit_state,
+            );
+            let (bx, by, bw, bh) = edit_state.bar_rect;
+            let min_x = total_rect.0.min(bx.round() as i32 - 2);
+            let min_y = total_rect.1.min(by.round() as i32 - 2);
+            let max_x = (total_rect.0 + total_rect.2).max((bx + bw).round() as i32 + 2);
+            let max_y = (total_rect.1 + total_rect.3).max((by + bh).round() as i32 + 2);
+            total_rect = (min_x, min_y, max_x - min_x, max_y - min_y);
+        }
+
+        let mut drawn_child_rect = None;
+        if let Some(k) = child_kind {
+            if panel.placed && !is_editing {
+                let parent_rect = modules::child::find_parent_rect(panel, k);
+                let parent_y = parent_rect.map(|r| r.1).unwrap_or(0.0);
+                let c_rect = modules::child::child_card_geometry(
+                    k,
+                    (ox, oy),
+                    pw,
+                    parent_y,
+                    world.child.items.len(),
+                    (w as f64, h as f64),
+                );
+                modules::child::draw_child_card(&cr, &th, &world, &world.child, c_rect);
+                drawn_child_rect = Some(c_rect);
+                let (cx, cy, cw, ch) = c_rect;
+                let min_x = total_rect.0.min(cx.round() as i32 - 2);
+                let min_y = total_rect.1.min(cy.round() as i32 - 2);
+                let max_x = (total_rect.0 + total_rect.2).max((cx + cw).round() as i32 + 2);
+                let max_y = (total_rect.1 + total_rect.3).max((cy + ch).round() as i32 + 2);
+                total_rect = (min_x, min_y, max_x - min_x, max_y - min_y);
+            }
+        }
+
+        if let Ok(boxes_path) = std::env::var("INFYNITAE_EDGE_BOXES") {
+            if !boxes_path.is_empty() {
+                let mut out_str = String::new();
+                out_str.push_str(&format!(
+                    "panel {} {:.0} {:.0} {:.0} {:.0} {}\n",
+                    panel.name,
+                    ox,
+                    oy,
+                    pw,
+                    ph,
+                    if is_editing { "editing" } else { "locked" }
+                ));
+                for (it, r) in panel.items.iter().zip(&rects) {
+                    if r.3 > 0.0 {
+                        out_str.push_str(&format!(
+                            "module {} {:.0} {:.0} {:.0} {:.0}\n",
+                            it.module.word(),
+                            ox + r.0,
+                            oy + r.1,
+                            r.2,
+                            r.3
+                        ));
+                    }
+                }
+                if is_editing {
+                    let (bx, by, bw, bh) = edit_state.bar_rect;
+                    out_str.push_str(&format!("bar {:.0} {:.0} {:.0} {:.0}\n", bx, by, bw, bh));
+                }
+                if let Some((cx, cy, cw, ch)) = drawn_child_rect {
+                    out_str.push_str(&format!("child {:.0} {:.0} {:.0} {:.0}\n", cx, cy, cw, ch));
+                }
+                let _ = std::fs::write(boxes_path, out_str);
+            }
+        }
+
         if std::env::var_os("INFYNITAE_EDGE_RENDER_RECT").is_some() {
             println!(
                 "{} {} {} {}",
-                ox.round() as i32,
-                oy.round() as i32,
-                pw.round() as i32,
-                ph.round() as i32
+                total_rect.0, total_rect.1, total_rect.2, total_rect.3
             );
         }
     } else {

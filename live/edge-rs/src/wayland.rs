@@ -137,11 +137,12 @@ impl OutputSurface {
                     // outside the panel reaches the edge and closes it (as the C edge while it
                     // holds the keyboard); opened by hover: the panel and the way to it, so
                     // leaving it closes it
-                    let (rx, ry, rw, rh) = if shell.opened_by_hover {
-                        panel_hover_box_in(p, w, h, &shell.world, &shell.theme)
-                    } else {
-                        (0.0, 0.0, w, h)
-                    };
+                    let (rx, ry, rw, rh) =
+                        if shell.opened_by_hover && !shell.edit.active && !shell.world.child.open {
+                            panel_hover_box_in(p, w, h, &shell.world, &shell.theme)
+                        } else {
+                            (0.0, 0.0, w, h)
+                        };
                     region.add(
                         rx.floor() as i32,
                         ry.floor() as i32,
@@ -379,20 +380,58 @@ impl OutputSurface {
             }
         }
 
-        let new_box = if let Some(mr) = tray_m_rect {
-            let min_x = (ox.min(mr.0).floor() as i32 - pad).max(0);
-            let min_y = (oy.min(mr.1).floor() as i32 - pad).max(0);
-            let max_x = ((ox + pw).max(mr.0 + mr.2).ceil() as i32 + pad).min(w);
-            let max_y = ((oy + ph).max(mr.1 + mr.3).ceil() as i32 + pad).min(h);
-            (min_x, min_y, (max_x - min_x).max(1), (max_y - min_y).max(1))
-        } else {
-            (
-                (ox.floor() as i32 - pad).max(0),
-                (oy.floor() as i32 - pad).max(0),
-                (pw.ceil() as i32 + 2 * pad).min(w),
-                (ph.ceil() as i32 + 2 * pad).min(h),
-            )
-        };
+        let mut child_draw_rect = None;
+        if shell.world.child.open && panel.placed && !shell.edit.active {
+            let child_kind = shell
+                .world
+                .child
+                .kind
+                .unwrap_or(modules::child::ChildKind::Wifi);
+            let parent_rect = modules::child::find_parent_rect(panel, child_kind);
+            let parent_y = parent_rect.map(|r| r.1).unwrap_or(0.0);
+            child_draw_rect = Some(modules::child::child_card_geometry(
+                child_kind,
+                (ox, oy),
+                pw,
+                parent_y,
+                shell.world.child.items.len(),
+                (w as f64, h as f64),
+            ));
+        }
+
+        let mut min_x = ox.floor() as i32 - pad;
+        let mut min_y = oy.floor() as i32 - pad;
+        let mut max_x = (ox + pw).ceil() as i32 + pad;
+        let mut max_y = (oy + ph).ceil() as i32 + pad;
+
+        if let Some(mr) = tray_m_rect {
+            min_x = min_x.min(mr.0.floor() as i32 - pad);
+            min_y = min_y.min(mr.1.floor() as i32 - pad);
+            max_x = max_x.max((mr.0 + mr.2).ceil() as i32 + pad);
+            max_y = max_y.max((mr.1 + mr.3).ceil() as i32 + pad);
+        }
+
+        if shell.edit.active {
+            let (bx, by, bw, bh) = shell.edit.bar_rect;
+            min_x = min_x.min(bx.floor() as i32 - pad);
+            min_y = min_y.min(by.floor() as i32 - pad);
+            max_x = max_x.max((bx + bw).ceil() as i32 + pad);
+            max_y = max_y.max((by + bh).ceil() as i32 + pad);
+        }
+
+        if let Some(cr_rect) = child_draw_rect {
+            min_x = min_x.min(cr_rect.0.floor() as i32 - pad);
+            min_y = min_y.min(cr_rect.1.floor() as i32 - pad);
+            max_x = max_x.max((cr_rect.0 + cr_rect.2).ceil() as i32 + pad);
+            max_y = max_y.max((cr_rect.1 + cr_rect.3).ceil() as i32 + pad);
+        }
+
+        let new_box = (
+            min_x.max(0),
+            min_y.max(0),
+            (max_x - min_x).clamp(1, w),
+            (max_y - min_y).clamp(1, h),
+        );
 
         let slot = self.slots[slot_idx].as_mut().unwrap();
         let old_box = slot.prev_box.replace(new_box);
@@ -438,6 +477,26 @@ impl OutputSurface {
                     }
                     if let Some(mr) = tray_m_rect {
                         modules::tray::draw_menu(&cr, &shell.theme, &shell.world, mr);
+                    }
+                    if shell.edit.active {
+                        modules::edit::draw_edit_overlay(
+                            &cr,
+                            &shell.theme,
+                            panel,
+                            (ox, oy),
+                            pw,
+                            ph,
+                            (w as f64, h as f64),
+                            &shell.edit,
+                        );
+                    } else if let Some(cr_rect) = child_draw_rect {
+                        modules::child::draw_child_card(
+                            &cr,
+                            &shell.theme,
+                            &shell.world,
+                            &shell.world.child,
+                            cr_rect,
+                        );
                     }
                 }
                 surface.flush();
@@ -943,7 +1002,7 @@ impl PointerHandler for App {
                     changed |= self.shell.click(w, h, x, y, button);
                 }
                 PointerEventKind::Release { .. } => {
-                    self.shell.pointer_release();
+                    changed |= self.shell.pointer_release();
                 }
                 PointerEventKind::Axis { vertical, .. } => {
                     let dy = if vertical.discrete != 0 {
@@ -991,6 +1050,9 @@ impl TouchHandler for App {
         _: u32,
         _: i32,
     ) {
+        if self.shell.pointer_release() {
+            self.sync_all();
+        }
     }
 
     fn motion(
@@ -1000,8 +1062,14 @@ impl TouchHandler for App {
         _: &wl_touch::WlTouch,
         _: u32,
         _: i32,
-        _: (f64, f64),
+        position: (f64, f64),
     ) {
+        if let Some(surf) = self.outputs.first() {
+            let (w, h) = (surf.width as f64, surf.height as f64);
+            if self.shell.pointer_motion(w, h, position.0, position.1) {
+                self.sync_all();
+            }
+        }
     }
 
     fn shape(
