@@ -81,6 +81,7 @@ for p in control clipboard; do
     if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render "$p" 1280x800 "$TMP/stage2b-$p.png" \
         && [ "$(stat -c %s "$TMP/stage2b-$p.png")" -gt 4000 ]; then echo "ok   stage2b $p drawn"
     else echo "FAIL stage2b $p not drawn"; fail=1; fi
+done
 printf 'FAVORITES="firefox org.gnome.Nautilus foot org.gnome.Settings org.gnome.SystemMonitor"\nPANEL_APPS="SUPER+W top center search:bar favorites apps"\nPANEL_WINDOWS="SUPER+L top center search:bar windows"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
 for p in apps windows; do
     if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render "$p" 1280x800 "$TMP/$p-data.png" \
