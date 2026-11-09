@@ -103,6 +103,26 @@ printf 'PANEL_CONTROL="SUPER+A bottom right 361x708 hover clock@8,8,344x34 volum
 if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render control 1280x800 "$TMP/stage3-control-placed.png" \
     && [ "$(stat -c %s "$TMP/stage3-control-placed.png")" -gt 4000 ]; then echo "ok   stage3 control (placed) drawn"
 else echo "FAIL stage3 control (placed) not drawn"; fail=1; fi
+for sub in wifi bt audio power cal; do
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" INFYNITAE_EDGE_RENDER_SUB="$sub" INFYNITAE_EDGE_BOXES="$TMP/boxes-$sub.txt" "$RS" --render control 1280x800 "$TMP/stage4-$sub.png" \
+        && [ "$(stat -c %s "$TMP/stage4-$sub.png")" -gt 4000 ] && grep -q '^child ' "$TMP/boxes-$sub.txt"; then
+        echo "ok   stage4 child ($sub) drawn"
+    else
+        echo "FAIL stage4 child ($sub) not drawn"; fail=1
+    fi
+done
+if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_EDIT=1 INFYNITAE_EDGE_BOXES="$TMP/boxes-edit.txt" "$RS" --render control 1280x800 "$TMP/stage4-edit.png" \
+    && [ "$(stat -c %s "$TMP/stage4-edit.png")" -gt 4000 ] && grep -q '^bar ' "$TMP/boxes-edit.txt"; then
+    echo "ok   stage4 edit mode drawn"
+else
+    echo "FAIL stage4 edit mode not drawn"; fail=1
+fi
+if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_EDIT=1 INFYNITAE_EDGE_RENDER_ADD=1 INFYNITAE_EDGE_BOXES="$TMP/boxes-add.txt" "$RS" --render control 1280x800 "$TMP/stage4-edit-add.png" \
+    && [ "$(stat -c %s "$TMP/stage4-edit-add.png")" -gt 4000 ] && grep -q '^bar ' "$TMP/boxes-add.txt"; then
+    echo "ok   stage4 edit add drawn"
+else
+    echo "FAIL stage4 edit add not drawn"; fail=1
+fi
 for q in "Format the drive as|exFAT|FAT32|ext4" "text:Name for the drive" "secret:Passphrase for USB"; do
     tag=${q%%:*}
     tag=${tag%%|*}
