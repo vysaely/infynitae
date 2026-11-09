@@ -22,10 +22,16 @@
 //!   `list sinks` (or e.g. `Volume: 60%\nMute: no\nDescription: Built-in Audio`).
 //! - `brightness`: output of `brightnessctl -m` / `brightnessctl info`
 //!   (e.g. `amdgpu_bl1,backlight,192,75%,255`, or `none` / empty when no device exists).
+//! - `clipboard`: output of `cliphist list` (e.g. `108\tgit push origin main`).
+//! - `notifications`: output of `makoctl list -j` / `makoctl history -j` (or `makoctl list` /
+//!   `makoctl history` plain text, or `id\tapp\ttime\tsummary\tbody` lines).
 
 pub mod calendar;
+pub mod clipboard;
 pub mod clock;
 pub mod memory;
+pub mod notifications;
+pub mod session;
 pub mod switches;
 pub mod system;
 pub mod volume;
@@ -159,6 +165,9 @@ pub struct World {
     pub volume: volume::VolumeData,
     pub system: system::SystemData,
     pub memory: memory::MemoryData,
+    pub clipboard: clipboard::ClipboardData,
+    pub notifications: notifications::NotificationsData,
+    pub close_panel: bool,
     pub live: bool,
     pub actions: Vec<String>,
 }
@@ -178,6 +187,9 @@ impl World {
             volume: volume::VolumeData::default(),
             system: system::SystemData::default(),
             memory: memory::MemoryData::default(),
+            clipboard: clipboard::ClipboardData::default(),
+            notifications: notifications::NotificationsData::default(),
+            close_panel: false,
             live: false,
             actions: Vec::new(),
         };
@@ -191,6 +203,7 @@ impl World {
     pub fn on_open(&mut self) {
         self.now = current_time();
         self.cal_month = 0;
+        self.close_panel = false;
         if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
             self.load_from_helper();
         }
@@ -204,6 +217,8 @@ impl World {
             .chain(volume::CMDS.iter())
             .chain(system::CMDS.iter())
             .chain(memory::CMDS.iter())
+            .chain(clipboard::CMDS.iter())
+            .chain(notifications::CMDS.iter())
         {
             let out = run_sh(k, c);
             self.apply(k, &out);
@@ -222,6 +237,8 @@ impl World {
             || volume::apply(&mut self.volume, key, out)
             || system::apply(&mut self.system, key, out)
             || memory::apply(&mut self.memory, key, out)
+            || clipboard::apply(&mut self.clipboard, key, out)
+            || notifications::apply(&mut self.notifications, key, out)
     }
 
     /// Records `cmd` in `actions` and, when running live in the Wayland daemon, spawns `sh -c cmd`
@@ -260,6 +277,8 @@ pub fn refresh_cmds(m: Module) -> &'static [(&'static str, &'static str)] {
         Module::Volume => volume::CMDS,
         Module::System => system::CMDS,
         Module::Memory => memory::CMDS,
+        Module::Clipboard => clipboard::CMDS,
+        Module::Notifications => notifications::CMDS,
         _ => &[],
     }
 }
@@ -281,6 +300,9 @@ pub fn height_in(it: &Item, world: &World, th: &Theme, w: f64) -> f64 {
         Module::Volume => volume::height(world),
         Module::System => system::height(world),
         Module::Memory => memory::height(world),
+        Module::Session => session::height(),
+        Module::Clipboard => clipboard::height(world),
+        Module::Notifications => notifications::height(world),
         m if m.is_switch() => switches::height(it, world, th),
         _ => 2.0 * PAD_Y + 40.0,
     }
@@ -294,6 +316,9 @@ pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), bu
         Module::Volume => volume::click(world, size, pos, button),
         Module::System => system::click(world, size, pos, button),
         Module::Memory => memory::click(world, size, pos, button),
+        Module::Session => session::click(world, size, pos, button),
+        Module::Clipboard => clipboard::click(world, size, pos, button),
+        Module::Notifications => notifications::click(world, size, pos, button),
         m if m.is_switch() => switches::click(m, world, button),
         _ => false,
     }
@@ -311,6 +336,7 @@ pub fn drag(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64)) -> 
 pub fn scroll(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), dy: f64) -> bool {
     match it.module {
         Module::Volume => volume::scroll(world, size, pos, dy),
+        Module::Clipboard => clipboard::scroll(world, size, pos, dy),
         _ => false,
     }
 }
@@ -330,6 +356,9 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
         Module::Volume => volume::draw(cr, th, world, rect),
         Module::System => system::draw(cr, th, world, rect),
         Module::Memory => memory::draw(cr, th, world, rect),
+        Module::Session => session::draw(cr, th, rect),
+        Module::Clipboard => clipboard::draw(cr, th, world, rect),
+        Module::Notifications => notifications::draw(cr, th, world, rect),
         m if m.is_switch() => switches::draw(cr, th, it, world, rect),
         m => {
             draw::card(cr, th, x, y, w, h);
@@ -526,6 +555,8 @@ power=performance
 replay=on
 volume=Volume: front-left: 39321 / 60% / -13.30 dB\\nMute: no\\nDescription: Studio Speakers
 brightness=amdgpu_bl1,backlight,192,75%,255
+clipboard=108\\tgit push origin main\\n107\\t[[ binary data 48 KiB png 1920x1080 ]]
+notifications=42\\tFirefox\\t2m\\tBuild finished\\tAll 20 checks passed on main
 ";
         let map = parse_render_data(data);
         let mut world = World::now();
@@ -550,5 +581,14 @@ brightness=amdgpu_bl1,backlight,192,75%,255
         assert!(!world.volume.muted);
         assert_eq!(world.volume.sink, "Studio Speakers");
         assert_eq!(world.volume.brightness, Some(75));
+        assert!(world.clipboard.ready);
+        assert_eq!(world.clipboard.items.len(), 2);
+        assert_eq!(world.clipboard.items[0].preview, "git push origin main");
+        assert_eq!(world.clipboard.items[1].preview, "Image 1920x1080");
+        assert!(world.notifications.ready);
+        assert_eq!(world.notifications.items.len(), 1);
+        assert_eq!(world.notifications.items[0].id, 42);
+        assert_eq!(world.notifications.items[0].app, "Firefox");
+        assert_eq!(world.notifications.items[0].title, "Build finished");
     }
 }

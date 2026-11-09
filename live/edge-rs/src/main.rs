@@ -403,6 +403,11 @@ impl Shell {
                 changed |= modules::click(it, &mut self.world, (mw, mh), (x - mx, y - my), button);
             }
         }
+        if self.world.close_panel {
+            self.world.close_panel = false;
+            self.close();
+            return true;
+        }
         changed
     }
 
@@ -777,5 +782,67 @@ mod tests {
             assert!(sh.scroll(w, h, ox + r_vol.0 + 40.0, oy + r_vol.1 + 25.0, -1.0));
             assert_eq!(sh.world.volume.pct, 5);
         }
+    }
+
+    #[test]
+    fn layout_and_clicks_work_for_session_clipboard_and_notifications() {
+        let cfg = Config::from_text(
+            "PANEL_CONTROL=\"SUPER+A top right notifications session\"\n\
+             PANEL_CLIPBOARD=\"SUPER+V right center clipboard\"\n",
+        );
+        let mut sh = Shell::from_config(cfg);
+        sh.world.apply(
+            "notifications",
+            "42\tFirefox\t2m\tBuild finished\tAll checks passed\n",
+        );
+        sh.world.apply("clipboard", "108\tgit push origin main\n");
+
+        let (w, h) = (1920.0, 1080.0);
+        assert!(sh.toggle_named("control"));
+        let panel = sh.cfg.panels[sh.open.unwrap()].clone();
+        let pw = panel_width(&panel, w);
+        let (rects, ph) = layout_in(&panel, pw, &sh.world, &sh.theme);
+        let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
+        assert_eq!(rects.len(), 2);
+        assert!(rects[0].3 > 0.0);
+        assert!(rects[1].3 > 0.0);
+
+        // Click notification item -> invokes default action, dismisses, and hides notifications
+        let r_notif = rects[0];
+        assert!(sh.click(w, h, ox + r_notif.0 + 40.0, oy + r_notif.1 + 60.0, 1));
+        sh.pointer_release();
+        assert!(sh.world.notifications.items.is_empty());
+        assert_eq!(
+            sh.world.actions.last().map(String::as_str),
+            Some("makoctl invoke -n 42 default 2>/dev/null; makoctl dismiss -n 42 2>/dev/null")
+        );
+
+        // Now notifications height is 0; click session Lock button
+        let (rects2, ph2) = layout_in(&panel, pw, &sh.world, &sh.theme);
+        let (ox2, oy2) = panel_origin(&panel, w, h, pw, ph2);
+        assert_eq!(rects2[0].3, 0.0);
+        let r_sess = rects2[1];
+        assert!(sh.click(w, h, ox2 + r_sess.0 + 30.0, oy2 + r_sess.1 + 30.0, 1));
+        sh.pointer_release();
+        assert_eq!(
+            sh.world.actions.last().map(String::as_str),
+            Some(
+                "infynitae msg lock >/dev/null 2>&1 || setsid -f ~/.local/bin/infynitae-lock >/dev/null 2>&1 || setsid -f ~/infynitae/live/lock/infynitae-lock >/dev/null 2>&1"
+            )
+        );
+
+        // Open clipboard panel and click first row -> copies and closes panel
+        assert!(sh.toggle_named("clipboard"));
+        let clip_panel = sh.cfg.panels[sh.open.unwrap()].clone();
+        let cpw = panel_width(&clip_panel, w);
+        let (crects, cph) = layout_in(&clip_panel, cpw, &sh.world, &sh.theme);
+        let (cox, coy) = panel_origin(&clip_panel, w, h, cpw, cph);
+        let r_clip = crects[0];
+        assert!(sh.click(w, h, cox + r_clip.0 + 40.0, coy + r_clip.1 + 55.0, 1));
+        assert_eq!(sh.open, None);
+        assert_eq!(
+            sh.world.actions.last().map(String::as_str),
+            Some("printf '%s\\n' '108\tgit push origin main' | cliphist decode 2>/dev/null | wl-copy")
+        );
     }
 }
