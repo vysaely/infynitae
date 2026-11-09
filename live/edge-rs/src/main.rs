@@ -111,7 +111,7 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
     let world = modules::World::now();
     for (it, r) in panel.items.iter().zip(rects) {
         if r.2 > 0.0 && r.3 > 0.0 {
-            modules::draw(&cr, &th, it, &world, ox + r.0, oy + r.1, r.2, r.3);
+            modules::draw(&cr, &th, it, &world, (ox + r.0, oy + r.1, r.2, r.3));
         }
     }
     drop(cr);

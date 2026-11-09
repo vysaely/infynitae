@@ -39,7 +39,9 @@ pub fn height(it: &Item, w: f64) -> f64 {
     }
 }
 
-pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, x: f64, y: f64, w: f64, h: f64) {
+/// A module drawn into its rectangle (x, y, w, h).
+pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: (f64, f64, f64, f64)) {
+    let (x, y, w, h) = rect;
     let (names, def) = it.module.looks();
     let look = names.get(it.look.unwrap_or(def)).copied().unwrap_or("");
     match it.module {

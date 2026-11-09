@@ -2,7 +2,7 @@
 //! (live/edge/infynitae-edge.c, load_position_config and panel_line), so both print the same
 //! panels (`--print-panels`, tools/test-edge-panel-lines) and either can replace the other.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// A module of a panel, by its word in the config. The C edge's modules first, in its order; the
 /// ones after `Session` are the new design's (the C edge skips their words).
@@ -449,10 +449,6 @@ fn truthy(v: &str) -> bool {
 impl Config {
     pub fn load() -> Config {
         Config::from_text(&std::fs::read_to_string(config_path()).unwrap_or_default())
-    }
-
-    pub fn load_from(path: &Path) -> Config {
-        Config::from_text(&std::fs::read_to_string(path).unwrap_or_default())
     }
 
     pub fn from_text(text: &str) -> Config {
