@@ -612,15 +612,22 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
         return;
     }
     let sw = info(it.module, &world.switches);
-    match th.switch_look.as_str() {
+    let look = if h < 56.0 || th.switch_look == "icons" {
+        "icons"
+    } else if th.switch_look == "tiles" {
+        "tiles"
+    } else {
+        "rows"
+    };
+    match look {
         "icons" => {
             let cx = (x + w / 2.0).round();
-            let iy = (y + 2.0).round();
+            let iy = (y + (h - 22.0) / 2.0).max(y).round();
             let col = if sw.on { th.accent } else { th.text };
             draw_icon(cr, it.module, cx - 9.0, iy, col);
             if sw.on {
                 cr.new_sub_path();
-                cr.arc(cx, y + 25.0, 2.0, 0.0, 2.0 * PI);
+                cr.arc(cx, (iy + 21.0).min(y + h - 2.0), 2.0, 0.0, 2.0 * PI);
                 draw::set(cr, th.accent);
                 let _ = cr.fill();
             }

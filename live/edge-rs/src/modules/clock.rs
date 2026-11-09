@@ -1,4 +1,11 @@
 //! The clock module (`clock`, `clock:big`, `clock:calendar`).
+//!
+//! # Sizes
+//!
+//! In placed panels or during resizing, size picks the look dynamically:
+//! - **time** (`h < 70.0` or `w < 150.0`): time and date on a line.
+//! - **big** (`70.0 <= h < 200.0`): large time digits with date underneath.
+//! - **calendar** (`h >= 200.0 && w >= 250.0`): time face with the month calendar grid.
 
 use crate::config::Item;
 use crate::draw::{self, Text, PAD_X, PAD_Y};
@@ -7,13 +14,34 @@ use crate::theme::Theme;
 use cairo::Context;
 use chrono::Timelike;
 
-fn look_name(it: &Item) -> &'static str {
-    let (names, def) = it.module.looks();
-    names.get(it.look.unwrap_or(def)).copied().unwrap_or("time")
+pub fn size_look(w: f64, h: f64) -> &'static str {
+    if h >= 200.0 && w >= 250.0 {
+        "calendar"
+    } else if h >= 70.0 {
+        "big"
+    } else {
+        "time"
+    }
+}
+
+fn look_name(it: &Item, rect: Rect) -> &'static str {
+    if it.rect.is_some() || (rect.2 > 0.0 && rect.3 > 0.0 && it.look.is_none()) {
+        size_look(rect.2, rect.3)
+    } else {
+        let (names, def) = it.module.looks();
+        names.get(it.look.unwrap_or(def)).copied().unwrap_or("time")
+    }
 }
 
 pub fn height(it: &Item) -> f64 {
-    match look_name(it) {
+    if let Some((_, _, _, h)) = it.rect {
+        if h > 0 {
+            return h as f64;
+        }
+    }
+    let (names, def) = it.module.looks();
+    let name = names.get(it.look.unwrap_or(def)).copied().unwrap_or("time");
+    match name {
         "time" => 2.0 * PAD_Y + 40.0,
         "big" => 2.0 * PAD_Y + 86.0,
         _ => calendar::height() + 2.0 * PAD_Y + 86.0 + draw::GAP,
@@ -22,16 +50,16 @@ pub fn height(it: &Item) -> f64 {
 
 pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
-    let look = look_name(it);
+    let look = look_name(it, rect);
     if look == "calendar" {
         let top = 2.0 * PAD_Y + 86.0;
-        draw::card(cr, th, x, y, w, top);
+        draw::card(cr, th, x, y, w, h.max(top));
         draw_face(cr, th, world, x, y, w, true);
         calendar::draw(
             cr,
             th,
             world,
-            (x, y + top + draw::GAP, w, calendar::height()),
+            (x, y + top + draw::GAP, w, (h - top - draw::GAP).max(40.0)),
         );
     } else {
         draw::card(cr, th, x, y, w, h);
@@ -40,7 +68,8 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
 }
 
 pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
-    if look_name(it) == "calendar" {
+    let look = look_name(it, (0.0, 0.0, size.0, size.1));
+    if look == "calendar" {
         let top = 2.0 * PAD_Y + 86.0 + draw::GAP;
         calendar::click(world, size.0, (pos.0, pos.1 - top))
     } else {
@@ -97,5 +126,18 @@ fn draw_face(cr: &Context, th: &Theme, world: &World, x: f64, y: f64, w: f64, bi
                 text: &date,
             },
         );
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn size_look_picks_expected_mode() {
+        assert_eq!(size_look(300.0, 50.0), "time");
+        assert_eq!(size_look(300.0, 100.0), "big");
+        assert_eq!(size_look(200.0, 250.0), "big"); // w < 250 stays big
+        assert_eq!(size_look(300.0, 250.0), "calendar");
     }
 }

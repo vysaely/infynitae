@@ -1,4 +1,13 @@
 //! The calendar module: six weeks, Monday first, previous/next month arrows.
+//!
+//! # Sizes
+//!
+//! - **today only** (`h < 140.0`):
+//!   Card showing today's day of week, day number, and month/year.
+//! - **the month** (`140.0 <= h < 310.0`):
+//!   The standard 6-week calendar month grid with previous/next month arrows.
+//! - **the month and events** (`h >= 310.0`):
+//!   The month grid with an "Events" agenda list below.
 
 use crate::draw::{self, Text, PAD_X, PAD_Y};
 use crate::modules::{Rect, World};
@@ -8,8 +17,49 @@ use chrono::{Datelike, NaiveDate};
 
 const CAL_ROW: f64 = 34.0;
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CalendarEvent {
+    pub time: String,
+    pub title: String,
+}
+
 pub fn height() -> f64 {
     2.0 * PAD_Y + 28.0 + 22.0 + 6.0 * CAL_ROW
+}
+
+/// Parses raw event lines (e.g. `time \t title` or `time title`) into `CalendarEvent`s.
+pub fn parse_calendar_events(out: &str) -> Vec<CalendarEvent> {
+    let mut events = Vec::new();
+    for line in out.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((time, title)) = line.split_once('\t') {
+            events.push(CalendarEvent {
+                time: time.trim().to_string(),
+                title: title.trim().to_string(),
+            });
+        } else if let Some((time, title)) = line.split_once(' ') {
+            if time.contains(':') && time.chars().any(|c| c.is_ascii_digit()) {
+                events.push(CalendarEvent {
+                    time: time.trim().to_string(),
+                    title: title.trim().to_string(),
+                });
+            } else {
+                events.push(CalendarEvent {
+                    time: String::new(),
+                    title: line.to_string(),
+                });
+            }
+        } else {
+            events.push(CalendarEvent {
+                time: String::new(),
+                title: line.to_string(),
+            });
+        }
+    }
+    events
 }
 
 /// The first day of the month `delta` months away from `today`'s month.
@@ -42,12 +92,62 @@ pub fn click(world: &mut World, w: f64, pos: (f64, f64)) -> bool {
     }
 }
 
-/// The month: six weeks, Monday first, the days of the months before and after dimmed, today on
-/// the accent.
+/// Draws the calendar module choosing size according to `h`:
+/// - `h < 140.0`: today only
+/// - `h >= 310.0`: the month and events
+/// - otherwise: the month
 pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
-    let (x, y, w, _) = rect;
-    let h = height();
+    let (x, y, w, h) = rect;
+    let effective_h = if h > 0.0 { h } else { height() };
+
+    if effective_h < 140.0 {
+        draw_today_only(cr, th, world, (x, y, w, effective_h));
+    } else if effective_h >= 310.0 {
+        draw_month_and_events(cr, th, world, (x, y, w, effective_h));
+    } else {
+        draw_month(cr, th, world, (x, y, w, effective_h));
+    }
+}
+
+/// Draws "today only" view (compact).
+fn draw_today_only(cr: &Context, th: &Theme, world: &World, rect: Rect) {
+    let (x, y, w, h) = rect;
     draw::card(cr, th, x, y, w, h);
+    let today = world.now.date();
+
+    let weekday = today.format("%A").to_string();
+    let mday = today.day().to_string();
+    let my = today.format("%B %Y").to_string();
+
+    draw::title(cr, th, x + PAD_X, y + PAD_Y, &weekday);
+
+    draw::text(
+        cr,
+        x + PAD_X,
+        y + PAD_Y + 24.0,
+        &Text {
+            size: 32.0,
+            bold: true,
+            color: th.accent,
+            text: &mday,
+        },
+    );
+
+    draw::text(
+        cr,
+        x + PAD_X + 54.0,
+        y + PAD_Y + 34.0,
+        &Text {
+            size: 13.0,
+            bold: false,
+            color: th.muted,
+            text: &my,
+        },
+    );
+}
+
+/// Draws the month grid.
+fn draw_month_grid(cr: &Context, th: &Theme, world: &World, x: f64, y: f64, w: f64) {
     let today = world.now.date();
     let first = shifted_month(today, world.cal_month);
     draw::title(
@@ -130,5 +230,113 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
                 text: &s,
             },
         );
+    }
+}
+
+/// Draws the standard month view.
+fn draw_month(cr: &Context, th: &Theme, world: &World, rect: Rect) {
+    let (x, y, w, h) = rect;
+    draw::card(cr, th, x, y, w, h);
+    draw_month_grid(cr, th, world, x, y, w);
+}
+
+/// Draws the month grid and the events section below.
+fn draw_month_and_events(cr: &Context, th: &Theme, world: &World, rect: Rect) {
+    let (x, y, w, h) = rect;
+    draw::card(cr, th, x, y, w, h);
+    draw_month_grid(cr, th, world, x, y, w);
+
+    let events_y = y + PAD_Y + 28.0 + 22.0 + 6.0 * CAL_ROW + 12.0;
+
+    // Events section header
+    draw::text(
+        cr,
+        x + PAD_X,
+        events_y,
+        &Text {
+            size: 13.0,
+            bold: true,
+            color: th.text,
+            text: "Events",
+        },
+    );
+
+    let item_y = events_y + 20.0;
+    if world.calendar_events.is_empty() {
+        draw::text(
+            cr,
+            x + PAD_X,
+            item_y,
+            &Text {
+                size: 12.0,
+                bold: false,
+                color: th.muted,
+                text: "No events today",
+            },
+        );
+    } else {
+        let mut cur_y = item_y;
+        for ev in &world.calendar_events {
+            if cur_y + 16.0 > y + h - PAD_Y {
+                break;
+            }
+            if !ev.time.is_empty() {
+                let tw = draw::text(
+                    cr,
+                    x + PAD_X,
+                    cur_y,
+                    &Text {
+                        size: 12.0,
+                        bold: true,
+                        color: th.accent,
+                        text: &ev.time,
+                    },
+                );
+                draw::text_max(
+                    cr,
+                    x + PAD_X + tw + 8.0,
+                    cur_y,
+                    w - 2.0 * PAD_X - tw - 8.0,
+                    &Text {
+                        size: 12.0,
+                        bold: false,
+                        color: th.text,
+                        text: &ev.title,
+                    },
+                );
+            } else {
+                draw::text_max(
+                    cr,
+                    x + PAD_X,
+                    cur_y,
+                    w - 2.0 * PAD_X,
+                    &Text {
+                        size: 12.0,
+                        bold: false,
+                        color: th.text,
+                        text: &ev.title,
+                    },
+                );
+            }
+            cur_y += 20.0;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_calendar_events_tsv_and_space() {
+        let sample = "10:00\tTeam Standup\n14:30 Code Review\nAll-day Holiday\n";
+        let evs = parse_calendar_events(sample);
+        assert_eq!(evs.len(), 3);
+        assert_eq!(evs[0].time, "10:00");
+        assert_eq!(evs[0].title, "Team Standup");
+        assert_eq!(evs[1].time, "14:30");
+        assert_eq!(evs[1].title, "Code Review");
+        assert_eq!(evs[2].time, "");
+        assert_eq!(evs[2].title, "All-day Holiday");
     }
 }
