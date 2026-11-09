@@ -165,8 +165,10 @@ still=$(blk -nro MOUNTPOINTS "$disk" 2>/dev/null | grep -v '^$' | head -n 1)
 [ -z "$still" ] || fail "$still is still in use: close what is open on it and try again."
 
 obj="/org/freedesktop/UDisks2/block_devices/$name_of_disk"
+# no 'tear-down': it also rewrites /etc/fstab and /etc/crypttab, which asks for the admin password; everything
+# on the drive is already unmounted and locked above, so a removable drive is formatted without a password
 if ! out=$(dbus call --system --timeout 600 --dest org.freedesktop.UDisks2 --object-path "$obj" \
-        --method org.freedesktop.UDisks2.Block.Format dos "{'tear-down': <true>}" 2>&1); then
+        --method org.freedesktop.UDisks2.Block.Format dos '{}' 2>&1); then
     log "partition table failed: $out"
     fail "The drive refused a new partition table: $(printf '%s' "$out" | tail -n 1 | cut -c 1-160)"
 fi

@@ -111,6 +111,7 @@ check "exFAT: Cancel is the first confirmation choice" '[ "$(head -n 1 "$TMP/off
 check "exFAT: unmounts each mounted partition" 'called "unmount --no-user-interaction -b /dev/sdx1" && called "unmount --no-user-interaction -b /dev/sdx3"'
 check "exFAT: locks the encrypted partition" 'called "lock --no-user-interaction -b /dev/sdx2"'
 check "exFAT: a new MBR table on the whole disk" 'called "object-path /org/freedesktop/UDisks2/block_devices/sdx --method org.freedesktop.UDisks2.Block.Format dos"'
+check "exFAT: the table without tear-down (it asks for the admin password)" '! called tear-down'
 check "exFAT: one exFAT partition named My Stick" "called \"CreatePartitionAndFormat 0 0 0x07  {} exfat {'label': <'My Stick'>}\""
 check "exFAT: says it is ready" 'grep -q "My Stick is ready" "$NOTES"'
 
