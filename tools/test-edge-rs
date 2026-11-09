@@ -69,4 +69,14 @@ printf 'PANEL_CONTROL="system memory"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#
 if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render control 1280x800 "$TMP/system-memory.png" \
     && [ "$(stat -c %s "$TMP/system-memory.png")" -gt 4000 ]; then echo "ok   system and memory drawn"
 else echo "FAIL system and memory not drawn"; fail=1; fi
+cat >> "$TMP/render-data.txt" <<'EOF'
+clipboard=pin:108\tgit push origin main\t2m\n107\t[[ binary data 24 KiB png 1920x1080 ]]\t5m\n106\thttps://github.com/vysaely/infynitae\t12m
+notifications=[{"id":14,"app_name":"Discord","time":"Now","summary":"New message from a friend","body":"Hey, are you online?"},{"id":11,"app_name":"Steam","time":"5m","summary":"Download complete","body":""}]
+EOF
+printf 'PANEL_CONTROL="clock volume notifications session"\nPANEL_CLIPBOARD="clipboard"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+for p in control clipboard; do
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render "$p" 1280x800 "$TMP/stage2b-$p.png" \
+        && [ "$(stat -c %s "$TMP/stage2b-$p.png")" -gt 4000 ]; then echo "ok   stage2b $p drawn"
+    else echo "FAIL stage2b $p not drawn"; fail=1; fi
+done
 [ "$fail" = 0 ] && echo "all edge-rs tests passed" || { echo "edge-rs tests failed"; exit 1; }
