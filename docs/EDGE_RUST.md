@@ -27,14 +27,15 @@ colour scheme (yours from the system, monochrome, neutral, tonal, vibrant, expre
 
 | Stage | What | Done when |
 |---|---|---|
-| 0 ✓ | Skeleton: config (`PANEL_` lines, theme colours, scheme, corners), the module trait with sizes, the card style, `--render` and `--print-panels`; clock and calendar | renders match the canvas; CI builds and tests it |
-| 1 ✓ | Wayland: layer-shell surfaces per output, double buffers and frame callbacks, pointer, keyboard, touch, signals and the request files, hover edges | a panel opens by key and by hover in the VM |
+| 0 (done) | Skeleton: config (`PANEL_` lines, theme colours, scheme, corners), the module trait with sizes, the card style, `--render` and `--print-panels`; clock and calendar | renders match the canvas; CI builds and tests it |
+| 1 (done) | Wayland: layer-shell surfaces per output, double buffers and frame callbacks, pointer, keyboard, touch, signals and the request files, hover edges | a panel opens by key and by hover in the VM |
 | 2 | Modules on commands: switches (wifi, bluetooth, dnd, nightlight, keyboard, osk, power, replay), sound, session, search, favorites, apps, windows (foreign toplevel), memory, system | each does what the C one does, VM checks |
 | 3 | Modules on D-Bus and files: tray (StatusNotifierItem), media (MPRIS, Melodyae's queue and lyrics), notifications, clipboard, ask | as the C one, plus the new parts |
 | 4 | The canvas: edit mode (move, resize, snap, overlap, undo, reset, add, done), sizes that show more, child cards beside | VM real-input tests as `vmt/pcanvas.py` |
 | 5 | Desktop widgets: the same modules on a bottom layer under windows, `WIDGETS_` lines, edited the same way | placed, edited, kept across restarts |
 | 6 | Switch: `EDGE_IMPL=rust` the default, a week of use, then the C edge and its tests removed | owner says so |
 | 7 | Everything else Infynitae draws in the same look and the same settings: the lock screen, the password prompt (polkit), the screen-share chooser, the control menu, notifications (mako's theme, or the edge's own popups), the volume and brightness popups, the ask prompts, window corners. Each moves to Rust when it is reworked | one look everywhere; one place to change it |
+| 8 | The config cleaned up (owner, 2026-11-09): one clear file in sections, every setting once with its comment and values, the edge's and widgets' lines together; old names still read and rewritten once to the new ones, `live/config-check` knowing both | an old config works unchanged and is tidied on update |
 
 ## One look, one set of settings
 
