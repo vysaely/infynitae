@@ -78,7 +78,24 @@ pub fn layout_in(
                     .unwrap_or((0.0, 0.0, 0.0, 0.0))
             })
             .collect();
-        let bottom = rects.iter().map(|r| r.1 + r.3).fold(0.0, f64::max);
+        let mut rects = rects;
+        let mut bottom = rects.iter().map(|r| r.1 + r.3).fold(0.0, f64::max);
+        // a module without a place of its own (it showed nothing when the panel was arranged):
+        // under the placed ones, the panel's width, once it has something to show
+        for (it, r) in p.items.iter().zip(rects.iter_mut()) {
+            if it.rect.is_none() {
+                let h = modules::height_in(it, world, th, pw);
+                if h > 0.0 {
+                    let y = if bottom > 0.0 {
+                        bottom + draw::GAP
+                    } else {
+                        0.0
+                    };
+                    *r = (0.0, y, pw, h);
+                    bottom = y + h;
+                }
+            }
+        }
         return (
             rects,
             if p.height > 0 {
@@ -1663,40 +1680,13 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
             }
         }
 
-        if let Ok(boxes_path) = std::env::var("INFYNITAE_EDGE_BOXES") {
-            if !boxes_path.is_empty() {
-                let mut out_str = String::new();
-                out_str.push_str(&format!(
-                    "panel {} {:.0} {:.0} {:.0} {:.0} {}\n",
-                    panel.name,
-                    ox,
-                    oy,
-                    pw,
-                    ph,
-                    if is_editing { "editing" } else { "locked" }
-                ));
-                for (it, r) in panel.items.iter().zip(&rects) {
-                    if r.3 > 0.0 {
-                        out_str.push_str(&format!(
-                            "module {} {:.0} {:.0} {:.0} {:.0}\n",
-                            it.module.word(),
-                            ox + r.0,
-                            oy + r.1,
-                            r.2,
-                            r.3
-                        ));
-                    }
-                }
-                if is_editing {
-                    let (bx, by, bw, bh) = edit_state.bar_rect;
-                    out_str.push_str(&format!("bar {:.0} {:.0} {:.0} {:.0}\n", bx, by, bw, bh));
-                }
-                if let Some((cx, cy, cw, ch)) = drawn_child_rect {
-                    out_str.push_str(&format!("child {:.0} {:.0} {:.0} {:.0}\n", cx, cy, cw, ch));
-                }
-                let _ = std::fs::write(boxes_path, out_str);
-            }
-        }
+        modules::dump_boxes(
+            panel,
+            &rects,
+            (ox, oy, pw, ph),
+            is_editing.then_some(edit_state.bar_rect),
+            drawn_child_rect,
+        );
 
         if std::env::var_os("INFYNITAE_EDGE_RENDER_RECT").is_some() {
             println!(

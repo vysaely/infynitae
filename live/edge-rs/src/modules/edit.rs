@@ -10,9 +10,12 @@ use crate::theme::Theme;
 use cairo::Context;
 
 pub const PAD: f64 = 8.0;
-pub const GAP: f64 = 6.0;
+/// The gap between modules while editing: the same as the stacked layout's, so a resize stops where
+/// the stacked look had its gap and snapping keeps the cards apart as the panels draw them.
+pub const GAP: f64 = crate::draw::GAP;
 
-/// Default modules for built-in panels when Reset is clicked.
+/// Default modules for built-in panels when Reset is clicked: the shipped PANEL_ lines'
+/// (live/config.default; the C edge's defaults).
 pub const DEFAULT_CONTROL: &[Module] = &[
     Module::Clock,
     Module::Volume,
@@ -22,6 +25,7 @@ pub const DEFAULT_CONTROL: &[Module] = &[
     Module::Dnd,
     Module::Night,
     Module::Keyboard,
+    Module::Osk,
     Module::Power,
     Module::Replay,
     Module::Tray,
@@ -319,7 +323,9 @@ pub fn freeze_layout(panel: &mut Panel, laid_out_rects: &[(f64, f64, f64, f64)],
                 r.3.round() as i32,
             ));
         } else {
-            it.rect = Some((PAD as i32, PAD as i32, 0, 0));
+            // shows nothing now (no tray icons, no notifications): no place of its own; it goes
+            // under the placed modules on the day it has something (layout_in)
+            it.rect = None;
         }
     }
     panel.placed = true;
@@ -365,11 +371,25 @@ pub fn calculate_bar_rect(
         bx = 8.0;
     }
 
+    // under the panel; else over it; else (a panel as tall as the screen) beside it, on the side
+    // with room, at the panel's top; always whole on the screen, where the pointer can reach it
+    let total = bh + gh;
     let mut by = oy + ph + 8.0;
-    if by + bh + gh > sh - 8.0 {
-        by = oy - 8.0 - bh - gh;
+    if by + total > sh - 8.0 {
+        by = oy - 8.0 - total;
+        if by < 8.0 {
+            let left = ox - 8.0 - bw;
+            let right = ox + pw + 8.0;
+            if left >= 8.0 {
+                bx = left;
+            } else if right + bw <= sw - 8.0 {
+                bx = right;
+            }
+            by = oy;
+        }
     }
-    (bx, by, bw, bh + gh)
+    by = by.min(sh - 8.0 - total).max(8.0);
+    (bx, by, bw, total)
 }
 
 /// Draws a button tile on the edit overlay.
@@ -661,6 +681,21 @@ pub fn save_panel_commands(panel: &Panel, before_val: &str) -> (String, String) 
 
 #[cfg(test)]
 mod tests {
+    /// The bug from the VM test: a panel grown to the screen's height put the bar under the
+    /// screen's bottom edge, where no click reaches it.
+    #[test]
+    fn the_bar_stays_on_the_screen_beside_a_full_height_panel() {
+        let c = crate::config::Config::from_text("PANEL_T=\"SUPER+T top right 380x400 clock\"\n");
+        let p = c.panels.iter().find(|p| p.name == "t").expect("panel t");
+        let (bx, by, bw, bh) =
+            calculate_bar_rect(p, (1532.0, 8.0), 380.0, 1060.0, (1920.0, 1080.0), false);
+        assert!(by >= 8.0 && by + bh <= 1072.0, "bar at {by}");
+        assert!(
+            bx + bw <= 1532.0 - 8.0,
+            "beside the panel, not over it: {bx}"
+        );
+    }
+
     use super::*;
     use crate::config::Item;
 
@@ -699,12 +734,12 @@ mod tests {
             placed: true,
         };
 
-        // Moving Volume near y=48 (which is Clock bottom at 8 + 34 + GAP 6 = 48)
+        // Moving Volume near y=54 (the clock's bottom at 8 + 34, and the gap of 12)
         let mut x = 12;
-        let mut y = 50;
+        let mut y = 56;
         snap_move(&p, 1, 360.0, &mut x, &mut y, 344, 32);
         assert_eq!(x, 8); // snapped to PAD (8)
-        assert_eq!(y, 8 + 34 + 6); // snapped to clock bottom + GAP = 48!
+        assert_eq!(y, 8 + 34 + GAP as i32);
 
         let mut w = 340;
         let mut h = 30;

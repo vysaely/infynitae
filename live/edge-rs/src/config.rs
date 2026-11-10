@@ -230,7 +230,9 @@ impl Panel {
                 }
                 _ => out += &format!(" {}", it.module.word()),
             }
-            if let (true, Some((x, y, w, h))) = (self.placed, it.rect) {
+            if let (true, Some((x, y, w, h))) =
+                (self.placed, it.rect.filter(|r| r.2 > 0 && r.3 > 0))
+            {
                 out += &format!("@{x},{y},{w}x{h}");
             }
         }

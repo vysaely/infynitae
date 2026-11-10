@@ -389,8 +389,16 @@ pub fn height(it: &Item, world: &World) -> f64 {
             return ph as f64;
         }
     }
-    // Default medium height
+    // the medium look: 234 px with two lines of lyrics, less what has no lyrics to show
+    let ly = &world.media.lyrics;
     234.0
+        - if ly.current.is_empty() {
+            40.0
+        } else if ly.next.is_empty() {
+            16.0
+        } else {
+            0.0
+        }
 }
 
 /// The width text starting at `text_x` (on the screen) may take in a card at `x` of width `w`,

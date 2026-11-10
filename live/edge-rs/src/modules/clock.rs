@@ -3,8 +3,8 @@
 //! # Sizes
 //!
 //! In placed panels or during resizing, size picks the look dynamically:
-//! - **time** (`h < 70.0` or `w < 150.0`): time and date on a line.
-//! - **big** (`70.0 <= h < 200.0`): large time digits with date underneath.
+//! - **time** (`h < 112`): time and date on a line.
+//! - **big** (`112 <= h`): large time digits with date underneath.
 //! - **calendar** (`h >= 200.0 && w >= 250.0`): time face with the month calendar grid.
 
 use crate::config::Item;
@@ -17,8 +17,8 @@ use chrono::Timelike;
 pub fn size_look(w: f64, h: f64) -> &'static str {
     if h >= 200.0 && w >= 250.0 {
         "calendar"
-    } else if h >= 70.0 {
-        "big"
+    } else if h >= 2.0 * PAD_Y + 80.0 {
+        "big" // the big face needs 64 px digits and the date: 2 * PAD_Y + 86, a little less is fine
     } else {
         "time"
     }
@@ -156,7 +156,8 @@ mod tests {
     #[test]
     fn size_look_picks_expected_mode() {
         assert_eq!(size_look(300.0, 50.0), "time");
-        assert_eq!(size_look(300.0, 100.0), "big");
+        assert_eq!(size_look(300.0, 72.0), "time"); // the natural height of the time look
+        assert_eq!(size_look(300.0, 118.0), "big");
         assert_eq!(size_look(200.0, 250.0), "big"); // w < 250 stays big
         assert_eq!(size_look(300.0, 250.0), "calendar");
     }

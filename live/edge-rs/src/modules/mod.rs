@@ -760,6 +760,45 @@ pub fn key(it: &Item, world: &mut World, keysym: u32, ch: Option<char>) -> bool 
     false
 }
 
+/// INFYNITAE_EDGE_BOXES=FILE: the panel's, each module's, the edit bar's and the child card's boxes
+/// in screen coordinates after every drawing, for the VM's real-input tests (vmt/pcanvas.py reads
+/// the same lines from the C edge).
+pub fn dump_boxes(
+    panel: &crate::config::Panel,
+    rects: &[Rect],
+    (ox, oy, pw, ph): Rect,
+    bar: Option<Rect>,
+    child: Option<Rect>,
+) {
+    let Some(path) = std::env::var_os("INFYNITAE_EDGE_BOXES").filter(|p| !p.is_empty()) else {
+        return;
+    };
+    let mut out = format!(
+        "panel {} {ox:.0} {oy:.0} {pw:.0} {ph:.0} {}\n",
+        panel.name,
+        if bar.is_some() { "editing" } else { "locked" }
+    );
+    for (it, r) in panel.items.iter().zip(rects) {
+        if r.3 > 0.0 {
+            out += &format!(
+                "module {} {:.0} {:.0} {:.0} {:.0}\n",
+                it.module.word(),
+                ox + r.0,
+                oy + r.1,
+                r.2,
+                r.3
+            );
+        }
+    }
+    if let Some((x, y, w, h)) = bar {
+        out += &format!("bar {x:.0} {y:.0} {w:.0} {h:.0}\n");
+    }
+    if let Some((x, y, w, h)) = child {
+        out += &format!("child {x:.0} {y:.0} {w:.0} {h:.0}\n");
+    }
+    let _ = std::fs::write(path, out);
+}
+
 /// A module drawn into its rectangle `(x, y, w, h)`, clipped to it: a module never draws over its
 /// neighbours, whatever size it was given.
 pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {

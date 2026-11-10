@@ -612,7 +612,8 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
         return;
     }
     let sw = info(it.module, &world.switches);
-    let look = if (it.rect.is_some() && h < 40.0) || th.switch_look == "icons" {
+    // a name and its state need 32 px; below that a placed switch is its icon
+    let look = if (it.rect.is_some() && h < 32.0) || th.switch_look == "icons" {
         "icons"
     } else if th.switch_look == "tiles" {
         "tiles"

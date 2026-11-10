@@ -502,6 +502,17 @@ impl OutputSurface {
                 surface.flush();
             }
         }
+        modules::dump_boxes(
+            panel,
+            &rects,
+            (ox, oy, pw, ph),
+            shell.edit.active.then_some(shell.edit.bar_rect),
+            if shell.edit.active {
+                None
+            } else {
+                child_draw_rect
+            },
+        );
 
         let wl = self.layer.wl_surface();
         if let Some((ox, oy, ow, oh)) = old_box {
