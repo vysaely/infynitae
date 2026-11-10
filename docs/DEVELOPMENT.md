@@ -11,7 +11,7 @@
 | `crates/infynitae-backend-headless` | An off-screen backend. Its `tests/` are the bulk of the test suite: real Wayland clients against a real compositor. |
 | `crates/infynitae-ipc` | The shell socket (`$XDG_RUNTIME_DIR/infynitae/shell.sock`, JSON lines). |
 | `crates/infynitae` | The binary: command line, picks a backend. |
-| `live/` | The desktop around the compositor: session scripts, environment, shortcut dispatcher, settings sync, and the C helpers (lock, wallpaper, portal, polkit, recorder). |
+| `live/` | The desktop around the compositor: session scripts, environment, shortcut dispatcher, settings sync, and the helpers: C (lock, wallpaper, portal, polkit, recorder, the old edge) and Rust (`live/edge-rs`, its own crate and lockfile; CI job "Edge (Rust)"). |
 | `config/config` | The config template, installed as `~/.config/infynitae/config`. |
 | `vendor/smithay-0.7.0` | Smithay, vendored with four authorized patches (`patches/`). |
 | `patches/xwayland-satellite-*` | Our patch to xwayland-satellite; `live/build-satellite.sh` builds it at install. |
@@ -39,7 +39,7 @@ All of these run in CI on every push, and all must pass before a change lands on
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked          # ~780 tests, a few minutes
+cargo test --workspace --locked          # over 1,000 tests, a few minutes
 tools/verify-architecture                # several minutes
 tools/check-foundation-docs              # and --self-test
 tools/verify-knowledge --content-only    # and --self-test

@@ -26,8 +26,8 @@ the pointer is on.
 
 | Action | Where | What |
 | :--- | :--- | :--- |
-| Super+Enter, `SUPER_ENTER_ACTION="fit"` (default) | `entry.rs` `fit_toggle` | Camera zoom to fit the window under the pointer; again: the camera before. The window is not resized. |
-| Super+Enter, `"maximize"` | `entry.rs` `maximize_toggle` | Zoom reset to 1; the window moves to the usable view's top-left and is asked for the usable size; no other window moves (it covers them, owner 2026-11-06); its place and size before are kept (`saved_floating`). Again: back to them; if the user moved it while maximized (a title bar drag keeps the maximize), back to its size before, centred where it is now (2026-11-06). Remembered with its screen (`Core::maximized`). A resize ends the maximize (2026-11-06). An app's maximize button does the same, except at a zoom other than 1, where it is only answered (apps never move the camera). |
+| Super+Enter, `SUPER_ENTER_ACTION="fit"` (the default without the line; the shipped config sets `"maximize"`) | `entry.rs` `fit_toggle` | Camera zoom to fit the window under the pointer; again: the camera before. The window is not resized. |
+| Super+Enter, `"maximize"` (shipped) | `entry.rs` `maximize_toggle` | Zoom reset to 1; the window is asked for the usable size and placed where it covers no other window: the view's top-left when that is free, else the nearest free spot on the canvas, out of view if need be, and Super+Space goes to it (owner, 2026-11-10); no other window moves; its place and size before are kept (`saved_floating`). Again: back to them; if the user moved it while maximized (a title bar drag keeps the maximize), back to its size before, centred where it is now (2026-11-06). Remembered with its screen (`Core::maximized`). A resize ends the maximize (2026-11-06). An app's maximize button does the same, except at a zoom other than 1, where it is only answered (apps never move the camera). |
 | Super+Shift+Enter, an app's `set_fullscreen` | `entry.rs` `toggle_fullscreen`, `protocol.rs` (M9) | Protocol fullscreen on the pointer's screen: the screen shows only it, at the screen's logical size rounded down (F-PRESENT-1). Nothing on the Canvas moves (owner, 2026-10-31). Leaving: the size before (`FullscreenState.saved`); at its first windowed frame the window keeps its place if it is free at the size it draws, else it moves to the nearest free spot (it came back larger, or a window took its place); it never pushes (`returned_from_fullscreen`). A Super+drag out of fullscreen places it where the user lets go. |
 | Super+right drag | `protocol.rs` `begin_resize`/`resize_to`/`end_resize` | From the nearest corner; one configure outstanding at a time; the opposite corner stays; no other window moves. Super+Shift+right drag scales a cluster. |
 | App's `set_maximized`/`set_minimized` | `protocol.rs` `toplevel_request`, `entry.rs` `client_minimize` | Minimize (2026-11-07): only the focused window and never a fullscreen one (Wine asks it of a game that lost the focus); it is hidden, still open and listed, until picked from the windows list or asked for by its app or a taskbar. Maximize: the compositor's maximize is Super+Enter. Asked before the window is shown (Firefox or Discord reopening maximized), it is granted at map (`maximize_opened`): the screen's room in the nearest space free of other apps' windows, not the screen in view over them (owner, 2026-11-07). |
@@ -46,7 +46,7 @@ next window switch.
 | Super+left drag / Super+Shift+left drag | Move the window / its cluster; out of fullscreen at the window's size before it. It may be dropped over other windows: nothing is pushed or kept apart (left as it is for the owner to decide). |
 | Super+right drag | Resize from the nearest corner; no other window moves, it may cover them (owner, 2026-11-06). |
 | Touch: three fingers | Move or resize the window under them (see the touch design notes). |
-| Super+Tab | Focus the next window; with `FOCUS_CYCLE_NAVIGATE` centre the camera on it. |
+| Super+Tab | Flip between the last two windows (one asking for attention first); with `FOCUS_CYCLE_NAVIGATE` centre the camera on it. |
 | Super+1..9 / Super+Shift+1..9 | Focus window / cluster N (creation order), raise, centre the camera (zoom 1) / frame the cluster. |
 | Click | Focus and raise the window under the pointer. |
 | Super+Space / Super+Shift+Space | Centre the focused window in the usable area at zoom 1 / at the current zoom. A window as large as the whole screen is lined up with it at zoom 1; only a window larger than the screen is zoomed out until it fits, with a 12 px margin (2026-11-06). Super+1..9, a two-finger double tap and TELEPORT_ON_OPEN centre the same way. |
@@ -70,10 +70,7 @@ title, anchor, size, fullscreen flag and maximized state (its place and size bef
 and each screen's camera centre. At login it launches each app, moves each new window of a saved
 app to the next saved anchor of that app (unless a window open before covers it), asks it for its
 saved size or maximizes it again on the first screen (`resize_element`, 2026-10-31), and puts the
-camera centres back. Not restored: zoom, fullscreen state. In the VM device runs (before 2026-10-31), the start terminal shown "NOT wholly on screen"
-was pushed aside by the test's own oversized XTerm, which took the middle of the view; it was not
-a restore misplacement. Since the free-space rule the XTerm goes to free space and the terminal
-stays.
+camera centres back. Not restored: zoom, fullscreen state.
 
 ## Tests
 
@@ -83,8 +80,3 @@ and every change between them; unplug; Super+Shift+Enter moves nothing), `t1_pro
 (room, oversize fit), `t1_fit_constraints`, `t1_fit_bindings`, `t1_window_slots`,
 `t1_window_drag`, `t1_fullscreen`, `t1_transform`, `t1_outputs`. Free space (new windows near
 the cursor, self-resize, back from fullscreen in every way): `t1_window_states` too.
-
-## Open questions (not changed)
-
-Placement and the room follow the first screen only (owner, 2026-10-31: kept). Session restore does not bring back zoom or
-fullscreen.

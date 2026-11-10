@@ -11,8 +11,8 @@
 | **applicability** | Future Phase G milestone |
 | **affected_branches** | N/A (Upcoming Increment) |
 | **related_invariants** | INV-ARCH-3, INV-PRES-1 |
-| **adoption_status** | PROPOSED |
-| **next_action** | Draft Phase G architectural specification |
+| **adoption_status** | IMPLEMENTED |
+| **next_action** | None: the DRM backend exists (crates/infynitae-backend-drm) |
 
 ---
 

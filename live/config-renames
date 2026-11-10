@@ -4,4 +4,4 @@
 ENABLE_ISLAND        ENABLE_EDGE          # the island became the edge, 2026-10-31
 ISLAND_EDGE          EDGE_POSITION
 ISLAND_CONTROL_SIDE  EDGE_CONTROL_SIDE
-CONTROL_MODULES      -                    # the control panel's modules: PANEL_CONTROL since 2026-11-07
+CONTROL_MODULES      -                    # the control panel's modules: still read by the edge, not rewritten; PANEL_CONTROL since 2026-11-07

@@ -10,10 +10,10 @@ This document records the exact provenance, source revisions, laboratory logs, t
 - **Repository:** `https://github.com/malbiruk/driftwm`
 - **Author:** Klim Kostiuk
 - **License:** **GPL-3.0-or-later** (Strict restriction: zero source code copying permitted into Infynitae Native)
-- **Exact Upstream Commit Audited:** [`352333a8fa1b22171492d4b71a54102045c9a19d`](file:///home/<user>/.gemini/antigravity/scratch/driftwm) (HEAD of `main`, version `0.19.0` + commits)
-- **Upstream Smithay Snapshot:** Git revision [`4cf0b62028039661477d482ec4758b687d8f4392`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/Cargo.toml#L9) (upstream `Smithay/smithay.git` master)
+- **Exact Upstream Commit Audited:** `352333a8fa1b22171492d4b71a54102045c9a19d` (HEAD of `main`, version `0.19.0` + commits)
+- **Upstream Smithay Snapshot:** Git revision `4cf0b62028039661477d482ec4758b687d8f4392` (upstream `Smithay/smithay.git` master)
 - **Rust Toolchain:** Edition 2024, `rust-version = "1.88"`
-- **Key Caveats Document:** [`dev/docs/caveats.md`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/dev/docs/caveats.md)
+- **Key Caveats Document:** `dev/docs/caveats.md`
 
 ### 1.2 Microsoft Windows Graphics Internals Baseline
 - **Subject:** Desktop Window Manager (DWM), DirectX Graphics Infrastructure (DXGI), Windows Display Driver Model (WDDM 1.0–3.2)

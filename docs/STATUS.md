@@ -1,6 +1,6 @@
 # Status
 
-Updated 2026-10-31.
+Updated 2026-11-10 (the edge, widgets and the newest window rules: docs/EDGE_RUST.md, docs/DECISIONS.md).
 
 Infynitae is my daily desktop. It is young and has only run on my own machine, so expect rough
 edges on other hardware.
@@ -10,7 +10,7 @@ edges on other hardware.
 - **The spatial model:** the endless canvas, a camera per screen (pan, zoom, fit, overview),
   clusters, window slots, fullscreen you can pan out of. The core is a pure state machine with
   no Wayland code in it, tested exactly.
-- **The test suite:** about 830 tests, most of them real Wayland clients against a headless
+- **The test suite:** over 1,000 tests (1,055 `#[test]` in the crates, counted 2026-11-10), most of them real Wayland clients against a headless
   compositor. `tools/verify-test-efficacy` seeds bugs on purpose to prove the tests catch them,
   and `tools/verify-architecture` checks that the architecture holds.
 - **The desktop:** lock screen, wallpaper, screenshots, clipboard history, session restore,
@@ -59,7 +59,7 @@ These pass the test suite but have not run on a real screen or device yet:
   - **Panels (Super+W, Super+L, Super+A, Super+V):** one look (sans-serif 12-15 px, 32 px rows,
     hairline outlines, the accent only for what is selected or on); the launcher, window list and
     clipboard are one-column lists with every item reachable (Up/Down, Page Up/Down); the control
-    panel spells everything out; **Restart and Shut down need a second press within 3 s.**
+    panel spells everything out.
   - **Faster shortcuts** (24 ms of shell setup a press down to 8 ms), the wallpaper no longer
     keeps its decoded image (about 70 MB with a large wallpaper).
 
@@ -150,17 +150,6 @@ These pass the test suite but have not run on a real screen or device yet:
   (`zwlr_virtual_pointer_v1`). Tested end to end on a private bus against a headless compositor,
   not yet with a real app.
 - **The session scripts and the C helpers** have the least test coverage of anything here.
-- **New key defaults (2026-10-31),** by the rule "often used on the left hand, rare on the
-  right": **Super+Tab** flips between the last two windows, Super held or not, and
-  **Super+arrow** goes to the nearest window that way (2026-11-01). **Super+W** opens the app launcher, recently started apps first, and **Super+L** lists only the
-  open windows (2026-11-01). A window that
-  opened without the focus (`FOCUS_ON_OPEN` "user" or "priority") or whose request to be focused
-  was refused asks for attention: Super+Tab goes to it first and brings it into view, the edge
-  (Super+L) marks its tile with an accent dot and line, and `infynitae msg snapshot` says
-  `"attention": true` on it. **Super+S** takes a region screenshot (Super+Shift+S the whole
-  screen), **Super+Shift+O** turns tearing on for a window, **Super+Alt+P** starts or stops
-  recording; Super+Shift+R, Super+Shift+T and Super+Alt+R still work. In the test suite; not
-  yet used day to day.
 
 ## Missing
 

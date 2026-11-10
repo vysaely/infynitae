@@ -11,8 +11,8 @@
 | **applicability** | Future Phase G native DRM backend |
 | **affected_branches** | N/A (Phase G Milestone) |
 | **related_invariants** | INV-PRES-1 |
-| **adoption_status** | PROPOSED |
-| **next_action** | Implement test harness in infynitae-backend-headless with mock DRM planes |
+| **adoption_status** | IMPLEMENTED |
+| **next_action** | None: direct scanout is in the DRM backend; checked on the real PC, not by a mock-plane harness |
 
 ---
 

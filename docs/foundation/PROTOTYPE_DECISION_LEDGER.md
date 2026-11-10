@@ -96,7 +96,7 @@ Each row carries forward one row of the Phase A table above, which stays unchang
 
 ### PL-09 — Protocol-state organization
 - **Class (Phase A, unchanged):** REIMPLEMENT
-- **Effective consequence:** five-crate split; core without Smithay
+- **Effective consequence:** seven crates; core without Smithay
 - **Justified by:** INV-ARCH-1
 - **ADR:** ADR-08, ADR-12
 
@@ -168,7 +168,7 @@ Each row carries forward one row of the Phase A table above, which stays unchang
 
 ### PL-21 — Placement policy
 - **Class (Phase A, unchanged):** DEFER
-- **Effective consequence:** Level D decision recorded 2026-10-13 (FOUNDATION_ARCHITECTURE §C12.F1), amended 2026-10-14 (§C12.F5): a new toplevel is centred in the usable region at its first windowed presentation (INV-STAGE-1); an oversized one is aligned to the region's origin (F-PLACE-1). Camera default placement stays Level D (INV-CAMERA-3)
+- **Effective consequence:** Level D decision recorded 2026-10-13 (FOUNDATION_ARCHITECTURE §C12.F1), amended 2026-10-14 (§C12.F5): a new toplevel opens in free space near the pointer at its first windowed presentation (cluster placement, F-PLACE-1; it was centred in the usable region until 2026-10-31) (INV-STAGE-1); an oversized one is aligned to the region's origin (F-PLACE-1). Camera default placement stays Level D (INV-CAMERA-3)
 - **Justified by:** INV-STAGE-1
 - **ADR:** —
 
@@ -180,7 +180,7 @@ Each row carries forward one row of the Phase A table above, which stays unchang
 
 ### PL-23 — Data device
 - **Class (Phase A, unchanged):** ADAPT
-- **Effective consequence:** clipboard plumbing follows ActiveElementFocus; DnD is a client-owned grab sequence
+- **Effective consequence:** clipboard plumbing follows ActiveElementFocus; drag-and-drop is refused (OB-59)
 - **Justified by:** INV-INPUT-1, INV-INPUT-8
 - **ADR:** ADR-07
 

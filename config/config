@@ -131,7 +131,7 @@ KEEP_ON_TOP="Picture-in-Picture, Picture in picture"
 
 SUPER_ENTER_ACTION="maximize"
     # Super+Enter
-    # default: maximize
+    # default: maximize (a config without this line: fit)
     #   maximize    the window fills the view at 100%
     #    fit        zoom the camera to the window
 
@@ -366,7 +366,7 @@ WALLPAPER_MODE="fill"
 WALLPAPER_PARALLAX="off"
     # Depth: while the view moves the wallpaper shifts a little against it, as far things do, and
     # settles back to the middle in about a second after (nothing is redrawn; the image is held
-    # 3%, strong 6%, larger than the screen) [save]
+    # larger than the screen: subtle 3%, strong 6%) [save]
     # default: off
     # options: off  · subtle  · strong
 
@@ -403,6 +403,7 @@ VRR_ENABLED="auto"
     # default: auto
     #   auto    while a window is fullscreen  · on  · off
     #   (display tools can switch it per screen: wlr-randr --adaptive-sync)
+    # VRR="..." and ADAPTIVE_SYNC="..." are read as this setting too
 
 VIRTUAL_SCREEN="auto"
     # With no screen connected (monitor off or unplugged), a virtual 1920x1080 one stands in,
@@ -427,6 +428,8 @@ AUTO_ROTATE="auto"
     # Turn the laptop's own screen with the device (convertibles; needs iio-sensor-proxy)
     # default: auto
     # options: auto  · false
+    #AUTO_ROTATE_INVERT="true"   swaps 90 and 270, for a sensor mounted the other way round
+    #AUTO_ROTATE_OUTPUT="eDP-1"  the screen to turn (default: the built-in one)
 
 OUTPUT_ORDER=""
     # Screens left to right
@@ -435,6 +438,7 @@ OUTPUT_ORDER=""
     #         ~/.local/state/infynitae/session.log)
 
 OUTPUT_LAYOUT="left-to-right"
+    # The order screens are placed in when OUTPUT_ORDER is empty
     # default: left-to-right
     # options: left-to-right  · right-to-left
 
@@ -534,8 +538,8 @@ MENU_PICKER=""
     #   ""    fuzzel --dmenu  · any dmenu-style command, e.g. "rofi -dmenu"
 
 CONTROL_MENU="auto"
-    # Super+A — Wi-Fi, Bluetooth, sound output, power mode, do not disturb (the parts whose
-    # tools are installed)
+    # Super+A — Wi-Fi, Bluetooth, volume (all sound or one app), sound output, power mode, do
+    # not disturb (the parts whose tools are installed)
     # default: auto
     # options: auto  · a command
 
@@ -583,11 +587,12 @@ FAVORITES=""
 #   MODULES stacked in the order written; one with nothing to show hides itself:
 #           search  favorites  apps  windows  clipboard  clock  volume  media  wifi  bluetooth
 #           dnd  nightlight  keyboard  osk  power  replay  tray  notifications  session
+#           calendar  memory  system  (these three: the Rust edge only)
 #           (clock: a click shows the month; media: the player playing, hidden when none;
 #           nightlight: warmer colours, NIGHT_LIGHT_TEMP; keyboard: the next layout, shown with
 #           more than one in XKB_DEFAULT_LAYOUT; osk: the on-screen keyboard, shown with squeekboard
 #           installed; bluetooth's list: Find new devices pairs one)
-#   A module's look: module:look, smallest first (none written: the middle one shown here):
+#   A module's look: module:look, smallest first (none written: the switches tile, search bar, clock time):
 #           the switches (wifi bluetooth dnd nightlight keyboard osk power replay):
 #             small (a quarter row, the name only)  tile (half a row, name and state)  wide (the row)
 #           search: hidden (shows once you type)  bar      clock: time  big  calendar (month shown)
@@ -608,7 +613,7 @@ PANELS_OVERLAP="false"
 # Four panels are built in; a line for one of them changes only what it says (PANEL_CONTROL="left"
 # moves it and keeps its key and modules). Any other name is a new panel:
 #   PANEL_APPS="SUPER+W top center search favorites apps"
-#   PANEL_CONTROL="SUPER+A top right hover clock volume media wifi bluetooth dnd nightlight keyboard power replay tray notifications session"
+#   PANEL_CONTROL="SUPER+A top right hover clock volume media wifi bluetooth dnd nightlight keyboard osk power replay tray notifications session"
 #   PANEL_WINDOWS="SUPER+L top center hover search windows"
 #   PANEL_CLIPBOARD="SUPER+V top center search clipboard"
 #   PANEL_MEDIA="SUPER+M right center 320 volume tray"      a panel of your own
@@ -739,7 +744,8 @@ REMOTE_DESKTOP="false"
 
 
 # ═══ Screen recorder & replay buffer ═══════════════════════════════════════════════ [use] ═══
-# A rolling buffer in RAM: about 110 MB per minute, frames copied through the CPU.
+# A rolling buffer in RAM: at most about 135 MB per minute (the recorder's own estimate, 18 Mbit/s),
+# frames copied through the CPU.
 # Super+Alt+C saves a clip, Super+Alt+P (or Super+Alt+R) records. Changes apply when the recorder restarts:
 # infynitae-reload recorder.
 
@@ -776,6 +782,7 @@ RECORD_AUDIO="desktop"
     # The system's default devices (the microphone only for mic or both)
     # default: desktop
     # options: desktop  · mic  · both  · none
+    #RECORD_NOTIFY="false"   no notification when recording starts, stops or a clip is saved
 
 
 UPDATE_SIGNING_KEY=""
@@ -797,12 +804,14 @@ UPDATE_SIGNING_KEY=""
 #           Super+Shift+O  tearing    Super+Shift+P  privacy
 #           Super+Shift+I  stay awake    Super+Alt+P  record    Super+Alt+C  replay clip
 #           Super+Shift+BackSpace  reload
+#   Windows: Super+Enter  maximize or fit    Super+Shift+Enter  fullscreen
+#           Super+Shift+Space  centre, keep the zoom    Super+Shift+K  keep on top
 #   Old keys kept as aliases: Super+Shift+R (region screenshot), Super+Shift+T (tearing),
 #   Super+Alt+R (record).
 # Give an action other keys (all its built-in ones are freed), or free them with "none":
 #   BIND_<ACTION>="CHORD[,CHORD]"       e.g. BIND_TERMINAL="SUPER+RETURN"
 #   FOCUS_NEXT FOCUS_LEFT FOCUS_RIGHT FOCUS_UP FOCUS_DOWN OVERVIEW WINDOWS LAUNCHER TERMINAL FILE_MANAGER SYSTEM_MONITOR SCREENSHOT REGION_SCREENSHOT RELOAD LOCK
-#   CLIPBOARD CONTROL PRIVACY IDLE_INHIBIT TEARING SAVE_REPLAY RECORD FIT FULLSCREEN CLOSE
+#   CLIPBOARD CONTROL PRIVACY IDLE_INHIBIT TEARING SAVE_REPLAY RECORD FIT FULLSCREEN KEEP_ON_TOP CLOSE
 #   FORCE_CLOSE RECENTER RECENTER_KEEP_ZOOM
 # Run a command:
 #   EXEC_<NAME>="CHORD:command"         e.g. EXEC_BROWSER="SUPER+B:firefox"

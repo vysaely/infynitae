@@ -5,7 +5,7 @@ endless canvas, and each screen is a camera you pan and zoom over it.
 
 A fresh install is a complete desktop: terminal, launcher, lock screen, wallpaper, screenshots,
 screen sharing, clipboard history and session restore. Every piece is a setting you can swap or
-turn off, every key can be rebound, and the whole configuration is one commented file.
+turn off, most keys can be rebound, and the whole configuration is one commented file.
 
 **Status:** my daily desktop, tested on my own hardware only. [docs/STATUS.md](docs/STATUS.md)
 says what is solid, what is untested and what is missing.
@@ -79,8 +79,12 @@ right.
 | `Super + Shift + S` or `Print` | Screenshot of the whole screen |
 | `Super + V` | Clipboard history |
 | `Super + A` | Control menu: Wi-Fi, Bluetooth, volume (all sound or one app), sound output, power, battery limit, do not disturb |
-| `Super + L` | Lock |
-| `Super + C` | Close the window (`Shift`: force) |
+| `Super + L` | List of open windows |
+| `Super + Shift + L` | Lock |
+| `Super + Shift + C` | Close the window |
+| `Super + Delete` | Force close (ends the app) |
+| `Super + Shift + K` | Keep the window on top |
+| `Super + Shift + Escape` | System monitor |
 | `Super + Shift + P` | Hide the window from screenshots and sharing |
 | `Super + Shift + I` | Stay awake |
 | `Super + Shift + O` | Tearing for the window while fullscreen: lowest latency for games (`Super + Shift + T` too) |
@@ -119,6 +123,10 @@ within seconds it stops restarting. `infynitae-session stop` ends the session.
 | [STATUS](docs/STATUS.md) | What works, what is untested, what is missing |
 | [ROADMAP](docs/ROADMAP.md) | What comes next, and ideas such as desktops on the canvas |
 | [COMPONENTS](docs/COMPONENTS.md) | Every piece of the desktop and what to use instead |
+| [WINDOWS](docs/WINDOWS.md) | Where windows open, move and grow, and why |
+| [SECURITY](docs/SECURITY.md) | Who may capture the screen, read the clipboard, send input |
+| [EDGE_RUST](docs/EDGE_RUST.md) | The edge (panels, widgets) in Rust: settings and stages |
+| [NO_SLOP](docs/NO_SLOP.md) | The rule for everything made here: no padding, nothing invented |
 | [DEVELOPMENT](docs/DEVELOPMENT.md) | Layout, building, the test suite and the checks |
 | [DECISIONS](docs/DECISIONS.md) | The choices behind how it behaves, and why |
 | [foundation/](docs/foundation) | The design specification: invariants, state machines, formulas |

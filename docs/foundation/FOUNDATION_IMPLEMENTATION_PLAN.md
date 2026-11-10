@@ -12,7 +12,6 @@ The order derives from:
 - the obligation graph (FOUNDATION_TEST_PLAN.md);
 - authority dependencies (FOUNDATION_INVARIANTS.md).
 
-It is **not** "finish core → finish Wayland → finish renderer → finish input".
 
 **Work categories** (exactly one per increment):
 - **ENFORCE:** probes, dependency/source checks, lints, the doc checker. Closes enforcement obligations only.
@@ -25,7 +24,7 @@ It is **not** "finish core → finish Wayland → finish renderer → finish inp
 - **NESTED:** a client inside the live session; explicit per-run authorization.
 - **EXCLUSIVE_HARDWARE:** DRM/KMS/VT ownership; separate explicit authorization; never casually during the user's working session.
 
-Future crate names follow ARCHITECTURE C1.1: `infynitae-core`, `infynitae-wayland`, `infynitae-backend-headless`, `infynitae-backend-winit`, `infynitae` (bin), `infynitae-ipc` (C7). Phase G adds `backend-drm`.
+Crates: `infynitae-core`, `infynitae-wayland`, `infynitae-ipc`, `infynitae-backend-headless`, `infynitae-backend-winit`, `infynitae-backend-drm`, `infynitae` (bin).
 
 ## Dependency graph
 
@@ -257,7 +256,7 @@ No PRODUCT increment may create a state where **persistent zoom ≠ 1 and camera
 - **Stop / rollback:** any camera change from client geometry; any presented rect that differs from Core's canonical rect.
 - **Architecture decision required first:** **yes: OB-24's decision**, recorded by C12.F14 (G-OB24, C12.F14.5), and the render handoff and fit rule, recorded by C12.F15. OB-24 itself stays OPEN until this increment's exit evidence is accepted through architecture change control.
 - **Why here:** zoom is reachable only through fit in Foundation 01. It is valuable but not foundational, and it is gated.
-- **Implementation status (2026-10-18):** implemented on local `main` (`b46021f`, `2884287`, `cdf3a09`, `73c0aca` and the evidence commit), not pushed. Exit evidence for items 1–11 is produced (evidence/phase-f/INC-10/IMPLEMENTATION_RECORD_2026-10-18.md) and **not accepted**: it waits for independent review and architecture change control, with four findings for change control (the C12.F15.5 crop formula, the crop box's i32 span, "exactly" in C12.F15.4, the Level D bindings). OB-24 stays OPEN. **Exit review (2026-10-18):** independent review of `c4a7263`: READY AFTER SPECIFIED GOVERNANCE CLARIFICATIONS. Its finding M1 (no pointer reconciliation after a fit or restore under a kept confinement) is fixed on local `main` with T1 tests and seeded controls, and Logo+F / Logo+Shift+F match their modifiers exactly (evidence/phase-f/INC-10/M1_RESOLUTION_RECORD_2026-10-18.md); the clarifications are prepared, not adopted, as the C12.F17 package (evidence/phase-f/C12-F17/); follow-ups OB-54 … OB-58. Still not accepted; OB-24 stays OPEN. **C12.F17 adopted 2026-10-20** (`56b3f12`). **Ratified 2026-10-20** (owner authorization 2026-10-20; exit evidence accepted through change control, `evidence/phase-f/INC-10/CHANGE_CONTROL_RECORD_2026-10-20.md`; ratified commit `faf6dda`; record evidence/phase-f/INC-10/RATIFICATION_RECORD_2026-10-20.md); OB-24 stays OPEN.
+- **Implementation status:** implemented and on `main`; records in `docs/archive/evidence/phase-f/INC-10/`.
 
 ### INC-11 — Shell IPC
 - **Category:** PRODUCT
@@ -274,7 +273,7 @@ No PRODUCT increment may create a state where **persistent zoom ≠ 1 and camera
 - **Entry conditions:** INC-6, INC-7 exits.
 - **Stop / rollback:** any shell path writing state outside the single-writer paths.
 - **Architecture decision required first:** no (shell UX PROV-10 stays provisional).
-- **Implementation status (2026-10-20):** implemented on branch `feature/inc11-shell-ipc-2026-10-20` (owner decisions 2026-10-20, evidence/phase-f/INC-11/DECISION_RECORD_2026-10-20.md); exit evidence in evidence/phase-f/INC-11/IMPLEMENTATION_RECORD_2026-10-20.md, **not accepted**; layer C12.F18 prepared, not adopted. Not `main`, not pushed.
+- **Implementation status:** implemented and on `main`; records in `docs/archive/evidence/phase-f/INC-11/`.
 
 ### INC-12 — xwayland-satellite supervisor
 - **Category:** PRODUCT
@@ -386,17 +385,3 @@ The cross-output drag definition (F-DRAG-1) is an open decision (OB-34). Interac
 
 No increment freezes a provisional value. PROV-1…PROV-11 (FOUNDATION_ARCHITECTURE §PROV) freeze only through their owning obligations at the tier their records name. Increments use the candidate values and keep them configurable.
 
-## Next-risk rationale (summary)
-
-| Step | Retires | Nearest alternative | Why the chosen step first |
-|---|---|---|---|
-| INC-0 | authority-path risk at the very first commit | start with core types | enforcement after code exists is the documented failure mode (ADR-12) |
-| INC-1 | NB-12 / A-C1: harness evidence vs the production seam | input or renderer first | every later increment rests on this seam; it is the cheapest falsifier |
-| INC-2 | multi-output projection, output authority (PD-F2-18 class) | input | membership is a prerequisite of scale, frames and focus semantics |
-| INC-3 → INC-5 | input authority (Level-A-class findings PD-F2-02/03/04) | scale first | authority divergence is worse than churn; constraints need focus |
-| INC-6 | churn contract | frames | needs membership + interactions; frames are independent and can follow |
-| INC-7 | mandatory protocol answers | IPC | needs focus; protocol compliance precedes shell features |
-| INC-8 | liveness/idle | — | independent; can parallelise |
-| INC-9 → G-OB24 → INC-10 | the open zoom decision | ship zoom with the residual | OB-24 must not become an implementation default |
-| INC-11 → INC-14 | shell, X11, real GPU, move/resize | — | lower architectural uncertainty; G-OB34 gates move/resize |
-| INC-15 → INC-17 | physical truth | — | separately authorized; never implied by Phase F |

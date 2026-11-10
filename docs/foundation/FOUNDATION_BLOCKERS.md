@@ -10,7 +10,6 @@ Status vocabulary:
 - `APPLIED`: a D-F1 applied in the D7 refinement layer;
 - `NOTED`: D-F0 clarification.
 
-Original finding text: the sections above (PD-F2) and audit/README (PD-F1-01…09, PD-F0-01…09, historical).
 
 <!-- living:PDF -->
 ### PD-F2-01
