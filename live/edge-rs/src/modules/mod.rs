@@ -1023,9 +1023,10 @@ pub fn draw_panel(
                 }
                 i = j;
             } else {
-                let h = rects.get(i).map(|r| r.3).unwrap_or(0.0);
-                if h > 0.0 {
-                    y += h + draw::GAP;
+                // the next card starts under this one; two halves share a row (their own rects
+                // say where: adding both heights put the Quick settings card too low)
+                if let Some(r) = rects.get(i).filter(|r| r.3 > 0.0) {
+                    y = y.max(r.1 + r.3 + draw::GAP);
                 }
                 i += 1;
             }

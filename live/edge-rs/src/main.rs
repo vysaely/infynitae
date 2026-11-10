@@ -2992,6 +2992,26 @@ mod tests {
         assert!(sh.edit.active, "the power buttons' corner: editing");
     }
 
+    /// Two halves before the switches: the Quick settings card is drawn where its switches are
+    /// (it was drawn as far down as both halves stacked).
+    #[test]
+    fn the_switch_card_sits_under_a_pair_of_halves() {
+        let line = "PANEL_CONTROL=\"top right 380 clock@half volume@half wifi bluetooth\"\n";
+        let mut sh = Shell::from_config(Config::from_text(line));
+        sh.world.switches.ready = true;
+        assert!(sh.toggle_named("control"));
+        let panel = sh.cfg.panels[sh.open.unwrap()].clone();
+        let (rects, _) = layout_in(&panel, 380.0, &sh.world, &sh.theme);
+        let br = modules::flow::block_rects(&panel, &rects, &sh.world, &sh.theme, 380.0);
+        let row = rects[0].3.max(rects[1].3);
+        let card = br.iter().find(|(b, _)| *b == 2).unwrap().1;
+        assert_eq!(card.1, row + draw::GAP, "the card starts under the row");
+        assert!(
+            rects[2].1 > card.1 && rects[2].1 < card.1 + card.3,
+            "its switches are in it"
+        );
+    }
+
     #[test]
     fn cancel_puts_the_panel_back() {
         let line = "PANEL_CONTROL=\"SUPER+A top right 380 hover clock volume session\"\n";
