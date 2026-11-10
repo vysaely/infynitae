@@ -214,8 +214,10 @@ these by date, e.g. "(owner, 2026-10-24)".
   supposed to move is the one getting resized", "maximize moves the window itself, not the
   other windows". A resize of any kind and a maximize change only that window; the push along
   the cluster (2026-10-31) is gone. A resize may cover a neighbour; a maximize does not since
-  2026-11-09 ("it should fullscreen to the free space nearby"): it grows into the largest free
-  part of the screen around the window, 12 px from the neighbours, and the whole screen only
-  when nothing else is in view. A window that already fills its gap does not change. Resizing a maximized window
+  2026-11-09 ("it should fullscreen to the free space nearby"): since 2026-11-10 it takes the
+  screen's size where it covers no other window, the view's top left when that is free, else the
+  nearest free spot on the canvas, out of view if need be; the camera stays, and Super+Space goes
+  to it ("it's supposed to go out of the viewport so I could Super+Space to it and it would be
+  fullscreen"; 2026-11-09 to 11-10 it shrank into the free part of the screen instead). Resizing a maximized window
   ends the maximize. New windows still open in free space, and a window that grows by itself
   still moves itself off its neighbours.

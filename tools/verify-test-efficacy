@@ -2063,9 +2063,9 @@ CONTROLS = [
      "infynitae-backend-headless", ["--test", "t1_window_states"],
      "back_from_fullscreen_larger_it_moves_to_free_space"),
     # ---- follow-ups (owner, 2026-10-31)
-    ("maximize (2026-11-09): the window covers its neighbours instead of growing into the gap", f"{CORE}/entry.rs",
-     "                let Some(gap) = crate::protocol::largest_gap(view_rect, &others, window) else {",
-     "                let Some(gap) = crate::protocol::largest_gap(view_rect, &[], window) else {",
+    ("maximize (2026-11-10): the window covers its neighbours instead of going to free space", f"{CORE}/entry.rs",
+     "                if crate::protocol::overlaps_any(&others, (tl.x, tl.y, size.0, size.1)) {",
+     "                if false && crate::protocol::overlaps_any(&others, (tl.x, tl.y, size.0, size.1)) {",
      "infynitae-core", ["--lib"], "maximize_moves_only_the_maximized_window"),
     ("INV-OUTPUT-2 (2026-10-31): a bar does not refit a maximized window", f"{CORE}/layer.rs",
      "            for id in self.refit_maximized(output, &mut fx) {\n",

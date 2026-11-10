@@ -918,16 +918,15 @@ impl Core {
     /// the usable screen area, or restores it.
     /// Without `proof` (an app's own button) no camera is written: apps never move it, so at
     /// another zoom than 1 the window stays as it is and the app is only answered.
-    /// `into_gap`: the window grows only into the free space around it on the screen
-    /// (`largest_gap`), covering no other window (owner, 2026-11-09); otherwise it fills the
-    /// whole usable area (a window opening maximized, which `maximize_opened` then moves to free
-    /// canvas).
+    /// `into_free`: the window takes the screen's size where it covers no other window, out of
+    /// view if need be (owner, 2026-11-10); otherwise it fills the usable area where the view is
+    /// (a window opening maximized, which `maximize_opened` then moves to free canvas).
     fn maximize_toggle(
         &mut self,
         proof: Option<authority::Authorized>,
         output: OutputId,
         element: crate::stage::ElementId,
-        into_gap: bool,
+        into_free: bool,
         out: &mut Vec<Effect>,
     ) {
         if self.stage.mapped(element).is_none() {
@@ -1001,22 +1000,10 @@ impl Core {
                 return;
             };
 
-            let mut canvas_w = usable.2.round().max(1.0) as i32;
-            let mut canvas_h = usable.3.round().max(1.0) as i32;
+            let canvas_w = usable.2.round().max(1.0) as i32;
+            let canvas_h = usable.3.round().max(1.0) as i32;
             let mut tl = tl;
-            if into_gap {
-                let view_rect = (
-                    tl.x,
-                    tl.y,
-                    tl.x + i64::from(canvas_w),
-                    tl.y + i64::from(canvas_h),
-                );
-                let window = (
-                    anchor.x,
-                    anchor.y,
-                    anchor.x + i64::from(orig_size.w),
-                    anchor.y + i64::from(orig_size.h),
-                );
+            if into_free {
                 // its own dialogs do not count: they sit over it
                 let others: Vec<_> = self
                     .stage
@@ -1033,13 +1020,17 @@ impl Core {
                         (w > 0 && h > 0).then_some((a.x, a.y, a.x + w, a.y + h))
                     })
                     .collect();
-                // no gap larger than the window: it already fills its room, nothing changes
-                let Some(gap) = crate::protocol::largest_gap(view_rect, &others, window) else {
-                    return;
-                };
-                tl = crate::geom::CanvasPoint { x: gap.0, y: gap.1 };
-                canvas_w = (gap.2 - gap.0) as i32;
-                canvas_h = (gap.3 - gap.1) as i32;
+                // the screen's size, where it covers no other window: the view's top left when
+                // that is free, else the nearest free spot on the canvas, out of view if need be
+                // (owner, 2026-11-10: "it's supposed to go out of the viewport so I could Super+Space
+                // to it and it would be fullscreen"); the camera stays where it is
+                let size = (i64::from(canvas_w), i64::from(canvas_h));
+                if crate::protocol::overlaps_any(&others, (tl.x, tl.y, size.0, size.1)) {
+                    let (x, y) = self
+                        .free_spot_near(&others, size, (tl.x, tl.y))
+                        .unwrap_or_else(|| crate::protocol::beside_all(&others, (tl.x, tl.y)));
+                    tl = crate::geom::CanvasPoint { x, y };
+                }
             }
 
             self.stage
@@ -4702,24 +4693,56 @@ mod tests {
             .unwrap();
 
         // the viewport is (-960..960, -540..540), w2 at (812, 0). Owner, 2026-11-06: only w1
-        // moves (w2 used to be pushed to x=972); 2026-11-09: w1 grows into the free space and
-        // stops 12 px before w2 (it used to cover it)
+        // moves (w2 used to be pushed to x=972); 2026-11-10: w1 takes the screen's size, 1920 x
+        // 1080, where it covers no window, out of view if need be (2026-11-09 it shrank into the
+        // free part of the screen: "it's supposed to go out of the viewport")
         let anchor_w1 = c.stage().anchor(w1).unwrap();
         let anchor_w2 = c.stage().anchor(w2).unwrap();
-        assert_eq!(anchor_w1.x, -960);
-        assert_eq!(anchor_w1.y, -540);
         assert!(
             fx.iter().any(
                 |e| matches!(e, Effect::ToplevelConfigureSize { element, size }
-                if *element == w1 && (size.w, size.h) == (1760, 1080))
+                if *element == w1 && (size.w, size.h) == (1920, 1080))
             ),
-            "w1 fills the view up to w2: {fx:?}"
+            "w1 takes the screen's size: {fx:?}"
         );
+        let apart = anchor_w1.x + 1920 <= anchor_w2.x
+            || anchor_w2.x + 800 <= anchor_w1.x
+            || anchor_w1.y + 1080 <= anchor_w2.y
+            || anchor_w2.y + 600 <= anchor_w1.y;
+        assert!(apart, "w1 at {anchor_w1:?} covers w2 at {anchor_w2:?}");
         assert_eq!(
             (anchor_w2.x, anchor_w2.y),
             (812, 0),
             "w2 stays where it was"
         );
+    }
+
+    /// With nothing else in view, a maximize fills the screen where the camera is.
+    #[test]
+    fn a_maximize_with_nothing_in_view_fills_the_view() {
+        let (mut c, mut i, _, mut t) = Core::new(PersistedCameras::default());
+        let (a, _) = c.output_connected(&mut t, desc("A")).unwrap();
+        let ws = map_windows(&mut c, a, 1);
+        c.set_focus(&mut i, Some(ws[0])).unwrap();
+        let (w, h) = c.output(a).unwrap().logical_extent();
+        c.pointer = PointerState::Located {
+            output: a,
+            p: (w / 2.0, h / 2.0),
+        };
+        let fx = c.client_maximize(ws[0], true);
+        let (ux, uy, uw, uh) = c.usable_area(a).unwrap();
+        assert!(fx.iter().any(
+            |e| matches!(e, Effect::ToplevelConfigureSize { element, size }
+            if *element == ws[0] && (size.w, size.h) == (uw.round() as i32, uh.round() as i32))
+        ));
+        let tl = c
+            .render_list(a)
+            .unwrap()
+            .view
+            .unproject(crate::geom::OutputLogicalPoint { x: ux, y: uy })
+            .round_to_point()
+            .unwrap();
+        assert_eq!(c.stage().anchor(ws[0]), Some(tl), "at the view's top left");
     }
 
     #[test]
