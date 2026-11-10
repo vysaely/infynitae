@@ -394,13 +394,20 @@ install_config() {
     if [ -f "$cfg" ]; then
         cp -f "$src/config/config" "$cfg.template"
         # renamed settings keep their values under the new name (else the new name would be added
-        # below at its default, over the old one): the island became the edge, 2026-10-31
-        if grep -qE '^(ENABLE_ISLAND|ISLAND_EDGE|ISLAND_CONTROL_SIDE)=' "$cfg"; then
-            cp -f "$cfg" "$cfg.bak-$(date +%F)-rename"
-            sed -i -e 's/^ENABLE_ISLAND=/ENABLE_EDGE=/' -e 's/^ISLAND_EDGE=/EDGE_POSITION=/' \
-                -e 's/^ISLAND_CONTROL_SIDE=/EDGE_CONTROL_SIDE=/' "$cfg"
-            echo "==> Renamed the island's settings to the edge's in your config"
-        fi
+        # below at its default, over the old one): live/config-renames
+        local old_name new_name rest renamed=""
+        while read -r old_name new_name rest; do
+            case "$old_name$new_name" in '#'* | *[!A-Z0-9_]*) continue ;; esac
+            grep -q "^$old_name=" "$cfg" || continue
+            [ -n "$renamed" ] || cp -f "$cfg" "$cfg.bak-$(date +%F)-rename"
+            if grep -q "^$new_name=" "$cfg"; then
+                sed -i "s/^$old_name=/#$old_name=/" "$cfg" # both: the new one is the one read
+            else
+                sed -i "s/^$old_name=/$new_name=/" "$cfg"
+            fi
+            renamed="$renamed $old_name"
+        done < "$src/live/config-renames"
+        [ -z "$renamed" ] || echo "==> Renamed in your config:$renamed"
         # each setting the config does not have, with the comment lines under it
         new=$(awk 'NR == FNR { if (match($0, /^[A-Z_]+=/)) have[substr($0, 1, RLENGTH)] = 1; next }
             match($0, /^[A-Z_]+=/) { take = !(substr($0, 1, RLENGTH) in have); if (take) print; next }
