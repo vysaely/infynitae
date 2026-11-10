@@ -44,6 +44,16 @@ $look_out
 LOOK_END
 }
 
+# The resolved look saved for the helpers that draw themselves (the lock screen): one file of
+# LOOK_*="value" lines, rewritten when it changes
+look_save() {
+    look_file="${XDG_CACHE_HOME:-$HOME/.cache}/infynitae/look"
+    mkdir -p "${look_file%/*}"
+    printf 'LOOK_CORNERS="%s"\nLOOK_CARD="%s"\nLOOK_EDGE="%s"\nLOOK_TEXT="%s"\nLOOK_ACCENT="%s"\n' \
+        "$LOOK_CORNERS" "$LOOK_CARD" "$LOOK_EDGE" "$LOOK_TEXT" "$LOOK_ACCENT" > "$look_file.new" \
+        && mv -f "$look_file.new" "$look_file"
+}
+
 # Load current config if present
 if [ -f "$CONFIG_FILE" ]; then
     . "$CONFIG_FILE"
@@ -223,6 +233,7 @@ EOF
     # gets a few widget rules, since its stock theme draws headerbars, buttons and entries in fixed
     # colours. GTK 4 does not: libadwaita takes its look from the names and the Settings portal.
     look_load
+    look_save
     # GTK's widgets a little rounder than square, less than the cards (8 gives 6, as before)
     gtk_radius=$((LOOK_CORNERS * 3 / 4))
     # (after the colours are known: the wallpaper may have just given them)
