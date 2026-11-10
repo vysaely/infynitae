@@ -439,6 +439,52 @@ fn parse_rect(s: &str) -> Option<(i32, i32, i32, i32)> {
     Some((x, y, w, h))
 }
 
+/// `text` (the config) with `key` set to `value`: its first `KEY=` line replaced (the comment
+/// lines under it kept), else the line added at the end.
+pub fn with_value(text: &str, key: &str, value: &str) -> String {
+    let line = format!("{key}=\"{value}\"");
+    let prefix = format!("{key}=");
+    let mut out = String::with_capacity(text.len() + line.len() + 1);
+    let mut done = false;
+    for l in text.lines() {
+        if !done && l.starts_with(&prefix) {
+            out.push_str(&line);
+            done = true;
+        } else {
+            out.push_str(l);
+        }
+        out.push('\n');
+    }
+    if !done {
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
+/// A value the edge may write into the config: only what its settings use (module words,
+/// places, true/false, app ids). The config is read by the shell at the session's start: a
+/// quote, a $ or a backtick in a value could run there, so such a value is never written.
+pub fn writable(value: &str) -> bool {
+    value
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || " +:_@,.-".contains(c))
+}
+
+/// Sets `key` to `value` in the config file, in this process: read, replace, write a temporary
+/// file, rename (one writer: the shell commands it replaced could lose one of two writes made
+/// close together). Nothing without a config file, or for a value `writable` refuses.
+pub fn write_value(key: &str, value: &str) -> std::io::Result<()> {
+    if !writable(key) || !writable(value) || key.contains(' ') {
+        return Err(std::io::Error::other("not a value the edge writes"));
+    }
+    let path = config_path();
+    let text = std::fs::read_to_string(&path)?;
+    let tmp = path.with_extension(format!("edge-tmp.{}", std::process::id()));
+    std::fs::write(&tmp, with_value(&text, key, value))?;
+    std::fs::rename(&tmp, &path)
+}
+
 /// A config value without its quotes and what follows them (the C edge's config_text).
 pub fn value_text(v: &str) -> String {
     let v = v.trim_end_matches(['\n', '\r']);
@@ -672,6 +718,25 @@ impl Config {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_value_is_set_in_place_and_comments_stay() {
+        let text = "A=\"1\"\n    # what A does\nPANELS_SNAP=\"true\"\n    # snap\n";
+        assert_eq!(
+            with_value(text, "PANELS_SNAP", "false"),
+            "A=\"1\"\n    # what A does\nPANELS_SNAP=\"false\"\n    # snap\n"
+        );
+        assert_eq!(
+            with_value("A=\"1\"", "WIDGETS", "clock@1,2,300x100"),
+            "A=\"1\"\nWIDGETS=\"clock@1,2,300x100\"\n"
+        );
+        assert!(writable(
+            "clock:big@60,60,380x150 org.gnome.Nautilus foot-1"
+        ));
+        for bad in ["a\"b", "$(x)", "`x`", "a;b", "a\nb", "a'b"] {
+            assert!(!writable(bad), "{bad}");
+        }
+    }
+
     use super::*;
 
     #[test]

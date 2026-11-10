@@ -695,31 +695,21 @@ pub fn format_config_update(config_text: &str, panel: &Panel) -> String {
     out
 }
 
-/// Commands to save updated panel line and panels.backup as C edge does.
-pub fn save_panel_commands(panel: &Panel, before_val: &str) -> (String, String) {
-    let name_up = panel.name.to_ascii_uppercase();
-    let val = panel.value();
-    // the desktop's widgets are the WIDGETS line, the panels PANEL_<NAME>
-    let key = if panel.desktop {
+/// The config key a panel is saved under: the desktop's widgets WIDGETS, a panel PANEL_<NAME>.
+pub fn panel_key(panel: &Panel) -> String {
+    if panel.desktop {
         "WIDGETS".to_string()
     } else {
-        format!("PANEL_{name_up}")
-    };
+        format!("PANEL_{}", panel.name.to_ascii_uppercase())
+    }
+}
 
-    let backup_cmd = format!(
-        "d=\"$HOME/.config/infynitae\"; [ -d \"$d\" ] || exit 0; \
-         printf '%s {}=\"{}\"\\n' \"$(date '+%F %T')\" >> \"$d/panels.backup\"",
-        key, before_val
-    );
-
-    let save_cmd = format!(
-        "f=\"$HOME/.config/infynitae/config\"; [ -f \"$f\" ] || exit 0; \
-         case \"{name_up}{val}\" in *[!A-Za-z0-9+:_@,\\ ]*) exit 0;; esac; \
-         awk -v k=\"{key}\" -v v=\"{val}\" 'BEGIN{{d=0}} index($0, k \"=\")==1{{print k \"=\\\"\" v \"\\\"\"; d=1; next}} {{print}} \
-         END{{if(!d) print k \"=\\\"\" v \"\\\"\"}}' \"$f\" > \"$f.tmp.$$\" && mv -f \"$f.tmp.$$\" \"$f\""
-    );
-
-    (backup_cmd, save_cmd)
+/// Saves the panel's line (Done, Escape): the line before kept in panels.backup, the new one
+/// written into the config in this process.
+pub fn save_panel(world: &mut crate::modules::World, panel: &Panel, before_val: &str) {
+    let key = panel_key(panel);
+    world.backup_line(&key, before_val);
+    world.set_config(&key, &panel.value());
 }
 
 #[cfg(test)]

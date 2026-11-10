@@ -689,10 +689,8 @@ impl Shell {
                         let rb = b.rect.unwrap_or((0, 0, 0, 0));
                         ra.1.cmp(&rb.1).then_with(|| ra.0.cmp(&rb.0))
                     });
-                    let (backup_cmd, save_cmd) =
-                        modules::edit::save_panel_commands(panel, &self.edit.before);
-                    self.world.run(backup_cmd);
-                    self.world.run(save_cmd);
+                    let before = self.edit.before.clone();
+                    modules::edit::save_panel(&mut self.world, panel, &before);
                 }
             }
         }
@@ -781,21 +779,13 @@ impl Shell {
                                 // Snap
                                 self.edit.snap = !self.edit.snap;
                                 let v = if self.edit.snap { "true" } else { "false" };
-                                self.world.run(format!(
-                                    "f=\"$HOME/.config/infynitae/config\"; [ -f \"$f\" ] || exit 0; \
-                                     awk -v k=\"PANELS_SNAP\" -v v=\"{v}\" 'BEGIN{{d=0}} index($0, k \"=\")==1{{print k \"=\\\"\" v \"\\\"\"; d=1; next}} {{print}} \
-                                     END{{if(!d) print k \"=\\\"\" v \"\\\"\"}}' \"$f\" > \"$f.tmp.$$\" && mv -f \"$f.tmp.$$\" \"$f\""
-                                ));
+                                self.world.set_config("PANELS_SNAP", v);
                             }
                             3 => {
                                 // Overlap
                                 self.edit.overlap = !self.edit.overlap;
                                 let v = if self.edit.overlap { "true" } else { "false" };
-                                self.world.run(format!(
-                                    "f=\"$HOME/.config/infynitae/config\"; [ -f \"$f\" ] || exit 0; \
-                                     awk -v k=\"PANELS_OVERLAP\" -v v=\"{v}\" 'BEGIN{{d=0}} index($0, k \"=\")==1{{print k \"=\\\"\" v \"\\\"\"; d=1; next}} {{print}} \
-                                     END{{if(!d) print k \"=\\\"\" v \"\\\"\"}}' \"$f\" > \"$f.tmp.$$\" && mv -f \"$f.tmp.$$\" \"$f\""
-                                ));
+                                self.world.set_config("PANELS_OVERLAP", v);
                             }
                             4 => {
                                 // Add
@@ -1982,12 +1972,15 @@ mod tests {
         let p = Config::from_text("WIDGETS=\"clock@60,60,380x150\"\n")
             .widgets
             .unwrap();
-        let (backup, save) = modules::edit::save_panel_commands(&p, "clock@0,0,380x150");
-        assert!(
-            save.contains("k=\"WIDGETS\"") && save.contains("clock@60,60,380x150"),
-            "{save}"
+        let mut world = modules::World::now();
+        modules::edit::save_panel(&mut world, &p, "clock@0,0,380x150");
+        assert_eq!(
+            world.actions,
+            vec![
+                "backup WIDGETS=\"clock@0,0,380x150\"".to_string(),
+                "set WIDGETS=\"clock@60,60,380x150\"".to_string()
+            ]
         );
-        assert!(backup.contains("WIDGETS="), "{backup}");
     }
 
     #[test]

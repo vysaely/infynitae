@@ -560,6 +560,33 @@ impl World {
         self.actions.push(cmd);
     }
 
+    /// Sets a config line (`config::write_value`) in the live edge; the tests see `set KEY="v"`.
+    pub fn set_config(&mut self, key: &str, value: &str) {
+        if self.live && std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_none() {
+            let _ = crate::config::write_value(key, value);
+        } else {
+            self.actions.push(format!("set {key}=\"{value}\""));
+        }
+    }
+
+    /// A panel's or the widgets' line before it was changed, added to panels.backup (live).
+    pub fn backup_line(&mut self, key: &str, value: &str) {
+        if self.live && std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_none() {
+            use std::io::Write;
+            let path = crate::config::config_path().with_file_name("panels.backup");
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+            {
+                let now = chrono::Local::now().format("%F %T");
+                let _ = writeln!(f, "{now} {key}=\"{value}\"");
+            }
+        } else {
+            self.actions.push(format!("backup {key}=\"{value}\""));
+        }
+    }
+
     /// Records what a click did that is not a command (a D-Bus call made directly: `media:next`,
     /// `tray:activate:ID`), for the tests; never given to a shell (a song title or a tray id in
     /// it could run as a command).

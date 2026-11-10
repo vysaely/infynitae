@@ -101,17 +101,7 @@ pub fn toggle_favorite(world: &mut World, app_idx: usize) -> bool {
     let next_favs = words.join(" ");
     world.apps.set_favorites(&next_favs);
 
-    if next_favs
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ' ' | '-'))
-    {
-        let cmd = format!(
-            "f=\"$HOME/.config/infynitae/config\"; [ -f \"$f\" ] || exit 0; \
-             awk -v v=\"{next_favs}\" 'BEGIN{{d=0}} /^FAVORITES=/{{print \"FAVORITES=\\\"\" v \"\\\"\"; d=1; next}} {{print}} \
-             END{{if(!d) print \"FAVORITES=\\\"\" v \"\\\"\"}}' \"$f\" > \"$f.tmp.$$\" && mv -f \"$f.tmp.$$\" \"$f\""
-        );
-        world.run(cmd);
-    }
+    world.set_config("FAVORITES", &next_favs);
     true
 }
 
@@ -288,7 +278,7 @@ mod tests {
             .actions
             .last()
             .unwrap()
-            .contains("v=\"foot org.gnome.Nautilus org.mozilla.firefox\""));
+            .contains("set FAVORITES=\"foot org.gnome.Nautilus org.mozilla.firefox\""));
 
         // Unpin Files (index 1) -> removed from favorites
         assert!(toggle_favorite(&mut world, 1));
