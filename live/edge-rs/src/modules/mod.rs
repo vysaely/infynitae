@@ -34,6 +34,7 @@ pub mod clipboard;
 pub mod clock;
 pub mod edit;
 pub mod favorites;
+pub mod flow;
 pub mod media;
 pub mod memory;
 pub mod notifications;
@@ -211,6 +212,8 @@ pub struct World {
     pub child_pending: Option<child::ChildKind>,
     pub live: bool,
     pub actions: Vec<String>,
+    /// the panel is being edited: empty modules keep a placeholder card (height_in)
+    pub edit_preview: bool,
 }
 
 impl Default for World {
@@ -245,6 +248,7 @@ impl World {
             child_pending: None,
             live: false,
             actions: Vec::new(),
+            edit_preview: false,
         };
         if std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
             w.load_from_helper();
@@ -635,6 +639,25 @@ pub fn height(it: &Item, w: f64) -> f64 {
 
 /// The module's height at width `w` given `world` and `th` (its card included).
 pub fn height_in(it: &Item, world: &World, th: &Theme, w: f64) -> f64 {
+    let h = shown_height(it, world, th, w);
+    // while the panel is edited, a module with nothing to show (no tray apps, no
+    // notifications, nothing playing) keeps a small card, to be moved or taken out
+    if h <= 0.0 && world.edit_preview && !it.module.is_switch() {
+        return PLACEHOLDER_H;
+    }
+    h
+}
+
+/// The height of an empty module's card while the panel is edited.
+pub const PLACEHOLDER_H: f64 = 52.0;
+
+/// Whether `it` shows only its placeholder (edited, nothing to show).
+pub fn is_placeholder(it: &Item, world: &World, th: &Theme, w: f64) -> bool {
+    world.edit_preview && !it.module.is_switch() && shown_height(it, world, th, w) <= 0.0
+}
+
+/// The module's own height: 0 when it has nothing to show.
+fn shown_height(it: &Item, world: &World, th: &Theme, w: f64) -> f64 {
     let _ = w;
     match it.module {
         Module::Search => search::height(it, world),
@@ -966,15 +989,24 @@ pub fn draw_placeholder(cr: &Context, th: &Theme, it: &Item, rect: Rect) {
     cr.set_dash(&dash, 0.0);
     let _ = cr.stroke();
     cr.set_dash(&[], 0.0);
-    draw::text(
+    let name = Text {
+        size: 13.0,
+        bold: true,
+        color: th.text.alpha(0.75),
+        text: edit::module_display_name(it.module),
+    };
+    let (nw, _) = draw::measure(cr, &name);
+    draw::text(cr, x + PAD_X, y + (h.min(52.0) - 15.0) / 2.0, &name);
+    draw::text_max(
         cr,
-        x + 12.0,
-        y + (h.min(30.0) - 13.0) / 2.0,
+        x + PAD_X + nw + 10.0,
+        y + (h.min(52.0) - 13.0) / 2.0 + 1.0,
+        (w - 2.0 * PAD_X - nw - 10.0).max(10.0),
         &Text {
-            size: 13.0,
+            size: 12.0,
             bold: false,
-            color: th.muted.alpha(0.60),
-            text: it.module.word(),
+            color: th.muted,
+            text: "nothing to show now",
         },
     );
 }
@@ -1009,9 +1041,10 @@ pub fn draw_panel(
                 }
                 i = j;
             } else {
-                let h = rects.get(i).map(|r| r.3).unwrap_or(0.0);
-                if h > 0.0 {
-                    y += h + draw::GAP;
+                // the next card starts under this one; two halves share a row (their own rects
+                // say where: adding both heights put the Quick settings card too low)
+                if let Some(r) = rects.get(i).filter(|r| r.3 > 0.0) {
+                    y = y.max(r.1 + r.3 + draw::GAP);
                 }
                 i += 1;
             }
@@ -1036,9 +1069,10 @@ pub fn draw_panel(
                 draw(cr, th, it, world, cell);
             } else {
                 let is_editing = std::env::var_os("INFYNITAE_EDGE_RENDER_EDIT").is_some();
-                if panel.placed
-                    && is_editing
-                    && (it.module == Module::Media && world.media.is_empty())
+                if is_placeholder(it, world, th, r.2)
+                    || (panel.placed
+                        && is_editing
+                        && (it.module == Module::Media && world.media.is_empty()))
                 {
                     draw_placeholder(cr, th, it, (ox + r.0, oy + r.1, r.2, r.3));
                 } else {
@@ -1069,6 +1103,7 @@ mod tests {
             module: Module::Calendar,
             look: None,
             rect: None,
+            half: false,
         };
         let w = 380.0;
         let h = height(&cal, w);
@@ -1133,6 +1168,7 @@ mod tests {
             module: Module::Clock,
             look: Some(2),
             rect: None,
+            half: false,
         };
         let w = 380.0;
         let h = height(&clock_cal, w);

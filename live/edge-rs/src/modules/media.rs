@@ -2004,6 +2004,7 @@ mod tests {
             module: crate::config::Module::Media,
             look: None,
             rect: None,
+            half: false,
         };
         let world = World::now();
         assert_eq!(height(&it, &world), 0.0);

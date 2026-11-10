@@ -74,6 +74,13 @@ jobs:
       - run: cd live/edge-rs && cargo clippy --locked --all-targets -- -D warnings
       - run: cd live/edge-rs && cargo test --locked
       - run: sh tools/test-edge-rs
+      # the edge itself, to render and try a change without building it on the owner's PC
+      - run: cd live/edge-rs && cargo build --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: infynitae-edge-rs
+          path: live/edge-rs/target/debug/infynitae-edge-rs
+          retention-days: 7
 
   # OB-19: production architecture enforcement.
   verify-architecture:

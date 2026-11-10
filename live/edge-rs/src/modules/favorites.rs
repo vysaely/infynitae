@@ -307,6 +307,7 @@ mod tests {
             module: crate::config::Module::Favorites,
             look: None,
             rect: None,
+            half: false,
         };
         let w = 560.0;
         let h = height(&it, &world);
