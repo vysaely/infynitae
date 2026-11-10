@@ -26,6 +26,7 @@ pub enum ChildKind {
     Audio,
     Power,
     Calendar,
+    Replay,
 }
 
 impl ChildKind {
@@ -36,6 +37,7 @@ impl ChildKind {
             ChildKind::Audio => "Sound",
             ChildKind::Power => "Power profiles",
             ChildKind::Calendar => "Calendar",
+            ChildKind::Replay => "Replay",
         }
     }
 
@@ -46,6 +48,7 @@ impl ChildKind {
             ChildKind::Audio => Module::Volume,
             ChildKind::Power => Module::Power,
             ChildKind::Calendar => Module::Clock,
+            ChildKind::Replay => Module::Replay,
         }
     }
 }
@@ -64,8 +67,41 @@ pub struct ChildState {
     pub kind: Option<ChildKind>,
     pub items: Vec<ChildItem>,
     pub bt_scan: bool,
+    /// the Network card: a search for networks was asked (the next list rescans)
+    pub scan: bool,
     pub rect: Option<(f64, f64, f64, f64)>,
     pub hover_row: Option<usize>,
+}
+
+/// The Network card's last row while Wi-Fi is on: search again for networks (the list is the
+/// one the system last found; a search takes a few seconds).
+pub const WIFI_SCAN: &str = "#wifi-scan";
+
+/// The Replay card's rows: save a clip of what the buffer holds, open the clips folder, the
+/// buffer on or off.
+pub const REPLAY_SAVE: &str = "#replay-save";
+pub const REPLAY_OPEN: &str = "#replay-open";
+pub const REPLAY_TOGGLE: &str = "#replay-toggle";
+
+/// The Replay card: with the buffer on, Save a clip first; the folder; the switch.
+pub fn replay_rows(on: bool) -> Vec<ChildItem> {
+    let row = |id: &str, label: &str, meta: &str| ChildItem {
+        id: id.into(),
+        label: label.into(),
+        meta: meta.into(),
+        active: false,
+    };
+    let mut rows = Vec::new();
+    if on {
+        rows.push(row(REPLAY_SAVE, "Save a clip", "Super+Alt+C"));
+    }
+    rows.push(row(REPLAY_OPEN, "Open the clips folder", "Videos/Clips"));
+    rows.push(row(
+        REPLAY_TOGGLE,
+        "Keep the last minutes",
+        if on { "On" } else { "Off" },
+    ));
+    rows
 }
 
 /// The Network card's switch row ids: clicking turns Wi-Fi on or off.
@@ -433,6 +469,14 @@ pub fn action_for_child_item(kind: ChildKind, item: &ChildItem) -> Option<String
     if item.id == WIFI_ON {
         return Some("nmcli radio wifi on >/dev/null 2>&1".into());
     }
+    if item.id == REPLAY_SAVE {
+        return Some("sh \"$HOME/infynitae/live/launch.sh\" save-replay >/dev/null 2>&1".into());
+    }
+    if item.id == REPLAY_OPEN {
+        return Some(
+            "d=\"${CLIPS_DIR:-$HOME/Videos/Clips}\"; mkdir -p \"$d\"; xdg-open \"$d\" >/dev/null 2>&1".into(),
+        );
+    }
     if item.id == WIFI_OFF {
         return Some("nmcli radio wifi off >/dev/null 2>&1".into());
     }
@@ -472,7 +516,8 @@ pub fn action_for_child_item(kind: ChildKind, item: &ChildItem) -> Option<String
                  notify-send -a Infynitae 'Power modes' {msg}"
             ))
         }
-        ChildKind::Calendar => None,
+        // its rows are all named (REPLAY_*), handled above
+        ChildKind::Calendar | ChildKind::Replay => None,
     }
 }
 
@@ -677,7 +722,9 @@ pub fn draw_child_card(
         }
 
         // Label
-        let text_color = if item.active {
+        // a row that does something (search again, save a clip) reads as an action
+        let action = item.id == WIFI_SCAN || item.id == REPLAY_SAVE;
+        let text_color = if item.active || action {
             th.accent
         } else if is_hovered {
             th.text
@@ -769,6 +816,29 @@ pub fn click_child(
             }
             return (true, Some(cmd));
         }
+        if item.id == WIFI_SCAN {
+            // search again: the list says so until the networks found come (a few seconds)
+            world.child.scan = true;
+            world
+                .child
+                .items
+                .retain(|r| r.id.starts_with('#') && r.id != WIFI_SCAN);
+            world.child.items.push(none_found("Searching for networks"));
+            if world.live && std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_none() {
+                world.child_pending = Some(ChildKind::Wifi);
+            } else {
+                world.child.items = crate::modules::load_child_list(ChildKind::Wifi, true, false);
+            }
+            return (true, None);
+        }
+        if item.id == REPLAY_TOGGLE {
+            let cmd = crate::modules::switches::toggle_action(Module::Replay, &mut world.switches);
+            if let Some(ref c) = cmd {
+                world.run(c.clone());
+            }
+            world.child.items = replay_rows(world.switches.replay_on);
+            return (true, cmd);
+        }
         if item.id == WIFI_ON || item.id == WIFI_OFF {
             let cmd = action_for_child_item(kind, &item);
             if let Some(ref c) = cmd {
@@ -820,6 +890,64 @@ pub fn click_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_replay_card_saves_a_clip_opens_the_folder_and_switches() {
+        let rows = replay_rows(true);
+        assert_eq!(rows[0].id, REPLAY_SAVE, "on: Save a clip first");
+        assert_eq!(
+            action_for_child_item(ChildKind::Replay, &rows[0]).as_deref(),
+            Some("sh \"$HOME/infynitae/live/launch.sh\" save-replay >/dev/null 2>&1")
+        );
+        assert!(action_for_child_item(ChildKind::Replay, &rows[1])
+            .unwrap()
+            .contains("xdg-open"));
+        assert!(
+            replay_rows(false).iter().all(|r| r.id != REPLAY_SAVE),
+            "off: nothing to save"
+        );
+        let mut world = World::now();
+        world.switches.replay_on = true;
+        assert!(crate::modules::toggle_child(&mut world, ChildKind::Replay));
+        let rect = (0.0, 0.0, CHILD_WIDTH, 200.0);
+        let toggle_y = PAD_Y + 22.0 + GAP + ROW_HEIGHT * 2.5;
+        let (changed, cmd) = click_child(&mut world, rect, (60.0, toggle_y), 1);
+        assert!(changed && cmd.unwrap().contains("ENABLE_REPLAY_BUFFER false"));
+        assert!(!world.switches.replay_on);
+        assert!(world.child.items.iter().all(|r| r.id != REPLAY_SAVE));
+    }
+
+    #[test]
+    fn the_network_card_can_search_again() {
+        let mut world = World::now();
+        world.child.open = true;
+        world.child.kind = Some(ChildKind::Wifi);
+        world.child.items = vec![
+            ChildItem {
+                id: WIFI_OFF.into(),
+                label: "Wi-Fi".into(),
+                meta: "On".into(),
+                active: false,
+            },
+            ChildItem {
+                id: "Home".into(),
+                label: "Home".into(),
+                meta: "80%".into(),
+                active: true,
+            },
+            ChildItem {
+                id: WIFI_SCAN.into(),
+                label: "Search for networks".into(),
+                meta: String::new(),
+                active: false,
+            },
+        ];
+        let rect = (0.0, 0.0, CHILD_WIDTH, 200.0);
+        let y = PAD_Y + 22.0 + GAP + ROW_HEIGHT * 2.5;
+        let (changed, _) = click_child(&mut world, rect, (60.0, y), 1);
+        assert!(changed);
+        assert!(world.child.scan, "the next list rescans");
+    }
 
     #[test]
     fn network_rows_say_the_cable_and_switch_wifi() {

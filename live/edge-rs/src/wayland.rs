@@ -783,7 +783,11 @@ impl App {
         self.flush_window_ops();
         if let Some(kind) = self.shell.world.child_pending.take() {
             let tx = self.child_tx.clone();
-            let scan = self.shell.world.child.bt_scan;
+            // Bluetooth: find new devices; Network: search again for networks
+            let scan = match kind {
+                modules::child::ChildKind::Wifi => self.shell.world.child.scan,
+                _ => self.shell.world.child.bt_scan,
+            };
             std::thread::spawn(move || {
                 let _ = tx.send((kind, modules::load_child_list(kind, scan, true)));
             });

@@ -459,6 +459,7 @@ impl World {
                 "bt" => child::ChildKind::Bluetooth,
                 "audio" | "sound" => child::ChildKind::Audio,
                 "power" => child::ChildKind::Power,
+                "replay" => child::ChildKind::Replay,
                 "cal" => child::ChildKind::Calendar,
                 _ => child::ChildKind::Wifi,
             };
@@ -514,6 +515,9 @@ impl World {
                     self.child.items = child::power_profiles_list(&self.switches.power_profile);
                 }
                 child::ChildKind::Calendar => {}
+                child::ChildKind::Replay => {
+                    self.child.items = child::replay_rows(self.switches.replay_on);
+                }
             }
         }
     }
@@ -687,9 +691,14 @@ pub fn toggle_child(world: &mut World, kind: child::ChildKind) -> bool {
     }
     world.child.open = true;
     world.child.kind = Some(kind);
+    // a card opens on the list as it is; a search is asked from inside it
+    world.child.scan = false;
     match kind {
         child::ChildKind::Power => {
             world.child.items = child::power_profiles_list(&world.switches.power_profile);
+        }
+        child::ChildKind::Replay => {
+            world.child.items = child::replay_rows(world.switches.replay_on);
         }
         child::ChildKind::Calendar => world.child.items.clear(),
         // the lists from nmcli, bluetoothctl and pactl: in the live edge on a helper thread
@@ -718,7 +727,12 @@ pub fn load_child_list(kind: child::ChildKind, bt_scan: bool, live: bool) -> Vec
         child::ChildKind::Wifi => {
             let mut out = run_sh(
                 "wifi_list",
-                "nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan no 2>/dev/null",
+                if bt_scan {
+                    // a search asked from the card: nmcli scans and waits for what it finds
+                    "nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan yes 2>/dev/null"
+                } else {
+                    "nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan no 2>/dev/null"
+                },
             );
             if out.is_empty() && std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
                 out = run_sh("wifi", "");
@@ -737,6 +751,14 @@ pub fn load_child_list(kind: child::ChildKind, bt_scan: bool, live: bool) -> Vec
             };
             if !items.is_empty() || (live && !head.is_empty()) {
                 head.extend(items);
+                if wifi_on {
+                    head.push(child::ChildItem {
+                        id: child::WIFI_SCAN.into(),
+                        label: "Search for networks".into(),
+                        meta: String::new(),
+                        active: false,
+                    });
+                }
                 if wifi_on && head.iter().all(|r| r.id.starts_with('#')) {
                     head.push(child::none_found("No networks found"));
                 }
@@ -781,7 +803,9 @@ pub fn load_child_list(kind: child::ChildKind, bt_scan: bool, live: bool) -> Vec
                 vec![row("default_sink", "Built-in Audio", "Output", true)]
             }
         }
-        child::ChildKind::Power | child::ChildKind::Calendar => Vec::new(),
+        child::ChildKind::Power | child::ChildKind::Calendar | child::ChildKind::Replay => {
+            Vec::new()
+        }
     }
 }
 
@@ -793,6 +817,7 @@ pub fn click(it: &Item, world: &mut World, size: (f64, f64), pos: (f64, f64), bu
             Module::Bluetooth => return toggle_child(world, child::ChildKind::Bluetooth),
             Module::Volume => return toggle_child(world, child::ChildKind::Audio),
             Module::Power => return toggle_child(world, child::ChildKind::Power),
+            Module::Replay => return toggle_child(world, child::ChildKind::Replay),
             Module::Clock if clock::size_look(size.0, size.1) != "calendar" => {
                 return toggle_child(world, child::ChildKind::Calendar);
             }
