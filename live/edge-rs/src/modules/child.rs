@@ -299,8 +299,22 @@ pub fn power_profiles_list(current_profile: &str) -> Vec<ChildItem> {
 }
 
 /// Computes the command to execute for selecting `item` in `kind`.
+/// A row that only says nothing was found (it does nothing when clicked). The sample rows
+/// (HomeNet, Headphones) are for `--render` and the tests only, never the live edge.
+pub fn none_found(label: &str) -> ChildItem {
+    ChildItem {
+        id: String::new(),
+        label: label.into(),
+        meta: String::new(),
+        active: false,
+    }
+}
+
 pub fn action_for_child_item(kind: ChildKind, item: &ChildItem) -> Option<String> {
     use crate::modules::sq;
+    if item.id.is_empty() {
+        return None;
+    }
     let id = sq(&item.id);
     match kind {
         ChildKind::Wifi => Some(format!(
@@ -383,16 +397,20 @@ pub fn child_card_geometry(
 }
 
 /// Finds the parent module rectangle in `panel` for child kind `kind`.
-pub fn find_parent_rect(panel: &Panel, kind: ChildKind) -> Option<(f64, f64, f64, f64)> {
+pub fn find_parent_rect(
+    panel: &Panel,
+    rects: &[(f64, f64, f64, f64)],
+    kind: ChildKind,
+) -> Option<(f64, f64, f64, f64)> {
+    // where the module is laid out, placed by hand or stacked (a stacked panel has no rect of
+    // its own: the card was then never drawn, while clicks went to its invisible rows)
     let m = kind.parent_module();
-    for it in &panel.items {
-        if it.module == m {
-            if let Some((x, y, w, h)) = it.rect {
-                return Some((x as f64, y as f64, w as f64, h as f64));
-            }
-        }
-    }
-    None
+    panel
+        .items
+        .iter()
+        .zip(rects)
+        .find(|(it, r)| it.module == m && r.2 > 0.0 && r.3 > 0.0)
+        .map(|(_, r)| *r)
 }
 
 /// Draws the child card (Wi-Fi, Bluetooth, Audio, Power, or Calendar).
@@ -640,7 +658,10 @@ mod tests {
             active: false,
         };
         let cmd = action_for_child_item(ChildKind::Bluetooth, &evil).unwrap();
-        assert!(cmd.contains("bluetoothctl pair '$(touch /tmp/pwned)'\\''; rm -rf x '\\'''"), "{cmd}");
+        assert!(
+            cmd.contains("bluetoothctl pair '$(touch /tmp/pwned)'\\''; rm -rf x '\\'''"),
+            "{cmd}"
+        );
         let wifi = action_for_child_item(ChildKind::Wifi, &evil).unwrap();
         assert!(wifi.starts_with("s=$(printf '%s' '$(touch"), "{wifi}");
     }

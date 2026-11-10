@@ -124,14 +124,25 @@ pub fn apply(d: &mut TrayData, key: &str, out: &str) -> bool {
     if key != "tray" {
         return false;
     }
-    d.items = parse_tray_data(out);
-    d.ready = true;
-    if let Some(open) = d.open_menu {
-        if open >= d.items.len() {
-            d.open_menu = None;
+    let mut items = parse_tray_data(out);
+    // a menu fetched on a right click stays (the refresh every 2 s has none: it turned an app's
+    // open menu into Open / Quit / Force Kill under the pointer); the open menu stays on its app
+    for it in &mut items {
+        if it.menu_items.is_empty() {
+            if let Some(old) = d.items.iter().find(|o| o.bus_name == it.bus_name) {
+                it.menu_items = old.menu_items.clone();
+            }
         }
     }
-    true
+    let open_bus = d
+        .open_menu
+        .and_then(|i| d.items.get(i))
+        .map(|it| it.bus_name.clone());
+    let changed = !d.ready || items != d.items;
+    d.items = items;
+    d.ready = true;
+    d.open_menu = open_bus.and_then(|b| d.items.iter().position(|it| it.bus_name == b));
+    changed
 }
 
 /// Strips mnemonic underscores from dbusmenu labels (e.g. `_Mute` -> `Mute`, `__` -> `_`).

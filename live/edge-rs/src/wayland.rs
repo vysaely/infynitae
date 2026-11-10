@@ -191,12 +191,11 @@ impl OutputSurface {
                     // outside the panel reaches the edge and closes it (as the C edge while it
                     // holds the keyboard); opened by hover: the panel and the way to it, so
                     // leaving it closes it
-                    let (rx, ry, rw, rh) =
-                        if shell.opened_by_hover && !shell.edit.active && !shell.world.child.open {
-                            panel_hover_box_in(p, w, h, &shell.world, &shell.theme)
-                        } else {
-                            (0.0, 0.0, w, h)
-                        };
+                    let (rx, ry, rw, rh) = if shell.hover_closes() {
+                        panel_hover_box_in(p, w, h, &shell.world, &shell.theme)
+                    } else {
+                        (0.0, 0.0, w, h)
+                    };
                     region.add(
                         rx.floor() as i32,
                         ry.floor() as i32,
@@ -459,13 +458,13 @@ impl OutputSurface {
         }
 
         let mut child_draw_rect = None;
-        if shell.world.child.open && panel.placed && !shell.edit.active {
+        if shell.world.child.open && !shell.edit.active {
             let child_kind = shell
                 .world
                 .child
                 .kind
                 .unwrap_or(modules::child::ChildKind::Wifi);
-            let parent_rect = modules::child::find_parent_rect(panel, child_kind);
+            let parent_rect = modules::child::find_parent_rect(panel, &rects, child_kind);
             let parent_y = parent_rect.map(|r| r.1).unwrap_or(0.0);
             child_draw_rect = Some(modules::child::child_card_geometry(
                 child_kind,

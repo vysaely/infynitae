@@ -643,7 +643,9 @@ pub fn toggle_child(world: &mut World, kind: child::ChildKind) -> bool {
                     );
                     world.child.items = child::parse_wifi_list(&out);
                 }
-                if world.child.items.is_empty() {
+                if world.child.items.is_empty() && world.live {
+                    world.child.items = vec![child::none_found("No networks found")];
+                } else if world.child.items.is_empty() {
                     world.child.items = vec![
                         child::ChildItem {
                             id: "HomeNet".into(),
@@ -671,7 +673,14 @@ pub fn toggle_child(world: &mut World, kind: child::ChildKind) -> bool {
                 let scanned = run_sh("bt_scanned", "bluetoothctl devices 2>/dev/null");
                 world.child.items =
                     child::parse_bluetooth_list(&paired, &scanned, world.child.bt_scan);
-                if world.child.items.is_empty() {
+                if world.child.items.is_empty() && world.live {
+                    world.child.items = vec![child::ChildItem {
+                        id: "-".into(),
+                        label: "Find new devices".into(),
+                        meta: "".into(),
+                        active: false,
+                    }];
+                } else if world.child.items.is_empty() {
                     world.child.items = vec![
                         child::ChildItem {
                             id: "4C:87:5D:11:22:33".into(),
@@ -692,7 +701,9 @@ pub fn toggle_child(world: &mut World, kind: child::ChildKind) -> bool {
                 let def = run_sh("audio_def", "pactl get-default-sink 2>/dev/null");
                 let sinks = run_sh("audio_sinks", "pactl list sinks 2>/dev/null");
                 world.child.items = child::parse_audio_list(&sinks, &def);
-                if world.child.items.is_empty() {
+                if world.child.items.is_empty() && world.live {
+                    world.child.items = vec![child::none_found("No outputs found")];
+                } else if world.child.items.is_empty() {
                     world.child.items = vec![child::ChildItem {
                         id: "default_sink".into(),
                         label: "Built-in Audio".into(),

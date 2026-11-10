@@ -368,6 +368,16 @@ impl Shell {
             && (self.edit.active || self.cfg.panels.first().is_some_and(|p| !p.items.is_empty()))
     }
 
+    /// A panel opened by hover closes when the pointer leaves it, unless something opened from
+    /// it is in use: a card beside it, a tray app's menu, the editing (the pointer has to cross
+    /// to them, or works outside the panel).
+    pub fn hover_closes(&self) -> bool {
+        self.opened_by_hover
+            && !self.edit.active
+            && !self.world.child.open
+            && self.world.tray.open_menu.is_none()
+    }
+
     /// reload_if_changed, saying whether the config was read again.
     pub fn reload_config_changed(&mut self) -> bool {
         let before = self.config_mtime;
@@ -1383,7 +1393,7 @@ impl Shell {
                 .child
                 .kind
                 .unwrap_or(modules::child::ChildKind::Wifi);
-            let parent_rect = modules::child::find_parent_rect(panel, child_kind);
+            let parent_rect = modules::child::find_parent_rect(panel, &rects, child_kind);
             let parent_y = parent_rect.map(|r| r.1).unwrap_or(0.0);
             let cr_rect = modules::child::child_card_geometry(
                 child_kind,
@@ -1554,7 +1564,7 @@ impl Shell {
         }
         if let Some(open_idx) = self.open {
             if let Some(p) = self.cfg.panels.get(open_idx) {
-                if self.opened_by_hover {
+                if self.hover_closes() {
                     let (bx, by, bw, bh) = panel_hover_box_in(p, w, h, &self.world, &self.theme);
                     if x < bx || x > bx + bw || y < by || y > by + bh {
                         return self.close();
@@ -1602,7 +1612,11 @@ impl Shell {
 
     pub fn pointer_leave(&mut self) -> bool {
         self.pointer_down = false;
-        if self.world.ask.on || self.edit.active || self.world.child.open {
+        if self.world.ask.on
+            || self.edit.active
+            || self.world.child.open
+            || self.world.tray.open_menu.is_some()
+        {
             return false;
         }
         let Some(open_idx) = self.open else {
@@ -1788,8 +1802,8 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
 
         let mut drawn_child_rect = None;
         if let Some(k) = child_kind {
-            if panel.placed && !is_editing {
-                let parent_rect = modules::child::find_parent_rect(panel, k);
+            if !is_editing {
+                let parent_rect = modules::child::find_parent_rect(panel, &rects, k);
                 let parent_y = parent_rect.map(|r| r.1).unwrap_or(0.0);
                 let c_rect = modules::child::child_card_geometry(
                     k,
