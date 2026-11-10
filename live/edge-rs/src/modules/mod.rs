@@ -256,8 +256,8 @@ impl World {
     /// the minute, nothing more often).
     pub fn tick_clock(&mut self) -> bool {
         let n = current_time();
-        let changed =
-            n.format("%Y%m%d%H%M").to_string() != self.now.format("%Y%m%d%H%M").to_string();
+        let minute = |t: &NaiveDateTime| t.and_utc().timestamp().div_euclid(60);
+        let changed = minute(&n) != minute(&self.now);
         self.now = n;
         changed
     }

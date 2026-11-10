@@ -1706,7 +1706,8 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                     next = next.min(REFRESH - elapsed);
                 }
             }
-            if app.widgets.reload_config_changed() {
+            // the config looked at on the minute (a stat on every pass of the loop before)
+            if redraw && app.widgets.reload_config_changed() {
                 redraw = true;
             }
             if redraw {

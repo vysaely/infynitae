@@ -1055,6 +1055,34 @@ fn draw_large(cr: &Context, th: &Theme, world: &World, rect: Rect) {
 // Drawing Helpers: Cover art & stroked line icons
 // =============================================================================
 
+thread_local! {
+    /// The last covers drawn, by path and size: a cover was read from disk and scaled on every
+    /// redraw (a few per second while music plays).
+    static COVERS: std::cell::RefCell<Vec<(String, i32, cairo::ImageSurface)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+fn cover_surface(p: &Path, size: i32) -> Option<cairo::ImageSurface> {
+    let key = p.to_string_lossy().to_string();
+    if let Some(hit) = COVERS.with(|c| {
+        c.borrow()
+            .iter()
+            .find(|(k, s, _)| *k == key && *s == size)
+            .map(|(_, _, surf)| surf.clone())
+    }) {
+        return Some(hit);
+    }
+    let surf = apps::load_icon_surface(p, size)?;
+    COVERS.with(|c| {
+        let mut c = c.borrow_mut();
+        if c.len() >= 4 {
+            c.remove(0);
+        }
+        c.push((key, size, surf.clone()));
+    });
+    Some(surf)
+}
+
 fn draw_cover(cr: &Context, th: &Theme, x: f64, y: f64, size: f64, art_url: &str) {
     let mut loaded = false;
 
@@ -1062,7 +1090,7 @@ fn draw_cover(cr: &Context, th: &Theme, x: f64, y: f64, size: f64, art_url: &str
         let local_path = decode_file_url(art_url).unwrap_or_else(|| art_url.to_string());
         let p = Path::new(&local_path);
         if p.exists() {
-            if let Some(surf) = apps::load_icon_surface(p, size as i32) {
+            if let Some(surf) = cover_surface(p, size as i32) {
                 let _ = cr.save();
                 draw::round_rect(cr, x, y, size, size, th.small_radius());
                 cr.clip();
@@ -1534,7 +1562,15 @@ pub fn scroll(world: &mut World, size: (f64, f64), pos: (f64, f64), dy: f64) -> 
 // Live D-Bus (zbus) interactions
 // =============================================================================
 
+/// [`execute_media_control_blocking`] on a helper thread: an app that does not answer never freezes the
+/// panel for the D-Bus timeout (it ran on the Wayland thread).
 pub fn execute_media_control(bus: &str, method: &str) {
+    let bus = bus.to_string();
+    let method = method.to_string();
+    std::thread::spawn(move || execute_media_control_blocking(&bus, &method));
+}
+
+fn execute_media_control_blocking(bus: &str, method: &str) {
     if let Ok(conn) = zbus::blocking::Connection::session() {
         if let Ok(proxy) = zbus::blocking::Proxy::new(
             &conn,
@@ -1547,7 +1583,14 @@ pub fn execute_media_control(bus: &str, method: &str) {
     }
 }
 
+/// [`execute_media_seek_blocking`] on a helper thread: an app that does not answer never freezes the
+/// panel for the D-Bus timeout (it ran on the Wayland thread).
 pub fn execute_media_seek(bus: &str, pos_us: i64) {
+    let bus = bus.to_string();
+    std::thread::spawn(move || execute_media_seek_blocking(&bus, pos_us));
+}
+
+fn execute_media_seek_blocking(bus: &str, pos_us: i64) {
     if let Ok(conn) = zbus::blocking::Connection::session() {
         if let Ok(proxy) = zbus::blocking::Proxy::new(
             &conn,
@@ -1567,7 +1610,14 @@ pub fn execute_media_seek(bus: &str, pos_us: i64) {
     }
 }
 
+/// [`execute_media_shuffle_blocking`] on a helper thread: an app that does not answer never freezes the
+/// panel for the D-Bus timeout (it ran on the Wayland thread).
 pub fn execute_media_shuffle(bus: &str, shuffle: bool) {
+    let bus = bus.to_string();
+    std::thread::spawn(move || execute_media_shuffle_blocking(&bus, shuffle));
+}
+
+fn execute_media_shuffle_blocking(bus: &str, shuffle: bool) {
     if let Ok(conn) = zbus::blocking::Connection::session() {
         if let Ok(proxy) = zbus::blocking::Proxy::new(
             &conn,
@@ -1580,7 +1630,15 @@ pub fn execute_media_shuffle(bus: &str, shuffle: bool) {
     }
 }
 
+/// [`execute_media_loop_blocking`] on a helper thread: an app that does not answer never freezes the
+/// panel for the D-Bus timeout (it ran on the Wayland thread).
 pub fn execute_media_loop(bus: &str, loop_status: &str) {
+    let bus = bus.to_string();
+    let loop_status = loop_status.to_string();
+    std::thread::spawn(move || execute_media_loop_blocking(&bus, &loop_status));
+}
+
+fn execute_media_loop_blocking(bus: &str, loop_status: &str) {
     if let Ok(conn) = zbus::blocking::Connection::session() {
         if let Ok(proxy) = zbus::blocking::Proxy::new(
             &conn,
@@ -1593,7 +1651,14 @@ pub fn execute_media_loop(bus: &str, loop_status: &str) {
     }
 }
 
+/// [`execute_media_play_queue_blocking`] on a helper thread: an app that does not answer never freezes the
+/// panel for the D-Bus timeout (it ran on the Wayland thread).
 pub fn execute_media_play_queue(bus: &str, idx: usize) {
+    let bus = bus.to_string();
+    std::thread::spawn(move || execute_media_play_queue_blocking(&bus, idx));
+}
+
+fn execute_media_play_queue_blocking(bus: &str, idx: usize) {
     if let Ok(conn) = zbus::blocking::Connection::session() {
         // Try app.melodyae.Extras PlayTrack
         if let Ok(extras) =

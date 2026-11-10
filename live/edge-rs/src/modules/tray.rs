@@ -635,7 +635,15 @@ pub fn click_menu(world: &mut World, m_rect: Rect, pos: (f64, f64)) -> bool {
 // =============================================================================
 
 /// Live activation of a StatusNotifierItem via D-Bus.
+/// [`activate_dbus_item_blocking`] on a helper thread: an app that does not answer never freezes the
+/// panel for the D-Bus timeout (it ran on the Wayland thread).
 pub fn activate_dbus_item(bus: &str, path: &str) {
+    let bus = bus.to_string();
+    let path = path.to_string();
+    std::thread::spawn(move || activate_dbus_item_blocking(&bus, &path));
+}
+
+fn activate_dbus_item_blocking(bus: &str, path: &str) {
     if let Ok(conn) = zbus::blocking::Connection::session() {
         let path = if path.is_empty() {
             "/StatusNotifierItem"
@@ -713,7 +721,24 @@ pub fn fetch_dbusmenu_items(bus: &str, path: &str) -> Vec<TrayMenuItem> {
 }
 
 /// Executes a click or action on a dbusmenu item.
+/// [`execute_dbusmenu_action_blocking`] on a helper thread: an app that does not answer never freezes the
+/// panel for the D-Bus timeout (it ran on the Wayland thread).
 pub fn execute_dbusmenu_action(
+    bus: &str,
+    menu_path: &str,
+    item_id: i32,
+    pid: u32,
+    proc_name: &str,
+) {
+    let bus = bus.to_string();
+    let menu_path = menu_path.to_string();
+    let proc_name = proc_name.to_string();
+    std::thread::spawn(move || {
+        execute_dbusmenu_action_blocking(&bus, &menu_path, item_id, pid, &proc_name)
+    });
+}
+
+fn execute_dbusmenu_action_blocking(
     bus: &str,
     menu_path: &str,
     item_id: i32,
