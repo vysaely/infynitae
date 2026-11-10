@@ -31,9 +31,9 @@ pub enum ChildKind {
 impl ChildKind {
     pub fn title(self) -> &'static str {
         match self {
-            ChildKind::Wifi => "Wi-Fi networks",
+            ChildKind::Wifi => "Network",
             ChildKind::Bluetooth => "Bluetooth devices",
-            ChildKind::Audio => "Sound output",
+            ChildKind::Audio => "Sound",
             ChildKind::Power => "Power profiles",
             ChildKind::Calendar => "Calendar",
         }
@@ -66,6 +66,120 @@ pub struct ChildState {
     pub bt_scan: bool,
     pub rect: Option<(f64, f64, f64, f64)>,
     pub hover_row: Option<usize>,
+}
+
+/// The Network card's switch row ids: clicking turns Wi-Fi on or off.
+pub const WIFI_ON: &str = "#wifi-on";
+pub const WIFI_OFF: &str = "#wifi-off";
+/// A row that is only said (the cable's state, a heading): nothing happens on a click.
+pub const SAID: &str = "#";
+
+/// The Network card's first rows from `nmcli -t -f TYPE,STATE device` and `nmcli radio wifi`:
+/// "Wired" with its state when the machine has a cable port, then the Wi-Fi switch (its id turns
+/// it the other way: WIFI_OFF while on).
+pub fn network_rows(out: &str) -> Vec<ChildItem> {
+    let mut rows = Vec::new();
+    let mut eth: Option<bool> = None;
+    let mut radio: Option<bool> = None;
+    let mut has_wifi = false;
+    for l in out.lines().map(str::trim) {
+        let low = l.to_ascii_lowercase();
+        if let Some(state) = low.strip_prefix("ethernet:") {
+            eth = Some(eth.unwrap_or(false) || state == "connected");
+        } else if low.starts_with("wifi:") {
+            has_wifi = true;
+        } else if low == "enabled" {
+            radio = Some(true);
+        } else if low == "disabled" {
+            radio = Some(false);
+        }
+    }
+    if let Some(connected) = eth {
+        rows.push(ChildItem {
+            id: SAID.into(),
+            label: "Wired".into(),
+            meta: if connected { "Connected" } else { "Unplugged" }.into(),
+            active: connected,
+        });
+    }
+    if has_wifi || radio.is_some() {
+        let on = radio.unwrap_or(false);
+        rows.push(ChildItem {
+            id: if on { WIFI_OFF } else { WIFI_ON }.into(),
+            label: "Wi-Fi".into(),
+            meta: if on { "On" } else { "Off" }.into(),
+            active: false,
+        });
+    }
+    rows
+}
+
+/// An app's row in the Sound card: id APP_PREFIX + its sink input's index, meta its level ("45%")
+/// or "Muted"; drawn with a slider, a click on which sets the app's volume.
+pub const APP_PREFIX: &str = "@app:";
+
+/// The apps playing sound, from `pactl list sink-inputs`: a heading row ("Apps"), then one row
+/// per app with its level. None playing: the heading and a row saying so.
+pub fn parse_sink_inputs(out: &str) -> Vec<ChildItem> {
+    let mut rows = vec![ChildItem {
+        id: SAID.into(),
+        label: "Apps".into(),
+        meta: String::new(),
+        active: false,
+    }];
+    let mut cur: Option<(String, String, String, bool)> = None; // index, name, level, muted
+    let push = |c: Option<(String, String, String, bool)>, rows: &mut Vec<ChildItem>| {
+        if let Some((idx, name, level, muted)) = c {
+            if !idx.is_empty() && idx.bytes().all(|b| b.is_ascii_digit()) {
+                rows.push(ChildItem {
+                    id: format!("{APP_PREFIX}{idx}"),
+                    label: if name.is_empty() { "App".into() } else { name },
+                    meta: if muted { "Muted".into() } else { level },
+                    active: false,
+                });
+            }
+        }
+    };
+    for raw in out.lines() {
+        let l = raw.trim();
+        if let Some(idx) = l.strip_prefix("Sink Input #") {
+            push(cur.take(), &mut rows);
+            cur = Some((idx.trim().to_string(), String::new(), "100%".into(), false));
+        } else if let Some(c) = cur.as_mut() {
+            if let Some(m) = l.strip_prefix("Mute:") {
+                c.3 = m.trim() == "yes";
+            } else if let Some(v) = l.strip_prefix("Volume:") {
+                if let Some(p) = v.split('/').map(str::trim).find(|t| t.ends_with('%')) {
+                    c.2 = p.to_string();
+                }
+            } else if let Some(n) = l.strip_prefix("application.name = ") {
+                c.1 = n.trim().trim_matches('"').to_string();
+            } else if c.1.is_empty() {
+                if let Some(n) = l.strip_prefix("application.process.binary = ") {
+                    c.1 = n.trim().trim_matches('"').to_string();
+                }
+            }
+        }
+    }
+    push(cur.take(), &mut rows);
+    if rows.len() == 1 {
+        rows.push(none_found("No app is playing sound"));
+    }
+    rows
+}
+
+/// The level (0-150) an app row's meta says, None for other rows (and "Muted": 0).
+pub fn app_level(item: &ChildItem) -> Option<u32> {
+    item.id.strip_prefix(APP_PREFIX)?;
+    if item.meta == "Muted" {
+        return Some(0);
+    }
+    item.meta.trim_end_matches('%').parse().ok()
+}
+
+/// The slider's span `(x0, x1)` in an app row of a card at `cx` of width `cw`.
+pub fn app_slider_span(cx: f64, cw: f64) -> (f64, f64) {
+    (cx + PAD_X + 118.0, cx + cw - PAD_X - 44.0)
 }
 
 /// Parses raw nmcli wifi list output into `ChildItem`s.
@@ -313,7 +427,17 @@ pub fn none_found(label: &str) -> ChildItem {
 
 pub fn action_for_child_item(kind: ChildKind, item: &ChildItem) -> Option<String> {
     use crate::modules::sq;
-    if item.id.is_empty() {
+    if item.id.is_empty() || item.id == SAID {
+        return None;
+    }
+    if item.id == WIFI_ON {
+        return Some("nmcli radio wifi on >/dev/null 2>&1".into());
+    }
+    if item.id == WIFI_OFF {
+        return Some("nmcli radio wifi off >/dev/null 2>&1".into());
+    }
+    if item.id.starts_with(APP_PREFIX) {
+        // an app's volume: the level is set by where the slider was clicked (click_child)
         return None;
     }
     let id = sq(&item.id);
@@ -464,6 +588,68 @@ pub fn draw_child_card(
         let row_y = start_y + i as f64 * ROW_HEIGHT;
         let is_hovered = state.hover_row == Some(i);
 
+        // a heading ("Apps"): small and muted, a line above it
+        if item.id == SAID && item.meta.is_empty() {
+            draw::round_rect(cr, cx + PAD_X, row_y + 4.0, cw - 2.0 * PAD_X, 1.0, 0.5);
+            draw::set(cr, th.track);
+            let _ = cr.fill();
+            draw::text(
+                cr,
+                cx + PAD_X,
+                row_y + ROW_HEIGHT - 17.0,
+                &Text {
+                    size: 11.5,
+                    bold: false,
+                    color: th.muted,
+                    text: &item.label,
+                },
+            );
+            continue;
+        }
+
+        // an app playing sound: its name, a slider, its level
+        if let Some(level) = app_level(item) {
+            let mid = row_y + ROW_HEIGHT / 2.0;
+            draw::text_max(
+                cr,
+                cx + PAD_X + 8.0,
+                mid - 8.0,
+                104.0,
+                &Text {
+                    size: 13.0,
+                    bold: false,
+                    color: th.text.alpha(0.9),
+                    text: &item.label,
+                },
+            );
+            let (x0, x1) = app_slider_span(cx, cw);
+            let frac = (f64::from(level.min(100)) / 100.0).clamp(0.0, 1.0);
+            draw::round_rect(cr, x0, mid - 2.0, x1 - x0, 4.0, 2.0);
+            draw::set(cr, th.track);
+            let _ = cr.fill();
+            if frac > 0.0 {
+                draw::round_rect(cr, x0, mid - 2.0, (x1 - x0) * frac, 4.0, 2.0);
+                draw::set(cr, th.accent);
+                let _ = cr.fill();
+            }
+            cr.new_sub_path();
+            cr.arc(x0 + (x1 - x0) * frac, mid, 6.0, 0.0, std::f64::consts::TAU);
+            draw::set(cr, th.text);
+            let _ = cr.fill();
+            draw::text_right(
+                cr,
+                cx + cw - PAD_X,
+                mid - 8.0,
+                &Text {
+                    size: 12.0,
+                    bold: false,
+                    color: th.muted,
+                    text: &item.meta,
+                },
+            );
+            continue;
+        }
+
         // Row background on active / hover
         if item.active || is_hovered {
             draw::round_rect(
@@ -564,6 +750,42 @@ pub fn click_child(
 
     let row = ((py - start_y) / ROW_HEIGHT).floor() as usize;
     if let Some(item) = world.child.items.get(row).cloned() {
+        if item.id == SAID || item.id.is_empty() {
+            return (false, None);
+        }
+        if let Some(idx) = item.id.strip_prefix(APP_PREFIX) {
+            // the slider: the level where it was clicked (0-100 %); elsewhere on the row nothing
+            let (x0, x1) = app_slider_span(cx, cw);
+            if px < x0 - 8.0 || px > x1 + 8.0 || !idx.bytes().all(|b| b.is_ascii_digit()) {
+                return (false, None);
+            }
+            let pct = (((px - x0) / (x1 - x0)).clamp(0.0, 1.0) * 100.0).round() as u32;
+            let cmd = format!(
+                "pactl set-sink-input-mute {idx} 0 >/dev/null 2>&1; pactl set-sink-input-volume {idx} {pct}% >/dev/null 2>&1"
+            );
+            world.run(cmd.clone());
+            if let Some(it) = world.child.items.get_mut(row) {
+                it.meta = format!("{pct}%");
+            }
+            return (true, Some(cmd));
+        }
+        if item.id == WIFI_ON || item.id == WIFI_OFF {
+            let cmd = action_for_child_item(kind, &item);
+            if let Some(ref c) = cmd {
+                world.run(c.clone());
+            }
+            let on = item.id == WIFI_ON;
+            world.switches.wifi_on = on;
+            if let Some(it) = world.child.items.get_mut(row) {
+                it.id = if on { WIFI_OFF } else { WIFI_ON }.into();
+                it.meta = if on { "On" } else { "Off" }.into();
+            }
+            if !on {
+                // Wi-Fi off: its networks go
+                world.child.items.retain(|r| r.id.starts_with('#'));
+            }
+            return (true, cmd);
+        }
         if kind == ChildKind::Bluetooth && item.id == "-" {
             // look for devices for 15 s (it only set a flag: nothing searched); the devices
             // found are listed the next time the list opens
@@ -577,9 +799,12 @@ pub fn click_child(
             world.run(c.clone());
         }
 
-        // Update active flag locally
+        // Update active flag locally (the chosen network, output or mode; not the said rows,
+        // the switch or the apps)
         for (i, it) in world.child.items.iter_mut().enumerate() {
-            it.active = i == row;
+            if !it.id.starts_with('#') && !it.id.starts_with(APP_PREFIX) {
+                it.active = i == row;
+            }
         }
 
         if kind == ChildKind::Power {
@@ -595,6 +820,64 @@ pub fn click_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn network_rows_say_the_cable_and_switch_wifi() {
+        let rows = network_rows(
+            "ethernet:connected\nwifi:disconnected\nloopback:connected (externally)\nenabled\n",
+        );
+        assert_eq!(rows[0].label, "Wired");
+        assert_eq!(rows[0].meta, "Connected");
+        assert!(rows[0].active);
+        assert_eq!(rows[1].id, WIFI_OFF, "on: the row turns it off");
+        assert_eq!(action_for_child_item(ChildKind::Wifi, &rows[0]), None);
+        assert_eq!(
+            action_for_child_item(ChildKind::Wifi, &rows[1]).as_deref(),
+            Some("nmcli radio wifi off >/dev/null 2>&1")
+        );
+        let rows = network_rows("wifi:unavailable\ndisabled\n");
+        assert_eq!(rows.len(), 1, "no cable port: no Wired row");
+        assert_eq!(rows[0].id, WIFI_ON);
+    }
+
+    #[test]
+    fn apps_playing_sound_get_a_row_each_with_their_level() {
+        let out = "Sink Input #45\n\tDriver: PipeWire\n\tMute: no\n\tVolume: front-left: 42598 /  65% / -11.23 dB,   front-right: 42598 /  65% / -11.23 dB\n\tProperties:\n\t\tapplication.name = \"Firefox\"\nSink Input #47\n\tMute: yes\n\tVolume: mono: 65536 / 100% / 0.00 dB\n\tProperties:\n\t\tapplication.process.binary = \"melodyae\"\nSink Input #x9\n";
+        let rows = parse_sink_inputs(out);
+        assert_eq!(rows[0].label, "Apps");
+        assert_eq!(rows.len(), 3, "the malformed index is left out");
+        assert_eq!(
+            (rows[1].id.as_str(), rows[1].label.as_str()),
+            ("@app:45", "Firefox")
+        );
+        assert_eq!(app_level(&rows[1]), Some(65));
+        assert_eq!(
+            (rows[2].label.as_str(), rows[2].meta.as_str()),
+            ("melodyae", "Muted")
+        );
+        assert_eq!(app_level(&rows[2]), Some(0));
+        assert_eq!(parse_sink_inputs("")[1].label, "No app is playing sound");
+    }
+
+    #[test]
+    fn a_click_on_an_app_slider_sets_that_apps_volume() {
+        let mut world = World::now();
+        world.child.open = true;
+        world.child.kind = Some(ChildKind::Audio);
+        world.child.items = parse_sink_inputs("Sink Input #45\n\tVolume: mono: 1 / 65% / 0 dB\n");
+        let rect = (0.0, 0.0, CHILD_WIDTH, 200.0);
+        let row_y = PAD_Y + 22.0 + GAP + ROW_HEIGHT * 1.5;
+        let (x0, x1) = app_slider_span(0.0, CHILD_WIDTH);
+        let (changed, cmd) = click_child(&mut world, rect, ((x0 + x1) / 2.0, row_y), 1);
+        assert!(changed);
+        assert_eq!(
+            cmd.as_deref(),
+            Some("pactl set-sink-input-mute 45 0 >/dev/null 2>&1; pactl set-sink-input-volume 45 50% >/dev/null 2>&1")
+        );
+        assert_eq!(world.child.items[1].meta, "50%");
+        let (changed, _) = click_child(&mut world, rect, (PAD_X + 20.0, row_y), 1);
+        assert!(!changed, "the name: nothing");
+    }
 
     #[test]
     fn parses_real_wifi_nmcli_output() {

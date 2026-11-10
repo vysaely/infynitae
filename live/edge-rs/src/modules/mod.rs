@@ -700,9 +700,24 @@ pub fn load_child_list(kind: child::ChildKind, bt_scan: bool, live: bool) -> Vec
             if out.is_empty() && std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
                 out = run_sh("wifi", "");
             }
-            let items = child::parse_wifi_list(&out);
-            if !items.is_empty() {
-                items
+            // the cable and the Wi-Fi switch first, then the networks (Wi-Fi on only)
+            let dev = run_sh(
+                "net_dev",
+                "nmcli -t -f TYPE,STATE device 2>/dev/null; nmcli radio wifi 2>/dev/null",
+            );
+            let mut head = child::network_rows(&dev);
+            let wifi_on = head.iter().any(|r| r.id == child::WIFI_OFF);
+            let items = if wifi_on {
+                child::parse_wifi_list(&out)
+            } else {
+                Vec::new()
+            };
+            if !items.is_empty() || (live && !head.is_empty()) {
+                head.extend(items);
+                if wifi_on && head.iter().all(|r| r.id.starts_with('#')) {
+                    head.push(child::none_found("No networks found"));
+                }
+                head
             } else if live {
                 vec![child::none_found("No networks found")]
             } else {
@@ -731,8 +746,11 @@ pub fn load_child_list(kind: child::ChildKind, bt_scan: bool, live: bool) -> Vec
         child::ChildKind::Audio => {
             let def = run_sh("audio_def", "pactl get-default-sink 2>/dev/null");
             let sinks = run_sh("audio_sinks", "pactl list sinks 2>/dev/null");
-            let items = child::parse_audio_list(&sinks, &def);
+            let mut items = child::parse_audio_list(&sinks, &def);
             if !items.is_empty() {
+                // then each app playing sound, with its own volume
+                let inputs = run_sh("audio_apps", "LC_ALL=C pactl list sink-inputs 2>/dev/null");
+                items.extend(child::parse_sink_inputs(&inputs));
                 items
             } else if live {
                 vec![child::none_found("No outputs found")]

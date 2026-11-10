@@ -43,6 +43,7 @@ const WORDS: &[(&str, Module)] = &[
     ("clock", Module::Clock),
     ("volume", Module::Volume),
     ("wifi", Module::Wifi),
+    ("network", Module::Wifi),
     ("bluetooth", Module::Bluetooth),
     ("dnd", Module::Dnd),
     ("power", Module::Power),

@@ -219,7 +219,7 @@ fn pointer_set(world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
     };
     let out_top = PAD_Y + (rows as f64) * SLIDER_ROW_H - 4.0;
     if y >= out_top {
-        // Click on "Output: <sink>": opens the output list (stage 4).
+        // the output line: click opens the Sound card; a drag does nothing there
         return false;
     }
     let pct = pct_at(w, x);
@@ -241,9 +241,23 @@ fn pointer_set(world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
     true
 }
 
+/// Whether `y` (in the card) is on the output line under the sliders.
+fn on_output_line(world: &World, y: f64) -> bool {
+    let rows = if world.volume.brightness.is_some() {
+        2
+    } else {
+        1
+    };
+    y >= PAD_Y + (rows as f64) * SLIDER_ROW_H - 4.0
+}
+
 pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) -> bool {
     if !is_left_button(button) {
         return false;
+    }
+    if !compact(size.1) && on_output_line(world, pos.1) {
+        // "Output: <sink> ... More": the Sound card (the outputs, and each app's volume)
+        return crate::modules::toggle_child(world, crate::modules::child::ChildKind::Audio);
     }
     pointer_set(world, size, pos)
 }
