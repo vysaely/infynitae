@@ -11,7 +11,6 @@ history, hidden from search by `.ignore`.
 - **No slop** (`docs/NO_SLOP.md`, the owner's rule): nothing decorative that carries no information,
   no sample or invented data in anything shipped, no hype or filler words in UI text, docs, comments
   or commits, no speculative code. Read it before changing anything people see or read.
-
 - **Core is a pure state machine** (`crates/infynitae-core`: no Wayland, no I/O, no unsafe). It takes events and
   returns effects; the adapter (`crates/infynitae-wayland`) applies them. Rules and invariants (INV-*, F-*) live
   in `docs/foundation/`; `tools/verify-architecture` and `tools/check-foundation-docs` enforce structure.
