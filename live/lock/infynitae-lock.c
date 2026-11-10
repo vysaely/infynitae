@@ -318,6 +318,33 @@ static void parse_hex_rgb(const char *s, double out[3]) {
     }
 }
 
+
+/* The look the panels, widgets, notifications and menus share (docs/EDGE_RUST.md, stage 7), as
+ * infynitae-settings resolved it into ~/.cache/infynitae/look: the card colour, its edge, the text,
+ * the accent and the corners (0: square). Read after the config, so a colour scheme reaches the
+ * lock screen too; without the file, the config's colours as before. */
+static void read_look(LockApp *app, const char *home) {
+    const char *cache = getenv("XDG_CACHE_HOME");
+    char path[512];
+    if (cache && *cache) snprintf(path, sizeof(path), "%s/infynitae/look", cache);
+    else snprintf(path, sizeof(path), "%s/.cache/infynitae/look", home);
+    FILE *f = fopen(path, "r");
+    if (!f) return;
+    char line[256];
+    while (fgets(line, sizeof(line), f)) {
+        if (strncmp(line, "LOOK_CARD=", 10) == 0) parse_hex_rgb(line + 10, app->surface_rgb);
+        else if (strncmp(line, "LOOK_EDGE=", 10) == 0) parse_hex_rgb(line + 10, app->border_inact_rgb);
+        else if (strncmp(line, "LOOK_TEXT=", 10) == 0) parse_hex_rgb(line + 10, app->text_rgb);
+        else if (strncmp(line, "LOOK_ACCENT=", 12) == 0) parse_hex_rgb(line + 12, app->border_act_rgb);
+        else if (strncmp(line, "LOOK_CORNERS=", 13) == 0) {
+            const char *v = line + 13;
+            while (*v == '"') v++;
+            if (*v >= '0' && *v <= '9') app->square_corners = atoi(v) == 0;
+        }
+    }
+    fclose(f);
+}
+
 static void load_theme_config(LockApp *app) {
     app->canvas_rgb[0] = 0.043; app->canvas_rgb[1] = 0.059; app->canvas_rgb[2] = 0.078;       /* #0b0f14 */
     app->surface_rgb[0] = 0.067; app->surface_rgb[1] = 0.075; app->surface_rgb[2] = 0.090;     /* #111317 */
@@ -348,6 +375,7 @@ static void load_theme_config(LockApp *app) {
         }
     }
     fclose(f);
+    read_look(app, home);
 }
 
 /* ========================================================================== */

@@ -1,0 +1,209 @@
+#!/bin/sh
+# tools/test-edge-rs: the Rust edge (live/edge-rs, docs/EDGE_RUST.md) reads PANEL_ lines exactly as the
+# C edge does (both print the same panels for the same config), and draws every panel to a PNG that
+# is not blank. Run from the repository root; builds both.
+set -eu
+REPO_DIR=$(cd "$(dirname "$0")/.." && pwd)
+TMP=$(mktemp -d "/tmp/infynitae-test-edge-rs.XXXXXX")
+cleanup() { [ -n "${FAKE:-}" ] && kill "$FAKE" 2>/dev/null || true; rm -rf "$TMP"; }
+trap cleanup EXIT INT TERM
+LIVE="$REPO_DIR/live"
+cc -O1 -o "$TMP/edge-c" "$LIVE/edge/infynitae-edge.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
+    "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/edge/wlr-foreign-toplevel-protocol.c" \
+    $(pkg-config --cflags --libs wayland-client cairo pangocairo xkbcommon gio-2.0) -lm
+(cd "$LIVE/edge-rs" && cargo build --locked --quiet)
+RS="$LIVE/edge-rs/target/debug/infynitae-edge-rs"
+[ -n "${CARGO_TARGET_DIR:-}" ] && RS="$CARGO_TARGET_DIR/debug/infynitae-edge-rs"
+mkdir -p "$TMP/home/.config/infynitae"
+fail=0
+same() {  # a config; both edges must print the same panels
+    printf '%s\n' "$1" > "$TMP/home/.config/infynitae/config"
+    HOME="$TMP/home" "$TMP/edge-c" --print-panels > "$TMP/c.txt"
+    HOME="$TMP/home" "$RS" --print-panels > "$TMP/rs.txt"
+    if cmp -s "$TMP/c.txt" "$TMP/rs.txt"; then echo "ok   same panels: $1"
+    else echo "FAIL different panels for: $1"; diff "$TMP/c.txt" "$TMP/rs.txt" || true; fail=1; fi
+}
+same ''
+same 'EDGE_POSITION="bottom"
+EDGE_CONTROL_SIDE="left"'
+same 'PANEL_CONTROL="SUPER+A top right hover clock:big wifi:small dnd:wide volume"'
+same 'PANEL_APPS="search:hidden favorites apps"'
+same 'PANEL_APPS="search:bar apps"'
+same 'PANEL_CONTROL="clock:huge wifi:tile"'
+same 'PANEL_MINE="SUPER+M left center 320 volume:loud wifi:small"'
+same 'PANEL_CONTROL="SUPER+A top right 360x400 hover clock@8,8,344x34 wifi@8,48,170x46 volume"'
+same 'PANEL_APPS="search:hidden@8,8,544x40 apps@8,56,544x256"'
+same 'PANEL_CONTROL="left"
+PANEL_MEDIA="SUPER+M right center 320 volume tray"'
+same 'PANEL_X="none, top, left, clock:big,wifi:small bogus 99999"'
+same 'CONTROL_MODULES="clock apps wifi"'
+same 'EDGE_POSITION="bottom"
+EDGE_CONTROL_SIDE="right"
+PANEL_CONTROL="SUPER+A bottom right 361x708 hover clock@8,8,344x34 volume@8,48,344x32 wifi@8,86,169x46 bluetooth@183,86,169x46 dnd@8,138,169x46 nightlight@183,138,169x46 keyboard@8,190,169x46 power@183,190,169x46 replay@8,242,169x40 osk@183,242,169x40 notifications@9,288,344x144 media@8,438,344x76 tray@8,520,345x143 session@9,669,344x36"'
+printf 'PANEL_CONTROL="clock:calendar wifi volume"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+for p in apps windows control clipboard; do
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" "$RS" --render "$p" 1280x800 "$TMP/$p.png" \
+        && [ "$(stat -c %s "$TMP/$p.png")" -gt 4000 ]; then echo "ok   $p drawn"
+    else echo "FAIL $p not drawn"; fail=1; fi
+done
+cat > "$TMP/render-data.txt" <<'EOF'
+wifi=enabled\nyes:HomeNet
+bluetooth=Powered: yes\nDevice 4C:87:5D:11:22:33 Headphones
+dnd=on
+nightlight=off
+keyboard=US\tEnglish (US)\t2
+osk=shown
+power=balanced
+replay=on
+volume=Volume: front-left: 39321 / 60% / -13.30 dB\nMute: no\nDescription: Built-in Audio
+brightness=amdgpu_bl1,backlight,192,75%,255
+system=gpu_busy=67\nvram_used=7807320064\nvram_total=17095983104\ntemp=57000\n7550,\tC0,\tAMD Radeon RX 9070 XT\n=== labv15-pushback-s1 20:55
+memory=MemTotal: 33554432 kB\nMemAvailable: 13002342 kB\nfirefox\t4404019\ncode\t2306867\nalacritty\t655360
+apps=Firefox\tfirefox\tfirefox\torg.mozilla.firefox.desktop\tWeb Browser\tweb;browser;\t200\nFiles\tnautilus\torg.gnome.Nautilus\torg.gnome.Nautilus.desktop\tFile Manager\tfolder;\t150\nFoot\tfoot\tfoot\tfoot.desktop\tTerminal\tshell;\t100\nSettings\tgnome-control-center\torg.gnome.Settings\torg.gnome.Settings.desktop\tSettings\tpreferences;\t0\nSystem Monitor\tgnome-system-monitor\torg.gnome.SystemMonitor\torg.gnome.SystemMonitor.desktop\tProcess Viewer\ttop;cpu;\t0
+favorites=firefox org.gnome.Nautilus foot org.gnome.Settings org.gnome.SystemMonitor
+windows=1\tfirefox\tMozilla Firefox — Infynitae\tfocused\n2\tfoot\t~/infynitae — foot\t\n3\torg.gnome.Nautilus\tFiles — Home\t
+EOF
+for look in rows icons tiles; do
+    printf 'SWITCH_LOOK="%s"\nPANEL_CONTROL="clock:calendar wifi bluetooth dnd nightlight keyboard osk power replay volume"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' "$look" > "$TMP/home/.config/infynitae/config"
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render control 1280x800 "$TMP/control-$look.png" \
+        && [ "$(stat -c %s "$TMP/control-$look.png")" -gt 4000 ]; then echo "ok   control ($look) drawn"
+    else echo "FAIL control ($look) not drawn"; fail=1; fi
+done
+# the desktop's widgets (stage 5): the WIDGETS line drawn on the whole screen
+printf 'WIDGETS="clock:big@60,60,380x150 calendar@60,230,380x330 media@470,60,380x234"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render widgets 1280x720 "$TMP/widgets.png" \
+    && [ "$(stat -c %s "$TMP/widgets.png")" -gt 4000 ]; then echo "ok   desktop widgets drawn"
+else echo "FAIL desktop widgets not drawn"; fail=1; fi
+printf 'PANEL_CONTROL="system memory"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render control 1280x800 "$TMP/system-memory.png" \
+    && [ "$(stat -c %s "$TMP/system-memory.png")" -gt 4000 ]; then echo "ok   system and memory drawn"
+else echo "FAIL system and memory not drawn"; fail=1; fi
+cat >> "$TMP/render-data.txt" <<'EOF'
+clipboard=pin:108\tgit push origin main\t2m\n107\t[[ binary data 24 KiB png 1920x1080 ]]\t5m\n106\thttps://github.com/vysaely/infynitae\t12m
+notifications=[{"id":14,"app_name":"Discord","time":"Now","summary":"New message from a friend","body":"Hey, are you online?"},{"id":11,"app_name":"Steam","time":"5m","summary":"Download complete","body":""}]
+EOF
+printf 'PANEL_CONTROL="clock volume notifications session"\nPANEL_CLIPBOARD="clipboard"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+for p in control clipboard; do
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render "$p" 1280x800 "$TMP/stage2b-$p.png" \
+        && [ "$(stat -c %s "$TMP/stage2b-$p.png")" -gt 4000 ]; then echo "ok   stage2b $p drawn"
+    else echo "FAIL stage2b $p not drawn"; fail=1; fi
+done
+printf 'FAVORITES="firefox org.gnome.Nautilus foot org.gnome.Settings org.gnome.SystemMonitor"\nPANEL_APPS="SUPER+W top center search:bar favorites apps"\nPANEL_WINDOWS="SUPER+L top center search:bar windows"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+for p in apps windows; do
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render "$p" 1280x800 "$TMP/$p-data.png" \
+        && [ "$(stat -c %s "$TMP/$p-data.png")" -gt 4000 ]; then echo "ok   $p (data) drawn"
+    else echo "FAIL $p (data) not drawn"; fail=1; fi
+done
+cat >> "$TMP/render-data.txt" <<'EOF'
+tray=Steam\t2159 MB\nDiscord\t2 new\tattention\nRustDesk\tIdle\nMelodyae\tPlaying
+media=status=Playing\ntitle=Starless\nartist=King Crimson\nalbum=Red\nplayer=Melodyae\nposition=234000000\nduration=742000000\nshuffle=true\nloop=Playlist\nlyrics_current=Starless and bible black\nlyrics_next=Ice and frozen darkness\nlyrics_before=Sundown dazzling day\nqueue=Starless\tKing Crimson\t\t742000000\nqueue=Fallen Angel\tKing Crimson\t\t363000000\nqueue=One More Red Nightmare\tKing Crimson\t\t427000000
+EOF
+printf 'PANEL_MEDIA="SUPER+M top right media tray"\nPANEL_LARGE="SUPER+L top center 400x600 media"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+for p in media large; do
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render "$p" 1280x800 "$TMP/stage3-$p.png" \
+        && [ "$(stat -c %s "$TMP/stage3-$p.png")" -gt 4000 ]; then echo "ok   stage3 $p drawn"
+    else echo "FAIL stage3 $p not drawn"; fail=1; fi
+done
+printf 'PANEL_CONTROL="SUPER+A bottom right 361x708 hover clock@8,8,344x34 volume@8,48,344x32 wifi@8,86,169x46 bluetooth@183,86,169x46 dnd@8,138,169x46 nightlight@183,138,169x46 keyboard@8,190,169x46 power@183,190,169x46 replay@8,242,169x40 osk@183,242,169x40 notifications@9,288,344x144 media@8,438,344x76 tray@8,520,345x143 session@9,669,344x36"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render control 1280x800 "$TMP/stage3-control-placed.png" \
+    && [ "$(stat -c %s "$TMP/stage3-control-placed.png")" -gt 4000 ]; then echo "ok   stage3 control (placed) drawn"
+else echo "FAIL stage3 control (placed) not drawn"; fail=1; fi
+for sub in wifi bt audio power cal; do
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" INFYNITAE_EDGE_RENDER_SUB="$sub" INFYNITAE_EDGE_BOXES="$TMP/boxes-$sub.txt" "$RS" --render control 1280x800 "$TMP/stage4-$sub.png" \
+        && [ "$(stat -c %s "$TMP/stage4-$sub.png")" -gt 4000 ] && grep -q '^child ' "$TMP/boxes-$sub.txt"; then
+        echo "ok   stage4 child ($sub) drawn"
+    else
+        echo "FAIL stage4 child ($sub) not drawn"; fail=1
+    fi
+done
+if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_EDIT=1 INFYNITAE_EDGE_BOXES="$TMP/boxes-edit.txt" "$RS" --render control 1280x800 "$TMP/stage4-edit.png" \
+    && [ "$(stat -c %s "$TMP/stage4-edit.png")" -gt 4000 ] && grep -q '^bar ' "$TMP/boxes-edit.txt"; then
+    echo "ok   stage4 edit mode drawn"
+else
+    echo "FAIL stage4 edit mode not drawn"; fail=1
+fi
+if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_EDIT=1 INFYNITAE_EDGE_RENDER_ADD=1 INFYNITAE_EDGE_BOXES="$TMP/boxes-add.txt" "$RS" --render control 1280x800 "$TMP/stage4-edit-add.png" \
+    && [ "$(stat -c %s "$TMP/stage4-edit-add.png")" -gt 4000 ] && grep -q '^bar ' "$TMP/boxes-add.txt"; then
+    echo "ok   stage4 edit add drawn"
+else
+    echo "FAIL stage4 edit add not drawn"; fail=1
+fi
+for q in "Format the drive as|exFAT|FAT32|ext4" "text:Name for the drive" "secret:Passphrase for USB"; do
+    tag=${q%%:*}
+    tag=${tag%%|*}
+    if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_ASK="$q" INFYNITAE_EDGE_RENDER_SEARCH="Photos" INFYNITAE_EDGE_RENDER_RECT=1 \
+        "$RS" --render ask 1920x1080 "$TMP/ask-$tag.png" > "$TMP/ask-rect" \
+        && [ "$(stat -c %s "$TMP/ask-$tag.png")" -gt 4000 ]; then
+        set -- $(cat "$TMP/ask-rect")
+        if [ $(( $1 + $3 / 2 )) -ge 955 ] && [ $(( $1 + $3 / 2 )) -le 965 ] && [ "$2" -lt 540 ] && [ "$3" -ge 400 ]; then
+            echo "ok   ask ($tag) drawn centred, $3 x $4"
+        else
+            echo "FAIL ask ($tag): rect $*"; fail=1
+        fi
+    else
+        echo "FAIL ask ($tag) not drawn"; fail=1
+    fi
+done
+if command -v bash >/dev/null; then
+    export XDG_RUNTIME_DIR="$TMP/run"
+    mkdir -p "$XDG_RUNTIME_DIR" "$TMP/fake"
+    cat > "$TMP/fake/infynitae-edge-rs" <<FAKE
+#!$(command -v bash)
+answer() {
+    req="\$XDG_RUNTIME_DIR/infynitae-edge-rs.ask"
+    cp "\$req" "$TMP/last-request"; rm -f "\$req"
+    pipe=\$(head -n 1 "$TMP/last-request")
+    a=\$(cat "$TMP/answer")
+    case "\$a" in
+        none) ;;
+        cancel) printf '0\n' > "\$pipe" ;;
+        *) printf '1\n%s\n' "\$a" > "\$pipe" ;;
+    esac
+}
+trap answer RTMIN+3
+echo \$\$ > "\$XDG_RUNTIME_DIR/infynitae-edge-rs.pid"
+while :; do sleep 0.1; done
+FAKE
+    chmod +x "$TMP/fake/infynitae-edge-rs"
+    check() { if eval "$2"; then echo "ok   ask: $1"; else echo "FAIL ask: $1"; fail=1; fi; }
+    ask() { rc=0; out=$("$RS" ask "$@") || rc=$?; }
+
+    ask "Pick" < /dev/null || true
+    check "no edge running: exit 3, so the caller asks another way" '[ "$rc" = 3 ]'
+
+    "$TMP/fake/infynitae-edge-rs" & FAKE=$!
+    for i in 1 2 3 4 5 6 7 8 9 10; do [ -f "$XDG_RUNTIME_DIR/infynitae-edge-rs.pid" ] && break; sleep 0.1; done
+
+    echo "FAT32: every device" > "$TMP/answer"
+    printf 'exFAT: every computer\nFAT32: every device\n\next4: Linux only\n' | { ask "Format the drive as"; echo "$rc|$out" > "$TMP/r"; }
+    check "a choice: prints the answer, exit 0" '[ "$(cat "$TMP/r")" = "0|FAT32: every device" ]'
+    check "a choice: the edge is told the pipe, the kind, the title" \
+        'sed -n 2,4p "$TMP/last-request" | tr "\n" "|" | grep -qx "choose|plain|Format the drive as|"'
+    check "a choice: the choices, empty lines left out" '[ "$(tail -n +6 "$TMP/last-request" | tr "\n" "|")" = "exFAT: every computer|FAT32: every device|ext4: Linux only|" ]'
+    check "a choice: the pipe is the runtime folder's and is gone after" \
+        'p=$(head -n 1 "$TMP/last-request"); case "$p" in "$XDG_RUNTIME_DIR"/infynitae-edge-rs.ask.*) [ ! -e "$p" ] ;; *) false ;; esac'
+
+    echo cancel > "$TMP/answer"
+    printf 'a\nb\n' | { ask "Pick"; echo "$rc|$out" > "$TMP/r"; }
+    check "cancelled: nothing printed, exit 1" '[ "$(cat "$TMP/r")" = "1|" ]'
+
+    echo "hunter two" > "$TMP/answer"
+    ask --secret --default "abc" "Passphrase for USB" < /dev/null
+    check "text: the typed text, exit 0" '[ "$rc" = 0 ] && [ "$out" = "hunter two" ]'
+    check "text: secret and the text to start from reach the edge" \
+        'sed -n 2,5p "$TMP/last-request" | tr "\n" "|" | grep -qx "text|secret|Passphrase for USB|abc|"'
+
+    echo "x" > "$TMP/answer"
+    printf 'one\n' | { ask "$(printf 'two\nlines')"; echo "$rc" > "$TMP/r"; }
+    check "a title of two lines reaches the edge as one" '[ "$(sed -n 4p "$TMP/last-request")" = "two" ] && [ "$(wc -l < "$TMP/last-request")" = 6 ]'
+
+    ask "Pick" < /dev/null || true
+    check "a choice with no choices: exit 2" '[ "$rc" = 2 ]'
+
+    echo none > "$TMP/answer"
+    ( sleep 1; kill "$FAKE" ) &
+    printf 'a\n' | { ask "Pick"; echo "$rc" > "$TMP/r"; }
+    check "the edge goes away without answering: exit 3, not a hang" '[ "$(cat "$TMP/r")" = 3 ]'
+    FAKE=""
+fi
+[ "$fail" = 0 ] && echo "all edge-rs tests passed" || { echo "edge-rs tests failed"; exit 1; }

@@ -1,0 +1,7 @@
+# Settings that were renamed: OLD NEW, one a line. The old name keeps working where the new one is
+# not set (live/config.sh), config-check knows it, and an update rewrites it to the new name in the
+# user's config, keeping its value (live/install-lib.sh). NEW "-": retired, only known.
+ENABLE_ISLAND        ENABLE_EDGE          # the island became the edge, 2026-10-31
+ISLAND_EDGE          EDGE_POSITION
+ISLAND_CONTROL_SIDE  EDGE_CONTROL_SIDE
+CONTROL_MODULES      -                    # the control panel's modules: PANEL_CONTROL since 2026-11-07

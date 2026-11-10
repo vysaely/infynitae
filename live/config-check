@@ -19,7 +19,9 @@ known=""
 if [ -f "$KNOWN_FROM" ]; then
     known=" $(grep -oE '[A-Z][A-Z0-9_]+=' "$KNOWN_FROM" | tr -d = | sort -u | tr '\n' ' ')"
     # old names of renamed settings, still read (live/config.sh)
-    known="$known ENABLE_ISLAND ISLAND_EDGE ISLAND_CONTROL_SIDE CONTROL_MODULES "
+    renames="$(dirname "$KNOWN_FROM")/../live/config-renames"
+    [ -f "$renames" ] || renames="$HOME/infynitae/live/config-renames"
+    known="$known $(sed -n 's/^\([A-Z][A-Z0-9_]*\)[[:space:]].*/\1/p' "$renames" 2>/dev/null | tr '\n' ' ') "
 fi
 
 problems=$(

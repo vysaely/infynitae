@@ -100,11 +100,19 @@ impl Capability {
             Capability::Clipboard => &["xwayland-satellite"],
             Capability::Input => &["infynitae-portal"],
             Capability::InputMethod => &[],
-            Capability::Windows => &["infynitae-edge", "infynitae-island"],
+            Capability::Windows => &[
+                "infynitae-edge",
+                "infynitae-edge-rs",
+                "infynitae-edge-c",
+                "infynitae-island",
+            ],
             Capability::Lock => &["infynitae-lock"],
             Capability::Display => &[],
             Capability::Layers => &[
                 "infynitae-edge",
+                // the edge in Rust (docs/EDGE_RUST.md), beside the C one until it replaces it
+                "infynitae-edge-rs",
+                "infynitae-edge-c",
                 "infynitae-island",
                 "infynitae-lock",
                 "infynitae-wallpaper",
@@ -488,6 +496,20 @@ mod tests {
         assert!(p.allows(&me(), Capability::Clipboard));
         let tight = Policy::from_lists(None, [(Capability::Clipboard, "wl-copy")]);
         assert!(!tight.allows(&me(), Capability::Clipboard));
+    }
+
+    /// The edge in Rust (docs/EDGE_RUST.md) draws panels and lists windows like the C edge, under
+    /// its own name while both exist; nothing else gains the edge's rights by that name's absence.
+    #[test]
+    fn the_rust_edge_is_one_of_the_helpers() {
+        let p = Policy::from_lists(None, [(Capability::Layers, ""), (Capability::Windows, "")]);
+        for name in ["infynitae-edge", "infynitae-edge-rs", "infynitae-edge-c"] {
+            let path = Path::new("/home/someone/.local/bin").join(name);
+            assert!(p.names(&path, Capability::Layers), "{name} layers");
+            assert!(p.names(&path, Capability::Windows), "{name} windows");
+            assert!(!p.names(&path, Capability::Lock), "{name} lock");
+        }
+        assert!(!p.names(Path::new("/usr/bin/infynitae-edge-rs2"), Capability::Layers));
     }
 
     /// An update writes each helper anew and renames it into place (`live/build-helpers.sh`): the

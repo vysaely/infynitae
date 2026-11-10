@@ -1,0 +1,27 @@
+#!/bin/sh
+# tools/test-config-renames: renamed settings (live/config-renames) in a stand-in home. Checks: the
+# old name gives its value to the new one when that is not set (live/config.sh), the new one wins
+# when both are; config-check knows the old and retired names and still names a misspelt one; an
+# update (install_config) rewrites the old name to the new one keeping its value, and comments it
+# out when the new one is there too. Run from the repository root.
+set -u
+REPO=$(pwd)
+T=$(mktemp -d)
+trap 'rm -rf "$T"' EXIT
+mkdir -p "$T/infynitae/live" "$T/infynitae/config" "$T/.config/infynitae" "$T/.local/state/infynitae"
+cp live/config.sh live/config-renames live/config-check "$T/infynitae/live/"
+cp config/config "$T/infynitae/config/"
+cfg="$T/.config/infynitae/config"
+printf 'ENABLE_ISLAND="false"\nISLAND_EDGE="bottom"\nEDGE_POSITION="top"\nCONTROL_MODULES="x"\nTYPO_SETTING="1"\n' > "$cfg"
+fails=0
+check() { if [ "$2" = "$3" ]; then echo "ok   $1"; else echo "FAIL $1: got [$2], want [$3]"; fails=$((fails + 1)); fi; }
+
+got=$(HOME=$T sh -c ". \"$T/infynitae/live/config.sh\"; echo \"\$ENABLE_EDGE \$EDGE_POSITION\"")
+check "the old name's value goes to the new name; the new one wins when both are set" "$got" "false top"
+got=$(HOME=$T sh "$T/infynitae/live/config-check" 2>&1)
+check "config-check names only the misspelt setting" "$got" "line 5: unknown setting TYPO_SETTING, ignored"
+HOME=$T bash -c ". \"$REPO/live/install-lib.sh\" >/dev/null 2>&1; install_config \"$REPO\"" >/dev/null 2>&1
+check "an update renames the old setting, keeping its value" "$(grep -c '^ENABLE_EDGE="false"$' "$cfg")" 1
+check "and comments out an old one whose new name is set" "$(grep -c '^#ISLAND_EDGE="bottom"$' "$cfg")" 1
+check "the new name keeps its own value" "$(grep '^EDGE_POSITION=' "$cfg")" 'EDGE_POSITION="top"'
+[ "$fails" = 0 ] && echo "test-config-renames: passed" || { echo "test-config-renames: $fails failed"; exit 1; }

@@ -48,7 +48,8 @@ fail() {
 # the edge (the panels) can ask: an edge from before `infynitae-edge ask` takes "ask" as a reason
 # to start again, so only one that says so in its features file is asked
 edge_can_ask() {
-    [ -n "${XDG_RUNTIME_DIR:-}" ] && grep -qx ask "$XDG_RUNTIME_DIR/infynitae-edge.features" 2>/dev/null \
+    [ -n "${XDG_RUNTIME_DIR:-}" ] && cat "$XDG_RUNTIME_DIR/infynitae-edge.features" \
+        "$XDG_RUNTIME_DIR/infynitae-edge-rs.features" 2>/dev/null | grep -qx ask \
         && command -v infynitae-edge >/dev/null 2>&1
 }
 

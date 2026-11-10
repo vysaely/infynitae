@@ -21,12 +21,16 @@ if [ -f "$_infy_config" ]; then
     fi
 fi
 unset _infy_config
-# settings renamed: the old name still works where the new one is not set
-# (the island became the edge, 2026-10-31)
-: "${ENABLE_EDGE:=${ENABLE_ISLAND:-}}" "${EDGE_POSITION:=${ISLAND_EDGE:-}}" "${EDGE_CONTROL_SIDE:=${ISLAND_CONTROL_SIDE:-}}"
-[ -n "$ENABLE_EDGE" ] || unset ENABLE_EDGE
-[ -n "$EDGE_POSITION" ] || unset EDGE_POSITION
-[ -n "$EDGE_CONTROL_SIDE" ] || unset EDGE_CONTROL_SIDE
+# settings renamed (live/config-renames): the old name still works where the new one is not set
+if [ -f "$HOME/infynitae/live/config-renames" ]; then
+    while read -r _infy_old _infy_new _infy_rest; do
+        case "$_infy_old$_infy_new" in
+            '' | '#'* | *[!A-Z0-9_]*) continue ;; # blank lines, comments, retired names ("-")
+        esac
+        eval "[ -n \"\${$_infy_new:-}\" ] || { [ -n \"\${$_infy_old:-}\" ] && $_infy_new=\"\$$_infy_old\"; }"
+    done < "$HOME/infynitae/live/config-renames"
+    unset _infy_old _infy_new _infy_rest
+fi
 
 # the compositor checked the layout it uses makes a keymap (an empty or misspelled one does
 # not) and gives it to what it starts: the apps use that one, never another

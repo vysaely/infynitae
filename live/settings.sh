@@ -22,6 +22,56 @@ expand_path() {
     esac
 }
 
+# The look shared by everything Infynitae draws (docs/EDGE_RUST.md, stage 7: CORNERS, THEME_SCHEME,
+# CARD_OPACITY), as the Rust edge resolves it (infynitae-edge-rs --print-theme): LOOK_CORNERS,
+# LOOK_CARD, LOOK_CARD_AA, LOOK_EDGE, LOOK_EDGE_AA, LOOK_TEXT, LOOK_ACCENT... Without the Rust edge,
+# today's values from the colours and SQUARE_CORNERS. Its lines are checked, never run as code.
+look_load() {
+    case "${SQUARE_CORNERS:-false}" in
+        1|true|yes|on|TRUE|True) LOOK_CORNERS=0 ;;
+        *) LOOK_CORNERS=8 ;;
+    esac
+    case "${CORNERS:-}" in
+        '' | *[!0-9]*) ;;
+        *)
+            # as a number (a leading 0 is not octal here), at most 28
+            LOOK_CORNERS=${CORNERS#"${CORNERS%%[!0]*}"}
+            LOOK_CORNERS=${LOOK_CORNERS:-0}
+            [ "${#LOOK_CORNERS}" -le 2 ] && [ "$LOOK_CORNERS" -le 28 ] || LOOK_CORNERS=28
+            ;;
+    esac
+    LOOK_CARD="${SURFACE_COLOR:-#1e2030}" LOOK_CARD_AA=f7
+    LOOK_EDGE="${BORDER_INACTIVE:-#333b54}" LOOK_EDGE_AA=e6
+    LOOK_TEXT="${TEXT_COLOR:-#e6e6e6}" LOOK_ACCENT="${BORDER_ACTIVE:-#7aa2f7}"
+    look_edge="$HOME/.local/bin/infynitae-edge-rs"
+    [ -x "$look_edge" ] || return 0
+    look_out=$("$look_edge" --print-theme 2>/dev/null) || return 0
+    while IFS= read -r look_line; do
+        case "$look_line" in
+            LOOK_[A-Z_]*=\"*\")
+                look_name=${look_line%%=*} look_val=${look_line#*=}
+                look_val=${look_val#\"} look_val=${look_val%\"}
+                case "$look_name$look_val" in
+                    *[!A-Za-z0-9_#]*) ;;
+                    *) eval "$look_name=\$look_val" ;;
+                esac
+                ;;
+        esac
+    done << LOOK_END
+$look_out
+LOOK_END
+}
+
+# The resolved look saved for the helpers that draw themselves (the lock screen): one file of
+# LOOK_*="value" lines, rewritten when it changes
+look_save() {
+    look_file="${XDG_CACHE_HOME:-$HOME/.cache}/infynitae/look"
+    mkdir -p "${look_file%/*}"
+    printf 'LOOK_CORNERS="%s"\nLOOK_CARD="%s"\nLOOK_EDGE="%s"\nLOOK_TEXT="%s"\nLOOK_ACCENT="%s"\n' \
+        "$LOOK_CORNERS" "$LOOK_CARD" "$LOOK_EDGE" "$LOOK_TEXT" "$LOOK_ACCENT" > "$look_file.new" \
+        && mv -f "$look_file.new" "$look_file"
+}
+
 # Load current config if present
 if [ -f "$CONFIG_FILE" ]; then
     . "$CONFIG_FILE"
@@ -200,10 +250,10 @@ EOF
     # colour names for both (GTK 3's theme_*, libadwaita's window_* / view_* / accent_*); GTK 3 also
     # gets a few widget rules, since its stock theme draws headerbars, buttons and entries in fixed
     # colours. GTK 4 does not: libadwaita takes its look from the names and the Settings portal.
-    case "${SQUARE_CORNERS:-false}" in
-        1|true|yes|on|TRUE|True) gtk_radius=0 ;;
-        *) gtk_radius=6 ;;
-    esac
+    look_load
+    look_save
+    # GTK's widgets a little rounder than square, less than the cards (8 gives 6, as before)
+    gtk_radius=$((LOOK_CORNERS * 3 / 4))
     # (after the colours are known: the wallpaper may have just given them)
     ICON_THEME=$(folder_icon_theme)
     for gtk_dir in "$HOME/.config/gtk-3.0" "$HOME/.config/gtk-4.0"; do
@@ -295,10 +345,10 @@ EOF
     t_hex="${TEXT_COLOR#\#}"
     # one look with the edge and the lock screen (2026-11-06): sans-serif 13 px, the hairline
     # outline, rounded unless SQUARE_CORNERS
-    case "${SQUARE_CORNERS:-false}" in
-        1|true|yes|on|TRUE|True) radius=0 ;;
-        *) radius=8 ;;
-    esac
+    # (the cards' corners and colours: look_load)
+    radius=$LOOK_CORNERS
+    card_hex="${LOOK_CARD#\#}${LOOK_CARD_AA}" edge_hex="${LOOK_EDGE#\#}${LOOK_EDGE_AA}"
+    lt_hex="${LOOK_TEXT#\#}" la_hex="${LOOK_ACCENT#\#}"
 
     mako_cfg="$HOME/.config/mako/config"
     if [ ! -f "$mako_cfg" ] || grep -q 'managed by infynitae' "$mako_cfg" 2>/dev/null; then
@@ -308,9 +358,9 @@ EOF
 font=sans-serif 10
 markup=1
 format=<b>%s</b>\n<span alpha="68%%" size="small">%b</span>
-background-color=#${s_hex}f7
-text-color=#${t_hex}
-border-color=#${bi_hex}e6
+background-color=#${card_hex}
+text-color=#${lt_hex}
+border-color=#${edge_hex}
 border-size=1
 border-radius=${radius}
 width=360
@@ -349,13 +399,13 @@ vertical-pad=8
 inner-pad=4
 
 [colors]
-background=${s_hex}f7
-text=${t_hex}ff
-match=${ba_hex}ff
-selection=${ba_hex}2e
-selection-text=${t_hex}ff
-selection-match=${ba_hex}ff
-border=${bi_hex}e6
+background=${card_hex}
+text=${lt_hex}ff
+match=${la_hex}ff
+selection=${la_hex}2e
+selection-text=${lt_hex}ff
+selection-match=${la_hex}ff
+border=${edge_hex}
 
 [border]
 width=1
