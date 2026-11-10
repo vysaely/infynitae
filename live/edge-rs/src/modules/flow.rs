@@ -29,7 +29,7 @@ pub const UNDO_MAX: usize = 30;
 
 const BAR_H: f64 = 36.0;
 const ADD_ROW_H: f64 = 34.0;
-const STRIP_H: f64 = 26.0;
+const STRIP_H: f64 = 30.0;
 const BTN: f64 = 24.0;
 
 /// What a panel module is for, in Add's list.
@@ -225,7 +225,7 @@ pub enum CardButton {
 /// The buttons on block `b`'s bar, right to left as they fit, each with its rectangle in the
 /// panel; the bar's own rectangle first.
 pub fn card_buttons(p: &Panel, b: usize, r: Rect, pw: f64) -> (Rect, Vec<(CardButton, Rect)>) {
-    let strip = (r.0 + 6.0, r.1 + 6.0, (r.2 - 12.0).max(0.0), STRIP_H);
+    let strip = (r.0 + 5.0, r.1 + 5.0, (r.2 - 10.0).max(0.0), STRIP_H);
     let bs = blocks(p);
     let Some(range) = bs.get(b) else {
         return (strip, Vec::new());
@@ -252,7 +252,7 @@ pub fn card_buttons(p: &Panel, b: usize, r: Rect, pw: f64) -> (Rect, Vec<(CardBu
             break;
         }
         x -= w;
-        out.push((k, (x, strip.1 + 1.0, w, STRIP_H - 2.0)));
+        out.push((k, (x, strip.1 + 3.0, w, STRIP_H - 6.0)));
         x -= 4.0;
     }
     (strip, out)
@@ -416,9 +416,9 @@ fn button_bg(cr: &Context, th: &Theme, r: Rect, on: bool, primary: bool) {
     if primary {
         draw::set(cr, th.accent);
     } else if on {
-        draw::set(cr, th.accent.alpha(0.22));
+        draw::set(cr, th.accent.alpha(0.24));
     } else {
-        draw::set(cr, th.track.alpha(0.55));
+        draw::set(cr, th.text.alpha(0.08));
     }
     let _ = cr.fill();
 }
@@ -497,7 +497,8 @@ pub fn draw_overlay(
                 strip.3,
                 th.small_radius(),
             );
-            draw::set(cr, th.card.alpha(0.96));
+            // solid: it covers the card's own title row
+            draw::set(cr, th.card.alpha(1.0));
             let _ = cr.fill();
             draw::round_rect(
                 cr,
@@ -665,7 +666,7 @@ pub fn draw_overlay(
         }
         for (m, r) in add_rows(bar, &choices) {
             draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
-            draw::set(cr, th.track.alpha(0.35));
+            draw::set(cr, th.text.alpha(0.05));
             let _ = cr.fill();
             let name = Text {
                 size: 13.0,
