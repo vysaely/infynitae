@@ -467,7 +467,8 @@ fn button_bg(cr: &Context, th: &Theme, r: Rect, on: bool, primary: bool) {
 
 fn arrow(cr: &Context, r: Rect, up: bool, color: crate::theme::Rgba) {
     let (cx, cy) = (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
-    let d = if up { -1.0 } else { 1.0 };
+    // the head at cy - 5 * d: up for Up
+    let d = if up { 1.0 } else { -1.0 };
     draw::set(cr, color);
     cr.set_line_width(1.8);
     cr.set_line_cap(cairo::LineCap::Round);
