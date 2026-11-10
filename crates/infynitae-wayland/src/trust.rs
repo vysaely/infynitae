@@ -100,13 +100,19 @@ impl Capability {
             Capability::Clipboard => &["xwayland-satellite"],
             Capability::Input => &["infynitae-portal"],
             Capability::InputMethod => &[],
-            Capability::Windows => &["infynitae-edge", "infynitae-edge-rs", "infynitae-island"],
+            Capability::Windows => &[
+                "infynitae-edge",
+                "infynitae-edge-rs",
+                "infynitae-edge-c",
+                "infynitae-island",
+            ],
             Capability::Lock => &["infynitae-lock"],
             Capability::Display => &[],
             Capability::Layers => &[
                 "infynitae-edge",
                 // the edge in Rust (docs/EDGE_RUST.md), beside the C one until it replaces it
                 "infynitae-edge-rs",
+                "infynitae-edge-c",
                 "infynitae-island",
                 "infynitae-lock",
                 "infynitae-wallpaper",
@@ -497,7 +503,7 @@ mod tests {
     #[test]
     fn the_rust_edge_is_one_of_the_helpers() {
         let p = Policy::from_lists(None, [(Capability::Layers, ""), (Capability::Windows, "")]);
-        for name in ["infynitae-edge", "infynitae-edge-rs"] {
+        for name in ["infynitae-edge", "infynitae-edge-rs", "infynitae-edge-c"] {
             let path = Path::new("/home/someone/.local/bin").join(name);
             assert!(p.names(&path, Capability::Layers), "{name} layers");
             assert!(p.names(&path, Capability::Windows), "{name} windows");

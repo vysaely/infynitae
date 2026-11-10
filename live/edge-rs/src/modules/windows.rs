@@ -279,9 +279,7 @@ pub fn activate_window(world: &mut World, win_idx: usize) -> bool {
             "infynitae msg navigate element {inst} {id} && infynitae msg focus {inst} {id}"
         ));
     } else {
-        world
-            .actions
-            .push(format!("wlr-foreign-toplevel activate {id}"));
+        world.note(format!("wlr-foreign-toplevel activate {id}"));
     }
     true
 }
@@ -296,9 +294,7 @@ pub fn close_window(world: &mut World, win_idx: usize) -> bool {
     if let Some(inst) = inst {
         world.run(format!("infynitae msg close {inst} {id}"));
     } else {
-        world
-            .actions
-            .push(format!("wlr-foreign-toplevel close {id}"));
+        world.note(format!("wlr-foreign-toplevel close {id}"));
     }
     world.windows.windows.remove(win_idx);
     world.windows.update_filter(&world.search);

@@ -397,7 +397,7 @@ install_config() {
         # below at its default, over the old one): live/config-renames
         local old_name new_name rest renamed=""
         while read -r old_name new_name rest; do
-            case "$old_name$new_name" in '#'* | *[!A-Z0-9_]*) continue ;; esac
+            case "$old_name$new_name" in '' | '#'* | *[!A-Z0-9_]*) continue ;; esac
             grep -q "^$old_name=" "$cfg" || continue
             [ -n "$renamed" ] || cp -f "$cfg" "$cfg.bak-$(date +%F)-rename"
             if grep -q "^$new_name=" "$cfg"; then

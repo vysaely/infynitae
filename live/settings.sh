@@ -20,7 +20,12 @@ look_load() {
     esac
     case "${CORNERS:-}" in
         '' | *[!0-9]*) ;;
-        *) LOOK_CORNERS=$CORNERS ;;
+        *)
+            # as a number (a leading 0 is not octal here), at most 28
+            LOOK_CORNERS=${CORNERS#"${CORNERS%%[!0]*}"}
+            LOOK_CORNERS=${LOOK_CORNERS:-0}
+            [ "${#LOOK_CORNERS}" -le 2 ] && [ "$LOOK_CORNERS" -le 28 ] || LOOK_CORNERS=28
+            ;;
     esac
     LOOK_CARD="${SURFACE_COLOR:-#1e2030}" LOOK_CARD_AA=f7
     LOOK_EDGE="${BORDER_INACTIVE:-#333b54}" LOOK_EDGE_AA=e6

@@ -476,10 +476,30 @@ impl OutputSurface {
             ));
         }
 
-        let mut min_x = ox.floor() as i32 - pad;
-        let mut min_y = oy.floor() as i32 - pad;
-        let mut max_x = (ox + pw).ceil() as i32 + pad;
-        let mut max_y = (oy + ph).ceil() as i32 + pad;
+        // the panel's box; the desktop's widgets: the box around the widgets only (the whole
+        // screen, cleared and sent each time, cost a 4K screen 33 MB a redraw)
+        let (bx0, by0, bx1, by1) = if self.desktop && shell.edit.active {
+            // arranging: handles and Remove reach past the widgets
+            (0.0, 0.0, w as f64, h as f64)
+        } else if self.desktop {
+            rects
+                .iter()
+                .filter(|r| r.2 > 0.0 && r.3 > 0.0)
+                .fold(None, |acc: Option<(f64, f64, f64, f64)>, r| {
+                    let (x0, y0, x1, y1) = (ox + r.0, oy + r.1, ox + r.0 + r.2, oy + r.1 + r.3);
+                    Some(match acc {
+                        None => (x0, y0, x1, y1),
+                        Some(a) => (a.0.min(x0), a.1.min(y0), a.2.max(x1), a.3.max(y1)),
+                    })
+                })
+                .unwrap_or((0.0, 0.0, 1.0, 1.0))
+        } else {
+            (ox, oy, ox + pw, oy + ph)
+        };
+        let mut min_x = bx0.floor() as i32 - pad;
+        let mut min_y = by0.floor() as i32 - pad;
+        let mut max_x = bx1.ceil() as i32 + pad;
+        let mut max_y = by1.ceil() as i32 + pad;
 
         if let Some(mr) = tray_m_rect {
             min_x = min_x.min(mr.0.floor() as i32 - pad);
@@ -745,6 +765,12 @@ impl App {
 
     fn sync_all(&mut self) {
         self.flush_window_ops();
+        // a panel opened (by its key, a signal) while the widgets are arranged: the arranging
+        // ends, saved (both on the top layer would want the keyboard)
+        if self.shell.open.is_some() && self.widgets.edit.active {
+            self.widgets.close();
+            self.sync_desk();
+        }
         // one thing edited at a time: a panel and the widgets
         if self.widgets.edit.active && self.shell.edit.active {
             self.shell.edit_exit();
@@ -1483,7 +1509,11 @@ pub fn run(initial_panel: Option<&str>) -> Result<(), String> {
     let _ = std::fs::write(&pid_file, format!("{}\n", std::process::id()));
 
     let res = run_loop(initial_panel);
-    let _ = std::fs::remove_file(&pid_file);
+    // only our own: a newer edge started meanwhile has written its pid there
+    if std::fs::read_to_string(&pid_file).is_ok_and(|t| t.trim() == std::process::id().to_string())
+    {
+        let _ = std::fs::remove_file(&pid_file);
+    }
     let _ = std::fs::remove_file(runtime_path(modules::ask::FEATURES_FILE));
     res
 }
@@ -1564,9 +1594,24 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         .insert_source(fetch_rx, |evt, _, app| {
             if let channel::Event::Msg(pairs) = evt {
                 let (mut any, mut desk) = (false, false);
+                // the widgets take (and redraw for) only the data their own modules show
+                let wanted: Vec<&str> = app
+                    .widgets
+                    .cfg
+                    .panels
+                    .first()
+                    .map(|p| {
+                        modules::World::cmds_for_panel(p)
+                            .iter()
+                            .map(|&(k, _)| k)
+                            .collect()
+                    })
+                    .unwrap_or_default();
                 for (k, v) in pairs {
                     any |= app.shell.world.apply(&k, &v);
-                    desk |= app.widgets.world.apply(&k, &v);
+                    if wanted.contains(&k.as_str()) {
+                        desk |= app.widgets.world.apply(&k, &v);
+                    }
                 }
                 if any && app.shell.open.is_some() {
                     app.sync_all();

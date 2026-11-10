@@ -201,8 +201,14 @@ fn pointer_set(world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
     }
     let (w, h) = size;
     let (x, y) = pos;
+    // a drag sends a level only when it changed (one command per motion event, run in no set
+    // order, could leave an older level last)
     if compact(h) {
-        let cmd = set_volume_action(&mut world.volume, compact_pct_at(w, x));
+        let pct = compact_pct_at(w, x);
+        if pct == world.volume.pct && !world.volume.muted {
+            return false;
+        }
+        let cmd = set_volume_action(&mut world.volume, pct);
         world.run(cmd);
         return true;
     }
@@ -217,7 +223,16 @@ fn pointer_set(world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
         return false;
     }
     let pct = pct_at(w, x);
-    let cmd = if rows == 2 && y >= PAD_Y + SLIDER_ROW_H - 4.0 {
+    let on_brightness = rows == 2 && y >= PAD_Y + SLIDER_ROW_H - 4.0;
+    let same = if on_brightness {
+        world.volume.brightness == Some(pct)
+    } else {
+        world.volume.pct == pct && !world.volume.muted
+    };
+    if same {
+        return false;
+    }
+    let cmd = if on_brightness {
         set_brightness_action(&mut world.volume, pct)
     } else {
         set_volume_action(&mut world.volume, pct)

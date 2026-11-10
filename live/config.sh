@@ -25,7 +25,7 @@ unset _infy_config
 if [ -f "$HOME/infynitae/live/config-renames" ]; then
     while read -r _infy_old _infy_new _infy_rest; do
         case "$_infy_old$_infy_new" in
-            '#'* | *[!A-Z0-9_]*) continue ;; # comments, retired names ("-"), anything not a name
+            '' | '#'* | *[!A-Z0-9_]*) continue ;; # blank lines, comments, retired names ("-")
         esac
         eval "[ -n \"\${$_infy_new:-}\" ] || { [ -n \"\${$_infy_old:-}\" ] && $_infy_new=\"\$$_infy_old\"; }"
     done < "$HOME/infynitae/live/config-renames"

@@ -538,14 +538,22 @@ impl World {
     /// detached in the background.
     pub fn run(&mut self, cmd: String) {
         if self.live && std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_none() {
-            let _ = Command::new("sh")
+            if let Ok(mut child) = Command::new("sh")
                 .arg("-c")
                 .arg(&cmd)
                 .stdin(Stdio::null())
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
-                .spawn();
+                .spawn()
+            {
+                // reaped when it ends (each one was left a zombie until the edge exited)
+                std::thread::spawn(move || {
+                    let _ = child.wait();
+                });
+            }
+            return;
         }
+        // the tests read what would have run (live, the list would only grow)
         self.actions.push(cmd);
     }
 
