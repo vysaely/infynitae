@@ -4735,8 +4735,9 @@ mod tests {
             |e| matches!(e, Effect::ToplevelConfigureSize { element, size }
             if *element == ws[0] && (size.w, size.h) == (uw.round() as i32, uh.round() as i32))
         ));
-        let frame = c.current_frame(a).unwrap();
-        let tl = frame
+        let tl = c
+            .render_list(a)
+            .unwrap()
             .view
             .unproject(crate::geom::OutputLogicalPoint { x: ux, y: uy })
             .round_to_point()
