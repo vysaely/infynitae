@@ -128,6 +128,9 @@ pub enum PhysicalEvent {
     },
     /// Centers the camera of the active output on an element.
     RecenterElement { element: stage::ElementId },
+    /// Moves a new window the camera will not come to into the view when it is mostly outside it
+    /// (owner, 2026-11-09: new windows open where they are seen).
+    BringIntoView { element: stage::ElementId },
     /// A finger touched a touchscreen on `output` at `p` (output logical px, the screen's
     /// rotation already applied), in `slot` (one per finger).
     TouchDown {
@@ -864,6 +867,18 @@ impl Core {
         buf: &mut protocol::EffectBuf,
     ) -> Result<(), EntryError> {
         self.physical_input(port, PhysicalEvent::RecenterElement { element }, buf)
+    }
+
+    /// A window just opened that the camera does not move to (an app opened it, it is a child,
+    /// or TELEPORT_ON_OPEN is off): when less than 60 % of it is in the view, it moves into the
+    /// view (over another window if the view has no free room). One mostly in view stays.
+    pub fn bring_into_view(
+        &mut self,
+        port: &mut InputPort,
+        element: stage::ElementId,
+        buf: &mut protocol::EffectBuf,
+    ) -> Result<(), EntryError> {
+        self.physical_input(port, PhysicalEvent::BringIntoView { element }, buf)
     }
 
     /// Read access to the authoritative active pointer constraint (OBJ-21).

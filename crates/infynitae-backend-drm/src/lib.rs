@@ -1878,23 +1878,30 @@ pub fn run_console_with(
             }
         }
 
-        if data.state.core().teleport_on_open() {
-            for ((&new_id, &user), &hold) in new_mapped.iter().zip(&by_user).zip(&held) {
-                // a child window opens over its parent, already in view: the camera stays; a
-                // held window does not move it either
-                if hold
-                    || (teleport_user_only && !user)
-                    || data.state.core().toplevel_parent(new_id).is_some()
-                {
-                    continue;
-                }
-                let port = &mut data.input_port;
+        let teleport = data.state.core().teleport_on_open();
+        for ((&new_id, &user), &hold) in new_mapped.iter().zip(&by_user).zip(&held) {
+            // a held window moves nothing: it waits out of the way
+            if hold {
+                continue;
+            }
+            let port = &mut data.input_port;
+            // a child window opens over its parent, already in view: the camera stays. A window
+            // the camera does not come to is brought into the view when it is mostly outside it
+            // (owner, 2026-11-09: a folder picker an app opened 1,620 px under the view)
+            if teleport
+                && !(teleport_user_only && !user)
+                && data.state.core().toplevel_parent(new_id).is_none()
+            {
                 let _ = data
                     .state
                     .with_effects(|core, fx| core.recenter_element(port, new_id, fx));
-                data.session.request_frame();
-                data.session.flush();
+            } else {
+                let _ = data
+                    .state
+                    .with_effects(|core, fx| core.bring_into_view(port, new_id, fx));
             }
+            data.session.request_frame();
+            data.session.flush();
         }
 
         let now = data.session.now();
