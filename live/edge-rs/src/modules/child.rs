@@ -227,9 +227,10 @@ pub fn parse_audio_list(sinks_out: &str, default_sink: &str) -> Vec<ChildItem> {
     for line in sinks_out.lines() {
         let trimmed = line.trim();
 
-        // TSV format: active \t id \t label \t Output
+        // TSV format: active \t id \t label \t Output (a 0 or 1 at the line's start; pactl's own
+        // property lines are indented with tabs too, and were read as outputs)
         let parts: Vec<&str> = line.split('\t').collect();
-        if parts.len() >= 3 {
+        if parts.len() >= 3 && matches!(parts[0], "0" | "1") {
             let active = parts[0] == "1";
             let id = parts[1].to_string();
             let label = parts[2].to_string();
@@ -564,7 +565,10 @@ pub fn click_child(
     let row = ((py - start_y) / ROW_HEIGHT).floor() as usize;
     if let Some(item) = world.child.items.get(row).cloned() {
         if kind == ChildKind::Bluetooth && item.id == "-" {
+            // look for devices for 15 s (it only set a flag: nothing searched); the devices
+            // found are listed the next time the list opens
             world.child.bt_scan = true;
+            world.run("bluetoothctl --timeout 15 scan on >/dev/null 2>&1".to_string());
             return (true, None);
         }
 
@@ -647,6 +651,15 @@ mod tests {
 
         let list_bal = power_profiles_list("balanced");
         assert!(list_bal[1].active);
+    }
+
+    #[test]
+    fn real_pactl_output_lists_each_output_once() {
+        let out = "Sink #57\n\tState: SUSPENDED\n\tName: auto_null\n\tDescription: Dummy Output\n\tProperties:\n\t\tnode.name = \"auto_null\"\n\t\taudio.rate = \"48000\"\nSink #60\n\tName: alsa_output.usb\n\tDescription: USB Headphones\n\tProperties:\n\t\tmedia.class = \"Audio/Sink\"\n";
+        let items = parse_audio_list(out, "alsa_output.usb");
+        let labels: Vec<&str> = items.iter().map(|i| i.label.as_str()).collect();
+        assert_eq!(labels, vec!["Dummy Output", "USB Headphones"]);
+        assert!(items[1].active && !items[0].active);
     }
 
     #[test]

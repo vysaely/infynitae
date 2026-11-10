@@ -120,14 +120,15 @@ pub fn apply(d: &mut MediaData, key: &str, out: &str) -> bool {
     if key != "media" {
         return false;
     }
-    if let Some(parsed) = parse_media_data(out) {
-        *d = parsed;
-        d.ready = true;
-    } else {
-        *d = MediaData::default();
-        d.ready = true;
-    }
-    true
+    // the queue's scroll is the user's, not the player's: kept across the refresh (it snapped
+    // back every 2 s), within the new queue
+    let scroll = d.queue_scroll;
+    let mut next = parse_media_data(out).unwrap_or_default();
+    next.ready = true;
+    next.queue_scroll = scroll.min(next.queue.len().saturating_sub(1));
+    let changed = next != *d;
+    *d = next;
+    changed
 }
 
 /// Formats duration in microseconds to mm:ss or hh:mm:ss.
@@ -148,23 +149,21 @@ pub fn format_time(us: i64) -> String {
 
 /// Decodes percent-encoded URL (e.g. `file:///home/user/My%20Song.mp3` -> `/home/user/My Song.mp3`).
 pub fn decode_file_url(url: &str) -> Option<String> {
+    // bytes first, then UTF-8: %C3%A9 is one letter (é), not two (each byte as a char made any
+    // path with letters outside ASCII wrong, and its cover missing)
     let path_str = url.strip_prefix("file://")?;
-    let mut out = String::with_capacity(path_str.len());
-    let mut bytes = path_str.bytes().peekable();
+    let mut out: Vec<u8> = Vec::with_capacity(path_str.len());
+    let mut bytes = path_str.bytes();
     while let Some(b) = bytes.next() {
         if b == b'%' {
-            let h1 = bytes.next()?;
-            let h2 = bytes.next()?;
-            let hex = [h1, h2];
-            let hex_str = std::str::from_utf8(&hex).ok()?;
-            if let Ok(byte_val) = u8::from_str_radix(hex_str, 16) {
-                out.push(byte_val as char);
-            }
+            let hex = [bytes.next()?, bytes.next()?];
+            let byte_val = u8::from_str_radix(std::str::from_utf8(&hex).ok()?, 16).ok()?;
+            out.push(byte_val);
         } else {
-            out.push(b as char);
+            out.push(b);
         }
     }
-    Some(out)
+    String::from_utf8(out).ok()
 }
 
 /// Parses media state from key=value lines, TSV, or JSON.
@@ -1842,6 +1841,14 @@ mod tests {
         assert_eq!(format_time(65_000_000), "1:05");
         assert_eq!(format_time(234_000_000), "3:54");
         assert_eq!(format_time(3_665_000_000), "1:01:05");
+    }
+
+    #[test]
+    fn decode_file_url_keeps_letters_outside_ascii() {
+        assert_eq!(
+            decode_file_url("file:///music/Caf%C3%A9/%D0%A0%D0%B0%D0%B9.jpg").as_deref(),
+            Some("/music/Café/Рай.jpg")
+        );
     }
 
     #[test]

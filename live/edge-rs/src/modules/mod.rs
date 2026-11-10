@@ -207,6 +207,8 @@ pub struct World {
     pub active_target: Option<NavTarget>,
     pub panel_scroll: f64,
     pub close_requested: bool,
+    /// a card's list to load on a helper thread (the live edge; taken by the event loop)
+    pub child_pending: Option<child::ChildKind>,
     pub live: bool,
     pub actions: Vec<String>,
 }
@@ -240,6 +242,7 @@ impl World {
             active_target: None,
             panel_scroll: 0.0,
             close_requested: false,
+            child_pending: None,
             live: false,
             actions: Vec::new(),
         };
@@ -630,105 +633,88 @@ pub fn toggle_child(world: &mut World, kind: child::ChildKind) -> bool {
     if world.child.open && world.child.kind == Some(kind) {
         world.child.open = false;
         world.child.kind = None;
-    } else {
-        world.child.open = true;
-        world.child.kind = Some(kind);
-        match kind {
-            child::ChildKind::Wifi => {
-                if let Some(path) = std::env::var_os("INFYNITAE_EDGE_RENDER_DATA") {
-                    let text = std::fs::read_to_string(path).unwrap_or_default();
-                    let map = parse_render_data(&text);
-                    let out = map
-                        .get("wifi_list")
-                        .or_else(|| map.get("wifi"))
-                        .cloned()
-                        .unwrap_or_default();
-                    world.child.items = child::parse_wifi_list(&out);
-                } else if world.live {
-                    let out = run_sh(
-                        "wifi_list",
-                        "nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan no 2>/dev/null",
-                    );
-                    world.child.items = child::parse_wifi_list(&out);
-                }
-                if world.child.items.is_empty() && world.live {
-                    world.child.items = vec![child::none_found("No networks found")];
-                } else if world.child.items.is_empty() {
-                    world.child.items = vec![
-                        child::ChildItem {
-                            id: "HomeNet".into(),
-                            label: "HomeNet".into(),
-                            meta: "90%".into(),
-                            active: true,
-                        },
-                        child::ChildItem {
-                            id: "Neighbours 5G".into(),
-                            label: "Neighbours 5G".into(),
-                            meta: "62%".into(),
-                            active: false,
-                        },
-                        child::ChildItem {
-                            id: "Cafe guest".into(),
-                            label: "Cafe guest".into(),
-                            meta: "40%".into(),
-                            active: false,
-                        },
-                    ];
-                }
-            }
-            child::ChildKind::Bluetooth => {
-                let paired = run_sh("bt_paired", "bluetoothctl devices Paired 2>/dev/null");
-                let scanned = run_sh("bt_scanned", "bluetoothctl devices 2>/dev/null");
-                world.child.items =
-                    child::parse_bluetooth_list(&paired, &scanned, world.child.bt_scan);
-                if world.child.items.is_empty() && world.live {
-                    world.child.items = vec![child::ChildItem {
-                        id: "-".into(),
-                        label: "Find new devices".into(),
-                        meta: "".into(),
-                        active: false,
-                    }];
-                } else if world.child.items.is_empty() {
-                    world.child.items = vec![
-                        child::ChildItem {
-                            id: "4C:87:5D:11:22:33".into(),
-                            label: "Headphones".into(),
-                            meta: "Connected".into(),
-                            active: true,
-                        },
-                        child::ChildItem {
-                            id: "-".into(),
-                            label: "Find new devices".into(),
-                            meta: "".into(),
-                            active: false,
-                        },
-                    ];
-                }
-            }
-            child::ChildKind::Audio => {
-                let def = run_sh("audio_def", "pactl get-default-sink 2>/dev/null");
-                let sinks = run_sh("audio_sinks", "pactl list sinks 2>/dev/null");
-                world.child.items = child::parse_audio_list(&sinks, &def);
-                if world.child.items.is_empty() && world.live {
-                    world.child.items = vec![child::none_found("No outputs found")];
-                } else if world.child.items.is_empty() {
-                    world.child.items = vec![child::ChildItem {
-                        id: "default_sink".into(),
-                        label: "Built-in Audio".into(),
-                        meta: "Output".into(),
-                        active: true,
-                    }];
-                }
-            }
-            child::ChildKind::Power => {
-                world.child.items = child::power_profiles_list(&world.switches.power_profile);
-            }
-            child::ChildKind::Calendar => {
-                world.child.items.clear();
-            }
+        return true;
+    }
+    world.child.open = true;
+    world.child.kind = Some(kind);
+    match kind {
+        child::ChildKind::Power => {
+            world.child.items = child::power_profiles_list(&world.switches.power_profile);
         }
+        child::ChildKind::Calendar => world.child.items.clear(),
+        // the lists from nmcli, bluetoothctl and pactl: in the live edge on a helper thread
+        // (a Wi-Fi list can take seconds: the panel froze meanwhile); the card says Loading
+        // until they come (World::child_pending, the event loop's child channel)
+        _ if world.live && std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_none() => {
+            world.child.items = vec![child::none_found("Loading")];
+            world.child_pending = Some(kind);
+        }
+        _ => world.child.items = load_child_list(kind, world.child.bt_scan, world.live),
     }
     true
+}
+
+/// The rows of a Wi-Fi, Bluetooth or outputs card (blocking: nmcli, bluetoothctl, pactl).
+/// Nothing found: live, a row saying so (Bluetooth: Find new devices); offline (--render, the
+/// tests), sample rows.
+pub fn load_child_list(kind: child::ChildKind, bt_scan: bool, live: bool) -> Vec<child::ChildItem> {
+    let row = |id: &str, label: &str, meta: &str, active: bool| child::ChildItem {
+        id: id.into(),
+        label: label.into(),
+        meta: meta.into(),
+        active,
+    };
+    match kind {
+        child::ChildKind::Wifi => {
+            let mut out = run_sh(
+                "wifi_list",
+                "nmcli -t -f IN-USE,SIGNAL,SECURITY,SSID dev wifi list --rescan no 2>/dev/null",
+            );
+            if out.is_empty() && std::env::var_os("INFYNITAE_EDGE_RENDER_DATA").is_some() {
+                out = run_sh("wifi", "");
+            }
+            let items = child::parse_wifi_list(&out);
+            if !items.is_empty() {
+                items
+            } else if live {
+                vec![child::none_found("No networks found")]
+            } else {
+                vec![
+                    row("HomeNet", "HomeNet", "90%", true),
+                    row("Neighbours 5G", "Neighbours 5G", "62%", false),
+                    row("Cafe guest", "Cafe guest", "40%", false),
+                ]
+            }
+        }
+        child::ChildKind::Bluetooth => {
+            let paired = run_sh("bt_paired", "bluetoothctl devices Paired 2>/dev/null");
+            let scanned = run_sh("bt_scanned", "bluetoothctl devices 2>/dev/null");
+            let items = child::parse_bluetooth_list(&paired, &scanned, bt_scan);
+            if !items.is_empty() {
+                items
+            } else if live {
+                vec![row("-", "Find new devices", "", false)]
+            } else {
+                vec![
+                    row("4C:87:5D:11:22:33", "Headphones", "Connected", true),
+                    row("-", "Find new devices", "", false),
+                ]
+            }
+        }
+        child::ChildKind::Audio => {
+            let def = run_sh("audio_def", "pactl get-default-sink 2>/dev/null");
+            let sinks = run_sh("audio_sinks", "pactl list sinks 2>/dev/null");
+            let items = child::parse_audio_list(&sinks, &def);
+            if !items.is_empty() {
+                items
+            } else if live {
+                vec![child::none_found("No outputs found")]
+            } else {
+                vec![row("default_sink", "Built-in Audio", "Output", true)]
+            }
+        }
+        child::ChildKind::Power | child::ChildKind::Calendar => Vec::new(),
+    }
 }
 
 /// Dispatches a pointer click at `pos` inside `it`'s `size` card.

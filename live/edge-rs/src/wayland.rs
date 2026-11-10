@@ -670,6 +670,8 @@ struct App {
     widgets_busy: Arc<AtomicBool>,
     last_widgets_fetch: Option<Instant>,
     fetch_tx: Sender<Vec<(String, String)>>,
+    /// a card's list, loaded on a helper thread (nmcli, bluetoothctl, pactl)
+    child_tx: Sender<(modules::child::ChildKind, Vec<modules::child::ChildItem>)>,
     fetch_busy: Arc<AtomicBool>,
     last_fetch: Option<Instant>,
     prev_open: Option<usize>,
@@ -765,6 +767,13 @@ impl App {
 
     fn sync_all(&mut self) {
         self.flush_window_ops();
+        if let Some(kind) = self.shell.world.child_pending.take() {
+            let tx = self.child_tx.clone();
+            let scan = self.shell.world.child.bt_scan;
+            std::thread::spawn(move || {
+                let _ = tx.send((kind, modules::load_child_list(kind, scan, true)));
+            });
+        }
         // a panel opened (by its key, a signal) while the widgets are arranged: the arranging
         // ends, saved (both on the top layer would want the keyboard)
         if self.shell.open.is_some() && self.widgets.edit.active {
@@ -1539,6 +1548,8 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     }
 
     let (fetch_tx, fetch_rx) = channel::channel::<Vec<(String, String)>>();
+    let (child_tx, child_rx) =
+        channel::channel::<(modules::child::ChildKind, Vec<modules::child::ChildItem>)>();
     let fetch_busy = Arc::new(AtomicBool::new(false));
 
     let output_state = OutputState::new(&globals, &qh);
@@ -1567,6 +1578,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         widgets_busy: Arc::new(AtomicBool::new(false)),
         last_widgets_fetch: None,
         fetch_tx,
+        child_tx,
         fetch_busy,
         last_fetch: None,
         prev_open: None,
@@ -1618,6 +1630,19 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
                 }
                 if desk && app.widgets.shows_widgets() {
                     app.sync_desk();
+                }
+            }
+        })
+        .map_err(|e| e.to_string())?;
+
+    loop_handle
+        .insert_source(child_rx, |evt, _, app| {
+            if let channel::Event::Msg((kind, items)) = evt {
+                // still the card that asked (not closed or switched meanwhile)
+                let child = &mut app.shell.world.child;
+                if child.open && child.kind == Some(kind) {
+                    child.items = items;
+                    app.sync_all();
                 }
             }
         })

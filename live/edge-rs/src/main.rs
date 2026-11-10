@@ -823,11 +823,7 @@ impl Shell {
 
             // If Add menu is open
             if self.edit.adding && y >= by + 34.0 {
-                let available: Vec<config::Module> = modules::edit::ALL_MODULES
-                    .iter()
-                    .copied()
-                    .filter(|&m| !panel.items.iter().any(|it| it.module == m))
-                    .collect();
+                let available = modules::edit::addable(&panel);
                 let w4 = (bw - 10.0 - 3.0 * 4.0) / 4.0;
                 for (k, &m) in available.iter().enumerate() {
                     let col = k % 4;
@@ -1472,6 +1468,12 @@ impl Shell {
                 clicked_module = true;
                 changed |= modules::click(it, &mut self.world, (mw, mh), (x - mx, y - my), button);
             }
+        }
+
+        // the desktop's widgets open no card beside them (placed for a panel, it went to the
+        // screen's far edge, outside the widgets' input region where it could not be clicked)
+        if panel.desktop && self.world.child.open {
+            self.world.child.open = false;
         }
 
         // Right click on empty background enters edit mode

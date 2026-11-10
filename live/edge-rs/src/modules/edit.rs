@@ -288,6 +288,27 @@ pub fn module_display_name(m: Module) -> &'static str {
 }
 
 /// All available modules that can be added to a panel.
+/// What Add offers: the modules not in the panel yet; none once it holds 16 (the most a line
+/// keeps: more vanished on Done). The desktop's widgets: not the ones that need typing or the
+/// panels' lists (search, apps, favorites, windows).
+pub fn addable(panel: &Panel) -> Vec<Module> {
+    if panel.items.len() >= 16 {
+        return Vec::new();
+    }
+    ALL_MODULES
+        .iter()
+        .copied()
+        .filter(|&m| !panel.items.iter().any(|it| it.module == m))
+        .filter(|&m| {
+            !panel.desktop
+                || !matches!(
+                    m,
+                    Module::Search | Module::Apps | Module::Favorites | Module::Windows
+                )
+        })
+        .collect()
+}
+
 pub const ALL_MODULES: &[Module] = &[
     Module::Search,
     Module::Favorites,
@@ -362,10 +383,7 @@ pub fn calculate_bar_rect(
     let (sw, sh) = screen;
     let bw = pw.max(470.0);
     let bh = 34.0;
-    let na = ALL_MODULES
-        .iter()
-        .filter(|&&m| !panel.items.iter().any(|it| it.module == m))
-        .count();
+    let na = addable(panel).len();
     let gh = if adding {
         8.0 + (na as f64 / 4.0).ceil() * 30.0
     } else {
@@ -625,11 +643,7 @@ pub fn draw_edit_overlay(
 
     // If Add is active: grid of modules not in the panel
     if state.adding {
-        let available: Vec<Module> = ALL_MODULES
-            .iter()
-            .copied()
-            .filter(|&m| !panel.items.iter().any(|it| it.module == m))
-            .collect();
+        let available = addable(panel);
         let w4 = (bw - 10.0 - 3.0 * 4.0) / 4.0;
         for (k, &m) in available.iter().enumerate() {
             let col = k % 4;
