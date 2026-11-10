@@ -1856,6 +1856,49 @@ impl Core {
         Some(self.free_place_for(id, size, at).unwrap_or(at))
     }
 
+    /// [`Core::bring_into_view`]: a mapped window mostly outside the usable view (less than
+    /// `SEEN` of it inside) moves into it; one larger than the view to its top left corner. A
+    /// fullscreen window, a notification and a window kept above are left alone.
+    pub(crate) fn bring_into_view_now(&mut self, id: ElementId) {
+        const SEEN: f64 = 0.6;
+        if self.fullscreen_of(id).is_some() || self.is_notification(id) || self.stage.is_above(id) {
+            return;
+        }
+        let (Some(at), Some(tree), Some((x0, y0, x1, y1))) = (
+            self.stage.anchor(id),
+            self.stage.tree(id),
+            self.usable_view(),
+        ) else {
+            return;
+        };
+        let (w, h) = (
+            i64::from(tree.geometry.size.w),
+            i64::from(tree.geometry.size.h),
+        );
+        if w <= 0 || h <= 0 {
+            return;
+        }
+        let seen_w = (at.x + w).min(x1) - at.x.max(x0);
+        let seen_h = (at.y + h).min(y1) - at.y.max(y0);
+        if seen_w > 0 && seen_h > 0 && (seen_w as f64 * seen_h as f64) >= SEEN * (w * h) as f64 {
+            return;
+        }
+        let fit = |p: i64, lo: i64, hi: i64, s: i64| {
+            if hi - lo <= s {
+                lo
+            } else {
+                p.clamp(lo, hi - s)
+            }
+        };
+        let to = CanvasPoint {
+            x: fit(at.x, x0, x1, w),
+            y: fit(at.y, y0, y1, h),
+        };
+        if to != at && self.stage.place(id, to).is_ok() {
+            self.invalidate_all_frames();
+        }
+    }
+
     /// Where a window opens before the rule that it covers no other app's window (`first_map_anchor`).
     fn first_map_spot(&self, id: ElementId, tree: &SurfaceTree) -> Option<CanvasPoint> {
         // an app's notification: the view's bottom right corner, above the ones already there
