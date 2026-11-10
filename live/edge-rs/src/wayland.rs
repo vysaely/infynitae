@@ -2,7 +2,7 @@
 //! paced by frame callbacks, zero work while closed, and signals / request files in calloop.
 
 use crate::{
-    hover_strip, layout_in, modules, panel_hover_box_in, panel_origin, panel_width, ph_of, Key,
+    hover_strip_in, layout_in, modules, panel_hover_box_in, panel_origin, panel_width, ph_of, Key,
     Shell,
 };
 use smithay_client_toolkit::{
@@ -206,7 +206,7 @@ impl OutputSurface {
             } else {
                 for p in &shell.cfg.panels {
                     if p.hover {
-                        let (sx, sy, sw, sh) = hover_strip(p, w, h);
+                        let (sx, sy, sw, sh) = hover_strip_in(p, w, h, &shell.world, &shell.theme);
                         region.add(
                             sx.floor() as i32,
                             sy.floor() as i32,
@@ -365,8 +365,11 @@ impl OutputSurface {
         let h = self.height as i32;
         let stride = w * 4;
         let Some(slot_idx) = self.acquire_slot() else {
+            // both buffers still held: a frame callback only comes after a commit, so commit the
+            // current content unchanged and draw on the callback (review 16: a stuck redraw)
             let wl = self.layer.wl_surface();
             wl.frame(qh, wl.clone());
+            self.layer.commit();
             self.frame_pending = true;
             return;
         };
@@ -1466,7 +1469,8 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
             }
             zwlr_foreign_toplevel_handle_v1::Event::Done => {
                 state.sync_toplevels_to_world();
-                if state.shell.open.is_some() {
+                // a title or focus change matters only to a panel that lists windows (review 22)
+                if state.shell.shows_windows() {
                     state.sync_all();
                 }
             }

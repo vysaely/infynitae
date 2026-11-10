@@ -180,9 +180,24 @@ pub fn panel_rect_in(
     (ox, oy, pw, ph)
 }
 
-/// The 2 px hover strip at `p`'s place on its screen edge (its edge and alignment as in `panel_origin`).
+/// The 2 px hover strip at `p`'s place on its screen edge (its edge and alignment as in `panel_origin`),
+/// measured with no data and the default look (tests).
+#[cfg(test)]
 pub fn hover_strip(p: &Panel, w: f64, h: f64) -> (f64, f64, f64, f64) {
-    let (ox, oy, pw, ph) = panel_rect(p, w, h);
+    let world = modules::World::now();
+    let th = theme::Theme::from_config(&Config::from_text(""));
+    hover_strip_in(p, w, h, &world, &th)
+}
+
+/// The hover strip given `world` and `th`, so it sits where the panel itself is drawn (review 22).
+pub fn hover_strip_in(
+    p: &Panel,
+    w: f64,
+    h: f64,
+    world: &modules::World,
+    th: &theme::Theme,
+) -> (f64, f64, f64, f64) {
+    let (ox, oy, pw, ph) = panel_rect_in(p, w, h, world, th);
     match p.side {
         Side::Top => (ox, 0.0, pw, 2.0),
         Side::Bottom => (ox, (h - 2.0).max(0.0), pw, 2.0),
@@ -575,6 +590,17 @@ impl Shell {
             self.close();
         }
         changed
+    }
+
+    /// Does the open panel (or its card) show windows: the windows list, or apps and favorites
+    /// with their running marks.
+    pub fn shows_windows(&self) -> bool {
+        let Some(i) = self.open else { return false };
+        self.world.child.open
+            || self.cfg.panels.get(i).is_some_and(|p| {
+                use config::Module::{Apps, Favorites, Windows};
+                p.has(Windows) || p.has(Apps) || p.has(Favorites)
+            })
     }
 
     pub fn open_panel(&mut self, idx: usize, by_hover: bool) -> bool {
@@ -1591,7 +1617,8 @@ impl Shell {
             if !self.cfg.panels[i].hover {
                 continue;
             }
-            let (sx, sy, sw, sh) = hover_strip(&self.cfg.panels[i], w, h);
+            let (sx, sy, sw, sh) =
+                hover_strip_in(&self.cfg.panels[i], w, h, &self.world, &self.theme);
             if x >= sx && x <= sx + sw && y >= sy && y <= sy + sh {
                 let name = self.cfg.panels[i].name.clone();
                 self.reload_if_changed();
@@ -2044,6 +2071,18 @@ mod tests {
         );
         assert!(parse_args(&["panel"]).is_err());
         assert!(parse_args(&["--unknown"]).is_err());
+    }
+
+    #[test]
+    fn window_changes_redraw_only_panels_that_show_windows() {
+        let mut sh = Shell::from_config(Config::from_text(
+            "PANEL_A=\"top left 300 clock\"\nPANEL_B=\"top right 300 windows\"\n",
+        ));
+        assert!(!sh.shows_windows(), "nothing open");
+        sh.open = sh.panel_index("a");
+        assert!(!sh.shows_windows(), "a clock-only panel");
+        sh.open = sh.panel_index("b");
+        assert!(sh.shows_windows(), "a windows list");
     }
 
     #[test]

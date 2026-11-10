@@ -800,10 +800,42 @@ fn execute_dbusmenu_action_blocking(
 }
 
 /// Fetches background apps list from StatusNotifierWatcher over D-Bus as TSV lines.
+/// The session bus connection the tray fetch keeps between fetches (it ran every 2 s on a fresh
+/// connection and registered again each time: review 22), and how many fetches since it last
+/// registered as a host.
+static TRAY_CONN: std::sync::Mutex<Option<(zbus::blocking::Connection, u32)>> =
+    std::sync::Mutex::new(None);
+
+/// Register as a host again after this many fetches (about a minute), in case the watcher restarted.
+const REREGISTER_EVERY: u32 = 30;
+
 pub fn fetch_dbus_string() -> String {
-    let Ok(conn) = zbus::blocking::Connection::session() else {
-        return String::new();
+    let out = fetch_with_kept_connection();
+    if out.is_none() {
+        // the bus or the watcher went away: start over next time
+        if let Ok(mut g) = TRAY_CONN.lock() {
+            *g = None;
+        }
+    }
+    out.unwrap_or_default()
+}
+
+fn fetch_with_kept_connection() -> Option<String> {
+    let (conn, register) = {
+        let mut g = TRAY_CONN.lock().ok()?;
+        if g.is_none() {
+            *g = Some((zbus::blocking::Connection::session().ok()?, 0));
+        }
+        let (conn, n) = g.as_mut()?;
+        let register = *n == 0;
+        *n = (*n + 1) % REREGISTER_EVERY;
+        (conn.clone(), register)
     };
+    fetch_on(&conn, register)
+}
+
+fn fetch_on(conn: &zbus::blocking::Connection, register: bool) -> Option<String> {
+    let conn = conn.clone();
 
     // Register as host with StatusNotifierWatcher
     let watcher_proxy = zbus::blocking::Proxy::new(
@@ -814,16 +846,17 @@ pub fn fetch_dbus_string() -> String {
     );
 
     let Ok(watcher) = watcher_proxy else {
-        return String::new();
+        return None;
     };
 
-    let _ =
-        watcher.call::<&str, (&str,), ()>("RegisterStatusNotifierHost", &("infynitae-edge-rs",));
-    let items_prop: zbus::Result<Vec<String>> =
-        watcher.get_property("RegisteredStatusNotifierItems");
-
-    let Ok(item_names) = items_prop else {
-        return String::new();
+    if register {
+        let _ = watcher
+            .call::<&str, (&str,), ()>("RegisterStatusNotifierHost", &("infynitae-edge-rs",));
+    }
+    // a fresh proxy each fetch reads the property anew (zbus caches it per proxy)
+    let Ok(item_names) = watcher.get_property::<Vec<String>>("RegisteredStatusNotifierItems")
+    else {
+        return None;
     };
 
     let mut lines = Vec::new();
@@ -861,7 +894,7 @@ pub fn fetch_dbus_string() -> String {
             ));
         }
     }
-    lines.join("\n")
+    Some(lines.join("\n"))
 }
 
 #[cfg(test)]
