@@ -341,12 +341,21 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         oy += SLIDER_ROW_H;
     }
 
+    // "Output: <sink>" left and "Change" right, as in the design: the whole line opens the list
+    let change = Text {
+        size: 12.0,
+        bold: false,
+        color: th.muted,
+        text: "Change",
+    };
+    let (cw, _) = draw::measure(cr, &change);
+    draw::text_right(cr, x + w - PAD_X, oy + 2.0, &change);
     let out_text = format!("Output: {}", d.sink);
     draw::text_max(
         cr,
         x + PAD_X,
         oy + 2.0,
-        (w - 2.0 * PAD_X).max(20.0),
+        (w - 2.0 * PAD_X - cw - 12.0).max(20.0),
         &Text {
             size: 12.0,
             bold: false,

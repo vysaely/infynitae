@@ -73,6 +73,19 @@ impl Default for TrayItem {
 }
 
 impl TrayItem {
+    /// What is said beside the name: nothing for the plain states every app has ("Active",
+    /// "Passive"), "needs you" for "NeedsAttention", any other status (e.g. "2 new") as it is.
+    pub fn note(&self) -> &str {
+        let s = self.status.trim();
+        if s.eq_ignore_ascii_case("active") || s.eq_ignore_ascii_case("passive") {
+            ""
+        } else if s.eq_ignore_ascii_case("needsattention") {
+            "needs you"
+        } else {
+            s
+        }
+    }
+
     pub fn display_name(&self) -> &str {
         if !self.title.is_empty() {
             &self.title
@@ -425,9 +438,13 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
             size: 11.5,
             bold: item.attention,
             color: status_color,
-            text: &item.status,
+            text: item.note(),
         };
-        let (sw, _) = draw::measure(cr, &status_t);
+        let (sw, _) = if status_t.text.is_empty() {
+            (0.0, 0.0)
+        } else {
+            draw::measure(cr, &status_t)
+        };
         let name_max_w = (col_w - sw - 8.0).max(20.0);
 
         // App name: 13 px from item's Title or Id
@@ -440,7 +457,7 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
         draw::text_max(cr, ix, iy + 4.0, name_max_w, &name_t);
 
         // Status: muted on the right, or accent when asking for attention
-        if !item.status.is_empty() {
+        if !status_t.text.is_empty() {
             draw::text_right(cr, ix + col_w, iy + 4.0, &status_t);
         }
     }
@@ -900,6 +917,18 @@ fn fetch_on(conn: &zbus::blocking::Connection, register: bool) -> Option<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notes_leave_out_the_plain_states() {
+        let mut it = parse_tray_data("Steam\tActive\n").remove(0);
+        assert_eq!(it.note(), "");
+        it.status = "Passive".into();
+        assert_eq!(it.note(), "");
+        it.status = "NeedsAttention".into();
+        assert_eq!(it.note(), "needs you");
+        it.status = "2 new".into();
+        assert_eq!(it.note(), "2 new");
+    }
 
     #[test]
     fn parses_tsv_and_c_edge_format_tray_data() {

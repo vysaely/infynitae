@@ -379,6 +379,9 @@ fn extract_json_num(block: &str, key: &str) -> Option<i64> {
 
 /// Returns the height for the media module.
 /// Hidden (0.0) when there is no player or track.
+/// The line and the "Next: ... / Queue N" row under the medium look's controls.
+const QUEUE_ROW_H: f64 = 33.0;
+
 pub fn height(it: &Item, world: &World) -> f64 {
     if !world.media.ready || world.media.is_empty() {
         return 0.0;
@@ -391,6 +394,11 @@ pub fn height(it: &Item, world: &World) -> f64 {
     // the medium look: 234 px with two lines of lyrics, less what has no lyrics to show
     let ly = &world.media.lyrics;
     234.0
+        - if world.media.queue.is_empty() {
+            QUEUE_ROW_H
+        } else {
+            0.0
+        }
         - if ly.current.is_empty() {
             40.0
         } else if ly.next.is_empty() {
@@ -697,6 +705,11 @@ fn draw_medium(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     );
 
     cur_y += ctrl_h + 10.0;
+
+    // Nothing queued: no line and no row under the controls (the card is shorter by QUEUE_ROW_H)
+    if world.media.queue.is_empty() {
+        return;
+    }
 
     // Thin line under controls
     draw::round_rect(cr, x + PAD_X, cur_y, w - 2.0 * PAD_X, 1.0, 0.5);
