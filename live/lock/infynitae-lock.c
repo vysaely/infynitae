@@ -22,6 +22,8 @@
 #include <pwd.h>
 #include <math.h>
 #include <poll.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 
 #include <wayland-client.h>
 #include <cairo.h>
@@ -986,9 +988,28 @@ static void setup_lock_surface(LockOutput *output) {
     // no commit here: the first commit waits for the configure
 }
 
+/* Tells infynitae-keyring that the screen is locked, so it forgets its key until the unlock (the PAM
+ * service's pam_exec line hands it the password again). Nothing happens when it does not run: no socket. */
+static void keyring_lock(void) {
+    const char *run = getenv("XDG_RUNTIME_DIR");
+    char path[sizeof(((struct sockaddr_un *)0)->sun_path)];
+    int n = run && *run ? snprintf(path, sizeof(path), "%s/infynitae-keyring/control", run)
+                        : snprintf(path, sizeof(path), "/run/user/%u/infynitae-keyring/control", (unsigned)getuid());
+    if (n < 0 || (size_t)n >= sizeof(path)) return;
+    int fd = socket(AF_UNIX, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    if (fd < 0) return;
+    struct sockaddr_un addr = { .sun_family = AF_UNIX };
+    memcpy(addr.sun_path, path, (size_t)n + 1);
+    if (connect(fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
+        if (write(fd, "lock\n", 5) == 5) shutdown(fd, SHUT_WR);
+    }
+    close(fd);
+}
+
 static void lock_locked(void *data, struct ext_session_lock_v1 *lock) {
     (void)lock;
     ((LockApp *)data)->locked = true;
+    keyring_lock();
 }
 
 static void lock_finished(void *data, struct ext_session_lock_v1 *lock) {
