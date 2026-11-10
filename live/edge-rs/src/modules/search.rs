@@ -106,11 +106,13 @@ mod tests {
             module: Module::Search,
             look: Some(0),
             rect: None,
+            half: false,
         };
         let bar = Item {
             module: Module::Search,
             look: Some(1),
             rect: None,
+            half: false,
         };
         assert_eq!(height(&hidden, &world), 0.0);
         assert_eq!(height(&bar, &world), BAR_H);

@@ -62,6 +62,17 @@ pub fn panel_origin(p: &Panel, w: f64, h: f64, pw: f64, ph: f64) -> (f64, f64) {
     (x, y.max(M))
 }
 
+/// The config with its panels as the edge lays them out (`Panel::flowed`): a line placed by hand
+/// keeps its order, its side-by-side modules become halves, and its places are dropped until
+/// the panel is saved again. `--print-panels` reads the lines as they are.
+pub fn flowed(mut cfg: Config) -> Config {
+    cfg.panels = cfg.panels.iter().map(config::Panel::flowed).collect();
+    cfg
+}
+
+/// Below this panel width two halves do not fit side by side: each takes the full width.
+pub const HALF_MIN_PANEL: f64 = 340.0;
+
 /// Each module's rectangle in the panel: where it was placed by hand, else stacked.
 pub fn layout(p: &Panel, pw: f64) -> (Vec<(f64, f64, f64, f64)>, f64) {
     let world = modules::World::now();
@@ -130,6 +141,25 @@ pub fn layout_in(
             }
             i = j;
         } else {
+            // two halves side by side (a half without a half after it, or a narrow panel: the
+            // full width); one of the two with nothing to show leaves the other the full width
+            let pair = p.items[i].half
+                && pw >= HALF_MIN_PANEL
+                && p.items
+                    .get(i + 1)
+                    .is_some_and(|b| b.half && !b.module.is_switch());
+            if pair {
+                let hw = ((pw - draw::GAP) / 2.0).floor();
+                let ha = modules::height_in(&p.items[i], world, th, hw);
+                let hb = modules::height_in(&p.items[i + 1], world, th, hw);
+                if ha > 0.0 && hb > 0.0 {
+                    rects.push((0.0, y, hw, ha));
+                    rects.push((pw - hw, y, hw, hb));
+                    y += ha.max(hb) + draw::GAP;
+                    i += 2;
+                    continue;
+                }
+            }
             let h = modules::height_in(&p.items[i], world, th, pw);
             rects.push((0.0, y, pw, h));
             if h > 0.0 {
@@ -311,7 +341,7 @@ impl Shell {
     pub fn new() -> Shell {
         let path = config::config_path();
         let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-        let cfg = Config::load();
+        let cfg = flowed(Config::load());
         let theme = theme::Theme::from_config(&cfg);
         let mut world = modules::World::now();
         if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
@@ -339,6 +369,7 @@ impl Shell {
 
     #[cfg(test)]
     pub fn from_config(cfg: Config) -> Shell {
+        let cfg = flowed(cfg);
         let theme = theme::Theme::from_config(&cfg);
         let mut world = modules::World::now();
         if world.apps.favorites.is_empty() && !cfg.favorites.is_empty() {
@@ -412,7 +443,7 @@ impl Shell {
             .ok();
         if mtime.is_some() && mtime != self.config_mtime {
             if let Ok(text) = std::fs::read_to_string(&self.config_path) {
-                self.cfg = Config::from_text(&text);
+                self.cfg = flowed(Config::from_text(&text));
                 self.theme = theme::Theme::from_config(&self.cfg);
                 self.world.apps.set_favorites(&self.cfg.favorites);
                 self.config_mtime = mtime;
@@ -661,8 +692,16 @@ impl Shell {
         let (_, content_h) = layout_in(panel, pw, &self.world, &self.theme);
         let ph = ph_of(panel, content_h, h);
         let (ox, oy) = panel_origin(panel, w, h, pw, ph);
-        self.edit.bar_rect =
-            modules::edit::calculate_bar_rect(panel, (ox, oy), pw, ph, (w, h), self.edit.adding);
+        self.edit.bar_rect = if panel.desktop {
+            modules::edit::calculate_bar_rect(panel, (ox, oy), pw, ph, (w, h), self.edit.adding)
+        } else {
+            let rows = if self.edit.adding {
+                modules::flow::add_row_count(panel)
+            } else {
+                0
+            };
+            modules::flow::bar_rect((ox, oy), pw, ph, (w, h), rows)
+        };
     }
 
     pub fn edit_enter(&mut self) -> bool {
@@ -675,6 +714,26 @@ impl Shell {
         self.world.child.open = false;
         self.world.tray.open_menu = None;
         let (w, h) = self.last_screen;
+        if let Some(panel) = self.cfg.panels.get(open_idx).filter(|p| !p.desktop) {
+            // a panel keeps its look while edited (modules/flow.rs): nothing is frozen
+            self.edit.before = panel.value();
+            self.edit.before_panel = Some(panel.clone());
+            self.edit.active = true;
+            self.edit.changed = false;
+            self.edit.adding = false;
+            self.edit.undo.clear();
+            self.edit.drag = None;
+            self.edit.live = false;
+            self.edit.selected = None;
+            self.edit.hover_block = None;
+            self.edit.flow_drag = None;
+            self.edit.drop_at = None;
+            self.edit.confirm_reset = false;
+            self.world.edit_preview = true;
+            self.opened_by_hover = false;
+            self.refresh_bar();
+            return true;
+        }
         if let Some(panel) = self.cfg.panels.get_mut(open_idx) {
             let pw = panel_width(panel, w);
             let (rects, content_h) = layout_in(panel, pw, &self.world, &self.theme);
@@ -699,10 +758,30 @@ impl Shell {
         false
     }
 
+    /// Ends editing a panel without saving: the panel as it was when editing began.
+    pub fn edit_cancel(&mut self) -> bool {
+        if !self.edit.active {
+            return false;
+        }
+        if let (Some(i), Some(before)) = (self.open, self.edit.before_panel.take()) {
+            if let Some(p) = self.cfg.panels.get_mut(i) {
+                *p = before;
+            }
+        }
+        self.edit.changed = false;
+        self.edit_exit()
+    }
+
     pub fn edit_exit(&mut self) -> bool {
         if !self.edit.active {
             return false;
         }
+        self.world.edit_preview = false;
+        self.edit.hover_block = None;
+        self.edit.flow_drag = None;
+        self.edit.drop_at = None;
+        self.edit.confirm_reset = false;
+        self.edit.before_panel = None;
         self.edit.active = false;
         self.edit.adding = false;
         self.edit.drag = None;
@@ -743,6 +822,14 @@ impl Shell {
         let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
 
         let is_left = modules::is_left_button(button);
+        if !panel.desktop {
+            if let Some(r) = self.flow_press(&panel, (ox, oy), pw, ph, (x, y), is_left) {
+                return r;
+            }
+            // the panel's background: move it to another edge (a press), or widen it (right
+            // press or its corner), as before
+            return self.panel_drag_start(&panel, (ox, oy), pw, ph, (x, y), button);
+        }
         let (bx, by, bw, bh) =
             modules::edit::calculate_bar_rect(&panel, (ox, oy), pw, ph, (w, h), self.edit.adding);
         self.edit.bar_rect = (bx, by, bw, bh);
@@ -789,6 +876,7 @@ impl Shell {
                                                 module: m,
                                                 look: None,
                                                 rect: None,
+                                                half: false,
                                             })
                                             .collect();
                                     }
@@ -860,6 +948,7 @@ impl Shell {
                                 module: m,
                                 look: None,
                                 rect: Some((fx, fy, dw, dh)),
+                                half: false,
                             });
                             self.edit.changed = true;
                             self.edit.selected = Some(p.items.len() - 1);
@@ -955,6 +1044,209 @@ impl Shell {
         true
     }
 
+    /// A press while a panel is edited (modules/flow.rs): the bar, Add's list, a card's bar, a
+    /// switch's x, or a card held to be moved. None: the panel's background. Outside the panel
+    /// and the bar nothing happens (a stray click ended editing before).
+    fn flow_press(
+        &mut self,
+        panel: &config::Panel,
+        origin: (f64, f64),
+        pw: f64,
+        ph: f64,
+        at: (f64, f64),
+        is_left: bool,
+    ) -> Option<bool> {
+        use modules::flow::{self, BarButton, BarHit, CardButton};
+        let open_idx = self.open?;
+        let (ox, oy) = origin;
+        let (x, y) = at;
+        self.refresh_bar();
+        let choices = modules::edit::addable(panel);
+        if let Some(hit) = flow::bar_hit(self.edit.bar_rect, &choices, self.edit.adding, x, y) {
+            if !is_left {
+                return Some(true);
+            }
+            let reset_pressed = hit == BarHit::Button(BarButton::Reset);
+            if !reset_pressed {
+                self.edit.confirm_reset = false;
+            }
+            match hit {
+                BarHit::Button(BarButton::Undo) => {
+                    if let Some(prev) = self.edit.undo.pop() {
+                        if let Some(p) = self.cfg.panels.get_mut(open_idx) {
+                            *p = prev;
+                            self.edit.changed = true;
+                        }
+                    }
+                }
+                BarHit::Button(BarButton::Reset) => {
+                    if !self.edit.confirm_reset {
+                        self.edit.confirm_reset = true;
+                    } else {
+                        self.edit.confirm_reset = false;
+                        let mods = match panel.name.as_str() {
+                            "control" => modules::edit::DEFAULT_CONTROL,
+                            "apps" => modules::edit::DEFAULT_APPS,
+                            "windows" => modules::edit::DEFAULT_WINDOWS,
+                            "clipboard" => modules::edit::DEFAULT_CLIPBOARD,
+                            _ => &[],
+                        };
+                        self.flow_change(|p| {
+                            if !mods.is_empty() {
+                                p.items = mods
+                                    .iter()
+                                    .map(|&m| config::Item {
+                                        module: m,
+                                        look: None,
+                                        rect: None,
+                                        half: false,
+                                    })
+                                    .collect();
+                            }
+                            p.width = 0;
+                        });
+                    }
+                }
+                BarHit::Button(BarButton::Add) => self.edit.adding = !self.edit.adding,
+                BarHit::Button(BarButton::Narrower) | BarHit::Button(BarButton::Wider) => {
+                    let step = if hit == BarHit::Button(BarButton::Wider) {
+                        flow::WIDTH_STEP
+                    } else {
+                        -flow::WIDTH_STEP
+                    };
+                    let now = pw.round() as i32;
+                    self.flow_change(|p| {
+                        p.width = (now + step).clamp(flow::WIDTH_MIN, flow::WIDTH_MAX)
+                    });
+                }
+                BarHit::Button(BarButton::Hover) => self.flow_change(|p| p.hover = !p.hover),
+                BarHit::Button(BarButton::Cancel) => {
+                    self.edit_cancel();
+                }
+                BarHit::Button(BarButton::Done) => {
+                    self.edit_exit();
+                }
+                BarHit::Add(m) => self.flow_change(|p| flow::add_module(p, m)),
+                BarHit::Nothing => {}
+            }
+            return Some(true);
+        }
+        self.edit.confirm_reset = false;
+        let inside = x >= ox && x <= ox + pw && y >= oy && y <= oy + ph;
+        if !inside {
+            return Some(false);
+        }
+        let (px, py) = (x - ox, y - oy + self.world.panel_scroll);
+        let rects = layout_in(panel, pw, &self.world, &self.theme).0;
+        let brects = flow::block_rects(panel, &rects, &self.world, &self.theme, pw);
+        let b = flow::block_at(&brects, px, py)?;
+        if !is_left {
+            return Some(true);
+        }
+        let r = brects.iter().find(|(k, _)| *k == b).map(|(_, r)| *r)?;
+        let range = flow::blocks(panel).get(b).cloned()?;
+        let (_, buttons) = flow::card_buttons(panel, b, r, pw);
+        let hit =
+            |q: (f64, f64, f64, f64)| px >= q.0 && px <= q.0 + q.2 && py >= q.1 && py <= q.1 + q.3;
+        if self.edit.hover_block == Some(b) {
+            if let Some((k, _)) = buttons.iter().find(|(_, q)| hit(*q)) {
+                let first = range.start;
+                match *k {
+                    CardButton::Up => self.flow_change(|p| flow::move_block(p, b, b - 1)),
+                    CardButton::Down => self.flow_change(|p| flow::move_block(p, b, b + 2)),
+                    CardButton::Half => {
+                        self.flow_change(|p| p.items[first].half = !p.items[first].half)
+                    }
+                    CardButton::Look => self.flow_change(|p| flow::next_look(p, first)),
+                    CardButton::Remove => {
+                        self.flow_change(|p| flow::remove_block(p, b));
+                        self.edit.hover_block = None;
+                    }
+                }
+                return Some(true);
+            }
+            if panel.items[range.start].module.is_switch() {
+                for i in range.clone() {
+                    if let Some(&cell) = rects.get(i).filter(|c| c.2 > 0.0 && c.3 > 0.0) {
+                        if hit(flow::switch_x(cell)) {
+                            self.flow_change(|p| flow::remove_item(p, i));
+                            return Some(true);
+                        }
+                    }
+                }
+            }
+        }
+        // held: it moves once dragged a little
+        self.edit.hover_block = Some(b);
+        self.edit.flow_drag = Some(modules::edit::FlowDrag {
+            block: b,
+            start: (x, y),
+            moved: false,
+        });
+        self.edit.drop_at = None;
+        self.pointer_down = true;
+        Some(true)
+    }
+
+    /// One change to the panel being edited, kept for Undo.
+    fn flow_change(&mut self, f: impl FnOnce(&mut config::Panel)) {
+        let Some(i) = self.open else { return };
+        let Some(p) = self.cfg.panels.get_mut(i) else {
+            return;
+        };
+        let before = p.clone();
+        f(p);
+        if *p != before {
+            self.edit.undo.push(before);
+            if self.edit.undo.len() > modules::flow::UNDO_MAX {
+                self.edit.undo.remove(0);
+            }
+            self.edit.changed = true;
+        }
+    }
+
+    /// A press on an edited panel's background: moving it to another edge, or widening it.
+    fn panel_drag_start(
+        &mut self,
+        panel: &config::Panel,
+        origin: (f64, f64),
+        pw: f64,
+        ph: f64,
+        at: (f64, f64),
+        button: u32,
+    ) -> bool {
+        let (ox, oy) = origin;
+        let (x, y) = at;
+        let (px_in, py_in) = (x - ox, y - oy);
+        let cx = if panel.align > 0 && panel.side.horizontal() {
+            0.0
+        } else {
+            pw
+        };
+        let cy = if panel.side == config::Side::Bottom {
+            0.0
+        } else {
+            ph
+        };
+        let corner = (px_in - cx).abs() < 16.0 && (py_in - cy).abs() < 16.0;
+        let kind = if modules::is_right_button(button) || corner {
+            modules::edit::DragKind::ResizePanel
+        } else {
+            modules::edit::DragKind::MovePanel
+        };
+        if let Some(p) = self.open.and_then(|i| self.cfg.panels.get(i)) {
+            self.edit.undo.push(p.clone());
+        }
+        self.edit.drag = Some(modules::edit::DragState {
+            kind,
+            start_pos: (x, y),
+            initial_rect: (0, 0, pw.round() as i32, ph.round() as i32),
+        });
+        self.edit.live = false;
+        self.pointer_down = true;
+        true
+    }
+
     pub fn edit_drag(&mut self, x: f64, y: f64) -> bool {
         let r = self.edit_drag_inner(x, y);
         self.refresh_bar();
@@ -962,6 +1254,29 @@ impl Shell {
     }
 
     fn edit_drag_inner(&mut self, x: f64, y: f64) -> bool {
+        if let Some(mut d) = self.edit.flow_drag {
+            let (w, h) = self.last_screen;
+            let Some(panel) = self.open.and_then(|i| self.cfg.panels.get(i)) else {
+                return false;
+            };
+            if !d.moved && (x - d.start.0).hypot(y - d.start.1) < 6.0 {
+                return false;
+            }
+            d.moved = true;
+            self.edit.flow_drag = Some(d);
+            let pw = panel_width(panel, w);
+            let (rects, content_h) = layout_in(panel, pw, &self.world, &self.theme);
+            let ph = ph_of(panel, content_h, h);
+            let (_, oy) = panel_origin(panel, w, h, pw, ph);
+            let brects = modules::flow::block_rects(panel, &rects, &self.world, &self.theme, pw);
+            let n = modules::flow::blocks(panel).len();
+            self.edit.drop_at = Some(modules::flow::drop_index(
+                &brects,
+                y - oy + self.world.panel_scroll,
+                n,
+            ));
+            return true;
+        }
         let Some(open_idx) = self.open else {
             return false;
         };
@@ -1139,6 +1454,15 @@ impl Shell {
         let Some(open_idx) = self.open else {
             return false;
         };
+        if let Some(d) = self.edit.flow_drag.take() {
+            self.pointer_down = false;
+            let to = self.edit.drop_at.take();
+            if let (true, Some(to)) = (d.moved, to) {
+                self.flow_change(|p| modules::flow::move_block(p, d.block, to));
+                self.edit.hover_block = None;
+            }
+            return true;
+        }
         let drag = self.edit.drag.take();
         self.pointer_down = false;
         let (w, _h) = self.last_screen;
@@ -1235,6 +1559,12 @@ impl Shell {
         };
         match k {
             Key::Escape => {
+                if self.edit.active && self.edit.adding {
+                    // Add's list first, then editing
+                    self.edit.adding = false;
+                    self.refresh_bar();
+                    return true;
+                }
                 if self.edit.active {
                     self.edit_exit();
                     return true;
@@ -1571,6 +1901,17 @@ impl Shell {
                     let (ox, oy) = panel_origin(panel, w, h, pw, ph);
                     let px = x - ox;
                     let py = y - oy;
+                    if !panel.desktop {
+                        let rects = layout_in(panel, pw, &self.world, &self.theme).0;
+                        let brects =
+                            modules::flow::block_rects(panel, &rects, &self.world, &self.theme, pw);
+                        let b = modules::flow::block_at(&brects, px, py + self.world.panel_scroll);
+                        if b != self.edit.hover_block {
+                            self.edit.hover_block = b;
+                            return true;
+                        }
+                        return false;
+                    }
                     let next_hover = modules::edit::module_under(panel, px, py);
                     if next_hover != self.edit.hover_module {
                         self.edit.hover_module = next_hover;
@@ -1655,7 +1996,7 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         .and_then(|(a, b)| Some((a.parse::<i32>().ok()?, b.parse::<i32>().ok()?)))
         .filter(|&(w, h)| (200..=8192).contains(&w) && (200..=8192).contains(&h))
         .ok_or("--render needs WxH, e.g. 1920x1080")?;
-    let mut cfg = Config::load();
+    let mut cfg = flowed(Config::load());
     let th = theme::Theme::from_config(&cfg);
     // the desktop's widgets: their one panel, the whole screen
     if name == "widgets" {
@@ -1691,6 +2032,7 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         let is_adding = std::env::var_os("INFYNITAE_EDGE_RENDER_ADD").is_some();
 
         let panel = &mut cfg.panels[open_idx];
+        world.edit_preview = is_editing && !panel.desktop;
         if panel.has(config::Module::Apps) || panel.has(config::Module::Favorites) {
             world.apps.ensure_loaded(&world.search);
         }
@@ -1720,7 +2062,7 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         };
 
         if is_editing {
-            if !panel.placed {
+            if !panel.placed && panel.desktop {
                 modules::edit::freeze_layout(panel, &rects_init, pw);
             }
             if let Ok(v) = std::env::var("INFYNITAE_EDGE_RENDER_EDIT") {
@@ -1728,6 +2070,10 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
                     if n > 0 && n <= panel.items.len() {
                         edit_state.selected = Some(n - 1);
                         edit_state.hover_module = Some(n - 1);
+                        // a panel: the card holding module n shows its bar
+                        edit_state.hover_block = modules::flow::blocks(panel)
+                            .iter()
+                            .position(|r| r.contains(&(n - 1)));
                     }
                 }
             }
@@ -1792,7 +2138,16 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
             ph.round() as i32,
         );
 
-        if is_editing {
+        if is_editing && !panel.desktop {
+            let rows = if is_adding {
+                modules::flow::add_row_count(panel)
+            } else {
+                0
+            };
+            edit_state.bar_rect =
+                modules::flow::bar_rect((ox, oy), pw, ph, (w as f64, h as f64), rows);
+            modules::flow::draw_overlay(&cr, &th, panel, &rects, &world, (ox, oy), pw, &edit_state);
+        } else if is_editing {
             edit_state.bar_rect = modules::edit::calculate_bar_rect(
                 panel,
                 (ox, oy),
@@ -1811,6 +2166,8 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
                 (w as f64, h as f64),
                 &edit_state,
             );
+        }
+        if is_editing {
             let (bx, by, bw, bh) = edit_state.bar_rect;
             let min_x = total_rect.0.min(bx.round() as i32 - 2);
             let min_y = total_rect.1.min(by.round() as i32 - 2);
@@ -2508,5 +2865,105 @@ mod tests {
             sh.world.actions.last().map(String::as_str),
             Some("ask:answer:FAT32")
         );
+    }
+    /// The panel edit mode of 2026-11-10 (modules/flow.rs): the cards stay cards, a card's bar
+    /// moves it, an empty module keeps a card while editing, Cancel puts it all back, Done
+    /// saves a line with no places in it.
+    #[test]
+    fn editing_a_panel_keeps_its_cards_and_saves_a_line_without_places() {
+        use modules::flow::{bar_buttons, block_rects, card_buttons, BarButton, CardButton};
+        let line = "PANEL_CONTROL=\"SUPER+A top right 380 hover clock volume tray session\"\n";
+        let mut sh = Shell::from_config(Config::from_text(line));
+        let (w, h) = (1920.0, 1080.0);
+        sh.last_screen = (w, h);
+        assert!(sh.toggle_named("control"));
+        let geo = |sh: &Shell| {
+            let panel = sh.cfg.panels[sh.open.unwrap()].clone();
+            let pw = panel_width(&panel, w);
+            let (rects, ch) = layout_in(&panel, pw, &sh.world, &sh.theme);
+            let ph = ph_of(&panel, ch, h);
+            let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
+            let br = block_rects(&panel, &rects, &sh.world, &sh.theme, pw);
+            (panel, pw, ox, oy, br)
+        };
+        let blocks_before = geo(&sh).4.len();
+        assert!(sh.edit_enter());
+        let (panel, pw, ox, oy, br) = geo(&sh);
+        assert!(!panel.placed, "nothing is frozen into places");
+        assert!(
+            br.len() > blocks_before,
+            "the empty tray keeps a card while editing"
+        );
+
+        // the clock's bar: Down puts it under the sound card
+        let (_, r0) = br[0];
+        sh.pointer_motion(w, h, ox + r0.0 + 30.0, oy + r0.1 + r0.3 - 6.0);
+        assert_eq!(sh.edit.hover_block, Some(0));
+        let (_, buttons) = card_buttons(&panel, 0, r0, pw);
+        let down = buttons
+            .iter()
+            .find(|(k, _)| *k == CardButton::Down)
+            .unwrap()
+            .1;
+        assert!(sh.click(w, h, ox + down.0 + 4.0, oy + down.1 + 4.0, 1));
+        sh.pointer_release();
+        let words = |sh: &Shell| {
+            sh.cfg.panels[sh.open.unwrap()]
+                .items
+                .iter()
+                .map(|i| i.module.word())
+                .collect::<Vec<_>>()
+                .join(" ")
+        };
+        assert_eq!(words(&sh), "volume clock tray session");
+
+        // a click outside the panel and its bar leaves editing alone
+        assert!(!sh.click(w, h, 100.0, 500.0, 1));
+        assert!(sh.edit.active);
+
+        // Undo, then Done: the line saved has no places
+        let bar = |sh: &Shell, k: BarButton| {
+            bar_buttons(sh.edit.bar_rect)
+                .into_iter()
+                .find(|(b, _)| *b == k)
+                .unwrap()
+                .1
+        };
+        let u = bar(&sh, BarButton::Undo);
+        assert!(sh.click(w, h, u.0 + 4.0, u.1 + 4.0, 1));
+        sh.pointer_release();
+        assert_eq!(words(&sh), "clock volume tray session");
+        let n = bar(&sh, BarButton::Narrower);
+        assert!(sh.click(w, h, n.0 + 4.0, n.1 + 4.0, 1));
+        sh.pointer_release();
+        let d = bar(&sh, BarButton::Done);
+        assert!(sh.click(w, h, d.0 + 4.0, d.1 + 4.0, 1));
+        sh.pointer_release();
+        assert!(!sh.edit.active);
+        assert!(!sh.world.edit_preview);
+        assert_eq!(
+            sh.world.actions.last().map(String::as_str),
+            Some("set PANEL_CONTROL=\"SUPER+A top right 360 hover clock volume tray session\"")
+        );
+    }
+
+    #[test]
+    fn cancel_puts_the_panel_back() {
+        let line = "PANEL_CONTROL=\"SUPER+A top right 380 hover clock volume session\"\n";
+        let mut sh = Shell::from_config(Config::from_text(line));
+        let (w, h) = (1920.0, 1080.0);
+        sh.last_screen = (w, h);
+        assert!(sh.toggle_named("control"));
+        assert!(sh.edit_enter());
+        let before = sh.cfg.panels[sh.open.unwrap()].clone();
+        sh.flow_change(|p| modules::flow::remove_block(p, 0));
+        assert_ne!(sh.cfg.panels[sh.open.unwrap()], before);
+        assert!(sh.edit_cancel());
+        assert_eq!(sh.cfg.panels[sh.open.unwrap()], before);
+        assert!(sh
+            .world
+            .actions
+            .iter()
+            .all(|a| !a.starts_with("set PANEL_")));
     }
 }

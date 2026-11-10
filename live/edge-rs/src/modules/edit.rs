@@ -66,6 +66,23 @@ pub struct EditState {
     pub overlap: bool,
     pub bar_rect: (f64, f64, f64, f64),
     pub hover_module: Option<usize>,
+    /// a panel (modules/flow.rs): the card under the pointer
+    pub hover_block: Option<usize>,
+    /// a panel: a card held to be moved, and where it lands
+    pub flow_drag: Option<FlowDrag>,
+    pub drop_at: Option<usize>,
+    /// a panel: Reset was pressed once (the second press resets)
+    pub confirm_reset: bool,
+    /// a panel as it was when editing began (Cancel)
+    pub before_panel: Option<Panel>,
+}
+
+/// A panel's card held by the pointer (modules/flow.rs).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FlowDrag {
+    pub block: usize,
+    pub start: (f64, f64),
+    pub moved: bool,
 }
 
 impl Default for EditState {
@@ -83,6 +100,11 @@ impl Default for EditState {
             overlap: false,
             bar_rect: (0.0, 0.0, 0.0, 0.0),
             hover_module: None,
+            hover_block: None,
+            flow_drag: None,
+            drop_at: None,
+            confirm_reset: false,
+            before_panel: None,
         }
     }
 }
@@ -268,9 +290,9 @@ pub fn module_display_name(m: Module) -> &'static str {
         Module::Windows => "Windows",
         Module::Clipboard => "Clipboard",
         Module::Clock => "Clock",
-        Module::Volume => "Volume",
-        Module::Media => "Media",
-        Module::Wifi => "Wi-Fi",
+        Module::Volume => "Sound",
+        Module::Media => "Music",
+        Module::Wifi => "Network",
         Module::Bluetooth => "Bluetooth",
         Module::Dnd => "Do not disturb",
         Module::Night => "Night light",
@@ -280,7 +302,7 @@ pub fn module_display_name(m: Module) -> &'static str {
         Module::Replay => "Replay",
         Module::Tray => "Background apps",
         Module::Notifications => "Notifications",
-        Module::Session => "Restart, shut down",
+        Module::Session => "Power buttons",
         Module::Calendar => "Calendar",
         Module::Memory => "Memory",
         Module::System => "System",
@@ -757,11 +779,13 @@ mod tests {
                     module: Module::Clock,
                     look: None,
                     rect: Some((8, 8, 344, 34)),
+                    half: false,
                 },
                 Item {
                     module: Module::Volume,
                     look: None,
                     rect: Some((8, 100, 344, 32)),
+                    half: false,
                 },
             ],
             placed: true,
@@ -796,11 +820,13 @@ mod tests {
                     module: Module::Clock,
                     look: None,
                     rect: Some((8, 8, 344, 34)),
+                    half: false,
                 },
                 Item {
                     module: Module::Volume,
                     look: None,
                     rect: Some((8, 48, 170, 46)),
+                    half: false,
                 },
             ],
             placed: true,
@@ -831,11 +857,13 @@ mod tests {
                     module: Module::Clock,
                     look: None,
                     rect: Some((8, 8, 344, 34)),
+                    half: false,
                 },
                 Item {
                     module: Module::Volume,
                     look: None,
                     rect: Some((8, 48, 344, 32)),
+                    half: false,
                 },
             ],
             placed: true,

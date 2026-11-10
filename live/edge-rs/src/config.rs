@@ -133,6 +133,8 @@ pub struct Item {
     pub look: Option<usize>,
     /// placed by hand: x, y, w, h inside the panel
     pub rect: Option<(i32, i32, i32, i32)>,
+    /// half the panel's width, beside another half (`module@half`); a lone half is full width
+    pub half: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -180,6 +182,7 @@ impl Panel {
                     module: m,
                     look: None,
                     rect: None,
+                    half: false,
                 })
                 .collect(),
         );
@@ -209,6 +212,62 @@ impl Panel {
         p.desktop = true;
         p.placed = true;
         (!p.items.is_empty()).then_some(p)
+    }
+
+    /// The panel as the edge lays it out and edits it (2026-11-10): modules in order, as wide
+    /// as the panel or half of it, as tall as what they show. A line placed by hand (the C edge's
+    /// `module@x,y,wxh`, edit mode before) keeps its modules from top to bottom, left to right;
+    /// two that sat side by side become halves; the places and the panel's height are dropped.
+    /// The line itself changes only when the panel is edited and saved. The desktop's widgets
+    /// keep their places.
+    pub fn flowed(&self) -> Panel {
+        let mut p = self.clone();
+        if p.desktop || !p.placed {
+            return p;
+        }
+        let pw = p.width.max(1);
+        let mut order: Vec<(i32, i32, usize)> = p
+            .items
+            .iter()
+            .enumerate()
+            .map(|(i, it)| match it.rect {
+                Some((x, y, _, _)) => (y, x, i),
+                None => (i32::MAX, 0, i),
+            })
+            .collect();
+        order.sort();
+        let items: Vec<Item> = order.iter().map(|&(_, _, i)| p.items[i].clone()).collect();
+        let narrow = |it: &Item| it.rect.is_some_and(|r| r.2 * 10 < pw * 6);
+        let row = |a: &Item, b: &Item| match (a.rect, b.rect) {
+            (Some(ra), Some(rb)) => (ra.1 - rb.1).abs() * 2 < ra.3.min(rb.3),
+            _ => false,
+        };
+        let mut out: Vec<Item> = Vec::with_capacity(items.len());
+        let mut i = 0;
+        while i < items.len() {
+            let a = &items[i];
+            let pair = i + 1 < items.len()
+                && !a.module.is_switch()
+                && !items[i + 1].module.is_switch()
+                && narrow(a)
+                && narrow(&items[i + 1])
+                && row(a, &items[i + 1]);
+            for (k, it) in items[i..if pair { i + 2 } else { i + 1 }]
+                .iter()
+                .enumerate()
+            {
+                let _ = k;
+                let mut it = it.clone();
+                it.rect = None;
+                it.half = pair;
+                out.push(it);
+            }
+            i += if pair { 2 } else { 1 };
+        }
+        p.items = out;
+        p.placed = false;
+        p.height = 0;
+        p
     }
 
     /// The desktop with no widgets (to add some to).
@@ -276,6 +335,8 @@ impl Panel {
                 (self.placed, it.rect.filter(|r| r.2 > 0 && r.3 > 0))
             {
                 out += &format!("@{x},{y},{w}x{h}");
+            } else if it.half && !self.placed && !it.module.is_switch() {
+                out += "@half";
             }
         }
         out
@@ -319,6 +380,7 @@ impl Panel {
                     let (names, _) = m.looks();
                     let look =
                         look.and_then(|l| names.iter().position(|n| n.eq_ignore_ascii_case(l)));
+                    let half = at.is_some_and(|a| a.eq_ignore_ascii_case("half"));
                     let rect = at
                         .and_then(parse_rect)
                         .filter(|&(_, _, w, h)| w >= 24 && h >= 20);
@@ -326,6 +388,7 @@ impl Panel {
                         module: m,
                         look,
                         rect,
+                        half,
                     });
                 }
                 continue;

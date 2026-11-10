@@ -578,7 +578,18 @@ impl OutputSurface {
                     if let Some(mr) = tray_m_rect {
                         modules::tray::draw_menu(&cr, &shell.theme, &shell.world, mr);
                     }
-                    if shell.edit.active {
+                    if shell.edit.active && !panel.desktop {
+                        modules::flow::draw_overlay(
+                            &cr,
+                            &shell.theme,
+                            panel,
+                            &rects,
+                            &shell.world,
+                            (ox, oy),
+                            pw,
+                            &shell.edit,
+                        );
+                    } else if shell.edit.active {
                         modules::edit::draw_edit_overlay(
                             &cr,
                             &shell.theme,
