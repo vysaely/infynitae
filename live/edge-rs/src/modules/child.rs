@@ -204,6 +204,62 @@ pub fn parse_sink_inputs(out: &str) -> Vec<ChildItem> {
     rows
 }
 
+/// The Sound card's microphone row id (the default input), and the line under it naming the apps
+/// using it.
+pub const MIC: &str = "@app:mic";
+pub const MIC_USERS: &str = "#mic-users";
+
+/// The microphone rows from `pactl get-default-source`, `get-source-volume @DEFAULT_SOURCE@`,
+/// `get-source-mute @DEFAULT_SOURCE@` (one output, in that order) and `pactl list source-outputs`
+/// (who records): a heading, the microphone with its level, and "Used by ..." when an app
+/// listens. Nothing without a real input (no source, or only a monitor of an output).
+pub fn mic_rows(source_out: &str, outputs_out: &str) -> Vec<ChildItem> {
+    let mut lines = source_out.lines().map(str::trim).filter(|l| !l.is_empty());
+    let Some(name) = lines.next() else {
+        return Vec::new();
+    };
+    if name.ends_with(".monitor") || name.starts_with("Volume:") {
+        return Vec::new();
+    }
+    let rest: Vec<&str> = lines.collect();
+    let level = rest
+        .iter()
+        .find_map(|l| l.strip_prefix("Volume:"))
+        .and_then(|v| v.split('/').map(str::trim).find(|t| t.ends_with('%')))
+        .unwrap_or("100%")
+        .to_string();
+    let muted = rest.iter().any(|l| l.trim() == "Mute: yes");
+    let mut users: Vec<String> = Vec::new();
+    for l in outputs_out.lines().map(str::trim) {
+        if let Some(n) = l.strip_prefix("application.name = ") {
+            let n = n.trim_matches('"').to_string();
+            // level meters (pavucontrol's peak detect) are not someone listening
+            if !n.is_empty() && !users.contains(&n) && !n.eq_ignore_ascii_case("pavucontrol") {
+                users.push(n);
+            }
+        }
+    }
+    let said = |id: &str, label: String| ChildItem {
+        id: id.into(),
+        label,
+        meta: String::new(),
+        active: false,
+    };
+    let mut rows = vec![
+        said(SAID, "Input".into()),
+        ChildItem {
+            id: MIC.into(),
+            label: "Microphone".into(),
+            meta: if muted { "Muted".into() } else { level },
+            active: false,
+        },
+    ];
+    if !users.is_empty() {
+        rows.push(said(MIC_USERS, format!("Used by {}", users.join(", "))));
+    }
+    rows
+}
+
 /// The level (0-150) an app row's meta says, None for other rows (and "Muted": 0).
 pub fn app_level(item: &ChildItem) -> Option<u32> {
     item.id.strip_prefix(APP_PREFIX)?;
@@ -486,10 +542,16 @@ pub fn action_for_child_item(kind: ChildKind, item: &ChildItem) -> Option<String
     }
     let id = sq(&item.id);
     match kind {
+        // a known network, else an open one, else its password asked in the edge's own prompt
+        // (a new secured network failed without a word before)
         ChildKind::Wifi => Some(format!(
             "s=$(printf '%s' {id} | tr '\\036' '\\t'); \
-                 nmcli connection up id \"$s\" >/dev/null 2>&1 || \
-                 nmcli dev wifi connect \"$s\" >/dev/null 2>&1"
+                 nmcli connection up id \"$s\" >/dev/null 2>&1 && exit 0; \
+                 nmcli dev wifi connect \"$s\" >/dev/null 2>&1 && exit 0; \
+                 pw=$(infynitae-edge ask --text --secret \"Password for $s\") || exit 0; \
+                 [ -n \"$pw\" ] || exit 0; \
+                 nmcli dev wifi connect \"$s\" password \"$pw\" >/dev/null 2>&1 || \
+                 notify-send -a Infynitae Wi-Fi \"Could not join $s (wrong password?)\""
         )),
         ChildKind::Bluetooth => {
             if item.id == "-" {
@@ -797,19 +859,48 @@ pub fn click_child(
 
     let row = ((py - start_y) / ROW_HEIGHT).floor() as usize;
     if let Some(item) = world.child.items.get(row).cloned() {
-        if item.id == SAID || item.id.is_empty() {
+        if item.id == SAID || item.id == MIC_USERS || item.id.is_empty() {
             return (false, None);
         }
         if let Some(idx) = item.id.strip_prefix(APP_PREFIX) {
             // the slider: the level where it was clicked (0-100 %); elsewhere on the row nothing
             let (x0, x1) = app_slider_span(cx, cw);
-            if px < x0 - 8.0 || px > x1 + 8.0 || !idx.bytes().all(|b| b.is_ascii_digit()) {
+            let mic = idx == "mic";
+            if !mic && !idx.bytes().all(|b| b.is_ascii_digit()) {
+                return (false, None);
+            }
+            if px < x0 - 8.0 {
+                // its name: mute or unmute it
+                let cmd = if mic {
+                    "pactl set-source-mute @DEFAULT_SOURCE@ toggle >/dev/null 2>&1".to_string()
+                } else {
+                    format!("pactl set-sink-input-mute {idx} toggle >/dev/null 2>&1")
+                };
+                world.run(cmd.clone());
+                if let Some(it) = world.child.items.get_mut(row) {
+                    // unmuted: a level until the card's reload says the real one
+                    it.meta = if it.meta == "Muted" {
+                        "100%".into()
+                    } else {
+                        "Muted".into()
+                    };
+                }
+                world.child_pending = world.live.then_some(ChildKind::Audio);
+                return (true, Some(cmd));
+            }
+            if px > x1 + 8.0 {
                 return (false, None);
             }
             let pct = (((px - x0) / (x1 - x0)).clamp(0.0, 1.0) * 100.0).round() as u32;
-            let cmd = format!(
-                "pactl set-sink-input-mute {idx} 0 >/dev/null 2>&1; pactl set-sink-input-volume {idx} {pct}% >/dev/null 2>&1"
-            );
+            let cmd = if mic {
+                format!(
+                    "pactl set-source-mute @DEFAULT_SOURCE@ 0 >/dev/null 2>&1; pactl set-source-volume @DEFAULT_SOURCE@ {pct}% >/dev/null 2>&1"
+                )
+            } else {
+                format!(
+                    "pactl set-sink-input-mute {idx} 0 >/dev/null 2>&1; pactl set-sink-input-volume {idx} {pct}% >/dev/null 2>&1"
+                )
+            };
             world.run(cmd.clone());
             if let Some(it) = world.child.items.get_mut(row) {
                 it.meta = format!("{pct}%");
@@ -890,6 +981,65 @@ pub fn click_child(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_microphone_row_says_its_level_and_who_listens() {
+        let src = "alsa_input.usb-mic\nVolume: front-left: 45000 /  69% / -9.7 dB,   front-right: 45000 /  69% / -9.7 dB\nMute: no\n";
+        let rec = "Source Output #12\n\tProperties:\n\t\tapplication.name = \"Discord\"\nSource Output #13\n\tProperties:\n\t\tapplication.name = \"PulseAudio Volume Control\"\n";
+        let rows = mic_rows(src, rec);
+        assert_eq!(rows[1].id, MIC);
+        assert_eq!(app_level(&rows[1]), Some(69));
+        assert_eq!(rows[2].label, "Used by Discord, PulseAudio Volume Control");
+        assert!(
+            mic_rows("alsa_output.pci.monitor\nVolume: 1 / 100% / 0 dB\n", "").is_empty(),
+            "no real input: no row"
+        );
+        assert!(mic_rows("", "").is_empty());
+        assert_eq!(
+            mic_rows(&src.replace("Mute: no", "Mute: yes"), "")[1].meta,
+            "Muted"
+        );
+    }
+
+    #[test]
+    fn the_microphone_mutes_by_its_name_and_levels_by_its_slider() {
+        let mut world = World::now();
+        world.child.open = true;
+        world.child.kind = Some(ChildKind::Audio);
+        world.child.items = mic_rows(
+            "alsa_input.mic\nVolume: mono: 1 / 50% / 0 dB\nMute: no\n",
+            "Source Output #1\n\t\tapplication.name = \"OBS\"\n",
+        );
+        let rect = (0.0, 0.0, CHILD_WIDTH, 200.0);
+        let row_y = PAD_Y + 22.0 + GAP + ROW_HEIGHT * 1.5;
+        let (_, cmd) = click_child(&mut world, rect, (PAD_X + 20.0, row_y), 1);
+        assert_eq!(
+            cmd.as_deref(),
+            Some("pactl set-source-mute @DEFAULT_SOURCE@ toggle >/dev/null 2>&1")
+        );
+        assert_eq!(world.child.items[1].meta, "Muted");
+        let (x0, x1) = app_slider_span(0.0, CHILD_WIDTH);
+        let (_, cmd) = click_child(&mut world, rect, ((x0 + x1) / 2.0, row_y), 1);
+        assert!(cmd
+            .unwrap()
+            .ends_with("pactl set-source-volume @DEFAULT_SOURCE@ 50% >/dev/null 2>&1"));
+        let users_y = PAD_Y + 22.0 + GAP + ROW_HEIGHT * 2.5;
+        let (changed, cmd) = click_child(&mut world, rect, (60.0, users_y), 1);
+        assert!(!changed && cmd.is_none(), "the Used by line does nothing");
+    }
+
+    #[test]
+    fn joining_a_new_secured_network_asks_its_password() {
+        let item = ChildItem {
+            id: "Cafe".into(),
+            label: "Cafe".into(),
+            meta: "40%".into(),
+            active: false,
+        };
+        let cmd = action_for_child_item(ChildKind::Wifi, &item).unwrap();
+        assert!(cmd.contains("infynitae-edge ask --text --secret"));
+        assert!(cmd.contains("nmcli dev wifi connect \"$s\" password \"$pw\""));
+    }
 
     #[test]
     fn the_replay_card_saves_a_clip_opens_the_folder_and_switches() {
@@ -1003,8 +1153,12 @@ mod tests {
             Some("pactl set-sink-input-mute 45 0 >/dev/null 2>&1; pactl set-sink-input-volume 45 50% >/dev/null 2>&1")
         );
         assert_eq!(world.child.items[1].meta, "50%");
-        let (changed, _) = click_child(&mut world, rect, (PAD_X + 20.0, row_y), 1);
-        assert!(!changed, "the name: nothing");
+        let (changed, cmd) = click_child(&mut world, rect, (PAD_X + 20.0, row_y), 1);
+        assert!(changed, "the name mutes the app");
+        assert_eq!(
+            cmd.as_deref(),
+            Some("pactl set-sink-input-mute 45 toggle >/dev/null 2>&1")
+        );
     }
 
     #[test]

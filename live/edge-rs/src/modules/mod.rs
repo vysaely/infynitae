@@ -794,6 +794,16 @@ pub fn load_child_list(kind: child::ChildKind, bt_scan: bool, live: bool) -> Vec
             let mut items = child::parse_audio_list(&sinks, &def);
             if !items.is_empty() {
                 // then each app playing sound, with its own volume
+                // the microphone (the default input) and who uses it, then each app playing
+                let src = run_sh(
+                    "audio_mic",
+                    "LC_ALL=C pactl get-default-source 2>/dev/null; LC_ALL=C pactl get-source-volume @DEFAULT_SOURCE@ 2>/dev/null; LC_ALL=C pactl get-source-mute @DEFAULT_SOURCE@ 2>/dev/null",
+                );
+                let recording = run_sh(
+                    "audio_mic_users",
+                    "LC_ALL=C pactl list source-outputs 2>/dev/null",
+                );
+                items.extend(child::mic_rows(&src, &recording));
                 let inputs = run_sh("audio_apps", "LC_ALL=C pactl list sink-inputs 2>/dev/null");
                 items.extend(child::parse_sink_inputs(&inputs));
                 items
