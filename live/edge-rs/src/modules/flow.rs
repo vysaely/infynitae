@@ -747,7 +747,7 @@ mod tests {
         add_module(&mut p, Module::Night);
         assert_eq!(words(&p), "clock wifi dnd nightlight volume");
         add_module(&mut p, Module::Night);
-        assert_eq!(p.items.len(), 4, "once");
+        assert_eq!(p.items.len(), 5, "once");
         remove_item(&mut p, 2);
         assert_eq!(words(&p), "clock wifi nightlight volume");
         remove_block(&mut p, 1);
