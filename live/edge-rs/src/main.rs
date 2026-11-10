@@ -595,6 +595,10 @@ impl Shell {
                         config::Module::Power => {
                             modules::toggle_child(&mut self.world, modules::child::ChildKind::Power)
                         }
+                        config::Module::Replay => modules::toggle_child(
+                            &mut self.world,
+                            modules::child::ChildKind::Replay,
+                        ),
                         config::Module::Clock => modules::toggle_child(
                             &mut self.world,
                             modules::child::ChildKind::Calendar,
@@ -2100,6 +2104,7 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
                 "bt" => modules::child::ChildKind::Bluetooth,
                 "audio" => modules::child::ChildKind::Audio,
                 "power" => modules::child::ChildKind::Power,
+                "replay" => modules::child::ChildKind::Replay,
                 _ => modules::child::ChildKind::Wifi,
             };
             modules::toggle_child(&mut world, k);

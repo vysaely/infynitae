@@ -489,6 +489,11 @@ pub fn click(m: Module, world: &mut World, button: u32) -> bool {
         // panel cut a wired machine's Wi-Fi without saying so
         return crate::modules::toggle_child(world, crate::modules::child::ChildKind::Wifi);
     }
+    if m == Module::Replay && is_left_button(button) {
+        // Replay: its card (save a clip, the clips folder, on or off); a plain switch had no
+        // way to save what it keeps
+        return crate::modules::toggle_child(world, crate::modules::child::ChildKind::Replay);
+    }
     if !is_left_button(button) {
         // Right click or Shift+Enter opens its list (stage 4).
         return false;

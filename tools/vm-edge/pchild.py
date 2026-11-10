@@ -8,7 +8,10 @@ def child():
 sh(f"sed -i '/^PANEL_CONTROL=/d' {CFG}")
 open(CFG, "a").write('PANEL_CONTROL="SUPER+A top right 360x300 hover clock@8,8,344x34 volume@8,48,344x32 wifi@8,86,169x46 bluetooth@183,86,169x46 dnd@8,138,169x46"\n')
 restart_edge(); chord("super+a"); wait(1.5); d = boxes()
-check("the placed panel reads its places", d["modules"]["wifi"][1] - d["panel"][1] == 86, str(d["modules"].get("wifi")))
+# a line placed by hand (the C edge's places) is read in order since 2026-11-10: the switches
+# stay one card, two to a row, under the clock and the volume
+wi, bt, vo = d["modules"]["wifi"], d["modules"]["bluetooth"], d["modules"]["volume"]
+check("an old placed line is read in order, the switches one card", abs(wi[1] - bt[1]) < 1 and bt[0] > wi[0] and wi[1] > vo[1], f"{wi} {bt}")
 ck = d["modules"]["clock"]; click_at(*centre(ck)); wait(0.5); c = boxes() and child(); shot("h-1-calendar")
 check("a click on the clock opens the month beside the panel", c is not None and c[0] + c[2] <= d["panel"][0], str(c))
 check("and nothing in the panel moved", boxes()["modules"] == d["modules"])
