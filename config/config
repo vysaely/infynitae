@@ -597,17 +597,16 @@ FAVORITES=""
 #             small (a quarter row, the name only)  tile (half a row, name and state)  wide (the row)
 #           search: hidden (shows once you type)  bar      clock: time  big  calendar (month shown)
 #           e.g. PANEL_CONTROL="clock:big wifi:small bluetooth:small dnd:small nightlight:small volume"
-#   Arranging a panel (like a small desktop, its modules like windows): right click on an empty
-#   part of the open panel (or hold a finger there) to edit its layout. Then a left drag moves a
-#   module anywhere in the panel and a right drag (or its corner) resizes it; it shows more the
-#   bigger it is (the clock: the time, then large, then the month). A click selects a module and
-#   shows its Remove. A drag on the panel's background moves the panel to another edge or corner;
-#   a right drag (or its corner) resizes the panel. The bar under it: Undo, Reset (the panel's own
-#   modules back, in their places), Snap (edges line up), Overlap (off: a module let go over
-#   another goes to the nearest free spot), Add, Done. Done, Escape or closing the panel saves the
-#   places here as module@x,y,WxH and the panel's size as WxH; the line from before is kept in
-#   ~/.config/infynitae/panels.backup. Locked otherwise: nothing moves by accident.
-#   An open list (networks, devices, sound outputs) or the month opens beside a panel arranged so.
+#   Editing a panel: right click on it where nothing else uses the right click (or hold a finger
+#   there). It keeps its look: the card under the pointer shows a bar to move it up or down, make
+#   it half width (two halves sit side by side), change its look, or take it out; a card can be
+#   dragged too. Each switch in Quick settings has its own x. The bar beside the panel: Undo,
+#   Reset (asks first), Add (each module with what it is for), - and + (the width), the edge the
+#   panel is on, Hover, Cancel (throws the changes away), Done. Done or Escape saves the line here
+#   (module@half for a half); the line from before is kept in ~/.config/infynitae/panels.backup.
+#   A line written with places (module@x,y,WxH, the older editor) is read in order, side by side
+#   modules as halves. An open list (networks, devices, sound, replay) opens beside the panel.
+#   The desktop's widgets (WIDGETS) keep free placement; for them Snap and Overlap still apply:
 PANELS_SNAP="true"
 PANELS_OVERLAP="false"
 # Four panels are built in; a line for one of them changes only what it says (PANEL_CONTROL="left"

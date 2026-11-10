@@ -807,6 +807,9 @@ impl App {
 
         if self.shell.open != self.prev_open {
             self.prev_open = self.shell.open;
+            if self.shell.open.is_none() {
+                modules::dump_closed();
+            }
             if let Some(idx) = self.shell.open {
                 self.request_fetch(idx);
             } else {

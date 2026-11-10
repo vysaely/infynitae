@@ -1112,7 +1112,14 @@ impl Shell {
         let (x, y) = at;
         self.refresh_bar();
         let choices = modules::edit::addable(panel);
-        if let Some(hit) = flow::bar_hit(self.edit.bar_rect, &choices, self.edit.adding, x, y) {
+        if let Some(hit) = flow::bar_hit(
+            self.edit.bar_rect,
+            &choices,
+            self.edit.adding,
+            self.edit.add_scroll,
+            x,
+            y,
+        ) {
             if !is_left {
                 return Some(true);
             }
@@ -1129,6 +1136,7 @@ impl Shell {
                         }
                     }
                 }
+                BarHit::Button(BarButton::Reset) if !flow::has_default(panel) => {}
                 BarHit::Button(BarButton::Reset) => {
                     if !self.edit.confirm_reset {
                         self.edit.confirm_reset = true;
@@ -1157,7 +1165,26 @@ impl Shell {
                         });
                     }
                 }
-                BarHit::Button(BarButton::Add) => self.edit.adding = !self.edit.adding,
+                BarHit::Button(BarButton::Add) => {
+                    self.edit.adding = !self.edit.adding;
+                    self.edit.add_scroll = 0;
+                }
+                BarHit::Button(BarButton::Edge) => {
+                    // the next edge where the panel is somewhere else (a full-height panel in a
+                    // corner is the same at the top and at the side)
+                    let (w, h) = self.last_screen;
+                    let here = panel_rect_in(panel, w, h, &self.world, &self.theme);
+                    let mut try_p = panel.clone();
+                    let mut side = panel.side;
+                    for _ in 0..3 {
+                        side = flow::next_side(side);
+                        try_p.side = side;
+                        if panel_rect_in(&try_p, w, h, &self.world, &self.theme) != here {
+                            break;
+                        }
+                    }
+                    self.flow_change(|p| p.side = side)
+                }
                 BarHit::Button(BarButton::Narrower) | BarHit::Button(BarButton::Wider) => {
                     let step = if hit == BarHit::Button(BarButton::Wider) {
                         flow::WIDTH_STEP
@@ -1761,8 +1788,16 @@ impl Shell {
                 let (changed, _) =
                     modules::child::click_child(&mut self.world, cr_rect, (x, y), button);
                 return changed;
-            } else {
-                self.world.child.open = false;
+            }
+            // anywhere else: the card closes, and the click does what it was for (outside the
+            // panel too it closes the panel; on another module it uses it), except on the
+            // card's own switch, whose click was to close it
+            self.world.child.open = false;
+            let on_parent = parent_rect.is_some_and(|r| {
+                let (px, py) = (x - ox, y - oy + self.world.panel_scroll);
+                px >= r.0 && px <= r.0 + r.2 && py >= r.1 && py <= r.1 + r.3
+            });
+            if on_parent {
                 return true;
             }
         }
@@ -1858,6 +1893,31 @@ impl Shell {
 
     pub fn scroll(&mut self, w: f64, h: f64, x: f64, y: f64, dy: f64) -> bool {
         self.last_screen = (w, h);
+        let bar = self.edit.bar_rect;
+        if self.edit.active
+            && self.edit.adding
+            && x >= bar.0
+            && x <= bar.0 + bar.2
+            && y >= bar.1
+            && y <= bar.1 + bar.3
+        {
+            // Add's list, when the screen is too short for all of it
+            let Some(panel) = self.open.and_then(|i| self.cfg.panels.get(i)) else {
+                return false;
+            };
+            let n = modules::edit::addable(panel).len();
+            let max = n.saturating_sub(modules::flow::add_rows_shown(bar));
+            let next = if dy > 0.0 {
+                (self.edit.add_scroll + 1).min(max)
+            } else if dy < 0.0 {
+                self.edit.add_scroll.saturating_sub(1)
+            } else {
+                self.edit.add_scroll
+            };
+            let moved = next != self.edit.add_scroll;
+            self.edit.add_scroll = next;
+            return moved;
+        }
         let Some(open_idx) = self.open else {
             return false;
         };
@@ -3017,6 +3077,46 @@ mod tests {
             rects[2].1 > card.1 && rects[2].1 < card.1 + card.3,
             "its switches are in it"
         );
+    }
+
+    /// With a card open, a click elsewhere in the panel closes the card and does what it was
+    /// for (it took a second click before); one outside closes the panel too.
+    #[test]
+    fn a_click_beside_an_open_card_closes_it_and_still_counts() {
+        let line = "PANEL_CONTROL=\"SUPER+A top right 380 wifi dnd volume\"\n";
+        let mut sh = Shell::from_config(Config::from_text(line));
+        sh.world.switches.ready = true;
+        let (w, h) = (1920.0, 1080.0);
+        assert!(sh.toggle_named("control"));
+        let panel = sh.cfg.panels[sh.open.unwrap()].clone();
+        let pw = panel_width(&panel, w);
+        let (rects, ch) = layout_in(&panel, pw, &sh.world, &sh.theme);
+        let ph = ph_of(&panel, ch, h);
+        let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
+        let at = |r: (f64, f64, f64, f64)| (ox + r.0 + 10.0, oy + r.1 + 10.0);
+        let (nx, ny) = at(rects[0]);
+        assert!(sh.click(w, h, nx, ny, 1));
+        sh.pointer_release();
+        assert!(sh.world.child.open, "Network's card");
+        let dnd_before = sh.world.switches.dnd_on;
+        let (dx, dy) = at(rects[1]);
+        assert!(sh.click(w, h, dx, dy, 1));
+        sh.pointer_release();
+        assert!(!sh.world.child.open, "the card closed");
+        assert_ne!(
+            sh.world.switches.dnd_on, dnd_before,
+            "and the click switched Do not disturb"
+        );
+        assert!(sh.click(w, h, nx, ny, 1));
+        sh.pointer_release();
+        assert!(sh.world.child.open);
+        assert!(sh.click(w, h, nx, ny, 1), "its own switch again: closed");
+        sh.pointer_release();
+        assert!(!sh.world.child.open && sh.open.is_some());
+        assert!(sh.click(w, h, nx, ny, 1));
+        sh.pointer_release();
+        sh.click(w, h, 200.0, 900.0, 1);
+        assert!(sh.open.is_none(), "outside: the card and the panel close");
     }
 
     #[test]

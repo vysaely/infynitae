@@ -73,6 +73,8 @@ pub struct EditState {
     pub drop_at: Option<usize>,
     /// a panel: Reset was pressed once (the second press resets)
     pub confirm_reset: bool,
+    /// a panel: the first of Add's rows shown (the list scrolls when the screen is short)
+    pub add_scroll: usize,
     /// a panel as it was when editing began (Cancel)
     pub before_panel: Option<Panel>,
 }
@@ -104,6 +106,7 @@ impl Default for EditState {
             flow_drag: None,
             drop_at: None,
             confirm_reset: false,
+            add_scroll: 0,
             before_panel: None,
         }
     }

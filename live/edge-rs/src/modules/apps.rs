@@ -723,6 +723,125 @@ fn rsvg_fns() -> Option<&'static RsvgFns> {
 }
 
 /// Loads a PNG or SVG icon file into a `size x size` `cairo::ImageSurface`.
+/// gdk-pixbuf, loaded when first needed like librsvg (it is what librsvg reads images with, so a
+/// system that shows SVG icons has it): JPEG covers and any other image it has a loader for.
+struct PixbufFns {
+    new_at_scale:
+        unsafe extern "C" fn(*const c_char, c_int, c_int, c_int, *mut *mut c_void) -> *mut c_void,
+    pixels: unsafe extern "C" fn(*mut c_void) -> *mut u8,
+    width: unsafe extern "C" fn(*mut c_void) -> c_int,
+    height: unsafe extern "C" fn(*mut c_void) -> c_int,
+    rowstride: unsafe extern "C" fn(*mut c_void) -> c_int,
+    channels: unsafe extern "C" fn(*mut c_void) -> c_int,
+    unref: unsafe extern "C" fn(*mut c_void),
+    g_error_free: Option<unsafe extern "C" fn(*mut c_void)>,
+}
+
+fn pixbuf_fns() -> Option<&'static PixbufFns> {
+    static PB: OnceLock<Option<PixbufFns>> = OnceLock::new();
+    PB.get_or_init(|| unsafe {
+        let lib = libc::dlopen(
+            CString::new("libgdk_pixbuf-2.0.so.0").ok()?.as_ptr(),
+            libc::RTLD_LAZY,
+        );
+        let gobj = libc::dlopen(
+            CString::new("libgobject-2.0.so.0").ok()?.as_ptr(),
+            libc::RTLD_LAZY,
+        );
+        if lib.is_null() || gobj.is_null() {
+            return None;
+        }
+        let glib = libc::dlopen(
+            CString::new("libglib-2.0.so.0").ok()?.as_ptr(),
+            libc::RTLD_LAZY,
+        );
+        let sym = |h: *mut c_void, n: &str| -> Option<*mut c_void> {
+            let c = CString::new(n).ok()?;
+            let p = libc::dlsym(h, c.as_ptr());
+            (!p.is_null()).then_some(p)
+        };
+        let err = if glib.is_null() {
+            None
+        } else {
+            sym(glib, "g_error_free")
+                .map(|p| std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void)>(p))
+        };
+        Some(PixbufFns {
+            new_at_scale: std::mem::transmute::<
+                *mut c_void,
+                unsafe extern "C" fn(*const c_char, c_int, c_int, c_int, *mut *mut c_void) -> *mut c_void,
+            >(sym(lib, "gdk_pixbuf_new_from_file_at_scale")?),
+            pixels: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> *mut u8>(
+                sym(lib, "gdk_pixbuf_get_pixels")?,
+            ),
+            width: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(
+                sym(lib, "gdk_pixbuf_get_width")?,
+            ),
+            height: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(
+                sym(lib, "gdk_pixbuf_get_height")?,
+            ),
+            rowstride: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(
+                sym(lib, "gdk_pixbuf_get_rowstride")?,
+            ),
+            channels: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void) -> c_int>(
+                sym(lib, "gdk_pixbuf_get_n_channels")?,
+            ),
+            unref: std::mem::transmute::<*mut c_void, unsafe extern "C" fn(*mut c_void)>(
+                sym(gobj, "g_object_unref")?,
+            ),
+            g_error_free: err,
+        })
+    })
+    .as_ref()
+}
+
+/// An image file at `size` x `size` through gdk-pixbuf (a cover is filled, not letterboxed),
+/// as a cairo surface (premultiplied ARGB).
+fn load_pixbuf_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
+    let fns = pixbuf_fns()?;
+    let c_path = CString::new(path.to_str()?).ok()?;
+    unsafe {
+        let mut err: *mut c_void = std::ptr::null_mut();
+        let pb = (fns.new_at_scale)(c_path.as_ptr(), size, size, 0, &mut err);
+        if !err.is_null() {
+            if let Some(free_fn) = fns.g_error_free {
+                free_fn(err);
+            }
+        }
+        if pb.is_null() {
+            return None;
+        }
+        let (w, h) = ((fns.width)(pb), (fns.height)(pb));
+        let (stride, ch) = ((fns.rowstride)(pb) as usize, (fns.channels)(pb) as usize);
+        let px = (fns.pixels)(pb);
+        let out = (|| {
+            if w <= 0 || h <= 0 || px.is_null() || !(ch == 3 || ch == 4) {
+                return None;
+            }
+            let mut surf = cairo::ImageSurface::create(cairo::Format::ARgb32, w, h).ok()?;
+            let dst_stride = surf.stride() as usize;
+            {
+                let mut data = surf.data().ok()?;
+                for y in 0..h as usize {
+                    let row = std::slice::from_raw_parts(px.add(y * stride), w as usize * ch);
+                    for x in 0..w as usize {
+                        let s = &row[x * ch..x * ch + ch];
+                        let a = if ch == 4 { s[3] as u32 } else { 255 };
+                        let pm = |c: u8| (c as u32 * a + 127) / 255;
+                        let v = (a << 24) | (pm(s[0]) << 16) | (pm(s[1]) << 8) | pm(s[2]);
+                        data[y * dst_stride + x * 4..y * dst_stride + x * 4 + 4]
+                            .copy_from_slice(&v.to_ne_bytes());
+                    }
+                }
+            }
+            surf.mark_dirty();
+            Some(surf)
+        })();
+        (fns.unref)(pb);
+        out
+    }
+}
+
 pub fn load_icon_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> {
     let ext = path
         .extension()
@@ -787,7 +906,8 @@ pub fn load_icon_surface(path: &Path, size: i32) -> Option<cairo::ImageSurface> 
             return Some(dst);
         }
     }
-    None
+    // anything else (JPEG covers, an embedded cover written without an extension): gdk-pixbuf
+    load_pixbuf_surface(path, size)
 }
 
 thread_local! {
@@ -1100,6 +1220,64 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A JPEG cover (8x8, one colour) loads through gdk-pixbuf at the size asked for; it drew the
+    /// placeholder note before (PNG and SVG only). Skipped where gdk-pixbuf is not installed.
+    #[test]
+    fn a_jpeg_cover_loads_at_its_size() {
+        if pixbuf_fns().is_none() {
+            return;
+        }
+        const JPEG: &[u8] = &[
+            255, 216, 255, 224, 0, 16, 74, 70, 73, 70, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 255, 219, 0,
+            67, 0, 2, 1, 1, 1, 1, 1, 2, 1, 1, 1, 2, 2, 2, 2, 2, 4, 3, 2, 2, 2, 2, 5, 4, 4, 3, 4, 6,
+            5, 6, 6, 6, 5, 6, 6, 6, 7, 9, 8, 6, 7, 9, 7, 6, 6, 8, 11, 8, 9, 10, 10, 10, 10, 10, 6,
+            8, 11, 12, 11, 10, 12, 9, 10, 10, 10, 255, 219, 0, 67, 1, 2, 2, 2, 2, 2, 2, 5, 3, 3, 5,
+            10, 7, 6, 7, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+            10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10,
+            10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 255, 192, 0, 17, 8, 0, 8, 0, 8, 3, 1, 34, 0, 2,
+            17, 1, 3, 17, 1, 255, 196, 0, 31, 0, 0, 1, 5, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+            1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 255, 196, 0, 181, 16, 0, 2, 1, 3, 3, 2, 4, 3, 5, 5,
+            4, 4, 0, 0, 1, 125, 1, 2, 3, 0, 4, 17, 5, 18, 33, 49, 65, 6, 19, 81, 97, 7, 34, 113,
+            20, 50, 129, 145, 161, 8, 35, 66, 177, 193, 21, 82, 209, 240, 36, 51, 98, 114, 130, 9,
+            10, 22, 23, 24, 25, 26, 37, 38, 39, 40, 41, 42, 52, 53, 54, 55, 56, 57, 58, 67, 68, 69,
+            70, 71, 72, 73, 74, 83, 84, 85, 86, 87, 88, 89, 90, 99, 100, 101, 102, 103, 104, 105,
+            106, 115, 116, 117, 118, 119, 120, 121, 122, 131, 132, 133, 134, 135, 136, 137, 138,
+            146, 147, 148, 149, 150, 151, 152, 153, 154, 162, 163, 164, 165, 166, 167, 168, 169,
+            170, 178, 179, 180, 181, 182, 183, 184, 185, 186, 194, 195, 196, 197, 198, 199, 200,
+            201, 202, 210, 211, 212, 213, 214, 215, 216, 217, 218, 225, 226, 227, 228, 229, 230,
+            231, 232, 233, 234, 241, 242, 243, 244, 245, 246, 247, 248, 249, 250, 255, 196, 0, 31,
+            1, 0, 3, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10,
+            11, 255, 196, 0, 181, 17, 0, 2, 1, 2, 4, 4, 3, 4, 7, 5, 4, 4, 0, 1, 2, 119, 0, 1, 2, 3,
+            17, 4, 5, 33, 49, 6, 18, 65, 81, 7, 97, 113, 19, 34, 50, 129, 8, 20, 66, 145, 161, 177,
+            193, 9, 35, 51, 82, 240, 21, 98, 114, 209, 10, 22, 36, 52, 225, 37, 241, 23, 24, 25,
+            26, 38, 39, 40, 41, 42, 53, 54, 55, 56, 57, 58, 67, 68, 69, 70, 71, 72, 73, 74, 83, 84,
+            85, 86, 87, 88, 89, 90, 99, 100, 101, 102, 103, 104, 105, 106, 115, 116, 117, 118, 119,
+            120, 121, 122, 130, 131, 132, 133, 134, 135, 136, 137, 138, 146, 147, 148, 149, 150,
+            151, 152, 153, 154, 162, 163, 164, 165, 166, 167, 168, 169, 170, 178, 179, 180, 181,
+            182, 183, 184, 185, 186, 194, 195, 196, 197, 198, 199, 200, 201, 202, 210, 211, 212,
+            213, 214, 215, 216, 217, 218, 226, 227, 228, 229, 230, 231, 232, 233, 234, 242, 243,
+            244, 245, 246, 247, 248, 249, 250, 255, 218, 0, 12, 3, 1, 0, 2, 17, 3, 17, 0, 63, 0,
+            243, 58, 40, 162, 189, 131, 253, 4, 63, 255, 217,
+        ];
+        let path = std::env::temp_dir().join(format!("edge-cover-{}.jpg", std::process::id()));
+        std::fs::write(&path, JPEG).unwrap();
+        let mut surf = load_icon_surface(&path, 64).expect("a JPEG loads");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!((surf.width(), surf.height()), (64, 64));
+        let stride = surf.stride() as usize;
+        let data = surf.data().unwrap();
+        let px = u32::from_ne_bytes(
+            data[32 * stride + 32 * 4..32 * stride + 32 * 4 + 4]
+                .try_into()
+                .unwrap(),
+        );
+        let (r, g, b) = ((px >> 16) & 255, (px >> 8) & 255, px & 255);
+        assert!(
+            r.abs_diff(200) < 12 && g.abs_diff(60) < 12 && b.abs_diff(120) < 12,
+            "{r} {g} {b}"
+        );
+    }
 
     fn sample_apps() -> Vec<DesktopApp> {
         vec![

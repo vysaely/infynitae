@@ -890,6 +890,14 @@ pub fn key(it: &Item, world: &mut World, keysym: u32, ch: Option<char>) -> bool 
 /// INFYNITAE_EDGE_BOXES=FILE: the panel's, each module's, the edit bar's and the child card's boxes
 /// in screen coordinates after every drawing, for the VM's real-input tests (vmt/pcanvas.py reads
 /// the same lines from the C edge).
+/// INFYNITAE_EDGE_BOXES=FILE: "closed" when no panel is open (the boxes were left as they were
+/// last drawn, so a closed panel read as open).
+pub fn dump_closed() {
+    if let Some(path) = std::env::var_os("INFYNITAE_EDGE_BOXES").filter(|p| !p.is_empty()) {
+        let _ = std::fs::write(path, "closed\n");
+    }
+}
+
 pub fn dump_boxes(
     panel: &crate::config::Panel,
     rects: &[Rect],
