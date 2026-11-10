@@ -465,7 +465,7 @@ impl Config {
             hair: None,
             corners: 8.0,
             scheme: "yours".into(),
-            opacity: 0.70,
+            opacity: 0.90, // 90 % until CARD_BLUR exists: 70 % without blur reads as see-through
             switch_look: "rows".into(),
         };
         let mut ctrl = vec![

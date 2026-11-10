@@ -46,6 +46,6 @@ THEME_SYNC as now):
 |---|---|---|
 | `CORNERS` | 0 (square) to 28 px; default 8 | `SQUARE_CORNERS` (still read: true = 0) |
 | `THEME_SCHEME` | yours (SURFACE_COLOR, TEXT_COLOR, BORDER_ACTIVE as they are), monochrome, neutral, tonal, vibrant, expressive (built from BORDER_ACTIVE) | |
-| `CARD_OPACITY` | 20 to 100 %; default 70 | |
+| `CARD_OPACITY` | 20 to 100 %; default 90 (70 once CARD_BLUR works) | |
 | `CARD_BLUR` | true / false (needs the compositor's blur behind a surface; until then false) | |
 | `SWITCH_LOOK` | rows, icons, tiles | |

@@ -140,7 +140,7 @@ mod tests {
                 0x13 as f64 / 255.0
             )
         );
-        assert!((t.card.3 - 0.70).abs() < 1e-9);
+        assert!((t.card.3 - 0.90).abs() < 1e-9);
     }
 
     #[test]

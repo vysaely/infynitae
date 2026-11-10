@@ -760,8 +760,18 @@ pub fn key(it: &Item, world: &mut World, keysym: u32, ch: Option<char>) -> bool 
     false
 }
 
-/// A module drawn into its rectangle `(x, y, w, h)`.
+/// A module drawn into its rectangle `(x, y, w, h)`, clipped to it: a module never draws over its
+/// neighbours, whatever size it was given.
 pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
+    let (x, y, w, h) = rect;
+    cr.save().ok();
+    cr.rectangle(x - 1.0, y - 1.0, w + 2.0, h + 2.0);
+    cr.clip();
+    draw_unclipped(cr, th, it, world, rect);
+    cr.restore().ok();
+}
+
+fn draw_unclipped(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
     let (x, y, w, h) = rect;
     match it.module {
         Module::Search => search::draw(cr, th, it, world, rect),

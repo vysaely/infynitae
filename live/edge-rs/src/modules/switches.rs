@@ -612,7 +612,7 @@ pub fn draw(cr: &Context, th: &Theme, it: &Item, world: &World, rect: Rect) {
         return;
     }
     let sw = info(it.module, &world.switches);
-    let look = if h < 56.0 || th.switch_look == "icons" {
+    let look = if (it.rect.is_some() && h < 40.0) || th.switch_look == "icons" {
         "icons"
     } else if th.switch_look == "tiles" {
         "tiles"

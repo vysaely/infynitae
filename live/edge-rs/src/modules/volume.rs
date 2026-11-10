@@ -175,6 +175,21 @@ pub fn set_brightness_action(d: &mut VolumeData, pct: u8) -> String {
     format!("brightnessctl set {pct}%")
 }
 
+/// Below this height the module is one line: the speaker, the slider, the value (the C edge's
+/// 32 px volume); brightness and the output are left to the full size and the child card.
+pub const COMPACT_H: f64 = 2.0 * PAD_Y + SLIDER_ROW_H;
+const COMPACT_LEFT: f64 = PAD_X + 28.0;
+const COMPACT_VALUE_W: f64 = 52.0;
+
+fn compact(h: f64) -> bool {
+    h > 0.0 && h < COMPACT_H
+}
+
+fn compact_pct_at(w: f64, x: f64) -> u8 {
+    let iw = (w - COMPACT_LEFT - PAD_X - COMPACT_VALUE_W).max(1.0);
+    (((x - COMPACT_LEFT) / iw).clamp(0.0, 1.0) * 100.0).round() as u8
+}
+
 fn pct_at(w: f64, x: f64) -> u8 {
     let iw = (w - 2.0 * PAD_X).max(1.0);
     (((x - PAD_X) / iw).clamp(0.0, 1.0) * 100.0).round() as u8
@@ -184,8 +199,13 @@ fn pointer_set(world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
     if !world.volume.ready {
         return false;
     }
-    let (w, _) = size;
+    let (w, h) = size;
     let (x, y) = pos;
+    if compact(h) {
+        let cmd = set_volume_action(&mut world.volume, compact_pct_at(w, x));
+        world.run(cmd);
+        return true;
+    }
     let rows = if world.volume.brightness.is_some() {
         2
     } else {
@@ -219,12 +239,14 @@ pub fn drag(world: &mut World, size: (f64, f64), pos: (f64, f64)) -> bool {
 
 /// Scroll changes volume (or brightness when over the brightness row) by 5.
 /// Negative `dy` scrolls up (+5), positive `dy` scrolls down (-5).
-pub fn scroll(world: &mut World, _size: (f64, f64), pos: (f64, f64), dy: f64) -> bool {
+pub fn scroll(world: &mut World, size: (f64, f64), pos: (f64, f64), dy: f64) -> bool {
     if !world.volume.ready || dy.abs() < 0.01 {
         return false;
     }
     let step: i32 = if dy < 0.0 { 5 } else { -5 };
-    let on_brightness = world.volume.brightness.is_some() && pos.1 >= PAD_Y + SLIDER_ROW_H - 4.0;
+    let on_brightness = !compact(size.1)
+        && world.volume.brightness.is_some()
+        && pos.1 >= PAD_Y + SLIDER_ROW_H - 4.0;
     let cmd = if on_brightness {
         let cur = world.volume.brightness.unwrap_or(50) as i32;
         let next = (cur + step).clamp(0, 100) as u8;
@@ -258,6 +280,10 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
     }
 
     let d = &world.volume;
+    if compact(h) {
+        draw_compact(cr, th, d, rect);
+        return;
+    }
     let vol_val = if d.muted {
         "Muted".to_string()
     } else {
@@ -313,6 +339,53 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
             text: &out_text,
         },
     );
+}
+
+fn draw_compact(cr: &Context, th: &Theme, d: &VolumeData, rect: Rect) {
+    let (x, y, w, h) = rect;
+    let cy = (y + h / 2.0).round();
+    draw_speaker_icon(
+        cr,
+        x + PAD_X,
+        cy - 9.0,
+        if d.muted { th.muted } else { th.text },
+        d.muted,
+    );
+    let value = if d.muted {
+        "Muted".to_string()
+    } else {
+        format!("{}%", d.pct)
+    };
+    draw::text_right(
+        cr,
+        x + w - PAD_X,
+        cy - 9.0,
+        &Text {
+            size: 13.0,
+            bold: true,
+            color: th.text,
+            text: &value,
+        },
+    );
+    let sx = x + COMPACT_LEFT;
+    let sw = (w - COMPACT_LEFT - PAD_X - COMPACT_VALUE_W).max(10.0);
+    let part = if d.muted {
+        0.0
+    } else {
+        d.pct.min(100) as f64 / 100.0
+    };
+    draw::round_rect(cr, sx, cy - 2.0, sw, 4.0, 2.0);
+    draw::set(cr, th.track);
+    let _ = cr.fill();
+    if part > 0.0 {
+        draw::round_rect(cr, sx, cy - 2.0, (sw * part).max(4.0), 4.0, 2.0);
+        draw::set(cr, th.accent);
+        let _ = cr.fill();
+    }
+    cr.new_sub_path();
+    cr.arc(sx + sw * part, cy, 7.0, 0.0, 2.0 * PI);
+    draw::set(cr, th.text);
+    let _ = cr.fill();
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -536,5 +609,12 @@ Sink #6698
             world.actions.last().map(String::as_str),
             Some("brightnessctl set 95%")
         );
+    }
+
+    #[test]
+    fn a_short_volume_is_one_slider() {
+        assert!(compact(32.0) && !compact(COMPACT_H) && !compact(0.0));
+        assert_eq!(compact_pct_at(344.0, COMPACT_LEFT), 0);
+        assert_eq!(compact_pct_at(344.0, 344.0 - PAD_X - COMPACT_VALUE_W), 100);
     }
 }

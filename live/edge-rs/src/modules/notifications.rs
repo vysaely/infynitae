@@ -547,9 +547,10 @@ pub fn draw(cr: &Context, th: &Theme, world: &World, rect: Rect) {
 
     let iw = (w - 2.0 * PAD_X).max(20.0);
     let mut ry = y + PAD_Y + HEAD_H;
-    for item in &world.notifications.items {
+    for (idx, item) in world.notifications.items.iter().enumerate() {
         let ih = item_height(item);
-        if ry + 32.0 > y + h {
+        // whole notifications only (the first always, however small the card)
+        if idx > 0 && ry + ih > y + h - PAD_Y / 2.0 {
             break;
         }
         let time_w = if !item.time.is_empty() {
