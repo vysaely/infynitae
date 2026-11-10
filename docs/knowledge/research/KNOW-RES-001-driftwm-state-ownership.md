@@ -17,7 +17,7 @@
 ---
 
 ## Verified Facts
-1. Upstream DriftWM bypasses Smithay's built-in `Space` element management for window layout and z-order. It introduces its own `Stage<W>` struct ([`src/stage/mod.rs`](file:///home/<user>/.gemini/antigravity/scratch/driftwm/src/stage/mod.rs)), enforcing via Clippy lints that `Space` must never mutate window positions.
+1. Upstream DriftWM bypasses Smithay's built-in `Space` element management for window layout and z-order. It introduces its own `Stage<W>` struct (`src/stage/mod.rs`), enforcing via Clippy lints that `Space` must never mutate window positions.
 2. However, DriftWM still relies on Smithay's `Window` struct to store toplevel state, popup maps, and subsurfaces, resulting in dual state ownership between `Stage` and Smithay `Window`.
 3. Infynitae Native achieves a far more rigorous separation: `infynitae-core` owns all authoritative layout, z-order, element lifecycle, and surface tree snapshots with zero dependencies on Smithay or Wayland server types.
 

@@ -1,14 +1,4 @@
-# Permanent Engineering Knowledge System
-
-## Overview
-The **Permanent Engineering Knowledge System** (`docs/knowledge/`) is a structured, searchable, non-authoritative engineering memory for Infynitae Native. Its primary purpose is to preserve:
-- Architectural lessons and design rationale.
-- External compositor research (e.g. DriftWM) and graphics architecture studies (e.g. Microsoft DWM/DXGI/WDDM).
-- Negative knowledge: approaches that were proposed, investigated, and rejected, along with the evidence justifying their rejection.
-- Empirical benchmark data, reproduction test protocols, and mutation testing records.
-- Engineering roadmaps and blueprints for upcoming milestones (e.g. Phase G native DRM/KMS).
-
----
+# Knowledge records
 
 ## Where it sits
 

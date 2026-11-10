@@ -11,8 +11,8 @@
 | **applicability** | Compositor resilience and GPU recovery |
 | **affected_branches** | N/A (Future Architecture) |
 | **related_invariants** | INV-OUTPUT-1, INV-STAGE-3 |
-| **adoption_status** | RESEARCH |
-| **next_action** | Prototype EGL_CONTEXT_LOST recovery in adapter |
+| **adoption_status** | IMPLEMENTED |
+| **next_action** | None: context loss is recovered (docs/DECISIONS.md, P3) |
 
 ---
 

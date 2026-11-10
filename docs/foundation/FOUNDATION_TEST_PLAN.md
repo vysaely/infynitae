@@ -6,7 +6,7 @@ Other documents cite obligations by ID only.
 
 ## 1. Verification tiers
 
-**Tier-honesty rule (unchanged from C11.1).** A tier claims only what it physically represents:
+**What a tier may claim.** A tier claims only what it physically represents:
 - T0/T1 never claim GPU, timing, visual, toolkit, game or device behaviour.
 - T2 never claims DRM/KMS behaviour.
 - T3 results are per toolkit version, never universal.
@@ -44,7 +44,7 @@ Destination vocabulary:
 - `CI`;
 - `GATE-C`: historical Phase C gate.
 
-Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/UP/DECISION cannot be `CLOSED` without the evidence its pass criterion names. **No Phase D activity closes any obligation.**
+Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/UP/DECISION cannot be `CLOSED` without the evidence its pass criterion names.
 
 <!-- living:OB -->
 ### OB-1
@@ -272,7 +272,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Dependencies:** INC-4, INC-7
 - **Blocks:** INC-7 exit
 - **Origin:** CP3A-4 (ARCHITECTURE, 795800937a / sealed 615b0ed)
-- **History:** INC-4 satisfies the W-SM-7 popup grab panic precondition via `grab_popup` validation, `reconcile_popup_chain`, and adversarial tests (`a1_inner_popup_closes_then_key`, `a1_client_closes_whole_chain_then_key`, `a1_middle_popup_disappears_then_key`, `a1_outer_popup_disappears_then_key`, `a1_root_unmaps_then_key`, `a1_destruction_at_depth_4`). Per observation C-1, the W-SM-6 popup portion (`ensure_configured` / initial commit carrying buffer) remains open pending INC-7. OB-18 therefore remains OPEN blocking INC-7 exit. The W-SM-6 popup portion was closed by INC-7 slice 3 and the independent audit; ratified CLOSED at INC-7 exit (owner, 2026-10-14) on `99c24cd`.
+- **History:** INC-4 satisfies the W-SM-7 popup grab panic precondition via `grab_popup` validation, `reconcile_popup_chain`, and adversarial tests (the `t1_popup_lifetime` a1_* tests). Per observation C-1, the W-SM-6 popup portion (`ensure_configured` / initial commit carrying buffer) remains open pending INC-7. OB-18 therefore remains OPEN blocking INC-7 exit. The W-SM-6 popup portion was closed by INC-7 slice 3 and the independent audit; ratified CLOSED at INC-7 exit (owner, 2026-10-14) on `99c24cd`.
 
 ### OB-19
 - **Status:** CLOSED
@@ -340,7 +340,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 
 ### OB-24
 - **Status:** OPEN
-- **Item:** Zoom anti-jitter decision: the ±1 physical-pixel shape variation at lattice-reference switches while panning at zoom ≠ 1 (A-B1-1). **Not resolved and not validated away.** Render/hit agreement is intact (ED-1).
+- **Item:** Zoom anti-jitter decision: the ±1 physical-pixel shape variation at lattice-reference switches while panning at zoom ≠ 1 (A-B1-1). Decided 2026-10-17 (C12.F14): the reference is kept while panning; ±1 px once per re-definition is accepted. Render/hit agreement is intact (ED-1).
 - **Owner:** architecture (core projection) via change control
 - **Evidence available:** ED-1 (Smithay geometry shows the ±1 px change), ED-2 F1 (model: constant widths with a gesture-pinned reference, candidate only)
 - **Pass criterion:** an architecture decision recorded through change control (a C12.R3-style amendment) with evidence equivalent to X-6/ED-1 Smithay geometry runs; the decided rule shows no relative shape change during zoomed pans, or the residual is explicitly accepted with visual evidence (T3/T4)
@@ -466,7 +466,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 
 ### OB-34
 - **Status:** OPEN
-- **Item:** Cross-output drag decision (PD-F2-13, F-DRAG-1): Canvas delta definition when the pointer crosses between independently-camera'd outputs. **Open design decision.**
+- **Item:** Cross-output drag decision (PD-F2-13, F-DRAG-1): Canvas delta definition when the pointer crosses between independently-camera'd outputs. Decided 2026-10-22: F-DRAG-1 (OB-34 stays open until a T1 test of a drag across outputs exists).
 - **Owner:** architecture via change control
 - **Evidence available:** analysis only (PD-F2-13)
 - **Pass criterion:** a recorded architecture decision; then T0 property (batching-independent, no drift) and T1 test (element stays under the cursor across an Arrangement crossing, or the decided alternative)
@@ -590,7 +590,7 @@ Status is `OPEN` or `CLOSED`. An obligation whose destination is T3/T4/T5/TUNE/U
 - **Status:** OPEN
 - **Item:** Performance and idle baselines (C14.1/C14.2): input latency, hit-test, projection, render-element generation, GPU submission, IPC, input-to-presentation latency, memory, product-idle wakeups (INV-IDLE-1).
 - **Owner:** workspace / backend
-- **Evidence available:** none (no production code; harness numbers are not baselines, C14.1)
+- **Evidence available:** none recorded here (harness numbers are not baselines, C14.1; measured figures are in ../DECISIONS.md, 2026-11-06)
 - **Pass criterion:** C14 procedures executed on target hardware; budgets frozen only from these T4 baselines; zero Infynitae-attributable wakeups while product-idle
 - **Destination:** T4
 - **May be closed by:** T4 PHYSICAL campaign (EXCLUSIVE_HARDWARE, separately authorized)

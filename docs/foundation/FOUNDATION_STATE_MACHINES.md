@@ -35,8 +35,8 @@ Object: OBJ-19, OBJ-22. Implements INV-PROTO-1, INV-PRES-1, INV-CAMERA-4. Every 
 | From | Trigger [guard] | To | Effects | Cites |
 |---|---|---|---|---|
 | pre-configure | `set_maximized` / `set_fullscreen` | same | recorded; W-SM-13 override sends nothing; fullscreen may be granted in the initial configure | INV-PROTO-1, INV-PRES-1 |
-| Mapped | `set_maximized` / `unset_maximized` | Mapped | exactly one configure, without `maximized`; no camera or Stage change | INV-PROTO-1 |
-| Mapped | `set_minimized` | Mapped | ignored | INV-PROTO-1 |
+| Mapped | `set_maximized` / `unset_maximized` | Mapped | exactly one configure; the focused window is maximized or restored as by Super+Enter (`maximized` set), any other is declined; no camera change | INV-PROTO-1 |
+| Mapped | `set_minimized` | Mapped | the focused window is hidden until picked again; not a fullscreen one | INV-PROTO-1 |
 | Mapped | ActiveElementFocus gained/lost | Mapped | configure with/without `activated` | INV-PROTO-1, INV-INPUT-8 |
 | Mapped | `set_fullscreen` / `unset_fullscreen` | M9 | exactly one configure | INV-PRES-1 |
 | Mapped | camera, membership, visibility, scale | Mapped | **no configure** | INV-CAMERA-4 |
@@ -113,8 +113,7 @@ Object: OBJ-07, OBJ-30. Implements INV-CAMERA-5, INV-CAMERA-1.
 
 | From | Trigger | To | Effects | Cites |
 |---|---|---|---|---|
-| — | key F pressed with Logo held, Ctrl and Alt released, Shift released, no compositor interaction active, the pointer on O | — | the binding is consumed (M12); W = the mapped element hit under the pointer on O's current ProjectionFrame (F-HIT-1): `FitViewport(O, W)`; no element hit: nothing — no mutation, no history change, no pointer event | INV-CAMERA-5 |
-| — | key F pressed with Logo and Shift held, Ctrl and Alt released, no compositor interaction active, the pointer on O | — | the binding is consumed (M12): `ViewportRestore(O)` | INV-CAMERA-5 |
+| — | key Enter pressed with Logo held, Ctrl, Alt and Shift released, no compositor interaction active, the pointer on O, `SUPER_ENTER_ACTION="fit"` | — | the binding is consumed (M12): at the fit, `ViewportRestore(O)`; else `FitViewport(O, W)` for the mapped element W hit under the pointer on O's current ProjectionFrame (F-HIT-1); no element hit: nothing. With `"maximize"` (shipped) W is maximized instead | INV-CAMERA-5 |
 | — | `FitViewport(O, W)` via input or shell [O connected ∧ O presents no protocol-fullscreen element ∧ W mapped ∧ g.w > 0 ∧ g.h > 0] | — | snapshot W now; F-FIT-1: zoom clamped into F-VIEW-1's domain, centre into INV-COORD-1; the previous value added as the newest history entry, the oldest evicted first if 256 are held (OBJ-30, C12.F16); one mutation; atomic epoch; one pointer reconciliation (M10) | INV-CAMERA-5 |
 | — | `FitViewport(O, W)` [otherwise] | — | refused: no mutation, nothing recorded or evicted, no pointer reconciliation (C12.F15, C12.F16, C12.F17) | INV-CAMERA-5 |
 | — | `ViewportRestore(O)` via input or shell [O connected ∧ O presents no protocol-fullscreen element ∧ O's history non-empty] | — | one mutation to the newest entry's exact value, which is removed (OBJ-30); one pointer reconciliation (M10) | INV-CAMERA-5 |
@@ -157,12 +156,12 @@ Object: OBJ-22, OBJ-23. Implements INV-INPUT-8, INV-INPUT-10, INV-PROTO-1. ADR-1
 
 | From | Trigger | To | Effects | Cites |
 |---|---|---|---|---|
-| any | click-to-focus, focus binding, shell focus, activation grant [E not hidden by a presentation, INV-INPUT-8] | Element(E) | M3 preemption if a grab is active; `leave`/`enter(keys)`; `activated` configures | INV-INPUT-8, INV-INPUT-10, INV-PROTO-1 |
+| any | click-to-focus, hover crossing (`FOCUS_FOLLOWS_MOUSE`), focus binding, shell focus, activation grant [E not hidden by a presentation, INV-INPUT-8] | Element(E) | M3 preemption if a grab is active; `leave`/`enter(keys)`; `activated` configures | INV-INPUT-8, INV-INPUT-10, INV-PROTO-1 |
 | any | the same actions [E hidden by a presentation] | unchanged | declined; no effect | INV-INPUT-8 |
 | Element(E), route ToRoot | valid popup grab in E | Element(E), route Grab | ActiveElementFocus unchanged | INV-INPUT-10 |
 | Element(E), route Grab | grab ends (client) | Element(E), route ToRoot | Smithay root restore inside E | INV-INPUT-10 |
 | Element(E) | target loss | successor, chosen among the elements not hidden by a presentation | `enter(keys)` without `leave` after client-side destruction | INV-INPUT-7, INV-INPUT-8 |
-| any | camera, visibility, pointer motion, fullscreen request or grant | unchanged (a focused element that becomes hidden keeps the focus) | — | INV-INPUT-8 |
+| any | camera, visibility, pointer motion inside one window, fullscreen request or grant | unchanged (a focused element that becomes hidden keeps the focus) | — | INV-INPUT-8 |
 
 ## M12 — Physical-key ownership
 Object: OBJ-25, OBJ-27. Implements INV-INPUT-1, INV-INPUT-6, INV-INPUT-7.

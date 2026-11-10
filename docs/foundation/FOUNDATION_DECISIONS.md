@@ -26,10 +26,6 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 | ADR-13 | Exact Smithay pin with adapter-local workarounds | Accepted; W-SM-14/15 added (1R) |
 | ADR-14 | Element-level focus authority vs protocol surface routing | **Accepted (1R, new)** |
 
----
-
-
-
 <!-- living:ADR -->
 ## ADR-01: Stage is the sole spatial authority; Smithay `Space` rejected
 
@@ -407,7 +403,7 @@ Evidence class: P protocol · S Smithay source · M math/model · H harness expe
 
 ## ADR-13: exact Smithay pin with adapter-local workarounds
 
-- **Status:** Accepted (D-B12-PIN, C9; INV-ARCH-3). This is a consolidation: the decision recurs across ADR-01/03/07 and is worth recording on its own.
+- **Status:** Accepted (D-B12-PIN, C9; INV-ARCH-3).
 - **Context:**
   - Infynitae relies on specific Smithay 0.7.0 behaviour and on 13 catalogued quirks (W-SM-1…13), several of them confirmed defects (W-SM-2, W-SM-4b, W-SM-11, W-SM-12).
   - Phase D added two source-level behaviours with authority impact: `PopupKeyboardGrab` (ED-3) and the `OutputDamageTracker` scale (ED-4).

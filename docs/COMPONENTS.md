@@ -20,9 +20,9 @@ this repository already.
 | Piece | Default | Alternatives | Switch | Build our own? |
 | :--- | :--- | :--- | :--- | :--- |
 | Notifications | mako | swaync (with a panel), dunst, fnott | `NOTIFICATIONS` | **Yes, small**: notifications placed on the screen you look at, matching the canvas look |
-| Volume / brightness pop-ups | `notify-send` from `live/launch.sh` | swayosd, avizo, wob | none yet | **Yes, small**: a native on-screen display |
-| Control menu (Wi-Fi, Bluetooth, volume, sound output, power) | `live/control-menu` (ours) on fuzzel | nm-applet, iwgtk, blueman, pwvucontrol, a bar's widgets | `CONTROL_MENU` | Ours already; a graphical panel later |
-| Bar / panel | the edge (ours, in C) | waybar, ironbar, eww, quickshell | `ENABLE_EDGE="false"`, then start yours in `autostart.sh`; `LAUNCHER` / `CONTROL_MENU` give it Super+L / Super+A | **Yes, medium**: the edge is the start |
+| Volume / brightness pop-ups | `notify-send` from `live/launch.sh` | swayosd, avizo, wob | none yet (the edge's sound card shows the level) | **Yes, small**: a native on-screen display |
+| Control menu (Wi-Fi, Bluetooth, volume, sound output, power) | `live/control-menu` (ours) on fuzzel | nm-applet, iwgtk, blueman, pwvucontrol, a bar's widgets | `CONTROL_MENU` | Ours already; the edge's control panel (Super+A) is the graphical one |
+| Bar / panel | the edge (ours, in Rust; the C one stays as `EDGE_IMPL="c"`) | waybar, ironbar, eww, quickshell | `ENABLE_EDGE="false"`, then start yours in `autostart.sh`; `LAUNCHER` / `CONTROL_MENU` give it Super+W / Super+A | **Yes, medium**: the edge is the start |
 | Clipboard history | cliphist + wl-clip-persist | clipman, copyq | `CLIPBOARD_HISTORY`, `CLIPBOARD_PICKER` | Low value |
 | Screenshots | grim + slurp | grimblast, flameshot, satty (annotate) | `SCREENSHOT_CMD` | **Yes, small**: the compositor can already capture; a native region picker is little work |
 | Recording, replay buffer | `infynitae-recorder` (ours) + ffmpeg | wf-recorder, gpu-screen-recorder, OBS | `ENABLE_REPLAY_BUFFER` | Ours |
@@ -40,18 +40,8 @@ this repository already.
 | Login | your display manager, or tty autologin | SDDM, GDM, greetd + tuigreet | system setting | **Maybe, medium**: a greeter in the lock screen's look, for greetd |
 | X11 apps | xwayland-satellite | (none needed) | `XWAYLAND` | No |
 
-## Needs the compositor first
-
-These tools exist and are good, but need a Wayland protocol Infynitae does not speak yet. Each is
-compositor work in this repository, then the tool just works:
-
-| Piece | Tools that would work | Protocol to add |
-| :--- | :--- | :--- |
-| Remote desktop host for apps that need the portal for input | AnyDesk, GNOME's remote-desktop clients (RustDesk works already) | the `RemoteDesktop` portal (with our own ScreenCast) |
-
 Already spoken, so these just work: display settings (wdisplays, nwg-displays, kanshi, wlr-randr:
-`wlr-output-management`; mode, scale, position and rotation, not yet turning a screen off or
-VRR), night light (wlsunset, gammastep: `wlr-gamma-control`),
+`wlr-output-management`; mode, scale, position and rotation, not yet turning a screen off), night light (wlsunset, gammastep: `wlr-gamma-control`),
 screen power (wlopm: `wlr-output-power-management`), external idle tools (swayidle, hypridle:
 `ext-idle-notify`; idle and auto-lock are built in already), task bars and window switchers
 (waybar's taskbar, rofi's window mode: `wlr-foreign-toplevel-management`,

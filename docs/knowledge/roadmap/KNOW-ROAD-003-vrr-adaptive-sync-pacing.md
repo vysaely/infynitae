@@ -11,8 +11,8 @@
 | **applicability** | Future Phase G native DRM backend |
 | **affected_branches** | N/A (Phase G Milestone) |
 | **related_invariants** | INV-PRES-1 |
-| **adoption_status** | RESEARCH |
-| **next_action** | Prototype VRR_ENABLED connector query in DRM backend |
+| **adoption_status** | IMPLEMENTED |
+| **next_action** | None: VRR_ENABLED is read (crates/infynitae/src/main.rs) and applied per screen |
 
 ---
 

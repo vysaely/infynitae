@@ -72,14 +72,14 @@ these by date, e.g. "(owner, 2026-10-24)".
   (`live/launch.sh`), so each is a config setting.
 - **Super+Shift+C closes, Super+Delete force-closes** (owner, 2026-11-01; Super+C and Super+Shift+C from 2026-10-25, Super+Delete for closing before). Force close
   ends the window's client process, pinned by a pidfd so a reused pid is never killed.
-- **Super+Enter is a fit toggle** (2026-10-21): it fits the window under the pointer, and pressed
-  at the fit it restores the view. Super+F was removed, it duplicated Super+Enter.
-  `SUPER_ENTER_ACTION="maximize"` makes it fill the view at 100% instead.
+- **Super+Enter maximizes** (the shipped setting): the window takes the screen's size where it
+  covers no other window (2026-11-10). `SUPER_ENTER_ACTION="fit"`, the default of a config
+  without the line, makes it the fit toggle of 2026-10-21 (fit the window, again: the view
+  before). Super+F was removed, it duplicated Super+Enter.
 - **Super+Shift+Enter is native fullscreen** (2026-10-21), and with `FULLSCREEN_PAN` you can still
   pan out of it and use Super+1…9 (2026-10-25).
-- **Super+Tab cycles focus** and centres the camera on the window (2026-10-21,
-  `FOCUS_CYCLE_NAVIGATE`); Super+Shift+Tab is the overview. Its order is the recently used one
-  since 2026-10-31 (above).
+- **Super+Shift+Tab is the overview** (2026-10-21). Super+Tab flips between the last two windows
+  (above); `FOCUS_CYCLE_NAVIGATE` centres the camera on it.
 - **Super+Space centres the focused window at 100%, Super+Shift+Space keeps the zoom**
   (2026-10-05, restated 2026-10-24). Super+Shift+Middle click no longer resets the zoom
   (2026-10-24).

@@ -7,7 +7,7 @@ What comes next, roughly in order. [STATUS.md](STATUS.md) says where things stan
 - **Try on real hardware** what has only run in the test suite: touch on the canvas, rotation
   and auto-rotate, VRR from display tools, the laptop lid, monitor hotplug, the virtual screen,
   remote desktop through the portal, crash reports.
-- **Fix what that turns up.**
+- ****
 - **Screens turned off from display tools** (`wlr-randr --off`, kanshi profiles): the screen
   leaves the layout and comes back where it was.
 - **Pens and drawing tablets** (`tablet-v2`).
@@ -44,13 +44,9 @@ Arch Linux.
 
 Written down so they are not lost; none is planned until the owner decides.
 
-- **A widget layer behind the canvas** (seen on another canvas desktop, 2026-10-31): a second
-  plane behind the windows holding widgets (clock, system stats, notes, now playing), seen in
-  the gaps between windows and when zoomed out. Questions before a design: does it pan with the
-  canvas, slower (parallax) or not at all; how is a widget reached behind a window (a key that
-  fades the windows and makes the widgets clickable?); widgets must update rarely and draw
-  nothing while idle, so the GPU can sleep. Most of it could be an add-on over the wallpaper and
-  layer-shell surfaces, not Core.
+- **Desktop widgets that move with the canvas** (2026-10-31): widgets exist (`WIDGETS`, under
+  the windows, fixed to the screen); open is whether they pan with the canvas, slower
+  (parallax), and how one is reached behind a window.
 - **Cluster types** (owner, 2026-10-31): a choice of how a cluster arranges its windows, beside
   today's (windows placed beside one another). Candidates: **scrolling**, a row of full-height
   columns that scrolls sideways as focus moves (the PaperWM and niri style); **dwindle**, each

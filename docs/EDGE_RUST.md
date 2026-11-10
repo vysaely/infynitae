@@ -1,5 +1,7 @@
 # The edge in Rust (2026-11-09)
 
+State 2026-11-10: the Rust edge is the default (`EDGE_IMPL`, `live/edge-pick`); the C edge stays until the owner says so (stage 6).
+
 The owner asked for the edge (`live/edge/infynitae-edge.c`, about 6,100 lines of C) to be rewritten in Rust
 with the new module design, the old one removed after, keeping what makes it ours: panels of modules
 (`PANEL_` lines), every module in any panel, sizes and places of their own, the panel as a small canvas
@@ -29,9 +31,9 @@ colour scheme (yours from the system, monochrome, neutral, tonal, vibrant, expre
 |---|---|---|
 | 0 (done) | Skeleton: config (`PANEL_` lines, theme colours, scheme, corners), the module trait with sizes, the card style, `--render` and `--print-panels`; clock and calendar | renders match the canvas; CI builds and tests it |
 | 1 (done) | Wayland: layer-shell surfaces per output, double buffers and frame callbacks, pointer, keyboard, touch, signals and the request files, hover edges | a panel opens by key and by hover in the VM |
-| 2 (2a done) | Modules on commands: switches (wifi, bluetooth, dnd, nightlight, keyboard, osk, power, replay), sound, session (done), search (done), favorites (done), apps (done), windows (foreign toplevel) (done), memory (done), system (done) | each does what the C one does, VM checks |
+| 2 (done) | Modules on commands: switches (wifi, bluetooth, dnd, nightlight, keyboard, osk, power, replay), sound, session (done), search (done), favorites (done), apps (done), windows (foreign toplevel) (done), memory (done), system (done) | each does what the C one does, VM checks |
 | 3 (done) | Modules on D-Bus and files: tray (StatusNotifierItem) (done), media (MPRIS, Melodyae's queue and lyrics) (done), notifications (done), clipboard (done), ask (done) | as the C one, plus the new parts |
-| 4 (done) | The canvas: edit mode (move, resize, snap, overlap, undo, reset, add, done), sizes that show more, child cards beside | VM real-input tests as `vmt/pcanvas.py` |
+| 4 (done) | The canvas: edit mode (move, resize, snap, overlap, undo, reset, add, done), sizes that show more, child cards beside | VM real-input tests as `tools/vm-edge/pcanvas.py` |
 | 5 (done) | Desktop widgets: the same modules on a bottom layer under windows, edited the same way. One `WIDGETS` line (module[:look]@x,y,WxH); a second shell whose one panel is the desktop (the whole screen at 0,0, always open); its input region only the widgets (the whole screen while edited); the clock wakes the edge on the minute, data every 2 s only for widgets that show it; `infynitae-edge widgets` or a right click on a widget edits them; `--render widgets` | placed, edited, kept across restarts |
 | 6 (started) | Switch: `EDGE_IMPL=rust` the default, a week of use, then the C edge and its tests removed. Done: `live/build-helpers.sh` builds both (`infynitae-edge-c`, `infynitae-edge-rs`) and `live/edge-pick` points `infynitae-edge` at the one EDGE_IMPL names, so every caller keeps the one name; `infynitae-reload edge` picks again | owner says so |
 | 7 | Everything else Infynitae draws in the same look and the same settings: the lock screen, the password prompt (polkit), the screen-share chooser, the control menu, notifications (mako's theme, or the edge's own popups), the volume and brightness popups, the ask prompts, window corners. Each moves to Rust when it is reworked. Started: `infynitae-edge-rs --print-theme` prints the resolved look (LOOK_* lines); `live/settings.sh` gives it to GTK (corners), mako and fuzzel (corners, card colour and opacity, edge, text, accent), today's values without the Rust edge | one look everywhere; one place to change it |
@@ -44,8 +46,8 @@ THEME_SYNC as now):
 
 | Setting | Values | Replaces |
 |---|---|---|
-| `CORNERS` | 0 (square) to 28 px; default 8 | `SQUARE_CORNERS` (still read: true = 0) |
+| `CORNERS` | 0 (square) to 28 px; unset: `SQUARE_CORNERS` decides (true 0, false 8) | `SQUARE_CORNERS` (still read) |
 | `THEME_SCHEME` | yours (SURFACE_COLOR, TEXT_COLOR, BORDER_ACTIVE as they are), monochrome, neutral, tonal, vibrant, expressive (built from BORDER_ACTIVE) | |
 | `CARD_OPACITY` | 20 to 100 %; default 90 (70 once CARD_BLUR works) | |
-| `CARD_BLUR` | true / false (needs the compositor's blur behind a surface; until then false) | |
+| `CARD_BLUR` | planned, not read yet (needs the compositor's blur behind a surface) | |
 | `SWITCH_LOOK` | rows, icons, tiles | |

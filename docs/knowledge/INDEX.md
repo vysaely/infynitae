@@ -1,24 +1,22 @@
 # Infynitae Native — Engineering Knowledge System Index
 
-**Location:** `docs/knowledge/`  
-**Purpose:** Permanent, evidence-driven engineering memory preserving architectural discoveries, experiments, benchmark results, external research, and negative knowledge across development sessions.  
-**Authority:** Non-authoritative engineering memory. Sealed governance lives exclusively in `docs/foundation/` (`CHECKPOINT.md`, `FOUNDATION_INVARIANTS.md`, `FOUNDATION_ARCHITECTURE.md`).
-
-**State of the code these records describe:** main = origin/main = `f323c2d`. INC-0…INC-5 and INC-7 are RATIFIED; INC-6 is experimental and unratified; INC-8 and INC-14 have not begun (`docs/archive/CHECKPOINT.md`). Records name the branch each fact holds on; a commit not on main is provenance, not current behaviour (see CONTRADICTIONS_AND_SUPERSEDED X-06).
-
-**How to use this index:** read the task list in section 0, open only the records it names, then check `CHECKPOINT.md` and `FOUNDATION_INVARIANTS.md` for what is sealed. Kinds of knowledge are kept apart: `research/` (external systems), `decisions/` (what Infynitae decided and ratified), `architecture/` (implemented principles), `experiments/` (measurements), `pitfalls/` (rejected approaches), `roadmap/` (future work and residuals). Inside each record, "Unverified Hypotheses" holds what is not measured; the ledger holds every correction.
+Records of what was learned while building Infynitae: research on other compositors, decisions,
+measurements, rejected approaches. They describe the code as of 2026-10-14 (`f323c2d`); later
+work is in `docs/STATUS.md` and `docs/DECISIONS.md`, which win where they differ. Kinds:
+`research/` (other systems), `decisions/`, `architecture/`, `experiments/` (measurements),
+`pitfalls/` (rejected approaches), `roadmap/`. Corrections are in CONTRADICTIONS_AND_SUPERSEDED.md.
 
 ---
 
-## 0. Start Here by Upcoming Work
+## 0. By topic
 
 | Work | Read first | Then |
 | :--- | :--- | :--- |
-| **INC-6** (scale policy; rebase onto `f323c2d`) | KNOW-ARCH-004 (main vs INC-6 split), KNOW-EXP-002, KNOW-EXP-005 | KNOW-PITFALL-005, KNOW-DEC-005 (R-15 converges with INC-6), KNOW-ROAD-005 |
-| **INC-8** (frame callbacks, liveness) | KNOW-ROAD-005 (R-10), KNOW-PITFALL-006 | KNOW-RES-005, KNOW-RES-008 (heartbeat is a candidate; INV-FRAME-1 governs), KNOW-RES-009 (camera animation), KNOW-RES-011 (DriftWM's per-frame frame-callback loop and off-screen throttle, traced) |
-| **INC-14** (interactive move/resize, grabs) | KNOW-PITFALL-007 (W-SM-19 → R-07 entry condition), KNOW-RES-003 | KNOW-RES-011 (DriftWM hit-test cascade and pan grab, traced), KNOW-RES-009 (live input under camera motion), KNOW-RES-010 (scrutinee lint, `with_states`, constraint snapshots), KNOW-DEC-004, KNOW-PITFALL-003 |
-| **INC-13 / libinput** | KNOW-ARCH-002 (R-04, R-05) | KNOW-PITFALL-004 |
-| **DRM/KMS backend (Phase G)** | KNOW-RES-008 (what transfers from Windows and what does not), KNOW-ROAD-001 | KNOW-RES-004, KNOW-RES-006, KNOW-RES-007, KNOW-RES-010 (scanout gating, fence wait), KNOW-EXP-004, KNOW-ROAD-002..004 |
+| **Scale policy** | KNOW-ARCH-004 (main vs INC-6 split), KNOW-EXP-002, KNOW-EXP-005 | KNOW-PITFALL-005, KNOW-DEC-005 (R-15 converges with INC-6), KNOW-ROAD-005 |
+| **Frame callbacks, liveness** | KNOW-ROAD-005 (R-10), KNOW-PITFALL-006 | KNOW-RES-005, KNOW-RES-008 (heartbeat is a candidate; INV-FRAME-1 governs), KNOW-RES-009 (camera animation), KNOW-RES-011 (DriftWM's per-frame frame-callback loop and off-screen throttle, traced) |
+| **Interactive move and resize, grabs** | KNOW-PITFALL-007 (W-SM-19 → R-07 entry condition), KNOW-RES-003 | KNOW-RES-011 (DriftWM hit-test cascade and pan grab, traced), KNOW-RES-009 (live input under camera motion), KNOW-RES-010 (scrutinee lint, `with_states`, constraint snapshots), KNOW-DEC-004, KNOW-PITFALL-003 |
+| **libinput** | KNOW-ARCH-002 (R-04, R-05) | KNOW-PITFALL-004 |
+| **DRM/KMS backend** | KNOW-RES-008 (what transfers from Windows and what does not), KNOW-ROAD-001 | KNOW-RES-004, KNOW-RES-006, KNOW-RES-007, KNOW-RES-010 (scanout gating, fence wait), KNOW-EXP-004, KNOW-ROAD-002..004 |
 | **Any DriftWM-inspired idea** | KNOW-RES-010 | the record its row names |
 | **Camera, zoom, culling, hit-test or spatial-index work** | KNOW-RES-011 (DriftWM vs Infynitae, traced complexity) | KNOW-ARCH-004, KNOW-RES-009, KNOW-PITFALL-002 |
 | **Fullscreen / presentation / focus changes** | KNOW-ARCH-001, KNOW-DEC-001, KNOW-DEC-002, KNOW-DEC-006 | KNOW-ARCH-003, KNOW-DEC-003, KNOW-PITFALL-001 |
@@ -83,7 +81,6 @@
 - [README.md](README.md): System architecture, schema rules, and metadata definitions.
 - [CONTRADICTIONS_AND_SUPERSEDED.md](CONTRADICTIONS_AND_SUPERSEDED.md): Traceability ledger of disputed, superseded, and corrected findings.
 - [PROVENANCE_INVENTORY.md](PROVENANCE_INVENTORY.md): Comprehensive inventory of original sources, laboratory reports, and external commits.
-- [AGENT_INTEGRATION.md](AGENT_INTEGRATION.md): Proposed integration additions for agent instructions (`AGENTS.md`, `CLAUDE.md`).
 - [WORKFLOW.md](WORKFLOW.md): Standard engineering development and knowledge maintenance workflow.
 
 ---
