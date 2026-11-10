@@ -608,6 +608,25 @@ impl Shell {
         }
     }
 
+    /// The edit bar where it is drawn now: under, over or beside the panel as it is after a
+    /// move or resize (a bar left at the panel's old height took the clicks meant for it
+    /// somewhere else).
+    fn refresh_bar(&mut self) {
+        if !self.edit.active {
+            return;
+        }
+        let Some(panel) = self.open.and_then(|i| self.cfg.panels.get(i)) else {
+            return;
+        };
+        let (w, h) = self.last_screen;
+        let pw = panel_width(panel, w);
+        let (_, content_h) = layout_in(panel, pw, &self.world, &self.theme);
+        let ph = ph_of(panel, content_h, h);
+        let (ox, oy) = panel_origin(panel, w, h, pw, ph);
+        self.edit.bar_rect =
+            modules::edit::calculate_bar_rect(panel, (ox, oy), pw, ph, (w, h), self.edit.adding);
+    }
+
     pub fn edit_enter(&mut self) -> bool {
         let Some(open_idx) = self.open else {
             return false;
@@ -669,6 +688,12 @@ impl Shell {
     }
 
     pub fn edit_press(&mut self, x: f64, y: f64, button: u32) -> bool {
+        let r = self.edit_press_inner(x, y, button);
+        self.refresh_bar();
+        r
+    }
+
+    fn edit_press_inner(&mut self, x: f64, y: f64, button: u32) -> bool {
         let Some(open_idx) = self.open else {
             return false;
         };
@@ -907,6 +932,12 @@ impl Shell {
     }
 
     pub fn edit_drag(&mut self, x: f64, y: f64) -> bool {
+        let r = self.edit_drag_inner(x, y);
+        self.refresh_bar();
+        r
+    }
+
+    fn edit_drag_inner(&mut self, x: f64, y: f64) -> bool {
         let Some(open_idx) = self.open else {
             return false;
         };
@@ -1072,6 +1103,12 @@ impl Shell {
     }
 
     pub fn edit_release(&mut self) -> bool {
+        let r = self.edit_release_inner();
+        self.refresh_bar();
+        r
+    }
+
+    fn edit_release_inner(&mut self) -> bool {
         if !self.edit.active {
             return false;
         }
