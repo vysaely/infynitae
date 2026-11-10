@@ -300,45 +300,39 @@ pub fn power_profiles_list(current_profile: &str) -> Vec<ChildItem> {
 
 /// Computes the command to execute for selecting `item` in `kind`.
 pub fn action_for_child_item(kind: ChildKind, item: &ChildItem) -> Option<String> {
+    use crate::modules::sq;
+    let id = sq(&item.id);
     match kind {
         ChildKind::Wifi => Some(format!(
-            "s=$(printf '%s' \"{}\" | tr '\\036' '\\t'); \
+            "s=$(printf '%s' {id} | tr '\\036' '\\t'); \
                  nmcli connection up id \"$s\" >/dev/null 2>&1 || \
-                 nmcli dev wifi connect \"$s\" >/dev/null 2>&1",
-            item.id
+                 nmcli dev wifi connect \"$s\" >/dev/null 2>&1"
         )),
         ChildKind::Bluetooth => {
             if item.id == "-" {
                 None // signals entering scan mode
             } else if item.meta == "Pair" {
+                let msg = sq(&format!("Could not pair with {}", item.label));
                 Some(format!(
-                    "bluetoothctl pair \"{0}\" >/dev/null 2>&1 && \
-                     bluetoothctl trust \"{0}\" >/dev/null 2>&1 && \
-                     bluetoothctl connect \"{0}\" >/dev/null 2>&1 || \
-                     notify-send -a Infynitae Bluetooth \"Could not pair with {1}\"",
-                    item.id, item.label
+                    "bluetoothctl pair {id} >/dev/null 2>&1 && \
+                     bluetoothctl trust {id} >/dev/null 2>&1 && \
+                     bluetoothctl connect {id} >/dev/null 2>&1 || \
+                     notify-send -a Infynitae Bluetooth {msg}"
                 ))
             } else if item.active {
-                Some(format!(
-                    "bluetoothctl disconnect \"{}\" >/dev/null 2>&1",
-                    item.id
-                ))
+                Some(format!("bluetoothctl disconnect {id} >/dev/null 2>&1"))
             } else {
-                Some(format!(
-                    "bluetoothctl connect \"{}\" >/dev/null 2>&1",
-                    item.id
-                ))
+                Some(format!("bluetoothctl connect {id} >/dev/null 2>&1"))
             }
         }
-        ChildKind::Audio => Some(format!(
-            "pactl set-default-sink \"{}\" >/dev/null 2>&1",
-            item.id
-        )),
-        ChildKind::Power => Some(format!(
-            "powerprofilesctl set \"{0}\" 2>/dev/null || \
-                 notify-send -a Infynitae 'Power modes' \"This machine has no {0} mode\"",
-            item.id
-        )),
+        ChildKind::Audio => Some(format!("pactl set-default-sink {id} >/dev/null 2>&1")),
+        ChildKind::Power => {
+            let msg = sq(&format!("This machine has no {} mode", item.id));
+            Some(format!(
+                "powerprofilesctl set {id} 2>/dev/null || \
+                 notify-send -a Infynitae 'Power modes' {msg}"
+            ))
+        }
         ChildKind::Calendar => None,
     }
 }
@@ -638,6 +632,20 @@ mod tests {
     }
 
     #[test]
+    fn outside_names_never_run_as_commands() {
+        let evil = ChildItem {
+            id: "$(touch /tmp/pwned)'; rm -rf x '".into(),
+            label: "\"; reboot; \"".into(),
+            meta: "Pair".into(),
+            active: false,
+        };
+        let cmd = action_for_child_item(ChildKind::Bluetooth, &evil).unwrap();
+        assert!(cmd.contains("bluetoothctl pair '$(touch /tmp/pwned)'\\''; rm -rf x '\\'''"), "{cmd}");
+        let wifi = action_for_child_item(ChildKind::Wifi, &evil).unwrap();
+        assert!(wifi.starts_with("s=$(printf '%s' '$(touch"), "{wifi}");
+    }
+
+    #[test]
     fn action_for_child_item_generates_expected_commands() {
         let wifi_item = ChildItem {
             id: "HomeNet".into(),
@@ -658,7 +666,7 @@ mod tests {
         let bt_cmd = action_for_child_item(ChildKind::Bluetooth, &bt_conn).unwrap();
         assert_eq!(
             bt_cmd,
-            "bluetoothctl connect \"AA:BB:CC:11:22:33\" >/dev/null 2>&1"
+            "bluetoothctl connect 'AA:BB:CC:11:22:33' >/dev/null 2>&1"
         );
 
         let bt_disconn = ChildItem {
@@ -670,7 +678,7 @@ mod tests {
         let bt_dis_cmd = action_for_child_item(ChildKind::Bluetooth, &bt_disconn).unwrap();
         assert_eq!(
             bt_dis_cmd,
-            "bluetoothctl disconnect \"AA:BB:CC:11:22:33\" >/dev/null 2>&1"
+            "bluetoothctl disconnect 'AA:BB:CC:11:22:33' >/dev/null 2>&1"
         );
 
         let bt_pair = ChildItem {
@@ -692,7 +700,7 @@ mod tests {
         let audio_cmd = action_for_child_item(ChildKind::Audio, &audio_item).unwrap();
         assert_eq!(
             audio_cmd,
-            "pactl set-default-sink \"sink.analog\" >/dev/null 2>&1"
+            "pactl set-default-sink 'sink.analog' >/dev/null 2>&1"
         );
 
         let power_item = ChildItem {
@@ -702,6 +710,6 @@ mod tests {
             active: false,
         };
         let power_cmd = action_for_child_item(ChildKind::Power, &power_item).unwrap();
-        assert!(power_cmd.contains("powerprofilesctl set \"performance\""));
+        assert!(power_cmd.contains("powerprofilesctl set 'performance'"));
     }
 }

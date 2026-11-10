@@ -377,7 +377,9 @@ impl Shell {
 
     /// Re-reads the config file if its modification time changed since the last load.
     pub fn reload_if_changed(&mut self) {
-        if self.config_path.as_os_str().is_empty() {
+        // never while arranging: the panel being edited is the one Done saves (Snap and Overlap
+        // write the config themselves, and a reload then put another panel in its place)
+        if self.config_path.as_os_str().is_empty() || self.edit.active {
             return;
         }
         let mtime = std::fs::metadata(&self.config_path)

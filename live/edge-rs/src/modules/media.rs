@@ -1254,7 +1254,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
             if px >= play_x && px <= play_x + 36.0 && py >= btn_y && py <= btn_y + 32.0 {
                 world.media.playing = !world.media.playing;
                 let bus = world.media.bus_name.clone();
-                world.run("media:play-pause".to_string());
+                world.note("media:play-pause".to_string());
                 if world.live && !bus.is_empty() {
                     execute_media_control(&bus, "PlayPause");
                 }
@@ -1262,7 +1262,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
             }
             if px >= next_x && px <= next_x + 32.0 && py >= btn_y && py <= btn_y + 32.0 {
                 let bus = world.media.bus_name.clone();
-                world.run("media:next".to_string());
+                world.note("media:next".to_string());
                 if world.live && !bus.is_empty() {
                     execute_media_control(&bus, "Next");
                 }
@@ -1289,7 +1289,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 let seek_us = (frac * world.media.duration_us as f64) as i64;
                 world.media.position_us = seek_us;
                 let bus = world.media.bus_name.clone();
-                world.run(format!("media:seek:{seek_us}"));
+                world.note(format!("media:seek:{seek_us}"));
                 if world.live && !bus.is_empty() {
                     execute_media_seek(&bus, seek_us);
                 }
@@ -1308,7 +1308,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 // Shuffle
                 if px >= start_ctrl_x && px <= start_ctrl_x + ctrl_w {
                     world.media.shuffle = !world.media.shuffle;
-                    world.run("media:shuffle".to_string());
+                    world.note("media:shuffle".to_string());
                     if world.live && !bus.is_empty() {
                         execute_media_shuffle(&bus, world.media.shuffle);
                     }
@@ -1317,7 +1317,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 // Prev
                 let prev_x = start_ctrl_x + ctrl_w + 12.0;
                 if px >= prev_x && px <= prev_x + ctrl_w {
-                    world.run("media:previous".to_string());
+                    world.note("media:previous".to_string());
                     if world.live && !bus.is_empty() {
                         execute_media_control(&bus, "Previous");
                     }
@@ -1327,7 +1327,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 let play_x = prev_x + ctrl_w + 12.0;
                 if px >= play_x && px <= play_x + ctrl_w {
                     world.media.playing = !world.media.playing;
-                    world.run("media:play-pause".to_string());
+                    world.note("media:play-pause".to_string());
                     if world.live && !bus.is_empty() {
                         execute_media_control(&bus, "PlayPause");
                     }
@@ -1336,7 +1336,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 // Next
                 let next_x = play_x + ctrl_w + 12.0;
                 if px >= next_x && px <= next_x + ctrl_w {
-                    world.run("media:next".to_string());
+                    world.note("media:next".to_string());
                     if world.live && !bus.is_empty() {
                         execute_media_control(&bus, "Next");
                     }
@@ -1350,7 +1350,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                         "Playlist" => "Track".into(),
                         _ => "None".into(),
                     };
-                    world.run("media:repeat".to_string());
+                    world.note("media:repeat".to_string());
                     if world.live && !bus.is_empty() {
                         execute_media_loop(&bus, &world.media.loop_status);
                     }
@@ -1381,7 +1381,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 let seek_us = (frac * world.media.duration_us as f64) as i64;
                 world.media.position_us = seek_us;
                 let bus = world.media.bus_name.clone();
-                world.run(format!("media:seek:{seek_us}"));
+                world.note(format!("media:seek:{seek_us}"));
                 if world.live && !bus.is_empty() {
                     execute_media_seek(&bus, seek_us);
                 }
@@ -1399,7 +1399,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 let bus = world.media.bus_name.clone();
                 if px >= start_ctrl_x && px <= start_ctrl_x + ctrl_w {
                     world.media.shuffle = !world.media.shuffle;
-                    world.run("media:shuffle".to_string());
+                    world.note("media:shuffle".to_string());
                     if world.live && !bus.is_empty() {
                         execute_media_shuffle(&bus, world.media.shuffle);
                     }
@@ -1407,7 +1407,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 }
                 let prev_x = start_ctrl_x + ctrl_w + 14.0;
                 if px >= prev_x && px <= prev_x + ctrl_w {
-                    world.run("media:previous".to_string());
+                    world.note("media:previous".to_string());
                     if world.live && !bus.is_empty() {
                         execute_media_control(&bus, "Previous");
                     }
@@ -1416,7 +1416,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 let play_x = prev_x + ctrl_w + 14.0;
                 if px >= play_x && px <= play_x + ctrl_w {
                     world.media.playing = !world.media.playing;
-                    world.run("media:play-pause".to_string());
+                    world.note("media:play-pause".to_string());
                     if world.live && !bus.is_empty() {
                         execute_media_control(&bus, "PlayPause");
                     }
@@ -1424,7 +1424,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 }
                 let next_x = play_x + ctrl_w + 14.0;
                 if px >= next_x && px <= next_x + ctrl_w {
-                    world.run("media:next".to_string());
+                    world.note("media:next".to_string());
                     if world.live && !bus.is_empty() {
                         execute_media_control(&bus, "Next");
                     }
@@ -1437,7 +1437,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                         "Playlist" => "Track".into(),
                         _ => "None".into(),
                     };
-                    world.run("media:repeat".to_string());
+                    world.note("media:repeat".to_string());
                     if world.live && !bus.is_empty() {
                         execute_media_loop(&bus, &world.media.loop_status);
                     }
@@ -1454,7 +1454,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                 if song_idx < world.media.queue.len() {
                     let song = &world.media.queue[song_idx];
                     let bus = world.media.bus_name.clone();
-                    world.run(format!("media:play-queue:{song_idx}:{}", song.title));
+                    world.note(format!("media:play-queue:{song_idx}:{}", song.title));
                     if world.live && !bus.is_empty() {
                         execute_media_play_queue(&bus, song_idx);
                     }

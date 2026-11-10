@@ -468,7 +468,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                     let id = world.tray.items[i].id.clone();
                     let bus = world.tray.items[i].bus_name.clone();
                     let path = world.tray.items[i].obj_path.clone();
-                    world.run(format!("tray:activate:{id}"));
+                    world.note(format!("tray:activate:{id}"));
                     if world.live && !bus.is_empty() {
                         activate_dbus_item(&bus, &path);
                     }
@@ -483,7 +483,7 @@ pub fn click(world: &mut World, size: (f64, f64), pos: (f64, f64), button: u32) 
                         let id = world.tray.items[i].id.clone();
                         let bus = world.tray.items[i].bus_name.clone();
                         let menu_path = world.tray.items[i].menu_path.clone();
-                        world.run(format!("tray:menu-open:{id}"));
+                        world.note(format!("tray:menu-open:{id}"));
                         if world.live && !bus.is_empty() && !menu_path.is_empty() {
                             let items = fetch_dbusmenu_items(&bus, &menu_path);
                             if !items.is_empty() {
@@ -606,7 +606,7 @@ pub fn click_menu(world: &mut World, m_rect: Rect, pos: (f64, f64)) -> bool {
             let pid = item.pid;
             let action_id = mi.id;
 
-            world.run(format!("tray:menu-action:{app_id}:{action_id}"));
+            world.note(format!("tray:menu-action:{app_id}:{action_id}"));
             if world.live {
                 execute_dbusmenu_action(&bus, &menu_path, action_id, pid, &app_id);
             }
@@ -726,12 +726,16 @@ pub fn execute_dbusmenu_action(
         }
     } else if item_id == -1 {
         // Open app
-        let cmd = if !proc_name.is_empty() {
-            proc_name
-        } else {
-            bus
-        };
-        let _ = std::process::Command::new("sh").arg("-c").arg(cmd).spawn();
+        // the app's program by its name, started directly (no shell: the name comes from the
+        // app); without one, nothing
+        let _ = bus;
+        if !proc_name.is_empty() && !proc_name.contains('/') {
+            let _ = std::process::Command::new(proc_name)
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn();
+        }
     } else if item_id == -2 {
         // Quit (SIGTERM)
         if pid > 0 {

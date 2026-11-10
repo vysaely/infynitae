@@ -549,6 +549,15 @@ impl World {
         self.actions.push(cmd);
     }
 
+    /// Records what a click did that is not a command (a D-Bus call made directly: `media:next`,
+    /// `tray:activate:ID`), for the tests; never given to a shell (a song title or a tray id in
+    /// it could run as a command).
+    pub fn note(&mut self, what: String) {
+        if !self.live {
+            self.actions.push(what);
+        }
+    }
+
     /// Collects the deduplicated `(key, cmd)` pairs needed to refresh `panel`'s modules.
     pub fn cmds_for_panel(panel: &Panel) -> Vec<(&'static str, &'static str)> {
         let mut out: Vec<(&'static str, &'static str)> = Vec::new();
@@ -843,6 +852,12 @@ pub fn dump_widget_boxes(
         out += &format!("bar {x:.0} {y:.0} {w:.0} {h:.0}\n");
     }
     let _ = std::fs::write(path, out);
+}
+
+/// `s` as one shell word in single quotes: text from outside (a Wi-Fi name, a device's name, a
+/// sink) put in a command is never read by the shell as code.
+pub fn sq(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "'\\''"))
 }
 
 /// A module drawn into its rectangle `(x, y, w, h)`, clipped to it: a module never draws over its
