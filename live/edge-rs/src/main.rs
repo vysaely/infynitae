@@ -2228,14 +2228,16 @@ mod tests {
             let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
             assert!(ph > 100.0);
 
-            // Click wifi (index 0)
+            // Click Network (index 0): its card opens (Wi-Fi is switched in there, not here);
+            // a second click closes it
             let r_wifi = rects[0];
             assert!(sh.click(w, h, ox + r_wifi.0 + 10.0, oy + r_wifi.1 + 10.0, 1));
-            assert!(!sh.world.switches.wifi_on);
-            assert_eq!(
-                sh.world.actions.last().map(String::as_str),
-                Some("nmcli radio wifi off")
-            );
+            assert!(sh.world.switches.wifi_on, "the click switched nothing");
+            assert!(sh.world.child.open);
+            assert_eq!(sh.world.child.kind, Some(modules::child::ChildKind::Wifi));
+            sh.pointer_release();
+            assert!(sh.click(w, h, ox + r_wifi.0 + 10.0, oy + r_wifi.1 + 10.0, 1));
+            assert!(!sh.world.child.open);
             sh.pointer_release();
 
             // Click and drag volume (index 8)

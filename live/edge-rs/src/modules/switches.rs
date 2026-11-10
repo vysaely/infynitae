@@ -16,7 +16,7 @@ pub const TILE_CELL_H: f64 = 68.0;
 pub const CMDS: &[(&str, &str)] = &[
     (
         "wifi",
-        "nmcli radio wifi 2>/dev/null; nmcli -t -f active,ssid dev wifi 2>/dev/null",
+        "nmcli radio wifi 2>/dev/null; nmcli -t -f active,ssid dev wifi 2>/dev/null; nmcli -t -f TYPE,STATE device 2>/dev/null",
     ),
     (
         "bluetooth",
@@ -50,6 +50,8 @@ pub struct SwitchesData {
     pub ready: bool,
     pub wifi_on: bool,
     pub wifi_label: String,
+    /// a cable is plugged in and connected (`nmcli device`: an "ethernet:connected" line)
+    pub wired: bool,
     pub bt_on: bool,
     pub bt_label: String,
     pub dnd_on: bool,
@@ -68,6 +70,7 @@ impl Default for SwitchesData {
             ready: false,
             wifi_on: false,
             wifi_label: "Off".into(),
+            wired: false,
             bt_on: false,
             bt_label: "Off".into(),
             dnd_on: false,
@@ -88,6 +91,7 @@ pub fn apply(d: &mut SwitchesData, key: &str, out: &str) -> bool {
             let (on, lbl) = parse_wifi(out);
             d.wifi_on = on;
             d.wifi_label = lbl;
+            d.wired = parse_wired(out);
             d.ready = true;
             true
         }
@@ -137,6 +141,28 @@ pub fn apply(d: &mut SwitchesData, key: &str, out: &str) -> bool {
 }
 
 /// Parses `nmcli radio wifi` and `nmcli -t -f active,ssid dev wifi` output into `(on, state_label)`.
+/// Whether a cable is connected: `nmcli -t -f TYPE,STATE device` lists it as "ethernet:connected".
+pub fn parse_wired(out: &str) -> bool {
+    out.lines()
+        .any(|l| l.trim().eq_ignore_ascii_case("ethernet:connected"))
+}
+
+/// What the Network switch says: a cable first ("Wired"), then the Wi-Fi network's name, "Not
+/// connected" with Wi-Fi on and no network, "Wi-Fi off" with neither; on when connected at all.
+pub fn network_state(d: &SwitchesData) -> (String, bool) {
+    let wifi_joined =
+        d.wifi_on && !d.wifi_label.is_empty() && d.wifi_label != "On" && d.wifi_label != "Off";
+    if d.wired {
+        ("Wired".into(), true)
+    } else if wifi_joined {
+        (d.wifi_label.clone(), true)
+    } else if d.wifi_on {
+        ("Not connected".into(), false)
+    } else {
+        ("Wi-Fi off".into(), false)
+    }
+}
+
 pub fn parse_wifi(out: &str) -> (bool, String) {
     let mut radio_on: Option<bool> = None;
     let mut ssid: Option<String> = None;
@@ -288,20 +314,15 @@ pub struct SwitchInfo {
 
 pub fn info(m: Module, d: &SwitchesData) -> SwitchInfo {
     match m {
-        Module::Wifi => SwitchInfo {
-            name: "Wi-Fi",
-            short_name: "Wi-Fi",
-            state: if d.wifi_on {
-                if d.wifi_label.is_empty() {
-                    "On".into()
-                } else {
-                    d.wifi_label.clone()
-                }
-            } else {
-                "Off".into()
-            },
-            on: d.wifi_on,
-        },
+        Module::Wifi => {
+            let (state, on) = network_state(d);
+            SwitchInfo {
+                name: "Network",
+                short_name: "Network",
+                state,
+                on,
+            }
+        }
         Module::Bluetooth => SwitchInfo {
             name: "Bluetooth",
             short_name: "Bluetooth",
@@ -463,6 +484,11 @@ pub fn toggle_action(m: Module, d: &mut SwitchesData) -> Option<String> {
 }
 
 pub fn click(m: Module, world: &mut World, button: u32) -> bool {
+    if m == Module::Wifi && is_left_button(button) {
+        // Network: its card (wired, Wi-Fi on/off, the networks); switching Wi-Fi off from the
+        // panel cut a wired machine's Wi-Fi without saying so
+        return crate::modules::toggle_child(world, crate::modules::child::ChildKind::Wifi);
+    }
     if !is_left_button(button) {
         // Right click or Shift+Enter opens its list (stage 4).
         return false;
@@ -778,6 +804,31 @@ mod tests {
     use super::*;
 
     #[test]
+    fn the_network_switch_says_wired_first_then_the_wifi_network() {
+        let mut d = SwitchesData::default();
+        assert!(apply(
+            &mut d,
+            "wifi",
+            "enabled\nyes:HomeNet\nethernet:connected\nwifi:connected\n"
+        ));
+        assert!(d.wired);
+        assert_eq!(info(Module::Wifi, &d).state, "Wired");
+        assert!(info(Module::Wifi, &d).on);
+        assert_eq!(info(Module::Wifi, &d).name, "Network");
+        apply(
+            &mut d,
+            "wifi",
+            "enabled\nyes:HomeNet\nethernet:unavailable\n",
+        );
+        assert_eq!(info(Module::Wifi, &d).state, "HomeNet");
+        apply(&mut d, "wifi", "enabled\n");
+        assert_eq!(info(Module::Wifi, &d).state, "Not connected");
+        assert!(!info(Module::Wifi, &d).on);
+        apply(&mut d, "wifi", "disabled\n");
+        assert_eq!(info(Module::Wifi, &d).state, "Wi-Fi off");
+    }
+
+    #[test]
     fn parses_real_nmcli_outputs() {
         let connected = "enabled\nno:Neighbours 5G\nyes:HomeNet\nno:Cafe guest\n";
         assert_eq!(parse_wifi(connected), (true, "HomeNet".to_string()));
@@ -891,6 +942,7 @@ Controller AC:36:1B:F9:5D:AF (public)
             ready: true,
             wifi_on: true,
             wifi_label: "HomeNet".into(),
+            wired: false,
             bt_on: false,
             bt_label: "Off".into(),
             dnd_on: false,
