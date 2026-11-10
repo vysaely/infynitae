@@ -995,6 +995,11 @@ where
     R: Renderer + ImportAll + ImportMem,
     R::TextureId: Send + Clone + 'static,
 {
+    // a capture asked for just before the lock (or before the window was made private) is drawn
+    // after it: nothing of the window then
+    if state.is_locked() || state.is_element_private(window) {
+        return Ok(None);
+    }
     let Some(frame) = state
         .core
         .window_frame(window, state.window_capture_scale())
