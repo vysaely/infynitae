@@ -69,6 +69,11 @@ for look in rows icons tiles; do
         && [ "$(stat -c %s "$TMP/control-$look.png")" -gt 4000 ]; then echo "ok   control ($look) drawn"
     else echo "FAIL control ($look) not drawn"; fail=1; fi
 done
+# the desktop's widgets (stage 5): the WIDGETS line drawn on the whole screen
+printf 'WIDGETS="clock:big@60,60,380x150 calendar@60,230,380x330 media@470,60,380x234"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
+if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render widgets 1280x720 "$TMP/widgets.png" \
+    && [ "$(stat -c %s "$TMP/widgets.png")" -gt 4000 ]; then echo "ok   desktop widgets drawn"
+else echo "FAIL desktop widgets not drawn"; fail=1; fi
 printf 'PANEL_CONTROL="system memory"\nBORDER_ACTIVE="#cc70a9"\nSURFACE_COLOR="#171013"\n' > "$TMP/home/.config/infynitae/config"
 if HOME="$TMP/home" INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" INFYNITAE_EDGE_RENDER_DATA="$TMP/render-data.txt" "$RS" --render control 1280x800 "$TMP/system-memory.png" \
     && [ "$(stat -c %s "$TMP/system-memory.png")" -gt 4000 ]; then echo "ok   system and memory drawn"

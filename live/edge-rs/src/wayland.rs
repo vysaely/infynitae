@@ -2,8 +2,8 @@
 //! paced by frame callbacks, zero work while closed, and signals / request files in calloop.
 
 use crate::{
-    hover_strip, layout_in, max_panel_height, modules, panel_hover_box_in, panel_origin,
-    panel_width, Key, Shell,
+    hover_strip, layout_in, modules, panel_hover_box_in, panel_origin, panel_width, ph_of, Key,
+    Shell,
 };
 use smithay_client_toolkit::{
     compositor::{CompositorHandler, CompositorState, Region},
@@ -56,6 +56,8 @@ use std::{
 
 const PID_FILE: &str = "infynitae-edge-rs.pid";
 const PANEL_FILE: &str = "infynitae-edge-rs.panel";
+/// the request word that starts editing the desktop's widgets (`infynitae-edge widgets`)
+pub const WIDGETS_REQUEST: &str = "@widgets";
 
 pub fn runtime_path(name: &str) -> PathBuf {
     let dir = std::env::var("XDG_RUNTIME_DIR")
@@ -102,6 +104,38 @@ pub fn stop_running() -> bool {
     unsafe { libc::kill(pid, libc::SIGTERM) == 0 }
 }
 
+/// How long until the next whole minute, from a time in milliseconds (the widgets' clock wakes
+/// the edge then and not before).
+pub fn until_next_minute(now_ms: i64) -> Duration {
+    let into = now_ms.rem_euclid(60_000);
+    Duration::from_millis((60_000 - into).max(1) as u64 + 5)
+}
+
+/// Whether a widget shows data that has to be fetched again while it is on the screen.
+fn widgets_need_data(widgets: &Shell) -> bool {
+    widgets
+        .cfg
+        .panels
+        .first()
+        .is_some_and(|p| !modules::World::cmds_for_panel(p).is_empty())
+}
+
+/// The input region of the desktop's widgets: each widget's rectangle on whole pixels.
+pub fn widget_region(rects: &[(f64, f64, f64, f64)]) -> Vec<(i32, i32, i32, i32)> {
+    rects
+        .iter()
+        .filter(|r| r.2 > 0.0 && r.3 > 0.0)
+        .map(|r| {
+            (
+                r.0.floor() as i32,
+                r.1.floor() as i32,
+                r.2.ceil() as i32,
+                r.3.ceil() as i32,
+            )
+        })
+        .collect()
+}
+
 struct BufferSlot {
     buffer: Buffer,
     prev_box: Option<(i32, i32, i32, i32)>,
@@ -119,6 +153,8 @@ struct OutputSurface {
     mapped_closed: bool,
     dirty: bool,
     frame_pending: bool,
+    /// the desktop's widgets (the Bottom layer, under the windows), not the panels
+    desktop: bool,
 }
 
 impl OutputSurface {
@@ -128,6 +164,24 @@ impl OutputSurface {
         };
         let w = self.width as f64;
         let h = self.height as f64;
+        if self.desktop {
+            // the widgets only (a click beside them is the desktop's); the whole screen while
+            // they are edited
+            if shell.edit.active {
+                region.add(0, 0, w.ceil() as i32, h.ceil() as i32);
+            } else if shell.shows_widgets() {
+                if let Some(p) = shell.cfg.panels.first() {
+                    let (rects, _) = layout_in(p, w, &shell.world, &shell.theme);
+                    for r in widget_region(&rects) {
+                        region.add(r.0, r.1, r.2, r.3);
+                    }
+                }
+            }
+            self.layer
+                .wl_surface()
+                .set_input_region(Some(region.wl_region()));
+            return;
+        }
         if w > 0.0 && h > 0.0 {
             if shell.world.ask.on {
                 region.add(0, 0, w.ceil() as i32, h.ceil() as i32);
@@ -173,13 +227,34 @@ impl OutputSurface {
         if !self.configured || self.width == 0 || self.height == 0 {
             return;
         }
-        let active = shell.open.is_some() || shell.world.ask.on;
-        let kb = if active {
+        let active = if self.desktop {
+            shell.shows_widgets()
+        } else {
+            shell.open.is_some() || shell.world.ask.on
+        };
+        // the widgets take the keyboard only while edited (Escape ends it, also when the editing
+        // was started by `infynitae-edge widgets`, with no click on them)
+        let kb = if self.desktop {
+            if shell.edit.active {
+                KeyboardInteractivity::Exclusive
+            } else {
+                KeyboardInteractivity::None
+            }
+        } else if active {
             KeyboardInteractivity::Exclusive
         } else {
             KeyboardInteractivity::None
         };
         self.layer.set_keyboard_interactivity(kb);
+        // the widgets over the windows while they are arranged (none covers them, and they have
+        // the keyboard for Escape), under them again after
+        if self.desktop {
+            self.layer.set_layer(if shell.edit.active {
+                Layer::Top
+            } else {
+                Layer::Bottom
+            });
+        }
         self.set_input_region(compositor, shell);
 
         if active {
@@ -284,6 +359,9 @@ impl OutputSurface {
         if !shell.world.ask.on && shell.open.is_none() {
             return;
         }
+        if self.desktop && !shell.shows_widgets() {
+            return;
+        }
         let w = self.width as i32;
         let h = self.height as i32;
         let stride = w * 4;
@@ -353,7 +431,7 @@ impl OutputSurface {
 
         let pw = panel_width(panel, w as f64);
         let (rects, content_h) = layout_in(panel, pw, &shell.world, &shell.theme);
-        let ph = content_h.min(max_panel_height(h as f64));
+        let ph = ph_of(panel, content_h, h as f64);
         let (ox, oy) = panel_origin(panel, w as f64, h as f64, pw, ph);
         let mut tray_m_rect = None;
         if let Some(open_idx) = shell.world.tray.open_menu {
@@ -502,17 +580,26 @@ impl OutputSurface {
                 surface.flush();
             }
         }
-        modules::dump_boxes(
-            panel,
-            &rects,
-            (ox, oy, pw, ph),
-            shell.edit.active.then_some(shell.edit.bar_rect),
-            if shell.edit.active {
-                None
-            } else {
-                child_draw_rect
-            },
-        );
+        if self.desktop {
+            modules::dump_widget_boxes(
+                panel,
+                &rects,
+                (w as f64, h as f64),
+                shell.edit.active.then_some(shell.edit.bar_rect),
+            );
+        } else {
+            modules::dump_boxes(
+                panel,
+                &rects,
+                (ox, oy, pw, ph),
+                shell.edit.active.then_some(shell.edit.bar_rect),
+                if shell.edit.active {
+                    None
+                } else {
+                    child_draw_rect
+                },
+            );
+        }
 
         let wl = self.layer.wl_surface();
         if let Some((ox, oy, ow, oh)) = old_box {
@@ -554,6 +641,15 @@ struct App {
     modifiers: Modifiers,
 
     shell: Shell,
+    /// the desktop's widgets and their surface (the first output's)
+    widgets: Shell,
+    desk: Vec<OutputSurface>,
+    /// the keyboard is on the widgets' surface (while they are edited)
+    kb_desk: bool,
+    /// the finger down is on the widgets' surface
+    touch_desk: bool,
+    widgets_busy: Arc<AtomicBool>,
+    last_widgets_fetch: Option<Instant>,
     fetch_tx: Sender<Vec<(String, String)>>,
     fetch_busy: Arc<AtomicBool>,
     last_fetch: Option<Instant>,
@@ -623,8 +719,38 @@ impl App {
         }
     }
 
+    /// The data the widgets show (media, memory, switches...), fetched as an open panel's is.
+    fn request_widgets_fetch(&mut self) {
+        if let Some(panel) = self.widgets.cfg.panels.first() {
+            let cmds = modules::World::cmds_for_panel(panel);
+            self.last_widgets_fetch = Some(Instant::now());
+            if !cmds.is_empty() {
+                modules::spawn_fetch(self.fetch_tx.clone(), self.widgets_busy.clone(), cmds);
+            }
+        }
+    }
+
+    /// The widgets drawn again (and their surface made, input region and keyboard set).
+    fn sync_desk(&mut self) {
+        if self.widgets.edit.active && self.shell.edit.active {
+            self.shell.edit_exit();
+            self.sync_all();
+        }
+        self.ensure_desk();
+        let qh = self.qh.clone();
+        for os in &mut self.desk {
+            os.dirty = true;
+            os.apply_mode(&qh, &self.compositor, &self.widgets);
+        }
+    }
+
     fn sync_all(&mut self) {
         self.flush_window_ops();
+        // one thing edited at a time: a panel and the widgets
+        if self.widgets.edit.active && self.shell.edit.active {
+            self.shell.edit_exit();
+        }
+
         if self.shell.open != self.prev_open {
             self.prev_open = self.shell.open;
             if let Some(idx) = self.shell.open {
@@ -643,23 +769,40 @@ impl App {
         if self.outputs.iter().any(|o| o.output == output) {
             return;
         }
-        let Ok(pool) = SlotPool::new(4096, &self.shm) else {
-            return;
-        };
+        if let Some(os) = self.new_surface(output, false) {
+            self.outputs.push(os);
+        }
+    }
+
+    /// A layer surface over the whole of `output`: the panels' (Top layer, over the windows) or
+    /// the desktop's widgets' (Bottom layer, under the windows, over the wallpaper).
+    fn new_surface(&mut self, output: wl_output::WlOutput, desktop: bool) -> Option<OutputSurface> {
+        let pool = SlotPool::new(4096, &self.shm).ok()?;
         let surface = self.compositor.create_surface(&self.qh);
         let layer = self.layer_shell.create_layer_surface(
             &self.qh,
             surface,
-            Layer::Top,
-            Some("infynitae-edge"),
+            if desktop { Layer::Bottom } else { Layer::Top },
+            Some(if desktop {
+                "infynitae-widgets"
+            } else {
+                "infynitae-edge"
+            }),
             Some(&output),
         );
         layer.set_anchor(Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT);
         layer.set_exclusive_zone(-1);
         layer.set_keyboard_interactivity(KeyboardInteractivity::None);
+        if desktop {
+            // nothing takes the pointer until the widgets are drawn
+            if let Ok(region) = Region::new(&self.compositor) {
+                layer
+                    .wl_surface()
+                    .set_input_region(Some(region.wl_region()));
+            }
+        }
         layer.commit();
-
-        self.outputs.push(OutputSurface {
+        Some(OutputSurface {
             output,
             layer,
             pool,
@@ -671,14 +814,34 @@ impl App {
             mapped_closed: false,
             dirty: false,
             frame_pending: false,
-        });
+            desktop,
+        })
+    }
+
+    /// The widgets' surface on the first output, made the first time there are widgets to show
+    /// (none at all without a WIDGETS line: zero cost).
+    fn ensure_desk(&mut self) {
+        if !self.desk.is_empty() || !self.widgets.shows_widgets() {
+            return;
+        }
+        let Some(output) = self.outputs.first().map(|o| o.output.clone()) else {
+            return;
+        };
+        if let Some(os) = self.new_surface(output, true) {
+            self.desk.push(os);
+        }
     }
 
     fn surface_dims(&self, surface: &wl_surface::WlSurface) -> Option<(f64, f64)> {
         self.outputs
             .iter()
+            .chain(&self.desk)
             .find(|o| o.layer.wl_surface() == surface && o.configured)
             .map(|o| (o.width as f64, o.height as f64))
+    }
+
+    fn is_desk(&self, surface: &wl_surface::WlSurface) -> bool {
+        self.desk.iter().any(|o| o.layer.wl_surface() == surface)
     }
 
     fn handle_signal_byte(&mut self, b: u8) {
@@ -696,7 +859,15 @@ impl App {
                 let name = std::fs::read_to_string(&path).unwrap_or_default();
                 let _ = std::fs::remove_file(&path);
                 let trimmed = name.trim();
-                if !trimmed.is_empty() {
+                if trimmed == WIDGETS_REQUEST {
+                    // `infynitae-edge widgets`: edit the desktop's widgets (a panel closes)
+                    self.shell.close();
+                    self.widgets.reload_if_changed();
+                    if self.widgets.edit_enter() {
+                        self.sync_desk();
+                    }
+                    true
+                } else if !trimmed.is_empty() {
                     self.shell.toggle_named(trimmed)
                 } else {
                     false
@@ -756,6 +927,16 @@ impl CompositorHandler for App {
                 os.render_if_needed(qh, &self.shell);
             }
         }
+        if let Some(os) = self
+            .desk
+            .iter_mut()
+            .find(|o| o.layer.wl_surface() == surface)
+        {
+            os.frame_pending = false;
+            if os.dirty {
+                os.render_if_needed(qh, &self.widgets);
+            }
+        }
     }
 
     fn surface_enter(
@@ -806,12 +987,14 @@ impl OutputHandler for App {
         output: wl_output::WlOutput,
     ) {
         self.outputs.retain(|o| o.output != output);
+        self.desk.retain(|o| o.output != output);
     }
 }
 
 impl LayerShellHandler for App {
     fn closed(&mut self, _conn: &Connection, _qh: &QueueHandle<Self>, layer: &LayerSurface) {
         self.outputs.retain(|o| &o.layer != layer);
+        self.desk.retain(|o| &o.layer != layer);
     }
 
     fn configure(
@@ -827,6 +1010,14 @@ impl LayerShellHandler for App {
             os.height = configure.new_size.1.max(1);
             os.configured = true;
             os.apply_mode(qh, &self.compositor, &self.shell);
+        }
+        if let Some(os) = self.desk.iter_mut().find(|o| &o.layer == layer) {
+            os.width = configure.new_size.0.max(1);
+            os.height = configure.new_size.1.max(1);
+            os.configured = true;
+            self.widgets.last_screen = (os.width as f64, os.height as f64);
+            os.dirty = true;
+            os.apply_mode(qh, &self.compositor, &self.widgets);
         }
     }
 }
@@ -889,11 +1080,12 @@ impl KeyboardHandler for App {
         _: &Connection,
         _: &QueueHandle<Self>,
         _: &wl_keyboard::WlKeyboard,
-        _: &wl_surface::WlSurface,
+        surface: &wl_surface::WlSurface,
         _: u32,
         _: &[u32],
         _: &[Keysym],
     ) {
+        self.kb_desk = self.is_desk(surface);
     }
 
     fn leave(
@@ -948,7 +1140,11 @@ impl KeyboardHandler for App {
             };
             Key::Sym { keysym, ch }
         };
-        if self.shell.key(key) {
+        if self.kb_desk {
+            if self.widgets.key(key) {
+                self.sync_desk();
+            }
+        } else if self.shell.key(key) {
             self.sync_all();
         }
     }
@@ -997,11 +1193,32 @@ impl PointerHandler for App {
         events: &[PointerEvent],
     ) {
         let mut changed = false;
+        let mut desk_changed = false;
         for event in events {
             let Some((w, h)) = self.surface_dims(&event.surface) else {
                 continue;
             };
             let (x, y) = event.position;
+            if self.is_desk(&event.surface) {
+                let ws = &mut self.widgets;
+                desk_changed |= match event.kind {
+                    PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
+                        ws.pointer_motion(w, h, x, y)
+                    }
+                    PointerEventKind::Leave { .. } => ws.pointer_leave(),
+                    PointerEventKind::Press { button, .. } => ws.click(w, h, x, y, button),
+                    PointerEventKind::Release { .. } => ws.pointer_release(),
+                    PointerEventKind::Axis { vertical, .. } => {
+                        let dy = if vertical.discrete != 0 {
+                            vertical.discrete as f64
+                        } else {
+                            vertical.absolute
+                        };
+                        dy.abs() > 0.0 && ws.scroll(w, h, x, y, dy)
+                    }
+                };
+                continue;
+            }
             match event.kind {
                 PointerEventKind::Enter { .. } | PointerEventKind::Motion { .. } => {
                     changed |= self.shell.pointer_motion(w, h, x, y);
@@ -1030,6 +1247,9 @@ impl PointerHandler for App {
         if changed {
             self.sync_all();
         }
+        if desk_changed {
+            self.sync_desk();
+        }
     }
 }
 
@@ -1046,8 +1266,16 @@ impl TouchHandler for App {
         position: (f64, f64),
     ) {
         if let Some((w, h)) = self.surface_dims(&surface) {
-            if self.shell.click(w, h, position.0, position.1, BTN_LEFT) {
-                self.sync_all();
+            if self.is_desk(&surface) {
+                self.touch_desk = true;
+                if self.widgets.click(w, h, position.0, position.1, BTN_LEFT) {
+                    self.sync_desk();
+                }
+            } else {
+                self.touch_desk = false;
+                if self.shell.click(w, h, position.0, position.1, BTN_LEFT) {
+                    self.sync_all();
+                }
             }
         }
     }
@@ -1061,7 +1289,11 @@ impl TouchHandler for App {
         _: u32,
         _: i32,
     ) {
-        if self.shell.pointer_release() {
+        if self.touch_desk {
+            if self.widgets.pointer_release() {
+                self.sync_desk();
+            }
+        } else if self.shell.pointer_release() {
             self.sync_all();
         }
     }
@@ -1077,7 +1309,11 @@ impl TouchHandler for App {
     ) {
         if let Some(surf) = self.outputs.first() {
             let (w, h) = (surf.width as f64, surf.height as f64);
-            if self.shell.pointer_motion(w, h, position.0, position.1) {
+            if self.touch_desk {
+                if self.widgets.pointer_motion(w, h, position.0, position.1) {
+                    self.sync_desk();
+                }
+            } else if self.shell.pointer_motion(w, h, position.0, position.1) {
                 self.sync_all();
             }
         }
@@ -1267,7 +1503,9 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
 
     let mut shell = Shell::new();
     shell.world.live = true;
-    if let Some(name) = initial_panel {
+    let mut widgets = Shell::widgets();
+    widgets.world.live = true;
+    if let Some(name) = initial_panel.filter(|n| *n != WIDGETS_REQUEST) {
         shell.toggle_named(name);
     }
 
@@ -1293,6 +1531,12 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         touch: None,
         modifiers: Modifiers::default(),
         shell,
+        widgets,
+        desk: Vec::new(),
+        kb_desk: false,
+        touch_desk: false,
+        widgets_busy: Arc::new(AtomicBool::new(false)),
+        last_widgets_fetch: None,
         fetch_tx,
         fetch_busy,
         last_fetch: None,
@@ -1308,6 +1552,11 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     for output in existing_outputs {
         app.create_output_surface(output);
     }
+    if initial_panel == Some(WIDGETS_REQUEST) {
+        app.widgets.edit_enter();
+    }
+    app.sync_all();
+    app.sync_desk();
 
     let mut event_loop: EventLoop<App> = EventLoop::try_new().map_err(|e| e.to_string())?;
     let loop_handle = event_loop.handle();
@@ -1315,12 +1564,16 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
     loop_handle
         .insert_source(fetch_rx, |evt, _, app| {
             if let channel::Event::Msg(pairs) = evt {
-                let mut any = false;
+                let (mut any, mut desk) = (false, false);
                 for (k, v) in pairs {
                     any |= app.shell.world.apply(&k, &v);
+                    desk |= app.widgets.world.apply(&k, &v);
                 }
                 if any && app.shell.open.is_some() {
                     app.sync_all();
+                }
+                if desk && app.widgets.shows_widgets() {
+                    app.sync_desk();
                 }
             }
         })
@@ -1356,7 +1609,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
 
     const REFRESH: Duration = Duration::from_secs(2);
     while !app.exit {
-        let timeout = if let Some(idx) = app.shell.open {
+        let mut timeout = if let Some(idx) = app.shell.open {
             let elapsed = app.last_fetch.map(|t| t.elapsed()).unwrap_or(REFRESH);
             if elapsed >= REFRESH {
                 app.request_fetch(idx);
@@ -1367,6 +1620,31 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         } else {
             None
         };
+        // the widgets: the clock on the minute; their data every 2 s only when one shows data
+        // that changes (music, memory, switches); nothing at all without widgets
+        if app.widgets.shows_widgets() {
+            let mut redraw = app.widgets.world.tick_clock();
+            let mut next = until_next_minute(chrono::Local::now().timestamp_millis());
+            if widgets_need_data(&app.widgets) {
+                let elapsed = app
+                    .last_widgets_fetch
+                    .map(|t| t.elapsed())
+                    .unwrap_or(REFRESH);
+                if elapsed >= REFRESH {
+                    app.request_widgets_fetch();
+                    next = next.min(REFRESH);
+                } else {
+                    next = next.min(REFRESH - elapsed);
+                }
+            }
+            if app.widgets.reload_config_changed() {
+                redraw = true;
+            }
+            if redraw {
+                app.sync_desk();
+            }
+            timeout = Some(timeout.map_or(next, |t| t.min(next)));
+        }
         event_loop
             .dispatch(timeout, &mut app)
             .map_err(|e| e.to_string())?;

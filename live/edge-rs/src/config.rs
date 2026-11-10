@@ -148,6 +148,9 @@ pub struct Panel {
     pub key: Option<char>,
     pub items: Vec<Item>,
     pub placed: bool,
+    /// the desktop's widgets (`WIDGETS`): the whole screen at 0,0, under the windows, always shown
+    /// (docs/EDGE_RUST.md stage 5)
+    pub desktop: bool,
 }
 
 impl Panel {
@@ -169,6 +172,7 @@ impl Panel {
             key,
             items: Vec::new(),
             placed: false,
+            desktop: false,
         };
         p.set_items(
             mods.iter()
@@ -196,8 +200,46 @@ impl Panel {
         self.items.iter().any(|i| i.module == m)
     }
 
-    /// The panel as its PANEL_ line value (the C edge's panel_value).
+    /// The desktop's widgets from a WIDGETS line: `module[:look]@x,y,wxh ...` in screen pixels.
+    /// A widget without its place is left out (Add in edit mode gives one).
+    pub fn widgets(value: &str) -> Option<Panel> {
+        let mut p = Panel::new("widgets", Side::Top, -1, None, false, &[]);
+        p.apply(value);
+        p.items.retain(|i| i.rect.is_some());
+        p.desktop = true;
+        p.placed = true;
+        (!p.items.is_empty()).then_some(p)
+    }
+
+    /// The desktop with no widgets (to add some to).
+    pub fn no_widgets() -> Panel {
+        let mut p = Panel::new("widgets", Side::Top, -1, None, false, &[]);
+        p.desktop = true;
+        p.placed = true;
+        p
+    }
+
+    /// The panel as its PANEL_ line value (the C edge's panel_value); the desktop's widgets as
+    /// their WIDGETS value (the widgets and their places only).
     pub fn value(&self) -> String {
+        if self.desktop {
+            return self
+                .items
+                .iter()
+                .filter_map(|it| {
+                    let (x, y, w, h) = it.rect.filter(|r| r.2 > 0 && r.3 > 0)?;
+                    let (names, def) = it.module.looks();
+                    let word = match it.look {
+                        Some(l) if !names.is_empty() && l != def => {
+                            format!("{}:{}", it.module.word(), names[l])
+                        }
+                        _ => it.module.word().to_string(),
+                    };
+                    Some(format!("{word}@{x},{y},{w}x{h}"))
+                })
+                .collect::<Vec<_>>()
+                .join(" ");
+        }
         let along = if self.align == 0 {
             "center"
         } else if self.side.horizontal() {
@@ -411,6 +453,8 @@ pub fn value_text(v: &str) -> String {
 #[derive(Clone, Debug)]
 pub struct Config {
     pub panels: Vec<Panel>,
+    /// WIDGETS: the desktop's widgets, None without the line or with no placed widget
+    pub widgets: Option<Panel>,
     pub favorites: String,
     pub snap: bool,
     pub overlap: bool,
@@ -458,6 +502,7 @@ impl Config {
         let mut ctrl_align: i8 = 1;
         let mut c = Config {
             panels: Vec::new(),
+            widgets: None,
             favorites: String::new(),
             snap: true,
             overlap: false,
@@ -558,6 +603,7 @@ impl Config {
                         ctrl = mods;
                     }
                 }
+                "WIDGETS" => c.widgets = Panel::widgets(&value_text(v)),
                 _ if key.starts_with("PANEL_") && lines.len() < 24 => {
                     lines.push((key["PANEL_".len()..].to_string(), v.to_string()));
                 }

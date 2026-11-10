@@ -6,6 +6,7 @@
 //!   infynitae-edge-rs stop                      stop the running edge
 //!   infynitae-edge-rs --print-panels            each panel as its PANEL_ line (as the C edge prints)
 //!   infynitae-edge-rs --print-theme             the resolved look as LOOK_* shell lines (stage 7)
+//!   infynitae-edge-rs widgets                   edit the desktop's widgets (WIDGETS line, stage 5)
 //!   infynitae-edge-rs --render NAME WxH OUT.png a panel open on a WxH screen, drawn to a PNG
 //!
 //! INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" fixes the clock for --render.
@@ -22,6 +23,9 @@ use std::{path::PathBuf, process::ExitCode, time::SystemTime};
 /// The width a panel takes on a screen w px wide (the C edge's panel_width).
 pub fn panel_width(p: &Panel, w: f64) -> f64 {
     use config::Module::*;
+    if p.desktop {
+        return w;
+    }
     let pw = if p.width > 0 {
         p.width as f64
     } else if p.has(Apps) || p.has(Windows) || p.has(Clipboard) || p.has(Favorites) {
@@ -35,6 +39,9 @@ pub fn panel_width(p: &Panel, w: f64) -> f64 {
 /// Where a panel of pw x ph goes: 8 px from its edge, at its place along it (panel_origin).
 pub fn panel_origin(p: &Panel, w: f64, h: f64, pw: f64, ph: f64) -> (f64, f64) {
     const M: f64 = 8.0;
+    if p.desktop {
+        return (0.0, 0.0);
+    }
     let (along_w, size) = if p.side.horizontal() {
         (w, pw)
     } else {
@@ -135,6 +142,16 @@ pub fn layout_in(
 }
 
 /// The maximum height a panel may take on a screen `h` px tall (screen height minus 16).
+/// A panel's height on a screen h px tall: its content, at most the screen less 16 px; the
+/// desktop's widgets: the whole screen (their canvas).
+pub fn ph_of(p: &Panel, content_h: f64, h: f64) -> f64 {
+    if p.desktop {
+        h
+    } else {
+        content_h.min(max_panel_height(h))
+    }
+}
+
 pub fn max_panel_height(h: f64) -> f64 {
     (h - 16.0).max(0.0)
 }
@@ -143,7 +160,7 @@ pub fn max_panel_height(h: f64) -> f64 {
 pub fn panel_rect(p: &Panel, w: f64, h: f64) -> (f64, f64, f64, f64) {
     let pw = panel_width(p, w);
     let (_, content_h) = layout(p, pw);
-    let ph = content_h.min(max_panel_height(h));
+    let ph = ph_of(p, content_h, h);
     let (ox, oy) = panel_origin(p, w, h, pw, ph);
     (ox, oy, pw, ph)
 }
@@ -158,7 +175,7 @@ pub fn panel_rect_in(
 ) -> (f64, f64, f64, f64) {
     let pw = panel_width(p, w);
     let (_, content_h) = layout_in(p, pw, world, th);
-    let ph = content_h.min(max_panel_height(h));
+    let ph = ph_of(p, content_h, h);
     let (ox, oy) = panel_origin(p, w, h, pw, ph);
     (ox, oy, pw, ph)
 }
@@ -232,12 +249,13 @@ pub fn parse_args<S: AsRef<str>>(args: &[S]) -> Result<Action, String> {
         ["ask", rest @ ..] => Ok(Action::Ask(rest.iter().map(|s| (*s).to_string()).collect())),
         ["stop", ..] => Ok(Action::Stop),
         ["panel", name, ..] if !name.is_empty() => Ok(Action::Panel((*name).to_string())),
+        ["widgets", ..] => Ok(Action::Panel(wayland::WIDGETS_REQUEST.to_string())),
         ["control", ..] => Ok(Action::Panel("control".to_string())),
         ["apps", ..] => Ok(Action::Panel("apps".to_string())),
         ["clipboard", ..] => Ok(Action::Panel("clipboard".to_string())),
         ["toggle" | "center" | "open", ..] => Ok(Action::Panel("windows".to_string())),
         _ => Err(
-            "usage: infynitae-edge-rs [panel NAME | control | apps | clipboard | toggle | stop | --print-panels | --print-theme | --render NAME WxH OUT.png]"
+            "usage: infynitae-edge-rs [panel NAME | control | apps | clipboard | toggle | widgets | stop | --print-panels | --print-theme | --render NAME|widgets WxH OUT.png]"
                 .to_string(),
         ),
     }
@@ -264,6 +282,8 @@ pub struct Shell {
     pub last_screen: (f64, f64),
     pub world: modules::World,
     pub edit: modules::edit::EditState,
+    /// the desktop's widgets (stage 5): its one panel is the WIDGETS line, always open
+    pub desktop: bool,
 }
 
 impl Default for Shell {
@@ -298,6 +318,7 @@ impl Shell {
             last_screen: (1920.0, 1080.0),
             world,
             edit,
+            desktop: false,
         }
     }
 
@@ -324,7 +345,34 @@ impl Shell {
             last_screen: (1920.0, 1080.0),
             world,
             edit,
+            desktop: false,
         }
+    }
+
+    /// The desktop's widgets: a shell whose one panel is the WIDGETS line, always open.
+    pub fn widgets() -> Shell {
+        let mut s = Shell::new();
+        s.desktop = true;
+        s.use_widgets();
+        s
+    }
+
+    fn use_widgets(&mut self) {
+        self.cfg.panels = vec![self.cfg.widgets.clone().unwrap_or_else(Panel::no_widgets)];
+        self.open = Some(0);
+    }
+
+    /// Widgets to show (or the desktop being edited, even with none yet).
+    pub fn shows_widgets(&self) -> bool {
+        self.desktop
+            && (self.edit.active || self.cfg.panels.first().is_some_and(|p| !p.items.is_empty()))
+    }
+
+    /// reload_if_changed, saying whether the config was read again.
+    pub fn reload_config_changed(&mut self) -> bool {
+        let before = self.config_mtime;
+        self.reload_if_changed();
+        before != self.config_mtime
     }
 
     /// Re-reads the config file if its modification time changed since the last load.
@@ -345,7 +393,11 @@ impl Shell {
                     self.edit.snap = self.cfg.snap;
                     self.edit.overlap = self.cfg.overlap;
                 }
-                if let Some(idx) = self.open {
+                if self.desktop {
+                    if !self.edit.active {
+                        self.use_widgets();
+                    }
+                } else if let Some(idx) = self.open {
                     if idx >= self.cfg.panels.len() {
                         self.open = None;
                         self.opened_by_hover = false;
@@ -569,7 +621,7 @@ impl Shell {
         if let Some(panel) = self.cfg.panels.get_mut(open_idx) {
             let pw = panel_width(panel, w);
             let (rects, content_h) = layout_in(panel, pw, &self.world, &self.theme);
-            let ph = content_h.min(max_panel_height(h));
+            let ph = ph_of(panel, content_h, h);
             let (ox, oy) = panel_origin(panel, w, h, pw, ph);
             self.edit.before = panel.value();
             if !panel.placed {
@@ -626,7 +678,7 @@ impl Shell {
         };
         let pw = panel_width(&panel, w);
         let (_rects, content_h) = layout_in(&panel, pw, &self.world, &self.theme);
-        let ph = content_h.min(max_panel_height(h));
+        let ph = ph_of(&panel, content_h, h);
         let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
 
         let is_left = modules::is_left_button(button);
@@ -653,7 +705,14 @@ impl Shell {
                             }
                             1 => {
                                 // Reset
-                                if let Some(p) = self.cfg.panels.get_mut(open_idx) {
+                                if let Some(p) =
+                                    self.cfg.panels.get_mut(open_idx).filter(|p| p.desktop)
+                                {
+                                    // the desktop's Reset: no widgets
+                                    self.edit.undo.push(p.clone());
+                                    p.items.clear();
+                                    self.edit.changed = true;
+                                } else if let Some(p) = self.cfg.panels.get_mut(open_idx) {
                                     self.edit.undo.push(p.clone());
                                     let mods = match p.name.as_str() {
                                         "control" => modules::edit::DEFAULT_CONTROL,
@@ -741,7 +800,11 @@ impl Shell {
                     if x >= ax && x <= ax + w4 && y >= ay && y <= ay + 26.0 {
                         if let Some(p) = self.cfg.panels.get_mut(open_idx) {
                             self.edit.undo.push(p.clone());
-                            let (dw, dh) = modules::edit::module_default_size(m, pw);
+                            let (dw, dh) = if p.desktop {
+                                modules::edit::widget_default_size(m)
+                            } else {
+                                modules::edit::module_default_size(m, pw)
+                            };
                             let (fx, fy) =
                                 modules::edit::nearest_free(p, p.items.len(), dw, dh, pw);
                             p.items.push(config::Item {
@@ -812,6 +875,9 @@ impl Shell {
             });
             self.edit.live = false;
             self.pointer_down = true;
+        } else if panel.desktop {
+            // the desktop: no panel to move or resize; a press beside the widgets unselects
+            self.edit.selected = None;
         } else {
             let cx = if panel.align > 0 && panel.side.horizontal() {
                 0.0
@@ -1069,6 +1135,16 @@ impl Shell {
     }
 
     pub fn close(&mut self) -> bool {
+        if self.desktop {
+            // the widgets stay: closing ends editing (saving) and what was open in them
+            let was =
+                self.edit.active || self.world.child.open || self.world.tray.open_menu.is_some();
+            self.edit_exit();
+            self.world.child.open = false;
+            self.world.tray.open_menu = None;
+            self.pointer_down = false;
+            return was;
+        }
         if self.edit.active {
             self.edit_exit();
         }
@@ -1258,7 +1334,7 @@ impl Shell {
         };
         let pw = panel_width(panel, w);
         let (rects, content_h) = layout_in(panel, pw, &self.world, &self.theme);
-        let ph = content_h.min(max_panel_height(h));
+        let ph = ph_of(panel, content_h, h);
         let (ox, oy) = panel_origin(panel, w, h, pw, ph);
 
         // 1. Child list interaction
@@ -1329,6 +1405,11 @@ impl Shell {
             return self.close();
         }
 
+        // a right click on a widget starts editing the desktop's widgets
+        if panel.desktop && modules::is_right_button(button) {
+            return self.edit_enter();
+        }
+
         // 5. Click inside panel
         if modules::is_left_button(button) {
             self.pointer_down = true;
@@ -1379,7 +1460,7 @@ impl Shell {
         };
         let pw = panel_width(panel, w);
         let (rects, content_h) = layout_in(panel, pw, &self.world, &self.theme);
-        let ph = content_h.min(max_panel_height(h));
+        let ph = ph_of(panel, content_h, h);
         let (ox, oy) = panel_origin(panel, w, h, pw, ph);
         let oy_scrolled = oy - self.world.panel_scroll;
         let mut changed = false;
@@ -1419,7 +1500,7 @@ impl Shell {
                 if let Some(panel) = self.cfg.panels.get(open_idx) {
                     let pw = panel_width(panel, w);
                     let (_, content_h) = layout_in(panel, pw, &self.world, &self.theme);
-                    let ph = content_h.min(max_panel_height(h));
+                    let ph = ph_of(panel, content_h, h);
                     let (ox, oy) = panel_origin(panel, w, h, pw, ph);
                     let px = x - ox;
                     let py = y - oy;
@@ -1443,7 +1524,7 @@ impl Shell {
                 if self.pointer_down {
                     let pw = panel_width(p, w);
                     let (rects, content_h) = layout_in(p, pw, &self.world, &self.theme);
-                    let ph = content_h.min(max_panel_height(h));
+                    let ph = ph_of(p, content_h, h);
                     let (ox, oy) = panel_origin(p, w, h, pw, ph);
                     let oy_scrolled = oy - self.world.panel_scroll;
                     let mut changed = false;
@@ -1504,6 +1585,13 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         .ok_or("--render needs WxH, e.g. 1920x1080")?;
     let mut cfg = Config::load();
     let th = theme::Theme::from_config(&cfg);
+    // the desktop's widgets: their one panel, the whole screen
+    if name == "widgets" {
+        cfg.panels = vec![cfg
+            .widgets
+            .clone()
+            .ok_or("no WIDGETS line with a placed widget")?];
+    }
     let is_ask = name == "ask";
     let panel_idx = if is_ask {
         None
@@ -1540,7 +1628,7 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
 
         let pw = panel_width(panel, w as f64);
         let (rects_init, content_h_init) = layout_in(panel, pw, &world, &th);
-        let ph_init = content_h_init.min(max_panel_height(h as f64));
+        let ph_init = ph_of(panel, content_h_init, h as f64);
         let (ox_init, oy_init) = panel_origin(panel, w as f64, h as f64, pw, ph_init);
 
         let mut edit_state = modules::edit::EditState {
@@ -1588,7 +1676,7 @@ fn render(name: &str, size: &str, out: &str) -> Result<(), String> {
         }
 
         let (rects, content_h) = layout_in(panel, pw, &world, &th);
-        let ph = content_h.min(max_panel_height(h as f64));
+        let ph = ph_of(panel, content_h, h as f64);
         let (ox, oy) = panel_origin(panel, w as f64, h as f64, pw, ph);
 
         if content_h > ph {
@@ -1776,6 +1864,90 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
+    fn widgets_shell(line: &str) -> Shell {
+        let mut s = Shell::from_config(Config::from_text(line));
+        s.desktop = true;
+        s.use_widgets();
+        s
+    }
+
+    #[test]
+    fn the_widgets_line_reads_and_writes_back() {
+        let c = Config::from_text(
+            "WIDGETS=\"clock:big@60,60,380x150 calendar@60,230,380x330 media wifi@500,40,180x46\"\n",
+        );
+        let w = c.widgets.expect("widgets");
+        assert!(w.desktop && w.placed);
+        // a widget without its place is left out
+        assert_eq!(
+            w.value(),
+            "clock:big@60,60,380x150 calendar@60,230,380x330 wifi@500,40,180x46"
+        );
+        assert!(Config::from_text("WIDGETS=\"\"\n").widgets.is_none());
+        assert!(Config::from_text("").widgets.is_none());
+    }
+
+    #[test]
+    fn widgets_are_the_whole_screen_and_their_region_is_the_widgets() {
+        let s = widgets_shell("WIDGETS=\"clock@60,60,380x150 calendar@60,230,380x330\"\n");
+        assert!(s.shows_widgets() && s.open == Some(0));
+        let p = &s.cfg.panels[0];
+        assert_eq!(panel_width(p, 1920.0), 1920.0);
+        assert_eq!(panel_origin(p, 1920.0, 1080.0, 1920.0, 1080.0), (0.0, 0.0));
+        assert_eq!(ph_of(p, 500.0, 1080.0), 1080.0);
+        let (rects, _) = layout_in(p, 1920.0, &s.world, &s.theme);
+        assert_eq!(
+            wayland::widget_region(&rects),
+            vec![(60, 60, 380, 150), (60, 230, 380, 330)]
+        );
+        // no line: nothing shown until editing starts
+        let mut none = widgets_shell("");
+        assert!(!none.shows_widgets());
+        assert!(none.edit_enter());
+        assert!(none.shows_widgets());
+    }
+
+    #[test]
+    fn a_click_reaches_the_widget_under_it_and_a_right_click_edits() {
+        let mut s = widgets_shell("WIDGETS=\"calendar@100,100,380x330\"\n");
+        let before = s.world.cal_month;
+        // the next-month arrow, at the calendar's top right
+        assert!(s.click(1920.0, 1080.0, 100.0 + 380.0 - 26.0, 100.0 + 26.0, 0x110));
+        assert_eq!(s.world.cal_month, before + 1);
+        assert!(!s.edit.active);
+        assert!(s.click(1920.0, 1080.0, 200.0, 300.0, 0x111));
+        assert!(s.edit.active);
+        // Escape ends editing; the widgets stay
+        assert!(s.close());
+        assert!(!s.edit.active && s.open == Some(0));
+    }
+
+    #[test]
+    fn done_writes_the_widgets_line() {
+        let p = Config::from_text("WIDGETS=\"clock@60,60,380x150\"\n")
+            .widgets
+            .unwrap();
+        let (backup, save) = modules::edit::save_panel_commands(&p, "clock@0,0,380x150");
+        assert!(
+            save.contains("k=\"WIDGETS\"") && save.contains("clock@60,60,380x150"),
+            "{save}"
+        );
+        assert!(backup.contains("WIDGETS="), "{backup}");
+    }
+
+    #[test]
+    fn the_widgets_clock_wakes_on_the_minute() {
+        use std::time::Duration;
+        assert_eq!(
+            wayland::until_next_minute(60_000 * 7 + 59_000),
+            Duration::from_millis(1_005)
+        );
+        assert_eq!(
+            wayland::until_next_minute(60_000 * 7),
+            Duration::from_millis(60_005)
+        );
+    }
+
     #[test]
     fn command_line_parses_into_actions() {
         let empty: &[&str] = &[];
@@ -1803,6 +1975,10 @@ mod tests {
         assert_eq!(parse_args(&["stop"]), Ok(Action::Stop));
         assert_eq!(parse_args(&["--print-panels"]), Ok(Action::PrintPanels));
         assert_eq!(parse_args(&["--print-theme"]), Ok(Action::PrintTheme));
+        assert_eq!(
+            parse_args(&["widgets"]),
+            Ok(Action::Panel(wayland::WIDGETS_REQUEST.into()))
+        );
         assert_eq!(
             parse_args(&["--render", "control", "1920x1080", "/tmp/out.png"]),
             Ok(Action::Render {

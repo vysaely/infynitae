@@ -617,6 +617,12 @@ PANELS_OVERLAP="false"
 # searches, Escape closes. (CONTROL_MODULES, the control panel's modules before 2026-11-07, still
 # reads.)
 
+#WIDGETS="clock:big@60,60,380x150 calendar@60,230,380x330 media@470,60,380x234"
+    # The same modules as widgets on the desktop, under the windows: each at its place (x,y,WxH
+    # in screen pixels). A right click on a widget (or infynitae-edge widgets) arranges them as a
+    # panel is arranged: move, resize, add, remove, Done. Unset: none, and nothing runs for them
+    # (the Rust edge only, EDGE_IMPL="rust") [save]
+
 # ═══ Lock & idle ═══════════════════════════════════════════════════════════════════ [save] ═══
 
 IDLE_SLEEP_TIMEOUT_MIN="15"

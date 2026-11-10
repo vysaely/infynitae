@@ -245,6 +245,20 @@ pub fn module_default_size(m: Module, pw: f64) -> (i32, i32) {
     (w, h)
 }
 
+/// A widget's size when added to the desktop: a card about a panel's width, tall enough for the
+/// module's larger look (the big clock, the month, the music card).
+pub fn widget_default_size(m: Module) -> (i32, i32) {
+    let (w, h) = module_default_size(m, 380.0);
+    let h = match m {
+        Module::Clock => 150,
+        Module::Calendar => 330,
+        Module::Media => 234,
+        Module::Notifications | Module::Memory | Module::System => 240,
+        _ => h,
+    };
+    (w, h)
+}
+
 /// Human name of a module shown on the Add menu.
 pub fn module_display_name(m: Module) -> &'static str {
     match m {
@@ -374,6 +388,13 @@ pub fn calculate_bar_rect(
     // under the panel; else over it; else (a panel as tall as the screen) beside it, on the side
     // with room, at the panel's top; always whole on the screen, where the pointer can reach it
     let total = bh + gh;
+    if panel.desktop {
+        // the desktop's widgets: the bar centred, near the screen's bottom, a panel's width
+        let bw = 520.0_f64.min(sw - 16.0);
+        let bx = ((sw - bw) / 2.0).max(8.0);
+        let by = (sh - 48.0 - bh - gh).max(8.0);
+        return (bx, by, bw, bh + gh);
+    }
     let mut by = oy + ph + 8.0;
     if by + total > sh - 8.0 {
         by = oy - 8.0 - total;
@@ -456,13 +477,15 @@ pub fn draw_edit_overlay(
     let (ox, oy) = origin;
     let dash = [4.0, 3.0];
 
-    // 1. Panel outline: dashed in accent
-    draw::round_rect(cr, ox + 0.5, oy + 0.5, pw - 1.0, ph - 1.0, th.corners);
-    draw::set(cr, th.accent);
-    cr.set_line_width(1.5);
-    cr.set_dash(&dash, 0.0);
-    let _ = cr.stroke();
-    cr.set_dash(&[], 0.0);
+    // 1. Panel outline: dashed in accent (the desktop's widgets have no panel around them)
+    if !panel.desktop {
+        draw::round_rect(cr, ox + 0.5, oy + 0.5, pw - 1.0, ph - 1.0, th.corners);
+        draw::set(cr, th.accent);
+        cr.set_line_width(1.5);
+        cr.set_dash(&dash, 0.0);
+        let _ = cr.stroke();
+        cr.set_dash(&[], 0.0);
+    }
 
     // 2. Each module's outline
     for (i, it) in panel.items.iter().enumerate() {
@@ -662,17 +685,23 @@ pub fn format_config_update(config_text: &str, panel: &Panel) -> String {
 pub fn save_panel_commands(panel: &Panel, before_val: &str) -> (String, String) {
     let name_up = panel.name.to_ascii_uppercase();
     let val = panel.value();
+    // the desktop's widgets are the WIDGETS line, the panels PANEL_<NAME>
+    let key = if panel.desktop {
+        "WIDGETS".to_string()
+    } else {
+        format!("PANEL_{name_up}")
+    };
 
     let backup_cmd = format!(
         "d=\"$HOME/.config/infynitae\"; [ -d \"$d\" ] || exit 0; \
-         printf '%s PANEL_{}=\"{}\"\\n' \"$(date '+%F %T')\" >> \"$d/panels.backup\"",
-        name_up, before_val
+         printf '%s {}=\"{}\"\\n' \"$(date '+%F %T')\" >> \"$d/panels.backup\"",
+        key, before_val
     );
 
     let save_cmd = format!(
         "f=\"$HOME/.config/infynitae/config\"; [ -f \"$f\" ] || exit 0; \
          case \"{name_up}{val}\" in *[!A-Za-z0-9+:_@,\\ ]*) exit 0;; esac; \
-         awk -v k=\"PANEL_{name_up}\" -v v=\"{val}\" 'BEGIN{{d=0}} index($0, k \"=\")==1{{print k \"=\\\"\" v \"\\\"\"; d=1; next}} {{print}} \
+         awk -v k=\"{key}\" -v v=\"{val}\" 'BEGIN{{d=0}} index($0, k \"=\")==1{{print k \"=\\\"\" v \"\\\"\"; d=1; next}} {{print}} \
          END{{if(!d) print k \"=\\\"\" v \"\\\"\"}}' \"$f\" > \"$f.tmp.$$\" && mv -f \"$f.tmp.$$\" \"$f\""
     );
 
@@ -732,6 +761,7 @@ mod tests {
                 },
             ],
             placed: true,
+            desktop: false,
         };
 
         // Moving Volume near y=54 (the clock's bottom at 8 + 34, and the gap of 12)
@@ -770,6 +800,7 @@ mod tests {
                 },
             ],
             placed: true,
+            desktop: false,
         };
 
         // (8, 20) overlaps Clock (8, 8, 344, 34)
@@ -804,6 +835,7 @@ mod tests {
                 },
             ],
             placed: true,
+            desktop: false,
         };
 
         let config = "EDGE_POSITION=\"top\"\nPANEL_CONTROL=\"old\"\nFAVORITES=\"app\"\n";

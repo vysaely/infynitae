@@ -249,6 +249,16 @@ impl World {
         w
     }
 
+    /// The clock to the current time; true when the shown minute changed (the widgets redraw on
+    /// the minute, nothing more often).
+    pub fn tick_clock(&mut self) -> bool {
+        let n = current_time();
+        let changed =
+            n.format("%Y%m%d%H%M").to_string() != self.now.format("%Y%m%d%H%M").to_string();
+        self.now = n;
+        changed
+    }
+
     /// Updates the clock when a panel opens while keeping the last fetched module data.
     pub fn on_open(&mut self) {
         self.now = current_time();
@@ -795,6 +805,42 @@ pub fn dump_boxes(
     }
     if let Some((x, y, w, h)) = child {
         out += &format!("child {x:.0} {y:.0} {w:.0} {h:.0}\n");
+    }
+    let _ = std::fs::write(path, out);
+}
+
+/// INFYNITAE_EDGE_BOXES=FILE: the desktop's widgets in FILE.widgets: `widgets W H
+/// editing|locked`, each widget's `module NAME x y w h`, the edit bar's `bar x y w h`.
+pub fn dump_widget_boxes(
+    panel: &crate::config::Panel,
+    rects: &[Rect],
+    screen: (f64, f64),
+    bar: Option<Rect>,
+) {
+    let Some(mut path) = std::env::var_os("INFYNITAE_EDGE_BOXES").filter(|p| !p.is_empty()) else {
+        return;
+    };
+    path.push(".widgets");
+    let mut out = format!(
+        "widgets {:.0} {:.0} {}\n",
+        screen.0,
+        screen.1,
+        if bar.is_some() { "editing" } else { "locked" }
+    );
+    for (it, r) in panel.items.iter().zip(rects) {
+        if r.2 > 0.0 && r.3 > 0.0 {
+            out += &format!(
+                "module {} {:.0} {:.0} {:.0} {:.0}\n",
+                it.module.word(),
+                r.0,
+                r.1,
+                r.2,
+                r.3
+            );
+        }
+    }
+    if let Some((x, y, w, h)) = bar {
+        out += &format!("bar {x:.0} {y:.0} {w:.0} {h:.0}\n");
     }
     let _ = std::fs::write(path, out);
 }
