@@ -89,19 +89,37 @@ fn a_window_placed_outside_a_full_view_is_brought_into_it() {
     );
 }
 
-/// A second window beside a centred first one reaches a little past the screen's edge: it stays
-/// there, beside the first, rather than being pulled over it.
+/// A window already in view is left where it is.
 #[test]
-fn a_window_mostly_in_view_stays_beside_the_others() {
+fn a_window_in_view_stays() {
     let mut r = cluster();
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
+    let before = rect(&r, w);
+    bring(&mut r, w);
+    assert_eq!(rect(&r, w), before);
+}
+
+/// A second window that the placement put mostly under the first (beside it, out of the view) is
+/// brought into the view where it covers the first the least: at a side, not over its middle.
+#[test]
+fn a_window_brought_into_view_covers_as_little_as_it_can() {
+    let mut r = cluster();
+    let w = *r.ls.state.core().stage().mapped_elements().last().unwrap();
     let b = open(&mut r, "B", (800, 600));
-    let before = rect(&r, b);
+    let v = view(&r);
     assert!(
-        seen(before, view(&r)) >= 0.6,
-        "the setup: B {before:?} is mostly in view"
+        seen(rect(&r, b), v) < 0.6,
+        "the setup: B {:?} is mostly out of view",
+        rect(&r, b)
     );
     bring(&mut r, b);
-    assert_eq!(rect(&r, b), before, "B stayed where it was");
+    let (rb, rw) = (rect(&r, b), rect(&r, w));
+    assert!(seen(rb, v) > 0.99, "B {rb:?} is in the view {v:?}");
+    let over = (rb.2.min(rw.2) - rb.0.max(rw.0)).max(0) * (rb.3.min(rw.3) - rb.1.max(rw.1)).max(0);
+    assert!(
+        (over as f64) < 0.25 * (800.0 * 600.0),
+        "B {rb:?} covers too much of W {rw:?}"
+    );
 }
 
 /// A window larger than the view is brought to the view's top left corner (its title bar and

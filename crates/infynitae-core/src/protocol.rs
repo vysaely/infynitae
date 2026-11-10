@@ -1890,10 +1890,37 @@ impl Core {
                 p.clamp(lo, hi - s)
             }
         };
-        let to = CanvasPoint {
-            x: fit(at.x, x0, x1, w),
-            y: fit(at.y, y0, y1, h),
+        // the nearest spot in the view, and the view's corners and edges: the one covering the
+        // other windows least (the nearest of those that tie)
+        let others = self.window_rects_except(id);
+        let covered = |x: i64, y: i64| -> i64 {
+            others
+                .iter()
+                .map(|&(ox0, oy0, ox1, oy1)| {
+                    ((x + w).min(ox1) - x.max(ox0)).max(0) * ((y + h).min(oy1) - y.max(oy0)).max(0)
+                })
+                .sum()
         };
+        let (cx, cy) = ((x0 + x1 - w) / 2, (y0 + y1 - h) / 2);
+        let to = [
+            (at.x, at.y),
+            (x0, y0),
+            (x1 - w, y0),
+            (x0, y1 - h),
+            (x1 - w, y1 - h),
+            (cx, y0),
+            (cx, y1 - h),
+            (x0, cy),
+            (x1 - w, cy),
+        ]
+        .into_iter()
+        .map(|(x, y)| (fit(x, x0, x1, w), fit(y, y0, y1, h)))
+        .min_by_key(|&(x, y)| {
+            let (dx, dy) = ((x - at.x) as i128, (y - at.y) as i128);
+            (covered(x, y), dx * dx + dy * dy)
+        })
+        .map(|(x, y)| CanvasPoint { x, y })
+        .unwrap_or(at);
         if to != at && self.stage.place(id, to).is_ok() {
             self.invalidate_all_frames();
         }
