@@ -225,45 +225,56 @@ impl Panel {
         if p.desktop || !p.placed {
             return p;
         }
-        let pw = p.width.max(1);
-        let mut order: Vec<(i32, i32, usize)> = p
+        // the width the line was arranged at (a line without one: the panels' default)
+        let pw = if p.width > 0 { p.width } else { 380 };
+        // rows first (modules whose tops are within half the smaller height), then left to
+        // right in each: a right module a few pixels higher stays the right half
+        let mut placed: Vec<Item> = p
             .items
             .iter()
-            .enumerate()
-            .map(|(i, it)| match it.rect {
-                Some((x, y, _, _)) => (y, x, i),
-                None => (i32::MAX, 0, i),
-            })
+            .filter(|i| i.rect.is_some())
+            .cloned()
             .collect();
-        order.sort();
-        let items: Vec<Item> = order.iter().map(|&(_, _, i)| p.items[i].clone()).collect();
-        let narrow = |it: &Item| it.rect.is_some_and(|r| r.2 * 10 < pw * 6);
-        let row = |a: &Item, b: &Item| match (a.rect, b.rect) {
+        let unplaced: Vec<Item> = p
+            .items
+            .iter()
+            .filter(|i| i.rect.is_none())
+            .cloned()
+            .collect();
+        placed.sort_by_key(|i| i.rect.map(|r| (r.1, r.0)));
+        let same_row = |a: &Item, b: &Item| match (a.rect, b.rect) {
             (Some(ra), Some(rb)) => (ra.1 - rb.1).abs() * 2 < ra.3.min(rb.3),
             _ => false,
         };
-        let mut out: Vec<Item> = Vec::with_capacity(items.len());
-        let mut i = 0;
-        while i < items.len() {
-            let a = &items[i];
-            let pair = i + 1 < items.len()
-                && !a.module.is_switch()
-                && !items[i + 1].module.is_switch()
-                && narrow(a)
-                && narrow(&items[i + 1])
-                && row(a, &items[i + 1]);
-            for (k, it) in items[i..if pair { i + 2 } else { i + 1 }]
-                .iter()
-                .enumerate()
-            {
-                let _ = k;
-                let mut it = it.clone();
-                it.rect = None;
-                it.half = pair;
-                out.push(it);
+        let mut rows: Vec<Vec<Item>> = Vec::new();
+        for it in placed {
+            match rows.last_mut() {
+                Some(row) if same_row(&row[0], &it) => row.push(it),
+                _ => rows.push(vec![it]),
             }
-            i += if pair { 2 } else { 1 };
         }
+        let narrow = |it: &Item| it.rect.is_some_and(|r| r.2 * 10 < pw * 6);
+        let mut out: Vec<Item> = Vec::with_capacity(p.items.len());
+        for mut row in rows {
+            row.sort_by_key(|i| i.rect.map(|r| r.0));
+            let mut k = 0;
+            while k < row.len() {
+                let pair = k + 1 < row.len()
+                    && !row[k].module.is_switch()
+                    && !row[k + 1].module.is_switch()
+                    && narrow(&row[k])
+                    && narrow(&row[k + 1]);
+                let n = if pair { 2 } else { 1 };
+                for it in &row[k..k + n] {
+                    let mut it = it.clone();
+                    it.rect = None;
+                    it.half = pair;
+                    out.push(it);
+                }
+                k += n;
+            }
+        }
+        out.extend(unplaced);
         p.items = out;
         p.placed = false;
         p.height = 0;
@@ -380,7 +391,7 @@ impl Panel {
                     let (names, _) = m.looks();
                     let look =
                         look.and_then(|l| names.iter().position(|n| n.eq_ignore_ascii_case(l)));
-                    let half = at.is_some_and(|a| a.eq_ignore_ascii_case("half"));
+                    let half = !m.is_switch() && at.is_some_and(|a| a.eq_ignore_ascii_case("half"));
                     let rect = at
                         .and_then(parse_rect)
                         .filter(|&(_, _, w, h)| w >= 24 && h >= 20);

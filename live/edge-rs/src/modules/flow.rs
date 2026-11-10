@@ -134,6 +134,43 @@ pub fn add_module(p: &mut Panel, m: Module) {
     p.items.push(it);
 }
 
+/// Half width on or off for module `i`. A half needs a half beside it, so turning a lone card
+/// half also makes the next card (or else the one before) half: the change shows at once.
+/// Turning it off turns its partner off too.
+pub fn toggle_half(p: &mut Panel, i: usize) {
+    let Some(it) = p.items.get(i) else { return };
+    if it.module.is_switch() {
+        return;
+    }
+    let on = !it.half;
+    let card = |p: &Panel, k: usize| p.items.get(k).is_some_and(|x| !x.module.is_switch());
+    // its partner: the halves pair up in order, so count the halves before it
+    let halves_before = p.items[..i]
+        .iter()
+        .rev()
+        .take_while(|x| x.half && !x.module.is_switch())
+        .count();
+    let partner = if halves_before % 2 == 1 {
+        Some(i - 1)
+    } else if card(p, i + 1) && p.items[i + 1].half {
+        Some(i + 1)
+    } else {
+        None
+    };
+    p.items[i].half = on;
+    if on {
+        if partner.is_none() {
+            if card(p, i + 1) {
+                p.items[i + 1].half = true;
+            } else if i > 0 && card(p, i - 1) {
+                p.items[i - 1].half = true;
+            }
+        }
+    } else if let Some(k) = partner {
+        p.items[k].half = false;
+    }
+}
+
 /// The next look of module `i` (its looks in turn; the first after the last).
 pub fn next_look(p: &mut Panel, i: usize) {
     let Some(it) = p.items.get_mut(i) else {
@@ -366,6 +403,11 @@ pub fn add_rows(bar: Rect, choices: &[Module]) -> Vec<(Module, Rect)> {
         .collect()
 }
 
+/// Whether two rectangles share any area.
+pub fn overlaps(a: Rect, b: Rect) -> bool {
+    a.0 < b.0 + b.2 && b.0 < a.0 + a.2 && a.1 < b.1 + b.3 && b.1 < a.1 + a.3
+}
+
 fn inside(r: Rect, x: f64, y: f64) -> bool {
     x >= r.0 && x <= r.0 + r.2 && y >= r.1 && y <= r.1 + r.3
 }
@@ -461,10 +503,16 @@ pub fn draw_overlay(
     rects: &[Rect],
     world: &crate::modules::World,
     origin: (f64, f64),
-    pw: f64,
+    size: (f64, f64),
     state: &EditState,
 ) {
+    let (pw, ph) = size;
     let (ox, oy) = (origin.0, origin.1 - world.panel_scroll);
+    // the cards' marks stay inside the panel (a scrolled panel clips its cards; marks drawn
+    // outside it were left on the screen)
+    let _ = cr.save();
+    cr.rectangle(origin.0 - 2.0, origin.1 - 2.0, pw + 4.0, ph + 4.0);
+    cr.clip();
     let brects = block_rects(panel, rects, world, th, pw);
     let bs = blocks(panel);
     let dragging = state.flow_drag.is_some_and(|d| d.moved);
@@ -574,6 +622,9 @@ pub fn draw_overlay(
             if first.module.is_switch() {
                 for i in bs[b].clone() {
                     if let Some(&cell) = rects.get(i).filter(|c| c.2 > 0.0 && c.3 > 0.0) {
+                        if overlaps(switch_x(cell), strip) {
+                            continue;
+                        }
                         let x = switch_x(cell);
                         let x = (ox + x.0, oy + x.1, x.2, x.3);
                         draw::round_rect(cr, x.0, x.1, x.2, x.3, 9.0);
@@ -595,10 +646,13 @@ pub fn draw_overlay(
                 .map(|(_, r)| r.1 + r.3 + GAP / 2.0)
                 .unwrap_or(0.0),
         };
-        draw::round_rect(cr, ox + 4.0, oy + y - 1.5, pw - 8.0, 3.0, 1.5);
+        let y = (oy + y).clamp(origin.1 + 1.0, origin.1 + ph - 2.0);
+        draw::round_rect(cr, ox + 4.0, y - 1.5, pw - 8.0, 3.0, 1.5);
         draw::set(cr, th.accent);
         let _ = cr.fill();
     }
+
+    let _ = cr.restore();
 
     // the bar
     let bar = state.bar_rect;
@@ -776,6 +830,21 @@ mod tests {
         let p = panel("top right 380 clock@half system@half volume");
         assert_eq!(words(&p), "clock@half system@half volume");
         assert!(p.value().ends_with("clock@half system@half volume"));
+    }
+
+    #[test]
+    fn half_on_a_lone_card_pairs_it_and_off_unpairs_both() {
+        let mut p = panel("clock volume system session");
+        toggle_half(&mut p, 0);
+        assert_eq!(words(&p), "clock@half volume@half system session");
+        toggle_half(&mut p, 1);
+        assert_eq!(words(&p), "clock volume system session");
+        toggle_half(&mut p, 3);
+        assert_eq!(
+            words(&p),
+            "clock volume system@half session@half",
+            "the last pairs back"
+        );
     }
 
     #[test]

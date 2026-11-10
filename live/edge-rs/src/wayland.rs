@@ -586,7 +586,7 @@ impl OutputSurface {
                             &rects,
                             &shell.world,
                             (ox, oy),
-                            pw,
+                            (pw, ph),
                             &shell.edit,
                         );
                     } else if shell.edit.active {
@@ -798,6 +798,8 @@ impl App {
         if self.widgets.edit.active && self.shell.edit.active {
             self.shell.edit_exit();
         }
+        // the edit bar follows the panel's content (music started, a notification came)
+        self.shell.refresh_bar();
 
         if self.shell.open != self.prev_open {
             self.prev_open = self.shell.open;
