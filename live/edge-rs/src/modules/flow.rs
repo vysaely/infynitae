@@ -312,24 +312,48 @@ pub enum BarButton {
     Add,
     Narrower,
     Wider,
+    Edge,
     Hover,
     Cancel,
     Done,
 }
 
-const BAR_BUTTONS: [(BarButton, f64); 8] = [
+pub const BAR_BUTTONS: [(BarButton, f64); 9] = [
     (BarButton::Undo, 1.0),
     (BarButton::Reset, 1.0),
     (BarButton::Add, 0.9),
-    (BarButton::Narrower, 0.55),
-    (BarButton::Wider, 0.55),
-    (BarButton::Hover, 1.15),
+    (BarButton::Narrower, 0.5),
+    (BarButton::Wider, 0.5),
+    (BarButton::Edge, 1.05),
+    (BarButton::Hover, 1.0),
     (BarButton::Cancel, 1.1),
     (BarButton::Done, 1.0),
 ];
 
+/// The next screen edge for the Edge button: top, right, bottom, left, round.
+pub fn next_side(s: crate::config::Side) -> crate::config::Side {
+    use crate::config::Side::*;
+    match s {
+        Top => Right,
+        Right => Bottom,
+        Bottom => Left,
+        Left => Top,
+    }
+}
+
+/// Whether Reset has a default to go back to (the four built-in panels; a panel of your own
+/// has none).
+pub fn has_default(p: &Panel) -> bool {
+    matches!(
+        p.name.as_str(),
+        "control" | "apps" | "windows" | "clipboard"
+    )
+}
+
 /// The bar's rectangle on the screen: beside the panel where there is room (above it, below
-/// it, to its inner side), never over the screen's edge; taller while adding.
+/// it, to its inner side), never over the screen's edge. It is placed as it is closed; while
+/// adding, Add's list hangs under its buttons as far as the screen goes (it scrolls for the
+/// rest), so opening Add never moves the buttons.
 pub fn bar_rect(
     origin: (f64, f64),
     pw: f64,
@@ -340,31 +364,36 @@ pub fn bar_rect(
     let (ox, oy) = origin;
     let (sw, sh) = screen;
     let bw = pw.max(380.0).min(sw - 16.0);
-    let bh = BAR_H
-        + if adding_rows > 0 {
-            6.0 + adding_rows as f64 * ADD_ROW_H
-        } else {
-            0.0
-        };
-    let bh = bh.min(sh - 16.0);
+    let bh = BAR_H;
     let clamp_x = |x: f64| x.clamp(8.0, (sw - bw - 8.0).max(8.0));
     let clamp_y = |y: f64| y.clamp(8.0, (sh - bh - 8.0).max(8.0));
-    // above, below
-    if oy - bh - 8.0 >= 8.0 {
-        return (clamp_x(ox + pw - bw), oy - bh - 8.0, bw, bh);
-    }
-    if oy + ph + 8.0 + bh <= sh - 8.0 {
-        return (clamp_x(ox + pw - bw), oy + ph + 8.0, bw, bh);
-    }
-    // beside, on the side with room (the inner side of a panel at an edge)
-    let y = clamp_y(oy);
-    if ox - bw - 8.0 >= 8.0 {
-        return (ox - bw - 8.0, y, bw, bh);
-    }
-    if ox + pw + 8.0 + bw <= sw - 8.0 {
-        return (ox + pw + 8.0, y, bw, bh);
-    }
-    (clamp_x(ox), clamp_y(oy), bw, bh)
+    // above the panel (Add's list then hangs over it), below it only with room for six of
+    // Add's rows, else beside it, where the screen's height is free (a tall panel left a strip
+    // under it that showed three rows)
+    let room = bh + 6.0 + 6.0 * ADD_ROW_H;
+    let (x, y) = if oy - bh - 8.0 >= 8.0 {
+        (clamp_x(ox + pw - bw), oy - bh - 8.0)
+    } else if oy + ph + 8.0 + room <= sh - 8.0 {
+        (clamp_x(ox + pw - bw), oy + ph + 8.0)
+    } else if ox - bw - 8.0 >= 8.0 {
+        (ox - bw - 8.0, clamp_y(oy))
+    } else if ox + pw + 8.0 + bw <= sw - 8.0 {
+        (ox + pw + 8.0, clamp_y(oy))
+    } else {
+        (clamp_x(ox), clamp_y(oy))
+    };
+    let list = if adding_rows > 0 {
+        let room = ((sh - 8.0 - y - BAR_H - 6.0) / ADD_ROW_H).floor().max(1.0) as usize;
+        6.0 + adding_rows.min(room) as f64 * ADD_ROW_H
+    } else {
+        0.0
+    };
+    (x, y, bw, BAR_H + list)
+}
+
+/// How many of Add's rows the bar shows at once.
+pub fn add_rows_shown(bar: Rect) -> usize {
+    ((bar.3 - BAR_H - 6.0).max(0.0) / ADD_ROW_H).round() as usize
 }
 
 /// The bar's buttons with their rectangles on the screen.
@@ -384,9 +413,10 @@ pub fn bar_buttons(bar: Rect) -> Vec<(BarButton, Rect)> {
 }
 
 /// Add's rows under the bar: each module the panel can take, with its rectangle on the screen.
-pub fn add_rows(bar: Rect, choices: &[Module]) -> Vec<(Module, Rect)> {
+pub fn add_rows(bar: Rect, choices: &[Module], scroll: usize) -> Vec<(Module, Rect)> {
     choices
         .iter()
+        .skip(scroll)
         .enumerate()
         .map(|(k, &m)| {
             (
@@ -413,7 +443,14 @@ fn inside(r: Rect, x: f64, y: f64) -> bool {
 }
 
 /// What a press at `(x, y)` on the screen hits in the bar.
-pub fn bar_hit(bar: Rect, choices: &[Module], adding: bool, x: f64, y: f64) -> Option<BarHit> {
+pub fn bar_hit(
+    bar: Rect,
+    choices: &[Module],
+    adding: bool,
+    scroll: usize,
+    x: f64,
+    y: f64,
+) -> Option<BarHit> {
     if !inside(bar, x, y) {
         return None;
     }
@@ -423,7 +460,7 @@ pub fn bar_hit(bar: Rect, choices: &[Module], adding: bool, x: f64, y: f64) -> O
         }
     }
     if adding {
-        for (m, r) in add_rows(bar, choices) {
+        for (m, r) in add_rows(bar, choices, scroll) {
             if inside(r, x, y) {
                 return Some(BarHit::Add(m));
             }
@@ -585,18 +622,22 @@ pub fn draw_overlay(
                 .last()
                 .map(|(_, r)| r.0 - 6.0)
                 .unwrap_or(strip.0 + strip.2 - 6.0);
-            draw::text_max(
-                cr,
-                ox + strip.0 + 22.0,
-                oy + strip.1 + (strip.3 - 13.0) / 2.0 - 1.0,
-                (name_right - strip.0 - 22.0).max(10.0),
-                &Text {
-                    size: 12.0,
-                    bold: true,
-                    color: th.text,
-                    text: name,
-                },
-            );
+            // the name where it fits whole enough to read; on a half card the grip alone
+            let name_room = name_right - strip.0 - 22.0;
+            if name_room >= 48.0 {
+                draw::text_max(
+                    cr,
+                    ox + strip.0 + 22.0,
+                    oy + strip.1 + (strip.3 - 13.0) / 2.0 - 1.0,
+                    name_room,
+                    &Text {
+                        size: 12.0,
+                        bold: true,
+                        color: th.text,
+                        text: name,
+                    },
+                );
+            }
             let it = &panel.items[bs[b].start];
             for (k, r) in buttons {
                 let r = (ox + r.0, oy + r.1, r.2, r.3);
@@ -680,17 +721,24 @@ pub fn draw_overlay(
                 },
                 state.confirm_reset,
                 false,
-                true,
+                has_default(panel),
             ),
             BarButton::Add => ("Add", state.adding, false, true),
             BarButton::Narrower => ("-", false, false, true),
             BarButton::Wider => ("+", false, false, true),
-            BarButton::Hover => (
-                if panel.hover { "Hover on" } else { "Hover off" },
-                panel.hover,
+            BarButton::Edge => (
+                match panel.side {
+                    crate::config::Side::Top => "Top",
+                    crate::config::Side::Right => "Right",
+                    crate::config::Side::Bottom => "Bottom",
+                    crate::config::Side::Left => "Left",
+                },
+                false,
                 false,
                 true,
             ),
+            // on: lit (a touch of the screen edge opens it)
+            BarButton::Hover => ("Hover", panel.hover, false, true),
             BarButton::Cancel => ("Cancel", false, false, true),
             BarButton::Done => ("Done", false, true, true),
         };
@@ -719,7 +767,7 @@ pub fn draw_overlay(
                 },
             );
         }
-        for (m, r) in add_rows(bar, &choices) {
+        for (m, r) in add_rows(bar, &choices, state.add_scroll) {
             draw::round_rect(cr, r.0, r.1, r.2, r.3, th.small_radius());
             draw::set(cr, th.text.alpha(0.05));
             let _ = cr.fill();
@@ -882,15 +930,36 @@ mod tests {
             "{bar:?} left of the panel"
         );
         assert!(bar.1 >= 8.0 && bar.1 + bar.3 <= 1072.0);
+        // opening Add does not move the buttons: the list hangs under them
+        let closed = bar_rect((1532.0, 600.0), 380.0, 472.0, (1920.0, 1080.0), 0);
         let bar = bar_rect((1532.0, 600.0), 380.0, 472.0, (1920.0, 1080.0), 3);
+        assert_eq!((bar.0, bar.1), (closed.0, closed.1), "the buttons stay");
         assert!(
-            bar.1 + bar.3 <= 600.0 - 8.0 + 0.5,
-            "{bar:?} above the panel"
+            closed.1 + closed.3 <= 600.0 - 8.0 + 0.5,
+            "{closed:?} above the panel"
         );
         assert_eq!(
-            add_rows(bar, &[Module::Calendar, Module::Memory, Module::System]).len(),
+            add_rows(bar, &[Module::Calendar, Module::Memory, Module::System], 0).len(),
             3
         );
+        // a short screen: as many rows as fit, the rest by scrolling
+        let short = bar_rect((1532.0, 8.0), 380.0, 400.0, (1920.0, 600.0), 20);
+        assert!(short.1 + short.3 <= 600.0);
+        let shown = add_rows_shown(short);
+        assert!(shown > 0 && shown < 20);
+        let all: Vec<Module> = crate::modules::edit::addable(&panel("clock"))
+            .into_iter()
+            .collect();
+        let first = add_rows(short, &all, 0)[0].0;
+        assert_ne!(add_rows(short, &all, 1)[0].0, first, "scrolled one row");
+    }
+
+    #[test]
+    fn the_edge_button_goes_round_and_reset_needs_a_default() {
+        use crate::config::Side::*;
+        assert_eq!(next_side(Top), Right);
+        assert_eq!(next_side(Left), Top);
+        assert!(!has_default(&panel("clock")), "a panel of your own");
     }
 
     #[test]

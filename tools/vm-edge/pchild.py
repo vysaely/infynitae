@@ -1,5 +1,14 @@
 import sys, os
-exec(open("/home/tester/g/pcanvas.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d;")[0])
+exec(open("/home/tester/pflow.py").read().split("sh(f\"sed -i '/^PANEL_CONTROL=/d' {CFG}; rm -f {BACKUP}\")")[0])
+def centre(r): return r[0] + r[2] / 2, r[1] + r[3] / 2
+def boxes():
+    wait(0.3)
+    d = {"modules": {}}
+    for l in open(BOX):
+        w = l.split()
+        if w[0] == "panel": d["panel"] = list(map(float, w[2:6])); d["state"] = w[6]
+        elif w[0] == "module": d["modules"][w[1]] = list(map(float, w[2:6]))
+    return d
 def child():
     for l in open(BOX):
         w = l.split()

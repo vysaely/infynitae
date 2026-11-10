@@ -26,7 +26,7 @@ def drag(x, y, dx, dy):
 def restart_edge():
     sh("pkill -x infynitae-edge; true"); wait(1.0); run_bg(f"INFYNITAE_EDGE_BOXES={BOX} infynitae-edge"); wait(2.0)
 # the bar's buttons: Undo Reset Add - + Hover Cancel Done, weighted as flow::BAR_BUTTONS
-W = [("undo", 1.0), ("reset", 1.0), ("add", 0.9), ("narrower", 0.55), ("wider", 0.55), ("hover", 1.15), ("cancel", 1.1), ("done", 1.0)]
+W = [("undo", 1.0), ("reset", 1.0), ("add", 0.9), ("narrower", 0.5), ("wider", 0.5), ("edge", 1.05), ("hover", 1.0), ("cancel", 1.1), ("done", 1.0)]
 def bar_button(name):
     b = boxes()["bar"]; inner = b[2] - 10 - 4 * (len(W) - 1); tot = sum(u for _, u in W); x = b[0] + 5
     for k, u in W:
