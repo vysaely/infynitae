@@ -115,6 +115,35 @@ impl Theme {
         }
     }
 
+    /// The resolved look as shell lines (`--print-theme`), for everything else Infynitae draws or
+    /// configures (GTK, mako, fuzzel, the lock screen, the C helpers): one place decides the look
+    /// (docs/EDGE_RUST.md stage 7). Colours as #rrggbb, their opacity as two hex digits.
+    pub fn shell_lines(&self) -> String {
+        let hex = |c: Rgba| {
+            let b = |v: f64| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
+            format!("#{:02x}{:02x}{:02x}", b(c.0), b(c.1), b(c.2))
+        };
+        let aa = |c: Rgba| format!("{:02x}", (c.3.clamp(0.0, 1.0) * 255.0).round() as u8);
+        let mut out = String::new();
+        for (name, c) in [
+            ("CARD", self.card),
+            ("EDGE", self.edge),
+            ("TEXT", self.text),
+            ("MUTED", self.muted),
+            ("ACCENT", self.accent),
+            ("ON_ACCENT", self.on_accent),
+            ("TRACK", self.track),
+        ] {
+            out += &format!("LOOK_{name}=\"{}\"\nLOOK_{name}_AA=\"{}\"\n", hex(c), aa(c));
+        }
+        out += &format!(
+            "LOOK_CORNERS=\"{}\"\nLOOK_SMALL_RADIUS=\"{}\"\n",
+            self.corners.round() as i64,
+            self.small_radius() as i64
+        );
+        out
+    }
+
     /// a small element's radius (buttons, art), from the cards' corners
     pub fn small_radius(&self) -> f64 {
         (self.corners * 0.55).round()
@@ -124,6 +153,24 @@ impl Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_look_prints_as_shell_lines() {
+        let c = Config::from_text(
+            "SURFACE_COLOR=\"#171013\"\nTEXT_COLOR=\"#ffffff\"\nBORDER_ACTIVE=\"#cc70a9\"\nCORNERS=\"12\"\nCARD_OPACITY=\"80\"\n",
+        );
+        let out = Theme::from_config(&c).shell_lines();
+        assert!(
+            out.contains("LOOK_CARD=\"#171013\"\nLOOK_CARD_AA=\"cc\"\n"),
+            "{out}"
+        );
+        assert!(out.contains("LOOK_ACCENT=\"#cc70a9\"\n"), "{out}");
+        assert!(
+            out.contains("LOOK_CORNERS=\"12\"\nLOOK_SMALL_RADIUS=\"7\"\n"),
+            "{out}"
+        );
+        assert_eq!(out.lines().count(), 16);
+    }
 
     #[test]
     fn yours_takes_the_system_colours_as_they_are() {

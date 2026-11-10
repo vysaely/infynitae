@@ -5,6 +5,7 @@
 //!   infynitae-edge-rs control | apps | clipboard | toggle | center | open
 //!   infynitae-edge-rs stop                      stop the running edge
 //!   infynitae-edge-rs --print-panels            each panel as its PANEL_ line (as the C edge prints)
+//!   infynitae-edge-rs --print-theme             the resolved look as LOOK_* shell lines (stage 7)
 //!   infynitae-edge-rs --render NAME WxH OUT.png a panel open on a WxH screen, drawn to a PNG
 //!
 //! INFYNITAE_EDGE_RENDER_TIME="2026-11-09 17:23" fixes the clock for --render.
@@ -208,6 +209,7 @@ pub enum Action {
     Panel(String),
     Stop,
     PrintPanels,
+    PrintTheme,
     Render {
         name: String,
         size: String,
@@ -221,6 +223,7 @@ pub fn parse_args<S: AsRef<str>>(args: &[S]) -> Result<Action, String> {
     match a.as_slice() {
         [] => Ok(Action::Run),
         ["--print-panels"] => Ok(Action::PrintPanels),
+        ["--print-theme"] => Ok(Action::PrintTheme),
         ["--render", name, size, out] => Ok(Action::Render {
             name: (*name).to_string(),
             size: (*size).to_string(),
@@ -234,7 +237,7 @@ pub fn parse_args<S: AsRef<str>>(args: &[S]) -> Result<Action, String> {
         ["clipboard", ..] => Ok(Action::Panel("clipboard".to_string())),
         ["toggle" | "center" | "open", ..] => Ok(Action::Panel("windows".to_string())),
         _ => Err(
-            "usage: infynitae-edge-rs [panel NAME | control | apps | clipboard | toggle | stop | --print-panels | --render NAME WxH OUT.png]"
+            "usage: infynitae-edge-rs [panel NAME | control | apps | clipboard | toggle | stop | --print-panels | --print-theme | --render NAME WxH OUT.png]"
                 .to_string(),
         ),
     }
@@ -1724,6 +1727,13 @@ fn main() -> ExitCode {
             }
             ExitCode::SUCCESS
         }
+        Ok(Action::PrintTheme) => {
+            print!(
+                "{}",
+                theme::Theme::from_config(&Config::load()).shell_lines()
+            );
+            ExitCode::SUCCESS
+        }
         Ok(Action::Render { name, size, out }) => match render(&name, &size, &out) {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
@@ -1792,6 +1802,7 @@ mod tests {
         }
         assert_eq!(parse_args(&["stop"]), Ok(Action::Stop));
         assert_eq!(parse_args(&["--print-panels"]), Ok(Action::PrintPanels));
+        assert_eq!(parse_args(&["--print-theme"]), Ok(Action::PrintTheme));
         assert_eq!(
             parse_args(&["--render", "control", "1920x1080", "/tmp/out.png"]),
             Ok(Action::Render {

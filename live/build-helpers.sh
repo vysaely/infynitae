@@ -47,11 +47,30 @@ build infynitae-lock "wayland-client cairo pangocairo xkbcommon pam" \
 build infynitae-wallpaper "wayland-client cairo gdk-pixbuf-2.0" \
     "$LIVE/wallpaper/infynitae-wallpaper.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
     "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/wallpaper/viewporter-protocol.c" -- -lm
-build infynitae-edge "wayland-client cairo pangocairo xkbcommon gio-2.0" \
+# the edge: the C one as infynitae-edge-c, the Rust one (live/edge-rs) as infynitae-edge-rs, and
+# infynitae-edge pointing at the one EDGE_IMPL names (live/edge-pick, after both)
+build infynitae-edge-c "wayland-client cairo pangocairo xkbcommon gio-2.0" \
     "$LIVE/edge/infynitae-edge.c" "$LIVE/wallpaper/wlr-layer-shell-protocol.c" \
     "$LIVE/wallpaper/xdg-shell-protocol.c" "$LIVE/edge/wlr-foreign-toplevel-protocol.c" -- -lm
 # the edge was called the island before 2026-10-31: its old binary goes
 [ -x "$BIN/infynitae-edge" ] && rm -f "$BIN/infynitae-island"
+if command -v cargo >/dev/null 2>&1; then
+    if cargo build --release --locked --quiet --manifest-path "$LIVE/edge-rs/Cargo.toml" \
+        --target-dir "$LIVE/edge-rs/target" \
+        && cp -f "$LIVE/edge-rs/target/release/infynitae-edge-rs" "$BIN/infynitae-edge-rs.new"; then
+        chmod 755 "$BIN/infynitae-edge-rs.new"
+        mv -f "$BIN/infynitae-edge-rs.new" "$BIN/infynitae-edge-rs"
+        echo "==> Built infynitae-edge-rs"
+    else
+        rm -f "$BIN/infynitae-edge-rs.new"
+        echo "[build-helpers] infynitae-edge-rs: build failed (see above)" >&2
+        FAILED="$FAILED infynitae-edge-rs"
+    fi
+else
+    echo "[build-helpers] infynitae-edge-rs: cargo is missing" >&2
+    FAILED="$FAILED infynitae-edge-rs"
+fi
+sh "$LIVE/edge-pick" "$BIN" || FAILED="$FAILED infynitae-edge"
 build infynitae-record-stream "wayland-client" \
     "$LIVE/record/infynitae-record-stream.c" "$LIVE/record/wlr-screencopy-protocol.c" -- -pthread -lrt
 

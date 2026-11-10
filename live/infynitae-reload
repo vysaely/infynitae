@@ -186,6 +186,8 @@ reload_polkit() {
 }
 
 reload_edge() {
+    # EDGE_IMPL (rust or c) may have changed: the name points at the one it names
+    [ -f "$LIVE/edge-pick" ] && sh "$LIVE/edge-pick" "$BIN_DIR" >/dev/null 2>&1
     p=$(first "$BIN_DIR/infynitae-edge" "$BIN_DIR/infynitae-island")
     stop_helper infynitae-edge
     # its name before 2026-10-31, still running from before an update
