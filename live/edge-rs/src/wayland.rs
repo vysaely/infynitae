@@ -1004,6 +1004,8 @@ impl OutputHandler for App {
         output: wl_output::WlOutput,
     ) {
         self.create_output_surface(output);
+        // a screen plugged in again: the widgets on it at once (not at the next minute)
+        self.sync_desk();
     }
 
     fn update_output(

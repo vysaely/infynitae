@@ -255,6 +255,41 @@ pub fn close_app_action(d: &mut MemoryData, idx: usize) -> Option<String> {
     Some(format!("pkill -TERM -x {}", shell_arg(&removed.name)))
 }
 
+/// The session's own processes: the compositor and its helpers, sound, D-Bus, the keyring,
+/// shells and system services. "Close background apps" never ends them.
+pub fn protected(name: &str) -> bool {
+    let n = name.to_ascii_lowercase();
+    n.starts_with("infynitae")
+        || n.starts_with("xdg-")
+        || n.starts_with("systemd")
+        || n.starts_with("dbus")
+        || n.starts_with("gnome-keyring")
+        || n.starts_with("pipewire")
+        || n.starts_with("gvfs")
+        || n.starts_with("at-spi")
+        || matches!(
+            n.as_str(),
+            "wireplumber"
+                | "xwayland"
+                | "xwayland-satellite"
+                | "mako"
+                | "squeekboard"
+                | "sh"
+                | "bash"
+                | "zsh"
+                | "fish"
+                | "dash"
+                | "agetty"
+                | "login"
+                | "sudo"
+                | "polkitd"
+                | "ssh-agent"
+                | "gpg-agent"
+                | "fcitx5"
+                | "ibus-daemon"
+        )
+}
+
 /// Closes all background apps (apps with no window in `window_app_ids`) and returns the shell
 /// command string.
 pub fn close_bg_action(d: &mut MemoryData) -> Option<String> {
@@ -265,7 +300,9 @@ pub fn close_bg_action(d: &mut MemoryData) -> Option<String> {
     let mut cmds = Vec::new();
     let mut freed_kb = 0u64;
     d.apps.retain(|a| {
-        if has_window(&a.name, &wins) {
+        // what keeps the session running is never a background app to close, window or not
+        // (the compositor itself has none: it was in reach of this)
+        if has_window(&a.name, &wins) || protected(&a.name) {
             true
         } else {
             freed_kb += a.rss_kb;
@@ -536,5 +573,21 @@ VmRSS:\t   26188 kB
         );
         assert_eq!(world.memory.apps.len(), 1);
         assert_eq!(world.memory.apps[0].name, "firefox");
+    }
+
+    #[test]
+    fn the_session_is_never_a_background_app() {
+        let mut d = MemoryData {
+            window_app_ids: vec!["firefox".into()],
+            ..Default::default()
+        };
+        for n in ["infynitae", "pipewire", "wireplumber", "steam", "firefox"] {
+            d.apps.push(AppMem {
+                name: n.into(),
+                rss_kb: 1000,
+            });
+        }
+        let cmd = close_bg_action(&mut d).unwrap();
+        assert_eq!(cmd, "pkill -TERM -x steam");
     }
 }
