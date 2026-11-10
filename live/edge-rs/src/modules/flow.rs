@@ -29,7 +29,7 @@ pub const UNDO_MAX: usize = 30;
 
 const BAR_H: f64 = 36.0;
 const ADD_ROW_H: f64 = 34.0;
-const STRIP_H: f64 = 30.0;
+const STRIP_H: f64 = 34.0;
 const BTN: f64 = 24.0;
 
 /// What a panel module is for, in Add's list.
@@ -262,7 +262,7 @@ pub enum CardButton {
 /// The buttons on block `b`'s bar, right to left as they fit, each with its rectangle in the
 /// panel; the bar's own rectangle first.
 pub fn card_buttons(p: &Panel, b: usize, r: Rect, pw: f64) -> (Rect, Vec<(CardButton, Rect)>) {
-    let strip = (r.0 + 5.0, r.1 + 5.0, (r.2 - 10.0).max(0.0), STRIP_H);
+    let strip = (r.0 + 5.0, r.1 + 4.0, (r.2 - 10.0).max(0.0), STRIP_H);
     let bs = blocks(p);
     let Some(range) = bs.get(b) else {
         return (strip, Vec::new());
@@ -289,7 +289,7 @@ pub fn card_buttons(p: &Panel, b: usize, r: Rect, pw: f64) -> (Rect, Vec<(CardBu
             break;
         }
         x -= w;
-        out.push((k, (x, strip.1 + 3.0, w, STRIP_H - 6.0)));
+        out.push((k, (x, strip.1 + 5.0, w, STRIP_H - 10.0)));
         x -= 4.0;
     }
     (strip, out)

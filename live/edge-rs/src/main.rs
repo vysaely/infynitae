@@ -2985,6 +2985,8 @@ mod tests {
         let (vx, vy) = (ox + rects[1].0 + 20.0, oy + rects[1].1 + 12.0);
         sh.click(w, h, vx, vy, 3);
         assert!(!sh.edit.active, "the sound card's own right click");
+        assert!(sh.world.child.open, "its outputs opened");
+        sh.world.child.open = false;
         let (sx, sy) = (ox + rects[2].0 + 4.0, oy + rects[2].1 + 4.0);
         assert!(sh.click(w, h, sx, sy, 3));
         assert!(sh.edit.active, "the power buttons' corner: editing");
