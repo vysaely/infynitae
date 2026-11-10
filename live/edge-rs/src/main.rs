@@ -1826,8 +1826,9 @@ impl Shell {
             self.world.child.open = false;
         }
 
-        // Right click on empty background enters edit mode
-        if !clicked_module && modules::is_right_button(button) {
+        // a right click that nothing under it uses (the background, a card's title, a module
+        // with no right click of its own) starts editing: a full panel has hardly any background
+        if (!clicked_module || !changed) && modules::is_right_button(button) {
             return self.edit_enter();
         }
 
@@ -2966,6 +2967,27 @@ mod tests {
             sh.world.actions.last().map(String::as_str),
             Some("set PANEL_CONTROL=\"SUPER+A top right 360 hover clock volume tray session\"")
         );
+    }
+
+    /// A right click on a card that has no right click of its own starts editing; one on a
+    /// module that uses it (the sound card opens its outputs) does what that module does.
+    #[test]
+    fn a_right_click_anywhere_unused_starts_editing() {
+        let line = "PANEL_CONTROL=\"SUPER+A top right 380 hover clock:big volume session\"\n";
+        let mut sh = Shell::from_config(Config::from_text(line));
+        let (w, h) = (1920.0, 1080.0);
+        assert!(sh.toggle_named("control"));
+        let panel = sh.cfg.panels[sh.open.unwrap()].clone();
+        let pw = panel_width(&panel, w);
+        let (rects, ch) = layout_in(&panel, pw, &sh.world, &sh.theme);
+        let ph = ph_of(&panel, ch, h);
+        let (ox, oy) = panel_origin(&panel, w, h, pw, ph);
+        let (vx, vy) = (ox + rects[1].0 + 20.0, oy + rects[1].1 + 12.0);
+        sh.click(w, h, vx, vy, 3);
+        assert!(!sh.edit.active, "the sound card's own right click");
+        let (sx, sy) = (ox + rects[2].0 + 4.0, oy + rects[2].1 + 4.0);
+        assert!(sh.click(w, h, sx, sy, 3));
+        assert!(sh.edit.active, "the power buttons' corner: editing");
     }
 
     #[test]
