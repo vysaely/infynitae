@@ -199,6 +199,10 @@ impl Core {
                 self.recenter_on_element(proof, element, false, out);
                 Ok(())
             }
+            PhysicalEvent::BringIntoView { element } => {
+                self.bring_into_view_now(element);
+                Ok(())
+            }
             PhysicalEvent::TouchDown {
                 slot,
                 output,

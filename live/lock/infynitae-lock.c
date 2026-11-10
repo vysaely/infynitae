@@ -1194,6 +1194,12 @@ static void registry_global_remove(void *data, struct wl_registry *registry, uin
         if ((*curr)->registry_name == name) {
             LockOutput *to_remove = *curr;
             *curr = to_remove->next;
+            /* a finger still down on this screen's keyboard: its release must not read the
+             * freed screen (a monitor unplugged mid-touch crashed the lock screen) */
+            if (app->osk_pressed_output == to_remove) {
+                app->osk_pressed_output = NULL;
+                app->osk_pressed = -1;
+            }
             if (to_remove->frame_cb) wl_callback_destroy(to_remove->frame_cb);
             if (to_remove->lock_surface) ext_session_lock_surface_v1_destroy(to_remove->lock_surface);
             if (to_remove->surface) wl_surface_destroy(to_remove->surface);

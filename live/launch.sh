@@ -399,6 +399,7 @@ case "$ACTION" in
                 if [ -w "$b/brightness" ] && [ -f "$b/max_brightness" ]; then
                     CUR=$(cat "$b/brightness" 2>/dev/null || echo 0)
                     MAX=$(cat "$b/max_brightness" 2>/dev/null || echo 0)
+                    [ "$MAX" -gt 0 ] 2>/dev/null || continue
                     STEP=$((MAX / 20))
                     [ "$STEP" -lt 1 ] && STEP=1
                     NEW=$((CUR + STEP))
@@ -436,6 +437,7 @@ case "$ACTION" in
                 if [ -w "$b/brightness" ] && [ -f "$b/max_brightness" ]; then
                     CUR=$(cat "$b/brightness" 2>/dev/null || echo 0)
                     MAX=$(cat "$b/max_brightness" 2>/dev/null || echo 0)
+                    [ "$MAX" -gt 0 ] 2>/dev/null || continue
                     STEP=$((MAX / 20))
                     [ "$STEP" -lt 1 ] && STEP=1
                     NEW=$((CUR - STEP))

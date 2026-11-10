@@ -490,12 +490,20 @@ EOF
 
 # the background job becomes the monitor itself (exec): $MON is then gdbus, ended by `end`, and
 # no subshell of this script (which a stop would end without its trap) is left holding it
+# UDisks2's signals, one per line. gdbus monitor ends when the system bus or UDisks2 restarts
+# (an update): it starts again after 2 s instead of the watcher ending for the rest of the session
 monitor() {
     if [ -n "${INFYNITAE_AUTOMOUNT_MONITOR:-}" ]; then
         exec sh -c "$INFYNITAE_AUTOMOUNT_MONITOR"
-    else
-        exec gdbus monitor --system --dest org.freedesktop.UDisks2
     fi
+    trap 'kill "$g" 2>/dev/null; exit 0' INT TERM HUP
+    while :; do
+        gdbus monitor --system --dest org.freedesktop.UDisks2 &
+        g=$!
+        wait "$g"
+        sleep 2
+        echo "infynitae-automount: monitor restarted"
+    done
 }
 
 end() {

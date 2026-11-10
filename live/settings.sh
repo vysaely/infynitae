@@ -6,8 +6,21 @@ umask 077
 
 CONFIG_FILE="${CONFIG_FILE:-$HOME/.config/infynitae/config}"
 
-# Ensure config directory exists
+# Ensure config directory and file exist (a fresh install has none yet: `set KEY VAL` read it with
+# awk and sourced it, and stopped with an error before changing anything)
 mkdir -p "$(dirname "$CONFIG_FILE")"
+[ -f "$CONFIG_FILE" ] || : > "$CONFIG_FILE"
+
+# A path from the config with ~, $HOME or ${HOME} at its start made absolute, without running the
+# value as shell code (it was eval'd before: a $(...) in it would have run)
+expand_path() {
+    case "$1" in
+        "~/"*) printf '%s' "$HOME/${1#\~/}" ;;
+        '$HOME/'*) printf '%s' "$HOME/${1#\$HOME/}" ;;
+        '${HOME}/'*) printf '%s' "$HOME/${1#\$\{HOME\}/}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
 
 # The look shared by everything Infynitae draws (docs/EDGE_RUST.md, stage 7: CORNERS, THEME_SCHEME,
 # CARD_OPACITY), as the Rust edge resolves it (infynitae-edge-rs --print-theme): LOOK_CORNERS,
@@ -198,7 +211,7 @@ apply_settings() {
         accent|all|true|1|yes|on)
             twf_what=all
             [ "$THEME_FROM_WALLPAPER" = accent ] && twf_what=accent
-            twf_wp=$(eval "printf '%s' \"${WALLPAPER:-}\"" 2>/dev/null)
+            twf_wp=$(expand_path "${WALLPAPER:-}")
             if [ -f "$twf_wp" ]; then
                 twf_stamp="${XDG_CACHE_HOME:-$HOME/.cache}/infynitae/theme-from-wallpaper"
                 twf_now="$twf_what $(stat -c '%s %Y' "$twf_wp" 2>/dev/null) $twf_wp"
@@ -824,7 +837,7 @@ case "$1" in
         for a in "${2:-}" "${3:-}"; do
             case "$a" in "") ;; accent|all) wc_what="$a" ;; *) wc_img="$a" ;; esac
         done
-        [ -n "$wc_img" ] || wc_img=$(eval "printf '%s' \"${WALLPAPER:-}\"" 2>/dev/null)
+        [ -n "$wc_img" ] || wc_img=$(expand_path "${WALLPAPER:-}")
         if [ ! -f "$wc_img" ]; then
             echo "No image: set WALLPAPER, or name one (infynitae-settings wallpaper-colors IMAGE)" >&2
             exit 1

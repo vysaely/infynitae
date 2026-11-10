@@ -17,6 +17,10 @@ if [ "$(cat /proc/$PPID/comm 2>/dev/null)" = "infynitae" ]; then
     renice -n -10 -p "$PPID" >/dev/null 2>&1 || true
 fi
 
+# the state directory every log below writes to (a fresh install has none: the logs and the
+# commands redirected into them failed)
+mkdir -p "${XDG_STATE_HOME:-$HOME/.local/state}/infynitae"
+
 # 1. Environment & Config
 if [ -f "$HOME/infynitae/live/env.sh" ]; then
     . "$HOME/infynitae/live/env.sh"

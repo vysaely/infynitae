@@ -180,6 +180,16 @@ pub fn set_focus(
     Ok(())
 }
 
+/// A new window the camera does not come to, into the view when mostly outside it (as the
+/// backends do after a map, `Core::bring_into_view`).
+pub fn bring_into_view(
+    state: &mut WaylandState,
+    port: &mut InputPort,
+    element: ElementId,
+) -> Result<(), EntryError> {
+    state.with_effects(|core, fx| core.bring_into_view(port, element, fx))
+}
+
 /// A virtual vblank of `output` at `now` (monotonic): the backend produces the output's frame
 /// with the test renderer (recording its ProjectionFrame, so hit-testing reads what was shown,
 /// INV-HIT-1); then Core's frame clock decides which observed elements complete, and the adapter
@@ -523,13 +533,17 @@ pub fn run_headless_with(
             }
         }
 
-        if state.core().teleport_on_open() {
-            for &new_id in &new_mapped {
-                let port = &mut input_port;
+        let teleport = state.core().teleport_on_open();
+        for &new_id in &new_mapped {
+            let port = &mut input_port;
+            // the camera to it, or (when it does not come) the window into the view
+            if teleport && state.core().toplevel_parent(new_id).is_none() {
                 let _ = state.with_effects(|core, fx| core.recenter_element(port, new_id, fx));
-                session.request_frame();
-                session.flush();
+            } else {
+                let _ = state.with_effects(|core, fx| core.bring_into_view(port, new_id, fx));
             }
+            session.request_frame();
+            session.flush();
         }
 
         // Settle the scale epochs whose deadline has passed, on the session clock.

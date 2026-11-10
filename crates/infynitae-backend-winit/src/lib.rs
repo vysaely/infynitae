@@ -408,15 +408,21 @@ pub fn run_nested_with(
             }
         }
 
-        if data.state.core().teleport_on_open() {
-            for &new_id in &new_mapped {
-                let port = &mut data.input_port;
+        let teleport = data.state.core().teleport_on_open();
+        for &new_id in &new_mapped {
+            let port = &mut data.input_port;
+            // the camera to it, or (when it does not come) the window into the view
+            if teleport && data.state.core().toplevel_parent(new_id).is_none() {
                 let _ = data
                     .state
                     .with_effects(|core, fx| core.recenter_element(port, new_id, fx));
-                data.session.request_frame();
-                data.session.flush();
+            } else {
+                let _ = data
+                    .state
+                    .with_effects(|core, fx| core.bring_into_view(port, new_id, fx));
             }
+            data.session.request_frame();
+            data.session.flush();
         }
 
         // Settle the scale epochs whose deadline has passed, on the session clock.
