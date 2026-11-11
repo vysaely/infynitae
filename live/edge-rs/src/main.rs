@@ -3297,4 +3297,28 @@ mod tests {
             .iter()
             .all(|a| !a.starts_with("set PANEL_")));
     }
+
+    #[test]
+    fn toplevel_sync_state_defers_work_when_closed() {
+        use crate::wayland::ToplevelSyncState;
+
+        let mut sync = ToplevelSyncState::default();
+        assert!(!sync.should_sync(false, false));
+        assert!(!sync.should_sync(true, false));
+
+        // Window change occurs while edge is closed
+        sync.mark_dirty();
+        assert!(sync.dirty);
+        // While panel is closed and no widgets are shown, syncing is deferred
+        assert!(!sync.should_sync(false, false));
+
+        // When a panel opens or widgets are shown, syncing triggers
+        assert!(sync.should_sync(true, false));
+        assert!(sync.should_sync(false, true));
+
+        // Once synced, dirty flag is cleared
+        sync.did_sync();
+        assert!(!sync.dirty);
+        assert!(!sync.should_sync(true, false));
+    }
 }

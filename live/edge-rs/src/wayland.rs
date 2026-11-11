@@ -702,7 +702,27 @@ struct App {
     fetch_busy: Arc<AtomicBool>,
     last_fetch: Option<Instant>,
     prev_open: Option<usize>,
+    toplevel_sync: ToplevelSyncState,
     exit: bool,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ToplevelSyncState {
+    pub dirty: bool,
+}
+
+impl ToplevelSyncState {
+    pub fn mark_dirty(&mut self) {
+        self.dirty = true;
+    }
+
+    pub fn should_sync(&self, panel_open: bool, widgets_visible: bool) -> bool {
+        self.dirty && (panel_open || widgets_visible)
+    }
+
+    pub fn did_sync(&mut self) {
+        self.dirty = false;
+    }
 }
 
 pub fn sync_toplevel_app_ids(
@@ -833,6 +853,14 @@ impl App {
         }
         // the edit bar follows the panel's content (music started, a notification came)
         self.shell.refresh_bar();
+
+        if self
+            .toplevel_sync
+            .should_sync(self.shell.open.is_some(), self.widgets.shows_widgets())
+        {
+            self.sync_toplevels_to_world();
+            self.toplevel_sync.did_sync();
+        }
 
         if self.shell.open != self.prev_open {
             self.prev_open = self.shell.open;
@@ -1518,17 +1546,29 @@ impl Dispatch<ZwlrForeignToplevelHandleV1, ()> for App {
                 }
             }
             zwlr_foreign_toplevel_handle_v1::Event::Done => {
-                state.sync_toplevels_to_world();
-                // a title or focus change matters only to a panel that lists windows (review 22)
-                if state.shell.shows_windows() {
-                    state.sync_all();
+                state.toplevel_sync.mark_dirty();
+                if state
+                    .toplevel_sync
+                    .should_sync(state.shell.open.is_some(), state.widgets.shows_widgets())
+                {
+                    state.sync_toplevels_to_world();
+                    state.toplevel_sync.did_sync();
+                    // a title or focus change matters only to a panel that lists windows (review 22)
+                    if state.shell.shows_windows() {
+                        state.sync_all();
+                    }
                 }
             }
             zwlr_foreign_toplevel_handle_v1::Event::Closed => {
                 handle.destroy();
                 state.toplevels.retain(|t| &t.handle != handle);
-                state.sync_toplevels_to_world();
-                if state.shell.open.is_some() {
+                state.toplevel_sync.mark_dirty();
+                if state
+                    .toplevel_sync
+                    .should_sync(state.shell.open.is_some(), state.widgets.shows_widgets())
+                {
+                    state.sync_toplevels_to_world();
+                    state.toplevel_sync.did_sync();
                     state.sync_all();
                 }
             }
@@ -1638,6 +1678,7 @@ fn run_loop(initial_panel: Option<&str>) -> Result<(), String> {
         fetch_busy,
         last_fetch: None,
         prev_open: None,
+        toplevel_sync: ToplevelSyncState::default(),
         exit: false,
     };
 
