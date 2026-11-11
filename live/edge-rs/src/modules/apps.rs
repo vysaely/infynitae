@@ -416,15 +416,20 @@ pub fn search_apps(apps: &[DesktopApp], query: &str) -> Vec<usize> {
             w_min
         };
 
+        // how good a match: the exact name, the name starting with the query, every word at a word
+        // start, inside the name, in keywords only, letters in order. Recent use orders apps within
+        // one of these, never above a better match (a recent app merely containing "a" was listed
+        // before every app whose name starts with "a").
+        let typed = q_fold.trim();
         let group = if words.is_empty() {
             if app.last_launched > 0 {
                 0
             } else {
                 1
             }
-        } else if words.len() == 1 && app.name_fold == words[0] {
+        } else if app.name_fold == typed {
             0
-        } else if app.last_launched > 0 && worst >= MATCH_INSIDE {
+        } else if app.name_fold.starts_with(typed) {
             1
         } else if worst == MATCH_WORD_START {
             2
@@ -1452,6 +1457,40 @@ mod tests {
         let out = search_apps(&apps, "fire");
         assert_eq!(apps[out[0]].name, "Firetools");
         assert_eq!(apps[out[1]].name, "Firefox");
+    }
+
+    /// Owner 2026-11-11 ("search works kinda weird"): typing "a" listed recently used apps that only
+    /// contain an "a" (Melodyae, Steam, Telegram) before every app whose name starts with "a".
+    #[test]
+    fn a_name_starting_with_the_query_beats_a_recent_app_that_contains_it() {
+        let mk = |name: &str, id: &str| DesktopApp::new(name, "", "", id, "", id);
+        let mut apps = vec![
+            mk("Melodyae", "melodyae.desktop"),
+            mk("Steam", "steam.desktop"),
+            mk("AEAM", "aeam.desktop"),
+            mk("About Xfce", "about.desktop"),
+            mk("Mana Overlay", "mana.desktop"),
+        ];
+        let mut recent = RecentApps::default();
+        recent.note("melodyae.desktop", 300);
+        recent.note("steam.desktop", 200);
+        recent.note("aeam.desktop", 100);
+        recent.apply(&mut apps);
+        let names: Vec<&str> = search_apps(&apps, "a")
+            .iter()
+            .map(|&i| apps[i].name.as_str())
+            .collect();
+        // starting with "a" first (the recently used one of them first), then the rest by recent use
+        assert_eq!(
+            names,
+            ["AEAM", "About Xfce", "Melodyae", "Steam", "Mana Overlay"]
+        );
+        // a word starting with the query, inside a longer name, still beats a mere "contains"
+        let names: Vec<&str> = search_apps(&apps, "o")
+            .iter()
+            .map(|&i| apps[i].name.as_str())
+            .collect();
+        assert_eq!(names[0], "Mana Overlay");
     }
 
     #[test]

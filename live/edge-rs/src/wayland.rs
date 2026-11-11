@@ -146,6 +146,10 @@ struct OutputSurface {
     layer: LayerSurface,
     pool: SlotPool,
     slots: [Option<BufferSlot>; 2],
+    /// the box of the frame last committed (in either buffer): the next frame damages it too, or a
+    /// panel that shrank right after a buffer swap left its old pixels on screen (the other buffer's
+    /// own previous box was smaller)
+    committed_box: Option<(i32, i32, i32, i32)>,
     width: u32,
     height: u32,
     buf_size: (u32, u32),
@@ -386,8 +390,9 @@ impl OutputSurface {
             let slot = self.slots[slot_idx].as_mut().unwrap();
             let old_box = slot.prev_box.replace(new_box);
             if let Some(canvas) = slot.buffer.canvas(&mut self.pool) {
-                if let Some(r) = old_box {
-                    Self::clear_box(canvas, stride, w, h, r);
+                match old_box {
+                    Some(r) => Self::clear_box(canvas, stride, w, h, r),
+                    None => canvas.fill(0),
                 }
                 Self::clear_box(canvas, stride, w, h, new_box);
                 if let Ok(surface) = unsafe {
@@ -411,8 +416,11 @@ impl OutputSurface {
                 }
             }
             let wl = self.layer.wl_surface();
-            if let Some((ox, oy, ow, oh)) = old_box {
-                wl.damage_buffer(ox, oy, ow, oh);
+            for (dx, dy, dw, dh) in [old_box, self.committed_box.replace(new_box)]
+                .into_iter()
+                .flatten()
+            {
+                wl.damage_buffer(dx, dy, dw, dh);
             }
             wl.damage_buffer(new_box.0, new_box.1, new_box.2, new_box.3);
             wl.frame(qh, wl.clone());
@@ -536,8 +544,10 @@ impl OutputSurface {
         let slot = self.slots[slot_idx].as_mut().unwrap();
         let old_box = slot.prev_box.replace(new_box);
         if let Some(canvas) = slot.buffer.canvas(&mut self.pool) {
-            if let Some(r) = old_box {
-                Self::clear_box(canvas, stride, w, h, r);
+            match old_box {
+                Some(r) => Self::clear_box(canvas, stride, w, h, r),
+                // a buffer's first frame: whatever the pool memory held goes
+                None => canvas.fill(0),
             }
             Self::clear_box(canvas, stride, w, h, new_box);
             if let Ok(surface) = unsafe {
@@ -635,8 +645,11 @@ impl OutputSurface {
         }
 
         let wl = self.layer.wl_surface();
-        if let Some((ox, oy, ow, oh)) = old_box {
-            wl.damage_buffer(ox, oy, ow, oh);
+        for (dx, dy, dw, dh) in [old_box, self.committed_box.replace(new_box)]
+            .into_iter()
+            .flatten()
+        {
+            wl.damage_buffer(dx, dy, dw, dh);
         }
         wl.damage_buffer(new_box.0, new_box.1, new_box.2, new_box.3);
         wl.frame(qh, wl.clone());
@@ -864,6 +877,7 @@ impl App {
             layer,
             pool,
             slots: [None, None],
+            committed_box: None,
             width: 0,
             height: 0,
             buf_size: (0, 0),
