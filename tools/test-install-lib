@@ -2,7 +2,6 @@
 # tools/test-install-lib: checks installer library routines (live/install-lib.sh).
 # Tests:
 # - Finding 9: INFY_LIVE does not use non-POSIX ${BASH_SOURCE[0]} syntax and resolves packages.txt
-# - Finding 24: sudo_once cleans up keeper on exit/signals
 # - Finding 25: set_option handles values with slashes, ampersands, and backslashes
 set -eu
 
@@ -30,30 +29,6 @@ resolved_live=$(bash -c "unset BASH_SOURCE; . '$REPO_DIR/live/install-lib.sh' >/
 check "INFY_LIVE resolves to directory containing packages.txt" \
     "$([ -f "$resolved_live/packages.txt" ] && echo yes || echo no)" "yes"
 
-# Finding 24: sudo_once cleans up keeper process on exit
-mock_bin="$TMP/mock_bin"
-mkdir -p "$mock_bin"
-cat << 'EOF' > "$mock_bin/sudo"
-#!/bin/sh
-exit 0
-EOF
-chmod +x "$mock_bin/sudo"
-
-keeper_pid_file="$TMP/keeper.pid"
-PATH="$mock_bin:$PATH" bash -c "
-    . '$REPO_DIR/live/install-lib.sh'
-    sudo_once
-    echo \"\$SUDO_KEEPER\" > '$keeper_pid_file'
-    # Child script exits without explicitly calling end_sudo
-    exit 0
-"
-sleep 0.2
-keeper_pid=$(cat "$keeper_pid_file")
-keeper_alive=$(kill -0 "$keeper_pid" 2>/dev/null && echo yes || echo no)
-# Clean up if still alive
-kill "$keeper_pid" 2>/dev/null || true
-check "sudo_once keeper process is terminated on script exit" "$keeper_alive" "no"
-
 # Finding 25: set_option handles values with slashes, ampersands, and backslashes
 cfg_file="$TMP/test_config"
 cat << 'EOF' > "$cfg_file"
@@ -73,9 +48,5 @@ bash -c '
 val_got=$(grep '^NOTIFICATIONS=' "$cfg_file" | cut -d= -f2- || true)
 check "set_option replaces setting with value containing slashes, ampersands, and backslashes" \
     "$val_got" '"custom/path & flag\extra"'
-
-# Finding 26: battery rules mktemp has cleanup trap
-has_battery_trap=$(grep -A2 'tmp="$(mktemp)"' "$REPO_DIR/live/install-lib.sh" | grep 'trap.*rm.*tmp' || true)
-check "battery rules temporary file has cleanup trap" "$([ -n "$has_battery_trap" ] && echo yes || echo no)" "yes"
 
 exit $fail

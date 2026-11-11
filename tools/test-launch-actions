@@ -2,7 +2,7 @@
 # tools/test-launch-actions: checks the action dispatcher in live/launch.sh.
 # Tests:
 # - Finding 19: commands and paths with spaces/options in LAUNCHER, FILE_MANAGER,
-#   SCREENSHOT_CMD, SCREEN_LOCKER, and TERMINAL are executed without word splitting
+#   SCREENSHOT_CMD and SCREEN_LOCKER are run as commands; TERMINAL keeps its own arguments
 # - Finding 19: game-mode parses mode and PID without unquoted set expansion
 # - Finding 5: brightness-up and brightness-down handle max_brightness 0 without division by zero
 set -eu
@@ -74,10 +74,11 @@ run_action() {
         sh "$REPO_DIR/live/launch.sh" "$action" "$arg" >/dev/null 2>&1 || true
 }
 
-# 1. Terminal with path containing spaces
+# 1. A terminal named with its own arguments (TERMINAL="kitty --single-instance")
+cp "$TMP/space dir/my-term" "$BIN/my-term"
 : > "$LOG"
-run_action terminal "" TERMINAL="$TMP/space dir/my-term"
-check "terminal with spaces in path executes" "$(grep -c '^term:' "$LOG" 2>/dev/null || true)" 1
+run_action terminal "" TERMINAL="my-term --single-instance"
+check "a terminal with its own arguments executes" "$(grep -c '^term: --single-instance' "$LOG" 2>/dev/null || true)" 1
 
 # 2. File manager configured as command with spaces/flags
 : > "$LOG"

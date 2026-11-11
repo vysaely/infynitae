@@ -63,9 +63,9 @@ case "$ACTION" in
         # with a command and its arguments (xdg-terminal-exec): that command in it
         if [ -n "$TERM_CMD" ] && [ $# -gt 1 ]; then
             shift
-            exec "$TERM_CMD" -e "$@"
+            exec $TERM_CMD -e "$@"
         elif [ -n "$TERM_CMD" ]; then
-            exec "$TERM_CMD"
+            exec $TERM_CMD
         else
             echo "[infynitae] Error: No terminal emulator found. Please install kitty, alacritty, or foot." >&2
         fi
@@ -125,7 +125,7 @@ case "$ACTION" in
                     command -v "$m" >/dev/null 2>&1 && exec "$m"
                 done
                 for m in btop htop top; do
-                    command -v "$m" >/dev/null 2>&1 && exec "$TERM_CMD" -e "$m"
+                    command -v "$m" >/dev/null 2>&1 && exec $TERM_CMD -e "$m"
                 done
                 ;;
             *)
@@ -139,9 +139,9 @@ case "$ACTION" in
         case "$FM" in
             auto|"")
                 if command -v yazi >/dev/null 2>&1; then
-                    exec "$TERM_CMD" -e yazi
+                    exec $TERM_CMD -e yazi
                 elif command -v lf >/dev/null 2>&1; then
-                    exec "$TERM_CMD" -e lf
+                    exec $TERM_CMD -e lf
                 elif command -v thunar >/dev/null 2>&1; then
                     exec thunar
                 elif command -v nemo >/dev/null 2>&1; then
@@ -149,17 +149,17 @@ case "$ACTION" in
                 elif command -v dolphin >/dev/null 2>&1; then
                     exec dolphin --new-window
                 else
-                    exec "$TERM_CMD" -e sh -c "ls -la; exec \$SHELL"
+                    exec $TERM_CMD -e sh -c "ls -la; exec \$SHELL"
                 fi
                 ;;
             yazi)
-                exec "$TERM_CMD" -e yazi
+                exec $TERM_CMD -e yazi
                 ;;
             lf)
-                exec "$TERM_CMD" -e lf
+                exec $TERM_CMD -e lf
                 ;;
             ranger)
-                exec "$TERM_CMD" -e ranger
+                exec $TERM_CMD -e ranger
                 ;;
             dolphin)
                 exec dolphin --new-window

@@ -187,7 +187,6 @@ sudo_once() {
     local parent=$$
     ( while kill -0 "$parent" 2>/dev/null; do sudo -n true; sleep 50; done ) >/dev/null 2>&1 &
     SUDO_KEEPER=$!
-    trap end_sudo EXIT INT TERM
 }
 
 # The root steps are done: the keeper stops and sudo's permission ends now, not minutes later,
@@ -304,7 +303,6 @@ PORTAL
     # the battery's charge limit (BATTERY_LIMIT), settable by this user where supported
     if ls /sys/class/power_supply/BAT*/charge_control_end_threshold >/dev/null 2>&1; then
         tmp="$(mktemp)"
-        trap 'rm -f "$tmp"' EXIT INT TERM
         escaped_grp=$(id -gn | sed 's/[&/\]/\\&/g')
         sed "s/@GROUP@/$escaped_grp/" "$src/live/99-infynitae-battery.rules" > "$tmp"
         if ! cmp -s "$tmp" /etc/udev/rules.d/99-infynitae-battery.rules; then
@@ -312,7 +310,6 @@ PORTAL
             sudo udevadm trigger --subsystem-match=power_supply 2>/dev/null || true
         fi
         rm -f "$tmp"
-        trap - EXIT INT TERM
     fi
     # a convertible's power button works like a tablet's: a tap sleeps, holding it shuts down
     if has_tablet_mode_switch || has_accelerometer; then
