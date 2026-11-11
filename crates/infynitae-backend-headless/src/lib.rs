@@ -342,23 +342,78 @@ impl Default for HeadlessCompositorOptions {
 /// descriptor, then its position).
 pub fn apply_output_configurations(state: &mut WaylandState, token: &mut OutputLifecycleToken) {
     for c in state.take_output_configurations() {
-        let ok = state.output_change_plan(&c.changes).is_some_and(|plan| {
-            plan.into_iter().all(|p| {
-                if let Some(desc) = p.descriptor {
-                    match state.core_mut().output_reconfigured(token, p.output, desc) {
-                        Ok(fx) => state.apply(&fx),
-                        Err(_) => return false,
+        let mut ok = true;
+        for &id in &c.off {
+            match state.core_mut().output_disconnected(token, id) {
+                Ok(fx) => state.apply(&fx),
+                Err(_) => {
+                    ok = false;
+                    break;
+                }
+            }
+        }
+        if ok {
+            for on in &c.on {
+                match state
+                    .core_mut()
+                    .output_connected(token, on.descriptor.clone())
+                {
+                    Ok((new_id, fx)) => {
+                        state.output_management_reconnect_head(on.output, new_id, on.adaptive_sync);
+                        state.apply(&fx);
+                        let cur_pos = state
+                            .core()
+                            .output(new_id)
+                            .map(|m| {
+                                (
+                                    m.arrangement.0.round() as i32,
+                                    m.arrangement.1.round() as i32,
+                                )
+                            })
+                            .unwrap_or((0, 0));
+                        if cur_pos != on.position {
+                            match state.core_mut().output_arranged(token, new_id, on.position) {
+                                Ok(fx) => state.apply(&fx),
+                                Err(_) => {
+                                    ok = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        ok = false;
+                        break;
                     }
                 }
-                if let Some(pos) = p.position {
-                    match state.core_mut().output_arranged(token, p.output, pos) {
-                        Ok(fx) => state.apply(&fx),
-                        Err(_) => return false,
+            }
+        }
+        if ok {
+            if let Some(plan) = state.output_change_plan(&c.changes) {
+                for p in plan {
+                    if let Some(desc) = p.descriptor {
+                        match state.core_mut().output_reconfigured(token, p.output, desc) {
+                            Ok(fx) => state.apply(&fx),
+                            Err(_) => {
+                                ok = false;
+                                break;
+                            }
+                        }
+                    }
+                    if let Some(pos) = p.position {
+                        match state.core_mut().output_arranged(token, p.output, pos) {
+                            Ok(fx) => state.apply(&fx),
+                            Err(_) => {
+                                ok = false;
+                                break;
+                            }
+                        }
                     }
                 }
-                true
-            })
-        });
+            } else {
+                ok = false;
+            }
+        }
         state.finish_output_configuration(c, ok);
     }
 }

@@ -43,6 +43,7 @@ impl Transform {
 
 /// Hardware facts only. There is deliberately no field for camera position, centre, zoom or
 /// binding: a caller cannot choose camera state (probes p8, p12).
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutputDescriptor {
     pub key: OutputKey,
     /// Physical mode in pixels, before the transform (`phys_O`).

@@ -9,13 +9,14 @@
 //! ([`WaylandState::finish_output_configuration`]). Everything changes or nothing does.
 //!
 //! VRR as a tool sees it is whether the screen may use it: on, or the backend's automatic mode
-//! (while a window is fullscreen); off is off. Not yet: turning a screen off or on, which fails.
+//! (while a window is fullscreen); off is off. Turning a screen off or on leaves or restores
+//! the screen in layout and Core, through the same events as unplug/replug.
 
 use std::collections::HashMap;
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 
-use infynitae_core::output::{OutputDescriptor, OutputId, OutputModel, Transform};
+use infynitae_core::output::{OutputDescriptor, OutputId, OutputKey, OutputModel, Transform};
 use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::reexports::wayland_server::protocol::wl_output;
 use smithay::reexports::wayland_server::{
@@ -73,10 +74,21 @@ pub struct OutputChangePlan {
     pub position: Option<(i32, i32)>,
 }
 
+/// A screen being enabled from a disabled state.
+#[derive(Clone, Debug)]
+pub struct HeadOn {
+    pub output: OutputId,
+    pub descriptor: OutputDescriptor,
+    pub position: (i32, i32),
+    pub adaptive_sync: Option<bool>,
+}
+
 /// A configuration the client applied, for the backend to carry out.
 pub struct PendingConfiguration {
-    resource: ZwlrOutputConfigurationV1,
+    pub(crate) resource: ZwlrOutputConfigurationV1,
     pub changes: Vec<HeadChange>,
+    pub off: Vec<OutputId>,
+    pub on: Vec<HeadOn>,
 }
 
 /// A head as a client configures it, before it is checked.
@@ -109,12 +121,12 @@ struct ConfigurationInner {
 }
 
 pub struct HeadData {
-    output: OutputId,
+    pub(crate) output: Arc<Mutex<OutputId>>,
 }
 
 pub struct ModeData {
-    output: OutputId,
-    mode: HeadMode,
+    pub(crate) output: Arc<Mutex<OutputId>>,
+    pub(crate) mode: HeadMode,
 }
 
 pub struct ConfigurationHeadData {
@@ -130,9 +142,20 @@ const SET_TRANSFORM: u32 = 1 << 2;
 const SET_SCALE: u32 = 1 << 3;
 const SET_ADAPTIVE_SYNC: u32 = 1 << 4;
 
+/// A screen turned off through output management, kept so display tools can enable it again.
+#[derive(Clone, Debug)]
+pub struct DisabledHead {
+    pub key: OutputKey,
+    pub descriptor: OutputDescriptor,
+    pub position: (i32, i32),
+    pub scale_120: u32,
+    pub transform: Transform,
+    pub info: HeadInfo,
+}
+
 /// What one client's head was last told.
 struct Head {
-    output: OutputId,
+    output: Arc<Mutex<OutputId>>,
     manager: ObjectId,
     head: ZwlrOutputHeadV1,
     modes: Vec<(HeadMode, ZwlrOutputModeV1)>,
@@ -141,6 +164,7 @@ struct Head {
 
 #[derive(Clone, Debug, PartialEq)]
 struct Told {
+    enabled: bool,
     mode: Option<HeadMode>,
     position: (i32, i32),
     transform: Transform,
@@ -158,6 +182,7 @@ pub struct OutputManagementState {
     managers: Vec<ZwlrOutputManagerV1>,
     heads: Vec<Head>,
     pub(crate) info: HashMap<OutputId, HeadInfo>,
+    pub(crate) disabled_screens: HashMap<OutputId, DisabledHead>,
     /// Configuration objects alive, by id, for their heads to reach.
     configurations: HashMap<ObjectId, ZwlrOutputConfigurationV1>,
     pending: Vec<PendingConfiguration>,
@@ -172,6 +197,7 @@ impl OutputManagementState {
             managers: Vec::new(),
             heads: Vec::new(),
             info: HashMap::new(),
+            disabled_screens: HashMap::new(),
             configurations: HashMap::new(),
             pending: Vec::new(),
         }
@@ -259,11 +285,36 @@ impl WaylandState {
         Some(plan)
     }
 
+    /// Re-links a previously disabled head to its newly assigned `OutputId`.
+    pub fn output_management_reconnect_head(
+        &mut self,
+        old_id: OutputId,
+        new_id: OutputId,
+        adaptive_sync: Option<bool>,
+    ) {
+        if let Some(disabled) = self.output_management.disabled_screens.remove(&old_id) {
+            let mut info = disabled.info;
+            if let Some(sync) = adaptive_sync {
+                info.adaptive_sync = Some(sync);
+            }
+            self.output_management.info.insert(new_id, info);
+        }
+        for h in &self.output_management.heads {
+            let mut out = h.output.lock().unwrap();
+            if *out == old_id {
+                *out = new_id;
+            }
+        }
+    }
+
     /// Tells the client how its configuration went; a VRR change it made is reported to every
     /// tool.
     pub fn finish_output_configuration(&mut self, pending: PendingConfiguration, ok: bool) {
         if !ok {
             pending.resource.failed();
+            for id in pending.off {
+                self.output_management.disabled_screens.remove(&id);
+            }
             return;
         }
         pending.resource.succeeded();
@@ -280,22 +331,41 @@ impl WaylandState {
     /// A screen connected, changed or left: every manager's heads follow, with a new serial.
     pub(crate) fn output_heads_changed(&mut self, output: OutputId) {
         let om = &mut self.output_management;
-        om.serial = om.serial.wrapping_add(1);
         om.managers.retain(|m| m.is_alive());
         om.heads.retain(|h| h.head.is_alive());
         let model = self.core.output(output).cloned();
         let mut affected: Vec<ObjectId> = Vec::new();
         match &model {
             None => {
-                self.output_management.heads.retain(|h| {
-                    if h.output == output {
-                        h.head.finished();
-                        affected.push(h.manager.clone());
-                        false
-                    } else {
-                        true
+                if om.disabled_screens.contains_key(&output) {
+                    let now = Told {
+                        enabled: false,
+                        mode: None,
+                        position: (i32::MIN, i32::MIN),
+                        transform: Transform::Normal,
+                        scale_120: 0,
+                        adaptive_sync: None,
+                    };
+                    for h in om
+                        .heads
+                        .iter_mut()
+                        .filter(|h| *h.output.lock().unwrap() == output)
+                    {
+                        if send_changes(h, &now) {
+                            affected.push(h.manager.clone());
+                        }
                     }
-                });
+                } else {
+                    self.output_management.heads.retain(|h| {
+                        if *h.output.lock().unwrap() == output {
+                            h.head.finished();
+                            affected.push(h.manager.clone());
+                            false
+                        } else {
+                            true
+                        }
+                    });
+                }
             }
             Some(model) => {
                 let managers = self.output_management.managers.clone();
@@ -304,7 +374,7 @@ impl WaylandState {
                         .output_management
                         .heads
                         .iter()
-                        .any(|h| h.output == output && h.manager == m.id());
+                        .any(|h| *h.output.lock().unwrap() == output && h.manager == m.id());
                     if !known {
                         self.announce_head(m, model);
                         affected.push(m.id());
@@ -315,7 +385,7 @@ impl WaylandState {
                     .output_management
                     .heads
                     .iter_mut()
-                    .filter(|h| h.output == output)
+                    .filter(|h| *h.output.lock().unwrap() == output)
                 {
                     if send_changes(h, &now) {
                         affected.push(h.manager.clone());
@@ -323,10 +393,13 @@ impl WaylandState {
                 }
             }
         }
-        let serial = self.output_management.serial;
-        for m in &self.output_management.managers {
-            if affected.contains(&m.id()) {
-                m.done(serial);
+        if !affected.is_empty() {
+            self.output_management.serial = self.output_management.serial.wrapping_add(1);
+            let serial = self.output_management.serial;
+            for m in &self.output_management.managers {
+                if affected.contains(&m.id()) {
+                    m.done(serial);
+                }
             }
         }
     }
@@ -353,6 +426,7 @@ impl WaylandState {
             .into_iter()
             .find(|m| m.size == current && m.refresh_mhz == model.refresh_mhz as i32);
         Told {
+            enabled: true,
             mode,
             position: position_of(model),
             transform: model.transform,
@@ -370,10 +444,13 @@ impl WaylandState {
         let Some(client) = manager.client() else {
             return;
         };
+        let id_cell = Arc::new(Mutex::new(model.id));
         let Ok(head) = client.create_resource::<ZwlrOutputHeadV1, _, WaylandState>(
             &self.dh,
             manager.version(),
-            HeadData { output: model.id },
+            HeadData {
+                output: id_cell.clone(),
+            },
         ) else {
             return;
         };
@@ -412,7 +489,7 @@ impl WaylandState {
                 &self.dh,
                 head.version(),
                 ModeData {
-                    output: model.id,
+                    output: id_cell.clone(),
                     mode,
                 },
             ) else {
@@ -429,12 +506,12 @@ impl WaylandState {
         head.enabled(1);
         let now = self.head_now(model);
         let mut h = Head {
-            output: model.id,
+            output: id_cell,
             manager: manager.id(),
             head,
             modes,
-            // everything differs from this, so all of it is sent
             told: Told {
+                enabled: true,
                 mode: None,
                 position: (i32::MIN, i32::MIN),
                 transform: now.transform,
@@ -447,96 +524,328 @@ impl WaylandState {
         self.output_management.heads.push(h);
     }
 
+    /// Announces a screen turned off through output management as a disabled head (`enabled 0`).
+    fn announce_disabled_head(
+        &mut self,
+        manager: &ZwlrOutputManagerV1,
+        disabled_id: OutputId,
+        disabled: &DisabledHead,
+    ) {
+        let Some(client) = manager.client() else {
+            return;
+        };
+        let id_cell = Arc::new(Mutex::new(disabled_id));
+        let Ok(head) = client.create_resource::<ZwlrOutputHeadV1, _, WaylandState>(
+            &self.dh,
+            manager.version(),
+            HeadData {
+                output: id_cell.clone(),
+            },
+        ) else {
+            return;
+        };
+        manager.head(&head);
+        let key = &disabled.key;
+        head.name(key.connector.clone());
+        let known = |s: &str| !s.is_empty() && s != "Unknown";
+        head.description(if known(&key.make) && known(&key.model) {
+            format!("{} {} ({})", key.make, key.model, key.connector)
+        } else {
+            key.connector.clone()
+        });
+        if head.version() >= 2 {
+            if known(&key.make) {
+                head.make(key.make.clone());
+            }
+            if known(&key.model) {
+                head.model(key.model.clone());
+            }
+            if let Some(serial) = &key.serial {
+                head.serial_number(serial.clone());
+            }
+        }
+        if let Some((w, h)) = disabled
+            .info
+            .physical_size
+            .filter(|(w, h)| *w > 0 && *h > 0)
+        {
+            head.physical_size(w, h);
+        }
+        let head_modes = if !disabled.info.modes.is_empty() {
+            disabled.info.modes.clone()
+        } else {
+            vec![HeadMode {
+                size: (
+                    disabled.descriptor.mode.0 as i32,
+                    disabled.descriptor.mode.1 as i32,
+                ),
+                refresh_mhz: disabled.descriptor.refresh_mhz as i32,
+                preferred: true,
+            }]
+        };
+        let mut modes = Vec::new();
+        for mode in head_modes {
+            let Ok(res) = client.create_resource::<ZwlrOutputModeV1, _, WaylandState>(
+                &self.dh,
+                head.version(),
+                ModeData {
+                    output: id_cell.clone(),
+                    mode,
+                },
+            ) else {
+                continue;
+            };
+            head.mode(&res);
+            res.size(mode.size.0, mode.size.1);
+            res.refresh(mode.refresh_mhz);
+            if mode.preferred {
+                res.preferred();
+            }
+            modes.push((mode, res));
+        }
+        head.enabled(0);
+        let h = Head {
+            output: id_cell,
+            manager: manager.id(),
+            head,
+            modes,
+            told: Told {
+                enabled: false,
+                mode: None,
+                position: (i32::MIN, i32::MIN),
+                transform: disabled.transform,
+                scale_120: 0,
+                adaptive_sync: None,
+            },
+        };
+        self.output_management.heads.push(h);
+    }
+
     /// Checks a configuration against the screens: the changes it makes, or `None` if it
     /// cannot be carried out.
     fn check_configuration(
         &self,
         heads: &HashMap<OutputId, HeadRequest>,
         disabled: &[OutputId],
-    ) -> Option<Vec<HeadChange>> {
-        if !disabled.is_empty() {
-            return None;
-        }
-        let mut changes = Vec::new();
-        for (output, req) in heads {
-            let model = self.core.output(*output)?;
-            let now = self.head_now(model);
-            let modes = self.head_modes(model);
-            let mode = match req.mode {
-                None => None,
-                Some(RequestedMode::Listed(m)) => Some(*modes.iter().find(|x| **x == m)?),
-                Some(RequestedMode::Custom { size, refresh_mhz }) => Some(
-                    *modes
-                        .iter()
-                        .filter(|m| m.size == size)
-                        .filter(|m| refresh_mhz == 0 || (m.refresh_mhz - refresh_mhz).abs() < 500)
-                        .max_by_key(|m| m.refresh_mhz)?,
-                ),
-            }
-            .filter(|m| Some(*m) != now.mode);
-            let transform = req.transform.filter(|t| *t != now.transform);
-            let adaptive_sync = match (req.adaptive_sync, now.adaptive_sync) {
-                (None, _) => None,
-                // a screen without VRR
-                (Some(_), None) => return None,
-                (Some(v), Some(was)) => (v != was).then_some(v),
-            };
-            let scale_120 = match req.scale {
-                None => None,
-                Some(s) => Some((s * 120.0).round() as u32).filter(|s| *s != now.scale_120),
-            };
-            let position = req.position.filter(|p| *p != now.position);
-            if mode.is_some()
-                || scale_120.is_some()
-                || position.is_some()
-                || transform.is_some()
-                || adaptive_sync.is_some()
+    ) -> CheckResult {
+        let currently_enabled: Vec<OutputId> = self.core.outputs().iter().map(|o| o.id).collect();
+
+        for &id in disabled {
+            if !currently_enabled.contains(&id)
+                && !self.output_management.disabled_screens.contains_key(&id)
             {
-                changes.push(HeadChange {
-                    output: *output,
-                    mode,
-                    position,
-                    scale_120,
+                return CheckResult::Fail;
+            }
+        }
+        let to_turn_off: Vec<OutputId> = disabled
+            .iter()
+            .copied()
+            .filter(|id| currently_enabled.contains(id))
+            .collect();
+
+        let mut changes = Vec::new();
+        let mut on = Vec::new();
+
+        for (output, req) in heads {
+            if let Some(model) = self.core.output(*output) {
+                let now = self.head_now(model);
+                let modes = self.head_modes(model);
+                let mode = match req.mode {
+                    None => None,
+                    Some(RequestedMode::Listed(m)) => {
+                        let Some(found) = modes.iter().find(|x| **x == m) else {
+                            return CheckResult::Fail;
+                        };
+                        Some(*found)
+                    }
+                    Some(RequestedMode::Custom { size, refresh_mhz }) => {
+                        let Some(found) = modes
+                            .iter()
+                            .filter(|m| m.size == size)
+                            .filter(|m| {
+                                refresh_mhz == 0 || (m.refresh_mhz - refresh_mhz).abs() < 500
+                            })
+                            .max_by_key(|m| m.refresh_mhz)
+                        else {
+                            return CheckResult::Fail;
+                        };
+                        Some(*found)
+                    }
+                }
+                .filter(|m| Some(*m) != now.mode);
+                let transform = req.transform.filter(|t| *t != now.transform);
+                let adaptive_sync = match (req.adaptive_sync, now.adaptive_sync) {
+                    (None, _) => None,
+                    (Some(_), None) => return CheckResult::Fail,
+                    (Some(v), Some(was)) => (v != was).then_some(v),
+                };
+                let scale_120 = match req.scale {
+                    None => None,
+                    Some(s) => {
+                        if !(s.is_finite() && s > 0.0) {
+                            return CheckResult::Fail;
+                        }
+                        Some((s * 120.0).round() as u32).filter(|s| *s != now.scale_120)
+                    }
+                };
+                let position = req.position.filter(|p| *p != now.position);
+                if mode.is_some()
+                    || scale_120.is_some()
+                    || position.is_some()
+                    || transform.is_some()
+                    || adaptive_sync.is_some()
+                {
+                    changes.push(HeadChange {
+                        output: *output,
+                        mode,
+                        position,
+                        scale_120,
+                        transform,
+                        adaptive_sync,
+                    });
+                }
+            } else if let Some(dh) = self.output_management.disabled_screens.get(output) {
+                let modes = if !dh.info.modes.is_empty() {
+                    dh.info.modes.clone()
+                } else {
+                    vec![HeadMode {
+                        size: (dh.descriptor.mode.0 as i32, dh.descriptor.mode.1 as i32),
+                        refresh_mhz: dh.descriptor.refresh_mhz as i32,
+                        preferred: true,
+                    }]
+                };
+
+                let mode = match req.mode {
+                    None => HeadMode {
+                        size: (dh.descriptor.mode.0 as i32, dh.descriptor.mode.1 as i32),
+                        refresh_mhz: dh.descriptor.refresh_mhz as i32,
+                        preferred: true,
+                    },
+                    Some(RequestedMode::Listed(m)) => {
+                        let Some(found) = modes.iter().find(|x| **x == m) else {
+                            return CheckResult::Fail;
+                        };
+                        *found
+                    }
+                    Some(RequestedMode::Custom { size, refresh_mhz }) => {
+                        let Some(found) = modes
+                            .iter()
+                            .filter(|m| m.size == size)
+                            .filter(|m| {
+                                refresh_mhz == 0 || (m.refresh_mhz - refresh_mhz).abs() < 500
+                            })
+                            .max_by_key(|m| m.refresh_mhz)
+                        else {
+                            return CheckResult::Fail;
+                        };
+                        *found
+                    }
+                };
+
+                let transform = req.transform.unwrap_or(dh.transform);
+                let scale_120 = match req.scale {
+                    None => dh.scale_120,
+                    Some(s) => {
+                        if !(s.is_finite() && s > 0.0) {
+                            return CheckResult::Fail;
+                        }
+                        (s * 120.0).round() as u32
+                    }
+                };
+                let position = req.position.unwrap_or(dh.position);
+                let adaptive_sync = match (req.adaptive_sync, dh.info.adaptive_sync) {
+                    (None, _) => None,
+                    (Some(_), None) => return CheckResult::Fail,
+                    (Some(v), Some(_)) => Some(v),
+                };
+
+                let desc = OutputDescriptor {
+                    key: dh.key.clone(),
+                    mode: (mode.size.0 as u32, mode.size.1 as u32),
                     transform,
+                    scale_120,
+                    refresh_mhz: mode.refresh_mhz as u32,
+                };
+                if !infynitae_core::output::valid(&desc) {
+                    return CheckResult::Fail;
+                }
+
+                on.push(HeadOn {
+                    output: *output,
+                    descriptor: desc,
+                    position,
                     adaptive_sync,
                 });
+            } else {
+                return CheckResult::Fail;
             }
         }
+
         changes.sort_by_key(|c| c.output);
-        Some(changes)
+        on.sort_by_key(|o| o.output);
+
+        let remaining_enabled = (currently_enabled.len() - to_turn_off.len()) + on.len();
+        if remaining_enabled == 0 {
+            return CheckResult::Cancel;
+        }
+
+        CheckResult::Ok {
+            changes,
+            off: to_turn_off,
+            on,
+        }
     }
+}
+
+enum CheckResult {
+    Cancel,
+    Fail,
+    Ok {
+        changes: Vec<HeadChange>,
+        off: Vec<OutputId>,
+        on: Vec<HeadOn>,
+    },
 }
 
 /// Sends what differs from what the head was told (no `done`): whether anything was sent.
 fn send_changes(h: &mut Head, now: &Told) -> bool {
     let mut sent = false;
-    if now.mode != h.told.mode
-        && let Some((_, res)) = h.modes.iter().find(|(m, _)| Some(*m) == now.mode)
-    {
-        h.head.current_mode(res);
+    if !h.told.enabled && now.enabled {
+        h.head.enabled(1);
         sent = true;
     }
-    if now.position != h.told.position {
-        h.head.position(now.position.0, now.position.1);
-        sent = true;
-    }
-    if now.transform != h.told.transform {
-        h.head.transform(transform_to_wl(now.transform));
-        sent = true;
-    }
-    if now.scale_120 != h.told.scale_120 {
-        h.head.scale(f64::from(now.scale_120) / 120.0);
-        sent = true;
-    }
-    if h.head.version() >= 4
-        && now.adaptive_sync != h.told.adaptive_sync
-        && let Some(on) = now.adaptive_sync
-    {
-        h.head.adaptive_sync(if on {
-            zwlr_output_head_v1::AdaptiveSyncState::Enabled
-        } else {
-            zwlr_output_head_v1::AdaptiveSyncState::Disabled
-        });
+    if now.enabled {
+        if now.mode != h.told.mode
+            && let Some((_, res)) = h.modes.iter().find(|(m, _)| Some(*m) == now.mode)
+        {
+            h.head.current_mode(res);
+            sent = true;
+        }
+        if now.position != h.told.position {
+            h.head.position(now.position.0, now.position.1);
+            sent = true;
+        }
+        if now.transform != h.told.transform {
+            h.head.transform(transform_to_wl(now.transform));
+            sent = true;
+        }
+        if now.scale_120 != h.told.scale_120 {
+            h.head.scale(f64::from(now.scale_120) / 120.0);
+            sent = true;
+        }
+        if h.head.version() >= 4
+            && now.adaptive_sync != h.told.adaptive_sync
+            && let Some(on) = now.adaptive_sync
+        {
+            h.head.adaptive_sync(if on {
+                zwlr_output_head_v1::AdaptiveSyncState::Enabled
+            } else {
+                zwlr_output_head_v1::AdaptiveSyncState::Disabled
+            });
+            sent = true;
+        }
+    } else if h.told.enabled && !now.enabled {
+        h.head.enabled(0);
         sent = true;
     }
     h.told = now.clone();
@@ -559,6 +868,16 @@ impl GlobalDispatch<ZwlrOutputManagerV1, crate::trust::Gate> for WaylandState {
         let models: Vec<OutputModel> = state.core.outputs().to_vec();
         for model in &models {
             state.announce_head(&manager, model);
+        }
+        let mut disabled: Vec<(OutputId, DisabledHead)> = state
+            .output_management
+            .disabled_screens
+            .iter()
+            .map(|(id, d)| (*id, d.clone()))
+            .collect();
+        disabled.sort_by_key(|(id, _)| *id);
+        for (id, d) in &disabled {
+            state.announce_disabled_head(&manager, *id, d);
         }
         manager.done(state.output_management.serial);
         state.output_management.managers.push(manager);
@@ -655,7 +974,7 @@ impl Dispatch<ZwlrOutputConfigurationV1, ConfigurationData> for WaylandState {
         };
         match request {
             Request::EnableHead { id, head } => {
-                let output = head.data::<HeadData>().map(|d| d.output);
+                let output = head.data::<HeadData>().map(|d| *d.output.lock().unwrap());
                 let output = output.filter(|o| configure(&mut inner, *o));
                 if let Some(o) = output {
                     inner.heads.insert(o, HeadRequest::default());
@@ -671,7 +990,7 @@ impl Dispatch<ZwlrOutputConfigurationV1, ConfigurationData> for WaylandState {
                 );
             }
             Request::DisableHead { head } => {
-                if let Some(o) = head.data::<HeadData>().map(|d| d.output)
+                if let Some(o) = head.data::<HeadData>().map(|d| *d.output.lock().unwrap())
                     && configure(&mut inner, o)
                 {
                     inner.disabled.push(o);
@@ -689,14 +1008,56 @@ impl Dispatch<ZwlrOutputConfigurationV1, ConfigurationData> for WaylandState {
                 }
                 let checked = state.check_configuration(&inner.heads, &inner.disabled);
                 match (checked, matches!(request, Request::Apply)) {
-                    (None, _) => resource.failed(),
-                    (Some(_), false) => resource.succeeded(),
-                    (Some(changes), true) if changes.is_empty() => resource.succeeded(),
-                    (Some(changes), true) => {
-                        state.output_management.pending.push(PendingConfiguration {
-                            resource: resource.clone(),
-                            changes,
-                        });
+                    (CheckResult::Cancel, _) => resource.cancelled(),
+                    (CheckResult::Fail, _) => resource.failed(),
+                    (CheckResult::Ok { .. }, false) => resource.succeeded(),
+                    (CheckResult::Ok { changes, off, on }, true) => {
+                        for &id in &off {
+                            if let Some(model) = state.core.output(id) {
+                                let key = model.key.clone();
+                                let desc = OutputDescriptor {
+                                    key: model.key.clone(),
+                                    mode: model.phys,
+                                    transform: model.transform,
+                                    scale_120: scale_120_of(model),
+                                    refresh_mhz: model.refresh_mhz,
+                                };
+                                let pos = position_of(model);
+                                let scale_120 = scale_120_of(model);
+                                let transform = model.transform;
+                                let info = state
+                                    .output_management
+                                    .info
+                                    .get(&id)
+                                    .cloned()
+                                    .unwrap_or_else(|| HeadInfo {
+                                        physical_size: None,
+                                        modes: Vec::new(),
+                                        adaptive_sync: None,
+                                    });
+                                state.output_management.disabled_screens.insert(
+                                    id,
+                                    DisabledHead {
+                                        key,
+                                        descriptor: desc,
+                                        position: pos,
+                                        scale_120,
+                                        transform,
+                                        info,
+                                    },
+                                );
+                            }
+                        }
+                        if changes.is_empty() && off.is_empty() && on.is_empty() {
+                            resource.succeeded();
+                        } else {
+                            state.output_management.pending.push(PendingConfiguration {
+                                resource: resource.clone(),
+                                changes,
+                                off,
+                                on,
+                            });
+                        }
                     }
                 }
             }
@@ -759,7 +1120,7 @@ impl Dispatch<ZwlrOutputConfigurationHeadV1, ConfigurationHeadData> for WaylandS
                 let Some(m) = mode.data::<ModeData>() else {
                     return;
                 };
-                if m.output != output {
+                if *m.output.lock().unwrap() != output {
                     resource.post_error(Error::InvalidMode, "the mode is another head's");
                     return;
                 }

@@ -1753,6 +1753,10 @@ pub fn run_console_with(
         }
         watch_frame_waits(&mut data);
         for c in data.state.take_output_configurations() {
+            if !c.off.is_empty() || !c.on.is_empty() {
+                data.state.finish_output_configuration(c, false);
+                continue;
+            }
             let ok = apply_output_configuration(&mut data, &c.changes);
             data.state.finish_output_configuration(c, ok);
         }

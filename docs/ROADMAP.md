@@ -5,11 +5,8 @@ What comes next, roughly in order. [STATUS.md](STATUS.md) says where things stan
 ## First: make what exists solid
 
 - **Try on real hardware** what has only run in the test suite: touch on the canvas, rotation
-  and auto-rotate, VRR from display tools, the laptop lid, monitor hotplug, the virtual screen,
-  remote desktop through the portal, crash reports.
-- ****
-- **Screens turned off from display tools** (`wlr-randr --off`, kanshi profiles): the screen
-  leaves the layout and comes back where it was.
+  and auto-rotate, VRR from display tools, screens turned off from display tools, the laptop lid,
+  monitor hotplug, the virtual screen, remote desktop through the portal, crash reports.
 - **Pens and drawing tablets** (`tablet-v2`).
 
 ## Later: desktops on the canvas
