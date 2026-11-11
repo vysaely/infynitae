@@ -52,6 +52,7 @@ jobs:
       - run: ./tools/test-readme-shortcuts --self-test
       - run: sh tools/test-reload-match
       - run: sh tools/test-launch-fast
+      - run: sh tools/test-launch-actions
       - run: sh tools/test-lock-render
       - run: sh tools/test-xdg-autostart
       - run: sh tools/test-theme-from-wallpaper

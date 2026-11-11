@@ -54,9 +54,9 @@ case "$ACTION" in
         # with a command and its arguments (xdg-terminal-exec): that command in it
         if [ -n "$TERM_CMD" ] && [ $# -gt 1 ]; then
             shift
-            exec $TERM_CMD -e "$@"
+            exec "$TERM_CMD" -e "$@"
         elif [ -n "$TERM_CMD" ]; then
-            exec $TERM_CMD
+            exec "$TERM_CMD"
         else
             echo "[infynitae] Error: No terminal emulator found. Please install kitty, alacritty, or foot." >&2
         fi
@@ -100,11 +100,12 @@ case "$ACTION" in
         # a fullscreen game shown directly started ("on <pid>") or ended ("off <pid>"): Feral's
         # gamemode, when installed, runs the CPU at full speed while it lasts. An X11 game's
         # process is xwayland-satellite's, which is enough for the CPU mode
-        set -- $2
-        [ "$1" = on ] && call=RegisterGame || call=UnregisterGame
+        gm_mode=${2%% *}
+        gm_pid=${2#* }
+        [ "$gm_mode" = on ] && call=RegisterGame || call=UnregisterGame
         gdbus call --session --dest com.feralinteractive.GameMode \
             --object-path /com/feralinteractive/GameMode \
-            --method "com.feralinteractive.GameMode.$call" "$2" >/dev/null 2>&1
+            --method "com.feralinteractive.GameMode.$call" "$gm_pid" >/dev/null 2>&1
         ;;
     system-monitor)
         # Super+Shift+Escape: a window of its own if one is installed, else in the terminal
@@ -115,7 +116,7 @@ case "$ACTION" in
                     command -v "$m" >/dev/null 2>&1 && exec "$m"
                 done
                 for m in btop htop top; do
-                    command -v "$m" >/dev/null 2>&1 && exec $TERM_CMD -e "$m"
+                    command -v "$m" >/dev/null 2>&1 && exec "$TERM_CMD" -e "$m"
                 done
                 ;;
             *)
@@ -129,9 +130,9 @@ case "$ACTION" in
         case "$FM" in
             auto|"")
                 if command -v yazi >/dev/null 2>&1; then
-                    exec $TERM_CMD -e yazi
+                    exec "$TERM_CMD" -e yazi
                 elif command -v lf >/dev/null 2>&1; then
-                    exec $TERM_CMD -e lf
+                    exec "$TERM_CMD" -e lf
                 elif command -v thunar >/dev/null 2>&1; then
                     exec thunar
                 elif command -v nemo >/dev/null 2>&1; then
@@ -139,23 +140,23 @@ case "$ACTION" in
                 elif command -v dolphin >/dev/null 2>&1; then
                     exec dolphin --new-window
                 else
-                    exec $TERM_CMD -e sh -c "ls -la; exec \$SHELL"
+                    exec "$TERM_CMD" -e sh -c "ls -la; exec \$SHELL"
                 fi
                 ;;
             yazi)
-                exec $TERM_CMD -e yazi
+                exec "$TERM_CMD" -e yazi
                 ;;
             lf)
-                exec $TERM_CMD -e lf
+                exec "$TERM_CMD" -e lf
                 ;;
             ranger)
-                exec $TERM_CMD -e ranger
+                exec "$TERM_CMD" -e ranger
                 ;;
             dolphin)
                 exec dolphin --new-window
                 ;;
             *)
-                exec $FM
+                exec sh -c "$FM"
                 ;;
         esac
         ;;
@@ -197,7 +198,7 @@ case "$ACTION" in
                 exec wofi --show drun
                 ;;
             *)
-                exec $L
+                exec sh -c "$L"
                 ;;
         esac
         ;;
@@ -233,7 +234,7 @@ case "$ACTION" in
         mkdir -p "$SHOT_DIR"
         SHOT_FILE="$SHOT_DIR/shot-$(date +%Y%m%d-%H%M%S).png"
         if [ -n "$SCREENSHOT_CMD" ]; then
-            exec $SCREENSHOT_CMD "$SHOT_FILE"
+            exec sh -c "$SCREENSHOT_CMD \"\$1\"" -- "$SHOT_FILE"
         elif command -v grim >/dev/null 2>&1; then
             grim "$SHOT_FILE"
             if [ -f "$SHOT_FILE" ] && command -v wl-copy >/dev/null 2>&1; then
@@ -489,7 +490,7 @@ case "$ACTION" in
                 fi
                 ;;
             *)
-                exec $LOCKER
+                exec sh -c "$LOCKER"
                 ;;
         esac
         ;;
